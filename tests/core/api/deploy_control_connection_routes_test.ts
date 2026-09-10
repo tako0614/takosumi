@@ -3,15 +3,36 @@ import { expect, test } from "bun:test";
 
 import { createApiApp } from "../../../core/api/app.ts";
 import { OpenTofuController } from "../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
+import {
+  InMemoryOpenTofuControlStore,
+  type WorkspaceManagementAuthority,
+} from "../../../core/domains/deploy-control/store.ts";
 import { StaticSecretConnectionVault } from "../../../core/adapters/vault/mod.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
 import { ActivityService } from "../../../core/domains/activity/mod.ts";
 import { ConnectionsService } from "../../../core/domains/connections/mod.ts";
+import { WorkspacesService } from "../../../core/domains/workspaces/mod.ts";
 import type { DeployControlInternalRouteDependencies } from "../../../core/api/deploy_control_internal_routes.ts";
+import {
+  createCloudflareD1OpenTofuControlStore,
+  ensureD1OpenTofuLedgerSchema,
+} from "../../../worker/src/d1_opentofu_store.ts";
+import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 import { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } from "../../../providers/registry.ts";
 
 const WORKSPACE_ID = "ws_10000001";
+
+function seedWorkspace(store: InMemoryOpenTofuControlStore): void {
+  void store.putWorkspace({
+    id: WORKSPACE_ID,
+    handle: "fixture-route-workspace",
+    displayName: "Fixture Route Workspace",
+    type: "personal",
+    ownerUserId: "fixture-route-owner",
+    createdAt: "2026-06-04T00:00:00.000Z",
+    updatedAt: "2026-06-04T00:00:00.000Z",
+  });
+}
 
 function makeApp(
   options: {
@@ -21,6 +42,8 @@ function makeApp(
   } = {},
 ) {
   const store = new InMemoryOpenTofuControlStore();
+  seedWorkspace(store);
+  const workspacesService = new WorkspacesService({ store });
   let counter = 0;
   const vault = new StaticSecretConnectionVault({
     store,
@@ -62,6 +85,7 @@ function makeApp(
       controller,
       activityService,
       connectionsService,
+      workspacesService,
       buildConnectionSetupRequest:
         REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.buildConnectionSetupRequest,
       ...(options.connectionOAuthHelpers
@@ -86,6 +110,120 @@ function makeApp(
     },
     requestCorrelation: false,
   });
+}
+
+async function makeD1OAuthApp(options: { readonly includeAuthority?: boolean } = {}) {
+  const database = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(database);
+  const store = createCloudflareD1OpenTofuControlStore(database);
+  await store.putWorkspace({
+    id: WORKSPACE_ID,
+    handle: "fixture-d1-oauth-workspace",
+    displayName: "Fixture D1 OAuth Workspace",
+    type: "personal",
+    ownerUserId: "fixture-route-owner",
+    createdAt: "2026-06-04T00:00:00.000Z",
+    updatedAt: "2026-06-04T00:00:00.000Z",
+  });
+  const workspacesService = new WorkspacesService({ store });
+  let originalAuthority: WorkspaceManagementAuthority | undefined;
+  const oauthHelper = {
+    start: async (input: {
+      readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
+    }) => {
+      originalAuthority = input.expectedWorkspaceManagementAuthority;
+      return {
+        authorizationUrl:
+          "https://dash.cloudflare.test/oauth2/auth?state=state_d1_original_epoch",
+        state: "state_d1_original_epoch",
+      };
+    },
+    complete: async () => {
+      const active = await store.getWorkspaceManagement(WORKSPACE_ID);
+      if (!active) throw new Error("D1 OAuth Workspace management is missing");
+      const drained = await store.beginWorkspaceDraining(WORKSPACE_ID, {
+        workspaceId: WORKSPACE_ID,
+        managementState: "active",
+        managementEpoch: active.managementEpoch,
+      });
+      if (drained.status !== "started") {
+        throw new Error(`D1 OAuth Workspace drain failed: ${drained.status}`);
+      }
+      const resumed = await database
+        .prepare(
+          "update workspaces set management_state = 'active', management_epoch = 3 where id = ? and management_state = 'draining'",
+        )
+        .bind(WORKSPACE_ID)
+        .run();
+      if (resumed.meta?.changes !== 1) {
+        throw new Error("D1 OAuth Workspace resume did not update one row");
+      }
+      return {
+        request: {
+          workspaceId: WORKSPACE_ID,
+          provider: "registry.opentofu.org/cloudflare/cloudflare",
+          credentialRecipe: {
+            id: "cloudflare",
+            authMode: "oauth",
+            secretPartition: "provider-credentials",
+          },
+          materialization: "oauth" as const,
+          displayName: "d1 oauth",
+          values: { CLOUDFLARE_API_TOKEN: "d1-oauth-secret" },
+        },
+        ...(options.includeAuthority !== false && originalAuthority
+          ? { expectedWorkspaceManagementAuthority: originalAuthority }
+          : {}),
+      };
+    },
+  };
+  const vault = new StaticSecretConnectionVault({
+    store,
+    crypto: new PartitionedSecretBoundaryCrypto({
+      globalPassphrase: "d1-oauth-route-test-passphrase-0123456789",
+    }),
+    now: () => new Date("2026-06-04T00:00:00.000Z"),
+    newId: () => "conn_d1oauth000000001",
+    credentialRecipeResolver: (id) =>
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find(
+        (recipe) => recipe.id === id,
+      ),
+    credentialDrivers:
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    sourceCredentialDrivers:
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.sourceCredentialDrivers,
+  });
+  const activityService = new ActivityService({
+    store,
+    now: () => new Date("2026-06-04T00:00:00.000Z"),
+  });
+  const connectionsService = new ConnectionsService({
+    store,
+    now: () => "2026-06-04T00:00:00.000Z",
+    newId: () => "conn_d1oauth000000001",
+  });
+  const controller = new OpenTofuController({ store, vault });
+  const app = await createApiApp({
+    registerDeployControlInternalRoutes: true,
+    deployControlInternalRouteOptions: {
+      controller,
+      activityService,
+      connectionsService,
+      workspacesService,
+      connectionOAuthHelpers: { cloudflare: oauthHelper },
+      authorizeDeployControlBearer: ({ token }) =>
+        token === "scoped-token"
+          ? {
+              actor: "acct_1",
+              workspaceIds: [WORKSPACE_ID],
+              operations: "*",
+              runnerProfileIds: "*",
+            }
+          : undefined,
+    },
+    requestCorrelation: false,
+  });
+  return { app, store };
 }
 
 const CF_PATH = "/internal/v1/connections/setups/cloudflare-api-token";
@@ -584,15 +722,19 @@ test("unconfigured OAuth helper routes authenticate first then return 501", asyn
 });
 
 test("Cloudflare OAuth helper starts and completes as a write-only Provider Connection", async () => {
+  let originalAuthority: WorkspaceManagementAuthority | undefined;
   const app = await makeApp({
     connectionOAuthHelpers: {
       cloudflare: {
-        start: async ({ body }) => ({
-          authorizationUrl:
-            "https://dash.cloudflare.test/oauth2/auth?state=state_cf",
-          state: "state_cf",
-          ...(body.expiresAt ? { expiresAt: body.expiresAt } : {}),
-        }),
+        start: async ({ body, expectedWorkspaceManagementAuthority }) => {
+          originalAuthority = expectedWorkspaceManagementAuthority;
+          return {
+            authorizationUrl:
+              "https://dash.cloudflare.test/oauth2/auth?state=state_cf",
+            state: "state_cf",
+            ...(body.expiresAt ? { expiresAt: body.expiresAt } : {}),
+          };
+        },
         complete: async ({ code, state }) => ({
           request: {
             workspaceId: WORKSPACE_ID,
@@ -608,6 +750,9 @@ test("Cloudflare OAuth helper starts and completes as a write-only Provider Conn
               CLOUDFLARE_API_TOKEN: `oauth-token-${code}-${state}`,
             },
           },
+          ...(originalAuthority
+            ? { expectedWorkspaceManagementAuthority: originalAuthority }
+            : {}),
         }),
       },
     },
@@ -653,6 +798,58 @@ test("Cloudflare OAuth helper starts and completes as a write-only Provider Conn
   });
   expect(payload.connection.materialization).toBe("oauth");
   expect(payload.connection.envNames).toEqual(["CLOUDFLARE_API_TOKEN"]);
+});
+
+test("internal OAuth callback retains its original Workspace authority across drain and resume", async () => {
+  const fixture = await makeD1OAuthApp();
+  const started = await fixture.app.request(
+    "/internal/v1/connections/oauth/cloudflare/start",
+    {
+      method: "POST",
+      headers: HEADERS,
+      body: JSON.stringify({
+        workspaceId: WORKSPACE_ID,
+        displayName: "d1 oauth",
+      }),
+    },
+  );
+  expect(started.status).toBe(200);
+
+  const completed = await fixture.app.request(
+    "/internal/v1/connections/oauth/cloudflare/callback?code=code_d1&state=state_d1_original_epoch",
+    {
+      method: "GET",
+      headers: { authorization: "Bearer scoped-token" },
+    },
+  );
+  expect(completed.status).toBe(409);
+  expect(await fixture.store.listConnections(WORKSPACE_ID)).toEqual([]);
+});
+
+test("internal OAuth Workspace callback without original authority fails closed", async () => {
+  const fixture = await makeD1OAuthApp({ includeAuthority: false });
+  const started = await fixture.app.request(
+    "/internal/v1/connections/oauth/cloudflare/start",
+    {
+      method: "POST",
+      headers: HEADERS,
+      body: JSON.stringify({
+        workspaceId: WORKSPACE_ID,
+        displayName: "d1 oauth missing authority",
+      }),
+    },
+  );
+  expect(started.status).toBe(200);
+
+  const completed = await fixture.app.request(
+    "/internal/v1/connections/oauth/cloudflare/callback?code=code_d1_missing&state=state_d1_original_epoch",
+    {
+      method: "GET",
+      headers: { authorization: "Bearer scoped-token" },
+    },
+  );
+  expect(completed.status).toBe(409);
+  expect(await fixture.store.listConnections(WORKSPACE_ID)).toEqual([]);
 });
 
 test("OAuth helper cannot smuggle a Source Git connection discriminator", async () => {

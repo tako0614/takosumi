@@ -25,6 +25,15 @@ async function makeAppWithStore(
   } = {},
 ) {
   const store = new InMemoryOpenTofuControlStore();
+  await store.putWorkspace({
+    id: "ws_001",
+    handle: "workspace-001",
+    displayName: "Workspace 001",
+    type: "personal",
+    ownerUserId: "acct_1",
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
   let counter = 0;
   const sourcesService = new SourcesService({
     store,
@@ -202,7 +211,9 @@ test("source register -> sync -> snapshots flow", async () => {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(synced.status).toBe(201);
-  expect((await synced.json()).run.status).toBe("queued");
+  const syncBody = await synced.json();
+  expect(syncBody.run.status).toBe("queued");
+  expect(JSON.stringify(syncBody)).not.toContain("workspaceManagementAuthority");
 
   const snaps = await app.request(
     `/internal/v1/sources/${sourceId}/snapshots`,

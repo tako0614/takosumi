@@ -31,6 +31,7 @@ import {
   type ActivityRecorder,
 } from "../activity/mod.ts";
 import type { InterfaceMaterializationWriteAuthority } from "../deploy-control/interface_materialization_intent.ts";
+import { WorkspaceManagementAdmissionConflictError } from "../deploy-control/store.ts";
 import type {
   InterfaceListFilter,
   InterfaceStores,
@@ -232,6 +233,10 @@ export interface InterfaceServiceOptions {
    */
   readonly projectionSink?: InterfaceProjectionSink;
 }
+
+type InterfaceObserverWriteOptions = {
+  readonly requireActiveWorkspace?: true;
+};
 
 /** Internal cooperative fence checked immediately before canonical writes. */
 export interface InterfaceAuthorityWriteFence {
@@ -1512,28 +1517,32 @@ export class InterfaceService {
     for (const item of interfaces.filter((current) =>
       interfaceReferencesCapsule(current, capsuleId),
     )) {
-      await this.#updateStatusConditions(item.metadata.id, (current, now) => {
-        if (
-          current.status.phase === "Unknown" ||
-          current.status.phase === "Terminating" ||
-          current.status.phase === "Retired"
-        ) {
-          return current.status.conditions ?? [];
-        }
-        return [
-          ...(current.status.conditions ?? []).filter(
-            (item) => item.type !== "ObservationPending",
-          ),
-          condition(
-            "ObservationPending",
-            "true",
-            "PlanObservationPending",
-            now,
-            current.metadata.generation,
-            pendingMessage,
-          ),
-        ];
-      });
+      await this.#updateStatusConditions(
+        item.metadata.id,
+        (current, now) => {
+          if (
+            current.status.phase === "Unknown" ||
+            current.status.phase === "Terminating" ||
+            current.status.phase === "Retired"
+          ) {
+            return current.status.conditions ?? [];
+          }
+          return [
+            ...(current.status.conditions ?? []).filter(
+              (item) => item.type !== "ObservationPending",
+            ),
+            condition(
+              "ObservationPending",
+              "true",
+              "PlanObservationPending",
+              now,
+              current.metadata.generation,
+              pendingMessage,
+            ),
+          ];
+        },
+        { requireActiveWorkspace: true },
+      );
     }
   }
 
@@ -1758,7 +1767,9 @@ export class InterfaceService {
       includeRetired: false,
     });
     for (const current of interfaces) {
-      await this.#markTerminating(current.metadata.id);
+      await this.#markTerminating(current.metadata.id, {
+        requireActiveWorkspace: true,
+      });
     }
     const references = await this.list({ workspaceId, includeRetired: false });
     for (const item of references) {
@@ -1778,6 +1789,7 @@ export class InterfaceService {
           item.metadata.id,
           "referenced Capsule destroy has started",
           "OwnerTerminating",
+          { requireActiveWorkspace: true },
         );
       }
     }
@@ -2049,6 +2061,7 @@ export class InterfaceService {
   async #updateStatusConditions(
     id: string,
     update: (current: Interface, now: string) => readonly Condition[],
+    options: InterfaceObserverWriteOptions = {},
   ): Promise<boolean> {
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const current = await this.get(id);
@@ -2066,7 +2079,22 @@ export class InterfaceService {
         metadata: { ...current.metadata, updatedAt: now },
         status: nextStatus,
       };
-      if (await this.#stores.interfaces.compareAndSet(next, guard(current))) {
+      let wrote = false;
+      try {
+        wrote = await this.#stores.interfaces.compareAndSet(
+          next,
+          guard(current, options.requireActiveWorkspace),
+        );
+      } catch (error) {
+        if (
+          options.requireActiveWorkspace === true &&
+          error instanceof WorkspaceManagementAdmissionConflictError
+        ) {
+          return false;
+        }
+        throw error;
+      }
+      if (wrote) {
         await this.#projectInterface(next);
         return true;
       }
@@ -2081,6 +2109,7 @@ export class InterfaceService {
     id: string,
     message: string,
     reason = "RunFailed",
+    options: InterfaceObserverWriteOptions = {},
   ): Promise<void> {
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const current = await this.get(id);
@@ -2112,7 +2141,22 @@ export class InterfaceService {
           ],
         },
       };
-      if (await this.#stores.interfaces.compareAndSet(next, guard(current))) {
+      let wrote = false;
+      try {
+        wrote = await this.#stores.interfaces.compareAndSet(
+          next,
+          guard(current, options.requireActiveWorkspace),
+        );
+      } catch (error) {
+        if (
+          options.requireActiveWorkspace === true &&
+          error instanceof WorkspaceManagementAdmissionConflictError
+        ) {
+          return;
+        }
+        throw error;
+      }
+      if (wrote) {
         await this.#refreshBindings(id);
         await this.#projectInterface(next);
         return;
@@ -2124,7 +2168,10 @@ export class InterfaceService {
     );
   }
 
-  async #markTerminating(id: string): Promise<void> {
+  async #markTerminating(
+    id: string,
+    options: InterfaceObserverWriteOptions = {},
+  ): Promise<void> {
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const current = await this.get(id);
       if (
@@ -2151,7 +2198,22 @@ export class InterfaceService {
           ],
         },
       };
-      if (await this.#stores.interfaces.compareAndSet(next, guard(current))) {
+      let wrote = false;
+      try {
+        wrote = await this.#stores.interfaces.compareAndSet(
+          next,
+          guard(current, options.requireActiveWorkspace),
+        );
+      } catch (error) {
+        if (
+          options.requireActiveWorkspace === true &&
+          error instanceof WorkspaceManagementAdmissionConflictError
+        ) {
+          return;
+        }
+        throw error;
+      }
+      if (wrote) {
         await this.#refreshBindings(id);
         await this.#projectInterface(next);
         return;
@@ -2449,11 +2511,17 @@ function unresolvedStatus(
   };
 }
 
-function guard(record: Interface): InterfaceWriteGuard {
+function guard(
+  record: Interface,
+  requireActiveWorkspace?: true,
+): InterfaceWriteGuard {
   return {
     generation: record.metadata.generation,
     resolvedRevision: record.status.resolvedRevision,
     record,
+    ...(requireActiveWorkspace === true
+      ? { requireActiveWorkspace: true as const }
+      : {}),
   };
 }
 

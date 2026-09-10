@@ -14,6 +14,7 @@ import {
   type BeginApplyRunResult,
   InMemoryOpenTofuControlStore,
   planRunExecutionInputsDigestMaterial,
+  type WorkspaceManagementAuthority,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
@@ -131,8 +132,14 @@ async function seedUpdatable(
 class LostFirstBeginApplyRunAcknowledgementStore extends InMemoryOpenTofuControlStore {
   #loseAcknowledgement = true;
 
-  override async beginApplyRun(run: ApplyRun): Promise<BeginApplyRunResult> {
-    const result = await super.beginApplyRun(run);
+  override async beginApplyRun(
+    run: ApplyRun,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<BeginApplyRunResult> {
+    const result = await super.beginApplyRun(
+      run,
+      expectedWorkspaceManagementAuthority,
+    );
     if (this.#loseAcknowledgement && result.status === "created") {
       this.#loseAcknowledgement = false;
       throw new Error("simulated lost beginApplyRun acknowledgement");
@@ -1830,7 +1837,19 @@ test("state generation: a stale plan is rejected at apply (state_generation_mism
       planRunExecutionInputsDigestMaterial(forgedInputs, undefined),
     ),
   } as const;
-  await store.preparePlanRun({ run: forgedPlan, inputs: forgedInputs });
+  const management = await store.getWorkspaceManagement(capsule!.workspaceId);
+  if (!management || management.managementState !== "active") {
+    throw new Error(`fixture Workspace ${capsule!.workspaceId} is not active`);
+  }
+  await store.preparePlanRun({
+    run: forgedPlan,
+    inputs: forgedInputs,
+    expectedWorkspaceManagementAuthority: {
+      workspaceId: management.workspaceId,
+      managementState: "active",
+      managementEpoch: management.managementEpoch,
+    },
+  });
   const staleApply = await controller.createApplyRun({
     planRunId: forgedId,
     expected: applyExpectedGuardFromPlanRun(forgedPlan),

@@ -14,6 +14,7 @@ import { mergePolicyConfigs } from "../../../../core/domains/deploy-control/prov
 import {
   RuntimeInputBundle,
   runtimeInputProviderInstance,
+  runtimeInputProviderInstanceForStorage,
   type RuntimeInputMaterializer,
 } from "../../../../core/domains/deploy-control/runtime_input_materializer.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
@@ -493,6 +494,9 @@ const RUNTIME_INPUT_VARIABLE = "takosumi_runtime_inputs__takoform";
 const RUNTIME_INPUT_INSTANCE = runtimeInputProviderInstance({
   moduleLocalName: "takoform",
 });
+const RUNTIME_INPUT_DESCRIPTOR_INSTANCE = runtimeInputProviderInstanceForStorage({
+  moduleLocalName: "takoform",
+});
 const RUNTIME_INPUT_NONCE = "8Jd1nQ2vK7pR4sT6wX9zB0cE3fH5jL8mN1qS4uV7yA0";
 const RUNTIME_INPUT_PROFILE_DIGEST = `sha256:${"7".repeat(64)}`;
 const RUNTIME_INPUT_VALUES = {
@@ -538,12 +542,13 @@ function runtimeInputDescriptor(
     readonly names: readonly string[];
     readonly profileDigest: string;
     readonly variableName: string;
+    readonly providerInstance: string;
   }> = {},
 ) {
   return {
     contract: "takosumi.dispatch-runtime-inputs/v1" as const,
     variableName: overrides.variableName ?? RUNTIME_INPUT_VARIABLE,
-    providerInstance: RUNTIME_INPUT_INSTANCE,
+    providerInstance: overrides.providerInstance ?? RUNTIME_INPUT_DESCRIPTOR_INSTANCE,
     nonce: overrides.nonce ?? RUNTIME_INPUT_NONCE,
     names: overrides.names ?? ["ENCRYPTION_KEY", "SIGNING_KEY"],
     profileDigest: overrides.profileDigest ?? RUNTIME_INPUT_PROFILE_DIGEST,
@@ -654,6 +659,35 @@ test("apply opens the sealed material for exactly the reviewed name set", async 
   expect(entry.variableName).toBe(RUNTIME_INPUT_VARIABLE);
   expect(Object.keys(entry.values).sort()).toEqual([...entry.names]);
   expect(entry.values).toEqual(RUNTIME_INPUT_VALUES);
+});
+
+test("apply accepts a retained legacy runtime-input descriptor", async () => {
+  const { broker, run } = await runtimeInputBrokerFor({
+    resolved: [runtimeInputBinding()],
+    descriptors: [runtimeInputDescriptor({ providerInstance: RUNTIME_INPUT_INSTANCE })],
+  });
+  const credentials = await broker.mintRunCredentials(run, "apply", "run_1");
+  expect(credentials?.runtimeInputs?.[0]?.values).toEqual(RUNTIME_INPUT_VALUES);
+});
+
+test("apply rejects a serialized descriptor for a different provider alias", async () => {
+  const { broker, run } = await runtimeInputBrokerFor({
+    resolved: [runtimeInputBinding()],
+    descriptors: [
+      runtimeInputDescriptor({
+        providerInstance: runtimeInputProviderInstanceForStorage({
+          moduleLocalName: "takoform",
+          rootAlias: "edge",
+        }),
+      }),
+    ],
+  });
+  await expect(
+    broker.mintRunCredentials(run, "apply", "run_1"),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "runtime_inputs_wiring_missing" },
+  });
 });
 
 test("apply fails closed when the material generation moved since the plan", async () => {

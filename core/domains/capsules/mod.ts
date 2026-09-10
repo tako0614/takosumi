@@ -45,6 +45,12 @@ import type {
   CapsuleLifecycleMutation,
   CapsuleListPageParams,
   OpenTofuControlStore,
+  WorkspaceManagementAuthority,
+} from "../deploy-control/store.ts";
+import {
+  assertWorkspaceManagementAdmission,
+  assertWorkspaceManagementAuthorityInput,
+  WorkspaceManagementAdmissionConflictError,
 } from "../deploy-control/store.ts";
 import {
   capsuleLifecycleExpected,
@@ -59,7 +65,12 @@ import {
   validateCapsuleInterfaceBlueprints,
   validateCapsuleRequiredInterfaces,
 } from "../interfaces/service.ts";
-import { ProjectsService } from "../projects/mod.ts";
+import {
+  DEFAULT_PROJECT_SLUG,
+  defaultProjectId,
+  ProjectsService,
+} from "../projects/mod.ts";
+import type { Project } from "takosumi-contract/projects";
 import {
   containsSecretLikeString,
   isSecretKey,
@@ -81,24 +92,21 @@ import { validateCapsuleProviderBindings } from "../connections/mod.ts";
  */
 const CAPSULE_NAME_PATTERN = /^[a-z0-9-]+$/;
 
-export interface CreateCapsuleRequest {
+/** Internal coordinator input; never accepted by the generic Capsule route. */
+export interface CreateCapsuleInitialAuthorityRequest {
   readonly workspaceId: string;
   /** Defaults to the Workspace-qualified default Project. */
   readonly projectId?: string;
+  /** Private Workspace-management authority retained from preparation. */
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
   readonly name: string;
   readonly environment: string;
   /** Registered Git Source. */
   readonly sourceId: string;
-  readonly installConfigId: string;
   /** Authenticated Principal that initiated this installation. */
   readonly installingPrincipalId: string;
   /** Auto-update opt-in (see {@link Capsule.autoUpdate}). Defaults to off. */
   readonly autoUpdate?: boolean;
-}
-
-/** Internal coordinator input; never accepted by the generic Capsule route. */
-export interface CreateCapsuleInitialAuthorityRequest
-  extends Omit<CreateCapsuleRequest, "installConfigId"> {
   readonly capsuleId: string;
   readonly installConfig: InstallConfig;
   readonly providerBindingSetId: string;
@@ -113,7 +121,9 @@ export interface CreateCapsuleInitialAuthorityResponse {
 export interface RebindCapsuleInstallConfigRequest {
   readonly capsuleId: string;
   readonly targetInstallConfigId: string;
-  readonly expected: CapsuleInstallConfigRebindInput["expected"];
+  /** Private authority retained from configuration preparation. */
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
+  readonly expected: Omit<CapsuleInstallConfigRebindInput["expected"], "targetInstallConfigDigest">;
   readonly actorSubject: string;
   readonly reason: string;
   readonly requestDigest: string;
@@ -268,155 +278,6 @@ export class CapsulesService {
 
   // --- Capsule (§5) ---------------------------------------------------------
 
-  async createCapsule(request: CreateCapsuleRequest): Promise<Capsule> {
-    requireNonEmptyString(request.workspaceId, "workspaceId");
-    requireNonEmptyString(request.name, "name");
-    requireNonEmptyString(request.environment, "environment");
-    requireNonEmptyString(request.installConfigId, "installConfigId");
-    requireNonEmptyString(
-      request.installingPrincipalId,
-      "installingPrincipalId",
-    );
-    if (!CAPSULE_NAME_PATTERN.test(request.name)) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        `name ${request.name} must match ${CAPSULE_NAME_PATTERN.source}`,
-      );
-    }
-    const workspace = await this.#store.getWorkspace(request.workspaceId);
-    if (!workspace) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "workspace does not exist",
-      );
-    }
-    const project = request.projectId
-      ? await this.#projects.getProject(request.projectId)
-      : await this.#projects.ensureDefaultProject(request.workspaceId);
-    if (project.workspaceId !== request.workspaceId) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "project is not available to this workspace",
-      );
-    }
-    requireNonEmptyString(request.sourceId, "sourceId");
-    const source = await this.#store.getSource(request.sourceId);
-    if (!source || source.workspaceId !== request.workspaceId) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "source is not available to this workspace",
-      );
-    }
-    let config: InstallConfig;
-    try {
-      config = await this.getInstallConfig(request.installConfigId);
-    } catch (error) {
-      if (
-        error instanceof OpenTofuControllerError &&
-        error.code === "not_found"
-      ) {
-        throw new OpenTofuControllerError(
-          "invalid_argument",
-          "install config does not exist",
-        );
-      }
-      throw error;
-    }
-    validateCapsuleInterfaceBlueprints(config.interfaceBlueprints ?? []);
-    validateCapsuleRequiredInterfaces(config.requiredInterfaces ?? []);
-    if (
-      capsuleInterfaceBlueprintsNeedInstallingPrincipal(
-        config.interfaceBlueprints,
-      )
-    ) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "install config contains an unresolved installing Principal binding placeholder",
-      );
-    }
-    // A workspace-scoped InstallConfig may only be used by its owning Workspace;
-    // an operator catalog/default config without workspaceId is reusable.
-    const configWorkspaceId = config.workspaceId;
-    if (
-      configWorkspaceId !== undefined &&
-      configWorkspaceId !== request.workspaceId
-    ) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "install config is not available to this workspace",
-      );
-    }
-    if (
-      config.sourceSelector &&
-      !installConfigSourceCoordinateMatches(config.sourceSelector, {
-        url: source.url,
-        path: source.defaultPath,
-      })
-    ) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "source does not match the install config source selector",
-        {
-          reason: "install_config_source_mismatch",
-          sourceId: source.id,
-          installConfigId: config.id,
-        },
-      );
-    }
-    const existing = await this.#store.getCapsuleByName(
-      project.id,
-      request.name,
-      request.environment,
-    );
-    if (existing && existing.status !== "destroyed") {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "capsule already exists",
-        {
-          reason: "duplicate_capsule",
-          name: request.name,
-          environment: request.environment,
-        },
-      );
-    }
-    const nowIso = this.#now().toISOString();
-    const capsule: Capsule = {
-      id: this.#newId("cap"),
-      workspaceId: request.workspaceId,
-      projectId: project.id,
-      name: request.name,
-      // The name is already a slug; the column is kept distinct so a future
-      // display name can diverge from the URL segment.
-      slug: request.name,
-      sourceId: request.sourceId,
-      installConfigId: request.installConfigId,
-      installingPrincipalId: request.installingPrincipalId,
-      environment: request.environment,
-      currentStateGeneration: 0,
-      status: "pending",
-      ...(request.autoUpdate === true ? { autoUpdate: true } : {}),
-      createdAt: nowIso,
-      updatedAt: nowIso,
-    };
-    const created = await this.#store.putCapsule(capsule);
-    // Activity (§27 / §34): a Capsule was created in the Workspace. Names /
-    // ids only — no secret material.
-    await this.#activity.record({
-      workspaceId: created.workspaceId,
-      action: "capsule.created",
-      targetType: "capsule",
-      targetId: created.id,
-      metadata: {
-        name: created.name,
-        environment: created.environment,
-        projectId: created.projectId,
-        sourceId: created.sourceId,
-        origin: "git",
-      },
-    });
-    return created;
-  }
-
   /**
    * Creates the complete initial deployment authority in one store commit.
    * This seam is intentionally create-only and accepts no existing Capsule;
@@ -441,6 +302,42 @@ export class CapsulesService {
         `name ${request.name} must match ${CAPSULE_NAME_PATTERN.source}`,
       );
     }
+    const suppliedWorkspaceManagementAuthority =
+      request.expectedWorkspaceManagementAuthority;
+    if (suppliedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        suppliedWorkspaceManagementAuthority,
+        request.workspaceId,
+      );
+    }
+    // Capture the private Workspace authority exactly once before any
+    // asynchronous preparation when the coordinator did not supply one. The
+    // store repeats this authority check in the same atomic initial-authority
+    // write; a late read must never refresh a supplied epoch away.
+    const workspaceManagement = await this.#store.getWorkspaceManagement(
+      request.workspaceId,
+    );
+    const activeWorkspaceManagement =
+      workspaceManagement?.workspaceId === request.workspaceId &&
+      workspaceManagement.managementState === "active"
+        ? workspaceManagement
+        : undefined;
+    const workspaceManagementKnownStopped =
+      activeWorkspaceManagement === undefined;
+    const workspaceManagementAuthorityMismatch =
+      suppliedWorkspaceManagementAuthority !== undefined &&
+      (activeWorkspaceManagement === undefined ||
+        activeWorkspaceManagement.managementEpoch !==
+          suppliedWorkspaceManagementAuthority.managementEpoch);
+    const expectedWorkspaceManagementAuthority =
+      suppliedWorkspaceManagementAuthority ??
+      (activeWorkspaceManagement === undefined
+        ? undefined
+        : {
+            workspaceId: activeWorkspaceManagement.workspaceId,
+            managementState: "active" as const,
+            managementEpoch: activeWorkspaceManagement.managementEpoch,
+          });
     const workspace = await this.#store.getWorkspace(request.workspaceId);
     if (!workspace) {
       throw new OpenTofuControllerError(
@@ -450,7 +347,15 @@ export class CapsulesService {
     }
     const project = request.projectId
       ? await this.#projects.getProject(request.projectId)
-      : await this.#projects.ensureDefaultProject(request.workspaceId);
+      : (workspaceManagementKnownStopped ||
+          workspaceManagementAuthorityMismatch)
+        ? await this.#readExistingDefaultProject(request.workspaceId)
+        : expectedWorkspaceManagementAuthority
+          ? await this.#projects.ensureDefaultProject(
+              request.workspaceId,
+              expectedWorkspaceManagementAuthority,
+            )
+          : await this.#projects.ensureDefaultProject(request.workspaceId);
     if (project.workspaceId !== request.workspaceId) {
       throw new OpenTofuControllerError(
         "invalid_argument",
@@ -541,18 +446,37 @@ export class CapsulesService {
       },
       capsule,
     );
-    const result: CapsuleInitialAuthorityResult =
-      await this.#store.createCapsuleInitialAuthority({
+    let result: CapsuleInitialAuthorityResult;
+    try {
+      result = await this.#store.createCapsuleInitialAuthority({
         installConfig: config,
         capsule,
         providerBindingSet,
+        ...(expectedWorkspaceManagementAuthority
+          ? { expectedWorkspaceManagementAuthority }
+          : {}),
       });
+    } catch (error) {
+      if (error instanceof WorkspaceManagementAdmissionConflictError) {
+        throw workspaceManagementAdmissionErrorFor();
+      }
+      throw error;
+    }
     if (result.status === "conflict") {
       throw new OpenTofuControllerError(
         "failed_precondition",
         "Capsule initial deployment authority conflicts with existing state",
         { reason: "capsule_initial_authority_conflict" },
       );
+    }
+    // An exact replay is an observation only. In particular, do not backfill
+    // the default Project or append another Activity event after a Workspace
+    // has entered draining; the durable store already owns the replay proof.
+    if (
+      result.status === "replayed" &&
+      (workspaceManagementKnownStopped || workspaceManagementAuthorityMismatch)
+    ) {
+      return { capsule: result.capsule, replayed: true };
     }
     const activity = {
       workspaceId: result.capsule.workspaceId,
@@ -616,8 +540,29 @@ export class CapsulesService {
         "re-adoption reason must be bounded non-secret text",
       );
     }
-    const target = await this.getInstallConfig(request.targetInstallConfigId);
     const before = await this.#requireCapsule(request.capsuleId);
+    const management = await this.#store.getWorkspaceManagement(before.workspaceId);
+    if (request.expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        request.expectedWorkspaceManagementAuthority,
+        before.workspaceId,
+      );
+    }
+    const workspaceManagementKnownStopped =
+      management?.workspaceId !== before.workspaceId ||
+      management.managementState !== "active";
+    let expectedWorkspaceManagementAuthority =
+      request.expectedWorkspaceManagementAuthority ??
+      (!workspaceManagementKnownStopped && management?.managementState === "active"
+        ? { ...management, managementState: "active" as const }
+        : undefined);
+    if (
+      workspaceManagementKnownStopped &&
+      before.installConfigId !== request.targetInstallConfigId
+    ) {
+      throw new WorkspaceManagementAdmissionConflictError(before.workspaceId);
+    }
+    const target = await this.getInstallConfig(request.targetInstallConfigId);
     if (
       target.workspaceId !== undefined &&
       target.workspaceId !== before.workspaceId
@@ -626,6 +571,29 @@ export class CapsulesService {
         "failed_precondition",
         "target InstallConfig is not available to the Capsule Workspace",
       );
+    }
+    const originalAuthority = await this.#store.getInstallConfigManagementAuthority(
+      target.id,
+    );
+    const successor =
+      target.internal?.reAdoption !== undefined || originalAuthority !== undefined;
+    const managementObservationOnly = workspaceManagementKnownStopped ||
+      (successor && (originalAuthority === undefined ||
+        originalAuthority.managementEpoch !== management?.managementEpoch));
+    if (successor) {
+      expectedWorkspaceManagementAuthority = originalAuthority;
+      if (before.installConfigId !== target.id) {
+        if (originalAuthority === undefined) {
+          throw new WorkspaceManagementAdmissionConflictError(before.workspaceId);
+        }
+        // The caller can confirm a capture, never replace the stored one.
+        assertWorkspaceManagementAdmission(
+          originalAuthority,
+          before.workspaceId,
+          request.expectedWorkspaceManagementAuthority,
+        );
+        assertWorkspaceManagementAdmission(management, before.workspaceId, originalAuthority);
+      }
     }
     const targetInstallConfigDigest = await stableJsonDigest(target);
     const providerBindingSetReplacement = request.providerBindingSetReplacement;
@@ -639,6 +607,9 @@ export class CapsulesService {
       await this.#store.rebindCapsuleInstallConfig({
         capsuleId: request.capsuleId,
         targetInstallConfigId: target.id,
+        ...(expectedWorkspaceManagementAuthority
+          ? { expectedWorkspaceManagementAuthority }
+          : {}),
         ...(validatedBindingReplacement
           ? { providerBindingSetReplacement: validatedBindingReplacement }
           : {}),
@@ -668,7 +639,7 @@ export class CapsulesService {
           }
         : {}),
     });
-    const result = admission
+    const result = admission && before.installConfigId !== target.id
       ? await admission(
           {
             capsule: before,
@@ -697,6 +668,22 @@ export class CapsulesService {
         "Capsule InstallConfig authority changed before rebind",
         { reason: "capsule_install_config_rebind_conflict" },
       );
+    }
+    const response: RebindCapsuleInstallConfigResponse = {
+      capsule: result.capsule,
+      replayed: result.status === "replayed",
+      targetInstallConfigDigest,
+      ...(validatedBindingReplacement
+        ? {
+            targetProviderBindingSetDigest:
+              validatedBindingReplacement.targetDigest,
+          }
+        : {}),
+    };
+    // Exact observation cannot acquire a new lifecycle holder or backfill
+    // Activity after its management epoch has ended, even if active again.
+    if (result.status === "replayed" && managementObservationOnly) {
+      return response;
     }
     const activity = {
       workspaceId: result.capsule.workspaceId,
@@ -730,17 +717,7 @@ export class CapsulesService {
     } else if (result.status === "updated") {
       await this.#activity.record(activity);
     }
-    return {
-      capsule: result.capsule,
-      replayed: result.status === "replayed",
-      targetInstallConfigDigest,
-      ...(validatedBindingReplacement
-        ? {
-            targetProviderBindingSetDigest:
-              validatedBindingReplacement.targetDigest,
-          }
-        : {}),
-    };
+    return response;
   }
 
   async listCapsules(workspaceId: string): Promise<readonly Capsule[]> {
@@ -892,7 +869,10 @@ export class CapsulesService {
     return await this.#store.putInstallConfig(config);
   }
 
-  async createInstallConfigIfAbsent(config: InstallConfig): Promise<boolean> {
+  async createInstallConfigIfAbsent(
+    config: InstallConfig,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<boolean> {
     requireNonEmptyString(config.id, "id");
     requireNonEmptyString(config.name, "name");
     validateInstallConfigInternal(config);
@@ -905,18 +885,75 @@ export class CapsulesService {
       workspaceId: "workspace-validation",
       capsuleId: "capsule-validation",
     });
-    if (
-      config.workspaceId !== undefined &&
-      !(await this.#store.getWorkspace(config.workspaceId))
-    ) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "workspace does not exist",
-      );
-    }
     validateCapsuleInterfaceBlueprints(config.interfaceBlueprints ?? []);
     validateCapsuleRequiredInterfaces(config.requiredInterfaces ?? []);
-    return await this.#store.createInstallConfigIfAbsent(config);
+    const workspaceId = config.workspaceId;
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      if (workspaceId === undefined) {
+        throw new TypeError(
+          "Workspace-neutral InstallConfig cannot carry Workspace management authority",
+        );
+      }
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        workspaceId,
+      );
+    }
+    let authority = expectedWorkspaceManagementAuthority;
+    if (config.internal?.reAdoption !== undefined && authority === undefined) {
+      // A successor was prepared before this call. Omission cannot approve it
+      // with a fresh epoch; an already stored id remains observation-only.
+      if (await this.#store.getInstallConfig(config.id)) return false;
+      throw new WorkspaceManagementAdmissionConflictError(workspaceId ?? "");
+    }
+    if (workspaceId !== undefined) {
+      if (authority === undefined) {
+        // In-process callers may start preparation here. Accounts callers
+        // pass their earlier capture; never refresh that supplied authority.
+        const management = await this.#store.getWorkspaceManagement(workspaceId);
+        if (
+          management?.workspaceId !== workspaceId ||
+          management.managementState !== "active"
+        ) {
+          // Existing ids are observations, not permission to finish a rebind.
+          // Known-stopped preparation must not become active through a later
+          // read if management changes while the canonical row is looked up.
+          if (await this.#store.getInstallConfig(config.id)) return false;
+          throw new WorkspaceManagementAdmissionConflictError(workspaceId);
+        }
+        authority = {
+          workspaceId,
+          managementState: "active",
+          managementEpoch: management.managementEpoch,
+        };
+      }
+      if (!(await this.#store.getWorkspace(workspaceId))) {
+        throw new OpenTofuControllerError(
+          "invalid_argument",
+          "workspace does not exist",
+        );
+      }
+    }
+    return await this.#store.createInstallConfigIfAbsent(config, authority);
+  }
+
+  /** Internal continuation of sealed preparation, not a public config field. */
+  async requireInstallConfigManagementAuthority(
+    id: string,
+    expected?: WorkspaceManagementAuthority,
+  ): Promise<WorkspaceManagementAuthority> {
+    const config = await this.getInstallConfig(id);
+    const original = await this.#store.getInstallConfigManagementAuthority(id);
+    if (config.workspaceId === undefined || original === undefined) {
+      throw new WorkspaceManagementAdmissionConflictError(config.workspaceId ?? "");
+    }
+    assertWorkspaceManagementAdmission(original, config.workspaceId, expected);
+    assertWorkspaceManagementAdmission(
+      await this.#store.getWorkspaceManagement(config.workspaceId),
+      config.workspaceId,
+      original,
+    );
+    return original;
   }
 
   async getCapsuleExecutionAuthorityEpoch(
@@ -1170,6 +1207,24 @@ export class CapsulesService {
       capsuleId,
       environment,
     );
+  }
+
+  /**
+   * Resolve the already durable default Project without creating one. This is
+   * used only after the captured Workspace-management authority is known to be
+   * stopped, where creating a new Project would be an unguarded side effect on
+   * an exact initial-authority replay.
+   */
+  async #readExistingDefaultProject(workspaceId: string): Promise<Project> {
+    const projectId = defaultProjectId(workspaceId);
+    const byId = await this.#store.getProject(projectId);
+    if (byId) return byId;
+    const bySlug = await this.#store.getProjectBySlug(
+      workspaceId,
+      DEFAULT_PROJECT_SLUG,
+    );
+    if (bySlug) return bySlug;
+    throw workspaceManagementAdmissionErrorFor();
   }
 
   async #requireCapsule(id: string): Promise<Capsule> {
@@ -1786,6 +1841,14 @@ function isSelectableInstallConfig(config: InstallConfig): boolean {
     return false;
   }
   return true;
+}
+
+function workspaceManagementAdmissionErrorFor(): OpenTofuControllerError {
+  return new OpenTofuControllerError(
+    "failed_precondition",
+    "Workspace is not accepting this management operation.",
+    { reason: "workspace_management_admission_conflict" },
+  );
 }
 
 function defaultId(prefix: string): string {

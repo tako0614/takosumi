@@ -322,8 +322,8 @@ async function makeVault(store: OpenTofuControlStore) {
       TAKOFORM_SPACE: "space_takoserver",
       TAKOFORM_TOKEN: TAKOSERVER_TOKEN,
     },
-  });
-  await vault.test(connection.id);
+  }, undefined, null);
+  await vault.test(connection.id, undefined, null);
   return { vault, connection };
 }
 

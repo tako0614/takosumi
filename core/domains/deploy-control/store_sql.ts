@@ -84,13 +84,22 @@ import type {
   CommitRestoredStateInput,
   CommitRestoredStateResult,
   BeginApplyRunResult,
+  BeginRestoreRunResult,
+  BeginSourceSyncRunResult,
+  ConnectionActorAuthority,
+  CreateConnectionRegistrationInput,
+  CommitConnectionTestResultInput,
   CapsuleExecutionAuthority,
   CapsuleExecutionAuthorityInput,
   CapsuleInitialAuthorityInput,
   CapsuleInitialAuthorityResult,
+  SourceConfigurationWriteInput,
+  SourceConfigurationWriteResult,
   CapsuleInstallConfigRebindInput,
   CapsuleInstallConfigRebindResult,
   ClaimCapsuleInterfaceMaterializationIntentInput,
+  MarkConnectionExpiredIfUnchangedInput,
+  RevokeConnectionIfUnchangedInput,
   MarkCapsuleStaleCommand,
   MarkCapsuleStaleResult,
   UpdateCapsuleLifecycleCommand,
@@ -111,15 +120,37 @@ import type {
   RuntimeSecretRetirementDispatchClaimInput,
   SettleCapsuleInterfaceMaterializationIntentInput,
   SettleCapsuleInterfaceMaterializationIntentResult,
+  StoredInstallConfig,
+  StoredManagedRun,
   StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
+  ProjectCreationInput,
+  ProjectCreationResult,
   CapsuleListPageParams,
+  BeginWorkspaceDrainingResult,
+  WorkspaceManagement,
+  WorkspaceManagementAuthority,
+  WorkspaceAccountReplacementInput,
+  WorkspaceMemberMutationInput,
+  WorkspaceOwnerMemberRepairInput,
+  WorkspaceReplacementInput,
+  RunManagementAuthorityInput,
   TransitionRunInput,
   TransitionRunResult,
 } from "./store.ts";
 import {
   assertSourceSyncSuccessCommit,
+  assertSourceConfigurationWriteInput,
+  assertWorkspaceManagementAdmission,
+  assertWorkspaceManagementAuthorityInput,
+  prepareConnectionExpiration,
+  prepareConnectionRegistration,
+  prepareConnectionRevocation,
+  prepareConnectionTestResult,
+  validateWorkspaceMemberReplacement,
+  validateWorkspaceOwnerMemberRepair,
+  validateWorkspaceReplacement,
   assertCapsulePlanCreationFence,
   assertPlanRunPreparation,
   assertCapsuleInterfaceMaterializationIntentClaimInput,
@@ -136,11 +167,14 @@ import {
   capsuleRuntimeSafetyFromRun,
   CapsuleStateVersionGuardConflict,
   CapsuleStateGenerationGuardConflict,
+  WorkspaceManagementAdmissionConflictError,
   isApplyRunRecord,
   isPlanRunRecord,
+  isSourceSyncRunRecord,
   isRecoverableOpenTofuRunRecord,
   normalizeStoredCapsuleCompatibilityLevel,
   normalizeStoredCapsuleCompatibilityReport,
+  normalizeWorkspaceManagement,
   parseStoredCapsuleRootModuleVariableDeclarations,
   parseStoredCapsuleCompatibilityProviderGraph,
   planRunPreparationPersistsInputs,
@@ -151,6 +185,26 @@ import {
   providerBindingSetTargetsCapsule,
   runtimeSecretRetirementDispatchAttempt,
   sourceSnapshotsExactlyMatch,
+  workspaceAccountReplacementAllowed,
+  workspaceAccountAuthorityAllowed,
+  workspaceMemberMutationAllowed,
+  workspaceMemberMutationDropsOwner,
+  installConfigManagementAuthority,
+  installConfigRequiresManagementAuthority,
+  publicStoredInstallConfig,
+  storeInstallConfig,
+  sourceSyncRunStoredIdentityMatches,
+  sourceSyncRunManagementAuthority,
+  sourceSyncRunImmutableIdentityMatches,
+  runStoredIdentityMatches,
+  runRequiresStoredManagementAuthority,
+  runManagementAuthority,
+  runManagementAuthorityForIdentity,
+  preserveStoredRunManagementAuthority,
+  storeRunManagementAuthority,
+  restoreRunCreationIdentityMatches,
+  publicStoredRun,
+  storeSourceSyncRun,
   storedCapsuleCompatibilityProviderGraph,
   SourceSnapshotConflictError,
   validateCommitRestoredStateInterfaceMaterialization,
@@ -170,11 +224,16 @@ import {
   normalizeSourceSnapshotRecord,
   normalizeUsageEvent,
   parseWorkspaceMemberRecord,
+  WorkspaceMemberRowError,
+  workspaceMemberFromRow,
   usageEventFromRow,
   usageResourceMetadataFromRow,
 } from "./store_row_mappers.ts";
 import type { SqlTransaction } from "../../adapters/storage/sql.ts";
-import { stableJsonDigest } from "../../adapters/source/digest.ts";
+import {
+  stableJsonDigest,
+  stableStringify,
+} from "../../adapters/source/digest.ts";
 import {
   committedPostApplyRecoveryProofMatches,
   exactRecoveryProofsEqual,
@@ -356,11 +415,24 @@ function pgCapsuleRuntimeSafetySafeOrAbsent(capsuleId: string): SQL {
   ), TRUE)`;
 }
 
+/**
+ * PostgreSQL keeps the raw Run JSON alongside the public proof material. The
+ * authority key is private persistence metadata and must not participate in
+ * recovery proof digests, but the same raw snapshot still fences the eventual
+ * capsule UPDATE against a concurrent Run change.
+ */
+type PgCommittedPostApplyRecoveryRows = CommittedPostApplyRecoveryRows & {
+  readonly failedApplyRunStored: StoredRunRecord;
+};
+
 async function pgCommittedPostApplyRecoveryRows(
   db: PgRemoteDatabase<typeof pgSchema>,
   failedApplyRun: ApplyRun,
   proof: InstallConfigCommittedPostApplyRecoveryProof,
-): Promise<CommittedPostApplyRecoveryRows | undefined> {
+): Promise<PgCommittedPostApplyRecoveryRows | undefined> {
+  const failedApplyRunStored = structuredClone(
+    failedApplyRun as StoredRunRecord,
+  );
   const [stateRows, outputRows] = await Promise.all([
     db
       .select({ json: pgSchema.stateVersions.snapshotJson })
@@ -376,7 +448,14 @@ async function pgCommittedPostApplyRecoveryRows(
   const stateVersion = parseRow(stateRows[0]) as StateVersion | undefined;
   const output = parseRow(outputRows[0]) as Output | undefined;
   return stateVersion && output
-    ? { failedApplyRun, stateVersion, output }
+    ? {
+        // Proof material is derived from the public Run projection; the
+        // private authority metadata remains available only to the SQL fence.
+        failedApplyRun: publicStoredRun(failedApplyRunStored) as ApplyRun,
+        failedApplyRunStored,
+        stateVersion,
+        output,
+      }
     : undefined;
 }
 
@@ -387,7 +466,7 @@ async function pgCommittedPostApplyRecoveryRows(
 function pgCapsuleCommittedPostApplyRecoveryFence(
   db: PgRemoteDatabase<typeof pgSchema>,
   capsuleId: string,
-  rows: CommittedPostApplyRecoveryRows,
+  rows: PgCommittedPostApplyRecoveryRows,
 ): SQL {
   const failedRunFence = db
     .select({ id: pgSchema.runs.id })
@@ -395,7 +474,9 @@ function pgCapsuleCommittedPostApplyRecoveryFence(
     .where(
       and(
         eq(pgSchema.runs.id, rows.failedApplyRun.id),
-        eq(pgSchema.runs.runJson, rows.failedApplyRun),
+        // Compare the complete raw stored JSON, including private authority
+        // metadata. Only the public projection is fed into proof digests.
+        eq(pgSchema.runs.runJson, rows.failedApplyRunStored),
       ),
     );
   const stateVersionFence = db
@@ -830,27 +911,53 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         json: run,
       },
     );
-    return run;
+    return publicStoredRun(run);
   }
 
   async preparePlanRun(
     input: PreparePlanRunInput,
   ): Promise<PreparePlanRunResult> {
+    input = structuredClone(input);
     assertPlanRunPreparation(input);
+    if (input.expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        input.expectedWorkspaceManagementAuthority,
+        input.run.workspaceId,
+      );
+    }
     return await this.#client.transaction(async (transaction) => {
       const db = this.#drizzleForClient(transaction);
       const run = input.run;
-      if (input.expectedCapsulePlanAuthority !== undefined && run.capsuleId) {
-        // An existing exact row is an idempotent replay and deliberately does
-        // not revalidate mutable current authority.  A new row, however, must
-        // lock and validate the Capsule before any Run/sidecar write so a
-        // successor or epoch race cannot leave a stale Plan behind.
-        const existingRun = await db
-          .select({ id: pgSchema.runs.id })
-          .from(pgSchema.runs)
-          .where(eq(pgSchema.runs.id, run.id))
-          .limit(1);
-        if (existingRun.length === 0) {
+      // An existing exact row is an idempotent replay and deliberately does
+      // not revalidate mutable current authority. A new row must lock and
+      // validate the Workspace first, before any dependent Capsule lock or
+      // Run/sidecar write, so a draining race cannot leave a stale Plan.
+      const existingRun = await db
+        .select({ id: pgSchema.runs.id })
+        .from(pgSchema.runs)
+        .where(eq(pgSchema.runs.id, run.id))
+        .limit(1);
+      let storedRun: StoredRunRecord = publicStoredRun(run);
+      if (existingRun.length === 0) {
+        const management = await pgWorkspaceManagementForTransaction(
+          transaction,
+          run.workspaceId,
+        );
+        if (input.expectedWorkspaceManagementAuthority === undefined) {
+          throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
+        }
+        const expectedWorkspaceManagementAuthority =
+          input.expectedWorkspaceManagementAuthority;
+        assertWorkspaceManagementAdmission(
+          management,
+          run.workspaceId,
+          expectedWorkspaceManagementAuthority,
+        );
+        storedRun = storeRunManagementAuthority(
+          run,
+          expectedWorkspaceManagementAuthority,
+        );
+        if (input.expectedCapsulePlanAuthority !== undefined && run.capsuleId) {
           const rows = await transaction.query<{
             installConfigId: string | null;
             currentStateVersionId: string | null;
@@ -909,7 +1016,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           leaseToken: null,
           heartbeatAt: run.heartbeatAt ?? null,
           createdAt: String(run.createdAt),
-          runJson: run,
+          runJson: storedRun,
         })
         .onConflictDoNothing({ target: pgSchema.runs.id })
         .returning({ json: pgSchema.runs.runJson });
@@ -958,7 +1065,10 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
             input,
           )
         ) {
-          return { status: "existing" as const, run: currentRun };
+          return {
+            status: "existing" as const,
+            run: publicStoredRun(currentRun),
+          };
         }
         throw new PlanRunPreparationConflictError(run.id);
       }
@@ -976,7 +1086,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           inputsJson: input.inputs,
         });
       }
-      return { status: "created" as const, run };
+      return { status: "created" as const, run: publicStoredRun(run) };
     });
   }
 
@@ -985,7 +1095,51 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       ...RUN_KINDS_PLAN,
       "drift_check",
     ]);
-    return coerceRunRowStatus(run && isPlanRunRecord(run) ? run : undefined);
+    return coerceRunRowStatus(
+      run && isPlanRunRecord(run) ? publicStoredRun(run) : undefined,
+    );
+  }
+
+  async getRunManagementAuthority(
+    input: RunManagementAuthorityInput,
+  ): Promise<WorkspaceManagementAuthority | undefined> {
+    input = structuredClone(input);
+    const kinds = input.kind === "plan"
+      ? [...RUN_KINDS_PLAN, "drift_check"]
+      : input.kind === "apply"
+        ? [...RUN_KINDS_APPLY]
+        : input.kind === "source_sync"
+          ? [RUN_KIND_SOURCE_SYNC]
+          : [RUN_KIND_RESTORE];
+    const rows = await this.#db
+      .select({
+        id: pgSchema.runs.id,
+        workspaceId: pgSchema.runs.workspaceId,
+        kind: pgSchema.runs.kind,
+        json: pgSchema.runs.runJson,
+      })
+      .from(pgSchema.runs)
+      .where(
+        and(
+          eq(pgSchema.runs.id, input.id),
+          eq(pgSchema.runs.workspaceId, input.workspaceId),
+          inArray(pgSchema.runs.kind, kinds),
+        ),
+      )
+      .limit(1);
+    const row = rows[0];
+    if (row === undefined) return undefined;
+    let value: unknown;
+    try {
+      value = parseJson(row.json);
+    } catch {
+      return undefined;
+    }
+    if (value === null || typeof value !== "object") return undefined;
+    return runManagementAuthorityForIdentity(
+      value as StoredRunRecord,
+      input,
+    );
   }
 
   async putApplyRun(run: ApplyRun): Promise<ApplyRun> {
@@ -999,36 +1153,110 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         json: run,
       },
     );
-    return run;
+    return publicStoredRun(run);
   }
 
-  async beginApplyRun(run: ApplyRun): Promise<BeginApplyRunResult> {
-    const inserted = await this.#db
-      .insert(pgSchema.runs)
-      .values({
-        id: run.id,
-        kind: run.operation === "destroy" ? "destroy_apply" : "apply",
-        workspaceId: run.workspaceId,
-        sourceId: null,
-        capsuleId: run.capsuleId ?? null,
-        status: run.status,
-        leaseToken: null,
-        heartbeatAt: run.heartbeatAt ?? null,
-        createdAt: String(run.createdAt),
-        runJson: run,
-      })
-      .onConflictDoNothing({ target: pgSchema.runs.id })
-      .returning({ json: pgSchema.runs.runJson });
-    if (inserted[0]) return { status: "created", run };
-    const current = await this.getApplyRun(run.id);
-    return current
-      ? { status: "existing", run: current }
-      : { status: "conflict" };
+  async beginApplyRun(
+    run: ApplyRun,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<BeginApplyRunResult> {
+    ({ run, expectedWorkspaceManagementAuthority } = structuredClone({
+      run,
+      expectedWorkspaceManagementAuthority,
+    }));
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        run.workspaceId,
+      );
+    }
+    return await this.#client.transaction(async (transaction) => {
+      const db = this.#drizzleForClient(transaction);
+      const existingRows = await db
+        .select({
+          kind: pgSchema.runs.kind,
+          workspaceId: pgSchema.runs.workspaceId,
+          json: pgSchema.runs.runJson,
+        })
+        .from(pgSchema.runs)
+        .where(eq(pgSchema.runs.id, run.id))
+        .limit(1);
+      const existing = parseRow(existingRows[0]) as
+        | StoredRunRecord
+        | undefined;
+      if (existing) {
+        return isApplyRunRecord(existing)
+          ? {
+              status: "existing" as const,
+              run: coerceRunRowStatus(publicStoredRun(existing))!,
+            }
+          : { status: "conflict" as const };
+      }
+
+      // Workspace is the outer lock in this transaction. The active state is
+      // always required for a new Apply row; an expected authority additionally
+      // pins the exact management epoch captured by the caller.
+      const management = await pgWorkspaceManagementForTransaction(
+        transaction,
+        run.workspaceId,
+      );
+      if (expectedWorkspaceManagementAuthority === undefined) {
+        throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
+      }
+      assertWorkspaceManagementAdmission(
+        management,
+        run.workspaceId,
+        expectedWorkspaceManagementAuthority,
+      );
+
+      const inserted = await db
+        .insert(pgSchema.runs)
+        .values({
+          id: run.id,
+          kind: run.operation === "destroy" ? "destroy_apply" : "apply",
+          workspaceId: run.workspaceId,
+          sourceId: null,
+          capsuleId: run.capsuleId ?? null,
+          status: run.status,
+          leaseToken: null,
+          heartbeatAt: run.heartbeatAt ?? null,
+          createdAt: String(run.createdAt),
+          runJson: storeRunManagementAuthority(
+            run,
+            expectedWorkspaceManagementAuthority,
+          ),
+        })
+        .onConflictDoNothing({ target: pgSchema.runs.id })
+        .returning({ json: pgSchema.runs.runJson });
+      if (inserted[0]) {
+        return { status: "created" as const, run: publicStoredRun(run) };
+      }
+      const currentRows = await db
+        .select({
+          kind: pgSchema.runs.kind,
+          workspaceId: pgSchema.runs.workspaceId,
+          json: pgSchema.runs.runJson,
+        })
+        .from(pgSchema.runs)
+        .where(eq(pgSchema.runs.id, run.id))
+        .limit(1);
+      const current = parseRow(currentRows[0]) as
+        | StoredRunRecord
+        | undefined;
+      return current && isApplyRunRecord(current)
+        ? {
+            status: "existing" as const,
+            run: coerceRunRowStatus(publicStoredRun(current))!,
+          }
+        : { status: "conflict" as const };
+    });
   }
 
   async getApplyRun(id: string): Promise<ApplyRun | undefined> {
     const run = await this.#getRun<StoredRunRecord>(id, RUN_KINDS_APPLY);
-    return coerceRunRowStatus(run && isApplyRunRecord(run) ? run : undefined);
+    return coerceRunRowStatus(
+      run && isApplyRunRecord(run) ? publicStoredRun(run) : undefined,
+    );
   }
 
   /**
@@ -1043,6 +1271,36 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
    * lost race (0 rows) re-reads the current row and returns it with `won: false`.
    */
   async transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
+    input = structuredClone(input);
+    if (input.expectedWorkspaceManagementAuthority !== undefined) {
+      // Validate the caller's captured authority before any database work.
+      // A valid but stale/mis-bound expectation is a normal CAS loss below;
+      // malformed input is a programming error and throws TypeError.
+      assertWorkspaceManagementAuthorityInput(
+        input.expectedWorkspaceManagementAuthority,
+        input.expectedWorkspaceManagementAuthority.workspaceId,
+      );
+    }
+    const candidate = input.run as StoredRunRecord;
+    const candidateKindMatches =
+      input.kind === "plan"
+        ? isPlanRunRecord(candidate)
+        : input.kind === "apply"
+          ? isApplyRunRecord(candidate)
+          : input.kind === "source_sync"
+            ? isSourceSyncRunRecord(candidate)
+            : "type" in candidate && candidate.type === RUN_KIND_RESTORE;
+    if (!candidateKindMatches || input.run.id !== input.id) {
+      const currentRun =
+        input.kind === "plan"
+          ? await this.getPlanRun(input.id)
+          : input.kind === "apply"
+            ? await this.getApplyRun(input.id)
+            : input.kind === "source_sync"
+              ? await this.getSourceSyncRun(input.id)
+              : await this.getBackupRun(input.id);
+      return { won: false, ...(currentRun ? { run: currentRun } : {}) };
+    }
     const kinds =
       input.kind === "plan"
         ? [...RUN_KINDS_PLAN, "drift_check"]
@@ -1064,42 +1322,208 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       : input.setLeaseToken !== undefined
         ? { leaseToken: input.setLeaseToken }
         : {};
-    const rows = await this.#db
-      .update(pgSchema.runs)
-      .set({
-        status: persisted.status,
-        runJson: persisted,
-        ...(input.clearHeartbeat
-          ? { heartbeatAt: null }
-          : heartbeatAt === undefined
-            ? {}
-            : { heartbeatAt }),
-        ...leaseSet,
-      })
-      .where(
-        and(
-          eq(pgSchema.runs.id, input.id),
-          inArray(pgSchema.runs.kind, kinds),
-          inArray(pgSchema.runs.status, [...input.expectFrom]),
-          input.expectLeaseToken === undefined
-            ? sql`true`
-            : eq(pgSchema.runs.leaseToken, input.expectLeaseToken),
-          input.expectHeartbeatAt === undefined
-            ? sql`true`
-            : input.expectHeartbeatAt === null
-              ? isNull(pgSchema.runs.heartbeatAt)
-              : eq(pgSchema.runs.heartbeatAt, input.expectHeartbeatAt),
-          input.expectStartedAt === undefined
-            ? sql`true`
-            : input.expectStartedAt === null
-              ? sql`${pgSchema.runs.runJson} ->> 'startedAt' IS NULL`
-              : sql`${pgSchema.runs.runJson} ->> 'startedAt' = ${String(input.expectStartedAt)}`,
-        ),
-      )
-      .returning({ json: pgSchema.runs.runJson });
-    const won = parseRow(rows[0]) as
-      PlanRun | ApplyRun | SourceSyncRun | Run | undefined;
-    if (won) return { won: true, run: won };
+    const requireStoredManagementAuthority =
+      input.requireStoredManagementAuthority === true;
+    const update = async (
+      db: PgRemoteDatabase<typeof pgSchema>,
+      expectedWorkspaceId?: string,
+      current?: StoredRunRecord,
+    ): Promise<PlanRun | ApplyRun | SourceSyncRun | Run | undefined> => {
+      let runForWrite: PlanRun | ApplyRun | SourceSyncRun | Run =
+        publicStoredRun(persisted as StoredRunRecord);
+      let currentRun = current;
+      let storedAuthority: WorkspaceManagementAuthority | undefined;
+      if (
+        currentRun === undefined &&
+        (input.kind === "source_sync" ||
+          input.setLeaseToken !== undefined ||
+          requireStoredManagementAuthority)
+      ) {
+          const currentRows = await db
+            .select({ json: pgSchema.runs.runJson })
+            .from(pgSchema.runs)
+            .where(
+              and(
+                eq(pgSchema.runs.id, input.id),
+                inArray(pgSchema.runs.kind, kinds),
+              ),
+            )
+            .limit(1);
+          currentRun = parseRow(currentRows[0]) as
+            | StoredRunRecord
+            | undefined;
+      }
+      if (
+        currentRun !== undefined &&
+        !runStoredIdentityMatches(
+          currentRun,
+          input.run as StoredRunRecord,
+        )
+      ) {
+        return undefined;
+      }
+      if (
+        (input.setLeaseToken !== undefined || requireStoredManagementAuthority) &&
+        (currentRun === undefined || !runRequiresStoredManagementAuthority(currentRun))
+      ) {
+        return undefined;
+      }
+      if (input.setLeaseToken !== undefined || requireStoredManagementAuthority) {
+        storedAuthority = currentRun
+          ? runManagementAuthority(currentRun)
+          : undefined;
+        if (storedAuthority === undefined) return undefined;
+      }
+      const expectedRunWorkspaceId = expectedWorkspaceId ?? input.run.workspaceId;
+      const runIdentityFence = and(
+        // The indexed Workspace owner and JSON identity must still describe
+        // the candidate row. Mutable progress fields intentionally remain
+        // unfenced so a same-lease heartbeat may race this write safely.
+        eq(pgSchema.runs.workspaceId, expectedRunWorkspaceId),
+        sql`${pgSchema.runs.runJson} ->> 'id' = ${input.id}`,
+        sql`${pgSchema.runs.runJson} ->> 'workspaceId' = ${expectedRunWorkspaceId}`,
+        input.kind === "source_sync"
+          ? sql`${pgSchema.runs.runJson} ->> 'kind' = ${RUN_KIND_SOURCE_SYNC}`
+          : input.kind === "restore"
+            ? sql`${pgSchema.runs.runJson} ->> 'type' = ${RUN_KIND_RESTORE}`
+            : sql`true`,
+      );
+      const runAuthorityFence = input.setLeaseToken === undefined &&
+          !requireStoredManagementAuthority
+        ? sql`true`
+        : storedAuthority === undefined
+          ? sql`false`
+          : and(
+              sql`${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' ->> 'workspaceId' = ${storedAuthority.workspaceId}`,
+              sql`${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' ->> 'managementState' = ${storedAuthority.managementState}`,
+              sql`${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' ->> 'managementEpoch' = ${String(storedAuthority.managementEpoch)}`,
+            );
+      const rows = await db
+        .update(pgSchema.runs)
+        .set({
+          status: runForWrite.status,
+          runJson: runJsonPreservingManagementAuthority(
+            runForWrite as StoredRunRecord,
+          ),
+          ...(input.clearHeartbeat
+            ? { heartbeatAt: null }
+            : heartbeatAt === undefined
+              ? {}
+              : { heartbeatAt }),
+          ...leaseSet,
+        })
+        .where(
+          and(
+            eq(pgSchema.runs.id, input.id),
+            runIdentityFence,
+            runAuthorityFence,
+            expectedWorkspaceId === undefined
+              ? sql`true`
+              : eq(pgSchema.runs.workspaceId, expectedWorkspaceId),
+            inArray(pgSchema.runs.kind, kinds),
+            inArray(pgSchema.runs.status, [...input.expectFrom]),
+            input.expectLeaseToken === undefined
+              ? sql`true`
+              : eq(pgSchema.runs.leaseToken, input.expectLeaseToken),
+            input.expectHeartbeatAt === undefined
+              ? sql`true`
+              : input.expectHeartbeatAt === null
+                ? isNull(pgSchema.runs.heartbeatAt)
+                : eq(pgSchema.runs.heartbeatAt, input.expectHeartbeatAt),
+            input.expectStartedAt === undefined
+              ? sql`true`
+              : input.expectStartedAt === null
+                ? sql`${pgSchema.runs.runJson} ->> 'startedAt' IS NULL`
+                : sql`${pgSchema.runs.runJson} ->> 'startedAt' = ${String(input.expectStartedAt)}`,
+          ),
+        )
+        .returning({ json: pgSchema.runs.runJson });
+      return parseRow(rows[0]) as
+        | PlanRun
+        | ApplyRun
+        | SourceSyncRun
+        | Run
+        | undefined;
+    };
+    let won: PlanRun | ApplyRun | SourceSyncRun | Run | undefined;
+    if (
+      input.setLeaseToken !== undefined ||
+      input.expectedWorkspaceManagementAuthority !== undefined ||
+      requireStoredManagementAuthority
+    ) {
+      // The replacement payload is not authority: read the Workspace id from
+      // the authoritative existing Run row, then lock that Workspace before
+      // attempting the dependent Run CAS.
+      won = await this.#client.transaction(async (transaction) => {
+        const runRows = await transaction.query<{
+          readonly workspaceId: string | null;
+        }>(
+          `select space_id as "workspaceId"
+             from takosumi_runs
+            where id = $1
+            limit 1`,
+          [input.id],
+        );
+        const workspaceId = runRows.rows[0]?.workspaceId;
+        const management = workspaceId
+          ? await pgWorkspaceManagementForTransaction(transaction, workspaceId)
+          : undefined;
+        if (!management || management.managementState !== "active") {
+          return undefined;
+        }
+        const expected = input.expectedWorkspaceManagementAuthority;
+        if (
+          expected !== undefined &&
+          (expected.workspaceId !== management.workspaceId ||
+            expected.managementEpoch !== management.managementEpoch)
+        ) {
+          // State/epoch loss is deliberately represented as the ordinary CAS
+          // miss; callers re-read the current Run below.
+          return undefined;
+        }
+        let current: StoredRunRecord | undefined;
+        if (
+          input.setLeaseToken !== undefined ||
+          requireStoredManagementAuthority
+        ) {
+          const currentRows = await transaction.query<{
+            readonly runJson: unknown;
+          }>(
+            `select run_json as "runJson"
+               from takosumi_runs
+              where id = $1
+              limit 1`,
+            [input.id],
+          );
+          current = parseJson(currentRows.rows[0]?.runJson) as
+            | StoredRunRecord
+            | undefined;
+          const authority = current ? runManagementAuthority(current) : undefined;
+        if (
+          authority === undefined ||
+          authority.workspaceId !== management.workspaceId ||
+          authority.managementEpoch !== management.managementEpoch
+          ) {
+            // The persisted original authority, not a caller's optional
+            // expectation, fences every fresh lease or explicitly guarded
+            // transition. Missing or malformed legacy metadata is an ordinary
+            // CAS miss.
+            return undefined;
+          }
+        }
+        // The initial Run read did not lock the dependent row. Bind the CAS to
+        // that same Workspace so a concurrent row replacement cannot make the
+        // locked active Workspace authorize a Run now owned by another one.
+        return await update(
+          this.#drizzleForClient(transaction),
+          management.workspaceId,
+          current,
+        );
+      });
+    } else {
+      won = await update(this.#db);
+    }
+    if (won) return { won: true, run: publicStoredRun(won) };
     // Lost the CAS race (or the row vanished): re-read the now-current row so
     // callers observe the winning transition instead of clobbering it.
     const current =
@@ -1121,37 +1545,231 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     const won = await this.#client.transaction(
       async (transaction: SqlTransaction) => {
         const db = this.#drizzleForClient(transaction);
+        const currentRows = await db
+          .select({ json: pgSchema.runs.runJson })
+          .from(pgSchema.runs)
+          .where(
+            and(
+              eq(pgSchema.runs.id, input.terminalRun.id),
+              eq(pgSchema.runs.kind, RUN_KIND_SOURCE_SYNC),
+            ),
+          )
+          .limit(1);
+        const current = parseRow(currentRows[0]) as
+          | StoredRunRecord
+          | undefined;
+        if (
+          current === undefined ||
+          !sourceSyncRunStoredIdentityMatches(
+            current,
+            input.terminalRun as StoredRunRecord,
+          )
+        ) {
+          return false;
+        }
+        const terminalRun = publicStoredRun(input.terminalRun);
         const terminalCommitted = await pgUpdateTerminalRunWithLease(
           db,
           RUN_KIND_SOURCE_SYNC,
           [RUN_KIND_SOURCE_SYNC],
-          input.terminalRun,
+          terminalRun,
           input.leaseToken,
         );
         if (!terminalCommitted) return false;
         await pgInsertOrAdoptSourceSnapshot(db, snapshot);
+        await pgMergeSourceSyncCursor(db, terminalRun, snapshot);
         return true;
       },
     );
-    if (won) return { won: true, run: input.terminalRun };
+    if (won) {
+      return { won: true, run: publicStoredRun(input.terminalRun) };
+    }
     const current = await this.getSourceSyncRun(input.terminalRun.id);
     return { won: false, ...(current ? { run: current } : {}) };
   }
 
-  async putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {
-    await this.#putRunDrizzle(RUN_KIND_SOURCE_SYNC, {
-      id: run.id,
-      workspaceId: run.workspaceId,
-      sourceId: run.sourceId,
-      capsuleId: null,
-      createdAt: run.createdAt,
-      json: run,
+  async beginSourceSyncRun(
+    run: SourceSyncRun,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<BeginSourceSyncRunResult> {
+    ({ run, expectedWorkspaceManagementAuthority } = structuredClone({
+      run,
+      expectedWorkspaceManagementAuthority,
+    }));
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        run.workspaceId,
+      );
+    }
+    return await this.#client.transaction(async (transaction) => {
+      const db = this.#drizzleForClient(transaction);
+
+      // Workspace is the outer lock for a new SourceSyncRun admission. An
+      // existing exact immutable row is an idempotent read and may be adopted
+      // while draining, so the admission check is deliberately after it.
+      const management = await pgWorkspaceManagementForTransaction(
+        transaction,
+        run.workspaceId,
+      );
+      const existingRows = await db
+        .select({
+          kind: pgSchema.runs.kind,
+          workspaceId: pgSchema.runs.workspaceId,
+          sourceId: pgSchema.runs.sourceId,
+          json: pgSchema.runs.runJson,
+        })
+        .from(pgSchema.runs)
+        .where(eq(pgSchema.runs.id, run.id))
+        .limit(1);
+      const existingRow = existingRows[0];
+      const existing = parseRow(existingRow) as
+        | StoredRunRecord
+        | undefined;
+      if (existingRow !== undefined) {
+        return existingRow.kind === RUN_KIND_SOURCE_SYNC &&
+            existingRow.workspaceId === run.workspaceId &&
+            existingRow.sourceId === run.sourceId &&
+            existing !== undefined &&
+            isSourceSyncRunRecord(existing) &&
+            sourceSyncRunImmutableIdentityMatches(existing, run)
+          ? { status: "existing" as const, run: publicStoredRun(existing) }
+          : { status: "conflict" as const };
+      }
+
+      if (expectedWorkspaceManagementAuthority === undefined) {
+        // New SourceSync rows must carry the authority captured before any
+        // asynchronous preparation. Existing exact rows above remain
+        // read-only replays and never backfill this private field.
+        throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
+      }
+      assertWorkspaceManagementAdmission(
+        management,
+        run.workspaceId,
+        expectedWorkspaceManagementAuthority,
+      );
+      const stored = storeSourceSyncRun(
+        run,
+        expectedWorkspaceManagementAuthority,
+      );
+      const inserted = await db
+        .insert(pgSchema.runs)
+        .values({
+          id: run.id,
+          kind: RUN_KIND_SOURCE_SYNC,
+          workspaceId: run.workspaceId,
+          sourceId: run.sourceId,
+          capsuleId: null,
+          status: run.status,
+          leaseToken: null,
+          heartbeatAt: run.heartbeatAt ?? null,
+          createdAt: String(run.createdAt),
+          runJson: stored,
+        })
+        .onConflictDoNothing({ target: pgSchema.runs.id })
+        .returning({ json: pgSchema.runs.runJson });
+      if (inserted[0]) {
+        return { status: "created" as const, run: publicStoredRun(stored) };
+      }
+
+      // A cross-Workspace id collision can bypass the target Workspace lock;
+      // adopt only an exact SourceSyncRun identity after the failed insert.
+      const currentRows = await db
+        .select({
+          kind: pgSchema.runs.kind,
+          workspaceId: pgSchema.runs.workspaceId,
+          sourceId: pgSchema.runs.sourceId,
+          json: pgSchema.runs.runJson,
+        })
+        .from(pgSchema.runs)
+        .where(eq(pgSchema.runs.id, run.id))
+        .limit(1);
+      const currentRow = currentRows[0];
+      const current = parseRow(currentRow) as
+        | StoredRunRecord
+        | undefined;
+      return currentRow && currentRow.kind === RUN_KIND_SOURCE_SYNC &&
+          currentRow.workspaceId === run.workspaceId &&
+          currentRow.sourceId === run.sourceId &&
+          current && isSourceSyncRunRecord(current) &&
+          sourceSyncRunImmutableIdentityMatches(current, run)
+        ? { status: "existing" as const, run: publicStoredRun(current) }
+        : { status: "conflict" as const };
     });
-    return run;
+  }
+
+  async putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {
+    if (!isSourceSyncRunRecord(run as StoredRunRecord)) {
+      throw new TypeError("SourceSyncRun stored identity cannot change");
+    }
+    // The caller's payload is always public. On conflict, preserve the
+    // existing private authority key in the same PostgreSQL upsert statement.
+    const publicRun = publicStoredRun(run);
+    const runJson = sourceSyncRunJsonPreservingAuthority(publicRun);
+    const written = await this.#db
+      .insert(pgSchema.runs)
+      .values({
+        id: publicRun.id,
+        kind: RUN_KIND_SOURCE_SYNC,
+        workspaceId: publicRun.workspaceId,
+        sourceId: publicRun.sourceId,
+        capsuleId: null,
+        status: publicRun.status,
+        leaseToken: null,
+        heartbeatAt: publicRun.heartbeatAt ?? null,
+        createdAt: String(publicRun.createdAt),
+        runJson: publicRun,
+      })
+      .onConflictDoUpdate({
+        target: pgSchema.runs.id,
+        set: {
+          kind: RUN_KIND_SOURCE_SYNC,
+          workspaceId: publicRun.workspaceId,
+          sourceId: publicRun.sourceId,
+          capsuleId: null,
+          status: publicRun.status,
+          leaseToken: null,
+          heartbeatAt: publicRun.heartbeatAt ?? null,
+          createdAt: String(publicRun.createdAt),
+          runJson,
+        },
+        setWhere: and(
+          eq(pgSchema.runs.kind, RUN_KIND_SOURCE_SYNC),
+          eq(pgSchema.runs.workspaceId, publicRun.workspaceId),
+          sql`${pgSchema.runs.runJson} ->> 'id' = ${publicRun.id}`,
+          sql`${pgSchema.runs.runJson} ->> 'workspaceId' = ${publicRun.workspaceId}`,
+          sql`${pgSchema.runs.runJson} ->> 'kind' = ${RUN_KIND_SOURCE_SYNC}`,
+        ),
+      })
+      .returning({ id: pgSchema.runs.id });
+    if (written.length === 0) {
+      const existingRows = await this.#db
+        .select({
+          kind: pgSchema.runs.kind,
+          workspaceId: pgSchema.runs.workspaceId,
+          json: pgSchema.runs.runJson,
+        })
+        .from(pgSchema.runs)
+        .where(eq(pgSchema.runs.id, publicRun.id))
+        .limit(1);
+      const existingRow = existingRows[0];
+      const existing = parseRow(existingRow) as StoredRunRecord | undefined;
+      if (
+        existingRow !== undefined &&
+        (existingRow.kind !== RUN_KIND_SOURCE_SYNC ||
+          existingRow.workspaceId !== publicRun.workspaceId ||
+          existing === undefined ||
+          !sourceSyncRunStoredIdentityMatches(existing, publicRun as StoredRunRecord))
+      ) {
+        throw new TypeError("SourceSyncRun stored identity cannot change");
+      }
+    }
+    return publicRun;
   }
 
   async getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined> {
-    return await this.#getRun<SourceSyncRun>(id, RUN_KIND_SOURCE_SYNC);
+    const run = await this.#getRun<StoredRunRecord>(id, RUN_KIND_SOURCE_SYNC);
+    return run && isSourceSyncRunRecord(run) ? publicStoredRun(run) : undefined;
   }
 
   async putCompatibilityCheckRun(run: Run): Promise<Run> {
@@ -1168,11 +1786,15 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       createdAt: run.createdAt,
       json: run,
     });
-    return run;
+    return publicStoredRun(run);
   }
 
   async getCompatibilityCheckRun(id: string): Promise<Run | undefined> {
-    return await this.#getRun<Run>(id, RUN_KIND_COMPATIBILITY_CHECK);
+    const run = await this.#getRun<StoredRunRecord>(
+      id,
+      RUN_KIND_COMPATIBILITY_CHECK,
+    );
+    return run ? (publicStoredRun(run) as Run) : undefined;
   }
 
   async putBackupRun(run: Run): Promise<Run> {
@@ -1186,11 +1808,123 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       createdAt: run.createdAt,
       json: run,
     });
-    return run;
+    return publicStoredRun(run);
+  }
+
+  async beginRestoreRun(
+    inputRun: Run,
+    inputExpectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<BeginRestoreRunResult> {
+    const {
+      run,
+      expectedWorkspaceManagementAuthority,
+    } = structuredClone({
+      run: inputRun,
+      expectedWorkspaceManagementAuthority:
+        inputExpectedWorkspaceManagementAuthority,
+    });
+    if (
+      run.type !== RUN_KIND_RESTORE ||
+      (run.status !== "waiting_approval" && run.status !== "queued")
+    ) {
+      throw new TypeError("Restore admission requires a new waiting or queued Restore");
+    }
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        run.workspaceId,
+      );
+    }
+    return await this.#client.transaction(async (transaction) => {
+      const db = this.#drizzleForClient(transaction);
+      const existingRows = await db
+        .select({
+          kind: pgSchema.runs.kind,
+          workspaceId: pgSchema.runs.workspaceId,
+          json: pgSchema.runs.runJson,
+        })
+        .from(pgSchema.runs)
+        .where(eq(pgSchema.runs.id, run.id))
+        .limit(1);
+      const existing = parseRow(existingRows[0]) as
+        | StoredRunRecord
+        | undefined;
+      if (existingRows.length > 0) {
+        return existing &&
+            existingRows[0]?.kind === RUN_KIND_RESTORE &&
+            existingRows[0]?.workspaceId === run.workspaceId &&
+            restoreRunCreationIdentityMatches(existing as Run, run)
+          ? {
+              status: "existing" as const,
+              run: publicStoredRun(existing) as Run,
+            }
+          : { status: "conflict" as const };
+      }
+      const management = await pgWorkspaceManagementForTransaction(
+        transaction,
+        run.workspaceId,
+      );
+      if (expectedWorkspaceManagementAuthority === undefined) {
+        throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
+      }
+      assertWorkspaceManagementAdmission(
+        management,
+        run.workspaceId,
+        expectedWorkspaceManagementAuthority,
+      );
+      const stored = storeRunManagementAuthority(
+        run,
+        expectedWorkspaceManagementAuthority,
+      );
+      const inserted = await db
+        .insert(pgSchema.runs)
+        .values({
+          id: run.id,
+          kind: RUN_KIND_RESTORE,
+          workspaceId: run.workspaceId,
+          sourceId: run.sourceId ?? null,
+          capsuleId: run.capsuleId ?? null,
+          status: run.status,
+          leaseToken: null,
+          heartbeatAt: run.heartbeatAt ?? null,
+          createdAt: String(run.createdAt),
+          runJson: stored,
+        })
+        .onConflictDoNothing({ target: pgSchema.runs.id })
+        .returning({ json: pgSchema.runs.runJson });
+      if (inserted.length > 0) {
+        return { status: "created" as const, run: publicStoredRun(run) as Run };
+      }
+      const currentRows = await db
+        .select({
+          kind: pgSchema.runs.kind,
+          workspaceId: pgSchema.runs.workspaceId,
+          json: pgSchema.runs.runJson,
+        })
+        .from(pgSchema.runs)
+        .where(eq(pgSchema.runs.id, run.id))
+        .limit(1);
+      const current = parseRow(currentRows[0]) as
+        | StoredRunRecord
+        | undefined;
+      return current &&
+          currentRows[0]?.kind === RUN_KIND_RESTORE &&
+          currentRows[0]?.workspaceId === run.workspaceId &&
+          restoreRunCreationIdentityMatches(current as Run, run)
+        ? {
+            status: "existing" as const,
+            run: publicStoredRun(current) as Run,
+          }
+        : { status: "conflict" as const };
+    });
   }
 
   async getBackupRun(id: string): Promise<Run | undefined> {
-    return await this.#getRun<Run>(id, [RUN_KIND_BACKUP, RUN_KIND_RESTORE]);
+    const run = await this.#getRun<StoredRunRecord>(id, [
+      RUN_KIND_BACKUP,
+      RUN_KIND_RESTORE,
+    ]);
+    return run ? (publicStoredRun(run) as Run) : undefined;
   }
 
   async listRunsByWorkspace(
@@ -1198,7 +1932,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     options: { readonly limit?: number } = {},
   ): Promise<readonly StoredRunRecord[]> {
     const limit = clampRunListLimit(options.limit);
-    return await this.#pgManyJson<StoredRunRecord>(
+    const rows = await this.#pgManyJson<StoredRunRecord>(
       pgSchema.runs,
       pgSchema.runs.runJson,
       {
@@ -1207,6 +1941,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         limit,
       },
     );
+    return rows.map(publicStoredRun);
   }
 
   async getCapsuleRuntimeSafety(
@@ -1297,7 +2032,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       .filter((row): row is StoredRunRecord => Boolean(row))
       // Keep the shared predicate as a fail-closed defense for legacy rows or
       // a future dialect drift; SQL performs the actual bound and ordering.
-      .filter((row) => isRecoverableOpenTofuRunRecord(row, options));
+      .filter((row) => isRecoverableOpenTofuRunRecord(row, options))
+      .map(publicStoredRun);
   }
 
   async listPendingRuntimeSecretRetirementRuns(options: {
@@ -1323,20 +2059,34 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       )
       .orderBy(asc(lastAttempt), asc(pgSchema.runs.id))
       .limit(limit);
-    return rows.map((row) => parseRow(row) as ApplyRun);
+    return rows
+      .map((row) => parseRow(row) as StoredRunRecord)
+      .filter((row): row is ApplyRun => Boolean(row && isApplyRunRecord(row)))
+      .map(publicStoredRun);
   }
 
   async claimPendingRuntimeSecretRetirementDispatch(
     input: RuntimeSecretRetirementDispatchClaimInput,
   ): Promise<boolean> {
-    const observed = await this.getApplyRun(input.runId);
+    const observedRaw = await this.#getRun<StoredRunRecord>(
+      input.runId,
+      RUN_KINDS_APPLY,
+    );
+    const observed = observedRaw && isApplyRunRecord(observedRaw)
+      ? publicStoredRun(observedRaw)
+      : undefined;
     const claimed = observed
       ? runtimeSecretRetirementDispatchAttempt(observed, input)
       : undefined;
     if (!claimed) return false;
     const rows = await this.#db
       .update(pgSchema.runs)
-      .set({ status: claimed.status, runJson: claimed })
+      .set({
+        status: claimed.status,
+        runJson: runJsonPreservingManagementAuthority(
+          claimed as StoredRunRecord,
+        ),
+      })
       .where(
         and(
           eq(pgSchema.runs.id, input.runId),
@@ -1344,7 +2094,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           inArray(pgSchema.runs.status, ["succeeded", "failed"]),
           // This exact JSON fence is the attempt claim. A concurrent sweep or
           // completed retirement changes the row and makes this update lose.
-          eq(pgSchema.runs.runJson, observed),
+          eq(pgSchema.runs.runJson, observedRaw),
           pgRunRuntimeSecretRetirementPending(),
         ),
       )
@@ -1365,7 +2115,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         ),
       )
       .orderBy(asc(pgSchema.runs.createdAt), asc(pgSchema.runs.id));
-    return currentRows.map((row) => parseRow(row) as SourceSyncRun);
+    return currentRows
+      .map((row) => parseRow(row) as SourceSyncRun)
+      .map(publicStoredRun);
   }
 
   // --- artifact ledger (§30 artifacts) -------------------------------------
@@ -1410,6 +2162,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       readonly leaseToken?: string | null;
       readonly heartbeatAt?: number | null;
     };
+    const publicRun = publicStoredRun(fields.json as StoredRunRecord);
     const values = {
       id: fields.id,
       kind,
@@ -1425,9 +2178,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       // created_at is TEXT so it can hold both the internal epoch-number runs
       // and the ISO-string SourceSyncRun without a per-kind column.
       createdAt: String(fields.createdAt),
-      runJson: fields.json,
+      runJson: publicRun,
     };
-    await this.#db
+    const written = await this.#db
       .insert(pgSchema.runs)
       .values(values)
       .onConflictDoUpdate({
@@ -1441,9 +2194,21 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           leaseToken: values.leaseToken,
           heartbeatAt: values.heartbeatAt,
           createdAt: values.createdAt,
-          runJson: values.runJson,
+          runJson: runJsonPreservingManagementAuthority(
+            publicRun as StoredRunRecord,
+          ),
         },
-      });
+        setWhere: and(
+          eq(pgSchema.runs.kind, kind),
+          eq(pgSchema.runs.workspaceId, fields.workspaceId),
+          sql`${pgSchema.runs.runJson} ->> 'id' = ${fields.id}`,
+          sql`${pgSchema.runs.runJson} ->> 'workspaceId' = ${fields.workspaceId}`,
+        ),
+      })
+      .returning({ id: pgSchema.runs.id });
+    if (written.length === 0) {
+      throw new TypeError("Run stored identity cannot change");
+    }
   }
 
   async #getRun<T>(
@@ -1510,6 +2275,203 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         },
       });
     return workspace;
+  }
+
+  async replaceWorkspace(input: WorkspaceReplacementInput): Promise<boolean> {
+    validateWorkspaceReplacement(input);
+    const {
+      workspace,
+      expectedWorkspace,
+      expectedWorkspaceManagementAuthority,
+    } = input;
+    return await this.#client.transaction(async (transaction) => {
+      // Workspace management is the outer authority lock. The exact epoch is
+      // checked while this row is locked, before the observed public JSON CAS.
+      const management = await pgWorkspaceManagementForTransaction(
+        transaction,
+        workspace.id,
+      );
+      assertWorkspaceManagementAdmission(
+        management,
+        workspace.id,
+        expectedWorkspaceManagementAuthority,
+      );
+      const db = this.#drizzleForClient(transaction);
+      const rows = await db
+        .update(pgSchema.workspaces)
+        .set({
+          // Metadata replacement deliberately changes only the public JSON
+          // and its audit timestamp; private management columns stay intact.
+          spaceJson: workspace,
+          updatedAt: workspace.updatedAt,
+        })
+        .where(
+          and(
+            eq(pgSchema.workspaces.id, expectedWorkspace.id),
+            eq(pgSchema.workspaces.handle, expectedWorkspace.handle),
+            eq(pgSchema.workspaces.spaceJson, expectedWorkspace),
+          ),
+        )
+        .returning({ id: pgSchema.workspaces.id });
+      return rows.length === 1;
+    });
+  }
+
+  async replaceWorkspaceForAccount(
+    input: WorkspaceAccountReplacementInput,
+  ): Promise<boolean> {
+    // Validate the immutable/public replacement and actor shape before any
+    // asynchronous preparation. The transaction below is the sole admission
+    // and write boundary; no current authority is recaptured here.
+    validateWorkspaceReplacement(input);
+    if (!workspaceAccountReplacementAllowed(input)) return false;
+    const {
+      workspace,
+      expectedWorkspace,
+      expectedWorkspaceManagementAuthority,
+      actorAccountId,
+      expectedActor,
+    } = input;
+    return await this.#client.transaction(async (transaction) => {
+      // Workspace management is the outer lock for account-facing metadata
+      // writes, matching replaceWorkspace and the member mutation paths.
+      const management = await pgWorkspaceManagementForTransaction(
+        transaction,
+        workspace.id,
+      );
+      assertWorkspaceManagementAdmission(
+        management,
+        workspace.id,
+        expectedWorkspaceManagementAuthority,
+      );
+
+      // The namespace owner is authoritative even when an imported/legacy
+      // roster has no derived owner member. Other actors must be re-read under
+      // the Workspace lock, with physical identity and the exact observed
+      // logical member snapshot checked before the metadata CAS.
+      if (expectedWorkspace.ownerUserId !== actorAccountId) {
+        if (expectedActor === undefined) return false;
+        const snapshot = await this.#workspaceMemberMutationSnapshot(
+          transaction,
+          expectedWorkspace,
+          [actorAccountId],
+        );
+        if (snapshot === undefined) return false;
+        const currentActor = snapshot.members.find(
+          (member) => member.accountId === actorAccountId,
+        );
+        if (
+          currentActor === undefined ||
+          !workspaceMemberLogicalEquals(currentActor, expectedActor) ||
+          !workspaceAccountReplacementAllowed({
+            ...input,
+            expectedActor: currentActor,
+          })
+        ) {
+          return false;
+        }
+      }
+
+      const db = this.#drizzleForClient(transaction);
+      const rows = await db
+        .update(pgSchema.workspaces)
+        .set({
+          // Account metadata replacement changes only the public JSON and its
+          // audit timestamp; private management columns remain untouched.
+          spaceJson: workspace,
+          updatedAt: workspace.updatedAt,
+        })
+        .where(
+          and(
+            eq(pgSchema.workspaces.id, expectedWorkspace.id),
+            eq(pgSchema.workspaces.handle, expectedWorkspace.handle),
+            eq(pgSchema.workspaces.spaceJson, expectedWorkspace),
+          ),
+        )
+        .returning({ id: pgSchema.workspaces.id });
+      return rows.length === 1;
+    });
+  }
+
+  async getWorkspaceManagement(
+    workspaceId: string,
+  ): Promise<WorkspaceManagement | undefined> {
+    const rows = await this.#db
+      .select({
+        managementState: pgSchema.workspaces.managementState,
+        managementEpoch: pgSchema.workspaces.managementEpoch,
+      })
+      .from(pgSchema.workspaces)
+      .where(eq(pgSchema.workspaces.id, workspaceId))
+      .limit(1);
+    const row = rows[0];
+    return row
+      ? normalizeWorkspaceManagement(
+          workspaceId,
+          row.managementState,
+          row.managementEpoch,
+        )
+      : undefined;
+  }
+
+  async beginWorkspaceDraining(
+    workspaceId: string,
+    expectedInput: WorkspaceManagementAuthority,
+  ): Promise<BeginWorkspaceDrainingResult> {
+    const expected = { ...expectedInput };
+    assertWorkspaceManagementAuthorityInput(expected, workspaceId);
+    return await this.#client.transaction(async (transaction) => {
+      // Workspace is the outer lock for every management transition. Dependent
+      // Run/Capsule locks are acquired only after this row is locked by callers.
+      const current = await pgWorkspaceManagementForTransaction(
+        transaction,
+        workspaceId,
+      );
+      if (current === undefined) return { status: "not_found" as const };
+      if (
+        current.managementState === "active" &&
+        current.managementEpoch === expected.managementEpoch
+      ) {
+        if (current.managementEpoch >= Number.MAX_SAFE_INTEGER) {
+          throw new TypeError(
+            `Workspace ${workspaceId} management epoch cannot advance safely`,
+          );
+        }
+        const rows = await transaction.query<{
+          readonly managementState: string | null;
+          readonly managementEpoch: number | string | null;
+        }>(
+          `update takosumi_workspaces
+              set management_state = 'draining',
+                  management_epoch = management_epoch + 1
+            where id = $1
+              and management_state = 'active'
+              and management_epoch = $2
+          returning management_state as "managementState",
+                    management_epoch as "managementEpoch"`,
+          [workspaceId, expected.managementEpoch],
+        );
+        const row = rows.rows[0];
+        if (row !== undefined) {
+          return {
+            status: "started" as const,
+            management: normalizeWorkspaceManagement(
+              workspaceId,
+              row.managementState,
+              row.managementEpoch,
+            ),
+          };
+        }
+      }
+      if (
+        current.managementState === "draining" &&
+        expected.managementEpoch < Number.MAX_SAFE_INTEGER &&
+        current.managementEpoch === expected.managementEpoch + 1
+      ) {
+        return { status: "existing" as const, management: current };
+      }
+      return { status: "conflict" as const, management: current };
+    });
   }
 
   async claimPersonalWorkspaceBootstrap(
@@ -1698,6 +2660,364 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return member;
   }
 
+  async mutateWorkspaceMember(
+    input: WorkspaceMemberMutationInput,
+  ): Promise<boolean> {
+    validateWorkspaceMemberReplacement(input);
+    const {
+      member,
+      expectedMember,
+      expectedActor,
+      expectedWorkspace,
+      expectedWorkspaceManagementAuthority,
+    } = input;
+    return await this.#client.transaction(async (transaction) => {
+      // Workspace management is the outer authority lock for every membership
+      // mutation. A stopped Workspace therefore fails before any member read.
+      const management = await pgWorkspaceManagementForTransaction(
+        transaction,
+        member.workspaceId,
+      );
+      assertWorkspaceManagementAdmission(
+        management,
+        member.workspaceId,
+        expectedWorkspaceManagementAuthority,
+      );
+      const snapshot = await this.#workspaceMemberMutationSnapshot(
+        transaction,
+        expectedWorkspace,
+        [
+          member.accountId,
+          expectedActor.accountId,
+          expectedWorkspace.ownerUserId,
+        ],
+      );
+      if (snapshot === undefined) return false;
+      const currentTarget = snapshot.members.find(
+        (row) => row.accountId === member.accountId,
+      );
+      const currentActor = snapshot.members.find(
+        (row) => row.accountId === expectedActor.accountId,
+      );
+      if (
+        !workspaceMemberMutationAllowed(input) ||
+        currentActor === undefined ||
+        !workspaceMemberLogicalEquals(currentActor, expectedActor) ||
+        !workspaceMemberExpectedMatches(currentTarget, expectedMember)
+      ) {
+        return false;
+      }
+      if (
+        workspaceMemberMutationDropsOwner(input) &&
+        !(await this.#workspaceMemberHasAnotherActiveOwner(
+          transaction,
+          member.workspaceId,
+          member.accountId,
+        ))
+      ) {
+        return false;
+      }
+      return await this.#writeWorkspaceMemberMutation(
+        transaction,
+        input,
+        currentTarget,
+      );
+    });
+  }
+
+  async repairWorkspaceOwnerMember(
+    input: WorkspaceOwnerMemberRepairInput,
+  ): Promise<boolean> {
+    validateWorkspaceOwnerMemberRepair(input);
+    const {
+      member,
+      expectedMember,
+      expectedWorkspace,
+      expectedWorkspaceManagementAuthority,
+    } = input;
+    return await this.#client.transaction(async (transaction) => {
+      const management = await pgWorkspaceManagementForTransaction(
+        transaction,
+        member.workspaceId,
+      );
+      assertWorkspaceManagementAdmission(
+        management,
+        member.workspaceId,
+        expectedWorkspaceManagementAuthority,
+      );
+      const snapshot = await this.#workspaceMemberMutationSnapshot(
+        transaction,
+        expectedWorkspace,
+        [member.accountId, expectedWorkspace.ownerUserId],
+      );
+      if (
+        snapshot === undefined ||
+        // Derive the namespace owner from the locked stored Workspace, never
+        // from a caller-selected account.
+        snapshot.workspace.ownerUserId !== member.accountId
+      ) {
+        return false;
+      }
+      const currentTarget = snapshot.members.find(
+        (row) => row.accountId === member.accountId,
+      );
+      if (!workspaceMemberExpectedMatches(currentTarget, expectedMember)) {
+        return false;
+      }
+      return await this.#writeWorkspaceMemberMutation(
+        transaction,
+        input,
+        currentTarget,
+      );
+    });
+  }
+
+  async #writeWorkspaceMemberMutation(
+    transaction: SqlTransaction,
+    input: WorkspaceMemberMutationInput | WorkspaceOwnerMemberRepairInput,
+    current: WorkspaceMember | undefined,
+  ): Promise<boolean> {
+    const member = input.member;
+    const db = this.#drizzleForClient(transaction);
+    if (current !== undefined) {
+      const rows = await db
+        .update(pgSchema.workspaceMembers)
+        .set({
+          id: member.id,
+          status: member.status,
+          memberJson: member,
+          createdAt: member.createdAt,
+          updatedAt: member.updatedAt,
+        })
+        .where(
+          and(
+            eq(pgSchema.workspaceMembers.id, current.id),
+            eq(pgSchema.workspaceMembers.workspaceId, member.workspaceId),
+            eq(pgSchema.workspaceMembers.accountId, member.accountId),
+          ),
+        )
+        .returning({ id: pgSchema.workspaceMembers.id });
+      return rows.length === 1;
+    }
+    const rows = await db
+      .insert(pgSchema.workspaceMembers)
+      .values({
+        id: member.id,
+        workspaceId: member.workspaceId,
+        accountId: member.accountId,
+        status: member.status,
+        memberJson: member,
+        createdAt: member.createdAt,
+        updatedAt: member.updatedAt,
+      })
+      .onConflictDoNothing({
+        target: [
+          pgSchema.workspaceMembers.workspaceId,
+          pgSchema.workspaceMembers.accountId,
+        ],
+      })
+      .returning({ id: pgSchema.workspaceMembers.id });
+    return rows.length === 1;
+  }
+
+  async #workspaceMemberMutationSnapshot(
+    transaction: SqlTransaction,
+    expectedWorkspace: Workspace,
+    accountIds: readonly string[],
+  ): Promise<WorkspaceMemberMutationSnapshot | undefined> {
+    const workspaceRows = await transaction.query<PgWorkspaceMutationWorkspaceRow>(
+      `select id,
+              handle,
+              space_json as "spaceJson",
+              workspace_type as "workspaceType",
+              owner_user_id as "ownerUserId",
+              created_at as "createdAt"
+         from takosumi_workspaces
+        where id = $1
+        for update`,
+      [expectedWorkspace.id],
+    );
+    const workspaceRow = workspaceRows.rows[0];
+    if (workspaceRow === undefined) return undefined;
+    const currentWorkspace = parseJson(workspaceRow.spaceJson) as
+      | Workspace
+      | undefined;
+    if (
+      currentWorkspace === undefined ||
+      !workspaceMutationRowMatches(
+        workspaceRow,
+        currentWorkspace,
+        expectedWorkspace,
+      )
+    ) {
+      return undefined;
+    }
+    const sortedAccountIds = [...new Set(accountIds)].sort();
+    if (sortedAccountIds.length === 0) {
+      // Namespace-owner authority deliberately bypasses the derived member
+      // roster. Keep the exact Workspace evidence above while avoiding a
+      // malformed/stale owner member row becoming an unrelated dependency.
+      return { workspace: currentWorkspace, members: [] };
+    }
+    const accountPlaceholders = sortedAccountIds
+      .map((_, index) => `$${index + 2}`)
+      .join(", ");
+    const memberRows = await transaction.query<PgWorkspaceMemberRow>(
+      `select id,
+              workspace_id as "workspaceId",
+              account_id as "accountId",
+              status,
+              member_json as "recordJson",
+              created_at as "createdAt",
+              updated_at as "updatedAt"
+         from takosumi_workspace_members
+        where workspace_id = $1
+          and account_id in (${accountPlaceholders})
+        order by account_id, id
+        for update`,
+      [expectedWorkspace.id, ...sortedAccountIds],
+    );
+    const members = memberRows.rows.map((row) =>
+      workspaceMemberFromRow(row, {
+        workspaceId: expectedWorkspace.id,
+        accountId: row.accountId,
+      }),
+    );
+    return { workspace: currentWorkspace, members };
+  }
+
+  /**
+   * Revalidate an account-facing Connection command against the exact
+   * Workspace/member snapshot captured before its asynchronous preparation.
+   * The caller already holds the Workspace management lock; this helper then
+   * takes the canonical Workspace/member snapshot lock before any
+   * Connection/blob lock or write.  A null authority is the explicit trusted
+   * internal path and deliberately keeps the historical behavior unchanged.
+   */
+  async #connectionActorAuthorityMatches(
+    transaction: SqlTransaction,
+    authority: ConnectionActorAuthority | null,
+  ): Promise<boolean> {
+    if (authority === null) return true;
+    if (!workspaceAccountAuthorityAllowed(authority)) return false;
+
+    let snapshot: WorkspaceMemberMutationSnapshot | undefined;
+    try {
+      snapshot = await this.#workspaceMemberMutationSnapshot(
+        transaction,
+        authority.expectedWorkspace,
+        authority.expectedWorkspace.ownerUserId === authority.actorAccountId
+          ? []
+          : [authority.actorAccountId],
+      );
+    } catch (error) {
+      // A malformed canonical member row is an authority denial for this
+      // command; unrelated SQL/storage failures must remain visible.
+      if (error instanceof WorkspaceMemberRowError) return false;
+      throw error;
+    }
+    if (snapshot === undefined) return false;
+
+    // Namespace owners are authoritative even when the roster has no member
+    // row. The exact Workspace snapshot above still fences an owner change.
+    if (snapshot.workspace.ownerUserId === authority.actorAccountId) {
+      return workspaceAccountAuthorityAllowed({
+        actorAccountId: authority.actorAccountId,
+        expectedWorkspace: snapshot.workspace,
+      });
+    }
+
+    const expectedActor = authority.expectedActor;
+    const currentActor = snapshot.members.find(
+      (member) => member.accountId === authority.actorAccountId,
+    );
+    if (
+      expectedActor === undefined ||
+      currentActor === undefined ||
+      !workspaceMemberLogicalEquals(currentActor, expectedActor)
+    ) {
+      return false;
+    }
+    return workspaceAccountAuthorityAllowed({
+      actorAccountId: authority.actorAccountId,
+      expectedWorkspace: snapshot.workspace,
+      expectedActor: currentActor,
+    });
+  }
+
+  async #workspaceMemberHasAnotherActiveOwner(
+    transaction: SqlTransaction,
+    workspaceId: string,
+    excludedAccountId: string,
+  ): Promise<boolean> {
+    const rows = await transaction.query<{ readonly id: string }>(
+      `select id
+         from takosumi_workspace_members
+        where workspace_id = $1
+          and account_id <> $2
+          and status = 'active'
+          and length(id) > 0
+          and member_json ->> 'id' = id
+          and member_json ->> 'workspaceId' = workspace_id
+          and member_json ->> 'accountId' = account_id
+          and member_json ->> 'status' = status
+          and member_json ->> 'createdAt' = created_at
+          and member_json ->> 'updatedAt' = updated_at
+          and case
+                when pg_input_is_valid(member_json ->> 'createdAt', 'timestamptz')
+                  then to_char(
+                    (member_json ->> 'createdAt')::timestamptz at time zone 'UTC',
+                    'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+                  ) = member_json ->> 'createdAt'
+                else false
+              end
+          and case
+                when pg_input_is_valid(member_json ->> 'updatedAt', 'timestamptz')
+                  then to_char(
+                    (member_json ->> 'updatedAt')::timestamptz at time zone 'UTC',
+                    'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+                  ) = member_json ->> 'updatedAt'
+                else false
+              end
+          and jsonb_typeof(member_json -> 'roles') = 'array'
+          and member_json -> 'roles' ? 'owner'
+          and (
+            select count(*)
+              from jsonb_array_elements(
+                case
+                  when jsonb_typeof(member_json -> 'roles') = 'array'
+                    then member_json -> 'roles'
+                  else '[]'::jsonb
+                end
+              ) as role(value)
+             where jsonb_typeof(role.value) <> 'string'
+                or role.value #>> '{}' not in ('owner', 'admin', 'member', 'viewer')
+          ) = 0
+          and (
+            select count(*)
+              from jsonb_array_elements(
+                case
+                  when jsonb_typeof(member_json -> 'roles') = 'array'
+                    then member_json -> 'roles'
+                  else '[]'::jsonb
+                end
+              ) as role(value)
+          ) = (
+            select count(distinct role.value #>> '{}')
+              from jsonb_array_elements(
+                case
+                  when jsonb_typeof(member_json -> 'roles') = 'array'
+                    then member_json -> 'roles'
+                  else '[]'::jsonb
+                end
+              ) as role(value)
+          )
+        limit 1`,
+      [workspaceId, excludedAccountId],
+    );
+    return rows.rows.length > 0;
+  }
+
   async getWorkspaceMember(
     workspaceId: string,
     accountId: string,
@@ -1847,6 +3167,172 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return project;
   }
 
+  async createProjectRecord(
+    input: ProjectCreationInput,
+  ): Promise<ProjectCreationResult> {
+    const { project, expectedWorkspaceManagementAuthority } = input;
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        project.workspaceId,
+      );
+    }
+    return await this.#client.transaction(async (transaction) => {
+      // Workspace is the outer lock for this create-only operation. Existing
+      // id/slug observations are classified before the mutable admission
+      // check so exact retries and ordinary conflicts remain readable while a
+      // Workspace is draining.
+      const management = await pgWorkspaceManagementForTransaction(
+        transaction,
+        project.workspaceId,
+      );
+      const currentRows = await transaction.query<PgProjectRow>(
+        `select id,
+                workspace_id as "workspaceId",
+                name,
+                slug,
+                project_json as "projectJson",
+                created_at as "createdAt",
+                updated_at as "updatedAt"
+           from takosumi_projects
+          where id = $1
+          for update`,
+        [project.id],
+      );
+      const currentRow = currentRows.rows[0];
+      if (currentRow) {
+        // The persisted physical owner is authoritative; a caller cannot
+        // rebind an occupied id to another Workspace or repair JSON drift.
+        if (currentRow.workspaceId !== project.workspaceId) {
+          return { status: "conflict" as const };
+        }
+        const current = projectFromPgRow(currentRow);
+        if (!current) return { status: "conflict" as const };
+        return (await stableJsonDigest(current)) ===
+            (await stableJsonDigest(project))
+          ? { status: "replayed" as const, project: current }
+          : { status: "conflict" as const };
+      }
+
+      // A different id occupying this Workspace/slug is a read-only conflict;
+      // the database unique index remains the final race-safe authority below.
+      const slugRows = await transaction.query<PgProjectRow>(
+        `select id,
+                workspace_id as "workspaceId",
+                name,
+                slug,
+                project_json as "projectJson",
+                created_at as "createdAt",
+                updated_at as "updatedAt"
+           from takosumi_projects
+          where workspace_id = $1
+            and slug = $2
+          for update`,
+        [project.workspaceId, project.slug],
+      );
+      if (slugRows.rows[0]) return { status: "conflict" as const };
+
+      assertWorkspaceManagementAdmission(
+        management,
+        project.workspaceId,
+        expectedWorkspaceManagementAuthority,
+      );
+      const expectedEpochPredicate =
+        expectedWorkspaceManagementAuthority === undefined
+          ? ""
+          : "\n            and workspace.management_epoch = $8";
+      const inserted = await transaction.query<PgProjectRow>(
+        `insert into takosumi_projects
+          (id, workspace_id, name, slug, project_json, created_at, updated_at)
+         select $1, workspace.id, $2, $3, $4::jsonb, $5, $6
+           from takosumi_workspaces as workspace
+          where workspace.id = $7
+            and workspace.management_state = 'active'${expectedEpochPredicate}
+         on conflict do nothing
+         returning id,
+                   workspace_id as "workspaceId",
+                   name,
+                   slug,
+                   project_json as "projectJson",
+                   created_at as "createdAt",
+                   updated_at as "updatedAt"`,
+        [
+          project.id,
+          project.name,
+          project.slug,
+          JSON.stringify(project),
+          project.createdAt,
+          project.updatedAt,
+          project.workspaceId,
+          ...(expectedWorkspaceManagementAuthority === undefined
+            ? []
+            : [expectedWorkspaceManagementAuthority.managementEpoch]),
+        ],
+      );
+      const insertedRow = inserted.rows[0];
+      const created = insertedRow
+        ? projectFromPgRow(insertedRow)
+        : undefined;
+      if (created) return { status: "created" as const, project: created };
+
+      // A raw concurrent writer may have won the id/slug race while this
+      // transaction was waiting. Classify an exact id candidate as replay,
+      // otherwise preserve the create-only conflict boundary.
+      const afterIdRows = await transaction.query<PgProjectRow>(
+        `select id,
+                workspace_id as "workspaceId",
+                name,
+                slug,
+                project_json as "projectJson",
+                created_at as "createdAt",
+                updated_at as "updatedAt"
+           from takosumi_projects
+          where id = $1
+          limit 1`,
+        [project.id],
+      );
+      const afterId = afterIdRows.rows[0];
+      if (afterId) {
+        if (afterId.workspaceId !== project.workspaceId) {
+          return { status: "conflict" as const };
+        }
+        const persisted = projectFromPgRow(afterId);
+        if (
+          persisted &&
+          (await stableJsonDigest(persisted)) ===
+            (await stableJsonDigest(project))
+        ) {
+          return { status: "replayed" as const, project: persisted };
+        }
+        return { status: "conflict" as const };
+      }
+      const afterSlugRows = await transaction.query<PgProjectRow>(
+        `select id,
+                workspace_id as "workspaceId",
+                name,
+                slug,
+                project_json as "projectJson",
+                created_at as "createdAt",
+                updated_at as "updatedAt"
+           from takosumi_projects
+          where workspace_id = $1
+            and slug = $2
+          limit 1`,
+        [project.workspaceId, project.slug],
+      );
+      if (afterSlugRows.rows[0]) return { status: "conflict" as const };
+      // A row-less insert can only have lost the persisted Workspace predicate
+      // (including a missing/stale epoch); surface that as the typed admission
+      // refusal rather than claiming a successful create.
+      assertWorkspaceManagementAdmission(
+        undefined,
+        project.workspaceId,
+        expectedWorkspaceManagementAuthority,
+      );
+      return { status: "conflict" as const };
+    });
+  }
+
   async getProject(id: string): Promise<Project | undefined> {
     return await this.#pgFirstJson<Project>(
       pgSchema.projects,
@@ -1885,39 +3371,189 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   // --- install_configs (§11) ------------------------------------------------
 
   async putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
-    await this.#pgUpsert(pgSchema.installConfigs, {
-      id: config.id,
-      workspaceId: config.workspaceId ?? null,
-      configJson: config,
-      createdAt: config.createdAt,
-      updatedAt: config.updatedAt,
-    });
-    return config;
-  }
-
-  async createInstallConfigIfAbsent(config: InstallConfig): Promise<boolean> {
-    const rows = await this.#db
+    const publicConfig = publicStoredInstallConfig(config);
+    const configJson = installConfigJsonPreservingAuthority(publicConfig);
+    const written = await this.#db
       .insert(pgSchema.installConfigs)
       .values({
-        id: config.id,
-        workspaceId: config.workspaceId ?? null,
-        configJson: config,
-        createdAt: config.createdAt,
-        updatedAt: config.updatedAt,
+        id: publicConfig.id,
+        workspaceId: publicConfig.workspaceId ?? null,
+        configJson: publicConfig,
+        createdAt: publicConfig.createdAt,
+        updatedAt: publicConfig.updatedAt,
       })
-      .onConflictDoNothing({ target: pgSchema.installConfigs.id })
+      .onConflictDoUpdate({
+        target: pgSchema.installConfigs.id,
+        set: {
+          workspaceId: publicConfig.workspaceId ?? null,
+          configJson,
+          createdAt: publicConfig.createdAt,
+          updatedAt: publicConfig.updatedAt,
+        },
+        // A stored private tuple pins the row to its original Workspace. An
+        // ordinary config without that key retains the historical full-write
+        // behavior; the SQL predicate makes the metadata-bearing decision
+        // atomic with the upsert itself.
+        setWhere: or(
+          sql`NOT (${pgSchema.installConfigs.configJson} ? 'workspaceManagementAuthority')`,
+          and(
+            publicConfig.workspaceId === undefined
+              ? isNull(pgSchema.installConfigs.workspaceId)
+              : eq(
+                  pgSchema.installConfigs.workspaceId,
+                  publicConfig.workspaceId,
+                ),
+            sql`${pgSchema.installConfigs.configJson} ->> 'id' = ${publicConfig.id}`,
+            publicConfig.workspaceId === undefined
+              ? sql`${pgSchema.installConfigs.configJson} ->> 'workspaceId' IS NULL`
+              : sql`${pgSchema.installConfigs.configJson} ->> 'workspaceId' = ${publicConfig.workspaceId}`,
+          ),
+        ),
+      })
       .returning({ id: pgSchema.installConfigs.id });
-    return rows.length === 1;
+    if (written.length === 0) {
+      // A zero-row upsert means the private metadata fence rejected the
+      // candidate (or the row disappeared between the conflict and return).
+      // Never report a successful write when PostgreSQL did not publish one.
+      throw new TypeError(
+        "InstallConfig management authority belongs to its original Workspace",
+      );
+    }
+    return publicConfig;
+  }
+
+  async createInstallConfigIfAbsent(
+    config: InstallConfig,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<boolean> {
+    const publicConfig = publicStoredInstallConfig(config);
+    const workspaceId = config.workspaceId;
+    if (workspaceId === undefined) {
+      if (expectedWorkspaceManagementAuthority !== undefined) {
+        throw new TypeError(
+          "Workspace-neutral InstallConfig cannot carry Workspace management authority",
+        );
+      }
+      const existing = await this.#db
+        .select({ id: pgSchema.installConfigs.id })
+        .from(pgSchema.installConfigs)
+        .where(eq(pgSchema.installConfigs.id, publicConfig.id))
+        .limit(1);
+      if (existing[0] !== undefined) return false;
+      const stored = storeInstallConfig(config);
+      const rows = await this.#db
+        .insert(pgSchema.installConfigs)
+        .values({
+          id: stored.id,
+          workspaceId: null,
+          configJson: stored,
+          createdAt: stored.createdAt,
+          updatedAt: stored.updatedAt,
+        })
+        .onConflictDoNothing({ target: pgSchema.installConfigs.id })
+        .returning({ id: pgSchema.installConfigs.id });
+      return rows.length === 1;
+    }
+
+    // Validate caller-captured authority before opening a transaction or
+    // issuing any database write. The persisted Workspace row remains the
+    // authority for the admission decision below.
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        workspaceId,
+      );
+    }
+
+    return await this.#client.transaction(async (transaction) => {
+      // Workspace is the outer lock for this create-only operation. Existing
+      // config ids are read-only observations, so retries remain available
+      // while management is draining; only a genuinely new row is admitted.
+      const management = await pgWorkspaceManagementForTransaction(
+        transaction,
+        workspaceId,
+      );
+      const current = await transaction.query<{ readonly id: string }>(
+        `select id
+           from takosumi_install_configs
+          where id = $1
+          for update`,
+        [config.id],
+      );
+      if (current.rows[0] !== undefined) return false;
+
+      assertWorkspaceManagementAdmission(
+        management,
+        workspaceId,
+        expectedWorkspaceManagementAuthority,
+      );
+      const stored = storeInstallConfig(
+        config,
+        expectedWorkspaceManagementAuthority,
+      );
+
+      // Keep the admission predicate in the write itself. This protects the
+      // row publication boundary if a future caller changes the lock scope,
+      // and pins an optional captured epoch without introducing a sentinel.
+      const expectedEpochPredicate =
+        expectedWorkspaceManagementAuthority === undefined
+          ? ""
+          : "\n            and workspace.management_epoch = $6";
+      const inserted = await transaction.query<{ readonly id: string }>(
+        `insert into takosumi_install_configs
+          (id, space_id, config_json, created_at, updated_at)
+         select $1, workspace.id, $2::jsonb, $3, $4
+           from takosumi_workspaces as workspace
+          where workspace.id = $5
+            and workspace.management_state = 'active'${expectedEpochPredicate}
+         on conflict (id) do nothing
+         returning id`,
+        [
+          stored.id,
+          JSON.stringify(stored),
+          stored.createdAt,
+          stored.updatedAt,
+          workspaceId,
+          ...(expectedWorkspaceManagementAuthority === undefined
+            ? []
+            : [expectedWorkspaceManagementAuthority.managementEpoch]),
+        ],
+      );
+      if (inserted.rows.length > 0) return true;
+
+      // A competing raw writer may have won the id race. Classify that as an
+      // ordinary existing row rather than retrying or overwriting it.
+      const after = await transaction.query<{ readonly id: string }>(
+        `select id
+           from takosumi_install_configs
+          where id = $1
+          limit 1`,
+        [config.id],
+      );
+      if (after.rows[0] !== undefined) return false;
+
+      // No row was published and no competing id exists. This can only be a
+      // failed persisted Workspace predicate (missing/stopped/stale), which
+      // must remain a typed admission refusal rather than a false success.
+      assertWorkspaceManagementAdmission(
+        undefined,
+        workspaceId,
+        expectedWorkspaceManagementAuthority,
+      );
+      return false;
+    });
   }
 
   async replaceUnreferencedSharedInstallConfig(
     expected: InstallConfig,
     replacement: InstallConfig,
   ): Promise<boolean> {
+    const publicExpected = publicStoredInstallConfig(expected);
+    const publicReplacement = publicStoredInstallConfig(replacement);
     if (
-      replacement.id !== expected.id ||
-      expected.workspaceId !== undefined ||
-      replacement.workspaceId !== undefined
+      publicReplacement.id !== publicExpected.id ||
+      publicExpected.workspaceId !== undefined ||
+      publicReplacement.workspaceId !== undefined
     ) {
       return false;
     }
@@ -1929,14 +3565,14 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       .update(pgSchema.installConfigs)
       .set({
         workspaceId: null,
-        configJson: replacement,
-        updatedAt: replacement.updatedAt,
+        configJson: publicReplacement,
+        updatedAt: publicReplacement.updatedAt,
       })
       .where(
         and(
-          eq(pgSchema.installConfigs.id, expected.id),
+          eq(pgSchema.installConfigs.id, publicExpected.id),
           isNull(pgSchema.installConfigs.workspaceId),
-          eq(pgSchema.installConfigs.configJson, expected),
+          eq(pgSchema.installConfigs.configJson, publicExpected),
           notExists(referenced),
         ),
       )
@@ -1950,7 +3586,18 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       pgSchema.installConfigs.configJson,
       eq(pgSchema.installConfigs.id, id),
     );
-    return config;
+    return config ? publicStoredInstallConfig(config) : undefined;
+  }
+
+  async getInstallConfigManagementAuthority(
+    id: string,
+  ): Promise<WorkspaceManagementAuthority | undefined> {
+    const config = await this.#pgFirstJson<InstallConfig>(
+      pgSchema.installConfigs,
+      pgSchema.installConfigs.configJson,
+      eq(pgSchema.installConfigs.id, id),
+    );
+    return config ? installConfigManagementAuthority(config) : undefined;
   }
 
   async getInstallConfigsByIds(
@@ -1963,7 +3610,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       .where(inArray(pgSchema.installConfigs.id, [...new Set(ids)]));
     const byId = new Map(
       rows.map((row) => {
-        const value = parseRow(row) as InstallConfig;
+        const value = publicStoredInstallConfig(
+          parseRow(row) as InstallConfig,
+        );
         return [value.id, value] as const;
       }),
     );
@@ -1989,11 +3638,11 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         ],
       },
     );
-    return configs;
+    return configs.map(publicStoredInstallConfig);
   }
 
   async listSharedInstallConfigs(): Promise<readonly InstallConfig[]> {
-    return await this.#pgManyJson<InstallConfig>(
+    const configs = await this.#pgManyJson<InstallConfig>(
       pgSchema.installConfigs,
       pgSchema.installConfigs.configJson,
       {
@@ -2004,6 +3653,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         ],
       },
     );
+    return configs.map(publicStoredInstallConfig);
   }
 
   async listInstallConfigsPage(
@@ -2047,7 +3697,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         limit: limit + 1,
       },
     );
-    return pageFromProbe(rows, limit);
+    return pageFromProbe(rows.map(publicStoredInstallConfig), limit);
   }
 
   // --- Capsules (§5 / §27, active UNIQUE(project_id, name, environment)) ---
@@ -2080,10 +3730,17 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     input: CapsuleInitialAuthorityInput,
   ): Promise<CapsuleInitialAuthorityResult> {
     const capsule = normalizeCapsuleRecord(input.capsule);
+    if (input.expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        input.expectedWorkspaceManagementAuthority,
+        capsule.workspaceId,
+      );
+    }
     const binding = input.providerBindingSet;
+    const installConfig = publicStoredInstallConfig(input.installConfig);
     if (
-      input.installConfig.id !== capsule.installConfigId ||
-      input.installConfig.workspaceId !== capsule.workspaceId ||
+      installConfig.id !== capsule.installConfigId ||
+      installConfig.workspaceId !== capsule.workspaceId ||
       binding.workspaceId !== capsule.workspaceId ||
       binding.capsuleId !== capsule.id ||
       binding.environment !== capsule.environment
@@ -2092,6 +3749,13 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     }
     return await this.#client.transaction(async (transaction) => {
       const db = this.#drizzleForClient(transaction);
+      // Workspace is the outer lock for this multi-row create. Existing exact
+      // rows are idempotent reads and may be adopted while draining; a new
+      // authority unit is admitted only after this persisted row is locked.
+      const management = await pgWorkspaceManagementForTransaction(
+        transaction,
+        capsule.workspaceId,
+      );
       // Initial authority is rare and must be one exact create-or-replay CAS.
       // Serialize every candidate across the three tables so two concurrent
       // first-install requests cannot both observe absence and turn a unique
@@ -2156,7 +3820,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           return { status: "conflict" as const };
         }
         const [configDigest, capsuleDigest, bindingDigest] = await Promise.all([
-          stableJsonDigest(parseJson(configRows[0].json)),
+          stableJsonDigest(
+            publicStoredInstallConfig(parseJson(configRows[0].json) as InstallConfig),
+          ),
           stableJsonDigest(
             normalizeCapsuleRecord(parseJson(capsuleRows[0].json) as Capsule),
           ),
@@ -2164,7 +3830,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         ]);
         const [expectedConfig, expectedCapsule, expectedBinding] =
           await Promise.all([
-            stableJsonDigest(input.installConfig),
+            stableJsonDigest(installConfig),
             stableJsonDigest(capsule),
             stableJsonDigest(binding),
           ]);
@@ -2188,12 +3854,17 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         )
         .limit(1);
       if (duplicate[0]) return { status: "conflict" as const };
+      assertWorkspaceManagementAdmission(
+        management,
+        capsule.workspaceId,
+        input.expectedWorkspaceManagementAuthority,
+      );
       await db.insert(pgSchema.installConfigs).values({
-        id: input.installConfig.id,
-        workspaceId: input.installConfig.workspaceId ?? null,
-        configJson: input.installConfig,
-        createdAt: input.installConfig.createdAt,
-        updatedAt: input.installConfig.updatedAt,
+        id: installConfig.id,
+        workspaceId: installConfig.workspaceId ?? null,
+        configJson: installConfig,
+        createdAt: installConfig.createdAt,
+        updatedAt: installConfig.updatedAt,
       });
       await db.insert(pgSchema.capsules).values(capsuleValues(capsule));
       await db.insert(pgSchema.providerBindingSets).values({
@@ -2308,21 +3979,27 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   async rebindCapsuleInstallConfig(
     input: CapsuleInstallConfigRebindInput,
   ): Promise<CapsuleInstallConfigRebindResult> {
+    const expectedManagementAuthority = input.expectedWorkspaceManagementAuthority
+      ? { ...input.expectedWorkspaceManagementAuthority }
+      : undefined;
+    // Validate the shape before opening a transaction, then validate the
+    // captured owner again against the Capsule's persisted Workspace below.
+    // The current Workspace row is the authority for admission; callers must
+    // not refresh a stale captured epoch here.
+    if (expectedManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        expectedManagementAuthority,
+        expectedManagementAuthority.workspaceId,
+      );
+    }
     return await this.#client.transaction(async (transaction) => {
       const db = this.#drizzleForClient(transaction);
       const bindingReplacement = input.providerBindingSetReplacement;
-      // ProviderBindingSet writers take ROW EXCLUSIVE table locks. This
-      // stronger, replacement-only lock makes both an existing row and exact
-      // absence stable through the digest check and atomic transition.
-      if (bindingReplacement) {
-        await transaction.query(
-          "lock table takosumi_provider_env_binding_sets in share row exclusive mode",
-        );
-      }
       const capsuleRows = await db
         .select({
           json: pgSchema.capsules.capsuleJson,
           epoch: pgSchema.capsules.executionAuthorityEpoch,
+          workspaceId: pgSchema.capsules.workspaceId,
         })
         .from(pgSchema.capsules)
         .where(eq(pgSchema.capsules.id, input.capsuleId))
@@ -2332,6 +4009,28 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       const capsule = normalizeCapsuleRecord(
         parseJson(capsuleRow.json) as Capsule,
       );
+      if (expectedManagementAuthority !== undefined) {
+        assertWorkspaceManagementAuthorityInput(
+          expectedManagementAuthority,
+          capsuleRow.workspaceId,
+        );
+      }
+      // Workspace is the outer lock for this authority transition. No
+      // Capsule, BindingSet, InstallConfig, or intent row is locked before it;
+      // this preserves the lock order used by the other guarded writers.
+      const management = await pgWorkspaceManagementForTransaction(
+        transaction,
+        capsuleRow.workspaceId,
+      );
+      // ProviderBindingSet writers take ROW EXCLUSIVE table locks. This
+      // stronger, replacement-only lock makes both an existing row and exact
+      // absence stable through the digest check and atomic transition, after
+      // the Workspace lock above (avoiding lock inversion).
+      if (bindingReplacement) {
+        await transaction.query(
+          "lock table takosumi_provider_env_binding_sets in share row exclusive mode",
+        );
+      }
       const bindingRows = bindingReplacement
         ? await transaction.query<{
             readonly id: string;
@@ -2380,11 +4079,20 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           for share`,
         [capsule.installConfigId, input.targetInstallConfigId],
       );
-      const configsById = new Map(
+      const storedConfigsById = new Map<string, StoredInstallConfig>(
         configRows.rows.map((row) => [
           row.id,
-          parseJson(row.json) as InstallConfig,
+          parseJson(row.json) as StoredInstallConfig,
         ]),
+      );
+      const configsById = new Map<string, InstallConfig>(
+        [...storedConfigsById.entries()].map(([id, config]) => [
+          id,
+          publicStoredInstallConfig(config),
+        ] as const),
+      );
+      const targetStoredConfig = storedConfigsById.get(
+        input.targetInstallConfigId,
       );
       const targetConfig = configsById.get(input.targetInstallConfigId);
       const recoveryProof = input.expected.committedPostApplyRecovery;
@@ -2416,6 +4124,45 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           ? { status: "replayed" as const, capsule }
           : { status: "conflict" as const, capsule };
       }
+      // A successor carrying a re-adoption receipt is admitted only against
+      // the private authority captured when that exact row was created. A
+      // malformed or missing receipt is fail-closed; exact completed replays
+      // above intentionally remain read-only while draining.
+      const targetRequiresManagementAuthority = targetStoredConfig !== undefined
+        ? installConfigRequiresManagementAuthority(targetStoredConfig)
+        : targetConfig !== undefined &&
+          installConfigRequiresManagementAuthority(targetConfig);
+      const originalAuthority = targetStoredConfig === undefined
+        ? undefined
+        : installConfigManagementAuthority(targetStoredConfig);
+      if (targetRequiresManagementAuthority) {
+        if (originalAuthority === undefined) {
+          throw new WorkspaceManagementAdmissionConflictError(
+            capsuleRow.workspaceId,
+          );
+        }
+        if (expectedManagementAuthority !== undefined) {
+          assertWorkspaceManagementAdmission(
+            originalAuthority,
+            capsuleRow.workspaceId,
+            expectedManagementAuthority,
+          );
+        }
+        assertWorkspaceManagementAdmission(
+          management,
+          capsuleRow.workspaceId,
+          originalAuthority,
+        );
+      } else {
+        assertWorkspaceManagementAdmission(
+          management,
+          capsuleRow.workspaceId,
+          expectedManagementAuthority,
+        );
+      }
+      const currentStoredConfig = storedConfigsById.get(
+        capsule.installConfigId,
+      );
       const currentConfig = configsById.get(capsule.installConfigId) as
         | InstallConfig
         | undefined;
@@ -2496,7 +4243,12 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         .where(
           and(
             eq(pgSchema.installConfigs.id, input.expected.installConfigId),
-            eq(pgSchema.installConfigs.configJson, currentConfig),
+            currentStoredConfig === undefined
+              ? sql`false`
+              : eq(
+                  pgSchema.installConfigs.configJson,
+                  currentStoredConfig,
+                ),
           ),
         );
       const targetConfigFence = db
@@ -2508,7 +4260,12 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
               pgSchema.installConfigs.id,
               input.targetInstallConfigId,
             ),
-            eq(pgSchema.installConfigs.configJson, targetConfig),
+            targetStoredConfig === undefined
+              ? sql`false`
+              : eq(
+                  pgSchema.installConfigs.configJson,
+                  targetStoredConfig,
+                ),
           ),
         );
       const bindingSetAuthorityFence = bindingReplacement === undefined
@@ -2589,6 +4346,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         .where(
           and(
             eq(pgSchema.capsules.id, input.capsuleId),
+            eq(pgSchema.capsules.workspaceId, capsuleRow.workspaceId),
             // The replacement record is derived from this exact observed
             // JSON. Fence the whole record so a concurrent non-authority
             // patch cannot be erased by the stale whole-JSON write below.
@@ -2977,6 +4735,21 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   async updateCapsuleLifecycle(
     input: UpdateCapsuleLifecycleCommand,
   ): Promise<UpdateCapsuleLifecycleResult> {
+    input = structuredClone(input);
+    // Capture the caller's original admission tuple before any asynchronous
+    // SQL preparation. A later Workspace transition must not change the
+    // authority this marker update was admitted with.
+    const expectedWorkspaceManagementAuthority =
+      input.mutation.kind === "auto-update-claim" &&
+          input.mutation.expectedWorkspaceManagementAuthority !== undefined
+        ? structuredClone(input.mutation.expectedWorkspaceManagementAuthority)
+        : undefined;
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        expectedWorkspaceManagementAuthority.workspaceId,
+      );
+    }
     const patch = capsuleLifecycleMutationPatch(
       input.mutation,
       input.updatedAt,
@@ -3009,33 +4782,78 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     const claimNotAlreadyApplied = input.mutation.kind === "auto-update-claim"
       ? sql`${pgSchema.capsules.capsuleJson} ->> 'autoUpdateAttemptSourceSnapshotId' IS DISTINCT FROM ${input.mutation.sourceSnapshotId}`
       : sql`true`;
-    const rows = await this.#db
-      .update(pgSchema.capsules)
-      .set({
-        ...(patch.status ? { status: patch.status } : {}),
-        capsuleJson:
-          sql`${pgSchema.capsules.capsuleJson} || ${JSON.stringify(patch)}::jsonb`,
-        updatedAt: input.updatedAt,
-      })
-      .where(
-        and(
-          eq(pgSchema.capsules.id, input.capsuleId),
-          eq(
-            pgSchema.capsules.executionAuthorityEpoch,
-            input.expected.executionAuthorityEpoch,
+    const update = async (
+      db: PgRemoteDatabase<typeof pgSchema>,
+      expectedWorkspaceId?: string,
+    ) =>
+      await db
+        .update(pgSchema.capsules)
+        .set({
+          ...(patch.status ? { status: patch.status } : {}),
+          capsuleJson:
+            sql`${pgSchema.capsules.capsuleJson} || ${JSON.stringify(patch)}::jsonb`,
+          updatedAt: input.updatedAt,
+        })
+        .where(
+          and(
+            eq(pgSchema.capsules.id, input.capsuleId),
+            expectedWorkspaceId === undefined
+              ? sql`true`
+              : eq(pgSchema.capsules.workspaceId, expectedWorkspaceId),
+            eq(
+              pgSchema.capsules.executionAuthorityEpoch,
+              input.expected.executionAuthorityEpoch,
+            ),
+            expectedStateVersion,
+            sql`COALESCE((${pgSchema.capsules.capsuleJson} ->> 'currentStateGeneration')::integer, 0) = ${input.expected.currentStateGeneration}`,
+            expectedOutput,
+            eq(pgSchema.capsules.status, input.expected.status),
+            expectedAutoUpdate,
+            expectedAutoUpdateAttempt,
+            expectedCompatibilityReport,
+            expectedCompatibilityStatus,
+            claimNotAlreadyApplied,
           ),
-          expectedStateVersion,
-          sql`COALESCE((${pgSchema.capsules.capsuleJson} ->> 'currentStateGeneration')::integer, 0) = ${input.expected.currentStateGeneration}`,
-          expectedOutput,
-          eq(pgSchema.capsules.status, input.expected.status),
-          expectedAutoUpdate,
-          expectedAutoUpdateAttempt,
-          expectedCompatibilityReport,
-          expectedCompatibilityStatus,
-          claimNotAlreadyApplied,
-        ),
-      )
-      .returning({ json: pgSchema.capsules.capsuleJson });
+        )
+        .returning({ json: pgSchema.capsules.capsuleJson });
+    let rows: Awaited<ReturnType<typeof update>> = [];
+    if (input.mutation.kind === "auto-update-claim") {
+      // Lock the persisted Capsule Workspace first, then pin that same
+      // workspace id in the lifecycle UPDATE. A drain racing this claim
+      // therefore loses atomically; no generic drain bypass is introduced.
+      rows = await this.#client.transaction(async (transaction) => {
+        const capsuleRows = await transaction.query<{
+          readonly workspaceId: string | null;
+        }>(
+          `select space_id as "workspaceId"
+             from takosumi_capsules
+            where id = $1
+            limit 1`,
+          [input.capsuleId],
+        );
+        const workspaceId = capsuleRows.rows[0]?.workspaceId;
+        if (!workspaceId) return [];
+        const management = await pgWorkspaceManagementForTransaction(
+          transaction,
+          workspaceId,
+        );
+        if (!management || management.managementState !== "active") return [];
+        if (expectedWorkspaceManagementAuthority === undefined) return [];
+        if (
+          expectedWorkspaceManagementAuthority.workspaceId !== workspaceId ||
+          expectedWorkspaceManagementAuthority.managementEpoch !==
+            management.managementEpoch
+        ) {
+          return [];
+        }
+        return await update(
+          this.#drizzleForClient(transaction),
+          management.workspaceId,
+        );
+      });
+    } else {
+      rows = await update(this.#db);
+    }
     if (rows[0]) {
       return {
         kind: "updated",
@@ -3443,6 +5261,107 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return connection;
   }
 
+  async createConnectionRegistration(
+    input: CreateConnectionRegistrationInput,
+  ): Promise<boolean> {
+    // Snapshot and validate all caller input before opening the transaction;
+    // the returned objects are detached from any later caller mutation.
+    const {
+      connection,
+      secretBlob,
+      expectedWorkspaceManagementAuthority,
+      actorAuthority,
+    } = prepareConnectionRegistration(input);
+
+    try {
+      return await this.#client.transaction(async (transaction) => {
+        if (connection.scope === "workspace") {
+          const workspaceId = connection.workspaceId;
+          if (workspaceId === undefined) {
+            // prepareConnectionRegistration already rejects this shape. Keep
+            // the check at the durable boundary so a future helper change
+            // cannot accidentally admit an unscoped registration.
+            throw new TypeError(
+              "Workspace Connection registration requires a Workspace id",
+            );
+          }
+          const management = await pgWorkspaceManagementForTransaction(
+            transaction,
+            workspaceId,
+          );
+          assertWorkspaceManagementAdmission(
+            management,
+            workspaceId,
+            expectedWorkspaceManagementAuthority,
+          );
+          if (
+            !(await this.#connectionActorAuthorityMatches(
+              transaction,
+              actorAuthority,
+            ))
+          ) {
+            return false;
+          }
+        }
+
+        // Existing orphan blobs are part of the registration identity. Read
+        // all occupied identities before either insert; a later unique race
+        // is handled by the transaction-level catch below and rolls back both
+        // rows rather than leaving a partial pair.
+        const collisions = await transaction.query<{ readonly collision: number }>(
+          `select 1 as collision
+             from takosumi_connections
+            where id = $1
+           union all
+           select 1 as collision
+             from takosumi_connection_secret_blobs
+            where connection_id = $1
+           union all
+           select 1 as collision
+             from takosumi_connection_secret_blobs
+            where id = $2
+            limit 1`,
+          [connection.id, secretBlob?.id ?? null],
+        );
+        if (collisions.rows.length > 0) return false;
+
+        const db = this.#drizzleForClient(transaction);
+        await db.insert(pgSchema.connections).values({
+          id: connection.id,
+          workspaceId: connection.workspaceId ?? null,
+          provider: connection.provider,
+          status: connection.status,
+          connectionJson: connection,
+          createdAt: connection.createdAt,
+          updatedAt: connection.updatedAt,
+        });
+        if (secretBlob !== undefined) {
+          await db.insert(pgSchema.secretBlobs).values({
+            id: secretBlob.id,
+            connectionId: secretBlob.connectionId,
+            workspaceId: secretBlob.workspaceId ?? null,
+            kind: secretBlob.kind,
+            ciphertext: secretBlob.ciphertext,
+            encryptedDek: secretBlob.encryptedDek,
+            nonce: secretBlob.nonce,
+            aad: secretBlob.aad,
+            keyVersion: secretBlob.keyVersion,
+            createdAt: secretBlob.createdAt,
+            rotatedAt: secretBlob.rotatedAt ?? null,
+            blobJson: secretBlob,
+          });
+        }
+        return true;
+      });
+    } catch (error) {
+      // A concurrent connection/blob insert can win after the observation
+      // query. The SQL transaction has already rolled back here, so report
+      // the create-only collision without exposing a half-written pair.
+      if (isUniqueConstraintViolation(error)) return false;
+      throw error;
+    }
+  }
+
   async createConnectionIfAbsent(
     connection: ProviderConnection,
   ): Promise<boolean> {
@@ -3485,6 +5404,277 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       )
       .returning({ id: pgSchema.connections.id });
     return updated.length === 1;
+  }
+
+  async markConnectionExpiredIfUnchanged(
+    input: MarkConnectionExpiredIfUnchangedInput,
+  ): Promise<boolean> {
+    const prepared = prepareConnectionExpiration(input);
+    if (prepared === undefined) return false;
+    return await this.replaceConnectionIfUnchanged(
+      prepared.expectedConnection,
+      prepared.replacement,
+    );
+  }
+
+  async revokeConnectionIfUnchanged(
+    input: RevokeConnectionIfUnchangedInput,
+  ): Promise<boolean> {
+    // Snapshot and validate before opening the transaction. Workspace-scoped
+    // callers must supply the authority captured for this exact operation;
+    // operator-scoped rows intentionally carry no Workspace fence.
+    const {
+      expectedConnection,
+      expectedWorkspaceManagementAuthority,
+      actorAuthority,
+    } = prepareConnectionRevocation(input);
+    return await this.#client.transaction(async (transaction) => {
+      if (expectedConnection.scope === "workspace") {
+        const workspaceId = expectedConnection.workspaceId;
+        if (workspaceId === undefined) {
+          throw new TypeError(
+            "Workspace Connection revocation requires a Workspace id",
+          );
+        }
+        const management = await pgWorkspaceManagementForTransaction(
+          transaction,
+          workspaceId,
+        );
+        assertWorkspaceManagementAdmission(
+          management,
+          workspaceId,
+          expectedWorkspaceManagementAuthority,
+        );
+        if (
+          !(await this.#connectionActorAuthorityMatches(
+            transaction,
+            actorAuthority,
+          ))
+        ) {
+          return false;
+        }
+      }
+
+      // After the Workspace/member authority snapshot above, lock the
+      // Connection row before comparing or deleting it. A stale or missing
+      // row returns false without touching an orphan/current blob.
+      const locked = await transaction.query<{
+        readonly id: string;
+        readonly connectionJson: unknown;
+      }>(
+        `select id, connection_json as "connectionJson"
+           from takosumi_connections
+          where id = $1
+          for update`,
+        [expectedConnection.id],
+      );
+      const row = locked.rows[0];
+      if (row === undefined) return false;
+      const current = parseJson(row.connectionJson);
+      if (current === null || typeof current !== "object" || Array.isArray(current)) {
+        return false;
+      }
+
+      const db = this.#drizzleForClient(transaction);
+      const deleted = await db
+        .delete(pgSchema.connections)
+        .where(
+          and(
+            eq(pgSchema.connections.id, expectedConnection.id),
+            expectedConnection.workspaceId === undefined
+              ? isNull(pgSchema.connections.workspaceId)
+              : eq(
+                  pgSchema.connections.workspaceId,
+                  expectedConnection.workspaceId,
+                ),
+            eq(pgSchema.connections.provider, expectedConnection.provider),
+            eq(pgSchema.connections.status, expectedConnection.status),
+            sql`${pgSchema.connections.connectionJson}::jsonb = ${JSON.stringify(expectedConnection)}::jsonb`,
+            eq(pgSchema.connections.createdAt, expectedConnection.createdAt),
+            eq(pgSchema.connections.updatedAt, expectedConnection.updatedAt),
+          ),
+        )
+        .returning({ id: pgSchema.connections.id });
+      if (deleted.length === 0) return false;
+
+      // Remove whichever sealed material is currently attached to this exact
+      // Connection. Blob rotation is not part of the Connection CAS.
+      await db
+        .delete(pgSchema.secretBlobs)
+        .where(eq(pgSchema.secretBlobs.connectionId, expectedConnection.id));
+      return true;
+    });
+  }
+
+  async commitConnectionTestResult(
+    input: CommitConnectionTestResultInput,
+  ): Promise<boolean> {
+    // Snapshot and validate before opening asynchronous SQL work. The
+    // expected blob is an explicit observation: null means the owner was
+    // absent, not that the material predicate should be skipped.
+    const {
+      expectedConnection,
+      expectedSecretBlob,
+      replacement,
+      expectedWorkspaceManagementAuthority,
+      actorAuthority,
+    } = prepareConnectionTestResult(input);
+
+    return await this.#client.transaction(async (transaction) => {
+      if (expectedConnection.workspaceId !== undefined) {
+        const management = await pgWorkspaceManagementForTransaction(
+          transaction,
+          expectedConnection.workspaceId,
+        );
+        assertWorkspaceManagementAdmission(
+          management,
+          expectedConnection.workspaceId,
+          expectedWorkspaceManagementAuthority,
+        );
+        if (
+          !(await this.#connectionActorAuthorityMatches(
+            transaction,
+            actorAuthority,
+          ))
+        ) {
+          return false;
+        }
+      }
+
+      // After the Workspace/member authority snapshot above, lock the
+      // Connection first, then whichever sealed-material row is currently
+      // attached. Raw blob writers do not acquire the Connection lock, so the
+      // final UPDATE below repeats the full blob predicate to linearize a
+      // rotation or a null->present insertion that races this observation.
+      const lockedConnection = await transaction.query<{
+        readonly id: string;
+        readonly workspaceId: string | null;
+        readonly provider: string;
+        readonly status: string;
+        readonly connectionJson: unknown;
+        readonly createdAt: string;
+        readonly updatedAt: string;
+      }>(
+        `select id,
+                space_id as "workspaceId",
+                provider,
+                status,
+                connection_json as "connectionJson",
+                created_at as "createdAt",
+                updated_at as "updatedAt"
+           from takosumi_connections
+          where id = $1
+          for update`,
+        [expectedConnection.id],
+      );
+      const connectionRow = lockedConnection.rows[0];
+      if (connectionRow === undefined) return false;
+      const currentJson = parseJson(connectionRow.connectionJson);
+      if (
+        currentJson === null ||
+        typeof currentJson !== "object" ||
+        Array.isArray(currentJson)
+      ) {
+        return false;
+      }
+
+      await transaction.query(
+        `select id
+           from takosumi_connection_secret_blobs
+          where connection_id = $1
+          for update`,
+        [expectedConnection.id],
+      );
+
+      const db = this.#drizzleForClient(transaction);
+      const connectionFence = and(
+        eq(pgSchema.connections.id, expectedConnection.id),
+        expectedConnection.workspaceId === undefined
+          ? isNull(pgSchema.connections.workspaceId)
+          : eq(
+              pgSchema.connections.workspaceId,
+              expectedConnection.workspaceId,
+            ),
+        eq(pgSchema.connections.provider, expectedConnection.provider),
+        eq(pgSchema.connections.status, expectedConnection.status),
+        sql`${pgSchema.connections.connectionJson}::jsonb = ${JSON.stringify(expectedConnection)}::jsonb`,
+        eq(pgSchema.connections.createdAt, expectedConnection.createdAt),
+        eq(pgSchema.connections.updatedAt, expectedConnection.updatedAt),
+      )!;
+
+      const blobFence = expectedSecretBlob === null
+        ? notExists(
+            db
+              .select({ id: pgSchema.secretBlobs.id })
+              .from(pgSchema.secretBlobs)
+              .where(
+                eq(
+                  pgSchema.secretBlobs.connectionId,
+                  expectedConnection.id,
+                ),
+              ),
+          )
+        : exists(
+            db
+              .select({ id: pgSchema.secretBlobs.id })
+              .from(pgSchema.secretBlobs)
+              .where(
+                and(
+                  eq(pgSchema.secretBlobs.id, expectedSecretBlob.id),
+                  eq(
+                    pgSchema.secretBlobs.connectionId,
+                    expectedSecretBlob.connectionId,
+                  ),
+                  expectedSecretBlob.workspaceId === undefined
+                    ? isNull(pgSchema.secretBlobs.workspaceId)
+                    : eq(
+                        pgSchema.secretBlobs.workspaceId,
+                        expectedSecretBlob.workspaceId,
+                      ),
+                  eq(pgSchema.secretBlobs.kind, expectedSecretBlob.kind),
+                  eq(
+                    pgSchema.secretBlobs.ciphertext,
+                    expectedSecretBlob.ciphertext,
+                  ),
+                  eq(
+                    pgSchema.secretBlobs.encryptedDek,
+                    expectedSecretBlob.encryptedDek,
+                  ),
+                  eq(pgSchema.secretBlobs.nonce, expectedSecretBlob.nonce),
+                  eq(pgSchema.secretBlobs.aad, expectedSecretBlob.aad),
+                  eq(
+                    pgSchema.secretBlobs.keyVersion,
+                    expectedSecretBlob.keyVersion,
+                  ),
+                  eq(
+                    pgSchema.secretBlobs.createdAt,
+                    expectedSecretBlob.createdAt,
+                  ),
+                  expectedSecretBlob.rotatedAt === undefined
+                    ? isNull(pgSchema.secretBlobs.rotatedAt)
+                    : eq(
+                        pgSchema.secretBlobs.rotatedAt,
+                        expectedSecretBlob.rotatedAt,
+                      ),
+                  sql`${pgSchema.secretBlobs.blobJson}::jsonb = ${JSON.stringify(expectedSecretBlob)}::jsonb`,
+                ),
+              ),
+          );
+
+      const updated = await db
+        .update(pgSchema.connections)
+        .set({
+          workspaceId: replacement.workspaceId ?? null,
+          provider: replacement.provider,
+          status: replacement.status,
+          connectionJson: replacement,
+          createdAt: replacement.createdAt,
+          updatedAt: replacement.updatedAt,
+        })
+        .where(and(connectionFence, blobFence))
+        .returning({ id: pgSchema.connections.id });
+      return updated.length === 1;
+    });
   }
 
   async getConnection(id: string): Promise<ProviderConnection | undefined> {
@@ -3643,6 +5833,199 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       updatedAt: source.updatedAt,
     });
     return source;
+  }
+
+  async writeSourceConfiguration(
+    input: SourceConfigurationWriteInput,
+  ): Promise<SourceConfigurationWriteResult> {
+    assertSourceConfigurationWriteInput(input);
+    const source = input.source;
+    return await this.#client.transaction(async (transaction) => {
+      // Workspace is the outer lock for every guarded Source configuration
+      // write. The source row is then locked and compared while that same
+      // persisted Workspace remains pinned for the eventual CAS.
+      const management = await pgWorkspaceManagementForTransaction(
+        transaction,
+        source.workspaceId,
+      );
+      const currentRows = await transaction.query<PgStoredSourceRow>(
+        `select id,
+                space_id as "workspaceId",
+                status,
+                source_json as "sourceJson",
+                created_at as "createdAt",
+                updated_at as "updatedAt"
+           from takosumi_sources
+          where id = $1
+          for update`,
+        [source.id],
+      );
+      const currentRow = currentRows.rows[0];
+
+      // A Source id is globally unique. An id physically owned by another
+      // Workspace is a conflict and must never be rebound by the candidate.
+      if (currentRow && currentRow.workspaceId !== source.workspaceId) {
+        return { status: "conflict" as const };
+      }
+      const current = currentRow
+        ? sourceFromPgRow(currentRow)
+        : undefined;
+      if (currentRow && !current) {
+        // Treat a physically/JSON-inconsistent row as an immutable conflict;
+        // no caller payload is allowed to repair its ownership or identity.
+        return { status: "conflict" as const };
+      }
+
+      if (current) {
+        // CREATE-only calls cannot overwrite an existing Source, even when the
+        // candidate happens to be byte-for-byte identical. An exact candidate
+        // is instead an observation-only replay, including the create-shaped
+        // call used to retry a stopped request. This replay intentionally wins
+        // before evaluating a stale expectedSource: no write can be performed
+        // by this branch, so it remains safe and idempotent.
+        const currentDigest = await stableJsonDigest(current);
+        const candidateDigest = await stableJsonDigest(source);
+        if (candidateDigest === currentDigest) {
+          // Exact replay is an observation-only read and remains available
+          // while Workspace management is draining or frozen.
+          return { status: "replayed" as const, source: current };
+        }
+        if (input.expectedSource === undefined) {
+          return { status: "conflict" as const };
+        }
+        const expectedDigest = await stableJsonDigest(input.expectedSource);
+        if (currentDigest !== expectedDigest) {
+          return { status: "conflict" as const };
+        }
+
+        assertWorkspaceManagementAdmission(
+          management,
+          source.workspaceId,
+          input.expectedWorkspaceManagementAuthority,
+        );
+        const expectedEpochPredicate =
+          input.expectedWorkspaceManagementAuthority === undefined
+            ? ""
+            : "\n                   and workspace.management_epoch = $11";
+        const updated = await transaction.query<PgStoredSourceRow>(
+          `update takosumi_sources as source_row
+              set status = $1,
+                  source_json = $2::jsonb,
+                  created_at = $3,
+                  updated_at = $4
+            where source_row.id = $5
+              and source_row.space_id = $6
+              and source_row.status = $8
+              and source_row.created_at = $9
+              and source_row.updated_at = $10
+              and source_row.source_json = $7::jsonb
+              and exists (
+                select 1
+                  from takosumi_workspaces as workspace
+                 where workspace.id = source_row.space_id
+                   and workspace.management_state = 'active'${expectedEpochPredicate}
+              )
+          returning source_row.id,
+                    source_row.space_id as "workspaceId",
+                    source_row.status,
+                    source_row.source_json as "sourceJson",
+                    source_row.created_at as "createdAt",
+                    source_row.updated_at as "updatedAt"`,
+          [
+            source.status,
+            JSON.stringify(source),
+            source.createdAt,
+            source.updatedAt,
+            source.id,
+            source.workspaceId,
+            JSON.stringify(input.expectedSource),
+            input.expectedSource.status,
+            input.expectedSource.createdAt,
+            input.expectedSource.updatedAt,
+            ...(input.expectedWorkspaceManagementAuthority === undefined
+              ? []
+              : [input.expectedWorkspaceManagementAuthority.managementEpoch]),
+          ],
+        );
+        const updatedRow = updated.rows[0];
+        const persisted = updatedRow
+          ? sourceFromPgRow(updatedRow)
+          : undefined;
+        return persisted
+          ? { status: "updated" as const, source: persisted }
+          : { status: "conflict" as const };
+      }
+
+      // A missing expectedSource is the only path that can create a Source.
+      if (input.expectedSource !== undefined) {
+        return { status: "conflict" as const };
+      }
+      assertWorkspaceManagementAdmission(
+        management,
+        source.workspaceId,
+        input.expectedWorkspaceManagementAuthority,
+      );
+      const expectedEpochPredicate =
+        input.expectedWorkspaceManagementAuthority === undefined
+          ? ""
+          : "\n             and workspace.management_epoch = $7";
+      const inserted = await transaction.query<PgStoredSourceRow>(
+        `insert into takosumi_sources
+          (id, space_id, status, source_json, created_at, updated_at)
+         select $1, workspace.id, $2, $3::jsonb, $4, $5
+           from takosumi_workspaces as workspace
+          where workspace.id = $6
+            and workspace.management_state = 'active'${expectedEpochPredicate}
+         on conflict (id) do nothing
+         returning id,
+                   space_id as "workspaceId",
+                   status,
+                   source_json as "sourceJson",
+                   created_at as "createdAt",
+                   updated_at as "updatedAt"`,
+        [
+          source.id,
+          source.status,
+          JSON.stringify(source),
+          source.createdAt,
+          source.updatedAt,
+          source.workspaceId,
+          ...(input.expectedWorkspaceManagementAuthority === undefined
+            ? []
+            : [input.expectedWorkspaceManagementAuthority.managementEpoch]),
+        ],
+      );
+      const insertedRow = inserted.rows[0];
+      const persisted = insertedRow
+        ? sourceFromPgRow(insertedRow)
+        : undefined;
+      if (persisted) return { status: "created" as const, source: persisted };
+
+      // Distinguish an id collision from a lost Workspace admission without
+      // writing anything in either case.
+      const afterRows = await transaction.query<PgStoredSourceRow>(
+        `select id,
+                space_id as "workspaceId",
+                status,
+                source_json as "sourceJson",
+                created_at as "createdAt",
+                updated_at as "updatedAt"
+           from takosumi_sources
+          where id = $1
+          limit 1`,
+        [source.id],
+      );
+      if (afterRows.rows[0]) return { status: "conflict" as const };
+      // The preflight assertion above protects normal paths; this second
+      // assertion turns a predicate miss (including a stale epoch) into the
+      // typed admission error without fabricating a Source result.
+      assertWorkspaceManagementAdmission(
+        undefined,
+        source.workspaceId,
+        input.expectedWorkspaceManagementAuthority,
+      );
+      return { status: "conflict" as const };
+    });
   }
 
   async getSource(id: string): Promise<StoredSource | undefined> {
@@ -5019,6 +7402,154 @@ interface JsonRow extends Record<string, unknown> {
   readonly json: unknown;
 }
 
+interface PgWorkspaceMutationWorkspaceRow extends Record<string, unknown> {
+  readonly id: string;
+  readonly handle: string;
+  readonly spaceJson: unknown;
+  readonly workspaceType: string | null;
+  readonly ownerUserId: string | null;
+  readonly createdAt: string;
+}
+
+interface PgWorkspaceMemberRow extends Record<string, unknown> {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly accountId: string;
+  readonly status: string;
+  readonly recordJson: unknown;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+interface WorkspaceMemberMutationSnapshot {
+  readonly workspace: Workspace;
+  readonly members: readonly WorkspaceMember[];
+}
+
+function workspaceMutationRowMatches(
+  row: PgWorkspaceMutationWorkspaceRow,
+  current: Workspace,
+  expected: Workspace,
+): boolean {
+  return row.id === expected.id &&
+    row.handle === expected.handle &&
+    row.workspaceType === expected.type &&
+    row.ownerUserId === expected.ownerUserId &&
+    row.createdAt === expected.createdAt &&
+    current.id === row.id &&
+    current.handle === row.handle &&
+    stableStringify(current) === stableStringify(expected);
+}
+
+function workspaceMemberLogicalEquals(
+  left: WorkspaceMember,
+  right: WorkspaceMember,
+): boolean {
+  return left.id === right.id &&
+    left.workspaceId === right.workspaceId &&
+    left.accountId === right.accountId &&
+    left.status === right.status &&
+    left.createdAt === right.createdAt &&
+    left.updatedAt === right.updatedAt &&
+    left.roles.length === right.roles.length &&
+    left.roles.every((role, index) => role === right.roles[index]);
+}
+
+function workspaceMemberExpectedMatches(
+  current: WorkspaceMember | undefined,
+  expected: WorkspaceMember | undefined,
+): boolean {
+  return expected === undefined
+    ? current === undefined
+    : current !== undefined && workspaceMemberLogicalEquals(current, expected);
+}
+
+/** Lock the shared Workspace row before dependent management writes. */
+export async function pgWorkspaceManagementForTransaction(
+  transaction: SqlTransaction,
+  workspaceId: string,
+): Promise<WorkspaceManagement | undefined> {
+  const rows = await transaction.query<{
+    readonly managementState: string | null;
+    readonly managementEpoch: number | string | null;
+  }>(
+    `select management_state as "managementState",
+            management_epoch as "managementEpoch"
+       from takosumi_workspaces
+      where id = $1
+      for update`,
+    [workspaceId],
+  );
+  const row = rows.rows[0];
+  return row
+    ? normalizeWorkspaceManagement(
+        workspaceId,
+        row.managementState,
+        row.managementEpoch,
+      )
+      : undefined;
+}
+
+interface PgStoredSourceRow extends Record<string, unknown> {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly status: string;
+  readonly sourceJson: unknown;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/**
+ * Reconcile the physical Source columns with the sealed JSON record before a
+ * configuration CAS. A mismatch is treated as an immutable conflict; callers
+ * cannot use a candidate write to repair ownership or identity drift.
+ */
+function sourceFromPgRow(row: PgStoredSourceRow): StoredSource | undefined {
+  const value = parseJson(row.sourceJson);
+  if (value === null || typeof value !== "object") return undefined;
+  const source = value as Partial<StoredSource>;
+  if (
+    source.id !== row.id ||
+    source.workspaceId !== row.workspaceId ||
+    source.status !== row.status ||
+    source.createdAt !== row.createdAt ||
+    source.updatedAt !== row.updatedAt
+  ) {
+    return undefined;
+  }
+  return source as StoredSource;
+}
+
+interface PgProjectRow extends Record<string, unknown> {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly name: string;
+  readonly slug: string;
+  readonly projectJson: unknown;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** Reconcile physical Project columns with the canonical JSON record. */
+function projectFromPgRow(row: PgProjectRow): Project | undefined {
+  const value = parseJson(row.projectJson);
+  if (value === null || typeof value !== "object") return undefined;
+  const project = value as Partial<Project>;
+  if (
+    project.id !== row.id ||
+    project.workspaceId !== row.workspaceId ||
+    project.name !== row.name ||
+    project.slug !== row.slug ||
+    project.createdAt !== row.createdAt ||
+    project.updatedAt !== row.updatedAt ||
+    project.projectJson === null ||
+    typeof project.projectJson !== "object"
+  ) {
+    return undefined;
+  }
+  return project as Project;
+}
+
 function parseRow(row: JsonRow | undefined): unknown {
   if (!row) return undefined;
   return parseJson(row.json);
@@ -5030,6 +7561,59 @@ function parseJson(value: unknown): unknown {
     return JSON.parse(value);
   }
   return value;
+}
+
+function isUniqueConstraintViolation(error: unknown): boolean {
+  if (error === null || typeof error !== "object") return false;
+  const candidate = error as {
+    readonly code?: unknown;
+    readonly message?: unknown;
+  };
+  return candidate.code === "23505" ||
+    (typeof candidate.message === "string" &&
+      /duplicate key|unique constraint/iu.test(candidate.message));
+}
+
+/**
+ * Persist a public Run payload while retaining the row's private original
+ * Workspace-management authority. The RHS references the existing PostgreSQL
+ * JSONB value, so transitions, terminal commits, and raw puts all preserve
+ * that key atomically instead of relying on a pre-read merge.
+ */
+function runJsonPreservingManagementAuthority(
+  run: StoredRunRecord,
+): SQL {
+  const publicRun = publicStoredRun(run);
+  return sql`${JSON.stringify(publicRun)}::jsonb || CASE
+    WHEN ${pgSchema.runs.runJson} ? 'workspaceManagementAuthority'
+    THEN jsonb_build_object(
+      'workspaceManagementAuthority',
+      ${pgSchema.runs.runJson} -> 'workspaceManagementAuthority'
+    )
+    ELSE '{}'::jsonb
+  END`;
+}
+
+function sourceSyncRunJsonPreservingAuthority(run: SourceSyncRun): SQL {
+  return runJsonPreservingManagementAuthority(run);
+}
+
+/**
+ * Persist a public InstallConfig while retaining the row's private original
+ * Workspace-management authority. The existing JSONB key is copied inside
+ * the same SQL write, so a public full-record rewrite cannot erase, replace,
+ * or mint that metadata through a read/merge/write race.
+ */
+function installConfigJsonPreservingAuthority(config: InstallConfig): SQL {
+  const publicConfig = publicStoredInstallConfig(config);
+  return sql`${JSON.stringify(publicConfig)}::jsonb || CASE
+    WHEN ${pgSchema.installConfigs.configJson} ? 'workspaceManagementAuthority'
+    THEN jsonb_build_object(
+      'workspaceManagementAuthority',
+      ${pgSchema.installConfigs.configJson} -> 'workspaceManagementAuthority'
+    )
+    ELSE '{}'::jsonb
+  END`;
 }
 
 function capsuleValues(capsule: Capsule) {
@@ -5084,19 +7668,20 @@ async function pgUpsertRun(
   kind: string,
   run: PlanRun | ApplyRun,
 ): Promise<void> {
+  const publicRun = publicStoredRun(run);
   const values = {
-    id: run.id,
+    id: publicRun.id,
     kind,
-    workspaceId: run.workspaceId,
+    workspaceId: publicRun.workspaceId,
     sourceId: null,
-    capsuleId: run.capsuleId ?? null,
-    status: run.status,
+    capsuleId: publicRun.capsuleId ?? null,
+    status: publicRun.status,
     leaseToken: null as string | null,
-    heartbeatAt: run.heartbeatAt ?? null,
-    createdAt: String(run.createdAt),
-    runJson: run,
+    heartbeatAt: publicRun.heartbeatAt ?? null,
+    createdAt: String(publicRun.createdAt),
+    runJson: publicRun,
   };
-  await db
+  const written = await db
     .insert(pgSchema.runs)
     .values(values)
     .onConflictDoUpdate({
@@ -5110,9 +7695,21 @@ async function pgUpsertRun(
         leaseToken: values.leaseToken,
         heartbeatAt: values.heartbeatAt,
         createdAt: values.createdAt,
-        runJson: values.runJson,
+        runJson: runJsonPreservingManagementAuthority(
+          publicRun as StoredRunRecord,
+        ),
       },
-    });
+      setWhere: and(
+        eq(pgSchema.runs.kind, kind),
+        eq(pgSchema.runs.workspaceId, publicRun.workspaceId),
+        sql`${pgSchema.runs.runJson} ->> 'id' = ${publicRun.id}`,
+        sql`${pgSchema.runs.runJson} ->> 'workspaceId' = ${publicRun.workspaceId}`,
+      ),
+    })
+    .returning({ id: pgSchema.runs.id });
+  if (written.length === 0) {
+    throw new TypeError("Run stored identity cannot change");
+  }
 }
 
 async function pgUpdateTerminalRunWithLease(
@@ -5122,24 +7719,35 @@ async function pgUpdateTerminalRunWithLease(
   run: PlanRun | ApplyRun | SourceSyncRun | Run,
   leaseToken: string,
 ): Promise<boolean> {
+  const publicRun = publicStoredRun(run as StoredRunRecord);
   const values = {
     kind,
-    workspaceId: run.workspaceId,
-    sourceId: "sourceId" in run ? (run.sourceId ?? null) : null,
-    capsuleId: "capsuleId" in run ? (run.capsuleId ?? null) : null,
-    status: run.status,
+    workspaceId: publicRun.workspaceId,
+    sourceId: "sourceId" in publicRun ? (publicRun.sourceId ?? null) : null,
+    capsuleId: "capsuleId" in publicRun ? (publicRun.capsuleId ?? null) : null,
+    status: publicRun.status,
     leaseToken: null as string | null,
-    heartbeatAt: run.heartbeatAt ?? null,
-    createdAt: String(run.createdAt),
-    runJson: run,
+    heartbeatAt: publicRun.heartbeatAt ?? null,
+    createdAt: String(publicRun.createdAt),
+    runJson: runJsonPreservingManagementAuthority(
+      publicRun as StoredRunRecord,
+    ),
   };
   const rows = await db
     .update(pgSchema.runs)
     .set(values)
     .where(
       and(
-        eq(pgSchema.runs.id, run.id),
+        eq(pgSchema.runs.id, publicRun.id),
         inArray(pgSchema.runs.kind, [...allowedKinds]),
+        eq(pgSchema.runs.workspaceId, publicRun.workspaceId),
+        sql`${pgSchema.runs.runJson} ->> 'id' = ${publicRun.id}`,
+        sql`${pgSchema.runs.runJson} ->> 'workspaceId' = ${publicRun.workspaceId}`,
+        kind === RUN_KIND_SOURCE_SYNC
+          ? sql`${pgSchema.runs.runJson} ->> 'kind' = ${RUN_KIND_SOURCE_SYNC}`
+          : kind === RUN_KIND_RESTORE
+            ? sql`${pgSchema.runs.runJson} ->> 'type' = ${RUN_KIND_RESTORE}`
+            : sql`true`,
         eq(pgSchema.runs.status, "running"),
         eq(pgSchema.runs.leaseToken, leaseToken),
       ),
@@ -5174,6 +7782,51 @@ async function pgInsertOrAdoptSourceSnapshot(
   if (!existing || !sourceSnapshotsExactlyMatch(existing, snapshot)) {
     throw new SourceSnapshotConflictError(snapshot.id);
   }
+}
+
+/**
+ * Fold the successful SourceSync observation into the existing Source row.
+ *
+ * The address predicates pin the physical Source and its configured default
+ * Git address, while the JSON mutation is built from the current row so every
+ * other configuration and hook field is preserved. Compliant configuration
+ * CAS writes serialize through the Workspace lock; if one advances the row
+ * first, this update observes that latest JSON rather than replacing it. This
+ * helper never creates a Source row and does not consult Workspace management:
+ * it settles the same lease that was already committed above.
+ */
+async function pgMergeSourceSyncCursor(
+  db: PgRemoteDatabase<typeof pgSchema>,
+  run: SourceSyncRun,
+  snapshot: SourceSnapshot,
+): Promise<void> {
+  if (snapshot.resolvedCommit === undefined) return;
+  await db
+    .update(pgSchema.sources)
+    .set({
+      sourceJson: sql`jsonb_set(
+        jsonb_set(
+          ${pgSchema.sources.sourceJson},
+          '{lastSeenCommit}',
+          to_jsonb(${snapshot.resolvedCommit}::text),
+          true
+        ),
+        '{updatedAt}',
+        to_jsonb(${snapshot.fetchedAt}::text),
+        true
+      )`,
+      updatedAt: snapshot.fetchedAt,
+    })
+    .where(
+      and(
+        eq(pgSchema.sources.id, run.sourceId),
+        eq(pgSchema.sources.workspaceId, run.workspaceId),
+        sql`${pgSchema.sources.sourceJson} ->> 'workspaceId' = ${run.workspaceId}`,
+        sql`${pgSchema.sources.sourceJson} ->> 'url' = ${run.url}`,
+        sql`${pgSchema.sources.sourceJson} ->> 'defaultRef' = ${run.ref}`,
+        sql`${pgSchema.sources.sourceJson} ->> 'defaultPath' = ${run.path}`,
+      ),
+    );
 }
 
 async function pgUpsertStateVersion(

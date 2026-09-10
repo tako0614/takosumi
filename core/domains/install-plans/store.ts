@@ -3,6 +3,12 @@ import type {
   GitInstallPlanInitialConfiguration,
 } from "takosumi-contract";
 import type { JsonValue } from "takosumi-contract";
+import {
+  assertWorkspaceManagementAuthorityInput,
+  WorkspaceManagementAdmissionConflictError,
+  type WorkspaceManagementAdmissionValidator,
+  type WorkspaceManagementAuthority,
+} from "../deploy-control/store.ts";
 
 export const GIT_INSTALL_PLAN_RECONCILE_LEASE_MS = 30_000;
 
@@ -11,6 +17,8 @@ export interface StoredGitInstallPlan extends GitInstallPlan {
   readonly actorSubject: string;
   /** SHA-256 digest of the caller's Idempotency-Key; raw key is never stored. */
   readonly idempotencyKeyHash: string;
+  /** Original management admission; absent only on retained legacy rows. */
+  readonly workspaceManagementAuthority?: WorkspaceManagementAuthority;
   /** Private Capsule execution-authority fence for revision coordination. */
   readonly capsuleExecutionAuthorityEpoch?: number;
   /** Private reviewed values retained only until atomic initial creation. */
@@ -20,6 +28,11 @@ export interface StoredGitInstallPlan extends GitInstallPlan {
   /** Private digest pin for the exact config returned by install preflight. */
   readonly preflightInstallConfigDigest?: string;
 }
+
+export type GitInstallPlanScope = Pick<
+  StoredGitInstallPlan,
+  "workspaceId" | "actorSubject" | "idempotencyKeyHash"
+>;
 
 export interface ClaimedGitInstallPlan {
   readonly plan: StoredGitInstallPlan;
@@ -44,8 +57,13 @@ export type CompleteGitInstallPlanResult =
 
 export interface GitInstallPlanStore {
   readonly durable: boolean;
-  create(plan: StoredGitInstallPlan): Promise<CreateGitInstallPlanResult>;
+  create(
+    plan: StoredGitInstallPlan,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<CreateGitInstallPlanResult>;
   get(id: string): Promise<StoredGitInstallPlan | undefined>;
+  /** Observation only: an exact replay must not require new admission. */
+  getByScope(scope: GitInstallPlanScope): Promise<StoredGitInstallPlan | undefined>;
   hasInFlightRevisionForCapsule(capsuleId: string): Promise<boolean>;
   claimReconcile(input: {
     readonly id: string;
@@ -53,6 +71,7 @@ export interface GitInstallPlanStore {
     readonly leaseToken: string;
     readonly claimedAt: string;
     readonly leaseExpiresAt: string;
+    readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
   }): Promise<ClaimGitInstallPlanResult>;
   completeReconcile(input: {
     readonly id: string;
@@ -77,8 +96,27 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
   readonly durable = false;
   readonly #entries = new Map<string, InMemoryEntry>();
   readonly #scopeIndex = new Map<string, string>();
+  readonly #workspaceManagementValidator?: WorkspaceManagementAdmissionValidator;
 
-  async create(plan: StoredGitInstallPlan): Promise<CreateGitInstallPlanResult> {
+  constructor(
+    workspaceManagementValidator?: WorkspaceManagementAdmissionValidator,
+  ) {
+    this.#workspaceManagementValidator = workspaceManagementValidator;
+  }
+
+  async create(
+    plan: StoredGitInstallPlan,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<CreateGitInstallPlanResult> {
+    if (plan.workspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(plan.workspaceManagementAuthority, plan.workspaceId);
+    }
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        plan.workspaceId,
+      );
+    }
     const scope = scopeKey(plan);
     const existingId = this.#scopeIndex.get(scope);
     if (existingId) {
@@ -94,6 +132,8 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
     if (this.#entries.has(plan.id)) {
       throw new Error("Git install plan id collision");
     }
+    const authority = gitInstallPlanManagementAuthority(plan, expectedWorkspaceManagementAuthority);
+    this.#assertNewAdmission(plan.workspaceId, authority);
     this.#entries.set(plan.id, { plan: clone(plan) });
     this.#scopeIndex.set(scope, plan.id);
     return { status: "created", plan: clone(plan) };
@@ -102,6 +142,11 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
   async get(id: string): Promise<StoredGitInstallPlan | undefined> {
     const entry = this.#entries.get(id);
     return entry ? clone(entry.plan) : undefined;
+  }
+
+  async getByScope(scope: GitInstallPlanScope): Promise<StoredGitInstallPlan | undefined> {
+    const id = this.#scopeIndex.get(scopeKey(scope));
+    return id === undefined ? undefined : await this.get(id);
   }
 
   hasInFlightRevisionForCapsule(capsuleId: string): Promise<boolean> {
@@ -120,6 +165,12 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
   ): Promise<ClaimGitInstallPlanResult> {
     const entry = this.#entries.get(input.id);
     if (!entry) return { status: "not_found" };
+    if (input.expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        input.expectedWorkspaceManagementAuthority,
+        entry.plan.workspaceId,
+      );
+    }
     if (entry.plan.generation !== input.expectedGeneration) {
       return { status: "conflict", plan: clone(entry.plan) };
     }
@@ -130,6 +181,10 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
     ) {
       return { status: "busy", plan: clone(entry.plan) };
     }
+    this.#assertNewAdmission(
+      entry.plan.workspaceId,
+      gitInstallPlanManagementAuthority(entry.plan, input.expectedWorkspaceManagementAuthority),
+    );
     entry.plan = {
       ...entry.plan,
       generation: entry.plan.generation + 1,
@@ -165,12 +220,27 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
     delete entry.leaseExpiresAt;
     return { status: "completed", plan: clone(entry.plan) };
   }
+
+  #assertNewAdmission(
+    workspaceId: string,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): void {
+    if (
+      this.#workspaceManagementValidator?.isWorkspaceManagementAdmissionAllowed(
+        workspaceId,
+        expectedWorkspaceManagementAuthority,
+      ) !== true
+    ) {
+      throw new WorkspaceManagementAdmissionConflictError(workspaceId);
+    }
+  }
 }
 
 export function publicGitInstallPlan(plan: StoredGitInstallPlan): GitInstallPlan {
   const {
     actorSubject: _actorSubject,
     idempotencyKeyHash: _idempotencyKeyHash,
+    workspaceManagementAuthority: _workspaceManagementAuthority,
     capsuleExecutionAuthorityEpoch: _capsuleExecutionAuthorityEpoch,
     initialVariables: _initialVariables,
     initialConfiguration: _initialConfiguration,
@@ -184,11 +254,18 @@ export function assertImmutableScope(
   current: StoredGitInstallPlan,
   next: StoredGitInstallPlan,
 ): void {
+  if (next.workspaceManagementAuthority !== undefined) {
+    assertWorkspaceManagementAuthorityInput(next.workspaceManagementAuthority, next.workspaceId);
+  }
   if (
     current.id !== next.id ||
     current.workspaceId !== next.workspaceId ||
     current.actorSubject !== next.actorSubject ||
     current.idempotencyKeyHash !== next.idempotencyKeyHash ||
+    !sameWorkspaceManagementAuthority(
+      current.workspaceManagementAuthority,
+      next.workspaceManagementAuthority,
+    ) ||
     current.capsuleExecutionAuthorityEpoch !==
       next.capsuleExecutionAuthorityEpoch ||
     current.preflightInstallConfigDigest !==
@@ -217,6 +294,34 @@ export function assertImmutableScope(
   }
 }
 
+/** A caller may confirm the durable admission, never replace or recapture it. */
+export function gitInstallPlanManagementAuthority(
+  plan: StoredGitInstallPlan,
+  expected?: WorkspaceManagementAuthority,
+): WorkspaceManagementAuthority {
+  const authority = plan.workspaceManagementAuthority;
+  if (authority === undefined) {
+    throw new WorkspaceManagementAdmissionConflictError(plan.workspaceId);
+  }
+  assertWorkspaceManagementAuthorityInput(authority, plan.workspaceId);
+  if (expected !== undefined) {
+    assertWorkspaceManagementAuthorityInput(expected, plan.workspaceId);
+    if (!sameWorkspaceManagementAuthority(authority, expected)) {
+      throw new WorkspaceManagementAdmissionConflictError(plan.workspaceId);
+    }
+  }
+  return authority;
+}
+
+function sameWorkspaceManagementAuthority(
+  left: WorkspaceManagementAuthority | undefined,
+  right: WorkspaceManagementAuthority | undefined,
+): boolean {
+  return left?.workspaceId === right?.workspaceId &&
+    left?.managementState === right?.managementState &&
+    left?.managementEpoch === right?.managementEpoch;
+}
+
 export function assertCompletionGeneration(
   expectedGeneration: number,
   plan: StoredGitInstallPlan,
@@ -226,6 +331,6 @@ export function assertCompletionGeneration(
   }
 }
 
-function scopeKey(plan: StoredGitInstallPlan): string {
+function scopeKey(plan: GitInstallPlanScope): string {
   return `${plan.workspaceId}\0${plan.actorSubject}\0${plan.idempotencyKeyHash}`;
 }

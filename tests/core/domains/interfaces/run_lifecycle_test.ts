@@ -433,7 +433,24 @@ output "endpoint" {
     createdAt: failedFastPathApply.createdAt + 1,
     updatedAt: failedFastPathApply.updatedAt + 1,
   };
-  await store.putApplyRun(replayApply);
+  const management = await store.getWorkspaceManagement(
+    replayApply.workspaceId,
+  );
+  if (!management || management.managementState !== "active") {
+    throw new Error(
+      `${replayApply.workspaceId}: Workspace management is not active`,
+    );
+  }
+  const admittedReplay = await store.beginApplyRun(replayApply, {
+    workspaceId: management.workspaceId,
+    managementState: "active",
+    managementEpoch: management.managementEpoch,
+  });
+  if (admittedReplay.status !== "created") {
+    throw new Error(
+      `${replayApply.id}: Apply admission returned ${admittedReplay.status}`,
+    );
+  }
   const replayService = await createTakosumiService({
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },

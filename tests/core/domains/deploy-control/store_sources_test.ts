@@ -6,10 +6,13 @@ import { expect, test } from "bun:test";
 
 import {
   InMemoryOpenTofuControlStore,
+  WorkspaceManagementAdmissionConflictError,
   type StoredSource,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { toPublicSource } from "../../../../core/domains/sources/mod.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
+import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
+import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { Page, PageParams } from "takosumi-contract/pagination";
@@ -97,6 +100,46 @@ const STORES: ReadonlyArray<[string, () => D1SourceStoreSlice]> = [
   ["in-memory", () => new InMemoryOpenTofuControlStore()],
   ["d1", () => new CloudflareD1OpenTofuControlStore(new SqliteFakeD1())],
 ];
+
+test("Source configuration CAS preserves the current row and requires active Workspace authority", async () => {
+  const client = await PGliteSqlClient.create();
+  try {
+    for (const [label, store] of [
+      ["memory", new InMemoryOpenTofuControlStore()],
+      ["postgres", new SqlOpenTofuControlStore({ client })],
+      ["d1", new CloudflareD1OpenTofuControlStore(new SqliteFakeD1())],
+    ] as const) {
+      const initial = source();
+      const authority = {
+        workspaceId: initial.workspaceId, managementState: "active" as const, managementEpoch: 1,
+      };
+      await store.putWorkspace({
+        id: initial.workspaceId, handle: "source-config", displayName: "Source config", type: "personal",
+        ownerUserId: "owner_source_config", createdAt: initial.createdAt, updatedAt: initial.updatedAt,
+      });
+      await expect(store.writeSourceConfiguration({
+        source: initial, expectedWorkspaceManagementAuthority: { ...authority, managementEpoch: 2 },
+      }), `${label}: stale captured epoch`).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      expect((await store.writeSourceConfiguration({ source: initial, expectedWorkspaceManagementAuthority: authority })).status).toBe("created");
+      const updated = { ...initial, name: "reviewed-name", autoSync: true };
+      expect((await store.writeSourceConfiguration({ source: updated, expectedSource: initial, expectedWorkspaceManagementAuthority: authority })).status).toBe("updated");
+      expect(await store.writeSourceConfiguration({ source: { ...initial, name: "stale-writer" }, expectedSource: initial })).toEqual({ status: "conflict" });
+      await store.beginWorkspaceDraining(initial.workspaceId, authority);
+      expect(await store.writeSourceConfiguration({ source: updated })).toEqual({ status: "replayed", source: updated });
+      expect(await store.writeSourceConfiguration({ source: updated, expectedSource: initial })).toEqual({ status: "replayed", source: updated });
+      await expect(store.writeSourceConfiguration({ source: { ...updated, name: "after-drain" }, expectedSource: updated }))
+        .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      await expect(store.writeSourceConfiguration({ source: { ...initial, id: "src_after_drain" } }))
+        .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      expect(await store.getSource(initial.id)).toEqual(updated);
+      expect(await store.getSource("src_after_drain")).toBeUndefined();
+      await expect(store.writeSourceConfiguration({ source: { ...initial, id: "src_missing_workspace", workspaceId: "missing" } }))
+        .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    }
+  } finally {
+    await client.close();
+  }
+}, 30_000);
 
 test("toPublicSource strips service-only Source fields", () => {
   const publicSource = toPublicSource(source());

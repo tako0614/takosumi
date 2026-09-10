@@ -239,7 +239,7 @@ test("Bun composition forwards one shared coordinator to ordered Capsule abandon
     ownerUserId: "principal_bun_abandon",
   });
   const now = new Date().toISOString();
-  await created.operations.capsules.putInstallConfig({
+  const installConfig: InstallConfig = {
     id: "cfg_bun_abandon",
     workspaceId: workspace.id,
     name: "bun-abandon",
@@ -248,20 +248,24 @@ test("Bun composition forwards one shared coordinator to ordered Capsule abandon
     policy: {},
     createdAt: now,
     updatedAt: now,
-  });
+  };
   const { source } = await created.operations.createSource({
     workspaceId: workspace.id,
     name: "bun-abandon-source",
     url: "https://example.test/bun-abandon.git",
   });
-  const capsule = await created.operations.capsules.createCapsule({
-    workspaceId: workspace.id,
-    name: "bun-abandon",
-    environment: "production",
-    sourceId: source.id,
-    installConfigId: "cfg_bun_abandon",
-    installingPrincipalId: "principal_bun_abandon",
-  });
+  const { capsule } =
+    await created.operations.capsules.createCapsuleInitialAuthority({
+      capsuleId: "cap_bun_abandon",
+      providerBindingSetId: "binding_bun_abandon",
+      workspaceId: workspace.id,
+      name: "bun-abandon",
+      environment: "production",
+      sourceId: source.id,
+      installingPrincipalId: "principal_bun_abandon",
+      installConfig,
+      providerBindings: [],
+    });
 
   const abandoned = await created.operations.capsules.abandonUnappliedCapsule(
     capsule.id,
@@ -760,20 +764,23 @@ test("composed Capsule Interface OAuth uses canonical Capsule authority without 
     createdAt: nowIso,
     updatedAt: nowIso,
   };
-  await created.operations.capsules.putInstallConfig(installConfig);
   const { source } = await created.operations.createSource({
     workspaceId: workspace.id,
     name: "interface-oauth-source",
     url: "https://github.com/takosjp/takos-office.git",
   });
-  const capsule = await created.operations.capsules.createCapsule({
-    workspaceId: workspace.id,
-    name: "office",
-    environment: "test",
-    installConfigId: installConfig.id,
-    sourceId: source.id,
-    installingPrincipalId: "principal_interface_oauth_e2e",
-  });
+  const { capsule } =
+    await created.operations.capsules.createCapsuleInitialAuthority({
+      capsuleId: "cap_interface_oauth_e2e",
+      providerBindingSetId: "binding_interface_oauth_e2e",
+      workspaceId: workspace.id,
+      name: "office",
+      environment: "test",
+      installConfig,
+      sourceId: source.id,
+      installingPrincipalId: "principal_interface_oauth_e2e",
+      providerBindings: [],
+    });
   await created.operations.capsules.patchCapsuleStatus(capsule.id, "active");
 
   const delegatedToken = "takat_interface_oauth_e2e";
@@ -1210,8 +1217,8 @@ async function buildRuntimeInputPlanFixture(options: {
         TAKOFORM_SPACE: "runtime-input",
         TAKOFORM_TOKEN: "runtime-input-token",
       },
-    });
-    await created.operations.testConnection(connection.connection.id);
+    }, undefined, null);
+    await created.operations.testConnection(connection.connection.id, undefined, null);
     connectionId = connection.connection.id;
   }
   const now = new Date(0).toISOString();

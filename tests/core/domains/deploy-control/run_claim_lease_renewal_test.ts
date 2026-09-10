@@ -147,7 +147,22 @@ async function seedApply(
     createdAt: 1,
     updatedAt: 1,
   };
-  await store.preparePlanRun({ run: planRun, inputs });
+  const workspaceManagement = await store.getWorkspaceManagement(
+    capsule.workspaceId,
+  );
+  if (!workspaceManagement) {
+    throw new Error("fixture Workspace management is missing");
+  }
+  const expectedWorkspaceManagementAuthority = {
+    workspaceId: capsule.workspaceId,
+    managementState: "active" as const,
+    managementEpoch: workspaceManagement.managementEpoch,
+  };
+  await store.preparePlanRun({
+    run: planRun,
+    inputs,
+    expectedWorkspaceManagementAuthority,
+  });
   const applyRun: ApplyRun = {
     id: ids.applyRunId,
     planRunId: ids.planRunId,
@@ -173,7 +188,13 @@ async function seedApply(
     createdAt: 1,
     updatedAt: 1,
   };
-  await store.putApplyRun(applyRun);
+  const applyAdmission = await store.beginApplyRun(
+    applyRun,
+    expectedWorkspaceManagementAuthority,
+  );
+  if (applyAdmission.status !== "created") {
+    throw new Error("fixture Apply admission did not create a new Run");
+  }
   return { environment };
 }
 
@@ -467,6 +488,179 @@ test("a requeued destroy after successful pre_destroy cannot be cancelled or cle
     runId: "apply_destroy_requeued",
     runType: "destroy_apply",
   });
+});
+
+test("a requeued Plan after runner infrastructure error cannot be cancelled or clear its started evidence", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  await seedApply(store, {
+    capsuleId: "cap_plan_requeued",
+    planRunId: "plan_requeued",
+    applyRunId: "apply_plan_requeued",
+  });
+  const planRun = (await store.getPlanRun("plan_requeued"))!;
+  const planInputs = await store.getPlanRunInputs(planRun.id);
+  const queued: PlanRun = {
+    ...planRun,
+    status: "queued",
+    startedAt: 10,
+    heartbeatAt: undefined,
+    diagnostics: undefined,
+    finishedAt: undefined,
+    auditEvents: [
+      ...planRun.auditEvents,
+      {
+        id: "audit_plan_retry",
+        type: "plan.retry_scheduled",
+        at: 12,
+        data: { reason: "runner_infrastructure_error" },
+      },
+    ],
+    updatedAt: 12,
+  };
+  await store.putPlanRun(queued);
+  const controller = controllerWith(store);
+
+  await expect(controller.cancelRun(queued.id)).rejects.toThrow(
+    /has already started/,
+  );
+  expect(await store.getPlanRun(queued.id)).toEqual(queued);
+  expect(await store.getPlanRunInputs(queued.id)).toEqual(planInputs);
+});
+
+test("a previously-started queued Plan retry loses its claim while Workspace management is draining", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  await seedApply(store, {
+    capsuleId: "cap_plan_claim_started_retry",
+    planRunId: "plan_claim_started_retry",
+    applyRunId: "apply_plan_claim_started_retry",
+  });
+  const planRun = (await store.getPlanRun("plan_claim_started_retry"))!;
+  const planInputs = await store.getPlanRunInputs(planRun.id);
+  const queuedRetry: PlanRun = {
+    ...planRun,
+    status: "queued",
+    startedAt: 10,
+    heartbeatAt: undefined,
+    diagnostics: undefined,
+    finishedAt: undefined,
+    auditEvents: [
+      ...planRun.auditEvents,
+      {
+        id: "audit_plan_claim_started_retry",
+        type: "plan.retry_scheduled",
+        at: 12,
+        data: { reason: "runner_infrastructure_error" },
+      },
+    ],
+    updatedAt: 12,
+  };
+  await store.putPlanRun(queuedRetry);
+  const workspaceManagement = await store.getWorkspaceManagement(
+    queuedRetry.workspaceId,
+  );
+  if (!workspaceManagement) {
+    throw new Error("fixture Workspace management is missing");
+  }
+  const drain = await store.beginWorkspaceDraining(
+    queuedRetry.workspaceId,
+    {
+      workspaceId: queuedRetry.workspaceId,
+      managementState: "active",
+      managementEpoch: workspaceManagement.managementEpoch,
+    },
+  );
+  expect(drain.status).toBe("started");
+
+  let planDispatches = 0;
+  const controller = controllerWith(store, {
+    plan: async () => {
+      planDispatches += 1;
+      return { planDigest: PLAN_DIGEST, planArtifact: planArtifact() };
+    },
+  });
+
+  const result = await controller.runQueuedPlan(queuedRetry.id);
+
+  // The draining Workspace fence makes this a non-admissible fresh claim. The
+  // RunEngine must return the row observed by the losing claim and never invoke
+  // the external planner or mutate the queued retry's private inputs.
+  expect(result?.status).toBe("queued");
+  expect(planDispatches).toBe(0);
+  expect(await store.getPlanRun(queuedRetry.id)).toEqual(queuedRetry);
+  expect(await store.getPlanRunInputs(queuedRetry.id)).toEqual(planInputs);
+});
+
+test("Plan cancel loses when a claim and infrastructure requeue happen between its read and CAS", async () => {
+  class ClaimAndRequeueBeforeCancelStore extends InMemoryOpenTofuControlStore {
+    #interceptCancel = true;
+
+    override async transitionRun(
+      input: TransitionRunInput,
+    ): Promise<TransitionRunResult> {
+      if (
+        this.#interceptCancel &&
+        input.kind === "plan" &&
+        input.run.status === "cancelled"
+      ) {
+        this.#interceptCancel = false;
+        const current = await this.getPlanRun(input.id);
+        if (current) {
+          const claimed: PlanRun = {
+            ...current,
+            status: "running",
+            startedAt: 10,
+            heartbeatAt: 10,
+            updatedAt: 10,
+          };
+          const claim = await super.transitionRun({
+            id: current.id,
+            kind: "plan",
+            expectFrom: ["queued"],
+            run: claimed,
+            setLeaseToken: "plan-race-lease",
+          });
+          if (!claim.won) throw new Error("plan claim fixture did not win");
+          await super.transitionRun({
+            id: current.id,
+            kind: "plan",
+            expectFrom: ["running"],
+            expectLeaseToken: "plan-race-lease",
+            run: {
+              ...claimed,
+              status: "queued",
+              heartbeatAt: undefined,
+              finishedAt: undefined,
+              updatedAt: 12,
+            },
+            clearLeaseToken: true,
+            clearHeartbeat: true,
+          });
+        }
+      }
+      return await super.transitionRun(input);
+    }
+  }
+
+  const store = new ClaimAndRequeueBeforeCancelStore();
+  await seedApply(store, {
+    capsuleId: "cap_plan_cancel_requeue_race",
+    planRunId: "plan_cancel_requeue_race",
+    applyRunId: "apply_plan_cancel_requeue_race",
+  });
+  const planRun = (await store.getPlanRun("plan_cancel_requeue_race"))!;
+  await store.putPlanRun({ ...planRun, status: "queued", updatedAt: 2 });
+  const planInputs = await store.getPlanRunInputs(planRun.id);
+  const controller = controllerWith(store);
+
+  await expect(controller.cancelRun(planRun.id)).rejects.toThrow(
+    /has already started/,
+  );
+  expect(await store.getPlanRun(planRun.id)).toMatchObject({
+    status: "queued",
+    startedAt: 10,
+    updatedAt: 12,
+  });
+  expect(await store.getPlanRunInputs(planRun.id)).toEqual(planInputs);
 });
 
 test("cancel loses when an apply is started and requeued between its read and CAS", async () => {
@@ -959,7 +1153,21 @@ test("the plan heartbeat is re-stamped while a long plan blocks in the runner", 
     createdAt: 1,
     updatedAt: 1,
   };
-  await store.preparePlanRun({ run: planRun, inputs });
+  const workspaceManagement = await store.getWorkspaceManagement(
+    capsule.workspaceId,
+  );
+  if (!workspaceManagement) {
+    throw new Error("fixture Workspace management is missing");
+  }
+  await store.preparePlanRun({
+    run: planRun,
+    inputs,
+    expectedWorkspaceManagementAuthority: {
+      workspaceId: capsule.workspaceId,
+      managementState: "active",
+      managementEpoch: workspaceManagement.managementEpoch,
+    },
+  });
 
   let clock = 2000;
   const now = () => (clock += 1);

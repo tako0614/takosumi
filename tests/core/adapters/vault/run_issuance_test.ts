@@ -99,7 +99,7 @@ describe("Vault run-issued credential recipe", () => {
     expect(connection).not.toHaveProperty("secretPartition");
     expect(await store.getSecretBlob(connection.id)).toBeUndefined();
 
-    expect(await vault.test(connection.id)).toEqual({ status: "verified" });
+    expect(await vault.test(connection.id, undefined, null)).toEqual({ status: "verified" });
     expect(verifyValues).toEqual({});
     const verified = await store.getConnection(connection.id);
     expect(verified?.status).toBe("verified");
@@ -217,7 +217,7 @@ describe("Vault run-issued credential recipe", () => {
           scope: "operator",
           credentialRecipe: { id: "run-issued", authMode: "broker" },
           ...input,
-        }),
+        }, undefined, null),
       ).rejects.toBeInstanceOf(ConnectionVaultError);
     }
 
@@ -500,7 +500,7 @@ describe("Vault run-issued credential recipe", () => {
     });
     await seedRunningPlan(store);
 
-    expect(await vault.test(fixed.id)).toEqual({ status: "verified" });
+    expect(await vault.test(fixed.id, undefined, null)).toEqual({ status: "verified" });
     const bundle = await vault.mintForCapsuleProviderBindings(
       "workspace_1",
       [{ provider: PROVIDER, connectionId: fixed.id }],
@@ -509,7 +509,7 @@ describe("Vault run-issued credential recipe", () => {
     expect(bundle.env).toEqual({ RUN_CREDENTIAL_TOKEN: "issued:plan_1" });
     expect(await store.getConnection(fixed.id)).toBeUndefined();
     expect(await store.getSecretBlob(fixed.id)).toBeUndefined();
-    await expect(vault.revoke(fixed.id)).rejects.toThrow(/running release/);
+    await expect(vault.revoke(fixed.id, undefined, null)).rejects.toThrow(/running release/);
   });
 });
 
@@ -617,7 +617,7 @@ async function register(vault: StaticSecretConnectionVault) {
     scope: "operator",
     credentialRecipe: { id: "run-issued", authMode: "broker" },
     values: {},
-  });
+  }, undefined, null);
 }
 
 async function verifiedConnection(
@@ -625,7 +625,7 @@ async function verifiedConnection(
   vault: StaticSecretConnectionVault,
 ): Promise<ProviderConnection> {
   const connection = await register(vault);
-  await vault.test(connection.id);
+  await vault.test(connection.id, undefined, null);
   return (await store.getConnection(connection.id))!;
 }
 

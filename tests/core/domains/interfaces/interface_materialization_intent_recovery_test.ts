@@ -26,6 +26,7 @@ import {
 import {
   InMemoryOpenTofuControlStore,
   type OpenTofuControlStore,
+  type WorkspaceManagementAuthority,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { InMemoryCapsuleCoordination } from "../../../../core/domains/deploy-control/capsule_lease.ts";
@@ -267,7 +268,22 @@ async function claimRestore(
     createdBy: "operator",
     createdAt: RESTORE_AT,
   };
-  await store.putBackupRun(queued);
+  const management = await store.getWorkspaceManagement(capsule.workspaceId);
+  if (!management || management.managementState !== "active") {
+    throw new Error(`${label}: Workspace management is not active`);
+  }
+  const expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority = {
+    workspaceId: management.workspaceId,
+    managementState: "active",
+    managementEpoch: management.managementEpoch,
+  };
+  const admitted = await store.beginRestoreRun(
+    queued,
+    expectedWorkspaceManagementAuthority,
+  );
+  if (admitted.status !== "created") {
+    throw new Error(`${label}: Restore admission returned ${admitted.status}`);
+  }
   const running: Run = {
     ...queued,
     status: "running",

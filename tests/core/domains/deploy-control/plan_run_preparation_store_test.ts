@@ -2,14 +2,18 @@ import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 
 import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
 import type { DependencySnapshot } from "takosumi-contract/dependencies";
+import type { Workspace } from "takosumi-contract/workspaces";
 import {
   InMemoryOpenTofuControlStore,
+  WorkspaceManagementAdmissionConflictError,
   planRunExecutionInputsDigestMaterial,
   PlanRunPreparationConflictError,
   type OpenTofuControlStore,
   type PlanRunInputs,
+  type WorkspaceManagementAuthority,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
+import { runtimeInputProviderInstanceForStorage } from "../../../../core/domains/deploy-control/runtime_input_materializer.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import type {
   SqlClient,
@@ -95,7 +99,10 @@ async function preparation(label: string): Promise<{
       {
         contract: "takosumi.dispatch-runtime-inputs/v1",
         variableName: "takosumi_runtime_inputs",
-        providerInstance: "cloudflare:main",
+        providerInstance: runtimeInputProviderInstanceForStorage({
+          moduleLocalName: "cloudflare",
+          rootAlias: "main",
+        }),
         nonce: "reviewed-nonce",
         names: ["OIDC_CLIENT_SECRET", "SESSION_SECRET"],
         profileDigest: "sha256:runtime-profile",
@@ -202,6 +209,34 @@ function transactionFaultClient(
   };
 }
 
+function workspaceFor(id: string): Workspace {
+  return {
+    id,
+    handle: id.replace(/[^a-z0-9-]/gu, "-").slice(0, 39),
+    displayName: id,
+    type: "personal",
+    ownerUserId: `owner_${id}`,
+    createdAt: "2026-09-03T00:00:00.000Z",
+    updatedAt: "2026-09-03T00:00:00.000Z",
+  };
+}
+
+async function seedWorkspace(
+  store: OpenTofuControlStore,
+  workspaceId: string,
+): Promise<WorkspaceManagementAuthority> {
+  await store.putWorkspace(workspaceFor(workspaceId));
+  const management = await store.getWorkspaceManagement(workspaceId);
+  if (!management || management.managementState !== "active") {
+    throw new Error(`fixture Workspace ${workspaceId} is not active`);
+  }
+  return {
+    workspaceId: management.workspaceId,
+    managementState: "active",
+    managementEpoch: management.managementEpoch,
+  };
+}
+
 function batchFaultDatabase(database: D1Database): {
   readonly database: D1Database;
   arm(failAtStatement: number, timing?: "before" | "after"): void;
@@ -250,8 +285,12 @@ function batchFaultDatabase(database: D1Database): {
 test("PlanRun preparation publishes the queued run and its exact inputs as one store command", async () => {
   for (const [label, store] of await stores()) {
     const prepared = await preparation(label);
+    const authority = await seedWorkspace(store, prepared.run.workspaceId);
 
-    const result = await store.preparePlanRun(prepared);
+    const result = await store.preparePlanRun({
+      ...prepared,
+      expectedWorkspaceManagementAuthority: authority,
+    });
 
     expect(result, label).toEqual({ status: "created", run: prepared.run });
     expect(await store.getPlanRun(prepared.run.id), label).toEqual(prepared.run);
@@ -268,6 +307,7 @@ test("PlanRun preparation publishes the queued run and its exact inputs as one s
 test("terminal policy-denied PlanRun preparation does not retain private inputs", async () => {
   for (const [label, store] of await stores()) {
     const prepared = await preparation(`policy_denied_${label}`);
+    const authority = await seedWorkspace(store, prepared.run.workspaceId);
     const denied: PlanRun = {
       ...prepared.run,
       status: "failed",
@@ -279,7 +319,11 @@ test("terminal policy-denied PlanRun preparation does not retain private inputs"
       finishedAt: 1,
     };
 
-    await store.preparePlanRun({ ...prepared, run: denied });
+    await store.preparePlanRun({
+      ...prepared,
+      run: denied,
+      expectedWorkspaceManagementAuthority: authority,
+    });
 
     expect(await store.getPlanRun(denied.id), label).toEqual(denied);
     expect(await store.getPlanRunInputs(denied.id), label).toBeUndefined();
@@ -289,6 +333,7 @@ test("terminal policy-denied PlanRun preparation does not retain private inputs"
 test("PlanRun preparation rejects a cross-kind Run ID collision in every adapter", async () => {
   for (const [label, store] of await stores()) {
     const prepared = await preparation(`cross_kind_${label}`);
+    const authority = await seedWorkspace(store, prepared.run.workspaceId);
     const existingApply: ApplyRun = {
       id: prepared.run.id,
       planRunId: `existing_plan_${label}`,
@@ -313,7 +358,13 @@ test("PlanRun preparation rejects a cross-kind Run ID collision in every adapter
     };
     await store.putApplyRun(existingApply);
 
-    await expect(store.preparePlanRun(prepared), label).rejects.toBeInstanceOf(
+    await expect(
+      store.preparePlanRun({
+        ...prepared,
+        expectedWorkspaceManagementAuthority: authority,
+      }),
+      label,
+    ).rejects.toBeInstanceOf(
       PlanRunPreparationConflictError,
     );
   }
@@ -338,7 +389,11 @@ test("durable restart recovery preserves the exact reviewed preparation bundle",
 
   for (const adapter of durableAdapters) {
     const prepared = await preparation(`restart_${adapter.label}`);
-    await adapter.writer.preparePlanRun(prepared);
+    const authority = await seedWorkspace(adapter.writer, prepared.run.workspaceId);
+    await adapter.writer.preparePlanRun({
+      ...prepared,
+      expectedWorkspaceManagementAuthority: authority,
+    });
 
     const restarted = adapter.restart();
     const run = await restarted.getPlanRun(prepared.run.id);
@@ -387,10 +442,15 @@ test("durable restart recovery preserves the exact reviewed preparation bundle",
 test("PlanRun preparation is retry-safe and rejects a conflicting immutable bundle", async () => {
   for (const [label, store] of await stores()) {
     const prepared = await preparation(`retry_${label}`);
+    const authority = await seedWorkspace(store, prepared.run.workspaceId);
+    const guarded = {
+      ...prepared,
+      expectedWorkspaceManagementAuthority: authority,
+    };
 
     const [first, second] = await Promise.all([
-      store.preparePlanRun(prepared),
-      store.preparePlanRun(prepared),
+      store.preparePlanRun(guarded),
+      store.preparePlanRun(guarded),
     ]);
 
     expect(
@@ -417,9 +477,77 @@ test("PlanRun preparation is retry-safe and rejects a conflicting immutable bund
   }
 });
 
+test("Workspace management fences new PlanRun preparation while adopting exact retries", async () => {
+  for (const [label, store] of await stores()) {
+    const prepared = await preparation(`management_prepare_${label}`);
+    const authority = await seedWorkspace(store, prepared.run.workspaceId);
+
+    await expect(
+      store.preparePlanRun({
+        ...prepared,
+        expectedWorkspaceManagementAuthority: authority,
+      }),
+      label,
+    ).resolves.toMatchObject({ status: "created" });
+    expect(
+      await store.beginWorkspaceDraining(prepared.run.workspaceId, authority),
+      label,
+    ).toEqual({
+      status: "started",
+      management: {
+        workspaceId: prepared.run.workspaceId,
+        managementState: "draining",
+        managementEpoch: 2,
+      },
+    });
+
+    // Existing immutable preparation reads remain idempotent after the
+    // Workspace starts draining, even when the caller retries its captured
+    // active authority.
+    expect(
+      await store.preparePlanRun({
+        ...prepared,
+        expectedWorkspaceManagementAuthority: authority,
+      }),
+      label,
+    ).toEqual({ status: "existing", run: prepared.run });
+
+    const different = await preparation(`management_new_${label}`);
+    const newRun = {
+      ...different.run,
+      workspaceId: prepared.run.workspaceId,
+    };
+    const newInput = {
+      ...different,
+      run: newRun,
+    };
+    for (const expectedWorkspaceManagementAuthority of [
+      authority,
+      undefined,
+    ] as const) {
+      await expect(
+        store.preparePlanRun({
+          ...newInput,
+          ...(expectedWorkspaceManagementAuthority === undefined
+            ? {}
+            : { expectedWorkspaceManagementAuthority }),
+        }),
+        label,
+      ).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      expect(await store.getPlanRun(newRun.id), label).toBeUndefined();
+      expect(await store.getPlanRunInputs(newRun.id), label).toBeUndefined();
+      expect(
+        await store.getDependencySnapshot(different.dependencySnapshot.id),
+        label,
+      ).toBeUndefined();
+    }
+  }
+});
+
 test("PlanRun preparation adopts retry-equivalent randomized sealed storage", async () => {
   for (const [label, store] of await stores()) {
     const base = await preparation(`sealed_retry_${label}`);
+    const authority = await seedWorkspace(store, base.run.workspaceId);
     const firstSnapshot = {
       ...base.dependencySnapshot,
       dependencies: base.dependencySnapshot.dependencies.map((entry) => ({
@@ -448,6 +576,7 @@ test("PlanRun preparation adopts retry-equivalent randomized sealed storage", as
         },
       },
       dependencySnapshot: firstSnapshot,
+      expectedWorkspaceManagementAuthority: authority,
     } satisfies Parameters<OpenTofuControlStore["preparePlanRun"]>[0];
     const retrySnapshot = {
       ...first.dependencySnapshot,
@@ -503,10 +632,14 @@ test("Postgres rolls back PlanRun preparation after every former write boundary"
       client: transactionFaultClient(client, failAtInsert),
     });
     const prepared = await preparation(`postgres_fault_${failAtInsert}`);
+    const authority = await seedWorkspace(store, prepared.run.workspaceId);
 
     let failure: unknown;
     try {
-      await store.preparePlanRun(prepared);
+      await store.preparePlanRun({
+        ...prepared,
+        expectedWorkspaceManagementAuthority: authority,
+      });
     } catch (error) {
       failure = error;
     }
@@ -544,8 +677,14 @@ test("D1 rolls back PlanRun preparation after every former write boundary", asyn
     const prepared = await preparation(
       `d1_fault_${faultCase.timing}_${faultCase.statement}`,
     );
+    const authority = await seedWorkspace(store, prepared.run.workspaceId);
 
-    await expect(store.preparePlanRun(prepared)).rejects.toThrow(
+    await expect(
+      store.preparePlanRun({
+        ...prepared,
+        expectedWorkspaceManagementAuthority: authority,
+      }),
+    ).rejects.toThrow(
       `injected d1 ${faultCase.timing} statement ${faultCase.statement}`,
     );
     expect(await store.getPlanRun(prepared.run.id)).toBeUndefined();
@@ -560,7 +699,11 @@ test("scheduled recovery retains legacy torn PlanRuns for fail-closed repair", a
   for (const [label, store] of await stores()) {
     const complete = await preparation(`recoverable_complete_${label}`);
     const torn = await preparation(`recoverable_torn_${label}`);
-    await store.preparePlanRun(complete);
+    const authority = await seedWorkspace(store, complete.run.workspaceId);
+    await store.preparePlanRun({
+      ...complete,
+      expectedWorkspaceManagementAuthority: authority,
+    });
     await store.putPlanRun(torn.run);
 
     expect(

@@ -12,6 +12,21 @@ import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
 
+function seedWorkspace(
+  store: InMemoryOpenTofuControlStore,
+  workspaceId: string,
+): void {
+  void store.putWorkspace({
+    id: workspaceId,
+    handle: `fixture-${workspaceId.replace(/[^a-z0-9-]/gi, "-")}`,
+    displayName: "Fixture Workspace",
+    type: "personal",
+    ownerUserId: "fixture-owner",
+    createdAt: "2026-06-04T00:00:00.000Z",
+    updatedAt: "2026-06-04T00:00:00.000Z",
+  });
+}
+
 function makeVault(
   overrides: {
     fetch?: typeof fetch;
@@ -20,6 +35,7 @@ function makeVault(
   } = {},
 ) {
   const store = overrides.store ?? new InMemoryOpenTofuControlStore();
+  seedWorkspace(store, "space_1");
   let counter = 0;
   const subject = new StaticSecretConnectionVault({
     store,
@@ -48,8 +64,16 @@ function explicitRecipeFixtureVault(
   return new Proxy(subject, {
     get(target, property) {
       if (property === "register") {
-        return (input: RegisterConnectionInput) =>
-          target.register(withExplicitRecipe(input));
+        return (
+          input: RegisterConnectionInput,
+          expectedWorkspaceManagementAuthority: Parameters<StaticSecretConnectionVault["register"]>[1],
+          actorAccountId: Parameters<StaticSecretConnectionVault["register"]>[2],
+        ) =>
+          target.register(
+            withExplicitRecipe(input),
+            expectedWorkspaceManagementAuthority,
+            actorAccountId,
+          );
       }
       const value = Reflect.get(target, property, target) as unknown;
       return typeof value === "function" ? value.bind(target) : value;
@@ -128,7 +152,7 @@ async function registerProvider(
       provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
       values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
-    }),
+    }, undefined, null),
   );
 }
 
@@ -160,7 +184,7 @@ async function registerCloudflareTokenVending(
         },
       },
       values: { CLOUDFLARE_API_TOKEN: "cf-bootstrap-token" },
-    }),
+    }, undefined, null),
   );
 }
 
@@ -185,7 +209,7 @@ async function registerHttps(
         },
       },
       values: { GIT_HTTPS_TOKEN: "ghp_secret_token" },
-    }),
+    }, undefined, null),
   );
 }
 
@@ -208,7 +232,7 @@ async function registerSsh(
       values: {
         GIT_SSH_PRIVATE_KEY: "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n",
       },
-    }),
+    }, undefined, null),
   );
 }
 
@@ -228,7 +252,7 @@ test("Source credential drivers are an explicit host contribution", async () => 
       provider: "source_git_https_token",
       kind: "source_git_https_token",
       values: { GIT_HTTPS_TOKEN: "ghp_secret_token" },
-    })
+    }, undefined, null)
     .catch((caught) => caught);
 
   expect(error).toBeInstanceOf(ConnectionVaultError);
@@ -261,7 +285,7 @@ test("source_git_https_token requires a repositoryUrl host binding", async () =>
       authMethod: "static_secret",
       scopeHints: { providerSettings: { username: "git-bot" } },
       values: { GIT_HTTPS_TOKEN: "ghp_secret_token" },
-    })
+    }, undefined, null)
     .then(
       () => undefined,
       (error: unknown) => error,
@@ -280,7 +304,7 @@ test("source_git_ssh_key REQUIRES scopeHints.knownHostsEntry", async () => {
       kind: "source_git_ssh_key",
       authMethod: "static_secret",
       values: { GIT_SSH_PRIVATE_KEY: "-----BEGIN-----" },
-    })
+    }, undefined, null)
     .catch((e) => e);
   expect(err).toBeInstanceOf(ConnectionVaultError);
   expect((err as ConnectionVaultError).code).toBe("invalid_argument");
@@ -296,7 +320,7 @@ test("source_git_https_token rejects wrong env name", async () => {
       kind: "source_git_https_token",
       authMethod: "static_secret",
       values: { CLOUDFLARE_API_TOKEN: "x" },
-    }),
+    }, undefined, null),
   ).rejects.toThrow(/requires exactly one value: GIT_HTTPS_TOKEN/);
 });
 
@@ -534,7 +558,7 @@ test("registers an operator-scoped connection without a Workspace", async () => 
     provider: "registry.opentofu.org/cloudflare/cloudflare",
     authMethod: "static_secret",
     values: { CLOUDFLARE_API_TOKEN: "operator-cf-token" },
-  });
+  }, undefined, null);
   expect(conn.scope).toBe("operator");
   expect(conn.workspaceId).toBeUndefined();
   expect(JSON.stringify(conn)).not.toContain("operator-cf-token");
@@ -548,7 +572,7 @@ test("provider-connection connection pool mints an operator connection from any 
       provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
       values: { CLOUDFLARE_API_TOKEN: "operator-cf-token" },
-    }),
+    }, undefined, null),
   );
   // The Workspace itself has NO cloudflare connection: only the resolved
   // provider-connection pool supplies one through operator-level provider
@@ -568,7 +592,7 @@ test("provider-connection connection pool still rejects a pending non-managed co
     provider: "registry.opentofu.org/cloudflare/cloudflare",
     authMethod: "static_secret",
     values: { CLOUDFLARE_API_TOKEN: "operator-cf-token" },
-  });
+  }, undefined, null);
   expect(operatorConn.status).toBe("pending");
 
   await expect(
@@ -631,7 +655,7 @@ async function registerAws(
         AWS_SECRET_ACCESS_KEY: "aws_secret_key_value",
         AWS_SESSION_TOKEN: "aws_session_token_value",
       },
-    }),
+    }, undefined, null),
   );
 }
 
@@ -656,7 +680,7 @@ async function registerAwsAssumeRole(
         AWS_ACCESS_KEY_ID: "AKIA_source",
         AWS_SECRET_ACCESS_KEY: "source_secret",
       },
-    }),
+    }, undefined, null),
   );
 }
 
@@ -708,7 +732,7 @@ test("mintForCapsuleProviderBindings records TTL evidence for expiring static pr
       authMethod: "static_secret",
       expiresAt: "2026-06-04T00:30:00.000Z",
       values: { CLOUDFLARE_API_TOKEN: "cf-expiring-token" },
-    }),
+    }, undefined, null),
   );
 
   const bundle = await vault.mintForCapsuleProviderBindings("space_1", [
@@ -850,7 +874,7 @@ test("expired connections fail closed before any provider credential mint", asyn
       authMethod: "static_secret",
       expiresAt: "2026-06-04T00:30:00.000Z",
       values: { CLOUDFLARE_API_TOKEN: "cf-expiring-token" },
-    }),
+    }, undefined, null),
   );
   const lateVault = makeVault({
     store,
@@ -874,9 +898,59 @@ test("expired connections fail closed before any provider credential mint", asyn
       authMethod: "static_secret",
       expiresAt: "2026-06-03T23:59:59.000Z",
       values: { CLOUDFLARE_API_TOKEN: "already-expired" },
-    }),
+    }, undefined, null),
   ).rejects.toThrow("expiresAt must be in the future");
 });
+
+for (const race of [false, true]) {
+  test(`expired mint during management drain preserves a concurrent connection update: ${race}`, async () => {
+    class ExpiryRaceStore extends InMemoryOpenTofuControlStore {
+      replacement?: ProviderConnection;
+      blobReads = 0;
+      override async getConnection(id: string): Promise<ProviderConnection | undefined> {
+        const observed = await super.getConnection(id);
+        if (this.replacement?.id === id) {
+          const replacement = this.replacement;
+          this.replacement = undefined;
+          await super.putConnection(replacement);
+        }
+        return observed;
+      }
+      override async getSecretBlob(id: string) {
+        this.blobReads += 1;
+        return await super.getSecretBlob(id);
+      }
+    }
+    const store = new ExpiryRaceStore();
+    const { vault } = makeVault({ store });
+    const connection = await markVerified(store, await vault.register({
+      workspaceId: "space_1",
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+      expiresAt: "2026-06-04T00:30:00.000Z",
+      values: { CLOUDFLARE_API_TOKEN: "fixture-expiring-token" },
+    }, undefined, null));
+    const blob = await store.getSecretBlob(connection.id);
+    const replacement: ProviderConnection = {
+      ...connection, displayName: "updated connection",
+      expiresAt: "2026-06-04T01:30:00.000Z", updatedAt: "2026-06-04T00:30:00.000Z",
+    };
+    await store.beginWorkspaceDraining("space_1", {
+      workspaceId: "space_1", managementState: "active", managementEpoch: 1,
+    });
+    const lateVault = makeVault({ store, now: () => new Date("2026-06-04T00:31:00.000Z") }).vault;
+    if (race) store.replacement = replacement;
+    store.blobReads = 0;
+    await expect(lateVault.mintForCapsuleProviderBindings("space_1", [{
+      provider: connection.provider, connectionId: connection.id,
+    }])).rejects.toThrow("expired at 2026-06-04T00:30:00.000Z");
+    expect(store.blobReads).toBe(0);
+    expect(await store.getConnection(connection.id)).toEqual(race ? replacement : {
+      ...connection, status: "expired", updatedAt: "2026-06-04T00:31:00.000Z",
+    });
+    expect(await store.getSecretBlob(connection.id)).toEqual(blob);
+    expect(await store.getWorkspaceManagement("space_1")).toMatchObject({ managementState: "draining", managementEpoch: 2 });
+  });
+}
 
 test("mintForCapsuleProviderBindings preserves recipe env across providers", async () => {
   const { store, vault } = makeVault();
@@ -1064,7 +1138,7 @@ test("mintForCapsuleProviderBindings never opens raw operator credentials for a 
       provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
       values: { CLOUDFLARE_API_TOKEN: "operator-cf-token" },
-    }),
+    }, undefined, null),
   );
   await expect(
     vault.mintForCapsuleProviderBindings("space_other", [
@@ -1083,7 +1157,7 @@ test("mintForCapsuleProviderBindings still rejects a pending non-managed connect
     provider: "registry.opentofu.org/cloudflare/cloudflare",
     authMethod: "static_secret",
     values: { CLOUDFLARE_API_TOKEN: "operator-cf-token" },
-  });
+  }, undefined, null);
   expect(operatorConn.status).toBe("pending");
 
   await expect(
@@ -1112,7 +1186,7 @@ test("new writes reject the legacy managed marker even with providerConfig", asy
           base_url: "https://provider.example.test/api",
         },
       },
-    }),
+    }, undefined, null),
   ).rejects.toThrow("legacy managed-provider fields are decode-only");
   expect(await store.listOperatorConnections()).toEqual([]);
 });
@@ -1129,7 +1203,7 @@ test("new Workspace writes also reject legacy managed fields", async () => {
         managedProvider: true,
         managedProviderProfile: "compat.example.v1",
       },
-    }),
+    }, undefined, null),
   ).rejects.toThrow("legacy managed-provider fields are decode-only");
   expect(await store.listConnections("workspace_1")).toEqual([]);
 });
@@ -1144,7 +1218,7 @@ test("the legacy profile alone is decode-only and grants no write authority", as
       scopeHints: {
         managedProviderProfile: "operator.example.provider.v1",
       },
-    }),
+    }, undefined, null),
   ).rejects.toThrow("legacy managed-provider fields are decode-only");
   expect(await store.listOperatorConnections()).toEqual([]);
 });
@@ -1163,7 +1237,7 @@ test("mintForCapsuleProviderBindings preserves env for every provider", async ()
         secretPartition: "provider-credentials",
       },
       values: { KUBE_CONFIG_PATH: "/work/.kube/config" },
-    }),
+    }, undefined, null),
   );
   const bundle = await vault.mintForCapsuleProviderBindings("space_1", [
     {
@@ -1191,7 +1265,7 @@ test("mintForCapsuleProviderBindings executes the generic-env recipe without a c
       values: {
         GITHUB_TOKEN: "github-secret",
       },
-    }),
+    }, undefined, null),
   );
 
   expect(conn.kind).toBeUndefined();
@@ -1237,7 +1311,7 @@ test("mintForCapsuleProviderBindings maps generic provider files to tofu credent
           envName: "GENERIC_CREDENTIALS_FILE",
         },
       ],
-    }),
+    }, undefined, null),
   );
 
   expect(conn.envNames).toEqual([
@@ -1283,7 +1357,7 @@ test("generic-env provider registration rejects unsafe credential file declarati
           envName: "GENERIC_CREDENTIALS_FILE",
         },
       ],
-    }),
+    }, undefined, null),
   ).rejects.toThrow("credential file path ../escape.json is unsafe");
 
   await expect(
@@ -1300,7 +1374,7 @@ test("generic-env provider registration rejects unsafe credential file declarati
           envName: "GENERIC_CREDENTIALS_FILE",
         },
       ],
-    }),
+    }, undefined, null),
   ).rejects.toThrow(
     "env name GENERIC_CREDENTIALS_FILE cannot be supplied both as a value and a credential file path",
   );
@@ -1318,7 +1392,7 @@ test("generic-env provider registration accepts arbitrary providers with explici
       authMethod: "static_secret",
       credentialRecipe: declaredEnvRecipe(),
       values: { NOT_A_REAL_PROVIDER_TOKEN: "secret" },
-    }),
+    }, undefined, null),
   );
 
   const bundle = await vault.mintForCapsuleProviderBindings("space_1", [
@@ -1346,7 +1420,7 @@ test("generic-env provider registration accepts explicit env names for guided pr
         GITHUB_TOKEN: "github-secret",
         GITHUB_CUSTOM_ENDPOINT: "https://github.example.test",
       },
-    }),
+    }, undefined, null),
   );
 
   const bundle = await vault.mintForCapsuleProviderBindings("space_1", [
@@ -1375,7 +1449,7 @@ test("generic-env provider registration passes raw env for root-mapped guided pr
         CLOUDFLARE_API_TOKEN: "cf-secret-token",
         CLOUDFLARE_CUSTOM_ENDPOINT: "https://api.example.test/client/v4",
       },
-    }),
+    }, undefined, null),
   );
 
   const bundle = await vault.mintForCapsuleProviderBindings("space_1", [
@@ -1402,7 +1476,7 @@ test("generic-env provider registration rejects runner-reserved env names", asyn
       authMethod: "static_secret",
       credentialRecipe: declaredEnvRecipe(),
       values: { PATH: "/tmp/evil" },
-    }),
+    }, undefined, null),
   ).rejects.toThrow("reserved for the runner runtime");
   await expect(
     vault.register({
@@ -1411,7 +1485,7 @@ test("generic-env provider registration rejects runner-reserved env names", asyn
       authMethod: "static_secret",
       credentialRecipe: declaredEnvRecipe(),
       values: { TAKOSUMI_RUN_ID: "override" },
-    }),
+    }, undefined, null),
   ).rejects.toThrow("reserved for the runner runtime");
 });
 
@@ -1425,7 +1499,7 @@ test("mintForCapsuleProviderBindings re-validates CapsuleProviderEnvBinding prov
       authMethod: "static_secret",
       credentialRecipe: declaredEnvRecipe(),
       values: { GITHUB_TOKEN: "github-secret" },
-    }),
+    }, undefined, null),
   );
 
   await expect(

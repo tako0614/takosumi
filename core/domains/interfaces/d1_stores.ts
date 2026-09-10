@@ -11,6 +11,7 @@ import {
 import { deployControlD1TableNames as names } from "../../adapters/storage/drizzle/schema/logical.ts";
 import type { D1Like } from "../../adapters/storage/d1.ts";
 import type { InterfaceMaterializationWriteAuthority } from "../deploy-control/interface_materialization_intent.ts";
+import { WorkspaceManagementAdmissionConflictError } from "../deploy-control/store.ts";
 import type {
   InterfaceAuthorizationPageInput,
   InterfaceAuthorizationQuery,
@@ -24,6 +25,12 @@ import { interfaceOAuth2ResourceUri } from "./oauth_resource.ts";
 
 interface JsonRow {
   readonly record_json: string;
+}
+
+interface GuardedInterfaceReadbackRow {
+  readonly workspace_id: string | null;
+  readonly management_workspace_id: string | null;
+  readonly management_state: string | null;
 }
 
 class D1InterfaceStore implements InterfaceStore {
@@ -135,6 +142,12 @@ class D1InterfaceStore implements InterfaceStore {
     authority?: InterfaceMaterializationWriteAuthority,
   ): Promise<boolean> {
     if (authority && !interfaceMatchesAuthority(record, authority)) return false;
+    if (
+      expected.requireActiveWorkspace === true &&
+      record.metadata.workspaceId !== expected.record.metadata.workspaceId
+    ) {
+      return false;
+    }
     const parameters = [
       ...interfaceParameters(record, true).slice(1),
       record.metadata.id,
@@ -142,6 +155,74 @@ class D1InterfaceStore implements InterfaceStore {
       expected.resolvedRevision,
       JSON.stringify(expected.record),
     ];
+    if (expected.requireActiveWorkspace === true) {
+      // A single correlated EXISTS keeps the Workspace fence and Interface CAS
+      // atomic on D1. The workspace id is read from the persisted Interface row
+      // by the UPDATE predicate, never selected from a replacement payload.
+      const guardedParameters = [
+        ...interfaceParameters(record, true).slice(1),
+        record.metadata.id,
+        expected.record.metadata.workspaceId,
+        expected.generation,
+        expected.resolvedRevision,
+        JSON.stringify(expected.record),
+      ];
+      const authorityClause = d1MaterializationAuthorityClause(
+        guardedParameters,
+        authority,
+      );
+      try {
+        const result = await this.db
+          .prepare(
+            `update ${this.#table} set
+          workspace_id=?, owner_kind=?, owner_id=?, name=?, interface_type=?,
+          phase=?, generation=?, resolved_revision=?,
+          oauth_resource_uri=case
+            when oauth_resource_uri=? then oauth_resource_uri else null end,
+          record_json=?, created_at=?, updated_at=?
+         where id=? and workspace_id=? and generation=? and resolved_revision=?
+           and record_json=?
+           and exists (
+             select 1 from ${names.workspaces} management_workspace
+              where management_workspace.id = ${this.#table}.workspace_id
+                and management_workspace.management_state = 'active'
+           )
+           and ${authorityClause}`,
+          )
+          .bind(...guardedParameters)
+          .run();
+        if ((result.meta?.changes ?? 0) > 0) return true;
+      } catch (error) {
+        if (!isUniqueConstraintError(error)) throw error;
+        return false;
+      }
+
+      // A failed UPDATE is either an ordinary CAS loss or a management
+      // admission refusal. Readback classifies the persisted row after the
+      // atomic attempt; this SELECT is intentionally not authority.
+      const row = await this.db
+        .prepare(
+          `select i.workspace_id,
+                  w.id as management_workspace_id,
+                  w.management_state
+             from ${this.#table} i
+             left join ${names.workspaces} w on w.id = i.workspace_id
+            where i.id = ?
+            limit 1`,
+        )
+        .bind(record.metadata.id)
+        .first<GuardedInterfaceReadbackRow>();
+      if (!row) return false;
+      if (
+        row.management_workspace_id === null ||
+        row.management_state !== "active"
+      ) {
+        throw new WorkspaceManagementAdmissionConflictError(
+          row.workspace_id ?? expected.record.metadata.workspaceId,
+        );
+      }
+      return false;
+    }
     const authorityClause = d1MaterializationAuthorityClause(
       parameters,
       authority,

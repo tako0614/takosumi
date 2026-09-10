@@ -76,6 +76,25 @@ test("GET /internal/v1/workspaces/:workspaceId/billing returns OSS showback sett
   expect(workspaceReads()).toBe(1);
 });
 
+test("stopped Workspace rejects billing setting changes but still serves billing reads", async () => {
+  const { app, store } = await makeApp();
+  const before = await store.getWorkspace(WORKSPACE_ID);
+  await store.beginWorkspaceDraining(WORKSPACE_ID, {
+    workspaceId: WORKSPACE_ID, managementState: "active", managementEpoch: 1,
+  });
+  const response = await app.request(`/internal/v1/workspaces/${WORKSPACE_ID}/billing`, {
+    method: "PATCH", headers: HEADERS,
+    body: JSON.stringify({ billingSettings: { mode: "disabled" } }),
+  });
+  expect(response.status).toBe(409);
+  expect(await store.getWorkspace(WORKSPACE_ID)).toEqual(before);
+  const observed = await app.request(`/internal/v1/workspaces/${WORKSPACE_ID}/billing`, {
+    headers: HEADERS,
+  });
+  expect(observed.status).toBe(200);
+  expect(await observed.json()).toEqual({ billing: { settings: { mode: "showback" } } });
+});
+
 test("GET /internal/v1/workspaces/:workspaceId/usage lists USD showback events", async () => {
   const { app } = await makeApp();
   const response = await app.request(

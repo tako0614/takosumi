@@ -380,6 +380,14 @@ export async function handleSources(
           : modulePath === ""
             ? "."
             : modulePath;
+      // Repository install UX creates a new Workspace-owned InstallConfig.
+      // Capture the exact private management authority before any asynchronous
+      // snapshot, compatibility, or provider preparation and retain it for
+      // the durable insert-only write. A later read must never refresh a drain
+      // away.
+      const expectedWorkspaceManagementAuthority = compileInstallUx
+        ? await operations.workspaces.captureManagementAuthority(workspaceId)
+        : undefined;
       let installUxSnapshot: SourceSnapshot | undefined;
       let installUxModulePath: string | undefined;
       let installUxBaseConfig: InstallConfig | undefined;
@@ -502,6 +510,9 @@ export async function handleSources(
         workspaceId,
         installingPrincipalId: ctx.session.subject,
         compatibilityReport: compatibility.report,
+        ...(expectedWorkspaceManagementAuthority
+          ? { expectedWorkspaceManagementAuthority }
+          : {}),
       });
       const repositoryInstallUx =
         preview.status === "accepted"

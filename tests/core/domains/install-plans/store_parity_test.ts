@@ -4,9 +4,15 @@ import { D1GitInstallPlanStore } from "../../../../core/domains/install-plans/d1
 import { SqlGitInstallPlanStore } from "../../../../core/domains/install-plans/sql_store.ts";
 import {
   InMemoryGitInstallPlanStore,
+  publicGitInstallPlan,
   type GitInstallPlanStore,
   type StoredGitInstallPlan,
 } from "../../../../core/domains/install-plans/store.ts";
+import {
+  InMemoryOpenTofuControlStore,
+  WorkspaceManagementAdmissionConflictError,
+  type WorkspaceManagementAuthority,
+} from "../../../../core/domains/deploy-control/store.ts";
 import { ensureD1OpenTofuLedgerSchema } from "../../../../worker/src/d1_opentofu_store.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
@@ -15,9 +21,16 @@ test("Git install-plan store has idempotency and CAS parity", async () => {
   const postgres = await PGliteSqlClient.create();
   const d1 = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(d1);
+  const memoryControl = new InMemoryOpenTofuControlStore();
+  await memoryControl.putWorkspace(workspace("ws_one"));
+  await memoryControl.putWorkspace(workspace("ws_two"));
+  await seedPostgresWorkspace(postgres, "ws_one");
+  await seedPostgresWorkspace(postgres, "ws_two");
+  await seedD1Workspace(d1, "ws_one");
+  await seedD1Workspace(d1, "ws_two");
   try {
     for (const store of [
-      new InMemoryGitInstallPlanStore(),
+      new InMemoryGitInstallPlanStore(memoryControl),
       new SqlGitInstallPlanStore(postgres),
       new D1GitInstallPlanStore(d1),
     ]) {
@@ -28,9 +41,251 @@ test("Git install-plan store has idempotency and CAS parity", async () => {
   }
 });
 
+test("Git install-plan admission follows Workspace management state", async () => {
+  const postgres = await PGliteSqlClient.create();
+  const d1 = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(d1);
+  const memoryControl = new InMemoryOpenTofuControlStore();
+  const activeWorkspace = workspace("admission_ws");
+  await memoryControl.putWorkspace(activeWorkspace);
+  await seedPostgresWorkspace(postgres, activeWorkspace.id);
+  await seedD1Workspace(d1, activeWorkspace.id);
+  const authority: WorkspaceManagementAuthority = {
+    workspaceId: activeWorkspace.id,
+    managementState: "active",
+    managementEpoch: 1,
+  };
+  await expect(
+    new InMemoryGitInstallPlanStore().create({
+      ...plan("admission_without_validator", "admission_without_validator"),
+    }),
+  ).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+  const adapters: readonly {
+    readonly label: string;
+    readonly store: GitInstallPlanStore;
+    readonly stop: () => Promise<void>;
+  }[] = [
+    {
+      label: "memory",
+      store: new InMemoryGitInstallPlanStore(memoryControl),
+      stop: async () => {
+        await memoryControl.beginWorkspaceDraining(activeWorkspace.id, authority);
+      },
+    },
+    {
+      label: "postgres",
+      store: new SqlGitInstallPlanStore(postgres),
+      stop: async () => {
+        await postgres.query(
+          `update takosumi_workspaces
+              set management_state = 'draining', management_epoch = 2
+            where id = $1`,
+          [activeWorkspace.id],
+        );
+      },
+    },
+    {
+      label: "d1",
+      store: new D1GitInstallPlanStore(d1),
+      stop: async () => {
+        await d1
+          .prepare(
+            `update workspaces
+                set management_state = 'draining', management_epoch = 2
+              where id = ?`,
+          )
+          .bind(activeWorkspace.id)
+          .run();
+      },
+    },
+  ];
+  try {
+    for (const { label, store, stop } of adapters) {
+      const base = {
+        ...plan(`admission_${label}`, "admission_digest"),
+        workspaceId: activeWorkspace.id,
+        workspaceManagementAuthority: authority,
+      };
+      await expect(
+        store.create({
+          ...base,
+          id: `${base.id}_missing_workspace`,
+          workspaceId: `${base.id}_missing_workspace`,
+          workspaceManagementAuthority: {
+            ...authority,
+            workspaceId: `${base.id}_missing_workspace`,
+          },
+          idempotencyKeyHash: `${base.id}_missing_workspace_key`,
+        }),
+      ).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      await expect(
+        store.create(
+          { ...base, id: `${base.id}_malformed_authority` },
+          { ...authority, managementEpoch: 0 },
+        ),
+      ).rejects.toBeInstanceOf(TypeError);
+      expect(await store.create(base, authority)).toMatchObject({
+        status: "created",
+      });
+      const busy = {
+        ...base,
+        id: `${base.id}_busy`,
+        idempotencyKeyHash: `${base.id}_busy_key`,
+      };
+      const fresh = {
+        ...base,
+        id: `${base.id}_fresh`,
+        idempotencyKeyHash: `${base.id}_fresh_key`,
+      };
+      expect(await store.create(busy, authority)).toMatchObject({
+        status: "created",
+      });
+      expect(await store.create(fresh, authority)).toMatchObject({
+        status: "created",
+      });
+      const claim = await store.claimReconcile({
+        id: base.id,
+        expectedGeneration: 0,
+        leaseToken: `lease_${base.id}`,
+        claimedAt: "2026-08-21T00:01:00.000Z",
+        leaseExpiresAt: "2026-08-21T00:01:30.000Z",
+        expectedWorkspaceManagementAuthority: authority,
+      });
+      expect(claim.status).toBe("claimed");
+      if (claim.status !== "claimed") throw new Error("claim was not acquired");
+      const busyClaim = await store.claimReconcile({
+        id: busy.id,
+        expectedGeneration: 0,
+        leaseToken: `lease_${busy.id}`,
+        claimedAt: "2026-08-21T00:01:00.000Z",
+        leaseExpiresAt: "2026-08-21T00:01:30.000Z",
+        expectedWorkspaceManagementAuthority: authority,
+      });
+      expect(busyClaim.status).toBe("claimed");
+      await expect(
+        store.claimReconcile({
+          id: busy.id,
+          expectedGeneration: 1,
+          leaseToken: "malformed",
+          claimedAt: "2026-08-21T00:01:01.000Z",
+          leaseExpiresAt: "2026-08-21T00:01:31.000Z",
+          expectedWorkspaceManagementAuthority: {
+            ...authority,
+            managementEpoch: 0,
+          },
+        }),
+      ).rejects.toBeInstanceOf(TypeError);
+
+      await stop();
+
+      // The lease acquired before draining may finish, but a fresh claim may
+      // not start. Exact-scope reads and busy/generation observations remain
+      // available while stopped.
+      const completedPlan = {
+        ...claim.claim.plan,
+        phase: "compiling_install" as const,
+        updatedAt: "2026-08-21T00:01:02.000Z",
+      };
+      expect(
+        await store.completeReconcile({
+          id: base.id,
+          expectedGeneration: 1,
+          leaseToken: claim.claim.leaseToken,
+          plan: completedPlan,
+        }),
+      ).toMatchObject({ status: "completed", plan: { phase: "compiling_install" } });
+      const scope = {
+        workspaceId: base.workspaceId,
+        actorSubject: base.actorSubject,
+        idempotencyKeyHash: base.idempotencyKeyHash,
+      };
+      expect(await store.getByScope(scope)).toEqual(completedPlan);
+      for (const otherScope of [
+        { ...scope, workspaceId: `${scope.workspaceId}_other` },
+        { ...scope, actorSubject: `${scope.actorSubject}_other` },
+        { ...scope, idempotencyKeyHash: `${scope.idempotencyKeyHash}_other` },
+      ]) {
+        expect(await store.getByScope(otherScope)).toBeUndefined();
+      }
+      expect(await store.get(base.id)).toEqual(completedPlan);
+      expect(
+        await store.create({ ...base, id: `${base.id}_replay` }, authority),
+      ).toMatchObject({ status: "replayed", plan: { id: base.id } });
+      expect(
+        await store.claimReconcile({
+          id: busy.id,
+          expectedGeneration: 1,
+          leaseToken: "other",
+          claimedAt: "2026-08-21T00:01:01.000Z",
+          leaseExpiresAt: "2026-08-21T00:01:31.000Z",
+        }),
+      ).toMatchObject({ status: "busy", plan: { generation: 1 } });
+      expect(
+        await store.claimReconcile({
+          id: base.id,
+          expectedGeneration: 0,
+          leaseToken: "stale",
+          claimedAt: "2026-08-21T00:01:03.000Z",
+          leaseExpiresAt: "2026-08-21T00:01:33.000Z",
+        }),
+      ).toMatchObject({ status: "conflict", plan: { generation: 1 } });
+
+      await expect(
+        store.create({
+          ...base,
+          id: `${base.id}_new`,
+          idempotencyKeyHash: `${base.id}_new_key`,
+        }, authority),
+      ).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+
+      await expect(
+        store.claimReconcile({
+          id: fresh.id,
+          expectedGeneration: 0,
+          leaseToken: `lease_${fresh.id}`,
+          claimedAt: "2026-08-21T00:01:04.000Z",
+          leaseExpiresAt: "2026-08-21T00:01:34.000Z",
+          expectedWorkspaceManagementAuthority: authority,
+        }),
+      ).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    }
+  } finally {
+    await postgres.close();
+  }
+});
+
 async function expectStoreParity(store: GitInstallPlanStore): Promise<void> {
-  const first = plan("ip_one", "digest_one");
+  const first = {
+    ...plan("ip_one", "digest_one"),
+    workspaceManagementAuthority: {
+      workspaceId: "ws_one",
+      managementState: "active" as const,
+      managementEpoch: 1,
+    },
+  };
   expect((await store.create(first)).status).toBe("created");
+  const persisted = await store.get(first.id);
+  expect(persisted).toEqual(first);
+  expect(publicGitInstallPlan(persisted!)).not.toHaveProperty("workspaceManagementAuthority");
+
+  await expect(store.create({
+    ...first,
+    id: "ip_missing_authority",
+    idempotencyKeyHash: "missing_authority_key",
+    workspaceManagementAuthority: undefined,
+  }, first.workspaceManagementAuthority)).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+  await expect(store.create({
+    ...first,
+    id: "ip_stale_authority",
+    idempotencyKeyHash: "stale_authority_key",
+    workspaceManagementAuthority: { ...first.workspaceManagementAuthority, managementEpoch: 2 },
+  })).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+  await expect(store.create({
+    ...first,
+    id: "ip_substituted_authority",
+    idempotencyKeyHash: "substituted_authority_key",
+    workspaceManagementAuthority: { ...first.workspaceManagementAuthority, managementEpoch: 2 },
+  }, first.workspaceManagementAuthority)).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
 
   const replay = await store.create({ ...first, id: "ip_replay" });
   expect(replay).toMatchObject({ status: "replayed", plan: { id: first.id } });
@@ -60,9 +315,19 @@ async function expectStoreParity(store: GitInstallPlanStore): Promise<void> {
         ...first,
         id: "ip_other_workspace",
         workspaceId: "ws_two",
+        workspaceManagementAuthority: { ...first.workspaceManagementAuthority, workspaceId: "ws_two" },
       })
     ).status,
   ).toBe("created");
+
+  await expect(store.claimReconcile({
+    id: first.id,
+    expectedGeneration: 0,
+    leaseToken: "lease_wrong_authority",
+    claimedAt: "2026-08-21T00:01:00.000Z",
+    leaseExpiresAt: "2026-08-21T00:01:30.000Z",
+    expectedWorkspaceManagementAuthority: { ...first.workspaceManagementAuthority, managementEpoch: 2 },
+  })).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
 
   const claim = await store.claimReconcile({
     id: first.id,
@@ -76,6 +341,21 @@ async function expectStoreParity(store: GitInstallPlanStore): Promise<void> {
     claim: { plan: { generation: 1 } },
   });
   if (claim.status !== "claimed") throw new Error("claim was not acquired");
+
+  await expect(
+    store.completeReconcile({
+      id: first.id,
+      expectedGeneration: 1,
+      leaseToken: "lease_one",
+      plan: {
+        ...claim.claim.plan,
+        workspaceManagementAuthority: {
+          ...first.workspaceManagementAuthority,
+          managementEpoch: 2,
+        },
+      },
+    }),
+  ).rejects.toThrow("immutable request scope changed");
 
   await expect(
     store.completeReconcile({
@@ -106,6 +386,12 @@ async function expectStoreParity(store: GitInstallPlanStore): Promise<void> {
 
   const completedPlan: StoredGitInstallPlan = {
     ...claim.claim.plan,
+    // JSONB may reorder object keys; immutable authority compares values.
+    workspaceManagementAuthority: {
+      managementEpoch: 1,
+      managementState: "active",
+      workspaceId: "ws_one",
+    },
     phase: "compiling_install",
     sourceId: "src_one",
     updatedAt: "2026-08-21T00:01:02.000Z",
@@ -152,10 +438,161 @@ async function expectStoreParity(store: GitInstallPlanStore): Promise<void> {
   ).rejects.toThrow("immutable request scope changed");
 }
 
+test("retained Git rows stay observable without granting a new management claim", async () => {
+  const postgres = await PGliteSqlClient.create();
+  const d1 = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(d1);
+  await seedPostgresWorkspace(postgres, "ws_one");
+  await seedD1Workspace(d1, "ws_one");
+  const adapters = [
+    {
+      store: new SqlGitInstallPlanStore(postgres),
+      retainLegacy: async (value: StoredGitInstallPlan) => {
+        await postgres.query(
+          "update takosumi_git_install_plans set record_json = $1::jsonb where id = $2",
+          [JSON.stringify(value), value.id],
+        );
+      },
+      resume: async () => {
+        await postgres.query("update takosumi_workspaces set management_state = 'active', management_epoch = 3 where id = 'ws_one'");
+      },
+    },
+    {
+      store: new D1GitInstallPlanStore(d1),
+      retainLegacy: async (value: StoredGitInstallPlan) => {
+        await d1.prepare("update git_install_plans set record_json = ? where id = ?")
+          .bind(JSON.stringify(value), value.id).run();
+      },
+      resume: async () => {
+        await d1.prepare("update workspaces set management_state = 'active', management_epoch = 3 where id = 'ws_one'").run();
+      },
+    },
+  ];
+  try {
+    for (const { store, retainLegacy, resume } of adapters) {
+      const pending = plan("legacy_pending", "legacy_pending");
+      const held = { ...pending, id: "legacy_held", idempotencyKeyHash: "legacy_held" };
+      const old = { ...pending, id: "old_epoch", idempotencyKeyHash: "old_epoch" };
+      await store.create(pending);
+      await store.create(held);
+      await store.create(old);
+      const claimInput = {
+        expectedGeneration: 0,
+        leaseToken: "held_lease",
+        claimedAt: "2026-08-21T00:01:00.000Z",
+        leaseExpiresAt: "2026-08-21T00:01:30.000Z",
+      };
+      const claim = await store.claimReconcile({ ...claimInput, id: held.id });
+      if (claim.status !== "claimed") throw new Error("fixture claim was not acquired");
+      // Fixture historical JSON emitted before the private field existed.
+      // No runtime backfill or test-only store API is needed.
+      const legacyPending = { ...pending, workspaceManagementAuthority: undefined };
+      const legacyHeld = { ...claim.claim.plan, workspaceManagementAuthority: undefined };
+      await retainLegacy(legacyPending);
+      await retainLegacy(legacyHeld);
+      expect(await store.get(pending.id)).toEqual(legacyPending);
+      expect(await store.getByScope(pending)).toEqual(legacyPending);
+      expect(await store.create(legacyPending)).toMatchObject({ status: "replayed" });
+      await expect(store.claimReconcile({ ...claimInput, id: pending.id }))
+        .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      await expect(store.claimReconcile({ ...claimInput, id: pending.id, expectedWorkspaceManagementAuthority: pending.workspaceManagementAuthority }))
+        .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      expect(await store.claimReconcile({ ...claimInput, id: held.id, expectedGeneration: 1 }))
+        .toMatchObject({ status: "busy" });
+      expect(await store.claimReconcile({ ...claimInput, id: held.id }))
+        .toMatchObject({ status: "conflict" });
+      await expect(store.completeReconcile({
+        id: held.id, expectedGeneration: 1, leaseToken: "held_lease",
+        plan: { ...legacyHeld, workspaceManagementAuthority: pending.workspaceManagementAuthority },
+      })).rejects.toThrow("immutable request scope changed");
+      expect(await store.completeReconcile({
+        id: held.id, expectedGeneration: 1, leaseToken: "held_lease",
+        plan: { ...legacyHeld, phase: "failed", updatedAt: "2026-08-21T00:01:01.000Z" },
+      })).toMatchObject({ status: "completed", plan: { phase: "failed" } });
+      expect(await store.claimReconcile({ ...claimInput, id: "absent" }))
+        .toEqual({ status: "not_found" });
+
+      // A stopped-and-resumed Workspace is active again, but old work cannot
+      // borrow its new epoch, even when the caller omits the optional guard.
+      await resume();
+      for (const expectedWorkspaceManagementAuthority of [undefined, {
+        workspaceId: "ws_one", managementState: "active" as const, managementEpoch: 3,
+      }]) {
+        await expect(store.claimReconcile({ ...claimInput, id: old.id, expectedWorkspaceManagementAuthority }))
+          .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      }
+      expect(await store.get(old.id)).toEqual(old);
+    }
+  } finally {
+    await postgres.close();
+  }
+});
+
+function workspace(id: string): {
+  readonly id: string;
+  readonly handle: string;
+  readonly displayName: string;
+  readonly type: "personal";
+  readonly ownerUserId: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+} {
+  return {
+    id,
+    handle: `handle-${id}`,
+    displayName: id,
+    type: "personal",
+    ownerUserId: `owner-${id}`,
+    createdAt: "2026-08-21T00:00:00.000Z",
+    updatedAt: "2026-08-21T00:00:00.000Z",
+  };
+}
+
+async function seedPostgresWorkspace(
+  client: PGliteSqlClient,
+  id: string,
+): Promise<void> {
+  const value = workspace(id);
+  await client.query(
+    `insert into takosumi_workspaces
+      (id, handle, space_json, created_at, updated_at, management_state, management_epoch)
+     values ($1, $2, $3::jsonb, $4, $5, 'active', 1)`,
+    [
+      value.id,
+      value.handle,
+      JSON.stringify(value),
+      value.createdAt,
+      value.updatedAt,
+    ],
+  );
+}
+
+async function seedD1Workspace(
+  db: SqliteFakeD1,
+  id: string,
+): Promise<void> {
+  const value = workspace(id);
+  await db
+    .prepare(
+      `insert into workspaces
+        (id, handle, record_json, created_at, updated_at, management_state, management_epoch)
+       values (?, ?, ?, ?, ?, 'active', 1)`,
+    )
+    .bind(
+      value.id,
+      value.handle,
+      JSON.stringify(value),
+      value.createdAt,
+      value.updatedAt,
+    )
+    .run();
+}
+
 function plan(id: string, requestDigest: string): StoredGitInstallPlan {
   return {
     id,
     workspaceId: "ws_one",
+    workspaceManagementAuthority: { workspaceId: "ws_one", managementState: "active", managementEpoch: 1 },
     createdBy: "user_one",
     actorSubject: "user_one",
     idempotencyKeyHash: "key_hash_one",

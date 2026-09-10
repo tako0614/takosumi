@@ -1,12 +1,19 @@
 import { expect, test } from "bun:test";
 
 import { CapsulesService } from "../../../../core/domains/capsules/mod.ts";
+import type { CreateCapsuleInitialAuthorityRequest } from "../../../../core/domains/capsules/mod.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
-import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import {
+  InMemoryOpenTofuControlStore,
+  WorkspaceManagementAdmissionConflictError,
+} from "../../../../core/domains/deploy-control/store.ts";
+import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
 import type {
   OpenTofuControlStore,
   StoredSource,
+  WorkspaceManagementAuthority,
 } from "../../../../core/domains/deploy-control/store.ts";
+import { ProjectsService } from "../../../../core/domains/projects/mod.ts";
 import {
   CAPSULE_LIFECYCLE_COMMAND_CAPABILITY,
   INSTALL_CONFIG_PATCH_V1_KIND,
@@ -90,33 +97,229 @@ async function seedConfig(
   return config;
 }
 
-async function seedAll(store: OpenTofuControlStore): Promise<void> {
+async function seedWorkspaceAndSource(store: OpenTofuControlStore): Promise<void> {
   await seedWorkspace(store);
   await seedSource(store);
-  await seedConfig(store);
 }
 
-async function createCapsule(
+function initialInstallConfig(
+  id: string,
+  over: Partial<InstallConfig> = {},
+): InstallConfig {
+  return {
+    id,
+    workspaceId: "ws_1",
+    name: id,
+    variableMapping: {},
+    outputAllowlist: {},
+    policy: {},
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...over,
+  };
+}
+
+test("successor config preparation retains Workspace authority and stopped replay is read-only", async () => {
+  const { store, service } = build();
+  await seedWorkspace(store);
+  const workspaces = new WorkspacesService({ store });
+  const captured = await workspaces.captureManagementAuthority("ws_1");
+  expect(captured).toEqual({
+    workspaceId: "ws_1", managementState: "active", managementEpoch: 1,
+  });
+  const existing = initialInstallConfig("config_successor_existing");
+  expect(await service.createInstallConfigIfAbsent(existing, captured)).toBe(true);
+  await store.beginWorkspaceDraining("ws_1", captured);
+  await expect(workspaces.captureManagementAuthority("ws_1")).rejects.toBeInstanceOf(
+    WorkspaceManagementAdmissionConflictError,
+  );
+  await expect(workspaces.captureManagementAuthority("ws_missing")).rejects.toBeInstanceOf(
+    WorkspaceManagementAdmissionConflictError,
+  );
+  const fresh = initialInstallConfig("config_successor_stopped");
+  await expect(service.createInstallConfigIfAbsent(fresh, captured)).rejects.toBeInstanceOf(
+    WorkspaceManagementAdmissionConflictError,
+  );
+  await expect(service.createInstallConfigIfAbsent(fresh)).rejects.toBeInstanceOf(
+    WorkspaceManagementAdmissionConflictError,
+  );
+  expect(await store.getInstallConfig(fresh.id)).toBeUndefined();
+  expect(await service.createInstallConfigIfAbsent(existing, captured)).toBe(false);
+  expect(await service.createInstallConfigIfAbsent(existing)).toBe(false);
+  expect(await store.getInstallConfig(existing.id)).toEqual(existing);
+});
+
+interface InitialCapsuleFixture
+  extends Omit<
+    CreateCapsuleInitialAuthorityRequest,
+    | "workspaceId"
+    | "name"
+    | "environment"
+    | "sourceId"
+    | "installingPrincipalId"
+    | "providerBindings"
+  > {
+  readonly workspaceId?: string;
+  readonly name?: string;
+  readonly environment?: string;
+  readonly sourceId?: string;
+  readonly installingPrincipalId?: string;
+  readonly providerBindings?: CreateCapsuleInitialAuthorityRequest["providerBindings"];
+}
+
+async function createInitialCapsule(
   service: CapsulesService,
-  over: Partial<Parameters<CapsulesService["createCapsule"]>[0]> = {},
+  fixture: InitialCapsuleFixture,
 ) {
-  return await service.createCapsule({
+  const response = await service.createCapsuleInitialAuthority({
     workspaceId: "ws_1",
     name: "shop",
     environment: "production",
     sourceId: "src_1",
-    installConfigId: "cfg_1",
     installingPrincipalId: "principal_installer",
-    ...over,
+    providerBindings: [],
+    ...fixture,
   });
+  return response.capsule;
 }
 
-test("createCapsule persists the canonical Workspace, Project, and Capsule fields", async () => {
-  const { store, service } = build();
-  await seedAll(store);
-  const capsule = await createCapsule(service);
+class ReplayProjectProbe extends ProjectsService {
+  ensureDefaultProjectCalls = 0;
 
-  expect(capsule.id).toBe("cap_test00000001");
+  override async ensureDefaultProject(
+    workspaceId: string,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ) {
+    this.ensureDefaultProjectCalls += 1;
+    if (this.ensureDefaultProjectCalls > 1) {
+      throw new Error("default Project creation must not run on replay");
+    }
+    return await super.ensureDefaultProject(
+      workspaceId,
+      expectedWorkspaceManagementAuthority,
+    );
+  }
+}
+
+test("initial authority rejects a supplied noncurrent Workspace epoch without creating resources", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  await seedWorkspace(store);
+  await seedSource(store);
+  const workspaces = new WorkspacesService({ store });
+  const authority = await workspaces.captureManagementAuthority("ws_1");
+  const projects = new ProjectsService({ store });
+  await projects.ensureDefaultProject("ws_1", authority);
+  let activityCalls = 0;
+  const service = new CapsulesService({
+    store,
+    projects,
+    now: () => new Date(NOW),
+    activity: {
+      record: async () => undefined,
+      recordIdempotent: async () => {
+        activityCalls += 1;
+        return undefined;
+      },
+    },
+  });
+  const request = {
+    capsuleId: "cap_stale_new",
+    providerBindingSetId: "pbind_stale_new",
+    workspaceId: "ws_1",
+    name: "stale-new",
+    environment: "production",
+    sourceId: "src_1",
+    installingPrincipalId: "principal_installer",
+    expectedWorkspaceManagementAuthority: {
+      ...authority,
+      managementEpoch: authority.managementEpoch + 1,
+    },
+    installConfig: initialInstallConfig("cfg_stale_new"),
+    providerBindings: [],
+  } satisfies CreateCapsuleInitialAuthorityRequest;
+
+  await expect(service.createCapsuleInitialAuthority(request)).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "workspace_management_admission_conflict" },
+  });
+  expect(await store.getCapsule(request.capsuleId)).toBeUndefined();
+  expect(await store.getInstallConfig(request.installConfig.id)).toBeUndefined();
+  expect(
+    await store.getProviderBindingSetByCapsule(
+      request.capsuleId,
+      request.environment,
+    ),
+  ).toBeUndefined();
+  expect(activityCalls).toBe(0);
+});
+
+test("initial authority replay during Workspace drain is observation-only", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  await seedWorkspace(store);
+  await seedSource(store);
+  const projects = new ReplayProjectProbe({ store });
+  const authority = await new WorkspacesService({ store }).captureManagementAuthority(
+    "ws_1",
+  );
+  let idempotentActivityCalls = 0;
+  const service = new CapsulesService({
+    store,
+    projects,
+    activity: {
+      record: async () => undefined,
+      recordIdempotent: async () => {
+        idempotentActivityCalls += 1;
+        return undefined;
+      },
+    },
+  });
+  const request = {
+    capsuleId: "cap_initial",
+    providerBindingSetId: "pbind_initial",
+    workspaceId: "ws_1",
+    name: "initial",
+    environment: "production",
+    sourceId: "src_1",
+    installingPrincipalId: "principal_installer",
+    expectedWorkspaceManagementAuthority: authority,
+    installConfig: {
+      id: "cfg_initial",
+      workspaceId: "ws_1",
+      name: "initial",
+      variableMapping: {},
+      outputAllowlist: {},
+      policy: {},
+      createdAt: NOW,
+      updatedAt: NOW,
+    },
+    providerBindings: [],
+  } as const;
+
+  const created = await service.createCapsuleInitialAuthority(request);
+  expect(created.replayed).toBe(false);
+  expect(projects.ensureDefaultProjectCalls).toBe(1);
+  expect(idempotentActivityCalls).toBe(1);
+
+  expect(
+    await store.beginWorkspaceDraining("ws_1", authority),
+  ).toMatchObject({ status: "started" });
+
+  const replay = await service.createCapsuleInitialAuthority(request);
+  expect(replay).toEqual({ capsule: created.capsule, replayed: true });
+  expect(projects.ensureDefaultProjectCalls).toBe(1);
+  expect(idempotentActivityCalls).toBe(1);
+});
+
+test("createCapsuleInitialAuthority persists the canonical Workspace, Project, and Capsule fields", async () => {
+  const { store, service } = build();
+  await seedWorkspaceAndSource(store);
+  const capsule = await createInitialCapsule(service, {
+    capsuleId: "cap_fields",
+    providerBindingSetId: "pbind_fields",
+    installConfig: initialInstallConfig("cfg_fields"),
+  });
+
+  expect(capsule.id).toBe("cap_fields");
   expect(capsule.workspaceId).toBe("ws_1");
   expect(capsule.projectId).toStartWith("prj_");
   expect(capsule.slug).toBe("shop");
@@ -126,70 +329,98 @@ test("createCapsule persists the canonical Workspace, Project, and Capsule field
   expect((await store.getCapsule(capsule.id))?.name).toBe("shop");
 });
 
-test("createCapsule rejects an invalid name", async () => {
+test("createCapsuleInitialAuthority rejects an invalid name", async () => {
   const { store, service } = build();
-  await seedAll(store);
+  await seedWorkspaceAndSource(store);
   await expect(
-    createCapsule(service, { name: "Shop Name" }),
+    createInitialCapsule(service, {
+      capsuleId: "cap_invalid_name",
+      providerBindingSetId: "pbind_invalid_name",
+      installConfig: initialInstallConfig("cfg_invalid_name"),
+      name: "Shop Name",
+    }),
   ).rejects.toMatchObject({ code: "invalid_argument" });
 });
 
-test("createCapsule rejects an unknown Workspace", async () => {
+test("createCapsuleInitialAuthority rejects an unknown Workspace", async () => {
   const { store, service } = build();
   await seedSource(store);
-  await seedConfig(store);
   await expect(
-    createCapsule(service, { workspaceId: "ws_missing" }),
+    createInitialCapsule(service, {
+      workspaceId: "ws_missing",
+      capsuleId: "cap_unknown_workspace",
+      providerBindingSetId: "pbind_unknown_workspace",
+      installConfig: initialInstallConfig("cfg_unknown_workspace", {
+        workspaceId: "ws_missing",
+      }),
+    }),
   ).rejects.toMatchObject({ code: "invalid_argument" });
 });
 
-test("createCapsule rejects a Source owned by another Workspace", async () => {
+test("createCapsuleInitialAuthority rejects a Source owned by another Workspace", async () => {
   const { store, service } = build();
   await seedWorkspace(store);
   await seedSource(store, { id: "src_other", workspaceId: "ws_other" });
-  await seedConfig(store);
   await expect(
-    createCapsule(service, { sourceId: "src_other" }),
+    createInitialCapsule(service, {
+      sourceId: "src_other",
+      capsuleId: "cap_foreign_source",
+      providerBindingSetId: "pbind_foreign_source",
+      installConfig: initialInstallConfig("cfg_foreign_source"),
+    }),
   ).rejects.toMatchObject({ code: "invalid_argument" });
 });
 
-test("createCapsule rejects an unknown InstallConfig", async () => {
+test("createCapsuleInitialAuthority rejects timestamps from different config transitions", async () => {
   const { store, service } = build();
-  await seedWorkspace(store);
-  await seedSource(store);
+  await seedWorkspaceAndSource(store);
   await expect(
-    createCapsule(service, { installConfigId: "cfg_missing" }),
+    createInitialCapsule(service, {
+      capsuleId: "cap_invalid_config",
+      providerBindingSetId: "pbind_invalid_config",
+      installConfig: initialInstallConfig("cfg_invalid_config", {
+        updatedAt: "2026-06-06T00:00:01.000Z",
+      }),
+    }),
   ).rejects.toMatchObject({ code: "invalid_argument" });
 });
 
-test("createCapsule enforces Workspace ownership for InstallConfig", async () => {
+test("createCapsuleInitialAuthority enforces Workspace ownership for InstallConfig", async () => {
   const { store, service } = build();
-  await seedWorkspace(store);
-  await seedSource(store);
-  await seedConfig(store, { id: "cfg_other", workspaceId: "ws_other" });
+  await seedWorkspaceAndSource(store);
   await expect(
-    createCapsule(service, { installConfigId: "cfg_other" }),
+    createInitialCapsule(service, {
+      capsuleId: "cap_foreign_config",
+      providerBindingSetId: "pbind_foreign_config",
+      installConfig: initialInstallConfig("cfg_foreign_config", {
+        workspaceId: "ws_other",
+      }),
+    }),
   ).rejects.toMatchObject({ code: "invalid_argument" });
 
-  await seedConfig(store, { id: "cfg_workspace", workspaceId: "ws_1" });
-  const capsule = await createCapsule(service, {
-    installConfigId: "cfg_workspace",
+  const capsule = await createInitialCapsule(service, {
+    capsuleId: "cap_workspace_config",
+    providerBindingSetId: "pbind_workspace_config",
+    installConfig: initialInstallConfig("cfg_workspace_config"),
   });
-  expect(capsule.installConfigId).toBe("cfg_workspace");
+  expect(capsule.installConfigId).toBe("cfg_workspace_config");
 });
 
-test("createCapsule enforces the InstallConfig Source coordinate at the authority boundary", async () => {
+test("createCapsuleInitialAuthority enforces the InstallConfig Source coordinate at the authority boundary", async () => {
   const { store, service } = build();
   await seedWorkspace(store);
   await seedSource(store);
-  await seedConfig(store, {
-    sourceSelector: {
-      url: "https://example.com/acme/repo",
-      path: "./infra/",
-    },
+  const sourceSelector = {
+    url: "https://example.com/acme/repo",
+    path: "./infra/",
+  } as const;
+  const capsule = await createInitialCapsule(service, {
+    capsuleId: "cap_coordinate",
+    providerBindingSetId: "pbind_coordinate",
+    installConfig: initialInstallConfig("cfg_coordinate", {
+      sourceSelector,
+    }),
   });
-
-  const capsule = await createCapsule(service);
   expect(capsule.sourceId).toBe("src_1");
 
   await seedSource(store, {
@@ -197,7 +428,12 @@ test("createCapsule enforces the InstallConfig Source coordinate at the authorit
     url: "https://example.com/acme/other.git",
   });
   await expect(
-    createCapsule(service, {
+    createInitialCapsule(service, {
+      capsuleId: "cap_other_repo",
+      providerBindingSetId: "pbind_other_repo",
+      installConfig: initialInstallConfig("cfg_other_repo", {
+        sourceSelector,
+      }),
       name: "other-repo",
       sourceId: "src_other_repo",
     }),
@@ -211,7 +447,12 @@ test("createCapsule enforces the InstallConfig Source coordinate at the authorit
     defaultPath: "other",
   });
   await expect(
-    createCapsule(service, {
+    createInitialCapsule(service, {
+      capsuleId: "cap_other_path",
+      providerBindingSetId: "pbind_other_path",
+      installConfig: initialInstallConfig("cfg_other_path", {
+        sourceSelector,
+      }),
       name: "other-path",
       sourceId: "src_other_path",
     }),
@@ -224,7 +465,12 @@ test("createCapsule enforces the InstallConfig Source coordinate at the authorit
     url: "https://example.com/acme/repo.git?alternate=1",
   });
   await expect(
-    createCapsule(service, {
+    createInitialCapsule(service, {
+      capsuleId: "cap_query_source",
+      providerBindingSetId: "pbind_query_source",
+      installConfig: initialInstallConfig("cfg_query_source", {
+        sourceSelector,
+      }),
       name: "query-source",
       sourceId: "src_query",
     }),
@@ -247,22 +493,40 @@ test("createCapsule enforces the InstallConfig Source coordinate at the authorit
   ).toBeUndefined();
 });
 
-test("createCapsule enforces unique Project, name, and environment", async () => {
+test("createCapsuleInitialAuthority enforces unique Project, name, and environment", async () => {
   const { store, service } = build();
-  await seedAll(store);
-  await createCapsule(service);
-  await expect(createCapsule(service)).rejects.toMatchObject({
+  await seedWorkspaceAndSource(store);
+  await createInitialCapsule(service, {
+    capsuleId: "cap_duplicate_first",
+    providerBindingSetId: "pbind_duplicate_first",
+    installConfig: initialInstallConfig("cfg_duplicate_first"),
+  });
+  await expect(
+    createInitialCapsule(service, {
+      capsuleId: "cap_duplicate_second",
+      providerBindingSetId: "pbind_duplicate_second",
+      installConfig: initialInstallConfig("cfg_duplicate_second"),
+    }),
+  ).rejects.toMatchObject({
     code: "failed_precondition",
   });
 });
 
 test("a destroyed Capsule does not reserve its former name", async () => {
   const { store, service } = build();
-  await seedAll(store);
-  const destroyed = await createCapsule(service);
+  await seedWorkspaceAndSource(store);
+  const destroyed = await createInitialCapsule(service, {
+    capsuleId: "cap_destroyed",
+    providerBindingSetId: "pbind_destroyed",
+    installConfig: initialInstallConfig("cfg_destroyed"),
+  });
   await store.putCapsule({ ...destroyed, status: "destroyed" });
 
-  const replacement = await createCapsule(service);
+  const replacement = await createInitialCapsule(service, {
+    capsuleId: "cap_destroyed_replacement",
+    providerBindingSetId: "pbind_destroyed_replacement",
+    installConfig: initialInstallConfig("cfg_destroyed_replacement"),
+  });
   expect(replacement.id).not.toBe(destroyed.id);
   expect(replacement.status).toBe("pending");
 });
@@ -288,8 +552,12 @@ test("abandonUnappliedCapsule closes the ledger and bindings without mutating hi
     { onRelease: () => (releaseCalls += 1) },
   );
   const { service } = build(store);
-  await seedAll(store);
-  const capsule = await createCapsule(service);
+  await seedWorkspaceAndSource(store);
+  const capsule = await createInitialCapsule(service, {
+    capsuleId: "cap_test00000001",
+    providerBindingSetId: "pbind_1",
+    installConfig: initialInstallConfig("cfg_abandon"),
+  });
   expect(capsule.id).toBe("cap_test00000001");
   await transitionProviderBindingSetForFixture(store, {
     id: "pbind_1",
@@ -324,13 +592,25 @@ test("abandonUnappliedCapsule closes the ledger and bindings without mutating hi
       capsule.environment,
     ),
   ).toBeUndefined();
-  expect((await createCapsule(service)).id).not.toBe(capsule.id);
+  expect(
+    (
+      await createInitialCapsule(service, {
+        capsuleId: "cap_abandon_replacement",
+        providerBindingSetId: "pbind_abandon_replacement",
+        installConfig: initialInstallConfig("cfg_abandon_replacement"),
+      })
+    ).id,
+  ).not.toBe(capsule.id);
 });
 
 test("abandonUnappliedCapsule refuses a Capsule with applied state", async () => {
   const { store, service } = build();
-  await seedAll(store);
-  const capsule = await createCapsule(service);
+  await seedWorkspaceAndSource(store);
+  const capsule = await createInitialCapsule(service, {
+    capsuleId: "cap_applied",
+    providerBindingSetId: "pbind_applied",
+    installConfig: initialInstallConfig("cfg_applied"),
+  });
   await store.patchCapsule(capsule.id, {
     currentStateGeneration: 1,
     updatedAt: "2026-06-06T00:01:00.000Z",
@@ -343,17 +623,30 @@ test("abandonUnappliedCapsule refuses a Capsule with applied state", async () =>
 
 test("the same Capsule name can be used in another environment", async () => {
   const { store, service } = build();
-  await seedAll(store);
-  await createCapsule(service);
-  const preview = await createCapsule(service, { environment: "preview" });
+  await seedWorkspaceAndSource(store);
+  await createInitialCapsule(service, {
+    capsuleId: "cap_production",
+    providerBindingSetId: "pbind_production",
+    installConfig: initialInstallConfig("cfg_production"),
+  });
+  const preview = await createInitialCapsule(service, {
+    capsuleId: "cap_preview",
+    providerBindingSetId: "pbind_preview",
+    installConfig: initialInstallConfig("cfg_preview"),
+    environment: "preview",
+  });
   expect(preview.environment).toBe("preview");
 });
 
 test("getCapsule, batched get, listCapsules, and patchCapsuleStatus use canonical ids", async () => {
   const { store, service } = build();
-  await seedAll(store);
+  await seedWorkspaceAndSource(store);
   await seedWorkspace(store, { id: "ws_2", handle: "other" });
-  const capsule = await createCapsule(service);
+  const capsule = await createInitialCapsule(service, {
+    capsuleId: "cap_lookup",
+    providerBindingSetId: "pbind_lookup",
+    installConfig: initialInstallConfig("cfg_lookup"),
+  });
 
   expect((await service.getCapsule(capsule.id)).id).toBe(capsule.id);
   expect(
@@ -567,9 +860,7 @@ test("only unattached Workspace-neutral InstallConfig templates accept patches",
   await seedWorkspace(store);
   await seedSource(store);
 
-  const compiled = await seedConfig(store, {
-    id: "icfg_compiled",
-    workspaceId: "ws_1",
+  const compiled = initialInstallConfig("icfg_compiled", {
     internal: {
       reason: "per_install_overrides",
       sourceSnapshotId: "snap_compiled",
@@ -577,8 +868,10 @@ test("only unattached Workspace-neutral InstallConfig templates accept patches",
     },
     variableMapping: { original: "compiled" },
   });
-  const capsule = await createCapsule(service, {
-    installConfigId: compiled.id,
+  const capsule = await createInitialCapsule(service, {
+    capsuleId: "cap_compiled",
+    providerBindingSetId: "pbind_compiled",
+    installConfig: compiled,
   });
   const sealed = await seedConfig(store, {
     id: "icfg_re_adopted",

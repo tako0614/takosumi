@@ -115,6 +115,35 @@ export async function handleWorkspaceInstallPlans(
       ctx.request,
     );
   }
+  // Request identity is immutable input bookkeeping, not mutable preparation.
+  // Observe an exact idempotency scope before capturing Workspace management
+  // authority so a stopped Workspace can still return its existing record
+  // without creating a successor or attempting new preparation.
+  const [requestDigest, idempotencyKeyHash] = await Promise.all([
+    stableJsonDigest(parsed),
+    stableJsonDigest(key),
+  ]);
+  const existing = await ctx.operations.gitInstallPlans.getByScope({
+    workspaceId,
+    actorSubject: ctx.session.subject,
+    idempotencyKeyHash,
+  });
+  if (existing) {
+    if (existing.requestDigest === requestDigest) {
+      return installPlanJson(existing);
+    }
+    return errorJson(
+      "idempotency_conflict",
+      "This Idempotency-Key was already used for a different install-plan request in the same Workspace and actor scope.",
+      409,
+      ctx.request,
+    );
+  }
+  // Retain this exact active authority through all asynchronous preflight
+  // preparation and pass it to the insert-only coordinator write. A later
+  // drain -> active epoch cannot bless work prepared under the old epoch.
+  const expectedWorkspaceManagementAuthority =
+    await ctx.operations.workspaces.captureManagementAuthority(workspaceId);
   let preflightAuthority:
     | {
         readonly installConfigDigest: string;
@@ -154,8 +183,6 @@ export async function handleWorkspaceInstallPlans(
       baseInstallConfigDigest: await stableJsonDigest(base.installConfig),
     };
   }
-  const requestDigest = await stableJsonDigest(parsed);
-  const idempotencyKeyHash = await stableJsonDigest(key);
   const now = new Date().toISOString();
   const plan: StoredGitInstallPlan = {
     id: installPlanId(),
@@ -163,6 +190,7 @@ export async function handleWorkspaceInstallPlans(
     createdBy: ctx.session.subject,
     actorSubject: ctx.session.subject,
     idempotencyKeyHash,
+    workspaceManagementAuthority: expectedWorkspaceManagementAuthority,
     requestDigest,
     operation: "install",
     source: parsed.source,
@@ -192,7 +220,10 @@ export async function handleWorkspaceInstallPlans(
     createdAt: now,
     updatedAt: now,
   };
-  const result = await ctx.operations.gitInstallPlans.create(plan);
+  const result = await ctx.operations.gitInstallPlans.create(
+    plan,
+    expectedWorkspaceManagementAuthority,
+  );
   if (result.status === "conflict") {
     return errorJson(
       "idempotency_conflict",
@@ -249,6 +280,21 @@ async function reconcileInstallPlan(
   if (observed.phase === "reviewable" || observed.phase === "failed") {
     return installPlanJson(observed);
   }
+  // Rows written before management-epoch persistence are terminal-read
+  // compatible only. Never recapture a newer authority for a nonterminal
+  // legacy coordinator, because that would bless stale preparation.
+  const expectedWorkspaceManagementAuthority =
+    observed.workspaceManagementAuthority;
+  if (expectedWorkspaceManagementAuthority === undefined) {
+    return errorJson(
+      "failed_precondition",
+      "Workspace management authority is unavailable for this coordinator record.",
+      409,
+      ctx.request,
+      {},
+      { reason: "workspace_management_admission_conflict" },
+    );
+  }
   const claimedAt = new Date();
   const claim = await ctx.operations.gitInstallPlans.claimReconcile({
     id: observed.id,
@@ -258,6 +304,7 @@ async function reconcileInstallPlan(
     leaseExpiresAt: new Date(
       claimedAt.getTime() + GIT_INSTALL_PLAN_RECONCILE_LEASE_MS,
     ).toISOString(),
+    expectedWorkspaceManagementAuthority,
   });
   if (claim.status !== "claimed") {
     if (claim.status === "not_found") {
@@ -395,7 +442,7 @@ async function advanceSource(
         ...(plan.source.authConnectionId
           ? { authConnectionId: plan.source.authConnectionId }
           : {}),
-      });
+      }, plan.workspaceManagementAuthority);
       // `hookSecret` is deliberately discarded at the call boundary.
       sourceId = created.source.id;
     }
@@ -429,10 +476,14 @@ async function advanceSource(
       sync = await operations.getSourceSyncRun(candidates[0].id);
     } else {
       sync = (
-        await operations.createSourceSync(sourceId, {
-          intent: "manual_plan",
-          dedupe: true,
-        })
+        await operations.createSourceSync(
+          sourceId,
+          {
+            intent: "manual_plan",
+            dedupe: true,
+          },
+          plan.workspaceManagementAuthority,
+        )
       ).run;
     }
   }
@@ -606,7 +657,6 @@ async function prepareInstallCompilation(
       modulePath: moduleSelection.modulePath,
       rootProviderRequirements: moduleSelection.rootProviderRequirements,
       genericVariableContractDigest,
-      persist: false,
     });
     if (!installConfig.ok) {
       return failedPlan(plan, installConfig.diagnostic);
@@ -859,6 +909,7 @@ async function createCapsule(
     environment: plan.capsule.environment,
     sourceId: source.id,
     installingPrincipalId: plan.createdBy,
+    expectedWorkspaceManagementAuthority: plan.workspaceManagementAuthority,
     installConfig,
     providerBindingSetId: deterministicInitialBindingSetId(plan.id),
     providerBindings: resolved.bindings,
@@ -1060,7 +1111,6 @@ async function materializePreflightInitialInstallConfig(input: {
     rootProviderRequirements: selection.rootProviderRequirements,
     genericVariableContractDigest,
     reviewedVariables: input.plan.initialVariables ?? {},
-    persist: false,
   });
   if (!materialized.ok) {
     throw permanent(materialized.diagnostic.code, materialized.diagnostic.message);
@@ -1178,7 +1228,6 @@ async function materializeCoordinatorInitialInstallConfig(input: {
     modulePath: selection.modulePath,
     rootProviderRequirements: selection.rootProviderRequirements,
     genericVariableContractDigest,
-    persist: false,
   });
   if (!materialized.ok) {
     throw permanent(materialized.diagnostic.code, materialized.diagnostic.message);
@@ -1262,6 +1311,8 @@ async function createOrObservePlanRun(
     const created = await operations.createCapsulePlan(plan.capsuleId!, {
       sourceSnapshotId: plan.sourceSnapshotId,
       planRunId: exactRunId,
+      expectedWorkspaceManagementAuthority:
+        plan.workspaceManagementAuthority,
       actor: installPlanRunActor(plan.id),
     });
     run = await operations.getRun(created.planRun.id);
@@ -1552,6 +1603,8 @@ interface InstallPlanCompatibilityEvidence {
  * When compatibility analysis produced a terminal runner variable contract,
  * the exact declaration digest and SourceSnapshot id are retained as
  * value-free provenance; no provider or variable values become authority.
+ * This preparation never persists a partial row. The initial-authority
+ * coordinator commits the config together with the Capsule and bindings.
  */
 async function materializeSelectedModuleInstallConfig(input: {
   readonly operations: ControlPlaneOperations;
@@ -1564,7 +1617,6 @@ async function materializeSelectedModuleInstallConfig(input: {
   /** Digest of the exact runner-discovered generic variable declarations. */
   readonly genericVariableContractDigest: string;
   readonly reviewedVariables?: InstallConfig["variableMapping"];
-  readonly persist?: boolean;
 }): Promise<
   | { readonly ok: true; readonly installConfig: InstallConfig }
   | { readonly ok: false; readonly diagnostic: GitInstallPlanDiagnostic }
@@ -1653,29 +1705,7 @@ async function materializeSelectedModuleInstallConfig(input: {
       throw error;
     }
   }
-  if (input.persist === false) {
-    return { ok: true, installConfig: expected };
-  }
-  const created = await input.operations.capsules.createInstallConfigIfAbsent(
-    expected,
-  );
-  const stored = created
-    ? expected
-    : await input.operations.capsules.getInstallConfig(expected.id);
-  if (
-    (await stableJsonDigest(stripInstallConfigTimestamps(stored))) !==
-    (await stableJsonDigest(stripInstallConfigTimestamps(expected)))
-  ) {
-    return {
-      ok: false,
-      diagnostic: {
-        code: "repository_install_module_config_identity_conflict",
-        message:
-          "The module InstallConfig did not persist its exact deterministic identity.",
-      },
-    };
-  }
-  return { ok: true, installConfig: stored };
+  return { ok: true, installConfig: expected };
 }
 
 function stripInstallConfigTimestamps(

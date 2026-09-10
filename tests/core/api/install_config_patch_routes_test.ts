@@ -6,6 +6,7 @@ import {
   INSTALL_CONFIG_PATCH_V1_KIND,
   type InstallConfig,
 } from "takosumi-contract/install-configs";
+import type { Capsule } from "takosumi-contract/capsules";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 
 const TOKEN = "install-config-operator-token";
@@ -321,7 +322,6 @@ test("internal InstallConfig PATCH rejects compiled and re-adopted rows for ever
     createdAt: now,
     updatedAt: now,
   };
-  await store.putInstallConfig(compiled);
   await store.putInstallConfig(reAdopted);
 
   let putCount = 0;
@@ -354,14 +354,18 @@ test("internal InstallConfig PATCH rejects compiled and re-adopted rows for ever
       return undefined;
     },
   });
-  const capsule = await operations.capsules.createCapsule({
-    workspaceId,
-    name: "immutable-capsule",
-    environment: "production",
-    sourceId: "src_install_config_immutable",
-    installConfigId: compiled.id,
-    installingPrincipalId: "user_install_config_immutable",
-  });
+  const { capsule } =
+    await operations.capsules.createCapsuleInitialAuthority({
+      capsuleId: "cap_install_config_immutable",
+      providerBindingSetId: "binding_install_config_immutable",
+      workspaceId,
+      name: "immutable-capsule",
+      environment: "production",
+      sourceId: "src_install_config_immutable",
+      installingPrincipalId: "user_install_config_immutable",
+      installConfig: compiled,
+      providerBindings: [],
+    });
   const beforeCapsule = await operations.capsules.getCapsule(capsule.id);
   const beforeEpoch = await operations.capsules.getCapsuleExecutionAuthorityEpoch(
     capsule.id,
@@ -647,14 +651,25 @@ test("operator PATCH updates only an unattached shared template and rejects acti
     updatedAt: now,
   };
   await store.putInstallConfig(referenced);
-  const capsule = await operations.capsules.createCapsule({
+  const project = await operations.projects.ensureDefaultProject(workspaceId);
+  // Retained Capsules can reference old shared templates. Seed that history
+  // explicitly; new installs create a complete Workspace-owned authority.
+  const capsule: Capsule = {
+    id: "cap_template_reference",
     workspaceId,
+    projectId: project.id,
     name: "template-reference",
-    environment: "preview",
+    slug: "template-reference",
     sourceId: "src_template_reference",
     installConfigId: referenced.id,
     installingPrincipalId: "acct_template_reference",
-  });
+    environment: "preview",
+    currentStateGeneration: 0,
+    status: "pending",
+    createdAt: now,
+    updatedAt: now,
+  };
+  await store.putCapsule(capsule);
   const patchReferenced = () =>
     app.request(`/internal/v1/install-configs/${referenced.id}`, {
       method: "PATCH",

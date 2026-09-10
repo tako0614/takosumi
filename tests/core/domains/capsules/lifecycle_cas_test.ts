@@ -430,6 +430,10 @@ test("auto-update claim replay has one winner across every store", async () => {
       autoUpdate: true,
     };
     await store.putCapsule(current);
+    const management = await store.getWorkspaceManagement(current.workspaceId);
+    if (!management || management.managementState !== "active") {
+      throw new Error(`${label}: Workspace management is not active`);
+    }
     const epoch = await store.getCapsuleExecutionAuthorityEpoch(current.id);
     const command = {
       capsuleId: current.id,
@@ -437,6 +441,11 @@ test("auto-update claim replay has one winner across every store", async () => {
       mutation: {
         kind: "auto-update-claim" as const,
         sourceSnapshotId: `snapshot_claim_${label}`,
+        expectedWorkspaceManagementAuthority: {
+          workspaceId: management.workspaceId,
+          managementState: "active" as const,
+          managementEpoch: management.managementEpoch,
+        },
       },
       updatedAt: LIFECYCLE_AT,
     };
@@ -507,6 +516,10 @@ test("D1 lifecycle CAS uses one fixed bounded conditional update", async () => {
     autoUpdate: true,
   };
   await store.putCapsule(current);
+  const management = await store.getWorkspaceManagement(current.workspaceId);
+  if (!management || management.managementState !== "active") {
+    throw new Error("D1 lifecycle statement Workspace management is not active");
+  }
   const epoch = await store.getCapsuleExecutionAuthorityEpoch(current.id);
   records.splice(0);
 
@@ -516,6 +529,11 @@ test("D1 lifecycle CAS uses one fixed bounded conditional update", async () => {
     mutation: {
       kind: "auto-update-claim",
       sourceSnapshotId: "snapshot_d1_lifecycle_statement",
+      expectedWorkspaceManagementAuthority: {
+        workspaceId: management.workspaceId,
+        managementState: "active" as const,
+        managementEpoch: management.managementEpoch,
+      },
     },
     updatedAt: LIFECYCLE_AT,
   });

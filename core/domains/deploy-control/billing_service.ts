@@ -26,7 +26,12 @@ import {
   NOOP_SHOWBACK_RATER,
 } from "takosumi-contract/billing";
 import type { Workspace } from "takosumi-contract/workspaces";
-import type { OpenTofuControlStore } from "./store.ts";
+import {
+  assertWorkspaceManagementAdmission,
+  WorkspaceManagementAdmissionConflictError,
+  type OpenTofuControlStore,
+  type WorkspaceManagementAuthority,
+} from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import type { OpenTofuPlanResult } from "./mod.ts";
 
@@ -73,13 +78,38 @@ export class BillingService {
     input: { readonly billingSettings: BillingSettings },
   ): Promise<{ readonly billing: { readonly settings: BillingSettings } }> {
     requireNonEmptyString(workspaceId, "workspaceId");
-    const workspace = await this.#requireWorkspace(workspaceId);
     const settings = normalizeBillingSettings(input.billingSettings);
-    await this.#store.putWorkspace({
-      ...workspace,
-      billingSettings: settings,
-      updatedAt: new Date(this.#now()).toISOString(),
-    });
+    try {
+      const management = assertWorkspaceManagementAdmission(
+        await this.#store.getWorkspaceManagement(workspaceId), workspaceId,
+      );
+      const expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority = {
+        workspaceId, managementState: "active", managementEpoch: management.managementEpoch,
+      };
+      const workspace = await this.#requireWorkspace(workspaceId);
+      const replaced = await this.#store.replaceWorkspace({
+        workspace: {
+          ...workspace, billingSettings: settings,
+          updatedAt: new Date(this.#now()).toISOString(),
+        },
+        expectedWorkspace: workspace,
+        expectedWorkspaceManagementAuthority,
+      });
+      if (!replaced) {
+        throw new OpenTofuControllerError(
+          "failed_precondition", "Workspace changed while preparing this update.",
+          { reason: "workspace_changed" },
+        );
+      }
+    } catch (error) {
+      if (error instanceof WorkspaceManagementAdmissionConflictError) {
+        throw new OpenTofuControllerError(
+          "failed_precondition", "Workspace is not accepting this management operation.",
+          { reason: "workspace_management_admission_conflict" },
+        );
+      }
+      throw error;
+    }
     return { billing: { settings } };
   }
 

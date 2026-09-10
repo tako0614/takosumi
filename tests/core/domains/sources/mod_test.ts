@@ -1,16 +1,253 @@
 import { expect, test } from "bun:test";
 
 import { SourcesService } from "../../../../core/domains/sources/mod.ts";
-import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
+import {
+  ObjectKeyArtifactReferenceAllocator,
+  type ArtifactReferenceAllocator,
+} from "../../../../core/adapters/storage/artifact-references.ts";
 import {
   InMemoryOpenTofuControlStore,
+  WorkspaceManagementAdmissionConflictError,
+  type TransitionRunInput,
+  type TransitionRunResult,
   type StoredSource,
+  type WorkspaceManagementAuthority,
+  type WorkspaceManagement,
 } from "../../../../core/domains/deploy-control/store.ts";
 import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
+import type {
+  ApplyRun,
+  PlanRun,
+} from "@takosumi/internal/deploy-control-api";
 import type { SourceSnapshot } from "takosumi-contract/sources";
+import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+class PausingArtifactReferenceAllocator
+  implements ArtifactReferenceAllocator
+{
+  readonly delegate = new ObjectKeyArtifactReferenceAllocator();
+  readonly started = deferred<void>();
+  readonly release = deferred<void>();
+  calls = 0;
+
+  async allocate(input: Parameters<ArtifactReferenceAllocator["allocate"]>[0]) {
+    this.calls += 1;
+    this.started.resolve();
+    await this.release.promise;
+    return await this.delegate.allocate(input);
+  }
+}
+
+class DrainBeforeStaleReplacementStore extends InMemoryOpenTofuControlStore {
+  beforeStaleReplacement?: () => Promise<void>;
+
+  override async transitionRun(
+    input: TransitionRunInput,
+  ): Promise<TransitionRunResult> {
+    if (
+      this.beforeStaleReplacement &&
+      input.kind === "source_sync" &&
+      input.expectedWorkspaceManagementAuthority !== undefined
+    ) {
+      const before = this.beforeStaleReplacement;
+      this.beforeStaleReplacement = undefined;
+      await before();
+    }
+    return await super.transitionRun(input);
+  }
+}
+
+/**
+ * Test-only management fixture that can model a drain/resume without exposing
+ * a public resume API. The underlying in-memory store remains the durable row
+ * authority for Run identity/lease state; this layer only changes the observed
+ * Workspace management tuple and rejects/permits the same CAS boundaries that
+ * a resumed durable adapter would enforce.
+ */
+class MutableWorkspaceManagementStore extends InMemoryOpenTofuControlStore {
+  #management: WorkspaceManagement = {
+    workspaceId: "workspace_1",
+    managementState: "active",
+    managementEpoch: 1,
+  };
+  storedAuthorityOverride?: WorkspaceManagementAuthority;
+
+  setManagement(management: WorkspaceManagement): void {
+    this.#management = { ...management };
+  }
+
+  override async getWorkspaceManagement(workspaceId: string) {
+    if (workspaceId === this.#management.workspaceId) {
+      return { ...this.#management };
+    }
+    return await super.getWorkspaceManagement(workspaceId);
+  }
+
+  override async getRunManagementAuthority(
+    input: Parameters<InMemoryOpenTofuControlStore["getRunManagementAuthority"]>[0],
+  ) {
+    if (this.storedAuthorityOverride !== undefined) {
+      return { ...this.storedAuthorityOverride };
+    }
+    return await super.getRunManagementAuthority(input);
+  }
+
+  override async beginSourceSyncRun(
+    run: Parameters<InMemoryOpenTofuControlStore["beginSourceSyncRun"]>[0],
+    expected?: Parameters<InMemoryOpenTofuControlStore["beginSourceSyncRun"]>[1],
+  ) {
+    // The base in-memory store starts at epoch 1. When a test models a resumed
+    // epoch, adapt only the delegate's private fixture state so a new-row
+    // admission can stand in for a durable adapter that has also resumed.
+    if (
+      expected !== undefined &&
+      expected.workspaceId === this.#management.workspaceId &&
+      expected.managementEpoch === this.#management.managementEpoch &&
+      this.#management.managementState === "active"
+    ) {
+      return await super.beginSourceSyncRun(run, {
+        ...expected,
+        managementEpoch: 1,
+      });
+    }
+    if (
+      expected !== undefined &&
+      expected.workspaceId === this.#management.workspaceId &&
+      (expected.managementEpoch !== this.#management.managementEpoch ||
+        this.#management.managementState !== "active")
+    ) {
+      throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
+    }
+    return await super.beginSourceSyncRun(run, expected);
+  }
+
+  override async transitionRun(
+    input: TransitionRunInput,
+  ): Promise<TransitionRunResult> {
+    const expected = input.expectedWorkspaceManagementAuthority;
+    if (expected !== undefined) {
+      const current = await super.getSourceSyncRun(input.id);
+      if (
+        expected.workspaceId !== this.#management.workspaceId ||
+        this.#management.managementState !== "active" ||
+        expected.managementEpoch !== this.#management.managementEpoch
+      ) {
+        return { won: false, ...(current ? { run: current } : {}) };
+      }
+      if (input.requireStoredManagementAuthority === true) {
+        const original = await super.getRunManagementAuthority({
+          id: input.id,
+          workspaceId: expected.workspaceId,
+          kind: input.kind,
+        });
+        if (
+          original === undefined ||
+          original.workspaceId !== this.#management.workspaceId ||
+          original.managementEpoch !== this.#management.managementEpoch
+        ) {
+          return { won: false, ...(current ? { run: current } : {}) };
+        }
+      }
+      const {
+        expectedWorkspaceManagementAuthority: _expected,
+        requireStoredManagementAuthority: _requireStored,
+        ...delegated
+      } = input;
+      return await super.transitionRun(delegated);
+    }
+    return await super.transitionRun(input);
+  }
+}
+
+class SentinelSourceManagementReadStore extends InMemoryOpenTofuControlStore {
+  throwOnRunManagementAuthorityRead = false;
+  throwOnWorkspaceManagementRead = false;
+
+  override async getRunManagementAuthority(
+    input: Parameters<InMemoryOpenTofuControlStore["getRunManagementAuthority"]>[0],
+  ) {
+    if (this.throwOnRunManagementAuthorityRead) {
+      throw new Error("sentinel run-management-authority read failure");
+    }
+    return await super.getRunManagementAuthority(input);
+  }
+
+  override async getWorkspaceManagement(workspaceId: string) {
+    if (this.throwOnWorkspaceManagementRead) {
+      throw new Error("sentinel workspace-management read failure");
+    }
+    return await super.getWorkspaceManagement(workspaceId);
+  }
+}
+
+class BeginExistingSourceSyncStore extends MutableWorkspaceManagementStore {
+  forcedExisting?: Parameters<InMemoryOpenTofuControlStore["beginSourceSyncRun"]>[0];
+
+  override async beginSourceSyncRun(
+    run: Parameters<InMemoryOpenTofuControlStore["beginSourceSyncRun"]>[0],
+    expected?: Parameters<InMemoryOpenTofuControlStore["beginSourceSyncRun"]>[1],
+  ) {
+    const existing = this.forcedExisting;
+    if (existing !== undefined) {
+      this.forcedExisting = undefined;
+      return { status: "existing" as const, run: existing };
+    }
+    return await super.beginSourceSyncRun(run, expected);
+  }
+}
+
+class ReconciliationBarrierStore extends MutableWorkspaceManagementStore {
+  readonly enumerationStarted = deferred<void>();
+  readonly releaseEnumeration = deferred<void>();
+  #pauseNextEnumeration = true;
+
+  override async listCapsulesPage(
+    workspaceId: string,
+    params: Parameters<InMemoryOpenTofuControlStore["listCapsulesPage"]>[1],
+  ) {
+    if (this.#pauseNextEnumeration) {
+      this.#pauseNextEnumeration = false;
+      this.enumerationStarted.resolve();
+      await this.releaseEnumeration.promise;
+    }
+    return await super.listCapsulesPage(workspaceId, params);
+  }
+}
+
+class PausingConnectionLookupStore extends InMemoryOpenTofuControlStore {
+  readonly connectionLookupStarted = deferred<void>();
+  readonly releaseConnectionLookup = deferred<void>();
+  #pauseNextConnectionLookup = false;
+
+  pauseNextConnectionLookup(): void {
+    this.#pauseNextConnectionLookup = true;
+  }
+
+  override async getConnection(id: string) {
+    if (this.#pauseNextConnectionLookup) {
+      this.#pauseNextConnectionLookup = false;
+      this.connectionLookupStarted.resolve();
+      await this.releaseConnectionLookup.promise;
+    }
+    return await super.getConnection(id);
+  }
+}
 
 function makeService(
   overrides: {
+    store?: InMemoryOpenTofuControlStore;
+    artifactReferenceAllocator?: ArtifactReferenceAllocator;
     enqueueSourceSync?: (d: {
       action: "source_sync";
       runId: string;
@@ -23,11 +260,25 @@ function makeService(
     ) => Promise<readonly { readonly path: string; readonly text: string }[]>;
   } = {},
 ) {
-  const store = new InMemoryOpenTofuControlStore();
+  const store = overrides.store ?? new InMemoryOpenTofuControlStore();
+  // createSync now claims a source_sync Run through the Workspace management
+  // admission fence; seed the fixture's owning Workspace before any Source
+  // creation or dedupe/claim assertion.
+  void store.putWorkspace({
+    id: "workspace_1",
+    handle: "workspace-1",
+    displayName: "Workspace 1",
+    type: "personal",
+    ownerUserId: "user_1",
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
   let counter = 0;
   const service = new SourcesService({
     store,
-    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    artifactReferenceAllocator:
+      overrides.artifactReferenceAllocator ??
+      new ObjectKeyArtifactReferenceAllocator(),
     now: () => new Date("2026-06-06T00:00:00.000Z"),
     newId: (prefix) =>
       `${prefix}_test${(counter += 1).toString().padStart(8, "0")}`,
@@ -141,6 +392,30 @@ test("createSource accepts an authConnectionId present in the Workspace", async 
   expect(source.authConnectionId).toBe("conn_git1");
 });
 
+test("createSource rejects a valid noncurrent Workspace management authority", async () => {
+  const { store, service } = makeService();
+  const expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority = {
+    workspaceId: "workspace_1",
+    managementState: "active",
+    managementEpoch: 2,
+  };
+
+  await expect(
+    service.createSource(
+      {
+        workspaceId: "workspace_1",
+        name: "noncurrent-authority",
+        url: "https://github.com/acme/repo.git",
+      },
+      expectedWorkspaceManagementAuthority,
+    ),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "workspace_management_admission_conflict" },
+  });
+  expect(await store.listSources("workspace_1")).toEqual([]);
+});
+
 test("listSources / getSource project public records only", async () => {
   const { service } = makeService();
   await service.createSource({
@@ -181,6 +456,65 @@ test("patchSource updates fields, autoSync, and clears authConnectionId with nul
   expect(patched.source.authConnectionId).toBeUndefined();
 });
 
+test("createSource rejects a drain raced during async auth validation", async () => {
+  const store = new PausingConnectionLookupStore();
+  const { service } = makeService({ store });
+  await seedConnection(store, "conn_git1", "workspace_1");
+  store.pauseNextConnectionLookup();
+
+  const creating = service.createSource({
+    workspaceId: "workspace_1",
+    name: "raced-create",
+    url: "https://github.com/acme/repo.git",
+    authConnectionId: "conn_git1",
+  });
+  await store.connectionLookupStarted.promise;
+  const management = await store.getWorkspaceManagement("workspace_1");
+  await store.beginWorkspaceDraining("workspace_1", {
+    workspaceId: "workspace_1",
+    managementState: "active",
+    managementEpoch: management!.managementEpoch,
+  });
+  store.releaseConnectionLookup.resolve();
+
+  await expect(creating).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "workspace_management_admission_conflict" },
+  });
+  expect(await store.listSources("workspace_1")).toEqual([]);
+});
+
+test("patchSource rejects a drain raced during async auth validation", async () => {
+  const store = new PausingConnectionLookupStore();
+  const { service } = makeService({ store });
+  const { source } = await service.createSource({
+    workspaceId: "workspace_1",
+    name: "raced-patch",
+    url: "https://github.com/acme/repo.git",
+  });
+  await seedConnection(store, "conn_git1", "workspace_1");
+  const before = await store.getSource(source.id);
+  store.pauseNextConnectionLookup();
+
+  const patching = service.patchSource(source.id, {
+    authConnectionId: "conn_git1",
+  });
+  await store.connectionLookupStarted.promise;
+  const management = await store.getWorkspaceManagement("workspace_1");
+  await store.beginWorkspaceDraining("workspace_1", {
+    workspaceId: "workspace_1",
+    managementState: "active",
+    managementEpoch: management!.managementEpoch,
+  });
+  store.releaseConnectionLookup.resolve();
+
+  await expect(patching).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "workspace_management_admission_conflict" },
+  });
+  expect(await store.getSource(source.id)).toEqual(before);
+});
+
 test("createSync persists a queued run, allocates the archive ref, and enqueues", async () => {
   const dispatched: unknown[] = [];
   const { store, service } = makeService({
@@ -210,6 +544,153 @@ test("createSync persists a queued run, allocates the archive ref, and enqueues"
   ]);
   const stored = await store.getSourceSyncRun(run.id);
   expect(stored?.id).toBe(run.id);
+});
+
+test("createSync rejects a valid noncurrent Workspace management authority", async () => {
+  const dispatched: unknown[] = [];
+  const { store, service } = makeService({
+    enqueueSourceSync: async (dispatch) => {
+      dispatched.push(dispatch);
+    },
+  });
+  const { source } = await service.createSource({
+    workspaceId: "workspace_1",
+    name: "noncurrent-sync-authority",
+    url: "https://github.com/acme/repo.git",
+  });
+  const expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority = {
+    workspaceId: "workspace_1",
+    managementState: "active",
+    managementEpoch: 2,
+  };
+
+  await expect(
+    service.createSync(
+      source.id,
+      {},
+      expectedWorkspaceManagementAuthority,
+    ),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "workspace_management_admission_conflict" },
+  });
+  expect(await store.listSourceSyncRuns(source.id)).toEqual([]);
+  expect(dispatched).toEqual([]);
+
+  for (const options of [
+    { dedupe: true },
+    {
+      intent: "manual_plan" as const,
+      coordinator: {
+        ref: "main", path: ".",
+        runId: "ssr_noncurrentreplay", snapshotId: "snap_noncurrentreplay",
+      },
+    },
+  ]) {
+    const created = await service.createSync(source.id, options);
+    const beforeReplay = [...dispatched];
+    const replay = await service.createSync(source.id, options, expectedWorkspaceManagementAuthority);
+    expect(replay.run).toEqual(created.run);
+    expect(dispatched).toEqual(beforeReplay);
+    expect(await store.getSourceSyncRun(created.run.id)).toEqual(created.run);
+  }
+});
+
+test("createSync loses a drain race during preparation without creating or enqueueing a run", async () => {
+  const allocator = new PausingArtifactReferenceAllocator();
+  const dispatched: unknown[] = [];
+  const { store, service } = makeService({
+    artifactReferenceAllocator: allocator,
+    enqueueSourceSync: async (dispatch) => {
+      dispatched.push(dispatch);
+    },
+  });
+  const { source } = await service.createSource({
+    workspaceId: "workspace_1",
+    name: "a",
+    url: "https://github.com/a/b",
+  });
+
+  const creating = service.createSync(source.id);
+  await allocator.started.promise;
+  const management = await store.getWorkspaceManagement("workspace_1");
+  expect(management).toMatchObject({
+    workspaceId: "workspace_1",
+    managementState: "active",
+    managementEpoch: 1,
+  });
+  await store.beginWorkspaceDraining("workspace_1", {
+    workspaceId: "workspace_1",
+    managementState: "active",
+    managementEpoch: management!.managementEpoch,
+  });
+  allocator.release.resolve();
+
+  await expect(creating).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "workspace_management_admission_conflict" },
+  });
+  expect(allocator.calls).toBe(1);
+  expect(dispatched).toEqual([]);
+  expect(await store.listSourceSyncRuns(source.id)).toEqual([]);
+});
+
+test("createSync adopts an exact queued retry during drain without enqueueing or overwriting it", async () => {
+  const allocator = new PausingArtifactReferenceAllocator();
+  const dispatched: unknown[] = [];
+  const { store, service } = makeService({
+    artifactReferenceAllocator: allocator,
+    enqueueSourceSync: async (dispatch) => {
+      dispatched.push(dispatch);
+    },
+  });
+  const { source } = await service.createSource({
+    workspaceId: "workspace_1",
+    name: "a",
+    url: "https://github.com/a/b",
+    defaultRef: "main",
+  });
+  const coordinator = {
+    ref: "main",
+    path: ".",
+    runId: "ssr_exactdrain",
+    snapshotId: "snap_exactdrain",
+  } as const;
+  const creating = service.createSync(source.id, {
+    dedupe: true,
+    intent: "manual_plan",
+    coordinator,
+  });
+  await allocator.started.promise;
+  const existing = {
+    id: coordinator.runId,
+    kind: "source_sync" as const,
+    workspaceId: source.workspaceId,
+    sourceId: source.id,
+    url: source.url,
+    ref: coordinator.ref,
+    path: coordinator.path,
+    archiveRef: `workspaces/${source.workspaceId}/sources/${source.id}/snapshots/${coordinator.snapshotId}/source.tar.zst`,
+    intent: "manual_plan" as const,
+    status: "queued" as const,
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+    snapshotId: coordinator.snapshotId,
+  };
+  await store.putSourceSyncRun(existing);
+  const management = await store.getWorkspaceManagement(source.workspaceId);
+  await store.beginWorkspaceDraining(source.workspaceId, {
+    workspaceId: source.workspaceId,
+    managementState: "active",
+    managementEpoch: management!.managementEpoch,
+  });
+  allocator.release.resolve();
+
+  const replay = await creating;
+
+  expect(replay.run).toEqual(existing);
+  expect(await store.getSourceSyncRun(existing.id)).toEqual(existing);
+  expect(dispatched).toEqual([]);
 });
 
 test("createSync dedupe returns and re-enqueues the existing queued run", async () => {
@@ -468,6 +949,472 @@ test("createSync dedupe replaces a stale running run with a fresh run", async ()
       sourceId: source.id,
     },
   ]);
+});
+
+test("createSync preserves a stale running run when drain wins the replacement race", async () => {
+  const dispatched: unknown[] = [];
+  const store = new DrainBeforeStaleReplacementStore();
+  const { service } = makeService({
+    store,
+    enqueueSourceSync: async (dispatch) => {
+      dispatched.push(dispatch);
+    },
+  });
+  const { source } = await service.createSource({
+    workspaceId: "workspace_1",
+    name: "a",
+    url: "https://github.com/a/b",
+  });
+  const first = await service.createSync(source.id, { dedupe: true });
+  const heartbeatAt = new Date("2026-06-05T23:48:00.000Z").getTime();
+  await store.transitionRun({
+    id: first.run.id,
+    kind: "source_sync",
+    expectFrom: ["queued"],
+    run: {
+      ...first.run,
+      status: "running",
+      startedAt: "2026-06-05T23:48:00.000Z",
+      updatedAt: "2026-06-05T23:48:00.000Z",
+      heartbeatAt,
+    },
+    setLeaseToken: "lease_stale",
+    heartbeatAt,
+  });
+  dispatched.length = 0;
+  store.beforeStaleReplacement = async () => {
+    const management = await store.getWorkspaceManagement(source.workspaceId);
+    await store.beginWorkspaceDraining(source.workspaceId, {
+      workspaceId: source.workspaceId,
+      managementState: "active",
+      managementEpoch: management!.managementEpoch,
+    });
+  };
+
+  const replay = await service.createSync(source.id, { dedupe: true });
+
+  expect(replay.run.id).toBe(first.run.id);
+  expect(replay.run.status).toBe("running");
+  expect(replay.run.error).toBeUndefined();
+  expect(await store.getSourceSyncRun(first.run.id)).toEqual(replay.run);
+  expect(dispatched).toEqual([]);
+});
+
+test("createSync does not replace an old-epoch running run after drain and resume", async () => {
+  const dispatched: unknown[] = [];
+  const store = new MutableWorkspaceManagementStore();
+  const { service } = makeService({
+    store,
+    enqueueSourceSync: async (dispatch) => {
+      dispatched.push(dispatch);
+    },
+  });
+  const { source } = await service.createSource({
+    workspaceId: "workspace_1",
+    name: "old-epoch-running",
+    url: "https://github.com/acme/repo.git",
+  });
+  const first = await service.createSync(source.id, { dedupe: true });
+  const heartbeatAt = new Date("2026-06-05T23:48:00.000Z").getTime();
+  const claimed = await store.transitionRun({
+    id: first.run.id,
+    kind: "source_sync",
+    expectFrom: ["queued"],
+    run: {
+      ...first.run,
+      status: "running",
+      startedAt: "2026-06-05T23:48:00.000Z",
+      updatedAt: "2026-06-05T23:48:00.000Z",
+      heartbeatAt,
+    },
+    setLeaseToken: "lease_old_epoch",
+    heartbeatAt,
+  });
+  expect(claimed.won).toBe(true);
+
+  // Model the internal drain/resume transition. The old Run retains N=1 while
+  // the current active Workspace is N+2=3.
+  store.setManagement({
+    workspaceId: source.workspaceId,
+    managementState: "draining",
+    managementEpoch: 2,
+  });
+  store.setManagement({
+    workspaceId: source.workspaceId,
+    managementState: "active",
+    managementEpoch: 3,
+  });
+  dispatched.length = 0;
+
+  const replay = await service.createSync(source.id, { dedupe: true });
+
+  expect(replay.run).toEqual(claimed.run);
+  expect(replay.run.status).toBe("running");
+  expect(await store.listSourceSyncRuns(source.id)).toHaveLength(1);
+  expect(await store.getSourceSyncRun(first.run.id)).toEqual(claimed.run);
+  expect(dispatched).toEqual([]);
+});
+
+test("createSync re-enqueues only a queued run with the exact original active authority", async () => {
+  const authority: WorkspaceManagementAuthority = {
+    workspaceId: "workspace_1",
+    managementState: "active",
+    managementEpoch: 1,
+  };
+
+  // Same-epoch replay remains the existing queue repair path.
+  {
+    const dispatched: unknown[] = [];
+    const store = new MutableWorkspaceManagementStore();
+    const { service } = makeService({
+      store,
+      enqueueSourceSync: async (dispatch) => {
+        dispatched.push(dispatch);
+      },
+    });
+    const { source } = await service.createSource({
+      workspaceId: "workspace_1",
+      name: "same-epoch-queue",
+      url: "https://github.com/acme/repo.git",
+    });
+    const first = await service.createSync(source.id, { dedupe: true });
+    dispatched.length = 0;
+    const replay = await service.createSync(source.id, { dedupe: true });
+    expect(replay.run).toEqual(first.run);
+    expect(dispatched).toHaveLength(1);
+  }
+
+  // An old row must not be re-enqueued after the Workspace resumes at N+2.
+  {
+    const dispatched: unknown[] = [];
+    const store = new MutableWorkspaceManagementStore();
+    const { service } = makeService({
+      store,
+      enqueueSourceSync: async (dispatch) => {
+        dispatched.push(dispatch);
+      },
+    });
+    const { source } = await service.createSource({
+      workspaceId: "workspace_1",
+      name: "old-epoch-queue",
+      url: "https://github.com/acme/repo.git",
+    });
+    const first = await service.createSync(source.id, { dedupe: true });
+    store.setManagement({
+      workspaceId: source.workspaceId,
+      managementState: "active",
+      managementEpoch: 3,
+    });
+    dispatched.length = 0;
+    const replay = await service.createSync(source.id, { dedupe: true });
+    expect(replay.run).toEqual(first.run);
+    expect(dispatched).toEqual([]);
+  }
+
+  // A pre-management legacy row remains observable but cannot gain authority.
+  {
+    const dispatched: unknown[] = [];
+    const store = new MutableWorkspaceManagementStore();
+    const { service } = makeService({
+      store,
+      enqueueSourceSync: async (dispatch) => {
+        dispatched.push(dispatch);
+      },
+    });
+    const { source } = await service.createSource({
+      workspaceId: "workspace_1",
+      name: "legacy-queue",
+      url: "https://github.com/acme/repo.git",
+    });
+    const legacy = {
+      id: "ssr_legacy_queue",
+      kind: "source_sync" as const,
+      workspaceId: source.workspaceId,
+      sourceId: source.id,
+      url: source.url,
+      ref: source.defaultRef,
+      path: source.defaultPath,
+      archiveRef: "workspaces/workspace_1/sources/legacy/source.tar.zst",
+      status: "queued" as const,
+      createdAt: "2026-06-06T00:00:00.000Z",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+    };
+    await store.putSourceSyncRun(legacy);
+    const replay = await service.createSync(source.id, { dedupe: true });
+    expect(replay.run).toEqual(legacy);
+    expect(dispatched).toEqual([]);
+  }
+
+  // Even an explicitly supplied stale tuple cannot authorize repair of a row
+  // whose persisted authority belongs to a different active epoch.
+  {
+    const dispatched: unknown[] = [];
+    const store = new MutableWorkspaceManagementStore();
+    const { service } = makeService({
+      store,
+      enqueueSourceSync: async (dispatch) => {
+        dispatched.push(dispatch);
+      },
+    });
+    const { source } = await service.createSource({
+      workspaceId: "workspace_1",
+      name: "explicit-stale-queue",
+      url: "https://github.com/acme/repo.git",
+    });
+    const first = await service.createSync(source.id, { dedupe: true });
+    store.storedAuthorityOverride = {
+      ...authority,
+      managementEpoch: 99,
+    };
+    dispatched.length = 0;
+    const replay = await service.createSync(
+      source.id,
+      { dedupe: true },
+      authority,
+    );
+    expect(replay.run).toEqual(first.run);
+    expect(dispatched).toEqual([]);
+  }
+});
+
+test("coordinator and begin-existing queue repairs require the original authority", async () => {
+  const dispatched: unknown[] = [];
+  const store = new BeginExistingSourceSyncStore();
+  const { service } = makeService({
+    store,
+    enqueueSourceSync: async (dispatch) => {
+      dispatched.push(dispatch);
+    },
+  });
+  const { source } = await service.createSource({
+    workspaceId: "workspace_1",
+    name: "coordinator-epoch",
+    url: "https://github.com/acme/repo.git",
+  });
+  const coordinator = {
+    ref: source.defaultRef,
+    path: source.defaultPath,
+    runId: "ssr_coordinatorEpoch",
+    snapshotId: "snap_coordinatorEpoch",
+  } as const;
+  const coordinated = await service.createSync(source.id, {
+    intent: "manual_plan",
+    dedupe: true,
+    coordinator,
+  });
+  store.setManagement({
+    workspaceId: source.workspaceId,
+    managementState: "active",
+    managementEpoch: 3,
+  });
+  dispatched.length = 0;
+  const coordinatorReplay = await service.createSync(source.id, {
+    intent: "manual_plan",
+    dedupe: true,
+    coordinator,
+  });
+  expect(coordinatorReplay.run).toEqual(coordinated.run);
+  expect(dispatched).toEqual([]);
+
+  const beginExisting = await service.createSync(source.id);
+  store.forcedExisting = beginExisting.run;
+  dispatched.length = 0;
+  const raced = await service.createSync(source.id);
+  expect(raced.run).toEqual(beginExisting.run);
+  expect(dispatched).toEqual([]);
+});
+
+test("createSync propagates unknown management reads instead of treating them as legacy", async () => {
+  const dispatched: unknown[] = [];
+
+  // The durable authority getter returns undefined for a missing/malformed
+  // legacy tuple. An unrelated adapter/SQL failure must still reach callers.
+  {
+    const store = new SentinelSourceManagementReadStore();
+    const { service } = makeService({
+      store,
+      enqueueSourceSync: async (dispatch) => {
+        dispatched.push(dispatch);
+      },
+    });
+    const { source } = await service.createSource({
+      workspaceId: "workspace_1",
+      name: "sentinel-run-authority",
+      url: "https://github.com/acme/repo.git",
+    });
+    await service.createSync(source.id, { dedupe: true });
+    dispatched.length = 0;
+    store.throwOnRunManagementAuthorityRead = true;
+
+    await expect(
+      service.createSync(source.id, { dedupe: true }),
+    ).rejects.toThrow("sentinel run-management-authority read failure");
+    expect(dispatched).toEqual([]);
+  }
+
+  // Supplying the already-captured tuple bypasses the initial capture read so
+  // this exercises the helper's current-management read specifically.
+  {
+    const store = new SentinelSourceManagementReadStore();
+    const { service } = makeService({
+      store,
+      enqueueSourceSync: async (dispatch) => {
+        dispatched.push(dispatch);
+      },
+    });
+    const { source } = await service.createSource({
+      workspaceId: "workspace_1",
+      name: "sentinel-workspace-management",
+      url: "https://github.com/acme/repo.git",
+    });
+    await service.createSync(source.id, { dedupe: true });
+    dispatched.length = 0;
+    store.throwOnWorkspaceManagementRead = true;
+
+    await expect(
+      service.createSync(
+        source.id,
+        { dedupe: true },
+        {
+          workspaceId: source.workspaceId,
+          managementState: "active",
+          managementEpoch: 1,
+        },
+      ),
+    ).rejects.toThrow("sentinel workspace-management read failure");
+    expect(dispatched).toEqual([]);
+  }
+});
+
+test("reconciliation keeps one captured authority across default and adopted lanes", async () => {
+  const dispatched: unknown[] = [];
+  const store = new ReconciliationBarrierStore();
+  const { service } = makeService({
+    store,
+    enqueueSourceSync: async (dispatch) => {
+      dispatched.push(dispatch);
+    },
+  });
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "workspace_1",
+    sourceId: "src_reconciliation",
+    capsuleId: "cap_reconciliation",
+    snapshotId: "snap_reconciliation_default",
+    ref: "main",
+  });
+  const adoptedSnapshot: SourceSnapshot = {
+    ...seeded.snapshot,
+    id: "snap_reconciliation_adopted",
+    ref: "release",
+    path: "infra",
+    resolvedCommit: "bcdef0123456789abcdef0123456789abcdef012",
+    archiveRef:
+      "workspaces/workspace_1/sources/src_reconciliation/snapshots/snap_reconciliation_adopted/source.tar.zst",
+    fetchedByRunId: "run_reconciliation_adopted",
+  };
+  await store.putSourceSnapshot(adoptedSnapshot);
+
+  const plan: PlanRun = {
+    id: "plan_reconciliation_adopted",
+    workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id,
+    capsuleCurrentStateVersionId: null,
+    source: {
+      kind: "git",
+      url: seeded.source.url,
+      commit: adoptedSnapshot.resolvedCommit,
+    },
+    sourceDigest: "sha256:reconciliation-source",
+    operation: "create",
+    runnerProfileId: "opentofu-default",
+    variablesDigest: "sha256:reconciliation-variables",
+    requiredProviders: [],
+    status: "succeeded",
+    policy: { status: "passed", reasons: [], checkedAt: 1 },
+    policyDecisionDigest: "sha256:reconciliation-policy",
+    planDigest: "sha256:reconciliation-plan",
+    sourceSnapshotId: adoptedSnapshot.id,
+    appliedApplyRunId: "apply_reconciliation_adopted",
+    auditEvents: [],
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const apply: ApplyRun = {
+    id: "apply_reconciliation_adopted",
+    planRunId: plan.id,
+    workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id,
+    stateVersionId: "state_reconciliation_adopted",
+    operation: "create",
+    runnerProfileId: plan.runnerProfileId,
+    status: "succeeded",
+    expected: {
+      planRunId: plan.id,
+      capsuleId: seeded.capsule.id,
+      currentStateVersionId: null,
+      runnerProfileId: plan.runnerProfileId,
+      sourceDigest: plan.sourceDigest,
+      variablesDigest: plan.variablesDigest,
+      policyDecisionDigest: plan.policyDecisionDigest,
+      planDigest: plan.planDigest!,
+      planArtifactDigest: "sha256:reconciliation-artifact",
+    },
+    stateBackend: { kind: "operator-managed", ref: "state://reconciliation" },
+    stateLock: {
+      status: "recorded",
+      backendRef: "state://reconciliation",
+    },
+    auditEvents: [],
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  await store.putPlanRun(plan);
+  await store.putApplyRun(apply);
+  await store.putStateVersion({
+    id: apply.stateVersionId!,
+    workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id,
+    environment: seeded.capsule.environment,
+    generation: 1,
+    stateRef: "state://reconciliation/1",
+    digest: "sha256:reconciliation-state",
+    createdByRunId: apply.id,
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putCapsule({
+    ...seeded.capsule,
+    currentStateVersionId: apply.stateVersionId,
+    currentStateGeneration: 1,
+    status: "active",
+  });
+
+  const reconciling = service.createReconciliationSyncs(seeded.source.id);
+  await store.enumerationStarted.promise;
+  expect(await store.getWorkspaceManagement(seeded.workspace.id)).toEqual({
+    workspaceId: seeded.workspace.id,
+    managementState: "active",
+    managementEpoch: 1,
+  });
+  // The asynchronous lane enumeration loses the original authority before any
+  // SourceSync row can be admitted.
+  store.setManagement({
+    workspaceId: seeded.workspace.id,
+    managementState: "draining",
+    managementEpoch: 2,
+  });
+  store.setManagement({
+    workspaceId: seeded.workspace.id,
+    managementState: "active",
+    managementEpoch: 3,
+  });
+  store.releaseEnumeration.resolve();
+
+  await expect(reconciling).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "workspace_management_admission_conflict" },
+  });
+  expect(await store.listSourceSyncRuns(seeded.source.id)).toEqual([]);
+  expect(dispatched).toEqual([]);
 });
 
 test("verifyHookSecret accepts the right bearer and rejects others", async () => {

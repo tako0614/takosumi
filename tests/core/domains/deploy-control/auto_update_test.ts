@@ -25,6 +25,7 @@ import {
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
   InMemoryOpenTofuControlStore,
+  type OpenTofuControlStore,
   type CapsulePatch,
   type CapsuleStateVersionGuard,
   type TransitionRunInput,
@@ -32,6 +33,8 @@ import {
   type UpdateCapsuleLifecycleCommand,
   type UpdateCapsuleLifecycleResult,
 } from "../../../../core/domains/deploy-control/store.ts";
+import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
+import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import { SourcesService } from "../../../../core/domains/sources/mod.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import type { PlanResourceChange } from "@takosumi/internal/deploy-control-api";
@@ -81,10 +84,12 @@ class FullStubRunner implements OpenTofuRunner {
   };
   planCalls = 0;
   applyCalls = 0;
+  beforePlanResult?: () => Promise<void>;
 
-  plan(_job: OpenTofuPlanJob): Promise<OpenTofuPlanResult> {
+  async plan(_job: OpenTofuPlanJob): Promise<OpenTofuPlanResult> {
     this.planCalls += 1;
-    return Promise.resolve({
+    await this.beforePlanResult?.();
+    return {
       planDigest: PLAN_DIGEST,
       planArtifact: {
         kind: "runner-local",
@@ -98,7 +103,7 @@ class FullStubRunner implements OpenTofuRunner {
       ...(this.planResourceChanges.length > 0
         ? { planResourceChanges: this.planResourceChanges }
         : {}),
-    });
+    };
   }
   apply(job: OpenTofuApplyJob) {
     this.applyCalls += 1;
@@ -145,6 +150,10 @@ class AutoUpdateClaimBarrierStore extends InMemoryOpenTofuControlStore {
 
   waitForFirstClaim(): Promise<void> {
     return this.#firstClaimReached;
+  }
+
+  releaseClaims(): void {
+    this.#resolveClaims();
   }
 
   override async patchCapsule(
@@ -202,7 +211,7 @@ class CorruptingAutoApplyInputsStore extends InMemoryOpenTofuControlStore {
 
 async function buildActiveCapsule(options: {
   readonly autoUpdate: boolean;
-  readonly store?: InMemoryOpenTofuControlStore;
+  readonly store?: OpenTofuControlStore;
 }) {
   const store = options.store ?? new InMemoryOpenTofuControlStore();
   const seeded = await seedCapsuleModel(store, {
@@ -287,7 +296,7 @@ async function syncNewCommit(controller: OpenTofuController): Promise<void> {
 /** Internal PlanRun records for the Workspace (via the public run projection ids). */
 async function planRunsOf(
   controller: OpenTofuController,
-  store: InMemoryOpenTofuControlStore,
+  store: OpenTofuControlStore,
 ) {
   const runs = await controller.listRuns("ws_test001", { limit: 50 });
   const planIds = runs
@@ -321,6 +330,38 @@ test("an opted-in stale capsule auto-updates: plan + clean auto-apply, no client
   const autoPlan = planRuns.find((run) => run.autoApplyRequested === true);
   expect(autoPlan?.status).toBe("succeeded");
   expect(autoPlan?.appliedApplyRunId).toBeTruthy();
+});
+
+test("a running Plan can finish after drain and resume without minting a new-epoch automatic Apply", async () => {
+  const database = new SqliteFakeD1();
+  const store = new CloudflareD1OpenTofuControlStore(database);
+  const { controller, runner, initialApplyCalls } = await buildActiveCapsule({
+    autoUpdate: true,
+    store,
+  });
+  const before = await store.getCapsule("cap_auto0001");
+  runner.beforePlanResult = async () => {
+    expect((await store.beginWorkspaceDraining("ws_test001", {
+      workspaceId: "ws_test001", managementState: "active", managementEpoch: 1,
+    })).status).toBe("started");
+    // Only the internal resume transition is emulated; the actual controller,
+    // saved Run, held lease, completion and automatic Apply path remain real.
+    await database.prepare("update workspaces set management_state = 'active', management_epoch = 3 where id = ?")
+      .bind("ws_test001").run();
+  };
+
+  const { planRun } = await controller.createCapsulePlan("cap_auto0001", {}, {
+    autoApplyRequested: true,
+  });
+
+  expect(planRun.status).toBe("succeeded");
+  expect(planRun.appliedApplyRunId).toBeUndefined();
+  expect((await store.getPlanRun(planRun.id))?.appliedApplyRunId).toBeUndefined();
+  expect((await store.getCapsule("cap_auto0001"))?.currentStateGeneration)
+    .toBe(before?.currentStateGeneration);
+  expect(runner.applyCalls).toBe(initialApplyCalls);
+  expect((await store.listRunsByWorkspace("ws_test001"))
+    .filter((run) => "planRunId" in run && run.planRunId === planRun.id)).toHaveLength(0);
 });
 
 test("a destructive update stops at waiting_approval and is never auto-applied", async () => {
@@ -428,4 +469,44 @@ test("two source sync completions create exactly one auto-update claim and Plan"
       ?.autoUpdateAttemptSourceSnapshotId,
   );
   expect(runner.planCalls).toBe(initialPlanCalls + 1);
+});
+
+test("draining during auto-update admission retains Source results without consuming the attempt", async () => {
+  const store = new AutoUpdateClaimBarrierStore();
+  const { controller } = await buildActiveCapsule({ autoUpdate: true, store });
+  const before = await store.getCapsule("cap_auto0001");
+  const { run } = await controller.createSourceSync("src_a");
+  const completion = controller.runQueuedSourceSync(run.id);
+  await store.waitForFirstClaim();
+  try {
+    const drain = await store.beginWorkspaceDraining("ws_test001", {
+      workspaceId: "ws_test001",
+      managementState: "active",
+      managementEpoch: 1,
+    });
+    expect(drain.status).toBe("started");
+  } finally {
+    store.releaseClaims();
+    await completion;
+  }
+
+  expect((await store.getSourceSyncRun(run.id))?.status).toBe("succeeded");
+  const snapshot = (await store.listSourceSnapshots("src_a")).find(
+    (candidate) => candidate.id === run.snapshotId,
+  );
+  expect(snapshot?.resolvedCommit).toBe("def456abc7890123def456abc7890123def456ab");
+  const capsule = await store.getCapsule("cap_auto0001");
+  expect(capsule?.status).toBe("stale");
+  expect(capsule?.currentStateGeneration).toBe(before?.currentStateGeneration);
+  expect(capsule?.autoUpdateAttemptSourceSnapshotId).toBe(
+    before?.autoUpdateAttemptSourceSnapshotId,
+  );
+  expect(
+    (await planRunsOf(controller, store)).filter((plan) => plan.autoApplyRequested === true),
+  ).toHaveLength(0);
+  expect(
+    (await store.listActivityEvents("ws_test001")).filter(
+      (event) => event.action === "capsule.auto_update_failed",
+    ),
+  ).toHaveLength(0);
 });

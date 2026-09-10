@@ -4,10 +4,29 @@ import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_open
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 import type {
+  OpenTofuControlStore,
+  WorkspaceManagementAuthority,
+} from "../../../../core/domains/deploy-control/store.ts";
+import type {
   D1Database,
   D1PreparedStatement,
   D1Result,
 } from "../../../../worker/src/bindings.ts";
+
+async function activeWorkspaceManagementAuthority(
+  store: OpenTofuControlStore,
+  workspaceId: string,
+): Promise<WorkspaceManagementAuthority> {
+  const management = await store.getWorkspaceManagement(workspaceId);
+  if (!management || management.managementState !== "active") {
+    throw new Error(`${workspaceId}: Workspace management is not active`);
+  }
+  return {
+    workspaceId: management.workspaceId,
+    managementState: "active",
+    managementEpoch: management.managementEpoch,
+  };
+}
 
 test("d1 store persists security findings and provider-neutral usage", async () => {
   const store = new CloudflareD1OpenTofuControlStore(new SqliteFakeD1());
@@ -250,7 +269,12 @@ test("d1 restore atomically commits the rebased Output with state, Capsule, and 
     createdBy: "operator",
     createdAt: TS,
   };
-  await store.putBackupRun(queued);
+  expect(
+    await store.beginRestoreRun(
+      queued,
+      await activeWorkspaceManagementAuthority(store, seeded.workspace.id),
+    ),
+  ).toMatchObject({ status: "created", run: queued });
   const running = {
     ...queued,
     status: "running" as const,
@@ -343,7 +367,12 @@ test("d1 restore rolls back state, Output, terminal Run, and lease clear when th
     createdBy: "operator",
     createdAt: TS,
   };
-  await store.putBackupRun(queued);
+  expect(
+    await store.beginRestoreRun(
+      queued,
+      await activeWorkspaceManagementAuthority(store, seeded.workspace.id),
+    ),
+  ).toMatchObject({ status: "created", run: queued });
   const running = {
     ...queued,
     status: "running" as const,
@@ -464,6 +493,7 @@ test("d1 atomic commits reject a batchless binding before database access", asyn
 
 test("d1 commitRunState rolls back when the apply lease changes after the pre-read", async () => {
   const backing = new SqliteFakeD1();
+  const admissionStore = new CloudflareD1OpenTofuControlStore(backing);
   const store = new CloudflareD1OpenTofuControlStore(
     new LeaseChangingD1(backing, "apply_interleave", "lease_taken"),
   );
@@ -514,7 +544,15 @@ test("d1 commitRunState rolls back when the apply lease changes after the pre-re
     updatedAt: 2_000,
   };
   await store.putPlanRun(planRun);
-  await store.putApplyRun(applyRun);
+  expect(
+    await admissionStore.beginApplyRun(
+      applyRun,
+      await activeWorkspaceManagementAuthority(
+        admissionStore,
+        seeded.workspace.id,
+      ),
+    ),
+  ).toMatchObject({ status: "created", run: applyRun });
   const claim = await store.transitionRun({
     id: "apply_interleave",
     kind: "apply",

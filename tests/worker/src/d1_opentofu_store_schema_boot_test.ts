@@ -785,7 +785,7 @@ test("predeployed verification is strictly read-only", async () => {
   );
 });
 
-test("predeployed verification accepts only the exact current v68 ledger", async () => {
+test("predeployed verification accepts only the exact current v69 ledger", async () => {
   const predecessor = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(predecessor, {
     throughMigrationVersion: 62,
@@ -826,7 +826,7 @@ test("predeployed verification accepts only the exact current v68 ledger", async
   await extra
     .prepare(
       `insert into schema_migrations (version, name, checksum, applied_at)
-       values (69, 'unexpected', ?, '2026-08-05T00:00:00.000Z')`,
+       values (70, 'unexpected', ?, '2026-08-05T00:00:00.000Z')`,
     )
     .bind(`sha256:${"f".repeat(64)}`)
     .run();

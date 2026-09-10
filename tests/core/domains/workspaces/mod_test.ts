@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
+import { ProjectsService } from "../../../../core/domains/projects/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { WORKSPACE_HANDLE_PATTERN } from "../../../../contract/workspaces.ts";
 
@@ -16,6 +17,40 @@ function build() {
   });
   return { store, service };
 }
+
+test("personal Workspace login repair stays available without creating a Project while stopped", async () => {
+  const { store, service } = build();
+  const workspace = await service.createWorkspace({
+    handle: "stopped-personal", displayName: "Stopped personal", type: "personal", ownerUserId: "user_stopped",
+  });
+  await store.beginWorkspaceDraining(workspace.id, {
+    workspaceId: workspace.id, managementState: "active", managementEpoch: 1,
+  });
+  const projects = new ProjectsService({ store });
+  const resumed = new WorkspacesService({
+    store, ensureDefaultProject: (workspaceId) => projects.ensureDefaultProject(workspaceId),
+  });
+  expect(await resumed.ensurePersonalWorkspace("user_stopped", "stopped-personal")).toEqual(workspace);
+  expect(await store.listProjectsByWorkspace(workspace.id)).toEqual([]);
+});
+
+test("stopped namespace owner can read its Workspace without repairing a missing membership", async () => {
+  const { store, service } = build();
+  const workspace = {
+    id: "ws_missing_owner", handle: "missing-owner", displayName: "Missing owner",
+    type: "personal" as const, ownerUserId: "user_owner",
+    createdAt: "2026-06-06T00:00:00.000Z", updatedAt: "2026-06-06T00:00:00.000Z",
+  };
+  await store.putWorkspace(workspace);
+  await store.beginWorkspaceDraining(workspace.id, {
+    workspaceId: workspace.id, managementState: "active", managementEpoch: 1,
+  });
+  expect(await service.ensurePersonalWorkspace(workspace.ownerUserId, workspace.handle)).toEqual(workspace);
+  expect(await service.getWorkspaceForAccount(workspace.ownerUserId, workspace.id)).toEqual(workspace);
+  expect(await service.getWorkspaceForAccount("unrelated-account", workspace.id)).toBeUndefined();
+  expect(await service.listWorkspaceMembers(workspace.id)).toEqual([]);
+  expect(await store.getWorkspaceMember(workspace.id, workspace.ownerUserId)).toBeUndefined();
+});
 
 test("createWorkspace persists a personal Workspace with derived id + timestamps", async () => {
   const { store, service } = build();
@@ -238,6 +273,155 @@ test("updateWorkspace persists displayName and Workspace policy", async () => {
     quota: { "resources.total": 10 },
   });
   expect(updated.updatedAt).toBe("2026-06-06T00:00:00.000Z");
+});
+
+test("draining Workspace rejects metadata mutations while retaining read access", async () => {
+  const { store, service } = build();
+  const workspace = await service.createWorkspace({
+    handle: "draining-metadata",
+    displayName: "Draining Metadata",
+    type: "personal",
+    ownerUserId: "user_owner",
+  });
+  await service.upsertWorkspaceMember({
+    workspaceId: workspace.id,
+    accountId: "user_member",
+    roles: ["member"],
+    status: "active",
+    actorAccountId: workspace.ownerUserId,
+  });
+  const before = await service.getWorkspace(workspace.id);
+  const management = await store.getWorkspaceManagement(workspace.id);
+  expect(management).toEqual({
+    workspaceId: workspace.id,
+    managementState: "active",
+    managementEpoch: 1,
+  });
+  expect(
+    await store.beginWorkspaceDraining(workspace.id, {
+      workspaceId: workspace.id,
+      managementState: "active",
+      managementEpoch: management!.managementEpoch,
+    }),
+  ).toMatchObject({
+    status: "started",
+    management: {
+      workspaceId: workspace.id,
+      managementState: "draining",
+      managementEpoch: 2,
+    },
+  });
+
+  const patches = [
+    { displayName: "Must Not Change" },
+    {
+      policy: {
+        allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+        quota: { "resources.total": 3 },
+      },
+    },
+    { archived: true },
+  ] as const;
+  for (const patch of patches) {
+    await expect(service.updateWorkspace(workspace.id, patch)).rejects.toMatchObject({
+      code: "failed_precondition",
+      details: { reason: "workspace_management_admission_conflict" },
+    });
+    expect(await service.getWorkspace(workspace.id)).toEqual(before);
+  }
+
+  expect(
+    await service.ensurePersonalWorkspace(
+      workspace.ownerUserId,
+      workspace.handle,
+    ),
+  ).toEqual(before);
+  expect(await service.listWorkspaceMembers(workspace.id)).toEqual([
+    expect.objectContaining({
+      workspaceId: workspace.id,
+      accountId: workspace.ownerUserId,
+      roles: ["owner"],
+      status: "active",
+    }),
+    expect.objectContaining({
+      workspaceId: workspace.id,
+      accountId: "user_member",
+      roles: ["member"],
+      status: "active",
+    }),
+  ]);
+});
+
+test("draining Workspace rejects member grant, change, and revoke while retaining the roster", async () => {
+  const { store, service } = build();
+  const workspace = await service.createWorkspace({
+    handle: "draining-members",
+    displayName: "Draining Members",
+    type: "personal",
+    ownerUserId: "user_owner",
+  });
+  await service.upsertWorkspaceMember({
+    workspaceId: workspace.id,
+    accountId: "user_member",
+    roles: ["member"],
+    status: "active",
+    actorAccountId: workspace.ownerUserId,
+  });
+  const before = await service.getWorkspace(workspace.id);
+  const beforeMembers = await service.listWorkspaceMembers(workspace.id);
+  const management = await store.getWorkspaceManagement(workspace.id);
+  expect(
+    await store.beginWorkspaceDraining(workspace.id, {
+      workspaceId: workspace.id,
+      managementState: "active",
+      managementEpoch: management!.managementEpoch,
+    }),
+  ).toMatchObject({ status: "started" });
+
+  const mutations = [
+    {
+      workspaceId: workspace.id,
+      accountId: "user_new",
+      roles: ["member"] as const,
+      status: "active" as const,
+      actorAccountId: workspace.ownerUserId,
+    },
+    {
+      workspaceId: workspace.id,
+      accountId: "user_member",
+      roles: ["admin"] as const,
+      status: "active" as const,
+      actorAccountId: workspace.ownerUserId,
+    },
+    {
+      workspaceId: workspace.id,
+      accountId: "user_member",
+      roles: ["member"] as const,
+      status: "suspended" as const,
+      actorAccountId: workspace.ownerUserId,
+    },
+  ];
+  for (const mutation of mutations) {
+    await expect(service.upsertWorkspaceMember(mutation)).rejects.toMatchObject({
+      code: "failed_precondition",
+      details: { reason: "workspace_management_admission_conflict" },
+    });
+    expect(await service.listWorkspaceMembers(workspace.id)).toEqual(
+      beforeMembers,
+    );
+  }
+
+  expect(await service.getWorkspace(workspace.id)).toEqual(before);
+  expect(
+    await service.ensurePersonalWorkspace(
+      workspace.ownerUserId,
+      workspace.handle,
+    ),
+  ).toEqual(before);
+  expect(await service.getWorkspaceMember(workspace.id, "user_member")).toEqual(
+    beforeMembers.find((member) => member.accountId === "user_member"),
+  );
+  expect(await service.listWorkspaceMembers(workspace.id)).toEqual(beforeMembers);
 });
 
 test("updateWorkspace archives and restores a Workspace without deleting it", async () => {

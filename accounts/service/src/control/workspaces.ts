@@ -62,6 +62,7 @@ import type {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type { ProviderConnection } from "takosumi-contract/connections";
+import type { WorkspaceManagementAuthority } from "../../../../core/domains/deploy-control/store.ts";
 import type {
   ProviderResolution,
   PublicProviderResolution,
@@ -188,6 +189,23 @@ export async function handleWorkspaces(
     ) {
       return errorJson("not_found", "not found", 404);
     }
+    const workspaceMutation = (segments.length === 2 && method === "PATCH") ||
+      (leaf === "members" && ((segments.length === 3 && method === "POST") ||
+        (segments.length === 4 && (method === "PATCH" || method === "DELETE"))));
+    // Capture once before asynchronous Workspace authorization/preparation.
+    // Keep refusal private until all relevant role checks have completed.
+    const captured = workspaceMutation ? await (async () => {
+      try {
+        return { ok: true as const, authority: await operations.workspaces.captureManagementAuthority(workspaceId) };
+      } catch (error) {
+        return { ok: false as const, error };
+      }
+    })() : undefined;
+    const managementAuthority = (): WorkspaceManagementAuthority => {
+      if (!captured) throw new Error("Workspace mutation authority was not captured");
+      if (!captured.ok) throw captured.error;
+      return captured.authority;
+    };
     const auth = await requireWorkspaceAccess({
       operations,
       store,
@@ -207,6 +225,7 @@ export async function handleWorkspaces(
           store,
           ctx.session.subject,
           workspaceId,
+          managementAuthority,
         );
       return methodNotAllowed("GET, PATCH");
     }
@@ -230,6 +249,7 @@ export async function handleWorkspaces(
             operations,
             workspaceId,
             ctx.session.subject,
+            managementAuthority,
           );
         }
         return methodNotAllowed("GET, POST");
@@ -243,6 +263,7 @@ export async function handleWorkspaces(
             workspaceId,
             ctx.session.subject,
             targetSubject,
+            managementAuthority,
           );
         }
         if (method === "DELETE") {
@@ -251,6 +272,7 @@ export async function handleWorkspaces(
             workspaceId,
             ctx.session.subject,
             targetSubject,
+            managementAuthority,
           );
         }
         return methodNotAllowed("PATCH, DELETE");
@@ -613,12 +635,13 @@ async function listWorkspacePage(
         workspace.type === "personal" &&
         workspace.ownerUserId === session.subject,
     );
+  let personalWorkspace: Workspace | undefined;
   if (subject !== undefined) {
     // The bounded membership page is the only route preflight. Always invoke
     // the canonical ensure so an already-visible personal Workspace still gets
     // its owner membership and default Project repaired. The helper keeps that
     // repair best-effort so other accessible Workspaces remain visible.
-    await maybeEnsurePersonalWorkspaceForSubject({
+    personalWorkspace = await maybeEnsurePersonalWorkspaceForSubject({
       subject,
       store,
       operations,
@@ -630,6 +653,7 @@ async function listWorkspacePage(
         // The initial bounded page is already usable. A best-effort bootstrap
         // refresh must not discard it when control storage becomes unavailable.
         page = initialPage;
+        personalWorkspace = undefined;
       }
     }
   }
@@ -637,10 +661,18 @@ async function listWorkspacePage(
     selected !== undefined &&
     (includeArchived || !isArchivedWorkspace(selected)) &&
     !page.items.some((workspace) => workspace.id === selected.id);
-  const workspaces =
+  const selectedItems =
     pinSelected && selected !== undefined
       ? [selected, ...page.items]
       : page.items;
+  // A stopped bootstrap may observe its namespace without repairing a
+  // missing member row. Keep that first-page observation visible, without
+  // inventing membership or changing the membership-page total/cursor.
+  const workspaces = personalWorkspace &&
+    (includeArchived || !isArchivedWorkspace(personalWorkspace)) &&
+    !selectedItems.some((workspace) => workspace.id === personalWorkspace.id)
+    ? [personalWorkspace, ...selectedItems]
+    : selectedItems;
   return json({
     workspaces,
     ...(page.total === undefined ? {} : { total: page.total }),
@@ -707,6 +739,7 @@ async function updateWorkspace(
   store: AccountsStore,
   sessionSubject: string,
   workspaceId: string,
+  managementAuthority: () => WorkspaceManagementAuthority,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
@@ -774,9 +807,11 @@ async function updateWorkspace(
       );
     }
   }
-  const workspace = await operations.workspaces.updateWorkspace(
+  const workspace = await operations.workspaces.updateWorkspaceForAccount(
     workspaceId,
     patch,
+    sessionSubject,
+    managementAuthority(),
   );
   await operations.activity.record?.({
     workspaceId,
@@ -810,13 +845,11 @@ async function updateWorkspace(
 //                  or demoted (last-owner guard) so a Workspace is never left
 //                  unmanaged.
 //
-// The Workspaces domain seeds no membership row when a Workspace is created, so the
-// roster starts empty. To keep the mutation gate aligned with the namespace
-// gate (which already trusts `Workspace.ownerUserId`) and to let the namespace owner
-// bootstrap the first membership, every handler reads the roster via
-// `effectiveMembers`, which adds an IMPLICIT active owner row for the namespace
-// owner whenever the ledger has no active row for them. The first real
-// `upsertMember` the owner performs persists a concrete row.
+// A creation/repair race can leave the namespace owner's durable row missing.
+// Mutation gates use a private role view aligned with Workspace.ownerUserId;
+// it is not a public membership row or a new identity. Core alone repairs the
+// real owner row under the captured management authority before a mutation.
+// Reads return the durable roster without repairing or inventing rows.
 //
 // `targetSubject` / the session subject are matched against the membership
 // ledger's `accountId`; the workspaceId is never taken from the client body.
@@ -839,25 +872,34 @@ function memberForbidden(description: string): Response {
   return errorJson("forbidden", description, 403);
 }
 
+type MemberAuthorization = Pick<PublicWorkspaceMember, "accountId" | "roles" | "status">;
+
 /** True when the membership has an active owner role. */
-function isActiveOwner(member: PublicWorkspaceMember): boolean {
+function isActiveOwner(member: MemberAuthorization): boolean {
   return member.status === "active" && member.roles.includes("owner");
 }
 
 /** The caller's membership in the Workspace, matched by session subject. */
 function findCaller(
-  members: readonly PublicWorkspaceMember[],
+  members: readonly MemberAuthorization[],
   subject: string,
-): PublicWorkspaceMember | undefined {
+): MemberAuthorization | undefined {
   return members.find((member) => member.accountId === subject);
 }
 
-/** Returns the canonical membership roster for this Workspace. */
+/** Private mutation policy view; never returned as a membership roster. */
 async function effectiveMembers(
   operations: ControlPlaneOperations,
   workspaceId: string,
-): Promise<readonly PublicWorkspaceMember[]> {
-  return await operations.members.listMembers(workspaceId);
+): Promise<readonly MemberAuthorization[]> {
+  const [workspace, members] = await Promise.all([
+    operations.workspaces.getWorkspace(workspaceId),
+    operations.members.listMembers(workspaceId),
+  ]);
+  return [
+    ...members.filter((member) => member.accountId !== workspace.ownerUserId),
+    { accountId: workspace.ownerUserId, roles: ["owner"], status: "active" },
+  ];
 }
 
 async function listWorkspaceMembers(
@@ -865,14 +907,14 @@ async function listWorkspaceMembers(
   workspaceId: string,
   subject: string,
 ): Promise<Response> {
-  const members = await effectiveMembers(operations, workspaceId);
-  // List is member-visible: the caller must be an active member of THIS Workspace.
-  // The namespace gate (requireWorkspaceAccess) already passed, but membership is a
-  // separate ledger — a namespace owner who is not a recorded member still sees
-  // the roster (they own the Workspace via the implicit owner row), otherwise an
-  // active member must be present.
+  const [workspace, members] = await Promise.all([
+    operations.workspaces.getWorkspace(workspaceId),
+    operations.members.listMembers(workspaceId),
+  ]);
+  // The namespace gate already passed. The actual namespace owner can observe
+  // the roster even if their durable member row still needs guarded repair.
   const caller = findCaller(members, subject);
-  if (caller && caller.status !== "active") {
+  if (subject !== workspace.ownerUserId && caller && caller.status !== "active") {
     return memberForbidden("Your membership in this Workspace is not active.");
   }
   return json({ members });
@@ -884,6 +926,7 @@ async function addWorkspaceMember(
   operations: ControlPlaneOperations,
   workspaceId: string,
   subject: string,
+  managementAuthority: () => WorkspaceManagementAuthority,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
@@ -909,9 +952,8 @@ async function addWorkspaceMember(
       400,
     );
   }
-  // Mutation gate: only an active owner/admin of this Workspace may add members. The
-  // roster includes the implicit namespace-owner row so the Workspace owner can
-  // always bootstrap the first membership.
+  // Mutation gate: only an active owner/admin may add members. The private
+  // role view includes namespace ownership even if its member row needs repair.
   const members = await effectiveMembers(operations, workspaceId);
   const caller = findCaller(members, subject);
   if (!caller || caller.status !== "active") {
@@ -930,7 +972,7 @@ async function addWorkspaceMember(
   // dedicated PATCH path (`changeWorkspaceMemberRole`) enforces, otherwise an admin
   // could demote a sitting owner and either role could strip the last owner —
   // privilege escalation / Workspace orphaning straight through POST. This also
-  // covers the implicit namespace-owner row (active owner), so a POST can never
+  // covers namespace ownership (active owner), so a POST can never
   // silently strip the namespace owner who has no ledger row yet.
   const target = findCaller(members, accountId);
   if (target && isActiveOwner(target)) {
@@ -949,6 +991,10 @@ async function addWorkspaceMember(
     }
   }
   const member = await operations.members.upsertMember({
+    expectedWorkspaceManagementAuthority: managementAuthority(),
+    ...(role === "owner" || (target && isActiveOwner(target))
+      ? { requiredActorRole: "owner" as const }
+      : {}),
     workspaceId,
     accountId,
     roles: [role],
@@ -971,6 +1017,7 @@ async function changeWorkspaceMemberRole(
   workspaceId: string,
   subject: string,
   targetSubject: string,
+  managementAuthority: () => WorkspaceManagementAuthority,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
@@ -1005,6 +1052,8 @@ async function changeWorkspaceMemberRole(
     );
   }
   const member = await operations.members.upsertMember({
+    expectedWorkspaceManagementAuthority: managementAuthority(),
+    requiredActorRole: "owner",
     workspaceId,
     accountId: targetSubject,
     roles,
@@ -1019,6 +1068,7 @@ async function removeWorkspaceMember(
   workspaceId: string,
   subject: string,
   targetSubject: string,
+  managementAuthority: () => WorkspaceManagementAuthority,
 ): Promise<Response> {
   const members = await effectiveMembers(operations, workspaceId);
   const caller = findCaller(members, subject);
@@ -1040,6 +1090,8 @@ async function removeWorkspaceMember(
   // membership is suspended (its roles are preserved for audit but it no longer
   // grants access).
   const member = await operations.members.upsertMember({
+    expectedWorkspaceManagementAuthority: managementAuthority(),
+    requiredActorRole: "owner",
     workspaceId,
     accountId: targetSubject,
     roles: target.roles,
@@ -1050,7 +1102,7 @@ async function removeWorkspaceMember(
 }
 
 /** Active owners in the Workspace (used by the last-owner guard). */
-function activeOwnerCount(members: readonly PublicWorkspaceMember[]): number {
+function activeOwnerCount(members: readonly MemberAuthorization[]): number {
   return members.filter(isActiveOwner).length;
 }
 
@@ -1074,7 +1126,7 @@ function parseRolesField(
 }
 
 /** Builds the membership-service actor from the caller's membership. */
-function actorFor(caller: PublicWorkspaceMember): MembershipActor {
+function actorFor(caller: MemberAuthorization): MembershipActor {
   return {
     actorAccountId: caller.accountId,
     roles: [...caller.roles],

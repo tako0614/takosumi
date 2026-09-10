@@ -20,6 +20,7 @@ import {
   parseStoredCapsuleCompatibilityProviderGraph,
   type OpenTofuControlStore,
   type StoredSecretBlob,
+  type WorkspaceManagementAuthority,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
@@ -102,6 +103,21 @@ function workspace(overrides: Partial<Workspace> = {}): Workspace {
     createdAt: TS,
     updatedAt: TS,
     ...overrides,
+  };
+}
+
+async function activeWorkspaceManagementAuthority(
+  store: OpenTofuControlStore,
+  workspaceId: string,
+): Promise<WorkspaceManagementAuthority> {
+  const management = await store.getWorkspaceManagement(workspaceId);
+  if (!management || management.managementState !== "active") {
+    throw new Error(`fixture Workspace ${workspaceId} is not active`);
+  }
+  return {
+    workspaceId: management.workspaceId,
+    managementState: "active",
+    managementEpoch: management.managementEpoch,
   };
 }
 
@@ -1462,7 +1478,14 @@ test("commitRestoredState persists the rebased Output with terminal restore stat
       createdBy: "operator",
       createdAt: TS,
     };
-    await store.putBackupRun(queued);
+    const authority = await activeWorkspaceManagementAuthority(
+      store,
+      seeded.workspace.id,
+    );
+    expect(await store.beginRestoreRun(queued, authority), label).toEqual({
+      status: "created",
+      run: queued,
+    });
     const running = {
       ...queued,
       status: "running" as const,
@@ -1548,7 +1571,14 @@ test("commitRestoredState fences a same-generation current-pointer change across
       createdBy: "operator",
       createdAt: TS,
     };
-    await store.putBackupRun(queued);
+    const authority = await activeWorkspaceManagementAuthority(
+      store,
+      seeded.workspace.id,
+    );
+    expect(await store.beginRestoreRun(queued, authority), label).toEqual({
+      status: "created",
+      run: queued,
+    });
     const running = {
       ...queued,
       status: "running" as const,
@@ -1764,6 +1794,16 @@ test("runtime safety ignores a later structured pre-provider runner failure acro
 
 test("ApplyRun begin is insert-or-adopt and never resets an existing running or terminal row", async () => {
   for (const [label, store] of await stores()) {
+    await store.putWorkspace(
+      workspace({
+        id: "workspace_runtime_safety",
+        handle: "workspace-runtime-safety",
+      }),
+    );
+    const authority = await activeWorkspaceManagementAuthority(
+      store,
+      "workspace_runtime_safety",
+    );
     for (const status of ["running", "succeeded"] as const) {
       const id = `apply_begin_${status}_${label}`;
       const candidate = applyRunForSafety({
@@ -1774,7 +1814,7 @@ test("ApplyRun begin is insert-or-adopt and never resets an existing running or 
         effectAt: 100,
       });
       expect(
-        await store.beginApplyRun(candidate),
+        await store.beginApplyRun(candidate, authority),
         `${label}:${status}`,
       ).toEqual({ status: "created", run: candidate });
       const advanced: ApplyRun = {
@@ -1786,7 +1826,7 @@ test("ApplyRun begin is insert-or-adopt and never resets an existing running or 
       };
       await store.putApplyRun(advanced);
 
-      const adopted = await store.beginApplyRun(candidate);
+      const adopted = await store.beginApplyRun(candidate, authority);
       expect(adopted.status, `${label}:${status}`).toBe("existing");
       expect(adopted.run, `${label}:${status}`).toEqual(advanced);
       expect(await store.getApplyRun(id), `${label}:${status}`).toEqual(
@@ -1798,6 +1838,16 @@ test("ApplyRun begin is insert-or-adopt and never resets an existing running or 
 
 test("ApplyRun begin adopts an existing queued row unchanged on every store backend", async () => {
   for (const [label, store] of await stores()) {
+    await store.putWorkspace(
+      workspace({
+        id: "workspace_runtime_safety",
+        handle: "workspace-runtime-safety",
+      }),
+    );
+    const authority = await activeWorkspaceManagementAuthority(
+      store,
+      "workspace_runtime_safety",
+    );
     const id = `apply_begin_queued_${label}`;
     const queued = applyRunForSafety({
       id,
@@ -1813,13 +1863,13 @@ test("ApplyRun begin adopts an existing queued row unchanged on every store back
         },
       ],
     });
-    expect(await store.beginApplyRun(queued), label).toEqual({
+    expect(await store.beginApplyRun(queued, authority), label).toEqual({
       status: "created",
       run: queued,
     });
 
     const candidate = { ...queued, updatedAt: 200, auditEvents: [] };
-    expect(await store.beginApplyRun(candidate), label).toEqual({
+    expect(await store.beginApplyRun(candidate, authority), label).toEqual({
       status: "existing",
       run: queued,
     });

@@ -4,6 +4,7 @@ import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { ProjectsService } from "../../../../core/domains/projects/mod.ts";
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
+import { InMemoryOpenTofuControlStore, WorkspaceManagementAdmissionConflictError } from "../../../../core/domains/deploy-control/store.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 
@@ -38,6 +39,41 @@ async function expectCompleteWorkspacePages(
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((client) => client.close()));
 });
+
+test("Project creation atomically checks Workspace authority and slug uniqueness on every store", async () => {
+  const client = await PGliteSqlClient.create();
+  clients.push(client);
+  for (const [label, store] of [
+    ["memory", new InMemoryOpenTofuControlStore()],
+    ["postgres", new SqlOpenTofuControlStore({ client })],
+    ["d1", new CloudflareD1OpenTofuControlStore(new SqliteFakeD1())],
+  ] as const) {
+    const now = "2026-09-08T00:00:00.000Z";
+    const project = { id: "project_admission", workspaceId: "workspace_admission", name: "Application", slug: "application", projectJson: { label: "retained" }, createdAt: now, updatedAt: now };
+    const authority = { workspaceId: project.workspaceId, managementState: "active" as const, managementEpoch: 1 };
+    await store.putWorkspace({ id: project.workspaceId, handle: "project-admission", displayName: "Project admission", type: "personal", ownerUserId: "owner_admission", createdAt: now, updatedAt: now });
+    await expect(store.createProjectRecord({ project, expectedWorkspaceManagementAuthority: { ...authority, managementEpoch: 2 } }), label)
+      .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    const outcomes = await Promise.all([
+      store.createProjectRecord({ project, expectedWorkspaceManagementAuthority: authority }),
+      store.createProjectRecord({ project: { ...project, id: "project_competing" }, expectedWorkspaceManagementAuthority: authority }),
+    ]);
+    expect(outcomes.map((result) => result.status).sort(), label).toEqual(["conflict", "created"]);
+    const created = outcomes.find((result) => result.status === "created");
+    if (!created || created.status !== "created") throw new Error("one Project must win creation");
+    expect(await store.listProjectsByWorkspace(project.workspaceId), label).toEqual([created.project]);
+    await store.beginWorkspaceDraining(project.workspaceId, authority);
+    expect(await store.createProjectRecord({ project: created.project, expectedWorkspaceManagementAuthority: authority }), label)
+      .toEqual({ status: "replayed", project: created.project });
+    expect(await store.createProjectRecord({ project: { ...created.project, projectJson: { label: "overwrite" } } }), label)
+      .toEqual({ status: "conflict" });
+    await expect(store.createProjectRecord({ project: { ...project, id: "project_after_drain", slug: "after-drain" } }), label)
+      .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    await expect(store.createProjectRecord({ project: { ...project, id: "project_missing_workspace", workspaceId: "missing" } }), label)
+      .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    expect(await store.listProjectsByWorkspace(project.workspaceId), label).toEqual([created.project]);
+  }
+}, 30_000);
 
 test("Postgres persists Project and WorkspaceMember in the canonical control ledger", async () => {
   const client = await PGliteSqlClient.create();

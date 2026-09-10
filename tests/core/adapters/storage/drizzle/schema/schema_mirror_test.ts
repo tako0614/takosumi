@@ -234,6 +234,8 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nullable("owner_user_id"),
     nullable("workspace_type"),
     nullable("personal_bootstrap_owner_id"),
+    defaulted("management_state"),
+    defaulted("management_epoch"),
   ]);
   expect(sqliteUniqueIndexesOf(d1Schema.workspaces)).toEqual([
     {
@@ -579,7 +581,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24,
     25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43,
     44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
-    61, 62, 63, 64, 65, 66, 67, 68,
+    61, 62, 63, 64, 65, 66, 67, 68, 69,
   ]);
   expect(rows.map((row) => row.name)).toEqual([
     "d1_opentofu_connections_and_secret_blobs_shape",
@@ -647,6 +649,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_retired_host_schema_drop_empty",
     "d1_capsule_interface_materialization_intents",
     "d1_capsule_compatibility_variable_declarations",
+    "d1_workspace_management_quiescence",
   ]);
   for (const row of rows) {
     expect(row.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -1360,6 +1363,8 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nullable("owner_user_id"),
     nullable("workspace_type"),
     nullable("personal_bootstrap_owner_id"),
+    defaulted("management_state"),
+    defaulted("management_epoch"),
   ]);
   expect(pgUniqueIndexesOf(postgresSchema.workspaces)).toEqual([
     {
@@ -1723,8 +1728,7 @@ test("Postgres v112 adds nullable compatibility declarations without upgrading l
     expect(result.rows).toEqual([
       { root_module_variable_declarations_json: null },
     ]);
-    expect(postgresStorageMigrationStatements.at(-2)?.version).toBe(111);
-    expect(postgresStorageMigrationStatements.at(-1)?.version).toBe(112);
+    expect(postgresStorageMigrationStatements.slice(-3).map((entry) => entry.version)).toEqual([112, 113, 114]);
   } finally {
     await client.close();
   }

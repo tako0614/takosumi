@@ -35,6 +35,7 @@ import {
   isNull,
   lt,
   ne,
+  not,
   notExists,
   or,
   type SQL,
@@ -97,6 +98,17 @@ import type {
   CommitRestoredStateInput,
   CommitRestoredStateResult,
   BeginApplyRunResult,
+  BeginRestoreRunResult,
+  BeginSourceSyncRunResult,
+  BeginWorkspaceDrainingResult,
+  CreateConnectionRegistrationInput,
+  MarkConnectionExpiredIfUnchangedInput,
+  RevokeConnectionIfUnchangedInput,
+  CommitConnectionTestResultInput,
+  ProjectCreationInput,
+  ProjectCreationResult,
+  SourceConfigurationWriteInput,
+  SourceConfigurationWriteResult,
   CapsuleExecutionAuthority,
   CapsuleExecutionAuthorityInput,
   CapsuleInitialAuthorityInput,
@@ -118,6 +130,7 @@ import type {
   PlanRunInputs,
   PublicHostReservation,
   RecoverableOpenTofuRunListOptions,
+  RunManagementAuthorityInput,
   RenewCapsuleInterfaceMaterializationIntentLeaseInput,
   RenewCapsuleInterfaceMaterializationIntentLeaseResult,
   RetryCapsuleInterfaceMaterializationIntentInput,
@@ -128,12 +141,21 @@ import type {
   StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
+  StoredSourceSyncRun,
   CapsuleListPageParams,
   TransitionRunInput,
   TransitionRunResult,
+  WorkspaceManagement,
+  WorkspaceManagementAuthority,
+  ConnectionActorAuthority,
 } from "../../core/domains/deploy-control/store.ts";
 import {
   assertSourceSyncSuccessCommit,
+  assertSourceConfigurationWriteInput,
+  prepareConnectionExpiration,
+  prepareConnectionRegistration,
+  prepareConnectionRevocation,
+  prepareConnectionTestResult,
   CapsulePlanCreationFenceConflictError,
   assertPlanRunPreparation,
   assertCapsuleInterfaceMaterializationIntentClaimInput,
@@ -152,7 +174,13 @@ import {
   CapsuleStateGenerationGuardConflict,
   isApplyRunRecord,
   isPlanRunRecord,
+  isRestoreRunRecord,
+  isSourceSyncRunRecord,
   isRecoverableOpenTofuRunRecord,
+  runManagementAuthority,
+  runManagementAuthorityForIdentity,
+  runRequiresStoredManagementAuthority,
+  runStoredIdentityMatches,
   normalizeStoredCapsuleCompatibilityLevel,
   normalizeStoredCapsuleCompatibilityReport,
   parseStoredCapsuleRootModuleVariableDeclarations,
@@ -165,8 +193,35 @@ import {
   providerBindingSetTargetsCapsule,
   runtimeSecretRetirementDispatchAttempt,
   sourceSnapshotsExactlyMatch,
+  installConfigManagementAuthority,
+  installConfigRequiresManagementAuthority,
+  publicStoredInstallConfig,
+  preserveStoredInstallConfigManagementAuthority,
+  storeInstallConfig,
+  sourceSyncRunImmutableIdentityMatches,
+  sourceSyncRunStoredIdentityMatches,
+  publicStoredRun,
+  preserveStoredRunManagementAuthority,
+  restoreRunCreationIdentityMatches,
+  storeRunManagementAuthority,
+  storeSourceSyncRun,
+  assertWorkspaceManagementAdmission,
+  validateWorkspaceReplacement,
+  type WorkspaceReplacementInput,
+  type WorkspaceAccountReplacementInput,
+  workspaceAccountReplacementAllowed,
+  type WorkspaceMemberMutationInput,
+  type WorkspaceOwnerMemberRepairInput,
+  validateWorkspaceMemberReplacement,
+  validateWorkspaceOwnerMemberRepair,
+  workspaceMemberMutationAllowed,
+  workspaceMemberMutationDropsOwner,
+  workspaceAccountAuthorityAllowed,
   storedCapsuleCompatibilityProviderGraph,
   SourceSnapshotConflictError,
+  assertWorkspaceManagementAuthorityInput,
+  normalizeWorkspaceManagement,
+  WorkspaceManagementAdmissionConflictError,
   validateCommitRestoredStateInterfaceMaterialization,
   validateCommitRunStateInterfaceMaterializationIntent,
 } from "../../core/domains/deploy-control/store.ts";
@@ -185,7 +240,10 @@ import {
   usageEventFromRow,
   workspaceMemberFromRow,
 } from "../../core/domains/deploy-control/store_row_mappers.ts";
-import { stableJsonDigest } from "../../core/adapters/source/digest.ts";
+import {
+  stableJsonDigest,
+  stableStringify,
+} from "../../core/adapters/source/digest.ts";
 import {
   committedPostApplyRecoveryProofMatches,
   exactRecoveryProofsEqual,
@@ -411,7 +469,13 @@ async function d1CommittedPostApplyRecoveryRows(
   db: DrizzleD1Database<typeof schema>,
   failedApplyRun: ApplyRun,
   proof: InstallConfigCommittedPostApplyRecoveryProof,
-): Promise<CommittedPostApplyRecoveryRows | undefined> {
+): Promise<D1CommittedPostApplyRecoveryRows | undefined> {
+  // The runtime-safety query reads the complete stored Run JSON. Keep that
+  // private snapshot for the same-statement Capsule fence, while exposing only
+  // the public projection to the recovery-proof digest/validator.
+  const failedApplyRunStored = structuredClone(
+    failedApplyRun as StoredRunRecord,
+  );
   const [stateVersionRow, outputRow] = await Promise.all([
     db
       .select()
@@ -433,9 +497,19 @@ async function d1CommittedPostApplyRecoveryRows(
     ? (jsonRecordFromD1Value(outputRow.json) as unknown as Output)
     : undefined;
   return stateVersion && output
-    ? { failedApplyRun, stateVersion, output }
+    ? {
+        failedApplyRun: publicStoredRun(failedApplyRunStored) as ApplyRun,
+        failedApplyRunStored,
+        stateVersion,
+        output,
+      }
     : undefined;
 }
+
+/** Raw D1 Run JSON retained only for the same-statement recovery fence. */
+type D1CommittedPostApplyRecoveryRows = CommittedPostApplyRecoveryRows & {
+  readonly failedApplyRunStored: StoredRunRecord;
+};
 
 /**
  * Same-statement D1 recovery fence. StateVersion has no JSON mirror, so every
@@ -444,7 +518,7 @@ async function d1CommittedPostApplyRecoveryRows(
 function d1CapsuleCommittedPostApplyRecoveryFence(
   db: DrizzleD1Database<typeof schema>,
   capsuleId: string,
-  rows: CommittedPostApplyRecoveryRows,
+  rows: D1CommittedPostApplyRecoveryRows,
 ): SQL {
   const failedRunFence = db
     .select({ id: schema.runs.id })
@@ -452,7 +526,9 @@ function d1CapsuleCommittedPostApplyRecoveryFence(
     .where(
       and(
         eq(schema.runs.id, rows.failedApplyRun.id),
-        eq(schema.runs.runJson, rows.failedApplyRun),
+        // Compare the complete raw stored JSON, including private authority
+        // metadata. Recovery proof derivation uses only failedApplyRun above.
+        eq(schema.runs.runJson, rows.failedApplyRunStored),
       ),
     );
   const stateVersionFence = db
@@ -1079,27 +1155,73 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   // -- Runs (PlanRun / ApplyRun / SourceSyncRun share the §27 `runs` table) ----
 
   async putPlanRun(run: PlanRun): Promise<PlanRun> {
+    const publicRun = publicStoredRun(run);
     await this.#putRun({
-      id: run.id,
+      id: publicRun.id,
       runGroupId: null,
-      workspaceId: run.workspaceId,
-      capsuleId: run.capsuleId ?? null,
-      environment: run.capsuleContext?.environment ?? null,
-      type: planRunType(run),
-      status: run.status,
-      runJson: JSON.stringify(run),
+      workspaceId: publicRun.workspaceId,
+      capsuleId: publicRun.capsuleId ?? null,
+      environment: publicRun.capsuleContext?.environment ?? null,
+      type: planRunType(publicRun),
+      status: publicRun.status,
+      runJson: JSON.stringify(publicRun),
     });
-    return run;
+    return publicRun;
   }
 
   async preparePlanRun(
     input: PreparePlanRunInput,
   ): Promise<PreparePlanRunResult> {
+    input = structuredClone(input);
     assertD1AtomicCommitBatch(this.db, "preparePlanRun");
     assertPlanRunPreparation(input);
+    if (input.expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        input.expectedWorkspaceManagementAuthority,
+        input.run.workspaceId,
+      );
+    }
     await this.#ensureSchema();
     const run = input.run;
+    // Probe the complete immutable preparation before admission. An exact
+    // replay is observation-only and remains idempotent while a Workspace is
+    // draining; only a genuinely new row must pass the active-epoch guard.
+    const rawExistingRun = await this.#getRawRun<StoredRunRecord>(run.id);
+    if (rawExistingRun !== undefined) {
+      const existingRun = coerceRunRowStatus(
+        isPlanRunRecord(rawExistingRun) ? rawExistingRun : undefined,
+      );
+      const existingInputs = await this.getPlanRunInputs(run.id);
+      const existingSnapshot = existingRun?.dependencySnapshotId
+        ? await this.getDependencySnapshot(existingRun.dependencySnapshotId)
+        : undefined;
+      if (
+        planRunPreparationExactlyMatches(
+          existingRun,
+          existingInputs,
+          existingSnapshot,
+          input,
+        )
+      ) {
+        return { status: "existing", run: publicStoredRun(existingRun) };
+      }
+      throw new PlanRunPreparationConflictError(run.id);
+    }
+    if (input.expectedWorkspaceManagementAuthority === undefined) {
+      throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
+    }
+    const persistedRun = storeRunManagementAuthority(
+      run,
+      input.expectedWorkspaceManagementAuthority,
+    );
     const statements = [
+      d1WorkspaceManagementAdmissionGuardStmt(
+        this.#orm,
+        run.workspaceId,
+        run.id,
+        input.expectedWorkspaceManagementAuthority,
+        true,
+      ),
       ...(input.expectedCapsulePlanAuthority !== undefined && run.capsuleId
         ? [
             d1CapsulePlanCreationFenceGuardStmt(
@@ -1121,7 +1243,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         status: run.status,
         leaseToken: null,
         heartbeatAt: run.heartbeatAt ?? null,
-        runJson: run,
+        runJson: persistedRun,
         createdAt: String(run.createdAt),
       }),
       ...(input.dependencySnapshot
@@ -1147,7 +1269,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       await this.#orm.batch(
         statements as [(typeof statements)[number], ...typeof statements],
       );
-      return { status: "created", run };
+      return { status: "created", run: publicStoredRun(run) };
     } catch (error) {
       if (
         input.expectedCapsulePlanAuthority !== undefined &&
@@ -1156,6 +1278,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         throw new CapsulePlanCreationFenceConflictError(
           run.capsuleId ?? "unknown",
         );
+      }
+      if (isD1WorkspaceManagementGuardError(error)) {
+        throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
       }
       // Plain INSERTs make duplicate preparation fail the whole D1 batch. Adopt
       // only an already-complete preparation with the same immutable execution
@@ -1182,7 +1307,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           input,
         )
       ) {
-        return { status: "existing", run: currentRun };
+        return { status: "existing", run: publicStoredRun(currentRun) };
       }
       if (
         rawCurrentRun !== undefined ||
@@ -1204,23 +1329,99 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return coerceRunRowStatus(run && isPlanRunRecord(run) ? run : undefined);
   }
 
-  async putApplyRun(run: ApplyRun): Promise<ApplyRun> {
-    await this.#putRun({
-      id: run.id,
-      runGroupId: null,
-      workspaceId: run.workspaceId,
-      capsuleId: run.capsuleId ?? null,
-      environment: null,
-      type: applyRunType(run),
-      status: run.status,
-      runJson: JSON.stringify(run),
-    });
-    return run;
+  async getRunManagementAuthority(
+    input: RunManagementAuthorityInput,
+  ): Promise<WorkspaceManagementAuthority | undefined> {
+    input = structuredClone(input);
+    await this.#ensureSchema();
+    const types =
+      input.kind === "plan"
+        ? [RUN_KIND_PLAN, "destroy_plan", "drift_check"]
+        : input.kind === "apply"
+          ? [RUN_KIND_APPLY, "destroy_apply"]
+          : input.kind === "source_sync"
+            ? [RUN_KIND_SOURCE_SYNC]
+            : [RUN_KIND_RESTORE];
+    const row = await this.#orm
+      .select({
+        workspaceId: schema.runs.workspaceId,
+        type: schema.runs.type,
+        runJson: schema.runs.runJson,
+      })
+      .from(schema.runs)
+      .where(
+        and(
+          eq(schema.runs.id, input.id),
+          eq(schema.runs.workspaceId, input.workspaceId),
+          inArray(schema.runs.type, types),
+        ),
+      )
+      .get();
+    if (row === undefined) return undefined;
+    const run = d1StoredRunFromD1Value(
+      row.runJson,
+      input.kind === "source_sync",
+    );
+    return run === undefined
+      ? undefined
+      : runManagementAuthorityForIdentity(run, input);
   }
 
-  async beginApplyRun(run: ApplyRun): Promise<BeginApplyRunResult> {
+  async putApplyRun(run: ApplyRun): Promise<ApplyRun> {
+    const publicRun = publicStoredRun(run);
+    await this.#putRun({
+      id: publicRun.id,
+      runGroupId: null,
+      workspaceId: publicRun.workspaceId,
+      capsuleId: publicRun.capsuleId ?? null,
+      environment: null,
+      type: applyRunType(publicRun),
+      status: publicRun.status,
+      runJson: JSON.stringify(publicRun),
+    });
+    return publicRun;
+  }
+
+  async beginApplyRun(
+    run: ApplyRun,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<BeginApplyRunResult> {
+    ({ run, expectedWorkspaceManagementAuthority } = structuredClone({
+      run,
+      expectedWorkspaceManagementAuthority,
+    }));
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        run.workspaceId,
+      );
+    }
+    assertD1AtomicCommitBatch(this.db, "beginApplyRun");
     await this.#ensureSchema();
-    const inserted = await this.#orm
+    // Probe the complete existing row before checking mutable Workspace
+    // admission. An occupied id is read-only adoption (including while the
+    // Workspace drains); only a new row needs an active captured tuple.
+    const existingRaw = await this.#getRawRun<StoredRunRecord>(run.id);
+    if (existingRaw !== undefined) {
+      return isApplyRunRecord(existingRaw)
+        ? { status: "existing", run: publicStoredRun(existingRaw) }
+        : { status: "conflict" };
+    }
+    if (expectedWorkspaceManagementAuthority === undefined) {
+      throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
+    }
+    const persistedRun = storeRunManagementAuthority(
+      run,
+      expectedWorkspaceManagementAuthority,
+    );
+    const guard = d1WorkspaceManagementAdmissionGuardStmt(
+      this.#orm,
+      run.workspaceId,
+      run.id,
+      expectedWorkspaceManagementAuthority,
+      true,
+    );
+    const insert = this.#orm
       .insert(schema.runs)
       .values({
         id: run.id,
@@ -1233,17 +1434,24 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         status: run.status,
         leaseToken: null,
         heartbeatAt: run.heartbeatAt ?? null,
-        runJson: run as unknown,
+        runJson: persistedRun as unknown,
         createdAt: String(run.createdAt),
       })
-      .onConflictDoNothing({ target: schema.runs.id })
-      .run();
-    if (changes(inserted as D1Result) > 0) {
-      return { status: "created", run };
+      .onConflictDoNothing({ target: schema.runs.id });
+    try {
+      const results = await this.#orm.batch([guard, insert]);
+      if (changes(results[1] as D1Result) > 0) {
+        return { status: "created", run: publicStoredRun(run) };
+      }
+    } catch (error) {
+      if (isD1WorkspaceManagementGuardError(error)) {
+        throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
+      }
+      throw error;
     }
-    const current = await this.getApplyRun(run.id);
-    return current
-      ? { status: "existing", run: current }
+    const current = await this.#getRawRun<StoredRunRecord>(run.id);
+    return current && isApplyRunRecord(current)
+      ? { status: "existing", run: publicStoredRun(current) }
       : { status: "conflict" };
   }
 
@@ -1267,6 +1475,15 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
    * returns it with `won: false`.
    */
   async transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
+    input = structuredClone(input);
+    if (input.expectedWorkspaceManagementAuthority !== undefined) {
+      // Validate malformed caller input up front. A valid but stale/mis-bound
+      // authority is represented by the normal CAS miss below.
+      assertWorkspaceManagementAuthorityInput(
+        input.expectedWorkspaceManagementAuthority,
+        input.expectedWorkspaceManagementAuthority.workspaceId,
+      );
+    }
     await this.#ensureSchema();
     const types =
       input.kind === "plan"
@@ -1276,24 +1493,62 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           : input.kind === "source_sync"
             ? [RUN_KIND_SOURCE_SYNC]
             : [RUN_KIND_RESTORE];
+    if (
+      input.kind === "source_sync" &&
+      (!isSourceSyncRunRecord(input.run as StoredRunRecord) ||
+        input.run.id !== input.id)
+    ) {
+      const current = await this.getSourceSyncRun(input.id);
+      return { won: false, ...(current ? { run: current } : {}) };
+    }
     const heartbeatAt = input.heartbeatAt ?? input.run.heartbeatAt;
-    const persisted: PlanRun | ApplyRun | SourceSyncRun | Run =
+    const candidate: PlanRun | ApplyRun | SourceSyncRun | Run =
       input.clearHeartbeat
         ? stripRunHeartbeat(input.run)
         : heartbeatAt === undefined
           ? input.run
           : ({ ...input.run, heartbeatAt } as
               PlanRun | ApplyRun | SourceSyncRun | Run);
+    const persisted: PlanRun | ApplyRun | SourceSyncRun | Run =
+      publicStoredRun(candidate);
     const leaseSet: { leaseToken?: string | null } = input.clearLeaseToken
       ? { leaseToken: null }
       : input.setLeaseToken !== undefined
         ? { leaseToken: input.setLeaseToken }
         : {};
+    // A new lease is a fresh admission and must observe the authoritative Run
+    // row's Workspace and its stored original management tuple in the same
+    // conditional UPDATE. Heartbeat/finalizer transitions without
+    // setLeaseToken retain their management-independent CAS behavior.
+    const expectedManagement = input.expectedWorkspaceManagementAuthority;
+    const requireStoredManagementAuthority =
+      input.requireStoredManagementAuthority === true;
+    const activeWorkspace =
+      input.setLeaseToken === undefined && expectedManagement === undefined
+        ? undefined
+        : exists(
+            this.#orm
+              .select({ one: sql`1` })
+              .from(schema.workspaces)
+              .where(
+                and(
+                  eq(schema.workspaces.id, schema.runs.workspaceId),
+                  eq(schema.workspaces.managementState, "active"),
+                  expectedManagement === undefined
+                    ? undefined
+                    : and(
+                        eq(schema.workspaces.id, expectedManagement.workspaceId),
+                        eq(schema.workspaces.managementEpoch, expectedManagement.managementEpoch),
+                      ),
+                ),
+              ),
+          );
+    const runJson = d1RunJsonPreservingAuthority(persisted);
     const result = await this.#orm
       .update(schema.runs)
       .set({
         status: persisted.status,
-        runJson: persisted as unknown,
+        runJson,
         ...(input.clearHeartbeat
           ? { heartbeatAt: null }
           : heartbeatAt === undefined
@@ -1319,11 +1574,16 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
             : input.expectStartedAt === null
               ? sql`json_extract(${schema.runs.runJson}, '$.startedAt') IS NULL`
               : sql`json_extract(${schema.runs.runJson}, '$.startedAt') = ${input.expectStartedAt}`,
+          activeWorkspace,
+          d1RunStoredIdentityWhere(persisted, types),
+          input.setLeaseToken === undefined && !requireStoredManagementAuthority
+            ? undefined
+            : d1RunStoredManagementAuthorityMatchesCurrentWorkspace(),
         ),
       )
       .run();
     if (changes(result as D1Result) > 0) {
-      return { won: true, run: persisted };
+      return { won: true, run: publicStoredRun(persisted) };
     }
     // Lost the CAS race (or the row vanished): re-read the now-current row so
     // callers observe the winning transition instead of clobbering it.
@@ -1357,12 +1617,19 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         input.terminalRun.id,
         input.leaseToken,
         [RUN_KIND_SOURCE_SYNC],
+        input.terminalRun,
+      ),
+      d1RunIdentityGuardStmt(
+        this.#orm,
+        input.terminalRun,
+        RUN_KIND_SOURCE_SYNC,
       ),
       d1UpsertRunStmt(
         this.#orm,
         RUN_KIND_SOURCE_SYNC,
         input.terminalRun,
       ),
+      d1UpdateSourceSyncCursorStmt(this.#orm, input.terminalRun, snapshot),
       d1InsertSourceSnapshotIfAbsentStmt(this.#orm, snapshot),
       d1SourceSnapshotExactGuardStmt(this.#orm, exactGuardSnapshot),
     ];
@@ -1370,7 +1637,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       await this.#orm.batch(
         statements as [(typeof statements)[number], ...typeof statements],
       );
-      return { won: true, run: input.terminalRun };
+      return { won: true, run: publicStoredRun(input.terminalRun) };
     } catch (error) {
       if (isD1RunLeaseLostError(error)) {
         const current = await this.getSourceSyncRun(input.terminalRun.id);
@@ -1383,8 +1650,105 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     }
   }
 
+  async beginSourceSyncRun(
+    run: SourceSyncRun,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<BeginSourceSyncRunResult> {
+    ({ run, expectedWorkspaceManagementAuthority } = structuredClone({
+      run,
+      expectedWorkspaceManagementAuthority,
+    }));
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        run.workspaceId,
+      );
+    }
+    assertD1AtomicCommitBatch(this.db, "beginSourceSyncRun");
+    await this.#ensureSchema();
+    // Probe the complete immutable SourceSync identity before admission. Exact
+    // retries are observation-only and remain readable while the Workspace is
+    // draining; only a genuinely new id must pass the active-epoch guard.
+    const existingRaw = await this.#getRawRun<StoredRunRecord>(run.id, true);
+    if (existingRaw !== undefined) {
+      return isSourceSyncRunRecord(existingRaw) &&
+          sourceSyncRunImmutableIdentityMatches(existingRaw, run)
+        ? { status: "existing", run: publicStoredRun(existingRaw) }
+        : { status: "conflict" };
+    }
+    if (expectedWorkspaceManagementAuthority === undefined) {
+      throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
+    }
+    // The guard is first in the batch and intentionally skips an id that races
+    // into existence after the probe; that race is classified by the readback
+    // below rather than re-admitting or overwriting the winner.
+    const guard = d1WorkspaceManagementAdmissionGuardStmt(
+      this.#orm,
+      run.workspaceId,
+      run.id,
+      expectedWorkspaceManagementAuthority,
+      true,
+    );
+    const persistedRun: SourceSyncRun | StoredSourceSyncRun =
+      expectedWorkspaceManagementAuthority === undefined
+        ? run
+        : storeSourceSyncRun(run, expectedWorkspaceManagementAuthority);
+    const insert = this.#orm
+      .insert(schema.runs)
+      .values({
+        id: run.id,
+        runGroupId: null,
+        workspaceId: run.workspaceId,
+        sourceId: run.sourceId,
+        capsuleId: null,
+        environment: null,
+        type: RUN_KIND_SOURCE_SYNC,
+        status: run.status,
+        leaseToken: null,
+        heartbeatAt: run.heartbeatAt ?? null,
+        runJson: persistedRun as unknown,
+        createdAt: String(run.createdAt),
+      })
+      .onConflictDoNothing({ target: schema.runs.id });
+    try {
+      const results = await this.#orm.batch([guard, insert]);
+      if (changes(results[1] as D1Result) > 0) {
+        return { status: "created", run: publicStoredRun(run) };
+      }
+    } catch (error) {
+      if (isD1WorkspaceManagementGuardError(error)) {
+        throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
+      }
+      throw error;
+    }
+    const currentRow = await this.#orm
+      .select({
+        type: schema.runs.type,
+        workspaceId: schema.runs.workspaceId,
+        sourceId: schema.runs.sourceId,
+        runJson: schema.runs.runJson,
+      })
+      .from(schema.runs)
+      .where(eq(schema.runs.id, run.id))
+      .get();
+    const rawCurrent = d1StoredRunFromD1Value(currentRow?.runJson, true);
+    return currentRow && currentRow.type === RUN_KIND_SOURCE_SYNC &&
+        currentRow.workspaceId === run.workspaceId &&
+        currentRow.sourceId === run.sourceId &&
+        rawCurrent && isSourceSyncRunRecord(rawCurrent) &&
+        sourceSyncRunImmutableIdentityMatches(rawCurrent, run)
+      ? { status: "existing", run: publicStoredRun(rawCurrent) }
+      : { status: "conflict" };
+  }
+
   async putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {
-    await this.#putRun({
+    run = structuredClone(run);
+    if (!isSourceSyncRunRecord(run as StoredRunRecord)) {
+      throw new TypeError("SourceSyncRun stored identity cannot change");
+    }
+    await this.#ensureSchema();
+    const publicRun = publicStoredRun(run);
+    const values = {
       id: run.id,
       runGroupId: null,
       workspaceId: run.workspaceId,
@@ -1393,9 +1757,33 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       environment: null,
       type: RUN_KIND_SOURCE_SYNC,
       status: run.status,
-      runJson: JSON.stringify(run),
-    });
-    return run;
+      leaseToken: null,
+      heartbeatAt: run.heartbeatAt ?? null,
+      runJson: publicRun as unknown,
+      createdAt: String(run.createdAt),
+    };
+    const result = await this.#orm
+      .insert(schema.runs)
+      .values(values)
+      .onConflictDoUpdate({
+        target: schema.runs.id,
+        setWhere: d1SourceSyncRunStoredIdentityWhere(run),
+        set: {
+          ...values,
+          runJson: d1SourceSyncRunJsonPreservingAuthority(publicRun),
+        },
+      })
+      .run();
+    if (changes(result as D1Result) === 0) {
+      const current = await this.#getRawRun<StoredRunRecord>(run.id, true);
+      if (
+        current === undefined ||
+        !sourceSyncRunStoredIdentityMatches(current, run)
+      ) {
+        throw new TypeError("SourceSyncRun stored identity cannot change");
+      }
+    }
+    return publicStoredRun(run);
   }
 
   async getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined> {
@@ -1408,18 +1796,19 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         "putCompatibilityCheckRun only accepts compatibility_check runs",
       );
     }
+    const publicRun = publicStoredRun(run);
     await this.#putRun({
-      id: run.id,
+      id: publicRun.id,
       runGroupId: run.runGroupId ?? null,
-      workspaceId: run.workspaceId,
-      sourceId: run.sourceId ?? null,
+      workspaceId: publicRun.workspaceId,
+      sourceId: publicRun.sourceId ?? null,
       capsuleId: null,
       environment: null,
       type: RUN_KIND_COMPATIBILITY_CHECK,
-      status: run.status,
-      runJson: JSON.stringify(run),
+      status: publicRun.status,
+      runJson: JSON.stringify(publicRun),
     });
-    return run;
+    return publicRun;
   }
 
   async getCompatibilityCheckRun(id: string): Promise<Run | undefined> {
@@ -1430,18 +1819,101 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     if (run.type !== RUN_KIND_BACKUP && run.type !== "restore") {
       throw new Error("putBackupRun only accepts backup/restore runs");
     }
+    const publicRun = publicStoredRun(run);
     await this.#putRun({
-      id: run.id,
-      runGroupId: run.runGroupId ?? null,
-      workspaceId: run.workspaceId,
-      sourceId: run.sourceId ?? null,
-      capsuleId: run.capsuleId ?? null,
-      environment: run.environment ?? null,
-      type: run.type,
-      status: run.status,
-      runJson: JSON.stringify(run),
+      id: publicRun.id,
+      runGroupId: publicRun.runGroupId ?? null,
+      workspaceId: publicRun.workspaceId,
+      sourceId: publicRun.sourceId ?? null,
+      capsuleId: publicRun.capsuleId ?? null,
+      environment: publicRun.environment ?? null,
+      type: publicRun.type,
+      status: publicRun.status,
+      runJson: JSON.stringify(publicRun),
     });
-    return run;
+    return publicRun;
+  }
+
+  async beginRestoreRun(
+    run: Run,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<BeginRestoreRunResult> {
+    ({ run, expectedWorkspaceManagementAuthority } = structuredClone({
+      run,
+      expectedWorkspaceManagementAuthority,
+    }));
+    if (
+      run.type !== RUN_KIND_RESTORE ||
+      (run.status !== "waiting_approval" && run.status !== "queued")
+    ) {
+      throw new TypeError(
+        "Restore admission requires a new waiting or queued Restore",
+      );
+    }
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        run.workspaceId,
+      );
+    }
+    assertD1AtomicCommitBatch(this.db, "beginRestoreRun");
+    await this.#ensureSchema();
+    // Existing immutable Restore creation is adoption-only. Probe before the
+    // mutable Workspace guard so a retry remains readable during draining.
+    const existingRaw = await this.#getRawRun<StoredRunRecord>(run.id);
+    if (existingRaw !== undefined) {
+      return isRestoreRunRecord(existingRaw) &&
+          restoreRunCreationIdentityMatches(existingRaw, run)
+        ? { status: "existing", run: publicStoredRun(existingRaw) }
+        : { status: "conflict" };
+    }
+    if (expectedWorkspaceManagementAuthority === undefined) {
+      throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
+    }
+    const persistedRun = storeRunManagementAuthority(
+      run,
+      expectedWorkspaceManagementAuthority,
+    );
+    const guard = d1WorkspaceManagementAdmissionGuardStmt(
+      this.#orm,
+      run.workspaceId,
+      run.id,
+      expectedWorkspaceManagementAuthority,
+      true,
+    );
+    const insert = this.#orm
+      .insert(schema.runs)
+      .values({
+        id: run.id,
+        runGroupId: run.runGroupId ?? null,
+        workspaceId: run.workspaceId,
+        sourceId: run.sourceId ?? null,
+        capsuleId: run.capsuleId ?? null,
+        environment: run.environment ?? null,
+        type: RUN_KIND_RESTORE,
+        status: run.status,
+        leaseToken: null,
+        heartbeatAt: run.heartbeatAt ?? null,
+        runJson: persistedRun as unknown,
+        createdAt: String(run.createdAt),
+      })
+      .onConflictDoNothing({ target: schema.runs.id });
+    try {
+      const results = await this.#orm.batch([guard, insert]);
+      if (changes(results[1] as D1Result) > 0) {
+        return { status: "created", run: publicStoredRun(run) };
+      }
+    } catch (error) {
+      if (isD1WorkspaceManagementGuardError(error)) {
+        throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
+      }
+      throw error;
+    }
+    const current = await this.#getRawRun<StoredRunRecord>(run.id);
+    return current && isRestoreRunRecord(current) &&
+        restoreRunCreationIdentityMatches(current, run)
+      ? { status: "existing", run: publicStoredRun(current) }
+      : { status: "conflict" };
   }
 
   async getBackupRun(id: string): Promise<Run | undefined> {
@@ -1453,7 +1925,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     options: { readonly limit?: number } = {},
   ): Promise<readonly StoredRunRecord[]> {
     const limit = clampRunListLimit(options.limit);
-    return await this.#drizzleManyJson<StoredRunRecord>(
+    const rows = await this.#drizzleManyJson<StoredRunRecord>(
       schema.runs,
       schema.runs.runJson,
       {
@@ -1462,6 +1934,12 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         limit,
       },
     );
+    return rows
+      .map((row) => d1StoredRunFromD1Value(row))
+      .filter(
+        (row): row is StoredRunRecord => row !== undefined,
+      )
+      .map(publicStoredRun);
   }
 
   async getCapsuleRuntimeSafety(
@@ -1556,7 +2034,13 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     );
     // Keep the shared predicate as a fail-closed defense for legacy rows or
     // a future dialect drift; SQL performs the actual bound and ordering.
-    return rows.filter((row) => isRecoverableOpenTofuRunRecord(row, options));
+    return rows
+      .map((row) => d1StoredRunFromD1Value(row))
+      .filter(
+        (row): row is StoredRunRecord =>
+          row !== undefined && isRecoverableOpenTofuRunRecord(row, options),
+      )
+      .map(publicStoredRun);
   }
 
   async listPendingRuntimeSecretRetirementRuns(options: {
@@ -1569,7 +2053,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       CAST(json_extract(${schema.runs.runJson}, '$.finishedAt') AS INTEGER),
       ${d1RunCreatedAtMillisOrder()}
     )`;
-    return await this.#drizzleManyJson<ApplyRun>(
+    const rows = await this.#drizzleManyJson<StoredRunRecord>(
       schema.runs,
       schema.runs.runJson,
       {
@@ -1583,19 +2067,32 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         limit,
       },
     );
+    return rows
+      .map((row) => d1StoredRunFromD1Value(row))
+      .filter(
+        (row): row is ApplyRun =>
+          row !== undefined && isApplyRunRecord(row),
+      )
+      .map(publicStoredRun);
   }
 
   async claimPendingRuntimeSecretRetirementDispatch(
     input: RuntimeSecretRetirementDispatchClaimInput,
   ): Promise<boolean> {
-    const observed = await this.getApplyRun(input.runId);
+    const observedStored = await this.#getRawRun<StoredRunRecord>(input.runId);
+    const observed = observedStored && isApplyRunRecord(observedStored)
+      ? observedStored
+      : undefined;
     const claimed = observed
       ? runtimeSecretRetirementDispatchAttempt(observed, input)
       : undefined;
     if (!claimed) return false;
     const result = await this.#orm
       .update(schema.runs)
-      .set({ status: claimed.status, runJson: claimed as unknown })
+      .set({
+        status: claimed.status,
+        runJson: d1RunJsonPreservingAuthority(claimed),
+      })
       .where(
         and(
           eq(schema.runs.id, input.runId),
@@ -1614,7 +2111,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async listSourceSyncRuns(
     sourceId: string,
   ): Promise<readonly SourceSyncRun[]> {
-    return await this.#drizzleManyJson<SourceSyncRun>(
+    const rows = await this.#drizzleManyJson<SourceSyncRun>(
       schema.runs,
       schema.runs.runJson,
       {
@@ -1625,6 +2122,13 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         orderBy: [asc(schema.runs.createdAt), asc(schema.runs.id)],
       },
     );
+    return rows
+      .map((row) => d1StoredRunFromD1Value(row, true))
+      .filter(
+        (row): row is SourceSyncRun =>
+          row !== undefined && isSourceSyncRunRecord(row),
+      )
+      .map(publicStoredRun);
   }
 
   // -- Artifact ledger (§30 artifacts) ---------------------------------------
@@ -1698,6 +2202,118 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       updatedAt: workspace.updatedAt,
     });
     return workspace;
+  }
+
+  async replaceWorkspace(input: WorkspaceReplacementInput): Promise<boolean> {
+    validateWorkspaceReplacement(input);
+    return await this.#replaceWorkspace(input);
+  }
+
+  async replaceWorkspaceForAccount(input: WorkspaceAccountReplacementInput): Promise<boolean> {
+    validateWorkspaceReplacement(input);
+    if (!workspaceAccountReplacementAllowed(input)) return false;
+    return await this.#replaceWorkspace(input,
+      input.expectedWorkspace.ownerUserId === input.actorAccountId
+        ? undefined : d1WorkspaceMemberSnapshotExists(this.#orm, input.expectedActor!),
+    );
+  }
+
+  async #replaceWorkspace(input: WorkspaceReplacementInput, actorGuard?: SQL): Promise<boolean> {
+    const { workspace, expectedWorkspace, expectedWorkspaceManagementAuthority } = input;
+    await this.#ensureSchema();
+    // Admission and the observed public row belong to this UPDATE, not a
+    // preceding read. A stopped/resumed writer cannot acquire a newer epoch.
+    const result = await this.#orm.update(schema.workspaces)
+      .set({ recordJson: workspace, updatedAt: workspace.updatedAt })
+      .where(and(
+        eq(schema.workspaces.id, workspace.id),
+        eq(schema.workspaces.handle, expectedWorkspace.handle),
+        eq(schema.workspaces.recordJson, expectedWorkspace),
+        eq(schema.workspaces.managementState, "active"),
+        eq(schema.workspaces.managementEpoch, expectedWorkspaceManagementAuthority.managementEpoch),
+        actorGuard,
+      )).run();
+    if (changes(result as D1Result) > 0) return true;
+    // Readback classifies a failed write only; it never authorizes a retry.
+    assertWorkspaceManagementAdmission(
+      await this.getWorkspaceManagement(workspace.id), workspace.id,
+      expectedWorkspaceManagementAuthority,
+    );
+    return false;
+  }
+
+  async getWorkspaceManagement(
+    workspaceId: string,
+  ): Promise<WorkspaceManagement | undefined> {
+    await this.#ensureSchema();
+    const row = await this.#orm
+      .select({
+        managementState: schema.workspaces.managementState,
+        managementEpoch: schema.workspaces.managementEpoch,
+      })
+      .from(schema.workspaces)
+      .where(eq(schema.workspaces.id, workspaceId))
+      .get();
+    return row
+      ? normalizeWorkspaceManagement(
+          workspaceId,
+          row.managementState,
+          row.managementEpoch,
+        )
+      : undefined;
+  }
+
+  async beginWorkspaceDraining(
+    workspaceId: string,
+    expectedInput: WorkspaceManagementAuthority,
+  ): Promise<BeginWorkspaceDrainingResult> {
+    const expected = { ...expectedInput };
+    assertWorkspaceManagementAuthorityInput(expected, workspaceId);
+    await this.#ensureSchema();
+    const current = await this.getWorkspaceManagement(workspaceId);
+    if (current === undefined) return { status: "not_found" };
+    if (
+      current.managementState === "active" &&
+      current.managementEpoch === expected.managementEpoch &&
+      current.managementEpoch >= Number.MAX_SAFE_INTEGER
+    ) {
+      throw new TypeError(
+        `Workspace ${workspaceId} management epoch cannot advance safely`,
+      );
+    }
+    const updated = await this.#orm
+      .update(schema.workspaces)
+      .set({
+        managementState: "draining",
+        managementEpoch: sql`${schema.workspaces.managementEpoch} + 1`,
+      })
+      .where(
+        and(
+          eq(schema.workspaces.id, workspaceId),
+          eq(schema.workspaces.managementState, "active"),
+          eq(schema.workspaces.managementEpoch, expected.managementEpoch),
+        ),
+      )
+      .run();
+    if (changes(updated as D1Result) > 0) {
+      return {
+        status: "started",
+        management: {
+          workspaceId,
+          managementState: "draining",
+          managementEpoch: expected.managementEpoch + 1,
+        },
+      };
+    }
+    const observed = await this.getWorkspaceManagement(workspaceId);
+    if (observed === undefined) return { status: "not_found" };
+    if (
+      observed.managementState === "draining" &&
+      observed.managementEpoch === expected.managementEpoch + 1
+    ) {
+      return { status: "existing", management: observed };
+    }
+    return { status: "conflict", management: observed };
   }
 
   async claimPersonalWorkspaceBootstrap(
@@ -1958,6 +2574,80 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       [schema.workspaceMembers.workspaceId, schema.workspaceMembers.accountId],
     );
     return member;
+  }
+
+  async mutateWorkspaceMember(input: WorkspaceMemberMutationInput): Promise<boolean> {
+    validateWorkspaceMemberReplacement(input);
+    if (!workspaceMemberMutationAllowed(input)) return false;
+    return await this.#replaceWorkspaceMember(input, input.expectedActor);
+  }
+
+  async repairWorkspaceOwnerMember(input: WorkspaceOwnerMemberRepairInput): Promise<boolean> {
+    validateWorkspaceOwnerMemberRepair(input);
+    return await this.#replaceWorkspaceMember(input);
+  }
+
+  async #replaceWorkspaceMember(
+    input: WorkspaceOwnerMemberRepairInput, expectedActor?: WorkspaceMember,
+  ): Promise<boolean> {
+    await this.#ensureSchema();
+    const { member, expectedMember, expectedWorkspace, expectedWorkspaceManagementAuthority } = input;
+    const workspace = this.#orm.select({ one: sql`1` }).from(schema.workspaces).where(and(
+      eq(schema.workspaces.id, member.workspaceId),
+      eq(schema.workspaces.handle, expectedWorkspace.handle),
+      eq(schema.workspaces.recordJson, expectedWorkspace),
+      eq(schema.workspaces.managementState, "active"),
+      eq(schema.workspaces.managementEpoch, expectedWorkspaceManagementAuthority.managementEpoch),
+    ));
+    const occupied = this.#orm.select({ one: sql`1` }).from(schema.workspaceMembers).where(and(
+      eq(schema.workspaceMembers.workspaceId, member.workspaceId),
+      eq(schema.workspaceMembers.accountId, member.accountId),
+    ));
+    const otherOwner = this.#orm.select({ one: sql`1` }).from(schema.workspaceMembers).where(and(
+      eq(schema.workspaceMembers.workspaceId, member.workspaceId),
+      ne(schema.workspaceMembers.accountId, member.accountId),
+      eq(schema.workspaceMembers.status, "active"),
+      sql`length(${schema.workspaceMembers.id}) > 0`,
+      sql`json_extract(${schema.workspaceMembers.recordJson}, '$.id') = ${schema.workspaceMembers.id}`,
+      sql`json_extract(${schema.workspaceMembers.recordJson}, '$.workspaceId') = ${member.workspaceId}`,
+      sql`json_extract(${schema.workspaceMembers.recordJson}, '$.accountId') = ${schema.workspaceMembers.accountId}`,
+      sql`json_extract(${schema.workspaceMembers.recordJson}, '$.status') = 'active'`,
+      sql`json_extract(${schema.workspaceMembers.recordJson}, '$.createdAt') = ${schema.workspaceMembers.createdAt}`,
+      sql`json_extract(${schema.workspaceMembers.recordJson}, '$.updatedAt') = ${schema.workspaceMembers.updatedAt}`,
+      sql`strftime('%Y-%m-%dT%H:%M:%fZ', ${schema.workspaceMembers.createdAt}) = ${schema.workspaceMembers.createdAt}`,
+      sql`strftime('%Y-%m-%dT%H:%M:%fZ', ${schema.workspaceMembers.updatedAt}) = ${schema.workspaceMembers.updatedAt}`,
+      sql`json_type(${schema.workspaceMembers.recordJson}, '$.roles') = 'array'`,
+      sql`not exists (select 1 from json_each(${schema.workspaceMembers.recordJson}, '$.roles') where type <> 'text' or value not in ('owner', 'admin', 'member', 'viewer'))`,
+      sql`(select count(*) = count(distinct value) from json_each(${schema.workspaceMembers.recordJson}, '$.roles'))`,
+      sql`exists (select 1 from json_each(${schema.workspaceMembers.recordJson}, '$.roles') where value = 'owner')`,
+    ));
+    // The SELECT predicates and target upsert are one SQL statement, including
+    // actor revocation, exact target/absence, and the last-owner invariant.
+    const result = await this.#orm.insert(schema.workspaceMembers).select(
+      this.#orm.select({
+        id: sql<string>`${member.id}`.as("id"),
+        workspaceId: sql<string>`${member.workspaceId}`.as("workspaceId"),
+        accountId: sql<string>`${member.accountId}`.as("accountId"),
+        status: sql<string>`${member.status}`.as("status"),
+        recordJson: sql<WorkspaceMember>`${JSON.stringify(member)}`.as("recordJson"),
+        createdAt: sql<string>`${member.createdAt}`.as("createdAt"),
+        updatedAt: sql<string>`${member.updatedAt}`.as("updatedAt"),
+      }).from(sql`(select 1) as workspace_member_guard_source`).where(and(
+        exists(workspace),
+        expectedMember ? d1WorkspaceMemberSnapshotExists(this.#orm, expectedMember) : notExists(occupied),
+        expectedActor ? d1WorkspaceMemberSnapshotExists(this.#orm, expectedActor) : undefined,
+        workspaceMemberMutationDropsOwner(input) ? exists(otherOwner) : undefined,
+      )),
+    ).onConflictDoUpdate({
+      target: [schema.workspaceMembers.workspaceId, schema.workspaceMembers.accountId],
+      set: { status: member.status, recordJson: member, updatedAt: member.updatedAt },
+    }).run();
+    if (changes(result as D1Result) > 0) return true;
+    assertWorkspaceManagementAdmission(
+      await this.getWorkspaceManagement(member.workspaceId), member.workspaceId,
+      expectedWorkspaceManagementAuthority,
+    );
+    return false;
   }
 
   async getWorkspaceMember(
@@ -2302,6 +2992,139 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return project;
   }
 
+  async createProjectRecord(
+    input: ProjectCreationInput,
+  ): Promise<ProjectCreationResult> {
+    const project = input.project;
+    if (input.expectedWorkspaceManagementAuthority !== undefined) {
+      // Validate malformed caller evidence before schema initialization or any
+      // write. A valid but stale epoch is classified by the conditional
+      // INSERT below and becomes the typed admission conflict.
+      assertWorkspaceManagementAuthorityInput(
+        input.expectedWorkspaceManagementAuthority,
+        project.workspaceId,
+      );
+    }
+    await this.#ensureSchema();
+
+    const currentRow = await this.#readD1StoredProjectRow(
+      eq(schema.projects.id, project.id),
+    );
+    const current = currentRow ? projectFromD1Row(currentRow) : undefined;
+    if (currentRow !== undefined && current === undefined) {
+      // A physically present id whose redundant columns disagree with
+      // record_json is immutable corruption, never a replay or a missing row.
+      return { status: "conflict" };
+    }
+
+    // Exact candidate replay is observation-only and remains valid while the
+    // Workspace is draining. It intentionally precedes management admission.
+    if (
+      current !== undefined &&
+      stableStringify(current) === stableStringify(project)
+    ) {
+      return { status: "replayed", project: current };
+    }
+    if (current !== undefined) return { status: "conflict" };
+
+    const existingSlotRow = await this.#readD1StoredProjectRow(
+      and(
+        eq(schema.projects.workspaceId, project.workspaceId),
+        eq(schema.projects.slug, project.slug),
+      ),
+    );
+    if (existingSlotRow !== undefined) {
+      // Any physically occupied slug conflicts, including a corrupt record.
+      return { status: "conflict" };
+    }
+
+    // The one INSERT ... SELECT is the mutation authority: it requires the
+    // physical Workspace to be active (and, when supplied, at the captured
+    // epoch), while rechecking both the id and Workspace/slug slot absence in
+    // that same statement. No upsert/fallback can switch Workspace ownership.
+    const workspace = d1WorkspaceManagementAdmissionExists(
+      this.#orm,
+      project.workspaceId,
+      input.expectedWorkspaceManagementAuthority,
+    );
+    const existingId = this.#orm
+      .select({ one: sql`1` })
+      .from(schema.projects)
+      .where(eq(schema.projects.id, project.id));
+    const existingSlug = this.#orm
+      .select({ one: sql`1` })
+      .from(schema.projects)
+      .where(
+        and(
+          eq(schema.projects.workspaceId, project.workspaceId),
+          eq(schema.projects.slug, project.slug),
+        ),
+      );
+    const inserted = await this.#orm
+      .insert(schema.projects)
+      .select(
+        this.#orm
+          .select({
+            id: sql<string>`${project.id}`.as("id"),
+            workspaceId: sql<string>`${project.workspaceId}`.as(
+              "workspaceId",
+            ),
+            name: sql<string>`${project.name}`.as("name"),
+            slug: sql<string>`${project.slug}`.as("slug"),
+            recordJson: sql<Project>`${JSON.stringify(project)}`.as(
+              "recordJson",
+            ),
+            createdAt: sql<string>`${project.createdAt}`.as("createdAt"),
+            updatedAt: sql<string>`${project.updatedAt}`.as("updatedAt"),
+          })
+          .from(sql`(select 1) as project_creation_guard_source`)
+          .where(
+            and(
+              workspace,
+              notExists(existingId),
+              notExists(existingSlug),
+            ),
+          ),
+      )
+      .run();
+    if (changes(inserted as D1Result) > 0) {
+      return { status: "created", project };
+    }
+
+    // A raced identical create may have won after the absence reads. Adopt
+    // only the exact current record after validating its physical columns;
+    // arbitrary id/slug occupancy never grants recovery authority.
+    const afterRow = await this.#readD1StoredProjectRow(
+      eq(schema.projects.id, project.id),
+    );
+    const after = afterRow ? projectFromD1Row(afterRow) : undefined;
+    if (afterRow !== undefined && after === undefined) {
+      return { status: "conflict" };
+    }
+    if (
+      after !== undefined &&
+      stableStringify(after) === stableStringify(project)
+    ) {
+      return { status: "replayed", project: after };
+    }
+    if (after !== undefined) return { status: "conflict" };
+
+    const afterSlotRow = await this.#readD1StoredProjectRow(
+      and(
+        eq(schema.projects.workspaceId, project.workspaceId),
+        eq(schema.projects.slug, project.slug),
+      ),
+    );
+    if (afterSlotRow !== undefined) {
+      return { status: "conflict" };
+    }
+    await this.#assertWorkspaceManagementAdmission(
+      project.workspaceId,
+      input.expectedWorkspaceManagementAuthority,
+    );
+    return { status: "conflict" };
+  }
+
   async getProject(id: string): Promise<Project | undefined> {
     return await this.#drizzleFirstJson<Project>(
       schema.projects,
@@ -2340,40 +3163,183 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   // -- InstallConfig ----------------------------------------------------------
 
   async putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
-    await this.#drizzleUpsert(schema.installConfigs, {
-      id: config.id,
-      workspaceId: config.workspaceId ?? null,
-      recordJson: config,
-      createdAt: config.createdAt,
-      updatedAt: config.updatedAt,
-    });
-    return config;
-  }
-
-  async createInstallConfigIfAbsent(config: InstallConfig): Promise<boolean> {
+    const publicConfig = publicStoredInstallConfig(config);
     await this.#ensureSchema();
+    const values = {
+      id: publicConfig.id,
+      workspaceId: publicConfig.workspaceId ?? null,
+      recordJson: publicConfig,
+      createdAt: publicConfig.createdAt,
+      updatedAt: publicConfig.updatedAt,
+    };
+    // A generic full-record writer may update ordinary configs, but it can
+    // never mint, erase, replace, or re-own the store-private authority tuple
+    // on an existing successor. The preservation expression reads the
+    // existing JSON key inside the same upsert (no read/merge/write race).
     const result = await this.#orm
       .insert(schema.installConfigs)
-      .values({
-        id: config.id,
-        workspaceId: config.workspaceId ?? null,
-        recordJson: config,
-        createdAt: config.createdAt,
-        updatedAt: config.updatedAt,
+      .values(values)
+      .onConflictDoUpdate({
+        target: schema.installConfigs.id,
+        set: {
+          ...values,
+          recordJson: d1InstallConfigJsonPreservingAuthority(publicConfig),
+        },
+        setWhere: or(
+          sql`json_type(${schema.installConfigs.recordJson}, '$.workspaceManagementAuthority') IS NULL`,
+          and(
+            publicConfig.workspaceId === undefined
+              ? isNull(schema.installConfigs.workspaceId)
+              : eq(schema.installConfigs.workspaceId, publicConfig.workspaceId),
+            sql`json_extract(${schema.installConfigs.recordJson}, '$.id') = ${publicConfig.id}`,
+            publicConfig.workspaceId === undefined
+              ? sql`json_extract(${schema.installConfigs.recordJson}, '$.workspaceId') IS NULL`
+              : sql`json_extract(${schema.installConfigs.recordJson}, '$.workspaceId') = ${publicConfig.workspaceId}`,
+          ),
+        ),
       })
-      .onConflictDoNothing({ target: schema.installConfigs.id })
       .run();
-    return changes(result as D1Result) > 0;
+    if (changes(result as D1Result) === 0) {
+      // The guarded conflict path means an existing metadata-bearing row did
+      // not match the caller's immutable owner. Never report a proposed
+      // payload as persisted; surface the write refusal after a read-only
+      // helper check for a descriptive, fail-closed classification.
+      const currentRow = await this.#orm
+        .select({
+          workspaceId: schema.installConfigs.workspaceId,
+          json: schema.installConfigs.recordJson,
+        })
+        .from(schema.installConfigs)
+        .where(eq(schema.installConfigs.id, publicConfig.id))
+        .get();
+      if (currentRow !== undefined) {
+        preserveStoredInstallConfigManagementAuthority(
+          publicConfig,
+          currentRow.json as InstallConfig,
+        );
+      }
+      throw new TypeError(
+        "InstallConfig management authority write was not accepted",
+      );
+    }
+    return publicConfig;
+  }
+
+  async createInstallConfigIfAbsent(
+    config: InstallConfig,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<boolean> {
+    const publicConfig = publicStoredInstallConfig(config);
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      if (publicConfig.workspaceId === undefined) {
+        // A shared Workspace-neutral template has no management authority to
+        // capture. Never silently ignore a caller's Workspace fence here.
+        throw new TypeError(
+          "Workspace management authority requires a Workspace-owned InstallConfig",
+        );
+      }
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        publicConfig.workspaceId,
+      );
+    }
+    await this.#ensureSchema();
+
+    // Existing rows are observation-only. In particular, a stopped Workspace
+    // must not prevent an exact retry from returning false, and this method
+    // never overwrites or repairs a colliding row.
+    const existingId = this.#orm
+      .select({ one: sql`1` })
+      .from(schema.installConfigs)
+      .where(eq(schema.installConfigs.id, publicConfig.id));
+    const existing = await this.#orm
+      .select({ id: schema.installConfigs.id })
+      .from(schema.installConfigs)
+      .where(eq(schema.installConfigs.id, publicConfig.id))
+      .get();
+    // Existing IDs are observation-only, including old rows lacking the
+    // private tuple. Never backfill one from a later/current authority.
+    if (existing !== undefined) return false;
+
+    // storeInstallConfig strips caller-supplied private keys and requires the
+    // original captured authority for a sealed successor. Plain configs retain
+    // their historical no-tuple representation.
+    const storedConfig = storeInstallConfig(
+      publicConfig,
+      expectedWorkspaceManagementAuthority,
+    );
+
+    if (publicConfig.workspaceId === undefined) {
+      // Workspace-neutral templates retain their historical insert-only path;
+      // there is no synthetic Workspace/fence to consult.
+      const result = await this.#orm
+        .insert(schema.installConfigs)
+        .values({
+          id: storedConfig.id,
+          workspaceId: null,
+          recordJson: storedConfig,
+          createdAt: storedConfig.createdAt,
+          updatedAt: storedConfig.updatedAt,
+        })
+        .onConflictDoNothing({ target: schema.installConfigs.id })
+        .run();
+      return changes(result as D1Result) > 0;
+    }
+
+    // A Workspace-owned config is admitted by this single conditional
+    // INSERT ... SELECT. The physical Workspace and optional captured epoch
+    // are checked in the same statement as the id absence; no pre-read may
+    // authorize a race with Workspace drain.
+    const workspace = d1WorkspaceManagementAdmissionExists(
+      this.#orm,
+      publicConfig.workspaceId,
+      expectedWorkspaceManagementAuthority,
+    );
+    const inserted = await this.#orm
+      .insert(schema.installConfigs)
+      .select(
+        this.#orm
+          .select({
+            id: sql<string>`${storedConfig.id}`.as("id"),
+            workspaceId: sql<string>`${storedConfig.workspaceId}`.as("workspaceId"),
+            recordJson: sql<InstallConfig>`${JSON.stringify(storedConfig)}`.as(
+              "recordJson",
+            ),
+            createdAt: sql<string>`${storedConfig.createdAt}`.as("createdAt"),
+            updatedAt: sql<string>`${storedConfig.updatedAt}`.as("updatedAt"),
+          })
+          .from(sql`(select 1) as install_config_creation_guard_source`)
+          .where(and(workspace, notExists(existingId))),
+      )
+      .run();
+    if (changes(inserted as D1Result) > 0) return true;
+
+    // A concurrent writer may have won after the absence read. Classify an
+    // actual id collision as the normal false result; never upsert/recover it.
+    const after = await this.#orm
+      .select({ id: schema.installConfigs.id })
+      .from(schema.installConfigs)
+      .where(eq(schema.installConfigs.id, publicConfig.id))
+      .get();
+    if (after !== undefined) return false;
+
+    // No row was written and no concurrent id collision explains the result:
+    // the guarded statement already observed a denied admission. Do not
+    // refresh mutable Workspace state here: a concurrent reactivation must not
+    // turn this refused write into a false success classification.
+    throw new WorkspaceManagementAdmissionConflictError(publicConfig.workspaceId);
   }
 
   async replaceUnreferencedSharedInstallConfig(
     expected: InstallConfig,
     replacement: InstallConfig,
   ): Promise<boolean> {
+    const publicExpected = publicStoredInstallConfig(expected);
+    const publicReplacement = publicStoredInstallConfig(replacement);
     if (
-      replacement.id !== expected.id ||
-      expected.workspaceId !== undefined ||
-      replacement.workspaceId !== undefined
+      publicReplacement.id !== publicExpected.id ||
+      publicExpected.workspaceId !== undefined ||
+      publicReplacement.workspaceId !== undefined
     ) {
       return false;
     }
@@ -2386,14 +3352,14 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .update(schema.installConfigs)
       .set({
         workspaceId: null,
-        recordJson: replacement,
-        updatedAt: replacement.updatedAt,
+        recordJson: publicReplacement,
+        updatedAt: publicReplacement.updatedAt,
       })
       .where(
         and(
-          eq(schema.installConfigs.id, expected.id),
+          eq(schema.installConfigs.id, publicExpected.id),
           isNull(schema.installConfigs.workspaceId),
-          eq(schema.installConfigs.recordJson, expected),
+          eq(schema.installConfigs.recordJson, publicExpected),
           notExists(referenced),
         ),
       )
@@ -2402,12 +3368,15 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async getInstallConfig(id: string): Promise<InstallConfig | undefined> {
-    const config = await this.#drizzleFirstJson<InstallConfig>(
-      schema.installConfigs,
-      schema.installConfigs.recordJson,
-      eq(schema.installConfigs.id, id),
-    );
-    return config;
+    const config = await this.#getRawInstallConfig(id);
+    return config ? publicStoredInstallConfig(config) : undefined;
+  }
+
+  async getInstallConfigManagementAuthority(
+    id: string,
+  ): Promise<WorkspaceManagementAuthority | undefined> {
+    const config = await this.#getRawInstallConfig(id);
+    return config ? installConfigManagementAuthority(config) : undefined;
   }
 
   async getInstallConfigsByIds(
@@ -2424,7 +3393,12 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         )),
       );
     }
-    const byId = new Map(rows.map((row) => [row.id, row] as const));
+    const byId = new Map(
+      rows.map((row) => {
+        const publicConfig = publicStoredInstallConfig(row);
+        return [publicConfig.id, publicConfig] as const;
+      }),
+    );
     return ids
       .map((id) => byId.get(id))
       .filter((row): row is InstallConfig => row !== undefined);
@@ -2447,11 +3421,11 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         ],
       },
     );
-    return configs;
+    return configs.map(publicStoredInstallConfig);
   }
 
   async listSharedInstallConfigs(): Promise<readonly InstallConfig[]> {
-    return await this.#drizzleManyJson<InstallConfig>(
+    const configs = await this.#drizzleManyJson<InstallConfig>(
       schema.installConfigs,
       schema.installConfigs.recordJson,
       {
@@ -2462,6 +3436,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         ],
       },
     );
+    return configs.map(publicStoredInstallConfig);
   }
 
   async listInstallConfigsPage(
@@ -2505,7 +3480,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         limit: limit + 1,
       },
     );
-    return pageFromProbe(rows, limit);
+    return pageFromProbe(rows.map(publicStoredInstallConfig), limit);
   }
 
   // -- Capsule -----------------------------------------------------------
@@ -2536,8 +3511,14 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     input: CapsuleInitialAuthorityInput,
   ): Promise<CapsuleInitialAuthorityResult> {
     assertD1AtomicCommitBatch(this.db, "createCapsuleInitialAuthority");
-    await this.#ensureSchema();
     const capsule = normalizeCapsuleRecord(input.capsule);
+    if (input.expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        input.expectedWorkspaceManagementAuthority,
+        capsule.workspaceId,
+      );
+    }
+    await this.#ensureSchema();
     const binding = input.providerBindingSet;
     if (
       input.installConfig.id !== capsule.installConfigId ||
@@ -2548,9 +3529,12 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     ) {
       return { status: "conflict" };
     }
+    // Initial authority has no successor capture. Strip any caller-supplied
+    // store-private key before hashing, classifying, or inserting the config.
+    const initialInstallConfig = publicStoredInstallConfig(input.installConfig);
     const [expectedConfig, expectedCapsule, expectedBinding] =
       await Promise.all([
-        stableJsonDigest(input.installConfig),
+        stableJsonDigest(initialInstallConfig),
         stableJsonDigest(capsule),
         stableJsonDigest(binding),
       ]);
@@ -2645,12 +3629,18 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     if (duplicate) return { status: "conflict" };
     try {
       await this.#orm.batch([
+        d1CapsuleInitialAuthorityWorkspaceGuardStmt(
+          this.#orm,
+          capsule.workspaceId,
+          capsule.id,
+          input.expectedWorkspaceManagementAuthority,
+        ),
         this.#orm.insert(schema.installConfigs).values({
-          id: input.installConfig.id,
-          workspaceId: input.installConfig.workspaceId ?? null,
-          recordJson: input.installConfig,
-          createdAt: input.installConfig.createdAt,
-          updatedAt: input.installConfig.updatedAt,
+          id: initialInstallConfig.id,
+          workspaceId: initialInstallConfig.workspaceId ?? null,
+          recordJson: initialInstallConfig,
+          createdAt: initialInstallConfig.createdAt,
+          updatedAt: initialInstallConfig.updatedAt,
         }),
         this.#orm.insert(schema.capsules).values({
           id: capsule.id,
@@ -2688,6 +3678,11 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       const concurrent = await classifyExisting();
       if (concurrent) return concurrent;
       if (await findDuplicateCapsule()) return { status: "conflict" };
+      if (isD1CapsuleStateGuardError(error)) {
+        throw new WorkspaceManagementAdmissionConflictError(
+          capsule.workspaceId,
+        );
+      }
       throw error;
     }
     return { status: "created", capsule };
@@ -2794,12 +3789,25 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async rebindCapsuleInstallConfig(
     input: CapsuleInstallConfigRebindInput,
   ): Promise<CapsuleInstallConfigRebindResult> {
+    const suppliedManagementAuthority = input.expectedWorkspaceManagementAuthority
+      ? { ...input.expectedWorkspaceManagementAuthority }
+      : undefined;
+    // Validate the shape before any asynchronous read, then validate the
+    // captured owner against the Capsule's persisted Workspace below. The
+    // management epoch is caller authority and must never be refreshed here.
+    if (suppliedManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        suppliedManagementAuthority,
+        suppliedManagementAuthority.workspaceId,
+      );
+    }
     assertD1AtomicCommitBatch(this.db, "rebindCapsuleInstallConfig");
     await this.#ensureSchema();
     const row = await this.#orm
       .select({
         json: schema.capsules.recordJson,
         epoch: schema.capsules.executionAuthorityEpoch,
+        workspaceId: schema.capsules.workspaceId,
       })
       .from(schema.capsules)
       .where(eq(schema.capsules.id, input.capsuleId))
@@ -2807,6 +3815,13 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .get();
     if (!row) return { status: "not_found" };
     const capsule = normalizeCapsuleRecord(row.json as Capsule);
+    if (suppliedManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        suppliedManagementAuthority,
+        row.workspaceId,
+      );
+    }
+    const observedManagement = await this.getWorkspaceManagement(row.workspaceId);
     const bindingReplacement = input.providerBindingSetReplacement;
     const bindingRows = bindingReplacement
       ? await this.#orm
@@ -2844,9 +3859,15 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const targetBindingIdRow = bindingRows.find(
       (bindingRow) => bindingRow.id === bindingReplacement?.target.id,
     );
-    const targetConfig = await this.getInstallConfig(
+    // Keep the complete stored JSON for the SQL equality fence, while all
+    // semantic digests and public-facing values use the projection without
+    // store-private metadata.
+    const targetStoredConfig = await this.#getRawInstallConfig(
       input.targetInstallConfigId,
     );
+    const targetConfig = targetStoredConfig
+      ? publicStoredInstallConfig(targetStoredConfig)
+      : undefined;
     const recoveryProof = input.expected.committedPostApplyRecovery;
     if (
       !targetConfig ||
@@ -2876,7 +3897,53 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         ? { status: "replayed", capsule }
         : { status: "conflict", capsule };
     }
-    const currentConfig = await this.getInstallConfig(capsule.installConfigId);
+    const targetRequiresManagementAuthority = targetStoredConfig !== undefined &&
+      installConfigRequiresManagementAuthority(targetStoredConfig);
+    const originalManagementAuthority = targetStoredConfig
+      ? installConfigManagementAuthority(targetStoredConfig)
+      : undefined;
+    let expectedManagementAuthority = suppliedManagementAuthority ??
+      (observedManagement?.managementState === "active"
+        ? { ...observedManagement, managementState: "active" as const }
+        : undefined);
+    if (targetRequiresManagementAuthority) {
+      // Successor rows are bound to the authority captured at creation. A
+      // legacy successor without the private tuple cannot authorize a fresh
+      // pointer transition, and a caller tuple can only confirm the stored
+      // value—it cannot replace it.
+      if (originalManagementAuthority === undefined) {
+        throw new WorkspaceManagementAdmissionConflictError(row.workspaceId);
+      }
+      if (suppliedManagementAuthority !== undefined) {
+        assertWorkspaceManagementAdmission(
+          originalManagementAuthority,
+          row.workspaceId,
+          suppliedManagementAuthority,
+        );
+      }
+      expectedManagementAuthority = originalManagementAuthority;
+    }
+    if (targetRequiresManagementAuthority && originalManagementAuthority !== undefined) {
+      assertWorkspaceManagementAdmission(
+        observedManagement,
+        row.workspaceId,
+        originalManagementAuthority,
+      );
+    }
+    if (
+      observedManagement?.managementState !== "active" ||
+      observedManagement.workspaceId !== row.workspaceId ||
+      expectedManagementAuthority === undefined ||
+      observedManagement.managementEpoch !== expectedManagementAuthority.managementEpoch
+    ) {
+      throw new WorkspaceManagementAdmissionConflictError(row.workspaceId);
+    }
+    const currentStoredConfig = await this.#getRawInstallConfig(
+      capsule.installConfigId,
+    );
+    const currentConfig = currentStoredConfig
+      ? publicStoredInstallConfig(currentStoredConfig)
+      : undefined;
     if (
       !currentConfig ||
       capsule.installConfigId !== input.expected.installConfigId ||
@@ -2949,24 +4016,34 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         input.capsuleId,
         input.expected.executionAuthorityEpoch,
       ));
-    const currentConfigFence = this.#orm
-      .select({ id: schema.installConfigs.id })
-      .from(schema.installConfigs)
-      .where(
-        and(
-          eq(schema.installConfigs.id, input.expected.installConfigId),
-          eq(schema.installConfigs.recordJson, currentConfig),
-        ),
-      );
-    const targetConfigFence = this.#orm
-      .select({ id: schema.installConfigs.id })
-      .from(schema.installConfigs)
-      .where(
-        and(
-          eq(schema.installConfigs.id, input.targetInstallConfigId),
-          eq(schema.installConfigs.recordJson, targetConfig),
-        ),
-      );
+    const currentConfigFence = currentStoredConfig
+      ? this.#orm
+          .select({ id: schema.installConfigs.id })
+          .from(schema.installConfigs)
+          .where(
+            and(
+              eq(schema.installConfigs.id, input.expected.installConfigId),
+              eq(schema.installConfigs.recordJson, currentStoredConfig),
+            ),
+          )
+      : this.#orm
+          .select({ id: schema.installConfigs.id })
+          .from(schema.installConfigs)
+          .where(sql`0`);
+    const targetConfigFence = targetStoredConfig
+      ? this.#orm
+          .select({ id: schema.installConfigs.id })
+          .from(schema.installConfigs)
+          .where(
+            and(
+              eq(schema.installConfigs.id, input.targetInstallConfigId),
+              eq(schema.installConfigs.recordJson, targetStoredConfig),
+            ),
+          )
+      : this.#orm
+          .select({ id: schema.installConfigs.id })
+          .from(schema.installConfigs)
+          .where(sql`0`);
     const bindingSetAuthorityFence = bindingReplacement === undefined
       ? sql`true`
       : currentBindingRow && currentBindingSet
@@ -3092,6 +4169,17 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           notExists(blocking),
         ),
       );
+    // This guard is the first statement in the batch. A denied Workspace or
+    // stale captured epoch deliberately inserts an invalid Capsule row, which
+    // aborts the entire batch before the pointer, BindingSet, or intent writes
+    // can leave a partial transition.
+    const workspaceManagementGuard =
+      d1CapsuleInitialAuthorityWorkspaceGuardStmt(
+        this.#orm,
+        row.workspaceId,
+        input.capsuleId,
+        expectedManagementAuthority,
+      );
     const reboundCapsuleFence = this.#orm
       .select({ id: schema.capsules.id })
       .from(schema.capsules)
@@ -3177,12 +4265,37 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           exists(reboundCapsuleFence),
         ),
       );
-    const [result] = await this.#orm.batch([
-      capsuleRebind,
-      ...replaceBindingSet,
-      retireUnresolvedIntents,
-      finalizeCapsuleRebind,
-    ]);
+    let results: readonly D1Result[];
+    try {
+      results = await this.#orm.batch([
+        workspaceManagementGuard,
+        capsuleRebind,
+        ...replaceBindingSet,
+        retireUnresolvedIntents,
+        finalizeCapsuleRebind,
+      ]);
+    } catch (error) {
+      // The batch guard intentionally uses the same invalid-row mechanism as
+      // initial authority. Re-read only for failure classification: map the
+      // error to a management conflict iff the persisted Workspace actually
+      // rejects this captured authority; unrelated D1 failures propagate.
+      if (isD1CapsuleStateGuardError(error)) {
+        const management = await this.getWorkspaceManagement(
+          row.workspaceId,
+        );
+        if (
+          management === undefined ||
+          management.managementState !== "active" ||
+          management.managementEpoch !== expectedManagementAuthority.managementEpoch
+        ) {
+          throw new WorkspaceManagementAdmissionConflictError(
+            row.workspaceId,
+          );
+        }
+      }
+      throw error;
+    }
+    const result = results[1];
     if (changes(result as D1Result) > 0) {
       return { status: "updated", capsule: updated };
     }
@@ -3492,11 +4605,52 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async updateCapsuleLifecycle(
     input: UpdateCapsuleLifecycleCommand,
   ): Promise<UpdateCapsuleLifecycleResult> {
+    input = structuredClone(input);
+    const expectedAutoUpdateAuthority =
+      input.mutation.kind === "auto-update-claim"
+        ? input.mutation.expectedWorkspaceManagementAuthority
+        : undefined;
+    if (
+      input.mutation.kind === "auto-update-claim" &&
+      expectedAutoUpdateAuthority !== undefined
+    ) {
+      // Validate the tuple's own shape before the asynchronous D1 write. A
+      // valid but mis-bound Workspace remains a normal CAS conflict in the
+      // SQL predicate below rather than a programming error.
+      assertWorkspaceManagementAuthorityInput(
+        expectedAutoUpdateAuthority,
+        expectedAutoUpdateAuthority.workspaceId,
+      );
+    }
     await this.#ensureSchema();
     const patch = capsuleLifecycleMutationPatch(
       input.mutation,
       input.updatedAt,
     );
+    const autoUpdateManagementAuthority =
+      input.mutation.kind !== "auto-update-claim"
+        ? undefined
+        : expectedAutoUpdateAuthority === undefined
+          ? sql`0`
+          : exists(
+              this.#orm
+                .select({ one: sql`1` })
+                .from(schema.workspaces)
+                .where(
+                  and(
+                    eq(schema.workspaces.id, schema.capsules.workspaceId),
+                    eq(
+                      schema.workspaces.id,
+                      expectedAutoUpdateAuthority.workspaceId,
+                    ),
+                    eq(schema.workspaces.managementState, "active"),
+                    eq(
+                      schema.workspaces.managementEpoch,
+                      expectedAutoUpdateAuthority.managementEpoch,
+                    ),
+                  ),
+                ),
+            );
     const result = await this.#orm
       .update(schema.capsules)
       .set({
@@ -3544,6 +4698,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           input.mutation.kind === "auto-update-claim"
             ? sql`COALESCE(json_extract(${schema.capsules.recordJson}, '$.autoUpdateAttemptSourceSnapshotId'), '') <> ${input.mutation.sourceSnapshotId}`
             : sql`true`,
+          autoUpdateManagementAuthority,
         ),
       )
       .run();
@@ -3634,6 +4789,24 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
               input.applyRunTerminal.id,
               input.applyRunLeaseToken,
               [RUN_KIND_APPLY, "destroy_apply"],
+            ),
+          ]
+        : []),
+      ...(input.applyRunTerminal
+        ? [
+            d1RunIdentityGuardStmt(
+              this.#orm,
+              input.applyRunTerminal,
+              applyRunType(input.applyRunTerminal),
+            ),
+          ]
+        : []),
+      ...(input.planRunApplied
+        ? [
+            d1RunIdentityGuardStmt(
+              this.#orm,
+              input.planRunApplied,
+              planRunType(input.planRunApplied),
             ),
           ]
         : []),
@@ -3767,6 +4940,11 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         input.restoreRunLeaseToken,
         [RUN_KIND_RESTORE],
       ),
+      d1RunIdentityGuardStmt(
+        this.#orm,
+        input.restoreRunTerminal,
+        RUN_KIND_RESTORE,
+      ),
       d1CapsuleRestoredStateGuardStmt(
         this.#orm,
         capsulePatch.id,
@@ -3880,6 +5058,135 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return connection;
   }
 
+  async createConnectionRegistration(
+    input: CreateConnectionRegistrationInput,
+  ): Promise<boolean> {
+    // Snapshot and validate before the first await. The durable adapter must
+    // never retain caller-owned mutable Connection/blob objects across an
+    // asynchronous D1 operation.
+    const {
+      connection,
+      secretBlob,
+      expectedWorkspaceManagementAuthority,
+      actorAuthority,
+    } = prepareConnectionRegistration(input);
+    assertD1AtomicCommitBatch(this.db, "createConnectionRegistration");
+    await this.#ensureSchema();
+
+    // Match the other durable adapters' classification order: an occupied
+    // identity is only a create-only false result when the captured Workspace
+    // is currently admissible. The in-batch guard below remains authoritative
+    // for a drain/epoch race after this read.
+    if (connection.workspaceId !== undefined) {
+      await this.#assertWorkspaceManagementAdmission(
+        connection.workspaceId,
+        expectedWorkspaceManagementAuthority,
+      );
+    }
+    // The pure model check is only a cheap classification aid. The final
+    // actor/Workspace snapshot guard below remains authoritative for a member
+    // suspension or Workspace replacement that races this preparation.
+    if (
+      actorAuthority !== null &&
+      !workspaceAccountAuthorityAllowed(actorAuthority)
+    ) {
+      return false;
+    }
+
+    // Existing identities are observation-only. In particular, an orphan
+    // secret blob owned by this Connection id blocks a metadata-only retry,
+    // and a blob id collision blocks a different Connection's pair.
+    if (
+      await d1ConnectionRegistrationHasCollision(
+        this.#orm,
+        connection.id,
+        secretBlob?.id,
+      )
+    ) {
+      return false;
+    }
+
+    const connectionInsert = this.#orm
+      .insert(schema.connections)
+      .values({
+        id: connection.id,
+        workspaceId: connection.workspaceId ?? null,
+        provider: connection.provider,
+        status: connection.status,
+        connectionJson: connection,
+        createdAt: connection.createdAt,
+        updatedAt: connection.updatedAt,
+      });
+    const statements = [
+      ...(connection.workspaceId === undefined
+        ? []
+        : [
+            d1ConnectionRegistrationWorkspaceGuardStmt(
+              this.#orm,
+              connection.workspaceId,
+              connection.id,
+              expectedWorkspaceManagementAuthority,
+            ),
+          ]),
+      ...(actorAuthority === null
+        ? []
+        : [
+            d1ConnectionActorAuthorityGuardStmt(
+              this.#orm,
+              actorAuthority,
+              expectedWorkspaceManagementAuthority,
+            ),
+          ]),
+      d1ConnectionRegistrationIdentityGuardStmt(
+        this.#orm,
+        connection.id,
+        secretBlob?.id,
+      ),
+      connectionInsert,
+      ...(secretBlob === undefined
+        ? []
+        : [
+            this.#orm.insert(schema.secretBlobs).values({
+              id: secretBlob.id,
+              connectionId: secretBlob.connectionId,
+              workspaceId: secretBlob.workspaceId ?? null,
+              kind: secretBlob.kind,
+              ciphertext: secretBlob.ciphertext,
+              encryptedDek: secretBlob.encryptedDek,
+              nonce: secretBlob.nonce,
+              aad: secretBlob.aad,
+              keyVersion: secretBlob.keyVersion,
+              createdAt: secretBlob.createdAt,
+              rotatedAt: secretBlob.rotatedAt ?? null,
+              blobJson: secretBlob,
+            }),
+          ]),
+    ];
+
+    try {
+      await this.#orm.batch(
+        statements as [(typeof statements)[number], ...typeof statements],
+      );
+      return true;
+    } catch (error) {
+      // Plain inserts intentionally expose a raced id/owner/blob collision so
+      // D1 rolls the whole batch back. Never retry or recapture after that
+      // acknowledgement; the create-only result is simply false.
+      if (isD1ConnectionActorGuardError(error)) return false;
+      if (isD1ConnectionRegistrationCollisionError(error)) return false;
+      if (isD1ConnectionRegistrationIdentityGuardError(error)) return false;
+      if (
+        connection.workspaceId !== undefined &&
+        isD1ConnectionRegistrationWorkspaceGuardError(error)
+      ) {
+        throw new WorkspaceManagementAdmissionConflictError(
+          connection.workspaceId,
+        );
+      }
+      throw error;
+    }
+  }
+
   async createConnectionIfAbsent(
     connection: ProviderConnection,
   ): Promise<boolean> {
@@ -3924,6 +5231,214 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       )
       .run();
     return changes(result as D1Result) > 0;
+  }
+
+  async markConnectionExpiredIfUnchanged(
+    input: MarkConnectionExpiredIfUnchangedInput,
+  ): Promise<boolean> {
+    const prepared = prepareConnectionExpiration(input);
+    if (prepared === undefined) return false;
+    return await this.replaceConnectionIfUnchanged(
+      prepared.expectedConnection,
+      prepared.replacement,
+    );
+  }
+
+  async revokeConnectionIfUnchanged(
+    input: RevokeConnectionIfUnchangedInput,
+  ): Promise<boolean> {
+    // Snapshot and validate before the first await. The revocation CAS must
+    // never retain caller-owned mutable Connection/authority objects while D1
+    // schema work and the atomic delete batch are pending.
+    const {
+      expectedConnection,
+      expectedWorkspaceManagementAuthority,
+      actorAuthority,
+    } = prepareConnectionRevocation(input);
+    assertD1AtomicCommitBatch(this.db, "revokeConnectionIfUnchanged");
+    await this.#ensureSchema();
+
+    // Match the other durable adapters' classification order: a missing or
+    // stale row is an observation-only false result, while a Workspace that
+    // stopped accepting management work is a typed admission conflict. The
+    // in-batch guards below remain authoritative for races after these reads.
+    if (expectedConnection.workspaceId !== undefined) {
+      await this.#assertWorkspaceManagementAdmission(
+        expectedConnection.workspaceId,
+        expectedWorkspaceManagementAuthority,
+      );
+    }
+    // Keep the pure actor policy as a preflight classification only; the
+    // in-batch exact Workspace/member guard below is the mutation authority.
+    if (
+      actorAuthority !== null &&
+      !workspaceAccountAuthorityAllowed(actorAuthority)
+    ) {
+      return false;
+    }
+    const current = await this.getConnection(expectedConnection.id);
+    if (
+      current === undefined ||
+      JSON.stringify(current) !== JSON.stringify(expectedConnection)
+    ) {
+      return false;
+    }
+
+    const statements = [
+      ...(expectedConnection.workspaceId === undefined
+        ? []
+        : [
+            d1ConnectionRevocationWorkspaceGuardStmt(
+              this.#orm,
+              expectedConnection.workspaceId,
+              expectedWorkspaceManagementAuthority,
+            ),
+          ]),
+      ...(actorAuthority === null
+        ? []
+        : [
+            d1ConnectionActorAuthorityGuardStmt(
+              this.#orm,
+              actorAuthority,
+              expectedWorkspaceManagementAuthority,
+            ),
+          ]),
+      d1ConnectionRevocationSnapshotGuardStmt(this.#orm, expectedConnection),
+      // Delete whatever material is currently attached to this exact
+      // Connection. Its blob id may have rotated since the caller observed
+      // the Connection; a blob-id CAS would incorrectly preserve the secret.
+      this.#orm
+        .delete(schema.secretBlobs)
+        .where(eq(schema.secretBlobs.connectionId, expectedConnection.id)),
+      this.#orm
+        .delete(schema.connections)
+        .where(d1ConnectionRevocationSnapshotWhere(expectedConnection)),
+    ];
+
+    try {
+      const results = await this.#orm.batch(
+        statements as [(typeof statements)[number], ...typeof statements],
+      );
+      return changes(results[results.length - 1] as D1Result) > 0;
+    } catch (error) {
+      // A failed guard aborts the whole batch. Management failure is distinct
+      // from an exact-row CAS miss; unexpected D1 errors remain visible.
+      if (isD1ConnectionActorGuardError(error)) return false;
+      if (
+        expectedConnection.workspaceId !== undefined &&
+        isD1ConnectionRevocationWorkspaceGuardError(error)
+      ) {
+        throw new WorkspaceManagementAdmissionConflictError(
+          expectedConnection.workspaceId,
+        );
+      }
+      if (isD1ConnectionRevocationSnapshotGuardError(error)) return false;
+      throw error;
+    }
+  }
+
+  async commitConnectionTestResult(
+    input: CommitConnectionTestResultInput,
+  ): Promise<boolean> {
+    // Snapshot and validate before the first await. Verification may only
+    // publish result fields for the exact Connection/blob state that was
+    // tested; caller-owned objects must not remain live across D1 work.
+    const {
+      expectedConnection,
+      expectedSecretBlob,
+      replacement,
+      expectedWorkspaceManagementAuthority,
+      actorAuthority,
+    } = prepareConnectionTestResult(input);
+    assertD1AtomicCommitBatch(this.db, "commitConnectionTestResult");
+    await this.#ensureSchema();
+
+    // Keep classification consistent with the other durable adapters: a
+    // stopped or epoch-advanced Workspace is an admission conflict, while a
+    // missing/stale Connection or blob is an observation-only false result.
+    if (expectedConnection.workspaceId !== undefined) {
+      await this.#assertWorkspaceManagementAdmission(
+        expectedConnection.workspaceId,
+        expectedWorkspaceManagementAuthority,
+      );
+    }
+    // Keep this read-free policy check separate from the authoritative
+    // same-batch Workspace/member snapshot guard below.
+    if (
+      actorAuthority !== null &&
+      !workspaceAccountAuthorityAllowed(actorAuthority)
+    ) {
+      return false;
+    }
+    const current = await this.getConnection(expectedConnection.id);
+    if (
+      current === undefined ||
+      JSON.stringify(current) !== JSON.stringify(expectedConnection)
+    ) {
+      return false;
+    }
+    const currentBlob = (await this.getSecretBlob(expectedConnection.id)) ?? null;
+    if (JSON.stringify(currentBlob) !== JSON.stringify(expectedSecretBlob)) {
+      return false;
+    }
+
+    const statements = [
+      ...(expectedConnection.workspaceId === undefined
+        ? []
+        : [
+            d1ConnectionRevocationWorkspaceGuardStmt(
+              this.#orm,
+              expectedConnection.workspaceId,
+              expectedWorkspaceManagementAuthority,
+            ),
+          ]),
+      ...(actorAuthority === null
+        ? []
+        : [
+            d1ConnectionActorAuthorityGuardStmt(
+              this.#orm,
+              actorAuthority,
+              expectedWorkspaceManagementAuthority,
+            ),
+          ]),
+      d1ConnectionTestResultSnapshotGuardStmt(
+        this.#orm,
+        expectedConnection,
+        expectedSecretBlob,
+      ),
+      this.#orm
+        .update(schema.connections)
+        .set({
+          workspaceId: replacement.workspaceId ?? null,
+          provider: replacement.provider,
+          status: replacement.status,
+          connectionJson: replacement,
+          createdAt: replacement.createdAt,
+          updatedAt: replacement.updatedAt,
+        })
+        .where(d1ConnectionRevocationSnapshotWhere(expectedConnection)),
+    ];
+
+    try {
+      const results = await this.#orm.batch(
+        statements as [(typeof statements)[number], ...typeof statements],
+      );
+      return changes(results[results.length - 1] as D1Result) > 0;
+    } catch (error) {
+      // Guard failures roll back the update and classify only their own
+      // expected outcome; all unrelated D1 errors remain visible.
+      if (isD1ConnectionActorGuardError(error)) return false;
+      if (
+        expectedConnection.workspaceId !== undefined &&
+        isD1ConnectionTestResultWorkspaceGuardError(error)
+      ) {
+        throw new WorkspaceManagementAdmissionConflictError(
+          expectedConnection.workspaceId,
+        );
+      }
+      if (isD1ConnectionTestResultSnapshotGuardError(error)) return false;
+      throw error;
+    }
   }
 
   async getConnection(id: string): Promise<ProviderConnection | undefined> {
@@ -4086,6 +5601,225 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       updatedAt: source.updatedAt,
     });
     return source;
+  }
+
+  async writeSourceConfiguration(
+    input: SourceConfigurationWriteInput,
+  ): Promise<SourceConfigurationWriteResult> {
+    assertSourceConfigurationWriteInput(input);
+    await this.#ensureSchema();
+
+    const source = input.source;
+    const currentRow = await this.#readD1StoredSourceRow(source.id);
+    const current = currentRow ? sourceFromD1Row(currentRow) : undefined;
+    if (currentRow !== undefined && current === undefined) {
+      // A physically present row whose indexed identity/redundant columns do
+      // not agree with record_json is immutable corruption. Do not treat it as
+      // missing (which could turn this into CREATE) or as a replay/admission
+      // result that lets a caller repair ownership through this path.
+      return { status: "conflict" };
+    }
+
+    // A replay is an observation-only read. It must remain available after a
+    // Workspace starts draining, and therefore intentionally precedes every
+    // management-admission check below.
+    if (
+      current !== undefined &&
+      stableStringify(current) === stableStringify(source)
+    ) {
+      return { status: "replayed", source: current };
+    }
+
+    if (input.expectedSource !== undefined) {
+      // An expected update is an exact CAS. A missing or changed row is a
+      // normal configuration conflict, not an opportunity to create/rebind it.
+      if (
+        current === undefined ||
+        stableStringify(current) !== stableStringify(input.expectedSource)
+      ) {
+        return { status: "conflict" };
+      }
+
+      const updated = await this.#orm
+        .update(schema.sources)
+        .set({
+          status: source.status,
+          recordJson: source,
+          createdAt: source.createdAt,
+          updatedAt: source.updatedAt,
+        })
+        .where(
+          and(
+            eq(schema.sources.id, source.id),
+            // The persisted owner, not the incoming payload, is the
+            // Workspace authority for this mutation.
+            eq(schema.sources.workspaceId, source.workspaceId),
+            eq(schema.sources.recordJson, input.expectedSource),
+            d1WorkspaceManagementAdmissionExists(
+              this.#orm,
+              source.workspaceId,
+              input.expectedWorkspaceManagementAuthority,
+            ),
+          ),
+        )
+        .run();
+      if (changes(updated as D1Result) > 0) {
+        return { status: "updated", source };
+      }
+
+      // The conditional update can lose a race to another writer. Re-read
+      // first for the exact candidate replay; only an unchanged expected row
+      // then lets us classify the failed Workspace admission.
+      const afterRow = await this.#readD1StoredSourceRow(source.id);
+      const after = afterRow ? sourceFromD1Row(afterRow) : undefined;
+      if (afterRow !== undefined && after === undefined) {
+        return { status: "conflict" };
+      }
+      if (
+        after !== undefined &&
+        stableStringify(after) === stableStringify(source)
+      ) {
+        return { status: "replayed", source: after };
+      }
+      if (
+        after === undefined ||
+        stableStringify(after) !== stableStringify(input.expectedSource)
+      ) {
+        return { status: "conflict" };
+      }
+      await this.#assertWorkspaceManagementAdmission(
+        source.workspaceId,
+        input.expectedWorkspaceManagementAuthority,
+      );
+      return { status: "conflict" };
+    }
+
+    // No expected row means CREATE ONLY. An occupied id remains a conflict,
+    // even when its Workspace is draining; only the exact candidate replay
+    // above is idempotent.
+    if (current !== undefined) return { status: "conflict" };
+
+    // Insert-select makes the physical Workspace and its active management
+    // epoch part of the same mutation statement. There is deliberately no
+    // upsert fallback that could switch Workspace ownership or clobber a
+    // synchronization cursor.
+    const workspace = d1WorkspaceManagementAdmissionExists(
+      this.#orm,
+      source.workspaceId,
+      input.expectedWorkspaceManagementAuthority,
+    );
+    const existing = this.#orm
+      .select({ one: sql`1` })
+      .from(schema.sources)
+      .where(eq(schema.sources.id, source.id));
+    const inserted = await this.#orm
+      .insert(schema.sources)
+      .select(
+        this.#orm
+          .select({
+            id: sql<string>`${source.id}`.as("id"),
+            workspaceId: sql<string>`${source.workspaceId}`.as(
+              "workspaceId",
+            ),
+            status: sql<string>`${source.status}`.as("status"),
+            recordJson: sql<StoredSource>`${JSON.stringify(source)}`.as(
+              "recordJson",
+            ),
+            createdAt: sql<string>`${source.createdAt}`.as("createdAt"),
+            updatedAt: sql<string>`${source.updatedAt}`.as("updatedAt"),
+          })
+          .from(sql`(select 1) as source_configuration_guard_source`)
+          .where(and(workspace, notExists(existing))),
+      )
+      .run();
+    if (changes(inserted as D1Result) > 0) {
+      return { status: "created", source };
+    }
+
+    // A concurrent identical create may have won between the absence read and
+    // this statement. Adopt only the exact candidate; an arbitrary row/id is
+    // never recovery authority.
+    const afterRow = await this.#readD1StoredSourceRow(source.id);
+    const after = afterRow ? sourceFromD1Row(afterRow) : undefined;
+    if (afterRow !== undefined && after === undefined) {
+      return { status: "conflict" };
+    }
+    if (
+      after !== undefined &&
+      stableStringify(after) === stableStringify(source)
+    ) {
+      return { status: "replayed", source: after };
+    }
+    if (after !== undefined) return { status: "conflict" };
+    await this.#assertWorkspaceManagementAdmission(
+      source.workspaceId,
+      input.expectedWorkspaceManagementAuthority,
+    );
+    return { status: "conflict" };
+  }
+
+  /**
+   * Classify a conditional Source write that affected no rows. This read is
+   * only a failure classification; the preceding INSERT/UPDATE predicate is
+   * the authority for the mutation itself.
+   */
+  async #assertWorkspaceManagementAdmission(
+    workspaceId: string,
+    expected?: WorkspaceManagementAuthority,
+  ): Promise<void> {
+    const management = await this.getWorkspaceManagement(workspaceId);
+    if (
+      management === undefined ||
+      management.managementState !== "active" ||
+      (expected !== undefined &&
+        management.managementEpoch !== expected.managementEpoch)
+    ) {
+      throw new WorkspaceManagementAdmissionConflictError(workspaceId);
+    }
+  }
+
+  /**
+   * Read the Source's physical identity columns together with its JSON record.
+   * This deliberately does not change the public getSource path: guarded
+   * configuration writes alone must reject rows whose redundant columns have
+   * drifted from record_json instead of treating the row as absent.
+   */
+  async #readD1StoredSourceRow(
+    sourceId: string,
+  ): Promise<D1StoredSourceRow | undefined> {
+    const row = await this.#orm
+      .select({
+        id: schema.sources.id,
+        workspaceId: schema.sources.workspaceId,
+        status: schema.sources.status,
+        recordJson: schema.sources.recordJson,
+        createdAt: schema.sources.createdAt,
+        updatedAt: schema.sources.updatedAt,
+      })
+      .from(schema.sources)
+      .where(eq(schema.sources.id, sourceId))
+      .get();
+    return row as D1StoredSourceRow | undefined;
+  }
+
+  /** Read Project physical identity columns alongside record_json. */
+  async #readD1StoredProjectRow(
+    where: SQL | undefined,
+  ): Promise<D1StoredProjectRow | undefined> {
+    const row = await this.#orm
+      .select({
+        id: schema.projects.id,
+        workspaceId: schema.projects.workspaceId,
+        name: schema.projects.name,
+        slug: schema.projects.slug,
+        recordJson: schema.projects.recordJson,
+        createdAt: schema.projects.createdAt,
+        updatedAt: schema.projects.updatedAt,
+      })
+      .from(schema.projects)
+      .where(where)
+      .get();
+    return row as D1StoredProjectRow | undefined;
   }
 
   async getSource(id: string): Promise<StoredSource | undefined> {
@@ -5435,26 +7169,72 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     // created_at is the internal record's createdAt (epoch number for plan/apply
     // runs, ISO string for source_sync) — stored verbatim so the typed get round
     // trips, and used only for stable list ordering.
-    const parsed = JSON.parse(row.runJson) as {
-      readonly createdAt?: number | string;
+    await this.#ensureSchema();
+    const parsed = JSON.parse(row.runJson) as StoredRunRecord & {
       readonly leaseToken?: string | null;
       readonly heartbeatAt?: number | null;
     };
-    const createdAt = parsed.createdAt ?? 0;
-    await this.#drizzleUpsert(schema.runs, {
-      id: row.id,
-      runGroupId: row.runGroupId,
-      workspaceId: row.workspaceId,
-      sourceId: row.sourceId ?? null,
-      capsuleId: row.capsuleId,
-      environment: row.environment,
-      type: row.type,
-      status: row.status,
-      leaseToken: parsed.leaseToken ?? null,
-      heartbeatAt: parsed.heartbeatAt ?? null,
-      runJson: parsed as unknown,
-      createdAt: String(createdAt),
-    });
+    const publicRun = publicStoredRun(parsed);
+    const createdAt = publicRun.createdAt ?? 0;
+    const result = await this.#orm
+      .insert(schema.runs)
+      .values({
+        id: row.id,
+        runGroupId: row.runGroupId,
+        workspaceId: row.workspaceId,
+        sourceId: row.sourceId ?? null,
+        capsuleId: row.capsuleId,
+        environment: row.environment,
+        type: row.type,
+        status: row.status,
+        leaseToken: publicRun.leaseToken ?? null,
+        heartbeatAt: publicRun.heartbeatAt ?? null,
+        runJson: publicRun as unknown,
+        createdAt: String(createdAt),
+      })
+      .onConflictDoUpdate({
+        target: schema.runs.id,
+        // A raw typed put may park/redeliver an existing row, but it can never
+        // re-own that id for another Workspace or Run kind.  Keep this CAS in
+        // the SQL statement so a concurrent writer cannot turn a failed
+        // identity check into a successful overwrite.
+        setWhere: d1RunStoredIdentityWhere(publicRun, [row.type]),
+        set: {
+          runGroupId: row.runGroupId,
+          workspaceId: row.workspaceId,
+          sourceId: row.sourceId ?? null,
+          capsuleId: row.capsuleId,
+          environment: row.environment,
+          type: row.type,
+          status: row.status,
+          leaseToken: publicRun.leaseToken ?? null,
+          heartbeatAt: publicRun.heartbeatAt ?? null,
+          runJson: d1RunJsonPreservingAuthority(publicRun),
+          createdAt: String(createdAt),
+        },
+      })
+      .run();
+    if (changes(result as D1Result) === 0) {
+      const current = await this.#orm
+        .select({
+          type: schema.runs.type,
+          workspaceId: schema.runs.workspaceId,
+          runJson: schema.runs.runJson,
+        })
+        .from(schema.runs)
+        .where(eq(schema.runs.id, row.id))
+        .get();
+      const currentRun = d1StoredRunFromD1Value(current?.runJson);
+      if (
+        current === undefined ||
+        current.type !== row.type ||
+        current.workspaceId !== row.workspaceId ||
+        currentRun === undefined ||
+        !runStoredIdentityMatches(currentRun, publicRun)
+      ) {
+        throw new TypeError("Run stored identity cannot change");
+      }
+    }
   }
 
   // Drizzle's `.insert(table).values(...)` demands a per-table insert model, so
@@ -5496,6 +7276,17 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .where(where)
       .get();
     return row?.value as T | undefined;
+  }
+
+  /** Read the complete stored InstallConfig for internal CAS/fence paths. */
+  async #getRawInstallConfig(
+    id: string,
+  ): Promise<InstallConfig | undefined> {
+    return await this.#drizzleFirstJson<InstallConfig>(
+      schema.installConfigs,
+      schema.installConfigs.recordJson,
+      eq(schema.installConfigs.id, id),
+    );
   }
 
   /**
@@ -5553,18 +7344,28 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .from(schema.runs)
       .where(and(eq(schema.runs.id, id), inArray(schema.runs.type, [...types])))
       .get();
-    return row?.runJson as T | undefined;
+    const run = d1StoredRunFromD1Value(
+      row?.runJson,
+      types.length === 1 && types[0] === RUN_KIND_SOURCE_SYNC,
+    );
+    return run === undefined ? undefined : (publicStoredRun(run) as T);
   }
 
   /** Reads a shared runs row without narrowing to one typed run family. */
-  async #getRawRun<T>(id: string): Promise<T | undefined> {
+  async #getRawRun<T>(
+    id: string,
+    allowHistoricalSourceSyncEncoding = false,
+  ): Promise<T | undefined> {
     await this.#ensureSchema();
     const row = await this.#orm
       .select({ runJson: schema.runs.runJson })
       .from(schema.runs)
       .where(eq(schema.runs.id, id))
       .get();
-    return row?.runJson as T | undefined;
+    return d1StoredRunFromD1Value(
+      row?.runJson,
+      allowHistoricalSourceSyncEncoding,
+    ) as T | undefined;
   }
 
   async #ensureSchema(): Promise<void> {
@@ -5640,6 +7441,88 @@ export function createCloudflareD1OpenTofuControlStoreForRequest(
 // through the atomic batch is byte-for-byte identical to one written through the
 // individual put* path.
 
+interface D1StoredSourceRow {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly status: string;
+  readonly recordJson: unknown;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+interface D1StoredProjectRow {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly name: string;
+  readonly slug: string;
+  readonly recordJson: unknown;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/**
+ * Reconcile a D1 Source's indexed identity/redundant columns with its JSON
+ * record before a guarded configuration CAS. A mismatch is an immutable
+ * conflict; this path must never repair physical ownership or identity from a
+ * caller payload.
+ */
+function sourceFromD1Row(row: D1StoredSourceRow): StoredSource | undefined {
+  let value: unknown = row.recordJson;
+  if (typeof value === "string") {
+    if (value === "") return undefined;
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const source = value as Partial<StoredSource>;
+  if (
+    source.id !== row.id ||
+    source.workspaceId !== row.workspaceId ||
+    source.status !== row.status ||
+    source.createdAt !== row.createdAt ||
+    source.updatedAt !== row.updatedAt
+  ) {
+    return undefined;
+  }
+  return source as StoredSource;
+}
+
+/**
+ * Reconcile a D1 Project's indexed identity/redundant columns with its JSON
+ * record before create-only replay/conflict classification.
+ */
+function projectFromD1Row(row: D1StoredProjectRow): Project | undefined {
+  let value: unknown = row.recordJson;
+  if (typeof value === "string") {
+    if (value === "") return undefined;
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const project = value as Partial<Project>;
+  if (
+    project.id !== row.id ||
+    project.workspaceId !== row.workspaceId ||
+    project.name !== row.name ||
+    project.slug !== row.slug ||
+    project.createdAt !== row.createdAt ||
+    project.updatedAt !== row.updatedAt
+  ) {
+    return undefined;
+  }
+  return project as Project;
+}
+
 /**
  * Batch-able §27 `runs` upsert (the commit-tail fold helper). Mirrors the
  * `#putRun` column payload so a run written through the atomic batch is
@@ -5654,6 +7537,7 @@ function d1UpsertRunStmt(
   run: PlanRun | ApplyRun | SourceSyncRun | Run,
 ) {
   const generic = run as Partial<Run>;
+  const publicRun = publicStoredRun(run);
   const values = {
     id: run.id,
     runGroupId: generic.runGroupId ?? null,
@@ -5665,13 +7549,57 @@ function d1UpsertRunStmt(
     status: run.status,
     leaseToken: null,
     heartbeatAt: run.heartbeatAt ?? null,
-    runJson: run as unknown,
+    runJson: publicRun as unknown,
     createdAt: String(run.createdAt),
+  };
+  const set = {
+    ...values,
+    runJson: d1RunJsonPreservingAuthority(publicRun),
   };
   return orm
     .insert(schema.runs)
     .values(values)
-    .onConflictDoUpdate({ target: schema.runs.id, set: values });
+    .onConflictDoUpdate({
+      target: schema.runs.id,
+      // The surrounding batch starts with d1RunIdentityGuardStmt, while this
+      // conditional conflict update remains a last-line fence if this helper
+      // is reused outside one of those commit tails.
+      setWhere: d1RunStoredIdentityWhere(run, [type]),
+      set,
+    });
+}
+
+/**
+ * Advance a Source's scheduler cursor as part of the same lease-fenced
+ * SourceSync success batch. The conditional update never creates a row and
+ * only touches the Source whose persisted owner/address exactly matches the
+ * terminal Run. `json_set` merges the two cursor fields into the existing
+ * record so unrelated configuration/credential metadata cannot be clobbered.
+ */
+function d1UpdateSourceSyncCursorStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  run: SourceSyncRun,
+  snapshot: SourceSnapshot,
+) {
+  return orm
+    .update(schema.sources)
+    .set({
+      recordJson: sql<StoredSource>`json_set(
+        ${schema.sources.recordJson},
+        '$.lastSeenCommit', ${snapshot.resolvedCommit},
+        '$.updatedAt', ${snapshot.fetchedAt}
+      )`,
+      updatedAt: snapshot.fetchedAt,
+    })
+    .where(
+      and(
+        eq(schema.sources.id, run.sourceId),
+        eq(schema.sources.workspaceId, run.workspaceId),
+        sql`json_extract(${schema.sources.recordJson}, '$.url') = ${run.url}`,
+        sql`json_extract(${schema.sources.recordJson}, '$.defaultRef') = ${run.ref}`,
+        sql`json_extract(${schema.sources.recordJson}, '$.defaultPath') = ${run.path}`,
+      ),
+    );
 }
 
 function d1InsertSourceSnapshotIfAbsentStmt(
@@ -5731,6 +7659,7 @@ function d1RunLeaseGuardStmt(
   runId: string,
   leaseToken: string,
   types: readonly string[],
+  sourceSyncIdentity?: SourceSyncRun,
 ) {
   const expectedLease = orm
     .select({ one: sql`1` })
@@ -5741,6 +7670,9 @@ function d1RunLeaseGuardStmt(
         inArray(schema.runs.type, [...types]),
         eq(schema.runs.status, "running"),
         eq(schema.runs.leaseToken, leaseToken),
+        sourceSyncIdentity === undefined
+          ? undefined
+          : d1SourceSyncRunStoredIdentityWhere(sourceSyncIdentity),
       ),
     );
   return orm.insert(schema.runs).select(
@@ -5766,6 +7698,103 @@ function d1RunLeaseGuardStmt(
       .from(sql`(select 1) as guard_source`)
       .where(notExists(expectedLease)),
   );
+}
+
+/**
+ * Abort an atomic terminal batch when the id is occupied by a different Run
+ * owner/kind.  The guard permits an absent row (the existing upsert semantics)
+ * and an exact immutable identity, but deliberately selects the invalid row
+ * only for an occupied/mismatched id so D1 rolls back every later ledger write
+ * instead of letting the upsert's conflict handler silently no-op.
+ */
+function d1RunIdentityGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  run: PlanRun | ApplyRun | SourceSyncRun | Run,
+  type: string,
+) {
+  const occupied = orm
+    .select({ one: sql`1` })
+    .from(schema.runs)
+    .where(eq(schema.runs.id, run.id));
+  const exact = orm
+    .select({ one: sql`1` })
+    .from(schema.runs)
+    .where(d1RunStoredIdentityWhere(run, [type]));
+  return orm.insert(schema.runs).select(
+    orm
+      .select(d1InvalidWorkspaceManagementGuardRow(run.id))
+      .from(sql`(select 1) as run_identity_guard_source`)
+      .where(and(exists(occupied), notExists(exact))),
+  );
+}
+
+/**
+ * Fence a Run update to the physical owner/kind and its JSON identity.  The
+ * indexed columns are redundant with run_json, so both representations must
+ * still describe the candidate row before a transition may win.  Mutable
+ * progress (status, heartbeat, diagnostics, and so on) is deliberately not
+ * part of this identity predicate; the caller supplies those through the
+ * separate CAS fences.
+ */
+function d1RunStoredIdentityWhere(
+  run: PlanRun | ApplyRun | SourceSyncRun | Run,
+  types: readonly string[],
+): SQL {
+  const runJson = schema.runs.runJson;
+  const sourceSyncRun = isSourceSyncRunRecord(run as StoredRunRecord)
+    ? (run as SourceSyncRun)
+    : undefined;
+  const kind = isRestoreRunRecord(run as StoredRunRecord)
+    ? sql`json_extract(${runJson}, '$.type') = 'restore'`
+    : undefined;
+  const jsonIdentity = sourceSyncRun
+    ? d1SourceSyncRunStoredIdentityMatches(sourceSyncRun)
+    : and(
+        sql`json_valid(${runJson}) = 1`,
+        sql`json_extract(${runJson}, '$.id') = ${run.id}`,
+        sql`json_extract(${runJson}, '$.workspaceId') = ${run.workspaceId}`,
+        kind,
+      );
+  return and(
+    eq(schema.runs.id, run.id),
+    eq(schema.runs.workspaceId, run.workspaceId),
+    inArray(schema.runs.type, [...types]),
+    jsonIdentity,
+  )!;
+}
+
+/**
+ * A fresh execution lease is authorized by the tuple captured when the Run
+ * was admitted, not by the replacement payload or a caller's optional
+ * expectation.  This predicate validates that private tuple and matches it
+ * to the currently active Workspace epoch in one UPDATE statement.
+ */
+function d1RunStoredManagementAuthorityMatchesCurrentWorkspace(): SQL {
+  const runJson = schema.runs.runJson;
+  const authorityPath = "$.workspaceManagementAuthority";
+  const authorityWorkspacePath =
+    "$.workspaceManagementAuthority.workspaceId";
+  const authorityStatePath =
+    "$.workspaceManagementAuthority.managementState";
+  const authorityEpochPath =
+    "$.workspaceManagementAuthority.managementEpoch";
+  const safeEpoch = 9_007_199_254_740_991;
+  return sql`json_valid(${runJson}) = 1
+    AND json_type(${runJson}, ${authorityPath}) = 'object'
+    AND json_type(${runJson}, ${authorityWorkspacePath}) = 'text'
+    AND json_type(${runJson}, ${authorityStatePath}) = 'text'
+    AND json_extract(${runJson}, ${authorityWorkspacePath}) = ${schema.runs.workspaceId}
+    AND json_extract(${runJson}, ${authorityStatePath}) = 'active'
+    AND json_type(${runJson}, ${authorityEpochPath}) = 'integer'
+    AND CAST(json_extract(${runJson}, ${authorityEpochPath}) AS INTEGER) > 0
+    AND CAST(json_extract(${runJson}, ${authorityEpochPath}) AS INTEGER) <= ${safeEpoch}
+    AND EXISTS (
+      SELECT 1
+      FROM ${schema.workspaces}
+      WHERE ${schema.workspaces.id} = ${schema.runs.workspaceId}
+        AND ${schema.workspaces.managementState} = 'active'
+        AND ${schema.workspaces.managementEpoch} = CAST(json_extract(${runJson}, ${authorityEpochPath}) AS INTEGER)
+    )`;
 }
 
 function d1CapsuleStateGuardStmt(
@@ -5898,6 +7927,703 @@ function d1CapsulePlanCreationFenceGuardStmt(
 }
 
 /**
+ * Correlated Workspace-management predicate used by single-statement Source
+ * configuration writes. The persisted Source Workspace is supplied by the
+ * caller only as an expected owner; the SQL row itself remains the authority.
+ */
+function d1WorkspaceMemberSnapshotExists(
+  orm: DrizzleD1Database<typeof schema>, member: WorkspaceMember,
+): SQL {
+  // Member decoding reconstructs key order. Match typed fields, not JSON text
+  // serialization order, while also fencing every redundant physical column.
+  const table = schema.workspaceMembers;
+  return exists(orm.select({ one: sql`1` }).from(table).where(and(
+    eq(table.id, member.id), eq(table.workspaceId, member.workspaceId),
+    eq(table.accountId, member.accountId), eq(table.status, member.status),
+    eq(table.createdAt, member.createdAt), eq(table.updatedAt, member.updatedAt),
+    sql`json_extract(${table.recordJson}, '$.id') = ${member.id}`,
+    sql`json_extract(${table.recordJson}, '$.workspaceId') = ${member.workspaceId}`,
+    sql`json_extract(${table.recordJson}, '$.accountId') = ${member.accountId}`,
+    sql`json_extract(${table.recordJson}, '$.status') = ${member.status}`,
+    sql`json_extract(${table.recordJson}, '$.roles') = ${JSON.stringify(member.roles)}`,
+    sql`json_extract(${table.recordJson}, '$.createdAt') = ${member.createdAt}`,
+    sql`json_extract(${table.recordJson}, '$.updatedAt') = ${member.updatedAt}`,
+  )));
+}
+
+function d1WorkspaceManagementAdmissionExists(
+  orm: DrizzleD1Database<typeof schema>,
+  workspaceId: string,
+  expected?: WorkspaceManagementAuthority,
+) {
+  return exists(
+    orm
+      .select({ one: sql`1` })
+      .from(schema.workspaces)
+      .where(
+        and(
+          eq(schema.workspaces.id, workspaceId),
+          eq(schema.workspaces.managementState, "active"),
+          expected === undefined
+            ? undefined
+            : eq(schema.workspaces.managementEpoch, expected.managementEpoch),
+        ),
+      ),
+  );
+}
+
+/**
+ * Exact public Workspace snapshot used by account-facing Connection guards.
+ * The generated owner/type columns and the redundant timestamps are fenced
+ * together with the canonical JSON so a stale or repaired Workspace row cannot
+ * authorize a Connection mutation under the same id.
+ */
+function d1ConnectionActorWorkspaceSnapshotExists(
+  orm: DrizzleD1Database<typeof schema>,
+  expectedWorkspace: ConnectionActorAuthority["expectedWorkspace"],
+  expectedManagement?: WorkspaceManagementAuthority,
+): SQL {
+  const workspace = schema.workspaces;
+  return exists(
+    orm
+      .select({ one: sql`1` })
+      .from(workspace)
+      .where(
+        and(
+          eq(workspace.id, expectedWorkspace.id),
+          eq(workspace.handle, expectedWorkspace.handle),
+          eq(workspace.recordJson, expectedWorkspace),
+          eq(workspace.ownerUserId, expectedWorkspace.ownerUserId),
+          eq(workspace.workspaceType, expectedWorkspace.type),
+          eq(workspace.createdAt, expectedWorkspace.createdAt),
+          eq(workspace.updatedAt, expectedWorkspace.updatedAt),
+          eq(workspace.managementState, "active"),
+          expectedManagement === undefined
+            ? undefined
+            : eq(workspace.managementEpoch, expectedManagement.managementEpoch),
+        ),
+      ),
+  );
+}
+
+/**
+ * In-batch account-authority guard for a Connection batch. Namespace
+ * owners need no derived member row, but still require the exact Workspace
+ * snapshot above. Other account actors require the exact active member row;
+ * `workspaceAccountAuthorityAllowed` performs the closed role policy before
+ * this SQL is built, while this predicate protects the final D1 state.
+ */
+function d1ConnectionActorAuthorityGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  authority: ConnectionActorAuthority,
+  expectedManagement?: WorkspaceManagementAuthority,
+) {
+  const workspace = d1ConnectionActorWorkspaceSnapshotExists(
+    orm,
+    authority.expectedWorkspace,
+    expectedManagement,
+  );
+  const actor = authority.expectedWorkspace.ownerUserId === authority.actorAccountId
+    ? sql`1`
+    : authority.expectedActor === undefined
+      ? sql`0`
+      : d1WorkspaceMemberSnapshotExists(orm, authority.expectedActor);
+  return orm.insert(schema.connections).select(
+    orm
+      .select(d1InvalidConnectionActorGuardRow())
+      .from(sql`(select 1) as connection_actor_guard_source`)
+      .where(not(and(workspace, actor)!)),
+  );
+}
+
+/** Deliberately invalid Connection row used to abort a denied actor batch. */
+function d1InvalidConnectionActorGuardRow() {
+  return {
+    id: sql<string>`'__takosumi_connection_actor_guard__'`.as("id"),
+    workspaceId: sql<string>`null`.as("workspaceId"),
+    provider: sql<string>`'guard'`.as("provider"),
+    status: sql<string>`'guard'`.as("status"),
+    connectionJson: sql<ProviderConnection>`'{}'`.as("connectionJson"),
+    createdAt: sql<string>`null`.as("createdAt"),
+    updatedAt: sql<string>`'0'`.as("updatedAt"),
+  };
+}
+
+/**
+ * Read-only create-only identity probe for a Connection registration. The
+ * owner lookup intentionally runs even for metadata-only registrations so an
+ * existing orphan secret blob cannot later be paired with a new Connection.
+ */
+async function d1ConnectionRegistrationHasCollision(
+  orm: DrizzleD1Database<typeof schema>,
+  connectionId: string,
+  secretBlobId: string | undefined,
+): Promise<boolean> {
+  const existingConnection = await orm
+    .select({ one: sql`1` })
+    .from(schema.connections)
+    .where(eq(schema.connections.id, connectionId))
+    .get();
+  if (existingConnection !== undefined) return true;
+
+  const existingOwnerBlob = await orm
+    .select({ one: sql`1` })
+    .from(schema.secretBlobs)
+    .where(eq(schema.secretBlobs.connectionId, connectionId))
+    .get();
+  if (existingOwnerBlob !== undefined) return true;
+
+  if (secretBlobId === undefined) return false;
+  const existingBlob = await orm
+    .select({ one: sql`1` })
+    .from(schema.secretBlobs)
+    .where(eq(schema.secretBlobs.id, secretBlobId))
+    .get();
+  return existingBlob !== undefined;
+}
+
+/**
+ * First-statement guard for Workspace-scoped Connection registration. An
+ * absent/stale management tuple selects a deliberately invalid Connection
+ * row; provider/status are NOT NULL so SQLite cannot silently accept an
+ * id-only sentinel and let the following pair inserts commit.
+ */
+function d1ConnectionRegistrationWorkspaceGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  workspaceId: string,
+  connectionId: string,
+  expected?: WorkspaceManagementAuthority,
+) {
+  const workspace = d1WorkspaceManagementAdmissionExists(
+    orm,
+    workspaceId,
+    expected,
+  );
+  return orm.insert(schema.connections).select(
+    orm
+      .select(
+        d1InvalidConnectionRegistrationGuardRow(
+          connectionId,
+          workspaceId,
+          "workspace",
+        ),
+      )
+      .from(sql`(select 1) as connection_registration_guard_source`)
+      .where(not(workspace)),
+  );
+}
+
+/**
+ * In-batch create-only identity guard. This is required even after the
+ * read-only collision probe: an orphan blob can be inserted after that probe
+ * while a metadata-only registration has no blob INSERT whose unique index
+ * would otherwise abort the batch. The guard covers Connection id, owner
+ * reference, and incoming blob id for both Workspace and operator scopes.
+ */
+function d1ConnectionRegistrationIdentityGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  connectionId: string,
+  secretBlobId: string | undefined,
+) {
+  const collisions = [
+    exists(
+      orm
+        .select({ one: sql`1` })
+        .from(schema.connections)
+        .where(eq(schema.connections.id, connectionId)),
+    ),
+    exists(
+      orm
+        .select({ one: sql`1` })
+        .from(schema.secretBlobs)
+        .where(eq(schema.secretBlobs.connectionId, connectionId)),
+    ),
+    ...(secretBlobId === undefined
+      ? []
+      : [
+          exists(
+            orm
+              .select({ one: sql`1` })
+              .from(schema.secretBlobs)
+              .where(eq(schema.secretBlobs.id, secretBlobId)),
+          ),
+        ]),
+  ];
+  return orm.insert(schema.connections).select(
+    orm
+      .select(
+        d1InvalidConnectionRegistrationGuardRow(
+          connectionId,
+          undefined,
+          "identity",
+        ),
+      )
+      .from(sql`(select 1) as connection_registration_identity_guard_source`)
+      .where(or(...collisions)),
+  );
+}
+
+/** Deliberately invalid Connection row used to abort a denied registration batch. */
+function d1InvalidConnectionRegistrationGuardRow(
+  connectionId: string,
+  workspaceId: string | undefined,
+  reason: "workspace" | "identity",
+) {
+  return {
+    id: sql<string>`${connectionId}`.as("id"),
+    workspaceId:
+      workspaceId === undefined
+        ? sql<string>`null`.as("workspaceId")
+        : sql<string>`${workspaceId}`.as("workspaceId"),
+    provider: reason === "workspace"
+      ? sql<string>`null`.as("provider")
+      : sql<string>`'guard'`.as("provider"),
+    status: reason === "identity"
+      ? sql<string>`null`.as("status")
+      : sql<string>`'guard'`.as("status"),
+    connectionJson: sql<ProviderConnection>`'{}'`.as("connectionJson"),
+    createdAt: sql<string>`'0'`.as("createdAt"),
+    updatedAt: sql<string>`'0'`.as("updatedAt"),
+  };
+}
+
+/**
+ * Exact durable Connection identity used by revocation CAS. The JSON payload
+ * and every indexed physical field are fenced together so a repair or stale
+ * read cannot delete a newer representation under the same id.
+ */
+function d1ConnectionRevocationSnapshotWhere(
+  expectedConnection: ProviderConnection,
+): SQL {
+  return and(
+    eq(schema.connections.id, expectedConnection.id),
+    expectedConnection.workspaceId === undefined
+      ? isNull(schema.connections.workspaceId)
+      : eq(schema.connections.workspaceId, expectedConnection.workspaceId),
+    eq(schema.connections.provider, expectedConnection.provider),
+    eq(schema.connections.status, expectedConnection.status),
+    eq(schema.connections.connectionJson, expectedConnection),
+    eq(schema.connections.createdAt, expectedConnection.createdAt),
+    eq(schema.connections.updatedAt, expectedConnection.updatedAt),
+  )!;
+}
+
+/** First-statement Workspace authority guard for Connection revocation. */
+function d1ConnectionRevocationWorkspaceGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  workspaceId: string,
+  expected?: WorkspaceManagementAuthority,
+) {
+  const workspace = orm
+    .select({ one: sql`1` })
+    .from(schema.workspaces)
+    .where(
+      and(
+        eq(schema.workspaces.id, workspaceId),
+        eq(schema.workspaces.managementState, "active"),
+        expected === undefined
+          ? sql`0`
+          : eq(schema.workspaces.managementEpoch, expected.managementEpoch),
+      ),
+    );
+  return orm.insert(schema.connections).select(
+    orm
+      .select(
+        d1InvalidConnectionRevocationGuardRow("workspace"),
+      )
+      .from(sql`(select 1) as connection_revocation_workspace_guard_source`)
+      .where(notExists(workspace)),
+  );
+}
+
+/**
+ * In-batch exact-row CAS guard. There is intentionally no existing-id bypass:
+ * a missing or changed row must abort before the blob delete, preserving both
+ * rows and allowing the caller to classify the result as false.
+ */
+function d1ConnectionRevocationSnapshotGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  expectedConnection: ProviderConnection,
+) {
+  const expected = orm
+    .select({ one: sql`1` })
+    .from(schema.connections)
+    .where(d1ConnectionRevocationSnapshotWhere(expectedConnection));
+  return orm.insert(schema.connections).select(
+    orm
+      .select(d1InvalidConnectionRevocationGuardRow("snapshot"))
+      .from(sql`(select 1) as connection_revocation_snapshot_guard_source`)
+      .where(notExists(expected)),
+  );
+}
+
+/** Deliberately invalid Connection row used to abort a revoke batch. */
+function d1InvalidConnectionRevocationGuardRow(
+  reason: "workspace" | "snapshot",
+) {
+  return {
+    id: sql<string>`'__takosumi_connection_revocation_guard__'`.as("id"),
+    workspaceId: sql<string>`null`.as("workspaceId"),
+    provider: reason === "workspace"
+      ? sql<string>`null`.as("provider")
+      : sql<string>`'guard'`.as("provider"),
+    status: reason === "snapshot"
+      ? sql<string>`null`.as("status")
+      : sql<string>`'guard'`.as("status"),
+    connectionJson: sql<ProviderConnection>`'{}'`.as("connectionJson"),
+    createdAt: sql<string>`'0'`.as("createdAt"),
+    updatedAt: sql<string>`'0'`.as("updatedAt"),
+  };
+}
+
+/** Full physical/JSON sealed-material identity used by test-result CAS. */
+function d1ConnectionTestResultSecretBlobWhere(
+  expectedSecretBlob: StoredSecretBlob,
+): SQL {
+  return and(
+    eq(schema.secretBlobs.id, expectedSecretBlob.id),
+    eq(schema.secretBlobs.connectionId, expectedSecretBlob.connectionId),
+    expectedSecretBlob.workspaceId === undefined
+      ? isNull(schema.secretBlobs.workspaceId)
+      : eq(schema.secretBlobs.workspaceId, expectedSecretBlob.workspaceId),
+    eq(schema.secretBlobs.kind, expectedSecretBlob.kind),
+    eq(schema.secretBlobs.ciphertext, expectedSecretBlob.ciphertext),
+    eq(schema.secretBlobs.encryptedDek, expectedSecretBlob.encryptedDek),
+    eq(schema.secretBlobs.nonce, expectedSecretBlob.nonce),
+    eq(schema.secretBlobs.aad, expectedSecretBlob.aad),
+    eq(schema.secretBlobs.keyVersion, expectedSecretBlob.keyVersion),
+    eq(schema.secretBlobs.createdAt, expectedSecretBlob.createdAt),
+    expectedSecretBlob.rotatedAt === undefined
+      ? isNull(schema.secretBlobs.rotatedAt)
+      : eq(schema.secretBlobs.rotatedAt, expectedSecretBlob.rotatedAt),
+    eq(schema.secretBlobs.blobJson, expectedSecretBlob),
+  )!;
+}
+
+/**
+ * In-batch Connection + blob snapshot guard for test-result publication.
+ * `expectedSecretBlob === null` is an explicit owner absence predicate, not an
+ * omitted condition; a newly attached blob therefore aborts the batch.
+ */
+function d1ConnectionTestResultSnapshotGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  expectedConnection: ProviderConnection,
+  expectedSecretBlob: StoredSecretBlob | null,
+) {
+  const connection = orm
+    .select({ one: sql`1` })
+    .from(schema.connections)
+    .where(d1ConnectionRevocationSnapshotWhere(expectedConnection));
+  const blob = orm
+    .select({ one: sql`1` })
+    .from(schema.secretBlobs)
+    .where(
+      expectedSecretBlob === null
+        ? eq(schema.secretBlobs.connectionId, expectedConnection.id)
+        : d1ConnectionTestResultSecretBlobWhere(expectedSecretBlob),
+    );
+  const snapshot = orm
+    .select({ one: sql`1` })
+    .from(sql`(select 1) as connection_test_result_snapshot_source`)
+    .where(
+      and(
+        exists(connection),
+        expectedSecretBlob === null ? notExists(blob) : exists(blob),
+      ),
+    );
+  return orm.insert(schema.connections).select(
+    orm
+      .select(d1InvalidConnectionTestResultGuardRow())
+      .from(sql`(select 1) as connection_test_result_guard_source`)
+      .where(notExists(snapshot)),
+  );
+}
+
+/** Deliberately invalid Connection row used to abort a stale-result batch. */
+function d1InvalidConnectionTestResultGuardRow() {
+  return {
+    id: sql<string>`'__takosumi_connection_test_result_guard__'`.as("id"),
+    workspaceId: sql<string>`null`.as("workspaceId"),
+    provider: sql<string>`'guard'`.as("provider"),
+    status: sql<string>`null`.as("status"),
+    connectionJson: sql<ProviderConnection>`'{}'`.as("connectionJson"),
+    createdAt: sql<string>`'0'`.as("createdAt"),
+    updatedAt: sql<string>`'0'`.as("updatedAt"),
+  };
+}
+
+/**
+ * Build a Run JSON write that cannot replace its durable admission tuple. The
+ * caller payload is projected first; an existing JSON key (even a malformed
+ * private value) is then copied from the row being updated. This is
+ * intentionally a SQL expression so a concurrent writer cannot be undone by
+ * a JavaScript read/merge/write race.
+ */
+function d1RunJsonPreservingAuthority(
+  run: PlanRun | ApplyRun | SourceSyncRun | Run,
+): SQL {
+  if (isSourceSyncRunRecord(run as StoredRunRecord)) {
+    return d1SourceSyncRunJsonPreservingAuthority(run as SourceSyncRun);
+  }
+  const publicRun = publicStoredRun(run);
+  const serialized = JSON.stringify(publicRun);
+  return sql`CASE
+    WHEN json_valid(${schema.runs.runJson}) = 1 THEN CASE
+      WHEN json_type(${schema.runs.runJson}, '$.workspaceManagementAuthority') IS NULL
+        THEN json(${serialized})
+      ELSE json_set(
+        json(${serialized}),
+        '$.workspaceManagementAuthority',
+        json_extract(${schema.runs.runJson}, '$.workspaceManagementAuthority')
+      )
+    END
+    ELSE json(${serialized})
+  END`;
+}
+
+/** SourceSync keeps the historical helper name for its existing callers. */
+function d1SourceSyncRunJsonPreservingAuthority(run: SourceSyncRun): SQL {
+  const publicRun = publicStoredRun(run);
+  const serialized = JSON.stringify(publicRun);
+  const runJson = schema.runs.runJson;
+  return sql`CASE
+    WHEN json_valid(${runJson}) = 1 THEN CASE
+      WHEN json_type(${runJson}, '$.workspaceManagementAuthority') IS NOT NULL
+        THEN json_set(
+          json(${serialized}),
+          '$.workspaceManagementAuthority',
+          json_extract(${runJson}, '$.workspaceManagementAuthority')
+        )
+      WHEN json_type(${runJson}, '$') = 'text' THEN CASE
+        WHEN json_valid(json_extract(${runJson}, '$')) = 1 THEN CASE
+          WHEN json_type(
+            json_extract(${runJson}, '$'),
+            '$.workspaceManagementAuthority'
+          ) IS NOT NULL
+            THEN json_set(
+              json(${serialized}),
+              '$.workspaceManagementAuthority',
+              json_extract(
+                json_extract(${runJson}, '$'),
+                '$.workspaceManagementAuthority'
+              )
+            )
+          ELSE json(${serialized})
+        END
+        ELSE json(${serialized})
+      END
+      ELSE json(${serialized})
+    END
+    ELSE json(${serialized})
+  END`;
+}
+
+/**
+ * Persist a public InstallConfig while retaining the row's private original
+ * Workspace-management authority. The existing JSON key is copied inside the
+ * same upsert, so a full-record caller cannot erase, replace, or mint it via a
+ * read/merge/write race.
+ */
+function d1InstallConfigJsonPreservingAuthority(config: InstallConfig): SQL {
+  const publicConfig = publicStoredInstallConfig(config);
+  const serialized = JSON.stringify(publicConfig);
+  return sql`CASE
+    WHEN json_valid(${schema.installConfigs.recordJson}) = 1 THEN CASE
+      WHEN json_type(${schema.installConfigs.recordJson}, '$.workspaceManagementAuthority') IS NULL
+        THEN json(${serialized})
+      ELSE json_set(
+        json(${serialized}),
+        '$.workspaceManagementAuthority',
+        json_extract(${schema.installConfigs.recordJson}, '$.workspaceManagementAuthority')
+      )
+    END
+    ELSE json(${serialized})
+  END`;
+}
+
+/**
+ * Keep every SourceSync writer bound to the physical row's immutable owner
+ * identity. Snapshot/result fields may be completed by a legacy finalizer, but
+ * the durable JSON must still describe this exact SourceSync id and Workspace.
+ */
+function d1SourceSyncRunStoredIdentityMatches(run: SourceSyncRun): SQL {
+  const runJson = schema.runs.runJson;
+  return sql`CASE
+    WHEN json_valid(${runJson}) = 1 THEN CASE
+      WHEN json_type(${runJson}, '$') = 'object' THEN CASE
+        WHEN json_extract(${runJson}, '$.kind') = 'source_sync' THEN CASE
+          WHEN json_extract(${runJson}, '$.id') = ${run.id} THEN CASE
+            WHEN json_extract(${runJson}, '$.workspaceId') = ${run.workspaceId}
+              THEN 1
+              ELSE 0
+          END
+          ELSE 0
+        END
+        ELSE 0
+      END
+      WHEN json_type(${runJson}, '$') = 'text' THEN CASE
+        WHEN json_valid(json_extract(${runJson}, '$')) = 1 THEN CASE
+          WHEN json_extract(json_extract(${runJson}, '$'), '$.kind') = 'source_sync' THEN CASE
+            WHEN json_extract(json_extract(${runJson}, '$'), '$.id') = ${run.id} THEN CASE
+              WHEN json_extract(json_extract(${runJson}, '$'), '$.workspaceId') = ${run.workspaceId}
+                THEN 1
+                ELSE 0
+            END
+            ELSE 0
+          END
+          ELSE 0
+        END
+        ELSE 0
+      END
+      ELSE 0
+    END
+    ELSE 0
+  END`;
+}
+
+function d1SourceSyncRunStoredIdentityWhere(run: SourceSyncRun): SQL {
+  return and(
+    eq(schema.runs.id, run.id),
+    eq(schema.runs.type, RUN_KIND_SOURCE_SYNC),
+    eq(schema.runs.workspaceId, run.workspaceId),
+    d1SourceSyncRunStoredIdentityMatches(run),
+  )!;
+}
+
+/**
+ * SourceSync queue claims must be fenced by the authority captured when the
+ * row was admitted. This predicate deliberately lives in the conditional
+ * UPDATE rather than in a read-then-update check: a delayed queue consumer
+ * must lose after a drain/resume epoch advance even if the Workspace is active
+ * again. Invalid or legacy authority metadata is a CAS miss, not an error.
+ */
+function d1SourceSyncRunManagementAuthorityMatchesCurrentWorkspace(): SQL {
+  const runJson = schema.runs.runJson;
+  const authorityPath = "$.workspaceManagementAuthority";
+  const authorityWorkspacePath =
+    "$.workspaceManagementAuthority.workspaceId";
+  const authorityStatePath =
+    "$.workspaceManagementAuthority.managementState";
+  const authorityEpochPath =
+    "$.workspaceManagementAuthority.managementEpoch";
+  const safeEpoch = 9_007_199_254_740_991;
+  return sql`CASE
+    WHEN json_valid(${runJson}) = 1 THEN CASE
+      WHEN json_type(${runJson}, ${authorityPath}) = 'object'
+        AND json_type(${runJson}, ${authorityWorkspacePath}) = 'text'
+        AND json_type(${runJson}, ${authorityStatePath}) = 'text'
+        AND json_extract(${runJson}, ${authorityWorkspacePath}) = ${schema.runs.workspaceId}
+        AND json_extract(${runJson}, ${authorityStatePath}) = 'active'
+        AND json_type(${runJson}, ${authorityEpochPath}) = 'integer'
+        AND CAST(json_extract(${runJson}, ${authorityEpochPath}) AS INTEGER) > 0
+        AND CAST(json_extract(${runJson}, ${authorityEpochPath}) AS INTEGER) <= ${safeEpoch}
+        AND EXISTS (
+          SELECT 1
+          FROM ${schema.workspaces}
+          WHERE ${schema.workspaces.id} = ${schema.runs.workspaceId}
+            AND ${schema.workspaces.managementState} = 'active'
+            AND ${schema.workspaces.managementEpoch} = CAST(json_extract(${runJson}, ${authorityEpochPath}) AS INTEGER)
+        )
+      THEN 1
+      ELSE 0
+    END
+    ELSE 0
+  END`;
+}
+
+/**
+ * Batch guard for new Workspace-scoped Run admissions. The invalid row is
+ * selected only when the exact Workspace management authority is absent and
+ * no Run with this id already exists; an exact replay therefore remains
+ * idempotent without rechecking mutable management state. Because the guard is
+ * the first statement in the D1 batch, a denied admission aborts every
+ * dependent Run/sidecar write atomically.
+ */
+function d1WorkspaceManagementAdmissionGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  workspaceId: string,
+  runId: string,
+  expected?: WorkspaceManagementAuthority,
+  requireExpectedAuthority = false,
+) {
+  const workspace = orm
+    .select({ one: sql`1` })
+    .from(schema.workspaces)
+    .where(
+      and(
+          eq(schema.workspaces.id, workspaceId),
+          eq(schema.workspaces.managementState, "active"),
+        expected === undefined
+          ? requireExpectedAuthority
+            ? sql`0`
+            : undefined
+          : eq(schema.workspaces.managementEpoch, expected.managementEpoch),
+      ),
+  );
+  const existingRun = orm
+    .select({ one: sql`1` })
+    .from(schema.runs)
+    .where(eq(schema.runs.id, runId));
+  return orm.insert(schema.runs).select(
+    orm
+      .select(d1InvalidWorkspaceManagementGuardRow(runId))
+      .from(sql`(select 1) as workspace_management_guard_source`)
+      .where(and(notExists(workspace), notExists(existingRun))),
+  );
+}
+
+/**
+ * First-statement guard for a new Capsule initial-authority unit. Unlike the
+ * Run admission guard this deliberately has no existing-id bypass: the
+ * complete config/Capsule/binding unit is classified by the caller's
+ * read-only replay/conflict probe before this batch, and a raced batch failure
+ * is classified again only after the whole transaction has rolled back.
+ */
+function d1CapsuleInitialAuthorityWorkspaceGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  workspaceId: string,
+  capsuleId: string,
+  expected?: WorkspaceManagementAuthority,
+) {
+  const workspace = orm
+    .select({ one: sql`1` })
+    .from(schema.workspaces)
+    .where(
+      and(
+        eq(schema.workspaces.id, workspaceId),
+        eq(schema.workspaces.managementState, "active"),
+        expected === undefined
+          ? undefined
+          : eq(schema.workspaces.managementEpoch, expected.managementEpoch),
+      ),
+    );
+  return orm.insert(schema.capsules).select(
+    orm
+      .select(d1InvalidCapsuleGuardRow(capsuleId))
+      .from(sql`(select 1) as capsule_initial_authority_guard_source`)
+      .where(notExists(workspace)),
+  );
+}
+
+/** Deliberately invalid Run row used to abort a denied D1 admission batch. */
+function d1InvalidWorkspaceManagementGuardRow(runId: string) {
+  return {
+    id: sql<string>`${runId}`.as("id"),
+    runGroupId: sql<string | null>`null`.as("runGroupId"),
+    workspaceId: sql<string>`null`.as("workspaceId"),
+    sourceId: sql<string | null>`null`.as("sourceId"),
+    capsuleId: sql<string | null>`null`.as("capsuleId"),
+    environment: sql<string | null>`null`.as("environment"),
+    type: sql<string>`'plan'`.as("type"),
+    status: sql<string>`'queued'`.as("status"),
+    leaseToken: sql<string | null>`null`.as("leaseToken"),
+    heartbeatAt: sql<number | null>`null`.as("heartbeatAt"),
+    runJson: sql<unknown>`null`.as("runJson"),
+    createdAt: sql<string>`'0'`.as("createdAt"),
+  };
+}
+
+/**
  * Deliberately invalid Capsule row selected only when a batch guard loses.
  * Using a constant one-row source makes concurrent deletion fail closed too:
  * the NOT NULL violation aborts the batch instead of silently selecting zero
@@ -5928,6 +8654,12 @@ function assertD1AtomicCommitBatch(
   db: D1Database,
   operation:
     | "preparePlanRun"
+    | "beginApplyRun"
+    | "beginRestoreRun"
+    | "beginSourceSyncRun"
+    | "createConnectionRegistration"
+    | "revokeConnectionIfUnchanged"
+    | "commitConnectionTestResult"
     | "commitRunState"
     | "commitRestoredState"
     | "commitSourceSyncSuccess"
@@ -5972,6 +8704,79 @@ function isD1CapsuleStateGuardError(error: unknown): boolean {
         ) ||
         error.message.includes("constraint failed: capsules.space_id")
     : false;
+}
+
+function isD1WorkspaceManagementGuardError(error: unknown): boolean {
+  return error instanceof Error
+    ? error.message.includes("NOT NULL constraint failed: runs.space_id") ||
+        error.message.includes("constraint failed: runs.space_id")
+    : false;
+}
+
+function isD1ConnectionRegistrationCollisionError(error: unknown): boolean {
+  // The registration batch contains only plain Connection/secret-blob
+  // inserts, so any SQLite UNIQUE failure is an occupied create-only identity
+  // (Connection id, secret-blob owner, or incoming secret-blob id). Do not
+  // classify NOT NULL guard failures as collisions.
+  if (!(error instanceof Error)) return false;
+  const message = error.message;
+  return message.includes("UNIQUE constraint failed") ||
+    message.includes("constraint failed: connections.id") ||
+    message.includes("constraint failed: secret_blobs.connection_id") ||
+    message.includes("constraint failed: secret_blobs.id");
+}
+
+function isD1ConnectionActorGuardError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message;
+  return message.includes("NOT NULL constraint failed: connections.created_at") ||
+    message.includes("constraint failed: connections.created_at");
+}
+
+function isD1ConnectionRegistrationWorkspaceGuardError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message;
+  return message.includes("NOT NULL constraint failed: connections.provider") ||
+    message.includes("constraint failed: connections.provider");
+}
+
+function isD1ConnectionRegistrationIdentityGuardError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message;
+  return message.includes("NOT NULL constraint failed: connections.status") ||
+    message.includes("constraint failed: connections.status");
+}
+
+function isD1ConnectionRevocationWorkspaceGuardError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message;
+  return message.includes("NOT NULL constraint failed: connections.provider") ||
+    message.includes("constraint failed: connections.provider");
+}
+
+function isD1ConnectionRevocationSnapshotGuardError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message;
+  return message.includes("NOT NULL constraint failed: connections.status") ||
+    message.includes("constraint failed: connections.status") ||
+    message.includes("UNIQUE constraint failed: connections.id") ||
+    message.includes("constraint failed: connections.id");
+}
+
+function isD1ConnectionTestResultWorkspaceGuardError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message;
+  return message.includes("NOT NULL constraint failed: connections.provider") ||
+    message.includes("constraint failed: connections.provider");
+}
+
+function isD1ConnectionTestResultSnapshotGuardError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message;
+  return message.includes("NOT NULL constraint failed: connections.status") ||
+    message.includes("constraint failed: connections.status") ||
+    message.includes("UNIQUE constraint failed: connections.id") ||
+    message.includes("constraint failed: connections.id");
 }
 
 function isD1UsageEventIdempotencyError(error: unknown): boolean {
@@ -6265,6 +9070,26 @@ function planRunType(run: PlanRun): string {
 
 function applyRunType(run: ApplyRun): string {
   return run.operation === "destroy" ? "destroy_apply" : RUN_KIND_APPLY;
+}
+
+/** Decode a D1 JSON column into one durable Run object. */
+function d1StoredRunFromD1Value(
+  value: unknown,
+  allowHistoricalSourceSyncEncoding = false,
+): StoredRunRecord | undefined {
+  let parsed = value;
+  // `jsonText(..., { mode: "json" })` normally returns an object. SourceSync
+  // rows written by the old JSON.stringify-to-json-column path have one extra
+  // string layer; retain that read-only compatibility without broadening it to
+  // unrelated Run families or rewriting private metadata.
+  const maxDepth = allowHistoricalSourceSyncEncoding ? 2 : 1;
+  for (let depth = 0; depth < maxDepth && typeof parsed === "string"; depth += 1) {
+    if (parsed.trim() === "") return undefined;
+    parsed = parseD1JsonColumn(parsed);
+  }
+  return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+    ? (parsed as StoredRunRecord)
+    : undefined;
 }
 
 function jsonRecordFromD1Value(value: unknown): Record<string, unknown> {
@@ -10214,6 +13039,50 @@ an analyzed module with no variable declarations stores an empty JSON array
         "capsule_compatibility_reports",
         "root_module_variable_declarations_json",
         "text",
+      );
+    },
+  },
+  {
+    version: 69,
+    name: "d1_workspace_management_quiescence",
+    checksumSource: `
+Workspaces carry private management_state and management_epoch columns
+existing rows default to active and epoch 1 without changing record_json
+putWorkspace and personal bootstrap writes preserve these private columns
+`,
+    async atomicStatements(db) {
+      return [
+        ...(await d1EnsureColumnStatements(
+          db,
+          "workspaces",
+          "management_state",
+          "text not null default 'active'",
+        )),
+        ...(await d1EnsureColumnStatements(
+          db,
+          "workspaces",
+          "management_epoch",
+          "integer not null default 1",
+        )),
+      ];
+    },
+    async apply(db) {
+      await runD1AtomicSql(
+        db,
+        [
+          ...(await d1EnsureColumnStatements(
+            db,
+            "workspaces",
+            "management_state",
+            "text not null default 'active'",
+          )),
+          ...(await d1EnsureColumnStatements(
+            db,
+            "workspaces",
+            "management_epoch",
+            "integer not null default 1",
+          )),
+        ],
       );
     },
   },

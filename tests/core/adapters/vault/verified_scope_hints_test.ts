@@ -15,6 +15,21 @@ function makeCrypto(): PartitionedSecretBoundaryCrypto {
   });
 }
 
+function seedWorkspace(
+  store: InMemoryOpenTofuControlStore,
+  workspaceId: string,
+): void {
+  void store.putWorkspace({
+    id: workspaceId,
+    handle: `fixture-${workspaceId.replace(/[^a-z0-9-]/gi, "-")}`,
+    displayName: "Fixture Workspace",
+    type: "personal",
+    ownerUserId: "fixture-owner",
+    createdAt: "2026-06-04T00:00:00.000Z",
+    updatedAt: "2026-06-04T00:00:00.000Z",
+  });
+}
+
 const recipe = {
   id: "verified-hints",
   displayName: "Verified hints",
@@ -30,6 +45,7 @@ const recipe = {
 
 function makeVault(driver: CredentialRecipeRuntimeDriver) {
   const store = new InMemoryOpenTofuControlStore();
+  seedWorkspace(store, "workspace_1");
   let sequence = 0;
   const vault = new StaticSecretConnectionVault({
     store,
@@ -42,36 +58,11 @@ function makeVault(driver: CredentialRecipeRuntimeDriver) {
   return { store, vault };
 }
 
-class RacyConnectionStore extends InMemoryOpenTofuControlStore {
-  race: "revoke" | "update" | undefined;
-
-  override async replaceConnectionIfUnchanged(
-    expected: ProviderConnection,
-    replacement: ProviderConnection,
-  ): Promise<boolean> {
-    const race = this.race;
-    this.race = undefined;
-    if (race === "revoke") {
-      await super.putConnection({
-        ...expected,
-        status: "revoked",
-        updatedAt: "2026-06-04T00:00:01.000Z",
-      });
-    } else if (race === "update") {
-      await super.putConnection({
-        ...expected,
-        displayName: "concurrent-update",
-        updatedAt: "2026-06-04T00:00:01.000Z",
-      });
-    }
-    return await super.replaceConnectionIfUnchanged(expected, replacement);
-  }
-}
-
 function makeRacyVault(
-  store: RacyConnectionStore,
+  store: InMemoryOpenTofuControlStore,
   driver: CredentialRecipeRuntimeDriver,
 ) {
+  seedWorkspace(store, "workspace_1");
   const vault = new StaticSecretConnectionVault({
     store,
     crypto: makeCrypto(),
@@ -97,7 +88,7 @@ async function register(
     },
     values: { EXAMPLE_TOKEN: "sealed-token" },
     ...(scopeHints ? { scopeHints } : {}),
-  });
+  }, undefined, null);
 }
 
 test("Vault registration rejects scope hint values that equal supplied secrets", async () => {
@@ -119,7 +110,7 @@ test("Vault registration rejects scope hint values that equal supplied secrets",
       },
       values: { EXAMPLE_TOKEN: "sealed-token" },
       scopeHints: { providerSettings: { accountId: "sealed-token" } },
-    })
+    }, undefined, null)
     .catch((caught) => caught);
 
   expect(error).toBeInstanceOf(ConnectionVaultError);
@@ -158,7 +149,7 @@ test("Vault rejects an unbounded trusted verifier id", async () => {
   });
   const connection = await register(vault);
 
-  const error = await vault.test(connection.id).catch((caught) => caught);
+  const error = await vault.test(connection.id, undefined, null).catch((caught) => caught);
   expect(error).toBeInstanceOf(ConnectionVaultError);
   expect((error as ConnectionVaultError).code).toBe("failed_precondition");
   expect((await store.getConnection(connection.id))?.status).toBe("pending");
@@ -190,7 +181,7 @@ test("Vault persists trusted verified scope hints on successful verification", a
   });
   const connection = await register(vault);
 
-  await expect(vault.test(connection.id)).resolves.toEqual({
+  await expect(vault.test(connection.id, undefined, null)).resolves.toEqual({
     status: "verified",
   });
   expect((await store.getConnection(connection.id))?.scopeHints).toEqual({
@@ -218,7 +209,7 @@ test("Vault ignores verification capabilities returned by driver code", async ()
   });
   const connection = await register(vault);
 
-  await expect(vault.test(connection.id)).resolves.toEqual({
+  await expect(vault.test(connection.id, undefined, null)).resolves.toEqual({
     status: "verified",
   });
   expect((await store.getConnection(connection.id))?.credentialVerification).toEqual({
@@ -236,7 +227,7 @@ test("Vault does not attest capabilities for a descriptor without a verifier", a
   });
   const connection = await register(vault);
 
-  const error = await vault.test(connection.id).catch((caught) => caught);
+  const error = await vault.test(connection.id, undefined, null).catch((caught) => caught);
   expect(error).toBeInstanceOf(ConnectionVaultError);
   expect((error as ConnectionVaultError).code).toBe("failed_precondition");
   expect((await store.getConnection(connection.id))?.status).toBe("pending");
@@ -260,7 +251,7 @@ test("Vault fails closed on malformed trusted verification capabilities", async 
     });
     const connection = await register(vault);
 
-    const error = await vault.test(connection.id).catch((caught) => caught);
+    const error = await vault.test(connection.id, undefined, null).catch((caught) => caught);
     expect(error).toBeInstanceOf(ConnectionVaultError);
     expect((error as ConnectionVaultError).code).toBe("failed_precondition");
     expect((await store.getConnection(connection.id))?.status).toBe("pending");
@@ -285,7 +276,7 @@ test("Vault rejects verified scope hints without trusted ownership declaration",
   });
   const connection = await register(vault);
 
-  const error = await vault.test(connection.id).catch((caught) => caught);
+  const error = await vault.test(connection.id, undefined, null).catch((caught) => caught);
   expect(error).toBeInstanceOf(ConnectionVaultError);
   expect((error as ConnectionVaultError).code).toBe("failed_precondition");
   expect((await store.getConnection(connection.id))?.status).toBe("pending");
@@ -308,7 +299,7 @@ test("Vault rejects secret collisions in verified scope hints before writing the
   });
   const connection = await register(vault);
 
-  const error = await vault.test(connection.id).catch((caught) => caught);
+  const error = await vault.test(connection.id, undefined, null).catch((caught) => caught);
   expect(error).toBeInstanceOf(ConnectionVaultError);
   expect((error as ConnectionVaultError).code).toBe("invalid_argument");
   expect((await store.getConnection(connection.id))?.status).toBe("pending");
@@ -331,7 +322,7 @@ test("Vault rejects opened secret values under benign verified hint keys", async
   });
   const connection = await register(vault);
 
-  const error = await vault.test(connection.id).catch((caught) => caught);
+  const error = await vault.test(connection.id, undefined, null).catch((caught) => caught);
   expect(error).toBeInstanceOf(ConnectionVaultError);
   expect((error as ConnectionVaultError).code).toBe("invalid_argument");
   expect((await store.getConnection(connection.id))?.status).toBe("pending");
@@ -355,7 +346,7 @@ test("Vault validates the final merged scope hints before a successful CAS", asy
     scopeHints: { providerSettings: { accountId: "sealed-token" } },
   });
 
-  const error = await vault.test(connection.id).catch((caught) => caught);
+  const error = await vault.test(connection.id, undefined, null).catch((caught) => caught);
   expect(error).toBeInstanceOf(ConnectionVaultError);
   expect((error as ConnectionVaultError).code).toBe("invalid_argument");
   const persisted = await store.getConnection(connection.id);
@@ -383,7 +374,7 @@ test("Vault invalidates a verified row when a re-test returns secret-shaped hint
     verifiedAt: "2026-06-04T00:00:00.000Z",
   });
 
-  const error = await vault.test(connection.id).catch((caught) => caught);
+  const error = await vault.test(connection.id, undefined, null).catch((caught) => caught);
   expect(error).toBeInstanceOf(ConnectionVaultError);
   expect((error as ConnectionVaultError).code).toBe("invalid_argument");
   expect((await store.getConnection(connection.id))?.status).toBe("pending");
@@ -407,9 +398,9 @@ test("Vault persists verified scope hints on a successful re-test", async () => 
   });
   const connection = await register(vault);
 
-  await vault.test(connection.id);
+  await vault.test(connection.id, undefined, null);
   accountId = "acct_second";
-  await vault.test(connection.id);
+  await vault.test(connection.id, undefined, null);
 
   expect((await store.getConnection(connection.id))?.scopeHints).toEqual({
     providerSettings: { accountId: "acct_second" },
@@ -438,14 +429,14 @@ test("Vault failed re-test CASes verified rows to pending and clears attested hi
     providerSettings: { roleArn: "arn:aws:iam::123456789012:role/retry" },
   });
 
-  await vault.test(connection.id);
+  await vault.test(connection.id, undefined, null);
   expect((await store.getConnection(connection.id))?.credentialVerification).toEqual({
     kind: "takosumi.credential-verification@v1",
     verifierId: "credential-recipe-driver@v1",
     capabilities: ["example.account-metadata.v1"],
   });
   shouldVerify = false;
-  await expect(vault.test(connection.id)).resolves.toEqual({
+  await expect(vault.test(connection.id, undefined, null)).resolves.toEqual({
     status: "pending",
     detail: "verification failed",
   });
@@ -461,7 +452,7 @@ test("Vault failed re-test CASes verified rows to pending and clears attested hi
   });
 
   shouldVerify = true;
-  await expect(vault.test(connection.id)).resolves.toEqual({
+  await expect(vault.test(connection.id, undefined, null)).resolves.toEqual({
     status: "verified",
   });
   expect((await store.getConnection(connection.id))?.scopeHints).toEqual({
@@ -473,38 +464,62 @@ test("Vault failed re-test CASes verified rows to pending and clears attested hi
 });
 
 test("Vault fails closed when successful verification loses the connection CAS", async () => {
-  const store = new RacyConnectionStore();
+  const store = new InMemoryOpenTofuControlStore();
+  let interleaved = false;
   const vault = makeRacyVault(store, {
     evidenceIssuer: "verified_hints_test",
-    async verify() {
+    async verify(input) {
+      // Mutate through the real store write boundary while Vault is awaiting
+      // the credential driver. The subsequent commit must lose its exact-row
+      // CAS rather than overwrite this concurrent update.
+      await store.putConnection({
+        ...input.connection,
+        displayName: "concurrent-update",
+        updatedAt: "2026-06-04T00:00:01.000Z",
+      });
+      interleaved = true;
       return { ok: true };
     },
   });
   const connection = await register(vault);
-  store.race = "update";
 
-  const error = await vault.test(connection.id).catch((caught) => caught);
+  const error = await vault.test(connection.id, undefined, null).catch((caught) => caught);
   expect(error).toBeInstanceOf(ConnectionVaultError);
   expect((error as ConnectionVaultError).code).toBe("failed_precondition");
-  expect((await store.getConnection(connection.id))?.status).toBe("pending");
+  expect(interleaved).toBe(true);
+  expect(await store.getConnection(connection.id)).toMatchObject({
+    status: "pending",
+    displayName: "concurrent-update",
+  });
 });
 
 test("Vault failed re-test cannot overwrite a concurrent revoke", async () => {
   let shouldVerify = true;
-  const store = new RacyConnectionStore();
+  const store = new InMemoryOpenTofuControlStore();
+  let interleaved = false;
   const vault = makeRacyVault(store, {
     evidenceIssuer: "verified_hints_test",
-    async verify() {
-      return shouldVerify ? { ok: true } : { ok: false };
+    async verify(input) {
+      if (shouldVerify) return { ok: true };
+      // Transition the real Connection row to revoked while the failed
+      // verifier is in flight. The pending replacement must lose its exact-row
+      // predicate rather than overwrite the concurrent revocation.
+      await store.putConnection({
+        ...input.connection,
+        status: "revoked",
+        updatedAt: "2026-06-04T00:00:01.000Z",
+      });
+      interleaved = true;
+      return { ok: false };
     },
   });
   const connection = await register(vault);
-  await vault.test(connection.id);
+  await vault.test(connection.id, undefined, null);
   shouldVerify = false;
-  store.race = "revoke";
 
-  const error = await vault.test(connection.id).catch((caught) => caught);
+  const error = await vault.test(connection.id, undefined, null).catch((caught) => caught);
   expect(error).toBeInstanceOf(ConnectionVaultError);
   expect((error as ConnectionVaultError).code).toBe("failed_precondition");
+  expect(interleaved).toBe(true);
   expect((await store.getConnection(connection.id))?.status).toBe("revoked");
 });

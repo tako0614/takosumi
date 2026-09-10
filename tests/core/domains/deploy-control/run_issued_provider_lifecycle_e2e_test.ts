@@ -180,10 +180,10 @@ test("generic run-issued credentials reach plan, apply, and destroy runner dispa
       authMode: "broker",
     },
     values: {},
-  });
+  }, undefined, null);
   expect(pending.status).toBe("pending");
   expect(await store.getSecretBlob(CONNECTION_ID)).toBeUndefined();
-  expect(await vault.test(CONNECTION_ID)).toEqual({ status: "verified" });
+  expect(await vault.test(CONNECTION_ID, undefined, null)).toEqual({ status: "verified" });
   await transitionProviderBindingSetForFixture(store, {
     id: "provider_bindings_run_issued_e2e",
     workspaceId: WORKSPACE_ID,

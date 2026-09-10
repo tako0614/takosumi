@@ -1,0 +1,1501 @@
+import { afterEach, expect, test } from "bun:test";
+
+import type { ApplyRun } from "@takosumi/internal/deploy-control-api";
+import type { Capsule } from "takosumi-contract/capsules";
+import type {
+  SourceSnapshot,
+  SourceSyncRun,
+} from "takosumi-contract/sources";
+import type { Workspace } from "takosumi-contract/workspaces";
+import {
+  InMemoryOpenTofuControlStore,
+  WorkspaceManagementAdmissionConflictError,
+  capsuleLifecycleExpected,
+  type OpenTofuControlStore,
+  type WorkspaceManagementAuthority,
+} from "../../../../core/domains/deploy-control/store.ts";
+import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
+import type {
+  SqlClient,
+  SqlParameters,
+  SqlTransaction,
+} from "../../../../core/adapters/storage/sql.ts";
+import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
+import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
+import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
+import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
+
+const pgClients: PGliteSqlClient[] = [];
+
+test("Postgres claim loses when the persisted Run Workspace changes after observation", async () => {
+  const pg = await PGliteSqlClient.create();
+  pgClients.push(pg);
+  const store = new SqlOpenTofuControlStore({ client: pg });
+  const active = workspace("claim-active");
+  const stopped = workspace("claim-stopped");
+  await store.putWorkspace(active);
+  await store.putWorkspace(stopped);
+  await store.beginWorkspaceDraining(stopped.id, {
+    workspaceId: stopped.id,
+    managementState: "active",
+    managementEpoch: 1,
+  });
+  const queued = applyRun("claim-workspace-interleaving", active.id);
+  await store.beginApplyRun(queued, {
+    workspaceId: active.id,
+    managementState: "active",
+    managementEpoch: 1,
+  });
+  const changed = { ...queued, workspaceId: stopped.id };
+  let interleaved = false;
+  const client: SqlClient = {
+    query: (statement, parameters) => pg.query(statement, parameters),
+    transaction: (callback) => pg.transaction((transaction) => {
+      const wrapped: SqlTransaction = {
+        transaction: (nested) => transaction.transaction(nested),
+        async query<Row extends Record<string, unknown>>(
+          statement: string,
+          parameters?: SqlParameters,
+        ) {
+          const result = await transaction.query<Row>(statement, parameters);
+          if (
+            !interleaved &&
+            /select\s+space_id\s+as\s+"workspaceId"\s+from\s+takosumi_runs/u.test(statement)
+          ) {
+            // Model another writer becoming visible between the claim's
+            // initial observation and its guarded UPDATE. Execute real SQL;
+            // do not fabricate the observed row or the CAS result.
+            interleaved = true;
+            await transaction.query(
+              "update takosumi_runs set space_id = $1, run_json = $2 where id = $3",
+              [stopped.id, JSON.stringify(changed), queued.id],
+            );
+          }
+          return result;
+        },
+      };
+      return callback(wrapped);
+    }),
+  };
+  const claimant = new SqlOpenTofuControlStore({ client });
+  const result = await claimant.transitionRun({
+    id: queued.id,
+    kind: "apply",
+    expectFrom: ["queued"],
+    setLeaseToken: "stale-workspace-lease",
+    run: { ...queued, status: "running" },
+  });
+  expect(interleaved).toBe(true);
+  expect(result).toEqual({ won: false, run: changed });
+  expect(await store.getApplyRun(queued.id)).toEqual(changed);
+});
+
+afterEach(async () => {
+  await Promise.all(pgClients.splice(0).map((client) => client.close()));
+});
+
+test("queued Apply retains its original authority across drain and resume", async () => {
+  const durable = (await adapters()).filter((adapter) => adapter.resumeManagement !== undefined);
+  expect(durable.length).toBe(2);
+  for (const adapter of durable) {
+    const { store } = adapter;
+    const owner = workspace(`apply-original-${adapter.label}`);
+    await store.putWorkspace(owner);
+    const original = { workspaceId: owner.id, managementState: "active" as const, managementEpoch: 1 };
+    const queued = applyRun(`apply-original-${adapter.label}`, owner.id);
+    expect((await store.beginApplyRun(queued, original)).status).toBe("created");
+    await store.beginWorkspaceDraining(owner.id, original);
+    await adapter.resumeManagement!(owner.id);
+    const reopened = adapter.reopen();
+    const current = await reopened.getWorkspaceManagement(owner.id);
+    expect(current?.managementEpoch).toBe(3);
+    const claim = await reopened.transitionRun({
+      id: queued.id, kind: "apply", expectFrom: ["queued"], setLeaseToken: "stale-apply-claim",
+      expectedWorkspaceManagementAuthority: { ...original, managementEpoch: 3 },
+      run: { ...queued, status: "running" },
+    });
+    expect(claim.won).toBe(false);
+    expect(await reopened.getApplyRun(queued.id)).toEqual(queued);
+  }
+});
+
+function workspace(id: string): Workspace {
+  return {
+    id,
+    handle: `ws-${id}`.slice(0, 39),
+    displayName: id,
+    type: "personal",
+    ownerUserId: `owner-${id}`,
+    createdAt: "2026-09-08T00:00:00.000Z",
+    updatedAt: "2026-09-08T00:00:00.000Z",
+  };
+}
+
+function applyRun(id: string, workspaceId: string, status: ApplyRun["status"] = "queued"): ApplyRun {
+  return {
+    id,
+    planRunId: `plan-${id}`,
+    workspaceId,
+    operation: "update",
+    runnerProfileId: "runner",
+    status,
+    expected: {
+      planRunId: `plan-${id}`,
+      runnerProfileId: "runner",
+      sourceDigest: "sha256:source",
+      variablesDigest: "sha256:variables",
+      policyDecisionDigest: "sha256:policy",
+      planDigest: "sha256:plan",
+      planArtifactDigest: "sha256:artifact",
+    },
+    stateBackend: { kind: "operator-managed", ref: "state" },
+    stateLock: { status: "pending", backendRef: "state" },
+    auditEvents: [],
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+function sourceSyncRun(
+  id: string,
+  workspaceId: string,
+  overrides: Partial<SourceSyncRun> = {},
+): SourceSyncRun {
+  return {
+    id,
+    kind: "source_sync",
+    workspaceId,
+    sourceId: `source-${workspaceId}`,
+    url: "https://example.com/repository.git",
+    ref: "main",
+    path: ".",
+    archiveRef: `archive-${id}`,
+    intent: "observe",
+    status: "queued",
+    createdAt: "2026-09-08T00:00:00.000Z",
+    updatedAt: "2026-09-08T00:00:00.000Z",
+    snapshotId: `snapshot-${id}`,
+    ...overrides,
+  };
+}
+
+function capsule(id: string, workspaceId: string): Capsule {
+  return {
+    id,
+    workspaceId,
+    projectId: `project-${workspaceId}`,
+    name: `capsule-${id}`,
+    slug: `capsule-${id}`,
+    sourceId: `source-${workspaceId}`,
+    installConfigId: `install-config-${id}`,
+    environment: "preview",
+    currentStateGeneration: 0,
+    status: "active",
+    autoUpdate: true,
+    createdAt: "2026-09-08T00:00:00.000Z",
+    updatedAt: "2026-09-08T00:00:00.000Z",
+  };
+}
+
+interface Adapter {
+  readonly label: string;
+  readonly store: OpenTofuControlStore;
+  readonly reopen: () => OpenTofuControlStore;
+  /** Fixture for the not-yet-public abort operation; no production bypass. */
+  readonly resumeManagement?: (workspaceId: string) => Promise<void>;
+  readonly setStoredSourceSyncAuthority?: (runId: string, value: unknown) => Promise<void>;
+}
+
+async function adapters(): Promise<readonly Adapter[]> {
+  const pgClient = await PGliteSqlClient.create();
+  pgClients.push(pgClient);
+  const d1 = new SqliteFakeD1();
+  const memory = new InMemoryOpenTofuControlStore();
+  return [
+    {
+      label: "memory",
+      store: memory,
+      reopen: () => memory,
+    },
+    {
+      label: "postgres",
+      store: new SqlOpenTofuControlStore({ client: pgClient }),
+      reopen: () => new SqlOpenTofuControlStore({ client: pgClient }),
+      async resumeManagement(workspaceId) {
+        await pgClient.query(
+          "update takosumi_workspaces set management_state = 'active', management_epoch = management_epoch + 1 where id = $1 and management_state = 'draining'",
+          [workspaceId],
+        );
+      },
+      async setStoredSourceSyncAuthority(runId, value) {
+        await pgClient.query(
+          "update takosumi_runs set run_json = (run_json::jsonb - 'workspaceManagementAuthority') || $1::jsonb where id = $2",
+          [JSON.stringify(value === undefined ? {} : { workspaceManagementAuthority: value }), runId],
+        );
+      },
+    },
+    {
+      label: "d1",
+      store: new CloudflareD1OpenTofuControlStore(d1),
+      reopen: () => new CloudflareD1OpenTofuControlStore(d1),
+      async resumeManagement(workspaceId) {
+        await d1.prepare(
+          "update workspaces set management_state = 'active', management_epoch = management_epoch + 1 where id = ? and management_state = 'draining'",
+        ).bind(workspaceId).run();
+      },
+      async setStoredSourceSyncAuthority(runId, value) {
+        if (value === undefined) {
+          await d1.prepare("update runs set run_json = json_remove(run_json, '$.workspaceManagementAuthority') where id = ?")
+            .bind(runId).run();
+        } else {
+          await d1.prepare("update runs set run_json = json_set(run_json, '$.workspaceManagementAuthority', json(?)) where id = ?")
+            .bind(JSON.stringify(value), runId).run();
+        }
+      },
+    },
+  ];
+}
+
+test("Workspace management observations cannot change stored admission authority", async () => {
+  for (const { label, store } of await adapters()) {
+    const ws = workspace(`management-snapshot-${label}`);
+    await store.putWorkspace(ws);
+    const original = { workspaceId: ws.id, managementState: "active" as const, managementEpoch: 1 };
+    const observation = (await store.getWorkspaceManagement(ws.id))!;
+    Object.assign(observation, { managementState: "released", managementEpoch: 90 });
+    expect(await store.getWorkspaceManagement(ws.id), label).toEqual(original);
+
+    for (const expectedStatus of ["started", "existing", "conflict"] as const) {
+      const result = await store.beginWorkspaceDraining(ws.id, {
+        ...original,
+        managementEpoch: expectedStatus === "conflict" ? 2 : 1,
+      });
+      expect(result.status, label).toBe(expectedStatus);
+      if (result.status === "not_found") throw new Error("Workspace disappeared");
+      Object.assign(result.management, original);
+      expect(await store.getWorkspaceManagement(ws.id), label).toEqual({
+        workspaceId: ws.id, managementState: "draining", managementEpoch: 2,
+      });
+      await expect(store.beginApplyRun(applyRun(`snapshot-${expectedStatus}-${label}`, ws.id), original), label)
+        .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    }
+  }
+});
+
+test("Workspace draining binds the command epoch before asynchronous storage work", async () => {
+  for (const { label, store } of await adapters()) {
+    for (const originalEpoch of [42, 1]) {
+      const ws = workspace(`drain-command-${label}-${originalEpoch}`);
+      await store.putWorkspace(ws);
+      const expected = { workspaceId: ws.id, managementState: "active" as const, managementEpoch: originalEpoch };
+      const pending = store.beginWorkspaceDraining(ws.id, expected);
+      expected.managementEpoch = originalEpoch === 1 ? 42 : 1;
+      expect(await pending, label).toEqual(originalEpoch === 1
+        ? { status: "started", management: { workspaceId: ws.id, managementState: "draining", managementEpoch: 2 } }
+        : { status: "conflict", management: { workspaceId: ws.id, managementState: "active", managementEpoch: 1 } });
+      expect(await store.getWorkspaceManagement(ws.id), label).toEqual({
+        workspaceId: ws.id,
+        managementState: originalEpoch === 1 ? "draining" : "active",
+        managementEpoch: originalEpoch === 1 ? 2 : 1,
+      });
+    }
+  }
+});
+
+test("Workspace management CAS and guarded admissions are conformed across storage adapters", async () => {
+  for (const { label, store } of await adapters()) {
+    const ws = workspace(`management-${label}`);
+    await store.putWorkspace(ws);
+    const authority = (await store.getWorkspaceManagement(ws.id))!;
+    expect(authority, label).toEqual({
+      workspaceId: ws.id,
+      managementState: "active",
+      managementEpoch: 1,
+    });
+
+    const existing = applyRun(`existing-${label}`, ws.id);
+    expect(await store.beginApplyRun(existing, authority), label).toEqual({
+      status: "created",
+      run: existing,
+    });
+    const forged = applyRun(`forged-${label}`, ws.id);
+    expect(await store.beginApplyRun(forged, authority), label).toEqual({
+      status: "created",
+      run: forged,
+    });
+    const otherWorkspace = workspace(`other-${label}`);
+    await store.putWorkspace(otherWorkspace);
+
+    // Claim while active so the later heartbeat/finalizer can prove that an
+    // existing lease remains valid after the Workspace starts draining.
+    const leaseToken = `lease-${label}`;
+    const claimedRun = {
+      ...existing,
+      status: "running" as const,
+      startedAt: 2,
+      heartbeatAt: 2,
+    };
+    expect(
+      await store.transitionRun({
+        id: existing.id,
+        kind: "apply",
+        expectFrom: ["queued"],
+        run: claimedRun,
+        setLeaseToken: leaseToken,
+      }),
+      label,
+    ).toEqual({ won: true, run: claimedRun });
+
+    expect(await store.beginWorkspaceDraining(ws.id, authority), label).toEqual({
+      status: "started",
+      management: {
+        workspaceId: ws.id,
+        managementState: "draining",
+        managementEpoch: 2,
+      },
+    });
+    expect(await store.beginWorkspaceDraining(ws.id, authority), label).toEqual({
+      status: "existing",
+      management: {
+        workspaceId: ws.id,
+        managementState: "draining",
+        managementEpoch: 2,
+      },
+    });
+    expect(
+      await store.beginWorkspaceDraining(ws.id, {
+        workspaceId: ws.id,
+        managementState: "active",
+        managementEpoch: 2,
+      }),
+      label,
+    ).toEqual({
+      status: "conflict",
+      management: {
+        workspaceId: ws.id,
+        managementState: "draining",
+        managementEpoch: 2,
+      },
+    });
+
+    const staleTakeover = await store.transitionRun({
+      id: existing.id,
+      kind: "apply",
+      expectFrom: ["running"],
+      expectHeartbeatAt: 2,
+      run: { ...claimedRun, heartbeatAt: 3 },
+      setLeaseToken: `takeover-${label}`,
+    });
+    expect(staleTakeover, label).toEqual({
+      won: false,
+      run: claimedRun,
+    });
+
+    // Exact existing reads remain idempotent, but every new row is denied even
+    // when the optional expected authority is omitted.
+    expect(await store.beginApplyRun({ ...existing, updatedAt: 2 }), label).toEqual({
+      status: "existing",
+      run: claimedRun,
+    });
+    await expect(
+      store.beginApplyRun(applyRun(`new-${label}`, ws.id)),
+      label,
+    ).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    await expect(
+      store.beginApplyRun(
+        applyRun(`cross-${label}`, ws.id),
+        {
+          workspaceId: `other-${label}`,
+          managementState: "active",
+          managementEpoch: 1,
+        } as WorkspaceManagementAuthority,
+      ),
+      label,
+    ).rejects.toBeInstanceOf(TypeError);
+
+    // Missing Workspace is fail-closed for both transition and CAS begin.
+    expect(
+      await store.beginWorkspaceDraining(`missing-${label}`, {
+        workspaceId: `missing-${label}`,
+        managementState: "active",
+        managementEpoch: 1,
+      }),
+      label,
+    ).toEqual({ status: "not_found" });
+    await expect(
+      store.beginApplyRun(applyRun(`missing-run-${label}`, `missing-${label}`)),
+      label,
+    ).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+
+    // A new lease is denied from the persisted authoritative Workspace row,
+    // even when the replacement payload names a different active Workspace.
+    const claim = await store.transitionRun({
+      id: forged.id,
+      kind: "apply",
+      expectFrom: ["queued"],
+      run: { ...forged, workspaceId: otherWorkspace.id, status: "running" },
+      setLeaseToken: `forged-lease-${label}`,
+    });
+    expect(claim, label).toEqual({ won: false, run: forged });
+
+    const wrongLease = await store.transitionRun({
+      id: existing.id,
+      kind: "apply",
+      expectFrom: ["running"],
+      expectLeaseToken: "wrong-lease",
+      run: { ...claimedRun, heartbeatAt: 3 },
+    });
+    expect(wrongLease, label).toEqual({ won: false, run: claimedRun });
+
+    const heartbeat = await store.transitionRun({
+      id: existing.id,
+      kind: "apply",
+      expectFrom: ["running"],
+      expectLeaseToken: leaseToken,
+      expectHeartbeatAt: 2,
+      run: { ...claimedRun, heartbeatAt: 3 },
+    });
+    expect(heartbeat, label).toEqual({
+      won: true,
+      run: { ...claimedRun, heartbeatAt: 3 },
+    });
+    const terminal = await store.transitionRun({
+      id: existing.id,
+      kind: "apply",
+      expectFrom: ["running"],
+      expectLeaseToken: leaseToken,
+      expectHeartbeatAt: 3,
+      run: { ...claimedRun, heartbeatAt: 3, status: "succeeded", finishedAt: 4 },
+      clearLeaseToken: true,
+    });
+    expect(terminal, label).toEqual({
+      won: true,
+      run: { ...claimedRun, heartbeatAt: 3, status: "succeeded", finishedAt: 4 },
+    });
+  }
+});
+
+test("Workspace metadata replacement fences stopped and resumed authority without losing concurrent settings", async () => {
+  for (const { label, store, reopen, resumeManagement } of await adapters()) {
+    const before = workspace(`metadata-cas-${label}`);
+    await store.putWorkspace(before);
+    const authority: WorkspaceManagementAuthority = {
+      workspaceId: before.id, managementState: "active", managementEpoch: 1,
+    };
+    const changed = { ...before, displayName: "Reviewed name" };
+    expect(await store.replaceWorkspace({
+      workspace: changed, expectedWorkspace: before, expectedWorkspaceManagementAuthority: authority,
+    }), label).toBe(true);
+    expect(await store.replaceWorkspace({
+      workspace: { ...before, billingSettings: { mode: "showback" } },
+      expectedWorkspace: before, expectedWorkspaceManagementAuthority: authority,
+    }), label).toBe(false);
+    expect(await reopen().getWorkspace(before.id), label).toEqual(changed);
+    await store.beginWorkspaceDraining(before.id, authority);
+    await expect(store.replaceWorkspace({
+      workspace: { ...changed, displayName: "Late name" }, expectedWorkspace: changed,
+      expectedWorkspaceManagementAuthority: authority,
+    }), label).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    if (resumeManagement) {
+      await resumeManagement(before.id);
+      await expect(store.replaceWorkspace({
+        workspace: { ...changed, displayName: "Late name" }, expectedWorkspace: changed,
+        expectedWorkspaceManagementAuthority: authority,
+      }), label).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      const service = new WorkspacesService({ store: reopen() });
+      expect((await service.updateWorkspace(before.id, { displayName: "Fresh name" })).displayName, label).toBe("Fresh name");
+    }
+  }
+});
+
+test("Workspace member writes recheck actor, target, and original epoch across adapters", async () => {
+  for (const { label, store, reopen, resumeManagement } of await adapters()) {
+    const service = new WorkspacesService({ store });
+    const ws = await service.createWorkspace({
+      handle: `member-cas-${label}`, displayName: "Members", type: "personal", ownerUserId: "namespace-owner",
+    });
+    const actor = await service.upsertWorkspaceMember({
+      workspaceId: ws.id, accountId: "administrator", actorAccountId: ws.ownerUserId, roles: ["admin"],
+    });
+    const target = await service.upsertWorkspaceMember({
+      workspaceId: ws.id, accountId: "reader", actorAccountId: ws.ownerUserId, roles: ["member"],
+    });
+    const authority: WorkspaceManagementAuthority = {
+      workspaceId: ws.id, managementState: "active", managementEpoch: 1,
+    };
+    const input = {
+      member: { ...target, roles: ["viewer"] as const }, expectedMember: target,
+      expectedActor: actor, expectedWorkspace: ws, expectedWorkspaceManagementAuthority: authority,
+    };
+    await store.putWorkspaceMember({ ...actor, status: "suspended" });
+    expect(await store.mutateWorkspaceMember(input), label).toBe(false);
+    expect(await reopen().getWorkspaceMember(ws.id, target.accountId), label).toEqual(target);
+    await store.putWorkspaceMember(actor);
+    expect(await store.mutateWorkspaceMember(input), label).toBe(true);
+    expect(await store.mutateWorkspaceMember({ ...input, member: { ...target, status: "suspended" } }), label).toBe(false);
+    const current = (await store.getWorkspaceMember(ws.id, target.accountId))!;
+    await store.beginWorkspaceDraining(ws.id, authority);
+    await expect(store.mutateWorkspaceMember({ ...input, expectedMember: current }), label)
+      .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    if (resumeManagement) {
+      await resumeManagement(ws.id);
+      await expect(store.mutateWorkspaceMember({ ...input, expectedMember: current }), label)
+        .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    }
+    expect(await reopen().getWorkspaceMember(ws.id, target.accountId), label).toEqual(current);
+  }
+});
+
+test("Accounts metadata writes fence revoked actors and preserve namespace-owner access", async () => {
+  for (const { label, store } of await adapters()) {
+    const service = new WorkspacesService({ store });
+    const ws = await service.createWorkspace({
+      handle: `account-cas-${label}`, displayName: "Account settings", type: "personal", ownerUserId: "namespace-owner",
+    });
+    const actor = await service.upsertWorkspaceMember({
+      workspaceId: ws.id, accountId: "admin", actorAccountId: ws.ownerUserId, roles: ["admin"],
+    });
+    const authority = await service.captureManagementAuthority(ws.id);
+    const input = {
+      workspace: { ...ws, displayName: "Updated" }, expectedWorkspace: ws,
+      expectedWorkspaceManagementAuthority: authority, actorAccountId: actor.accountId, expectedActor: actor,
+    };
+    await store.putWorkspaceMember({ ...actor, status: "suspended" });
+    expect(await store.replaceWorkspaceForAccount(input), label).toBe(false);
+    expect(await store.getWorkspace(ws.id), label).toEqual(ws);
+    await store.putWorkspaceMember(actor);
+    expect(await store.replaceWorkspaceForAccount(input), label).toBe(true);
+    const fresh = workspace(`owner-fallback-${label}`);
+    await store.putWorkspace(fresh);
+    expect(await store.replaceWorkspaceForAccount({
+      workspace: { ...fresh, displayName: "Namespace owner" }, expectedWorkspace: fresh,
+      actorAccountId: fresh.ownerUserId,
+      expectedWorkspaceManagementAuthority: { workspaceId: fresh.id, managementState: "active", managementEpoch: 1 },
+    }), label).toBe(true);
+    expect(await store.getWorkspaceMember(fresh.id, fresh.ownerUserId), label).toBeUndefined();
+  }
+});
+
+test("member writes cannot demote the final active owner after a competing demotion", async () => {
+  for (const { label, store } of await adapters()) {
+    const ws = workspace(`last-owner-${label}`);
+    await store.putWorkspace(ws);
+    // An imported roster without its derived namespace-owner row still must
+    // not lose its last explicit owner through two previously reviewed edits.
+    const owners = ["first", "second"].map((accountId) => ({
+      id: `owner-${accountId}`, workspaceId: ws.id, accountId,
+      roles: ["owner"] as const, status: "active" as const,
+      createdAt: ws.createdAt, updatedAt: ws.updatedAt,
+    }));
+    for (const owner of owners) await store.putWorkspaceMember(owner);
+    const inputs = owners.map((owner) => ({
+      member: { ...owner, roles: ["member"] as const }, expectedMember: owner, expectedActor: owner,
+      expectedWorkspace: ws,
+      expectedWorkspaceManagementAuthority: { workspaceId: ws.id, managementState: "active" as const, managementEpoch: 1 },
+    }));
+    expect(await store.mutateWorkspaceMember(inputs[0]!), label).toBe(true);
+    expect(await store.mutateWorkspaceMember(inputs[1]!), label).toBe(false);
+    expect(await store.getWorkspaceMember(ws.id, "second"), label).toEqual(owners[1]);
+  }
+});
+
+test("guarded member writes refuse a candidate the canonical reader cannot decode", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const service = new WorkspacesService({ store });
+  const ws = await service.createWorkspace({
+    handle: "canonical-owner", displayName: "Owner", type: "personal", ownerUserId: "owner",
+  });
+  const owner = (await store.getWorkspaceMember(ws.id, "owner"))!;
+  const input = {
+    expectedWorkspace: ws, expectedActor: owner, expectedMember: owner,
+    expectedWorkspaceManagementAuthority: await service.captureManagementAuthority(ws.id),
+  };
+  await expect(store.mutateWorkspaceMember({ ...input, member: { ...owner, roles: ["owner", "owner"] } }))
+    .rejects.toBeInstanceOf(TypeError);
+  await expect(store.mutateWorkspaceMember({ ...input, member: { ...owner, updatedAt: "not-a-timestamp" } }))
+    .rejects.toBeInstanceOf(TypeError);
+  expect(await store.getWorkspaceMember(ws.id, "owner")).toEqual(owner);
+});
+
+test("D1 cannot count a corrupt member identity as the remaining active owner", async () => {
+  const database = new SqliteFakeD1();
+  const store = new CloudflareD1OpenTofuControlStore(database);
+  const ws = workspace("corrupt-other-owner");
+  await store.putWorkspace(ws);
+  const owner = {
+    id: "canonical-owner", workspaceId: ws.id, accountId: "first",
+    roles: ["owner"] as const, status: "active" as const,
+    createdAt: ws.createdAt, updatedAt: ws.updatedAt,
+  };
+  await store.putWorkspaceMember(owner);
+  await store.putWorkspaceMember({ ...owner, id: "corrupt-owner", accountId: "second" });
+  await database.prepare("update workspace_members set record_json = json_set(record_json, '$.id', 'different-row') where id = ?")
+    .bind("corrupt-owner").run();
+  expect(await store.mutateWorkspaceMember({
+    member: { ...owner, roles: ["member"] }, expectedMember: owner, expectedActor: owner,
+    expectedWorkspace: ws,
+    expectedWorkspaceManagementAuthority: { workspaceId: ws.id, managementState: "active", managementEpoch: 1 },
+  })).toBe(false);
+  expect(await store.getWorkspaceMember(ws.id, owner.accountId)).toEqual(owner);
+});
+
+test("private management columns survive Workspace upsert, bootstrap claim, and reopen", async () => {
+  for (const { label, store, reopen } of await adapters()) {
+    const ws = workspace(`upsert-${label}`);
+    await store.putWorkspace(ws);
+    const authority = (await store.getWorkspaceManagement(ws.id))!;
+    await store.beginWorkspaceDraining(ws.id, authority);
+    const updated = { ...ws, displayName: "updated public projection" };
+    await store.putWorkspace(updated);
+    expect(await store.getWorkspace(updated.id), label).toEqual(updated);
+    expect(await store.getWorkspaceManagement(updated.id), label).toEqual({
+      workspaceId: updated.id,
+      managementState: "draining",
+      managementEpoch: 2,
+    });
+
+    const candidate = workspace(`bootstrap-${label}`);
+    const claimed = await store.claimPersonalWorkspaceBootstrap(
+      candidate.ownerUserId,
+      candidate,
+    );
+    expect(claimed, label).toEqual(candidate);
+    const candidateAuthority = (await store.getWorkspaceManagement(candidate.id))!;
+    expect(candidateAuthority, label).toMatchObject({
+      workspaceId: candidate.id,
+      managementState: "active",
+      managementEpoch: 1,
+    });
+    await store.beginWorkspaceDraining(candidate.id, candidateAuthority);
+    expect(
+      await store.claimPersonalWorkspaceBootstrap(candidate.ownerUserId, {
+        ...candidate,
+        displayName: "ignored replay",
+      }),
+      label,
+    ).toEqual(candidate);
+    expect(await reopen().getWorkspaceManagement(candidate.id), label).toEqual({
+      workspaceId: candidate.id,
+      managementState: "draining",
+      managementEpoch: 2,
+    });
+  }
+});
+
+test("SourceSync admission fences new rows and preserves exact retries across adapters", async () => {
+  for (const { label, store } of await adapters()) {
+    const ws = workspace(`source-${label}`);
+    await store.putWorkspace(ws);
+    const authority = (await store.getWorkspaceManagement(ws.id))!;
+    const initial = sourceSyncRun(`source-run-${label}`, ws.id);
+    expect(await store.beginSourceSyncRun(initial, authority), label).toEqual({
+      status: "created",
+      run: initial,
+    });
+    // Creation must already persist a readable Run, before any transition
+    // rewrites its payload. Exact replay is observation, not re-admission.
+    expect(await store.getSourceSyncRun(initial.id), label).toEqual(initial);
+    expect(await store.beginSourceSyncRun(initial), label).toEqual({
+      status: "existing",
+      run: initial,
+    });
+
+    const claimed: SourceSyncRun = {
+      ...initial,
+      status: "running",
+      startedAt: "2026-09-08T00:00:01.000Z",
+      heartbeatAt: 1,
+      updatedAt: "2026-09-08T00:00:01.000Z",
+    };
+    expect(
+      await store.transitionRun({
+        id: initial.id,
+        kind: "source_sync",
+        expectFrom: ["queued"],
+        run: claimed,
+        setLeaseToken: `source-lease-${label}`,
+      }),
+      label,
+    ).toEqual({ won: true, run: claimed });
+
+    expect(await store.beginWorkspaceDraining(ws.id, authority), label).toEqual({
+      status: "started",
+      management: {
+        workspaceId: ws.id,
+        managementState: "draining",
+        managementEpoch: 2,
+      },
+    });
+
+    // Mutable status/evidence changes in a retry candidate do not overwrite
+    // the durable row or its lease/evidence while the Workspace drains.
+    expect(
+      await store.beginSourceSyncRun(
+        {
+          ...initial,
+          status: "failed",
+          updatedAt: "2026-09-08T00:00:02.000Z",
+          finishedAt: "2026-09-08T00:00:02.000Z",
+          errorCode: "retry-candidate",
+        },
+        authority,
+      ),
+      label,
+    ).toEqual({ status: "existing", run: claimed });
+    expect(await store.getSourceSyncRun(initial.id), label).toEqual(claimed);
+
+    await expect(
+      store.beginSourceSyncRun(sourceSyncRun(`source-new-${label}`, ws.id)),
+      label,
+    ).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    await expect(
+      store.beginSourceSyncRun(sourceSyncRun(`source-new-expected-${label}`, ws.id), authority),
+      label,
+    ).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+
+    expect(
+      await store.beginSourceSyncRun({
+        ...initial,
+        sourceId: "source-different",
+      }),
+      label,
+    ).toEqual({ status: "conflict" });
+
+    // The already-held lease can still finalize after draining; the expected
+    // active authority is only an optional stale-transition fence.
+    const terminal: SourceSyncRun = {
+      ...claimed,
+      status: "failed",
+      finishedAt: "2026-09-08T00:00:03.000Z",
+      updatedAt: "2026-09-08T00:00:03.000Z",
+    };
+    expect(
+      await store.transitionRun({
+        id: claimed.id,
+        kind: "source_sync",
+        expectFrom: ["running"],
+        expectLeaseToken: `source-lease-${label}`,
+        run: terminal,
+        clearLeaseToken: true,
+      }),
+      label,
+    ).toEqual({ won: true, run: terminal });
+
+    const staleAuthorityRun = sourceSyncRun(`source-stale-${label}`, ws.id);
+    // Seed through the raw path to model a pre-existing queue item created
+    // before the Workspace began draining.
+    await store.putSourceSyncRun(staleAuthorityRun);
+    expect(
+      await store.transitionRun({
+        id: staleAuthorityRun.id,
+        kind: "source_sync",
+        expectFrom: ["queued"],
+        run: { ...staleAuthorityRun, status: "running" },
+        expectedWorkspaceManagementAuthority: authority,
+      }),
+      label,
+    ).toEqual({ won: false, run: staleAuthorityRun });
+  }
+});
+
+test("SourceSync retains its original authority through public rewrites and cannot borrow a resumed epoch", async () => {
+  for (const { label, store, reopen, resumeManagement } of await adapters()) {
+    if (!resumeManagement) continue;
+    const ws = workspace(`source-epoch-${label}`);
+    await store.putWorkspace(ws);
+    const authority: WorkspaceManagementAuthority = {
+      workspaceId: ws.id, managementState: "active", managementEpoch: 1,
+    };
+    const currentAuthority: WorkspaceManagementAuthority = { ...authority, managementEpoch: 3 };
+    const queued = sourceSyncRun(`source-epoch-run-${label}`, ws.id);
+    expect(await store.beginSourceSyncRun(queued, authority), label).toEqual({ status: "created", run: queued });
+    // A public read/modify/write must preserve storage-owned original authority
+    // even if the input attempts to replace it with the future active epoch.
+    expect(await store.putSourceSyncRun({ ...queued, workspaceManagementAuthority: currentAuthority } as SourceSyncRun), label)
+      .toEqual(queued);
+    const observed = { ...queued, updatedAt: "2026-09-08T00:00:01.000Z" };
+    expect(await store.transitionRun({
+      id: queued.id, kind: "source_sync", expectFrom: ["queued"], run: observed,
+    }), label).toEqual({ won: true, run: observed });
+    expect(await reopen().listSourceSyncRuns(queued.sourceId), label).toEqual([observed]);
+    expect(await reopen().listRunsByWorkspace(ws.id), label).toEqual([observed]);
+    expect(await reopen().listRecoverableOpenTofuRuns({
+      staleQueuedBeforeMs: Date.parse("2026-09-09T00:00:00.000Z"),
+      staleRunningBeforeMs: Date.parse("2026-09-09T00:00:00.000Z"),
+    }), label).toEqual([observed]);
+
+    await store.beginWorkspaceDraining(ws.id, authority);
+    await resumeManagement(ws.id);
+    const resumed = reopen();
+    expect(await resumed.getWorkspaceManagement(ws.id), label).toEqual(currentAuthority);
+    expect(await resumed.beginSourceSyncRun(queued), label).toEqual({ status: "existing", run: observed });
+    for (const expectedWorkspaceManagementAuthority of [undefined, currentAuthority]) {
+      expect(await resumed.transitionRun({
+        id: queued.id, kind: "source_sync", expectFrom: ["queued"],
+        run: { ...observed, status: "running" }, setLeaseToken: `stale-${label}`,
+        expectedWorkspaceManagementAuthority,
+      }), label).toEqual({ won: false, run: observed });
+    }
+    const fresh = sourceSyncRun(`source-epoch-fresh-${label}`, ws.id);
+    await expect(resumed.beginSourceSyncRun(fresh), label)
+      .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    await expect(resumed.beginSourceSyncRun(fresh, authority), label)
+      .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    expect(await resumed.beginSourceSyncRun(fresh, currentAuthority), label)
+      .toEqual({ status: "created", run: fresh });
+    const running = { ...fresh, status: "running" as const };
+    expect(await resumed.transitionRun({
+      id: fresh.id, kind: "source_sync", expectFrom: ["queued"],
+      run: running, setLeaseToken: `fresh-${label}`,
+    }), label).toEqual({ won: true, run: running });
+  }
+});
+
+test("SourceSync stale replacement requires the stored authority on durable adapters", async () => {
+  for (const { label, store, reopen, resumeManagement } of await adapters()) {
+    const ws = workspace(`source-replace-${label}`);
+    await store.putWorkspace(ws);
+    const originalAuthority: WorkspaceManagementAuthority = {
+      workspaceId: ws.id,
+      managementState: "active",
+      managementEpoch: 1,
+    };
+    const queued = sourceSyncRun(`source-replace-run-${label}`, ws.id);
+    expect(
+      await store.beginSourceSyncRun(queued, originalAuthority),
+      label,
+    ).toEqual({ status: "created", run: queued });
+    const leaseToken = `source-replace-lease-${label}`;
+    const running: SourceSyncRun = {
+      ...queued,
+      status: "running",
+      startedAt: "2026-09-08T00:00:01.000Z",
+      heartbeatAt: 1,
+      updatedAt: "2026-09-08T00:00:01.000Z",
+    };
+    expect(
+      await store.transitionRun({
+        id: queued.id,
+        kind: "source_sync",
+        expectFrom: ["queued"],
+        run: running,
+        setLeaseToken: leaseToken,
+        heartbeatAt: running.heartbeatAt,
+      }),
+      label,
+    ).toEqual({ won: true, run: running });
+
+    // Memory has no reopen/resume seam yet; the actual durable adapters use
+    // their existing raw-fixture resume to advance N=1 -> draining N+1 -> N+2.
+    if (resumeManagement) {
+      expect(
+        await store.beginWorkspaceDraining(ws.id, originalAuthority),
+        label,
+      ).toMatchObject({
+        status: "started",
+        management: {
+          workspaceId: ws.id,
+          managementState: "draining",
+          managementEpoch: 2,
+        },
+      });
+      await resumeManagement(ws.id);
+      const resumed = reopen();
+      const currentAuthority = await resumed.getWorkspaceManagement(ws.id);
+      expect(currentAuthority, label).toEqual({
+        workspaceId: ws.id,
+        managementState: "active",
+        managementEpoch: 3,
+      });
+      const failed: SourceSyncRun = {
+        ...running,
+        status: "failed",
+        finishedAt: "2026-09-08T00:00:02.000Z",
+        heartbeatAt: 2,
+        updatedAt: "2026-09-08T00:00:02.000Z",
+        error: "stale_source_sync_replaced",
+      };
+      expect(
+        await resumed.transitionRun({
+          id: running.id,
+          kind: "source_sync",
+          expectFrom: ["running"],
+          expectLeaseToken: leaseToken,
+          expectHeartbeatAt: running.heartbeatAt,
+          run: failed,
+          clearLeaseToken: true,
+          heartbeatAt: failed.heartbeatAt,
+          expectedWorkspaceManagementAuthority: currentAuthority!,
+          requireStoredManagementAuthority: true,
+        }),
+        label,
+      ).toEqual({ won: false, run: running });
+      expect(await resumed.getSourceSyncRun(running.id), label).toEqual(running);
+
+      // A held lease remains usable for the completion path after the guarded
+      // stale-replacement attempt loses; this proves the failed CAS did not
+      // clear or replace the original lease.
+      const heartbeat: SourceSyncRun = {
+        ...running,
+        heartbeatAt: 2,
+        updatedAt: "2026-09-08T00:00:02.500Z",
+      };
+      expect(
+        await resumed.transitionRun({
+          id: running.id,
+          kind: "source_sync",
+          expectFrom: ["running"],
+          expectLeaseToken: leaseToken,
+          expectHeartbeatAt: running.heartbeatAt,
+          run: heartbeat,
+          heartbeatAt: heartbeat.heartbeatAt,
+        }),
+        label,
+      ).toEqual({ won: true, run: heartbeat });
+    }
+
+    // Same-epoch stale terminalization remains valid when the stored tuple
+    // matches the active caller authority, including the strict flag. Use a
+    // separate Workspace because the durable case above has already resumed
+    // this one to N+2.
+    const sameEpochWorkspace = workspace(`source-replace-same-${label}`);
+    await store.putWorkspace(sameEpochWorkspace);
+    const sameEpochAuthority: WorkspaceManagementAuthority = {
+      workspaceId: sameEpochWorkspace.id,
+      managementState: "active",
+      managementEpoch: 1,
+    };
+    const sameEpochQueued = sourceSyncRun(
+      `source-replace-same-run-${label}`,
+      sameEpochWorkspace.id,
+    );
+    expect(
+      await store.beginSourceSyncRun(sameEpochQueued, sameEpochAuthority),
+      label,
+    ).toEqual({ status: "created", run: sameEpochQueued });
+    const sameEpochLease = `source-replace-same-lease-${label}`;
+    const sameEpochRunning: SourceSyncRun = {
+      ...sameEpochQueued,
+      status: "running",
+      startedAt: "2026-09-08T00:01:01.000Z",
+      heartbeatAt: 1,
+      updatedAt: "2026-09-08T00:01:01.000Z",
+    };
+    expect(
+      await store.transitionRun({
+        id: sameEpochQueued.id,
+        kind: "source_sync",
+        expectFrom: ["queued"],
+        run: sameEpochRunning,
+        setLeaseToken: sameEpochLease,
+        heartbeatAt: sameEpochRunning.heartbeatAt,
+      }),
+      label,
+    ).toEqual({ won: true, run: sameEpochRunning });
+    const sameEpochFailed: SourceSyncRun = {
+      ...sameEpochRunning,
+      status: "failed",
+      finishedAt: "2026-09-08T00:01:02.000Z",
+      heartbeatAt: 2,
+      updatedAt: "2026-09-08T00:01:02.000Z",
+      error: "stale_source_sync_replaced",
+    };
+    expect(
+      await store.transitionRun({
+        id: sameEpochRunning.id,
+        kind: "source_sync",
+        expectFrom: ["running"],
+        expectLeaseToken: sameEpochLease,
+        expectHeartbeatAt: sameEpochRunning.heartbeatAt,
+        run: sameEpochFailed,
+        clearLeaseToken: true,
+        heartbeatAt: sameEpochFailed.heartbeatAt,
+        expectedWorkspaceManagementAuthority: sameEpochAuthority,
+        requireStoredManagementAuthority: true,
+      }),
+      label,
+    ).toEqual({ won: true, run: sameEpochFailed });
+    expect(await store.getSourceSyncRun(sameEpochRunning.id), label).toEqual(
+      sameEpochFailed,
+    );
+  }
+});
+
+test("SourceSync legacy rows cannot gain authority from raw writes or a current caller", async () => {
+  for (const { label, store } of await adapters()) {
+    const ws = workspace(`source-legacy-${label}`);
+    await store.putWorkspace(ws);
+    const authority: WorkspaceManagementAuthority = {
+      workspaceId: ws.id, managementState: "active", managementEpoch: 1,
+    };
+    const queued = sourceSyncRun(`source-legacy-run-${label}`, ws.id);
+    await expect(store.beginSourceSyncRun(queued), label)
+      .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    expect(await store.putSourceSyncRun({ ...queued, workspaceManagementAuthority: authority } as SourceSyncRun), label)
+      .toEqual(queued);
+    expect(await store.beginSourceSyncRun(queued, authority), label)
+      .toEqual({ status: "existing", run: queued });
+    for (const expectedWorkspaceManagementAuthority of [undefined, authority]) {
+      expect(await store.transitionRun({
+        id: queued.id, kind: "source_sync", expectFrom: ["queued"],
+        run: { ...queued, status: "running" }, setLeaseToken: `legacy-${label}`,
+        expectedWorkspaceManagementAuthority,
+      }), label).toEqual({ won: false, run: queued });
+    }
+  }
+});
+
+test("SourceSync corrupt stored authority denies fresh leases while historical held leases can finish", async () => {
+  for (const { label, store, reopen, setStoredSourceSyncAuthority } of await adapters()) {
+    if (!setStoredSourceSyncAuthority) continue;
+    const ws = workspace(`source-corrupt-${label}`);
+    await store.putWorkspace(ws);
+    const authority: WorkspaceManagementAuthority = {
+      workspaceId: ws.id, managementState: "active", managementEpoch: 1,
+    };
+    const queued = sourceSyncRun(`source-corrupt-run-${label}`, ws.id);
+    await store.beginSourceSyncRun(queued, authority);
+    for (const value of [undefined, null, [], { ...authority, managementEpoch: "1" },
+      { ...authority, managementEpoch: 0 }, { ...authority, managementEpoch: 1.5 },
+      { ...authority, workspaceId: "another-workspace" }, { ...authority, managementState: "released" }]) {
+      await setStoredSourceSyncAuthority(queued.id, value);
+      expect(await reopen().getSourceSyncRun(queued.id), label).toEqual(queued);
+      expect(await reopen().transitionRun({
+        id: queued.id, kind: "source_sync", expectFrom: ["queued"],
+        run: { ...queued, status: "running" }, setLeaseToken: `corrupt-${label}`,
+      }), label).toEqual({ won: false, run: queued });
+    }
+
+    const held = sourceSyncRun(`source-held-legacy-${label}`, ws.id);
+    await store.beginSourceSyncRun(held, authority);
+    const running = { ...held, status: "running" as const, heartbeatAt: 1 };
+    expect(await store.transitionRun({
+      id: held.id, kind: "source_sync", expectFrom: ["queued"],
+      run: running, setLeaseToken: `held-${label}`,
+    }), label).toEqual({ won: true, run: running });
+    await setStoredSourceSyncAuthority(held.id, undefined);
+    await store.beginWorkspaceDraining(ws.id, authority);
+    const heartbeat = { ...running, heartbeatAt: 2 };
+    expect(await reopen().transitionRun({
+      id: held.id, kind: "source_sync", expectFrom: ["running"],
+      expectLeaseToken: `held-${label}`, run: heartbeat, heartbeatAt: 2,
+    }), label).toEqual({ won: true, run: heartbeat });
+    const terminal = { ...heartbeat, status: "failed" as const };
+    expect(await reopen().transitionRun({
+      id: held.id, kind: "source_sync", expectFrom: ["running"],
+      expectLeaseToken: `held-${label}`, run: terminal, clearLeaseToken: true,
+    }), label).toEqual({ won: true, run: terminal });
+  }
+});
+
+test("SourceSync held-lease and raw writers cannot change the stored Run owner or kind", async () => {
+  for (const { label, store } of await adapters()) {
+    const ws = workspace(`source-owner-${label}`);
+    const other = workspace(`source-other-owner-${label}`);
+    await store.putWorkspace(ws);
+    await store.putWorkspace(other);
+    const authority: WorkspaceManagementAuthority = {
+      workspaceId: ws.id, managementState: "active", managementEpoch: 1,
+    };
+    const queued = sourceSyncRun(`source-owner-run-${label}`, ws.id);
+    await store.beginSourceSyncRun(queued, authority);
+    const running = { ...queued, status: "running" as const };
+    expect(await store.transitionRun({
+      id: queued.id, kind: "source_sync", expectFrom: ["queued"],
+      run: running, setLeaseToken: `owner-lease-${label}`,
+    }), label).toEqual({ won: true, run: running });
+    for (const run of [
+      { ...running, workspaceId: other.id },
+      { ...running, id: `another-run-${label}` },
+      applyRun(queued.id, ws.id, "running"),
+    ]) {
+      expect(await store.transitionRun({
+        id: queued.id, kind: "source_sync", expectFrom: ["running"],
+        expectLeaseToken: `owner-lease-${label}`, run,
+      }), label).toEqual({ won: false, run: running });
+    }
+    await expect(store.putSourceSyncRun({ ...queued, workspaceId: other.id }), label)
+      .rejects.toBeInstanceOf(TypeError);
+    await expect(store.putSourceSyncRun(applyRun(queued.id, ws.id, "running") as unknown as SourceSyncRun), label)
+      .rejects.toBeInstanceOf(TypeError);
+    expect(await store.getSourceSyncRun(queued.id), label).toEqual(running);
+    expect(await store.listRunsByWorkspace(other.id), label).toEqual([]);
+  }
+});
+
+test("D1 historical double-encoded SourceSync JSON remains observable without new authority", async () => {
+  const database = new SqliteFakeD1();
+  const store = new CloudflareD1OpenTofuControlStore(database);
+  const ws = workspace("source-double-encoded");
+  await store.putWorkspace(ws);
+  const authority: WorkspaceManagementAuthority = {
+    workspaceId: ws.id, managementState: "active", managementEpoch: 1,
+  };
+  const queued = sourceSyncRun("source-double-encoded-run", ws.id);
+  await store.beginSourceSyncRun(queued, authority);
+  // Exact historical payload produced by the old jsonText-mode insert.
+  const encoded = JSON.stringify(JSON.stringify(queued));
+  await database.prepare("update runs set run_json = ? where id = ?").bind(encoded, queued.id).run();
+  const reopened = new CloudflareD1OpenTofuControlStore(database);
+  expect(await reopened.getSourceSyncRun(queued.id)).toEqual(queued);
+  expect(await reopened.listSourceSyncRuns(queued.sourceId)).toEqual([queued]);
+  expect(await reopened.listRunsByWorkspace(ws.id)).toEqual([queued]);
+  expect(await reopened.beginSourceSyncRun(queued)).toEqual({ status: "existing", run: queued });
+  expect(await reopened.transitionRun({
+    id: queued.id, kind: "source_sync", expectFrom: ["queued"],
+    run: { ...queued, status: "running" }, setLeaseToken: "legacy-double-lease",
+    expectedWorkspaceManagementAuthority: authority,
+  })).toEqual({ won: false, run: queued });
+  expect(await database.prepare("select run_json as payload from runs where id = ?").bind(queued.id).first())
+    .toEqual({ payload: encoded });
+});
+
+test("D1 historical double-encoded SourceSync held leases finish without authority metadata", async () => {
+  const database = new SqliteFakeD1();
+  const store = new CloudflareD1OpenTofuControlStore(database);
+  const ws = workspace("source-double-held");
+  await store.putWorkspace(ws);
+  const authority: WorkspaceManagementAuthority = {
+    workspaceId: ws.id,
+    managementState: "active",
+    managementEpoch: 1,
+  };
+  const queued = sourceSyncRun("source-double-held-run", ws.id);
+  await store.beginSourceSyncRun(queued, authority);
+  const running: SourceSyncRun = {
+    ...queued,
+    status: "running",
+    startedAt: "2026-09-08T00:00:01.000Z",
+    heartbeatAt: 1,
+    updatedAt: "2026-09-08T00:00:01.000Z",
+  };
+  expect(
+    await store.transitionRun({
+      id: running.id,
+      kind: "source_sync",
+      expectFrom: ["queued"],
+      run: running,
+      setLeaseToken: "legacy-held-lease",
+    }),
+  ).toEqual({ won: true, run: running });
+
+  // This is the historical row shape: one extra JSON string layer and no
+  // storage-owned authority metadata. Keep the physical lease columns intact.
+  const encoded = JSON.stringify(JSON.stringify(running));
+  await database
+    .prepare("update runs set run_json = ? where id = ?")
+    .bind(encoded, running.id)
+    .run();
+  expect(
+    await database
+      .prepare("select status, lease_token, run_json from runs where id = ?")
+      .bind(running.id)
+      .first(),
+  ).toEqual({
+    status: "running",
+    lease_token: "legacy-held-lease",
+    run_json: encoded,
+  });
+
+  const reopened = new CloudflareD1OpenTofuControlStore(database);
+  expect(await reopened.getSourceSyncRun(running.id)).toEqual(running);
+
+  // A malformed inner string is not a second supported encoding. The guarded
+  // SQL must fail closed without relying on SQLite AND/OR evaluation order.
+  await database
+    .prepare("update runs set run_json = ? where id = ?")
+    .bind(JSON.stringify("{invalid-inner"), running.id)
+    .run();
+  expect(
+    await reopened.transitionRun({
+      id: running.id,
+      kind: "source_sync",
+      expectFrom: ["running"],
+      expectLeaseToken: "legacy-held-lease",
+      run: running,
+    }),
+  ).toEqual({ won: false });
+  await database
+    .prepare("update runs set run_json = ? where id = ?")
+    .bind(encoded, running.id)
+    .run();
+
+  // Missing original authority closes only fresh admission; it must not let a
+  // resumed/current tuple be borrowed or backfilled into the legacy row.
+  expect(
+    await reopened.transitionRun({
+      id: running.id,
+      kind: "source_sync",
+      expectFrom: ["running"],
+      run: running,
+      setLeaseToken: "fresh-lease-must-deny",
+    }),
+  ).toEqual({ won: false, run: running });
+
+  expect(await reopened.beginWorkspaceDraining(ws.id, authority)).toMatchObject({
+    status: "started",
+    management: { managementState: "draining", managementEpoch: 2 },
+  });
+  const heartbeat: SourceSyncRun = {
+    ...running,
+    heartbeatAt: 2,
+    updatedAt: "2026-09-08T00:00:02.000Z",
+  };
+  expect(
+    await reopened.transitionRun({
+      id: running.id,
+      kind: "source_sync",
+      expectFrom: ["running"],
+      expectLeaseToken: "legacy-held-lease",
+      run: heartbeat,
+      heartbeatAt: heartbeat.heartbeatAt,
+    }),
+  ).toEqual({ won: true, run: heartbeat });
+
+  // Re-encode the heartbeat to keep the terminal CAS on the historical shape
+  // too; the prior heartbeat intentionally exercises the same held lease.
+  const terminal: SourceSyncRun = {
+    ...heartbeat,
+    status: "succeeded",
+    finishedAt: "2026-09-08T00:00:03.000Z",
+    updatedAt: "2026-09-08T00:00:03.000Z",
+    resolvedCommit: "legacy-double-commit",
+    archiveDigest: "sha256:legacy-double-commit",
+    archiveSizeBytes: 128,
+    snapshotId: "snapshot-source-double-held",
+  };
+  const terminalLegacyPayload = JSON.stringify(JSON.stringify(heartbeat));
+  await database
+    .prepare("update runs set run_json = ? where id = ?")
+    .bind(terminalLegacyPayload, running.id)
+    .run();
+  const snapshot: SourceSnapshot = {
+    id: terminal.snapshotId!,
+    origin: "git",
+    workspaceId: ws.id,
+    sourceId: terminal.sourceId,
+    url: terminal.url,
+    ref: terminal.ref,
+    resolvedCommit: terminal.resolvedCommit!,
+    path: terminal.path,
+    archiveRef: terminal.archiveRef,
+    archiveDigest: terminal.archiveDigest!,
+    archiveSizeBytes: terminal.archiveSizeBytes!,
+    repositoryInstallMetadata: { status: "absent" },
+    repositoryManifest: { status: "absent" },
+    repositoryModules: { status: "ready", scopePath: ".", modules: [] },
+    fetchedByRunId: terminal.id,
+    fetchedAt: terminal.finishedAt!,
+  };
+  expect(
+    await reopened.commitSourceSyncSuccess({
+      terminalRun: terminal,
+      leaseToken: "legacy-held-lease",
+      snapshot,
+    }),
+  ).toEqual({ won: true, run: terminal });
+  expect(await reopened.getSourceSyncRun(running.id)).toEqual(terminal);
+  expect(await reopened.getSourceSnapshot(snapshot.id)).toEqual(snapshot);
+  expect(
+    await database
+      .prepare(
+        "select json_extract(run_json, '$.workspaceManagementAuthority') as authority from runs where id = ?",
+      )
+      .bind(running.id)
+      .first(),
+  ).toEqual({ authority: null });
+});
+
+test("D1 historical double-encoded SourceSync preserves its private authority on held-lease rewrites", async () => {
+  const database = new SqliteFakeD1();
+  const store = new CloudflareD1OpenTofuControlStore(database);
+  const ws = workspace("source-double-private");
+  await store.putWorkspace(ws);
+  const authority: WorkspaceManagementAuthority = {
+    workspaceId: ws.id,
+    managementState: "active",
+    managementEpoch: 1,
+  };
+  const queued = sourceSyncRun("source-double-private-run", ws.id);
+  await store.beginSourceSyncRun(queued, authority);
+  const running: SourceSyncRun = {
+    ...queued,
+    status: "running",
+    startedAt: "2026-09-08T00:00:01.000Z",
+    heartbeatAt: 1,
+    updatedAt: "2026-09-08T00:00:01.000Z",
+  };
+  expect(
+    await store.transitionRun({
+      id: running.id,
+      kind: "source_sync",
+      expectFrom: ["queued"],
+      run: running,
+      setLeaseToken: "legacy-private-lease",
+    }),
+  ).toEqual({ won: true, run: running });
+
+  const storedRunning = { ...running, workspaceManagementAuthority: authority };
+  await database
+    .prepare("update runs set run_json = ? where id = ?")
+    .bind(JSON.stringify(JSON.stringify(storedRunning)), running.id)
+    .run();
+  const reopened = new CloudflareD1OpenTofuControlStore(database);
+  expect(await reopened.getSourceSyncRun(running.id)).toEqual(running);
+  await reopened.beginWorkspaceDraining(ws.id, authority);
+
+  const heartbeat: SourceSyncRun = {
+    ...running,
+    heartbeatAt: 2,
+    updatedAt: "2026-09-08T00:00:02.000Z",
+  };
+  expect(
+    await reopened.transitionRun({
+      id: running.id,
+      kind: "source_sync",
+      expectFrom: ["running"],
+      expectLeaseToken: "legacy-private-lease",
+      run: heartbeat,
+      heartbeatAt: heartbeat.heartbeatAt,
+    }),
+  ).toEqual({ won: true, run: heartbeat });
+  expect(
+    await database
+      .prepare(
+        "select json_extract(run_json, '$.workspaceManagementAuthority.managementEpoch') as epoch from runs where id = ?",
+      )
+      .bind(running.id)
+      .first(),
+  ).toEqual({ epoch: 1 });
+
+  const terminal: SourceSyncRun = {
+    ...heartbeat,
+    status: "succeeded",
+    finishedAt: "2026-09-08T00:00:03.000Z",
+    updatedAt: "2026-09-08T00:00:03.000Z",
+    resolvedCommit: "legacy-private-commit",
+    archiveDigest: "sha256:legacy-private-commit",
+    archiveSizeBytes: 128,
+    snapshotId: "snapshot-source-double-private",
+  };
+  const storedHeartbeat = { ...heartbeat, workspaceManagementAuthority: authority };
+  await database
+    .prepare("update runs set run_json = ? where id = ?")
+    .bind(JSON.stringify(JSON.stringify(storedHeartbeat)), running.id)
+    .run();
+  const snapshot: SourceSnapshot = {
+    id: terminal.snapshotId!,
+    origin: "git",
+    workspaceId: ws.id,
+    sourceId: terminal.sourceId,
+    url: terminal.url,
+    ref: terminal.ref,
+    resolvedCommit: terminal.resolvedCommit!,
+    path: terminal.path,
+    archiveRef: terminal.archiveRef,
+    archiveDigest: terminal.archiveDigest!,
+    archiveSizeBytes: terminal.archiveSizeBytes!,
+    repositoryInstallMetadata: { status: "absent" },
+    repositoryManifest: { status: "absent" },
+    repositoryModules: { status: "ready", scopePath: ".", modules: [] },
+    fetchedByRunId: terminal.id,
+    fetchedAt: terminal.finishedAt!,
+  };
+  expect(
+    await reopened.commitSourceSyncSuccess({
+      terminalRun: terminal,
+      leaseToken: "legacy-private-lease",
+      snapshot,
+    }),
+  ).toEqual({ won: true, run: terminal });
+  expect(
+    await database
+      .prepare(
+        "select json_extract(run_json, '$.workspaceManagementAuthority.workspaceId') as workspace_id, json_extract(run_json, '$.workspaceManagementAuthority.managementEpoch') as epoch from runs where id = ?",
+      )
+      .bind(running.id)
+      .first(),
+  ).toEqual({ workspace_id: ws.id, epoch: 1 });
+  expect(await reopened.getSourceSyncRun(running.id)).toEqual(terminal);
+});
+
+test("auto-update claim requires an active Capsule Workspace but exact retries and other finalizers remain readable", async () => {
+  for (const { label, store } of await adapters()) {
+    const ws = workspace(`capsule-${label}`);
+    await store.putWorkspace(ws);
+    const initial = capsule(`capsule-${label}`, ws.id);
+    await store.putCapsule(initial);
+    const management = await store.getWorkspaceManagement(ws.id);
+    if (!management || management.managementState !== "active") {
+      throw new Error(`${label}: Workspace management is not active`);
+    }
+    const authority: WorkspaceManagementAuthority = {
+      workspaceId: management.workspaceId,
+      managementState: "active",
+      managementEpoch: management.managementEpoch,
+    };
+    const first = await store.updateCapsuleLifecycle({
+      capsuleId: initial.id,
+      expected: capsuleLifecycleExpected(initial, 1),
+      mutation: {
+        kind: "auto-update-claim",
+        sourceSnapshotId: `snapshot-first-${label}`,
+        expectedWorkspaceManagementAuthority: authority,
+      },
+      updatedAt: "2026-09-08T00:00:01.000Z",
+    });
+    expect(first, label).toMatchObject({ kind: "updated" });
+    const claimed = first.kind === "updated" || first.kind === "unchanged"
+      ? first.capsule
+      : initial;
+
+    expect(await store.beginWorkspaceDraining(ws.id, authority), label).toMatchObject({
+      status: "started",
+      management: { managementState: "draining", managementEpoch: 2 },
+    });
+
+    // Replaying the exact claim is an idempotent read even while draining.
+    expect(
+      await store.updateCapsuleLifecycle({
+        capsuleId: claimed.id,
+        expected: capsuleLifecycleExpected(claimed, 1),
+        mutation: {
+          kind: "auto-update-claim",
+          sourceSnapshotId: `snapshot-first-${label}`,
+          expectedWorkspaceManagementAuthority: authority,
+        },
+        updatedAt: "2026-09-08T00:00:02.000Z",
+      }),
+      label,
+    ).toEqual({ kind: "unchanged", capsule: claimed });
+
+    // A different marker is a new admission and must not be consumed after
+    // the Workspace fence has changed.
+    expect(
+      await store.updateCapsuleLifecycle({
+        capsuleId: claimed.id,
+        expected: capsuleLifecycleExpected(claimed, 1),
+        mutation: {
+          kind: "auto-update-claim",
+          sourceSnapshotId: `snapshot-second-${label}`,
+          expectedWorkspaceManagementAuthority: authority,
+        },
+        updatedAt: "2026-09-08T00:00:03.000Z",
+      }),
+      label,
+    ).toEqual({ kind: "conflict", current: claimed });
+
+    // Existing lifecycle finalization unrelated to auto-update admission is
+    // intentionally unchanged and remains allowed while draining.
+    const finalizer = await store.updateCapsuleLifecycle({
+      capsuleId: claimed.id,
+      expected: capsuleLifecycleExpected(claimed, 1),
+      mutation: { kind: "status", status: "stale" },
+      updatedAt: "2026-09-08T00:00:04.000Z",
+    });
+    expect(finalizer, label).toMatchObject({
+      kind: "updated",
+      capsule: { status: "stale" },
+    });
+  }
+});

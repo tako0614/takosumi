@@ -627,6 +627,8 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         "owner_user_id",
         "workspace_type",
         "personal_bootstrap_owner_id",
+        "management_state",
+        "management_epoch",
       ],
       primaryKey: ["id"],
       uniqueConstraints: [["handle"], ["personal_bootstrap_owner_id"]],
@@ -4895,5 +4897,31 @@ create index if not exists takosumi_interface_intents_dead_letter_idx
   add column if not exists root_module_variable_declarations_json jsonb;`,
       down: `alter table takosumi_capsule_compatibility_reports
   drop column if exists root_module_variable_declarations_json;`,
+    },
+    {
+      id: "deploy.workspace_management_quiescence.add",
+      version: 113,
+      domain: "deploy",
+      description:
+        "Add private Workspace management lifecycle state and epoch columns with active/1 defaults while preserving public Workspace JSON and Capsule execution authority.",
+      sql: `alter table takosumi_workspaces
+  add column if not exists management_state text not null default 'active';
+alter table takosumi_workspaces
+  add column if not exists management_epoch bigint not null default 1;`,
+      down: `alter table takosumi_workspaces
+  drop column if exists management_epoch;
+alter table takosumi_workspaces
+  drop column if exists management_state;`,
+    },
+    {
+      id: "deploy.connection_operational_statuses.expand",
+      version: 114,
+      domain: "deploy",
+      description:
+        "Expand the Connection status constraint to the existing operational contract, including expired/error. Preserve every row and encrypted blob; repair forward without narrowing the constraint again.",
+      sql: `alter table takosumi_connections
+  drop constraint takosumi_connections_status_check,
+  add constraint takosumi_connections_status_check
+    check (status in ('pending', 'verified', 'revoked', 'expired', 'error'));`,
     },
   ]);

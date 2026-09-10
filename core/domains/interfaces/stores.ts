@@ -7,6 +7,10 @@ import {
 } from "takosumi-contract";
 import { freezeClone } from "../../shared/freeze.ts";
 import type { InterfaceMaterializationWriteAuthority } from "../deploy-control/interface_materialization_intent.ts";
+import {
+  WorkspaceManagementAdmissionConflictError,
+  type WorkspaceManagementAdmissionValidator,
+} from "../deploy-control/store.ts";
 import { interfaceOAuth2ResourceUri } from "./oauth_resource.ts";
 
 export interface InterfaceMaterializationAuthorityValidator {
@@ -34,6 +38,8 @@ export interface InterfaceWriteGuard {
   readonly resolvedRevision: number;
   /** Exact prior row prevents lost condition-only lifecycle updates. */
   readonly record: Interface;
+  /** Internal fence for a newly queued observer marker. */
+  readonly requireActiveWorkspace?: true;
 }
 
 export interface InterfaceStore {
@@ -131,6 +137,7 @@ export class InMemoryInterfaceStore implements InterfaceStore {
   constructor(
     private readonly materializationAuthority?: InterfaceMaterializationAuthorityValidator,
     private readonly now: () => string = () => new Date().toISOString(),
+    private readonly workspaceManagementAuthority?: WorkspaceManagementAdmissionValidator,
   ) {}
 
   create(
@@ -214,8 +221,26 @@ export class InMemoryInterfaceStore implements InterfaceStore {
   ): Promise<boolean> {
     if (!this.#writeAuthorized(record, authority)) return Promise.resolve(false);
     const current = this.#records.get(record.metadata.id);
+    if (!current) return Promise.resolve(false);
+    if (expected.requireActiveWorkspace === true) {
+      if (
+        record.metadata.workspaceId !== expected.record.metadata.workspaceId
+      ) {
+        return Promise.resolve(false);
+      }
+      if (
+        !this.workspaceManagementAuthority?.isWorkspaceManagementAdmissionAllowed(
+          current.metadata.workspaceId,
+        )
+      ) {
+        return Promise.reject(
+          new WorkspaceManagementAdmissionConflictError(
+            current.metadata.workspaceId,
+          ),
+        );
+      }
+    }
     if (
-      !current ||
       current.metadata.generation !== expected.generation ||
       current.status.resolvedRevision !== expected.resolvedRevision ||
       JSON.stringify(current) !== JSON.stringify(expected.record)
@@ -390,11 +415,13 @@ export class InMemoryInterfaceBindingStore implements InterfaceBindingStore {
 export function createInMemoryInterfaceStores(options: {
   readonly materializationAuthority?: InterfaceMaterializationAuthorityValidator;
   readonly now?: () => string;
+  readonly workspaceManagementAuthority?: WorkspaceManagementAdmissionValidator;
 } = {}): InterfaceStores {
   const now = options.now ?? (() => new Date().toISOString());
   const interfaces = new InMemoryInterfaceStore(
     options.materializationAuthority,
     now,
+    options.workspaceManagementAuthority,
   );
   const bindings = new InMemoryInterfaceBindingStore(
     interfaces,

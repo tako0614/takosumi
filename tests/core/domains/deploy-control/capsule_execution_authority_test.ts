@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Miniflare } from "miniflare";
-import type { ApplyRun } from "@takosumi/internal/deploy-control-api";
+import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
+import type { Run } from "takosumi-contract/runs";
 import type { Capsule } from "takosumi-contract/capsules";
+import type { InstallConfig } from "takosumi-contract/install-configs";
+import type { SourceSyncRun } from "takosumi-contract/sources";
 
 import type {
   SqlClient,
@@ -9,10 +12,22 @@ import type {
 } from "../../../../core/adapters/storage/sql.ts";
 import {
   createCapsuleExecutionAuthorityResolver,
+  capsuleLifecycleExpected,
   InMemoryOpenTofuControlStore,
+  WorkspaceManagementAdmissionConflictError,
+  planRunExecutionInputsDigestMaterial,
+  type StoredRunRecord,
+  type WorkspaceManagementAuthority,
   type OpenTofuControlStore,
 } from "../../../../core/domains/deploy-control/store.ts";
+import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
+import { D1GitInstallPlanStore } from "../../../../core/domains/install-plans/d1_store.ts";
+import type { StoredGitInstallPlan } from "../../../../core/domains/install-plans/store.ts";
+import {
+  createD1InterfaceStores,
+  InterfaceService,
+} from "../../../../core/domains/interfaces/mod.ts";
 import { postgresStorageMigrationStatements } from "../../../../core/adapters/storage/migrations.ts";
 import {
   CloudflareD1OpenTofuControlStore,
@@ -23,6 +38,10 @@ import {
   splitSqlStatements,
 } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
+import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
+import { StaticSecretConnectionVault } from "../../../../core/adapters/vault/mod.ts";
+import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
+import { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } from "../../../../providers/registry.ts";
 import type {
   D1Database,
   D1PreparedStatement,
@@ -422,6 +441,453 @@ describe("Capsule execution authority", () => {
     ).toBe(true);
   });
 
+  test("Workspace metadata and member guards execute on isolated workerd D1", async () => {
+    const runtime = new Miniflare({
+      compatibilityDate: "2026-07-17",
+      modules: [{ type: "ESModule", path: "workspace-writes.mjs", contents: "export default {fetch(){return new Response('ok')}}" }],
+      d1Databases: { CONTROL: "workspace-writes" },
+    });
+    try {
+      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const store = new CloudflareD1OpenTofuControlStore(database);
+      const service = new WorkspacesService({ store });
+      const workspace = await service.createWorkspace({
+        handle: "workspace-writes", displayName: "Original", type: "personal", ownerUserId: "owner",
+      });
+      const actor = await service.upsertWorkspaceMember({
+        workspaceId: workspace.id, accountId: "admin", actorAccountId: "owner", roles: ["admin"],
+      });
+      const member = await service.upsertWorkspaceMember({
+        workspaceId: workspace.id, accountId: "reader", actorAccountId: "admin", roles: ["member"],
+      });
+      const authority = await service.captureManagementAuthority(workspace.id);
+      await store.putWorkspaceMember({ ...actor, status: "suspended" });
+      expect(await store.replaceWorkspaceForAccount({
+        workspace: { ...workspace, displayName: "Revoked admin" }, expectedWorkspace: workspace,
+        expectedWorkspaceManagementAuthority: authority, actorAccountId: actor.accountId, expectedActor: actor,
+      })).toBe(false);
+      expect(await store.mutateWorkspaceMember({
+        member: { ...member, roles: ["viewer"] }, expectedMember: member,
+        expectedActor: actor, expectedWorkspace: workspace, expectedWorkspaceManagementAuthority: authority,
+      })).toBe(false);
+      expect(await store.getWorkspaceMember(workspace.id, member.accountId)).toEqual(member);
+      const changed = await service.updateWorkspaceForAccount(workspace.id, { displayName: "Updated" }, "owner");
+      expect(changed.displayName).toBe("Updated");
+      expect(await store.replaceWorkspace({
+        workspace: { ...workspace, displayName: "Stale" }, expectedWorkspace: workspace,
+        expectedWorkspaceManagementAuthority: authority,
+      })).toBe(false);
+      await store.beginWorkspaceDraining(workspace.id, authority);
+      await expect(service.upsertWorkspaceMember({
+        workspaceId: workspace.id, accountId: "new-member", actorAccountId: "owner",
+      })).rejects.toMatchObject({ code: "failed_precondition" });
+      await expect(service.updateWorkspace(workspace.id, { displayName: "Stopped" }))
+        .rejects.toMatchObject({ code: "failed_precondition" });
+      await database.prepare("update workspaces set management_state = 'active', management_epoch = 3 where id = ?")
+        .bind(workspace.id).run();
+      await expect(store.replaceWorkspace({
+        workspace: { ...changed, displayName: "Late" }, expectedWorkspace: changed,
+        expectedWorkspaceManagementAuthority: authority,
+      })).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      expect(await new CloudflareD1OpenTofuControlStore(database).getWorkspace(workspace.id)).toEqual(changed);
+    } finally {
+      await runtime.dispose();
+    }
+  }, 30_000);
+
+  test("Connection registration rolls back a failed blob insert on isolated workerd D1", async () => {
+    const runtime = new Miniflare({
+      compatibilityDate: "2026-07-17",
+      modules: [{ type: "ESModule", path: "connection-registration.mjs", contents: "export default {fetch(){return new Response('ok')}}" }],
+      d1Databases: { CONTROL: "connection-registration" },
+    });
+    try {
+      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const store = new CloudflareD1OpenTofuControlStore(database);
+      const service = new WorkspacesService({ store });
+      const workspace = await service.createWorkspace({ handle: "connection-registration",
+        displayName: "Connections", type: "personal", ownerUserId: "owner" });
+      let counter = 0;
+      const vault = new StaticSecretConnectionVault({
+        store, newId: () => `conn_registration_${++counter}`,
+        crypto: new PartitionedSecretBoundaryCrypto({ globalPassphrase: "registration-fixture-passphrase-0123456789" }),
+        credentialRecipeResolver: (id) => REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find((recipe) => recipe.id === id),
+      });
+      const registration = { workspaceId: workspace.id,
+        provider: "registry.opentofu.org/vercel/vercel",
+        credentialRecipe: { id: "generic-env", authMode: "env", secretPartition: "provider-credentials", declaredEnv: true },
+        values: { VERCEL_API_TOKEN: "fixture-only-value" } };
+      const first = await vault.register(registration, undefined, null);
+      const firstBlob = await store.getSecretBlob(first.id);
+      expect(firstBlob).toBeDefined();
+      if (!firstBlob) throw new Error("registration fixture blob is missing");
+      // The first table insert really executes. A database-side failure on
+      // the second table must roll it back, not leave a credentialless row.
+      await database.prepare("CREATE TRIGGER reject_registration_blob BEFORE INSERT ON secret_blobs BEGIN SELECT RAISE(ABORT, 'fixture blob write failure'); END").run();
+      await expect(vault.register(registration, undefined, null)).rejects.toThrow();
+      expect(await store.getConnection("conn_registration_2")).toBeUndefined();
+      expect(await store.getSecretBlob("conn_registration_2")).toBeUndefined();
+      expect(await store.getConnection(first.id)).toEqual(first);
+      expect(await store.getSecretBlob(first.id)).toEqual(firstBlob);
+      await database.prepare("DROP TRIGGER reject_registration_blob").run();
+
+      const authority = await service.captureManagementAuthority(workspace.id);
+      const candidate = { connection: { ...first, id: "conn_registration_stale" },
+        secretBlob: { ...firstBlob, id: "secret_conn_registration_stale", connectionId: "conn_registration_stale" },
+        expectedWorkspaceManagementAuthority: authority, actorAuthority: null };
+      await store.beginWorkspaceDraining(workspace.id, authority);
+      await expect(store.createConnectionRegistration(candidate)).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      await database.prepare("update workspaces set management_state = 'active', management_epoch = 3 where id = ?").bind(workspace.id).run();
+      await expect(store.createConnectionRegistration(candidate)).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      expect(await store.getConnection(candidate.connection.id)).toBeUndefined();
+      expect(await store.getSecretBlob(candidate.connection.id)).toBeUndefined();
+      const fresh = await vault.register(registration, undefined, null);
+      expect(await new CloudflareD1OpenTofuControlStore(database).getConnection(fresh.id)).toEqual(fresh);
+      expect(await store.getSecretBlob(fresh.id)).toBeDefined();
+    } finally {
+      await runtime.dispose();
+    }
+  }, 30_000);
+
+  test("Connection revocation rolls back a failed second delete on isolated workerd D1", async () => {
+    const runtime = new Miniflare({
+      compatibilityDate: "2026-07-17",
+      modules: [{ type: "ESModule", path: "connection-revoke.mjs", contents: "export default {fetch(){return new Response('ok')}}" }],
+      d1Databases: { CONTROL: "connection-revoke" },
+    });
+    try {
+      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const store = new CloudflareD1OpenTofuControlStore(database);
+      const service = new WorkspacesService({ store });
+      const workspace = await service.createWorkspace({ handle: "connection-revoke", displayName: "Revoke",
+        type: "personal", ownerUserId: "owner" });
+      const vault = new StaticSecretConnectionVault({
+        store, newId: () => "conn_revoke_workerd",
+        crypto: new PartitionedSecretBoundaryCrypto({ globalPassphrase: "revocation-fixture-passphrase-0123456789" }),
+        credentialRecipeResolver: (id) => REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find((recipe) => recipe.id === id),
+      });
+      const connection = await vault.register({ workspaceId: workspace.id,
+        provider: "registry.opentofu.org/example/example",
+        credentialRecipe: { id: "generic-env", authMode: "env", secretPartition: "provider-credentials" },
+        values: { EXAMPLE_TOKEN: "fixture-only-value" } }, undefined, null);
+      const blob = await store.getSecretBlob(connection.id);
+      expect(blob).toBeDefined();
+      await database.prepare("CREATE TRIGGER reject_revoke_connection BEFORE DELETE ON connections BEGIN SELECT RAISE(ABORT, 'fixture revoke failure'); END").run();
+      await expect(vault.revoke(connection.id, undefined, null)).rejects.toThrow();
+      const reopened = new CloudflareD1OpenTofuControlStore(database);
+      expect(await reopened.getConnection(connection.id)).toEqual(connection);
+      expect(await reopened.getSecretBlob(connection.id)).toEqual(blob);
+      await database.prepare("DROP TRIGGER reject_revoke_connection").run();
+      const original = await service.captureManagementAuthority(workspace.id);
+      await store.beginWorkspaceDraining(workspace.id, original);
+      await expect(vault.revoke(connection.id, original, null)).rejects.toMatchObject({ reason: "workspace_management_admission_conflict" });
+      await database.prepare("update workspaces set management_state = 'active', management_epoch = 3 where id = ?").bind(workspace.id).run();
+      await expect(vault.revoke(connection.id, original, null)).rejects.toMatchObject({ reason: "workspace_management_admission_conflict" });
+      expect(await reopened.getSecretBlob(connection.id)).toEqual(blob);
+      expect(await vault.revoke(connection.id, undefined, null)).toBe(true);
+      expect(await reopened.getConnection(connection.id)).toBeUndefined();
+      expect(await reopened.getSecretBlob(connection.id)).toBeUndefined();
+      expect(await vault.revoke(connection.id, undefined, null)).toBe(false);
+    } finally {
+      await runtime.dispose();
+    }
+  }, 30_000);
+
+  test("Connection actor revocation fences final writes on isolated workerd D1", async () => {
+    const runtime = new Miniflare({
+      compatibilityDate: "2026-07-17",
+      modules: [{ type: "ESModule", path: "connection-actor.mjs", contents: "export default {fetch(){return new Response('ok')}}" }],
+      d1Databases: { CONTROL: "connection-actor" },
+    });
+    try {
+      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      let beforeBatch: (() => Promise<void>) | undefined;
+      const store = new CloudflareD1OpenTofuControlStore({
+        prepare: (query) => database.prepare(query),
+        async batch(statements) {
+          const action = beforeBatch;
+          beforeBatch = undefined;
+          await action?.();
+          return await database.batch(statements);
+        },
+      });
+      const service = new WorkspacesService({ store });
+      for (const operation of ["register", "test", "revoke"] as const) {
+        const workspace = await service.createWorkspace({ handle: `actor-${operation}`, displayName: "Actor authority",
+          type: "personal", ownerUserId: "owner" });
+        const member = await service.upsertWorkspaceMember({ workspaceId: workspace.id,
+          actorAccountId: "owner", accountId: "admin", roles: ["admin"] });
+        const connectionId = `conn_actor_${operation}`;
+        const vault = new StaticSecretConnectionVault({
+          store, newId: () => connectionId,
+          crypto: new PartitionedSecretBoundaryCrypto({ globalPassphrase: "actor-fixture-passphrase-0123456789" }),
+          credentialRecipeResolver: (id) => REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find((recipe) => recipe.id === id),
+        });
+        const registration = { workspaceId: workspace.id, provider: "registry.opentofu.org/example/example",
+          credentialRecipe: { id: "generic-env", authMode: "env", secretPartition: "provider-credentials" },
+          values: { EXAMPLE_TOKEN: "fixture-only-value" } };
+        if (operation !== "register") await vault.register(registration, undefined, "admin");
+        const originalConnection = await store.getConnection(connectionId);
+        const originalBlob = await store.getSecretBlob(connectionId);
+        const authority = await service.captureManagementAuthority(workspace.id);
+        let interleavedOnce = false;
+        beforeBatch = async () => {
+          interleavedOnce = true;
+          await store.putWorkspaceMember({ ...member, status: "suspended" });
+        };
+        const result = operation === "register" ? vault.register(registration, authority, "admin")
+          : operation === "test" ? vault.test(connectionId, authority, "admin")
+          : vault.revoke(connectionId, authority, "admin");
+        await expect(result).rejects.toMatchObject({ code: "failed_precondition" });
+        expect(interleavedOnce).toBe(true);
+        const reopened = new CloudflareD1OpenTofuControlStore(database);
+        expect(await reopened.getConnection(connectionId)).toEqual(originalConnection);
+        expect(await reopened.getSecretBlob(connectionId)).toEqual(originalBlob);
+        expect(await reopened.getWorkspaceManagement(workspace.id)).toEqual(authority);
+        expect(await reopened.getWorkspaceMember(workspace.id, "admin")).toMatchObject({ status: "suspended" });
+      }
+    } finally {
+      await runtime.dispose();
+    }
+  }, 30_000);
+
+  test("Connection test results fence in-batch races on isolated workerd D1", async () => {
+    const runtime = new Miniflare({
+      compatibilityDate: "2026-07-17",
+      modules: [{ type: "ESModule", path: "connection-test.mjs", contents: "export default {fetch(){return new Response('ok')}}" }],
+      d1Databases: { CONTROL: "connection-test" },
+    });
+    try {
+      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      let beforeBatch: (() => Promise<void>) | undefined;
+      const interleaved: D1Database = {
+        prepare: (query) => database.prepare(query),
+        async batch(statements) {
+          const action = beforeBatch;
+          beforeBatch = undefined;
+          await action?.();
+          return await database.batch(statements);
+        },
+      };
+      const store = new CloudflareD1OpenTofuControlStore(interleaved);
+      const service = new WorkspacesService({ store });
+      for (const mutation of ["rotate", "absence", "physical", "drain", "resume"] as const) {
+        const workspace = await service.createWorkspace({ handle: `test-${mutation}`, displayName: "Test result",
+          type: "personal", ownerUserId: "owner" });
+        const vault = new StaticSecretConnectionVault({
+          store, newId: () => `conn_test_workerd_${mutation}`,
+          crypto: new PartitionedSecretBoundaryCrypto({ globalPassphrase: "test-result-fixture-passphrase-0123456789" }),
+          credentialRecipeResolver: (id) => REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find((recipe) => recipe.id === id),
+        });
+        let connection = await vault.register({ workspaceId: workspace.id,
+          provider: "registry.opentofu.org/example/example",
+          credentialRecipe: { id: "generic-env", authMode: "env", secretPartition: "provider-credentials" },
+          values: { EXAMPLE_TOKEN: "fixture-only-value" } }, undefined, null);
+        const blob = (await store.getSecretBlob(connection.id))!;
+        if (mutation === "absence") {
+          await store.deleteSecretBlob(connection.id);
+          connection = { ...connection, secretPartition: undefined };
+          await store.putConnection(connection);
+        }
+        const original = await service.captureManagementAuthority(workspace.id);
+        let interleavedOnce = false;
+        beforeBatch = async () => {
+          interleavedOnce = true;
+          if (mutation === "rotate") await store.putSecretBlob({ ...blob, ciphertext: "cm90YXRlZA==" });
+          else if (mutation === "absence") await store.putSecretBlob(blob);
+          else if (mutation === "physical") {
+            await database.prepare("update connections set status = 'verified' where id = ?").bind(connection.id).run();
+          } else {
+            await store.beginWorkspaceDraining(workspace.id, original);
+            if (mutation === "resume") {
+              await database.prepare("update workspaces set management_state = 'active', management_epoch = 3 where id = ?").bind(workspace.id).run();
+            }
+          }
+        };
+        const result = store.commitConnectionTestResult({ expectedConnection: connection,
+          expectedSecretBlob: mutation === "absence" ? null : blob,
+          replacement: { ...connection, status: "verified", verifiedAt: connection.updatedAt },
+          expectedWorkspaceManagementAuthority: original, actorAuthority: null });
+        if (mutation === "drain" || mutation === "resume") {
+          await expect(result).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+        } else {
+          expect(await result).toBe(false);
+        }
+        expect(interleavedOnce).toBe(true);
+        const reopened = new CloudflareD1OpenTofuControlStore(database);
+        expect(await reopened.getConnection(connection.id)).toEqual(connection);
+        expect(await reopened.getSecretBlob(connection.id)).toEqual(
+          mutation === "rotate" ? { ...blob, ciphertext: "cm90YXRlZA==" } : blob,
+        );
+      }
+    } finally {
+      await runtime.dispose();
+    }
+  }, 30_000);
+
+  test("Run claims, approvals and continuation markers require their original epoch in the final workerd D1 update", async () => {
+    const runtime = new Miniflare({
+      compatibilityDate: "2026-07-17",
+      modules: [{ type: "ESModule", path: "run-management.mjs", contents: "export default {fetch(){return new Response('ok')}}" }],
+      d1Databases: { CONTROL: "run-management" },
+    });
+    try {
+      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      let beforeClaim: (() => Promise<void>) | undefined;
+      const store = new CloudflareD1OpenTofuControlStore({
+        prepare(query) {
+          const statement = database.prepare(query);
+          if (!beforeClaim || !/^\s*update\s+"?(?:runs|capsules)"?\s/iu.test(query)) return statement;
+          const wrap = (bound: D1PreparedStatement): D1PreparedStatement => ({
+            bind: (...values) => wrap(bound.bind(...values)),
+            first: <T>() => bound.first<T>(),
+            all: <T>() => bound.all<T>(),
+            async run<T>() {
+              const action = beforeClaim;
+              beforeClaim = undefined;
+              await action?.();
+              return await bound.run<T>();
+            },
+          });
+          return wrap(statement);
+        },
+        batch: (statements) => database.batch(statements),
+      });
+      for (const kind of ["plan", "apply", "restore"] as const) {
+        const workspaceId = `workerd-run-${kind}`;
+        await store.putWorkspace({ id: workspaceId, handle: workspaceId, displayName: "Run management",
+          type: "personal", ownerUserId: "owner", createdAt: NOW, updatedAt: NOW });
+        const original = { workspaceId, managementState: "active" as const, managementEpoch: 1 };
+        const id = `workerd-${kind}`;
+        let queued: StoredRunRecord;
+        if (kind === "restore") {
+          queued = { id, workspaceId, type: "restore", status: "queued", createdAt: NOW,
+            createdBy: "owner", capsuleId: CAPSULE_ID, backupId: "backup", planDigest: "sha256:backup",
+            restoreStateGeneration: 1, restoredFromStateVersionId: "state-1" } satisfies Run;
+        } else if (kind === "apply") {
+          const { startedAt: _startedAt, ...neverStarted } = terminatingRun("queued");
+          queued = { ...neverStarted, id, workspaceId, operation: "update" } satisfies ApplyRun;
+        } else {
+          queued = { id, workspaceId, source: { kind: "git", url: "https://example.test/repo.git",
+            commit: "0123456789abcdef0123456789abcdef01234567" }, sourceDigest: "sha256:source",
+            operation: "update", runnerProfileId: "runner", status: "queued", createdAt: 1, updatedAt: 1,
+            variablesDigest: await stableJsonDigest({}), executionInputsDigest: await stableJsonDigest(
+              planRunExecutionInputsDigestMaterial({ planRunId: id, variables: {} }, undefined)),
+            requiredProviders: [], requiredProviderRequirements: [], policy: { status: "passed", reasons: [], checkedAt: 1 },
+            policyDecisionDigest: "sha256:policy", auditEvents: [] } satisfies PlanRun;
+        }
+        const admit = (authority: WorkspaceManagementAuthority) => kind === "plan"
+          ? store.preparePlanRun({ run: queued as PlanRun, inputs: { planRunId: id, variables: {} },
+              expectedWorkspaceManagementAuthority: authority })
+          : kind === "apply" ? store.beginApplyRun(queued as ApplyRun, authority)
+          : store.beginRestoreRun(queued as Run, authority);
+        expect((await admit(original)).status).toBe("created");
+        const wrongOwner = { ...queued, workspaceId: `${workspaceId}-other` };
+        await expect(kind === "plan" ? store.putPlanRun(wrongOwner as PlanRun)
+          : kind === "apply" ? store.putApplyRun(wrongOwner as ApplyRun)
+          : store.putBackupRun(wrongOwner as Run)).rejects.toThrow();
+        if (kind === "plan") {
+          const ownerCapsule = { ...capsule(), id: "workerd-plan-terminal", workspaceId };
+          await store.putCapsule(ownerCapsule);
+          const state = { id: "workerd-plan-terminal-state", workspaceId, capsuleId: ownerCapsule.id,
+            environment: ownerCapsule.environment, generation: 1, stateRef: "fixture-state",
+            digest: "sha256:fixture", createdByRunId: id, createdAt: NOW };
+          const refused = await store.commitRunState({
+            stateVersion: state,
+            capsulePatch: { id: ownerCapsule.id, patch: { currentStateGeneration: 1, currentStateVersionId: state.id },
+              guard: { currentStateVersionId: undefined } },
+            planRunApplied: { ...wrongOwner, status: "succeeded" } as PlanRun,
+          }).then((result) => result.applyRunLeaseLost === true, () => true);
+          expect(refused).toBe(true);
+          expect(await store.getStateVersion(state.id)).toBeUndefined();
+          expect(await store.getCapsule(ownerCapsule.id)).toEqual(ownerCapsule);
+        }
+        const running = { ...queued, status: "running", startedAt: kind === "restore" ? NOW : 100 } as StoredRunRecord;
+        let interleaved = false;
+        beforeClaim = async () => {
+          interleaved = true;
+          await store.beginWorkspaceDraining(workspaceId, original);
+          await database.prepare("update workspaces set management_state = 'active', management_epoch = 3 where id = ?")
+            .bind(workspaceId).run();
+        };
+        expect(await store.transitionRun({ id, kind, expectFrom: ["queued"], setLeaseToken: "stale-lease", run: running }))
+          .toEqual({ won: false, run: queued });
+        expect(interleaved).toBe(true);
+        const reopened = new CloudflareD1OpenTofuControlStore(database);
+        expect(await reopened.getRunManagementAuthority({ id, workspaceId, kind })).toEqual(original);
+        expect(await reopened.transitionRun({ id, kind, expectFrom: ["queued"], setLeaseToken: "current-caller-lease",
+          expectedWorkspaceManagementAuthority: { ...original, managementEpoch: 3 }, run: running }))
+          .toEqual({ won: false, run: queued });
+        expect(await database.prepare(
+          "select json_extract(run_json, '$.workspaceManagementAuthority.managementEpoch') as epoch from runs where id = ?",
+        ).bind(id).first()).toEqual({ epoch: 1 });
+        expect(JSON.stringify(await reopened.listRunsByWorkspace(workspaceId))).not.toContain("workspaceManagementAuthority");
+        if (kind !== "apply") {
+          const approvalId = `${id}-approval`;
+          const approvalAuthority = { ...original, managementEpoch: 3 };
+          let approvalRun: PlanRun | Run;
+          if (kind === "plan") {
+            const inputs = { planRunId: approvalId, variables: {} };
+            const initial: PlanRun = { ...queued as PlanRun, id: approvalId,
+              executionInputsDigest: await stableJsonDigest(planRunExecutionInputsDigestMaterial(inputs, undefined)) };
+            await store.preparePlanRun({ run: initial, inputs,
+              expectedWorkspaceManagementAuthority: approvalAuthority });
+            approvalRun = { ...initial, status: "waiting_approval" };
+            await store.putPlanRun(approvalRun);
+          } else {
+            approvalRun = { ...queued as Run, id: approvalId, status: "waiting_approval" };
+            await store.beginRestoreRun(approvalRun, approvalAuthority);
+          }
+          const approved = { ...approvalRun, status: kind === "plan" ? "succeeded" : "queued" } as PlanRun | Run;
+          let approvalInterleaved = false;
+          beforeClaim = async () => {
+            approvalInterleaved = true;
+            await store.beginWorkspaceDraining(workspaceId, approvalAuthority);
+            await database.prepare("update workspaces set management_state = 'active', management_epoch = 5 where id = ?")
+              .bind(workspaceId).run();
+          };
+          expect(await store.transitionRun({ id: approvalId, kind, expectFrom: ["waiting_approval"],
+            requireStoredManagementAuthority: true, run: approved })).toEqual({ won: false, run: approvalRun });
+          expect(approvalInterleaved).toBe(true);
+          expect(await reopened.transitionRun({ id: approvalId, kind, expectFrom: ["waiting_approval"],
+            requireStoredManagementAuthority: true,
+            expectedWorkspaceManagementAuthority: { ...original, managementEpoch: 5 }, run: approved }))
+            .toEqual({ won: false, run: approvalRun });
+          expect(await database.prepare(
+            "select json_extract(run_json, '$.workspaceManagementAuthority.managementEpoch') as epoch from runs where id = ?",
+          ).bind(approvalId).first()).toEqual({ epoch: 3 });
+        }
+      }
+      const workspaceId = "workerd-continuation-marker";
+      await store.putWorkspace({ id: workspaceId, handle: workspaceId, displayName: "Continuation marker",
+        type: "personal", ownerUserId: "owner", createdAt: NOW, updatedAt: NOW });
+      const original = { workspaceId, managementState: "active" as const, managementEpoch: 1 };
+      const stale = { ...capsule("stale"), id: "workerd-continuation-capsule", workspaceId,
+        projectId: "workerd-continuation-project", autoUpdate: true };
+      await store.putCapsule(stale);
+      let markerInterleaved = false;
+      beforeClaim = async () => {
+        markerInterleaved = true;
+        await store.beginWorkspaceDraining(workspaceId, original);
+        await database.prepare("update workspaces set management_state = 'active', management_epoch = 3 where id = ?")
+          .bind(workspaceId).run();
+      };
+      expect((await store.updateCapsuleLifecycle({
+        capsuleId: stale.id,
+        expected: capsuleLifecycleExpected(stale, 1),
+        mutation: { kind: "auto-update-claim", sourceSnapshotId: "old-epoch-snapshot",
+          expectedWorkspaceManagementAuthority: original },
+        updatedAt: NOW,
+      })).kind).toBe("conflict");
+      expect(markerInterleaved).toBe(true);
+      const reopened = new CloudflareD1OpenTofuControlStore(database);
+      expect(await reopened.getCapsule(stale.id)).toEqual(stale);
+      expect(await reopened.getWorkspaceManagement(workspaceId)).toEqual({ ...original, managementEpoch: 3 });
+    } finally {
+      await runtime.dispose();
+    }
+  }, 30_000);
+
   test("ordered authority batches execute on an isolated workerd D1", async () => {
     const runtime = new Miniflare({
       compatibilityDate: "2026-07-17",
@@ -440,6 +906,428 @@ describe("Capsule execution authority", () => {
         database as unknown as D1Database,
       );
       await expectBatchAuthorityParity(store);
+    } finally {
+      await runtime.dispose();
+    }
+  }, 30_000);
+
+  test("Source management fences execute on isolated workerd D1 without blocking the current lease", async () => {
+    const runtime = new Miniflare({
+      compatibilityDate: "2026-07-17",
+      modules: [{
+        type: "ESModule",
+        path: "source-management-workerd.mjs",
+        contents: "export default {fetch(){return new Response('ok')}}",
+      }],
+      d1Databases: { CONTROL: "source-management-workerd" },
+    });
+    try {
+      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const store = new CloudflareD1OpenTofuControlStore(database);
+      await store.putWorkspace({
+        id: WORKSPACE_ID,
+        handle: "source-management",
+        displayName: "Source management",
+        type: "personal",
+        ownerUserId: "source-management-owner",
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      const authority = {
+        workspaceId: WORKSPACE_ID,
+        managementState: "active" as const,
+        managementEpoch: 1,
+      };
+      const stale = { ...capsule("stale"), autoUpdate: true };
+      await store.putCapsule(stale);
+      const project = {
+        id: "project_management_native", workspaceId: WORKSPACE_ID,
+        name: "Native project", slug: "native-project", projectJson: {},
+        createdAt: NOW, updatedAt: NOW,
+      };
+      await expect(store.createProjectRecord({ project, expectedWorkspaceManagementAuthority: { ...authority, managementEpoch: 2 } }))
+        .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      expect((await store.createProjectRecord({ project, expectedWorkspaceManagementAuthority: authority })).status).toBe("created");
+      const source = {
+        id: "source-management-source", workspaceId: WORKSPACE_ID,
+        name: "source-kept", url: "https://example.com/source.git",
+        defaultRef: "main", defaultPath: ".", status: "active" as const,
+        hookSecretHash: "hash-kept", autoSync: false,
+        createdAt: NOW, updatedAt: NOW,
+      };
+      await expect(store.writeSourceConfiguration({ source, expectedWorkspaceManagementAuthority: { ...authority, managementEpoch: 2 } }))
+        .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      expect((await store.writeSourceConfiguration({ source, expectedWorkspaceManagementAuthority: authority })).status).toBe("created");
+      const initial = {
+        installConfig: {
+          id: "config_initial_native", workspaceId: WORKSPACE_ID, name: "initial",
+          variableMapping: {}, outputAllowlist: {}, policy: {}, createdAt: NOW, updatedAt: NOW,
+        },
+        capsule: {
+          ...capsule("pending"), id: "capsule_initial_native", name: "initial-native", slug: "initial-native",
+          sourceId: source.id, installConfigId: "config_initial_native",
+        },
+        providerBindingSet: {
+          id: "binding_initial_native", workspaceId: WORKSPACE_ID, capsuleId: "capsule_initial_native",
+          environment: "production", bindings: [], createdAt: NOW, updatedAt: NOW,
+        },
+        expectedWorkspaceManagementAuthority: authority,
+      };
+      expect((await store.createCapsuleInitialAuthority(initial)).status).toBe("created");
+      const queued = {
+        id: "source-management-run",
+        kind: "source_sync",
+        workspaceId: WORKSPACE_ID,
+        sourceId: "source-management-source",
+        url: "https://example.com/source.git",
+        ref: "main",
+        path: ".",
+        archiveRef: "source-management-archive",
+        snapshotId: "source-management-snapshot",
+        status: "queued",
+        createdAt: NOW,
+        updatedAt: NOW,
+      } satisfies SourceSyncRun;
+      expect((await store.beginSourceSyncRun(queued, authority)).status).toBe("created");
+      expect(await store.getSourceSyncRun(queued.id)).toEqual(queued);
+      const delayed = { ...queued, id: "source-management-delayed" };
+      expect(await store.beginSourceSyncRun(delayed, authority)).toEqual({ status: "created", run: delayed });
+      const running = { ...queued, status: "running" as const };
+      expect((await store.transitionRun({
+        id: queued.id,
+        kind: "source_sync",
+        expectFrom: ["queued"],
+        setLeaseToken: "source-management-lease",
+        run: running,
+      })).won).toBe(true);
+      expect((await store.beginWorkspaceDraining(WORKSPACE_ID, authority)).status).toBe("started");
+      expect(await store.createProjectRecord({ project })).toEqual({ status: "replayed", project });
+      await expect(store.createProjectRecord({ project: { ...project, id: "project_native_denied", slug: "denied" } }))
+        .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      expect(await store.getProject("project_native_denied")).toBeUndefined();
+      expect((await store.createCapsuleInitialAuthority(initial)).status).toBe("replayed");
+      await expect(store.writeSourceConfiguration({ source: { ...source, name: "after-drain" }, expectedSource: source }))
+        .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      await expect(store.createCapsuleInitialAuthority({
+        installConfig: { ...initial.installConfig, id: "config_initial_denied" },
+        capsule: { ...initial.capsule, id: "capsule_initial_denied", name: "denied", slug: "denied", installConfigId: "config_initial_denied" },
+        providerBindingSet: { ...initial.providerBindingSet, id: "binding_initial_denied", capsuleId: "capsule_initial_denied" },
+      })).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      expect(await store.getCapsule("capsule_initial_denied")).toBeUndefined();
+      expect(await store.getInstallConfig("config_initial_denied")).toBeUndefined();
+      expect(await store.getProviderBindingSetByCapsule("capsule_initial_denied", "production")).toBeUndefined();
+      expect(await store.beginSourceSyncRun(queued, authority)).toMatchObject({
+        status: "existing",
+        run: { status: "running" },
+      });
+      await expect(store.beginSourceSyncRun({ ...queued, id: "new-source-management-run" }))
+        .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      expect(await store.getSourceSyncRun("new-source-management-run")).toBeUndefined();
+      expect((await store.transitionRun({
+        id: queued.id,
+        kind: "source_sync",
+        expectFrom: ["running"],
+        expectedWorkspaceManagementAuthority: authority,
+        clearLeaseToken: true,
+        run: { ...running, status: "failed" },
+      })).won).toBe(false);
+      expect((await store.updateCapsuleLifecycle({
+        capsuleId: CAPSULE_ID,
+        expected: capsuleLifecycleExpected(stale, 1),
+        mutation: { kind: "auto-update-claim", sourceSnapshotId: queued.snapshotId,
+          expectedWorkspaceManagementAuthority: authority },
+        updatedAt: NOW,
+      })).kind).toBe("conflict");
+      expect((await store.getCapsule(CAPSULE_ID))?.autoUpdateAttemptSourceSnapshotId).toBeUndefined();
+      expect((await store.transitionRun({
+        id: queued.id,
+        kind: "source_sync",
+        expectFrom: ["running"],
+        expectLeaseToken: "source-management-lease",
+        run: running,
+      })).won).toBe(true);
+      expect((await store.commitSourceSyncSuccess({
+        terminalRun: {
+          ...running, status: "succeeded", resolvedCommit: "native-commit",
+          archiveDigest: "sha256:native", archiveSizeBytes: 128, finishedAt: NOW,
+        },
+        leaseToken: "source-management-lease",
+        snapshot: {
+          id: queued.snapshotId, origin: "git", workspaceId: WORKSPACE_ID, sourceId: source.id,
+          url: queued.url, ref: queued.ref, path: queued.path, resolvedCommit: "native-commit",
+          archiveRef: queued.archiveRef, archiveDigest: "sha256:native", archiveSizeBytes: 128,
+          fetchedByRunId: queued.id, fetchedAt: NOW,
+          repositoryInstallMetadata: { status: "absent" },
+          repositoryManifest: { status: "absent" },
+          repositoryModules: { status: "ready", scopePath: ".", modules: [] },
+        },
+      })).won).toBe(true);
+      expect(await store.getSource(source.id)).toEqual({ ...source, lastSeenCommit: "native-commit" });
+      // SourceSync terminal writes retain private original admission metadata
+      // in the existing durable row, without exposing it from typed getters.
+      expect(await database.prepare(
+        "select json_extract(run_json, '$.workspaceManagementAuthority.managementEpoch') as epoch from runs where id = ?",
+      ).bind(queued.id).first()).toEqual({ epoch: 1 });
+      expect(JSON.stringify(await store.getSourceSyncRun(queued.id))).not.toContain("workspaceManagementAuthority");
+      await database.prepare(
+        "update workspaces set management_state = 'active', management_epoch = 3 where id = ? and management_state = 'draining'",
+      ).bind(WORKSPACE_ID).run();
+      const resumed = new CloudflareD1OpenTofuControlStore(database);
+      const currentAuthority = { ...authority, managementEpoch: 3 };
+      expect(await resumed.getWorkspaceManagement(WORKSPACE_ID)).toEqual(currentAuthority);
+      expect(await resumed.getRunManagementAuthority({ id: queued.id, workspaceId: WORKSPACE_ID, kind: "source_sync" }))
+        .toEqual(authority);
+      for (const expectedWorkspaceManagementAuthority of [undefined, currentAuthority]) {
+        expect(await resumed.transitionRun({
+          id: delayed.id, kind: "source_sync", expectFrom: ["queued"],
+          run: { ...delayed, status: "running" }, setLeaseToken: "delayed-lease",
+          expectedWorkspaceManagementAuthority,
+        })).toEqual({ won: false, run: delayed });
+      }
+      const fresh = { ...queued, id: "source-management-fresh" };
+      expect(await resumed.beginSourceSyncRun(fresh, currentAuthority)).toEqual({ status: "created", run: fresh });
+      expect(await resumed.transitionRun({
+        id: fresh.id, kind: "source_sync", expectFrom: ["queued"],
+        run: { ...fresh, status: "running" }, setLeaseToken: "fresh-lease",
+      })).toEqual({ won: true, run: { ...fresh, status: "running" } });
+    } finally {
+      await runtime.dispose();
+    }
+  }, 30_000);
+
+  test("Git, InstallConfig and Interface admission share the Workspace fence on isolated workerd D1", async () => {
+    const runtime = new Miniflare({
+      compatibilityDate: "2026-07-17",
+      modules: [{
+        type: "ESModule",
+        path: "git-interface-management-workerd.mjs",
+        contents: "export default {fetch(){return new Response('ok')}}",
+      }],
+      d1Databases: { CONTROL: "git-interface-management-workerd" },
+    });
+    try {
+      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const management = new CloudflareD1OpenTofuControlStore(database);
+      await management.putWorkspace({
+        id: WORKSPACE_ID,
+        handle: "git-interface-management",
+        displayName: "Git and Interface management",
+        type: "personal",
+        ownerUserId: "management-owner",
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      const authority = {
+        workspaceId: WORKSPACE_ID,
+        managementState: "active" as const,
+        managementEpoch: 1,
+      };
+      const git = new D1GitInstallPlanStore(database);
+      const plan: StoredGitInstallPlan = {
+        id: "git-management-plan",
+        workspaceId: WORKSPACE_ID,
+        workspaceManagementAuthority: authority,
+        createdBy: "management-owner",
+        actorSubject: "management-owner",
+        idempotencyKeyHash: "management-request-hash",
+        requestDigest: "management-request-digest",
+        source: {
+          name: "repo",
+          url: "https://example.com/source.git",
+          ref: "main",
+          path: ".",
+        },
+        capsule: { name: "management", environment: "production" },
+        options: {},
+        phase: "syncing_source",
+        generation: 0,
+        createdAt: NOW,
+        updatedAt: NOW,
+      };
+      expect((await git.create(plan, authority)).status).toBe("created");
+      const claim = await git.claimReconcile({
+        id: plan.id,
+        expectedGeneration: 0,
+        leaseToken: "git-management-lease",
+        claimedAt: NOW,
+        leaseExpiresAt: "2026-08-10T00:00:30.000Z",
+        expectedWorkspaceManagementAuthority: authority,
+      });
+      expect(claim.status).toBe("claimed");
+      if (claim.status !== "claimed") throw new Error("Git lease was not acquired");
+
+      const interfaces = createD1InterfaceStores(database);
+      const service = new InterfaceService({ stores: interfaces, now: () => NOW });
+      const initial = await service.create({
+        workspaceId: WORKSPACE_ID,
+        name: "management-observation",
+        ownerRef: { kind: "Capsule", id: CAPSULE_ID },
+        spec: {
+          type: "example.http",
+          version: "v1",
+          document: { endpoint: "https://example.test" },
+          access: { visibility: "workspace" },
+        },
+      });
+      const pending = {
+        ...initial,
+        status: {
+          ...initial.status,
+          conditions: [{
+            type: "ObservationPending",
+            status: "true" as const,
+            reason: "PlanObservationPending",
+            message: "plan-before-drain",
+            observedGeneration: initial.metadata.generation,
+            lastTransitionAt: NOW,
+          }],
+        },
+      };
+      expect(await interfaces.interfaces.compareAndSet(pending, {
+        generation: initial.metadata.generation,
+        resolvedRevision: initial.status.resolvedRevision,
+        record: initial,
+        requireActiveWorkspace: true,
+      })).toBe(true);
+
+      const successorInstallConfig: InstallConfig = {
+        id: "config_management_successor",
+        workspaceId: WORKSPACE_ID,
+        name: "management successor",
+        variableMapping: {},
+        outputAllowlist: {},
+        policy: {},
+        internal: {
+          reason: "per_install_overrides",
+          reAdoption: {
+            capsuleId: CAPSULE_ID,
+            actorSubject: "management-owner",
+            reason: "Change configuration",
+            idempotencyKeyHash: `sha256:${"1".repeat(64)}`,
+            requestDigest: `sha256:${"2".repeat(64)}`,
+            previousInstallConfigId: "config_previous",
+            previousInstallConfigDigest: `sha256:${"3".repeat(64)}`,
+            previousCapsuleStatus: "active",
+            previousStateGeneration: 0,
+            previousExecutionAuthorityEpoch: 1,
+            authorityGuard: `sha256:${"4".repeat(64)}`,
+            derivedTargetDigest: `sha256:${"5".repeat(64)}`,
+            baseInstallConfigId: "config_base",
+            sourceSnapshotId: "snapshot_prepared",
+          },
+        },
+        createdAt: NOW,
+        updatedAt: NOW,
+      };
+      await expect(
+        management.createInstallConfigIfAbsent(
+          successorInstallConfig,
+          { ...authority, managementEpoch: 2 },
+        ),
+      ).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      expect(
+        await management.getInstallConfig(successorInstallConfig.id),
+      ).toBeUndefined();
+      expect(
+        await management.createInstallConfigIfAbsent(
+          successorInstallConfig,
+          authority,
+        ),
+      ).toBe(true);
+      expect(
+        await management.getInstallConfig(successorInstallConfig.id),
+      ).toEqual(successorInstallConfig);
+
+      expect(await management.getInstallConfigManagementAuthority(successorInstallConfig.id)).toEqual(authority);
+      const forgedConfig = {
+        ...successorInstallConfig,
+        workspaceManagementAuthority: { ...authority, managementEpoch: 99 },
+      };
+      expect(await management.putInstallConfig(forgedConfig)).toEqual(successorInstallConfig);
+      await management.putInstallConfig(successorInstallConfig);
+      const reopened = new CloudflareD1OpenTofuControlStore(database);
+      expect(await reopened.getInstallConfigManagementAuthority(successorInstallConfig.id)).toEqual(authority);
+      expect(await reopened.getInstallConfigsByIds([successorInstallConfig.id])).toEqual([successorInstallConfig]);
+      expect((await reopened.listInstallConfigsPage(WORKSPACE_ID, { limit: 10 })).items).toEqual([successorInstallConfig]);
+      const legacy = { ...successorInstallConfig, id: "config_legacy_without_authority" };
+      await reopened.putInstallConfig({ ...forgedConfig, id: legacy.id });
+      expect(await reopened.getInstallConfig(legacy.id)).toEqual(legacy);
+      expect(await reopened.getInstallConfigManagementAuthority(legacy.id)).toBeUndefined();
+
+      expect((await management.beginWorkspaceDraining(WORKSPACE_ID, authority)).status).toBe("started");
+      expect(
+        await management.createInstallConfigIfAbsent(successorInstallConfig),
+      ).toBe(false);
+      expect(
+        await management.getInstallConfig(successorInstallConfig.id),
+      ).toEqual(successorInstallConfig);
+      const deniedInstallConfig: InstallConfig = {
+        ...successorInstallConfig,
+        id: "config_management_denied",
+        name: "management denied",
+      };
+      await expect(
+        management.createInstallConfigIfAbsent(deniedInstallConfig),
+      ).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      expect(
+        await management.getInstallConfig(deniedInstallConfig.id),
+      ).toBeUndefined();
+      const neutralInstallConfig: InstallConfig = {
+        id: "config_management_neutral",
+        name: "management neutral",
+        variableMapping: {},
+        outputAllowlist: {},
+        policy: {},
+        createdAt: NOW,
+        updatedAt: NOW,
+      };
+      expect(
+        await management.createInstallConfigIfAbsent(neutralInstallConfig),
+      ).toBe(true);
+      expect(
+        await management.getInstallConfig(neutralInstallConfig.id),
+      ).toEqual(neutralInstallConfig);
+
+      expect(await git.create(plan, authority)).toMatchObject({
+        status: "replayed",
+        plan: claim.claim.plan,
+      });
+      await expect(git.create({ ...plan, id: "git-after-drain", idempotencyKeyHash: "new-key-hash" }))
+        .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      expect(await git.get("git-after-drain")).toBeUndefined();
+      await expect(git.claimReconcile({
+        id: plan.id,
+        expectedGeneration: 1,
+        leaseToken: "replacement-lease",
+        claimedAt: "2026-08-10T00:01:00.000Z",
+        leaseExpiresAt: "2026-08-10T00:01:30.000Z",
+      })).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      expect(await git.get(plan.id)).toEqual(claim.claim.plan);
+
+      const observed = {
+        ...pending,
+        status: { ...pending.status, conditions: [] },
+      };
+      const guard = {
+        generation: pending.metadata.generation,
+        resolvedRevision: pending.status.resolvedRevision,
+        record: pending,
+      };
+      await expect(interfaces.interfaces.compareAndSet(observed, {
+        ...guard,
+        requireActiveWorkspace: true,
+      })).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      expect(await interfaces.interfaces.get(pending.metadata.id)).toEqual(pending);
+
+      // Existing lease completion and terminal observation retain their own
+      // exact-record authority; stopping admission must not strand settlement.
+      expect((await git.completeReconcile({
+        id: plan.id,
+        expectedGeneration: 1,
+        leaseToken: "git-management-lease",
+        plan: { ...claim.claim.plan, phase: "compiling_install", sourceId: "source-committed" },
+      })).status).toBe("completed");
+      expect(await interfaces.interfaces.compareAndSet(observed, guard)).toBe(true);
     } finally {
       await runtime.dispose();
     }

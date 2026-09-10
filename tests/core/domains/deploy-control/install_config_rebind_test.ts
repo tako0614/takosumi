@@ -26,6 +26,7 @@ import type {
 } from "../../../../core/adapters/storage/sql.ts";
 import {
   InMemoryOpenTofuControlStore,
+  WorkspaceManagementAdmissionConflictError,
   providerBindingSetAuthorityDigest,
   type CapsuleInstallConfigRebindInput,
   type CapsuleInstallConfigRebindResult,
@@ -109,6 +110,15 @@ async function seedRebind(
   const target = config(`config_target_${suffix}`);
   const next = config(`config_next_${suffix}`);
   const row = capsule(`capsule_${suffix}`, previous.id);
+  await store.putWorkspace({
+    id: WORKSPACE_ID,
+    handle: "rebind-fixture",
+    displayName: "Rebind fixture",
+    type: "personal",
+    ownerUserId: "owner_rebind",
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
   await store.putInstallConfig(target);
   await store.putInstallConfig(next);
   const initialBindingSet = initialBindingSuffix
@@ -549,6 +559,7 @@ async function seedCommittedPostApplyRecovery(
   store: OpenTofuControlStore,
   seeded: Awaited<ReturnType<typeof seedRebind>>,
   suffix: string,
+  guardedAdmission = false,
 ): Promise<{
   readonly capsule: Capsule;
   readonly proof: InstallConfigCommittedPostApplyRecoveryProof;
@@ -623,6 +634,13 @@ async function seedCommittedPostApplyRecovery(
   };
   await store.putStateVersion(stateVersion);
   await store.putOutput(output);
+  if (guardedAdmission) {
+    const management = await store.getWorkspaceManagement(failedApply.workspaceId);
+    if (management?.managementState !== "active") throw new Error("Run admission fixture must be active");
+    const { startedAt: _startedAt, finishedAt: _finishedAt, ...creation } = failedApply;
+    expect((await store.beginApplyRun({ ...creation, status: "queued", auditEvents: [] },
+      { ...management, managementState: "active" })).status).toBe("created");
+  }
   await store.putApplyRun(failedApply);
   const proofCore = {
     failedApplyRunId,
@@ -643,6 +661,7 @@ async function seedCommittedPostApplyRecovery(
     };
   const target: InstallConfig = {
     ...seeded.target,
+    id: `${seeded.target.id}_recovery`,
     internal: {
       reason: "per_install_overrides",
       sourceSnapshotId: `snapshot_${suffix}`,
@@ -666,7 +685,9 @@ async function seedCommittedPostApplyRecovery(
       },
     },
   };
-  await store.putInstallConfig(target);
+  const management = await store.getWorkspaceManagement(current.workspaceId);
+  if (management?.managementState !== "active") throw new Error("recovery fixture must be active");
+  expect(await store.createInstallConfigIfAbsent(target, { ...management, managementState: "active" })).toBe(true);
   return {
     capsule: current,
     proof,
@@ -787,6 +808,79 @@ test("InstallConfig rebind is CAS-fenced, idempotent, and epoch-advancing across
       target: seeded.next,
     });
     expect(stale.status, label).toBe("conflict");
+  }
+});
+
+test("sealed successor storage preserves original authority without changing InstallConfig digests or projections", async () => {
+  for (const [label, store] of await stores()) {
+    const seeded = await seedRebind(store, `private_successor_${label}`);
+    const recovery = await seedCommittedPostApplyRecovery(store, seeded, `private_successor_${label}`);
+    const target = recovery.target;
+    const original = { workspaceId: WORKSPACE_ID, managementState: "active" as const, managementEpoch: 1 };
+    expect(await store.getInstallConfig(target.id), label).toEqual(target);
+    expect(await stableJsonDigest(await store.getInstallConfig(target.id)), label).toBe(await stableJsonDigest(target));
+    expect(await store.getInstallConfigManagementAuthority(target.id), label).toEqual(original);
+    for (const rows of [
+      await store.getInstallConfigsByIds([target.id]),
+      await store.listInstallConfigs(),
+      await store.listInstallConfigs(WORKSPACE_ID),
+      (await store.listInstallConfigsPage(WORKSPACE_ID, { limit: 100 })).items,
+    ]) {
+      expect(rows.find((row) => row.id === target.id), label).toEqual(target);
+      expect(rows.every((row) => !Object.hasOwn(row, "workspaceManagementAuthority")), label).toBe(true);
+    }
+    const forged = { ...target, workspaceManagementAuthority: { ...original, managementEpoch: 99 } };
+    expect(await store.putInstallConfig(forged), label).toEqual(target);
+    expect(await store.getInstallConfigManagementAuthority(target.id), label).toEqual(original);
+    await store.putInstallConfig(target);
+    expect(await store.getInstallConfigManagementAuthority(target.id), label).toEqual(original);
+    const workspace = (await store.getWorkspace(WORKSPACE_ID))!;
+    await store.putWorkspace({ ...workspace, id: `${WORKSPACE_ID}_other`, handle: "other-workspace" });
+    await expect(store.putInstallConfig({ ...target, workspaceId: `${WORKSPACE_ID}_other` }), label)
+      .rejects.toBeInstanceOf(TypeError);
+    expect(await store.getInstallConfig(target.id), label).toEqual(target);
+    const readAuthority = (await store.getInstallConfigManagementAuthority(target.id))!;
+    Reflect.set(readAuthority, "managementEpoch", 99);
+    expect(await store.getInstallConfigManagementAuthority(target.id), label).toEqual(original);
+    const injected = { ...forged, id: `${target.id}_injected` };
+    await store.putInstallConfig(injected);
+    expect(await store.getInstallConfigManagementAuthority(injected.id), label).toBeUndefined();
+    expect(Object.hasOwn((await store.getInstallConfig(injected.id))!, "workspaceManagementAuthority"), label).toBe(false);
+    const { internal: _internal, ...ordinary } = target;
+    const reusable = { ...ordinary, id: `${target.id}_ordinary`, workspaceManagementAuthority: original };
+    await store.createInstallConfigIfAbsent(reusable, original);
+    expect(await store.getInstallConfigManagementAuthority(reusable.id), label).toBeUndefined();
+
+    const input = await recoveryRebindInput(seeded, recovery);
+    expect((await store.rebindCapsuleInstallConfig(input)).status, label).toBe("updated");
+    await store.beginWorkspaceDraining(WORKSPACE_ID, original);
+    expect((await store.rebindCapsuleInstallConfig(input)).status, label).toBe("replayed");
+    expect(await store.createInstallConfigIfAbsent(target), label).toBe(false);
+  }
+});
+
+test("unfinished successor without stored authority cannot rebind or be backfilled by a payload", async () => {
+  for (const [label, store] of await stores()) {
+    const seeded = await seedRebind(store, `legacy_successor_${label}`);
+    const recovery = await seedCommittedPostApplyRecovery(store, seeded, `legacy_successor_${label}`);
+    const original = { workspaceId: WORKSPACE_ID, managementState: "active" as const, managementEpoch: 1 };
+    const legacy = { ...recovery.target, id: `${recovery.target.id}_legacy` };
+    await store.putInstallConfig({ ...legacy, workspaceManagementAuthority: original });
+    const input = await recoveryRebindInput(seeded, { ...recovery, target: legacy });
+    await expect(store.rebindCapsuleInstallConfig({ ...input, expectedWorkspaceManagementAuthority: original }), label)
+      .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    expect(await store.getInstallConfigManagementAuthority(legacy.id), label).toBeUndefined();
+    expect((await store.getCapsule(seeded.capsule.id))?.installConfigId, label).toBe(seeded.previous.id);
+    const missing = { ...legacy, id: `${legacy.id}_missing` };
+    await expect(store.createInstallConfigIfAbsent(missing), label)
+      .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    expect(await store.getInstallConfig(missing.id), label).toBeUndefined();
+    // Historical completed records may be observed without manufacturing
+    // metadata. This fixture does not expose a new adoption/transfer path.
+    await store.putCapsule({ ...recovery.capsule, installConfigId: legacy.id });
+    await store.beginWorkspaceDraining(WORKSPACE_ID, original);
+    expect((await store.rebindCapsuleInstallConfig(input)).status, label).toBe("replayed");
+    expect(await store.getInstallConfigManagementAuthority(legacy.id), label).toBeUndefined();
   }
 });
 
@@ -1265,7 +1359,10 @@ test("runtime-safety authority rejects every ambiguous external-effect phase wit
   }
 });
 
-test("receipt-fenced committed post-apply recovery permits exact rebind across every store", async () => {
+for (const guardedAdmission of [false, true]) {
+test(guardedAdmission
+  ? "receipt-fenced recovery excludes private Run admission from its public evidence across every store"
+  : "receipt-fenced committed post-apply recovery permits exact rebind across every store", async () => {
   const statuses: string[] = [];
   for (const [label, store] of await stores()) {
     const seeded = await seedRebind(store, `post_apply_recovery_${label}`);
@@ -1273,6 +1370,7 @@ test("receipt-fenced committed post-apply recovery permits exact rebind across e
       store,
       seeded,
       label,
+      guardedAdmission,
     );
     const result = await store.rebindCapsuleInstallConfig(
       await recoveryRebindInput(seeded, recovery),
@@ -1295,6 +1393,7 @@ test("receipt-fenced committed post-apply recovery permits exact rebind across e
     "d1:updated",
   ]);
 });
+}
 
 test("receipt-fenced recovery fails closed on missing, drifted, or provider-uncertain evidence", async () => {
   for (const [label, store] of await stores()) {

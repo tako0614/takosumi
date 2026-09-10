@@ -39,6 +39,7 @@ import type {
 } from "takosumi-contract/capsules";
 import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
 import { consoleErrorRedacted } from "../redacted-log.ts";
+import { WorkspaceManagementAdmissionConflictError } from "../../../../core/domains/deploy-control/store.ts";
 import {
   bearerWorkspaceAllows,
   type AccountsBearerRequiredScope,
@@ -362,9 +363,20 @@ export async function publicApplyActionResponse(
 
 /**
  * Renders an `OpenTofuControllerError` (carrying a `.code`) to the contract's
- * code->HTTP-status mapping. Non-controller errors collapse to 500.
+ * code->HTTP-status mapping. Workspace admission loss is a precondition failure;
+ * other non-controller errors collapse to 500.
  */
 export function controllerErrorResponse(error: unknown): Response {
+  if (error instanceof WorkspaceManagementAdmissionConflictError) {
+    return errorJson(
+      "failed_precondition",
+      "Workspace is not accepting this management operation.",
+      409,
+      undefined,
+      {},
+      { reason: "workspace_management_admission_conflict" },
+    );
+  }
   const code = controllerErrorCode(error);
   if (code) {
     const publicError = publicControllerError(error);

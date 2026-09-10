@@ -171,6 +171,21 @@ async function seedProviderConnections(
   });
 }
 
+async function seedActiveWorkspace(
+  store: InMemoryOpenTofuControlStore,
+  id: string,
+): Promise<void> {
+  await store.putWorkspace({
+    id,
+    handle: id.replace(/_/g, "-"),
+    displayName: id,
+    type: "personal",
+    ownerUserId: `owner-${id}`,
+    createdAt: "2026-09-08T00:00:00.000Z",
+    updatedAt: "2026-09-08T00:00:00.000Z",
+  });
+}
+
 function providerShortName(provider: string): string {
   if (provider.includes("/cloudflare/")) return "cloudflare";
   if (provider.includes("/hashicorp/aws")) return "aws";
@@ -795,6 +810,7 @@ test("PlanRun rejects capsule operations outside the requested space", async () 
   const { store, capsuleId } = await seedUpdatableCapsule({
     workspaceId: "workspace_a",
   });
+  await seedActiveWorkspace(store, "workspace_b");
   const controller = new OpenTofuController({
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
@@ -821,9 +837,12 @@ test("PlanRun requires an existing Capsule regardless of operation", async () =>
   // existing Capsule row. A raw createPlanRun with no capsuleId is a
   // failed_precondition for any operation; the create-on-apply legacy path is
   // removed.
+  const store = new InMemoryOpenTofuControlStore();
+  await seedActiveWorkspace(store, "workspace_test");
   const controller = new OpenTofuController({
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
+    store,
     now: sequenceNow(30),
     newId: deterministicIds(),
     runner: fakeRunner(),
@@ -959,9 +978,12 @@ test("apply rejects a stale update PlanRun after the current StateVersion change
 });
 
 test("git source is restricted to safe HTTPS source URLs", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  await seedActiveWorkspace(store, "workspace_test");
   const controller = new OpenTofuController({
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
+    store,
     now: sequenceNow(91),
     newId: deterministicIds(),
   });
@@ -2126,6 +2148,87 @@ test("destroy apply is rejected until the plan is approved (always two-stage, sp
     expected: applyExpectedGuardFromPlanRun(destroyPlan),
   });
   expect(destroyed.applyRun.status).toEqual("succeeded");
+});
+
+test("restore preparation captures Workspace authority before backup lookup and rejects a drained Workspace", async () => {
+  let releaseBackupRead!: () => void;
+  let backupReadStarted!: () => void;
+  const backupReadStartedPromise = new Promise<void>((resolve) => {
+    backupReadStarted = resolve;
+  });
+  const backupReadRelease = new Promise<void>((resolve) => {
+    releaseBackupRead = resolve;
+  });
+
+  class DelayedBackupReadStore extends InMemoryOpenTofuControlStore {
+    override async getBackupRecord(id: string) {
+      backupReadStarted();
+      await backupReadRelease;
+      return await super.getBackupRecord(id);
+    }
+  }
+
+  const store = new DelayedBackupReadStore();
+  const { capsule, backupId } = await seedRestoreFixture(
+    store,
+    "management_capture",
+  );
+  const activityEvents: unknown[] = [];
+  const dispatches: unknown[] = [];
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    vault: fakeProviderVault() as never,
+    store,
+    now: sequenceNow(69),
+    newId: deterministicIds(),
+    activity: {
+      record: async (event) => {
+        activityEvents.push(event);
+        return undefined;
+      },
+    },
+    enqueueRun: async (dispatch) => {
+      dispatches.push(dispatch);
+    },
+  });
+
+  const createRestore = controller.createRestoreRun(
+    capsule.workspaceId,
+    backupId,
+    {
+      capsuleId: capsule.id,
+      environment: capsule.environment,
+      stateGeneration: 1,
+      expectedBackupDigest: PLAN_DIGEST,
+    },
+  );
+  await backupReadStartedPromise;
+
+  const authority = await store.getWorkspaceManagement(capsule.workspaceId);
+  expect(authority).toEqual({
+    workspaceId: capsule.workspaceId,
+    managementState: "active",
+    managementEpoch: 1,
+  });
+  expect(
+    await store.beginWorkspaceDraining(capsule.workspaceId, authority!),
+  ).toMatchObject({
+    status: "started",
+    management: { managementState: "draining", managementEpoch: 2 },
+  });
+  releaseBackupRead();
+
+  await expect(createRestore).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "workspace_management_admission_conflict" },
+  });
+  expect(
+    (await store.listRunsByWorkspace(capsule.workspaceId)).filter(
+      (run) => run.type === "restore",
+    ),
+  ).toEqual([]);
+  expect(activityEvents).toEqual([]);
+  expect(dispatches).toEqual([]);
 });
 
 test("restore rebases StateVersion and Output cursors and marks the Capsule stale", async () => {

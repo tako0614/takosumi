@@ -5,6 +5,12 @@ import { handleAuthenticatedControlRoute } from "../../../../accounts/service/sr
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { defaultCapsuleInstallConfig } from "../../../../core/domains/capsules/default_install_config.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
+import {
+  InMemoryOpenTofuControlStore,
+  type WorkspaceManagementAuthority,
+} from "../../../../core/domains/deploy-control/store.ts";
+import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
+import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { InMemoryGitInstallPlanStore } from "../../../../core/domains/install-plans/store.ts";
 import type { CapsuleCompatibilityReport } from "../../../../contract/capsules.ts";
 import type { Capsule, InstallConfig } from "../../../../contract/install-configs.ts";
@@ -135,6 +141,116 @@ test("Git revision plan reconciles an existing Capsule to one reviewable pinned 
     "tsub_foreign",
   );
   expect(denied.status).toBe(403);
+});
+
+test("Git revision POST rejects preparation captured before drain and resume", async () => {
+  const fixture = revisionFixture({ pausePreparation: true });
+  const pending = fixture.request(
+    "/api/v1/capsules/cap_revision/revision-plans",
+    "POST",
+    { ref: "release/v2" },
+    { "idempotency-key": "revision-stale-management-epoch" },
+  );
+
+  await fixture.preparationStarted;
+  await fixture.drainAndResume();
+  fixture.releasePreparation();
+
+  const response = await pending;
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({
+    error: {
+      code: "failed_precondition",
+      details: { reason: "workspace_management_admission_conflict" },
+    },
+  });
+  expect(
+    await fixture.planStore.getByScope({
+      workspaceId: WORKSPACE.id,
+      actorSubject: WORKSPACE.ownerUserId,
+      idempotencyKeyHash: await stableJsonDigest(
+        "revision-stale-management-epoch",
+      ),
+    }),
+  ).toBeUndefined();
+});
+
+test("Git revision POST replays an exact idempotency key while draining", async () => {
+  const fixture = revisionFixture();
+  const first = await fixture.request(
+    "/api/v1/capsules/cap_revision/revision-plans",
+    "POST",
+    { ref: "release/v2" },
+    { "idempotency-key": "revision-draining-replay" },
+  );
+  expect(first.status).toBe(201);
+  const planId = (await first.json()).revisionPlan.id as string;
+
+  await fixture.beginDrain();
+  const replay = await fixture.request(
+    "/api/v1/capsules/cap_revision/revision-plans",
+    "POST",
+    { ref: "release/v2" },
+    { "idempotency-key": "revision-draining-replay" },
+  );
+  expect(replay.status).toBe(200);
+  expect((await replay.json()).revisionPlan.id).toBe(planId);
+});
+
+test("Git revision reconciliation uses the original private management authority", async () => {
+  const fixture = revisionFixture();
+  const created = await fixture.request(
+    "/api/v1/capsules/cap_revision/revision-plans",
+    "POST",
+    { ref: "release/v2" },
+    { "idempotency-key": "revision-persisted-management-authority" },
+  );
+  expect(created.status).toBe(201);
+  const payload = await created.json();
+  const planId = payload.revisionPlan.id as string;
+  expect(JSON.stringify(payload)).not.toContain("workspaceManagementAuthority");
+  expect((await fixture.planStore.get(planId))?.workspaceManagementAuthority).toEqual({
+    workspaceId: WORKSPACE.id,
+    managementState: "active",
+    managementEpoch: 1,
+  });
+
+  await fixture.drainAndResume();
+  const rejected = await fixture.reconcile(planId);
+  expect(rejected.status).toBe(409);
+  expect(await rejected.json()).toMatchObject({
+    error: {
+      code: "failed_precondition",
+      details: { reason: "workspace_management_admission_conflict" },
+    },
+  });
+  expect((await fixture.planStore.get(planId))?.generation).toBe(0);
+  expect(fixture.counts).toEqual({ sync: 0, compatibility: 0, plan: 0 });
+});
+
+test("Git revision Source sync forwarding rejects a post-claim management epoch race", async () => {
+  const fixture = revisionFixture({
+    raceAfterClaimBeforeSourceSync: true,
+  });
+  const created = await fixture.request(
+    "/api/v1/capsules/cap_revision/revision-plans",
+    "POST",
+    { ref: "release/v2" },
+    { "idempotency-key": "revision-post-claim-source-sync-race" },
+  );
+  expect(created.status).toBe(201);
+  const planId = (await created.json()).revisionPlan.id as string;
+
+  const raced = await fixture.reconcile(planId);
+  expect(raced.status).toBe(202);
+  expect(await raced.json()).toMatchObject({
+    revisionPlan: {
+      phase: "syncing_source",
+      generation: 1,
+      diagnostic: { code: "revision_plan_reconcile_retryable" },
+    },
+  });
+  expect(fixture.counts).toEqual({ sync: 0, compatibility: 0, plan: 0 });
 });
 
 test("Git revision plan follows the adopted Capsule path instead of Source.defaultPath", async () => {
@@ -392,9 +508,33 @@ function revisionFixture(
     readonly mutateInstallConfigDuringPlan?: boolean;
     readonly sourceDefaultPath?: string;
     readonly adoptedPath?: string;
+    readonly pausePreparation?: boolean;
+    readonly raceAfterClaimBeforeSourceSync?: boolean;
   } = {},
 ) {
-  const planStore = new InMemoryGitInstallPlanStore();
+  const managementStore = new InMemoryOpenTofuControlStore();
+  // The in-memory store installs the Workspace synchronously before resolving.
+  void managementStore.putWorkspace(WORKSPACE);
+  const workspacesService = new WorkspacesService({ store: managementStore });
+  let resumedManagementEpoch: number | undefined;
+  const managementValidator = {
+    isWorkspaceManagementAdmissionAllowed(
+      workspaceId: string,
+      expected?: WorkspaceManagementAuthority,
+    ): boolean {
+      if (resumedManagementEpoch !== undefined) {
+        return workspaceId === WORKSPACE.id &&
+          (expected === undefined ||
+            expected.workspaceId === workspaceId &&
+              expected.managementEpoch === resumedManagementEpoch);
+      }
+      return managementStore.isWorkspaceManagementAdmissionAllowed(
+        workspaceId,
+        expected,
+      );
+    },
+  };
+  const planStore = new InMemoryGitInstallPlanStore(managementValidator);
   const accountsStore = new InMemoryAccountsStore();
   const loseAck = new Set(options.loseAckOnce ?? []);
   const source: Source = {
@@ -437,6 +577,38 @@ function revisionFixture(
   const counts = { sync: 0, compatibility: 0, plan: 0 };
   let approvalCalls = 0;
   let applyCalls = 0;
+  let preparationPausePending = options.pausePreparation === true;
+  let raceAfterClaimBeforeSourceSyncPending =
+    options.raceAfterClaimBeforeSourceSync === true;
+  let resolvePreparationStarted: (() => void) | undefined;
+  let releasePreparationGate: (() => void) | undefined;
+  const preparationStarted = new Promise<void>((resolve) => {
+    resolvePreparationStarted = resolve;
+  });
+  const preparationGate = new Promise<void>((resolve) => {
+    releasePreparationGate = resolve;
+  });
+
+  async function raceManagementEpochAfterClaim(): Promise<void> {
+    const management = await managementStore.getWorkspaceManagement(
+      WORKSPACE.id,
+    );
+    if (!management || management.managementState !== "active") {
+      throw new Error("Workspace is not active");
+    }
+    const result = await managementStore.beginWorkspaceDraining(WORKSPACE.id, {
+      workspaceId: WORKSPACE.id,
+      managementState: "active",
+      managementEpoch: management.managementEpoch,
+    });
+    if (result.status !== "started") {
+      throw new Error("Workspace did not start draining");
+    }
+    // There is intentionally no public abort/resume endpoint yet. The
+    // fixture's read-only validator models the documented N+2 active epoch
+    // so stale child preparation cannot be blessed by a later active state.
+    resumedManagementEpoch = management.managementEpoch + 2;
+  }
 
   const operations = {
     gitInstallPlans: planStore,
@@ -444,6 +616,16 @@ function revisionFixture(
       getWorkspace: async (id: string) => {
         if (id !== WORKSPACE.id) throw new Error("workspace not found");
         return WORKSPACE;
+      },
+      captureManagementAuthority: async (workspaceId: string) => {
+        if (resumedManagementEpoch !== undefined) {
+          return {
+            workspaceId,
+            managementState: "active" as const,
+            managementEpoch: resumedManagementEpoch,
+          };
+        }
+        return await workspacesService.captureManagementAuthority(workspaceId);
       },
     },
     members: {
@@ -457,6 +639,7 @@ function revisionFixture(
     createSourceSync: async (
       sourceId: string,
       request: CreateSourceSyncRequest,
+      expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
     ) => {
       const identity = request.coordinator;
       if (!identity || sourceId !== source.id) throw new Error("coordinator identity missing");
@@ -465,6 +648,22 @@ function revisionFixture(
           "failed_precondition",
           "deterministic sync identity conflict",
           { reason: "source_sync_identity_conflict" },
+        );
+      }
+      if (raceAfterClaimBeforeSourceSyncPending) {
+        raceAfterClaimBeforeSourceSyncPending = false;
+        await raceManagementEpochAfterClaim();
+      }
+      if (
+        !managementValidator.isWorkspaceManagementAdmissionAllowed(
+          WORKSPACE.id,
+          expectedWorkspaceManagementAuthority,
+        )
+      ) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "Workspace management admission conflict",
+          { reason: "workspace_management_admission_conflict" },
         );
       }
       const existing = syncRuns.get(identity.runId);
@@ -570,6 +769,11 @@ function revisionFixture(
       },
       getInstallConfig: async (id: string) => {
         if (id !== installConfig.id) throw new OpenTofuControllerError("not_found", "missing");
+        if (preparationPausePending) {
+          preparationPausePending = false;
+          resolvePreparationStarted?.();
+          await preparationGate;
+        }
         return installConfig;
       },
       getCapsuleExecutionAuthorityEpoch: async () => 1,
@@ -670,6 +874,42 @@ function revisionFixture(
 
   return {
     planStore,
+    preparationStarted,
+    releasePreparation: () => releasePreparationGate?.(),
+    async beginDrain() {
+      const management = await managementStore.getWorkspaceManagement(
+        WORKSPACE.id,
+      );
+      if (!management || management.managementState !== "active") {
+        throw new Error("Workspace is not active");
+      }
+      return await managementStore.beginWorkspaceDraining(WORKSPACE.id, {
+        workspaceId: WORKSPACE.id,
+        managementState: "active",
+        managementEpoch: management.managementEpoch,
+      });
+    },
+    async drainAndResume() {
+      const management = await managementStore.getWorkspaceManagement(
+        WORKSPACE.id,
+      );
+      if (!management || management.managementState !== "active") {
+        throw new Error("Workspace is not active");
+      }
+      const result = await managementStore.beginWorkspaceDraining(WORKSPACE.id, {
+        workspaceId: WORKSPACE.id,
+        managementState: "active",
+        managementEpoch: management.managementEpoch,
+      });
+      if (result.status !== "started") {
+        throw new Error("Workspace did not start draining");
+      }
+      // There is intentionally no public abort/resume endpoint yet. The
+      // fixture's read-only validator models the documented N+2 active epoch
+      // so stale preparation cannot be blessed by a later active state.
+      resumedManagementEpoch = management.managementEpoch + 2;
+      return result;
+    },
     source,
     capsule,
     get installConfig() {

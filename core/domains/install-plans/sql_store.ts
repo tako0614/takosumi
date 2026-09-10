@@ -1,10 +1,19 @@
 import type { SqlClient } from "../../adapters/storage/sql.ts";
 import {
+  assertWorkspaceManagementAdmission,
+  assertWorkspaceManagementAuthorityInput,
+  WorkspaceManagementAdmissionConflictError,
+  type WorkspaceManagementAuthority,
+} from "../deploy-control/store.ts";
+import { pgWorkspaceManagementForTransaction } from "../deploy-control/store_sql.ts";
+import {
   assertCompletionGeneration,
   assertImmutableScope,
+  gitInstallPlanManagementAuthority,
   type ClaimGitInstallPlanResult,
   type CompleteGitInstallPlanResult,
   type CreateGitInstallPlanResult,
+  type GitInstallPlanScope,
   type GitInstallPlanStore,
   type StoredGitInstallPlan,
 } from "./store.ts";
@@ -32,45 +41,87 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
     this.#client = client;
   }
 
-  async create(plan: StoredGitInstallPlan): Promise<CreateGitInstallPlanResult> {
-    await this.#client.query(
-      `insert into ${TABLE}
-        (id, workspace_id, actor_subject, idempotency_key_hash,
-         request_digest, phase, generation, record_json, created_at, updated_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
-       on conflict (workspace_id, actor_subject, idempotency_key_hash) do nothing`,
-      [
-        plan.id,
+  async create(
+    plan: StoredGitInstallPlan,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<CreateGitInstallPlanResult> {
+    if (plan.workspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(plan.workspaceManagementAuthority, plan.workspaceId);
+    }
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
         plan.workspaceId,
-        plan.actorSubject,
-        plan.idempotencyKeyHash,
-        plan.requestDigest,
-        plan.phase,
-        plan.generation,
-        JSON.stringify(plan),
-        plan.createdAt,
-        plan.updatedAt,
-      ],
-    );
-    const existing = await this.#getByScope(plan);
-    if (!existing) throw new Error("Git install plan insert was not readable");
-    return {
-      status:
-        existing.id === plan.id
-          ? "created"
-          : existing.requestDigest === plan.requestDigest
-            ? "replayed"
-            : "conflict",
-      plan: existing,
-    };
+      );
+    }
+    return await this.#client.transaction(async (transaction) => {
+      // An existing exact scope is an observation-only replay/conflict and is
+      // intentionally readable while Workspace management is draining.
+      const existing = await this.#getByScope(plan, transaction);
+      if (existing) return createResult(plan, existing);
+      const authority = gitInstallPlanManagementAuthority(plan, expectedWorkspaceManagementAuthority);
+
+      // Workspace is the outer lock for a new dependent row. The persisted
+      // active/epoch predicate below keeps the write bound to this Workspace.
+      const management = await pgWorkspaceManagementForTransaction(
+        transaction,
+        plan.workspaceId,
+      );
+      // A concurrent writer may have created this scope while the initial
+      // observation raced with the Workspace lock. Re-check before applying
+      // the mutable admission predicate so that exact retries remain readable
+      // even if management stopped in the meantime.
+      const afterLock = await this.#getByScope(plan, transaction);
+      if (afterLock) return createResult(plan, afterLock);
+      assertWorkspaceManagementAdmission(
+        management,
+        plan.workspaceId,
+        authority,
+      );
+      const inserted = await transaction.query<GitInstallPlanRow>(
+        `insert into ${TABLE}
+          (id, workspace_id, actor_subject, idempotency_key_hash,
+           request_digest, phase, generation, record_json, created_at, updated_at)
+         select $1, workspace.id, $2, $3, $4, $5, $6, $7::jsonb, $8, $9
+           from takosumi_workspaces as workspace
+          where workspace.id = $10
+            and workspace.management_state = 'active'
+            and workspace.management_epoch = $11
+         on conflict (workspace_id, actor_subject, idempotency_key_hash) do nothing
+         returning *`,
+        [
+          plan.id,
+          plan.actorSubject,
+          plan.idempotencyKeyHash,
+          plan.requestDigest,
+          plan.phase,
+          plan.generation,
+          JSON.stringify(plan),
+          plan.createdAt,
+          plan.updatedAt,
+          plan.workspaceId,
+          authority.managementEpoch,
+        ],
+      );
+      if (inserted.rowCount > 0 && inserted.rows[0]) {
+        return { status: "created", plan: rowPlan(inserted.rows[0]) };
+      }
+
+      // A concurrent writer may have won the scope unique key while this
+      // transaction waited for the Workspace lock. Re-read only to classify
+      // that existing row; an absent row means the admission predicate lost.
+      const after = await this.#getByScope(plan, transaction);
+      if (after) return createResult(plan, after);
+      throw new WorkspaceManagementAdmissionConflictError(plan.workspaceId);
+    });
   }
 
   async get(id: string): Promise<StoredGitInstallPlan | undefined> {
-    const result = await this.#client.query<GitInstallPlanRow>(
-      `select * from ${TABLE} where id = $1`,
-      [id],
-    );
-    return result.rows[0] ? rowPlan(result.rows[0]) : undefined;
+    return await this.#getById(id);
+  }
+
+  async getByScope(scope: GitInstallPlanScope): Promise<StoredGitInstallPlan | undefined> {
+    return await this.#getByScope(scope);
   }
 
   async hasInFlightRevisionForCapsule(capsuleId: string): Promise<boolean> {
@@ -92,53 +143,107 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
     readonly leaseToken: string;
     readonly claimedAt: string;
     readonly leaseExpiresAt: string;
+    readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
   }): Promise<ClaimGitInstallPlanResult> {
-    const current = await this.get(input.id);
-    if (!current) return { status: "not_found" };
-    if (current.generation !== input.expectedGeneration) {
-      return { status: "conflict", plan: current };
+    const observedRow = await this.#getByIdRow(input.id);
+    if (!observedRow) return { status: "not_found" };
+    const observed = rowPlan(observedRow);
+    if (input.expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        input.expectedWorkspaceManagementAuthority,
+        observed.workspaceId,
+      );
     }
-    const claimed: StoredGitInstallPlan = {
-      ...current,
-      generation: current.generation + 1,
-      updatedAt: input.claimedAt,
-    };
-    const result = await this.#client.query<GitInstallPlanRow>(
-      `update ${TABLE}
-          set generation = $1, record_json = $2::jsonb,
-              reconcile_lease_token = $3, reconcile_lease_expires_at = $4,
-              updated_at = $5
-        where id = $6 and generation = $7
-          and (reconcile_lease_expires_at is null or reconcile_lease_expires_at <= $5)
-        returning *`,
-      [
-        claimed.generation,
-        JSON.stringify(claimed),
-        input.leaseToken,
-        input.leaseExpiresAt,
-        input.claimedAt,
-        input.id,
-        input.expectedGeneration,
-      ],
-    );
-    const row = result.rows[0];
-    if (row) {
-      return {
-        status: "claimed",
-        claim: {
-          plan: rowPlan(row),
-          leaseToken: input.leaseToken,
-          leaseExpiresAt: input.leaseExpiresAt,
-        },
+    if (observed.generation !== input.expectedGeneration) {
+      return { status: "conflict", plan: observed };
+    }
+    if (leaseIsBusy(observedRow, input.claimedAt)) {
+      return { status: "busy", plan: observed };
+    }
+
+    const workspaceId = observed.workspaceId;
+    return await this.#client.transaction(async (transaction) => {
+      // Capture the Git row's Workspace before taking the shared Workspace
+      // lock; never trust a caller-supplied Workspace to choose the lock.
+      const management = await pgWorkspaceManagementForTransaction(
+        transaction,
+        workspaceId,
+      );
+      const currentRow = await this.#getByIdRow(input.id, transaction);
+      if (!currentRow) return { status: "not_found" };
+      const current = rowPlan(currentRow);
+      if (current.workspaceId !== workspaceId) {
+        return { status: "conflict", plan: current };
+      }
+      if (current.generation !== input.expectedGeneration) {
+        return { status: "conflict", plan: current };
+      }
+      if (leaseIsBusy(currentRow, input.claimedAt)) {
+        return { status: "busy", plan: current };
+      }
+
+      const authority = gitInstallPlanManagementAuthority(current, input.expectedWorkspaceManagementAuthority);
+      assertWorkspaceManagementAdmission(
+        management,
+        workspaceId,
+        authority,
+      );
+      const claimed: StoredGitInstallPlan = {
+        ...current,
+        generation: current.generation + 1,
+        updatedAt: input.claimedAt,
       };
-    }
-    const latest = await this.get(input.id);
-    if (!latest) return { status: "not_found" };
-    return {
-      status:
-        latest.generation === input.expectedGeneration ? "busy" : "conflict",
-      plan: latest,
-    };
+      const result = await transaction.query<GitInstallPlanRow>(
+        `update ${TABLE}
+            set generation = $1, record_json = $2::jsonb,
+                reconcile_lease_token = $3, reconcile_lease_expires_at = $4,
+                updated_at = $5
+          where id = $6 and workspace_id = $7 and generation = $8
+            and (reconcile_lease_expires_at is null or reconcile_lease_expires_at <= $5)
+            and exists (
+              select 1 from takosumi_workspaces as workspace
+               where workspace.id = ${TABLE}.workspace_id
+                 and workspace.management_state = 'active'
+                 and workspace.management_epoch = $9
+            )
+          returning *`,
+        [
+          claimed.generation,
+          JSON.stringify(claimed),
+          input.leaseToken,
+          input.leaseExpiresAt,
+          input.claimedAt,
+          input.id,
+          workspaceId,
+          input.expectedGeneration,
+          authority.managementEpoch,
+        ],
+      );
+      const row = result.rows[0];
+      if (row) {
+        return {
+          status: "claimed",
+          claim: {
+            plan: rowPlan(row),
+            leaseToken: input.leaseToken,
+            leaseExpiresAt: input.leaseExpiresAt,
+          },
+        };
+      }
+      const latestRow = await this.#getByIdRow(input.id, transaction);
+      if (!latestRow) return { status: "not_found" };
+      const latest = rowPlan(latestRow);
+      if (latest.workspaceId !== workspaceId) {
+        return { status: "conflict", plan: latest };
+      }
+      if (latest.generation !== input.expectedGeneration) {
+        return { status: "conflict", plan: latest };
+      }
+      if (leaseIsBusy(latestRow, input.claimedAt)) {
+        return { status: "busy", plan: latest };
+      }
+      throw new WorkspaceManagementAdmissionConflictError(workspaceId);
+    });
   }
 
   async completeReconcile(input: {
@@ -180,15 +285,54 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
       StoredGitInstallPlan,
       "workspaceId" | "actorSubject" | "idempotencyKeyHash"
     >,
+    client: SqlClient = this.#client,
   ): Promise<StoredGitInstallPlan | undefined> {
-    const result = await this.#client.query<GitInstallPlanRow>(
+    const result = await client.query<GitInstallPlanRow>(
       `select * from ${TABLE}
         where workspace_id = $1 and actor_subject = $2
-          and idempotency_key_hash = $3`,
+        and idempotency_key_hash = $3`,
       [plan.workspaceId, plan.actorSubject, plan.idempotencyKeyHash],
     );
     return result.rows[0] ? rowPlan(result.rows[0]) : undefined;
   }
+
+  async #getById(
+    id: string,
+    client: SqlClient = this.#client,
+  ): Promise<StoredGitInstallPlan | undefined> {
+    const row = await this.#getByIdRow(id, client);
+    return row ? rowPlan(row) : undefined;
+  }
+
+  async #getByIdRow(
+    id: string,
+    client: SqlClient = this.#client,
+  ): Promise<GitInstallPlanRow | undefined> {
+    const result = await client.query<GitInstallPlanRow>(
+      `select * from ${TABLE} where id = $1`,
+      [id],
+    );
+    return result.rows[0];
+  }
+}
+
+function createResult(
+  plan: StoredGitInstallPlan,
+  existing: StoredGitInstallPlan,
+): CreateGitInstallPlanResult {
+  return {
+    status:
+      existing.requestDigest === plan.requestDigest ? "replayed" : "conflict",
+    plan: existing,
+  };
+}
+
+function leaseIsBusy(
+  row: Pick<GitInstallPlanRow, "reconcile_lease_expires_at">,
+  claimedAt: string,
+): boolean {
+  return row.reconcile_lease_expires_at !== null &&
+    row.reconcile_lease_expires_at > claimedAt;
 }
 
 function rowPlan(row: GitInstallPlanRow): StoredGitInstallPlan {

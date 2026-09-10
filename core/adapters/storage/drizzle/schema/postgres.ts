@@ -34,6 +34,12 @@ export const workspaces = pgTable(
       sql`space_json ->> 'type'`,
     ),
     personalBootstrapOwnerId: text("personal_bootstrap_owner_id"),
+    managementState: text("management_state")
+      .notNull()
+      .default("active"),
+    managementEpoch: bigint("management_epoch", { mode: "number" })
+      .notNull()
+      .default(1),
   },
   (table) => [
     uniqueIndex("takosumi_workspaces_handle_unique").on(table.handle),

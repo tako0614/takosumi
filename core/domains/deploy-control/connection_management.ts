@@ -20,7 +20,10 @@ import type {
 } from "@takosumi/internal/deploy-control-api";
 import type { PageParams } from "takosumi-contract/pagination";
 import type { ConnectionVault } from "../../adapters/vault/mod.ts";
-import type { OpenTofuControlStore } from "./store.ts";
+import type {
+  OpenTofuControlStore,
+  WorkspaceManagementAuthority,
+} from "./store.ts";
 import {
   mapVaultError,
   OpenTofuControllerError,
@@ -44,10 +47,16 @@ export class ConnectionManagement {
 
   async createConnection(
     request: CreateConnectionRequest,
+    expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
+    actorAccountId: string | null,
   ): Promise<ConnectionResponse> {
     const vault = this.#requireVault();
     try {
-      const connection = await vault.register(request);
+      const connection = await vault.register(
+        request,
+        expectedWorkspaceManagementAuthority,
+        actorAccountId,
+      );
       return { connection };
     } catch (error) {
       throw mapVaultError(error);
@@ -91,21 +100,35 @@ export class ConnectionManagement {
 
   async testConnection(
     connectionId: string,
+    expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
+    actorAccountId: string | null,
   ): Promise<TestConnectionResponse> {
     const vault = this.#requireVault();
     requireNonEmptyString(connectionId, "connectionId");
     try {
-      return await vault.test(connectionId);
+      return await vault.test(
+        connectionId,
+        expectedWorkspaceManagementAuthority,
+        actorAccountId,
+      );
     } catch (error) {
       throw mapVaultError(error);
     }
   }
 
-  async deleteConnection(connectionId: string): Promise<boolean> {
+  async deleteConnection(
+    connectionId: string,
+    expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
+    actorAccountId: string | null,
+  ): Promise<boolean> {
     const vault = this.#requireVault();
     requireNonEmptyString(connectionId, "connectionId");
     try {
-      return await vault.revoke(connectionId);
+      return await vault.revoke(
+        connectionId,
+        expectedWorkspaceManagementAuthority,
+        actorAccountId,
+      );
     } catch (error) {
       throw mapVaultError(error);
     }

@@ -35,6 +35,8 @@ export const workspaces = sqliteTable(
       { mode: "virtual" },
     ),
     personalBootstrapOwnerId: text("personal_bootstrap_owner_id"),
+    managementState: text("management_state").notNull().default("active"),
+    managementEpoch: integer("management_epoch").notNull().default(1),
   },
   (table) => [
     uniqueIndex("workspaces_handle_unique").on(table.handle),

@@ -6,6 +6,10 @@
  * so the ~4 in-tree importers are unchanged.
  */
 import type {
+  RebindCapsuleInstallConfigRequest,
+  RebindCapsuleInstallConfigResponse,
+} from "../../../core/domains/capsules/mod.ts";
+import type {
   ApplyExpectedGuard,
   ApplyRunResponse,
   ConnectionOAuthStartResponse,
@@ -81,7 +85,7 @@ import type {
 } from "takosumi-contract/connections";
 import type {
   CapsulePlanCreationFence,
-  CapsuleProviderBindingSetReplacement,
+  WorkspaceManagementAuthority,
 } from "../../../core/domains/deploy-control/store.ts";
 import type {
   ProviderResolution,
@@ -219,6 +223,15 @@ export interface ControlPlaneOperations {
     ): Promise<Workspace | undefined>;
     listWorkspacesByIds?(ids: readonly string[]): Promise<readonly Workspace[]>;
     getWorkspace(id: string): Promise<Workspace>;
+    /**
+     * Captures the exact active private Workspace-management authority for a
+     * one-shot admission. The caller must retain this snapshot across async
+     * preparation and pass it to the durable write; it must never be refreshed
+     * after preparation starts.
+     */
+    captureManagementAuthority(
+      workspaceId: string,
+    ): Promise<WorkspaceManagementAuthority>;
     createWorkspace(request: {
       readonly handle: string;
       readonly displayName: string;
@@ -232,6 +245,16 @@ export interface ControlPlaneOperations {
         readonly policy?: PolicyConfig;
         readonly archived?: boolean;
       },
+    ): Promise<Workspace>;
+    updateWorkspaceForAccount(
+      id: string,
+      patch: {
+        readonly displayName?: string;
+        readonly policy?: PolicyConfig;
+        readonly archived?: boolean;
+      },
+      actorAccountId: string,
+      expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority,
     ): Promise<Workspace>;
   };
   // --- Projects (canonical Workspace-owned grouping) ---
@@ -272,6 +295,9 @@ export interface ControlPlaneOperations {
      * membership projection.
      */
     upsertMember(input: {
+      readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
+      /** Internal owner-only command policy, never current role authority. */
+      readonly requiredActorRole?: "owner";
       readonly workspaceId: string;
       readonly accountId: string;
       readonly roles?: readonly ControlWorkspaceRole[];
@@ -293,6 +319,8 @@ export interface ControlPlaneOperations {
       readonly capsuleId: string;
       readonly workspaceId: string;
       readonly projectId?: string;
+      /** Private management authority retained across initial preparation. */
+      readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
       readonly name: string;
       readonly environment: string;
       readonly sourceId: string;
@@ -303,8 +331,16 @@ export interface ControlPlaneOperations {
       readonly providerBindings: ProviderBindingSet["bindings"];
     }): Promise<{ readonly capsule: Capsule; readonly replayed: boolean }>;
     putInstallConfig(config: InstallConfig): Promise<InstallConfig>;
-    createInstallConfigIfAbsent(config: InstallConfig): Promise<boolean>;
+    createInstallConfigIfAbsent(
+      config: InstallConfig,
+      expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+    ): Promise<boolean>;
     getInstallConfig(id: string): Promise<InstallConfig>;
+    /** Private continuation authority; absent legacy metadata cannot resume work. */
+    requireInstallConfigManagementAuthority(
+      id: string,
+      expected?: WorkspaceManagementAuthority,
+    ): Promise<WorkspaceManagementAuthority>;
     getInstallConfigsByIds?(
       ids: readonly string[],
     ): Promise<readonly InstallConfig[]>;
@@ -339,30 +375,9 @@ export interface ControlPlaneOperations {
     getInstallConfigReAdoptionRecoveryProof?(
       capsuleId: string,
     ): Promise<InstallConfigCommittedPostApplyRecoveryProof | undefined>;
-    rebindInstallConfig(request: {
-      readonly capsuleId: string;
-      readonly targetInstallConfigId: string;
-      readonly expected: {
-        readonly installConfigId: string;
-        readonly installConfigDigest: string;
-        readonly currentStateGeneration: number;
-        readonly currentStateVersionId: string | undefined;
-        readonly status: Capsule["status"];
-        readonly executionAuthorityEpoch: number;
-        readonly committedPostApplyRecovery?:
-          InstallConfigCommittedPostApplyRecoveryProof;
-      };
-      readonly actorSubject: string;
-      readonly reason: string;
-      readonly requestDigest: string;
-      readonly providerBindingSetReplacement?:
-        CapsuleProviderBindingSetReplacement;
-    }): Promise<{
-      readonly capsule: Capsule;
-      readonly replayed: boolean;
-      readonly targetInstallConfigDigest: string;
-      readonly targetProviderBindingSetDigest?: string;
-    }>;
+    rebindInstallConfig(
+      request: RebindCapsuleInstallConfigRequest,
+    ): Promise<RebindCapsuleInstallConfigResponse>;
     getProviderBindingSetByCapsule(
       capsuleId: string,
       environment: string,
@@ -511,22 +526,36 @@ export interface ControlPlaneOperations {
    */
   createConnection(
     request: CreateConnectionRequest,
+    expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
+    actorAccountId: string | null,
   ): Promise<ConnectionResponse>;
   /**
    * Re-verifies a Provider Connection's stored credential with the provider (§30
    * `POST /internal/v1/connections/:id/test`). The control surface resolves the
    * Provider Connection's owning Workspace (via {@link getConnection}) and Workspace-permission
-   * gates BEFORE calling this; the response carries no secret values.
+   * gates BEFORE calling this; the response carries no secret values. The
+   * private authority tuple is captured before that authorization work and
+   * retained through the Vault write.
    */
-  testConnection(connectionId: string): Promise<TestConnectionResponse>;
+  testConnection(
+    connectionId: string,
+    expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
+    actorAccountId: string | null,
+  ): Promise<TestConnectionResponse>;
   /**
    * Revokes a Provider Connection and deletes its sealed secret blob (§30
    * `POST /internal/v1/connections/:id/revoke`). The control surface resolves the
    * Provider Connection's owning Workspace (via {@link getConnection}) and Workspace-permission
    * gates BEFORE calling this. The wiring records the §27 / §34
    * `connection.revoked` Workspace activity, mirroring the deploy-control route.
+   * The private authority tuple is captured before authorization and retained
+   * through deletion.
    */
-  revokeConnection(connectionId: string): Promise<void>;
+  revokeConnection(
+    connectionId: string,
+    expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
+    actorAccountId: string | null,
+  ): Promise<void>;
   /** Provider-owned OAuth helpers keyed by opaque composition-time helper id. */
   readonly connectionOAuth?: Readonly<
     Record<
@@ -543,6 +572,8 @@ export interface ControlPlaneOperations {
           readonly workspaceId: string;
           readonly displayName?: string;
           readonly successRedirectUri?: string;
+          /** Private Workspace admission tuple captured before OAuth awaits. */
+          readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
         }): Promise<ConnectionOAuthStartResponse>;
         /**
          * Verifies the signed state and returns BOTH the connection-create
@@ -557,6 +588,8 @@ export interface ControlPlaneOperations {
         }): Promise<{
           readonly request: CreateConnectionRequest;
           readonly subject?: string;
+          /** Private tuple captured at OAuth start; never public request data. */
+          readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
         }>;
       }
     >
@@ -577,6 +610,8 @@ export interface ControlPlaneOperations {
       readonly planRunId?: string;
       /** Exact Capsule authority fence for configuration-plan persistence. */
       readonly expectedCapsulePlanAuthority?: CapsulePlanCreationFence;
+      /** Private management authority retained across configuration preparation. */
+      readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
       /** Server-owned audit marker; never parsed from an HTTP request body. */
       readonly actor?: string;
     },
@@ -673,7 +708,10 @@ export interface ControlPlaneOperations {
    */
   getRunCost(id: string): Promise<RunCostInfo>;
   // --- Sources (§6) ---
-  createSource(request: CreateSourceRequest): Promise<CreateSourceResponse>;
+  createSource(
+    request: CreateSourceRequest,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<CreateSourceResponse>;
   listSources(
     workspaceId: string,
     params?: PageParams,
@@ -683,6 +721,7 @@ export interface ControlPlaneOperations {
   createSourceSync(
     sourceId: string,
     options?: CreateSourceSyncRequest & { readonly dedupe?: boolean },
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<CreateSourceSyncResponse>;
   createSourceReconciliationSyncs(
     sourceId: string,

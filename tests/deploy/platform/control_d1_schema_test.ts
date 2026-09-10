@@ -668,10 +668,10 @@ test("control D1 plan captures the full OSS schema and migration ledger", async 
   expect(plan.manifestDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.schemaDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.ledgerDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
-  expect(plan.migrations.at(-1)?.version).toBe(68);
-  expect(plan.migrations).toHaveLength(65);
+  expect(plan.migrations.at(-1)?.version).toBe(69);
+  expect(plan.migrations).toHaveLength(66);
   expect(plan.migrations.at(-1)?.name).toBe(
-    "d1_capsule_compatibility_variable_declarations",
+    "d1_workspace_management_quiescence",
   );
   expect(plan.tables.some((table) => table.name === "target_pools")).toBe(false);
   expect(
@@ -741,6 +741,8 @@ test("control D1 plan captures the full OSS schema and migration ledger", async 
       "owner_user_id",
       "workspace_type",
       "personal_bootstrap_owner_id",
+      "management_state",
+      "management_epoch",
     ]),
   );
   expect(
@@ -797,7 +799,7 @@ test("control D1 verify is read-only and accepts host extension tables", async (
     const verification = await verifyControlD1Schema(database, plan);
     expect(verification.status).toBe("ready");
     expect(verification.issues).toEqual([]);
-    expect(verification.latestMigrationVersion).toBe(68);
+    expect(verification.latestMigrationVersion).toBe(69);
   } finally {
     database.close();
   }
@@ -2250,7 +2252,7 @@ test("control D1 CLI verify reports a ready remote ledger", async () => {
       mode: "verify",
       environment: "staging",
       status: "ready",
-      verification: { latestMigrationVersion: 68 },
+      verification: { latestMigrationVersion: 69 },
     });
   } finally {
     database.close();
@@ -3858,7 +3860,7 @@ test("control D1 CLI reports the exact predecessor fence transition on recovery"
   const database = new SqliteControlD1Database();
   try {
     await ensureD1OpenTofuLedgerSchema(database, {
-      throughMigrationVersion: 67,
+      throughMigrationVersion: 68,
     });
     const predecessorFence = await acquireControlD1MaintenanceFence(
       database,
@@ -3911,7 +3913,7 @@ test("control D1 CLI reports the exact predecessor fence transition on recovery"
     expect(code).toBe(0);
     expect(transcript).toMatchObject({
       status: "ready",
-      appliedMigrationVersions: [68],
+      appliedMigrationVersions: [69],
       maintenanceFenceTransition: {
         predecessorSourceCommit: PREDECESSOR_SOURCE_COMMIT,
         predecessorManifestDigest: PREDECESSOR_MANIFEST_DIGEST,
@@ -3942,7 +3944,7 @@ test("control D1 CLI preserves the fence transition on post-apply schema mismatc
   const database = new SqliteControlD1Database();
   try {
     await ensureD1OpenTofuLedgerSchema(database, {
-      throughMigrationVersion: 67,
+      throughMigrationVersion: 68,
     });
     await database
       .prepare(
@@ -4028,7 +4030,7 @@ test("control D1 CLI preserves the fence transition on post-apply schema mismatc
       await database
         .prepare(`select max(version) as version from schema_migrations`)
         .first(),
-    ).toEqual({ version: 68 });
+    ).toEqual({ version: 69 });
     await expect(
       database
         .prepare(

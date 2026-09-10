@@ -120,6 +120,7 @@ import {
   CapsuleStateGenerationGuardConflict,
   type OpenTofuControlStore,
   type CapsulePlanCreationFence,
+  type WorkspaceManagementAuthority,
   type PlanRunInputs,
   type RuntimeSecretRetirementDispatchClaimInput,
 } from "./store.ts";
@@ -1270,6 +1271,12 @@ export interface PlanRunInternalContext {
  */
 export interface ApplyRunInternalContext {
   readonly applyRunId?: string;
+  /**
+   * Private Workspace-management authority retained by an automatic
+   * continuation's original Plan/Source callback. It is never a public
+   * request field and must not be recaptured from the current Workspace.
+   */
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
   readonly onPrepared?: (applyRun: ApplyRun) => Promise<void>;
 }
 
@@ -1296,6 +1303,8 @@ export interface CreateCapsulePlanRequest {
  */
 export interface CreateCapsulePlanInternal {
   readonly runGroupId?: string;
+  /** Private management authority retained from outer configuration preparation. */
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
   /**
    * Operator-selected runner profile for this plan. Runner choice remains
    * service-side and never changes the Capsule's Git Source contract.
@@ -2064,8 +2073,14 @@ export class OpenTofuController {
 
   async createConnection(
     request: CreateConnectionRequest,
+    expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
+    actorAccountId: string | null,
   ): Promise<ConnectionResponse> {
-    return await this.#connections.createConnection(request);
+    return await this.#connections.createConnection(
+      request,
+      expectedWorkspaceManagementAuthority,
+      actorAccountId,
+    );
   }
 
   async listConnections(
@@ -2087,12 +2102,28 @@ export class OpenTofuController {
     return await this.#connections.getConnection(connectionId);
   }
 
-  async testConnection(connectionId: string): Promise<TestConnectionResponse> {
-    return await this.#connections.testConnection(connectionId);
+  async testConnection(
+    connectionId: string,
+    expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
+    actorAccountId: string | null,
+  ): Promise<TestConnectionResponse> {
+    return await this.#connections.testConnection(
+      connectionId,
+      expectedWorkspaceManagementAuthority,
+      actorAccountId,
+    );
   }
 
-  async deleteConnection(connectionId: string): Promise<boolean> {
-    return await this.#connections.deleteConnection(connectionId);
+  async deleteConnection(
+    connectionId: string,
+    expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
+    actorAccountId: string | null,
+  ): Promise<boolean> {
+    return await this.#connections.deleteConnection(
+      connectionId,
+      expectedWorkspaceManagementAuthority,
+      actorAccountId,
+    );
   }
 
   #requireVault(): ConnectionVault {
@@ -2118,6 +2149,8 @@ export class OpenTofuController {
   async #maybeAutoUpdateStaleCapsule(input: {
     readonly capsule: Capsule;
     readonly snapshot: SourceSnapshot;
+    /** Original SourceSync admission tuple; never recapture current state. */
+    readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
   }): Promise<void> {
     try {
       // Re-read: the stale patch just rewrote the row, and the opt-in /
@@ -2127,6 +2160,21 @@ export class OpenTofuController {
       if (capsule.autoUpdateAttemptSourceSnapshotId === input.snapshot.id) {
         return;
       }
+      const expectedWorkspaceManagementAuthority =
+        input.expectedWorkspaceManagementAuthority;
+      if (
+        expectedWorkspaceManagementAuthority.workspaceId !==
+        capsule.workspaceId
+      ) return;
+      const management = await this.#store.getWorkspaceManagement(capsule.workspaceId);
+      if (
+        management?.workspaceId !== capsule.workspaceId ||
+        management.managementState !== "active" ||
+        management.managementEpoch !==
+          expectedWorkspaceManagementAuthority.managementEpoch
+      ) return;
+      // This read avoids a known-stopped attempt. The store's atomic claim
+      // still decides admission if draining begins after this observation.
       const epoch = await this.#store.getCapsuleExecutionAuthorityEpoch(
         capsule.id,
       );
@@ -2137,6 +2185,7 @@ export class OpenTofuController {
         mutation: {
           kind: "auto-update-claim",
           sourceSnapshotId: input.snapshot.id,
+          expectedWorkspaceManagementAuthority,
         },
         updatedAt: new Date(this.#now()).toISOString(),
       });
@@ -2147,6 +2196,7 @@ export class OpenTofuController {
         {
           autoApplyRequested: true,
           sourceSnapshotId: input.snapshot.id,
+          expectedWorkspaceManagementAuthority,
         },
       );
     } catch (error) {
@@ -2174,8 +2224,12 @@ export class OpenTofuController {
 
   async createSource(
     request: CreateSourceRequest,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<CreateSourceResponse> {
-    return await this.#sources.createSource(request);
+    return await this.#sources.createSource(
+      request,
+      expectedWorkspaceManagementAuthority,
+    );
   }
 
   async listSources(
@@ -2199,8 +2253,13 @@ export class OpenTofuController {
   async createSourceSync(
     sourceId: string,
     options: CreateSourceSyncRequest & { readonly dedupe?: boolean } = {},
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<CreateSourceSyncResponse> {
-    return await this.#sources.createSourceSync(sourceId, options);
+    return await this.#sources.createSourceSync(
+      sourceId,
+      options,
+      expectedWorkspaceManagementAuthority,
+    );
   }
 
   async createSourceReconciliationSyncs(

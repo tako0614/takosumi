@@ -176,6 +176,7 @@ import {
   InMemoryOpenTofuControlStore,
   type CapsuleExecutionAuthorityResolver,
   type OpenTofuControlStore,
+  type WorkspaceManagementAuthority,
 } from "./domains/deploy-control/store.ts";
 import { SqlOpenTofuControlStore } from "./domains/deploy-control/store_sql.ts";
 import type { CapsuleModuleVariableMaterializer } from "./domains/deploy-control/module_variable_materializer.ts";
@@ -639,7 +640,10 @@ export interface TakosumiOperations {
   readonly workspaces: WorkspacesService;
   /** Canonical Workspace-owned Project ledger. */
   readonly projects: ProjectsService;
-  /** Capsule and service-side InstallConfig ledger over the shared store. */
+  /**
+   * Capsule lifecycle and InstallConfig ledger over the shared store. Creation
+   * accepts the coordinator's complete initial authority, never a Capsule alone.
+   */
   readonly capsules: CapsulesService;
   /**
    * Private provider-neutral authority for hosted Capsule execution. Hosts map
@@ -658,6 +662,8 @@ export interface TakosumiOperations {
     ): Promise<WorkspaceMember | undefined>;
     listMembers(workspaceId: string): Promise<readonly WorkspaceMember[]>;
     upsertMember(input: {
+      readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
+      readonly requiredActorRole?: "owner";
       readonly workspaceId: string;
       readonly accountId: string;
       readonly roles?: readonly WorkspaceRole[];
@@ -766,6 +772,7 @@ export interface TakosumiOperations {
       readonly sourceSnapshotId?: string;
       readonly planRunId?: string;
       readonly expectedCapsulePlanAuthority?: CapsulePlanCreationFence;
+      readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
       readonly actor?: string;
     },
   ): Promise<PlanRunResponse>;
@@ -856,14 +863,24 @@ export interface TakosumiOperations {
    */
   createConnection(
     request: CreateConnectionRequest,
+    expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
+    actorAccountId: string | null,
   ): Promise<ConnectionResponse>;
   /** Re-verifies a ProviderConnection's stored credential with the provider (§30). */
-  testConnection(connectionId: string): Promise<TestConnectionResponse>;
+  testConnection(
+    connectionId: string,
+    expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
+    actorAccountId: string | null,
+  ): Promise<TestConnectionResponse>;
   /**
    * Revokes a ProviderConnection and deletes its sealed secret blob (§30), recording the
    * §27 / §34 `connection.revoked` Workspace activity.
    */
-  revokeConnection(connectionId: string): Promise<void>;
+  revokeConnection(
+    connectionId: string,
+    expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
+    actorAccountId: string | null,
+  ): Promise<void>;
   /** Provider-owned OAuth helpers keyed by opaque composition-time helper id. */
   readonly connectionOAuth?: Readonly<
     Record<
@@ -874,6 +891,8 @@ export interface TakosumiOperations {
           readonly workspaceId: string;
           readonly displayName?: string;
           readonly successRedirectUri?: string;
+          /** Private Workspace admission tuple captured before OAuth awaits. */
+          readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
         }): Promise<ConnectionOAuthStartResponse>;
         complete(input: {
           readonly code: string;
@@ -882,6 +901,8 @@ export interface TakosumiOperations {
         }): Promise<{
           readonly request: CreateConnectionRequest;
           readonly subject?: string;
+          /** Private tuple captured at OAuth start; never public request data. */
+          readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
         }>;
       }
     >
@@ -897,7 +918,10 @@ export interface TakosumiOperations {
     workspaceId: string;
   }): Promise<void>;
   // --- Sources (Core Specification §6) ---
-  createSource(request: CreateSourceRequest): Promise<CreateSourceResponse>;
+  createSource(
+    request: CreateSourceRequest,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<CreateSourceResponse>;
   listSources(
     workspaceId: string,
     params?: PageParams,
@@ -907,6 +931,7 @@ export interface TakosumiOperations {
   createSourceSync(
     sourceId: string,
     options?: CreateSourceSyncRequest & { readonly dedupe?: boolean },
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<CreateSourceSyncResponse>;
   createSourceReconciliationSyncs(
     sourceId: string,
@@ -1011,7 +1036,11 @@ export async function createTakosumiService(
     options.gitInstallPlanStore ??
     (options.sqlClient
       ? new SqlGitInstallPlanStore(options.sqlClient)
-      : new InMemoryGitInstallPlanStore());
+      : new InMemoryGitInstallPlanStore(
+          durableOpenTofuStore instanceof InMemoryOpenTofuControlStore
+            ? durableOpenTofuStore
+            : undefined,
+        ));
   assertDurableGitInstallPlanStoreOrWarn({
     environment: runtimeConfig.environment,
     durable: gitInstallPlanStore.durable,
@@ -1312,7 +1341,10 @@ export async function createTakosumiService(
       ? createSqlInterfaceStores(options.sqlClient)
       : createInMemoryInterfaceStores({
           ...(durableOpenTofuStore instanceof InMemoryOpenTofuControlStore
-            ? { materializationAuthority: durableOpenTofuStore }
+            ? {
+                materializationAuthority: durableOpenTofuStore,
+                workspaceManagementAuthority: durableOpenTofuStore,
+              }
             : {}),
         }));
   const interfaceProjectionSink = options.interfaceProjectionSink;
@@ -1692,6 +1724,8 @@ export async function createTakosumiService(
       workspacesService.listWorkspaceMembers(workspaceId),
     upsertMember: (input) =>
       workspacesService.upsertWorkspaceMember({
+        expectedWorkspaceManagementAuthority: input.expectedWorkspaceManagementAuthority,
+        requiredActorRole: input.requiredActorRole,
         workspaceId: input.workspaceId,
         accountId: input.accountId,
         ...(input.roles ? { roles: input.roles } : {}),
@@ -1752,7 +1786,8 @@ export async function createTakosumiService(
         options?.runnerProfileId ||
         options?.sourceSnapshotId ||
         options?.planRunId ||
-        options?.expectedCapsulePlanAuthority
+        options?.expectedCapsulePlanAuthority ||
+        options?.expectedWorkspaceManagementAuthority
           ? {
               ...(options?.compatibilityReportId
                 ? { compatibilityReportId: options.compatibilityReportId }
@@ -1770,6 +1805,12 @@ export async function createTakosumiService(
                 ? {
                     expectedCapsulePlanAuthority:
                       options.expectedCapsulePlanAuthority,
+                  }
+                : {}),
+              ...(options?.expectedWorkspaceManagementAuthority
+                ? {
+                    expectedWorkspaceManagementAuthority:
+                      options.expectedWorkspaceManagementAuthority,
                   }
                 : {}),
             }
@@ -1818,17 +1859,42 @@ export async function createTakosumiService(
     listOperatorConnections: () => opentofuController.listOperatorConnections(),
     getConnection: (connectionId) =>
       opentofuController.getConnection(connectionId),
-    createConnection: (request) => opentofuController.createConnection(request),
-    testConnection: (connectionId) =>
-      opentofuController.testConnection(connectionId),
+    createConnection: (
+      request,
+      expectedWorkspaceManagementAuthority,
+      actorAccountId,
+    ) =>
+      opentofuController.createConnection(
+        request,
+        expectedWorkspaceManagementAuthority,
+        actorAccountId,
+      ),
+    testConnection: (
+      connectionId,
+      expectedWorkspaceManagementAuthority,
+      actorAccountId,
+    ) =>
+      opentofuController.testConnection(
+        connectionId,
+        expectedWorkspaceManagementAuthority,
+        actorAccountId,
+      ),
     // Revoke + delete the sealed blob, mirroring the §30
     // `POST /internal/v1/connections/:id/revoke` route: read the non-secret
     // ProviderConnection projection first (for the activity context captured before the
     // blob is gone), delete, then record the space-scoped `connection.revoked`
     // activity. The control-routes layer has already space-permission gated.
-    revokeConnection: async (connectionId) => {
+    revokeConnection: async (
+      connectionId,
+      expectedWorkspaceManagementAuthority,
+      actorAccountId,
+    ) => {
       const connection = await opentofuController.getConnection(connectionId);
-      await opentofuController.deleteConnection(connectionId);
+      await opentofuController.deleteConnection(
+        connectionId,
+        expectedWorkspaceManagementAuthority,
+        actorAccountId,
+      );
       if (connection.workspaceId) {
         await activityService.record({
           workspaceId: connection.workspaceId,
@@ -1877,6 +1943,12 @@ export async function createTakosumiService(
                         ? { successRedirectUri: input.successRedirectUri }
                         : {}),
                     },
+                    ...(input.expectedWorkspaceManagementAuthority
+                      ? {
+                          expectedWorkspaceManagementAuthority:
+                            input.expectedWorkspaceManagementAuthority,
+                        }
+                      : {}),
                   }),
                 complete: (input) =>
                   helper.complete({
@@ -1896,13 +1968,21 @@ export async function createTakosumiService(
       : {}),
     dispatchQueuedRun: (dispatch) =>
       opentofuController.dispatchQueuedRun(dispatch),
-    createSource: (request) => opentofuController.createSource(request),
+    createSource: (request, expectedWorkspaceManagementAuthority) =>
+      opentofuController.createSource(
+        request,
+        expectedWorkspaceManagementAuthority,
+      ),
     listSources: (workspaceId, params) =>
       opentofuController.listSources(workspaceId, params),
     getSource: (id) => opentofuController.getSource(id),
     patchSource: (id, patch) => opentofuController.patchSource(id, patch),
-    createSourceSync: (sourceId, opts) =>
-      opentofuController.createSourceSync(sourceId, opts ?? {}),
+    createSourceSync: (sourceId, opts, expectedWorkspaceManagementAuthority) =>
+      opentofuController.createSourceSync(
+        sourceId,
+        opts ?? {},
+        expectedWorkspaceManagementAuthority,
+      ),
     createSourceReconciliationSyncs: (sourceId) =>
       opentofuController.createSourceReconciliationSyncs(sourceId),
     createSourceCompatibilityCheck: (sourceId, request) =>

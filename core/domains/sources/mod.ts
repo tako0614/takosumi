@@ -44,7 +44,13 @@ import {
 } from "../deploy-control/errors.ts";
 import type {
   OpenTofuControlStore,
+  SourceConfigurationWriteInput,
   StoredSource,
+  WorkspaceManagementAuthority,
+} from "../deploy-control/store.ts";
+import {
+  assertWorkspaceManagementAuthorityInput,
+  WorkspaceManagementAdmissionConflictError,
 } from "../deploy-control/store.ts";
 import type { Run } from "takosumi-contract/runs";
 import {
@@ -56,6 +62,7 @@ import {
 import { evaluateSourceUrl } from "./url-policy.ts";
 import { mergePolicyConfigs } from "../deploy-control/provider_policy.ts";
 import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
+import { stableStringify } from "../../adapters/source/digest.ts";
 import { getCapsuleAdoptedSourceSnapshot } from "../deploy-control/capsule_source_revision.ts";
 
 // Git already has a provider-neutral spelling for the remote's configured
@@ -172,6 +179,7 @@ export class SourcesService {
    */
   async createSource(
     request: CreateSourceRequest,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<CreateSourceResponse> {
     requireNonEmptyString(request.workspaceId, "workspaceId");
     requireNonEmptyString(request.name, "name");
@@ -183,6 +191,15 @@ export class SourcesService {
         `source url is not allowed (${policy.reason})`,
       );
     }
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        request.workspaceId,
+      );
+    }
+    const workspaceManagementAuthority =
+      expectedWorkspaceManagementAuthority ??
+      (await this.#captureWorkspaceManagementAuthority(request.workspaceId));
     const defaultRef = nonEmpty(request.defaultRef) ?? DEFAULT_REF;
     const defaultPath = nonEmpty(request.defaultPath) ?? DEFAULT_PATH;
     if (request.authConnectionId !== undefined) {
@@ -213,8 +230,11 @@ export class SourcesService {
       hookSecretHash,
       autoSync: request.autoSync === true,
     };
-    await this.#store.putSource(stored);
-    return { source: toPublicSource(stored), hookSecret };
+    const persisted = await this.#writeSourceConfiguration({
+      source: stored,
+      expectedWorkspaceManagementAuthority: workspaceManagementAuthority,
+    });
+    return { source: toPublicSource(persisted), hookSecret };
   }
 
   async listSources(
@@ -248,6 +268,8 @@ export class SourcesService {
   ): Promise<SourceResponse> {
     const stored = await this.#requireSource(id);
     const next: StoredSource = { ...stored };
+    const shouldValidateAuthConnection =
+      patch.authConnectionId !== undefined && patch.authConnectionId !== null;
     if (patch.name !== undefined) {
       requireNonEmptyString(patch.name, "name");
       (next as { name: string }).name = patch.name;
@@ -265,10 +287,6 @@ export class SourcesService {
         delete (next as { authConnectionId?: string }).authConnectionId;
       } else {
         requireNonEmptyString(patch.authConnectionId, "authConnectionId");
-        await this.#requireConnectionInWorkspace(
-          patch.authConnectionId,
-          stored.workspaceId,
-        );
         (next as { authConnectionId?: string }).authConnectionId =
           patch.authConnectionId;
       }
@@ -280,8 +298,29 @@ export class SourcesService {
       (next as { autoSync: boolean }).autoSync = patch.autoSync === true;
     }
     (next as { updatedAt: string }).updatedAt = this.#now().toISOString();
-    await this.#store.putSource(next);
-    return { source: toPublicSource(next) };
+    // A same-row PATCH is a read-only replay and remains observable while a
+    // Workspace drains. The store still validates the full expected row.
+    if (stableStringify(next) === stableStringify(stored)) {
+      const persisted = await this.#writeSourceConfiguration({
+        source: next,
+        expectedSource: stored,
+      });
+      return { source: toPublicSource(persisted) };
+    }
+    const workspaceManagementAuthority =
+      await this.#captureWorkspaceManagementAuthority(stored.workspaceId);
+    if (shouldValidateAuthConnection) {
+      await this.#requireConnectionInWorkspace(
+        patch.authConnectionId as string,
+        stored.workspaceId,
+      );
+    }
+    const persisted = await this.#writeSourceConfiguration({
+      source: next,
+      expectedSource: stored,
+      expectedWorkspaceManagementAuthority: workspaceManagementAuthority,
+    });
+    return { source: toPublicSource(persisted) };
   }
 
   async listSnapshots(
@@ -352,8 +391,14 @@ export class SourcesService {
   async createSync(
     sourceId: string,
     options: CreateSourceSyncRequest & { readonly dedupe?: boolean } = {},
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<CreateSourceSyncResponse> {
-    return await this.#createSync(sourceId, options);
+    return await this.#createSync(
+      sourceId,
+      options,
+      undefined,
+      expectedWorkspaceManagementAuthority,
+    );
   }
 
   /**
@@ -367,6 +412,12 @@ export class SourcesService {
     sourceId: string,
   ): Promise<readonly CreateSourceSyncResponse[]> {
     const stored = await this.#requireSource(sourceId);
+    // Capture one immutable authority before asynchronous Capsule/lane
+    // enumeration. Every reconciliation lane must use this original tuple;
+    // taking a fresh epoch after a drain/resume could admit only a subset of
+    // the lanes from an obsolete reconciliation request.
+    const workspaceManagementAuthority =
+      await this.#captureWorkspaceManagementAuthority(stored.workspaceId);
     const addresses = new Map<string, { readonly ref: string; readonly path: string }>();
     const addAddress = (ref: string, path: string) => {
       addresses.set(JSON.stringify([ref, path]), { ref, path });
@@ -408,6 +459,7 @@ export class SourcesService {
           sourceId,
           { intent: "observe", dedupe: true },
           address,
+          workspaceManagementAuthority,
         ),
       );
     }
@@ -443,8 +495,32 @@ export class SourcesService {
     sourceId: string,
     options: CreateSourceSyncRequest & { readonly dedupe?: boolean },
     trackedAddress?: { readonly ref: string; readonly path: string },
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<CreateSourceSyncResponse> {
     const stored = await this.#requireSource(sourceId);
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        stored.workspaceId,
+      );
+    }
+    // Capture the private Workspace authority before any asynchronous source
+    // preparation. This exact snapshot is the admission fence for a new row;
+    // do not refresh it later after dedupe/stale observations, or a drain could
+    // be erased by a late read. Existing exact rows remain read-only probes.
+    let workspaceManagementAuthority: WorkspaceManagementAuthority | undefined;
+    let workspaceManagementAdmissionError: OpenTofuControllerError | undefined;
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      workspaceManagementAuthority = expectedWorkspaceManagementAuthority;
+    } else {
+      try {
+        workspaceManagementAuthority =
+          await this.#captureWorkspaceManagementAuthority(stored.workspaceId);
+      } catch (error) {
+        if (!isWorkspaceManagementAdmissionConflict(error)) throw error;
+        workspaceManagementAdmissionError = workspaceManagementAdmissionErrorFor();
+      }
+    }
     const intent = options.intent ?? "observe";
     if (intent !== "observe" && intent !== "manual_plan") {
       throw new OpenTofuControllerError(
@@ -513,7 +589,12 @@ export class SourcesService {
             { reason: "source_sync_identity_conflict" },
           );
         }
-        if (existing.status === "queued") {
+        if (
+          await this.#canReenqueueExistingSourceSyncRun(
+            existing,
+            workspaceManagementAuthority,
+          )
+        ) {
           await this.#enqueue({
             action: "source_sync",
             runId: existing.id,
@@ -532,7 +613,12 @@ export class SourcesService {
         runPath,
       );
       if (existing) {
-        if (existing.status === "queued") {
+        if (
+          await this.#canReenqueueExistingSourceSyncRun(
+            existing,
+            workspaceManagementAuthority,
+          )
+        ) {
           await this.#enqueue({
             action: "source_sync",
             runId: existing.id,
@@ -541,8 +627,14 @@ export class SourcesService {
           });
           return { run: existing };
         }
-        if (shouldReplaceStaleRunningSyncRun(existing, this.#now().getTime())) {
-          const replaced = await this.#failStaleSyncRun(existing);
+        if (
+          workspaceManagementAuthority &&
+          shouldReplaceStaleRunningSyncRun(existing, this.#now().getTime())
+        ) {
+          const replaced = await this.#failStaleSyncRun(
+            existing,
+            workspaceManagementAuthority,
+          );
           if (!replaced) {
             const current = await this.#activeSyncRun(
               sourceId,
@@ -559,6 +651,12 @@ export class SourcesService {
           return { run: existing };
         }
       }
+    }
+    if (!workspaceManagementAuthority) {
+      // A known draining/released Workspace may still return exact existing
+      // rows above, but must never allocate or enqueue new management work.
+      throw workspaceManagementAdmissionError ??
+        workspaceManagementAdmissionErrorFor();
     }
     const runId = coordinator?.runId ?? this.#newId("ssr");
     const snapshotId = coordinator?.snapshotId ?? this.#newId("snap");
@@ -591,14 +689,49 @@ export class SourcesService {
       updatedAt: nowIso,
       snapshotId,
     };
-    await this.#store.putSourceSyncRun(run);
+    let begun;
+    try {
+      begun = await this.#store.beginSourceSyncRun(
+        run,
+        workspaceManagementAuthority,
+      );
+    } catch (error) {
+      if (error instanceof WorkspaceManagementAdmissionConflictError) {
+        throw workspaceManagementAdmissionErrorFor();
+      }
+      throw error;
+    }
+    if (begun.status === "conflict") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "source-sync identity is already bound to different evidence",
+        { reason: "source_sync_identity_conflict" },
+      );
+    }
+    const persisted = begun.run;
+    if (begun.status === "existing") {
+      if (
+        await this.#canReenqueueExistingSourceSyncRun(
+          persisted,
+          workspaceManagementAuthority,
+        )
+      ) {
+        await this.#enqueue({
+          action: "source_sync",
+          runId: persisted.id,
+          workspaceId: persisted.workspaceId,
+          sourceId: persisted.sourceId,
+        });
+      }
+      return { run: persisted };
+    }
     await this.#enqueue({
       action: "source_sync",
-      runId,
-      workspaceId: stored.workspaceId,
-      sourceId,
+      runId: persisted.id,
+      workspaceId: persisted.workspaceId,
+      sourceId: persisted.sourceId,
     });
-    return { run };
+    return { run: persisted };
   }
 
   async createCompatibilityCheck(
@@ -978,7 +1111,10 @@ export class SourcesService {
     return run;
   }
 
-  async #failStaleSyncRun(run: SourceSyncRun): Promise<boolean> {
+  async #failStaleSyncRun(
+    run: SourceSyncRun,
+    expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority,
+  ): Promise<boolean> {
     const now = this.#now();
     const failed: SourceSyncRun = {
       ...run,
@@ -996,8 +1132,100 @@ export class SourcesService {
       run: failed,
       clearLeaseToken: true,
       heartbeatAt: failed.heartbeatAt,
+      expectedWorkspaceManagementAuthority,
+      requireStoredManagementAuthority: true,
     });
     return result.won;
+  }
+
+  async #captureWorkspaceManagementAuthority(
+    workspaceId: string,
+  ): Promise<WorkspaceManagementAuthority> {
+    const management = await this.#store.getWorkspaceManagement(workspaceId);
+    if (
+      !management ||
+      management.workspaceId !== workspaceId ||
+      management.managementState !== "active"
+    ) {
+      throw workspaceManagementAdmissionErrorFor();
+    }
+    return {
+      workspaceId: management.workspaceId,
+      managementState: "active",
+      managementEpoch: management.managementEpoch,
+    };
+  }
+
+  async #writeSourceConfiguration(
+    input: SourceConfigurationWriteInput,
+  ): Promise<StoredSource> {
+    try {
+      const result = await this.#store.writeSourceConfiguration(input);
+      if (result.status === "conflict") {
+        throw sourceConfigurationConflictError();
+      }
+      return result.source;
+    } catch (error) {
+      if (error instanceof WorkspaceManagementAdmissionConflictError) {
+        throw workspaceManagementAdmissionErrorFor();
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Existing queued rows may be repaired only while the Workspace still holds
+   * the exact authority captured for this request. This is deliberately not
+   * used for NEW admission; beginSourceSyncRun owns that CAS with the same
+   * captured authority.
+   */
+  async #workspaceManagementIsActive(
+    workspaceId: string,
+    expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority,
+  ): Promise<boolean> {
+    const management = await this.#store.getWorkspaceManagement(workspaceId);
+    return (
+      management?.workspaceId === workspaceId &&
+      management.managementState === "active" &&
+      expectedWorkspaceManagementAuthority.workspaceId === workspaceId &&
+      management.managementEpoch ===
+        expectedWorkspaceManagementAuthority.managementEpoch
+    );
+  }
+
+  /**
+   * Existing queued rows may be repaired only when their original private
+   * admission tuple exactly matches this request's captured active tuple.
+   * Missing/corrupt legacy metadata is observation-only: return the row but
+   * never turn it into a new queue dispatch. Coordinator replay, ordinary
+   * dedupe, and an insert-race adoption all share this gate.
+   */
+  async #canReenqueueExistingSourceSyncRun(
+    run: SourceSyncRun,
+    expectedWorkspaceManagementAuthority:
+      | WorkspaceManagementAuthority
+      | undefined,
+  ): Promise<boolean> {
+    if (run.status !== "queued") return false;
+    const original = await this.#store.getRunManagementAuthority({
+      id: run.id,
+      workspaceId: run.workspaceId,
+      kind: "source_sync",
+    });
+    if (
+      expectedWorkspaceManagementAuthority === undefined ||
+      original === undefined ||
+      original.workspaceId !== expectedWorkspaceManagementAuthority.workspaceId ||
+      original.managementState !== "active" ||
+      original.managementEpoch !==
+        expectedWorkspaceManagementAuthority.managementEpoch
+    ) {
+      return false;
+    }
+    return await this.#workspaceManagementIsActive(
+      run.workspaceId,
+      expectedWorkspaceManagementAuthority,
+    );
   }
 
   async #resolveCompatibilitySnapshot(
@@ -1079,6 +1307,42 @@ export class SourcesService {
       );
     }
   }
+}
+
+const WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_REASON =
+  "workspace_management_admission_conflict";
+const WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_MESSAGE =
+  "Workspace is not accepting this management operation.";
+const SOURCE_CONFIGURATION_CONFLICT_MESSAGE =
+  "Source configuration changed before it could be persisted.";
+
+function workspaceManagementAdmissionErrorFor(): OpenTofuControllerError {
+  return new OpenTofuControllerError(
+    "failed_precondition",
+    WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_MESSAGE,
+    { reason: WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_REASON },
+  );
+}
+
+function sourceConfigurationConflictError(): OpenTofuControllerError {
+  return new OpenTofuControllerError(
+    "failed_precondition",
+    SOURCE_CONFIGURATION_CONFLICT_MESSAGE,
+    { reason: "source_configuration_conflict" },
+  );
+}
+
+function isWorkspaceManagementAdmissionConflict(error: unknown): boolean {
+  if (!(error instanceof OpenTofuControllerError)) return false;
+  const details = error.details;
+  return (
+    error.code === "failed_precondition" &&
+    typeof details === "object" &&
+    details !== null &&
+    !Array.isArray(details) &&
+    (details as { readonly reason?: unknown }).reason ===
+      WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_REASON
+  );
 }
 
 /** Strips the internal fields off a stored source for the public API. */

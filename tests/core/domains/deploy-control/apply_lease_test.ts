@@ -79,6 +79,15 @@ async function seedApply(
   if (!source || !snapshot) {
     throw new Error(`fixture source authority is missing for ${ids.capsuleId}`);
   }
+  const management = await store.getWorkspaceManagement(capsule.workspaceId);
+  if (!management || management.managementState !== "active") {
+    throw new Error(`fixture Workspace ${capsule.workspaceId} is not active`);
+  }
+  const authority = {
+    workspaceId: management.workspaceId,
+    managementState: "active" as const,
+    managementEpoch: management.managementEpoch,
+  };
   await store.putCapsule({
     ...capsule,
     currentStateVersionId: seedStateVersionId,
@@ -130,7 +139,11 @@ async function seedApply(
     createdAt: 1,
     updatedAt: 1,
   };
-  await store.preparePlanRun({ run: planRun, inputs });
+  await store.preparePlanRun({
+    run: planRun,
+    inputs,
+    expectedWorkspaceManagementAuthority: authority,
+  });
   const applyRun: ApplyRun = {
     id: ids.applyRunId,
     planRunId: ids.planRunId,
@@ -156,7 +169,7 @@ async function seedApply(
     createdAt: 1,
     updatedAt: 1,
   };
-  await store.putApplyRun(applyRun);
+  await store.beginApplyRun(applyRun, authority);
   return { environment };
 }
 

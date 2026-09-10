@@ -168,6 +168,25 @@ bootstrap は `sqlite_master` と `schema_migrations` をそれぞれ 1 回だ�
 順序は変わりません。収束済み database の再実行は statement を 1 本も発行せず、
 read だけで終わります。
 
+## Connection operational status expansion (Postgres v114)
+
+v114 は既存の `ConnectionStatus` 型に保存制約を揃える `expand` です。古い v30 の
+履歴は変更せず、同名の CHECK constraint を一つの ALTER TABLE で置換して
+`pending / verified / revoked / expired / error` を受理します。行、暗号化 blob、
+公開 schema を変更・再作成せず、不明な status は引き続き拒否します。D1 の lineage は
+この変更では増やしません。
+
+対象 DB は明示的な廃棄許可がない限り protected です。適用は通常の明示 predeploy
+migration job で行い、対象 DB で制約検証とロック時間を事前確認します。ローカル検証は
+v113 の実 schema に代表行と暗号化 blob の fixture を作り、DDL の transaction rollback、
+前進後の全行保持、期限切れ更新と全 status の readback を確認します。これは本番適用や
+本番サイズでの無停止性の証拠ではありません。
+
+SQL の保存形と既存 operational 型は互換ですが、strict migration-ledger 検証のため
+v114 を知らない旧 catalog の process 再起動は rollback 手段として扱いません。適用後の
+修正 artifact も v114 を保持し、制約を旧三状態へ戻す down migration は行いません。
+失敗時は一つの ALTER の原子性と ledger を照合し、前進修正します。
+
 ## Failure and reversal procedure
 
 `expand` / `backfill`:

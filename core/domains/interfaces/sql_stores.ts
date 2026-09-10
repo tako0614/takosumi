@@ -11,6 +11,10 @@ import {
 import type { SqlClient, SqlValue } from "../../adapters/storage/sql.ts";
 import { deployControlPostgresTableNames as names } from "../../adapters/storage/drizzle/schema/logical.ts";
 import type { InterfaceMaterializationWriteAuthority } from "../deploy-control/interface_materialization_intent.ts";
+import {
+  assertWorkspaceManagementAdmission,
+} from "../deploy-control/store.ts";
+import { pgWorkspaceManagementForTransaction } from "../deploy-control/store_sql.ts";
 import type {
   InterfaceAuthorizationPageInput,
   InterfaceAuthorizationQuery,
@@ -137,6 +141,12 @@ class SqlInterfaceStore implements InterfaceStore {
     authority?: InterfaceMaterializationWriteAuthority,
   ): Promise<boolean> {
     if (authority && !interfaceMatchesAuthority(record, authority)) return false;
+    if (
+      expected.requireActiveWorkspace === true &&
+      record.metadata.workspaceId !== expected.record.metadata.workspaceId
+    ) {
+      return false;
+    }
     const p = interfaceParameters(record, true);
     const parameters: SqlValue[] = [
       ...p,
@@ -144,13 +154,14 @@ class SqlInterfaceStore implements InterfaceStore {
       expected.resolvedRevision,
       JSON.stringify(expected.record),
     ];
-    const authorityClause = postgresMaterializationAuthorityClause(
-      parameters,
-      authority,
-    );
-    try {
-      const result = await this.client.query(
-        `update ${this.#table} set
+    if (expected.requireActiveWorkspace !== true) {
+      const authorityClause = postgresMaterializationAuthorityClause(
+        parameters,
+        authority,
+      );
+      try {
+        const result = await this.client.query(
+          `update ${this.#table} set
           workspace_id=$2, owner_kind=$3, owner_id=$4, name=$5,
           interface_type=$6, phase=$7, generation=$8, resolved_revision=$9,
           oauth_resource_uri=case
@@ -158,13 +169,66 @@ class SqlInterfaceStore implements InterfaceStore {
           record_json=$11::jsonb, created_at=$12, updated_at=$13
          where id=$1 and generation=$14 and resolved_revision=$15
            and record_json=$16::jsonb and ${authorityClause}`,
-        parameters,
-      );
-      return result.rowCount > 0;
-    } catch (error) {
-      if (isUniqueConstraintError(error)) return false;
-      throw error;
+          parameters,
+        );
+        return result.rowCount > 0;
+      } catch (error) {
+        if (isUniqueConstraintError(error)) return false;
+        throw error;
+      }
     }
+
+    // A queued observer is a new management admission. Read the persisted
+    // Interface Workspace, lock that exact Workspace, and only then issue the
+    // CAS. The candidate payload never selects the Workspace authority.
+    return await this.client.transaction(async (transaction) => {
+      const currentRows = await transaction.query<{
+        readonly workspaceId: string | null;
+      }>(
+        `select workspace_id as "workspaceId"
+           from ${this.#table}
+          where id = $1
+          limit 1`,
+        [record.metadata.id],
+      );
+      const actualWorkspaceId = currentRows.rows[0]?.workspaceId;
+      if (!actualWorkspaceId) return false;
+      const management = await pgWorkspaceManagementForTransaction(
+        transaction,
+        actualWorkspaceId,
+      );
+      assertWorkspaceManagementAdmission(management, actualWorkspaceId);
+      if (actualWorkspaceId !== expected.record.metadata.workspaceId) {
+        return false;
+      }
+
+      const guardedParameters: SqlValue[] = [
+        ...parameters,
+        actualWorkspaceId,
+      ];
+      const authorityClause = postgresMaterializationAuthorityClause(
+        guardedParameters,
+        authority,
+      );
+      try {
+        const result = await transaction.query(
+          `update ${this.#table} set
+          workspace_id=$2, owner_kind=$3, owner_id=$4, name=$5,
+          interface_type=$6, phase=$7, generation=$8, resolved_revision=$9,
+          oauth_resource_uri=case
+            when oauth_resource_uri=$10 then oauth_resource_uri else null end,
+          record_json=$11::jsonb, created_at=$12, updated_at=$13
+         where id=$1 and workspace_id=$17 and generation=$14
+           and resolved_revision=$15 and record_json=$16::jsonb
+           and ${authorityClause}`,
+          guardedParameters,
+        );
+        return result.rowCount > 0;
+      } catch (error) {
+        if (isUniqueConstraintError(error)) return false;
+        throw error;
+      }
+    });
   }
 
   async claimOAuth2Resource(input: {

@@ -28,6 +28,7 @@ import type {
 } from "takosumi-contract/capsules";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import { OpenTofuControllerError } from "./errors.ts";
+import type { WorkspaceManagementAuthority } from "./store.ts";
 
 /**
  * Collaborator owning the Source lifecycle delegation. When `sourcesService` is
@@ -43,8 +44,12 @@ export class SourceManagement {
 
   async createSource(
     request: CreateSourceRequest,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<CreateSourceResponse> {
-    return await this.#require().createSource(request);
+    return await this.#require().createSource(
+      request,
+      expectedWorkspaceManagementAuthority,
+    );
   }
 
   async listSources(
@@ -68,8 +73,13 @@ export class SourceManagement {
   async createSourceSync(
     sourceId: string,
     options: CreateSourceSyncRequest & { readonly dedupe?: boolean } = {},
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<CreateSourceSyncResponse> {
-    return await this.#require().createSync(sourceId, options);
+    return await this.#require().createSync(
+      sourceId,
+      options,
+      expectedWorkspaceManagementAuthority,
+    );
   }
 
   async createSourceReconciliationSyncs(

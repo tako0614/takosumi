@@ -34,7 +34,11 @@ import type {
 } from "takosumi-contract/sources";
 import type { ConnectionVault } from "../../adapters/vault/mod.ts";
 import type { SourcesService } from "../sources/mod.ts";
-import type { OpenTofuControlStore, StoredSource } from "./store.ts";
+import type {
+  OpenTofuControlStore,
+  StoredSource,
+  WorkspaceManagementAuthority,
+} from "./store.ts";
 import type { OpenTofuRunner, OpenTofuSourceSyncResult } from "./mod.ts";
 import { NON_TERMINAL_RUN_STATUSES } from "./mod.ts";
 import { getCapsuleAdoptedSourceSnapshot } from "./capsule_source_revision.ts";
@@ -78,6 +82,12 @@ export interface SourceLifecycleServiceDependencies {
   readonly onCapsuleStaleForNewSnapshot?: (input: {
     readonly capsule: Capsule;
     readonly snapshot: SourceSnapshot;
+    /**
+     * Private authority captured when the exact SourceSync Run was admitted.
+     * A stale callback may complete after a drain/resume, so this must never
+     * be replaced with a current Workspace read.
+     */
+    readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
   }) => Promise<void>;
 }
 
@@ -100,6 +110,7 @@ export class SourceLifecycleService {
   readonly #onCapsuleStaleForNewSnapshot?: (input: {
     readonly capsule: Capsule;
     readonly snapshot: SourceSnapshot;
+    readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
   }) => Promise<void>;
 
   constructor(dependencies: SourceLifecycleServiceDependencies) {
@@ -364,20 +375,6 @@ export class SourceLifecycleService {
     if (!terminal.won) {
       return terminal.run ?? succeeded;
     }
-    // `lastSeenCommit` is the cursor for the shared Source default address only.
-    // A per-Capsule tracked-lane sync must never rewrite that cursor.
-    const stored = await this.#store.getSource(running.sourceId);
-    if (
-      stored &&
-      stored.defaultRef === running.ref &&
-      stored.defaultPath === running.path
-    ) {
-      await this.#store.putSource({
-        ...stored,
-        lastSeenCommit: result.resolvedCommit,
-        updatedAt: finishedAtIso,
-      });
-    }
     await this.#markSourceCapsulesStaleForNewSnapshot({
       running,
       snapshot,
@@ -391,6 +388,26 @@ export class SourceLifecycleService {
     readonly snapshot: SourceSnapshot;
     readonly finishedAtIso: string;
   }): Promise<void> {
+    // The SourceSync Run's original admission tuple is the only authority a
+    // post-drain completion may forward to automatic follow-up. Public Run
+    // projections strip this metadata, so ask the exact internal identity
+    // seam before iterating Capsules. A missing/corrupt historical tuple is
+    // fail-closed for the follow-up only; stale finalization still proceeds.
+    let expectedWorkspaceManagementAuthority:
+      | WorkspaceManagementAuthority
+      | undefined;
+    if (input.running.intent !== "manual_plan") {
+      try {
+        expectedWorkspaceManagementAuthority =
+          await this.#store.getRunManagementAuthority({
+            id: input.running.id,
+            workspaceId: input.running.workspaceId,
+            kind: "source_sync",
+          });
+      } catch {
+        expectedWorkspaceManagementAuthority = undefined;
+      }
+    }
     const capsules = await this.#store.listCapsules(input.running.workspaceId);
     for (const capsule of capsules) {
       if (
@@ -455,9 +472,33 @@ export class SourceLifecycleService {
       // Auto-update hook: the controller decides (autoUpdate opt-in +
       // one-attempt-per-snapshot backoff) and enqueues the update plan.
       if (input.running.intent !== "manual_plan") {
+        if (expectedWorkspaceManagementAuthority === undefined) continue;
+        // Source finalization is allowed to converge after a drain, but a
+        // known-stopped Workspace must not start a new auto-update side effect.
+        // This read is only an optimization: the durable auto-update claim and
+        // any new Plan admission remain the storage/controller authority for a
+        // race that flips management state after this observation.
+        try {
+          const management = await this.#store.getWorkspaceManagement(
+            input.running.workspaceId,
+          );
+          if (
+            management?.workspaceId !==
+              expectedWorkspaceManagementAuthority.workspaceId ||
+            management.managementState !== "active" ||
+            management.managementEpoch !==
+              expectedWorkspaceManagementAuthority.managementEpoch
+          ) continue;
+        } catch {
+          // A transient management read leaves the Workspace state unknown;
+          // skip this Capsule's auto-update attempt while continuing stale
+          // observation for the remaining Capsules.
+          continue;
+        }
         await this.#onCapsuleStaleForNewSnapshot?.({
           capsule: staleCapsule,
           snapshot: input.snapshot,
+          expectedWorkspaceManagementAuthority,
         });
       }
     }

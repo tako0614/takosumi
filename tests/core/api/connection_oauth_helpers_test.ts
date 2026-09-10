@@ -79,6 +79,9 @@ test("generic OAuth engine installs an opaque host descriptor", async () => {
     },
     values: { ACME_BEARER: "acme-run-credential" },
   });
+  // States issued by an internal caller that has not opted into the private
+  // Workspace authority remain readable without manufacturing a tuple.
+  expect(completed.expectedWorkspaceManagementAuthority).toBeUndefined();
 });
 
 test("Cloudflare OAuth helper signs state and returns an internal provider resolver request", async () => {
@@ -121,6 +124,11 @@ test("Cloudflare OAuth helper signs state and returns an internal provider resol
       // The cookie-gated start binds the authenticated subject into the state.
       subject: "tsub_owner",
     },
+    expectedWorkspaceManagementAuthority: {
+      workspaceId: "ws_1",
+      managementState: "active",
+      managementEpoch: 7,
+    },
   });
   expect(started).toBeDefined();
   const authUrl = new URL(started!.authorizationUrl);
@@ -156,6 +164,11 @@ test("Cloudflare OAuth helper signs state and returns an internal provider resol
   // The HMAC-signed subject rides the state so the cross-site callback can
   // authorize without a session cookie.
   expect(completion.subject).toBe("tsub_owner");
+  expect(completion.expectedWorkspaceManagementAuthority).toEqual({
+    workspaceId: "ws_1",
+    managementState: "active",
+    managementEpoch: 7,
+  });
 });
 
 test("Cloudflare OAuth state binds the subject under the HMAC: tampering fails verification", async () => {

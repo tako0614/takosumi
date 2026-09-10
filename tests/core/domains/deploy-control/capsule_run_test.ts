@@ -37,13 +37,17 @@ import {
   OpenTofuRunnerInfrastructureError,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
+  applyRunBillingCapturePending,
   InMemoryOpenTofuControlStore,
   type OpenTofuControlStore,
   type PlanRunInputs,
   type PreparePlanRunInput,
   type PreparePlanRunResult,
+  type RunManagementAuthorityInput,
   type TransitionRunInput,
   type TransitionRunResult,
+  type WorkspaceManagement,
+  type WorkspaceManagementAuthority,
 } from "../../../../core/domains/deploy-control/store.ts";
 import {
   type AcquireCapsuleLeaseInput,
@@ -8498,6 +8502,10 @@ test("a fresh reviewed plan/apply recovers a Capsule after post-apply lifecycle 
   ) {
     throw new Error("post-apply recovery fixture did not commit state/output");
   }
+  const management = await store.getWorkspaceManagement(failedCapsule.workspaceId);
+  if (management?.managementState !== "active") {
+    throw new Error("post-apply recovery preparation requires active management");
+  }
   const previousConfig = await store.getInstallConfig(
     failedCapsule.installConfigId,
   );
@@ -8554,7 +8562,10 @@ test("a fresh reviewed plan/apply recovers a Capsule after post-apply lifecycle 
     createdAt: "2026-08-26T00:00:00.000Z",
     updatedAt: "2026-08-26T00:00:00.000Z",
   };
-  await store.putInstallConfig(targetConfig);
+  expect(await store.createInstallConfigIfAbsent(targetConfig, {
+    ...management,
+    managementState: "active",
+  })).toBe(true);
 
   const rebound = await store.rebindCapsuleInstallConfig({
     capsuleId: failedCapsule.id,
@@ -10835,4 +10846,462 @@ test("OpenTofuControllerError is surfaced for an unknown capsule", async () => {
   await expect(
     controller.createCapsulePlan("cap_missing"),
   ).rejects.toBeInstanceOf(OpenTofuControllerError);
+});
+
+class BlockingCapsulePlanPreparationStore extends InMemoryOpenTofuControlStore {
+  readonly preparationStarted = deferredSignal();
+  readonly releasePreparation = deferredSignal();
+  blockInstallConfigRead = false;
+  preparedPlanRunId: string | undefined;
+
+  override async getInstallConfig(id: string): Promise<InstallConfig | undefined> {
+    if (this.blockInstallConfigRead) {
+      this.blockInstallConfigRead = false;
+      this.preparationStarted.resolve();
+      await this.releasePreparation.promise;
+    }
+    return await super.getInstallConfig(id);
+  }
+
+  override async preparePlanRun(
+    input: PreparePlanRunInput,
+  ): Promise<PreparePlanRunResult> {
+    this.preparedPlanRunId = input.run.id;
+    return await super.preparePlanRun(input);
+  }
+}
+
+class BlockingApplyPreflightStore extends InMemoryOpenTofuControlStore {
+  readonly preflightStarted = deferredSignal();
+  readonly releasePreflight = deferredSignal();
+  blockPlanInputsRead = false;
+
+  override async getPlanRunInputs(
+    planRunId: string,
+  ): Promise<PlanRunInputs | undefined> {
+    if (this.blockPlanInputsRead) {
+      this.blockPlanInputsRead = false;
+      this.preflightStarted.resolve();
+      await this.releasePreflight.promise;
+    }
+    return await super.getPlanRunInputs(planRunId);
+  }
+}
+
+class ResumableWorkspaceManagementStore extends InMemoryOpenTofuControlStore {
+  private readonly resumedWorkspaceIds = new Set<string>();
+
+  async resumeFixtureWorkspaceManagement(workspaceId: string): Promise<void> {
+    const current = await super.getWorkspaceManagement(workspaceId);
+    if (!current || current.managementState !== "draining") {
+      throw new Error("fixture Workspace is not draining");
+    }
+    this.resumedWorkspaceIds.add(workspaceId);
+  }
+
+  override async getWorkspaceManagement(
+    workspaceId: string,
+  ): Promise<WorkspaceManagement | undefined> {
+    const current = await super.getWorkspaceManagement(workspaceId);
+    if (
+      current &&
+      current.managementState === "draining" &&
+      this.resumedWorkspaceIds.has(workspaceId)
+    ) {
+      return {
+        ...current,
+        managementState: "active",
+        managementEpoch: current.managementEpoch + 1,
+      };
+    }
+    return current;
+  }
+}
+
+class MissingRunManagementAuthorityStore extends ResumableWorkspaceManagementStore {
+  readonly missingRunIds = new Set<string>();
+
+  override getRunManagementAuthority(
+    input: RunManagementAuthorityInput,
+  ): Promise<WorkspaceManagementAuthority | undefined> {
+    if (this.missingRunIds.has(input.id)) return Promise.resolve(undefined);
+    return super.getRunManagementAuthority(input);
+  }
+}
+
+async function beginFixtureWorkspaceDraining(
+  store: OpenTofuControlStore,
+): Promise<void> {
+  const current = await store.getWorkspaceManagement("ws_test001");
+  if (!current || current.managementState !== "active") {
+    throw new Error("fixture Workspace is not active");
+  }
+  const result = await store.beginWorkspaceDraining("ws_test001", {
+    workspaceId: current.workspaceId,
+    managementState: "active",
+    managementEpoch: current.managementEpoch,
+  });
+  expect(result.status).toBe("started");
+}
+
+test("Workspace draining during Capsule Plan preparation leaves no Run or inputs sidecar", async () => {
+  const store = new BlockingCapsulePlanPreparationStore();
+  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  store.blockInstallConfigRead = true;
+  const runner = recordingRunner();
+  const controller = controllerWith(store, runner, {
+    enqueueRun: () => Promise.resolve(),
+  });
+
+  const attempt = controller.createCapsulePlan("cap_fixture1");
+  try {
+    await store.preparationStarted.promise;
+    await beginFixtureWorkspaceDraining(store);
+    store.releasePreparation.resolve();
+
+    await expect(attempt).rejects.toMatchObject({
+      code: "failed_precondition",
+      details: { reason: "workspace_management_admission_conflict" },
+    });
+    expect(store.preparedPlanRunId).toBeDefined();
+    expect(await store.getPlanRun(store.preparedPlanRunId!)).toBeUndefined();
+    expect(
+      await store.getPlanRunInputs(store.preparedPlanRunId!),
+    ).toBeUndefined();
+    expect(runner.planJobs).toHaveLength(0);
+  } finally {
+    store.releasePreparation.resolve();
+  }
+});
+
+test("Workspace draining during Apply preflight creates no ApplyRun or dispatch", async () => {
+  const store = new BlockingApplyPreflightStore();
+  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const runner = recordingRunner();
+  const controller = controllerWith(store, runner);
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+
+  store.blockPlanInputsRead = true;
+  const attempt = controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  try {
+    await store.preflightStarted.promise;
+    await beginFixtureWorkspaceDraining(store);
+    store.releasePreflight.resolve();
+
+    await expect(attempt).rejects.toMatchObject({
+      code: "failed_precondition",
+      details: { reason: "workspace_management_admission_conflict" },
+    });
+    const runs = await store.listRunsByWorkspace("ws_test001");
+    expect(runs.filter((run) => "planRunId" in run)).toHaveLength(0);
+    expect(runner.applyJobs).toHaveLength(0);
+  } finally {
+    store.releasePreflight.resolve();
+  }
+});
+
+test("an already-applied ApplyRun remains a read-only idempotent read while draining", async () => {
+  const { store, runner, controller } = await seededController();
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+  const first = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  const applyJobsBeforeReplay = runner.applyJobs.length;
+
+  await beginFixtureWorkspaceDraining(store);
+  const replay = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(replay.applyRun).toEqual(first.applyRun);
+  expect(runner.applyJobs).toHaveLength(applyJobsBeforeReplay);
+});
+
+test("draining skips queued Plan replay and queued Apply dispatch repair", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const runner = recordingRunner();
+  const enqueued: string[] = [];
+  let dispatchPlans = true;
+  let controller!: OpenTofuController;
+  controller = controllerWith(store, runner, {
+    enqueueRun: async (dispatch) => {
+      enqueued.push(`${dispatch.action}:${dispatch.runId}`);
+      if (dispatch.action === "plan" && dispatchPlans) {
+        await controller.dispatchQueuedRun(dispatch);
+      }
+    },
+  });
+
+  const applyPlan = await controller.createCapsulePlan("cap_fixture1");
+  expect(applyPlan.planRun.status).toBe("succeeded");
+  const queuedApply = await controller.createApplyRun({
+    planRunId: applyPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(applyPlan.planRun),
+  });
+  expect(queuedApply.applyRun.status).toBe("queued");
+
+  dispatchPlans = false;
+  const queuedPlan = await controller.createCapsulePlan("cap_fixture1");
+  expect(queuedPlan.planRun.status).toBe("queued");
+  const enqueuedBeforeDrain = enqueued.length;
+
+  await beginFixtureWorkspaceDraining(store);
+  const replayedPlan = await controller.createCapsulePlan(
+    "cap_fixture1",
+    {},
+    { planRunId: queuedPlan.planRun.id },
+  );
+  const replayedApply = await controller.createApplyRun(
+    {
+      planRunId: applyPlan.planRun.id,
+      expected: applyExpectedGuardFromPlanRun(applyPlan.planRun),
+    },
+    {},
+    { applyRunId: queuedApply.applyRun.id },
+  );
+
+  expect(replayedPlan.planRun.id).toBe(queuedPlan.planRun.id);
+  expect(replayedPlan.planRun.status).toBe("queued");
+  expect(replayedApply.applyRun.id).toBe(queuedApply.applyRun.id);
+  expect(replayedApply.applyRun.status).toBe("queued");
+  expect(enqueued).toHaveLength(enqueuedBeforeDrain);
+
+  // A redelivered queue message still reaches the durable NEW-lease fence.
+  // Draining must therefore suppress provider execution even when the
+  // read-only replay/repair path was bypassed entirely.
+  const planJobsBeforeDispatch = runner.planJobs.length;
+  const applyJobsBeforeDispatch = runner.applyJobs.length;
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.planRun.id,
+    workspaceId: "ws_test001",
+  });
+  await controller.dispatchQueuedRun({
+    action: "apply",
+    runId: queuedApply.applyRun.id,
+    workspaceId: "ws_test001",
+  });
+
+  expect((await store.getPlanRun(queuedPlan.planRun.id))?.status).toBe(
+    "queued",
+  );
+  expect((await store.getApplyRun(queuedApply.applyRun.id))?.status).toBe(
+    "queued",
+  );
+  expect(runner.planJobs).toHaveLength(planJobsBeforeDispatch);
+  expect(runner.applyJobs).toHaveLength(applyJobsBeforeDispatch);
+});
+
+test("resumed Workspace skips stale queued Plan replay and Apply dispatch repair", async () => {
+  const store = new ResumableWorkspaceManagementStore();
+  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const runner = recordingRunner();
+  const enqueued: string[] = [];
+  const planQueuedObservers: string[] = [];
+  const applyQueuedObservers: string[] = [];
+  let dispatchPlans = true;
+  let controller!: OpenTofuController;
+  controller = controllerWith(store, runner, {
+    enqueueRun: async (dispatch) => {
+      enqueued.push(`${dispatch.action}:${dispatch.runId}`);
+      if (dispatch.action === "plan" && dispatchPlans) {
+        await controller.dispatchQueuedRun(dispatch);
+      }
+    },
+  });
+  controller.setPlanRunQueuedObserver(async (run) => {
+    planQueuedObservers.push(run.id);
+  });
+  controller.setApplyRunQueuedObserver(async (run) => {
+    applyQueuedObservers.push(run.id);
+  });
+
+  const applyPlan = await controller.createCapsulePlan("cap_fixture1");
+  expect(applyPlan.planRun.status).toBe("succeeded");
+  const queuedApply = await controller.createApplyRun({
+    planRunId: applyPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(applyPlan.planRun),
+  });
+  expect(queuedApply.applyRun.status).toBe("queued");
+
+  dispatchPlans = false;
+  const queuedPlan = await controller.createCapsulePlan("cap_fixture1");
+  expect(queuedPlan.planRun.status).toBe("queued");
+  // A same-epoch lost-ACK repair remains eligible for redelivery before the
+  // Workspace is stopped.
+  const enqueuedBeforeSameEpochReplay = enqueued.length;
+  await controller.createCapsulePlan(
+    "cap_fixture1",
+    {},
+    { planRunId: queuedPlan.planRun.id },
+  );
+  await controller.createApplyRun(
+    {
+      planRunId: applyPlan.planRun.id,
+      expected: applyExpectedGuardFromPlanRun(applyPlan.planRun),
+    },
+    {},
+    { applyRunId: queuedApply.applyRun.id },
+  );
+  expect(enqueued).toHaveLength(enqueuedBeforeSameEpochReplay + 2);
+  const persistedPlan = queuedPlan.planRun;
+  const persistedApply = queuedApply.applyRun;
+  const enqueuedBeforeReplay = [...enqueued];
+  const planObserversBeforeReplay = [...planQueuedObservers];
+  const applyObserversBeforeReplay = [...applyQueuedObservers];
+  const originalAuthority = {
+    workspaceId: "ws_test001",
+    managementState: "active" as const,
+    managementEpoch: 1,
+  };
+  expect(
+    await store.getRunManagementAuthority({
+      id: queuedPlan.planRun.id,
+      workspaceId: "ws_test001",
+      kind: "plan",
+    }),
+  ).toEqual(originalAuthority);
+  expect(
+    await store.getRunManagementAuthority({
+      id: queuedApply.applyRun.id,
+      workspaceId: "ws_test001",
+      kind: "apply",
+    }),
+  ).toEqual(originalAuthority);
+
+  await beginFixtureWorkspaceDraining(store);
+  await store.resumeFixtureWorkspaceManagement("ws_test001");
+  expect(await store.getWorkspaceManagement("ws_test001")).toEqual({
+    workspaceId: "ws_test001",
+    managementState: "active",
+    managementEpoch: 3,
+  });
+
+  const replayedPlan = await controller.createCapsulePlan(
+    "cap_fixture1",
+    {},
+    { planRunId: queuedPlan.planRun.id },
+  );
+  const replayedApply = await controller.createApplyRun(
+    {
+      planRunId: applyPlan.planRun.id,
+      expected: applyExpectedGuardFromPlanRun(applyPlan.planRun),
+    },
+    {},
+    { applyRunId: queuedApply.applyRun.id },
+  );
+
+  expect(replayedPlan.planRun).toEqual(persistedPlan);
+  expect(replayedApply.applyRun).toEqual(persistedApply);
+  expect(enqueued).toEqual(enqueuedBeforeReplay);
+  expect(planQueuedObservers).toEqual(planObserversBeforeReplay);
+  expect(applyQueuedObservers).toEqual(applyObserversBeforeReplay);
+});
+
+test("queued replay and Apply repair fail closed when original authority is missing", async () => {
+  const store = new MissingRunManagementAuthorityStore();
+  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const runner = recordingRunner();
+  const enqueued: string[] = [];
+  const applyQueuedObservers: string[] = [];
+  let dispatchPlans = true;
+  let controller!: OpenTofuController;
+  controller = controllerWith(store, runner, {
+    enqueueRun: async (dispatch) => {
+      enqueued.push(`${dispatch.action}:${dispatch.runId}`);
+      if (dispatch.action === "plan" && dispatchPlans) {
+        await controller.dispatchQueuedRun(dispatch);
+      }
+    },
+  });
+  controller.setApplyRunQueuedObserver(async (run) => {
+    applyQueuedObservers.push(run.id);
+  });
+
+  const applyPlan = await controller.createCapsulePlan("cap_fixture1");
+  expect(applyPlan.planRun.status).toBe("succeeded");
+  const queuedApply = await controller.createApplyRun({
+    planRunId: applyPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(applyPlan.planRun),
+  });
+  dispatchPlans = false;
+  const queuedPlan = await controller.createCapsulePlan("cap_fixture1");
+  expect(queuedPlan.planRun.status).toBe("queued");
+
+  const enqueuedBeforeReplay = [...enqueued];
+  const applyObserversBeforeReplay = [...applyQueuedObservers];
+  await beginFixtureWorkspaceDraining(store);
+  await store.resumeFixtureWorkspaceManagement("ws_test001");
+  store.missingRunIds.add(queuedPlan.planRun.id);
+  store.missingRunIds.add(queuedApply.applyRun.id);
+
+  const replayedPlan = await controller.createCapsulePlan(
+    "cap_fixture1",
+    {},
+    { planRunId: queuedPlan.planRun.id },
+  );
+  const replayedApply = await controller.createApplyRun(
+    {
+      planRunId: applyPlan.planRun.id,
+      expected: applyExpectedGuardFromPlanRun(applyPlan.planRun),
+    },
+    {},
+    { applyRunId: queuedApply.applyRun.id },
+  );
+
+  expect(replayedPlan.planRun).toEqual(queuedPlan.planRun);
+  expect(replayedApply.applyRun).toEqual(queuedApply.applyRun);
+  expect(enqueued).toEqual(enqueuedBeforeReplay);
+  expect(applyQueuedObservers).toEqual(applyObserversBeforeReplay);
+});
+
+test("a claimed ApplyRun completes after draining without changing its lease", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const delegate = recordingRunner();
+  const executionStarted = deferredSignal();
+  const releaseExecution = deferredSignal();
+  let claimedApplyRunId: string | undefined;
+  const runner: RecordingRunner = {
+    ...delegate,
+    apply: async (job) => {
+      claimedApplyRunId = job.applyRun.id;
+      executionStarted.resolve();
+      await releaseExecution.promise;
+      return await delegate.apply(job);
+    },
+  };
+  const controller = controllerWith(store, runner);
+
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+  const attempt = controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  try {
+    await executionStarted.promise;
+    expect(claimedApplyRunId).toBeDefined();
+    expect((await store.getApplyRun(claimedApplyRunId!))?.status).toBe(
+      "running",
+    );
+
+    await beginFixtureWorkspaceDraining(store);
+    releaseExecution.resolve();
+
+    const completed = await attempt;
+    expect(completed.applyRun.status).toBe("succeeded");
+    expect((await store.getApplyRun(claimedApplyRunId!))?.status).toBe(
+      "succeeded",
+    );
+    expect(applyRunBillingCapturePending(completed.applyRun)).toBe(false);
+    expect(runner.applyJobs).toHaveLength(1);
+  } finally {
+    releaseExecution.resolve();
+  }
 });

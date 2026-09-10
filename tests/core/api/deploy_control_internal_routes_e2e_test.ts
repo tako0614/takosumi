@@ -241,6 +241,126 @@ test("Credential Recipe discovery and generic-env connection routes round-trip",
   expect(JSON.stringify(genericEnvProviderBody)).not.toContain("vercel_secret");
 });
 
+for (const stopMoment of ["before request", "during seal"] as const) {
+test(`Workspace draining ${stopMoment} rejects generic-env setup without changing its Connection reads or secret blob`, async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const connectionId = "conn_draingenv0001";
+  let workspaceId = "";
+  let sealed = false;
+  const crypto = new PartitionedSecretBoundaryCrypto({
+    globalPassphrase: "draining-generic-env-e2e-passphrase-0123456789",
+  });
+  const vault = new StaticSecretConnectionVault({
+    store,
+    crypto: {
+      open: crypto.open.bind(crypto),
+      keyVersion: crypto.keyVersion.bind(crypto),
+      async seal(...args) {
+        const ciphertext = await crypto.seal(...args);
+        sealed = true;
+        if (stopMoment === "during seal") {
+          expect(await store.beginWorkspaceDraining(workspaceId, {
+            workspaceId, managementState: "active", managementEpoch: 1,
+          })).toMatchObject({ status: "started" });
+        }
+        return ciphertext;
+      },
+    },
+    now: () => new Date("2026-06-09T00:00:00.000Z"),
+    newId: () => connectionId,
+    credentialRecipeResolver: (id) =>
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find(
+        (recipe) => recipe.id === id,
+      ),
+    credentialDrivers:
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    sourceCredentialDrivers:
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.sourceCredentialDrivers,
+  });
+  const { app } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: {
+      TAKOSUMI_DEV_MODE: "1",
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,
+    },
+    mountInternalLedgerRoutes: true,
+    opentofuControlStore: store,
+    opentofuConnectionVault: vault,
+    ...REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
+  });
+
+  const workspaceResponse = await app.request("/internal/v1/workspaces", {
+    method: "POST",
+    headers: headers({ "content-type": "application/json" }),
+    body: JSON.stringify({
+      handle: "draining-generic-env",
+      displayName: "Draining generic env",
+      type: "personal",
+      ownerUserId: "user_drain_generic_env",
+    }),
+  });
+  expect(workspaceResponse.status).toBe(201);
+  workspaceId = (await workspaceResponse.json()).workspace.id as string;
+  const workspaceBefore = await store.getWorkspace(workspaceId);
+  const listBeforeResponse = await app.request(
+    `/internal/v1/connections?workspaceId=${workspaceId}`,
+    { headers: headers() },
+  );
+  expect(listBeforeResponse.status).toBe(200);
+  const listBefore = await listBeforeResponse.json();
+  expect(listBefore).toEqual({ connections: [] });
+  const getBeforeResponse = await app.request(
+    `/internal/v1/connections/${connectionId}`,
+    { headers: headers() },
+  );
+  expect(getBeforeResponse.status).toBe(404);
+
+  if (stopMoment === "before request") expect(
+    await store.beginWorkspaceDraining(workspaceId, {
+      workspaceId,
+      managementState: "active",
+      managementEpoch: 1,
+    }),
+  ).toMatchObject({ status: "started" });
+
+  const rejected = await app.request(
+    "/internal/v1/connections/setups/generic-env",
+    {
+      method: "POST",
+      headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        workspaceId,
+        provider: "registry.opentofu.org/vercel/vercel",
+        displayName: "Vercel",
+        values: { VERCEL_API_TOKEN: "must-not-persist" },
+      }),
+    },
+  );
+  expect(rejected.status).toBe(409);
+  expect(sealed).toBe(stopMoment === "during seal");
+
+  const listAfterResponse = await app.request(
+    `/internal/v1/connections?workspaceId=${workspaceId}`,
+    { headers: headers() },
+  );
+  expect(listAfterResponse.status).toBe(200);
+  expect(await listAfterResponse.json()).toEqual(listBefore);
+  const getAfterResponse = await app.request(
+    `/internal/v1/connections/${connectionId}`,
+    { headers: headers() },
+  );
+  expect(getAfterResponse.status).toBe(404);
+  expect(await store.getConnection(connectionId)).toBeUndefined();
+  expect(await store.getSecretBlob(connectionId)).toBeUndefined();
+  expect(await store.getWorkspace(workspaceId)).toEqual(workspaceBefore);
+  expect(await store.getWorkspaceManagement(workspaceId)).toEqual({
+    workspaceId,
+    managementState: "draining",
+    managementEpoch: 2,
+  });
+});
+}
+
 test("Credential Recipe discovery exposes the service-installed open catalog", async () => {
   const { app } = await createTakosumiService({
     role: "takosumi-api",

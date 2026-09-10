@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 
 import {
   type ApplyRun,
@@ -12,19 +12,50 @@ import {
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
   InMemoryOpenTofuControlStore,
+  type OpenTofuControlStore,
   type MarkCapsuleStaleCommand,
   type MarkCapsuleStaleResult,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { SourcesService } from "../../../../core/domains/sources/mod.ts";
-import { StaticSecretConnectionVault } from "../../../../core/adapters/vault/mod.ts";
+import {
+  PhaseMintBundle,
+  StaticSecretConnectionVault,
+  type MintRequest,
+} from "../../../../core/adapters/vault/mod.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
 import { REFERENCE_SOURCE_CREDENTIAL_DRIVERS } from "../../../../providers/git/source-credential-driver.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import type { Capsule } from "takosumi-contract/capsules";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
+import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
+import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
+import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
+import {
+  CloudflareD1OpenTofuControlStore,
+  ensureD1OpenTofuLedgerSchema,
+} from "../../../../worker/src/d1_opentofu_store.ts";
+import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 const TEST_TIME = "2026-06-06T00:00:00.000Z";
+const pgClients: PGliteSqlClient[] = [];
+
+setDefaultTimeout(30_000);
+
+afterEach(async () => {
+  await Promise.all(pgClients.splice(0).map((client) => client.close()));
+});
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 class StubRunner {
   readonly calls: OpenTofuSourceSyncJob[] = [];
@@ -74,26 +105,69 @@ class StaleConflictStore extends InMemoryOpenTofuControlStore {
   }
 }
 
+class TransientWorkspaceManagementReadStore extends InMemoryOpenTofuControlStore {
+  #rejectNextWorkspaceManagementRead = false;
+
+  rejectNextWorkspaceManagementRead(): void {
+    this.#rejectNextWorkspaceManagementRead = true;
+  }
+
+  override async getWorkspaceManagement(workspaceId: string) {
+    if (this.#rejectNextWorkspaceManagementRead) {
+      this.#rejectNextWorkspaceManagementRead = false;
+      throw new Error("transient Workspace management read failure");
+    }
+    return await super.getWorkspaceManagement(workspaceId);
+  }
+}
+
+class CountingMintVault extends StaticSecretConnectionVault {
+  mintCalls = 0;
+
+  override async mintForPhase(_request: MintRequest): Promise<PhaseMintBundle> {
+    this.mintCalls += 1;
+    return new PhaseMintBundle({ env: {} });
+  }
+}
+
 function build(
   options: {
     readonly now?: () => number;
     readonly runRenewalIntervalMs?: number;
-    readonly store?: InMemoryOpenTofuControlStore;
+    readonly store?: OpenTofuControlStore;
+    readonly seedWorkspace?: boolean;
+    readonly vault?: StaticSecretConnectionVault;
   } = {},
 ) {
   const store = options.store ?? new InMemoryOpenTofuControlStore();
+  // Source-sync admission now requires a durable active Workspace authority;
+  // keep this consumer fixture explicit so dispatch tests reach the runner
+  // and terminal-CAS assertions below.
+  if (options.seedWorkspace !== false) {
+    void store.putWorkspace({
+      id: "workspace_1",
+      handle: "workspace-1",
+      displayName: "Workspace 1",
+      type: "personal",
+      ownerUserId: "user_1",
+      createdAt: TEST_TIME,
+      updatedAt: TEST_TIME,
+    });
+  }
   let counter = 0;
   const newId = (prefix: string) =>
     `${prefix}_test${(counter += 1).toString().padStart(8, "0")}`;
-  const vault = new StaticSecretConnectionVault({
-    store,
-    crypto: new PartitionedSecretBoundaryCrypto({
-      globalPassphrase: "test-passphrase-0123456789-abcdef-0123456789",
-    }),
-    now: () => new Date(TEST_TIME),
-    newId: () => newId("conn"),
-    sourceCredentialDrivers: REFERENCE_SOURCE_CREDENTIAL_DRIVERS,
-  });
+  const vault =
+    options.vault ??
+    new StaticSecretConnectionVault({
+      store,
+      crypto: new PartitionedSecretBoundaryCrypto({
+        globalPassphrase: "test-passphrase-0123456789-abcdef-0123456789",
+      }),
+      now: () => new Date(TEST_TIME),
+      newId: () => newId("conn"),
+      sourceCredentialDrivers: REFERENCE_SOURCE_CREDENTIAL_DRIVERS,
+    });
   const sourcesService = new SourcesService({
     store,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
@@ -141,7 +215,7 @@ function sourceSnapshot(over: Partial<SourceSnapshot> = {}): SourceSnapshot {
 }
 
 async function seedActiveCapsuleOnSnapshot(input: {
-  readonly store: InMemoryOpenTofuControlStore;
+  readonly store: OpenTofuControlStore;
   readonly sourceId: string;
   readonly snapshot: SourceSnapshot;
 }): Promise<void> {
@@ -320,6 +394,15 @@ test("source_sync rejects a runner result that resolves a different immutable So
 
 test("source_sync fails terminally when the selected runner lacks source-sync capability", async () => {
   const store = new InMemoryOpenTofuControlStore();
+  await store.putWorkspace({
+    id: "workspace_1",
+    handle: "workspace-1",
+    displayName: "Workspace 1",
+    type: "personal",
+    ownerUserId: "user_1",
+    createdAt: TEST_TIME,
+    updatedAt: TEST_TIME,
+  });
   const artifactReferenceAllocator = new ObjectKeyArtifactReferenceAllocator();
   const sourcesService = new SourcesService({
     store,
@@ -398,6 +481,364 @@ test("source_sync consumer marks active source Capsules stale when the resolved 
       }),
     }),
   );
+});
+
+test("source_sync finalizes a pre-drain claim but does not enqueue auto-update work after drain", async () => {
+  const { store, sourcesService, runner, controller } = build();
+  const { source } = await sourcesService.createSource({
+    workspaceId: "workspace_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: "main",
+  });
+  const previous = sourceSnapshot({ sourceId: source.id });
+  await seedActiveCapsuleOnSnapshot({
+    store,
+    sourceId: source.id,
+    snapshot: previous,
+  });
+  const observedCapsule = (await store.patchCapsule("capsule_active", {
+    autoUpdate: true,
+  }))!;
+  expect(observedCapsule.autoUpdate).toBe(true);
+  runner.result = {
+    resolvedCommit: "new123",
+    archiveDigest: "sha256:" + "c".repeat(64),
+    archiveSizeBytes: 2048,
+  };
+
+  const { run } = await controller.createSourceSync(source.id);
+  const claimed = deferred<void>();
+  const release = deferred<void>();
+  runner.onSourceSync = async () => {
+    claimed.resolve();
+    const management = await store.getWorkspaceManagement(source.workspaceId);
+    await store.beginWorkspaceDraining(source.workspaceId, {
+      workspaceId: source.workspaceId,
+      managementState: "active",
+      managementEpoch: management!.managementEpoch,
+    });
+    await release.promise;
+  };
+
+  const completion = controller.runQueuedSourceSync(run.id);
+  await claimed.promise;
+  release.resolve();
+  await completion;
+
+  expect((await store.getSourceSyncRun(run.id))?.status).toBe("succeeded");
+  expect(await store.listSourceSnapshots(source.id)).toHaveLength(2);
+  expect((await store.getSource(source.id))?.lastSeenCommit).toBe("new123");
+  expect((await store.getCapsule("capsule_active"))?.status).toBe("stale");
+  expect(
+    (await store.getCapsule("capsule_active"))
+      ?.autoUpdateAttemptSourceSnapshotId,
+  ).toBeUndefined();
+  expect(
+    (await store.listRunsByWorkspace("workspace_1")).filter((row) =>
+      row.id.startsWith("plan_"),
+    ),
+  ).toHaveLength(1);
+});
+
+test("source_sync completion after drain and resume cannot mint follow-up work from a newer authority epoch", async () => {
+  const database = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(database);
+  const store = new CloudflareD1OpenTofuControlStore(database);
+  await store.putWorkspace({
+    id: "workspace_1",
+    handle: "workspace-1",
+    displayName: "Workspace 1",
+    type: "personal",
+    ownerUserId: "user_1",
+    createdAt: TEST_TIME,
+    updatedAt: TEST_TIME,
+  });
+  const { sourcesService, runner, controller } = build({
+    store,
+    seedWorkspace: false,
+  });
+  const { source } = await sourcesService.createSource({
+    workspaceId: "workspace_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: "main",
+  });
+  const previous = sourceSnapshot({ sourceId: source.id });
+  await seedActiveCapsuleOnSnapshot({
+    store,
+    sourceId: source.id,
+    snapshot: previous,
+  });
+  const optedIn = await store.patchCapsule("capsule_active", {
+    autoUpdate: true,
+  });
+  expect(optedIn?.autoUpdate).toBe(true);
+  runner.result = {
+    resolvedCommit: "new123",
+    archiveDigest: "sha256:" + "c".repeat(64),
+    archiveSizeBytes: 2048,
+  };
+
+  const { run } = await controller.createSourceSync(source.id);
+  const originalAuthority = await store.getRunManagementAuthority({
+    id: run.id,
+    workspaceId: run.workspaceId,
+    kind: "source_sync",
+  });
+  expect(originalAuthority).toEqual({
+    workspaceId: "workspace_1",
+    managementState: "active",
+    managementEpoch: 1,
+  });
+
+  const claimed = deferred<void>();
+  const resumed = deferred<void>();
+  const release = deferred<void>();
+  runner.onSourceSync = async () => {
+    claimed.resolve();
+    const active = await store.getWorkspaceManagement(source.workspaceId);
+    if (!active || active.managementState !== "active") {
+      throw new Error("source-sync Workspace management is not active");
+    }
+    const draining = await store.beginWorkspaceDraining(
+      source.workspaceId,
+      {
+        workspaceId: active.workspaceId,
+        managementState: "active",
+        managementEpoch: active.managementEpoch,
+      },
+    );
+    expect(draining.status).toBe("started");
+    // There is intentionally no public resume API yet. Use the actual D1
+    // fixture's raw SQL to emulate the operator resume at a newer epoch while
+    // this already-claimed SourceSync remains running.
+    await database
+      .prepare(
+        "update workspaces set management_state = 'active', management_epoch = 3 where id = ?",
+      )
+      .bind(source.workspaceId)
+      .run();
+    resumed.resolve();
+    await release.promise;
+  };
+
+  const completion = controller.runQueuedSourceSync(run.id);
+  await claimed.promise;
+  await resumed.promise;
+  expect(await store.getWorkspaceManagement(source.workspaceId)).toEqual({
+    workspaceId: source.workspaceId,
+    managementState: "active",
+    managementEpoch: 3,
+  });
+  release.resolve();
+  await completion;
+
+  expect((await store.getSourceSyncRun(run.id))?.status).toBe("succeeded");
+  expect(await store.listSourceSnapshots(source.id)).toHaveLength(2);
+  expect((await store.getSource(source.id))?.lastSeenCommit).toBe("new123");
+  expect((await store.getCapsule("capsule_active"))?.status).toBe("stale");
+  expect(
+    (await store.getCapsule("capsule_active"))
+      ?.autoUpdateAttemptSourceSnapshotId,
+  ).toBeUndefined();
+  expect(
+    (await store.listRunsByWorkspace(source.workspaceId)).filter((row) =>
+      row.id.startsWith("plan_"),
+    ),
+  ).toHaveLength(1);
+});
+
+test("source_sync does not claim a queued run after Workspace resumes at a newer management epoch", async () => {
+  const client = await PGliteSqlClient.create();
+  pgClients.push(client);
+  const store = new SqlOpenTofuControlStore({ client });
+  await store.putWorkspace({
+    id: "workspace_1",
+    handle: "workspace-1",
+    displayName: "Workspace 1",
+    type: "personal",
+    ownerUserId: "user_1",
+    createdAt: TEST_TIME,
+    updatedAt: TEST_TIME,
+  });
+  const sourceConnection: ProviderConnection = {
+    id: "conn_source_epoch",
+    workspaceId: "workspace_1",
+    scope: "workspace",
+    provider: "source_git_https_token",
+    providerSource: "git",
+    kind: "source_git_https_token",
+    materialization: "secret",
+    status: "pending",
+    envNames: ["GIT_HTTPS_TOKEN"],
+    createdAt: TEST_TIME,
+    updatedAt: TEST_TIME,
+  };
+  await store.putConnection(sourceConnection);
+  const vault = new CountingMintVault({
+    store,
+    crypto: new PartitionedSecretBoundaryCrypto({
+      globalPassphrase: "test-passphrase-0123456789-abcdef-0123456789",
+    }),
+    now: () => new Date(TEST_TIME),
+    newId: () => "conn_source_epoch_generated",
+    sourceCredentialDrivers: REFERENCE_SOURCE_CREDENTIAL_DRIVERS,
+  });
+  const { sourcesService, runner, controller } = build({
+    store,
+    seedWorkspace: false,
+    vault,
+  });
+  const { source } = await sourcesService.createSource({
+    workspaceId: "workspace_1",
+    name: "epoch-guarded-repo",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: "main",
+    authConnectionId: sourceConnection.id,
+  });
+  const { run } = await controller.createSourceSync(source.id);
+  expect(run.status).toBe("queued");
+
+  const active = await store.getWorkspaceManagement(source.workspaceId);
+  expect(active).toEqual({
+    workspaceId: source.workspaceId,
+    managementState: "active",
+    managementEpoch: 1,
+  });
+  await store.beginWorkspaceDraining(source.workspaceId, {
+    workspaceId: source.workspaceId,
+    managementState: "active",
+    managementEpoch: active!.managementEpoch,
+  });
+  await client.exec(
+    "update takosumi_workspaces set management_state = 'active', management_epoch = 3 where id = 'workspace_1'",
+  );
+  expect(await store.getWorkspaceManagement(source.workspaceId)).toEqual({
+    workspaceId: source.workspaceId,
+    managementState: "active",
+    managementEpoch: 3,
+  });
+
+  const delayed = await controller.runQueuedSourceSync(run.id);
+
+  expect(delayed).toMatchObject({ id: run.id, status: "queued" });
+  expect(await store.getSourceSyncRun(run.id)).toMatchObject({
+    id: run.id,
+    status: "queued",
+  });
+  expect(runner.calls).toEqual([]);
+  expect(vault.mintCalls).toBe(0);
+  expect(await store.listSourceSnapshots(source.id)).toEqual([]);
+});
+
+test("source_sync continues stale finalization when the first auto-update gate read is transiently unavailable", async () => {
+  const store = new TransientWorkspaceManagementReadStore();
+  const { sourcesService, runner, controller } = build({ store });
+  const { source } = await sourcesService.createSource({
+    workspaceId: "workspace_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: "main",
+  });
+  const previous = sourceSnapshot({ sourceId: source.id });
+  await seedActiveCapsuleOnSnapshot({
+    store,
+    sourceId: source.id,
+    snapshot: previous,
+  });
+
+  const originalSource = await store.getSource(source.id);
+  const { capsule: secondCapsule } = await seedCapsuleModel(store, {
+    workspaceId: "workspace_1",
+    capsuleId: "capsule_second",
+    sourceId: source.id,
+    snapshotId: previous.id,
+    installConfigId: "cfg_fixture_second",
+    name: "second",
+    withoutSnapshot: true,
+  });
+  const previousPlan = await store.getPlanRun("plan_prev");
+  const previousApply = await store.getApplyRun("apply_prev");
+  const previousState = await store.getStateVersion("state_prev");
+  if (!originalSource || !previousPlan || !previousApply || !previousState) {
+    throw new Error("source_sync stale-finalization fixture is incomplete");
+  }
+  // seedCapsuleModel supplies ownership rows for the second Capsule; restore
+  // the Source and old Snapshot that both Capsules are expected to have adopted.
+  await store.putSource(originalSource);
+  await store.putSourceSnapshot(previous);
+  await store.putPlanRun({
+    ...previousPlan,
+    id: "plan_second",
+    capsuleId: secondCapsule.id,
+  });
+  await store.putApplyRun({
+    ...previousApply,
+    id: "apply_second",
+    planRunId: "plan_second",
+    capsuleId: secondCapsule.id,
+    stateVersionId: "state_second",
+    expected: {
+      ...previousApply.expected,
+      planRunId: "plan_second",
+      capsuleId: secondCapsule.id,
+    },
+  });
+  await store.putStateVersion({
+    ...previousState,
+    id: "state_second",
+    capsuleId: secondCapsule.id,
+    createdByRunId: "apply_second",
+  });
+  await store.putCapsule({
+    ...secondCapsule,
+    currentStateGeneration: 1,
+    currentStateVersionId: "state_second",
+    status: "active",
+    updatedAt: TEST_TIME,
+  });
+  const optedIn = await store.patchCapsule("capsule_active", {
+    autoUpdate: true,
+  });
+  expect(optedIn?.autoUpdate).toBe(true);
+
+  runner.result = {
+    resolvedCommit: "new123",
+    archiveDigest: "sha256:" + "c".repeat(64),
+    archiveSizeBytes: 2048,
+  };
+  const { run } = await controller.createSourceSync(source.id);
+  // Arm after admission so this is the first post-commit auto-update gate
+  // read, not the Source-sync Workspace admission read.
+  runner.onSourceSync = async () => {
+    store.rejectNextWorkspaceManagementRead();
+  };
+  await controller.runQueuedSourceSync(run.id);
+
+  const finished = await store.getSourceSyncRun(run.id);
+  expect(finished?.status).toBe("succeeded");
+  expect(finished?.snapshotId).toBeDefined();
+  expect(await store.listSourceSnapshots(source.id)).toHaveLength(2);
+  expect((await store.getSource(source.id))?.lastSeenCommit).toBe("new123");
+  expect((await store.getCapsule("capsule_active"))?.status).toBe("stale");
+  expect((await store.getCapsule("capsule_second"))?.status).toBe("stale");
+  expect(
+    (await store.listActivityEvents("workspace_1", { limit: 10 }))
+      .filter((event) => event.action === "capsule.stale")
+      .map((event) => event.targetId),
+  ).toEqual(expect.arrayContaining(["capsule_active", "capsule_second"]));
+  // The opted-in Capsule whose management state was unknown must not receive
+  // an automatic attempt; no follow-on Plan was admitted for either Capsule.
+  expect(
+    (await store.getCapsule("capsule_active"))
+      ?.autoUpdateAttemptSourceSnapshotId,
+  ).toBeUndefined();
+  expect(
+    (await store.listRunsByWorkspace("workspace_1")).filter((row) =>
+      row.id.startsWith("plan_"),
+    ),
+  ).toHaveLength(2);
 });
 
 test("source_sync leaves a concurrently advanced Capsule and its hooks untouched when staleness CAS conflicts", async () => {
@@ -1037,13 +1478,12 @@ test("source_sync consumer does not reuse sibling Git archives across credential
     workspaceId: "workspace_1",
     provider: "source_git_https_token",
     kind: "source_git_https_token",
-    authMethod: "static_secret",
-    scope: { username: "git-bot" },
+    scope: "workspace",
     scopeHints: {
-      providerSettings: { repositoryUrl: "https://github.com/acme/repo.git" },
+      providerSettings: { username: "git-bot", repositoryUrl: "https://github.com/acme/repo.git" },
     },
     values: { GIT_HTTPS_TOKEN: "ghp_super_secret" },
-  });
+  }, undefined, null);
   await store.putConnection({
     ...conn,
     status: "verified",
@@ -1189,13 +1629,12 @@ test("source_sync consumer mints ONLY source-phase git creds for a private repo"
     workspaceId: "workspace_1",
     provider: "source_git_https_token",
     kind: "source_git_https_token",
-    authMethod: "static_secret",
-    scope: { username: "git-bot" },
+    scope: "workspace",
     scopeHints: {
-      providerSettings: { repositoryUrl: "https://github.com/acme/repo.git" },
+      providerSettings: { username: "git-bot", repositoryUrl: "https://github.com/acme/repo.git" },
     },
     values: { GIT_HTTPS_TOKEN: "ghp_super_secret" },
-  });
+  }, undefined, null);
   await store.putConnection({
     ...conn,
     status: "verified",
@@ -1251,7 +1690,7 @@ test("source_sync consumer never mints a git token for a Source on a foreign hos
       providerSettings: { repositoryUrl: "https://github.com/acme/repo.git" },
     },
     values: { GIT_HTTPS_TOKEN: "ghp_super_secret" },
-  });
+  }, undefined, null);
   await store.putConnection({
     ...conn,
     status: "verified",

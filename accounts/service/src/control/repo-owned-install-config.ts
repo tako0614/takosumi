@@ -14,6 +14,7 @@ import type { JsonValue } from "takosumi-contract/types";
 import { resolveCapsuleInterfaceBlueprintInstallingPrincipal } from "takosumi-contract/interfaces";
 
 import type { ControlPlaneOperations } from "../control-operations.ts";
+import type { WorkspaceManagementAuthority } from "../../../../core/domains/deploy-control/store.ts";
 import {
   compileRepositoryInstallUx,
   type RepositoryInstallUxDiagnostic,
@@ -62,6 +63,11 @@ export interface RepoOwnedInstallConfigAdoptionInput {
   readonly installingPrincipalId?: string;
   readonly compatibilityReport?: CapsuleCompatibilityReport;
   readonly requireReviewedValues?: boolean;
+  /**
+   * Exact active Workspace-management authority captured before async
+   * preparation. It is forwarded only to the durable insert-only write.
+   */
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
 }
 
 export type RepoOwnedInstallConfigAdoptionDiagnostic =
@@ -554,6 +560,7 @@ export async function previewRepoOwnedInstallConfig(
   }
   const created = await input.operations.capsules.createInstallConfigIfAbsent(
     expected,
+    input.expectedWorkspaceManagementAuthority,
   );
   const config = created
     ? expected

@@ -12,6 +12,11 @@ import type {
 } from "@takosumi/internal/deploy-control-api";
 import { OpenTofuControllerError } from "../domains/deploy-control/mod.ts";
 import {
+  assertWorkspaceManagementAuthorityInput,
+  WorkspaceManagementAdmissionConflictError,
+  type WorkspaceManagementAuthority,
+} from "../domains/deploy-control/store.ts";
+import {
   authorizeDeployControl,
   type ConnectionOAuthCallbackInput,
   type ConnectionOAuthHelper,
@@ -190,7 +195,7 @@ export function mountDeployControlConnectionRoutes(
           request.workspaceId,
           request.scope,
         );
-        const response = await controller.createConnection(request);
+        const response = await controller.createConnection(request, undefined, null);
         await recordConnectionCreatedActivity(
           ctx,
           auth.principal.actor,
@@ -229,12 +234,41 @@ export function mountDeployControlConnectionRoutes(
           body.workspaceId,
           body.scope,
         );
+        let expectedWorkspaceManagementAuthority:
+          | WorkspaceManagementAuthority
+          | undefined;
+        if (body.workspaceId !== undefined && body.scope !== "operator") {
+          const workspaces = dependencies.workspacesService;
+          if (!workspaces) {
+            throw new OpenTofuControllerError(
+              "not_implemented",
+              "workspaces not wired",
+            );
+          }
+          try {
+            expectedWorkspaceManagementAuthority =
+              await workspaces.captureManagementAuthority(body.workspaceId);
+          } catch (error) {
+            if (error instanceof OpenTofuControllerError) throw error;
+            if (!(error instanceof WorkspaceManagementAdmissionConflictError)) {
+              throw error;
+            }
+            throw new OpenTofuControllerError(
+              "failed_precondition",
+              "Workspace is not accepting this management operation.",
+              { reason: "workspace_management_admission_conflict" },
+            );
+          }
+        }
         return c.json(
           await helper.start({
             helperId,
             request: c.req.raw,
             principal: auth.principal,
             body,
+            ...(expectedWorkspaceManagementAuthority
+              ? { expectedWorkspaceManagementAuthority }
+              : {}),
           }),
           200,
         );
@@ -255,7 +289,33 @@ export function mountDeployControlConnectionRoutes(
           request.workspaceId,
           request.scope,
         );
-        const response = await controller.createConnection(request);
+        if (request.workspaceId !== undefined) {
+          const expectedWorkspaceManagementAuthority =
+            completion.expectedWorkspaceManagementAuthority;
+          if (expectedWorkspaceManagementAuthority === undefined) {
+            throw new OpenTofuControllerError(
+              "failed_precondition",
+              "OAuth callback is missing the original Workspace management authority.",
+              { reason: "workspace_management_admission_conflict" },
+            );
+          }
+          try {
+            assertWorkspaceManagementAuthorityInput(
+              expectedWorkspaceManagementAuthority,
+              request.workspaceId,
+            );
+          } catch {
+            throw new OpenTofuControllerError(
+              "invalid_argument",
+              "OAuth callback Workspace management authority is invalid",
+            );
+          }
+        }
+        const response = await controller.createConnection(
+          request,
+          completion.expectedWorkspaceManagementAuthority,
+          null,
+        );
         await recordConnectionCreatedActivity(
           ctx,
           auth.principal.actor,
@@ -293,7 +353,7 @@ export function mountDeployControlConnectionRoutes(
           request.workspaceId,
           request.scope,
         );
-        const response = await controller.createConnection(request);
+        const response = await controller.createConnection(request, undefined, null);
         await recordConnectionCreatedActivity(
           ctx,
           auth.principal.actor,
@@ -346,7 +406,7 @@ export function mountDeployControlConnectionRoutes(
       handler: async ({ c, principal, id }) => {
         const connection = await controller.getConnection(id);
         ensureConnectionPermission(principal, connection.workspaceId);
-        return c.json(await controller.testConnection(id), 200);
+        return c.json(await controller.testConnection(id, undefined, null), 200);
       },
     }),
   );
@@ -360,7 +420,7 @@ export function mountDeployControlConnectionRoutes(
         const connection = await controller.getConnection(id);
         ensureConnectionPermission(principal, connection.workspaceId);
         // Maps to the vault revoke path (the former DELETE handler logic).
-        await controller.deleteConnection(id);
+        await controller.deleteConnection(id, undefined, null);
         // Activity (§27 / §34): mirror connection.created for Workspace-scoped
         // revocation. Emit only non-secret context captured before the sealed
         // secret blob is deleted.

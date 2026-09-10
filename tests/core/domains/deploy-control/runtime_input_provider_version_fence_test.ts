@@ -208,7 +208,7 @@ async function seedFenceModel(
       TAKOFORM_SPACE: "space_fence",
       TAKOFORM_TOKEN: "takoform-token-never-persisted",
     },
-  });
+  }, undefined, null);
   // The protocol descriptor is recipe authority, pinned at registration.
   expect(connection.credentialRecipe?.runtimeInputs).toEqual({
     contract: "takosumi.provider-runtime-inputs/v1",
@@ -216,7 +216,7 @@ async function seedFenceModel(
     mapArgument: "runtime_inputs",
     minimumProviderVersion: "4.0.0",
   });
-  await vault.test(connection.id);
+  await vault.test(connection.id, undefined, null);
   await transitionProviderBindingSetForFixture(store, {
     id: `ipcset_${options.capsuleId}`,
     workspaceId: WORKSPACE_ID,

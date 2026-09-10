@@ -43,6 +43,7 @@ import type {
   Workspace,
   WorkspaceMember,
 } from "takosumi-contract/workspaces";
+import { parseWorkspaceMemberRecord } from "./store_row_mappers.ts";
 import type { Project } from "takosumi-contract/projects";
 import type { ProviderBindingSet } from "takosumi-contract/connections";
 import type {
@@ -393,6 +394,233 @@ export interface PlanRunInputs {
 }
 
 /**
+ * Private Workspace-management lifecycle.  This is deliberately separate
+ * from the public Workspace contract and from a Capsule's execution epoch.
+ */
+export type WorkspaceManagementState =
+  | "active"
+  | "draining"
+  | "frozen"
+  | "released";
+
+export interface WorkspaceManagement {
+  readonly workspaceId: string;
+  readonly managementState: WorkspaceManagementState;
+  readonly managementEpoch: number;
+}
+
+/** Exact active-management authority captured before a new admission. */
+export interface WorkspaceManagementAuthority {
+  readonly workspaceId: string;
+  readonly managementState: "active";
+  readonly managementEpoch: number;
+}
+
+/** Metadata replacement from one observed row and original management epoch. */
+export interface WorkspaceReplacementInput {
+  readonly workspace: Workspace;
+  readonly expectedWorkspace: Workspace;
+  readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
+}
+
+/** Accounts mutation; absence of a member only authorizes the namespace owner. */
+export interface WorkspaceAccountReplacementInput extends WorkspaceReplacementInput {
+  readonly actorAccountId: string;
+  readonly expectedActor?: WorkspaceMember;
+}
+
+export type WorkspaceAccountAuthority = Pick<WorkspaceAccountReplacementInput,
+  "actorAccountId" | "expectedWorkspace" | "expectedActor">;
+
+/** Existing namespace-owner / active owner-admin policy, without a target mutation. */
+export function workspaceAccountAuthorityAllowed(input: WorkspaceAccountAuthority): boolean {
+  if (!input.actorAccountId) return false;
+  if (input.expectedWorkspace.ownerUserId === input.actorAccountId) return true;
+  const actor = input.expectedActor;
+  if (actor) parseWorkspaceMemberRecord(actor);
+  return actor?.accountId === input.actorAccountId && actor.workspaceId === input.expectedWorkspace.id &&
+    actor.status === "active" && (actor.roles.includes("owner") || actor.roles.includes("admin"));
+}
+
+export function workspaceAccountReplacementAllowed(input: WorkspaceAccountReplacementInput): boolean {
+  return input.workspace.id === input.expectedWorkspace.id && workspaceAccountAuthorityAllowed(input);
+}
+
+export function validateWorkspaceReplacement(input: WorkspaceReplacementInput): void {
+  const { workspace, expectedWorkspace, expectedWorkspaceManagementAuthority } = input;
+  assertWorkspaceManagementAuthorityInput(expectedWorkspaceManagementAuthority, workspace.id);
+  for (const key of ["id", "handle", "type", "ownerUserId", "createdAt"] as const) {
+    if (workspace[key] !== expectedWorkspace[key]) {
+      throw new TypeError(`Workspace replacement cannot change ${key}`);
+    }
+  }
+}
+
+export interface WorkspaceOwnerMemberRepairInput {
+  readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
+  readonly expectedWorkspace: Workspace;
+  readonly expectedMember?: WorkspaceMember;
+  readonly member: WorkspaceMember;
+}
+
+export interface WorkspaceMemberMutationInput extends WorkspaceOwnerMemberRepairInput {
+  readonly expectedActor: WorkspaceMember;
+}
+
+/** Immutable identities and the reviewed member delta, before any I/O. */
+export function validateWorkspaceMemberReplacement(input: WorkspaceOwnerMemberRepairInput): void {
+  const { member, expectedMember, expectedWorkspace } = input;
+  parseWorkspaceMemberRecord(member);
+  if (expectedMember) parseWorkspaceMemberRecord(expectedMember);
+  assertWorkspaceManagementAuthorityInput(input.expectedWorkspaceManagementAuthority, member.workspaceId);
+  if (
+    expectedWorkspace.id !== member.workspaceId ||
+    (expectedMember !== undefined && (
+      expectedMember.workspaceId !== member.workspaceId ||
+      expectedMember.accountId !== member.accountId ||
+      expectedMember.id !== member.id ||
+      expectedMember.createdAt !== member.createdAt
+    )) ||
+    member.roles.length === 0 ||
+    member.roles.some((role) => !["owner", "admin", "member", "viewer"].includes(role)) ||
+    !["active", "invited", "suspended"].includes(member.status)
+  ) throw new TypeError("Workspace membership replacement is invalid");
+}
+
+/** This is checked again against exact current rows by every durable adapter. */
+export function workspaceMemberMutationAllowed(input: WorkspaceMemberMutationInput): boolean {
+  const { expectedActor: actor, expectedMember: current, member, expectedWorkspace } = input;
+  parseWorkspaceMemberRecord(actor);
+  return actor.workspaceId === member.workspaceId && actor.status === "active" &&
+    (actor.roles.includes("owner") || actor.roles.includes("admin")) &&
+    (!(member.roles.includes("owner") || current?.roles.includes("owner")) || actor.roles.includes("owner")) &&
+    (member.accountId !== expectedWorkspace.ownerUserId ||
+      (member.status === "active" && member.roles.includes("owner")));
+}
+
+export function workspaceMemberMutationDropsOwner(input: WorkspaceOwnerMemberRepairInput): boolean {
+  return input.expectedMember?.status === "active" && input.expectedMember.roles.includes("owner") &&
+    (input.member.status !== "active" || !input.member.roles.includes("owner"));
+}
+
+export function validateWorkspaceOwnerMemberRepair(input: WorkspaceOwnerMemberRepairInput): void {
+  validateWorkspaceMemberReplacement(input);
+  if (
+    input.member.accountId !== input.expectedWorkspace.ownerUserId ||
+    input.member.status !== "active" || input.member.roles.length !== 1 || input.member.roles[0] !== "owner"
+  ) throw new TypeError("Workspace owner repair must derive the stored namespace owner");
+}
+
+/** A malformed row cannot count as authority merely because it contains owner. */
+export function isCanonicalActiveWorkspaceOwner(value: unknown): boolean {
+  try {
+    const member = parseWorkspaceMemberRecord(value);
+    return member.status === "active" && member.roles.includes("owner");
+  } catch {
+    return false;
+  }
+}
+
+/** Shared synchronous authority for co-located in-memory domain stores. */
+export interface WorkspaceManagementAdmissionValidator {
+  isWorkspaceManagementAdmissionAllowed(
+    workspaceId: string,
+    expected?: WorkspaceManagementAuthority,
+  ): boolean;
+}
+
+export class WorkspaceManagementAdmissionConflictError extends Error {
+  override readonly name = "WorkspaceManagementAdmissionConflictError";
+
+  constructor(readonly workspaceId: string) {
+    super(`Workspace ${workspaceId} is not accepting new management work`);
+  }
+}
+
+export type BeginWorkspaceDrainingResult =
+  | {
+      readonly status: "started" | "existing";
+      readonly management: WorkspaceManagement;
+    }
+  | {
+      readonly status: "conflict";
+      readonly management: WorkspaceManagement;
+    }
+  | { readonly status: "not_found" };
+
+function validWorkspaceManagementState(
+  value: unknown,
+): value is WorkspaceManagementState {
+  return (
+    value === "active" ||
+    value === "draining" ||
+    value === "frozen" ||
+    value === "released"
+  );
+}
+
+/** Validate a stored private state before it can influence admission. */
+export function normalizeWorkspaceManagement(
+  workspaceId: string,
+  managementState: unknown,
+  managementEpoch: unknown,
+): WorkspaceManagement {
+  const epoch = Number(managementEpoch);
+  if (
+    !validWorkspaceManagementState(managementState) ||
+    !Number.isSafeInteger(epoch) ||
+    epoch < 1
+  ) {
+    throw new TypeError(`Workspace ${workspaceId} management state is invalid`);
+  }
+  return {
+    workspaceId,
+    managementState,
+    managementEpoch: epoch,
+  };
+}
+
+/** Validate caller-captured active authority before issuing a guarded write. */
+export function assertWorkspaceManagementAuthorityInput(
+  expected: WorkspaceManagementAuthority,
+  workspaceId: string,
+): void {
+  if (
+    typeof expected.workspaceId !== "string" ||
+    expected.workspaceId.trim() === "" ||
+    expected.workspaceId !== workspaceId ||
+    expected.managementState !== "active" ||
+    !Number.isSafeInteger(expected.managementEpoch) ||
+    expected.managementEpoch < 1
+  ) {
+    throw new TypeError(
+      `Workspace ${workspaceId} management authority expectation is invalid`,
+    );
+  }
+}
+
+/** Shared fail-closed admission predicate for all storage adapters. */
+export function assertWorkspaceManagementAdmission(
+  actual: WorkspaceManagement | undefined,
+  workspaceId: string,
+  expected?: WorkspaceManagementAuthority,
+): WorkspaceManagement {
+  if (expected !== undefined) {
+    assertWorkspaceManagementAuthorityInput(expected, workspaceId);
+  }
+  if (
+    actual === undefined ||
+    actual.workspaceId !== workspaceId ||
+    actual.managementState !== "active" ||
+    (expected !== undefined &&
+      actual.managementEpoch !== expected.managementEpoch)
+  ) {
+    throw new WorkspaceManagementAdmissionConflictError(workspaceId);
+  }
+  return actual;
+}
+
+/**
  * One immutable Plan preparation unit. The Run must not become queue-visible
  * unless its exact private inputs and optional DependencySnapshot commit with
  * it. `inputs` is the at-rest representation (possibly sealed); the Run's
@@ -408,6 +636,8 @@ export interface PreparePlanRunInput {
    * ordinary plan callers omit it and retain their existing behavior.
    */
   readonly expectedCapsulePlanAuthority?: CapsulePlanCreationFence;
+  /** Optional exact active Workspace-management authority for new admission. */
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
 }
 
 /**
@@ -668,6 +898,202 @@ export interface StoredSecretBlob {
   readonly rotatedAt?: string;
 }
 
+/** Private account snapshot used by Connection mutations, never by Run mint. */
+export type ConnectionActorAuthority = WorkspaceAccountAuthority;
+
+/** One new Connection and, when required, its sealed credential material. */
+export interface CreateConnectionRegistrationInput {
+  readonly connection: ProviderConnection;
+  readonly secretBlob?: StoredSecretBlob;
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
+  /** Explicit null is internal authority; omission must never select it. */
+  readonly actorAuthority: ConnectionActorAuthority | null;
+}
+
+/** Internal monotonic expiry transition for one exact Connection snapshot. */
+export interface MarkConnectionExpiredIfUnchangedInput {
+  readonly expectedConnection: ProviderConnection;
+  readonly observedAt: string;
+}
+
+/** Management-owned revocation of one observed Connection and its attached material. */
+export interface RevokeConnectionIfUnchangedInput {
+  readonly expectedConnection: ProviderConnection;
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
+  readonly actorAuthority: ConnectionActorAuthority | null;
+}
+
+/** A verification result belongs to the exact row AND sealed material tested. */
+export interface CommitConnectionTestResultInput {
+  readonly expectedConnection: ProviderConnection;
+  /** null means material was observed absent, not an omitted CAS condition. */
+  readonly expectedSecretBlob: StoredSecretBlob | null;
+  readonly replacement: ProviderConnection;
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
+  readonly actorAuthority: ConnectionActorAuthority | null;
+}
+
+function validateConnectionActorAuthority(
+  authority: ConnectionActorAuthority | null,
+  workspaceId: string | undefined,
+): void {
+  if (authority === null) return;
+  if (!authority || typeof authority !== "object" || workspaceId === undefined ||
+    typeof authority.actorAccountId !== "string" || authority.actorAccountId.trim() === "" ||
+    authority.expectedWorkspace?.id !== workspaceId) {
+    throw new TypeError("Connection mutation requires explicit internal or Workspace account authority");
+  }
+  if (authority.expectedActor !== undefined) {
+    const member = parseWorkspaceMemberRecord(authority.expectedActor);
+    if (member.workspaceId !== workspaceId || member.accountId !== authority.actorAccountId) {
+      throw new TypeError("Connection actor does not match its Workspace account");
+    }
+  }
+}
+
+export function prepareConnectionTestResult(
+  input: CommitConnectionTestResultInput,
+): CommitConnectionTestResultInput {
+  const snapshot = structuredClone(input);
+  const { expectedConnection, expectedSecretBlob, replacement } = snapshot;
+  // Both commands require the same exact management scope, but verification
+  // may replace only its own result fields, never identity or configuration.
+  prepareConnectionRevocation(snapshot);
+  if (!replacement || expectedConnection.status === "revoked" ||
+    !["pending", "verified", "expired"].includes(replacement.status)) {
+    throw new TypeError("Connection test requires an operational result");
+  }
+  const identity = (connection: ProviderConnection) => {
+    const { status: _status, updatedAt: _updatedAt, verifiedAt: _verifiedAt,
+      credentialVerification: _verification, scopeHints: _scopeHints, ...rest } = connection;
+    return stableStringify(JSON.parse(JSON.stringify(rest)));
+  };
+  if (identity(expectedConnection) !== identity(replacement)) {
+    throw new TypeError("Connection test cannot replace identity or configuration");
+  }
+  if (expectedSecretBlob !== null && (!expectedSecretBlob ||
+    expectedSecretBlob.connectionId !== expectedConnection.id ||
+    expectedSecretBlob.workspaceId !== expectedConnection.workspaceId ||
+    expectedSecretBlob.kind !== expectedConnection.secretPartition)) {
+    throw new TypeError("Connection test requires the observed owner's sealed material or explicit absence");
+  }
+  if (finiteConnectionTimestamp(replacement.updatedAt) === undefined) {
+    throw new TypeError("Connection test requires a finite result timestamp");
+  }
+  return snapshot;
+}
+
+export function prepareConnectionRevocation(
+  input: RevokeConnectionIfUnchangedInput,
+): RevokeConnectionIfUnchangedInput {
+  const snapshot = structuredClone(input);
+  const { expectedConnection: connection, expectedWorkspaceManagementAuthority: authority } = snapshot;
+  if (!connection || typeof connection.id !== "string" || connection.id.trim() === "") {
+    throw new TypeError("Connection revocation requires an observed Connection");
+  }
+  if (connection.scope === "workspace") {
+    if (typeof connection.workspaceId !== "string" || connection.workspaceId.trim() === "" || authority === undefined) {
+      throw new TypeError("Workspace Connection revocation requires captured management authority");
+    }
+    assertWorkspaceManagementAuthorityInput(authority, connection.workspaceId);
+  } else if (connection.scope !== "operator" || connection.workspaceId !== undefined || authority !== undefined) {
+    throw new TypeError("Operator Connection revocation cannot carry Workspace authority");
+  }
+  validateConnectionActorAuthority(snapshot.actorAuthority, connection.workspaceId);
+  return snapshot;
+}
+
+/** Snapshot before asynchronous storage work; no caller object remains writable. */
+export function prepareConnectionRegistration(
+  input: CreateConnectionRegistrationInput,
+): CreateConnectionRegistrationInput {
+  const snapshot = structuredClone(input);
+  const { connection, secretBlob, expectedWorkspaceManagementAuthority } = snapshot;
+  if ([connection.id, connection.provider, connection.providerSource,
+    connection.createdAt, connection.updatedAt].some((value) =>
+    typeof value !== "string" || value.trim() === "") || connection.status !== "pending") {
+    throw new TypeError("Connection registration requires a new pending Connection");
+  }
+  if (connection.scope === "workspace") {
+    if (typeof connection.workspaceId !== "string" || connection.workspaceId.trim() === "" ||
+      expectedWorkspaceManagementAuthority === undefined) {
+      throw new TypeError("Workspace Connection registration requires captured management authority");
+    }
+    assertWorkspaceManagementAuthorityInput(expectedWorkspaceManagementAuthority, connection.workspaceId);
+  } else if (connection.scope !== "operator" || connection.workspaceId !== undefined ||
+    expectedWorkspaceManagementAuthority !== undefined) {
+    throw new TypeError("Operator Connection registration cannot carry Workspace authority");
+  }
+  validateConnectionActorAuthority(snapshot.actorAuthority, connection.workspaceId);
+  if (connection.secretPartition !== undefined &&
+    (typeof connection.secretPartition !== "string" || connection.secretPartition.trim() === "")) {
+    throw new TypeError("Connection registration has an invalid secret partition");
+  }
+  if ((connection.secretPartition !== undefined) !== (secretBlob !== undefined)) {
+    throw new TypeError("Connection registration must include its declared sealed material");
+  }
+  if (secretBlob && (
+    secretBlob.connectionId !== connection.id || secretBlob.workspaceId !== connection.workspaceId ||
+    secretBlob.kind !== connection.secretPartition ||
+    [secretBlob.id, secretBlob.ciphertext, secretBlob.encryptedDek, secretBlob.nonce,
+      secretBlob.aad, secretBlob.createdAt].some((value) => typeof value !== "string" || value.trim() === "") ||
+    !Number.isSafeInteger(secretBlob.keyVersion) || secretBlob.keyVersion < 1
+  )) {
+    throw new TypeError("Connection registration sealed material does not match its owner");
+  }
+  return snapshot;
+}
+
+/**
+ * Prepare the value-reducing Connection expiry transition before any store
+ * await. Invalid input returns no transition; callers must fail closed.
+ */
+export function prepareConnectionExpiration(
+  input: MarkConnectionExpiredIfUnchangedInput,
+): {
+  readonly expectedConnection: ProviderConnection;
+  readonly replacement: ProviderConnection;
+} | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  let snapshot: MarkConnectionExpiredIfUnchangedInput;
+  try {
+    snapshot = structuredClone(input);
+  } catch {
+    return undefined;
+  }
+  const expected = snapshot?.expectedConnection;
+  if (!expected || typeof expected !== "object") return undefined;
+  if (
+    typeof expected.id !== "string" ||
+    expected.id.trim() === "" ||
+    (expected.status !== "pending" && expected.status !== "verified")
+  ) {
+    return undefined;
+  }
+  const expiresAt = finiteConnectionTimestamp(expected.expiresAt);
+  const observedAt = finiteConnectionTimestamp(snapshot.observedAt);
+  const updatedAt = finiteConnectionTimestamp(expected.updatedAt);
+  if (expiresAt === undefined || observedAt === undefined || updatedAt === undefined) {
+    return undefined;
+  }
+  if (expiresAt > observedAt) return undefined;
+  return {
+    expectedConnection: expected,
+    replacement: {
+      ...expected,
+      status: "expired",
+      // A delayed observer cannot move the operational timestamp backwards.
+      updatedAt: updatedAt >= observedAt ? expected.updatedAt : snapshot.observedAt,
+    },
+  };
+}
+
+function finiteConnectionTimestamp(value: unknown): number | undefined {
+  if (typeof value !== "string" || value.trim() === "") return undefined;
+  const millis = Date.parse(value);
+  return Number.isFinite(millis) ? millis : undefined;
+}
+
 /**
  * Persisted Source record. Extends the public {@link Source} with internal fields
  * that are NEVER projected into the public API:
@@ -681,6 +1107,46 @@ export interface StoredSource extends Source {
   readonly hookSecretHash: string;
   readonly lastSeenCommit?: string;
   readonly autoSync: boolean;
+}
+
+/** Create one Workspace-owned Project without changing an occupied id or slug. */
+export interface ProjectCreationInput {
+  readonly project: Project;
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
+}
+
+export type ProjectCreationResult =
+  | { readonly status: "created" | "replayed"; readonly project: Project }
+  | { readonly status: "conflict" };
+
+/** Create-only when expectedSource is absent; otherwise an exact-record configuration CAS. */
+export interface SourceConfigurationWriteInput {
+  readonly source: StoredSource;
+  readonly expectedSource?: StoredSource;
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
+}
+
+export type SourceConfigurationWriteResult =
+  | { readonly status: "created" | "updated" | "replayed"; readonly source: StoredSource }
+  | { readonly status: "conflict" };
+
+export function assertSourceConfigurationWriteInput(input: SourceConfigurationWriteInput): void {
+  if (input.expectedWorkspaceManagementAuthority !== undefined) {
+    assertWorkspaceManagementAuthorityInput(input.expectedWorkspaceManagementAuthority, input.source.workspaceId);
+  }
+  if (input.expectedSource !== undefined && (
+    input.expectedSource.id !== input.source.id ||
+    input.expectedSource.workspaceId !== input.source.workspaceId ||
+    input.expectedSource.url !== input.source.url ||
+    input.expectedSource.hookSecretHash !== input.source.hookSecretHash ||
+    input.expectedSource.createdAt !== input.source.createdAt ||
+    input.expectedSource.lastSeenCommit !== input.source.lastSeenCommit
+  )) {
+    throw new TypeError("Source configuration cannot change identity or synchronization observations");
+  }
+  if (input.expectedSource === undefined && input.source.lastSeenCommit !== undefined) {
+    throw new TypeError("Source creation cannot provide a synchronization observation");
+  }
 }
 
 export interface CapsuleStateVersionGuard {
@@ -833,6 +1299,12 @@ export type CapsuleLifecycleMutation =
   | {
       readonly kind: "auto-update-claim";
       readonly sourceSnapshotId: string;
+      /**
+       * Original Workspace-management authority captured by the source
+       * preparation. The auto-update marker is a new management admission,
+       * so a caller must confirm that exact tuple is still active.
+       */
+      readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
     }
   | {
       readonly kind: "compatibility";
@@ -972,6 +1444,7 @@ export interface CapsuleInitialAuthorityInput {
   readonly installConfig: InstallConfig;
   readonly capsule: Capsule;
   readonly providerBindingSet: ProviderBindingSet;
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
 }
 
 export type CapsuleInitialAuthorityResult =
@@ -981,6 +1454,13 @@ export type CapsuleInitialAuthorityResult =
 export interface CapsuleInstallConfigRebindInput {
   readonly capsuleId: string;
   readonly targetInstallConfigId: string;
+  /**
+   * Optional exact active Workspace-management authority captured before
+   * asynchronous rebind preparation. New rebinds require this authority (or
+   * a captured active authority when omitted); exact completed replays remain
+   * read-only observations while management is draining.
+   */
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
   /**
    * Optional value-free ProviderBindingSet replacement committed with the
    * InstallConfig pointer and execution-authority epoch transition. Absence is
@@ -1494,6 +1974,28 @@ export interface TransitionRunInput {
   readonly clearLeaseToken?: boolean;
   readonly clearHeartbeat?: boolean;
   readonly heartbeatAt?: number;
+  /** Optional exact active Workspace-management fence for this transition. */
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
+  /**
+   * Require the Run's persisted admission tuple to match the currently active
+   * Workspace even when this transition does not acquire a new lease.
+   *
+   * This is an internal approval/admission guard.  The caller's replacement
+   * payload and optional expectation never supply the tuple; the original
+   * private metadata on the stored row remains authoritative.
+   */
+  readonly requireStoredManagementAuthority?: boolean;
+}
+
+/**
+ * Exact internal identity for observing a Run's original admission tuple.
+ * Public callers must supply the physical Workspace and Run family so a
+ * stale/mis-bound row is treated as absent rather than becoming authority.
+ */
+export interface RunManagementAuthorityInput {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly kind: TransitionRunInput["kind"];
 }
 
 export interface TransitionRunResult {
@@ -1536,6 +2038,28 @@ export function sourceSnapshotsExactlyMatch(
 }
 
 /**
+ * Compare only the immutable creation identity of two SourceSyncRuns.
+ * Mutable execution/result fields (status, timestamps, lease/heartbeat,
+ * resolution evidence and errors) are intentionally excluded. Pre-v1 rows
+ * without an intent are the default `observe` intent.
+ */
+export function sourceSyncRunImmutableIdentityMatches(
+  left: SourceSyncRun,
+  right: SourceSyncRun,
+): boolean {
+  return left.id === right.id &&
+    left.kind === right.kind &&
+    left.workspaceId === right.workspaceId &&
+    left.sourceId === right.sourceId &&
+    left.url === right.url &&
+    left.ref === right.ref &&
+    left.path === right.path &&
+    left.archiveRef === right.archiveRef &&
+    left.snapshotId === right.snapshotId &&
+    (left.intent ?? "observe") === (right.intent ?? "observe");
+}
+
+/**
  * Rejects a caller that tries to atomically bind a succeeded Run to anything
  * other than its exact canonical SourceSnapshot.
  */
@@ -1572,11 +2096,261 @@ export function assertSourceSyncSuccessCommit(
 
 export type StoredRunRecord = PlanRun | ApplyRun | SourceSyncRun | Run;
 
+/** Store-owned metadata, excluded from InstallConfig seals and runtime digests. */
+export type StoredInstallConfig = InstallConfig & {
+  readonly workspaceManagementAuthority?: WorkspaceManagementAuthority;
+};
+
+export function publicStoredInstallConfig(config: InstallConfig): InstallConfig {
+  const {
+    workspaceManagementAuthority: _workspaceManagementAuthority,
+    ...publicConfig
+  } = config as StoredInstallConfig;
+  return publicConfig;
+}
+
+export function installConfigRequiresManagementAuthority(
+  config: InstallConfig,
+): boolean {
+  return config.internal?.reAdoption !== undefined ||
+    Object.prototype.hasOwnProperty.call(config, "workspaceManagementAuthority");
+}
+
+/** Missing/corrupt historical metadata is observation-only, never backfilled. */
+export function installConfigManagementAuthority(
+  config: InstallConfig,
+): WorkspaceManagementAuthority | undefined {
+  const authority = (config as StoredInstallConfig).workspaceManagementAuthority;
+  if (
+    config.workspaceId === undefined ||
+    typeof authority !== "object" || authority === null
+  ) {
+    return undefined;
+  }
+  try {
+    assertWorkspaceManagementAuthorityInput(authority, config.workspaceId);
+  } catch {
+    return undefined;
+  }
+  return {
+    workspaceId: authority.workspaceId,
+    managementState: "active",
+    managementEpoch: authority.managementEpoch,
+  };
+}
+
+/** Only creation of a sealed successor admits its original preparation. */
+export function storeInstallConfig(
+  config: InstallConfig,
+  authority?: WorkspaceManagementAuthority,
+): StoredInstallConfig {
+  const publicConfig = publicStoredInstallConfig(config);
+  if (publicConfig.internal?.reAdoption === undefined) return publicConfig;
+  if (publicConfig.workspaceId === undefined || authority === undefined) {
+    throw new WorkspaceManagementAdmissionConflictError(
+      publicConfig.workspaceId ?? "",
+    );
+  }
+  assertWorkspaceManagementAuthorityInput(authority, publicConfig.workspaceId);
+  return {
+    ...publicConfig,
+    workspaceManagementAuthority: {
+      workspaceId: authority.workspaceId,
+      managementState: "active",
+      managementEpoch: authority.managementEpoch,
+    },
+  };
+}
+
+/** Full-record writers cannot mint, erase, replace, or re-own stored authority. */
+export function preserveStoredInstallConfigManagementAuthority(
+  config: InstallConfig,
+  current: InstallConfig | undefined,
+): StoredInstallConfig {
+  const publicConfig = publicStoredInstallConfig(config);
+  if (
+    !current ||
+    !Object.prototype.hasOwnProperty.call(current, "workspaceManagementAuthority")
+  ) {
+    return publicConfig;
+  }
+  if (current.id !== config.id || current.workspaceId !== config.workspaceId) {
+    throw new TypeError(
+      "InstallConfig management authority belongs to its original Workspace",
+    );
+  }
+  return {
+    ...publicConfig,
+    workspaceManagementAuthority:
+      (current as StoredInstallConfig).workspaceManagementAuthority,
+  };
+}
+
+/** Private persistence metadata; never part of a public Run or queue payload. */
+type RunManagementMetadata = {
+  readonly workspaceManagementAuthority?: WorkspaceManagementAuthority;
+};
+export type StoredManagedRun = StoredRunRecord & RunManagementMetadata;
+export type StoredSourceSyncRun = SourceSyncRun & StoredManagedRun;
+
+export function runStoredIdentityMatches(
+  left: StoredRunRecord,
+  right: StoredRunRecord,
+): boolean {
+  return left.id === right.id && left.workspaceId === right.workspaceId &&
+    transitionKindForRun(left) === transitionKindForRun(right);
+}
+
+/** Only these operations grant a new management execution lease. */
+export function runRequiresStoredManagementAuthority(
+  run: StoredRunRecord,
+): boolean {
+  const kind = transitionKindForRun(run);
+  return kind === "plan" || kind === "apply" || kind === "restore" ||
+    kind === "source_sync";
+}
+
+export function runManagementAuthority(
+  run: StoredRunRecord,
+): WorkspaceManagementAuthority | undefined {
+  const authority = (run as StoredManagedRun).workspaceManagementAuthority;
+  if (typeof authority !== "object" || authority === null) return undefined;
+  try {
+    assertWorkspaceManagementAuthorityInput(authority, run.workspaceId);
+  } catch {
+    return undefined;
+  }
+  return {
+    workspaceId: authority.workspaceId,
+    managementState: "active",
+    managementEpoch: authority.managementEpoch,
+  };
+}
+
+/**
+ * Return the stored original tuple only for one exact Run identity.  This is
+ * an internal observation seam: a mismatched id, Workspace, or Run family is
+ * indistinguishable from a missing/malformed authority.
+ */
+export function runManagementAuthorityForIdentity(
+  run: StoredRunRecord,
+  input: RunManagementAuthorityInput,
+): WorkspaceManagementAuthority | undefined {
+  if (
+    run.id !== input.id ||
+    run.workspaceId !== input.workspaceId ||
+    transitionKindForRun(run) !== input.kind
+  ) {
+    return undefined;
+  }
+  const authority = runManagementAuthority(run);
+  return authority === undefined ? undefined : { ...authority };
+}
+
+/** Stable owner/type fence; legacy completion may still fill snapshot fields. */
+export function sourceSyncRunStoredIdentityMatches(
+  left: StoredRunRecord,
+  right: StoredRunRecord,
+): boolean {
+  return isSourceSyncRunRecord(left) && isSourceSyncRunRecord(right) &&
+    left.id === right.id && left.workspaceId === right.workspaceId;
+}
+
+/** Missing or corrupt historical authority cannot authorize a fresh lease. */
+export function sourceSyncRunManagementAuthority(
+  run: SourceSyncRun,
+): WorkspaceManagementAuthority | undefined {
+  return runManagementAuthority(run);
+}
+
+/** Project only Run records; unrelated stored JSON documents are untouched. */
+export function publicStoredRun<T extends StoredRunRecord>(run: T): T {
+  const {
+    workspaceManagementAuthority: _workspaceManagementAuthority,
+    ...publicRun
+  } = run as StoredManagedRun;
+  return publicRun as T;
+}
+
+/** A public payload can neither replace nor manufacture stored authority. */
+export function preserveStoredRunManagementAuthority<T extends StoredRunRecord>(
+  run: T,
+  current: StoredRunRecord | undefined,
+): T {
+  const publicRun = publicStoredRun(run);
+  if (
+    !current ||
+    !Object.prototype.hasOwnProperty.call(current, "workspaceManagementAuthority")
+  ) return publicRun;
+  if (!runStoredIdentityMatches(current, run)) {
+    throw new TypeError("Run update cannot change stored management owner or kind");
+  }
+  return {
+    ...publicRun,
+    workspaceManagementAuthority:
+      (current as StoredManagedRun).workspaceManagementAuthority,
+  } as T;
+}
+
+/** Only atomic new admission may attach the original captured authority. */
+export function storeSourceSyncRun(
+  run: SourceSyncRun,
+  authority: WorkspaceManagementAuthority,
+): StoredSourceSyncRun {
+  return storeRunManagementAuthority(run, authority);
+}
+
+/** Used only by a guarded new admission, never to backfill an existing row. */
+export function storeRunManagementAuthority<T extends StoredRunRecord>(
+  run: T,
+  authority: WorkspaceManagementAuthority,
+): T & RunManagementMetadata {
+  assertWorkspaceManagementAuthorityInput(authority, run.workspaceId);
+  return {
+    ...publicStoredRun(run),
+    workspaceManagementAuthority: {
+      workspaceId: authority.workspaceId,
+      managementState: "active",
+      managementEpoch: authority.managementEpoch,
+    },
+  };
+}
+
+export type BeginRestoreRunResult =
+  | { readonly status: "created"; readonly run: Run }
+  | { readonly status: "existing"; readonly run: Run }
+  | { readonly status: "conflict" };
+
+export function restoreRunCreationIdentityMatches(left: Run, right: Run): boolean {
+  const identity = (run: Run) => ({
+    id: run.id,
+    workspaceId: run.workspaceId,
+    type: run.type,
+    capsuleId: run.capsuleId,
+    environment: run.environment,
+    backupId: run.backupId,
+    restoreStateGeneration: run.restoreStateGeneration,
+    restoreServiceData: run.restoreServiceData,
+    restoredFromStateVersionId: run.restoredFromStateVersionId,
+    planDigest: run.planDigest,
+    createdBy: run.createdBy,
+    createdAt: run.createdAt,
+  });
+  return left.type === "restore" && right.type === "restore" &&
+    stableStringify(identity(left)) === stableStringify(identity(right));
+}
+
 /** Atomic insert-or-adopt result for an immutable ApplyRun creation row. */
 export type BeginApplyRunResult =
   | { readonly status: "created"; readonly run: ApplyRun }
   | { readonly status: "existing"; readonly run: ApplyRun }
   | { readonly status: "conflict"; readonly run?: ApplyRun };
+
+/** Atomic insert-or-adopt result for an immutable SourceSyncRun creation row. */
+export type BeginSourceSyncRunResult =
+  | { readonly status: "created"; readonly run: SourceSyncRun }
+  | { readonly status: "existing"; readonly run: SourceSyncRun }
+  | { readonly status: "conflict" };
 
 export interface RecoverableOpenTofuRunListOptions {
   readonly staleQueuedBeforeMs: number;
@@ -1675,6 +2449,10 @@ export interface OpenTofuControlStore {
   // the typed accessors stay so the controller keeps its internal shapes.
   putPlanRun(run: PlanRun): Promise<PlanRun>;
   getPlanRun(id: string): Promise<PlanRun | undefined>;
+  /** Internal-only observation of a Run's saved original Workspace authority. */
+  getRunManagementAuthority(
+    input: RunManagementAuthorityInput,
+  ): Promise<WorkspaceManagementAuthority | undefined>;
 
   /** Insert-or-adopt one atomic, immutable Plan preparation unit. */
   preparePlanRun(input: PreparePlanRunInput): Promise<PreparePlanRunResult>;
@@ -1686,7 +2464,10 @@ export interface OpenTofuControlStore {
 
   putApplyRun(run: ApplyRun): Promise<ApplyRun>;
   /** Insert-only creation. A same-id row is returned without mutation. */
-  beginApplyRun(run: ApplyRun): Promise<BeginApplyRunResult>;
+  beginApplyRun(
+    run: ApplyRun,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<BeginApplyRunResult>;
   getApplyRun(id: string): Promise<ApplyRun | undefined>;
 
   /**
@@ -1707,12 +2488,18 @@ export interface OpenTofuControlStore {
   ): Promise<CommitSourceSyncSuccessResult>;
 
   // SourceSyncRun ledger records (rows of `runs` with kind source_sync).
+  /** Insert-or-adopt one immutable SourceSyncRun creation row. */
+  beginSourceSyncRun(
+    run: SourceSyncRun,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<BeginSourceSyncRunResult>;
   putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun>;
   getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined>;
   listSourceSyncRuns(sourceId: string): Promise<readonly SourceSyncRun[]>;
   putCompatibilityCheckRun(run: Run): Promise<Run>;
   getCompatibilityCheckRun(id: string): Promise<Run | undefined>;
   putBackupRun(run: Run): Promise<Run>;
+  beginRestoreRun(run: Run, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<BeginRestoreRunResult>;
   getBackupRun(id: string): Promise<Run | undefined>;
   listRunsByWorkspace(
     workspaceId: string,
@@ -1759,7 +2546,20 @@ export interface OpenTofuControlStore {
   listArtifactRecordsForRun(runId: string): Promise<readonly ArtifactRecord[]>;
 
   // Workspace records (spec §4). The owner namespace Capsules live under.
+  /** Low-level creation/fixture writer; ordinary metadata changes use replaceWorkspace. */
   putWorkspace(workspace: Workspace): Promise<Workspace>;
+  /** Atomic management admission and full observed-row CAS; false means stale metadata. */
+  replaceWorkspace(input: WorkspaceReplacementInput): Promise<boolean>;
+  replaceWorkspaceForAccount(input: WorkspaceAccountReplacementInput): Promise<boolean>;
+  /** Read private management state; never part of public Workspace JSON. */
+  getWorkspaceManagement(
+    workspaceId: string,
+  ): Promise<WorkspaceManagement | undefined>;
+  /** Atomically CAS active -> draining, advancing the private epoch. */
+  beginWorkspaceDraining(
+    workspaceId: string,
+    expected: WorkspaceManagementAuthority,
+  ): Promise<BeginWorkspaceDrainingResult>;
   /**
    * Claims the one system-managed personal bootstrap slot for an owner.
    *
@@ -1790,6 +2590,10 @@ export interface OpenTofuControlStore {
   // Canonical Workspace membership ledger. The Workspace namespace owner is
   // persisted as an ordinary active owner member on Workspace creation.
   putWorkspaceMember(member: WorkspaceMember): Promise<WorkspaceMember>;
+  /** Exact actor/target CAS and current role invariants under management admission. */
+  mutateWorkspaceMember(input: WorkspaceMemberMutationInput): Promise<boolean>;
+  /** Derived namespace-owner repair only; never a stopped-Workspace bypass. */
+  repairWorkspaceOwnerMember(input: WorkspaceOwnerMemberRepairInput): Promise<boolean>;
   getWorkspaceMember(
     workspaceId: string,
     accountId: string,
@@ -1811,7 +2615,9 @@ export interface OpenTofuControlStore {
   ): Promise<AccountWorkspacePage>;
 
   // Workspace-owned Project records. Capsules reference one Project id.
+  /** Low-level record seeding; normal creation uses createProjectRecord. */
   putProject(project: Project): Promise<Project>;
+  createProjectRecord(input: ProjectCreationInput): Promise<ProjectCreationResult>;
   getProject(id: string): Promise<Project | undefined>;
   getProjectBySlug(
     workspaceId: string,
@@ -1823,8 +2629,15 @@ export interface OpenTofuControlStore {
   // when `workspaceId` is absent; latency-sensitive reads must use the
   // explicit shared-only operation instead of filtering that global result.
   putInstallConfig(config: InstallConfig): Promise<InstallConfig>;
-  /** Insert-only creation for immutable derived InstallConfig rows. */
-  createInstallConfigIfAbsent(config: InstallConfig): Promise<boolean>;
+  /**
+   * Insert-only creation for immutable derived InstallConfig rows. New
+   * Workspace-owned rows require active management in the same atomic write;
+   * existing ids are read-only observations, not permission to rebind a Capsule.
+   */
+  createInstallConfigIfAbsent(
+    config: InstallConfig,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<boolean>;
   /**
    * Exact-row CAS for the sole mutable InstallConfig class: an unattached,
    * Workspace-neutral operator template. The replacement is rejected in the
@@ -1836,6 +2649,10 @@ export interface OpenTofuControlStore {
     replacement: InstallConfig,
   ): Promise<boolean>;
   getInstallConfig(id: string): Promise<InstallConfig | undefined>;
+  /** Internal-only original authority for unfinished sealed successor work. */
+  getInstallConfigManagementAuthority(
+    id: string,
+  ): Promise<WorkspaceManagementAuthority | undefined>;
   getInstallConfigsByIds(
     ids: readonly string[],
   ): Promise<readonly InstallConfig[]>;
@@ -1958,6 +2775,8 @@ export interface OpenTofuControlStore {
   // stored in a separate namespace so the public ProviderConnection can be listed
   // without ever touching ciphertext.
   putConnection(connection: ProviderConnection): Promise<ProviderConnection>;
+  /** Atomic create-only pair; a occupied Connection or blob identity returns false. */
+  createConnectionRegistration(input: CreateConnectionRegistrationInput): Promise<boolean>;
   /** Atomic fixed-id create used by deploy-time credential reconciliation. */
   createConnectionIfAbsent(connection: ProviderConnection): Promise<boolean>;
   /**
@@ -1968,6 +2787,12 @@ export interface OpenTofuControlStore {
     expected: ProviderConnection,
     replacement: ProviderConnection,
   ): Promise<boolean>;
+  /** Monotonic expiry transition for one exact pending/verified snapshot. */
+  markConnectionExpiredIfUnchanged(
+    input: MarkConnectionExpiredIfUnchangedInput,
+  ): Promise<boolean>;
+  revokeConnectionIfUnchanged(input: RevokeConnectionIfUnchangedInput): Promise<boolean>;
+  commitConnectionTestResult(input: CommitConnectionTestResultInput): Promise<boolean>;
   getConnection(id: string): Promise<ProviderConnection | undefined>;
   listConnections(workspaceId: string): Promise<readonly ProviderConnection[]>;
   /** Keyset-paged Workspace ProviderConnection listing (spec §30 connection list route). */
@@ -1991,7 +2816,11 @@ export interface OpenTofuControlStore {
 
   // Source records (public fields + internal hook-secret hash / lastSeenCommit /
   // autoSync). The hook secret plaintext is NEVER stored.
+  /** Low-level record seeding; configuration uses the guarded CAS below and sync uses its leased commit. */
   putSource(source: StoredSource): Promise<StoredSource>;
+  writeSourceConfiguration(
+    input: SourceConfigurationWriteInput,
+  ): Promise<SourceConfigurationWriteResult>;
   getSource(id: string): Promise<StoredSource | undefined>;
   listSources(workspaceId?: string): Promise<readonly StoredSource[]>;
   /** Keyset-paged Source listing for a Workspace (spec §30 source list route). */
@@ -2300,6 +3129,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
    */
   readonly #runLeases = new Map<string, string>();
   readonly #workspaces = new Map<string, Workspace>();
+  readonly #workspaceManagement = new Map<string, WorkspaceManagement>();
   readonly #personalWorkspaceBootstrapIds = new Map<string, string>();
   readonly #workspaceMembers = new Map<string, WorkspaceMember>();
   readonly #projects = new Map<string, Project>();
@@ -2392,14 +3222,21 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   putPlanRun(run: PlanRun): Promise<PlanRun> {
-    this.#runs.set(run.id, run);
-    return Promise.resolve(run);
+    this.#runs.set(run.id, preserveStoredRunManagementAuthority(run, this.#runs.get(run.id)));
+    return Promise.resolve(publicStoredRun(run));
   }
 
   async preparePlanRun(
     input: PreparePlanRunInput,
   ): Promise<PreparePlanRunResult> {
+    input = structuredClone(input);
     assertPlanRunPreparation(input);
+    if (input.expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        input.expectedWorkspaceManagementAuthority,
+        input.run.workspaceId,
+      );
+    }
     const current = this.#runs.get(input.run.id);
     if (current !== undefined) {
       const currentRun = isPlanRunRecord(current)
@@ -2417,10 +3254,18 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
           input,
         )
       ) {
-        return { status: "existing", run: currentRun };
+        return { status: "existing", run: publicStoredRun(currentRun) };
       }
       throw new PlanRunPreparationConflictError(input.run.id);
     }
+    if (input.expectedWorkspaceManagementAuthority === undefined) {
+      throw new WorkspaceManagementAdmissionConflictError(input.run.workspaceId);
+    }
+    assertWorkspaceManagementAdmission(
+      this.#workspaceManagement.get(input.run.workspaceId),
+      input.run.workspaceId,
+      input.expectedWorkspaceManagementAuthority,
+    );
     if (
       this.#planRunInputs.has(input.run.id) ||
       (input.dependencySnapshot !== undefined &&
@@ -2451,14 +3296,25 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         input.dependencySnapshot,
       );
     }
-    this.#runs.set(input.run.id, input.run);
-    return { status: "created", run: input.run };
+    this.#runs.set(input.run.id, storeRunManagementAuthority(input.run, input.expectedWorkspaceManagementAuthority));
+    return { status: "created", run: publicStoredRun(input.run) };
   }
 
   getPlanRun(id: string): Promise<PlanRun | undefined> {
     const run = this.#runs.get(id);
     return Promise.resolve(
-      run && isPlanRunRecord(run) ? coerceRunRowStatus(run) : undefined,
+      run && isPlanRunRecord(run) ? publicStoredRun(coerceRunRowStatus(run)!) : undefined,
+    );
+  }
+
+  getRunManagementAuthority(
+    input: RunManagementAuthorityInput,
+  ): Promise<WorkspaceManagementAuthority | undefined> {
+    const run = this.#runs.get(input.id);
+    return Promise.resolve(
+      run === undefined
+        ? undefined
+        : runManagementAuthorityForIdentity(run, input),
     );
   }
 
@@ -2477,27 +3333,43 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   putApplyRun(run: ApplyRun): Promise<ApplyRun> {
-    this.#runs.set(run.id, run);
-    return Promise.resolve(run);
+    this.#runs.set(run.id, preserveStoredRunManagementAuthority(run, this.#runs.get(run.id)));
+    return Promise.resolve(publicStoredRun(run));
   }
 
-  beginApplyRun(run: ApplyRun): Promise<BeginApplyRunResult> {
+  async beginApplyRun(
+    run: ApplyRun,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<BeginApplyRunResult> {
+    ({ run, expectedWorkspaceManagementAuthority } = structuredClone({ run, expectedWorkspaceManagementAuthority }));
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        run.workspaceId,
+      );
+    }
     const current = this.#runs.get(run.id);
     if (!current) {
-      this.#runs.set(run.id, run);
-      return Promise.resolve({ status: "created", run });
+      if (expectedWorkspaceManagementAuthority === undefined) {
+        throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
+      }
+      assertWorkspaceManagementAdmission(
+        this.#workspaceManagement.get(run.workspaceId),
+        run.workspaceId,
+        expectedWorkspaceManagementAuthority,
+      );
+      this.#runs.set(run.id, storeRunManagementAuthority(run, expectedWorkspaceManagementAuthority));
+      return { status: "created", run: publicStoredRun(run) };
     }
-    return Promise.resolve(
-      isApplyRunRecord(current)
-        ? { status: "existing", run: coerceRunRowStatus(current)! }
-        : { status: "conflict" },
-    );
+    return isApplyRunRecord(current)
+      ? { status: "existing", run: publicStoredRun(coerceRunRowStatus(current)!) }
+      : { status: "conflict" };
   }
 
   getApplyRun(id: string): Promise<ApplyRun | undefined> {
     const run = this.#runs.get(id);
     return Promise.resolve(
-      run && isApplyRunRecord(run) ? coerceRunRowStatus(run) : undefined,
+      run && isApplyRunRecord(run) ? publicStoredRun(coerceRunRowStatus(run)!) : undefined,
     );
   }
 
@@ -2510,9 +3382,70 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
    * (here: returns the unchanged in-memory row) with `won: false`.
    */
   transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
+    input = structuredClone(input);
     const current = this.#runs.get(input.id);
     if (!current || transitionKindForRun(current) !== input.kind) {
       return Promise.resolve({ won: false });
+    }
+    if (runRequiresStoredManagementAuthority(current) &&
+      (input.run.id !== input.id || !runStoredIdentityMatches(current, input.run))
+    ) {
+      return Promise.resolve({ won: false, run: publicStoredRun(current) });
+    }
+    const requireStoredManagementAuthority =
+      input.requireStoredManagementAuthority === true;
+    if (input.expectedWorkspaceManagementAuthority !== undefined) {
+      // Validate the caller's captured authority before comparing it with the
+      // persisted Run Workspace. A valid but stale/mis-bound expectation is a
+      // normal CAS loss; malformed input is a programming error.
+      assertWorkspaceManagementAuthorityInput(
+        input.expectedWorkspaceManagementAuthority,
+        input.expectedWorkspaceManagementAuthority.workspaceId,
+      );
+      const expected = input.expectedWorkspaceManagementAuthority;
+      const management = this.#workspaceManagement.get(current.workspaceId);
+      if (
+        current.workspaceId !== expected.workspaceId ||
+        management === undefined ||
+        management.managementState !== "active" ||
+        management.managementEpoch !== expected.managementEpoch
+      ) {
+        return Promise.resolve({ won: false, run: publicStoredRun(current) });
+      }
+    }
+    if (
+      input.setLeaseToken !== undefined &&
+      this.#workspaceManagement.get(current.workspaceId)?.managementState !==
+        "active"
+    ) {
+      return Promise.resolve({ won: false, run: publicStoredRun(current) });
+    }
+    if (runRequiresStoredManagementAuthority(current) && input.setLeaseToken !== undefined) {
+      const authority = runManagementAuthority(current);
+      const management = this.#workspaceManagement.get(current.workspaceId);
+      if (
+        authority === undefined ||
+        management?.managementEpoch !== authority.managementEpoch ||
+        input.run.workspaceId !== current.workspaceId
+      ) {
+        return Promise.resolve({ won: false, run: publicStoredRun(current) });
+      }
+    }
+    if (requireStoredManagementAuthority) {
+      // Approval/release transitions do not necessarily acquire a lease, but
+      // they still must be admitted by the original tuple persisted on this
+      // Run.  Never derive authority from the replacement payload or the
+      // caller's optional expectation.
+      const authority = runManagementAuthority(current);
+      const management = this.#workspaceManagement.get(current.workspaceId);
+      if (
+        authority === undefined ||
+        authority.workspaceId !== current.workspaceId ||
+        management?.managementState !== "active" ||
+        management.managementEpoch !== authority.managementEpoch
+      ) {
+        return Promise.resolve({ won: false, run: publicStoredRun(current) });
+      }
     }
     const currentLease = this.#runLeases.get(input.id);
     const statusMatches = input.expectFrom.includes(current.status);
@@ -2533,7 +3466,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       !heartbeatMatches ||
       !startedAtMatches
     ) {
-      return Promise.resolve({ won: false, run: current });
+      return Promise.resolve({ won: false, run: publicStoredRun(current) });
     }
     const persisted: PlanRun | ApplyRun | SourceSyncRun | Run =
       input.clearHeartbeat
@@ -2542,13 +3475,13 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
             ...input.run,
             ...resolvedHeartbeat(input),
           } as PlanRun | ApplyRun | SourceSyncRun | Run);
-    this.#runs.set(input.id, persisted);
+    this.#runs.set(input.id, preserveStoredRunManagementAuthority(persisted, current));
     if (input.clearLeaseToken) {
       this.#runLeases.delete(input.id);
     } else if (input.setLeaseToken !== undefined) {
       this.#runLeases.set(input.id, input.setLeaseToken);
     }
-    return Promise.resolve({ won: true, run: persisted });
+    return Promise.resolve({ won: true, run: publicStoredRun(persisted) });
   }
 
   commitSourceSyncSuccess(
@@ -2560,12 +3493,15 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     if (
       !current ||
       !isSourceSyncRunRecord(current) ||
+      !sourceSyncRunStoredIdentityMatches(current, input.terminalRun) ||
       current.status !== "running" ||
       this.#runLeases.get(current.id) !== input.leaseToken
     ) {
       return Promise.resolve({
         won: false,
-        ...(current && isSourceSyncRunRecord(current) ? { run: current } : {}),
+        ...(current && isSourceSyncRunRecord(current)
+          ? { run: publicStoredRun(current) }
+          : {}),
       });
     }
     const existingSnapshot = this.#sourceSnapshots.get(snapshot.id);
@@ -2578,20 +3514,73 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     // All validation/conflict checks happen before mutation. These synchronous
     // Map writes form one in-process critical section with no await/interleaving
     // point.
-    this.#runs.set(input.terminalRun.id, input.terminalRun);
+    this.#runs.set(
+      input.terminalRun.id,
+      preserveStoredRunManagementAuthority(input.terminalRun, current),
+    );
     if (!existingSnapshot) this.#sourceSnapshots.set(snapshot.id, snapshot);
     this.#runLeases.delete(input.terminalRun.id);
-    return Promise.resolve({ won: true, run: input.terminalRun });
+    const source = this.#sources.get(input.terminalRun.sourceId);
+    if (source &&
+      source.workspaceId === input.terminalRun.workspaceId &&
+      source.url === input.terminalRun.url &&
+      source.defaultRef === input.terminalRun.ref &&
+      source.defaultPath === input.terminalRun.path
+    ) {
+      this.#sources.set(source.id, {
+        ...source,
+        lastSeenCommit: snapshot.resolvedCommit,
+        updatedAt: snapshot.fetchedAt,
+      });
+    }
+    return Promise.resolve({ won: true, run: publicStoredRun(input.terminalRun) });
   }
 
   putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {
-    this.#runs.set(run.id, run);
-    return Promise.resolve(run);
+    const current = this.#runs.get(run.id);
+    if (!isSourceSyncRunRecord(run) ||
+      (current !== undefined && !sourceSyncRunStoredIdentityMatches(current, run))
+    ) {
+      return Promise.reject(new TypeError("SourceSyncRun stored identity cannot change"));
+    }
+    this.#runs.set(run.id, preserveStoredRunManagementAuthority(run, current));
+    return Promise.resolve(publicStoredRun(run));
+  }
+
+  async beginSourceSyncRun(
+    run: SourceSyncRun,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<BeginSourceSyncRunResult> {
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        run.workspaceId,
+      );
+    }
+    const current = this.#runs.get(run.id);
+    if (current !== undefined) {
+      return isSourceSyncRunRecord(current) &&
+          sourceSyncRunImmutableIdentityMatches(current, run)
+        ? { status: "existing", run: publicStoredRun(current) }
+        : { status: "conflict" };
+    }
+    // New rows require a real, active Workspace. Existing immutable retries
+    // above deliberately bypass this mutable admission check while draining.
+    if (expectedWorkspaceManagementAuthority === undefined) {
+      throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
+    }
+    assertWorkspaceManagementAdmission(
+      this.#workspaceManagement.get(run.workspaceId),
+      run.workspaceId,
+      expectedWorkspaceManagementAuthority,
+    );
+    this.#runs.set(run.id, storeSourceSyncRun(run, expectedWorkspaceManagementAuthority));
+    return { status: "created", run: publicStoredRun(run) };
   }
 
   getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined> {
     const run = this.#runs.get(id);
-    return Promise.resolve(run && isSourceSyncRunRecord(run) ? run : undefined);
+    return Promise.resolve(run && isSourceSyncRunRecord(run) ? publicStoredRun(run) : undefined);
   }
 
   listSourceSyncRuns(sourceId: string): Promise<readonly SourceSyncRun[]> {
@@ -2602,7 +3591,8 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         .sort(
           (a, b) =>
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-        ),
+        )
+        .map(publicStoredRun),
     );
   }
 
@@ -2614,15 +3604,15 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         ),
       );
     }
-    this.#runs.set(run.id, run);
-    return Promise.resolve(run);
+    this.#runs.set(run.id, preserveStoredRunManagementAuthority(run, this.#runs.get(run.id)));
+    return Promise.resolve(publicStoredRun(run));
   }
 
   getCompatibilityCheckRun(id: string): Promise<Run | undefined> {
     const run = this.#runs.get(id);
     return Promise.resolve(
       run && isPublicRunRecord(run) && run.type === "compatibility_check"
-        ? run
+        ? publicStoredRun(run)
         : undefined,
     );
   }
@@ -2633,8 +3623,27 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         new Error("putBackupRun only accepts backup/restore runs"),
       );
     }
-    this.#runs.set(run.id, run);
-    return Promise.resolve(run);
+    this.#runs.set(run.id, preserveStoredRunManagementAuthority(run, this.#runs.get(run.id)));
+    return Promise.resolve(publicStoredRun(run));
+  }
+
+  async beginRestoreRun(run: Run, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<BeginRestoreRunResult> {
+    ({ run, expectedWorkspaceManagementAuthority } = structuredClone({ run, expectedWorkspaceManagementAuthority }));
+    if (run.type !== "restore" || (run.status !== "waiting_approval" && run.status !== "queued")) {
+      throw new TypeError("Restore admission requires a new waiting or queued Restore");
+    }
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(expectedWorkspaceManagementAuthority, run.workspaceId);
+    }
+    const current = this.#runs.get(run.id);
+    if (current !== undefined) {
+      return isPublicRunRecord(current) && restoreRunCreationIdentityMatches(current, run)
+        ? { status: "existing", run: publicStoredRun(current) } : { status: "conflict" };
+    }
+    if (expectedWorkspaceManagementAuthority === undefined) throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
+    assertWorkspaceManagementAdmission(this.#workspaceManagement.get(run.workspaceId), run.workspaceId, expectedWorkspaceManagementAuthority);
+    this.#runs.set(run.id, storeRunManagementAuthority(run, expectedWorkspaceManagementAuthority));
+    return { status: "created", run: publicStoredRun(run) };
   }
 
   getBackupRun(id: string): Promise<Run | undefined> {
@@ -2643,7 +3652,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       run &&
         isPublicRunRecord(run) &&
         (run.type === "backup" || run.type === "restore")
-        ? run
+        ? publicStoredRun(run)
         : undefined,
     );
   }
@@ -2657,7 +3666,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       (row) => row.workspaceId === workspaceId,
     );
     return Promise.resolve(
-      rows.sort(compareStoredRunRecordsDesc).slice(0, limit),
+      rows.sort(compareStoredRunRecordsDesc).slice(0, limit).map(publicStoredRun),
     );
   }
 
@@ -2692,7 +3701,8 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       rows
         .filter((row) => isRecoverableOpenTofuRunRecord(row, options))
         .sort(compareStoredRunRecordsAsc)
-        .slice(0, limit),
+        .slice(0, limit)
+        .map(publicStoredRun),
     );
   }
 
@@ -2707,7 +3717,8 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
           isPendingRuntimeSecretRetirementRun(row, options.staleBeforeMs)
         )
         .sort(comparePendingRuntimeSecretRetirementRunsAsc)
-        .slice(0, limit),
+        .slice(0, limit)
+        .map(publicStoredRun),
     );
   }
 
@@ -2721,7 +3732,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     if (!claimed) return Promise.resolve(false);
     // No await occurs between the read and write, so this is the in-memory
     // adapter's whole-row CAS linearization point.
-    this.#runs.set(input.runId, claimed);
+    this.#runs.set(input.runId, preserveStoredRunManagementAuthority(claimed, current));
     return Promise.resolve(true);
   }
 
@@ -2743,7 +3754,120 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
 
   putWorkspace(workspace: Workspace): Promise<Workspace> {
     this.#workspaces.set(workspace.id, workspace);
+    if (!this.#workspaceManagement.has(workspace.id)) {
+      this.#workspaceManagement.set(workspace.id, {
+        workspaceId: workspace.id,
+        managementState: "active",
+        managementEpoch: 1,
+      });
+    }
     return Promise.resolve(workspace);
+  }
+
+  async replaceWorkspace(input: WorkspaceReplacementInput): Promise<boolean> {
+    return this.#replaceWorkspace(input);
+  }
+
+  #replaceWorkspace(input: WorkspaceReplacementInput): boolean {
+    validateWorkspaceReplacement(input);
+    const { workspace, expectedWorkspace, expectedWorkspaceManagementAuthority } = input;
+    assertWorkspaceManagementAdmission(
+      this.#workspaceManagement.get(workspace.id),
+      workspace.id,
+      expectedWorkspaceManagementAuthority,
+    );
+    const current = this.#workspaces.get(workspace.id);
+    if (current === undefined || stableStringify(current) !== stableStringify(expectedWorkspace)) {
+      return false;
+    }
+    this.#workspaces.set(workspace.id, structuredClone(workspace));
+    return true;
+  }
+
+  async replaceWorkspaceForAccount(input: WorkspaceAccountReplacementInput): Promise<boolean> {
+    validateWorkspaceReplacement(input);
+    assertWorkspaceManagementAdmission(
+      this.#workspaceManagement.get(input.workspace.id), input.workspace.id,
+      input.expectedWorkspaceManagementAuthority,
+    );
+    if (!workspaceAccountReplacementAllowed(input)) return false;
+    if (input.expectedWorkspace.ownerUserId !== input.actorAccountId &&
+      stableStringify(this.#workspaceMembers.get(workspaceMemberKey(input.workspace.id, input.actorAccountId))) !==
+        stableStringify(input.expectedActor)
+    ) return false;
+    return this.#replaceWorkspace(input);
+  }
+
+  isWorkspaceManagementAdmissionAllowed(
+    workspaceId: string,
+    expected?: WorkspaceManagementAuthority,
+  ): boolean {
+    if (expected !== undefined) {
+      assertWorkspaceManagementAuthorityInput(expected, expected.workspaceId);
+    }
+    const current = this.#workspaceManagement.get(workspaceId);
+    return this.#workspaces.has(workspaceId) &&
+      current?.workspaceId === workspaceId &&
+      current.managementState === "active" &&
+      (expected === undefined ||
+        (expected.workspaceId === workspaceId &&
+          expected.managementEpoch === current.managementEpoch));
+  }
+
+  getWorkspaceManagement(
+    workspaceId: string,
+  ): Promise<WorkspaceManagement | undefined> {
+    if (!this.#workspaces.has(workspaceId)) return Promise.resolve(undefined);
+    const current = this.#workspaceManagement.get(workspaceId);
+    if (current) return Promise.resolve({ ...current });
+    const initial: WorkspaceManagement = {
+      workspaceId,
+      managementState: "active",
+      managementEpoch: 1,
+    };
+    this.#workspaceManagement.set(workspaceId, initial);
+    return Promise.resolve({ ...initial });
+  }
+
+  async beginWorkspaceDraining(
+    workspaceId: string,
+    expected: WorkspaceManagementAuthority,
+  ): Promise<BeginWorkspaceDrainingResult> {
+    assertWorkspaceManagementAuthorityInput(expected, workspaceId);
+    if (!this.#workspaces.has(workspaceId)) {
+      return Promise.resolve({ status: "not_found" });
+    }
+    const current = this.#workspaceManagement.get(workspaceId) ?? {
+      workspaceId,
+      managementState: "active" as const,
+      managementEpoch: 1,
+    };
+    if (
+      current.managementState === "active" &&
+      current.managementEpoch === expected.managementEpoch
+    ) {
+      if (current.managementEpoch >= Number.MAX_SAFE_INTEGER) {
+        return Promise.reject(
+          new TypeError(
+            `Workspace ${workspaceId} management epoch cannot advance safely`,
+          ),
+        );
+      }
+      const draining: WorkspaceManagement = {
+        workspaceId,
+        managementState: "draining",
+        managementEpoch: current.managementEpoch + 1,
+      };
+      this.#workspaceManagement.set(workspaceId, draining);
+      return Promise.resolve({ status: "started", management: { ...draining } });
+    }
+    if (
+      current.managementState === "draining" &&
+      current.managementEpoch === expected.managementEpoch + 1
+    ) {
+      return Promise.resolve({ status: "existing", management: { ...current } });
+    }
+    return Promise.resolve({ status: "conflict", management: { ...current } });
   }
 
   claimPersonalWorkspaceBootstrap(
@@ -2774,6 +3898,13 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       )[0];
     if (adoptable) {
       this.#personalWorkspaceBootstrapIds.set(ownerUserId, adoptable.id);
+      if (!this.#workspaceManagement.has(adoptable.id)) {
+        this.#workspaceManagement.set(adoptable.id, {
+          workspaceId: adoptable.id,
+          managementState: "active",
+          managementEpoch: 1,
+        });
+      }
       return Promise.resolve(adoptable);
     }
 
@@ -2786,6 +3917,11 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       return Promise.resolve(undefined);
     }
     this.#workspaces.set(candidate.id, candidate);
+    this.#workspaceManagement.set(candidate.id, {
+      workspaceId: candidate.id,
+      managementState: "active",
+      managementEpoch: 1,
+    });
     this.#personalWorkspaceBootstrapIds.set(ownerUserId, candidate.id);
     return Promise.resolve(candidate);
   }
@@ -2848,6 +3984,42 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       member,
     );
     return Promise.resolve(member);
+  }
+
+  async mutateWorkspaceMember(input: WorkspaceMemberMutationInput): Promise<boolean> {
+    validateWorkspaceMemberReplacement(input);
+    assertWorkspaceManagementAdmission(
+      this.#workspaceManagement.get(input.member.workspaceId), input.member.workspaceId,
+      input.expectedWorkspaceManagementAuthority,
+    );
+    if (!workspaceMemberMutationAllowed(input) ||
+      !this.#workspaceMemberReplacementMatches(input) ||
+      stableStringify(this.#workspaceMembers.get(workspaceMemberKey(input.member.workspaceId, input.expectedActor.accountId))) !==
+        stableStringify(input.expectedActor)
+    ) return false;
+    if (workspaceMemberMutationDropsOwner(input) && !Array.from(this.#workspaceMembers.values()).some((row) =>
+      row.workspaceId === input.member.workspaceId && row.accountId !== input.member.accountId &&
+      isCanonicalActiveWorkspaceOwner(row)
+    )) return false;
+    this.#workspaceMembers.set(workspaceMemberKey(input.member.workspaceId, input.member.accountId), structuredClone(input.member));
+    return true;
+  }
+
+  async repairWorkspaceOwnerMember(input: WorkspaceOwnerMemberRepairInput): Promise<boolean> {
+    validateWorkspaceOwnerMemberRepair(input);
+    assertWorkspaceManagementAdmission(
+      this.#workspaceManagement.get(input.member.workspaceId), input.member.workspaceId,
+      input.expectedWorkspaceManagementAuthority,
+    );
+    if (!this.#workspaceMemberReplacementMatches(input)) return false;
+    this.#workspaceMembers.set(workspaceMemberKey(input.member.workspaceId, input.member.accountId), structuredClone(input.member));
+    return true;
+  }
+
+  #workspaceMemberReplacementMatches(input: WorkspaceOwnerMemberRepairInput): boolean {
+    return stableStringify(this.#workspaces.get(input.member.workspaceId)) === stableStringify(input.expectedWorkspace) &&
+      stableStringify(this.#workspaceMembers.get(workspaceMemberKey(input.member.workspaceId, input.member.accountId))) ===
+        stableStringify(input.expectedMember);
   }
 
   getWorkspaceMember(
@@ -2933,6 +4105,33 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(project);
   }
 
+  async createProjectRecord(input: ProjectCreationInput): Promise<ProjectCreationResult> {
+    const { project, expectedWorkspaceManagementAuthority } = input;
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(expectedWorkspaceManagementAuthority, project.workspaceId);
+    }
+    const current = this.#projects.get(project.id);
+    if (current !== undefined) {
+      return stableStringify(current) === stableStringify(project)
+        ? { status: "replayed", project: current }
+        : { status: "conflict" };
+    }
+    if (Array.from(this.#projects.values()).some(
+      (existing) => existing.workspaceId === project.workspaceId && existing.slug === project.slug,
+    )) {
+      return { status: "conflict" };
+    }
+    assertWorkspaceManagementAdmission(
+      this.#workspaces.has(project.workspaceId) ? this.#workspaceManagement.get(project.workspaceId) : undefined,
+      project.workspaceId,
+      expectedWorkspaceManagementAuthority,
+    );
+    // Workspace admission, slug uniqueness and publication share one synchronous section.
+    const created = structuredClone(project);
+    this.#projects.set(created.id, created);
+    return { status: "created", project: created };
+  }
+
   getProject(id: string): Promise<Project | undefined> {
     return Promise.resolve(this.#projects.get(id));
   }
@@ -2959,15 +4158,46 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
-  putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
-    this.#installConfigs.set(config.id, config);
-    return Promise.resolve(config);
+  async putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
+    const stored = preserveStoredInstallConfigManagementAuthority(
+      config,
+      this.#installConfigs.get(config.id),
+    );
+    this.#installConfigs.set(config.id, structuredClone(stored));
+    return structuredClone(publicStoredInstallConfig(stored));
   }
 
-  createInstallConfigIfAbsent(config: InstallConfig): Promise<boolean> {
-    if (this.#installConfigs.has(config.id)) return Promise.resolve(false);
-    this.#installConfigs.set(config.id, config);
-    return Promise.resolve(true);
+  async createInstallConfigIfAbsent(
+    config: InstallConfig,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<boolean> {
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      if (config.workspaceId === undefined) {
+        throw new TypeError(
+          "Workspace-neutral InstallConfig cannot carry Workspace management authority",
+        );
+      }
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        config.workspaceId,
+      );
+    }
+    if (this.#installConfigs.has(config.id)) return false;
+    if (config.workspaceId !== undefined) {
+      assertWorkspaceManagementAdmission(
+        this.#workspaces.has(config.workspaceId)
+          ? this.#workspaceManagement.get(config.workspaceId)
+          : undefined,
+        config.workspaceId,
+        expectedWorkspaceManagementAuthority,
+      );
+    }
+    // Admission and publication share one synchronous section.
+    this.#installConfigs.set(
+      config.id,
+      structuredClone(storeInstallConfig(config, expectedWorkspaceManagementAuthority)),
+    );
+    return true;
   }
 
   replaceUnreferencedSharedInstallConfig(
@@ -2977,7 +4207,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     const current = this.#installConfigs.get(expected.id);
     if (
       current === undefined ||
-      JSON.stringify(current) !== JSON.stringify(expected) ||
+      JSON.stringify(current) !== JSON.stringify(publicStoredInstallConfig(expected)) ||
       current.workspaceId !== undefined ||
       replacement.id !== expected.id ||
       replacement.workspaceId !== undefined ||
@@ -2987,12 +4217,25 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     ) {
       return Promise.resolve(false);
     }
-    this.#installConfigs.set(replacement.id, replacement);
+    this.#installConfigs.set(
+      replacement.id,
+      structuredClone(publicStoredInstallConfig(replacement)),
+    );
     return Promise.resolve(true);
   }
 
   getInstallConfig(id: string): Promise<InstallConfig | undefined> {
-    return Promise.resolve(this.#installConfigs.get(id));
+    const stored = this.#installConfigs.get(id);
+    return Promise.resolve(
+      stored ? structuredClone(publicStoredInstallConfig(stored)) : undefined,
+    );
+  }
+
+  getInstallConfigManagementAuthority(
+    id: string,
+  ): Promise<WorkspaceManagementAuthority | undefined> {
+    const stored = this.#installConfigs.get(id);
+    return Promise.resolve(stored ? installConfigManagementAuthority(stored) : undefined);
   }
 
   getInstallConfigsByIds(
@@ -3001,7 +4244,8 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(
       ids
         .map((id) => this.#installConfigs.get(id))
-        .filter((row): row is InstallConfig => row !== undefined),
+        .filter((row): row is InstallConfig => row !== undefined)
+        .map((row) => structuredClone(publicStoredInstallConfig(row))),
     );
   }
 
@@ -3015,7 +4259,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       filtered.sort(
         (a, b) =>
           a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-      ),
+      ).map((row) => structuredClone(publicStoredInstallConfig(row))),
     );
   }
 
@@ -3026,7 +4270,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         .sort(
           (a, b) =>
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-        ),
+        ).map((row) => structuredClone(publicStoredInstallConfig(row))),
     );
   }
 
@@ -3040,7 +4284,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         .sort(
           (a, b) =>
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-        ),
+        ).map((row) => structuredClone(publicStoredInstallConfig(row))),
       params,
     );
   }
@@ -3054,7 +4298,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         .sort(
           (a, b) =>
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-        ),
+        ).map((row) => structuredClone(publicStoredInstallConfig(row))),
       params,
     );
   }
@@ -3086,7 +4330,11 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   createCapsuleInitialAuthority(
     input: CapsuleInitialAuthorityInput,
   ): Promise<CapsuleInitialAuthorityResult> {
-    const { installConfig, providerBindingSet } = input;
+    if (input.expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(input.expectedWorkspaceManagementAuthority, input.capsule.workspaceId);
+    }
+    const { providerBindingSet } = input;
+    const installConfig = publicStoredInstallConfig(input.installConfig);
     const capsule = normalizeCapsule(input.capsule);
     const exact =
       installConfig.id === capsule.installConfigId &&
@@ -3117,7 +4365,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
           existingBinding &&
           existingBindingSlot?.id === existingBinding.id &&
           epoch === 1 &&
-          stableStringify(existingConfig) === stableStringify(installConfig) &&
+          stableStringify(publicStoredInstallConfig(existingConfig)) === stableStringify(installConfig) &&
           stableStringify(existingCapsule) === stableStringify(capsule) &&
           stableStringify(existingBinding) === stableStringify(providerBindingSet)
           ? { status: "replayed", capsule: existingCapsule }
@@ -3132,6 +4380,15 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         candidate.environment === capsule.environment,
     );
     if (duplicate) return Promise.resolve({ status: "conflict" });
+    try {
+      assertWorkspaceManagementAdmission(
+        this.#workspaces.has(capsule.workspaceId) ? this.#workspaceManagement.get(capsule.workspaceId) : undefined,
+        capsule.workspaceId,
+        input.expectedWorkspaceManagementAuthority,
+      );
+    } catch (error) {
+      return Promise.reject(error);
+    }
     this.#installConfigs.set(installConfig.id, installConfig);
     this.#capsuleExecutionAuthorityEpochs.set(capsule.id, 1);
     this.#capsules.set(capsule.id, capsule);
@@ -3335,6 +4592,31 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     if (capsuleLifecycleMutationAlreadyApplied(current, epoch, input)) {
       return Promise.resolve({ kind: "unchanged", capsule: current });
     }
+    if (input.mutation.kind === "auto-update-claim") {
+      const expectedAuthority =
+        input.mutation.expectedWorkspaceManagementAuthority;
+      // Runtime callers may still supply an older/malformed payload despite
+      // the required TypeScript field. Missing authority fails closed while
+      // an already-applied marker above remains a read-only replay.
+      if (expectedAuthority === undefined) {
+        return Promise.resolve({ kind: "conflict", current });
+      }
+      assertWorkspaceManagementAuthorityInput(
+        expectedAuthority,
+        expectedAuthority.workspaceId,
+      );
+      const management = this.#workspaceManagement.get(current.workspaceId);
+      if (
+        management === undefined ||
+        management.managementState !== "active" ||
+        expectedAuthority.workspaceId !== current.workspaceId ||
+        expectedAuthority.managementEpoch !== management.managementEpoch
+      ) {
+        // A source success may still mark a Capsule stale while draining, but
+        // consuming its auto-update marker is a new management admission.
+        return Promise.resolve({ kind: "conflict", current });
+      }
+    }
     const updated = normalizeCapsule({
       ...current,
       ...capsuleLifecycleMutationPatch(input.mutation, input.updatedAt),
@@ -3357,6 +4639,42 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   ): Promise<CapsuleInstallConfigRebindResult> {
     const observedCapsule = this.#capsules.get(input.capsuleId);
     if (!observedCapsule) return { status: "not_found" };
+    const suppliedWorkspaceManagementAuthority =
+      input.expectedWorkspaceManagementAuthority;
+    if (suppliedWorkspaceManagementAuthority !== undefined) {
+      // Check the caller's captured authority against the Capsule's actual
+      // Workspace before any asynchronous digest work. A mis-bound authority
+      // is malformed input, not a normal CAS loss.
+      assertWorkspaceManagementAuthorityInput(
+        suppliedWorkspaceManagementAuthority,
+        observedCapsule.workspaceId,
+      );
+    }
+    // Keep a value snapshot rather than the caller's mutable object while the
+    // digest promises below are in flight.
+    const expectedWorkspaceManagementAuthority =
+      suppliedWorkspaceManagementAuthority === undefined
+        ? undefined
+        : {
+            workspaceId: suppliedWorkspaceManagementAuthority.workspaceId,
+            managementState: "active" as const,
+            managementEpoch:
+              suppliedWorkspaceManagementAuthority.managementEpoch,
+          };
+    const observedWorkspaceManagement = this.#workspaceManagement.get(
+      observedCapsule.workspaceId,
+    );
+    // Snapshot the active authority before the asynchronous digest calculations
+    // below. The snapshot is deliberately retained through the final guard so
+    // a draining -> active epoch change cannot bless stale preparation.
+    const capturedWorkspaceManagementAuthority =
+      observedWorkspaceManagement?.managementState === "active"
+        ? {
+            workspaceId: observedWorkspaceManagement.workspaceId,
+            managementState: "active" as const,
+            managementEpoch: observedWorkspaceManagement.managementEpoch,
+          }
+        : undefined;
     const observedTarget = this.#installConfigs.get(
       input.targetInstallConfigId,
     );
@@ -3399,8 +4717,8 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       observedBindingSetAuthorityDigest,
       observedTargetBindingSetDigest,
     ] = await Promise.all([
-      observedConfig ? stableJsonDigest(observedConfig) : undefined,
-      observedTarget ? stableJsonDigest(observedTarget) : undefined,
+      observedConfig ? stableJsonDigest(publicStoredInstallConfig(observedConfig)) : undefined,
+      observedTarget ? stableJsonDigest(publicStoredInstallConfig(observedTarget)) : undefined,
       recoveryProof && observedRecoveryRows
         ? committedPostApplyRecoveryProofMatches(
             recoveryProof,
@@ -3460,6 +4778,19 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
               stableStringify(bindingReplacement.target))
         ? { status: "replayed", capsule }
         : { status: "conflict", capsule };
+    }
+    const originalAuthority = installConfigManagementAuthority(target);
+    if (installConfigRequiresManagementAuthority(target)) {
+      if (originalAuthority === undefined) {
+        throw new WorkspaceManagementAdmissionConflictError(capsule.workspaceId);
+      }
+      if (expectedWorkspaceManagementAuthority !== undefined) {
+        assertWorkspaceManagementAdmission(
+          originalAuthority,
+          capsule.workspaceId,
+          expectedWorkspaceManagementAuthority,
+        );
+      }
     }
     const currentConfig = this.#installConfigs.get(capsule.installConfigId);
     const epoch = this.#capsuleExecutionAuthorityEpochs.get(capsule.id) ?? 1;
@@ -3524,6 +4855,29 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     ) {
       return { status: "busy", capsule };
     }
+    // All asynchronous preparation is complete. Re-check both the authority
+    // captured at entry and the current row immediately before the synchronous
+    // in-memory commit. Existing target replays returned above intentionally
+    // bypass this new-admission guard.
+    if (capturedWorkspaceManagementAuthority === undefined) {
+      throw new WorkspaceManagementAdmissionConflictError(
+        capsule.workspaceId,
+      );
+    }
+    const effectiveAuthority =
+      originalAuthority ?? expectedWorkspaceManagementAuthority;
+    if (effectiveAuthority !== undefined) {
+      assertWorkspaceManagementAdmission(
+        observedWorkspaceManagement,
+        capsule.workspaceId,
+        effectiveAuthority,
+      );
+    }
+    assertWorkspaceManagementAdmission(
+      this.#workspaceManagement.get(capsule.workspaceId),
+      capsule.workspaceId,
+      capturedWorkspaceManagementAuthority,
+    );
     const updated = normalizeCapsule({
       ...capsule,
       installConfigId: input.targetInstallConfigId,
@@ -3640,6 +4994,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         );
       }
     }
+    const applyRunTerminal = input.applyRunTerminal && preserveStoredRunManagementAuthority(
+      input.applyRunTerminal, this.#runs.get(input.applyRunTerminal.id));
+    const planRunApplied = input.planRunApplied && preserveStoredRunManagementAuthority(
+      input.planRunApplied, this.#runs.get(input.planRunApplied.id));
     if (input.stateVersion) {
       this.#stateVersions.set(input.stateVersion.id, input.stateVersion);
     }
@@ -3651,12 +5009,12 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     // The apply terminal clears its lease fence (mirrors transitionRun
     // clearLeaseToken); the plan patch is a plain write (already terminal, no
     // lease).
-    if (input.applyRunTerminal) {
-      this.#runs.set(input.applyRunTerminal.id, input.applyRunTerminal);
-      this.#runLeases.delete(input.applyRunTerminal.id);
+    if (applyRunTerminal) {
+      this.#runs.set(applyRunTerminal.id, applyRunTerminal);
+      this.#runLeases.delete(applyRunTerminal.id);
     }
-    if (input.planRunApplied) {
-      this.#runs.set(input.planRunApplied.id, input.planRunApplied);
+    if (planRunApplied) {
+      this.#runs.set(planRunApplied.id, planRunApplied);
     }
     if (intent && !this.#capsuleInterfaceMaterializationIntents.has(intent.id)) {
       this.#capsuleInterfaceMaterializationIntents.set(intent.id, intent);
@@ -4012,11 +5370,13 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       ...existing,
       ...capsulePatch.patch,
     });
+    const restoreRunTerminal = preserveStoredRunManagementAuthority(
+      input.restoreRunTerminal, this.#runs.get(input.restoreRunTerminal.id));
     this.#stateVersions.set(input.stateVersion.id, input.stateVersion);
     if (input.output) {
       this.#outputs.set(input.output.id, input.output);
     }
-    this.#runs.set(input.restoreRunTerminal.id, input.restoreRunTerminal);
+    this.#runs.set(restoreRunTerminal.id, restoreRunTerminal);
     this.#runLeases.delete(input.restoreRunTerminal.id);
     this.#setCapsule(updated);
     if (replacement) {
@@ -4060,6 +5420,64 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(connection);
   }
 
+  async createConnectionRegistration(input: CreateConnectionRegistrationInput): Promise<boolean> {
+    const { connection, secretBlob, expectedWorkspaceManagementAuthority, actorAuthority } = prepareConnectionRegistration(input);
+    if (connection.workspaceId !== undefined) {
+      assertWorkspaceManagementAdmission(this.#workspaceManagement.get(connection.workspaceId),
+        connection.workspaceId, expectedWorkspaceManagementAuthority);
+    }
+    if (!this.#connectionActorAuthorityMatches(actorAuthority)) return false;
+    if (this.#connections.has(connection.id) || this.#secretBlobs.has(connection.id) ||
+      (secretBlob !== undefined && Array.from(this.#secretBlobs.values()).some((blob) => blob.id === secretBlob.id))) {
+      return false;
+    }
+    // No await between the authority/collision checks and publishing either row.
+    if (secretBlob) this.#secretBlobs.set(connection.id, secretBlob);
+    this.#connections.set(connection.id, connection);
+    return true;
+  }
+
+  async revokeConnectionIfUnchanged(input: RevokeConnectionIfUnchangedInput): Promise<boolean> {
+    const { expectedConnection, expectedWorkspaceManagementAuthority, actorAuthority } = prepareConnectionRevocation(input);
+    if (expectedConnection.workspaceId !== undefined) {
+      assertWorkspaceManagementAdmission(this.#workspaceManagement.get(expectedConnection.workspaceId),
+        expectedConnection.workspaceId, expectedWorkspaceManagementAuthority);
+    }
+    if (!this.#connectionActorAuthorityMatches(actorAuthority)) return false;
+    const current = this.#connections.get(expectedConnection.id);
+    if (!current || JSON.stringify(current) !== JSON.stringify(expectedConnection)) return false;
+    this.#secretBlobs.delete(expectedConnection.id);
+    this.#connections.delete(expectedConnection.id);
+    return true;
+  }
+
+  async commitConnectionTestResult(input: CommitConnectionTestResultInput): Promise<boolean> {
+    const { expectedConnection, expectedSecretBlob, replacement, expectedWorkspaceManagementAuthority, actorAuthority } =
+      prepareConnectionTestResult(input);
+    if (expectedConnection.workspaceId !== undefined) {
+      assertWorkspaceManagementAdmission(this.#workspaceManagement.get(expectedConnection.workspaceId),
+        expectedConnection.workspaceId, expectedWorkspaceManagementAuthority);
+    }
+    if (!this.#connectionActorAuthorityMatches(actorAuthority)) return false;
+    const current = this.#connections.get(expectedConnection.id);
+    const blob = this.#secretBlobs.get(expectedConnection.id) ?? null;
+    if (!current || JSON.stringify(current) !== JSON.stringify(expectedConnection) ||
+      JSON.stringify(blob) !== JSON.stringify(expectedSecretBlob)) return false;
+    // No await between the management, row and material predicates and write.
+    this.#connections.set(replacement.id, replacement);
+    return true;
+  }
+
+  #connectionActorAuthorityMatches(authority: ConnectionActorAuthority | null): boolean {
+    if (authority === null) return true;
+    if (!workspaceAccountAuthorityAllowed(authority)) return false;
+    const workspace = this.#workspaces.get(authority.expectedWorkspace.id);
+    if (workspace === undefined || stableStringify(workspace) !== stableStringify(authority.expectedWorkspace)) return false;
+    return workspace.ownerUserId === authority.actorAccountId ||
+      stableStringify(this.#workspaceMembers.get(workspaceMemberKey(workspace.id, authority.actorAccountId))) ===
+        stableStringify(authority.expectedActor);
+  }
+
   createConnectionIfAbsent(connection: ProviderConnection): Promise<boolean> {
     if (this.#connections.has(connection.id)) return Promise.resolve(false);
     this.#connections.set(connection.id, connection);
@@ -4080,6 +5498,17 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     }
     this.#connections.set(replacement.id, replacement);
     return Promise.resolve(true);
+  }
+
+  async markConnectionExpiredIfUnchanged(
+    input: MarkConnectionExpiredIfUnchangedInput,
+  ): Promise<boolean> {
+    const prepared = prepareConnectionExpiration(input);
+    if (prepared === undefined) return false;
+    return await this.replaceConnectionIfUnchanged(
+      prepared.expectedConnection,
+      prepared.replacement,
+    );
   }
 
   getConnection(id: string): Promise<ProviderConnection | undefined> {
@@ -4143,6 +5572,32 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   putSource(source: StoredSource): Promise<StoredSource> {
     this.#sources.set(source.id, source);
     return Promise.resolve(source);
+  }
+
+  async writeSourceConfiguration(
+    input: SourceConfigurationWriteInput,
+  ): Promise<SourceConfigurationWriteResult> {
+    assertSourceConfigurationWriteInput(input);
+    const current = this.#sources.get(input.source.id);
+    if (current && stableStringify(current) === stableStringify(input.source)) {
+      return { status: "replayed", source: current };
+    }
+    if (input.expectedSource === undefined ? current !== undefined : (
+      current === undefined ||
+      current.workspaceId !== input.source.workspaceId ||
+      stableStringify(current) !== stableStringify(input.expectedSource)
+    )) {
+      return { status: "conflict" };
+    }
+    assertWorkspaceManagementAdmission(
+      this.#workspaces.has(input.source.workspaceId) ? this.#workspaceManagement.get(input.source.workspaceId) : undefined,
+      input.source.workspaceId,
+      input.expectedWorkspaceManagementAuthority,
+    );
+    // No await between the exact-source/Workspace predicates and publication.
+    const source = structuredClone(input.source);
+    this.#sources.set(source.id, source);
+    return { status: current === undefined ? "created" : "updated", source };
   }
 
   getSource(id: string): Promise<StoredSource | undefined> {
@@ -4959,7 +6414,7 @@ function memoryCommittedPostApplyRecoveryRows(
   const stateVersion = stateVersions.get(proof.stateVersionId);
   const output = outputs.get(proof.outputId);
   return stateVersion && output
-    ? { failedApplyRun, stateVersion, output }
+    ? { failedApplyRun: publicStoredRun(failedApplyRun), stateVersion, output }
     : undefined;
 }
 
@@ -5143,7 +6598,7 @@ export function isApplyRunRecord(row: StoredRunRecord): row is ApplyRun {
   return "planRunId" in row && "expected" in row;
 }
 
-function isSourceSyncRunRecord(row: StoredRunRecord): row is SourceSyncRun {
+export function isSourceSyncRunRecord(row: StoredRunRecord): row is SourceSyncRun {
   return "kind" in row && row.kind === "source_sync";
 }
 
@@ -5155,7 +6610,7 @@ function isPublicRunRecord(row: StoredRunRecord): row is Run {
   );
 }
 
-function isRestoreRunRecord(row: StoredRunRecord): row is Run {
+export function isRestoreRunRecord(row: StoredRunRecord): row is Run {
   return isPublicRunRecord(row) && row.type === "restore";
 }
 

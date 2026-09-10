@@ -28,7 +28,10 @@ import {
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import { evaluateCompatibilityReportAgainstPolicy } from "../../../../core/domains/deploy-control/provider_policy.ts";
-import { providerBindingSetAuthorityDigest } from "../../../../core/domains/deploy-control/store.ts";
+import {
+  providerBindingSetAuthorityDigest,
+  type WorkspaceManagementAuthority,
+} from "../../../../core/domains/deploy-control/store.ts";
 import type { InstallPlanCompatibilityCheckRequest } from "../../../../core/domains/sources/mod.ts";
 import {
   errorJson,
@@ -176,6 +179,14 @@ export async function handleCapsuleConfigurationPlans(
       { reason: "capsule_install_config_rebind_busy" },
     );
   }
+  // A configuration Plan miss creates a new Workspace-owned successor. Capture
+  // the exact active management authority before any asynchronous source,
+  // compatibility, or provider preparation and retain this snapshot through
+  // the durable insert-only write; never refresh it after preparation starts.
+  const expectedWorkspaceManagementAuthority =
+    await ctx.operations.workspaces.captureManagementAuthority(
+      authority.capsule.workspaceId,
+    );
 
   const sourceContext = await currentSourceContext(ctx, authority);
   const moduleSelection = resolveRepoOwnedInstallModulePath({
@@ -370,6 +381,7 @@ export async function handleCapsuleConfigurationPlans(
   });
   const created = await ctx.operations.capsules.createInstallConfigIfAbsent(
     expectedTarget,
+    expectedWorkspaceManagementAuthority,
   );
   const target = created
     ? expectedTarget
@@ -385,6 +397,7 @@ export async function handleCapsuleConfigurationPlans(
     requestDigest,
     target,
     receipt,
+    expectedWorkspaceManagementAuthority,
   });
 }
 
@@ -393,6 +406,7 @@ async function finishConfigurationPlan(input: {
   readonly requestDigest: string;
   readonly target: InstallConfig;
   readonly receipt: ReAdoptionReceipt;
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
 }): Promise<Response> {
   const previousBindingAuthorityDigest =
     input.receipt.previousProviderBindingSetAuthorityDigest;
@@ -500,6 +514,15 @@ async function finishConfigurationPlan(input: {
     });
   }
 
+  // Only the original sealed preparation can authorize missing work. A
+  // completed Plan returned above needs no new authority, including legacy
+  // results; an incomplete legacy successor is never silently re-approved.
+  const expectedWorkspaceManagementAuthority = await input.ctx.operations.capsules
+    .requireInstallConfigManagementAuthority(
+      input.target.id,
+      input.expectedWorkspaceManagementAuthority,
+    );
+
   // Re-read every mutable authority cursor before deciding whether this is a
   // first attempt (predecessor is still current) or a recovery after the
   // target rebind committed. A later successor, advanced state, or changed
@@ -582,6 +605,7 @@ async function finishConfigurationPlan(input: {
     const rebound = await input.ctx.operations.capsules.rebindInstallConfig({
       capsuleId: input.receipt.capsuleId,
       targetInstallConfigId: input.target.id,
+      expectedWorkspaceManagementAuthority,
       expected: rebindExpected(input.receipt),
       actorSubject: input.receipt.actorSubject,
       reason: input.receipt.reason,
@@ -656,6 +680,7 @@ async function finishConfigurationPlan(input: {
 
   const planRunId = await createFreshPlanRun({
     ctx: input.ctx,
+    expectedWorkspaceManagementAuthority,
     capsule: planCapsule,
     source,
     sourceSnapshot,
@@ -914,6 +939,7 @@ async function createOrObserveCompatibilityEvidence(input: {
 
 async function createFreshPlanRun(input: {
   readonly ctx: ControlDispatchContext;
+  readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
   readonly capsule: Capsule;
   readonly source: Source;
   readonly sourceSnapshot: SourceSnapshot;
@@ -934,6 +960,7 @@ async function createFreshPlanRun(input: {
       sourceSnapshotId: input.sourceSnapshot.id,
       compatibilityReportId: input.compatibilityReportId,
       planRunId: input.evidence.planRunId,
+      expectedWorkspaceManagementAuthority: input.expectedWorkspaceManagementAuthority,
       expectedCapsulePlanAuthority: {
         installConfigId: input.targetInstallConfig.id,
         executionAuthorityEpoch: input.executionAuthorityEpoch,

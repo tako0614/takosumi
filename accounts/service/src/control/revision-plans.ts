@@ -91,6 +91,46 @@ export async function handleCapsuleRevisionPlans(
       ctx.request,
     );
   }
+  const normalizedRequest = {
+    operation: "revision" as const,
+    capsuleId: capsule.id,
+    ref: request.ref,
+  };
+  // Request identity is immutable input bookkeeping, not mutable preparation.
+  // Observe an exact idempotency scope before capturing Workspace management
+  // authority so a stopped Workspace can still return its existing record
+  // without creating a successor or attempting new preparation.
+  const [requestDigest, idempotencyKeyHash] = await Promise.all([
+    stableJsonDigest(normalizedRequest),
+    stableJsonDigest(key),
+  ]);
+  const existing = await ctx.operations.gitInstallPlans.getByScope({
+    workspaceId: capsule.workspaceId,
+    actorSubject: ctx.session.subject,
+    idempotencyKeyHash,
+  });
+  if (existing) {
+    if (
+      existing.requestDigest === requestDigest &&
+      isStoredGitRevisionPlan(existing)
+    ) {
+      return revisionPlanJson(existing);
+    }
+    return errorJson(
+      "idempotency_conflict",
+      "This Idempotency-Key was already used for a different Git lifecycle request in the same Workspace and actor scope.",
+      409,
+      ctx.request,
+    );
+  }
+  // Retain this exact active authority through all asynchronous Source,
+  // InstallConfig, and Capsule preparation and pass it to the insert-only
+  // coordinator write. A later drain -> active epoch cannot bless work
+  // prepared under the old epoch.
+  const expectedWorkspaceManagementAuthority =
+    await ctx.operations.workspaces.captureManagementAuthority(
+      capsule.workspaceId,
+    );
   const { source } = await ctx.operations.getSource(capsule.sourceId);
   const installConfig = await ctx.operations.capsules.getInstallConfig(
     capsule.installConfigId,
@@ -121,13 +161,6 @@ export async function handleCapsuleRevisionPlans(
   const installConfigDigest = await stableJsonDigest(installConfig);
   const capsuleExecutionAuthorityEpoch =
     await ctx.operations.capsules.getCapsuleExecutionAuthorityEpoch(capsule.id);
-  const normalizedRequest = {
-    operation: "revision" as const,
-    capsuleId: capsule.id,
-    ref: request.ref,
-  };
-  const requestDigest = await stableJsonDigest(normalizedRequest);
-  const idempotencyKeyHash = await stableJsonDigest(key);
   const now = new Date().toISOString();
   const plan: StoredGitRevisionPlan = {
     id: revisionPlanId(),
@@ -135,6 +168,7 @@ export async function handleCapsuleRevisionPlans(
     createdBy: ctx.session.subject,
     actorSubject: ctx.session.subject,
     idempotencyKeyHash,
+    workspaceManagementAuthority: expectedWorkspaceManagementAuthority,
     capsuleExecutionAuthorityEpoch,
     requestDigest,
     operation: "revision",
@@ -181,7 +215,10 @@ export async function handleCapsuleRevisionPlans(
     createdAt: now,
     updatedAt: now,
   };
-  const result = await ctx.operations.gitInstallPlans.create(plan);
+  const result = await ctx.operations.gitInstallPlans.create(
+    plan,
+    expectedWorkspaceManagementAuthority,
+  );
   if (result.status === "conflict") {
     return errorJson(
       "idempotency_conflict",
@@ -244,6 +281,21 @@ async function reconcileRevisionPlan(
   if (observed.phase === "reviewable" || observed.phase === "failed") {
     return revisionPlanJson(observed);
   }
+  // Rows written before management-epoch persistence are terminal-read
+  // compatible only. Never recapture a newer authority for a nonterminal
+  // legacy coordinator, because that would bless stale preparation.
+  const expectedWorkspaceManagementAuthority =
+    observed.workspaceManagementAuthority;
+  if (expectedWorkspaceManagementAuthority === undefined) {
+    return errorJson(
+      "failed_precondition",
+      "Workspace management authority is unavailable for this coordinator record.",
+      409,
+      ctx.request,
+      {},
+      { reason: "workspace_management_admission_conflict" },
+    );
+  }
   const claimedAt = new Date();
   const claim = await ctx.operations.gitInstallPlans.claimReconcile({
     id: observed.id,
@@ -253,6 +305,7 @@ async function reconcileRevisionPlan(
     leaseExpiresAt: new Date(
       claimedAt.getTime() + GIT_INSTALL_PLAN_RECONCILE_LEASE_MS,
     ).toISOString(),
+    expectedWorkspaceManagementAuthority,
   });
   if (claim.status !== "claimed") {
     if (claim.status === "not_found") {
@@ -387,16 +440,20 @@ async function advanceRevisionSource(
     sync = await operations.getSourceSyncRun(plan.sourceSyncRunId);
   } else {
     sync = (
-      await operations.createSourceSync(plan.sourceId, {
-        intent: "manual_plan",
-        dedupe: true,
-        coordinator: {
-          ref: plan.revision.targetRef,
-          path: plan.source.path,
-          runId: evidence.runId,
-          snapshotId: evidence.snapshotId,
+      await operations.createSourceSync(
+        plan.sourceId,
+        {
+          intent: "manual_plan",
+          dedupe: true,
+          coordinator: {
+            ref: plan.revision.targetRef,
+            path: plan.source.path,
+            runId: evidence.runId,
+            snapshotId: evidence.snapshotId,
+          },
         },
-      })
+        plan.workspaceManagementAuthority,
+      )
     ).run;
   }
   assertSourceSyncMatches(sync, plan, identity.source, evidence);
@@ -504,6 +561,8 @@ async function createOrObserveRevisionPlanRun(
       sourceSnapshotId: plan.sourceSnapshotId,
       compatibilityReportId: plan.compatibilityReportId,
       planRunId: exactRunId,
+      expectedWorkspaceManagementAuthority:
+        plan.workspaceManagementAuthority,
       actor: revisionPlanRunActor(plan.id),
     });
     run = await operations.getRun(created.planRun.id);

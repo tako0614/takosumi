@@ -28,6 +28,7 @@ import type {
 import type { CreatePlanRunRequest } from "@takosumi/internal/deploy-control-api";
 import { type PageParams } from "takosumi-contract/pagination";
 import type { WorkspacesService } from "../domains/workspaces/mod.ts";
+import type { WorkspaceManagementAuthority } from "../domains/deploy-control/store.ts";
 import type { ProjectsService } from "../domains/projects/mod.ts";
 import type { CapsulesService } from "../domains/capsules/mod.ts";
 import type { ConnectionsService } from "../domains/connections/mod.ts";
@@ -420,6 +421,8 @@ export interface ConnectionOAuthStartInput {
   readonly request: Request;
   readonly principal: DeployControlPrincipal;
   readonly body: ConnectionOAuthStartBody;
+  /** Private Workspace admission tuple captured before OAuth preparation. */
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
 }
 
 export interface ConnectionOAuthCallbackInput {
@@ -442,6 +445,8 @@ export interface ConnectionOAuthCallbackInput {
 export interface ConnectionOAuthCompletion {
   readonly request: CreateConnectionRequest;
   readonly subject?: string;
+  /** Private tuple captured at OAuth start; never part of the public request. */
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
 }
 
 export interface ConnectionOAuthHelper {

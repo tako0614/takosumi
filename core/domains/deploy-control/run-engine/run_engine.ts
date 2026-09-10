@@ -181,6 +181,10 @@ import {
   capsuleLifecycleExpected,
   CapsuleStateVersionGuardConflict,
   CapsulePlanCreationFenceConflictError,
+  WorkspaceManagementAdmissionConflictError,
+  assertWorkspaceManagementAuthorityInput,
+  type WorkspaceManagementAuthority,
+  type BeginApplyRunResult,
   planRunExecutionInputsDigestMaterial,
   type OpenTofuControlStore,
   type PlanRunInputs,
@@ -387,6 +391,12 @@ type RunEnginePlanRunInternalContext = PlanRunInternalContext & {
   readonly legacySourcelessDestroyRecovery?: true;
   /** Authority used to derive the private Capsule Plan request/root. */
   readonly capsulePlanExecutionAuthority?: CapsulePlanExecutionAuthority;
+  /**
+   * Private Workspace management fence captured before Plan input assembly.
+   * This is threaded from the Capsule outer flow into the atomic store write;
+   * it is never part of the public PlanRun or request contract.
+   */
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
 };
 
 interface PreparedPlanRun {
@@ -455,6 +465,31 @@ const RUN_EXECUTION_RENEWAL_UNAVAILABLE_REASON =
   "run_execution_renewal_unavailable";
 const RUN_RENEWAL_TRANSPORT_RETRY_LIMIT = 1;
 const RUN_RENEWAL_TRANSPORT_RETRY_MAX_DELAY_MS = 250;
+const WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_REASON =
+  "workspace_management_admission_conflict";
+const WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_MESSAGE =
+  "Workspace is not accepting this management operation.";
+
+function workspaceManagementAdmissionConflictError(): OpenTofuControllerError {
+  return new OpenTofuControllerError(
+    "failed_precondition",
+    WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_MESSAGE,
+    { reason: WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_REASON },
+  );
+}
+
+function isWorkspaceManagementAdmissionConflict(error: unknown): boolean {
+  if (!(error instanceof OpenTofuControllerError)) return false;
+  const details = error.details;
+  return (
+    error.code === "failed_precondition" &&
+    typeof details === "object" &&
+    details !== null &&
+    !Array.isArray(details) &&
+    (details as { readonly reason?: unknown }).reason ===
+      WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_REASON
+  );
+}
 
 type RunRenewalTarget = "run_heartbeat" | "capsule_lease";
 type RunRenewalFailure = "lost" | "unavailable";
@@ -1719,6 +1754,29 @@ export class RunEngine {
   ): Promise<PreparedPlanRun> {
     const workspaceId = request.workspaceId;
     requireNonEmptyString(workspaceId, "workspaceId");
+    let expectedWorkspaceManagementAuthority =
+      internal.expectedWorkspaceManagementAuthority;
+    if (expectedWorkspaceManagementAuthority === undefined) {
+      try {
+        expectedWorkspaceManagementAuthority =
+          await this.#captureWorkspaceManagementAuthority(workspaceId);
+      } catch (error) {
+        // A retry carrying an exact, already durable PlanRun id is a read-only
+        // idempotency probe. It may continue through preparation while the
+        // Workspace is draining; the store's existing-row branch will verify
+        // the request without admitting any new Run or sidecar.
+        if (
+          !isWorkspaceManagementAdmissionConflict(error) ||
+          internal.planRunId === undefined ||
+          !(await this.#existingPlanReadAllowedDuringQuiescence(
+            workspaceId,
+            internal.planRunId,
+          ))
+        ) {
+          throw error;
+        }
+      }
+    }
     const requestCapsuleId = request.capsuleId;
     const operation =
       request.operation ?? (requestCapsuleId ? "update" : "create");
@@ -2125,6 +2183,9 @@ export class RunEngine {
         run: planRun,
         inputs: storedPlanRunInputs,
         ...(dependencySnapshot ? { dependencySnapshot } : {}),
+        ...(expectedWorkspaceManagementAuthority
+          ? { expectedWorkspaceManagementAuthority }
+          : {}),
         ...(internal.expectedCapsulePlanAuthority
           ? {
               expectedCapsulePlanAuthority:
@@ -2139,6 +2200,9 @@ export class RunEngine {
           "The Capsule configuration changed before its Plan could be persisted.",
           { reason: "capsule_configuration_identity_conflict" },
         );
+      }
+      if (error instanceof WorkspaceManagementAdmissionConflictError) {
+        throw workspaceManagementAdmissionConflictError();
       }
       throw error;
     }
@@ -2191,6 +2255,20 @@ export class RunEngine {
     // completed (or parked for approval). The queue consumer's own CAS remains
     // the execution fence for the duplicate queued message.
     if (planRun.status === "queued" && this.#hasRunnerForProfile(profile)) {
+      // A replay of an already durable queued Plan is still a read-only
+      // observation while Workspace management is draining or its original
+      // authority is stale. If the fence flips after this read,
+      // transitionRun's durable NEW-lease guard remains the final authority
+      // and refuses the claim.
+      if (
+        !(await this.#queuedRunHasCurrentManagementAuthority({
+          id: planRun.id,
+          workspaceId: planRun.workspaceId,
+          kind: "plan",
+        }))
+      ) {
+        return { planRun: publicPlanRun(planRun) };
+      }
       await this.#enqueueRun({
         action: "plan",
         runId: planRun.id,
@@ -2331,6 +2409,32 @@ export class RunEngine {
       "capsule_load",
       this.#requireCapsule(capsuleId),
     );
+    // Capture the Workspace fence before any InstallConfig/Source/compatibility
+    // preparation. The same immutable authority is passed to the inner Plan
+    // preparation and its atomic store admission; it must not be refreshed late.
+    // A retry carrying an exact existing PlanRun id may still perform a
+    // read-only idempotency probe while the Workspace is draining.
+    let workspaceManagementAuthority: WorkspaceManagementAuthority | undefined;
+    try {
+      workspaceManagementAuthority = await planCreationStage(
+        "workspace_management_load",
+        this.#captureWorkspaceManagementAuthority(
+          capsule.workspaceId,
+          internal.expectedWorkspaceManagementAuthority,
+        ),
+      );
+    } catch (error) {
+      if (
+        !isWorkspaceManagementAdmissionConflict(error) ||
+        internal.planRunId === undefined ||
+        !(await this.#existingPlanReadAllowedDuringQuiescence(
+          capsule.workspaceId,
+          internal.planRunId,
+        ))
+      ) {
+        throw error;
+      }
+    }
     const installConfig = await planCreationStage(
       "install_config_load",
       this.#store.getInstallConfig(capsule.installConfigId),
@@ -2355,6 +2459,9 @@ export class RunEngine {
         capsule,
         runnerProfile,
         context,
+        ...(workspaceManagementAuthority
+          ? { expectedWorkspaceManagementAuthority: workspaceManagementAuthority }
+          : {}),
         ...(lifecycleActions ? { lifecycleActions } : {}),
       });
     }
@@ -2672,6 +2779,9 @@ export class RunEngine {
       "plan_run_create",
       this.#preparePlanRun(injectedRequest, context, {
         capsuleContext,
+        ...(workspaceManagementAuthority
+          ? { expectedWorkspaceManagementAuthority: workspaceManagementAuthority }
+          : {}),
         sourceSnapshotId: snapshot.id,
         ...(internal.planRunId ? { planRunId: internal.planRunId } : {}),
         baseStateGeneration,
@@ -4016,6 +4126,7 @@ export class RunEngine {
     readonly capsule: Capsule;
     readonly runnerProfile: RunnerProfile;
     readonly context: DeployControlActorContext;
+    readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
     readonly lifecycleActions?: InstallConfig["lifecycleActions"];
   }): Promise<PlanRunResponse> {
     const { capsule, runnerProfile } = input;
@@ -4107,6 +4218,12 @@ export class RunEngine {
           capsuleId: capsule.id,
           environment: capsule.environment,
         },
+        ...(input.expectedWorkspaceManagementAuthority
+          ? {
+              expectedWorkspaceManagementAuthority:
+                input.expectedWorkspaceManagementAuthority,
+            }
+          : {}),
         baseStateGeneration: capsule.currentStateGeneration,
         legacySourcelessDestroyRecovery: true,
         genericRootDispatch: {
@@ -4361,6 +4478,15 @@ export class RunEngine {
         `plan run ${planRun.id} is awaiting approval; approve it (POST /runs/${planRun.id}/approve) before apply`,
       );
     }
+    // This is a genuinely new Apply admission. Capture the active Workspace
+    // fence before any asynchronous guard/preflight or lifecycle checkpoint;
+    // beginApplyRun rechecks this exact authority atomically before inserting
+    // the ApplyRun row.
+    const expectedWorkspaceManagementAuthority =
+      await this.#captureWorkspaceManagementAuthority(
+        planRun.workspaceId,
+        internal.expectedWorkspaceManagementAuthority,
+      );
     await checkApplyExpected(request.expected, planRun);
     if (planRun.capsuleId) {
       await this.#requireCurrentPlannedCapsule(planRun);
@@ -4409,7 +4535,18 @@ export class RunEngine {
       updatedAt: now,
     };
     await internal.onPrepared?.(applyRun);
-    const begun = await this.#store.beginApplyRun(applyRun);
+    let begun: BeginApplyRunResult;
+    try {
+      begun = await this.#store.beginApplyRun(
+        applyRun,
+        expectedWorkspaceManagementAuthority,
+      );
+    } catch (error) {
+      if (error instanceof WorkspaceManagementAdmissionConflictError) {
+        throw workspaceManagementAdmissionConflictError();
+      }
+      throw error;
+    }
     if (begun.status === "conflict") {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -4461,6 +4598,19 @@ export class RunEngine {
       profile,
       expected,
     );
+    // Exact idempotent reads remain available during draining and after resume
+    // when the queued row's original authority is stale. This early-out avoids
+    // known-stopped repair work; it cannot atomically fence the later observer
+    // write or external queue delivery. transitionRun prevents a late delivery
+    // from executing. The observer's durable admission must join the Workspace
+    // fence before complete management quiescence is exposed.
+    if (
+      !(await this.#queuedRunHasCurrentManagementAuthority({
+        id: current.id,
+        workspaceId: current.workspaceId,
+        kind: "apply",
+      }))
+    ) return;
     await this.#notifyApplyQueued(current);
     if (!this.#hasRunnerForProfile(profile)) return;
     // Insert acknowledgement or process loss can leave the exact row queued
@@ -5852,12 +6002,24 @@ export class RunEngine {
     )
       return;
     try {
+      // Finishing a held Plan is allowed after draining. Starting its automatic
+      // Apply is a separate admission bound to the Plan's original epoch, not
+      // whichever active epoch happens to exist when the result arrives.
+      const authority = await this.#store.getRunManagementAuthority({
+        id: planRun.id,
+        workspaceId: planRun.workspaceId,
+        kind: "plan",
+      });
+      if (authority === undefined) {
+        throw workspaceManagementAdmissionConflictError();
+      }
       await this.createApplyRun(
         {
           planRunId: planRun.id,
           expected: applyExpectedGuardFromPlanRun(planRun),
         },
         { actor: "system:auto-update" },
+        { expectedWorkspaceManagementAuthority: authority },
       );
     } catch (error) {
       await this.#recordActivity({
@@ -6018,6 +6180,12 @@ export class RunEngine {
         "stateGeneration must be a non-negative integer",
       );
     }
+    // Capture the Workspace management fence before any backup, Capsule, or
+    // StateVersion lookup. The immutable Restore row is admitted only with
+    // this original tuple; preparation that crosses a drain cannot mint a new
+    // Restore under a resumed epoch.
+    const expectedWorkspaceManagementAuthority =
+      await this.#captureWorkspaceManagementAuthority(workspaceId);
     const backup = await this.#store.getBackupRecord(backupId);
     if (!backup || backup.workspaceId !== workspaceId) {
       throw new OpenTofuControllerError(
@@ -6093,7 +6261,25 @@ export class RunEngine {
       createdBy: context.actor ?? "system",
       createdAt: now,
     };
-    await this.#store.putBackupRun(run);
+    let begun;
+    try {
+      begun = await this.#store.beginRestoreRun(
+        run,
+        expectedWorkspaceManagementAuthority,
+      );
+    } catch (error) {
+      if (error instanceof WorkspaceManagementAdmissionConflictError) {
+        throw workspaceManagementAdmissionConflictError();
+      }
+      throw error;
+    }
+    if (begun.status === "conflict") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `RestoreRun id ${run.id} is already bound to a different Run`,
+      );
+    }
+    if (begun.status === "existing") return begun.run;
     await this.#recordActivity({
       workspaceId,
       ...(context.actor ? { actorId: context.actor } : {}),
@@ -6112,10 +6298,10 @@ export class RunEngine {
               serviceDataRef: backup.serviceData!.ref,
               serviceDataDigest: backup.serviceData!.digest,
             }
-          : {}),
+        : {}),
       },
     });
-    return run;
+    return begun.run;
   }
 
   /**
@@ -6135,6 +6321,18 @@ export class RunEngine {
         throw new OpenTofuControllerError(
           "failed_precondition",
           `plan run ${id} is ${planRun.status}; only queued or waiting-approval runs can be cancelled`,
+        );
+      }
+      // A retryable runner-infrastructure failure deliberately requeues the
+      // SAME PlanRun after it has started. Its queued status is not evidence
+      // that no execution happened: the retained startedAt/audit evidence is
+      // needed to keep the retry fail-closed. Waiting-approval plans retain
+      // their historical cancellation semantics, so this guard is scoped to
+      // the queued retry state only.
+      if (planRun.status === "queued" && planRun.startedAt !== undefined) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `plan run ${id} is queued and has already started; only queued or waiting-approval runs can be cancelled, and only before they start`,
         );
       }
       const now = this.#now();
@@ -6158,14 +6356,21 @@ export class RunEngine {
         id,
         kind: "plan",
         expectFrom: [planRun.status],
+        // Status alone is insufficient: a runner can claim this never-started
+        // row and requeue it after execution between our read and CAS. Require
+        // a queued Plan to still be genuinely never-started. The
+        // waiting-approval path intentionally keeps its existing semantics.
+        ...(planRun.status === "queued" ? { expectStartedAt: null } : {}),
         run: cancelled,
         clearLeaseToken: true,
       });
       if (!result.won) {
         const current = (result.run as PlanRun | undefined) ?? planRun;
+        const alreadyStartedQueued =
+          current.status === "queued" && current.startedAt !== undefined;
         throw new OpenTofuControllerError(
           "failed_precondition",
-          `plan run ${id} is ${current.status}; only queued or waiting-approval runs can be cancelled`,
+          `plan run ${id} is ${current.status}${alreadyStartedQueued ? " and has already started" : ""}; only queued or waiting-approval runs can be cancelled${alreadyStartedQueued ? ", and only before they start" : ""}`,
         );
       }
       await this.#store.deletePlanRunInputs(id);
@@ -6329,9 +6534,13 @@ export class RunEngine {
       expectFrom:
         planRun.status === "succeeded" ? ["succeeded"] : ["waiting_approval"],
       run: approved,
+      requireStoredManagementAuthority: true,
     });
     if (!approveResult.won) {
       const current = (approveResult.run as PlanRun | undefined) ?? approved;
+      if (current.status === "waiting_approval") {
+        throw workspaceManagementAdmissionConflictError();
+      }
       throw new OpenTofuControllerError(
         "failed_precondition",
         `plan run ${id} is ${current.status}; only a plan awaiting approval can be approved`,
@@ -6383,9 +6592,14 @@ export class RunEngine {
       kind: "restore",
       expectFrom: ["waiting_approval"],
       run: approved,
+      requireStoredManagementAuthority: true,
     });
     if (!approveResult.won) {
-      return (approveResult.run as Run | undefined) ?? restoreRun;
+      const current = (approveResult.run as Run | undefined) ?? restoreRun;
+      if (current.status === "waiting_approval") {
+        throw workspaceManagementAdmissionConflictError();
+      }
+      return current;
     }
     await this.#recordActivity({
       workspaceId: approved.workspaceId,
@@ -10720,6 +10934,76 @@ export class RunEngine {
 
   async #requireCapsule(id: string): Promise<Capsule> {
     return await requireCapsule(this.#store, id);
+  }
+
+  /**
+   * Captures the active Workspace management fence before any asynchronous
+   * Plan/Apply preparation. The atomic store admission remains authoritative;
+   * this early read only prevents known draining/released Workspaces from
+   * spending time assembling inputs and gives callers a stable precondition.
+   */
+  async #captureWorkspaceManagementAuthority(
+    workspaceId: string,
+    expected?: WorkspaceManagementAuthority,
+  ): Promise<WorkspaceManagementAuthority> {
+    if (expected !== undefined) {
+      assertWorkspaceManagementAuthorityInput(expected, workspaceId);
+    }
+    const management = await this.#store.getWorkspaceManagement(workspaceId);
+    if (
+      !management ||
+      management.workspaceId !== workspaceId ||
+      management.managementState !== "active" ||
+      (expected !== undefined && management.managementEpoch !== expected.managementEpoch)
+    ) {
+      throw workspaceManagementAdmissionConflictError();
+    }
+    return {
+      workspaceId: management.workspaceId,
+      managementState: "active",
+      managementEpoch: management.managementEpoch,
+    };
+  }
+
+  /**
+   * Read-only gate used when repairing an already durable queued Apply/Plan.
+   * The row's original persisted authority must still match the current active
+   * Workspace epoch; missing authority fails closed and is never backfilled.
+   */
+  async #queuedRunHasCurrentManagementAuthority(input: {
+    readonly id: string;
+    readonly workspaceId: string;
+    readonly kind: "plan" | "apply";
+  }): Promise<boolean> {
+    const [authority, management] = await Promise.all([
+      this.#store.getRunManagementAuthority({
+        id: input.id,
+        workspaceId: input.workspaceId,
+        kind: input.kind,
+      }),
+      this.#store.getWorkspaceManagement(input.workspaceId),
+    ]);
+    return (
+      authority?.workspaceId === input.workspaceId &&
+      authority.managementState === "active" &&
+      management?.workspaceId === input.workspaceId &&
+      management.managementState === "active" &&
+      authority.managementEpoch === management.managementEpoch
+    );
+  }
+
+  /**
+   * Confirms that a PlanRun idempotency probe targets a durable existing row
+   * under a real Workspace. This is intentionally separate from management
+   * state: missing Workspace authority must never become a drain bypass.
+   */
+  async #existingPlanReadAllowedDuringQuiescence(
+    workspaceId: string,
+    planRunId: string,
+  ): Promise<boolean> {
+    const existing = await this.#store.getPlanRun(planRunId);
+    if (!existing || existing.workspaceId !== workspaceId) return false;
+    return (await this.#store.getWorkspace(workspaceId)) !== undefined;
   }
 
   async #requireCurrentPlannedCapsule(planRun: PlanRun): Promise<Capsule> {

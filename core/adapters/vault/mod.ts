@@ -76,9 +76,15 @@ import {
   normalizeProviderConfigBaseUrl,
   providerConfigUrlError,
 } from "../../shared/provider_config_urls.ts";
-import type {
-  OpenTofuControlStore,
-  StoredSecretBlob,
+import {
+  assertWorkspaceManagementAdmission,
+  WorkspaceManagementAdmissionConflictError,
+  type OpenTofuControlStore,
+  type StoredSecretBlob,
+  type WorkspaceManagementAuthority,
+  type CommitConnectionTestResultInput,
+  type ConnectionActorAuthority,
+  workspaceAccountAuthorityAllowed,
 } from "../../domains/deploy-control/store.ts";
 import type { SecretBoundaryCrypto } from "../secret-store/memory.ts";
 import type { SecretPartition } from "../secret-store/types.ts";
@@ -241,9 +247,15 @@ export interface CapsuleProviderBindingMintOptions {
 }
 
 export interface ConnectionVault {
-  register(input: RegisterConnectionInput): Promise<ProviderConnection>;
-  test(connectionId: string): Promise<TestConnectionResult>;
-  revoke(id: string): Promise<boolean>;
+  register(
+    input: RegisterConnectionInput,
+    expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
+    actorAccountId: string | null,
+  ): Promise<ProviderConnection>;
+  test(connectionId: string, expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
+    actorAccountId: string | null): Promise<TestConnectionResult>;
+  revoke(id: string, expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
+    actorAccountId: string | null): Promise<boolean>;
   /**
    * Mints a {@link CredentialBundle} of env vars for the given providers within
    * a Workspace. Only verified connections may mint. This is the default
@@ -357,6 +369,13 @@ interface ProviderSecretMaterial {
   readonly files: readonly MintedFile[];
 }
 
+type ConnectionTestSnapshot = Omit<CommitConnectionTestResultInput, "replacement">;
+
+interface ObservedProviderSecretMaterial {
+  readonly material: ProviderSecretMaterial;
+  readonly secretBlob: StoredSecretBlob | null;
+}
+
 /** Injected fetch implementation so driver verification is unit-testable. */
 export type VaultFetch = CredentialDriverFetch;
 
@@ -437,7 +456,14 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     );
   }
 
-  async register(input: RegisterConnectionInput): Promise<ProviderConnection> {
+  async register(
+    input: RegisterConnectionInput,
+    expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
+    actorAccountId: string | null,
+  ): Promise<ProviderConnection> {
+    if (actorAccountId !== null) requireNonEmpty(actorAccountId, "actorAccountId");
+    const originalAuthority = expectedWorkspaceManagementAuthority === undefined
+      ? undefined : structuredClone(expectedWorkspaceManagementAuthority);
     const workspaceId = workspaceIdForConnectionInput(input);
     if (hasLegacyManagedProviderScopeHints(input.scopeHints)) {
       throw new ConnectionVaultError(
@@ -461,8 +487,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         "operator-scoped connections must not have an owning Workspace (omit workspaceId for scope: operator)",
       );
     }
+    const actorAuthority = await this.#captureConnectionActorAuthority(workspaceId, actorAccountId);
     if (isSourceGitKind(input.kind)) {
-      return await this.#registerGitConnection(input, input.kind);
+      return await this.#registerGitConnection(input, input.kind, originalAuthority, actorAuthority);
     }
     requireNonEmpty(input.provider, "provider");
     if (
@@ -675,6 +702,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         { includeUnknownEnvAsSensitive: false },
       ),
     );
+    const registrationAuthority = await this.#captureManagementAuthority(workspaceId, originalAuthority);
     const now = this.#now();
     const expiresAt = normalizeConnectionExpiresAt(input.expiresAt, now);
     const id = this.#newId();
@@ -682,6 +710,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const secretPartition = runIssuance
       ? undefined
       : secretPartitionForRegistration(credentialRecipe);
+    let blob: StoredSecretBlob | undefined;
     if (secretPartition) {
       const secretMaterial = declaredEnvRegistration
         ? {
@@ -699,7 +728,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
           provider: input.provider,
         }),
       );
-      const blob = makeStoredSecretBlob({
+      blob = makeStoredSecretBlob({
         connectionId: id,
         ...(workspaceId ? { workspaceId: workspaceId } : {}),
         provider: input.provider,
@@ -708,7 +737,6 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         createdAt: nowIso,
         crypto: this.#crypto,
       });
-      await this.#store.putSecretBlob(blob);
     }
 
     const connection: ProviderConnection = {
@@ -732,7 +760,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       updatedAt: nowIso,
       ...(expiresAt ? { expiresAt } : {}),
     };
-    await this.#store.putConnection(connection);
+    await this.#persistRegistration(connection, blob, registrationAuthority, actorAuthority);
     return connection;
   }
 
@@ -744,6 +772,8 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   async #registerGitConnection(
     input: RegisterConnectionInput,
     kind: SourceGitConnectionKind,
+    originalAuthority: WorkspaceManagementAuthority | undefined,
+    actorAuthority: ConnectionActorAuthority | null,
   ): Promise<ProviderConnection> {
     const workspaceId = workspaceIdForConnectionInput(input);
     const values = input.values;
@@ -784,6 +814,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     if (!validation.ok) {
       throw new ConnectionVaultError("invalid_argument", validation.detail);
     }
+    const registrationAuthority = await this.#captureManagementAuthority(workspaceId, originalAuthority);
     const now = this.#now();
     const expiresAt = normalizeConnectionExpiresAt(input.expiresAt, now);
     const id = this.#newId();
@@ -810,7 +841,6 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       createdAt: nowIso,
       crypto: this.#crypto,
     });
-    await this.#store.putSecretBlob(blob);
 
     const connection: ProviderConnection = {
       id,
@@ -829,26 +859,107 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       updatedAt: nowIso,
       ...(expiresAt ? { expiresAt } : {}),
     };
-    await this.#store.putConnection(connection);
+    await this.#persistRegistration(connection, blob, registrationAuthority, actorAuthority);
     return connection;
   }
 
-  async test(connectionId: string): Promise<TestConnectionResult> {
-    const connection = await this.#requireConnection(connectionId);
+  async #captureConnectionActorAuthority(
+    workspaceId: string | undefined,
+    actorAccountId: string | null,
+  ): Promise<ConnectionActorAuthority | null> {
+    // Null is an explicit trusted internal caller, never an omitted account.
+    if (actorAccountId === null) return null;
+    requireNonEmpty(actorAccountId, "actorAccountId");
+    if (workspaceId === undefined) {
+      throw new ConnectionVaultError("invalid_argument", "account authority requires a Workspace Connection");
+    }
+    const expectedWorkspace = structuredClone(await this.#store.getWorkspace(workspaceId));
+    if (!expectedWorkspace || expectedWorkspace.id !== workspaceId) {
+      throw new ConnectionVaultError("failed_precondition", "Connection account authority is no longer current",
+        undefined, "connection_actor_authority_conflict");
+    }
+    const expectedActor = expectedWorkspace.ownerUserId === actorAccountId
+      ? undefined : structuredClone(await this.#store.getWorkspaceMember(workspaceId, actorAccountId));
+    const authority: ConnectionActorAuthority = { actorAccountId, expectedWorkspace,
+      ...(expectedActor === undefined ? {} : { expectedActor }) };
+    if (!workspaceAccountAuthorityAllowed(authority)) {
+      throw new ConnectionVaultError("failed_precondition", "Connection account authority is no longer current",
+        undefined, "connection_actor_authority_conflict");
+    }
+    return authority;
+  }
+
+  async #captureManagementAuthority(
+    workspaceId: string | undefined,
+    originalAuthority?: WorkspaceManagementAuthority,
+  ): Promise<WorkspaceManagementAuthority | undefined> {
+    if (workspaceId === undefined) {
+      if (originalAuthority !== undefined) {
+        throw new ConnectionVaultError("invalid_argument", "operator-scoped connections must not carry Workspace authority");
+      }
+      return undefined;
+    }
+    try {
+      const management = assertWorkspaceManagementAdmission(
+        await this.#store.getWorkspaceManagement(workspaceId), workspaceId, originalAuthority,
+      );
+      return originalAuthority ?? { workspaceId, managementState: "active", managementEpoch: management.managementEpoch };
+    } catch (error) {
+      throw connectionManagementAdmissionError(error);
+    }
+  }
+
+  async #persistRegistration(
+    connection: ProviderConnection, secretBlob: StoredSecretBlob | undefined,
+    expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
+    actorAuthority: ConnectionActorAuthority | null,
+  ): Promise<void> {
+    const created = await this.#store.createConnectionRegistration({
+      connection, secretBlob, expectedWorkspaceManagementAuthority, actorAuthority,
+    }).catch((error: unknown) => { throw connectionManagementAdmissionError(error); });
+    if (!created) {
+      throw new ConnectionVaultError("failed_precondition",
+        "Connection registration identity is already occupied", undefined, "connection_registration_conflict");
+    }
+  }
+
+  async test(connectionId: string, expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
+    actorAccountId: string | null): Promise<TestConnectionResult> {
+    if (actorAccountId !== null) requireNonEmpty(actorAccountId, "actorAccountId");
+    const originalAuthority = expectedWorkspaceManagementAuthority === undefined
+      ? undefined : structuredClone(expectedWorkspaceManagementAuthority);
+    const connection = structuredClone(await this.#requireConnection(connectionId));
     if (connection.status === "revoked") {
       throw new ConnectionVaultError(
         "failed_precondition",
         `connection ${connectionId} is revoked`,
       );
     }
+    const authority = await this.#captureManagementAuthority(connection.workspaceId, originalAuthority);
+    const actorAuthority = await this.#captureConnectionActorAuthority(connection.workspaceId, actorAccountId);
     if (connectionIsExpired(connection, this.#now())) {
-      await this.#markConnectionExpired(connection);
+      if (this.#operatorProviderConnections.has(connection.id)) {
+        await this.#markConnectionExpired(connection);
+      } else {
+        const expectedSecretBlob = structuredClone(await this.#store.getSecretBlob(connection.id) ?? null);
+        const observedAt = this.#now().toISOString();
+        await this.#commitTestResult({ expectedConnection: connection, expectedSecretBlob,
+          expectedWorkspaceManagementAuthority: authority, actorAuthority }, {
+          ...connection, status: "expired",
+          updatedAt: Date.parse(connection.updatedAt) >= Date.parse(observedAt) ? connection.updatedAt : observedAt,
+        });
+      }
       return {
         status: "expired",
         detail: `connection ${connectionId} expired at ${connection.expiresAt}`,
       };
     }
-    const material = await this.#providerMaterialForConnection(connection);
+    const observed = await this.#observeProviderMaterialForConnection(connection);
+    const material = observed.material;
+    const testSnapshot: ConnectionTestSnapshot = {
+      expectedConnection: structuredClone(connection), expectedSecretBlob: observed.secretBlob,
+      expectedWorkspaceManagementAuthority: authority, actorAuthority,
+    };
     const values = material.env;
     const sensitiveValues = sensitiveMaterialValues(
       connection,
@@ -863,7 +974,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
       if (!driver) {
         return await this.#verificationFailed(
-          connection,
+          testSnapshot,
           `no verification driver is configured for connection kind ${connection.kind ?? "(unknown)"} (provider ${connection.provider})`,
           sensitiveValues,
         );
@@ -880,7 +991,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         );
       } catch (error) {
         const wrapped = wrapDriverError(error);
-        await this.#verificationFailed(connection, wrapped.message, sensitiveValues);
+        await this.#verificationFailed(testSnapshot, wrapped.message, sensitiveValues);
         throw wrapped;
       }
     } else {
@@ -891,7 +1002,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
             "verification authority requires a verify method",
           );
           await this.#verificationFailed(
-            connection,
+            testSnapshot,
             error.message,
             sensitiveValues,
           );
@@ -899,7 +1010,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         }
         if (connection.credentialRecipe?.preRunAction && !driver?.mint) {
           return await this.#verificationFailed(
-            connection,
+            testSnapshot,
             `no mint driver is installed for pre-run credential recipe ${recipeLabel(connection)}`,
             sensitiveValues,
           );
@@ -921,14 +1032,14 @@ export class StaticSecretConnectionVault implements ConnectionVault {
           );
         } catch (error) {
           const wrapped = wrapDriverError(error);
-          await this.#verificationFailed(connection, wrapped.message, sensitiveValues);
+          await this.#verificationFailed(testSnapshot, wrapped.message, sensitiveValues);
           throw wrapped;
         }
       }
     }
     if (!verified.ok) {
       return await this.#verificationFailed(
-        connection,
+        testSnapshot,
         verified.detail,
         sensitiveValues,
       );
@@ -948,7 +1059,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
     } catch (error) {
       await this.#verificationFailed(
-        connection,
+        testSnapshot,
         "credential verification driver descriptor is invalid",
         sensitiveValues,
       );
@@ -967,7 +1078,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
     } catch (error) {
       await this.#verificationFailed(
-        connection,
+        testSnapshot,
         "credential verification produced invalid non-secret metadata",
         sensitiveValues,
       );
@@ -983,7 +1094,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
     } catch (error) {
       await this.#verificationFailed(
-        connection,
+        testSnapshot,
         "credential verification produced invalid non-secret metadata",
         sensitiveValues,
       );
@@ -1007,27 +1118,35 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     if (this.#operatorProviderConnections.has(connection.id)) {
       return { status: "verified" };
     }
-    const replaced = await this.#store.replaceConnectionIfUnchanged(
-      connection,
-      verifiedConnection,
-    );
-    if (!replaced) {
-      throw connectionVerificationRaceError();
-    }
+    await this.#commitTestResult(testSnapshot, verifiedConnection);
     return { status: "verified" };
   }
 
-  async revoke(id: string): Promise<boolean> {
+  async revoke(id: string, expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
+    actorAccountId: string | null): Promise<boolean> {
+    if (actorAccountId !== null) requireNonEmpty(actorAccountId, "actorAccountId");
+    const originalAuthority = expectedWorkspaceManagementAuthority === undefined
+      ? undefined : structuredClone(expectedWorkspaceManagementAuthority);
     if (this.#operatorProviderConnections.has(id)) {
       throw new ConnectionVaultError(
         "failed_precondition",
         `connection ${id} is owned by the running release and cannot be revoked through the runtime API`,
       );
     }
-    const existed = await this.#store.getConnection(id);
-    await this.#store.deleteSecretBlob(id);
-    const deleted = await this.#store.deleteConnection(id);
-    return deleted || existed !== undefined;
+    const connection = await this.#store.getConnection(id);
+    // An orphan opaque blob is not authority to delete material without an
+    // owning Connection. Repeated revocation remains an observation only.
+    if (!connection) return false;
+    const authority = await this.#captureManagementAuthority(connection.workspaceId, originalAuthority);
+    const actorAuthority = await this.#captureConnectionActorAuthority(connection.workspaceId, actorAccountId);
+    const revoked = await this.#store.revokeConnectionIfUnchanged({
+      expectedConnection: connection, expectedWorkspaceManagementAuthority: authority, actorAuthority,
+    }).catch((error: unknown) => { throw connectionManagementAdmissionError(error); });
+    if (!revoked) {
+      throw new ConnectionVaultError("failed_precondition", "Connection changed before revocation",
+        undefined, "connection_revocation_conflict");
+    }
+    return true;
   }
 
   async mint(
@@ -1448,20 +1567,21 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         `release-owned connection ${connection.id} cannot be mutated at runtime`,
       );
     }
-    const nowIso = this.#now().toISOString();
-    const expiredConnection: ProviderConnection = {
-      ...connection,
-      status: "expired",
-      updatedAt: nowIso,
-    };
-    await this.#store.putConnection(expiredConnection);
+    // Expiry can only reduce the authority of the exact observed row. Losing
+    // this CAS does not resume mint with a newer credential; the caller still
+    // rejects the expired snapshot without opening its material.
+    await this.#store.markConnectionExpiredIfUnchanged({
+      expectedConnection: connection,
+      observedAt: this.#now().toISOString(),
+    });
   }
 
   async #verificationFailed(
-    connection: ProviderConnection,
+    testSnapshot: ConnectionTestSnapshot,
     detail: string | undefined,
     sensitiveValues: readonly string[] = [],
   ): Promise<TestConnectionResult> {
+    const connection = testSnapshot.expectedConnection;
     if (this.#operatorProviderConnections.has(connection.id)) {
       return {
         status: "pending",
@@ -1503,14 +1623,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       updatedAt: this.#now().toISOString(),
       ...(normalizedScopeHints ? { scopeHints: normalizedScopeHints } : {}),
     };
-    if (
-      !(await this.#store.replaceConnectionIfUnchanged(
-        connection,
-        pendingConnection,
-      ))
-    ) {
-      throw connectionVerificationRaceError();
-    }
+    await this.#commitTestResult(testSnapshot, pendingConnection);
     return {
       status: "pending",
       ...(detail ? { detail } : {}),
@@ -1520,7 +1633,19 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   async #openProviderSecretMaterial(
     connection: ProviderConnection,
   ): Promise<ProviderSecretMaterial> {
-    const blob = await this.#store.getSecretBlob(connection.id);
+    return (await this.#observeStoredProviderMaterial(connection)).material;
+  }
+
+  async #commitTestResult(snapshot: ConnectionTestSnapshot, replacement: ProviderConnection): Promise<void> {
+    const replaced = await this.#store.commitConnectionTestResult({ ...snapshot, replacement })
+      .catch((error: unknown) => { throw connectionManagementAdmissionError(error); });
+    if (!replaced) throw connectionVerificationRaceError();
+  }
+
+  async #observeStoredProviderMaterial(connection: ProviderConnection): Promise<ObservedProviderSecretMaterial> {
+    // Keep the exact sealed bytes BEFORE crypto/driver awaits. A fresh read at
+    // commit would attach old verification evidence to newly rotated material.
+    const blob = structuredClone(await this.#store.getSecretBlob(connection.id));
     if (!blob) {
       throw new ConnectionVaultError(
         "failed_precondition",
@@ -1538,25 +1663,31 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const parsed = JSON.parse(plaintext) as Record<string, unknown>;
     if (isRecord(parsed.env)) {
       return {
-        env: stringRecord(parsed.env),
-        files: mintedFilesFromSecretMaterial(parsed.files),
+        material: { env: stringRecord(parsed.env), files: mintedFilesFromSecretMaterial(parsed.files) },
+        secretBlob: blob,
       };
     }
-    return { env: stringRecord(parsed), files: [] };
+    return { material: { env: stringRecord(parsed), files: [] }, secretBlob: blob };
   }
 
   async #providerMaterialForConnection(
     connection: ProviderConnection,
   ): Promise<ProviderSecretMaterial> {
+    return (await this.#observeProviderMaterialForConnection(connection)).material;
+  }
+
+  async #observeProviderMaterialForConnection(
+    connection: ProviderConnection,
+  ): Promise<ObservedProviderSecretMaterial> {
     if (
       !isCapsuleRunCredentialIssuance(
         connection.credentialRecipe?.runIssuance,
       )
     ) {
-      return await this.#openProviderSecretMaterial(connection);
+      return await this.#observeStoredProviderMaterial(connection);
     }
     if (this.#operatorProviderConnections.has(connection.id)) {
-      return { env: {}, files: [] };
+      return { material: { env: {}, files: [] }, secretBlob: null };
     }
     const unexpected = await this.#store.getSecretBlob(connection.id);
     if (unexpected) {
@@ -1567,7 +1698,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         "credential_service_unavailable",
       );
     }
-    return { env: {}, files: [] };
+    return { material: { env: {}, files: [] }, secretBlob: null };
   }
 
   async #openValues(
@@ -3058,6 +3189,13 @@ function wrapDriverError(_error: unknown): ConnectionVaultError {
     undefined,
     "credential_service_unavailable",
   );
+}
+
+function connectionManagementAdmissionError(error: unknown): unknown {
+  return error instanceof WorkspaceManagementAdmissionConflictError
+    ? new ConnectionVaultError("failed_precondition", "Workspace is not accepting this connection change",
+      undefined, "workspace_management_admission_conflict")
+    : error;
 }
 
 /**

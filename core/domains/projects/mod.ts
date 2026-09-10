@@ -11,7 +11,9 @@
  *
  * The production composition injects the shared OpenTofu control store, whose
  * D1/Postgres implementations persist this port in the canonical `projects`
- * table. The small in-memory implementation remains an explicit test helper.
+ * table. Project creation is deliberately routed through the store's guarded
+ * record seam so Workspace management state and slug uniqueness share one
+ * durable boundary.
  */
 
 import type { Project } from "takosumi-contract/projects";
@@ -19,6 +21,13 @@ import {
   OpenTofuControllerError,
   requireNonEmptyString,
 } from "../deploy-control/errors.ts";
+import type {
+  ProjectCreationInput,
+  ProjectCreationResult,
+  WorkspaceManagement,
+  WorkspaceManagementAuthority,
+} from "../deploy-control/store.ts";
+import { assertWorkspaceManagementAuthorityInput, WorkspaceManagementAdmissionConflictError } from "../deploy-control/store.ts";
 
 /**
  * Deterministic default Project id scoped by its owning Workspace.
@@ -48,55 +57,18 @@ export interface CreateProjectRequest {
   readonly projectJson?: Readonly<Record<string, unknown>>;
 }
 
-/**
- * Persistence port for Projects. The durable control plane provides a backing
- * implementation; {@link InMemoryProjectStore} is an explicit test helper.
- */
+/** Persistence port for Projects backed by the control-plane store. */
 export interface ProjectStore {
-  putProject(project: Project): Promise<Project>;
+  createProjectRecord(input: ProjectCreationInput): Promise<ProjectCreationResult>;
+  getWorkspaceManagement(
+    workspaceId: string,
+  ): Promise<WorkspaceManagement | undefined>;
   getProject(id: string): Promise<Project | undefined>;
   getProjectBySlug(
     workspaceId: string,
     slug: string,
   ): Promise<Project | undefined>;
   listProjectsByWorkspace(workspaceId: string): Promise<readonly Project[]>;
-}
-
-/** Single-isolate {@link ProjectStore} for dev / tests. */
-export class InMemoryProjectStore implements ProjectStore {
-  readonly #byId = new Map<string, Project>();
-
-  async putProject(project: Project): Promise<Project> {
-    this.#byId.set(project.id, project);
-    return project;
-  }
-
-  async getProject(id: string): Promise<Project | undefined> {
-    return this.#byId.get(id);
-  }
-
-  async getProjectBySlug(
-    workspaceId: string,
-    slug: string,
-  ): Promise<Project | undefined> {
-    for (const project of this.#byId.values()) {
-      if (project.workspaceId === workspaceId && project.slug === slug) {
-        return project;
-      }
-    }
-    return undefined;
-  }
-
-  async listProjectsByWorkspace(
-    workspaceId: string,
-  ): Promise<readonly Project[]> {
-    return [...this.#byId.values()]
-      .filter((project) => project.workspaceId === workspaceId)
-      .sort(
-        (a, b) =>
-          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-      );
-  }
 }
 
 export interface ProjectsServiceDependencies {
@@ -126,6 +98,12 @@ export class ProjectsService {
         `slug ${request.slug} must match ${PROJECT_SLUG_PATTERN.source}`,
       );
     }
+    // Capture this exact private authority before the asynchronous slug
+    // lookup and record preparation. The store repeats the epoch check in the
+    // same atomic create boundary; never refresh it after those awaits.
+    const expectedWorkspaceManagementAuthority =
+      await this.#captureWorkspaceManagementAuthority(request.workspaceId);
+    if (!expectedWorkspaceManagementAuthority) throw workspaceManagementAdmissionErrorFor();
     const existing = await this.#store.getProjectBySlug(
       request.workspaceId,
       request.slug,
@@ -146,7 +124,27 @@ export class ProjectsService {
       createdAt: nowIso,
       updatedAt: nowIso,
     };
-    return await this.#store.putProject(project);
+    let result: ProjectCreationResult;
+    try {
+      result = await this.#store.createProjectRecord({
+        project,
+        expectedWorkspaceManagementAuthority,
+      });
+    } catch (error) {
+      if (error instanceof WorkspaceManagementAdmissionConflictError) {
+        throw workspaceManagementAdmissionErrorFor();
+      }
+      throw error;
+    }
+    if (result.status === "conflict") {
+      // Preserve the existing duplicate-slug contract for a concurrent writer
+      // that wins the store CAS between our read and publication.
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "project already exists",
+      );
+    }
+    return result.project;
   }
 
   async getProject(id: string): Promise<Project> {
@@ -162,7 +160,15 @@ export class ProjectsService {
     requireNonEmptyString(workspaceId, "workspaceId");
     const projects = await this.#store.listProjectsByWorkspace(workspaceId);
     if (projects.length > 0) return projects;
-    return [await this.ensureDefaultProject(workspaceId)];
+    try {
+      return [await this.ensureDefaultProject(workspaceId)];
+    } catch (error) {
+      // An empty stopped Workspace is a valid read-only observation. Only the
+      // exact management-admission refusal is converted to an empty list;
+      // duplicate/conflict and all other failures remain visible to callers.
+      if (isWorkspaceManagementAdmissionConflict(error)) return [];
+      throw error;
+    }
   }
 
   /**
@@ -170,16 +176,22 @@ export class ProjectsService {
    * Workspace so pre-Project Capsules keep a stable owner. Returns the existing
    * default when already present.
    */
-  async ensureDefaultProject(workspaceId: string): Promise<Project> {
+  async ensureDefaultProject(
+    workspaceId: string,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<Project> {
     requireNonEmptyString(workspaceId, "workspaceId");
-    const projectId = defaultProjectId(workspaceId);
-    const existing = await this.#store.getProject(projectId);
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(expectedWorkspaceManagementAuthority, workspaceId);
+    }
+    const authority = expectedWorkspaceManagementAuthority ??
+      (await this.#captureWorkspaceManagementAuthority(workspaceId));
+    const existing = await this.#readDefaultProject(workspaceId);
     if (existing) return existing;
-    const bySlug = await this.#store.getProjectBySlug(
-      workspaceId,
-      DEFAULT_PROJECT_SLUG,
-    );
-    if (bySlug) return bySlug;
+    // Existing defaults are read-only even while draining. A new default is
+    // admitted only through createProjectRecord with this one captured epoch.
+    if (!authority) throw workspaceManagementAdmissionErrorFor();
+    const projectId = defaultProjectId(workspaceId);
     const nowIso = this.#now().toISOString();
     const project: Project = {
       id: projectId,
@@ -190,8 +202,85 @@ export class ProjectsService {
       createdAt: nowIso,
       updatedAt: nowIso,
     };
-    return await this.#store.putProject(project);
+    let result: ProjectCreationResult;
+    try {
+      result = await this.#store.createProjectRecord({
+        project,
+        expectedWorkspaceManagementAuthority: authority,
+      });
+    } catch (error) {
+      if (error instanceof WorkspaceManagementAdmissionConflictError) {
+        throw workspaceManagementAdmissionErrorFor();
+      }
+      throw error;
+    }
+    if (result.status === "created" || result.status === "replayed") {
+      return result.project;
+    }
+    // A concurrent creator may have used a different timestamp (or a
+    // different generated id) for the same default slug. Adopt the canonical
+    // row after the CAS conflict; never overwrite it with our candidate.
+    const canonical = await this.#readDefaultProject(workspaceId);
+    if (canonical) return canonical;
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "project already exists",
+    );
   }
+
+  async #readDefaultProject(workspaceId: string): Promise<Project | undefined> {
+    const byId = await this.#store.getProject(defaultProjectId(workspaceId));
+    if (byId?.workspaceId === workspaceId) return byId;
+    const bySlug = await this.#store.getProjectBySlug(
+      workspaceId,
+      DEFAULT_PROJECT_SLUG,
+    );
+    return bySlug?.workspaceId === workspaceId ? bySlug : undefined;
+  }
+
+  async #captureWorkspaceManagementAuthority(
+    workspaceId: string,
+  ): Promise<WorkspaceManagementAuthority | undefined> {
+    const management = await this.#store.getWorkspaceManagement(workspaceId);
+    if (
+      !management ||
+      management.workspaceId !== workspaceId ||
+      management.managementState !== "active"
+    ) {
+      return undefined;
+    }
+    return {
+      workspaceId: management.workspaceId,
+      managementState: "active",
+      managementEpoch: management.managementEpoch,
+    };
+  }
+}
+
+const WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_REASON =
+  "workspace_management_admission_conflict";
+const WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_MESSAGE =
+  "Workspace is not accepting this management operation.";
+
+function workspaceManagementAdmissionErrorFor(): OpenTofuControllerError {
+  return new OpenTofuControllerError(
+    "failed_precondition",
+    WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_MESSAGE,
+    { reason: WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_REASON },
+  );
+}
+
+function isWorkspaceManagementAdmissionConflict(error: unknown): boolean {
+  if (!(error instanceof OpenTofuControllerError)) return false;
+  const details = error.details;
+  return (
+    error.code === "failed_precondition" &&
+    typeof details === "object" &&
+    details !== null &&
+    !Array.isArray(details) &&
+    (details as { readonly reason?: unknown }).reason ===
+      WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_REASON
+  );
 }
 
 function defaultId(prefix: string): string {

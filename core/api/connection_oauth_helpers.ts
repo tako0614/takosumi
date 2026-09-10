@@ -2,6 +2,10 @@ import type { CreateConnectionRequest } from "@takosumi/internal/deploy-control-
 import type { ConnectionOAuthDescriptor } from "./connection_oauth_ports.ts";
 import { constantTimeEqualsString } from "takosumi-contract/internal/crypto";
 import { OpenTofuControllerError } from "../domains/deploy-control/mod.ts";
+import {
+  assertWorkspaceManagementAuthorityInput,
+  type WorkspaceManagementAuthority,
+} from "../domains/deploy-control/store.ts";
 import type {
   ConnectionOAuthCallbackInput,
   ConnectionOAuthCompletion,
@@ -19,6 +23,8 @@ interface SignedOAuthState {
   readonly helperId: string;
   readonly expiresAt: number;
   readonly body: ConnectionOAuthStartInput["body"];
+  /** Private Workspace admission tuple captured before OAuth preparation. */
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
   /**
    * Authenticated account subject of the caller that started the flow,
    * captured at `start` time and protected by the state HMAC. The cross-site
@@ -77,12 +83,34 @@ async function startOAuth(
   config: OAuthProviderConfig,
   input: ConnectionOAuthStartInput,
 ): Promise<ConnectionOAuthStartResponse> {
+  const expectedWorkspaceManagementAuthority =
+    input.expectedWorkspaceManagementAuthority;
+  if (expectedWorkspaceManagementAuthority !== undefined) {
+    try {
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        input.body.workspaceId ?? "",
+      );
+    } catch {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "OAuth Workspace management authority is invalid",
+      );
+    }
+  }
   const expiresAt = Date.now() + 10 * 60 * 1000;
   const state = await signState(
     {
       helperId: config.id,
       expiresAt,
       body: input.body,
+      ...(expectedWorkspaceManagementAuthority
+        ? {
+            expectedWorkspaceManagementAuthority: structuredClone(
+              expectedWorkspaceManagementAuthority,
+            ),
+          }
+        : {}),
       // Bind the OAuth state to the authenticated subject so the cross-site
       // callback can authorize from the signed state alone (no session cookie).
       ...(input.body.subject ? { subject: input.body.subject } : {}),
@@ -134,6 +162,16 @@ async function completeOAuth(
     fetchImpl,
   );
   const values = valuesFromTokenResponse(config, tokenResponse);
+  if (state.expectedWorkspaceManagementAuthority !== undefined) {
+    try {
+      assertWorkspaceManagementAuthorityInput(
+        state.expectedWorkspaceManagementAuthority,
+        state.body.workspaceId ?? "",
+      );
+    } catch {
+      throw new OpenTofuControllerError("invalid_argument", "invalid OAuth state");
+    }
+  }
   const request: CreateConnectionRequest = {
     ...(state.body.workspaceId ? { workspaceId: state.body.workspaceId } : {}),
     provider: config.providerSource,
@@ -150,7 +188,16 @@ async function completeOAuth(
   // top-level signed `subject`; fall back to a subject the caller threaded
   // through `body` for older states.
   const subject = state.subject ?? state.body.subject;
-  return subject ? { request, subject } : { request };
+  return {
+    request,
+    ...(subject ? { subject } : {}),
+    ...(state.expectedWorkspaceManagementAuthority
+      ? {
+          expectedWorkspaceManagementAuthority:
+            structuredClone(state.expectedWorkspaceManagementAuthority),
+        }
+      : {}),
+  };
 }
 
 async function exchangeCode(
@@ -317,7 +364,24 @@ function isSignedOAuthState(value: unknown): value is SignedOAuthState {
     typeof value.helperId === "string" &&
     value.helperId.trim() !== "" &&
     typeof value.expiresAt === "number" &&
-    isRecord(value.body)
+    isRecord(value.body) &&
+    (value.expectedWorkspaceManagementAuthority === undefined ||
+      isWorkspaceManagementAuthority(value.expectedWorkspaceManagementAuthority))
+  );
+}
+
+function isWorkspaceManagementAuthority(
+  value: unknown,
+): value is WorkspaceManagementAuthority {
+  if (!isRecord(value)) return false;
+  const managementEpoch = value.managementEpoch;
+  return (
+    typeof value.workspaceId === "string" &&
+    value.workspaceId.trim() !== "" &&
+    value.managementState === "active" &&
+    typeof managementEpoch === "number" &&
+    Number.isSafeInteger(managementEpoch) &&
+    managementEpoch >= 1
   );
 }
 

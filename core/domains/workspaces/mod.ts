@@ -22,10 +22,17 @@ import {
   type WorkspaceType,
 } from "takosumi-contract/workspaces";
 import {
+  isRecord,
   OpenTofuControllerError,
   requireNonEmptyString,
 } from "../deploy-control/errors.ts";
-import type { OpenTofuControlStore } from "../deploy-control/store.ts";
+import {
+  assertWorkspaceManagementAdmission,
+  assertWorkspaceManagementAuthorityInput,
+  WorkspaceManagementAdmissionConflictError,
+  type OpenTofuControlStore,
+  type WorkspaceManagementAuthority,
+} from "../deploy-control/store.ts";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 
 // The contract owns the stable technical API-identifier grammar (lowercase
@@ -37,6 +44,12 @@ export interface CreateWorkspaceRequest {
   readonly displayName: string;
   readonly type: WorkspaceType;
   readonly ownerUserId: string;
+}
+
+export interface WorkspaceMetadataPatch {
+  readonly displayName?: string;
+  readonly policy?: Workspace["policy"];
+  readonly archived?: boolean;
 }
 
 export interface WorkspacesServiceDependencies {
@@ -52,6 +65,9 @@ export interface WorkspacesServiceDependencies {
 }
 
 export interface UpsertWorkspaceMemberRequest {
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
+  /** A stricter caller policy, checked against the current durable actor. */
+  readonly requiredActorRole?: "owner";
   readonly workspaceId: string;
   readonly accountId: string;
   readonly roles?: readonly WorkspaceRole[];
@@ -78,6 +94,22 @@ export class WorkspacesService {
     this.#now = deps.now ?? (() => new Date());
   }
 
+  /** Private preparation fence; the eventual store mutation rechecks it. */
+  async captureManagementAuthority(
+    workspaceId: string,
+  ): Promise<WorkspaceManagementAuthority> {
+    requireNonEmptyString(workspaceId, "workspaceId");
+    const management = assertWorkspaceManagementAdmission(
+      await this.#store.getWorkspaceManagement(workspaceId),
+      workspaceId,
+    );
+    return {
+      workspaceId,
+      managementState: "active",
+      managementEpoch: management.managementEpoch,
+    };
+  }
+
   async createWorkspace(request: CreateWorkspaceRequest): Promise<Workspace> {
     requireNonEmptyString(request.handle, "handle");
     requireNonEmptyString(request.displayName, "displayName");
@@ -98,7 +130,7 @@ export class WorkspacesService {
     if (existing) {
       if (workspaceMatchesCreateRequest(existing, request)) {
         await this.#ensureOwnerMember(existing);
-        await this.#ensureDefaultProject?.(existing.id);
+        await this.#completeDefaultProjectRepair(existing.id);
         return existing;
       }
       throw new OpenTofuControllerError(
@@ -127,7 +159,7 @@ export class WorkspacesService {
       created = recovered;
     }
     await this.#ensureOwnerMember(created);
-    await this.#ensureDefaultProject?.(created.id);
+    await this.#completeDefaultProjectRepair(created.id);
     return created;
   }
 
@@ -157,11 +189,22 @@ export class WorkspacesService {
    */
   async updateWorkspace(
     id: string,
-    patch: {
-      readonly displayName?: string;
-      readonly policy?: Workspace["policy"];
-      readonly archived?: boolean;
-    },
+    patch: WorkspaceMetadataPatch,
+  ): Promise<Workspace> {
+    return await this.#updateWorkspace(id, patch);
+  }
+
+  async updateWorkspaceForAccount(
+    id: string, patch: WorkspaceMetadataPatch, actorAccountId: string,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<Workspace> {
+    requireNonEmptyString(actorAccountId, "actorAccountId");
+    return await this.#updateWorkspace(id, patch, actorAccountId, expectedWorkspaceManagementAuthority);
+  }
+
+  async #updateWorkspace(
+    id: string, patch: WorkspaceMetadataPatch, actorAccountId?: string,
+    suppliedAuthority?: WorkspaceManagementAuthority,
   ): Promise<Workspace> {
     requireNonEmptyString(id, "id");
     if (patch.displayName !== undefined) {
@@ -188,7 +231,16 @@ export class WorkspacesService {
         "displayName, policy, or archived is required",
       );
     }
+    if (suppliedAuthority) assertWorkspaceManagementAuthorityInput(suppliedAuthority, id);
+    const expectedWorkspaceManagementAuthority = suppliedAuthority ?? await this.captureManagementAuthority(id)
+      .catch((error: unknown) => { throw workspaceMutationError(error); });
     const workspace = await this.getWorkspace(id);
+    const expectedActor = actorAccountId === undefined || workspace.ownerUserId === actorAccountId
+      ? undefined : await this.#store.getWorkspaceMember(id, actorAccountId);
+    if (actorAccountId !== undefined && workspace.ownerUserId !== actorAccountId &&
+      (!expectedActor || expectedActor.status !== "active" ||
+        (!expectedActor.roles.includes("owner") && !expectedActor.roles.includes("admin")))
+    ) throw new OpenTofuControllerError("permission_denied", "actor cannot update Workspace settings");
     const nowIso = this.#now().toISOString();
     const updated: Workspace = {
       ...workspace,
@@ -204,7 +256,22 @@ export class WorkspacesService {
     if (patch.archived === false) {
       delete (updated as { archivedAt?: string }).archivedAt;
     }
-    return await this.#store.putWorkspace(updated);
+    const replacement = {
+      workspace: updated,
+      expectedWorkspace: workspace,
+      expectedWorkspaceManagementAuthority,
+    };
+    const replaced = await (actorAccountId === undefined
+      ? this.#store.replaceWorkspace(replacement)
+      : this.#store.replaceWorkspaceForAccount({ ...replacement, actorAccountId, expectedActor })
+    ).catch((error: unknown) => { throw workspaceMutationError(error); });
+    if (!replaced) {
+      throw new OpenTofuControllerError(
+        "failed_precondition", "Workspace changed while preparing this update.",
+        { reason: "workspace_changed" },
+      );
+    }
+    return updated;
   }
 
   async getWorkspaceByHandle(handle: string): Promise<Workspace | undefined> {
@@ -273,9 +340,11 @@ export class WorkspacesService {
   ): Promise<Workspace | undefined> {
     requireNonEmptyString(accountId, "accountId");
     requireNonEmptyString(workspaceId, "workspaceId");
+    const workspace = await this.#store.getWorkspace(workspaceId);
+    if (!workspace || workspace.ownerUserId === accountId) return workspace;
     const member = await this.#store.getWorkspaceMember(workspaceId, accountId);
     if (member?.status !== "active") return undefined;
-    return await this.#store.getWorkspace(workspaceId);
+    return workspace;
   }
 
   /** Exact membership lookup for authorization hot paths. */
@@ -292,8 +361,7 @@ export class WorkspacesService {
   async listWorkspaceMembers(
     workspaceId: string,
   ): Promise<readonly WorkspaceMember[]> {
-    const workspace = await this.getWorkspace(workspaceId);
-    await this.#ensureOwnerMember(workspace);
+    await this.getWorkspace(workspaceId);
     return await this.#store.listWorkspaceMembers(workspaceId);
   }
 
@@ -307,8 +375,13 @@ export class WorkspacesService {
     requireNonEmptyString(request.workspaceId, "workspaceId");
     requireNonEmptyString(request.accountId, "accountId");
     requireNonEmptyString(request.actorAccountId, "actorAccountId");
+    if (request.expectedWorkspaceManagementAuthority) {
+      assertWorkspaceManagementAuthorityInput(request.expectedWorkspaceManagementAuthority, request.workspaceId);
+    }
+    const expectedWorkspaceManagementAuthority = request.expectedWorkspaceManagementAuthority ?? await this.captureManagementAuthority(request.workspaceId)
+      .catch((error: unknown) => { throw workspaceMutationError(error); });
     const workspace = await this.getWorkspace(request.workspaceId);
-    await this.#ensureOwnerMember(workspace);
+    await this.#ensureOwnerMember(workspace, expectedWorkspaceManagementAuthority);
     const members = await this.#store.listWorkspaceMembers(workspace.id);
     const actor = members.find(
       (member) => member.accountId === request.actorAccountId,
@@ -316,7 +389,8 @@ export class WorkspacesService {
     if (
       !actor ||
       actor.status !== "active" ||
-      (!actor.roles.includes("owner") && !actor.roles.includes("admin"))
+      (!actor.roles.includes("owner") && !actor.roles.includes("admin")) ||
+      (request.requiredActorRole === "owner" && !actor.roles.includes("owner"))
     ) {
       throw new OpenTofuControllerError(
         "permission_denied",
@@ -373,7 +447,7 @@ export class WorkspacesService {
       );
     }
     const nowIso = this.#now().toISOString();
-    return await this.#store.putWorkspaceMember({
+    const member: WorkspaceMember = {
       id: existing?.id ?? this.#newId("wsm"),
       workspaceId: workspace.id,
       accountId: request.accountId,
@@ -381,7 +455,18 @@ export class WorkspacesService {
       status,
       createdAt: existing?.createdAt ?? nowIso,
       updatedAt: nowIso,
-    });
+    };
+    const committed = await this.#store.mutateWorkspaceMember({
+      member, expectedActor: actor, expectedMember: existing,
+      expectedWorkspace: workspace, expectedWorkspaceManagementAuthority,
+    }).catch((error: unknown) => { throw workspaceMutationError(error); });
+    if (!committed) {
+      throw new OpenTofuControllerError(
+        "failed_precondition", "Workspace membership changed while preparing this update.",
+        { reason: "workspace_membership_changed" },
+      );
+    }
+    return member;
   }
 
   /**
@@ -456,20 +541,52 @@ export class WorkspacesService {
 
   async #repairPersonalWorkspace(workspace: Workspace): Promise<Workspace> {
     await this.#ensureOwnerMember(workspace);
-    await this.#ensureDefaultProject?.(workspace.id);
+    await this.#completeDefaultProjectRepair(workspace.id);
     return workspace;
   }
 
-  async #ensureOwnerMember(workspace: Workspace): Promise<WorkspaceMember> {
+  async #completeDefaultProjectRepair(workspaceId: string): Promise<void> {
+    try {
+      await this.#ensureDefaultProject?.(workspaceId);
+    } catch (error) {
+      // The Project is a management grouping, not login authority. A stopped
+      // Workspace can still be returned without completing this optional
+      // repair. Never hide an unrelated storage/hook error or a missing owner.
+      if (
+        error instanceof OpenTofuControllerError &&
+        error.code === "failed_precondition" &&
+        isRecord(error.details) &&
+        error.details.reason === "workspace_management_admission_conflict"
+      ) {
+        const management = await this.#store.getWorkspaceManagement(workspaceId);
+        if (
+          management?.workspaceId === workspaceId &&
+          management.managementState !== "active"
+        ) return;
+      }
+      throw error;
+    }
+  }
+
+  async #ensureOwnerMember(
+    workspace: Workspace, expected?: WorkspaceManagementAuthority,
+  ): Promise<void> {
+    // A login may observe stopped management, but it cannot repair a roster
+    // then. Ordinary mutations retain their original tuple across this step.
+    const management = expected ?? await this.#store.getWorkspaceManagement(workspace.id);
+    const authority: WorkspaceManagementAuthority | undefined = management?.managementState === "active"
+      ? { workspaceId: workspace.id, managementState: "active", managementEpoch: management.managementEpoch }
+      : undefined;
     const existing = await this.#store.getWorkspaceMember(
       workspace.id,
       workspace.ownerUserId,
     );
     if (existing?.status === "active" && existing.roles.includes("owner")) {
-      return existing;
+      return;
     }
+    if (!authority) return;
     const nowIso = this.#now().toISOString();
-    return await this.#store.putWorkspaceMember({
+    const member: WorkspaceMember = {
       id: existing?.id ?? this.#newId("wsm"),
       workspaceId: workspace.id,
       accountId: workspace.ownerUserId,
@@ -477,8 +594,36 @@ export class WorkspacesService {
       status: "active",
       createdAt: existing?.createdAt ?? workspace.createdAt ?? nowIso,
       updatedAt: nowIso,
-    });
+    };
+    try {
+      const repaired = await this.#store.repairWorkspaceOwnerMember({
+        member, expectedMember: existing, expectedWorkspace: workspace,
+        expectedWorkspaceManagementAuthority: authority,
+      });
+      if (!repaired) {
+        const current = await this.#store.getWorkspaceMember(workspace.id, workspace.ownerUserId);
+        if (current?.status === "active" && current.roles.includes("owner")) return;
+        throw new OpenTofuControllerError(
+          "failed_precondition", "Workspace owner membership changed during repair.",
+          { reason: "workspace_membership_changed" },
+        );
+      }
+    } catch (error) {
+      // A bootstrap remains observational after an admission race. Only a
+      // distinct future login may capture a new epoch and attempt repair.
+      if (error instanceof WorkspaceManagementAdmissionConflictError && expected === undefined) return;
+      throw workspaceMutationError(error);
+    }
   }
+}
+
+function workspaceMutationError(error: unknown): unknown {
+  return error instanceof WorkspaceManagementAdmissionConflictError
+    ? new OpenTofuControllerError(
+      "failed_precondition", "Workspace is not accepting this management operation.",
+      { reason: "workspace_management_admission_conflict" },
+    )
+    : error;
 }
 
 function workspaceMatchesCreateRequest(

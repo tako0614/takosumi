@@ -145,6 +145,10 @@ import {
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
+import {
+  assertWorkspaceManagementAuthorityInput,
+  type WorkspaceManagementAuthority,
+} from "../../../../core/domains/deploy-control/store.ts";
 
 export async function handleConnections(
   ctx: ControlDispatchContext,
@@ -278,6 +282,25 @@ async function createControlConnection(
   if (!workspaceId) {
     return errorJson("invalid_request", "workspaceId is required", 400);
   }
+  // Capture the exact Workspace-management tuple before authorization and the
+  // remaining asynchronous preparation. Keep capture refusal private until the
+  // existing Workspace access gate has produced its normal response.
+  const captured = await (async () => {
+    try {
+      return {
+        ok: true as const,
+        authority: await operations.workspaces.captureManagementAuthority(
+          workspaceId,
+        ),
+      };
+    } catch (error) {
+      return { ok: false as const, error };
+    }
+  })();
+  const managementAuthority = (): WorkspaceManagementAuthority => {
+    if (!captured.ok) throw captured.error;
+    return captured.authority;
+  };
   const auth = await requireWorkspaceAccess({
     operations,
     store,
@@ -369,7 +392,11 @@ async function createControlConnection(
     values: values ?? {},
     ...(files.length > 0 ? { files } : {}),
   };
-  const response = await operations.createConnection(createRequest);
+  const response = await operations.createConnection(
+    createRequest,
+    managementAuthority(),
+    session.subject,
+  );
   // `response.connection` is the public projection (no secret values).
   return jsonStatus(
     {
@@ -417,6 +444,25 @@ async function connectionItemOp(
   if (!workspaceId) {
     return errorJson("connection_not_found", "connection not found", 404);
   }
+  // Capture the exact Workspace-management tuple before authorization and keep
+  // any refusal private until the existing non-disclosing ownership gate has
+  // completed. Authorized callers then pass this unchanged into the Vault CAS.
+  const captured = await (async () => {
+    try {
+      return {
+        ok: true as const,
+        authority: await operations.workspaces.captureManagementAuthority(
+          workspaceId,
+        ),
+      };
+    } catch (error) {
+      return { ok: false as const, error };
+    }
+  })();
+  const managementAuthority = (): WorkspaceManagementAuthority => {
+    if (!captured.ok) throw captured.error;
+    return captured.authority;
+  };
   // Both test (re-verify) and revoke (delete the sealed blob) are write-scoped
   // mutations; the ownership failure must not disclose the connection's
   // existence, so a 403 from the gate is surfaced as a 404 here.
@@ -430,9 +476,19 @@ async function connectionItemOp(
     return errorJson("connection_not_found", "connection not found", 404);
   }
   if (op === "test") {
-    return json(await operations.testConnection(rawConnectionId));
+    return json(
+      await operations.testConnection(
+        rawConnectionId,
+        managementAuthority(),
+        session.subject,
+      ),
+    );
   }
-  await operations.revokeConnection(rawConnectionId);
+  await operations.revokeConnection(
+    rawConnectionId,
+    managementAuthority(),
+    session.subject,
+  );
   return new Response(null, { status: 204 });
 }
 
@@ -483,6 +539,25 @@ async function startConnectionOAuth(
   if (!workspaceId) {
     return errorJson("invalid_request", "workspaceId is required", 400);
   }
+  // Capture the exact Workspace-management tuple before authorization and the
+  // provider-owned OAuth awaits. Keep refusal private until the existing
+  // Workspace access gate has produced its normal response.
+  const captured = await (async () => {
+    try {
+      return {
+        ok: true as const,
+        authority: await operations.workspaces.captureManagementAuthority(
+          workspaceId,
+        ),
+      };
+    } catch (error) {
+      return { ok: false as const, error };
+    }
+  })();
+  const managementAuthority = (): WorkspaceManagementAuthority => {
+    if (!captured.ok) throw captured.error;
+    return captured.authority;
+  };
   const auth = await requireWorkspaceAccess({
     operations,
     store,
@@ -498,6 +573,7 @@ async function startConnectionOAuth(
     ...(stringValue(body.displayName)
       ? { displayName: stringValue(body.displayName) }
       : {}),
+    expectedWorkspaceManagementAuthority: managementAuthority(),
   });
   return json(started);
 }
@@ -536,6 +612,7 @@ export async function completeConnectionOAuth(
   let completed: {
     readonly request: CreateConnectionRequest;
     readonly subject?: string;
+    readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
   };
   try {
     completed = await helper.complete({ code, state, query });
@@ -565,19 +642,38 @@ export async function completeConnectionOAuth(
     session: { subject, requiredAccess: "write" },
   });
   if (!auth.ok) return redirectToConnections(url, { error: "forbidden" });
+  const expectedWorkspaceManagementAuthority =
+    completed.expectedWorkspaceManagementAuthority;
+  if (!expectedWorkspaceManagementAuthority) {
+    // Valid legacy states can still verify, but they did not capture the
+    // original Workspace epoch and cannot mint a new Connection.
+    return redirectToConnections(url, { error: "oauth_failed" });
+  }
+  try {
+    assertWorkspaceManagementAuthorityInput(
+      expectedWorkspaceManagementAuthority,
+      workspaceId,
+    );
+  } catch {
+    return redirectToConnections(url, { error: "oauth_failed" });
+  }
   let created: ConnectionResponse;
   try {
     // Force Workspace scope regardless of what the helper produced.
     created = await operations.createConnection({
       ...createRequest,
       scope: "workspace",
-    });
+    }, expectedWorkspaceManagementAuthority, subject);
   } catch {
     return redirectToConnections(url, { error: "oauth_failed" });
   }
   let connectionStatus: TestConnectionResponse["status"] | undefined;
   try {
-    const result = await operations.testConnection(created.connection.id);
+    const result = await operations.testConnection(
+      created.connection.id,
+      expectedWorkspaceManagementAuthority,
+      subject,
+    );
     connectionStatus = result.status;
   } catch {
     connectionStatus = "pending";

@@ -155,7 +155,7 @@ async function makeVault(store: OpenTofuControlStore) {
       AWS_SESSION_TOKEN,
       AWS_REGION: "us-east-1",
     },
-  });
+  }, undefined, null);
   const cloudflare = await vault.register({
     workspaceId: WORKSPACE_ID,
     provider: CLOUDFLARE_PROVIDER,
@@ -165,11 +165,11 @@ async function makeVault(store: OpenTofuControlStore) {
       secretPartition: "provider-credentials",
     },
     values: { CLOUDFLARE_API_TOKEN: CLOUDFLARE_TOKEN },
-  });
-  await expect(vault.test(aws.id)).resolves.toMatchObject({
+  }, undefined, null);
+  await expect(vault.test(aws.id, undefined, null)).resolves.toMatchObject({
     status: "verified",
   });
-  await expect(vault.test(cloudflare.id)).resolves.toMatchObject({
+  await expect(vault.test(cloudflare.id, undefined, null)).resolves.toMatchObject({
     status: "verified",
   });
   const verifiedAws = await store.getConnection(aws.id);

@@ -4,6 +4,7 @@ import type {
   SourceSnapshot,
   SourceSyncRun,
 } from "takosumi-contract/sources";
+import type { Workspace } from "takosumi-contract/workspaces";
 import type {
   SqlClient,
   SqlParameters,
@@ -93,12 +94,29 @@ function sourceSnapshot(resolvedCommit: string): SourceSnapshot {
   };
 }
 
+function workspace(): Workspace {
+  return {
+    id: WORKSPACE_ID,
+    handle: "workspace-atomic-1",
+    displayName: "Workspace Atomic 1",
+    type: "personal",
+    ownerUserId: "owner_atomic_1",
+    createdAt: CREATED_AT,
+    updatedAt: CREATED_AT,
+  };
+}
+
 async function claimRun(
   store: OpenTofuControlStore,
   leaseToken: string,
 ): Promise<SourceSyncRun> {
   const queued = queuedRun();
-  await store.putSourceSyncRun(queued);
+  await store.putWorkspace(workspace());
+  await store.beginSourceSyncRun(queued, {
+    workspaceId: WORKSPACE_ID,
+    managementState: "active",
+    managementEpoch: 1,
+  });
   const running: SourceSyncRun = {
     ...queued,
     status: "running",
@@ -159,6 +177,40 @@ test("source-sync success atomically publishes its canonical snapshot on every s
   }
 });
 
+test("same-lease Source success advances only its default cursor atomically while draining", async () => {
+  for (const [label, store] of await stores()) {
+    const running = await claimRun(store, `lease_cursor_${label}`);
+    const source = {
+      id: SOURCE_ID,
+      workspaceId: WORKSPACE_ID,
+      name: "configuration-kept",
+      url: running.url,
+      defaultRef: running.ref,
+      defaultPath: running.path,
+      hookSecretHash: "hook-hash-kept",
+      autoSync: false,
+      status: "active" as const,
+      lastSeenCommit: "previous-commit",
+      createdAt: CREATED_AT,
+      updatedAt: STARTED_AT,
+    };
+    await store.putSource(source);
+    await store.beginWorkspaceDraining(WORKSPACE_ID, {
+      workspaceId: WORKSPACE_ID, managementState: "active", managementEpoch: 1,
+    });
+    expect((await store.commitSourceSyncSuccess({
+      terminalRun: succeededRun(running, "next-commit"),
+      leaseToken: `lease_cursor_${label}`,
+      snapshot: sourceSnapshot("next-commit"),
+    })).won).toBe(true);
+    expect(await store.getSource(SOURCE_ID), label).toEqual({
+      ...source,
+      lastSeenCommit: "next-commit",
+      updatedAt: FINISHED_AT,
+    });
+  }
+});
+
 test("source-sync success exactly adopts an identical immutable snapshot", async () => {
   for (const [label, store] of await stores()) {
     const snapshot = sourceSnapshot(`adopt-${label}`);
@@ -185,6 +237,21 @@ test("a snapshot id collision rolls back the terminal run and preserves immutabl
     const running = await claimRun(store, `lease_collision_${label}`);
     const terminal = succeededRun(running, `candidate-${label}`);
     const candidate = sourceSnapshot(`candidate-${label}`);
+    const source = {
+      id: SOURCE_ID,
+      workspaceId: WORKSPACE_ID,
+      name: "collision-cursor",
+      url: running.url,
+      defaultRef: running.ref,
+      defaultPath: running.path,
+      hookSecretHash: "kept-hash",
+      autoSync: false,
+      status: "active" as const,
+      lastSeenCommit: "kept-commit",
+      createdAt: CREATED_AT,
+      updatedAt: STARTED_AT,
+    };
+    await store.putSource(source);
 
     await expect(
       Promise.resolve().then(() =>
@@ -198,6 +265,7 @@ test("a snapshot id collision rolls back the terminal run and preserves immutabl
 
     expect((await store.getSourceSyncRun(RUN_ID))?.status, label).toBe("running");
     expect(await store.getSourceSnapshot(SNAPSHOT_ID), label).toEqual(existing);
+    expect(await store.getSource(SOURCE_ID), label).toEqual(source);
   }
 });
 
@@ -270,6 +338,61 @@ test("stores reject a succeeded source-sync run paired with a non-canonical snap
     expect((await store.getSourceSyncRun(RUN_ID))?.status, label).toBe("running");
     expect(await store.getSourceSnapshot(SNAPSHOT_ID), label).toBeUndefined();
   }
+});
+
+test("source-sync success cannot move a held Run to another Workspace", async () => {
+  for (const [label, store] of await stores()) {
+    const running = await claimRun(store, `lease_owner_${label}`);
+    const otherWorkspaceId = `other-workspace-${label}`;
+    await store.putWorkspace({ ...workspace(), id: otherWorkspaceId, handle: `other-${label}`, ownerUserId: `other-owner-${label}` });
+    const terminal = { ...succeededRun(running, `owner-${label}`), workspaceId: otherWorkspaceId };
+    const snapshot = { ...sourceSnapshot(`owner-${label}`), workspaceId: otherWorkspaceId };
+    expect(await store.commitSourceSyncSuccess({
+      terminalRun: terminal, leaseToken: `lease_owner_${label}`, snapshot,
+    }), label).toEqual({ won: false, run: running });
+    expect(await store.getSourceSyncRun(RUN_ID), label).toEqual(running);
+    expect(await store.getSourceSnapshot(SNAPSHOT_ID), label).toBeUndefined();
+  }
+});
+
+test("postgres SourceSync success tolerates a concurrent heartbeat on the same held lease", async () => {
+  const backing = await PGliteSqlClient.create();
+  pgClients.push(backing);
+  let armed = false;
+  let interleaved = false;
+  const client: SqlClient = {
+    query: (statement, parameters) => backing.query(statement, parameters),
+    transaction: (callback) => backing.transaction(async (transaction) => {
+      const handle: SqlTransaction = {
+        transaction: (nested) => transaction.transaction(nested),
+        async query<Row extends Record<string, unknown>>(
+          statement: string, parameters?: SqlParameters,
+        ) {
+          if (armed && /^update\b/iu.test(statement.trimStart()) && statement.includes("takosumi_runs")) {
+            armed = false;
+            interleaved = true;
+            // A normal heartbeat does not change status or the held lease.
+            // It must not turn an otherwise valid success into a lost-lease CAS.
+            await transaction.query(
+              "update takosumi_runs set heartbeat_at = 1500, run_json = jsonb_set(run_json::jsonb, '{heartbeatAt}', '1500'::jsonb) where id = $1",
+              [RUN_ID],
+            );
+          }
+          return await transaction.query<Row>(statement, parameters);
+        },
+      };
+      return await callback(handle);
+    }),
+  };
+  const store = new SqlOpenTofuControlStore({ client });
+  const running = await claimRun(store, "same-lease-heartbeat");
+  const terminal = succeededRun(running, "same-lease-commit");
+  const snapshot = sourceSnapshot("same-lease-commit");
+  armed = true;
+  const result = await store.commitSourceSyncSuccess({ terminalRun: terminal, leaseToken: "same-lease-heartbeat", snapshot });
+  expect(interleaved).toBe(true);
+  expect(result).toEqual({ won: true, run: terminal });
+  expect(await store.getSourceSnapshot(SNAPSHOT_ID)).toEqual(snapshot);
 });
 
 test("postgres rolls back the terminal source-sync CAS when the snapshot write fails", async () => {

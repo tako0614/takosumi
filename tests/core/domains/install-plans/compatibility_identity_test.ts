@@ -10,6 +10,15 @@ import {
 
 test("install-plan compatibility identity canonically recovers one exact analysis", async () => {
   const store = new InMemoryOpenTofuControlStore();
+  await store.putWorkspace({
+    id: "ws_install_identity",
+    handle: "install-identity",
+    displayName: "Install identity",
+    type: "personal",
+    ownerUserId: "user_1",
+    createdAt: "2026-08-21T00:00:00.000Z",
+    updatedAt: "2026-08-21T00:00:00.000Z",
+  });
   await store.putInstallConfig(defaultCapsuleInstallConfig());
   let analysisCount = 0;
   let idCount = 0;
@@ -103,6 +112,15 @@ test("install-plan compatibility identity canonically recovers one exact analysi
 
 test("revision-plan compatibility identity pins the existing Capsule and recovers one exact analysis", async () => {
   const store = new InMemoryOpenTofuControlStore();
+  await store.putWorkspace({
+    id: "ws_revision_identity",
+    handle: "revision-identity",
+    displayName: "Revision identity",
+    type: "personal",
+    ownerUserId: "user_1",
+    createdAt: "2026-08-21T00:00:00.000Z",
+    updatedAt: "2026-08-21T00:00:00.000Z",
+  });
   await store.putInstallConfig(defaultCapsuleInstallConfig());
   let analysisCount = 0;
   let idCount = 0;

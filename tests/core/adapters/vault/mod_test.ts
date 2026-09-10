@@ -31,6 +31,21 @@ function makeCrypto(): PartitionedSecretBoundaryCrypto {
   });
 }
 
+function seedWorkspace(
+  store: InMemoryOpenTofuControlStore,
+  workspaceId: string,
+): void {
+  void store.putWorkspace({
+    id: workspaceId,
+    handle: `fixture-${workspaceId.replace(/[^a-z0-9-]/gi, "-")}`,
+    displayName: "Fixture Workspace",
+    type: "personal",
+    ownerUserId: "fixture-owner",
+    createdAt: "2026-06-04T00:00:00.000Z",
+    updatedAt: "2026-06-04T00:00:00.000Z",
+  });
+}
+
 function makeVault(
   overrides: {
     fetch?: typeof fetch;
@@ -38,6 +53,7 @@ function makeVault(
   } = {},
 ) {
   const store = new InMemoryOpenTofuControlStore();
+  seedWorkspace(store, "space_1");
   let counter = 0;
   const subject = new StaticSecretConnectionVault({
     store,
@@ -63,6 +79,7 @@ function makeVault(
 
 function makeUnimplementedPreRunVault() {
   const store = new InMemoryOpenTofuControlStore();
+  seedWorkspace(store, "space_1");
   const vault = new StaticSecretConnectionVault({
     store,
     crypto: makeCrypto(),
@@ -100,8 +117,16 @@ function explicitRecipeFixtureVault(
   return new Proxy(subject, {
     get(target, property) {
       if (property === "register") {
-        return (input: RegisterConnectionInput) =>
-          target.register(withExplicitRecipe(input));
+        return (
+          input: RegisterConnectionInput,
+          expectedWorkspaceManagementAuthority: Parameters<StaticSecretConnectionVault["register"]>[1],
+          actorAccountId: Parameters<StaticSecretConnectionVault["register"]>[2],
+        ) =>
+          target.register(
+            withExplicitRecipe(input),
+            expectedWorkspaceManagementAuthority,
+            actorAccountId,
+          );
       }
       const value = Reflect.get(target, property, target) as unknown;
       return typeof value === "function" ? value.bind(target) : value;
@@ -170,7 +195,7 @@ test("Vault does not treat the reference recipe asset as an implicit catalog", a
         secretPartition: "provider-credentials",
       },
       values: { CLOUDFLARE_API_TOKEN: "secret" },
-    })
+    }, undefined, null)
     .catch((caught) => caught);
 
   expect(error).toBeInstanceOf(ConnectionVaultError);
@@ -180,8 +205,59 @@ test("Vault does not treat the reference recipe asset as an implicit catalog", a
   );
 });
 
+for (const kind of ["provider", "git"] as const) {
+  test(`register preserves supplied Workspace authority for ${kind} credentials`, async () => {
+    const store = new InMemoryOpenTofuControlStore();
+    seedWorkspace(store, "workspace_1");
+    const crypto = makeCrypto();
+    let sealed = 0;
+    const vault = new StaticSecretConnectionVault({
+      store,
+      crypto: {
+        seal: (...args) => { sealed += 1; return crypto.seal(...args); },
+        open: (...args) => crypto.open(...args),
+      },
+      newId: () => "conn_supplied_authority",
+      credentialRecipeResolver: (id) =>
+        REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find((recipe) => recipe.id === id),
+      sourceCredentialDrivers: REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.sourceCredentialDrivers,
+    });
+    const input: RegisterConnectionInput = kind === "provider" ? {
+      workspaceId: "workspace_1",
+      provider: "registry.opentofu.org/example/example",
+      credentialRecipe: { id: "generic-env", authMode: "env", secretPartition: "provider-credentials" },
+      values: { EXAMPLE_TOKEN: "fixture-token" },
+    } : {
+      workspaceId: "workspace_1",
+      provider: "source_git_https_token",
+      kind: "source_git_https_token",
+      scopeHints: { providerSettings: { repositoryUrl: "https://git.example.com/o/r.git" } },
+      values: { GIT_HTTPS_TOKEN: "fixture-token" },
+    };
+    const authority = { workspaceId: "workspace_1", managementState: "active" as const, managementEpoch: 1 };
+    await expect(vault.register(input, { ...authority, managementEpoch: 2 }, null)).rejects.toMatchObject({
+      reason: "workspace_management_admission_conflict",
+    });
+    expect(sealed).toBe(0);
+    expect(await store.getConnection("conn_supplied_authority")).toBeUndefined();
+    expect(await store.getSecretBlob("conn_supplied_authority")).toBeUndefined();
+    // Git permits operator registration; generic-env is already Workspace-only.
+    // A supplied tuple must not be silently discarded on this otherwise valid scope.
+    if (kind === "git") {
+      await expect(vault.register({ ...input, workspaceId: undefined, scope: "operator" }, authority, null))
+        .rejects.toMatchObject({ code: "invalid_argument" });
+    }
+    expect(sealed).toBe(0);
+    const connection = await vault.register(input, authority, null);
+    expect(await store.getConnection(connection.id)).toEqual(connection);
+    expect(await store.getSecretBlob(connection.id)).toBeDefined();
+    expect(sealed).toBe(1);
+  });
+}
+
 test("an explicitly installed reference composition keeps generic env open", async () => {
   const store = new InMemoryOpenTofuControlStore();
+  seedWorkspace(store, "workspace_1");
   const vault = new StaticSecretConnectionVault({
     store,
     crypto: makeCrypto(),
@@ -202,14 +278,14 @@ test("an explicitly installed reference composition keeps generic env open", asy
       secretPartition: "provider-credentials",
     },
     values: { EXAMPLE_TOKEN: "secret" },
-  });
+  }, undefined, null);
 
   expect(connection.providerSource).toBe(
     "registry.opentofu.org/example/example",
   );
   expect(connection.envNames).toEqual(["EXAMPLE_TOKEN"]);
   expect(connection.credentialRecipe?.id).toBe("generic-env");
-  await expect(vault.test(connection.id)).resolves.toEqual({
+  await expect(vault.test(connection.id, undefined, null)).resolves.toEqual({
     status: "verified",
   });
   const bundle = await vault.mintForCapsuleProviderBindings("workspace_1", [
@@ -221,6 +297,7 @@ test("an explicitly installed reference composition keeps generic env open", asy
 
 test("declared-env behavior is selected by recipe capability, not a reserved id", async () => {
   const store = new InMemoryOpenTofuControlStore();
+  seedWorkspace(store, "workspace_1");
   const vault = new StaticSecretConnectionVault({
     store,
     crypto: makeCrypto(),
@@ -257,12 +334,12 @@ test("declared-env behavior is selected by recipe capability, not a reserved id"
       secretPartition: "operator-partition",
     },
     values: { UNKNOWN_PROVIDER_TOKEN: "secret" },
-  });
+  }, undefined, null);
 
   expect(connection.credentialRecipe?.id).toBe("operator-env");
   expect(connection.secretPartition).toBe("operator-partition");
   expect(connection.envNames).toEqual(["UNKNOWN_PROVIDER_TOKEN"]);
-  await expect(vault.test(connection.id)).resolves.toEqual({
+  await expect(vault.test(connection.id, undefined, null)).resolves.toEqual({
     status: "verified",
   });
   const bundle = await vault.mint("workspace_1", [
@@ -273,6 +350,7 @@ test("declared-env behavior is selected by recipe capability, not a reserved id"
 
 test("request-declared capability cannot widen an installed fixed-env recipe", async () => {
   const store = new InMemoryOpenTofuControlStore();
+  seedWorkspace(store, "workspace_1");
   const vault = new StaticSecretConnectionVault({
     store,
     crypto: makeCrypto(),
@@ -306,7 +384,7 @@ test("request-declared capability cannot widen an installed fixed-env recipe", a
       provider: "registry.opentofu.org/example/example",
       credentialRecipe: callerClaimedRecipe,
       values: { ARBITRARY_TOKEN: "secret" },
-    }),
+    }, undefined, null),
   ).rejects.toThrow("env name ARBITRARY_TOKEN is not allowed");
 
   await expect(
@@ -316,7 +394,7 @@ test("request-declared capability cannot widen an installed fixed-env recipe", a
       credentialRecipe: callerClaimedRecipe,
       values: { FIXED_TOKEN: "secret" },
       files: [{ path: "credential.json", content: "secret" }],
-    }),
+    }, undefined, null),
   ).rejects.toThrow(
     "provider credential files require an installed declared-env recipe",
   );
@@ -359,11 +437,11 @@ test("register seals values and returns a public ProviderConnection with no secr
   const connection = await vault.register({
     workspaceId: "space_1",
     provider: "registry.opentofu.org/cloudflare/cloudflare",
-    authMethod: "static_secret",
     displayName: "prod cloudflare",
-    scope: { accountId: "acct_xyz" },
+    scope: "workspace",
+    scopeHints: { providerSettings: { accountId: "acct_xyz" } },
     values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
-  });
+  }, undefined, null);
 
   expect(connection.id).toMatch(/^conn_/);
   expect(connection.status).toBe("pending");
@@ -371,7 +449,10 @@ test("register seals values and returns a public ProviderConnection with no secr
     "registry.opentofu.org/cloudflare/cloudflare",
   );
   expect(connection.envNames).toEqual(["CLOUDFLARE_API_TOKEN"]);
-  expect(connection.scope).toEqual({ accountId: "acct_xyz" });
+  expect(connection.scope).toBe("workspace");
+  expect(connection.scopeHints).toEqual({
+    providerSettings: { accountId: "acct_xyz" },
+  });
   // The public ProviderConnection must never carry the secret value.
   expect(JSON.stringify(connection)).not.toContain("cf-secret-token");
 
@@ -397,7 +478,7 @@ test("register rejects unknown env names and unsatisfied required groups", async
       provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
       values: { NOT_A_CLOUDFLARE_VAR: "x" },
-    }),
+    }, undefined, null),
   ).rejects.toThrow(/not allowed for provider/);
 
   // account id alone does not satisfy any required group.
@@ -407,7 +488,7 @@ test("register rejects unknown env names and unsatisfied required groups", async
       provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
       values: { CLOUDFLARE_ACCOUNT_ID: "acct" },
-    })
+    }, undefined, null)
     .catch((e) => e);
   expect(err).toBeInstanceOf(ConnectionVaultError);
   expect((err as ConnectionVaultError).code).toBe("invalid_argument");
@@ -423,7 +504,7 @@ test("register rejects unknown providers without a declared generic-env recipe",
       workspaceId: "space_1",
       provider: "does-not-exist",
       values: { X: "y" },
-    }),
+    }, undefined, null),
   ).rejects.toThrow(/credentialRecipe is required/);
 
   const generic = await vault.register({
@@ -440,7 +521,7 @@ test("register rejects unknown providers without a declared generic-env recipe",
       SNOWFLAKE_USER: "test-user",
       SNOWFLAKE_PASSWORD: "secret",
     },
-  });
+  }, undefined, null);
   expect(generic.provider).toBe(
     "registry.opentofu.org/snowflake-labs/snowflake",
   );
@@ -486,7 +567,7 @@ test("register rejects credential-shaped values in non-secret provider metadata 
         credentialRecipe: declaredEnvRecipe(),
         values: { SNOWFLAKE_TOKEN: "sealed-secret" },
         scopeHints: entry.scopeHints,
-      })
+      }, undefined, null)
       .catch((caught) => caught);
 
     expect(error).toBeInstanceOf(ConnectionVaultError);
@@ -513,7 +594,7 @@ test("register rejects a provider base URL outside the operator allowlist", asyn
       scopeHints: {
         providerConfig: { endpoint: "https://attacker.example.invalid" },
       },
-    })
+    }, undefined, null)
     .catch((caught) => caught);
 
   expect(error).toBeInstanceOf(ConnectionVaultError);
@@ -536,7 +617,7 @@ test("register rejects a provider base URL outside the operator allowlist", asyn
           endpoints: { extra: ["http://169.254.169.254/latest"] },
         },
       },
-    })
+    }, undefined, null)
     .catch((caught) => caught);
   expect(nested).toBeInstanceOf(ConnectionVaultError);
   expect((nested as ConnectionVaultError).message).toContain(
@@ -555,7 +636,7 @@ test("register rejects every provider base URL when the operator set no allowlis
       scopeHints: {
         providerConfig: { endpoint: "https://provider.example.test" },
       },
-    })
+    }, undefined, null)
     .catch((caught) => caught);
 
   expect(error).toBeInstanceOf(ConnectionVaultError);
@@ -584,7 +665,7 @@ test("register keeps descriptive non-secret provider metadata", async () => {
         password_policy: "generated",
       },
     },
-  });
+  }, undefined, null);
 
   expect(connection.scopeHints?.providerConfig).toEqual({
     endpoint: "https://provider.example.test",
@@ -609,7 +690,7 @@ test("register rejects a hybrid { workspaceId, scope: operator } privilege escal
       provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
       values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
-    })
+    }, undefined, null)
     .catch((e) => e);
   expect(err).toBeInstanceOf(ConnectionVaultError);
   expect((err as ConnectionVaultError).code).toBe("invalid_argument");
@@ -631,7 +712,7 @@ test("mint round-trips the decrypted values into a credential bundle", async () 
         CLOUDFLARE_API_TOKEN: "cf-secret-token",
         CLOUDFLARE_ACCOUNT_ID: "acct_xyz",
       },
-    }),
+    }, undefined, null),
   );
 
   const bundle = await vault.mint("space_1", [
@@ -652,7 +733,7 @@ test("opening a blob swapped onto a different connection id fails the aad bind",
       provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
       values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
-    }),
+    }, undefined, null),
   );
   const sealed = await store.getSecretBlob(original.id);
   expect(sealed).toBeDefined();
@@ -668,7 +749,7 @@ test("opening a blob swapped onto a different connection id fails the aad bind",
       provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
       values: { CLOUDFLARE_API_TOKEN: "other-token" },
-    }),
+    }, undefined, null),
   );
   await store.putSecretBlob({
     ...sealed!,
@@ -678,7 +759,7 @@ test("opening a blob swapped onto a different connection id fails the aad bind",
 
   // The vault re-derives the AAD from the victim row's identity; the swapped
   // ciphertext was bound to the original id, so the auth tag rejects it.
-  await expect(vault.test(victim.id)).rejects.toThrow();
+  await expect(vault.test(victim.id, undefined, null)).rejects.toThrow();
 });
 
 test("opening a blob moved to a different Workspace fails the aad bind", async () => {
@@ -690,7 +771,7 @@ test("opening a blob moved to a different Workspace fails the aad bind", async (
       provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
       values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
-    }),
+    }, undefined, null),
   );
   const sealed = await store.getSecretBlob(original.id);
   expect(sealed).toBeDefined();
@@ -712,7 +793,7 @@ test("mint refuses a pending connection before verification", async () => {
     provider: "registry.opentofu.org/cloudflare/cloudflare",
     authMethod: "static_secret",
     values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
-  });
+  }, undefined, null);
 
   await expect(
     vault.mint("space_1", ["registry.opentofu.org/cloudflare/cloudflare"]),
@@ -728,7 +809,7 @@ test("credential bundle never serializes its secret values", async () => {
       provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
       values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
-    }),
+    }, undefined, null),
   );
   const bundle = await vault.mint("space_1", [
     "registry.opentofu.org/cloudflare/cloudflare",
@@ -752,6 +833,79 @@ test("mint with no registered connection throws a typed error listing env groups
   expect(err).toBeInstanceOf(ConnectionVaultError);
   expect((err as ConnectionVaultError).code).toBe("not_found");
   expect((err as ConnectionVaultError).missingEnvGroups).toEqual([]);
+});
+
+for (const mutation of ["rotate", "drain"] as const) {
+  for (const accepted of [true, false]) {
+    test(`test() rejects ${accepted ? "successful" : "failed"} verification after ${mutation}`, async () => {
+      let connectionId = "";
+      let mutated = false;
+      const { store, vault } = makeVault({
+        fetch: (async (input: string) => {
+          if (!mutated) {
+            mutated = true;
+            if (mutation === "rotate") {
+              const blob = (await store.getSecretBlob(connectionId))!;
+              await store.putSecretBlob({ ...blob, ciphertext: "cm90YXRlZA==" });
+            } else {
+              await store.beginWorkspaceDraining("space_1", {
+                workspaceId: "space_1", managementState: "active", managementEpoch: 1,
+              });
+            }
+          }
+          if (!accepted) return new Response("denied", { status: 403 });
+          const result = input.endsWith("/workers/subdomain")
+            ? { subdomain: "fixture-workers" }
+            : input.endsWith(`/accounts/${CLOUDFLARE_ACCOUNT_TEST_ID}`)
+              ? { id: CLOUDFLARE_ACCOUNT_TEST_ID } : { status: "active" };
+          return Response.json({ success: true, result });
+        }) as typeof fetch,
+      });
+      const connection = await vault.register({
+        workspaceId: "space_1", provider: "registry.opentofu.org/cloudflare/cloudflare",
+        values: { CLOUDFLARE_API_TOKEN: "fixture-token", CLOUDFLARE_ACCOUNT_ID: CLOUDFLARE_ACCOUNT_TEST_ID },
+      }, undefined, null);
+      connectionId = connection.id;
+      const before = structuredClone(await store.getConnection(connection.id));
+      const blobBefore = structuredClone(await store.getSecretBlob(connection.id));
+      await expect(vault.test(connection.id, undefined, null)).rejects.toMatchObject({
+        code: "failed_precondition",
+        reason: mutation === "drain" ? "workspace_management_admission_conflict" : "credential_service_unavailable",
+      });
+      expect(mutated).toBe(true);
+      expect(await store.getConnection(connection.id)).toEqual(before);
+      expect(await store.getSecretBlob(connection.id)).toEqual(
+        mutation === "rotate" ? { ...blobBefore, ciphertext: "cm90YXRlZA==" } : blobBefore,
+      );
+    });
+  }
+}
+
+test("test() retains the blob snapshot from before asynchronous crypto opening", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  seedWorkspace(store, "space_1");
+  const crypto = makeCrypto();
+  let opened = false;
+  const vault = new StaticSecretConnectionVault({
+    store, newId: () => "conn_crypto_snapshot", now: () => new Date("2026-06-04T00:00:00.000Z"),
+    credentialRecipeResolver: (id) => REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find((recipe) => recipe.id === id),
+    crypto: {
+      seal: (...args) => crypto.seal(...args),
+      async open(...args) {
+        opened = true;
+        const blob = (await store.getSecretBlob("conn_crypto_snapshot"))!;
+        await store.putSecretBlob({ ...blob, ciphertext: "cm90YXRlZA==" });
+        return await crypto.open(...args);
+      },
+    },
+  });
+  const connection = await vault.register({ workspaceId: "space_1", provider: "registry.opentofu.org/example/example",
+    credentialRecipe: declaredEnvRecipe(), values: { EXAMPLE_TOKEN: "fixture-value" } }, undefined, null);
+  const before = (await store.getSecretBlob(connection.id))!;
+  await expect(vault.test(connection.id, undefined, null)).rejects.toMatchObject({ code: "failed_precondition", reason: "credential_service_unavailable" });
+  expect(opened).toBe(true);
+  expect(await store.getConnection(connection.id)).toEqual(connection);
+  expect(await store.getSecretBlob(connection.id)).toEqual({ ...before, ciphertext: "cm90YXRlZA==" });
 });
 
 test("test() verifies a cloudflare token via injected fetch and persists verified", async () => {
@@ -794,9 +948,9 @@ test("test() verifies a cloudflare token via injected fetch and persists verifie
       CLOUDFLARE_API_TOKEN: "cf-secret-token",
       CLOUDFLARE_ACCOUNT_ID: CLOUDFLARE_ACCOUNT_TEST_ID,
     },
-  });
+  }, undefined, null);
 
-  const result = await vault.test(connection.id);
+  const result = await vault.test(connection.id, undefined, null);
   expect(result.status).toBe("verified");
   expect(calledWith?.url).toBe(
     `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_TEST_ID}/workers/subdomain`,
@@ -872,9 +1026,9 @@ test("test() accepts a cloudflare oauth bearer when account access probe succeed
       CLOUDFLARE_API_TOKEN: "wrangler-oauth-bearer",
       CLOUDFLARE_ACCOUNT_ID: CLOUDFLARE_ACCOUNT_OAUTH_ID,
     },
-  });
+  }, undefined, null);
 
-  const result = await vault.test(connection.id);
+  const result = await vault.test(connection.id, undefined, null);
   expect(result.status).toBe("verified");
   expect(calls).toEqual([
     {
@@ -948,13 +1102,13 @@ test("Cloudflare failed re-test clears verifier-owned hints but preserves config
       CLOUDFLARE_API_TOKEN: "cf-secret-token",
       CLOUDFLARE_ACCOUNT_ID: CLOUDFLARE_ACCOUNT_TEST_ID,
     },
-  });
+  }, undefined, null);
 
-  await expect(vault.test(connection.id)).resolves.toEqual({
+  await expect(vault.test(connection.id, undefined, null)).resolves.toEqual({
     status: "verified",
   });
   shouldVerify = false;
-  await expect(vault.test(connection.id)).resolves.toMatchObject({
+  await expect(vault.test(connection.id, undefined, null)).resolves.toMatchObject({
     status: "pending",
   });
 
@@ -979,7 +1133,7 @@ test("test() reaches verified for a declared-env recipe connection", async () =>
     authMethod: "static_secret",
     credentialRecipe: declaredEnvRecipe(),
     values: { VERCEL_API_TOKEN: "vercel-secret" },
-  });
+  }, undefined, null);
   expect(connection.kind).toBeUndefined();
   expect(connection.credentialRecipe).toMatchObject({
     id: "generic-env",
@@ -987,7 +1141,7 @@ test("test() reaches verified for a declared-env recipe connection", async () =>
     declaredEnv: true,
   });
 
-  const result = await vault.test(connection.id);
+  const result = await vault.test(connection.id, undefined, null);
   expect(result.status).toBe("verified");
 
   const persisted = await store.getConnection(connection.id);
@@ -1012,11 +1166,11 @@ test("test() structurally verifies generic-env even for guided providers", async
       CLOUDFLARE_API_TOKEN: "cf-secret-token",
       CLOUDFLARE_CUSTOM_ENDPOINT: "https://api.example.test/client/v4",
     },
-  });
+  }, undefined, null);
   expect(connection.kind).toBeUndefined();
   expect(connection.credentialRecipe?.declaredEnv).toBe(true);
 
-  const result = await vault.test(connection.id);
+  const result = await vault.test(connection.id, undefined, null);
   expect(result.status).toBe("verified");
   expect(fetchCalled).toBe(false);
 
@@ -1031,7 +1185,7 @@ test("operator-scoped provider connections have no owning Workspace", async () =
     scope: "operator",
     provider: "registry.opentofu.org/cloudflare/cloudflare",
     values: { CLOUDFLARE_API_TOKEN: "operator-secret" },
-  });
+  }, undefined, null);
 
   expect(connection.workspaceId).toBeUndefined();
   expect(connection.scope).toBe("operator");
@@ -1049,7 +1203,7 @@ test("register rejects operator-scoped declared-env recipe connections", async (
       credentialDriver: "generic_env",
       authMethod: "static_secret",
       values: { GITHUB_TOKEN: "github-secret-token" },
-    })
+    }, undefined, null)
     .catch((e) => e);
 
   expect(err).toBeInstanceOf(ConnectionVaultError);
@@ -1070,9 +1224,9 @@ test("static reference recipes verify structurally and mint without provider dri
     },
     authMethod: "static_secret",
     values: { GITHUB_TOKEN: "github-secret-token" },
-  });
+  }, undefined, null);
 
-  const result = await vault.test(connection.id);
+  const result = await vault.test(connection.id, undefined, null);
   expect(result.status).toBe("verified");
 
   const persisted = await store.getConnection(connection.id);
@@ -1098,6 +1252,7 @@ test("static reference recipes verify structurally and mint without provider dri
 
 test("static env/file recipes verify and mint structurally without a driver", async () => {
   const store = new InMemoryOpenTofuControlStore();
+  seedWorkspace(store, "space_1");
   const vault = new StaticSecretConnectionVault({
     store,
     crypto: makeCrypto(),
@@ -1133,9 +1288,9 @@ test("static env/file recipes verify and mint structurally without a driver", as
         envName: "EXAMPLE_CREDENTIAL_FILE",
       },
     ],
-  });
+  }, undefined, null);
 
-  await expect(vault.test(connection.id)).resolves.toEqual({
+  await expect(vault.test(connection.id, undefined, null)).resolves.toEqual({
     status: "verified",
   });
   const bundle = await vault.mintForCapsuleProviderBindings("space_1", [
@@ -1166,9 +1321,9 @@ test("test() keeps an unimplemented pre-run recipe pending", async () => {
       secretPartition: "provider-credentials",
     },
     values: { UPSTREAM_TOKEN: "upstream-secret" },
-  });
+  }, undefined, null);
 
-  const result = await vault.test(connection.id);
+  const result = await vault.test(connection.id, undefined, null);
   expect(result.status).toBe("pending");
   expect(result.detail).toContain("pre-run credential recipe");
   expect(result.detail).toContain("no mint driver is installed");
@@ -1197,13 +1352,13 @@ test("test() verifies and mints gcp service account JSON Provider Connections", 
       GOOGLE_CREDENTIALS: serviceAccountJson,
       GOOGLE_CLOUD_PROJECT: "project-1",
     },
-  });
+  }, undefined, null);
   expect(connection.envNames).toEqual([
     "GOOGLE_CLOUD_PROJECT",
     "GOOGLE_CREDENTIALS",
   ]);
 
-  const result = await vault.test(connection.id);
+  const result = await vault.test(connection.id, undefined, null);
   expect(result.status).toBe("verified");
   const persisted = await store.getConnection(connection.id);
   expect(persisted?.status).toBe("verified");
@@ -1240,7 +1395,7 @@ test("mint rejects unavailable pre-run drivers even if a row is manually verifie
         secretPartition: "provider-credentials",
       },
       values: { UPSTREAM_TOKEN: "upstream-secret" },
-    }),
+    }, undefined, null),
   );
 
   const err = await vault
@@ -1271,9 +1426,9 @@ test("test() reaches verified for a git https source connection", async () => {
       providerSettings: { repositoryUrl: "https://git.example.com/o/r.git" },
     },
     values: { GIT_HTTPS_TOKEN: "ghp_token" },
-  });
+  }, undefined, null);
 
-  const result = await vault.test(connection.id);
+  const result = await vault.test(connection.id, undefined, null);
   expect(result.status).toBe("verified");
   const persisted = await store.getConnection(connection.id);
   expect(persisted?.status).toBe("verified");
@@ -1293,9 +1448,9 @@ test("test() stays pending when the provider reports the token is inactive", asy
     provider: "registry.opentofu.org/cloudflare/cloudflare",
     authMethod: "static_secret",
     values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
-  });
+  }, undefined, null);
 
-  const result = await vault.test(connection.id);
+  const result = await vault.test(connection.id, undefined, null);
   expect(result.status).toBe("pending");
   expect((await store.getConnection(connection.id))?.status).toBe("pending");
 });
@@ -1337,9 +1492,9 @@ test("test() verifies an aws assume-role connection via STS and persists verifie
       AWS_ACCESS_KEY_ID: "AKIA_source",
       AWS_SECRET_ACCESS_KEY: "source_secret",
     },
-  });
+  }, undefined, null);
 
-  const result = await vault.test(connection.id);
+  const result = await vault.test(connection.id, undefined, null);
   expect(result.status).toBe("verified");
   expect(called?.url).toBe("https://sts.us-west-2.amazonaws.com/");
   expect(called?.body).toContain("Action=AssumeRole");
@@ -1387,13 +1542,13 @@ test("AWS assume-role failed re-test preserves roleArn and can retry", async () 
       AWS_ACCESS_KEY_ID: "AKIA_source",
       AWS_SECRET_ACCESS_KEY: "source_secret",
     },
-  });
+  }, undefined, null);
 
-  await expect(vault.test(connection.id)).resolves.toEqual({
+  await expect(vault.test(connection.id, undefined, null)).resolves.toEqual({
     status: "verified",
   });
   shouldVerify = false;
-  await expect(vault.test(connection.id)).resolves.toMatchObject({
+  await expect(vault.test(connection.id, undefined, null)).resolves.toMatchObject({
     status: "pending",
   });
   expect((await store.getConnection(connection.id))?.scopeHints).toEqual({
@@ -1405,7 +1560,7 @@ test("AWS assume-role failed re-test preserves roleArn and can retry", async () 
   });
 
   shouldVerify = true;
-  await expect(vault.test(connection.id)).resolves.toEqual({
+  await expect(vault.test(connection.id, undefined, null)).resolves.toEqual({
     status: "verified",
   });
   expect((await store.getConnection(connection.id))?.scopeHints).toEqual({
@@ -1442,9 +1597,9 @@ test("test() keeps aws assume-role pending when STS rejects the role", async () 
       AWS_ACCESS_KEY_ID: "AKIA_source",
       AWS_SECRET_ACCESS_KEY: "source_secret",
     },
-  });
+  }, undefined, null);
 
-  const result = await vault.test(connection.id);
+  const result = await vault.test(connection.id, undefined, null);
   expect(result.status).toBe("pending");
   expect(result.detail).toContain("AccessDenied");
   expect((await store.getConnection(connection.id))?.status).toBe("pending");
@@ -1460,9 +1615,9 @@ test("test() keeps aws assume-role pending when role ARN is missing", async () =
       AWS_ACCESS_KEY_ID: "AKIA_source",
       AWS_SECRET_ACCESS_KEY: "source_secret",
     },
-  });
+  }, undefined, null);
 
-  const result = await vault.test(connection.id);
+  const result = await vault.test(connection.id, undefined, null);
   expect(result.status).toBe("pending");
   expect(result.detail).toContain("scopeHints.providerSettings.roleArn");
   expect((await store.getConnection(connection.id))?.status).toBe("pending");
@@ -1483,13 +1638,31 @@ test("test() keeps aws assume-role pending when source credentials are missing",
       AWS_ROLE_ARN: "arn:aws:iam::123456789012:role/takosumi-prod",
       AWS_WEB_IDENTITY_TOKEN_FILE: "/var/run/secrets/token",
     },
-  });
+  }, undefined, null);
 
-  const result = await vault.test(connection.id);
+  const result = await vault.test(connection.id, undefined, null);
   expect(result.status).toBe("pending");
   expect(result.detail).toContain("AWS_ACCESS_KEY_ID");
   expect(result.detail).toContain("AWS_SECRET_ACCESS_KEY");
   expect((await store.getConnection(connection.id))?.status).toBe("pending");
+});
+
+test("revoke preserves the connection and sealed blob while Workspace management is draining", async () => {
+  const { store, vault } = makeVault();
+  const connection = await vault.register({
+    workspaceId: "space_1",
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
+    values: { CLOUDFLARE_API_TOKEN: "fixture-token" },
+  }, undefined, null);
+  const blob = await store.getSecretBlob(connection.id);
+  await store.beginWorkspaceDraining("space_1", {
+    workspaceId: "space_1", managementState: "active", managementEpoch: 1,
+  });
+  await expect(vault.revoke(connection.id, undefined, null)).rejects.toMatchObject({
+    code: "failed_precondition", reason: "workspace_management_admission_conflict",
+  });
+  expect(await store.getConnection(connection.id)).toEqual(connection);
+  expect(await store.getSecretBlob(connection.id)).toEqual(blob);
 });
 
 test("revoke deletes both the connection and the sealed blob", async () => {
@@ -1499,10 +1672,10 @@ test("revoke deletes both the connection and the sealed blob", async () => {
     provider: "registry.opentofu.org/cloudflare/cloudflare",
     authMethod: "static_secret",
     values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
-  });
+  }, undefined, null);
 
-  expect(await vault.revoke(connection.id)).toBe(true);
+  expect(await vault.revoke(connection.id, undefined, null)).toBe(true);
   expect(await store.getConnection(connection.id)).toBeUndefined();
   expect(await store.getSecretBlob(connection.id)).toBeUndefined();
-  expect(await vault.revoke(connection.id)).toBe(false);
+  expect(await vault.revoke(connection.id, undefined, null)).toBe(false);
 });

@@ -25,7 +25,16 @@ import {
 } from "../../../../accounts/service/src/store.ts";
 import { encodeCursor } from "../../../../contract/pagination.ts";
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
-import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import {
+  InMemoryOpenTofuControlStore,
+  WorkspaceManagementAdmissionConflictError,
+  type WorkspaceManagementAuthority,
+} from "../../../../core/domains/deploy-control/store.ts";
+import {
+  CloudflareD1OpenTofuControlStore,
+  ensureD1OpenTofuLedgerSchema,
+} from "../../../../worker/src/d1_opentofu_store.ts";
+import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 const workspace = {
   id: "ws_owner",
@@ -75,12 +84,18 @@ async function authenticatedControlRequest(input: {
   readonly token: string;
   readonly path: string;
   readonly method?: string;
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly body?: string;
 }): Promise<Response> {
   const url = new URL(`https://app.example.test${input.path}`);
   const response = await handleControlRoute({
     request: new Request(url, {
       method: input.method ?? "GET",
-      headers: { authorization: `Bearer ${input.token}` },
+      headers: {
+        ...input.headers,
+        authorization: `Bearer ${input.token}`,
+      },
+      ...(input.body !== undefined ? { body: input.body } : {}),
     }),
     url,
     store: input.store,
@@ -323,6 +338,10 @@ function roleAuthorizationOperations(role: "member" | "admin"): {
         mutations.workspaceUpdates += 1;
         return roleWorkspace;
       },
+      updateWorkspaceForAccount: async () => {
+        mutations.workspaceUpdates += 1;
+        return roleWorkspace;
+      },
     },
     members: {
       listMembers: async () => [
@@ -409,6 +428,487 @@ test("a Workspace admin can control a Run", async () => {
   expect(fixture.mutations.runCancels).toBe(1);
 });
 
+test("Workspace PATCH refuses an admin whose membership is revoked before durable replacement", async () => {
+  const controlStore = new InMemoryOpenTofuControlStore();
+  let idCounter = 0;
+  const service = new WorkspacesService({
+    store: controlStore,
+    newId: (prefix) => `${prefix}_actor_race_${(idCounter += 1)}`,
+    now: () => new Date("2026-06-06T00:00:00.000Z"),
+  });
+  const seeded = await service.createWorkspace({
+    handle: "actor-race",
+    displayName: "Actor Race",
+    type: "organization",
+    ownerUserId: "tsub_namespace_owner",
+  });
+  const actor = await service.upsertWorkspaceMember({
+    workspaceId: seeded.id,
+    accountId: "tsub_role_actor",
+    roles: ["admin"],
+    status: "active",
+    actorAccountId: seeded.ownerUserId,
+  });
+  const operations = {
+    workspaces: {
+      getWorkspace: service.getWorkspace.bind(service),
+      getWorkspaceForAccount: service.getWorkspaceForAccount.bind(service),
+      listWorkspacesForAccount: service.listWorkspacesForAccount.bind(service),
+      listWorkspacesForAccountPage:
+        service.listWorkspacesForAccountPage.bind(service),
+      updateWorkspace: service.updateWorkspace.bind(service),
+      updateWorkspaceForAccount: service.updateWorkspaceForAccount.bind(service),
+      captureManagementAuthority: service.captureManagementAuthority.bind(
+        service,
+      ),
+    },
+    members: {
+      getMember: service.getWorkspaceMember.bind(service),
+      listMembers: service.listWorkspaceMembers.bind(service),
+      upsertMember: async (input: {
+        readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
+        readonly workspaceId: string;
+        readonly accountId: string;
+        readonly roles?: readonly ("owner" | "admin" | "member" | "viewer")[];
+        readonly status?: "active" | "invited" | "suspended";
+        readonly actor: { readonly actorAccountId: string };
+      }) =>
+        await service.upsertWorkspaceMember({
+          workspaceId: input.workspaceId,
+          accountId: input.accountId,
+          roles: input.roles,
+          status: input.status,
+          actorAccountId: input.actor.actorAccountId,
+          expectedWorkspaceManagementAuthority:
+            input.expectedWorkspaceManagementAuthority,
+        }),
+    },
+    activity: { record: async () => undefined },
+  } as unknown as ControlPlaneOperations;
+  const before = await controlStore.getWorkspace(seeded.id);
+  const originalReplaceWorkspaceForAccount =
+    controlStore.replaceWorkspaceForAccount.bind(controlStore);
+  let interleaved = false;
+  controlStore.replaceWorkspaceForAccount = async (input) => {
+    const currentActor = await controlStore.getWorkspaceMember(
+      seeded.id,
+      actor.accountId,
+    );
+    if (!currentActor) throw new Error("race actor membership is missing");
+    await controlStore.putWorkspaceMember({
+      ...currentActor,
+      status: "suspended",
+      updatedAt: "2026-06-06T00:00:01.000Z",
+    });
+    interleaved = true;
+    return await originalReplaceWorkspaceForAccount(input);
+  };
+
+  const auth = roleSessionStore();
+  const response = await authenticatedControlRequest({
+    ...auth,
+    operations,
+    path: `/api/v1/workspaces/${seeded.id}`,
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ displayName: "Must Not Apply" }),
+  });
+
+  expect([403, 409]).toContain(response.status);
+  expect(interleaved).toBe(true);
+  expect(await controlStore.getWorkspace(seeded.id)).toEqual(before);
+  expect(
+    await controlStore.getWorkspaceMember(seeded.id, actor.accountId),
+  ).toMatchObject({ status: "suspended" });
+});
+
+test("D1 Workspace mutations retain authority captured before route authorization", async () => {
+  const mutationCases = [
+    {
+      method: "PATCH",
+      path: (workspaceId: string) => `/api/v1/workspaces/${workspaceId}`,
+      body: { displayName: "Must Not Apply" },
+    },
+    {
+      method: "POST",
+      path: (workspaceId: string) => `/api/v1/workspaces/${workspaceId}/members`,
+      body: { accountId: "tsub_new_member", role: "member" },
+    },
+  ] as const;
+
+  for (const mutationCase of mutationCases) {
+    const database = new SqliteFakeD1();
+    await ensureD1OpenTofuLedgerSchema(database);
+    const controlStore = new CloudflareD1OpenTofuControlStore(database);
+    let idCounter = 0;
+    const service = new WorkspacesService({
+      store: controlStore,
+      newId: (prefix) => `${prefix}_d1_actor_race_${(idCounter += 1)}`,
+      now: () => new Date("2026-06-06T00:00:00.000Z"),
+    });
+    const seeded = await service.createWorkspace({
+      handle: "d1-actor-race",
+      displayName: "D1 Actor Race",
+      type: "organization",
+      ownerUserId: "tsub_namespace_owner",
+    });
+    const actor = await service.upsertWorkspaceMember({
+      workspaceId: seeded.id,
+      accountId: "tsub_role_actor",
+      roles: ["admin"],
+      status: "active",
+      actorAccountId: seeded.ownerUserId,
+    });
+    const before = await controlStore.getWorkspace(seeded.id);
+    const beforeMembers = await controlStore.listWorkspaceMembers(seeded.id);
+    const originalGetMember = service.getWorkspaceMember.bind(service);
+    let interleaved = false;
+    const operations = {
+      workspaces: {
+        getWorkspace: service.getWorkspace.bind(service),
+        getWorkspaceForAccount: service.getWorkspaceForAccount.bind(service),
+        listWorkspacesForAccount: service.listWorkspacesForAccount.bind(service),
+        listWorkspacesForAccountPage:
+          service.listWorkspacesForAccountPage.bind(service),
+        updateWorkspace: service.updateWorkspace.bind(service),
+        updateWorkspaceForAccount:
+          service.updateWorkspaceForAccount.bind(service),
+        captureManagementAuthority: service.captureManagementAuthority.bind(
+          service,
+        ),
+      },
+      members: {
+        getMember: async (workspaceId: string, accountId: string) => {
+          const observed = await originalGetMember(workspaceId, accountId);
+          if (
+            !interleaved &&
+            workspaceId === seeded.id &&
+            accountId === actor.accountId
+          ) {
+            if (!observed) throw new Error("race actor membership is missing");
+            expect(observed).toEqual(actor);
+            expect(
+              await controlStore.beginWorkspaceDraining(seeded.id, {
+                workspaceId: seeded.id,
+                managementState: "active",
+                managementEpoch: 1,
+              }),
+            ).toMatchObject({ status: "started" });
+            const resumed = await database
+              .prepare(
+                "update workspaces set management_state = 'active', management_epoch = 3 where id = ? and management_state = 'draining' and management_epoch = 2",
+              )
+              .bind(seeded.id)
+              .run();
+            expect(resumed.meta?.changes).toBe(1);
+            interleaved = true;
+          }
+          return observed;
+        },
+        listMembers: service.listWorkspaceMembers.bind(service),
+        upsertMember: async (input: {
+          readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
+          readonly workspaceId: string;
+          readonly accountId: string;
+          readonly roles?: readonly ("owner" | "admin" | "member" | "viewer")[];
+          readonly status?: "active" | "invited" | "suspended";
+          readonly actor: { readonly actorAccountId: string };
+        }) =>
+          await service.upsertWorkspaceMember({
+            expectedWorkspaceManagementAuthority:
+              input.expectedWorkspaceManagementAuthority,
+            workspaceId: input.workspaceId,
+            accountId: input.accountId,
+            roles: input.roles,
+            status: input.status,
+            actorAccountId: input.actor.actorAccountId,
+          }),
+      },
+      activity: { record: async () => undefined },
+    } as unknown as ControlPlaneOperations;
+    const auth = roleSessionStore();
+    const response = await authenticatedControlRequest({
+      ...auth,
+      operations,
+      path: mutationCase.path(seeded.id),
+      method: mutationCase.method,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(mutationCase.body),
+    });
+
+    expect(interleaved).toBe(true);
+    expect(response.status).toBe(409);
+    expect(await controlStore.getWorkspace(seeded.id)).toEqual(before);
+    expect(await controlStore.listWorkspaceMembers(seeded.id)).toEqual(
+      beforeMembers,
+    );
+    expect(
+      await controlStore.getWorkspaceMember(seeded.id, actor.accountId),
+    ).toEqual(actor);
+    expect(await controlStore.getWorkspaceManagement(seeded.id)).toEqual({
+      workspaceId: seeded.id,
+      managementState: "active",
+      managementEpoch: 3,
+    });
+  }
+});
+
+test("Workspace member PATCH and DELETE require the owner observed before actor demotion", async () => {
+  const mutationCases = [
+    {
+      method: "PATCH",
+      body: { roles: ["viewer"] },
+    },
+    {
+      method: "DELETE",
+      body: undefined,
+    },
+  ] as const;
+
+  for (const mutationCase of mutationCases) {
+    const controlStore = new InMemoryOpenTofuControlStore();
+    let idCounter = 0;
+    const service = new WorkspacesService({
+      store: controlStore,
+      newId: (prefix) => `${prefix}_member_owner_race_${(idCounter += 1)}`,
+      now: () => new Date("2026-06-06T00:00:00.000Z"),
+    });
+    const seeded = await service.createWorkspace({
+      handle: `member-owner-race-${mutationCase.method.toLowerCase()}`,
+      displayName: "Member owner race",
+      type: "organization",
+      ownerUserId: "tsub_namespace_owner",
+    });
+    const actor = await service.upsertWorkspaceMember({
+      workspaceId: seeded.id,
+      accountId: "tsub_role_actor",
+      roles: ["owner"],
+      status: "active",
+      actorAccountId: seeded.ownerUserId,
+    });
+    const target = await service.upsertWorkspaceMember({
+      workspaceId: seeded.id,
+      accountId: "tsub_target_member",
+      roles: ["member"],
+      status: "active",
+      actorAccountId: actor.accountId,
+    });
+    const beforeWorkspace = await controlStore.getWorkspace(seeded.id);
+    const beforeTarget = await controlStore.getWorkspaceMember(
+      seeded.id,
+      target.accountId,
+    );
+    if (!beforeWorkspace || !beforeTarget) {
+      throw new Error("member owner race fixture failed to seed");
+    }
+    const originalListMembers = service.listWorkspaceMembers.bind(service);
+    let interleaved = false;
+    let observedRoster: readonly typeof actor[] | undefined;
+    const operations = {
+      workspaces: {
+        getWorkspace: service.getWorkspace.bind(service),
+        getWorkspaceForAccount: service.getWorkspaceForAccount.bind(service),
+        listWorkspacesForAccount: service.listWorkspacesForAccount.bind(service),
+        listWorkspacesForAccountPage:
+          service.listWorkspacesForAccountPage.bind(service),
+        updateWorkspace: service.updateWorkspace.bind(service),
+        updateWorkspaceForAccount:
+          service.updateWorkspaceForAccount.bind(service),
+        captureManagementAuthority: service.captureManagementAuthority.bind(
+          service,
+        ),
+      },
+      members: {
+        getMember: service.getWorkspaceMember.bind(service),
+        listMembers: async (workspaceId: string) => {
+          const observed = observedRoster ?? (await originalListMembers(workspaceId));
+          observedRoster = observed as readonly typeof actor[];
+          if (!interleaved && workspaceId === seeded.id) {
+            const currentActor = await controlStore.getWorkspaceMember(
+              seeded.id,
+              actor.accountId,
+            );
+            if (!currentActor) {
+              throw new Error("member owner race actor membership is missing");
+            }
+            await controlStore.putWorkspaceMember({
+              ...currentActor,
+              roles: ["admin"],
+              status: "active",
+              updatedAt: "2026-06-06T00:00:01.000Z",
+            });
+            interleaved = true;
+          }
+          return observed;
+        },
+        upsertMember: async (input: {
+          readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
+          readonly workspaceId: string;
+          readonly accountId: string;
+          readonly roles?: readonly ("owner" | "admin" | "member" | "viewer")[];
+          readonly status?: "active" | "invited" | "suspended";
+          readonly actor: { readonly actorAccountId: string };
+          readonly requiredActorRole?: "owner";
+        }) => {
+          const request = {
+            expectedWorkspaceManagementAuthority:
+              input.expectedWorkspaceManagementAuthority,
+            workspaceId: input.workspaceId,
+            accountId: input.accountId,
+            roles: input.roles,
+            status: input.status,
+            actorAccountId: input.actor.actorAccountId,
+            ...(input.requiredActorRole
+              ? { requiredActorRole: input.requiredActorRole }
+              : {}),
+          };
+          return await service.upsertWorkspaceMember(
+            request as Parameters<WorkspacesService["upsertWorkspaceMember"]>[0],
+          );
+        },
+      },
+      activity: { record: async () => undefined },
+    } as unknown as ControlPlaneOperations;
+
+    const auth = roleSessionStore();
+    const response = await authenticatedControlRequest({
+      ...auth,
+      operations,
+      path: `/api/v1/workspaces/${seeded.id}/members/${target.accountId}`,
+      method: mutationCase.method,
+      ...(mutationCase.body === undefined
+        ? {}
+        : {
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(mutationCase.body),
+          }),
+    });
+
+    expect(interleaved).toBe(true);
+    expect(response.status).toBe(403);
+    expect(await controlStore.getWorkspace(seeded.id)).toEqual(beforeWorkspace);
+    expect(
+      await controlStore.getWorkspaceMember(seeded.id, target.accountId),
+    ).toEqual(beforeTarget);
+    expect(
+      await controlStore.getWorkspaceMember(seeded.id, actor.accountId),
+    ).toMatchObject({ roles: ["admin"], status: "active" });
+  }
+});
+
+test("an active namespace owner can bootstrap the first member, while a stopped owner cannot", async () => {
+  for (const stopped of [false, true]) {
+    const controlStore = new InMemoryOpenTofuControlStore();
+    const service = new WorkspacesService({
+      store: controlStore,
+      newId: (prefix) => `${prefix}_owner_bootstrap_${stopped ? "stopped" : "active"}`,
+      now: () => new Date("2026-06-06T00:00:00.000Z"),
+    });
+    const seeded = {
+      id: `ws_owner_bootstrap_${stopped ? "stopped" : "active"}`,
+      handle: `owner-bootstrap-${stopped ? "stopped" : "active"}`,
+      displayName: "Owner bootstrap",
+      type: "personal" as const,
+      ownerUserId: "tsub_role_actor",
+      createdAt: "2026-06-06T00:00:00.000Z",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+    };
+    await controlStore.putWorkspace(seeded);
+    if (stopped) {
+      expect(
+        await controlStore.beginWorkspaceDraining(seeded.id, {
+          workspaceId: seeded.id,
+          managementState: "active",
+          managementEpoch: 1,
+        }),
+      ).toMatchObject({ status: "started" });
+    }
+    const operations = {
+      workspaces: {
+        getWorkspace: service.getWorkspace.bind(service),
+        getWorkspaceForAccount: service.getWorkspaceForAccount.bind(service),
+        listWorkspacesForAccount: service.listWorkspacesForAccount.bind(service),
+        listWorkspacesForAccountPage:
+          service.listWorkspacesForAccountPage.bind(service),
+        updateWorkspace: service.updateWorkspace.bind(service),
+        updateWorkspaceForAccount:
+          service.updateWorkspaceForAccount.bind(service),
+        captureManagementAuthority: service.captureManagementAuthority.bind(
+          service,
+        ),
+      },
+      members: {
+        getMember: service.getWorkspaceMember.bind(service),
+        listMembers: service.listWorkspaceMembers.bind(service),
+        upsertMember: async (input: {
+          readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
+          readonly workspaceId: string;
+          readonly accountId: string;
+          readonly roles?: readonly ("owner" | "admin" | "member" | "viewer")[];
+          readonly status?: "active" | "invited" | "suspended";
+          readonly actor: { readonly actorAccountId: string };
+          readonly requiredActorRole?: "owner";
+        }) => {
+          const request = {
+            expectedWorkspaceManagementAuthority:
+              input.expectedWorkspaceManagementAuthority,
+            workspaceId: input.workspaceId,
+            accountId: input.accountId,
+            roles: input.roles,
+            status: input.status,
+            actorAccountId: input.actor.actorAccountId,
+            ...(input.requiredActorRole
+              ? { requiredActorRole: input.requiredActorRole }
+              : {}),
+          };
+          return await service.upsertWorkspaceMember(
+            request as Parameters<WorkspacesService["upsertWorkspaceMember"]>[0],
+          );
+        },
+      },
+      activity: { record: async () => undefined },
+    } as unknown as ControlPlaneOperations;
+
+    const auth = roleSessionStore();
+    const response = await authenticatedControlRequest({
+      ...auth,
+      operations,
+      path: `/api/v1/workspaces/${seeded.id}/members`,
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ accountId: "tsub_new_member", role: "member" }),
+    });
+
+    if (stopped) {
+      expect(response.status).toBe(409);
+      expect(await controlStore.listWorkspaceMembers(seeded.id)).toEqual([]);
+      expect(
+        await controlStore.getWorkspaceMember(seeded.id, seeded.ownerUserId),
+      ).toBeUndefined();
+      continue;
+    }
+
+    expect(response.status).toBe(201);
+    expect(
+      await controlStore.getWorkspaceMember(seeded.id, seeded.ownerUserId),
+    ).toMatchObject({
+      workspaceId: seeded.id,
+      accountId: seeded.ownerUserId,
+      roles: ["owner"],
+      status: "active",
+    });
+    expect(
+      await controlStore.getWorkspaceMember(seeded.id, "tsub_new_member"),
+    ).toMatchObject({
+      workspaceId: seeded.id,
+      accountId: "tsub_new_member",
+      roles: ["member"],
+      status: "active",
+    });
+    expect(await controlStore.listWorkspaceMembers(seeded.id)).toHaveLength(2);
+  }
+});
+
 test("account-plane relationship views expose only Workspace and Capsule ids", () => {
   const dependency = publicDependency({
     id: "dep_1",
@@ -459,6 +959,21 @@ test("account-plane control errors preserve structured reason details", async ()
       code: "failed_precondition",
       message: "Source synchronization is required",
       details: { reason: "source_sync_required" },
+    },
+  });
+});
+
+test("account-plane Workspace admission refusal is a value-free precondition response", async () => {
+  const response = controllerErrorResponse(
+    new WorkspaceManagementAdmissionConflictError("private-workspace-identity"),
+  );
+  expect(response.status).toBe(409);
+  expect(await response.json()).toEqual({
+    error: {
+      code: "failed_precondition",
+      message: "Workspace is not accepting this management operation.",
+      details: { reason: "workspace_management_admission_conflict" },
+      requestId: expect.any(String),
     },
   });
 });
@@ -1550,6 +2065,11 @@ test("credential OAuth callback success preserves tk_control_init timing", async
         complete: async () => ({
           request: { workspaceId: workspace.id },
           subject: workspace.ownerUserId,
+          expectedWorkspaceManagementAuthority: {
+            workspaceId: workspace.id,
+            managementState: "active",
+            managementEpoch: 1,
+          },
         }),
       },
     },
@@ -1574,6 +2094,44 @@ test("credential OAuth callback success preserves tk_control_init timing", async
   expect(response?.headers.get("server-timing")).toMatch(
     /tk_control_init;dur=/u,
   );
+});
+
+test("credential OAuth callback rejects a valid legacy state before minting", async () => {
+  let createCalls = 0;
+  const operations = {
+    connectionOAuth: {
+      helper: {
+        // This models an HMAC-valid state issued before the Workspace authority
+        // tuple became part of OAuth state. It remains readable but cannot mint.
+        complete: async () => ({
+          request: { workspaceId: workspace.id },
+          subject: workspace.ownerUserId,
+        }),
+      },
+    },
+    workspaces: {
+      getWorkspace: async () => workspace,
+    },
+    createConnection: async () => {
+      createCalls += 1;
+      return { connection: { id: "conn_legacy_oauth" } };
+    },
+  } as unknown as ControlPlaneOperations;
+  const request = new Request(
+    "https://app.example.test/api/v1/connections/oauth/helper/callback?code=code-legacy&state=state-legacy",
+  );
+  const response = await handleControlRoute({
+    request,
+    url: new URL(request.url),
+    store: new InMemoryAccountsStore(),
+    resolveOperations: async () => operations,
+  });
+
+  expect(response?.status).toBe(303);
+  expect(response?.headers.get("location")).toContain(
+    "connection_error=oauth_failed",
+  );
+  expect(createCalls).toBe(0);
 });
 
 test("credential OAuth callback failure preserves tk_control_init timing", async () => {
@@ -1955,6 +2513,62 @@ test("Workspace list adopts and repairs an existing personal Workspace missing f
   ).toEqual(expect.objectContaining({ roles: ["owner"], status: "active" }));
   expect(defaultProjectRepairs).toBe(1);
   expect(await controlStore.listWorkspaces()).toHaveLength(1);
+});
+
+test("Workspace first page retains a stopped owned personal Workspace without repairing its missing owner", async () => {
+  const controlStore = new InMemoryOpenTofuControlStore();
+  let id = 0;
+  const service = new WorkspacesService({
+    store: controlStore,
+    newId: (prefix) => `${prefix}_stopped_owner_${(id += 1)}`,
+    now: () => new Date("2026-08-10T00:00:00.000Z"),
+  });
+  const existing = {
+    id: "ws_stopped_owner",
+    handle: "stopped-owner",
+    displayName: "Stopped owner",
+    type: "personal" as const,
+    ownerUserId: "tsub_role_actor",
+    createdAt: "2026-08-10T00:00:00.000Z",
+    updatedAt: "2026-08-10T00:00:00.000Z",
+  };
+  await controlStore.putWorkspace(existing);
+  expect(
+    await controlStore.beginWorkspaceDraining(existing.id, {
+      workspaceId: existing.id,
+      managementState: "active",
+      managementEpoch: 1,
+    }),
+  ).toMatchObject({ status: "started" });
+
+  const operations = {
+    workspaces: {
+      ensurePersonalWorkspace: service.ensurePersonalWorkspace.bind(service),
+      getWorkspace: service.getWorkspace.bind(service),
+      getWorkspaceForAccount: service.getWorkspaceForAccount.bind(service),
+      listWorkspacesForAccount: service.listWorkspacesForAccount.bind(service),
+      listWorkspacesForAccountPage:
+        service.listWorkspacesForAccountPage.bind(service),
+      captureManagementAuthority: service.captureManagementAuthority.bind(
+        service,
+      ),
+    },
+    members: {
+      getMember: service.getWorkspaceMember.bind(service),
+      listMembers: service.listWorkspaceMembers.bind(service),
+    },
+  } as unknown as ControlPlaneOperations;
+  const auth = roleSessionStore();
+  const response = await authenticatedControlRequest({
+    ...auth,
+    operations,
+    path: "/api/v1/workspaces",
+  });
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ workspaces: [existing] });
+  expect(await controlStore.getWorkspace(existing.id)).toEqual(existing);
+  expect(await controlStore.listWorkspaceMembers(existing.id)).toEqual([]);
 });
 
 test("Workspace list keeps bootstrap outage best-effort without an owner scan", async () => {

@@ -147,7 +147,18 @@ async function seedQueuedApply(
     createdAt: 1,
     updatedAt: 1,
   };
-  await store.putApplyRun(apply);
+  const management = await store.getWorkspaceManagement(planRun.workspaceId);
+  if (!management || management.managementState !== "active") {
+    throw new Error(`${planRun.workspaceId}: Workspace management is not active`);
+  }
+  const admitted = await store.beginApplyRun(apply, {
+    workspaceId: management.workspaceId,
+    managementState: "active",
+    managementEpoch: management.managementEpoch,
+  });
+  if (admitted.status !== "created") {
+    throw new Error(`${applyRunId}: Apply admission returned ${admitted.status}`);
+  }
 }
 
 test("two applies of the same create plan: exactly one materializes, the other replays, only ONE StateVersion", async () => {

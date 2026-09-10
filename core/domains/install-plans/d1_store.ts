@@ -1,12 +1,19 @@
 import {
   assertCompletionGeneration,
   assertImmutableScope,
+  gitInstallPlanManagementAuthority,
   type ClaimGitInstallPlanResult,
   type CompleteGitInstallPlanResult,
   type CreateGitInstallPlanResult,
+  type GitInstallPlanScope,
   type GitInstallPlanStore,
   type StoredGitInstallPlan,
 } from "./store.ts";
+import {
+  assertWorkspaceManagementAuthorityInput,
+  WorkspaceManagementAdmissionConflictError,
+  type WorkspaceManagementAuthority,
+} from "../deploy-control/store.ts";
 
 interface D1Result<T> {
   readonly results?: readonly T[];
@@ -44,18 +51,36 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
     this.#db = db;
   }
 
-  async create(plan: StoredGitInstallPlan): Promise<CreateGitInstallPlanResult> {
-    await this.#db
+  async create(
+    plan: StoredGitInstallPlan,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<CreateGitInstallPlanResult> {
+    if (plan.workspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(plan.workspaceManagementAuthority, plan.workspaceId);
+    }
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        plan.workspaceId,
+      );
+    }
+    const observed = await this.#getByScope(plan);
+    if (observed) return createResult(plan, observed);
+    const authority = gitInstallPlanManagementAuthority(plan, expectedWorkspaceManagementAuthority);
+    const result = await this.#db
       .prepare(
         `insert into git_install_plans
           (id, workspace_id, actor_subject, idempotency_key_hash,
            request_digest, phase, generation, record_json, created_at, updated_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         select ?, workspace.id, ?, ?, ?, ?, ?, ?, ?, ?
+           from workspaces as workspace
+          where workspace.id = ?
+            and workspace.management_state = 'active'
+            and workspace.management_epoch = ?
          on conflict (workspace_id, actor_subject, idempotency_key_hash) do nothing`,
       )
       .bind(
         plan.id,
-        plan.workspaceId,
         plan.actorSubject,
         plan.idempotencyKeyHash,
         plan.requestDigest,
@@ -64,27 +89,30 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
         JSON.stringify(plan),
         plan.createdAt,
         plan.updatedAt,
+        plan.workspaceId,
+        authority.managementEpoch,
       )
       .run();
+    if ((result.meta?.changes ?? 0) > 0) {
+      const inserted = await this.get(plan.id);
+      if (!inserted) throw new Error("Git install plan insert was not readable");
+      return { status: "created", plan: inserted };
+    }
+    // A no-op can be either an existing scope (which is still observable
+    // while draining) or a failed Workspace admission. Read back the scope
+    // to distinguish those outcomes without an unconditional write.
     const existing = await this.#getByScope(plan);
-    if (!existing) throw new Error("Git install plan insert was not readable");
-    return {
-      status:
-        existing.id === plan.id
-          ? "created"
-          : existing.requestDigest === plan.requestDigest
-            ? "replayed"
-            : "conflict",
-      plan: existing,
-    };
+    if (existing) return createResult(plan, existing);
+    throw new WorkspaceManagementAdmissionConflictError(plan.workspaceId);
   }
 
   async get(id: string): Promise<StoredGitInstallPlan | undefined> {
-    const row = await this.#db
-      .prepare("select * from git_install_plans where id = ?")
-      .bind(id)
-      .first<GitInstallPlanD1Row>();
+    const row = await this.#getByIdRow(id);
     return row ? rowPlan(row) : undefined;
+  }
+
+  async getByScope(scope: GitInstallPlanScope): Promise<StoredGitInstallPlan | undefined> {
+    return await this.#getByScope(scope);
   }
 
   async hasInFlightRevisionForCapsule(capsuleId: string): Promise<boolean> {
@@ -108,53 +136,79 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
     readonly leaseToken: string;
     readonly claimedAt: string;
     readonly leaseExpiresAt: string;
+    readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
   }): Promise<ClaimGitInstallPlanResult> {
-    const current = await this.get(input.id);
-    if (!current) return { status: "not_found" };
-    if (current.generation !== input.expectedGeneration) {
-      return { status: "conflict", plan: current };
+    const observedRow = await this.#getByIdRow(input.id);
+    if (!observedRow) return { status: "not_found" };
+    const observed = rowPlan(observedRow);
+    if (input.expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        input.expectedWorkspaceManagementAuthority,
+        observed.workspaceId,
+      );
     }
-    const claimed: StoredGitInstallPlan = {
-      ...current,
-      generation: current.generation + 1,
-      updatedAt: input.claimedAt,
-    };
-    const result = await this.#db
+    if (observed.generation !== input.expectedGeneration) {
+      return { status: "conflict", plan: observed };
+    }
+    if (leaseIsBusy(observedRow, input.claimedAt)) {
+      return { status: "busy", plan: observed };
+    }
+    const claimedGeneration = observed.generation + 1;
+    const authority = gitInstallPlanManagementAuthority(observed, input.expectedWorkspaceManagementAuthority);
+    const claimedRow = await this.#db
       .prepare(
         `update git_install_plans
-            set generation = ?, record_json = ?, reconcile_lease_token = ?,
+            set generation = ?,
+                record_json = json_set(record_json, '$.generation', ?, '$.updatedAt', ?),
+                reconcile_lease_token = ?,
                 reconcile_lease_expires_at = ?, updated_at = ?
-          where id = ? and generation = ?
-            and (reconcile_lease_expires_at is null or reconcile_lease_expires_at <= ?)`,
+          where id = ? and workspace_id = ? and generation = ?
+            and (reconcile_lease_expires_at is null or reconcile_lease_expires_at <= ?)
+            and exists (
+              select 1 from workspaces as workspace
+               where workspace.id = git_install_plans.workspace_id
+                 and workspace.management_state = 'active'
+                 and workspace.management_epoch = ?
+            )
+          returning *`,
       )
       .bind(
-        claimed.generation,
-        JSON.stringify(claimed),
+        claimedGeneration,
+        claimedGeneration,
+        input.claimedAt,
         input.leaseToken,
         input.leaseExpiresAt,
         input.claimedAt,
         input.id,
+        observed.workspaceId,
         input.expectedGeneration,
         input.claimedAt,
+        authority.managementEpoch,
       )
-      .run();
-    if ((result.meta?.changes ?? 0) > 0) {
+      .first<GitInstallPlanD1Row>();
+    if (claimedRow) {
       return {
         status: "claimed",
         claim: {
-          plan: claimed,
+          plan: rowPlan(claimedRow),
           leaseToken: input.leaseToken,
           leaseExpiresAt: input.leaseExpiresAt,
         },
       };
     }
-    const latest = await this.get(input.id);
-    if (!latest) return { status: "not_found" };
-    return {
-      status:
-        latest.generation === input.expectedGeneration ? "busy" : "conflict",
-      plan: latest,
-    };
+    const latestRow = await this.#getByIdRow(input.id);
+    if (!latestRow) return { status: "not_found" };
+    const latest = rowPlan(latestRow);
+    if (latest.workspaceId !== observed.workspaceId) {
+      return { status: "conflict", plan: latest };
+    }
+    if (latest.generation !== input.expectedGeneration) {
+      return { status: "conflict", plan: latest };
+    }
+    if (leaseIsBusy(latestRow, input.claimedAt)) {
+      return { status: "busy", plan: latest };
+    }
+    throw new WorkspaceManagementAdmissionConflictError(observed.workspaceId);
   }
 
   async completeReconcile(input: {
@@ -207,6 +261,33 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
       .first<GitInstallPlanD1Row>();
     return row ? rowPlan(row) : undefined;
   }
+
+  async #getByIdRow(id: string): Promise<GitInstallPlanD1Row | undefined> {
+    const row = await this.#db
+      .prepare("select * from git_install_plans where id = ?")
+      .bind(id)
+      .first<GitInstallPlanD1Row>();
+    return row ?? undefined;
+  }
+}
+
+function createResult(
+  plan: StoredGitInstallPlan,
+  existing: StoredGitInstallPlan,
+): CreateGitInstallPlanResult {
+  return {
+    status:
+      existing.requestDigest === plan.requestDigest ? "replayed" : "conflict",
+    plan: existing,
+  };
+}
+
+function leaseIsBusy(
+  row: Pick<GitInstallPlanD1Row, "reconcile_lease_expires_at">,
+  claimedAt: string,
+): boolean {
+  return row.reconcile_lease_expires_at !== null &&
+    row.reconcile_lease_expires_at > claimedAt;
 }
 
 function rowPlan(row: GitInstallPlanD1Row): StoredGitInstallPlan {

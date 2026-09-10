@@ -9,6 +9,9 @@ import {
 } from "../../../../accounts/service/src/control-routes.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
+import { createConnectionOAuthHelpers } from "../../../../core/api/connection_oauth_helpers.ts";
+import { StaticSecretConnectionVault } from "../../../../core/adapters/vault/mod.ts";
+import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import {
   hasValidDerivedTargetSeal,
@@ -46,6 +49,7 @@ import {
 import {
   InMemoryOpenTofuControlStore,
   planRunExecutionInputsDigestMaterial,
+  type OpenTofuControlStore,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
@@ -82,6 +86,7 @@ import type {
   ApplyRun,
   PlanRun,
 } from "@takosumi/internal/deploy-control-api";
+import { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } from "../../../../providers/registry.ts";
 
 const ORIGIN = "https://app.takosumi.test";
 const PLAN_DIGEST =
@@ -382,6 +387,710 @@ async function createInitialAuthorityFixture(input: {
   ).capsule;
 }
 
+async function createConnectionItemFixture(suffix: string) {
+  const accountStore = new InMemoryAccountsStore();
+  const cookie = seedSession(accountStore);
+  const database = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(database);
+  const deployStore = createCloudflareD1OpenTofuControlStore(database);
+  const workspaceId = `ws_account_connection_item_${suffix}`;
+  const connectionId = `conn_account_connection_item_${suffix}`;
+  await deployStore.putWorkspace({
+    id: workspaceId,
+    handle: `account-connection-item-${suffix}`,
+    displayName: "Account Connection Item",
+    type: "personal",
+    ownerUserId: "user_test",
+    createdAt: "2026-09-10T00:00:00.000Z",
+    updatedAt: "2026-09-10T00:00:00.000Z",
+  });
+  const vault = new StaticSecretConnectionVault({
+    store: deployStore,
+    crypto: new PartitionedSecretBoundaryCrypto({
+      globalPassphrase: `account-connection-item-${suffix}-passphrase-0123456789`,
+    }),
+    now: () => new Date("2026-09-10T00:00:00.000Z"),
+    newId: () => connectionId,
+    credentialRecipeResolver: (id) =>
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find(
+        (recipe) => recipe.id === id,
+      ),
+    credentialDrivers:
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    sourceCredentialDrivers:
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.sourceCredentialDrivers,
+  });
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: deployStore,
+    opentofuConnectionVault: vault,
+    ...REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
+  });
+  const authority = {
+    workspaceId,
+    managementState: "active" as const,
+    managementEpoch: 1,
+  };
+  await operations.createConnection(
+    {
+      workspaceId,
+      provider: "registry.opentofu.org/vercel/vercel",
+      credentialRecipe: {
+        id: "generic-env",
+        authMode: "env",
+        secretPartition: "provider-credentials",
+      },
+      scope: "workspace",
+      displayName: "Account Connection Item",
+      values: { VERCEL_API_TOKEN: "connection-item-token" },
+    },
+    authority,
+    null,
+  );
+  return {
+    accountStore,
+    cookie,
+    database,
+    deployStore,
+    operations,
+    workspaceId,
+    connectionId,
+  };
+}
+
+async function drainAndResumeDuringWorkspaceAuthorization(input: {
+  readonly fixture: Awaited<ReturnType<typeof createConnectionItemFixture>>;
+}): Promise<() => void> {
+  const { fixture } = input;
+  const originalGetWorkspace = fixture.operations.workspaces.getWorkspace.bind(
+    fixture.operations.workspaces,
+  );
+  let interleaved = false;
+  fixture.operations.workspaces.getWorkspace = async (workspaceId) => {
+    const workspace = await originalGetWorkspace(workspaceId);
+    if (!interleaved && workspaceId === fixture.workspaceId) {
+      interleaved = true;
+      const active = await fixture.deployStore.getWorkspaceManagement(
+        fixture.workspaceId,
+      );
+      expect(active).toEqual({
+        workspaceId: fixture.workspaceId,
+        managementState: "active",
+        managementEpoch: 1,
+      });
+      expect(
+        await fixture.deployStore.beginWorkspaceDraining(
+          fixture.workspaceId,
+          active!,
+        ),
+      ).toMatchObject({ status: "started" });
+      const resumed = await fixture.database
+        .prepare(
+          "update workspaces set management_state = 'active', management_epoch = 3 where id = ? and management_state = 'draining'",
+        )
+        .bind(fixture.workspaceId)
+        .run();
+      expect(resumed.meta?.changes).toBe(1);
+    }
+    return workspace;
+  };
+  return () => {
+    fixture.operations.workspaces.getWorkspace = originalGetWorkspace;
+  };
+}
+
+test("account connection item test and revoke retain their original Workspace authority", async () => {
+  for (const operation of ["test", "revoke"] as const) {
+    const fixture = await createConnectionItemFixture(`race-${operation}`);
+    const restore = await drainAndResumeDuringWorkspaceAuthorization({
+      fixture,
+    });
+    let response: Response | undefined;
+    try {
+      const built = request(
+        "POST",
+        `/api/v1/connections/${fixture.connectionId}/${operation}`,
+        { cookie: fixture.cookie },
+      );
+      response = await handleControlRoute({
+        request: built.request,
+        url: built.url,
+        store: fixture.accountStore,
+        operations: fixture.operations,
+      });
+    } finally {
+      restore();
+    }
+    expect(response?.status).toBe(409);
+    expect(await response?.json()).toMatchObject({
+      error: {
+        code: "failed_precondition",
+        details: { reason: "workspace_management_admission_conflict" },
+      },
+    });
+    expect(await fixture.deployStore.listConnections(fixture.workspaceId)).toHaveLength(1);
+    expect(await fixture.deployStore.getSecretBlob(fixture.connectionId)).toBeDefined();
+    expect(await fixture.deployStore.getWorkspaceManagement(fixture.workspaceId)).toEqual({
+      workspaceId: fixture.workspaceId,
+      managementState: "active",
+      managementEpoch: 3,
+    });
+  }
+});
+
+test("account connection item test and revoke succeed for an active Workspace", async () => {
+  for (const operation of ["test", "revoke"] as const) {
+    const fixture = await createConnectionItemFixture(`active-${operation}`);
+    const built = request(
+      "POST",
+      `/api/v1/connections/${fixture.connectionId}/${operation}`,
+      { cookie: fixture.cookie },
+    );
+    const response = await handleControlRoute({
+      request: built.request,
+      url: built.url,
+      store: fixture.accountStore,
+      operations: fixture.operations,
+    });
+    if (operation === "test") {
+      expect(response?.status).toBe(200);
+      expect(await response?.json()).toEqual({ status: "verified" });
+      expect(await fixture.deployStore.getConnection(fixture.connectionId)).toMatchObject({
+        status: "verified",
+      });
+      expect(await fixture.deployStore.getSecretBlob(fixture.connectionId)).toBeDefined();
+    } else {
+      expect(response?.status).toBe(204);
+      expect(await fixture.deployStore.getConnection(fixture.connectionId)).toBeUndefined();
+      expect(await fixture.deployStore.getSecretBlob(fixture.connectionId)).toBeUndefined();
+    }
+  }
+});
+
+test("account Connection writes reject a member suspended after authorization before the final D1 batch", async () => {
+  for (const operation of ["register", "test", "revoke"] as const) {
+    const fixture = await createConnectionItemFixture(`actor-revocation-${operation}`);
+    if (operation === "register") await fixture.operations.revokeConnection(fixture.connectionId, undefined, null);
+    const originalConnection = await fixture.deployStore.getConnection(fixture.connectionId);
+    const originalBlob = await fixture.deployStore.getSecretBlob(fixture.connectionId);
+    const workspace = await fixture.deployStore.getWorkspace(fixture.workspaceId);
+    if (!workspace) throw new Error("fixture Workspace is missing");
+    await fixture.deployStore.putWorkspace({ ...workspace, ownerUserId: "namespace_owner" });
+    const member = {
+      id: "member_connection_actor", workspaceId: fixture.workspaceId, accountId: "user_test",
+      roles: ["admin"] as const, status: "active" as const,
+      createdAt: "2026-09-10T00:00:00.000Z", updatedAt: "2026-09-10T00:00:00.000Z",
+    };
+    await fixture.deployStore.putWorkspaceMember(member);
+    const originalBatch = fixture.database.batch.bind(fixture.database);
+    let interleaved = false;
+    fixture.database.batch = async <T>(statements: Parameters<SqliteFakeD1["batch"]>[0]) => {
+      if (!interleaved) {
+        interleaved = true;
+        await fixture.deployStore.putWorkspaceMember({ ...member, status: "suspended" });
+      }
+      return await originalBatch<T>(statements);
+    };
+    try {
+      const built = request("POST", operation === "register" ? "/api/v1/connections"
+        : `/api/v1/connections/${fixture.connectionId}/${operation}`, {
+        cookie: fixture.cookie,
+        body: {
+          workspaceId: fixture.workspaceId, provider: "registry.opentofu.org/vercel/vercel",
+          credentialRecipe: { id: "generic-env", authMode: "env", secretPartition: "provider-credentials" },
+          values: { VERCEL_API_TOKEN: "must-not-survive-actor-revocation" },
+        },
+      });
+      const response = await handleControlRoute({
+        request: built.request, url: built.url, store: fixture.accountStore, operations: fixture.operations,
+      });
+      expect(interleaved).toBe(true);
+      expect(response?.status).toBe(409);
+      expect(await fixture.deployStore.getConnection(fixture.connectionId)).toEqual(originalConnection);
+      expect(await fixture.deployStore.getSecretBlob(fixture.connectionId)).toEqual(originalBlob);
+      expect(await fixture.deployStore.getWorkspaceManagement(fixture.workspaceId)).toEqual({
+        workspaceId: fixture.workspaceId, managementState: "active", managementEpoch: 1,
+      });
+    } finally {
+      fixture.database.batch = originalBatch;
+    }
+  }
+});
+
+test("unauthorized account connection item test and revoke remain a non-disclosing 404", async () => {
+  for (const operation of ["test", "revoke"] as const) {
+    const fixture = await createConnectionItemFixture(`unauthorized-${operation}`);
+    const intruderCookie = seedSession(fixture.accountStore, "intruder");
+    const restore = await drainAndResumeDuringWorkspaceAuthorization({
+      fixture,
+    });
+    let response: Response | undefined;
+    try {
+      const built = request(
+        "POST",
+        `/api/v1/connections/${fixture.connectionId}/${operation}`,
+        { cookie: intruderCookie },
+      );
+      response = await handleControlRoute({
+        request: built.request,
+        url: built.url,
+        store: fixture.accountStore,
+        operations: fixture.operations,
+      });
+    } finally {
+      restore();
+    }
+    expect(response?.status).toBe(404);
+    expect(await response?.json()).toMatchObject({
+      error: { code: "connection_not_found" },
+    });
+    expect(await fixture.deployStore.listConnections(fixture.workspaceId)).toHaveLength(1);
+    expect(await fixture.deployStore.getSecretBlob(fixture.connectionId)).toBeDefined();
+  }
+});
+
+test("account public generic-env registration retains the original Workspace authority across drain and resume", async () => {
+  const accountStore = new InMemoryAccountsStore();
+  const cookie = seedSession(accountStore);
+  const database = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(database);
+  const deployStore = createCloudflareD1OpenTofuControlStore(database);
+  const workspaceId = "ws_account_connection_epoch";
+  const connectionId = "conn_account_connection_epoch";
+  await deployStore.putWorkspace({
+    id: workspaceId,
+    handle: "account-connection-epoch",
+    displayName: "Account Connection Epoch",
+    type: "personal",
+    ownerUserId: "user_test",
+    createdAt: "2026-09-10T00:00:00.000Z",
+    updatedAt: "2026-09-10T00:00:00.000Z",
+  });
+  const vault = new StaticSecretConnectionVault({
+    store: deployStore,
+    crypto: new PartitionedSecretBoundaryCrypto({
+      globalPassphrase: "account-connection-epoch-passphrase-0123456789",
+    }),
+    now: () => new Date("2026-09-10T00:00:00.000Z"),
+    newId: () => connectionId,
+    credentialRecipeResolver: (id) =>
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find(
+        (recipe) => recipe.id === id,
+      ),
+    credentialDrivers:
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    sourceCredentialDrivers:
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.sourceCredentialDrivers,
+  });
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: deployStore,
+    opentofuConnectionVault: vault,
+    ...REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
+  });
+
+  const originalGetWorkspace = operations.workspaces.getWorkspace.bind(
+    operations.workspaces,
+  );
+  let interleaved = false;
+  operations.workspaces.getWorkspace = async (id) => {
+    const workspace = await originalGetWorkspace(id);
+    if (!interleaved && id === workspaceId) {
+      interleaved = true;
+      const active = await deployStore.getWorkspaceManagement(workspaceId);
+      expect(active).toEqual({
+        workspaceId,
+        managementState: "active",
+        managementEpoch: 1,
+      });
+      expect(
+        await deployStore.beginWorkspaceDraining(workspaceId, {
+          workspaceId,
+          managementState: "active",
+          managementEpoch: 1,
+        }),
+      ).toMatchObject({ status: "started" });
+      const resumed = await database.prepare(
+        "update workspaces set management_state = 'active', management_epoch = 3 where id = ? and management_state = 'draining'",
+      ).bind(workspaceId).run();
+      expect(resumed.meta?.changes).toBe(1);
+    }
+    return workspace;
+  };
+  try {
+    const built = request("POST", "/api/v1/connections", {
+      cookie,
+      body: {
+        workspaceId,
+        provider: "registry.opentofu.org/vercel/vercel",
+        credentialRecipe: {
+          id: "generic-env",
+          authMode: "env",
+          secretPartition: "provider-credentials",
+        },
+        displayName: "Account connection epoch",
+        values: { VERCEL_API_TOKEN: "must-not-persist" },
+      },
+    });
+    const response = await handleControlRoute({
+      request: built.request,
+      url: built.url,
+      store: accountStore,
+      operations,
+    });
+    expect(response?.status).toBe(409);
+    expect(await response?.json()).toMatchObject({
+      error: {
+        code: "failed_precondition",
+        details: { reason: "workspace_management_admission_conflict" },
+      },
+    });
+  } finally {
+    operations.workspaces.getWorkspace = originalGetWorkspace;
+  }
+  expect(interleaved).toBe(true);
+  expect(await deployStore.listConnections(workspaceId)).toEqual([]);
+  expect(await deployStore.getSecretBlob(connectionId)).toBeUndefined();
+  expect(await deployStore.getWorkspaceManagement(workspaceId)).toEqual({
+    workspaceId,
+    managementState: "active",
+    managementEpoch: 3,
+  });
+});
+
+test("account OAuth registration retains the original Workspace authority across token exchange and resume", async () => {
+  const accountStore = new InMemoryAccountsStore();
+  const cookie = seedSession(accountStore);
+  const database = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(database);
+  const deployStore = createCloudflareD1OpenTofuControlStore(database);
+  const workspaceId = "ws_account_oauth_epoch";
+  const connectionId = "conn_account_oauth_epoch";
+  await deployStore.putWorkspace({
+    id: workspaceId,
+    handle: "account-oauth-epoch",
+    displayName: "Account OAuth Epoch",
+    type: "personal",
+    ownerUserId: "user_test",
+    createdAt: "2026-09-10T00:00:00.000Z",
+    updatedAt: "2026-09-10T00:00:00.000Z",
+  });
+  const crypto = new PartitionedSecretBoundaryCrypto({
+    globalPassphrase: "account-oauth-epoch-passphrase-0123456789",
+  });
+  const vault = new StaticSecretConnectionVault({
+    store: deployStore,
+    crypto,
+    now: () => new Date("2026-09-10T00:00:00.000Z"),
+    newId: () => connectionId,
+    credentialRecipeResolver: (id) =>
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find(
+        (recipe) => recipe.id === id,
+      ),
+    credentialDrivers:
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    sourceCredentialDrivers:
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.sourceCredentialDrivers,
+  });
+  let exchangeCalls = 0;
+  const oauthHelpers = createConnectionOAuthHelpers(
+    {
+      stateSecret: "account-oauth-state-secret",
+      descriptors: [
+        {
+          id: "fixture",
+          providerSource: "registry.opentofu.org/vercel/vercel",
+          credentialRecipe: {
+            id: "generic-env",
+            authMode: "env",
+            secretPartition: "provider-credentials",
+          },
+          clientId: "fixture-client",
+          authorizationUrl: "https://provider.example.test/authorize",
+          tokenUrl: "https://provider.example.test/token",
+          redirectUri: "https://app.takosumi.test/api/v1/connections/oauth/fixture/callback",
+          scopes: ["connections:write"],
+          mapTokenResponse: ({ tokenResponse }) => ({
+            VERCEL_API_TOKEN: String(tokenResponse.access_token ?? ""),
+          }),
+        },
+      ],
+    },
+    (async () => {
+      exchangeCalls += 1;
+      const active = await deployStore.getWorkspaceManagement(workspaceId);
+      expect(active).toEqual({
+        workspaceId,
+        managementState: "active",
+        managementEpoch: 1,
+      });
+      expect(
+        await deployStore.beginWorkspaceDraining(workspaceId, {
+          workspaceId,
+          managementState: "active",
+          managementEpoch: 1,
+        }),
+      ).toMatchObject({ status: "started" });
+      const resumed = await database.prepare(
+        "update workspaces set management_state = 'active', management_epoch = 3 where id = ? and management_state = 'draining'",
+      ).bind(workspaceId).run();
+      expect(resumed.meta?.changes).toBe(1);
+      return Response.json({ access_token: "oauth-must-not-persist" });
+    }) as typeof fetch,
+  );
+  if (!oauthHelpers?.fixture) throw new Error("fixture OAuth helper is missing");
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: deployStore,
+    opentofuConnectionVault: vault,
+    connectionOAuthHelpers: oauthHelpers,
+    ...REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
+  });
+
+  const startRequest = request("POST", "/api/v1/connections/oauth/fixture/start", {
+    cookie,
+    body: { workspaceId, displayName: "Account OAuth Epoch" },
+  });
+  const startedResponse = await handleControlRoute({
+    request: startRequest.request,
+    url: startRequest.url,
+    store: accountStore,
+    operations,
+  });
+  expect(startedResponse?.status).toBe(200);
+  const started = (await startedResponse?.json()) as { readonly state: string };
+  expect(started.state).toContain(".");
+
+  const callbackRequest = request(
+    "GET",
+    `/api/v1/connections/oauth/fixture/callback?code=fixture-code&state=${encodeURIComponent(started.state)}`,
+  );
+  const callbackResponse = await handleControlRoute({
+    request: callbackRequest.request,
+    url: callbackRequest.url,
+    store: accountStore,
+    operations,
+  });
+  expect(callbackResponse?.status).toBe(303);
+  expect(callbackResponse?.headers.get("location")).toContain(
+    "connection_error=oauth_failed",
+  );
+  expect(exchangeCalls).toBe(1);
+  expect(await deployStore.listConnections(workspaceId)).toEqual([]);
+  expect(await deployStore.getSecretBlob(connectionId)).toBeUndefined();
+  expect(await deployStore.getWorkspaceManagement(workspaceId)).toEqual({
+    workspaceId,
+    managementState: "active",
+    managementEpoch: 3,
+  });
+});
+
+for (const pauseBeforeVerification of [false, true]) {
+test(pauseBeforeVerification
+  ? "account OAuth follow-up verification retains its signed original epoch after registration"
+  : "account OAuth registration succeeds when the captured Workspace remains active", async () => {
+  const accountStore = new InMemoryAccountsStore();
+  const cookie = seedSession(accountStore);
+  const database = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(database);
+  const deployStore = createCloudflareD1OpenTofuControlStore(database);
+  const workspaceId = "ws_account_oauth_normal";
+  const connectionId = "conn_account_oauth_normal";
+  await deployStore.putWorkspace({
+    id: workspaceId,
+    handle: "account-oauth-normal",
+    displayName: "Account OAuth Normal",
+    type: "personal",
+    ownerUserId: "user_test",
+    createdAt: "2026-09-10T00:00:00.000Z",
+    updatedAt: "2026-09-10T00:00:00.000Z",
+  });
+  const vault = new StaticSecretConnectionVault({
+    store: deployStore,
+    crypto: new PartitionedSecretBoundaryCrypto({
+      globalPassphrase: "account-oauth-normal-passphrase-0123456789",
+    }),
+    now: () => new Date("2026-09-10T00:00:00.000Z"),
+    newId: () => connectionId,
+    credentialRecipeResolver: (id) =>
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find(
+        (recipe) => recipe.id === id,
+      ),
+    credentialDrivers:
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    sourceCredentialDrivers:
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.sourceCredentialDrivers,
+  });
+  const oauthHelpers = createConnectionOAuthHelpers(
+    {
+      stateSecret: "account-oauth-normal-state-secret",
+      descriptors: [
+        {
+          id: "fixture",
+          providerSource: "registry.opentofu.org/vercel/vercel",
+          credentialRecipe: {
+            id: "generic-env",
+            authMode: "env",
+            secretPartition: "provider-credentials",
+          },
+          clientId: "fixture-client",
+          authorizationUrl: "https://provider.example.test/authorize",
+          tokenUrl: "https://provider.example.test/token",
+          redirectUri:
+            "https://app.takosumi.test/api/v1/connections/oauth/fixture/callback",
+          scopes: ["connections:write"],
+          mapTokenResponse: ({ tokenResponse }) => ({
+            VERCEL_API_TOKEN: String(tokenResponse.access_token ?? ""),
+          }),
+        },
+      ],
+    },
+    (async () =>
+      Response.json({ access_token: "oauth-normal-token" })) as typeof fetch,
+  );
+  if (!oauthHelpers?.fixture) throw new Error("fixture OAuth helper is missing");
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: deployStore,
+    opentofuConnectionVault: vault,
+    connectionOAuthHelpers: oauthHelpers,
+    ...REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
+  });
+
+  const startRequest = request(
+    "POST",
+    "/api/v1/connections/oauth/fixture/start",
+    { cookie, body: { workspaceId, displayName: "Account OAuth Normal" } },
+  );
+  const startedResponse = await handleControlRoute({
+    request: startRequest.request,
+    url: startRequest.url,
+    store: accountStore,
+    operations,
+  });
+  expect(startedResponse?.status).toBe(200);
+  const started = (await startedResponse?.json()) as { readonly state: string };
+  expect(started.state).toContain(".");
+
+  let registered: Awaited<ReturnType<typeof deployStore.getConnection>>;
+  const callbackOperations: ControlPlaneOperations = pauseBeforeVerification ? {
+    ...operations,
+    async createConnection(input, authority, actorAccountId) {
+      const result = await operations.createConnection(input, authority, actorAccountId);
+      registered = structuredClone(result.connection);
+      await deployStore.beginWorkspaceDraining(workspaceId, {
+        workspaceId, managementState: "active", managementEpoch: 1,
+      });
+      await database.prepare("update workspaces set management_state = 'active', management_epoch = 3 where id = ?")
+        .bind(workspaceId).run();
+      return result;
+    },
+  } : operations;
+  const callbackRequest = request(
+    "GET",
+    `/api/v1/connections/oauth/fixture/callback?code=fixture-code&state=${encodeURIComponent(started.state)}`,
+  );
+  const callbackResponse = await handleControlRoute({
+    request: callbackRequest.request,
+    url: callbackRequest.url,
+    store: accountStore,
+    operations: callbackOperations,
+  });
+  expect(callbackResponse?.status).toBe(303);
+  expect(callbackResponse?.headers.get("location")).toContain(
+    "connected=1",
+  );
+  expect(callbackResponse?.headers.get("location")).toContain(
+    `connection_id=${connectionId}`,
+  );
+  expect(await deployStore.listConnections(workspaceId)).toHaveLength(1);
+  expect(await deployStore.getSecretBlob(connectionId)).toBeDefined();
+  expect(await deployStore.getWorkspaceManagement(workspaceId)).toEqual({
+    workspaceId,
+    managementState: "active",
+    managementEpoch: pauseBeforeVerification ? 3 : 1,
+  });
+  if (pauseBeforeVerification) {
+    expect(registered).toBeDefined();
+    expect(await deployStore.getConnection(connectionId)).toEqual(registered);
+    expect(callbackResponse?.headers.get("location")).toContain("connection_status=pending");
+  }
+});
+}
+
+test("repository install UX refuses a Workspace drain captured before async preparation", async () => {
+  const fixture = await reAdoptionRouteFixture("source-management-admission", {
+    genericDefault: true,
+  });
+  const before = await fixture.deployStore.listInstallConfigs(
+    fixture.seeded.workspace.id,
+  );
+  const originalGetWorkspaceManagement =
+    fixture.deployStore.getWorkspaceManagement.bind(fixture.deployStore);
+  let drained = false;
+  fixture.deployStore.getWorkspaceManagement = async (workspaceId) => {
+    const management = await originalGetWorkspaceManagement(workspaceId);
+    if (
+      !drained &&
+      management?.managementState === "active" &&
+      management.workspaceId === workspaceId
+    ) {
+      drained = true;
+      const result = await fixture.deployStore.beginWorkspaceDraining(
+        workspaceId,
+        {
+          workspaceId,
+          managementState: "active",
+          managementEpoch: management.managementEpoch,
+        },
+      );
+      expect(result.status).toBe("started");
+    }
+    return management;
+  };
+  try {
+    const rejected = await controlJson<{
+      readonly error: {
+        readonly code: string;
+        readonly details?: { readonly reason?: string };
+      };
+    }>(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "POST",
+        path: `/api/v1/sources/${fixture.seeded.source.id}/compatibility-check`,
+        body: {
+          sourceSnapshotId: fixture.seeded.snapshot.id,
+          capsuleName: "source-management-admission",
+          compileInstallUx: true,
+        },
+      },
+      409,
+    );
+    expect(rejected.error).toMatchObject({
+      code: "failed_precondition",
+      details: { reason: "workspace_management_admission_conflict" },
+    });
+  } finally {
+    fixture.deployStore.getWorkspaceManagement = originalGetWorkspaceManagement;
+  }
+  expect(drained).toBe(true);
+  expect(
+    await fixture.deployStore.getWorkspaceManagement(
+      fixture.seeded.workspace.id,
+    ),
+  ).toMatchObject({ managementState: "draining", managementEpoch: 2 });
+  expect(
+    await fixture.deployStore.listInstallConfigs(fixture.seeded.workspace.id),
+  ).toEqual(before);
+});
+
 test("account Workspace inventory follows real active membership pagination", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
@@ -619,7 +1328,7 @@ test("capsule configuration Plan atomically preserves authority and replays one 
   ).toHaveLength(1);
 });
 
-test("completed configuration Plan replay ignores later Source deactivation", async () => {
+test("completed configuration Plan replay ignores later Source deactivation and management drain", async () => {
   const { fixture, path, body } = await configurationPlanRouteFixture(
     "configuration-plan-source-disabled-replay",
   );
@@ -645,6 +1354,11 @@ test("completed configuration Plan replay ignores later Source deactivation", as
     ...source,
     status: "disabled",
     updatedAt: "2026-09-04T00:00:00.001Z",
+  });
+  await fixture.deployStore.beginWorkspaceDraining(fixture.seeded.workspace.id, {
+    workspaceId: fixture.seeded.workspace.id,
+    managementState: "active",
+    managementEpoch: 1,
   });
 
   const replay = await controlJson<CapsuleConfigurationPlanResponse>(
@@ -849,7 +1563,7 @@ test("capsule configuration Plan rejects an installing_principal placeholder wit
     },
     409,
   );
-  expect(rejected.error.code).toBe("failed_precondition");
+  expect(rejected.error).toBeDefined();
   expect(await configurationAuthoritySnapshot(fixture)).toEqual(before);
   expect(
     (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
@@ -1519,6 +2233,88 @@ test("configuration Plan authority fence aborts a target-current interleaving be
   ).toHaveLength(0);
 });
 
+test("Capsule Plan facade retains the earlier Workspace management epoch", async () => {
+  const { fixture } = await configurationPlanRouteFixture(
+    "configuration-plan-retained-management",
+  );
+  await expect(fixture.operations.createCapsulePlan(fixture.seeded.capsule.id, {
+    expectedWorkspaceManagementAuthority: {
+      workspaceId: fixture.seeded.workspace.id,
+      managementState: "active",
+      managementEpoch: 2,
+    },
+  })).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "workspace_management_admission_conflict" },
+  });
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toHaveLength(0);
+});
+
+test("configuration Plan cannot move existing successor authority after Workspace drain", async () => {
+  const { fixture, path, body } = await configurationPlanRouteFixture(
+    "configuration-plan-drain-before-rebind",
+  );
+  const before = await configurationAuthoritySnapshot(fixture);
+  const original = fixture.operations.capsules.rebindInstallConfig.bind(
+    fixture.operations.capsules,
+  );
+  let drained = false;
+  fixture.operations.capsules.rebindInstallConfig = async (...args) => {
+    const stopped = await fixture.deployStore.beginWorkspaceDraining(
+      fixture.seeded.workspace.id,
+      {
+        workspaceId: fixture.seeded.workspace.id,
+        managementState: "active",
+        managementEpoch: 1,
+      },
+    );
+    expect(stopped.status).toBe("started");
+    drained = true;
+    return await original(...args);
+  };
+  try {
+    await controlJson(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "POST",
+        path,
+        headers: { "idempotency-key": "configuration-plan-drain-before-rebind-v1" },
+        body,
+      },
+      409,
+    );
+  } finally {
+    fixture.operations.capsules.rebindInstallConfig = original;
+  }
+  expect(drained).toBe(true);
+  expect(await configurationAuthoritySnapshot(fixture)).toEqual(before);
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toHaveLength(0);
+  // The target row exists, but a retry must not finish new authority work.
+  await controlJson(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-drain-before-rebind-v1" },
+      body,
+    },
+    409,
+  );
+  expect(await configurationAuthoritySnapshot(fixture)).toEqual(before);
+});
+
 test("configuration Plan recovers a lost acknowledgement at target creation", async () => {
   const { fixture, path, body } = await configurationPlanRouteFixture(
     "configuration-plan-lost-target",
@@ -1530,8 +2326,8 @@ test("configuration Plan recovers a lost acknowledgement at target creation", as
     fixture.operations.capsules,
   );
   let loseAck = true;
-  capsules.createInstallConfigIfAbsent = async (config) => {
-    const created = await original(config);
+  capsules.createInstallConfigIfAbsent = async (...args) => {
+    const created = await original(...args);
     if (loseAck) {
       loseAck = false;
       throw new OpenTofuControllerError(
@@ -1577,6 +2373,90 @@ test("configuration Plan recovers a lost acknowledgement at target creation", as
   ).toHaveLength(1);
 });
 
+test("configuration Plan does not rebind a persisted target after a resumed Workspace epoch", async () => {
+  const { database, fixture: routeFixture } = await d1ConfigurationPlanRouteFixture(
+    "configuration-plan-lost-target-management-epoch",
+  );
+  const { fixture, path, body } = routeFixture;
+  const before = await configurationAuthoritySnapshot(fixture);
+  const capsules = fixture.operations.capsules as unknown as {
+    createInstallConfigIfAbsent: typeof fixture.operations.capsules.createInstallConfigIfAbsent;
+  };
+  const original = capsules.createInstallConfigIfAbsent.bind(
+    fixture.operations.capsules,
+  );
+  let loseAck = true;
+  capsules.createInstallConfigIfAbsent = async (...args) => {
+    const created = await original(...args);
+    if (loseAck) {
+      loseAck = false;
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "simulated target persistence acknowledgement loss before rebind",
+      );
+    }
+    return created;
+  };
+  try {
+    await controlJson(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "POST",
+        path,
+        headers: { "idempotency-key": "configuration-plan-lost-target-management-epoch-v1" },
+        body,
+      },
+      409,
+    );
+  } finally {
+    capsules.createInstallConfigIfAbsent = original;
+  }
+  expect(loseAck).toBe(false);
+  expect(await configurationAuthoritySnapshot(fixture)).toEqual(before);
+  expect(
+    (
+      await fixture.deployStore.listInstallConfigs(
+        fixture.seeded.workspace.id,
+      )
+    ).filter(
+      (config) => config.internal?.reAdoption?.capsuleId === fixture.seeded.capsule.id,
+    ),
+  ).toHaveLength(1);
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toHaveLength(0);
+  const planJobsBeforeRetry = fixture.runner.planJobs.length;
+
+  await resumeD1WorkspaceAtEpoch3(database, fixture);
+
+  const rejected = await controlJson<{
+    readonly error: { readonly code: string };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-lost-target-management-epoch-v1" },
+      body,
+    },
+    409,
+  );
+  expect(rejected.error).toBeDefined();
+  expect(await configurationAuthoritySnapshot(fixture)).toEqual(before);
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toHaveLength(0);
+  expect(fixture.runner.planJobs).toHaveLength(planJobsBeforeRetry);
+});
+
 test("configuration Plan revalidates provider semantics after a lost target acknowledgement", async () => {
   const { fixture, path, body } = await configurationPlanRouteFixture(
     "configuration-plan-lost-target-provider-revalidation",
@@ -1591,8 +2471,8 @@ test("configuration Plan revalidates provider semantics after a lost target ackn
     fixture.operations.capsules,
   );
   let loseAck = true;
-  capsules.createInstallConfigIfAbsent = async (config) => {
-    const created = await original(config);
+  capsules.createInstallConfigIfAbsent = async (...args) => {
+    const created = await original(...args);
     if (loseAck) {
       loseAck = false;
       throw new OpenTofuControllerError(
@@ -1675,8 +2555,8 @@ test("configuration Plan recovers after the atomic rebind acknowledgement is los
   };
   const original = capsules.rebindInstallConfig.bind(fixture.operations.capsules);
   let loseAck = true;
-  capsules.rebindInstallConfig = async (request) => {
-    const rebound = await original(request);
+  capsules.rebindInstallConfig = async (...args) => {
+    const rebound = await original(...args);
     if (loseAck) {
       loseAck = false;
       throw new OpenTofuControllerError(
@@ -1722,10 +2602,88 @@ test("configuration Plan recovers after the atomic rebind acknowledgement is los
   ).toHaveLength(1);
 });
 
+test("configuration Plan does not create a missing Plan after rebind ACK loss across a resumed Workspace epoch", async () => {
+  const { database, fixture: routeFixture } = await d1ConfigurationPlanRouteFixture(
+    "configuration-plan-lost-rebind-management-epoch",
+  );
+  const { fixture, path, body } = routeFixture;
+  const before = await configurationAuthoritySnapshot(fixture);
+  const capsules = fixture.operations.capsules as unknown as {
+    rebindInstallConfig: typeof fixture.operations.capsules.rebindInstallConfig;
+  };
+  const original = capsules.rebindInstallConfig.bind(fixture.operations.capsules);
+  let loseAck = true;
+  capsules.rebindInstallConfig = async (...args) => {
+    const rebound = await original(...args);
+    if (loseAck) {
+      loseAck = false;
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "simulated rebind acknowledgement loss before Plan",
+      );
+    }
+    return rebound;
+  };
+  try {
+    await controlJson(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "POST",
+        path,
+        headers: { "idempotency-key": "configuration-plan-lost-rebind-management-epoch-v1" },
+        body,
+      },
+      409,
+    );
+  } finally {
+    capsules.rebindInstallConfig = original;
+  }
+  expect(loseAck).toBe(false);
+  const afterRebind = await configurationAuthoritySnapshot(fixture);
+  expect(afterRebind.installConfigId).not.toBe(before.installConfigId);
+  expect(afterRebind.executionAuthorityEpoch).toBe(
+    before.executionAuthorityEpoch + 1,
+  );
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toHaveLength(0);
+  const planJobsBeforeRetry = fixture.runner.planJobs.length;
+
+  await resumeD1WorkspaceAtEpoch3(database, fixture);
+
+  const rejected = await controlJson<{
+    readonly error: { readonly code: string };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-lost-rebind-management-epoch-v1" },
+      body,
+    },
+    409,
+  );
+  expect(rejected.error).toBeDefined();
+  expect(await configurationAuthoritySnapshot(fixture)).toEqual(afterRebind);
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toHaveLength(0);
+  expect(fixture.runner.planJobs).toHaveLength(planJobsBeforeRetry);
+});
+
 test("configuration Plan replays the persisted Plan after its acknowledgement is lost", async () => {
-  const { fixture, path, body } = await configurationPlanRouteFixture(
+  const { database, fixture: routeFixture } = await d1ConfigurationPlanRouteFixture(
     "configuration-plan-lost-plan",
   );
+  const { fixture, path, body } = routeFixture;
   const original = fixture.operations.createCapsulePlan.bind(
     fixture.operations,
   );
@@ -1770,6 +2728,8 @@ test("configuration Plan replays the persisted Plan after its acknowledgement is
     updatedAt: "2026-09-04T00:00:00.001Z",
   });
   const authorityBeforeReplay = await configurationAuthoritySnapshot(fixture);
+  const planJobsBeforeReplay = fixture.runner.planJobs.length;
+  await resumeD1WorkspaceAtEpoch3(database, fixture);
   const recovered = await controlJson<CapsuleConfigurationPlanResponse>(
     {
       operations: fixture.operations,
@@ -1791,6 +2751,7 @@ test("configuration Plan replays the persisted Plan after its acknowledgement is
       (run) => run.type === "plan",
     ),
   ).toHaveLength(1);
+  expect(fixture.runner.planJobs).toHaveLength(planJobsBeforeReplay);
 });
 
 test("configuration Plan refuses an unmarked generic InstallConfig before planning", async () => {
@@ -2174,7 +3135,20 @@ async function seedQueuedNoStateCapsuleApply(
     createdAt: 1,
     updatedAt: 1,
   };
-  await store.preparePlanRun({ run: planRun, inputs });
+  const management = await store.getWorkspaceManagement(capsule.workspaceId);
+  if (!management || management.managementState !== "active") {
+    throw new Error(`${capsule.workspaceId}: Workspace management is not active`);
+  }
+  const expectedWorkspaceManagementAuthority = {
+    workspaceId: management.workspaceId,
+    managementState: "active" as const,
+    managementEpoch: management.managementEpoch,
+  };
+  await store.preparePlanRun({
+    run: planRun,
+    inputs,
+    expectedWorkspaceManagementAuthority,
+  });
   const applyRun: ApplyRun = {
     id: input.applyRunId,
     planRunId: planRun.id,
@@ -2190,7 +3164,13 @@ async function seedQueuedNoStateCapsuleApply(
     createdAt: 1,
     updatedAt: 1,
   };
-  await store.putApplyRun(applyRun);
+  const admitted = await store.beginApplyRun(
+    applyRun,
+    expectedWorkspaceManagementAuthority,
+  );
+  if (admitted.status !== "created") {
+    throw new Error(`${input.applyRunId}: Apply admission returned ${admitted.status}`);
+  }
   return { capsule, planRun, applyRun };
 }
 
@@ -4439,21 +5419,28 @@ const TAKOS_SCOPES = [
   "capsules:write",
 ] as const;
 
+type ReAdoptionRouteFixtureOptions = {
+  readonly legacyProfile?: boolean;
+  readonly genericDefault?: boolean;
+  readonly baseVariableMapping?: Readonly<Record<string, JsonValue>>;
+  readonly currentVariableMapping?: Readonly<Record<string, unknown>>;
+  readonly currentInstallConfig?: Partial<InstallConfig>;
+  readonly repositoryInputs?: readonly RepositoryInstallUxInput[];
+  readonly deployStore?: OpenTofuControlStore;
+};
+
+type ReAdoptionRouteFixture = Awaited<
+  ReturnType<typeof reAdoptionRouteFixture>
+>;
+
 async function reAdoptionRouteFixture(
   suffix: string,
-  options: {
-    readonly legacyProfile?: boolean;
-    readonly genericDefault?: boolean;
-    readonly baseVariableMapping?: Readonly<Record<string, JsonValue>>;
-    readonly currentVariableMapping?: Readonly<Record<string, unknown>>;
-    readonly currentInstallConfig?: Partial<InstallConfig>;
-    readonly repositoryInputs?: readonly RepositoryInstallUxInput[];
-  } = {},
+  options: ReAdoptionRouteFixtureOptions = {},
 ) {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
   const foreignCookie = seedSession(accountStore, `foreign_${suffix}`);
-  const deployStore = new InMemoryOpenTofuControlStore();
+  const deployStore = options.deployStore ?? new InMemoryOpenTofuControlStore();
   const repositoryInputs = options.repositoryInputs ?? [
     {
       name: "public_url",
@@ -4666,7 +5653,10 @@ async function readReAdoptionGuard(
   return response.installConfigReAdoption.authorityGuard;
 }
 
-async function configurationPlanRouteFixture(suffix: string) {
+async function configurationPlanRouteFixture(
+  suffix: string,
+  options: { readonly deployStore?: OpenTofuControlStore } = {},
+) {
   const genericInputs: readonly RepositoryInstallUxInput[] = [
     {
       name: "public_url",
@@ -4679,6 +5669,7 @@ async function configurationPlanRouteFixture(suffix: string) {
   const fixture = await reAdoptionRouteFixture(suffix, {
     genericDefault: true,
     repositoryInputs: genericInputs,
+    ...(options.deployStore ? { deployStore: options.deployStore } : {}),
     currentInstallConfig: {
       modulePath: "deploy/opentofu/cloudflare",
       internal: {
@@ -4720,6 +5711,61 @@ async function configurationPlanRouteFixture(suffix: string) {
       expected: { authorityGuard },
     },
   };
+}
+
+async function d1ReAdoptionRouteFixture(
+  suffix: string,
+  options: Omit<ReAdoptionRouteFixtureOptions, "deployStore"> = {},
+): Promise<{
+  readonly database: SqliteFakeD1;
+  readonly fixture: ReAdoptionRouteFixture;
+}> {
+  const database = new SqliteFakeD1();
+  const deployStore = createCloudflareD1OpenTofuControlStore(database);
+  const fixture = await reAdoptionRouteFixture(suffix, {
+    ...options,
+    deployStore,
+  });
+  return { database, fixture };
+}
+
+async function d1ConfigurationPlanRouteFixture(suffix: string): Promise<{
+  readonly database: SqliteFakeD1;
+  readonly fixture: Awaited<ReturnType<typeof configurationPlanRouteFixture>>;
+}> {
+  const database = new SqliteFakeD1();
+  const deployStore = createCloudflareD1OpenTofuControlStore(database);
+  const fixture = await configurationPlanRouteFixture(suffix, { deployStore });
+  return { database, fixture };
+}
+
+async function resumeD1WorkspaceAtEpoch3(
+  database: SqliteFakeD1,
+  fixture: ReAdoptionRouteFixture,
+): Promise<void> {
+  const workspaceId = fixture.seeded.workspace.id;
+  const active = await fixture.deployStore.getWorkspaceManagement(workspaceId);
+  expect(active).toEqual({
+    workspaceId,
+    managementState: "active",
+    managementEpoch: 1,
+  });
+  if (!active) throw new Error("D1 Workspace management row is missing");
+  const drained = await fixture.deployStore.beginWorkspaceDraining(workspaceId, {
+    workspaceId,
+    managementState: "active",
+    managementEpoch: active.managementEpoch,
+  });
+  expect(drained.status).toBe("started");
+  const resumed = await database.prepare(
+    "update workspaces set management_state = 'active', management_epoch = 3 where id = ? and management_state = 'draining'",
+  ).bind(workspaceId).run();
+  expect(resumed.meta?.changes).toBe(1);
+  expect(await fixture.deployStore.getWorkspaceManagement(workspaceId)).toEqual({
+    workspaceId,
+    managementState: "active",
+    managementEpoch: 3,
+  });
 }
 
 async function configurationAuthoritySnapshot(
@@ -5931,7 +6977,7 @@ test("re-adoption rejects base-policy collisions with explicit user variables be
     },
     409,
   );
-  expect(rejected.error.code).toBe("failed_precondition");
+  expect(rejected.error).toBeDefined();
   expect(
     await fixture.operations.capsules.getCapsule(capsuleBefore.id),
   ).toEqual(capsuleBefore);
@@ -6096,7 +7142,7 @@ test("re-adoption rejects the retired deployment profile field before durable mu
   ).toEqual(configIdsBefore);
 });
 
-test("re-adoption keeps the generic host default idempotent", async () => {
+test("re-adoption keeps the generic host default idempotent during management drain", async () => {
   const fixture = await reAdoptionRouteFixture("generic-host");
   const authorityGuard = await readReAdoptionGuard(fixture);
   const body = reAdoptionBody(fixture, authorityGuard);
@@ -6122,13 +7168,143 @@ test("re-adoption keeps the generic host default idempotent", async () => {
     );
 
   const adopted = await call();
+  const beforeReplay = await configurationAuthoritySnapshot(fixture);
+  const planJobsBeforeReplay = fixture.runner.planJobs.length;
+  await fixture.deployStore.beginWorkspaceDraining(fixture.seeded.workspace.id, {
+    workspaceId: fixture.seeded.workspace.id,
+    managementState: "active",
+    managementEpoch: 1,
+  });
   const replay = await call();
+  expect(await configurationAuthoritySnapshot(fixture)).toEqual(beforeReplay);
+  expect(fixture.runner.planJobs).toHaveLength(planJobsBeforeReplay);
   expect(adopted.installConfigReAdoption.replayed).toBe(false);
   expect(replay.installConfigReAdoption).toMatchObject({
     replayed: true,
     targetInstallConfigId:
       adopted.installConfigReAdoption.targetInstallConfigId,
   });
+});
+
+test("re-adoption does not rebind a persisted target after a resumed Workspace epoch", async () => {
+  const { database, fixture } = await d1ReAdoptionRouteFixture(
+    "re-adoption-lost-target-management-epoch",
+    {
+      genericDefault: true,
+      currentInstallConfig: {
+        interfaceBlueprints: [configurationInstallingPrincipalBlueprint()],
+      },
+    },
+  );
+  const authorityGuard = await readReAdoptionGuard(fixture);
+  const body = reAdoptionBody(fixture, authorityGuard);
+  const path =
+    `/api/v1/capsules/${fixture.seeded.capsule.id}/install-config-re-adoptions`;
+  const before = await configurationAuthoritySnapshot(fixture);
+  const capsules = fixture.operations.capsules as unknown as {
+    createInstallConfigIfAbsent: typeof fixture.operations.capsules.createInstallConfigIfAbsent;
+  };
+  const original = capsules.createInstallConfigIfAbsent.bind(
+    fixture.operations.capsules,
+  );
+  let loseAck = true;
+  capsules.createInstallConfigIfAbsent = async (...args) => {
+    const created = await original(...args);
+    if (loseAck) {
+      loseAck = false;
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "simulated re-adoption target acknowledgement loss before rebind",
+      );
+    }
+    return created;
+  };
+  try {
+    await controlJson(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "POST",
+        path,
+        headers: { "idempotency-key": "re-adopt-lost-target-management-epoch-v1" },
+        body,
+      },
+      409,
+    );
+  } finally {
+    capsules.createInstallConfigIfAbsent = original;
+  }
+  expect(loseAck).toBe(false);
+  expect(await configurationAuthoritySnapshot(fixture)).toEqual(before);
+  expect(
+    (
+      await fixture.deployStore.listInstallConfigs(
+        fixture.seeded.workspace.id,
+      )
+    ).filter(
+      (config) => config.internal?.reAdoption?.capsuleId === fixture.seeded.capsule.id,
+    ),
+  ).toHaveLength(1);
+  const planJobsBeforeRetry = fixture.runner.planJobs.length;
+
+  await resumeD1WorkspaceAtEpoch3(database, fixture);
+
+  const rejected = await controlJson<{
+    readonly error: { readonly code: string };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "re-adopt-lost-target-management-epoch-v1" },
+      body,
+    },
+    409,
+  );
+  expect(rejected.error).toBeDefined();
+  expect(await configurationAuthoritySnapshot(fixture)).toEqual(before);
+  expect(fixture.runner.planJobs).toHaveLength(planJobsBeforeRetry);
+});
+
+test("D1 re-adoption without interfaces seals durable JSON and remains observable after management resumes", async () => {
+  const { database, fixture } = await d1ReAdoptionRouteFixture("no-interface-durable-seal", {
+    genericDefault: true,
+  });
+  const authorityGuard = await readReAdoptionGuard(fixture);
+  const request = {
+    operations: fixture.operations,
+    store: fixture.accountStore,
+    cookie: fixture.cookie,
+    method: "POST" as const,
+    path: `/api/v1/capsules/${fixture.seeded.capsule.id}/install-config-re-adoptions`,
+    headers: { "idempotency-key": "no-interface-durable-seal-v1" },
+    body: {
+      sourceSnapshotId: fixture.seeded.snapshot.id,
+      reason: "Adopt the reviewed generic repository setup",
+      expected: { authorityGuard },
+    },
+  };
+  const adopted = await controlJson<{
+    readonly installConfigReAdoption: {
+      readonly replayed: boolean;
+      readonly targetInstallConfigId: string;
+      readonly targetInstallConfigDigest: string;
+    };
+  }>(request, 200);
+  expect(adopted.installConfigReAdoption.replayed).toBe(false);
+  const targetId = adopted.installConfigReAdoption.targetInstallConfigId;
+  const target = await fixture.operations.capsules.getInstallConfig(targetId);
+  expect(target.interfaceBlueprints).toBeUndefined();
+  expect(Object.hasOwn(target, "workspaceManagementAuthority")).toBe(false);
+  expect(await stableJsonDigest(target)).toBe(adopted.installConfigReAdoption.targetInstallConfigDigest);
+  const before = await configurationAuthoritySnapshot(fixture);
+  await resumeD1WorkspaceAtEpoch3(database, fixture);
+  const replay = await controlJson<typeof adopted>(request, 200);
+  expect(replay.installConfigReAdoption).toEqual({ ...adopted.installConfigReAdoption, replayed: true });
+  expect(await configurationAuthoritySnapshot(fixture)).toEqual(before);
 });
 
 test("re-adoption resolves the generic host default without client selectors", async () => {

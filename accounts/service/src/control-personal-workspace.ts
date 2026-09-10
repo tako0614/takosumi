@@ -12,6 +12,7 @@
 import type { ControlPlaneOperations } from "./control-routes.ts";
 import type { AccountsStore } from "./store.ts";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import type { Workspace } from "takosumi-contract/workspaces";
 
 /**
  * Derives a preferred handle from the authenticated account and awaits the
@@ -26,7 +27,7 @@ export async function maybeEnsurePersonalWorkspaceForSubject(input: {
   readonly subject: TakosumiSubject;
   readonly store: AccountsStore;
   readonly operations?: ControlPlaneOperations;
-}): Promise<void> {
+}): Promise<Workspace | undefined> {
   try {
     const operations = input.operations;
     if (!operations?.workspaces.ensurePersonalWorkspace) return;
@@ -36,7 +37,11 @@ export async function maybeEnsurePersonalWorkspaceForSubject(input: {
       email: account?.email,
       displayName: account?.displayName,
     });
-    await operations.workspaces.ensurePersonalWorkspace(input.subject, handle);
+    const workspace = await operations.workspaces.ensurePersonalWorkspace(input.subject, handle);
+    // A bootstrap result is only a read fallback for this exact personal
+    // namespace; an unrelated composition result grants no list visibility.
+    return workspace.type === "personal" && workspace.ownerUserId === input.subject
+      ? workspace : undefined;
   } catch {
     // Never let personal-Workspace bootstrap hide other accessible Workspaces.
   }

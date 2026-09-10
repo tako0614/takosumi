@@ -26,6 +26,8 @@ Internal navigation:
   definition of done; not a contract or roadmap/backlog.
 - [Core Spec](./core-spec.md) — current OSS contract and ownership authority.
 - [Core Conformance](./core-conformance.md) — evidence against Core Spec.
+- [Workspace management quiescence](./workspace-management-quiescence.md) —
+  private admission/settlement implementation design; not an available transfer API.
 - [Generalization audit](./generalization-audit.md) — allowed specialization
   and boundary checks.
 - [AI Gateway boundary](./ai-gateway.md) — generic OSS extension seam; hosted

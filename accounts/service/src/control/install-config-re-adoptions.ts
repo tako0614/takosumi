@@ -16,7 +16,10 @@ import {
   isSecretKey,
 } from "../../../../contract/redaction.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
-import { providerBindingSetAuthorityDigest } from "../../../../core/domains/deploy-control/store.ts";
+import {
+  providerBindingSetAuthorityDigest,
+  type WorkspaceManagementAuthority,
+} from "../../../../core/domains/deploy-control/store.ts";
 import type { ControlPlaneOperations } from "../control-operations.ts";
 import {
   errorJson,
@@ -229,6 +232,14 @@ export async function handleCapsuleInstallConfigReAdoption(
       { reason: "capsule_install_config_rebind_busy" },
     );
   }
+  // A re-adoption miss creates a new Workspace-owned successor. Capture the
+  // exact active management authority before asynchronous Source, manifest,
+  // compatibility, or provider preparation and retain it through the durable
+  // insert-only write; never refresh it after preparation starts.
+  const expectedWorkspaceManagementAuthority =
+    await ctx.operations.workspaces.captureManagementAuthority(
+      current.workspaceId,
+    );
 
   const { source } = await ctx.operations.getSource(current.sourceId);
   const sourceSnapshot = await ctx.operations.getSourceSnapshot(
@@ -382,6 +393,7 @@ export async function handleCapsuleInstallConfigReAdoption(
   });
   const created = await ctx.operations.capsules.createInstallConfigIfAbsent(
     target,
+    expectedWorkspaceManagementAuthority,
   );
   const canonicalTarget = created
     ? target
@@ -409,6 +421,7 @@ export async function handleCapsuleInstallConfigReAdoption(
   return await rebindResponse({
     operations: ctx.operations,
     capsule: current,
+    expectedWorkspaceManagementAuthority,
     targetInstallConfigId: canonicalTarget.id,
     target: canonicalTarget,
     actorSubject,
@@ -472,7 +485,11 @@ export async function sealInstallConfigSuccessor(input: {
   };
   readonly receiptCore: Omit<ReAdoptionReceipt, "derivedTargetDigest">;
 }): Promise<InstallConfig> {
-  const provisional: InstallConfig = {
+  // Seal the JSON that will actually be persisted. Optional undefined fields
+  // in a freshly composed draft disappear in PG/D1 storage; hashing them
+  // before serialization would make the first readback fail its own seal.
+  // This applies only to new targets, never to historical receipt validation.
+  const provisional = JSON.parse(JSON.stringify({
     ...input.target,
     internal: {
       ...input.target.internal,
@@ -481,15 +498,15 @@ export async function sealInstallConfigSuccessor(input: {
         derivedTargetDigest: EMPTY_DERIVED_TARGET_DIGEST,
       },
     },
-  };
+  })) as InstallConfig;
   const derivedTargetDigest = await stableJsonDigest(
     derivedTargetWithoutSeal(provisional),
   );
   return {
-    ...input.target,
+    ...provisional,
     internal: {
-      ...input.target.internal,
-      reAdoption: { ...input.receiptCore, derivedTargetDigest },
+      ...provisional.internal!,
+      reAdoption: { ...provisional.internal!.reAdoption!, derivedTargetDigest },
     },
   };
 }
@@ -595,6 +612,7 @@ export async function buildSealedReAdoptionTarget(input: {
 
 async function rebindResponse(input: {
   readonly operations: ControlPlaneOperations;
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
   readonly capsule: Capsule;
   readonly targetInstallConfigId: string;
   readonly target: InstallConfig;
@@ -613,6 +631,9 @@ async function rebindResponse(input: {
   const result = await input.operations.capsules.rebindInstallConfig({
     capsuleId: input.capsule.id,
     targetInstallConfigId: input.targetInstallConfigId,
+    ...(input.expectedWorkspaceManagementAuthority
+      ? { expectedWorkspaceManagementAuthority: input.expectedWorkspaceManagementAuthority }
+      : {}),
     expected: input.expected,
     actorSubject: input.actorSubject,
     reason: input.reason,
