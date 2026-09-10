@@ -24,6 +24,7 @@ import {
 import { initPlanAndBuildResponse } from "../../runner/lib/plan_apply.ts";
 import type { RunWorkspace } from "../../runner/lib/types.ts";
 import { generateOpenTofuChildModuleRoot } from "../../lib/rootgen/src/mod.ts";
+import { runProviderLockfileFifoChild } from "./provider_lockfile_fifo_fixture.ts";
 
 const REQUEST = {
   planRun: {
@@ -598,66 +599,41 @@ test("post-init lockfile FIFO is rejected without blocking the runner", async ()
       join(root, "provider.tf"),
       'terraform { required_providers { aws = { source = "hashicorp/aws" } } }\n',
     );
-    const providerScan = await requiredProviderSourcesFromTerraformTree(root);
     const fake = await fakeTofu(`#!/usr/bin/env bash
 set -euo pipefail
 if [ "$1" = init ]; then
   rm -f .terraform.lock.hcl
   mkfifo .terraform.lock.hcl
+  # The parent starts its FIFO-operation watchdog after init setup is done.
+  : > "\${FIFO_READY_PATH:?}"
   exit 0
 fi
 echo "unexpected tofu command: $*" >&2
 exit 2
 `);
-    const workspace = pipelineWorkspace(root);
     const runId = `provider-lock-fifo-${crypto.randomUUID()}`;
-    const context = {
-      env: { PATH: `${fake.bin}:${Bun.env.PATH ?? ""}` },
-    };
-    let outcomeSettled = false;
-    const outcomePromise = initPlanAndBuildResponse(
-      runId,
-      workspace,
-      root,
-      {
-        operation: "create",
-        commandContext: context,
-        requiredProviders: providerScan.providers,
-        providerScan,
-      },
-    ).then(
-      (result) => ({ ok: true as const, result }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
-    outcomePromise.finally(() => {
-      outcomeSettled = true;
-    });
-    let writer: ReturnType<typeof Bun.spawn> | undefined;
+    const readyPath = join(root, "provider-lock-fifo.ready");
     try {
-      // Before O_NONBLOCK, open(O_RDONLY) waits for a writer on this FIFO.
-      // The bounded race makes that regression observable without leaving a
-      // blocked descriptor: the writer below unblocks the old path before the
-      // assertion runs.
-      const settledQuickly = await Promise.race([
-        outcomePromise.then(() => true),
-        Bun.sleep(250).then(() => false),
-      ]);
-      if (!settledQuickly && !outcomeSettled) {
-        writer = Bun.spawn(
-          ["bash", "-c", "timeout 1s sh -c 'printf x > .terraform.lock.hcl'"],
-          { cwd: root, stdout: "ignore", stderr: "ignore" },
-        );
-      }
-      const outcome = await outcomePromise;
-      if (writer) await writer.exited;
-      expect(settledQuickly).toBe(true);
+      const child = await runProviderLockfileFifoChild({
+        mode: "pipeline",
+        root,
+        runId,
+        readyPath,
+        fakeTofuBin: fake.bin,
+      });
+      expect(child.phase).toBe("completed");
+      expect(child.exitCode).toBe(0);
+      const output = child.stdout.trim().split(/\r?\n/u).at(-1);
+      expect(output).toBeDefined();
+      const outcome = JSON.parse(output ?? "null") as
+        | { readonly ok: true; readonly result: unknown }
+        | { readonly ok: false; readonly error: string };
       expect(outcome.ok).toBe(false);
       if (outcome.ok) throw new Error("FIFO lockfile unexpectedly succeeded");
-      expect(String(outcome.error)).toContain(
+      expect(outcome.error).toContain(
         "OpenTofu dependency lock is not a physical regular file",
       );
     } finally {
-      if (writer) await writer.exited;
       await fake.cleanup();
     }
   });

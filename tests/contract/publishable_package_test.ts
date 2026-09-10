@@ -10,19 +10,104 @@ import {
   TAKOSUMI_MANAGED_RUNTIME_MATERIALIZATION_BINDING,
 } from "../../contract/managed-runtime-connections.ts";
 
+const PACK_TIMEOUT_MS = 15_000;
+
 async function packedFiles(): Promise<readonly string[]> {
-  const packed = Bun.spawnSync(
+  const detached = process.platform !== "win32";
+  const child = Bun.spawn(
     ["npm", "pack", "--dry-run", "--ignore-scripts", "--json"],
     {
       cwd: new URL("../../contract", import.meta.url).pathname,
+      // POSIX process groups let this read-only probe reap npm descendants;
+      // Bun's Windows fallback can only kill the direct child.
+      detached,
+      stdin: "ignore",
       stdout: "pipe",
-      stderr: "ignore",
+      stderr: "pipe",
     },
   );
-  const report = JSON.parse(packed.stdout.toString()) as readonly {
-    readonly files: readonly { readonly path: string }[];
-  }[];
-  return report[0]!.files.map((file) => file.path);
+  let timedOut = false;
+  let succeeded = false;
+  const killPack = (markTimedOut: boolean): void => {
+    if (markTimedOut) timedOut = true;
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // The child may have exited between the deadline and this cleanup.
+    }
+    if (detached) {
+      try {
+        // `detached` gives the npm process its own POSIX process group. Kill
+        // that group so descendants cannot keep the captured pipes open.
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        // The group may already have exited; the direct child is still reaped.
+      }
+    }
+  };
+  const timeout = setTimeout(() => killPack(true), PACK_TIMEOUT_MS);
+  try {
+    const stdoutPromise = new Response(child.stdout).text();
+    const stderrPromise = new Response(child.stderr).text();
+    const exitCode = await child.exited;
+    const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+    const signalCode =
+      "signalCode" in child
+        ? String((child as { readonly signalCode?: unknown }).signalCode ?? "none")
+        : "none";
+    if (timedOut) {
+      throw new Error(
+        `npm pack timed out after ${PACK_TIMEOUT_MS}ms (exit=${exitCode}, signal=${signalCode}, stdoutBytes=${stdout.length}): ${stderr.slice(0, 2000) || "no stderr"}`,
+      );
+    }
+    if (exitCode !== 0) {
+      throw new Error(
+        `npm pack failed (exit=${exitCode}, signal=${signalCode}, stdoutBytes=${stdout.length}): ${stderr.slice(0, 2000) || "no stderr"}`,
+      );
+    }
+    if (stdout.trim().length === 0) {
+      throw new Error(
+        `npm pack returned empty stdout (stdoutBytes=${stdout.length}): ${stderr.slice(0, 2000) || "no stderr"}`,
+      );
+    }
+    let report: unknown;
+    try {
+      report = JSON.parse(stdout);
+    } catch {
+      throw new Error(
+        `npm pack returned invalid JSON (stdoutBytes=${stdout.length}): ${stderr.slice(0, 2000) || "no stderr"}`,
+      );
+    }
+    const files =
+      Array.isArray(report) &&
+      report.length === 1 &&
+      report[0] &&
+      typeof report[0] === "object"
+        ? (report[0] as { readonly files?: unknown }).files
+        : undefined;
+    if (
+      !Array.isArray(files) ||
+      files.length === 0 ||
+      files.some(
+        (file) =>
+          !file ||
+          typeof file !== "object" ||
+          typeof (file as { readonly path?: unknown }).path !== "string",
+      )
+    ) {
+      throw new Error(
+        `npm pack returned an unexpected report (stdoutBytes=${stdout.length}): ${stderr.slice(0, 2000) || "no stderr"}`,
+      );
+    }
+    succeeded = true;
+    return files.map((file) => (file as { readonly path: string }).path);
+  } finally {
+    clearTimeout(timeout);
+    if (!succeeded) {
+      killPack(false);
+      await child.exited.catch(() => undefined);
+    }
+  }
 }
 
 const packageJson = JSON.parse(
@@ -39,6 +124,11 @@ const packageJson = JSON.parse(
   readonly exports?: Readonly<Record<string, string>>;
   readonly publishConfig?: { readonly access?: string };
 };
+
+// Run the real pack once during module setup. Keeping this subprocess outside
+// an individual test's 5-second budget makes the package assertion stable when
+// Bun runs it alongside the full parallel suite.
+const packedArchiveFiles = new Set(await packedFiles());
 
 test("the OSS contract directory is an explicit public package", () => {
   expect(packageJson).toMatchObject({
@@ -60,12 +150,11 @@ test("the OSS contract directory is an explicit public package", () => {
 test("every export subpath resolves to a module the package actually ships", async () => {
   const exported = Object.entries(packageJson.exports ?? {});
   expect(exported.length).toBeGreaterThan(0);
-  const packed = new Set(await packedFiles());
   for (const [subpath, target] of exported) {
     expect(target.startsWith("./")).toBe(true);
     // The relation, not a list: a subpath whose target is not in the packed
     // tarball is exactly the shape of a broken published export.
-    expect({ subpath, packed: packed.has(target.slice(2)) }).toEqual({
+    expect({ subpath, packed: packedArchiveFiles.has(target.slice(2)) }).toEqual({
       subpath,
       packed: true,
     });

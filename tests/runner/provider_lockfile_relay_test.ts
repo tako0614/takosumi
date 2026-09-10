@@ -16,6 +16,7 @@ import {
   workspaceForRun,
 } from "../../runner/lib/artifacts.ts";
 import { DEFAULT_PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES } from "../../runner/lib/constants.ts";
+import { runProviderLockfileFifoChild } from "./provider_lockfile_fifo_fixture.ts";
 
 async function withWorkspace(
   run: (
@@ -106,30 +107,22 @@ test("provider lockfile relay refuses FIFO promptly without reading secret bytes
     await makeFifo.exited;
     expect(makeFifo.exitCode).toBe(0);
 
-    const responsePromise = handleProviderLockfileArtifactRequest(
+    const child = await runProviderLockfileFifoChild({
+      mode: "relay",
+      root: workspace.root,
       runId,
-      relayRequest(runId),
-    );
-    const settledQuickly = await Promise.race([
-      responsePromise.then(() => true),
-      Bun.sleep(250).then(() => false),
-    ]);
-    let writer: ReturnType<typeof Bun.spawn> | undefined;
-    try {
-      if (!settledQuickly) {
-        writer = Bun.spawn(
-          ["bash", "-c", "printf '%s' 'relay-secret-fifo' > \"$1\"", "bash", fifo],
-          { stdout: "ignore", stderr: "ignore" },
-        );
-      }
-      const response = await responsePromise;
-      if (writer) await writer.exited;
-      expect(settledQuickly).toBe(true);
-      expect(response.status).toBe(404);
-      expect(await response.text()).not.toContain("relay-secret-fifo");
-    } finally {
-      if (writer) await writer.exited;
-    }
+      readyPath: join(workspace.root, "provider-lockfile-fifo.ready"),
+    });
+    expect(child.phase).toBe("completed");
+    expect(child.exitCode).toBe(0);
+    const output = child.stdout.trim().split(/\r?\n/u).at(-1);
+    expect(output).toBeDefined();
+    const response = JSON.parse(output ?? "null") as {
+      readonly status: number;
+      readonly body: string;
+    };
+    expect(response.status).toBe(404);
+    expect(response.body).not.toContain("relay-secret-fifo");
   });
 });
 
