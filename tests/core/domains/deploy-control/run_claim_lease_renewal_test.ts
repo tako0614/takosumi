@@ -7,6 +7,8 @@ import {
   type OpenTofuApplyResult,
   type OpenTofuRestoreJob,
   type OpenTofuRestoreResult,
+  type OpenTofuSourceSyncJob,
+  type OpenTofuSourceSyncResult,
   type OpenTofuServiceDataRestoreJob,
   type RunExecutionControl,
   type RunServiceDataRestoreResult,
@@ -24,6 +26,7 @@ import {
 import {
   InMemoryOpenTofuControlStore,
   planRunExecutionInputsDigestMaterial,
+  type StoredSource,
   type TransitionRunInput,
   type TransitionRunResult,
 } from "../../../../core/domains/deploy-control/store.ts";
@@ -40,6 +43,8 @@ import type {
   PlanRun,
   RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
+import type { Run } from "takosumi-contract/runs";
+import type { SourceSyncRun } from "takosumi-contract/sources";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -198,6 +203,30 @@ async function seedApply(
   return { environment };
 }
 
+function queuedSourceSyncRun(
+  id: string,
+  workspaceId: string,
+  sourceId: string,
+  overrides: Partial<SourceSyncRun> = {},
+): SourceSyncRun {
+  return {
+    id,
+    kind: "source_sync",
+    workspaceId,
+    sourceId,
+    url: "https://example.test/source.git",
+    ref: "main",
+    path: ".",
+    archiveRef: `archive-${id}`,
+    intent: "observe",
+    status: "queued",
+    createdAt: "2026-09-11T00:00:00.000Z",
+    updatedAt: "2026-09-11T00:00:00.000Z",
+    snapshotId: `snapshot-${id}`,
+    ...overrides,
+  };
+}
+
 function controllerWith(
   store: InMemoryOpenTofuControlStore,
   options: {
@@ -205,6 +234,7 @@ function controllerWith(
     now?: () => number;
     plan?: () => Promise<OpenTofuPlanResult>;
     apply?: (job: OpenTofuApplyJob) => Promise<OpenTofuApplyResult>;
+    sourceSync?: (job: OpenTofuSourceSyncJob) => Promise<OpenTofuSourceSyncResult>;
     restore?: (
       job: OpenTofuRestoreJob,
       control?: RunExecutionControl,
@@ -252,6 +282,7 @@ function controllerWith(
         rawOutputRef: job.rawOutputRef,
         executionEvidence: fixtureExecutionEvidence(job, "apply"),
       }),
+      ...(options.sourceSync ? { sourceSync: options.sourceSync } : {}),
       ...(options.restore ? { restore: options.restore } : {}),
       ...(options.restoreServiceData
         ? { restoreServiceData: options.restoreServiceData }
@@ -399,7 +430,7 @@ test("cancel that wins forces a later consumer claim to lose (no dispatch, no re
   expect((await store.getApplyRun("apply_cf"))?.status).toBe("cancelled");
 });
 
-test("cancelRunDuringDrain settles only unstarted rows through the controller seam", async () => {
+test("settleRunDuringDrain settles only unstarted rows through the controller seam", async () => {
   const beginDrain = async (
     store: InMemoryOpenTofuControlStore,
     workspaceId: string,
@@ -429,7 +460,7 @@ test("cancelRunDuringDrain settles only unstarted rows through the controller se
     const management = await beginDrain(store, queued.workspaceId);
     const controller = controllerWith(store, { now: () => 3 });
 
-    const cancelled = await controller.cancelRunDuringDrain(queued.id, management);
+    const cancelled = await controller.settleRunDuringDrain(queued.id, management);
 
     expect(cancelled.status).toBe("cancelled");
     expect((await store.getPlanRun(queued.id))?.status).toBe("cancelled");
@@ -458,7 +489,7 @@ test("cancelRunDuringDrain settles only unstarted rows through the controller se
     const management = await beginDrain(store, gated.workspaceId);
     const controller = controllerWith(store, { now: () => 3 });
 
-    const cancelled = await controller.cancelRunDuringDrain(gated.id, management);
+    const cancelled = await controller.settleRunDuringDrain(gated.id, management);
 
     expect(cancelled.status).toBe("cancelled");
     expect((await store.getPlanRun(gated.id))?.status).toBe("cancelled");
@@ -488,7 +519,7 @@ test("cancelRunDuringDrain settles only unstarted rows through the controller se
       terminalStatuses.push(run.status);
     });
 
-    const cancelled = await controller.cancelRunDuringDrain(queued.id, management);
+    const cancelled = await controller.settleRunDuringDrain(queued.id, management);
 
     expect(cancelled.status).toBe("cancelled");
     expect(runnerCalls).toBe(0);
@@ -515,7 +546,7 @@ test("cancelRunDuringDrain settles only unstarted rows through the controller se
     const controller = controllerWith(store, { now: () => 3 });
 
     await expect(
-      controller.cancelRunDuringDrain(retry.id, management),
+      controller.settleRunDuringDrain(retry.id, management),
     ).rejects.toThrow(/cannot be settled by management drain/);
     expect(await store.getApplyRun(retry.id)).toEqual(retry);
   }
@@ -549,7 +580,7 @@ test("cancelRunDuringDrain settles only unstarted rows through the controller se
     const controller = controllerWith(store, { now: () => 3 });
 
     await expect(
-      controller.cancelRunDuringDrain(held.id, management),
+      controller.settleRunDuringDrain(held.id, management),
     ).rejects.toThrow(/cannot be settled by management drain/);
     expect(await store.getApplyRun(held.id)).toEqual(held);
   }
@@ -569,9 +600,234 @@ test("cancelRunDuringDrain settles only unstarted rows through the controller se
     const controller = controllerWith(store, { now: () => 3 });
 
     await expect(
-      controller.cancelRunDuringDrain(queued.id, stale),
+      controller.settleRunDuringDrain(queued.id, stale),
     ).rejects.toThrow(/only queued runs can be cancelled/);
     expect(await store.getApplyRun(queued.id)).toEqual(queued);
+  }
+});
+
+test("settleRunDuringDrain settles queued SourceSync without execution side effects", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const workspaceId = "source-drain-controller-workspace";
+  const sourceId = "source-drain-controller-source";
+  await store.putWorkspace({
+    id: workspaceId,
+    handle: "source-drain-controller",
+    displayName: "Source drain controller",
+    type: "personal",
+    ownerUserId: "source-drain-controller-owner",
+    createdAt: "2026-09-11T00:00:00.000Z",
+    updatedAt: "2026-09-11T00:00:00.000Z",
+  });
+  const source: StoredSource = {
+    id: sourceId,
+    workspaceId,
+    name: "source-drain-controller",
+    url: "https://example.test/source.git",
+    defaultRef: "main",
+    defaultPath: ".",
+    status: "active",
+    hookSecretHash: "source-drain-controller-hash",
+    autoSync: false,
+    lastSeenCommit: "before-drain",
+    createdAt: "2026-09-11T00:00:00.000Z",
+    updatedAt: "2026-09-11T00:00:00.000Z",
+  };
+  await store.putSource(source);
+  const original = {
+    workspaceId,
+    managementState: "active" as const,
+    managementEpoch: 1,
+  };
+  const queued = queuedSourceSyncRun(
+    "source-drain-controller-run",
+    workspaceId,
+    sourceId,
+  );
+  expect(await store.beginSourceSyncRun(queued, original)).toEqual({
+    status: "created",
+    run: queued,
+  });
+  const invalidRows = [
+    queuedSourceSyncRun("source-drain-controller-started", workspaceId, sourceId, {
+      startedAt: "2026-09-11T00:00:01.000Z",
+      updatedAt: "2026-09-11T00:00:01.000Z",
+    }),
+    queuedSourceSyncRun("source-drain-controller-result", workspaceId, sourceId, {
+      resolvedCommit: "0123456789abcdef0123456789abcdef01234567",
+    }),
+  ];
+  for (const run of invalidRows) {
+    expect(await store.beginSourceSyncRun(run, original)).toEqual({
+      status: "created",
+      run,
+    });
+  }
+
+  let sourceRunnerCalls = 0;
+  const controller = controllerWith(store, {
+    now: () => Date.parse("2026-09-11T00:00:03.000Z"),
+    sourceSync: async () => {
+      sourceRunnerCalls += 1;
+      return {
+        resolvedCommit: "should-not-run",
+        archiveDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        archiveSizeBytes: 1,
+        repositoryModules: { status: "ready", scopePath: ".", modules: [] },
+      };
+    },
+  });
+  await expect(controller.cancelRun(queued.id)).rejects.toThrow(
+    /not a cancellable plan or apply run/,
+  );
+  expect(await store.getSourceSyncRun(queued.id)).toEqual(queued);
+
+  const draining = {
+    workspaceId,
+    managementState: "draining" as const,
+    managementEpoch: 2,
+  };
+  expect(await store.beginWorkspaceDraining(workspaceId, original)).toEqual({
+    status: "started",
+    management: draining,
+  });
+  await expect(
+    controller.settleRunDuringDrain(queued.id, { ...draining, managementEpoch: 3 }),
+  ).rejects.toMatchObject({ code: "failed_precondition" });
+  expect(await store.getSourceSyncRun(queued.id)).toEqual(queued);
+
+  const finishedAt = "2026-09-11T00:00:03.000Z";
+  const failed: SourceSyncRun = {
+    ...queued,
+    status: "failed",
+    errorCode: "workspace_management_draining",
+    error: "Workspace management stopped before this source sync was started.",
+    updatedAt: finishedAt,
+    finishedAt,
+  };
+  expect(await controller.settleRunDuringDrain(queued.id, draining)).toEqual({
+    id: queued.id,
+    workspaceId,
+    type: "source_sync",
+    status: "failed",
+    sourceId,
+    ref: "main",
+    createdBy: "system",
+    createdAt: queued.createdAt,
+    finishedAt,
+    errorCode: "workspace_management_draining",
+  });
+  expect(await store.getSourceSyncRun(queued.id)).toEqual(failed);
+  expect(await store.getSource(sourceId)).toEqual(source);
+  expect(await store.getSourceSnapshot(queued.snapshotId!)).toBeUndefined();
+  expect(sourceRunnerCalls).toBe(0);
+  expect(await controller.runQueuedSourceSync(queued.id)).toEqual(failed);
+  expect(sourceRunnerCalls).toBe(0);
+
+  for (const run of invalidRows) {
+    await expect(
+      controller.settleRunDuringDrain(run.id, draining),
+    ).rejects.toMatchObject({ code: "failed_precondition" });
+    expect(await store.getSourceSyncRun(run.id)).toEqual(run);
+  }
+});
+
+test("settleRunDuringDrain settles queued Restore without observer or execution side effects", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const workspaceId = "restore-drain-controller-workspace";
+  await store.putWorkspace({
+    id: workspaceId,
+    handle: "restore-drain-controller",
+    displayName: "Restore drain controller",
+    type: "personal",
+    ownerUserId: "restore-drain-controller-owner",
+    createdAt: "2026-09-11T00:00:00.000Z",
+    updatedAt: "2026-09-11T00:00:00.000Z",
+  });
+  const original = {
+    workspaceId,
+    managementState: "active" as const,
+    managementEpoch: 1,
+  };
+  const restoreRun = (
+    id: string,
+    status: "queued" | "waiting_approval",
+    overrides: Partial<Run> = {},
+  ): Run => ({
+    id,
+    workspaceId,
+    capsuleId: `capsule-${id}`,
+    environment: "production",
+    type: "restore",
+    status,
+    backupId: `backup-${id}`,
+    restoreStateGeneration: 1,
+    restoredFromStateVersionId: `state-${id}`,
+    planDigest: PLAN_DIGEST,
+    createdBy: "system",
+    createdAt: "2026-09-11T00:00:00.000Z",
+    ...overrides,
+  });
+  const queued = restoreRun("restore-drain-controller-run", "queued");
+  const started = restoreRun("restore-drain-controller-started", "queued", {
+    startedAt: "2026-09-11T00:00:01.000Z",
+  });
+  const resultPresent = restoreRun("restore-drain-controller-result", "queued", {
+    restoredStateVersionId: "state-already-restored",
+  });
+  for (const run of [queued, started, resultPresent]) {
+    expect(await store.beginRestoreRun(run, original)).toEqual({
+      status: "created",
+      run,
+    });
+  }
+
+  let restoreRunnerCalls = 0;
+  const restoreEvents: string[] = [];
+  const controller = controllerWith(store, {
+    now: () => Date.parse("2026-09-11T00:00:03.000Z"),
+    restore: async (job) => {
+      restoreRunnerCalls += 1;
+      return restoreAck(job);
+    },
+  });
+  controller.setRestoreRunObserver(async (event) => {
+    restoreEvents.push(event.phase);
+  });
+
+  await expect(controller.cancelRun(queued.id)).rejects.toMatchObject({
+    code: "failed_precondition",
+  });
+  expect(await store.getBackupRun(queued.id)).toEqual(queued);
+
+  const draining = {
+    workspaceId,
+    managementState: "draining" as const,
+    managementEpoch: 2,
+  };
+  expect(await store.beginWorkspaceDraining(workspaceId, original)).toEqual({
+    status: "started",
+    management: draining,
+  });
+  const finishedAt = "2026-09-11T00:00:03.000Z";
+  const cancelled: Run = {
+    ...queued,
+    status: "cancelled",
+    finishedAt,
+  };
+  expect(await store.listStateVersions(queued.capsuleId!, queued.environment!)).toEqual([]);
+  expect(await controller.settleRunDuringDrain(queued.id, draining)).toEqual(cancelled);
+  expect(await store.getBackupRun(queued.id)).toEqual(cancelled);
+  expect(await controller.runQueuedRestore(queued.id)).toEqual(cancelled);
+  expect(restoreRunnerCalls).toBe(0);
+  expect(restoreEvents).toEqual([]);
+  expect(await store.listStateVersions(queued.capsuleId!, queued.environment!)).toEqual([]);
+
+  for (const run of [started, resultPresent]) {
+    await expect(
+      controller.settleRunDuringDrain(run.id, draining),
+    ).rejects.toMatchObject({ code: "failed_precondition" });
+    expect(await store.getBackupRun(run.id)).toEqual(run);
   }
 });
 

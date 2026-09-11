@@ -738,7 +738,7 @@ test("drain-owned Apply cancellation requires the exact draining Workspace autho
       expectFrom: ["queued"],
       expectStartedAt: null,
       clearLeaseToken: true,
-      expectDrainCancellation: {
+      expectDrainSettlement: {
         management,
         expectedRun: queued,
       },
@@ -838,7 +838,7 @@ test("durable drain cancellation settles an older admission after resume and re-
         expectFrom: ["queued"],
         expectStartedAt: null,
         clearLeaseToken: true,
-        expectDrainCancellation: {
+        expectDrainSettlement: {
           management: draining,
           expectedRun: queued,
         },
@@ -909,7 +909,7 @@ test("drain-owned Apply cancellation rejects malformed present timestamps", asyn
         expectFrom: ["queued"],
         expectStartedAt: null,
         clearLeaseToken: true,
-        expectDrainCancellation: {
+        expectDrainSettlement: {
           management: draining,
           expectedRun: malformed,
         },
@@ -972,7 +972,7 @@ test("drain-owned Apply cancellation rejects raw Postgres numeric timestamps", a
         expectFrom: ["queued"],
         expectStartedAt: null,
         clearLeaseToken: true,
-        expectDrainCancellation: {
+        expectDrainSettlement: {
           management: draining,
           expectedRun: malformed,
         },
@@ -2395,6 +2395,238 @@ test("SourceSync admission fences new rows and preserves exact retries across ad
       }),
       label,
     ).toEqual({ won: false, run: staleAuthorityRun });
+  }
+});
+
+test("SourceSync drain settlement only converges an unstarted queued row", async () => {
+  const failures: string[] = [];
+  for (const { label, store } of await adapters()) {
+    const ws = workspace(`source-drain-${label}`);
+    await store.putWorkspace(ws);
+    const original: WorkspaceManagementAuthority = {
+      workspaceId: ws.id,
+      managementState: "active",
+      managementEpoch: 1,
+    };
+    const activeCandidate = sourceSyncRun(`source-drain-active-${label}`, ws.id);
+    const queued = sourceSyncRun(`source-drain-queued-${label}`, ws.id);
+    const resultPresent: SourceSyncRun = {
+      ...sourceSyncRun(`source-drain-result-${label}`, ws.id),
+      resolvedCommit: "0123456789abcdef0123456789abcdef01234567",
+    };
+    for (const run of [activeCandidate, queued, resultPresent]) {
+      expect(await store.beginSourceSyncRun(run, original), label).toEqual({
+        status: "created",
+        run,
+      });
+    }
+
+    const draining = {
+      workspaceId: ws.id,
+      managementState: "draining" as const,
+      managementEpoch: 2,
+    };
+    const failed = (run: SourceSyncRun): SourceSyncRun => ({
+      ...run,
+      status: "failed",
+      errorCode: "workspace_management_draining",
+      error: "Workspace management stopped before this source sync was started.",
+      updatedAt: "2026-09-11T00:00:03.000Z",
+      finishedAt: "2026-09-11T00:00:03.000Z",
+    });
+    const settle = (
+      expectedRun: SourceSyncRun,
+      run: SourceSyncRun,
+      management: typeof draining,
+    ) => store.transitionRun({
+      id: expectedRun.id,
+      kind: "source_sync",
+      expectFrom: ["queued"],
+      expectStartedAt: null,
+      clearLeaseToken: true,
+      expectDrainSettlement: {
+        management,
+        expectedRun,
+      },
+      run,
+    });
+
+    // A drain-owned terminal write is not an active-work mutation. Keep this
+    // separate from the positive row so an ignored pre-fix option cannot mask
+    // the real drain settlement path for the durable adapters.
+    const activeResult = await settle(activeCandidate, failed(activeCandidate), draining);
+    const activeAfter = await store.getSourceSyncRun(activeCandidate.id);
+    if (
+      activeResult.won ||
+      activeAfter?.status !== "queued" ||
+      activeAfter?.updatedAt !== activeCandidate.updatedAt ||
+      activeAfter?.finishedAt !== undefined
+    ) {
+      failures.push(`${label}:active drain settlement mutated while active`);
+    }
+
+    expect(await store.beginWorkspaceDraining(ws.id, original), label).toEqual({
+      status: "started",
+      management: draining,
+    });
+    const settled = await settle(queued, failed(queued), draining);
+    expect(settled, label).toEqual({ won: true, run: failed(queued) });
+    expect(await store.getSourceSyncRun(queued.id), label).toEqual(failed(queued));
+    expect(
+      await store.getRunManagementAuthority({
+        id: queued.id,
+        workspaceId: ws.id,
+        kind: "source_sync",
+      }),
+      label,
+    ).toEqual(original);
+
+    // A queued row that already names a snapshot carries result evidence and
+    // is not eligible for drain settlement; the validator must reject it
+    // without changing the durable row.
+    await expect(
+      Promise.resolve().then(() => settle(resultPresent, failed(resultPresent), draining)),
+      label,
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(await store.getSourceSyncRun(resultPresent.id), label).toEqual(resultPresent);
+
+    const lateClaim = await store.transitionRun({
+      id: queued.id,
+      kind: "source_sync",
+      expectFrom: ["failed"],
+      setLeaseToken: `source-drain-late-${label}`,
+      run: {
+        ...failed(queued),
+        status: "running",
+        startedAt: "2026-09-11T00:00:04.000Z",
+        heartbeatAt: 4,
+        updatedAt: "2026-09-11T00:00:04.000Z",
+      },
+    });
+    if (lateClaim.won || lateClaim.run?.status !== "failed") {
+      failures.push(`${label}:settled SourceSync accepted a later lease`);
+    }
+  }
+  expect(failures).toEqual([]);
+});
+
+test("Restore drain settlement preserves creator fields across adapters", async () => {
+  for (const { label, store } of await adapters()) {
+    const ws = workspace(`restore-drain-${label}`);
+    await store.putWorkspace(ws);
+    const original: WorkspaceManagementAuthority = {
+      workspaceId: ws.id,
+      managementState: "active",
+      managementEpoch: 1,
+    };
+    const restoreRun = (id: string, status: "queued" | "waiting_approval"): Run => ({
+      id,
+      workspaceId: ws.id,
+      capsuleId: `capsule-${id}`,
+      environment: "production",
+      type: "restore",
+      status,
+      backupId: `backup-${id}`,
+      restoreStateGeneration: 1,
+      restoredFromStateVersionId: `state-${id}`,
+      planDigest: `sha256:${"a".repeat(64)}`,
+      createdBy: "system",
+      createdAt: "2026-09-11T00:00:00.000Z",
+    });
+    const queued = restoreRun(`restore-drain-queued-${label}`, "queued");
+    const waiting = restoreRun(`restore-drain-waiting-${label}`, "waiting_approval");
+    expect(await store.beginRestoreRun(queued, original), label).toEqual({
+      status: "created",
+      run: queued,
+    });
+    expect(await store.beginRestoreRun(waiting, original), label).toEqual({
+      status: "created",
+      run: waiting,
+    });
+
+    const draining = {
+      workspaceId: ws.id,
+      managementState: "draining" as const,
+      managementEpoch: 2,
+    };
+    const cancelled = (run: Run, finishedAt: string): Run => ({
+      ...run,
+      status: "cancelled",
+      finishedAt,
+    });
+    const settle = (expectedRun: Run, run: Run, management: typeof draining) =>
+      store.transitionRun({
+        id: expectedRun.id,
+        kind: "restore",
+        expectFrom: [expectedRun.status],
+        expectStartedAt: null,
+        clearLeaseToken: true,
+        expectDrainSettlement: { management, expectedRun },
+        run,
+      });
+
+    // A drain-owned write cannot run while the Workspace is still active.
+    expect(
+      await settle(queued, cancelled(queued, "2026-09-11T00:00:03.000Z"), draining),
+      label,
+    ).toEqual({ won: false, run: queued });
+    expect(await store.getBackupRun(queued.id), label).toEqual(queued);
+
+    expect(await store.beginWorkspaceDraining(ws.id, original), label).toEqual({
+      status: "started",
+      management: draining,
+    });
+    const stale = { ...draining, managementEpoch: 3 };
+    expect(
+      await settle(queued, cancelled(queued, "2026-09-11T00:00:03.000Z"), stale),
+      label,
+    ).toEqual({ won: false, run: queued });
+
+    const queuedCancelled = cancelled(queued, "2026-09-11T00:00:03.000Z");
+    expect(await settle(queued, queuedCancelled, draining), label).toEqual({
+      won: true,
+      run: queuedCancelled,
+    });
+    expect(await store.getBackupRun(queued.id), label).toEqual(queuedCancelled);
+    expect(
+      await store.getRunManagementAuthority({
+        id: queued.id,
+        workspaceId: ws.id,
+        kind: "restore",
+      }),
+      label,
+    ).toEqual(original);
+    expect(await settle(queued, queuedCancelled, draining), label).toEqual({
+      won: false,
+      run: queuedCancelled,
+    });
+
+    const waitingCancelled = cancelled(waiting, "2026-09-11T00:00:04.000Z");
+    expect(await settle(waiting, waitingCancelled, draining), label).toEqual({
+      won: true,
+      run: waitingCancelled,
+    });
+    expect(await store.getBackupRun(waiting.id), label).toEqual(waitingCancelled);
+    expect(
+      await store.getRunManagementAuthority({
+        id: waiting.id,
+        workspaceId: ws.id,
+        kind: "restore",
+      }),
+      label,
+    ).toEqual(original);
+    const resurrected = await store.transitionRun({
+      id: queued.id,
+      kind: "restore",
+      expectFrom: ["cancelled"],
+      setLeaseToken: `restore-drain-lease-${label}`,
+      run: {
+        ...queuedCancelled,
+        status: "running",
+        startedAt: "2026-09-11T00:00:05.000Z",
+      },
+    });
+    expect(resurrected, label).toEqual({ won: false, run: queuedCancelled });
   }
 });
 

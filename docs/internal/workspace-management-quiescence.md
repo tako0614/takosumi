@@ -36,7 +36,7 @@ runtime grant に束縛されており、管理を止めるための流用はア
 | 操作 | draining 中の扱い |
 | --- | --- |
 | 新規 Plan、Apply、Restore、承認、SourceSync、auto-update、configuration、rebind、initial authority | 拒否。既存 idempotency 結果の読み取りは許すが、欠けた後続処理を生成しない |
-| 一度も実行 claim されていない queue・承認待ち | 実行しない。既存 cancellation 表現で停止を永続化してから blocker を解消する |
+| 一度も実行 claim されていない queue・承認待ち | 実行しない。各種別の既存 terminal 表現で停止を永続化してから blocker を解消する |
 | 実行歴のある queued retry | 未開始 queue と区別する。再 dispatch せず、結果照合・復旧が済むまで blocker とする |
 | 停止前から running | 同じ Run と正しい lease に限り heartbeat、結果、state commit、既存 finalizer を許す |
 | stale-running | heartbeat 失効だけで旧 executor の終了としない。通常の実行 takeover は止め、既存結果と finalizer の回収に限定する |
@@ -434,12 +434,12 @@ Run の cancellation、管理停止の中止・移管を完成済みとするも
 
 ### 停止中の Plan / Apply の取消し
 
-内部候補の `cancelRunDuringDrain` は、既存 RunEngine の取消し処理を共用します。
+内部候補の `settleRunDuringDrain` は、Plan / Apply では既存 RunEngine の取消し処理を共用します。
 新しい ledger、公開 Run status、HTTP route、任意の停止中書込み flag は追加しません。
 未開始の queued Plan / Apply と、未承認・未適用の承認待ち Plan を対象にし、旧
 `succeeded` 表現の承認待ちも既存 projection と同じ条件で扱います。
 
-既存 `transitionRun` の取消し専用条件で、現在の exact な draining epoch D、保存した
+既存 `transitionRun` の収束専用条件で、現在の exact な draining epoch D、保存した
 original active epoch、読み取った Run 全体、物理 identity/status/heartbeat と lease の
 不在を一度の保存で確認します。取消しは現在の D が認める収束であり、original epoch は
 D 未満であれば有効です。停止中止・再停止を経た古い未開始 Run を D-1 の条件だけで
@@ -456,10 +456,54 @@ JavaScript 値の比較だけでなく保存 JSON の整数表現と物理列も
 現在の Workspace lock を先に取得する Postgres、一つの条件付き UPDATE にまとめる D1、
 同期的に判定・保存する Memory で同じ条件を適用します。
 
-これは内部の一行の収束処理です。SourceSync / Restore の未開始処理、実行済みの
-結果不明処理、停止・中止・移管の公開操作は別の残件です。SourceSync の公開 status に
-`cancelled` を追加しません。Git command も同じく original epoch を D 未満として扱い、
+これは内部の一行の収束処理です。実行済みの結果不明処理、停止・中止・移管の公開操作は
+別の残件です。Git command も同じく original epoch を D 未満として扱い、
 中止・再停止の後も元の admission を保持したまま未開始の処理だけを収束させます。
+
+### 停止中の未開始 SourceSync の終了
+
+SourceSync の公開 status に `cancelled` はありません。内部の `settleRunDuringDrain`
+は Source lifecycle に委譲し、未開始の queued Run だけを既存の `failed` と固定理由
+`workspace_management_draining` で終了させます。公開の Plan / Apply cancellation
+route は変更せず、SourceSync の取消し API としては提供しません。
+
+開始・heartbeat・終了・解決済み commit・archive digest/size・phase timings・失敗理由が
+一つでも既にある Run は対象外です。作成・更新時刻と新しい終了時刻は canonical ISO
+文字列とし、作成から更新、終了への時間順序を確認します。不正な時刻や結果を新しい
+終了 payload で正常化しません。変更するのは status、固定の error/errorCode、更新・
+終了時刻だけで、heartbeat を新しく付けません。
+`snapshotId` と `archiveRef` は同期の作成時に割り当てる identity であり、実行結果の
+存在とは区別してそのまま保持します。ID があるだけで開始済みと判断しません。
+
+Plan / Apply と同じ `expectDrainSettlement` により、現在の exact な draining epoch、
+保存済みの元の active epoch、Run 全体、lease 不在を一度の保存で照合します。
+永続 adapter は物理列の Source ID、Workspace、Run 種別・status、作成時刻、Capsule と
+heartbeat の不在も確認します。旧二重 JSON 行を読み取り時に復元できることは、
+その行を収束対象として正常化する許可ではありません。停止中止・再停止後の古い Run
+も元の authority を保持し、現在の epoch を新しい実行権限として取り直しません。
+
+この処理は runner、credential mint、Source cursor、SourceSnapshot、auto-update に
+触れません。開始済み SourceSync の結果確定は既存の lease-fenced commit が引き続き
+所有します。ここまでの実装だけで公開の管理停止・移管が完成したとは扱いません。
+
+### 停止中の未開始 Restore の取消し
+
+内部の `settleRunDuringDrain` は、未開始の queued または waiting_approval の Restore
+を、既存の `cancelled` と終了時刻だけで収束させます。同じ `expectDrainSettlement`
+で管理状態、元の authority、Run 全体、物理列と lease 不在を一度の保存で確認します。
+作成・終了時刻は canonical ISO で順序を確認し、開始・heartbeat・終了・復元結果・
+実行 receipt・失敗理由が既にある Run は対象にしません。
+
+`backupId`、`restoreStateGeneration`、`restoredFromStateVersionId`、`planDigest` は
+作成時に選ぶ復元元の identity です。実行結果の `restoredStateVersionId` や
+`restoredServiceData` と区別して保持します。StateVersion、Output、Capsule、Interface
+の変更、runner の呼出し、Activity の追加は行いません。
+
+既存の Restore observer は started/failed で Interface を Unknown にし、succeeded
+で照合します。未開始の取消しにはどの phase も当てはまらず、observer は呼びません。
+新しい cancelled phase を追加したり、failed として通知したりしません。公開の
+Plan / Apply cancellation route も拡張しません。開始済みの失敗・結果不明 Restore
+は引き続き blocker であり、この操作で放棄・削除できるものではありません。
 
 ### 手動 control export の開始・結果確定
 

@@ -2027,9 +2027,9 @@ export interface TransitionRunInput {
    */
   readonly expectExactRun?: ApplyRun;
   /** Private drain convergence; never grants execution or recaptures admission. */
-  readonly expectDrainCancellation?: {
+  readonly expectDrainSettlement?: {
     readonly management: FreezeWorkspaceManagementExpectation;
-    readonly expectedRun: PlanRun | ApplyRun;
+    readonly expectedRun: PlanRun | ApplyRun | SourceSyncRun | Run;
   };
   readonly run: PlanRun | ApplyRun | SourceSyncRun | Run;
   readonly setLeaseToken?: string;
@@ -2068,16 +2068,78 @@ export function runCanCancelDuringDrain(run: StoredRunRecord): run is PlanRun | 
   return plan && planRunAwaitsApproval(run);
 }
 
-/** Validate the cancellation-only mode before any adapter observes or writes. */
-export function assertDrainRunCancellationInput(input: TransitionRunInput): void {
-  const drain = input.expectDrainCancellation;
+function drainIsoTimestamp(value: unknown): number | undefined {
+  if (typeof value !== "string") return undefined;
+  const time = Date.parse(value);
+  return Number.isSafeInteger(time) && time >= 0 &&
+      new Date(time).toISOString() === value
+    ? time
+    : undefined;
+}
+
+/** Never normalize malformed execution evidence into a settled SourceSync. */
+export function sourceSyncRunForDrainFailure(
+  run: SourceSyncRun,
+  finishedAt: string,
+): SourceSyncRun | undefined {
+  if (
+    !isSourceSyncRunRecord(run) || isPlanRunRecord(run) || isApplyRunRecord(run) ||
+    "type" in run || run.status !== "queued"
+  ) return undefined;
+  for (const field of [
+    "startedAt", "heartbeatAt", "finishedAt", "resolvedCommit", "archiveDigest",
+    "archiveSizeBytes", "phaseTimings", "error", "errorCode",
+  ] as const) {
+    if (run[field] !== undefined) return undefined;
+  }
+  // Sources allocates the snapshot ID before enqueueing, alongside archiveRef.
+  // It is immutable creation identity, not proof that a snapshot was written.
+  if (run.snapshotId !== undefined &&
+    (typeof run.snapshotId !== "string" || run.snapshotId.length === 0)) return undefined;
+  const times = [run.createdAt, run.updatedAt, finishedAt].map(drainIsoTimestamp);
+  const [created, updated, finished] = times;
+  if (
+    created === undefined || updated === undefined || finished === undefined ||
+    updated < created || finished < updated
+  ) return undefined;
+  return {
+    ...run,
+    status: "failed",
+    errorCode: "workspace_management_draining",
+    error: "Workspace management stopped before this source sync was started.",
+    updatedAt: finishedAt,
+    finishedAt,
+  };
+}
+
+/** Restore selection references are not execution results; preserve them unchanged. */
+export function restoreRunForDrainCancellation(run: Run, finishedAt: string): Run | undefined {
+  if (
+    !isRestoreRunRecord(run) || "kind" in run ||
+    (run.status !== "queued" && run.status !== "waiting_approval") ||
+    typeof run.capsuleId !== "string" || run.capsuleId.length === 0 ||
+    typeof run.environment !== "string" || run.environment.length === 0
+  ) return undefined;
+  for (const field of [
+    "startedAt", "heartbeatAt", "finishedAt", "restoredStateVersionId",
+    "restoredServiceData", "executionEvidence", "errorCode",
+  ] as const) {
+    if (run[field] !== undefined) return undefined;
+  }
+  const created = drainIsoTimestamp(run.createdAt);
+  const finished = drainIsoTimestamp(finishedAt);
+  if (created === undefined || finished === undefined || finished < created) return undefined;
+  return { ...run, status: "cancelled", finishedAt };
+}
+
+/** Validate terminal-only drain convergence before any adapter observes or writes. */
+export function assertDrainRunSettlementInput(input: TransitionRunInput): void {
+  const drain = input.expectDrainSettlement;
   if (drain === undefined) return;
   assertWorkspaceFreezeExpectation(drain.management);
   const expected = drain.expectedRun;
   if (
     !expected || typeof expected !== "object" ||
-    !runCanCancelDuringDrain(expected) ||
-    (!isPlanRunRecord(input.run) && !isApplyRunRecord(input.run)) ||
     expected.id !== input.id || transitionKindForRun(expected) !== input.kind ||
     input.expectFrom.length !== 1 || input.expectFrom[0] !== expected.status ||
     input.expectExactRun !== undefined ||
@@ -2087,9 +2149,35 @@ export function assertDrainRunCancellationInput(input: TransitionRunInput): void
     input.heartbeatAt !== undefined || input.clearHeartbeat === true ||
     input.expectHeartbeatAt !== undefined ||
     (input.expectStartedAt !== undefined &&
-      (input.expectStartedAt !== null || expected.status !== "queued")) ||
+      (input.expectStartedAt !== null ||
+        (expected.status !== "queued" &&
+          !(isRestoreRunRecord(expected) && expected.status === "waiting_approval"))))
+  ) throw new TypeError("Drain settlement requires an exact unclaimed Run observation");
+  if (isSourceSyncRunRecord(expected)) {
+    const failed = isSourceSyncRunRecord(input.run)
+      ? sourceSyncRunForDrainFailure(expected, input.run.updatedAt)
+      : undefined;
+    if (
+      failed === undefined ||
+      stableStringify(publicStoredRun(input.run)) !== stableStringify(publicStoredRun(failed))
+    ) throw new TypeError("Drain settlement may only fail a never-started SourceSync");
+    return;
+  }
+  if (isRestoreRunRecord(expected)) {
+    const cancelled = isRestoreRunRecord(input.run) && typeof input.run.finishedAt === "string"
+      ? restoreRunForDrainCancellation(expected, input.run.finishedAt)
+      : undefined;
+    if (
+      cancelled === undefined ||
+      stableStringify(publicStoredRun(input.run)) !== stableStringify(publicStoredRun(cancelled))
+    ) throw new TypeError("Drain settlement may only cancel a never-started Restore");
+    return;
+  }
+  if (
+    !runCanCancelDuringDrain(expected) ||
+    (!isPlanRunRecord(input.run) && !isApplyRunRecord(input.run)) ||
     !Array.isArray(expected.auditEvents) || !Array.isArray(input.run.auditEvents)
-  ) throw new TypeError("Drain cancellation requires an exact unclaimed Plan or Apply observation");
+  ) throw new TypeError("Drain settlement requires an exact unclaimed Plan or Apply observation");
   const now = input.run.updatedAt;
   const eventType = `${input.kind}.cancelled`;
   const cancelled = {
@@ -2109,11 +2197,11 @@ export function assertDrainRunCancellationInput(input: TransitionRunInput): void
 }
 
 /** Snapshot and original-admission fence; adapters also fence Workspace and lease. */
-export function runDrainCancellationMatches(
+export function runDrainSettlementMatches(
   current: StoredRunRecord,
   input: TransitionRunInput,
 ): boolean {
-  const drain = input.expectDrainCancellation;
+  const drain = input.expectDrainSettlement;
   if (drain === undefined) return true;
   const original = runManagementAuthority(current);
   return current.workspaceId === drain.management.workspaceId &&
@@ -3761,7 +3849,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
     input = structuredClone(input);
     assertExactRunTransitionInput(input);
-    assertDrainRunCancellationInput(input);
+    assertDrainRunSettlementInput(input);
     const current = this.#runs.get(input.id);
     if (!current || transitionKindForRun(current) !== input.kind) {
       return Promise.resolve({ won: false });
@@ -3827,13 +3915,13 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       }
     }
     const currentLease = this.#runLeases.get(input.id);
-    if (input.expectDrainCancellation !== undefined) {
-      const expected = input.expectDrainCancellation.management;
+    if (input.expectDrainSettlement !== undefined) {
+      const expected = input.expectDrainSettlement.management;
       const management = this.#workspaceManagement.get(current.workspaceId);
       if (
         management?.managementState !== "draining" ||
         management.managementEpoch !== expected.managementEpoch ||
-        currentLease !== undefined || !runDrainCancellationMatches(current, input)
+        currentLease !== undefined || !runDrainSettlementMatches(current, input)
       ) return Promise.resolve({ won: false, run: publicStoredRun(current) });
     }
     const statusMatches = input.expectFrom.includes(current.status);

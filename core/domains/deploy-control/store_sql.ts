@@ -149,7 +149,7 @@ import type {
 } from "./store.ts";
 import {
   assertExactRunTransitionInput,
-  assertDrainRunCancellationInput,
+  assertDrainRunSettlementInput,
   assertSourceSyncSuccessCommit,
   assertSourceConfigurationWriteInput,
   assertWorkspaceManagementAdmission,
@@ -215,7 +215,7 @@ import {
   sourceSyncRunManagementAuthority,
   sourceSyncRunImmutableIdentityMatches,
   runStoredIdentityMatches,
-  runDrainCancellationMatches,
+  runDrainSettlementMatches,
   runRequiresStoredManagementAuthority,
   runManagementAuthority,
   runManagementAuthorityForIdentity,
@@ -1988,7 +1988,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   async transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
     input = structuredClone(input);
     assertExactRunTransitionInput(input);
-    assertDrainRunCancellationInput(input);
+    assertDrainRunSettlementInput(input);
     if (input.expectedWorkspaceManagementAuthority !== undefined) {
       // Validate the caller's captured authority before any database work.
       // A valid but stale/mis-bound expectation is a normal CAS loss below;
@@ -2026,7 +2026,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           : input.kind === "source_sync"
             ? [RUN_KIND_SOURCE_SYNC]
             : [RUN_KIND_RESTORE];
-    const drainCancellation = input.expectDrainCancellation;
+    const drainSettlement = input.expectDrainSettlement;
     const heartbeatAt = input.heartbeatAt ?? input.run.heartbeatAt;
     const persisted: PlanRun | ApplyRun | SourceSyncRun | Run =
       input.clearHeartbeat
@@ -2056,7 +2056,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         (input.kind === "source_sync" ||
           input.setLeaseToken !== undefined ||
           requireStoredManagementAuthority ||
-          drainCancellation !== undefined)
+          drainSettlement !== undefined)
       ) {
           const currentRows = await db
             .select({ json: pgSchema.runs.runJson })
@@ -2082,8 +2082,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         return undefined;
       }
       if (
-        drainCancellation !== undefined &&
-        (currentRun === undefined || !runDrainCancellationMatches(currentRun, input))
+        drainSettlement !== undefined &&
+        (currentRun === undefined || !runDrainSettlementMatches(currentRun, input))
       ) {
         return undefined;
       }
@@ -2123,7 +2123,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
               sql`${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' ->> 'managementState' = ${storedAuthority.managementState}`,
               sql`${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' ->> 'managementEpoch' = ${String(storedAuthority.managementEpoch)}`,
             );
-      const drainWorkspaceFence = drainCancellation === undefined
+      const settlementWorkspaceFence = drainSettlement === undefined
         ? sql`true`
         : exists(
             db
@@ -2133,17 +2133,17 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
                 and(
                   eq(
                     pgSchema.workspaces.id,
-                    drainCancellation.management.workspaceId,
+                    drainSettlement.management.workspaceId,
                   ),
                   eq(pgSchema.workspaces.managementState, "draining"),
                   eq(
                     pgSchema.workspaces.managementEpoch,
-                    drainCancellation.management.managementEpoch,
+                    drainSettlement.management.managementEpoch,
                   ),
                 ),
               ),
           );
-      const drainOriginalAuthorityFence = drainCancellation === undefined
+      const settlementOriginalAuthorityFence = drainSettlement === undefined
         ? sql`true`
         : sql`jsonb_typeof(${pgSchema.runs.runJson}) = 'object'
           AND jsonb_typeof(${pgSchema.runs.runJson} -> 'workspaceManagementAuthority') = 'object'
@@ -2157,48 +2157,122 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
             WHEN ${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' ->> 'managementEpoch' ~ '^(0|[1-9][0-9]*)$'
             THEN (${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' ->> 'managementEpoch')::numeric > 0
               AND (${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' ->> 'managementEpoch')::numeric <= 9007199254740991
-              AND (${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' ->> 'managementEpoch')::numeric < ${drainCancellation.management.managementEpoch}
+              AND (${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' ->> 'managementEpoch')::numeric < ${drainSettlement.management.managementEpoch}
             ELSE false
           END`;
-      const drainExpectedRun = drainCancellation?.expectedRun;
-      const drainExpectedKind = drainExpectedRun === undefined
-        ? undefined
-        : input.kind === "plan"
-          ? (drainExpectedRun as PlanRun).driftCheck === true
-            ? "drift_check"
-            : (drainExpectedRun as PlanRun).operation === "destroy"
-              ? "destroy_plan"
-              : "plan"
-          : (drainExpectedRun as ApplyRun).operation === "destroy"
-            ? "destroy_apply"
-            : "apply";
-      const drainExpectedSnapshot = drainExpectedRun === undefined
-        ? undefined
-        : and(
-            eq(
-              pgSchema.runs.runJson,
-              runJsonPreservingManagementAuthority(
-                drainExpectedRun as StoredRunRecord,
-              ),
-            ),
-            eq(pgSchema.runs.workspaceId, drainExpectedRun.workspaceId),
-            eq(pgSchema.runs.status, drainExpectedRun.status),
-            eq(pgSchema.runs.kind, drainExpectedKind!),
-            drainExpectedRun.capsuleId === undefined
-              ? isNull(pgSchema.runs.capsuleId)
-              : eq(pgSchema.runs.capsuleId, drainExpectedRun.capsuleId),
-            isNull(pgSchema.runs.leaseToken),
-            drainExpectedRun.heartbeatAt === undefined
-              ? isNull(pgSchema.runs.heartbeatAt)
-              : eq(pgSchema.runs.heartbeatAt, drainExpectedRun.heartbeatAt),
-          );
+      const settlementExpectedRun = drainSettlement?.expectedRun;
+      const settlementExpectedPlanOrApply =
+        settlementExpectedRun === undefined ||
+        input.kind === "source_sync" ||
+        input.kind === "restore"
+          ? undefined
+          : settlementExpectedRun as PlanRun | ApplyRun;
+      const settlementExpectedTextRun =
+        settlementExpectedRun === undefined ||
+        (input.kind !== "source_sync" && input.kind !== "restore")
+          ? undefined
+          : settlementExpectedRun as SourceSyncRun | Run;
+      const settlementExpectedTextCapsuleId =
+        input.kind === "restore" && settlementExpectedTextRun !== undefined
+          ? (settlementExpectedTextRun as Run).capsuleId
+          : undefined;
+      const settlementExpectedKind =
+        settlementExpectedRun === undefined
+          ? undefined
+          : input.kind === "source_sync"
+            ? RUN_KIND_SOURCE_SYNC
+            : input.kind === "restore"
+              ? RUN_KIND_RESTORE
+              : input.kind === "plan"
+                ? (settlementExpectedRun as PlanRun).driftCheck === true
+                  ? "drift_check"
+                  : (settlementExpectedRun as PlanRun).operation === "destroy"
+                    ? "destroy_plan"
+                    : "plan"
+                : (settlementExpectedRun as ApplyRun).operation === "destroy"
+                  ? "destroy_apply"
+                  : "apply";
+      const settlementExpectedSnapshot =
+        settlementExpectedRun === undefined
+          ? undefined
+          : input.kind === "source_sync" || input.kind === "restore"
+            ? and(
+                eq(
+                  pgSchema.runs.runJson,
+                  runJsonPreservingManagementAuthority(
+                    settlementExpectedTextRun!,
+                  ),
+                ),
+                eq(
+                  pgSchema.runs.workspaceId,
+                  settlementExpectedTextRun!.workspaceId,
+                ),
+                eq(
+                  pgSchema.runs.status,
+                  settlementExpectedTextRun!.status,
+                ),
+                eq(pgSchema.runs.kind, settlementExpectedKind!),
+                settlementExpectedTextRun!.sourceId === undefined
+                  ? isNull(pgSchema.runs.sourceId)
+                  : eq(
+                      pgSchema.runs.sourceId,
+                      settlementExpectedTextRun!.sourceId,
+                    ),
+                input.kind === "source_sync"
+                  ? isNull(pgSchema.runs.capsuleId)
+                  : settlementExpectedTextCapsuleId === undefined
+                    ? isNull(pgSchema.runs.capsuleId)
+                    : eq(
+                        pgSchema.runs.capsuleId,
+                        settlementExpectedTextCapsuleId,
+                      ),
+                eq(
+                  pgSchema.runs.createdAt,
+                  settlementExpectedTextRun!.createdAt,
+                ),
+                isNull(pgSchema.runs.leaseToken),
+                isNull(pgSchema.runs.heartbeatAt),
+              )
+            : and(
+                eq(
+                  pgSchema.runs.runJson,
+                  runJsonPreservingManagementAuthority(
+                    settlementExpectedPlanOrApply!,
+                  ),
+                ),
+                eq(
+                  pgSchema.runs.workspaceId,
+                  settlementExpectedPlanOrApply!.workspaceId,
+                ),
+                eq(
+                  pgSchema.runs.status,
+                  settlementExpectedPlanOrApply!.status,
+                ),
+                eq(pgSchema.runs.kind, settlementExpectedKind!),
+                settlementExpectedPlanOrApply!.capsuleId === undefined
+                  ? isNull(pgSchema.runs.capsuleId)
+                  : eq(
+                      pgSchema.runs.capsuleId,
+                      settlementExpectedPlanOrApply!.capsuleId,
+                    ),
+                isNull(pgSchema.runs.leaseToken),
+                settlementExpectedPlanOrApply!.heartbeatAt === undefined
+                  ? isNull(pgSchema.runs.heartbeatAt)
+                  : eq(
+                      pgSchema.runs.heartbeatAt,
+                      settlementExpectedPlanOrApply!.heartbeatAt,
+                    ),
+              );
       // PostgreSQL JSONB considers 1.0 equal to 1.  Keep the freeze
       // predicate's canonical integer representation fence in this CAS so a
-      // raw timestamp cannot be normalized by the cancellation writer and
+      // raw timestamp cannot be normalized by the settlement writer and
       // silently clear a blocker.
-      const drainTimestampFence = drainCancellation === undefined
-        ? sql`true`
-        : sql`CASE
+      const settlementTimestampFence =
+        drainSettlement === undefined ||
+        input.kind === "source_sync" ||
+        input.kind === "restore"
+          ? sql`true`
+          : sql`CASE
           WHEN jsonb_typeof(${pgSchema.runs.runJson} -> 'createdAt') = 'number' THEN
             ${pgSchema.runs.runJson} ->> 'createdAt' ~ '^(0|[1-9][0-9]*)$'
             AND (${pgSchema.runs.runJson} ->> 'createdAt')::numeric <= 9007199254740991
@@ -2257,10 +2331,10 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
             eq(pgSchema.runs.id, input.id),
             runIdentityFence,
             runAuthorityFence,
-            drainWorkspaceFence,
-            drainOriginalAuthorityFence,
-            drainExpectedSnapshot,
-            drainTimestampFence,
+            settlementWorkspaceFence,
+            settlementOriginalAuthorityFence,
+            settlementExpectedSnapshot,
+            settlementTimestampFence,
             expectedWorkspaceId === undefined
               ? sql`true`
               : eq(pgSchema.runs.workspaceId, expectedWorkspaceId),
@@ -2314,7 +2388,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       input.setLeaseToken !== undefined ||
       input.expectedWorkspaceManagementAuthority !== undefined ||
       requireStoredManagementAuthority ||
-      drainCancellation !== undefined
+      drainSettlement !== undefined
     ) {
       // The replacement payload is not authority: read the Workspace id from
       // the authoritative existing Run row, then lock that Workspace before
@@ -2335,14 +2409,14 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           : undefined;
         if (
           !management ||
-          (drainCancellation === undefined
+          (drainSettlement === undefined
             ? management.managementState !== "active"
             : management.managementState !== "draining")
         ) {
           return undefined;
         }
         const expected = input.expectedWorkspaceManagementAuthority ??
-          drainCancellation?.management;
+          drainSettlement?.management;
         if (
           expected !== undefined &&
           (expected.workspaceId !== management.workspaceId ||
@@ -2356,7 +2430,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         if (
           input.setLeaseToken !== undefined ||
           requireStoredManagementAuthority ||
-          drainCancellation !== undefined
+          drainSettlement !== undefined
         ) {
           const currentRows = await transaction.query<{
             readonly runJson: unknown;
@@ -2371,8 +2445,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
             | StoredRunRecord
             | undefined;
           if (
-            drainCancellation !== undefined &&
-            (current === undefined || !runDrainCancellationMatches(current, input))
+            drainSettlement !== undefined &&
+            (current === undefined || !runDrainSettlementMatches(current, input))
           ) {
             return undefined;
           }

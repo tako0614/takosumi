@@ -1920,11 +1920,11 @@ export class OpenTofuController {
   }
 
   /** Private management convergence; not exposed through bootstrap or HTTP. */
-  cancelRunDuringDrain(
+  settleRunDuringDrain(
     id: string,
     management: FreezeWorkspaceManagementExpectation,
   ): Promise<Run> {
-    return this.#runEngine.cancelRunDuringDrain(id, management);
+    return this.#runEngine.settleRunDuringDrain(id, management);
   }
 
   approveRun(

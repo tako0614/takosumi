@@ -159,7 +159,7 @@ import type {
 } from "../../core/domains/deploy-control/store.ts";
 import {
   assertExactRunTransitionInput,
-  assertDrainRunCancellationInput,
+  assertDrainRunSettlementInput,
   assertSourceSyncSuccessCommit,
   assertSourceConfigurationWriteInput,
   prepareConnectionExpiration,
@@ -2602,7 +2602,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
     input = structuredClone(input);
     assertExactRunTransitionInput(input);
-    assertDrainRunCancellationInput(input);
+    assertDrainRunSettlementInput(input);
     if (input.expectedWorkspaceManagementAuthority !== undefined) {
       // Validate malformed caller input up front. A valid but stale/mis-bound
       // authority is represented by the normal CAS miss below.
@@ -2620,7 +2620,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           : input.kind === "source_sync"
             ? [RUN_KIND_SOURCE_SYNC]
             : [RUN_KIND_RESTORE];
-    const drainCancellation = input.expectDrainCancellation;
+    const drainSettlement = input.expectDrainSettlement;
     if (
       input.kind === "source_sync" &&
       (!isSourceSyncRunRecord(input.run as StoredRunRecord) ||
@@ -2652,7 +2652,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const requireStoredManagementAuthority =
       input.requireStoredManagementAuthority === true;
     const activeWorkspace =
-      drainCancellation !== undefined
+      drainSettlement !== undefined
         ? exists(
             this.#orm
               .select({ one: sql`1` })
@@ -2662,12 +2662,12 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
                   eq(schema.workspaces.id, schema.runs.workspaceId),
                   eq(
                     schema.workspaces.id,
-                    drainCancellation.management.workspaceId,
+                    drainSettlement.management.workspaceId,
                   ),
                   eq(schema.workspaces.managementState, "draining"),
                   eq(
                     schema.workspaces.managementEpoch,
-                    drainCancellation.management.managementEpoch,
+                    drainSettlement.management.managementEpoch,
                   ),
                 ),
               ),
@@ -2691,30 +2691,110 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
                   ),
                 ),
             );
-    const drainExpectedRun = drainCancellation?.expectedRun;
-    const drainExpectedType = drainExpectedRun === undefined
-      ? undefined
-      : input.kind === "plan"
-        ? planRunType(drainExpectedRun as PlanRun)
-        : applyRunType(drainExpectedRun as ApplyRun);
-    const drainExpectedSnapshot = drainExpectedRun === undefined
-      ? undefined
-      : and(
-          eq(
-            schema.runs.runJson,
-            d1RunJsonPreservingAuthority(drainExpectedRun),
-          ),
-          eq(schema.runs.workspaceId, drainExpectedRun.workspaceId),
-          eq(schema.runs.type, drainExpectedType!),
-          eq(schema.runs.status, drainExpectedRun.status),
-          drainExpectedRun.capsuleId === undefined
-            ? isNull(schema.runs.capsuleId)
-            : eq(schema.runs.capsuleId, drainExpectedRun.capsuleId),
-          isNull(schema.runs.leaseToken),
-          drainExpectedRun.heartbeatAt === undefined
-            ? isNull(schema.runs.heartbeatAt)
-            : eq(schema.runs.heartbeatAt, drainExpectedRun.heartbeatAt),
-        );
+    const settlementExpectedRun = drainSettlement?.expectedRun;
+    const settlementExpectedPlanOrApply =
+      settlementExpectedRun === undefined ||
+      input.kind === "source_sync" ||
+      input.kind === "restore"
+        ? undefined
+        : settlementExpectedRun as PlanRun | ApplyRun;
+    const settlementExpectedTextRun =
+      settlementExpectedRun === undefined ||
+      (input.kind !== "source_sync" && input.kind !== "restore")
+        ? undefined
+        : settlementExpectedRun as SourceSyncRun | Run;
+    const settlementExpectedTextCapsuleId =
+      input.kind === "restore" && settlementExpectedTextRun !== undefined
+        ? (settlementExpectedTextRun as Run).capsuleId
+        : undefined;
+    const settlementExpectedTextEnvironment =
+      input.kind === "restore" && settlementExpectedTextRun !== undefined
+        ? (settlementExpectedTextRun as Run).environment
+        : undefined;
+    const settlementExpectedType =
+      settlementExpectedRun === undefined
+        ? undefined
+        : input.kind === "source_sync"
+          ? RUN_KIND_SOURCE_SYNC
+          : input.kind === "restore"
+            ? RUN_KIND_RESTORE
+            : input.kind === "plan"
+              ? planRunType(settlementExpectedRun as PlanRun)
+              : applyRunType(settlementExpectedRun as ApplyRun);
+    const settlementExpectedSnapshot =
+      settlementExpectedRun === undefined
+        ? undefined
+        : input.kind === "source_sync" || input.kind === "restore"
+          ? and(
+              eq(
+                schema.runs.runJson,
+                d1RunJsonPreservingAuthority(settlementExpectedTextRun!),
+              ),
+              eq(
+                schema.runs.workspaceId,
+                settlementExpectedTextRun!.workspaceId,
+              ),
+              eq(
+                schema.runs.status,
+                settlementExpectedTextRun!.status,
+              ),
+              eq(schema.runs.type, settlementExpectedType!),
+              settlementExpectedTextRun!.sourceId === undefined
+                ? isNull(schema.runs.sourceId)
+                : eq(
+                    schema.runs.sourceId,
+                    settlementExpectedTextRun!.sourceId,
+                  ),
+              input.kind === "source_sync"
+                ? isNull(schema.runs.capsuleId)
+                : settlementExpectedTextCapsuleId === undefined
+                  ? isNull(schema.runs.capsuleId)
+                  : eq(
+                      schema.runs.capsuleId,
+                      settlementExpectedTextCapsuleId,
+                    ),
+              input.kind === "source_sync"
+                ? isNull(schema.runs.environment)
+                : settlementExpectedTextEnvironment === undefined
+                  ? isNull(schema.runs.environment)
+                  : eq(
+                      schema.runs.environment,
+                      settlementExpectedTextEnvironment,
+                    ),
+              eq(
+                schema.runs.createdAt,
+                settlementExpectedTextRun!.createdAt,
+              ),
+              isNull(schema.runs.leaseToken),
+              isNull(schema.runs.heartbeatAt),
+            )
+          : and(
+              eq(
+                schema.runs.runJson,
+                d1RunJsonPreservingAuthority(
+                  settlementExpectedPlanOrApply!,
+                ),
+              ),
+              eq(
+                schema.runs.workspaceId,
+                settlementExpectedPlanOrApply!.workspaceId,
+              ),
+              eq(schema.runs.type, settlementExpectedType!),
+              eq(schema.runs.status, settlementExpectedPlanOrApply!.status),
+              settlementExpectedPlanOrApply!.capsuleId === undefined
+                ? isNull(schema.runs.capsuleId)
+                : eq(
+                    schema.runs.capsuleId,
+                    settlementExpectedPlanOrApply!.capsuleId,
+                  ),
+              isNull(schema.runs.leaseToken),
+              settlementExpectedPlanOrApply!.heartbeatAt === undefined
+                ? isNull(schema.runs.heartbeatAt)
+                : eq(
+                    schema.runs.heartbeatAt,
+                    settlementExpectedPlanOrApply!.heartbeatAt,
+                  ),
+            );
     const runJson = d1RunJsonPreservingAuthority(persisted);
     const result = await this.#orm
       .update(schema.runs)
@@ -2733,7 +2813,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           eq(schema.runs.id, input.id),
           inArray(schema.runs.type, types),
           inArray(schema.runs.status, [...input.expectFrom]),
-          drainExpectedSnapshot,
+          settlementExpectedSnapshot,
           input.expectExactRun === undefined
             ? undefined
             : and(
@@ -2766,9 +2846,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
               : sql`json_extract(${schema.runs.runJson}, '$.startedAt') = ${input.expectStartedAt}`,
           activeWorkspace,
           d1RunStoredIdentityWhere(persisted, types),
-          drainCancellation !== undefined
-            ? d1RunDrainCancellationManagementFence(
-                drainCancellation.management,
+          drainSettlement !== undefined
+            ? d1RunDrainSettlementManagementFence(
+                drainSettlement.management,
               )
             : input.setLeaseToken === undefined && !requireStoredManagementAuthority
               ? undefined
@@ -9712,12 +9792,12 @@ function d1RunStoredManagementAuthorityMatchesCurrentWorkspace(): SQL {
 }
 
 /**
- * Drain cancellation keeps the original admission tuple while the current
+ * Drain settlement keeps the original admission tuple while the current
  * Workspace is in the exact draining epoch captured by the caller.  The
  * predicate is part of the same Run UPDATE as the snapshot/lease CAS; a stale
  * or malformed private tuple therefore cannot authorize a terminal write.
  */
-function d1RunDrainCancellationManagementFence(
+function d1RunDrainSettlementManagementFence(
   expected: FreezeWorkspaceManagementExpectation,
 ): SQL {
   const runJson = schema.runs.runJson;

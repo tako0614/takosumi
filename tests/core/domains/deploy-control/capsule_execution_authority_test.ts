@@ -1628,6 +1628,43 @@ describe("Capsule execution authority", () => {
         status: "created",
         run: queuedApply,
       });
+      const queuedSourceSync: SourceSyncRun = {
+        id: "workerd-freeze-queued-source-sync",
+        kind: "source_sync",
+        workspaceId,
+        sourceId: "workerd-freeze-source",
+        url: "https://example.test/freeze-source.git",
+        ref: "main",
+        path: ".",
+        archiveRef: "workerd-freeze-source-archive",
+        intent: "observe",
+        status: "queued",
+        createdAt: NOW,
+        updatedAt: NOW,
+        snapshotId: "workerd-freeze-source-snapshot",
+      };
+      expect(await store.beginSourceSyncRun(queuedSourceSync, authority)).toEqual({
+        status: "created",
+        run: queuedSourceSync,
+      });
+      const waitingRestore: Run = {
+        id: "workerd-freeze-waiting-restore",
+        workspaceId,
+        capsuleId: plan.capsuleId,
+        environment: "production",
+        type: "restore",
+        status: "waiting_approval",
+        backupId: "workerd-freeze-restore-backup",
+        restoreStateGeneration: 1,
+        restoredFromStateVersionId: "workerd-freeze-restore-source-state",
+        planDigest: "sha256:freeze-restore-plan",
+        createdBy: "freeze-owner",
+        createdAt: NOW,
+      };
+      expect(await store.beginRestoreRun(waitingRestore, authority)).toEqual({
+        status: "created",
+        run: waitingRestore,
+      });
       const unclaimedGitPlan: StoredGitInstallPlan = {
         id: "workerd-freeze-unclaimed-git",
         workspaceId,
@@ -1681,7 +1718,7 @@ describe("Capsule execution authority", () => {
         expectFrom: ["queued"],
         expectStartedAt: null,
         clearLeaseToken: true,
-        expectDrainCancellation: {
+        expectDrainSettlement: {
           management: draining,
           expectedRun: queuedApply,
         },
@@ -1689,6 +1726,51 @@ describe("Capsule execution authority", () => {
       })).toEqual({ won: true, run: cancelledApply });
       expect(await store.getApplyRun(queuedApply.id)).toEqual(cancelledApply);
       // The Git coordinator remains the blocker after the queued Apply settles.
+      expect(await store.freezeWorkspaceManagementIfQuiescent(draining)).toEqual({
+        status: "blocked",
+        management: draining,
+      });
+      const failedSourceSync: SourceSyncRun = {
+        ...queuedSourceSync,
+        status: "failed",
+        errorCode: "workspace_management_draining",
+        error: "Workspace management stopped before this source sync was started.",
+        updatedAt: "2026-08-10T00:00:03.000Z",
+        finishedAt: "2026-08-10T00:00:03.000Z",
+      };
+      expect(await store.transitionRun({
+        id: queuedSourceSync.id,
+        kind: "source_sync",
+        expectFrom: ["queued"],
+        expectStartedAt: null,
+        clearLeaseToken: true,
+        expectDrainSettlement: {
+          management: draining,
+          expectedRun: queuedSourceSync,
+        },
+        run: failedSourceSync,
+      })).toEqual({ won: true, run: failedSourceSync });
+      expect(await store.getSourceSyncRun(queuedSourceSync.id)).toEqual(failedSourceSync);
+      // Restore selection fields are immutable creation identity; drain settlement
+      // appends only the terminal status and timestamp.
+      const cancelledRestore: Run = {
+        ...waitingRestore,
+        status: "cancelled",
+        finishedAt: "2026-08-10T00:00:04.000Z",
+      };
+      expect(await store.transitionRun({
+        id: waitingRestore.id,
+        kind: "restore",
+        expectFrom: ["waiting_approval"],
+        expectStartedAt: null,
+        clearLeaseToken: true,
+        expectDrainSettlement: {
+          management: draining,
+          expectedRun: waitingRestore,
+        },
+        run: cancelledRestore,
+      })).toEqual({ won: true, run: cancelledRestore });
+      expect(await store.getBackupRun(waitingRestore.id)).toEqual(cancelledRestore);
       expect(await store.freezeWorkspaceManagementIfQuiescent(draining)).toEqual({
         status: "blocked",
         management: draining,

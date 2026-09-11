@@ -161,7 +161,7 @@ import {
   redactRunDiagnostics,
   stateLockEvidence,
 } from "../projection.ts";
-import { projectApplyRun, projectPlanRun } from "../projection_run.ts";
+import { projectApplyRun, projectPlanRun, projectSourceSyncRun } from "../projection_run.ts";
 import {
   canonicalProviderAddress,
   compactLayeredPolicy,
@@ -188,6 +188,7 @@ import {
   assertWorkspaceFreezeExpectation,
   assertWorkspaceManagementAuthorityInput,
   runCanCancelDuringDrain,
+  restoreRunForDrainCancellation,
   type FreezeWorkspaceManagementExpectation,
   type WorkspaceManagementAuthority,
   type BeginApplyRunResult,
@@ -6336,12 +6337,45 @@ export class RunEngine {
   }
 
   /** Internal convergence only; the public cancellation route has no drain mode. */
-  cancelRunDuringDrain(
+  async settleRunDuringDrain(
     id: string,
     management: FreezeWorkspaceManagementExpectation,
   ): Promise<Run> {
     assertWorkspaceFreezeExpectation(management);
-    return this.#cancelRun(id, structuredClone(management));
+    management = structuredClone(management);
+    requireNonEmptyString(id, "runId");
+    if (await this.#store.getSourceSyncRun(id)) {
+      return projectSourceSyncRun(await this.#sourceLifecycle.settleDuringDrain(id, management));
+    }
+    const restore = await this.#store.getBackupRun(id);
+    if (restore?.type === "restore") {
+      const cancelled = restoreRunForDrainCancellation(restore, new Date(this.#now()).toISOString());
+      if (!cancelled) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `restore run ${id} cannot be settled by management drain`,
+        );
+      }
+      const result = await this.#store.transitionRun({
+        id,
+        kind: "restore",
+        expectFrom: [restore.status],
+        expectStartedAt: null,
+        clearLeaseToken: true,
+        expectDrainSettlement: { management, expectedRun: restore },
+        run: cancelled,
+      });
+      if (!result.won) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `restore run ${id} or its management drain changed before settlement`,
+        );
+      }
+      // No restore started: neither failure nor success occurred, and the
+      // Restore observer must not invalidate or reconcile Capsule Interfaces.
+      return cancelled;
+    }
+    return this.#cancelRun(id, management);
   }
 
   async #cancelRun(
@@ -6405,7 +6439,7 @@ export class RunEngine {
         // waiting-approval path intentionally keeps its existing semantics.
         ...(planRun.status === "queued" ? { expectStartedAt: null } : {}),
         ...(management !== undefined
-          ? { expectDrainCancellation: { management, expectedRun: planRun } }
+          ? { expectDrainSettlement: { management, expectedRun: planRun } }
           : {}),
         run: cancelled,
         clearLeaseToken: true,
@@ -6470,7 +6504,7 @@ export class RunEngine {
         // and CAS. Require the row to still be genuinely never-started.
         expectStartedAt: null,
         ...(management !== undefined
-          ? { expectDrainCancellation: { management, expectedRun: applyRun } }
+          ? { expectDrainSettlement: { management, expectedRun: applyRun } }
           : {}),
         run: cancelled,
         clearLeaseToken: true,

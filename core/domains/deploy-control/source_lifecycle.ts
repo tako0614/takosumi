@@ -35,9 +35,14 @@ import type {
 import type { ConnectionVault } from "../../adapters/vault/mod.ts";
 import type { SourcesService } from "../sources/mod.ts";
 import type {
+  FreezeWorkspaceManagementExpectation,
   OpenTofuControlStore,
   StoredSource,
   WorkspaceManagementAuthority,
+} from "./store.ts";
+import {
+  assertWorkspaceFreezeExpectation,
+  sourceSyncRunForDrainFailure,
 } from "./store.ts";
 import type { OpenTofuRunner, OpenTofuSourceSyncResult } from "./mod.ts";
 import { NON_TERMINAL_RUN_STATUSES } from "./mod.ts";
@@ -124,6 +129,42 @@ export class SourceLifecycleService {
     this.#shouldProcessRun = dependencies.shouldProcessRun;
     this.#onCapsuleStaleForNewSnapshot =
       dependencies.onCapsuleStaleForNewSnapshot;
+  }
+
+  /** Internal convergence: no credentials, source cursor, snapshot, or runner effects. */
+  async settleDuringDrain(
+    runId: string,
+    management: FreezeWorkspaceManagementExpectation,
+  ): Promise<SourceSyncRun> {
+    assertWorkspaceFreezeExpectation(management);
+    management = structuredClone(management);
+    const run = await this.#store.getSourceSyncRun(runId);
+    if (!run) {
+      throw new OpenTofuControllerError("not_found", `source sync run ${runId} not found`);
+    }
+    const failed = sourceSyncRunForDrainFailure(run, new Date(this.#now()).toISOString());
+    if (!failed) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `source sync run ${runId} cannot be settled by management drain`,
+      );
+    }
+    const result = await this.#store.transitionRun({
+      id: runId,
+      kind: "source_sync",
+      expectFrom: ["queued"],
+      expectStartedAt: null,
+      clearLeaseToken: true,
+      expectDrainSettlement: { management, expectedRun: run },
+      run: failed,
+    });
+    if (!result.won) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `source sync run ${runId} or its management drain changed before settlement`,
+      );
+    }
+    return failed;
   }
 
   /**
