@@ -1,6 +1,6 @@
 # Takosumi Core Spec
 
-Last updated: 2026-08-27
+Last updated: 2026-09-11
 
 This document is the present Takosumi OSS contract. It supersedes historical
 planning notes such as [`final-plan.md`](./final-plan.md); those notes cannot
@@ -14,23 +14,31 @@ persisted state, Outputs, and audit evidence. A provider is selected by the user
 OpenTofu configuration and explicit host bindings; there is no Takosumi DSL or
 second desired-state ledger.
 
-Takoform is an ordinary external provider and portable specification project.
-Takoform owns Form definitions, FormRef/package publication, provider releases,
-and portable conformance. Takosumi ships no first-party Terraform/OpenTofu provider
-and does not host a Form Registry or hosted Form lifecycle.
+Takoform defines an optional portable Host API; its API contract, Core library,
+Form publishers, and Terraform/OpenTofu Provider implementations have separate
+owners and release cadences. Each publisher owns its exact Form definitions,
+packages, and publication evidence. Each Provider implementation owns its source
+address, resource mappings, and software releases. They are ordinary external
+Providers alongside other Providers selected by the module, without an official
+or privileged execution path. Takosumi ships no first-party Terraform/OpenTofu
+Provider and does not host a Form Registry or Form resource lifecycle.
 
 ## Ownership boundary
 
 | Area                                                                                                                                                                                      | Owner                                            |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
 | Git sources, OpenTofu/Terraform init/validate/plan/apply/destroy, Runs, state, Outputs, audit, provider connections, credential recipes, provider bindings, Interfaces, InterfaceBindings | Takosumi OSS                                     |
-| Portable Form schema, FormRef, data-only Form Packages, typed provider, package signatures, and conformance                                                                               | Takoform                                         |
-| Hosted Form instances, Form Host lifecycle, backend implementations, targets/capacity, commercial offerings, billing, SLA, support, and abuse controls                                    | Takosumi hosted service or another external Host |
+| Host API, identity grammar, package/trust format, and generic conformance | Takoform API specification |
+| Verifier, SDK, and CLI implementation of the pinned API contract | Core library implementation |
+| Exact Form definitions, runtime Interface/Binding semantics, package bytes, signatures, and family conformance | Each Form publisher |
+| Provider source address, typed resource/state/import mappings, and Provider releases | Each Terraform/OpenTofu Provider implementation |
+| Managed Form resources, backend execution, provider credentials, capacity, Offerings, and supply lifecycle | Takoserver or another independent Host/operator |
+| Retail Marketplace, retail prepaid/Stripe, reseller client, and customer support | Takosumi Hosted or another retail operator; not OSS Core |
 
-The portable project owns no Resource ID, lifecycle ledger, Run, StateVersion,
-Output, Target, credential, Policy, Adapter, Interface, or InterfaceBinding.
-Conversely, OSS does not acquire portable definition or provider authority by
-retaining migration rows.
+These external specifications, publishers, and Providers do not own Takosumi's
+Run, StateVersion, Output, credential, or runtime Interface/InterfaceBinding
+ledgers. Conversely, OSS does not acquire portable definition, Provider, or
+Host supply authority by retaining migration rows.
 
 Takosumi Core does not own:
 
@@ -614,10 +622,13 @@ the Interface, revision, Workspace, or binding evidence does not match.
 
 ## Takoform and external Form Hosts
 
-Takoform owns its current provider address, API versions, exact FormRef fields,
-package identity, and publication status. Takosumi pins the provider source,
-version, and checksum selected by the module; it does not duplicate a candidate
-Takoform registry or declare an unpublished API stable.
+The Takoform API specification owns the Host API contract and exact identity
+grammar. Each Form publisher owns its Form/package definitions and publication
+status; each Provider implementation owns its Provider address and releases.
+Takosumi uses the Provider sources, versions, and lock checksums selected by the
+OpenTofu module. Multiple Providers and aliases use the same Run and credential
+mechanisms. Takosumi does not duplicate a Form registry, treat a publisher's
+Provider as the API itself, or declare an unpublished contract stable.
 
 For retained historical rows, the old Resource wire-to-FormRef mapping remains
 migration data. A historical package example may therefore contain:
@@ -677,8 +688,11 @@ supported OSS surface.
 The owning repository/operator deploys each production surface. A task, branch
 name, green check, or this document never authorizes production mutation. A
 release must bind the reviewed commit and artifact, prove post-conditions,
-state reversal/forward-repair, and record failure handling. Takosumi hosted service
-deployment and commercial readiness are separate external-Host decisions.
+state reversal/forward-repair, and record failure handling. Takosumi Hosted
+deployment and retail readiness are separate from OSS release readiness.
+Takoserver or another independent Host/operator owns its own execution,
+capacity, provider credentials, deployment, and supply readiness; a Hosted
+reseller client does not acquire that authority.
 
 ## Conformance reading order
 
