@@ -114,8 +114,15 @@ test("native candidate producer builds once, runs both exact proofs, and exports
   const archiveBytes = Buffer.from("authenticated docker archive\n", "utf8");
   const priorAppArmor = process.env.TAKOSUMI_RUNNER_PROOF_APPARMOR_UNCONFINED;
   const priorCloudflareToken = process.env.CLOUDFLARE_API_TOKEN;
+  const priorActions = process.env.GITHUB_ACTIONS;
+  const priorSha = process.env.GITHUB_SHA;
+  const priorRepository = process.env.GITHUB_REPOSITORY;
   process.env.TAKOSUMI_RUNNER_PROOF_APPARMOR_UNCONFINED = "1";
   process.env.CLOUDFLARE_API_TOKEN = "x";
+  // Exercise the real Actions guard against this fixture, not the parent CI run.
+  process.env.GITHUB_ACTIONS = "true";
+  process.env.GITHUB_SHA = fixture.commit;
+  process.env.GITHUB_REPOSITORY = "tako0614/takosumi";
   let buildHasNoProvenance = false;
   let record: Awaited<ReturnType<typeof runRunnerImageNativeCandidate>>;
   try {
@@ -186,6 +193,9 @@ test("native candidate producer builds once, runs both exact proofs, and exports
       priorAppArmor,
     );
     restoreEnvironment("CLOUDFLARE_API_TOKEN", priorCloudflareToken);
+    restoreEnvironment("GITHUB_ACTIONS", priorActions);
+    restoreEnvironment("GITHUB_SHA", priorSha);
+    restoreEnvironment("GITHUB_REPOSITORY", priorRepository);
   }
 
   expect(record).toMatchObject({
