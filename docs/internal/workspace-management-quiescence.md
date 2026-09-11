@@ -332,11 +332,39 @@ record、書き換わった Run、authority のない旧 Run を上書き・補�
 書き換えは拒否します。保存の応答が失われた場合も、失敗を推測して別の terminal
 結果を書きません。確定後の Activity 保存失敗は export の成功記録を取り消しません。
 
-これは手動 control export の局所的な対処です。`createdByRunId` を持つ既存 Run
-からの継続経路、raw Run writer の撤去・限定、compatibility check の新規 admission は
-残件です。
+control export は自分の Backup Run を必ず作ります。製品内の呼出し元が使っていなかった
+`CreateBackupRequest.createdByRunId` の特例は削除し、この入力は明示的に拒否します。
+任意の Run ID は開始済み処理の証拠にはなりません。保存済み BackupRecord の
+`createdByRunId` は実際に生成した Backup Run を示す従来の意味のまま残し、履歴を
+書き換えません。これで control export の開始・確定は同じ経路に揃いますが、
+他の raw Run writer の撤去・限定は残件です。
 この局所修正だけで全 blocker が単調に収束する、凍結・移管できる、完全な
 Workspace backup / restore を提供できる、とは扱いません。
+
+### 互換性チェックの開始
+
+互換性チェックの新規開始も既存 Run store の `beginCompatibilityCheckRun` に
+集約します。Source の所属 Workspace が分かった直後、Snapshot・policy 等の
+非同期準備より前に管理 authority を取得し、最終保存時の active/epoch と照合します。
+新しい running Run と original tuple は一括で作り、拒否時に analysis や report の
+保存を始めません。公開 request/Run schema、DB schema、仕様 version は増やしません。
+
+内部呼出しは新規の取得か、すでに取得した authority の転送かを明示します。
+Git coordinator、configuration、re-adoption、Plan からは最初の tuple を渡し、
+保存値のない旧処理は `null` として渡します。引数の欠落を現在 epoch の取得に
+置き換えません。Accounts と内部 API は認可の非同期処理前に取得し、取得エラーは
+認証・Workspace scope の確認後に返します。
+
+exact な terminal Run/report の組は停止中も読み取りだけで返します。開始済みの
+deterministic running Run は、保存済み original tuple と同じ authority を持つ場合
+だけ同じ ID で再開できます。新規候補の時刻で既存 Run の開始時刻を上書きしません。
+別の identity、terminal 行、authority のない旧 running 行を採用・補完しません。
+元の tuple を持っていても停止後に欠けた child Run を新しく作ることはできません。
+
+これは新規 admission の局所的な対処です。report と terminal Run の一括確定、
+running retry 同士の lease/CAS、保存済み report の再解析時の扱い、raw terminal
+writer の限定は残件です。これらの収束を証明するまでは全体の frozen 判定や公開の
+停止・移管 API を有効化しません。局所テストの成功は live D1 や管理移管の実証ではありません。
 
 ### Plan・Apply・Restore の永続 authority
 

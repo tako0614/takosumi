@@ -605,6 +605,10 @@ async function prepareInstallCompilation(
     const compatibility = await operations.createSourceCompatibilityCheck(
       source.id,
       compatibilityRequest,
+      {
+        kind: "captured",
+        authority: plan.workspaceManagementAuthority ?? null,
+      },
     );
     assertCompatibilityEvidenceMatches({
       compatibility,
@@ -759,6 +763,10 @@ async function analyzeAndCompileInstall(
   const compatibility = await operations.createSourceCompatibilityCheck(
     source.id,
     compatibilityRequest,
+    {
+      kind: "captured",
+      authority: plan.workspaceManagementAuthority ?? null,
+    },
   );
   assertCompatibilityEvidenceMatches({
     compatibility,

@@ -138,6 +138,7 @@ import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
 } from "takosumi-contract/capsules";
+import type { CompatibilityCheckManagementContext } from "./domains/sources/mod.ts";
 import type { ProviderBindings } from "takosumi-contract/connections";
 import type { CreateRestoreRequest } from "takosumi-contract/backups";
 import type {
@@ -939,6 +940,7 @@ export interface TakosumiOperations {
   createSourceCompatibilityCheck(
     sourceId: string,
     request?: CreateSourceCompatibilityCheckRequest,
+    context?: CompatibilityCheckManagementContext,
   ): Promise<CapsuleCompatibilityReportResponse>;
   getCompatibilityReport(
     reportId: string,
@@ -1985,8 +1987,12 @@ export async function createTakosumiService(
       ),
     createSourceReconciliationSyncs: (sourceId) =>
       opentofuController.createSourceReconciliationSyncs(sourceId),
-    createSourceCompatibilityCheck: (sourceId, request) =>
-      opentofuController.createSourceCompatibilityCheck(sourceId, request),
+    createSourceCompatibilityCheck: (sourceId, request, context) =>
+      opentofuController.createSourceCompatibilityCheck(
+        sourceId,
+        request,
+        context,
+      ),
     getCompatibilityReport: (reportId) =>
       opentofuController.getCompatibilityReport(reportId),
     listCredentialRecipes: () => opentofuController.listCredentialRecipes(),

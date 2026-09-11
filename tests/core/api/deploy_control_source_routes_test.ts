@@ -6,13 +6,72 @@ import {
   OpenTofuController,
   type OpenTofuRunner,
 } from "../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
+import {
+  InMemoryOpenTofuControlStore,
+  WorkspaceManagementAdmissionConflictError,
+  type WorkspaceManagement,
+  type WorkspaceManagementAuthority,
+} from "../../../core/domains/deploy-control/store.ts";
+import type { DeployControlInternalRouteDependencies } from "../../../core/api/deploy_control_shared.ts";
 import {
   SourcesService,
   type ReadCapsuleSourceFiles,
 } from "../../../core/domains/sources/mod.ts";
+import { WorkspacesService } from "../../../core/domains/workspaces/mod.ts";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { SourceSnapshot } from "takosumi-contract/sources";
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+class SourceRouteManagementRaceStore extends InMemoryOpenTofuControlStore {
+  #management: WorkspaceManagement = {
+    workspaceId: "ws_001",
+    managementState: "active",
+    managementEpoch: 1,
+  };
+  workspaceManagementReads = 0;
+  observedAdmissionAuthorities: WorkspaceManagementAuthority[] = [];
+
+  setManagement(management: WorkspaceManagement): void {
+    this.#management = { ...management };
+  }
+
+  override async getWorkspaceManagement(workspaceId: string) {
+    if (workspaceId === this.#management.workspaceId) {
+      this.workspaceManagementReads += 1;
+      return { ...this.#management };
+    }
+    return await super.getWorkspaceManagement(workspaceId);
+  }
+
+  override async beginCompatibilityCheckRun(
+    run: Parameters<
+      InMemoryOpenTofuControlStore["beginCompatibilityCheckRun"]
+    >[0],
+    expected: Parameters<
+      InMemoryOpenTofuControlStore["beginCompatibilityCheckRun"]
+    >[1],
+  ) {
+    this.observedAdmissionAuthorities.push({ ...expected });
+    const current = await this.getWorkspaceManagement(run.workspaceId);
+    if (
+      current?.managementState !== "active" ||
+      current.managementEpoch !== expected.managementEpoch
+    ) {
+      throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
+    }
+    return await super.beginCompatibilityCheckRun(run, expected);
+  }
+}
 
 function makeApp() {
   return makeAppWithStore().then(({ app }) => app);
@@ -20,11 +79,15 @@ function makeApp() {
 
 async function makeAppWithStore(
   options: {
+    readonly store?: InMemoryOpenTofuControlStore;
     readonly readCapsuleSourceFiles?: ReadCapsuleSourceFiles;
     readonly runner?: OpenTofuRunner;
+    readonly authorizeDeployControlBearer?:
+      DeployControlInternalRouteDependencies["authorizeDeployControlBearer"];
   } = {},
 ) {
-  const store = new InMemoryOpenTofuControlStore();
+  const store = options.store ?? new InMemoryOpenTofuControlStore();
+  const workspacesService = new WorkspacesService({ store });
   await store.putWorkspace({
     id: "ws_001",
     handle: "workspace-001",
@@ -49,19 +112,23 @@ async function makeAppWithStore(
     sourcesService,
     ...(options.runner ? { runner: options.runner } : {}),
   });
+  const authorizeDeployControlBearer =
+    options.authorizeDeployControlBearer ??
+    (({ token }: { readonly token: string }) =>
+      token === "scoped-token"
+        ? {
+            actor: "acct_1",
+            workspaceIds: ["ws_001"],
+            operations: "*" as const,
+            runnerProfileIds: "*" as const,
+          }
+        : undefined);
   const app = await createApiApp({
     registerDeployControlInternalRoutes: true,
     deployControlInternalRouteOptions: {
       controller,
-      authorizeDeployControlBearer: ({ token }) =>
-        token === "scoped-token"
-          ? {
-              actor: "acct_1",
-              workspaceIds: ["ws_001"],
-              operations: "*",
-              runnerProfileIds: "*",
-            }
-          : undefined,
+      workspacesService,
+      authorizeDeployControlBearer,
     },
     requestCorrelation: false,
   });
@@ -457,6 +524,135 @@ test("source compatibility-check creates and reads a Capsule report", async () =
   );
   expect(cancel.status).toBe(409);
   expect((await cancel.json()).error.code).toBe("failed_precondition");
+});
+
+test("source compatibility-check keeps its pre-auth authority across drain and resume", async () => {
+  const store = new SourceRouteManagementRaceStore();
+  const authStarted = deferred<void>();
+  const releaseAuth = deferred<void>();
+  let pauseAuth = false;
+  let sourceFileReads = 0;
+  const authorizeDeployControlBearer: NonNullable<
+    DeployControlInternalRouteDependencies["authorizeDeployControlBearer"]
+  > = async ({ token }) => {
+    if (pauseAuth) {
+      pauseAuth = false;
+      authStarted.resolve();
+      await releaseAuth.promise;
+    }
+    return token === "scoped-token"
+      ? {
+          actor: "acct_1",
+          workspaceIds: ["ws_001"],
+          operations: "*",
+          runnerProfileIds: "*",
+        }
+      : undefined;
+  };
+  const { app } = await makeAppWithStore({
+    store,
+    authorizeDeployControlBearer,
+    readCapsuleSourceFiles: async () => {
+      sourceFileReads += 1;
+      return [];
+    },
+  });
+  const created = await app.request("/internal/v1/sources", {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({
+      workspaceId: "ws_001",
+      name: "auth-race",
+      url: "https://github.com/acme/auth-race.git",
+    }),
+  });
+  expect(created.status).toBe(201);
+  const { source } = await created.json();
+  const snapshot: SourceSnapshot = {
+    id: "snap_auth_race0001",
+    origin: "git",
+    sourceId: source.id,
+    url: source.url,
+    ref: source.defaultRef,
+    resolvedCommit: "abc123",
+    path: source.defaultPath,
+    archiveRef: `workspaces/ws_001/sources/${source.id}/snapshots/snap_auth_race0001/source.tar.zst`,
+    archiveDigest: "sha256:sourcearchive",
+    archiveSizeBytes: 42,
+    fetchedByRunId: "ssr_auth_race0001",
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  };
+  await store.putSourceSnapshot(snapshot);
+
+  store.workspaceManagementReads = 0;
+  pauseAuth = true;
+  const checking = app.request(
+    `/internal/v1/sources/${source.id}/compatibility-check`,
+    {
+      method: "POST",
+      headers: HEADERS,
+      body: JSON.stringify({ sourceSnapshotId: snapshot.id }),
+    },
+  );
+  await authStarted.promise;
+  expect(store.workspaceManagementReads).toBeGreaterThan(0);
+  store.setManagement({
+    workspaceId: source.workspaceId,
+    managementState: "draining",
+    managementEpoch: 2,
+  });
+  store.setManagement({
+    workspaceId: source.workspaceId,
+    managementState: "active",
+    managementEpoch: 3,
+  });
+  releaseAuth.resolve();
+
+  const raced = await checking;
+  expect(raced.status).toBe(409);
+  const racedBody = await raced.json();
+  expect(racedBody.error).toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "workspace_management_admission_conflict" },
+  });
+  expect(store.observedAdmissionAuthorities).toEqual([
+    {
+      workspaceId: source.workspaceId,
+      managementState: "active",
+      managementEpoch: 1,
+    },
+  ]);
+  expect(sourceFileReads).toBe(0);
+  expect(
+    (await store.listRunsByWorkspace(source.workspaceId)).filter(
+      (run) => run.type === "compatibility_check",
+    ),
+  ).toEqual([]);
+  expect(
+    await store.getLatestCapsuleCompatibilityReportForSourceSnapshot(
+      snapshot.id,
+      { sourceId: source.id },
+    ),
+  ).toBeUndefined();
+
+  store.setManagement({
+    workspaceId: source.workspaceId,
+    managementState: "draining",
+    managementEpoch: 4,
+  });
+  const unauthorized = await app.request(
+    `/internal/v1/sources/${source.id}/compatibility-check`,
+    {
+      method: "POST",
+      headers: {
+        authorization: "Bearer invalid-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ sourceSnapshotId: snapshot.id }),
+    },
+  );
+  expect(unauthorized.status).toBe(401);
+  expect((await unauthorized.json()).error.code).toBe("unauthenticated");
 });
 
 test("GET /internal/v1/compatibility-reports resolves owner from sourceSnapshot and enforces workspace scope", async () => {

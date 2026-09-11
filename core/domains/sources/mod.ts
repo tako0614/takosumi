@@ -125,6 +125,15 @@ export interface InstallPlanCompatibilityIdentity {
   readonly createdBy: string;
 }
 
+/** Internal authority only; never accepted from the public request body. */
+export type CompatibilityCheckManagementContext =
+  | { readonly kind: "fresh" }
+  | {
+      readonly kind: "captured";
+      /** Missing original authority permits only exact terminal evidence reads. */
+      readonly authority: WorkspaceManagementAuthority | null;
+    };
+
 export type InstallPlanCompatibilityCheckRequest =
   CreateSourceCompatibilityCheckRequest & {
     readonly installPlanIdentity: InstallPlanCompatibilityIdentity;
@@ -736,10 +745,32 @@ export class SourcesService {
 
   async createCompatibilityCheck(
     sourceId: string,
-    request: CreateSourceCompatibilityCheckRequest = {},
+    request: CreateSourceCompatibilityCheckRequest,
+    managementContext: CompatibilityCheckManagementContext,
   ): Promise<CapsuleCompatibilityReportResponse> {
+    managementContext = structuredClone(managementContext);
+    if (managementContext.kind !== "fresh" && managementContext.kind !== "captured") {
+      throw new TypeError("Compatibility analysis requires an explicit management context");
+    }
     const installPlanIdentity = installPlanCompatibilityIdentity(request);
     const stored = await this.#requireSource(sourceId);
+    // Capture before snapshot/policy preparation. An existing workflow must
+    // explicitly carry its original tuple; absence must never refresh it.
+    let authority: WorkspaceManagementAuthority | undefined;
+    if (managementContext.kind === "captured") {
+      if (managementContext.authority !== null) {
+        assertWorkspaceManagementAuthorityInput(managementContext.authority, stored.workspaceId);
+        authority = structuredClone(managementContext.authority);
+      }
+    } else {
+      try {
+        authority = await this.#captureWorkspaceManagementAuthority(stored.workspaceId);
+      } catch (error) {
+        // Exact terminal evidence remains readable while stopped. Other
+        // storage errors are not converted into management admission failure.
+        if (!isWorkspaceManagementAdmissionConflict(error)) throw error;
+      }
+    }
     const capsuleId = request.capsuleId;
     const snapshot = await this.#resolveCompatibilitySnapshot(
       sourceId,
@@ -771,6 +802,8 @@ export class SourcesService {
       ...(modulePath ? { modulePath } : {}),
       ...(context.policy ? { policy: context.policy } : {}),
       ...(installPlanIdentity ? { installPlanIdentity } : {}),
+      authority,
+      allowRunningRecovery: managementContext.kind === "captured" && installPlanIdentity !== undefined,
     });
   }
 
@@ -783,6 +816,8 @@ export class SourcesService {
     readonly modulePath?: string;
     readonly policy?: PolicyConfig;
     readonly installPlanIdentity?: InstallPlanCompatibilityIdentity;
+    readonly authority: WorkspaceManagementAuthority | undefined;
+    readonly allowRunningRecovery: boolean;
   }): Promise<CapsuleCompatibilityReportResponse> {
     const { snapshot, workspaceId } = input;
     const runId = input.installPlanIdentity?.runId ?? this.#newId("ccr");
@@ -796,6 +831,7 @@ export class SourcesService {
         })
       : undefined;
     if (recovered) return recovered;
+    if (!input.authority) throw workspaceManagementAdmissionErrorFor();
 
     const nowIso = this.#now().toISOString();
     const runningRun: Run = {
@@ -810,13 +846,24 @@ export class SourcesService {
       createdAt: nowIso,
       startedAt: nowIso,
     };
-    const existingRunningRun = input.installPlanIdentity
-      ? await this.#store.getCompatibilityCheckRun(runId)
-      : undefined;
-    if (!existingRunningRun) {
-      await this.#store.putCompatibilityCheckRun(runningRun);
+    let admission;
+    try {
+      admission = await this.#store.beginCompatibilityCheckRun(runningRun, input.authority);
+    } catch (error) {
+      if (error instanceof WorkspaceManagementAdmissionConflictError) {
+        throw workspaceManagementAdmissionErrorFor();
+      }
+      throw error;
     }
-    const activeRun = existingRunningRun ?? runningRun;
+    if (admission.status === "conflict" ||
+      (admission.status === "existing" && !input.allowRunningRecovery)) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "compatibility analysis identity cannot be started or resumed",
+        { reason: "compatibility_evidence_identity_conflict" },
+      );
+    }
+    const activeRun = admission.run;
     const analysisAttempt =
       await this.#compatibilityAnalysisOrUnsupportedReport(
         snapshot,
@@ -899,13 +946,14 @@ export class SourcesService {
           { reason: "compatibility_evidence_incomplete" },
         );
       }
-      // A running exact record may be resumed. Analysis is read-only and writes
-      // back to the same deterministic ids; no second evidence row is created.
+      // A running exact record may be resumed only after the store verifies
+      // its original authority. This read alone does not grant continuation.
       return undefined;
     }
     if (run.status === "running") {
       // The report write may have committed before the terminal Run update.
-      // Re-analysis is safe and converges on these same exact identities.
+      // Admission still requires the same stored original authority. Atomic
+      // report/terminal settlement is a separate, unresolved storage boundary.
       return undefined;
     }
     if (

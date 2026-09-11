@@ -8,7 +8,10 @@
  * and the `/api` source route layer keep calling the controller surface.
  */
 
-import type { SourcesService } from "../sources/mod.ts";
+import type {
+  CompatibilityCheckManagementContext,
+  SourcesService,
+} from "../sources/mod.ts";
 import type {
   CreateSourceRequest,
   CreateSourceResponse,
@@ -102,8 +105,13 @@ export class SourceManagement {
   async createSourceCompatibilityCheck(
     sourceId: string,
     request: CreateSourceCompatibilityCheckRequest = {},
+    context: CompatibilityCheckManagementContext = { kind: "fresh" },
   ): Promise<CapsuleCompatibilityReportResponse> {
-    return await this.#require().createCompatibilityCheck(sourceId, request);
+    return await this.#require().createCompatibilityCheck(
+      sourceId,
+      request,
+      context,
+    );
   }
 
   async getCompatibilityReport(

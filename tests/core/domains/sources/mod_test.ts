@@ -21,6 +21,7 @@ import type {
 } from "@takosumi/internal/deploy-control-api";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
+import type { CapsuleCompatibilityAnalyzer } from "../../../../core/domains/sources/capsule_compatibility.ts";
 
 function deferred<T>(): {
   readonly promise: Promise<T>;
@@ -170,6 +171,46 @@ class MutableWorkspaceManagementStore extends InMemoryOpenTofuControlStore {
   }
 }
 
+class PausingCompatibilityAdmissionStore extends MutableWorkspaceManagementStore {
+  readonly admissionStarted = deferred<void>();
+  readonly releaseAdmission = deferred<void>();
+  #pauseNextAdmission = false;
+  observedExpectedAuthority?: WorkspaceManagementAuthority;
+
+  pauseNextCompatibilityAdmission(): void {
+    this.#pauseNextAdmission = true;
+  }
+
+  override async beginCompatibilityCheckRun(
+    run: Parameters<
+      InMemoryOpenTofuControlStore["beginCompatibilityCheckRun"]
+    >[0],
+    expected: Parameters<
+      InMemoryOpenTofuControlStore["beginCompatibilityCheckRun"]
+    >[1],
+  ) {
+    this.observedExpectedAuthority = { ...expected };
+    if (this.#pauseNextAdmission) {
+      this.#pauseNextAdmission = false;
+      this.admissionStarted.resolve();
+      await this.releaseAdmission.promise;
+    }
+    const current = await this.getWorkspaceManagement(run.workspaceId);
+    if (
+      current?.managementState !== "active" ||
+      current.managementEpoch !== expected.managementEpoch
+    ) {
+      throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
+    }
+    // The in-memory delegate has its own epoch-1 fixture state; adapt only
+    // after the test-only management view has accepted the exact active tuple.
+    return await super.beginCompatibilityCheckRun(run, {
+      ...expected,
+      managementEpoch: 1,
+    });
+  }
+}
+
 class SentinelSourceManagementReadStore extends InMemoryOpenTofuControlStore {
   throwOnRunManagementAuthorityRead = false;
   throwOnWorkspaceManagementRead = false;
@@ -244,10 +285,30 @@ class PausingConnectionLookupStore extends InMemoryOpenTofuControlStore {
   }
 }
 
+class PausingSourceSnapshotLookupStore extends InMemoryOpenTofuControlStore {
+  readonly snapshotLookupStarted = deferred<void>();
+  readonly releaseSnapshotLookup = deferred<void>();
+  #pauseNextSnapshotLookup = false;
+
+  pauseNextSnapshotLookup(): void {
+    this.#pauseNextSnapshotLookup = true;
+  }
+
+  override async listSourceSnapshots(sourceId: string) {
+    if (this.#pauseNextSnapshotLookup) {
+      this.#pauseNextSnapshotLookup = false;
+      this.snapshotLookupStarted.resolve();
+      await this.releaseSnapshotLookup.promise;
+    }
+    return await super.listSourceSnapshots(sourceId);
+  }
+}
+
 function makeService(
   overrides: {
     store?: InMemoryOpenTofuControlStore;
     artifactReferenceAllocator?: ArtifactReferenceAllocator;
+    compatibilityAnalyzer?: CapsuleCompatibilityAnalyzer;
     enqueueSourceSync?: (d: {
       action: "source_sync";
       runId: string;
@@ -288,6 +349,9 @@ function makeService(
       : {}),
     ...(overrides.readCapsuleSourceFiles
       ? { readCapsuleSourceFiles: overrides.readCapsuleSourceFiles }
+      : {}),
+    ...(overrides.compatibilityAnalyzer
+      ? { compatibilityAnalyzer: overrides.compatibilityAnalyzer }
       : {}),
   });
   return { store, service };
@@ -1517,6 +1581,178 @@ test("listAutoSyncSourcesPage stays bounded while advancing across sparse rows",
   expect(second.nextCursor).toBeUndefined();
 });
 
+test("createCompatibilityCheck rejects a drain raced during snapshot preparation without evidence", async () => {
+  const store = new PausingSourceSnapshotLookupStore();
+  let analyzerCalls = 0;
+  const { service } = makeService({
+    store,
+    compatibilityAnalyzer: {
+      async analyze() {
+        analyzerCalls += 1;
+        return {
+          level: "ready",
+          findings: [],
+          providerPackages: [],
+          rootProviderRequirements: [],
+          resources: [],
+          dataSources: [],
+          provisioners: [],
+          rootModuleVariables: [],
+          rootModuleVariableDeclarations: [],
+          rootModuleOutputs: [],
+        };
+      },
+    },
+  });
+  const { source } = await service.createSource({
+    workspaceId: "workspace_1",
+    name: "drain-raced-compatibility-check",
+    url: "https://github.com/acme/capsule.git",
+  });
+  const { run: syncRun } = await service.createSync(source.id);
+  const snapshot: SourceSnapshot = {
+    id: syncRun.snapshotId!,
+    origin: "git",
+    workspaceId: source.workspaceId,
+    sourceId: source.id,
+    url: source.url,
+    ref: "HEAD",
+    resolvedCommit: "a".repeat(40),
+    path: ".",
+    archiveRef: syncRun.archiveRef,
+    archiveDigest: "sha256:source",
+    archiveSizeBytes: 1,
+    fetchedByRunId: syncRun.id,
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  };
+  await store.putSourceSnapshot(snapshot);
+
+  store.pauseNextSnapshotLookup();
+  const creating = service.createCompatibilityCheck(
+    source.id,
+    { sourceSnapshotId: snapshot.id },
+    { kind: "fresh" },
+  );
+  await store.snapshotLookupStarted.promise;
+  const management = await store.getWorkspaceManagement(source.workspaceId);
+  expect(management).toMatchObject({
+    workspaceId: source.workspaceId,
+    managementState: "active",
+    managementEpoch: 1,
+  });
+  await store.beginWorkspaceDraining(source.workspaceId, {
+    workspaceId: source.workspaceId,
+    managementState: "active",
+    managementEpoch: management!.managementEpoch,
+  });
+  store.releaseSnapshotLookup.resolve();
+
+  await expect(creating).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "workspace_management_admission_conflict" },
+  });
+  expect(analyzerCalls).toBe(0);
+  expect(
+    (await store.listRunsByWorkspace(source.workspaceId)).filter(
+      (run) => run.type === "compatibility_check",
+    ),
+  ).toEqual([]);
+  expect(
+    await store.getLatestCapsuleCompatibilityReportForSourceSnapshot(
+      snapshot.id,
+      { sourceId: source.id },
+    ),
+  ).toBeUndefined();
+});
+
+test("createCompatibilityCheck refuses the original authority after drain and resume before admission", async () => {
+  const store = new PausingCompatibilityAdmissionStore();
+  let analyzerCalls = 0;
+  const { service } = makeService({
+    store,
+    compatibilityAnalyzer: {
+      async analyze() {
+        analyzerCalls += 1;
+        return {
+          level: "ready",
+          findings: [],
+          providerPackages: [],
+          rootProviderRequirements: [],
+          resources: [],
+          dataSources: [],
+          provisioners: [],
+          rootModuleVariables: [],
+          rootModuleVariableDeclarations: [],
+          rootModuleOutputs: [],
+        };
+      },
+    },
+  });
+  const { source } = await service.createSource({
+    workspaceId: "workspace_1",
+    name: "old-authority-compatibility-check",
+    url: "https://github.com/acme/capsule.git",
+  });
+  const { run: syncRun } = await service.createSync(source.id);
+  const snapshot: SourceSnapshot = {
+    id: syncRun.snapshotId!,
+    origin: "git",
+    workspaceId: source.workspaceId,
+    sourceId: source.id,
+    url: source.url,
+    ref: "HEAD",
+    resolvedCommit: "a".repeat(40),
+    path: ".",
+    archiveRef: syncRun.archiveRef,
+    archiveDigest: "sha256:source",
+    archiveSizeBytes: 1,
+    fetchedByRunId: syncRun.id,
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  };
+  await store.putSourceSnapshot(snapshot);
+
+  store.pauseNextCompatibilityAdmission();
+  const creating = service.createCompatibilityCheck(
+    source.id,
+    { sourceSnapshotId: snapshot.id },
+    { kind: "fresh" },
+  );
+  await store.admissionStarted.promise;
+  expect(store.observedExpectedAuthority).toMatchObject({
+    workspaceId: source.workspaceId,
+    managementState: "active",
+    managementEpoch: 1,
+  });
+  store.setManagement({
+    workspaceId: source.workspaceId,
+    managementState: "draining",
+    managementEpoch: 2,
+  });
+  store.setManagement({
+    workspaceId: source.workspaceId,
+    managementState: "active",
+    managementEpoch: 3,
+  });
+  store.releaseAdmission.resolve();
+
+  await expect(creating).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "workspace_management_admission_conflict" },
+  });
+  expect(analyzerCalls).toBe(0);
+  expect(
+    (await store.listRunsByWorkspace(source.workspaceId)).filter(
+      (run) => run.type === "compatibility_check",
+    ),
+  ).toEqual([]);
+  expect(
+    await store.getLatestCapsuleCompatibilityReportForSourceSnapshot(
+      snapshot.id,
+      { sourceId: source.id },
+    ),
+  ).toBeUndefined();
+});
+
 test("createCompatibilityCheck preserves the immutable source instead of rewriting HCL", async () => {
   const { store, service } = makeService({
     readCapsuleSourceFiles: async () => [
@@ -1568,7 +1804,7 @@ output "public_url" {
   const { report, run: compatibilityResponseRun } =
     await service.createCompatibilityCheck(source.id, {
       sourceSnapshotId: run.snapshotId,
-    });
+    }, { kind: "fresh" });
 
   expect(report.level).toBe("ready");
   expect(report).not.toHaveProperty("normalizedObjectKey");
@@ -1692,7 +1928,7 @@ output "public_url" {
   const { report } = await service.createCompatibilityCheck(source.id, {
     sourceSnapshotId: run.snapshotId,
     capsuleId: "capsule_policy",
-  });
+  }, { kind: "fresh" });
 
   expect(observedOptions).toEqual([
     {
@@ -1782,7 +2018,7 @@ output "url" {
   // Unset policy follows the provider-neutral OpenTofu path.
   const baseline = await service.createCompatibilityCheck(source.id, {
     sourceSnapshotId: run.snapshotId,
-  });
+  }, { kind: "fresh" });
   expect(baseline.report.level).toBe("ready");
   expect(
     baseline.report.findings.some(
@@ -1794,7 +2030,7 @@ output "url" {
   const curated = await service.createCompatibilityCheck(source.id, {
     sourceSnapshotId: run.snapshotId,
     installConfigId: "cfg-official-dns-capsule",
-  });
+  }, { kind: "fresh" });
   expect(curated.report.level).toBe("ready");
   expect(curated.report.resources.every((resource) => resource.allowed)).toBe(
     true,
@@ -1856,7 +2092,7 @@ test("createCompatibilityCheck rejects a curated installConfig from another Work
     service.createCompatibilityCheck(source.id, {
       sourceSnapshotId: run.snapshotId,
       installConfigId: "cfg_other_workspace",
-    }),
+    }, { kind: "fresh" }),
   ).rejects.toThrow(/install config is not available to this workspace/);
 });
 
@@ -1902,7 +2138,7 @@ test("createCompatibilityCheck rejects a Capsule from another Workspace", async 
     service.createCompatibilityCheck(source.id, {
       sourceSnapshotId: run.snapshotId,
       capsuleId: "capsule_foreign",
-    }),
+    }, { kind: "fresh" }),
   ).rejects.toThrow(/capsule is not available to this source workspace/);
 });
 
@@ -1953,7 +2189,7 @@ test("createCompatibilityCheck rejects a Capsule for another source", async () =
     service.createCompatibilityCheck(source.id, {
       sourceSnapshotId: run.snapshotId,
       capsuleId: "capsule_other_source",
-    }),
+    }, { kind: "fresh" }),
   ).rejects.toThrow(/does not use source/);
 });
 
@@ -2016,7 +2252,7 @@ output "public_url" {
 
   const { report } = await service.createCompatibilityCheck(source.id, {
     sourceSnapshotId: run.snapshotId,
-  });
+  }, { kind: "fresh" });
 
   const providerBySource = new Map(
     report.providerPackages.map((provider) => [provider.source, provider]),
@@ -2064,7 +2300,7 @@ test("createCompatibilityCheck returns an unsupported report when analysis fails
 
   const checked = await service.createCompatibilityCheck(source.id, {
     sourceSnapshotId: run.snapshotId,
-  });
+  }, { kind: "fresh" });
   expect(checked.report).toMatchObject({
     id: "caprep_test00000005",
     sourceId: source.id,
@@ -2161,7 +2397,7 @@ output "url" {
   const { report } = await service.createCompatibilityCheck(source.id, {
     sourceSnapshotId: run.snapshotId,
     modulePath: "deploy/opentofu",
-  });
+  }, { kind: "fresh" });
 
   expect(observedOptions).toEqual([
     { modulePath: "deploy/opentofu", runId: "ccr_test00000004" },
@@ -2238,7 +2474,7 @@ output "url" {
   const { report } = await service.createCompatibilityCheck(source.id, {
     sourceSnapshotId: run.snapshotId,
     installConfigId: "cfg-git-takos",
-  });
+  }, { kind: "fresh" });
 
   expect(observedOptions).toEqual([
     { modulePath: "deploy/opentofu", runId: "ccr_test00000004" },
@@ -2317,7 +2553,7 @@ output "url" {
     sourceSnapshotId: run.snapshotId,
     capsuleId: "capsule_module_path",
     modulePath: "examples/hello",
-  });
+  }, { kind: "fresh" });
 
   expect(observedOptions).toEqual([
     { modulePath: "deploy/opentofu", runId: "ccr_test00000004" },

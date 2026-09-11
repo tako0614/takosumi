@@ -86,7 +86,10 @@ import type {
   CapsuleUsageSummary,
   UsageEvent,
 } from "takosumi-contract/billing";
-import type { SourcesService } from "../sources/mod.ts";
+import type {
+  CompatibilityCheckManagementContext,
+  SourcesService,
+} from "../sources/mod.ts";
 import { evaluateSourceUrl } from "../sources/url-policy.ts";
 import type {
   CapsuleCompatibilityReport,
@@ -2333,10 +2336,12 @@ export class OpenTofuController {
   async createSourceCompatibilityCheck(
     sourceId: string,
     request: CreateSourceCompatibilityCheckRequest = {},
+    context: CompatibilityCheckManagementContext = { kind: "fresh" },
   ): Promise<CapsuleCompatibilityReportResponse> {
     return await this.#sources.createSourceCompatibilityCheck(
       sourceId,
       request,
+      context,
     );
   }
 

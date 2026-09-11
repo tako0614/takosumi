@@ -282,11 +282,18 @@ export async function adoptRepoOwnedInstallConfig(
   if (!compatibilityReport) {
     try {
       compatibilityReport = (
-        await input.operations.createSourceCompatibilityCheck(input.source.id, {
-          sourceSnapshotId: input.sourceSnapshot!.id,
-          modulePath,
-          installConfigId: input.baseConfig.id,
-        })
+        await input.operations.createSourceCompatibilityCheck(
+          input.source.id,
+          {
+            sourceSnapshotId: input.sourceSnapshot!.id,
+            modulePath,
+            installConfigId: input.baseConfig.id,
+          },
+          {
+            kind: "captured",
+            authority: input.expectedWorkspaceManagementAuthority ?? null,
+          },
+        )
       ).report;
     } catch {
       return {

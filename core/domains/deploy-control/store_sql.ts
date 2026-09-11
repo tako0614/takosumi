@@ -85,6 +85,7 @@ import type {
   CommitRestoredStateResult,
   BeginApplyRunResult,
   BeginBackupRunResult,
+  BeginCompatibilityCheckRunResult,
   CommitBackupRunInput,
   CommitBackupRunResult,
   BeginRestoreRunResult,
@@ -147,6 +148,8 @@ import {
   assertSourceConfigurationWriteInput,
   assertWorkspaceManagementAdmission,
   assertWorkspaceManagementAuthorityInput,
+  assertCompatibilityCheckRunAdmissionInput,
+  compatibilityCheckRunAdmissionMatches,
   assertCommitBackupRunInput,
   backupRunCommitDisposition,
   prepareConnectionExpiration,
@@ -1795,7 +1798,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       id: run.id,
       workspaceId: run.workspaceId,
       sourceId: run.sourceId ?? null,
-      capsuleId: null,
+      capsuleId: run.capsuleId ?? null,
       createdAt: run.createdAt,
       json: run,
     });
@@ -1808,6 +1811,124 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       RUN_KIND_COMPATIBILITY_CHECK,
     );
     return run ? (publicStoredRun(run) as Run) : undefined;
+  }
+
+  async beginCompatibilityCheckRun(
+    inputRun: Run,
+    inputExpectedWorkspaceManagementAuthority: WorkspaceManagementAuthority,
+  ): Promise<BeginCompatibilityCheckRunResult> {
+    const {
+      run,
+      expectedWorkspaceManagementAuthority,
+    } = structuredClone({
+      run: inputRun,
+      expectedWorkspaceManagementAuthority:
+        inputExpectedWorkspaceManagementAuthority,
+    });
+    assertCompatibilityCheckRunAdmissionInput(
+      run,
+      expectedWorkspaceManagementAuthority,
+    );
+    return await this.#client.transaction(async (transaction) => {
+      // Workspace is the outer lock for a new compatibility analysis. Existing
+      // exact rows are read-only replays and therefore do not re-check the
+      // mutable current Workspace state.
+      const management = await pgWorkspaceManagementForTransaction(
+        transaction,
+        run.workspaceId,
+      );
+      const readRow = async (): Promise<
+        PgCompatibilityAdmissionRow | undefined
+      > => {
+        const rows = await transaction.query<PgCompatibilityAdmissionRow>(
+          `select id,
+                  kind,
+                  space_id as "workspaceId",
+                  source_id as "sourceId",
+                  installation_id as "capsuleId",
+                  status,
+                  lease_token as "leaseToken",
+                  created_at as "createdAt",
+                  run_json as "runJson"
+             from takosumi_runs
+            where id = $1
+            for update`,
+          [run.id],
+        );
+        return rows.rows[0];
+      };
+      const existingRow = await readRow();
+      if (existingRow !== undefined) {
+        const current = pgCompatibilityRunFromAdmissionRow(existingRow);
+        if (
+          current === undefined ||
+          !compatibilityCheckRunAdmissionMatches(
+            current,
+            run,
+            expectedWorkspaceManagementAuthority,
+          )
+        ) {
+          return { status: "conflict" as const };
+        }
+        return {
+          status: "existing" as const,
+          run: publicStoredRun(current) as Run,
+        };
+      }
+
+      assertWorkspaceManagementAdmission(
+        management,
+        run.workspaceId,
+        expectedWorkspaceManagementAuthority,
+      );
+      const stored = storeRunManagementAuthority(
+        run,
+        expectedWorkspaceManagementAuthority,
+      );
+      const inserted = await transaction.query<{ readonly id: string }>(
+        `insert into takosumi_runs
+          (id, kind, space_id, source_id, installation_id, status,
+           lease_token, heartbeat_at, created_at, run_json)
+         select $1, $2, workspace.id, $4, $5, $6,
+                null, $7, $8, $9::jsonb
+           from takosumi_workspaces as workspace
+          where workspace.id = $3
+            and workspace.management_state = 'active'
+            and workspace.management_epoch = $10
+         on conflict (id) do nothing
+         returning id`,
+        [
+          run.id,
+          RUN_KIND_COMPATIBILITY_CHECK,
+          run.workspaceId,
+          run.sourceId,
+          run.capsuleId ?? null,
+          run.status,
+          run.heartbeatAt ?? null,
+          String(run.createdAt),
+          JSON.stringify(stored),
+          expectedWorkspaceManagementAuthority.managementEpoch,
+        ],
+      );
+      if (inserted.rows.length > 0) {
+        return { status: "created" as const, run: publicStoredRun(run) };
+      }
+
+      // A raced id collision is never adopted blindly. Re-read the durable
+      // row under the same transaction and apply the exact read-only matcher.
+      const currentRow = await readRow();
+      const current = currentRow
+        ? pgCompatibilityRunFromAdmissionRow(currentRow)
+        : undefined;
+      return currentRow !== undefined && current !== undefined &&
+          compatibilityCheckRunAdmissionMatches(
+            current,
+            run,
+            expectedWorkspaceManagementAuthority,
+          )
+        ? { status: "existing" as const, run: publicStoredRun(current) as Run }
+        : { status: "conflict" as const };
+    });
   }
 
   async putBackupRun(run: Run): Promise<Run> {
@@ -7766,7 +7887,48 @@ export async function pgWorkspaceManagementForTransaction(
         row.managementState,
         row.managementEpoch,
       )
-      : undefined;
+    : undefined;
+}
+
+interface PgCompatibilityAdmissionRow extends Record<string, unknown> {
+  readonly id: string;
+  readonly kind: string;
+  readonly workspaceId: string;
+  readonly sourceId: string | null;
+  readonly capsuleId: string | null;
+  readonly status: string;
+  readonly leaseToken: string | null;
+  readonly createdAt: string;
+  readonly runJson: unknown;
+}
+
+/** Parse one locked compatibility Run while rejecting physical/JSON drift. */
+function pgCompatibilityRunFromAdmissionRow(
+  row: PgCompatibilityAdmissionRow,
+): StoredRunRecord | undefined {
+  let value: unknown;
+  try {
+    value = parseJson(row.runJson);
+  } catch {
+    return undefined;
+  }
+  if (
+    row.kind !== RUN_KIND_COMPATIBILITY_CHECK ||
+    value === null || typeof value !== "object" || Array.isArray(value)
+  ) {
+    return undefined;
+  }
+  const run = value as Partial<Run>;
+  return run.id === row.id &&
+      run.workspaceId === row.workspaceId &&
+      run.type === RUN_KIND_COMPATIBILITY_CHECK &&
+      run.status === row.status &&
+      row.leaseToken === null &&
+      run.createdAt === row.createdAt &&
+      nullablePhysicalMatches(run.sourceId, row.sourceId) &&
+      nullablePhysicalMatches(run.capsuleId, row.capsuleId)
+    ? value as StoredRunRecord
+    : undefined;
 }
 
 interface PgBackupSettlementRunRow extends Record<string, unknown> {

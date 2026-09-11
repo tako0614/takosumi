@@ -287,6 +287,14 @@ export async function handleSources(
       const { source } = await operations.getSource(sourceId);
       const workspaceId = sourceWorkspaceId(source);
       if (!workspaceId) return sourceWorkspaceIdentityMissing();
+      // Capture once while the Source's Workspace identity is known, before
+      // access/body validation can perform asynchronous work. Keep capture
+      // failures inert until those current checks complete so a rejected
+      // caller or malformed body cannot observe management-state details.
+      const capturedWorkspaceManagementAuthority = await operations.workspaces
+        .captureManagementAuthority(workspaceId)
+        .then((authority) => ({ ok: true as const, authority }))
+        .catch((error) => ({ ok: false as const, error }));
       const auth = await requireWorkspaceAccess({
         operations,
         store,
@@ -371,6 +379,11 @@ export async function handleSources(
           { diagnosticCode: "repository_install_ux_module_path_invalid" },
         );
       }
+      if (!capturedWorkspaceManagementAuthority.ok) {
+        throw capturedWorkspaceManagementAuthority.error;
+      }
+      const expectedWorkspaceManagementAuthority =
+        capturedWorkspaceManagementAuthority.authority;
       // `modulePathValue` returns an empty string for the root path. Preserve
       // the distinction between an omitted caller path and an explicit root
       // selection while using the canonical scanner candidate for authority.
@@ -380,14 +393,9 @@ export async function handleSources(
           : modulePath === ""
             ? "."
             : modulePath;
-      // Repository install UX creates a new Workspace-owned InstallConfig.
-      // Capture the exact private management authority before any asynchronous
-      // snapshot, compatibility, or provider preparation and retain it for
-      // the durable insert-only write. A later read must never refresh a drain
-      // away.
-      const expectedWorkspaceManagementAuthority = compileInstallUx
-        ? await operations.workspaces.captureManagementAuthority(workspaceId)
-        : undefined;
+      // Repository install UX creates a new Workspace-owned InstallConfig and
+      // retains the authority captured above for its durable insert-only write.
+      // A later read must never refresh a drained Workspace.
       let installUxSnapshot: SourceSnapshot | undefined;
       let installUxModulePath: string | undefined;
       let installUxBaseConfig: InstallConfig | undefined;
@@ -465,6 +473,10 @@ export async function handleSources(
       const compatibility = await operations.createSourceCompatibilityCheck(
         sourceId,
         compatibilityRequest,
+        {
+          kind: "captured",
+          authority: expectedWorkspaceManagementAuthority,
+        },
       );
       if (!compileInstallUx) {
         return jsonStatus(

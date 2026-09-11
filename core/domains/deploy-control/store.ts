@@ -2316,6 +2316,50 @@ export function storeRunManagementAuthority<T extends StoredRunRecord>(
   };
 }
 
+export type BeginCompatibilityCheckRunResult =
+  | { readonly status: "created" | "existing"; readonly run: Run }
+  | { readonly status: "conflict" };
+
+/** A compatibility admission starts analysis, not a queued execution lease. */
+export function assertCompatibilityCheckRunAdmissionInput(
+  run: Run,
+  authority: WorkspaceManagementAuthority,
+): void {
+  assertWorkspaceManagementAuthorityInput(authority, run.workspaceId);
+  if (
+    run.type !== "compatibility_check" || run.status !== "running" ||
+    [run.id, run.workspaceId, run.sourceId, run.sourceSnapshotId,
+      run.createdBy, run.createdAt, run.startedAt].some(
+        (value) => typeof value !== "string" || value.trim().length === 0,
+      ) ||
+    run.finishedAt !== undefined || run.errorCode !== undefined ||
+    run.compatibilityReportId !== undefined
+  ) throw new TypeError("Compatibility admission requires one new running analysis");
+}
+
+/** Adopt only the same started analysis and its stored original authority. */
+export function compatibilityCheckRunAdmissionMatches(
+  current: StoredRunRecord,
+  candidate: Run,
+  authority: WorkspaceManagementAuthority,
+): boolean {
+  if (!isPublicRunRecord(current)) return false;
+  const original = runManagementAuthority(current);
+  if (!original || original.workspaceId !== authority.workspaceId ||
+    original.managementEpoch !== authority.managementEpoch) return false;
+  try {
+    assertCompatibilityCheckRunAdmissionInput(current, original);
+  } catch {
+    return false;
+  }
+  return current.id === candidate.id &&
+    current.workspaceId === candidate.workspaceId &&
+    current.sourceId === candidate.sourceId &&
+    (current.capsuleId ?? undefined) === (candidate.capsuleId ?? undefined) &&
+    current.sourceSnapshotId === candidate.sourceSnapshotId &&
+    current.createdBy === candidate.createdBy;
+}
+
 /** A manual backup has no resume protocol: an occupied Run id never starts work again. */
 export type BeginBackupRunResult =
   | { readonly status: "created"; readonly run: Run }
@@ -2563,6 +2607,10 @@ export interface OpenTofuControlStore {
   getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined>;
   listSourceSyncRuns(sourceId: string): Promise<readonly SourceSyncRun[]>;
   putCompatibilityCheckRun(run: Run): Promise<Run>;
+  beginCompatibilityCheckRun(
+    run: Run,
+    expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority,
+  ): Promise<BeginCompatibilityCheckRunResult>;
   getCompatibilityCheckRun(id: string): Promise<Run | undefined>;
   putBackupRun(run: Run): Promise<Run>;
   beginBackupRun(run: Run, expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority): Promise<BeginBackupRunResult>;
@@ -3674,6 +3722,28 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     }
     this.#runs.set(run.id, preserveStoredRunManagementAuthority(run, this.#runs.get(run.id)));
     return Promise.resolve(publicStoredRun(run));
+  }
+
+  async beginCompatibilityCheckRun(
+    run: Run,
+    expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority,
+  ): Promise<BeginCompatibilityCheckRunResult> {
+    ({ run, expectedWorkspaceManagementAuthority } = structuredClone({ run, expectedWorkspaceManagementAuthority }));
+    assertCompatibilityCheckRunAdmissionInput(run, expectedWorkspaceManagementAuthority);
+    if (this.#runLeases.has(run.id)) return { status: "conflict" };
+    const current = this.#runs.get(run.id);
+    if (current !== undefined) {
+      return compatibilityCheckRunAdmissionMatches(current, run, expectedWorkspaceManagementAuthority)
+        ? { status: "existing", run: publicStoredRun(current) as Run }
+        : { status: "conflict" };
+    }
+    assertWorkspaceManagementAdmission(
+      this.#workspaceManagement.get(run.workspaceId),
+      run.workspaceId,
+      expectedWorkspaceManagementAuthority,
+    );
+    this.#runs.set(run.id, storeRunManagementAuthority(run, expectedWorkspaceManagementAuthority));
+    return { status: "created", run: publicStoredRun(run) };
   }
 
   getCompatibilityCheckRun(id: string): Promise<Run | undefined> {

@@ -315,6 +315,10 @@ export async function handleCapsuleInstallConfigReAdoption(
       modulePath,
       installConfigId: baseConfig.id,
     },
+    {
+      kind: "captured",
+      authority: expectedWorkspaceManagementAuthority,
+    },
   );
   const adoption = await adoptRepoOwnedInstallConfig({
     operations: ctx.operations,

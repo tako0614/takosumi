@@ -99,6 +99,7 @@ import type {
   CommitRestoredStateResult,
   BeginApplyRunResult,
   BeginBackupRunResult,
+  BeginCompatibilityCheckRunResult,
   CommitBackupRunInput,
   CommitBackupRunResult,
   BeginRestoreRunResult,
@@ -209,6 +210,8 @@ import {
   storeRunManagementAuthority,
   storeSourceSyncRun,
   assertWorkspaceManagementAdmission,
+  assertCompatibilityCheckRunAdmissionInput,
+  compatibilityCheckRunAdmissionMatches,
   validateWorkspaceReplacement,
   assertCommitBackupRunInput,
   backupRunCommitDisposition,
@@ -1807,8 +1810,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       runGroupId: run.runGroupId ?? null,
       workspaceId: publicRun.workspaceId,
       sourceId: publicRun.sourceId ?? null,
-      capsuleId: null,
-      environment: null,
+      capsuleId: publicRun.capsuleId ?? null,
+      environment: publicRun.environment ?? null,
       type: RUN_KIND_COMPATIBILITY_CHECK,
       status: publicRun.status,
       runJson: JSON.stringify(publicRun),
@@ -1818,6 +1821,155 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
 
   async getCompatibilityCheckRun(id: string): Promise<Run | undefined> {
     return await this.#getRun<Run>(id, [RUN_KIND_COMPATIBILITY_CHECK]);
+  }
+
+  async beginCompatibilityCheckRun(
+    inputRun: Run,
+    inputExpectedWorkspaceManagementAuthority: WorkspaceManagementAuthority,
+  ): Promise<BeginCompatibilityCheckRunResult> {
+    const {
+      run,
+      expectedWorkspaceManagementAuthority,
+    } = structuredClone({
+      run: inputRun,
+      expectedWorkspaceManagementAuthority:
+        inputExpectedWorkspaceManagementAuthority,
+    });
+    assertCompatibilityCheckRunAdmissionInput(
+      run,
+      expectedWorkspaceManagementAuthority,
+    );
+    assertD1AtomicCommitBatch(this.db, "beginCompatibilityCheckRun");
+    await this.#ensureSchema();
+
+    const readRow = async (): Promise<
+      D1CompatibilityAdmissionRow | undefined
+    > => await this.#orm
+      .select({
+        id: schema.runs.id,
+        type: schema.runs.type,
+        workspaceId: schema.runs.workspaceId,
+        sourceId: schema.runs.sourceId,
+        capsuleId: schema.runs.capsuleId,
+        environment: schema.runs.environment,
+        status: schema.runs.status,
+        leaseToken: schema.runs.leaseToken,
+        createdAt: schema.runs.createdAt,
+        runJson: schema.runs.runJson,
+      })
+      .from(schema.runs)
+      .where(eq(schema.runs.id, run.id))
+      .get();
+
+    // The probe is observational. An occupied id is replayable only when the
+    // complete physical/JSON row and its original private authority remain
+    // unchanged; mutable current Workspace state is irrelevant to replays.
+    const existingRow = await readRow();
+    if (existingRow !== undefined) {
+      const current = d1CompatibilityRunFromAdmissionRow(existingRow);
+      if (
+        current === undefined ||
+        !compatibilityCheckRunAdmissionMatches(
+          current,
+          run,
+          expectedWorkspaceManagementAuthority,
+        )
+      ) {
+        return { status: "conflict" };
+      }
+      try {
+        await this.#orm.batch([
+          d1CompatibilityExistingGuardStmt(
+            this.#orm,
+            current as Run,
+            existingRow.runJson,
+            expectedWorkspaceManagementAuthority,
+          ),
+        ]);
+      } catch (error) {
+        if (isD1CompatibilityCheckAdmissionGuardError(error)) {
+          return { status: "conflict" };
+        }
+        throw error;
+      }
+      return { status: "existing", run: publicStoredRun(current) as Run };
+    }
+
+    // For a genuinely new id the active Workspace/epoch guard is the first
+    // statement in the atomic batch. The create is insert-only; a raced id is
+    // classified from a fresh physical read below, never adopted or repaired.
+    const guard = d1WorkspaceManagementAdmissionGuardStmt(
+      this.#orm,
+      run.workspaceId,
+      run.id,
+      expectedWorkspaceManagementAuthority,
+      true,
+    );
+    const insert = this.#orm
+      .insert(schema.runs)
+      .values({
+        id: run.id,
+        runGroupId: run.runGroupId ?? null,
+        workspaceId: run.workspaceId,
+        sourceId: run.sourceId ?? null,
+        capsuleId: run.capsuleId ?? null,
+        environment: run.environment ?? null,
+        type: RUN_KIND_COMPATIBILITY_CHECK,
+        status: run.status,
+        leaseToken: null,
+        heartbeatAt: run.heartbeatAt ?? null,
+        runJson: storeRunManagementAuthority(
+          run,
+          expectedWorkspaceManagementAuthority,
+        ) as unknown,
+        createdAt: String(run.createdAt),
+      })
+      .onConflictDoNothing({ target: schema.runs.id });
+    try {
+      const results = await this.#orm.batch([guard, insert]);
+      if (changes(results[1] as D1Result) > 0) {
+        return { status: "created", run: publicStoredRun(run) };
+      }
+    } catch (error) {
+      if (isD1WorkspaceManagementGuardError(error)) {
+        throw new WorkspaceManagementAdmissionConflictError(
+          run.workspaceId,
+        );
+      }
+      throw error;
+    }
+
+    const currentRow = await readRow();
+    const current = currentRow
+      ? d1CompatibilityRunFromAdmissionRow(currentRow)
+      : undefined;
+    if (
+      currentRow === undefined ||
+      current === undefined ||
+      !compatibilityCheckRunAdmissionMatches(
+        current,
+        run,
+        expectedWorkspaceManagementAuthority,
+      )
+    ) {
+      return { status: "conflict" };
+    }
+    try {
+      await this.#orm.batch([
+        d1CompatibilityExistingGuardStmt(
+          this.#orm,
+          current as Run,
+          currentRow.runJson,
+          expectedWorkspaceManagementAuthority,
+        ),
+      ]);
+    } catch (error) {
+      if (isD1CompatibilityCheckAdmissionGuardError(error)) {
+        return { status: "conflict" };
+      }
+      throw error;
+    }
+    return { status: "existing", run: publicStoredRun(current) as Run };
   }
 
   async putBackupRun(run: Run): Promise<Run> {
@@ -8942,6 +9094,7 @@ function assertD1AtomicCommitBatch(
     | "preparePlanRun"
     | "beginApplyRun"
     | "beginBackupRun"
+    | "beginCompatibilityCheckRun"
     | "commitBackupRun"
     | "beginRestoreRun"
     | "beginSourceSyncRun"
@@ -9011,6 +9164,14 @@ function isD1ManualBackupWorkspaceManagementGuardError(
   return error instanceof Error &&
     (error.message.includes("UNIQUE constraint failed: runs.id") ||
       error.message.includes("constraint failed: runs.id"));
+}
+
+function isD1CompatibilityCheckAdmissionGuardError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.message.includes("UNIQUE constraint failed: runs.id") ||
+    error.message.includes("constraint failed: runs.id") ||
+    error.message.includes("NOT NULL constraint failed: runs.space_id") ||
+    error.message.includes("constraint failed: runs.space_id");
 }
 
 function isD1BackupCommitGuardError(error: unknown): boolean {
@@ -9403,6 +9564,43 @@ function d1StoredRunFromD1Value(
     : undefined;
 }
 
+interface D1CompatibilityAdmissionRow {
+  readonly id: string;
+  readonly type: string;
+  readonly workspaceId: string;
+  readonly sourceId: string | null;
+  readonly capsuleId: string | null;
+  readonly environment: string | null;
+  readonly status: string;
+  readonly leaseToken: string | null;
+  readonly createdAt: string;
+  readonly runJson: unknown;
+}
+
+/** Parse one compatibility Run while rejecting physical/JSON identity drift. */
+function d1CompatibilityRunFromAdmissionRow(
+  row: D1CompatibilityAdmissionRow,
+): StoredRunRecord | undefined {
+  const run = d1StoredRunFromD1Value(row.runJson);
+  const generic = run as unknown as Partial<Run> | undefined;
+  if (
+    row.type !== RUN_KIND_COMPATIBILITY_CHECK ||
+    run === undefined ||
+    run.id !== row.id ||
+    run.workspaceId !== row.workspaceId ||
+    generic?.type !== RUN_KIND_COMPATIBILITY_CHECK ||
+    run.status !== row.status ||
+    row.leaseToken !== null ||
+    run.createdAt !== row.createdAt ||
+    !d1BackupNullablePhysicalMatches(generic?.sourceId, row.sourceId) ||
+    !d1BackupNullablePhysicalMatches(generic?.capsuleId, row.capsuleId) ||
+    !d1BackupNullablePhysicalMatches(generic?.environment, row.environment)
+  ) {
+    return undefined;
+  }
+  return run;
+}
+
 interface D1BackupSettlementRunRow {
   readonly id: string;
   readonly type: string;
@@ -9492,6 +9690,87 @@ function d1BackupNullableWhere(
   value: string | undefined,
 ): SQL {
   return value === undefined ? isNull(column) : eq(column, value);
+}
+
+/** Match the original active Workspace-management tuple sealed in a Run. */
+function d1CompatibilityRunAuthorityWhere(
+  authority: WorkspaceManagementAuthority,
+): SQL {
+  const runJson = schema.runs.runJson;
+  const authorityPath = "$.workspaceManagementAuthority";
+  const workspacePath = "$.workspaceManagementAuthority.workspaceId";
+  const statePath = "$.workspaceManagementAuthority.managementState";
+  const epochPath = "$.workspaceManagementAuthority.managementEpoch";
+  const safeEpoch = 9_007_199_254_740_991;
+  return sql`json_valid(${runJson}) = 1
+    AND json_type(${runJson}, ${authorityPath}) = 'object'
+    AND json_type(${runJson}, ${workspacePath}) = 'text'
+    AND json_type(${runJson}, ${statePath}) = 'text'
+    AND json_extract(${runJson}, ${workspacePath}) = ${authority.workspaceId}
+    AND json_extract(${runJson}, ${workspacePath}) = ${schema.runs.workspaceId}
+    AND json_extract(${runJson}, ${statePath}) = 'active'
+    AND json_type(${runJson}, ${epochPath}) = 'integer'
+    AND CAST(json_extract(${runJson}, ${epochPath}) AS INTEGER) > 0
+    AND CAST(json_extract(${runJson}, ${epochPath}) AS INTEGER) <= ${safeEpoch}
+    AND CAST(json_extract(${runJson}, ${epochPath}) AS INTEGER) = ${authority.managementEpoch}`;
+}
+
+/** Exact physical/JSON predicate used by compatibility replay sentinels. */
+function d1CompatibilityRunAdmissionWhere(
+  run: Run,
+  rawRunJson: unknown,
+  authority: WorkspaceManagementAuthority,
+): SQL {
+  const runJson = schema.runs.runJson;
+  const nullableJson = (path: string, value: string | undefined): SQL =>
+    value === undefined || value === null
+      ? sql`json_extract(${runJson}, ${path}) IS NULL`
+      : sql`json_extract(${runJson}, ${path}) = ${value}`;
+  return and(
+    eq(schema.runs.id, run.id),
+    eq(schema.runs.workspaceId, run.workspaceId),
+    eq(schema.runs.type, RUN_KIND_COMPATIBILITY_CHECK),
+    eq(schema.runs.status, run.status),
+    d1BackupNullableWhere(schema.runs.sourceId, run.sourceId),
+    d1BackupNullableWhere(schema.runs.capsuleId, run.capsuleId),
+    d1BackupNullableWhere(schema.runs.environment, run.environment),
+    isNull(schema.runs.leaseToken),
+    eq(schema.runs.createdAt, String(run.createdAt)),
+    rawRunJson === undefined
+      ? undefined
+      : eq(schema.runs.runJson, rawRunJson as unknown),
+    sql`json_valid(${runJson}) = 1`,
+    sql`json_extract(${runJson}, '$.id') = ${run.id}`,
+    sql`json_extract(${runJson}, '$.workspaceId') = ${run.workspaceId}`,
+    sql`json_extract(${runJson}, '$.type') = 'compatibility_check'`,
+    sql`json_extract(${runJson}, '$.status') = ${run.status}`,
+    sql`json_extract(${runJson}, '$.sourceId') = ${run.sourceId}`,
+    nullableJson("$.capsuleId", run.capsuleId),
+    nullableJson("$.environment", run.environment),
+    sql`json_extract(${runJson}, '$.sourceSnapshotId') = ${run.sourceSnapshotId}`,
+    sql`json_extract(${runJson}, '$.createdBy') = ${run.createdBy}`,
+    sql`json_extract(${runJson}, '$.createdAt') = ${run.createdAt}`,
+    d1CompatibilityRunAuthorityWhere(authority),
+  )!;
+}
+
+/** Guard-only batch statement for an occupied compatibility Run id. */
+function d1CompatibilityExistingGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  run: Run,
+  rawRunJson: unknown,
+  authority: WorkspaceManagementAuthority,
+) {
+  const exact = orm
+    .select({ one: sql`1` })
+    .from(schema.runs)
+    .where(d1CompatibilityRunAdmissionWhere(run, rawRunJson, authority));
+  return orm.insert(schema.runs).select(
+    orm
+      .select(d1InvalidWorkspaceManagementGuardRow(run.id))
+      .from(sql`(select 1) as compatibility_admission_guard_source`)
+      .where(notExists(exact)),
+  );
 }
 
 /** Original admission authority only; current Workspace state is irrelevant at settlement. */

@@ -87,6 +87,7 @@ import type {
   CapsulePlanCreationFence,
   WorkspaceManagementAuthority,
 } from "../../../core/domains/deploy-control/store.ts";
+import type { CompatibilityCheckManagementContext } from "../../../core/domains/sources/mod.ts";
 import type {
   ProviderResolution,
   PublicProviderResolution,
@@ -735,6 +736,7 @@ export interface ControlPlaneOperations {
   createSourceCompatibilityCheck(
     sourceId: string,
     request?: CreateSourceCompatibilityCheckRequest,
+    context?: CompatibilityCheckManagementContext,
   ): Promise<CapsuleCompatibilityReportResponse>;
   getCompatibilityReport(
     reportId: string,

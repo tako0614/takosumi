@@ -24,6 +24,7 @@ import {
   type DeployControlRouteContext,
   COMPATIBILITY_REPORT_ID_PATTERN,
   ensureWorkspacePermission,
+  ensureValidParam,
   errorEnvelope,
   parsePageParams,
   readOptionalJsonBody,
@@ -250,13 +251,36 @@ export function mountDeployControlSourceRoutes(
   app.post(
     TAKOSUMI_SOURCE_COMPATIBILITY_CHECK_ROUTE,
     deployControlBodyLimit,
-    defineRoute({
-      ctx,
-      param: SOURCE_ID_PARAM,
-      enforceBody: false,
-      handler: async ({ c, principal, id }) => {
-        const existing = await controller.getSource(id);
-        ensureWorkspacePermission(principal, existing.source.workspaceId);
+    async (c) => {
+      const idCheck = ensureValidParam(c, "sourceId", SOURCE_ID_PATTERN);
+      const workspaces = dependencies.workspacesService;
+      // Retain the original tuple across asynchronous bearer authorization.
+      // Do not disclose either Source/capture errors until auth and scope pass.
+      const prepared = idCheck.kind !== "invalid" && workspaces
+        ? await (async () => {
+          try {
+            const existing = await controller.getSource(idCheck.value);
+            const authority = await workspaces.captureManagementAuthority(existing.source.workspaceId)
+              .then(
+                (value) => ({ ok: true as const, value }),
+                (error: unknown) => ({ ok: false as const, error }),
+              );
+            return { ok: true as const, existing, authority };
+          } catch (error) {
+            return { ok: false as const, error };
+          }
+        })()
+        : undefined;
+      const auth = await authorizeDeployControl(c, dependencies);
+      if (!auth.ok) return auth.response;
+      if (idCheck.kind === "invalid") return idCheck.response;
+      return await runHandler(c, async () => {
+        if (!workspaces) {
+          throw new OpenTofuControllerError("not_implemented", "workspace management not wired");
+        }
+        if (!prepared) throw new Error("Compatibility admission was not captured");
+        if (!prepared.ok) throw prepared.error;
+        ensureWorkspacePermission(auth.principal, prepared.existing.source.workspaceId);
         const body =
           await readOptionalJsonBody<CreateSourceCompatibilityCheckRequest>(
             c,
@@ -270,15 +294,16 @@ export function mountDeployControlSourceRoutes(
             "modulePath must be a safe relative path inside the SourceSnapshot",
           );
         }
+        if (!prepared.authority.ok) throw prepared.authority.error;
         return c.json(
-          await controller.createSourceCompatibilityCheck(id, {
+          await controller.createSourceCompatibilityCheck(idCheck.value, {
             ...request,
             ...(modulePath ? { modulePath } : {}),
-          }),
+          }, { kind: "captured", authority: prepared.authority.value }),
           201,
         );
-      },
-    }),
+      });
+    },
   );
 
   app.get(

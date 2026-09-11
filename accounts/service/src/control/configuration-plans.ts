@@ -273,6 +273,7 @@ export async function handleCapsuleConfigurationPlans(
     sourceSnapshot: sourceContext.sourceSnapshot,
     installConfigId: authority.installConfig.id,
     modulePath: moduleSelection.modulePath,
+    expectedWorkspaceManagementAuthority,
     evidence,
   });
   const compatibilityPolicy = evaluateCompatibilityReportAgainstPolicy(
@@ -587,6 +588,7 @@ async function finishConfigurationPlan(input: {
       sourceSnapshot,
       installConfigId: input.target.id,
       modulePath: input.target.modulePath,
+      expectedWorkspaceManagementAuthority,
       evidence,
     });
     assertConfigurationCompatibilityPolicy(compatibility, input.target);
@@ -667,6 +669,7 @@ async function finishConfigurationPlan(input: {
       sourceSnapshot,
       installConfigId: input.target.id,
       modulePath: input.target.modulePath,
+      expectedWorkspaceManagementAuthority,
       evidence,
     });
     assertConfigurationCompatibilityPolicy(compatibility, input.target);
@@ -895,6 +898,7 @@ async function createOrObserveCompatibilityEvidence(input: {
   readonly sourceSnapshot: SourceSnapshot;
   readonly installConfigId: string;
   readonly modulePath: string;
+  readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
   readonly evidence: ConfigurationEvidenceIdentity;
 }): Promise<CapsuleCompatibilityReportResponse> {
   const request: InstallPlanCompatibilityCheckRequest = {
@@ -911,6 +915,10 @@ async function createOrObserveCompatibilityEvidence(input: {
     .createSourceCompatibilityCheck(
       input.source.id,
       request,
+      {
+        kind: "captured",
+        authority: input.expectedWorkspaceManagementAuthority,
+      },
     );
   const { report, run } = compatibility;
   if (

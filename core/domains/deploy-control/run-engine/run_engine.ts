@@ -103,7 +103,10 @@ import {
 } from "../../connections/mod.ts";
 import type { ActivityRecorder } from "../../activity/mod.ts";
 import type { RecordActivityInput } from "../../activity/mod.ts";
-import type { SourcesService } from "../../sources/mod.ts";
+import type {
+  CompatibilityCheckManagementContext,
+  SourcesService,
+} from "../../sources/mod.ts";
 import {
   collectRootModuleOutputDeclarations,
   collectRootModuleVariableNames,
@@ -2713,6 +2716,10 @@ export class RunEngine {
               source,
               snapshot,
               installConfig.modulePath,
+              {
+                kind: "captured",
+                authority: workspaceManagementAuthority ?? null,
+              },
             ),
           );
     const {
@@ -3042,7 +3049,8 @@ export class RunEngine {
     capsule: Capsule,
     source: Source,
     snapshot: SourceSnapshot,
-    modulePath?: string,
+    modulePath: string | undefined,
+    managementContext: CompatibilityCheckManagementContext,
   ): Promise<CapsuleCompatibilityReport | undefined> {
     const existing = capsule.compatibilityReportId
       ? await this.#store.getCapsuleCompatibilityReport(
@@ -3108,6 +3116,7 @@ export class RunEngine {
         capsuleId: capsule.id,
         ...(modulePath ? { modulePath } : {}),
       },
+      managementContext,
     );
     this.#assertCompatibilityReportRunnable(report, policy);
     await this.#recordCapsuleCompatibility(capsule, report);
@@ -5480,6 +5489,11 @@ export class RunEngine {
       );
     }
     const source = await this.#requireSourceForCapsule(capsule);
+    const managementAuthority = await this.#store.getRunManagementAuthority({
+      id: planRun.id,
+      workspaceId: planRun.workspaceId,
+      kind: "plan",
+    });
     const report = await this.#ensureCapsuleCompatibilityReport(
       capsule,
       source,
@@ -5487,6 +5501,10 @@ export class RunEngine {
       planRun.source.kind === "operator_module"
         ? undefined
         : planRun.source.modulePath,
+      {
+        kind: "captured",
+        authority: managementAuthority ?? null,
+      },
     );
     if (!report) return planRun;
     const updated: PlanRun = {

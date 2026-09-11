@@ -520,6 +520,10 @@ async function analyzeRevisionCompatibility(
   const compatibility = await operations.createSourceCompatibilityCheck(
     identity.source.id,
     request,
+    {
+      kind: "captured",
+      authority: plan.workspaceManagementAuthority ?? null,
+    },
   );
   assertRevisionCompatibilityMatches({
     compatibility,

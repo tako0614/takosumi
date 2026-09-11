@@ -181,6 +181,26 @@ function backupRun(
   };
 }
 
+function compatibilityRun(
+  id: string,
+  workspaceId: string,
+  overrides: Partial<Run> = {},
+): Run {
+  return {
+    id,
+    workspaceId,
+    sourceId: `source-${workspaceId}`,
+    capsuleId: `capsule-${id}`,
+    type: "compatibility_check",
+    status: "running",
+    sourceSnapshotId: `snapshot-${id}`,
+    createdBy: "compatibility-test",
+    createdAt: "2026-09-08T00:00:00.000Z",
+    startedAt: "2026-09-08T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
 function backupRecord(run: Run, id: string): BackupRecord {
   return {
     id,
@@ -686,6 +706,61 @@ test("manual Backup admission is create-only and rejects stale authority across 
       status: "created",
       run: fresh,
     });
+  }
+});
+
+test("Compatibility admission is create-only and fences the original Workspace epoch across adapters", async () => {
+  for (const { label, store, reopen, resumeManagement } of await adapters()) {
+    const ws = workspace(`compatibility-admission-${label}`);
+    await store.putWorkspace(ws);
+    const original: WorkspaceManagementAuthority = {
+      workspaceId: ws.id,
+      managementState: "active",
+      managementEpoch: 1,
+    };
+    const run = compatibilityRun(`compatibility-run-${label}`, ws.id);
+    const created = await store.beginCompatibilityCheckRun(run, original);
+    expect(created, label).toEqual({ status: "created", run });
+    if (created.status !== "created") throw new Error("Compatibility admission did not create");
+    expect(Object.prototype.hasOwnProperty.call(created.run, "workspaceManagementAuthority"), label).toBe(false);
+    expect(await reopen().getCompatibilityCheckRun(run.id), label).toEqual(run);
+
+    expect(await store.beginWorkspaceDraining(ws.id, original), label).toMatchObject({
+      status: "started",
+      management: { managementState: "draining", managementEpoch: 2 },
+    });
+
+    // An already-admitted analysis may be observed again while the Workspace
+    // drains; the original active tuple is the replay fence.
+    expect(
+      await reopen().beginCompatibilityCheckRun(run, original),
+      `${label}: running replay while draining`,
+    ).toEqual({ status: "existing", run });
+
+    const absent = compatibilityRun(`compatibility-absent-${label}`, ws.id);
+    await expect(
+      reopen().beginCompatibilityCheckRun(absent, original),
+      `${label}: fresh id while draining`,
+    ).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    expect(await reopen().getCompatibilityCheckRun(absent.id), label).toBeUndefined();
+
+    // Durable adapters expose the resumed N=3 tuple. It must not adopt the
+    // old row, even when the caller supplies the current authority under the
+    // occupied Run id.
+    if (resumeManagement === undefined) continue;
+    await resumeManagement(ws.id);
+    const resumed = reopen();
+    const current = await resumed.getWorkspaceManagement(ws.id);
+    expect(current, label).toEqual({
+      workspaceId: ws.id,
+      managementState: "active",
+      managementEpoch: 3,
+    });
+    expect(
+      await resumed.beginCompatibilityCheckRun(run, current!),
+      `${label}: current epoch cannot adopt old run`,
+    ).toEqual({ status: "conflict" });
+    expect(await resumed.getCompatibilityCheckRun(run.id), label).toEqual(run);
   }
 });
 
