@@ -86,6 +86,8 @@ import type {
   BeginApplyRunResult,
   BeginBackupRunResult,
   BeginCompatibilityCheckRunResult,
+  CommitCompatibilityCheckRunInput,
+  CommitCompatibilityCheckRunResult,
   CommitBackupRunInput,
   CommitBackupRunResult,
   BeginRestoreRunResult,
@@ -150,6 +152,9 @@ import {
   assertWorkspaceManagementAuthorityInput,
   assertCompatibilityCheckRunAdmissionInput,
   compatibilityCheckRunAdmissionMatches,
+  compatibilityCheckReportForStorage,
+  assertCommitCompatibilityCheckRunInput,
+  compatibilityCheckRunCommitDisposition,
   assertCommitBackupRunInput,
   backupRunCommitDisposition,
   prepareConnectionExpiration,
@@ -273,6 +278,14 @@ class BackupCommitConflictError extends Error {
   constructor() {
     super("manual Backup settlement conflict");
     this.name = "BackupCommitConflictError";
+  }
+}
+
+/** Internal transaction abort used when a compatibility settlement CAS loses. */
+class CompatibilityCheckCommitConflictError extends Error {
+  constructor() {
+    super("compatibility Check settlement conflict");
+    this.name = "CompatibilityCheckCommitConflictError";
   }
 }
 
@@ -1929,6 +1942,206 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         ? { status: "existing" as const, run: publicStoredRun(current) as Run }
         : { status: "conflict" as const };
     });
+  }
+
+  async commitCompatibilityCheckRun(
+    input: CommitCompatibilityCheckRunInput,
+  ): Promise<CommitCompatibilityCheckRunResult> {
+    // Settlement data is caller-owned. Clone and project the report before
+    // the first asynchronous operation so a later caller mutation cannot
+    // alter the CAS candidate or the returned replay value.
+    input = structuredClone(input);
+    input = {
+      ...input,
+      report: compatibilityCheckReportForStorage(input.report),
+    };
+    assertCommitCompatibilityCheckRunInput(input);
+
+    try {
+      return await this.#client.transaction(async (transaction) => {
+        // Workspace is the outer lock for every settlement. The mutable
+        // Workspace state is intentionally observational here: an admitted
+        // analysis may finish while management is draining or frozen.
+        await pgWorkspaceManagementForTransaction(
+          transaction,
+          input.expectedRunningRun.workspaceId,
+        );
+
+        const runRows = await transaction.query<PgCompatibilitySettlementRunRow>(
+          `select id,
+                  kind,
+                  space_id as "workspaceId",
+                  source_id as "sourceId",
+                  installation_id as "capsuleId",
+                  status,
+                  lease_token as "leaseToken",
+                  heartbeat_at as "heartbeatAt",
+                  created_at as "createdAt",
+                  run_json as "runJson"
+             from takosumi_runs
+            where id = $1
+            for update`,
+          [input.expectedRunningRun.id],
+        );
+        const runRow = runRows.rows[0];
+        const current = runRow
+          ? pgCompatibilityRunFromAdmissionRow(runRow)
+          : undefined;
+        if (runRow !== undefined && current === undefined) {
+          return { status: "conflict" as const };
+        }
+        if (runRow === undefined || current === undefined) {
+          return { status: "conflict" as const };
+        }
+
+        const reportRows = await transaction.query<PgCompatibilitySettlementReportRow>(
+          `select id,
+                  source_id as "sourceId",
+                  installation_id as "capsuleId",
+                  source_snapshot_id as "sourceSnapshotId",
+                  module_path as "modulePath",
+                  level,
+                  findings_json as "findingsJson",
+                  providers_json as "providersJson",
+                  resources_json as "resourcesJson",
+                  data_sources_json as "dataSourcesJson",
+                  provisioners_json as "provisionersJson",
+                  root_module_variables_json as "rootModuleVariablesJson",
+                  root_module_variable_declarations_json as "rootModuleVariableDeclarationsJson",
+                  root_module_outputs_json as "rootModuleOutputsJson",
+                  created_at as "createdAt"
+             from takosumi_capsule_compatibility_reports
+            where id = $1
+            for update`,
+          [input.report.id],
+        );
+        const reportRow = reportRows.rows[0];
+        const currentReport = reportRow === undefined
+          ? undefined
+          : pgCompatibilityReportFromSettlementRow(reportRow);
+        if (reportRow !== undefined && currentReport === undefined) {
+          return { status: "conflict" as const };
+        }
+
+        const disposition = compatibilityCheckRunCommitDisposition(
+          current,
+          currentReport,
+          input,
+        );
+        if (disposition === "conflict") {
+          return { status: "conflict" as const };
+        }
+        if (disposition === "replay") {
+          // A replay is read-only. Returning the parsed durable projection
+          // avoids blessing a caller payload when optional storage defaults
+          // differ in representation.
+          return {
+            status: "replayed" as const,
+            run: publicStoredRun(input.terminalRun),
+            report: currentReport!,
+          };
+        }
+
+        // Validate the transition against the locked durable authority. The
+        // SQL expression below preserves that same private tuple atomically;
+        // caller-injected metadata is never written.
+        const storedTerminal = preserveStoredRunManagementAuthority(
+          input.terminalRun,
+          current,
+        );
+        const terminal = publicStoredRun(storedTerminal);
+        const report = input.report;
+        const providerGraph = storedCapsuleCompatibilityProviderGraph(report);
+        const insertedReport = await transaction.query<{ readonly id: string }>(
+          `insert into takosumi_capsule_compatibility_reports
+            (id, source_id, installation_id, source_snapshot_id, module_path,
+             level, findings_json, providers_json, resources_json,
+             data_sources_json, provisioners_json, root_module_variables_json,
+             root_module_variable_declarations_json, root_module_outputs_json,
+             created_at)
+           values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb,
+                   $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb,
+                   $14::jsonb, $15)
+           on conflict (id) do nothing
+           returning id`,
+          [
+            report.id,
+            report.sourceId,
+            report.capsuleId ?? null,
+            report.sourceSnapshotId,
+            report.modulePath ?? null,
+            report.level,
+            JSON.stringify(report.findings),
+            JSON.stringify(providerGraph),
+            JSON.stringify(report.resources),
+            JSON.stringify(report.dataSources),
+            JSON.stringify(report.provisioners),
+            JSON.stringify(report.rootModuleVariables ?? []),
+            report.rootModuleVariableDeclarations === undefined
+              ? null
+              : JSON.stringify(report.rootModuleVariableDeclarations),
+            JSON.stringify(report.rootModuleOutputs ?? []),
+            report.createdAt,
+          ],
+        );
+        if (insertedReport.rows.length === 0) {
+          // The report id was occupied after the observational read. Roll the
+          // whole transaction back rather than turning the collision into a
+          // terminal Run update.
+          throw new CompatibilityCheckCommitConflictError();
+        }
+
+        const updated = await transaction.query<{ readonly id: string }>(
+          `update takosumi_runs as run
+              set status = $1,
+                  lease_token = null,
+                  heartbeat_at = $2,
+                  run_json = $3::jsonb || case
+                    when run.run_json ? 'workspaceManagementAuthority'
+                      then jsonb_build_object(
+                        'workspaceManagementAuthority',
+                        run.run_json -> 'workspaceManagementAuthority'
+                      )
+                    else '{}'::jsonb
+                  end
+            where run.id = $4
+              and run.kind = 'compatibility_check'
+              and run.space_id = $5
+              and run.source_id is not distinct from $6
+              and run.installation_id is not distinct from $7
+              and run.status = 'running'
+              and run.lease_token is null
+              and run.heartbeat_at is not distinct from $2
+              and run.created_at = $8
+              and run.run_json = $9::jsonb
+           returning run.id`,
+          [
+            terminal.status,
+            terminal.heartbeatAt ?? null,
+            JSON.stringify(terminal),
+            input.expectedRunningRun.id,
+            input.expectedRunningRun.workspaceId,
+            input.expectedRunningRun.sourceId ?? null,
+            input.expectedRunningRun.capsuleId ?? null,
+            String(input.expectedRunningRun.createdAt),
+            JSON.stringify(current),
+          ],
+        );
+        if (updated.rows.length === 0) {
+          throw new CompatibilityCheckCommitConflictError();
+        }
+        return {
+          status: "committed" as const,
+          run: terminal,
+          report,
+        };
+      });
+    } catch (error) {
+      if (error instanceof CompatibilityCheckCommitConflictError) {
+        return { status: "conflict" };
+      }
+      throw error;
+    }
   }
 
   async putBackupRun(run: Run): Promise<Run> {
@@ -7898,8 +8111,31 @@ interface PgCompatibilityAdmissionRow extends Record<string, unknown> {
   readonly capsuleId: string | null;
   readonly status: string;
   readonly leaseToken: string | null;
+  readonly heartbeatAt?: number | null;
   readonly createdAt: string;
   readonly runJson: unknown;
+}
+
+interface PgCompatibilitySettlementRunRow extends PgCompatibilityAdmissionRow {
+  readonly heartbeatAt: number | null;
+}
+
+interface PgCompatibilitySettlementReportRow extends Record<string, unknown> {
+  readonly id: string;
+  readonly sourceId: string | null;
+  readonly capsuleId: string | null;
+  readonly sourceSnapshotId: string;
+  readonly modulePath: string | null;
+  readonly level: string;
+  readonly findingsJson: unknown;
+  readonly providersJson: unknown;
+  readonly resourcesJson: unknown;
+  readonly dataSourcesJson: unknown;
+  readonly provisionersJson: unknown;
+  readonly rootModuleVariablesJson: unknown;
+  readonly rootModuleVariableDeclarationsJson: unknown;
+  readonly rootModuleOutputsJson: unknown;
+  readonly createdAt: string;
 }
 
 /** Parse one locked compatibility Run while rejecting physical/JSON drift. */
@@ -7924,11 +8160,70 @@ function pgCompatibilityRunFromAdmissionRow(
       run.type === RUN_KIND_COMPATIBILITY_CHECK &&
       run.status === row.status &&
       row.leaseToken === null &&
+      (row.heartbeatAt === undefined ||
+        (row.heartbeatAt === null
+          ? run.heartbeatAt === undefined || run.heartbeatAt === null
+          : run.heartbeatAt === row.heartbeatAt)) &&
       run.createdAt === row.createdAt &&
       nullablePhysicalMatches(run.sourceId, row.sourceId) &&
       nullablePhysicalMatches(run.capsuleId, row.capsuleId)
     ? value as StoredRunRecord
     : undefined;
+}
+
+/** Parse one compatibility report while rejecting malformed persisted JSON. */
+function pgCompatibilityReportFromSettlementRow(
+  row: PgCompatibilitySettlementReportRow,
+): CapsuleCompatibilityReport | undefined {
+  try {
+    const findings = parseJson(row.findingsJson);
+    const resources = parseJson(row.resourcesJson);
+    const dataSources = parseJson(row.dataSourcesJson);
+    const provisioners = parseJson(row.provisionersJson);
+    const rootModuleVariables = parseJson(row.rootModuleVariablesJson);
+    const rootModuleOutputs = parseJson(row.rootModuleOutputsJson);
+    if (
+      !Array.isArray(findings) || !Array.isArray(resources) ||
+      !Array.isArray(dataSources) || !Array.isArray(provisioners) ||
+      !Array.isArray(rootModuleVariables) || !Array.isArray(rootModuleOutputs) ||
+      typeof row.id !== "string" || typeof row.sourceSnapshotId !== "string" ||
+      typeof row.createdAt !== "string"
+    ) {
+      return undefined;
+    }
+    const providerGraph = parseStoredCapsuleCompatibilityProviderGraph(
+      parseJson(row.providersJson),
+    );
+    const report = {
+      id: row.id,
+      sourceId: compatibilityReportSourceId(row.sourceId),
+      ...(row.capsuleId ? { capsuleId: row.capsuleId } : {}),
+      sourceSnapshotId: row.sourceSnapshotId,
+      ...(row.modulePath ? { modulePath: row.modulePath } : {}),
+      level: normalizeStoredCapsuleCompatibilityLevel(row.level),
+      findings: findings as CapsuleCompatibilityReport["findings"],
+      ...providerGraph,
+      resources: resources as CapsuleCompatibilityReport["resources"],
+      dataSources: dataSources as CapsuleCompatibilityReport["dataSources"],
+      provisioners: provisioners as CapsuleCompatibilityReport["provisioners"],
+      rootModuleVariables:
+        rootModuleVariables as CapsuleCompatibilityReport["rootModuleVariables"],
+      ...(row.rootModuleVariableDeclarationsJson === null
+        ? {}
+        : {
+            rootModuleVariableDeclarations:
+              parseStoredCapsuleRootModuleVariableDeclarations(
+                parseJson(row.rootModuleVariableDeclarationsJson),
+              ),
+          }),
+      rootModuleOutputs:
+        rootModuleOutputs as CapsuleCompatibilityReport["rootModuleOutputs"],
+      createdAt: row.createdAt,
+    } satisfies CapsuleCompatibilityReport;
+    return compatibilityCheckReportForStorage(report);
+  } catch {
+    return undefined;
+  }
 }
 
 interface PgBackupSettlementRunRow extends Record<string, unknown> {

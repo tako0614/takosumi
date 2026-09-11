@@ -822,7 +822,7 @@ export class SourcesService {
     const { snapshot, workspaceId } = input;
     const runId = input.installPlanIdentity?.runId ?? this.#newId("ccr");
     const reportId = input.installPlanIdentity?.reportId ?? this.#newId("caprep");
-    const recovered = input.installPlanIdentity
+    const recover = async () => input.installPlanIdentity
       ? await this.#recoverInstallPlanCompatibilityEvidence({
           ...input,
           runId,
@@ -830,6 +830,7 @@ export class SourcesService {
           createdBy: input.installPlanIdentity.createdBy,
         })
       : undefined;
+    const recovered = await recover();
     if (recovered) return recovered;
     if (!input.authority) throw workspaceManagementAdmissionErrorFor();
 
@@ -899,7 +900,6 @@ export class SourcesService {
       rootModuleOutputs: analysis.rootModuleOutputs,
       createdAt: this.#now().toISOString(),
     };
-    await this.#store.putCapsuleCompatibilityReport(report);
     const succeededRun: Run = {
       ...activeRun,
       status: analysisAttempt.errorCode ? "failed" : "succeeded",
@@ -909,8 +909,38 @@ export class SourcesService {
         : {}),
       finishedAt: this.#now().toISOString(),
     };
-    await this.#store.putCompatibilityCheckRun(succeededRun);
-    return { report, run: succeededRun };
+    let settlement;
+    try {
+      settlement = await this.#store.commitCompatibilityCheckRun({
+        expectedRunningRun: activeRun,
+        terminalRun: succeededRun,
+        report,
+      });
+    } catch (error) {
+      // A lost commit acknowledgement is not a failed analysis. Only exact
+      // deterministic terminal evidence may resolve it; otherwise retain the
+      // original storage error without writing a second outcome.
+      try {
+        const committed = await recover();
+        if (committed) return committed;
+      } catch {
+        // An incomplete or unavailable readback cannot resolve the commit.
+      }
+      throw error;
+    }
+    if (settlement.status === "conflict") {
+      // Concurrent analyses can finish with different timestamps or results.
+      // Return the already-committed canonical pair, never rewrite it using
+      // this attempt's report or make unequal candidates into store replays.
+      const committed = await recover();
+      if (committed) return committed;
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "compatibility analysis result could not be committed",
+        { reason: "compatibility_evidence_identity_conflict" },
+      );
+    }
+    return { report: settlement.report, run: settlement.run };
   }
 
   async #recoverInstallPlanCompatibilityEvidence(input: {
@@ -951,10 +981,15 @@ export class SourcesService {
       return undefined;
     }
     if (run.status === "running") {
-      // The report write may have committed before the terminal Run update.
-      // Admission still requires the same stored original authority. Atomic
-      // report/terminal settlement is a separate, unresolved storage boundary.
-      return undefined;
+      // Retained partial evidence is not permission to repeat the analysis
+      // or replace its report. A concurrent terminal commit can also make
+      // these independent reads temporarily incomplete; a later exact replay
+      // may observe it, but this invocation must not repair either record.
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "install-plan compatibility evidence is incomplete",
+        { reason: "compatibility_evidence_incomplete" },
+      );
     }
     if (
       (run.status !== "succeeded" && run.status !== "failed") ||

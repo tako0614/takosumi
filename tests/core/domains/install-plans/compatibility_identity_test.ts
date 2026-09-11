@@ -7,7 +7,11 @@ import {
   SourcesService,
   type InstallPlanCompatibilityCheckRequest,
 } from "../../../../core/domains/sources/mod.ts";
-import type { CapsuleCompatibilityAnalyzer } from "../../../../core/domains/sources/capsule_compatibility.ts";
+import type {
+  CapsuleCompatibilityAnalysis,
+  CapsuleCompatibilityAnalyzer,
+} from "../../../../core/domains/sources/capsule_compatibility.ts";
+import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { Run } from "takosumi-contract/runs";
 
 function deferred<T>(): {
@@ -37,6 +41,27 @@ class PausingCompatibilityEvidenceReadStore extends InMemoryOpenTofuControlStore
       await this.releaseEvidenceRead.promise;
     }
     return await super.getCompatibilityCheckRun(id);
+  }
+}
+
+class LostCompatibilitySettlementAcknowledgementStore extends InMemoryOpenTofuControlStore {
+  commitAttempts = 0;
+  committedBeforeAcknowledgementLoss = false;
+  #loseNextAcknowledgement = true;
+
+  override async commitCompatibilityCheckRun(
+    input: Parameters<
+      InMemoryOpenTofuControlStore["commitCompatibilityCheckRun"]
+    >[0],
+  ) {
+    this.commitAttempts += 1;
+    const result = await super.commitCompatibilityCheckRun(input);
+    if (this.#loseNextAcknowledgement) {
+      this.#loseNextAcknowledgement = false;
+      this.committedBeforeAcknowledgementLoss = true;
+      throw new Error("simulated lost compatibility settlement acknowledgement");
+    }
+    return result;
   }
 }
 
@@ -258,6 +283,207 @@ test("authorityless running install-plan compatibility evidence is never resumed
   expect(
     await store.getCapsuleCompatibilityReport(request.installPlanIdentity.reportId),
   ).toBeUndefined();
+});
+
+test("partial install-plan compatibility evidence fails closed without rerunning analysis", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let analysisCount = 0;
+  const { service, source, sync, request: baseRequest } =
+    await seedCompatibilityIdentityFixture(
+      store,
+      readyCompatibilityAnalyzer(() => {
+        analysisCount += 1;
+      }),
+    );
+  const capsuleId = "cap_partial_identity";
+  await store.putCapsule({
+    id: capsuleId,
+    workspaceId: source.workspaceId,
+    projectId: "project_partial_identity",
+    name: "partial-identity",
+    slug: "partial-identity",
+    sourceId: source.id,
+    installConfigId: "cfg-default-opentofu-capsule",
+    environment: "production",
+    currentStateGeneration: 0,
+    status: "active",
+    createdAt: "2026-08-21T00:00:00.000Z",
+    updatedAt: "2026-08-21T00:00:00.000Z",
+  });
+  const request = { ...baseRequest, capsuleId };
+  const originalAuthority = {
+    workspaceId: source.workspaceId,
+    managementState: "active" as const,
+    managementEpoch: 1,
+  };
+  const running: Run = {
+    id: request.installPlanIdentity.runId,
+    workspaceId: source.workspaceId,
+    sourceId: source.id,
+    capsuleId,
+    type: "compatibility_check",
+    status: "running",
+    sourceSnapshotId: sync.snapshotId,
+    createdBy: request.installPlanIdentity.createdBy,
+    createdAt: "2026-08-21T00:00:00.000Z",
+    startedAt: "2026-08-21T00:00:00.000Z",
+  };
+  expect(
+    await store.beginCompatibilityCheckRun(running, originalAuthority),
+  ).toEqual({ status: "created", run: running });
+  const partialReport: CapsuleCompatibilityReport = {
+    id: request.installPlanIdentity.reportId,
+    sourceId: source.id,
+    capsuleId,
+    sourceSnapshotId: sync.snapshotId!,
+    modulePath: ".",
+    level: "needs_patch",
+    findings: [
+      {
+        severity: "warning",
+        compatibilityImpact: "needs_patch",
+        code: "partial-evidence-sentinel",
+        message: "retain this partial evidence",
+      },
+    ],
+    providerPackages: [],
+    rootProviderRequirements: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    rootModuleVariables: [],
+    rootModuleVariableDeclarations: [],
+    rootModuleOutputs: [],
+    createdAt: "2026-08-21T00:00:00.000Z",
+  };
+  await store.putCapsuleCompatibilityReport(partialReport);
+  const beforeRun = await store.getCompatibilityCheckRun(running.id);
+  const beforeReport = await store.getCapsuleCompatibilityReport(partialReport.id);
+  const beforeSource = await store.getSource(source.id);
+
+  await expect(
+    service.createCompatibilityCheck(source.id, request, {
+      kind: "captured",
+      authority: originalAuthority,
+    }),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "compatibility_evidence_incomplete" },
+  });
+  expect(analysisCount).toBe(0);
+  expect(await store.getCompatibilityCheckRun(running.id)).toEqual(beforeRun);
+  expect(await store.getCapsuleCompatibilityReport(partialReport.id)).toEqual(
+    beforeReport,
+  );
+  expect(await store.getSource(source.id)).toEqual(beforeSource);
+});
+
+test("concurrent install-plan compatibility calls return the first terminal evidence", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const firstAnalyzing = deferred<void>();
+  const secondAnalyzing = deferred<void>();
+  const releaseFirst = deferred<void>();
+  const releaseSecond = deferred<void>();
+  let analysisCount = 0;
+  const analysis = (
+    level: CapsuleCompatibilityAnalysis["level"],
+    code: string,
+  ): CapsuleCompatibilityAnalysis => ({
+    level,
+    findings: [
+      {
+        severity: "info",
+        compatibilityImpact: "none",
+        code,
+        message: code,
+      },
+    ],
+    providerPackages: [],
+    rootProviderRequirements: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    rootModuleVariables: [],
+    rootModuleVariableDeclarations: [],
+    rootModuleOutputs: [],
+  });
+  const analyzer: CapsuleCompatibilityAnalyzer = {
+    async analyze() {
+      analysisCount += 1;
+      if (analysisCount === 1) {
+        firstAnalyzing.resolve();
+        await releaseFirst.promise;
+        return analysis("ready", "first-analysis");
+      }
+      secondAnalyzing.resolve();
+      await releaseSecond.promise;
+      return analysis("needs_patch", "second-analysis");
+    },
+  };
+  const { service, source, request } = await seedCompatibilityIdentityFixture(
+    store,
+    analyzer,
+  );
+  const originalAuthority = {
+    workspaceId: source.workspaceId,
+    managementState: "active" as const,
+    managementEpoch: 1,
+  };
+  const firstCall = service.createCompatibilityCheck(source.id, request, {
+    kind: "captured",
+    authority: originalAuthority,
+  });
+  await firstAnalyzing.promise;
+  const secondCall = service.createCompatibilityCheck(source.id, request, {
+    kind: "captured",
+    authority: originalAuthority,
+  });
+  await secondAnalyzing.promise;
+
+  releaseFirst.resolve();
+  const first = await firstCall;
+  releaseSecond.resolve();
+  const second = await secondCall;
+
+  expect(analysisCount).toBe(2);
+  expect(second).toEqual(first);
+  expect(first.report.findings[0]?.code).toBe("first-analysis");
+  expect(first.run.status).toBe("succeeded");
+  expect(await store.getCompatibilityCheckRun(first.run.id)).toEqual(first.run);
+  expect(
+    await store.getCapsuleCompatibilityReport(first.report.id),
+  ).toEqual(first.report);
+});
+
+test("lost compatibility settlement acknowledgement returns the committed terminal pair", async () => {
+  const store = new LostCompatibilitySettlementAcknowledgementStore();
+  let analysisCount = 0;
+  const { service, source, request } = await seedCompatibilityIdentityFixture(
+    store,
+    readyCompatibilityAnalyzer(() => {
+      analysisCount += 1;
+    }),
+  );
+  const originalAuthority = {
+    workspaceId: source.workspaceId,
+    managementState: "active" as const,
+    managementEpoch: 1,
+  };
+
+  const result = await service.createCompatibilityCheck(source.id, request, {
+    kind: "captured",
+    authority: originalAuthority,
+  });
+
+  expect(store.commitAttempts).toBe(1);
+  expect(store.committedBeforeAcknowledgementLoss).toBe(true);
+  expect(analysisCount).toBe(1);
+  expect(result.run.status).toBe("succeeded");
+  expect(result.run.errorCode).toBeUndefined();
+  expect(await store.getCompatibilityCheckRun(result.run.id)).toEqual(result.run);
+  expect(await store.getCapsuleCompatibilityReport(result.report.id)).toEqual(
+    result.report,
+  );
 });
 
 test("install-plan compatibility identity canonically recovers one exact analysis", async () => {

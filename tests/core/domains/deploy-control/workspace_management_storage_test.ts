@@ -7,10 +7,12 @@ import type {
   SourceSnapshot,
   SourceSyncRun,
 } from "takosumi-contract/sources";
+import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { Run } from "takosumi-contract/runs";
 import type { Workspace } from "takosumi-contract/workspaces";
 import {
   type CommitBackupRunInput,
+  type CommitCompatibilityCheckRunInput,
   InMemoryOpenTofuControlStore,
   WorkspaceManagementAdmissionConflictError,
   capsuleLifecycleExpected,
@@ -761,6 +763,107 @@ test("Compatibility admission is create-only and fences the original Workspace e
       `${label}: current epoch cannot adopt old run`,
     ).toEqual({ status: "conflict" });
     expect(await resumed.getCompatibilityCheckRun(run.id), label).toEqual(run);
+  }
+});
+
+test("Compatibility settlement commits an admitted Run and report atomically while draining", async () => {
+  for (const { label, store, reopen } of await adapters()) {
+    const ws = workspace(`compatibility-settlement-${label}`);
+    await store.putWorkspace(ws);
+    const authority: WorkspaceManagementAuthority = {
+      workspaceId: ws.id,
+      managementState: "active",
+      managementEpoch: 1,
+    };
+    const running = compatibilityRun(
+      `compatibility-settlement-${label}`,
+      ws.id,
+      { capsuleId: undefined },
+    );
+    expect(
+      await store.beginCompatibilityCheckRun(running, authority),
+      label,
+    ).toEqual({ status: "created", run: running });
+    expect(await store.beginWorkspaceDraining(ws.id, authority), label).toMatchObject({
+      status: "started",
+      management: { managementState: "draining", managementEpoch: 2 },
+    });
+
+    const report: CapsuleCompatibilityReport = {
+      id: `caprep-settlement-${label}`,
+      sourceId: running.sourceId!,
+      sourceSnapshotId: running.sourceSnapshotId!,
+      level: "ready",
+      findings: [
+        {
+          severity: "info",
+          compatibilityImpact: "none",
+          code: "settlement-sentinel",
+          message: "must remain exact",
+        },
+      ],
+      providerPackages: [],
+      rootProviderRequirements: [],
+      resources: [],
+      dataSources: [],
+      provisioners: [],
+      createdAt: "2026-09-08T00:00:01.000Z",
+    };
+    const persistedReport: CapsuleCompatibilityReport = {
+      ...report,
+      rootModuleVariables: [],
+      rootModuleOutputs: [],
+    };
+    const terminal: Run = {
+      ...running,
+      status: "succeeded",
+      compatibilityReportId: report.id,
+      finishedAt: "2026-09-08T00:00:02.000Z",
+    };
+    const input: CommitCompatibilityCheckRunInput = {
+      expectedRunningRun: running,
+      terminalRun: terminal,
+      report,
+    };
+    const committed = await store.commitCompatibilityCheckRun(input);
+    expect(committed.status, label).toBe("committed");
+    if (committed.status !== "committed") throw new Error("Compatibility settlement did not commit");
+    expect(jsonNormalized(committed.run), label).toEqual(jsonNormalized(terminal));
+    expect(jsonNormalized(committed.report), label).toEqual(jsonNormalized(persistedReport));
+    expect(jsonNormalized(await reopen().getCompatibilityCheckRun(running.id)), label).toEqual(
+      jsonNormalized(terminal),
+    );
+    expect(jsonNormalized(await reopen().getCapsuleCompatibilityReport(report.id)), label).toEqual(
+      jsonNormalized(persistedReport),
+    );
+
+    const replay = await reopen().commitCompatibilityCheckRun(input);
+    expect(jsonNormalized(replay), `${label}: exact replay`).toEqual(
+      jsonNormalized({ status: "replayed", run: terminal, report: persistedReport }),
+    );
+
+    const changedReport: CapsuleCompatibilityReport = {
+      ...report,
+      findings: [
+        {
+          ...report.findings[0]!,
+          message: "must not overwrite",
+        },
+      ],
+    };
+    expect(
+      await reopen().commitCompatibilityCheckRun({
+        ...input,
+        report: changedReport,
+      }),
+      `${label}: changed report collision`,
+    ).toEqual({ status: "conflict" });
+    expect(jsonNormalized(await reopen().getCompatibilityCheckRun(running.id)), label).toEqual(
+      jsonNormalized(terminal),
+    );
+    expect(jsonNormalized(await reopen().getCapsuleCompatibilityReport(report.id)), label).toEqual(
+      jsonNormalized(persistedReport),
+    );
   }
 });
 

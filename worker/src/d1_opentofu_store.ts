@@ -100,6 +100,8 @@ import type {
   BeginApplyRunResult,
   BeginBackupRunResult,
   BeginCompatibilityCheckRunResult,
+  CommitCompatibilityCheckRunInput,
+  CommitCompatibilityCheckRunResult,
   CommitBackupRunInput,
   CommitBackupRunResult,
   BeginRestoreRunResult,
@@ -212,6 +214,9 @@ import {
   assertWorkspaceManagementAdmission,
   assertCompatibilityCheckRunAdmissionInput,
   compatibilityCheckRunAdmissionMatches,
+  compatibilityCheckReportForStorage,
+  assertCommitCompatibilityCheckRunInput,
+  compatibilityCheckRunCommitDisposition,
   validateWorkspaceReplacement,
   assertCommitBackupRunInput,
   backupRunCommitDisposition,
@@ -1970,6 +1975,202 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       throw error;
     }
     return { status: "existing", run: publicStoredRun(current) as Run };
+  }
+
+  async commitCompatibilityCheckRun(
+    input: CommitCompatibilityCheckRunInput,
+  ): Promise<CommitCompatibilityCheckRunResult> {
+    // Clone and project caller-owned input before any await. The projection is
+    // the exact set of values persisted by the report table below.
+    input = structuredClone(input);
+    input = {
+      ...input,
+      report: compatibilityCheckReportForStorage(input.report),
+    };
+    assertCommitCompatibilityCheckRunInput(input);
+    assertD1AtomicCommitBatch(this.db, "commitCompatibilityCheckRun");
+    await this.#ensureSchema();
+
+    // These reads only classify the request. Every successful replay/commit is
+    // repeated by an in-batch sentinel guard at the same D1 boundary.
+    const runRow = await this.#orm
+      .select({
+        id: schema.runs.id,
+        type: schema.runs.type,
+        workspaceId: schema.runs.workspaceId,
+        sourceId: schema.runs.sourceId,
+        capsuleId: schema.runs.capsuleId,
+        environment: schema.runs.environment,
+        status: schema.runs.status,
+        leaseToken: schema.runs.leaseToken,
+        heartbeatAt: schema.runs.heartbeatAt,
+        createdAt: schema.runs.createdAt,
+        runJson: schema.runs.runJson,
+      })
+      .from(schema.runs)
+      .where(eq(schema.runs.id, input.expectedRunningRun.id))
+      .get();
+    const current = runRow
+      ? d1CompatibilityRunFromAdmissionRow(runRow)
+      : undefined;
+    if (runRow !== undefined && current === undefined) {
+      return { status: "conflict" };
+    }
+    if (runRow === undefined || current === undefined) {
+      return { status: "conflict" };
+    }
+
+    const reportRow = await this.#orm
+      .select({
+        id: schema.capsuleCompatibilityReports.id,
+        sourceId: schema.capsuleCompatibilityReports.sourceId,
+        capsuleId: schema.capsuleCompatibilityReports.capsuleId,
+        sourceSnapshotId: schema.capsuleCompatibilityReports.sourceSnapshotId,
+        modulePath: schema.capsuleCompatibilityReports.modulePath,
+        level: schema.capsuleCompatibilityReports.level,
+        findingsJson: schema.capsuleCompatibilityReports.findingsJson,
+        providersJson: schema.capsuleCompatibilityReports.providersJson,
+        resourcesJson: schema.capsuleCompatibilityReports.resourcesJson,
+        dataSourcesJson: schema.capsuleCompatibilityReports.dataSourcesJson,
+        provisionersJson: schema.capsuleCompatibilityReports.provisionersJson,
+        rootModuleVariablesJson:
+          schema.capsuleCompatibilityReports.rootModuleVariablesJson,
+        rootModuleVariableDeclarationsJson:
+          schema.capsuleCompatibilityReports.rootModuleVariableDeclarationsJson,
+        rootModuleOutputsJson:
+          schema.capsuleCompatibilityReports.rootModuleOutputsJson,
+        createdAt: schema.capsuleCompatibilityReports.createdAt,
+      })
+      .from(schema.capsuleCompatibilityReports)
+      .where(eq(schema.capsuleCompatibilityReports.id, input.report.id))
+      .get();
+    const currentReport = reportRow === undefined
+      ? undefined
+      : d1CompatibilityReportFromSettlementRow(reportRow);
+    if (reportRow !== undefined && currentReport === undefined) {
+      return { status: "conflict" };
+    }
+
+    const disposition = compatibilityCheckRunCommitDisposition(
+      current,
+      currentReport,
+      input,
+    );
+    if (disposition === "conflict") {
+      return { status: "conflict" };
+    }
+
+    const authority = runManagementAuthority(current);
+    if (authority === undefined) {
+      return { status: "conflict" };
+    }
+
+    if (disposition === "replay") {
+      const replayGuard = d1CompatibilitySettlementGuardStmt(
+        this.#orm,
+        input,
+        runRow,
+        reportRow,
+        authority,
+        "replay",
+      );
+      try {
+        // A valid guard selects no invalid row and performs no writes. Any
+        // changed Run/report identity aborts the batch via the sentinel.
+        await this.#orm.batch([replayGuard]);
+      } catch (error) {
+        if (isD1CompatibilityCheckCommitGuardError(error)) {
+          return { status: "conflict" };
+        }
+        throw error;
+      }
+      return {
+        status: "replayed",
+        run: publicStoredRun(input.terminalRun),
+        report: currentReport!,
+      };
+    }
+
+    // The durable authority is retained by d1RunJsonPreservingAuthority; the
+    // caller's terminal payload cannot mint or replace that private tuple.
+    const storedTerminal = preserveStoredRunManagementAuthority(
+      input.terminalRun,
+      current,
+    );
+    const terminal = publicStoredRun(storedTerminal);
+    const report = input.report;
+    const providerGraph = storedCapsuleCompatibilityProviderGraph(report);
+    const statements = [
+      // The first guard repeats the expected running Run and report absence.
+      // No current Workspace state is consulted during settlement.
+      d1CompatibilitySettlementGuardStmt(
+        this.#orm,
+        input,
+        runRow,
+        undefined,
+        authority,
+        "commit",
+      ),
+      this.#orm
+        .insert(schema.capsuleCompatibilityReports)
+        .values({
+          id: report.id,
+          sourceId: report.sourceId,
+          capsuleId: report.capsuleId ?? null,
+          sourceSnapshotId: report.sourceSnapshotId,
+          modulePath: report.modulePath ?? null,
+          level: report.level,
+          findingsJson: report.findings,
+          providersJson: providerGraph,
+          resourcesJson: report.resources,
+          dataSourcesJson: report.dataSources,
+          provisionersJson: report.provisioners,
+          rootModuleVariablesJson: report.rootModuleVariables ?? [],
+          rootModuleVariableDeclarationsJson:
+            report.rootModuleVariableDeclarations ?? null,
+          rootModuleOutputsJson: report.rootModuleOutputs ?? [],
+          createdAt: report.createdAt,
+        })
+        .onConflictDoNothing({
+          target: schema.capsuleCompatibilityReports.id,
+        }),
+      this.#orm
+        .update(schema.runs)
+        .set({
+          status: terminal.status,
+          leaseToken: null,
+          heartbeatAt: terminal.heartbeatAt ?? null,
+          runJson: d1RunJsonPreservingAuthority(terminal),
+        })
+        .where(
+          d1CompatibilityRunSettlementWhere(
+            input.expectedRunningRun,
+            runRow.runJson,
+            authority,
+          ),
+        ),
+      // D1 has no per-statement row count. This final guard detects an update
+      // miss and verifies the complete terminal Run + report pair in-batch;
+      // a failure rolls back the report insert above.
+      d1CompatibilityTerminalGuardStmt(
+        this.#orm,
+        input,
+        storedTerminal,
+        report,
+        authority,
+      ),
+    ];
+    try {
+      await this.#orm.batch(
+        statements as [(typeof statements)[number], ...typeof statements],
+      );
+    } catch (error) {
+      if (isD1CompatibilityCheckCommitGuardError(error)) {
+        return { status: "conflict" };
+      }
+      throw error;
+    }
+    return { status: "committed", run: terminal, report };
   }
 
   async putBackupRun(run: Run): Promise<Run> {
@@ -9096,6 +9297,7 @@ function assertD1AtomicCommitBatch(
     | "beginBackupRun"
     | "beginCompatibilityCheckRun"
     | "commitBackupRun"
+    | "commitCompatibilityCheckRun"
     | "beginRestoreRun"
     | "beginSourceSyncRun"
     | "createConnectionRegistration"
@@ -9179,6 +9381,14 @@ function isD1BackupCommitGuardError(error: unknown): boolean {
   // Settlement guards reuse the candidate Run id. A failed predicate either
   // collides with that existing id or selects the deliberate NULL Workspace
   // row when the Run vanished; both are ordinary CAS conflicts.
+  return error.message.includes("UNIQUE constraint failed: runs.id") ||
+    error.message.includes("constraint failed: runs.id") ||
+    error.message.includes("NOT NULL constraint failed: runs.space_id") ||
+    error.message.includes("constraint failed: runs.space_id");
+}
+
+function isD1CompatibilityCheckCommitGuardError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
   return error.message.includes("UNIQUE constraint failed: runs.id") ||
     error.message.includes("constraint failed: runs.id") ||
     error.message.includes("NOT NULL constraint failed: runs.space_id") ||
@@ -9573,8 +9783,27 @@ interface D1CompatibilityAdmissionRow {
   readonly environment: string | null;
   readonly status: string;
   readonly leaseToken: string | null;
+  readonly heartbeatAt?: number | null;
   readonly createdAt: string;
   readonly runJson: unknown;
+}
+
+interface D1CompatibilitySettlementReportRow {
+  readonly id: string;
+  readonly sourceId: string | null;
+  readonly capsuleId: string | null;
+  readonly sourceSnapshotId: string;
+  readonly modulePath: string | null;
+  readonly level: string;
+  readonly findingsJson: unknown;
+  readonly providersJson: unknown;
+  readonly resourcesJson: unknown;
+  readonly dataSourcesJson: unknown;
+  readonly provisionersJson: unknown;
+  readonly rootModuleVariablesJson: unknown;
+  readonly rootModuleVariableDeclarationsJson: unknown;
+  readonly rootModuleOutputsJson: unknown;
+  readonly createdAt: string;
 }
 
 /** Parse one compatibility Run while rejecting physical/JSON identity drift. */
@@ -9591,6 +9820,10 @@ function d1CompatibilityRunFromAdmissionRow(
     generic?.type !== RUN_KIND_COMPATIBILITY_CHECK ||
     run.status !== row.status ||
     row.leaseToken !== null ||
+    !(row.heartbeatAt === undefined ||
+      (row.heartbeatAt === null
+        ? run.heartbeatAt === undefined || run.heartbeatAt === null
+        : run.heartbeatAt === row.heartbeatAt)) ||
     run.createdAt !== row.createdAt ||
     !d1BackupNullablePhysicalMatches(generic?.sourceId, row.sourceId) ||
     !d1BackupNullablePhysicalMatches(generic?.capsuleId, row.capsuleId) ||
@@ -9599,6 +9832,77 @@ function d1CompatibilityRunFromAdmissionRow(
     return undefined;
   }
   return run;
+}
+
+/** Parse one compatibility report while rejecting malformed persisted JSON. */
+function d1CompatibilityReportFromSettlementRow(
+  row: D1CompatibilitySettlementReportRow,
+): CapsuleCompatibilityReport | undefined {
+  try {
+    // jsonText columns are usually decoded by Drizzle, but an older driver
+    // may return text. Decode arrays explicitly and fail closed on malformed
+    // or partial rows.
+    const decodeArray = (value: unknown): unknown => {
+      if (typeof value === "string") {
+        if (value.trim() === "") return undefined;
+        return parseD1JsonColumn(value);
+      }
+      return value;
+    };
+    const findingValues = decodeArray(row.findingsJson);
+    const resourceValues = decodeArray(row.resourcesJson);
+    const dataSourceValues = decodeArray(row.dataSourcesJson);
+    const provisionerValues = decodeArray(row.provisionersJson);
+    const rootVariableValues = decodeArray(row.rootModuleVariablesJson);
+    const rootOutputValues = decodeArray(row.rootModuleOutputsJson);
+    if (
+      !Array.isArray(findingValues) || !Array.isArray(resourceValues) ||
+      !Array.isArray(dataSourceValues) || !Array.isArray(provisionerValues) ||
+      !Array.isArray(rootVariableValues) || !Array.isArray(rootOutputValues) ||
+      typeof row.id !== "string" || typeof row.sourceSnapshotId !== "string" ||
+      typeof row.createdAt !== "string"
+    ) {
+      return undefined;
+    }
+    const providerGraph = parseStoredCapsuleCompatibilityProviderGraph(
+      typeof row.providersJson === "string"
+        ? parseD1JsonColumn(row.providersJson)
+        : row.providersJson,
+    );
+    const report = {
+      id: row.id,
+      sourceId: compatibilityReportSourceId(row.sourceId),
+      ...(row.capsuleId ? { capsuleId: row.capsuleId } : {}),
+      sourceSnapshotId: row.sourceSnapshotId,
+      ...(row.modulePath ? { modulePath: row.modulePath } : {}),
+      level: normalizeStoredCapsuleCompatibilityLevel(row.level),
+      findings: findingValues as CapsuleCompatibilityReport["findings"],
+      ...providerGraph,
+      resources: resourceValues as CapsuleCompatibilityReport["resources"],
+      dataSources:
+        dataSourceValues as CapsuleCompatibilityReport["dataSources"],
+      provisioners:
+        provisionerValues as CapsuleCompatibilityReport["provisioners"],
+      rootModuleVariables:
+        rootVariableValues as CapsuleCompatibilityReport["rootModuleVariables"],
+      ...(row.rootModuleVariableDeclarationsJson === null
+        ? {}
+        : {
+            rootModuleVariableDeclarations:
+              parseStoredCapsuleRootModuleVariableDeclarations(
+                typeof row.rootModuleVariableDeclarationsJson === "string"
+                  ? parseD1JsonColumn(row.rootModuleVariableDeclarationsJson)
+                  : row.rootModuleVariableDeclarationsJson,
+              ),
+          }),
+      rootModuleOutputs:
+        rootOutputValues as CapsuleCompatibilityReport["rootModuleOutputs"],
+      createdAt: row.createdAt,
+    } satisfies CapsuleCompatibilityReport;
+    return compatibilityCheckReportForStorage(report);
+  } catch {
+    return undefined;
+  }
 }
 
 interface D1BackupSettlementRunRow {
@@ -9770,6 +10074,162 @@ function d1CompatibilityExistingGuardStmt(
       .select(d1InvalidWorkspaceManagementGuardRow(run.id))
       .from(sql`(select 1) as compatibility_admission_guard_source`)
       .where(notExists(exact)),
+  );
+}
+
+/** Exact persisted report columns used by compatibility settlement guards. */
+function d1CompatibilityReportSettlementWhere(
+  report: CapsuleCompatibilityReport,
+  rawReport?: D1CompatibilitySettlementReportRow,
+): SQL {
+  const normalized = compatibilityCheckReportForStorage(report);
+  const providerGraph = storedCapsuleCompatibilityProviderGraph(normalized);
+  const values = rawReport ?? {
+    id: normalized.id,
+    sourceId: normalized.sourceId,
+    capsuleId: normalized.capsuleId ?? null,
+    sourceSnapshotId: normalized.sourceSnapshotId,
+    modulePath: normalized.modulePath ?? null,
+    level: normalized.level,
+    findingsJson: normalized.findings,
+    providersJson: providerGraph,
+    resourcesJson: normalized.resources,
+    dataSourcesJson: normalized.dataSources,
+    provisionersJson: normalized.provisioners,
+    rootModuleVariablesJson: normalized.rootModuleVariables ?? [],
+    rootModuleVariableDeclarationsJson:
+      normalized.rootModuleVariableDeclarations ?? null,
+    rootModuleOutputsJson: normalized.rootModuleOutputs ?? [],
+    createdAt: normalized.createdAt,
+  } satisfies D1CompatibilitySettlementReportRow;
+  const nullable = (column: SQLiteColumn, value: unknown): SQL =>
+    value === null || value === undefined ? isNull(column) : eq(column, value);
+  return and(
+    eq(schema.capsuleCompatibilityReports.id, values.id),
+    nullable(schema.capsuleCompatibilityReports.sourceId, values.sourceId),
+    nullable(schema.capsuleCompatibilityReports.capsuleId, values.capsuleId),
+    eq(
+      schema.capsuleCompatibilityReports.sourceSnapshotId,
+      values.sourceSnapshotId,
+    ),
+    nullable(schema.capsuleCompatibilityReports.modulePath, values.modulePath),
+    eq(schema.capsuleCompatibilityReports.level, values.level),
+    eq(schema.capsuleCompatibilityReports.findingsJson, values.findingsJson),
+    eq(schema.capsuleCompatibilityReports.providersJson, values.providersJson),
+    eq(schema.capsuleCompatibilityReports.resourcesJson, values.resourcesJson),
+    eq(
+      schema.capsuleCompatibilityReports.dataSourcesJson,
+      values.dataSourcesJson,
+    ),
+    eq(
+      schema.capsuleCompatibilityReports.provisionersJson,
+      values.provisionersJson,
+    ),
+    eq(
+      schema.capsuleCompatibilityReports.rootModuleVariablesJson,
+      values.rootModuleVariablesJson,
+    ),
+    nullable(
+      schema.capsuleCompatibilityReports.rootModuleVariableDeclarationsJson,
+      values.rootModuleVariableDeclarationsJson,
+    ),
+    eq(
+      schema.capsuleCompatibilityReports.rootModuleOutputsJson,
+      values.rootModuleOutputsJson,
+    ),
+    eq(schema.capsuleCompatibilityReports.createdAt, values.createdAt),
+  )!;
+}
+
+/** Original Run authority plus physical identity; current Workspace is unused. */
+function d1CompatibilityRunSettlementWhere(
+  run: Run,
+  rawRunJson: unknown,
+  authority: WorkspaceManagementAuthority,
+): SQL {
+  return and(
+    d1CompatibilityRunAdmissionWhere(run, rawRunJson, authority),
+    run.heartbeatAt === undefined
+      ? isNull(schema.runs.heartbeatAt)
+      : eq(schema.runs.heartbeatAt, run.heartbeatAt),
+  )!;
+}
+
+/** First/replay compatibility guard for one atomic D1 settlement batch. */
+function d1CompatibilitySettlementGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  input: CommitCompatibilityCheckRunInput,
+  runRow: D1CompatibilityAdmissionRow,
+  reportRow: D1CompatibilitySettlementReportRow | undefined,
+  authority: WorkspaceManagementAuthority,
+  mode: "commit" | "replay",
+) {
+  const run = mode === "replay"
+    ? input.terminalRun
+    : input.expectedRunningRun;
+  const runMatch = orm
+    .select({ one: sql`1` })
+    .from(schema.runs)
+    .where(
+      d1CompatibilityRunSettlementWhere(run, runRow.runJson, authority),
+    );
+  const reportMatch = mode === "commit"
+    ? orm
+        .select({ one: sql`1` })
+        .from(schema.capsuleCompatibilityReports)
+        .where(eq(schema.capsuleCompatibilityReports.id, input.report.id))
+    : reportRow === undefined
+      ? orm
+          .select({ one: sql`1` })
+          .from(schema.capsuleCompatibilityReports)
+          .where(sql`false`)
+      : orm
+          .select({ one: sql`1` })
+          .from(schema.capsuleCompatibilityReports)
+          .where(
+            d1CompatibilityReportSettlementWhere(input.report, reportRow),
+          );
+  const reportSatisfied: SQL = mode === "commit"
+    ? notExists(reportMatch)
+    : exists(reportMatch);
+  const satisfied = and(exists(runMatch), reportSatisfied)!;
+  return orm.insert(schema.runs).select(
+    orm
+      .select(d1InvalidWorkspaceManagementGuardRow(input.expectedRunningRun.id))
+      .from(sql`(select 1) as compatibility_settlement_guard_source`)
+      .where(not(satisfied)),
+  );
+}
+
+/** Final guard proves the terminal Run and exact report survived the batch. */
+function d1CompatibilityTerminalGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  input: CommitCompatibilityCheckRunInput,
+  storedTerminal: StoredRunRecord,
+  report: CapsuleCompatibilityReport,
+  authority: WorkspaceManagementAuthority,
+) {
+  const terminal = publicStoredRun(storedTerminal) as Run;
+  const runMatch = orm
+    .select({ one: sql`1` })
+    .from(schema.runs)
+    .where(
+      d1CompatibilityRunSettlementWhere(
+        terminal,
+        storedTerminal,
+        authority,
+      ),
+    );
+  const reportMatch = orm
+    .select({ one: sql`1` })
+    .from(schema.capsuleCompatibilityReports)
+    .where(d1CompatibilityReportSettlementWhere(report));
+  const satisfied = and(exists(runMatch), exists(reportMatch))!;
+  return orm.insert(schema.runs).select(
+    orm
+      .select(d1InvalidWorkspaceManagementGuardRow(input.expectedRunningRun.id))
+      .from(sql`(select 1) as compatibility_settlement_terminal_guard_source`)
+      .where(not(satisfied)),
   );
 }
 

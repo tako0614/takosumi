@@ -341,7 +341,7 @@ control export は自分の Backup Run を必ず作ります。製品内の呼�
 この局所修正だけで全 blocker が単調に収束する、凍結・移管できる、完全な
 Workspace backup / restore を提供できる、とは扱いません。
 
-### 互換性チェックの開始
+### 互換性チェックの開始・結果確定
 
 互換性チェックの新規開始も既存 Run store の `beginCompatibilityCheckRun` に
 集約します。Source の所属 Workspace が分かった直後、Snapshot・policy 等の
@@ -361,10 +361,29 @@ deterministic running Run は、保存済み original tuple と同じ authority 
 別の identity、terminal 行、authority のない旧 running 行を採用・補完しません。
 元の tuple を持っていても停止後に欠けた child Run を新しく作ることはできません。
 
-これは新規 admission の局所的な対処です。report と terminal Run の一括確定、
-running retry 同士の lease/CAS、保存済み report の再解析時の扱い、raw terminal
-writer の限定は残件です。これらの収束を証明するまでは全体の frozen 判定や公開の
-停止・移管 API を有効化しません。局所テストの成功は live D1 や管理移管の実証ではありません。
+結果は `commitCompatibilityCheckRun` が一括確定します。保存済み original authority を
+持つ exact な running Run と report ID の未使用を確認し、report の新規保存と
+terminal Run の CAS を同じ保存処理に入れます。完了時には現在の active/epoch を
+取得し直さず、停止前に受理した処理の結果確定を許します。report の source・snapshot・
+Capsule と Run の一致を確認し、開始時の identity や他の Run field を変更しません。
+
+report の比較は既存の保存 column と optional field の既定値に揃えます。Memory と
+Postgres/D1 の JavaScript 表現の違いを、別の結果や上書きの理由にしません。
+時刻も含む exact な terminal Run/report だけを store の read-only replay とします。
+同時解析の一方が先に確定した場合、異なる候補は conflict となり、deterministic な
+呼出し側は実際に保存された exact identity の terminal 組だけを返せます。後着候補の
+report や時刻で勝者を書き換えません。
+
+running Run と report が片方だけ確定した旧 evidence は再解析・補完せず、明示的な
+処置まで拒否します。独立した二つの getter は同時確定の前後で一時的に不完全な組を
+観測する場合もあります。その呼出しでは変更せず、次の読取りで完了済み組を確認します。
+commit の応答が失われても失敗と推測して別の terminal を書きません。deterministic な
+完了済み evidence で解決できない場合は元の保存エラーを維持します。
+
+この一括確定は、同時に走る解析そのものを一つにする lease protocol ではありません。
+残る raw writer の限定、全 blocker の収束と frozen の atomic 判定、旧 partial evidence
+の処置は別の残件です。これらを満たすまで公開の停止・移管 API を有効化しません。
+局所テストの成功は live D1 や管理移管の実証ではありません。
 
 ### Plan・Apply・Restore の永続 authority
 

@@ -2326,6 +2326,10 @@ export function assertCompatibilityCheckRunAdmissionInput(
   authority: WorkspaceManagementAuthority,
 ): void {
   assertWorkspaceManagementAuthorityInput(authority, run.workspaceId);
+  assertRunningCompatibilityCheckRun(run);
+}
+
+function assertRunningCompatibilityCheckRun(run: Run): void {
   if (
     run.type !== "compatibility_check" || run.status !== "running" ||
     [run.id, run.workspaceId, run.sourceId, run.sourceSnapshotId,
@@ -2358,6 +2362,108 @@ export function compatibilityCheckRunAdmissionMatches(
     (current.capsuleId ?? undefined) === (candidate.capsuleId ?? undefined) &&
     current.sourceSnapshotId === candidate.sourceSnapshotId &&
     current.createdBy === candidate.createdBy;
+}
+
+export interface CommitCompatibilityCheckRunInput {
+  readonly expectedRunningRun: Run;
+  readonly terminalRun: Run;
+  readonly report: CapsuleCompatibilityReport;
+}
+
+export type CommitCompatibilityCheckRunResult =
+  | {
+      readonly status: "committed" | "replayed";
+      readonly run: Run;
+      readonly report: CapsuleCompatibilityReport;
+    }
+  | { readonly status: "conflict" };
+
+/** The existing report columns, including their optional-field defaults. */
+export function compatibilityCheckReportForStorage(
+  report: CapsuleCompatibilityReport,
+): CapsuleCompatibilityReport {
+  const normalized = normalizeStoredCapsuleCompatibilityReport(report);
+  return {
+    id: normalized.id,
+    sourceId: normalized.sourceId,
+    ...(normalized.capsuleId ? { capsuleId: normalized.capsuleId } : {}),
+    sourceSnapshotId: normalized.sourceSnapshotId,
+    ...(normalized.modulePath ? { modulePath: normalized.modulePath } : {}),
+    level: normalized.level,
+    findings: normalized.findings,
+    ...storedCapsuleCompatibilityProviderGraph(normalized),
+    resources: normalized.resources,
+    dataSources: normalized.dataSources,
+    provisioners: normalized.provisioners,
+    rootModuleVariables: normalized.rootModuleVariables ?? [],
+    ...(normalized.rootModuleVariableDeclarations !== undefined
+      ? { rootModuleVariableDeclarations: normalized.rootModuleVariableDeclarations }
+      : {}),
+    rootModuleOutputs: normalized.rootModuleOutputs ?? [],
+    createdAt: normalized.createdAt,
+  };
+}
+
+function compatibilitySettlementJson(value: object): string {
+  return stableStringify(JSON.parse(JSON.stringify(value)));
+}
+
+export function assertCommitCompatibilityCheckRunInput(
+  input: CommitCompatibilityCheckRunInput,
+): void {
+  const { expectedRunningRun: expected, terminalRun: terminal } = input;
+  assertRunningCompatibilityCheckRun(expected);
+  const report = compatibilityCheckReportForStorage(input.report);
+  const identity = (run: Run) => {
+    const {
+      status: _status, finishedAt: _finishedAt, errorCode: _errorCode,
+      compatibilityReportId: _reportId, ...rest
+    } = publicStoredRun(run);
+    return rest;
+  };
+  if (
+    (terminal.status !== "succeeded" && terminal.status !== "failed") ||
+    typeof terminal.finishedAt !== "string" || terminal.finishedAt.trim().length === 0 ||
+    (terminal.status === "succeeded" && terminal.errorCode !== undefined) ||
+    compatibilitySettlementJson(identity(expected)) !==
+      compatibilitySettlementJson(identity(terminal)) ||
+    typeof report.id !== "string" || report.id.trim().length === 0 ||
+    typeof report.createdAt !== "string" || report.createdAt.trim().length === 0 ||
+    terminal.compatibilityReportId !== report.id ||
+    report.sourceId !== expected.sourceId ||
+    report.sourceSnapshotId !== expected.sourceSnapshotId ||
+    report.capsuleId !== (expected.capsuleId ?? undefined)
+  ) {
+    throw new TypeError("Compatibility settlement requires one unchanged running analysis and its exact terminal report");
+  }
+}
+
+/** Only already-admitted durable evidence may settle, including while draining. */
+export function compatibilityCheckRunCommitDisposition(
+  current: StoredRunRecord | undefined,
+  currentReport: CapsuleCompatibilityReport | undefined,
+  input: CommitCompatibilityCheckRunInput,
+): "commit" | "replay" | "conflict" {
+  if (!current || !isPublicRunRecord(current) || current.type !== "compatibility_check") {
+    return "conflict";
+  }
+  const original = runManagementAuthority(current);
+  if (!original) return "conflict";
+  try {
+    assertCompatibilityCheckRunAdmissionInput(input.expectedRunningRun, original);
+    const currentJson = compatibilitySettlementJson(publicStoredRun(current));
+    if (currentJson === compatibilitySettlementJson(publicStoredRun(input.terminalRun))) {
+      return currentReport !== undefined &&
+          compatibilitySettlementJson(compatibilityCheckReportForStorage(currentReport)) ===
+            compatibilitySettlementJson(compatibilityCheckReportForStorage(input.report))
+        ? "replay" : "conflict";
+    }
+    return currentReport === undefined &&
+        currentJson === compatibilitySettlementJson(publicStoredRun(input.expectedRunningRun))
+      ? "commit" : "conflict";
+  } catch {
+    return "conflict";
+  }
 }
 
 /** A manual backup has no resume protocol: an occupied Run id never starts work again. */
@@ -2611,6 +2717,9 @@ export interface OpenTofuControlStore {
     run: Run,
     expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority,
   ): Promise<BeginCompatibilityCheckRunResult>;
+  commitCompatibilityCheckRun(
+    input: CommitCompatibilityCheckRunInput,
+  ): Promise<CommitCompatibilityCheckRunResult>;
   getCompatibilityCheckRun(id: string): Promise<Run | undefined>;
   putBackupRun(run: Run): Promise<Run>;
   beginBackupRun(run: Run, expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority): Promise<BeginBackupRunResult>;
@@ -3744,6 +3853,29 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     );
     this.#runs.set(run.id, storeRunManagementAuthority(run, expectedWorkspaceManagementAuthority));
     return { status: "created", run: publicStoredRun(run) };
+  }
+
+  async commitCompatibilityCheckRun(
+    input: CommitCompatibilityCheckRunInput,
+  ): Promise<CommitCompatibilityCheckRunResult> {
+    input = structuredClone(input);
+    input = { ...input, report: compatibilityCheckReportForStorage(input.report) };
+    assertCommitCompatibilityCheckRunInput(input);
+    if (this.#runLeases.has(input.expectedRunningRun.id)) return { status: "conflict" };
+    const current = this.#runs.get(input.expectedRunningRun.id);
+    const currentReport = this.#capsuleCompatibilityReports.get(input.report.id);
+    const disposition = compatibilityCheckRunCommitDisposition(current, currentReport, input);
+    if (disposition === "conflict") return { status: "conflict" };
+    if (disposition === "commit") {
+      const terminal = preserveStoredRunManagementAuthority(input.terminalRun, current);
+      this.#capsuleCompatibilityReports.set(input.report.id, structuredClone(input.report));
+      this.#runs.set(input.terminalRun.id, structuredClone(terminal));
+    }
+    return {
+      status: disposition === "commit" ? "committed" : "replayed",
+      run: publicStoredRun(input.terminalRun),
+      report: input.report,
+    };
   }
 
   getCompatibilityCheckRun(id: string): Promise<Run | undefined> {

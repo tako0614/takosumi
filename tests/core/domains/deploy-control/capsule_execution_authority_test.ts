@@ -2,7 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { Miniflare } from "miniflare";
 import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
 import type { Run } from "takosumi-contract/runs";
-import type { Capsule } from "takosumi-contract/capsules";
+import type {
+  Capsule,
+  CapsuleCompatibilityReport,
+} from "takosumi-contract/capsules";
 import type { InstallConfig } from "takosumi-contract/install-configs";
 import type { SourceSyncRun } from "takosumi-contract/sources";
 
@@ -1090,6 +1093,123 @@ describe("Capsule execution authority", () => {
         id: fresh.id, kind: "source_sync", expectFrom: ["queued"],
         run: { ...fresh, status: "running" }, setLeaseToken: "fresh-lease",
       })).toEqual({ won: true, run: { ...fresh, status: "running" } });
+    } finally {
+      await runtime.dispose();
+    }
+  }, 30_000);
+
+  test("Compatibility settlement rolls back the report when its terminal Run update fails on isolated workerd D1", async () => {
+    const runtime = new Miniflare({
+      compatibilityDate: "2026-07-17",
+      modules: [{
+        type: "ESModule",
+        path: "compatibility-settlement-workerd.mjs",
+        contents: "export default {fetch(){return new Response('ok')}}",
+      }],
+      d1Databases: { CONTROL: "compatibility-settlement-workerd" },
+    });
+    try {
+      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const store = new CloudflareD1OpenTofuControlStore(database);
+      const workspaceId = "compatibility-settlement-workerd";
+      await store.putWorkspace({
+        id: workspaceId,
+        handle: "compatibility-settlement-workerd",
+        displayName: "Compatibility settlement",
+        type: "personal",
+        ownerUserId: "compatibility-owner",
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      const authority: WorkspaceManagementAuthority = {
+        workspaceId,
+        managementState: "active",
+        managementEpoch: 1,
+      };
+      const running: Run = {
+        id: "compatibility-settlement-workerd-run",
+        workspaceId,
+        sourceId: "compatibility-settlement-workerd-source",
+        type: "compatibility_check",
+        status: "running",
+        sourceSnapshotId: "compatibility-settlement-workerd-snapshot",
+        createdBy: "compatibility-owner",
+        createdAt: NOW,
+        startedAt: NOW,
+      };
+      expect(await store.beginCompatibilityCheckRun(running, authority)).toEqual({
+        status: "created",
+        run: running,
+      });
+      expect(await store.beginWorkspaceDraining(workspaceId, authority)).toMatchObject({
+        status: "started",
+        management: {
+          managementState: "draining",
+          managementEpoch: 2,
+        },
+      });
+
+      const report: CapsuleCompatibilityReport = {
+        id: "compatibility-settlement-workerd-report",
+        sourceId: running.sourceId!,
+        sourceSnapshotId: running.sourceSnapshotId!,
+        modulePath: ".",
+        level: "ready",
+        findings: [],
+        providerPackages: [],
+        rootProviderRequirements: [],
+        resources: [],
+        dataSources: [],
+        provisioners: [],
+        rootModuleVariables: [],
+        rootModuleVariableDeclarations: [],
+        rootModuleOutputs: [],
+        createdAt: "2026-08-10T00:00:01.000Z",
+      };
+      const terminal: Run = {
+        ...running,
+        status: "succeeded",
+        compatibilityReportId: report.id,
+        finishedAt: "2026-08-10T00:00:02.000Z",
+      };
+      const input = {
+        expectedRunningRun: running,
+        terminalRun: terminal,
+        report,
+      };
+
+      // The report INSERT precedes the terminal Run UPDATE in the settlement
+      // batch. A real D1 trigger failure must roll back that pair atomically.
+      await database.prepare(
+        `CREATE TRIGGER reject_compatibility_terminal_update
+           BEFORE UPDATE OF status ON runs
+           WHEN OLD.id = 'compatibility-settlement-workerd-run'
+             AND NEW.status = 'succeeded'
+           BEGIN
+             SELECT RAISE(ABORT, 'fixture compatibility terminal update failure');
+           END`,
+      ).run();
+      await expect(store.commitCompatibilityCheckRun(input)).rejects.toThrow(
+        "fixture compatibility terminal update failure",
+      );
+      const afterFailure = new CloudflareD1OpenTofuControlStore(database);
+      expect(await afterFailure.getCompatibilityCheckRun(running.id)).toEqual(running);
+      expect(await afterFailure.getCapsuleCompatibilityReport(report.id)).toBeUndefined();
+
+      await database.prepare("DROP TRIGGER reject_compatibility_terminal_update").run();
+      const reopened = new CloudflareD1OpenTofuControlStore(database);
+      const committed = await reopened.commitCompatibilityCheckRun(input);
+      expect(committed).toEqual({ status: "committed", run: terminal, report });
+      expect(await reopened.getCompatibilityCheckRun(running.id)).toEqual(terminal);
+      expect(await reopened.getCapsuleCompatibilityReport(report.id)).toEqual(report);
+
+      // The captured original authority remains the replay fence while the
+      // Workspace is draining; an exact payload may be reopened, not rewritten.
+      expect(await reopened.commitCompatibilityCheckRun(input)).toEqual({
+        status: "replayed",
+        run: terminal,
+        report,
+      });
     } finally {
       await runtime.dispose();
     }
