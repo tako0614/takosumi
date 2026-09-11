@@ -165,6 +165,8 @@ export async function runStableSemverTagResolution(
   const context: CommandContext = {
     env: { ...baseCommandEnv(), GIT_TERMINAL_PROMPT: "0" },
   };
+  // Tag discovery can be the first operation on a fresh runner filesystem.
+  await mkdir(RUN_ROOT, { recursive: true, mode: 0o700 });
   const result = await runCommand(["git", "ls-remote", "--tags", "--", url], {
     cwd: RUN_ROOT,
     context,
@@ -880,6 +882,8 @@ export async function resolveSourceCommit(
   if (/^[0-9a-f]{40}$|^[0-9a-f]{64}$/i.test(source.ref)) {
     return source.ref.toLowerCase();
   }
+  // Do not depend on an earlier Run having created the subprocess cwd.
+  await mkdir(RUN_ROOT, { recursive: true, mode: 0o700 });
   const result = await runCommand(
     ["git", "ls-remote", "--", source.url, source.ref, `${source.ref}^{}`],
     { cwd: RUN_ROOT, context: git.context },

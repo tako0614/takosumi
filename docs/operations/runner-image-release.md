@@ -154,12 +154,15 @@ publication outcome and does not claim an immutable identity.
 Any unresolved journal entry blocks every future build before a new nonce or
 push. The environment plus checked publication repository select one fixed
 operator-account journal locator. The locator binds the exact journal path and
-physical file identity and the operator machine/PID namespace; a missing,
-replaced, or cross-host journal is never recreated as empty. This is an
-enforced single-physical-host/PID-namespace authority, not a distributed lock:
-do not put its locator root on a home/state directory shared by multiple
-operator hosts. A foreign host, namespace, or boot lock fails closed and is
-never auto-reclaimed.
+physical file identity and the operator machine identity; its observed PID
+namespace is retained in the v3 bytes but does not have to survive a same-machine
+restart. A missing, replaced, or cross-host journal is never recreated as empty,
+and the v3 locator is never rewritten or migrated for that restart. This is
+durable local-machine continuity, not a distributed lock: do not put its locator
+root on a home/state directory shared by multiple operator hosts, even when
+machine IDs are cloned. During an active publication, the separate lock binds
+the full machine/PID namespace plus boot/PID-start and file identity. A foreign
+host, namespace, or boot lock fails closed and is never auto-reclaimed.
 
 An exclusive release-scope lock covers the unresolved check through the
 publication attempt. The implementation first writes and fsyncs a complete

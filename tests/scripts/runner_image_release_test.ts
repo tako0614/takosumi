@@ -3086,6 +3086,167 @@ test("a valid dead-process journal lock is reclaimed without weakening active-lo
   ).resolves.toMatchObject({ status: "published" });
 });
 
+test("a same-machine journal locator survives a changed PID namespace after restart", async () => {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  await runRunnerImageRelease(buildOptions(input, "staging", true), {
+    ...buildRuntime(input, successfulPublicationCommand),
+    publicationJournalRoot: journalRoot,
+  });
+  const locatorName = readdirSync(journalRoot).find((name) =>
+    name.endsWith(".locator.json"),
+  );
+  expect(locatorName).toBeDefined();
+  const locatorPath = join(journalRoot, locatorName!);
+  const locator = JSON.parse(readFileSync(locatorPath, "utf8")) as {
+    hostIdentity: {
+      machineIdSha256: string;
+      pidNamespaceDev: string;
+      pidNamespaceIno: string;
+    };
+  };
+  writePrivate(
+    locatorPath,
+    `${JSON.stringify({
+      ...locator,
+      hostIdentity: {
+        ...locator.hostIdentity,
+        pidNamespaceDev: (BigInt(locator.hostIdentity.pidNamespaceDev) + 1n).toString(),
+        pidNamespaceIno: (BigInt(locator.hostIdentity.pidNamespaceIno) + 1n).toString(),
+      },
+    })}\n`,
+  );
+  const locatorBytes = readFileSync(locatorPath);
+
+  await expect(
+    runRunnerImageRelease(
+      {
+        ...buildOptions(input, "staging", true),
+        evidence: join(input.operator, "same-machine-pid-namespace.jsonl"),
+      },
+      {
+        ...buildRuntime(input, successfulPublicationCommand),
+        nonce: () => "02".repeat(16),
+        publicationJournalRoot: journalRoot,
+      },
+    ),
+  ).resolves.toMatchObject({ status: "published" });
+  expect(readFileSync(locatorPath)).toEqual(locatorBytes);
+});
+
+test("a same-machine PID namespace change does not bypass an unresolved attempt", async () => {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  await bindDescriptorAwareAttemptThroughBuild(input, journalRoot);
+  const locatorName = readdirSync(journalRoot).find((name) =>
+    name.endsWith(".locator.json"),
+  );
+  expect(locatorName).toBeDefined();
+  const locatorPath = join(journalRoot, locatorName!);
+  const locator = JSON.parse(readFileSync(locatorPath, "utf8")) as {
+    hostIdentity: {
+      machineIdSha256: string;
+      pidNamespaceDev: string;
+      pidNamespaceIno: string;
+    };
+  };
+  writePrivate(
+    locatorPath,
+    `${JSON.stringify({
+      ...locator,
+      hostIdentity: {
+        ...locator.hostIdentity,
+        pidNamespaceDev: (BigInt(locator.hostIdentity.pidNamespaceDev) + 1n).toString(),
+        pidNamespaceIno: (BigInt(locator.hostIdentity.pidNamespaceIno) + 1n).toString(),
+      },
+    })}\n`,
+  );
+  let nonceCalls = 0;
+
+  await expect(
+    runRunnerImageRelease(
+      {
+        ...buildOptions(input, "staging", true),
+        evidence: join(input.operator, "same-machine-unresolved.jsonl"),
+      },
+      {
+        ...buildRuntime(input, async () => {
+          throw new Error("an unresolved attempt must stop before Docker");
+        }),
+        nonce: () => {
+          nonceCalls += 1;
+          return "02".repeat(16);
+        },
+        publicationJournalRoot: journalRoot,
+      },
+    ),
+  ).rejects.toThrow("runner_image_publication_reconciliation_required");
+  expect(nonceCalls).toBe(0);
+});
+
+test("a foreign PID namespace lock is retained even when its process is dead", async () => {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  await runRunnerImageRelease(buildOptions(input, "staging", true), {
+    ...buildRuntime(input, successfulPublicationCommand),
+    publicationJournalRoot: journalRoot,
+  });
+  const locatorName = readdirSync(journalRoot).find((name) =>
+    name.endsWith(".locator.json"),
+  )!;
+  const locator = JSON.parse(
+    readFileSync(join(journalRoot, locatorName), "utf8"),
+  ) as {
+    scope: string;
+    hostIdentity: {
+      machineIdSha256: string;
+      pidNamespaceDev: string;
+      pidNamespaceIno: string;
+    };
+  };
+  const lockPath = join(
+    journalRoot,
+    locatorName.replace(/\.locator\.json$/u, ".lock"),
+  );
+  writePrivate(lockPath, "");
+  const lockStatus = statSync(lockPath, { bigint: true });
+  const lockBytes = `${JSON.stringify({
+    kind: "takosumi.runner-image-publication-lock@v3",
+    scope: locator.scope,
+    lockPath,
+    pendingName: `${basename(lockPath)}.pending-2147483647-${"a".repeat(32)}`,
+    fileIdentity: {
+      dev: lockStatus.dev.toString(),
+      ino: lockStatus.ino.toString(),
+      birthtimeNs: lockStatus.birthtimeNs.toString(),
+    },
+    hostIdentity: {
+      ...locator.hostIdentity,
+      pidNamespaceDev: (BigInt(locator.hostIdentity.pidNamespaceDev) + 1n).toString(),
+      pidNamespaceIno: (BigInt(locator.hostIdentity.pidNamespaceIno) + 1n).toString(),
+    },
+    pid: 2_147_483_647,
+    bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(),
+    processStartTicks: "1",
+    acquiredAt: "2026-08-27T00:00:00.000Z",
+  })}\n`;
+  writePrivate(lockPath, lockBytes);
+
+  await expect(
+    runRunnerImageRelease(
+      {
+        ...buildOptions(input, "staging", true),
+        evidence: join(input.operator, "foreign-pid-namespace.jsonl"),
+      },
+      {
+        ...buildRuntime(input, successfulPublicationCommand),
+        publicationJournalRoot: journalRoot,
+      },
+    ),
+  ).rejects.toThrow("runner_image_publication_lock_foreign_host");
+  expect(readFileSync(lockPath, "utf8")).toBe(lockBytes);
+});
+
 test("lock publication is atomic when the owner crashes before the canonical link", async () => {
   const input = fixture();
   const journalRoot = join(input.operator, "publication-locator");
@@ -3178,7 +3339,7 @@ test("a foreign-boot lock is never reclaimed as a dead local process", async () 
   expect(existsSync(lockPath)).toBe(true);
 });
 
-test("the fixed journal locator enforces one physical host and PID namespace", async () => {
+test("the fixed journal locator enforces one physical machine", async () => {
   const input = fixture();
   const journalRoot = join(input.operator, "publication-locator");
   await runRunnerImageRelease(buildOptions(input, "staging", true), {

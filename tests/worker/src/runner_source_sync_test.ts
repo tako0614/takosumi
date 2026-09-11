@@ -223,6 +223,51 @@ test("parseLsRemoteCommit returns undefined when no commit matches", () => {
   ).toBeUndefined();
 });
 
+test("resolveSourceCommit initializes a cold runner root before remote lookup", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-source-sync-cold-"));
+  try {
+    git(root, ["init", "-b", "main", "repo"]);
+    const repo = join(root, "repo");
+    git(repo, [
+      "-c", "user.email=test@example.com",
+      "-c", "user.name=Takosumi Test",
+      "commit", "--allow-empty", "-m", "initial",
+    ]);
+    const expectedCommit = git(repo, ["rev-parse", "HEAD"]);
+    const runRoot = join(root, "previously-absent", "runs");
+    const moduleUrl = new URL("../../../runner/lib/source_sync.ts", import.meta.url).href;
+    const source = { url: repo, ref: "HEAD", path: "." };
+    const script = `
+      import { resolveSourceCommit } from ${JSON.stringify(moduleUrl)};
+      const commit = await resolveSourceCommit(${JSON.stringify(source)}, {
+        context: { env: process.env },
+      });
+      console.log(commit);
+    `;
+    const child = Bun.spawn([process.execPath, "--eval", script], {
+      cwd: root,
+      env: {
+        ...commandEnv(),
+        TAKOSUMI_OPENTOFU_RUN_ROOT: runRoot,
+        TAKOSUMI_RUNNER_START_SERVER: "0",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    expect(stdout.trim()).toBe(expectedCommit);
+    expect((await stat(runRoot)).mode & 0o777).toBe(0o700);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("resolveSourceCommit resolves an explicit remote HEAD without guessing main", async () => {
   const root = await mkdtemp(join(tmpdir(), "takosumi-source-sync-"));
   try {

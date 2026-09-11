@@ -4255,7 +4255,7 @@ async function openPublicationJournal(
       throw new Error("runner_image_publication_locator_invalid");
     }
     const locator = parsePublicationLocator(locatorBytes, identity);
-    if (!samePublicationHostIdentity(locator.hostIdentity, hostIdentity)) {
+    if (!samePublicationMachineIdentity(locator.hostIdentity, hostIdentity)) {
       throw new Error("runner_image_publication_host_mismatch");
     }
     if (resolve(locator.journalPath) !== requested) {
@@ -4611,6 +4611,13 @@ function samePublicationHostIdentity(
     left.pidNamespaceDev === right.pidNamespaceDev &&
     left.pidNamespaceIno === right.pidNamespaceIno
   );
+}
+
+function samePublicationMachineIdentity(
+  left: PublicationHostIdentity,
+  right: PublicationHostIdentity,
+): boolean {
+  return left.machineIdSha256 === right.machineIdSha256;
 }
 
 async function readStablePublicationLock(
