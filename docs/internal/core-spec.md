@@ -20,8 +20,10 @@ owners and release cadences. Each publisher owns its exact Form definitions,
 packages, and publication evidence. Each Provider implementation owns its source
 address, resource mappings, and software releases. They are ordinary external
 Providers alongside other Providers selected by the module, without an official
-or privileged execution path. Takosumi ships no first-party Terraform/OpenTofu
-Provider and does not host a Form Registry or Form resource lifecycle.
+or privileged execution path.
+
+Takosumi ships no first-party Terraform/OpenTofu provider.
+It does not host a Form Registry or Form resource lifecycle.
 
 ## Ownership boundary
 
