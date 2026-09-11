@@ -399,6 +399,182 @@ test("cancel that wins forces a later consumer claim to lose (no dispatch, no re
   expect((await store.getApplyRun("apply_cf"))?.status).toBe("cancelled");
 });
 
+test("cancelRunDuringDrain settles only unstarted rows through the controller seam", async () => {
+  const beginDrain = async (
+    store: InMemoryOpenTofuControlStore,
+    workspaceId: string,
+  ) => {
+    const active = await store.getWorkspaceManagement(workspaceId);
+    if (!active) throw new Error("fixture Workspace management is missing");
+    const result = await store.beginWorkspaceDraining(workspaceId, active);
+    if (result.status !== "started") {
+      throw new Error(`fixture drain did not start: ${result.status}`);
+    }
+    return result.management;
+  };
+
+  // A queued Plan is cancelled through the real controller and its private
+  // preparation inputs are removed by the same terminal path.
+  {
+    const store = new InMemoryOpenTofuControlStore();
+    await seedApply(store, {
+      capsuleId: "cap_cancel_drain_plan",
+      planRunId: "plan_cancel_drain_plan",
+      applyRunId: "apply_cancel_drain_plan",
+    });
+    const seeded = (await store.getPlanRun("plan_cancel_drain_plan"))!;
+    const queued: PlanRun = { ...seeded, status: "queued" };
+    await store.putPlanRun(queued);
+    expect(await store.getPlanRunInputs(queued.id)).toBeDefined();
+    const management = await beginDrain(store, queued.workspaceId);
+    const controller = controllerWith(store, { now: () => 3 });
+
+    const cancelled = await controller.cancelRunDuringDrain(queued.id, management);
+
+    expect(cancelled.status).toBe("cancelled");
+    expect((await store.getPlanRun(queued.id))?.status).toBe("cancelled");
+    expect(await store.getPlanRunInputs(queued.id)).toBeUndefined();
+  }
+
+  // Persisted waiting_approval and the legacy succeeded+requiresApproval
+  // representation take the same drain-owned cancellation route.
+  for (const scenario of [
+    { suffix: "waiting", status: "waiting_approval" as const },
+    { suffix: "legacy", status: "succeeded" as const, requiresApproval: true },
+  ]) {
+    const store = new InMemoryOpenTofuControlStore();
+    await seedApply(store, {
+      capsuleId: `cap_cancel_drain_${scenario.suffix}`,
+      planRunId: `plan_cancel_drain_${scenario.suffix}`,
+      applyRunId: `apply_cancel_drain_${scenario.suffix}`,
+    });
+    const seeded = (await store.getPlanRun(`plan_cancel_drain_${scenario.suffix}`))!;
+    const gated: PlanRun = {
+      ...seeded,
+      status: scenario.status,
+      ...(scenario.requiresApproval ? { requiresApproval: true } : {}),
+    };
+    await store.putPlanRun(gated);
+    const management = await beginDrain(store, gated.workspaceId);
+    const controller = controllerWith(store, { now: () => 3 });
+
+    const cancelled = await controller.cancelRunDuringDrain(gated.id, management);
+
+    expect(cancelled.status).toBe("cancelled");
+    expect((await store.getPlanRun(gated.id))?.status).toBe("cancelled");
+  }
+
+  // An Apply cancellation reaches the terminal observer without invoking the
+  // external runner or dispatching a second execution.
+  {
+    const store = new InMemoryOpenTofuControlStore();
+    await seedApply(store, {
+      capsuleId: "cap_cancel_drain_apply",
+      planRunId: "plan_cancel_drain_apply",
+      applyRunId: "apply_cancel_drain_apply",
+    });
+    const queued = (await store.getApplyRun("apply_cancel_drain_apply"))!;
+    const management = await beginDrain(store, queued.workspaceId);
+    let runnerCalls = 0;
+    const terminalStatuses: string[] = [];
+    const controller = controllerWith(store, {
+      now: () => 3,
+      apply: async () => {
+        runnerCalls += 1;
+        return fixtureStateCommit();
+      },
+    });
+    controller.setTerminalRunObserver(async (run) => {
+      terminalStatuses.push(run.status);
+    });
+
+    const cancelled = await controller.cancelRunDuringDrain(queued.id, management);
+
+    expect(cancelled.status).toBe("cancelled");
+    expect(runnerCalls).toBe(0);
+    expect(terminalStatuses).toEqual(["cancelled"]);
+  }
+
+  // A queued retry carrying started evidence is not an unclaimed row.
+  {
+    const store = new InMemoryOpenTofuControlStore();
+    await seedApply(store, {
+      capsuleId: "cap_cancel_drain_started",
+      planRunId: "plan_cancel_drain_started",
+      applyRunId: "apply_cancel_drain_started",
+    });
+    const seeded = (await store.getApplyRun("apply_cancel_drain_started"))!;
+    const retry: ApplyRun = {
+      ...seeded,
+      status: "queued",
+      startedAt: 10,
+      updatedAt: 10,
+    };
+    await store.putApplyRun(retry);
+    const management = await beginDrain(store, retry.workspaceId);
+    const controller = controllerWith(store, { now: () => 3 });
+
+    await expect(
+      controller.cancelRunDuringDrain(retry.id, management),
+    ).rejects.toThrow(/cannot be settled by management drain/);
+    expect(await store.getApplyRun(retry.id)).toEqual(retry);
+  }
+
+  // A held execution lease is likewise refused before the drain CAS.
+  {
+    const store = new InMemoryOpenTofuControlStore();
+    await seedApply(store, {
+      capsuleId: "cap_cancel_drain_held",
+      planRunId: "plan_cancel_drain_held",
+      applyRunId: "apply_cancel_drain_held",
+    });
+    const seeded = (await store.getApplyRun("apply_cancel_drain_held"))!;
+    const held: ApplyRun = {
+      ...seeded,
+      status: "running",
+      startedAt: 2,
+      heartbeatAt: 2,
+      updatedAt: 2,
+    };
+    expect(
+      await store.transitionRun({
+        id: held.id,
+        kind: "apply",
+        expectFrom: ["queued"],
+        run: held,
+        setLeaseToken: "drain-held-lease",
+      }),
+    ).toEqual({ won: true, run: held });
+    const management = await beginDrain(store, held.workspaceId);
+    const controller = controllerWith(store, { now: () => 3 });
+
+    await expect(
+      controller.cancelRunDuringDrain(held.id, management),
+    ).rejects.toThrow(/cannot be settled by management drain/);
+    expect(await store.getApplyRun(held.id)).toEqual(held);
+  }
+
+  // A stale drain observation loses the exact Workspace CAS and leaves the
+  // queued Apply available for a caller holding the current observation.
+  {
+    const store = new InMemoryOpenTofuControlStore();
+    await seedApply(store, {
+      capsuleId: "cap_cancel_drain_stale",
+      planRunId: "plan_cancel_drain_stale",
+      applyRunId: "apply_cancel_drain_stale",
+    });
+    const queued = (await store.getApplyRun("apply_cancel_drain_stale"))!;
+    const management = await beginDrain(store, queued.workspaceId);
+    const stale = { ...management, managementEpoch: management.managementEpoch + 1 };
+    const controller = controllerWith(store, { now: () => 3 });
+
+    await expect(
+      controller.cancelRunDuringDrain(queued.id, stale),
+    ).rejects.toThrow(/only queued runs can be cancelled/);
+    expect(await store.getApplyRun(queued.id)).toEqual(queued);
+  }
+});
+
 test("a consumer claim that wins forces a concurrent cancel to be rejected (never clobbers the running apply)", async () => {
   const store = new InMemoryOpenTofuControlStore();
   await seedApply(store, {

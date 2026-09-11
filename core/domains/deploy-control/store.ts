@@ -27,6 +27,7 @@ import type {
   StateVersion,
 } from "@takosumi/internal/deploy-control-api";
 import { coerceRunStatus } from "@takosumi/internal/deploy-control-api";
+import { planRunAwaitsApproval } from "./projection_run.ts";
 import type { InMemoryGitInstallPlanStore } from "../install-plans/store.ts";
 import {
   interfaceIntentBlocksWorkspaceManagement,
@@ -2025,6 +2026,11 @@ export interface TransitionRunInput {
    * Ordinary progress transitions intentionally do not use this fence.
    */
   readonly expectExactRun?: ApplyRun;
+  /** Private drain convergence; never grants execution or recaptures admission. */
+  readonly expectDrainCancellation?: {
+    readonly management: FreezeWorkspaceManagementExpectation;
+    readonly expectedRun: PlanRun | ApplyRun;
+  };
   readonly run: PlanRun | ApplyRun | SourceSyncRun | Run;
   readonly setLeaseToken?: string;
   readonly clearLeaseToken?: boolean;
@@ -2041,6 +2047,79 @@ export interface TransitionRunInput {
    * private metadata on the stored row remains authoritative.
    */
   readonly requireStoredManagementAuthority?: boolean;
+}
+
+/** The existing cancellation states, with no queued execution evidence. */
+export function runCanCancelDuringDrain(run: StoredRunRecord): run is PlanRun | ApplyRun {
+  const plan = isPlanRunRecord(run);
+  if (plan === isApplyRunRecord(run) || "kind" in run || "type" in run) return false;
+  // Cancellation must not replace malformed safety evidence with valid dates.
+  // Approval-waiting historical rows may omit optional completion timestamps.
+  for (const field of ["createdAt", "updatedAt", "startedAt", "finishedAt", "heartbeatAt"] as const) {
+    const value = run[field];
+    if (value === undefined && field !== "createdAt" && field !== "updatedAt") continue;
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) return false;
+  }
+  if (plan && (run.approval !== undefined || run.appliedApplyRunId !== undefined)) return false;
+  if (run.status === "queued") {
+    return run.startedAt === undefined && run.heartbeatAt === undefined &&
+      run.finishedAt === undefined;
+  }
+  return plan && planRunAwaitsApproval(run);
+}
+
+/** Validate the cancellation-only mode before any adapter observes or writes. */
+export function assertDrainRunCancellationInput(input: TransitionRunInput): void {
+  const drain = input.expectDrainCancellation;
+  if (drain === undefined) return;
+  assertWorkspaceFreezeExpectation(drain.management);
+  const expected = drain.expectedRun;
+  if (
+    !expected || typeof expected !== "object" ||
+    !runCanCancelDuringDrain(expected) ||
+    (!isPlanRunRecord(input.run) && !isApplyRunRecord(input.run)) ||
+    expected.id !== input.id || transitionKindForRun(expected) !== input.kind ||
+    input.expectFrom.length !== 1 || input.expectFrom[0] !== expected.status ||
+    input.expectExactRun !== undefined ||
+    input.expectedWorkspaceManagementAuthority !== undefined ||
+    input.requireStoredManagementAuthority !== undefined ||
+    input.setLeaseToken !== undefined || input.expectLeaseToken !== undefined ||
+    input.heartbeatAt !== undefined || input.clearHeartbeat === true ||
+    input.expectHeartbeatAt !== undefined ||
+    (input.expectStartedAt !== undefined &&
+      (input.expectStartedAt !== null || expected.status !== "queued")) ||
+    !Array.isArray(expected.auditEvents) || !Array.isArray(input.run.auditEvents)
+  ) throw new TypeError("Drain cancellation requires an exact unclaimed Plan or Apply observation");
+  const now = input.run.updatedAt;
+  const eventType = `${input.kind}.cancelled`;
+  const cancelled = {
+    ...publicStoredRun(expected),
+    status: "cancelled",
+    auditEvents: [
+      ...expected.auditEvents,
+      { id: `${expected.id}:${eventType}:${now}`, type: eventType, at: now },
+    ],
+    updatedAt: now,
+    finishedAt: now,
+  };
+  if (
+    typeof now !== "number" || !Number.isSafeInteger(now) || now < expected.updatedAt ||
+    stableStringify(publicStoredRun(input.run)) !== stableStringify(cancelled)
+  ) throw new TypeError("Drain cancellation may only append its cancellation event and terminal timestamps");
+}
+
+/** Snapshot and original-admission fence; adapters also fence Workspace and lease. */
+export function runDrainCancellationMatches(
+  current: StoredRunRecord,
+  input: TransitionRunInput,
+): boolean {
+  const drain = input.expectDrainCancellation;
+  if (drain === undefined) return true;
+  const original = runManagementAuthority(current);
+  return current.workspaceId === drain.management.workspaceId &&
+    original !== undefined && original.managementEpoch < drain.management.managementEpoch &&
+    stableStringify(publicStoredRun(current)) ===
+      stableStringify(publicStoredRun(drain.expectedRun));
 }
 
 /** Validate the narrow terminal-finalizer mode before any adapter writes. */
@@ -3682,6 +3761,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
     input = structuredClone(input);
     assertExactRunTransitionInput(input);
+    assertDrainRunCancellationInput(input);
     const current = this.#runs.get(input.id);
     if (!current || transitionKindForRun(current) !== input.kind) {
       return Promise.resolve({ won: false });
@@ -3747,6 +3827,15 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       }
     }
     const currentLease = this.#runLeases.get(input.id);
+    if (input.expectDrainCancellation !== undefined) {
+      const expected = input.expectDrainCancellation.management;
+      const management = this.#workspaceManagement.get(current.workspaceId);
+      if (
+        management?.managementState !== "draining" ||
+        management.managementEpoch !== expected.managementEpoch ||
+        currentLease !== undefined || !runDrainCancellationMatches(current, input)
+      ) return Promise.resolve({ won: false, run: publicStoredRun(current) });
+    }
     const statusMatches = input.expectFrom.includes(current.status);
     const leaseMatches =
       input.expectLeaseToken === undefined ||

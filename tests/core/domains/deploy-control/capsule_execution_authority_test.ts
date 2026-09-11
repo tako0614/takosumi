@@ -1600,6 +1600,34 @@ describe("Capsule execution authority", () => {
       });
 
       const git = new D1GitInstallPlanStore(database);
+      const queuedApply: ApplyRun = {
+        id: "workerd-freeze-queued-apply",
+        planRunId: plan.id,
+        workspaceId,
+        capsuleId: plan.capsuleId,
+        operation: "update",
+        runnerProfileId: plan.runnerProfileId,
+        status: "queued",
+        expected: {
+          planRunId: plan.id,
+          capsuleId: plan.capsuleId,
+          runnerProfileId: plan.runnerProfileId,
+          sourceDigest: plan.sourceDigest,
+          variablesDigest: plan.variablesDigest,
+          policyDecisionDigest: plan.policyDecisionDigest,
+          planDigest: "sha256:freeze-plan",
+          planArtifactDigest: "sha256:freeze-artifact",
+        },
+        stateBackend: { kind: "managed", ref: "state" } as never,
+        stateLock: { status: "pending", backendRef: "state" },
+        auditEvents: [],
+        createdAt: 4,
+        updatedAt: 4,
+      };
+      expect(await store.beginApplyRun(queuedApply, authority)).toEqual({
+        status: "created",
+        run: queuedApply,
+      });
       const unclaimedGitPlan: StoredGitInstallPlan = {
         id: "workerd-freeze-unclaimed-git",
         workspaceId,
@@ -1632,6 +1660,35 @@ describe("Capsule execution authority", () => {
         managementState: "draining" as const,
         managementEpoch: 2,
       };
+      expect(await store.freezeWorkspaceManagementIfQuiescent(draining)).toEqual({
+        status: "blocked",
+        management: draining,
+      });
+      const cancelledApply: ApplyRun = {
+        ...queuedApply,
+        status: "cancelled",
+        auditEvents: [{
+          id: `${queuedApply.id}:apply.cancelled:5`,
+          type: "apply.cancelled",
+          at: 5,
+        }],
+        updatedAt: 5,
+        finishedAt: 5,
+      };
+      expect(await store.transitionRun({
+        id: queuedApply.id,
+        kind: "apply",
+        expectFrom: ["queued"],
+        expectStartedAt: null,
+        clearLeaseToken: true,
+        expectDrainCancellation: {
+          management: draining,
+          expectedRun: queuedApply,
+        },
+        run: cancelledApply,
+      })).toEqual({ won: true, run: cancelledApply });
+      expect(await store.getApplyRun(queuedApply.id)).toEqual(cancelledApply);
+      // The Git coordinator remains the blocker after the queued Apply settles.
       expect(await store.freezeWorkspaceManagementIfQuiescent(draining)).toEqual({
         status: "blocked",
         management: draining,

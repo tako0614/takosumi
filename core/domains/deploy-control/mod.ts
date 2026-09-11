@@ -124,6 +124,7 @@ import {
   type OpenTofuControlStore,
   type CapsulePlanCreationFence,
   type WorkspaceManagementAuthority,
+  type FreezeWorkspaceManagementExpectation,
   type PlanRunInputs,
   type RuntimeSecretRetirementDispatchClaimInput,
 } from "./store.ts";
@@ -1916,6 +1917,14 @@ export class OpenTofuController {
 
   cancelRun(id: string): Promise<Run> {
     return this.#runEngine.cancelRun(id);
+  }
+
+  /** Private management convergence; not exposed through bootstrap or HTTP. */
+  cancelRunDuringDrain(
+    id: string,
+    management: FreezeWorkspaceManagementExpectation,
+  ): Promise<Run> {
+    return this.#runEngine.cancelRunDuringDrain(id, management);
   }
 
   approveRun(

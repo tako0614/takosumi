@@ -417,6 +417,8 @@ interface Adapter {
   /** Fixture for the not-yet-public abort operation; no production bypass. */
   readonly resumeManagement?: (workspaceId: string) => Promise<void>;
   readonly setStoredSourceSyncAuthority?: (runId: string, value: unknown) => Promise<void>;
+  /** Fixture-only raw JSON mutation for persisted numeric representation checks. */
+  readonly setStoredRunUpdatedAtNumericOne?: (runId: string) => Promise<void>;
 }
 
 async function adapters(): Promise<readonly Adapter[]> {
@@ -445,6 +447,12 @@ async function adapters(): Promise<readonly Adapter[]> {
         await pgClient.query(
           "update takosumi_runs set run_json = (run_json::jsonb - 'workspaceManagementAuthority') || $1::jsonb where id = $2",
           [JSON.stringify(value === undefined ? {} : { workspaceManagementAuthority: value }), runId],
+        );
+      },
+      async setStoredRunUpdatedAtNumericOne(runId) {
+        await pgClient.query(
+          "update takosumi_runs set run_json = jsonb_set(run_json, '{updatedAt}', '1.0'::jsonb) where id = $1",
+          [runId],
         );
       },
     },
@@ -687,6 +695,295 @@ test("Workspace management CAS and guarded admissions are conformed across stora
       won: true,
       run: { ...claimedRun, heartbeatAt: 3, status: "succeeded", finishedAt: 4 },
     });
+  }
+});
+
+test("drain-owned Apply cancellation requires the exact draining Workspace authority", async () => {
+  for (const { label, store } of await adapters()) {
+    const ws = workspace(`drain-cancel-${label}`);
+    await store.putWorkspace(ws);
+    const original = {
+      workspaceId: ws.id,
+      managementState: "active" as const,
+      managementEpoch: 1,
+    };
+    const queued = applyRun(`drain-cancel-run-${label}`, ws.id);
+    expect(await store.beginApplyRun(queued, original), label).toEqual({
+      status: "created",
+      run: queued,
+    });
+
+    const draining = {
+      workspaceId: ws.id,
+      managementState: "draining" as const,
+      managementEpoch: 2,
+    };
+    const cancelled: ApplyRun = {
+      ...queued,
+      status: "cancelled",
+      auditEvents: [
+        ...queued.auditEvents,
+        {
+          id: `${queued.id}:apply.cancelled:3`,
+          type: "apply.cancelled",
+          at: 3,
+        },
+      ],
+      updatedAt: 3,
+      finishedAt: 3,
+    };
+    const cancel = (management: typeof draining) => store.transitionRun({
+      id: queued.id,
+      kind: "apply",
+      expectFrom: ["queued"],
+      expectStartedAt: null,
+      clearLeaseToken: true,
+      expectDrainCancellation: {
+        management,
+        expectedRun: queued,
+      },
+      run: cancelled,
+    });
+
+    // A drain-owned cancellation cannot be used as an active-work mutation.
+    expect(await cancel(draining), label).toEqual({
+      won: false,
+      run: queued,
+    });
+    expect(await store.getApplyRun(queued.id), label).toEqual(queued);
+
+    expect(await store.beginWorkspaceDraining(ws.id, original), label).toEqual({
+      status: "started",
+      management: draining,
+    });
+    expect(
+      await cancel({ ...draining, managementEpoch: 3 }),
+      label,
+    ).toEqual({
+      won: false,
+      run: queued,
+    });
+    expect(await store.getApplyRun(queued.id), label).toEqual(queued);
+
+    expect(await cancel(draining), label).toEqual({
+      won: true,
+      run: cancelled,
+    });
+    expect(await store.getApplyRun(queued.id), label).toEqual(cancelled);
+    expect(
+      await store.getRunManagementAuthority({
+        id: queued.id,
+        workspaceId: ws.id,
+        kind: "apply",
+      }),
+      label,
+    ).toEqual(original);
+  }
+});
+
+test("durable drain cancellation settles an older admission after resume and re-drain", async () => {
+  for (const { label, store, reopen, resumeManagement } of await adapters()) {
+    if (resumeManagement === undefined) continue;
+    const ws = workspace(`drain-cancel-older-${label}`);
+    await store.putWorkspace(ws);
+    const original = {
+      workspaceId: ws.id,
+      managementState: "active" as const,
+      managementEpoch: 1,
+    };
+    const queued = applyRun(`drain-cancel-older-run-${label}`, ws.id);
+    expect(await store.beginApplyRun(queued, original), label).toEqual({
+      status: "created",
+      run: queued,
+    });
+    expect(await store.beginWorkspaceDraining(ws.id, original), label).toMatchObject({
+      status: "started",
+      management: { workspaceId: ws.id, managementState: "draining", managementEpoch: 2 },
+    });
+    await resumeManagement(ws.id);
+    const resumed = reopen();
+    const resumedAuthority = await resumed.getWorkspaceManagement(ws.id);
+    expect(resumedAuthority, label).toEqual({
+      workspaceId: ws.id,
+      managementState: "active",
+      managementEpoch: 3,
+    });
+    expect(await resumed.beginWorkspaceDraining(ws.id, resumedAuthority!), label).toMatchObject({
+      status: "started",
+      management: { workspaceId: ws.id, managementState: "draining", managementEpoch: 4 },
+    });
+    const draining = {
+      workspaceId: ws.id,
+      managementState: "draining" as const,
+      managementEpoch: 4,
+    };
+    const cancelled: ApplyRun = {
+      ...queued,
+      status: "cancelled",
+      auditEvents: [
+        ...queued.auditEvents,
+        {
+          id: `${queued.id}:apply.cancelled:3`,
+          type: "apply.cancelled",
+          at: 3,
+        },
+      ],
+      updatedAt: 3,
+      finishedAt: 3,
+    };
+    expect(
+      await resumed.transitionRun({
+        id: queued.id,
+        kind: "apply",
+        expectFrom: ["queued"],
+        expectStartedAt: null,
+        clearLeaseToken: true,
+        expectDrainCancellation: {
+          management: draining,
+          expectedRun: queued,
+        },
+        run: cancelled,
+      }),
+      label,
+    ).toEqual({ won: true, run: cancelled });
+    expect(await resumed.getApplyRun(queued.id), label).toEqual(cancelled);
+    expect(
+      await resumed.getRunManagementAuthority({
+        id: queued.id,
+        workspaceId: ws.id,
+        kind: "apply",
+      }),
+      label,
+    ).toEqual(original);
+  }
+});
+
+test("drain-owned Apply cancellation rejects malformed present timestamps", async () => {
+  for (const { label, store } of await adapters()) {
+    const ws = workspace(`drain-cancel-timestamp-${label}`);
+    await store.putWorkspace(ws);
+    const original = {
+      workspaceId: ws.id,
+      managementState: "active" as const,
+      managementEpoch: 1,
+    };
+    const queued = applyRun(`drain-cancel-timestamp-run-${label}`, ws.id);
+    expect(await store.beginApplyRun(queued, original), label).toEqual({
+      status: "created",
+      run: queued,
+    });
+    const malformed = {
+      ...queued,
+      updatedAt: "bad" as unknown as number,
+    };
+    await store.putApplyRun(malformed);
+    expect(await store.getApplyRun(queued.id), label).toEqual(malformed);
+
+    const draining = {
+      workspaceId: ws.id,
+      managementState: "draining" as const,
+      managementEpoch: 2,
+    };
+    expect(await store.beginWorkspaceDraining(ws.id, original), label).toEqual({
+      status: "started",
+      management: draining,
+    });
+    const cancelled: ApplyRun = {
+      ...malformed,
+      status: "cancelled",
+      auditEvents: [
+        ...malformed.auditEvents,
+        {
+          id: `${queued.id}:apply.cancelled:3`,
+          type: "apply.cancelled",
+          at: 3,
+        },
+      ],
+      updatedAt: 3,
+      finishedAt: 3,
+    };
+    await expect(
+      Promise.resolve().then(() => store.transitionRun({
+        id: queued.id,
+        kind: "apply",
+        expectFrom: ["queued"],
+        expectStartedAt: null,
+        clearLeaseToken: true,
+        expectDrainCancellation: {
+          management: draining,
+          expectedRun: malformed,
+        },
+        run: cancelled,
+      })),
+      label,
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(await store.getApplyRun(queued.id), label).toEqual(malformed);
+  }
+});
+
+test("drain-owned Apply cancellation rejects raw Postgres numeric timestamps", async () => {
+  for (const adapter of await adapters()) {
+    if (adapter.setStoredRunUpdatedAtNumericOne === undefined) continue;
+    const { label, store } = adapter;
+    const ws = workspace(`drain-cancel-numeric-${label}`);
+    await store.putWorkspace(ws);
+    const original = {
+      workspaceId: ws.id,
+      managementState: "active" as const,
+      managementEpoch: 1,
+    };
+    const queued = applyRun(`drain-cancel-numeric-run-${label}`, ws.id);
+    expect(await store.beginApplyRun(queued, original), label).toEqual({
+      status: "created",
+      run: queued,
+    });
+    await adapter.setStoredRunUpdatedAtNumericOne(queued.id);
+    const malformed = await store.getApplyRun(queued.id);
+    expect(malformed, label).toMatchObject({ id: queued.id, updatedAt: 1 });
+    if (malformed === undefined) throw new Error("Apply row disappeared");
+
+    const draining = {
+      workspaceId: ws.id,
+      managementState: "draining" as const,
+      managementEpoch: 2,
+    };
+    expect(await store.beginWorkspaceDraining(ws.id, original), label).toEqual({
+      status: "started",
+      management: draining,
+    });
+    const cancelled: ApplyRun = {
+      ...malformed,
+      status: "cancelled",
+      auditEvents: [
+        ...malformed.auditEvents,
+        {
+          id: `${queued.id}:apply.cancelled:3`,
+          type: "apply.cancelled",
+          at: 3,
+        },
+      ],
+      updatedAt: 3,
+      finishedAt: 3,
+    };
+    expect(
+      await store.transitionRun({
+        id: queued.id,
+        kind: "apply",
+        expectFrom: ["queued"],
+        expectStartedAt: null,
+        clearLeaseToken: true,
+        expectDrainCancellation: {
+          management: draining,
+          expectedRun: malformed,
+        },
+        run: cancelled,
+      }),
+      label,
+    ).toEqual({
+      won: false,
+      run: malformed,
+    });
+    expect(await store.getApplyRun(queued.id), label).toEqual(malformed);
   }
 });
 

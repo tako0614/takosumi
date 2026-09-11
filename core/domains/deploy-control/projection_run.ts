@@ -30,6 +30,14 @@ import type {
 } from "takosumi-contract/runs";
 import { normalizePlanResourceScope, type JsonValue } from "takosumi-contract";
 
+/** Persisted approval gate, including the pre-waiting_approval representation. */
+export function planRunAwaitsApproval(planRun: PlanRun): boolean {
+  if (planRun.appliedApplyRunId || planRun.approval) return false;
+  if (planRun.status === "waiting_approval") return true;
+  if (planRun.driftCheck === true || planRun.status !== "succeeded") return false;
+  return planRun.operation === "destroy" || planRun.requiresApproval === true;
+}
+
 type RunEnvironmentEvidenceProjection = Pick<
   Run,
   "providerResolutions" | "runEnvironmentEvidenceDigest" | "redactionProfileId"

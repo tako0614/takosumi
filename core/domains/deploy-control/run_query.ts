@@ -8,12 +8,9 @@
  * `getRunEvents` / `getRunCost`) on its public API unchanged, so the `/api` run
  * ledger route layers keep calling the controller surface.
  *
- * Two pure projection helpers — {@link RunQueryService.planAwaitsApproval} and
- * {@link RunQueryService.capsuleProjection} — are owned here because they are
- * functions of a stored PlanRun alone (no controller mutation state). The
- * controller's run-engine mutations (`cancelRun` / `approveRun`) call back into
- * this service for those helpers so the §25 approval-gate logic and the §19 Run
- * Capsule projection live in exactly one place.
+ * Pure approval semantics live in projection_run alongside the Run projection;
+ * this service delegates to that same predicate used by fenced cancellation.
+ * Capsule context is also derived from the stored PlanRun alone.
  */
 
 import type {
@@ -36,6 +33,7 @@ import {
 } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import {
+  planRunAwaitsApproval,
   projectApplyRun,
   projectPlanRun,
   projectPlanRunCost,
@@ -302,16 +300,7 @@ export class RunQueryService {
    * rows keep their two-stage behavior.
    */
   planAwaitsApproval(planRun: PlanRun): Promise<boolean> {
-    if (planRun.appliedApplyRunId) return Promise.resolve(false);
-    if (planRun.approval) return Promise.resolve(false);
-    if (planRun.status === "waiting_approval") return Promise.resolve(true);
-    // Back-compat for rows persisted `succeeded` before `waiting_approval` was a
-    // persisted status. A §19 drift_check is read-only and never parks.
-    if (planRun.driftCheck === true) return Promise.resolve(false);
-    if (planRun.status !== "succeeded") return Promise.resolve(false);
-    if (planRun.operation === "destroy") return Promise.resolve(true);
-    if (planRun.requiresApproval === true) return Promise.resolve(true);
-    return Promise.resolve(false);
+    return Promise.resolve(planRunAwaitsApproval(planRun));
   }
 }
 

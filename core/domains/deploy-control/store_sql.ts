@@ -149,6 +149,7 @@ import type {
 } from "./store.ts";
 import {
   assertExactRunTransitionInput,
+  assertDrainRunCancellationInput,
   assertSourceSyncSuccessCommit,
   assertSourceConfigurationWriteInput,
   assertWorkspaceManagementAdmission,
@@ -214,6 +215,7 @@ import {
   sourceSyncRunManagementAuthority,
   sourceSyncRunImmutableIdentityMatches,
   runStoredIdentityMatches,
+  runDrainCancellationMatches,
   runRequiresStoredManagementAuthority,
   runManagementAuthority,
   runManagementAuthorityForIdentity,
@@ -1986,6 +1988,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   async transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
     input = structuredClone(input);
     assertExactRunTransitionInput(input);
+    assertDrainRunCancellationInput(input);
     if (input.expectedWorkspaceManagementAuthority !== undefined) {
       // Validate the caller's captured authority before any database work.
       // A valid but stale/mis-bound expectation is a normal CAS loss below;
@@ -2023,6 +2026,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           : input.kind === "source_sync"
             ? [RUN_KIND_SOURCE_SYNC]
             : [RUN_KIND_RESTORE];
+    const drainCancellation = input.expectDrainCancellation;
     const heartbeatAt = input.heartbeatAt ?? input.run.heartbeatAt;
     const persisted: PlanRun | ApplyRun | SourceSyncRun | Run =
       input.clearHeartbeat
@@ -2051,7 +2055,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         currentRun === undefined &&
         (input.kind === "source_sync" ||
           input.setLeaseToken !== undefined ||
-          requireStoredManagementAuthority)
+          requireStoredManagementAuthority ||
+          drainCancellation !== undefined)
       ) {
           const currentRows = await db
             .select({ json: pgSchema.runs.runJson })
@@ -2073,6 +2078,12 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           currentRun,
           input.run as StoredRunRecord,
         )
+      ) {
+        return undefined;
+      }
+      if (
+        drainCancellation !== undefined &&
+        (currentRun === undefined || !runDrainCancellationMatches(currentRun, input))
       ) {
         return undefined;
       }
@@ -2112,6 +2123,121 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
               sql`${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' ->> 'managementState' = ${storedAuthority.managementState}`,
               sql`${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' ->> 'managementEpoch' = ${String(storedAuthority.managementEpoch)}`,
             );
+      const drainWorkspaceFence = drainCancellation === undefined
+        ? sql`true`
+        : exists(
+            db
+              .select({ one: sql`1` })
+              .from(pgSchema.workspaces)
+              .where(
+                and(
+                  eq(
+                    pgSchema.workspaces.id,
+                    drainCancellation.management.workspaceId,
+                  ),
+                  eq(pgSchema.workspaces.managementState, "draining"),
+                  eq(
+                    pgSchema.workspaces.managementEpoch,
+                    drainCancellation.management.managementEpoch,
+                  ),
+                ),
+              ),
+          );
+      const drainOriginalAuthorityFence = drainCancellation === undefined
+        ? sql`true`
+        : sql`jsonb_typeof(${pgSchema.runs.runJson}) = 'object'
+          AND jsonb_typeof(${pgSchema.runs.runJson} -> 'workspaceManagementAuthority') = 'object'
+          AND jsonb_typeof(${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' -> 'workspaceId') = 'string'
+          AND btrim(${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' ->> 'workspaceId') <> ''
+          AND ${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' ->> 'workspaceId' = ${pgSchema.runs.workspaceId}
+          AND jsonb_typeof(${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' -> 'managementState') = 'string'
+          AND ${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' ->> 'managementState' = 'active'
+          AND jsonb_typeof(${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' -> 'managementEpoch') = 'number'
+          AND CASE
+            WHEN ${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' ->> 'managementEpoch' ~ '^(0|[1-9][0-9]*)$'
+            THEN (${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' ->> 'managementEpoch')::numeric > 0
+              AND (${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' ->> 'managementEpoch')::numeric <= 9007199254740991
+              AND (${pgSchema.runs.runJson} -> 'workspaceManagementAuthority' ->> 'managementEpoch')::numeric < ${drainCancellation.management.managementEpoch}
+            ELSE false
+          END`;
+      const drainExpectedRun = drainCancellation?.expectedRun;
+      const drainExpectedKind = drainExpectedRun === undefined
+        ? undefined
+        : input.kind === "plan"
+          ? (drainExpectedRun as PlanRun).driftCheck === true
+            ? "drift_check"
+            : (drainExpectedRun as PlanRun).operation === "destroy"
+              ? "destroy_plan"
+              : "plan"
+          : (drainExpectedRun as ApplyRun).operation === "destroy"
+            ? "destroy_apply"
+            : "apply";
+      const drainExpectedSnapshot = drainExpectedRun === undefined
+        ? undefined
+        : and(
+            eq(
+              pgSchema.runs.runJson,
+              runJsonPreservingManagementAuthority(
+                drainExpectedRun as StoredRunRecord,
+              ),
+            ),
+            eq(pgSchema.runs.workspaceId, drainExpectedRun.workspaceId),
+            eq(pgSchema.runs.status, drainExpectedRun.status),
+            eq(pgSchema.runs.kind, drainExpectedKind!),
+            drainExpectedRun.capsuleId === undefined
+              ? isNull(pgSchema.runs.capsuleId)
+              : eq(pgSchema.runs.capsuleId, drainExpectedRun.capsuleId),
+            isNull(pgSchema.runs.leaseToken),
+            drainExpectedRun.heartbeatAt === undefined
+              ? isNull(pgSchema.runs.heartbeatAt)
+              : eq(pgSchema.runs.heartbeatAt, drainExpectedRun.heartbeatAt),
+          );
+      // PostgreSQL JSONB considers 1.0 equal to 1.  Keep the freeze
+      // predicate's canonical integer representation fence in this CAS so a
+      // raw timestamp cannot be normalized by the cancellation writer and
+      // silently clear a blocker.
+      const drainTimestampFence = drainCancellation === undefined
+        ? sql`true`
+        : sql`CASE
+          WHEN jsonb_typeof(${pgSchema.runs.runJson} -> 'createdAt') = 'number' THEN
+            ${pgSchema.runs.runJson} ->> 'createdAt' ~ '^(0|[1-9][0-9]*)$'
+            AND (${pgSchema.runs.runJson} ->> 'createdAt')::numeric <= 9007199254740991
+          ELSE false
+        END
+        AND ${pgSchema.runs.runJson} ->> 'createdAt' = ${pgSchema.runs.createdAt}
+        AND CASE
+          WHEN jsonb_typeof(${pgSchema.runs.runJson} -> 'updatedAt') = 'number' THEN
+            ${pgSchema.runs.runJson} ->> 'updatedAt' ~ '^(0|[1-9][0-9]*)$'
+            AND (${pgSchema.runs.runJson} ->> 'updatedAt')::numeric <= 9007199254740991
+          ELSE false
+        END
+        AND (
+          NOT (${pgSchema.runs.runJson} ? 'startedAt')
+          OR CASE
+            WHEN jsonb_typeof(${pgSchema.runs.runJson} -> 'startedAt') = 'number' THEN
+              ${pgSchema.runs.runJson} ->> 'startedAt' ~ '^(0|[1-9][0-9]*)$'
+              AND (${pgSchema.runs.runJson} ->> 'startedAt')::numeric <= 9007199254740991
+            ELSE false
+          END
+        )
+        AND (
+          NOT (${pgSchema.runs.runJson} ? 'finishedAt')
+          OR CASE
+            WHEN jsonb_typeof(${pgSchema.runs.runJson} -> 'finishedAt') = 'number' THEN
+              ${pgSchema.runs.runJson} ->> 'finishedAt' ~ '^(0|[1-9][0-9]*)$'
+              AND (${pgSchema.runs.runJson} ->> 'finishedAt')::numeric <= 9007199254740991
+            ELSE false
+          END
+        )
+        AND CASE
+          WHEN ${pgSchema.runs.heartbeatAt} IS NULL THEN
+            NOT (${pgSchema.runs.runJson} ? 'heartbeatAt')
+          ELSE
+            ${pgSchema.runs.heartbeatAt} BETWEEN 0 AND 9007199254740991
+            AND jsonb_typeof(${pgSchema.runs.runJson} -> 'heartbeatAt') = 'number'
+            AND ${pgSchema.runs.runJson} ->> 'heartbeatAt' ~ '^(0|[1-9][0-9]*)$'
+            AND ${pgSchema.runs.runJson} -> 'heartbeatAt' = to_jsonb(${pgSchema.runs.heartbeatAt})
+        END`;
       const rows = await db
         .update(pgSchema.runs)
         .set({
@@ -2131,6 +2257,10 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
             eq(pgSchema.runs.id, input.id),
             runIdentityFence,
             runAuthorityFence,
+            drainWorkspaceFence,
+            drainOriginalAuthorityFence,
+            drainExpectedSnapshot,
+            drainTimestampFence,
             expectedWorkspaceId === undefined
               ? sql`true`
               : eq(pgSchema.runs.workspaceId, expectedWorkspaceId),
@@ -2183,7 +2313,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     if (
       input.setLeaseToken !== undefined ||
       input.expectedWorkspaceManagementAuthority !== undefined ||
-      requireStoredManagementAuthority
+      requireStoredManagementAuthority ||
+      drainCancellation !== undefined
     ) {
       // The replacement payload is not authority: read the Workspace id from
       // the authoritative existing Run row, then lock that Workspace before
@@ -2202,10 +2333,16 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         const management = workspaceId
           ? await pgWorkspaceManagementForTransaction(transaction, workspaceId)
           : undefined;
-        if (!management || management.managementState !== "active") {
+        if (
+          !management ||
+          (drainCancellation === undefined
+            ? management.managementState !== "active"
+            : management.managementState !== "draining")
+        ) {
           return undefined;
         }
-        const expected = input.expectedWorkspaceManagementAuthority;
+        const expected = input.expectedWorkspaceManagementAuthority ??
+          drainCancellation?.management;
         if (
           expected !== undefined &&
           (expected.workspaceId !== management.workspaceId ||
@@ -2218,7 +2355,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         let current: StoredRunRecord | undefined;
         if (
           input.setLeaseToken !== undefined ||
-          requireStoredManagementAuthority
+          requireStoredManagementAuthority ||
+          drainCancellation !== undefined
         ) {
           const currentRows = await transaction.query<{
             readonly runJson: unknown;
@@ -2232,11 +2370,19 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           current = parseJson(currentRows.rows[0]?.runJson) as
             | StoredRunRecord
             | undefined;
+          if (
+            drainCancellation !== undefined &&
+            (current === undefined || !runDrainCancellationMatches(current, input))
+          ) {
+            return undefined;
+          }
           const authority = current ? runManagementAuthority(current) : undefined;
-        if (
-          authority === undefined ||
-          authority.workspaceId !== management.workspaceId ||
-          authority.managementEpoch !== management.managementEpoch
+          if (
+            (input.setLeaseToken !== undefined ||
+              requireStoredManagementAuthority) &&
+            (authority === undefined ||
+              authority.workspaceId !== management.workspaceId ||
+              authority.managementEpoch !== management.managementEpoch)
           ) {
             // The persisted original authority, not a caller's optional
             // expectation, fences every fresh lease or explicitly guarded

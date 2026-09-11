@@ -430,6 +430,35 @@ generation が進んだ行、片方でも lease が残る行、来歴のない�
 この command の対象外です。HTTP/queue caller に接続した全自動の停止操作や、残る
 Run の cancellation、管理停止の中止・移管を完成済みとするものではありません。
 
+### 停止中の Plan / Apply の取消し
+
+内部候補の `cancelRunDuringDrain` は、既存 RunEngine の取消し処理を共用します。
+新しい ledger、公開 Run status、HTTP route、任意の停止中書込み flag は追加しません。
+未開始の queued Plan / Apply と、未承認・未適用の承認待ち Plan を対象にし、旧
+`succeeded` 表現の承認待ちも既存 projection と同じ条件で扱います。
+
+既存 `transitionRun` の取消し専用条件で、現在の exact な draining epoch D、保存した
+original active epoch、読み取った Run 全体、物理 identity/status/heartbeat と lease の
+不在を一度の保存で確認します。取消しは現在の D が認める収束であり、original epoch は
+D 未満であれば有効です。停止中止・再停止を経た古い未開始 Run を D-1 の条件だけで
+永久に残さず、現在の epoch を取り直して通常実行する権限も与えません。
+
+変更は既存の cancelled status、取消し event の一回の追記、更新・終了時刻だけです。
+元の admission と履歴・実行結果は維持します。競合では上書きせず既存 Run を返し、
+成功した Plan の入力削除と terminal observer は従来の取消し経路を使います。
+取消し前の必須・存在する任意の時刻は、既存の凍結判定と同じ非負の安全な整数として
+検証します。不正な更新・終了時刻を取消しの時刻で置換し、壊れた停止証拠を正常化
+しません。Postgres の JSONB は数値 `1.0` と `1` を等しいとみなすため、読み取った
+JavaScript 値の比較だけでなく保存 JSON の整数表現と物理列も最終 UPDATE で確認します。
+旧承認待ちに任意の終了時刻がないことは、不正な時刻が保存されていることと区別します。
+現在の Workspace lock を先に取得する Postgres、一つの条件付き UPDATE にまとめる D1、
+同期的に判定・保存する Memory で同じ条件を適用します。
+
+これは内部の一行の収束処理です。SourceSync / Restore の未開始処理、実行済みの
+結果不明処理、停止・中止・移管の公開操作は別の残件です。SourceSync の公開 status に
+`cancelled` を追加しません。上記 Git command に残る D-1 条件の中止・再停止時の
+扱いも別途修正・回帰確認する必要があります。
+
 ### 手動 control export の開始・結果確定
 
 内部候補の手動 Backup は、元の管理 epoch を保持した `beginBackupRun` で

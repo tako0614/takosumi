@@ -185,7 +185,10 @@ import {
   CapsuleStateVersionGuardConflict,
   CapsulePlanCreationFenceConflictError,
   WorkspaceManagementAdmissionConflictError,
+  assertWorkspaceFreezeExpectation,
   assertWorkspaceManagementAuthorityInput,
+  runCanCancelDuringDrain,
+  type FreezeWorkspaceManagementExpectation,
   type WorkspaceManagementAuthority,
   type BeginApplyRunResult,
   planRunExecutionInputsDigestMaterial,
@@ -6328,10 +6331,32 @@ export class RunEngine {
    * cancelled; a `running` or terminal run is rejected. Returns the resulting
    * unified Run.
    */
-  async cancelRun(id: string): Promise<Run> {
+  cancelRun(id: string): Promise<Run> {
+    return this.#cancelRun(id);
+  }
+
+  /** Internal convergence only; the public cancellation route has no drain mode. */
+  cancelRunDuringDrain(
+    id: string,
+    management: FreezeWorkspaceManagementExpectation,
+  ): Promise<Run> {
+    assertWorkspaceFreezeExpectation(management);
+    return this.#cancelRun(id, structuredClone(management));
+  }
+
+  async #cancelRun(
+    id: string,
+    management?: FreezeWorkspaceManagementExpectation,
+  ): Promise<Run> {
     requireNonEmptyString(id, "runId");
     const planRun = await this.#store.getPlanRun(id);
     if (planRun) {
+      if (management !== undefined && !runCanCancelDuringDrain(planRun)) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `plan run ${id} cannot be settled by management drain`,
+        );
+      }
       if (
         planRun.status !== "queued" &&
         !(await this.#runQuery.planAwaitsApproval(planRun))
@@ -6379,6 +6404,9 @@ export class RunEngine {
         // a queued Plan to still be genuinely never-started. The
         // waiting-approval path intentionally keeps its existing semantics.
         ...(planRun.status === "queued" ? { expectStartedAt: null } : {}),
+        ...(management !== undefined
+          ? { expectDrainCancellation: { management, expectedRun: planRun } }
+          : {}),
         run: cancelled,
         clearLeaseToken: true,
       });
@@ -6400,6 +6428,12 @@ export class RunEngine {
     }
     const applyRun = await this.#store.getApplyRun(id);
     if (applyRun) {
+      if (management !== undefined && !runCanCancelDuringDrain(applyRun)) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `apply run ${id} cannot be settled by management drain`,
+        );
+      }
       // A retryable runner-infrastructure failure deliberately requeues the
       // SAME ApplyRun after it has started. Such a row may already carry
       // provider/lifecycle mutation evidence (notably a succeeded pre_destroy
@@ -6435,6 +6469,9 @@ export class RunEngine {
         // row and requeue it after provider/lifecycle execution between our read
         // and CAS. Require the row to still be genuinely never-started.
         expectStartedAt: null,
+        ...(management !== undefined
+          ? { expectDrainCancellation: { management, expectedRun: applyRun } }
+          : {}),
         run: cancelled,
         clearLeaseToken: true,
       });

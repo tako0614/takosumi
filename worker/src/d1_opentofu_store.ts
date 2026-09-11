@@ -159,6 +159,7 @@ import type {
 } from "../../core/domains/deploy-control/store.ts";
 import {
   assertExactRunTransitionInput,
+  assertDrainRunCancellationInput,
   assertSourceSyncSuccessCommit,
   assertSourceConfigurationWriteInput,
   prepareConnectionExpiration,
@@ -2601,6 +2602,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
     input = structuredClone(input);
     assertExactRunTransitionInput(input);
+    assertDrainRunCancellationInput(input);
     if (input.expectedWorkspaceManagementAuthority !== undefined) {
       // Validate malformed caller input up front. A valid but stale/mis-bound
       // authority is represented by the normal CAS miss below.
@@ -2618,6 +2620,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           : input.kind === "source_sync"
             ? [RUN_KIND_SOURCE_SYNC]
             : [RUN_KIND_RESTORE];
+    const drainCancellation = input.expectDrainCancellation;
     if (
       input.kind === "source_sync" &&
       (!isSourceSyncRunRecord(input.run as StoredRunRecord) ||
@@ -2649,25 +2652,69 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const requireStoredManagementAuthority =
       input.requireStoredManagementAuthority === true;
     const activeWorkspace =
-      input.setLeaseToken === undefined && expectedManagement === undefined
-        ? undefined
-        : exists(
+      drainCancellation !== undefined
+        ? exists(
             this.#orm
               .select({ one: sql`1` })
               .from(schema.workspaces)
               .where(
                 and(
                   eq(schema.workspaces.id, schema.runs.workspaceId),
-                  eq(schema.workspaces.managementState, "active"),
-                  expectedManagement === undefined
-                    ? undefined
-                    : and(
-                        eq(schema.workspaces.id, expectedManagement.workspaceId),
-                        eq(schema.workspaces.managementEpoch, expectedManagement.managementEpoch),
-                      ),
+                  eq(
+                    schema.workspaces.id,
+                    drainCancellation.management.workspaceId,
+                  ),
+                  eq(schema.workspaces.managementState, "draining"),
+                  eq(
+                    schema.workspaces.managementEpoch,
+                    drainCancellation.management.managementEpoch,
+                  ),
                 ),
               ),
-          );
+          )
+        : input.setLeaseToken === undefined && expectedManagement === undefined
+          ? undefined
+          : exists(
+              this.#orm
+                .select({ one: sql`1` })
+                .from(schema.workspaces)
+                .where(
+                  and(
+                    eq(schema.workspaces.id, schema.runs.workspaceId),
+                    eq(schema.workspaces.managementState, "active"),
+                    expectedManagement === undefined
+                      ? undefined
+                      : and(
+                          eq(schema.workspaces.id, expectedManagement.workspaceId),
+                          eq(schema.workspaces.managementEpoch, expectedManagement.managementEpoch),
+                        ),
+                  ),
+                ),
+            );
+    const drainExpectedRun = drainCancellation?.expectedRun;
+    const drainExpectedType = drainExpectedRun === undefined
+      ? undefined
+      : input.kind === "plan"
+        ? planRunType(drainExpectedRun as PlanRun)
+        : applyRunType(drainExpectedRun as ApplyRun);
+    const drainExpectedSnapshot = drainExpectedRun === undefined
+      ? undefined
+      : and(
+          eq(
+            schema.runs.runJson,
+            d1RunJsonPreservingAuthority(drainExpectedRun),
+          ),
+          eq(schema.runs.workspaceId, drainExpectedRun.workspaceId),
+          eq(schema.runs.type, drainExpectedType!),
+          eq(schema.runs.status, drainExpectedRun.status),
+          drainExpectedRun.capsuleId === undefined
+            ? isNull(schema.runs.capsuleId)
+            : eq(schema.runs.capsuleId, drainExpectedRun.capsuleId),
+          isNull(schema.runs.leaseToken),
+          drainExpectedRun.heartbeatAt === undefined
+            ? isNull(schema.runs.heartbeatAt)
+            : eq(schema.runs.heartbeatAt, drainExpectedRun.heartbeatAt),
+        );
     const runJson = d1RunJsonPreservingAuthority(persisted);
     const result = await this.#orm
       .update(schema.runs)
@@ -2686,6 +2733,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           eq(schema.runs.id, input.id),
           inArray(schema.runs.type, types),
           inArray(schema.runs.status, [...input.expectFrom]),
+          drainExpectedSnapshot,
           input.expectExactRun === undefined
             ? undefined
             : and(
@@ -2718,9 +2766,13 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
               : sql`json_extract(${schema.runs.runJson}, '$.startedAt') = ${input.expectStartedAt}`,
           activeWorkspace,
           d1RunStoredIdentityWhere(persisted, types),
-          input.setLeaseToken === undefined && !requireStoredManagementAuthority
-            ? undefined
-            : d1RunStoredManagementAuthorityMatchesCurrentWorkspace(),
+          drainCancellation !== undefined
+            ? d1RunDrainCancellationManagementFence(
+                drainCancellation.management,
+              )
+            : input.setLeaseToken === undefined && !requireStoredManagementAuthority
+              ? undefined
+              : d1RunStoredManagementAuthorityMatchesCurrentWorkspace(),
         ),
       )
       .run();
@@ -9657,6 +9709,41 @@ function d1RunStoredManagementAuthorityMatchesCurrentWorkspace(): SQL {
         AND ${schema.workspaces.managementState} = 'active'
         AND ${schema.workspaces.managementEpoch} = CAST(json_extract(${runJson}, ${authorityEpochPath}) AS INTEGER)
     )`;
+}
+
+/**
+ * Drain cancellation keeps the original admission tuple while the current
+ * Workspace is in the exact draining epoch captured by the caller.  The
+ * predicate is part of the same Run UPDATE as the snapshot/lease CAS; a stale
+ * or malformed private tuple therefore cannot authorize a terminal write.
+ */
+function d1RunDrainCancellationManagementFence(
+  expected: FreezeWorkspaceManagementExpectation,
+): SQL {
+  const runJson = schema.runs.runJson;
+  const authorityPath = "$.workspaceManagementAuthority";
+  const authorityWorkspacePath =
+    "$.workspaceManagementAuthority.workspaceId";
+  const authorityStatePath =
+    "$.workspaceManagementAuthority.managementState";
+  const authorityEpochPath =
+    "$.workspaceManagementAuthority.managementEpoch";
+  const safeEpoch = 9_007_199_254_740_991;
+  return sql`CASE
+    WHEN json_valid(${runJson}) = 1
+      AND json_type(${runJson}, ${authorityPath}) = 'object'
+      AND json_type(${runJson}, ${authorityWorkspacePath}) = 'text'
+      AND trim(json_extract(${runJson}, ${authorityWorkspacePath})) <> ''
+      AND json_extract(${runJson}, ${authorityWorkspacePath}) = ${schema.runs.workspaceId}
+      AND json_type(${runJson}, ${authorityStatePath}) = 'text'
+      AND json_extract(${runJson}, ${authorityStatePath}) = 'active'
+      AND json_type(${runJson}, ${authorityEpochPath}) = 'integer'
+      AND CAST(json_extract(${runJson}, ${authorityEpochPath}) AS INTEGER) > 0
+      AND CAST(json_extract(${runJson}, ${authorityEpochPath}) AS INTEGER) <= ${safeEpoch}
+      AND CAST(json_extract(${runJson}, ${authorityEpochPath}) AS INTEGER) < ${expected.managementEpoch}
+    THEN 1
+    ELSE 0
+  END`;
 }
 
 function d1CapsuleStateGuardStmt(
