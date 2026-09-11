@@ -10020,6 +10020,7 @@ export class RunEngine {
       id: applyRun.id,
       kind: "apply",
       expectFrom: [applyRun.status],
+      expectExactRun: applyRun,
       run: {
         ...applyRun,
         auditEvents: [...applyRun.auditEvents, completedMarker],
@@ -10106,6 +10107,7 @@ export class RunEngine {
       id: applyRun.id,
       kind: "apply",
       expectFrom: [applyRun.status],
+      expectExactRun: applyRun,
       run: {
         ...applyRun,
         auditEvents: [...applyRun.auditEvents, completedMarker],
@@ -10135,6 +10137,7 @@ export class RunEngine {
         id: applyRun.id,
         kind: "apply",
         expectFrom: [applyRun.status],
+        expectExactRun: applyRun,
         run: {
           ...applyRun,
           updatedAt: now,

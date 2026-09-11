@@ -208,7 +208,7 @@ function output(capsuleId: string, overrides: Partial<Output> = {}): Output {
 function applyRunForSafety(input: {
   readonly id: string;
   readonly capsuleId: string;
-  readonly operation: "update" | "destroy";
+  readonly operation: "create" | "update" | "destroy";
   readonly status: "queued" | "succeeded" | "failed";
   readonly effectAt: number;
   readonly auditEvents?: ApplyRun["auditEvents"];
@@ -2518,6 +2518,385 @@ test("runtime-secret retirement markers use ordered pending completion parity", 
       }),
       label,
     ).toBe(false);
+  }
+});
+
+test("terminal Apply exact finalizer CAS is parity-safe across stores", async () => {
+  const scenarios = [
+    "same_terminal_observation",
+    "draining_authority",
+    "held_lease",
+    "invalid_exact_input",
+    "billing_create",
+  ] as const;
+
+  for (const [label, store] of await stores()) {
+    for (const scenario of scenarios) {
+      const suffix = `${label}_${scenario}`;
+      const workspaceId = `workspace_exact_cas_${suffix}`;
+      const runId = `apply_exact_cas_${suffix}`;
+      const capsuleId = `capsule_exact_cas_${suffix}`;
+      const billingCreate = scenario === "billing_create";
+      await store.putWorkspace(
+        workspace({
+          id: workspaceId,
+          handle: workspaceId.replace(/_/g, "-"),
+        }),
+      );
+      const authority = await activeWorkspaceManagementAuthority(
+        store,
+        workspaceId,
+      );
+      const r0 = {
+        ...applyRunForSafety({
+          id: runId,
+          capsuleId,
+          operation: billingCreate ? "create" : "destroy",
+          status: "succeeded",
+          effectAt: 100,
+          auditEvents: billingCreate
+            ? [
+                {
+                  id: `billing_capture_pending_${suffix}`,
+                  type: "billing.capture.pending",
+                  at: 100,
+                  data: {
+                    planRunId: `plan_${runId}`,
+                    providerMutationCommitted: true,
+                  },
+                },
+              ]
+            : [
+                {
+                  id: `runtime_retirement_pending_${suffix}`,
+                  type: "runtime_secret.retirement.pending",
+                  at: 100,
+                  data: {
+                    capsuleId,
+                    providerDestroyCommitted: true,
+                  },
+                },
+              ],
+        }),
+        workspaceId,
+      } satisfies ApplyRun;
+      expect(
+        await store.beginApplyRun(r0, authority),
+        `${label}:${scenario}`,
+      ).toEqual({ status: "created", run: r0 });
+
+      const retirementEvent = (
+        id: string,
+        type:
+          | "runtime_secret.retirement.completed"
+          | "runtime_secret.retirement.deferred",
+        at: number,
+      ): ApplyRun["auditEvents"][number] => ({ id, type, at });
+      const pendingEvent = (
+        id: string,
+        at: number,
+      ): ApplyRun["auditEvents"][number] => ({
+        id,
+        type: "runtime_secret.retirement.pending",
+        at,
+      });
+      const billingCompletedEvent = (
+        id: string,
+        at: number,
+      ): ApplyRun["auditEvents"][number] => ({
+        id,
+        type: "billing.capture.completed",
+        at,
+      });
+
+      if (scenario === "billing_create") {
+        const completed = {
+          ...r0,
+          updatedAt: 101,
+          auditEvents: [
+            ...r0.auditEvents,
+            billingCompletedEvent(`billing_capture_completed_${suffix}`, 101),
+          ],
+        } satisfies ApplyRun;
+        expect(
+          await store.transitionRun({
+            id: r0.id,
+            kind: "apply",
+            expectFrom: [r0.status],
+            expectExactRun: r0,
+            run: completed,
+          }),
+          label,
+        ).toEqual({ won: true, run: completed });
+        expect(
+          await store.getRunManagementAuthority({
+            id: r0.id,
+            workspaceId,
+            kind: "apply",
+          }),
+          label,
+        ).toEqual(authority);
+      } else if (scenario === "same_terminal_observation") {
+        const deferred = {
+          ...r0,
+          updatedAt: 101,
+          auditEvents: [
+            ...r0.auditEvents,
+            retirementEvent(
+              `runtime_retirement_deferred_${suffix}`,
+              "runtime_secret.retirement.deferred",
+              101,
+            ),
+          ],
+        } satisfies ApplyRun;
+        const completedFromR0 = {
+          ...r0,
+          updatedAt: 102,
+          auditEvents: [
+            ...r0.auditEvents,
+            retirementEvent(
+              `runtime_retirement_completed_stale_${suffix}`,
+              "runtime_secret.retirement.completed",
+              102,
+            ),
+          ],
+        } satisfies ApplyRun;
+        expect(
+          await store.transitionRun({
+            id: r0.id,
+            kind: "apply",
+            expectFrom: [r0.status],
+            expectExactRun: r0,
+            run: deferred,
+          }),
+          label,
+        ).toEqual({ won: true, run: deferred });
+        expect(
+          await store.transitionRun({
+            id: r0.id,
+            kind: "apply",
+            expectFrom: [r0.status],
+            expectExactRun: r0,
+            run: completedFromR0,
+          }),
+          label,
+        ).toEqual({ won: false, run: deferred });
+        expect(
+          (
+            await store.listPendingRuntimeSecretRetirementRuns({
+              staleBeforeMs: 1_000,
+            })
+          ).map((run) => run.id),
+          label,
+        ).toContain(r0.id);
+
+        const completed = {
+          ...deferred,
+          updatedAt: 103,
+          auditEvents: [
+            ...deferred.auditEvents,
+            retirementEvent(
+              `runtime_retirement_completed_retry_${suffix}`,
+              "runtime_secret.retirement.completed",
+              103,
+            ),
+          ],
+        } satisfies ApplyRun;
+        expect(
+          await store.transitionRun({
+            id: r0.id,
+            kind: "apply",
+            expectFrom: [deferred.status],
+            expectExactRun: deferred,
+            run: completed,
+          }),
+          label,
+        ).toEqual({ won: true, run: completed });
+        expect(
+          (
+            await store.listPendingRuntimeSecretRetirementRuns({
+              staleBeforeMs: 1_000,
+            })
+          ).map((run) => run.id),
+          label,
+        ).not.toContain(r0.id);
+
+        const staleDeferred = {
+          ...r0,
+          updatedAt: 104,
+          auditEvents: [
+            ...r0.auditEvents,
+            retirementEvent(
+              `runtime_retirement_deferred_stale_${suffix}`,
+              "runtime_secret.retirement.deferred",
+              104,
+            ),
+          ],
+        } satisfies ApplyRun;
+        expect(
+          await store.transitionRun({
+            id: r0.id,
+            kind: "apply",
+            expectFrom: [r0.status],
+            expectExactRun: r0,
+            run: staleDeferred,
+          }),
+          label,
+        ).toEqual({ won: false, run: completed });
+      } else if (scenario === "draining_authority") {
+        expect(
+          await store.beginWorkspaceDraining(workspaceId, authority),
+          label,
+        ).toMatchObject({
+          status: "started",
+          management: {
+            workspaceId,
+            managementState: "draining",
+            managementEpoch: authority.managementEpoch + 1,
+          },
+        });
+        const deferred = {
+          ...r0,
+          updatedAt: 101,
+          auditEvents: [
+            ...r0.auditEvents,
+            retirementEvent(
+              `runtime_retirement_deferred_draining_${suffix}`,
+              "runtime_secret.retirement.deferred",
+              101,
+            ),
+          ],
+        } satisfies ApplyRun;
+        expect(
+          await store.transitionRun({
+            id: r0.id,
+            kind: "apply",
+            expectFrom: [r0.status],
+            expectExactRun: r0,
+            run: deferred,
+          }),
+          label,
+        ).toEqual({ won: true, run: deferred });
+        expect(
+          await store.getRunManagementAuthority({
+            id: r0.id,
+            workspaceId,
+            kind: "apply",
+          }),
+          label,
+        ).toEqual(authority);
+        expect(
+          await store.getWorkspaceManagement(workspaceId),
+          label,
+        ).toEqual({
+          workspaceId,
+          managementState: "draining",
+          managementEpoch: authority.managementEpoch + 1,
+        });
+      } else if (scenario === "held_lease") {
+        const held = { ...r0, updatedAt: 101 } satisfies ApplyRun;
+        expect(
+          await store.transitionRun({
+            id: r0.id,
+            kind: "apply",
+            expectFrom: [r0.status],
+            run: held,
+            setLeaseToken: `exact_cas_lease_${suffix}`,
+          }),
+          label,
+        ).toEqual({ won: true, run: held });
+        const deferred = {
+          ...held,
+          updatedAt: 102,
+          auditEvents: [
+            ...held.auditEvents,
+            retirementEvent(
+              `runtime_retirement_deferred_lease_${suffix}`,
+              "runtime_secret.retirement.deferred",
+              102,
+            ),
+          ],
+        } satisfies ApplyRun;
+        expect(
+          await store.transitionRun({
+            id: r0.id,
+            kind: "apply",
+            expectFrom: [held.status],
+            expectExactRun: held,
+            run: deferred,
+          }),
+          label,
+        ).toEqual({ won: false, run: held });
+      } else {
+        const invalidCases: readonly {
+          readonly name: string;
+          readonly run: (current: ApplyRun) => ApplyRun;
+          readonly options?: {
+            readonly setLeaseToken?: string;
+            readonly heartbeatAt?: number;
+          };
+        }[] = [
+          {
+            name: "lease mutation",
+            run: (current) => current,
+            options: { setLeaseToken: `invalid_lease_${suffix}` },
+          },
+          {
+            name: "heartbeat mutation",
+            run: (current) => current,
+            options: { heartbeatAt: 999 },
+          },
+          {
+            name: "altered capsule",
+            run: (current) => ({
+              ...current,
+              capsuleId: `wrong_capsule_${suffix}`,
+            }),
+          },
+          {
+            name: "append pending",
+            run: (current) => ({
+              ...current,
+              auditEvents: [
+                ...current.auditEvents.slice(0, -1),
+                pendingEvent(`runtime_retirement_pending_again_${suffix}`, 101),
+              ],
+            }),
+          },
+        ];
+        const validDeferred = {
+          ...r0,
+          updatedAt: 101,
+          auditEvents: [
+            ...r0.auditEvents,
+            retirementEvent(
+              `runtime_retirement_deferred_invalid_${suffix}`,
+              "runtime_secret.retirement.deferred",
+              101,
+            ),
+          ],
+        } satisfies ApplyRun;
+        for (const invalid of invalidCases) {
+          await expect(
+            Promise.resolve().then(() =>
+              store.transitionRun({
+                id: r0.id,
+                kind: "apply",
+                expectFrom: [r0.status],
+                expectExactRun: r0,
+                run: invalid.run(validDeferred),
+                ...(invalid.options ?? {}),
+              })
+            ),
+            `${label}:${invalid.name}`,
+          ).rejects.toBeInstanceOf(TypeError);
+          expect(
+            await store.getApplyRun(r0.id),
+            `${label}:${invalid.name}`,
+          ).toEqual(r0);
+        }
+      }
+    }
   }
 });
 

@@ -1969,6 +1969,13 @@ export interface TransitionRunInput {
   readonly expectLeaseToken?: string;
   readonly expectHeartbeatAt?: number | null;
   readonly expectStartedAt?: number | string | null;
+  /**
+   * Exact observed terminal ApplyRun for a finalizer's same-status write.
+   * Requires a lease-free row and matching indexed identity/status/heartbeat;
+   * cannot be combined with execution lease or heartbeat mutation options.
+   * Ordinary progress transitions intentionally do not use this fence.
+   */
+  readonly expectExactRun?: ApplyRun;
   readonly run: PlanRun | ApplyRun | SourceSyncRun | Run;
   readonly setLeaseToken?: string;
   readonly clearLeaseToken?: boolean;
@@ -1985,6 +1992,50 @@ export interface TransitionRunInput {
    * private metadata on the stored row remains authoritative.
    */
   readonly requireStoredManagementAuthority?: boolean;
+}
+
+/** Validate the narrow terminal-finalizer mode before any adapter writes. */
+export function assertExactRunTransitionInput(input: TransitionRunInput): void {
+  const expected = input.expectExactRun;
+  if (expected === undefined) return;
+  if (
+    !expected || typeof expected !== "object" ||
+    input.kind !== "apply" ||
+    !isApplyRunRecord(expected) || !isApplyRunRecord(input.run) ||
+    expected.id !== input.id ||
+    !runStoredIdentityMatches(expected, input.run) ||
+    expected.operation !== input.run.operation ||
+    (expected.status !== "succeeded" && expected.status !== "failed") ||
+    input.run.status !== expected.status ||
+    input.expectFrom.length !== 1 || input.expectFrom[0] !== expected.status ||
+    input.setLeaseToken !== undefined || input.clearLeaseToken === true ||
+    input.expectLeaseToken !== undefined ||
+    input.heartbeatAt !== undefined || input.clearHeartbeat === true ||
+    input.expectHeartbeatAt !== undefined || input.expectStartedAt !== undefined ||
+    (input.run.heartbeatAt ?? null) !== (expected.heartbeatAt ?? null)
+  ) {
+    throw new TypeError("Exact Run observation requires a terminal Apply finalizer transition");
+  }
+  const { auditEvents: beforeEvents, updatedAt: _beforeUpdatedAt, ...before } =
+    publicStoredRun(expected);
+  const { auditEvents: afterEvents, updatedAt: _afterUpdatedAt, ...after } =
+    publicStoredRun(input.run);
+  const appendedType = afterEvents.at(-1)?.type;
+  const finalizesPendingWork =
+    appendedType === APPLY_BILLING_CAPTURE_COMPLETED_EVENT
+      ? applyRunBillingCapturePending(expected)
+      : (appendedType === APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT ||
+          appendedType === APPLY_RUNTIME_SECRET_RETIREMENT_DEFERRED_EVENT) &&
+        applyRunRuntimeSecretRetirementPending(expected);
+  if (
+    stableStringify(before) !== stableStringify(after) ||
+    afterEvents.length !== beforeEvents.length + 1 ||
+    stableStringify(afterEvents.slice(0, beforeEvents.length)) !==
+      stableStringify(beforeEvents) ||
+    !finalizesPendingWork
+  ) {
+    throw new TypeError("Exact Run finalization may only append one pending-work outcome");
+  }
 }
 
 /**
@@ -3608,6 +3659,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
    */
   transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
     input = structuredClone(input);
+    assertExactRunTransitionInput(input);
     const current = this.#runs.get(input.id);
     if (!current || transitionKindForRun(current) !== input.kind) {
       return Promise.resolve({ won: false });
@@ -3685,11 +3737,17 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     const startedAtMatches =
       input.expectStartedAt === undefined ||
       input.expectStartedAt === currentStartedAt;
+    const exactRunMatches = input.expectExactRun === undefined || (
+      currentLease === undefined &&
+      stableStringify(publicStoredRun(current)) ===
+        stableStringify(publicStoredRun(input.expectExactRun))
+    );
     if (
       !statusMatches ||
       !leaseMatches ||
       !heartbeatMatches ||
-      !startedAtMatches
+      !startedAtMatches ||
+      !exactRunMatches
     ) {
       return Promise.resolve({ won: false, run: publicStoredRun(current) });
     }

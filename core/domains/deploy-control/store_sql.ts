@@ -146,6 +146,7 @@ import type {
   TransitionRunResult,
 } from "./store.ts";
 import {
+  assertExactRunTransitionInput,
   assertSourceSyncSuccessCommit,
   assertSourceConfigurationWriteInput,
   assertWorkspaceManagementAdmission,
@@ -1308,6 +1309,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
    */
   async transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
     input = structuredClone(input);
+    assertExactRunTransitionInput(input);
     if (input.expectedWorkspaceManagementAuthority !== undefined) {
       // Validate the caller's captured authority before any database work.
       // A valid but stale/mis-bound expectation is a normal CAS loss below;
@@ -1458,6 +1460,26 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
               : eq(pgSchema.runs.workspaceId, expectedWorkspaceId),
             inArray(pgSchema.runs.kind, kinds),
             inArray(pgSchema.runs.status, [...input.expectFrom]),
+            input.expectExactRun === undefined
+              ? undefined
+              : and(
+                  eq(
+                    pgSchema.runs.runJson,
+                    runJsonPreservingManagementAuthority(input.expectExactRun),
+                  ),
+                  eq(pgSchema.runs.status, input.expectExactRun.status),
+                  eq(
+                    pgSchema.runs.kind,
+                    input.expectExactRun.operation === "destroy" ? "destroy_apply" : "apply",
+                  ),
+                  input.expectExactRun.capsuleId === undefined
+                    ? isNull(pgSchema.runs.capsuleId)
+                    : eq(pgSchema.runs.capsuleId, input.expectExactRun.capsuleId),
+                  isNull(pgSchema.runs.leaseToken),
+                  input.expectExactRun.heartbeatAt === undefined
+                    ? isNull(pgSchema.runs.heartbeatAt)
+                    : eq(pgSchema.runs.heartbeatAt, input.expectExactRun.heartbeatAt),
+                ),
             input.expectLeaseToken === undefined
               ? sql`true`
               : eq(pgSchema.runs.leaseToken, input.expectLeaseToken),

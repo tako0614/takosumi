@@ -6706,6 +6706,96 @@ test("destroy commits a durable runtime-secret retirement intent and retries wit
   expect(runner.destroyJobs).toHaveLength(1);
 });
 
+test("stale runtime-secret retirement retry cannot overwrite a newer completion", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: runtimeSecretLifecycleInstallConfig(),
+  });
+  const retirementStarted = deferredSignal();
+  const releaseRetirement = deferredSignal();
+  let retireAttempts = 0;
+  const runtimeSecretFileMaterializer: RuntimeSecretFileMaterializer = {
+    materialize: () => Promise.resolve(fakeRuntimeSecretFileBundle()),
+    retire: async () => {
+      retireAttempts += 1;
+      if (retireAttempts === 1) {
+        // Leave the durable intent pending after the initial destroy. The
+        // provider teardown has already committed and must not be replayed.
+        throw new Error("injected initial retirement acknowledgement loss");
+      }
+      if (retireAttempts === 2) {
+        retirementStarted.resolve();
+        await releaseRetirement.promise;
+        // This stale owner observed the pending row before the concurrent
+        // owner completed it. Its failure tail must not restore that row.
+        throw new Error("injected stale retirement failure");
+      }
+    },
+  };
+  const controller = controllerWith(store, runner, {
+    runtimeSecretFileMaterializer,
+    releaseActivator: {
+      activate: () => Promise.resolve({ status: "succeeded" }),
+    },
+  });
+
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  await controller.approveRun(destroy.planRun.id);
+  const first = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+  expect(first.applyRun.status).toBe("succeeded");
+  expect(runner.destroyJobs).toHaveLength(1);
+  expect(retireAttempts).toBe(1);
+
+  const retryAController = controllerWith(store, runner, {
+    runtimeSecretFileMaterializer,
+  });
+  const retryBController = controllerWith(store, runner, {
+    runtimeSecretFileMaterializer,
+  });
+  const retryA = retryAController.runQueuedApply(first.applyRun.id);
+  await retirementStarted.promise;
+
+  const retryB = await retryBController.runQueuedApply(first.applyRun.id);
+  expect(
+    retryB.applyRun.auditEvents.some(
+      (event) => event.type === "runtime_secret.retirement.completed",
+    ),
+  ).toBe(true);
+  expect(retireAttempts).toBe(3);
+
+  releaseRetirement.resolve();
+  await retryA;
+
+  const final = await store.getApplyRun(first.applyRun.id);
+  expect(final).toBeDefined();
+  expect(
+    final!.auditEvents.filter(
+      (event) => event.type === "runtime_secret.retirement.completed",
+    ),
+  ).toHaveLength(1);
+  expect(
+    (
+      await store.listPendingRuntimeSecretRetirementRuns({
+        staleBeforeMs: Number.MAX_SAFE_INTEGER,
+      })
+    ).map((run) => run.id),
+  ).not.toContain(first.applyRun.id);
+
+  await retryBController.runQueuedApply(first.applyRun.id);
+  expect(retireAttempts).toBe(3);
+  expect(runner.destroyJobs).toHaveLength(1);
+});
+
 test("lifecycle action plan fails when the selected RunnerProfile lacks its declared capability", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();

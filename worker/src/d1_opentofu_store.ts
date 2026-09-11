@@ -156,6 +156,7 @@ import type {
   ConnectionActorAuthority,
 } from "../../core/domains/deploy-control/store.ts";
 import {
+  assertExactRunTransitionInput,
   assertSourceSyncSuccessCommit,
   assertSourceConfigurationWriteInput,
   prepareConnectionExpiration,
@@ -1506,6 +1507,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
    */
   async transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
     input = structuredClone(input);
+    assertExactRunTransitionInput(input);
     if (input.expectedWorkspaceManagementAuthority !== undefined) {
       // Validate malformed caller input up front. A valid but stale/mis-bound
       // authority is represented by the normal CAS miss below.
@@ -1591,6 +1593,23 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           eq(schema.runs.id, input.id),
           inArray(schema.runs.type, types),
           inArray(schema.runs.status, [...input.expectFrom]),
+          input.expectExactRun === undefined
+            ? undefined
+            : and(
+                eq(
+                  schema.runs.runJson,
+                  d1RunJsonPreservingAuthority(input.expectExactRun),
+                ),
+                eq(schema.runs.status, input.expectExactRun.status),
+                eq(schema.runs.type, applyRunType(input.expectExactRun)),
+                input.expectExactRun.capsuleId === undefined
+                  ? isNull(schema.runs.capsuleId)
+                  : eq(schema.runs.capsuleId, input.expectExactRun.capsuleId),
+                isNull(schema.runs.leaseToken),
+                input.expectExactRun.heartbeatAt === undefined
+                  ? isNull(schema.runs.heartbeatAt)
+                  : eq(schema.runs.heartbeatAt, input.expectExactRun.heartbeatAt),
+              ),
           input.expectLeaseToken === undefined
             ? undefined
             : eq(schema.runs.leaseToken, input.expectLeaseToken),

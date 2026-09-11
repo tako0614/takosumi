@@ -1003,6 +1003,159 @@ describe("Capsule execution authority", () => {
     }
   }, 30_000);
 
+  test("terminal Apply finalizers preserve ordered billing and retirement markers on isolated workerd D1", async () => {
+    const runtime = new Miniflare({
+      compatibilityDate: "2026-07-17",
+      modules: [{
+        type: "ESModule",
+        path: "terminal-apply-finalizers-workerd.mjs",
+        contents: "export default {fetch(){return new Response('ok')}}",
+      }],
+      d1Databases: { CONTROL: "terminal-apply-finalizers-workerd" },
+    });
+    try {
+      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const store = new CloudflareD1OpenTofuControlStore(database);
+      const r0: ApplyRun = {
+        ...terminatingRun("failed"),
+        id: "workerd-terminal-apply-finalizers",
+        planRunId: "workerd-terminal-apply-finalizers-plan",
+        auditEvents: [
+          {
+            id: "workerd-terminal-apply-billing-pending",
+            type: "billing.capture.pending",
+            at: 100,
+            data: {
+              planRunId: "workerd-terminal-apply-finalizers-plan",
+              providerMutationCommitted: true,
+            },
+          },
+          {
+            id: "workerd-terminal-apply-retirement-pending",
+            type: "runtime_secret.retirement.pending",
+            at: 101,
+            data: {
+              capsuleId: CAPSULE_ID,
+              installConfigId: "terminal-apply-finalizers-config",
+              profileDigest: "sha256:terminal-apply-finalizers",
+              providerDestroyCommitted: true,
+            },
+          },
+        ],
+      };
+      await store.putApplyRun(r0);
+
+      const billingCompleted: ApplyRun = {
+        ...r0,
+        auditEvents: [
+          ...r0.auditEvents,
+          {
+            id: "workerd-terminal-apply-billing-completed",
+            type: "billing.capture.completed",
+            at: 200,
+            data: {
+              planRunId: r0.planRunId,
+              applyRunId: r0.id,
+            },
+          },
+        ],
+      };
+      expect(
+        await store.transitionRun({
+          id: r0.id,
+          kind: "apply",
+          expectFrom: [r0.status],
+          expectExactRun: r0,
+          run: billingCompleted,
+        }),
+      ).toEqual({ won: true, run: billingCompleted });
+
+      const staleRetirement = {
+        ...r0,
+        auditEvents: [
+          ...r0.auditEvents,
+          {
+            id: "workerd-terminal-apply-retirement-completed-stale",
+            type: "runtime_secret.retirement.completed",
+            at: 201,
+            data: {
+              capsuleId: CAPSULE_ID,
+              installConfigId: "terminal-apply-finalizers-config",
+              profileDigest: "sha256:terminal-apply-finalizers",
+            },
+          },
+        ],
+      } satisfies ApplyRun;
+      expect(
+        await store.transitionRun({
+          id: r0.id,
+          kind: "apply",
+          expectFrom: [r0.status],
+          expectExactRun: r0,
+          run: staleRetirement,
+        }),
+      ).toEqual({ won: false, run: billingCompleted });
+
+      const completed = {
+        ...billingCompleted,
+        auditEvents: [
+          ...billingCompleted.auditEvents,
+          {
+            id: "workerd-terminal-apply-retirement-completed",
+            type: "runtime_secret.retirement.completed",
+            at: 202,
+            data: {
+              capsuleId: CAPSULE_ID,
+              installConfigId: "terminal-apply-finalizers-config",
+              profileDigest: "sha256:terminal-apply-finalizers",
+            },
+          },
+        ],
+      } satisfies ApplyRun;
+      expect(
+        await store.transitionRun({
+          id: r0.id,
+          kind: "apply",
+          expectFrom: [billingCompleted.status],
+          expectExactRun: billingCompleted,
+          run: completed,
+        }),
+      ).toEqual({ won: true, run: completed });
+
+      const staleDeferred = {
+        ...r0,
+        auditEvents: [
+          ...r0.auditEvents,
+          {
+            id: "workerd-terminal-apply-retirement-deferred-stale",
+            type: "runtime_secret.retirement.deferred",
+            at: 203,
+          },
+        ],
+      } satisfies ApplyRun;
+      expect(
+        await store.transitionRun({
+          id: r0.id,
+          kind: "apply",
+          expectFrom: [r0.status],
+          expectExactRun: r0,
+          run: staleDeferred,
+        }),
+      ).toEqual({ won: false, run: completed });
+      expect(await store.getApplyRun(r0.id)).toEqual(completed);
+      expect(
+        completed.auditEvents.map((event) => event.type),
+      ).toEqual([
+        "billing.capture.pending",
+        "runtime_secret.retirement.pending",
+        "billing.capture.completed",
+        "runtime_secret.retirement.completed",
+      ]);
+    } finally {
+      await runtime.dispose();
+    }
+  }, 30_000);
+
   test("ordered authority batches execute on an isolated workerd D1", async () => {
     const runtime = new Miniflare({
       compatibilityDate: "2026-07-17",

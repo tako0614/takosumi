@@ -218,6 +218,13 @@ Run 内の finalizer marker は auditEvents の配列順で判定します。過
 みなしません。state commit と完了処理は既存の atomic commit/outbox に収束させます。
 別の「移管用成功 Run」を作らず、空の Capsule や偽の ApplyRun を importer にしません。
 
+terminal Apply の billing／runtime-secret finalizer は、外部処理前に読んだ Run 全体を
+保存時にも照合します。同じ terminal status だけでは、別の処理の completed marker を
+古い応答が消せるためです。遅れた completed／deferred の保存が競合したら保存済みの
+結果を返し、未処理 marker が残る場合だけ既存の idempotent な後処理を再開します。
+この照合は lease のない terminal 行に限り、通常の heartbeat・実行 progress の条件を
+変えません。元の private management authority は保存済みの値を維持します。
+
 ## 実装順序と受け入れ条件
 
 現在は最初の内部縦断を実装・検証中です。Workspace の private state/epoch、
