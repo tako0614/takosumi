@@ -85,6 +85,8 @@ import type {
   CommitRestoredStateResult,
   BeginApplyRunResult,
   BeginBackupRunResult,
+  CommitBackupRunInput,
+  CommitBackupRunResult,
   BeginRestoreRunResult,
   BeginSourceSyncRunResult,
   ConnectionActorAuthority,
@@ -145,6 +147,8 @@ import {
   assertSourceConfigurationWriteInput,
   assertWorkspaceManagementAdmission,
   assertWorkspaceManagementAuthorityInput,
+  assertCommitBackupRunInput,
+  backupRunCommitDisposition,
   prepareConnectionExpiration,
   prepareConnectionRegistration,
   prepareConnectionRevocation,
@@ -260,6 +264,14 @@ function compatibilityReportSourceId(value: string | null | undefined): string {
 }
 const RUN_KIND_BACKUP = "backup";
 const RUN_KIND_RESTORE = "restore";
+
+/** Internal transaction abort used when a manual-backup settlement CAS loses. */
+class BackupCommitConflictError extends Error {
+  constructor() {
+    super("manual Backup settlement conflict");
+    this.name = "BackupCommitConflictError";
+  }
+}
 
 const PG_PRE_PROVIDER_FAILURE_CODE_SQL =
   PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES.map((code) => `'${code}'`).join(
@@ -1878,6 +1890,204 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         ? { status: "created" as const, run: publicStoredRun(run) }
         : { status: "conflict" as const };
     });
+  }
+
+  async commitBackupRun(
+    input: CommitBackupRunInput,
+  ): Promise<CommitBackupRunResult> {
+    // The settlement payload is caller-owned. Clone and validate it before
+    // entering the asynchronous transaction so no caller mutation can alter
+    // the CAS candidate or the returned replay projection.
+    input = structuredClone(input);
+    assertCommitBackupRunInput(input);
+
+    try {
+      return await this.#client.transaction(async (transaction) => {
+        // Workspace is the outer lock for every manual-backup settlement. A
+        // terminal commit may finish while the Workspace is draining, so this
+        // lock is observational only and deliberately does not assert active
+        // state or an epoch.
+        await pgWorkspaceManagementForTransaction(
+          transaction,
+          input.expectedRunningRun.workspaceId,
+        );
+
+        // Lock and read the exact Run row after the Workspace lock. The raw
+        // JSON is retained for the terminal compare-and-set below; no caller
+        // metadata is trusted to supply the durable authority tuple.
+        const runRows = await transaction.query<PgBackupSettlementRunRow>(
+          `select id,
+                  kind,
+                  space_id as "workspaceId",
+                  source_id as "sourceId",
+                  installation_id as "capsuleId",
+                  status,
+                  lease_token as "leaseToken",
+                  created_at as "createdAt",
+                  run_json as "runJson"
+             from takosumi_runs
+            where id = $1
+            for update`,
+          [input.expectedRunningRun.id],
+        );
+        const runRow = runRows.rows[0];
+        const current = runRow
+          ? pgBackupRunFromSettlementRow(runRow)
+          : undefined;
+        // A present but malformed or physically divergent row is a conflict,
+        // never an invitation to repair it with the candidate payload.
+        if (runRow !== undefined && current === undefined) {
+          return { status: "conflict" as const };
+        }
+        if (current === undefined || runRow === undefined) {
+          return { status: "conflict" as const };
+        }
+
+        // Success settles against its candidate Backup id. Failure has no
+        // candidate id, so inspect every pointer whose physical or sealed JSON
+        // owner names this Run; an existing pointer makes the failure a
+        // conflict rather than silently coexisting with a published record.
+        const recordRows = input.record
+          ? await transaction.query<PgBackupSettlementRecordRow>(
+              `select id,
+                      space_id as "workspaceId",
+                      installation_id as "capsuleId",
+                      environment,
+                      created_by_run_id as "createdByRunId",
+                      backup_json as "backupJson",
+                      created_at as "createdAt"
+                 from takosumi_backups
+                where id = $1
+                for update`,
+              [input.record.id],
+            )
+          : await transaction.query<PgBackupSettlementRecordRow>(
+              `select id,
+                      space_id as "workspaceId",
+                      installation_id as "capsuleId",
+                      environment,
+                      created_by_run_id as "createdByRunId",
+                      backup_json as "backupJson",
+                      created_at as "createdAt"
+                 from takosumi_backups
+                where created_by_run_id = $1
+                   or backup_json ->> 'createdByRunId' = $1
+                order by id
+                limit 1
+                for update`,
+              [input.expectedRunningRun.id],
+            );
+        let currentRecord: BackupRecord | undefined;
+        const recordRow = recordRows.rows[0];
+        if (recordRow !== undefined) {
+          currentRecord = pgBackupRecordFromSettlementRow(recordRow);
+          if (currentRecord === undefined) {
+            return { status: "conflict" as const };
+          }
+        }
+
+        const disposition = backupRunCommitDisposition(
+          current,
+          currentRecord,
+          input,
+        );
+        if (disposition === "conflict") {
+          return { status: "conflict" as const };
+        }
+        if (disposition === "replay") {
+          return {
+            status: "replayed" as const,
+            run: publicStoredRun(input.terminalRun),
+            ...(input.record ? { record: input.record } : {}),
+          };
+        }
+
+        // This helper verifies that the transition cannot change the durable
+        // owner/kind. The SQL expression below preserves the authority from
+        // the locked row itself, ignoring any caller-injected private key.
+        preserveStoredRunManagementAuthority(input.terminalRun, current);
+
+        if (input.record !== undefined) {
+          const record = input.record;
+          const inserted = await transaction.query<{ readonly id: string }>(
+            `insert into takosumi_backups
+              (id, space_id, installation_id, environment,
+               created_by_run_id, backup_json, created_at)
+             values ($1, $2, $3, $4, $5, $6::jsonb, $7)
+             on conflict (id) do nothing
+             returning id`,
+            [
+              record.id,
+              record.workspaceId,
+              record.capsuleId ?? null,
+              record.environment ?? null,
+              record.createdByRunId ?? null,
+              JSON.stringify(record),
+              record.createdAt,
+            ],
+          );
+          if (inserted.rows.length === 0) {
+            // A concurrent/colliding pointer must roll back the entire
+            // settlement transaction; do not turn it into a replay.
+            throw new BackupCommitConflictError();
+          }
+        }
+
+        const terminal = publicStoredRun(input.terminalRun);
+        const updated = await transaction.query<{ readonly id: string }>(
+          `update takosumi_runs as run
+              set space_id = $1,
+                  source_id = $2,
+                  installation_id = $3,
+                  status = $4,
+                  lease_token = null,
+                  heartbeat_at = $5,
+                  created_at = $6,
+                  run_json = $7::jsonb || case
+                    when run.run_json ? 'workspaceManagementAuthority'
+                      then jsonb_build_object(
+                        'workspaceManagementAuthority',
+                        run.run_json -> 'workspaceManagementAuthority'
+                      )
+                    else '{}'::jsonb
+                  end
+            where run.id = $8
+              and run.kind = 'backup'
+              and run.space_id = $1
+              and run.source_id is not distinct from $2
+              and run.installation_id is not distinct from $3
+              and run.status = 'running'
+              and run.lease_token is null
+              and run.created_at = $6
+              and run.run_json = $9::jsonb
+           returning run.id`,
+          [
+            terminal.workspaceId,
+            terminal.sourceId ?? null,
+            terminal.capsuleId ?? null,
+            terminal.status,
+            terminal.heartbeatAt ?? null,
+            terminal.createdAt,
+            JSON.stringify(terminal),
+            input.expectedRunningRun.id,
+            JSON.stringify(current),
+          ],
+        );
+        if (updated.rows.length === 0) {
+          throw new BackupCommitConflictError();
+        }
+        return {
+          status: "committed" as const,
+          run: terminal,
+          ...(input.record ? { record: input.record } : {}),
+        };
+      });
+    } catch (error) {
+      if (error instanceof BackupCommitConflictError) {
+        return { status: "conflict" };
+      }
+      throw error;
+    }
   }
 
   async beginRestoreRun(
@@ -7557,6 +7767,95 @@ export async function pgWorkspaceManagementForTransaction(
         row.managementEpoch,
       )
       : undefined;
+}
+
+interface PgBackupSettlementRunRow extends Record<string, unknown> {
+  readonly id: string;
+  readonly kind: string;
+  readonly workspaceId: string;
+  readonly sourceId: string | null;
+  readonly capsuleId: string | null;
+  readonly status: string;
+  readonly leaseToken: string | null;
+  readonly createdAt: string;
+  readonly runJson: unknown;
+}
+
+interface PgBackupSettlementRecordRow extends Record<string, unknown> {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly capsuleId: string | null;
+  readonly environment: string | null;
+  readonly createdByRunId: string | null;
+  readonly backupJson: unknown;
+  readonly createdAt: string;
+}
+
+function nullablePhysicalMatches(
+  logical: unknown,
+  physical: string | null,
+): boolean {
+  return physical === null
+    ? logical === undefined || logical === null
+    : logical === physical;
+}
+
+/** Parse one locked Run while rejecting physical/JSON identity drift. */
+function pgBackupRunFromSettlementRow(
+  row: PgBackupSettlementRunRow,
+): StoredRunRecord | undefined {
+  let value: unknown;
+  try {
+    value = parseJson(row.runJson);
+  } catch {
+    return undefined;
+  }
+  if (
+    row.kind !== RUN_KIND_BACKUP ||
+    typeof value !== "object" || value === null || Array.isArray(value)
+  ) {
+    return undefined;
+  }
+  const run = value as Partial<Run>;
+  return run.id === row.id &&
+      run.workspaceId === row.workspaceId &&
+      run.type === RUN_KIND_BACKUP &&
+      run.status === row.status &&
+      row.leaseToken === null &&
+      run.createdAt === row.createdAt &&
+      nullablePhysicalMatches(run.sourceId, row.sourceId) &&
+      nullablePhysicalMatches(run.capsuleId, row.capsuleId)
+    ? (value as StoredRunRecord)
+    : undefined;
+}
+
+/** Parse one locked Backup pointer while rejecting physical/JSON drift. */
+function pgBackupRecordFromSettlementRow(
+  row: PgBackupSettlementRecordRow,
+): BackupRecord | undefined {
+  let value: unknown;
+  try {
+    value = parseJson(row.backupJson);
+  } catch {
+    return undefined;
+  }
+  if (
+    typeof value !== "object" || value === null || Array.isArray(value)
+  ) {
+    return undefined;
+  }
+  const record = value as Partial<BackupRecord>;
+  if (
+    row.id !== record.id ||
+    row.workspaceId !== record.workspaceId ||
+    row.createdAt !== record.createdAt ||
+    !nullablePhysicalMatches(record.capsuleId, row.capsuleId) ||
+    !nullablePhysicalMatches(record.environment, row.environment) ||
+    !nullablePhysicalMatches(record.createdByRunId, row.createdByRunId)
+  ) {
+    return undefined;
+  }
+  return value as BackupRecord;
 }
 
 interface PgStoredSourceRow extends Record<string, unknown> {

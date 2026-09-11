@@ -309,7 +309,7 @@ Interface marker の fence だけをもって、観測後の全効果の収束�
 **全 admission と凍結判定が揃うまで live composition に停止の入口を接続しません。**
 最初の内部縦断だけで Workspace 全体の安全な凍結や管理移管を提供済みとしません。
 
-### 手動 control export の開始
+### 手動 control export の開始・結果確定
 
 内部候補の手動 Backup は、元の管理 epoch を保持した `beginBackupRun` で
 running Run を作成してから、artifact の生成・保存を始めます。Memory は同期の
@@ -323,9 +323,18 @@ Workspace 権限の確認後にだけ返します。サービスを直接呼ぶ�
 Workspace 取得や export 準備より前に取得します。開始済みの export の完了・
 失敗記録は停止中も継続します。公開 Run/API schema や DB schema は増やしません。
 
-これは部分的な control export の新規開始だけの対処です。`createdByRunId` を
-持つ既存 Run からの継続経路、raw Run writer の撤去・限定、BackupRecord と
-terminal Run の原子的な確定、compatibility check の新規 admission は残件です。
+手動 export の結果は `commitBackupRun` が一括確定します。保存済みの original
+authority と exact な running Run を確認し、成功時の BackupRecord の新規保存と
+terminal Run への更新を同じ transaction / batch / Memory critical section に
+入れます。失敗時は record を作りません。停止中の完了は許しますが、占有された
+record、書き換わった Run、authority のない旧 Run を上書き・補完しません。
+同一の terminal Run と record の再読取りだけを replay とし、成功から失敗への
+書き換えは拒否します。保存の応答が失われた場合も、失敗を推測して別の terminal
+結果を書きません。確定後の Activity 保存失敗は export の成功記録を取り消しません。
+
+これは手動 control export の局所的な対処です。`createdByRunId` を持つ既存 Run
+からの継続経路、raw Run writer の撤去・限定、compatibility check の新規 admission は
+残件です。
 この局所修正だけで全 blocker が単調に収束する、凍結・移管できる、完全な
 Workspace backup / restore を提供できる、とは扱いません。
 

@@ -2321,6 +2321,67 @@ export type BeginBackupRunResult =
   | { readonly status: "created"; readonly run: Run }
   | { readonly status: "conflict" };
 
+export interface CommitBackupRunInput {
+  readonly expectedRunningRun: Run;
+  readonly terminalRun: Run;
+  readonly record?: BackupRecord;
+}
+
+export type CommitBackupRunResult =
+  | { readonly status: "committed" | "replayed"; readonly run: Run; readonly record?: BackupRecord }
+  | { readonly status: "conflict" };
+
+/** Compare the JSON that durable adapters actually persist (optional keys may be undefined). */
+function backupSettlementJson(value: Run | BackupRecord | Record<string, unknown>): string {
+  return stableStringify(JSON.parse(JSON.stringify(value)));
+}
+
+export function assertCommitBackupRunInput(input: CommitBackupRunInput): void {
+  const { expectedRunningRun: expected, terminalRun: terminal, record } = input;
+  const identity = (run: Run) => {
+    const { status: _status, finishedAt: _finishedAt, errorCode: _errorCode, ...rest } = publicStoredRun(run);
+    return rest;
+  };
+  if (
+    expected.type !== "backup" || expected.status !== "running" ||
+    expected.finishedAt !== undefined || expected.errorCode !== undefined ||
+    typeof expected.startedAt !== "string" || expected.startedAt.length === 0 ||
+    (terminal.status !== "succeeded" && terminal.status !== "failed") ||
+    typeof terminal.finishedAt !== "string" || terminal.finishedAt.length === 0 ||
+    backupSettlementJson(identity(expected)) !== backupSettlementJson(identity(terminal))
+  ) throw new TypeError("Backup settlement requires one unchanged running Backup and its terminal result");
+  if (terminal.status === "succeeded") {
+    if (
+      terminal.errorCode !== undefined || !record || !record.id ||
+      record.workspaceId !== expected.workspaceId || record.createdByRunId !== expected.id ||
+      record.capsuleId !== expected.capsuleId || record.environment !== expected.environment ||
+      record.createdAt !== expected.createdAt
+    ) throw new TypeError("A successful Backup requires its exact Workspace and Run record");
+  } else if (record !== undefined) {
+    throw new TypeError("A failed Backup cannot publish a backup record");
+  }
+}
+
+/** Classify only durable evidence; caller metadata can never grant authority. */
+export function backupRunCommitDisposition(
+  current: StoredRunRecord | undefined,
+  currentRecord: BackupRecord | undefined,
+  input: CommitBackupRunInput,
+): "commit" | "replay" | "conflict" {
+  if (!current || !isPublicRunRecord(current) || current.type !== "backup" || !runManagementAuthority(current)) {
+    return "conflict";
+  }
+  if (backupSettlementJson(publicStoredRun(current)) === backupSettlementJson(publicStoredRun(input.terminalRun))) {
+    const recordMatches = currentRecord === undefined
+      ? input.record === undefined
+      : input.record !== undefined && backupSettlementJson(currentRecord) === backupSettlementJson(input.record);
+    return recordMatches ? "replay" : "conflict";
+  }
+  return currentRecord === undefined &&
+      backupSettlementJson(publicStoredRun(current)) === backupSettlementJson(publicStoredRun(input.expectedRunningRun))
+    ? "commit" : "conflict";
+}
+
 export type BeginRestoreRunResult =
   | { readonly status: "created"; readonly run: Run }
   | { readonly status: "existing"; readonly run: Run }
@@ -2505,6 +2566,7 @@ export interface OpenTofuControlStore {
   getCompatibilityCheckRun(id: string): Promise<Run | undefined>;
   putBackupRun(run: Run): Promise<Run>;
   beginBackupRun(run: Run, expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority): Promise<BeginBackupRunResult>;
+  commitBackupRun(input: CommitBackupRunInput): Promise<CommitBackupRunResult>;
   beginRestoreRun(run: Run, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<BeginRestoreRunResult>;
   getBackupRun(id: string): Promise<Run | undefined>;
   listRunsByWorkspace(
@@ -3643,6 +3705,31 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     if (this.#runs.has(run.id)) return { status: "conflict" };
     this.#runs.set(run.id, storeRunManagementAuthority(run, expectedWorkspaceManagementAuthority));
     return { status: "created", run: publicStoredRun(run) };
+  }
+
+  async commitBackupRun(input: CommitBackupRunInput): Promise<CommitBackupRunResult> {
+    input = structuredClone(input);
+    assertCommitBackupRunInput(input);
+    const current = this.#runs.get(input.expectedRunningRun.id);
+    let currentRecord = input.record ? this.#backupRecords.get(input.record.id) : undefined;
+    if (!input.record) {
+      for (const record of this.#backupRecords.values()) {
+        if (record.createdByRunId !== input.expectedRunningRun.id) continue;
+        currentRecord = record;
+        break;
+      }
+    }
+    const disposition = backupRunCommitDisposition(current, currentRecord, input);
+    if (disposition === "conflict") return { status: "conflict" };
+    if (disposition === "commit") {
+      if (input.record) this.#backupRecords.set(input.record.id, structuredClone(input.record));
+      this.#runs.set(input.terminalRun.id, preserveStoredRunManagementAuthority(input.terminalRun, current));
+    }
+    return {
+      status: disposition === "commit" ? "committed" : "replayed",
+      run: publicStoredRun(input.terminalRun),
+      ...(input.record ? { record: input.record } : {}),
+    };
   }
 
   async beginRestoreRun(run: Run, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<BeginRestoreRunResult> {

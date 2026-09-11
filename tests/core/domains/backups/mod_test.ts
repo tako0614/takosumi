@@ -9,7 +9,10 @@ import {
 } from "../../../../core/domains/backups/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import type { StoredSource } from "../../../../core/domains/deploy-control/store.ts";
-import { ActivityService } from "../../../../core/domains/activity/mod.ts";
+import {
+  ActivityService,
+  type ActivityRecorder,
+} from "../../../../core/domains/activity/mod.ts";
 import {
   seedCapsuleModel,
   transitionProviderBindingSetForFixture,
@@ -60,6 +63,7 @@ function makeService(
     readonly artifactStore?: InMemoryBackupArtifactStore | null;
     readonly serviceDataRunner?: ServiceDataBackupRunner;
     readonly stateObjects?: Readonly<Record<string, Uint8Array>>;
+    readonly activity?: ActivityRecorder;
   } = {},
 ): {
   readonly service: BackupsService;
@@ -82,7 +86,8 @@ function makeService(
     ...(options.serviceDataRunner
       ? { serviceDataRunner: options.serviceDataRunner }
       : {}),
-    activity: new ActivityService({ store, now: () => new Date(TS) }),
+    activity:
+      options.activity ?? new ActivityService({ store, now: () => new Date(TS) }),
     now: () => new Date(TS),
     newId: (prefix) =>
       `${prefix}_${(counter += 1).toString().padStart(4, "0")}`,
@@ -360,6 +365,38 @@ test("createBackup rejects a caller-supplied stale Workspace authority", async (
       `workspaces/${workspaceId}/backups/bkp_0001/control.json.zst.enc`,
     ),
   ).toBeUndefined();
+});
+
+test("activity persistence failure does not downgrade a succeeded Backup Run", async () => {
+  const workspaceId = "ws_backup_activity_failure";
+  const activity: ActivityRecorder = {
+    record: async () => {
+      throw new Error("activity persistence failed");
+    },
+  };
+  const { service, store } = makeService({ activity });
+  await store.putWorkspace({
+    id: workspaceId,
+    handle: "backup-activity-failure",
+    displayName: "Backup activity failure",
+    type: "personal",
+    ownerUserId: "user_backup_activity_failure",
+    createdAt: TS,
+    updatedAt: TS,
+  });
+
+  await expect(service.createBackup({ workspaceId })).rejects.toThrow(
+    "activity persistence failed",
+  );
+
+  expect(await store.listBackupRecords(workspaceId)).toHaveLength(1);
+  expect(await store.listRunsByWorkspace(workspaceId)).toEqual([
+    expect.objectContaining({
+      type: "backup",
+      status: "succeeded",
+      workspaceId,
+    }),
+  ]);
 });
 
 test("control bundle captures the Workspace ledger as public projections", async () => {

@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 
 import type { ApplyRun } from "@takosumi/internal/deploy-control-api";
+import type { BackupRecord } from "takosumi-contract/backups";
 import type { Capsule } from "takosumi-contract/capsules";
 import type {
   SourceSnapshot,
@@ -9,6 +10,7 @@ import type {
 import type { Run } from "takosumi-contract/runs";
 import type { Workspace } from "takosumi-contract/workspaces";
 import {
+  type CommitBackupRunInput,
   InMemoryOpenTofuControlStore,
   WorkspaceManagementAdmissionConflictError,
   capsuleLifecycleExpected,
@@ -19,8 +21,13 @@ import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control
 import type {
   SqlClient,
   SqlParameters,
+  SqlQueryResult,
   SqlTransaction,
 } from "../../../../core/adapters/storage/sql.ts";
+import type {
+  D1PreparedStatement,
+  D1Result,
+} from "../../../../worker/src/bindings.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
@@ -157,7 +164,11 @@ function applyRun(id: string, workspaceId: string, status: ApplyRun["status"] = 
   };
 }
 
-function backupRun(id: string, workspaceId: string): Run {
+function backupRun(
+  id: string,
+  workspaceId: string,
+  overrides: Partial<Run> = {},
+): Run {
   return {
     id,
     workspaceId,
@@ -166,7 +177,118 @@ function backupRun(id: string, workspaceId: string): Run {
     createdBy: "manual",
     createdAt: "2026-09-08T00:00:00.000Z",
     startedAt: "2026-09-08T00:00:00.000Z",
+    ...overrides,
   };
+}
+
+function backupRecord(run: Run, id: string): BackupRecord {
+  return {
+    id,
+    workspaceId: run.workspaceId,
+    ...(run.capsuleId ? { capsuleId: run.capsuleId } : {}),
+    ...(run.environment ? { environment: run.environment } : {}),
+    ref: `workspaces/${run.workspaceId}/backups/${id}/control.json.zst.enc`,
+    digest: `sha256:${"a".repeat(64)}`,
+    sizeBytes: 4_096,
+    createdByRunId: run.id,
+    createdAt: run.createdAt,
+  };
+}
+
+function backupSettlementInput(
+  expectedRunningRun: Run,
+  terminalRun: Run,
+  record?: BackupRecord,
+): CommitBackupRunInput {
+  return {
+    expectedRunningRun,
+    terminalRun,
+    ...(record === undefined ? {} : { record }),
+  };
+}
+
+function jsonNormalized(value: unknown): unknown {
+  return JSON.parse(JSON.stringify(value));
+}
+
+class BackupSettlementFailingSqlClient implements SqlClient {
+  #armed = false;
+  recordInsertPrecededFinalUpdate = false;
+
+  constructor(private readonly inner: SqlClient) {}
+
+  arm(): void {
+    this.#armed = true;
+    this.recordInsertPrecededFinalUpdate = false;
+  }
+
+  query<Row extends Record<string, unknown> = Record<string, unknown>>(
+    sql: string,
+    parameters?: SqlParameters,
+  ): Promise<SqlQueryResult<Row>> {
+    return this.inner.query<Row>(sql, parameters);
+  }
+
+  transaction<T>(
+    fn: (transaction: SqlTransaction) => T | Promise<T>,
+  ): Promise<T> {
+    return this.inner.transaction(async (transaction) => {
+      let sawBackupRecordInsert = false;
+      const handle: SqlTransaction = {
+        query: async <Row extends Record<string, unknown> = Record<string, unknown>>(
+          sql: string,
+          parameters?: SqlParameters,
+        ): Promise<SqlQueryResult<Row>> => {
+          const normalized = sql.trimStart().toLowerCase();
+          if (
+            normalized.includes("insert into") &&
+            normalized.includes("takosumi_backups")
+          ) {
+            sawBackupRecordInsert = true;
+          }
+          if (
+            this.#armed &&
+            sawBackupRecordInsert &&
+            normalized.includes("update") &&
+            normalized.includes("takosumi_runs")
+          ) {
+            this.#armed = false;
+            this.recordInsertPrecededFinalUpdate = true;
+            throw new Error("injected backup terminal update failure");
+          }
+          return await transaction.query<Row>(sql, parameters);
+        },
+        transaction: async <Nested>(
+          nested: (transaction: SqlTransaction) => Nested | Promise<Nested>,
+        ): Promise<Nested> => await nested(handle),
+      };
+      return await fn(handle);
+    });
+  }
+}
+
+class ReplayRecordMutatingD1 extends SqliteFakeD1 {
+  #recordId: string | undefined;
+
+  armRecordMutation(recordId: string): void {
+    this.#recordId = recordId;
+  }
+
+  override async batch<T = unknown>(
+    statements: readonly D1PreparedStatement[],
+  ): Promise<readonly D1Result<T>[]> {
+    const recordId = this.#recordId;
+    this.#recordId = undefined;
+    if (recordId !== undefined) {
+      await this
+        .prepare(
+          "update backups set record_json = json_set(record_json, '$.digest', ?) where id = ?",
+        )
+        .bind(`sha256:${"b".repeat(64)}`, recordId)
+        .run();
+    }
+    return await super.batch<T>(statements);
+  }
 }
 
 function sourceSyncRun(
@@ -214,6 +336,7 @@ interface Adapter {
   readonly label: string;
   readonly store: OpenTofuControlStore;
   readonly reopen: () => OpenTofuControlStore;
+  readonly database?: ReplayRecordMutatingD1;
   /** Fixture for the not-yet-public abort operation; no production bypass. */
   readonly resumeManagement?: (workspaceId: string) => Promise<void>;
   readonly setStoredSourceSyncAuthority?: (runId: string, value: unknown) => Promise<void>;
@@ -222,7 +345,7 @@ interface Adapter {
 async function adapters(): Promise<readonly Adapter[]> {
   const pgClient = await PGliteSqlClient.create();
   pgClients.push(pgClient);
-  const d1 = new SqliteFakeD1();
+  const d1 = new ReplayRecordMutatingD1();
   const memory = new InMemoryOpenTofuControlStore();
   return [
     {
@@ -251,6 +374,7 @@ async function adapters(): Promise<readonly Adapter[]> {
       label: "d1",
       store: new CloudflareD1OpenTofuControlStore(d1),
       reopen: () => new CloudflareD1OpenTofuControlStore(d1),
+      database: d1,
       async resumeManagement(workspaceId) {
         await d1.prepare(
           "update workspaces set management_state = 'active', management_epoch = management_epoch + 1 where id = ? and management_state = 'draining'",
@@ -563,6 +687,280 @@ test("manual Backup admission is create-only and rejects stale authority across 
       run: fresh,
     });
   }
+});
+
+test("manual Backup settlement is atomic, replayable, and authority-fenced across adapters", async () => {
+  for (const { label, store, reopen, database } of await adapters()) {
+    const ws = workspace(`backup-settlement-${label}`);
+    await store.putWorkspace(ws);
+    const authority: WorkspaceManagementAuthority = {
+      workspaceId: ws.id,
+      managementState: "active",
+      managementEpoch: 1,
+    };
+
+    // Keep optional keys explicitly undefined in the caller payload. Durable
+    // JSON storage drops those keys; settlement comparisons must remain exact
+    // after that normalization.
+    const successfulRunning = backupRun(
+      `backup-settlement-success-${label}`,
+      ws.id,
+      {
+        capsuleId: `capsule-${label}`,
+        environment: "preview",
+        sourceId: undefined,
+        planDigest: undefined,
+      },
+    );
+    const failedRunning = backupRun(
+      `backup-settlement-failed-${label}`,
+      ws.id,
+    );
+    const collisionRunning = backupRun(
+      `backup-settlement-collision-${label}`,
+      ws.id,
+    );
+    for (const run of [successfulRunning, failedRunning, collisionRunning]) {
+      expect(
+        jsonNormalized(await store.beginBackupRun(run, authority)),
+        label,
+      ).toEqual(jsonNormalized({ status: "created", run }));
+    }
+
+    const failedTerminal: Run = {
+      ...failedRunning,
+      status: "failed",
+      errorCode: "backup_failed",
+      finishedAt: "2026-09-08T00:00:02.000Z",
+    };
+    expect(
+      jsonNormalized(
+        await store.commitBackupRun(
+          backupSettlementInput(failedRunning, failedTerminal),
+        ),
+      ),
+      label,
+    ).toEqual(jsonNormalized({ status: "committed", run: failedTerminal }));
+    expect(await store.getBackupRecord(failedRunning.id), label).toBeUndefined();
+    expect(await store.listBackupRecords(ws.id), label).toEqual([]);
+    expect(
+      jsonNormalized(
+        await reopen().commitBackupRun(
+          backupSettlementInput(failedRunning, failedTerminal),
+        ),
+      ),
+      `${label}: failed replay`,
+    ).toEqual(jsonNormalized({ status: "replayed", run: failedTerminal }));
+
+    const successRecord: BackupRecord = {
+      ...backupRecord(successfulRunning, `backup-record-success-${label}`),
+      stateArchive: undefined,
+      artifactsManifest: undefined,
+      serviceData: undefined,
+    };
+    const successTerminal: Run = {
+      ...successfulRunning,
+      status: "succeeded",
+      finishedAt: "2026-09-08T00:00:03.000Z",
+    };
+    expect(await store.beginWorkspaceDraining(ws.id, authority), label).toMatchObject({
+      status: "started",
+      management: { managementState: "draining", managementEpoch: 2 },
+    });
+
+    // Finishing an already-admitted export is allowed while draining; the
+    // current Workspace epoch is not consulted at settlement.
+    const persisted = reopen();
+    expect(
+      jsonNormalized(
+        await persisted.commitBackupRun(
+          backupSettlementInput(successfulRunning, successTerminal, successRecord),
+        ),
+      ),
+      label,
+    ).toEqual(
+      jsonNormalized({
+        status: "committed",
+        run: successTerminal,
+        record: successRecord,
+      }),
+    );
+    expect(await persisted.getBackupRun(successfulRunning.id), label).toEqual(
+      jsonNormalized(successTerminal),
+    );
+    expect(await persisted.getBackupRecord(successRecord.id), label).toEqual(
+      jsonNormalized(successRecord),
+    );
+    expect(
+      jsonNormalized(
+        await persisted.commitBackupRun(
+          backupSettlementInput(successfulRunning, successTerminal, successRecord),
+        ),
+      ),
+      `${label}: success replay`,
+    ).toEqual(
+      jsonNormalized({
+        status: "replayed",
+        run: successTerminal,
+        record: successRecord,
+      }),
+    );
+
+    if (database !== undefined) {
+      // The record JSON can change after the observation reads. Replay must
+      // fence the exact pre-read JSON and leave both rows untouched.
+      const tamperedRecord = {
+        ...successRecord,
+        digest: `sha256:${"b".repeat(64)}`,
+      };
+      database.armRecordMutation(successRecord.id);
+      expect(
+        await reopen().commitBackupRun(
+          backupSettlementInput(successfulRunning, successTerminal, successRecord),
+        ),
+        `${label}: replay record race`,
+      ).toEqual({ status: "conflict" });
+      expect(await reopen().getBackupRun(successfulRunning.id), label).toEqual(
+        jsonNormalized(successTerminal),
+      );
+      expect(await reopen().getBackupRecord(successRecord.id), label).toEqual(
+        jsonNormalized(tamperedRecord),
+      );
+    }
+
+    // A terminal success cannot be rewritten by a stale failed completion.
+    const downgrade: Run = {
+      ...successfulRunning,
+      status: "failed",
+      errorCode: "backup_failed",
+      finishedAt: "2026-09-08T00:00:04.000Z",
+    };
+    expect(
+      await persisted.commitBackupRun(
+        backupSettlementInput(successfulRunning, downgrade),
+      ),
+      `${label}: downgrade`,
+    ).toEqual({ status: "conflict" });
+    expect(await persisted.getBackupRun(successfulRunning.id), label).toEqual(
+      jsonNormalized(successTerminal),
+    );
+
+    // A pre-existing pointer id is a collision, never an adoption target.
+    const collisionRecordId = `backup-record-collision-${label}`;
+    const existingCollisionRecord: BackupRecord = {
+      ...backupRecord(collisionRunning, collisionRecordId),
+      createdByRunId: `unrelated-run-${label}`,
+    };
+    await persisted.putBackupRecord(existingCollisionRecord);
+    const collisionRecord = backupRecord(collisionRunning, collisionRecordId);
+    const collisionTerminal: Run = {
+      ...collisionRunning,
+      status: "succeeded",
+      finishedAt: "2026-09-08T00:00:05.000Z",
+    };
+    expect(
+      await persisted.commitBackupRun(
+        backupSettlementInput(collisionRunning, collisionTerminal, collisionRecord),
+      ),
+      `${label}: record collision`,
+    ).toEqual({ status: "conflict" });
+    expect(await persisted.getBackupRun(collisionRunning.id), label).toEqual(
+      jsonNormalized(collisionRunning),
+    );
+    expect(await persisted.getBackupRecord(collisionRecordId), label).toEqual(
+      jsonNormalized(existingCollisionRecord),
+    );
+
+    // A raw legacy running row has no private original authority and cannot be
+    // completed, even when the caller supplies a structurally valid record.
+    const legacyRunning = backupRun(`backup-settlement-legacy-${label}`, ws.id);
+    await persisted.putBackupRun(legacyRunning);
+    const legacyRecord = backupRecord(
+      legacyRunning,
+      `backup-record-legacy-${label}`,
+    );
+    const legacyTerminal: Run = {
+      ...legacyRunning,
+      status: "succeeded",
+      finishedAt: "2026-09-08T00:00:06.000Z",
+    };
+    expect(
+      await persisted.commitBackupRun(
+        backupSettlementInput(legacyRunning, legacyTerminal, legacyRecord),
+      ),
+      `${label}: authorityless legacy`,
+    ).toEqual({ status: "conflict" });
+    expect(await persisted.getBackupRun(legacyRunning.id), label).toEqual(
+      jsonNormalized(legacyRunning),
+    );
+    expect(await persisted.getBackupRecord(legacyRecord.id), label).toBeUndefined();
+
+    const absentRunning = backupRun(`backup-settlement-absent-${label}`, ws.id);
+    const absentRecord = backupRecord(
+      absentRunning,
+      `backup-record-absent-${label}`,
+    );
+    const absentTerminal: Run = {
+      ...absentRunning,
+      status: "succeeded",
+      finishedAt: "2026-09-08T00:00:07.000Z",
+    };
+    expect(
+      await persisted.commitBackupRun(
+        backupSettlementInput(absentRunning, absentTerminal, absentRecord),
+      ),
+      `${label}: absent running`,
+    ).toEqual({ status: "conflict" });
+    expect(await persisted.getBackupRun(absentRunning.id), label).toBeUndefined();
+    expect(await persisted.getBackupRecord(absentRecord.id), label).toBeUndefined();
+  }
+});
+
+test("Postgres Backup settlement rolls back the record when its final Run update fails", async () => {
+  const backing = await PGliteSqlClient.create();
+  pgClients.push(backing);
+  const faulting = new BackupSettlementFailingSqlClient(backing);
+  const store = new SqlOpenTofuControlStore({ client: faulting });
+  const ws = workspace("backup-settlement-postgres-fault");
+  await store.putWorkspace(ws);
+  const authority: WorkspaceManagementAuthority = {
+    workspaceId: ws.id,
+    managementState: "active",
+    managementEpoch: 1,
+  };
+  const running = backupRun("backup-settlement-postgres-fault-run", ws.id);
+  expect(await store.beginBackupRun(running, authority)).toEqual({
+    status: "created",
+    run: running,
+  });
+  const record = backupRecord(running, "backup-record-postgres-fault");
+  const terminal: Run = {
+    ...running,
+    status: "succeeded",
+    finishedAt: "2026-09-08T00:00:02.000Z",
+  };
+  faulting.arm();
+
+  await expect(
+    store.commitBackupRun(
+      backupSettlementInput(running, terminal, record),
+    ),
+  ).rejects.toThrow("injected backup terminal update failure");
+  expect(faulting.recordInsertPrecededFinalUpdate).toBe(true);
+  expect(await store.getBackupRun(running.id)).toEqual(running);
+  expect(await store.getBackupRecord(record.id)).toBeUndefined();
+
+  // The failed transaction left no terminal or pointer residue, so the exact
+  // same settlement can be retried after the transient database fault clears.
+  expect(
+    jsonNormalized(
+      await store.commitBackupRun(
+        backupSettlementInput(running, terminal, record),
+      ),
+    ),
+  ).toEqual(
+    jsonNormalized({ status: "committed", run: terminal, record }),
+  );
 });
 
 test("Workspace metadata replacement fences stopped and resumed authority without losing concurrent settings", async () => {

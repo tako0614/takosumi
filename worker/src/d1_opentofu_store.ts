@@ -99,6 +99,8 @@ import type {
   CommitRestoredStateResult,
   BeginApplyRunResult,
   BeginBackupRunResult,
+  CommitBackupRunInput,
+  CommitBackupRunResult,
   BeginRestoreRunResult,
   BeginSourceSyncRunResult,
   BeginWorkspaceDrainingResult,
@@ -208,6 +210,8 @@ import {
   storeSourceSyncRun,
   assertWorkspaceManagementAdmission,
   validateWorkspaceReplacement,
+  assertCommitBackupRunInput,
+  backupRunCommitDisposition,
   type WorkspaceReplacementInput,
   type WorkspaceAccountReplacementInput,
   workspaceAccountReplacementAllowed,
@@ -1898,6 +1902,192 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       }
       throw error;
     }
+  }
+
+  async commitBackupRun(
+    input: CommitBackupRunInput,
+  ): Promise<CommitBackupRunResult> {
+    // Clone before the first await: the settlement CAS and replay result must
+    // remain bound to the caller's original immutable candidate.
+    input = structuredClone(input);
+    assertCommitBackupRunInput(input);
+    assertD1AtomicCommitBatch(this.db, "commitBackupRun");
+    await this.#ensureSchema();
+
+    // These reads are observational only. Every classification that can
+    // publish or replay is repeated by an atomic guard below, at the same D1
+    // batch boundary as the optional record insert and Run CAS.
+    const runRow = await this.#orm
+      .select({
+        id: schema.runs.id,
+        type: schema.runs.type,
+        workspaceId: schema.runs.workspaceId,
+        sourceId: schema.runs.sourceId,
+        capsuleId: schema.runs.capsuleId,
+        environment: schema.runs.environment,
+        status: schema.runs.status,
+        leaseToken: schema.runs.leaseToken,
+        createdAt: schema.runs.createdAt,
+        runJson: schema.runs.runJson,
+      })
+      .from(schema.runs)
+      .where(eq(schema.runs.id, input.expectedRunningRun.id))
+      .get();
+    const current = runRow
+      ? d1BackupRunFromSettlementRow(runRow)
+      : undefined;
+    if (runRow !== undefined && current === undefined) {
+      return { status: "conflict" };
+    }
+    if (current === undefined || runRow === undefined) {
+      return { status: "conflict" };
+    }
+
+    const recordRows = input.record
+      ? await this.#orm
+          .select({
+            id: schema.backups.id,
+            workspaceId: schema.backups.workspaceId,
+            capsuleId: schema.backups.capsuleId,
+            environment: schema.backups.environment,
+            createdByRunId: schema.backups.createdByRunId,
+            recordJson: schema.backups.recordJson,
+            createdAt: schema.backups.createdAt,
+          })
+          .from(schema.backups)
+          .where(eq(schema.backups.id, input.record.id))
+          .limit(1)
+          .all()
+      : await this.#orm
+          .select({
+            id: schema.backups.id,
+            workspaceId: schema.backups.workspaceId,
+            capsuleId: schema.backups.capsuleId,
+            environment: schema.backups.environment,
+            createdByRunId: schema.backups.createdByRunId,
+            recordJson: schema.backups.recordJson,
+            createdAt: schema.backups.createdAt,
+          })
+          .from(schema.backups)
+          .where(d1BackupRecordOwnerWhere(input.expectedRunningRun.id))
+          .limit(1)
+          .all();
+    const recordRow = recordRows[0];
+    let currentRecord: BackupRecord | undefined;
+    if (recordRow !== undefined) {
+      currentRecord = d1BackupRecordFromSettlementRow(recordRow);
+      if (currentRecord === undefined) {
+        return { status: "conflict" };
+      }
+    }
+
+    const disposition = backupRunCommitDisposition(
+      current,
+      currentRecord,
+      input,
+    );
+    if (disposition === "conflict") {
+      return { status: "conflict" };
+    }
+
+    if (disposition === "replay") {
+      const replayGuard = d1BackupSettlementGuardStmt(
+        this.#orm,
+        input,
+        runRow.runJson,
+        "replay",
+        recordRow?.recordJson,
+      );
+      try {
+        // A valid guard SELECTs no invalid row, so this batch performs no
+        // writes. If either the Run or its exact record changed, the sentinel
+        // insert aborts the batch and the operation is a conflict.
+        await this.#orm.batch([replayGuard]);
+      } catch (error) {
+        if (isD1BackupCommitGuardError(error)) {
+          return { status: "conflict" };
+        }
+        throw error;
+      }
+      return {
+        status: "replayed",
+        run: publicStoredRun(input.terminalRun),
+        ...(input.record ? { record: input.record } : {}),
+      };
+    }
+
+    // Preserve the authority from the durable row in the SQL expression; the
+    // caller's terminal payload is public data and cannot mint or replace it.
+    preserveStoredRunManagementAuthority(input.terminalRun, current);
+    const terminal = publicStoredRun(input.terminalRun);
+    const statements = [
+      // The first statement repeats the full expected-running guard and the
+      // create-only record absence. It has no active-Workspace requirement:
+      // finishing a run is allowed while management is draining.
+      d1BackupSettlementGuardStmt(
+        this.#orm,
+        input,
+        runRow.runJson,
+        "commit",
+        undefined,
+      ),
+      ...(input.record
+        ? [
+            this.#orm
+              .insert(schema.backups)
+              .values({
+                id: input.record.id,
+                workspaceId: input.record.workspaceId,
+                capsuleId: input.record.capsuleId ?? null,
+                environment: input.record.environment ?? null,
+                createdByRunId: input.record.createdByRunId ?? null,
+                recordJson: input.record,
+                createdAt: input.record.createdAt,
+              })
+              .onConflictDoNothing({ target: schema.backups.id }),
+          ]
+        : []),
+      this.#orm
+        .update(schema.runs)
+        .set({
+          workspaceId: terminal.workspaceId,
+          sourceId: terminal.sourceId ?? null,
+          capsuleId: terminal.capsuleId ?? null,
+          environment: terminal.environment ?? null,
+          type: RUN_KIND_BACKUP,
+          status: terminal.status,
+          leaseToken: null,
+          heartbeatAt: terminal.heartbeatAt ?? null,
+          runJson: d1RunJsonPreservingAuthority(terminal),
+          createdAt: String(terminal.createdAt),
+        })
+        .where(
+          d1BackupRunSettlementWhere(
+            input.expectedRunningRun,
+            runRow.runJson,
+            "running",
+          ),
+        ),
+      // D1 batch has no per-statement row count. This final guard makes an
+      // update miss (or malformed authority) abort and roll back a record
+      // insert that preceded it.
+      d1BackupTerminalGuardStmt(this.#orm, input),
+    ];
+    try {
+      await this.#orm.batch(
+        statements as [(typeof statements)[number], ...typeof statements],
+      );
+    } catch (error) {
+      if (isD1BackupCommitGuardError(error)) {
+        return { status: "conflict" };
+      }
+      throw error;
+    }
+    return {
+      status: "committed",
+      run: terminal,
+      ...(input.record ? { record: input.record } : {}),
+    };
   }
 
   async beginRestoreRun(
@@ -8752,6 +8942,7 @@ function assertD1AtomicCommitBatch(
     | "preparePlanRun"
     | "beginApplyRun"
     | "beginBackupRun"
+    | "commitBackupRun"
     | "beginRestoreRun"
     | "beginSourceSyncRun"
     | "createConnectionRegistration"
@@ -8820,6 +9011,17 @@ function isD1ManualBackupWorkspaceManagementGuardError(
   return error instanceof Error &&
     (error.message.includes("UNIQUE constraint failed: runs.id") ||
       error.message.includes("constraint failed: runs.id"));
+}
+
+function isD1BackupCommitGuardError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  // Settlement guards reuse the candidate Run id. A failed predicate either
+  // collides with that existing id or selects the deliberate NULL Workspace
+  // row when the Run vanished; both are ordinary CAS conflicts.
+  return error.message.includes("UNIQUE constraint failed: runs.id") ||
+    error.message.includes("constraint failed: runs.id") ||
+    error.message.includes("NOT NULL constraint failed: runs.space_id") ||
+    error.message.includes("constraint failed: runs.space_id");
 }
 
 function isD1ConnectionRegistrationCollisionError(error: unknown): boolean {
@@ -9199,6 +9401,249 @@ function d1StoredRunFromD1Value(
   return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
     ? (parsed as StoredRunRecord)
     : undefined;
+}
+
+interface D1BackupSettlementRunRow {
+  readonly id: string;
+  readonly type: string;
+  readonly workspaceId: string;
+  readonly sourceId: string | null;
+  readonly capsuleId: string | null;
+  readonly environment: string | null;
+  readonly status: string;
+  readonly leaseToken: string | null;
+  readonly createdAt: string;
+  readonly runJson: unknown;
+}
+
+interface D1BackupSettlementRecordRow {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly capsuleId: string | null;
+  readonly environment: string | null;
+  readonly createdByRunId: string | null;
+  readonly recordJson: unknown;
+  readonly createdAt: string;
+}
+
+function d1BackupRunFromSettlementRow(
+  row: D1BackupSettlementRunRow,
+): StoredRunRecord | undefined {
+  const run = d1StoredRunFromD1Value(row.runJson);
+  const generic = run as unknown as Partial<Run> | undefined;
+  if (
+    row.type !== RUN_KIND_BACKUP ||
+    run === undefined ||
+    run.id !== row.id ||
+    run.workspaceId !== row.workspaceId ||
+    generic?.type !== RUN_KIND_BACKUP ||
+    run.status !== row.status ||
+    row.leaseToken !== null ||
+    run.createdAt !== row.createdAt ||
+    !d1BackupNullablePhysicalMatches(generic?.sourceId, row.sourceId) ||
+    !d1BackupNullablePhysicalMatches(generic?.capsuleId, row.capsuleId) ||
+    !d1BackupNullablePhysicalMatches(generic?.environment, row.environment)
+  ) {
+    return undefined;
+  }
+  return run;
+}
+
+function d1BackupRecordFromSettlementRow(
+  row: D1BackupSettlementRecordRow,
+): BackupRecord | undefined {
+  let value: unknown = row.recordJson;
+  if (typeof value === "string") {
+    if (value.trim() === "") return undefined;
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Partial<BackupRecord>;
+  if (
+    row.id !== record.id ||
+    row.workspaceId !== record.workspaceId ||
+    row.createdAt !== record.createdAt ||
+    !d1BackupNullablePhysicalMatches(record.capsuleId, row.capsuleId) ||
+    !d1BackupNullablePhysicalMatches(record.environment, row.environment) ||
+    !d1BackupNullablePhysicalMatches(record.createdByRunId, row.createdByRunId)
+  ) {
+    return undefined;
+  }
+  return value as BackupRecord;
+}
+
+function d1BackupNullablePhysicalMatches(
+  logical: unknown,
+  physical: string | null,
+): boolean {
+  return physical === null
+    ? logical === undefined || logical === null
+    : logical === physical;
+}
+
+function d1BackupNullableWhere(
+  column: SQLiteColumn,
+  value: string | undefined,
+): SQL {
+  return value === undefined ? isNull(column) : eq(column, value);
+}
+
+/** Original admission authority only; current Workspace state is irrelevant at settlement. */
+function d1BackupRunAuthorityWhere(): SQL {
+  const runJson = schema.runs.runJson;
+  const authorityPath = "$.workspaceManagementAuthority";
+  const workspacePath = "$.workspaceManagementAuthority.workspaceId";
+  const statePath = "$.workspaceManagementAuthority.managementState";
+  const epochPath = "$.workspaceManagementAuthority.managementEpoch";
+  const safeEpoch = 9_007_199_254_740_991;
+  return sql`json_valid(${runJson}) = 1
+    AND json_type(${runJson}, ${authorityPath}) = 'object'
+    AND json_type(${runJson}, ${workspacePath}) = 'text'
+    AND json_type(${runJson}, ${statePath}) = 'text'
+    AND json_extract(${runJson}, ${workspacePath}) = ${schema.runs.workspaceId}
+    AND json_extract(${runJson}, ${statePath}) = 'active'
+    AND json_type(${runJson}, ${epochPath}) = 'integer'
+    AND CAST(json_extract(${runJson}, ${epochPath}) AS INTEGER) > 0
+    AND CAST(json_extract(${runJson}, ${epochPath}) AS INTEGER) <= ${safeEpoch}`;
+}
+
+function d1BackupRunSettlementWhere(
+  run: Run,
+  rawRunJson: unknown,
+  status: Run["status"],
+): SQL {
+  return and(
+    eq(schema.runs.id, run.id),
+    eq(schema.runs.workspaceId, run.workspaceId),
+    eq(schema.runs.type, RUN_KIND_BACKUP),
+    eq(schema.runs.status, status),
+    d1BackupNullableWhere(schema.runs.sourceId, run.sourceId),
+    d1BackupNullableWhere(schema.runs.capsuleId, run.capsuleId),
+    d1BackupNullableWhere(schema.runs.environment, run.environment),
+    isNull(schema.runs.leaseToken),
+    eq(schema.runs.createdAt, String(run.createdAt)),
+    rawRunJson === undefined
+      ? undefined
+      : eq(schema.runs.runJson, rawRunJson as unknown),
+    sql`json_valid(${schema.runs.runJson}) = 1`,
+    sql`json_extract(${schema.runs.runJson}, '$.id') = ${run.id}`,
+    sql`json_extract(${schema.runs.runJson}, '$.workspaceId') = ${run.workspaceId}`,
+    sql`json_extract(${schema.runs.runJson}, '$.type') = 'backup'`,
+    sql`json_extract(${schema.runs.runJson}, '$.status') = ${status}`,
+    d1BackupRunAuthorityWhere(),
+  )!;
+}
+
+function d1BackupRecordSettlementWhere(
+  record: BackupRecord,
+  rawRecordJson: unknown,
+): SQL {
+  return and(
+    eq(schema.backups.id, record.id),
+    eq(schema.backups.workspaceId, record.workspaceId),
+    d1BackupNullableWhere(schema.backups.capsuleId, record.capsuleId),
+    d1BackupNullableWhere(schema.backups.environment, record.environment),
+    d1BackupNullableWhere(schema.backups.createdByRunId, record.createdByRunId),
+    eq(schema.backups.createdAt, record.createdAt),
+    rawRecordJson === undefined
+      ? undefined
+      : eq(schema.backups.recordJson, rawRecordJson as unknown),
+  )!;
+}
+
+function d1BackupRecordOwnerWhere(runId: string): SQL {
+  return or(
+    eq(schema.backups.createdByRunId, runId),
+    sql`case
+      when json_valid(${schema.backups.recordJson}) = 1
+        then json_extract(${schema.backups.recordJson}, '$.createdByRunId')
+      else null
+    end = ${runId}`,
+  )!;
+}
+
+/** Build a sentinel guard for replay or the first commit statement. */
+function d1BackupSettlementGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  input: CommitBackupRunInput,
+  rawRunJson: unknown,
+  mode: "commit" | "replay",
+  rawRecordJson: unknown,
+) {
+  const run = mode === "replay"
+    ? input.terminalRun
+    : input.expectedRunningRun;
+  const runMatch = orm
+    .select({ one: sql`1` })
+    .from(schema.runs)
+    .where(d1BackupRunSettlementWhere(run, rawRunJson, run.status));
+  const recordMatch = input.record
+    ? orm
+        .select({ one: sql`1` })
+        .from(schema.backups)
+        .where(
+          mode === "replay"
+            ? d1BackupRecordSettlementWhere(input.record, rawRecordJson)
+            : eq(schema.backups.id, input.record.id),
+        )
+    : orm
+        .select({ one: sql`1` })
+        .from(schema.backups)
+        .where(d1BackupRecordOwnerWhere(input.expectedRunningRun.id));
+  const recordSatisfied: SQL = input.record && mode === "commit"
+    ? notExists(recordMatch)
+    : input.record
+      ? exists(recordMatch)
+      : notExists(recordMatch);
+  const satisfied = and(exists(runMatch), recordSatisfied)!;
+  return orm.insert(schema.runs).select(
+    orm
+      .select(d1InvalidWorkspaceManagementGuardRow(input.expectedRunningRun.id))
+      .from(sql`(select 1) as backup_settlement_guard_source`)
+      .where(not(satisfied)),
+  );
+}
+
+/** Final D1 guard verifies the terminal row and its optional record in-batch. */
+function d1BackupTerminalGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  input: CommitBackupRunInput,
+) {
+  const runMatch = orm
+    .select({ one: sql`1` })
+    .from(schema.runs)
+    .where(
+      d1BackupRunSettlementWhere(
+        input.terminalRun,
+        undefined,
+        input.terminalRun.status,
+      ),
+    );
+  const recordMatch = input.record
+    ? orm
+        .select({ one: sql`1` })
+        .from(schema.backups)
+        .where(d1BackupRecordSettlementWhere(input.record, input.record))
+    : orm
+        .select({ one: sql`1` })
+        .from(schema.backups)
+        .where(d1BackupRecordOwnerWhere(input.expectedRunningRun.id));
+  const recordSatisfied: SQL = input.record
+    ? exists(recordMatch)
+    : notExists(recordMatch);
+  const satisfied = and(exists(runMatch), recordSatisfied)!;
+  return orm.insert(schema.runs).select(
+    orm
+      .select(d1InvalidWorkspaceManagementGuardRow(input.expectedRunningRun.id))
+      .from(sql`(select 1) as backup_settlement_terminal_guard_source`)
+      .where(not(satisfied)),
+  );
 }
 
 function jsonRecordFromD1Value(value: unknown): Record<string, unknown> {
