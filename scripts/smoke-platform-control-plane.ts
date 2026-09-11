@@ -1382,9 +1382,7 @@ export function dryRunResult(
   const generatedAt = new Date().toISOString();
   const steps = requiredSteps(options);
   const dryRunInterfaces = dryRunInterfaceEvidence(options);
-  const dryRunRunEvents = dryRunInterfaces
-    ? dryRunCanonicalRunEventSequence()
-    : undefined;
+  const dryRunRunEvents = dryRunCanonicalRunEventSequence();
   const publicUrlDestroyChecks: readonly PublicUrlDestroyCheckResult[] =
     options.publicUrlChecks.map((check) => ({
       name: check.name,
@@ -2097,18 +2095,16 @@ async function runPlatformControlPlaneSmokeInternal(
       interfaceMaterialization = interfaceMaterializations[0];
       completeStep("interfaceRetiredVerified");
     }
-    if (interfaceMaterializationContext) {
-      beginStep("runEventSequenceVerified");
-      runEventSequence = await assertCanonicalRunEventSequence(options, {
-        workspaceId,
-        capsuleId,
-        planRunId,
-        applyRunId,
-        destroyPlanRunId,
-        destroyApplyRunId,
-      });
-      completeStep("runEventSequenceVerified");
-    }
+    beginStep("runEventSequenceVerified");
+    runEventSequence = await assertCanonicalRunEventSequence(options, {
+      workspaceId,
+      capsuleId,
+      planRunId,
+      applyRunId,
+      destroyPlanRunId,
+      destroyApplyRunId,
+    });
+    completeStep("runEventSequenceVerified");
 
     if (connectionId && !options.keepConnection) {
       beginStep("connectionRevoked");
@@ -8764,8 +8760,8 @@ function requiredSteps(
     }
   }
   steps.push("destroy");
+  steps.push("runEventSequenceVerified");
   if (options?.interfaceBlueprints && options.interfaceBlueprints.length > 0) {
-    steps.push("runEventSequenceVerified");
     steps.push("interfaceRetiredVerified");
   }
   if (

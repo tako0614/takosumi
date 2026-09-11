@@ -3488,7 +3488,9 @@ test("platform control-plane smoke defaults providerless OpenTofu mode to a keyl
     "opentofuApplyVerified",
     "stateVersionLedgerVerified",
     "destroy",
+    "runEventSequenceVerified",
   ]);
+  expect(result.runEventSequence?.destroyApply.runId).toBe("destroy_apply_dry_run");
 });
 
 test("platform control-plane smoke can require public URL checks for generic OpenTofu Capsules", async () => {
@@ -3543,6 +3545,7 @@ test("platform control-plane smoke can require public URL checks for generic Ope
     "stateVersionLedgerVerified",
     "publicUrlVerified",
     "destroy",
+    "runEventSequenceVerified",
   ]);
   expect(result.publicUrlVerified).toBe(true);
   expect(result.publicUrlChecks).toEqual([
@@ -3902,6 +3905,7 @@ test("platform control-plane smoke does not infer Cloudflare resource verificati
     "stateVersionLedgerVerified",
     "publicUrlVerified",
     "destroy",
+    "runEventSequenceVerified",
     "connectionRevoked",
   ]);
   expect(result.workerUrl).toBe("");
@@ -3984,6 +3988,7 @@ async function runConfiguredPublicUrlLifecycleFixture(
     readonly reconcileApply?: boolean;
     readonly ambiguousApplyReconciliation?: boolean;
     readonly temporaryConnection?: boolean;
+    readonly omitDestroyedEvent?: boolean;
   } = {},
 ) {
   const appName = "takosumi-configured-public-url-lifecycle";
@@ -4173,6 +4178,22 @@ async function runConfiguredPublicUrlLifecycleFixture(
           status: 200,
           headers: { "x-release-revision": "release-configured-public-url" },
         });
+      }
+      if (method === "GET" && path === `/api/v1/workspaces/${workspaceId}/activity`) {
+        const events = [
+          { action: "run.plan_created", runId: runs.planSucceeded.id, operation: "plan" },
+          { action: "run.applied", runId: runs.applySucceeded.id },
+          { action: "run.plan_created", runId: runs.destroyPlan.id, operation: "destroy" },
+          { action: "run.destroyed", runId: runs.destroyApply.id },
+        ].filter((event) => !behavior.omitDestroyedEvent || event.action !== "run.destroyed");
+        return Response.json({ events: events.map((event) => ({
+          id: `event_${event.runId}`,
+          action: event.action,
+          runId: event.runId,
+          targetType: "run",
+          targetId: event.runId,
+          metadata: { capsuleId, ...(event.operation ? { operation: event.operation } : {}) },
+        })) });
       }
       if (method === "POST" && path === "/api/v1/connections") {
         return Response.json({ connection: { id: rawConnectionId } });
@@ -4429,6 +4450,13 @@ test("generic OpenTofu smoke verifies every configured URL absent after Destroy"
   expect(fixture.result.error).toBeUndefined();
   expect(fixture.result.status).toBe("passed");
   expect(fixture.result.destroyVerified).toBe(true);
+  expect(fixture.result.completedSteps).toContain("runEventSequenceVerified");
+  expect(fixture.result.runEventSequence).toMatchObject({
+    plan: { runId: fixture.runs.planSucceeded.id },
+    apply: { runId: fixture.runs.applySucceeded.id },
+    destroyPlan: { runId: fixture.runs.destroyPlan.id },
+    destroyApply: { runId: fixture.runs.destroyApply.id },
+  });
   expect(fixture.result.publicUrlDestroyChecks).toEqual([
     {
       name: "health",
@@ -4471,6 +4499,21 @@ test("generic OpenTofu smoke verifies every configured URL absent after Destroy"
     request.address === "93.184.216.34" &&
     request.servername === "app-staging.takosumi.com"
   )).toBe(true);
+});
+
+test("generic OpenTofu smoke refuses success without canonical Destroy activity even without Interfaces", async () => {
+  const fixture = await runConfiguredPublicUrlLifecycleFixture(
+    { kind: "http-404" },
+    { omitDestroyedEvent: true },
+  );
+
+  expect(fixture.result.status).toBe("failed");
+  expect(fixture.result.error).toContain("Workspace activity did not expose canonical plan/apply/destroy events");
+  expect(fixture.result.completedSteps).not.toContain("runEventSequenceVerified");
+  expect(fixture.result.runEventSequence).toBeUndefined();
+  expect(fixture.controlPlaneRequests.filter((request) =>
+    request.method === "POST" && request.path.endsWith("/destroy-plan")
+  )).toHaveLength(1);
 });
 
 test("generic OpenTofu cleanup checks every registered URL and does not claim a failed Apply probe", async () => {
