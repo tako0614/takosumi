@@ -211,6 +211,8 @@ export const en: Record<keyof typeof ja, string> = {
     "Access and sharing, keys, backups, and policy",
   "settings.manage.backups": "Create and restore restore points",
   "settings.manage.shares": "Manage values shared between services",
+  "settings.manage.interfaceRecovery":
+    "Review and queue durable Interface materialization retries",
   "settings.manage.hostedResources":
     "Review resources managed by the hosted environment",
 
@@ -876,6 +878,7 @@ export const en: Record<keyof typeof ja, string> = {
   "workspaceSettings.tab.usageQuota": "Usage",
   "workspaceSettings.tab.backups": "Backups",
   "workspaceSettings.tab.shares": "Shared values",
+  "workspaceSettings.tab.interfaceRecovery": "Interface recovery",
   "workspaceSettings.general.displayName": "Display name",
   "workspaceSettings.general.handle": "Handle",
   "workspaceSettings.general.type": "Type",
@@ -1057,6 +1060,33 @@ export const en: Record<keyof typeof ja, string> = {
   "shares.status.revoked": "Revoked",
   "shares.list.title": "Shares",
   "shares.empty": "No shares yet.",
+
+  // --- Interface materialization recovery ----------------------------------
+  "interfaceRecovery.title": "Interface recovery",
+  "interfaceRecovery.subtitle":
+    "Review durable Interface materialization failures and queue a retry using the observed state.",
+  "interfaceRecovery.col.capsule": "Service",
+  "interfaceRecovery.col.error": "Error",
+  "interfaceRecovery.col.recordedAt": "Recorded",
+  "interfaceRecovery.col.progress": "Progress",
+  "interfaceRecovery.col.attempts": "Attempts",
+  "interfaceRecovery.col.actions": "Actions",
+  "interfaceRecovery.progress": "{next} of {total} processed",
+  "interfaceRecovery.retry": "Queue retry",
+  "interfaceRecovery.retryFor": "Queue retry for {capsule}",
+  "interfaceRecovery.retryQueued":
+    "Retry queued for {capsule}. It is pending; this screen does not report completion.",
+  "interfaceRecovery.retryStale":
+    "This failure changed or is no longer available. The list was refreshed; choose retry on the current row.",
+  "interfaceRecovery.retryForbidden":
+    "Only workspace owners and admins can queue a retry.",
+  "interfaceRecovery.retryFailed":
+    "The retry could not be queued. Refresh the list and try again.",
+  "interfaceRecovery.empty.title": "No Interface failures",
+  "interfaceRecovery.empty.message":
+    "Durable Interface materialization failures will appear here when they need attention.",
+  "interfaceRecovery.limitNote":
+    "Showing up to 100 failures. A full list is not guaranteed when this limit is reached.",
 
   // --- notifications -------------------------------------------------------------
   "notif.markAllRead": "Mark all as read",

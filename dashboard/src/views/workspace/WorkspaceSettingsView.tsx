@@ -20,9 +20,16 @@ import ConnectionsTab from "./tabs/ConnectionsTab.tsx";
 import BillingTab from "./tabs/BillingTab.tsx";
 import BackupsTab from "./tabs/BackupsTab.tsx";
 import SharesTab from "./tabs/SharesTab.tsx";
+import InterfaceRecoveryTab from "./tabs/InterfaceRecoveryTab.tsx";
 
 type TabId =
-  "general" | "members" | "connections" | "billing" | "backups" | "shares";
+  | "general"
+  | "members"
+  | "connections"
+  | "billing"
+  | "backups"
+  | "shares"
+  | "interface-recovery";
 
 type StandaloneTabId = Extract<TabId, "connections" | "billing">;
 
@@ -54,7 +61,8 @@ function Inner(props: {
       raw === "connections" ||
       raw === "billing" ||
       raw === "backups" ||
-      raw === "shares"
+      raw === "shares" ||
+      raw === "interface-recovery"
       ? raw
       : "general";
   };
@@ -89,11 +97,17 @@ function Inner(props: {
         title={pageTitle(props.standaloneTab)}
         subtitle={pageSubtitle(props.standaloneTab)}
       />
-      {/* Backups/Shares are reached from the /settings/manage catalog, not the
-          everyday settings tab strip (a deliberate de-noising). Hide the strip
-          on those routes so it doesn't render with no active tab highlighted. */}
+      {/* Backups/Shares/Interface recovery are reached from the
+          /settings/manage catalog, not the everyday settings tab strip (a
+          deliberate de-noising). Hide the strip on those routes so it doesn't
+          render with no active tab highlighted. */}
       <Show
-        when={!props.standaloneTab && tab() !== "backups" && tab() !== "shares"}
+        when={
+          !props.standaloneTab &&
+          tab() !== "backups" &&
+          tab() !== "shares" &&
+          tab() !== "interface-recovery"
+        }
       >
         <Tabs
           items={tabItems()}
@@ -132,6 +146,9 @@ function Inner(props: {
               </Match>
               <Match when={tab() === "shares"}>
                 <SharesTab workspaceId={id} />
+              </Match>
+              <Match when={tab() === "interface-recovery"}>
+                <InterfaceRecoveryTab workspaceId={id} />
               </Match>
             </Switch>
           </div>

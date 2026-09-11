@@ -395,6 +395,57 @@ export interface WorkspaceBilling {
   readonly settings: BillingSettings;
 }
 
+/**
+ * Value-free projection of one durable Interface materialization failure.
+ *
+ * The control API deliberately exposes digests and counters only. In
+ * particular, the dashboard never receives Interface values or diagnostic
+ * payloads through this projection.
+ */
+export interface CapsuleInterfaceMaterializationFailure {
+  readonly id: string;
+  readonly capsuleId: string;
+  readonly stateVersionId: string;
+  readonly outputId: string;
+  readonly stateGeneration: number;
+  readonly blueprintsDigest: string;
+  readonly totalItems: number;
+  readonly nextItemIndex: number;
+  readonly attempts: number;
+  readonly error: {
+    readonly code: string;
+    readonly detailDigest: string;
+    readonly recordedAt: string;
+  };
+  readonly deadLetteredAt: string;
+  readonly failureDigest: string;
+}
+
+export interface RetryCapsuleInterfaceMaterializationFailureInput {
+  readonly failureDigest: string;
+  readonly stateVersionId: string;
+  readonly stateGeneration: number;
+}
+
+export interface CapsuleInterfaceMaterializationRetryReceipt {
+  readonly id: string;
+  readonly capsuleId: string;
+  readonly stateVersionId: string;
+  readonly stateGeneration: number;
+  readonly blueprintsDigest: string;
+  readonly status: "pending";
+  readonly nextItemIndex: number;
+  readonly totalItems: number;
+  readonly nextRetryAt: string;
+}
+
+export const INTERFACE_MATERIALIZATION_FAILURE_LIMIT = 100;
+
+export interface InterfaceMaterializationFailureListOptions {
+  readonly limit?: number;
+  readonly signal?: AbortSignal;
+}
+
 export type CapsuleStatus =
   "pending" | "active" | "stale" | "error" | "disabled" | "destroyed";
 
@@ -1008,6 +1059,69 @@ export async function getWorkspaceBilling(
     `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/billing`,
   );
   return body.billing;
+}
+
+/**
+ * Lists the value-free Interface materialization failures retained by the
+ * selected Workspace. The endpoint is intentionally bounded; callers must
+ * not infer that a page at the cap is exhaustive.
+ */
+export async function listInterfaceMaterializationFailures(
+  workspaceId: string,
+  options: InterfaceMaterializationFailureListOptions = {},
+): Promise<readonly CapsuleInterfaceMaterializationFailure[]> {
+  const body = await controlFetch<unknown>(
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/interface-materialization-failures${query({
+      limit:
+        options.limit ?? INTERFACE_MATERIALIZATION_FAILURE_LIMIT,
+    })}`,
+    { signal: options.signal },
+  );
+  if (!isRecord(body) || !Array.isArray(body.failures)) {
+    throw new ControlApiError(
+      502,
+      "invalid_interface_materialization_failures_response",
+      "Interface materialization failures returned an invalid response.",
+    );
+  }
+  return body.failures as readonly CapsuleInterfaceMaterializationFailure[];
+}
+
+/**
+ * Queues one observed Interface materialization failure using the exact
+ * failure/state identity returned by the preceding list read.
+ */
+export async function retryInterfaceMaterializationFailure(
+  workspaceId: string,
+  intentId: string,
+  input: RetryCapsuleInterfaceMaterializationFailureInput,
+): Promise<CapsuleInterfaceMaterializationRetryReceipt> {
+  const body = await controlFetch<{
+    readonly retry: CapsuleInterfaceMaterializationRetryReceipt;
+  }>(
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/interface-materialization-failures/${encodeURIComponent(intentId)}/retries`,
+    {
+      method: "POST",
+      // Keep this object explicit: the server's CAS contract rejects every
+      // extra key, and no fresh state identity may be invented client-side.
+      body: {
+        failureDigest: input.failureDigest,
+        stateVersionId: input.stateVersionId,
+        stateGeneration: input.stateGeneration,
+      },
+    },
+  );
+  return body.retry;
+}
+
+/** A listed failure may have disappeared or changed before its retry click. */
+export function isInterfaceMaterializationRetryStale(
+  error: unknown,
+): boolean {
+  return (
+    error instanceof ControlApiError &&
+    (error.status === 404 || error.status === 409)
+  );
 }
 
 export async function listWorkspaceUsagePage(

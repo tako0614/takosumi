@@ -218,6 +218,8 @@ export const ja = {
     "アクセスと共有、キー、バックアップ、ポリシー",
   "settings.manage.backups": "復元ポイントの作成と復元",
   "settings.manage.shares": "サービス間で共有する値の管理",
+  "settings.manage.interfaceRecovery":
+    "永続化に失敗したInterfaceを確認し、再試行をキューに追加",
   "settings.manage.hostedResources": "ホスト環境で管理されているリソースの確認",
 
   // --- hosted resources ----------------------------------------------------
@@ -881,6 +883,7 @@ export const ja = {
   "workspaceSettings.tab.usageQuota": "使用量",
   "workspaceSettings.tab.backups": "バックアップ",
   "workspaceSettings.tab.shares": "共有値",
+  "workspaceSettings.tab.interfaceRecovery": "Interface の復旧",
   "workspaceSettings.general.displayName": "表示名",
   "workspaceSettings.general.handle": "ハンドル",
   "workspaceSettings.general.type": "種別",
@@ -1068,6 +1071,33 @@ export const ja = {
   "shares.status.revoked": "取り消し済み",
   "shares.list.title": "共有一覧",
   "shares.empty": "共有はまだありません。",
+
+  // --- Interface materialization recovery ----------------------------------
+  "interfaceRecovery.title": "Interface の復旧",
+  "interfaceRecovery.subtitle":
+    "Interface の永続化に失敗した項目を確認し、観測した状態で再試行をキューに追加します。",
+  "interfaceRecovery.col.capsule": "ワークロード",
+  "interfaceRecovery.col.error": "エラー",
+  "interfaceRecovery.col.recordedAt": "記録日時",
+  "interfaceRecovery.col.progress": "進み具合",
+  "interfaceRecovery.col.attempts": "試行回数",
+  "interfaceRecovery.col.actions": "操作",
+  "interfaceRecovery.progress": "{total} 件中 {next} 件処理済み",
+  "interfaceRecovery.retry": "再試行をキューに追加",
+  "interfaceRecovery.retryFor": "{capsule} の再試行をキューに追加",
+  "interfaceRecovery.retryQueued":
+    "{capsule} の再試行をキューに追加しました。保留中であり、この画面では完了とは表示しません。",
+  "interfaceRecovery.retryStale":
+    "この失敗は変更されたか、すでに存在しません。一覧を更新しました。現在の行から再試行してください。",
+  "interfaceRecovery.retryForbidden":
+    "再試行をキューに追加できるのはワークスペースのオーナーまたは管理者です。",
+  "interfaceRecovery.retryFailed":
+    "再試行をキューに追加できませんでした。一覧を更新して、もう一度お試しください。",
+  "interfaceRecovery.empty.title": "Interface の失敗はありません",
+  "interfaceRecovery.empty.message":
+    "対応が必要な Interface の永続化失敗があると、ここに表示されます。",
+  "interfaceRecovery.limitNote":
+    "最大 100 件まで表示しています。この上限に達している場合、全件とは限りません。",
 
   // --- notifications -------------------------------------------------------------
   "notif.markAllRead": "すべて既読にする",

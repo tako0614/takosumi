@@ -17,6 +17,7 @@ import {
   LayoutGrid,
   Link2,
   Network,
+  RotateCcw,
   Server,
   Settings,
   Share2,
@@ -107,6 +108,12 @@ export const MANAGE_DESTINATIONS: readonly ManageDestination[] = [
     labelKey: "workspaceSettings.tab.shares",
     descriptionKey: "settings.manage.shares",
     icon: Share2,
+  },
+  {
+    href: "/advanced/workspace/interface-recovery",
+    labelKey: "workspaceSettings.tab.interfaceRecovery",
+    descriptionKey: "settings.manage.interfaceRecovery",
+    icon: RotateCcw,
   },
 ] as const;
 
