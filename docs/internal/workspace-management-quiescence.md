@@ -209,6 +209,11 @@ Workspace に属する未解決の効果と処理全体を、同じ store 境界
 - pending、leased、dead-letter の Interface materialization intent。
 - terminal Run に残る billing capture、runtime-secret retirement の pending marker。
 
+Run 内の finalizer marker は auditEvents の配列順で判定します。過去の completed が
+存在しても、その後に pending があれば未処理です。deferred や無関係な event は完了に
+しません。runtime-secret retirement の一覧と dispatch claim も Memory/PostgreSQL/D1
+でこの同じ規則を使い、古い completed だけで再び pending になった処理を隠しません。
+
 後続 Run の成功や lease の期限切れだけで、古い executor の効果を確定したと
 みなしません。state commit と完了処理は既存の atomic commit/outbox に収束させます。
 別の「移管用成功 Run」を作らず、空の Capsule や偽の ApplyRun を importer にしません。

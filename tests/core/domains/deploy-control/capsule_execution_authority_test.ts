@@ -891,6 +891,118 @@ describe("Capsule execution authority", () => {
     }
   }, 30_000);
 
+  test("runtime-secret retirement ordered markers on isolated workerd D1", async () => {
+    const runtime = new Miniflare({
+      compatibilityDate: "2026-07-17",
+      modules: [{
+        type: "ESModule",
+        path: "runtime-secret-retirement-workerd.mjs",
+        contents: "export default {fetch(){return new Response('ok')}}",
+      }],
+      d1Databases: { CONTROL: "runtime-secret-retirement-workerd" },
+    });
+    try {
+      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const store = new CloudflareD1OpenTofuControlStore(database);
+      const run: ApplyRun = {
+        ...terminatingRun("failed"),
+        id: "workerd-runtime-secret-retirement",
+        planRunId: "workerd-runtime-secret-retirement-plan",
+        auditEvents: [
+          {
+            id: "workerd-runtime-secret-retirement-pending-before",
+            type: "runtime_secret.retirement.pending",
+            at: 100,
+            data: {
+              capsuleId: CAPSULE_ID,
+              providerDestroyCommitted: true,
+            },
+          },
+          {
+            id: "workerd-runtime-secret-retirement-completed-before",
+            type: "runtime_secret.retirement.completed",
+            at: 110,
+          },
+          {
+            id: "workerd-runtime-secret-retirement-pending-after",
+            type: "runtime_secret.retirement.pending",
+            at: 120,
+            data: {
+              capsuleId: CAPSULE_ID,
+              providerDestroyCommitted: true,
+            },
+          },
+          {
+            id: "workerd-runtime-secret-retirement-unrelated",
+            type: "apply.note",
+            at: 130,
+          },
+          {
+            id: "workerd-runtime-secret-retirement-deferred",
+            type: "runtime_secret.retirement.deferred",
+            at: 140,
+          },
+        ],
+      };
+      await store.putApplyRun(run);
+
+      const staleBeforeMs = 1_000;
+      expect(
+        (
+          await store.listPendingRuntimeSecretRetirementRuns({
+            staleBeforeMs,
+          })
+        ).map((candidate) => candidate.id),
+      ).toContain(run.id);
+      expect(
+        await store.claimPendingRuntimeSecretRetirementDispatch({
+          runId: run.id,
+          staleBeforeMs,
+          attemptedAt: 200,
+        }),
+      ).toBe(true);
+
+      const claimed = await store.getApplyRun(run.id);
+      expect(claimed).toBeDefined();
+      expect(
+        (
+          await store.listPendingRuntimeSecretRetirementRuns({
+            staleBeforeMs,
+          })
+        ).map((candidate) => candidate.id),
+      ).toContain(run.id);
+
+      await store.putApplyRun({
+        ...claimed!,
+        updatedAt: 300,
+        auditEvents: [
+          ...claimed!.auditEvents,
+          {
+            id: "workerd-runtime-secret-retirement-completed-after",
+            type: "runtime_secret.retirement.completed",
+            at: 300,
+          },
+        ],
+      });
+      expect(
+        (
+          await store.listPendingRuntimeSecretRetirementRuns({
+            staleBeforeMs,
+          })
+        ).map((candidate) => candidate.id),
+      ).not.toContain(run.id);
+      expect(
+        await store.claimPendingRuntimeSecretRetirementDispatch({
+          runId: run.id,
+          staleBeforeMs,
+          attemptedAt: 400,
+        }),
+      ).toBe(false);
+    } finally {
+      await runtime.dispose();
+    }
+  }, 30_000);
+
   test("ordered authority batches execute on an isolated workerd D1", async () => {
     const runtime = new Miniflare({
       compatibilityDate: "2026-07-17",

@@ -887,15 +887,32 @@ function d1RunBillingCapturePending(): SQL {
 /** Mirrors applyRunRuntimeSecretRetirementPending in the shared store model. */
 function d1RunRuntimeSecretRetirementPending(): SQL {
   return sql`
-    EXISTS (
-      SELECT 1
+    (
+      SELECT COALESCE(
+        MAX(
+          CASE
+            WHEN json_extract(audit_event.value, '$.type') =
+              'runtime_secret.retirement.pending'
+              THEN CAST(audit_event.key AS INTEGER) + 1
+            ELSE 0
+          END
+        ),
+        0
+      )
       FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
-      WHERE json_extract(audit_event.value, '$.type') = 'runtime_secret.retirement.pending'
-    )
-    AND NOT EXISTS (
-      SELECT 1
+    ) > (
+      SELECT COALESCE(
+        MAX(
+          CASE
+            WHEN json_extract(audit_event.value, '$.type') =
+              'runtime_secret.retirement.completed'
+              THEN CAST(audit_event.key AS INTEGER) + 1
+            ELSE 0
+          END
+        ),
+        0
+      )
       FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
-      WHERE json_extract(audit_event.value, '$.type') = 'runtime_secret.retirement.completed'
     )
   `;
 }

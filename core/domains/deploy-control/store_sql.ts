@@ -775,19 +775,26 @@ function pgRunBillingCapturePending(): SQL {
 /** Mirrors applyRunRuntimeSecretRetirementPending in the shared store model. */
 function pgRunRuntimeSecretRetirementPending(): SQL {
   return sql`
-    EXISTS (
-      SELECT 1
+    (
+      SELECT COALESCE(
+        MAX(audit_event.ordinality) FILTER (
+          WHERE audit_event.value ->> 'type' = 'runtime_secret.retirement.pending'
+        ),
+        0
+      )
       FROM jsonb_array_elements(
         COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
-      ) AS audit_event
-      WHERE audit_event ->> 'type' = 'runtime_secret.retirement.pending'
-    )
-    AND NOT EXISTS (
-      SELECT 1
+      ) WITH ORDINALITY AS audit_event(value, ordinality)
+    ) > (
+      SELECT COALESCE(
+        MAX(audit_event.ordinality) FILTER (
+          WHERE audit_event.value ->> 'type' = 'runtime_secret.retirement.completed'
+        ),
+        0
+      )
       FROM jsonb_array_elements(
         COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
-      ) AS audit_event
-      WHERE audit_event ->> 'type' = 'runtime_secret.retirement.completed'
+      ) WITH ORDINALITY AS audit_event(value, ordinality)
     )
   `;
 }

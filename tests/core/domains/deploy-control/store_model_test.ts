@@ -2415,6 +2415,112 @@ test("terminal runtime-secret retirement markers are recoverable on every store 
   }
 });
 
+test("runtime-secret retirement markers use ordered pending completion parity", async () => {
+  for (const [label, store] of await stores()) {
+    const run = applyRunForSafety({
+      id: `apply_runtime_retirement_ordered_${label}`,
+      capsuleId: `capsule_runtime_retirement_ordered_${label}`,
+      operation: "destroy",
+      status: "succeeded",
+      effectAt: 100,
+      auditEvents: [
+        {
+          id: `audit_runtime_retirement_ordered_pending_before_${label}`,
+          type: "runtime_secret.retirement.pending",
+          at: 100,
+          data: {
+            capsuleId: `capsule_runtime_retirement_ordered_${label}`,
+            providerDestroyCommitted: true,
+          },
+        },
+        {
+          id: `audit_runtime_retirement_ordered_completed_before_${label}`,
+          type: "runtime_secret.retirement.completed",
+          at: 110,
+        },
+        {
+          id: `audit_runtime_retirement_ordered_pending_after_${label}`,
+          type: "runtime_secret.retirement.pending",
+          at: 120,
+          data: {
+            capsuleId: `capsule_runtime_retirement_ordered_${label}`,
+            providerDestroyCommitted: true,
+          },
+        },
+        {
+          id: `audit_runtime_retirement_ordered_unrelated_${label}`,
+          type: "apply.note",
+          at: 130,
+        },
+        {
+          id: `audit_runtime_retirement_ordered_deferred_${label}`,
+          type: "runtime_secret.retirement.deferred",
+          at: 140,
+        },
+      ],
+    });
+    await store.putApplyRun(run);
+
+    const staleBeforeMs = 1_000;
+    expect(
+      (
+        await store.listPendingRuntimeSecretRetirementRuns({
+          staleBeforeMs,
+        })
+      ).map((candidate) => candidate.id),
+      label,
+    ).toContain(run.id);
+    expect(
+      await store.claimPendingRuntimeSecretRetirementDispatch({
+        runId: run.id,
+        staleBeforeMs,
+        attemptedAt: 200,
+      }),
+      label,
+    ).toBe(true);
+
+    const claimed = await store.getApplyRun(run.id);
+    expect(claimed, label).toBeDefined();
+    expect(
+      (
+        await store.listPendingRuntimeSecretRetirementRuns({
+          staleBeforeMs,
+        })
+      ).map((candidate) => candidate.id),
+      label,
+    ).toContain(run.id);
+
+    await store.putApplyRun({
+      ...claimed!,
+      updatedAt: 300,
+      auditEvents: [
+        ...claimed!.auditEvents,
+        {
+          id: `audit_runtime_retirement_ordered_completed_after_${label}`,
+          type: "runtime_secret.retirement.completed",
+          at: 300,
+        },
+      ],
+    });
+    expect(
+      (
+        await store.listPendingRuntimeSecretRetirementRuns({
+          staleBeforeMs,
+        })
+      ).map((candidate) => candidate.id),
+      label,
+    ).not.toContain(run.id);
+    expect(
+      await store.claimPendingRuntimeSecretRetirementDispatch({
+        runId: run.id,
+        staleBeforeMs,
+        attemptedAt: 400,
+      }),
+      label,
+    ).toBe(false);
+  }
+});
+
 test("sealed secret create-if-absent converges under concurrent writers on every store backend", async () => {
   for (const [label, store] of await stores()) {
     const connectionId = `runtime_secret_file_concurrent_${label}`;
