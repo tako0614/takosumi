@@ -447,6 +447,7 @@ export interface ControlPlaneOperations {
       readonly createdByRunId?: string;
       readonly capsuleId?: string;
       readonly environment?: string;
+      readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
     }): Promise<BackupRecord>;
     listBackups(
       workspaceId: string,

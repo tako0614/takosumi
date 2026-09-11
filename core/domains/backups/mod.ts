@@ -48,9 +48,12 @@ import type { Output as Output } from "takosumi-contract/outputs";
 import type { Run } from "takosumi-contract/runs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
-import type {
-  OpenTofuControlStore,
-  StoredSource,
+import {
+  assertWorkspaceManagementAdmission,
+  WorkspaceManagementAdmissionConflictError,
+  type WorkspaceManagementAuthority,
+  type OpenTofuControlStore,
+  type StoredSource,
 } from "../deploy-control/store.ts";
 import {
   type ActivityRecorder,
@@ -124,6 +127,8 @@ export type ServiceDataBackupRunnerResult =
 
 export interface CreateBackupRequest {
   readonly workspaceId: string;
+  /** Private epoch captured before authorization/preparation; never refreshed. */
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
   /** Optional run id that triggered the backup (operator / scheduled flows). */
   readonly createdByRunId?: string;
   /** Optional Capsule context for Capsule-scoped backup Runs. */
@@ -221,6 +226,20 @@ export class BackupsService {
     return ref;
   }
 
+  /** Internal preparation fence for manual export routes, not a public token. */
+  async captureManagementAuthority(workspaceId: string): Promise<WorkspaceManagementAuthority> {
+    try {
+      const management = await this.#store.getWorkspaceManagement(workspaceId);
+      if (!management) {
+        throw new OpenTofuControllerError("not_found", "workspace not found");
+      }
+      const active = assertWorkspaceManagementAdmission(management, workspaceId);
+      return { workspaceId, managementState: "active", managementEpoch: active.managementEpoch };
+    } catch (error) {
+      throw backupManagementError(error);
+    }
+  }
+
   /**
    * Creates one partial control export for a Workspace: gathers the supported
    * projection, strips secret material, zstd-compresses + seals + writes it to
@@ -228,6 +247,7 @@ export class BackupsService {
    * The returned {@link BackupRecord} deliberately carries no restore target.
    */
   async createBackup(request: CreateBackupRequest): Promise<BackupRecord> {
+    request = structuredClone(request);
     const workspaceId = request.workspaceId.trim();
     if (workspaceId.length === 0) {
       throw new OpenTofuControllerError(
@@ -241,6 +261,10 @@ export class BackupsService {
         "control backups are not wired (backup artifact storage + crypto unavailable)",
       );
     }
+    const expectedWorkspaceManagementAuthority = request.createdByRunId
+      ? undefined
+      : request.expectedWorkspaceManagementAuthority ??
+        await this.captureManagementAuthority(workspaceId);
     const workspace = await this.#store.getWorkspace(workspaceId);
     if (!workspace) {
       throw new OpenTofuControllerError("not_found", "workspace not found");
@@ -250,14 +274,25 @@ export class BackupsService {
     const backupId = this.#newId("bkp");
     const runId = request.createdByRunId ?? this.#newId("backup");
     if (!request.createdByRunId) {
-      await this.#putBackupRun({
-        request,
-        runId,
-        workspaceId,
-        status: "running",
-        createdAt,
-        startedAt: createdAt,
-      });
+      try {
+        const admission = await this.#store.beginBackupRun(this.#backupRun({
+          request,
+          runId,
+          workspaceId,
+          status: "running",
+          createdAt,
+          startedAt: createdAt,
+        }), expectedWorkspaceManagementAuthority!);
+        if (admission.status !== "created") {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            "Backup Run already exists; this export cannot be started again.",
+            { reason: "backup_run_already_exists" },
+          );
+        }
+      } catch (error) {
+        throw backupManagementError(error);
+      }
     }
 
     try {
@@ -308,7 +343,7 @@ export class BackupsService {
       await this.#store.putBackupRecord(record);
 
       if (!request.createdByRunId) {
-        await this.#putBackupRun({
+        await this.#store.putBackupRun(this.#backupRun({
           request,
           runId,
           workspaceId,
@@ -316,7 +351,7 @@ export class BackupsService {
           createdAt,
           startedAt: createdAt,
           finishedAt: this.#now().toISOString(),
-        });
+        }));
       }
 
       // Activity (§27 / §34): a control backup was created. Pointer metadata only
@@ -340,7 +375,7 @@ export class BackupsService {
       return record;
     } catch (error) {
       if (!request.createdByRunId) {
-        await this.#putBackupRun({
+        await this.#store.putBackupRun(this.#backupRun({
           request,
           runId,
           workspaceId,
@@ -349,13 +384,13 @@ export class BackupsService {
           createdAt,
           startedAt: createdAt,
           finishedAt: this.#now().toISOString(),
-        });
+        }));
       }
       throw error;
     }
   }
 
-  async #putBackupRun(input: {
+  #backupRun(input: {
     readonly request: CreateBackupRequest;
     readonly runId: string;
     readonly workspaceId: string;
@@ -364,8 +399,8 @@ export class BackupsService {
     readonly createdAt: string;
     readonly startedAt?: string;
     readonly finishedAt?: string;
-  }): Promise<void> {
-    await this.#store.putBackupRun({
+  }): Run {
+    return {
       id: input.runId,
       workspaceId: input.workspaceId,
       ...(input.request.capsuleId
@@ -381,7 +416,7 @@ export class BackupsService {
       createdAt: input.createdAt,
       ...(input.startedAt ? { startedAt: input.startedAt } : {}),
       ...(input.finishedAt ? { finishedAt: input.finishedAt } : {}),
-    });
+    };
   }
 
   /** Lists a Workspace's control backups, newest first (keyset-paged, spec §30). */
@@ -1367,6 +1402,16 @@ export class InMemoryBackupArtifactStore implements BackupArtifactStore {
   get(ref: string): Uint8Array | undefined {
     return this.#objects.get(ref);
   }
+}
+
+function backupManagementError(error: unknown): unknown {
+  return error instanceof WorkspaceManagementAdmissionConflictError
+    ? new OpenTofuControllerError(
+      "failed_precondition",
+      "Workspace is not accepting this management operation.",
+      { reason: "workspace_management_admission_conflict" },
+    )
+    : error;
 }
 
 async function digestBytes(bytes: Uint8Array): Promise<string> {

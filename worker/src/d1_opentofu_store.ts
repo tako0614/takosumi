@@ -98,6 +98,7 @@ import type {
   CommitRestoredStateInput,
   CommitRestoredStateResult,
   BeginApplyRunResult,
+  BeginBackupRunResult,
   BeginRestoreRunResult,
   BeginSourceSyncRunResult,
   BeginWorkspaceDrainingResult,
@@ -1832,6 +1833,71 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       runJson: JSON.stringify(publicRun),
     });
     return publicRun;
+  }
+
+  async beginBackupRun(
+    inputRun: Run,
+    inputExpectedWorkspaceManagementAuthority: WorkspaceManagementAuthority,
+  ): Promise<BeginBackupRunResult> {
+    const {
+      run,
+      expectedWorkspaceManagementAuthority,
+    } = structuredClone({
+      run: inputRun,
+      expectedWorkspaceManagementAuthority:
+        inputExpectedWorkspaceManagementAuthority,
+    });
+    if (run.type !== RUN_KIND_BACKUP || run.status !== "running") {
+      throw new TypeError("Backup admission requires a new running Backup");
+    }
+    assertWorkspaceManagementAuthorityInput(
+      expectedWorkspaceManagementAuthority,
+      run.workspaceId,
+    );
+    assertD1AtomicCommitBatch(this.db, "beginBackupRun");
+    await this.#ensureSchema();
+
+    // The guard is first in the batch and has no occupied-id bypass: a
+    // stopped or epoch-mismatched Workspace rejects even an existing Run id.
+    // The insert is create-only; a raced or pre-existing id is always a
+    // conflict and is never adopted or backfilled.
+    const guard = d1ManualBackupWorkspaceManagementGuardStmt(
+      this.#orm,
+      run.workspaceId,
+      run.id,
+      expectedWorkspaceManagementAuthority,
+    );
+    const insert = this.#orm
+      .insert(schema.runs)
+      .values({
+        id: run.id,
+        runGroupId: run.runGroupId ?? null,
+        workspaceId: run.workspaceId,
+        sourceId: run.sourceId ?? null,
+        capsuleId: run.capsuleId ?? null,
+        environment: run.environment ?? null,
+        type: RUN_KIND_BACKUP,
+        status: run.status,
+        leaseToken: null,
+        heartbeatAt: run.heartbeatAt ?? null,
+        runJson: storeRunManagementAuthority(
+          run,
+          expectedWorkspaceManagementAuthority,
+        ) as unknown,
+        createdAt: String(run.createdAt),
+      })
+      .onConflictDoNothing({ target: schema.runs.id });
+    try {
+      const results = await this.#orm.batch([guard, insert]);
+      return changes(results[1] as D1Result) > 0
+        ? { status: "created", run: publicStoredRun(run) }
+        : { status: "conflict" };
+    } catch (error) {
+      if (isD1ManualBackupWorkspaceManagementGuardError(error)) {
+        throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
+      }
+      throw error;
+    }
   }
 
   async beginRestoreRun(
@@ -8573,6 +8639,36 @@ function d1WorkspaceManagementAdmissionGuardStmt(
 }
 
 /**
+ * First-statement guard for manual Backup admission. Unlike the general Run
+ * guard, an occupied id never bypasses this Workspace check: a stopped or
+ * epoch-mismatched Workspace must reject before the create-only insert can
+ * classify that id as a conflict.
+ */
+function d1ManualBackupWorkspaceManagementGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  workspaceId: string,
+  runId: string,
+  expected: WorkspaceManagementAuthority,
+) {
+  const workspace = orm
+    .select({ one: sql`1` })
+    .from(schema.workspaces)
+    .where(
+      and(
+        eq(schema.workspaces.id, workspaceId),
+        eq(schema.workspaces.managementState, "active"),
+        eq(schema.workspaces.managementEpoch, expected.managementEpoch),
+      ),
+    );
+  return orm.insert(schema.runs).select(
+    orm
+      .select(d1InvalidWorkspaceManagementGuardRow(runId))
+      .from(sql`(select 1) as manual_backup_workspace_management_guard_source`)
+      .where(notExists(workspace)),
+  );
+}
+
+/**
  * First-statement guard for a new Capsule initial-authority unit. Unlike the
  * Run admission guard this deliberately has no existing-id bypass: the
  * complete config/Capsule/binding unit is classified by the caller's
@@ -8655,6 +8751,7 @@ function assertD1AtomicCommitBatch(
   operation:
     | "preparePlanRun"
     | "beginApplyRun"
+    | "beginBackupRun"
     | "beginRestoreRun"
     | "beginSourceSyncRun"
     | "createConnectionRegistration"
@@ -8711,6 +8808,18 @@ function isD1WorkspaceManagementGuardError(error: unknown): boolean {
     ? error.message.includes("NOT NULL constraint failed: runs.space_id") ||
         error.message.includes("constraint failed: runs.space_id")
     : false;
+}
+
+function isD1ManualBackupWorkspaceManagementGuardError(
+  error: unknown,
+): boolean {
+  if (isD1WorkspaceManagementGuardError(error)) return true;
+  // The invalid guard row uses the candidate id. When that id is already
+  // occupied, SQLite reports the guard's failed insert as a primary-key
+  // collision; the create-only Run insert itself uses ON CONFLICT DO NOTHING.
+  return error instanceof Error &&
+    (error.message.includes("UNIQUE constraint failed: runs.id") ||
+      error.message.includes("constraint failed: runs.id"));
 }
 
 function isD1ConnectionRegistrationCollisionError(error: unknown): boolean {

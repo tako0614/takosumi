@@ -309,6 +309,26 @@ Interface marker の fence だけをもって、観測後の全効果の収束�
 **全 admission と凍結判定が揃うまで live composition に停止の入口を接続しません。**
 最初の内部縦断だけで Workspace 全体の安全な凍結や管理移管を提供済みとしません。
 
+### 手動 control export の開始
+
+内部候補の手動 Backup は、元の管理 epoch を保持した `beginBackupRun` で
+running Run を作成してから、artifact の生成・保存を始めます。Memory は同期の
+判定と作成、Postgres は Workspace を先に lock する transaction、D1 は batch
+先頭の管理状態・epoch guard と create-only insert を使います。Run ID が既に
+存在する場合は開始を拒否し、既存の export を再実行・上書きしません。
+
+Accounts と内部 backup POST は、Workspace が判明した時点で認可処理の前に
+epoch を取得し、停止・再開を挟んでも取得し直しません。取得時のエラーは認証・
+Workspace 権限の確認後にだけ返します。サービスを直接呼ぶ場合も、非同期の
+Workspace 取得や export 準備より前に取得します。開始済みの export の完了・
+失敗記録は停止中も継続します。公開 Run/API schema や DB schema は増やしません。
+
+これは部分的な control export の新規開始だけの対処です。`createdByRunId` を
+持つ既存 Run からの継続経路、raw Run writer の撤去・限定、BackupRecord と
+terminal Run の原子的な確定、compatibility check の新規 admission は残件です。
+この局所修正だけで全 blocker が単調に収束する、凍結・移管できる、完全な
+Workspace backup / restore を提供できる、とは扱いません。
+
 ### Plan・Apply・Restore の永続 authority
 
 内部候補では、SourceSync と同じ保存境界を Plan・Apply・Restore にも使います。

@@ -6,6 +6,7 @@ import type {
   SourceSnapshot,
   SourceSyncRun,
 } from "takosumi-contract/sources";
+import type { Run } from "takosumi-contract/runs";
 import type { Workspace } from "takosumi-contract/workspaces";
 import {
   InMemoryOpenTofuControlStore,
@@ -153,6 +154,18 @@ function applyRun(id: string, workspaceId: string, status: ApplyRun["status"] = 
     auditEvents: [],
     createdAt: 1,
     updatedAt: 1,
+  };
+}
+
+function backupRun(id: string, workspaceId: string): Run {
+  return {
+    id,
+    workspaceId,
+    type: "backup",
+    status: "running",
+    createdBy: "manual",
+    createdAt: "2026-09-08T00:00:00.000Z",
+    startedAt: "2026-09-08T00:00:00.000Z",
   };
 }
 
@@ -471,6 +484,83 @@ test("Workspace management CAS and guarded admissions are conformed across stora
     expect(terminal, label).toEqual({
       won: true,
       run: { ...claimedRun, heartbeatAt: 3, status: "succeeded", finishedAt: 4 },
+    });
+  }
+});
+
+test("manual Backup admission is create-only and rejects stale authority across adapters", async () => {
+  for (const { label, store, reopen, resumeManagement } of await adapters()) {
+    const ws = workspace(`backup-${label}`);
+    await store.putWorkspace(ws);
+    const original: WorkspaceManagementAuthority = {
+      workspaceId: ws.id,
+      managementState: "active",
+      managementEpoch: 1,
+    };
+    const run = backupRun(`backup-run-${label}`, ws.id);
+    expect(await store.beginBackupRun(run, original), label).toEqual({
+      status: "created",
+      run,
+    });
+
+    // A reused Run id is a conflict and cannot adopt or overwrite the
+    // caller's replacement payload, even while the authority is still active.
+    expect(
+      await store.beginBackupRun(
+        { ...run, finishedAt: "2026-09-08T00:00:01.000Z", status: "running" },
+        original,
+      ),
+      label,
+    ).toEqual({ status: "conflict" });
+    expect(await reopen().getBackupRun(run.id), label).toEqual(run);
+
+    expect(await store.beginWorkspaceDraining(ws.id, original), label).toMatchObject({
+      status: "started",
+      management: { managementState: "draining", managementEpoch: 2 },
+    });
+
+    // The management guard runs before the occupied-id check: a stopped
+    // Workspace cannot turn an existing Run id into an idempotent bypass.
+    await expect(
+      reopen().beginBackupRun(run, original),
+      label,
+    ).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    expect(await reopen().getBackupRun(run.id), label).toEqual(run);
+
+    // Memory has no resume fixture; its draining authority is already stale.
+    const staleBeforeResume = backupRun(`backup-stale-draining-${label}`, ws.id);
+    await expect(
+      reopen().beginBackupRun(staleBeforeResume, original),
+      label,
+    ).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    expect(await reopen().getBackupRun(staleBeforeResume.id), label).toBeUndefined();
+
+    if (!resumeManagement) continue;
+    await resumeManagement(ws.id);
+    const resumed = reopen();
+    const current = await resumed.getWorkspaceManagement(ws.id);
+    expect(current, label).toEqual({
+      workspaceId: ws.id,
+      managementState: "active",
+      managementEpoch: 3,
+    });
+
+    // The original N=1 tuple remains stale after drain/resume (N=3), so it
+    // cannot be borrowed to create a fresh manual Backup Run.
+    const staleAfterResume = backupRun(`backup-stale-resumed-${label}`, ws.id);
+    await expect(
+      resumed.beginBackupRun(staleAfterResume, original),
+      label,
+    ).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    expect(await resumed.getBackupRun(staleAfterResume.id), label).toBeUndefined();
+
+    // A caller with the actual current tuple can create a distinct Run; this
+    // proves the stale rejection is epoch-specific rather than a permanent
+    // prohibition after a completed resume fixture.
+    const fresh = backupRun(`backup-fresh-resumed-${label}`, ws.id);
+    expect(await resumed.beginBackupRun(fresh, current!), label).toEqual({
+      status: "created",
+      run: fresh,
     });
   }
 });

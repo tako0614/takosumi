@@ -20,6 +20,40 @@ import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
 
 const TS = "2026-06-06T00:00:00.000Z";
 
+/** Holds the first control-artifact write so a test can drain mid-flight. */
+class BlockingBackupArtifactStore extends InMemoryBackupArtifactStore {
+  readonly entered: Promise<void>;
+  readonly #resolveEntered: () => void;
+  readonly #released: Promise<void>;
+  readonly #resolveReleased: () => void;
+
+  constructor() {
+    super();
+    let resolveEntered!: () => void;
+    this.entered = new Promise<void>((resolve) => {
+      resolveEntered = resolve;
+    });
+    this.#resolveEntered = resolveEntered;
+    let resolveReleased!: () => void;
+    this.#released = new Promise<void>((resolve) => {
+      resolveReleased = resolve;
+    });
+    this.#resolveReleased = resolveReleased;
+  }
+
+  release(): void {
+    this.#resolveReleased();
+  }
+
+  override async put(
+    input: Parameters<InMemoryBackupArtifactStore["put"]>[0],
+  ): Promise<{ readonly digest: string; readonly sizeBytes: number }> {
+    this.#resolveEntered();
+    await this.#released;
+    return await super.put(input);
+  }
+}
+
 function makeService(
   options: {
     readonly store?: InMemoryOpenTofuControlStore;
@@ -189,6 +223,143 @@ test("createBackup writes a sealed bundle + records a pointer + emits activity",
   expect(backupEvent).toBeDefined();
   expect(backupEvent!.targetId).toBe(record.id);
   expect(backupEvent!.metadata.ref).toBe(record.ref);
+});
+
+test("createBackup rejects a new manual backup while Workspace is draining before any side effects", async () => {
+  const { service, store, artifactStore } = makeService();
+  const workspaceId = "ws_backup_draining";
+  await store.putWorkspace({
+    id: workspaceId,
+    handle: "backup-draining",
+    displayName: "Backup draining",
+    type: "personal",
+    ownerUserId: "user_backup_draining",
+    createdAt: TS,
+    updatedAt: TS,
+  });
+  const authority = await store.getWorkspaceManagement(workspaceId);
+  expect(authority).toEqual({
+    workspaceId,
+    managementState: "active",
+    managementEpoch: 1,
+  });
+  expect(
+    await store.beginWorkspaceDraining(workspaceId, authority!),
+  ).toMatchObject({
+    status: "started",
+    management: {
+      workspaceId,
+      managementState: "draining",
+      managementEpoch: 2,
+    },
+  });
+
+  await expect(service.createBackup({ workspaceId })).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "workspace_management_admission_conflict" },
+  });
+
+  // Admission is before Run creation, bundle preparation, artifact writes, and
+  // the backup pointer. Existing APIs therefore observe no partial work.
+  expect(await store.listRunsByWorkspace(workspaceId)).toEqual([]);
+  expect(await store.listBackupRecords(workspaceId)).toEqual([]);
+  expect(
+    artifactStore!.get(
+      `workspaces/${workspaceId}/backups/bkp_0001/control.json.zst.enc`,
+    ),
+  ).toBeUndefined();
+  expect(
+    artifactStore!.get(
+      `workspaces/${workspaceId}/backups/bkp_0001/artifacts.manifest.json`,
+    ),
+  ).toBeUndefined();
+});
+
+test("an in-flight manual backup may finish after Workspace starts draining", async () => {
+  const artifactStore = new BlockingBackupArtifactStore();
+  const { service, store } = makeService({ artifactStore });
+  const workspaceId = "ws_backup_inflight";
+  await store.putWorkspace({
+    id: workspaceId,
+    handle: "backup-inflight",
+    displayName: "Backup in flight",
+    type: "personal",
+    ownerUserId: "user_backup_inflight",
+    createdAt: TS,
+    updatedAt: TS,
+  });
+  const authority = await store.getWorkspaceManagement(workspaceId);
+  expect(authority).toEqual({
+    workspaceId,
+    managementState: "active",
+    managementEpoch: 1,
+  });
+
+  const pending = service.createBackup({ workspaceId });
+  await artifactStore.entered;
+  expect(await store.listRunsByWorkspace(workspaceId)).toEqual([
+    expect.objectContaining({ type: "backup", status: "running", workspaceId }),
+  ]);
+
+  expect(
+    await store.beginWorkspaceDraining(workspaceId, authority!),
+  ).toMatchObject({
+    status: "started",
+    management: {
+      workspaceId,
+      managementState: "draining",
+      managementEpoch: 2,
+    },
+  });
+  artifactStore.release();
+
+  const record = await pending;
+  expect(record.workspaceId).toBe(workspaceId);
+  expect(await store.listBackupRecords(workspaceId)).toEqual([record]);
+  expect(await store.listRunsByWorkspace(workspaceId)).toEqual([
+    expect.objectContaining({ type: "backup", status: "succeeded", workspaceId }),
+  ]);
+});
+
+test("createBackup rejects a caller-supplied stale Workspace authority", async () => {
+  const { service, store, artifactStore } = makeService();
+  const workspaceId = "ws_backup_stale_authority";
+  await store.putWorkspace({
+    id: workspaceId,
+    handle: "backup-stale-authority",
+    displayName: "Backup stale authority",
+    type: "personal",
+    ownerUserId: "user_backup_stale_authority",
+    createdAt: TS,
+    updatedAt: TS,
+  });
+  const original = await store.getWorkspaceManagement(workspaceId);
+  expect(original).toEqual({
+    workspaceId,
+    managementState: "active",
+    managementEpoch: 1,
+  });
+  expect(await store.beginWorkspaceDraining(workspaceId, original!)).toMatchObject({
+    status: "started",
+    management: { managementState: "draining", managementEpoch: 2 },
+  });
+
+  await expect(
+    service.createBackup({
+      workspaceId,
+      expectedWorkspaceManagementAuthority: original!,
+    }),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "workspace_management_admission_conflict" },
+  });
+  expect(await store.listRunsByWorkspace(workspaceId)).toEqual([]);
+  expect(await store.listBackupRecords(workspaceId)).toEqual([]);
+  expect(
+    artifactStore!.get(
+      `workspaces/${workspaceId}/backups/bkp_0001/control.json.zst.enc`,
+    ),
+  ).toBeUndefined();
 });
 
 test("control bundle captures the Workspace ledger as public projections", async () => {

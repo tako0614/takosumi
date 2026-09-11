@@ -2316,6 +2316,11 @@ export function storeRunManagementAuthority<T extends StoredRunRecord>(
   };
 }
 
+/** A manual backup has no resume protocol: an occupied Run id never starts work again. */
+export type BeginBackupRunResult =
+  | { readonly status: "created"; readonly run: Run }
+  | { readonly status: "conflict" };
+
 export type BeginRestoreRunResult =
   | { readonly status: "created"; readonly run: Run }
   | { readonly status: "existing"; readonly run: Run }
@@ -2499,6 +2504,7 @@ export interface OpenTofuControlStore {
   putCompatibilityCheckRun(run: Run): Promise<Run>;
   getCompatibilityCheckRun(id: string): Promise<Run | undefined>;
   putBackupRun(run: Run): Promise<Run>;
+  beginBackupRun(run: Run, expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority): Promise<BeginBackupRunResult>;
   beginRestoreRun(run: Run, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<BeginRestoreRunResult>;
   getBackupRun(id: string): Promise<Run | undefined>;
   listRunsByWorkspace(
@@ -3625,6 +3631,18 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     }
     this.#runs.set(run.id, preserveStoredRunManagementAuthority(run, this.#runs.get(run.id)));
     return Promise.resolve(publicStoredRun(run));
+  }
+
+  async beginBackupRun(run: Run, expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority): Promise<BeginBackupRunResult> {
+    ({ run, expectedWorkspaceManagementAuthority } = structuredClone({ run, expectedWorkspaceManagementAuthority }));
+    if (run.type !== "backup" || run.status !== "running") {
+      throw new TypeError("Backup admission requires a new running Backup");
+    }
+    assertWorkspaceManagementAuthorityInput(expectedWorkspaceManagementAuthority, run.workspaceId);
+    assertWorkspaceManagementAdmission(this.#workspaceManagement.get(run.workspaceId), run.workspaceId, expectedWorkspaceManagementAuthority);
+    if (this.#runs.has(run.id)) return { status: "conflict" };
+    this.#runs.set(run.id, storeRunManagementAuthority(run, expectedWorkspaceManagementAuthority));
+    return { status: "created", run: publicStoredRun(run) };
   }
 
   async beginRestoreRun(run: Run, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<BeginRestoreRunResult> {

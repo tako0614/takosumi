@@ -14,7 +14,10 @@ import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/stor
 
 const TS = "2026-06-06T00:00:00.000Z";
 
-async function makeApp(options: { readonly withArtifactStore?: boolean } = {}) {
+async function makeApp(options: {
+  readonly withArtifactStore?: boolean;
+  readonly onAuthorize?: (store: InMemoryOpenTofuControlStore) => Promise<void> | void;
+} = {}) {
   const store = new InMemoryOpenTofuControlStore();
   await seedCapsuleModel(store, {
     workspaceId: "ws_aaaaaaaa",
@@ -50,15 +53,17 @@ async function makeApp(options: { readonly withArtifactStore?: boolean } = {}) {
     deployControlInternalRouteOptions: {
       controller,
       backupsService,
-      authorizeDeployControlBearer: ({ token }) =>
-        token === "scoped-token"
+      authorizeDeployControlBearer: async ({ token }) => {
+        await options.onAuthorize?.(store);
+        return token === "scoped-token"
           ? {
               actor: "acct_1",
               workspaceIds: ["ws_aaaaaaaa"],
               operations: "*",
               runnerProfileIds: "*",
             }
-          : undefined,
+          : undefined;
+      },
     },
     requestCorrelation: false,
   });
@@ -139,6 +144,54 @@ test("POST /internal/v1/workspaces/:workspaceId/backups creates a backup (201)",
   expect(runBody.run.type).toBe("backup");
   expect(runBody.run.status).toBe("succeeded");
   expect(runBody.run.workspaceId).toBe("ws_aaaaaaaa");
+});
+
+test("POST backup rejects a request whose captured authority became draining during auth (409)", async () => {
+  let drained = false;
+  const { app, store } = await makeApp({
+    onAuthorize: async (currentStore) => {
+      if (drained) return;
+      drained = true;
+      const authority = await currentStore.getWorkspaceManagement("ws_aaaaaaaa");
+      if (!authority) throw new Error("workspace management fixture missing");
+      await currentStore.beginWorkspaceDraining("ws_aaaaaaaa", authority);
+    },
+  });
+  const response = await app.request(
+    "/internal/v1/workspaces/ws_aaaaaaaa/backups",
+    {
+      method: "POST",
+      headers: HEADERS,
+    },
+  );
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({
+    error: {
+      code: "failed_precondition",
+      details: { reason: "workspace_management_admission_conflict" },
+    },
+  });
+  expect(await store.listRunsByWorkspace("ws_aaaaaaaa")).toEqual([]);
+  expect(await store.listBackupRecords("ws_aaaaaaaa")).toEqual([]);
+});
+
+test("unauthorized backup caller keeps the auth error while Workspace management is stopped", async () => {
+  const { app, store } = await makeApp();
+  const authority = await store.getWorkspaceManagement("ws_aaaaaaaa");
+  if (!authority) throw new Error("workspace management fixture missing");
+  await store.beginWorkspaceDraining("ws_aaaaaaaa", authority);
+  const response = await app.request(
+    "/internal/v1/workspaces/ws_aaaaaaaa/backups",
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer invalid-token",
+      },
+    },
+  );
+  expect(response.status).toBe(401);
+  expect((await response.json()).error.code).toBe("unauthenticated");
 });
 
 test("POST /internal/v1/capsules/:capsuleId/backups creates a Workspace backup (201)", async () => {

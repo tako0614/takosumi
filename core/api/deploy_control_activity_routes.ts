@@ -5,6 +5,7 @@
  */
 
 import type { Context } from "hono";
+import type { CreateBackupRequest } from "../domains/backups/mod.ts";
 import { ACTIVITY_MAX_LIMIT } from "takosumi-contract/activity";
 import {
   authorizeDeployControl,
@@ -12,6 +13,7 @@ import {
   type DeployControlEndpoint,
   type DeployControlRouteContext,
   ensureWorkspacePermission,
+  ensureValidId,
   ensureValidParam,
   errorEnvelope,
   notImplemented,
@@ -29,8 +31,6 @@ const WORKSPACE_ID_PARAM = {
   param: "workspaceId",
   pattern: WORKSPACE_ID_PATTERN,
 } as const;
-const CAPSULE_ID_PARAM = { id: "capsuleId" } as const;
-
 export const DEPLOY_CONTROL_ACTIVITY_ENDPOINTS: readonly DeployControlEndpoint[] =
   [
     {
@@ -133,44 +133,54 @@ export function mountDeployControlActivityRoutes(
     });
   });
 
-  app.post(
-    TAKOSUMI_WORKSPACE_BACKUPS_ROUTE,
-    defineRoute({
-      ctx,
-      requireService: (deps) =>
-        deps.backupsService ? undefined : "backups not wired",
-      param: WORKSPACE_ID_PARAM,
-      handler: async ({ c, principal, id }) => {
-        ensureWorkspacePermission(principal, id);
-        const backup = await dependencies.backupsService!.createBackup({
-          workspaceId: id,
+  // Capture the original private epoch before asynchronous authorization, but
+  // disclose capture errors only after authentication and Workspace access.
+  const createBackupRoute = (scope: "workspace" | "capsule") =>
+    async (c: Context): Promise<Response> => {
+      const service = dependencies.backupsService;
+      const wired = service && (scope === "workspace" || dependencies.controller);
+      const idCheck = scope === "workspace"
+        ? ensureValidParam(c, "workspaceId", WORKSPACE_ID_PATTERN)
+        : ensureValidId(c, "capsuleId");
+      const prepared = wired && idCheck.kind !== "invalid"
+        ? await (async () => {
+          try {
+            const capsule = scope === "capsule"
+              ? (await dependencies.controller!.getCapsule(idCheck.value)).capsule
+              : undefined;
+            const request: CreateBackupRequest = capsule
+              ? { workspaceId: capsule.workspaceId, capsuleId: capsule.id, environment: capsule.environment }
+              : { workspaceId: idCheck.value };
+            const authority = await service.captureManagementAuthority(request.workspaceId)
+              .then(
+                (value) => ({ ok: true as const, value }),
+                (error: unknown) => ({ ok: false as const, error }),
+              );
+            return { ok: true as const, request, authority };
+          } catch (error) {
+            return { ok: false as const, error };
+          }
+        })()
+        : undefined;
+      const auth = await authorizeDeployControl(c, dependencies);
+      if (!auth.ok) return auth.response;
+      if (!wired) return c.json(notImplemented(c, "backups not wired"), 501);
+      if (idCheck.kind === "invalid") return idCheck.response;
+      return await runHandler(c, async () => {
+        if (!prepared) throw new Error("Backup preparation was not captured");
+        if (!prepared.ok) throw prepared.error;
+        ensureWorkspacePermission(auth.principal, prepared.request.workspaceId);
+        if (!prepared.authority.ok) throw prepared.authority.error;
+        const backup = await service.createBackup({
+          ...prepared.request,
+          expectedWorkspaceManagementAuthority: prepared.authority.value,
         });
         return c.json({ backup }, 201);
-      },
-    }),
-  );
+      });
+    };
 
-  app.post(
-    TAKOSUMI_CAPSULE_BACKUPS_ROUTE,
-    defineRoute({
-      ctx,
-      requireService: (deps) =>
-        deps.backupsService && deps.controller
-          ? undefined
-          : "backups not wired",
-      param: CAPSULE_ID_PARAM,
-      handler: async ({ c, principal, id }) => {
-        const response = await dependencies.controller!.getCapsule(id);
-        ensureWorkspacePermission(principal, response.capsule.workspaceId);
-        const backup = await dependencies.backupsService!.createBackup({
-          workspaceId: response.capsule.workspaceId,
-          capsuleId: response.capsule.id,
-          environment: response.capsule.environment,
-        });
-        return c.json({ backup }, 201);
-      },
-    }),
-  );
+  app.post(TAKOSUMI_WORKSPACE_BACKUPS_ROUTE, createBackupRoute("workspace"));
+  app.post(TAKOSUMI_CAPSULE_BACKUPS_ROUTE, createBackupRoute("capsule"));
 
   app.get(
     TAKOSUMI_WORKSPACE_BACKUPS_ROUTE,

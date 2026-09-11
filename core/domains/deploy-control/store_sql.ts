@@ -84,6 +84,7 @@ import type {
   CommitRestoredStateInput,
   CommitRestoredStateResult,
   BeginApplyRunResult,
+  BeginBackupRunResult,
   BeginRestoreRunResult,
   BeginSourceSyncRunResult,
   ConnectionActorAuthority,
@@ -1809,6 +1810,74 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       json: run,
     });
     return publicStoredRun(run);
+  }
+
+  async beginBackupRun(
+    inputRun: Run,
+    inputExpectedWorkspaceManagementAuthority: WorkspaceManagementAuthority,
+  ): Promise<BeginBackupRunResult> {
+    const {
+      run,
+      expectedWorkspaceManagementAuthority,
+    } = structuredClone({
+      run: inputRun,
+      expectedWorkspaceManagementAuthority:
+        inputExpectedWorkspaceManagementAuthority,
+    });
+    if (run.type !== RUN_KIND_BACKUP || run.status !== "running") {
+      throw new TypeError("Backup admission requires a new running Backup");
+    }
+    assertWorkspaceManagementAuthorityInput(
+      expectedWorkspaceManagementAuthority,
+      run.workspaceId,
+    );
+    return await this.#client.transaction(async (transaction) => {
+      // The Workspace is the outer lock for manual-backup admission. A
+      // stopped or epoch-mismatched Workspace rejects even an occupied Run id;
+      // the idempotency conflict is checked only after this guard.
+      const management = await pgWorkspaceManagementForTransaction(
+        transaction,
+        run.workspaceId,
+      );
+      assertWorkspaceManagementAdmission(
+        management,
+        run.workspaceId,
+        expectedWorkspaceManagementAuthority,
+      );
+
+      const db = this.#drizzleForClient(transaction);
+      const existingRows = await db
+        .select({ id: pgSchema.runs.id })
+        .from(pgSchema.runs)
+        .where(eq(pgSchema.runs.id, run.id))
+        .limit(1);
+      if (existingRows.length > 0) {
+        return { status: "conflict" as const };
+      }
+
+      const inserted = await db
+        .insert(pgSchema.runs)
+        .values({
+          id: run.id,
+          kind: RUN_KIND_BACKUP,
+          workspaceId: run.workspaceId,
+          sourceId: run.sourceId ?? null,
+          capsuleId: run.capsuleId ?? null,
+          status: run.status,
+          leaseToken: null,
+          heartbeatAt: run.heartbeatAt ?? null,
+          createdAt: String(run.createdAt),
+          runJson: storeRunManagementAuthority(
+            run,
+            expectedWorkspaceManagementAuthority,
+          ),
+        })
+        .onConflictDoNothing({ target: pgSchema.runs.id })
+        .returning({ json: pgSchema.runs.runJson });
+      return inserted.length > 0
+        ? { status: "created" as const, run: publicStoredRun(run) }
+        : { status: "conflict" as const };
+    });
   }
 
   async beginRestoreRun(

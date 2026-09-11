@@ -190,6 +190,7 @@ export async function handleWorkspaces(
       return errorJson("not_found", "not found", 404);
     }
     const workspaceMutation = (segments.length === 2 && method === "PATCH") ||
+      (leaf === "backups" && segments.length === 3 && method === "POST") ||
       (leaf === "members" && ((segments.length === 3 && method === "POST") ||
         (segments.length === 4 && (method === "PATCH" || method === "DELETE"))));
     // Capture once before asynchronous Workspace authorization/preparation.
@@ -465,7 +466,10 @@ export async function handleWorkspaces(
         );
       }
       if (method === "POST") {
-        const backup = await operations.backups.createBackup({ workspaceId });
+        const backup = await operations.backups.createBackup({
+          workspaceId,
+          expectedWorkspaceManagementAuthority: managementAuthority(),
+        });
         return jsonStatus({ backup } satisfies CreateBackupResponse, 201);
       }
       return methodNotAllowed("GET, POST");

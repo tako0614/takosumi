@@ -167,6 +167,21 @@ export async function handleCapsules(
   if (segments[0] === "capsules" && segments.length >= 2) {
     const capsuleId = decodeURIComponent(segments[1] ?? "");
     const capsule = await operations.capsules.getCapsule(capsuleId);
+    // Once the Capsule identifies its Workspace, retain the original epoch
+    // across authorization. A stop/resume must not authorize an older request.
+    const backupAuthority = method === "POST" && segments.length === 3 &&
+        segments[2] === "backups"
+      ? await (async () => {
+        try {
+          return {
+            ok: true as const,
+            authority: await operations.workspaces.captureManagementAuthority(capsule.workspaceId),
+          };
+        } catch (error) {
+          return { ok: false as const, error };
+        }
+      })()
+      : undefined;
     const auth = await requireWorkspaceAccess({
       operations,
       store,
@@ -288,10 +303,13 @@ export async function handleCapsules(
     }
     if (leaf === "backups" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
+      if (!backupAuthority) throw new Error("Backup authority was not captured");
+      if (!backupAuthority.ok) throw backupAuthority.error;
       const backup = await operations.backups.createBackup({
         workspaceId: capsule.workspaceId,
         capsuleId: capsule.id,
         environment: capsule.environment,
+        expectedWorkspaceManagementAuthority: backupAuthority.authority,
       });
       return jsonStatus({ backup } satisfies CreateBackupResponse, 201);
     }
