@@ -1599,6 +1599,30 @@ describe("Capsule execution authority", () => {
         context_environment: "production",
       });
 
+      const git = new D1GitInstallPlanStore(database);
+      const unclaimedGitPlan: StoredGitInstallPlan = {
+        id: "workerd-freeze-unclaimed-git",
+        workspaceId,
+        workspaceManagementAuthority: authority,
+        createdBy: "freeze-owner",
+        actorSubject: "freeze-owner",
+        idempotencyKeyHash: "workerd-freeze-git-idempotency",
+        requestDigest: "workerd-freeze-git-request",
+        source: {
+          name: "freeze-git",
+          url: "https://example.test/freeze-git.git",
+          ref: "main",
+          path: ".",
+        },
+        capsule: { name: "freeze-git", environment: "production" },
+        options: {},
+        phase: "syncing_source",
+        generation: 0,
+        createdAt: NOW,
+        updatedAt: NOW,
+      };
+      expect((await git.create(unclaimedGitPlan, authority)).status).toBe("created");
+
       expect(await store.beginWorkspaceDraining(workspaceId, authority)).toMatchObject({
         status: "started",
         management: { managementState: "draining", managementEpoch: 2 },
@@ -1608,6 +1632,36 @@ describe("Capsule execution authority", () => {
         managementState: "draining" as const,
         managementEpoch: 2,
       };
+      expect(await store.freezeWorkspaceManagementIfQuiescent(draining)).toEqual({
+        status: "blocked",
+        management: draining,
+      });
+      const failedGit = await git.failUnclaimedDuringDrain({
+        id: unclaimedGitPlan.id,
+        expectedWorkspaceManagement: draining,
+        completedAt: "2026-08-10T00:00:04.000Z",
+      });
+      expect(failedGit).toMatchObject({
+        status: "completed",
+        plan: {
+          id: unclaimedGitPlan.id,
+          workspaceId,
+          workspaceManagementAuthority: authority,
+          phase: "failed",
+          generation: 0,
+          diagnostic: { code: "workspace_management_draining" },
+          completedAt: "2026-08-10T00:00:04.000Z",
+        },
+      });
+      expect(await git.get(unclaimedGitPlan.id)).toMatchObject({
+        ...unclaimedGitPlan,
+        phase: "failed",
+        workspaceManagementAuthority: authority,
+        generation: 0,
+        diagnostic: { code: "workspace_management_draining" },
+        completedAt: "2026-08-10T00:00:04.000Z",
+        updatedAt: "2026-08-10T00:00:04.000Z",
+      });
       expect(await store.freezeWorkspaceManagementIfQuiescent(draining)).toEqual({
         status: "frozen",
         management: { ...draining, managementState: "frozen" },

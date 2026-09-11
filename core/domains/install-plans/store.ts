@@ -4,8 +4,10 @@ import type {
 } from "takosumi-contract";
 import type { JsonValue } from "takosumi-contract";
 import {
+  assertWorkspaceFreezeExpectation,
   assertWorkspaceManagementAuthorityInput,
   WorkspaceManagementAdmissionConflictError,
+  type FreezeWorkspaceManagementExpectation,
   type WorkspaceManagementAdmissionValidator,
   type WorkspaceManagementAuthority,
 } from "../deploy-control/store.ts";
@@ -55,6 +57,78 @@ export type CompleteGitInstallPlanResult =
   | { readonly status: "conflict"; readonly plan: StoredGitInstallPlan }
   | { readonly status: "not_found" };
 
+/** Private settlement of an admitted coordinator that was never claimed. */
+export interface FailUnclaimedGitInstallPlanInput {
+  readonly id: string;
+  readonly expectedWorkspaceManagement: FreezeWorkspaceManagementExpectation;
+  readonly completedAt: string;
+}
+
+export function assertGitInstallPlanDrainFailureInput(
+  input: FailUnclaimedGitInstallPlanInput,
+): void {
+  if (!input || typeof input !== "object" ||
+    typeof input.id !== "string" || input.id.trim() === "") {
+    throw new TypeError("Git drain settlement requires one existing plan ID");
+  }
+  assertWorkspaceFreezeExpectation(input.expectedWorkspaceManagement);
+  if (typeof input.completedAt !== "string" ||
+    !Number.isFinite(Date.parse(input.completedAt)) ||
+    new Date(input.completedAt).toISOString() !== input.completedAt) {
+    throw new TypeError("Git drain settlement requires an ISO UTC completion time");
+  }
+}
+
+/** The caller also fences its physical row, lease columns and Workspace. */
+export function gitInstallPlanForDrainFailure(
+  plan: StoredGitInstallPlan,
+  input: FailUnclaimedGitInstallPlanInput,
+): StoredGitInstallPlan | undefined {
+  if (!plan || typeof plan !== "object" || Array.isArray(plan)) return undefined;
+  const expected = input.expectedWorkspaceManagement;
+  const original = plan.workspaceManagementAuthority;
+  const operation = plan.operation === undefined ? "install" : plan.operation;
+  // Normal creation has only these two initial states. Later phases require a
+  // claim, even when a corrupt row still says generation zero.
+  const initialPhase = plan.phase === "syncing_source"
+    ? plan.preflight === undefined
+    : plan.phase === "creating_capsule" && operation === "install" &&
+      plan.preflight !== null && typeof plan.preflight === "object" &&
+      !Array.isArray(plan.preflight);
+  if (plan.id !== input.id || plan.workspaceId !== expected.workspaceId ||
+    (operation !== "install" && operation !== "revision") ||
+    plan.generation !== 0 || !initialPhase ||
+    plan.completedAt !== undefined || plan.diagnostic !== undefined ||
+    plan.sourceSyncRunId !== undefined || plan.planRunId !== undefined ||
+    plan.compatibilityRequestDigest !== undefined ||
+    !original || typeof original !== "object" || Array.isArray(original) ||
+    original.workspaceId !== plan.workspaceId ||
+    original.managementState !== "active" ||
+    !Number.isSafeInteger(original.managementEpoch) || original.managementEpoch < 1 ||
+    original.managementEpoch !== expected.managementEpoch - 1) return undefined;
+  if ([plan.actorSubject, plan.idempotencyKeyHash, plan.requestDigest].some(
+    (value) => typeof value !== "string" || value.trim() === "",
+  )) return undefined;
+  const completedAt = Date.parse(input.completedAt);
+  if (typeof plan.createdAt !== "string" ||
+    !Number.isFinite(Date.parse(plan.createdAt)) ||
+    new Date(plan.createdAt).toISOString() !== plan.createdAt ||
+    plan.updatedAt !== plan.createdAt ||
+    completedAt < Date.parse(plan.createdAt)) return undefined;
+  // Existing request/configuration/provenance are retained, not recreated or
+  // recaptured under the stopped Workspace's current epoch.
+  return {
+    ...plan,
+    phase: "failed",
+    diagnostic: {
+      code: "workspace_management_draining",
+      message: "Workspace management stopped before this install plan was claimed.",
+    },
+    updatedAt: input.completedAt,
+    completedAt: input.completedAt,
+  };
+}
+
 export interface GitInstallPlanStore {
   readonly durable: boolean;
   create(
@@ -70,6 +144,10 @@ export interface GitInstallPlanStore {
    * only after both reconciliation lease columns have been cleared.
    */
   hasWorkspaceManagementBlockers(workspaceId: string): Promise<boolean>;
+  /** No new reconcile lease or execution authority is granted by this command. */
+  failUnclaimedDuringDrain(
+    input: FailUnclaimedGitInstallPlanInput,
+  ): Promise<CompleteGitInstallPlanResult>;
   claimReconcile(input: {
     readonly id: string;
     readonly expectedGeneration: number;
@@ -187,6 +265,26 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
     return this.hasWorkspaceManagementBlockersNow(workspaceId);
   }
 
+  async failUnclaimedDuringDrain(
+    inputValue: FailUnclaimedGitInstallPlanInput,
+  ): Promise<CompleteGitInstallPlanResult> {
+    const input = clone(inputValue);
+    assertGitInstallPlanDrainFailureInput(input);
+    const entry = this.#entries.get(input.id);
+    if (!entry) return { status: "not_found" };
+    const next = gitInstallPlanForDrainFailure(entry.plan, input);
+    if (!next || entry.leaseToken !== undefined || entry.leaseExpiresAt !== undefined ||
+      this.#workspaceManagementValidator?.isWorkspaceManagementDraining?.(
+        input.expectedWorkspaceManagement,
+      ) !== true) {
+      return { status: "conflict", plan: clone(entry.plan) };
+    }
+    // There is no await between checking the co-located Workspace and writing
+    // the existing entry. The command never acquires or clears a claim lease.
+    entry.plan = clone(next);
+    return { status: "completed", plan: clone(next) };
+  }
+
   async claimReconcile(
     input: Parameters<GitInstallPlanStore["claimReconcile"]>[0],
   ): Promise<ClaimGitInstallPlanResult> {
@@ -239,6 +337,7 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
     if (!entry) return { status: "not_found" };
     if (
       entry.plan.generation !== input.expectedGeneration ||
+      typeof entry.leaseToken !== "string" || entry.leaseToken.length === 0 ||
       entry.leaseToken !== input.leaseToken
     ) {
       return { status: "conflict", plan: clone(entry.plan) };

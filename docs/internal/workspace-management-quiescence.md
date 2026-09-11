@@ -399,6 +399,37 @@ Interface marker の fence だけをもって、観測後の全効果の収束�
 **全 admission と凍結判定が揃うまで live composition に停止の入口を接続しません。**
 最初の内部縦断だけで Workspace 全体の安全な凍結や管理移管を提供済みとしません。
 
+### 一度も claim されていない Git coordinator の終了
+
+凍結 command は blocker を観測するだけで、未完了処理を成功や削除に変えません。
+Git install/revision store に、未開始の一行だけを既存の `failed` へ終了させる private
+command を実装しています。新しい公開 phase、停止 API、reconcile lease は追加しません。
+
+現在の create は generation 0 から始まり、最初の claim は lease の取得と同時に
+generation を 1 へ進めます。completion は generation を戻しません。そのため正常な
+保存経路の generation 0 と両 lease 列の不在を、claim が一度も成立していない証拠に
+使います。Source や InstallConfig 等の ID は事前準備で存在し得るため、その有無だけを
+実行歴とはしません。実行歴のある処理を lease の期限切れだけで終了するものではありません。
+
+終了は、exact な `draining` epoch D と、同じ Workspace の保存済み original active
+epoch D-1 の双方に束縛します。初期 phase は preflight のない `syncing_source` または
+install の preflight を持つ `creating_capsule` に限定し、同じ canonical な作成・更新時刻と
+diagnostic・後続 Run の証拠の不在を確認します。後段の phase と generation 0 が混在する
+行を未開始と推測しません。generation、保存 JSON と物理列の identity が一致し、両 lease
+列が空の場合だけ変更します。JSON の `0.0` 等を整数 `0` に正規化して blocker を消すことも
+しません。Postgres は Workspace 先行
+lock と行の CAS、D1 は Workspace 条件と行の snapshot を含む一つの UPDATE、Memory は
+同じ同期的な validator と Map の更新を使います。確認後の await と無条件保存には分けません。
+
+変更するのは phase、既存形の固定 diagnostic、updatedAt と completedAt だけです。
+公開の既存 request と private な元の authority はそのまま残し、同じ scope の再送から
+処理を作り直しません。既に terminal の行は変更せず conflict と現在の行を返します。
+Memory の通常 completion も、保存済みの空でない lease token と入力の一致を要求します。
+両方の token が未指定であることを一致と扱い、終了済みの行を復活させることはありません。
+generation が進んだ行、片方でも lease が残る行、来歴のない旧行、不正・不明な行は
+この command の対象外です。HTTP/queue caller に接続した全自動の停止操作や、残る
+Run の cancellation、管理停止の中止・移管を完成済みとするものではありません。
+
 ### 手動 control export の開始・結果確定
 
 内部候補の手動 Backup は、元の管理 epoch を保持した `beginBackupRun` で

@@ -1,10 +1,13 @@
 import {
   assertCompletionGeneration,
+  assertGitInstallPlanDrainFailureInput,
   assertImmutableScope,
+  gitInstallPlanForDrainFailure,
   gitInstallPlanManagementAuthority,
   type ClaimGitInstallPlanResult,
   type CompleteGitInstallPlanResult,
   type CreateGitInstallPlanResult,
+  type FailUnclaimedGitInstallPlanInput,
   type GitInstallPlanScope,
   type GitInstallPlanStore,
   type StoredGitInstallPlan,
@@ -44,6 +47,8 @@ interface GitInstallPlanD1Row {
   readonly record_json: string;
   readonly reconcile_lease_token: string | null;
   readonly reconcile_lease_expires_at: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
 }
 
 /** D1/raw-SQL realization. The migration catalog owns all DDL. */
@@ -153,6 +158,86 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
       throw new TypeError("Git install-plan blocker predicate result is indeterminate");
     }
     return result.present === 1;
+  }
+
+  async failUnclaimedDuringDrain(
+    inputValue: FailUnclaimedGitInstallPlanInput,
+  ): Promise<CompleteGitInstallPlanResult> {
+    // Validate and detach caller-owned input before the first await. The
+    // expected Workspace observation is an authority fence, not a mutable
+    // object that a caller may change while this statement is in flight.
+    const input = structuredClone(inputValue);
+    assertGitInstallPlanDrainFailureInput(input);
+    const expectedManagement = input.expectedWorkspaceManagement;
+
+    const observedRow = await this.#getByIdRow(input.id);
+    if (!observedRow) return { status: "not_found" };
+    const observed = rowPlan(observedRow);
+
+    // A drain settlement only consumes an exact, never-claimed snapshot.
+    // Keep malformed/unknown rows fail-closed and classify every valid row
+    // that does not satisfy the private command as an unchanged conflict.
+    if (!d1UnclaimedGitInstallPlanRowMatches(observedRow, observed, input)) {
+      return { status: "conflict", plan: observed };
+    }
+    const failed = gitInstallPlanForDrainFailure(observed, input);
+    if (!failed) return { status: "conflict", plan: observed };
+
+    const claimedRow = await this.#db
+      .prepare(
+        `update git_install_plans
+            set phase = ?, record_json = ?, updated_at = ?
+          where id = ?
+            and workspace_id = ?
+            and actor_subject = ?
+            and idempotency_key_hash = ?
+            and request_digest = ?
+            and phase = ?
+            and typeof(generation) = 'integer'
+            and generation = 0
+            and json_valid(record_json) = 1
+            and json_type(record_json, '$.generation') = 'integer'
+            and json_extract(record_json, '$.generation') = 0
+            and record_json = ?
+            and created_at = ?
+            and updated_at = ?
+            and reconcile_lease_token is null
+            and reconcile_lease_expires_at is null
+            and exists (
+              select 1 from workspaces as workspace
+               where workspace.id = git_install_plans.workspace_id
+                 and workspace.id = ?
+                 and workspace.management_state = 'draining'
+                 and workspace.management_epoch = ?
+            )
+          returning *`,
+      )
+      .bind(
+        failed.phase,
+        JSON.stringify(failed),
+        failed.updatedAt,
+        observedRow.id,
+        observedRow.workspace_id,
+        observedRow.actor_subject,
+        observedRow.idempotency_key_hash,
+        observedRow.request_digest,
+        observedRow.phase,
+        observedRow.record_json,
+        observedRow.created_at,
+        observedRow.updated_at,
+        expectedManagement.workspaceId,
+        expectedManagement.managementEpoch,
+      )
+      .first<GitInstallPlanD1Row>();
+    if (claimedRow) {
+      return { status: "completed", plan: rowPlan(claimedRow) };
+    }
+
+    // A lost CAS is observation-only. Never retry the mutation; classify the
+    // latest row (or its absence) for the caller instead.
+    const latestRow = await this.#getByIdRow(input.id);
+    if (!latestRow) return { status: "not_found" };
+    return { status: "conflict", plan: rowPlan(latestRow) };
   }
 
   async claimReconcile(input: {
@@ -338,6 +423,32 @@ function leaseIsBusy(
 ): boolean {
   return row.reconcile_lease_expires_at !== null &&
     row.reconcile_lease_expires_at > claimedAt;
+}
+
+function d1UnclaimedGitInstallPlanRowMatches(
+  row: GitInstallPlanD1Row,
+  plan: StoredGitInstallPlan,
+  input: FailUnclaimedGitInstallPlanInput,
+): boolean {
+  const workspaceId = input.expectedWorkspaceManagement.workspaceId;
+  return row.id === input.id &&
+    row.id === plan.id &&
+    row.workspace_id === workspaceId &&
+    row.workspace_id === plan.workspaceId &&
+    row.actor_subject === plan.actorSubject &&
+    row.idempotency_key_hash === plan.idempotencyKeyHash &&
+    row.request_digest === plan.requestDigest &&
+    row.phase === plan.phase &&
+    d1PhysicalGenerationIsZero(row.generation) &&
+    plan.generation === 0 &&
+    row.created_at === plan.createdAt &&
+    row.updated_at === plan.updatedAt &&
+    row.reconcile_lease_token === null &&
+    row.reconcile_lease_expires_at === null;
+}
+
+function d1PhysicalGenerationIsZero(value: number | string): boolean {
+  return typeof value === "number" && Number.isInteger(value) && value === 0;
 }
 
 function rowPlan(row: GitInstallPlanD1Row): StoredGitInstallPlan {

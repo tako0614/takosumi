@@ -550,6 +550,10 @@ export interface WorkspaceManagementAdmissionValidator {
     workspaceId: string,
     expected?: WorkspaceManagementAuthority,
   ): boolean;
+  /** Optional private drain settlement; absent implementations fail closed. */
+  isWorkspaceManagementDraining?(
+    expected: FreezeWorkspaceManagementExpectation,
+  ): boolean;
 }
 
 export class WorkspaceManagementAdmissionConflictError extends Error {
@@ -4195,6 +4199,17 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       (expected === undefined ||
         (expected.workspaceId === workspaceId &&
           expected.managementEpoch === current.managementEpoch));
+  }
+
+  isWorkspaceManagementDraining(
+    expected: FreezeWorkspaceManagementExpectation,
+  ): boolean {
+    assertWorkspaceFreezeExpectation(expected);
+    const current = this.#workspaceManagement.get(expected.workspaceId);
+    return this.#workspaces.has(expected.workspaceId) &&
+      current?.workspaceId === expected.workspaceId &&
+      current.managementState === "draining" &&
+      current.managementEpoch === expected.managementEpoch;
   }
 
   getWorkspaceManagement(

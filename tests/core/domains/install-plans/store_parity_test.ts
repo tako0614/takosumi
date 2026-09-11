@@ -14,10 +14,16 @@ import type {
 } from "../../../../core/adapters/storage/sql.ts";
 import {
   InMemoryOpenTofuControlStore,
+  type FreezeWorkspaceManagementExpectation,
+  type OpenTofuControlStore,
   WorkspaceManagementAdmissionConflictError,
   type WorkspaceManagementAuthority,
 } from "../../../../core/domains/deploy-control/store.ts";
-import { ensureD1OpenTofuLedgerSchema } from "../../../../worker/src/d1_opentofu_store.ts";
+import {
+  CloudflareD1OpenTofuControlStore,
+  ensureD1OpenTofuLedgerSchema,
+} from "../../../../worker/src/d1_opentofu_store.ts";
+import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 
@@ -49,6 +55,520 @@ test("Git install-plan store has idempotency and CAS parity", async () => {
       new D1GitInstallPlanStore(d1),
     ]) {
       await expectStoreParity(store);
+    }
+  } finally {
+    await postgres.close();
+  }
+});
+
+test("Git unclaimed plans settle during a Workspace drain", async () => {
+  const postgres = await PGliteSqlClient.create();
+  const d1 = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(d1);
+  const memoryControl = new InMemoryOpenTofuControlStore();
+  const postgresControl = new SqlOpenTofuControlStore({ client: postgres });
+  const d1Control = new CloudflareD1OpenTofuControlStore(d1);
+  const adapters: readonly {
+    readonly label: string;
+    readonly workspaceId: string;
+    readonly control: Pick<OpenTofuControlStore, "putWorkspace" | "beginWorkspaceDraining">;
+    readonly store: GitInstallPlanStore;
+  }[] = [
+    {
+      label: "memory",
+      workspaceId: "fail_unclaimed_memory",
+      control: memoryControl,
+      store: new InMemoryGitInstallPlanStore(memoryControl),
+    },
+    {
+      label: "postgres",
+      workspaceId: "fail_unclaimed_postgres",
+      control: postgresControl,
+      store: new SqlGitInstallPlanStore(postgres),
+    },
+    {
+      label: "d1",
+      workspaceId: "fail_unclaimed_d1",
+      control: d1Control,
+      store: new D1GitInstallPlanStore(d1),
+    },
+  ];
+  try {
+    for (const { label, workspaceId, control, store } of adapters) {
+      const ws = workspace(workspaceId);
+      await control.putWorkspace(ws);
+      const originalAuthority: WorkspaceManagementAuthority = {
+        workspaceId,
+        managementState: "active",
+        managementEpoch: 1,
+      };
+      const planToSettle: StoredGitInstallPlan = {
+        ...plan(`fail_unclaimed_${label}`, `fail_unclaimed_digest_${label}`),
+        workspaceId,
+        workspaceManagementAuthority: originalAuthority,
+        phase: "syncing_source",
+      };
+      expect(await store.create(planToSettle, originalAuthority)).toMatchObject({
+        status: "created",
+        plan: planToSettle,
+      });
+      expect(await store.hasWorkspaceManagementBlockers(workspaceId)).toBe(true);
+
+      const draining: FreezeWorkspaceManagementExpectation = {
+        workspaceId,
+        managementState: "draining",
+        managementEpoch: 2,
+      };
+      expect(await control.beginWorkspaceDraining(workspaceId, originalAuthority)).toEqual({
+        status: "started",
+        management: draining,
+      });
+
+      const completedAt = "2026-09-11T00:01:00.000Z";
+      const settled = await store.failUnclaimedDuringDrain({
+        id: planToSettle.id,
+        expectedWorkspaceManagement: draining,
+        completedAt,
+      });
+      expect(settled).toMatchObject({
+        status: "completed",
+        plan: {
+          ...planToSettle,
+          phase: "failed",
+          updatedAt: completedAt,
+          completedAt,
+          diagnostic: {
+            code: "workspace_management_draining",
+          },
+        },
+      });
+      if (settled.status !== "completed") throw new Error("unclaimed plan was not settled");
+      expect(await store.get(planToSettle.id)).toEqual(settled.plan);
+      expect(await store.hasWorkspaceManagementBlockers(workspaceId)).toBe(false);
+      expect(
+        await store.claimReconcile({
+          id: planToSettle.id,
+          expectedGeneration: 0,
+          leaseToken: "retry-after-drain",
+          claimedAt: completedAt,
+          leaseExpiresAt: "2026-09-11T00:01:30.000Z",
+        }),
+      ).toEqual({ status: "conflict", plan: settled.plan });
+      expect(
+        await store.create({
+          ...planToSettle,
+          id: `${planToSettle.id}_replay`,
+        }),
+      ).toEqual({ status: "replayed", plan: settled.plan });
+    }
+  } finally {
+    await postgres.close();
+  }
+});
+
+test("Git drain settlement refuses stale, claimed, and inconsistent snapshots", async () => {
+  const postgres = await PGliteSqlClient.create();
+  const d1 = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(d1);
+  const memoryControl = new InMemoryOpenTofuControlStore();
+  const postgresControl = new SqlOpenTofuControlStore({ client: postgres });
+  const d1Control = new CloudflareD1OpenTofuControlStore(d1);
+  const adapters: readonly {
+    readonly label: string;
+    readonly control: Pick<OpenTofuControlStore, "putWorkspace" | "beginWorkspaceDraining">;
+    readonly store: GitInstallPlanStore;
+    readonly removeAuthority?: (id: string) => Promise<void>;
+    readonly retainExpiredLease?: (id: string) => Promise<void>;
+    readonly mutatePhysicalPhase?: (id: string) => Promise<void>;
+  }[] = [
+    {
+      label: "memory",
+      control: memoryControl,
+      store: new InMemoryGitInstallPlanStore(memoryControl),
+    },
+    {
+      label: "postgres",
+      control: postgresControl,
+      store: new SqlGitInstallPlanStore(postgres),
+      removeAuthority: async (id) => {
+        await postgres.query(
+          "update takosumi_git_install_plans set record_json = record_json - 'workspaceManagementAuthority' where id = $1",
+          [id],
+        );
+      },
+      retainExpiredLease: async (id) => {
+        await postgres.query(
+          "update takosumi_git_install_plans set reconcile_lease_expires_at = $1 where id = $2",
+          ["2020-01-01T00:00:00.000Z", id],
+        );
+      },
+      mutatePhysicalPhase: async (id) => {
+        await postgres.query(
+          "update takosumi_git_install_plans set phase = $1 where id = $2",
+          ["failed", id],
+        );
+      },
+    },
+    {
+      label: "d1",
+      control: d1Control,
+      store: new D1GitInstallPlanStore(d1),
+      removeAuthority: async (id) => {
+        await d1
+          .prepare("update git_install_plans set record_json = json_remove(record_json, '$.workspaceManagementAuthority') where id = ?")
+          .bind(id)
+          .run();
+      },
+      retainExpiredLease: async (id) => {
+        await d1
+          .prepare("update git_install_plans set reconcile_lease_expires_at = ? where id = ?")
+          .bind("2020-01-01T00:00:00.000Z", id)
+          .run();
+      },
+      mutatePhysicalPhase: async (id) => {
+        await d1
+          .prepare("update git_install_plans set phase = ? where id = ?")
+          .bind("failed", id)
+          .run();
+      },
+    },
+  ];
+  try {
+    for (const {
+      label,
+      control,
+      store,
+      removeAuthority,
+      retainExpiredLease,
+      mutatePhysicalPhase,
+    } of adapters) {
+      let sequence = 0;
+      const createPlan = async (suffix: string, drain = true) => {
+        sequence += 1;
+        const workspaceId = `fail_guard_${label}_${suffix}`;
+        const ws = workspace(workspaceId);
+        await control.putWorkspace(ws);
+        const originalAuthority: WorkspaceManagementAuthority = {
+          workspaceId,
+          managementState: "active",
+          managementEpoch: 1,
+        };
+        const planToSettle: StoredGitInstallPlan = {
+          ...plan(`fail_guard_${label}_${suffix}_${sequence}`, `fail_guard_digest_${label}_${suffix}_${sequence}`),
+          workspaceId,
+          workspaceManagementAuthority: originalAuthority,
+          phase: "syncing_source",
+        };
+        expect(await store.create(planToSettle, originalAuthority)).toMatchObject({
+          status: "created",
+          plan: planToSettle,
+        });
+        const draining: FreezeWorkspaceManagementExpectation = {
+          workspaceId,
+          managementState: "draining",
+          managementEpoch: 2,
+        };
+        if (drain) {
+          expect(await control.beginWorkspaceDraining(workspaceId, originalAuthority)).toEqual({
+            status: "started",
+            management: draining,
+          });
+        }
+        return { plan: planToSettle, originalAuthority, draining };
+      };
+      const drainInput = (id: string, draining: FreezeWorkspaceManagementExpectation) => ({
+        id,
+        expectedWorkspaceManagement: draining,
+        completedAt: "2026-09-11T00:02:00.000Z",
+      });
+
+      const active = await createPlan("active", false);
+      const activeDraining = { ...active.draining };
+      expect(await store.failUnclaimedDuringDrain(drainInput(active.plan.id, activeDraining)))
+        .toEqual({ status: "conflict", plan: active.plan });
+      expect(await store.get(active.plan.id)).toEqual(active.plan);
+      expect(await store.failUnclaimedDuringDrain(drainInput(active.plan.id, {
+        ...activeDraining,
+        workspaceId: `${activeDraining.workspaceId}_other`,
+      }))).toEqual({ status: "conflict", plan: active.plan });
+
+      const wrongEpoch = await createPlan("wrong_epoch");
+      expect(await store.failUnclaimedDuringDrain(drainInput(wrongEpoch.plan.id, {
+        ...wrongEpoch.draining,
+        managementEpoch: 3,
+      }))).toEqual({ status: "conflict", plan: wrongEpoch.plan });
+
+      const claimed = await createPlan("claimed", false);
+      const claim = await store.claimReconcile({
+        id: claimed.plan.id,
+        expectedGeneration: 0,
+        leaseToken: `held_${label}`,
+        claimedAt: "2026-09-11T00:00:10.000Z",
+        leaseExpiresAt: "2026-09-11T00:05:00.000Z",
+        expectedWorkspaceManagementAuthority: claimed.originalAuthority,
+      });
+      expect(claim.status).toBe("claimed");
+      if (claim.status !== "claimed") throw new Error("claimed fixture was not acquired");
+      expect(await control.beginWorkspaceDraining(claimed.plan.workspaceId, claimed.originalAuthority)).toEqual({
+        status: "started",
+        management: claimed.draining,
+      });
+      expect(await store.failUnclaimedDuringDrain(drainInput(claimed.plan.id, claimed.draining)))
+        .toEqual({ status: "conflict", plan: claim.claim.plan });
+      expect(await store.get(claimed.plan.id)).toEqual(claim.claim.plan);
+
+      const terminal = await createPlan("terminal");
+      const settled = await store.failUnclaimedDuringDrain(drainInput(terminal.plan.id, terminal.draining));
+      expect(settled.status).toBe("completed");
+      if (settled.status !== "completed") throw new Error("terminal fixture was not settled");
+      expect(await store.failUnclaimedDuringDrain(drainInput(terminal.plan.id, terminal.draining)))
+        .toEqual({ status: "conflict", plan: settled.plan });
+      expect(await store.hasWorkspaceManagementBlockers(terminal.plan.workspaceId)).toBe(false);
+
+      if (removeAuthority && retainExpiredLease && mutatePhysicalPhase) {
+        const legacy = await createPlan("legacy");
+        await removeAuthority(legacy.plan.id);
+        const legacyObserved = await store.get(legacy.plan.id);
+        expect(legacyObserved).toBeDefined();
+        expect(await store.hasWorkspaceManagementBlockers(legacy.plan.workspaceId)).toBe(true);
+        expect(await store.failUnclaimedDuringDrain(drainInput(legacy.plan.id, legacy.draining)))
+          .toEqual({ status: "conflict", plan: legacyObserved });
+        expect(await store.get(legacy.plan.id)).toEqual(legacyObserved);
+
+        const physicalMismatch = await createPlan("physical_mismatch");
+        await mutatePhysicalPhase(physicalMismatch.plan.id);
+        const physicalObserved = await store.get(physicalMismatch.plan.id);
+        expect(physicalObserved).toBeDefined();
+        expect(await store.hasWorkspaceManagementBlockers(physicalMismatch.plan.workspaceId)).toBe(true);
+        expect(await store.failUnclaimedDuringDrain(drainInput(physicalMismatch.plan.id, physicalMismatch.draining)))
+          .toEqual({ status: "conflict", plan: physicalObserved });
+        expect(await store.get(physicalMismatch.plan.id)).toEqual(physicalObserved);
+
+        const expiredLease = await createPlan("expired_lease");
+        await retainExpiredLease(expiredLease.plan.id);
+        const expiredObserved = await store.get(expiredLease.plan.id);
+        expect(expiredObserved).toBeDefined();
+        expect(await store.hasWorkspaceManagementBlockers(expiredLease.plan.workspaceId)).toBe(true);
+        expect(await store.failUnclaimedDuringDrain(drainInput(expiredLease.plan.id, expiredLease.draining)))
+          .toEqual({ status: "conflict", plan: expiredObserved });
+        expect(await store.get(expiredLease.plan.id)).toEqual(expiredObserved);
+      }
+    }
+  } finally {
+    await postgres.close();
+  }
+});
+
+test("Git drain settlement rejects impossible initial phases", async () => {
+  const postgres = await PGliteSqlClient.create();
+  const d1 = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(d1);
+  const memoryControl = new InMemoryOpenTofuControlStore();
+  const postgresControl = new SqlOpenTofuControlStore({ client: postgres });
+  const d1Control = new CloudflareD1OpenTofuControlStore(d1);
+  const adapters: readonly {
+    readonly label: string;
+    readonly control: Pick<OpenTofuControlStore, "putWorkspace" | "beginWorkspaceDraining">;
+    readonly store: GitInstallPlanStore;
+  }[] = [
+    {
+      label: "memory",
+      control: memoryControl,
+      store: new InMemoryGitInstallPlanStore(memoryControl),
+    },
+    {
+      label: "postgres",
+      control: postgresControl,
+      store: new SqlGitInstallPlanStore(postgres),
+    },
+    {
+      label: "d1",
+      control: d1Control,
+      store: new D1GitInstallPlanStore(d1),
+    },
+  ];
+  try {
+    for (const { label, control, store } of adapters) {
+      const createDrainingPlan = async (suffix: string, phase: StoredGitInstallPlan["phase"]) => {
+        const workspaceId = `fail_initial_${label}_${suffix}`;
+        await control.putWorkspace(workspace(workspaceId));
+        const originalAuthority: WorkspaceManagementAuthority = {
+          workspaceId,
+          managementState: "active",
+          managementEpoch: 1,
+        };
+        const planToSettle: StoredGitInstallPlan = {
+          ...plan(`fail_initial_${label}_${suffix}`, `fail_initial_digest_${label}_${suffix}`),
+          workspaceId,
+          workspaceManagementAuthority: originalAuthority,
+          phase,
+        };
+        expect(await store.create(planToSettle, originalAuthority)).toMatchObject({
+          status: "created",
+          plan: planToSettle,
+        });
+        const draining: FreezeWorkspaceManagementExpectation = {
+          workspaceId,
+          managementState: "draining",
+          managementEpoch: 2,
+        };
+        expect(await control.beginWorkspaceDraining(workspaceId, originalAuthority)).toEqual({
+          status: "started",
+          management: draining,
+        });
+        return { plan: planToSettle, draining };
+      };
+      const impossible = await createDrainingPlan("planning", "planning");
+      expect(await store.failUnclaimedDuringDrain({
+        id: impossible.plan.id,
+        expectedWorkspaceManagement: impossible.draining,
+        completedAt: "2026-09-11T00:03:00.000Z",
+      })).toEqual({ status: "conflict", plan: impossible.plan });
+      expect(await store.get(impossible.plan.id)).toEqual(impossible.plan);
+
+    }
+  } finally {
+    await postgres.close();
+  }
+});
+
+test("Memory Git terminal plans reject lease-free completion resurrection", async () => {
+  const control = new InMemoryOpenTofuControlStore();
+  const store = new InMemoryGitInstallPlanStore(control);
+  const workspaceId = "fail_terminal_resurrection_memory";
+  await control.putWorkspace(workspace(workspaceId));
+  const originalAuthority: WorkspaceManagementAuthority = {
+    workspaceId,
+    managementState: "active",
+    managementEpoch: 1,
+  };
+  const planToSettle: StoredGitInstallPlan = {
+    ...plan("fail_terminal_resurrection", "fail_terminal_resurrection_digest"),
+    workspaceId,
+    workspaceManagementAuthority: originalAuthority,
+    phase: "syncing_source",
+  };
+  expect(await store.create(planToSettle, originalAuthority)).toMatchObject({
+    status: "created",
+    plan: planToSettle,
+  });
+  const draining: FreezeWorkspaceManagementExpectation = {
+    workspaceId,
+    managementState: "draining",
+    managementEpoch: 2,
+  };
+  expect(await control.beginWorkspaceDraining(workspaceId, originalAuthority)).toEqual({
+    status: "started",
+    management: draining,
+  });
+  const completedAt = "2026-09-11T00:03:00.000Z";
+  const settled = await store.failUnclaimedDuringDrain({
+    id: planToSettle.id,
+    expectedWorkspaceManagement: draining,
+    completedAt,
+  });
+  expect(settled.status).toBe("completed");
+  if (settled.status !== "completed") throw new Error("valid fixture was not settled");
+  const resurrected: StoredGitInstallPlan = {
+    ...settled.plan,
+    phase: "syncing_source",
+    diagnostic: undefined,
+    completedAt: undefined,
+    updatedAt: completedAt,
+  };
+  expect(await store.completeReconcile({
+    id: settled.plan.id,
+    expectedGeneration: 0,
+    leaseToken: undefined as never,
+    plan: resurrected,
+  })).toEqual({ status: "conflict", plan: settled.plan });
+  expect(await store.get(settled.plan.id)).toEqual(settled.plan);
+});
+
+test("Git drain settlement rejects a non-integer JSON generation representation", async () => {
+  const postgres = await PGliteSqlClient.create();
+  const d1 = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(d1);
+  const postgresControl = new SqlOpenTofuControlStore({ client: postgres });
+  const d1Control = new CloudflareD1OpenTofuControlStore(d1);
+  const adapters: readonly {
+    readonly label: string;
+    readonly control: Pick<OpenTofuControlStore, "putWorkspace" | "beginWorkspaceDraining">;
+    readonly store: GitInstallPlanStore;
+    readonly rewriteGeneration: (id: string) => Promise<void>;
+  }[] = [
+    {
+      label: "postgres",
+      control: postgresControl,
+      store: new SqlGitInstallPlanStore(postgres),
+      rewriteGeneration: async (id) => {
+        await postgres.query(
+          "update takosumi_git_install_plans set record_json = jsonb_set(record_json, '{generation}', '0.0'::jsonb) where id = $1",
+          [id],
+        );
+      },
+    },
+    {
+      label: "d1",
+      control: d1Control,
+      store: new D1GitInstallPlanStore(d1),
+      rewriteGeneration: async (id) => {
+        await d1
+          .prepare("update git_install_plans set record_json = replace(record_json, '\"generation\":0', '\"generation\":0.0') where id = ?")
+          .bind(id)
+          .run();
+      },
+    },
+  ];
+  const outcomes: Array<{
+    readonly label: string;
+    readonly id: string;
+    readonly observed: StoredGitInstallPlan;
+    readonly result: Awaited<ReturnType<GitInstallPlanStore["failUnclaimedDuringDrain"]>>;
+  }> = [];
+  try {
+    for (const { label, control, store, rewriteGeneration } of adapters) {
+      const workspaceId = `fail_generation_${label}`;
+      await control.putWorkspace(workspace(workspaceId));
+      const originalAuthority: WorkspaceManagementAuthority = {
+        workspaceId,
+        managementState: "active",
+        managementEpoch: 1,
+      };
+      const planToSettle: StoredGitInstallPlan = {
+        ...plan(`fail_generation_${label}`, `fail_generation_digest_${label}`),
+        workspaceId,
+        workspaceManagementAuthority: originalAuthority,
+        phase: "syncing_source",
+      };
+      expect(await store.create(planToSettle, originalAuthority)).toMatchObject({
+        status: "created",
+        plan: planToSettle,
+      });
+      const draining: FreezeWorkspaceManagementExpectation = {
+        workspaceId,
+        managementState: "draining",
+        managementEpoch: 2,
+      };
+      expect(await control.beginWorkspaceDraining(workspaceId, originalAuthority)).toEqual({
+        status: "started",
+        management: draining,
+      });
+      await rewriteGeneration(planToSettle.id);
+      const observed = await store.get(planToSettle.id);
+      if (!observed) throw new Error(`${label} generation fixture was not readable`);
+      expect(await store.hasWorkspaceManagementBlockers(workspaceId)).toBe(true);
+      const result = await store.failUnclaimedDuringDrain({
+        id: planToSettle.id,
+        expectedWorkspaceManagement: draining,
+        completedAt: "2026-09-11T00:03:00.000Z",
+      });
+      outcomes.push({ label, id: planToSettle.id, observed, result });
+    }
+    for (const { label, id, observed, result } of outcomes) {
+      expect(result, label).toEqual({ status: "conflict", plan: observed });
+      expect(await adapters.find((adapter) => adapter.label === label)!.store.get(id), label)
+        .toEqual(observed);
     }
   } finally {
     await postgres.close();

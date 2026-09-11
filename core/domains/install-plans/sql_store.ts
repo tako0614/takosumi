@@ -8,11 +8,14 @@ import {
 import { pgWorkspaceManagementForTransaction } from "../deploy-control/store_sql.ts";
 import {
   assertCompletionGeneration,
+  assertGitInstallPlanDrainFailureInput,
   assertImmutableScope,
+  gitInstallPlanForDrainFailure,
   gitInstallPlanManagementAuthority,
   type ClaimGitInstallPlanResult,
   type CompleteGitInstallPlanResult,
   type CreateGitInstallPlanResult,
+  type FailUnclaimedGitInstallPlanInput,
   type GitInstallPlanScope,
   type GitInstallPlanStore,
   type StoredGitInstallPlan,
@@ -34,6 +37,8 @@ interface GitInstallPlanRow extends Record<string, unknown> {
   record_json: unknown;
   reconcile_lease_token: string | null;
   reconcile_lease_expires_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 /** Postgres/raw-SQL realization. Schema is migration-owned; no DDL runs here. */
@@ -157,6 +162,103 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
       throw new TypeError("Git install-plan blocker predicate result is indeterminate");
     }
     return result.rows[0].present;
+  }
+
+  async failUnclaimedDuringDrain(
+    inputValue: FailUnclaimedGitInstallPlanInput,
+  ): Promise<CompleteGitInstallPlanResult> {
+    // Validate and detach caller-owned input before the first await. The
+    // expected Workspace observation is an authority fence, not a mutable
+    // object that a caller may change while this transaction is in flight.
+    const input = structuredClone(inputValue);
+    assertGitInstallPlanDrainFailureInput(input);
+    const expectedManagement = input.expectedWorkspaceManagement;
+
+    return await this.#client.transaction(async (transaction) => {
+      // Workspace is the outer lock for every management-fenced dependent
+      // write. Even a missing Workspace is observed before classifying an
+      // existing Git row, so a stale/foreign row is never treated as absent.
+      const management = await pgWorkspaceManagementForTransaction(
+        transaction,
+        expectedManagement.workspaceId,
+      );
+      const observedRow = await this.#getByIdRow(input.id, transaction);
+      if (!observedRow) return { status: "not_found" as const };
+      const observed = rowPlan(observedRow);
+
+      // A drain settlement only consumes an exact, never-claimed snapshot.
+      // Keep malformed/unknown rows fail-closed and classify every valid row
+      // that does not satisfy the private command as an unchanged conflict.
+      if (
+        !pgUnclaimedGitInstallPlanRowMatches(
+          observedRow,
+          observed,
+          input,
+        ) ||
+        management === undefined ||
+        management.managementState !== "draining" ||
+        management.managementEpoch !== expectedManagement.managementEpoch
+      ) {
+        return { status: "conflict" as const, plan: observed };
+      }
+      const failed = gitInstallPlanForDrainFailure(observed, input);
+      if (!failed) return { status: "conflict" as const, plan: observed };
+
+      const originalRecordJson = recordJsonSnapshot(observedRow.record_json);
+      const result = await transaction.query<GitInstallPlanRow>(
+        `update ${TABLE}
+            set phase = $1, record_json = $2::jsonb, updated_at = $3
+          where id = $4
+            and workspace_id = $5
+            and actor_subject = $6
+            and idempotency_key_hash = $7
+            and request_digest = $8
+            and phase = $9
+            and generation = $10
+            and jsonb_typeof(record_json -> 'generation') = 'number'
+            and record_json ->> 'generation' = generation::text
+            and record_json = $11::jsonb
+            and created_at = $12
+            and updated_at = $13
+            and reconcile_lease_token is null
+            and reconcile_lease_expires_at is null
+            and exists (
+              select 1 from takosumi_workspaces as workspace
+               where workspace.id = ${TABLE}.workspace_id
+                 and workspace.id = $14
+                 and workspace.management_state = 'draining'
+                 and workspace.management_epoch = $15
+            )
+          returning *`,
+        [
+          failed.phase,
+          JSON.stringify(failed),
+          failed.updatedAt,
+          input.id,
+          observedRow.workspace_id,
+          observedRow.actor_subject,
+          observedRow.idempotency_key_hash,
+          observedRow.request_digest,
+          observedRow.phase,
+          observedRow.generation,
+          originalRecordJson,
+          observedRow.created_at,
+          observedRow.updated_at,
+          expectedManagement.workspaceId,
+          expectedManagement.managementEpoch,
+        ],
+      );
+      const row = result.rows[0];
+      if (row) {
+        return { status: "completed" as const, plan: rowPlan(row) };
+      }
+
+      // A lost CAS is observation-only. Never retry the mutation; classify the
+      // latest row (or its absence) for the caller instead.
+      const latestRow = await this.#getByIdRow(input.id, transaction);
+      if (!latestRow) return { status: "not_found" as const };
+      return { status: "conflict" as const, plan: rowPlan(latestRow) };
+    });
   }
 
   async claimReconcile(input: {
@@ -386,6 +488,41 @@ function leaseIsBusy(
 ): boolean {
   return row.reconcile_lease_expires_at !== null &&
     row.reconcile_lease_expires_at > claimedAt;
+}
+
+function pgUnclaimedGitInstallPlanRowMatches(
+  row: GitInstallPlanRow,
+  plan: StoredGitInstallPlan,
+  input: FailUnclaimedGitInstallPlanInput,
+): boolean {
+  const workspaceId = input.expectedWorkspaceManagement.workspaceId;
+  return row.id === input.id &&
+    row.id === plan.id &&
+    row.workspace_id === workspaceId &&
+    row.workspace_id === plan.workspaceId &&
+    row.actor_subject === plan.actorSubject &&
+    row.idempotency_key_hash === plan.idempotencyKeyHash &&
+    row.request_digest === plan.requestDigest &&
+    row.phase === plan.phase &&
+    pgPhysicalGenerationIsZero(row.generation) &&
+    plan.generation === 0 &&
+    row.created_at === plan.createdAt &&
+    row.updated_at === plan.updatedAt &&
+    row.reconcile_lease_token === null &&
+    row.reconcile_lease_expires_at === null;
+}
+
+function pgPhysicalGenerationIsZero(value: number | string): boolean {
+  return value === 0 || value === "0";
+}
+
+function recordJsonSnapshot(value: unknown): string {
+  if (typeof value === "string") return value;
+  const serialized = JSON.stringify(value);
+  if (typeof serialized !== "string") {
+    throw new TypeError("invalid Git install plan record_json");
+  }
+  return serialized;
 }
 
 function rowPlan(row: GitInstallPlanRow): StoredGitInstallPlan {
