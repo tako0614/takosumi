@@ -19,6 +19,7 @@ import {
   isReconcileableGitInstallPlanPhase,
   isTerminalGitInstallPlanPhase,
 } from "./store.ts";
+import { PG_GIT_INSTALL_PLAN_MANAGEMENT_BLOCKER_SQL } from "./management_blockers_sql.ts";
 
 const TABLE = "takosumi_git_install_plans";
 
@@ -145,18 +146,7 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
       `select exists (
          select 1 from ${TABLE}
           where workspace_id = $1
-            and (
-              phase is null
-              or phase not in ('failed', 'reviewable')
-              or reconcile_lease_token is not null
-              or reconcile_lease_expires_at is not null
-              or jsonb_typeof(record_json -> 'workspaceId') is distinct from 'string'
-              or record_json ->> 'workspaceId' is distinct from workspace_id
-              or jsonb_typeof(record_json -> 'phase') is distinct from 'string'
-              or record_json ->> 'phase' is distinct from phase
-              or jsonb_typeof(record_json -> 'generation') is distinct from 'number'
-              or record_json ->> 'generation' is distinct from generation::text
-            )
+            and ${PG_GIT_INSTALL_PLAN_MANAGEMENT_BLOCKER_SQL}
        ) as present`,
       [workspaceId],
     );

@@ -33,8 +33,18 @@ test("Git install-plan store has idempotency and CAS parity", async () => {
   await seedD1Workspace(d1, "ws_one");
   await seedD1Workspace(d1, "ws_two");
   try {
+    const memoryGit = new InMemoryGitInstallPlanStore(memoryControl);
+    expect(memoryGit.hasWorkspaceManagementBlockersNow("ws_one")).toBe(false);
+    expect(
+      memoryGit.usesWorkspaceManagementAdmissionValidator(memoryControl),
+    ).toBe(true);
+    expect(
+      memoryGit.usesWorkspaceManagementAdmissionValidator(
+        new InMemoryOpenTofuControlStore(),
+      ),
+    ).toBe(false);
     for (const store of [
-      new InMemoryGitInstallPlanStore(memoryControl),
+      memoryGit,
       new SqlGitInstallPlanStore(postgres),
       new D1GitInstallPlanStore(d1),
     ]) {

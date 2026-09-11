@@ -72,6 +72,13 @@ Git coordinator の store は `core/domains/install-plans/` にあります。�
 generation/lease の CAS だけでは不十分であり、同じ Workspace fence と束縛します。
 Workspace が見つからない admission も拒否します。
 
+Git の blocker 条件は install-plans domain が所有し、PostgreSQL/SQLite の条件式を
+観測 query と管理停止 command で共用できる形に分離します。Memory は同じ Map の
+同期判定を提供し、async observer はその結果を返すだけにします。composition は
+Git と control store が同じ admission validator を参照することを確認できます。
+この内部 seam だけでは凍結を許可しません。Run・Interface を含む全条件の確認と
+Workspace の更新を同じ atomic boundary に収める command は、引き続き未提供です。
+
 ## Workspace の設定・メンバー変更
 
 2026-09-10 の内部候補は、設定・showback 設定・メンバーの追加／役割変更／停止を
@@ -226,6 +233,36 @@ terminal Apply の billing／runtime-secret finalizer は、外部処理前に�
 変えません。元の private management authority は保存済みの値を維持します。
 
 ## 実装順序と受け入れ条件
+
+### 次の凍結 command が確認する安全性の範囲
+
+2026-09-11 の内部設計判断です。既存の公開 Run/API の意味は変更しません。
+凍結は「以後の効果を起こせる未解決処理がない」ことを確定する操作であり、保存済み
+全データの完全性検査や、blueprint の再検証とは分けます。以下の実装はまだ未提供です。
+
+- Run は Workspace の全行・全 epoch を対象にし、既知の種別・status と物理列／JSON の
+  identity・時刻・heartbeat の一致を要求します。未知または壊れた安全性の情報は blocker
+  です。期限にかかわらず lease が残る行、queued/running/waiting_approval は停止済みと
+  しません。`runIsInFlight` は別用途で waiting_approval を settled とするため流用しません。
+- failed Apply は、対応する失敗 event が明示的に `providerDispatched: false` を示し、
+  全 audit history に provider/lifecycle dispatch の肯定的証拠がなく、finalizer も収束済みの
+  場合だけ解決済みとできます。証拠のない旧行は不明です。開始歴・dispatch 証拠のある
+  cancelled/expired Apply も blocker のままにします。
+- Restore は dispatch 前後の失敗を区別できる永続的な証拠がないため、failed/expired を
+  blocker とします。cancelled は未開始を示せる場合だけ解決済みとし、succeeded は対応する
+  StateVersion と作成 Run・Workspace・Capsule・環境・復元元の一致、必要な service-data
+  receipt と Interface replacement intent を確認します。新しい放棄操作は定義しません。
+- Interface は completed、両 lease 列の消去、error/dead-letter の不在、正しい作成元と
+  deterministic ID、同じ Workspace/Capsule の成功 Run、認められた receipt の形と
+  digest/完了時刻の一致、cursor の整合を要求します。pending/dead-letter や不明な
+  terminal evidence は blocker です。
+
+Interface の completed 行は既存 claim/retry 経路から新規処理に戻れません。このため凍結
+判定では上記の完了証拠を検証し、SQL 内で blueprint schema と暗号学的 digest 検証を
+再実装しません。宣言自体の破損は別の完全性の問題として残り、凍結をデータ検証済みの
+証明にはしません。新しい汎用 decoder framework や移管用台帳を追加しない方針です。
+
+### 既存の admission と収束の実装状況
 
 現在は最初の内部縦断を実装・検証中です。Workspace の private state/epoch、
 Plan/Apply/SourceSync の永続化時の admission、Run の新規 lease claim を対象とします。

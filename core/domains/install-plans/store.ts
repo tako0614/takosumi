@@ -109,6 +109,13 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
     this.#workspaceManagementValidator = workspaceManagementValidator;
   }
 
+  /** Whether this Git store shares the exact admission validator instance. */
+  usesWorkspaceManagementAdmissionValidator(
+    validator: WorkspaceManagementAdmissionValidator,
+  ): boolean {
+    return this.#workspaceManagementValidator === validator;
+  }
+
   async create(
     plan: StoredGitInstallPlan,
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
@@ -165,7 +172,7 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
     );
   }
 
-  async hasWorkspaceManagementBlockers(workspaceId: string): Promise<boolean> {
+  hasWorkspaceManagementBlockersNow(workspaceId: string): boolean {
     for (const entry of this.#entries.values()) {
       if (entry.plan.workspaceId !== workspaceId) continue;
       if (!isTerminalGitInstallPlanPhase(entry.plan.phase)) return true;
@@ -174,6 +181,10 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
       }
     }
     return false;
+  }
+
+  async hasWorkspaceManagementBlockers(workspaceId: string): Promise<boolean> {
+    return this.hasWorkspaceManagementBlockersNow(workspaceId);
   }
 
   async claimReconcile(

@@ -16,6 +16,7 @@ import {
   WorkspaceManagementAdmissionConflictError,
   type WorkspaceManagementAuthority,
 } from "../deploy-control/store.ts";
+import { SQLITE_GIT_INSTALL_PLAN_MANAGEMENT_BLOCKER_SQL } from "./management_blockers_sql.ts";
 
 interface D1Result<T> {
   readonly results?: readonly T[];
@@ -139,22 +140,7 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
         `select exists (
            select 1 from git_install_plans
             where workspace_id = ?
-              and (
-                phase is null
-                or phase not in ('failed', 'reviewable')
-                or reconcile_lease_token is not null
-                or reconcile_lease_expires_at is not null
-                or case when json_valid(record_json) = 1 then
-                    case when
-                      json_type(record_json, '$.workspaceId') = 'text'
-                      and json_extract(record_json, '$.workspaceId') is workspace_id
-                      and json_type(record_json, '$.phase') = 'text'
-                      and json_extract(record_json, '$.phase') is phase
-                      and json_type(record_json, '$.generation') = 'integer'
-                      and json_extract(record_json, '$.generation') is generation
-                    then 0 else 1 end
-                  else 1 end = 1
-              )
+              and ${SQLITE_GIT_INSTALL_PLAN_MANAGEMENT_BLOCKER_SQL}
          ) as present`,
       )
       .bind(workspaceId)
