@@ -377,9 +377,18 @@ test("core spec names the final OSS model and excludes operator-provided capacit
   assert.match(coreSpec, /official SLA \/ support \/ abuse tooling/);
   assert.match(coreSpec, /one supported\s+Git\/OpenTofu\/Terraform deployment flow/);
   assert.match(coreSpec, /any runner-installable OpenTofu\/Terraform\s+provider/);
-  assert.match(coreSpec, /Takoform is an ordinary external provider/);
+  assert.match(coreSpec, /Takoform defines an optional portable Host API/);
+  assert.match(coreSpec, /Each publisher owns its exact Form definitions/);
+  assert.match(
+    coreSpec,
+    /Each Provider implementation owns its source\s+address, resource mappings, and software releases/,
+  );
+  assert.match(coreSpec, /ordinary external\s+Providers alongside other Providers/);
+  assert.doesNotMatch(coreSpec, /Takoform is an ordinary external provider/);
   assert.match(coreSpec, /does not host a Form Registry/);
-  assert.match(coreSpec, /Takosumi hosted service or another external Host/);
+  assert.match(coreSpec, /Takoserver or another independent Host\/operator/);
+  assert.match(coreSpec, /Takosumi Hosted or another retail operator; not OSS Core/);
+  assert.doesNotMatch(coreSpec, /Takosumi hosted service or another external Host/);
   assert.match(coreSpec, /old `Resource Shape`.*HTTP families are retired/s);
   assert.match(coreSpec, /unconditional `404`/);
   assert.doesNotMatch(coreSpec, /Final Plan.*current direction|Final Plan.*authoritative/);
@@ -605,8 +614,9 @@ test("current docs keep retired Resource HTTP surfaces absent and externalize Fo
   assert.match(combined, /unconditionally retired.*`404`/s);
   assert.match(combined, /discovery[^\n]*(?:unavailable|remain unavailable|retired)/i);
   assert.match(combined, /writes[^\n]*(?:unavailable|remain unavailable|disabled|retired)/i);
-  assert.match(combined, /Takosumi hosted service (?:or another external )?Host/i);
-  assert.match(combined, /ordinary external provider/i);
+  assert.match(combined, /Takoserver or another independent Host\/operator/);
+  assert.match(combined, /Takosumi Hosted or another retail operator; not OSS Core/);
+  assert.match(combined, /ordinary external\s+provider/i);
 
   const config = docs.find(({ path }) => path === "docs/reference/configuration.md")?.text ?? "";
   assert.doesNotMatch(config, /TAKOSUMI_RESOURCE_SHAPES.*\/v1\/resources.*(?:出す|enable|publish)/is);
