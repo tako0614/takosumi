@@ -5228,7 +5228,7 @@ export class RunEngine {
       undefined,
       profile,
       applyRun.startedAt ?? applyRun.createdAt,
-      "apply.failed",
+      applyRun.operation === "destroy" ? "destroy.failed" : "apply.failed",
       new Error(reason),
     );
     return true;

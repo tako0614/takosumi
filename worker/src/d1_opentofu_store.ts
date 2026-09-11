@@ -107,6 +107,8 @@ import type {
   BeginRestoreRunResult,
   BeginSourceSyncRunResult,
   BeginWorkspaceDrainingResult,
+  FreezeWorkspaceManagementExpectation,
+  FreezeWorkspaceManagementResult,
   CreateConnectionRegistrationInput,
   MarkConnectionExpiredIfUnchangedInput,
   RevokeConnectionIfUnchangedInput,
@@ -234,11 +236,15 @@ import {
   storedCapsuleCompatibilityProviderGraph,
   SourceSnapshotConflictError,
   assertWorkspaceManagementAuthorityInput,
+  assertWorkspaceFreezeExpectation,
   normalizeWorkspaceManagement,
   WorkspaceManagementAdmissionConflictError,
   validateCommitRestoredStateInterfaceMaterialization,
   validateCommitRunStateInterfaceMaterializationIntent,
 } from "../../core/domains/deploy-control/store.ts";
+import {
+  SQLITE_GIT_INSTALL_PLAN_MANAGEMENT_BLOCKER_SQL,
+} from "../../core/domains/install-plans/management_blockers_sql.ts";
 import {
   capsuleInterfaceBlueprintsJson,
   type CapsuleInterfaceMaterializationIntent,
@@ -288,6 +294,1093 @@ const RUN_KIND_SOURCE_SYNC = "source_sync" as const;
 const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check" as const;
 const RUN_KIND_BACKUP = "backup" as const;
 const RUN_KIND_RESTORE = "restore" as const;
+
+/** Build a shallow AND tree for D1's production expression-depth limit. */
+function d1WorkspaceFreezeAll(parts: readonly string[]): string {
+  if (parts.length === 0) {
+    throw new TypeError("Workspace freeze predicate group must not be empty");
+  }
+  if (parts.length === 1) return `(${parts[0]})`;
+  const middle = Math.floor(parts.length / 2);
+  return `(${d1WorkspaceFreezeAll(parts.slice(0, middle))} and ${
+    d1WorkspaceFreezeAll(parts.slice(middle))
+  })`;
+}
+
+/*
+ * SQLite JSON functions throw on malformed input. Freeze is fail-closed, so
+ * every projection below reads through a known-valid fallback while retaining
+ * an explicit json_valid predicate that makes malformed rows blockers.
+ */
+const D1_WORKSPACE_FREEZE_NORMALIZED_RUN_JSON_SQL = `
+  case when json_valid(run.run_json) = 1 then run.run_json else '{}' end
+`;
+
+const D1_WORKSPACE_FREEZE_RUN_JSON_SQL = "run.freeze_json";
+
+const D1_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL = `
+  case
+    when json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.auditEvents') = 'array'
+      then json_extract(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.auditEvents')
+    else '[]'
+  end
+`;
+
+const D1_WORKSPACE_FREEZE_VALID_APPLY_AUDIT_SQL = `
+  json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.auditEvents') = 'array'
+  and not exists (
+    select 1
+      from json_each(${D1_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}) as audit_event
+     where audit_event.type <> 'object'
+        or json_type(
+          case when json_valid(audit_event.value) = 1
+            then audit_event.value else '{}' end,
+          '$.type'
+        ) is not 'text'
+        or trim(json_extract(
+          case when json_valid(audit_event.value) = 1
+            then audit_event.value else '{}' end,
+          '$.type'
+        )) = ''
+        or case
+          when json_type(
+            case when json_valid(audit_event.value) = 1
+              then audit_event.value else '{}' end,
+            '$.data'
+          ) is not null then
+            json_type(
+              case when json_valid(audit_event.value) = 1
+                then audit_event.value else '{}' end,
+              '$.data'
+            ) <> 'object'
+            or (
+              json_type(
+                case when json_valid(audit_event.value) = 1
+                  then audit_event.value else '{}' end,
+                '$.data.providerDispatched'
+              ) is not null
+              and json_type(
+                case when json_valid(audit_event.value) = 1
+                  then audit_event.value else '{}' end,
+                '$.data.providerDispatched'
+              ) not in ('true', 'false')
+            )
+            or (
+              json_type(
+                case when json_valid(audit_event.value) = 1
+                  then audit_event.value else '{}' end,
+                '$.data.lifecycleActionDispatched'
+              ) is not null
+              and json_type(
+                case when json_valid(audit_event.value) = 1
+                  then audit_event.value else '{}' end,
+                '$.data.lifecycleActionDispatched'
+              ) not in ('true', 'false')
+            )
+            or (
+              json_type(
+                case when json_valid(audit_event.value) = 1
+                  then audit_event.value else '{}' end,
+                '$.data.actionDispatched'
+              ) is not null
+              and json_type(
+                case when json_valid(audit_event.value) = 1
+                  then audit_event.value else '{}' end,
+                '$.data.actionDispatched'
+              ) not in ('true', 'false')
+            )
+          else 0
+        end
+  )
+`;
+
+const D1_WORKSPACE_FREEZE_APPLY_DISPATCHED_SQL = `
+  exists (
+    select 1
+      from json_each(${D1_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}) as audit_event
+     where json_type(
+             case when json_valid(audit_event.value) = 1
+               then audit_event.value else '{}' end,
+             '$.data.providerDispatched'
+           ) = 'true'
+        or json_type(
+             case when json_valid(audit_event.value) = 1
+               then audit_event.value else '{}' end,
+             '$.data.lifecycleActionDispatched'
+           ) = 'true'
+        or (
+          json_extract(
+            case when json_valid(audit_event.value) = 1
+              then audit_event.value else '{}' end,
+            '$.type'
+          ) is not null
+          and substr(
+            json_extract(
+              case when json_valid(audit_event.value) = 1
+                then audit_event.value else '{}' end,
+              '$.type'
+            ),
+            1,
+            length('lifecycle_action.')
+          ) = 'lifecycle_action.'
+          and json_type(
+            case when json_valid(audit_event.value) = 1
+              then audit_event.value else '{}' end,
+            '$.data.actionDispatched'
+          ) = 'true'
+        )
+  )
+`;
+
+const D1_WORKSPACE_FREEZE_APPLY_FINALIZERS_SETTLED_SQL = `
+  (
+    select coalesce(max(case
+      when json_extract(
+        case when json_valid(audit_event.value) = 1
+          then audit_event.value else '{}' end,
+        '$.type'
+      ) = 'billing.capture.pending' then cast(audit_event.key as integer)
+    end), -1)
+      from json_each(${D1_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}) as audit_event
+  ) <= (
+    select coalesce(max(case
+      when json_extract(
+        case when json_valid(audit_event.value) = 1
+          then audit_event.value else '{}' end,
+        '$.type'
+      ) = 'billing.capture.completed' then cast(audit_event.key as integer)
+    end), -1)
+      from json_each(${D1_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}) as audit_event
+  )
+  and (
+    select coalesce(max(case
+      when json_extract(
+        case when json_valid(audit_event.value) = 1
+          then audit_event.value else '{}' end,
+        '$.type'
+      ) = 'runtime_secret.retirement.pending'
+        then cast(audit_event.key as integer)
+    end), -1)
+      from json_each(${D1_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}) as audit_event
+  ) <= (
+    select coalesce(max(case
+      when json_extract(
+        case when json_valid(audit_event.value) = 1
+          then audit_event.value else '{}' end,
+        '$.type'
+      ) = 'runtime_secret.retirement.completed'
+        then cast(audit_event.key as integer)
+    end), -1)
+      from json_each(${D1_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}) as audit_event
+  )
+`;
+
+const D1_WORKSPACE_FREEZE_PLAN_APPROVAL_SETTLED_SQL = `
+  (
+    json_type(
+      ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.requiresApproval'
+    ) is null
+    or json_type(
+      ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.requiresApproval'
+    ) in ('true', 'false')
+  )
+  and (
+    json_type(
+      ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.appliedApplyRunId'
+    ) is null
+    or (
+      json_type(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.appliedApplyRunId'
+      ) = 'text'
+      and trim(json_extract(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.appliedApplyRunId'
+      )) <> ''
+    )
+  )
+  and (
+    json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.approval') is null
+    or (
+      json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.approval') = 'object'
+      and json_type(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.approval.approvedAt'
+      ) = 'integer'
+      and json_extract(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.approval.approvedAt'
+      ) between 0 and 9007199254740991
+    )
+  )
+  and not (
+    run.status = 'succeeded'
+    and run.type <> 'drift_check'
+    and (
+      json_extract(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.operation'
+      ) = 'destroy'
+      or coalesce(json_type(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.requiresApproval'
+      ) = 'true', 0)
+    )
+    and json_type(
+      ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.approval'
+    ) is null
+    and json_type(
+      ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.appliedApplyRunId'
+    ) is null
+  )
+`;
+
+const D1_WORKSPACE_FREEZE_APPLY_SETTLED_SQL = `
+  ${D1_WORKSPACE_FREEZE_VALID_APPLY_AUDIT_SQL}
+  and ${D1_WORKSPACE_FREEZE_APPLY_FINALIZERS_SETTLED_SQL}
+  and case run.status
+    when 'succeeded' then 1
+    when 'failed' then
+      json_type(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.stateVersionId'
+      ) is null
+      and json_type(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.outputId'
+      ) is null
+      and json_type(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.executionEvidence'
+      ) is null
+      and not (${D1_WORKSPACE_FREEZE_APPLY_DISPATCHED_SQL})
+      and exists (
+        select 1
+          from json_each(
+            ${D1_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}
+          ) as audit_event
+         where (
+             json_extract(
+                 case when json_valid(audit_event.value) = 1
+                   then audit_event.value else '{}' end,
+                 '$.type'
+               ) = 'apply.failed'
+             or run.type = 'destroy_apply'
+               and json_extract(
+                 case when json_valid(audit_event.value) = 1
+                   then audit_event.value else '{}' end,
+                 '$.type'
+               ) = 'destroy.failed'
+           )
+           and json_type(
+                 case when json_valid(audit_event.value) = 1
+                   then audit_event.value else '{}' end,
+                 '$.data.providerDispatched'
+               ) = 'false'
+      )
+    else
+      json_type(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.stateVersionId'
+      ) is null
+      and json_type(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.outputId'
+      ) is null
+      and json_type(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.executionEvidence'
+      ) is null
+      and json_type(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.startedAt'
+      ) is null
+      and json_type(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.heartbeatAt'
+      ) is null
+      and not (${D1_WORKSPACE_FREEZE_APPLY_DISPATCHED_SQL})
+  end
+`;
+
+const D1_WORKSPACE_FREEZE_RESTORE_SETTLED_SQL = `
+  json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.capsuleId') = 'text'
+  and trim(json_extract(
+    ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.capsuleId'
+  )) <> ''
+  and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.environment') = 'text'
+  and trim(json_extract(
+    ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.environment'
+  )) <> ''
+  and case run.status
+    when 'cancelled' then
+      json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.startedAt') is null
+      and json_type(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.heartbeatAt'
+      ) is null
+      and json_type(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.restoredStateVersionId'
+      ) is null
+      and json_type(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.restoredServiceData'
+      ) is null
+    when 'succeeded' then
+      json_type(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.restoredStateVersionId'
+      ) = 'text'
+      and trim(json_extract(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.restoredStateVersionId'
+      )) <> ''
+      and json_type(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.restoredFromStateVersionId'
+      ) = 'text'
+      and trim(json_extract(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.restoredFromStateVersionId'
+      )) <> ''
+      and (
+        json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.restoreServiceData'
+        ) is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.restoredServiceData'
+        ) is null
+        or json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.restoreServiceData'
+        ) = 'false'
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.restoredServiceData'
+        ) is null
+        or json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.restoreServiceData'
+        ) = 'true'
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.restoredServiceData'
+        ) = 'object'
+        and json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.restoredServiceData.status'
+        ) = 'restored'
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.restoredServiceData.ref'
+        ) = 'text'
+        and trim(json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.restoredServiceData.ref'
+        )) <> ''
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.restoredServiceData.digest'
+        ) = 'text'
+        and trim(json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.restoredServiceData.digest'
+        )) <> ''
+      )
+      and exists (
+        select 1
+          from freeze_restore_lineage as restore_lineage
+         where restore_lineage.restore_run_id = run.id
+      )
+    else 0
+  end
+`;
+
+const D1_WORKSPACE_FREEZE_RESTORE_STATE_PAIRS_SQL = `
+  select
+    run.id as restore_run_id,
+    run.space_id as workspace_id,
+    run.installation_id as capsule_id,
+    target_state.id as target_state_version_id,
+    target_state.generation as target_state_generation,
+    source_state.id as source_state_version_id,
+    source_state.generation as source_state_generation,
+    source_state.created_by_run_id as source_created_by_run_id
+  from freeze_runs as run
+  join state_versions as target_state
+    on target_state.id = json_extract(
+      ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL},
+      '$.restoredStateVersionId'
+    )
+  join state_versions as source_state
+    on source_state.id = json_extract(
+      ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL},
+      '$.restoredFromStateVersionId'
+    )
+  where ${d1WorkspaceFreezeAll([
+    `
+      run.type = 'restore'
+      and run.status = 'succeeded'
+    `,
+    `
+      trim(target_state.id) <> ''
+      and target_state.space_id = run.space_id
+      and target_state.installation_id = run.installation_id
+      and target_state.environment = run.environment
+      and typeof(target_state.generation) = 'integer'
+      and target_state.generation between 1 and 9007199254740991
+      and target_state.created_by_run_id = run.id
+    `,
+    `
+      trim(source_state.id) <> ''
+      and source_state.space_id = run.space_id
+      and source_state.installation_id = run.installation_id
+      and source_state.environment = run.environment
+      and typeof(source_state.generation) = 'integer'
+      and source_state.generation between 1 and 9007199254740991
+      and typeof(source_state.created_by_run_id) = 'text'
+      and trim(source_state.created_by_run_id) <> ''
+      and target_state.generation > source_state.generation
+    `,
+    `
+      json_type(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL},
+        '$.restoreStateGeneration'
+      ) = 'integer'
+      and json_extract(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL},
+        '$.restoreStateGeneration'
+      ) = source_state.generation
+    `,
+  ])}
+`;
+
+const D1_WORKSPACE_FREEZE_RESTORE_LINEAGE_SQL = `
+  select restore_state.restore_run_id
+  from freeze_restore_state_pairs as restore_state
+  left join capsule_interface_materialization_intents as direct_source_intent
+    on direct_source_intent.id =
+      'cimi_' || restore_state.source_created_by_run_id
+  left join capsule_interface_materialization_intents as restore_source_intent
+    on restore_source_intent.id =
+      'cimi_restore_' || restore_state.source_created_by_run_id
+  left join capsule_interface_materialization_intents as source_intent
+    on source_intent.id = case
+      when direct_source_intent.id is not null
+        then 'cimi_' || restore_state.source_created_by_run_id
+      else 'cimi_restore_' || restore_state.source_created_by_run_id
+    end
+  left join capsule_interface_materialization_intents as replacement_intent
+    on replacement_intent.id = 'cimi_restore_' || restore_state.restore_run_id
+  where (
+    direct_source_intent.id is null
+    and restore_source_intent.id is null
+    or ${d1WorkspaceFreezeAll([
+      `
+        source_intent.id is not null
+        and source_intent.workspace_id = restore_state.workspace_id
+        and source_intent.capsule_id = restore_state.capsule_id
+        and source_intent.state_version_id =
+          restore_state.source_state_version_id
+        and source_intent.state_generation =
+          restore_state.source_state_generation
+      `,
+      `
+        replacement_intent.id is not null
+        and replacement_intent.apply_run_id is null
+        and replacement_intent.restore_run_id = restore_state.restore_run_id
+        and replacement_intent.source_intent_id = source_intent.id
+        and replacement_intent.workspace_id = restore_state.workspace_id
+        and replacement_intent.capsule_id = restore_state.capsule_id
+      `,
+      `
+        replacement_intent.state_version_id =
+          restore_state.target_state_version_id
+        and replacement_intent.state_generation =
+          restore_state.target_state_generation
+        and replacement_intent.blueprints_digest =
+          source_intent.blueprints_digest
+      `,
+    ])}
+  )
+`;
+
+const D1_WORKSPACE_FREEZE_RUN_BLOCKER_SQL = `
+  case when ${d1WorkspaceFreezeAll([
+    `
+      run.lease_token is null
+      and run.type in (
+        'plan', 'destroy_plan', 'drift_check', 'apply', 'destroy_apply',
+        'source_sync', 'compatibility_check', 'backup', 'restore'
+      )
+      and run.status in ('succeeded', 'failed', 'cancelled', 'expired')
+    `,
+    `
+      json_valid(run.run_json) = 1
+      and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}) = 'object'
+      and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.id') = 'text'
+      and trim(json_extract(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.id'
+      )) <> ''
+      and json_extract(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.id'
+      ) is run.id
+      and json_type(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.workspaceId'
+      ) = 'text'
+      and trim(json_extract(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.workspaceId'
+      )) <> ''
+      and json_extract(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.workspaceId'
+      ) is run.space_id
+      and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.status') = 'text'
+      and json_extract(
+        ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.status'
+      ) is run.status
+    `,
+    `case
+      when run.source_id is null then
+        json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.sourceId') is null
+      else
+        json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.sourceId') = 'text'
+        and trim(json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.sourceId'
+        )) <> ''
+        and json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.sourceId'
+        ) is run.source_id
+    end`,
+    `case
+      when run.installation_id is null then
+        json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.capsuleId') is null
+      else
+        json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.capsuleId') = 'text'
+        and trim(json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.capsuleId'
+        )) <> ''
+        and json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.capsuleId'
+        ) is run.installation_id
+    end`,
+    `case
+      when run.type in ('plan', 'destroy_plan', 'drift_check') then
+        json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.environment'
+        ) is null
+        and (
+          json_type(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.capsuleContext'
+          ) is null
+          and run.environment is null
+          or json_type(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.capsuleContext'
+          ) = 'object'
+          and json_type(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL},
+            '$.capsuleContext.workspaceId'
+          ) = 'text'
+          and json_extract(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL},
+            '$.capsuleContext.workspaceId'
+          ) is run.space_id
+          and json_type(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL},
+            '$.capsuleContext.capsuleId'
+          ) = 'text'
+          and trim(json_extract(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL},
+            '$.capsuleContext.capsuleId'
+          )) <> ''
+          and json_extract(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL},
+            '$.capsuleContext.capsuleId'
+          ) is run.installation_id
+          and json_type(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL},
+            '$.capsuleContext.environment'
+          ) = 'text'
+          and trim(json_extract(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL},
+            '$.capsuleContext.environment'
+          )) <> ''
+          and json_extract(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL},
+            '$.capsuleContext.environment'
+          ) is run.environment
+        )
+      else case
+        when run.environment is null then
+          json_type(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.environment'
+          ) is null
+        else
+          json_type(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.environment'
+          ) = 'text'
+          and trim(json_extract(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.environment'
+          )) <> ''
+          and json_extract(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.environment'
+          ) is run.environment
+      end
+    end`,
+    `case
+      when run.heartbeat_at is null then
+        json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.heartbeatAt'
+        ) is null
+      else
+        typeof(run.heartbeat_at) = 'integer'
+        and run.heartbeat_at between 0 and 9007199254740991
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.heartbeatAt'
+        ) = 'integer'
+        and json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.heartbeatAt'
+        ) is run.heartbeat_at
+    end`,
+    `case
+      when run.type in (
+        'plan', 'destroy_plan', 'drift_check', 'apply', 'destroy_apply'
+      ) then
+        json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.createdAt'
+        ) = 'integer'
+        and json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.createdAt'
+        ) between 0 and 9007199254740991
+        and cast(json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.createdAt'
+        ) as text) is run.created_at
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.updatedAt'
+        ) = 'integer'
+        and json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.updatedAt'
+        ) between 0 and 9007199254740991
+        and (
+          json_type(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.startedAt'
+          ) is null
+          or json_type(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.startedAt'
+          ) = 'integer'
+          and json_extract(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.startedAt'
+          ) between 0 and 9007199254740991
+        )
+        and (
+          json_type(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.finishedAt'
+          ) is null
+          or json_type(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.finishedAt'
+          ) = 'integer'
+          and json_extract(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.finishedAt'
+          ) between 0 and 9007199254740991
+        )
+      else
+        json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.createdAt'
+        ) = 'text'
+        and trim(json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.createdAt'
+        )) <> ''
+        and json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.createdAt'
+        ) is run.created_at
+        and (
+          json_type(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.startedAt'
+          ) is null
+          or json_type(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.startedAt'
+          ) = 'text'
+          and trim(json_extract(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.startedAt'
+          )) <> ''
+        )
+        and (
+          json_type(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.finishedAt'
+          ) is null
+          or json_type(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.finishedAt'
+          ) = 'text'
+          and trim(json_extract(
+            ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.finishedAt'
+          )) <> ''
+        )
+    end`,
+    `case run.type
+      when 'plan' then
+        json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.kind') is null
+        and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.type') is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.planRunId'
+        ) is null
+        and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.expected') is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.driftCheck'
+        ) is null
+        and json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.operation'
+        ) in ('create', 'update')
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.sourceDigest'
+        ) = 'text'
+        and trim(json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.sourceDigest'
+        )) <> ''
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.variablesDigest'
+        ) = 'text'
+        and trim(json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.variablesDigest'
+        )) <> ''
+        and ${D1_WORKSPACE_FREEZE_PLAN_APPROVAL_SETTLED_SQL}
+      when 'destroy_plan' then
+        json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.kind') is null
+        and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.type') is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.planRunId'
+        ) is null
+        and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.expected') is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.driftCheck'
+        ) is null
+        and json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.operation'
+        ) = 'destroy'
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.sourceDigest'
+        ) = 'text'
+        and trim(json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.sourceDigest'
+        )) <> ''
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.variablesDigest'
+        ) = 'text'
+        and trim(json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.variablesDigest'
+        )) <> ''
+        and ${D1_WORKSPACE_FREEZE_PLAN_APPROVAL_SETTLED_SQL}
+      when 'drift_check' then
+        json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.kind') is null
+        and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.type') is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.planRunId'
+        ) is null
+        and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.expected') is null
+        and json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.operation'
+        ) = 'update'
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.driftCheck'
+        ) = 'true'
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.sourceDigest'
+        ) = 'text'
+        and trim(json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.sourceDigest'
+        )) <> ''
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.variablesDigest'
+        ) = 'text'
+        and trim(json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.variablesDigest'
+        )) <> ''
+        and ${D1_WORKSPACE_FREEZE_PLAN_APPROVAL_SETTLED_SQL}
+      when 'apply' then
+        json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.kind') is null
+        and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.type') is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.sourceDigest'
+        ) is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.variablesDigest'
+        ) is null
+        and json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.operation'
+        ) in ('create', 'update')
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.planRunId'
+        ) = 'text'
+        and trim(json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.planRunId'
+        )) <> ''
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.expected'
+        ) = 'object'
+        and ${D1_WORKSPACE_FREEZE_APPLY_SETTLED_SQL}
+      when 'destroy_apply' then
+        json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.kind') is null
+        and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.type') is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.sourceDigest'
+        ) is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.variablesDigest'
+        ) is null
+        and json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.operation'
+        ) = 'destroy'
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.planRunId'
+        ) = 'text'
+        and trim(json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.planRunId'
+        )) <> ''
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.expected'
+        ) = 'object'
+        and ${D1_WORKSPACE_FREEZE_APPLY_SETTLED_SQL}
+      when 'source_sync' then
+        run.status in ('succeeded', 'failed')
+        and json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.kind'
+        ) = 'source_sync'
+        and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.type') is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.operation'
+        ) is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.sourceDigest'
+        ) is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.variablesDigest'
+        ) is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.planRunId'
+        ) is null
+        and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.expected') is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.sourceId'
+        ) = 'text'
+        and trim(json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.sourceId'
+        )) <> ''
+      when 'compatibility_check' then
+        json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.type'
+        ) = 'compatibility_check'
+        and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.kind') is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.operation'
+        ) is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.sourceDigest'
+        ) is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.variablesDigest'
+        ) is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.planRunId'
+        ) is null
+        and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.expected') is null
+      when 'backup' then
+        json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.type'
+        ) = 'backup'
+        and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.kind') is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.operation'
+        ) is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.sourceDigest'
+        ) is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.variablesDigest'
+        ) is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.planRunId'
+        ) is null
+        and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.expected') is null
+      when 'restore' then
+        json_extract(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.type'
+        ) = 'restore'
+        and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.kind') is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.operation'
+        ) is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.sourceDigest'
+        ) is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.variablesDigest'
+        ) is null
+        and json_type(
+          ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.planRunId'
+        ) is null
+        and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.expected') is null
+        and ${D1_WORKSPACE_FREEZE_RESTORE_SETTLED_SQL}
+      else 0
+    end`,
+  ])}
+  then 0 else 1 end = 1
+`;
+
+const D1_WORKSPACE_FREEZE_RECEIPT_JSON_SQL = `
+  case when json_valid(intent.receipt_json) = 1
+    then intent.receipt_json else '{}' end
+`;
+
+const D1_WORKSPACE_FREEZE_INTERFACE_BLOCKER_SQL = `
+  case when ${d1WorkspaceFreezeAll([
+    `
+      intent.status = 'completed'
+      and intent.lease_token is null
+      and intent.lease_expires_at is null
+      and intent.error_json is null
+      and intent.dead_lettered_at is null
+    `,
+    `
+      typeof(intent.id) = 'text'
+      and trim(intent.id) <> ''
+      and typeof(intent.workspace_id) = 'text'
+      and trim(intent.workspace_id) <> ''
+      and typeof(intent.capsule_id) = 'text'
+      and trim(intent.capsule_id) <> ''
+    `,
+    `
+      typeof(intent.install_config_id) = 'text'
+      and trim(intent.install_config_id) <> ''
+      and typeof(intent.state_version_id) = 'text'
+      and trim(intent.state_version_id) <> ''
+      and typeof(intent.output_id) = 'text'
+      and trim(intent.output_id) <> ''
+      and typeof(intent.completed_at) = 'text'
+      and trim(intent.completed_at) <> ''
+    `,
+    `
+      typeof(intent.state_generation) = 'integer'
+      and intent.state_generation between 1 and 9007199254740991
+      and typeof(intent.total_items) = 'integer'
+      and intent.total_items between 1 and 9007199254740991
+      and typeof(intent.next_item_index) = 'integer'
+      and intent.next_item_index between 0 and 9007199254740991
+      and intent.next_item_index between 0 and intent.total_items
+      and typeof(intent.attempts) = 'integer'
+      and intent.attempts between 0 and 9007199254740991
+    `,
+    `
+      typeof(intent.blueprints_digest) = 'text'
+      and length(intent.blueprints_digest) = 71
+      and substr(intent.blueprints_digest, 1, 7) = 'sha256:'
+      and substr(intent.blueprints_digest, 8) not glob '*[^0-9a-f]*'
+    `,
+    `(
+      intent.apply_run_id is not null
+      and typeof(intent.apply_run_id) = 'text'
+      and trim(intent.apply_run_id) <> ''
+      and intent.restore_run_id is null
+      and intent.source_intent_id is null
+      and intent.id = 'cimi_' || intent.apply_run_id
+      or intent.apply_run_id is null
+      and intent.restore_run_id is not null
+      and typeof(intent.restore_run_id) = 'text'
+      and trim(intent.restore_run_id) <> ''
+      and intent.source_intent_id is not null
+      and typeof(intent.source_intent_id) = 'text'
+      and trim(intent.source_intent_id) <> ''
+      and intent.id = 'cimi_restore_' || intent.restore_run_id
+    )`,
+    `exists (
+      select 1
+        from runs as origin_run
+       where origin_run.id = coalesce(
+               intent.apply_run_id,
+               intent.restore_run_id
+             )
+         and origin_run.space_id = intent.workspace_id
+         and origin_run.installation_id = intent.capsule_id
+         and origin_run.status = 'succeeded'
+         and (
+           intent.apply_run_id is not null and origin_run.type = 'apply'
+           or intent.restore_run_id is not null and origin_run.type = 'restore'
+         )
+    )`,
+    `exists (
+      select 1
+        from state_versions as intent_state
+       where intent_state.id = intent.state_version_id
+         and intent_state.space_id = intent.workspace_id
+         and intent_state.installation_id = intent.capsule_id
+         and typeof(intent_state.generation) = 'integer'
+         and intent_state.generation = intent.state_generation
+         and intent_state.created_by_run_id = coalesce(
+               intent.apply_run_id,
+               intent.restore_run_id
+             )
+    )`,
+    `(
+      intent.restore_run_id is null
+      or exists (
+        select 1
+          from runs as restore_origin
+          join state_versions as source_state
+            on source_state.id = json_extract(
+              case when json_valid(restore_origin.run_json) = 1
+                then restore_origin.run_json else '{}' end,
+              '$.restoredFromStateVersionId'
+            )
+          join capsule_interface_materialization_intents as source_intent
+            on source_intent.id = intent.source_intent_id
+         where restore_origin.id = intent.restore_run_id
+           and restore_origin.type = 'restore'
+           and restore_origin.space_id = intent.workspace_id
+           and restore_origin.installation_id = intent.capsule_id
+           and json_valid(restore_origin.run_json) = 1
+           and json_type(
+                 case when json_valid(restore_origin.run_json) = 1
+                   then restore_origin.run_json else '{}' end,
+                 '$.restoredFromStateVersionId'
+               ) = 'text'
+           and source_state.space_id = intent.workspace_id
+           and source_state.installation_id = intent.capsule_id
+           and source_state.environment = json_extract(
+                 case when json_valid(restore_origin.run_json) = 1
+                   then restore_origin.run_json else '{}' end,
+                 '$.environment'
+               )
+           and typeof(source_state.generation) = 'integer'
+           and source_state.generation between 1 and 9007199254740991
+           and typeof(source_state.created_by_run_id) = 'text'
+           and trim(source_state.created_by_run_id) <> ''
+           and source_intent.id = case
+             when exists (
+               select 1
+                 from capsule_interface_materialization_intents
+                where id = 'cimi_' || source_state.created_by_run_id
+             ) then 'cimi_' || source_state.created_by_run_id
+             else 'cimi_restore_' || source_state.created_by_run_id
+           end
+           and source_intent.workspace_id = intent.workspace_id
+           and source_intent.capsule_id = intent.capsule_id
+           and source_intent.install_config_id = intent.install_config_id
+           and source_intent.state_version_id = source_state.id
+           and source_intent.state_generation = source_state.generation
+           and source_intent.blueprints_digest = intent.blueprints_digest
+      )
+    )`,
+    `
+      json_valid(intent.receipt_json) = 1
+      and json_type(${D1_WORKSPACE_FREEZE_RECEIPT_JSON_SQL}) = 'object'
+      and (
+        select count(*)
+          from json_each(${D1_WORKSPACE_FREEZE_RECEIPT_JSON_SQL})
+      ) = 3
+    `,
+    `
+      json_type(
+        ${D1_WORKSPACE_FREEZE_RECEIPT_JSON_SQL}, '$.disposition'
+      ) = 'text'
+      and json_extract(
+        ${D1_WORKSPACE_FREEZE_RECEIPT_JSON_SQL}, '$.disposition'
+      ) in (
+        'materialized',
+        'retired_before_materialization',
+        'superseded_before_materialization'
+      )
+    `,
+    `
+      json_type(
+        ${D1_WORKSPACE_FREEZE_RECEIPT_JSON_SQL}, '$.blueprintsDigest'
+      ) = 'text'
+      and json_extract(
+        ${D1_WORKSPACE_FREEZE_RECEIPT_JSON_SQL}, '$.blueprintsDigest'
+      ) is intent.blueprints_digest
+      and json_type(
+        ${D1_WORKSPACE_FREEZE_RECEIPT_JSON_SQL}, '$.completedAt'
+      ) = 'text'
+      and json_extract(
+        ${D1_WORKSPACE_FREEZE_RECEIPT_JSON_SQL}, '$.completedAt'
+      ) is intent.completed_at
+    `,
+    `(
+      json_extract(
+        ${D1_WORKSPACE_FREEZE_RECEIPT_JSON_SQL}, '$.disposition'
+      ) <> 'materialized'
+      or intent.next_item_index = intent.total_items
+    )`,
+  ])}
+  then 0 else 1 end = 1
+`;
 
 const D1_PRE_PROVIDER_FAILURE_CODE_SQL =
   PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES.map((code) => `'${code}'`).join(
@@ -2957,6 +4050,118 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       observed.managementEpoch === expected.managementEpoch + 1
     ) {
       return { status: "existing", management: observed };
+    }
+    return { status: "conflict", management: observed };
+  }
+
+  async freezeWorkspaceManagementIfQuiescent(
+    expectedInput: FreezeWorkspaceManagementExpectation,
+  ): Promise<FreezeWorkspaceManagementResult> {
+    const expected = structuredClone(expectedInput);
+    assertWorkspaceFreezeExpectation(expected);
+    await this.#ensureSchema();
+
+    // This statement is the authority decision. There is deliberately no
+    // pre-read: the exact draining fence and every all-Workspace blocker
+    // predicate are evaluated by the same D1 write transaction. MATERIALIZED
+    // projections are statement-local expression-depth fences, not observers.
+    const updated = await this.db
+      .prepare(
+        `with
+          freeze_expected(workspace_id, management_epoch) as materialized (
+            values (?, ?)
+          ),
+          freeze_runs as materialized (
+            select
+              run.id,
+              run.space_id,
+              run.source_id,
+              run.installation_id,
+              run.environment,
+              run.type,
+              run.status,
+              run.lease_token,
+              run.heartbeat_at,
+              run.run_json,
+              run.created_at,
+              ${D1_WORKSPACE_FREEZE_NORMALIZED_RUN_JSON_SQL} as freeze_json
+            from runs as run
+            join freeze_expected as expected
+              on expected.workspace_id = run.space_id
+          ),
+          freeze_restore_state_pairs as materialized (
+            ${D1_WORKSPACE_FREEZE_RESTORE_STATE_PAIRS_SQL}
+          ),
+          freeze_restore_lineage as materialized (
+            ${D1_WORKSPACE_FREEZE_RESTORE_LINEAGE_SQL}
+          ),
+          freeze_run_blockers as materialized (
+            select 1 as present
+              from freeze_runs as run
+             where (${D1_WORKSPACE_FREEZE_RUN_BLOCKER_SQL})
+             limit 1
+          ),
+          freeze_interface_blockers as materialized (
+            select 1 as present
+              from capsule_interface_materialization_intents as intent
+              join freeze_expected as expected
+                on expected.workspace_id = intent.workspace_id
+             where (${D1_WORKSPACE_FREEZE_INTERFACE_BLOCKER_SQL})
+             limit 1
+          ),
+          freeze_git_blockers as materialized (
+            select 1 as present
+              from git_install_plans as git_plan
+             where git_plan.workspace_id = (
+                     select workspace_id from freeze_expected
+                   )
+               and (${SQLITE_GIT_INSTALL_PLAN_MANAGEMENT_BLOCKER_SQL})
+             limit 1
+          )
+          update workspaces as workspace
+            set management_state = 'frozen'
+          where workspace.id = (
+                  select workspace_id from freeze_expected
+                )
+            and workspace.management_state = 'draining'
+            and workspace.management_epoch = (
+                  select management_epoch from freeze_expected
+                )
+            and not exists (
+              select 1 from freeze_run_blockers
+            )
+            and not exists (
+              select 1 from freeze_interface_blockers
+            )
+            and not exists (
+              select 1 from freeze_git_blockers
+            )`,
+      )
+      .bind(expected.workspaceId, expected.managementEpoch)
+      .run();
+    if (changes(updated as D1Result) > 0) {
+      return {
+        status: "frozen",
+        management: {
+          workspaceId: expected.workspaceId,
+          managementState: "frozen",
+          managementEpoch: expected.managementEpoch,
+        },
+      };
+    }
+
+    // Readback classifies only the failed conditional mutation. It is never
+    // used to authorize a second write or to replace the atomic blocker scan.
+    const observed = await this.getWorkspaceManagement(expected.workspaceId);
+    if (observed === undefined) return { status: "not_found" };
+    if (observed.managementEpoch !== expected.managementEpoch) {
+      return { status: "conflict", management: observed };
+    }
+    if (observed.managementState === "frozen") {
+      return { status: "existing", management: observed };
+    }
+    if (observed.managementState === "draining") {
+      return { status: "blocked", management: observed };
     }
     return { status: "conflict", management: observed };
   }
@@ -8176,6 +9381,18 @@ function projectFromD1Row(row: D1StoredProjectRow): Project | undefined {
  * marker), so the lease fence is always nulled — the fold never re-stamps a live
  * lease.
  */
+function d1PersistedRunEnvironment(
+  type: string,
+  run: PlanRun | ApplyRun | SourceSyncRun | Run,
+): string | null {
+  if (
+    type === "plan" || type === "destroy_plan" || type === "drift_check"
+  ) {
+    return (run as PlanRun).capsuleContext?.environment ?? null;
+  }
+  return (run as Partial<Run>).environment ?? null;
+}
+
 function d1UpsertRunStmt(
   orm: DrizzleD1Database<typeof schema>,
   type: string,
@@ -8189,7 +9406,7 @@ function d1UpsertRunStmt(
     workspaceId: run.workspaceId,
     sourceId: generic.sourceId ?? null,
     capsuleId: "capsuleId" in run ? (run.capsuleId ?? null) : null,
-    environment: generic.environment ?? null,
+    environment: d1PersistedRunEnvironment(type, run),
     type,
     status: run.status,
     leaseToken: null,

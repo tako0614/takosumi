@@ -1480,6 +1480,154 @@ describe("Capsule execution authority", () => {
     }
   }, 30_000);
 
+  test("workerd D1 freeze validates Plan environment projection and approval settlement", async () => {
+    const runtime = new Miniflare({
+      compatibilityDate: "2026-07-17",
+      modules: [{
+        type: "ESModule",
+        path: "workspace-freeze-plan-workerd.mjs",
+        contents: "export default {fetch(){return new Response('ok')}}",
+      }],
+      d1Databases: { CONTROL: "workspace-freeze-plan-workerd" },
+    });
+    try {
+      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const store = new CloudflareD1OpenTofuControlStore(database);
+      const workspace = (id: string) => ({
+        id, handle: id, displayName: "Freeze Plan", type: "personal" as const,
+        ownerUserId: "freeze-owner", createdAt: NOW, updatedAt: NOW,
+      });
+      const planRun = (id: string, workspaceId: string): PlanRun => ({
+        id,
+        workspaceId,
+        capsuleId: `capsule-${id}`,
+        capsuleContext: {
+          workspaceId,
+          capsuleId: `capsule-${id}`,
+          environment: "production",
+        },
+        source: {
+          kind: "git",
+          url: "https://example.test/freeze-plan.git",
+          commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+        sourceDigest: "sha256:source",
+        operation: "update",
+        runnerProfileId: "opentofu-default",
+        variablesDigest: "sha256:variables",
+        executionInputsDigest: "sha256:inputs",
+        requiredProviders: [],
+        status: "queued",
+        policy: { status: "passed", reasons: [], checkedAt: 1 },
+        policyDecisionDigest: "sha256:policy",
+        requiresApproval: true,
+        auditEvents: [],
+        createdAt: 1,
+        updatedAt: 1,
+      });
+
+      const legacyWorkspaceId = "workerd-freeze-legacy-plan";
+      await store.putWorkspace(workspace(legacyWorkspaceId));
+      const legacy = {
+        ...planRun("workerd-freeze-legacy", legacyWorkspaceId),
+        capsuleId: undefined,
+        capsuleContext: undefined,
+        status: "succeeded" as const,
+      } satisfies PlanRun;
+      await store.putPlanRun(legacy);
+      const legacyAuthority: WorkspaceManagementAuthority = {
+        workspaceId: legacyWorkspaceId,
+        managementState: "active",
+        managementEpoch: 1,
+      };
+      expect(await store.beginWorkspaceDraining(legacyWorkspaceId, legacyAuthority)).toMatchObject({
+        status: "started",
+        management: { managementState: "draining", managementEpoch: 2 },
+      });
+      const legacyDraining = {
+        workspaceId: legacyWorkspaceId,
+        managementState: "draining" as const,
+        managementEpoch: 2,
+      };
+      expect(await store.freezeWorkspaceManagementIfQuiescent(legacyDraining)).toEqual({
+        status: "blocked",
+        management: legacyDraining,
+      });
+
+      const workspaceId = "workerd-freeze-canonical-plan";
+      await store.putWorkspace(workspace(workspaceId));
+      const authority: WorkspaceManagementAuthority = {
+        workspaceId,
+        managementState: "active",
+        managementEpoch: 1,
+      };
+      const plan = planRun("workerd-freeze-canonical", workspaceId);
+      const inputs = { planRunId: plan.id, variables: {} };
+      expect(await store.preparePlanRun({
+        run: plan,
+        inputs,
+        expectedWorkspaceManagementAuthority: authority,
+      })).toEqual({ status: "created", run: plan });
+      const running: PlanRun = { ...plan, status: "running", startedAt: 2, updatedAt: 2 };
+      expect(await store.transitionRun({
+        id: plan.id,
+        kind: "plan",
+        expectFrom: ["queued"],
+        setLeaseToken: "freeze-plan-lease",
+        run: running,
+      })).toEqual({ won: true, run: running });
+      const settled: PlanRun = {
+        ...running,
+        status: "succeeded",
+        finishedAt: 3,
+        approval: { approvedBy: "freeze-owner", approvedAt: 3 },
+        updatedAt: 3,
+      };
+      expect(await store.transitionRun({
+        id: plan.id,
+        kind: "plan",
+        expectFrom: ["running"],
+        expectLeaseToken: "freeze-plan-lease",
+        clearLeaseToken: true,
+        requireStoredManagementAuthority: true,
+        run: settled,
+      })).toEqual({ won: true, run: settled });
+      expect(await database.prepare(
+        "select environment, json_extract(run_json, '$.capsuleContext.environment') as context_environment from runs where id = ?",
+      ).bind(plan.id).first()).toEqual({
+        environment: "production",
+        context_environment: "production",
+      });
+
+      expect(await store.beginWorkspaceDraining(workspaceId, authority)).toMatchObject({
+        status: "started",
+        management: { managementState: "draining", managementEpoch: 2 },
+      });
+      const draining = {
+        workspaceId,
+        managementState: "draining" as const,
+        managementEpoch: 2,
+      };
+      expect(await store.freezeWorkspaceManagementIfQuiescent(draining)).toEqual({
+        status: "frozen",
+        management: { ...draining, managementState: "frozen" },
+      });
+      const fresh = planRun("workerd-freeze-fresh", workspaceId);
+      await expect(store.preparePlanRun({
+        run: fresh,
+        inputs: { planRunId: fresh.id, variables: {} },
+      })).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      const stale = planRun("workerd-freeze-stale", workspaceId);
+      await expect(store.preparePlanRun({
+        run: stale,
+        inputs: { planRunId: stale.id, variables: {} },
+        expectedWorkspaceManagementAuthority: authority,
+      })).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+    } finally {
+      await runtime.dispose();
+    }
+  }, 30_000);
+
   test("Git, InstallConfig and Interface admission share the Workspace fence on isolated workerd D1", async () => {
     const runtime = new Miniflare({
       compatibilityDate: "2026-07-17",

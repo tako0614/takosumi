@@ -27,6 +27,29 @@ import type {
   StateVersion,
 } from "@takosumi/internal/deploy-control-api";
 import { coerceRunStatus } from "@takosumi/internal/deploy-control-api";
+import type { InMemoryGitInstallPlanStore } from "../install-plans/store.ts";
+import {
+  interfaceIntentBlocksWorkspaceManagement,
+  runBlocksWorkspaceManagement,
+} from "./workspace_management_blockers.ts";
+import {
+  APPLY_BILLING_CAPTURE_PENDING_EVENT,
+  APPLY_BILLING_CAPTURE_COMPLETED_EVENT,
+  APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT,
+  APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT,
+  APPLY_RUNTIME_SECRET_RETIREMENT_DEFERRED_EVENT,
+  applyRunBillingCapturePending,
+  applyRunRuntimeSecretRetirementPending,
+} from "./run_finalization.ts";
+export {
+  APPLY_BILLING_CAPTURE_PENDING_EVENT,
+  APPLY_BILLING_CAPTURE_COMPLETED_EVENT,
+  APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT,
+  APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT,
+  APPLY_RUNTIME_SECRET_RETIREMENT_DEFERRED_EVENT,
+  applyRunBillingCapturePending,
+  applyRunRuntimeSecretRetirementPending,
+} from "./run_finalization.ts";
 import type {
   CapsuleCompatibilityLevel,
   CapsuleCompatibilityReport,
@@ -547,6 +570,28 @@ export type BeginWorkspaceDrainingResult =
       readonly management: WorkspaceManagement;
     }
   | { readonly status: "not_found" };
+
+export type FreezeWorkspaceManagementExpectation = WorkspaceManagement & {
+  readonly managementState: "draining";
+};
+
+export type FreezeWorkspaceManagementResult =
+  | {
+      readonly status: "frozen" | "existing" | "blocked" | "conflict";
+      readonly management: WorkspaceManagement;
+    }
+  | { readonly status: "not_found" };
+
+export function assertWorkspaceFreezeExpectation(
+  expected: FreezeWorkspaceManagementExpectation,
+): void {
+  if (
+    !expected || typeof expected !== "object" ||
+    typeof expected.workspaceId !== "string" || expected.workspaceId.trim() === "" ||
+    expected.managementState !== "draining" ||
+    !Number.isSafeInteger(expected.managementEpoch) || expected.managementEpoch < 1
+  ) throw new TypeError("Workspace freeze requires one exact draining management observation");
+}
 
 function validWorkspaceManagementState(
   value: unknown,
@@ -2660,49 +2705,6 @@ export type CapsuleRuntimeSafety =
       readonly runType: "destroy_apply";
     };
 
-/**
- * Durable post-commit billing-finalization markers carried by the ApplyRun
- * ledger row itself. `pending` is committed atomically with provider state;
- * `completed` is appended only after the idempotent host capture succeeds.
- */
-export const APPLY_BILLING_CAPTURE_PENDING_EVENT =
-  "billing.capture.pending" as const;
-export const APPLY_BILLING_CAPTURE_COMPLETED_EVENT =
-  "billing.capture.completed" as const;
-export const APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT =
-  "runtime_secret.retirement.pending" as const;
-export const APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT =
-  "runtime_secret.retirement.completed" as const;
-export const APPLY_RUNTIME_SECRET_RETIREMENT_DEFERRED_EVENT =
-  "runtime_secret.retirement.deferred" as const;
-
-export function applyRunBillingCapturePending(run: ApplyRun): boolean {
-  let latestPending = -1;
-  let latestCompleted = -1;
-  for (let index = 0; index < run.auditEvents.length; index += 1) {
-    const type = run.auditEvents[index]?.type;
-    if (type === APPLY_BILLING_CAPTURE_PENDING_EVENT) latestPending = index;
-    if (type === APPLY_BILLING_CAPTURE_COMPLETED_EVENT) latestCompleted = index;
-  }
-  return latestPending > latestCompleted;
-}
-
-/** Durable destroy-tail outbox state; the audit payload contains references only. */
-export function applyRunRuntimeSecretRetirementPending(run: ApplyRun): boolean {
-  let latestPending = -1;
-  let latestCompleted = -1;
-  for (let index = 0; index < run.auditEvents.length; index += 1) {
-    const type = run.auditEvents[index]?.type;
-    if (type === APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT) {
-      latestPending = index;
-    }
-    if (type === APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT) {
-      latestCompleted = index;
-    }
-  }
-  return latestPending > latestCompleted;
-}
-
 export interface OpenTofuControlStore {
   /** Declares whether ledger writes survive process restart. */
   readonly persistence: "durable" | "ephemeral";
@@ -2836,6 +2838,10 @@ export interface OpenTofuControlStore {
     workspaceId: string,
     expected: WorkspaceManagementAuthority,
   ): Promise<BeginWorkspaceDrainingResult>;
+  /** All-Workspace blocker check and draining -> frozen CAS in one storage boundary. */
+  freezeWorkspaceManagementIfQuiescent(
+    expected: FreezeWorkspaceManagementExpectation,
+  ): Promise<FreezeWorkspaceManagementResult>;
   /**
    * Claims the one system-managed personal bootstrap slot for an owner.
    *
@@ -3406,6 +3412,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   readonly #runLeases = new Map<string, string>();
   readonly #workspaces = new Map<string, Workspace>();
   readonly #workspaceManagement = new Map<string, WorkspaceManagement>();
+  #gitInstallPlanStore: InMemoryGitInstallPlanStore | undefined;
   readonly #personalWorkspaceBootstrapIds = new Map<string, string>();
   readonly #workspaceMembers = new Map<string, WorkspaceMember>();
   readonly #projects = new Map<string, Project>();
@@ -3441,6 +3448,17 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
 
   constructor() {
     maybeWarnInMemoryStore("InMemoryOpenTofuControlStore");
+  }
+
+  /** Named composition pairing; no async observer or generic blocker callback. */
+  attachGitInstallPlanStore(store: InMemoryGitInstallPlanStore): void {
+    if (!store.usesWorkspaceManagementAdmissionValidator(this)) {
+      throw new TypeError("Workspace freeze requires Git and control stores with the same admission validator");
+    }
+    if (this.#gitInstallPlanStore !== undefined && this.#gitInstallPlanStore !== store) {
+      throw new TypeError("Workspace freeze cannot replace its paired Git store");
+    }
+    this.#gitInstallPlanStore = store;
   }
 
   /**
@@ -4233,6 +4251,57 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       return Promise.resolve({ status: "existing", management: { ...current } });
     }
     return Promise.resolve({ status: "conflict", management: { ...current } });
+  }
+
+  async freezeWorkspaceManagementIfQuiescent(
+    expectedInput: FreezeWorkspaceManagementExpectation,
+  ): Promise<FreezeWorkspaceManagementResult> {
+    const expected = structuredClone(expectedInput);
+    assertWorkspaceFreezeExpectation(expected);
+    const { workspaceId } = expected;
+    if (!this.#workspaces.has(workspaceId)) return { status: "not_found" };
+    const management = this.#workspaceManagement.get(workspaceId) ?? {
+      workspaceId, managementState: "active" as const, managementEpoch: 1,
+    };
+    if (management.managementEpoch !== expected.managementEpoch) {
+      return { status: "conflict", management: { ...management } };
+    }
+    if (management.managementState === "frozen") {
+      return { status: "existing", management: { ...management } };
+    }
+    if (management.managementState !== "draining") {
+      return { status: "conflict", management: { ...management } };
+    }
+    if (!this.#gitInstallPlanStore) {
+      throw new TypeError("Workspace freeze requires the paired in-memory Git store");
+    }
+    const ledgers = {
+      runs: this.#runs,
+      stateVersions: this.#stateVersions,
+      interfaceIntents: this.#capsuleInterfaceMaterializationIntents,
+    };
+    // No await between any ledger observation and the management-state CAS.
+    let blocked = this.#gitInstallPlanStore.hasWorkspaceManagementBlockersNow(workspaceId);
+    for (const [id, run] of this.#runs) {
+      if (run.workspaceId !== workspaceId) continue;
+      if (id !== run.id || this.#runLeases.has(id) || runBlocksWorkspaceManagement(run, ledgers)) {
+        blocked = true;
+        break;
+      }
+    }
+    if (!blocked) {
+      for (const [id, intent] of this.#capsuleInterfaceMaterializationIntents) {
+        if (intent.workspaceId === workspaceId &&
+          (id !== intent.id || interfaceIntentBlocksWorkspaceManagement(intent, ledgers))) {
+          blocked = true;
+          break;
+        }
+      }
+    }
+    if (blocked) return { status: "blocked", management: { ...management } };
+    const frozen: WorkspaceManagement = { ...management, managementState: "frozen" };
+    this.#workspaceManagement.set(workspaceId, frozen);
+    return { status: "frozen", management: { ...frozen } };
   }
 
   claimPersonalWorkspaceBootstrap(

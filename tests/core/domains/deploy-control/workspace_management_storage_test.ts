@@ -1,16 +1,23 @@
 import { afterEach, expect, test } from "bun:test";
 
-import type { ApplyRun } from "@takosumi/internal/deploy-control-api";
+import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
 import type { BackupRecord } from "takosumi-contract/backups";
 import type { Capsule } from "takosumi-contract/capsules";
+import type { CapsuleInterfaceBlueprint } from "takosumi-contract";
+import type { Output } from "takosumi-contract/outputs";
 import type {
   SourceSnapshot,
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { Run } from "takosumi-contract/runs";
+import type { StateVersion } from "takosumi-contract/state-versions";
 import type { Workspace } from "takosumi-contract/workspaces";
 import {
+  APPLY_BILLING_CAPTURE_COMPLETED_EVENT,
+  APPLY_BILLING_CAPTURE_PENDING_EVENT,
+  APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT,
+  APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT,
   type CommitBackupRunInput,
   type CommitCompatibilityCheckRunInput,
   InMemoryOpenTofuControlStore,
@@ -19,6 +26,10 @@ import {
   type OpenTofuControlStore,
   type WorkspaceManagementAuthority,
 } from "../../../../core/domains/deploy-control/store.ts";
+import {
+  createCapsuleInterfaceMaterializationIntent,
+  pinCapsuleInterfaceBlueprints,
+} from "../../../../core/domains/deploy-control/interface_materialization_intent.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import type {
   SqlClient,
@@ -31,8 +42,10 @@ import type {
   D1Result,
 } from "../../../../worker/src/bindings.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
+import { InMemoryGitInstallPlanStore } from "../../../../core/domains/install-plans/store.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
+import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
 
 const pgClients: PGliteSqlClient[] = [];
@@ -163,6 +176,48 @@ function applyRun(id: string, workspaceId: string, status: ApplyRun["status"] = 
     auditEvents: [],
     createdAt: 1,
     updatedAt: 1,
+  };
+}
+
+function planRun(id: string, workspaceId: string, overrides: Partial<PlanRun> = {}): PlanRun {
+  return {
+    id,
+    workspaceId,
+    source: {
+      kind: "git",
+      url: "https://example.test/freeze.git",
+      commit: "0123456789abcdef0123456789abcdef01234567",
+    },
+    sourceDigest: "sha256:source",
+    operation: "update",
+    runnerProfileId: "runner",
+    variablesDigest: "sha256:variables",
+    executionInputsDigest: "sha256:inputs",
+    requiredProviders: [],
+    requiredProviderRequirements: [],
+    status: "queued",
+    policy: { status: "passed", reasons: [], checkedAt: 1 },
+    policyDecisionDigest: "sha256:policy",
+    auditEvents: [],
+    createdAt: 1,
+    updatedAt: 1,
+    ...overrides,
+  };
+}
+
+function interfaceBlueprint(key: string): CapsuleInterfaceBlueprint {
+  return {
+    key,
+    name: `interface-${key}`,
+    spec: {
+      type: "mcp.server",
+      version: "2025-11-25",
+      document: { transport: "streamable-http" },
+      inputs: {
+        endpoint: { source: "capsule_output", outputName: "endpoint" },
+      },
+      access: { visibility: "workspace", resourceUriInput: "endpoint" },
+    },
   };
 }
 
@@ -369,6 +424,7 @@ async function adapters(): Promise<readonly Adapter[]> {
   pgClients.push(pgClient);
   const d1 = new ReplayRecordMutatingD1();
   const memory = new InMemoryOpenTofuControlStore();
+  memory.attachGitInstallPlanStore(new InMemoryGitInstallPlanStore(memory));
   return [
     {
       label: "memory",
@@ -630,6 +686,587 @@ test("Workspace management CAS and guarded admissions are conformed across stora
     expect(terminal, label).toEqual({
       won: true,
       run: { ...claimedRun, heartbeatAt: 3, status: "succeeded", finishedAt: 4 },
+    });
+  }
+});
+
+test("Workspace freezes an empty draining namespace with CAS parity", async () => {
+  for (const { label, store } of await adapters()) {
+    const owner = workspace(`freeze-empty-${label}`);
+    const unrelated = workspace(`freeze-unrelated-${label}`);
+    await store.putWorkspace(owner);
+    await store.putWorkspace(unrelated);
+    const authority = {
+      workspaceId: owner.id,
+      managementState: "active" as const,
+      managementEpoch: 1,
+    };
+    const unrelatedAuthority = {
+      workspaceId: unrelated.id,
+      managementState: "active" as const,
+      managementEpoch: 1,
+    };
+    expect(
+      await store.beginApplyRun(
+        applyRun(`freeze-unrelated-run-${label}`, unrelated.id),
+        unrelatedAuthority,
+      ),
+      label,
+    ).toMatchObject({ status: "created" });
+
+    expect(await store.beginWorkspaceDraining(owner.id, authority), label).toEqual({
+      status: "started",
+      management: {
+        workspaceId: owner.id,
+        managementState: "draining",
+        managementEpoch: 2,
+      },
+    });
+    const draining = {
+      workspaceId: owner.id,
+      managementState: "draining" as const,
+      managementEpoch: 2,
+    };
+    expect(
+      await store.freezeWorkspaceManagementIfQuiescent(draining),
+      label,
+    ).toEqual({
+      status: "frozen",
+      management: {
+        workspaceId: owner.id,
+        managementState: "frozen",
+        managementEpoch: 2,
+      },
+    });
+    expect(
+      await store.freezeWorkspaceManagementIfQuiescent(draining),
+      label,
+    ).toEqual({
+      status: "existing",
+      management: {
+        workspaceId: owner.id,
+        managementState: "frozen",
+        managementEpoch: 2,
+      },
+    });
+    expect(
+      await store.freezeWorkspaceManagementIfQuiescent({
+        ...draining,
+        managementEpoch: 1,
+      }),
+      label,
+    ).toEqual({
+      status: "conflict",
+      management: {
+        workspaceId: owner.id,
+        managementState: "frozen",
+        managementEpoch: 2,
+      },
+    });
+    await expect(
+      store.beginApplyRun(applyRun(`freeze-after-${label}`, owner.id), authority),
+      label,
+    ).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+  }
+});
+
+test("Workspace freeze observes terminal Plan, finalizer, and Interface lineage blockers", async () => {
+  for (const { label, store } of await adapters()) {
+    const drain = async (workspaceId: string) => {
+      const current = await store.getWorkspaceManagement(workspaceId);
+      if (!current || current.managementState !== "active") {
+        throw new Error(`${label}: Workspace is not active`);
+      }
+      const result = await store.beginWorkspaceDraining(workspaceId, {
+        workspaceId,
+        managementState: "active",
+        managementEpoch: current.managementEpoch,
+      });
+      expect(result.status, label).toBe("started");
+      return {
+        workspaceId,
+        managementState: "draining" as const,
+        managementEpoch: current.managementEpoch + 1,
+      };
+    };
+    const expectFreeze = async (
+      draining: { workspaceId: string; managementState: "draining"; managementEpoch: number },
+      status: "blocked" | "frozen",
+    ) => expect((await store.freezeWorkspaceManagementIfQuiescent(draining)).status, label).toBe(status);
+
+    const legacy = workspace(`freeze-legacy-plan-${label}`);
+    await store.putWorkspace(legacy);
+    const legacyPlan = planRun(`freeze-legacy-plan-row-${label}`, legacy.id, {
+      status: "succeeded",
+      requiresApproval: true,
+    });
+    await store.putPlanRun(legacyPlan);
+    const legacyDraining = await drain(legacy.id);
+    await expectFreeze(legacyDraining, "blocked");
+
+    const finalizerWorkspace = workspace(`freeze-finalizer-${label}`);
+    await store.putWorkspace(finalizerWorkspace);
+    const finalizerAuthority = (await store.getWorkspaceManagement(finalizerWorkspace.id))!;
+    const finalizerApplyId = `freeze-finalizer-apply-${label}`;
+    const finalizerPlan = planRun(`freeze-finalizer-plan-${label}`, finalizerWorkspace.id, {
+      capsuleId: `freeze-finalizer-capsule-${label}`,
+      capsuleContext: {
+        workspaceId: finalizerWorkspace.id,
+        capsuleId: `freeze-finalizer-capsule-${label}`,
+        environment: "production",
+      },
+    });
+    await store.preparePlanRun({
+      run: finalizerPlan,
+      inputs: { planRunId: finalizerPlan.id, variables: {} },
+      expectedWorkspaceManagementAuthority: finalizerAuthority,
+    });
+    const finalizerApplyBase = applyRun(finalizerApplyId, finalizerWorkspace.id);
+    const finalizerApplyQueued = {
+      ...finalizerApplyBase,
+      planRunId: finalizerPlan.id,
+      capsuleId: finalizerPlan.capsuleId,
+      expected: {
+        ...finalizerApplyBase.expected,
+        planRunId: finalizerPlan.id,
+        capsuleId: finalizerPlan.capsuleId,
+      },
+    } satisfies ApplyRun;
+    await store.beginApplyRun(finalizerApplyQueued, finalizerAuthority);
+    const finalizerPlanSucceeded: PlanRun = {
+      ...finalizerPlan,
+      status: "succeeded",
+      appliedApplyRunId: finalizerApplyId,
+      updatedAt: 2,
+    };
+    expect(
+      (await store.transitionRun({
+        id: finalizerPlan.id,
+        kind: "plan",
+        expectFrom: ["queued"],
+        run: finalizerPlanSucceeded,
+      })).won,
+      label,
+    ).toBe(true);
+    const pendingFinalizers: ApplyRun = {
+      ...finalizerApplyQueued,
+      status: "succeeded",
+      finishedAt: 4,
+      updatedAt: 4,
+      auditEvents: [
+        { id: "billing-pending", type: APPLY_BILLING_CAPTURE_PENDING_EVENT, at: 2 },
+        { id: "retirement-pending", type: APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT, at: 3 },
+      ],
+    };
+    expect(
+      (await store.transitionRun({
+        id: finalizerApplyId,
+        kind: "apply",
+        expectFrom: ["queued"],
+        run: pendingFinalizers,
+      })).won,
+      label,
+    ).toBe(true);
+    const finalizerDraining = await drain(finalizerWorkspace.id);
+    await expectFreeze(finalizerDraining, "blocked");
+    const billingFinalized: ApplyRun = {
+      ...pendingFinalizers,
+      updatedAt: 5,
+      auditEvents: [
+        ...pendingFinalizers.auditEvents,
+        { id: "billing-completed", type: APPLY_BILLING_CAPTURE_COMPLETED_EVENT, at: 5 },
+      ],
+    };
+    expect(
+      (await store.transitionRun({
+        id: finalizerApplyId,
+        kind: "apply",
+        expectFrom: ["succeeded"],
+        expectExactRun: pendingFinalizers,
+        run: billingFinalized,
+      })).won,
+      label,
+    ).toBe(true);
+    await expectFreeze(finalizerDraining, "blocked");
+    const retirementFinalized: ApplyRun = {
+      ...billingFinalized,
+      updatedAt: 6,
+      auditEvents: [
+        ...billingFinalized.auditEvents,
+        { id: "retirement-completed", type: APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT, at: 6 },
+      ],
+    };
+    expect(
+      (await store.transitionRun({
+        id: finalizerApplyId,
+        kind: "apply",
+        expectFrom: ["succeeded"],
+        expectExactRun: billingFinalized,
+        run: retirementFinalized,
+      })).won,
+      label,
+    ).toBe(true);
+    await expectFreeze(finalizerDraining, "frozen");
+
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: `freeze-interface-${label}`,
+      sourceId: `freeze-interface-source-${label}`,
+      snapshotId: `freeze-interface-snapshot-${label}`,
+      installConfigId: `freeze-interface-config-${label}`,
+      capsuleId: `freeze-interface-capsule-${label}`,
+    });
+    const interfaceApplyId = `freeze-interface-apply-${label}`;
+    const interfaceState: StateVersion = {
+      id: `freeze-interface-state-${label}`,
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      environment: seeded.capsule.environment,
+      generation: 1,
+      stateRef: `state://freeze-interface-${label}`,
+      digest: `sha256:${"a".repeat(64)}`,
+      createdByRunId: interfaceApplyId,
+      createdAt: "2026-09-11T00:00:00.000Z",
+    };
+    const interfaceOutput: Output = {
+      id: `freeze-interface-output-${label}`,
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      stateGeneration: 1,
+      rawArtifactRef: `output://freeze-interface-${label}`,
+      publicOutputs: { endpoint: "https://example.test/mcp" },
+      workspaceOutputs: { endpoint: "https://example.test/mcp" },
+      outputDigest: `sha256:${"b".repeat(64)}`,
+      createdAt: "2026-09-11T00:00:00.000Z",
+    };
+    const interfaceApplyBase = applyRun(interfaceApplyId, seeded.workspace.id);
+    const interfaceApply: ApplyRun = {
+      ...interfaceApplyBase,
+      planRunId: `freeze-interface-plan-${label}`,
+      capsuleId: seeded.capsule.id,
+      stateVersionId: interfaceState.id,
+      outputId: interfaceOutput.id,
+      status: "succeeded",
+      startedAt: 1,
+      finishedAt: 2,
+      expected: {
+        ...interfaceApplyBase.expected,
+        planRunId: `freeze-interface-plan-${label}`,
+        capsuleId: seeded.capsule.id,
+      },
+    };
+    const pinned = await pinCapsuleInterfaceBlueprints({
+      installConfigId: seeded.capsule.installConfigId,
+      blueprints: [interfaceBlueprint(`freeze-${label}`)],
+    });
+    const intent = createCapsuleInterfaceMaterializationIntent({
+      applyRunId: interfaceApplyId,
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      stateVersionId: interfaceState.id,
+      outputId: interfaceOutput.id,
+      stateGeneration: 1,
+      pinned: pinned!,
+      createdAt: "2026-09-11T00:00:00.000Z",
+    });
+    expect(
+      await store.commitRunState({
+        stateVersion: interfaceState,
+        output: interfaceOutput,
+        capsulePatch: {
+          id: seeded.capsule.id,
+          patch: {
+            currentStateVersionId: interfaceState.id,
+            currentStateGeneration: 1,
+            currentOutputId: interfaceOutput.id,
+            status: "active",
+            updatedAt: "2026-09-11T00:00:00.000Z",
+          },
+          guard: {
+            currentStateVersionId: seeded.capsule.currentStateVersionId,
+            status: seeded.capsule.status,
+          },
+        },
+        applyRunTerminal: interfaceApply,
+        interfaceMaterializationIntent: intent,
+      }),
+      label,
+    ).toMatchObject({ capsule: { id: seeded.capsule.id } });
+    const interfaceDraining = await drain(seeded.workspace.id);
+    await expectFreeze(interfaceDraining, "blocked");
+    const claimedIntent = await store.claimCapsuleInterfaceMaterializationIntent({
+      intentId: intent.id,
+      leaseToken: `freeze-interface-lease-${label}`,
+      claimedAt: "2026-09-11T00:01:00.000Z",
+      leaseExpiresAt: "2026-09-11T01:00:00.000Z",
+    });
+    expect(claimedIntent?.id, label).toBe(intent.id);
+    expect(
+      await store.settleCapsuleInterfaceMaterializationIntent({
+        id: intent.id,
+        leaseToken: `freeze-interface-lease-${label}`,
+        expectedNextItemIndex: claimedIntent!.nextItemIndex,
+        settledAt: "2026-09-11T00:02:00.000Z",
+        outcome: { kind: "completed", disposition: "materialized" },
+      }),
+      label,
+    ).toMatchObject({ kind: "updated", intent: { status: "completed" } });
+    await store.putStateVersion({
+      ...interfaceState,
+      workspaceId: `freeze-interface-malformed-${label}`,
+    });
+    await expectFreeze(interfaceDraining, "blocked");
+    await store.putStateVersion(interfaceState);
+    await expectFreeze(interfaceDraining, "frozen");
+  }
+});
+
+test("Workspace freeze validates Restore StateVersion lineage and scoped source intent", async () => {
+  for (const { label, store } of await adapters()) {
+    const drain = async (workspaceId: string) => {
+      const current = await store.getWorkspaceManagement(workspaceId);
+      if (!current || current.managementState !== "active") {
+        throw new Error(`${label}: Workspace is not active`);
+      }
+      const result = await store.beginWorkspaceDraining(workspaceId, {
+        workspaceId,
+        managementState: "active",
+        managementEpoch: current.managementEpoch,
+      });
+      expect(result.status, label).toBe("started");
+      return {
+        workspaceId,
+        managementState: "draining" as const,
+        managementEpoch: current.managementEpoch + 1,
+      };
+    };
+    const stateVersion = (
+      id: string,
+      workspaceId: string,
+      capsuleId: string,
+      generation: number,
+      createdByRunId: string,
+    ): StateVersion => ({
+      id,
+      workspaceId,
+      capsuleId,
+      environment: "production",
+      generation,
+      stateRef: `state://${id}`,
+      digest: `sha256:${"a".repeat(64)}`,
+      createdByRunId,
+      createdAt: "2026-09-11T00:00:00.000Z",
+    });
+    const succeededRestore = (
+      id: string,
+      workspaceId: string,
+      capsuleId: string,
+      sourceStateVersionId: string,
+      targetStateVersionId: string,
+    ): Run => ({
+      id,
+      workspaceId,
+      capsuleId,
+      environment: "production",
+      type: "restore",
+      status: "succeeded",
+      backupId: `backup-${id}`,
+      restoreStateGeneration: 1,
+      restoredFromStateVersionId: sourceStateVersionId,
+      restoredStateVersionId: targetStateVersionId,
+      createdBy: "historical-restore",
+      createdAt: "2026-09-11T00:00:00.000Z",
+      startedAt: "2026-09-11T00:00:01.000Z",
+      finishedAt: "2026-09-11T00:00:02.000Z",
+    });
+
+    const validWorkspace = workspace(`freeze-restore-valid-${label}`);
+    const validCapsuleId = `freeze-restore-valid-capsule-${label}`;
+    const validRestoreId = `freeze-restore-valid-run-${label}`;
+    const validSource = stateVersion(
+      `freeze-restore-valid-source-${label}`,
+      validWorkspace.id,
+      validCapsuleId,
+      1,
+      `historical-source-${label}`,
+    );
+    const validTarget = stateVersion(
+      `freeze-restore-valid-target-${label}`,
+      validWorkspace.id,
+      validCapsuleId,
+      2,
+      validRestoreId,
+    );
+    await store.putWorkspace(validWorkspace);
+    await store.putStateVersion(validSource);
+    await store.putStateVersion(validTarget);
+    await store.putBackupRun(
+      succeededRestore(
+        validRestoreId,
+        validWorkspace.id,
+        validCapsuleId,
+        validSource.id,
+        validTarget.id,
+      ),
+    );
+    const validDraining = await drain(validWorkspace.id);
+    expect(
+      await store.freezeWorkspaceManagementIfQuiescent(validDraining),
+      label,
+    ).toMatchObject({
+      status: "frozen",
+      management: { workspaceId: validWorkspace.id, managementEpoch: 2 },
+    });
+
+    // Build one real pending source intent in another Workspace. The target
+    // Restore's source StateVersion points at that deterministic intent id;
+    // the scoped lineage check must not treat the foreign row as absent.
+    const foreign = await seedCapsuleModel(store, {
+      workspaceId: `freeze-restore-foreign-source-${label}`,
+      sourceId: `freeze-restore-foreign-source-ledger-${label}`,
+      snapshotId: `freeze-restore-foreign-snapshot-${label}`,
+      installConfigId: `freeze-restore-foreign-config-${label}`,
+      capsuleId: `freeze-restore-foreign-capsule-${label}`,
+    });
+    const foreignApplyId = `freeze-restore-foreign-apply-${label}`;
+    const foreignState = stateVersion(
+      `freeze-restore-foreign-state-${label}`,
+      foreign.workspace.id,
+      foreign.capsule.id,
+      1,
+      foreignApplyId,
+    );
+    const foreignOutput: Output = {
+      id: `freeze-restore-foreign-output-${label}`,
+      workspaceId: foreign.workspace.id,
+      capsuleId: foreign.capsule.id,
+      stateGeneration: 1,
+      rawArtifactRef: `output://freeze-restore-foreign-${label}`,
+      publicOutputs: { endpoint: "https://example.test/mcp" },
+      workspaceOutputs: { endpoint: "https://example.test/mcp" },
+      outputDigest: `sha256:${"b".repeat(64)}`,
+      createdAt: "2026-09-11T00:00:00.000Z",
+    };
+    const foreignApplyBase = applyRun(foreignApplyId, foreign.workspace.id);
+    const foreignApply: ApplyRun = {
+      ...foreignApplyBase,
+      planRunId: `freeze-restore-foreign-plan-${label}`,
+      capsuleId: foreign.capsule.id,
+      status: "succeeded",
+      startedAt: 1,
+      finishedAt: 2,
+      stateVersionId: foreignState.id,
+      outputId: foreignOutput.id,
+      expected: {
+        ...foreignApplyBase.expected,
+        planRunId: `freeze-restore-foreign-plan-${label}`,
+        capsuleId: foreign.capsule.id,
+      },
+    };
+    const pinned = await pinCapsuleInterfaceBlueprints({
+      installConfigId: foreign.capsule.installConfigId,
+      blueprints: [interfaceBlueprint(`freeze-restore-foreign-${label}`)],
+    });
+    expect(pinned, label).toBeDefined();
+    const foreignIntent = createCapsuleInterfaceMaterializationIntent({
+      applyRunId: foreignApplyId,
+      workspaceId: foreign.workspace.id,
+      capsuleId: foreign.capsule.id,
+      stateVersionId: foreignState.id,
+      outputId: foreignOutput.id,
+      stateGeneration: 1,
+      pinned: pinned!,
+      createdAt: "2026-09-11T00:00:00.000Z",
+    });
+    expect(
+      await store.commitRunState({
+        stateVersion: foreignState,
+        output: foreignOutput,
+        capsulePatch: {
+          id: foreign.capsule.id,
+          patch: {
+            currentStateVersionId: foreignState.id,
+            currentStateGeneration: 1,
+            currentOutputId: foreignOutput.id,
+            status: "active",
+            updatedAt: "2026-09-11T00:00:00.000Z",
+          },
+          guard: {
+            currentStateVersionId: foreign.capsule.currentStateVersionId,
+            status: foreign.capsule.status,
+          },
+        },
+        applyRunTerminal: foreignApply,
+        interfaceMaterializationIntent: foreignIntent,
+      }),
+      label,
+    ).toMatchObject({ capsule: { id: foreign.capsule.id } });
+
+    const foreignTargetWorkspace = workspace(`freeze-restore-foreign-target-${label}`);
+    const foreignTargetCapsuleId = `freeze-restore-foreign-target-capsule-${label}`;
+    const foreignTargetRestoreId = `freeze-restore-foreign-target-run-${label}`;
+    const foreignSource = stateVersion(
+      `freeze-restore-foreign-target-source-${label}`,
+      foreignTargetWorkspace.id,
+      foreignTargetCapsuleId,
+      1,
+      foreignApplyId,
+    );
+    const foreignTarget = stateVersion(
+      `freeze-restore-foreign-target-state-${label}`,
+      foreignTargetWorkspace.id,
+      foreignTargetCapsuleId,
+      2,
+      foreignTargetRestoreId,
+    );
+    await store.putWorkspace(foreignTargetWorkspace);
+    await store.putStateVersion(foreignSource);
+    await store.putStateVersion(foreignTarget);
+    await store.putBackupRun(
+      succeededRestore(
+        foreignTargetRestoreId,
+        foreignTargetWorkspace.id,
+        foreignTargetCapsuleId,
+        foreignSource.id,
+        foreignTarget.id,
+      ),
+    );
+    const foreignDraining = await drain(foreignTargetWorkspace.id);
+    expect(
+      await store.freezeWorkspaceManagementIfQuiescent(foreignDraining),
+      label,
+    ).toMatchObject({
+      status: "blocked",
+      management: { workspaceId: foreignTargetWorkspace.id, managementEpoch: 2 },
+    });
+
+    const missingWorkspace = workspace(`freeze-restore-missing-${label}`);
+    const missingCapsuleId = `freeze-restore-missing-capsule-${label}`;
+    const missingRestoreId = `freeze-restore-missing-run-${label}`;
+    const missingTarget = stateVersion(
+      `freeze-restore-missing-target-${label}`,
+      missingWorkspace.id,
+      missingCapsuleId,
+      2,
+      missingRestoreId,
+    );
+    await store.putWorkspace(missingWorkspace);
+    await store.putStateVersion(missingTarget);
+    await store.putBackupRun(
+      succeededRestore(
+        missingRestoreId,
+        missingWorkspace.id,
+        missingCapsuleId,
+        `freeze-restore-missing-source-${label}`,
+        missingTarget.id,
+      ),
+    );
+    const missingDraining = await drain(missingWorkspace.id);
+    expect(
+      await store.freezeWorkspaceManagementIfQuiescent(missingDraining),
+      label,
+    ).toMatchObject({
+      status: "blocked",
+      management: { workspaceId: missingWorkspace.id, managementEpoch: 2 },
     });
   }
 });

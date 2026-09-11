@@ -77,7 +77,8 @@ Git の blocker 条件は install-plans domain が所有し、PostgreSQL/SQLite 
 同期判定を提供し、async observer はその結果を返すだけにします。composition は
 Git と control store が同じ admission validator を参照することを確認できます。
 この内部 seam だけでは凍結を許可しません。Run・Interface を含む全条件の確認と
-Workspace の更新を同じ atomic boundary に収める command は、引き続き未提供です。
+Workspace の更新を同じ atomic boundary に収める private command を実装中です。
+HTTP route や管理移管機能はまだ提供しません。
 
 ## Workspace の設定・メンバー変更
 
@@ -234,28 +235,68 @@ terminal Apply の billing／runtime-secret finalizer は、外部処理前に�
 
 ## 実装順序と受け入れ条件
 
-### 次の凍結 command が確認する安全性の範囲
+### 凍結 command が確認する安全性の範囲
 
 2026-09-11 の内部設計判断です。既存の公開 Run/API の意味は変更しません。
 凍結は「以後の効果を起こせる未解決処理がない」ことを確定する操作であり、保存済み
-全データの完全性検査や、blueprint の再検証とは分けます。以下の実装はまだ未提供です。
+全データの完全性検査や、blueprint の再検証とは分けます。内部候補の実装と検証を
+進めている段階であり、以下を live 環境で提供済みとは扱いません。
+
+`freezeWorkspaceManagementIfQuiescent` は、観測済みの `draining` と exact epoch を
+受け取ります。全 blocker がなければ同じ epoch の `frozen` に更新し、同じ epoch で
+既に frozen なら読み取りだけの `existing` を返します。epoch が違う場合や active からの
+直接凍結は `conflict`、未処理の仕事があれば `blocked` です。SQL の失敗や欠けた ledger を
+「仕事なし」として扱いません。管理を再開する処理や公開の停止操作は追加しません。
+
+Postgres は Workspace 行を先に lock した同じ transaction 内、D1 は全条件を含む
+一つの条件付き UPDATE、Memory は await のない全 ledger の観測と更新で実行します。
+Memory の Git store は同じ concrete control store を admission validator とする一組を
+内部の owning composition から明示的に接続します。組が未接続なら凍結は失敗し、別の
+組への差し替えも拒否します。通常の service bootstrap には接続しません。未公開の停止
+機能のために既存 store wrapper や、停止とは無関係な起動時の検証を変更しないためです。
+DB 版は Run・Interface・Git が同じ DB にある
+構成を前提とします。異なる DB や任意の custom store まで横断して凍結を証明する
+ものではなく、そのような構成に公開の停止入口を接続してはいけません。
+
+D1 は SQL の長さだけでなく式の深さにも制限があります。上位の AND を balanced tree
+にするだけでは、Restore の成功結果から StateVersion・復元元 intent・replacement
+intent をたどる式が workerd D1 の深さ制限に達しました。修正では同じ statement 内の
+materialized CTE に JSON の正規化と深い判定を分け、一つの条件付き UPDATE に
+全 blocker の不存在確認を残します。空の判定群を成功扱いにせず、事前の JavaScript
+判定や複数回の書き込みには分けません。
+対象 Workspace の行を列挙することと、参照先の ID を検証することも分けます。後者は
+元の全体の table を参照し、別 Workspace に同じ deterministic ID の行がある不整合を
+「参照先なし」と扱いません。不正な JSON を安全に評価するための代替値も、元の JSON
+が正しいという証拠にはしません。SQLite の代替 adapter の成功だけではこの制限を
+検出できないため、同じ凍結処理を呼ぶ workerd D1 回帰を受け入れ条件に含めます。
+共用の Git blocker 式は Git table の列を無修飾で参照するため、その外側の row scope に
+同名列を持つ expected CTE を JOIN しません。対象 ID は scalar subquery で参照します。
 
 - Run は Workspace の全行・全 epoch を対象にし、既知の種別・status と物理列／JSON の
   identity・時刻・heartbeat の一致を要求します。未知または壊れた安全性の情報は blocker
   です。期限にかかわらず lease が残る行、queued/running/waiting_approval は停止済みと
   しません。`runIsInFlight` は別用途で waiting_approval を settled とするため流用しません。
+  過去の succeeded Plan でも、non-drift の承認待ちで approval と適用先 Apply がなければ
+  既存の RunQueryService と同じく未解決です。RunGroup は管理停止の authority にはしません。
 - failed Apply は、対応する失敗 event が明示的に `providerDispatched: false` を示し、
   全 audit history に provider/lifecycle dispatch の肯定的証拠がなく、finalizer も収束済みの
-  場合だけ解決済みとできます。証拠のない旧行は不明です。開始歴・dispatch 証拠のある
-  cancelled/expired Apply も blocker のままにします。
+  場合だけ解決済みとできます。state/output/execution evidence がある失敗は未 dispatch
+  の表示と矛盾するため blocker です。証拠のない旧行は不明です。開始歴・heartbeat・効果の
+  証拠のある cancelled/expired Apply も blocker のままにします。
+  旧 queued/DLQ writer は destroy でも `apply.failed` を保存していたため、この既知の
+  event も上記の全条件を満たす場合だけ認めます。新規 destroy は `destroy.failed` に揃えます。
 - Restore は dispatch 前後の失敗を区別できる永続的な証拠がないため、failed/expired を
   blocker とします。cancelled は未開始を示せる場合だけ解決済みとし、succeeded は対応する
   StateVersion と作成 Run・Workspace・Capsule・環境・復元元の一致、必要な service-data
   receipt と Interface replacement intent を確認します。新しい放棄操作は定義しません。
+  復元元の intent は既存 runtime と同じ deterministic ID の順序で解決し、任意の
+  stateVersion 一致行への検索で代替しません。
 - Interface は completed、両 lease 列の消去、error/dead-letter の不在、正しい作成元と
   deterministic ID、同じ Workspace/Capsule の成功 Run、認められた receipt の形と
   digest/完了時刻の一致、cursor の整合を要求します。pending/dead-letter や不明な
   terminal evidence は blocker です。
+  intent が指す StateVersion も同じ Workspace/Capsule/generation と作成 Run に一致する
+  必要があります。Restore の復元元も作成 Run の欠落を「宣言なし」とは解釈しません。
 
 Interface の completed 行は既存 claim/retry 経路から新規処理に戻れません。このため凍結
 判定では上記の完了証拠を検証し、SQL 内で blueprint schema と暗号学的 digest 検証を

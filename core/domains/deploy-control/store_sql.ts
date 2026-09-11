@@ -135,6 +135,8 @@ import type {
   ProjectCreationResult,
   CapsuleListPageParams,
   BeginWorkspaceDrainingResult,
+  FreezeWorkspaceManagementExpectation,
+  FreezeWorkspaceManagementResult,
   WorkspaceManagement,
   WorkspaceManagementAuthority,
   WorkspaceAccountReplacementInput,
@@ -151,6 +153,7 @@ import {
   assertSourceConfigurationWriteInput,
   assertWorkspaceManagementAdmission,
   assertWorkspaceManagementAuthorityInput,
+  assertWorkspaceFreezeExpectation,
   assertCompatibilityCheckRunAdmissionInput,
   compatibilityCheckRunAdmissionMatches,
   compatibilityCheckReportForStorage,
@@ -225,6 +228,9 @@ import {
   validateCommitRunStateInterfaceMaterializationIntent,
 } from "./store.ts";
 import {
+  PG_GIT_INSTALL_PLAN_MANAGEMENT_BLOCKER_SQL,
+} from "../install-plans/management_blockers_sql.ts";
+import {
   capsuleInterfaceBlueprintsJson,
   type CapsuleInterfaceMaterializationIntent,
   validateCapsuleInterfaceMaterializationIntent,
@@ -273,6 +279,676 @@ function compatibilityReportSourceId(value: string | null | undefined): string {
 }
 const RUN_KIND_BACKUP = "backup";
 const RUN_KIND_RESTORE = "restore";
+
+/*
+ * Complete, fail-closed safety projection used only by the private Workspace
+ * freeze command.  This is deliberately not a second Run decoder: it checks
+ * the physical/JSON fields that identify execution authority and the small
+ * terminal evidence set described by workspace-management-quiescence.md.
+ */
+const PG_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL = `
+  case
+    when jsonb_typeof(run.run_json -> 'auditEvents') = 'array'
+      then run.run_json -> 'auditEvents'
+    else '[]'::jsonb
+  end
+`;
+
+const PG_WORKSPACE_FREEZE_VALID_APPLY_AUDIT_SQL = `
+  jsonb_typeof(run.run_json -> 'auditEvents') = 'array'
+  and not exists (
+    select 1
+      from jsonb_array_elements(
+        ${PG_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}
+      ) as audit_event(value)
+     where jsonb_typeof(audit_event.value) is distinct from 'object'
+        or jsonb_typeof(audit_event.value -> 'type') is distinct from 'string'
+        or btrim(audit_event.value ->> 'type') = ''
+        or case
+             when audit_event.value ? 'data' then
+               jsonb_typeof(audit_event.value -> 'data') is distinct from 'object'
+               or (
+                 audit_event.value -> 'data' ? 'providerDispatched'
+                 and jsonb_typeof(
+                   audit_event.value -> 'data' -> 'providerDispatched'
+                 ) is distinct from 'boolean'
+               )
+               or (
+                 audit_event.value -> 'data' ? 'lifecycleActionDispatched'
+                 and jsonb_typeof(
+                   audit_event.value -> 'data' -> 'lifecycleActionDispatched'
+                 ) is distinct from 'boolean'
+               )
+               or (
+                 audit_event.value -> 'data' ? 'actionDispatched'
+                 and jsonb_typeof(
+                   audit_event.value -> 'data' -> 'actionDispatched'
+                 ) is distinct from 'boolean'
+               )
+             else false
+           end
+  )
+`;
+
+const PG_WORKSPACE_FREEZE_APPLY_DISPATCHED_SQL = `
+  exists (
+    select 1
+      from jsonb_array_elements(
+        ${PG_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}
+      ) as audit_event(value)
+     where audit_event.value -> 'data' -> 'providerDispatched' = 'true'::jsonb
+        or audit_event.value -> 'data' -> 'lifecycleActionDispatched' = 'true'::jsonb
+        or (
+          left(
+            audit_event.value ->> 'type',
+            length('lifecycle_action.')
+          ) = 'lifecycle_action.'
+          and audit_event.value -> 'data' -> 'actionDispatched' = 'true'::jsonb
+        )
+  )
+`;
+
+const PG_WORKSPACE_FREEZE_APPLY_FINALIZERS_SETTLED_SQL = `
+  (
+    select coalesce(
+      max(audit_event.ordinality) filter (
+        where audit_event.value ->> 'type' = 'billing.capture.pending'
+      ),
+      0
+    )
+      from jsonb_array_elements(
+        ${PG_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}
+      ) with ordinality as audit_event(value, ordinality)
+  ) <= (
+    select coalesce(
+      max(audit_event.ordinality) filter (
+        where audit_event.value ->> 'type' = 'billing.capture.completed'
+      ),
+      0
+    )
+      from jsonb_array_elements(
+        ${PG_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}
+      ) with ordinality as audit_event(value, ordinality)
+  )
+  and (
+    select coalesce(
+      max(audit_event.ordinality) filter (
+        where audit_event.value ->> 'type' = 'runtime_secret.retirement.pending'
+      ),
+      0
+    )
+      from jsonb_array_elements(
+        ${PG_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}
+      ) with ordinality as audit_event(value, ordinality)
+  ) <= (
+    select coalesce(
+      max(audit_event.ordinality) filter (
+        where audit_event.value ->> 'type' = 'runtime_secret.retirement.completed'
+      ),
+      0
+    )
+      from jsonb_array_elements(
+        ${PG_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}
+      ) with ordinality as audit_event(value, ordinality)
+  )
+`;
+
+const PG_WORKSPACE_FREEZE_RUN_BLOCKER_SQL = `
+  not coalesce((
+    run.lease_token is null
+    and run.kind in (
+      'plan', 'destroy_plan', 'drift_check', 'apply', 'destroy_apply',
+      'source_sync', 'compatibility_check', 'backup', 'restore'
+    )
+    and run.status in ('succeeded', 'failed', 'cancelled', 'expired')
+    and jsonb_typeof(run.run_json) = 'object'
+    and jsonb_typeof(run.run_json -> 'id') = 'string'
+    and btrim(run.run_json ->> 'id') <> ''
+    and run.run_json ->> 'id' = run.id
+    and jsonb_typeof(run.run_json -> 'workspaceId') = 'string'
+    and btrim(run.run_json ->> 'workspaceId') <> ''
+    and run.run_json ->> 'workspaceId' = run.space_id
+    and jsonb_typeof(run.run_json -> 'status') = 'string'
+    and run.run_json ->> 'status' = run.status
+    and case
+      when run.source_id is null then not (run.run_json ? 'sourceId')
+      else jsonb_typeof(run.run_json -> 'sourceId') = 'string'
+        and btrim(run.run_json ->> 'sourceId') <> ''
+        and run.run_json ->> 'sourceId' = run.source_id
+    end
+    and case
+      when run.installation_id is null then not (run.run_json ? 'capsuleId')
+      else jsonb_typeof(run.run_json -> 'capsuleId') = 'string'
+        and btrim(run.run_json ->> 'capsuleId') <> ''
+        and run.run_json ->> 'capsuleId' = run.installation_id
+    end
+    and (
+      not (run.run_json ? 'environment')
+      or (
+        jsonb_typeof(run.run_json -> 'environment') = 'string'
+        and btrim(run.run_json ->> 'environment') <> ''
+      )
+    )
+    and case
+      when run.kind in ('plan', 'destroy_plan', 'drift_check') then
+        not (run.run_json ? 'environment')
+        and (
+          not (run.run_json ? 'capsuleContext')
+          or (
+            jsonb_typeof(run.run_json -> 'capsuleContext') = 'object'
+            and jsonb_typeof(run.run_json -> 'capsuleContext' -> 'workspaceId') = 'string'
+            and run.run_json -> 'capsuleContext' ->> 'workspaceId' = run.space_id
+            and jsonb_typeof(run.run_json -> 'capsuleContext' -> 'capsuleId') = 'string'
+            and btrim(run.run_json -> 'capsuleContext' ->> 'capsuleId') <> ''
+            and run.run_json -> 'capsuleContext' ->> 'capsuleId' = run.installation_id
+            and jsonb_typeof(run.run_json -> 'capsuleContext' -> 'environment') = 'string'
+            and btrim(run.run_json -> 'capsuleContext' ->> 'environment') <> ''
+          )
+        )
+      else true
+    end
+    and case
+      when run.heartbeat_at is null then not (run.run_json ? 'heartbeatAt')
+      else run.heartbeat_at between 0 and 9007199254740991
+        and jsonb_typeof(run.run_json -> 'heartbeatAt') = 'number'
+        and run.run_json -> 'heartbeatAt' = to_jsonb(run.heartbeat_at)
+    end
+    and case
+      when run.kind in ('plan', 'destroy_plan', 'drift_check', 'apply', 'destroy_apply')
+      then
+        case when jsonb_typeof(run.run_json -> 'createdAt') = 'number' then
+          run.run_json ->> 'createdAt' ~ '^(0|[1-9][0-9]*)$'
+          and (run.run_json ->> 'createdAt')::numeric <= 9007199254740991
+        else false end
+        and run.run_json ->> 'createdAt' = run.created_at
+        and case when jsonb_typeof(run.run_json -> 'updatedAt') = 'number' then
+          run.run_json ->> 'updatedAt' ~ '^(0|[1-9][0-9]*)$'
+          and (run.run_json ->> 'updatedAt')::numeric <= 9007199254740991
+        else false end
+        and (
+          not (run.run_json ? 'startedAt')
+          or case when jsonb_typeof(run.run_json -> 'startedAt') = 'number' then
+            run.run_json ->> 'startedAt' ~ '^(0|[1-9][0-9]*)$'
+            and (run.run_json ->> 'startedAt')::numeric <= 9007199254740991
+          else false end
+        )
+        and (
+          not (run.run_json ? 'finishedAt')
+          or case when jsonb_typeof(run.run_json -> 'finishedAt') = 'number' then
+            run.run_json ->> 'finishedAt' ~ '^(0|[1-9][0-9]*)$'
+            and (run.run_json ->> 'finishedAt')::numeric <= 9007199254740991
+          else false end
+        )
+      else
+        jsonb_typeof(run.run_json -> 'createdAt') = 'string'
+        and btrim(run.run_json ->> 'createdAt') <> ''
+        and run.run_json ->> 'createdAt' = run.created_at
+        and (
+          not (run.run_json ? 'startedAt')
+          or (
+            jsonb_typeof(run.run_json -> 'startedAt') = 'string'
+            and btrim(run.run_json ->> 'startedAt') <> ''
+          )
+        )
+        and (
+          not (run.run_json ? 'finishedAt')
+          or (
+            jsonb_typeof(run.run_json -> 'finishedAt') = 'string'
+            and btrim(run.run_json ->> 'finishedAt') <> ''
+          )
+        )
+    end
+    and case
+      when run.kind in ('plan', 'destroy_plan', 'drift_check') then
+        (
+          not (run.run_json ? 'requiresApproval')
+          or jsonb_typeof(run.run_json -> 'requiresApproval') = 'boolean'
+        )
+        and (
+          not (run.run_json ? 'appliedApplyRunId')
+          or (
+            jsonb_typeof(run.run_json -> 'appliedApplyRunId') = 'string'
+            and btrim(run.run_json ->> 'appliedApplyRunId') <> ''
+          )
+        )
+        and (
+          not (run.run_json ? 'approval')
+          or (
+            jsonb_typeof(run.run_json -> 'approval') = 'object'
+            and case when jsonb_typeof(
+              run.run_json -> 'approval' -> 'approvedAt'
+            ) = 'number' then
+              run.run_json -> 'approval' ->> 'approvedAt' ~
+                '^(0|[1-9][0-9]*)$'
+              and (run.run_json -> 'approval' ->> 'approvedAt')::numeric <=
+                9007199254740991
+            else false end
+          )
+        )
+        and not (
+          run.status = 'succeeded'
+          and run.kind <> 'drift_check'
+          and (
+            run.run_json ->> 'operation' = 'destroy'
+            or coalesce(
+              run.run_json -> 'requiresApproval' = 'true'::jsonb,
+              false
+            )
+          )
+          and not (run.run_json ? 'approval')
+          and not (run.run_json ? 'appliedApplyRunId')
+        )
+      else true
+    end
+    and case run.kind
+      when 'plan' then
+        not (run.run_json ? 'kind')
+        and not (run.run_json ? 'type')
+        and not (run.run_json ? 'planRunId')
+        and not (run.run_json ? 'expected')
+        and not (run.run_json ? 'driftCheck')
+        and run.run_json ->> 'operation' in ('create', 'update')
+        and jsonb_typeof(run.run_json -> 'sourceDigest') = 'string'
+        and btrim(run.run_json ->> 'sourceDigest') <> ''
+        and jsonb_typeof(run.run_json -> 'variablesDigest') = 'string'
+        and btrim(run.run_json ->> 'variablesDigest') <> ''
+      when 'destroy_plan' then
+        not (run.run_json ? 'kind')
+        and not (run.run_json ? 'type')
+        and not (run.run_json ? 'planRunId')
+        and not (run.run_json ? 'expected')
+        and not (run.run_json ? 'driftCheck')
+        and run.run_json ->> 'operation' = 'destroy'
+        and jsonb_typeof(run.run_json -> 'sourceDigest') = 'string'
+        and btrim(run.run_json ->> 'sourceDigest') <> ''
+        and jsonb_typeof(run.run_json -> 'variablesDigest') = 'string'
+        and btrim(run.run_json ->> 'variablesDigest') <> ''
+      when 'drift_check' then
+        not (run.run_json ? 'kind')
+        and not (run.run_json ? 'type')
+        and not (run.run_json ? 'planRunId')
+        and not (run.run_json ? 'expected')
+        and run.run_json ->> 'operation' = 'update'
+        and run.run_json -> 'driftCheck' = 'true'::jsonb
+        and jsonb_typeof(run.run_json -> 'sourceDigest') = 'string'
+        and btrim(run.run_json ->> 'sourceDigest') <> ''
+        and jsonb_typeof(run.run_json -> 'variablesDigest') = 'string'
+        and btrim(run.run_json ->> 'variablesDigest') <> ''
+      when 'apply' then
+        not (run.run_json ? 'kind')
+        and not (run.run_json ? 'type')
+        and not (run.run_json ? 'sourceDigest')
+        and not (run.run_json ? 'variablesDigest')
+        and run.run_json ->> 'operation' in ('create', 'update')
+        and jsonb_typeof(run.run_json -> 'planRunId') = 'string'
+        and btrim(run.run_json ->> 'planRunId') <> ''
+        and jsonb_typeof(run.run_json -> 'expected') = 'object'
+        and ${PG_WORKSPACE_FREEZE_VALID_APPLY_AUDIT_SQL}
+        and ${PG_WORKSPACE_FREEZE_APPLY_FINALIZERS_SETTLED_SQL}
+        and case run.status
+          when 'succeeded' then true
+          when 'failed' then
+            not (run.run_json ? 'stateVersionId')
+            and not (run.run_json ? 'outputId')
+            and not (run.run_json ? 'executionEvidence')
+            and not (${PG_WORKSPACE_FREEZE_APPLY_DISPATCHED_SQL})
+            and exists (
+              select 1
+                from jsonb_array_elements(
+                  ${PG_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}
+                ) as audit_event(value)
+               where audit_event.value ->> 'type' = 'apply.failed'
+                 and audit_event.value -> 'data' -> 'providerDispatched' = 'false'::jsonb
+            )
+          else
+            not (run.run_json ? 'stateVersionId')
+            and not (run.run_json ? 'outputId')
+            and not (run.run_json ? 'executionEvidence')
+            and not (run.run_json ? 'startedAt')
+            and not (run.run_json ? 'heartbeatAt')
+            and not (${PG_WORKSPACE_FREEZE_APPLY_DISPATCHED_SQL})
+        end
+      when 'destroy_apply' then
+        not (run.run_json ? 'kind')
+        and not (run.run_json ? 'type')
+        and not (run.run_json ? 'sourceDigest')
+        and not (run.run_json ? 'variablesDigest')
+        and run.run_json ->> 'operation' = 'destroy'
+        and jsonb_typeof(run.run_json -> 'planRunId') = 'string'
+        and btrim(run.run_json ->> 'planRunId') <> ''
+        and jsonb_typeof(run.run_json -> 'expected') = 'object'
+        and ${PG_WORKSPACE_FREEZE_VALID_APPLY_AUDIT_SQL}
+        and ${PG_WORKSPACE_FREEZE_APPLY_FINALIZERS_SETTLED_SQL}
+        and case run.status
+          when 'succeeded' then true
+          when 'failed' then
+            not (run.run_json ? 'stateVersionId')
+            and not (run.run_json ? 'outputId')
+            and not (run.run_json ? 'executionEvidence')
+            and not (${PG_WORKSPACE_FREEZE_APPLY_DISPATCHED_SQL})
+            and exists (
+              select 1
+                from jsonb_array_elements(
+                  ${PG_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}
+                ) as audit_event(value)
+               where (
+                   audit_event.value ->> 'type' = 'apply.failed'
+                   or audit_event.value ->> 'type' = 'destroy.failed'
+                 )
+                 and audit_event.value -> 'data' -> 'providerDispatched' = 'false'::jsonb
+            )
+          else
+            not (run.run_json ? 'stateVersionId')
+            and not (run.run_json ? 'outputId')
+            and not (run.run_json ? 'executionEvidence')
+            and not (run.run_json ? 'startedAt')
+            and not (run.run_json ? 'heartbeatAt')
+            and not (${PG_WORKSPACE_FREEZE_APPLY_DISPATCHED_SQL})
+        end
+      when 'source_sync' then
+        run.status in ('succeeded', 'failed')
+        and run.run_json ->> 'kind' = 'source_sync'
+        and not (run.run_json ? 'type')
+        and not (run.run_json ? 'operation')
+        and not (run.run_json ? 'sourceDigest')
+        and not (run.run_json ? 'variablesDigest')
+        and not (run.run_json ? 'planRunId')
+        and not (run.run_json ? 'expected')
+        and jsonb_typeof(run.run_json -> 'sourceId') = 'string'
+        and btrim(run.run_json ->> 'sourceId') <> ''
+      when 'compatibility_check' then
+        run.run_json ->> 'type' = 'compatibility_check'
+        and not (run.run_json ? 'kind')
+        and not (run.run_json ? 'operation')
+        and not (run.run_json ? 'sourceDigest')
+        and not (run.run_json ? 'variablesDigest')
+        and not (run.run_json ? 'planRunId')
+        and not (run.run_json ? 'expected')
+      when 'backup' then
+        run.run_json ->> 'type' = 'backup'
+        and not (run.run_json ? 'kind')
+        and not (run.run_json ? 'operation')
+        and not (run.run_json ? 'sourceDigest')
+        and not (run.run_json ? 'variablesDigest')
+        and not (run.run_json ? 'planRunId')
+        and not (run.run_json ? 'expected')
+      when 'restore' then
+        run.run_json ->> 'type' = 'restore'
+        and not (run.run_json ? 'kind')
+        and not (run.run_json ? 'operation')
+        and not (run.run_json ? 'sourceDigest')
+        and not (run.run_json ? 'variablesDigest')
+        and not (run.run_json ? 'planRunId')
+        and not (run.run_json ? 'expected')
+        and jsonb_typeof(run.run_json -> 'capsuleId') = 'string'
+        and btrim(run.run_json ->> 'capsuleId') <> ''
+        and jsonb_typeof(run.run_json -> 'environment') = 'string'
+        and btrim(run.run_json ->> 'environment') <> ''
+        and case run.status
+          when 'cancelled' then
+            not (run.run_json ? 'startedAt')
+            and not (run.run_json ? 'heartbeatAt')
+            and not (run.run_json ? 'restoredStateVersionId')
+            and not (run.run_json ? 'restoredServiceData')
+          when 'succeeded' then
+            jsonb_typeof(run.run_json -> 'restoredStateVersionId') = 'string'
+            and btrim(run.run_json ->> 'restoredStateVersionId') <> ''
+            and jsonb_typeof(run.run_json -> 'restoredFromStateVersionId') = 'string'
+            and btrim(run.run_json ->> 'restoredFromStateVersionId') <> ''
+            and (
+              not (run.run_json ? 'restoreServiceData')
+              and not (run.run_json ? 'restoredServiceData')
+              or run.run_json -> 'restoreServiceData' = 'false'::jsonb
+                and not (run.run_json ? 'restoredServiceData')
+              or run.run_json -> 'restoreServiceData' = 'true'::jsonb
+                and jsonb_typeof(run.run_json -> 'restoredServiceData') = 'object'
+                and run.run_json -> 'restoredServiceData' ->> 'status' = 'restored'
+                and jsonb_typeof(
+                  run.run_json -> 'restoredServiceData' -> 'ref'
+                ) = 'string'
+                and btrim(
+                  run.run_json -> 'restoredServiceData' ->> 'ref'
+                ) <> ''
+                and jsonb_typeof(
+                  run.run_json -> 'restoredServiceData' -> 'digest'
+                ) = 'string'
+                and btrim(
+                  run.run_json -> 'restoredServiceData' ->> 'digest'
+                ) <> ''
+            )
+            and exists (
+              select 1
+                from takosumi_state_versions as target_state
+                join takosumi_state_versions as source_state
+                  on source_state.id = run.run_json ->> 'restoredFromStateVersionId'
+               where target_state.id = run.run_json ->> 'restoredStateVersionId'
+                 and target_state.space_id = run.space_id
+                 and target_state.installation_id = run.installation_id
+                 and target_state.environment = run.run_json ->> 'environment'
+                 and source_state.space_id = run.space_id
+                 and source_state.installation_id = run.installation_id
+                 and source_state.environment = run.run_json ->> 'environment'
+                 and target_state.generation > source_state.generation
+                 and jsonb_typeof(run.run_json -> 'restoreStateGeneration') = 'number'
+                 and run.run_json -> 'restoreStateGeneration' =
+                   to_jsonb(source_state.generation)
+                 and jsonb_typeof(target_state.snapshot_json) = 'object'
+                 and target_state.snapshot_json -> 'id' = to_jsonb(target_state.id)
+                 and target_state.snapshot_json -> 'workspaceId' = to_jsonb(target_state.space_id)
+                 and target_state.snapshot_json -> 'capsuleId' = to_jsonb(target_state.installation_id)
+                 and target_state.snapshot_json -> 'environment' = to_jsonb(target_state.environment)
+                 and target_state.snapshot_json -> 'generation' =
+                   to_jsonb(target_state.generation)
+                 and target_state.snapshot_json -> 'createdByRunId' = to_jsonb(run.id)
+                 and jsonb_typeof(source_state.snapshot_json) = 'object'
+                 and source_state.snapshot_json -> 'id' = to_jsonb(source_state.id)
+                 and source_state.snapshot_json -> 'workspaceId' = to_jsonb(source_state.space_id)
+                 and source_state.snapshot_json -> 'capsuleId' = to_jsonb(source_state.installation_id)
+                 and source_state.snapshot_json -> 'environment' = to_jsonb(source_state.environment)
+                 and source_state.snapshot_json -> 'generation' =
+                   to_jsonb(source_state.generation)
+                 and jsonb_typeof(source_state.snapshot_json -> 'createdByRunId') = 'string'
+                 and btrim(source_state.snapshot_json ->> 'createdByRunId') <> ''
+                 and (
+                   (
+                     not exists (
+                       select 1
+                         from takosumi_capsule_interface_materialization_intents
+                        where id = 'cimi_' ||
+                          (source_state.snapshot_json ->> 'createdByRunId')
+                     )
+                     and not exists (
+                       select 1
+                         from takosumi_capsule_interface_materialization_intents
+                        where id = 'cimi_restore_' ||
+                          (source_state.snapshot_json ->> 'createdByRunId')
+                     )
+                   )
+                   or exists (
+                     select 1
+                       from takosumi_capsule_interface_materialization_intents
+                         as source_intent
+                      where source_intent.id = case
+                        when exists (
+                          select 1
+                            from takosumi_capsule_interface_materialization_intents
+                           where id = 'cimi_' ||
+                             (source_state.snapshot_json ->> 'createdByRunId')
+                        ) then 'cimi_' ||
+                          (source_state.snapshot_json ->> 'createdByRunId')
+                        else 'cimi_restore_' ||
+                          (source_state.snapshot_json ->> 'createdByRunId')
+                      end
+                        and source_intent.workspace_id = run.space_id
+                        and source_intent.capsule_id = run.installation_id
+                        and source_intent.state_version_id = source_state.id
+                        and source_intent.state_generation = source_state.generation
+                        and exists (
+                          select 1
+                            from takosumi_capsule_interface_materialization_intents
+                              as replacement_intent
+                           where replacement_intent.id = 'cimi_restore_' || run.id
+                             and replacement_intent.apply_run_id is null
+                             and replacement_intent.restore_run_id = run.id
+                             and replacement_intent.source_intent_id = source_intent.id
+                             and replacement_intent.workspace_id = run.space_id
+                             and replacement_intent.capsule_id = run.installation_id
+                             and replacement_intent.state_version_id = target_state.id
+                             and replacement_intent.state_generation = target_state.generation
+                             and replacement_intent.blueprints_digest =
+                               source_intent.blueprints_digest
+                        )
+                   )
+                 )
+            )
+          else false
+        end
+      else false
+    end
+  ), false)
+`;
+
+const PG_WORKSPACE_FREEZE_INTERFACE_BLOCKER_SQL = `
+  not coalesce((
+    intent.status = 'completed'
+    and intent.lease_token is null
+    and intent.lease_expires_at is null
+    and intent.error_json is null
+    and intent.dead_lettered_at is null
+    and btrim(intent.id) <> ''
+    and btrim(intent.workspace_id) <> ''
+    and btrim(intent.capsule_id) <> ''
+    and btrim(intent.install_config_id) <> ''
+    and btrim(intent.state_version_id) <> ''
+    and btrim(intent.output_id) <> ''
+    and btrim(intent.completed_at) <> ''
+    and intent.state_generation >= 1
+    and intent.total_items >= 1
+    and intent.next_item_index between 0 and intent.total_items
+    and intent.attempts >= 0
+    and intent.blueprints_digest ~ '^sha256:[0-9a-f]{64}$'
+    and (
+      intent.apply_run_id is not null
+      and btrim(intent.apply_run_id) <> ''
+      and intent.restore_run_id is null
+      and intent.source_intent_id is null
+      and intent.id = 'cimi_' || intent.apply_run_id
+      or intent.apply_run_id is null
+      and intent.restore_run_id is not null
+      and btrim(intent.restore_run_id) <> ''
+      and intent.source_intent_id is not null
+      and btrim(intent.source_intent_id) <> ''
+      and intent.id = 'cimi_restore_' || intent.restore_run_id
+    )
+    and exists (
+      select 1
+        from takosumi_runs as origin_run
+       where origin_run.id = coalesce(intent.apply_run_id, intent.restore_run_id)
+         and origin_run.space_id = intent.workspace_id
+         and origin_run.installation_id = intent.capsule_id
+         and origin_run.status = 'succeeded'
+         and (
+           intent.apply_run_id is not null and origin_run.kind = 'apply'
+           or intent.restore_run_id is not null and origin_run.kind = 'restore'
+         )
+    )
+    and exists (
+      select 1
+        from takosumi_state_versions as intent_state
+       where intent_state.id = intent.state_version_id
+         and intent_state.space_id = intent.workspace_id
+         and intent_state.installation_id = intent.capsule_id
+         and intent_state.generation = intent.state_generation
+         and jsonb_typeof(intent_state.snapshot_json) = 'object'
+         and intent_state.snapshot_json -> 'id' = to_jsonb(intent_state.id)
+         and intent_state.snapshot_json -> 'workspaceId' = to_jsonb(intent_state.space_id)
+         and intent_state.snapshot_json -> 'capsuleId' = to_jsonb(intent_state.installation_id)
+         and intent_state.snapshot_json -> 'generation' =
+           to_jsonb(intent_state.generation)
+         and intent_state.snapshot_json -> 'createdByRunId' =
+           to_jsonb(coalesce(intent.apply_run_id, intent.restore_run_id))
+    )
+    and (
+      intent.restore_run_id is null
+      or exists (
+        select 1
+          from takosumi_runs as restore_origin
+          join takosumi_state_versions as source_state
+            on source_state.id =
+              restore_origin.run_json ->> 'restoredFromStateVersionId'
+          join takosumi_capsule_interface_materialization_intents
+            as source_intent
+            on source_intent.id = intent.source_intent_id
+         where restore_origin.id = intent.restore_run_id
+           and restore_origin.kind = 'restore'
+           and restore_origin.space_id = intent.workspace_id
+           and restore_origin.installation_id = intent.capsule_id
+           and jsonb_typeof(
+                 restore_origin.run_json -> 'restoredFromStateVersionId'
+               ) = 'string'
+           and source_state.space_id = intent.workspace_id
+           and source_state.installation_id = intent.capsule_id
+           and source_state.environment =
+             restore_origin.run_json ->> 'environment'
+           and source_state.generation >= 1
+           and jsonb_typeof(source_state.snapshot_json) = 'object'
+           and source_state.snapshot_json -> 'id' = to_jsonb(source_state.id)
+           and source_state.snapshot_json -> 'workspaceId' = to_jsonb(source_state.space_id)
+           and source_state.snapshot_json -> 'capsuleId' =
+             to_jsonb(source_state.installation_id)
+           and source_state.snapshot_json -> 'environment' =
+             to_jsonb(source_state.environment)
+           and source_state.snapshot_json -> 'generation' =
+             to_jsonb(source_state.generation)
+           and jsonb_typeof(
+                 source_state.snapshot_json -> 'createdByRunId'
+               ) = 'string'
+           and btrim(
+                 source_state.snapshot_json ->> 'createdByRunId'
+               ) <> ''
+           and source_intent.id = case
+             when exists (
+               select 1
+                 from takosumi_capsule_interface_materialization_intents
+                where id = 'cimi_' ||
+                  (source_state.snapshot_json ->> 'createdByRunId')
+             ) then 'cimi_' ||
+               (source_state.snapshot_json ->> 'createdByRunId')
+             else 'cimi_restore_' ||
+               (source_state.snapshot_json ->> 'createdByRunId')
+           end
+           and source_intent.workspace_id = intent.workspace_id
+           and source_intent.capsule_id = intent.capsule_id
+           and source_intent.install_config_id = intent.install_config_id
+           and source_intent.state_version_id = source_state.id
+           and source_intent.state_generation = source_state.generation
+           and source_intent.blueprints_digest = intent.blueprints_digest
+      )
+    )
+    and jsonb_typeof(intent.receipt_json) = 'object'
+    and (
+      select count(*)
+        from jsonb_object_keys(
+          case when jsonb_typeof(intent.receipt_json) = 'object'
+            then intent.receipt_json else '{}'::jsonb end
+        )
+    ) = 3
+    and jsonb_typeof(intent.receipt_json -> 'disposition') = 'string'
+    and intent.receipt_json ->> 'disposition' in (
+      'materialized',
+      'retired_before_materialization',
+      'superseded_before_materialization'
+    )
+    and jsonb_typeof(intent.receipt_json -> 'blueprintsDigest') = 'string'
+    and intent.receipt_json ->> 'blueprintsDigest' = intent.blueprints_digest
+    and jsonb_typeof(intent.receipt_json -> 'completedAt') = 'string'
+    and intent.receipt_json ->> 'completedAt' = intent.completed_at
+    and (
+      intent.receipt_json ->> 'disposition' <> 'materialized'
+      or intent.next_item_index = intent.total_items
+    )
+  ), false)
+`;
 
 /** Internal transaction abort used when a manual-backup settlement CAS loses. */
 class BackupCommitConflictError extends Error {
@@ -3113,6 +3789,85 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         return { status: "existing" as const, management: current };
       }
       return { status: "conflict" as const, management: current };
+    });
+  }
+
+  async freezeWorkspaceManagementIfQuiescent(
+    expectedInput: FreezeWorkspaceManagementExpectation,
+  ): Promise<FreezeWorkspaceManagementResult> {
+    const expected = structuredClone(expectedInput);
+    assertWorkspaceFreezeExpectation(expected);
+    return await this.#client.transaction(async (transaction) => {
+      // Keep the Workspace lock outermost. Every management-fenced admission
+      // takes this lock before inserting dependent work, so the blocker scan
+      // and draining -> frozen CAS share one serialization boundary.
+      const current = await pgWorkspaceManagementForTransaction(
+        transaction,
+        expected.workspaceId,
+      );
+      if (current === undefined) return { status: "not_found" as const };
+      if (current.managementEpoch !== expected.managementEpoch) {
+        return {
+          status: "conflict" as const,
+          management: current,
+        };
+      }
+      if (current.managementState === "frozen") {
+        return { status: "existing" as const, management: current };
+      }
+      if (current.managementState !== "draining") {
+        return {
+          status: "conflict" as const,
+          management: current,
+        };
+      }
+
+      const rows = await transaction.query<{
+        readonly managementState: string | null;
+        readonly managementEpoch: number | string | null;
+      }>(
+        `update takosumi_workspaces as workspace
+            set management_state = 'frozen'
+          where workspace.id = $1
+            and workspace.management_state = 'draining'
+            and workspace.management_epoch = $2
+            and not exists (
+              select 1
+                from takosumi_runs as run
+               where run.space_id = workspace.id
+                 and (${PG_WORKSPACE_FREEZE_RUN_BLOCKER_SQL})
+            )
+            and not exists (
+              select 1
+                from takosumi_capsule_interface_materialization_intents as intent
+               where intent.workspace_id = workspace.id
+                 and (${PG_WORKSPACE_FREEZE_INTERFACE_BLOCKER_SQL})
+            )
+            and not exists (
+              select 1
+                from takosumi_git_install_plans as git_plan
+               where git_plan.workspace_id = workspace.id
+                 and (${PG_GIT_INSTALL_PLAN_MANAGEMENT_BLOCKER_SQL})
+            )
+        returning workspace.management_state as "managementState",
+                  workspace.management_epoch as "managementEpoch"`,
+        [expected.workspaceId, expected.managementEpoch],
+      );
+      const row = rows.rows[0];
+      if (row === undefined) {
+        // The row is still locked and was confirmed as the exact draining
+        // expectation above; a failed conditional update is therefore a
+        // complete, fail-closed blocker result rather than a stale readback.
+        return { status: "blocked" as const, management: current };
+      }
+      return {
+        status: "frozen" as const,
+        management: normalizeWorkspaceManagement(
+          expected.workspaceId,
+          row.managementState,
+          row.managementEpoch,
+        ),
+      };
     });
   }
 
