@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
-import { resolve } from "node:path";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import {
   assertConfigTargetsSource,
   assertPlatformRunnerImageProof,
@@ -12,15 +14,30 @@ import {
   platformCommandFailureDiagnostic,
   platformDashboardBuildEnvironment,
   platformTargetForEnvironment,
+  readPlatformContainer,
   remoteBranchContainsCommit,
   selectRecoveredVersion,
   secretNames,
+  type PlatformReleaseCommand,
   waitForPlatformContainerReadback,
 } from "../../scripts/platform-worker-release.ts";
 
 const root = resolve(import.meta.dir, "../..");
 const PROVED_RUNNER_IMAGE =
   `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"b".repeat(64)}`;
+
+function containerReadbackConfig(image: string): { path: string; dispose: () => void } {
+  const directory = mkdtempSync(join(tmpdir(), "takosumi-platform-container-readback-"));
+  const path = join(directory, "wrangler.toml");
+  const accountId = /^registry\.cloudflare\.com\/([0-9a-f]{32})\//u.exec(image)?.[1];
+  if (!accountId) throw new Error("test runner image account id missing");
+  writeFileSync(
+    path,
+    `name = "takosumi-platform-staging"\naccount_id = "${accountId}"\n\n[[containers]]\nclass_name = "OpenTofuRunnerObject"\nimage = "${image}"\n`,
+    { mode: 0o600 },
+  );
+  return { path, dispose: () => rmSync(directory, { recursive: true, force: true }) };
+}
 
 test("platform release owns isolated staging and production targets", () => {
   expect(platformTargetForEnvironment("staging")).toEqual({
@@ -730,6 +747,374 @@ test("platform container readback fails closed after persistent list/detail mism
     ),
   ).rejects.toThrow("platform_worker_release_container_list_detail_mismatch");
   expect(reads).toBe(36);
+});
+
+type LinkedRolloutFixtureOptions = {
+  readonly secondDetail?: (
+    detail: Readonly<Record<string, unknown>>,
+  ) => Record<string, unknown>;
+  readonly secondNativeSummary?: (
+    summary: Readonly<Record<string, unknown>>,
+  ) => Record<string, unknown>;
+  readonly rollout?: (
+    rollout: Readonly<Record<string, unknown>>,
+  ) => Record<string, unknown>;
+};
+
+function linkedRolloutFixture(options: LinkedRolloutFixtureOptions = {}) {
+  const id = "11111111-1111-4111-8111-111111111111";
+  const name = "takosumi-staging-opentofurunnerobject";
+  const oldImage = `registry.cloudflare.com/${"b".repeat(32)}/takosumi-runner@sha256:${"c".repeat(64)}`;
+  const newImage = `registry.cloudflare.com/${"b".repeat(32)}/takosumi-runner@sha256:${"d".repeat(64)}`;
+  const rolloutId = "22222222-2222-4222-8222-222222222222";
+  const summary = {
+    id,
+    name,
+    state: "ready",
+    image: oldImage,
+    version: 113,
+  } as const;
+  const detail = {
+    id,
+    name,
+    version: 114,
+    configuration: { image: newImage },
+    health: {
+      errors: [],
+      instances: {
+        active: 0,
+        assigned: 0,
+        healthy: 7,
+        stopped: 0,
+        failed: 0,
+        scheduling: 0,
+        starting: 0,
+      },
+    },
+  } as const;
+  const rollout = {
+    id: rolloutId,
+    kind: "full_auto",
+    status: "completed",
+    strategy: "rolling",
+    created_at: "2026-09-11T00:00:00.000Z",
+    last_updated_at: "2026-09-11T00:01:00.000Z",
+    current_version: 113,
+    target_version: 114,
+    current_configuration: { image: oldImage },
+    target_configuration: { image: newImage },
+    progress: {
+      total_steps: 1,
+      current_step: 1,
+      updated_instances: 7,
+      total_instances: 7,
+      version_distribution: {
+        target_version_instances: 7,
+        current_version_instances: 0,
+        target_version_percentage: 100,
+      },
+    },
+    health: detail.health,
+    steps: [
+      {
+        id: 1,
+        status: "completed",
+        step_size: { percentage: 100 },
+        started_at: "2026-09-11T00:00:00.000Z",
+        completed_at: "2026-09-11T00:00:00.000Z",
+      },
+    ],
+  } as const;
+  const settledSummary = {
+    ...summary,
+    image: newImage,
+    version: 114,
+  };
+  const settledDetail = { ...detail };
+  const settledNativeSummary = {
+    id,
+    name,
+    version: 114,
+    configuration: { image: newImage },
+    account_id: "b".repeat(32),
+    health: detail.health,
+  };
+  const firstNativeSummary = {
+    id,
+    name,
+    version: 113,
+    configuration: { image: oldImage },
+    account_id: "b".repeat(32),
+    health: detail.health,
+    active_rollout_id: rolloutId,
+  };
+  const listPath = `/containers/applications?name=${encodeURIComponent(name)}`;
+  const rolloutPath = `/containers/applications/${id}/rollouts/${rolloutId}`;
+  const secondDetail = options.secondDetail?.(settledDetail) ?? settledDetail;
+  const secondNativeSummary =
+    options.secondNativeSummary?.(settledNativeSummary) ?? settledNativeSummary;
+  const settledRollout = options.rollout?.(rollout) ?? rollout;
+  const nativePaths: string[] = [];
+  const commandReads = { list: 0, info: 0 };
+  const nativeReads = { list: 0, rollout: 0 };
+  const command: PlatformReleaseCommand = async (argv) => {
+    const containersIndex = argv.indexOf("containers");
+    const action = containersIndex < 0 ? undefined : argv[containersIndex + 1];
+    if (action === "list") {
+      commandReads.list += 1;
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify([commandReads.list === 1 ? summary : settledSummary]),
+        stderr: "",
+      };
+    }
+    if (action === "info") {
+      commandReads.info += 1;
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify(commandReads.info === 1 ? detail : secondDetail),
+        stderr: "",
+      };
+    }
+    throw new Error(`unexpected container command: ${argv.join(" ")}`);
+  };
+  const nativeRead = async (path: string): Promise<unknown> => {
+    nativePaths.push(path);
+    if (path === listPath) {
+      nativeReads.list += 1;
+      return [nativeReads.list === 1 ? firstNativeSummary : secondNativeSummary];
+    }
+    if (path === rolloutPath) {
+      nativeReads.rollout += 1;
+      return settledRollout;
+    }
+    throw new Error(`unexpected native path: ${path}`);
+  };
+
+  return {
+    id,
+    name,
+    newImage,
+    rolloutId,
+    listPath,
+    rolloutPath,
+    command,
+    nativeRead,
+    nativePaths,
+    commandReads,
+    nativeReads,
+    config: containerReadbackConfig(newImage),
+  };
+}
+
+test("platform container readback accepts a completed linked rollout", async () => {
+  const fixture = linkedRolloutFixture();
+  try {
+    const state = await readPlatformContainer(
+      fixture.config.path,
+      "staging",
+      fixture.command,
+      fixture.nativeRead,
+    );
+
+    expect(state).toMatchObject({
+      id: fixture.id,
+      name: fixture.name,
+      state: "ready",
+      image: fixture.newImage,
+      version: 114,
+      hasActiveRollout: false,
+      health: { failed: 0, starting: 0, scheduling: 0, errorCount: 0 },
+    });
+    expect(fixture.commandReads).toEqual({ list: 2, info: 2 });
+    expect(fixture.nativeReads).toEqual({ list: 2, rollout: 2 });
+    expect(fixture.nativePaths).toHaveLength(4);
+    expect(fixture.nativePaths.filter((path) => path === fixture.listPath)).toHaveLength(2);
+    expect(fixture.nativePaths.filter((path) => path === fixture.rolloutPath)).toHaveLength(2);
+  } finally {
+    fixture.config.dispose();
+  }
+});
+
+test("platform container readback tolerates informational healthy-count drift", async () => {
+  const fixture = linkedRolloutFixture({
+    secondNativeSummary: (summary) => ({
+      ...summary,
+      health: {
+        errors: [],
+        instances: {
+          active: 0,
+          assigned: 0,
+          healthy: 6,
+          stopped: 0,
+          failed: 0,
+          scheduling: 0,
+          starting: 0,
+        },
+      },
+    }),
+  });
+  try {
+    const state = await readPlatformContainer(
+      fixture.config.path,
+      "staging",
+      fixture.command,
+      fixture.nativeRead,
+    );
+    expect(state).toMatchObject({
+      id: fixture.id,
+      name: fixture.name,
+      image: fixture.newImage,
+      version: 114,
+      hasActiveRollout: false,
+      health: { failed: 0, starting: 0, scheduling: 0, errorCount: 0 },
+    });
+  } finally {
+    fixture.config.dispose();
+  }
+});
+
+test("platform container readback rejects a changed second linked-rollout read", async () => {
+  const fixture = linkedRolloutFixture({
+    secondNativeSummary: (summary) => ({ ...summary, version: 115 }),
+  });
+  try {
+    await expect(
+      readPlatformContainer(
+        fixture.config.path,
+        "staging",
+        fixture.command,
+        fixture.nativeRead,
+      ),
+    ).rejects.toThrow(/^platform_worker_release_container_/u);
+    expect(fixture.nativeReads.list).toBe(2);
+  } finally {
+    fixture.config.dispose();
+  }
+});
+
+test("platform container readback rejects a completed rollout without a full-size step", async () => {
+  const fixture = linkedRolloutFixture({
+    rollout: (rollout) => ({
+      ...rollout,
+      steps: [
+        {
+          id: 1,
+          status: "completed",
+          completed_at: "2026-09-11T00:00:00.000Z",
+        },
+      ],
+    }),
+  });
+  try {
+    await expect(
+      readPlatformContainer(
+        fixture.config.path,
+        "staging",
+        fixture.command,
+        fixture.nativeRead,
+      ),
+    ).rejects.toThrow(/^platform_worker_release_container_/u);
+  } finally {
+    fixture.config.dispose();
+  }
+});
+
+test("platform container readback rejects a partially complete rollout", async () => {
+  const fixture = linkedRolloutFixture({
+    rollout: (rollout) => ({
+      ...rollout,
+      progress: {
+        total_steps: 1,
+        current_step: 1,
+        updated_instances: 6,
+        total_instances: 7,
+        version_distribution: {
+          target_version_instances: 6,
+          current_version_instances: 1,
+          target_version_percentage: 86,
+        },
+      },
+    }),
+  });
+  try {
+    await expect(
+      readPlatformContainer(
+        fixture.config.path,
+        "staging",
+        fixture.command,
+        fixture.nativeRead,
+      ),
+    ).rejects.toThrow(/^platform_worker_release_container_/u);
+  } finally {
+    fixture.config.dispose();
+  }
+});
+
+test("platform container readback refuses an unlinked list/detail mismatch", async () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  const name = "takosumi-staging-opentofurunnerobject";
+  const oldImage = `registry.cloudflare.com/${"b".repeat(32)}/takosumi-runner@sha256:${"c".repeat(64)}`;
+  const newImage = `registry.cloudflare.com/${"b".repeat(32)}/takosumi-runner@sha256:${"d".repeat(64)}`;
+  const command: PlatformReleaseCommand = async (argv) => {
+    const actionIndex = argv.indexOf("containers") + 1;
+    const action = argv[actionIndex];
+    if (action === "list") {
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify([{ id, name, state: "ready", image: oldImage, version: 113 }]),
+        stderr: "",
+      };
+    }
+    if (action === "info") {
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          id,
+          name,
+          version: 114,
+          configuration: { image: newImage },
+          health: {
+            errors: [],
+            instances: { failed: 0, starting: 0, scheduling: 0 },
+          },
+        }),
+        stderr: "",
+      };
+    }
+    throw new Error(`unexpected container command: ${argv.join(" ")}`);
+  };
+
+  const config = containerReadbackConfig(newImage);
+  try {
+    await expect(
+      readPlatformContainer(
+        config.path,
+        "staging",
+        command,
+        async (path) => {
+          if (path === `/containers/applications?name=${name}`) {
+            return [
+              {
+                id,
+                name,
+                version: 113,
+                configuration: { image: oldImage },
+                account_id: "b".repeat(32),
+                health: {
+                  errors: [],
+                  instances: { failed: 0, starting: 0, scheduling: 0 },
+                },
+              },
+            ];
+          }
+          throw new Error(`unexpected native path: ${path}`);
+        },
+      ),
+    ).rejects.toThrow("platform_worker_release_container_list_detail_mismatch");
+  } finally {
+    config.dispose();
+  }
 });
 
 test("lost acknowledgement recovery selects one post-plan Version and exact bindings", () => {

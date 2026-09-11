@@ -275,11 +275,29 @@ document must then emit that same UUID as `x-takosumi-version-id`; a cache hit,
 50/50 split, unchanged predecessor, or concurrent Version cannot satisfy ready
 evidence. Ready evidence repeats the plan's readable source repository/commit
 and canonical source-authority digest. It also requires the unique Container
-list row and authoritative detail to agree on the exact application id, name,
-version, and immutable configured image. Wrangler's list row supplies the synthesized
-application state; raw detail may omit that field, but must agree when it is
-present. The result must have no active rollout and no failed, starting,
-scheduling, or error entries.
+list row and authoritative detail to agree on the exact application id and name.
+Normally their version and immutable configured image also agree. Cloudflare
+can instead expose the completed rollout's base version/image in its list and
+the effective target version/image in exact application detail. That mismatch
+is accepted only with a native, exact linked rollout proving the list/raw
+application tuple is its current tuple and detail/configuration is its target
+tuple: completed status, one completed 100-percent step, a positive complete
+target-instance count, no old-version instances, and zero unhealthy counts or
+errors. The reader repeats the application, rollout, and detail reads before
+accepting the unchanged completed bridge or fully converged target projections.
+Missing links, malformed counts, changed identities, a new rollout or partial
+completion remain refusal, not permission to trust detail alone. Evidence
+records the verified effective target, not the stale base tuple.
+
+Wrangler's list row supplies the synthesized application state; raw detail may
+omit that field, but must agree when present. The effective result must have no
+active rollout and no failed, starting, scheduling, or error entries. Native
+healthy-instance counts are not required to equal historical rollout totals
+or each other across observations; lifecycle changes after a completed rollout
+do not change its completed current-to-target proof. A present healthy count
+must still be well-formed. Native
+fallback reads use only the fixed provider origin and in-memory credentials;
+Wrangler authentication output and its disk logging are never retained.
 
 If provider acknowledgement is lost, recovery lists the bounded recent Version
 set and accepts exactly one post-plan Version carrying that unique plan tag.

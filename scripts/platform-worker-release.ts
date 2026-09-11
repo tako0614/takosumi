@@ -58,6 +58,9 @@ export type { PlatformReleaseSourcePin } from "./lib/platform-release-source.ts"
 const ROOT = resolve(import.meta.dir, "..");
 const WRANGLER = resolve(ROOT, "node_modules/.bin/wrangler");
 const MAX_OUTPUT = 64 * 1024 * 1024;
+const NATIVE_CONTAINER_MAX_OUTPUT = 1024 * 1024;
+const NATIVE_CONTAINER_TIMEOUT_MS = 20_000;
+const CLOUDFLARE_API_ORIGIN = "https://api.cloudflare.com";
 // Dashboard bundling can legitimately exceed three minutes on the production
 // operator host while the portable suite and Wrangler share the same filesystem.
 // Keep the release bounded, but do not turn a slow, otherwise successful build
@@ -4831,12 +4834,131 @@ function configuredRunnerImage(configPath: string): string {
   }
 }
 
-async function readPlatformContainer(
+export async function readPlatformContainer(
   configPath: string,
   environment: PlatformEnvironment,
   command: PlatformReleaseCommand = requiredCommand,
+  _nativeRead?: (path: string) => Promise<unknown>,
 ): Promise<PlatformContainerState> {
   const expectedName = `${platformTargetForEnvironment(environment).workerName}-opentofurunnerobject`;
+  const summary = await readPlatformContainerSummary(
+    configPath,
+    expectedName,
+    command,
+  );
+  const detail = await readPlatformContainerInfo(
+    configPath,
+    summary.id as string,
+    command,
+  );
+  try {
+    return parsePlatformContainerDetail(summary, detail);
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      error.message !== "platform_worker_release_container_list_detail_mismatch"
+    ) {
+      throw error;
+    }
+  }
+
+  const accountId = platformContainerAccountIdFromConfig(configPath);
+  const target = platformContainerFallbackDetail(summary, detail, true);
+  const nativeRead =
+    _nativeRead ??
+    (await platformContainerNativeReader(configPath, accountId, command));
+  const applicationPath = `/containers/applications?name=${encodeURIComponent(expectedName)}`;
+  const firstApplication = platformContainerNativeApplication(
+    await nativeRead(applicationPath),
+    expectedName,
+    accountId,
+  );
+  if (
+    firstApplication.id !== summary.id ||
+    firstApplication.image !== summary.image ||
+    firstApplication.version !== summary.version ||
+    firstApplication.rolloutId === null ||
+    (firstApplication.state !== null &&
+      firstApplication.state !== summary.state)
+  ) {
+    throw new Error("platform_worker_release_container_list_detail_mismatch");
+  }
+
+  const rolloutPath = `/containers/applications/${encodeURIComponent(firstApplication.id)}/rollouts/${encodeURIComponent(firstApplication.rolloutId)}`;
+  const firstRollout = platformContainerNativeRollout(
+    await nativeRead(rolloutPath),
+    firstApplication.id,
+    firstApplication.rolloutId,
+  );
+  assertPlatformContainerRolloutBridge(
+    summary,
+    target,
+    firstApplication,
+    firstRollout,
+  );
+
+  // The provider projections are not transactional. Repeat every authority
+  // used by the bridge, and accept only the same completed bridge or a fully
+  // converged target projection. In particular, never combine fields from
+  // different second-read generations.
+  const secondSummary = await readPlatformContainerSummary(
+    configPath,
+    expectedName,
+    command,
+  );
+  const secondApplicationValue = await nativeRead(applicationPath);
+  const secondRolloutValue = await nativeRead(rolloutPath);
+  const secondDetail = await readPlatformContainerInfo(
+    configPath,
+    secondSummary.id as string,
+    command,
+  );
+  const secondApplication = platformContainerNativeApplication(
+    secondApplicationValue,
+    expectedName,
+    accountId,
+  );
+  const secondRollout = platformContainerNativeRollout(
+    secondRolloutValue,
+    firstApplication.id,
+    firstApplication.rolloutId,
+  );
+  const secondTarget = platformContainerFallbackDetail(
+    secondSummary,
+    secondDetail,
+    false,
+  );
+  assertPlatformContainerRepeatedBridge(
+    summary,
+    target,
+    firstApplication,
+    firstRollout,
+    secondSummary,
+    secondTarget,
+    secondApplication,
+    secondRollout,
+  );
+  return {
+    id: secondTarget.id,
+    name: secondTarget.name,
+    state: secondTarget.state,
+    image: secondTarget.image,
+    version: secondTarget.version,
+    hasActiveRollout: false,
+    health: {
+      failed: secondTarget.health.failed,
+      starting: secondTarget.health.starting,
+      scheduling: secondTarget.health.scheduling,
+      errorCount: secondTarget.health.errorCount,
+    },
+  };
+}
+
+async function readPlatformContainerSummary(
+  configPath: string,
+  expectedName: string,
+  command: PlatformReleaseCommand,
+): Promise<Readonly<Record<string, unknown>>> {
   const list = await command([
     WRANGLER,
     "containers",
@@ -4867,22 +4989,603 @@ async function readPlatformContainer(
   ) {
     throw new Error("platform_worker_release_container_list_invalid");
   }
-  const summary = matching[0];
+  return matching[0];
+}
+
+async function readPlatformContainerInfo(
+  configPath: string,
+  applicationId: string,
+  command: PlatformReleaseCommand,
+): Promise<unknown> {
   const info = await command([
     WRANGLER,
     "containers",
     "info",
-    summary.id as string,
+    applicationId,
     "--config",
     configPath,
   ]);
-  let detail: unknown;
   try {
-    detail = JSON.parse(info.stdout) as unknown;
+    return JSON.parse(info.stdout) as unknown;
   } catch {
     throw new Error("platform_worker_release_container_detail_invalid");
   }
-  return parsePlatformContainerDetail(summary, detail);
+}
+
+type PlatformContainerVerifiedHealth = PlatformContainerState["health"] &
+  Readonly<{ healthy: number | null }>;
+
+type PlatformContainerFallbackProjection = Readonly<{
+  id: string;
+  name: string;
+  state: string;
+  image: string;
+  version: string | number;
+  health: PlatformContainerVerifiedHealth;
+}>;
+
+type PlatformContainerNativeApplication = Readonly<{
+  id: string;
+  name: string;
+  state: string | null;
+  image: string;
+  version: string | number;
+  rolloutId: string | null;
+  health: PlatformContainerVerifiedHealth;
+}>;
+
+type PlatformContainerRolloutProof = Readonly<{
+  id: string;
+  currentImage: string;
+  currentVersion: string | number;
+  targetImage: string;
+  targetVersion: string | number;
+  totalInstances: number;
+  completedStepId: number;
+  completedAt: string;
+  health: PlatformContainerVerifiedHealth;
+}>;
+
+function platformContainerAccountIdFromConfig(configPath: string): string {
+  let source: string;
+  let image: string;
+  try {
+    source = new TextDecoder("utf-8", { fatal: true }).decode(
+      readStablePhysicalBytes(
+        configPath,
+        "platform_worker_release_config_source_invalid",
+      ),
+    );
+    image = platformRunnerImageRange(source).image;
+  } catch {
+    throw new Error("platform_worker_release_config_source_invalid");
+  }
+  const registryPrefix = "registry.cloudflare.com/";
+  const accountId = image.slice(registryPrefix.length).split("/", 1)[0];
+  if (!/^[0-9a-f]{32}$/u.test(accountId)) {
+    throw new Error("platform_worker_release_container_account_invalid");
+  }
+  for (const line of source.split(/\r?\n/u)) {
+    if (!/^\s*(?:account_id|"account_id"|'account_id')\s*=/u.test(line)) {
+      continue;
+    }
+    const assignment =
+      /^\s*(?:account_id|"account_id"|'account_id')\s*=\s*(?:"([0-9a-f]{32})"|'([0-9a-f]{32})')\s*(?:#.*)?$/u.exec(
+        line,
+      );
+    const explicit = assignment?.[1] ?? assignment?.[2];
+    if (explicit !== accountId) {
+      throw new Error("platform_worker_release_container_account_invalid");
+    }
+  }
+  return accountId;
+}
+
+async function platformContainerNativeReader(
+  configPath: string,
+  accountId: string,
+  command: PlatformReleaseCommand,
+): Promise<(path: string) => Promise<unknown>> {
+  const environmentAccountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  if (
+    environmentAccountId !== undefined &&
+    (!/^[0-9a-f]{32}$/u.test(environmentAccountId) ||
+      environmentAccountId !== accountId)
+  ) {
+    throw new Error("platform_worker_release_container_account_invalid");
+  }
+  const authEnvironment = {
+    ...childEnvironment(),
+    NO_COLOR: "1",
+    WRANGLER_SEND_METRICS: "false",
+    WRANGLER_WRITE_LOGS: "false",
+  };
+  let token: string;
+  try {
+    const result = await command(
+      [WRANGLER, "auth", "token", "--json", "--config", configPath],
+      undefined,
+      ROOT,
+      authEnvironment,
+    );
+    const authValue =
+      result.stdout.length <= 16 * 1024
+        ? (JSON.parse(result.stdout) as unknown)
+        : undefined;
+    if (
+      result.exitCode !== 0 ||
+      !record(authValue)
+    ) {
+      throw new Error("invalid auth response");
+    }
+    if (
+      (authValue.type !== "api_token" && authValue.type !== "oauth") ||
+      typeof authValue.token !== "string" ||
+      authValue.token.length === 0 ||
+      authValue.token.length > 4096 ||
+      !/^[\x21-\x7e]+$/u.test(authValue.token)
+    ) {
+      throw new Error("invalid auth response");
+    }
+    token = authValue.token;
+  } catch {
+    // PlatformCommandError deliberately retains bounded stdout/stderr for
+    // ordinary diagnostics. Never let the auth-token command's result or
+    // failure object escape this in-memory-only boundary.
+    throw new Error("platform_worker_release_container_auth_invalid");
+  }
+
+  return async (path: string): Promise<unknown> => {
+    if (!validPlatformContainerNativePath(path)) {
+      throw new Error("platform_worker_release_container_native_path_invalid");
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(),
+      NATIVE_CONTAINER_TIMEOUT_MS,
+    );
+    try {
+      const response = await fetch(
+        `${CLOUDFLARE_API_ORIGIN}/client/v4/accounts/${accountId}${path}`,
+        {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          redirect: "error",
+          signal: controller.signal,
+        },
+      );
+      if (!response.ok) {
+        throw new Error("native response rejected");
+      }
+      return platformContainerNativeEnvelopeResult(
+        await readPlatformContainerNativeJson(response),
+      );
+    } catch {
+      controller.abort();
+      // Fetch errors, response bodies, and auth data are intentionally not a
+      // cause: a caller-visible provider error must never retain the token.
+      throw new Error("platform_worker_release_container_native_read_failed");
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+}
+
+function validPlatformContainerNativePath(path: string): boolean {
+  if (path.length === 0 || path.length > 2_048) return false;
+  const applicationList =
+    /^\/containers\/applications\?name=([^/?#&]+)$/u.exec(path);
+  if (applicationList) {
+    return canonicalEncodedPlatformContainerSegment(applicationList[1]!);
+  }
+  const rollout =
+    /^\/containers\/applications\/([^/?#]+)\/rollouts\/([^/?#]+)$/u.exec(
+      path,
+    );
+  return (
+    rollout !== null &&
+    canonicalEncodedPlatformContainerSegment(rollout[1]!) &&
+    canonicalEncodedPlatformContainerSegment(rollout[2]!)
+  );
+}
+
+function canonicalEncodedPlatformContainerSegment(value: string): boolean {
+  try {
+    return (
+      value.length > 0 &&
+      value.length <= 768 &&
+      encodeURIComponent(decodeURIComponent(value)) === value
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function readPlatformContainerNativeJson(
+  response: Response,
+): Promise<unknown> {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null) {
+    if (!/^[0-9]+$/u.test(contentLength)) {
+      throw new Error("native response length invalid");
+    }
+    const length = Number(contentLength);
+    if (
+      !Number.isSafeInteger(length) ||
+      length < 0 ||
+      length > NATIVE_CONTAINER_MAX_OUTPUT
+    ) {
+      throw new Error("native response length invalid");
+    }
+  }
+  if (response.body === null) {
+    throw new Error("native response body missing");
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const next = await reader.read();
+    if (next.done) break;
+    total += next.value.byteLength;
+    if (total > NATIVE_CONTAINER_MAX_OUTPUT) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error("native response too large");
+    }
+    chunks.push(next.value);
+  }
+  if (total === 0) throw new Error("native response body missing");
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+  ) as unknown;
+}
+
+function platformContainerNativeEnvelopeResult(value: unknown): unknown {
+  if (
+    !record(value) ||
+    value.success !== true ||
+    !Object.hasOwn(value, "result") ||
+    !Array.isArray(value.errors) ||
+    value.errors.length !== 0 ||
+    !Array.isArray(value.messages)
+  ) {
+    throw new Error("native response envelope invalid");
+  }
+  return value.result;
+}
+
+function platformContainerFallbackDetail(
+  summary: Readonly<Record<string, unknown>>,
+  detail: unknown,
+  requireMismatch: boolean,
+): PlatformContainerFallbackProjection {
+  if (!record(detail) || !record(detail.configuration)) {
+    throw new Error("platform_worker_release_container_detail_invalid");
+  }
+  const image = detail.configuration.image;
+  const hasState = Object.hasOwn(detail, "state");
+  const hasActiveRollout =
+    Object.hasOwn(detail, "active_rollout_id") &&
+    detail.active_rollout_id !== undefined &&
+    detail.active_rollout_id !== null;
+  if (
+    detail.id !== summary.id ||
+    detail.name !== summary.name ||
+    !platformContainerVersion(detail.version) ||
+    !RUNNER_IMAGE.test(String(image)) ||
+    (hasState &&
+      (!boundedString(detail.state, 64) || detail.state !== summary.state)) ||
+    hasActiveRollout ||
+    (requireMismatch &&
+      detail.version === summary.version &&
+      image === summary.image) ||
+    (summary.state !== "active" && summary.state !== "ready")
+  ) {
+    throw new Error("platform_worker_release_container_list_detail_mismatch");
+  }
+  return {
+    id: detail.id as string,
+    name: detail.name as string,
+    state: summary.state as string,
+    image: image as string,
+    version: detail.version,
+    health: platformContainerVerifiedHealth(detail),
+  };
+}
+
+function platformContainerNativeApplication(
+  value: unknown,
+  expectedName: string,
+  accountId: string,
+): PlatformContainerNativeApplication {
+  if (!Array.isArray(value)) {
+    throw new Error("platform_worker_release_container_native_application_invalid");
+  }
+  const matching = value.filter(
+    (entry) => record(entry) && entry.name === expectedName,
+  );
+  const application = matching[0];
+  if (
+    matching.length !== 1 ||
+    !record(application) ||
+    !record(application.configuration) ||
+    !boundedString(application.id, 256) ||
+    application.account_id !== accountId ||
+    !platformContainerVersion(application.version) ||
+    !RUNNER_IMAGE.test(String(application.configuration.image))
+  ) {
+    throw new Error("platform_worker_release_container_native_application_invalid");
+  }
+  let state: string | null = null;
+  if (Object.hasOwn(application, "state")) {
+    if (application.state !== null && !boundedString(application.state, 64)) {
+      throw new Error(
+        "platform_worker_release_container_native_application_invalid",
+      );
+    }
+    state = application.state as string | null;
+  }
+  let rolloutId: string | null = null;
+  if (
+    Object.hasOwn(application, "active_rollout_id") &&
+    application.active_rollout_id !== undefined &&
+    application.active_rollout_id !== null
+  ) {
+    if (!boundedString(application.active_rollout_id, 256)) {
+      throw new Error(
+        "platform_worker_release_container_native_application_invalid",
+      );
+    }
+    rolloutId = application.active_rollout_id;
+  }
+  return {
+    id: application.id,
+    name: application.name as string,
+    state,
+    image: application.configuration.image as string,
+    version: application.version,
+    rolloutId,
+    health: platformContainerVerifiedHealth(application),
+  };
+}
+
+function platformContainerNativeRollout(
+  value: unknown,
+  applicationId: string,
+  rolloutId: string,
+): PlatformContainerRolloutProof {
+  const currentConfiguration = record(value)
+    ? value.current_configuration
+    : undefined;
+  const targetConfiguration = record(value)
+    ? value.target_configuration
+    : undefined;
+  const progress = record(value) ? value.progress : undefined;
+  const distribution = record(progress)
+    ? progress.version_distribution
+    : undefined;
+  const steps = record(value) ? value.steps : undefined;
+  const step = Array.isArray(steps) ? steps[0] : undefined;
+  const stepSize = record(step) ? step.step_size : undefined;
+  if (
+    !record(value) ||
+    value.id !== rolloutId ||
+    (Object.hasOwn(value, "application_id") &&
+      value.application_id !== applicationId) ||
+    value.status !== "completed" ||
+    !record(currentConfiguration) ||
+    !record(targetConfiguration) ||
+    !RUNNER_IMAGE.test(String(currentConfiguration.image)) ||
+    !RUNNER_IMAGE.test(String(targetConfiguration.image)) ||
+    !platformContainerVersion(value.current_version) ||
+    !platformContainerVersion(value.target_version) ||
+    !record(progress) ||
+    progress.total_steps !== 1 ||
+    progress.current_step !== 1 ||
+    !positiveSafeInteger(progress.updated_instances) ||
+    !positiveSafeInteger(progress.total_instances) ||
+    progress.updated_instances !== progress.total_instances ||
+    !record(distribution) ||
+    distribution.target_version_instances !== progress.total_instances ||
+    distribution.current_version_instances !== 0 ||
+    distribution.target_version_percentage !== 100 ||
+    !Array.isArray(steps) ||
+    steps.length !== 1 ||
+    !record(step) ||
+    !positiveSafeInteger(step.id) ||
+    step.status !== "completed" ||
+    !record(stepSize) ||
+    stepSize.percentage !== 100 ||
+    !validPlatformContainerTimestamp(step.completed_at)
+  ) {
+    throw new Error("platform_worker_release_container_rollout_invalid");
+  }
+  const health = platformContainerVerifiedHealth(value);
+  return {
+    id: rolloutId,
+    currentImage: currentConfiguration.image as string,
+    currentVersion: value.current_version,
+    targetImage: targetConfiguration.image as string,
+    targetVersion: value.target_version,
+    totalInstances: progress.total_instances,
+    completedStepId: step.id,
+    completedAt: step.completed_at,
+    health,
+  };
+}
+
+function platformContainerVerifiedHealth(
+  value: Record<string, unknown>,
+): PlatformContainerVerifiedHealth {
+  const health = platformContainerHealth(value);
+  const rawHealth = value.health;
+  const instances = record(rawHealth) ? rawHealth.instances : undefined;
+  const rawHealthy = record(instances) ? instances.healthy : undefined;
+  const healthy = rawHealthy === undefined ? null : rawHealthy;
+  if (
+    (healthy !== null && !nonNegativeInteger(healthy)) ||
+    health.failed !== 0 ||
+    health.starting !== 0 ||
+    health.scheduling !== 0 ||
+    health.errorCount !== 0
+  ) {
+    throw new Error("platform_worker_release_container_health_invalid");
+  }
+  return { ...health, healthy };
+}
+
+function assertPlatformContainerRolloutBridge(
+  summary: Readonly<Record<string, unknown>>,
+  target: PlatformContainerFallbackProjection,
+  application: PlatformContainerNativeApplication,
+  rollout: PlatformContainerRolloutProof,
+): void {
+  if (
+    rollout.id !== application.rolloutId ||
+    rollout.currentImage !== summary.image ||
+    rollout.currentVersion !== summary.version ||
+    rollout.targetImage !== target.image ||
+    rollout.targetVersion !== target.version ||
+    !samePlatformContainerVerifiedHealth(application.health, target.health) ||
+    !samePlatformContainerVerifiedHealth(rollout.health, target.health)
+  ) {
+    throw new Error("platform_worker_release_container_rollout_mismatch");
+  }
+}
+
+function assertPlatformContainerRepeatedBridge(
+  firstSummary: Readonly<Record<string, unknown>>,
+  firstTarget: PlatformContainerFallbackProjection,
+  firstApplication: PlatformContainerNativeApplication,
+  firstRollout: PlatformContainerRolloutProof,
+  secondSummary: Readonly<Record<string, unknown>>,
+  secondTarget: PlatformContainerFallbackProjection,
+  secondApplication: PlatformContainerNativeApplication,
+  secondRollout: PlatformContainerRolloutProof,
+): void {
+  const commonUnchanged =
+    samePlatformContainerFallbackProjection(firstTarget, secondTarget) &&
+    samePlatformContainerRolloutProof(firstRollout, secondRollout) &&
+    secondApplication.id === firstApplication.id &&
+    secondApplication.name === firstApplication.name &&
+    (secondApplication.state === null ||
+      secondApplication.state === secondSummary.state) &&
+    samePlatformContainerVerifiedHealth(
+      secondApplication.health,
+      secondTarget.health,
+    ) &&
+    samePlatformContainerVerifiedHealth(
+      secondRollout.health,
+      secondTarget.health,
+    );
+  const unchangedBridge =
+    samePlatformContainerSummary(firstSummary, secondSummary) &&
+    samePlatformContainerNativeApplication(
+      firstApplication,
+      secondApplication,
+    );
+  const convergedTarget =
+    secondSummary.id === firstTarget.id &&
+    secondSummary.name === firstTarget.name &&
+    secondSummary.state === firstTarget.state &&
+    secondSummary.image === firstTarget.image &&
+    secondSummary.version === firstTarget.version &&
+    secondApplication.image === firstTarget.image &&
+    secondApplication.version === firstTarget.version &&
+    secondApplication.rolloutId === null;
+  if (!commonUnchanged || (!unchangedBridge && !convergedTarget)) {
+    throw new Error("platform_worker_release_container_repeated_read_mismatch");
+  }
+}
+
+function samePlatformContainerSummary(
+  left: Readonly<Record<string, unknown>>,
+  right: Readonly<Record<string, unknown>>,
+): boolean {
+  return (
+    left.id === right.id &&
+    left.name === right.name &&
+    left.state === right.state &&
+    left.image === right.image &&
+    left.version === right.version
+  );
+}
+
+function samePlatformContainerFallbackProjection(
+  left: PlatformContainerFallbackProjection,
+  right: PlatformContainerFallbackProjection,
+): boolean {
+  return (
+    left.id === right.id &&
+    left.name === right.name &&
+    left.state === right.state &&
+    left.image === right.image &&
+    left.version === right.version &&
+    samePlatformContainerVerifiedHealth(left.health, right.health)
+  );
+}
+
+function samePlatformContainerNativeApplication(
+  left: PlatformContainerNativeApplication,
+  right: PlatformContainerNativeApplication,
+): boolean {
+  return (
+    left.id === right.id &&
+    left.name === right.name &&
+    left.state === right.state &&
+    left.image === right.image &&
+    left.version === right.version &&
+    left.rolloutId === right.rolloutId &&
+    samePlatformContainerVerifiedHealth(left.health, right.health)
+  );
+}
+
+function samePlatformContainerRolloutProof(
+  left: PlatformContainerRolloutProof,
+  right: PlatformContainerRolloutProof,
+): boolean {
+  return (
+    left.id === right.id &&
+    left.currentImage === right.currentImage &&
+    left.currentVersion === right.currentVersion &&
+    left.targetImage === right.targetImage &&
+    left.targetVersion === right.targetVersion &&
+    left.totalInstances === right.totalInstances &&
+    left.completedStepId === right.completedStepId &&
+    left.completedAt === right.completedAt &&
+    samePlatformContainerVerifiedHealth(left.health, right.health)
+  );
+}
+
+function samePlatformContainerVerifiedHealth(
+  left: PlatformContainerVerifiedHealth,
+  right: PlatformContainerVerifiedHealth,
+): boolean {
+  return (
+    left.failed === right.failed &&
+    left.starting === right.starting &&
+    left.scheduling === right.scheduling &&
+    left.errorCount === right.errorCount
+  );
+}
+
+function positiveSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) > 0;
+}
+
+function validPlatformContainerTimestamp(value: unknown): value is string {
+  return (
+    boundedString(value, 128) && Number.isFinite(Date.parse(value as string))
+  );
 }
 
 export function parsePlatformContainerDetail(
