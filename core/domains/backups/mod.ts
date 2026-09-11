@@ -129,8 +129,6 @@ export interface CreateBackupRequest {
   readonly workspaceId: string;
   /** Private epoch captured before authorization/preparation; never refreshed. */
   readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
-  /** Optional run id that triggered the backup (operator / scheduled flows). */
-  readonly createdByRunId?: string;
   /** Optional Capsule context for Capsule-scoped backup Runs. */
   readonly capsuleId?: string;
   readonly environment?: string;
@@ -248,6 +246,14 @@ export class BackupsService {
    */
   async createBackup(request: CreateBackupRequest): Promise<BackupRecord> {
     request = structuredClone(request);
+    // A caller-supplied parent id is not evidence that a Backup was admitted.
+    // Reject the removed internal shortcut instead of adopting that authority.
+    if (Object.prototype.hasOwnProperty.call(request, "createdByRunId")) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "A control export creates its own Backup Run; createdByRunId is not accepted.",
+      );
+    }
     const workspaceId = request.workspaceId.trim();
     if (workspaceId.length === 0) {
       throw new OpenTofuControllerError(
@@ -261,10 +267,8 @@ export class BackupsService {
         "control backups are not wired (backup artifact storage + crypto unavailable)",
       );
     }
-    const expectedWorkspaceManagementAuthority = request.createdByRunId
-      ? undefined
-      : request.expectedWorkspaceManagementAuthority ??
-        await this.captureManagementAuthority(workspaceId);
+    const expectedWorkspaceManagementAuthority = request.expectedWorkspaceManagementAuthority ??
+      await this.captureManagementAuthority(workspaceId);
     const workspace = await this.#store.getWorkspace(workspaceId);
     if (!workspace) {
       throw new OpenTofuControllerError("not_found", "workspace not found");
@@ -272,7 +276,7 @@ export class BackupsService {
 
     const createdAt = this.#now().toISOString();
     const backupId = this.#newId("bkp");
-    const runId = request.createdByRunId ?? this.#newId("backup");
+    const runId = this.#newId("backup");
     const runningRun: Run = {
       id: runId,
       workspaceId,
@@ -284,19 +288,17 @@ export class BackupsService {
       createdAt,
       startedAt: createdAt,
     };
-    if (!request.createdByRunId) {
-      try {
-        const admission = await this.#store.beginBackupRun(runningRun, expectedWorkspaceManagementAuthority!);
-        if (admission.status !== "created") {
-          throw new OpenTofuControllerError(
-            "failed_precondition",
-            "Backup Run already exists; this export cannot be started again.",
-            { reason: "backup_run_already_exists" },
-          );
-        }
-      } catch (error) {
-        throw backupManagementError(error);
+    try {
+      const admission = await this.#store.beginBackupRun(runningRun, expectedWorkspaceManagementAuthority);
+      if (admission.status !== "created") {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "Backup Run already exists; this export cannot be started again.",
+          { reason: "backup_run_already_exists" },
+        );
       }
+    } catch (error) {
+      throw backupManagementError(error);
     }
 
     let record: BackupRecord;
@@ -346,37 +348,31 @@ export class BackupsService {
         createdAt,
       };
     } catch (error) {
-      if (!request.createdByRunId) {
-        const settled = await this.#store.commitBackupRun({
-          expectedRunningRun: runningRun,
-          terminalRun: {
-            ...runningRun,
-            status: "failed",
-            errorCode: "backup_failed",
-            finishedAt: this.#now().toISOString(),
-          },
-        });
-        if (settled.status === "conflict") throw backupSettlementConflict();
-      }
+      const settled = await this.#store.commitBackupRun({
+        expectedRunningRun: runningRun,
+        terminalRun: {
+          ...runningRun,
+          status: "failed",
+          errorCode: "backup_failed",
+          finishedAt: this.#now().toISOString(),
+        },
+      });
+      if (settled.status === "conflict") throw backupSettlementConflict();
       throw error;
     }
 
     // Do not turn an indeterminate commit or an Activity failure into a second
     // terminal write. The exact Run and record commit together, before audit.
-    if (!request.createdByRunId) {
-      const settled = await this.#store.commitBackupRun({
-        expectedRunningRun: runningRun,
-        terminalRun: {
-          ...runningRun,
-          status: "succeeded",
-          finishedAt: this.#now().toISOString(),
-        },
-        record,
-      });
-      if (settled.status === "conflict") throw backupSettlementConflict();
-    } else {
-      await this.#store.putBackupRecord(record);
-    }
+    const settled = await this.#store.commitBackupRun({
+      expectedRunningRun: runningRun,
+      terminalRun: {
+        ...runningRun,
+        status: "succeeded",
+        finishedAt: this.#now().toISOString(),
+      },
+      record,
+    });
+    if (settled.status === "conflict") throw backupSettlementConflict();
 
     // Pointer metadata only, never bundle contents. A failed Activity write
     // does not erase the successfully committed export or change Run status.

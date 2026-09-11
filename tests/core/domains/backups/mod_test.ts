@@ -280,6 +280,59 @@ test("createBackup rejects a new manual backup while Workspace is draining befor
   ).toBeUndefined();
 });
 
+test("createBackup rejects the removed createdByRunId input before any side effects", async () => {
+  const { service, store, artifactStore } = makeService();
+  const workspaceId = "ws_backup_legacy_run_id";
+  await store.putWorkspace({
+    id: workspaceId,
+    handle: "backup-legacy-run-id",
+    displayName: "Backup legacy run id",
+    type: "personal",
+    ownerUserId: "user_backup_legacy_run_id",
+    createdAt: TS,
+    updatedAt: TS,
+  });
+  const authority = await store.getWorkspaceManagement(workspaceId);
+  expect(authority).toEqual({
+    workspaceId,
+    managementState: "active",
+    managementEpoch: 1,
+  });
+  expect(
+    await store.beginWorkspaceDraining(workspaceId, authority!),
+  ).toMatchObject({
+    status: "started",
+    management: {
+      workspaceId,
+      managementState: "draining",
+      managementEpoch: 2,
+    },
+  });
+
+  // Keep this as a structural extra-property object so the test remains a
+  // runtime guard after the legacy field is removed from CreateBackupRequest.
+  const legacyRequest = {
+    workspaceId,
+    createdByRunId: "apply_legacy_backup",
+  };
+  await expect(service.createBackup(legacyRequest)).rejects.toMatchObject({
+    code: "invalid_argument",
+  });
+
+  expect(await store.listRunsByWorkspace(workspaceId)).toEqual([]);
+  expect(await store.listBackupRecords(workspaceId)).toEqual([]);
+  expect(
+    artifactStore!.get(
+      `workspaces/${workspaceId}/backups/bkp_0001/control.json.zst.enc`,
+    ),
+  ).toBeUndefined();
+  expect(
+    artifactStore!.get(
+      `workspaces/${workspaceId}/backups/bkp_0001/artifacts.manifest.json`,
+    ),
+  ).toBeUndefined();
+});
+
 test("an in-flight manual backup may finish after Workspace starts draining", async () => {
   const artifactStore = new BlockingBackupArtifactStore();
   const { service, store } = makeService({ artifactStore });
@@ -1261,14 +1314,21 @@ test("listBackups returns the Workspace's pointers newest-first", async () => {
   const { service, store } = makeService();
   await seedCapsuleModel(store, { workspaceId: "ws_backup1" });
   const first = await service.createBackup({ workspaceId: "ws_backup1" });
-  const second = await service.createBackup({
-    workspaceId: "ws_backup1",
-    createdByRunId: "apply_9",
-  });
+  const second = await service.createBackup({ workspaceId: "ws_backup1" });
 
   const listed = (await service.listBackups("ws_backup1")).backups;
   // Same createdAt -> tie-break by id desc; both pointers present.
   expect(listed.map((b) => b.id).sort()).toEqual([first.id, second.id].sort());
-  const withRun = listed.find((b) => b.id === second.id);
-  expect(withRun!.createdByRunId).toBe("apply_9");
+  const runs = await store.listRunsByWorkspace("ws_backup1");
+  expect(runs.map((run) => run.id).sort()).toEqual(
+    [first.createdByRunId, second.createdByRunId].sort(),
+  );
+  for (const record of [first, second]) {
+    expect(runs.find((run) => run.id === record.createdByRunId)).toMatchObject({
+      id: record.createdByRunId,
+      type: "backup",
+      status: "succeeded",
+      workspaceId: "ws_backup1",
+    });
+  }
 });
