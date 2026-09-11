@@ -8,6 +8,10 @@ import {
   type GitInstallPlanStore,
   type StoredGitInstallPlan,
 } from "../../../../core/domains/install-plans/store.ts";
+import type {
+  SqlClient,
+  SqlTransaction,
+} from "../../../../core/adapters/storage/sql.ts";
 import {
   InMemoryOpenTofuControlStore,
   WorkspaceManagementAdmissionConflictError,
@@ -527,6 +531,358 @@ test("retained Git rows stay observable without granting a new management claim"
     await postgres.close();
   }
 });
+
+test("Git install-plan blockers are Workspace-wide and terminal plans cannot be reclaimed", async () => {
+  const postgres = await PGliteSqlClient.create();
+  const d1 = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(d1);
+  const memoryControl = new InMemoryOpenTofuControlStore();
+  for (const workspaceId of [
+    "ws_terminal",
+    "ws_lease",
+    "ws_unknown",
+    "ws_mismatch",
+    "ws_completion",
+  ]) {
+    await memoryControl.putWorkspace(workspace(workspaceId));
+    await seedPostgresWorkspace(postgres, workspaceId);
+    await seedD1Workspace(d1, workspaceId);
+  }
+  try {
+    await exerciseWorkspaceBlockers(
+      new InMemoryGitInstallPlanStore(memoryControl),
+    );
+    await exerciseWorkspaceBlockers(new SqlGitInstallPlanStore(postgres), {
+      retainLease: async (id, token, expiresAt) => {
+        await postgres.query(
+          `update takosumi_git_install_plans
+              set reconcile_lease_token = $1, reconcile_lease_expires_at = $2
+            where id = $3`,
+          [token, expiresAt, id],
+        );
+      },
+      mutatePhase: async (id, phase) => {
+        await postgres.query(
+          `update takosumi_git_install_plans set phase = $1 where id = $2`,
+          [phase, id],
+        );
+      },
+      mutateRecord: async (id, recordJson) => {
+        await postgres.query(
+          `update takosumi_git_install_plans set record_json = $1::jsonb where id = $2`,
+          [recordJson, id],
+        );
+      },
+      mutateGeneration: async (id, generation) => {
+        await postgres.query(
+          `update takosumi_git_install_plans set generation = $1 where id = $2`,
+          [generation, id],
+        );
+      },
+    });
+    await exerciseWorkspaceBlockers(new D1GitInstallPlanStore(d1), {
+      retainLease: async (id, token, expiresAt) => {
+        await d1
+          .prepare(
+            `update git_install_plans
+                set reconcile_lease_token = ?, reconcile_lease_expires_at = ?
+              where id = ?`,
+          )
+          .bind(token, expiresAt, id)
+          .run();
+      },
+      mutatePhase: async (id, phase) => {
+        await d1
+          .prepare("update git_install_plans set phase = ? where id = ?")
+          .bind(phase, id)
+          .run();
+      },
+      mutateRecord: async (id, recordJson) => {
+        await d1
+          .prepare("update git_install_plans set record_json = ? where id = ?")
+          .bind(recordJson, id)
+          .run();
+      },
+      mutateGeneration: async (id, generation) => {
+        await d1
+          .prepare("update git_install_plans set generation = ? where id = ?")
+          .bind(generation, id)
+          .run();
+      },
+      mutateMalformed: async (id) => {
+        await d1
+          .prepare("update git_install_plans set record_json = ? where id = ?")
+          .bind("not-json", id)
+          .run();
+      },
+    });
+  } finally {
+    await postgres.close();
+  }
+});
+
+test("Git blocker predicate fails closed when its aggregate result is indeterminate", async () => {
+  const emptySqlClient: SqlClient = {
+    query: async <Row extends Record<string, unknown>>() => ({
+      rows: [] as Row[],
+      rowCount: 0,
+    }),
+    transaction: async <T>(_fn: (transaction: SqlTransaction) => T | Promise<T>) => {
+      throw new Error("not used");
+    },
+  };
+  await expect(
+    new SqlGitInstallPlanStore(emptySqlClient).hasWorkspaceManagementBlockers("ws"),
+  ).rejects.toThrow("indeterminate");
+
+  const invalidSqlClient: SqlClient = {
+    query: async <Row extends Record<string, unknown>>() => ({
+      rows: [{ present: 1 } as unknown as Row],
+      rowCount: 1,
+    }),
+    transaction: async <T>(_fn: (transaction: SqlTransaction) => T | Promise<T>) => {
+      throw new Error("not used");
+    },
+  };
+  await expect(
+    new SqlGitInstallPlanStore(invalidSqlClient).hasWorkspaceManagementBlockers("ws"),
+  ).rejects.toThrow("indeterminate");
+
+  type FakeD1Statement = {
+    bind(...values: unknown[]): FakeD1Statement;
+    first<T>(): Promise<T | null>;
+    run<T = Record<string, unknown>>(): Promise<{ meta: { changes: number } }>;
+  };
+  const statement: FakeD1Statement = {
+    bind: (..._values) => statement,
+    first: async <T>() => null as T | null,
+    run: async () => ({ meta: { changes: 0 } }),
+  };
+  const emptyD1 = { prepare: () => statement };
+  await expect(
+    new D1GitInstallPlanStore(emptyD1).hasWorkspaceManagementBlockers("ws"),
+  ).rejects.toThrow("indeterminate");
+
+  const invalidD1Statement: FakeD1Statement = {
+    bind: (..._values) => invalidD1Statement,
+    first: async <T>() => ({ present: 2 } as unknown as T),
+    run: async () => ({ meta: { changes: 0 } }),
+  };
+  const invalidD1 = { prepare: () => invalidD1Statement };
+  await expect(
+    new D1GitInstallPlanStore(invalidD1).hasWorkspaceManagementBlockers("ws"),
+  ).rejects.toThrow("indeterminate");
+});
+
+async function exerciseWorkspaceBlockers(
+  store: GitInstallPlanStore,
+  options: {
+    readonly retainLease?: (
+      id: string,
+      token: string | null,
+      expiresAt: string | null,
+    ) => Promise<void>;
+    readonly mutatePhase?: (id: string, phase: string) => Promise<void>;
+    readonly mutateRecord?: (id: string, recordJson: string) => Promise<void>;
+    readonly mutateGeneration?: (id: string, generation: number) => Promise<void>;
+    readonly mutateMalformed?: (id: string) => Promise<void>;
+  } = {},
+): Promise<void> {
+  const failed = {
+    ...plan("blocker_failed", "blocker_failed_digest"),
+    workspaceId: "ws_terminal",
+    workspaceManagementAuthority: {
+      workspaceId: "ws_terminal",
+      managementState: "active" as const,
+      managementEpoch: 1,
+    },
+    phase: "failed" as const,
+  };
+  const reviewable = {
+    ...plan("blocker_reviewable", "blocker_reviewable_digest"),
+    workspaceId: "ws_terminal",
+    workspaceManagementAuthority: {
+      workspaceId: "ws_terminal",
+      managementState: "active" as const,
+      managementEpoch: 1,
+    },
+    idempotencyKeyHash: "blocker_reviewable_key",
+    phase: "reviewable" as const,
+  };
+  expect((await store.create(failed)).status).toBe("created");
+  expect((await store.create(reviewable)).status).toBe("created");
+  expect(await store.hasWorkspaceManagementBlockers("ws_terminal")).toBe(false);
+  for (const terminal of [failed, reviewable]) {
+    const result = await store.claimReconcile({
+      id: terminal.id,
+      expectedGeneration: 0,
+      leaseToken: `${terminal.id}_lease`,
+      claimedAt: "2026-08-21T00:01:00.000Z",
+      leaseExpiresAt: "2026-08-21T00:01:30.000Z",
+    });
+    expect(result).toMatchObject({
+      status: "conflict",
+      plan: { id: terminal.id, phase: terminal.phase, generation: 0 },
+    });
+    expect(await store.get(terminal.id)).toEqual(terminal);
+  }
+
+  const retainedToken = {
+    ...plan("blocker_retained_token", "blocker_retained_token_digest"),
+    workspaceId: "ws_lease",
+    workspaceManagementAuthority: {
+      workspaceId: "ws_lease",
+      managementState: "active" as const,
+      managementEpoch: 1,
+    },
+    idempotencyKeyHash: "blocker_retained_token_key",
+    phase: "failed" as const,
+  };
+  expect((await store.create(retainedToken)).status).toBe("created");
+  if (options.retainLease) {
+    await options.retainLease(
+      retainedToken.id,
+      "retained-token",
+      "2020-01-01T00:00:00.000Z",
+    );
+    expect(await store.hasWorkspaceManagementBlockers("ws_lease")).toBe(true);
+    expect(
+      await store.claimReconcile({
+        id: retainedToken.id,
+        expectedGeneration: 0,
+        leaseToken: "replacement",
+        claimedAt: "2026-08-21T00:01:00.000Z",
+        leaseExpiresAt: "2026-08-21T00:01:30.000Z",
+      }),
+    ).toMatchObject({ status: "conflict", plan: { generation: 0 } });
+    await options.retainLease(retainedToken.id, null, null);
+    expect(await store.hasWorkspaceManagementBlockers("ws_lease")).toBe(false);
+    const retainedExpiry = {
+      ...retainedToken,
+      id: "blocker_retained_expiry",
+      idempotencyKeyHash: "blocker_retained_expiry_key",
+    };
+    expect((await store.create(retainedExpiry)).status).toBe("created");
+    await options.retainLease(
+      retainedExpiry.id,
+      null,
+      "2020-01-01T00:00:00.000Z",
+    );
+    expect(await store.hasWorkspaceManagementBlockers("ws_lease")).toBe(true);
+    await options.retainLease(retainedExpiry.id, null, null);
+    expect(await store.hasWorkspaceManagementBlockers("ws_lease")).toBe(false);
+  } else {
+    expect(await store.hasWorkspaceManagementBlockers("ws_lease")).toBe(false);
+  }
+  expect(await store.hasWorkspaceManagementBlockers("ws_empty")).toBe(false);
+
+  const unknown = {
+    ...plan("blocker_unknown", "blocker_unknown_digest"),
+    workspaceId: "ws_unknown",
+    workspaceManagementAuthority: {
+      workspaceId: "ws_unknown",
+      managementState: "active" as const,
+      managementEpoch: 1,
+    },
+    idempotencyKeyHash: "blocker_unknown_key",
+    phase: "unknown" as never,
+  };
+  expect((await store.create(unknown)).status).toBe("created");
+  expect(await store.hasWorkspaceManagementBlockers("ws_unknown")).toBe(true);
+  expect(
+    await store.claimReconcile({
+      id: unknown.id,
+      expectedGeneration: 0,
+      leaseToken: "unknown_lease",
+      claimedAt: "2026-08-21T00:01:00.000Z",
+      leaseExpiresAt: "2026-08-21T00:01:30.000Z",
+    }),
+  ).toMatchObject({ status: "conflict", plan: { generation: 0 } });
+
+  const mismatch = {
+    ...plan("blocker_mismatch", "blocker_mismatch_digest"),
+    workspaceId: "ws_mismatch",
+    workspaceManagementAuthority: {
+      workspaceId: "ws_mismatch",
+      managementState: "active" as const,
+      managementEpoch: 1,
+    },
+    idempotencyKeyHash: "blocker_mismatch_key",
+    phase: "failed" as const,
+  };
+  expect((await store.create(mismatch)).status).toBe("created");
+  if (options.mutatePhase) {
+    await options.mutatePhase(mismatch.id, "reviewable");
+    expect(await store.hasWorkspaceManagementBlockers("ws_mismatch")).toBe(true);
+    expect(
+      await store.claimReconcile({
+        id: mismatch.id,
+        expectedGeneration: 0,
+        leaseToken: "mismatch_lease",
+        claimedAt: "2026-08-21T00:01:00.000Z",
+        leaseExpiresAt: "2026-08-21T00:01:30.000Z",
+      }),
+    ).toMatchObject({ status: "conflict", plan: { generation: 0 } });
+    await options.mutatePhase(mismatch.id, "failed");
+    expect(await store.hasWorkspaceManagementBlockers("ws_mismatch")).toBe(false);
+    if (options.mutateRecord) {
+      await options.mutateRecord(
+        mismatch.id,
+        JSON.stringify({ ...mismatch, workspaceId: "ws_other" }),
+      );
+      expect(await store.hasWorkspaceManagementBlockers("ws_mismatch")).toBe(true);
+      await options.mutateRecord(mismatch.id, JSON.stringify(mismatch));
+      expect(await store.hasWorkspaceManagementBlockers("ws_mismatch")).toBe(false);
+    }
+    if (options.mutateGeneration) {
+      await options.mutateGeneration(mismatch.id, 1);
+      expect(await store.hasWorkspaceManagementBlockers("ws_mismatch")).toBe(true);
+      await options.mutateGeneration(mismatch.id, 0);
+      expect(await store.hasWorkspaceManagementBlockers("ws_mismatch")).toBe(false);
+    }
+    if (options.mutateMalformed) {
+      await options.mutateMalformed(mismatch.id);
+      expect(await store.hasWorkspaceManagementBlockers("ws_mismatch")).toBe(true);
+      await options.mutateRecord!(mismatch.id, JSON.stringify(mismatch));
+      expect(await store.hasWorkspaceManagementBlockers("ws_mismatch")).toBe(false);
+    }
+  }
+
+  const completion = {
+    ...plan("blocker_completion", "blocker_completion_digest"),
+    workspaceId: "ws_completion",
+    workspaceManagementAuthority: {
+      workspaceId: "ws_completion",
+      managementState: "active" as const,
+      managementEpoch: 1,
+    },
+    idempotencyKeyHash: "blocker_completion_key",
+    phase: "planning" as const,
+  };
+  expect((await store.create(completion)).status).toBe("created");
+  expect(await store.hasWorkspaceManagementBlockers("ws_completion")).toBe(true);
+  const claim = await store.claimReconcile({
+    id: completion.id,
+    expectedGeneration: 0,
+    leaseToken: "completion_lease",
+    claimedAt: "2026-08-21T00:02:00.000Z",
+    leaseExpiresAt: "2026-08-21T00:02:30.000Z",
+  });
+  if (claim.status !== "claimed") throw new Error("completion claim was not acquired");
+  expect(
+    await store.completeReconcile({
+      id: completion.id,
+      expectedGeneration: 1,
+      leaseToken: claim.claim.leaseToken,
+      plan: {
+        ...claim.claim.plan,
+        phase: "failed",
+        updatedAt: "2026-08-21T00:02:01.000Z",
+      },
+    }),
+  ).toMatchObject({ status: "completed", plan: { phase: "failed" } });
+  expect(await store.hasWorkspaceManagementBlockers("ws_completion")).toBe(false);
+}
 
 function workspace(id: string): {
   readonly id: string;

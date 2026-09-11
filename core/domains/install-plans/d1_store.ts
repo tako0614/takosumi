@@ -8,6 +8,8 @@ import {
   type GitInstallPlanScope,
   type GitInstallPlanStore,
   type StoredGitInstallPlan,
+  isReconcileableGitInstallPlanPhase,
+  isTerminalGitInstallPlanPhase,
 } from "./store.ts";
 import {
   assertWorkspaceManagementAuthorityInput,
@@ -36,6 +38,7 @@ interface GitInstallPlanD1Row {
   readonly actor_subject: string;
   readonly idempotency_key_hash: string;
   readonly request_digest: string;
+  readonly phase: string;
   readonly generation: number | string;
   readonly record_json: string;
   readonly reconcile_lease_token: string | null;
@@ -130,6 +133,42 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
     return row?.present === 1;
   }
 
+  async hasWorkspaceManagementBlockers(workspaceId: string): Promise<boolean> {
+    const result = await this.#db
+      .prepare(
+        `select exists (
+           select 1 from git_install_plans
+            where workspace_id = ?
+              and (
+                phase is null
+                or phase not in ('failed', 'reviewable')
+                or reconcile_lease_token is not null
+                or reconcile_lease_expires_at is not null
+                or case when json_valid(record_json) = 1 then
+                    case when
+                      json_type(record_json, '$.workspaceId') = 'text'
+                      and json_extract(record_json, '$.workspaceId') is workspace_id
+                      and json_type(record_json, '$.phase') = 'text'
+                      and json_extract(record_json, '$.phase') is phase
+                      and json_type(record_json, '$.generation') = 'integer'
+                      and json_extract(record_json, '$.generation') is generation
+                    then 0 else 1 end
+                  else 1 end = 1
+              )
+         ) as present`,
+      )
+      .bind(workspaceId)
+      .first<{ readonly present: number }>();
+    if (
+      result === null ||
+      typeof result !== "object" ||
+      (result.present !== 0 && result.present !== 1)
+    ) {
+      throw new TypeError("Git install-plan blocker predicate result is indeterminate");
+    }
+    return result.present === 1;
+  }
+
   async claimReconcile(input: {
     readonly id: string;
     readonly expectedGeneration: number;
@@ -150,6 +189,13 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
     if (observed.generation !== input.expectedGeneration) {
       return { status: "conflict", plan: observed };
     }
+    if (
+      !isReconcileableGitInstallPlanPhase(observed.phase) ||
+      observedRow.phase !== observed.phase ||
+      isTerminalGitInstallPlanPhase(observedRow.phase)
+    ) {
+      return { status: "conflict", plan: observed };
+    }
     if (leaseIsBusy(observedRow, input.claimedAt)) {
       return { status: "busy", plan: observed };
     }
@@ -164,6 +210,17 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
                 reconcile_lease_expires_at = ?, updated_at = ?
           where id = ? and workspace_id = ? and generation = ?
             and (reconcile_lease_expires_at is null or reconcile_lease_expires_at <= ?)
+            and phase in (
+              'syncing_source', 'compiling_install',
+              'analyzing_compatibility', 'creating_capsule', 'planning'
+            )
+            and json_valid(record_json) = 1
+            and json_type(record_json, '$.phase') = 'text'
+            and json_extract(record_json, '$.phase') = phase
+            and json_type(record_json, '$.workspaceId') = 'text'
+            and json_extract(record_json, '$.workspaceId') = workspace_id
+            and json_type(record_json, '$.generation') = 'integer'
+            and json_extract(record_json, '$.generation') = generation
             and exists (
               select 1 from workspaces as workspace
                where workspace.id = git_install_plans.workspace_id
@@ -203,6 +260,13 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
       return { status: "conflict", plan: latest };
     }
     if (latest.generation !== input.expectedGeneration) {
+      return { status: "conflict", plan: latest };
+    }
+    if (
+      !isReconcileableGitInstallPlanPhase(latest.phase) ||
+      latestRow.phase !== latest.phase ||
+      isTerminalGitInstallPlanPhase(latestRow.phase)
+    ) {
       return { status: "conflict", plan: latest };
     }
     if (leaseIsBusy(latestRow, input.claimedAt)) {

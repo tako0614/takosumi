@@ -16,8 +16,11 @@ function declaredDurableGitInstallPlanStore(): GitInstallPlanStore {
   const store = new InMemoryGitInstallPlanStore();
   return {
     durable: true,
-    create: (plan) => store.create(plan),
+    create: (plan, authority) => store.create(plan, authority),
     get: (id) => store.get(id),
+    getByScope: (scope) => store.getByScope(scope),
+    hasInFlightRevisionForCapsule: (id) => store.hasInFlightRevisionForCapsule(id),
+    hasWorkspaceManagementBlockers: (id) => store.hasWorkspaceManagementBlockers(id),
     claimReconcile: (input) => store.claimReconcile(input),
     completeReconcile: (input) => store.completeReconcile(input),
   };

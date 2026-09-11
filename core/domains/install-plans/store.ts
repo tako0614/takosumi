@@ -65,6 +65,11 @@ export interface GitInstallPlanStore {
   /** Observation only: an exact replay must not require new admission. */
   getByScope(scope: GitInstallPlanScope): Promise<StoredGitInstallPlan | undefined>;
   hasInFlightRevisionForCapsule(capsuleId: string): Promise<boolean>;
+  /**
+   * Private Workspace-wide quiescence observation. A terminal plan is settled
+   * only after both reconciliation lease columns have been cleared.
+   */
+  hasWorkspaceManagementBlockers(workspaceId: string): Promise<boolean>;
   claimReconcile(input: {
     readonly id: string;
     readonly expectedGeneration: number;
@@ -160,6 +165,17 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
     );
   }
 
+  async hasWorkspaceManagementBlockers(workspaceId: string): Promise<boolean> {
+    for (const entry of this.#entries.values()) {
+      if (entry.plan.workspaceId !== workspaceId) continue;
+      if (!isTerminalGitInstallPlanPhase(entry.plan.phase)) return true;
+      if (entry.leaseToken !== undefined || entry.leaseExpiresAt !== undefined) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   async claimReconcile(
     input: Parameters<GitInstallPlanStore["claimReconcile"]>[0],
   ): Promise<ClaimGitInstallPlanResult> {
@@ -172,6 +188,9 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
       );
     }
     if (entry.plan.generation !== input.expectedGeneration) {
+      return { status: "conflict", plan: clone(entry.plan) };
+    }
+    if (!isReconcileableGitInstallPlanPhase(entry.plan.phase)) {
       return { status: "conflict", plan: clone(entry.plan) };
     }
     if (
@@ -234,6 +253,24 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
       throw new WorkspaceManagementAdmissionConflictError(workspaceId);
     }
   }
+}
+
+/** Terminal phases are clear only when no reconciliation lease is retained. */
+export function isTerminalGitInstallPlanPhase(
+  phase: unknown,
+): phase is "reviewable" | "failed" {
+  return phase === "reviewable" || phase === "failed";
+}
+
+/** Only known nonterminal phases may be claimed for reconciliation. */
+export function isReconcileableGitInstallPlanPhase(
+  phase: unknown,
+): boolean {
+  return phase === "syncing_source" ||
+    phase === "compiling_install" ||
+    phase === "analyzing_compatibility" ||
+    phase === "creating_capsule" ||
+    phase === "planning";
 }
 
 export function publicGitInstallPlan(plan: StoredGitInstallPlan): GitInstallPlan {

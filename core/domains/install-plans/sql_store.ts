@@ -16,6 +16,8 @@ import {
   type GitInstallPlanScope,
   type GitInstallPlanStore,
   type StoredGitInstallPlan,
+  isReconcileableGitInstallPlanPhase,
+  isTerminalGitInstallPlanPhase,
 } from "./store.ts";
 
 const TABLE = "takosumi_git_install_plans";
@@ -26,6 +28,7 @@ interface GitInstallPlanRow extends Record<string, unknown> {
   actor_subject: string;
   idempotency_key_hash: string;
   request_digest: string;
+  phase: string;
   generation: number | string;
   record_json: unknown;
   reconcile_lease_token: string | null;
@@ -137,6 +140,35 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
     return result.rows[0]?.present === true;
   }
 
+  async hasWorkspaceManagementBlockers(workspaceId: string): Promise<boolean> {
+    const result = await this.#client.query<{ readonly present: boolean }>(
+      `select exists (
+         select 1 from ${TABLE}
+          where workspace_id = $1
+            and (
+              phase is null
+              or phase not in ('failed', 'reviewable')
+              or reconcile_lease_token is not null
+              or reconcile_lease_expires_at is not null
+              or jsonb_typeof(record_json -> 'workspaceId') is distinct from 'string'
+              or record_json ->> 'workspaceId' is distinct from workspace_id
+              or jsonb_typeof(record_json -> 'phase') is distinct from 'string'
+              or record_json ->> 'phase' is distinct from phase
+              or jsonb_typeof(record_json -> 'generation') is distinct from 'number'
+              or record_json ->> 'generation' is distinct from generation::text
+            )
+       ) as present`,
+      [workspaceId],
+    );
+    if (
+      result.rows.length !== 1 ||
+      typeof result.rows[0]?.present !== "boolean"
+    ) {
+      throw new TypeError("Git install-plan blocker predicate result is indeterminate");
+    }
+    return result.rows[0].present;
+  }
+
   async claimReconcile(input: {
     readonly id: string;
     readonly expectedGeneration: number;
@@ -155,6 +187,13 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
       );
     }
     if (observed.generation !== input.expectedGeneration) {
+      return { status: "conflict", plan: observed };
+    }
+    if (
+      !isReconcileableGitInstallPlanPhase(observed.phase) ||
+      observedRow.phase !== observed.phase ||
+      isTerminalGitInstallPlanPhase(observedRow.phase)
+    ) {
       return { status: "conflict", plan: observed };
     }
     if (leaseIsBusy(observedRow, input.claimedAt)) {
@@ -178,6 +217,13 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
       if (current.generation !== input.expectedGeneration) {
         return { status: "conflict", plan: current };
       }
+      if (
+        !isReconcileableGitInstallPlanPhase(current.phase) ||
+        currentRow.phase !== current.phase ||
+        isTerminalGitInstallPlanPhase(currentRow.phase)
+      ) {
+        return { status: "conflict", plan: current };
+      }
       if (leaseIsBusy(currentRow, input.claimedAt)) {
         return { status: "busy", plan: current };
       }
@@ -199,6 +245,16 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
                 reconcile_lease_token = $3, reconcile_lease_expires_at = $4,
                 updated_at = $5
           where id = $6 and workspace_id = $7 and generation = $8
+            and phase in (
+              'syncing_source', 'compiling_install',
+              'analyzing_compatibility', 'creating_capsule', 'planning'
+            )
+            and jsonb_typeof(record_json -> 'phase') = 'string'
+            and record_json ->> 'phase' = phase
+            and jsonb_typeof(record_json -> 'workspaceId') = 'string'
+            and record_json ->> 'workspaceId' = workspace_id
+            and jsonb_typeof(record_json -> 'generation') = 'number'
+            and record_json ->> 'generation' = generation::text
             and (reconcile_lease_expires_at is null or reconcile_lease_expires_at <= $5)
             and exists (
               select 1 from takosumi_workspaces as workspace
@@ -237,6 +293,13 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
         return { status: "conflict", plan: latest };
       }
       if (latest.generation !== input.expectedGeneration) {
+        return { status: "conflict", plan: latest };
+      }
+      if (
+        !isReconcileableGitInstallPlanPhase(latest.phase) ||
+        latestRow.phase !== latest.phase ||
+        isTerminalGitInstallPlanPhase(latestRow.phase)
+      ) {
         return { status: "conflict", plan: latest };
       }
       if (leaseIsBusy(latestRow, input.claimedAt)) {
