@@ -1767,7 +1767,7 @@ test("evidence and publication state reject any Git worktree, hardlink, or inode
 
   writePrivate(input.state, "");
   const linked = join(input.operator, "linked-state.jsonl");
-  Bun.spawnSync(["ln", input.state, linked]);
+  linkSync(input.state, linked);
   await expect(
     runRunnerImageRelease(buildOptions(input), {
       repositoryRoot: input.repository,
