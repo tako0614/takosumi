@@ -105,7 +105,7 @@ export function gitInstallPlanForDrainFailure(
     original.workspaceId !== plan.workspaceId ||
     original.managementState !== "active" ||
     !Number.isSafeInteger(original.managementEpoch) || original.managementEpoch < 1 ||
-    original.managementEpoch !== expected.managementEpoch - 1) return undefined;
+    original.managementEpoch >= expected.managementEpoch) return undefined;
   if ([plan.actorSubject, plan.idempotencyKeyHash, plan.requestDigest].some(
     (value) => typeof value !== "string" || value.trim() === "",
   )) return undefined;

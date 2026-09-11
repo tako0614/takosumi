@@ -412,7 +412,9 @@ generation を 1 へ進めます。completion は generation を戻しません�
 実行歴とはしません。実行歴のある処理を lease の期限切れだけで終了するものではありません。
 
 終了は、exact な `draining` epoch D と、同じ Workspace の保存済み original active
-epoch D-1 の双方に束縛します。初期 phase は preflight のない `syncing_source` または
+epoch（1 以上 D 未満の安全な整数）の双方に束縛します。停止中止・再停止を経ても
+古い未開始の処理は収束できますが、現在の epoch を取り直して再実行する権限は与えません。
+初期 phase は preflight のない `syncing_source` または
 install の preflight を持つ `creating_capsule` に限定し、同じ canonical な作成・更新時刻と
 diagnostic・後続 Run の証拠の不在を確認します。後段の phase と generation 0 が混在する
 行を未開始と推測しません。generation、保存 JSON と物理列の identity が一致し、両 lease
@@ -456,8 +458,8 @@ JavaScript 値の比較だけでなく保存 JSON の整数表現と物理列も
 
 これは内部の一行の収束処理です。SourceSync / Restore の未開始処理、実行済みの
 結果不明処理、停止・中止・移管の公開操作は別の残件です。SourceSync の公開 status に
-`cancelled` を追加しません。上記 Git command に残る D-1 条件の中止・再停止時の
-扱いも別途修正・回帰確認する必要があります。
+`cancelled` を追加しません。Git command も同じく original epoch を D 未満として扱い、
+中止・再停止の後も元の admission を保持したまま未開始の処理だけを収束させます。
 
 ### 手動 control export の開始・結果確定
 
