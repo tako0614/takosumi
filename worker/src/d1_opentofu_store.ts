@@ -107,6 +107,8 @@ import type {
   BeginRestoreRunResult,
   BeginSourceSyncRunResult,
   BeginWorkspaceDrainingResult,
+  CommitCapsuleAbandonmentInput,
+  CommitCapsuleAbandonmentResult,
   FreezeWorkspaceManagementExpectation,
   FreezeWorkspaceManagementResult,
   CreateConnectionRegistrationInput,
@@ -162,6 +164,7 @@ import {
   assertDrainRunSettlementInput,
   assertSourceSyncSuccessCommit,
   assertSourceConfigurationWriteInput,
+  assertCapsuleAbandonmentInput,
   prepareConnectionExpiration,
   prepareConnectionRegistration,
   prepareConnectionRevocation,
@@ -179,6 +182,7 @@ import {
   clampRunListLimit,
   capsuleLifecycleMutationAlreadyApplied,
   capsuleLifecycleMutationPatch,
+  capsuleAbandonmentTerminalMatches,
   capsuleRuntimeSafetyFromRun,
   CapsuleStateVersionGuardConflict,
   CapsuleStateGenerationGuardConflict,
@@ -6602,6 +6606,15 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       );
     }
     await this.#ensureSchema();
+    if (
+      input.mutation.kind === "status" &&
+      (input.mutation.status as Capsule["status"]) === "destroyed"
+    ) {
+      const current = await this.getCapsule(input.capsuleId);
+      return current
+        ? { kind: "conflict", current }
+        : { kind: "not-found" };
+    }
     const patch = capsuleLifecycleMutationPatch(
       input.mutation,
       input.updatedAt,
@@ -6662,6 +6675,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
                 input.expected.currentOutputId,
               ),
           eq(schema.capsules.status, input.expected.status),
+          input.mutation.kind === "status"
+            ? ne(schema.capsules.status, "destroyed")
+            : sql`true`,
           input.expected.autoUpdate === undefined
             ? sql`json_extract(${schema.capsules.recordJson}, '$.autoUpdate') IS NULL`
             : sql`json_extract(${schema.capsules.recordJson}, '$.autoUpdate') = ${input.expected.autoUpdate ? 1 : 0}`,
@@ -6698,6 +6714,120 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return current
       ? { kind: "conflict", current }
       : { kind: "not-found" };
+  }
+
+  async commitCapsuleAbandonment(
+    input: CommitCapsuleAbandonmentInput,
+  ): Promise<CommitCapsuleAbandonmentResult> {
+    // The caller's lifecycle and Workspace authority are a value snapshot;
+    // never retain a mutable object while schema admission or batch execution
+    // is in flight. Validation is deliberately before the first await.
+    input = structuredClone(input);
+    assertCapsuleAbandonmentInput(input);
+    assertD1AtomicCommitBatch(this.db, "commitCapsuleAbandonment");
+    await this.#ensureSchema();
+
+    // Binding cleanup and the Capsule transition use the same complete
+    // eligibility predicate. The first statement is conditional so an empty
+    // binding slot is a valid no-op, while any failed predicate keeps the
+    // Capsule untouched by the following UPDATE.
+    const eligibility = d1CapsuleAbandonmentEligibility(this.#orm, input);
+    const bindingDelete = this.#orm
+      .delete(schema.providerBindingSets)
+      .where(
+        and(
+          eq(schema.providerBindingSets.capsuleId, input.capsuleId),
+          eq(
+            schema.providerBindingSets.environment,
+            input.expected.environment,
+          ),
+          exists(
+            this.#orm
+              .select({ one: sql`1` })
+              .from(schema.capsules)
+              .where(eligibility),
+          ),
+        ),
+      );
+    const capsuleUpdate = this.#orm
+      .update(schema.capsules)
+      .set({
+        status: "destroyed",
+        recordJson: sql`json_patch(
+          ${schema.capsules.recordJson},
+          ${JSON.stringify({ status: "destroyed", updatedAt: input.updatedAt })}
+        )`,
+        updatedAt: input.updatedAt,
+      })
+      .where(eligibility);
+    const finalSnapshot = this.#orm
+      .select({
+        id: schema.capsules.id,
+        json: schema.capsules.recordJson,
+        workspaceId: schema.capsules.workspaceId,
+        environment: schema.capsules.environment,
+        status: schema.capsules.status,
+        currentStateVersionId: schema.capsules.currentStateVersionId,
+        currentStateGeneration: schema.capsules.currentStateGeneration,
+        currentOutputId: schema.capsules.currentOutputId,
+        updatedAt: schema.capsules.updatedAt,
+        epoch: schema.capsules.executionAuthorityEpoch,
+        bindingExists: sql<number>`EXISTS (
+          SELECT 1
+            FROM ${schema.providerBindingSets}
+           WHERE ${schema.providerBindingSets.capsuleId} = ${input.capsuleId}
+             AND ${schema.providerBindingSets.environment} = ${input.expected.environment}
+        )`,
+      })
+      .from(schema.capsules)
+      .where(eq(schema.capsules.id, input.capsuleId))
+      .limit(1);
+
+    const results = await this.#orm.batch([
+      bindingDelete,
+      capsuleUpdate,
+      finalSnapshot,
+    ]);
+    const updateResult = results[1] as D1Result;
+    // Drizzle maps SELECT results in a batch to the row array itself; only
+    // write statements retain D1Result metadata. This also keeps the read
+    // portable with the SQLite fake, which intentionally preserves SELECT
+    // rows in batch mode.
+    const row = results[2][0];
+    const current = row === undefined
+      ? undefined
+      : normalizeOptionalCapsuleRecord(
+          jsonRecordFromD1Value(row.json) as unknown as Capsule,
+        );
+    if (changes(updateResult) > 0) {
+      return current
+        ? { kind: "updated", capsule: current }
+        : { kind: "not-found" };
+    }
+    if (row === undefined || current === undefined) {
+      return { kind: "not-found" };
+    }
+    const bindingExists = Number(row.bindingExists) !== 0;
+    const exactReplay =
+      !bindingExists &&
+      row.id === input.capsuleId &&
+      current.id === input.capsuleId &&
+      row.workspaceId === input.expected.workspaceId &&
+      row.environment === input.expected.environment &&
+      row.status === "destroyed" &&
+      row.updatedAt === input.updatedAt &&
+      row.currentStateVersionId === null &&
+      row.currentStateGeneration === 0 &&
+      row.currentOutputId === (input.expected.currentOutputId ?? null) &&
+      capsuleAbandonmentTerminalMatches(
+        current,
+        Number(row.epoch),
+        input.expected,
+        input.updatedAt,
+      );
+    return exactReplay
+      ? { kind: "unchanged", capsule: current }
+      : { kind: "conflict", current };
   }
 
   /**
@@ -8105,22 +8235,6 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   }
 
   // -- ProviderBindingSet ------------------------------------------------------
-
-  async deleteProviderBindingSet(
-    capsuleId: string,
-    environment: string,
-  ): Promise<void> {
-    await this.#ensureSchema();
-    await this.#orm
-      .delete(schema.providerBindingSets)
-      .where(
-        and(
-          eq(schema.providerBindingSets.capsuleId, capsuleId),
-          eq(schema.providerBindingSets.environment, environment),
-        ),
-      )
-      .run();
-  }
 
   async getProviderBindingSetByCapsule(
     capsuleId: string,
@@ -9823,6 +9937,124 @@ function d1RunDrainSettlementManagementFence(
   END`;
 }
 
+/**
+ * Complete in-batch admission fence for local Capsule abandonment. Keep this
+ * predicate shared by the binding DELETE and Capsule UPDATE: if any persisted
+ * owner, lifecycle cursor, Workspace authority, or runtime evidence changes,
+ * neither statement may perform a cleanup.
+ */
+function d1CapsuleAbandonmentEligibility(
+  orm: DrizzleD1Database<typeof schema>,
+  input: CommitCapsuleAbandonmentInput,
+): SQL {
+  const expected = input.expected;
+  const capsule = schema.capsules;
+  const workspace = schema.workspaces;
+  const workspaceAuthority = orm
+    .select({ one: sql`1` })
+    .from(workspace)
+    .where(
+      and(
+        eq(workspace.id, expected.workspaceId),
+        eq(workspace.managementState, "active"),
+        eq(
+          workspace.managementEpoch,
+          input.expectedWorkspaceManagementAuthority.managementEpoch,
+        ),
+      ),
+    );
+  const runtimeSafetyCandidate = orm
+    .select({ one: sql`1` })
+    .from(schema.runs)
+    .where(d1RuntimeSafetyCandidateWhere(input.capsuleId));
+  const normalApplyInFlight = orm
+    .select({ one: sql`1` })
+    .from(schema.runs)
+    .where(
+      and(
+        eq(schema.runs.capsuleId, input.capsuleId),
+        eq(schema.runs.type, RUN_KIND_APPLY),
+        inArray(schema.runs.status, ["queued", "running"]),
+      ),
+    );
+  const invalidBindingSlot = orm
+    .select({ one: sql`1` })
+    .from(schema.providerBindingSets)
+    .where(
+      and(
+        eq(schema.providerBindingSets.capsuleId, input.capsuleId),
+        eq(
+          schema.providerBindingSets.environment,
+          expected.environment,
+        ),
+        or(
+          ne(schema.providerBindingSets.workspaceId, expected.workspaceId),
+          sql`json_type(${schema.providerBindingSets.recordJson}, '$.id') IS NULL
+            OR json_type(${schema.providerBindingSets.recordJson}, '$.id') <> 'text'
+            OR length(COALESCE(json_extract(${schema.providerBindingSets.recordJson}, '$.id'), '')) = 0
+            OR json_extract(${schema.providerBindingSets.recordJson}, '$.id') <> ${schema.providerBindingSets.id}`,
+          sql`json_type(${schema.providerBindingSets.recordJson}, '$.workspaceId') IS NULL
+            OR json_type(${schema.providerBindingSets.recordJson}, '$.workspaceId') <> 'text'
+            OR json_extract(${schema.providerBindingSets.recordJson}, '$.workspaceId') <> ${expected.workspaceId}`,
+          sql`json_type(${schema.providerBindingSets.recordJson}, '$.capsuleId') IS NULL
+            OR json_type(${schema.providerBindingSets.recordJson}, '$.capsuleId') <> 'text'
+            OR json_extract(${schema.providerBindingSets.recordJson}, '$.capsuleId') <> ${input.capsuleId}`,
+          sql`json_type(${schema.providerBindingSets.recordJson}, '$.environment') IS NULL
+            OR json_type(${schema.providerBindingSets.recordJson}, '$.environment') <> 'text'
+            OR json_extract(${schema.providerBindingSets.recordJson}, '$.environment') <> ${expected.environment}`,
+        ),
+      ),
+    );
+  return and(
+    eq(capsule.id, input.capsuleId),
+    eq(capsule.workspaceId, expected.workspaceId),
+    eq(capsule.environment, expected.environment),
+    eq(capsule.executionAuthorityEpoch, expected.executionAuthorityEpoch),
+    isNull(capsule.currentStateVersionId),
+    expected.currentStateVersionId === undefined ? sql`true` : sql`false`,
+    eq(capsule.currentStateGeneration, expected.currentStateGeneration),
+    eq(capsule.currentStateGeneration, 0),
+    expected.currentOutputId === undefined
+      ? isNull(capsule.currentOutputId)
+      : eq(capsule.currentOutputId, expected.currentOutputId),
+    eq(capsule.status, expected.status),
+    ne(capsule.status, "destroyed"),
+    // The physical columns are indexed projections; these JSON comparisons
+    // also reject a repaired/torn record that would otherwise share the row id.
+    sql`json_extract(${capsule.recordJson}, '$.id') = ${input.capsuleId}`,
+    sql`json_extract(${capsule.recordJson}, '$.workspaceId') = ${expected.workspaceId}`,
+    sql`json_extract(${capsule.recordJson}, '$.environment') = ${expected.environment}`,
+    sql`json_extract(${capsule.recordJson}, '$.status') = ${expected.status}`,
+    sql`json_extract(${capsule.recordJson}, '$.currentStateGeneration') = ${expected.currentStateGeneration}`,
+    sql`json_extract(${capsule.recordJson}, '$.currentStateVersionId') IS NULL`,
+    expected.currentOutputId === undefined
+      ? sql`json_extract(${capsule.recordJson}, '$.currentOutputId') IS NULL`
+      : sql`json_extract(${capsule.recordJson}, '$.currentOutputId') = ${expected.currentOutputId}`,
+    expected.autoUpdate === undefined
+      ? sql`json_extract(${capsule.recordJson}, '$.autoUpdate') IS NULL`
+      : sql`json_extract(${capsule.recordJson}, '$.autoUpdate') = ${expected.autoUpdate ? 1 : 0}`,
+    expected.autoUpdateAttemptSourceSnapshotId === undefined
+      ? sql`json_extract(${capsule.recordJson}, '$.autoUpdateAttemptSourceSnapshotId') IS NULL`
+      : sql`json_extract(${capsule.recordJson}, '$.autoUpdateAttemptSourceSnapshotId') = ${expected.autoUpdateAttemptSourceSnapshotId}`,
+    expected.compatibilityReportId === undefined
+      ? sql`json_extract(${capsule.recordJson}, '$.compatibilityReportId') IS NULL`
+      : sql`json_extract(${capsule.recordJson}, '$.compatibilityReportId') = ${expected.compatibilityReportId}`,
+    expected.compatibilityStatus === undefined
+      ? sql`json_extract(${capsule.recordJson}, '$.compatibilityStatus') IS NULL`
+      : sql`json_extract(${capsule.recordJson}, '$.compatibilityStatus') = ${expected.compatibilityStatus}`,
+    exists(workspaceAuthority),
+    notExists(runtimeSafetyCandidate),
+    // Runtime-safety intentionally omits normal Apply queued/running rows;
+    // abandonment must fence those separately because a stale lease does not
+    // prove that provider work has stopped.
+    notExists(normalApplyInFlight),
+    // A binding slot is safe to delete only when both its indexed owner and
+    // its persisted JSON identity target this Capsule. Missing slots remain
+    // eligible; malformed/orphaned rows fail closed and stay for repair.
+    notExists(invalidBindingSlot),
+  )!;
+}
+
 function d1CapsuleStateGuardStmt(
   orm: DrizzleD1Database<typeof schema>,
   capsuleId: string,
@@ -10723,6 +10955,7 @@ function assertD1AtomicCommitBatch(
     | "commitRunState"
     | "commitRestoredState"
     | "commitSourceSyncSuccess"
+    | "commitCapsuleAbandonment"
     | "rebindCapsuleInstallConfig"
     | "createCapsuleInitialAuthority",
 ): void {

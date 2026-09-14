@@ -108,6 +108,8 @@ import type {
   RevokeConnectionIfUnchangedInput,
   MarkCapsuleStaleCommand,
   MarkCapsuleStaleResult,
+  CommitCapsuleAbandonmentInput,
+  CommitCapsuleAbandonmentResult,
   UpdateCapsuleLifecycleCommand,
   UpdateCapsuleLifecycleResult,
   CapsuleRuntimeSafety,
@@ -182,6 +184,9 @@ import {
   clampRunListLimit,
   capsuleLifecycleMutationAlreadyApplied,
   capsuleLifecycleMutationPatch,
+  assertCapsuleAbandonmentInput,
+  capsuleAbandonmentTerminalMatches,
+  capsuleAbandonmentTerminalCapsule,
   capsuleRuntimeSafetyFromRun,
   CapsuleStateVersionGuardConflict,
   CapsuleStateGenerationGuardConflict,
@@ -6366,6 +6371,15 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         expectedWorkspaceManagementAuthority.workspaceId,
       );
     }
+    if (
+      input.mutation.kind === "status" &&
+      (input.mutation.status as Capsule["status"]) === "destroyed"
+    ) {
+      const current = await this.getCapsule(input.capsuleId);
+      return current
+        ? { kind: "conflict", current }
+        : { kind: "not-found" };
+    }
     const patch = capsuleLifecycleMutationPatch(
       input.mutation,
       input.updatedAt,
@@ -6424,6 +6438,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
             sql`COALESCE((${pgSchema.capsules.capsuleJson} ->> 'currentStateGeneration')::integer, 0) = ${input.expected.currentStateGeneration}`,
             expectedOutput,
             eq(pgSchema.capsules.status, input.expected.status),
+            input.mutation.kind === "status"
+              ? ne(pgSchema.capsules.status, "destroyed")
+              : sql`true`,
             expectedAutoUpdate,
             expectedAutoUpdateAttempt,
             expectedCompatibilityReport,
@@ -6491,6 +6508,277 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return current
       ? { kind: "conflict", current }
       : { kind: "not-found" };
+  }
+
+  async commitCapsuleAbandonment(
+    input: CommitCapsuleAbandonmentInput,
+  ): Promise<CommitCapsuleAbandonmentResult> {
+    input = structuredClone(input);
+    assertCapsuleAbandonmentInput(input);
+
+    return await this.#client.transaction(async (transaction) => {
+      // Discover the persisted Workspace before taking the shared lock. The
+      // second read is FOR UPDATE and all guarded writes below remain on that
+      // same pinned transaction, so a rebind cannot move the Capsule between
+      // authority validation and the terminal update.
+      const observedRows = await transaction.query<{
+        readonly workspaceId: string | null;
+        readonly environment: string | null;
+      }>(
+        `select space_id as "workspaceId", environment
+           from takosumi_capsules
+          where id = $1
+          limit 1`,
+        [input.capsuleId],
+      );
+      const persistedWorkspaceId = observedRows.rows[0]?.workspaceId;
+      if (!persistedWorkspaceId) return { kind: "not-found" as const };
+      const observedEnvironment = observedRows.rows[0]?.environment;
+      if (!observedEnvironment) return { kind: "not-found" as const };
+      const management = await pgWorkspaceManagementForTransaction(
+        transaction,
+        persistedWorkspaceId,
+      );
+      // Rebind locks the provider slot before its Capsule UPDATE, so retain
+      // that lock order (Workspace -> binding -> Capsule) to avoid a
+      // cross-adapter deadlock while both commands target one Capsule.
+      const bindingRows = await transaction.query<{
+        readonly json: unknown;
+        readonly id: string;
+        readonly workspaceId: string;
+        readonly capsuleId: string;
+        readonly environment: string;
+      }>(
+        `select id,
+                space_id as "workspaceId",
+                installation_id as "capsuleId",
+                environment,
+                profile_json as "json"
+           from takosumi_provider_env_binding_sets
+          where installation_id = $1
+            and environment = $2
+          for update`,
+        [input.capsuleId, observedEnvironment],
+      );
+      const capsuleRows = await transaction.query<{
+        readonly json: unknown;
+        readonly id: string;
+        readonly workspaceId: string | null;
+        readonly environment: string | null;
+        readonly status: string | null;
+        readonly epoch: number | string | null;
+      }>(
+        `select id,
+                installation_json as "json",
+                space_id as "workspaceId",
+                environment,
+                status,
+                execution_authority_epoch as "epoch"
+           from takosumi_capsules
+          where id = $1
+          for update`,
+        [input.capsuleId],
+      );
+      const capsuleRow = capsuleRows.rows[0];
+      if (!capsuleRow) return { kind: "not-found" as const };
+      const current = normalizeCapsuleRecord(
+        parseRow(capsuleRow) as Capsule,
+      );
+      const epoch = Number(capsuleRow.epoch);
+      const binding = bindingRows.rows[0]
+        ? parseRow(bindingRows.rows[0]) as ProviderBindingSet
+        : undefined;
+      const bindingRow = bindingRows.rows[0];
+
+      // Exact replay is a read-only observation and remains available while
+      // the Workspace is draining/frozen. Presence of a binding disqualifies
+      // replay: an arbitrary destroyed row must never authorize cleanup.
+      if (
+        binding === undefined &&
+        capsuleRow.id === current.id &&
+        capsuleRow.id === input.capsuleId &&
+        capsuleRow.workspaceId === current.workspaceId &&
+        capsuleRow.environment === current.environment &&
+        capsuleRow.status === current.status &&
+        capsuleAbandonmentTerminalMatches(
+          current,
+          epoch,
+          input.expected,
+          input.updatedAt,
+        )
+      ) {
+        return { kind: "unchanged" as const, capsule: current };
+      }
+
+      const expected = input.expected;
+      const expectedStateVersion = expected.currentStateVersionId === undefined
+        ? isNull(pgSchema.capsules.currentStateVersionId)
+        : sql`false`;
+      const expectedOutput = expected.currentOutputId === undefined
+        ? sql`${pgSchema.capsules.capsuleJson} ->> 'currentOutputId' IS NULL`
+        : sql`${pgSchema.capsules.capsuleJson} ->> 'currentOutputId' = ${expected.currentOutputId}`;
+      const expectedAutoUpdate = expected.autoUpdate === undefined
+        ? sql`${pgSchema.capsules.capsuleJson} ->> 'autoUpdate' IS NULL`
+        : sql`${pgSchema.capsules.capsuleJson} ->> 'autoUpdate' = ${String(expected.autoUpdate)}`;
+      const expectedAutoUpdateAttempt =
+        expected.autoUpdateAttemptSourceSnapshotId === undefined
+          ? sql`${pgSchema.capsules.capsuleJson} ->> 'autoUpdateAttemptSourceSnapshotId' IS NULL`
+          : sql`${pgSchema.capsules.capsuleJson} ->> 'autoUpdateAttemptSourceSnapshotId' = ${expected.autoUpdateAttemptSourceSnapshotId}`;
+      const expectedCompatibilityReport =
+        expected.compatibilityReportId === undefined
+          ? sql`${pgSchema.capsules.capsuleJson} ->> 'compatibilityReportId' IS NULL`
+          : sql`${pgSchema.capsules.capsuleJson} ->> 'compatibilityReportId' = ${expected.compatibilityReportId}`;
+      const expectedCompatibilityStatus = expected.compatibilityStatus === undefined
+        ? sql`${pgSchema.capsules.capsuleJson} ->> 'compatibilityStatus' IS NULL`
+        : sql`${pgSchema.capsules.capsuleJson} ->> 'compatibilityStatus' = ${expected.compatibilityStatus}`;
+      const db = this.#drizzleForClient(transaction);
+      const runtimeCandidateAbsent = notExists(
+        db
+          .select({ id: pgSchema.runs.id })
+          .from(pgSchema.runs)
+          .where(pgRuntimeSafetyCandidateWhere(input.capsuleId)),
+      );
+      const normalApplyAbsent = notExists(
+        db
+          .select({ id: pgSchema.runs.id })
+          .from(pgSchema.runs)
+          .where(
+            and(
+              eq(pgSchema.runs.capsuleId, input.capsuleId),
+              eq(pgSchema.runs.kind, "apply"),
+              inArray(pgSchema.runs.status, ["queued", "running"]),
+            ),
+          ),
+      );
+      const bindingSlotFence = binding === undefined
+        ? notExists(
+            db
+              .select({ id: pgSchema.providerBindingSets.id })
+              .from(pgSchema.providerBindingSets)
+              .where(
+                and(
+                  eq(pgSchema.providerBindingSets.capsuleId, input.capsuleId),
+                  eq(
+                    pgSchema.providerBindingSets.environment,
+                    current.environment,
+                  ),
+                ),
+              ),
+          )
+        : exists(
+            db
+              .select({ id: pgSchema.providerBindingSets.id })
+              .from(pgSchema.providerBindingSets)
+              .where(
+                and(
+                  eq(pgSchema.providerBindingSets.id, binding.id),
+                  eq(
+                    pgSchema.providerBindingSets.workspaceId,
+                    binding.workspaceId,
+                  ),
+                  eq(
+                    pgSchema.providerBindingSets.capsuleId,
+                    binding.capsuleId,
+                  ),
+                  eq(
+                    pgSchema.providerBindingSets.environment,
+                    binding.environment,
+                  ),
+                  eq(pgSchema.providerBindingSets.profileJson, binding),
+                ),
+              ),
+          );
+
+      if (
+        current.status === "destroyed" ||
+        capsuleRow.id !== current.id ||
+        capsuleRow.id !== input.capsuleId ||
+        capsuleRow.workspaceId !== current.workspaceId ||
+        capsuleRow.environment !== current.environment ||
+        capsuleRow.status !== current.status ||
+        current.workspaceId !== expected.workspaceId ||
+        current.environment !== expected.environment ||
+        !Number.isSafeInteger(epoch) ||
+        epoch !== expected.executionAuthorityEpoch ||
+        current.currentStateVersionId !== expected.currentStateVersionId ||
+        current.currentStateGeneration !== expected.currentStateGeneration ||
+        current.currentStateVersionId !== undefined ||
+        current.currentStateGeneration !== 0 ||
+        current.status !== expected.status ||
+        (binding !== undefined && (!providerBindingSetTargetsCapsule(binding, current) ||
+          !bindingRow ||
+          bindingRow.id !== binding.id ||
+          bindingRow.workspaceId !== binding.workspaceId ||
+          bindingRow.capsuleId !== binding.capsuleId ||
+          bindingRow.environment !== binding.environment)) ||
+        !management ||
+        management.managementState !== "active" ||
+        management.managementEpoch !==
+          input.expectedWorkspaceManagementAuthority.managementEpoch ||
+        input.expectedWorkspaceManagementAuthority.workspaceId !==
+          current.workspaceId
+      ) {
+        return { kind: "conflict" as const, current };
+      }
+
+      const terminal = capsuleAbandonmentTerminalCapsule(
+        current,
+        input.updatedAt,
+      );
+      const terminalValues = capsuleValues(terminal);
+      const updatedRows = await db
+        .update(pgSchema.capsules)
+        .set({
+          status: "destroyed",
+          capsuleJson: terminalValues.capsuleJson,
+          updatedAt: terminal.updatedAt,
+        })
+        .where(
+          and(
+            eq(pgSchema.capsules.id, input.capsuleId),
+            eq(pgSchema.capsules.workspaceId, expected.workspaceId),
+            eq(pgSchema.capsules.environment, expected.environment),
+            eq(
+              pgSchema.capsules.executionAuthorityEpoch,
+              expected.executionAuthorityEpoch,
+            ),
+            expectedStateVersion,
+            sql`COALESCE((${pgSchema.capsules.capsuleJson} ->> 'currentStateGeneration')::integer, 0) = 0`,
+            expectedOutput,
+            eq(pgSchema.capsules.status, expected.status),
+            ne(pgSchema.capsules.status, "destroyed"),
+            expectedAutoUpdate,
+            expectedAutoUpdateAttempt,
+            expectedCompatibilityReport,
+            expectedCompatibilityStatus,
+            runtimeCandidateAbsent,
+            normalApplyAbsent,
+            bindingSlotFence,
+          ),
+        )
+        .returning({ json: pgSchema.capsules.capsuleJson });
+      if (!updatedRows[0]) return { kind: "conflict" as const, current };
+
+      // Deleting the binding in this transaction makes a delete/update fault
+      // roll back both rows. Missing binding is an ordinary successful
+      // abandonment and therefore does not require a separate write.
+      if (binding !== undefined) {
+        await db
+          .delete(pgSchema.providerBindingSets)
+          .where(
+            and(
+              eq(pgSchema.providerBindingSets.capsuleId, input.capsuleId),
+              eq(pgSchema.providerBindingSets.environment, current.environment),
+            ),
+          );
+      }
+      return {
+        kind: "updated" as const,
+        capsule: normalizeCapsuleRecord(
+          parseRow(updatedRows[0]) as Capsule,
+        ),
+      };
+    });
   }
 
   /**
@@ -7957,20 +8245,6 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   // --- Provider Binding sets (physical key: installation_id, environment) --
-
-  async deleteProviderBindingSet(
-    capsuleId: string,
-    environment: string,
-  ): Promise<void> {
-    await this.#db
-      .delete(pgSchema.providerBindingSets)
-      .where(
-        and(
-          eq(pgSchema.providerBindingSets.capsuleId, capsuleId),
-          eq(pgSchema.providerBindingSets.environment, environment),
-        ),
-      );
-  }
 
   async getProviderBindingSetByCapsule(
     capsuleId: string,

@@ -1337,10 +1337,34 @@ export interface CapsuleLifecycleExpected {
   readonly compatibilityStatus: Capsule["compatibilityStatus"];
 }
 
+/**
+ * Exact never-applied Capsule snapshot required by the local abandonment CAS.
+ * Workspace identity is repeated here because it is part of the persisted
+ * binding slot and must be fenced together with the lifecycle revision.
+ */
+export interface CapsuleAbandonmentExpected extends CapsuleLifecycleExpected {
+  readonly workspaceId: string;
+  readonly environment: string;
+}
+
+/** Atomically retires one never-applied Capsule and its binding slot. */
+export interface CommitCapsuleAbandonmentInput {
+  readonly capsuleId: string;
+  readonly expected: CapsuleAbandonmentExpected;
+  readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
+  readonly updatedAt: string;
+}
+
+export type CommitCapsuleAbandonmentResult =
+  | { readonly kind: "updated"; readonly capsule: Capsule }
+  | { readonly kind: "unchanged"; readonly capsule: Capsule }
+  | { readonly kind: "conflict"; readonly current: Capsule }
+  | { readonly kind: "not-found" };
+
 export type CapsuleLifecycleMutation =
   | {
       readonly kind: "status";
-      readonly status: Capsule["status"];
+      readonly status: Exclude<Capsule["status"], "destroyed">;
       /** Original active Workspace-management authority for this mutation. */
       readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
     }
@@ -1408,6 +1432,76 @@ export function capsuleLifecycleExpected(
     compatibilityReportId: capsule.compatibilityReportId,
     compatibilityStatus: capsule.compatibilityStatus,
   };
+}
+
+/** Build the terminal local-abandonment projection from an observed Capsule. */
+export function capsuleAbandonmentTerminalCapsule(
+  capsule: Capsule,
+  updatedAt: string,
+): Capsule {
+  return normalizeCapsule({
+    ...capsule,
+    status: "destroyed",
+    updatedAt,
+  });
+}
+
+/**
+ * Read-only exact replay fence for local abandonment. A destroyed row never
+ * authorizes a new cleanup; replay is accepted only when the terminal record
+ * is precisely the one derived from the supplied active expectation and the
+ * execution epoch advanced once.
+ */
+export function capsuleAbandonmentTerminalMatches(
+  capsule: Capsule,
+  executionAuthorityEpoch: number,
+  expected: CapsuleAbandonmentExpected,
+  updatedAt: string,
+): boolean {
+  return expected.status !== "destroyed" &&
+    expected.currentStateVersionId === undefined &&
+    expected.currentStateGeneration === 0 &&
+    capsule.workspaceId === expected.workspaceId &&
+    capsule.environment === expected.environment &&
+    capsule.status === "destroyed" &&
+    capsule.updatedAt === updatedAt &&
+    executionAuthorityEpoch === expected.executionAuthorityEpoch + 1 &&
+    capsule.currentStateVersionId === expected.currentStateVersionId &&
+    capsule.currentStateGeneration === expected.currentStateGeneration &&
+    capsule.currentOutputId === expected.currentOutputId &&
+    capsule.autoUpdate === expected.autoUpdate &&
+    capsule.autoUpdateAttemptSourceSnapshotId ===
+      expected.autoUpdateAttemptSourceSnapshotId &&
+    capsule.compatibilityReportId === expected.compatibilityReportId &&
+    capsule.compatibilityStatus === expected.compatibilityStatus;
+}
+
+/** Validate command shape before an adapter opens a transaction. */
+export function assertCapsuleAbandonmentInput(
+  input: CommitCapsuleAbandonmentInput,
+): void {
+  if (
+    typeof input.capsuleId !== "string" || input.capsuleId.trim().length === 0
+  ) {
+    throw new TypeError("capsuleId must be a non-empty string");
+  }
+  if (
+    typeof input.expected.workspaceId !== "string" ||
+    input.expected.workspaceId.trim().length === 0 ||
+    typeof input.expected.environment !== "string" ||
+    input.expected.environment.trim().length === 0 ||
+    !Number.isSafeInteger(input.expected.executionAuthorityEpoch) ||
+    input.expected.executionAuthorityEpoch < 1
+  ) {
+    throw new TypeError("Capsule abandonment expectation is invalid");
+  }
+  assertWorkspaceManagementAuthorityInput(
+    input.expectedWorkspaceManagementAuthority,
+    input.expected.workspaceId,
+  );
+  if (typeof input.updatedAt !== "string" || input.updatedAt.trim().length === 0) {
+    throw new TypeError("updatedAt must be a non-empty string");
+  }
 }
 
 export function capsuleLifecycleMutationPatch(
@@ -3186,6 +3280,10 @@ export interface OpenTofuControlStore {
   updateCapsuleLifecycle(
     input: UpdateCapsuleLifecycleCommand,
   ): Promise<UpdateCapsuleLifecycleResult>;
+  /** Atomically retires a never-applied Capsule and removes its binding slot. */
+  commitCapsuleAbandonment(
+    input: CommitCapsuleAbandonmentInput,
+  ): Promise<CommitCapsuleAbandonmentResult>;
   /** Private epoch read that does not reinterpret current Run safety. */
   getCapsuleExecutionAuthorityEpoch(
     capsuleId: string,
@@ -3334,10 +3432,6 @@ export interface OpenTofuControlStore {
   // replacement are intentionally available only through the atomic initial
   // authority and deployment-intent rebind operations above. A standalone
   // writer would be a second configuration authority.
-  deleteProviderBindingSet(
-    capsuleId: string,
-    environment: string,
-  ): Promise<void>;
   getProviderBindingSetByCapsule(
     capsuleId: string,
     environment: string,
@@ -5247,10 +5341,107 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         return Promise.resolve({ kind: "conflict", current });
       }
     }
+    if (
+      input.mutation.kind === "status" &&
+      ((input.mutation.status as Capsule["status"]) === "destroyed" ||
+        current.status === "destroyed")
+    ) {
+      // A destroyed Capsule is terminal. The dedicated abandonment command is
+      // the only local path that may enter this state; malformed runtime
+      // payloads must not bypass that boundary.
+      return Promise.resolve({ kind: "conflict", current });
+    }
     const updated = normalizeCapsule({
       ...current,
       ...capsuleLifecycleMutationPatch(input.mutation, input.updatedAt),
     });
+    this.#setCapsule(updated);
+    return Promise.resolve({ kind: "updated", capsule: updated });
+  }
+
+  commitCapsuleAbandonment(
+    input: CommitCapsuleAbandonmentInput,
+  ): Promise<CommitCapsuleAbandonmentResult> {
+    input = structuredClone(input);
+    assertCapsuleAbandonmentInput(input);
+    const current = this.#capsules.get(input.capsuleId);
+    if (!current) return Promise.resolve({ kind: "not-found" });
+    const epoch = this.#capsuleExecutionAuthorityEpochs.get(current.id) ?? 1;
+    const bindingCandidates = Array.from(this.#providerBindingSets.values())
+      .filter(
+        (candidate) =>
+          candidate.capsuleId === current.id &&
+          candidate.environment === current.environment,
+      );
+    const binding = bindingCandidates[0];
+
+    // Replay is deliberately read-only and may be observed while the
+    // Workspace is draining. A destroyed row with a binding is never a valid
+    // replay and therefore cannot authorize cleanup of arbitrary rows.
+    if (
+      binding === undefined &&
+      capsuleAbandonmentTerminalMatches(
+        current,
+        epoch,
+        input.expected,
+        input.updatedAt,
+      )
+    ) {
+      return Promise.resolve({ kind: "unchanged", capsule: current });
+    }
+    if (
+      current.status === "destroyed" ||
+      current.workspaceId !== input.expected.workspaceId ||
+      current.environment !== input.expected.environment ||
+      !capsuleLifecycleRevisionMatches(current, epoch, input.expected) ||
+      current.currentStateVersionId !== undefined ||
+      current.currentStateGeneration !== 0
+    ) {
+      return Promise.resolve({ kind: "conflict", current });
+    }
+    if (
+      bindingCandidates.some(
+        (candidate) => !providerBindingSetTargetsCapsule(candidate, current),
+      )
+    ) {
+      return Promise.resolve({ kind: "conflict", current });
+    }
+    const management = this.#workspaceManagement.get(current.workspaceId);
+    if (
+      management === undefined ||
+      management.managementState !== "active" ||
+      input.expectedWorkspaceManagementAuthority.workspaceId !==
+        current.workspaceId ||
+      input.expectedWorkspaceManagementAuthority.managementEpoch !==
+        management.managementEpoch
+    ) {
+      return Promise.resolve({ kind: "conflict", current });
+    }
+    if (this.#capsuleRuntimeSafetyCandidate(current.id) !== undefined) {
+      return Promise.resolve({ kind: "conflict", current });
+    }
+    const normalApplyInFlight = Array.from(this.#runs.values()).some(
+      (row) =>
+        isApplyRunRecord(row) &&
+        row.capsuleId === current.id &&
+        row.operation !== "destroy" &&
+        (row.status === "queued" || row.status === "running"),
+    );
+    if (normalApplyInFlight) {
+      return Promise.resolve({ kind: "conflict", current });
+    }
+
+    const updated = capsuleAbandonmentTerminalCapsule(current, input.updatedAt);
+    if (bindingCandidates.length > 0) {
+      for (const [key, candidate] of this.#providerBindingSets) {
+        if (
+          candidate.capsuleId === current.id &&
+          candidate.environment === current.environment
+        ) {
+          this.#providerBindingSets.delete(key);
+        }
+      }
+    }
     this.#setCapsule(updated);
     return Promise.resolve({ kind: "updated", capsule: updated });
   }
@@ -6346,21 +6537,6 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
           b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
       );
     return Promise.resolve(candidates[0]);
-  }
-
-  deleteProviderBindingSet(
-    capsuleId: string,
-    environment: string,
-  ): Promise<void> {
-    for (const [key, existing] of this.#providerBindingSets) {
-      if (
-        existing.capsuleId === capsuleId &&
-        existing.environment === environment
-      ) {
-        this.#providerBindingSets.delete(key);
-      }
-    }
-    return Promise.resolve();
   }
 
   getProviderBindingSetByCapsule(

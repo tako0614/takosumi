@@ -604,8 +604,35 @@ Plan の preflight と明示 report hint の projection は、初期 Plan の元
 別です。停止によって参照更新が拒否されても report を削除せず、すでに一致する
 current pointer は読取りだけで確認できます。
 
-この変更は公開の停止・移管機能の完成を示しません。未適用 Capsule の abandonment
-には fenced な status 更新後の ProviderBindingSet 削除が残ります。
+未適用 Capsule の abandonment は `commitCapsuleAbandonment` 一つで、保存済み
+Capsule/environment の ProviderBindingSet 削除と destroyed への変更を確定します。
+元の Workspace authority、Capsule の所属・environment・lifecycle revision・execution
+epoch を照合し、currentStateVersionId 不在・generation 0・非 destroyed を要求します。
+runtime-safety candidate が一つでもある場合と、同じ Capsule の通常 Apply が queued
+または running の場合は拒否します。通常 Apply を含めない既存の runtime-safety 表示
+判定を変更したり、「safe なら破棄できる」と流用したりしません。期限切れの Capsule
+lease だけでは、以前の executor による外部処理の終了を証明できないためです。
+
+Memory は同期変更、PostgreSQL は Workspace を lock した transaction、D1 は同じ
+完全な条件を持つ DELETE と UPDATE の atomic batch で確定します。後段の SQL 失敗も
+全体を rollback し、destroyed だけ、または BindingSet 削除だけを残しません。
+BindingSet が元からない場合も同じ条件で破棄できます。host の lifecycle lease は維持
+しますが、永続 authority の代用にはしません。呼出元もこの command に移行し、
+独立した削除用の `deleteProviderBindingSet` store port は削除しました。
+
+同じ command の再観測は、destroyed・指定 timestamp・元の epoch + 1・残りの期待値
+が一致し、BindingSet も存在しない場合だけ unchanged です。観測は一つの保存境界で
+行い、別々の時点の Capsule・epoch・BindingSet を合成しません。任意の destroyed 行
+から残った BindingSet を削除する「修復」はしません。Activity は updated のときだけ
+記録します。通常の status 変更は destroyed への変更と destroyed からの復活を拒否し、
+provider destroy の既存 commit とこの abandonment に終端への変更を限定します。
+
+これは将来の Run 行の作成まで排除する保証ではありません。先に Capsule を読んだ
+Apply 作成が遅れて `beginApplyRun` に入る場合、現行の Workspace-only admission は
+queued 行を残し得ます。consumer の実行前照合は destroyed を拒否しますが、新規 Run
+admission 自体の Capsule epoch/status fence は別の残件です。公開停止・移管機能の
+完成も示しません。
+
 `public-origin-reservation` は新規予約と確認済み解放の両方に使われる private な
 host bookkeeping であり、この四種類に一括分類しません。draining 中の解放を
 妨げない causal authority の整理が別途必要です。SourceSync の terminal 確定後の

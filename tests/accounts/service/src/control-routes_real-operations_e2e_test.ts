@@ -3277,7 +3277,7 @@ test("default service coordination returns 409 while provider Apply holds the Ca
   );
 });
 
-test("abandon wins the Capsule lifecycle lease before a queued Apply rechecks destroyed status", async () => {
+test("queued Apply prevents abandonment before acquiring the Capsule lifecycle lease", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
   const deployStore = new InMemoryOpenTofuControlStore();
@@ -3308,8 +3308,13 @@ test("abandon wins the Capsule lifecycle lease before a queued Apply rechecks de
     applyRunId: "apply_abandon_first",
     environment: "preview",
   });
+  const binding = await deployStore.getProviderBindingSetByCapsule(
+    seeded.capsule.id,
+    seeded.capsule.environment,
+  );
+  expect(binding).toBeDefined();
 
-  await controlJson(
+  const response = await controlJson(
     {
       operations,
       store: accountStore,
@@ -3317,14 +3322,22 @@ test("abandon wins the Capsule lifecycle lease before a queued Apply rechecks de
       method: "DELETE",
       path: `/api/v1/capsules/${seeded.capsule.id}`,
     },
-    202,
+    409,
   );
+  expect(response).toMatchObject({
+    error: {
+      code: "failed_precondition",
+      details: { reason: "capsule_lifecycle_busy" },
+    },
+  });
   expect(acquiredScopes).toEqual([
     `capsule:${seeded.capsule.id}:${seeded.capsule.environment}`,
   ]);
-  expect((await deployStore.getCapsule(seeded.capsule.id))?.status).toBe(
-    "destroyed",
-  );
+  expect(await deployStore.getCapsule(seeded.capsule.id)).toEqual(seeded.capsule);
+  expect(await deployStore.getProviderBindingSetByCapsule(
+    seeded.capsule.id,
+    seeded.capsule.environment,
+  )).toEqual(binding);
 
   await operations.dispatchQueuedRun({
     action: "apply",
@@ -3332,12 +3345,12 @@ test("abandon wins the Capsule lifecycle lease before a queued Apply rechecks de
     workspaceId: seeded.capsule.workspaceId,
   });
 
-  expect(applyJobs).toHaveLength(0);
+  expect(applyJobs).toHaveLength(1);
   expect((await deployStore.getApplyRun(seeded.applyRun.id))?.status).toBe(
-    "failed",
+    "succeeded",
   );
   expect((await deployStore.getCapsule(seeded.capsule.id))?.status).toBe(
-    "destroyed",
+    "active",
   );
 });
 

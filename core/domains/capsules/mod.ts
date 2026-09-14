@@ -753,6 +753,12 @@ export class CapsulesService {
     status: CapsuleStatus,
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<Capsule> {
+    if (status === "destroyed") {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "destroyed status requires provider destroy or unapplied Capsule abandonment",
+      );
+    }
     const suppliedAuthority = expectedWorkspaceManagementAuthority === undefined
       ? undefined
       : { ...expectedWorkspaceManagementAuthority };
@@ -838,19 +844,35 @@ export class CapsulesService {
           `capsule ${id} has applied state and must use the destroy flow`,
         );
       }
-      const updated = await this.#updateCapsuleLifecycle(
-        prepared,
-        {
-          kind: "status",
-          status: "destroyed",
-          expectedWorkspaceManagementAuthority:
-            prepared.expectedWorkspaceManagementAuthority,
+      const result = await this.#store.commitCapsuleAbandonment({
+        capsuleId: current.id,
+        expected: {
+          ...capsuleLifecycleExpected(
+            current,
+            prepared.executionAuthorityEpoch,
+          ),
+          workspaceId: current.workspaceId,
+          environment: current.environment,
         },
-      );
-      await this.#store.deleteProviderBindingSet(
-        updated.id,
-        updated.environment,
-      );
+        expectedWorkspaceManagementAuthority:
+          prepared.expectedWorkspaceManagementAuthority,
+        updatedAt: this.#now().toISOString(),
+      });
+      if (result.kind === "unchanged") return result.capsule;
+      if (result.kind === "not-found") {
+        throw new OpenTofuControllerError(
+          "not_found",
+          `capsule ${current.id} not found`,
+        );
+      }
+      if (result.kind === "conflict") {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `capsule ${current.id} lifecycle changed or has runtime work before abandonment`,
+          { reason: CAPSULE_LIFECYCLE_BUSY_REASON },
+        );
+      }
+      const updated = result.capsule;
       await this.#activity.record({
         workspaceId: updated.workspaceId,
         action: "capsule.abandoned",

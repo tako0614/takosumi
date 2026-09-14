@@ -603,6 +603,33 @@ test("abandonUnappliedCapsule closes the ledger and bindings without mutating hi
   ).not.toBe(capsule.id);
 });
 
+test("Capsule status patches cannot retire or resurrect a Capsule", async () => {
+  const { store, service } = build();
+  await seedWorkspaceAndSource(store);
+  const capsule = await createInitialCapsule(service, {
+    capsuleId: "cap_terminal_status",
+    providerBindingSetId: "pbind_terminal_status",
+    installConfig: initialInstallConfig("cfg_terminal_status"),
+  });
+
+  await expect(
+    service.patchCapsuleStatus(capsule.id, "destroyed"),
+  ).rejects.toMatchObject({ code: "invalid_argument" });
+  expect(await store.getCapsule(capsule.id)).toEqual(capsule);
+  expect(
+    await store.getProviderBindingSetByCapsule(capsule.id, capsule.environment),
+  ).toBeDefined();
+
+  const abandoned = await service.abandonUnappliedCapsule(capsule.id, "cancel");
+  for (const status of ["active", "stale", "error"] as const) {
+    await expect(
+      service.patchCapsuleStatus(capsule.id, status),
+    ).rejects.toMatchObject({ code: "failed_precondition" });
+  }
+  expect(await store.getCapsule(capsule.id)).toEqual(abandoned);
+  expect(await store.getCapsuleExecutionAuthorityEpoch(capsule.id)).toBe(2);
+});
+
 test("abandonUnappliedCapsule refuses a Capsule with applied state", async () => {
   const { store, service } = build();
   await seedWorkspaceAndSource(store);

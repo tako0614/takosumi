@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import type { Capsule } from "takosumi-contract/capsules";
 import type { InstallConfig } from "takosumi-contract/install-configs";
 import type { Output } from "takosumi-contract/outputs";
+import type { Run } from "takosumi-contract/runs";
 import type { StateVersion } from "takosumi-contract/state-versions";
 
 import {
@@ -16,6 +17,8 @@ import type {
 } from "../../../../core/adapters/storage/sql.ts";
 import {
   capsuleLifecycleExpected,
+  type CapsuleRuntimeSafety,
+  type CommitCapsuleAbandonmentInput,
   InMemoryOpenTofuControlStore,
   type UpdateCapsuleLifecycleCommand,
   type OpenTofuControlStore,
@@ -80,6 +83,7 @@ class PausingLifecycleStore extends InMemoryOpenTofuControlStore {
   readonly lifecycleStarted = deferred<void>();
   readonly releaseLifecycle = deferred<void>();
   observedLifecycleCommand?: UpdateCapsuleLifecycleCommand;
+  observedAbandonmentCommand?: CommitCapsuleAbandonmentInput;
 
   override async updateCapsuleLifecycle(
     input: UpdateCapsuleLifecycleCommand,
@@ -88,6 +92,42 @@ class PausingLifecycleStore extends InMemoryOpenTofuControlStore {
     this.lifecycleStarted.resolve();
     await this.releaseLifecycle.promise;
     return await super.updateCapsuleLifecycle(input);
+  }
+
+  override async commitCapsuleAbandonment(
+    input: CommitCapsuleAbandonmentInput,
+  ) {
+    this.observedAbandonmentCommand = input;
+    this.lifecycleStarted.resolve();
+    await this.releaseLifecycle.promise;
+    return await super.commitCapsuleAbandonment(input);
+  }
+}
+
+class RuntimeEvidenceAfterSafetyReadStore extends InMemoryOpenTofuControlStore {
+  #injected = false;
+
+  override async getCapsuleRuntimeSafety(
+    capsuleId: string,
+  ): Promise<CapsuleRuntimeSafety | undefined> {
+    const observed = await super.getCapsuleRuntimeSafety(capsuleId);
+    if (!this.#injected && observed === undefined) {
+      this.#injected = true;
+      const capsule = await super.getCapsule(capsuleId);
+      if (!capsule) throw new Error("Capsule disappeared during safety read");
+      const runtimeEvidence: Run = {
+        id: `restore_runtime_evidence_${capsule.id}`,
+        workspaceId: capsule.workspaceId,
+        capsuleId: capsule.id,
+        environment: capsule.environment,
+        type: "restore",
+        status: "running",
+        createdBy: "runtime-evidence-fixture",
+        createdAt: LIFECYCLE_AT,
+      };
+      await this.putBackupRun(runtimeEvidence);
+    }
+    return observed;
   }
 }
 
@@ -398,9 +438,10 @@ test(
         code: "failed_precondition",
         details: { reason: CAPSULE_LIFECYCLE_BUSY_REASON },
       });
-      expect(lifecycleCommandAuthority(store.observedLifecycleCommand)).toEqual(
-        authority,
-      );
+      expect(
+        store.observedAbandonmentCommand?.expectedWorkspaceManagementAuthority ??
+          lifecycleCommandAuthority(store.observedLifecycleCommand),
+      ).toEqual(authority);
       expect(await store.getCapsule(seeded.capsule.id)).toMatchObject({
         status: "pending",
       });
@@ -553,6 +594,90 @@ test("abandonment cannot retire a Capsule after a concurrent Apply commit", asyn
   });
 });
 
+test(
+  "Capsule abandonment atomicity rolls back the Capsule when binding deletion fails",
+  async () => {
+    const database = new SqliteFakeD1();
+    const store = new CloudflareD1OpenTofuControlStore(database);
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: "workspace_abandonment_binding_failure",
+      capsuleId: "capsule_abandonment_binding_failure",
+      requiredProviders: ["registry.opentofu.org/examplecorp/example"],
+    });
+    const binding = await store.getProviderBindingSetByCapsule(
+      seeded.capsule.id,
+      seeded.capsule.environment,
+    );
+    if (!binding) throw new Error("abandonment binding fixture is incomplete");
+
+    await database.exec(`
+      CREATE TRIGGER reject_capsule_abandonment_binding_delete
+      BEFORE DELETE ON provider_env_binding_sets
+      BEGIN
+        SELECT RAISE(ABORT, 'fixture capsule abandonment binding failure');
+      END;
+    `);
+
+    const service = new CapsulesService({
+      store,
+      now: () => new Date(LIFECYCLE_AT),
+    });
+    await expect(
+      service.abandonUnappliedCapsule(
+        seeded.capsule.id,
+        "operator abandoned an unapplied Capsule",
+      ),
+    ).rejects.toThrow();
+
+    expect(await store.getCapsule(seeded.capsule.id)).toEqual(seeded.capsule);
+    expect(
+      await store.getProviderBindingSetByCapsule(
+        seeded.capsule.id,
+        seeded.capsule.environment,
+      ),
+    ).toEqual(binding);
+  },
+);
+
+test(
+  "Capsule abandonment atomicity rejects runtime evidence arriving after the safety read",
+  async () => {
+    const store = new RuntimeEvidenceAfterSafetyReadStore();
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: "workspace_abandonment_runtime_arrival",
+      capsuleId: "capsule_abandonment_runtime_arrival",
+      requiredProviders: ["registry.opentofu.org/examplecorp/example"],
+    });
+    const binding = await store.getProviderBindingSetByCapsule(
+      seeded.capsule.id,
+      seeded.capsule.environment,
+    );
+    if (!binding) throw new Error("abandonment binding fixture is incomplete");
+
+    const service = new CapsulesService({
+      store,
+      now: () => new Date(LIFECYCLE_AT),
+    });
+    await expect(
+      service.abandonUnappliedCapsule(
+        seeded.capsule.id,
+        "operator abandoned an unapplied Capsule",
+      ),
+    ).rejects.toMatchObject({ code: "failed_precondition" });
+
+    expect(await store.getCapsule(seeded.capsule.id)).toEqual(seeded.capsule);
+    expect(
+      await store.getProviderBindingSetByCapsule(
+        seeded.capsule.id,
+        seeded.capsule.environment,
+      ),
+    ).toEqual(binding);
+    expect(
+      await store.getBackupRun(`restore_runtime_evidence_${seeded.capsule.id}`),
+    ).toMatchObject({ status: "running" });
+  },
+);
+
 test("InstallConfig re-adoption uses the same host lifecycle admission as provider work", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const seeded = await seedCapsuleModel(store, {
@@ -645,7 +770,7 @@ test("lifecycle CAS preserves a newer Apply across every store", async () => {
       expected,
       mutation: {
         kind: "status",
-        status: "destroyed",
+        status: "error",
         expectedWorkspaceManagementAuthority: management,
       },
       updatedAt: LIFECYCLE_AT,
@@ -709,7 +834,7 @@ test("auto-update claim replay has one winner across every store", async () => {
   }
 });
 
-test("destroy lifecycle CAS advances execution authority once and rejects stale replay", async () => {
+test("atomic abandonment advances execution authority once and observes exact replay", async () => {
   for (const [label, store] of await stores()) {
     const seeded = await seedCapsuleModel(store, {
       workspaceId: `workspace_destroy_epoch_${label}`,
@@ -725,16 +850,16 @@ test("destroy lifecycle CAS advances execution authority once and rejects stale 
     );
     const command = {
       capsuleId: seeded.capsule.id,
-      expected: capsuleLifecycleExpected(seeded.capsule, epoch!),
-      mutation: {
-        kind: "status" as const,
-        status: "destroyed" as const,
-        expectedWorkspaceManagementAuthority: management,
+      expected: {
+        ...capsuleLifecycleExpected(seeded.capsule, epoch!),
+        workspaceId: seeded.capsule.workspaceId,
+        environment: seeded.capsule.environment,
       },
+      expectedWorkspaceManagementAuthority: management,
       updatedAt: LIFECYCLE_AT,
     };
 
-    const first = await store.updateCapsuleLifecycle(command);
+    const first = await store.commitCapsuleAbandonment(command);
     expect(first.kind, `${label}:first result`).toBe("updated");
     expect(first.kind === "updated" ? first.capsule.status : undefined, label)
       .toBe("destroyed");
@@ -744,9 +869,9 @@ test("destroy lifecycle CAS advances execution authority once and rejects stale 
     ).toBe(2);
 
     expect(
-      (await store.updateCapsuleLifecycle(command)).kind,
-      `${label}:stale replay`,
-    ).toBe("conflict");
+      (await store.commitCapsuleAbandonment(command)).kind,
+      `${label}:exact replay`,
+    ).toBe("unchanged");
     expect(
       await store.getCapsuleExecutionAuthorityEpoch(seeded.capsule.id),
       `${label}:replay epoch`,
