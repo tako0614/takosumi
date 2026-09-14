@@ -1,25 +1,22 @@
 /**
  * `contract/package.json` `files` is DERIVED from `exports`, not hand-listed.
  *
- * WHY. The two statements drifted, and the drift was invisible until someone
- * imported the package. `files` named 13 of 57 modules while the repository's
- * own consumers imported `runs`, `capsules`, `workspaces` and the
- * deploy-control API from `contract/` directly — so every wire type an external
- * consumer tracks was importable here and absent from the published bytes. That
- * is the same failure the broken `./client-api` export shipped elsewhere in the
- * ecosystem: a hand-listed `files` array is a second statement of what the
- * package contains, and nothing dereferenced it.
+ * The public entrypoints are curated in `exports` and documented in the
+ * contract README. Relative imports by the service and its source-tree aliases
+ * do not establish public package entrypoints. A separate exact export-map
+ * assertion guards that boundary; this checker guards packed completeness.
  *
  * The package is still CURATED on purpose: host-internal contracts
  * (`index.ts`, `internal-*.ts`, `interface-display.ts`, `reference/`) are
- * deliberately not published. Curation and derivation are compatible — the
- * curated thing is `exports`, and `files` is exactly what those exports need:
+ * deliberately not public entrypoints. Curation and derivation are compatible —
+ * the curated thing is `exports`, and `files` is exactly what those exports need:
  * every export target plus everything it transitively imports.
  *
  * So this computes the closure by reading the real import graph and diffs it
  * against what is committed (regenerate-and-diff). Adding an export adds its
  * closure with no second edit; forgetting one is a gate failure, not a bug
- * report from a consumer.
+ * report from a consumer. Being packed as an implementation dependency does not
+ * make a module a supported public subpath.
  *
  * Run: `bun scripts/check-contract-package-files.ts --check`
  *      `bun scripts/check-contract-package-files.ts --write`

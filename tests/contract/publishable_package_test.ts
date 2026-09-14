@@ -138,12 +138,8 @@ test("the OSS contract directory is an explicit public package", () => {
     publishConfig: { access: "public" },
   });
   expect(packageJson.private).not.toBe(true);
-  // `files` is DERIVED from `exports` — every export target plus everything it
-  // transitively imports — not hand-listed. The hand-listed array named 13 of
-  // 57 modules, so every wire type a consumer tracks (runs, capsules,
-  // workspaces, the deploy-control API) was importable in this repository and
-  // absent from the published bytes. The package stays curated: what is curated
-  // is `exports`, and `files` follows from it.
+  // The public entrypoints are curated separately below. `files` follows their
+  // import closure; source-tree consumers do not expand the public surface.
   expect(packageJson.files).toEqual([...contractPackageFiles(packageJson)]);
 });
 
@@ -162,17 +158,20 @@ test("every export subpath resolves to a module the package actually ships", asy
   }
 });
 
-test("the wire modules a consumer tracks are importable subpaths", () => {
-  // These are what an external consumer pins against: they were reachable in
-  // this repository and unreachable from the published package.
-  for (const subpath of [
-    "./deploy-control-api",
-    "./runs",
-    "./capsules",
-    "./workspaces",
-  ]) {
-    expect(Object.keys(packageJson.exports ?? {})).toContain(subpath);
-  }
+test("the public export map remains the nine curated runtime entrypoints", () => {
+  // Assert identities independently of the manifest-derived closure. Checking
+  // only that every declared export packs would accept an accidental SDK.
+  expect(packageJson.exports).toEqual({
+    ".": "./runtime.ts",
+    "./background-events": "./background-events.ts",
+    "./managed-runtime-connections": "./managed-runtime-connections.ts",
+    "./managed-relational-runtime": "./managed-relational-runtime.ts",
+    "./discovery": "./discovery.ts",
+    "./interface-types": "./interface-types.ts",
+    "./runtime-interfaces": "./runtime-interfaces.ts",
+    "./notification-pushers": "./notification-pushers.ts",
+    "./identity-oidc": "./identity-oidc.ts",
+  });
 });
 
 test("root and explicit runtime subpaths expose one contract identity", () => {

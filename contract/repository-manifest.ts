@@ -86,19 +86,53 @@ export interface RepositoryInstallUxInput {
  * The requirement itself is identical either way — only delivery differs.
  */
 export type RepositoryRuntimeDelivery<K extends string> =
-  | { readonly variables: Readonly<Partial<Record<K, string>>> }
-  | { readonly bindings: Readonly<Partial<Record<K, string>>> };
+  | {
+      readonly variables: Readonly<Partial<Record<K, string>>>;
+      readonly bindings?: never;
+    }
+  | {
+      readonly bindings: Readonly<Partial<Record<K, string>>>;
+      readonly variables?: never;
+    };
 
 /** OIDC slots delivered to ordinary OpenTofu module variables. */
 export type RepositoryOidcVariableSlot =
   "issuerUrl" | "accountsUrl" | "clientId" | "redirectUri";
-/** OIDC slots delivered to the runtime binding environment. */
+/**
+ * OIDC slots delivered to runtime bindings by the v2.4 profile. Earlier
+ * manifest versions use the legacy variable-slot set for bindings instead.
+ */
 export type RepositoryOidcBindingSlot =
   "issuerUrl" | "clientId" | "ownerSubject" | "redirectUri";
+/** OIDC slots delivered to runtime bindings by v1 through v2.3. */
+export type RepositoryOidcLegacyBindingSlot = RepositoryOidcVariableSlot;
 /** Compatibility union for callers that only need the complete slot set. */
 export type RepositoryOidcSlot =
   | RepositoryOidcVariableSlot
   | RepositoryOidcBindingSlot;
+
+type RepositoryOidcTargetRecord<AllowedSlot extends RepositoryOidcSlot> =
+  Readonly<
+    Partial<Record<AllowedSlot, string>> &
+      Partial<Record<Exclude<RepositoryOidcSlot, AllowedSlot>, never>>
+  >;
+
+/**
+ * OIDC delivery keeps variable slots and binding slots as distinct surfaces.
+ * The aggregate default is useful for callers that only consume parser output;
+ * versioned manifest types provide the exact binding-slot parameter.
+ */
+export type RepositoryOidcDelivery<
+  BindingSlot extends RepositoryOidcSlot = RepositoryOidcSlot,
+> =
+  | {
+      readonly variables: RepositoryOidcTargetRecord<RepositoryOidcVariableSlot>;
+      readonly bindings?: never;
+    }
+  | {
+      readonly bindings: RepositoryOidcTargetRecord<BindingSlot>;
+      readonly variables?: never;
+    };
 export type RepositoryEndpointSlot = "url" | "subdomain" | "routePattern";
 export type RepositorySecretSlot = "value";
 
@@ -124,15 +158,13 @@ export interface RepositoryConsumedInterfaceRequirement {
  * Takosumi validates each requirement against operator policy and compiles it
  * into its own DB-owned InstallConfig before any Plan can use it.
  */
-export type RepositoryRuntimeRequirement =
-  | {
-      readonly kind: "identity.oidc";
-      readonly callbackPath: string;
-      readonly scopes?: readonly string[];
-      readonly deliver:
-        | RepositoryRuntimeDelivery<RepositoryOidcVariableSlot>
-        | RepositoryRuntimeDelivery<RepositoryOidcBindingSlot>;
-    }
+interface RepositoryIdentityOidcRequirement {
+  readonly kind: "identity.oidc";
+  readonly callbackPath: string;
+  readonly scopes?: readonly string[];
+}
+
+type RepositoryNonOidcRuntimeRequirement =
   | {
       readonly kind: "secret.generated";
       readonly bytes?: number;
@@ -144,6 +176,22 @@ export type RepositoryRuntimeRequirement =
       readonly deliver: RepositoryRuntimeDelivery<RepositoryEndpointSlot>;
     }
   | RepositoryConsumedInterfaceRequirement;
+
+/**
+ * Requirement view parameterized by the binding slots available in one
+ * manifest version. Variables always retain their four ordinary OIDC slots.
+ */
+export type RepositoryRuntimeRequirementFor<
+  BindingSlot extends RepositoryOidcSlot,
+> =
+  | (RepositoryIdentityOidcRequirement & {
+      readonly deliver: RepositoryOidcDelivery<BindingSlot>;
+    })
+  | RepositoryNonOidcRuntimeRequirement;
+
+/** Aggregate parser-output view for callers without a version discriminator. */
+export type RepositoryRuntimeRequirement =
+  RepositoryRuntimeRequirementFor<RepositoryOidcSlot>;
 
 /** Public output types that a Capsule Interface may consume. */
 export type RepositoryInterfaceOutputType =
@@ -209,21 +257,35 @@ export interface RepositoryInstallUxModule {
   readonly interfaces?: readonly RepositoryInterfaceDeclaration[];
 }
 
+/** Module view parameterized by the OIDC binding slots of one API version. */
+export type RepositoryInstallUxModuleFor<
+  BindingSlot extends RepositoryOidcSlot,
+> = Omit<RepositoryInstallUxModule, "requires"> & {
+  readonly requires?: readonly RepositoryRuntimeRequirementFor<BindingSlot>[];
+};
+
 export type RepositoryInstallUxModuleV1 = Omit<
-  RepositoryInstallUxModule,
+  RepositoryInstallUxModuleFor<RepositoryOidcLegacyBindingSlot>,
   "interfaces"
 > & { readonly interfaces?: never };
+
+export type RepositoryInstallUxModuleV2 =
+  RepositoryInstallUxModuleFor<RepositoryOidcLegacyBindingSlot>;
+
+export type RepositoryInstallUxModuleV2_1 = RepositoryInstallUxModuleV2;
+
+export type RepositoryInstallUxModuleV2_2 = RepositoryInstallUxModuleV2;
 
 export interface RepositoryManifestInstallV1 {
   readonly modules: Readonly<Record<string, RepositoryInstallUxModuleV1>>;
 }
 
 export interface RepositoryManifestInstallV2 {
-  readonly modules: Readonly<Record<string, RepositoryInstallUxModule>>;
+  readonly modules: Readonly<Record<string, RepositoryInstallUxModuleV2>>;
 }
 
 export interface RepositoryManifestInstallV2_1 {
-  readonly modules: Readonly<Record<string, RepositoryInstallUxModule>>;
+  readonly modules: Readonly<Record<string, RepositoryInstallUxModuleV2_1>>;
   /**
    * Compatibility-only presentation hint from the published v2.1 wire.
    * Module execution authority remains the SourceSnapshot scan plus the
@@ -233,18 +295,26 @@ export interface RepositoryManifestInstallV2_1 {
 }
 
 export interface RepositoryManifestInstallV2_2 {
-  readonly modules: Readonly<Record<string, RepositoryInstallUxModule>>;
+  readonly modules: Readonly<Record<string, RepositoryInstallUxModuleV2_2>>;
   /** @see RepositoryManifestInstallV2_1.defaultModule */
   readonly defaultModule?: string;
 }
 
-export interface RepositoryInstallUxModuleV2_3 extends RepositoryInstallUxModule {
-  /** Credential-free argv build proposal, reviewed before Plan. */
-  readonly sourceBuild?: SourceBuildConfig;
-}
+export type RepositoryInstallUxModuleV2_3 =
+  RepositoryInstallUxModuleFor<RepositoryOidcLegacyBindingSlot> & {
+    /** Credential-free argv build proposal, reviewed before Plan. */
+    readonly sourceBuild?: SourceBuildConfig;
+  };
 
-/** v2.4 retains v2.3 and adds the closed runtime OIDC binding slots. */
-export interface RepositoryInstallUxModuleV2_4 extends RepositoryInstallUxModuleV2_3 {}
+/**
+ * v2.4 retains v2.3 and replaces binding accountsUrl with ownerSubject; its
+ * variable-delivered OIDC slots remain unchanged.
+ */
+export type RepositoryInstallUxModuleV2_4 =
+  RepositoryInstallUxModuleFor<RepositoryOidcBindingSlot> & {
+    /** Credential-free argv build proposal, reviewed before Plan. */
+    readonly sourceBuild?: SourceBuildConfig;
+  };
 
 export interface RepositoryManifestInstallV2_3 {
   readonly modules: Readonly<Record<string, RepositoryInstallUxModuleV2_3>>;
@@ -1251,10 +1321,7 @@ function parseOidcDelivery(
   value: unknown,
   prefix: string,
   allowRuntimeOidcBindings: boolean,
-):
-  | RepositoryRuntimeDelivery<RepositoryOidcVariableSlot>
-  | RepositoryRuntimeDelivery<RepositoryOidcBindingSlot>
-  | string {
+): RepositoryOidcDelivery | string {
   if (!isPlainRecord(value)) return `${prefix} must be an object`;
   const keys = exactKeys(value, ["variables", "bindings"]);
   if (keys) return `${prefix}.${keys}`;

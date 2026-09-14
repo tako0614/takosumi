@@ -13,8 +13,8 @@ const TARBALL_NAME = "takosjp-takosumi-contract-2.1.0.tgz";
  * Derived, not listed. `files` is itself derived from `exports` by
  * `scripts/check-contract-package-files.ts`, so what this test compares the
  * tarball against is the manifest the package publishes — a relation that stays
- * true across the next legitimate export, rather than a value someone has to
- * remember to edit alongside it.
+ * true across changes to its implementation closure. The independent exact
+ * export-map assertion in publishable_package_test.ts guards public identities.
  */
 const EXPECTED_PACKAGE_FILES: readonly string[] = [
   ...(
@@ -90,11 +90,8 @@ test(
       expect(parseDryRunFiles(dryRun.stdout)).toEqual([
         ...EXPECTED_PACKAGE_FILES,
       ]);
-      // Every export subpath's target is in the packed bytes. This is the
-      // defect the derivation closes: `files` named 13 of 57 modules while the
-      // repository imported runs / capsules / workspaces / the deploy-control
-      // API from `contract/` directly, so every wire type an external consumer
-      // tracks was importable here and absent from the published package.
+      // Every curated entrypoint must be present in the packed bytes. Internal
+      // relative imports are not declarations of new public package subpaths.
       const exported = (
         JSON.parse(readFileSync(join(CONTRACT, "package.json"), "utf8")) as {
           readonly exports: Readonly<Record<string, string>>;
@@ -119,7 +116,7 @@ test(
           /(?:^|\/)(?:accounts|core|deploy|lib|providers|reference)(?:\/|$)/u,
         );
         expect(path).not.toMatch(
-          /(?:index|interface-display|internal-api|internal-crypto)\.ts$/u,
+          /(?:index|interface-display|internal-[^/]+)\.ts$/u,
         );
       }
 
@@ -145,7 +142,17 @@ test(
       const fixture = join(directory, "consumer");
       await mkdir(fixture);
       await writeConsumerFixture(fixture, tarball);
-      await runChecked(["bun", "install", "--ignore-scripts"], fixture);
+      // Consume only the archive under test, without an installer, registry,
+      // workspace symlink or dependency cache. The compiler stays owner-pinned.
+      const packageDirectory = join(
+        fixture,
+        "node_modules/@takosjp/takosumi-contract",
+      );
+      await mkdir(packageDirectory, { recursive: true });
+      await runChecked(
+        ["tar", "-xzf", tarball, "-C", packageDirectory, "--strip-components=1"],
+        fixture,
+      );
       await runChecked([TSC, "--project", "tsconfig.json"], fixture);
 
       const legacy = await runChecked(
@@ -324,6 +331,16 @@ import * as IpClassification from "@takosjp/takosumi-contract/reference/ip-class
 import * as InternalApi from "@takosjp/takosumi-contract/internal-api";
 // @ts-expect-error provider adapters are not package exports
 import * as Providers from "@takosjp/takosumi-contract/providers";
+// @ts-expect-error Run lifecycle is source-only, not a portable runtime API
+import * as Runs from "@takosjp/takosumi-contract/runs";
+// @ts-expect-error state lifecycle is source-only
+import * as StateVersions from "@takosjp/takosumi-contract/state-versions";
+// @ts-expect-error install configuration is source-only
+import * as InstallConfigs from "@takosjp/takosumi-contract/install-configs";
+// @ts-expect-error the deploy-control API is not a contract package entrypoint
+import * as DeployControl from "@takosjp/takosumi-contract/deploy-control-api";
+// @ts-expect-error packed transitive modules are not public subpath identities
+import * as Capabilities from "@takosjp/takosumi-contract/capabilities";
 `,
   );
 }
