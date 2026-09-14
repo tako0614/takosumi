@@ -1517,7 +1517,9 @@ test("Capsule Plan fails closed when re-adoption races outer and persisted mater
       if (property === "getCapsuleExecutionAuthorityEpoch") {
         return async (capsuleId: string) => {
           epochReads += 1;
-          if (epochReads === 2) {
+          // The initial compatibility epoch precedes the outer materialization
+          // capture. Race that outer capture with the subsequent inner read.
+          if (epochReads === 3) {
             const rebound = await targetStore.rebindCapsuleInstallConfig({
               capsuleId,
               targetInstallConfigId: target.id,
@@ -1548,7 +1550,7 @@ test("Capsule Plan fails closed when re-adoption races outer and persisted mater
     code: "failed_precondition",
     details: { reason: "capsule_execution_authority_changed" },
   });
-  expect(epochReads).toBe(2);
+  expect(epochReads).toBe(3);
   expect((await inner.getCapsule(seeded.capsule.id))?.installConfigId).toBe(
     target.id,
   );
@@ -1591,7 +1593,8 @@ test("Capsule Plan without a materializer rejects re-adoption between outer auth
       if (property === "getCapsuleExecutionAuthorityEpoch") {
         return async (capsuleId: string) => {
           epochReads += 1;
-          if (epochReads === 2) {
+          // Include the initial compatibility-projection epoch capture.
+          if (epochReads === 3) {
             const rebound = await targetStore.rebindCapsuleInstallConfig({
               capsuleId,
               targetInstallConfigId: target.id,
@@ -1625,7 +1628,7 @@ test("Capsule Plan without a materializer rejects re-adoption between outer auth
     code: "failed_precondition",
     details: { reason: "capsule_execution_authority_changed" },
   });
-  expect(epochReads).toBe(2);
+  expect(epochReads).toBe(3);
   expect(planWrites).toBe(0);
   expect((await inner.getCapsule(seeded.capsule.id))?.installConfigId).toBe(
     target.id,

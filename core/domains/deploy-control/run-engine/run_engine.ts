@@ -2412,6 +2412,15 @@ export class RunEngine {
     internal: CreateCapsulePlanInternal = {},
   ): Promise<PlanRunResponse> {
     requireNonEmptyString(capsuleId, "capsuleId");
+    // Capture before the first Capsule read: old compatibility evidence must
+    // never be paired with an epoch obtained after an InstallConfig rebind.
+    // Destroy does not select or project compatibility evidence.
+    const compatibilityExecutionAuthorityEpoch = destroy
+      ? undefined
+      : await planCreationStage(
+          "compatibility_authority_load",
+          this.#store.getCapsuleExecutionAuthorityEpoch(capsuleId),
+        );
     const capsule = await planCreationStage(
       "capsule_load",
       this.#requireCapsule(capsuleId),
@@ -2711,6 +2720,7 @@ export class RunEngine {
               snapshot,
               internal.compatibilityReportId,
               installConfig.modulePath,
+              compatibilityExecutionAuthorityEpoch,
             ),
           )
         : await planCreationStage(
@@ -2724,6 +2734,7 @@ export class RunEngine {
                 kind: "captured",
                 authority: workspaceManagementAuthority ?? null,
               },
+              compatibilityExecutionAuthorityEpoch,
             ),
           );
     const {
@@ -3055,6 +3066,7 @@ export class RunEngine {
     snapshot: SourceSnapshot,
     modulePath: string | undefined,
     managementContext: CompatibilityCheckManagementContext,
+    executionAuthorityEpoch: number | undefined,
   ): Promise<CapsuleCompatibilityReport | undefined> {
     const existing = capsule.compatibilityReportId
       ? await this.#store.getCapsuleCompatibilityReport(
@@ -3098,7 +3110,9 @@ export class RunEngine {
       )
     ) {
       this.#assertCompatibilityReportRunnable(preflight, policy);
-      await this.#recordCapsuleCompatibility(capsule, preflight);
+      await this.#recordCapsuleCompatibility(
+        capsule, preflight, executionAuthorityEpoch,
+      );
       return preflight;
     }
     if (!this.#sourcesService) {
@@ -3123,7 +3137,9 @@ export class RunEngine {
       managementContext,
     );
     this.#assertCompatibilityReportRunnable(report, policy);
-    await this.#recordCapsuleCompatibility(capsule, report);
+    await this.#recordCapsuleCompatibility(
+      capsule, report, executionAuthorityEpoch,
+    );
     return report;
   }
 
@@ -3133,6 +3149,7 @@ export class RunEngine {
     snapshot: SourceSnapshot,
     reportId: string,
     modulePath: string | undefined,
+    executionAuthorityEpoch: number | undefined,
   ): Promise<CapsuleCompatibilityReport> {
     const report = await this.#store.getCapsuleCompatibilityReport(reportId);
     if (!report) {
@@ -3152,7 +3169,9 @@ export class RunEngine {
     const policy = await this.#policyForCapsule(capsule);
     this.#assertCompatibilityReportRunnable(report, policy);
     if (capsule.compatibilityReportId !== report.id) {
-      await this.#recordCapsuleCompatibility(capsule, report);
+      await this.#recordCapsuleCompatibility(
+        capsule, report, executionAuthorityEpoch,
+      );
     }
     return report;
   }
@@ -3160,10 +3179,8 @@ export class RunEngine {
   async #recordCapsuleCompatibility(
     capsule: Capsule,
     report: CapsuleCompatibilityReport,
+    epoch: number | undefined,
   ): Promise<void> {
-    const epoch = await this.#store.getCapsuleExecutionAuthorityEpoch(
-      capsule.id,
-    );
     if (epoch === undefined) {
       throw new OpenTofuControllerError(
         "not_found",
@@ -5460,7 +5477,9 @@ export class RunEngine {
     ) {
       return planRun;
     }
-    const capsule = await this.#requireCapsule(planRun.capsuleId);
+    // This continuation is anchored to the persisted Plan, not whichever
+    // Capsule epoch happens to be current when a consumer starts.
+    const capsule = await this.#requireCurrentPlannedCapsule(planRun);
     const snapshot = await this.#store.getSourceSnapshot(
       planRun.sourceSnapshotId,
     );
@@ -5489,6 +5508,7 @@ export class RunEngine {
         kind: "captured",
         authority: managementAuthority ?? null,
       },
+      planRun.capsuleExecutionAuthorityEpoch ?? 1,
     );
     if (!report) return planRun;
     // Keep this candidate in memory until the running claim. A separate put

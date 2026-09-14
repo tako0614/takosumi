@@ -607,8 +607,17 @@ Plan consumer による入力 sidecar の削除と通知は、終了更新に勝
 再削除や、終了保存後に process が停止した場合の cleanup/通知の確実な配送までは、
 この経路で保証しません。
 
-互換性 report 自体の生成・Capsule への結果反映、全 blocker の収束と公開の停止・移管
-API は別の残件です。公開 Run schema、DB schema、管理 epoch の取得経路は変更しません。
+Capsule への互換性結果の反映では、Plan 作成の最初の Capsule 読み取りより前に取得した
+execution-authority epoch を、report の選択・分析から最後の lifecycle CAS まで保持します。
+保存直前に epoch を取り直すことはなく、旧 InstallConfig の結果を新しい設定へ反映しません。
+キュー待ち Plan の補完は保存済み Plan の epoch と現在の Capsule を先に照合し、同じ
+保存済み epoch を結果反映にも渡します。途中の rebind は既存 CAS で拒否します。
+report 自体の保存済み内容は消さず、後段の Plan 実行権確認も維持します。
+
+この execution-authority の照合だけでは、管理停止中の report 生成・Capsule 結果反映を
+すべて収束済みと扱えません。開始済みの分析結果の保存と、既存 report の表示反映は
+別に確認します。全 blocker の収束と公開の停止・移管 API も別の残件です。
+公開 Run schema、DB schema、Workspace 管理 epoch の取得経路は変更しません。
 
 内部候補では、SourceSync と同じ保存境界を Plan・Apply・Restore にも使います。
 新規の `preparePlanRun`、`beginApplyRun`、`beginRestoreRun` は、準備前に取得した
