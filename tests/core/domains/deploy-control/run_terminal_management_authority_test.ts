@@ -8,6 +8,7 @@ import type { Run } from "takosumi-contract/runs";
 import type { Workspace } from "takosumi-contract/workspaces";
 import {
   InMemoryOpenTofuControlStore,
+  capsuleApplyRunAdmissionFence,
   type OpenTofuControlStore,
   type WorkspaceManagementAuthority,
 } from "../../../../core/domains/deploy-control/store.ts";
@@ -256,9 +257,19 @@ async function seedApplyFixture(store: OpenTofuControlStore, label: string) {
     seeded.workspace.id,
     seeded.capsule.id,
   );
-  expect((await store.beginApplyRun(apply, authority)).status, label).toBe(
-    "created",
-  );
+  expect(
+    (
+      await store.beginApplyRun(
+        apply,
+        authority,
+        capsuleApplyRunAdmissionFence(
+          seeded.capsule,
+          await store.getCapsuleExecutionAuthorityEpoch(seeded.capsule.id) ?? 1,
+        ),
+      )
+    ).status,
+    label,
+  ).toBe("created");
   const running: ApplyRun = {
     ...apply,
     status: "running",

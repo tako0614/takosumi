@@ -1257,12 +1257,8 @@ test("Workspace freeze observes terminal Plan, finalizer, and Interface lineage 
     const finalizerAuthority = (await store.getWorkspaceManagement(finalizerWorkspace.id))!;
     const finalizerApplyId = `freeze-finalizer-apply-${label}`;
     const finalizerPlan = planRun(`freeze-finalizer-plan-${label}`, finalizerWorkspace.id, {
-      capsuleId: `freeze-finalizer-capsule-${label}`,
-      capsuleContext: {
-        workspaceId: finalizerWorkspace.id,
-        capsuleId: `freeze-finalizer-capsule-${label}`,
-        environment: "production",
-      },
+      capsuleId: undefined,
+      capsuleContext: undefined,
     });
     await store.preparePlanRun({
       run: finalizerPlan,
@@ -1273,11 +1269,9 @@ test("Workspace freeze observes terminal Plan, finalizer, and Interface lineage 
     const finalizerApplyQueued = {
       ...finalizerApplyBase,
       planRunId: finalizerPlan.id,
-      capsuleId: finalizerPlan.capsuleId,
       expected: {
         ...finalizerApplyBase.expected,
         planRunId: finalizerPlan.id,
-        capsuleId: finalizerPlan.capsuleId,
       },
     } satisfies ApplyRun;
     await store.beginApplyRun(finalizerApplyQueued, finalizerAuthority);

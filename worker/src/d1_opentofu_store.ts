@@ -124,6 +124,7 @@ import type {
   CapsuleInitialAuthorityInput,
   CapsuleInitialAuthorityResult,
   CapsulePlanCreationFence,
+  CapsuleApplyRunAdmissionFence,
   CapsuleInstallConfigRebindInput,
   CapsuleInstallConfigRebindResult,
   ClaimCapsuleInterfaceMaterializationIntentInput,
@@ -170,6 +171,7 @@ import {
   prepareConnectionRevocation,
   prepareConnectionTestResult,
   CapsulePlanCreationFenceConflictError,
+  CapsuleApplyRunAdmissionConflictError,
   assertPlanRunPreparation,
   assertCapsuleInterfaceMaterializationIntentClaimInput,
   assertCapsuleInterfaceMaterializationIntentSettlementInput,
@@ -182,6 +184,8 @@ import {
   clampRunListLimit,
   capsuleLifecycleMutationAlreadyApplied,
   capsuleLifecycleMutationPatch,
+  assertCapsuleApplyRunAdmissionFenceInput,
+  capsuleApplyRunAdmissionFenceMatchesRun,
   capsuleAbandonmentTerminalMatches,
   capsuleRuntimeSafetyFromRun,
   CapsuleStateVersionGuardConflict,
@@ -2514,16 +2518,21 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async beginApplyRun(
     run: ApplyRun,
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+    expectedCapsule?: CapsuleApplyRunAdmissionFence,
   ): Promise<BeginApplyRunResult> {
-    ({ run, expectedWorkspaceManagementAuthority } = structuredClone({
+    ({ run, expectedWorkspaceManagementAuthority, expectedCapsule } = structuredClone({
       run,
       expectedWorkspaceManagementAuthority,
+      expectedCapsule,
     }));
     if (expectedWorkspaceManagementAuthority !== undefined) {
       assertWorkspaceManagementAuthorityInput(
         expectedWorkspaceManagementAuthority,
         run.workspaceId,
       );
+    }
+    if (expectedCapsule !== undefined) {
+      assertCapsuleApplyRunAdmissionFenceInput(expectedCapsule);
     }
     assertD1AtomicCommitBatch(this.db, "beginApplyRun");
     await this.#ensureSchema();
@@ -2536,13 +2545,11 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         ? { status: "existing", run: publicStoredRun(existingRaw) }
         : { status: "conflict" };
     }
-    if (expectedWorkspaceManagementAuthority === undefined) {
-      throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
-    }
-    const persistedRun = storeRunManagementAuthority(
-      run,
-      expectedWorkspaceManagementAuthority,
-    );
+    // Missing authority must fail inside the same existing-ID-bypassing
+    // batch, not before a concurrent creator can become visible.
+    const persistedRun = expectedWorkspaceManagementAuthority === undefined
+      ? publicStoredRun(run)
+      : storeRunManagementAuthority(run, expectedWorkspaceManagementAuthority);
     const guard = d1WorkspaceManagementAdmissionGuardStmt(
       this.#orm,
       run.workspaceId,
@@ -2550,6 +2557,22 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       expectedWorkspaceManagementAuthority,
       true,
     );
+    const capsuleId = run.capsuleId ?? expectedCapsule?.capsuleId;
+    const expectedRunCapsuleId = typeof run.expected === "object" && run.expected !== null
+      ? (run.expected as { readonly capsuleId?: unknown }).capsuleId
+      : undefined;
+    const capsuleGuard =
+      run.capsuleId !== undefined || expectedCapsule !== undefined || expectedRunCapsuleId !== undefined
+        ? d1CapsuleApplyRunAdmissionFenceGuardStmt(
+            this.#orm,
+            capsuleId ?? run.id,
+            run.id,
+            expectedCapsule,
+            run.capsuleId !== undefined &&
+              expectedCapsule !== undefined &&
+              capsuleApplyRunAdmissionFenceMatchesRun(run, expectedCapsule),
+          )
+        : undefined;
     const insert = this.#orm
       .insert(schema.runs)
       .values({
@@ -2568,11 +2591,21 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       })
       .onConflictDoNothing({ target: schema.runs.id });
     try {
-      const results = await this.#orm.batch([guard, insert]);
-      if (changes(results[1] as D1Result) > 0) {
-        return { status: "created", run: publicStoredRun(run) };
+      if (capsuleGuard !== undefined) {
+        const results = await this.#orm.batch([guard, capsuleGuard, insert]);
+        if (changes(results[2] as D1Result) > 0) {
+          return { status: "created", run: publicStoredRun(run) };
+        }
+      } else {
+        const results = await this.#orm.batch([guard, insert]);
+        if (changes(results[1] as D1Result) > 0) {
+          return { status: "created", run: publicStoredRun(run) };
+        }
       }
     } catch (error) {
+      if (capsuleGuard !== undefined && isD1CapsuleStateGuardError(error)) {
+        throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
+      }
       if (isD1WorkspaceManagementGuardError(error)) {
         throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
       }
@@ -10053,6 +10086,51 @@ function d1CapsuleAbandonmentEligibility(
     // eligible; malformed/orphaned rows fail closed and stay for repair.
     notExists(invalidBindingSlot),
   )!;
+}
+
+/** Exact new-Apply fence; an occupied Run ID remains read-only adoption. */
+function d1CapsuleApplyRunAdmissionFenceGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  capsuleId: string,
+  runId: string,
+  fence: CapsuleApplyRunAdmissionFence | undefined,
+  runMatches: boolean,
+) {
+  const capsule = schema.capsules;
+  const current = orm.select({ one: sql`1` }).from(capsule).where(
+    fence !== undefined && runMatches
+      ? and(
+        eq(capsule.id, fence.capsuleId),
+        eq(capsule.workspaceId, fence.workspaceId),
+        eq(capsule.environment, fence.environment),
+        eq(capsule.status, fence.status),
+        eq(capsule.installConfigId, fence.installConfigId),
+        eq(capsule.executionAuthorityEpoch, fence.executionAuthorityEpoch),
+        eq(capsule.currentStateGeneration, fence.currentStateGeneration),
+        fence.currentStateVersionId === null
+          ? isNull(capsule.currentStateVersionId)
+          : eq(capsule.currentStateVersionId, fence.currentStateVersionId),
+        sql`json_valid(${capsule.recordJson}) = 1`,
+        sql`json_extract(${capsule.recordJson}, '$.id') = ${fence.capsuleId}`,
+        sql`json_extract(${capsule.recordJson}, '$.workspaceId') = ${fence.workspaceId}`,
+        sql`json_extract(${capsule.recordJson}, '$.environment') = ${fence.environment}`,
+        sql`json_extract(${capsule.recordJson}, '$.status') = ${fence.status}`,
+        sql`json_extract(${capsule.recordJson}, '$.installConfigId') = ${fence.installConfigId}`,
+        sql`json_type(${capsule.recordJson}, '$.currentStateGeneration') = 'integer'`,
+        sql`json_extract(${capsule.recordJson}, '$.currentStateGeneration') = ${fence.currentStateGeneration}`,
+        fence.currentStateVersionId === null
+          ? sql`json_extract(${capsule.recordJson}, '$.currentStateVersionId') IS NULL`
+          : sql`json_extract(${capsule.recordJson}, '$.currentStateVersionId') = ${fence.currentStateVersionId}`,
+      )
+      : sql`0`,
+  );
+  const existing = orm.select({ one: sql`1` }).from(schema.runs)
+    .where(eq(schema.runs.id, runId));
+  return orm.insert(capsule).select(
+    orm.select(d1InvalidCapsuleGuardRow(capsuleId))
+      .from(sql`(select 1) as capsule_apply_admission_guard_source`)
+      .where(and(notExists(current), notExists(existing))),
+  );
 }
 
 function d1CapsuleStateGuardStmt(

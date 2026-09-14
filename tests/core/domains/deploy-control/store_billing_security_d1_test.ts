@@ -3,9 +3,10 @@ import { expect, test } from "bun:test";
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
-import type {
-  OpenTofuControlStore,
-  WorkspaceManagementAuthority,
+import {
+  capsuleApplyRunAdmissionFence,
+  type OpenTofuControlStore,
+  type WorkspaceManagementAuthority,
 } from "../../../../core/domains/deploy-control/store.ts";
 import type {
   D1Database,
@@ -530,6 +531,8 @@ test("d1 commitRunState rolls back when the apply lease changes after the pre-re
     status: "queued" as const,
     expected: {
       planRunId: "plan_interleave",
+      capsuleId: seeded.capsule.id,
+      currentStateVersionId: null,
       runnerProfileId: "rp_1",
       sourceDigest: "sha256:src",
       variablesDigest: "sha256:vars",
@@ -550,6 +553,12 @@ test("d1 commitRunState rolls back when the apply lease changes after the pre-re
       await activeWorkspaceManagementAuthority(
         admissionStore,
         seeded.workspace.id,
+      ),
+      capsuleApplyRunAdmissionFence(
+        seeded.capsule,
+        await admissionStore.getCapsuleExecutionAuthorityEpoch(
+          seeded.capsule.id,
+        ) ?? 1,
       ),
     ),
   ).toMatchObject({ status: "created", run: applyRun });

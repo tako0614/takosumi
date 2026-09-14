@@ -47,6 +47,7 @@ import {
   type CapsuleCoordination,
 } from "../../../../core/domains/deploy-control/capsule_lease.ts";
 import {
+  capsuleApplyRunAdmissionFence,
   InMemoryOpenTofuControlStore,
   planRunExecutionInputsDigestMaterial,
   type OpenTofuControlStore,
@@ -3167,6 +3168,10 @@ async function seedQueuedNoStateCapsuleApply(
   const admitted = await store.beginApplyRun(
     applyRun,
     expectedWorkspaceManagementAuthority,
+    capsuleApplyRunAdmissionFence(
+      capsule,
+      await store.getCapsuleExecutionAuthorityEpoch(capsule.id) ?? 1,
+    ),
   );
   if (admitted.status !== "created") {
     throw new Error(`${input.applyRunId}: Apply admission returned ${admitted.status}`);

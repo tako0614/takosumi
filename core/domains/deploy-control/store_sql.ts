@@ -110,6 +110,7 @@ import type {
   MarkCapsuleStaleResult,
   CommitCapsuleAbandonmentInput,
   CommitCapsuleAbandonmentResult,
+  CapsuleApplyRunAdmissionFence,
   UpdateCapsuleLifecycleCommand,
   UpdateCapsuleLifecycleResult,
   CapsuleRuntimeSafety,
@@ -187,10 +188,14 @@ import {
   assertCapsuleAbandonmentInput,
   capsuleAbandonmentTerminalMatches,
   capsuleAbandonmentTerminalCapsule,
+  assertCapsuleApplyRunAdmissionFenceInput,
+  capsuleApplyRunAdmissionFenceMatchesRun,
+  capsuleApplyRunAdmissionFenceMatchesCurrent,
   capsuleRuntimeSafetyFromRun,
   CapsuleStateVersionGuardConflict,
   CapsuleStateGenerationGuardConflict,
   WorkspaceManagementAdmissionConflictError,
+  CapsuleApplyRunAdmissionConflictError,
   isApplyRunRecord,
   isPlanRunRecord,
   isSourceSyncRunRecord,
@@ -1879,16 +1884,22 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   async beginApplyRun(
     run: ApplyRun,
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+    expectedCapsule?: CapsuleApplyRunAdmissionFence,
   ): Promise<BeginApplyRunResult> {
-    ({ run, expectedWorkspaceManagementAuthority } = structuredClone({
-      run,
-      expectedWorkspaceManagementAuthority,
-    }));
+    ({ run, expectedWorkspaceManagementAuthority, expectedCapsule } =
+      structuredClone({
+        run,
+        expectedWorkspaceManagementAuthority,
+        expectedCapsule,
+      }));
     if (expectedWorkspaceManagementAuthority !== undefined) {
       assertWorkspaceManagementAuthorityInput(
         expectedWorkspaceManagementAuthority,
         run.workspaceId,
       );
+    }
+    if (expectedCapsule !== undefined) {
+      assertCapsuleApplyRunAdmissionFenceInput(expectedCapsule);
     }
     return await this.#client.transaction(async (transaction) => {
       const db = this.#drizzleForClient(transaction);
@@ -1920,6 +1931,29 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         transaction,
         run.workspaceId,
       );
+      // A concurrent creator may have inserted this id while the Workspace
+      // lock was being acquired. Re-read it before checking mutable authority
+      // or the Capsule fence so same-id adoption remains read-only.
+      const lockedExistingRows = await db
+        .select({
+          kind: pgSchema.runs.kind,
+          workspaceId: pgSchema.runs.workspaceId,
+          json: pgSchema.runs.runJson,
+        })
+        .from(pgSchema.runs)
+        .where(eq(pgSchema.runs.id, run.id))
+        .limit(1);
+      const lockedExisting = parseRow(lockedExistingRows[0]) as
+        | StoredRunRecord
+        | undefined;
+      if (lockedExisting) {
+        return isApplyRunRecord(lockedExisting)
+          ? {
+              status: "existing" as const,
+              run: coerceRunRowStatus(publicStoredRun(lockedExisting))!,
+            }
+          : { status: "conflict" as const };
+      }
       if (expectedWorkspaceManagementAuthority === undefined) {
         throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
       }
@@ -1928,6 +1962,84 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         run.workspaceId,
         expectedWorkspaceManagementAuthority,
       );
+
+      if (run.capsuleId === undefined) {
+        const expectedRunCapsuleId =
+          typeof run.expected === "object" && run.expected !== null
+            ? (run.expected as { readonly capsuleId?: unknown }).capsuleId
+            : undefined;
+        if (expectedRunCapsuleId !== undefined) {
+          throw new CapsuleApplyRunAdmissionConflictError(undefined);
+        }
+        if (expectedCapsule !== undefined) {
+          throw new CapsuleApplyRunAdmissionConflictError(undefined);
+        }
+      } else {
+        if (expectedCapsule === undefined) {
+          throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
+        }
+        if (!capsuleApplyRunAdmissionFenceMatchesRun(run, expectedCapsule)) {
+          throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
+        }
+        const capsuleRows = await transaction.query<{
+          readonly id: string;
+          readonly workspaceId: string;
+          readonly environment: string;
+          readonly installConfigId: string;
+          readonly currentStateVersionId: string | null;
+          readonly status: string;
+          readonly executionAuthorityEpoch: number | string | null;
+          readonly capsuleJson: unknown;
+        }>(
+          `select
+             id,
+             space_id as "workspaceId",
+             environment,
+             install_config_id as "installConfigId",
+             current_state_version_id as "currentStateVersionId",
+             status,
+             execution_authority_epoch as "executionAuthorityEpoch",
+             installation_json as "capsuleJson"
+           from takosumi_capsules
+          where id = $1
+          for update`,
+          [run.capsuleId],
+        );
+        const capsuleRow = capsuleRows.rows[0];
+        let persistedCapsule: Capsule | undefined;
+        try {
+          persistedCapsule = capsuleRow
+            ? normalizeOptionalCapsuleRecord(
+                parseJson(capsuleRow.capsuleJson) as Capsule,
+              )
+            : undefined;
+        } catch {
+          persistedCapsule = undefined;
+        }
+        const persistedEpoch = capsuleRow?.executionAuthorityEpoch === null ||
+            capsuleRow?.executionAuthorityEpoch === undefined
+          ? undefined
+          : Number(capsuleRow.executionAuthorityEpoch);
+        if (
+          capsuleRow === undefined ||
+          persistedCapsule === undefined ||
+          capsuleRow.id !== run.capsuleId ||
+          capsuleRow.workspaceId !== expectedCapsule.workspaceId ||
+          capsuleRow.environment !== expectedCapsule.environment ||
+          capsuleRow.installConfigId !== expectedCapsule.installConfigId ||
+          capsuleRow.status !== expectedCapsule.status ||
+          (capsuleRow.currentStateVersionId ?? null) !==
+            expectedCapsule.currentStateVersionId ||
+          persistedEpoch === undefined ||
+          !capsuleApplyRunAdmissionFenceMatchesCurrent(
+            persistedCapsule,
+            persistedEpoch,
+            expectedCapsule,
+          )
+        ) {
+          throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
+        }
+      }
 
       const inserted = await db
         .insert(pgSchema.runs)

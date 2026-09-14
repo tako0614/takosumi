@@ -702,6 +702,142 @@ export interface CapsulePlanCreationFence {
   readonly currentStateVersionId: string | undefined;
 }
 
+/**
+ * Exact Capsule authority captured before an ApplyRun is admitted.  Apply
+ * creation is the last queue-visible boundary after plan preparation, so the
+ * original Capsule owner, lifecycle status captured during Apply preparation,
+ * install target, and state cursor must still be unchanged.
+ */
+export interface CapsuleApplyRunAdmissionFence {
+  readonly capsuleId: string;
+  readonly workspaceId: string;
+  readonly environment: string;
+  readonly status: Exclude<Capsule["status"], "destroyed">;
+  readonly installConfigId: string;
+  readonly executionAuthorityEpoch: number;
+  readonly currentStateVersionId: string | null;
+  readonly currentStateGeneration: number;
+}
+
+/** Raised when a new Capsule-bound ApplyRun lost its captured Capsule fence. */
+export class CapsuleApplyRunAdmissionConflictError extends Error {
+  override readonly name = "CapsuleApplyRunAdmissionConflictError";
+
+  constructor(readonly capsuleId: string | undefined) {
+    super(
+      capsuleId === undefined
+        ? "Capsule-bound ApplyRun admission fence is missing or mismatched"
+        : `Capsule ${capsuleId} changed before its ApplyRun could be admitted`,
+    );
+  }
+}
+
+function isCapsuleApplyRunAdmissionStatus(
+  value: unknown,
+): value is CapsuleApplyRunAdmissionFence["status"] {
+  return value === "pending" || value === "active" || value === "stale" ||
+    value === "error" || value === "disabled";
+}
+
+function isCapsuleApplyRunAdmissionFenceShape(
+  value: unknown,
+): value is CapsuleApplyRunAdmissionFence {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const fence = value as Record<string, unknown>;
+  return typeof fence.capsuleId === "string" && fence.capsuleId.trim() !== "" &&
+    typeof fence.workspaceId === "string" && fence.workspaceId.trim() !== "" &&
+    typeof fence.environment === "string" && fence.environment.trim() !== "" &&
+    isCapsuleApplyRunAdmissionStatus(fence.status) &&
+    typeof fence.installConfigId === "string" &&
+    fence.installConfigId.trim() !== "" &&
+    Number.isSafeInteger(fence.executionAuthorityEpoch) &&
+    (fence.executionAuthorityEpoch as number) >= 1 &&
+    (fence.currentStateVersionId === null ||
+      (typeof fence.currentStateVersionId === "string" &&
+        fence.currentStateVersionId.trim() !== "")) &&
+    Number.isSafeInteger(fence.currentStateGeneration) &&
+    (fence.currentStateGeneration as number) >= 0;
+}
+
+/** Validate a present ApplyRun Capsule fence before mutable admission work. */
+export function assertCapsuleApplyRunAdmissionFenceInput(
+  expectedCapsule: CapsuleApplyRunAdmissionFence,
+): void {
+  if (!isCapsuleApplyRunAdmissionFenceShape(expectedCapsule)) {
+    throw new TypeError("Capsule ApplyRun admission fence is invalid");
+  }
+}
+
+/** Build the exact ApplyRun Capsule fence from one captured Capsule snapshot. */
+export function capsuleApplyRunAdmissionFence(
+  capsule: Capsule,
+  executionAuthorityEpoch: number,
+): CapsuleApplyRunAdmissionFence {
+  const expectedCapsule = {
+    capsuleId: capsule.id,
+    workspaceId: capsule.workspaceId,
+    environment: capsule.environment,
+    status: capsule.status as CapsuleApplyRunAdmissionFence["status"],
+    installConfigId: capsule.installConfigId,
+    executionAuthorityEpoch,
+    currentStateVersionId: capsule.currentStateVersionId ?? null,
+    currentStateGeneration: capsule.currentStateGeneration,
+  } satisfies CapsuleApplyRunAdmissionFence;
+  assertCapsuleApplyRunAdmissionFenceInput(expectedCapsule);
+  return expectedCapsule;
+}
+
+/** Pure run-side matcher used by every storage adapter's new-row fence. */
+export function capsuleApplyRunAdmissionFenceMatchesRun(
+  run: ApplyRun,
+  expectedCapsule: CapsuleApplyRunAdmissionFence,
+): boolean {
+  if (!isCapsuleApplyRunAdmissionFenceShape(expectedCapsule)) return false;
+  const expected = run.expected as unknown;
+  if (typeof expected !== "object" || expected === null || Array.isArray(expected)) {
+    return false;
+  }
+  const guard = expected as {
+    readonly capsuleId?: unknown;
+    readonly currentStateVersionId?: unknown;
+    readonly capsuleExecutionAuthorityEpoch?: unknown;
+  };
+  return run.capsuleId === expectedCapsule.capsuleId &&
+    run.workspaceId === expectedCapsule.workspaceId &&
+    guard.capsuleId === expectedCapsule.capsuleId &&
+    guard.currentStateVersionId === expectedCapsule.currentStateVersionId &&
+    (guard.capsuleExecutionAuthorityEpoch === undefined
+      ? 1
+      : guard.capsuleExecutionAuthorityEpoch) ===
+      expectedCapsule.executionAuthorityEpoch;
+}
+
+/** Pure current-row matcher for all eight Capsule admission fields. */
+export function capsuleApplyRunAdmissionFenceMatchesCurrent(
+  capsule: Capsule | undefined,
+  executionAuthorityEpoch: number | undefined,
+  expectedCapsule: CapsuleApplyRunAdmissionFence,
+): boolean {
+  if (
+    capsule === undefined ||
+    !isCapsuleApplyRunAdmissionFenceShape(expectedCapsule) ||
+    executionAuthorityEpoch === undefined
+  ) {
+    return false;
+  }
+  return capsule.id === expectedCapsule.capsuleId &&
+    capsule.workspaceId === expectedCapsule.workspaceId &&
+    capsule.environment === expectedCapsule.environment &&
+    capsule.status === expectedCapsule.status &&
+    capsule.installConfigId === expectedCapsule.installConfigId &&
+    executionAuthorityEpoch === expectedCapsule.executionAuthorityEpoch &&
+    (capsule.currentStateVersionId ?? null) ===
+      expectedCapsule.currentStateVersionId &&
+    capsule.currentStateGeneration === expectedCapsule.currentStateGeneration;
+}
+
 /** Raised when a fenced configuration Plan lost its Capsule authority race. */
 export class CapsulePlanCreationFenceConflictError extends Error {
   override readonly name = "CapsulePlanCreationFenceConflictError";
@@ -3007,6 +3143,7 @@ export interface OpenTofuControlStore {
   beginApplyRun(
     run: ApplyRun,
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+    expectedCapsule?: CapsuleApplyRunAdmissionFence,
   ): Promise<BeginApplyRunResult>;
   getApplyRun(id: string): Promise<ApplyRun | undefined>;
 
@@ -3905,30 +4042,74 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   async beginApplyRun(
     run: ApplyRun,
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+    expectedCapsule?: CapsuleApplyRunAdmissionFence,
   ): Promise<BeginApplyRunResult> {
-    ({ run, expectedWorkspaceManagementAuthority } = structuredClone({ run, expectedWorkspaceManagementAuthority }));
+    ({ run, expectedWorkspaceManagementAuthority, expectedCapsule } =
+      structuredClone({
+        run,
+        expectedWorkspaceManagementAuthority,
+        expectedCapsule,
+      }));
     if (expectedWorkspaceManagementAuthority !== undefined) {
       assertWorkspaceManagementAuthorityInput(
         expectedWorkspaceManagementAuthority,
         run.workspaceId,
       );
     }
-    const current = this.#runs.get(run.id);
-    if (!current) {
-      if (expectedWorkspaceManagementAuthority === undefined) {
-        throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
-      }
-      assertWorkspaceManagementAdmission(
-        this.#workspaceManagement.get(run.workspaceId),
-        run.workspaceId,
-        expectedWorkspaceManagementAuthority,
-      );
-      this.#runs.set(run.id, storeRunManagementAuthority(run, expectedWorkspaceManagementAuthority));
-      return { status: "created", run: publicStoredRun(run) };
+    if (expectedCapsule !== undefined) {
+      assertCapsuleApplyRunAdmissionFenceInput(expectedCapsule);
     }
-    return isApplyRunRecord(current)
-      ? { status: "existing", run: publicStoredRun(coerceRunRowStatus(current)!) }
-      : { status: "conflict" };
+    const current = this.#runs.get(run.id);
+    if (current) {
+      return isApplyRunRecord(current)
+        ? { status: "existing", run: publicStoredRun(coerceRunRowStatus(current)!) }
+        : { status: "conflict" };
+    }
+    if (expectedWorkspaceManagementAuthority === undefined) {
+      throw new WorkspaceManagementAdmissionConflictError(run.workspaceId);
+    }
+    assertWorkspaceManagementAdmission(
+      this.#workspaceManagement.get(run.workspaceId),
+      run.workspaceId,
+      expectedWorkspaceManagementAuthority,
+    );
+    if (run.capsuleId === undefined) {
+      const expectedRunCapsuleId =
+        typeof run.expected === "object" && run.expected !== null
+          ? (run.expected as { readonly capsuleId?: unknown }).capsuleId
+          : undefined;
+      if (expectedRunCapsuleId !== undefined) {
+        throw new CapsuleApplyRunAdmissionConflictError(undefined);
+      }
+      if (expectedCapsule !== undefined) {
+        throw new CapsuleApplyRunAdmissionConflictError(undefined);
+      }
+    } else {
+      if (expectedCapsule === undefined) {
+        throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
+      }
+      if (!capsuleApplyRunAdmissionFenceMatchesRun(run, expectedCapsule)) {
+        throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
+      }
+      const capsule = this.#capsules.get(run.capsuleId);
+      const executionAuthorityEpoch = capsule === undefined
+        ? undefined
+        : this.#capsuleExecutionAuthorityEpochs.get(capsule.id) ?? 1;
+      if (
+        !capsuleApplyRunAdmissionFenceMatchesCurrent(
+          capsule,
+          executionAuthorityEpoch,
+          expectedCapsule,
+        )
+      ) {
+        throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
+      }
+    }
+    this.#runs.set(
+      run.id,
+      storeRunManagementAuthority(run, expectedWorkspaceManagementAuthority),
+    );
+    return { status: "created", run: publicStoredRun(run) };
   }
 
   getApplyRun(id: string): Promise<ApplyRun | undefined> {

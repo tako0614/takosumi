@@ -25,7 +25,11 @@ import {
   OpenTofuController,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import { InMemoryCapsuleCoordination } from "../../../../core/domains/deploy-control/capsule_lease.ts";
-import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { CapsulesService } from "../../../../core/domains/capsules/mod.ts";
+import {
+  capsuleApplyRunAdmissionFence,
+  InMemoryOpenTofuControlStore,
+} from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
@@ -151,11 +155,23 @@ async function seedQueuedApply(
   if (!management || management.managementState !== "active") {
     throw new Error(`${planRun.workspaceId}: Workspace management is not active`);
   }
-  const admitted = await store.beginApplyRun(apply, {
-    workspaceId: management.workspaceId,
-    managementState: "active",
-    managementEpoch: management.managementEpoch,
-  });
+  const capsule = planRun.capsuleId
+    ? await store.getCapsule(planRun.capsuleId)
+    : undefined;
+  const admitted = await store.beginApplyRun(
+    apply,
+    {
+      workspaceId: management.workspaceId,
+      managementState: "active",
+      managementEpoch: management.managementEpoch,
+    },
+    capsule
+      ? capsuleApplyRunAdmissionFence(
+        capsule,
+        planRun.capsuleExecutionAuthorityEpoch ?? 1,
+      )
+      : undefined,
+  );
   if (admitted.status !== "created") {
     throw new Error(`${applyRunId}: Apply admission returned ${admitted.status}`);
   }
@@ -233,4 +249,54 @@ test("exact recovery checkpoint A rejects a Plan already applied by B instead of
     ),
   ).rejects.toThrow("already applied by a different ApplyRun");
   expect(await store.getApplyRun("apply_checkpoint_A")).toBeUndefined();
+});
+
+test("Apply Capsule admission rejects abandonment after preparation without creating a Run", async () => {
+  const { store, controller, planRun, capsuleId } = await seedCreatePlan();
+  const capsules = new CapsulesService({ store });
+  await expect(controller.createApplyRun(
+    {
+      planRunId: planRun.id,
+      expected: applyExpectedGuardFromPlanRun(planRun),
+    },
+    {},
+    {
+      applyRunId: "apply_after_abandonment",
+      onPrepared: async () => {
+        await capsules.abandonUnappliedCapsule(capsuleId, "cancel before Apply admission");
+      },
+    },
+  )).rejects.toMatchObject({ code: "failed_precondition" });
+
+  expect(await store.getApplyRun("apply_after_abandonment")).toBeUndefined();
+  expect((await store.getCapsule(capsuleId))?.status).toBe("destroyed");
+  expect(await store.getProviderBindingSetByCapsule(capsuleId, "production"))
+    .toBeUndefined();
+});
+
+test("Apply Capsule admission rejects a completed competing Apply without creating a stale Run", async () => {
+  const { store, controller, planRun, capsuleId } = await seedCreatePlan();
+  const request = {
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  };
+  let winningStateVersionId: string | undefined;
+  await expect(controller.createApplyRun(request, {}, {
+    applyRunId: "apply_prepared_before_winner",
+    onPrepared: async () => {
+      const winner = await controller.createApplyRun(request, {}, {
+        applyRunId: "apply_admitted_winner",
+      });
+      expect(winner.applyRun.status).toBe("succeeded");
+      winningStateVersionId = winner.applyRun.stateVersionId;
+      expect(winningStateVersionId).toBeDefined();
+    },
+  })).rejects.toMatchObject({ code: "failed_precondition" });
+
+  expect(await store.getApplyRun("apply_prepared_before_winner")).toBeUndefined();
+  expect((await store.getCapsule(capsuleId))?.currentStateVersionId)
+    .toBe(winningStateVersionId);
+  expect((await store.getPlanRun(planRun.id))?.appliedApplyRunId)
+    .toBe("apply_admitted_winner");
+  expect(await store.listStateVersions(capsuleId, "production")).toHaveLength(1);
 });

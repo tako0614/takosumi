@@ -18,6 +18,7 @@ import {
 } from "../../../../core/domains/deploy-control/capsule_lease.ts";
 import {
   InMemoryOpenTofuControlStore,
+  capsuleApplyRunAdmissionFence,
   planRunExecutionInputsDigestMaterial,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
@@ -169,7 +170,18 @@ async function seedApply(
     createdAt: 1,
     updatedAt: 1,
   };
-  await store.beginApplyRun(applyRun, authority);
+  const currentCapsule = await store.getCapsule(capsule.id);
+  if (!currentCapsule) {
+    throw new Error(`fixture Capsule ${capsule.id} is missing`);
+  }
+  await store.beginApplyRun(
+    applyRun,
+    authority,
+    capsuleApplyRunAdmissionFence(
+      currentCapsule,
+      await store.getCapsuleExecutionAuthorityEpoch(currentCapsule.id) ?? 1,
+    ),
+  );
   return { environment };
 }
 

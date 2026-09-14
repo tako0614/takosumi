@@ -14,6 +14,7 @@ import type {
   SqlParameters,
 } from "../../../../core/adapters/storage/sql.ts";
 import {
+  capsuleApplyRunAdmissionFence,
   createCapsuleExecutionAuthorityResolver,
   capsuleLifecycleExpected,
   InMemoryOpenTofuControlStore,
@@ -41,6 +42,7 @@ import {
   splitSqlStatements,
 } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
+import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
 import { StaticSecretConnectionVault } from "../../../../core/adapters/vault/mod.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
@@ -769,7 +771,21 @@ describe("Capsule execution authority", () => {
             restoreStateGeneration: 1, restoredFromStateVersionId: "state-1" } satisfies Run;
         } else if (kind === "apply") {
           const { startedAt: _startedAt, ...neverStarted } = terminatingRun("queued");
-          queued = { ...neverStarted, id, workspaceId, operation: "update" } satisfies ApplyRun;
+          const {
+            capsuleId: _capsuleId,
+            expected: {
+              capsuleId: _expectedCapsuleId,
+              ...headlessExpected
+            },
+            ...headlessRun
+          } = neverStarted;
+          queued = {
+            ...headlessRun,
+            id,
+            workspaceId,
+            operation: "update",
+            expected: headlessExpected,
+          } satisfies ApplyRun;
         } else {
           queued = { id, workspaceId, source: { kind: "git", url: "https://example.test/repo.git",
             commit: "0123456789abcdef0123456789abcdef01234567" }, sourceDigest: "sha256:source",
@@ -1555,13 +1571,21 @@ describe("Capsule execution authority", () => {
       });
 
       const workspaceId = "workerd-freeze-canonical-plan";
+      const plan = planRun("workerd-freeze-canonical", workspaceId);
+      if (!plan.capsuleId) throw new Error("freeze plan fixture Capsule is missing");
+      const seeded = await seedCapsuleModel(store, {
+        workspaceId,
+        capsuleId: plan.capsuleId,
+        sourceId: "workerd-freeze-canonical-source",
+        snapshotId: "workerd-freeze-canonical-snapshot",
+        installConfigId: "workerd-freeze-canonical-config",
+      });
       await store.putWorkspace(workspace(workspaceId));
       const authority: WorkspaceManagementAuthority = {
         workspaceId,
         managementState: "active",
         managementEpoch: 1,
       };
-      const plan = planRun("workerd-freeze-canonical", workspaceId);
       const inputs = { planRunId: plan.id, variables: {} };
       expect(await store.preparePlanRun({
         run: plan,
@@ -1611,6 +1635,7 @@ describe("Capsule execution authority", () => {
         expected: {
           planRunId: plan.id,
           capsuleId: plan.capsuleId,
+          currentStateVersionId: null,
           runnerProfileId: plan.runnerProfileId,
           sourceDigest: plan.sourceDigest,
           variablesDigest: plan.variablesDigest,
@@ -1624,7 +1649,16 @@ describe("Capsule execution authority", () => {
         createdAt: 4,
         updatedAt: 4,
       };
-      expect(await store.beginApplyRun(queuedApply, authority)).toEqual({
+      expect(
+        await store.beginApplyRun(
+          queuedApply,
+          authority,
+          capsuleApplyRunAdmissionFence(
+            seeded.capsule,
+            await store.getCapsuleExecutionAuthorityEpoch(seeded.capsule.id) ?? 1,
+          ),
+        ),
+      ).toEqual({
         status: "created",
         run: queuedApply,
       });

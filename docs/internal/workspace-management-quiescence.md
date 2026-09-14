@@ -627,11 +627,24 @@ BindingSet が元からない場合も同じ条件で破棄できます。host �
 記録します。通常の status 変更は destroyed への変更と destroyed からの復活を拒否し、
 provider destroy の既存 commit とこの abandonment に終端への変更を限定します。
 
-これは将来の Run 行の作成まで排除する保証ではありません。先に Capsule を読んだ
-Apply 作成が遅れて `beginApplyRun` に入る場合、現行の Workspace-only admission は
-queued 行を残し得ます。consumer の実行前照合は destroyed を拒否しますが、新規 Run
-admission 自体の Capsule epoch/status fence は別の残件です。公開停止・移管機能の
-完成も示しません。
+新しい Capsule-bound Apply の `beginApplyRun` は、元の Workspace authority に加え、
+Apply 準備時に検証した Capsule の ID・Workspace・environment・非 destroyed の status・
+InstallConfig ID・execution epoch・StateVersion pointer・generation を必須とします。
+RunEngine は Plan の state/generation と execution epoch を検証し、その snapshot を
+非同期の入力準備より前から保持します。保存直前に現在値を取り直しません。status は
+Apply 準備時の観測値であり、公開 Plan に新しい status field を追加するものではありません。
+
+Memory は同期照合、PostgreSQL は Workspace → Capsule の lock を持つ transaction、
+D1 は Workspace/Capsule の guard と INSERT の同じ batch で新規登録を確定します。
+準備後の abandonment、設定の再結合、状態の更新は、新しい Run の作成と通知・enqueue
+より前に拒否します。destroy Apply も同じ exact fence を使い、abandonment 専用の
+「state なし」を要求しません。Capsule を持たない内部 Run は Workspace-only のままです。
+
+既に存在する同じ Run ID の採用は読取りのままです。PostgreSQL の Workspace lock 待ち、
+D1 の最初の読取りと batch の間に同じ ID が登録された場合も、保存済み Run を返します。
+その間に Capsule や Workspace が変化しても、新しい現在値で Run を承認し直しません。
+これは新規登録時の競合を閉じる変更であり、公開停止・移管機能の完成、live D1、
+実アプリの WfP journey の実証を示しません。
 
 `public-origin-reservation` は新規予約と確認済み解放の両方に使われる private な
 host bookkeeping であり、この四種類に一括分類しません。draining 中の解放を

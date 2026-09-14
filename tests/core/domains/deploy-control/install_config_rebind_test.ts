@@ -25,6 +25,7 @@ import type {
   SqlTransaction,
 } from "../../../../core/adapters/storage/sql.ts";
 import {
+  capsuleApplyRunAdmissionFence,
   InMemoryOpenTofuControlStore,
   WorkspaceManagementAdmissionConflictError,
   providerBindingSetAuthorityDigest,
@@ -638,8 +639,22 @@ async function seedCommittedPostApplyRecovery(
     const management = await store.getWorkspaceManagement(failedApply.workspaceId);
     if (management?.managementState !== "active") throw new Error("Run admission fixture must be active");
     const { startedAt: _startedAt, finishedAt: _finishedAt, ...creation } = failedApply;
-    expect((await store.beginApplyRun({ ...creation, status: "queued", auditEvents: [] },
-      { ...management, managementState: "active" })).status).toBe("created");
+    const executionAuthorityEpoch =
+      await store.getCapsuleExecutionAuthorityEpoch(current.id) ?? 1;
+    expect((await store.beginApplyRun(
+      {
+        ...creation,
+        status: "queued",
+        auditEvents: [],
+        expected: {
+          ...creation.expected,
+          currentStateVersionId: current.currentStateVersionId ?? null,
+          capsuleExecutionAuthorityEpoch: executionAuthorityEpoch,
+        },
+      },
+      { ...management, managementState: "active" },
+      capsuleApplyRunAdmissionFence(current, executionAuthorityEpoch),
+    )).status).toBe("created");
   }
   await store.putApplyRun(failedApply);
   const proofCore = {

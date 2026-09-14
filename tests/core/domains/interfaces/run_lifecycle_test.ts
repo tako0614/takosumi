@@ -26,6 +26,7 @@ import {
   type ReleaseCapsuleLeaseInput,
 } from "../../../../core/domains/deploy-control/capsule_lease.ts";
 import {
+  capsuleApplyRunAdmissionFence,
   type CommitRunStateInput,
   type CommitRunStateResult,
   type ClaimCapsuleInterfaceMaterializationIntentInput,
@@ -403,10 +404,54 @@ output "endpoint" {
   });
   const { planRun: failedFastPathPlan } =
     await operations.controller.createCapsulePlan(capsule.id);
+  let replayApply: ApplyRun | undefined;
   const { applyRun: failedFastPathApply } =
     await operations.controller.createApplyRun({
       planRunId: failedFastPathPlan.id,
       expected: applyExpectedGuardFromPlanRun(failedFastPathPlan),
+    }, {}, {
+      onPrepared: async (prepared) => {
+        if (!prepared.capsuleId) {
+          throw new Error(`${prepared.id}: replay fixture Capsule is missing`);
+        }
+        const currentCapsule = await store.getCapsule(prepared.capsuleId);
+        if (!currentCapsule) {
+          throw new Error(`${prepared.capsuleId}: replay fixture Capsule is missing`);
+        }
+        const management = await store.getWorkspaceManagement(
+          prepared.workspaceId,
+        );
+        if (!management || management.managementState !== "active") {
+          throw new Error(
+            `${prepared.workspaceId}: Workspace management is not active`,
+          );
+        }
+        replayApply = {
+          ...prepared,
+          id: "apply_interface_intent_fast_path_replay",
+          createdAt: prepared.createdAt + 1,
+          updatedAt: prepared.updatedAt + 1,
+        };
+        const executionAuthorityEpoch =
+          await store.getCapsuleExecutionAuthorityEpoch(currentCapsule.id) ?? 1;
+        const admittedReplay = await store.beginApplyRun(
+          replayApply,
+          {
+            workspaceId: management.workspaceId,
+            managementState: "active",
+            managementEpoch: management.managementEpoch,
+          },
+          capsuleApplyRunAdmissionFence(
+            currentCapsule,
+            executionAuthorityEpoch,
+          ),
+        );
+        if (admittedReplay.status !== "created") {
+          throw new Error(
+            `${replayApply.id}: Apply admission returned ${admittedReplay.status}`,
+          );
+        }
+      },
     });
   expect(failedFastPathApply.status).toBe("succeeded");
   expect(
@@ -419,38 +464,7 @@ output "endpoint" {
   // original Apply already marked the Plan applied. Its idempotent replay must
   // drain the original durable intent, not a cimi row derived from the replay
   // ApplyRun id.
-  const replayApply: ApplyRun = {
-    ...failedFastPathApply,
-    id: "apply_interface_intent_fast_path_replay",
-    status: "queued",
-    stateVersionId: undefined,
-    outputId: undefined,
-    startedAt: undefined,
-    finishedAt: undefined,
-    heartbeatAt: undefined,
-    diagnostics: undefined,
-    auditEvents: [],
-    createdAt: failedFastPathApply.createdAt + 1,
-    updatedAt: failedFastPathApply.updatedAt + 1,
-  };
-  const management = await store.getWorkspaceManagement(
-    replayApply.workspaceId,
-  );
-  if (!management || management.managementState !== "active") {
-    throw new Error(
-      `${replayApply.workspaceId}: Workspace management is not active`,
-    );
-  }
-  const admittedReplay = await store.beginApplyRun(replayApply, {
-    workspaceId: management.workspaceId,
-    managementState: "active",
-    managementEpoch: management.managementEpoch,
-  });
-  if (admittedReplay.status !== "created") {
-    throw new Error(
-      `${replayApply.id}: Apply admission returned ${admittedReplay.status}`,
-    );
-  }
+  if (!replayApply) throw new Error("replay fixture ApplyRun was not admitted");
   const replayService = await createTakosumiService({
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },

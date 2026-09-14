@@ -12,6 +12,8 @@ import {
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
   type BeginApplyRunResult,
+  type CapsuleApplyRunAdmissionFence,
+  capsuleApplyRunAdmissionFence,
   InMemoryOpenTofuControlStore,
   planRunExecutionInputsDigestMaterial,
   type WorkspaceManagementAuthority,
@@ -135,10 +137,12 @@ class LostFirstBeginApplyRunAcknowledgementStore extends InMemoryOpenTofuControl
   override async beginApplyRun(
     run: ApplyRun,
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+    expectedCapsule?: CapsuleApplyRunAdmissionFence,
   ): Promise<BeginApplyRunResult> {
     const result = await super.beginApplyRun(
       run,
       expectedWorkspaceManagementAuthority,
+      expectedCapsule,
     );
     if (this.#loseAcknowledgement && result.status === "created") {
       this.#loseAcknowledgement = false;
@@ -1969,7 +1973,7 @@ test("state generation: a stale plan is rejected at apply (state_generation_mism
   expect(updateB.baseStateGeneration).toEqual(1);
 
   // Apply updateB -> generation advances to 2.
-  await controller.createApplyRun({
+  const appliedB = await controller.createApplyRun({
     planRunId: updateB.id,
     expected: applyExpectedGuardFromPlanRun(updateB),
   });
@@ -1977,7 +1981,7 @@ test("state generation: a stale plan is rejected at apply (state_generation_mism
   expect(capsule?.currentStateGeneration).toEqual(2);
 
   // Forge a stale plan that still claims generation 1, bypassing the
-  // currentStateVersion guard, to prove the generation guard fires inside execute.
+  // currentStateVersion guard, to prove both admission and execution reject it.
   const stalePlan = (await store.getPlanRun(updateB.id))!;
   const forgedId = "plan_forged_stale";
   const forgedInputs = { planRunId: forgedId, variables: {} } as const;
@@ -2006,10 +2010,41 @@ test("state generation: a stale plan is rejected at apply (state_generation_mism
       managementEpoch: management.managementEpoch,
     },
   });
-  const staleApply = await controller.createApplyRun({
+  const staleRequest = {
     planRunId: forgedId,
     expected: applyExpectedGuardFromPlanRun(forgedPlan),
+  };
+  await expect(controller.createApplyRun(staleRequest, {}, {
+    applyRunId: "apply_stale_generation_admission",
+  })).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "state_generation_mismatch" },
   });
+  expect(await store.getApplyRun("apply_stale_generation_admission")).toBeUndefined();
+
+  // Preserve the consumer guard coverage for an old queued row admitted
+  // before the controller checked generation. The store has no Plan lookup;
+  // this deliberately bypasses the controller's now-earlier Plan validation.
+  const queued: ApplyRun = {
+    ...appliedB.applyRun,
+    id: "apply_stale_generation_existing",
+    planRunId: forgedId,
+    expected: staleRequest.expected,
+    status: "queued",
+    stateVersionId: undefined,
+    outputId: undefined,
+    startedAt: undefined,
+    finishedAt: undefined,
+    heartbeatAt: undefined,
+    diagnostics: undefined,
+    auditEvents: [],
+  };
+  expect((await store.beginApplyRun(
+    queued,
+    { ...management, managementState: "active" },
+    capsuleApplyRunAdmissionFence(capsule!, forgedPlan.capsuleExecutionAuthorityEpoch ?? 1),
+  )).status).toBe("created");
+  const staleApply = await controller.runQueuedApply(queued.id);
   expect(staleApply.applyRun.status).toBe("failed");
   expect(staleApply.applyRun.diagnostics?.[0]?.message).toContain(
     "state_generation_mismatch",

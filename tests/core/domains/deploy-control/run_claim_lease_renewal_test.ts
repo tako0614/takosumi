@@ -25,6 +25,7 @@ import {
 } from "../../../../core/domains/deploy-control/capsule_lease.ts";
 import {
   InMemoryOpenTofuControlStore,
+  capsuleApplyRunAdmissionFence,
   planRunExecutionInputsDigestMaterial,
   type StoredSource,
   type TransitionRunInput,
@@ -110,6 +111,10 @@ async function seedApply(
     currentStateGeneration: 0,
     status: "active",
   });
+  const currentCapsule = await store.getCapsule(capsule.id);
+  if (!currentCapsule) {
+    throw new Error(`fixture Capsule ${capsule.id} is missing`);
+  }
   const inputs = {
     planRunId: ids.planRunId,
     variables: {},
@@ -196,6 +201,10 @@ async function seedApply(
   const applyAdmission = await store.beginApplyRun(
     applyRun,
     expectedWorkspaceManagementAuthority,
+    capsuleApplyRunAdmissionFence(
+      currentCapsule,
+      await store.getCapsuleExecutionAuthorityEpoch(currentCapsule.id) ?? 1,
+    ),
   );
   if (applyAdmission.status !== "created") {
     throw new Error("fixture Apply admission did not create a new Run");

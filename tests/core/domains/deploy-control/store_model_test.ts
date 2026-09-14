@@ -207,7 +207,7 @@ function output(capsuleId: string, overrides: Partial<Output> = {}): Output {
 
 function applyRunForSafety(input: {
   readonly id: string;
-  readonly capsuleId: string;
+  readonly capsuleId?: string;
   readonly operation: "create" | "update" | "destroy";
   readonly status: "queued" | "succeeded" | "failed";
   readonly effectAt: number;
@@ -219,13 +219,13 @@ function applyRunForSafety(input: {
     id: input.id,
     planRunId,
     workspaceId: "workspace_runtime_safety",
-    capsuleId: input.capsuleId,
+    ...(input.capsuleId ? { capsuleId: input.capsuleId } : {}),
     operation: input.operation,
     runnerProfileId: "opentofu-default",
     status: input.status,
     expected: {
       planRunId,
-      capsuleId: input.capsuleId,
+      ...(input.capsuleId ? { capsuleId: input.capsuleId } : {}),
       runnerProfileId: "opentofu-default",
       sourceDigest: "sha256:source",
       variablesDigest: "sha256:variables",
@@ -1808,7 +1808,6 @@ test("ApplyRun begin is insert-or-adopt and never resets an existing running or 
       const id = `apply_begin_${status}_${label}`;
       const candidate = applyRunForSafety({
         id,
-        capsuleId: `capsule_${id}`,
         operation: "update",
         status: "queued",
         effectAt: 100,
@@ -1851,7 +1850,6 @@ test("ApplyRun begin adopts an existing queued row unchanged on every store back
     const id = `apply_begin_queued_${label}`;
     const queued = applyRunForSafety({
       id,
-      capsuleId: `capsule_${id}`,
       operation: "update",
       status: "queued",
       effectAt: 100,
@@ -2550,7 +2548,6 @@ test("terminal Apply exact finalizer CAS is parity-safe across stores", async ()
       const r0 = {
         ...applyRunForSafety({
           id: runId,
-          capsuleId,
           operation: billingCreate ? "create" : "destroy",
           status: "succeeded",
           effectAt: 100,

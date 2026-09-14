@@ -178,7 +178,9 @@ import {
   APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT,
   applyRunBillingCapturePending,
   applyRunRuntimeSecretRetirementPending,
+  capsuleApplyRunAdmissionFence,
   capsuleLifecycleExpected,
+  CapsuleApplyRunAdmissionConflictError,
   CapsuleStateVersionGuardConflict,
   CapsulePlanCreationFenceConflictError,
   WorkspaceManagementAdmissionConflictError,
@@ -4521,9 +4523,19 @@ export class RunEngine {
         internal.expectedWorkspaceManagementAuthority,
       );
     await checkApplyExpected(request.expected, planRun);
-    if (planRun.capsuleId) {
-      await this.#requireCurrentPlannedCapsule(planRun);
-    }
+    const plannedCapsule = planRun.capsuleId
+      ? await this.#requireCurrentPlannedCapsule(planRun)
+      : undefined;
+    assertStateGenerationMatches(planRun, plannedCapsule);
+    // Preserve the authority validated against this Plan through all later
+    // asynchronous preparation. Recapturing the Capsule at insertion would
+    // authorize a stale Plan against its replacement or newer state.
+    const expectedCapsule = plannedCapsule
+      ? capsuleApplyRunAdmissionFence(
+        plannedCapsule,
+        planRun.capsuleExecutionAuthorityEpoch ?? 1,
+      )
+      : undefined;
     // Source snapshot revalidation (spec invariant 10): an env-driven plan is
     // pinned to a SourceSnapshot; the apply must run against the SAME snapshot
     // the plan was reviewed against. Re-read the persisted plan and confirm its
@@ -4573,10 +4585,18 @@ export class RunEngine {
       begun = await this.#store.beginApplyRun(
         applyRun,
         expectedWorkspaceManagementAuthority,
+        expectedCapsule,
       );
     } catch (error) {
       if (error instanceof WorkspaceManagementAdmissionConflictError) {
         throw workspaceManagementAdmissionConflictError();
+      }
+      if (error instanceof CapsuleApplyRunAdmissionConflictError) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `capsule ${planRun.capsuleId} changed during Apply preparation for PlanRun ${planRun.id}`,
+          { reason: "capsule_execution_authority_changed" },
+        );
       }
       throw error;
     }
