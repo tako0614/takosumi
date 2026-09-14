@@ -156,6 +156,10 @@ import {
   handleCapsuleInstallConfigReAdoption,
 } from "./install-config-re-adoptions.ts";
 import { handleCapsuleConfigurationPlans } from "./configuration-plans.ts";
+import {
+  WorkspaceManagementAdmissionConflictError,
+  type WorkspaceManagementAuthority,
+} from "../../../../core/domains/deploy-control/store.ts";
 
 export async function handleCapsules(
   ctx: ControlDispatchContext,
@@ -169,8 +173,13 @@ export async function handleCapsules(
     const capsule = await operations.capsules.getCapsule(capsuleId);
     // Once the Capsule identifies its Workspace, retain the original epoch
     // across authorization. A stop/resume must not authorize an older request.
-    const backupAuthority = method === "POST" && segments.length === 3 &&
-        segments[2] === "backups"
+    const lifecycleMutation = (method === "PATCH" && segments.length === 2) ||
+      (capsule.status !== "destroyed" && (
+        (method === "DELETE" && segments.length === 2 && !capsuleHasAppliedState(capsule)) ||
+        (method === "POST" && segments.length === 3 && segments[2] === "abandon")
+      ));
+    const capturedManagement = lifecycleMutation ||
+        (method === "POST" && segments.length === 3 && segments[2] === "backups")
       ? await (async () => {
         try {
           return {
@@ -189,6 +198,11 @@ export async function handleCapsules(
       session: ctx.session,
     });
     if (!auth.ok) return auth.response;
+    const requireCapturedManagement = (): WorkspaceManagementAuthority => {
+      if (!capturedManagement) throw new Error("Capsule management authority was not captured");
+      if (!capturedManagement.ok) throw capturedManagement.error;
+      return capturedManagement.authority;
+    };
     if (segments.length === 2) {
       if (method === "GET") {
         return json({
@@ -205,7 +219,7 @@ export async function handleCapsules(
         });
       }
       if (method === "PATCH") {
-        return await patchCapsule(request, operations, capsuleId);
+        return await patchCapsule(request, operations, capsuleId, requireCapturedManagement);
       }
       if (method === "DELETE") {
         return await deleteCapsule(
@@ -213,6 +227,7 @@ export async function handleCapsules(
           capsule,
           capsuleId,
           ctx.session.subject,
+          lifecycleMutation ? requireCapturedManagement() : undefined,
         );
       }
       return methodNotAllowed("GET, PATCH, DELETE");
@@ -231,6 +246,7 @@ export async function handleCapsules(
         operations,
         capsule,
         reason: "restart requested before first successful apply",
+        expectedWorkspaceManagementAuthority: requireCapturedManagement(),
       });
     }
     if (leaf === "plan" && segments.length === 3) {
@@ -303,13 +319,11 @@ export async function handleCapsules(
     }
     if (leaf === "backups" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      if (!backupAuthority) throw new Error("Backup authority was not captured");
-      if (!backupAuthority.ok) throw backupAuthority.error;
       const backup = await operations.backups.createBackup({
         workspaceId: capsule.workspaceId,
         capsuleId: capsule.id,
         environment: capsule.environment,
-        expectedWorkspaceManagementAuthority: backupAuthority.authority,
+        expectedWorkspaceManagementAuthority: requireCapturedManagement(),
       });
       return jsonStatus({ backup } satisfies CreateBackupResponse, 201);
     }
@@ -464,6 +478,7 @@ async function patchCapsule(
   request: Request,
   operations: ControlPlaneOperations,
   capsuleId: string,
+  requireCapturedManagement: () => WorkspaceManagementAuthority,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
@@ -484,15 +499,21 @@ async function patchCapsule(
       400,
     );
   }
+  // Capture happened before auth; malformed requests retain their normal 400
+  // response before a captured management refusal is disclosed or used.
+  const expectedWorkspaceManagementAuthority = requireCapturedManagement();
   let capsule: Capsule | undefined;
   if (autoUpdate !== undefined) {
     capsule = await operations.capsules.setCapsuleAutoUpdate(
       capsuleId,
       autoUpdate,
+      expectedWorkspaceManagementAuthority,
     );
   }
   if (status) {
-    capsule = await operations.capsules.patchCapsuleStatus(capsuleId, status);
+    capsule = await operations.capsules.patchCapsuleStatus(
+      capsuleId, status, expectedWorkspaceManagementAuthority,
+    );
   }
   return json({ capsule: publicCapsule(capsule!) });
 }
@@ -502,6 +523,7 @@ async function deleteCapsule(
   capsule: Capsule,
   capsuleId: string,
   actor: string,
+  expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
 ): Promise<Response> {
   if (capsule.status === "destroyed") {
     return jsonStatus(
@@ -513,10 +535,14 @@ async function deleteCapsule(
     );
   }
   if (!capsuleHasAppliedState(capsule)) {
+    if (expectedWorkspaceManagementAuthority === undefined) {
+      throw new WorkspaceManagementAdmissionConflictError(capsule.workspaceId);
+    }
     return await abandonUnappliedCapsule({
       operations,
       capsule,
       reason: "delete requested before first successful apply",
+      expectedWorkspaceManagementAuthority,
     });
   }
   const response = await operations.createCapsuleDestroyPlan(capsuleId, {
@@ -535,6 +561,7 @@ async function abandonUnappliedCapsule(input: {
   readonly operations: ControlPlaneOperations;
   readonly capsule: Capsule;
   readonly reason: string;
+  readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
 }): Promise<Response> {
   const abandon = input.operations.capsules.abandonUnappliedCapsule;
   if (typeof abandon !== "function") {
@@ -548,6 +575,7 @@ async function abandonUnappliedCapsule(input: {
     input.operations.capsules,
     input.capsule.id,
     input.reason,
+    input.expectedWorkspaceManagementAuthority,
   );
   return jsonStatus(
     {

@@ -11,12 +11,83 @@ import type { StateVersion } from "takosumi-contract/state-versions";
 import type { Dependency } from "takosumi-contract/dependencies";
 
 import { createTakosumiService } from "../../../core/bootstrap.ts";
+import { createApiApp } from "../../../core/api/app.ts";
+import { OpenTofuController } from "../../../core/domains/deploy-control/mod.ts";
 import type { DeployControlPrincipal } from "../../../core/api/deploy_control_shared.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import { seedCapsuleModel } from "../../helpers/deploy-control/model_fixture.ts";
 
 const WORKSPACE_ID = "ws_scoped";
 const CAPSULE_ID = "cap_scoped0001";
+
+test("Capsule lifecycle authority preserves authenticated unwired-service error precedence", async () => {
+  const app = await createApiApp({
+    registerDeployControlInternalRoutes: true,
+    deployControlInternalRouteOptions: {
+      controller: new OpenTofuController({ store: new InMemoryOpenTofuControlStore() }),
+      getDeployControlToken: () => "scoped-token",
+    },
+    requestCorrelation: false,
+  });
+  for (const method of ["PATCH", "DELETE"] as const) {
+    const response = await app.request("/internal/v1/capsules/invalid", {
+      method,
+      headers: headers(),
+    });
+    expect(response.status).toBe(501);
+    expect((await response.json()).error.message).toBe("capsules not wired");
+    const unauthenticated = await app.request("/internal/v1/capsules/invalid", { method });
+    expect(unauthenticated.status).toBe(401);
+  }
+});
+
+for (const method of ["PATCH", "DELETE"] as const) {
+  test(`Capsule lifecycle authority is captured before internal ${method} authorization`, async () => {
+    class CaptureCountingStore extends InMemoryOpenTofuControlStore {
+      reads = 0;
+      override async getWorkspaceManagement(workspaceId: string) {
+        this.reads += 1;
+        return await super.getWorkspaceManagement(workspaceId);
+      }
+    }
+    const store = new CaptureCountingStore();
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: WORKSPACE_ID,
+      capsuleId: CAPSULE_ID,
+    });
+    let readsBeforeAuth = 0;
+    const { app } = await createTakosumiService({
+      role: "takosumi-api",
+      runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+      opentofuControlStore: store,
+      authorizeDeployControlBearer: async ({ token }) => {
+        readsBeforeAuth = store.reads;
+        expect(await store.beginWorkspaceDraining(WORKSPACE_ID, {
+          workspaceId: WORKSPACE_ID,
+          managementState: "active",
+          managementEpoch: 1,
+        })).toMatchObject({ status: "started" });
+        return token === "scoped-token" ? {
+          actor: "acct_scoped",
+          workspaceIds: [WORKSPACE_ID],
+          operations: "*" as const,
+          runnerProfileIds: "*" as const,
+        } : undefined;
+      },
+    });
+    const before = await store.getCapsule(seeded.capsule.id);
+    store.reads = 0;
+    const response = await app.request(`/internal/v1/capsules/${CAPSULE_ID}`, {
+      method,
+      headers: headers(),
+      ...(method === "PATCH" ? { body: JSON.stringify({ status: "stale" }) } : {}),
+    });
+    expect(readsBeforeAuth).toBeGreaterThan(0);
+    expect(response.status).toBe(409);
+    expect(await store.getCapsule(seeded.capsule.id)).toEqual(before);
+    expect(await store.listRunsByWorkspace(WORKSPACE_ID)).toHaveLength(0);
+  });
+}
 
 function headers(): Record<string, string> {
   return {

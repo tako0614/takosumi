@@ -47,6 +47,7 @@ function deferred<T>(): Deferred<T> {
 /** Pauses after the preflight row has been read, before the caller projects it. */
 class CompatibilityPreflightPauseStore extends InMemoryOpenTofuControlStore {
   private pauseNextRead = false;
+  private pauseHintRead = false;
   private readCaptured = deferred<void>();
   private releaseRead = deferred<void>();
 
@@ -54,6 +55,24 @@ class CompatibilityPreflightPauseStore extends InMemoryOpenTofuControlStore {
     this.pauseNextRead = true;
     this.readCaptured = deferred<void>();
     this.releaseRead = deferred<void>();
+  }
+
+  armHintReadPause(): void {
+    this.pauseHintRead = true;
+    this.readCaptured = deferred<void>();
+    this.releaseRead = deferred<void>();
+  }
+
+  override async getCapsuleCompatibilityReport(
+    id: string,
+  ): Promise<CapsuleCompatibilityReport | undefined> {
+    const report = await super.getCapsuleCompatibilityReport(id);
+    if (this.pauseHintRead) {
+      this.pauseHintRead = false;
+      this.readCaptured.resolve();
+      await this.releaseRead.promise;
+    }
+    return report;
   }
 
   waitForPreflightRead(): Promise<void> {
@@ -267,3 +286,42 @@ test("createCapsulePlan projects matching preflight evidence and leaves one queu
     ),
   ).toHaveLength(1);
 });
+
+for (const selection of ["preflight", "hint"] as const) {
+  test(`Capsule lifecycle authority prevents ${selection} compatibility projection during Workspace drain`, async () => {
+    const store = new CompatibilityPreflightPauseStore();
+    const runner = recordingRunner();
+    const { seeded, report } = await createFixture(store);
+    const controller = controllerFor(store, runner);
+    if (selection === "hint") store.armHintReadPause();
+    else store.armPreflightReadPause();
+    const planning = controller.createCapsulePlan(
+      seeded.capsule.id,
+      {},
+      selection === "hint" ? { compatibilityReportId: report.id } : {},
+    );
+    try {
+      await Promise.race([
+        store.waitForPreflightRead(),
+        planning.then(() => {
+          throw new Error("Plan completed before the compatibility read");
+        }),
+      ]);
+      expect(await store.beginWorkspaceDraining(seeded.workspace.id, {
+        workspaceId: seeded.workspace.id,
+        managementState: "active",
+        managementEpoch: 1,
+      })).toMatchObject({ status: "started" });
+    } finally {
+      store.releasePreflightRead();
+    }
+    await expect(planning).rejects.toMatchObject({ code: "failed_precondition" });
+    const capsule = await store.getCapsule(seeded.capsule.id);
+    expect(capsule?.compatibilityReportId).toBeUndefined();
+    expect(capsule?.compatibilityStatus).toBeUndefined();
+    // Immutable evidence is independent of the current Capsule pointer.
+    expect(await store.getCapsuleCompatibilityReport(report.id)).toEqual(report);
+    expect(await store.listRunsByWorkspace(seeded.workspace.id)).toHaveLength(0);
+    expect(runner.planJobs).toHaveLength(0);
+  });
+}

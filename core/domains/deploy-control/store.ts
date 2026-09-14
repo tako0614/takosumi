@@ -1341,10 +1341,14 @@ export type CapsuleLifecycleMutation =
   | {
       readonly kind: "status";
       readonly status: Capsule["status"];
+      /** Original active Workspace-management authority for this mutation. */
+      readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
     }
   | {
       readonly kind: "auto-update";
       readonly enabled: boolean;
+      /** Original active Workspace-management authority for this mutation. */
+      readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
     }
   | {
       readonly kind: "auto-update-claim";
@@ -1360,6 +1364,8 @@ export type CapsuleLifecycleMutation =
       readonly kind: "compatibility";
       readonly reportId: string;
       readonly status: CapsuleCompatibilityLevel;
+      /** Original active Workspace-management authority for this mutation. */
+      readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
     }
   | {
       /**
@@ -5218,12 +5224,12 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     if (capsuleLifecycleMutationAlreadyApplied(current, epoch, input)) {
       return Promise.resolve({ kind: "unchanged", capsule: current });
     }
-    if (input.mutation.kind === "auto-update-claim") {
+    if (input.mutation.kind !== "public-origin-reservation") {
       const expectedAuthority =
         input.mutation.expectedWorkspaceManagementAuthority;
       // Runtime callers may still supply an older/malformed payload despite
       // the required TypeScript field. Missing authority fails closed while
-      // an already-applied marker above remains a read-only replay.
+      // an already-applied auto-update marker above remains a read-only replay.
       if (expectedAuthority === undefined) {
         return Promise.resolve({ kind: "conflict", current });
       }
@@ -5238,8 +5244,6 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         expectedAuthority.workspaceId !== current.workspaceId ||
         expectedAuthority.managementEpoch !== management.managementEpoch
       ) {
-        // A source success may still mark a Capsule stale while draining, but
-        // consuming its auto-update marker is a new management admission.
         return Promise.resolve({ kind: "conflict", current });
       }
     }

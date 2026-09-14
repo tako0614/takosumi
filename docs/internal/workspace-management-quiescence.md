@@ -581,6 +581,38 @@ commit の応答が失われても失敗と推測して別の terminal を書き
 の処置は別の残件です。これらを満たすまで公開の停止・移管 API を有効化しません。
 局所テストの成功は live D1 や管理移管の実証ではありません。
 
+### Capsule の lifecycle metadata
+
+状態の直接変更、自動更新の opt-in、互換性 report の current pointer は、新しい
+管理変更です。SourceSync が観測結果として stale を記録する処理とは区別します。
+`updateCapsuleLifecycle` の `status`、`auto-update`、`auto-update-claim`、
+`compatibility` は、元の active Workspace authority を必須とします。
+Memory は一つの同期変更、PostgreSQL は Workspace を lock した transaction、
+D1 は一つの UPDATE 内で、Workspace ID・active・管理 epoch と Capsule の
+execution epoch・lifecycle revision を同時に照合します。引数の欠落を現在値で
+補いません。保存済み auto-update marker の完全一致 replay は変更を伴いません。
+
+直接の Capsule 操作は execution epoch を最初の Capsule snapshot より前に読み、
+その snapshot と Workspace authority を保存処理まで保持します。保存直前に
+execution epoch を取得し直し、古い Capsule snapshot を新しい設定の操作として
+承認しません。Accounts と内部 HTTP の lifecycle 操作は非同期認可前の Workspace
+authority を転送し、取得エラーは認証・Workspace scope の確認後に返します。
+
+Plan の preflight と明示 report hint の projection は、初期 Plan の元の authority
+を使います。queued Plan の継続は Run に保存された元の tuple を使い、欠落時に
+現在値で再承認しません。report 自体の immutable な結果確定と、Capsule の参照更新は
+別です。停止によって参照更新が拒否されても report を削除せず、すでに一致する
+current pointer は読取りだけで確認できます。
+
+この変更は公開の停止・移管機能の完成を示しません。未適用 Capsule の abandonment
+には fenced な status 更新後の ProviderBindingSet 削除が残ります。
+`public-origin-reservation` は新規予約と確認済み解放の両方に使われる private な
+host bookkeeping であり、この四種類に一括分類しません。draining 中の解放を
+妨げない causal authority の整理が別途必要です。SourceSync の terminal 確定後の
+stale 記録と frozen 判定の順序も残件です。draining 中に許す収束を、frozen 後にも
+無条件で許すことにはしません。公開 API/Form/Interface/Binding と DB schema は
+変更しません。
+
 ### Plan・Apply・Restore の永続 authority
 
 キュー待ち Plan の互換性 report 補完は、実行権の取得前に Run を保存しません。

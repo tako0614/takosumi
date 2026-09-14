@@ -6588,20 +6588,17 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     input: UpdateCapsuleLifecycleCommand,
   ): Promise<UpdateCapsuleLifecycleResult> {
     input = structuredClone(input);
-    const expectedAutoUpdateAuthority =
-      input.mutation.kind === "auto-update-claim"
+    const expectedWorkspaceManagementAuthority =
+      input.mutation.kind !== "public-origin-reservation"
         ? input.mutation.expectedWorkspaceManagementAuthority
         : undefined;
-    if (
-      input.mutation.kind === "auto-update-claim" &&
-      expectedAutoUpdateAuthority !== undefined
-    ) {
+    if (expectedWorkspaceManagementAuthority !== undefined) {
       // Validate the tuple's own shape before the asynchronous D1 write. A
       // valid but mis-bound Workspace remains a normal CAS conflict in the
       // SQL predicate below rather than a programming error.
       assertWorkspaceManagementAuthorityInput(
-        expectedAutoUpdateAuthority,
-        expectedAutoUpdateAuthority.workspaceId,
+        expectedWorkspaceManagementAuthority,
+        expectedWorkspaceManagementAuthority.workspaceId,
       );
     }
     await this.#ensureSchema();
@@ -6609,10 +6606,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       input.mutation,
       input.updatedAt,
     );
-    const autoUpdateManagementAuthority =
-      input.mutation.kind !== "auto-update-claim"
-        ? undefined
-        : expectedAutoUpdateAuthority === undefined
+    const workspaceManagementAuthority =
+      input.mutation.kind === "public-origin-reservation"
+        ? sql`true`
+        : expectedWorkspaceManagementAuthority === undefined
           ? sql`0`
           : exists(
               this.#orm
@@ -6623,12 +6620,12 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
                     eq(schema.workspaces.id, schema.capsules.workspaceId),
                     eq(
                       schema.workspaces.id,
-                      expectedAutoUpdateAuthority.workspaceId,
+                      expectedWorkspaceManagementAuthority.workspaceId,
                     ),
                     eq(schema.workspaces.managementState, "active"),
                     eq(
                       schema.workspaces.managementEpoch,
-                      expectedAutoUpdateAuthority.managementEpoch,
+                      expectedWorkspaceManagementAuthority.managementEpoch,
                     ),
                   ),
                 ),
@@ -6680,7 +6677,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           input.mutation.kind === "auto-update-claim"
             ? sql`COALESCE(json_extract(${schema.capsules.recordJson}, '$.autoUpdateAttemptSourceSnapshotId'), '') <> ${input.mutation.sourceSnapshotId}`
             : sql`true`,
-          autoUpdateManagementAuthority,
+          workspaceManagementAuthority,
         ),
       )
       .run();

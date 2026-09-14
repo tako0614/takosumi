@@ -369,9 +369,21 @@ export interface ControlPlaneOperations {
         readonly includeInternal?: boolean;
       },
     ): Promise<Page<InstallConfig>>;
-    patchCapsuleStatus(id: string, status: Capsule["status"]): Promise<Capsule>;
-    setCapsuleAutoUpdate(id: string, enabled: boolean): Promise<Capsule>;
-    abandonUnappliedCapsule(id: string, reason: string): Promise<Capsule>;
+    patchCapsuleStatus(
+      id: string,
+      status: Capsule["status"],
+      expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+    ): Promise<Capsule>;
+    setCapsuleAutoUpdate(
+      id: string,
+      enabled: boolean,
+      expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+    ): Promise<Capsule>;
+    abandonUnappliedCapsule(
+      id: string,
+      reason: string,
+      expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+    ): Promise<Capsule>;
     getCapsuleExecutionAuthorityEpoch(capsuleId: string): Promise<number>;
     getInstallConfigReAdoptionRecoveryProof?(
       capsuleId: string,

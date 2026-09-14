@@ -251,6 +251,15 @@ export interface CapsulesServiceDependencies {
   readonly capsuleLifecycleAdmission?: CapsuleLifecycleAdmission;
 }
 
+interface PreparedCapsuleLifecycle {
+  /** Immutable value snapshot captured before any lifecycle admission hook. */
+  readonly capsule: Capsule;
+  /** Execution epoch read before the authoritative Capsule snapshot. */
+  readonly executionAuthorityEpoch: number;
+  /** Exact active Workspace-management tuple retained through the CAS. */
+  readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
+}
+
 export class CapsulesService {
   readonly #store: OpenTofuControlStore;
   readonly #newId: (prefix: string) => string;
@@ -742,18 +751,42 @@ export class CapsulesService {
   async patchCapsuleStatus(
     id: string,
     status: CapsuleStatus,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<Capsule> {
-    const current = await this.#requireCapsule(id);
-    return await this.#updateCapsuleLifecycle(current, { kind: "status", status });
+    const suppliedAuthority = expectedWorkspaceManagementAuthority === undefined
+      ? undefined
+      : { ...expectedWorkspaceManagementAuthority };
+    const prepared = await this.#prepareCapsuleLifecycle(id, suppliedAuthority);
+    return await this.#updateCapsuleLifecycle(
+      prepared,
+      {
+        kind: "status",
+        status,
+        expectedWorkspaceManagementAuthority:
+          prepared.expectedWorkspaceManagementAuthority,
+      },
+    );
   }
 
   /** Toggles the auto-update opt-in (see {@link Capsule.autoUpdate}). */
-  async setCapsuleAutoUpdate(id: string, enabled: boolean): Promise<Capsule> {
-    const current = await this.#requireCapsule(id);
-    const updated = await this.#updateCapsuleLifecycle(current, {
-      kind: "auto-update",
-      enabled,
-    });
+  async setCapsuleAutoUpdate(
+    id: string,
+    enabled: boolean,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<Capsule> {
+    const suppliedAuthority = expectedWorkspaceManagementAuthority === undefined
+      ? undefined
+      : { ...expectedWorkspaceManagementAuthority };
+    const prepared = await this.#prepareCapsuleLifecycle(id, suppliedAuthority);
+    const updated = await this.#updateCapsuleLifecycle(
+      prepared,
+      {
+        kind: "auto-update",
+        enabled,
+        expectedWorkspaceManagementAuthority:
+          prepared.expectedWorkspaceManagementAuthority,
+      },
+    );
     await this.#activity.record({
       workspaceId: updated.workspaceId,
       action: enabled
@@ -773,9 +806,17 @@ export class CapsulesService {
    * public-host reservation rows remain untouched until operator inventory can
    * prove that deleting that historical authority is safe.
    */
-  async abandonUnappliedCapsule(id: string, reason: string): Promise<Capsule> {
-    const existing = await this.#requireCapsule(id);
-    const abandon = async (current: Capsule = existing): Promise<Capsule> => {
+  async abandonUnappliedCapsule(
+    id: string,
+    reason: string,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<Capsule> {
+    const suppliedAuthority = expectedWorkspaceManagementAuthority === undefined
+      ? undefined
+      : { ...expectedWorkspaceManagementAuthority };
+    const prepared = await this.#prepareCapsuleLifecycle(id, suppliedAuthority);
+    const abandon = async (): Promise<Capsule> => {
+      const current = prepared.capsule;
       const runtimeSafety = await this.#store.getCapsuleRuntimeSafety(current.id);
       if (runtimeSafety) {
         // Any durable runtime evidence proves that provider work reached a
@@ -797,10 +838,15 @@ export class CapsulesService {
           `capsule ${id} has applied state and must use the destroy flow`,
         );
       }
-      const updated = await this.#updateCapsuleLifecycle(current, {
-        kind: "status",
-        status: "destroyed",
-      });
+      const updated = await this.#updateCapsuleLifecycle(
+        prepared,
+        {
+          kind: "status",
+          status: "destroyed",
+          expectedWorkspaceManagementAuthority:
+            prepared.expectedWorkspaceManagementAuthority,
+        },
+      );
       await this.#store.deleteProviderBindingSet(
         updated.id,
         updated.environment,
@@ -821,10 +867,13 @@ export class CapsulesService {
     const admission = this.#capsuleLifecycleAdmission;
     return admission
       ? await admission(
-          { capsule: existing, holderId: this.#newId("capsule-abandon") },
-          (current) => abandon(current),
+          {
+            capsule: structuredClone(prepared.capsule),
+            holderId: this.#newId("capsule-abandon"),
+          },
+          () => abandon(),
         )
-      : await abandon(existing);
+      : await abandon();
   }
 
   // --- InstallConfig (§11) --------------------------------------------------
@@ -1236,20 +1285,76 @@ export class CapsulesService {
     return capsule;
   }
 
-  async #updateCapsuleLifecycle(
-    current: Capsule,
-    mutation: CapsuleLifecycleMutation,
-  ): Promise<Capsule> {
-    const epoch = await this.#store.getCapsuleExecutionAuthorityEpoch(current.id);
-    if (epoch === undefined) {
+  /**
+   * Captures the complete lifecycle revision in the direct-command order:
+   * execution epoch, authoritative Capsule value, then Workspace-management
+   * admission. A caller-supplied Workspace tuple is validated against the
+   * current row but is never refreshed to the row's later epoch.
+   */
+  async #prepareCapsuleLifecycle(
+    id: string,
+    suppliedAuthority?: WorkspaceManagementAuthority,
+  ): Promise<PreparedCapsuleLifecycle> {
+    requireNonEmptyString(id, "id");
+    const executionAuthorityEpoch =
+      await this.#store.getCapsuleExecutionAuthorityEpoch(id);
+    if (executionAuthorityEpoch === undefined) {
       throw new OpenTofuControllerError(
         "not_found",
-        `capsule ${current.id} not found`,
+        `capsule ${id} not found`,
       );
     }
+    const capsule = structuredClone(await this.#requireCapsule(id));
+    const workspaceManagement = await this.#store.getWorkspaceManagement(
+      capsule.workspaceId,
+    );
+    let expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
+    try {
+      if (suppliedAuthority !== undefined) {
+        assertWorkspaceManagementAuthorityInput(
+          suppliedAuthority,
+          capsule.workspaceId,
+        );
+        assertWorkspaceManagementAdmission(
+          workspaceManagement,
+          capsule.workspaceId,
+          suppliedAuthority,
+        );
+        expectedWorkspaceManagementAuthority = { ...suppliedAuthority };
+      } else {
+        const active = assertWorkspaceManagementAdmission(
+          workspaceManagement,
+          capsule.workspaceId,
+        );
+        expectedWorkspaceManagementAuthority = {
+          workspaceId: active.workspaceId,
+          managementState: "active",
+          managementEpoch: active.managementEpoch,
+        };
+      }
+    } catch (error) {
+      if (error instanceof WorkspaceManagementAdmissionConflictError) {
+        throw workspaceManagementAdmissionErrorFor();
+      }
+      throw error;
+    }
+    return {
+      capsule,
+      executionAuthorityEpoch,
+      expectedWorkspaceManagementAuthority,
+    };
+  }
+
+  async #updateCapsuleLifecycle(
+    prepared: PreparedCapsuleLifecycle,
+    mutation: CapsuleLifecycleMutation,
+  ): Promise<Capsule> {
     const result = await this.#store.updateCapsuleLifecycle({
-      capsuleId: current.id,
-      expected: capsuleLifecycleExpected(current, epoch),
+      capsuleId: prepared.capsule.id,
+      expected: capsuleLifecycleExpected(
+        prepared.capsule,
+        prepared.executionAuthorityEpoch,
+      ),
       mutation,
       updatedAt: this.#now().toISOString(),
     });
@@ -1257,12 +1362,12 @@ export class CapsulesService {
     if (result.kind === "not-found") {
       throw new OpenTofuControllerError(
         "not_found",
-        `capsule ${current.id} not found`,
+        `capsule ${prepared.capsule.id} not found`,
       );
     }
     throw new OpenTofuControllerError(
       "failed_precondition",
-      `capsule ${current.id} lifecycle changed before the update`,
+      `capsule ${prepared.capsule.id} lifecycle changed before the update`,
       { reason: CAPSULE_LIFECYCLE_BUSY_REASON },
     );
   }

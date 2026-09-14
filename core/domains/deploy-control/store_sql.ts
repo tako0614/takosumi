@@ -6357,8 +6357,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     // SQL preparation. A later Workspace transition must not change the
     // authority this marker update was admitted with.
     const expectedWorkspaceManagementAuthority =
-      input.mutation.kind === "auto-update-claim" &&
-          input.mutation.expectedWorkspaceManagementAuthority !== undefined
+      input.mutation.kind !== "public-origin-reservation"
         ? structuredClone(input.mutation.expectedWorkspaceManagementAuthority)
         : undefined;
     if (expectedWorkspaceManagementAuthority !== undefined) {
@@ -6434,10 +6433,11 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         )
         .returning({ json: pgSchema.capsules.capsuleJson });
     let rows: Awaited<ReturnType<typeof update>> = [];
-    if (input.mutation.kind === "auto-update-claim") {
+    if (input.mutation.kind !== "public-origin-reservation") {
       // Lock the persisted Capsule Workspace first, then pin that same
-      // workspace id in the lifecycle UPDATE. A drain racing this claim
-      // therefore loses atomically; no generic drain bypass is introduced.
+      // workspace id in the lifecycle UPDATE. A drain racing any managed
+      // lifecycle mutation therefore loses atomically; no generic drain
+      // bypass is introduced.
       rows = await this.#client.transaction(async (transaction) => {
         const capsuleRows = await transaction.query<{
           readonly workspaceId: string | null;

@@ -2,6 +2,7 @@ import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Capsule } from "takosumi-contract/capsules";
+import type { InstallConfig } from "takosumi-contract/install-configs";
 import type { Output } from "takosumi-contract/outputs";
 import type { StateVersion } from "takosumi-contract/state-versions";
 
@@ -16,7 +17,9 @@ import type {
 import {
   capsuleLifecycleExpected,
   InMemoryOpenTofuControlStore,
+  type UpdateCapsuleLifecycleCommand,
   type OpenTofuControlStore,
+  type WorkspaceManagementAuthority,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
@@ -48,6 +51,76 @@ type RawD1PreparedStatement = D1PreparedStatement & {
   raw<T = unknown[]>(): Promise<T[]>;
 };
 
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+class RebindAfterFirstCapsuleReadStore extends InMemoryOpenTofuControlStore {
+  #fired = false;
+  onFirstCapsuleRead?: (capsule: Capsule) => Promise<void>;
+
+  override async getCapsule(id: string): Promise<Capsule | undefined> {
+    const capsule = await super.getCapsule(id);
+    if (!this.#fired && capsule && this.onFirstCapsuleRead) {
+      this.#fired = true;
+      await this.onFirstCapsuleRead(capsule);
+    }
+    return capsule;
+  }
+}
+
+class PausingLifecycleStore extends InMemoryOpenTofuControlStore {
+  readonly lifecycleStarted = deferred<void>();
+  readonly releaseLifecycle = deferred<void>();
+  observedLifecycleCommand?: UpdateCapsuleLifecycleCommand;
+
+  override async updateCapsuleLifecycle(
+    input: UpdateCapsuleLifecycleCommand,
+  ) {
+    this.observedLifecycleCommand = input;
+    this.lifecycleStarted.resolve();
+    await this.releaseLifecycle.promise;
+    return await super.updateCapsuleLifecycle(input);
+  }
+}
+
+async function activeWorkspaceAuthority(
+  store: OpenTofuControlStore,
+  workspaceId: string,
+): Promise<WorkspaceManagementAuthority> {
+  const management = await store.getWorkspaceManagement(workspaceId);
+  if (!management || management.managementState !== "active") {
+    throw new Error(`Workspace ${workspaceId} is not active`);
+  }
+  return {
+    workspaceId: management.workspaceId,
+    managementState: "active",
+    managementEpoch: management.managementEpoch,
+  };
+}
+
+function lifecycleCommandAuthority(
+  command: UpdateCapsuleLifecycleCommand | undefined,
+): WorkspaceManagementAuthority | undefined {
+  if (!command) return undefined;
+  switch (command.mutation.kind) {
+    case "status":
+    case "auto-update":
+    case "auto-update-claim":
+    case "compatibility":
+      return command.mutation.expectedWorkspaceManagementAuthority;
+    case "public-origin-reservation":
+      return undefined;
+  }
+}
+
 afterEach(async () => {
   await Promise.all(pgClients.splice(0).map((client) => client.close()));
 });
@@ -64,31 +137,26 @@ async function stores(): Promise<readonly [string, OpenTofuControlStore][]> {
 
 function postgresLifecycleInterleaver(inner: SqlClient): {
   readonly client: SqlClient;
-  beforeNextWrite(callback: () => Promise<void>): void;
+  beforeNextTransaction(callback: () => Promise<void>): void;
 } {
-  let beforeNext: (() => Promise<void>) | undefined;
+  let beforeNextTransaction: (() => Promise<void>) | undefined;
   return {
     client: {
       async query<Row extends Record<string, unknown>>(
         sql: string,
         parameters?: SqlParameters,
       ) {
-        const normalized = sql.trimStart().toLowerCase();
-        if (
-          normalized.startsWith('update "takosumi_capsules"') &&
-          normalized.includes('"execution_authority_epoch"') &&
-          normalized.includes('"installation_json" ||')
-        ) {
-          const before = beforeNext;
-          beforeNext = undefined;
-          await before?.();
-        }
         return await inner.query<Row>(sql, parameters);
       },
-      transaction: (work) => inner.transaction(work),
+      async transaction(work) {
+        const before = beforeNextTransaction;
+        beforeNextTransaction = undefined;
+        await before?.();
+        return await inner.transaction(work);
+      },
     },
-    beforeNextWrite(callback) {
-      beforeNext = callback;
+    beforeNextTransaction(callback) {
+      beforeNextTransaction = callback;
     },
   };
 }
@@ -177,6 +245,175 @@ async function commitConcurrentApply(
   return { state, output };
 }
 
+test(
+  "Capsule lifecycle authority carries the early execution epoch across a first-read rebind",
+  async () => {
+    const store = new RebindAfterFirstCapsuleReadStore();
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: "workspace_lifecycle_epoch_rebind",
+      capsuleId: "capsule_lifecycle_epoch_rebind",
+    });
+    const target: InstallConfig = {
+      ...seeded.installConfig,
+      id: "cfg_lifecycle_epoch_rebind_target",
+      name: "lifecycle-epoch-rebind-target",
+      createdAt: LIFECYCLE_AT,
+      updatedAt: LIFECYCLE_AT,
+    };
+    await store.putInstallConfig(target);
+    const before = await store.getCapsule(seeded.capsule.id);
+    const epoch = await store.getCapsuleExecutionAuthorityEpoch(
+      seeded.capsule.id,
+    );
+    if (!before || epoch === undefined) {
+      throw new Error("Capsule lifecycle epoch fixture is incomplete");
+    }
+
+    store.onFirstCapsuleRead = async (observed) => {
+      const rebound = await store.rebindCapsuleInstallConfig({
+        capsuleId: observed.id,
+        targetInstallConfigId: target.id,
+        expected: {
+          installConfigId: observed.installConfigId,
+          installConfigDigest: await stableJsonDigest(seeded.installConfig),
+          targetInstallConfigDigest: await stableJsonDigest(target),
+          currentStateGeneration: observed.currentStateGeneration,
+          currentStateVersionId: observed.currentStateVersionId,
+          status: observed.status,
+          executionAuthorityEpoch: epoch,
+        },
+        updatedAt: LIFECYCLE_AT,
+      });
+      expect(rebound.status).toBe("updated");
+    };
+
+    const service = new CapsulesService({
+      store,
+      now: () => new Date(LIFECYCLE_AT),
+    });
+
+    await expect(
+      service.patchCapsuleStatus(seeded.capsule.id, "active"),
+    ).rejects.toMatchObject({
+      code: "failed_precondition",
+      details: { reason: CAPSULE_LIFECYCLE_BUSY_REASON },
+    });
+    expect(await store.getCapsule(seeded.capsule.id)).toMatchObject({
+      installConfigId: target.id,
+      status: "pending",
+    });
+    expect(
+      await store.getCapsuleExecutionAuthorityEpoch(seeded.capsule.id),
+    ).toBe(epoch + 1);
+  },
+);
+
+test(
+  "Capsule lifecycle authority rejects a stale supplied Workspace authority",
+  async () => {
+    const store = new InMemoryOpenTofuControlStore();
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: "workspace_lifecycle_stale_workspace_authority",
+      capsuleId: "capsule_lifecycle_stale_workspace_authority",
+    });
+    const authority = await activeWorkspaceAuthority(
+      store,
+      seeded.workspace.id,
+    );
+    expect(
+      (await store.beginWorkspaceDraining(seeded.workspace.id, authority)).status,
+    ).toBe("started");
+
+    const service = new CapsulesService({
+      store,
+      now: () => new Date(LIFECYCLE_AT),
+    });
+
+    await expect(
+      service.setCapsuleAutoUpdate(seeded.capsule.id, true, authority),
+    ).rejects.toMatchObject({
+      code: "failed_precondition",
+      details: { reason: "workspace_management_admission_conflict" },
+    });
+    expect(await store.getCapsule(seeded.capsule.id)).toEqual(
+      seeded.capsule,
+    );
+  },
+);
+
+test(
+  "Capsule lifecycle authority rejects status, auto-update, and abandonment after a drain during preparation",
+  async () => {
+    for (const operation of ["status", "auto-update", "abandon"] as const) {
+      const store = new PausingLifecycleStore();
+      const seeded = await seedCapsuleModel(store, {
+        workspaceId: `workspace_lifecycle_drain_${operation}`,
+        capsuleId: `capsule_lifecycle_drain_${operation}`,
+      });
+      const authority = await activeWorkspaceAuthority(
+        store,
+        seeded.workspace.id,
+      );
+      const service = new CapsulesService({
+        store,
+        now: () => new Date(LIFECYCLE_AT),
+        ...(operation === "abandon"
+          ? {
+              capsuleLifecycleAdmission: async ({ capsule }, work) => {
+                const current = await store.getCapsule(capsule.id);
+                if (!current) throw new Error("Capsule disappeared in hook");
+                return await work(current);
+              },
+            }
+          : {}),
+      });
+      const attempt =
+        operation === "status"
+          ? service.patchCapsuleStatus(seeded.capsule.id, "active")
+          : operation === "auto-update"
+            ? service.setCapsuleAutoUpdate(seeded.capsule.id, true)
+            : service.abandonUnappliedCapsule(
+                seeded.capsule.id,
+                "operator abandoned during preparation",
+              );
+
+      try {
+        await Promise.race([
+          store.lifecycleStarted.promise,
+          attempt.then(() => {
+            throw new Error(
+              "Capsule lifecycle mutation completed before the pause",
+            );
+          }),
+        ]);
+        expect(
+          (await store.beginWorkspaceDraining(seeded.workspace.id, authority))
+            .status,
+        ).toBe("started");
+      } finally {
+        store.releaseLifecycle.resolve();
+      }
+
+      await expect(attempt).rejects.toMatchObject({
+        code: "failed_precondition",
+        details: { reason: CAPSULE_LIFECYCLE_BUSY_REASON },
+      });
+      expect(lifecycleCommandAuthority(store.observedLifecycleCommand)).toEqual(
+        authority,
+      );
+      expect(await store.getCapsule(seeded.capsule.id)).toMatchObject({
+        status: "pending",
+      });
+      expect(
+        await store.getProviderBindingSetByCapsule(
+          seeded.capsule.id,
+          seeded.capsule.environment,
+        ),
+      ).toBeDefined();
+    }
+  },
+);
+
 test("a stale lifecycle status writer cannot replace a concurrent Apply commit", async () => {
   const client = await PGliteSqlClient.create();
   pgClients.push(client);
@@ -195,7 +432,7 @@ test("a stale lifecycle status writer cannot replace a concurrent Apply commit",
   let applied:
     | { readonly state: StateVersion; readonly output: Output }
     | undefined;
-  interleaver.beforeNextWrite(async () => {
+  interleaver.beforeNextTransaction(async () => {
     applied = await commitConcurrentApply(concurrentStore, seeded.capsule);
   });
 
@@ -241,7 +478,7 @@ test("a stale auto-update toggle cannot replace a concurrent Apply commit", asyn
   let applied:
     | { readonly state: StateVersion; readonly output: Output }
     | undefined;
-  interleaver.beforeNextWrite(async () => {
+  interleaver.beforeNextTransaction(async () => {
     applied = await commitConcurrentApply(concurrentStore, seeded.capsule);
   });
 
@@ -290,7 +527,7 @@ test("abandonment cannot retire a Capsule after a concurrent Apply commit", asyn
   let applied:
     | { readonly state: StateVersion; readonly output: Output }
     | undefined;
-  interleaver.beforeNextWrite(async () => {
+  interleaver.beforeNextTransaction(async () => {
     applied = await commitConcurrentApply(concurrentStore, seeded.capsule);
   });
 
@@ -396,13 +633,21 @@ test("lifecycle CAS preserves a newer Apply across every store", async () => {
       seeded.capsule.id,
     );
     expect(epoch, `${label}:epoch`).toBe(1);
+    const management = await activeWorkspaceAuthority(
+      store,
+      seeded.capsule.workspaceId,
+    );
     const expected = capsuleLifecycleExpected(seeded.capsule, epoch!);
     const applied = await commitConcurrentApply(store, seeded.capsule);
 
     const result = await store.updateCapsuleLifecycle({
       capsuleId: seeded.capsule.id,
       expected,
-      mutation: { kind: "status", status: "destroyed" },
+      mutation: {
+        kind: "status",
+        status: "destroyed",
+        expectedWorkspaceManagementAuthority: management,
+      },
       updatedAt: LIFECYCLE_AT,
     });
 
@@ -474,10 +719,18 @@ test("destroy lifecycle CAS advances execution authority once and rejects stale 
       seeded.capsule.id,
     );
     expect(epoch, `${label}:initial epoch`).toBe(1);
+    const management = await activeWorkspaceAuthority(
+      store,
+      seeded.capsule.workspaceId,
+    );
     const command = {
       capsuleId: seeded.capsule.id,
       expected: capsuleLifecycleExpected(seeded.capsule, epoch!),
-      mutation: { kind: "status" as const, status: "destroyed" as const },
+      mutation: {
+        kind: "status" as const,
+        status: "destroyed" as const,
+        expectedWorkspaceManagementAuthority: management,
+      },
       updatedAt: LIFECYCLE_AT,
     };
 

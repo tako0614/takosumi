@@ -103,10 +103,7 @@ import {
 } from "../../connections/mod.ts";
 import type { ActivityRecorder } from "../../activity/mod.ts";
 import type { RecordActivityInput } from "../../activity/mod.ts";
-import type {
-  CompatibilityCheckManagementContext,
-  SourcesService,
-} from "../../sources/mod.ts";
+import type { SourcesService } from "../../sources/mod.ts";
 import {
   collectRootModuleOutputDeclarations,
   collectRootModuleVariableNames,
@@ -2721,6 +2718,7 @@ export class RunEngine {
               internal.compatibilityReportId,
               installConfig.modulePath,
               compatibilityExecutionAuthorityEpoch,
+              workspaceManagementAuthority ?? null,
             ),
           )
         : await planCreationStage(
@@ -2730,10 +2728,7 @@ export class RunEngine {
               source,
               snapshot,
               installConfig.modulePath,
-              {
-                kind: "captured",
-                authority: workspaceManagementAuthority ?? null,
-              },
+              workspaceManagementAuthority ?? null,
               compatibilityExecutionAuthorityEpoch,
             ),
           );
@@ -3065,7 +3060,7 @@ export class RunEngine {
     source: Source,
     snapshot: SourceSnapshot,
     modulePath: string | undefined,
-    managementContext: CompatibilityCheckManagementContext,
+    managementAuthority: WorkspaceManagementAuthority | null,
     executionAuthorityEpoch: number | undefined,
   ): Promise<CapsuleCompatibilityReport | undefined> {
     const existing = capsule.compatibilityReportId
@@ -3111,7 +3106,7 @@ export class RunEngine {
     ) {
       this.#assertCompatibilityReportRunnable(preflight, policy);
       await this.#recordCapsuleCompatibility(
-        capsule, preflight, executionAuthorityEpoch,
+        capsule, preflight, executionAuthorityEpoch, managementAuthority,
       );
       return preflight;
     }
@@ -3134,11 +3129,11 @@ export class RunEngine {
         capsuleId: capsule.id,
         ...(modulePath ? { modulePath } : {}),
       },
-      managementContext,
+      { kind: "captured", authority: managementAuthority },
     );
     this.#assertCompatibilityReportRunnable(report, policy);
     await this.#recordCapsuleCompatibility(
-      capsule, report, executionAuthorityEpoch,
+      capsule, report, executionAuthorityEpoch, managementAuthority,
     );
     return report;
   }
@@ -3150,6 +3145,7 @@ export class RunEngine {
     reportId: string,
     modulePath: string | undefined,
     executionAuthorityEpoch: number | undefined,
+    managementAuthority: WorkspaceManagementAuthority | null,
   ): Promise<CapsuleCompatibilityReport> {
     const report = await this.#store.getCapsuleCompatibilityReport(reportId);
     if (!report) {
@@ -3170,7 +3166,7 @@ export class RunEngine {
     this.#assertCompatibilityReportRunnable(report, policy);
     if (capsule.compatibilityReportId !== report.id) {
       await this.#recordCapsuleCompatibility(
-        capsule, report, executionAuthorityEpoch,
+        capsule, report, executionAuthorityEpoch, managementAuthority,
       );
     }
     return report;
@@ -3180,7 +3176,13 @@ export class RunEngine {
     capsule: Capsule,
     report: CapsuleCompatibilityReport,
     epoch: number | undefined,
+    managementAuthority: WorkspaceManagementAuthority | null,
   ): Promise<void> {
+    // An immutable report can finish during drain; changing the Capsule's
+    // current pointer is a new admission under the original Plan authority.
+    if (managementAuthority === null) {
+      throw workspaceManagementAdmissionConflictError();
+    }
     if (epoch === undefined) {
       throw new OpenTofuControllerError(
         "not_found",
@@ -3194,6 +3196,7 @@ export class RunEngine {
         kind: "compatibility",
         reportId: report.id,
         status: report.level,
+        expectedWorkspaceManagementAuthority: managementAuthority,
       },
       updatedAt: new Date(this.#now()).toISOString(),
     });
@@ -5469,10 +5472,7 @@ export class RunEngine {
       planRun.source.kind === "operator_module"
         ? undefined
         : planRun.source.modulePath,
-      {
-        kind: "captured",
-        authority: managementAuthority ?? null,
-      },
+      managementAuthority ?? null,
       planRun.capsuleExecutionAuthorityEpoch ?? 1,
     );
     if (!report) return planRun;

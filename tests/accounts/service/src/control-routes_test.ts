@@ -1110,6 +1110,114 @@ test("Capsule abandon action rejects an applied-state race without creating a de
   expect(destroyPlanCalls).toBe(0);
 });
 
+for (const action of ["status", "auto-update", "delete", "abandon"] as const) {
+  test(`Capsule lifecycle authority is captured before Accounts authorization for ${action}`, async () => {
+    const fixture = operationsFixture();
+    let epoch = 1;
+    let captures = 0;
+    const observed: Array<WorkspaceManagementAuthority | undefined> = [];
+    const base = await fixture.operations.capsules.getCapsule("cap_1");
+    const operations: ControlPlaneOperations = {
+      ...fixture.operations,
+      workspaces: {
+        ...fixture.operations.workspaces,
+        captureManagementAuthority: async (workspaceId) => {
+          captures += 1;
+          return { workspaceId, managementState: "active", managementEpoch: epoch };
+        },
+        getWorkspace: async () => {
+          // Simulate stop/resume while the original request awaits authorization.
+          epoch = 3;
+          return workspace;
+        },
+      },
+      capsules: {
+        ...fixture.operations.capsules,
+        patchCapsuleStatus: async (_id: string, _status: typeof base.status, authority?: WorkspaceManagementAuthority) => {
+          observed.push(authority);
+          return base;
+        },
+        setCapsuleAutoUpdate: async (_id: string, _enabled: boolean, authority?: WorkspaceManagementAuthority) => {
+          observed.push(authority);
+          return base;
+        },
+        abandonUnappliedCapsule: async (_id: string, _reason: string, authority?: WorkspaceManagementAuthority) => {
+          observed.push(authority);
+          return { ...base, status: "destroyed" };
+        },
+      },
+    };
+    const method = action === "delete" ? "DELETE" : action === "abandon" ? "POST" : "PATCH";
+    const segments = action === "abandon" ? ["capsules", "cap_1", "abandon"] : ["capsules", "cap_1"];
+    const request = new Request(`https://app.example.test/api/v1/${segments.join("/")}`, {
+      method,
+      ...(method === "PATCH" ? {
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(action === "status" ? { status: "stale" } : { autoUpdate: true }),
+      } : {}),
+    });
+    const response = await handleCapsules(context(operations, request), segments, method);
+    expect(response?.status).toBe(method === "PATCH" ? 200 : 202);
+    expect(epoch).toBe(3);
+    expect(captures).toBe(1);
+    expect(observed).toEqual([{
+      workspaceId: workspace.id,
+      managementState: "active",
+      managementEpoch: 1,
+    }]);
+  });
+}
+
+test("Capsule lifecycle authority preserves malformed PATCH validation during drain", async () => {
+  const fixture = operationsFixture();
+  let captures = 0;
+  const operations: ControlPlaneOperations = {
+    ...fixture.operations,
+    workspaces: {
+      ...fixture.operations.workspaces,
+      captureManagementAuthority: async () => {
+        captures += 1;
+        throw new WorkspaceManagementAdmissionConflictError(workspace.id);
+      },
+    },
+  };
+  const request = new Request("https://app.example.test/api/v1/capsules/cap_1", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: "{invalid-json",
+  });
+  const response = await handleCapsules(context(operations, request), ["capsules", "cap_1"], "PATCH")
+    .catch(controllerErrorResponse);
+  expect(response?.status).toBe(400);
+  expect(captures).toBe(1);
+  expect(await response?.text()).not.toContain("workspace_management_admission_conflict");
+});
+
+test("Capsule lifecycle authority capture errors remain hidden from unauthorized Accounts callers", async () => {
+  const fixture = operationsFixture();
+  let captures = 0;
+  const operations: ControlPlaneOperations = {
+    ...fixture.operations,
+    workspaces: {
+      ...fixture.operations.workspaces,
+      captureManagementAuthority: async () => {
+        captures += 1;
+        throw new WorkspaceManagementAdmissionConflictError(workspace.id);
+      },
+    },
+  };
+  const request = new Request("https://app.example.test/api/v1/capsules/cap_1", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ status: "stale" }),
+  });
+  const ctx = { ...context(operations, request), session: { subject: "tsub_stranger" } };
+  const response = await handleCapsules(ctx, ["capsules", "cap_1"], "PATCH");
+  expect(response?.status).toBe(403);
+  expect(captures).toBe(1);
+  expect(await response?.text()).not.toContain("workspace_management_admission_conflict");
+});
+
 function operationsFixture() {
   const projects: Array<{
     id: string;
@@ -1123,6 +1231,11 @@ function operationsFixture() {
   const workspacePageCalls: Record<string, unknown>[] = [];
   const operations = {
     workspaces: {
+      captureManagementAuthority: async (workspaceId: string) => ({
+        workspaceId,
+        managementState: "active" as const,
+        managementEpoch: 1,
+      }),
       getWorkspace: async () => workspace,
       getWorkspaceForAccount: async (
         _accountId: string,

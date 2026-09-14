@@ -20,6 +20,7 @@ import {
   APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT,
   type CommitBackupRunInput,
   type CommitCompatibilityCheckRunInput,
+  type CapsuleLifecycleMutation,
   InMemoryOpenTofuControlStore,
   WorkspaceManagementAdmissionConflictError,
   capsuleLifecycleExpected,
@@ -368,6 +369,91 @@ class ReplayRecordMutatingD1 extends SqliteFakeD1 {
   }
 }
 
+/**
+ * Test-only D1 seam for the lifecycle authority boundary. The callback runs
+ * immediately before the single Capsule UPDATE, allowing the test to model a
+ * Workspace drain racing a durable mutation without changing the store.
+ */
+class CapsuleLifecycleAuthorityD1 extends SqliteFakeD1 {
+  readonly statements: string[] = [];
+  recording = false;
+  #beforeLifecycleWrite: (() => Promise<void>) | undefined;
+
+  armBeforeLifecycleWrite(callback: () => Promise<void>): void {
+    this.#beforeLifecycleWrite = callback;
+  }
+
+  override prepare(query: string): D1PreparedStatement {
+    const statement = super.prepare(query);
+    if (!this.recording && this.#beforeLifecycleWrite === undefined) {
+      return statement;
+    }
+    const lifecycleWrite = /^update\s+["`]?capsules["`]?\b/iu.test(
+      query.trim(),
+    );
+    // Leave native fake-D1 statement identity and Drizzle raw() reads intact.
+    if (!lifecycleWrite) return statement;
+    const wrap = (
+      delegate: D1PreparedStatement,
+    ): D1PreparedStatement => ({
+      bind: (...values) => wrap(delegate.bind(...values)),
+      first: async <T = unknown>() => {
+        if (this.recording) this.statements.push(query);
+        return await delegate.first<T>();
+      },
+      all: async <T = unknown>() => {
+        if (this.recording) this.statements.push(query);
+        return await delegate.all<T>();
+      },
+      run: async <T = unknown>() => {
+        if (this.recording) this.statements.push(query);
+        if (lifecycleWrite) {
+          const callback = this.#beforeLifecycleWrite;
+          this.#beforeLifecycleWrite = undefined;
+          await callback?.();
+        }
+        return await delegate.run<T>();
+      },
+    });
+    return wrap(statement);
+  }
+}
+
+/** Records transaction statements while preserving the real SQL client. */
+class CapsuleLifecycleAuthoritySqlClient implements SqlClient {
+  readonly statements: string[] = [];
+
+  constructor(private readonly inner: SqlClient) {}
+
+  async query<Row extends Record<string, unknown>>(
+    statement: string,
+    parameters?: SqlParameters,
+  ): Promise<SqlQueryResult<Row>> {
+    this.statements.push(statement);
+    return await this.inner.query<Row>(statement, parameters);
+  }
+
+  async transaction<T>(
+    callback: (transaction: SqlTransaction) => T | Promise<T>,
+  ): Promise<T> {
+    return await this.inner.transaction(async (transaction) => {
+      const wrapped: SqlTransaction = {
+        query: async <Row extends Record<string, unknown>>(
+          statement: string,
+          parameters?: SqlParameters,
+        ) => {
+          this.statements.push(statement);
+          return await transaction.query<Row>(statement, parameters);
+        },
+        transaction: async <Nested>(
+          nested: (transaction: SqlTransaction) => Nested | Promise<Nested>,
+        ): Promise<Nested> => await transaction.transaction(nested),
+      };
+      return await callback(wrapped);
+    });
+  }
+}
+
 function sourceSyncRun(
   id: string,
   workspaceId: string,
@@ -407,6 +493,71 @@ function capsule(id: string, workspaceId: string): Capsule {
     createdAt: "2026-09-08T00:00:00.000Z",
     updatedAt: "2026-09-08T00:00:00.000Z",
   };
+}
+
+type CapsuleLifecycleAuthorityMutationKind =
+  | "status"
+  | "auto-update"
+  | "auto-update-claim"
+  | "compatibility";
+
+/** Build one valid managed lifecycle mutation with its captured authority. */
+function capsuleLifecycleAuthorityMutation(
+  kind: CapsuleLifecycleAuthorityMutationKind,
+  expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority,
+  marker: string,
+): CapsuleLifecycleMutation {
+  switch (kind) {
+    case "status":
+      return {
+        kind,
+        status: "stale",
+        expectedWorkspaceManagementAuthority,
+      };
+    case "auto-update":
+      return {
+        kind,
+        enabled: false,
+        expectedWorkspaceManagementAuthority,
+      };
+    case "auto-update-claim":
+      return {
+        kind,
+        sourceSnapshotId: `snapshot-${marker}`,
+        expectedWorkspaceManagementAuthority,
+      };
+    case "compatibility":
+      return {
+        kind,
+        reportId: `report-${marker}`,
+        status: "ready",
+        expectedWorkspaceManagementAuthority,
+      };
+  }
+}
+
+/** Deliberately malformed runtime shape used only for the missing-tuple case. */
+function capsuleLifecycleMutationWithoutAuthority(
+  kind: CapsuleLifecycleAuthorityMutationKind,
+  marker: string,
+): CapsuleLifecycleMutation {
+  switch (kind) {
+    case "status":
+      return { kind, status: "stale" } as unknown as CapsuleLifecycleMutation;
+    case "auto-update":
+      return { kind, enabled: false } as unknown as CapsuleLifecycleMutation;
+    case "auto-update-claim":
+      return {
+        kind,
+        sourceSnapshotId: `snapshot-${marker}`,
+      } as unknown as CapsuleLifecycleMutation;
+    case "compatibility":
+      return {
+        kind,
+        reportId: `report-${marker}`,
+        status: "ready",
+      } as unknown as CapsuleLifecycleMutation;
+  }
 }
 
 interface Adapter {
@@ -3251,6 +3402,287 @@ test("D1 historical double-encoded SourceSync preserves its private authority on
   expect(await reopened.getSourceSyncRun(running.id)).toEqual(terminal);
 });
 
+test("Capsule lifecycle authority fences every managed mutation across adapters", async () => {
+  const kinds: readonly CapsuleLifecycleAuthorityMutationKind[] = [
+    "status",
+    "auto-update",
+    "auto-update-claim",
+    "compatibility",
+  ];
+
+  for (const { label, store, reopen, resumeManagement } of await adapters()) {
+    const seed = (key: string) => seedCapsuleModel(store, {
+      workspaceId: `capsule-authority-${label}-${key}`,
+      sourceId: `capsule-authority-source-${label}-${key}`,
+      snapshotId: `capsule-authority-snapshot-${label}-${key}`,
+      installConfigId: `capsule-authority-config-${label}-${key}`,
+      capsuleId: `capsule-authority-capsule-${label}-${key}`,
+    });
+
+    // Every managed mutation accepts the exact original active tuple while
+    // its Capsule lifecycle revision and execution epoch still match.
+    const activeSeed = await seed("active");
+    const original: WorkspaceManagementAuthority = {
+      workspaceId: activeSeed.workspace.id,
+      managementState: "active",
+      managementEpoch: 1,
+    };
+    let current = activeSeed.capsule;
+    for (const kind of kinds) {
+      const executionEpoch = await store.getCapsuleExecutionAuthorityEpoch(
+        current.id,
+      );
+      const result = await store.updateCapsuleLifecycle({
+        capsuleId: current.id,
+        expected: capsuleLifecycleExpected(current, executionEpoch!),
+        mutation: capsuleLifecycleAuthorityMutation(
+          kind,
+          original,
+          `active-${label}-${kind}`,
+        ),
+        updatedAt: `2026-09-08T00:00:0${kinds.indexOf(kind) + 1}.000Z`,
+      });
+      expect(result.kind, `${label}:active:${kind}`).toBe("updated");
+      if (result.kind !== "updated") {
+        throw new Error(`${label}: active ${kind} mutation did not update`);
+      }
+      current = result.capsule;
+    }
+    expect(current, `${label}:active final`).toMatchObject({
+      status: "stale",
+      autoUpdate: false,
+      autoUpdateAttemptSourceSnapshotId: `snapshot-active-${label}-auto-update-claim`,
+      compatibilityReportId: `report-active-${label}-compatibility`,
+      compatibilityStatus: "ready",
+    });
+
+    // A captured active tuple is rejected once management has started
+    // draining or has already been frozen. The same exact lifecycle revision
+    // must remain untouched for every mutation kind.
+    for (const scenario of ["draining", "frozen", "wrong-workspace", "missing"] as const) {
+      const scenarioSeed = await seed(scenario);
+      const scenarioAuthority: WorkspaceManagementAuthority = {
+        workspaceId: scenarioSeed.workspace.id,
+        managementState: "active",
+        managementEpoch: 1,
+      };
+      let scenarioStore = store;
+      let expectedAuthority: WorkspaceManagementAuthority | undefined =
+        scenarioAuthority;
+
+      if (scenario === "draining" || scenario === "frozen") {
+        expect(
+          await scenarioStore.beginWorkspaceDraining(
+            scenarioSeed.workspace.id,
+            scenarioAuthority,
+          ),
+          `${label}:${scenario}:drain`,
+        ).toMatchObject({
+          status: "started",
+          management: {
+            workspaceId: scenarioSeed.workspace.id,
+            managementState: "draining",
+            managementEpoch: 2,
+          },
+        });
+        if (scenario === "frozen") {
+          expect(
+            await scenarioStore.freezeWorkspaceManagementIfQuiescent({
+              workspaceId: scenarioSeed.workspace.id,
+              managementState: "draining",
+              managementEpoch: 2,
+            }),
+            `${label}:frozen:freeze`,
+          ).toMatchObject({
+            status: "frozen",
+            management: {
+              workspaceId: scenarioSeed.workspace.id,
+              managementState: "frozen",
+              managementEpoch: 2,
+            },
+          });
+        }
+      } else if (scenario === "wrong-workspace") {
+        const other = workspace(`capsule-authority-other-${label}`);
+        await scenarioStore.putWorkspace(other);
+        expectedAuthority = {
+          workspaceId: other.id,
+          managementState: "active",
+          managementEpoch: 1,
+        };
+      } else {
+        // Omit the runtime tuple entirely. This is intentionally represented
+        // by the helper's missing field, not by a synthetic zero epoch.
+        expectedAuthority = undefined;
+      }
+
+      for (const kind of kinds) {
+        const before = (await scenarioStore.getCapsule(scenarioSeed.capsule.id))!;
+        const executionEpoch = await scenarioStore.getCapsuleExecutionAuthorityEpoch(
+          before.id,
+        );
+        const result = await scenarioStore.updateCapsuleLifecycle({
+          capsuleId: before.id,
+          expected: capsuleLifecycleExpected(before, executionEpoch!),
+          mutation: expectedAuthority === undefined
+            ? capsuleLifecycleMutationWithoutAuthority(
+              kind,
+              `${scenario}-${label}-${kind}`,
+            )
+            : capsuleLifecycleAuthorityMutation(
+              kind,
+              expectedAuthority,
+              `${scenario}-${label}-${kind}`,
+            ),
+          updatedAt: "2026-09-08T00:01:00.000Z",
+        });
+        expect(result.kind, `${label}:${scenario}:${kind}`).toBe("conflict");
+        expect(
+          await scenarioStore.getCapsule(before.id),
+          `${label}:${scenario}:${kind}:unchanged`,
+        ).toEqual(before);
+      }
+    }
+
+    // Durable adapters expose a resumed active epoch. The pre-drain tuple is
+    // stale even though the Workspace is active again, and cannot be reused.
+    if (resumeManagement !== undefined) {
+      const staleSeed = await seed("stale");
+      const staleAuthority: WorkspaceManagementAuthority = {
+        workspaceId: staleSeed.workspace.id,
+        managementState: "active",
+        managementEpoch: 1,
+      };
+      expect(
+        await store.beginWorkspaceDraining(staleSeed.workspace.id, staleAuthority),
+        `${label}:stale:drain`,
+      ).toMatchObject({ status: "started" });
+      await resumeManagement(staleSeed.workspace.id);
+      const staleStore = reopen();
+      expect(
+        await staleStore.getWorkspaceManagement(staleSeed.workspace.id),
+        `${label}:stale:resumed`,
+      ).toEqual({
+        workspaceId: staleSeed.workspace.id,
+        managementState: "active",
+        managementEpoch: 3,
+      });
+      for (const kind of kinds) {
+        const before = (await staleStore.getCapsule(staleSeed.capsule.id))!;
+        const executionEpoch = await staleStore.getCapsuleExecutionAuthorityEpoch(
+          before.id,
+        );
+        const result = await staleStore.updateCapsuleLifecycle({
+          capsuleId: before.id,
+          expected: capsuleLifecycleExpected(before, executionEpoch!),
+          mutation: capsuleLifecycleAuthorityMutation(
+            kind,
+            staleAuthority,
+            `stale-${label}-${kind}`,
+          ),
+          updatedAt: "2026-09-08T00:02:00.000Z",
+        });
+        expect(result.kind, `${label}:stale:${kind}`).toBe("conflict");
+        expect(await staleStore.getCapsule(before.id), `${label}:stale:${kind}:unchanged`)
+          .toEqual(before);
+      }
+    }
+  }
+});
+
+test("Capsule lifecycle authority D1 guards the one Capsule UPDATE against a racing drain", async () => {
+  const database = new CapsuleLifecycleAuthorityD1();
+  const store = new CloudflareD1OpenTofuControlStore(database);
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "capsule-authority-d1-race-workspace",
+    sourceId: "capsule-authority-d1-race-source",
+    snapshotId: "capsule-authority-d1-race-snapshot",
+    installConfigId: "capsule-authority-d1-race-config",
+    capsuleId: "capsule-authority-d1-race-capsule",
+  });
+  database.recording = true;
+  const authority: WorkspaceManagementAuthority = {
+    workspaceId: seeded.workspace.id,
+    managementState: "active",
+    managementEpoch: 1,
+  };
+  database.statements.splice(0);
+  database.armBeforeLifecycleWrite(async () => {
+    await database
+      .prepare(
+        "update workspaces set management_state = 'draining', management_epoch = management_epoch + 1 where id = ? and management_state = 'active'",
+      )
+      .bind(seeded.workspace.id)
+      .run();
+  });
+
+  const executionEpoch = await store.getCapsuleExecutionAuthorityEpoch(
+    seeded.capsule.id,
+  );
+  const result = await store.updateCapsuleLifecycle({
+    capsuleId: seeded.capsule.id,
+    expected: capsuleLifecycleExpected(seeded.capsule, executionEpoch!),
+    mutation: capsuleLifecycleAuthorityMutation(
+      "status",
+      authority,
+      "d1-race-status",
+    ),
+    updatedAt: "2026-09-08T00:03:00.000Z",
+  });
+  expect(result.kind).toBe("conflict");
+  expect(await store.getCapsule(seeded.capsule.id)).toEqual(seeded.capsule);
+
+  const writes = database.statements.filter((statement) =>
+    /^update\s+["`]?capsules["`]?\b/iu.test(statement.trim()),
+  );
+  expect(writes).toHaveLength(1);
+  expect(writes[0]).toMatch(/workspaces/iu);
+  expect(writes[0]).toMatch(/management_(?:state|epoch)/iu);
+});
+
+test("Capsule lifecycle authority Postgres locks Workspace before its Capsule UPDATE", async () => {
+  const pg = await PGliteSqlClient.create();
+  pgClients.push(pg);
+  const seedStore = new SqlOpenTofuControlStore({ client: pg });
+  const seeded = await seedCapsuleModel(seedStore, {
+    workspaceId: "capsule-authority-postgres-workspace",
+    sourceId: "capsule-authority-postgres-source",
+    snapshotId: "capsule-authority-postgres-snapshot",
+    installConfigId: "capsule-authority-postgres-config",
+    capsuleId: "capsule-authority-postgres-capsule",
+  });
+  const authority: WorkspaceManagementAuthority = {
+    workspaceId: seeded.workspace.id,
+    managementState: "active",
+    managementEpoch: 1,
+  };
+  const recordingClient = new CapsuleLifecycleAuthoritySqlClient(pg);
+  const store = new SqlOpenTofuControlStore({ client: recordingClient });
+  const executionEpoch = await store.getCapsuleExecutionAuthorityEpoch(
+    seeded.capsule.id,
+  );
+  const result = await store.updateCapsuleLifecycle({
+    capsuleId: seeded.capsule.id,
+    expected: capsuleLifecycleExpected(seeded.capsule, executionEpoch!),
+    mutation: capsuleLifecycleAuthorityMutation(
+      "status",
+      authority,
+      "postgres-lock-status",
+    ),
+    updatedAt: "2026-09-08T00:04:00.000Z",
+  });
+  expect(result.kind).toBe("updated");
+  const lockIndex = recordingClient.statements.findIndex((statement) =>
+    /for\s+update/iu.test(statement),
+  );
+  const capsuleIndex = recordingClient.statements.findIndex((statement) =>
+    /update\s+["`]?takosumi_capsules["`]?/iu.test(statement),
+  );
+  expect(lockIndex).toBeGreaterThanOrEqual(0);
+  expect(capsuleIndex).toBeGreaterThan(lockIndex);
+  expect(recordingClient.statements[lockIndex]).toMatch(/takosumi_workspaces/iu);
+});
+
 test("auto-update claim requires an active Capsule Workspace but exact retries and other finalizers remain readable", async () => {
   for (const { label, store } of await adapters()) {
     const ws = workspace(`capsule-${label}`);
@@ -3317,15 +3749,16 @@ test("auto-update claim requires an active Capsule Workspace but exact retries a
       label,
     ).toEqual({ kind: "conflict", current: claimed });
 
-    // Existing lifecycle finalization unrelated to auto-update admission is
-    // intentionally unchanged and remains allowed while draining.
-    const finalizer = await store.updateCapsuleLifecycle({
+    // SourceSync stale convergence is a distinct causal path and remains
+    // allowed while draining; generic lifecycle status mutations are fenced
+    // by the authority matrix above.
+    const stale = await store.markCapsuleStale({
       capsuleId: claimed.id,
-      expected: capsuleLifecycleExpected(claimed, 1),
-      mutation: { kind: "status", status: "stale" },
+      expected: claimed,
+      reason: "source-revision",
       updatedAt: "2026-09-08T00:00:04.000Z",
     });
-    expect(finalizer, label).toMatchObject({
+    expect(stale, label).toMatchObject({
       kind: "updated",
       capsule: { status: "stale" },
     });

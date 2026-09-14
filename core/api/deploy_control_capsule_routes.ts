@@ -12,17 +12,23 @@ import type {
   PublicCapsule,
 } from "takosumi-contract/capsules";
 import {
+  authorizeDeployControl,
+  DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES,
   defineRoute,
   type DeployControlEndpoint,
   type DeployControlRouteContext,
   ensureOperationPermission,
+  enforceBodyLimit,
   ensureRunnerProfileSelectionPermission,
   ensureWorkspacePermission,
+  ensureValidId,
   errorEnvelope,
   nonEmptyString,
+  notImplemented,
   parsePageParams,
   readJsonBody,
   readOptionalJsonBody,
+  runHandler,
   STATE_VERSION_ID_PATTERN,
   WORKSPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
@@ -393,6 +399,27 @@ export function mountDeployControlCapsuleRoutes(
   const requireCapsules = (deps: typeof dependencies): string | undefined =>
     deps.capsulesService ? undefined : "capsules not wired";
 
+  // Preserve only admission evidence here; errors are disclosed by the route
+  // after bearer authorization and the Capsule's Workspace scope check.
+  const prepareLifecycle = async (id: string) => {
+    try {
+      const existing = await controller.getCapsule(id);
+      const authority = await (async () => {
+        const workspaces = dependencies.workspacesService;
+        if (!workspaces) {
+          throw new OpenTofuControllerError("not_implemented", "workspace management not wired");
+        }
+        return await workspaces.captureManagementAuthority(existing.capsule.workspaceId);
+      })().then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      return { ok: true as const, existing, authority };
+    } catch (error) {
+      return { ok: false as const, error };
+    }
+  };
+
   // Capsule creation is coordinated exclusively by the exact-provenance initial
   // install authority. Keep an authenticated tombstone so callers learn the
   // surviving read method without disclosing Workspace existence before auth.
@@ -462,14 +489,21 @@ export function mountDeployControlCapsuleRoutes(
   app.patch(
     TAKOSUMI_API_CAPSULE_ROUTE,
     deployControlBodyLimit,
-    defineRoute({
-      ctx,
-      requireService: requireCapsules,
-      param: CAPSULE_ID_PARAM,
-      enforceBody: true,
-      handler: async ({ c, principal, id }) => {
-        const existing = await controller.getCapsule(id);
-        ensureWorkspacePermission(principal, existing.capsule.workspaceId);
+    async (c) => {
+      const idCheck = ensureValidId(c, "capsuleId");
+      const prepared = idCheck.kind !== "invalid" && capsules
+        ? await prepareLifecycle(idCheck.value)
+        : undefined;
+      const auth = await authorizeDeployControl(c, dependencies);
+      if (!auth.ok) return auth.response;
+      if (!capsules) return c.json(notImplemented(c, "capsules not wired"), 501);
+      if (idCheck.kind === "invalid") return idCheck.response;
+      const limit = enforceBodyLimit(c, DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES);
+      if (limit) return limit;
+      return await runHandler(c, async () => {
+        if (!prepared) throw new Error("Capsule lifecycle admission was not captured");
+        if (!prepared.ok) throw prepared.error;
+        ensureWorkspacePermission(auth.principal, prepared.existing.capsule.workspaceId);
         const body = await readJsonBody<PatchCapsuleRequest>(c, "capsulePatch");
         if (body.status === undefined) {
           return c.json(
@@ -491,39 +525,51 @@ export function mountDeployControlCapsuleRoutes(
             400,
           );
         }
-        const capsule = await capsules!.patchCapsuleStatus(id, body.status);
+        if (!prepared.authority.ok) throw prepared.authority.error;
+        const capsule = await capsules.patchCapsuleStatus(
+          idCheck.value, body.status, prepared.authority.value,
+        );
         return c.json(capsuleResponse(capsule), 200);
-      },
-    }),
+      });
+    },
   );
 
   app.delete(
     TAKOSUMI_API_CAPSULE_ROUTE,
-    defineRoute({
-      ctx,
-      requireService: requireCapsules,
-      param: CAPSULE_ID_PARAM,
-      handler: async ({ c, principal, id }) => {
-        const existing = await controller.getCapsule(id);
-        ensureWorkspacePermission(principal, existing.capsule.workspaceId);
-        if (!capsuleHasAppliedState(existing.capsule)) {
-          const capsule = await capsules!.abandonUnappliedCapsule(
-            id,
+    async (c) => {
+      const idCheck = ensureValidId(c, "capsuleId");
+      const prepared = idCheck.kind !== "invalid" && capsules
+        ? await prepareLifecycle(idCheck.value)
+        : undefined;
+      const auth = await authorizeDeployControl(c, dependencies);
+      if (!auth.ok) return auth.response;
+      if (!capsules) return c.json(notImplemented(c, "capsules not wired"), 501);
+      if (idCheck.kind === "invalid") return idCheck.response;
+      return await runHandler(c, async () => {
+        if (!prepared) throw new Error("Capsule lifecycle admission was not captured");
+        if (!prepared.ok) throw prepared.error;
+        const principal = auth.principal;
+        ensureWorkspacePermission(principal, prepared.existing.capsule.workspaceId);
+        if (!capsuleHasAppliedState(prepared.existing.capsule)) {
+          if (!prepared.authority.ok) throw prepared.authority.error;
+          const capsule = await capsules.abandonUnappliedCapsule(
+            idCheck.value,
             "delete requested before first successful apply",
+            prepared.authority.value,
           );
           return c.json({ ...capsuleResponse(capsule), abandoned: true }, 202);
         }
         ensureOperationPermission(principal, "destroy");
         ensureRunnerProfileSelectionPermission(principal, undefined);
-        const response = await controller.createCapsuleDestroyPlan(id, {
+        const response = await controller.createCapsuleDestroyPlan(idCheck.value, {
           actor: principal.actor,
         });
         return c.json(
           { run: await controller.getRun(response.planRun.id) },
           202,
         );
-      },
-    }),
+      });
+    },
   );
 
   app.get(
