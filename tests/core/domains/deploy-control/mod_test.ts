@@ -186,6 +186,43 @@ async function seedActiveWorkspace(
   });
 }
 
+/** Pauses the public restore DLQ read after returning its observed row. */
+class MarkRunFailedRestoreReadStore extends InMemoryOpenTofuControlStore {
+  #pauseNextRead = false;
+  #readCaptured = Promise.resolve();
+  #captureRead: () => void = () => {};
+  #readReleasePromise = Promise.resolve();
+  #releaseRead: () => void = () => {};
+
+  armBackupRunReadPause(): void {
+    this.#pauseNextRead = true;
+    this.#readCaptured = new Promise<void>((resolve) => {
+      this.#captureRead = resolve;
+    });
+    this.#readReleasePromise = new Promise<void>((resolve) => {
+      this.#releaseRead = resolve;
+    });
+  }
+
+  waitForBackupRunRead(): Promise<void> {
+    return this.#readCaptured;
+  }
+
+  releaseBackupRunRead(): void {
+    this.#releaseRead();
+  }
+
+  override async getBackupRun(id: string) {
+    const run = await super.getBackupRun(id);
+    if (this.#pauseNextRead) {
+      this.#pauseNextRead = false;
+      this.#captureRead();
+      await this.#readReleasePromise;
+    }
+    return run;
+  }
+}
+
 function providerShortName(provider: string): string {
   if (provider.includes("/cloudflare/")) return "cloudflare";
   if (provider.includes("/hashicorp/aws")) return "aws";
@@ -2586,6 +2623,256 @@ test("restore DLQ failure is observed after its terminal transition", async () =
   ).toBe(true);
   expect((await store.getBackupRun(restore.id))?.status).toBe("failed");
   expect(lifecycle).toEqual(["failed:failed:failed"]);
+});
+
+test("restore DLQ preclaim failure loses its queued row when Workspace management drains", async () => {
+  const store = new MarkRunFailedRestoreReadStore();
+  const { capsule, backupId } = await seedRestoreFixture(store, "dlq_authority_race");
+  const lifecycle: string[] = [];
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    vault: fakeProviderVault() as never,
+    store,
+    now: sequenceNow(81),
+    newId: deterministicIds(),
+    runner: {
+      restore: (job) => Promise.resolve(restoreAck(job)),
+    },
+    enqueueRun: () => Promise.resolve(),
+  });
+  controller.setRestoreRunObserver(async ({ phase, run }) => {
+    lifecycle.push(`${phase}:${run.status}`);
+  });
+  const restore = await controller.createRestoreRun(
+    capsule.workspaceId,
+    backupId,
+    {
+      capsuleId: capsule.id,
+      environment: capsule.environment,
+      stateGeneration: 1,
+      expectedBackupDigest: PLAN_DIGEST,
+    },
+  );
+  await controller.approveRun(restore.id, { approvedBy: "ops" });
+  const observed = await store.getBackupRun(restore.id);
+  expect(observed?.status).toBe("queued");
+  const originalAuthority = await store.getRunManagementAuthority({
+    id: restore.id,
+    workspaceId: restore.workspaceId,
+    kind: "restore",
+  });
+  expect(originalAuthority).toEqual({
+    workspaceId: capsule.workspaceId,
+    managementState: "active",
+    managementEpoch: 1,
+  });
+
+  store.armBackupRunReadPause();
+  const failure = controller.markRunFailed(
+    "restore",
+    restore.id,
+    "retries-exhausted",
+  );
+  try {
+    await Promise.race([
+      store.waitForBackupRunRead(),
+      failure.then(() => { throw new Error("restore DLQ read was not intercepted"); }),
+    ]);
+    const management = await store.getWorkspaceManagement(capsule.workspaceId);
+    expect(management?.managementState).toBe("active");
+    const draining = await store.beginWorkspaceDraining(capsule.workspaceId, {
+      workspaceId: capsule.workspaceId,
+      managementState: "active",
+      managementEpoch: management!.managementEpoch,
+    });
+    expect(draining.status).toBe("started");
+  } finally {
+    store.releaseBackupRunRead();
+  }
+
+  expect(await failure).toBe(false);
+  expect(await store.getBackupRun(restore.id)).toEqual(observed);
+  expect(lifecycle).toEqual([]);
+  expect(await store.getWorkspaceManagement(capsule.workspaceId)).toEqual({
+    workspaceId: capsule.workspaceId,
+    managementState: "draining",
+    managementEpoch: 2,
+  });
+});
+
+test("restore DLQ preclaim failure loses a same-status queued heartbeat mutation", async () => {
+  const store = new MarkRunFailedRestoreReadStore();
+  const { capsule, backupId } = await seedRestoreFixture(store, "dlq_heartbeat_race");
+  const lifecycle: string[] = [];
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    vault: fakeProviderVault() as never,
+    store,
+    now: sequenceNow(81),
+    newId: deterministicIds(),
+    runner: {
+      restore: (job) => Promise.resolve(restoreAck(job)),
+    },
+    enqueueRun: () => Promise.resolve(),
+  });
+  controller.setRestoreRunObserver(async ({ phase, run }) => {
+    lifecycle.push(`${phase}:${run.status}`);
+  });
+  const restore = await controller.createRestoreRun(
+    capsule.workspaceId,
+    backupId,
+    {
+      capsuleId: capsule.id,
+      environment: capsule.environment,
+      stateGeneration: 1,
+      expectedBackupDigest: PLAN_DIGEST,
+    },
+  );
+  await controller.approveRun(restore.id, { approvedBy: "ops" });
+
+  store.armBackupRunReadPause();
+  const failure = controller.markRunFailed(
+    "restore",
+    restore.id,
+    "retries-exhausted",
+  );
+  try {
+    await Promise.race([
+      store.waitForBackupRunRead(),
+      failure.then(() => { throw new Error("restore DLQ read was not intercepted"); }),
+    ]);
+    const observed = await store.getBackupRun(restore.id);
+    expect(observed?.status).toBe("queued");
+    const changed = await store.transitionRun({
+      id: restore.id,
+      kind: "restore",
+      expectFrom: ["queued"],
+      run: {
+        ...(observed as NonNullable<typeof observed>),
+        status: "queued",
+        startedAt: "2026-06-06T00:00:08.000Z",
+        heartbeatAt: 8_000,
+      },
+      heartbeatAt: 8_000,
+    });
+    expect(changed.won).toBe(true);
+  } finally {
+    store.releaseBackupRunRead();
+  }
+
+  expect(await failure).toBe(false);
+  expect(await store.getBackupRun(restore.id)).toMatchObject({
+    status: "queued",
+    startedAt: "2026-06-06T00:00:08.000Z",
+    heartbeatAt: 8_000,
+  });
+  expect(lifecycle).toEqual([]);
+});
+
+test("restore preclaim failure cannot clobber a sibling restore lease", async () => {
+  let releaseBackupRead!: () => void;
+  let backupReadStarted!: () => void;
+  const backupReadStartedPromise = new Promise<void>((resolve) => {
+    backupReadStarted = resolve;
+  });
+  const backupReadRelease = new Promise<void>((resolve) => {
+    releaseBackupRead = resolve;
+  });
+  class FailingBackupReadStore extends InMemoryOpenTofuControlStore {
+    #armed = false;
+
+    armBackupReadFailure(): void {
+      this.#armed = true;
+    }
+
+    override async getBackupRecord(id: string) {
+      const backup = await super.getBackupRecord(id);
+      if (!this.#armed) return backup;
+      this.#armed = false;
+      backupReadStarted();
+      await backupReadRelease;
+      throw new Error("injected restore preclaim failure");
+    }
+  }
+
+  const store = new FailingBackupReadStore();
+  const { capsule, backupId } = await seedRestoreFixture(store, "preclaim_lease");
+  const lifecycle: string[] = [];
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    vault: fakeProviderVault() as never,
+    store,
+    now: sequenceNow(82),
+    newId: deterministicIds(),
+    runner: {
+      restore: (job) => Promise.resolve(restoreAck(job)),
+    },
+    enqueueRun: () => Promise.resolve(),
+  });
+  controller.setRestoreRunObserver(async ({ phase, run }) => {
+    lifecycle.push(`${phase}:${run.status}`);
+  });
+  const restore = await controller.createRestoreRun(
+    capsule.workspaceId,
+    backupId,
+    {
+      capsuleId: capsule.id,
+      environment: capsule.environment,
+      stateGeneration: 1,
+      expectedBackupDigest: PLAN_DIGEST,
+    },
+  );
+  await controller.approveRun(restore.id, { approvedBy: "ops" });
+  store.armBackupReadFailure();
+
+  const completion = controller.runQueuedRestore(restore.id);
+  const leaseToken = "lease_restore_sibling";
+  try {
+    await Promise.race([
+      backupReadStartedPromise,
+      completion.then(() => { throw new Error("restore backup read was not intercepted"); }),
+    ]);
+    const observed = await store.getBackupRun(restore.id);
+    expect(observed?.status).toBe("queued");
+    const takeover = await store.transitionRun({
+      id: restore.id,
+      kind: "restore",
+      expectFrom: ["queued"],
+      setLeaseToken: leaseToken,
+      heartbeatAt: 9_000,
+      run: {
+        ...(observed as NonNullable<typeof observed>),
+        status: "running",
+        startedAt: "2026-06-06T00:00:09.000Z",
+        heartbeatAt: 9_000,
+      },
+    });
+    expect(takeover.won).toBe(true);
+  } finally {
+    releaseBackupRead();
+  }
+
+  await expect(completion).rejects.toThrow("injected restore preclaim failure");
+  expect(await store.getBackupRun(restore.id)).toMatchObject({
+    status: "running",
+    startedAt: "2026-06-06T00:00:09.000Z",
+    heartbeatAt: 9_000,
+  });
+  expect(lifecycle).toEqual([]);
+  const renewed = await store.transitionRun({
+    id: restore.id,
+    kind: "restore",
+    expectFrom: ["running"],
+    expectLeaseToken: leaseToken,
+    expectHeartbeatAt: 9_000,
+    run: {
+      ...(await store.getBackupRun(restore.id))!,
+      status: "running",
+      heartbeatAt: 9_001,
+    },
+    heartbeatAt: 9_001,
+  });
+  expect(renewed.won).toBe(true);
 });
 
 test("restore does not publish state after losing its run lease", async () => {

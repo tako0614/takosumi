@@ -597,7 +597,15 @@ active な場合だけ `failed` を保存します。別 consumer の claim、he
 保存済みの勝者を返します。行が消えた場合も failed を捏造しません。backstop の戻り値は
 実際の終了更新が成立したかを示します。tuple のない旧行に権限を補いません。
 
-実行権を持つ Plan の失敗処理は lease token を必須とします。停止中も既存 lease に
+SourceSync・Apply・Restore の dead-letter backstop も同じ観測値と original tuple の
+条件付き更新を使い、`running` の行を終了させません。Apply の入力取得失敗と Restore の
+対象取得失敗も、実行権取得前はこの条件を使います。Restore の呼出元は取得エラーを
+引き続き返しますが、競合に負けた場合は勝者の行や lease を変更せず、失敗通知もしません。
+Apply backstop は可変の RunnerProfile を再取得せず、Run に保存済みの stateBackend で
+既存形の終了記録を作ります。通常の active epoch 内の再試行終了と、停止中の収束は
+混同しません。開始済み retry を停止中に未開始と見なして終了する権限は追加しません。
+
+実行権を持つ Plan・Apply・Restore の失敗処理は lease token を必須とします。停止中も既存 lease に
 よる終了確定は継続できますが、実行権を失った consumer は勝者を上書きしません。
 Plan consumer による入力 sidecar の削除と通知は、終了更新に勝った場合だけ行います。
 `succeeded` と `waiting_approval` の入力は、後続 Apply が同じレビュー済み入力を
@@ -606,6 +614,12 @@ Plan consumer による入力 sidecar の削除と通知は、終了更新に勝
 削除失敗は Run ID だけで警告し、storage error や入力値をログに出しません。残った入力の
 再削除や、終了保存後に process が停止した場合の cleanup/通知の確実な配送までは、
 この経路で保証しません。
+
+Apply の実行権取得前の入力取得・検証失敗では、終了更新の勝敗にかかわらず Plan の
+入力 sidecar を削除しません。Apply 一行の更新は、他の Apply も使う Plan 所有の入力を
+削除する権限ではありません。失敗通知・metric・activity は更新に勝った場合だけです。
+既存の Plan 側の終了・取消や provider 結果の確定後の削除経路は維持します。保持された
+入力の回収まで完了したという意味ではありません。
 
 Capsule への互換性結果の反映では、Plan 作成の最初の Capsule 読み取りより前に取得した
 execution-authority epoch を、report の選択・分析から最後の lifecycle CAS まで保持します。

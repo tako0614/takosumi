@@ -4688,7 +4688,7 @@ export class RunEngine {
     try {
       leaseTarget = await this.#restoreLeaseTarget(run);
     } catch (error) {
-      await this.#failRestoreRun(run, undefined, error);
+      await this.#failUnclaimedRestoreRun(run, runErrorCode(error, "restore_failed"));
       throw error;
     }
     const runWork = (handle?: LeaseHandle) =>
@@ -5170,8 +5170,9 @@ export class RunEngine {
   }
 
   /**
-   * Dead-letter backstop. Marks a run failed with the given reason when it is
-   * not already settled (succeeded/failed/waiting_approval/expired/cancelled).
+   * Dead-letter backstop. Fails only an unchanged, non-running, unsettled Run
+   * still admitted by its original Workspace authority. It owns no execution
+   * lease and cannot terminate a running consumer or settle management drain.
    * Used by the DLQ consumer for runs whose consumer crashed before it could
    * record failure.
    * Returns true when it transitioned the run.
@@ -5183,7 +5184,7 @@ export class RunEngine {
   ): Promise<boolean> {
     if (action === "source_sync") {
       const run = await this.#store.getSourceSyncRun(runId);
-      if (!run || run.status === "succeeded" || run.status === "failed") {
+      if (!run || run.status !== "queued") {
         return false;
       }
       const now = this.#now();
@@ -5196,14 +5197,7 @@ export class RunEngine {
         updatedAt: finishedAt,
         error: reason,
       };
-      const result = await this.#store.transitionRun({
-        id: run.id,
-        kind: "source_sync",
-        expectFrom: [run.status],
-        run: failed,
-        clearLeaseToken: true,
-        heartbeatAt: now,
-      });
+      const result = await this.#persistUnclaimedFailure("source_sync", run, failed);
       return result.won;
     }
     if (action === "plan") {
@@ -5219,39 +5213,14 @@ export class RunEngine {
         return false;
       }
       if (run.status === "running") return false;
-      const failed: Run = {
-        ...run,
-        status: "failed",
-        heartbeatAt: this.#now(),
-        errorCode: reason,
-        finishedAt: new Date(this.#now()).toISOString(),
-      };
-      const result = await this.#store.transitionRun({
-        id: run.id,
-        kind: "restore",
-        expectFrom: [run.status],
-        run: failed,
-        clearLeaseToken: true,
-        heartbeatAt: failed.heartbeatAt,
-      });
-      if (result.won) {
-        await this.#notifyRestore({ phase: "failed", run: failed });
-      }
+      const result = await this.#failUnclaimedRestoreRun(run, reason);
       return result.won;
     }
     const applyRun = await this.#store.getApplyRun(runId);
     if (!applyRun || isTerminalStatus(applyRun.status)) return false;
     if (applyRun.status === "running") return false;
-    const profile = await this.#requireRunnerProfile(applyRun.runnerProfileId);
-    await this.#failApplyRun(
-      applyRun,
-      undefined,
-      profile,
-      applyRun.startedAt ?? applyRun.createdAt,
-      applyRun.operation === "destroy" ? "destroy.failed" : "apply.failed",
-      new Error(reason),
-    );
-    return true;
+    const result = await this.#failUnclaimedApplyRun(applyRun, new Error(reason));
+    return result.won;
   }
 
   /**
@@ -5377,15 +5346,11 @@ export class RunEngine {
       try {
         inputs = await this.#requirePreparedPlanRunInputs(planRun);
       } catch (error) {
-        await this.#store.deletePlanRunInputs(planRun.id);
-        const failed = await this.#failApplyRun(
-          applyRun,
-          undefined,
-          profile,
-          applyRun.startedAt ?? applyRun.createdAt,
-          planRun.operation === "destroy" ? "destroy.failed" : "apply.failed",
-          error,
-        );
+        // These are Plan-owned inputs, shared with other admitted Apply Runs.
+        // Neither a failed read nor winning this Apply's CAS owns their deletion.
+        const result = await this.#failUnclaimedApplyRun(applyRun, error);
+        if (!result.run) return await this.getApplyRun(runId);
+        const failed = result.run;
         const capsule = failed.capsuleId
           ? await this.#store.getCapsule(failed.capsuleId)
           : undefined;
@@ -7054,13 +7019,13 @@ export class RunEngine {
   async #persistTerminalRun<R extends PlanRun | ApplyRun>(
     kind: "plan" | "apply",
     terminal: R,
-    leaseToken?: string,
+    leaseToken: string,
   ): Promise<TerminalRunPersistResult<R>> {
     const result = await this.#store.transitionRun({
       id: terminal.id,
       kind,
       expectFrom: NON_TERMINAL_RUN_STATUSES,
-      ...(leaseToken ? { expectLeaseToken: leaseToken } : {}),
+      expectLeaseToken: leaseToken,
       run: terminal,
       clearLeaseToken: true,
     });
@@ -7069,6 +7034,24 @@ export class RunEngine {
       won: result.won,
       run: (result.won ? terminal : (result.run ?? terminal)) as R,
     };
+  }
+
+  async #persistUnclaimedFailure<R extends PlanRun | ApplyRun | SourceSyncRun | Run>(
+    kind: "plan" | "apply" | "source_sync" | "restore",
+    observed: R,
+    failed: R,
+  ): Promise<{ readonly won: boolean; readonly run: R | undefined }> {
+    const result = await this.#store.transitionRun({
+      id: observed.id,
+      kind,
+      expectFrom: [observed.status],
+      expectHeartbeatAt: observed.heartbeatAt ?? null,
+      expectStartedAt: observed.startedAt ?? null,
+      requireStoredManagementAuthority: true,
+      run: failed,
+      clearLeaseToken: true,
+    });
+    return { won: result.won, run: result.run as R | undefined };
   }
 
   async #afterTerminalRunWon(
@@ -7094,27 +7077,41 @@ export class RunEngine {
     await this.#notifyTerminal(terminal);
   }
 
-  async #failRestoreRun(
-    running: Run,
-    leaseToken: string | undefined,
-    error: unknown,
-  ): Promise<Run> {
+  #failedRestoreRunCandidate(observed: Run, errorCode: string): Run {
     const finishedAtMs = this.#now();
-    const failed: Run = {
-      ...running,
+    return {
+      ...observed,
       status: "failed",
       heartbeatAt: finishedAtMs,
-      errorCode: runErrorCode(error, "restore_failed"),
+      errorCode,
       finishedAt: new Date(finishedAtMs).toISOString(),
     };
+  }
+
+  async #failUnclaimedRestoreRun(
+    observed: Run,
+    errorCode: string,
+  ): Promise<{ readonly won: boolean; readonly run: Run | undefined }> {
+    const failed = this.#failedRestoreRunCandidate(observed, errorCode);
+    const result = await this.#persistUnclaimedFailure("restore", observed, failed);
+    if (result.won) await this.#notifyRestore({ phase: "failed", run: failed });
+    return result;
+  }
+
+  async #failRestoreRun(
+    running: Run,
+    leaseToken: string,
+    error: unknown,
+  ): Promise<Run> {
+    const failed = this.#failedRestoreRunCandidate(running, runErrorCode(error, "restore_failed"));
     const result = await this.#store.transitionRun({
       id: failed.id,
       kind: "restore",
       expectFrom: NON_TERMINAL_RUN_STATUSES,
-      ...(leaseToken ? { expectLeaseToken: leaseToken } : {}),
+      expectLeaseToken: leaseToken,
       run: failed,
       clearLeaseToken: true,
-      heartbeatAt: finishedAtMs,
+      heartbeatAt: failed.heartbeatAt,
     });
     if (result.won) {
       await this.#notifyRestore({ phase: "failed", run: failed });
@@ -7147,16 +7144,7 @@ export class RunEngine {
     error: unknown,
   ): Promise<{ readonly won: boolean; readonly run: PlanRun | undefined }> {
     const failed = this.#failedPlanRunCandidate(observed, error);
-    const result = await this.#store.transitionRun({
-      id: observed.id,
-      kind: "plan",
-      expectFrom: [observed.status],
-      expectHeartbeatAt: observed.heartbeatAt ?? null,
-      expectStartedAt: observed.startedAt ?? null,
-      requireStoredManagementAuthority: true,
-      run: failed,
-      clearLeaseToken: true,
-    });
+    const result = await this.#persistUnclaimedFailure("plan", observed, failed);
     if (!result.won) {
       return { won: false, run: result.run as PlanRun | undefined };
     }
@@ -7267,23 +7255,22 @@ export class RunEngine {
     return result.run as PlanRun;
   }
 
-  async #failApplyRun(
+  #failedApplyRunCandidate(
     running: ApplyRun,
-    leaseToken: string | undefined,
-    profile: RunnerProfile,
+    stateBackend: ApplyRun["stateBackend"],
     startedAt: number,
     eventType: "apply.failed" | "destroy.failed",
     error: unknown,
     providerDispatched = false,
     lifecycleActionDispatched = false,
     lifecycleOutcome?: LifecycleActionOutcome,
-  ): Promise<ApplyRun> {
+  ): ApplyRun {
     const now = this.#now();
-    const failed: ApplyRun = {
+    return {
       ...running,
       status: "failed",
       stateLock: stateLockEvidence(
-        profile.stateBackend,
+        stateBackend,
         startedAt,
         now,
         "recorded",
@@ -7324,18 +7311,61 @@ export class RunEngine {
       updatedAt: now,
       finishedAt: now,
     };
+  }
+
+  async #failUnclaimedApplyRun(
+    observed: ApplyRun,
+    error: unknown,
+  ): Promise<{ readonly won: boolean; readonly run: ApplyRun | undefined }> {
+    const startedAt = observed.startedAt ?? observed.createdAt;
+    const eventType = observed.operation === "destroy" ? "destroy.failed" : "apply.failed";
+    const failed = this.#failedApplyRunCandidate(
+      observed, observed.stateBackend, startedAt, eventType, error,
+    );
+    const result = await this.#persistUnclaimedFailure("apply", observed, failed);
+    if (!result.won) return result;
+    await this.#afterTerminalRunWon("apply", failed);
+    await this.#recordApplyFailure(failed, startedAt, eventType, error);
+    return { won: true, run: failed };
+  }
+
+  async #failApplyRun(
+    running: ApplyRun,
+    leaseToken: string,
+    profile: RunnerProfile,
+    startedAt: number,
+    eventType: "apply.failed" | "destroy.failed",
+    error: unknown,
+    providerDispatched = false,
+    lifecycleActionDispatched = false,
+    lifecycleOutcome?: LifecycleActionOutcome,
+  ): Promise<ApplyRun> {
+    const failed = this.#failedApplyRunCandidate(
+      running, profile.stateBackend, startedAt, eventType, error,
+      providerDispatched, lifecycleActionDispatched, lifecycleOutcome,
+    );
     const persisted = await this.#persistTerminalRun(
       "apply",
       failed,
       leaseToken,
     );
     if (!persisted.won) return persisted.run;
+    await this.#recordApplyFailure(failed, startedAt, eventType, error);
+    return failed;
+  }
+
+  async #recordApplyFailure(
+    failed: ApplyRun,
+    startedAt: number,
+    eventType: "apply.failed" | "destroy.failed",
+    error: unknown,
+  ): Promise<void> {
     await this.#recordDeployOperationMetric({
       run: failed,
       operationKind: eventType === "destroy.failed" ? "destroy_apply" : "apply",
       status: "failed",
       startedAt,
-      finishedAt: now,
+      finishedAt: failed.finishedAt,
       recordApplyDuration: true,
     });
     // Activity (§27 / §34): an apply / destroy_apply reached a failed terminal
@@ -7357,7 +7387,6 @@ export class RunEngine {
         ...(failed.capsuleId ? { capsuleId: failed.capsuleId } : {}),
       },
     });
-    return failed;
   }
 
   async #completeApplyRunAsIdempotentReplay(input: {

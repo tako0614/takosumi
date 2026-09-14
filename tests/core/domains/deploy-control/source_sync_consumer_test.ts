@@ -121,6 +121,37 @@ class TransientWorkspaceManagementReadStore extends InMemoryOpenTofuControlStore
   }
 }
 
+/** Pauses the DLQ read after the observed SourceSync row is returned. */
+class MarkRunFailedSourceSyncReadStore extends InMemoryOpenTofuControlStore {
+  #pauseNextRead = false;
+  #readCaptured = deferred<void>();
+  #releaseRead = deferred<void>();
+
+  armSourceSyncReadPause(): void {
+    this.#pauseNextRead = true;
+    this.#readCaptured = deferred<void>();
+    this.#releaseRead = deferred<void>();
+  }
+
+  waitForSourceSyncRead(): Promise<void> {
+    return this.#readCaptured.promise;
+  }
+
+  releaseSourceSyncRead(): void {
+    this.#releaseRead.resolve();
+  }
+
+  override async getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined> {
+    const run = await super.getSourceSyncRun(id);
+    if (this.#pauseNextRead) {
+      this.#pauseNextRead = false;
+      this.#readCaptured.resolve();
+      await this.#releaseRead.promise;
+    }
+    return run;
+  }
+}
+
 class CountingMintVault extends StaticSecretConnectionVault {
   mintCalls = 0;
 
@@ -1795,6 +1826,169 @@ test("source_sync retry-exhausted backstop marks a queued run failed", async () 
   expect(
     await controller.markRunFailed("source_sync", run.id, "retries-exhausted"),
   ).toBe(false);
+});
+
+test("source_sync DLQ failure does not clobber a running lease", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { sourcesService, controller } = build({ store });
+  const { source } = await sourcesService.createSource({
+    workspaceId: "workspace_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: "main",
+  });
+  const { run } = await controller.createSourceSync(source.id);
+  const leaseToken = "lease_source_sync_owner";
+  const claimed = await store.transitionRun({
+    id: run.id,
+    kind: "source_sync",
+    expectFrom: ["queued"],
+    setLeaseToken: leaseToken,
+    heartbeatAt: 2_000,
+    run: {
+      ...run,
+      status: "running",
+      startedAt: "2026-06-06T00:00:02.000Z",
+      heartbeatAt: 2_000,
+      updatedAt: "2026-06-06T00:00:02.000Z",
+    },
+  });
+  expect(claimed.won).toBe(true);
+
+  expect(
+    await controller.markRunFailed(
+      "source_sync",
+      run.id,
+      "retries-exhausted",
+    ),
+  ).toBe(false);
+
+  const renewed = await store.transitionRun({
+    id: run.id,
+    kind: "source_sync",
+    expectFrom: ["running"],
+    expectLeaseToken: leaseToken,
+    expectHeartbeatAt: 2_000,
+    run: {
+      ...(await store.getSourceSyncRun(run.id))!,
+      status: "running",
+      heartbeatAt: 2_001,
+      updatedAt: "2026-06-06T00:00:02.001Z",
+    },
+    heartbeatAt: 2_001,
+  });
+  expect(renewed.won).toBe(true);
+  expect(await store.getSourceSyncRun(run.id)).toMatchObject({
+    status: "running",
+    startedAt: "2026-06-06T00:00:02.000Z",
+    heartbeatAt: 2_001,
+  });
+});
+
+test("source_sync DLQ preclaim failure loses a same-status queued mutation", async () => {
+  const store = new MarkRunFailedSourceSyncReadStore();
+  const { sourcesService, controller } = build({ store });
+  const { source } = await sourcesService.createSource({
+    workspaceId: "workspace_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: "main",
+  });
+  const { run } = await controller.createSourceSync(source.id);
+
+  store.armSourceSyncReadPause();
+  const failure = controller.markRunFailed(
+    "source_sync",
+    run.id,
+    "retries-exhausted",
+  );
+  try {
+    await Promise.race([
+      store.waitForSourceSyncRead(),
+      failure.then(() => { throw new Error("SourceSync DLQ read was not intercepted"); }),
+    ]);
+    const observed = await store.getSourceSyncRun(run.id);
+    expect(observed?.status).toBe("queued");
+    const changed = await store.transitionRun({
+      id: run.id,
+      kind: "source_sync",
+      expectFrom: ["queued"],
+      run: {
+        ...(observed as SourceSyncRun),
+        status: "queued",
+        startedAt: "2026-06-06T00:00:03.000Z",
+        heartbeatAt: 3_000,
+        updatedAt: "2026-06-06T00:00:03.000Z",
+      },
+      heartbeatAt: 3_000,
+    });
+    expect(changed.won).toBe(true);
+  } finally {
+    store.releaseSourceSyncRead();
+  }
+
+  expect(await failure).toBe(false);
+  expect(await store.getSourceSyncRun(run.id)).toMatchObject({
+    status: "queued",
+    startedAt: "2026-06-06T00:00:03.000Z",
+    heartbeatAt: 3_000,
+    updatedAt: "2026-06-06T00:00:03.000Z",
+  });
+});
+
+test("source_sync DLQ preclaim failure loses when Workspace management starts draining", async () => {
+  const store = new MarkRunFailedSourceSyncReadStore();
+  const { sourcesService, controller } = build({ store });
+  const { source } = await sourcesService.createSource({
+    workspaceId: "workspace_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: "main",
+  });
+  const { run } = await controller.createSourceSync(source.id);
+  const original = await store.getRunManagementAuthority({
+    id: run.id,
+    workspaceId: run.workspaceId,
+    kind: "source_sync",
+  });
+  expect(original).toEqual({
+    workspaceId: "workspace_1",
+    managementState: "active",
+    managementEpoch: 1,
+  });
+
+  store.armSourceSyncReadPause();
+  const failure = controller.markRunFailed(
+    "source_sync",
+    run.id,
+    "retries-exhausted",
+  );
+  try {
+    await Promise.race([
+      store.waitForSourceSyncRead(),
+      failure.then(() => { throw new Error("SourceSync DLQ read was not intercepted"); }),
+    ]);
+    const management = await store.getWorkspaceManagement(run.workspaceId);
+    expect(management?.managementState).toBe("active");
+    const draining = await store.beginWorkspaceDraining(run.workspaceId, {
+      workspaceId: run.workspaceId,
+      managementState: "active",
+      managementEpoch: management!.managementEpoch,
+    });
+    expect(draining.status).toBe("started");
+  } finally {
+    store.releaseSourceSyncRead();
+  }
+
+  expect(await failure).toBe(false);
+  expect(await store.getSourceSyncRun(run.id)).toMatchObject({
+    status: "queued",
+  });
+  expect(await store.getWorkspaceManagement(run.workspaceId)).toEqual({
+    workspaceId: run.workspaceId,
+    managementState: "draining",
+    managementEpoch: 2,
+  });
 });
 
 test("source_sync consumer is idempotent on an already-succeeded run", async () => {

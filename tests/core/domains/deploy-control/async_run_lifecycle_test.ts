@@ -1749,6 +1749,162 @@ test("DLQ backstop does not clobber a running run with a fresh owner", async () 
   expect((await store.getPlanRun(planRun.id))?.status).toEqual("running");
 });
 
+class ApplyFailureInterleavingStore extends InMemoryOpenTofuControlStore {
+  afterApplyRead?: () => Promise<void>;
+  beforeInputsFailure?: () => Promise<void>;
+
+  override async getApplyRun(id: string) {
+    const run = await super.getApplyRun(id);
+    const interleave = this.afterApplyRead;
+    this.afterApplyRead = undefined;
+    await interleave?.();
+    return run;
+  }
+
+  override async getPlanRunInputs(id: string) {
+    const interleave = this.beforeInputsFailure;
+    this.beforeInputsFailure = undefined;
+    if (interleave) {
+      await interleave();
+      throw new Error("injected prepared input read failure");
+    }
+    return await super.getPlanRunInputs(id);
+  }
+}
+
+async function queuedApplyFailureFixture() {
+  const store = new ApplyFailureInterleavingStore();
+  let applyCalls = 0;
+  const runner = stubRunner();
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(6800),
+    newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner: {
+      ...runner,
+      apply: async (job) => { applyCalls += 1; return await runner.apply(job); },
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+  });
+  const request = await seedUpdatable(store, { capsuleId: "cap_apply_failure_race" });
+  const { planRun: queued } = await controller.createPlanRun(request);
+  await controller.runQueuedPlan(queued.id);
+  const plan = (await store.getPlanRun(queued.id))!;
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: plan.id,
+    expected: applyExpectedGuardFromPlanRun(plan),
+  });
+  expect(applyRun.status).toBe("queued");
+  const inputs = await store.getPlanRunInputs(plan.id);
+  expect(inputs).toBeDefined();
+  const notifications: string[] = [];
+  controller.setTerminalRunObserver(async (run) => { notifications.push(run.status); });
+  return { store, controller, applyRun, inputs, notifications, applyCalls: () => applyCalls };
+}
+
+for (const race of ["claim", "heartbeat", "requeue", "drain"] as const) {
+  test(`Apply DLQ backstop loses after ${race} changes its observed authority`, async () => {
+    const fixture = await queuedApplyFailureFixture();
+    const { store, controller, applyRun } = fixture;
+    let winner: ApplyRun | undefined;
+    store.afterApplyRead = async () => {
+      if (race === "drain") {
+        const result = await store.beginWorkspaceDraining(applyRun.workspaceId, {
+          workspaceId: applyRun.workspaceId,
+          managementState: "active",
+          managementEpoch: 1,
+        });
+        expect(result.status).toBe("started");
+      } else if (race === "heartbeat") {
+        const result = await store.transitionRun({
+          id: applyRun.id, kind: "apply", expectFrom: ["queued"],
+          run: { ...applyRun, heartbeatAt: 7001, updatedAt: 7001 },
+        });
+        expect(result.won).toBe(true);
+      } else {
+        const claimed = await store.transitionRun({
+          id: applyRun.id, kind: "apply", expectFrom: ["queued"],
+          setLeaseToken: "apply-sibling",
+          run: { ...applyRun, status: "running", startedAt: 7001, heartbeatAt: 7001, updatedAt: 7001 },
+        });
+        expect(claimed.won).toBe(true);
+        if (race === "requeue") {
+          const running = (await store.getApplyRun(applyRun.id))!;
+          const requeued = await store.transitionRun({
+            id: applyRun.id, kind: "apply", expectFrom: ["running"],
+            expectLeaseToken: "apply-sibling", clearLeaseToken: true, clearHeartbeat: true,
+            run: { ...running, status: "queued", updatedAt: 7002 },
+          });
+          expect(requeued.won).toBe(true);
+        }
+      }
+      winner = await store.getApplyRun(applyRun.id);
+    };
+    expect(await controller.markRunFailed("apply", applyRun.id, "retries-exhausted")).toBe(false);
+    expect(await store.getApplyRun(applyRun.id)).toEqual(winner);
+    expect(await store.getPlanRunInputs(applyRun.planRunId)).toEqual(fixture.inputs);
+    expect(fixture.notifications).toHaveLength(0);
+    expect(fixture.applyCalls()).toBe(0);
+    if (race === "claim") {
+      const renewed = await store.transitionRun({
+        id: applyRun.id, kind: "apply", expectFrom: ["running"],
+        expectLeaseToken: "apply-sibling", run: { ...winner!, heartbeatAt: 7002 },
+      });
+      expect(renewed.won).toBe(true);
+    }
+  });
+}
+
+test("Apply DLQ backstop reports a won failure once", async () => {
+  const { store, controller, applyRun, notifications } = await queuedApplyFailureFixture();
+  expect(await controller.markRunFailed("apply", applyRun.id, "retries-exhausted")).toBe(true);
+  const failed = await store.getApplyRun(applyRun.id);
+  expect(failed?.status).toBe("failed");
+  expect(failed?.auditEvents.filter((event) => event.type === "apply.failed")).toHaveLength(1);
+  expect(notifications).toEqual(["failed"]);
+  expect(await controller.markRunFailed("apply", applyRun.id, "retries-exhausted")).toBe(false);
+  expect(notifications).toEqual(["failed"]);
+});
+
+test("Apply prepared-input failure cannot fail a sibling or delete its reviewed inputs", async () => {
+  const fixture = await queuedApplyFailureFixture();
+  const { store, controller, applyRun } = fixture;
+  let winner: ApplyRun | undefined;
+  store.beforeInputsFailure = async () => {
+    const claimed = await store.transitionRun({
+      id: applyRun.id, kind: "apply", expectFrom: ["queued"],
+      setLeaseToken: "input-sibling",
+      run: { ...applyRun, status: "running", startedAt: 7001, heartbeatAt: 7001, updatedAt: 7001 },
+    });
+    expect(claimed.won).toBe(true);
+    winner = await store.getApplyRun(applyRun.id);
+  };
+  const result = await controller.runQueuedApply(applyRun.id);
+  expect(result.applyRun).toEqual(winner);
+  expect(await store.getApplyRun(applyRun.id)).toEqual(winner);
+  expect(await store.getPlanRunInputs(applyRun.planRunId)).toEqual(fixture.inputs);
+  expect(fixture.notifications).toHaveLength(0);
+  expect(fixture.applyCalls()).toBe(0);
+  const renewed = await store.transitionRun({
+    id: applyRun.id, kind: "apply", expectFrom: ["running"],
+    expectLeaseToken: "input-sibling", run: { ...winner!, heartbeatAt: 7002 },
+  });
+  expect(renewed.won).toBe(true);
+});
+
+test("a won Apply prepared-input failure retains Plan-owned reviewed inputs", async () => {
+  const { store, controller, applyRun, inputs, notifications, applyCalls } = await queuedApplyFailureFixture();
+  store.beforeInputsFailure = async () => {};
+  const result = await controller.runQueuedApply(applyRun.id);
+  expect(result.applyRun.status).toBe("failed");
+  expect(await store.getPlanRunInputs(applyRun.planRunId)).toEqual(inputs);
+  expect(notifications).toEqual(["failed"]);
+  expect(applyCalls()).toBe(0);
+});
+
 // --- state generation guard ---
 
 test("state generation: a successful apply increments the capsule generation", async () => {
