@@ -19,11 +19,13 @@ import {
   capsuleLifecycleExpected,
   type CapsuleRuntimeSafety,
   type CommitCapsuleAbandonmentInput,
+  type MarkCapsuleStaleCommand,
   InMemoryOpenTofuControlStore,
   type UpdateCapsuleLifecycleCommand,
   type OpenTofuControlStore,
   type WorkspaceManagementAuthority,
 } from "../../../../core/domains/deploy-control/store.ts";
+import { InMemoryGitInstallPlanStore } from "../../../../core/domains/install-plans/store.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import type {
@@ -168,10 +170,60 @@ afterEach(async () => {
 async function stores(): Promise<readonly [string, OpenTofuControlStore][]> {
   const client = await PGliteSqlClient.create();
   pgClients.push(client);
+  const memory = new InMemoryOpenTofuControlStore();
+  memory.attachGitInstallPlanStore(new InMemoryGitInstallPlanStore(memory));
   return [
-    ["memory", new InMemoryOpenTofuControlStore()],
+    ["memory", memory],
     ["postgres", new SqlOpenTofuControlStore({ client })],
     ["d1", new CloudflareD1OpenTofuControlStore(new SqliteFakeD1())],
+  ];
+}
+
+function markStaleInput(
+  expected: Capsule,
+  reason: MarkCapsuleStaleCommand["reason"],
+): MarkCapsuleStaleCommand {
+  return {
+    capsuleId: expected.id,
+    expected,
+    reason,
+    updatedAt: LIFECYCLE_AT,
+  };
+}
+
+interface ReleasedStoreFixture {
+  readonly label: string;
+  readonly store: OpenTofuControlStore;
+  readonly setReleased: (workspaceId: string) => Promise<void>;
+}
+
+async function releasedStores(): Promise<readonly ReleasedStoreFixture[]> {
+  const client = await PGliteSqlClient.create();
+  pgClients.push(client);
+  const d1 = new SqliteFakeD1();
+  return [
+    {
+      label: "postgres",
+      store: new SqlOpenTofuControlStore({ client }),
+      setReleased: async (workspaceId: string) => {
+        await client.query(
+          "update takosumi_workspaces set management_state = 'released' where id = $1",
+          [workspaceId],
+        );
+      },
+    },
+    {
+      label: "d1",
+      store: new CloudflareD1OpenTofuControlStore(d1),
+      setReleased: async (workspaceId: string) => {
+        await d1
+          .prepare(
+            "update workspaces set management_state = 'released' where id = ?",
+          )
+          .bind(workspaceId)
+          .run();
+      },
+    },
   ];
 }
 
@@ -787,6 +839,126 @@ test("lifecycle CAS preserves a newer Apply across every store", async () => {
       });
   }
 });
+
+test(
+  "Capsule stale frozen boundary preserves active and draining observation, but refuses frozen state",
+  async () => {
+    const reasons = ["source-revision", "dependency-output"] as const;
+    for (const [label, store] of await stores()) {
+      for (const managementState of ["active", "draining"] as const) {
+        for (const reason of reasons) {
+          const seeded = await seedCapsuleModel(store, {
+            workspaceId: `workspace_stale_${managementState}_${reason}_${label}`,
+            capsuleId: `capsule_stale_${managementState}_${reason}_${label}`,
+            sourceId: `source_stale_${managementState}_${reason}_${label}`,
+            snapshotId: `snapshot_stale_${managementState}_${reason}_${label}`,
+            installConfigId: `config_stale_${managementState}_${reason}_${label}`,
+          });
+          if (managementState === "draining") {
+            const authority = await activeWorkspaceAuthority(
+              store,
+              seeded.workspace.id,
+            );
+            const draining = await store.beginWorkspaceDraining(
+              seeded.workspace.id,
+              authority,
+            );
+            expect(draining.status, `${label}:${reason}:drain`).toBe("started");
+          }
+          const result = await store.markCapsuleStale(
+            markStaleInput(seeded.capsule, reason),
+          );
+          expect(result.kind, `${label}:${managementState}:${reason}`).toBe(
+            "updated",
+          );
+          expect(await store.getCapsule(seeded.capsule.id)).toEqual({
+            ...seeded.capsule,
+            status: "stale",
+            updatedAt: LIFECYCLE_AT,
+          });
+        }
+      }
+
+      const frozenSeed = await seedCapsuleModel(store, {
+        workspaceId: `workspace_stale_frozen_${label}`,
+        capsuleId: `capsule_stale_frozen_${label}`,
+        sourceId: `source_stale_frozen_${label}`,
+        snapshotId: `snapshot_stale_frozen_${label}`,
+        installConfigId: `config_stale_frozen_${label}`,
+      });
+      const authority = await activeWorkspaceAuthority(
+        store,
+        frozenSeed.workspace.id,
+      );
+      const draining = await store.beginWorkspaceDraining(
+        frozenSeed.workspace.id,
+        authority,
+      );
+      if (draining.status !== "started") {
+        throw new Error(`${label}: failed to start Workspace drain`);
+      }
+      expect(
+        (await store.freezeWorkspaceManagementIfQuiescent(draining.management))
+          .status,
+        `${label}:freeze`,
+      ).toBe("frozen");
+      for (const reason of reasons) {
+        expect(
+          await store.markCapsuleStale(markStaleInput(frozenSeed.capsule, reason)),
+          `${label}:frozen:${reason}`,
+        ).toEqual({ kind: "conflict", current: frozenSeed.capsule });
+        expect(await store.getCapsule(frozenSeed.capsule.id), label).toEqual(
+          frozenSeed.capsule,
+        );
+      }
+
+      const orphan = {
+        ...frozenSeed.capsule,
+        id: `capsule_stale_orphan_${label}`,
+        workspaceId: `workspace_stale_missing_${label}`,
+        projectId: `project_stale_orphan_${label}`,
+        name: `stale-orphan-${label}`,
+        slug: `stale-orphan-${label}`,
+      };
+      await store.putCapsule(orphan);
+      expect(
+        await store.markCapsuleStale(markStaleInput(orphan, reasons[0])),
+        `${label}:orphan`,
+      ).toEqual({ kind: "conflict", current: orphan });
+      expect(await store.getCapsule(orphan.id), `${label}:orphan:unchanged`).toEqual(
+        orphan,
+      );
+    }
+  },
+);
+
+test(
+  "Capsule stale frozen boundary refuses released state without mutation in durable stores",
+  async () => {
+    const reasons = ["source-revision", "dependency-output"] as const;
+    for (const { label, store, setReleased } of await releasedStores()) {
+      const seeded = await seedCapsuleModel(store, {
+        workspaceId: `workspace_stale_released_${label}`,
+        capsuleId: `capsule_stale_released_${label}`,
+      });
+      await setReleased(seeded.workspace.id);
+      expect(
+        (await store.getWorkspaceManagement(seeded.workspace.id))
+          ?.managementState,
+        `${label}:released fixture`,
+      ).toBe("released");
+      for (const reason of reasons) {
+        expect(
+          await store.markCapsuleStale(markStaleInput(seeded.capsule, reason)),
+          `${label}:released:${reason}`,
+        ).toEqual({ kind: "conflict", current: seeded.capsule });
+        expect(await store.getCapsule(seeded.capsule.id), label).toEqual(
+          seeded.capsule,
+        );
+      }
+    }
+  },
+);
 
 test("auto-update claim replay has one winner across every store", async () => {
   for (const [label, store] of await stores()) {

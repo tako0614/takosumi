@@ -6591,6 +6591,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async markCapsuleStale(
     input: MarkCapsuleStaleCommand,
   ): Promise<MarkCapsuleStaleResult> {
+    input = structuredClone(input);
     await this.#ensureSchema();
     const expected = normalizeCapsuleRecord(input.expected);
     const updated = normalizeCapsuleRecord({
@@ -6608,7 +6609,22 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .where(
         and(
           eq(schema.capsules.id, input.capsuleId),
+          eq(schema.capsules.workspaceId, expected.workspaceId),
           eq(schema.capsules.recordJson, expected),
+          exists(
+            this.#orm
+              .select({ one: sql`1` })
+              .from(schema.workspaces)
+              .where(
+                and(
+                  eq(schema.workspaces.id, schema.capsules.workspaceId),
+                  or(
+                    eq(schema.workspaces.managementState, "active"),
+                    eq(schema.workspaces.managementState, "draining"),
+                  ),
+                ),
+              ),
+          ),
         ),
       )
       .run();

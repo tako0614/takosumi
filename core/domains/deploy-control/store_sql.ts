@@ -6434,26 +6434,43 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   async markCapsuleStale(
     input: MarkCapsuleStaleCommand,
   ): Promise<MarkCapsuleStaleResult> {
+    input = structuredClone(input);
     const expected = normalizeCapsuleRecord(input.expected);
     const updated = normalizeCapsuleRecord({
       ...expected,
       status: "stale",
       updatedAt: input.updatedAt,
     });
-    const rows = await this.#db
-      .update(pgSchema.capsules)
-      .set({
-        status: updated.status,
-        capsuleJson: updated,
-        updatedAt: updated.updatedAt,
-      })
-      .where(
-        and(
-          eq(pgSchema.capsules.id, input.capsuleId),
-          eq(pgSchema.capsules.capsuleJson, expected),
-        ),
-      )
-      .returning({ json: pgSchema.capsules.capsuleJson });
+    const rows = await this.#client.transaction(async (transaction) => {
+      // Serialize with freeze on the owning Workspace before changing the
+      // Capsule. This is causal settlement, not a fresh active-epoch admission.
+      const management = await pgWorkspaceManagementForTransaction(
+        transaction,
+        expected.workspaceId,
+      );
+      if (
+        !management ||
+        (management.managementState !== "active" &&
+          management.managementState !== "draining")
+      ) {
+        return [];
+      }
+      return await this.#drizzleForClient(transaction)
+        .update(pgSchema.capsules)
+        .set({
+          status: updated.status,
+          capsuleJson: updated,
+          updatedAt: updated.updatedAt,
+        })
+        .where(
+          and(
+            eq(pgSchema.capsules.id, input.capsuleId),
+            eq(pgSchema.capsules.workspaceId, expected.workspaceId),
+            eq(pgSchema.capsules.capsuleJson, expected),
+          ),
+        )
+        .returning({ json: pgSchema.capsules.capsuleJson });
+    });
     if (rows[0]) {
       return {
         kind: "updated",

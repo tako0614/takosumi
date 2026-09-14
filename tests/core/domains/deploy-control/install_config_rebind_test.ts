@@ -350,25 +350,28 @@ function isD1CapsuleStaleWrite(sql: string): boolean {
 function postgresStaleInterleaver(inner: SqlClient): {
   readonly client: SqlClient;
   readonly staleWrites: RecordedStatement[];
-  beforeNextStaleWrite(callback: () => Promise<void>): void;
+  beforeNextStaleWrite(callback: (transaction: SqlTransaction) => Promise<void>): void;
 } {
-  let beforeNext: (() => Promise<void>) | undefined;
+  let beforeNext: ((transaction: SqlTransaction) => Promise<void>) | undefined;
   const staleWrites: RecordedStatement[] = [];
   return {
     client: {
-      async query<Row extends Record<string, unknown>>(
-        sql: string,
-        parameters?: SqlParameters,
-      ) {
-        if (isPostgresCapsuleStaleWrite(sql)) {
-          staleWrites.push({ sql, parameters: positional(parameters) });
-          const before = beforeNext;
-          beforeNext = undefined;
-          await before?.();
-        }
-        return await inner.query<Row>(sql, parameters);
-      },
-      transaction: (work) => inner.transaction(work),
+      query: (sql, parameters) => inner.query(sql, parameters),
+      transaction: (work) => inner.transaction((transaction) => work({
+        transaction: (nested) => transaction.transaction(nested),
+        async query<Row extends Record<string, unknown>>(
+          sql: string,
+          parameters?: SqlParameters,
+        ) {
+          if (isPostgresCapsuleStaleWrite(sql)) {
+            staleWrites.push({ sql, parameters: positional(parameters) });
+            const before = beforeNext;
+            beforeNext = undefined;
+            await before?.(transaction);
+          }
+          return await transaction.query<Row>(sql, parameters);
+        },
+      })),
     },
     staleWrites,
     beforeNextStaleWrite(callback) {
@@ -1029,17 +1032,19 @@ test("markCapsuleStale returns typed exact-record CAS outcomes across every stor
   }
 });
 
-test("markCapsuleStale cannot erase a newer Postgres or D1 Capsule committed at its write boundary", async () => {
+test("markCapsuleStale cannot erase a newer Postgres or D1 Capsule visible at its write boundary", async () => {
   const pg = await PGliteSqlClient.create();
   pgClients.push(pg);
   const pgInterleaving = postgresStaleInterleaver(pg);
   const pgStore = new SqlOpenTofuControlStore({
     client: pgInterleaving.client,
   });
-  const pgConcurrentStore = new SqlOpenTofuControlStore({ client: pg });
   const pgSeed = await seedRebind(pgStore, "stale_race_pg");
   let pgNewer: Capsule | undefined;
-  pgInterleaving.beforeNextStaleWrite(async () => {
+  pgInterleaving.beforeNextStaleWrite(async (transaction) => {
+    // Inject the newer row at the real transactional UPDATE boundary. A
+    // separate PGlite client cannot progress while this transaction is held.
+    const pgConcurrentStore = new SqlOpenTofuControlStore({ client: transaction });
     pgNewer = await pgConcurrentStore.patchCapsule(pgSeed.capsule.id, {
       currentStateVersionId: "state_newer_pg",
       currentStateGeneration: 8,

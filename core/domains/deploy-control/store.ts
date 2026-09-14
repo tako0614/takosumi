@@ -1447,6 +1447,7 @@ export interface MarkCapsuleStaleCommand {
   readonly capsuleId: string;
   /** Exact canonical Capsule record observed by the lifecycle caller. */
   readonly expected: Capsule;
+  /** Causal observations may settle while draining, but never after freeze. */
   readonly reason: "source-revision" | "dependency-output";
   readonly updatedAt: string;
 }
@@ -5468,9 +5469,15 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   markCapsuleStale(
     input: MarkCapsuleStaleCommand,
   ): Promise<MarkCapsuleStaleResult> {
+    input = structuredClone(input);
     const current = this.#capsules.get(input.capsuleId);
     if (!current) return Promise.resolve({ kind: "not-found" });
+    const management = this.#workspaceManagement.get(current.workspaceId);
     if (
+      !this.#workspaces.has(current.workspaceId) ||
+      !management ||
+      (management.managementState !== "active" &&
+        management.managementState !== "draining") ||
       stableStringify(current) !== stableStringify(input.expected)
     ) {
       return Promise.resolve({ kind: "conflict", current });

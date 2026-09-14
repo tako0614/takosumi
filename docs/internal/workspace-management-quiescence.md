@@ -646,6 +646,18 @@ D1 の最初の読取りと batch の間に同じ ID が登録された場合も
 これは新規登録時の競合を閉じる変更であり、公開停止・移管機能の完成、live D1、
 実アプリの WfP journey の実証を示しません。
 
+`markCapsuleStale` は SourceSync と dependency-output の観測結果を、同じ Workspace が
+active または draining の間だけ保存します。frozen、released、Workspace 不在では
+Capsule を変更せず conflict を返し、呼出元は stale Activity や自動後続を生成しません。
+Memory は同期判定、PostgreSQL は Workspace lock と Capsule の exact-record UPDATE を
+同じ transaction、D1 は Workspace 条件を含む一つの UPDATE で確定します。これは
+観測済み結果の収束であり、新規管理 admission の active epoch を取り直しません。
+
+この保存ガードだけでは SourceSync の terminal 確定と stale projection の間の順序は
+解決しません。凍結が先に成立すると遅い projection は保存されないため、成功結果と
+影響する Capsule の観測更新を凍結前に一緒に収束させる作業が残ります。停止・移管や
+export の完全性を、このガードだけで実証済みとは扱いません。
+
 `public-origin-reservation` は新規予約と確認済み解放の両方に使われる private な
 host bookkeeping であり、この四種類に一括分類しません。draining 中の解放を
 妨げない causal authority の整理が別途必要です。SourceSync の terminal 確定後の
