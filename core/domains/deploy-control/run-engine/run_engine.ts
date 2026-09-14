@@ -5193,9 +5193,8 @@ export class RunEngine {
       const planRun = await this.#store.getPlanRun(runId);
       if (!planRun || isTerminalStatus(planRun.status)) return false;
       if (planRun.status === "running") return false;
-      await this.#failPlanRun(planRun, undefined, new Error(reason));
-      await this.#store.deletePlanRunInputs(runId);
-      return true;
+      const result = await this.#failUnclaimedPlanRun(planRun, new Error(reason));
+      return result.won;
     }
     if (action === "restore") {
       const run = await this.#store.getBackupRun(runId);
@@ -5262,8 +5261,7 @@ export class RunEngine {
     try {
       inputs = await this.#requirePreparedPlanRunInputs(planRun);
     } catch (error) {
-      await this.#store.deletePlanRunInputs(runId);
-      return await this.#failPlanRun(planRun, undefined, error);
+      return (await this.#failUnclaimedPlanRun(planRun, error)).run;
     }
     const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
     // An asynchronous dispatcher is execution authority: a missing explicit executor
@@ -5272,8 +5270,7 @@ export class RunEngine {
     try {
       planRun = await this.#ensureQueuedPlanCompatibilityReport(planRun);
     } catch (error) {
-      await this.#store.deletePlanRunInputs(runId);
-      return await this.#failPlanRun(planRun, undefined, error);
+      return (await this.#failUnclaimedPlanRun(planRun, error)).run;
     }
     // The sidecar is sealed at rest when a sensitive dependency value was
     // injected. Preparation verification above unseals it and checks the whole
@@ -5283,8 +5280,7 @@ export class RunEngine {
     try {
       await this.#verification.assertCapsuleCompatibilityAllowsRun(planRun);
     } catch (error) {
-      await this.#store.deletePlanRunInputs(runId);
-      return await this.#failPlanRun(planRun, undefined, error);
+      return (await this.#failUnclaimedPlanRun(planRun, error)).run;
     }
     const claim = await this.#markPlanRunning(planRun);
     if (!claim.won) {
@@ -5293,7 +5289,6 @@ export class RunEngine {
       return claim.run;
     }
     const running = claim.run;
-    let result: PlanRun;
     try {
       const runEnvironment = await this.#runEnv.resolveRunEnvironment({
         planRun,
@@ -5304,7 +5299,7 @@ export class RunEngine {
         running,
         runEnvironment,
       );
-      result = await this.#executePlan(
+      return await this.#executePlan(
         runningWithEnv,
         claim.leaseToken,
         profile,
@@ -5314,24 +5309,9 @@ export class RunEngine {
       );
     } catch (error) {
       if (isRunnerInfrastructureRequeueError(error)) throw error;
-      await this.#store.deletePlanRunInputs(runId);
       const failedRun = runEnvironmentFailedRun(running, error);
       return await this.#failPlanRun(failedRun, claim.leaseToken, error);
     }
-    // Retain the inputs sidecar for an applyable Capsule run: direct-root runs
-    // also need the same variables, Output policy, source build, and lifecycle
-    // actions reviewed by plan. An applyable plan is one that
-    // completed `succeeded`, OR parked `waiting_approval` (it becomes applyable
-    // once approved — the sidecar must survive the approval gate). It is deleted
-    // once the plan is applied (apply-once) or the run is failed. Other terminal
-    // plans drop the sidecar now.
-    const retainForApply =
-      (result.status === "succeeded" || result.status === "waiting_approval") &&
-      inputs !== undefined;
-    if (!retainForApply) {
-      await this.#store.deletePlanRunInputs(runId);
-    }
-    return result;
   }
 
   /**
@@ -7046,10 +7026,10 @@ export class RunEngine {
    * Persists a run that has reached a TERMINAL status (succeeded / failed /
    * cancelled). Routed through {@link OpenTofuControlStore.transitionRun}
    * instead of a raw `put*` so the lease fence column is CLEARED on the same
-   * write (a `put*` would leave a stale `lease_token` behind). Non-terminal →
-   * terminal is uncontested (the consumer that reached this point already holds
-   * the run), so the CAS accepts any non-terminal from-state; a lost CAS means a
-   * sibling already terminalized it and the existing terminal row stands.
+   * write (a `put*` would leave a stale `lease_token` behind). Claimed Plan
+   * callers supply their execution lease; unclaimed failures use the separate
+   * observed-row/management CAS below. A lost CAS can return a sibling that is
+   * still running, so only the winning writer may retire inputs or notify.
    */
   async #persistTerminalRun<R extends PlanRun | ApplyRun>(
     kind: "plan" | "apply",
@@ -7064,11 +7044,34 @@ export class RunEngine {
       run: terminal,
       clearLeaseToken: true,
     });
-    if (result.won) await this.#notifyTerminal(terminal);
+    if (result.won) await this.#afterTerminalRunWon(kind, terminal);
     return {
       won: result.won,
       run: (result.won ? terminal : (result.run ?? terminal)) as R,
     };
+  }
+
+  async #afterTerminalRunWon(
+    kind: "plan" | "apply",
+    terminal: PlanRun | ApplyRun,
+  ): Promise<void> {
+    // Apply must reuse the exact reviewed inputs, including through approval.
+    // For other Plan outcomes, cleanup belongs to the won terminal write, never
+    // to a consumer's catch or its returned (possibly sibling-owned) Run.
+    if (kind === "plan" && terminal.status !== "succeeded" &&
+      terminal.status !== "waiting_approval") {
+      try {
+        await this.#store.deletePlanRunInputs(terminal.id);
+      } catch {
+        // Persistence has already committed. Retained inputs are cleanup debt,
+        // not grounds to undo the outcome or suppress lifecycle notification.
+        // Storage errors may contain sensitive material; log only the Run ID.
+        log.warn("deploy_control.plan_post_commit_cleanup_failed", {
+          planRunId: terminal.id,
+        });
+      }
+    }
+    await this.#notifyTerminal(terminal);
   }
 
   async #failRestoreRun(
@@ -7099,34 +7102,66 @@ export class RunEngine {
     return (result.won ? failed : (result.run ?? failed)) as Run;
   }
 
-  // Failure ceremony shared by the three catch bodies: clone the running run
-  // into `failed`, attach the redacted error diagnostic and the phase `failed`
-  // audit event, persist, and return the failed run.
-  async #failPlanRun(
-    running: PlanRun,
-    leaseToken: string | undefined,
+  #failedPlanRunCandidate(
+    observed: PlanRun,
     error: unknown,
-  ): Promise<PlanRun> {
+  ): PlanRun {
     const now = this.#now();
-    const failed: PlanRun = {
-      ...running,
+    return {
+      ...observed,
       status: "failed",
       diagnostics: runFailureDiagnostics(error),
       auditEvents: [
-        ...running.auditEvents,
-        auditEvent(running.id, "plan.failed", now, {
+        ...observed.auditEvents,
+        auditEvent(observed.id, "plan.failed", now, {
           message: errorMessage(error),
         }),
       ],
       updatedAt: now,
       finishedAt: now,
     };
+  }
+
+  async #failUnclaimedPlanRun(
+    observed: PlanRun,
+    error: unknown,
+  ): Promise<{ readonly won: boolean; readonly run: PlanRun | undefined }> {
+    const failed = this.#failedPlanRunCandidate(observed, error);
+    const result = await this.#store.transitionRun({
+      id: observed.id,
+      kind: "plan",
+      expectFrom: [observed.status],
+      expectHeartbeatAt: observed.heartbeatAt ?? null,
+      expectStartedAt: observed.startedAt ?? null,
+      requireStoredManagementAuthority: true,
+      run: failed,
+      clearLeaseToken: true,
+    });
+    if (!result.won) {
+      return { won: false, run: result.run as PlanRun | undefined };
+    }
+    await this.#afterTerminalRunWon("plan", failed);
+    await this.#recordPlanFailure(failed, error);
+    return { won: true, run: failed };
+  }
+
+  async #failPlanRun(
+    running: PlanRun,
+    leaseToken: string,
+    error: unknown,
+  ): Promise<PlanRun> {
+    const failed = this.#failedPlanRunCandidate(running, error);
     const persisted = await this.#persistTerminalRun(
       "plan",
       failed,
       leaseToken,
     );
     if (!persisted.won) return persisted.run;
+    await this.#recordPlanFailure(failed, error);
+    return failed;
+  }
+
+  async #recordPlanFailure(failed: PlanRun, error: unknown): Promise<void> {
     await this.#recordDeployOperationMetric({
       run: failed,
       operationKind: "plan",
@@ -7148,7 +7183,6 @@ export class RunEngine {
         ...(failed.capsuleId ? { capsuleId: failed.capsuleId } : {}),
       },
     });
-    return failed;
   }
 
   async #requeuePlanRunAfterRunnerInfrastructureError(

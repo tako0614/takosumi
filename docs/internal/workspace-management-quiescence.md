@@ -590,10 +590,25 @@ claim、または stale-running 観測後の heartbeat 更新が先に成立し�
 候補を書き戻さず、その時点の保存済み Run を返します。claim 前の raw upsert で
 状態や heartbeat を戻してから CAS を試す二重の更新経路は使いません。
 
-この変更は Plan の事前保存を取り除くものです。互換性 report 自体の生成・Capsule
-への結果反映や、実行権取得前のエラー終了処理全体の停止適合を示すものではありません。
-それらの確認と公開の停止・移管 API は別の残件です。公開 Run schema、DB schema、
-管理 epoch の取得経路は変更しません。
+実行権取得前に入力・互換性検証が失敗した場合と、Plan の dead-letter backstop は、
+観測した status・heartbeat・startedAt が同じで、保存済み original tuple が現在も
+active な場合だけ `failed` を保存します。別 consumer の claim、heartbeat 更新、
+開始後の再キュー、取消、管理停止・epoch 変更が先に成立すれば、終了更新は負け、
+保存済みの勝者を返します。行が消えた場合も failed を捏造しません。backstop の戻り値は
+実際の終了更新が成立したかを示します。tuple のない旧行に権限を補いません。
+
+実行権を持つ Plan の失敗処理は lease token を必須とします。停止中も既存 lease に
+よる終了確定は継続できますが、実行権を失った consumer は勝者を上書きしません。
+Plan consumer による入力 sidecar の削除と通知は、終了更新に勝った場合だけ行います。
+`succeeded` と `waiting_approval` の入力は、後続 Apply が同じレビュー済み入力を
+使えるよう保持します。取消の入力削除も、取消自身の条件付き更新に勝った場合だけです。
+入力削除が失敗しても保存済みの終了結果は取り消さず、通知・失敗記録を続行します。
+削除失敗は Run ID だけで警告し、storage error や入力値をログに出しません。残った入力の
+再削除や、終了保存後に process が停止した場合の cleanup/通知の確実な配送までは、
+この経路で保証しません。
+
+互換性 report 自体の生成・Capsule への結果反映、全 blocker の収束と公開の停止・移管
+API は別の残件です。公開 Run schema、DB schema、管理 epoch の取得経路は変更しません。
 
 内部候補では、SourceSync と同じ保存境界を Plan・Apply・Restore にも使います。
 新規の `preparePlanRun`、`beginApplyRun`、`beginRestoreRun` は、準備前に取得した
