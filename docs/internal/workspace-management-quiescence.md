@@ -583,6 +583,18 @@ commit の応答が失われても失敗と推測して別の terminal を書き
 
 ### Plan・Apply・Restore の永続 authority
 
+キュー待ち Plan の互換性 report 補完は、実行権の取得前に Run を保存しません。
+既存 report の選択・検証結果をメモリ内の候補に持ち、通常の `running` claim と
+同じ保存で `compatibilityReportId` を確定します。停止・取消・他 consumer の
+claim、または stale-running 観測後の heartbeat 更新が先に成立した場合は、
+候補を書き戻さず、その時点の保存済み Run を返します。claim 前の raw upsert で
+状態や heartbeat を戻してから CAS を試す二重の更新経路は使いません。
+
+この変更は Plan の事前保存を取り除くものです。互換性 report 自体の生成・Capsule
+への結果反映や、実行権取得前のエラー終了処理全体の停止適合を示すものではありません。
+それらの確認と公開の停止・移管 API は別の残件です。公開 Run schema、DB schema、
+管理 epoch の取得経路は変更しません。
+
 内部候補では、SourceSync と同じ保存境界を Plan・Apply・Restore にも使います。
 新規の `preparePlanRun`、`beginApplyRun`、`beginRestoreRun` は、準備前に取得した
 active Workspace tuple を必須とし、管理状態の確認と同じ原子的な保存で既存 Run JSON

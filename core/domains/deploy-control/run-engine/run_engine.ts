@@ -5511,13 +5511,13 @@ export class RunEngine {
       },
     );
     if (!report) return planRun;
-    const updated: PlanRun = {
+    // Keep this candidate in memory until the running claim. A separate put
+    // here could resurrect a cancellation or overwrite a sibling's heartbeat
+    // before the Workspace/status/lease fence gets a chance to reject it.
+    return {
       ...planRun,
       compatibilityReportId: report.id,
-      updatedAt: this.#now(),
     };
-    await this.#store.putPlanRun(updated);
-    return updated;
   }
 
   async #requireSourceForCapsule(capsule: Capsule): Promise<Source> {
