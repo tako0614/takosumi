@@ -25,6 +25,7 @@ export default createHandler(() => (
       <html lang="ja">
         <head>
           <meta charset="utf-8" />
+          <meta name="adring-site-verification" content="adring_vrf_YsZGc0CcS_JZmrU_-NnS4c7Pn6dhRQPC" />
           <meta name="viewport" content="width=device-width, initial-scale=1" />
           <title>{SITE_TITLE}</title>
           <meta name="description" content={SITE_DESC} />

@@ -10,6 +10,7 @@ import Comparison from "~/components/Comparison";
 import Pricing from "~/components/Pricing";
 import EndCTA from "~/components/EndCTA";
 import Footer from "~/components/Footer";
+import AdringWidget from "~/components/AdringWidget";
 
 export default function Home() {
   return (
@@ -30,6 +31,7 @@ export default function Home() {
         </div>
       </main>
       <Footer />
+      <AdringWidget />
     </>
   );
 }
