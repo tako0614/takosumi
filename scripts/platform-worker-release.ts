@@ -6499,16 +6499,18 @@ async function readPlatformContainerNativeJson(
   ) as unknown;
 }
 
-function platformNativeEnvelope(
+export function platformNativeEnvelope(
   value: unknown,
 ): Readonly<{ result: unknown; resultInfo: unknown }> {
   if (
     !record(value) ||
     value.success !== true ||
     !Object.hasOwn(value, "result") ||
-    !Array.isArray(value.errors) ||
-    value.errors.length !== 0 ||
-    !Array.isArray(value.messages)
+    !Object.hasOwn(value, "errors") ||
+    (value.errors !== null &&
+      (!Array.isArray(value.errors) || value.errors.length !== 0)) ||
+    !Object.hasOwn(value, "messages") ||
+    (value.messages !== null && !Array.isArray(value.messages))
   ) {
     throw new Error("native response envelope invalid");
   }

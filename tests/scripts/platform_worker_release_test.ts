@@ -18,6 +18,7 @@ import {
   platformCommandFailureDiagnostic,
   platformDashboardBuildEnvironment,
   platformExecutionEvidenceReleasePins,
+  platformNativeEnvelope,
   platformTargetForEnvironment,
   readPlatformWorkerCodeTopology,
   readPlatformContainer,
@@ -650,6 +651,40 @@ test("routine code Version matcher accepts the observed shape and only three pri
       CODE_SECRETS,
     )
   ).toThrow("platform_worker_code_binding_mismatch");
+});
+
+test("native reads accept proven null diagnostics without accepting failures", () => {
+  const result = [{ hostname: "app-staging.takosumi.com" }];
+  const resultInfo = { count: 1, total_count: 1 };
+  expect(
+    platformNativeEnvelope({
+      success: true,
+      result,
+      result_info: resultInfo,
+      errors: null,
+      messages: null,
+    }),
+  ).toEqual({ result, resultInfo });
+  expect(
+    platformNativeEnvelope({
+      success: true,
+      result,
+      errors: [],
+      messages: [{ code: 10_000, message: "informational" }],
+    }),
+  ).toEqual({ result, resultInfo: null });
+
+  for (const envelope of [
+    { success: false, result, errors: null, messages: null },
+    { success: true, result, errors: [{ code: 1 }], messages: null },
+    { success: true, result, errors: {}, messages: null },
+    { success: true, result, errors: null, messages: {} },
+    { success: true, result, errors: null },
+  ]) {
+    expect(() => platformNativeEnvelope(envelope)).toThrow(
+      "native response envelope invalid",
+    );
+  }
 });
 
 test("routine code preserves the known route and rejects malformed provider state", async () => {
