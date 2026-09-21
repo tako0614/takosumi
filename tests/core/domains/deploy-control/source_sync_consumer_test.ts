@@ -13,8 +13,8 @@ import {
 import {
   InMemoryOpenTofuControlStore,
   type OpenTofuControlStore,
-  type MarkCapsuleStaleCommand,
-  type MarkCapsuleStaleResult,
+  type CommitSourceSyncSuccessInput,
+  type CommitSourceSyncSuccessResult,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { SourcesService } from "../../../../core/domains/sources/mod.ts";
 import {
@@ -88,20 +88,44 @@ class StubRunner {
   }
 }
 
-class StaleConflictStore extends InMemoryOpenTofuControlStore {
+class SettlementReplacementStore extends InMemoryOpenTofuControlStore {
   #replacement?: Capsule;
 
-  replaceBeforeNextMarkCapsuleStale(replacement: Capsule): void {
+  replaceBeforeNextSourceSyncSettlement(replacement: Capsule): void {
     this.#replacement = replacement;
   }
 
-  override async markCapsuleStale(
-    input: MarkCapsuleStaleCommand,
-  ): Promise<MarkCapsuleStaleResult> {
+  override async commitSourceSyncSuccess(
+    input: CommitSourceSyncSuccessInput,
+  ): Promise<CommitSourceSyncSuccessResult> {
     const replacement = this.#replacement;
     this.#replacement = undefined;
     if (replacement) await this.putCapsule(replacement);
-    return await super.markCapsuleStale(input);
+    return await super.commitSourceSyncSuccess(input);
+  }
+}
+
+class SettlementSourceDriftStore extends InMemoryOpenTofuControlStore {
+  #settling = false;
+
+  override async commitSourceSyncSuccess(
+    input: CommitSourceSyncSuccessInput,
+  ): Promise<CommitSourceSyncSuccessResult> {
+    this.#settling = true;
+    try {
+      return await super.commitSourceSyncSuccess(input);
+    } finally {
+      this.#settling = false;
+    }
+  }
+
+  override async getSource(id: string) {
+    const source = await super.getSource(id);
+    if (this.#settling && source) {
+      this.#settling = false;
+      await this.putSource({ ...source, updatedAt: "2026-06-06T00:01:00.000Z" });
+    }
+    return source;
   }
 }
 
@@ -872,8 +896,8 @@ test("source_sync continues stale finalization when the first auto-update gate r
   ).toHaveLength(2);
 });
 
-test("source_sync leaves a concurrently advanced Capsule and its hooks untouched when staleness CAS conflicts", async () => {
-  const store = new StaleConflictStore();
+test("source_sync leaves a Capsule advanced before settlement and its hooks untouched", async () => {
+  const store = new SettlementReplacementStore();
   const { sourcesService, runner, controller } = build({ store });
   const { source } = await sourcesService.createSource({
     workspaceId: "workspace_1",
@@ -897,7 +921,7 @@ test("source_sync leaves a concurrently advanced Capsule and its hooks untouched
     compatibilityStatus: "needs_patch",
     updatedAt: "2026-06-06T00:00:01.000Z",
   };
-  store.replaceBeforeNextMarkCapsuleStale(newer);
+  store.replaceBeforeNextSourceSyncSettlement(newer);
   runner.result = {
     resolvedCommit: "new123",
     archiveDigest: "sha256:" + "c".repeat(64),
@@ -1746,6 +1770,30 @@ test("source_sync consumer never mints a git token for a Source on a foreign hos
   expect(failed?.status).toBe("failed");
   expect(failed?.error).toBe("credential driver failed");
   expect(JSON.stringify(failed)).not.toContain("ghp_super_secret");
+});
+
+test("source_sync consumer terminally fails same-lease settlement drift without publication", async () => {
+  const store = new SettlementSourceDriftStore();
+  const { sourcesService, controller } = build({ store });
+  const { source } = await sourcesService.createSource({
+    workspaceId: "workspace_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: "main",
+  });
+  const { run } = await controller.createSourceSync(source.id);
+  await controller.dispatchQueuedRun({
+    action: "source_sync",
+    runId: run.id,
+    workspaceId: "workspace_1",
+  });
+  const finished = await store.getSourceSyncRun(run.id);
+  expect(finished?.status).toBe("failed");
+  expect(finished?.error).toContain("SourceSync settlement observations changed");
+  expect(await store.listSourceSnapshots(source.id)).toHaveLength(0);
+  expect((await store.getSource(source.id))?.lastSeenCommit).toBeUndefined();
+  expect((await store.listActivityEvents("workspace_1", { limit: 100 }))
+    .filter((event) => event.action === "capsule.stale")).toEqual([]);
 });
 
 test("source_sync consumer records the run failed when the runner errors", async () => {

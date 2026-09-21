@@ -234,6 +234,7 @@ import {
   restoreRunCreationIdentityMatches,
   publicStoredRun,
   storeSourceSyncRun,
+  sourceSyncRunSuccessIdentityMatches,
   storedCapsuleCompatibilityProviderGraph,
   SourceSnapshotConflictError,
   validateCommitRestoredStateInterfaceMaterialization,
@@ -271,6 +272,15 @@ import {
   exactRecoveryProofsEqual,
   type CommittedPostApplyRecoveryRows,
 } from "./committed_post_apply_recovery.ts";
+import {
+  MAX_SOURCE_RECONCILIATION_CAPSULES,
+  observeSourceSyncSettlement,
+  sourceSyncSettlementCensusMatches,
+  sourceSyncSettlementReadMatches,
+  SourceSyncSettlementConflictError,
+  type SourceSyncSettlementRead,
+  type SourceSyncSettlementReader,
+} from "./source_sync_settlement.ts";
 
 /** Discriminator stored in the single `runs` table (§27). */
 // §27 runs.type values. Destroy runs persist their own discriminator
@@ -2611,33 +2621,142 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   async commitSourceSyncSuccess(
     input: CommitSourceSyncSuccessInput,
   ): Promise<CommitSourceSyncSuccessResult> {
+    input = structuredClone(input);
     assertSourceSyncSuccessCommit(input);
     const snapshot = normalizeSourceSnapshotRecord(input.snapshot);
-    const won = await this.#client.transaction(
+    const outcome = await this.#client.transaction(
       async (transaction: SqlTransaction) => {
         const db = this.#drizzleForClient(transaction);
-        const currentRows = await db
-          .select({ json: pgSchema.runs.runJson })
-          .from(pgSchema.runs)
-          .where(
-            and(
-              eq(pgSchema.runs.id, input.terminalRun.id),
-              eq(pgSchema.runs.kind, RUN_KIND_SOURCE_SYNC),
-            ),
-          )
-          .limit(1);
-        const current = parseRow(currentRows[0]) as
+        // Workspace is the outer lock for this settlement. A completed
+        // SourceSync may converge while the Workspace is draining, but no
+        // terminal/projection writes are allowed once it is frozen/released.
+        const management = await pgWorkspaceManagementForTransaction(
+          transaction,
+          input.terminalRun.workspaceId,
+        );
+
+        // Lock the held SourceSync row before validating its lease. This
+        // preserves same-lease heartbeat semantics while ensuring a takeover
+        // that won the row lock is observed as the ordinary CAS loss.
+        const currentRows = await transaction.query<{
+          readonly id: string;
+          readonly kind: string;
+          readonly workspaceId: string;
+          readonly sourceId: string | null;
+          readonly status: string;
+          readonly leaseToken: string | null;
+          readonly runJson: unknown;
+        }>(
+          `select id,
+                  kind,
+                  space_id as "workspaceId",
+                  source_id as "sourceId",
+                  status,
+                  lease_token as "leaseToken",
+                  run_json as "runJson"
+             from takosumi_runs
+            where id = $1
+            for update`,
+          [input.terminalRun.id],
+        );
+        const currentRow = currentRows.rows[0];
+        const current = parseJson(currentRow?.runJson) as
           | StoredRunRecord
           | undefined;
         if (
+          currentRow === undefined ||
+          currentRow.kind !== RUN_KIND_SOURCE_SYNC ||
+          currentRow.workspaceId !== input.terminalRun.workspaceId ||
+          currentRow.sourceId !== input.terminalRun.sourceId ||
+          currentRow.status !== "running" ||
+          currentRow.leaseToken !== input.leaseToken ||
           current === undefined ||
-          !sourceSyncRunStoredIdentityMatches(
+          !isSourceSyncRunRecord(current) ||
+          !sourceSyncRunSuccessIdentityMatches(
             current,
-            input.terminalRun as StoredRunRecord,
+            input.terminalRun,
           )
         ) {
-          return false;
+          return { won: false as const };
         }
+        if (
+          current.status !== "running" ||
+          !management ||
+          (management.managementState !== "active" &&
+            management.managementState !== "draining")
+        ) {
+          // The held Run still has this caller's immutable identity and lease;
+          // a same-lease Workspace/management change is an observation
+          // conflict, not an acknowledged lease loss.
+          throw new SourceSyncSettlementConflictError();
+        }
+
+        // Lock the complete Workspace Capsule census before resolving any
+        // adopted-source lineage. Normal Capsule admission and lifecycle
+        // writes take this Workspace-first lock, so the census cannot gain or
+        // lose a row while the settlement is being observed.
+        const lockedCapsules = await pgLockSourceSyncSettlementCapsules(
+          transaction,
+          input.terminalRun.workspaceId,
+        );
+
+        // The Source cursor is part of this same settlement. Lock its exact
+        // row (when present) before helper observation; Source creation also
+        // takes the Workspace lock above, so an absent row is a stable read.
+        await pgLockSourceSyncSettlementSource(
+          transaction,
+          input.terminalRun.sourceId,
+        );
+
+        const reader = new SqlOpenTofuControlStore({ client: transaction });
+        const observation = await observeSourceSyncSettlement(
+          reader,
+          snapshot,
+          input.terminalRun,
+          lockedCapsules,
+        );
+
+        // A complete physical Capsule census was locked above. Compare the
+        // normalized locked rows with the helper's domain census, then read
+        // the census again through the tx-bound store to detect any direct
+        // fixture/physical mutation that bypassed the normal lock seam.
+        if (
+          !sourceSyncSettlementCensusMatches(
+            lockedCapsules,
+            observation.capsules,
+          )
+        ) {
+          throw new SourceSyncSettlementConflictError();
+        }
+        const currentCapsules = await pgLockSourceSyncSettlementCapsules(
+          transaction,
+          input.terminalRun.workspaceId,
+        );
+        if (
+          !sourceSyncSettlementCensusMatches(
+            observation.capsules,
+            currentCapsules,
+          )
+        ) {
+          throw new SourceSyncSettlementConflictError();
+        }
+
+        // The helper discovers the complete lineage read-set. Lock each
+        // referenced row in deterministic table/id order, including rows that
+        // currently belong to another Run family (a missing Apply read must
+        // not be invalidated by an unlocked Restore row with the same id).
+        await pgLockSourceSyncSettlementLineage(
+          transaction,
+          observation.reads,
+        );
+
+        const readsMatch = await pgSourceSyncSettlementReadsMatch(
+          transaction,
+          reader,
+          observation.reads,
+        );
+        if (!readsMatch) throw new SourceSyncSettlementConflictError();
+
         const terminalRun = publicStoredRun(input.terminalRun);
         const terminalCommitted = await pgUpdateTerminalRunWithLease(
           db,
@@ -2646,14 +2765,57 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           terminalRun,
           input.leaseToken,
         );
-        if (!terminalCommitted) return false;
+        if (!terminalCommitted) return { won: false as const };
         await pgInsertOrAdoptSourceSnapshot(db, snapshot);
         await pgMergeSourceSyncCursor(db, terminalRun, snapshot);
-        return true;
+
+        // Stale Capsules and their matching Activity rows are part of the
+        // same authority unit. Every update remains exact-record guarded even
+        // though the Workspace/Capsule locks above already serialize normal
+        // writers; a zero-row result is an observation conflict and aborts the
+        // transaction rather than terminalizing a partial census.
+        for (const { capsule, activity } of observation.changes) {
+          const expectedCapsule = observation.capsules.find(
+            (candidate) => candidate.id === capsule.id,
+          );
+          if (!expectedCapsule) {
+            throw new SourceSyncSettlementConflictError();
+          }
+          const values = capsuleValues(capsule);
+          const updated = await db
+            .update(pgSchema.capsules)
+            .set({
+              status: values.status,
+              capsuleJson: values.capsuleJson,
+              updatedAt: values.updatedAt,
+            })
+            .where(
+              and(
+                eq(pgSchema.capsules.id, capsule.id),
+                eq(pgSchema.capsules.workspaceId, capsule.workspaceId),
+                eq(pgSchema.capsules.status, expectedCapsule.status),
+                eq(pgSchema.capsules.capsuleJson, expectedCapsule),
+              ),
+            )
+            .returning({ json: pgSchema.capsules.capsuleJson });
+          if (!updated[0]) {
+            throw new SourceSyncSettlementConflictError();
+          }
+          await pgInsertOrAdoptSourceSyncActivity(db, activity);
+        }
+
+        return {
+          won: true as const,
+          staleCapsules: observation.changes.map(({ capsule }) => capsule),
+        };
       },
     );
-    if (won) {
-      return { won: true, run: publicStoredRun(input.terminalRun) };
+    if (outcome.won) {
+      return {
+        won: true,
+        run: publicStoredRun(input.terminalRun),
+        staleCapsules: outcome.staleCapsules,
+      };
     }
     const current = await this.getSourceSyncRun(input.terminalRun.id);
     return { won: false, ...(current ? { run: current } : {}) };
@@ -5494,7 +5656,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       // Serialize every candidate across the three tables so two concurrent
       // first-install requests cannot both observe absence and turn a unique
       // constraint into an indeterminate transport-style failure.
-      await transaction.query(
+    await transaction.query(
         `lock table takosumi_install_configs,
                     takosumi_capsules,
                     takosumi_provider_env_binding_sets
@@ -10059,6 +10221,412 @@ async function pgMergeSourceSyncCursor(
         sql`${pgSchema.sources.sourceJson} ->> 'defaultPath' = ${run.path}`,
       ),
     );
+}
+
+interface PgSourceSyncSettlementCapsuleRow extends Record<string, unknown> {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly projectId: string;
+  readonly name: string;
+  readonly environment: string;
+  readonly sourceId: string | null;
+  readonly installConfigId: string;
+  readonly currentStateVersionId: string | null;
+  readonly status: string;
+  readonly capsuleJson: unknown;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/**
+ * Lock and decode the complete non-destroyed Capsule census for a SourceSync
+ * settlement. A coherent destroyed row is terminal history and is excluded;
+ * any disagreement between its physical and canonical identity keeps it in
+ * the census and fails closed below instead of silently hiding corruption.
+ * Physical columns are checked against the canonical JSON while the lock is
+ * held so an out-of-band fixture cannot be mistaken for a stable observation.
+ */
+async function pgLockSourceSyncSettlementCapsules(
+  transaction: SqlTransaction,
+  workspaceId: string,
+): Promise<readonly Capsule[]> {
+  const rows = await transaction.query<PgSourceSyncSettlementCapsuleRow>(
+    `select id,
+            space_id as "workspaceId",
+            project_id as "projectId",
+            name,
+            environment,
+            source_id as "sourceId",
+            install_config_id as "installConfigId",
+            current_state_version_id as "currentStateVersionId",
+            status,
+            installation_json as "capsuleJson",
+            created_at as "createdAt",
+            updated_at as "updatedAt"
+      from takosumi_capsules
+      where space_id = $1
+        and not (
+          status = 'destroyed'
+          and coalesce(installation_json ->> 'status', '') = 'destroyed'
+          and coalesce(installation_json ->> 'id', '') = id
+          and coalesce(installation_json ->> 'workspaceId', '') = space_id
+        )
+      order by created_at, id
+      limit ${MAX_SOURCE_RECONCILIATION_CAPSULES + 1}
+      for update`,
+    [workspaceId],
+  );
+  return rows.rows.map((row) => {
+    const capsule = normalizeCapsuleRecord(
+      parseJson(row.capsuleJson) as Capsule,
+    );
+    if (
+      capsule.id !== row.id ||
+      capsule.workspaceId !== row.workspaceId ||
+      capsule.projectId !== row.projectId ||
+      capsule.name !== row.name ||
+      capsule.environment !== row.environment ||
+      (capsule.sourceId ?? null) !== row.sourceId ||
+      capsule.installConfigId !== row.installConfigId ||
+      (capsule.currentStateVersionId ?? null) !==
+        row.currentStateVersionId ||
+      capsule.status !== row.status ||
+      capsule.createdAt !== row.createdAt ||
+      capsule.updatedAt !== row.updatedAt
+    ) {
+      throw new SourceSyncSettlementConflictError();
+    }
+    return capsule;
+  });
+}
+
+/** Lock the exact Source row before the helper captures its full record. */
+async function pgLockSourceSyncSettlementSource(
+  transaction: SqlTransaction,
+  sourceId: string,
+): Promise<void> {
+  await transaction.query(
+    `select id
+       from takosumi_sources
+      where id = $1
+      for update`,
+    [sourceId],
+  );
+}
+
+/**
+ * Lock every lineage row named by one helper observation. Run-family reads
+ * share the physical `runs` table, so IDs are locked together even when a
+ * getter observed an absent Apply but a Restore row occupies that ID.
+ */
+async function pgLockSourceSyncSettlementLineage(
+  transaction: SqlTransaction,
+  reads: readonly SourceSyncSettlementRead[],
+): Promise<void> {
+  const stateIds = new Set<string>();
+  const runIds = new Set<string>();
+  const snapshotIds = new Set<string>();
+  for (const read of reads) {
+    if (!read.id) continue;
+    switch (read.kind) {
+      case "state":
+        stateIds.add(read.id);
+        break;
+      case "apply":
+      case "plan":
+      case "restore":
+        runIds.add(read.id);
+        break;
+      case "snapshot":
+        snapshotIds.add(read.id);
+        break;
+      case "source":
+        // The exact Source is locked before helper observation, regardless of
+        // whether the getter reports it present or absent.
+        break;
+    }
+  }
+
+  const lockIds = async (table: string, ids: Set<string>): Promise<void> => {
+    const ordered = [...ids].sort();
+    if (ordered.length === 0) return;
+    const placeholders = ordered.map((_, index) => `$${index + 1}`).join(", ");
+    await transaction.query(
+      `select id
+         from ${table}
+        where id in (${placeholders})
+        order by id
+        for update`,
+      ordered,
+    );
+  };
+
+  // Keep the lock order stable across concurrent SourceSync settlements.
+  await lockIds("takosumi_state_versions", stateIds);
+  await lockIds("takosumi_runs", runIds);
+  await lockIds("takosumi_source_snapshots", snapshotIds);
+}
+
+/** Read one helper-projected lineage entity through the transaction-bound store. */
+async function pgSourceSyncSettlementReadRecord(
+  reader: SourceSyncSettlementReader,
+  read: SourceSyncSettlementRead,
+): Promise<unknown> {
+  switch (read.kind) {
+    case "source":
+      return await reader.getSource(read.id);
+    case "state":
+      return await reader.getStateVersion(read.id);
+    case "apply":
+      return await reader.getApplyRun(read.id);
+    case "plan":
+      return await reader.getPlanRun(read.id);
+    case "restore":
+      return await reader.getBackupRun(read.id);
+    case "snapshot":
+      return await reader.getSourceSnapshot(read.id);
+  }
+}
+
+/** Validate every observed read, including explicit absence (`value: null`). */
+async function pgSourceSyncSettlementReadsMatch(
+  transaction: SqlTransaction,
+  reader: SourceSyncSettlementReader,
+  reads: readonly SourceSyncSettlementRead[],
+): Promise<boolean> {
+  const records = new Map<string, unknown>();
+  const physicalMatches = new Map<string, boolean>();
+  for (const read of reads) {
+    const key = `${read.kind}\u0000${read.id}`;
+    if (!records.has(key)) {
+      records.set(key, await pgSourceSyncSettlementReadRecord(reader, read));
+    }
+    if (!sourceSyncSettlementReadMatches(read, records.get(key))) {
+      return false;
+    }
+    if (!physicalMatches.has(key)) {
+      physicalMatches.set(
+        key,
+        await pgSourceSyncSettlementPhysicalReadMatches(
+          transaction,
+          read,
+          records.get(key),
+        ),
+      );
+    }
+    if (!physicalMatches.get(key)) return false;
+  }
+  return true;
+}
+
+interface PgSourceSyncSettlementSnapshotRow extends Record<string, unknown> {
+  readonly id: string;
+  readonly sourceId: string | null;
+  readonly snapshotJson: unknown;
+}
+
+interface PgSourceSyncSettlementStateRow extends Record<string, unknown> {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly environment: string;
+  readonly generation: number;
+  readonly snapshotJson: unknown;
+  readonly createdAt: string;
+}
+
+interface PgSourceSyncSettlementRunRow extends Record<string, unknown> {
+  readonly id: string;
+  readonly kind: string;
+  readonly runJson: unknown;
+}
+
+/**
+ * Re-check the physical projection for one observed lineage read while all
+ * rows are held by the settlement transaction. The JSON getters above are
+ * intentionally retained for the domain projection; these checks close the
+ * gap where a torn searchable column would otherwise leave the same JSON
+ * looking stable.
+ */
+async function pgSourceSyncSettlementPhysicalReadMatches(
+  transaction: SqlTransaction,
+  read: SourceSyncSettlementRead,
+  record: unknown,
+): Promise<boolean> {
+  switch (read.kind) {
+    case "source": {
+      const rows = await transaction.query<PgStoredSourceRow>(
+        `select id,
+                space_id as "workspaceId",
+                status,
+                source_json as "sourceJson",
+                created_at as "createdAt",
+                updated_at as "updatedAt"
+           from takosumi_sources
+          where id = $1
+          limit 1`,
+        [read.id],
+      );
+      const row = rows.rows[0];
+      if (read.value === null) return row === undefined;
+      if (row === undefined) return false;
+      try {
+        const physical = sourceFromPgRow(row);
+        return physical !== undefined &&
+          stableStringify(physical) === stableStringify(record);
+      } catch {
+        return false;
+      }
+    }
+    case "snapshot": {
+      const rows = await transaction.query<PgSourceSyncSettlementSnapshotRow>(
+        `select id,
+                source_id as "sourceId",
+                snapshot_json as "snapshotJson"
+           from takosumi_source_snapshots
+          where id = $1
+          limit 1`,
+        [read.id],
+      );
+      const row = rows.rows[0];
+      if (read.value === null) return row === undefined;
+      if (row === undefined || record === undefined || record === null ||
+        typeof record !== "object" || Array.isArray(record)) return false;
+      const snapshot = record as Partial<SourceSnapshot>;
+      return row.sourceId === (snapshot.sourceId ?? null);
+    }
+    case "state": {
+      const rows = await transaction.query<PgSourceSyncSettlementStateRow>(
+        `select id,
+                space_id as "workspaceId",
+                installation_id as "capsuleId",
+                environment,
+                generation,
+                snapshot_json as "snapshotJson",
+                created_at as "createdAt"
+           from takosumi_state_versions
+          where id = $1
+          limit 1`,
+        [read.id],
+      );
+      const row = rows.rows[0];
+      if (read.value === null) return row === undefined;
+      if (row === undefined || record === undefined || record === null ||
+        typeof record !== "object" || Array.isArray(record)) return false;
+      const state = record as Partial<StateVersion>;
+      return row.id === state.id &&
+        row.workspaceId === state.workspaceId &&
+        row.capsuleId === state.capsuleId &&
+        row.environment === state.environment &&
+        row.generation === state.generation &&
+        row.createdAt === state.createdAt;
+    }
+    case "apply":
+    case "plan":
+    case "restore": {
+      const rows = await transaction.query<PgSourceSyncSettlementRunRow>(
+        `select id,
+                kind,
+                run_json as "runJson"
+           from takosumi_runs
+          where id = $1
+          limit 1`,
+        [read.id],
+      );
+      const row = rows.rows[0];
+      if (read.value === null) {
+        return row === undefined ||
+          !pgSourceSyncSettlementRunFamilyMatches(read.kind, row);
+      }
+      return row !== undefined &&
+        pgSourceSyncSettlementRunFamilyMatches(read.kind, row);
+    }
+  }
+}
+
+/** Match the physical Run discriminator to the getter family before commit. */
+function pgSourceSyncSettlementRunFamilyMatches(
+  kind: Extract<SourceSyncSettlementRead["kind"], "apply" | "plan" | "restore">,
+  row: PgSourceSyncSettlementRunRow,
+): boolean {
+  const allowed = kind === "apply"
+    ? ["apply", "destroy_apply"]
+    : kind === "plan"
+      ? ["plan", "destroy_plan", "drift_check"]
+      : ["backup", "restore"];
+  if (!allowed.includes(row.kind)) return false;
+  let value: unknown;
+  try {
+    value = parseJson(row.runJson);
+  } catch {
+    return false;
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  if (kind === "apply") {
+    return Object.hasOwn(value, "planRunId") && Object.hasOwn(value, "expected");
+  }
+  if (kind === "plan") {
+    return Object.hasOwn(value, "sourceDigest") &&
+      Object.hasOwn(value, "variablesDigest");
+  }
+  return true;
+}
+
+/** Create-or-adopt a deterministic stale Activity row without overwriting IDs. */
+async function pgInsertOrAdoptSourceSyncActivity(
+  db: PgRemoteDatabase<typeof pgSchema>,
+  activity: ActivityEvent,
+): Promise<void> {
+  const inserted = await db
+    .insert(pgSchema.auditEvents)
+    .values({
+      id: activity.id,
+      workspaceId: activity.workspaceId,
+      actorId: activity.actorId ?? null,
+      action: activity.action,
+      targetType: activity.targetType,
+      targetId: activity.targetId,
+      runId: activity.runId ?? null,
+      eventJson: activity,
+      createdAt: activity.createdAt,
+    })
+    .onConflictDoNothing({ target: pgSchema.auditEvents.id })
+    .returning({ id: pgSchema.auditEvents.id });
+  if (inserted.length > 0) return;
+
+  const rows = await db
+    .select({
+      id: pgSchema.auditEvents.id,
+      workspaceId: pgSchema.auditEvents.workspaceId,
+      actorId: pgSchema.auditEvents.actorId,
+      action: pgSchema.auditEvents.action,
+      targetType: pgSchema.auditEvents.targetType,
+      targetId: pgSchema.auditEvents.targetId,
+      runId: pgSchema.auditEvents.runId,
+      createdAt: pgSchema.auditEvents.createdAt,
+      json: pgSchema.auditEvents.eventJson,
+    })
+    .from(pgSchema.auditEvents)
+    .where(eq(pgSchema.auditEvents.id, activity.id))
+    .limit(1);
+  const row = rows[0];
+  const existing = parseRow(row) as ActivityEvent | undefined;
+  if (
+    !row ||
+    !existing ||
+    row.workspaceId !== activity.workspaceId ||
+    (row.actorId ?? undefined) !== activity.actorId ||
+    row.action !== activity.action ||
+    row.targetType !== activity.targetType ||
+    row.targetId !== activity.targetId ||
+    (row.runId ?? undefined) !== activity.runId ||
+    row.createdAt !== activity.createdAt ||
+    stableStringify(existing) !== stableStringify(activity)
+  ) {
+    throw new SourceSyncSettlementConflictError();
+  }
 }
 
 async function pgUpsertStateVersion(

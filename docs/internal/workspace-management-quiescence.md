@@ -653,15 +653,46 @@ Memory は同期判定、PostgreSQL は Workspace lock と Capsule の exact-rec
 同じ transaction、D1 は Workspace 条件を含む一つの UPDATE で確定します。これは
 観測済み結果の収束であり、新規管理 admission の active epoch を取り直しません。
 
-この保存ガードだけでは SourceSync の terminal 確定と stale projection の間の順序は
-解決しません。凍結が先に成立すると遅い projection は保存されないため、成功結果と
-影響する Capsule の観測更新を凍結前に一緒に収束させる作業が残ります。停止・移管や
-export の完全性を、このガードだけで実証済みとは扱いません。
+SourceSync の成功は `commitSourceSyncSuccess` 一つで、terminal Run、immutable
+Snapshot、Source cursor、影響する Capsule の stale projection と Activity を確定します。
+呼出元は成功後に Capsule を再列挙・更新せず、同じ保存で変更した Capsule だけを
+自動更新の候補として受け取ります。自動更新は引き続き元の Run の管理 authority を
+必要とし、この保存結果自体を新しい Plan の許可にしません。
+
+保存対象は事前に見つけた候補だけではありません。同じ Workspace の destroyed 以外の
+Capsule 全件の観測と、既存の StateVersion → Apply/Restore → Plan → SourceSnapshot resolver が使う
+provenance の read-set を照合します。対象外だった Capsule の変更・追加・削除、Source
+設定・cursor の変更、参照した lineage の変更や欠落も、成功保存の前に判定します。
+関連する適用済み Capsule の lineage が不明な場合に「影響なし」として成功させません。
+Run の heartbeat や audit の追記など、採用済み revision を変えない field は lineage
+read-set に含めません。optional field の欠落と明示的な null は区別します。
+destroyed は復活できない終端なので、整合した tombstone は対象件数に含めません。
+destroyed 境界を跨ぐ変更は census の追加・削除として検出し、SQL の物理列と JSON の
+identity/status が矛盾する行を除外して成功させることはしません。
+
+Memory は観測後の同期した再照合と変更、PostgreSQL は Workspace・Capsule census・
+参照した行の lock を持つ transaction、D1 は完全な census/read-set の guard と bulk
+projection を含む一つの atomic batch を使います。競合時に一部だけ stale にして
+terminal にせず、成功保存全体を成立させません。Source reconciliation と同じ
+1,000 Capsule の上限を使い、保存できない大きさの入力は mutation 前に拒否します。
+読込時も最大 1,001 件の probe に制限し、全件を読み込んだ後で件数だけを拒否する
+実装にはしません。D1 の JSON envelope には保存先のサイズ上限も適用します。
+これは拒否上限であり、適用済み Capsule 1,000 件の処理能力を保証する値ではありません。
+lineage の深さ・件数による D1 の query 数／実行時間上限の実測は別の未検証項目です。
+分割 batch の最後だけ terminal にする抜け道は作りません。
+Run の immutable な作成 identity と lease が一致するまま観測が変わった場合は、
+競合 error を返し、consumer が Run を failed に収束させます。実行中の Run を
+通常の lease 負けとして返して queue ACK だけを進めることはしません。
+旧 Run の未割当 snapshotId を成功時に埋める以外、Source/ref/path/archive/intent 等の
+作成座標は変更できません。
+
+この境界の後に成立した Capsule の更新は、新しい Capsule authority の結果です。
+停止中の全 Run の収束、public-origin の解放、自動更新 callback の確実な配送、公開の
+停止・移管と export 全体の完成を、この SourceSync の保存境界だけで証明しません。
 
 `public-origin-reservation` は新規予約と確認済み解放の両方に使われる private な
 host bookkeeping であり、この四種類に一括分類しません。draining 中の解放を
-妨げない causal authority の整理が別途必要です。SourceSync の terminal 確定後の
-stale 記録と frozen 判定の順序も残件です。draining 中に許す収束を、frozen 後にも
+妨げない causal authority の整理が別途必要です。draining 中に許す収束を、frozen 後にも
 無条件で許すことにはしません。公開 API/Form/Interface/Binding と DB schema は
 変更しません。
 

@@ -16,6 +16,17 @@ import type { SourceSnapshot } from "takosumi-contract/sources";
 import { OpenTofuControllerError } from "./errors.ts";
 import type { OpenTofuControlStore } from "./store.ts";
 
+/** The provenance reader, reusable inside a storage transaction/observation. */
+export type CapsuleSourceRevisionReader = Pick<
+  OpenTofuControlStore,
+  | "getSource"
+  | "getStateVersion"
+  | "getApplyRun"
+  | "getBackupRun"
+  | "getPlanRun"
+  | "getSourceSnapshot"
+>;
+
 export const CAPSULE_SOURCE_REVISION_LINEAGE_MISMATCH_REASON =
   "capsule_source_revision_lineage_mismatch" as const;
 
@@ -25,7 +36,7 @@ export const CAPSULE_SOURCE_REVISION_LINEAGE_MISMATCH_REASON =
  * StateVersion exists, any missing or cross-scope lineage fails closed.
  */
 export async function getCapsuleAdoptedSourceSnapshot(
-  store: OpenTofuControlStore,
+  store: CapsuleSourceRevisionReader,
   capsule: Capsule,
 ): Promise<SourceSnapshot | undefined> {
   if (!capsule.currentStateVersionId) {
@@ -97,7 +108,7 @@ export async function getCapsuleAdoptedSourceSnapshot(
 }
 
 async function planRunForStateVersion(
-  store: OpenTofuControlStore,
+  store: CapsuleSourceRevisionReader,
   capsule: Capsule,
   stateVersion: StateVersion,
   seen: Set<string>,

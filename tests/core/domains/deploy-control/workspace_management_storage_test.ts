@@ -3230,7 +3230,7 @@ test("D1 historical double-encoded SourceSync held leases finish without authori
   ).toEqual({ won: true, run: heartbeat });
 
   // Re-encode the heartbeat to keep the terminal CAS on the historical shape
-  // too; the prior heartbeat intentionally exercises the same held lease.
+  // too; preserve the Snapshot id allocated when this Run was created.
   const terminal: SourceSyncRun = {
     ...heartbeat,
     status: "succeeded",
@@ -3239,7 +3239,6 @@ test("D1 historical double-encoded SourceSync held leases finish without authori
     resolvedCommit: "legacy-double-commit",
     archiveDigest: "sha256:legacy-double-commit",
     archiveSizeBytes: 128,
-    snapshotId: "snapshot-source-double-held",
   };
   const terminalLegacyPayload = JSON.stringify(JSON.stringify(heartbeat));
   await database
@@ -3270,7 +3269,7 @@ test("D1 historical double-encoded SourceSync held leases finish without authori
       leaseToken: "legacy-held-lease",
       snapshot,
     }),
-  ).toEqual({ won: true, run: terminal });
+  ).toEqual({ won: true, run: terminal, staleCapsules: [] });
   expect(await reopened.getSourceSyncRun(running.id)).toEqual(terminal);
   expect(await reopened.getSourceSnapshot(snapshot.id)).toEqual(snapshot);
   expect(
@@ -3353,7 +3352,6 @@ test("D1 historical double-encoded SourceSync preserves its private authority on
     resolvedCommit: "legacy-private-commit",
     archiveDigest: "sha256:legacy-private-commit",
     archiveSizeBytes: 128,
-    snapshotId: "snapshot-source-double-private",
   };
   const storedHeartbeat = { ...heartbeat, workspaceManagementAuthority: authority };
   await database
@@ -3384,7 +3382,7 @@ test("D1 historical double-encoded SourceSync preserves its private authority on
       leaseToken: "legacy-private-lease",
       snapshot,
     }),
-  ).toEqual({ won: true, run: terminal });
+  ).toEqual({ won: true, run: terminal, staleCapsules: [] });
   expect(
     await database
       .prepare(

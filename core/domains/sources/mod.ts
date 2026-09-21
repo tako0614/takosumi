@@ -64,6 +64,7 @@ import { mergePolicyConfigs } from "../deploy-control/provider_policy.ts";
 import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
 import { stableStringify } from "../../adapters/source/digest.ts";
 import { getCapsuleAdoptedSourceSnapshot } from "../deploy-control/capsule_source_revision.ts";
+import { MAX_SOURCE_RECONCILIATION_CAPSULES } from "../deploy-control/source_sync_settlement.ts";
 
 // Git already has a provider-neutral spelling for the remote's configured
 // default branch. Do not guess `main`/`master`: an omitted ref means HEAD,
@@ -73,7 +74,6 @@ const DEFAULT_PATH = ".";
 const REPOSITORY_INSTALL_METADATA_PATH = ".well-known/tcs.json";
 const SOURCE_SYNC_REQUEUE_STALE_MS = 10 * 60 * 1000;
 const IMMUTABLE_SOURCE_REVISION = /^[0-9a-f]{40}$/iu;
-const MAX_SOURCE_RECONCILIATION_CAPSULES = 1_000;
 
 function isImmutableSourceRevision(value: string): boolean {
   return IMMUTABLE_SOURCE_REVISION.test(value);
