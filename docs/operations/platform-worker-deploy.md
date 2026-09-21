@@ -125,6 +125,26 @@ Workspace before forwarding. The route-less Hosted target receives only
 verified context, never a browser cookie, the original bearer, an account id, a
 legal Organization id, or an unverified Workspace context.
 
+### Read-only status
+
+Read the realized target without planning or mutating it:
+
+```bash
+bun run deploy -- takosumi-platform-staging status \
+  --config /absolute/operator-private/wrangler.staging.toml
+```
+
+Status stably reads the pathless config, projects it into a disposable
+Wrangler-only config, and reads the exact 100%-serving Version, its immutable
+binding/`fetch` closure, and the runner Container. It requires the configured
+immutable runner image to match an active/ready Container with no active rollout
+or unhealthy instances. The JSON result is bounded to IDs, required binding
+names/types, image and config/source digests, health readiness, and the
+observed sibling source pin. The pin is metadata only for this command: a
+stale checkout does not become a Git or clean/pushed release requirement.
+Production uses `takosumi-platform` with its realized production config. This
+command does not build the dashboard, create a plan, or upload/route a Worker.
+
 ### Realized Hosted extension descriptors
 
 `TAKOSUMI_PLATFORM_EXTENSIONS` is operator-realized config outside this

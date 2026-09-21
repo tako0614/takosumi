@@ -5,9 +5,11 @@ import { join, resolve } from "node:path";
 import {
   assertConfigTargetsSource,
   assertPlatformRunnerImageProof,
+  assertPlatformWorkerStatusVersion,
   assertPublishedVersion,
   bindingNames,
   hasHostedDiscovery,
+  inspectPlatformWorkerStatus,
   parsePlatformWorkerReleaseArgs,
   parsePlatformContainerDetail,
   parseServingVersion,
@@ -25,6 +27,139 @@ import {
 const root = resolve(import.meta.dir, "../..");
 const PROVED_RUNNER_IMAGE =
   `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"b".repeat(64)}`;
+
+const STATUS_VERSION_ID = "11111111-1111-4111-8111-111111111111";
+const STATUS_CONTAINER_ID = "22222222-2222-4222-8222-222222222222";
+const STATUS_CONTAINER_IMAGE =
+  `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"c".repeat(64)}`;
+
+function statusConfigSource(image = STATUS_CONTAINER_IMAGE): string {
+  const broker = {
+    connectionId: "conn_takoserverTakoform01",
+    recipeId: "takoserver-takoform-run-v1",
+    providerSource: "registry.terraform.io/tako0614/takoform",
+    displayName: "Takoserver",
+    exchangePath: "/provider-credentials/takoform",
+    envNames: ["TAKOFORM_ENDPOINT", "TAKOFORM_SPACE", "TAKOFORM_TOKEN"],
+    runCredentialSettings: { requiredAvailableMinor: 2300 },
+    publicInputExchangePath: "/public-inputs/http-endpoint",
+    publicInputCapabilities: ["http_endpoint_url"],
+    runtimeInputs: {
+      contract: "takosumi.provider-runtime-inputs/v1",
+      nonceArgument: "runtime_input_nonce",
+      mapArgument: "runtime_inputs",
+      minimumProviderVersion: "4.0.0",
+    },
+  };
+  const extensions = [
+    {
+      id: "takosumi-hosted-sponsorship",
+      basePath: "/api/v1/account/subscription",
+      handlerKey: "HOSTED",
+      authDelivery: "context",
+      ownsPathSubtree: true,
+      workspaceContext: "query-required",
+      runCredential: {
+        audience: "takosumi-hosted.takoform.v1",
+        requiredScopes: ["takoform.run"],
+      },
+      providerCredentialBroker: broker,
+    },
+    {
+      id: "takosumi-ai",
+      basePath: "/api/v1/ai",
+      handlerKey: "HOSTED",
+      authDelivery: "context",
+      ownsPathSubtree: true,
+      workspaceContext: "query-optional",
+      selfServicePatScopes: ["ai.models.read", "ai.chat"],
+      requestScopeRules: [
+        {
+          path: "/models",
+          methods: ["GET"],
+          requiredScopes: ["ai.models.read"],
+        },
+        {
+          path: "/chat/completions",
+          methods: ["POST"],
+          requiredScopes: ["ai.chat"],
+        },
+      ],
+      capabilities: ["openai.models.v1", "openai.chat-completions.v1"],
+    },
+  ];
+  return [
+    'name = "takosumi-staging"',
+    'compatibility_flags = ["nodejs_compat", "enable_request_signal"]',
+    "[assets]",
+    'binding = "ASSETS"',
+    "[version_metadata]",
+    'binding = "TAKOSUMI_VERSION_METADATA"',
+    "[[services]]",
+    'binding = "HOSTED"',
+    'service = "takosumi-hosted-staging"',
+    "[vars]",
+    'TAKOSUMI_ENVIRONMENT = "staging"',
+    `TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify(extensions)}'`,
+    "[[containers]]",
+    'class_name = "OpenTofuRunnerObject"',
+    `image = ${JSON.stringify(image)}`,
+    "",
+  ].join("\n");
+}
+
+function statusVersionSource(
+  versionId = STATUS_VERSION_ID,
+  hostedService = "takosumi-hosted-staging",
+  bindings: readonly Readonly<Record<string, unknown>>[] = [
+    { name: "ASSETS", type: "assets" },
+    { name: "TAKOSUMI_ACCOUNTS_DB", type: "d1" },
+    { name: "TAKOSUMI_CONTROL_DB", type: "d1" },
+    { name: "HOSTED", type: "service", service: hostedService },
+    { name: "TAKOSUMI_VERSION_METADATA", type: "version_metadata" },
+    {
+      name: "TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY",
+      type: "secret_text",
+    },
+  ],
+): string {
+  return JSON.stringify({
+    id: versionId,
+    resources: {
+      script: { handlers: ["fetch"] },
+      bindings,
+    },
+  });
+}
+
+function statusContainerSource(options: {
+  readonly image?: string;
+  readonly failed?: number;
+  readonly activeRolloutId?: string | null;
+} = {}) {
+  const image = options.image ?? STATUS_CONTAINER_IMAGE;
+  const summary = {
+    id: STATUS_CONTAINER_ID,
+    name: "takosumi-staging-opentofurunnerobject",
+    state: "ready",
+    image,
+    version: 4,
+  };
+  const detail = {
+    ...summary,
+    configuration: { image },
+    active_rollout_id: options.activeRolloutId ?? null,
+    health: {
+      instances: {
+        failed: options.failed ?? 0,
+        starting: 0,
+        scheduling: 0,
+      },
+      errors: [],
+    },
+  };
+  return { summary, detail };
+}
 
 function containerReadbackConfig(image: string): { path: string; dispose: () => void } {
   const directory = mkdtempSync(join(tmpdir(), "takosumi-platform-container-readback-"));
@@ -453,6 +588,16 @@ test("public release readback ignores capabilities owned by another extension", 
 test("platform release parser exposes reviewed plan, execute, recovery, and restore actions", () => {
   expect(
     parsePlatformWorkerReleaseArgs([
+      "status",
+      "--config",
+      "/private/wrangler.staging.toml",
+    ]),
+  ).toEqual({
+    action: "status",
+    config: "/private/wrangler.staging.toml",
+  });
+  expect(
+    parsePlatformWorkerReleaseArgs([
       "plan",
       "--config",
       "/private/wrangler.staging.toml",
@@ -529,6 +674,231 @@ test("platform release parser exposes reviewed plan, execute, recovery, and rest
     reviewer: "operator:reviewer",
     evidence: "/private/restored.json",
   });
+});
+
+test("read-only platform status accepts a stale source pin and uses only provider read commands", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "takosumi-platform-status-"));
+  const configPath = join(directory, "wrangler.staging.toml");
+  writeFileSync(configPath, statusConfigSource(STATUS_CONTAINER_IMAGE), {
+    mode: 0o600,
+  });
+  writeFileSync(
+    `${configPath.slice(0, -".toml".length)}.source.json`,
+    JSON.stringify({
+      kind: "takosumi.platform-release-source@v1",
+      repository: "https://github.com/example/stale-takosumi.git",
+      commit: "0".repeat(40),
+    }),
+    { mode: 0o600 },
+  );
+  const seen: string[][] = [];
+  const container = statusContainerSource();
+  const command: PlatformReleaseCommand = async (argv) => {
+    seen.push([...argv]);
+    if (argv.includes("git") || argv.includes("build") || argv.includes("deploy")) {
+      throw new Error("status invoked a forbidden command");
+    }
+    if (argv[1] === "deployments" && argv[2] === "status") {
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          versions: [{ version_id: STATUS_VERSION_ID, percentage: 100 }],
+        }),
+        stderr: "",
+      };
+    }
+    if (argv[1] === "versions" && argv[2] === "view") {
+      expect(argv[3]).toBe(STATUS_VERSION_ID);
+      return { exitCode: 0, stdout: statusVersionSource(), stderr: "" };
+    }
+    if (argv[1] === "containers" && argv[2] === "list") {
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify([container.summary]),
+        stderr: "",
+      };
+    }
+    if (argv[1] === "containers" && argv[2] === "info") {
+      return { exitCode: 0, stdout: JSON.stringify(container.detail), stderr: "" };
+    }
+    throw new Error(`unexpected status command: ${argv.join(" ")}`);
+  };
+
+  try {
+    const status = await inspectPlatformWorkerStatus(
+      configPath,
+      "staging",
+      { command },
+    );
+    expect(status).toMatchObject({
+      kind: "takosumi.platform-worker-status@v1",
+      status: "ready",
+      environment: "staging",
+      workerName: "takosumi-staging",
+      versionId: STATUS_VERSION_ID,
+      hostedService: "takosumi-hosted-staging",
+      runnerImage: STATUS_CONTAINER_IMAGE,
+      sourcePin: {
+        repository: "https://github.com/example/stale-takosumi.git",
+        commit: "0".repeat(40),
+      },
+      container: {
+        id: STATUS_CONTAINER_ID,
+        state: "ready",
+        image: STATUS_CONTAINER_IMAGE,
+        ready: true,
+        hasActiveRollout: false,
+        health: { failed: 0, starting: 0, scheduling: 0, errorCount: 0 },
+      },
+    });
+    expect(seen.map((argv) => argv.slice(1, 3))).toEqual([
+      ["deployments", "status"],
+      ["versions", "view"],
+      ["containers", "list"],
+      ["containers", "info"],
+      ["deployments", "status"],
+    ]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("platform status rejects wrong immutable Version identity, binding closure, image, and health", async () => {
+  const cases = [
+    {
+      name: "wrong version id",
+      version: statusVersionSource("33333333-3333-4333-8333-333333333333"),
+      expected: "platform_worker_release_status_version_identity_invalid",
+    },
+    {
+      name: "wrong Hosted service",
+      version: statusVersionSource(
+        STATUS_VERSION_ID,
+        "unreviewed-hosted-service",
+      ),
+      expected: "platform_worker_release_binding_invalid",
+    },
+    {
+      name: "missing required binding",
+      version: statusVersionSource(
+        STATUS_VERSION_ID,
+        "takosumi-hosted-staging",
+        [
+          { name: "ASSETS", type: "assets" },
+          { name: "HOSTED", type: "service", service: "takosumi-hosted-staging" },
+        ],
+      ),
+      expected: "platform_worker_release_binding_invalid",
+    },
+  ] as const;
+  for (const entry of cases) {
+    const directory = mkdtempSync(join(tmpdir(), "takosumi-platform-status-"));
+    const configPath = join(directory, "wrangler.staging.toml");
+    writeFileSync(configPath, statusConfigSource(STATUS_CONTAINER_IMAGE), {
+      mode: 0o600,
+    });
+    const container = statusContainerSource();
+    const command: PlatformReleaseCommand = async (argv) => {
+      if (argv[1] === "deployments" && argv[2] === "status") {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            versions: [{ version_id: STATUS_VERSION_ID, percentage: 100 }],
+          }),
+          stderr: "",
+        };
+      }
+      if (argv[1] === "versions" && argv[2] === "view") {
+        return { exitCode: 0, stdout: entry.version, stderr: "" };
+      }
+      if (argv[1] === "containers" && argv[2] === "list") {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify([container.summary]),
+          stderr: "",
+        };
+      }
+      if (argv[1] === "containers" && argv[2] === "info") {
+        return { exitCode: 0, stdout: JSON.stringify(container.detail), stderr: "" };
+      }
+      throw new Error(`unexpected status command: ${argv.join(" ")}`);
+    };
+    try {
+      await expect(
+        inspectPlatformWorkerStatus(configPath, "staging", { command }),
+      ).rejects.toThrow(entry.expected);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+
+  const physicalCases = [
+    {
+      name: "runner image",
+      container: statusContainerSource({
+        image:
+          `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"d".repeat(64)}`,
+      }),
+    },
+    { name: "unhealthy container", container: statusContainerSource({ failed: 1 }) },
+    {
+      name: "active rollout",
+      container: statusContainerSource({ activeRolloutId: "active-rollout" }),
+    },
+  ] as const;
+  for (const entry of physicalCases) {
+    const directory = mkdtempSync(join(tmpdir(), "takosumi-platform-status-"));
+    const configPath = join(directory, "wrangler.staging.toml");
+    writeFileSync(configPath, statusConfigSource(STATUS_CONTAINER_IMAGE), {
+      mode: 0o600,
+    });
+    const command: PlatformReleaseCommand = async (argv) => {
+      if (argv[1] === "deployments" && argv[2] === "status") {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            versions: [{ version_id: STATUS_VERSION_ID, percentage: 100 }],
+          }),
+          stderr: "",
+        };
+      }
+      if (argv[1] === "versions" && argv[2] === "view") {
+        return { exitCode: 0, stdout: statusVersionSource(), stderr: "" };
+      }
+      if (argv[1] === "containers" && argv[2] === "list") {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify([entry.container.summary]),
+          stderr: "",
+        };
+      }
+      if (argv[1] === "containers" && argv[2] === "info") {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify(entry.container.detail),
+          stderr: "",
+        };
+      }
+      throw new Error(`unexpected status command: ${argv.join(" ")}`);
+    };
+    try {
+      await expect(
+        inspectPlatformWorkerStatus(configPath, "staging", { command }),
+      ).rejects.toThrow("platform_worker_release_container_not_ready");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("status Version validator does not require release annotations", () => {
+  expect(
+    assertPlatformWorkerStatusVersion(
+      statusVersionSource(),
+      "takosumi-hosted-staging",
+      STATUS_VERSION_ID,
+    ),
+  ).toContainEqual({ name: "HOSTED", type: "service" });
 });
 
 test("execute rebinds the sealed runner proof to the configured immutable image", () => {

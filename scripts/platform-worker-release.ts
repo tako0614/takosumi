@@ -30,6 +30,7 @@ import {
   assertPlatformReleaseSourcePinMatchesCheckout,
   injectPlatformSourcePaths,
   platformReleaseSourceAuthorityDigest,
+  platformReleaseSourcePinPath,
   readPlatformReleaseSourcePin,
   resolvePlatformReleaseSourceAuthority,
   sameGitRemote,
@@ -1863,6 +1864,10 @@ export function createPlatformReadyEvidence(
 
 type Options =
   | {
+      readonly action: "status";
+      readonly config: string;
+    }
+  | {
       readonly action: "plan";
       readonly config: string;
       readonly runnerBuildEvidence: string;
@@ -1946,13 +1951,64 @@ export type PlatformReleasePlanRuntime = Readonly<{
   nonce: () => string;
 }>;
 
+/**
+ * Read-only status dependencies. The CLI uses the production command runner;
+ * tests inject the same bounded command seam used by the release readbacks.
+ * No Git, build, plan, or mutation capability belongs in this runtime.
+ */
+export type PlatformWorkerStatusRuntime = Readonly<{
+  command: PlatformReleaseCommand;
+  repositoryRoot?: string;
+}>;
+
+export type PlatformWorkerStatusReport = Readonly<{
+  kind: "takosumi.platform-worker-status@v1";
+  status: "ready";
+  environment: PlatformEnvironment;
+  workerName: string;
+  versionId: string;
+  hostedService: string;
+  fetchHandler: true;
+  bindings: readonly Readonly<{ name: string; type: string }>[];
+  configSha256: string;
+  runnerImage: string;
+  container: Readonly<{
+    id: string;
+    name: string;
+    state: string;
+    version: string | number;
+    image: string;
+    ready: true;
+    hasActiveRollout: false;
+    health: Readonly<{
+      failed: 0;
+      starting: 0;
+      scheduling: 0;
+      errorCount: 0;
+    }>;
+  }>;
+  sourcePin?: Readonly<{
+    repository: string;
+    commit: string;
+    authoritySha256: string;
+  }>;
+}>;
+
 export async function runPlatformWorkerRelease(
   argv: readonly string[],
   environment: PlatformEnvironment = "staging",
   planRuntime?: PlatformReleasePlanRuntime,
+  statusRuntime?: PlatformWorkerStatusRuntime,
 ): Promise<void> {
   const options = parsePlatformWorkerReleaseArgs(argv);
-  if (options.action === "plan") {
+  if (options.action === "status") {
+    const report = await inspectPlatformWorkerStatus(
+      options,
+      environment,
+      statusRuntime ?? { command: requiredCommand },
+    );
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  } else if (options.action === "plan") {
     await plan(
       options,
       environment,
@@ -2030,6 +2086,7 @@ export function parsePlatformWorkerReleaseArgs(
 ): Options {
   const [action, ...rest] = argv;
   if (
+    action !== "status" &&
     action !== "plan" &&
     action !== "materialize-source" &&
     action !== "execute" &&
@@ -2054,11 +2111,13 @@ export function parsePlatformWorkerReleaseArgs(
     values.set(key, value);
   }
   const allowed =
-    action === "plan"
-      ? ["--config", "--runner-build-evidence", "--plan-out"]
-      : action === "materialize-source"
+    action === "status"
+      ? ["--config"]
+      : action === "plan"
         ? ["--config", "--into"]
-        : ["--plan", "--confirm", "--review", "--evidence"];
+        : action === "materialize-source"
+          ? ["--config", "--into"]
+          : ["--plan", "--confirm", "--review", "--evidence"];
   if (action === "plan" && !values.has("--runner-build-evidence")) {
     throw new Error("platform_worker_release_runner_image_proof_required");
   }
@@ -2075,6 +2134,12 @@ export function parsePlatformWorkerReleaseArgs(
       config: absolute(values.get("--config")!),
       runnerBuildEvidence: absolute(values.get("--runner-build-evidence")!),
       planOut: absolute(values.get("--plan-out")!),
+    };
+  }
+  if (action === "status") {
+    return {
+      action,
+      config: absolute(values.get("--config")!),
     };
   }
   if (action === "materialize-source") {
@@ -2176,6 +2241,123 @@ function readRunnerImagePlanProof(
     throw new Error("platform_worker_release_runner_image_proof_invalid", {
       cause: error,
     });
+  }
+}
+
+/**
+ * Read the realized Worker, immutable serving Version, and runner Container.
+ * This is deliberately separate from plan/execute: status never consults Git,
+ * builds the dashboard, creates a release plan, or invokes a mutating command.
+ */
+export async function inspectPlatformWorkerStatus(
+  options: Extract<Options, { action: "status" }> | string,
+  environment: PlatformEnvironment = "staging",
+  runtime: PlatformWorkerStatusRuntime = { command: requiredCommand },
+): Promise<PlatformWorkerStatusReport> {
+  const configPath =
+    typeof options === "string" ? options : options.config;
+  if (!isAbsolute(configPath)) {
+    throw new Error("platform_worker_release_config_invalid");
+  }
+  assertReadableConfig(configPath);
+  const configBytes = readStablePhysicalBytes(
+    configPath,
+    "platform_worker_release_config_invalid",
+  );
+  const configSource = new TextDecoder("utf-8", { fatal: true }).decode(
+    configBytes,
+  );
+  assertConfigTargetsSource(configSource, environment);
+
+  let sourcePin: PlatformWorkerStatusReport["sourcePin"];
+  const pinPath = platformReleaseSourcePinPath(configPath);
+  if (existsSync(pinPath)) {
+    const pin = readPlatformReleaseSourcePin(configPath);
+    sourcePin = {
+      repository: pin.repository,
+      commit: pin.commit,
+      authoritySha256: platformReleaseSourceAuthorityDigest(pin),
+    };
+  }
+
+  const projection = createPlatformDryRunConfig(
+    configSource,
+    configPath,
+    runtime.repositoryRoot ?? ROOT,
+  );
+  try {
+    const runnerImage = configuredRunnerImage(projection.path);
+    const servingVersionId = await readServingVersion(
+      projection.path,
+      runtime.command,
+    );
+    const immutableVersion = await runtime.command([
+      WRANGLER,
+      "versions",
+      "view",
+      servingVersionId,
+      "--config",
+      projection.path,
+      "--json",
+    ]);
+    const bindings = assertPlatformWorkerStatusVersion(
+      immutableVersion.stdout,
+      platformTargetForEnvironment(environment).hostedService,
+      servingVersionId,
+    );
+    const container = await readPlatformContainer(
+      projection.path,
+      environment,
+      runtime.command,
+    );
+    assertPlatformContainerComplete(container, runnerImage);
+    const finalServingVersionId = await readServingVersion(
+      projection.path,
+      runtime.command,
+    );
+    if (finalServingVersionId !== servingVersionId) {
+      throw new Error("platform_worker_release_status_version_drift");
+    }
+    projection.assertUnchanged();
+
+    const rereadConfig = readStablePhysicalBytes(
+      configPath,
+      "platform_worker_release_config_drift",
+    );
+    if (digest(rereadConfig) !== digest(configBytes)) {
+      throw new Error("platform_worker_release_config_drift");
+    }
+
+    return {
+      kind: "takosumi.platform-worker-status@v1",
+      status: "ready",
+      environment,
+      workerName: platformTargetForEnvironment(environment).workerName,
+      versionId: servingVersionId,
+      hostedService: platformTargetForEnvironment(environment).hostedService,
+      fetchHandler: true,
+      bindings,
+      configSha256: digest(configBytes),
+      runnerImage,
+      container: {
+        id: container.id,
+        name: container.name,
+        state: container.state,
+        version: container.version,
+        image: container.image,
+        ready: true,
+        hasActiveRollout: false,
+        health: {
+          failed: 0,
+          starting: 0,
+          scheduling: 0,
+          errorCount: 0,
+        },
+      },
+      ...(sourcePin === undefined ? {} : { sourcePin }),
+    };
+  } finally {
+    projection.dispose();
   }
 }
 
@@ -4727,6 +4909,50 @@ export function assertPublishedVersion(
   if (!handlers.has("fetch")) {
     throw new Error("platform_worker_release_fetch_handler_missing");
   }
+}
+
+/**
+ * Validate the immutable Version used by the read-only status lane.
+ *
+ * Unlike publication readback, status has no release tag or message to prove:
+ * it identifies the exact 100%-serving Version first, then validates only the
+ * binding/handler closure that the realized target is expected to serve.
+ */
+export function assertPlatformWorkerStatusVersion(
+  stdout: string,
+  expectedHostedService: string,
+  expectedVersionId: string,
+): readonly Readonly<{ name: string; type: string }>[] {
+  assertPublishedVersion(stdout, expectedHostedService);
+  let value: unknown;
+  try {
+    value = JSON.parse(stdout) as unknown;
+  } catch {
+    throw new Error("platform_worker_release_status_version_invalid");
+  }
+  if (
+    !VERSION.test(expectedVersionId) ||
+    !record(value) ||
+    typeof value.id !== "string" ||
+    !VERSION.test(value.id) ||
+    value.id !== expectedVersionId
+  ) {
+    throw new Error("platform_worker_release_status_version_identity_invalid");
+  }
+  const resources = record(value) ? value.resources : undefined;
+  if (!record(resources) || !Array.isArray(resources.bindings)) {
+    throw new Error("platform_worker_release_status_version_invalid");
+  }
+  return REQUIRED_BINDINGS.map((name) => {
+    const binding = resources.bindings.find(
+      (entry) =>
+        record(entry) && (entry.name === name || entry.binding === name),
+    );
+    if (!record(binding) || typeof binding.type !== "string") {
+      throw new Error("platform_worker_release_status_binding_invalid");
+    }
+    return { name, type: binding.type };
+  });
 }
 
 async function readSecretNames(config: string): Promise<readonly string[]> {
