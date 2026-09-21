@@ -145,6 +145,53 @@ stale checkout does not become a Git or clean/pushed release requirement.
 Production uses `takosumi-platform` with its realized production config. This
 command does not build the dashboard, create a plan, or upload/route a Worker.
 
+### Routine staging code publication
+
+Use the staging-only routine lane when bindings, secrets, runtime settings,
+routes, schedules, custom domains, and the runner Container must stay fixed:
+
+```bash
+bun run deploy -- takosumi-platform-staging-code apply \
+  --config /absolute/operator-private/wrangler.staging.toml
+```
+
+The sibling source pin must name the selected checkout's exact `HEAD`. This is
+an integration lane: the commit need not be pushed to `main` and a dirty
+candidate is allowed; the uploaded entry digest is the byte identity. Read-only
+status remains `takosumi-platform-staging status` above.
+
+Before building, the lane compares the 100%-serving immutable Version and
+secret-name set with the config and reads Cloudflare's exact routes, domains,
+schedules, workers.dev/preview state, observability, and healthy runner
+Container. Script-associated routes are a live preservation baseline: every
+route id, pattern, target script, and request-limit fail-open value must remain
+unchanged through the immediate pre-upload and final snapshots. The lane does
+not write those routes or silently adopt them into config. A malformed route,
+a route for another script, an unknown shape, or drift refuses; config-owned
+custom domains, schedules, and settings must still match the realized config.
+
+The lane builds the dashboard once, runs
+`check:cloudflare-worker-build` once, and performs two `versions upload`
+dry-runs. The first derives the sealed entry digest; the second injects the
+three execution-evidence digest variables and must produce the same entry.
+Migration declarations are omitted only from the transient upload projection,
+after live readback proved the configured migration tag, so routine code cannot
+replay a Durable Object migration.
+
+`wrangler versions upload` synchronizes assets and uploads one tagged Version
+without applying triggers or a Container rollout. After immutable Version
+readback, `wrangler versions deploy` routes it at 100% using a transient config
+with only the exact account and Worker name, so activation cannot patch
+observability, logpush, or tail consumers. Final readback repeats every
+Version, topology, secret, Container, public-header, and discovery invariant.
+
+Asset synchronization is the first possible mutation. A lost acknowledgement
+from upload or activation is `incomplete`: the lane prints the predecessor and
+unique Version tag, never retries, and requires immutable Version/deployment
+history before recovery. Historical rollback remains owned by
+`takosumi-platform-staging`; this lane creates no plan, journal, archive, or
+parallel restore mechanism.
+
 ### Realized Hosted extension descriptors
 
 `TAKOSUMI_PLATFORM_EXTENSIONS` is operator-realized config outside this

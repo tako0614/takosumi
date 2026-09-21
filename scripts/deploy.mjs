@@ -8,6 +8,7 @@
 //
 //   bun run deploy -- takosumi-website
 //   bun run deploy -- takosumi-platform-staging plan ...
+//   bun run deploy -- takosumi-platform-staging-code apply --config <absolute>
 //   bun run deploy -- takosumi-platform plan ...
 //   bun run deploy -- takosumi-platform-staging restore ...
 //   bun run deploy -- takosumi-platform restore ...
@@ -53,6 +54,12 @@ const WEBSITE = {
 
 const PLATFORM_STAGING = {
   surface: "takosumi-platform-staging",
+  environment: "staging",
+  target: "cloudflare-worker:takosumi-staging",
+};
+
+const PLATFORM_STAGING_CODE = {
+  surface: "takosumi-platform-staging-code",
   environment: "staging",
   target: "cloudflare-worker:takosumi-staging",
 };
@@ -109,6 +116,22 @@ const platformContract = ({ surface, target, environment }) => ({
 const CONTRACT = {
   kind: "takos.deploy-contract@v2",
   surfaces: [
+    {
+      surface: PLATFORM_STAGING_CODE.surface,
+      target: PLATFORM_STAGING_CODE.target,
+      triggers: [],
+      lineage: "integration",
+      obligations: {
+        provenance:
+          "requires the operator-private source pin to equal the selected checkout HEAD, builds the staging dashboard once, runs the Worker-build scoped gate once, and runs two versions-upload dry runs to bind the three execution-evidence variables to the exact sealed entry digest",
+        "post-conditions":
+          "reads the uploaded immutable Version and then requires it alone at 100 percent, exact public version headers and discovery, unchanged secret names, binding identities, Durable Object namespace ids, Container identity/image/version/health, and exact routes, domains, schedules, subdomain, and non-versioned settings",
+        reversal:
+          "prints the predecessor Version and names takosumi-platform-staging as the historical rollback owner; this routine lane does not invent a second restore mechanism",
+        "failure-handling":
+          "refuses any pre-upload authority drift; asset sync is the first possible mutation, so every upload or activation error is incomplete, prints the recovery tag and predecessor, and never retries either mutation",
+      },
+    },
     platformContract(PLATFORM_STAGING),
     platformContract(PLATFORM_PRODUCTION),
     ...CONTROL_SCHEMA_SURFACES.map(({ surface, target, environment }) => ({
@@ -258,6 +281,18 @@ if (controlSchema) {
     controlSchema.environment,
     ...args,
   ]));
+}
+
+if (
+  selected === PLATFORM_STAGING_CODE.surface
+) {
+  const { runPlatformWorkerCodeRelease } =
+    await import("./platform-worker-release.ts");
+  await runPlatformWorkerCodeRelease(
+    process.argv.slice(3),
+    PLATFORM_STAGING_CODE.environment,
+  );
+  process.exit(0);
 }
 
 if (

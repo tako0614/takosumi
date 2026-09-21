@@ -274,6 +274,22 @@ export function parseDeployedVersion(output: string): string {
   return matches[0][1];
 }
 
+export function parseUploadedVersion(output: string): string {
+  const matches = [
+    ...output.matchAll(
+      /(?:^|\n)Worker Version ID:\s*([0-9a-f]{8}-[0-9a-f-]{27,})(?:\r?$)/gmu,
+    ),
+  ];
+  if (
+    matches.length !== 1 ||
+    typeof matches[0]?.[1] !== "string" ||
+    !VERSION.test(matches[0][1])
+  ) {
+    throw new Error("platform_worker_code_emitted_version_invalid");
+  }
+  return matches[0][1];
+}
+
 export function platformMutationAction(
   fence: PlatformMutationFence | null,
 ): "deploy" | "reconcile" {
@@ -2032,6 +2048,499 @@ export async function runPlatformWorkerRelease(
   } else if (options.action === "execute") await execute(options, environment);
   else if (options.action === "recover") await recover(options, environment);
   else await restore(options, environment);
+}
+
+export type PlatformWorkerCodeNativeRead = (
+  path: string,
+) => Promise<Readonly<{ result: unknown; resultInfo: unknown }>>;
+
+export type PlatformWorkerCodeRuntime = Readonly<{
+  command?: PlatformReleaseCommand;
+  repositoryRoot?: string;
+  assertSelectedSource?: (configPath: string) => void;
+  buildDashboard?: (
+    environment: PlatformEnvironment,
+  ) => Promise<DashboardAssetSeal>;
+  runScopedGate?: () => Promise<void>;
+  nativeRead?: PlatformWorkerCodeNativeRead;
+  publicReadback?: (
+    environment: PlatformEnvironment,
+    versionId: string,
+  ) => Promise<void>;
+  nonce?: () => string;
+}>;
+
+type PlatformWorkerCodeAuthority = Readonly<{
+  versionId: string;
+  version: PlatformWorkerCodeVersionAuthority;
+  secrets: readonly string[];
+  container: PlatformContainerState;
+  topology: PlatformWorkerCodeTopology;
+}>;
+
+/** Fixed integration-only lane. Full config/image release remains separate. */
+export async function runPlatformWorkerCodeRelease(
+  argv: readonly string[],
+  environment: PlatformEnvironment = "staging",
+  runtime: PlatformWorkerCodeRuntime = {},
+): Promise<void> {
+  if (environment !== "staging" || argv[0] !== "apply") {
+    throw new Error("platform_worker_code_action_invalid");
+  }
+  const parsed = parsePlatformWorkerReleaseArgs(["status", ...argv.slice(1)]);
+  if (parsed.action !== "status") {
+    throw new Error("platform_worker_code_arguments_invalid");
+  }
+  const command = runtime.command ?? requiredCommand;
+  const root = runtime.repositoryRoot ?? ROOT;
+  const configBytes = readStablePhysicalBytes(
+    parsed.config,
+    "platform_worker_code_config_invalid",
+  );
+  const configSource = new TextDecoder("utf-8", { fatal: true }).decode(
+    configBytes,
+  );
+  assertConfigTargetsSource(configSource, environment);
+  (runtime.assertSelectedSource ??
+    ((path) => assertPinnedSourceRoot(readPlatformReleaseSourcePin(path))))(
+    parsed.config,
+  );
+
+  const initialConfig = createPlatformDryRunConfig(
+    platformWorkerCodeWithoutMigrations(configSource),
+    parsed.config,
+    root,
+  );
+  let finalConfig: PlatformDryRunConfig | undefined;
+  let activationConfig: PlatformDryRunConfig | undefined;
+  let initialOutput: string | undefined;
+  let finalOutput: string | undefined;
+  let mutation: "none" | "upload" | "activate" = "none";
+  let predecessorVersionId = "unknown";
+  let releaseTag = "unknown";
+  try {
+    const runnerImage = configuredRunnerImage(initialConfig.path);
+    const workerName = platformTargetForEnvironment(environment).workerName;
+    const nativeRead =
+      runtime.nativeRead ??
+      (await platformWorkerCodeNativeReader(
+        initialConfig.path,
+        platformContainerAccountIdFromConfig(initialConfig.path),
+        workerName,
+        command,
+      ));
+    const readAuthority = (path: string, source: string, priorPins: boolean) =>
+      readPlatformWorkerCodeAuthority(
+        path,
+        source,
+        environment,
+        priorPins,
+        command,
+        nativeRead,
+      );
+    const baseline = await readAuthority(initialConfig.path, configSource, true);
+    predecessorVersionId = baseline.versionId;
+    assertPlatformContainerComplete(baseline.container, runnerImage);
+
+    const dashboard = await (runtime.buildDashboard ??
+      ((selected) => buildPlatformDashboardOnce(selected, command, root)))(
+      environment,
+    );
+    await (runtime.runScopedGate ??
+      (() => runPlatformWorkerCodeGate(command, root)))();
+
+    initialOutput = createGlobalTransientDirectory("takosumi-code-dry-run-");
+    const initialSeal = await buildPlatformWorkerCodeDryRunSeal(
+      initialConfig.path,
+      initialOutput,
+      command,
+      root,
+    );
+    const initialEntry = platformWorkerCodeEntrypoint(
+      initialSeal,
+      initialOutput,
+    );
+    const pins = platformExecutionEvidenceReleasePins(
+      readStablePhysicalBytes(
+        initialEntry,
+        "platform_worker_code_bundle_invalid",
+      ),
+      runnerImage,
+    );
+    const finalSource = injectPlatformExecutionEvidencePins(configSource, pins);
+    finalConfig = createPlatformDryRunConfig(
+      platformWorkerCodeWithoutMigrations(finalSource),
+      parsed.config,
+      root,
+    );
+    finalOutput = createGlobalTransientDirectory("takosumi-code-sealed-");
+    const finalSeal = await buildPlatformWorkerCodeDryRunSeal(
+      finalConfig.path,
+      finalOutput,
+      command,
+      root,
+    );
+    const finalEntry = platformWorkerCodeEntrypoint(finalSeal, finalOutput);
+    const finalBytes = readStablePhysicalBytes(
+      finalEntry,
+      "platform_worker_code_bundle_invalid",
+    );
+    const entryDigest = digest(finalBytes);
+    if (entryDigest !== pins.controllerArtifactDigest) {
+      throw new Error("platform_worker_code_bundle_digest_drift");
+    }
+
+    const immediate = await readAuthority(
+      initialConfig.path,
+      configSource,
+      true,
+    );
+    assertPlatformWorkerCodeAuthorityUnchanged(baseline, immediate, true);
+    assertPlatformWorkerCodeInputUnchanged(parsed.config, configBytes);
+    initialConfig.assertUnchanged();
+    finalConfig.assertUnchanged();
+
+    const nonce = (runtime.nonce ?? (() => randomBytes(16).toString("hex")))();
+    if (!/^[0-9a-f]{32}$/u.test(nonce)) {
+      throw new Error("platform_worker_code_nonce_invalid");
+    }
+    releaseTag = `tks-stg-code-${nonce}`;
+    const releaseMessage =
+      `takosumi-platform-staging-code ${entryDigest}`;
+    mutation = "upload";
+    const upload = await command(
+      [
+        WRANGLER,
+        "versions",
+        "upload",
+        finalEntry,
+        "--no-bundle",
+        "--config",
+        finalConfig.path,
+        "--tag",
+        releaseTag,
+        "--message",
+        releaseMessage,
+        "--strict",
+      ],
+      undefined,
+      root,
+    );
+    const deployedVersionId = parseUploadedVersion(
+      `${upload.stdout}\n${upload.stderr}`,
+    );
+    const uploadedSource = await readPlatformWorkerCodeVersion(
+      finalConfig.path,
+      deployedVersionId,
+      command,
+    );
+    const uploaded = assertPlatformWorkerCodeVersionMatchesConfig(
+      uploadedSource,
+      finalSource,
+      platformTargetForEnvironment(environment).hostedService,
+      baseline.secrets,
+    );
+    assertPublishedVersion(
+      uploadedSource,
+      platformTargetForEnvironment(environment).hostedService,
+      deployedVersionId,
+      releaseTag,
+      releaseMessage,
+    );
+    assertPlatformWorkerCodeStableVersion(baseline.version, uploaded);
+
+    activationConfig = createPlatformWorkerCodeActivationConfig(
+      workerName,
+      platformContainerAccountIdFromConfig(initialConfig.path),
+    );
+    mutation = "activate";
+    await command(
+      [
+        WRANGLER,
+        "versions",
+        "deploy",
+        `${deployedVersionId}@100%`,
+        "--config",
+        activationConfig.path,
+        "--message",
+        releaseMessage,
+        "--yes",
+      ],
+      undefined,
+      root,
+    );
+    const deployed = await readAuthority(
+      finalConfig.path,
+      finalSource,
+      false,
+    );
+    if (deployed.versionId !== deployedVersionId) {
+      throw new Error(
+        deployed.versionId === predecessorVersionId
+          ? "platform_worker_release_predecessor_unchanged"
+          : "platform_worker_release_concurrent_version",
+      );
+    }
+    assertPlatformWorkerCodeAuthorityUnchanged(baseline, deployed, false);
+    assertPlatformWorkerCodeInputUnchanged(parsed.config, configBytes);
+    activationConfig.assertUnchanged();
+    await (runtime.publicReadback ?? verifyPublicReadback)(
+      environment,
+      deployedVersionId,
+    );
+    process.stdout.write(
+      `${JSON.stringify({
+        kind: "takosumi.platform-worker-staging-code@v1",
+        status: "ready",
+        predecessorVersionId,
+        deployedVersionId,
+        releaseTag,
+        entryDigest,
+        dashboardDigest: dashboard.digest,
+        historicalRollbackOwner: "takosumi-platform-staging",
+      })}\n`,
+    );
+  } catch (error) {
+    if (mutation === "none") throw error;
+    process.stdout.write(
+      `${JSON.stringify({
+        kind: "takosumi.platform-worker-staging-code@v1",
+        status: "incomplete",
+        predecessorVersionId,
+        releaseTag,
+        mutation,
+        recoveryStatus:
+          "read the tagged Version and deployment history before rollback or forward repair; no mutation was retried",
+        historicalRollbackOwner: "takosumi-platform-staging",
+      })}\n`,
+    );
+    throw new Error("platform_worker_code_release_incomplete", { cause: error });
+  } finally {
+    activationConfig?.dispose();
+    finalConfig?.dispose();
+    initialConfig.dispose();
+    if (initialOutput) rmSync(initialOutput, { recursive: true, force: true });
+    if (finalOutput) rmSync(finalOutput, { recursive: true, force: true });
+  }
+}
+
+async function readPlatformWorkerCodeAuthority(
+  configPath: string,
+  source: string,
+  environment: "staging",
+  allowPriorPins: boolean,
+  command: PlatformReleaseCommand,
+  nativeRead: PlatformWorkerCodeNativeRead,
+): Promise<PlatformWorkerCodeAuthority> {
+  const topology = await readPlatformWorkerCodeTopology(
+    source,
+    platformTargetForEnvironment(environment).workerName,
+    nativeRead,
+  );
+  const versionId = await readServingVersion(configPath, command);
+  const [versionSource, secrets, container] = await Promise.all([
+    readPlatformWorkerCodeVersion(configPath, versionId, command),
+    readSecretNames(configPath, command),
+    readPlatformContainer(configPath, environment, command),
+  ]);
+  return {
+    versionId,
+    version: assertPlatformWorkerCodeVersionMatchesConfig(
+      versionSource,
+      source,
+      platformTargetForEnvironment(environment).hostedService,
+      secrets,
+      { allowPriorPins },
+    ),
+    secrets,
+    container,
+    topology,
+  };
+}
+
+async function readPlatformWorkerCodeVersion(
+  configPath: string,
+  versionId: string,
+  command: PlatformReleaseCommand,
+): Promise<string> {
+  return (
+    await command([
+      WRANGLER,
+      "versions",
+      "view",
+      versionId,
+      "--config",
+      configPath,
+      "--json",
+    ])
+  ).stdout;
+}
+
+function assertPlatformWorkerCodeStableVersion(
+  baseline: PlatformWorkerCodeVersionAuthority,
+  current: PlatformWorkerCodeVersionAuthority,
+): void {
+  if (!platformWorkerCodeEqual(baseline, current)) {
+    throw new Error("platform_worker_code_authority_drift");
+  }
+}
+
+function assertPlatformWorkerCodeAuthorityUnchanged(
+  baseline: PlatformWorkerCodeAuthority,
+  current: PlatformWorkerCodeAuthority,
+  sameVersion: boolean,
+): void {
+  if (
+    (sameVersion && baseline.versionId !== current.versionId) ||
+    !platformWorkerCodeEqual(baseline.secrets, current.secrets) ||
+    !platformWorkerCodeEqual(baseline.container, current.container) ||
+    !platformWorkerCodeEqual(baseline.topology, current.topology)
+  ) {
+    throw new Error("platform_worker_code_authority_drift");
+  }
+  assertPlatformWorkerCodeStableVersion(baseline.version, current.version);
+}
+
+function assertPlatformWorkerCodeInputUnchanged(
+  configPath: string,
+  expected: Uint8Array,
+): void {
+  if (
+    digest(
+      readStablePhysicalBytes(
+        configPath,
+        "platform_worker_code_config_invalid",
+      ),
+    ) !== digest(expected)
+  ) {
+    throw new Error("platform_worker_code_config_drift");
+  }
+}
+
+function platformWorkerCodeWithoutMigrations(source: string): string {
+  let removed = 0;
+  let skipping = false;
+  const projected = source
+    .split(/(?<=\n)/u)
+    .filter((line) => {
+      const heading =
+        /^\s*(\[\[?[^\]\r\n]+\]?\])\s*(?:#.*)?$/u.exec(line);
+      if (heading) {
+        skipping = heading[1] === "[[migrations]]";
+        if (skipping) removed += 1;
+      }
+      return !skipping;
+    })
+    .join("");
+  if (removed === 0 || /\[\[migrations\]\]/u.test(projected)) {
+    throw new Error("platform_worker_code_migration_projection_invalid");
+  }
+  return projected;
+}
+
+function createPlatformWorkerCodeActivationConfig(
+  workerName: string,
+  accountId: string,
+): PlatformDryRunConfig {
+  if (
+    !/^[a-z0-9-]{1,64}$/u.test(workerName) ||
+    !/^[0-9a-f]{32}$/u.test(accountId)
+  ) {
+    throw new Error("platform_worker_code_activation_config_invalid");
+  }
+  const directory = createGlobalTransientDirectory("takosumi-code-activate-");
+  const path = join(directory, "wrangler.toml");
+  writePrivate(
+    path,
+    new TextEncoder().encode(
+      `name = ${JSON.stringify(workerName)}\naccount_id = ${JSON.stringify(accountId)}\n`,
+    ),
+  );
+  chmodSync(path, 0o400);
+  const expected = digest(
+    readStablePhysicalBytes(
+      path,
+      "platform_worker_code_activation_config_invalid",
+    ),
+  );
+  return {
+    path,
+    assertUnchanged: () => {
+      if (
+        digest(
+          readStablePhysicalBytes(
+            path,
+            "platform_worker_code_activation_config_invalid",
+          ),
+        ) !== expected
+      ) {
+        throw new Error("platform_worker_code_activation_config_invalid");
+      }
+    },
+    dispose: () => rmSync(directory, { recursive: true, force: true }),
+  };
+}
+
+async function buildPlatformWorkerCodeDryRunSeal(
+  configPath: string,
+  output: string,
+  command: PlatformReleaseCommand,
+  root: string,
+): Promise<DashboardAssetSeal> {
+  await command(
+    [
+      WRANGLER,
+      "versions",
+      "upload",
+      "--dry-run",
+      "--outdir",
+      output,
+      "--strict",
+      "--config",
+      configPath,
+    ],
+    undefined,
+    root,
+  );
+  return dashboardAssetTreeSeal(output);
+}
+
+function platformWorkerCodeEntrypoint(
+  seal: DashboardAssetSeal,
+  output: string,
+): string {
+  const entries = seal.entries.filter(
+    (entry) => !entry.path.includes("/") && entry.path.endsWith(".js"),
+  );
+  if (entries.length !== 1) {
+    throw new Error("platform_worker_code_dry_run_entrypoint_invalid");
+  }
+  return join(output, entries[0]!.path);
+}
+
+async function runPlatformWorkerCodeGate(
+  command: PlatformReleaseCommand,
+  root: string,
+): Promise<void> {
+  await command(
+    ["bun", "run", "check:cloudflare-worker-build"],
+    undefined,
+    root,
+  );
+}
+
+async function buildPlatformDashboardOnce(
+  environment: PlatformEnvironment,
+  command: PlatformReleaseCommand,
+  root: string,
+): Promise<DashboardAssetSeal> {
+  await command(
+    ["bun", "run", "build"],
+    undefined,
+    resolve(root, "dashboard"),
+    platformDashboardBuildEnvironment(environment),
+  );
+  return dashboardAssetTreeSeal(resolve(root, "dashboard/dist"));
 }
 
 function productionPlatformReleasePlanRuntime(): PlatformReleasePlanRuntime {
@@ -4955,8 +5464,483 @@ export function assertPlatformWorkerStatusVersion(
   });
 }
 
-async function readSecretNames(config: string): Promise<readonly string[]> {
-  const result = await requiredCommand([
+type PlatformWorkerCodeVersionMatchOptions = Readonly<{
+  allowPriorPins?: boolean;
+}>;
+
+export type PlatformWorkerCodeVersionAuthority = Readonly<{
+  handlers: readonly string[];
+  lastDeployedFrom: string;
+  namedHandlers: readonly unknown[];
+  durableObjectNamespaces: readonly Readonly<{
+    name: string;
+    className: string;
+    namespaceId: string;
+  }>[];
+}>;
+
+export function assertPlatformWorkerCodeVersionMatchesConfig(
+  stdout: string,
+  configSource: string,
+  hostedService: string,
+  secretNamesExpected: readonly string[],
+  options: PlatformWorkerCodeVersionMatchOptions = {},
+): PlatformWorkerCodeVersionAuthority {
+  let version: unknown;
+  let config: Record<string, unknown>;
+  try {
+    version = JSON.parse(stdout) as unknown;
+    config = Bun.TOML.parse(configSource) as Record<string, unknown>;
+  } catch {
+    throw new Error("platform_worker_code_version_shape_unsupported");
+  }
+  if (!record(version) || !record(version.resources)) {
+    throw new Error("platform_worker_code_version_shape_unsupported");
+  }
+  platformWorkerCodeExactKeys(version.resources, [
+    "bindings",
+    "script",
+    "script_runtime",
+  ]);
+  assertPlatformWorkerStatusVersion(stdout, hostedService, String(version.id));
+  const script = version.resources.script;
+  const runtime = version.resources.script_runtime;
+  if (!record(script) || !Array.isArray(script.named_handlers) || !record(runtime)) {
+    throw new Error("platform_worker_code_version_shape_unsupported");
+  }
+  platformWorkerCodeExactKeys(script, [
+    "etag",
+    "handlers",
+    "last_deployed_from",
+    "named_handlers",
+  ]);
+  if (
+    !boundedString(script.etag, 256) ||
+    !Array.isArray(script.handlers) ||
+    script.handlers.some((handler) => !boundedString(handler, 128)) ||
+    script.last_deployed_from !== "wrangler"
+  ) {
+    throw new Error("platform_worker_code_version_shape_unsupported");
+  }
+  const namedHandlers = script.named_handlers.map((entry) => {
+    if (!record(entry)) {
+      throw new Error("platform_worker_code_version_shape_unsupported");
+    }
+    platformWorkerCodeExactKeys(entry, ["handlers", "name"]);
+    if (!boundedString(entry.name, 256) || !Array.isArray(entry.handlers)) {
+      throw new Error("platform_worker_code_version_shape_unsupported");
+    }
+    return { name: entry.name, handlers: entry.handlers };
+  }).sort((left, right) => codePointCompare(left.name, right.name));
+  platformWorkerCodeExactKeys(runtime, [
+    "assets",
+    "compatibility_date",
+    "compatibility_flags",
+    "containers",
+    "migration_tag",
+    "usage_model",
+  ]);
+  const assets = config.assets;
+  const migrations = platformWorkerCodeRecords(config.migrations);
+  const containers = platformWorkerCodeRecords(config.containers);
+  if (
+    !record(runtime.assets) ||
+    !record(assets) ||
+    migrations.length === 0 ||
+    containers.length !== 1 ||
+    runtime.migration_tag !== migrations.at(-1)?.tag ||
+    runtime.compatibility_date !== config.compatibility_date ||
+    !platformWorkerCodeEqual(
+      runtime.compatibility_flags,
+      config.compatibility_flags,
+    ) ||
+    runtime.usage_model !== "standard" ||
+    runtime.assets.not_found_handling !== assets.not_found_handling ||
+    runtime.assets.serve_directly !== false ||
+    runtime.assets.raw_run_worker_first !== assets.run_worker_first ||
+    !Array.isArray(runtime.containers) ||
+    runtime.containers.length !== 1 ||
+    !record(runtime.containers[0]) ||
+    runtime.containers[0].class_name !== containers[0]?.class_name
+  ) {
+    throw new Error("platform_worker_code_settings_mismatch");
+  }
+  platformWorkerCodeExactKeys(runtime.assets, [
+    "not_found_handling",
+    "raw_run_worker_first",
+    "serve_directly",
+  ]);
+  platformWorkerCodeExactKeys(runtime.containers[0], ["class_name"]);
+
+  const expected = platformWorkerCodeExpectedBindings(config);
+  const expectedSecrets = [...secretNamesExpected].sort(codePointCompare);
+  const actualSecrets: string[] = [];
+  const namespaces: Array<{
+    name: string;
+    className: string;
+    namespaceId: string;
+  }> = [];
+  const seen = new Set<string>();
+  if (!Array.isArray(version.resources.bindings)) {
+    throw new Error("platform_worker_code_version_shape_unsupported");
+  }
+  for (const binding of version.resources.bindings) {
+    if (!record(binding) || !boundedString(binding.name, 128) || seen.has(binding.name)) {
+      throw new Error("platform_worker_code_version_shape_unsupported");
+    }
+    seen.add(binding.name);
+    if (binding.type === "secret_text") {
+      platformWorkerCodeExactKeys(binding, ["name", "type"]);
+      actualSecrets.push(binding.name);
+      continue;
+    }
+    if (
+      options.allowPriorPins === true &&
+      EXECUTION_EVIDENCE_DIGEST_ENV_NAMES.includes(binding.name)
+    ) {
+      platformWorkerCodeExactKeys(binding, ["name", "text", "type"]);
+      if (binding.type !== "plain_text" || !SHA256.test(String(binding.text))) {
+        throw new Error("platform_worker_code_binding_mismatch");
+      }
+      continue;
+    }
+    const wanted = expected.get(binding.name);
+    if (!wanted) throw new Error("platform_worker_code_binding_mismatch");
+    if (wanted.type === "durable_object_namespace") {
+      platformWorkerCodeExactKeys(binding, [
+        "class_name",
+        "name",
+        "namespace_id",
+        "type",
+      ]);
+      if (
+        binding.type !== wanted.type ||
+        binding.class_name !== wanted.class_name ||
+        !/^[0-9a-f]{32}$/u.test(String(binding.namespace_id))
+      ) {
+        throw new Error("platform_worker_code_binding_mismatch");
+      }
+      namespaces.push({
+        name: binding.name,
+        className: binding.class_name,
+        namespaceId: binding.namespace_id as string,
+      });
+      continue;
+    }
+    platformWorkerCodeExactKeys(binding, Object.keys(wanted));
+    if (Object.entries(wanted).some(([key, value]) => binding[key] !== value)) {
+      throw new Error("platform_worker_code_binding_mismatch");
+    }
+  }
+  actualSecrets.sort(codePointCompare);
+  const priorPins = options.allowPriorPins === true
+    ? EXECUTION_EVIDENCE_DIGEST_ENV_NAMES
+    : [];
+  if (
+    !platformWorkerCodeEqual(actualSecrets, expectedSecrets) ||
+    [...expected.keys()].some((name) => !seen.has(name)) ||
+    priorPins.some((name) => !seen.has(name))
+  ) {
+    throw new Error("platform_worker_code_binding_mismatch");
+  }
+  return {
+    handlers: script.handlers as readonly string[],
+    lastDeployedFrom: script.last_deployed_from,
+    namedHandlers,
+    durableObjectNamespaces: namespaces.sort((left, right) =>
+      codePointCompare(left.name, right.name)),
+  };
+}
+
+function platformWorkerCodeExpectedBindings(
+  config: Record<string, unknown>,
+): Map<string, Record<string, unknown>> {
+  const output = new Map<string, Record<string, unknown>>();
+  const add = (value: Record<string, unknown>): void => {
+    const name = value.name;
+    if (typeof name !== "string" || output.has(name)) {
+      throw new Error("platform_worker_code_config_shape_unsupported");
+    }
+    output.set(name, value);
+  };
+  if (!record(config.assets) || !record(config.version_metadata)) {
+    throw new Error("platform_worker_code_config_shape_unsupported");
+  }
+  add({ name: config.assets.binding, type: "assets" });
+  add({ name: config.version_metadata.binding, type: "version_metadata" });
+  for (const value of platformWorkerCodeRecords(config.d1_databases)) {
+    add({
+      name: value.binding,
+      database_id: value.database_id,
+      id: value.database_id,
+      type: "d1",
+    });
+  }
+  for (const value of platformWorkerCodeRecords(config.r2_buckets)) {
+    add({ name: value.binding, bucket_name: value.bucket_name, type: "r2_bucket" });
+  }
+  for (const value of platformWorkerCodeRecords(config.services)) {
+    add({
+      name: value.binding,
+      environment: "production",
+      service: value.service,
+      type: "service",
+    });
+  }
+  if (!record(config.durable_objects)) {
+    throw new Error("platform_worker_code_config_shape_unsupported");
+  }
+  for (const value of platformWorkerCodeRecords(config.durable_objects.bindings)) {
+    add({
+      name: value.name,
+      class_name: value.class_name,
+      type: "durable_object_namespace",
+    });
+  }
+  if (!record(config.vars)) {
+    throw new Error("platform_worker_code_config_shape_unsupported");
+  }
+  for (const [name, text] of Object.entries(config.vars)) {
+    if (typeof text !== "string") {
+      throw new Error("platform_worker_code_config_shape_unsupported");
+    }
+    add({ name, text, type: "plain_text" });
+  }
+  return output;
+}
+
+function platformWorkerCodeRecords(value: unknown): readonly Record<string, unknown>[] {
+  if (!Array.isArray(value) || value.some((entry) => !record(entry))) {
+    throw new Error("platform_worker_code_config_shape_unsupported");
+  }
+  return value as readonly Record<string, unknown>[];
+}
+
+function platformWorkerCodeExactKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): void {
+  if (
+    JSON.stringify(Object.keys(value).sort(codePointCompare)) !==
+    JSON.stringify([...keys].sort(codePointCompare))
+  ) {
+    throw new Error("platform_worker_code_native_field_unsupported");
+  }
+}
+
+function platformWorkerCodeEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length &&
+      left.every((value, index) => platformWorkerCodeEqual(value, right[index]));
+  }
+  if (!record(left) || !record(right)) return false;
+  const keys = Object.keys(left).sort(codePointCompare);
+  return platformWorkerCodeEqual(keys, Object.keys(right).sort(codePointCompare)) &&
+    keys.every((key) => platformWorkerCodeEqual(left[key], right[key]));
+}
+
+export type PlatformWorkerCodeTopology = Readonly<{
+  routes: readonly unknown[];
+  settings: unknown;
+  subdomain: unknown;
+  crons: readonly string[];
+  domains: readonly unknown[];
+}>;
+
+export async function readPlatformWorkerCodeTopology(
+  configSource: string,
+  workerName: string,
+  read: PlatformWorkerCodeNativeRead,
+): Promise<PlatformWorkerCodeTopology> {
+  const config = Bun.TOML.parse(configSource) as Record<string, unknown>;
+  const encoded = encodeURIComponent(workerName);
+  const [scripts, settings, subdomain, schedules, domains] = await Promise.all([
+    read("/workers/scripts"),
+    read(`/workers/scripts/${encoded}/script-settings`),
+    read(`/workers/scripts/${encoded}/subdomain`),
+    read(`/workers/scripts/${encoded}/schedules`),
+    read(`/workers/domains?service=${encoded}&environment=production`),
+  ]);
+  if (!Array.isArray(scripts.result)) {
+    throw new Error("platform_worker_code_topology_shape_unsupported");
+  }
+  const matches = scripts.result.filter(
+    (value) => record(value) && value.id === workerName,
+  );
+  const script = matches[0];
+  if (matches.length !== 1 || !record(script) || !Array.isArray(script.routes)) {
+    throw new Error("platform_worker_code_topology_shape_unsupported");
+  }
+  platformWorkerCodeExactKeys(script, [
+    "compatibility_date",
+    "compatibility_flags",
+    "created_on",
+    "deployment_id",
+    "etag",
+    "handlers",
+    "has_assets",
+    "has_modules",
+    "id",
+    "last_deployed_from",
+    "logpush",
+    "migration_tag",
+    "modified_on",
+    "named_handlers",
+    "observability",
+    "routes",
+    "tag",
+    "tags",
+    "tail_consumers",
+    "usage_model",
+  ]);
+  const routes = script.routes.map((route) => {
+    if (!record(route)) throw new Error("platform_worker_code_topology_shape_unsupported");
+    platformWorkerCodeExactKeys(route, [
+      "id",
+      "pattern",
+      "request_limit_fail_open",
+      "script",
+    ]);
+    if (
+      typeof route.id !== "string" ||
+      !/^[0-9a-f]{32}$/u.test(route.id) ||
+      !boundedString(route.pattern, 2_048) ||
+      /\p{Cc}/u.test(route.pattern) ||
+      typeof route.request_limit_fail_open !== "boolean"
+    ) {
+      throw new Error("platform_worker_code_topology_shape_unsupported");
+    }
+    if (route.script !== workerName) {
+      throw new Error("platform_worker_code_topology_mismatch");
+    }
+    return {
+      id: route.id,
+      pattern: route.pattern,
+      request_limit_fail_open: route.request_limit_fail_open,
+      script: route.script,
+    };
+  }).sort((left, right) =>
+    codePointCompare(String(left.pattern), String(right.pattern)) ||
+    codePointCompare(String(left.id), String(right.id))
+  );
+  if (!record(settings.result) || !record(subdomain.result)) {
+    throw new Error("platform_worker_code_topology_shape_unsupported");
+  }
+  platformWorkerCodeExactKeys(settings.result, [
+    "logpush",
+    "observability",
+    "tags",
+    "tail_consumers",
+  ]);
+  platformWorkerCodeExactKeys(subdomain.result, ["enabled", "previews_enabled"]);
+  if (!record(config.observability) || !record(config.triggers)) {
+    throw new Error("platform_worker_code_config_shape_unsupported");
+  }
+  const expectedSettings = {
+    logpush: false,
+    tags: null,
+    tail_consumers: null,
+    observability: {
+      enabled: config.observability.enabled,
+      head_sampling_rate: config.observability.head_sampling_rate,
+      redact_query_string: false,
+      logs: config.observability.logs,
+      traces: config.observability.traces,
+    },
+  };
+  if (
+    !platformWorkerCodeEqual(settings.result, expectedSettings) ||
+    script.compatibility_date !== config.compatibility_date ||
+    !platformWorkerCodeEqual(
+      script.compatibility_flags,
+      config.compatibility_flags,
+    ) ||
+    script.migration_tag !== platformWorkerCodeRecords(config.migrations).at(-1)?.tag ||
+    script.usage_model !== "standard" ||
+    !platformWorkerCodeEqual(
+      script.observability,
+      expectedSettings.observability,
+    ) ||
+    script.logpush !== false ||
+    !platformWorkerCodeEqual(script.tags, []) ||
+    script.tail_consumers !== null ||
+    subdomain.result.enabled !== config.workers_dev ||
+    subdomain.result.previews_enabled !== config.preview_urls
+  ) {
+    throw new Error("platform_worker_code_topology_mismatch");
+  }
+  if (!record(schedules.result) || !Array.isArray(schedules.result.schedules)) {
+    throw new Error("platform_worker_code_topology_shape_unsupported");
+  }
+  platformWorkerCodeExactKeys(schedules.result, ["schedules"]);
+  const crons = schedules.result.schedules.map((value) => {
+    if (!record(value)) throw new Error("platform_worker_code_topology_shape_unsupported");
+    platformWorkerCodeExactKeys(value, ["created_on", "cron", "modified_on"]);
+    return value.cron;
+  }).sort(codePointCompare);
+  const expectedCrons = Array.isArray(config.triggers.crons)
+    ? [...config.triggers.crons].sort(codePointCompare)
+    : [];
+  if (!Array.isArray(domains.result) || !record(domains.resultInfo)) {
+    throw new Error("platform_worker_code_topology_shape_unsupported");
+  }
+  platformWorkerCodeExactKeys(domains.resultInfo, [
+    "count",
+    "page",
+    "per_page",
+    "total_count",
+  ]);
+  const normalizedDomains = domains.result.map((value) => {
+    if (!record(value)) throw new Error("platform_worker_code_topology_shape_unsupported");
+    platformWorkerCodeExactKeys(value, [
+      "cert_id",
+      "enabled",
+      "environment",
+      "hostname",
+      "id",
+      "previews_enabled",
+      "service",
+      "zone_id",
+      "zone_name",
+    ]);
+    return {
+      hostname: value.hostname,
+      service: value.service,
+      environment: value.environment,
+      previews_enabled: value.previews_enabled,
+      enabled: value.enabled,
+    };
+  }).sort((left, right) => codePointCompare(String(left.hostname), String(right.hostname)));
+  const expectedDomains = platformWorkerCodeRecords(config.routes).map((value) => ({
+    hostname: value.pattern,
+    service: workerName,
+    environment: "production",
+    previews_enabled: false,
+    enabled: true,
+  })).sort((left, right) => codePointCompare(String(left.hostname), String(right.hostname)));
+  if (
+    !platformWorkerCodeEqual(crons, expectedCrons) ||
+    domains.resultInfo.count !== normalizedDomains.length ||
+    domains.resultInfo.total_count !== normalizedDomains.length ||
+    !platformWorkerCodeEqual(normalizedDomains, expectedDomains)
+  ) {
+    throw new Error("platform_worker_code_topology_mismatch");
+  }
+  return {
+    routes,
+    settings: settings.result,
+    subdomain: subdomain.result,
+    crons,
+    domains: normalizedDomains,
+  };
+}
+
+async function readSecretNames(
+  config: string,
+  command: PlatformReleaseCommand = requiredCommand,
+): Promise<readonly string[]> {
+  const result = await command([
     WRANGLER,
     "secret",
     "list",
@@ -5312,13 +6296,53 @@ async function platformContainerNativeReader(
   accountId: string,
   command: PlatformReleaseCommand,
 ): Promise<(path: string) => Promise<unknown>> {
+  const read = await platformNativeReader(
+    configPath,
+    accountId,
+    command,
+    validPlatformContainerNativePath,
+    "platform_worker_release_container",
+  );
+  return async (path) => (await read(path)).result;
+}
+
+async function platformWorkerCodeNativeReader(
+  configPath: string,
+  accountId: string,
+  workerName: string,
+  command: PlatformReleaseCommand,
+): Promise<PlatformWorkerCodeNativeRead> {
+  const encoded = encodeURIComponent(workerName);
+  const paths = new Set([
+    "/workers/scripts",
+    `/workers/scripts/${encoded}/script-settings`,
+    `/workers/scripts/${encoded}/subdomain`,
+    `/workers/scripts/${encoded}/schedules`,
+    `/workers/domains?service=${encoded}&environment=production`,
+  ]);
+  return platformNativeReader(
+    configPath,
+    accountId,
+    command,
+    (path) => paths.has(path),
+    "platform_worker_code",
+  );
+}
+
+async function platformNativeReader(
+  configPath: string,
+  accountId: string,
+  command: PlatformReleaseCommand,
+  validPath: (path: string) => boolean,
+  errorPrefix: string,
+): Promise<PlatformWorkerCodeNativeRead> {
   const environmentAccountId = process.env.CLOUDFLARE_ACCOUNT_ID;
   if (
     environmentAccountId !== undefined &&
     (!/^[0-9a-f]{32}$/u.test(environmentAccountId) ||
       environmentAccountId !== accountId)
   ) {
-    throw new Error("platform_worker_release_container_account_invalid");
+    throw new Error(`${errorPrefix}_account_invalid`);
   }
   const authEnvironment = {
     ...childEnvironment(),
@@ -5358,12 +6382,12 @@ async function platformContainerNativeReader(
     // PlatformCommandError deliberately retains bounded stdout/stderr for
     // ordinary diagnostics. Never let the auth-token command's result or
     // failure object escape this in-memory-only boundary.
-    throw new Error("platform_worker_release_container_auth_invalid");
+    throw new Error(`${errorPrefix}_auth_invalid`);
   }
 
-  return async (path: string): Promise<unknown> => {
-    if (!validPlatformContainerNativePath(path)) {
-      throw new Error("platform_worker_release_container_native_path_invalid");
+  return async (path) => {
+    if (!validPath(path)) {
+      throw new Error(`${errorPrefix}_native_path_invalid`);
     }
     const controller = new AbortController();
     const timer = setTimeout(
@@ -5386,14 +6410,14 @@ async function platformContainerNativeReader(
       if (!response.ok) {
         throw new Error("native response rejected");
       }
-      return platformContainerNativeEnvelopeResult(
+      return platformNativeEnvelope(
         await readPlatformContainerNativeJson(response),
       );
     } catch {
       controller.abort();
       // Fetch errors, response bodies, and auth data are intentionally not a
       // cause: a caller-visible provider error must never retain the token.
-      throw new Error("platform_worker_release_container_native_read_failed");
+      throw new Error(`${errorPrefix}_native_read_failed`);
     } finally {
       clearTimeout(timer);
     }
@@ -5475,7 +6499,9 @@ async function readPlatformContainerNativeJson(
   ) as unknown;
 }
 
-function platformContainerNativeEnvelopeResult(value: unknown): unknown {
+function platformNativeEnvelope(
+  value: unknown,
+): Readonly<{ result: unknown; resultInfo: unknown }> {
   if (
     !record(value) ||
     value.success !== true ||
@@ -5486,7 +6512,10 @@ function platformContainerNativeEnvelopeResult(value: unknown): unknown {
   ) {
     throw new Error("native response envelope invalid");
   }
-  return value.result;
+  return {
+    result: value.result,
+    resultInfo: Object.hasOwn(value, "result_info") ? value.result_info : null,
+  };
 }
 
 function platformContainerFallbackDetail(

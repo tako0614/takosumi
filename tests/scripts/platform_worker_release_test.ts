@@ -1,23 +1,28 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   assertConfigTargetsSource,
   assertPlatformRunnerImageProof,
+  assertPlatformWorkerCodeVersionMatchesConfig,
   assertPlatformWorkerStatusVersion,
   assertPublishedVersion,
   bindingNames,
   hasHostedDiscovery,
+  injectPlatformExecutionEvidencePins,
   inspectPlatformWorkerStatus,
   parsePlatformWorkerReleaseArgs,
   parsePlatformContainerDetail,
   parseServingVersion,
   platformCommandFailureDiagnostic,
   platformDashboardBuildEnvironment,
+  platformExecutionEvidenceReleasePins,
   platformTargetForEnvironment,
+  readPlatformWorkerCodeTopology,
   readPlatformContainer,
   remoteBranchContainsCommit,
+  runPlatformWorkerCodeRelease,
   selectRecoveredVersion,
   secretNames,
   type PlatformReleaseCommand,
@@ -173,6 +178,580 @@ function containerReadbackConfig(image: string): { path: string; dispose: () => 
   );
   return { path, dispose: () => rmSync(directory, { recursive: true, force: true }) };
 }
+
+const CODE_PREDECESSOR_ID = "33333333-3333-4333-8333-333333333333";
+const CODE_DEPLOYED_ID = "44444444-4444-4444-8444-444444444444";
+const CODE_BUNDLE = new TextEncoder().encode("export default { fetch() {} };\n");
+const CODE_SECRETS = ["TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY"] as const;
+
+function codeConfigSource(): string {
+  return statusConfigSource()
+    .replace(
+      'name = "takosumi-staging"\ncompatibility_flags = ["nodejs_compat", "enable_request_signal"]',
+      [
+        'name = "takosumi-staging"',
+        'compatibility_date = "2026-04-01"',
+        'compatibility_flags = ["nodejs_compat", "enable_request_signal"]',
+        "workers_dev = true",
+        "preview_urls = false",
+        'routes = [{ pattern = "app-staging.takosumi.com", custom_domain = true }]',
+        "[triggers]",
+        'crons = ["* * * * *", "*/5 * * * *"]',
+        "[observability]",
+        "enabled = true",
+        "head_sampling_rate = 1",
+        "[observability.logs]",
+        "enabled = true",
+        "head_sampling_rate = 1",
+        "persist = true",
+        "invocation_logs = true",
+        "[observability.traces]",
+        "enabled = false",
+        "persist = true",
+        "head_sampling_rate = 1",
+      ].join("\n"),
+    )
+    .replace(
+      '[assets]\nbinding = "ASSETS"',
+      [
+        "[assets]",
+        'binding = "ASSETS"',
+        'not_found_handling = "single-page-application"',
+        "run_worker_first = true",
+      ].join("\n"),
+    )
+    .concat(
+      [
+        "[[d1_databases]]",
+        'binding = "TAKOSUMI_ACCOUNTS_DB"',
+        'database_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"',
+        'database_name = "human-label-only"',
+        "[[d1_databases]]",
+        'binding = "TAKOSUMI_CONTROL_DB"',
+        'database_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"',
+        'database_name = "another-human-label"',
+        "[[r2_buckets]]",
+        'binding = "R2_STATE"',
+        'bucket_name = "state-fixture"',
+        "[durable_objects]",
+        "[[durable_objects.bindings]]",
+        'name = "COORDINATION"',
+        'class_name = "CoordinationObject"',
+        "[[durable_objects.bindings]]",
+        'name = "RUN_OWNER"',
+        'class_name = "OpenTofuRunOwnerObject"',
+        "[[durable_objects.bindings]]",
+        'name = "RUNNER"',
+        'class_name = "OpenTofuRunnerObject"',
+        "[[migrations]]",
+        'tag = "v9"',
+        'new_sqlite_classes = ["CoordinationObject", "OpenTofuRunOwnerObject", "OpenTofuRunnerObject"]',
+        "",
+      ].join("\n"),
+    );
+}
+
+function codeVersionSource(
+  configSource: string,
+  versionId: string,
+  annotations: Readonly<{ tag: string; message: string }>,
+): string {
+  const config = Bun.TOML.parse(configSource) as Record<string, any>;
+  const bindings: Record<string, unknown>[] = [
+    { name: config.assets.binding, type: "assets" },
+    ...config.d1_databases.map((value: any) => ({
+      name: value.binding,
+      database_id: value.database_id,
+      id: value.database_id,
+      type: "d1",
+    })),
+    ...config.durable_objects.bindings.map((value: any, index: number) => ({
+      name: value.name,
+      class_name: value.class_name,
+      namespace_id: String(index + 1).repeat(32),
+      type: "durable_object_namespace",
+    })),
+    { name: "HOSTED", environment: "production", service: "takosumi-hosted-staging", type: "service" },
+    ...config.r2_buckets.map((value: any) => ({
+      name: value.binding,
+      bucket_name: value.bucket_name,
+      type: "r2_bucket",
+    })),
+    ...Object.entries(config.vars).map(([name, text]) => ({
+      name,
+      text,
+      type: "plain_text",
+    })),
+    { name: "TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY", type: "secret_text" },
+    { name: config.version_metadata.binding, type: "version_metadata" },
+  ];
+  for (const name of [
+    "TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST",
+    "TAKOSUMI_RUNNER_ARTIFACT_DIGEST",
+    "TAKOSUMI_EXECUTOR_ARTIFACT_DIGEST",
+  ]) {
+    if (!Object.hasOwn(config.vars, name)) {
+      bindings.push({ name, text: `sha256:${"9".repeat(64)}`, type: "plain_text" });
+    }
+  }
+  return JSON.stringify({
+    id: versionId,
+    number: 9,
+    metadata: {},
+    annotations: {
+      "workers/message": annotations.message,
+      "workers/tag": annotations.tag,
+      "workers/triggered_by": "upload",
+    },
+    resources: {
+      script: {
+        etag: "e".repeat(64),
+        handlers: ["fetch", "scheduled"],
+        named_handlers: [
+          { name: "CoordinationObject", handlers: ["class"] },
+          { name: "OpenTofuRunOwnerObject", handlers: ["class"] },
+          { name: "OpenTofuRunnerObject", handlers: ["class"] },
+        ],
+        last_deployed_from: "wrangler",
+      },
+      script_runtime: {
+        migration_tag: "v9",
+        assets: {
+          not_found_handling: "single-page-application",
+          serve_directly: false,
+          raw_run_worker_first: true,
+        },
+        compatibility_date: "2026-04-01",
+        compatibility_flags: ["nodejs_compat", "enable_request_signal"],
+        usage_model: "standard",
+        containers: [{ class_name: "OpenTofuRunnerObject" }],
+      },
+      bindings,
+    },
+  });
+}
+
+const CODE_LEGACY_ROUTE = {
+  id: "42357ba815864e1d9af2da8ac4a157c0",
+  pattern: "*.edge-staging.takos.jp/*",
+  script: "takosumi-staging",
+  request_limit_fail_open: false,
+} as const;
+
+type CodeRouteDrift = "id" | "add" | "remove" | "pattern" | "fail-open";
+
+function codeRoutes(drift?: CodeRouteDrift): readonly Record<string, unknown>[] {
+  const current: {
+    id: string;
+    pattern: string;
+    script: string;
+    request_limit_fail_open: boolean;
+  } = { ...CODE_LEGACY_ROUTE };
+  if (drift === "id") current.id = "5".repeat(32);
+  if (drift === "pattern") current.pattern = "*.changed-staging.takos.jp/*";
+  if (drift === "fail-open") current.request_limit_fail_open = true;
+  if (drift === "remove") return [];
+  if (drift === "add") {
+    return [
+      current,
+      {
+        ...CODE_LEGACY_ROUTE,
+        id: "6".repeat(32),
+        pattern: "added.edge-staging.takos.jp/*",
+      },
+    ];
+  }
+  return [current];
+}
+
+function codeNativeRead(
+  configSource: string,
+  options: {
+    readonly routes?: readonly Readonly<Record<string, unknown>>[];
+    readonly unknownSetting?: boolean;
+    readonly cronDrift?: boolean;
+    readonly domainDrift?: boolean;
+  } = {},
+) {
+  const config = Bun.TOML.parse(configSource) as Record<string, any>;
+  const observability = {
+    enabled: true,
+    head_sampling_rate: 1,
+    redact_query_string: false,
+    logs: config.observability.logs,
+    traces: config.observability.traces,
+  };
+  const settings: Record<string, unknown> = {
+    logpush: false,
+    tags: null,
+    tail_consumers: null,
+    observability,
+  };
+  if (options.unknownSetting) settings.future_setting = true;
+  const values = new Map<string, { result: unknown; resultInfo: unknown }>([
+    ["/workers/scripts", {
+      result: [{
+        created_on: "2026-01-01T00:00:00Z",
+        modified_on: "2026-01-02T00:00:00Z",
+        id: "takosumi-staging",
+        tag: null,
+        deployment_id: "deployment-fixture",
+        has_assets: true,
+        has_modules: true,
+        etag: "etag-fixture",
+        handlers: ["fetch", "scheduled"],
+        named_handlers: [],
+        last_deployed_from: "wrangler",
+        routes: options.routes ?? codeRoutes(),
+        compatibility_date: "2026-04-01",
+        compatibility_flags: ["nodejs_compat", "enable_request_signal"],
+        migration_tag: "v9",
+        usage_model: "standard",
+        logpush: false,
+        tags: [],
+        tail_consumers: null,
+        observability,
+      }],
+      resultInfo: null,
+    }],
+    ["/workers/scripts/takosumi-staging/script-settings", { result: settings, resultInfo: null }],
+    ["/workers/scripts/takosumi-staging/subdomain", {
+      result: { enabled: true, previews_enabled: false },
+      resultInfo: null,
+    }],
+    ["/workers/scripts/takosumi-staging/schedules", {
+      result: { schedules: [
+        ...config.triggers.crons,
+        ...(options.cronDrift ? ["0 0 * * *"] : []),
+      ].map((cron: string) => ({
+        cron,
+        created_on: "2026-01-01T00:00:00Z",
+        modified_on: "2026-01-02T00:00:00Z",
+      })) },
+      resultInfo: null,
+    }],
+    ["/workers/domains?service=takosumi-staging&environment=production", {
+      result: [{
+        id: "domain",
+        zone_id: "zone",
+        zone_name: "takosumi.com",
+        hostname: options.domainDrift
+          ? "changed-staging.takosumi.com"
+          : "app-staging.takosumi.com",
+        service: "takosumi-staging",
+        environment: "production",
+        cert_id: "cert",
+        previews_enabled: false,
+        enabled: true,
+      }],
+      resultInfo: { page: 1, per_page: 1, count: 1, total_count: 1 },
+    }],
+  ]);
+  return async (path: string) => {
+    const value = values.get(path);
+    if (!value) throw new Error(`unexpected native path: ${path}`);
+    return structuredClone(value);
+  };
+}
+
+async function exerciseCodeLane(options: {
+  readonly topologyDriftAt?: number;
+  readonly routeDrift?: CodeRouteDrift;
+  readonly uploadFails?: boolean;
+} = {}) {
+  const directory = mkdtempSync(join(tmpdir(), "takosumi-code-lane-test-"));
+  const configPath = join(directory, "wrangler.toml");
+  const source = codeConfigSource();
+  writeFileSync(configPath, source, { mode: 0o600 });
+  const pins = platformExecutionEvidenceReleasePins(CODE_BUNDLE, STATUS_CONTAINER_IMAGE);
+  const finalSource = injectPlatformExecutionEvidencePins(source, pins);
+  const tag = `tks-stg-code-${"1".repeat(32)}`;
+  const message = `takosumi-platform-staging-code ${pins.controllerArtifactDigest}`;
+  const predecessor = codeVersionSource(source, CODE_PREDECESSOR_ID, {
+    tag: "predecessor",
+    message: "predecessor",
+  });
+  const deployed = codeVersionSource(finalSource, CODE_DEPLOYED_ID, {
+    tag,
+    message,
+  });
+  const container = statusContainerSource();
+  let activated = false;
+  let uploadCount = 0;
+  let activationCount = 0;
+  let buildCount = 0;
+  let gateCount = 0;
+  let topologySnapshot = 0;
+  let uploadArgs: readonly string[] = [];
+  let activationArgs: readonly string[] = [];
+  let uploadConfigSource = "";
+  let activationConfigSource = "";
+  const command: PlatformReleaseCommand = async (argv) => {
+    if (argv[1] === "versions" && argv[2] === "upload" && argv.includes("--dry-run")) {
+      const output = argv[argv.indexOf("--outdir") + 1]!;
+      writeFileSync(join(output, "index.js"), CODE_BUNDLE);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    }
+    if (argv[1] === "versions" && argv[2] === "upload") {
+      uploadCount += 1;
+      uploadArgs = argv;
+      uploadConfigSource = readFileSync(argv[argv.indexOf("--config") + 1]!, "utf8");
+      if (options.uploadFails) throw new Error("lost upload acknowledgement");
+      return {
+        exitCode: 0,
+        stdout: `Worker Version ID: ${CODE_DEPLOYED_ID}\n`,
+        stderr: "",
+      };
+    }
+    if (argv[1] === "versions" && argv[2] === "deploy") {
+      activationCount += 1;
+      activationArgs = argv;
+      activationConfigSource = readFileSync(
+        argv[argv.indexOf("--config") + 1]!,
+        "utf8",
+      );
+      activated = true;
+      return { exitCode: 0, stdout: "", stderr: "" };
+    }
+    if (argv[1] === "deployments" && argv[2] === "status") {
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          versions: [{
+            version_id: activated ? CODE_DEPLOYED_ID : CODE_PREDECESSOR_ID,
+            percentage: 100,
+          }],
+        }),
+        stderr: "",
+      };
+    }
+    if (argv[1] === "versions" && argv[2] === "view") {
+      return {
+        exitCode: 0,
+        stdout: argv[3] === CODE_DEPLOYED_ID ? deployed : predecessor,
+        stderr: "",
+      };
+    }
+    if (argv[1] === "secret" && argv[2] === "list") {
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify(CODE_SECRETS.map((name) => ({ name }))),
+        stderr: "",
+      };
+    }
+    if (argv[1] === "containers" && argv[2] === "list") {
+      return { exitCode: 0, stdout: JSON.stringify([container.summary]), stderr: "" };
+    }
+    if (argv[1] === "containers" && argv[2] === "info") {
+      return { exitCode: 0, stdout: JSON.stringify(container.detail), stderr: "" };
+    }
+    throw new Error(`unexpected command: ${argv.slice(1).join(" ")}`);
+  };
+  const cleanNativeRead = codeNativeRead(source);
+  let error: unknown;
+  try {
+    await runPlatformWorkerCodeRelease(
+      ["apply", "--config", configPath],
+      "staging",
+      {
+        command,
+        repositoryRoot: root,
+        assertSelectedSource: () => undefined,
+        buildDashboard: async () => {
+          buildCount += 1;
+          return { digest: `sha256:${"d".repeat(64)}`, entries: [] };
+        },
+        runScopedGate: async () => {
+          gateCount += 1;
+        },
+        nativeRead: async (path) => {
+          if (path === "/workers/scripts") topologySnapshot += 1;
+          if (options.topologyDriftAt === topologySnapshot) {
+            return codeNativeRead(source, {
+              routes: codeRoutes(options.routeDrift ?? "add"),
+            })(path);
+          }
+          return cleanNativeRead(path);
+        },
+        publicReadback: async () => undefined,
+        nonce: () => "1".repeat(32),
+      },
+    );
+  } catch (caught) {
+    error = caught;
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+  return {
+    error,
+    uploadCount,
+    activationCount,
+    buildCount,
+    gateCount,
+    topologySnapshot,
+    uploadArgs,
+    activationArgs,
+    uploadConfigSource,
+    activationConfigSource,
+  };
+}
+
+test("routine code Version matcher accepts the observed shape and only three prior digest vars", () => {
+  const source = codeConfigSource();
+  const predecessor = codeVersionSource(source, CODE_PREDECESSOR_ID, {
+    tag: "predecessor",
+    message: "predecessor",
+  });
+  expect(() =>
+    assertPlatformWorkerCodeVersionMatchesConfig(
+      predecessor,
+      source,
+      "takosumi-hosted-staging",
+      CODE_SECRETS,
+      { allowPriorPins: true },
+    )
+  ).not.toThrow();
+
+  const unknown = JSON.parse(predecessor);
+  unknown.resources.bindings[0].future_identity = "no";
+  expect(() =>
+    assertPlatformWorkerCodeVersionMatchesConfig(
+      JSON.stringify(unknown),
+      source,
+      "takosumi-hosted-staging",
+      CODE_SECRETS,
+      { allowPriorPins: true },
+    )
+  ).toThrow("platform_worker_code_native_field_unsupported");
+
+  const pins = platformExecutionEvidenceReleasePins(CODE_BUNDLE, STATUS_CONTAINER_IMAGE);
+  const finalSource = injectPlatformExecutionEvidencePins(source, pins);
+  const finalVersion = codeVersionSource(finalSource, CODE_DEPLOYED_ID, {
+    tag: "final",
+    message: "final",
+  });
+  expect(() =>
+    assertPlatformWorkerCodeVersionMatchesConfig(
+      finalVersion,
+      finalSource,
+      "takosumi-hosted-staging",
+      CODE_SECRETS,
+    )
+  ).not.toThrow();
+  const changedPin = JSON.parse(finalVersion);
+  changedPin.resources.bindings.find(
+    (binding: any) => binding.name === "TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST",
+  ).text = `sha256:${"0".repeat(64)}`;
+  expect(() =>
+    assertPlatformWorkerCodeVersionMatchesConfig(
+      JSON.stringify(changedPin),
+      finalSource,
+      "takosumi-hosted-staging",
+      CODE_SECRETS,
+    )
+  ).toThrow("platform_worker_code_binding_mismatch");
+});
+
+test("routine code preserves the known route and rejects malformed provider state", async () => {
+  const source = codeConfigSource();
+  await expect(
+    readPlatformWorkerCodeTopology(source, "takosumi-staging", codeNativeRead(source)),
+  ).resolves.toMatchObject({
+    routes: [CODE_LEGACY_ROUTE],
+    crons: ["* * * * *", "*/5 * * * *"],
+  });
+  for (const route of [
+    { ...CODE_LEGACY_ROUTE, id: "not-an-id" },
+    { ...CODE_LEGACY_ROUTE, pattern: "bad\u0001pattern" },
+    { ...CODE_LEGACY_ROUTE, request_limit_fail_open: "false" },
+  ]) {
+    await expect(
+      readPlatformWorkerCodeTopology(
+        source,
+        "takosumi-staging",
+        codeNativeRead(source, { routes: [route] }),
+      ),
+    ).rejects.toThrow("platform_worker_code_topology_shape_unsupported");
+  }
+  await expect(
+    readPlatformWorkerCodeTopology(
+      source,
+      "takosumi-staging",
+      codeNativeRead(source, {
+        routes: [{ ...CODE_LEGACY_ROUTE, script: "foreign-worker" }],
+      }),
+    ),
+  ).rejects.toThrow("platform_worker_code_topology_mismatch");
+  await expect(
+    readPlatformWorkerCodeTopology(
+      source,
+      "takosumi-staging",
+      codeNativeRead(source, { unknownSetting: true }),
+    ),
+  ).rejects.toThrow("platform_worker_code_native_field_unsupported");
+  for (const drift of [{ cronDrift: true }, { domainDrift: true }]) {
+    await expect(
+      readPlatformWorkerCodeTopology(
+        source,
+        "takosumi-staging",
+        codeNativeRead(source, drift),
+      ),
+    ).rejects.toThrow("platform_worker_code_topology_mismatch");
+  }
+});
+
+test("routine code publishes once and refuses production", async () => {
+  const result = await exerciseCodeLane();
+  expect(result).toMatchObject({
+    error: undefined,
+    uploadCount: 1,
+    activationCount: 1,
+    buildCount: 1,
+    gateCount: 1,
+    topologySnapshot: 3,
+  });
+  expect(result.uploadArgs).toEqual(
+    expect.arrayContaining(["versions", "upload", "--no-bundle", "--strict"]),
+  );
+  expect(result.activationArgs).toEqual(
+    expect.arrayContaining(["versions", "deploy", `${CODE_DEPLOYED_ID}@100%`, "--yes"]),
+  );
+  expect(result.uploadConfigSource).not.toContain("[[migrations]]");
+  expect(Object.keys(Bun.TOML.parse(result.activationConfigSource)).sort()).toEqual([
+    "account_id",
+    "name",
+  ]);
+  await expect(
+    runPlatformWorkerCodeRelease(["apply", "--config", "/private/config"], "production"),
+  ).rejects.toThrow("platform_worker_code_action_invalid");
+});
+
+test("routine code refuses every route drift before upload and after activation", async () => {
+  for (const routeDrift of [
+    "id",
+    "add",
+    "remove",
+    "pattern",
+    "fail-open",
+  ] as const) {
+    const before = await exerciseCodeLane({ topologyDriftAt: 2, routeDrift });
+    expect(before.error).toBeInstanceOf(Error);
+    expect(before).toMatchObject({ uploadCount: 0, activationCount: 0 });
+
+    const after = await exerciseCodeLane({ topologyDriftAt: 3, routeDrift });
+    expect((after.error as Error).message).toBe(
+      "platform_worker_code_release_incomplete",
+    );
+    expect(after).toMatchObject({ uploadCount: 1, activationCount: 1 });
+  }
+});
+
+test("routine code never retries a lost acknowledgement", async () => {
+  const lost = await exerciseCodeLane({ uploadFails: true });
+  expect(lost.error).toBeInstanceOf(Error);
+  expect((lost.error as Error).message).toBe("platform_worker_code_release_incomplete");
+  expect(lost).toMatchObject({ uploadCount: 1, activationCount: 0 });
+});
 
 test("platform release owns isolated staging and production targets", () => {
   expect(platformTargetForEnvironment("staging")).toEqual({
