@@ -2114,7 +2114,7 @@ export function parsePlatformWorkerReleaseArgs(
     action === "status"
       ? ["--config"]
       : action === "plan"
-        ? ["--config", "--into"]
+        ? ["--config", "--runner-build-evidence", "--plan-out"]
         : action === "materialize-source"
           ? ["--config", "--into"]
           : ["--plan", "--confirm", "--review", "--evidence"];
