@@ -5565,7 +5565,14 @@ export function assertPlatformWorkerCodeVersionMatchesConfig(
   ) {
     throw new Error("platform_worker_code_settings_mismatch");
   }
+  // New Versions expose the provider's canonical root even though Wrangler
+  // does not configure an asset base path. Keep accepting legacy omissions.
+  const hasAssetBasePath = Object.hasOwn(runtime.assets, "base_path");
+  if (hasAssetBasePath && runtime.assets.base_path !== "/") {
+    throw new Error("platform_worker_code_settings_mismatch");
+  }
   platformWorkerCodeExactKeys(runtime.assets, [
+    ...(hasAssetBasePath ? ["base_path"] : []),
     "not_found_handling",
     "raw_run_worker_first",
     "serve_directly",

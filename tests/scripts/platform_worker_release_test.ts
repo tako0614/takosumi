@@ -653,6 +653,31 @@ test("routine code Version matcher accepts the observed shape and only three pri
   ).toThrow("platform_worker_code_binding_mismatch");
 });
 
+test("routine code Version matcher accepts only canonical root asset base path", () => {
+  const source = codeConfigSource();
+  const version = JSON.parse(codeVersionSource(source, CODE_PREDECESSOR_ID, {
+    tag: "predecessor",
+    message: "predecessor",
+  }));
+  const matches = () => assertPlatformWorkerCodeVersionMatchesConfig(
+    JSON.stringify(version),
+    source,
+    "takosumi-hosted-staging",
+    CODE_SECRETS,
+    { allowPriorPins: true },
+  );
+  expect(matches).not.toThrow();
+  version.resources.script_runtime.assets.base_path = "/";
+  expect(matches).not.toThrow();
+  for (const invalid of ["", "/nested", null, false, [], {}]) {
+    version.resources.script_runtime.assets.base_path = invalid;
+    expect(matches).toThrow("platform_worker_code_settings_mismatch");
+  }
+  version.resources.script_runtime.assets.base_path = "/";
+  version.resources.script_runtime.assets.future_identity = "unknown";
+  expect(matches).toThrow("platform_worker_code_native_field_unsupported");
+});
+
 test("native reads accept proven null diagnostics without accepting failures", () => {
   const result = [{ hostname: "app-staging.takosumi.com" }];
   const resultInfo = { count: 1, total_count: 1 };
