@@ -457,7 +457,12 @@ Before deploying code that requires a newer control-ledger D1 shape, run the
 [Control D1 schema predeploy](control-d1-schema-predeploy.md) gate against the
 same exact source commit. Back up, apply, and read-only verify staging before
 production. A platform Worker deployment must not depend on its first request
-to create or repair the required schema.
+to create or repair the required schema. The temporary production owner surface
+`takosumi-control-d1-schema-production-v66-v69` is a fixed, target-v69,
+continuously-fenced direct cutover for the exact v66 ledger lineage; its local
+synthetic proof is not live or full-HTTP evidence. It does not change the
+hosted v68 pre-bridge retirement rule below, and it does not authorize serving
+v68/v69 from the retired bridge.
 
 Accounts D1 v4 uses a separate one-time owner lane. First deploy the feature
 bridge, which accepts only exact legacy v3 or exact checksummed v4 and performs
