@@ -55,24 +55,21 @@ import {
   createStateVersionRollbackPlan,
   createCapsuleBackup,
   createCapsuleConfigurationPlan,
+  createReviewableGitRevisionPlan,
   deleteCapsule,
   extractRunId,
   getStateVersion,
   getInstallConfig,
   getCapsuleProviderBindingSet,
   getCapsuleConfigurationContext,
-  isImmutableSourceRevision,
   getWorkspaceGraph,
-  updateCapsuleSourceRevision,
   listActivity,
-  listCapsules,
   listStateVersions,
   listProviderConnections,
   listSources,
   getCapsuleUsageSummary,
   getCurrentResourceInventory,
   type CapsuleCurrentResourceInventory,
-  planCapsuleUpdate,
   setCapsuleAutoUpdate,
 } from "../../lib/control-api.ts";
 import { formatUsdMicros } from "../../lib/billing-format.ts";
@@ -126,6 +123,10 @@ import { autoApplyRunPath } from "../../lib/auto-apply-consent.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
+import {
+  getOrCreateRevisionPlanAttempt,
+  type RevisionPlanAttempt,
+} from "../../lib/revision-plan-attempt.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import {
@@ -214,20 +215,15 @@ function Inner() {
     if (installConfig.error) return undefined;
     return capsuleDisplayName(installConfig(), locale());
   });
-  // Source metadata is needed on the Updates tab for the explicit immutable
-  // revision step as well as in Settings' support disclosure. Keep the
-  // settings resource scoped to that tab; the update flow owns a separate
-  // readback resource so switching tabs cannot reseed either view's data.
+  // Source metadata is displayed on the Updates tab and in Settings' support
+  // disclosure. Keep each resource scoped to its tab; revision mutations use
+  // the Capsule-local coordinator and never patch this shared Source.
   const [sources] = createResource(settingsWorkspaceId, listSources);
   const deploySourceWorkspaceId = () =>
     tab() === "deploys" ? (workspaceId() ?? null) : null;
-  const [deploySources, { refetch: refetchDeploySources }] = createResource(
+  const [deploySources] = createResource(
     deploySourceWorkspaceId,
     listSources,
-  );
-  const [sourceCapsules, { refetch: refetchSourceCapsules }] = createResource(
-    deploySourceWorkspaceId,
-    (id) => listCapsules(id, { includeDestroyed: false }),
   );
   const [stateVersions] = createResource(deploysCapsuleId, listStateVersions);
   const [resourceInventory] = createResource(
@@ -278,8 +274,6 @@ function Inner() {
     const resource = tab() === "deploys" ? deploySources : sources;
     return resource.error ? [] : (resource() ?? []);
   };
-  const sourceCapsuleList = () =>
-    sourceCapsules.error ? [] : (sourceCapsules.latest ?? []);
   const graphData = () => (graph.error ? undefined : graph());
   const stateVersionList = () =>
     stateVersions.error ? [] : (stateVersions() ?? []);
@@ -302,60 +296,12 @@ function Inner() {
   const source = createMemo(() =>
     sourceList().find((item) => item.id === capsuleData()?.sourceId),
   );
-  const [sourceRevisionReadback, setSourceRevisionReadback] =
-    createSignal<string | undefined>();
-  const [sourceRevisionPendingReadback, setSourceRevisionPendingReadback] =
-    createSignal(false);
-  createEffect(() => {
-    const current = source()?.defaultRef;
-    if (
-      sourceRevisionReadback() === undefined &&
-      current !== undefined &&
-      isImmutableSourceRevision(current)
-    ) {
-      // An exact value from the owning Source projection is already a safe
-      // initial readback; mutable branch/tag values remain unverified.
-      setSourceRevisionReadback(current);
-    }
-  });
   const currentSourceRevision = () =>
-    sourceRevisionReadback() ?? source()?.defaultRef;
+    capsuleData()?.adoptedSourceRevision?.ref ?? source()?.defaultRef;
   const sourceRevisionReady = () => {
     const revision = currentSourceRevision();
-    return (
-      !sourceRevisionPendingReadback() &&
-      revision !== undefined &&
-      isImmutableSourceRevision(revision)
-    );
+    return typeof revision === "string" && revision.trim().length > 0;
   };
-  const sourceIdentity = () => {
-    const inst = capsuleData();
-    const src = source();
-    if (!inst || !src) return undefined;
-    return {
-      workspaceId: inst.workspaceId,
-      sourceId: src.id,
-      url: src.url,
-      defaultPath: src.defaultPath,
-    } as const;
-  };
-  const affectedSourceCapsules = createMemo(() => {
-    const sourceId = source()?.id;
-    if (!sourceId) return [] as readonly Capsule[];
-    return sourceCapsuleList()
-      .filter(
-        (candidate) =>
-          candidate.workspaceId === workspaceId() &&
-          candidate.sourceId === sourceId && candidate.status !== "destroyed",
-      )
-      .sort((left, right) =>
-        (left.name || left.id).localeCompare(right.name || right.id),
-      );
-  });
-  const sourceMembershipReady = () =>
-    !sourceCapsules.loading &&
-    !sourceCapsules.error &&
-    sourceCapsules.latest !== undefined;
   const { confirm } = useConfirmDialog();
   const producers = createMemo(() =>
     dependencyRows(capsuleData(), graphData(), "producer"),
@@ -422,75 +368,50 @@ function Inner() {
   );
 
   // --- actions ---------------------------------------------------------------
-  const changeSourceRevision = createAction(async (revision: string) => {
-    const identity = sourceIdentity();
-    if (!identity) {
+  // Keep one request/key pair for every ref the user tries in this Capsule.
+  // The POST may have committed before a later reconcile error reaches the
+  // browser, so even definite HTTP errors must not discard a replay key.
+  const revisionAttempts = new Map<string, RevisionPlanAttempt>();
+  const [revisionActionBusy, setRevisionActionBusy] = createSignal(false);
+
+  const createRevisionRun = async (requestedRevision?: string) => {
+    const revision = (requestedRevision ?? currentSourceRevision())?.trim();
+    if (!revision) {
       throw new ControlApiError(
-        409,
-        "source_revision_mismatch",
-        "The existing Source could not be verified for this service.",
-      );
-    }
-    if (!sourceMembershipReady()) {
-      throw new ControlApiError(
-        409,
-        "source_membership_changed",
-        "Affected Workloads could not be verified; review the Source again.",
-      );
-    }
-    const affectedCapsules = affectedSourceCapsules();
-    const affectedCapsuleIds = affectedCapsules.map((candidate) => candidate.id);
-    if (!affectedCapsuleIds.includes(capsuleId())) {
-      throw new ControlApiError(
-        409,
-        "source_membership_changed",
-        "This Workload is no longer attached to the Source.",
-      );
-    }
-    if (affectedCapsuleIds.length > 1) {
-      const affectedWorkloadSummary = affectedCapsules
-        .map((candidate) => `${candidate.name} (${candidate.id})`)
-        .join("\n");
-      const confirmed = await confirm({
-        title: t("app.deploys.sourceImpactConfirmTitle"),
-        message: t("app.deploys.sourceImpactConfirmMessage", {
-          count: affectedCapsuleIds.length,
-          workloads: affectedWorkloadSummary,
-        }),
-        confirmText: t("app.deploys.sourceImpactConfirmCta"),
-        cancelText: t("common.cancel"),
-      });
-      if (!confirmed) return undefined;
-    }
-    const updated = await updateCapsuleSourceRevision(
-      capsuleId(),
-      identity,
-      revision,
-      { affectedCapsuleIds },
-    );
-    // The update helper has performed the authoritative GET. Keep that exact
-    // value as the only revision eligible for Review changes while the list
-    // projection catches up.
-    setSourceRevisionReadback(updated.defaultRef);
-    setSourceRevisionPendingReadback(false);
-    await Promise.all([refetchDeploySources(), refetchSourceCapsules()]);
-    return updated;
-  });
-  const plan = createAction(async () => {
-    const identity = sourceIdentity();
-    const revision = currentSourceRevision();
-    if (!identity || !revision || !isImmutableSourceRevision(revision)) {
-      throw new ControlApiError(
-        409,
+        400,
         "invalid_source_revision",
-        "Review changes requires an exact Source revision readback.",
+        "Choose a Git ref before reviewing changes.",
       );
     }
-    const envelope = await planCapsuleUpdate(capsuleId(), {
-      sourceRevision: revision,
-      sourceIdentity: identity,
-    });
-    const runId = extractRunId(envelope);
+    if (revisionActionBusy()) {
+      throw new ControlApiError(
+        409,
+        "revision_plan_busy",
+        "Another revision review is already in progress.",
+      );
+    }
+    setRevisionActionBusy(true);
+    const request = { ref: revision } as const;
+    const requestJson = JSON.stringify(request);
+    const attempt = getOrCreateRevisionPlanAttempt(
+      revisionAttempts,
+      capsuleId(),
+      requestJson,
+    );
+    try {
+      const response = await createReviewableGitRevisionPlan(
+        capsuleId(),
+        request,
+        { idempotencyKey: attempt.idempotencyKey },
+      );
+      return response.revisionPlan.planRunId;
+    } finally {
+      setRevisionActionBusy(false);
+    }
+  };
+
+  const plan = createAction(async (requestedRevision?: string) => {
+    const runId = await createRevisionRun(requestedRevision);
     if (runId) navigate(`/runs/${runId}`);
   });
   // 1-tap update: same plan run, but the run screen shows the App-Store-style
@@ -498,20 +419,7 @@ function Inner() {
   // this button is the authority for that apply, so mint the tab-local consent
   // token with the URL — the flag alone never authorizes it.
   const update = createAction(async () => {
-    const identity = sourceIdentity();
-    const revision = currentSourceRevision();
-    if (!identity || !revision || !isImmutableSourceRevision(revision)) {
-      throw new ControlApiError(
-        409,
-        "invalid_source_revision",
-        "An exact Source revision is required before updating this service.",
-      );
-    }
-    const envelope = await planCapsuleUpdate(capsuleId(), {
-      sourceRevision: revision,
-      sourceIdentity: identity,
-    });
-    const runId = extractRunId(envelope);
+    const runId = await createRevisionRun();
     if (runId) navigate(autoApplyRunPath(`/runs/${runId}`, runId, "update"));
   });
   const autoUpdateToggle = createAction(async () => {
@@ -682,7 +590,11 @@ function Inner() {
                         variant="primary"
                         type="button"
                         busy={update.busy()}
-                        disabled={update.busy() || !sourceRevisionReady()}
+                        disabled={
+                          update.busy() ||
+                          revisionActionBusy() ||
+                          !sourceRevisionReady()
+                        }
                         onClick={() => void update.run()}
                         icon={<RefreshCw size={16} />}
                       >
@@ -783,19 +695,6 @@ function Inner() {
                       sourceLoading={deploySources.loading}
                       sourceRevision={currentSourceRevision()}
                       sourceRevisionReady={sourceRevisionReady()}
-                      affectedWorkloads={affectedSourceCapsules()}
-                      affectedWorkloadsLoading={sourceCapsules.loading}
-                      affectedWorkloadsError={Boolean(sourceCapsules.error)}
-                      changeVersionBusy={changeSourceRevision.busy()}
-                      changeVersionError={changeSourceRevision.error()}
-                      onRevisionInputChange={(value) => {
-                        setSourceRevisionPendingReadback(
-                          value.trim() !== currentSourceRevision(),
-                        );
-                      }}
-                      onChangeVersion={async (revision) =>
-                        (await changeSourceRevision.run(revision)) !== undefined
-                      }
                       loading={stateVersions.loading}
                       error={
                         stateVersions.error
@@ -812,8 +711,8 @@ function Inner() {
                       backupError={backup.error()}
                       backupResult={backup.result()}
                       recentActivity={recentActivity()}
-                      reviewBusy={plan.busy()}
-                      onReview={() => void plan.run()}
+                      reviewBusy={plan.busy() || revisionActionBusy()}
+                      onReview={(revision) => void plan.run(revision)}
                       reviewError={plan.error()}
                       settingsHref={`/workloads/${encodeURIComponent(capsuleId())}/settings`}
                       resourceInventory={
@@ -854,6 +753,7 @@ function Inner() {
                     </Card>
                     <SettingsTab
                       source={source()}
+                      adoptedSourceRevision={capsuleData()?.adoptedSourceRevision}
                       installConfig={settingsInstallConfig()}
                       installConfigLoading={installConfig.loading}
                       sourceLoading={sources.loading}
@@ -1151,13 +1051,6 @@ function DeploysTab(props: {
   readonly sourceLoading: boolean;
   readonly sourceRevision?: string;
   readonly sourceRevisionReady: boolean;
-  readonly affectedWorkloads: readonly Capsule[];
-  readonly affectedWorkloadsLoading: boolean;
-  readonly affectedWorkloadsError: boolean;
-  readonly changeVersionBusy: boolean;
-  readonly changeVersionError: string | null;
-  readonly onRevisionInputChange: (value: string) => void;
-  readonly onChangeVersion: (revision: string) => Promise<boolean>;
   readonly loading: boolean;
   readonly error?: string;
   readonly history: readonly {
@@ -1176,7 +1069,7 @@ function DeploysTab(props: {
   readonly backupResult: BackupRecord | undefined;
   readonly recentActivity: readonly ActivityEvent[];
   readonly reviewBusy: boolean;
-  readonly onReview: () => void;
+  readonly onReview: (revision?: string) => void;
   readonly reviewError: string | null;
   readonly settingsHref: string;
   readonly resourceInventory?: CapsuleCurrentResourceInventory;
@@ -1188,8 +1081,8 @@ function DeploysTab(props: {
   const revisionCandidate = () => revisionInput().trim();
   const submitRevision = async () => {
     const revision = revisionCandidate();
-    if (!isImmutableSourceRevision(revision)) return;
-    if (await props.onChangeVersion(revision)) setRevisionInput("");
+    if (!revision) return;
+    props.onReview(revision);
   };
   return (
     <>
@@ -1198,110 +1091,53 @@ function DeploysTab(props: {
           title={t("app.deploys.sourceVersionTitle")}
           subtitle={t("app.deploys.sourceVersionSubtitle")}
         />
-        <Show
-          when={props.source}
-          fallback={
-            <p class="muted">
-              {props.sourceLoading
-                ? t("app.source.loading")
-                : t("app.deploys.sourceVersionUnavailable")}
-            </p>
-          }
-        >
-          {(source) => (
-            <>
-              <KVList
-                items={[
-                  {
-                    label: t("app.deploys.sourceVersionCurrent"),
-                    value: <code>{currentRevision() || "—"}</code>,
-                  },
-                ]}
-              />
-              <div class="wa-source-impact" role="status">
-                <strong>{t("app.deploys.sourceImpactTitle")}</strong>
-                <Show when={props.affectedWorkloadsLoading}>
-                  <p class="muted">{t("app.deploys.sourceImpactLoading")}</p>
-                </Show>
-                <Show when={props.affectedWorkloadsError}>
-                  <p class="wa-error">
-                    {t("app.deploys.sourceImpactUnavailable")}
-                  </p>
-                </Show>
-                <Show
-                  when={
-                    !props.affectedWorkloadsLoading &&
-                    !props.affectedWorkloadsError
-                  }
-                >
-                  <p class="muted">
-                    {props.affectedWorkloads.length > 1
-                      ? t("app.deploys.sourceImpactShared", {
-                          count: props.affectedWorkloads.length,
-                        })
-                      : t("app.deploys.sourceImpactSingle")}
-                  </p>
-                  <Show when={props.affectedWorkloads.length > 1}>
-                    <ul class="wa-source-impact-list">
-                      <For each={props.affectedWorkloads}>
-                        {(workload) => (
-                          <li>
-                            <span>{workload.name}</span>{" "}
-                            <code>{workload.id}</code>{" "}
-                            <span class="muted">({workload.status})</span>
-                          </li>
-                        )}
-                      </For>
-                    </ul>
-                  </Show>
-                </Show>
-              </div>
-              <details class="wb-disclosure">
-                <summary>{t("app.deploys.sourceVersionChange")}</summary>
-                <div class="wa-form-actions">
-                  <FormField
-                    label={t("app.deploys.sourceVersionInput")}
-                    hint={t("app.deploys.sourceVersionHint")}
-                  >
-                    <Input
-                      value={revisionInput()}
-                      placeholder={source().defaultRef}
-                      spellcheck={false}
-                      autocomplete="off"
-                      onInput={(event) => {
-                        const value = event.currentTarget.value;
-                        setRevisionInput(value);
-                        props.onRevisionInputChange(value);
-                      }}
-                    />
-                  </FormField>
-                  <Button
-                    variant="secondary"
-                    type="button"
-                    disabled={
-                      props.changeVersionBusy ||
-                      props.affectedWorkloadsLoading ||
-                      props.affectedWorkloadsError ||
-                      props.affectedWorkloads.length === 0 ||
-                      !isImmutableSourceRevision(revisionCandidate())
-                    }
-                    busy={props.changeVersionBusy}
-                    onClick={() => void submitRevision()}
-                  >
-                    {t("app.deploys.sourceVersionApply")}
-                  </Button>
-                </div>
-                <Show when={props.changeVersionError}>
-                  {(message) => (
-                    <p class="wa-error" role="alert">
-                      {message()}
-                    </p>
-                  )}
-                </Show>
-              </details>
-            </>
-          )}
+        <KVList
+          items={[
+            {
+              label: t("app.deploys.sourceVersionCurrent"),
+              value: <code>{currentRevision() || "—"}</code>,
+            },
+          ]}
+        />
+        <Show when={!props.source && props.sourceLoading}>
+          <p class="muted">{t("app.source.loading")}</p>
         </Show>
+        <Show when={!props.source && !props.sourceLoading && !currentRevision()}>
+          <p class="muted">{t("app.deploys.sourceVersionUnavailable")}</p>
+        </Show>
+        <details class="wb-disclosure">
+          <summary>{t("app.deploys.sourceVersionChange")}</summary>
+          <div class="wa-form-actions">
+            <FormField
+              label={t("app.deploys.sourceVersionInput")}
+              hint={t("app.deploys.sourceVersionHint")}
+            >
+              <Input
+                value={revisionInput()}
+                placeholder={props.source?.defaultRef ?? currentRevision()}
+                spellcheck={false}
+                autocomplete="off"
+                onInput={(event) => setRevisionInput(event.currentTarget.value)}
+              />
+            </FormField>
+            <Button
+              variant="secondary"
+              type="button"
+              disabled={props.reviewBusy || !revisionCandidate()}
+              busy={props.reviewBusy}
+              onClick={() => void submitRevision()}
+            >
+              {t("app.deploys.sourceVersionApply")}
+            </Button>
+          </div>
+          <Show when={props.reviewError}>
+            {(message) => (
+              <p class="wa-error" role="alert">
+                {message()}
+              </p>
+            )}
+          </Show>
+        </details>
       </Card>
 
       <Card>
@@ -1837,6 +1673,7 @@ function SettingsTab(props: {
         readonly status: string;
       }
     | undefined;
+  readonly adoptedSourceRevision?: Capsule["adoptedSourceRevision"];
   readonly installConfig: InstallConfig | undefined;
   readonly installConfigLoading: boolean;
   readonly sourceLoading: boolean;
@@ -2444,9 +2281,13 @@ function SettingsTab(props: {
                       label: t("app.source.refPath"),
                       value: (
                         <>
-                          <code>{src().defaultRef}</code>
+                          <code>
+                            {props.adoptedSourceRevision?.ref ?? src().defaultRef}
+                          </code>
                           <span class="muted"> / </span>
-                          <code>{src().defaultPath}</code>
+                          <code>
+                            {props.adoptedSourceRevision?.path ?? src().defaultPath}
+                          </code>
                         </>
                       ),
                     },
