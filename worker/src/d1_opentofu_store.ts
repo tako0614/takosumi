@@ -9638,6 +9638,11 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const assertMaintenanceInactive = () =>
       this.#requestMaintenanceScope?.ensure(this.db) ??
       assertControlD1MaintenanceInactive(this.db);
+    // Admission is request-local and must never become part of the memoized
+    // schema readiness promise. A maintenance read that stalls on the first
+    // operation must not make every later operation in this long-lived store
+    // wait on the same pending fence check.
+    await assertMaintenanceInactive();
     // Serialize concurrent callers onto the one in-flight bootstrap, but never
     // cache a REJECTED promise: a transient failure (e.g. a contended DDL) would
     // otherwise poison the isolate so every later method rejects forever. On
@@ -9646,15 +9651,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     if (this.#initialized === undefined) {
       const attempt = (
         this.#schemaMode === "predeployed"
-          ? Promise.all([
-              assertMaintenanceInactive(),
-              ensurePredeployedD1SchemaReady(this.db),
-            ]).then(() => {
+          ? ensurePredeployedD1SchemaReady(this.db).then(() => {
               this.#predeployedSchemaVerified = true;
             })
-          : assertMaintenanceInactive().then(() =>
-              ensureBootstrapD1SchemaReady(this.db),
-            )
+          : ensureBootstrapD1SchemaReady(this.db)
       ).catch((error: unknown) => {
         if (this.#initialized === attempt) {
           this.#initialized = undefined;
@@ -9663,8 +9663,6 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         throw error;
       });
       this.#initialized = attempt;
-    } else {
-      await assertMaintenanceInactive();
     }
     await this.#initialized;
   }
