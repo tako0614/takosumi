@@ -59,6 +59,15 @@ import {
   prepareRuntimeInputVariableFile,
 } from "./runtime_inputs.ts";
 import {
+  enumeratePlanJsonForReconcile,
+  missingReconcileCandidates,
+  reconcileApplyWorkspaceState,
+  reconcileEnumerationFailed,
+  reconcilePlanPath,
+  reconcileStateFromPlanJson,
+  type StateReconcileSummary,
+} from "./state_reconcile.ts";
+import {
   commandContextFromRequest,
   prepareProviderCredentialFiles,
   buildPhaseEnv,
@@ -402,58 +411,136 @@ export async function initPlanAndBuildResponse(
     providerLockfile?.text,
   );
   // OpenTofu requires an ephemeral variable set at plan to be set again at
-  // apply, so plan supplies the same variables with an empty map. The body
-  // travels through a run-private FIFO: never `-var` (argv), never `TF_VAR_*`
-  // (env), and never standard input (which every provider plugin inherits).
-  const runtimeInputVariableFile = await prepareRuntimeInputVariableFile(
-    commandContext.runtimeInputs ?? [],
-    workspace.root,
-  );
-  let plan: Awaited<ReturnType<typeof runCommand>>;
-  try {
-    plan = await timer.measure("tofu_plan", () =>
-      runCommand(
-        [
-          "tofu",
-          "plan",
-          ...(operation === "destroy" ? ["-destroy"] : []),
-          ...(options.refreshOnly ? ["-refresh-only"] : []),
-          ...(options.variableFilePath
-            ? [`-var-file=${options.variableFilePath}`]
-            : []),
-          ...runtimeInputVariableFile.args,
-          "-input=false",
-          "-no-color",
-          "-out",
-          workspace.planPath,
-        ],
-        {
-          cwd: moduleDir,
-          context: commandContext,
-          isolateProcessGroup: true,
-          onSpawn: runtimeInputVariableFile.onSpawn,
-        },
-      ),
+  // apply, so every plan supplies the same variables with an empty map. The
+  // body travels through a run-private FIFO: never `-var` (argv), never
+  // `TF_VAR_*` (env), and never standard input (which every provider plugin
+  // inherits). Each plan phase prepares its own FIFO because the pipe is
+  // delivered exactly once per spawn.
+  const runPlanPhase = async (): Promise<
+    Awaited<ReturnType<typeof runCommand>>
+  > => {
+    const variableFile = await prepareRuntimeInputVariableFile(
+      commandContext.runtimeInputs ?? [],
+      workspace.root,
     );
-    await runtimeInputVariableFile.delivered();
-  } finally {
-    await runtimeInputVariableFile.dispose();
-  }
-  if (plan.exitCode !== 0) {
-    return withPhaseTimings(
+    try {
+      const result = await timer.measure("tofu_plan", () =>
+        runCommand(
+          [
+            "tofu",
+            "plan",
+            ...(operation === "destroy" ? ["-destroy"] : []),
+            ...(options.refreshOnly ? ["-refresh-only"] : []),
+            ...(options.variableFilePath
+              ? [`-var-file=${options.variableFilePath}`]
+              : []),
+            ...variableFile.args,
+            "-input=false",
+            "-no-color",
+            "-out",
+            workspace.planPath,
+          ],
+          {
+            cwd: moduleDir,
+            context: commandContext,
+            isolateProcessGroup: true,
+            onSpawn: variableFile.onSpawn,
+          },
+        ),
+      );
+      await variableFile.delivered();
+      return result;
+    } finally {
+      await variableFile.dispose();
+    }
+  };
+  const planFailure = (result: Awaited<ReturnType<typeof runCommand>>) =>
+    withPhaseTimings(
       mergeBuildLog(
-        commandFailurePayload(runId, "plan", plan, commandContext, "plan"),
+        commandFailurePayload(runId, "plan", result, commandContext, "plan"),
         options.buildLog,
       ),
       timer,
     );
+
+  // A destroy plan covers only recorded state, so resources a previous
+  // interrupted mutation left live but unrecorded would deadlock the destroy
+  // against the host's dependency fences. Reconcile them into state first so
+  // the reviewed plan names the complete deletion set.
+  let stateReconcile: StateReconcileSummary | undefined;
+  if (operation === "destroy" && !options.refreshOnly) {
+    stateReconcile = await timer.measure("tofu_state_reconcile", async () => {
+      const enumeration = await enumeratePlanJsonForReconcile({
+        moduleDir,
+        context: commandContext,
+        ...(options.variableFilePath === undefined
+          ? {}
+          : { variableFilePath: options.variableFilePath }),
+        workspaceRoot: workspace.root,
+        planPath: reconcilePlanPath(workspace.root),
+      });
+      if (enumeration.planJson === undefined) {
+        return reconcileEnumerationFailed(enumeration.error);
+      }
+      return await reconcileStateFromPlanJson({
+        planJson: enumeration.planJson,
+        moduleDir,
+        context: commandContext,
+        ...(options.variableFilePath === undefined
+          ? {}
+          : { variableFilePath: options.variableFilePath }),
+        workspaceRoot: workspace.root,
+      });
+    });
+  }
+
+  let plan = await runPlanPhase();
+  if (plan.exitCode !== 0) {
+    return planFailure(plan);
+  }
+
+  let planJson = await timer.measure("tofu_plan_json", () =>
+    readOpenTofuPlanJson(moduleDir, workspace, commandContext),
+  );
+
+  // A create/update plan that names resources prior state does not record can
+  // converge the same divergence: import each stray, then re-plan so the
+  // reviewed artifact reflects the post-import update set rather than a stale
+  // create the host would refuse as a name conflict. A first apply has an
+  // empty prior state, so nothing could have diverged and no probe runs.
+  if (
+    stateReconcile === undefined &&
+    !options.refreshOnly &&
+    planJson !== undefined
+  ) {
+    const missing = missingReconcileCandidates(planJson);
+    if (missing.recordedAddresses > 0 && missing.candidates.length > 0) {
+      const enumeratedPlanJson = planJson;
+      stateReconcile = await timer.measure("tofu_state_reconcile", () =>
+        reconcileStateFromPlanJson({
+          planJson: enumeratedPlanJson,
+          moduleDir,
+          context: commandContext,
+          ...(options.variableFilePath === undefined
+            ? {}
+            : { variableFilePath: options.variableFilePath }),
+          workspaceRoot: workspace.root,
+        }),
+      );
+      if (stateReconcile.imported.length > 0) {
+        plan = await runPlanPhase();
+        if (plan.exitCode !== 0) {
+          return planFailure(plan);
+        }
+        planJson = await timer.measure("tofu_plan_json", () =>
+          readOpenTofuPlanJson(moduleDir, workspace, commandContext),
+        );
+      }
+    }
   }
 
   const planBytes = await readFile(workspace.planPath);
   const planDigest = await digestBytes(planBytes);
-  const planJson = await timer.measure("tofu_plan_json", () =>
-    readOpenTofuPlanJson(moduleDir, workspace, commandContext),
-  );
   const planJsonArtifact = planJson
     ? await writePlanJsonArtifact(workspace, planJson)
     : undefined;
@@ -481,6 +568,7 @@ export async function initPlanAndBuildResponse(
       status: "succeeded",
       exitCode: 0,
       planDigest,
+      ...(stateReconcile === undefined ? {} : { stateReconcile }),
       planArtifact: {
         kind: "runner-local",
         ref: `runner-local://${runId}/tfplan`,
@@ -651,6 +739,32 @@ export async function runReviewedPlanApply(
       parseRequiredProviders(request),
       strictMirrorInit?.attestation,
     );
+    // A plan that adopted strays into state never persisted them — only
+    // apply/destroy runs persist state — so the restored workspace can lack
+    // the resources the reviewed plan now updates or deletes. Re-import the
+    // same set before applying; on a healthy state the check costs two local
+    // reads and no provider call.
+    const applyVariables = parseVariables(request);
+    let applyVariableFilePath: string | undefined;
+    if (!generatedRoot && Object.keys(applyVariables).length > 0) {
+      applyVariableFilePath = join(workspace.root, "run-inputs.tfvars.json");
+      await writeFile(
+        applyVariableFilePath,
+        `${JSON.stringify(applyVariables)}\n`,
+      );
+    }
+    const applyReconcile = await timer.measure("tofu_state_reconcile", () =>
+      reconcileApplyWorkspaceState({
+        moduleDir,
+        planPath: workspace.planPath,
+        context: applyContext,
+        ...(applyVariableFilePath === undefined
+          ? {}
+          : { variableFilePath: applyVariableFilePath }),
+        workspaceRoot: workspace.root,
+        enumeratePlanPath: reconcilePlanPath(workspace.root),
+      }),
+    );
     // A saved plan carries no ephemeral variable value, so apply re-supplies the
     // map here, through the same run-private FIFO the plan used.
     const runtimeInputVariableFile = await prepareRuntimeInputVariableFile(
@@ -694,6 +808,9 @@ export async function runReviewedPlanApply(
         status: result.exitCode === 0 ? "succeeded" : "failed",
         exitCode: result.exitCode,
         providerInstallation,
+        ...(applyReconcile === undefined
+          ? {}
+          : { stateReconcile: applyReconcile }),
         ...(outputs ? { outputs } : {}),
         stdout: redactRunnerOutput(
           [init.stdout, result.stdout].filter(Boolean).join("\n"),
