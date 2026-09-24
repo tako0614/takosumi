@@ -6,7 +6,7 @@ Takosumi hosted service で使う cloud resource は、Git repository の OpenTo
 
 ## どの provider を使えるか
 
-module の `required_providers` が選択の正本です。例えば次の経路を同じ Workspace で
+module の `required_providers` が選択の正本 (正とする情報) です。例えば次の経路を同じ Workspace で
 利用できます。
 
 - 自分の Cloudflare、AWS、その他の cloud account

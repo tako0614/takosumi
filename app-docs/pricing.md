@@ -38,7 +38,7 @@ abuse / safety 上限です。
 
 ## Usage Prices
 
-Hosted capacity の価格は Takosumi hosted service の versioned PriceCatalog が正本です。
+Hosted capacity の価格は Takosumi hosted service の versioned PriceCatalog が正本 (正とする情報) です。
 provider 公開価格は原価比較に使いますが、provider invoice を tenant 使用量の正本には
 しません。provider の共有 free tier と platform 固定費は Takosumi hosted service が吸収し、tenant ごとの
 隠れた割引にはしません。価格変更は version と effective date を持ち、過去の

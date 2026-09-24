@@ -32,7 +32,7 @@ upstream APIそのものの可用性は含みません。
 
 ## インシデント通知
 
-サービス状況の正本は
+サービス状況の正本 (正とする情報) は
 [status.takosumi.com](https://status.takosumi.com/) です。
 
 | 重大度 | 初報の目標 | 継続更新 |

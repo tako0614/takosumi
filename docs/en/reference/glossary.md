@@ -133,6 +133,7 @@ OpenTofu providers.
 | digest                 | A SHA-256 fingerprint computed from content. The same content always gives the same value.                                                                   |
 | fail closed            | Stopping rather than letting something through when the decision is unclear.                                                                                 |
 | lease                  | A mechanism that reserves ownership with an expiry so the same target is not processed in two places at once.                                                |
+| materialization      | Preparing a declared Interface / Binding / credential as a concrete thing only on the host or runner that executes it. Declarations and plans never carry secret values. |
 | CAS (compare-and-swap) | Checking just before an update that the version you read is still current, and not writing if it changed.                                                    |
 | cursor                 | An opaque token for reading the next part of a list. Do not interpret it; pass it straight into the next request.                                            |
 

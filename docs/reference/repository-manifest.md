@@ -10,7 +10,7 @@ install できます。Source sync は repository root の文書を
 `SourceSnapshot.repositoryManifest` に保存します。raw document は public API に返しません。
 
 Git URL、ref、Source subtree と exact commit の tracked regular file scan が
-module/provider 候補の正本です。app-owned Git/OpenTofu configuration が
+module/provider 候補の正本 (正とする情報) です。app-owned Git/OpenTofu configuration が
 infrastructure/lifecycle authority であり続けます。
 Takosumi は accepted generic API/capability の実装を所有し、manifest はその request と
 app-owned module への delivered value mapping だけを宣言します。

@@ -2,7 +2,7 @@
 
 Takosumi は、TCS 2.0 compatible Store を Capsule の発見 UI として利用できます。
 TCS の wire contract は Takosumi ではなく Store project が所有します。field、route、
-pagination、error envelope の正本は
+pagination、error envelope の正本 (正とする情報) は
 [TCS 2.0 specification](https://github.com/tako0614/takosumi-store/blob/main/docs/SPEC-v2.md)、
 動く server の例は
 [Takosumi Store reference implementation](https://github.com/tako0614/takosumi-store)

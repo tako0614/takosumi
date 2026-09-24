@@ -1,7 +1,8 @@
 # 用語集
 
 Takosumi のドキュメントに出てくる言葉を、1 語ずつ短く説明します。動きの説明は右端の
-ページにあります。
+ページにあります。この docs では「正本」を「正とする情報 (そのデータについて最終的に
+信頼できる管理元)」の意味で使います。
 
 ## 画面の言葉と内部の言葉
 
@@ -131,6 +132,7 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | digest                 | 内容から計算した SHA-256 の指紋です。同じ内容なら必ず同じ値になります。                                                    | [API](./api.md)                         |
 | fail closed            | 判断がつかないときに、通さずに止める動き方です。                                                                           | [Interface](../concepts/interfaces.md)  |
 | lease                  | 同じ対象を 2 か所で同時に処理しないよう、担当を期限つきで確保する仕組みです。                                              | [API](./api.md)                         |
+| materialization      | 宣言した Interface / Binding / credential を、実行する host や runner の上にだけ実体として用意することです。宣言や plan には秘密の値を書きません。 | [Interface](../concepts/interfaces.md)  |
 | CAS (compare-and-swap) | 更新の直前に、読んだときの版のままかを確かめ、変わっていたら書き込まない方式です。                                         | [API](./api.md)                         |
 | cursor                 | 一覧の続きを読むための不透明な token です。中身は解釈せず、次の要求にそのまま渡します。                                    | [API](./api.md)                         |
 

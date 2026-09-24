@@ -153,7 +153,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 ではなく、既知の旧 path は 404 で fail closed します。OIDC/OAuth、well-known、
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
-正本は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
+正本 (正とする情報) は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
 次の 86 件です。
 
 **Account views**
