@@ -10,7 +10,7 @@ Output として残り得ますが、fallback authority には戻しません。
 - report は Output の名前・ID・digest だけを返し、値を返しません。
 - token / password / bearer / signing key など secret-shaped な Output 名は候補に
   出しません。値を Interface や audit へコピーしません。
-- known first-party Capsule は現在の service-side `interfaceBlueprints` だけを正本に
+- known first-party Capsule は現在の service-side `interfaceBlueprints` だけを正本 (正とする情報) に
   します。request から blueprint を差し替えられません。
 - unknown third-party Capsule は Workspace owner/operator が Output 名、Interface
   type/version、入力名を明示選択します。well-known Output 名から推測しません。
@@ -30,7 +30,7 @@ Authorization: Bearer {deploy-control-token}
 
 - `candidates`: exact fence と、値を含まない `availableOutputNames`
 - `completed`: 永続 migration evidence と Interface ID
-- `issues`: Output pointer不整合、missing Output、retired blueprintなどの安全側に停止する理由
+- `issues`: Output pointer不整合、missing Output、廃止済み blueprint などの安全側に停止する理由
 
 `mode=service_blueprints` なら `candidate` をそのまま確認します。
 `mode=owner_selection_required` なら、ownerとInterface 利用側が合意した明示
@@ -49,7 +49,7 @@ Content-Type: application/json
 ```
 
 Takosumi はInstallConfigに保存済みのblueprintを一度だけmaterializeします。既に同じ
-blueprint由来のInterfaceがあれば再利用し、operatorの後続編集やretireを上書きしません。
+blueprint由来のInterfaceがあれば再利用し、operator の後続編集や廃止を上書きしません。
 
 ## 3. unknown third-party の確認
 
@@ -83,5 +83,5 @@ Workspace Activityで `interface.output_convention_migrated` として読める�
 runtime 利用側はInterface APIとReady InterfaceBindingだけを読みます。shadow compareを
 行う場合も旧Output discoveryは観測対象に限定し、fallbackとして使いません。
 
-移行後にInterfaceが不要になった場合は通常のInterface retireを使います。旧Output
+移行後にInterfaceが不要になった場合は通常の Interface 廃止手順を使います。旧Output
 conventionを再有効化するrollbackはありません。

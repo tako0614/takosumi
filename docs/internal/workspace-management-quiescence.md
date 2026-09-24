@@ -2,7 +2,7 @@
 
 2026-09-08。管理移管に必要な local quiescence の内部実装方針です。
 **内部実装中であり、停止・移管 API の提供を示しません。** 現行の挙動は
-[Core Spec](./core-spec.md)が正本です。管理移管は資源の削除、供給契約の終了、
+[Core Spec](./core-spec.md) が正本 (正とする情報) です。管理移管は資源の削除、供給契約の終了、
 アプリ利用者の移行とは別の操作です。
 
 ## 所有する状態
@@ -229,7 +229,7 @@ Run 内の finalizer marker は auditEvents の配列順で判定します。過
 terminal Apply の billing／runtime-secret finalizer は、外部処理前に読んだ Run 全体を
 保存時にも照合します。同じ terminal status だけでは、別の処理の completed marker を
 古い応答が消せるためです。遅れた completed／deferred の保存が競合したら保存済みの
-結果を返し、未処理 marker が残る場合だけ既存の idempotent な後処理を再開します。
+結果を返し、未処理 marker が残る場合だけ、再実行しても安全な既存の後処理を再開します。
 この照合は lease のない terminal 行に限り、通常の heartbeat・実行 progress の条件を
 変えません。元の private management authority は保存済みの値を維持します。
 
@@ -301,7 +301,7 @@ materialized CTE に JSON の正規化と深い判定を分け、一つの条件
 Interface の completed 行は既存 claim/retry 経路から新規処理に戻れません。このため凍結
 判定では上記の完了証拠を検証し、SQL 内で blueprint schema と暗号学的 digest 検証を
 再実装しません。宣言自体の破損は別の完全性の問題として残り、凍結をデータ検証済みの
-証明にはしません。新しい汎用 decoder framework や移管用台帳を追加しない方針です。
+証明にはしません。新しい汎用 decoder framework や移管用の記録を追加しない方針です。
 
 ### 既存の admission と収束の実装状況
 

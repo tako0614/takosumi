@@ -5,7 +5,7 @@
 
 ## 1. alarm を再武装するコードは、必ず上限と ledger を持つ
 
-正本: [`core/shared/lifecycle/schedule.ts`](../../core/shared/lifecycle/schedule.ts)
+正本 (正とする情報): [`core/shared/lifecycle/schedule.ts`](../../core/shared/lifecycle/schedule.ts)
 
 - `RetrySchedule` — 失敗の再試行。`maxAttempts` に達したら `exhausted` を返し、
   呼び出し側は必ずそれを処理しなければならない (union 型なので無視できない)。
@@ -60,8 +60,8 @@ host worker は service を作る前に routing を決めるので、静的な�
 設定を capabilities や Worker binding として広告せず、retained row を扱う typed
 Host migration surface も提供しない。
 
-従って PostgreSQL v110 / D1 v66 で入る物理 retirement は route では解決
-しない。retired table に row があれば forward migration は fail-closed で停止する。
+従って PostgreSQL v110 / D1 v66 で入る物理的な廃止は route では解決
+しない。廃止済み table に row があれば forward migration は fail-closed で停止する。
 operator は immediate predecessor または out-of-band database tooling で inventory / export
 を取り、explicit disposition を記録してから empty-state migration を再実行する。
 

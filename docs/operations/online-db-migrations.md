@@ -14,7 +14,7 @@ model への migration 対象として扱います。host/distribution product �
 この runbook では扱いません。
 
 production surfaceのdeployはこのrepositoryのentrypointを使います。共通ruleは
-`takos-control`の`engineering.policy.json`→`deploy`が正本です。
+`takos-control`の`engineering.policy.json`→`deploy` が正本 (正とする情報) です。
 
 ```bash
 bun run deploy

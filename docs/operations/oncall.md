@@ -4,7 +4,7 @@
 > rotation、SEV 分類、paging path、escalation matrix、staging SEV-1
 > simulation の実施基準。
 
-この runbook は operator が構成した Takosumi platform の汎用運用正本です。
+この runbook は operator が構成した Takosumi platform の汎用運用の正本 (正とする情報) です。
 対象は accounts plane、control plane、dashboard SPA、Run queue、coordination、
 runner 実行基盤、operator が選択した database / object storage です。公式 hosted
 deployment 固有の topology、provider、official SLA/support は host extension の

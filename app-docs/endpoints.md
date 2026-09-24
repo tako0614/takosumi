@@ -10,7 +10,7 @@ endpoint URL、audience、必要な permission は Run の Output または auth
 から取得します。base URL や tenant hostname を推測しないでください。
 
 認証済み Takosumi catalog は現在利用できる protocol family を返します。この catalog endpoint は
-hosted service owner が定義する外部 surface です。Takosumi OSS platform worker は retired
+hosted service owner が定義する外部 surface です。Takosumi OSS platform worker は廃止済みの
 `/v1/cloud/catalog` を mount せず、`/api/v1/cloud/catalog` という互換 alias も提供しません。
 実際の URL は hosted service owner の契約または authorized Interface から取得してください。
 

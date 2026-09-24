@@ -14,7 +14,7 @@ secret ストアから渡してください。
 | `TAKOSUMI_ENVIRONMENT`          | 任意                                                        | `local` | `local` / `development` / `test` / `staging` / `production` のどれか。`staging` と `production` では暗号鍵と永続ストアの検査が fail-closed になります。`NODE_ENV`、`ENVIRONMENT` も同じ順で読みます          |
 | `TAKOSUMI_DEV_MODE`             | 任意                                                        | 未設定  | `1` / `true` / `yes` / `on` / `enabled` のどれかにすると、非本番で暗号鍵を設定しないまま起動できます。`staging` と `production` では効きません                                                               |
 | `PORT`                          | 任意                                                        | `8788`  | `bun core/index.ts` で起動したときの待ち受けポート                                                                                                                                                           |
-| `TAKOSUMI_DATABASE_URL`         | `bun core/index.ts` で control plane を単体で動かすとき必須 | なし    | control plane の PostgreSQL 接続先。`DATABASE_URL` も同じ用途で読みます。同梱の compose は control plane と accounts を 1 つの接続で動かすので、そちらでは `TAKOSUMI_ACCOUNTS_DATABASE_URL` だけを設定します |
+| `TAKOSUMI_DATABASE_URL`         | `bun core/index.ts` で control plane を単体で動かすとき必須 | なし    | control plane の PostgreSQL 接続先。`DATABASE_URL` も同じ用途で読みます。同梱の Docker Compose 定義は control plane と accounts を 1 つの接続で動かすので、そちらでは `TAKOSUMI_ACCOUNTS_DATABASE_URL` だけを設定します |
 | `TAKOSUMI_DB_AUTO_MIGRATE`      | 任意                                                        | `false` | `bun core/index.ts` の起動時にマイグレーションを適用するか。既定では適用せず、読み取りだけで検証します。`staging` と `production` で `true` にすると起動が失敗します                                         |
 | `TAKOSUMI_DEPLOY_CONTROL_TOKEN` | 実運用では必須・**秘密**                                    | なし    | operator 専用 API の bearer。CLI と operator client が使います。旧 Resource/Form `/v1` surface には作用しません                                                                                              |
 | `TAKOSUMI_METRICS_SCRAPE_TOKEN` | 任意・**秘密**                                              | なし    | `/metrics` を読むための bearer。未設定のあいだ `/metrics` は `404` を返します                                                                                                                                |
@@ -164,9 +164,9 @@ bunx wrangler secret put TAKOSUMI_RELEASE_ACTIVATOR_TOKEN \
 | `TAKOSUMI_ACCOUNTS_PG_STATEMENT_TIMEOUT_MS` | 任意                               | `30000`                         | 1 文を待つ時間                                                       |
 | `TAKOSUMI_ACCOUNTS_PG_SSL_MODE`             | 任意                               | `disable`                       | `disable` / `require` / `verify-ca` / `verify-full`                  |
 | `TAKOSUMI_ACCOUNTS_PG_SSL_ROOT_CERT`        | `verify-ca` / `verify-full` で必須 | なし                            | PEM の CA バンドル                                                   |
-| `POSTGRES_PASSWORD`                         | compose を使う場合は必須・**秘密** | なし                            | 同梱の compose が PostgreSQL に設定するパスワード                    |
+| `POSTGRES_PASSWORD`                         | Docker Compose を使う場合は必須・**秘密** | なし                            | 同梱の Docker Compose 定義が PostgreSQL に設定するパスワード                    |
 
-同梱の compose は `deploy/node-postgres/.env` からこれらを読みます。
+同梱の Docker Compose 定義は `deploy/node-postgres/.env` からこれらを読みます。
 
 ```bash
 cat >> deploy/node-postgres/.env <<'ENV'

@@ -4,11 +4,11 @@
 > container、Bun/npm dependencies、operator reference template の patch
 > management 方針。
 
-この runbook は **Takosumi operated environment** の patch management 正本です。
+この runbook は **Takosumi operated environment** の patch management の正本 (正とする情報) です。
 operator は単一の Takosumi origin を運用し、storage / queue / lease / runner
-の substrate adapter は明示 composition で選びます。Cloudflare Worker /
+の実行基盤 adapter は明示 composition で選びます。Cloudflare Worker /
 Container は公開 reference composition であって、すべての Operator の必須
-substrate ではありません。Takos product worker や installable apps の patch
+実行基盤ではありません。Takos product worker や installable apps の patch
 gate はそれぞれの product docs が所有します。
 
 production surfaceのdeployはこのrepositoryのentrypointを使います。共通ruleは

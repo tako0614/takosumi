@@ -12,7 +12,7 @@
 > 側にあります。
 
 この runbook は [On-call and SEV Policy](./oncall.md) の実行手順です。 SEV
-判断、paging、escalation は on-call policy を正本とし、このページでは incident
+判断、paging、escalation は on-call policy を正本 (正とする情報) とし、このページでは incident
 開始後の進め方、記録形式、RCA template、postmortem cadence を固定 します。
 
 ## Trigger

@@ -1,14 +1,14 @@
 # Deploy Topology Notes
 
 > このページでわかること: Takosumi operated environment の single-origin
-> topology、交換可能な substrate adapter、再導入してはいけない
+> topology、交換可能な実行基盤 adapter、再導入してはいけない
 > split-control-plane / manifest-era 前提。
 
 ## Canonical Topology
 
 operator は accounts / control plane / dashboard を **単一の Takosumi
 origin** として公開します。これは論理的な product boundary であり、
-Cloudflare Worker、Bun + Postgres、Kubernetes、VM など特定の substrate を
+Cloudflare Worker、Bun + Postgres、Kubernetes、VM など特定の実行基盤を
 public contract に固定するものではありません。公開 repo の
 `deploy/platform` は Cloudflare reference composition、`deploy/node-postgres`
 は Bun + Postgres composition です。公式 Cloud の realized origin

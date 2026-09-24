@@ -12,7 +12,7 @@
 ## Public release workflow
 
 production surfaceのdeployはこのrepositoryのentrypointを使います。共通ruleは
-`takos-control`の`engineering.policy.json`→`deploy`が正本です。
+`takos-control`の`engineering.policy.json`→`deploy` が正本 (正とする情報) です。
 
 ```bash
 bun run deploy

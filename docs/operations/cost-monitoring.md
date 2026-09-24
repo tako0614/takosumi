@@ -7,7 +7,7 @@
 Takosumi OSS は commercial cost-attribution system を提供しません。OSS が所有するのは、
 OpenTofu Run の非 secret な見積もりと、Workspace に記録された provider-neutral な
 showback ledger です。架空の cloud spend metric や固定 Grafana dashboard を共通release条件にせず、
-control-plane API と永続化された ledger を運用上の正本にします。
+control-plane API と永続化された ledger を運用上の正本 (正とする情報) にします。
 
 ## Boundary
 

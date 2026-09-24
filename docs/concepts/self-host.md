@@ -13,7 +13,7 @@ OpenTofu runner が同じ origin に同居します。CLI、dashboard、Takoform
 | --- | --- | --- | --- |
 | Cloudflare | Cloudflare Workers | D1 / R2 / Durable Objects | `deploy/platform/wrangler.toml` |
 | Bun と PostgreSQL | VM やコンテナ | PostgreSQL | `deploy/node-postgres/` |
-| 手元だけ | 手元の Linux と Docker | compose のボリューム | `deploy/local-substrate/` |
+| 手元だけ | 手元の Linux と Docker | Docker Compose のボリューム | `deploy/local-substrate/` |
 
 **Cloudflare** は、サーバーを自分で持たずに運用したい場合に向きます。Cloudflare
 アカウントと wrangler があれば動き、OpenTofu の実行も Cloudflare Container の runner が
@@ -129,7 +129,7 @@ bunx wrangler deploy --config deploy/platform/wrangler.toml
 
 ## Bun と PostgreSQL に置く
 
-`deploy/node-postgres/` の compose が、PostgreSQL、マイグレーション、サービス本体、
+`deploy/node-postgres/` の Docker Compose 定義が、PostgreSQL、マイグレーション、サービス本体、
 Caddy を順に起動します。サービス本体は accounts と control plane と dashboard を
 同じ origin に載せた 1 プロセスです。リポジトリのルートから始めます。
 
@@ -142,10 +142,10 @@ cp .env.example .env
 `TAKOSUMI_ACCOUNTS_ISSUER`、`TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME`、OIDC client の
 登録です。
 
-`.env` の値は compose ファイルの変数展開に使われるだけで、そのままコンテナへ渡るわけでは
+`.env` の値は `docker-compose.yml` の変数展開に使われるだけで、そのままコンテナへ渡るわけでは
 ありません。同梱の `docker-compose.yml` が `accounts` サービスに渡すのは、上に挙げた
 issuer と接続先と client 登録だけです。残りの秘密は、`accounts` サービスの
-`environment:` に自分で足してください。compose なら同じディレクトリの
+`environment:` に自分で足してください。Docker Compose なら同じディレクトリの
 `docker-compose.override.yml` に書けます。
 
 | 変数 | なぜ要るか |
@@ -165,12 +165,12 @@ issuer が https のとき、署名鍵が届いていないとサービスは起
 docker compose up -d
 ```
 
-compose の `migrations` コンテナが `takosumi accounts migrate` を 1 回実行してから、
+Docker Compose の `migrations` コンテナが `takosumi accounts migrate` を 1 回実行してから、
 サービス本体が起動します。これで揃うのは accounts 側のテーブルだけです。control plane
 側のテーブルは、同じデータベースに対して別に作ります。
 
 control plane 側のマイグレーションは、リポジトリのチェックアウトから走らせます。同梱の
-イメージには入っていません。同梱の compose は PostgreSQL を内部ネットワークにしか
+イメージには入っていません。同梱の Docker Compose 定義は PostgreSQL を内部ネットワークにしか
 出さないので、先に 5432 を公開するか、同じネットワークから届くホストで実行します。
 
 ```bash
@@ -186,7 +186,7 @@ DATABASE_URL="postgres://takosumi:<password>@<postgres-host>:5432/takosumi_accou
 resetはlocal/development/test用の注入clientだけに限定され、ここで指定する
 database URLやproduction credentialを読みません。
 
-compose を使わず手で動かす場合は、同じ環境変数を渡して
+Docker Compose を使わず手で動かす場合は、同じ環境変数を渡して
 `bun deploy/node-postgres/src/server.ts` を起動します。待ち受けは
 `TAKOSUMI_ACCOUNTS_BIND_HOST` (既定 `0.0.0.0`) と `PORT` (既定 `8787`) で決まります。
 
