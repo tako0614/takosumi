@@ -7,7 +7,7 @@ import Section from "./Section";
 const ROWS = [
   {
     axis: "データの所在",
-    us: "あなたのサーバーの中",
+    us: "リソースは各 provider、管理データは Takosumi の設置先",
     saas: "ベンダーのクラウドの中",
     paas: "PaaS の中",
   },
@@ -25,7 +25,7 @@ const ROWS = [
   },
   {
     axis: "引っ越し",
-    us: "同じコードで別のクラウドへ",
+    us: "標準の OpenTofu module / provider、固有リソースは移行時に編集",
     saas: "原則不可、エクスポートしても互換性なし",
     paas: "不可、ロックイン",
   },

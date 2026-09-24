@@ -17,9 +17,9 @@ const STATS: readonly Stat[] = [
     note: "計画・適用・状態・出力をまとめて記録",
   },
   {
-    num: "5+",
-    label: "実行先",
-    note: "Cloudflare・AWS・GCP・K8s・VM…",
+    num: "any",
+    label: "OpenTofu provider",
+    note: "任意の OpenTofu provider を接続",
   },
 ];
 
