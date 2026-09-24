@@ -11,31 +11,42 @@ const viewSource = readFileSync(
   "utf8",
 );
 
-test("Workload revision changes are explicit, progressive, and readback-gated", () => {
-  expect(viewSource).toContain("updateCapsuleSourceRevision(");
-  expect(viewSource).toContain("isImmutableSourceRevision");
-  expect(viewSource).toContain("sourceRevisionReady");
+test("Workload revisions use the Capsule-local coordinator and applied provenance", () => {
+  expect(viewSource).toContain("createReviewableGitRevisionPlan(");
+  expect(viewSource).toContain("adoptedSourceRevision");
+  expect(viewSource).toContain("revisionAttempts");
+  expect(viewSource).toContain("revisionActionBusy");
+  expect(viewSource).toContain("if (revisionActionBusy())");
+  expect(viewSource).toContain(
+    "reviewBusy={plan.busy() || revisionActionBusy()}",
+  );
+  expect(viewSource).toContain("idempotencyKey");
   expect(viewSource).toContain(
     'disabled={props.reviewBusy || !props.sourceRevisionReady}',
   );
   expect(viewSource).toContain(
     '<summary>{t("app.deploys.sourceVersionChange")}</summary>',
   );
-  expect(viewSource).toContain("affectedSourceCapsules");
-  expect(viewSource).toContain("affectedCapsuleIds");
-  expect(viewSource).toContain("sourceImpactConfirmTitle");
-  expect(viewSource).toContain("if (!confirmed) return undefined;");
-  expect(viewSource).toContain("source_membership_changed");
   expect(viewSource).toContain('t("app.deploys.sourceVersionCurrent")');
   expect(viewSource).toContain('t("app.deploys.sourceVersionApply")');
+  expect(viewSource).not.toContain("updateCapsuleSourceRevision(");
+  expect(viewSource).not.toContain("sourceImpact");
+  expect(viewSource).not.toContain("affectedSourceCapsules");
+  expect(viewSource).not.toContain("source_membership_changed");
+  expect(viewSource).not.toContain("isImmutableSourceRevision");
   expect(viewSource).not.toContain("authConnectionId");
   expect(viewSource).not.toContain("credential");
 });
 
-test("revision copy requires immutable commits and avoids mutable ref language", () => {
+test("revision copy accepts backend-safe refs instead of requiring immutable commits", () => {
   for (const dictionary of [en, ja]) {
-    expect(dictionary["app.deploys.sourceVersionHint"]).toMatch(/40/iu);
-    expect(dictionary["app.deploys.sourceVersionHint"]).toMatch(/Git/iu);
+    expect(dictionary["app.deploys.sourceVersionHint"]).toMatch(
+      /branch|ブランチ/iu,
+    );
+    expect(dictionary["app.deploys.sourceVersionHint"]).toMatch(
+      /tag|タグ/iu,
+    );
+    expect(dictionary["app.deploys.sourceVersionHint"]).not.toMatch(/40/iu);
     expect(dictionary["app.deploys.sourceVersionChange"]).toBeTruthy();
     expect(dictionary["app.deploys.sourceVersionApply"]).toBeTruthy();
   }

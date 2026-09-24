@@ -125,6 +125,73 @@ Workspace before forwarding. The route-less Hosted target receives only
 verified context, never a browser cookie, the original bearer, an account id, a
 legal Organization id, or an unverified Workspace context.
 
+### Read-only status
+
+Read the realized target without planning or mutating it:
+
+```bash
+bun run deploy -- takosumi-platform-staging status \
+  --config /absolute/operator-private/wrangler.staging.toml
+```
+
+Status stably reads the pathless config, projects it into a disposable
+Wrangler-only config, and reads the exact 100%-serving Version, its immutable
+binding/`fetch` closure, and the runner Container. It requires the configured
+immutable runner image to match an active/ready Container with no active rollout
+or unhealthy instances. The JSON result is bounded to IDs, required binding
+names/types, image and config/source digests, health readiness, and the
+observed sibling source pin. The pin is metadata only for this command: a
+stale checkout does not become a Git or clean/pushed release requirement.
+Production uses `takosumi-platform` with its realized production config. This
+command does not build the dashboard, create a plan, or upload/route a Worker.
+
+### Routine staging code publication
+
+Use the staging-only routine lane when bindings, secrets, runtime settings,
+routes, schedules, custom domains, and the runner Container must stay fixed:
+
+```bash
+bun run deploy -- takosumi-platform-staging-code apply \
+  --config /absolute/operator-private/wrangler.staging.toml
+```
+
+The sibling source pin must name the selected checkout's exact `HEAD`. This is
+an integration lane: the commit need not be pushed to `main` and a dirty
+candidate is allowed; the uploaded entry digest is the byte identity. Read-only
+status remains `takosumi-platform-staging status` above.
+
+Before building, the lane compares the 100%-serving immutable Version and
+secret-name set with the config and reads Cloudflare's exact routes, domains,
+schedules, workers.dev/preview state, observability, and healthy runner
+Container. Script-associated routes are a live preservation baseline: every
+route id, pattern, target script, and request-limit fail-open value must remain
+unchanged through the immediate pre-upload and final snapshots. The lane does
+not write those routes or silently adopt them into config. A malformed route,
+a route for another script, an unknown shape, or drift refuses; config-owned
+custom domains, schedules, and settings must still match the realized config.
+
+The lane builds the dashboard once, runs
+`check:cloudflare-worker-build` once, and performs two `versions upload`
+dry-runs. The first derives the sealed entry digest; the second injects the
+three execution-evidence digest variables and must produce the same entry.
+Migration declarations are omitted only from the transient upload projection,
+after live readback proved the configured migration tag, so routine code cannot
+replay a Durable Object migration.
+
+`wrangler versions upload` synchronizes assets and uploads one tagged Version
+without applying triggers or a Container rollout. After immutable Version
+readback, `wrangler versions deploy` routes it at 100% using a transient config
+with only the exact account and Worker name, so activation cannot patch
+observability, logpush, or tail consumers. Final readback repeats every
+Version, topology, secret, Container, public-header, and discovery invariant.
+
+Asset synchronization is the first possible mutation. A lost acknowledgement
+from upload or activation is `incomplete`: the lane prints the predecessor and
+unique Version tag, never retries, and requires immutable Version/deployment
+history before recovery. Historical rollback remains owned by
+`takosumi-platform-staging`; this lane creates no plan, journal, archive, or
+parallel restore mechanism.
+
 ### Realized Hosted extension descriptors
 
 `TAKOSUMI_PLATFORM_EXTENSIONS` is operator-realized config outside this
@@ -390,7 +457,12 @@ Before deploying code that requires a newer control-ledger D1 shape, run the
 [Control D1 schema predeploy](control-d1-schema-predeploy.md) gate against the
 same exact source commit. Back up, apply, and read-only verify staging before
 production. A platform Worker deployment must not depend on its first request
-to create or repair the required schema.
+to create or repair the required schema. The temporary production owner surface
+`takosumi-control-d1-schema-production-v66-v69` is a fixed, target-v69,
+continuously-fenced direct cutover for the exact v66 ledger lineage; its local
+synthetic proof is not live or full-HTTP evidence. It does not change the
+hosted v68 pre-bridge retirement rule below, and it does not authorize serving
+v68/v69 from the retired bridge.
 
 Accounts D1 v4 uses a separate one-time owner lane. First deploy the feature
 bridge, which accepts only exact legacy v3 or exact checksummed v4 and performs

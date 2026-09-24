@@ -49,6 +49,8 @@ import type {
   CapsuleConfigurationPlanResponse,
   CreateGitInstallPlanRequest,
   GitInstallPlanResponse,
+  CreateGitRevisionPlanRequest,
+  GitRevisionPlanResponse,
 } from "takosumi-contract";
 import { isCanonicalRepositoryDirectoryPath } from "takosumi-contract";
 
@@ -460,6 +462,10 @@ export interface Capsule {
   readonly slug: string;
   readonly sourceId?: string;
   readonly installConfigId: string;
+  /** Applied SourceSnapshot provenance; absent before the first successful Apply. */
+  readonly adoptedSourceRevision?: NonNullable<
+    ContractCapsule["adoptedSourceRevision"]
+  >;
   readonly environment: string;
   readonly currentStateVersionId?: string;
   readonly currentStateGeneration: number;
@@ -1414,6 +1420,80 @@ export async function reconcileGitInstallPlan(
     `${BASE}/install-plans/${encodeURIComponent(installPlanId)}/reconcile`,
     { method: "POST" },
   );
+}
+
+/** Starts the durable Capsule-local Git revision coordinator. */
+export async function createGitRevisionPlan(
+  capsuleId: string,
+  request: CreateGitRevisionPlanRequest,
+  idempotencyKey: string = crypto.randomUUID(),
+): Promise<GitRevisionPlanResponse> {
+  return await controlFetch<GitRevisionPlanResponse>(
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/revision-plans`,
+    {
+      method: "POST",
+      headers: { "idempotency-key": idempotencyKey },
+      body: request,
+    },
+  );
+}
+
+/** Advances exactly one durable Capsule-local revision coordinator phase. */
+export async function reconcileGitRevisionPlan(
+  revisionPlanId: string,
+): Promise<GitRevisionPlanResponse> {
+  return await controlFetch<GitRevisionPlanResponse>(
+    `${BASE}/revision-plans/${encodeURIComponent(revisionPlanId)}/reconcile`,
+    { method: "POST" },
+  );
+}
+
+/**
+ * Drives a revision coordinator through explicit reconciliation until its
+ * Plan Run is reviewable. Approval and apply stay on the ordinary Run
+ * surface; an uncertain create response is allowed to propagate so a caller
+ * can retry this exact request with the same idempotency key.
+ */
+export async function createReviewableGitRevisionPlan(
+  capsuleId: string,
+  request: CreateGitRevisionPlanRequest,
+  options: {
+    readonly maxReconciles?: number;
+    readonly idempotencyKey?: string;
+  } = {},
+): Promise<GitRevisionPlanResponse> {
+  let response = await createGitRevisionPlan(
+    capsuleId,
+    request,
+    options.idempotencyKey,
+  );
+  const max = options.maxReconciles ?? 120;
+  for (let attempt = 0; response.nextAction === "reconcile"; attempt += 1) {
+    if (attempt >= max) {
+      throw new ControlApiError(
+        504,
+        "revision_plan_reconcile_timeout",
+        "The revision plan did not become reviewable in time.",
+      );
+    }
+    response = await reconcileGitRevisionPlan(response.revisionPlan.id);
+    if (response.nextAction === "reconcile") {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  if (
+    response.nextAction !== "review_run" ||
+    !response.revisionPlan.planRunId
+  ) {
+    throw new ControlApiError(
+      409,
+      response.revisionPlan.diagnostic?.code ?? "revision_plan_failed",
+      response.revisionPlan.diagnostic?.message ??
+        "The revision plan did not produce a reviewable Run.",
+      response,
+    );
+  }
+  return response;
 }
 
 /**

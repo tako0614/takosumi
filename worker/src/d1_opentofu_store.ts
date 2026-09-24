@@ -211,6 +211,7 @@ import {
   providerBindingSetTargetsCapsule,
   runtimeSecretRetirementDispatchAttempt,
   sourceSnapshotsExactlyMatch,
+  sourceSyncRunSuccessIdentityMatches,
   installConfigManagementAuthority,
   installConfigRequiresManagementAuthority,
   publicStoredInstallConfig,
@@ -278,6 +279,14 @@ import {
   exactRecoveryProofsEqual,
   type CommittedPostApplyRecoveryRows,
 } from "../../core/domains/deploy-control/committed_post_apply_recovery.ts";
+import {
+  MAX_SOURCE_RECONCILIATION_CAPSULES,
+  observeSourceSyncSettlement,
+  SOURCE_SYNC_SETTLEMENT_READ_PATHS,
+  SourceSyncSettlementConflictError,
+  type SourceSyncSettlementObservation,
+  type SourceSyncSettlementReadKind,
+} from "../../core/domains/deploy-control/source_sync_settlement.ts";
 import * as schema from "../../core/adapters/storage/drizzle/schema/d1.ts";
 import type { D1Database, D1PreparedStatement, D1Result } from "./bindings.ts";
 import {
@@ -303,6 +312,13 @@ const RUN_KIND_SOURCE_SYNC = "source_sync" as const;
 const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check" as const;
 const RUN_KIND_BACKUP = "backup" as const;
 const RUN_KIND_RESTORE = "restore" as const;
+
+// Cloudflare D1's maximum string/row payload is 2,000,000 bytes. The
+// reconciliation envelope is a single bound JSON value shared by the guard
+// and the two bulk write statements below; refuse an over-capacity settlement
+// before any terminal or projection write is issued. The 1,000-Capsule bound
+// itself is owned by source_sync_settlement.ts.
+const D1_SOURCE_SYNC_SETTLEMENT_ENVELOPE_MAX_BYTES = 2_000_000;
 
 /** Build a shallow AND tree for D1's production expression-depth limit. */
 function d1WorkspaceFreezeAll(parts: readonly string[]): string {
@@ -2912,10 +2928,68 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async commitSourceSyncSuccess(
     input: CommitSourceSyncSuccessInput,
   ): Promise<CommitSourceSyncSuccessResult> {
+    input = structuredClone(input);
     assertD1AtomicCommitBatch(this.db, "commitSourceSyncSuccess");
     await this.#ensureSchema();
     assertSourceSyncSuccessCommit(input);
     const snapshot = normalizeSourceSnapshotRecord(input.snapshot);
+    // A consumer that no longer owns this exact running SourceSync must lose
+    // before we dereference any Capsule lineage. Besides avoiding needless D1
+    // work, this keeps a malformed unrelated lineage from turning a genuine
+    // lease/identity loss into a settlement-conflict failure.
+    const heldRow = await d1ReadSourceSyncSettlementRunRow(
+      this.#orm,
+      input.terminalRun.id,
+    );
+    const heldRun = d1SourceSyncSettlementHeldRun(
+      heldRow,
+      input.terminalRun,
+      input.leaseToken,
+    );
+    if (heldRun === undefined) {
+      const current = d1SourceSyncSettlementPublicRun(heldRow);
+      return { won: false, ...(current ? { run: current } : {}) };
+    }
+    // Fetch at most one row beyond the public reconciliation ceiling. Only a
+    // coherent destroyed tombstone is excluded here. A physical/JSON mismatch
+    // remains a candidate and is rejected by the atomic census guard below.
+    const capsuleRows = await this.#orm
+      .select({
+        recordJson: sql<string>`CAST(${schema.capsules.recordJson} AS TEXT)`,
+      })
+      .from(schema.capsules)
+      .where(
+        and(
+          eq(schema.capsules.workspaceId, input.terminalRun.workspaceId),
+          not(
+            sql.raw(
+              d1SourceSyncSettlementCoherentDestroyedCapsuleSql("capsules"),
+            ),
+          ),
+        ),
+      )
+      .orderBy(asc(schema.capsules.createdAt), asc(schema.capsules.id))
+      .limit(MAX_SOURCE_RECONCILIATION_CAPSULES + 1);
+    const observedCapsules = capsuleRows.map(({ recordJson }) => {
+      const parsed = typeof recordJson === "string"
+        ? parseD1JsonColumn(recordJson)
+        : recordJson;
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new SourceSyncSettlementConflictError();
+      }
+      return normalizeCapsuleRecord(parsed as Capsule);
+    }).filter((capsule) => capsule.status !== "destroyed");
+    const observation = await observeSourceSyncSettlement(
+      this,
+      snapshot,
+      input.terminalRun,
+      observedCapsules,
+    );
+    const settlement = d1SourceSyncSettlementEnvelope(
+      input,
+      snapshot,
+      observation,
+    );
     const observedSnapshot = await this.getSourceSnapshot(snapshot.id);
     const exactGuardSnapshot =
       observedSnapshot &&
@@ -2923,35 +2997,80 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         ? observedSnapshot
         : snapshot;
     const statements = [
-      d1RunLeaseGuardStmt(
-        this.#orm,
-        input.terminalRun.id,
-        input.leaseToken,
-        [RUN_KIND_SOURCE_SYNC],
-        input.terminalRun,
+      d1SourceSyncSettlementGuardStmt(this.db, settlement.serialized),
+      d1PreparedStatementFromDrizzle(
+        this.db,
+        d1RunLeaseGuardStmt(
+          this.#orm,
+          input.terminalRun.id,
+          input.leaseToken,
+          [RUN_KIND_SOURCE_SYNC],
+          input.terminalRun,
+        ),
       ),
-      d1RunIdentityGuardStmt(
-        this.#orm,
-        input.terminalRun,
-        RUN_KIND_SOURCE_SYNC,
+      d1PreparedStatementFromDrizzle(
+        this.db,
+        d1RunIdentityGuardStmt(
+          this.#orm,
+          input.terminalRun,
+          RUN_KIND_SOURCE_SYNC,
+        ),
       ),
-      d1UpsertRunStmt(
-        this.#orm,
-        RUN_KIND_SOURCE_SYNC,
-        input.terminalRun,
+      d1PreparedStatementFromDrizzle(
+        this.db,
+        d1UpsertRunStmt(
+          this.#orm,
+          RUN_KIND_SOURCE_SYNC,
+          input.terminalRun,
+        ),
       ),
-      d1UpdateSourceSyncCursorStmt(this.#orm, input.terminalRun, snapshot),
-      d1InsertSourceSnapshotIfAbsentStmt(this.#orm, snapshot),
-      d1SourceSnapshotExactGuardStmt(this.#orm, exactGuardSnapshot),
+      d1PreparedStatementFromDrizzle(
+        this.db,
+        d1UpdateSourceSyncCursorStmt(
+          this.#orm,
+          input.terminalRun,
+          snapshot,
+        ),
+      ),
+      d1PreparedStatementFromDrizzle(
+        this.db,
+        d1InsertSourceSnapshotIfAbsentStmt(this.#orm, snapshot),
+      ),
+      d1PreparedStatementFromDrizzle(
+        this.db,
+        d1SourceSnapshotExactGuardStmt(this.#orm, exactGuardSnapshot),
+      ),
+      ...(settlement.changes.length === 0
+        ? []
+        : [d1BulkSourceSyncStaleCapsulesStmt(this.db, settlement.serialized)]),
+      ...(settlement.changes.length === 0
+        ? []
+        : [d1BulkSourceSyncActivityStmt(this.db, settlement.serialized)]),
     ];
     try {
-      await this.#orm.batch(
-        statements as [(typeof statements)[number], ...typeof statements],
-      );
-      return { won: true, run: publicStoredRun(input.terminalRun) };
+      await this.db.batch(statements);
+      return {
+        won: true,
+        run: publicStoredRun(input.terminalRun),
+        staleCapsules: settlement.changes.map(({ capsule }) => capsule),
+      };
     } catch (error) {
-      if (isD1RunLeaseLostError(error)) {
-        const current = await this.getSourceSyncRun(input.terminalRun.id);
+      if (
+        isD1RunLeaseLostError(error) ||
+        isD1SourceSyncSettlementGuardError(error)
+      ) {
+        const currentRow = await d1ReadSourceSyncSettlementRunRow(
+          this.#orm,
+          input.terminalRun.id,
+        );
+        if (d1SourceSyncSettlementHeldRun(
+          currentRow,
+          input.terminalRun,
+          input.leaseToken,
+        ) !== undefined) {
+          throw new SourceSyncSettlementConflictError();
+        }
+        const current = d1SourceSyncSettlementPublicRun(currentRow);
         return { won: false, ...(current ? { run: current } : {}) };
       }
       if (isD1SourceSnapshotConflictError(error)) {
@@ -9519,6 +9638,11 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const assertMaintenanceInactive = () =>
       this.#requestMaintenanceScope?.ensure(this.db) ??
       assertControlD1MaintenanceInactive(this.db);
+    // Admission is request-local and must never become part of the memoized
+    // schema readiness promise. A maintenance read that stalls on the first
+    // operation must not make every later operation in this long-lived store
+    // wait on the same pending fence check.
+    await assertMaintenanceInactive();
     // Serialize concurrent callers onto the one in-flight bootstrap, but never
     // cache a REJECTED promise: a transient failure (e.g. a contended DDL) would
     // otherwise poison the isolate so every later method rejects forever. On
@@ -9527,15 +9651,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     if (this.#initialized === undefined) {
       const attempt = (
         this.#schemaMode === "predeployed"
-          ? Promise.all([
-              assertMaintenanceInactive(),
-              ensurePredeployedD1SchemaReady(this.db),
-            ]).then(() => {
+          ? ensurePredeployedD1SchemaReady(this.db).then(() => {
               this.#predeployedSchemaVerified = true;
             })
-          : assertMaintenanceInactive().then(() =>
-              ensureBootstrapD1SchemaReady(this.db),
-            )
+          : ensureBootstrapD1SchemaReady(this.db)
       ).catch((error: unknown) => {
         if (this.#initialized === attempt) {
           this.#initialized = undefined;
@@ -9544,8 +9663,6 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         throw error;
       });
       this.#initialized = attempt;
-    } else {
-      await assertMaintenanceInactive();
     }
     await this.#initialized;
   }
@@ -9683,6 +9800,760 @@ function d1PersistedRunEnvironment(
     return (run as PlanRun).capsuleContext?.environment ?? null;
   }
   return (run as Partial<Run>).environment ?? null;
+}
+
+interface D1SourceSyncSettlementChange {
+  readonly id: string;
+  readonly before: Capsule;
+  readonly capsule: Capsule;
+  readonly activity: ActivityEvent;
+}
+
+interface D1SourceSyncSettlementEnvelope {
+  readonly serialized: string;
+  readonly changes: readonly D1SourceSyncSettlementChange[];
+}
+
+interface D1SourceSyncSettlementRunRow {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly sourceId: string | null;
+  readonly type: string;
+  readonly status: string;
+  readonly leaseToken: string | null;
+  readonly runJson: unknown;
+}
+
+async function d1ReadSourceSyncSettlementRunRow(
+  orm: DrizzleD1Database<typeof schema>,
+  runId: string,
+): Promise<D1SourceSyncSettlementRunRow | undefined> {
+  return await orm
+    .select({
+      id: schema.runs.id,
+      workspaceId: schema.runs.workspaceId,
+      sourceId: schema.runs.sourceId,
+      type: schema.runs.type,
+      status: schema.runs.status,
+      leaseToken: schema.runs.leaseToken,
+      // Bypass the jsonText decoder so malformed durable JSON becomes a
+      // decoded-identity loss rather than throwing before we can classify the
+      // commit as won:false.
+      runJson: sql<string>`CAST(${schema.runs.runJson} AS TEXT)`,
+    })
+    .from(schema.runs)
+    .where(eq(schema.runs.id, runId))
+    .get();
+}
+
+function d1SourceSyncSettlementPublicRun(
+  row: D1SourceSyncSettlementRunRow | undefined,
+): SourceSyncRun | undefined {
+  const run = d1StoredRunFromD1Value(row?.runJson, true);
+  return run !== undefined && isSourceSyncRunRecord(run)
+    ? publicStoredRun(run)
+    : undefined;
+}
+
+/** Both indexed columns and decoded JSON must still describe the held Run. */
+function d1SourceSyncSettlementHeldRun(
+  row: D1SourceSyncSettlementRunRow | undefined,
+  terminalRun: SourceSyncRun,
+  leaseToken: string,
+): SourceSyncRun | undefined {
+  const run = d1StoredRunFromD1Value(row?.runJson, true);
+  return row !== undefined &&
+      row.id === terminalRun.id &&
+      row.workspaceId === terminalRun.workspaceId &&
+      row.sourceId === terminalRun.sourceId &&
+      row.type === RUN_KIND_SOURCE_SYNC &&
+      row.status === "running" &&
+      row.leaseToken === leaseToken &&
+      run !== undefined &&
+      isSourceSyncRunRecord(run) &&
+      run.status === "running" &&
+      sourceSyncRunSuccessIdentityMatches(run, terminalRun)
+    ? run
+    : undefined;
+}
+
+/**
+ * A destroyed row leaves the settlement census only when its searchable owner,
+ * id, and status agree with one valid JSON object. Any torn/corrupt tombstone
+ * remains visible so the atomic guard can reject it.
+ */
+function d1SourceSyncSettlementCoherentDestroyedCapsuleSql(
+  alias: string,
+): string {
+  const record = `${alias}.record_json`;
+  return `(CASE
+    WHEN COALESCE(json_valid(${record}), 0) <> 1 THEN 0
+    WHEN json_type(${record}, '$') IS NOT 'object' THEN 0
+    WHEN ${alias}.status IS 'destroyed'
+      AND json_extract(${record}, '$.id') IS ${alias}.id
+      AND json_extract(${record}, '$.workspaceId') IS ${alias}.space_id
+      AND json_extract(${record}, '$.status') IS ${alias}.status
+      THEN 1
+    ELSE 0
+  END = 1)`;
+}
+
+const D1_SOURCE_SYNC_SETTLEMENT_BIND_MARKER =
+  "__takosumi_source_sync_settlement_bound_json__";
+
+/** Compile one Drizzle builder into the same native D1 batch as raw guards. */
+function d1PreparedStatementFromDrizzle(
+  db: D1Database,
+  statement: {
+    toSQL(): { readonly sql: string; readonly params: readonly unknown[] };
+  },
+): D1PreparedStatement {
+  const query = statement.toSQL();
+  const prepared = db.prepare(query.sql);
+  return query.params.length === 0
+    ? prepared
+    : prepared.bind(...query.params);
+}
+
+/** Bind the envelope without interpolating its JSON into raw SQL text. */
+function d1SourceSyncSettlementPreparedStatement(
+  db: D1Database,
+  statement: string,
+  serialized: string,
+): D1PreparedStatement {
+  const pieces = statement.split(D1_SOURCE_SYNC_SETTLEMENT_BIND_MARKER);
+  if (pieces.length !== 2) {
+    throw new TypeError("SourceSync settlement SQL must contain one bind marker");
+  }
+  return db.prepare(`${pieces[0]!}?${pieces[1]!}`).bind(serialized);
+}
+
+/**
+ * Serialize the complete settlement observation once. D1 receives this as one
+ * JSON-table parameter rather than one bound parameter (or statement) per
+ * Capsule/read. A source-sync success is refused before the batch when the
+ * single value would exceed D1's documented string/row capacity.
+ */
+function d1SourceSyncSettlementEnvelope(
+  input: CommitSourceSyncSuccessInput,
+  snapshot: SourceSnapshot,
+  observation: SourceSyncSettlementObservation,
+): D1SourceSyncSettlementEnvelope {
+  if (
+    observation.capsules.length > MAX_SOURCE_RECONCILIATION_CAPSULES ||
+    new Set(observation.capsules.map((capsule) => capsule.id)).size !==
+      observation.capsules.length
+  ) {
+    throw new SourceSyncSettlementConflictError();
+  }
+  const observedById = new Map(
+    observation.capsules.map((capsule) => [capsule.id, capsule]),
+  );
+  const changes = observation.changes.map(({ capsule, activity }) => {
+    const before = observedById.get(capsule.id);
+    if (!before) throw new SourceSyncSettlementConflictError();
+    return {
+      id: capsule.id,
+      before,
+      capsule,
+      activity,
+    };
+  });
+  const serialized = JSON.stringify({
+    workspaceId: input.terminalRun.workspaceId,
+    terminalRun: publicStoredRun(input.terminalRun),
+    leaseToken: input.leaseToken,
+    snapshot,
+    capsules: observation.capsules.map((capsule) => ({
+      id: capsule.id,
+      capsule,
+    })),
+    reads: observation.reads,
+    changes,
+  });
+  if (
+    new TextEncoder().encode(serialized).byteLength >
+    D1_SOURCE_SYNC_SETTLEMENT_ENVELOPE_MAX_BYTES
+  ) {
+    throw new SourceSyncSettlementConflictError();
+  }
+  return { serialized, changes };
+}
+
+function d1SqlStringLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function d1SourceSyncSettlementReadValuePath(path: string): string {
+  return d1SqlStringLiteral(`$."${path}"`);
+}
+
+/**
+ * Decode the physical JSON text the same way as the D1 getters. Ordinary Run
+ * families accept the normal object representation only. SourceSync alone may
+ * unwrap its historical extra JSON-string layers.
+ */
+function d1SourceSyncSettlementRunJson(
+  alias: string,
+  allowHistoricalSourceSyncEncoding = false,
+): string {
+  const json = `${alias}.run_json`;
+  if (!allowHistoricalSourceSyncEncoding) {
+    return `CASE
+      WHEN COALESCE(json_valid(${json}), 0) <> 1 THEN NULL
+      WHEN json_type(${json}, '$') = 'object' THEN ${json}
+      ELSE NULL
+    END`;
+  }
+  const once = `json_extract(${json}, '$')`;
+  const twice = `json_extract(${once}, '$')`;
+  return `CASE
+    WHEN COALESCE(json_valid(${json}), 0) = 1 THEN CASE
+      WHEN json_type(${json}, '$') = 'object' THEN ${json}
+      WHEN json_type(${json}, '$') = 'text'
+        AND COALESCE(json_valid(${once}), 0) = 1
+        THEN CASE
+          WHEN json_type(${once}, '$') = 'object' THEN ${once}
+          WHEN json_type(${once}, '$') = 'text'
+            THEN CASE
+              WHEN COALESCE(json_valid(${twice}), 0) <> 1 THEN NULL
+              WHEN json_type(${twice}, '$') = 'object' THEN ${twice}
+              ELSE NULL
+            END
+          ELSE NULL
+        END
+      ELSE NULL
+    END
+    ELSE NULL
+  END`;
+}
+
+function d1SourceSyncSettlementRunReadJson(
+  normalizedJson: string,
+  kindExpression: string,
+): string {
+  return `(CASE
+    WHEN ${kindExpression} IN ('apply', 'plan')
+      AND json_extract(${normalizedJson}, '$.status') = 'blocked'
+      THEN json_set(${normalizedJson}, '$.status', 'failed')
+    ELSE ${normalizedJson}
+  END)`;
+}
+
+function d1SourceSyncSettlementReadProjectionMatches(
+  kind: SourceSyncSettlementReadKind,
+  actualJson: string,
+  expectedJson: string,
+): string {
+  const paths = SOURCE_SYNC_SETTLEMENT_READ_PATHS[kind];
+  const matches = paths.map((path) => {
+    if (path === "$") {
+      const expected = `json_extract(${expectedJson}, '$."$"')`;
+      return `(CASE
+        WHEN COALESCE(json_valid(${actualJson}), 0) = 1
+          AND COALESCE(json_valid(${expected}), 0) = 1
+          THEN json(${actualJson}) = json(${expected})
+        ELSE 0
+      END)`;
+    }
+    const actualPath = d1SqlStringLiteral(path);
+    const expectedPath = d1SourceSyncSettlementReadValuePath(path);
+    return `(json_type(${actualJson}, ${actualPath}) IS
+        json_type(${expectedJson}, ${expectedPath})
+      AND (
+        json_type(${expectedJson}, ${expectedPath}) IS NULL
+        OR json_extract(${actualJson}, ${actualPath}) IS
+          json_extract(${expectedJson}, ${expectedPath})
+      ))`;
+  });
+  return `(CASE
+    WHEN COALESCE(json_valid(${actualJson}), 0) = 1
+      AND COALESCE(json_valid(${expectedJson}), 0) = 1
+      THEN CASE WHEN ${matches.join(" AND ")} THEN 1 ELSE 0 END
+    ELSE 0
+  END = 1)`;
+}
+
+function d1SourceSyncSettlementCapsuleMatches(
+  actualAlias: string,
+  expectedJson: string,
+): string {
+  const actual = `${actualAlias}`;
+  const expected = (path: string) =>
+    `json_extract(${expectedJson}, ${d1SqlStringLiteral(path)})`;
+  return `(
+    CASE WHEN json_valid(${actual}.record_json) = 1
+      AND json_valid(${expected("$")}) = 1
+      THEN json(${actual}.record_json) = json(${expected("$")})
+      ELSE 0 END
+    AND ${actual}.id IS ${expected("$.id")}
+    AND ${actual}.space_id IS ${expected("$.workspaceId")}
+    AND ${actual}.project_id IS ${expected("$.projectId")}
+    AND ${actual}.name IS ${expected("$.name")}
+    AND ${actual}.slug IS ${expected("$.slug")}
+    AND ${actual}.source_id IS ${expected("$.sourceId")}
+    AND ${actual}.install_config_id IS ${expected("$.installConfigId")}
+    AND ${actual}.environment IS ${expected("$.environment")}
+    AND ${actual}.current_state_version_id IS
+      ${expected("$.currentStateVersionId")}
+    AND ${actual}.current_state_generation IS
+      ${expected("$.currentStateGeneration")}
+    AND ${actual}.current_output_snapshot_id IS
+      ${expected("$.currentOutputId")}
+    AND ${actual}.status IS ${expected("$.status")}
+    AND ${actual}.created_at IS ${expected("$.createdAt")}
+    AND ${actual}.updated_at IS ${expected("$.updatedAt")}
+  )`;
+}
+
+function d1SourceSyncSettlementSourceMatches(
+  actualAlias: string,
+  expectedJson: string,
+): string {
+  const expected = `json_extract(${expectedJson}, '$."$"')`;
+  return `(
+    CASE WHEN json_valid(${actualAlias}.record_json) = 1
+      AND json_valid(${expected}) = 1
+      THEN json(${actualAlias}.record_json) = json(${expected})
+      ELSE 0 END
+    AND ${actualAlias}.id IS json_extract(${expected}, '$.id')
+    AND ${actualAlias}.space_id IS json_extract(${expected}, '$.workspaceId')
+    AND ${actualAlias}.status IS json_extract(${expected}, '$.status')
+    AND ${actualAlias}.created_at IS json_extract(${expected}, '$.createdAt')
+    AND ${actualAlias}.updated_at IS json_extract(${expected}, '$.updatedAt')
+  )`;
+}
+
+function d1SourceSyncSettlementStateJson(actualAlias: string): string {
+  return `json_object(
+    'id', ${actualAlias}.id,
+    'workspaceId', ${actualAlias}.space_id,
+    'capsuleId', ${actualAlias}.installation_id,
+    'environment', ${actualAlias}.environment,
+    'generation', ${actualAlias}.generation,
+    'stateRef', ${actualAlias}.object_key,
+    'digest', ${actualAlias}.digest,
+    'createdByRunId', ${actualAlias}.created_by_run_id,
+    'createdAt', ${actualAlias}.created_at
+  )`;
+}
+
+function d1SourceSyncSettlementRunClassifier(
+  kind: SourceSyncSettlementReadKind,
+  alias: string,
+  normalizedJson: string,
+): string {
+  switch (kind) {
+    case "apply":
+      return `(
+        ${alias}.type IN ('apply', 'destroy_apply')
+        AND json_type(${normalizedJson}, '$.planRunId') IS NOT NULL
+        AND json_type(${normalizedJson}, '$.expected') IS NOT NULL
+      )`;
+    case "plan":
+      return `(
+        ${alias}.type IN ('plan', 'destroy_plan', 'drift_check')
+        AND json_type(${normalizedJson}, '$.sourceDigest') IS NOT NULL
+        AND json_type(${normalizedJson}, '$.variablesDigest') IS NOT NULL
+      )`;
+    case "restore":
+      return `(
+        ${alias}.type IN ('backup', 'restore')
+        AND ${normalizedJson} IS NOT NULL
+        AND json_type(${normalizedJson}, '$') = 'object'
+      )`;
+    default:
+      return "0";
+  }
+}
+
+/**
+ * Compare the complete observed census/read-set and the existing Activity
+ * identities before any terminal or projection statement in the D1 batch.
+ * A failed predicate selects a deliberately invalid Run row, forcing D1 to
+ * abort the entire batch. The same JSON envelope is then reused by bulk stale
+ * and Activity writes, keeping the 100-parameter limit independent of census
+ * size.
+ */
+function d1SourceSyncSettlementGuardSql(): string {
+  const reads = (kind: SourceSyncSettlementReadKind) => {
+    const alias = "r";
+    const normalized = `${alias}.normalized_json`;
+    const projected = d1SourceSyncSettlementRunReadJson(
+      normalized,
+      "o.kind",
+    );
+    const classifier = d1SourceSyncSettlementRunClassifier(
+      kind,
+      alias,
+      normalized,
+    );
+    const projection = d1SourceSyncSettlementReadProjectionMatches(
+      kind,
+      projected,
+      "o.read_value",
+    );
+    if (kind === "source") {
+      return `EXISTS (
+        SELECT 1 FROM sources r
+        WHERE r.id = o.id
+          AND ${d1SourceSyncSettlementSourceMatches("r", "o.read_value")}
+      )`;
+    }
+    if (kind === "snapshot") {
+      return `EXISTS (
+        SELECT 1 FROM source_snapshots r
+        WHERE r.id = o.id
+          AND CASE WHEN json_valid(r.record_json) = 1
+            THEN ${d1SourceSyncSettlementReadProjectionMatches(
+              kind,
+              "r.record_json",
+              "o.read_value",
+            )}
+            ELSE 0 END
+          AND r.source_id IS json_extract(o.read_value, '$."$.sourceId"')
+      )`;
+    }
+    if (kind === "state") {
+      const state = d1SourceSyncSettlementStateJson("r");
+      return `EXISTS (
+        SELECT 1 FROM state_versions r
+        WHERE r.id = o.id
+          AND ${d1SourceSyncSettlementReadProjectionMatches(
+            kind,
+            state,
+            "o.read_value",
+          )}
+      )`;
+    }
+    return `EXISTS (
+      SELECT 1 FROM normalized_runs r
+      WHERE r.id = o.id
+        AND ${classifier}
+        AND ${projection}
+    )`;
+  };
+  const present = (kind: SourceSyncSettlementReadKind) => {
+    if (kind === "source") return "EXISTS (SELECT 1 FROM sources r WHERE r.id = o.id)";
+    if (kind === "snapshot") return "EXISTS (SELECT 1 FROM source_snapshots r WHERE r.id = o.id)";
+    if (kind === "state") return "EXISTS (SELECT 1 FROM state_versions r WHERE r.id = o.id)";
+    const alias = "r";
+    const normalized = `${alias}.normalized_json`;
+    return `EXISTS (
+      SELECT 1 FROM normalized_runs r
+      WHERE r.id = o.id
+        AND ${d1SourceSyncSettlementRunClassifier(kind, alias, normalized)}
+    )`;
+  };
+  const readMismatch = `(
+    (SELECT count(*) FROM observed_reads)
+      <> (SELECT count(*) FROM (
+        SELECT kind, id FROM observed_reads GROUP BY kind, id
+      ))
+    OR EXISTS (
+      SELECT 1 FROM observed_reads o
+      WHERE typeof(o.kind) <> 'text'
+        OR typeof(o.id) <> 'text'
+        OR (o.read_value IS NULL AND (
+      CASE o.kind
+        WHEN 'source' THEN ${present("source")}
+        WHEN 'snapshot' THEN ${present("snapshot")}
+        WHEN 'state' THEN ${present("state")}
+        WHEN 'apply' THEN ${present("apply")}
+        WHEN 'plan' THEN ${present("plan")}
+        WHEN 'restore' THEN ${present("restore")}
+        ELSE 1
+      END
+    ))
+      OR (o.read_value IS NOT NULL AND (
+      CASE o.kind
+        WHEN 'source' THEN NOT ${reads("source")}
+        WHEN 'snapshot' THEN NOT ${reads("snapshot")}
+        WHEN 'state' THEN NOT ${reads("state")}
+        WHEN 'apply' THEN NOT ${reads("apply")}
+        WHEN 'plan' THEN NOT ${reads("plan")}
+        WHEN 'restore' THEN NOT ${reads("restore")}
+        ELSE 1
+      END
+    ))
+    )
+  )`;
+  const coherentDestroyed =
+    d1SourceSyncSettlementCoherentDestroyedCapsuleSql("c");
+  const censusMismatch = `(
+    (SELECT count(*) FROM capsules c
+      WHERE c.space_id = json_extract(e.payload, '$.workspaceId')
+        AND NOT ${coherentDestroyed})
+      <> (SELECT count(*) FROM observed_capsules)
+    OR (SELECT count(*) FROM observed_capsules)
+      <> (SELECT count(DISTINCT id) FROM observed_capsules)
+    OR EXISTS (
+      SELECT 1 FROM observed_capsules o
+      WHERE typeof(o.id) <> 'text'
+        OR json_extract(o.capsule_json, '$.id') IS NOT o.id
+        OR json_extract(o.capsule_json, '$.workspaceId') IS NOT
+          json_extract(e.payload, '$.workspaceId')
+        OR json_extract(o.capsule_json, '$.status') IS 'destroyed'
+        OR NOT EXISTS (
+        SELECT 1 FROM capsules c
+        WHERE c.id = o.id
+          AND c.space_id = json_extract(e.payload, '$.workspaceId')
+          AND NOT ${coherentDestroyed}
+          AND ${d1SourceSyncSettlementCapsuleMatches("c", "o.capsule_json")}
+      )
+    )
+  )`;
+  const changesMismatch = `(
+    (SELECT count(*) FROM observed_changes)
+      <> (SELECT count(DISTINCT id) FROM observed_changes)
+    OR (SELECT count(*) FROM observed_changes)
+      <> (SELECT count(DISTINCT json_extract(activity_json, '$.id'))
+          FROM observed_changes)
+    OR EXISTS (
+      SELECT 1 FROM observed_changes ch
+      WHERE COALESCE(json_valid(ch.before_json), 0) <> 1
+        OR COALESCE(json_valid(ch.capsule_json), 0) <> 1
+        OR COALESCE(json_valid(ch.activity_json), 0) <> 1
+        OR typeof(ch.id) <> 'text'
+        OR typeof(json_extract(ch.activity_json, '$.id')) <> 'text'
+        OR json_extract(ch.capsule_json, '$.id') IS NOT ch.id
+        OR json_extract(ch.capsule_json, '$.workspaceId') IS NOT
+          json_extract(e.payload, '$.workspaceId')
+        OR json_extract(ch.capsule_json, '$.status') IS NOT 'stale'
+        OR json_extract(ch.activity_json, '$.action') IS NOT 'capsule.stale'
+        OR json_extract(ch.activity_json, '$.targetType') IS NOT 'capsule'
+        OR json_extract(ch.activity_json, '$.targetId') IS NOT ch.id
+        OR json_extract(ch.activity_json, '$.workspaceId') IS NOT
+          json_extract(e.payload, '$.workspaceId')
+        OR NOT EXISTS (
+          SELECT 1 FROM observed_capsules o
+          WHERE o.id = ch.id
+            AND CASE
+              WHEN COALESCE(json_valid(o.capsule_json), 0) = 1
+                AND COALESCE(json_valid(ch.before_json), 0) = 1
+                THEN json(o.capsule_json) = json(ch.before_json)
+              ELSE 0
+            END
+        )
+        OR NOT EXISTS (
+          SELECT 1 FROM capsules c
+          WHERE c.id = ch.id
+            AND c.space_id = json_extract(e.payload, '$.workspaceId')
+            AND ${d1SourceSyncSettlementCapsuleMatches("c", "ch.before_json")}
+        )
+      )
+    OR EXISTS (
+      SELECT 1 FROM audit_events a
+      JOIN observed_changes ch
+        ON a.id = json_extract(ch.activity_json, '$.id')
+      WHERE COALESCE(json_valid(a.record_json), 0) <> 1
+        OR a.space_id IS NOT json_extract(ch.activity_json, '$.workspaceId')
+        OR a.actor_id IS NOT json_extract(ch.activity_json, '$.actorId')
+        OR a.action IS NOT json_extract(ch.activity_json, '$.action')
+        OR a.target_type IS NOT json_extract(ch.activity_json, '$.targetType')
+        OR a.target_id IS NOT json_extract(ch.activity_json, '$.targetId')
+        OR a.run_id IS NOT json_extract(ch.activity_json, '$.runId')
+        OR a.created_at IS NOT json_extract(ch.activity_json, '$.createdAt')
+        OR CASE
+          WHEN COALESCE(json_valid(a.record_json), 0) = 1
+            AND COALESCE(json_valid(ch.activity_json), 0) = 1
+            THEN json(a.record_json) IS NOT json(ch.activity_json)
+          ELSE 1
+        END
+    )
+  )`;
+  const candidateRun = `EXISTS (
+    SELECT 1 FROM source_sync_runs r
+    WHERE r.id = json_extract(e.payload, '$.terminalRun.id')
+      AND r.type = 'source_sync'
+      AND r.status = 'running'
+      AND r.lease_token IS json_extract(e.payload, '$.leaseToken')
+      AND r.space_id IS json_extract(e.payload, '$.terminalRun.workspaceId')
+      AND r.source_id IS json_extract(e.payload, '$.terminalRun.sourceId')
+      AND COALESCE(json_valid(r.normalized_json), 0) = 1
+      AND json_type(r.normalized_json, '$') = 'object'
+      AND json_extract(r.normalized_json, '$.status') IS 'running'
+      AND json_extract(r.normalized_json, '$.kind') IS 'source_sync'
+      AND json_extract(r.normalized_json, '$.id') IS
+        json_extract(e.payload, '$.terminalRun.id')
+      AND json_extract(r.normalized_json, '$.workspaceId') IS
+        json_extract(e.payload, '$.terminalRun.workspaceId')
+      AND json_extract(r.normalized_json, '$.sourceId') IS
+        json_extract(e.payload, '$.terminalRun.sourceId')
+      AND json_extract(r.normalized_json, '$.url') IS
+        json_extract(e.payload, '$.terminalRun.url')
+      AND json_extract(r.normalized_json, '$.ref') IS
+        json_extract(e.payload, '$.terminalRun.ref')
+      AND json_extract(r.normalized_json, '$.path') IS
+        json_extract(e.payload, '$.terminalRun.path')
+      AND json_extract(r.normalized_json, '$.archiveRef') IS
+        json_extract(e.payload, '$.terminalRun.archiveRef')
+      AND (
+        json_type(r.normalized_json, '$.snapshotId') IS NULL
+        OR (
+          json_type(r.normalized_json, '$.snapshotId') = 'text'
+          AND json_extract(r.normalized_json, '$.snapshotId') IS
+            json_extract(e.payload, '$.terminalRun.snapshotId')
+        )
+      )
+      AND coalesce(json_extract(r.normalized_json, '$.intent'), 'observe') IS
+        coalesce(json_extract(e.payload, '$.terminalRun.intent'), 'observe')
+  )`;
+  return `
+WITH
+  envelope AS (SELECT ${D1_SOURCE_SYNC_SETTLEMENT_BIND_MARKER} AS payload),
+  e AS (SELECT payload FROM envelope),
+  observed_capsules AS (
+    SELECT
+      json_extract(item.value, '$.id') AS id,
+      json_extract(item.value, '$.capsule') AS capsule_json
+    FROM e, json_each(e.payload, '$.capsules') AS item
+  ),
+  observed_reads AS (
+    SELECT
+      json_extract(item.value, '$.kind') AS kind,
+      json_extract(item.value, '$.id') AS id,
+      json_extract(item.value, '$.value') AS read_value
+    FROM e, json_each(e.payload, '$.reads') AS item
+  ),
+  observed_changes AS (
+    SELECT
+      json_extract(item.value, '$.id') AS id,
+      json_extract(item.value, '$.before') AS before_json,
+      json_extract(item.value, '$.capsule') AS capsule_json,
+      json_extract(item.value, '$.activity') AS activity_json
+    FROM e, json_each(e.payload, '$.changes') AS item
+  ),
+  normalized_runs AS MATERIALIZED (
+    SELECT
+      r.*,
+      ${d1SourceSyncSettlementRunJson("r")} AS normalized_json
+    FROM runs r
+    WHERE EXISTS (
+      SELECT 1 FROM observed_reads o
+      WHERE o.id = r.id
+        AND (
+          (o.kind = 'apply' AND r.type IN ('apply', 'destroy_apply'))
+          OR (o.kind = 'plan'
+            AND r.type IN ('plan', 'destroy_plan', 'drift_check'))
+          OR (o.kind = 'restore' AND r.type IN ('backup', 'restore'))
+        )
+    )
+  ),
+  source_sync_runs AS MATERIALIZED (
+    SELECT
+      r.*,
+      ${d1SourceSyncSettlementRunJson("r", true)} AS normalized_json
+    FROM runs r, e
+    WHERE r.type = 'source_sync'
+      AND r.id = json_extract(e.payload, '$.terminalRun.id')
+  )
+INSERT INTO runs (
+  id, run_group_id, space_id, source_id, installation_id, environment,
+  type, status, lease_token, heartbeat_at, run_json, created_at
+)
+SELECT
+  json_extract(e.payload, '$.terminalRun.id'), NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL
+FROM e
+WHERE NOT (
+  EXISTS (
+    SELECT 1 FROM workspaces w
+    WHERE w.id = json_extract(e.payload, '$.workspaceId')
+      AND w.management_state IN ('active', 'draining')
+  )
+  AND ${candidateRun}
+  AND NOT ${censusMismatch}
+  AND NOT ${readMismatch}
+  AND NOT ${changesMismatch}
+  AND json_extract(e.payload, '$.workspaceId') IS
+    json_extract(e.payload, '$.terminalRun.workspaceId')
+)`;
+}
+
+const D1_SOURCE_SYNC_SETTLEMENT_GUARD_SQL =
+  d1SourceSyncSettlementGuardSql();
+
+function d1SourceSyncSettlementGuardStmt(
+  db: D1Database,
+  serialized: string,
+): D1PreparedStatement {
+  return d1SourceSyncSettlementPreparedStatement(
+    db,
+    D1_SOURCE_SYNC_SETTLEMENT_GUARD_SQL,
+    serialized,
+  );
+}
+
+const D1_BULK_SOURCE_SYNC_STALE_CAPSULES_SQL = `
+WITH envelope AS (
+  SELECT ${D1_SOURCE_SYNC_SETTLEMENT_BIND_MARKER} AS payload
+),
+observed_changes AS (
+  SELECT
+    json_extract(item.value, '$.before') AS before_json,
+    json_extract(item.value, '$.capsule') AS capsule_json
+  FROM envelope, json_each(envelope.payload, '$.changes') AS item
+)
+UPDATE capsules AS c
+SET
+  status = json_extract(ch.capsule_json, '$.status'),
+  record_json = json(ch.capsule_json),
+  updated_at = json_extract(ch.capsule_json, '$.updatedAt')
+FROM observed_changes AS ch CROSS JOIN envelope AS e
+WHERE c.id = json_extract(ch.capsule_json, '$.id')
+  AND c.space_id = json_extract(e.payload, '$.workspaceId')
+  AND json(c.record_json) = json(ch.before_json)
+  AND c.status IS json_extract(ch.before_json, '$.status')
+`;
+
+function d1BulkSourceSyncStaleCapsulesStmt(
+  db: D1Database,
+  serialized: string,
+): D1PreparedStatement {
+  return d1SourceSyncSettlementPreparedStatement(
+    db,
+    D1_BULK_SOURCE_SYNC_STALE_CAPSULES_SQL,
+    serialized,
+  );
+}
+
+const D1_BULK_SOURCE_SYNC_ACTIVITY_SQL = `
+WITH envelope AS (
+  SELECT ${D1_SOURCE_SYNC_SETTLEMENT_BIND_MARKER} AS payload
+),
+observed_changes AS (
+  SELECT json_extract(item.value, '$.activity') AS activity_json
+  FROM envelope, json_each(envelope.payload, '$.changes') AS item
+)
+INSERT INTO audit_events (
+  id, space_id, actor_id, action, target_type, target_id,
+  run_id, created_at, record_json
+)
+SELECT
+  json_extract(activity_json, '$.id'),
+  json_extract(activity_json, '$.workspaceId'),
+  json_extract(activity_json, '$.actorId'),
+  json_extract(activity_json, '$.action'),
+  json_extract(activity_json, '$.targetType'),
+  json_extract(activity_json, '$.targetId'),
+  json_extract(activity_json, '$.runId'),
+  json_extract(activity_json, '$.createdAt'),
+  json(activity_json)
+FROM observed_changes
+WHERE COALESCE(json_valid(activity_json), 0) = 1
+ON CONFLICT(id) DO NOTHING
+`;
+
+function d1BulkSourceSyncActivityStmt(
+  db: D1Database,
+  serialized: string,
+): D1PreparedStatement {
+  return d1SourceSyncSettlementPreparedStatement(
+    db,
+    D1_BULK_SOURCE_SYNC_ACTIVITY_SQL,
+    serialized,
+  );
 }
 
 function d1UpsertRunStmt(
@@ -11059,6 +11930,15 @@ function assertD1AtomicCommitBatch(
 }
 
 function isD1RunLeaseLostError(error: unknown): boolean {
+  return error instanceof Error
+    ? error.message.includes("UNIQUE constraint failed: runs.id") ||
+        error.message.includes("constraint failed: runs.id") ||
+        error.message.includes("NOT NULL constraint failed: runs.space_id") ||
+        error.message.includes("constraint failed: runs.space_id")
+    : false;
+}
+
+function isD1SourceSyncSettlementGuardError(error: unknown): boolean {
   return error instanceof Error
     ? error.message.includes("UNIQUE constraint failed: runs.id") ||
         error.message.includes("constraint failed: runs.id") ||

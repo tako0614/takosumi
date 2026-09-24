@@ -46,7 +46,6 @@ import {
 } from "./store.ts";
 import type { OpenTofuRunner, OpenTofuSourceSyncResult } from "./mod.ts";
 import { NON_TERMINAL_RUN_STATUSES } from "./mod.ts";
-import { getCapsuleAdoptedSourceSnapshot } from "./capsule_source_revision.ts";
 import {
   mapVaultError,
   OpenTofuControllerError,
@@ -321,7 +320,7 @@ export class SourceLifecycleService {
     leaseToken: string,
     result: OpenTofuSourceSyncResult,
     reuseSnapshot: SourceSnapshot | undefined,
-  ): Promise<SourceSyncRun> {
+  ): Promise<SourceSyncRun | undefined> {
     const finishedAtMs = this.#now();
     const finishedAtIso = new Date(finishedAtMs).toISOString();
     // A manual Workload review may pin the Source to an immutable commit. The
@@ -414,26 +413,28 @@ export class SourceLifecycleService {
       snapshot,
     });
     if (!terminal.won) {
-      return terminal.run ?? succeeded;
+      // A vanished/lost Run is not a successfully committed observation.
+      return terminal.run;
     }
-    await this.#markSourceCapsulesStaleForNewSnapshot({
+    await this.#notifySourceCapsulesStaleForNewSnapshot({
       running,
       snapshot,
-      finishedAtIso,
+      capsules: terminal.staleCapsules ?? [],
     });
     return succeeded;
   }
 
-  async #markSourceCapsulesStaleForNewSnapshot(input: {
+  async #notifySourceCapsulesStaleForNewSnapshot(input: {
     readonly running: SourceSyncRun;
     readonly snapshot: SourceSnapshot;
-    readonly finishedAtIso: string;
+    readonly capsules: readonly Capsule[];
   }): Promise<void> {
     // The SourceSync Run's original admission tuple is the only authority a
     // post-drain completion may forward to automatic follow-up. Public Run
     // projections strip this metadata, so ask the exact internal identity
     // seam before iterating Capsules. A missing/corrupt historical tuple is
-    // fail-closed for the follow-up only; stale finalization still proceeds.
+    // fail-closed for the follow-up only; stale projection and Activity were
+    // already committed atomically with the SourceSync result.
     let expectedWorkspaceManagementAuthority:
       | WorkspaceManagementAuthority
       | undefined;
@@ -449,67 +450,7 @@ export class SourceLifecycleService {
         expectedWorkspaceManagementAuthority = undefined;
       }
     }
-    const capsules = await this.#store.listCapsules(input.running.workspaceId);
-    for (const capsule of capsules) {
-      if (
-        capsule.sourceId !== input.running.sourceId ||
-        (capsule.status !== "active" && capsule.status !== "stale")
-      ) {
-        continue;
-      }
-      const currentStateVersionId = capsule.currentStateVersionId;
-      if (!currentStateVersionId) continue;
-      let deployedSnapshot: SourceSnapshot | undefined;
-      try {
-        deployedSnapshot = await getCapsuleAdoptedSourceSnapshot(
-          this.#store,
-          capsule,
-        );
-      } catch {
-        // A broken current-state lineage cannot authorize a status transition.
-        // The ordinary plan path surfaces the typed fail-closed error.
-        continue;
-      }
-      if (!deployedSnapshot) continue;
-      if (
-        deployedSnapshot.ref !== input.snapshot.ref ||
-        deployedSnapshot.path !== input.snapshot.path
-      ) {
-        continue;
-      }
-      const deployedSourceSnapshotId = deployedSnapshot.id;
-      if (deployedSourceSnapshotId === input.snapshot.id) continue;
-      if (
-        sourceSnapshotsRepresentSameGitCommit(deployedSnapshot, input.snapshot)
-      ) {
-        continue;
-      }
-      const stale = await this.#store.markCapsuleStale({
-        capsuleId: capsule.id,
-        expected: capsule,
-        reason: "source-revision",
-        updatedAt: input.finishedAtIso,
-      });
-      if (stale.kind !== "updated") continue;
-      const staleCapsule = stale.capsule;
-      await this.#store.putActivityEvent({
-        id: this.#newId("act"),
-        workspaceId: staleCapsule.workspaceId,
-        action: "capsule.stale",
-        targetType: "capsule",
-        targetId: staleCapsule.id,
-        metadata: {
-          reason: "source_ref_changed",
-          sourceId: input.running.sourceId,
-          sourceSnapshotId: input.snapshot.id,
-          previousSourceSnapshotId: deployedSourceSnapshotId,
-          resolvedCommit: input.snapshot.resolvedCommit,
-          previousResolvedCommit: deployedSnapshot?.resolvedCommit ?? null,
-          ref: input.running.ref,
-          path: input.running.path,
-        },
-        createdAt: input.finishedAtIso,
-      });
+    for (const staleCapsule of input.capsules) {
       // Auto-update hook: the controller decides (autoUpdate opt-in +
       // one-attempt-per-snapshot backoff) and enqueues the update plan.
       if (input.running.intent !== "manual_plan") {
@@ -532,8 +473,8 @@ export class SourceLifecycleService {
           ) continue;
         } catch {
           // A transient management read leaves the Workspace state unknown;
-          // skip this Capsule's auto-update attempt while continuing stale
-          // observation for the remaining Capsules.
+          // skip this Capsule's auto-update attempt without undoing any
+          // committed projection or suppressing the other callbacks.
           continue;
         }
         await this.#onCapsuleStaleForNewSnapshot?.({
@@ -726,21 +667,6 @@ function sourceSnapshotMatchesRun(
     snapshot.url === running.url &&
     snapshot.ref === running.ref &&
     snapshot.path === running.path
-  );
-}
-
-function sourceSnapshotsRepresentSameGitCommit(
-  a: SourceSnapshot,
-  b: SourceSnapshot,
-): boolean {
-  return (
-    a.origin === "git" &&
-    b.origin === "git" &&
-    a.sourceId === b.sourceId &&
-    a.url === b.url &&
-    a.ref === b.ref &&
-    a.path === b.path &&
-    a.resolvedCommit === b.resolvedCommit
   );
 }
 

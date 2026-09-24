@@ -456,27 +456,15 @@ export const ja = {
     "変更がある場合は内容を確認してからデプロイできます。",
   "app.deploys.sourceVersionTitle": "取得元のバージョン",
   "app.deploys.sourceVersionSubtitle":
-    "変更を確認する前に、Git のコミットを明示してください。",
-  "app.deploys.sourceVersionCurrent": "現在のバージョン",
+    "変更を確認する前に、Git のブランチ、タグ、またはコミットを指定してください。",
+  "app.deploys.sourceVersionCurrent": "追跡するバージョン",
   "app.deploys.sourceVersionChange": "バージョンを変更",
-  "app.deploys.sourceVersionInput": "コミット",
+  "app.deploys.sourceVersionInput": "ブランチ・タグ・コミット",
   "app.deploys.sourceVersionHint":
-    "40 桁の Git コミットを入力してください。ブランチ名やタグは使えません。",
-  "app.deploys.sourceVersionApply": "バージョンを設定",
+    "このワークロードで使うブランチ名、タグ名、またはコミットを入力し、適用前に内容を確認してください。",
+  "app.deploys.sourceVersionApply": "このバージョンを確認",
   "app.deploys.sourceVersionUnavailable":
-    "既存の取得元を読み込めませんでした。",
-  "app.deploys.sourceImpactTitle": "影響を受けるワークロード",
-  "app.deploys.sourceImpactLoading":
-    "この取得元を使っているワークロードを確認しています。",
-  "app.deploys.sourceImpactUnavailable":
-    "影響を受けるワークロードを確認できません。バージョン変更の前に再試行してください。",
-  "app.deploys.sourceImpactSingle": "このワークロードだけが取得元を使っています。",
-  "app.deploys.sourceImpactShared":
-    "この取得元は {count} 件のワークロードで共有されています。変更するとすべてに反映されます。",
-  "app.deploys.sourceImpactConfirmTitle": "共有された取得元のバージョンを変更しますか？",
-  "app.deploys.sourceImpactConfirmMessage":
-    "この取得元は {count} 件のワークロードで使われています:\n{workloads}\nすべてにこのコミットを設定しますか？",
-  "app.deploys.sourceImpactConfirmCta": "共有バージョンを変更",
+    "現在の適用済みバージョンを取得できません。",
   "app.deploys.empty": "まだデプロイ履歴はありません。",
   "app.deploys.restore": "この状態に戻す",
   "app.deploys.restoreDisclosure": "以前の状態に戻す",
@@ -644,7 +632,7 @@ export const ja = {
   "controlError.sourceRevisionMismatch":
     "取得元の識別情報または指定したバージョンが変わりました。現在のサービスを確認し直してください。",
   "controlError.invalidSourceRevision":
-    "変更を確認する前に、40 桁の Git コミットを指定してください。",
+    "変更を確認する前に、Git のブランチ、タグ、またはコミットを指定してください。",
   "controlError.compatibilityStale":
     "確認結果が古くなりました。もう一度確認してください。",
   "controlError.runnerUnavailable":

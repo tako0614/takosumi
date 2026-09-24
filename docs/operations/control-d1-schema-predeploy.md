@@ -22,8 +22,37 @@ bun run deploy -- takosumi-control-d1-schema-staging verify
 
 Selecting this surface fixes the staging environment; caller-supplied
 `--environment` arguments are refused. There is no official production in-place
-schema surface. Production must first qualify its separate transition procedure
-and owner entrypoint under the boundaries below.
+schema surface in the generic lane. A temporary, explicit production owner lane
+exists only for the bounded v66 -> v69 transition:
+
+```bash
+bun run deploy -- takosumi-control-d1-schema-production-v66-v69 plan
+bun run deploy -- takosumi-control-d1-schema-production-v66-v69 apply \
+  --confirm-manifest sha256:<reviewed-v69-manifest>
+bun run deploy -- takosumi-control-d1-schema-production-v66-v69 release \
+  --confirm-manifest sha256:<reviewed-v69-manifest>
+bun run deploy -- takosumi-control-d1-schema-production-v66-v69 verify
+```
+
+That surface fixes production and target head 69, refuses environment overrides,
+and keeps the exact in-place maintenance fence retained through `apply`. Before
+the first fence mutation it accepts the canonical ledger prefix at head 66 when
+the maintenance row is absent or inactive; an exact active fence at head 66 is
+also a valid retry point after a fence-only failure. Forward resume otherwise
+accepts only the same active exact fence at canonical head 67, 68, or 69, with
+no predecessor or source export. A wrong/future ledger or any source, manifest,
+target, or fence mismatch is read-only refusal. The generic CLI and staging
+surface remain unchanged, and this temporary owner lane is not a generic
+production migration switch.
+
+The local proof for this lane is limited to a synthetic production-shaped D1
+fixture: it covers the exact old v66 bridge source while the fence is held and
+the direct fenced v66 -> v69 schema transition, including fault-forward resume.
+It is not live Cloudflare evidence and not full HTTP-entrypoint proof. The
+historical hosted procedure below still requires the v68-pre-bridge retirement
+boundary and forbids serving v68 from the old bridge; this conditional direct
+fenced cutover is not permission to adopt that old bridge as a v68/v69 serving
+runtime.
 
 The staging surface delegates the existing CLI, including its source, manifest,
 target, maintenance, and verification checks. They add no second migration

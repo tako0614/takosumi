@@ -14,7 +14,10 @@ import {
   ensureD1OpenTofuLedgerSchema,
   verifyD1OpenTofuLedgerSchemaPredeployed,
 } from "../../../worker/src/d1_opentofu_store.ts";
-import type { D1Database } from "../../../worker/src/bindings.ts";
+import type {
+  D1Database,
+  D1PreparedStatement,
+} from "../../../worker/src/bindings.ts";
 import {
   acquireControlD1MaintenanceFence,
   assertControlD1MaintenanceInactive,
@@ -995,6 +998,73 @@ test("predeployed exact Workspace reads readiness and data in one statement", as
   );
   expect(prepareCalls).toBe(3);
   expect(batchCalls).toBe(0);
+});
+
+test("a pending first admission does not block a later default-store operation", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+
+  let holdFirstMaintenanceRead = true;
+  let markFirstMaintenanceReadStarted!: () => void;
+  const firstMaintenanceReadStarted = new Promise<void>((resolve) => {
+    markFirstMaintenanceReadStarted = resolve;
+  });
+  let releaseFirstMaintenanceRead!: () => void;
+  const firstMaintenanceReadRelease = new Promise<void>((resolve) => {
+    releaseFirstMaintenanceRead = resolve;
+  });
+
+  const observed: D1Database = {
+    prepare(query) {
+      const statement = db.prepare(query);
+      const isMaintenanceRead =
+        holdFirstMaintenanceRead &&
+        query.includes("_takosumi_control_schema_maintenance") &&
+        query.includes("where singleton = 1");
+      if (!isMaintenanceRead) return statement;
+      holdFirstMaintenanceRead = false;
+      return {
+        bind(...values: readonly unknown[]): D1PreparedStatement {
+          return statement.bind(...values);
+        },
+        async first<T = unknown>(): Promise<T | null> {
+          markFirstMaintenanceReadStarted();
+          await firstMaintenanceReadRelease;
+          return await statement.first<T>();
+        },
+        async all<T = unknown>() {
+          return await statement.all<T>();
+        },
+        async run<T = unknown>() {
+          return await statement.run<T>();
+        },
+      } satisfies D1PreparedStatement;
+    },
+    batch: db.batch.bind(db),
+  };
+
+  const store = createCloudflareD1OpenTofuControlStore(observed, {
+    schemaMode: "predeployed",
+  });
+  const firstOperation = store.listWorkspaces();
+  await firstMaintenanceReadStarted;
+  const secondOperation = store.listWorkspaces();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    const secondStatus = await Promise.race([
+      secondOperation.then(() => "completed" as const),
+      new Promise<"timed_out">((resolve) => {
+        timeout = setTimeout(() => resolve("timed_out"), 200);
+      }),
+    ]);
+    expect(secondStatus).toBe("completed");
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+    releaseFirstMaintenanceRead();
+    await firstOperation;
+    await secondOperation;
+  }
 });
 
 test("predeployed account Workspace page reads readiness, total, and data in one statement", async () => {

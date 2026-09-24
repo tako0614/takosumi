@@ -42,6 +42,22 @@ export {
 export const CONTROL_D1_SCHEMA_MANIFEST_VERSION = 2 as const;
 
 /**
+ * Opaque internal selector for the temporary owner-only production v66 -> v69 lane.
+ *
+ * This is deliberately a runtime symbol rather than a public CLI switch. The
+ * owner entrypoint injects it through the CLI dependency seam; ordinary schema
+ * callers keep the existing staging/test behavior and cannot select this fixed
+ * transition by adding an argv flag.
+ */
+export const CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD = Symbol(
+  "takosumi-control-d1-schema-production-v66-v69",
+);
+
+export const CONTROL_D1_PRODUCTION_V66_V69_TARGET = 69 as const;
+export const CONTROL_D1_PRODUCTION_V66_V69_BASELINE = 66 as const;
+const CONTROL_D1_PRODUCTION_V66_V69_TAIL = [67, 68, 69] as const;
+
+/**
  * Tables deliberately retired by the current OSS control-ledger migration
  * chain. Host extensions may add their own tables, so verification rejects
  * only these known retired names and otherwise checks the OSS-owned schema as
@@ -320,6 +336,8 @@ export interface ControlD1SchemaApplyOptions {
     readonly sourceCommit: string;
     readonly manifestDigest: string;
   };
+  /** @internal owner-surface selector; never supplied by public argv. */
+  readonly internalGuard?: typeof CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD;
 }
 
 export interface ControlD1SchemaFenceResult {
@@ -408,6 +426,18 @@ export async function applyControlD1Schema(
   options: ControlD1SchemaApplyOptions,
 ): Promise<ControlD1SchemaApplyResult> {
   const before = await readControlD1MigrationLedger(database);
+  if (options.internalGuard === CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD) {
+    await assertControlD1ProductionV66V69ApplyPreflight(database, plan, {
+      sourceCommit: options.sourceCommit,
+      environment: options.environment,
+      databaseId: options.databaseId,
+      databaseRole: options.databaseRole,
+      releasePolicy: options.releasePolicy,
+      sourceExportSha256: options.sourceExportSha256,
+      retainMaintenanceFence: options.retainMaintenanceFence,
+      activePredecessorFence: options.activePredecessorFence,
+    });
+  }
   const successorIdentity = {
     sourceCommit: options.sourceCommit,
     manifestDigest: plan.manifestDigest,
@@ -496,6 +526,128 @@ export async function applyControlD1Schema(
   };
 }
 
+/**
+ * Read-only admission for the temporary production v66 -> v69 owner lane.
+ *
+ * A fresh run may create a fence only on the exact canonical v66 ledger with
+ * no active maintenance fence. A retry may reuse an active exact fence at v66,
+ * v67, v68, or v69; every other ledger/fence combination is refused before
+ * the caller can acquire or replace a fence.
+ */
+export async function assertControlD1ProductionV66V69ApplyPreflight(
+  database: D1Database,
+  plan: ControlD1SchemaPlan,
+  options: {
+    readonly sourceCommit: string;
+    readonly environment: string;
+    readonly databaseId?: string;
+    readonly databaseRole?: ControlD1MaintenanceDatabaseRole;
+    readonly releasePolicy?: ControlD1MaintenanceReleasePolicy;
+    readonly sourceExportSha256?: string;
+    readonly retainMaintenanceFence?: boolean;
+    readonly activePredecessorFence?: {
+      readonly sourceCommit: string;
+      readonly manifestDigest: string;
+    };
+  },
+): Promise<{
+  readonly mode: "new" | "resume";
+  readonly actualHead: number;
+  readonly pendingMigrationVersions: readonly number[];
+}> {
+  if (
+    plan.migrations.at(-1)?.version !== CONTROL_D1_PRODUCTION_V66_V69_TARGET
+  ) {
+    throw new ControlD1SchemaError("production_v66_v69_plan_target_mismatch");
+  }
+  if (options.environment !== "production") {
+    throw new ControlD1SchemaError("production_v66_v69_environment_fixed");
+  }
+  if (options.retainMaintenanceFence !== true) {
+    throw new ControlD1SchemaError("production_v66_v69_retain_fence_required");
+  }
+  if (
+    (options.databaseRole ?? "in_place") !== "in_place" ||
+    (options.releasePolicy ?? "in_place") !== "in_place" ||
+    options.sourceExportSha256 !== undefined
+  ) {
+    throw new ControlD1SchemaError("production_v66_v69_fence_identity_invalid");
+  }
+  if (options.activePredecessorFence) {
+    throw new ControlD1SchemaError("production_v66_v69_predecessor_forbidden");
+  }
+  if (!options.databaseId?.trim()) {
+    throw new ControlD1SchemaError("production_v66_v69_database_id_required");
+  }
+
+  const actual = await readControlD1MigrationLedger(database);
+  const state = await readControlD1MaintenanceState(database);
+  const baseline = canonicalControlD1MigrationPrefix(
+    plan,
+    CONTROL_D1_PRODUCTION_V66_V69_BASELINE,
+  );
+  if (!baseline) {
+    throw new ControlD1SchemaError("production_v66_v69_plan_baseline_missing");
+  }
+  assertControlD1ProductionV66V69Tail(plan);
+
+  if (sameControlD1MigrationLedger(actual, baseline)) {
+    if (state.status === "active") {
+      if (!matchesControlD1ProductionV66V69Fence(state, plan, options)) {
+        throw new ControlD1SchemaError("production_v66_v69_fence_mismatch");
+      }
+      return {
+        mode: "resume",
+        actualHead: CONTROL_D1_PRODUCTION_V66_V69_BASELINE,
+        pendingMigrationVersions: productionV66V69PendingVersions(
+          CONTROL_D1_PRODUCTION_V66_V69_BASELINE,
+        ),
+      };
+    }
+    if (state.status !== "absent" && state.status !== "inactive") {
+      throw new ControlD1SchemaError("production_v66_v69_fence_state_invalid");
+    }
+    return {
+      mode: "new",
+      actualHead: CONTROL_D1_PRODUCTION_V66_V69_BASELINE,
+      pendingMigrationVersions: productionV66V69PendingVersions(
+        CONTROL_D1_PRODUCTION_V66_V69_BASELINE,
+      ),
+    };
+  }
+
+  const actualHead = actual.at(-1)?.version ?? 0;
+  if (
+    actual.some(
+      (row) =>
+        row.version > CONTROL_D1_PRODUCTION_V66_V69_TARGET ||
+        !plan.migrations.some(
+          (migration) => migration.version === row.version,
+        ),
+    ) || actualHead > CONTROL_D1_PRODUCTION_V66_V69_TARGET
+  ) {
+    throw new ControlD1SchemaError("production_v66_v69_future_ledger_rejected");
+  }
+
+  for (const resumeHead of [67, 68, 69] as const) {
+    const prefix = canonicalControlD1MigrationPrefix(plan, resumeHead);
+    if (!prefix || !sameControlD1MigrationLedger(actual, prefix)) continue;
+    if (state.status !== "active") {
+      throw new ControlD1SchemaError("production_v66_v69_active_fence_required");
+    }
+    if (!matchesControlD1ProductionV66V69Fence(state, plan, options)) {
+      throw new ControlD1SchemaError("production_v66_v69_fence_mismatch");
+    }
+    return {
+      mode: "resume",
+      actualHead: resumeHead,
+      pendingMigrationVersions: productionV66V69PendingVersions(resumeHead),
+    };
+  }
+
+  throw new ControlD1SchemaError("production_v66_v69_ledger_mismatch");
+}
+
 async function matchesExactInPlaceReleaseReceipt(
   database: D1Database,
   fence: ControlD1MaintenanceFence,
@@ -527,6 +679,66 @@ async function matchesExactInPlaceReleaseReceipt(
   } catch {
     return false;
   }
+}
+
+function canonicalControlD1MigrationPrefix(
+  plan: ControlD1SchemaPlan,
+  throughVersion: number,
+): readonly ControlD1MigrationLedgerRow[] | undefined {
+  const index = plan.migrations.findIndex(
+    (migration) => migration.version === throughVersion,
+  );
+  return index < 0 ? undefined : plan.migrations.slice(0, index + 1);
+}
+
+function assertControlD1ProductionV66V69Tail(
+  plan: ControlD1SchemaPlan,
+): void {
+  const actualTail = plan.migrations
+    .filter(
+      (migration) =>
+        migration.version > CONTROL_D1_PRODUCTION_V66_V69_BASELINE,
+    )
+    .map((migration) => migration.version);
+  if (stableJson(actualTail) !== stableJson(CONTROL_D1_PRODUCTION_V66_V69_TAIL)) {
+    throw new ControlD1SchemaError("production_v66_v69_plan_suffix_mismatch");
+  }
+}
+
+function productionV66V69PendingVersions(
+  actualHead: 66 | 67 | 68 | 69,
+): readonly number[] {
+  return CONTROL_D1_PRODUCTION_V66_V69_TAIL.filter(
+    (version) => version > actualHead,
+  );
+}
+
+function sameControlD1MigrationLedger(
+  actual: readonly ControlD1MigrationLedgerRow[],
+  expected: readonly ControlD1MigrationLedgerRow[],
+): boolean {
+  return stableJson(actual) === stableJson(expected);
+}
+
+function matchesControlD1ProductionV66V69Fence(
+  state: Awaited<ReturnType<typeof readControlD1MaintenanceState>>,
+  plan: ControlD1SchemaPlan,
+  options: {
+    readonly sourceCommit: string;
+    readonly databaseId?: string;
+  },
+): boolean {
+  return (
+    state.status === "active" &&
+    state.fence.sourceCommit === options.sourceCommit &&
+    state.fence.manifestDigest === plan.manifestDigest &&
+    state.fence.environment === "production" &&
+    state.fence.databaseRole === "in_place" &&
+    state.fence.releasePolicy === "in_place" &&
+    state.fence.databaseId === options.databaseId &&
+    state.fence.sourceExportSha256 === null &&
+    state.fence.predecessor === null
+  );
 }
 
 function predecessorRecoveryMigrationLedger(

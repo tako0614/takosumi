@@ -4,6 +4,8 @@ import type { D1Database } from "../../worker/src/bindings.ts";
 import {
   applyControlD1Schema,
   buildControlD1SchemaPlan,
+  CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD,
+  CONTROL_D1_PRODUCTION_V66_V69_TARGET,
   ControlD1SchemaError,
   fenceControlD1Schema,
   releaseControlD1Candidate,
@@ -93,6 +95,12 @@ interface CliDependencies {
   readonly buildReleaseCapability?: (
     options: Readonly<{ readonly sourceCommit: string }>,
   ) => Promise<ControlD1ReleaseCapability>;
+  /** @internal fixed-transition selector, injected only by the owner surface. */
+  readonly internalGuard?:
+    typeof CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD;
+  readonly buildSchemaPlan?: (options?: {
+    readonly throughMigrationVersion?: number;
+  }) => Promise<ControlD1SchemaPlan>;
 }
 
 interface TranscriptProvenance {
@@ -106,6 +114,9 @@ export async function runControlD1SchemaCli(
   write: (value: string) => void = console.log,
   dependencies: CliDependencies = {},
 ): Promise<number> {
+  const productionV66V69Guard =
+    dependencies.internalGuard ===
+    CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD;
   let args: ParsedArgs;
   try {
     args = parseArgs(argv);
@@ -130,6 +141,31 @@ export async function runControlD1SchemaCli(
   if (args.help) {
     write(helpText());
     return 0;
+  }
+
+  if (
+    productionV66V69Guard &&
+    !["plan", "verify", "apply", "release"].includes(args.command)
+  ) {
+    write(failureTranscript("production_v66_v69_command_invalid", undefined, args));
+    return 1;
+  }
+  if (
+    productionV66V69Guard &&
+    args.environment !== "production"
+  ) {
+    write(failureTranscript("production_v66_v69_environment_fixed", undefined, args));
+    return 1;
+  }
+  if (productionV66V69Guard && args.confirmFenceSourceCommit) {
+    write(
+      failureTranscript(
+        "production_v66_v69_forward_repair_forbidden",
+        undefined,
+        args,
+      ),
+    );
+    return 1;
   }
 
   if (args.command === "release-capability") {
@@ -185,7 +221,13 @@ export async function runControlD1SchemaCli(
 
   let plan: ControlD1SchemaPlan;
   try {
-    plan = await buildControlD1SchemaPlan();
+    plan = await (dependencies.buildSchemaPlan ?? buildControlD1SchemaPlan)();
+    if (
+      productionV66V69Guard &&
+      plan.migrations.at(-1)?.version !== CONTROL_D1_PRODUCTION_V66_V69_TARGET
+    ) {
+      throw new ControlD1SchemaError("production_v66_v69_plan_target_mismatch");
+    }
   } catch (error) {
     write(failureTranscript(errorCode(error), undefined, args, provenance));
     return 1;
@@ -415,6 +457,9 @@ export async function runControlD1SchemaCli(
       ) {
         throw new ControlD1SchemaError("maintenance_fence_release_mismatch");
       }
+      if (productionV66V69Guard && fence.predecessor !== null) {
+        throw new ControlD1SchemaError("production_v66_v69_fence_mismatch");
+      }
       const preReleaseVerification = await verifyControlD1Schema(
         remote.database,
         plan,
@@ -529,6 +574,9 @@ export async function runControlD1SchemaCli(
       releasePolicy: "in_place",
       databaseId: remote.databaseId,
       ...(activePredecessorFence ? { activePredecessorFence } : {}),
+      ...(productionV66V69Guard
+        ? { internalGuard: CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD }
+        : {}),
     });
     write(
       JSON.stringify(
@@ -571,6 +619,23 @@ export async function runControlD1SchemaCli(
     );
     return 1;
   }
+}
+
+/**
+ * Temporary fixed owner lane for the production v66 -> v69 transition.
+ * The internal selector is injected here, through dependencies, and is never parsed
+ * from argv. The deploy entrypoint is the only caller that selects this lane.
+ */
+export async function runControlD1SchemaProductionV66V69Cli(
+  argv: readonly string[],
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  write: (value: string) => void = console.log,
+  dependencies: CliDependencies = {},
+): Promise<number> {
+  return runControlD1SchemaCli(argv, env, write, {
+    ...dependencies,
+    internalGuard: CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD,
+  });
 }
 
 function fenceMatchesRelease(

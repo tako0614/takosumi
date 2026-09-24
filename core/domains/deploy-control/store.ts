@@ -28,6 +28,13 @@ import type {
 } from "@takosumi/internal/deploy-control-api";
 import { coerceRunStatus } from "@takosumi/internal/deploy-control-api";
 import { planRunAwaitsApproval } from "./projection_run.ts";
+import {
+  MAX_SOURCE_RECONCILIATION_CAPSULES,
+  observeSourceSyncSettlement,
+  sourceSyncSettlementCensusMatches,
+  sourceSyncSettlementReadMatches,
+  SourceSyncSettlementConflictError,
+} from "./source_sync_settlement.ts";
 import type { InMemoryGitInstallPlanStore } from "../install-plans/store.ts";
 import {
   interfaceIntentBlocksWorkspaceManagement,
@@ -2522,6 +2529,8 @@ export interface CommitSourceSyncSuccessResult {
   readonly won: boolean;
   /** Current SourceSyncRun on a lost lease race, when the row still exists. */
   readonly run?: SourceSyncRun;
+  /** Exact projections committed with the successful Run, never a later census. */
+  readonly staleCapsules?: readonly Capsule[];
 }
 
 export class SourceSnapshotConflictError extends Error {
@@ -2561,6 +2570,18 @@ export function sourceSyncRunImmutableIdentityMatches(
     left.archiveRef === right.archiveRef &&
     left.snapshotId === right.snapshotId &&
     (left.intent ?? "observe") === (right.intent ?? "observe");
+}
+
+/** Success may fill an old missing snapshot id, but no creation coordinate. */
+export function sourceSyncRunSuccessIdentityMatches(
+  stored: StoredRunRecord,
+  terminal: SourceSyncRun,
+): boolean {
+  if (!isSourceSyncRunRecord(stored)) return false;
+  return sourceSyncRunImmutableIdentityMatches(
+    stored.snapshotId === undefined ? { ...stored, snapshotId: terminal.snapshotId } : stored,
+    terminal,
+  );
 }
 
 /**
@@ -4248,16 +4269,17 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve({ won: true, run: publicStoredRun(persisted) });
   }
 
-  commitSourceSyncSuccess(
+  async commitSourceSyncSuccess(
     input: CommitSourceSyncSuccessInput,
   ): Promise<CommitSourceSyncSuccessResult> {
+    input = structuredClone(input);
     assertSourceSyncSuccessCommit(input);
     const snapshot = normalizeSourceSnapshot(input.snapshot);
-    const current = this.#runs.get(input.terminalRun.id);
+    let current = this.#runs.get(input.terminalRun.id);
     if (
       !current ||
       !isSourceSyncRunRecord(current) ||
-      !sourceSyncRunStoredIdentityMatches(current, input.terminalRun) ||
+      !sourceSyncRunSuccessIdentityMatches(current, input.terminalRun) ||
       current.status !== "running" ||
       this.#runLeases.get(current.id) !== input.leaseToken
     ) {
@@ -4268,12 +4290,67 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
           : {}),
       });
     }
+    const readCapsules = (): readonly Capsule[] => {
+      const capsules: Capsule[] = [];
+      for (const capsule of this.#capsules.values()) {
+        if (capsule.workspaceId !== input.terminalRun.workspaceId ||
+          capsule.status === "destroyed") continue;
+        capsules.push(capsule);
+        if (capsules.length > MAX_SOURCE_RECONCILIATION_CAPSULES) break;
+      }
+      return capsules;
+    };
+    const observation = await observeSourceSyncSettlement(
+      this, snapshot, input.terminalRun, readCapsules(),
+    );
+    // No await may follow this revalidation before all dependent Map writes.
+    current = this.#runs.get(input.terminalRun.id);
+    const management = this.#workspaceManagement.get(input.terminalRun.workspaceId);
+    const currentCapsules = readCapsules();
+    const readsMatch = observation.reads.every((read) => {
+      let record: unknown;
+      const run = this.#runs.get(read.id);
+      switch (read.kind) {
+        case "source": record = this.#sources.get(read.id); break;
+        case "state": record = this.#stateVersions.get(read.id); break;
+        case "snapshot": record = this.#sourceSnapshots.get(read.id); break;
+        case "apply": record = run && isApplyRunRecord(run)
+          ? publicStoredRun(coerceRunRowStatus(run)!) : undefined; break;
+        case "plan": record = run && isPlanRunRecord(run)
+          ? publicStoredRun(coerceRunRowStatus(run)!) : undefined; break;
+        case "restore": record = run && isPublicRunRecord(run) &&
+            (run.type === "backup" || run.type === "restore")
+          ? publicStoredRun(run) : undefined; break;
+      }
+      return sourceSyncSettlementReadMatches(read, record);
+    });
+    if (!current || !isSourceSyncRunRecord(current) ||
+      !sourceSyncRunSuccessIdentityMatches(current, input.terminalRun) ||
+      current.status !== "running" || this.#runLeases.get(current.id) !== input.leaseToken) {
+      return {
+        won: false,
+        ...(current && isSourceSyncRunRecord(current) ? { run: publicStoredRun(current) } : {}),
+      };
+    }
+    if (!this.#workspaces.has(input.terminalRun.workspaceId) || !management ||
+      (management.managementState !== "active" && management.managementState !== "draining") ||
+      !sourceSyncSettlementCensusMatches(observation.capsules, currentCapsules) || !readsMatch) {
+      // This consumer still owns the Run. Do not acknowledge a running Run as
+      // a lease loser: the service must terminally fail this observation.
+      throw new SourceSyncSettlementConflictError();
+    }
     const existingSnapshot = this.#sourceSnapshots.get(snapshot.id);
     if (
       existingSnapshot &&
       !sourceSnapshotsExactlyMatch(existingSnapshot, snapshot)
     ) {
       return Promise.reject(new SourceSnapshotConflictError(snapshot.id));
+    }
+    for (const { activity } of observation.changes) {
+      const existing = this.#activityEvents.get(activity.id);
+      if (existing && stableStringify(existing) !== stableStringify(activity)) {
+        throw new SourceSyncSettlementConflictError();
+      }
     }
     // All validation/conflict checks happen before mutation. These synchronous
     // Map writes form one in-process critical section with no await/interleaving
@@ -4283,6 +4360,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       preserveStoredRunManagementAuthority(input.terminalRun, current),
     );
     if (!existingSnapshot) this.#sourceSnapshots.set(snapshot.id, snapshot);
+    for (const { capsule, activity } of observation.changes) {
+      this.#setCapsule(capsule);
+      this.#activityEvents.set(activity.id, activity);
+    }
     this.#runLeases.delete(input.terminalRun.id);
     const source = this.#sources.get(input.terminalRun.sourceId);
     if (source &&
@@ -4297,7 +4378,11 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         updatedAt: snapshot.fetchedAt,
       });
     }
-    return Promise.resolve({ won: true, run: publicStoredRun(input.terminalRun) });
+    return {
+      won: true,
+      run: publicStoredRun(input.terminalRun),
+      staleCapsules: observation.changes.map(({ capsule }) => capsule),
+    };
   }
 
   putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {

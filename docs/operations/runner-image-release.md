@@ -7,21 +7,25 @@ implementation: `runner/Dockerfile`, the `runner/` payload, and
 official realized image pin and operator evidence. Realized configuration,
 credentials, and release records never belong in this public repository.
 
-There are two distinct authorities:
+Publication, local recovery, and platform deployment have separate authorities:
 
 - `takosumi-runner-image build` is the only runner image publication mutation.
+- `takosumi-runner-image recover-journal` is the only operation that can bind a
+  replacement local publication-journal inode. It writes private local metadata
+  only and never calls a registry or provider.
 - `takosumi-platform-staging` / `takosumi-platform` plan and execute are the
   only full Worker and Container configuration mutation. Runner `verify` is a
   readback-only post-step and never invokes `wrangler deploy`.
 
 All commands are exposed through Takosumi's single `bun run deploy` entrypoint.
 `build` and `verify` are read-only without `--execute`; executing either
-requires a bounded named `--review` identity. `reconcile` is always externally
+requires a bounded named `--review` identity. `recover-journal` always requires
+both `--execute` and a named reviewer. `reconcile` is always externally
 read-only and never accepts `--execute`.
 
 ## Source and configuration gates
 
-Both runner operations require clean attached source. `staging` accepts the
+All runner operations require clean attached source. `staging` accepts the
 current feature branch only when `HEAD` equals both local
 `origin/<current-branch>` and a fresh `git ls-remote` read of the same branch.
 `production` additionally requires `main`, with `HEAD` exactly equal to pushed
@@ -56,7 +60,8 @@ and use exact mode `0600`. `takosumi-private` owns their policy and realized
 pin, but these runtime files are not written inside that checkout. Records
 contain bounded, redacted diagnostics and digest fields, never secrets. The
 closed artifact revisions carrying source authority are runner release v3,
-runner publication state v2, platform plan v6, and platform ready evidence v3.
+runner publication state v2, journal recovery locator v4, platform plan v6,
+and platform ready evidence v3.
 Older artifacts fail closed; rebuild and re-plan instead of translating them.
 The reader has one narrow archival exception: a closed prefix of validated v1
 publication pairs may remain in an existing journal for history inspection.
@@ -181,8 +186,55 @@ attempt. While holding the publication lock, it first proves that attempt's
 exact local transport tag has both the recorded Docker image ID and descriptor
 digest, then revalidates the unchanged journal inode before publishing the
 locator. Descriptor-aware, multi-record, missing-tag, and mismatched-tag
-unbound journals remain unbound and fail closed. Reconcile that exact tag
-without mutation:
+unbound journals remain unbound and fail closed.
+
+### Recover a replaced local journal inode
+
+If the v3-bound path contains a different inode after a filesystem replacement,
+ordinary build and reconcile continue to fail closed. They never infer that the
+new file is the old journal and never rewrite the v3 locator. Recovery is an
+explicit, independently reviewed local authority transition:
+
+```bash
+bun run deploy -- takosumi-runner-image recover-journal \
+  --config /absolute/operator-private/wrangler.staging.toml \
+  --environment staging \
+  --release journal-recovery-2026-09-23 \
+  --state /absolute/non-worktree-release-state/runner-publication.jsonl \
+  --evidence /absolute/non-worktree-release-state/runner-recovery.jsonl \
+  --review operator:<reviewer> \
+  --execute
+```
+
+Recovery rejects another `--state` path before writing coordination metadata,
+then takes the same canonical scope lock used by v3 build and reconcile. It
+validates every observed v1/v2 record and attempt/resolution relationship in the
+current file. A malformed or torn record refuses recovery. A known unresolved
+attempt remains unresolved and continues to block build; only ordinary
+exact-transport-ref reconcile can close it.
+
+The operation leaves the v3 locator byte-for-byte unchanged and atomically
+publishes a no-overwrite v4 sidecar after file fsync. V4 records the SHA-256 of
+the exact predecessor locator bytes, its expected old file identity, the
+observed current file identity, the observed prefix byte length and SHA-256,
+the machine/scope, and the exact recovery source authority and reviewer. The
+prefix is immutable: later appends are allowed, but prefix mutation, truncation,
+inode replacement, another path, or missing v3/v4 metadata while the replacement
+journal remains all fail closed. A two-link crash window can be completed only
+by rerunning this explicit recovery under the same lock; ordinary build never
+repairs it. This is concurrency and accidental-loss protection, not anti-rollback
+storage: an operator who can delete v4 and restore the exact v3-bound journal
+inode can also roll back this local metadata domain. Protect that directory with
+the operator's access and backup controls; the release tool does not claim to
+detect such a full same-owner rollback.
+
+V4 records `continuity: "unknown"`. It does not say that the observed prefix is
+complete, resolve or prove absence of an unobserved old attempt, or prove that a
+future descriptor is distinct. A future build still uses a fresh nonce-bound
+transport reference and all normal source, native proof, descriptor equality,
+pre-push, and no-overwrite checks. Different transport references may resolve
+to the same immutable descriptor digest; the digest is the consumer identity.
+Recovery performs no Docker, registry, Worker, or Container mutation.
 
 A bound journal may begin with adjacent, closed v1 `publication-started` and
 `published` pairs from the historical writer. The reader validates their exact
@@ -191,6 +243,8 @@ relations against the selected environment and repository, then excludes those
 rows from unresolved and unique current-publication evidence. A new build
 appends v2 records after that prefix only. The old v1 release/evidence path is
 not supported for general recovery or reconciliation.
+
+Reconcile an exact recorded tag without mutation:
 
 ```bash
 bun run deploy -- takosumi-runner-image reconcile \

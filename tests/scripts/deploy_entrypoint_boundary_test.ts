@@ -27,6 +27,11 @@ test("OSS deploy entrypoint owns the official platform Worker without a Cloud wr
   };
   expect(contract.surfaces).toEqual([
     expect.objectContaining({
+      surface: "takosumi-platform-staging-code",
+      target: "cloudflare-worker:takosumi-staging",
+      triggers: [],
+    }),
+    expect.objectContaining({
       surface: "takosumi-platform-staging",
       target: "cloudflare-worker:takosumi-staging",
     }),
@@ -36,6 +41,11 @@ test("OSS deploy entrypoint owns the official platform Worker without a Cloud wr
     }),
     expect.objectContaining({
       surface: "takosumi-control-d1-schema-staging",
+      triggers: ["irreversible", "authority"],
+    }),
+    expect.objectContaining({
+      surface: "takosumi-control-d1-schema-production-v66-v69",
+      target: "cloudflare-d1:TAKOSUMI_CONTROL_D1_PRODUCTION_DATABASE_ID",
       triggers: ["irreversible", "authority"],
     }),
     expect.objectContaining({
@@ -186,5 +196,59 @@ mock.module(${JSON.stringify(cli)}, () => ({
     });
   } finally {
     await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test("production v66-v69 surface fixes production and injects retained apply", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "takosumi-schema-production-deploy-"));
+  try {
+    const preload = join(temporary, "cli-spy.ts");
+    const cli = resolve(root, "deploy/platform/control_d1_schema_cli.ts");
+    await writeFile(
+      preload,
+      `import { mock } from "bun:test";
+mock.module(${JSON.stringify(cli)}, () => ({
+  runControlD1SchemaProductionV66V69Cli: async (args: string[]) => {
+    console.log(JSON.stringify({ args }));
+    return 0;
+  },
+}));
+`,
+    );
+    const manifest = `sha256:${"b".repeat(64)}`;
+    const result = await schemaDeploy(
+      "takosumi-control-d1-schema-production-v66-v69",
+      ["apply", "--confirm-manifest", manifest],
+      preload,
+    );
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      args: [
+        "apply",
+        "--environment",
+        "production",
+        "--confirm-manifest",
+        manifest,
+        "--retain-maintenance-fence",
+      ],
+    });
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test("production v66-v69 surface refuses caller environment and predecessor overrides", async () => {
+  for (const args of [
+    ["plan", "--environment", "staging"],
+    ["apply", "--confirm-predecessor-source", "a".repeat(40)],
+    ["release", "--confirm-predecessor-manifest", `sha256:${"c".repeat(64)}`],
+  ]) {
+    const result = await schemaDeploy(
+      "takosumi-control-d1-schema-production-v66-v69",
+      args,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/fixed|predecessor/);
+    expect(result.stdout).toBe("");
   }
 });
