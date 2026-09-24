@@ -111,6 +111,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "API", link: "/en/reference/api" },
         { text: "CLI", link: "/en/reference/cli" },
+        { text: "Configuration", link: "/en/reference/configuration" },
         {
           text: "Repository manifest",
           link: "/en/reference/repository-manifest",

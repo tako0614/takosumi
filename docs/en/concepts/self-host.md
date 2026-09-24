@@ -70,7 +70,7 @@ client, or delete it outright if you do not need one.
 For a production deployment, add `TAKOSUMI_ENVIRONMENT = "production"` as well. When that
 value is `production` or `staging`, the checks on encryption keys and persistent stores
 become fail-closed. What each value means is collected in the
-[configuration reference](/reference/configuration) (Japanese).
+[configuration reference](/en/reference/configuration).
 
 Build the dashboard. `ASSETS` serves this output.
 
@@ -264,7 +264,7 @@ credentials and is a good fit for this check.
 At this point the endpoint runs. What it makes available is then up to you. The Resource
 types on offer, the targets, the runner's concurrency, the frequency of periodic
 observation, and how secrets are handled are all settings. The list of variables and how to
-choose them is in the [configuration reference](/reference/configuration) (Japanese).
+choose them is in the [configuration reference](/en/reference/configuration).
 
 What you end up taking on from the point of view of the people using that endpoint is set
 out in [Product boundaries](./boundaries.md).
