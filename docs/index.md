@@ -11,8 +11,9 @@ Takosumi は first-party Terraform/OpenTofu provider を同梱しません。
 
 ### 確認した変更だけを反映する
 
-Takosumi は `plan` と `apply` を 1 つの Run として扱います。確認後に別の計画を
-作り直さないため、読んだ差分と実際に反映する差分を一致させられます。
+Takosumi は `plan` と `apply` をそれぞれ別の Run として記録します。`apply` の Run は
+確認した plan の Run に `planRunId` で固定され、別の計画を作り直さないため、読んだ差分と
+実際に反映する差分を一致させられます。
 
 ### 認証情報を module から分離する
 
@@ -42,7 +43,7 @@ Git URL と module の宣言
 
 ## 最初に試す
 
-API だけなら 5 分で起動できます。データはメモリ上に置かれるため、開発用です。
+API だけを開発用の構成で起動できます。データはメモリ上に置かれます。
 
 ```bash
 git clone https://github.com/tako0614/takosumi.git

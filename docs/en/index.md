@@ -13,8 +13,9 @@ Takosumi does not ship a first-party Terraform/OpenTofu provider.
 
 ### Apply only what you reviewed
 
-Takosumi treats the plan and apply as one Run. It does not silently create a
-different plan after review, so the changes you read are the changes it applies.
+Takosumi records plan and apply as separate Runs. The apply Run is pinned to the
+reviewed plan Run with `planRunId`, so it does not silently create a different
+plan after review and the changes you read are the changes it applies.
 
 ### Keep credentials out of modules
 
@@ -45,8 +46,7 @@ Git URL and module declaration
 
 ## Try the API
 
-You can start the API in about five minutes. This development setup keeps data
-in memory.
+You can start the API with this development setup. It keeps data in memory.
 
 ```bash
 git clone https://github.com/tako0614/takosumi.git

@@ -12,7 +12,7 @@ that execution.
 | **Project**   | a way to group apps and infrastructure within a Workspace                         |
 | **Source**    | a registered Git repository and module location                                   |
 | **Capsule**   | one deployable module created from a Source                                       |
-| **Run**       | one plan, apply, refresh, destroy, or other execution                             |
+| **Run**       | one plan, apply, destroy, or other execution                                      |
 | **Interface** | a declaration of the connection a deployment provides                            |
 
 A Workspace is not team- or permission-first. It is a purpose-specific work,

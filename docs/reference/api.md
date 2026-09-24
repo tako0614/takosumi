@@ -182,6 +182,7 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 | PATCH    | `/api/v1/workspaces/{workspaceId}/members/{subject}` | メンバーの役割を変える                  |
 | DELETE   | `/api/v1/workspaces/{workspaceId}/members/{subject}` | メンバーを外す                          |
 | GET      | `/api/v1/workspaces/{workspaceId}/graph`             | Capsule の依存グラフを読む              |
+| GET      | `/api/v1/workspaces/{workspaceId}/ui-surfaces`       | 認可済み Workspace UI surface Interface を一覧する |
 | GET      | `/api/v1/workspaces/{workspaceId}/activity`          | 操作履歴を一覧する                      |
 | GET      | `/api/v1/workspaces/{workspaceId}/interface-materialization-failures` | Interface materialization の value-free な失敗を一覧する |
 | POST     | `/api/v1/workspaces/{workspaceId}/interface-materialization-failures/{intentId}/retries` | exact failure/state CAS で再試行する |
@@ -311,7 +312,7 @@ module-local tuple をそのまま指定します。
     "modulePath": "deploy/selected",
     "providerBindings": [
       {
-        "provider": "registry.opentofu.org/tako0614/takoform",
+        "provider": "registry.terraform.io/tako0614/takoform",
         "moduleLocalName": "takoform",
         "connectionId": "conn_takoform"
       }

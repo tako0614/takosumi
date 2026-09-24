@@ -26,6 +26,87 @@ CredentialRecipes. Source authoring is Git-only; immutable source archives are
 internal runner transport and are not accepted as a CLI creation input. The
 local-upload path for `takosumi deploy` / `takosumi plan` is retired.
 
+## Creating a token
+
+The `TAKOSUMI_DEPLOY_CONTROL_TOKEN` used by the other pages is created here.
+
+```bash
+takosumi accounts tokens create \
+  --name my-cli \
+  --scope write \
+  --accounts-url "$TAKOSUMI_ACCOUNTS_URL" \
+  --token "$TAKOSUMI_ACCOUNTS_SESSION_BEARER"
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--name` | A name for recognizing the token |
+| `--scope` | `read` / `write` / `admin` |
+| `--expires-at` | Expiration time (ISO 8601) |
+| `--accounts-url` | The Accounts URL; the environment variable is `TAKOSUMI_ACCOUNTS_URL` |
+| `--token` | **The Accounts session bearer** (`sess_...`) |
+| `--json` | Print JSON |
+
+The `--token` passed to `accounts` commands is an Accounts session bearer, not the
+token being issued. This is the one place where the value passed differs from the other
+commands.
+
+**The issued token string is returned only once, when it is created.** The list command
+shows only metadata such as the name, prefix, scope, and creation time. If you lose the
+string, it cannot be recovered; create a new token and revoke the old one.
+
+```bash
+takosumi accounts tokens list   --accounts-url "$TAKOSUMI_ACCOUNTS_URL" --token "$SESSION"
+takosumi accounts tokens revoke pat_example --accounts-url "$TAKOSUMI_ACCOUNTS_URL" --token "$SESSION"
+```
+
+You cannot assign yourself the `admin` scope. Only a token issued by an operator can have it.
+
+## Setting up a self-hosted Accounts plane
+
+Use these commands to run Accounts in your own environment. They are unnecessary when you
+only need to use an endpoint that is already running.
+
+### Apply the schema
+
+For PostgreSQL:
+
+```bash
+takosumi accounts migrate --database-url "$TAKOSUMI_ACCOUNTS_DATABASE_URL"
+```
+
+Add `--dry-run` to show what would run without applying it. The database URL can also be
+read from `TAKOSUMI_ACCOUNTS_DATABASE_URL`.
+
+Cloudflare D1 schema migrations are not a customer-facing CLI workflow. The deployment
+owner handles them in the same change window as the release. This public CLI reference
+does not document account/database identifiers, backup custody, confirmation digests, or
+the apply/verify sequence.
+
+### Seed the initial data
+
+```bash
+takosumi accounts seed \
+  --issuer https://accounts.example.com \
+  --subject tsub_example \
+  --client-id example-client \
+  --redirect-uri https://app.example.com/callback
+```
+
+### Start the Accounts server
+
+```bash
+takosumi accounts serve \
+  --issuer https://accounts.example.com \
+  --hostname 0.0.0.0 --port 8080 \
+  --database-url "$TAKOSUMI_ACCOUNTS_DATABASE_URL"
+```
+
+When using an upstream identity provider or passkeys, also provide options such as
+`--upstream-providers` (a JSON array), `--passkey-rp-id`, `--passkey-rp-name`, and
+`--passkey-origin`. For a local check that needs only one session, use
+`--dev-session-id sess_...`. **Do not use this in production.**
+
 ## Platform Readiness Contributions
 
 `takosumi launch-readiness template` generates the baseline shared by OSS and

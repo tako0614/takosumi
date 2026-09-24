@@ -63,20 +63,23 @@ bunx wrangler r2 bucket create takosumi-backups
 
 Copy `wrangler.toml` for your own use. What you rewrite is `database_id`, the `pattern`
 under `routes`, and `TAKOSUMI_ACCOUNTS_ISSUER` under `[vars]`. The issuer is exactly the
-origin that serves the dashboard. The template's `TAKOSUMI_ACCOUNTS_CLIENTS` holds an
-example client whose redirect points at a domain you do not own. Replace it with your own
-client, or delete it outright if you do not need one.
-
-For a production deployment, add `TAKOSUMI_ENVIRONMENT = "production"` as well. When that
+origin that serves the dashboard. The published template is a reference with placeholder IDs;
+the realized production config is kept in the operator-private `takosumi-private` repository.
+The template already sets `TAKOSUMI_ENVIRONMENT = "production"` under `[vars]`. When that
 value is `production` or `staging`, the checks on encryption keys and persistent stores
 become fail-closed. What each value means is collected in the
 [configuration reference](/en/reference/configuration).
+
+The reference template assumes that the release tool injects `main` and `[assets] directory`,
+so it does not contain them. If you deploy your copy directly with `wrangler deploy`, add `main`
+for your Worker entrypoint and `directory` under `[assets]` for the dashboard build output
+before deploying. If you use your own Worker script, point `main` at that script.
 
 Build the dashboard. `ASSETS` serves this output.
 
 ```bash
 bun install
-bun run build:dashboard
+(cd dashboard && bun run build)
 ```
 
 Load the secrets. Keep them out of `wrangler.toml` and push them in with

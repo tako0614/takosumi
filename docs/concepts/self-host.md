@@ -59,19 +59,22 @@ bunx wrangler r2 bucket create takosumi-backups
 
 `wrangler.toml` を自分用に写します。書き換えるのは `database_id`、`routes` の
 `pattern`、`[vars]` の `TAKOSUMI_ACCOUNTS_ISSUER` です。issuer は dashboard を配る
-origin そのものです。雛形の `TAKOSUMI_ACCOUNTS_CLIENTS` には例示用の client が
-入っていて、redirect 先が自分の持たない domain を指しています。自分の client に
-差し替えるか、要らなければ丸ごと消してください。
-
-本番として運用するなら `TAKOSUMI_ENVIRONMENT = "production"` も足します。この値が
-`production` か `staging` のとき、暗号鍵と永続ストアの検査が fail-closed になります。
+origin そのものです。公開されている雛形は placeholder ID を含む参照用で、実際に deploy する
+realized production config は operator-private な `takosumi-private` repo で管理します。
+雛形の `[vars]` には `TAKOSUMI_ENVIRONMENT = "production"` がすでに設定されています。
+この値が `production` か `staging` のとき、暗号鍵と永続ストアの検査が fail-closed になります。
 値の意味は[設定リファレンス](../reference/configuration.md)にまとめてあります。
+
+この参照雛形は release tool が `main` と `[assets] directory` を注入する前提で、その 2 つを
+持ちません。自分の copy を `wrangler deploy` で直接使う場合は、copy 側に Worker entrypoint の
+`main` と dashboard build output の `directory` を `[assets]` に追加してから deploy します。
+自分の Worker script を使う場合も、その script を `main` に指定します。
 
 dashboard をビルドします。`ASSETS` はこの出力を配ります。
 
 ```bash
 bun install
-bun run build:dashboard
+(cd dashboard && bun run build)
 ```
 
 secret を入れます。`wrangler.toml` には書かず、`wrangler secret put` で押し込みます。

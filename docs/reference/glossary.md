@@ -50,7 +50,6 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | plan                   | 何がどう変わるかを計算して見せる操作です。この時点では実物は変わりません。                                            | [実行モデル](../concepts/run-model.md)         |
 | apply                  | 確認した plan をそのまま反映する操作です。                                                                            | [実行モデル](../concepts/run-model.md)         |
 | destroy                | Capsule が作ったリソースを削除する操作です。計画を作ってから反映します。                                              | [実行モデル](../concepts/run-model.md)         |
-| refresh                | 外部の実物を変えずに、Takosumi 側の状態と Output を取り込み直す操作です。                                             | [状態と出力](../concepts/state-and-outputs.md) |
 | 差分確認 (drift check) | 保存した状態と実物のずれを、読み取り専用で調べる操作です。                                                            | [状態と出力](../concepts/state-and-outputs.md) |
 | drift                  | 保存した状態と実物のあいだに生まれたずれのことです。                                                                  | [状態と出力](../concepts/state-and-outputs.md) |
 | RunGroup               | 依存関係の順に複数の Run をまとめた記録です。Workspace 全体の更新や差分確認、Capsule の追加・更新・削除で作られます。 | [実行モデル](../concepts/run-model.md)         |

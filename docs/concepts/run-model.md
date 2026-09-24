@@ -1,16 +1,15 @@
 # 実行モデル
 
-Run は Takosumi における実行の唯一の記録単位です。計画も適用も破棄も差分確認も、
-すべて Run になります。
+Run は Takosumi における実行の記録単位です。計画、適用、破棄、差分確認などの実行は、
+それぞれ Run として記録されます。
 
-## Run は 1 つのエンティティです
+## Plan と Apply は別の Run です
 
-`plan` / `apply` / `destroy` / `refresh` / `output` は別々のエンティティではなく、
-1 つの Run が持つ操作です。「計画レコード」と「適用レコード」が分かれているわけでは
-ありません。
+`plan` は Plan Run を作り、`apply` は確認した Plan Run に `planRunId` で結びついた
+別の Apply Run を作ります。適用時は plan の digest、source snapshot、依存関係の snapshot、
+state generation などを再検証するため、確認した計画からずれません。
 
-この設計の効果は 1 つです。**確認した計画と、適用される内容が食い違いません。**
-適用は同じ Run に対して行います。
+**確認した計画と、適用される内容が食い違わない**ように、Apply Run はこの plan に固定されます。
 
 ## 計画から始まります
 
@@ -19,8 +18,8 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/plan" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-Run は必ず、何かの計画として生まれます。破棄も同じで、
-`DELETE /api/v1/capsules/{capsuleId}` は破棄計画を作る操作です。
+`plan` は Plan Run を作ります。破棄も同じで、`DELETE /api/v1/capsules/{capsuleId}` は
+破棄計画を作る操作です。
 
 内容は Run から読みます。
 
@@ -39,7 +38,8 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/runs/run_example/cost" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-納得したら適用します。承認が必要な設定なら、適用の前に `/approve` を通します。
+納得したら、確認した plan の Run に対して適用します。別の Apply Run が作られ、承認が必要な
+設定なら、適用の前に `/approve` を通します。
 
 ```bash
 curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/runs/run_example/apply" \

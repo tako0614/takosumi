@@ -11,7 +11,7 @@ Takosumi はクラウド API の代わりではありません。OpenTofu / Terr
 | **Project**   | Workspace 内でアプリやインフラを整理する単位                           |
 | **Source**    | 登録した Git リポジトリと module の場所                                |
 | **Capsule**   | Source から作った、1 つの module のデプロイ単位                        |
-| **Run**       | plan、apply、refresh、destroy など 1 回の実行                          |
+| **Run**       | plan、apply、destroy など 1 回の実行                                   |
 | **Interface** | デプロイしたものが提供する接続方法の宣言                              |
 
 Workspace はチームや権限を最初に作るためのものではありません。Personal、Work、

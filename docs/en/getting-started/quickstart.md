@@ -1,9 +1,9 @@
 # Quickstart
 
-Start with a five-minute API check. If you want to continue, bring up the full
+Start with a development API check. If you want to continue, bring up the full
 local environment with the dashboard, sign-in, database, and OpenTofu runner.
 
-## Five minutes: development API
+## Development API
 
 You need Bun and Git.
 
@@ -29,7 +29,7 @@ The API is running when it returns JSON. This setup stores data in memory, so
 it disappears on restart. It also does not start the dashboard or runner. Use
 it only for API development.
 
-## About 30 minutes: complete local environment
+## Complete local environment
 
 The remaining steps start a local Takosumi installation on Linux and run a
 plan and apply for a Git module. The first run builds containers and the

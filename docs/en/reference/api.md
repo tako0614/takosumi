@@ -285,7 +285,7 @@ from the scan, not by a provider-source-only map:
     "modulePath": "deploy/selected",
     "providerBindings": [
       {
-        "provider": "registry.opentofu.org/tako0614/takoform",
+        "provider": "registry.terraform.io/tako0614/takoform",
         "moduleLocalName": "takoform",
         "connectionId": "conn_takoform"
       }
@@ -386,8 +386,10 @@ with a bounded current-Principal Binding query; listing never reconciles or
 writes Interface lifecycle state. Individual invocation and token issuance
 still revalidate the exact Interface and Binding immediately before use.
 
-A Run is one ledger entry with a `plan`, `apply`, `destroy`, `refresh`, or
-`output` operation. Plan / Apply / Destroy are not separate ledgers.
+A Run is one operation ledger entry. Its `type` is one of `source_sync`,
+`compatibility_check`, `plan`, `apply`, `destroy_plan`, `destroy_apply`,
+`drift_check`, `backup`, or `restore`. Plan and Apply are separate Runs, and the
+Apply Run is linked to the reviewed Plan Run by `planRunId`.
 
 A Capsule that builds from a Git checkout can declare an optional `sourceBuild`
 at creation time. This is not Store metadata; it is a Capsule setting that the

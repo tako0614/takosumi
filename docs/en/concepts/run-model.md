@@ -1,15 +1,17 @@
 # Run model
 
-Every execution in Takosumi leaves exactly one Run behind. Planning, applying,
-destroying, and checking for drift are all recorded as Runs.
+Every execution in Takosumi is recorded as a Run. Planning, applying, destroying,
+and checking for drift each leave a Run record.
 
-## A plan and its apply are the same Run
+## A plan and its apply are separate Runs
 
-`plan`, `apply`, `destroy`, `refresh`, and `output` are operations on a single Run. A
-separate "plan record" and "apply record" are never created.
+`plan` creates a Plan Run. `apply` creates a separate Apply Run linked with
+`planRunId` to the Plan Run you reviewed. On apply, Takosumi rechecks the plan
+digest, source snapshot, dependency snapshot, and state generation, so the applied
+change cannot diverge from the plan you reviewed.
 
-That has one effect worth stating plainly. **The plan you reviewed and the change that is
-applied cannot diverge**, because the apply acts on the same Run.
+**The plan you reviewed and the change that is applied cannot diverge**, because the
+Apply Run is pinned to that plan.
 
 ## Everything starts with a plan
 
@@ -18,7 +20,7 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/plan" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-A Run is always born as a plan for something. Destruction works the same way:
+A `plan` creates a Plan Run. Destruction works the same way:
 `DELETE /api/v1/capsules/{capsuleId}` creates a destroy plan.
 
 You read the contents from the Run.
@@ -38,8 +40,8 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/runs/run_example/cost" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-When you are satisfied, apply. If the configuration requires approval, `/approve` comes
-before the apply.
+When you are satisfied, apply the reviewed plan Run. This creates a separate Apply Run.
+If the configuration requires approval, `/approve` comes before the apply.
 
 ```bash
 curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/runs/run_example/apply" \
@@ -72,6 +74,25 @@ directly; it hands the work to the runner and takes back the result.
 
 The rule is to **keep names rather than values**. You can find out later which
 environment variables were injected, but not what was in them.
+
+### Provider lockfile continuity
+
+For a plan that uses providers, the runner retains the **raw bytes** of
+`.terraform.lock.hcl` read immediately after `tofu init` as a private artifact
+from 0 bytes through the 1 MiB limit. SHA-256 is computed over those bytes, and
+the plan succeeds only when it matches `providerLockDigest`. After the runner
+exits, the bytes remain as an immutable object tied to the Run in the existing
+encrypted artifact store, readable only by authorized internal processing. The
+lockfile body and its artifact reference do not appear in public Run, Output, or
+log projections.
+
+When the current runner is provider-free and did not produce a lockfile, private
+metadata records an explicit `null`. An empty lockfile is a present raw byte
+sequence of size 0 and is distinct from `null`. Digest-only records from older
+runners remain `undefined` (unknown); Takosumi does not later retrieve or
+regenerate a lockfile and claim that it was the historical byte sequence. A
+provider plan with a missing, oversized, modified, or cross-Run lockfile
+reference cannot succeed.
 
 ## What can continue automatically
 

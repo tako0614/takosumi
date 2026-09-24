@@ -50,7 +50,6 @@ docs use a different name, read it back through this table.
 | plan         | The operation that computes and shows what will change. Nothing real changes yet.                                                                                |
 | apply        | The operation that applies the plan you reviewed, unchanged.                                                                                                     |
 | destroy      | The operation that removes the resources a Capsule created. A plan is produced first, then applied.                                                              |
-| refresh      | The operation that re-reads state and Outputs into Takosumi without touching anything real outside.                                                              |
 | drift check  | The read-only operation that looks for gaps between saved state and reality.                                                                                     |
 | drift        | The gap that has appeared between saved state and reality.                                                                                                       |
 | RunGroup     | The record grouping several Runs in dependency order. It is created by a Workspace-wide update or drift check, and by adding, updating, or destroying a Capsule. |

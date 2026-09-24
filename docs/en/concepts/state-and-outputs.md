@@ -101,9 +101,10 @@ A drift check reads that difference and reports it, read-only. **It repairs noth
 own.** It reports with the current version and endpoint held fixed, and a person decides
 whether to act.
 
-To take the difference back in, use refresh. Refresh changes nothing outside; it updates
-only the state and Outputs on the Takosumi side, and re-resolves the versions of related
-Interfaces when it succeeds.
+`refresh` remains only as a historical `ResourceOperation` marker; it is not a current
+`RunType`. A drift check remains read-only and does not change anything outside on its own.
+An Output is not a Run; it is the current public projection read from
+`/api/v1/capsules/{capsuleId}/outputs`.
 
 ## How this differs from an export
 

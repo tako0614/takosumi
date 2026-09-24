@@ -1,9 +1,9 @@
 # クイックスタート
 
-まず 5 分で API を確認し、そのあと必要なら dashboard、サインイン、データベース、
+まず開発用 API を確認し、そのあと必要なら dashboard、サインイン、データベース、
 OpenTofu runner を含むローカル環境を起動します。
 
-## 5 分: 開発用 API
+## 開発用 API
 
 必要なものは Bun と Git です。
 
@@ -28,7 +28,7 @@ curl http://127.0.0.1:8788/api/v1/capabilities \
 JSON が返れば API は動いています。この構成はデータをメモリに置き、再起動すると消えます。
 dashboard や runner も起動しないため、開発中の API 確認にだけ使ってください。
 
-## 約 30 分: 完全なローカル環境
+## 完全なローカル環境
 
 ここからは Linux マシン上にローカルの Takosumi を立て、Git module の plan と apply を
 実行します。初回はコンテナと dashboard をビルドするため時間がかかります。

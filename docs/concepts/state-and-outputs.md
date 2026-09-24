@@ -95,8 +95,9 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/output-shares/share_example/ap
 差分確認はこのずれを読み取り専用で報告します。**自動では直しません。** 現在の版と
 endpoint を固定したまま報告するので、直すかどうかは人が決めます。
 
-取り込み直す場合は refresh を使います。refresh は外部の実物を変更せず、Takosumi 側の
-状態と Output だけを更新し、成功したときだけ関連する Interface の版を解決し直します。
+`refresh` は歴史的な `ResourceOperation` marker としてのみ残っており、現在の `RunType` では
+ありません。差分確認は読み取り専用のままで、外部の実物を自動では変更しません。Output は
+Run ではなく、`/api/v1/capsules/{capsuleId}/outputs` から読む現在の公開 projection です。
 
 ## 書き出しとの違い
 
