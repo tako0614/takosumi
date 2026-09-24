@@ -94,7 +94,7 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | ----------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
 | Resource          | 旧 API が保持する型付きサービスの記録 (migration only)。                                                     | [Resource migration](../concepts/resources.md) |
 | Resource Shape    | 旧 API・schema・state で Resource の型を表す名前 (migration only)。                                            | [Resource migration](../concepts/resources.md) |
-| Service Form      | Takoform 側の portable 概念。Takosumi OSS の Host ownership ではない。                                          | [Resource migration](../concepts/resources.md) |
+| Service Form      | Takoform 側の portable 概念。Takosumi OSS の Host ownership ではありません。                                          | [Resource migration](../concepts/resources.md) |
 | FormRef           | Takoform の exact な Form 定義を指す識別子 (external Host vocabulary)。                                        | [Resource migration](../concepts/resources.md) |
 | Form Package      | Takoform の定義 schema と付随情報の bundle (external Host vocabulary)。                                       | [Resource migration](../concepts/resources.md) |
 | Form Registry     | external Host が信頼して固定する Form Package の一覧 (migration only)。                                      | [Resource migration](../concepts/resources.md) |
