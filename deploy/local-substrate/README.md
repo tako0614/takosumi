@@ -225,4 +225,4 @@ CI で自動検証されるパス:
 
 - **公開面は絶対に出さない**: ACME は Pebble 固定、 DNS は CoreDNS 固定、 emulator は内部 network。 Phase 3 で多重防御 guard と `prove-no-public-leak.sh` を追加
 - **実 cloud compute は credentials で叩いてよい**: emulator 無し compute (Fargate / Cloud Run / Container Apps / Cloudflare Container) は local fixture の Provider Connection / Gateway resolver を明示した場合に限り real cloud を呼ぶ。default では未解決 Provider Connection として fail-closed にする
-- **Takosumi-owned fixture に閉じる**: endpoint override は `deploy/local-substrate/factories/` と local wrapper に閉じ、 Takos product service をこの compose topology に戻さない
+- **Takosumi-owned fixture に閉じる**: endpoint override は `deploy/local-substrate/factories/` と local wrapper に閉じ、 Takos product service をこの Docker Compose topology に戻さない

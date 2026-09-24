@@ -54,7 +54,7 @@ local internal API ではなく account-plane の authority を通す platform s
    ```
 2. 実際の invocation では exact Git SourceSnapshot と successful compatibility
    declaration を作り、install plan が返す review Run から apply へ進むことを確認します。
-3. `scripts/smoke.sh` は local substrate 自体の health/isolation に限定し、この
+3. `scripts/smoke.sh` は `local-substrate` 自体の health/isolation に限定し、この
    deployment-authority smoke を重複実装しません。
 
 Dynamic `<id>.app.takosumi.test` projection is deferred. Takosumi v1's public deploy control API does not expose raw desired-route listings; route projection must come from a future operator-internal source.
