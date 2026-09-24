@@ -249,6 +249,14 @@ function buildOptions(
   };
 }
 
+function recoverJournalOptions(input: Fixture) {
+  return {
+    ...buildOptions(input, "staging", true),
+    command: "recover-journal" as const,
+    review: "operator:recovery-reviewer",
+  };
+}
+
 function candidateBuildOptions(input: Fixture) {
   return parseRunnerImageReleaseArgs([
     "build",
@@ -455,6 +463,7 @@ function publicationCoordinationPaths(
   const key = sha256(scope).slice("sha256:".length);
   return {
     locator: join(root, `${key}.locator.json`),
+    recoveryLocator: join(root, `${key}.locator-v4.json`),
     lock: join(root, `${key}.lock`),
   };
 }
@@ -650,6 +659,31 @@ async function bindEmptyPublicationJournalThroughFailedBuild(
   expect(readFileSync(input.state, "utf8")).toBe("");
   expect(existsSync(publicationCoordinationPaths(journalRoot).locator)).toBeTrue();
   return statSync(input.state).ino;
+}
+
+async function replaceAndRecoverPublicationJournal(
+  input: Fixture,
+  journalRoot: string,
+  source: string,
+) {
+  await bindEmptyPublicationJournalThroughFailedBuild(input, journalRoot);
+  const coordination = publicationCoordinationPaths(journalRoot);
+  const predecessorBytes = readFileSync(coordination.locator);
+  const predecessorInode = statSync(coordination.locator).ino;
+  const displaced = join(input.operator, "displaced-publication-state.jsonl");
+  renameSync(input.state, displaced);
+  writePrivate(input.state, source);
+  const result = await runRunnerImageRelease(recoverJournalOptions(input), {
+    repositoryRoot: input.repository,
+    git: gitFor("fix/TASK-0032-runner-image"),
+    publicationJournalRoot: journalRoot,
+  });
+  return {
+    result,
+    coordination,
+    predecessorBytes,
+    predecessorInode,
+  };
 }
 
 function sha256(value: string | Uint8Array): string {
@@ -1625,6 +1659,30 @@ test("public CLI exposes build and read-only verify, never activate", () => {
       "/private/publication-state.jsonl",
     ]),
   ).toMatchObject({ command: "reconcile", execute: false });
+  const recoveryArgs = [
+    "recover-journal",
+    "--config",
+    "/private/wrangler.toml",
+    "--environment",
+    "staging",
+    "--release",
+    "journal-recovery-1",
+    "--evidence",
+    "/private/recovery.jsonl",
+    "--state",
+    "/private/publication-state.jsonl",
+    "--review",
+    "operator:recovery-reviewer",
+  ] as const;
+  expect(() => parseRunnerImageReleaseArgs(recoveryArgs)).toThrow(
+    "recover-journal requires --execute",
+  );
+  expect(parseRunnerImageReleaseArgs([...recoveryArgs, "--execute"]))
+    .toMatchObject({
+      command: "recover-journal",
+      execute: true,
+      review: "operator:recovery-reviewer",
+    });
   expect(() => parseRunnerImageReleaseArgs(["activate"])).toThrow();
   expect(() =>
     parseRunnerImageReleaseArgs([
@@ -2871,6 +2929,379 @@ test("a persisted resolution must bind the attempt to the descriptor rather than
       },
     ),
   ).rejects.toThrow("runner_image_publication_state_invalid");
+});
+
+test("explicit recovery seals a valid replaced closed prefix in v4 without changing v3", async () => {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  const prefix = legacyPublicationPrefix(input, 6);
+  const recovered = await replaceAndRecoverPublicationJournal(
+    input,
+    journalRoot,
+    prefix,
+  );
+  expect(recovered.result).toMatchObject({
+    operation: "recover-journal",
+    status: "recovered",
+    continuity: "unknown",
+    observedPrefix: {
+      byteLength: Buffer.byteLength(prefix),
+      sha256: sha256(prefix),
+    },
+  });
+  expect(readFileSync(recovered.coordination.locator)).toEqual(
+    recovered.predecessorBytes,
+  );
+  expect(statSync(recovered.coordination.locator).ino).toBe(
+    recovered.predecessorInode,
+  );
+  const v4 = JSON.parse(
+    readFileSync(recovered.coordination.recoveryLocator, "utf8"),
+  ) as {
+    predecessor: { expectedJournalIdentity: { ino: string } };
+    journalIdentity: { ino: string };
+  };
+  expect(v4).toMatchObject({
+    kind: "takosumi.runner-image-publication-locator@v4",
+    continuity: "unknown",
+    journalPath: input.state,
+    predecessor: { locatorSha256: sha256(recovered.predecessorBytes) },
+    recoveredBy: {
+      repository: REPOSITORY,
+      commit: COMMIT,
+      review: "operator:recovery-reviewer",
+    },
+  });
+  expect(v4.predecessor.expectedJournalIdentity.ino).not.toBe(
+    v4.journalIdentity.ino,
+  );
+  await expect(
+    runRunnerImageRelease(buildOptions(input), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+      publicationJournalRoot: journalRoot,
+    }),
+  ).resolves.toMatchObject({ status: "planned" });
+});
+
+test("recovery refuses torn or malformed observed history before publishing v4", async () => {
+  for (const source of [
+    '{"kind":"takosumi.runner-image-publication-state@v2"',
+    `${JSON.stringify(publicationAttempt(fixture()))}\nnot-json\n`,
+  ]) {
+    const input = fixture();
+    const journalRoot = join(input.operator, "publication-locator");
+    await bindEmptyPublicationJournalThroughFailedBuild(input, journalRoot);
+    renameSync(input.state, join(input.operator, "displaced.jsonl"));
+    writePrivate(input.state, source);
+    await expect(
+      runRunnerImageRelease(recoverJournalOptions(input), {
+        repositoryRoot: input.repository,
+        git: gitFor("fix/TASK-0032-runner-image"),
+        publicationJournalRoot: journalRoot,
+      }),
+    ).rejects.toThrow("runner_image_publication_state_invalid");
+    expect(
+      existsSync(publicationCoordinationPaths(journalRoot).recoveryLocator),
+    ).toBeFalse();
+  }
+});
+
+test("a recovered known unresolved attempt still blocks build and reconciles only its exact ref", async () => {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  const attempt = publicationAttempt(input, {
+    localDescriptorDigest: `sha256:${"d".repeat(64)}`,
+  });
+  await replaceAndRecoverPublicationJournal(
+    input,
+    journalRoot,
+    `${JSON.stringify(attempt)}\n`,
+  );
+  let nonceCalls = 0;
+  await expect(
+    runRunnerImageRelease(buildOptions(input, "staging", true), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+      publicationJournalRoot: journalRoot,
+      accountId: "b".repeat(32),
+      nonce: () => {
+        nonceCalls += 1;
+        return "02".repeat(16);
+      },
+    }),
+  ).rejects.toThrow("runner_image_publication_reconciliation_required");
+  expect(nonceCalls).toBe(0);
+  const reconciled = await runRunnerImageRelease(
+    { ...buildOptions(input), command: "reconcile" },
+    {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+      publicationJournalRoot: journalRoot,
+      materializeSource: materializeFixtureSource,
+      command: successfulPublicationCommand,
+    },
+  );
+  expect(reconciled).toMatchObject({
+    status: "published",
+    image: { transportRef: attempt.image.transportRef, immutableRef: NEXT },
+  });
+});
+
+test("recovery is idempotent and never rewrites an existing recovered prefix", async () => {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  const recovered = await replaceAndRecoverPublicationJournal(
+    input,
+    journalRoot,
+    legacyPublicationPrefix(input, 6),
+  );
+  const before = readFileSync(recovered.coordination.recoveryLocator);
+  const inode = statSync(recovered.coordination.recoveryLocator).ino;
+  await expect(
+    runRunnerImageRelease(recoverJournalOptions(input), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+      publicationJournalRoot: journalRoot,
+    }),
+  ).resolves.toMatchObject({ status: "already-recovered" });
+  expect(readFileSync(recovered.coordination.recoveryLocator)).toEqual(before);
+  expect(statSync(recovered.coordination.recoveryLocator).ino).toBe(inode);
+});
+
+test("ordinary v4 open refuses prefix tamper, missing state or v4, and a replaced journal", async () => {
+  for (const mutation of ["tamper", "missing", "missing-v4", "replace"] as const) {
+    const input = fixture();
+    const journalRoot = join(input.operator, `publication-locator-${mutation}`);
+    const prefix = legacyPublicationPrefix(input, 6);
+    await replaceAndRecoverPublicationJournal(input, journalRoot, prefix);
+    if (mutation === "tamper") {
+      const bytes = readFileSync(input.state);
+      bytes[0] = bytes[0] === 0x7b ? 0x5b : 0x7b;
+      writeFileSync(input.state, bytes);
+    } else if (mutation === "missing") {
+      rmSync(input.state);
+    } else if (mutation === "missing-v4") {
+      rmSync(publicationCoordinationPaths(journalRoot).recoveryLocator);
+    } else {
+      renameSync(input.state, join(input.operator, "replaced-old.jsonl"));
+      writePrivate(input.state, prefix);
+    }
+    await expect(
+      runRunnerImageRelease(buildOptions(input), {
+        repositoryRoot: input.repository,
+        git: gitFor("fix/TASK-0032-runner-image"),
+        publicationJournalRoot: journalRoot,
+      }),
+    ).rejects.toThrow();
+    if (mutation === "missing-v4") {
+      let nonceCalls = 0;
+      let providerCalls = 0;
+      await expect(
+        runRunnerImageRelease(buildOptions(input, "staging", true), {
+          repositoryRoot: input.repository,
+          git: gitFor("fix/TASK-0032-runner-image"),
+          publicationJournalRoot: journalRoot,
+          accountId: "b".repeat(32),
+          nonce: () => {
+            nonceCalls += 1;
+            return "07".repeat(16);
+          },
+          command: async () => {
+            providerCalls += 1;
+            throw new Error("provider must not be called");
+          },
+        }),
+      ).rejects.toThrow("runner_image_publication_journal_identity_changed");
+      expect(
+        existsSync(publicationCoordinationPaths(journalRoot).recoveryLocator),
+      ).toBeFalse();
+      expect(nonceCalls).toBe(0);
+      expect(providerCalls).toBe(0);
+    }
+  }
+});
+
+test("explicit recovery completes a durable v4 two-link crash window", async () => {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  const recovered = await replaceAndRecoverPublicationJournal(
+    input,
+    journalRoot,
+    legacyPublicationPrefix(input, 6),
+  );
+  const locator = JSON.parse(
+    readFileSync(recovered.coordination.recoveryLocator, "utf8"),
+  ) as { pendingName: string };
+  const pending = join(journalRoot, locator.pendingName);
+  linkSync(recovered.coordination.recoveryLocator, pending);
+  await expect(
+    runRunnerImageRelease(buildOptions(input), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+      publicationJournalRoot: journalRoot,
+    }),
+  ).rejects.toThrow();
+  await expect(
+    runRunnerImageRelease(recoverJournalOptions(input), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+      publicationJournalRoot: journalRoot,
+    }),
+  ).resolves.toMatchObject({ status: "already-recovered" });
+  expect(existsSync(pending)).toBeFalse();
+  expect(statSync(recovered.coordination.recoveryLocator).nlink).toBe(1);
+});
+
+test("retained v4 with missing v3 cannot recreate v3 or touch journal/provider state", async () => {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  const recovered = await replaceAndRecoverPublicationJournal(
+    input,
+    journalRoot,
+    legacyPublicationPrefix(input, 6),
+  );
+  rmSync(recovered.coordination.locator);
+  const stateBytes = readFileSync(input.state);
+  const stateInode = statSync(input.state).ino;
+  const v4Bytes = readFileSync(recovered.coordination.recoveryLocator);
+  let providerCalls = 0;
+  let nonceCalls = 0;
+  await expect(
+    runRunnerImageRelease(buildOptions(input, "staging", true), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+      publicationJournalRoot: journalRoot,
+      accountId: "b".repeat(32),
+      nonce: () => {
+        nonceCalls += 1;
+        return "08".repeat(16);
+      },
+      command: async () => {
+        providerCalls += 1;
+        throw new Error("provider must not be called");
+      },
+    }),
+  ).rejects.toThrow("runner_image_publication_locator_invalid");
+  expect(existsSync(recovered.coordination.locator)).toBeFalse();
+  expect(readFileSync(input.state)).toEqual(stateBytes);
+  expect(statSync(input.state).ino).toBe(stateInode);
+  expect(readFileSync(recovered.coordination.recoveryLocator)).toEqual(v4Bytes);
+  expect(providerCalls).toBe(0);
+  expect(nonceCalls).toBe(0);
+});
+
+test("recovery rejects an alternate path before creating v4 metadata", async () => {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  await bindEmptyPublicationJournalThroughFailedBuild(input, journalRoot);
+  const alternate = join(input.operator, "alternate.jsonl");
+  writePrivate(alternate, legacyPublicationPrefix(input, 6));
+  await expect(
+    runRunnerImageRelease(
+      { ...recoverJournalOptions(input), state: alternate },
+      {
+        repositoryRoot: input.repository,
+        git: gitFor("fix/TASK-0032-runner-image"),
+        publicationJournalRoot: journalRoot,
+      },
+    ),
+  ).rejects.toThrow("runner_image_publication_state_path_mismatch");
+  expect(
+    existsSync(publicationCoordinationPaths(journalRoot).recoveryLocator),
+  ).toBeFalse();
+});
+
+test("v3 build and v4 recovery share the exact same scope lock", async () => {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  await bindEmptyPublicationJournalThroughFailedBuild(input, journalRoot);
+  renameSync(input.state, join(input.operator, "displaced.jsonl"));
+  writePrivate(input.state, legacyPublicationPrefix(input, 6));
+  let linked!: () => void;
+  const lockLinked = new Promise<void>((resolve) => (linked = resolve));
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => (release = resolve));
+  const recovery = runRunnerImageRelease(recoverJournalOptions(input), {
+    repositoryRoot: input.repository,
+    git: gitFor("fix/TASK-0032-runner-image"),
+    publicationJournalRoot: journalRoot,
+    publicationLockHook: async (phase) => {
+      if (phase === "linked") {
+        linked();
+        await hold;
+      }
+    },
+  });
+  await lockLinked;
+  await expect(
+    runRunnerImageRelease(buildOptions(input, "staging", true), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+      publicationJournalRoot: journalRoot,
+      accountId: "b".repeat(32),
+    }),
+  ).rejects.toThrow("runner_image_publication_locked");
+  release();
+  await expect(recovery).resolves.toMatchObject({ status: "recovered" });
+});
+
+test("recovery fsync failure publishes no v4 locator and performs no provider call", async () => {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  await bindEmptyPublicationJournalThroughFailedBuild(input, journalRoot);
+  renameSync(input.state, join(input.operator, "displaced.jsonl"));
+  writePrivate(input.state, legacyPublicationPrefix(input, 6));
+  let providerCalls = 0;
+  await expect(
+    runRunnerImageRelease(recoverJournalOptions(input), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+      publicationJournalRoot: journalRoot,
+      command: async () => {
+        providerCalls += 1;
+        throw new Error("provider must not be called");
+      },
+      publicationRecoveryFsync: async () => {
+        throw new Error("simulated fsync failure");
+      },
+    }),
+  ).rejects.toThrow("simulated fsync failure");
+  expect(providerCalls).toBe(0);
+  const coordination = publicationCoordinationPaths(journalRoot);
+  expect(existsSync(coordination.recoveryLocator)).toBeFalse();
+  expect(readdirSync(journalRoot).some((name) =>
+    name.startsWith(`${basename(coordination.recoveryLocator)}.pending-`)
+  )).toBeFalse();
+});
+
+test("a fresh transport ref after unknown-continuity recovery may retain the same descriptor", async () => {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  const historical = legacyPublicationAttempt(input, {
+    release: "historical-same-digest",
+    transportTag: "historical-same-digest",
+    localDescriptorDigest: `sha256:${"d".repeat(64)}`,
+  });
+  await replaceAndRecoverPublicationJournal(
+    input,
+    journalRoot,
+    `${JSON.stringify(historical)}\n${JSON.stringify(
+      legacyPublicationResolution(historical, { immutableRef: NEXT }),
+    )}\n`,
+  );
+  const record = await runRunnerImageRelease(buildOptions(input, "staging", true), {
+    ...buildRuntime(input, successfulPublicationCommand),
+    publicationJournalRoot: journalRoot,
+    nonce: () => "05".repeat(16),
+  });
+  expect(record).toMatchObject({
+    status: "published",
+    image: { immutableRef: NEXT },
+  });
+  expect((record as { image: { transportRef: string } }).image.transportRef).not.toBe(
+    historical.image.transportRef,
+  );
 });
 
 test("a release-scope journal locator rejects an alternate caller-selected state path", async () => {
