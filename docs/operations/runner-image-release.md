@@ -7,7 +7,7 @@ implementation: `runner/Dockerfile`, the `runner/` payload, and
 official realized image pin and operator evidence. Realized configuration,
 credentials, and release records never belong in this public repository.
 
-There are two distinct authorities:
+Publication, local recovery, and platform deployment have separate authorities:
 
 - `takosumi-runner-image build` is the only runner image publication mutation.
 - `takosumi-runner-image recover-journal` is the only operation that can bind a
