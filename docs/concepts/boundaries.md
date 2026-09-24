@@ -69,7 +69,7 @@ provider です。ただし、実行後の authority は同じではありませ
 
 - Cloudflare / AWS などの provider を module から直接使う場合は、共通の
   Run、state、output、監査記録を使います。provider 側の resource は必ずしも
-  Takosumi の Resource 台帳には入りません。
+  Takosumi の Resource ledger には入りません。
 - Takoform の host または Takosumi hosted service が hosted Form instance を提供する場合、その
   lifecycle と実装の authority は外部 Host 側にあります。
 - Takosumi OSS の runner が hosted service 専用の provider や TargetPool を暗黙に選ぶ仕組みは

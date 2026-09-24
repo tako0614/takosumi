@@ -58,7 +58,7 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | Output                 | Capsule が外に公開する、秘密でない値です。                                                                            | [状態と出力](../concepts/state-and-outputs.md) |
 | OutputShare            | Workspace をまたいで Output を渡す記録です。受け取る側が承認して有効になります。                                      | [状態と出力](../concepts/state-and-outputs.md) |
 | AuditEvent             | 誰が、何に対して、何をして、結果どうなったかを 1 件ずつ残した記録です。                                               | [実行モデル](../concepts/run-model.md)         |
-| 台帳 (ledger)          | Run や Resource の記録を積み上げていく保存先です。入口が違っても記録先は同じです。                                    | [実行モデル](../concepts/run-model.md)         |
+| ledger                 | Run や Resource の記録を積み上げていく保存先です。入口が違っても記録先は同じです。                                    | [実行モデル](../concepts/run-model.md)         |
 
 ## 認証情報
 
@@ -107,7 +107,7 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | ResolutionLock    | 旧 Resource の実装・配置固定記録 (migration only)。                                                         | [Resource migration](../concepts/resources.md) |
 | NativeResource    | 旧 adapter が作った provider 側 resource の記録 (migration only)。                                           | [Resource migration](../concepts/resources.md) |
 | observe           | 旧 Resource の読み取り専用差分確認 (migration only)。                                                        | [Resource migration](../concepts/resources.md) |
-| import            | 旧 Resource 台帳へ既存実物を取り込む操作 (migration only)。                                                   | [Resource migration](../concepts/resources.md) |
+| import            | 旧 Resource ledger へ既存実物を取り込む操作 (migration only)。                                                   | [Resource migration](../concepts/resources.md) |
 | portability       | 旧 Resource 解決の移しやすさ (migration only)。                                                             | [Resource migration](../concepts/resources.md) |
 | Compatibility API | S3 や OCI のような標準プロトコルを、範囲と版を決めて受け付ける入口です。                                      | [API](./api.md)                             |
 

@@ -59,7 +59,7 @@ const REQUIRED_DOC_CLAIMS: Readonly<
   "docs/concepts/boundaries.md": [
     {
       pattern:
-        /provider 側の resource は必ずしも\s+Takosumi の Resource 台帳には入りません/u,
+        /provider 側の resource は必ずしも\s+Takosumi の Resource ledger には入りません/u,
       message:
         "Japanese product boundary must distinguish direct providers from the Resource ledger",
     },

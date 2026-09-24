@@ -15,7 +15,7 @@ InterfaceBinding が決めるので、**宣言しただけでは誰も呼べま�
 
 Interface の正本は Takosumi の Interface API です。Capsule の blueprint から
 materialize する場合も、外部 Host が Form descriptor を投影する場合も、最終的には
-同じ台帳へ収束します。Form descriptor の定義・実体化の authority は外部 Host 側です。
+同じ履歴へ収束します。Form descriptor の定義・実体化の authority は外部 Host 側です。
 
 ```http
 POST /api/v1/interfaces
@@ -93,7 +93,7 @@ JSON Pointer です。
 ## デプロイ済みアプリから別の Capsule を使う
 
 Interface は提供側の宣言です。consumer Capsule に接続を渡す場合も、同じ
-Interface / InterfaceBinding 台帳で、値の出どころと認可を明示します。
+Interface / InterfaceBinding の記録で、値の出どころと認可を明示します。
 
 この場合、宣言は2種類を混ぜません。
 
