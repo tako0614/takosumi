@@ -828,6 +828,17 @@ function failedProviderExecutionResult(
     },
     ...(detail ? { detail } : {}),
     ...(stateDigest ? { state: { digest: stateDigest } } : {}),
+    // Preserve the immutable mutation receipt + attested provider installation.
+    // A persisted provider failure is committed as a terminal mutation, which
+    // requires the same execution evidence as a success; stripping it here made
+    // the controller fail the run with a misleading execution_evidence_missing
+    // and hid the real provider error from diagnostics.
+    ...(result.executionEvidence !== undefined
+      ? { executionEvidence: result.executionEvidence }
+      : {}),
+    ...(result.providerInstallation !== undefined
+      ? { providerInstallation: result.providerInstallation }
+      : {}),
   };
 }
 

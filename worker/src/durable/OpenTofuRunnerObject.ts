@@ -2571,6 +2571,13 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       digest: metadataDigest,
       ...(Number.isFinite(ciphertextLength) ? { ciphertextLength } : {}),
     };
+    // A replayed/adopted mutation must re-present the attested provider set or
+    // the controller's reviewed-installation cross-check fails a byte-identical
+    // replay with execution_evidence_provider_mismatch. The immutable receipt
+    // is the only surviving observation, so the installation view is rebuilt
+    // from it with an honest "unknown" method.
+    const providerInstallation =
+      providerInstallationFromExecutionEvidence(executionEvidence);
     if (providerExecutionFailed) {
       return jsonResponse(
         {
@@ -2590,6 +2597,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
             state,
           ),
           ...(executionEvidence ? { executionEvidence } : {}),
+          ...(providerInstallation ? { providerInstallation } : {}),
         },
         500,
       );
@@ -2600,6 +2608,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         exitCode: 0,
         state,
         ...(executionEvidence ? { executionEvidence } : {}),
+        ...(providerInstallation ? { providerInstallation } : {}),
         ...(rawOutputs
           ? { outputs: rawOutputs.outputs, rawOutputRef: rawOutputs.ref }
           : {}),
@@ -6794,6 +6803,26 @@ function providerFailureErrorCode(
     : undefined;
 }
 
+/**
+ * Rebuilds the runner's provider-installation observation from the persisted
+ * immutable receipt for an adopted/replayed mutation. The receipt's attested
+ * artifact set is the same data the live container reported; the installation
+ * method is honestly "unknown" because only the attested identities survive.
+ */
+function providerInstallationFromExecutionEvidence(
+  evidence: RunExecutionEvidence | undefined,
+): Record<string, unknown>[] | undefined {
+  const artifacts = evidence?.authority.providerArtifacts;
+  if (!artifacts || artifacts.length === 0) return undefined;
+  return artifacts.map((artifact) => ({
+    provider: artifact.source,
+    mirrored: false,
+    installationMethod: "unknown",
+    attested: artifact.attested,
+    installedDigest: artifact.digest,
+  }));
+}
+
 function failedProviderExecutionPayload(
   payload: Record<string, unknown>,
   action: "apply" | "destroy",
@@ -6813,6 +6842,14 @@ function failedProviderExecutionPayload(
     },
     ...(detail ? { detail } : {}),
     ...(state ? { state } : {}),
+    // Mirror the container's attested provider installation. A persisted
+    // failure is still a terminal mutation: the controller cross-checks the
+    // reviewed provider set against this observation before committing the
+    // failed StateVersion, so dropping it turns a real provider error into a
+    // misleading execution-evidence failure.
+    ...(Array.isArray(payload.providerInstallation)
+      ? { providerInstallation: payload.providerInstallation }
+      : {}),
   };
 }
 

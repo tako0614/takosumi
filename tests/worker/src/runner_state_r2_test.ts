@@ -1223,6 +1223,10 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
     runId: "plan_1",
     request: {
       applyRun: { id: applyRunId },
+      planRun: {
+        id: "plan_1",
+        requiredProviders: ["registry.terraform.io/tako0614/takoform"],
+      },
       stateScope: {
         ...SCOPE,
         generation: 1,
@@ -1260,6 +1264,20 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
   assert.equal(String(firstPayload.detail).length <= 4_096, true);
   assert.equal(firstPayload.outputs, undefined);
   assert.equal(firstPayload.rawOutputRef, undefined);
+  // A persisted provider failure is still a terminal mutation: the immutable
+  // receipt and the container's attested provider installation must ride the
+  // failure payload so the controller can commit the failed StateVersion.
+  assert.equal(
+    (firstPayload.executionEvidence as Record<string, unknown> | undefined)
+      ?.outcome,
+    "provider_failed_state_persisted",
+  );
+  assert.deepEqual(
+    (firstPayload.providerInstallation as Record<string, unknown>[]).map(
+      (entry) => entry.provider,
+    ),
+    ["registry.terraform.io/tako0614/takoform"],
+  );
   const firstSerialized = JSON.stringify(firstPayload);
   for (const forbidden of [
     "provider-failure-token",

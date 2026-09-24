@@ -699,6 +699,53 @@ test("container runner returns a typed failed apply with persisted partial state
   const stateDigest = `sha256:${"e".repeat(64)}`;
   const safeFailureDetail =
     "Error: SQLiteMigrationSet rejected migration 7 after earlier resources were created";
+  const providerInstallation = [
+    {
+      provider: "registry.terraform.io/tako0614/takoform",
+      mirrored: true,
+      installationMethod: "filesystem_mirror",
+      attested: true,
+      attestationMethod: "forced_filesystem_mirror_init",
+      installedDigest: `sha256:${"a".repeat(64)}`,
+    },
+  ];
+  const executionEvidence = {
+    format: "takosumi.run-execution-evidence/v1",
+    runId: "apply_partial",
+    planRunId: "plan_partial",
+    action: "apply",
+    outcome: "provider_failed_state_persisted",
+    authority: {
+      controllerArtifact: {
+        digest: `sha256:${"b".repeat(64)}`,
+        immutable: true,
+      },
+      runnerArtifact: {
+        digest: `sha256:${"b".repeat(64)}`,
+        immutable: true,
+      },
+      runnerProfileId: "opentofu-default",
+      executorId: "opentofu.default",
+      executorArtifact: {
+        digest: `sha256:${"c".repeat(64)}`,
+        immutable: true,
+      },
+      providerArtifacts: [
+        {
+          source: "registry.terraform.io/tako0614/takoform",
+          digest: `sha256:${"a".repeat(64)}`,
+          attested: true,
+        },
+      ],
+    },
+    plan: {
+      digest: PLAN_DIGEST,
+      artifactDigest: PLAN_DIGEST,
+    },
+    commit: { stateVersionId: "state_partial" },
+    receipt: { operationId: "apply_partial", version: 1, fence: 1 },
+    committedAt: "2026-09-24T19:08:45.402Z",
+  };
   const runner = new CloudflareContainerOpenTofuRunner(
     envReturning(
       {
@@ -715,6 +762,8 @@ test("container runner returns a typed failed apply with persisted partial state
         },
         rawOutputRef: "must-not-publish",
         detail: `${safeFailureDetail}\npassword=partial-apply-secret`,
+        executionEvidence,
+        providerInstallation,
       },
       undefined,
       500,
@@ -739,6 +788,11 @@ test("container runner returns a typed failed apply with persisted partial state
   expect(result.stateDigest).toBe(stateDigest);
   expect(result.outputs).toBeUndefined();
   expect(result.rawOutputRef).toBeUndefined();
+  // A persisted provider failure is still a terminal mutation: the immutable
+  // receipt and the attested provider installation must reach the controller
+  // or the run fails closed with a misleading execution_evidence_missing.
+  expect(result.executionEvidence).toEqual(executionEvidence);
+  expect(result.providerInstallation).toEqual(providerInstallation);
   expect(JSON.stringify(result.diagnostics)).not.toContain(
     "partial-apply-secret",
   );
