@@ -5362,6 +5362,24 @@ test("verify refuses a proved image built by another repository", async () => {
   expect(readbacks).toBe(0);
 });
 
+test("verify accepts historical build evidence from a different config path when platform evidence binds the current path", async () => {
+  const input = fixture(NEXT);
+  writeBuildEvidence(input, {
+    configPath: join(input.operator, "historical-wrangler.toml"),
+  });
+  writePlatformEvidence(input);
+  const record = await runRunnerImageRelease(verifyOptions(input), {
+    repositoryRoot: input.repository,
+    git: gitFor("fix/TASK-0032-runner-image"),
+    command: verificationCommand().command,
+  });
+  expect(record).toMatchObject({
+    status: "verified",
+    image: NEXT,
+    platform: { deployedVersionId: DEPLOYED_VERSION },
+  });
+});
+
 test("verify consumes exact platform evidence and performs no Worker mutation", async () => {
   const input = fixture(NEXT);
   writeBuildEvidence(input);
@@ -5461,6 +5479,23 @@ test("verify rejects platform config or serving Version not bound to the build t
   let calls = 0;
   await expect(
     runRunnerImageRelease(verifyOptions(input), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+      command: async () => {
+        calls += 1;
+        throw new Error("must not read live state");
+      },
+    }),
+  ).rejects.toThrow("platform evidence does not bind");
+  expect(calls).toBe(0);
+
+  rmSync(input.platformEvidence);
+  writePlatformEvidence(input, {
+    configPath: join(input.operator, "other-wrangler.toml"),
+  });
+  calls = 0;
+  await expect(
+    runRunnerImageRelease(verifyOptions(input, false), {
       repositoryRoot: input.repository,
       git: gitFor("fix/TASK-0032-runner-image"),
       command: async () => {

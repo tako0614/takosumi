@@ -2690,7 +2690,6 @@ async function verifyRunnerImage(
     throw new Error("runner_image_runtime_input_plan_proof_required");
   }
   if (
-    build.config.path !== context.config.path ||
     build.config.expectedActivationSha256 !== context.config.sha256 ||
     context.config.runnerImage !== immutableRef ||
     context.config.runnerImage === build.config.previousImage
