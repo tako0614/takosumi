@@ -13,15 +13,15 @@ pagination、error envelope の正本 (正とする情報) は
 TCS 2.0 listing から install authority として Takosumi が受け取るのは Git repository
 URL だけです。suggested name や表示情報は UI の初期値にできますが、実行対象を決めません。
 
-1. dashboard が listing の repository URL を受け取る。
-2. Takosumi がその URL の Source を root から sync し、ref を immutable commit に固定する。
+1. dashboard が listing の repository URL を受け取ります。
+2. Takosumi がその URL の Source を root から sync し、ref を immutable commit に固定します。
 3. exact SourceSnapshot の tracked OpenTofu file scan から module 候補と provider requirement
-   を取得する。候補が1件なら自動選択し、複数なら利用者が選択する。
-4. server が repository URL に一致する host policy override を一意に解決する。無い場合は
+   を取得します。候補が1件なら自動選択し、複数なら利用者が選択します。
+4. server が repository URL に一致する host policy override を一意に解決します。無い場合は
    汎用 Git InstallConfig を使い、その policy ceiling の下で exact module の
-   compatibility check を実行する。
+   compatibility check を実行します。
 5. 選択した module path を Workspace-scoped derived InstallConfig に保存し、通常の
-   review / Plan / Apply へ渡す。
+   review / Plan / Apply へ渡します。
 
 Store client は `compileInstallUx: true` の request に `modulePath` や
 `installConfigId` を指定できません。候補が0件なら install 不可、1件なら自動選択、複数なら

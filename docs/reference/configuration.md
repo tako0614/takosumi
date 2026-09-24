@@ -85,25 +85,24 @@ export COMPANY_SSO_CLIENT_SECRET="<upstream client secret>"
 
 `providerId` は表示と識別のための名前で、挙動は選びません。何個でも並べられます。
 
-## Retired Resource/Form HTTP surfaces
+## 廃止済みの Resource/Form HTTP surface
 
-Takosumi OSS supports one Git/OpenTofu/Terraform Stack flow. The former
-Resource Shape, Form Host, Form Registry, FormActivation, TargetPool, and
-SpacePolicy `/v1` routes and CLI domains are retired and have no enable flag.
-They remain unconditional `404`, are absent from capabilities/OpenAPI, and are
-not restored by a bearer, a database, or retained rows.
+Takosumi OSS が対応するのは Git/OpenTofu/Terraform の Stack flow の 1 つだけです。
+以前の Resource Shape、Form Host、Form Registry、FormActivation、TargetPool、
+SpacePolicy の `/v1` route と CLI domain は廃止済みで、有効化する flag も
+ありません。常に `404` を返し、capabilities/OpenAPI にも出ず、bearer、
+database、残っている行で復活させることもできません。
 
-Current Takosumi exposes no typed Host migration operation or configuration for
-Resource Shape, TargetPool, or the other retired Host records. PostgreSQL
-migration v110 and D1 migration v66 physically drop those tables only when all
-of them are empty; populated rows stop the forward migration. An affected
-operator must use the immediate predecessor release or out-of-band database
-tooling to inventory and export those rows, record an explicit disposition,
-empty the retired tables according to that disposition, and then retry the
-migration. The portable Takoform protocol is an external Host contract, not a
-compatibility alias or migration surface. New users configure ordinary
-providers through a Stack and the ProviderConnection / CredentialRecipe /
-ProviderBinding path.
+現在の Takosumi は、Resource Shape、TargetPool、その他の廃止済み Host record
+向けの型付き Host migration 操作や設定を公開していません。PostgreSQL
+migration v110 と D1 migration v66 は、対象の table がすべて空のときだけ
+物理的に drop します。行が残っていれば forward migration はそこで止まります。
+影響を受ける operator は、直前の release か外部の database ツールでその行を
+棚卸しして export し、どう処置するかを明示的に記録したうえで、その処置に
+従って廃止済み table を空にしてから migration を再試行してください。portable
+Takoform protocol は外部 Host の contract であり、互換 alias や migration
+surface ではありません。新しい利用者は Stack と ProviderConnection /
+CredentialRecipe / ProviderBinding の経路で通常の provider を設定します。
 
 ## Run と runner
 
@@ -126,12 +125,12 @@ export TAKOSUMI_ENABLED_RUNNER_PROFILES="opentofu-default"
 export TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR="/tmp/takosumi-provider-cache"
 ```
 
-## Form Package configuration (external Host only)
+## Form Package の設定 (外部 Host のみ)
 
-Takosumi OSS does not install or host Form Packages. A hosted service or operator
-composition that owns a Form Host may document its private trust policy and
-artifact bindings in that Host's runbook; those settings are not a supported
-Takosumi OSS deployment path and do not create a FormActivation or Offering.
+Takosumi OSS は Form Package を install も host もしません。Form Host を所有する
+hosted service や operator の構成が、その Host 固有の trust policy と artifact
+binding を Host の runbook に記録することがあります。それらの設定は Takosumi
+OSS が対応する deploy 経路ではなく、FormActivation や Offering を作りません。
 
 ## Cloudflare 構成で使うもの
 
