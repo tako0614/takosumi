@@ -46,7 +46,7 @@ After `ca-install.sh` Chrome trusts the Pebble-issued certs (no green-lock warni
 ## Smoke flow E — deployment authority
 
 Capsule の exact-provenance install、Plan / Apply、run/state/output evidence は
-local internal API ではなく account-plane の authority を通す platform smoke が正本です。
+local internal API ではなく account-plane の authority を通す platform smoke を正とする情報とします。
 
 1. repo root から対象 platform と credential を明示して実行します:
    ```bash

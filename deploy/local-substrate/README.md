@@ -54,7 +54,7 @@ Accounts Worker unit sentinel: worker_test.ts (issuer policy, provider-neutral l
 
 加えて repo 側の unit / worker / browser-evidence self-test は root の quality gate で実行する。公開面 / egress の companion gate として `scripts/prove-no-public-leak.sh` も用意している。
 Capsule の exact-provenance install、Plan / Apply、ledger evidence は account-plane の
-authority を使う root `bun run smoke:platform-control-plane -- ...` が正本であり、
+authority を使う root `bun run smoke:platform-control-plane -- ...` を正とする情報とし、
 local-only internal bearer を使う重複 smoke は持たない。
 
 CI workflow は ecosystem-root の `.github/workflows/local-substrate-smoke.yml` を参照。現在は `smoke` job が submodule checkout 経由で takosumi を揃え、 ca-install.sh の sudo run + Pebble root の NSS install を含めた smoke chain を毎 PR で再現する。Playwright dashboard job は現時点では未実装で、signed-in browser UX は `capture:takosumi-browser-ux-evidence` / `check:takosumi-browser-ux-evidence` の operator evidence として扱う。
