@@ -165,8 +165,8 @@ Plan は endpoint の `url` variable から、path、query、fragment、credenti
 canonical な exact HTTPS origin を読めなければ fail closed です。その origin と
 review 済み `callbackPath` から redirect URI を導出し、exact 4 variables と authority
 digest を Plan sidecar に固定します。Plan と `apply_check` は Accounts を変更せず、
-final Apply だけが Capsule-bound public client を idempotent に登録できます。terminal
-destroy 後の retirement も idempotent です。Accounts capability が利用できない、
+final Apply だけが Capsule-bound public client を何度実行しても結果が同じ形で登録できます。terminal
+destroy 後の retirement も、何度実行しても結果は同じです。Accounts capability が利用できない、
 origin/variable/callback/scope/digest が drift した場合は runner 実行前に失敗します。
 ProviderBinding、provider output、製品名、hostname 規則からの fallback/inference はなく、
 この request は provider/resource/deployment/lifecycle authority を追加しません。

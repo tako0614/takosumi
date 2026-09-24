@@ -15,7 +15,7 @@ module の `required_providers` が選択の正本 (正とする情報) です�
 
 Takosumi hosted service は provider 名から account、region、secret、価格を推測しません。
 Connection を作り、module の provider requirement へ Binding します。credential は Run の
-間だけ runner に materialize され、plan 表示、Output、Interface、ログへ書きません。
+間だけ runner の中に実体として用意され、plan 表示、Output、Interface、ログへ書きません。
 
 ## Lifecycle
 

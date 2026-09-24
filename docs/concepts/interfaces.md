@@ -13,7 +13,7 @@ InterfaceBinding が決めるので、**宣言しただけでは誰も呼べま�
 
 ## 宣言する
 
-Interface の正本は Takosumi の Interface API です。Capsule の blueprint から
+Interface の正本 (正とする情報) は Takosumi の Interface API です。Capsule の blueprint から
 materialize する場合も、外部 Host が Form descriptor を投影する場合も、最終的には
 同じ履歴へ収束します。Form descriptor の定義・実体化の authority は外部 Host 側です。
 

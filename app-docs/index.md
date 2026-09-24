@@ -32,7 +32,7 @@ resource ledger に複製しません。
 Takosumi hosted service は次を提供します。
 
 - hosted dashboard、Accounts、runner、state、Output、audit
-- provider connection と credential の runner-only materialization
+- provider connection と credential を、実行する runner の中にだけ実体として用意する仕組み
 - prepaid credit、利用量、quota、spend guard
 - 利用可能な hosted service と標準 protocol endpoint
 - deployed service へ安全に接続する Interface / InterfaceBinding

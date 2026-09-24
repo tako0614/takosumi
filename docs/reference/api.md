@@ -599,7 +599,7 @@ review 済み repository manifest は、同じ module に exactly one の `http.
 exact Plan-known canonical HTTPS origin を要求し、`accountsUrl`、`issuerUrl`、`clientId`、
 `redirectUri` の4つの非 secret delivery 値だけを authority digest に固定します。
 Plan と `apply_check` は Accounts を変更せず、最終 Apply の再検証時だけ Capsule-bound
-client を冪等登録して現在の value-free `activationDigest` を保存できます。
+client を何度実行しても結果が同じ形で登録して、現在の value-free `activationDigest` を保存できます。
 
 この digest は contract `takosumi.accounts-oidc-activation/v1`、Workspace/Capsule、
 `executionAuthorityEpoch`、full InstallConfig digest を束ねます。live grant は current
@@ -616,7 +616,7 @@ Accounts が発行する Workspace-scoped token と Interface 呼び出しは、
 Workspace の両方を検証します。token の実体は利用側の secret store に暗号化して保存し、
 OpenTofu state や Output には保存しません。
 
-Accounts schema は additive な protected migration ですが、promotion order は substrate ごとに
+Accounts schema は additive な protected migration ですが、promotion order は実行基盤ごとに
 異なります。PostgreSQL では migration 043 を適用してから migration 044 を適用し、feature
 Worker を promote する前に完了させます。043 は nullable `activation_digest` と NOT VALID
 shape check を追加し、044 はその check を validate します。Cloudflare D1 では、まず exact-v3
