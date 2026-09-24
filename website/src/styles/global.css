@@ -392,6 +392,16 @@ section > .container {
   z-index: 1;
 }
 
+/* Narrow screens: the continuous ink field sits under the whole text column,
+   so page-field splats are capped faint enough for body copy to hold AA
+   (takos-control/docs/reference/design-language.md §A11y). Hero ink is
+   dimmed separately via .hero-splat-wrap. */
+@media (max-width: 720px) {
+  .ink-canvas > .splat-field .splat {
+    opacity: 0.16 !important;
+  }
+}
+
 /* ===== Simple centered hero (login / signup focused) ===== */
 .hero-simple .hero-center {
   position: relative;
@@ -863,7 +873,7 @@ footer.site .copy {
 /* Inline accent emphasis on key nouns in body copy */
 .em {
   font-style: normal;
-  color: var(--tg-accent);
+  color: var(--tg-accent-text);
   font-weight: 600;
 }
 .hero .em {
