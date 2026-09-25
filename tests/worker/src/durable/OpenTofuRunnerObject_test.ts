@@ -2423,6 +2423,177 @@ test("OpenTofu runner adopts completed state only after fresh exact mutation aut
   );
 });
 
+test("OpenTofu runner replaces an uncommitted state remnant from a different ApplyRun", async () => {
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const stateScope = capsuleStateScope();
+  const env = {
+    TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET,
+  };
+  // Run A persists generation 1 at the allocated target, then loses its
+  // ledger commit — the R2 remnant outlives the run.
+  const planRunIdA = "plan_remnant_origin";
+  await seedEncryptedPlan(artifacts, planRunIdA);
+  let providerCallsA = 0;
+  const tokenA = await signedMutationToken(planRunIdA, {
+    action: "destroy",
+    jti: "remnant-origin",
+  });
+  const first = await runnerWithContainer(
+    artifacts,
+    mutationSuccessContainer(planRunIdA, () => {
+      providerCallsA += 1;
+    }),
+    { storage: new FakeDoStorage(), stateBucket: state, env },
+  ).fetch(
+    signedMutationRequest(planRunIdA, tokenA, {
+      action: "destroy",
+      stateScope,
+    }),
+  );
+  assert.equal(first.status, 200);
+  assert.equal(providerCallsA, 1);
+  assert.ok(state.body(stateScope.stateRef));
+  const remnant = await state.get(stateScope.stateRef);
+  assert.equal(
+    remnant?.customMetadata?.["takosumi-run-id"],
+    `apply_${planRunIdA}`,
+  );
+
+  // Run B — a different ApplyRun on a different Durable Object (fresh
+  // storage) — is allocated the same generation slot by the controller. The
+  // uncommitted remnant must not deadlock it.
+  const planRunIdB = "plan_remnant_successor";
+  await seedEncryptedPlan(artifacts, planRunIdB);
+  let providerCallsB = 0;
+  const tokenB = await signedMutationToken(planRunIdB, {
+    action: "destroy",
+    jti: "remnant-successor",
+  });
+  const second = await runnerWithContainer(
+    artifacts,
+    mutationSuccessContainer(planRunIdB, () => {
+      providerCallsB += 1;
+    }),
+    { storage: new FakeDoStorage(), stateBucket: state, env },
+  ).fetch(
+    signedMutationRequest(planRunIdB, tokenB, {
+      action: "destroy",
+      stateScope,
+    }),
+  );
+  assert.equal(second.status, 200);
+  assert.equal(providerCallsB, 1);
+  const replacement = await state.get(stateScope.stateRef);
+  assert.equal(
+    replacement?.customMetadata?.["takosumi-run-id"],
+    `apply_${planRunIdB}`,
+  );
+  const evidence = await state.get(
+    `${stateScope.stateRef}.execution-evidence.json`,
+  );
+  assert.equal(
+    evidence?.customMetadata?.["takosumi-evidence-run-id"],
+    `apply_${planRunIdB}`,
+  );
+});
+
+test("OpenTofu runner keeps a foreign state target fenced without provider dispatch", async () => {
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const stateScope = capsuleStateScope();
+  // An object at the allocated target that the protocol never wrote — no
+  // takosumi-* metadata — must keep the orphaned block.
+  await state.put(stateScope.stateRef, new TextEncoder().encode("foreign"));
+  const planRunId = "plan_foreign_target";
+  await seedEncryptedPlan(artifacts, planRunId);
+  let providerCalls = 0;
+  const token = await signedMutationToken(planRunId, {
+    action: "destroy",
+    jti: "foreign-target",
+  });
+  const storage = new FakeDoStorage();
+  const response = await runnerWithContainer(
+    artifacts,
+    mutationSuccessContainer(planRunId, () => {
+      providerCalls += 1;
+    }),
+    {
+      storage,
+      stateBucket: state,
+      env: {
+        TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET,
+      },
+    },
+  ).fetch(
+    signedMutationRequest(planRunId, token, {
+      action: "destroy",
+      stateScope,
+    }),
+  );
+  assert.equal(response.status, 409);
+  assertMutationIndeterminateResponse(await response.text(), "destroy");
+  assert.equal(providerCalls, 0);
+  assert.match(JSON.stringify(storage.entries()), /"phase":"orphaned"/);
+});
+
+test("OpenTofu runner adopts a same-ApplyRun state remnant after dispatch authority loss", async () => {
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const stateScope = capsuleStateScope();
+  const env = {
+    TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET,
+  };
+  const planRunId = "plan_authority_loss";
+  await seedEncryptedPlan(artifacts, planRunId);
+  let providerCalls = 0;
+  const container = mutationSuccessContainer(planRunId, () => {
+    providerCalls += 1;
+  });
+  const token = await signedMutationToken(planRunId, {
+    action: "destroy",
+    jti: "authority-loss",
+  });
+  const first = await runnerWithContainer(artifacts, container, {
+    storage: new FakeDoStorage(),
+    stateBucket: state,
+    env,
+  }).fetch(
+    signedMutationRequest(planRunId, token, {
+      action: "destroy",
+      stateScope,
+    }),
+  );
+  assert.equal(first.status, 200);
+  assert.equal(providerCalls, 1);
+  const firstPayload = (await first.json()) as {
+    readonly executionEvidence?: unknown;
+  };
+
+  // The Durable Object loses its durable dispatch record entirely (fresh
+  // storage) while the completed state object survives. The same ApplyRun
+  // must adopt the authenticated object — never re-dispatch the provider.
+  const replay = await runnerWithContainer(artifacts, container, {
+    storage: new FakeDoStorage(),
+    stateBucket: state,
+    env,
+  }).fetch(
+    signedMutationRequest(planRunId, token, {
+      action: "destroy",
+      stateScope,
+    }),
+  );
+  assert.equal(replay.status, 200);
+  assert.equal(providerCalls, 1);
+  const replayPayload = (await replay.json()) as {
+    readonly executionEvidence?: unknown;
+  };
+  assert.deepEqual(
+    replayPayload.executionEvidence,
+    firstPayload.executionEvidence,
+  );
+});
+
 test("OpenTofu runner Durable Object grants one concurrent mutation dispatch authority", async () => {
   const runId = "apply_concurrent_redelivery";
   const r2 = new FakeR2Bucket();

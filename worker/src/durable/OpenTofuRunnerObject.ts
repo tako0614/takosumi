@@ -1072,6 +1072,67 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     return runnerMutationIndeterminateResponse(preparation.action);
   }
 
+  /**
+   * Classifies an object already occupying the mutation's allocated state
+   * target before provider dispatch is authorized.
+   *
+   * The controller allocates `stateScope.stateRef` only for the ledger's next
+   * generation, so a protocol-written object at that exact slot is always an
+   * uncommitted remnant of a run whose post-persist ledger commit never
+   * landed — never a committed generation. A remnant left by a different
+   * ApplyRun is discarded so this run's conditional persist can recreate it;
+   * its execution-evidence sidecar goes with it because evidence is written
+   * create-only under the writer's run identity. A remnant left by THIS
+   * ApplyRun means the durable dispatch authority was lost after the persist;
+   * the completed object is adopted only when it authenticates, never
+   * re-dispatched. An object without the protocol's metadata is foreign and
+   * keeps the orphaned block.
+   */
+  async #gateExistingStateTarget(
+    scope: StateScope,
+    action: RunnerMutationAction,
+    applyRunId: string,
+    rawOutputRef: string | undefined,
+    preparation: RunnerMutationDispatchRecord,
+  ): Promise<Response | undefined> {
+    const bucket = this.#r2State();
+    assertStateRefForScope(scope);
+    const existing = await bucket.head(scope.stateRef);
+    if (!existing) return undefined;
+    const metadata = existing.customMetadata;
+    const remnantRunId = metadata?.["takosumi-run-id"];
+    const protocolRemnant =
+      metadata?.["takosumi-logical-target-state-ref"] === scope.stateRef &&
+      metadata?.["takosumi-generation"] === String(scope.generation) &&
+      typeof remnantRunId === "string" &&
+      remnantRunId.length > 0;
+    if (!protocolRemnant) {
+      return await this.#blockPreparedMutationWithExistingTarget(preparation);
+    }
+    if (remnantRunId === applyRunId) {
+      try {
+        const adopted = await this.#adoptCompletedStateMutationFromR2(
+          applyRunId,
+          scope,
+          action,
+          rawOutputRef,
+        );
+        if (adopted) return adopted;
+      } catch {
+        // An object that only claims this ApplyRun's identity fails the same
+        // authentication a replay would; keep it fenced below.
+      }
+      return await this.#blockPreparedMutationWithExistingTarget(preparation);
+    }
+    await bucket.delete(scope.stateRef);
+    await bucket.delete(executionEvidenceObjectKey(scope.stateRef));
+    console.warn("OpenTofu runner discarded an uncommitted state remnant", {
+      action,
+      generation: scope.generation,
+    });
+    return undefined;
+  }
+
   async #markMutationDispatched(
     preparation: RunnerMutationDispatchRecord,
   ): Promise<RunnerMutationDispatchRecord | undefined> {
@@ -1496,12 +1557,15 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         return adopted ?? runnerMutationIndeterminateResponse(envelope.action);
       }
       mutationPreparation = claim.record;
-      if (stateScope && (await this.#r2State().head(stateScope.stateRef))) {
-        // A target without a matching dispatched authority may be a legacy or
-        // out-of-band mutation. It cannot authorize adoption or provider I/O.
-        return await this.#blockPreparedMutationWithExistingTarget(
+      if (stateScope) {
+        const gated = await this.#gateExistingStateTarget(
+          stateScope,
+          envelope.action,
+          applyRunId!,
+          rawOutputRef,
           mutationPreparation,
         );
+        if (gated) return gated;
       }
     }
     if (envelope.action === "release") {
