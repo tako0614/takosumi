@@ -64,7 +64,7 @@ bunx wrangler r2 bucket create takosumi-backups
 Copy `wrangler.toml` for your own use. What you rewrite is `database_id`, the `pattern`
 under `routes`, and `TAKOSUMI_ACCOUNTS_ISSUER` under `[vars]`. The issuer is exactly the
 origin that serves the dashboard. The published template is a reference with placeholder IDs;
-the realized production config is kept in the operator-private `takosumi-private` repository.
+fill in your own values and keep the working copy somewhere you do not publish.
 The template already sets `TAKOSUMI_ENVIRONMENT = "production"` under `[vars]`. When that
 value is `production` or `staging`, the checks on encryption keys and persistent stores
 become fail-closed. What each value means is collected in the

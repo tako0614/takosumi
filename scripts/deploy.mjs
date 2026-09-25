@@ -206,7 +206,7 @@ const CONTRACT = {
       covers: ["contract", "scripts/contract-package-release.ts"],
       triggers: ["published-identity"],
       lineage: "published-identity",
-      requiresScripts: ["check", "deploy"],
+      requiresScripts: ["check"],
       requiresTools: ["git", "bun", "npm"],
       obligations: {
         provenance:

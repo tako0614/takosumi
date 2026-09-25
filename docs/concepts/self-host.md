@@ -59,8 +59,8 @@ bunx wrangler r2 bucket create takosumi-backups
 
 `wrangler.toml` を自分用に写します。書き換えるのは `database_id`、`routes` の
 `pattern`、`[vars]` の `TAKOSUMI_ACCOUNTS_ISSUER` です。issuer は dashboard を配る
-origin そのものです。公開されている雛形は placeholder ID を含む参照用で、実際に deploy する
-realized production config は operator-private な `takosumi-private` repo で管理します。
+origin そのものです。公開されている雛形は placeholder ID を含む参照用です。実際に deploy する
+設定の値は自分の環境のものに置き換え、公開しない場所で管理してください。
 雛形の `[vars]` には `TAKOSUMI_ENVIRONMENT = "production"` がすでに設定されています。
 この値が `production` か `staging` のとき、暗号鍵と永続ストアの検査が fail-closed になります。
 値の意味は[設定リファレンス](../reference/configuration.md)にまとめてあります。
