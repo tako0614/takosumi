@@ -2,6 +2,7 @@ import { Title } from "@solidjs/meta";
 import Nav from "~/components/Nav";
 import Hero from "~/components/Hero";
 import SplatField from "~/components/SplatField";
+import { ProductHome } from "~/components/ProductVisuals";
 import Why from "~/components/WhyOperatorOwned";
 import WhatYouCanHost from "~/components/WhatYouCanHost";
 import Showcase from "~/components/Showcase";
@@ -21,6 +22,7 @@ export default function Home() {
         <Hero />
         <div class="ink-canvas">
           <SplatField density="page" />
+          <ProductHome />
           <WhatYouCanHost />
           <Why />
           <Showcase />

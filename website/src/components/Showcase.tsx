@@ -1,5 +1,6 @@
 import { For } from "solid-js";
 import Section from "./Section";
+import { PlanReview } from "./ProductVisuals";
 
 interface Step {
   readonly title: string;
@@ -44,6 +45,11 @@ export default function Showcase() {
           )}
         </For>
       </ol>
+      <PlanReview />
+      <p class="pv-caption">
+        ステップ 3 の「変更内容を確認」画面。作成・変更・削除されるリソースを
+        見てから承認するので、思わぬ変更は走りません。
+      </p>
     </Section>
   );
 }

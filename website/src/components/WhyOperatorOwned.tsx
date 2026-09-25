@@ -1,5 +1,6 @@
 import { For } from "solid-js";
 import Section from "./Section";
+import { RunHistory } from "./ProductVisuals";
 
 interface Point {
   readonly title: string;
@@ -45,6 +46,11 @@ export default function WhyOperatorOwned() {
           )}
         </For>
       </div>
+      <RunHistory />
+      <p class="pv-caption">
+        デプロイ履歴と状態の履歴は、サービスごとに残ります。
+        以前の状態に戻すこともできます。
+      </p>
     </Section>
   );
 }
