@@ -1,5 +1,8 @@
 # Takosumi support
 
+How to reach the Takosumi hosted service support channel and what to
+include in a request.
+
 ## Official channel
 
 The official Takosumi hosted service support channel is

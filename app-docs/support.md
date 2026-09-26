@@ -1,5 +1,7 @@
 # Takosumi サポート
 
+Takosumi hosted service の問い合わせ窓口と、連絡の前に確認する内容です。
+
 ## 公式窓口
 
 Takosumi hosted service の公式サポート窓口は
