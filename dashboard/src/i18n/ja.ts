@@ -326,6 +326,8 @@ export const ja = {
   // --- errors / error boundary ------------------------------------------
   "error.generic":
     "問題が発生しました。しばらくしてからもう一度お試しください。",
+  "error.planReconcileTimeout":
+    "プランの完了を待つのを停止しました。サーバー側では処理が続いている可能性があります。同じリクエストを再開して安全に確認できます。",
   "errorBoundary.title": "問題が発生しました",
   "errorBoundary.body":
     "予期しないエラーで画面を表示できませんでした。ページを再読み込みしてください。",
