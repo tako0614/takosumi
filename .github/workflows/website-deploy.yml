@@ -1,4 +1,4 @@
-name: Deploy takosumi.com website to Cloudflare Pages
+name: Check takosumi.com website artifact
 
 # The single `takosumi-website` Pages project serves the public property:
 #
@@ -34,12 +34,11 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  build-and-deploy:
+  build:
+    name: Build merged landing and docs artifact
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      deployments: write
-      pull-requests: write
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pinned: v6.0.2 (2026)
@@ -62,13 +61,7 @@ jobs:
       - name: Build merged Pages artifact (landing + /docs/)
         run: bash website/build.sh
 
-      - name: Deploy to Cloudflare Pages
-        # release-safety: blocked until the takosumi-website fixed adapter is registered.
-        if: ${{ false }}
-        uses: cloudflare/pages-action@f0a1cd58cd66095dee69bfa18fa5efd1dde93bca # pinned: v1.5.0 (2026)
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          projectName: takosumi-website
-          directory: website/.output/public
-          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify merged artifact
+        run: |
+          test -f website/.output/public/index.html
+          test -f website/.output/public/docs/index.html

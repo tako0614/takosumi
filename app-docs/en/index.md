@@ -12,9 +12,17 @@ apply, state, outputs, audit, usage, and prepaid credit together.
 
 1. Sign in to the [Dashboard](https://app.takosumi.com/) and select a Workspace.
 2. Add a repository from the Store or by Git URL.
-3. Select the provider connections required by the module.
+3. Select a matching Connection for each provider used by the selected module. If it
+   needs multiple providers, assign a connection to each one.
 4. Review the plan and quote, then apply it.
 5. Open the service from the Run outputs or an Interface published by the app.
+
+When you add a Git URL, the available modules come from scanning the fetched Git revision.
+Assign Connections that match the selected module's provider requirements. Repository
+display hints and Connection names do not replace provider matching. For connection setup,
+plan review, and what to check after a failed Run, see the
+[Takosumi software docs](https://takosumi.com/docs/en/). Using providers such as Cloudflare
+or AWS does not require a separate Takoserver service.
 
 ```text
 Git repository
