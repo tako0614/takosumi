@@ -101,6 +101,13 @@ apply まで続けられます。それ以外は Run 画面で停止します。
 標準の入口は dashboard の `/new` です。Git URL を入れると scan で実在 module を求め、
 必要な変数と provider を提示します。ref は必要に応じて指定できます。
 
+選んだ module が複数の provider を必要とする場合は、表示された provider ごとに対応する
+Connection を選びます。たとえば AWS と Cloudflare の両方を宣言する module では、AWS 用と
+Cloudflare 用をそれぞれ割り当てます。repository の表示ヒントや Connection の名前だけで
+接続先が決まることはありません。`.well-known/takosumi.json` は入力表示などの補助情報であり、
+provider Connection の代わりにはなりません。Connection の作成と provider の照合は[認証情報](./credentials.md)、
+計画の確認と失敗後の扱いは[実行モデル](./run-model.md)を参照してください。
+
 外部のアプリから利用者をこの画面へ送るためのリンクがあります。
 
 ```text
