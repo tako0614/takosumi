@@ -11,16 +11,10 @@ Takosumi hosted service は、Git repository の OpenTofu module を実行し、
 
 1. [Dashboard](https://app.takosumi.com/) にサインインし、Workspace を選びます。
 2. Store または Git URL から repository を追加します。
-3. 選んだ module が使う provider ごとに、対応する Connection を選びます。複数 provider が
-   必要なら、それぞれに接続を割り当てます。
+3. 画面に表示される接続要件ごとに、module 名や alias を確認して Connection を選びます。
+   認証情報が不要な provider に Connection は必要ありません。
 4. plan と見積りを確認し、apply します。
 5. Run の Output と、アプリが公開した Interface から接続先を開きます。
-
-Git URL から追加した場合、実行する module は取得した Git revision の scan 結果から選びます。
-module の provider 要件に合う Connection を割り当てます。repository の表示ヒントや Connection
-の名前は provider の照合を置き換えません。接続、plan の確認、失敗後の確認方法は
-[Takosumi software docs](https://takosumi.com/docs/)を参照してください。Cloudflare や AWS などの
-provider を使うために、別の Takoserver service を追加する必要はありません。
 
 ```text
 Git repository
