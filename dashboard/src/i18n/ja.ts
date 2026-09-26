@@ -30,7 +30,15 @@ export const ja = {
     "このSourceSnapshotのモジュールを安全に特定できませんでした。",
   "installStore.moduleMissing":
     "このリポジトリ版には追加できるroot moduleがありません。",
-  "installStore.moduleRequirements": "検出したプロバイダー要件",
+  "installStore.moduleRequirements": "プロバイダーの詳細",
+  "installStore.sourceSummary": "OpenTofuソースと接続",
+  "installStore.selectedModule": "OpenTofu module",
+  "installStore.sourceScope": "リポジトリ内の範囲",
+  "installStore.detectedProviders": "このmoduleのプロバイダー",
+  "installStore.noProviderPackages": "このmoduleからプロバイダーパッケージは検出されませんでした。",
+  "installStore.requiredConnections": "必要な接続",
+  "installStore.noRequiredConnections": "このmoduleにプロバイダー接続は必要ありません。",
+  "installStore.connectionNotSelected": "未選択",
   "installStore.moduleRequirement":
     "{source}・module {module}{alias} {version}",
   "installStore.stepsLabel": "追加ステップ",

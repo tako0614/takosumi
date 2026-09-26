@@ -347,40 +347,116 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   };
 
   const selectedModuleDetails = () => {
+    const catalog = installModuleCatalog();
     const module = selectedModule();
-    if (!module) return undefined;
+    if (!module || catalog.status !== "ready") return undefined;
     return (
-      <details
-        class="iv-module-details"
-        data-testid="install-module-requirements"
+      <section
+        class="iv-source-summary"
+        data-testid="install-source-summary"
+        aria-label={t("installStore.sourceSummary")}
       >
-        <summary>
-          {t("installStore.moduleRequirements")} · <code>{module.path}</code>
-        </summary>
-        <Show
-          when={module.rootProviderRequirements.length > 0}
-          fallback={<p>{t("common.none")}</p>}
-        >
-          <ul>
-            <For each={module.rootProviderRequirements}>
-              {(requirement) => (
-                <li>
-                  {t("installStore.moduleRequirement", {
-                    source: requirement.source,
-                    module: requirement.moduleLocalName,
-                    alias: requirement.childAlias
-                      ? ` (${requirement.childAlias})`
-                      : "",
-                    version: requirement.version
-                      ? `v${requirement.version}`
-                      : "",
-                  })}
-                </li>
-              )}
-            </For>
-          </ul>
+        <dl class="iv-source-coordinates">
+          <div>
+            <dt>{t("installStore.selectedModule")}</dt>
+            <dd>
+              <code data-testid="install-selected-module">{module.path}</code>
+            </dd>
+          </div>
+          <Show when={catalog.scopePath !== "."}>
+            <div>
+              <dt>{t("installStore.sourceScope")}</dt>
+              <dd><code>{catalog.scopePath}</code></dd>
+            </div>
+          </Show>
+        </dl>
+        <div class="iv-provider-summary">
+          <h2>{t("installStore.detectedProviders")}</h2>
+          <Show
+            when={module.providerPackages.length > 0}
+            fallback={<p>{t("installStore.noProviderPackages")}</p>}
+          >
+            <ul data-testid="install-provider-packages">
+              <For each={module.providerPackages}>
+                {(provider) => (
+                  <li>
+                    <code>{provider.source}</code>
+                    <Show when={provider.version}>
+                      <span>{provider.version}</span>
+                    </Show>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </Show>
+        </div>
+        <Show when={phase() === "connections" || phase() === "setup" || phase() === "review"}>
+          <div class="iv-provider-summary">
+            <h2>{t("installStore.requiredConnections")}</h2>
+            <Show
+              when={providerRows().length > 0}
+              fallback={<p>{t("installStore.noRequiredConnections")}</p>}
+            >
+              <ul>
+                <For each={providerRows()}>
+                  {(row) => {
+                    const connection = () => candidatesFor(row.provider).find(
+                      (candidate) => candidate.id === row.connectionId,
+                    );
+                    return (
+                      <li
+                        data-testid="install-required-connection"
+                        data-provider-source={row.provider}
+                        data-module-local-name={row.moduleLocalName}
+                        data-child-alias={row.childAlias}
+                      >
+                        <span>
+                          {providerModuleLabel(row)}
+                          {row.childAlias ? ` (${row.childAlias})` : ""}
+                        </span>
+                        <strong>
+                          {connection()
+                            ? providerConnectionDisplayName(connection()!)
+                            : t("installStore.connectionNotSelected")}
+                        </strong>
+                      </li>
+                    );
+                  }}
+                </For>
+              </ul>
+            </Show>
+          </div>
         </Show>
-      </details>
+        <details
+          class="iv-module-details"
+          data-testid="install-module-requirements"
+        >
+          <summary>{t("installStore.moduleRequirements")}</summary>
+          <Show
+            when={module.rootProviderRequirements.length > 0}
+            fallback={<p>{t("common.none")}</p>}
+          >
+            <ul>
+              <For each={module.rootProviderRequirements}>
+                {(requirement) => (
+                  <li>
+                    {t("installStore.moduleRequirement", {
+                      source: requirement.source,
+                      module: requirement.moduleLocalName,
+                      alias: requirement.childAlias
+                        ? ` (${requirement.childAlias})`
+                        : "",
+                      version: requirement.version
+                        ? `v${requirement.version}`
+                        : "",
+                    })}
+                  </li>
+                )}
+              </For>
+            </ul>
+          </Show>
+        </details>
+      </section>
     );
   };
 
@@ -2095,6 +2171,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
 
       <Show when={phase() === "review" && planRunId() && capsuleId()}>
         <section class="iv-workbench">
+          {selectedModuleDetails()}
           {autoSelectedDestinationSummary()}
           <InstallExecution
             planRunId={planRunId()!}

@@ -418,6 +418,24 @@ describe("single-screen install surface", () => {
     expect(view).not.toContain("parseCapsuleSourceOptions");
   });
 
+  test("keeps scanned packages and connection requirements visible in review", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const summary = view.slice(
+      view.indexOf("const selectedModuleDetails ="),
+      view.indexOf("const sourceCandidates ="),
+    );
+    expect(summary).toContain('data-testid="install-source-summary"');
+    expect(summary).toContain("catalog.scopePath");
+    expect(summary).toContain("module.providerPackages");
+    expect(summary).toContain("candidatesFor(row.provider)");
+    // An aborted/blocked compatibility check must not claim no connection is needed.
+    expect(summary).toContain('phase() === "connections" || phase() === "setup" || phase() === "review"');
+    const review = view.slice(view.indexOf('<Show when={phase() === "review" &&'));
+    expect(review.indexOf("selectedModuleDetails()")).toBeLessThan(review.indexOf("<InstallExecution"));
+    expect(summary).not.toContain("createApplyRun");
+    expect(summary).not.toContain("setProviderRows");
+  });
+
   test("preserves app handoff and Interface-first completion", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).toContain("appHandoffFromSearch");
