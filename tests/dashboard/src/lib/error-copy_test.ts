@@ -20,7 +20,7 @@ describe("friendlyError plan deadline copy", () => {
 
       const friendly = friendlyError(error, (key) => ja[key]);
       expect(friendly.message).toBe(
-        "プランの完了を待つのを停止しました。サーバー側では処理が続いている可能性があります。同じリクエストを再開して安全に確認できます。",
+        "プランの完了を待つのを停止しました。サーバー側では処理が続いている可能性があります。もう一度始める前に実行状況を確認してください。",
       );
       expect(friendly.detail).toBeUndefined();
     });
@@ -34,7 +34,7 @@ describe("friendlyError plan deadline copy", () => {
 
       const friendly = friendlyError(error, (key) => en[key]);
       expect(friendly.message).toBe(
-        "We stopped waiting for the plan. It may still be running on the server; resuming this same request is safe.",
+        "We stopped waiting for the plan. It may still be running on the server; check its execution status before starting again.",
       );
       expect(friendly.detail).toBeUndefined();
     });

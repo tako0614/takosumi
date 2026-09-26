@@ -320,7 +320,7 @@ export const en: Record<keyof typeof ja, string> = {
   // --- errors / error boundary ------------------------------------------
   "error.generic": "Something went wrong. Please try again in a moment.",
   "error.planReconcileTimeout":
-    "We stopped waiting for the plan. It may still be running on the server; resuming this same request is safe.",
+    "We stopped waiting for the plan. It may still be running on the server; check its execution status before starting again.",
   "errorBoundary.title": "Something went wrong",
   "errorBoundary.body":
     "An unexpected error stopped this page from loading. Please reload the page.",
