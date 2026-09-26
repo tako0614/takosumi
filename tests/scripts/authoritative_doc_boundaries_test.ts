@@ -15,7 +15,7 @@ const COMPLETE_BASELINE = [
   {
     path: "docs/concepts/boundaries.md",
     content:
-      "provider 側の resource は必ずしも\nTakosumi の Resource 台帳には入りません。",
+      "provider 側の resource は必ずしも\nTakosumi の Resource ledger には入りません。",
   },
   {
     path: "docs/en/concepts/boundaries.md",
