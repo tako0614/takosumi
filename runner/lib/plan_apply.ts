@@ -78,6 +78,7 @@ import {
   writePlanJsonArtifact,
   readProviderLockfileBytes,
   providerLockfilePath,
+  restoredProviderLockfilePath,
   workspaceForRun,
   writeModuleInfo,
   restoreUploadedState,
@@ -682,6 +683,10 @@ export async function runReviewedPlanApply(
         sourceBuild,
       );
   const timer = new RunnerPhaseTimer();
+  const reviewedProviderLockDigest = await timer.measure(
+    "provider_lockfile_restore",
+    () => restoreReviewedProviderLockfile(workspace, moduleDir, request),
+  );
   const preparedCredentials = await prepareProviderCredentialFiles(
     commandContext,
     workspace,
@@ -714,11 +719,20 @@ export async function runReviewedPlanApply(
 
     const init = await timer.measure("tofu_init", () =>
       withProviderPluginCacheInitLock(strictMirrorInit, () =>
-        runCommand(["tofu", "init", "-input=false", "-no-color"], {
-          cwd: moduleDir,
-          context: applyContext,
-          isolateProcessGroup: true,
-        }),
+        runCommand(
+          [
+            "tofu",
+            "init",
+            "-input=false",
+            "-no-color",
+            ...(reviewedProviderLockDigest ? ["-lockfile=readonly"] : []),
+          ],
+          {
+            cwd: moduleDir,
+            context: applyContext,
+            isolateProcessGroup: true,
+          },
+        ),
       ),
     );
     if (init.exitCode !== 0) {
@@ -734,6 +748,19 @@ export async function runReviewedPlanApply(
       postInitProviderScan,
       await readDependencyLockIfPresent(moduleDir),
     );
+    if (reviewedProviderLockDigest) {
+      const afterInitBytes = await readProviderLockfileBytes(
+        join(moduleDir, ".terraform.lock.hcl"),
+      );
+      if (
+        afterInitBytes === undefined ||
+        (await digestBytes(afterInitBytes)) !== reviewedProviderLockDigest
+      ) {
+        throw new Error(
+          "OpenTofu dependency lock changed after reviewed Plan restore",
+        );
+      }
+    }
     const providerInstallation = await providerInstallationEvidence(
       moduleDir,
       parseRequiredProviders(request),
@@ -1176,6 +1203,88 @@ async function readDependencyLockIfPresent(
     if (code === "ENOENT") return undefined;
     throw error;
   }
+}
+
+/**
+ * A current PlanRun carries the exact post-init lockfile as a private artifact.
+ * Older PlanRuns have no artifact and retain their historical init behavior.
+ * The restored bytes are checked before credentials or provider code can run.
+ */
+async function restoreReviewedProviderLockfile(
+  workspace: RunWorkspace,
+  moduleDir: string,
+  request: unknown,
+): Promise<string | undefined> {
+  const planRun = recordField(request, "planRun");
+  const artifact = recordField(planRun, "providerLockArtifact");
+  const rawDigest = stringField(planRun, "providerLockDigest");
+  if (artifact === undefined || artifact === null) {
+    if (artifact === null && rawDigest !== undefined) {
+      throw new Error(
+        "provider-free reviewed Plan has an unexpected lock digest",
+      );
+    }
+    return undefined;
+  }
+  if (
+    !isRecord(artifact) ||
+    stringField(artifact, "kind") !== "object-storage"
+  ) {
+    throw new Error("reviewed Plan provider lock artifact is invalid");
+  }
+  const artifactDigest = stringField(artifact, "digest");
+  if (
+    !rawDigest ||
+    !/^sha256:[0-9a-f]{64}$/u.test(rawDigest) ||
+    artifactDigest !== rawDigest
+  ) {
+    throw new Error("reviewed Plan provider lock digest is invalid");
+  }
+  const restored = await readProviderLockfileBytes(
+    restoredProviderLockfilePath(workspace),
+  );
+  if (!restored || (await digestBytes(restored)) !== rawDigest) {
+    throw new Error(
+      "reviewed Plan provider lock bytes were not restored exactly",
+    );
+  }
+  if (moduleDir === workspace.generatedRootDir) {
+    const childLock = await readProviderLockfileBytes(
+      join(workspace.childModuleDir, ".terraform.lock.hcl"),
+    );
+    if (
+      childLock !== undefined &&
+      (await digestBytes(childLock)) !== rawDigest
+    ) {
+      throw new Error(
+        "source module lockfile conflicts with reviewed Plan lockfile",
+      );
+    }
+  }
+  const target = join(moduleDir, ".terraform.lock.hcl");
+  const existing = await readProviderLockfileBytes(target);
+  if (existing !== undefined) {
+    if ((await digestBytes(existing)) !== rawDigest) {
+      throw new Error(
+        "source module lockfile conflicts with reviewed Plan lockfile",
+      );
+    }
+  } else {
+    const file = await open(
+      target,
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        fsConstants.O_NOFOLLOW,
+      0o600,
+    );
+    try {
+      await file.writeFile(restored);
+    } finally {
+      await file.close();
+    }
+  }
+  return rawDigest;
 }
 
 async function captureProviderLockfile(

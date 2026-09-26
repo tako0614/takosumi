@@ -1596,6 +1596,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       }
       if (envelope.action === "apply" || envelope.action === "destroy") {
         await this.#restorePlanArtifact(runId, envelope.request, url);
+        await this.#restoreReviewedProviderLockfile(
+          runId,
+          envelope.request,
+          url,
+        );
       }
       if (stateScope) {
         await this.#restoreStateFromR2State(
@@ -3473,6 +3478,101 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     }
   }
 
+  async #restoreReviewedProviderLockfile(
+    runId: string,
+    requestPayload: unknown,
+    baseUrl: URL,
+  ): Promise<void> {
+    const planRun = recordField(requestPayload, "planRun");
+    if (!planRun) return; // Historical transport without a PlanRun projection.
+    const rawArtifact = planRun.providerLockArtifact;
+    if (rawArtifact === undefined || rawArtifact === null) {
+      if (rawArtifact === null && stringField(planRun, "providerLockDigest")) {
+        throw new Error("provider-free Plan has an unexpected lock digest");
+      }
+      return; // Historical PlanRun or an explicit provider-free Plan.
+    }
+    const artifact = recordField(planRun, "providerLockArtifact");
+    const planArtifact = recordField(requestPayload, "planArtifact");
+    if (
+      !artifact ||
+      stringField(planRun, "id") !== runId ||
+      !planArtifact ||
+      stringField(artifact, "kind") !== "object-storage"
+    ) {
+      throw new Error("reviewed Plan provider lock authority is invalid");
+    }
+    const expectedDigest = requiredSha256DigestField(
+      planRun,
+      "providerLockDigest",
+    );
+    if (requiredSha256DigestField(artifact, "digest") !== expectedDigest) {
+      throw new Error("reviewed Plan provider lock digest mismatch");
+    }
+    const expectedSize = nonNegativeIntegerField(artifact, "sizeBytes");
+    assertArtifactSize(
+      "provider_lockfile",
+      this.#artifactLimits.providerLockfile,
+      expectedSize,
+    );
+    if (
+      stringField(artifact, "contentType") !== undefined &&
+      stringField(artifact, "contentType") !== PROVIDER_LOCKFILE_CONTENT_TYPE
+    ) {
+      throw new Error("reviewed Plan provider lock content type is invalid");
+    }
+    const bucket = this.#planArtifactBucket();
+    const planKey = planArtifactKeyFromRef(
+      requiredStringField(planArtifact, "ref"),
+      bucket,
+    );
+    const ownLegacyPlanKey = planArtifactKey(runId);
+    const ownScopedPlanSuffix = `/runs/${safeKeySegment(runId)}/plan.bin`;
+    if (
+      planKey !== ownLegacyPlanKey &&
+      !planKey.endsWith(ownScopedPlanSuffix)
+    ) {
+      throw new Error("reviewed Plan artifact does not belong to this run");
+    }
+    const expectedKey = `${planKey.slice(0, planKey.lastIndexOf("/"))}/provider-lockfile.hcl`;
+    const lockKey = planArtifactRef(bucket, expectedKey);
+    if (requiredStringField(artifact, "ref") !== lockKey) {
+      throw new Error(
+        "reviewed Plan provider lock ref does not match Plan artifact",
+      );
+    }
+    const bytes = await this.#readProviderLockfilePlaintext(
+      expectedKey,
+      runId,
+      expectedDigest,
+      expectedSize,
+    );
+    const response = await this.#containerFetch(
+      new Request(providerLockfileRestoreUrl(baseUrl, runId), {
+        method: "PUT",
+        headers: { "content-type": PROVIDER_LOCKFILE_CONTENT_TYPE },
+        body: toArrayBuffer(bytes),
+      }),
+    );
+    if (!response.ok) {
+      throw new Error(
+        `container provider lockfile restore failed: ${response.status}`,
+      );
+    }
+    const restored = await readJsonObject(
+      response,
+      this.#artifactLimits.runnerResponse,
+    );
+    if (
+      stringField(restored, "digest") !== expectedDigest ||
+      restored.sizeBytes !== expectedSize
+    ) {
+      throw new Error(
+        "container provider lockfile restore acknowledgement mismatch",
+      );
+    }
+  }
+
   async #readPlanArtifactPlaintext(
     key: string,
     expectedDigest: string,
@@ -3808,6 +3908,13 @@ function artifactUrl(baseUrl: URL, runId: string): string {
 function providerLockfileArtifactUrl(baseUrl: URL, runId: string): string {
   const url = new URL(baseUrl);
   url.pathname = `/runs/${encodeURIComponent(runId)}/artifacts/tf-lockfile`;
+  url.search = "";
+  return url.toString();
+}
+
+function providerLockfileRestoreUrl(baseUrl: URL, runId: string): string {
+  const url = new URL(baseUrl);
+  url.pathname = `/runs/${encodeURIComponent(runId)}/provider-lockfile/restore`;
   url.search = "";
   return url.toString();
 }

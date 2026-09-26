@@ -1861,6 +1861,148 @@ test("OpenTofu runner Durable Object restores reviewed R2 plan artifact before a
   ]);
 });
 
+test("OpenTofu runner restores the exact encrypted Plan lock before apply dispatch", async () => {
+  const runId = "plan_reviewed_lock_restore";
+  const calls: string[] = [];
+  const r2 = new FakeR2Bucket();
+  const lockBytes = new TextEncoder().encode(
+    'provider "registry.opentofu.org/hashicorp/null" {}\n',
+  );
+  const lockDigest = await digestBytes(lockBytes);
+  await seedEncryptedPlan(r2, runId);
+  const sealed = await StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  }).seal(lockBytes);
+  await r2.put(
+    `opentofu-plan-runs/${runId}/provider-lockfile.hcl.enc`,
+    sealed.ciphertext,
+    {
+      httpMetadata: { contentType: "application/octet-stream" },
+      customMetadata: {
+        "takosumi-plan-run-id": runId,
+        "takosumi-provider-lockfile": "true",
+        "takosumi-content-digest": lockDigest,
+        "takosumi-size-bytes": String(lockBytes.byteLength),
+        "takosumi-ciphertext-length": String(sealed.ciphertextLength),
+        "takosumi-encryption-format": sealed.format,
+      },
+    },
+  );
+  const runner = runnerWithContainer(r2, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      calls.push(`${request.method} ${path}`);
+      if (
+        request.method === "PUT" &&
+        path === `/runs/${runId}/artifacts/tfplan`
+      ) {
+        return Response.json({ ok: true });
+      }
+      if (
+        request.method === "PUT" &&
+        path === `/runs/${runId}/provider-lockfile/restore`
+      ) {
+        assert.deepEqual(
+          new Uint8Array(await request.arrayBuffer()),
+          lockBytes,
+        );
+        return Response.json({
+          digest: lockDigest,
+          sizeBytes: lockBytes.byteLength,
+        });
+      }
+      if (request.method === "POST" && path === `/runs/${runId}`) {
+        return Response.json({ status: "succeeded", exitCode: 0 });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+  const response = await runner.fetch(
+    new Request(`https://runner/runs/${runId}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "apply",
+        runId,
+        request: {
+          planArtifact: {
+            kind: "object-storage",
+            ref: `r2://takos-artifacts/opentofu-plan-runs/${runId}/tfplan`,
+            digest: PLAN_DIGEST,
+          },
+          planRun: {
+            id: runId,
+            providerLockDigest: lockDigest,
+            providerLockArtifact: {
+              kind: "object-storage",
+              ref: `r2://takos-artifacts/opentofu-plan-runs/${runId}/provider-lockfile.hcl`,
+              digest: lockDigest,
+              sizeBytes: lockBytes.byteLength,
+            },
+          },
+        },
+      }),
+    }),
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, [
+    `PUT /runs/${runId}/artifacts/tfplan`,
+    `PUT /runs/${runId}/provider-lockfile/restore`,
+    `POST /runs/${runId}`,
+  ]);
+});
+
+test("OpenTofu runner refuses a destroy Plan lock from another artifact before provider dispatch", async () => {
+  const runId = "plan_destroy_lock_mismatch";
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, runId);
+  const calls: string[] = [];
+  const runner = runnerWithContainer(r2, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      calls.push(`${request.method} ${path}`);
+      if (
+        request.method === "PUT" &&
+        path === `/runs/${runId}/artifacts/tfplan`
+      ) {
+        return Response.json({ ok: true });
+      }
+      return Response.json({ error: "must not dispatch" }, { status: 500 });
+    },
+  });
+  const response = await runner.fetch(
+    new Request(`https://runner/runs/${runId}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "destroy",
+        runId,
+        request: {
+          planArtifact: {
+            kind: "object-storage",
+            ref: `r2://takos-artifacts/opentofu-plan-runs/${runId}/tfplan`,
+            digest: PLAN_DIGEST,
+          },
+          planRun: {
+            id: runId,
+            providerLockDigest: `sha256:${"a".repeat(64)}`,
+            providerLockArtifact: {
+              kind: "object-storage",
+              ref: "r2://takos-artifacts/opentofu-plan-runs/other-plan/provider-lockfile.hcl",
+              digest: `sha256:${"a".repeat(64)}`,
+              sizeBytes: 12,
+            },
+          },
+        },
+      }),
+    }),
+  );
+  assert.equal(response.status, 500);
+  assert.deepEqual(calls, [`PUT /runs/${runId}/artifacts/tfplan`]);
+});
+
 for (const mutation of [
   {
     action: "apply" as const,
@@ -2010,8 +2152,7 @@ test("OpenTofu runner resumes a durable pre-dispatch claim with an equivalent fr
   const first = await runnerWithContainer(r2, container, {
     storage,
     env: {
-      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET:
-        RUN_CREDENTIAL_SIGNING_SECRET,
+      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET,
     },
   }).fetch(signedMutationRequest(planRunId, firstToken));
   assert.equal(first.status, 500);
@@ -2149,7 +2290,8 @@ test("run-scoped sensitive input values change mutation identity without ever be
   const options = {
     storage,
     env: {
-      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET,
+      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET:
+        RUN_CREDENTIAL_SIGNING_SECRET,
     },
   };
   const token = await signedMutationToken(planRunId, {

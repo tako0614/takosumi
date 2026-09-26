@@ -25,6 +25,7 @@ import {
   handlePlanJsonArtifactRequest,
   handlePlanArtifactRequest,
   handleProviderLockfileArtifactRequest,
+  handleProviderLockfileRestoreRequest,
   handleStateArtifactRequest,
 } from "./artifacts.ts";
 import { runBackup, runRelease } from "./backup.ts";
@@ -61,6 +62,8 @@ export async function handleRunnerRequestWithDependencies(
       /^\/runs\/([^/]+)\/artifacts\/tfplan-json$/.exec(url.pathname);
     const providerLockfileArtifactMatch =
       /^\/runs\/([^/]+)\/artifacts\/tf-lockfile$/.exec(url.pathname);
+    const providerLockfileRestoreMatch =
+      /^\/runs\/([^/]+)\/provider-lockfile\/restore$/.exec(url.pathname);
     const stateArtifactMatch = /^\/runs\/([^/]+)\/artifacts\/tfstate$/.exec(
       url.pathname,
     );
@@ -98,6 +101,12 @@ export async function handleRunnerRequestWithDependencies(
     if (providerLockfileArtifactMatch) {
       return await handleProviderLockfileArtifactRequest(
         decodeURIComponent(providerLockfileArtifactMatch[1]!),
+        request,
+      );
+    }
+    if (providerLockfileRestoreMatch) {
+      return await handleProviderLockfileRestoreRequest(
+        decodeURIComponent(providerLockfileRestoreMatch[1]!),
         request,
       );
     }
