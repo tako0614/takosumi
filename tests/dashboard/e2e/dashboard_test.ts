@@ -358,6 +358,8 @@ interface ProviderDestinationFixtureCoordinates {
   readonly sourcePath?: string;
   readonly modulePath?: string;
   readonly freshCompatibilityIds?: boolean;
+  readonly providerPackages?: readonly { readonly source: string; readonly version?: string }[];
+  readonly rootProviderRequirements?: readonly Record<string, unknown>[];
 }
 
 /** Stub a complete manual source check while retaining mutation ordering. */
@@ -503,8 +505,8 @@ async function stubProviderDestinationFixture(
           modules: [
             {
               path: modulePath,
-              providerPackages: [],
-              rootProviderRequirements: [],
+              providerPackages: coordinates.providerPackages ?? [],
+              rootProviderRequirements: coordinates.rootProviderRequirements ?? [],
             },
           ],
         },
@@ -1406,7 +1408,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     traffic.assertNoFailures();
   });
 
-  test("mixed manual and auto-selected destinations do not show a singular summary", async ({
+  test("module review shows all scanned providers and mixed required connections before apply", async ({
     page,
   }) => {
     test.skip(
@@ -1450,11 +1452,23 @@ test.describe("Takosumi dashboard browser surface", () => {
           credentialRequired: true,
         },
       ],
+      {
+        modulePath: "deploy/opentofu/portable",
+        providerPackages: [
+          { source: "registry.opentofu.org/cloudflare/cloudflare-v02", version: "5.0.0" },
+          { source: "registry.opentofu.org/hashicorp/aws", version: "5.0.0" },
+          { source: "registry.opentofu.org/hashicorp/random", version: "3.6.0" },
+        ],
+        rootProviderRequirements: [
+          { source: "registry.opentofu.org/cloudflare/cloudflare-v02", moduleLocalName: "cloudflare-v02", version: "5.0.0" },
+          { source: "registry.opentofu.org/hashicorp/aws", moduleLocalName: "aws", version: "5.0.0" },
+        ],
+      },
     );
     const query = new URLSearchParams({
       git: "https://github.com/example/cloudflare-service.git",
       ref: PORTABLE_SOURCE_COMMIT,
-      path: ".",
+      path: "deploy/opentofu/portable",
       name: "cloudflare-service",
     });
     await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
@@ -1467,8 +1481,19 @@ test.describe("Takosumi dashboard browser surface", () => {
     ).toBeVisible();
     const destinations = page.locator(".iv-connection-list select");
     await expect(destinations).toHaveCount(2);
+    const summary = page.getByTestId("install-source-summary");
+    await expect(page.getByRole("region", { name: "Configuration and connections" })).toBeVisible();
+    await expect(summary.locator("dt").first()).toHaveText("Configuration");
+    await expect(summary.getByTestId("install-selected-module")).toHaveText("deploy/opentofu/portable");
+    const packages = summary.getByTestId("install-provider-packages");
+    await expect(packages.locator("li")).toHaveCount(3);
+    await expect(packages).toContainText("registry.opentofu.org/hashicorp/random");
+    await expect(packages).toContainText("3.6.0");
+    await expect(summary.getByTestId("install-required-connection")).toHaveCount(2);
+    await expect(summary.getByTestId("install-required-connection").nth(1)).toContainText("Not selected");
     await expect(destinations.nth(0)).toHaveValue("pc_cloudflare_host_v02_mixed");
     await destinations.nth(1).selectOption("pc_aws_primary_mixed");
+    await expect(summary.getByTestId("install-required-connection").nth(1)).toContainText("AWS primary");
     await page.getByRole("button", { name: /続ける|Continue/u }).click();
 
     await expect(
@@ -1477,6 +1502,22 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(
       page.locator('[data-install-provider-destination="auto-selected"]'),
     ).toHaveCount(0);
+    await expect(summary).toBeVisible();
+    await expect(summary.getByTestId("install-selected-module")).toHaveText("deploy/opentofu/portable");
+    await expect(packages.locator("li")).toHaveCount(3);
+    await expect(summary.getByTestId("install-required-connection").nth(0)).toContainText("Cloudflare host");
+    await expect(summary.getByTestId("install-required-connection").nth(1)).toContainText("AWS primary");
+    await expect(page.getByRole("link", { name: /Technical details/u }).first()).toHaveAttribute("href", "/runs/run_provider_plan_e2e");
+    expect(state.mutations.some((entry) => /apply|approve/u.test(entry))).toBe(false);
+    await page.screenshot({ path: test.info().outputPath("module-review-desktop.png"), fullPage: true });
+    for (const width of [320, 375, 414, 768]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await expect(summary).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      if (width === 375) {
+        await page.screenshot({ path: test.info().outputPath("module-review-mobile.png"), fullPage: true });
+      }
+    }
     await expect
       .poll(() => state.installPlanBody?.options?.providerBindings)
       .toEqual([
@@ -1584,6 +1625,14 @@ test.describe("Takosumi dashboard browser surface", () => {
     await choices.nth(1).locator("select").selectOption("pc_aws_secondary_tuple");
     await choices.nth(2).locator("select").selectOption("pc_aws_primary_tuple");
     await page.getByRole("button", { name: /続ける|Continue/u }).click();
+
+    const connectionSummary = page.getByTestId("install-required-connection");
+    await expect(connectionSummary).toHaveCount(3);
+    await expect(connectionSummary.nth(0)).toHaveAttribute("data-child-alias", "primary");
+    await expect(connectionSummary.nth(1)).toHaveAttribute("data-child-alias", "secondary");
+    await expect(connectionSummary.nth(2)).toHaveAttribute("data-child-alias", "edge");
+    await expect(connectionSummary.nth(0)).toContainText("AWS primary");
+    await expect(connectionSummary.nth(1)).toContainText("AWS secondary");
 
     await expect
       .poll(() => state.installPlanBody?.options?.providerBindings)

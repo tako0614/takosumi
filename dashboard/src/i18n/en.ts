@@ -25,7 +25,15 @@ export const en: Record<keyof typeof ja, string> = {
     "Takosumi could not safely determine this SourceSnapshot's modules.",
   "installStore.moduleMissing":
     "No installable root module was found in this repository revision.",
-  "installStore.moduleRequirements": "Detected provider requirements",
+  "installStore.moduleRequirements": "Provider details",
+  "installStore.sourceSummary": "Configuration and connections",
+  "installStore.selectedModule": "Configuration",
+  "installStore.sourceScope": "Repository subtree",
+  "installStore.detectedProviders": "Providers in this module",
+  "installStore.noProviderPackages": "No provider packages were detected in this module.",
+  "installStore.requiredConnections": "Required connections",
+  "installStore.noRequiredConnections": "This module does not require a provider connection.",
+  "installStore.connectionNotSelected": "Not selected",
   "installStore.moduleRequirement":
     "{source} · module {module}{alias} {version}",
   "installStore.stepsLabel": "Install steps",
