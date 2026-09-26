@@ -15,6 +15,11 @@ operations は migration custody のためだけに残り、実際の Host、bac
 transition pair、Form の install/retain は Takosumi hosted service または別の external Host が
 所有します。
 
+残る compatibility composition は、host code が maintenance lane 一式を明示的に注入した
+場合だけ有効になります。凍結された v1alpha1 parser set や環境変数を置くだけでは
+Resource の作成権限は発生せず、通常の OSS edge では有効化できません。retained
+Resource の読み取り、observe、削除は、作成を無効にしたまま利用できます。
+
 ## 実行経路
 
 ```text

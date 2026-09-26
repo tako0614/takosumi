@@ -31,6 +31,37 @@ availability, the old exact read/observe/preview/update/delete lifecycle, and
 the transition operation on one configured origin. Advertising only the
 transition endpoint is invalid.
 
+## Connection
+
+A Host endpoint and its credential are registered in the Workspace as an
+ordinary ProviderConnection and bound to the module's provider requirement
+through ProviderBinding. The credential is materialized only inside the
+runner; it is never stored in the repository, plan views, state, Output, or
+Interface documents.
+
+When the Takosumi hosted service publishes a current Takoform Host, this path
+does not change. The hosted service's default connection is a convenient
+initial value, not a hidden runner mode or a first-party provider; you can
+swap it for your own compatible Host connection.
+
+## Protocol version
+
+These docs do not mirror unpublished Takoform candidate versions, FormRefs,
+schema digests, or Host routes. Check the published Takoform provider and the
+configured Host's discovery/contract for the available protocol and exact
+identity. An unpublished candidate is not advertised as production capability.
+
+The retired Takosumi Resource Shape/Form Host endpoints and provider settings
+are not a supported product flow. Reads, transitions, and cleanup of retained
+rows go through typed in-process operations or the owning external Host's
+migration custody. A semver bump does not imply a Form transition; the
+installed provider and the configured Host's discovery/contract remain the
+protocol authority. The transition below is the portable protocol contract an
+external Host provides; it does not revive Takosumi OSS `/v1` routes or
+compatibility aliases, and mounting the maintenance lane does not turn
+retained Resource Shape, TargetPool, or SpacePolicy APIs into a supported OSS
+authoring surface.
+
 ## Exact Resource Form transition
 
 An ordinary `PUT` cannot change a Resource's exact Form identity. The only
@@ -100,11 +131,3 @@ dispatches a provider/backend mutation. It may narrowly forward-repair the
 canonical database only when the exact host ledger already proves this
 operation committed and the stored claim, old preconditions, and desired spec
 digest still match.
-
-## Protocol authority
-
-Takosumi documentation does not promote an unpublished Takoform candidate or
-infer a Form transition from semver. The installed provider and the configured
-Host discovery/contract remain protocol authority. Mounting this maintenance
-lane does not turn retained Resource Shape, TargetPool, or SpacePolicy APIs into
-a supported OSS authoring surface.
