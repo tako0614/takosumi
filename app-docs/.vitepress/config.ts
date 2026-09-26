@@ -105,7 +105,7 @@ const config: UserConfig = {
     ],
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { property: "og:site_name", content: "Takosumi" }],
-    ["meta", { name: "twitter:card", content: "summary" }],
+    ["meta", { name: "twitter:card", content: "summary_large_image" }],
   ],
   transformHead({ pageData, siteConfig, title, description }) {
     const route = pageData.relativePath
@@ -113,7 +113,9 @@ const config: UserConfig = {
       .replace(/\.md$/u, "");
     const ogDescription = pageData.frontmatter?.description
       ? description
-      : (firstParagraph(siteConfig.srcDir, pageData.relativePath) ?? description);
+      : (siteConfig?.srcDir
+          ? firstParagraph(siteConfig.srcDir, pageData.relativePath)
+          : undefined) ?? description;
     const pageUrl = new URL(`${base}${route}`, "https://app.takosumi.com/").href;
     // hreflang targets the same page in the other locale when that source file
     // exists; x-default points at the root (Japanese) locale.
@@ -123,8 +125,12 @@ const config: UserConfig = {
     const jaRoute = jaPath
       .replace(/(^|\/)index\.md$/u, "$1")
       .replace(/\.md$/u, "");
-    const hasJa = existsSync(path.join(siteConfig.srcDir, jaPath));
-    const hasEn = existsSync(path.join(siteConfig.srcDir, `en/${jaPath}`));
+    const hasJa =
+      siteConfig?.srcDir !== undefined &&
+      existsSync(path.join(siteConfig.srcDir, jaPath));
+    const hasEn =
+      siteConfig?.srcDir !== undefined &&
+      existsSync(path.join(siteConfig.srcDir, `en/${jaPath}`));
     const jaUrl = new URL(`${base}${jaRoute}`, "https://app.takosumi.com/").href;
     const enUrl = new URL(`${base}en/${jaRoute}`, "https://app.takosumi.com/").href;
     const alternates: [string, Record<string, string>][] = [];
@@ -155,9 +161,26 @@ const config: UserConfig = {
         },
       ],
       ["link", { rel: "canonical", href: pageUrl }],
+      [
+        "meta",
+        {
+          property: "og:image",
+          content: new URL(`${base}og-cover.png`, "https://app.takosumi.com/").href,
+        },
+      ],
+      ["meta", { property: "og:image:type", content: "image/png" }],
+      ["meta", { property: "og:image:width", content: "1200" }],
+      ["meta", { property: "og:image:height", content: "630" }],
       ...alternates,
       ["meta", { name: "twitter:title", content: title }],
       ["meta", { name: "twitter:description", content: ogDescription }],
+      [
+        "meta",
+        {
+          name: "twitter:image",
+          content: new URL(`${base}og-cover.png`, "https://app.takosumi.com/").href,
+        },
+      ],
     ];
   },
   cleanUrls: true,
