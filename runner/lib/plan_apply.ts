@@ -658,6 +658,7 @@ export async function runReviewedPlanApply(
   action: "apply" | "destroy",
   request: unknown,
   signal?: AbortSignal,
+  restoredProviderLockDigest?: string,
 ): Promise<JsonRecord> {
   const generatedRoot = parseGeneratedRoot(request);
   const legacyRecovery = parseLegacySourcelessDestroyRecovery(request);
@@ -698,9 +699,15 @@ export async function runReviewedPlanApply(
         sourceBuild,
         timer,
       );
-  const reviewedProviderLockDigest = await timer.measure(
+  const reviewedProviderLock = await timer.measure(
     "provider_lockfile_restore",
-    () => restoreReviewedProviderLockfile(workspace, moduleDir, request),
+    () =>
+      restoreReviewedProviderLockfile(
+        workspace,
+        moduleDir,
+        request,
+        restoredProviderLockDigest,
+      ),
   );
   const preparedCredentials = await prepareProviderCredentialFiles(
     commandContext,
@@ -740,7 +747,7 @@ export async function runReviewedPlanApply(
             "init",
             "-input=false",
             "-no-color",
-            ...(reviewedProviderLockDigest ? ["-lockfile=readonly"] : []),
+            ...(reviewedProviderLock.readonlyInit ? ["-lockfile=readonly"] : []),
           ],
           {
             cwd: moduleDir,
@@ -763,16 +770,16 @@ export async function runReviewedPlanApply(
       postInitProviderScan,
       await readDependencyLockIfPresent(moduleDir),
     );
-    if (reviewedProviderLockDigest) {
+    if (reviewedProviderLock.digest) {
       const afterInitBytes = await readProviderLockfileBytes(
         join(moduleDir, ".terraform.lock.hcl"),
       );
       if (
         afterInitBytes === undefined ||
-        (await digestBytes(afterInitBytes)) !== reviewedProviderLockDigest
+        (await digestBytes(afterInitBytes)) !== reviewedProviderLock.digest
       ) {
         throw new Error(
-          "OpenTofu dependency lock changed after reviewed Plan restore",
+          "OpenTofu dependency lock differs from reviewed Plan",
         );
       }
     }
@@ -1245,25 +1252,33 @@ async function readDependencyLockIfPresent(
 }
 
 /**
- * A current PlanRun carries the exact post-init lockfile as a private artifact.
- * Older PlanRuns have no artifact and retain their historical init behavior.
- * The restored bytes are checked before credentials or provider code can run.
+ * A current DO proves successful private lockfile PUT by an internal header.
+ * Only that mode installs exact bytes and uses readonly init. An older DO has
+ * no marker, so the legacy init path is allowed but the post-init lock digest
+ * must still match the reviewed Plan before reconcile or provider apply.
  */
 async function restoreReviewedProviderLockfile(
   workspace: RunWorkspace,
   moduleDir: string,
   request: unknown,
-): Promise<string | undefined> {
+  restoredProviderLockDigest?: string,
+): Promise<{ readonly digest?: string; readonly readonlyInit: boolean }> {
   const planRun = recordField(request, "planRun");
   const artifact = recordField(planRun, "providerLockArtifact");
   const rawDigest = stringField(planRun, "providerLockDigest");
   if (artifact === undefined || artifact === null) {
+    if (restoredProviderLockDigest !== undefined) {
+      throw new Error("provider lock restore marker has no reviewed artifact");
+    }
     if (artifact === null && rawDigest !== undefined) {
       throw new Error(
         "provider-free reviewed Plan has an unexpected lock digest",
       );
     }
-    return undefined;
+    if (rawDigest !== undefined && !/^sha256:[0-9a-f]{64}$/u.test(rawDigest)) {
+      throw new Error("reviewed Plan provider lock digest is invalid");
+    }
+    return { digest: rawDigest, readonlyInit: false };
   }
   const planRunId = stringField(planRun, "id");
   const artifactKind = stringField(artifact, "kind");
@@ -1284,6 +1299,14 @@ async function restoreReviewedProviderLockfile(
     artifactDigest !== rawDigest
   ) {
     throw new Error("reviewed Plan provider lock digest is invalid");
+  }
+  if (restoredProviderLockDigest === undefined) {
+    // A pre-rollout DO never attempted the PUT. No absence-of-file inference:
+    // the fallback is selected solely by the private transport marker.
+    return { digest: rawDigest, readonlyInit: false };
+  }
+  if (restoredProviderLockDigest !== rawDigest) {
+    throw new Error("provider lock restore marker differs from reviewed Plan");
   }
   const restored = await readProviderLockfileBytes(
     restoredProviderLockfilePath(workspace),
@@ -1316,7 +1339,7 @@ async function restoreReviewedProviderLockfile(
       await file.close();
     }
   }
-  return rawDigest;
+  return { digest: rawDigest, readonlyInit: true };
 }
 
 async function captureProviderLockfile(

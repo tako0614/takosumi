@@ -25,6 +25,7 @@ import {
 } from "../../../../worker/src/state_crypto.ts";
 import { createRunCredentialToken } from "../../../../core/shared/run_credential_tokens.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
+import { PROVIDER_LOCK_RESTORE_DIGEST_HEADER } from "../../../../runner/lib/transport.ts";
 
 const PLAN_BYTES = new TextEncoder().encode("reviewed tfplan bytes");
 const PLAN_DIGEST =
@@ -1861,8 +1862,8 @@ test("OpenTofu runner Durable Object restores reviewed R2 plan artifact before a
   ]);
 });
 
-test("OpenTofu runner restores the exact encrypted Plan lock before apply dispatch", async () => {
-  const runId = "plan_reviewed_lock_restore";
+test("compatibility DO dispatches artifact Plan without a lock restore marker", async () => {
+  const runId = "plan_reviewed_lock_compat";
   const calls: string[] = [];
   const r2 = new FakeR2Bucket();
   const lockBytes = new TextEncoder().encode(
@@ -1902,16 +1903,10 @@ test("OpenTofu runner restores the exact encrypted Plan lock before apply dispat
         request.method === "PUT" &&
         path === `/runs/${runId}/provider-lockfile/restore`
       ) {
-        assert.deepEqual(
-          new Uint8Array(await request.arrayBuffer()),
-          lockBytes,
-        );
-        return Response.json({
-          digest: lockDigest,
-          sizeBytes: lockBytes.byteLength,
-        });
+        assert.fail("compatibility DO must not PUT a reviewed lockfile");
       }
       if (request.method === "POST" && path === `/runs/${runId}`) {
+        assert.equal(request.headers.get(PROVIDER_LOCK_RESTORE_DIGEST_HEADER), null);
         return Response.json({ status: "succeeded", exitCode: 0 });
       }
       return Response.json({ error: "unexpected" }, { status: 500 });
@@ -1920,7 +1915,11 @@ test("OpenTofu runner restores the exact encrypted Plan lock before apply dispat
   const response = await runner.fetch(
     new Request(`https://runner/runs/${runId}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        // This caller value must be stripped; only the successful PUT can mint it.
+        [PROVIDER_LOCK_RESTORE_DIGEST_HEADER]: `sha256:${"0".repeat(64)}`,
+      },
       body: JSON.stringify({
         kind: "takosumi.opentofu-run@v1",
         action: "apply",
@@ -1948,7 +1947,6 @@ test("OpenTofu runner restores the exact encrypted Plan lock before apply dispat
   assert.equal(response.status, 200);
   assert.deepEqual(calls, [
     `PUT /runs/${runId}/artifacts/tfplan`,
-    `PUT /runs/${runId}/provider-lockfile/restore`,
     `POST /runs/${runId}`,
   ]);
 });

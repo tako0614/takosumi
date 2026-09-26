@@ -12,6 +12,7 @@ import { expect, test } from "bun:test";
 
 import { handleRunnerRequest } from "../../runner/entrypoint.ts";
 import { workspaceForRun } from "../../runner/lib/artifacts.ts";
+import { PROVIDER_LOCK_RESTORE_DIGEST_HEADER } from "../../runner/lib/transport.ts";
 
 const LOCK = `provider "registry.opentofu.org/hashicorp/null" {
   version = "3.2.4"
@@ -112,7 +113,10 @@ esac
     const applyRequest = () =>
       new Request(`https://runner.internal/runs/${encodeURIComponent(runId)}`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          [PROVIDER_LOCK_RESTORE_DIGEST_HEADER]: lockDigest,
+        },
         body,
       });
     const result = await handleRunnerRequest(applyRequest());
@@ -132,6 +136,23 @@ esac
       ),
     ).toBe(LOCK);
 
+    const invalidMarker = applyRequest();
+    invalidMarker.headers.set(PROVIDER_LOCK_RESTORE_DIGEST_HEADER, `sha256:${"0".repeat(64)}`);
+    const markerMismatch = await handleRunnerRequest(invalidMarker);
+    expect(markerMismatch.status).toBe(500);
+    expect((await markerMismatch.json()).stderr).toContain(
+      "provider lock restore marker differs from reviewed Plan",
+    );
+
+    const restoredPath = join(workspace.root, "restored-provider-lockfile.hcl");
+    await writeFile(restoredPath, LOCK.replace("3.2.4", "3.2.5"));
+    const wrongBytes = await handleRunnerRequest(applyRequest());
+    expect(wrongBytes.status).toBe(500);
+    expect((await wrongBytes.json()).stderr).toContain(
+      "reviewed Plan provider lock bytes were not restored exactly",
+    );
+    await writeFile(restoredPath, LOCK);
+
     await writeFile(
       join(workspace.generatedRootDir, ".terraform.lock.hcl"),
       'provider "registry.opentofu.org/hashicorp/null" { version = "0.0.0" }\n',
@@ -142,7 +163,7 @@ esac
       "source module lockfile conflicts with reviewed Plan lockfile",
     );
     await writeFile(join(workspace.generatedRootDir, ".terraform.lock.hcl"), LOCK);
-    await rm(join(workspace.root, "restored-provider-lockfile.hcl"));
+    await rm(restoredPath);
     const missing = await handleRunnerRequest(applyRequest());
     expect(missing.status).toBe(500);
     expect((await missing.json()).stderr).toContain(
@@ -155,6 +176,115 @@ esac
     await rm(bin, { recursive: true, force: true });
   }
 });
+
+for (const artifactMode of ["artifact", "digest-only"] as const) {
+  for (const lockMatches of [true, false]) {
+    test(`legacy DO with new runner checks post-init ${artifactMode} digest (${lockMatches ? "match" : "mismatch"}) before apply`, async () => {
+      const runId = `legacy-lock-${crypto.randomUUID()}`;
+      const workspace = workspaceForRun(runId);
+      const bin = await mkdtemp(join(tmpdir(), "takosumi-legacy-lock-bin-"));
+      const oldPath = Bun.env.PATH;
+      const lockDigest = await digest(new TextEncoder().encode(LOCK));
+      try {
+        await mkdir(workspace.sourceRoot, { recursive: true });
+        await writeFile(join(workspace.sourceRoot, "main.tf"),
+          `terraform { required_providers { null = { source = "hashicorp/null" } } }\nresource "null_resource" "example" {}\n`);
+        const planBytes = new TextEncoder().encode("reviewed-plan");
+        await writeFile(workspace.planPath, planBytes);
+        await writeFile(join(bin, "tofu"), `#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  init)
+    case " $* " in *" -lockfile=readonly "*) exit 31;; esac
+    printf '%s' '${(lockMatches ? LOCK : LOCK.replace("3.2.4", "3.2.5")).replaceAll("'", "'\"'\"'")}' > .terraform.lock.hcl
+    ;;
+  show) printf '{"resource_changes":[]}' ;;
+  state) exit 0 ;;
+  apply) touch '${join(workspace.root, "applied")}' ;;
+  output) printf '{}' ;;
+  *) exit 32 ;;
+esac
+`);
+        await chmod(join(bin, "tofu"), 0o755);
+        Bun.env.PATH = `${bin}:${oldPath ?? "/usr/bin:/bin"}`;
+        const response = await handleRunnerRequest(new Request(
+          `https://runner.internal/runs/${encodeURIComponent(runId)}`,
+          { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+            action: "apply", runId, request: {
+              generatedRoot: { files: { "main.tf": 'terraform {}\nmodule "service" { source = "./module" }\n' } },
+              planRun: {
+                id: runId,
+                source: { kind: "git", url: "https://git.example.test/repo.git", commit: "1".repeat(40) },
+                requiredProviders: [PROVIDER], providerLockDigest: lockDigest,
+                ...(artifactMode === "artifact" ? { providerLockArtifact: { kind: "object-storage", digest: lockDigest } } : {}),
+              },
+              planArtifact: { digest: await digest(planBytes) },
+            },
+          }) },
+        ));
+        expect(response.status).toBe(lockMatches ? 200 : 500);
+        if (!lockMatches) {
+          expect((await response.json()).stderr).toContain("OpenTofu dependency lock differs from reviewed Plan");
+          expect(await Bun.file(join(workspace.root, "applied")).exists()).toBe(false);
+        }
+      } finally {
+        if (oldPath === undefined) delete Bun.env.PATH;
+        else Bun.env.PATH = oldPath;
+        await rm(workspace.root, { recursive: true, force: true });
+        await rm(bin, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
+for (const providerLockArtifact of [null, undefined]) {
+  test(`provider-free Plan ${providerLockArtifact === null ? "explicitly absent" : "legacy without lock fields"} still applies without readonly init`, async () => {
+    const runId = `provider-free-lock-${crypto.randomUUID()}`;
+    const workspace = workspaceForRun(runId);
+    const bin = await mkdtemp(join(tmpdir(), "takosumi-provider-free-bin-"));
+    const oldPath = Bun.env.PATH;
+    try {
+      await mkdir(workspace.sourceRoot, { recursive: true });
+      await writeFile(join(workspace.sourceRoot, "main.tf"), 'output "value" { value = "ok" }\n');
+      const planBytes = new TextEncoder().encode("reviewed-plan");
+      await writeFile(workspace.planPath, planBytes);
+      await writeFile(join(bin, "tofu"), `#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  init) case " $* " in *" -lockfile=readonly "*) exit 31;; esac ;;
+  show) printf '{"resource_changes":[]}' ;;
+  state) exit 0 ;;
+  apply) exit 0 ;;
+  output) printf '{}' ;;
+  *) exit 32 ;;
+esac
+`);
+      await chmod(join(bin, "tofu"), 0o755);
+      Bun.env.PATH = `${bin}:${oldPath ?? "/usr/bin:/bin"}`;
+      const response = await handleRunnerRequest(new Request(
+        `https://runner.internal/runs/${encodeURIComponent(runId)}`,
+        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+          action: "apply", runId, request: {
+            generatedRoot: { files: { "main.tf": 'terraform {}\nmodule "service" { source = "./module" }\n' } },
+            planRun: {
+              id: runId,
+              source: { kind: "git", url: "https://git.example.test/repo.git", commit: "1".repeat(40) },
+              requiredProviders: [],
+              ...(providerLockArtifact === null ? { providerLockArtifact: null } : {}),
+            },
+            planArtifact: { digest: await digest(planBytes) },
+          },
+        }) },
+      ));
+      expect(response.status).toBe(200);
+    } finally {
+      if (oldPath === undefined) delete Bun.env.PATH;
+      else Bun.env.PATH = oldPath;
+      await rm(workspace.root, { recursive: true, force: true });
+      await rm(bin, { recursive: true, force: true });
+    }
+  });
+}
 
 test("private lockfile restore is bounded and exact on retry", async () => {
   const runId = `reviewed-lock-route-${crypto.randomUUID()}`;

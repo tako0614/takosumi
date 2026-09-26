@@ -36,6 +36,7 @@ import {
 } from "./plan_apply.ts";
 import { classifyOpenTofuFailure } from "./exec.ts";
 import type { RuntimeSecretFileSystem } from "./runtime_secrets.ts";
+import { PROVIDER_LOCK_RESTORE_DIGEST_HEADER } from "./transport.ts";
 
 interface RunnerRequestDependencies {
   readonly runtimeSecretFileSystem?: Partial<RuntimeSecretFileSystem>;
@@ -221,6 +222,8 @@ export async function handleRunnerRequestWithDependencies(
                     action,
                     body.request,
                     request.signal,
+                    request.headers.get(PROVIDER_LOCK_RESTORE_DIGEST_HEADER) ??
+                      undefined,
                   );
       return Response.json(result, {
         status: result.exitCode === 0 ? 200 : 500,
