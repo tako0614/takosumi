@@ -1401,13 +1401,16 @@ export async function createGitInstallPlan(
   workspaceId: string,
   request: CreateGitInstallPlanRequest,
   idempotencyKey: string = crypto.randomUUID(),
+  options: { readonly signal?: AbortSignal } = {},
 ): Promise<GitInstallPlanResponse> {
+  throwIfAborted(options.signal);
   return await controlFetch<GitInstallPlanResponse>(
     `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/install-plans`,
     {
       method: "POST",
       headers: { "idempotency-key": idempotencyKey },
       body: request,
+      signal: options.signal,
     },
   );
 }
@@ -1415,10 +1418,12 @@ export async function createGitInstallPlan(
 /** Advances exactly one durable install coordinator phase. */
 export async function reconcileGitInstallPlan(
   installPlanId: string,
+  options: { readonly signal?: AbortSignal } = {},
 ): Promise<GitInstallPlanResponse> {
+  throwIfAborted(options.signal);
   return await controlFetch<GitInstallPlanResponse>(
     `${BASE}/install-plans/${encodeURIComponent(installPlanId)}/reconcile`,
-    { method: "POST" },
+    { method: "POST", signal: options.signal },
   );
 }
 
@@ -1427,13 +1432,16 @@ export async function createGitRevisionPlan(
   capsuleId: string,
   request: CreateGitRevisionPlanRequest,
   idempotencyKey: string = crypto.randomUUID(),
+  options: { readonly signal?: AbortSignal } = {},
 ): Promise<GitRevisionPlanResponse> {
+  throwIfAborted(options.signal);
   return await controlFetch<GitRevisionPlanResponse>(
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}/revision-plans`,
     {
       method: "POST",
       headers: { "idempotency-key": idempotencyKey },
       body: request,
+      signal: options.signal,
     },
   );
 }
@@ -1441,11 +1449,47 @@ export async function createGitRevisionPlan(
 /** Advances exactly one durable Capsule-local revision coordinator phase. */
 export async function reconcileGitRevisionPlan(
   revisionPlanId: string,
+  options: { readonly signal?: AbortSignal } = {},
 ): Promise<GitRevisionPlanResponse> {
+  throwIfAborted(options.signal);
   return await controlFetch<GitRevisionPlanResponse>(
     `${BASE}/revision-plans/${encodeURIComponent(revisionPlanId)}/reconcile`,
-    { method: "POST" },
+    { method: "POST", signal: options.signal },
   );
+}
+
+function gitPlanTimeout(kind: "install" | "revision"): ControlApiError {
+  return new ControlApiError(
+    504,
+    `${kind}_plan_reconcile_timeout`,
+    `The ${kind} plan did not become reviewable in time. It may still be running; retry the same request to resume.`,
+  );
+}
+
+/** Bounds create, reconciliation, and response bodies with one shared deadline. */
+async function withGitPlanDeadline<T>(
+  kind: "install" | "revision",
+  timeoutMs: number = 120_000,
+  work: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new TypeError("Git plan timeoutMs must be a positive integer");
+  }
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      // Stop waiting, not the durable server operation. The caller must retain
+      // its key and resume through the coordinator after an uncertain response.
+      reject(gitPlanTimeout(kind));
+      controller.abort();
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([work(controller.signal), expired]);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 /**
@@ -1460,40 +1504,43 @@ export async function createReviewableGitRevisionPlan(
   options: {
     readonly maxReconciles?: number;
     readonly idempotencyKey?: string;
+    /** Bounds the entire coordinator wait; defaults to two minutes. */
+    readonly timeoutMs?: number;
   } = {},
 ): Promise<GitRevisionPlanResponse> {
-  let response = await createGitRevisionPlan(
-    capsuleId,
-    request,
-    options.idempotencyKey,
-  );
-  const max = options.maxReconciles ?? 120;
-  for (let attempt = 0; response.nextAction === "reconcile"; attempt += 1) {
-    if (attempt >= max) {
+  return await withGitPlanDeadline("revision", options.timeoutMs, async (signal) => {
+    let response = await createGitRevisionPlan(
+      capsuleId,
+      request,
+      options.idempotencyKey,
+      { signal },
+    );
+    throwIfAborted(signal);
+    const max = options.maxReconciles ?? 120;
+    for (let attempt = 0; response.nextAction === "reconcile"; attempt += 1) {
+      if (attempt >= max) {
+        throw gitPlanTimeout("revision");
+      }
+      response = await reconcileGitRevisionPlan(response.revisionPlan.id, { signal });
+      throwIfAborted(signal);
+      if (response.nextAction === "reconcile") {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+    if (
+      response.nextAction !== "review_run" ||
+      !response.revisionPlan.planRunId
+    ) {
       throw new ControlApiError(
-        504,
-        "revision_plan_reconcile_timeout",
-        "The revision plan did not become reviewable in time.",
+        409,
+        response.revisionPlan.diagnostic?.code ?? "revision_plan_failed",
+        response.revisionPlan.diagnostic?.message ??
+          "The revision plan did not produce a reviewable Run.",
+        response,
       );
     }
-    response = await reconcileGitRevisionPlan(response.revisionPlan.id);
-    if (response.nextAction === "reconcile") {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-  }
-  if (
-    response.nextAction !== "review_run" ||
-    !response.revisionPlan.planRunId
-  ) {
-    throw new ControlApiError(
-      409,
-      response.revisionPlan.diagnostic?.code ?? "revision_plan_failed",
-      response.revisionPlan.diagnostic?.message ??
-        "The revision plan did not produce a reviewable Run.",
-      response,
-    );
-  }
-  return response;
+    return response;
+  });
 }
 
 /**
@@ -1506,40 +1553,43 @@ export async function createReviewableGitInstallPlan(
   options: {
     readonly maxReconciles?: number;
     readonly idempotencyKey?: string;
+    /** Bounds the entire coordinator wait; defaults to two minutes. */
+    readonly timeoutMs?: number;
   } = {},
 ): Promise<GitInstallPlanResponse> {
-  let response = await createGitInstallPlan(
-    workspaceId,
-    request,
-    options.idempotencyKey,
-  );
-  const max = options.maxReconciles ?? 120;
-  for (let attempt = 0; response.nextAction === "reconcile"; attempt += 1) {
-    if (attempt >= max) {
+  return await withGitPlanDeadline("install", options.timeoutMs, async (signal) => {
+    let response = await createGitInstallPlan(
+      workspaceId,
+      request,
+      options.idempotencyKey,
+      { signal },
+    );
+    throwIfAborted(signal);
+    const max = options.maxReconciles ?? 120;
+    for (let attempt = 0; response.nextAction === "reconcile"; attempt += 1) {
+      if (attempt >= max) {
+        throw gitPlanTimeout("install");
+      }
+      response = await reconcileGitInstallPlan(response.installPlan.id, { signal });
+      throwIfAborted(signal);
+      if (response.nextAction === "reconcile") {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+    if (
+      response.nextAction !== "review_run" ||
+      !response.installPlan.planRunId
+    ) {
       throw new ControlApiError(
-        504,
-        "install_plan_reconcile_timeout",
-        "The install plan did not become reviewable in time.",
+        409,
+        response.installPlan.diagnostic?.code ?? "install_plan_failed",
+        response.installPlan.diagnostic?.message ??
+          "The install plan did not produce a reviewable Run.",
+        response,
       );
     }
-    response = await reconcileGitInstallPlan(response.installPlan.id);
-    if (response.nextAction === "reconcile") {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-  }
-  if (
-    response.nextAction !== "review_run" ||
-    !response.installPlan.planRunId
-  ) {
-    throw new ControlApiError(
-      409,
-      response.installPlan.diagnostic?.code ?? "install_plan_failed",
-      response.installPlan.diagnostic?.message ??
-        "The install plan did not produce a reviewable Run.",
-      response,
-    );
-  }
-  return response;
+    return response;
+  });
 }
 
 const CAPSULE_STATUSES: ReadonlySet<CapsuleStatus> = new Set([
