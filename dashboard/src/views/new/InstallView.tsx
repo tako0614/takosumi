@@ -89,6 +89,11 @@ import {
   providerConnectionDisplayName,
 } from "../../lib/provider-connections.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
+import {
+  getOrCreateInstallPlanAttempt,
+  installPlanAttemptRequest,
+  type InstallPlanAttempt,
+} from "../../lib/install-plan-attempt.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { fetchTcsListing, type TcsListing } from "../../lib/tcs-client.ts";
@@ -255,8 +260,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   >({});
   const [capsuleId, setCapsuleId] = createSignal<string>();
   const [planRunId, setPlanRunId] = createSignal<string>();
-  const [installPlanIdempotencyKey, setInstallPlanIdempotencyKey] =
-    createSignal(crypto.randomUUID());
+  let installPlanAttempt: InstallPlanAttempt | undefined;
   const [error, setError] = createSignal<string>();
   const [busy, setBusy] = createSignal(false);
   const [preparationStage, setPreparationStage] =
@@ -700,7 +704,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setCapsuleId(undefined);
     setPlanRunId(undefined);
     setInterfaceUrl(undefined);
-    setInstallPlanIdempotencyKey(crypto.randomUUID());
+    installPlanAttempt = undefined;
   };
 
   const resetPreparedSource = (options?: {
@@ -778,6 +782,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     target: ProviderConnectionRow,
     connectionId: string,
   ) => {
+    installPlanAttempt = undefined;
     setProviderRows((rows) =>
       rows.map((row) =>
         row.provider === target.provider &&
@@ -795,6 +800,12 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   };
 
   const prepareInstall = async () => {
+    // A timeout does not cancel the durable coordinator. An unchanged explicit
+    // retry must replay its exact evidence/body, not run compatibility again.
+    if (installPlanAttempt) {
+      await submitInstallPlan(installPlanAttempt);
+      return;
+    }
     const validation = validateBasic();
     if (validation) {
       setError(validation);
@@ -1289,7 +1300,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           "The exact successful install preflight is unavailable.",
         );
       }
-      const response = await createReviewableGitInstallPlan(
+      installPlanAttempt = getOrCreateInstallPlanAttempt(
+        installPlanAttempt,
         workspace,
         {
           source: {
@@ -1321,7 +1333,28 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           },
           ...(vars ? { variables: vars } : {}),
         },
-        { idempotencyKey: installPlanIdempotencyKey() },
+      );
+      await submitInstallPlan(installPlanAttempt);
+    } catch (cause) {
+      setError(friendlyError(cause, t).message);
+      setPhase(storeEntry() ? "setup" : "configure");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitInstallPlan = async (attempt: InstallPlanAttempt) => {
+    const workspace = attempt.workspaceId;
+    if (!workspaceIsCurrent(workspace)) return;
+    setPreparationStage("plan");
+    setPhase("preparing");
+    setBusy(true);
+    setError(undefined);
+    try {
+      const response = await createReviewableGitInstallPlan(
+        workspace,
+        installPlanAttemptRequest(attempt),
+        { idempotencyKey: attempt.idempotencyKey },
       );
       if (!workspaceIsCurrent(workspace)) return;
       const currentCapsuleId = response.installPlan.capsuleId;
@@ -1341,7 +1374,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         cause.status > 0 &&
         cause.status < 500
       ) {
-        setInstallPlanIdempotencyKey(crypto.randomUUID());
+        if (installPlanAttempt === attempt) installPlanAttempt = undefined;
       }
       setError(friendlyError(cause, t).message);
       setPhase(storeEntry() ? "setup" : "configure");
@@ -1402,7 +1435,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setProviderRows([]);
     setCapsuleId(undefined);
     setPlanRunId(undefined);
-    setInstallPlanIdempotencyKey(crypto.randomUUID());
+    installPlanAttempt = undefined;
     setStoreValues({});
     setStoreInputTouched({});
     setStoreFeatureSelections({});
@@ -1435,6 +1468,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const updateStoreInput = (field: StoreInputField, value: string) => {
     const entry = storeEntry();
     if (!entry) return;
+    installPlanAttempt = undefined;
     const key = storeInputKey(entry.id, field.name);
     setStoreValues((current) => ({ ...current, [key]: value }));
     setStoreInputTouched((current) => ({ ...current, [key]: true }));
@@ -1450,6 +1484,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     feature: StoreInstallFeature,
     enabled: boolean,
   ) => {
+    installPlanAttempt = undefined;
     setStoreFeatureSelections((current) => ({
       ...current,
       [storeFeatureKey(entry, feature)]: enabled,

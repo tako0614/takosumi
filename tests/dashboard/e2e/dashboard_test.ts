@@ -357,6 +357,7 @@ interface ProviderDestinationFixtureState extends SourceCreateFixtureState {
 interface ProviderDestinationFixtureCoordinates {
   readonly sourcePath?: string;
   readonly modulePath?: string;
+  readonly freshCompatibilityIds?: boolean;
 }
 
 /** Stub a complete manual source check while retaining mutation ordering. */
@@ -511,16 +512,19 @@ async function stubProviderDestinationFixture(
     }
     if (path === `/api/v1/sources/${sourceId}/compatibility-check`) {
       state.compatibilityBodies.push(request.postDataJSON());
+      const suffix = coordinates.freshCompatibilityIds
+        ? `_${state.compatibilityBodies.length}`
+        : "";
       return route.fulfill({
         json: {
           run: {
-            id: "ccr_provider_destination_e2e",
+            id: `ccr_provider_destination_e2e${suffix}`,
             type: "compatibility_check",
             status: "succeeded",
-            compatibilityReportId: "caprep_provider_destination_e2e",
+            compatibilityReportId: `caprep_provider_destination_e2e${suffix}`,
           },
           report: {
-            id: "caprep_provider_destination_e2e",
+            id: `caprep_provider_destination_e2e${suffix}`,
             level: "ready",
             findings: [],
             providerPackages: [
@@ -1310,6 +1314,54 @@ test.describe("Takosumi dashboard browser surface", () => {
     traffic.assertNoFailures();
   });
 
+  for (const edited of [false, true]) {
+    test(`direct Git timeout retry ${edited ? "discards edited" : "retains exact"} request`, async ({ page }) => {
+      test.skip(mode !== "portable", "local install fixture only");
+      const state = await stubProviderDestinationFixture(page, [], [], {
+        freshCompatibilityIds: true,
+      });
+      const posts: { body: string; key: string | undefined }[] = [];
+      await page.route("**/workspaces/ws_alpha/install-plans", async (route) => {
+        posts.push({
+          body: route.request().postData()!,
+          key: route.request().headers()["idempotency-key"],
+        });
+        if (posts.length === 1) {
+          return route.fulfill({ status: 504, json: {
+            error: { code: "git_install_plan_timeout", message: "Timed out" },
+          } });
+        }
+        return route.fallback();
+      });
+      const query = new URLSearchParams({
+        git: "https://github.com/example/cloudflare-service.git",
+        ref: PORTABLE_SOURCE_COMMIT,
+        path: ".",
+        name: "cloudflare-service",
+      });
+      await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
+      await page.getByRole("button", { name: /追加|Add/u }).click();
+      await expect.poll(() => posts.length).toBe(1);
+      const add = page.getByRole("button", { name: /追加|Add/u });
+      await expect(add).toBeEnabled();
+      // No automatic mutation retry after an unknown outcome.
+      expect(posts).toHaveLength(1);
+      if (edited) await page.locator(".iv-form input").first().fill("edited-service");
+      await add.click();
+      await expect.poll(() => posts.length).toBe(2);
+      await expect(page.locator(".iv-execution")).toBeVisible();
+      expect(posts[0]!.key).toBeTruthy();
+      if (edited) {
+        expect(posts[1]!.key).not.toBe(posts[0]!.key);
+        expect(JSON.parse(posts[1]!.body).capsule.name).toBe("edited-service");
+        expect(state.compatibilityBodies).toHaveLength(2);
+      } else {
+        expect(posts[1]).toEqual(posts[0]);
+        expect(state.compatibilityBodies).toHaveLength(1);
+      }
+    });
+  }
+
   test("unsupported resources offer connection setup before Plan", async ({
     page,
   }) => {
@@ -1727,7 +1779,8 @@ test.describe("Takosumi dashboard browser surface", () => {
     traffic.assertNoFailures();
   });
 
-  test("Store setup edits keep the ready compatibility fence and continue to Plan", async ({
+  const storeSetupRetryTest = (retryMode: "none" | "unchanged" | "edited") => {
+  test(`Store setup edits keep the ready compatibility fence and continue to Plan (${retryMode})`, async ({
     page,
   }) => {
     test.skip(
@@ -1744,6 +1797,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     const sourcePostBodies: unknown[] = [];
     const syncBodies: unknown[] = [];
     const installPlanBodies: unknown[] = [];
+    const installPlanKeys: (string | undefined)[] = [];
     const sourceState: SourceCreateFixtureState = {
       sourceListReads: [],
       sourcePosts: [],
@@ -1992,6 +2046,12 @@ test.describe("Takosumi dashboard browser surface", () => {
       ) {
         const body = request.postDataJSON() as Record<string, unknown>;
         installPlanBodies.push(body);
+        installPlanKeys.push(request.headers()["idempotency-key"]);
+        if (retryMode !== "none" && installPlanBodies.length === 1) {
+          return route.fulfill({ status: 504, json: {
+            error: { code: "git_install_plan_timeout", message: "Timed out" },
+          } });
+        }
         return route.fulfill({
           status: 201,
           json: {
@@ -2094,6 +2154,23 @@ test.describe("Takosumi dashboard browser surface", () => {
         variables: { region: "edited" },
       }),
     ]);
+    if (retryMode !== "none") {
+      const next = page.getByRole("button", { name: /続ける|Continue/u });
+      await expect(next).toBeEnabled();
+      expect(installPlanBodies).toHaveLength(1);
+      if (retryMode === "edited") await page.getByLabel(/リージョン|Region/u).fill("changed-again");
+      await next.click();
+      await expect.poll(() => installPlanBodies.length).toBe(2);
+      expect(installPlanKeys[0]).toBeTruthy();
+      if (retryMode === "unchanged") {
+        expect(installPlanBodies[1]).toEqual(installPlanBodies[0]);
+        expect(installPlanKeys[1]).toBe(installPlanKeys[0]);
+      } else {
+        expect(installPlanBodies[1]).toMatchObject({ variables: { region: "changed-again" } });
+        expect(installPlanKeys[1]).not.toBe(installPlanKeys[0]);
+      }
+      expect(compatibilityBodies).toHaveLength(1);
+    }
     expect(seenMutations).not.toContain(
       "POST /api/v1/workspaces/ws_alpha/capsules",
     );
@@ -2116,6 +2193,10 @@ test.describe("Takosumi dashboard browser surface", () => {
     ]);
     expect(syncBodies).toEqual([{ expectedRef: resolvedCommit }]);
   });
+  };
+  storeSetupRetryTest("none");
+  storeSetupRetryTest("unchanged");
+  storeSetupRetryTest("edited");
 
   test("Workload settings submit one complete Configuration Plan and open its Run review", async ({
     page,

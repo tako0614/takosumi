@@ -156,11 +156,18 @@ const REASON_MESSAGES: Readonly<Record<string, MessageKey>> = {
   output_share_revoked: "controlError.shareRevoked",
 };
 
-function mappedReasonMessage(
+const CODE_MESSAGES: Readonly<Record<string, MessageKey>> = {
+  install_plan_reconcile_timeout: "error.planReconcileTimeout",
+  revision_plan_reconcile_timeout: "error.planReconcileTimeout",
+};
+
+function mappedControlApiMessage(
   err: unknown,
   t: FriendlyErrorTranslate,
 ): string | undefined {
   if (!(err instanceof ControlApiError)) return undefined;
+  const codeKey = err.code ? CODE_MESSAGES[err.code] : undefined;
+  if (codeKey) return t(codeKey);
   const key = err.reason ? REASON_MESSAGES[err.reason] : undefined;
   return key ? t(key) : undefined;
 }
@@ -169,7 +176,7 @@ export function friendlyError(
   err: unknown,
   t: FriendlyErrorTranslate,
 ): FriendlyError {
-  const mapped = mappedReasonMessage(err, t);
+  const mapped = mappedControlApiMessage(err, t);
   if (mapped !== undefined) return { message: mapped };
   const raw = extract(err);
   if (isOpaque(raw)) {
