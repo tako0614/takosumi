@@ -4,7 +4,7 @@ const jaNav: DefaultTheme.NavItem[] = [
   { text: "はじめに", link: "/getting-started/quickstart" },
   { text: "解説", link: "/concepts/" },
   { text: "リファレンス", link: "/reference/api" },
-  { text: "Takosumi Cloud", link: "https://app.takosumi.com/docs/" },
+  { text: "Takosumi Hosted", link: "https://app.takosumi.com/docs/" },
 ];
 
 const enNav: DefaultTheme.NavItem[] = [
@@ -12,7 +12,7 @@ const enNav: DefaultTheme.NavItem[] = [
   { text: "Quickstart", link: "/en/getting-started/quickstart" },
   { text: "Concepts", link: "/en/concepts/" },
   { text: "Reference", link: "/en/reference/api" },
-  { text: "Hosted Cloud", link: "https://app.takosumi.com/docs/en/" },
+  { text: "Takosumi Hosted", link: "https://app.takosumi.com/docs/en/" },
 ];
 
 const jaSidebar: DefaultTheme.SidebarMulti = {
