@@ -200,6 +200,11 @@ export default defineConfig({
         darkModeSwitchLabel: "テーマ",
         sidebarMenuLabel: "メニュー",
         returnToTopLabel: "トップへ戻る",
+        notFound: {
+          title: "ページがありません",
+          quote: "URLが正しいか確認するか、検索から探してください。",
+          linkText: "トップへ",
+        },
         footer: {
           message: "AGPL-3.0-only",
           copyright: "© Takosumi contributors",
@@ -226,6 +231,11 @@ export default defineConfig({
         darkModeSwitchLabel: "Theme",
         sidebarMenuLabel: "Menu",
         returnToTopLabel: "Return to top",
+        notFound: {
+          title: "Page not found",
+          quote: "Check the URL or use search to find a page.",
+          linkText: "Home",
+        },
         footer: {
           message: "AGPL-3.0-only",
           copyright: "© Takosumi contributors",
