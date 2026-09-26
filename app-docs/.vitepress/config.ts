@@ -52,6 +52,8 @@ const enSidebar: DefaultTheme.SidebarMulti = {
   ],
 };
 
+const base = process.env.VITEPRESS_BASE ?? "/docs/";
+
 const config: UserConfig = {
   title: "Takosumi",
   description: "Takosumi hosted service documentation",
@@ -59,7 +61,13 @@ const config: UserConfig = {
   // Local-search indexing mutates MiniSearch as pages finish. A single worker
   // keeps document ids and content-hashed chunks reproducible for release pins.
   buildConcurrency: 1,
-  base: process.env.VITEPRESS_BASE ?? "/docs/",
+  base,
+  head: [
+    [
+      "link",
+      { rel: "icon", type: "image/svg+xml", href: `${base}favicon.svg` },
+    ],
+  ],
   cleanUrls: true,
   lastUpdated: true,
   vite: {
@@ -133,6 +141,8 @@ const config: UserConfig = {
     },
   },
   themeConfig: {
+    // Same mark as app.takosumi.com and the landing (website/public/tako.png).
+    logo: "/tako.png",
     socialLinks: [
       { icon: "github", link: "https://github.com/tako0614/takosumi" },
     ],

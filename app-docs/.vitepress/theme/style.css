@@ -1,0 +1,77 @@
+/* Takosumi brand — the landing's ink/red tokens (website/src/styles/tokens.css).
+ * Dark mode adopts the product surface verbatim (#0a0a0a ink + 朱 red accent);
+ * light mode keeps white paper with a darker red for AA link contrast.
+ * app-docs has no node_modules of its own, so the variable-font files are
+ * vendored next to this stylesheet (OFL-licensed, latin/wght subset, same
+ * files docs/ loads through @fontsource-variable). */
+@font-face {
+  font-family: "Bricolage Grotesque Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 800;
+  src: url(./fonts/bricolage-grotesque-latin-wght-normal.woff2)
+    format("woff2-variations");
+}
+
+@font-face {
+  font-family: "JetBrains Mono Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url(./fonts/jetbrains-mono-latin-wght-normal.woff2)
+    format("woff2-variations");
+}
+
+:root {
+  --vp-c-brand-1: #dc2626;
+  --vp-c-brand-2: #ef4444;
+  --vp-c-brand-3: #f87171;
+  --vp-c-brand-soft: rgba(220, 38, 38, 0.14);
+
+  --vp-font-family-base:
+    "Bricolage Grotesque Variable", "Bricolage Grotesque", -apple-system,
+    BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", "Yu Gothic UI",
+    "Segoe UI", Roboto, sans-serif;
+  --vp-font-family-mono:
+    "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular,
+    Menlo, Consolas, monospace;
+}
+
+.dark {
+  --vp-c-brand-1: #f87171;
+  --vp-c-brand-2: #ef4444;
+  --vp-c-brand-3: #dc2626;
+  --vp-c-brand-soft: rgba(239, 68, 68, 0.16);
+
+  --vp-c-bg: #0a0a0a;
+  --vp-c-bg-alt: #141414;
+  --vp-c-bg-elv: #141414;
+  --vp-c-bg-soft: #1a1a1a;
+  --vp-c-divider: #262626;
+  --vp-c-gutter: #262626;
+  --vp-c-text-1: #fafafa;
+  --vp-c-text-2: #a3a3a3;
+  --vp-c-text-3: #6b6b6b;
+
+  --vp-code-bg: #1a1a1a;
+  --vp-code-block-bg: #141414;
+}
+
+.vp-doc a {
+  text-underline-offset: 0.18em;
+}
+
+.vp-doc table {
+  display: table;
+  width: 100%;
+}
+
+/* VitePress keeps the mobile sidebar in the DOM while it is translated away.
+ * Hiding the closed state prevents its links from becoming keyboard stops
+ * during the short window before the client-side inert marker is applied. */
+@media (max-width: 959px) {
+  .VPSidebar:not(.open) {
+    visibility: hidden;
+    pointer-events: none;
+  }
+}
