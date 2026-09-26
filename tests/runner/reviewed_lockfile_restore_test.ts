@@ -78,6 +78,18 @@ esac
       action: "apply",
       runId,
       request: {
+        sourceBuild: {
+          commands: [
+            {
+              argv: [
+                process.execPath,
+                "-e",
+                "await Bun.write('build.marker', 'ready')",
+              ],
+            },
+          ],
+          outputs: ["build.marker"],
+        },
         generatedRoot: {
           files: {
             "main.tf":
@@ -105,7 +117,14 @@ esac
       });
     const result = await handleRunnerRequest(applyRequest());
     expect(result.status).toBe(200);
-    expect((await result.json()).status).toBe("succeeded");
+    const resultBody = await result.json();
+    expect(resultBody.status).toBe("succeeded");
+    expect(
+      resultBody.phaseTimings.some(
+        (timing: { phase: string; durationMs: number }) =>
+          timing.phase === "source_build" && timing.durationMs >= 0,
+      ),
+    ).toBe(true);
     expect(
       await readFile(
         join(workspace.generatedRootDir, ".terraform.lock.hcl"),

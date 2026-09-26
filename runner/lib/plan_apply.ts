@@ -163,6 +163,7 @@ export async function runGeneratedRootPlan(
   );
 
   const workspace = await prepareGeneratedRootWorkspace(runId);
+  const timer = new RunnerPhaseTimer();
   let sourceCommit: string | undefined;
   let buildLog: string | undefined;
 
@@ -182,12 +183,17 @@ export async function runGeneratedRootPlan(
       throw new Error("operator_module source requires operatorModule");
     }
     await ensureSourceAvailable(source, workspace.sourceRoot);
-    buildLog = await runSourceBuild(sourceBuild, workspace.sourceRoot, {
-      ...(commandContext.timeoutMs
-        ? { timeoutMs: commandContext.timeoutMs }
-        : {}),
-      ...(commandContext.signal ? { signal: commandContext.signal } : {}),
-    });
+    buildLog = await runTimedSourceBuild(
+      sourceBuild,
+      workspace.sourceRoot,
+      {
+        ...(commandContext.timeoutMs
+          ? { timeoutMs: commandContext.timeoutMs }
+          : {}),
+        ...(commandContext.signal ? { signal: commandContext.signal } : {}),
+      },
+      timer,
+    );
     const moduleDir = resolveModulePath(
       workspace.sourceRoot,
       source.modulePath,
@@ -255,6 +261,7 @@ export async function runGeneratedRootPlan(
           ...(sourceCommit ? { sourceCommit } : {}),
         },
       },
+      timer,
     );
   } finally {
     await preparedCredentials.cleanup();
@@ -289,14 +296,20 @@ export async function runDirectRootPlan(
     undefined,
   );
   const workspace = workspaceForRun(runId);
+  const timer = new RunnerPhaseTimer();
   await mkdir(workspace.root, { recursive: true });
   await ensureSourceAvailable(source, workspace.sourceRoot);
-  const buildLog = await runSourceBuild(sourceBuild, workspace.sourceRoot, {
-    ...(commandContext.timeoutMs
-      ? { timeoutMs: commandContext.timeoutMs }
-      : {}),
-    ...(commandContext.signal ? { signal: commandContext.signal } : {}),
-  });
+  const buildLog = await runTimedSourceBuild(
+    sourceBuild,
+    workspace.sourceRoot,
+    {
+      ...(commandContext.timeoutMs
+        ? { timeoutMs: commandContext.timeoutMs }
+        : {}),
+      ...(commandContext.signal ? { signal: commandContext.signal } : {}),
+    },
+    timer,
+  );
   const moduleDir = resolveModulePath(workspace.sourceRoot, source.modulePath);
   await assertDirectory(moduleDir, "source module directory");
   await assertRealPathInsideSourceRoot(
@@ -354,7 +367,7 @@ export async function runDirectRootPlan(
         : {}),
       ...(buildLog ? { buildLog } : {}),
       extra: { ...(sourceCommit ? { sourceCommit } : {}) },
-    });
+    }, timer);
   } finally {
     await preparedCredentials.cleanup();
   }
@@ -367,12 +380,12 @@ export async function initPlanAndBuildResponse(
   workspace: RunWorkspace,
   moduleDir: string,
   options: PlanResponseOptions,
+  timer = new RunnerPhaseTimer(),
 ): Promise<JsonRecord> {
   const { operation } = options;
   if (options.refreshOnly && operation === "destroy") {
     throw new Error("refreshOnly cannot be combined with destroy");
   }
-  const timer = new RunnerPhaseTimer();
   const strictMirrorInit = await prepareStrictProviderMirrorInit(
     workspace,
     options.commandContext,
@@ -657,6 +670,7 @@ export async function runReviewedPlanApply(
     signal,
   );
   const workspace = workspaceForRun(runId);
+  const timer = new RunnerPhaseTimer();
   const planArtifact = parsePlanArtifact(request);
   assertNoLegacyArtifactDispatch(request);
   await verifyPlanArtifact(workspace.planPath, planArtifact);
@@ -675,14 +689,15 @@ export async function runReviewedPlanApply(
         generatedRoot,
         operatorModule,
         sourceBuild,
+        timer,
       )
     : await restoreDirectRootApplyWorkspace(
         runId,
         parseSource(request),
         commandContext,
         sourceBuild,
+        timer,
       );
-  const timer = new RunnerPhaseTimer();
   const reviewedProviderLockDigest = await timer.measure(
     "provider_lockfile_restore",
     () => restoreReviewedProviderLockfile(workspace, moduleDir, request),
@@ -886,6 +901,7 @@ export async function restoreGeneratedRootApplyWorkspace(
   generatedRoot: GeneratedRoot,
   operatorModule?: OperatorModule,
   sourceBuild?: SourceBuildConfig,
+  timer?: RunnerPhaseTimer,
 ): Promise<string> {
   const workspace = workspaceForRun(runId);
   await mkdir(workspace.root, { recursive: true });
@@ -905,10 +921,15 @@ export async function restoreGeneratedRootApplyWorkspace(
       throw new Error("operator_module source requires operatorModule");
     }
     await ensureSourceAvailable(source, workspace.sourceRoot);
-    await runSourceBuild(sourceBuild, workspace.sourceRoot, {
-      ...(context.timeoutMs ? { timeoutMs: context.timeoutMs } : {}),
-      ...(context.signal ? { signal: context.signal } : {}),
-    });
+    await runTimedSourceBuild(
+      sourceBuild,
+      workspace.sourceRoot,
+      {
+        ...(context.timeoutMs ? { timeoutMs: context.timeoutMs } : {}),
+        ...(context.signal ? { signal: context.signal } : {}),
+      },
+      timer,
+    );
     const moduleDir = resolveModulePath(
       workspace.sourceRoot,
       source.modulePath,
@@ -934,14 +955,20 @@ export async function restoreDirectRootApplyWorkspace(
   source: OpenTofuModuleSource,
   context: CommandContext,
   sourceBuild?: SourceBuildConfig,
+  timer?: RunnerPhaseTimer,
 ): Promise<string> {
   const workspace = workspaceForRun(runId);
   await mkdir(workspace.root, { recursive: true });
   await ensureSourceAvailable(source, workspace.sourceRoot);
-  await runSourceBuild(sourceBuild, workspace.sourceRoot, {
-    ...(context.timeoutMs ? { timeoutMs: context.timeoutMs } : {}),
-    ...(context.signal ? { signal: context.signal } : {}),
-  });
+  await runTimedSourceBuild(
+    sourceBuild,
+    workspace.sourceRoot,
+    {
+      ...(context.timeoutMs ? { timeoutMs: context.timeoutMs } : {}),
+      ...(context.signal ? { signal: context.signal } : {}),
+    },
+    timer,
+  );
   const moduleDir = resolveModulePath(workspace.sourceRoot, source.modulePath);
   await assertDirectory(moduleDir, "source module directory");
   await assertRealPathInsideSourceRoot(
@@ -952,6 +979,18 @@ export async function restoreDirectRootApplyWorkspace(
   await restoreUploadedState(workspace, moduleDir);
   await writeModuleInfo(workspace, moduleDir);
   return moduleDir;
+}
+
+async function runTimedSourceBuild(
+  sourceBuild: SourceBuildConfig | undefined,
+  sourceRoot: string,
+  options: { readonly timeoutMs?: number; readonly signal?: AbortSignal },
+  timer?: RunnerPhaseTimer,
+): Promise<string | undefined> {
+  const run = () => runSourceBuild(sourceBuild, sourceRoot, options);
+  return sourceBuild && timer
+    ? await timer.measure("source_build", run)
+    : await run();
 }
 
 // Fresh per-run workspace for a generated-root plan. Preserve a SourceSnapshot
