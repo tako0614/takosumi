@@ -12,7 +12,8 @@ apply, state, outputs, audit, usage, and prepaid credit together.
 
 1. Sign in to the [Dashboard](https://app.takosumi.com/) and select a Workspace.
 2. Add a repository from the Store or by Git URL.
-3. Select the provider connections required by the module.
+3. Select a Connection for each displayed connection requirement, using its module name and
+   alias to distinguish entries. Providers that do not require credentials need no Connection.
 4. Review the plan and quote, then apply it.
 5. Open the service from the Run outputs or an Interface published by the app.
 

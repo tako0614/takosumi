@@ -128,7 +128,11 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/plan-upd
 
 ## 失敗したとき
 
-Run が失敗すると失敗として記録され、状態は直前の StateVersion のままです。
+Run の失敗だけでは、provider 側の変更が戻ったかどうかは分かりません。provider の実行失敗時に
+状態が保存されて StateVersion が進む場合も、apply 後の lifecycle action の失敗で適用済みの状態が
+残る場合もあります。Run の結果とログに加え、Run に StateVersion が記録されているか、Capsule の現在の
+StateVersion と状態も確認してから対応してください。結果が不明な場合は provider 側の状態も確認し、
+何が適用されたか分からないまま apply を繰り返さないでください。
 
 ## 履歴
 

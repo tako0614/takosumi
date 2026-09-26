@@ -101,6 +101,10 @@ apply まで続けられます。それ以外は Run 画面で停止します。
 標準の入口は dashboard の `/new` です。Git URL を入れると scan で実在 module を求め、
 必要な変数と provider を提示します。ref は必要に応じて指定できます。
 
+Connection の選択が必要な項目は画面に表示されます。provider source だけでは区別できないため、
+項目ごとに表示される module 名と alias を確認して、それぞれに Connection を選びます。
+認証情報が不要な provider に Connection は必要ありません。
+
 外部のアプリから利用者をこの画面へ送るためのリンクがあります。
 
 ```text
