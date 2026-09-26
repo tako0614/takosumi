@@ -1,4 +1,4 @@
-# Takosumi hosted serviceflare deploy runbook
+# Takosumi Cloudflare deploy runbook
 
 This runbook covers the public Takosumi website/docs property and the managed account surface.
 
@@ -8,8 +8,9 @@ This runbook covers the public Takosumi website/docs property and the managed ac
 
 The account plane (OIDC issuer / dashboard API / Capsule Run projection / billing) no
 longer ships as a separate account-plane Worker. It runs **in-process** inside
-the operator Takosumi platform worker, at `app.takosumi.com` for official Cloud
-or at the explicit origin selected by another operator/self-hoster. The
+the operator Takosumi platform worker, at `app.takosumi.com` for the
+official hosted service or at the explicit origin selected by another
+operator/self-hoster. The
 account-plane source lives at `deploy/accounts-cloudflare/src/{handler,routes}.ts`
 (aliased as `@takosjp/takosumi-accounts-worker`); the host worker owns the
 actual `wrangler.toml`, bindings, secrets, routes, and deploy command.
@@ -75,7 +76,7 @@ Smoke:
 ```bash
 curl -I https://takosumi.com/
 curl -I https://takosumi.com/docs/
-curl -I https://takosumi.com/docs/reference/model
+curl -I https://takosumi.com/docs/reference/api
 curl -I https://app.takosumi.com/docs/
 curl -I https://app.takosumi.com/docs/endpoints
 ```

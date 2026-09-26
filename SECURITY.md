@@ -13,8 +13,8 @@ before sending it.
 This policy covers the Takosumi OSS control plane, Accounts/OIDC plane,
 dashboard, CLI, reference runner, OpenTofu modules, and operator reference
 composition in this repository. Closed Takosumi hosted service implementation and
-official managed capacity follow the Cloud operator policy in addition to this
-baseline.
+official managed capacity follow the hosted service operator policy in addition
+to this baseline.
 
 Only the current `main` branch and immutable releases still supported by the
 operator are eligible for security fixes. Pre-release compatibility surfaces

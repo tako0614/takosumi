@@ -3,12 +3,13 @@
 This directory is **not a standalone deployable Worker anymore**. It is the
 Cloudflare reference entry point for the account-plane handler
 (session cookie, upstream sign-in, OIDC issuer/client registration, dashboard
-account-plane facade, Interface OAuth, and any
-Cloud-only billing hooks supplied by the host composition), consumed in-process
-by the operator Takosumi platform worker:
+account-plane facade, Interface OAuth, and any hosted-service-only
+billing hooks supplied by the host composition), consumed in-process by
+the operator Takosumi platform worker:
 
 - the operator Takosumi platform worker in `takosumi/deploy/platform/`, served at
-  the operator's explicit origin (`app.takosumi.com` for official Cloud).
+  the operator's explicit origin (`app.takosumi.com` for the official hosted
+  service).
 
 The self-hosted Takos product worker template in `takos/deploy/cloudflare/` is an
 external OIDC/control-plane client. It does not mount this handler.
