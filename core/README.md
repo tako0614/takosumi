@@ -27,7 +27,7 @@ PORT=8788 bun core/index.ts
 
 This `core/api` Hono table is **not** edge-reachable. It is the in-process deploy-control seam dialed by the accounts
 composition; the single edge-public surface is `/api/v1/*`, owned by the accounts router (see
-[`docs/reference/deploy-control-api.md`](../docs/reference/deploy-control-api.md)). The seam uses the current
+[`docs/reference/api.md`](../docs/reference/api.md)). The seam uses the current
 Workspace / Capsule / StateVersion route vocabulary:
 
 - `POST /internal/v1/workspaces` / `GET /internal/v1/workspaces`
@@ -115,4 +115,4 @@ Postgres tables and any generated SQL must be folded into the checksumed `Storag
 ## See also
 
 - `docs/reference/cli.md` — operator CLI
-- `docs/reference/deploy-control-api.md` — public `/api` surface
+- `docs/reference/api.md` — public `/api` surface

@@ -104,6 +104,7 @@ Takos は別の製品です。Accounts / deploy-control / dashboard / runner を
 - [CLI リファレンス](docs/reference/cli.md)
 - [設定リファレンス](docs/reference/configuration.md)
 - [運用手順](docs/operations/README.md)
+- [公開プロパティの deploy runbook](DEPLOY.md) — この repo の operator が持つ hosted 面の手順
 
 ## 開発
 
