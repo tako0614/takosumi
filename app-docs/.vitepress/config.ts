@@ -119,6 +119,10 @@ const config: UserConfig = {
       ["meta", { property: "og:description", content: ogDescription }],
       [
         "meta",
+        { property: "og:locale", content: route.startsWith("en/") ? "en_US" : "ja_JP" },
+      ],
+      [
+        "meta",
         {
           property: "og:url",
           content: new URL(`${base}${route}`, "https://app.takosumi.com/").href,
