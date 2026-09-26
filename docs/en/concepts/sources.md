@@ -104,13 +104,9 @@ The standard entrance is `/new` in the dashboard. Give it a Git URL and it disco
 real modules from the scan, then shows the variables and providers they need. A ref may
 be supplied when needed.
 
-If the selected module needs more than one provider, choose a matching Connection for
-each provider shown. For example, a module declaring both AWS and Cloudflare needs an
-AWS Connection and a Cloudflare Connection. Repository display hints and Connection names
-do not decide which connection is used. `.well-known/takosumi.json` can provide input
-presentation hints, but it does not replace a provider Connection. See
-[Credentials](./credentials.md) for creating and matching Connections, and the
-[Run model](./run-model.md) for reviewing a plan and what to do after a failed Run.
+Connection requirements appear on screen. Since a provider source alone may not
+distinguish them, check the module name and alias shown for each requirement and select a
+Connection for each one. Providers that do not require credentials need no Connection.
 
 There is a link form for sending users into that screen from another application.
 

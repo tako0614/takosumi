@@ -135,12 +135,11 @@ Approval can be given for the group at once through
 
 ## When a Run fails
 
-A failed Run is recorded as failed, and the state Takosumi records stays at the last
-successful StateVersion. Start by checking the Run status and logs. If the outcome of an
-apply is unclear, also check the provider-side state; do not repeat the apply while its
-result is uncertain. To continue, create and review a new plan. To undo a successful
-change, do not rewind the history: create a rollback plan from the StateVersion, review
-it, and apply it ([State and outputs](./state-and-outputs.md)).
+A failed Run does not by itself show whether provider changes were rolled back. A provider
+execution failure can persist a new StateVersion, and a lifecycle failure after apply can
+leave the applied state current. Check the Run result and logs, any StateVersion it records,
+and the Capsule's current StateVersion and status before recovery. If the provider outcome
+is unclear, inspect provider-side state; do not repeat apply until you know what was committed.
 
 ## History
 
