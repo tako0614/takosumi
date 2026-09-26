@@ -1,3 +1,6 @@
+import "@fontsource-variable/bricolage-grotesque";
+import "@fontsource-variable/jetbrains-mono";
+
 import DefaultTheme from "vitepress/theme";
 import type { Theme } from "vitepress";
 

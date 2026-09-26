@@ -9,6 +9,8 @@
     "preview": "vitepress preview"
   },
   "devDependencies": {
+    "@fontsource-variable/bricolage-grotesque": "^5.2.10",
+    "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "vitepress": "^1.5.0"
   },
   "overrides": {

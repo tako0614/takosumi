@@ -128,12 +128,20 @@ const enSidebar: DefaultTheme.SidebarMulti = {
   ],
 };
 
+const base = process.env.VITEPRESS_BASE ?? "/docs/";
+
 export default defineConfig({
   title: "Takosumi",
   description:
     "Git-based OpenTofu control plane with provider-neutral connections and interfaces",
   lang: "ja",
-  base: process.env.VITEPRESS_BASE ?? "/docs/",
+  base,
+  head: [
+    [
+      "link",
+      { rel: "icon", type: "image/svg+xml", href: `${base}favicon.svg` },
+    ],
+  ],
   // Public docs must not publish product-local design notes or operator runbooks.
   srcExclude: ["internal/**/*.md", "operations/**/*.md"],
   cleanUrls: true,
@@ -209,6 +217,8 @@ export default defineConfig({
     },
   },
   themeConfig: {
+    // Same mark as app.takosumi.com and the landing (website/public/tako.png).
+    logo: "/tako.png",
     socialLinks: [
       { icon: "github", link: "https://github.com/tako0614/takosumi" },
     ],
