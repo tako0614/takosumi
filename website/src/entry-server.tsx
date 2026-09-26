@@ -38,9 +38,9 @@ export default createHandler(() => (
           <meta property="og:type" content="website" />
           <meta
             property="og:image"
-            content="https://takosumi.com/brand/og-cover.svg"
+            content="https://takosumi.com/brand/og-cover.png"
           />
-          <meta property="og:image:type" content="image/svg+xml" />
+          <meta property="og:image:type" content="image/png" />
           <meta property="og:image:width" content="1200" />
           <meta property="og:image:height" content="630" />
           <meta property="og:image:alt" content={SITE_TITLE} />
@@ -49,7 +49,7 @@ export default createHandler(() => (
           <meta name="twitter:description" content={SITE_DESC} />
           <meta
             name="twitter:image"
-            content="https://takosumi.com/brand/og-cover.svg"
+            content="https://takosumi.com/brand/og-cover.png"
           />
           <meta name="theme-color" content="#0a0a0a" />
           <link rel="icon" href="/tako.png" />
