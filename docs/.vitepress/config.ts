@@ -141,7 +141,28 @@ export default defineConfig({
       "link",
       { rel: "icon", type: "image/svg+xml", href: `${base}favicon.svg` },
     ],
+    ["meta", { property: "og:type", content: "website" }],
+    ["meta", { property: "og:site_name", content: "Takosumi" }],
+    ["meta", { name: "twitter:card", content: "summary" }],
   ],
+  transformHead({ pageData, title, description }) {
+    const route = pageData.relativePath
+      .replace(/(^|\/)index\.md$/u, "$1")
+      .replace(/\.md$/u, "");
+    return [
+      ["meta", { property: "og:title", content: title }],
+      ["meta", { property: "og:description", content: description }],
+      [
+        "meta",
+        {
+          property: "og:url",
+          content: new URL(`${base}${route}`, "https://takosumi.com/").href,
+        },
+      ],
+      ["meta", { name: "twitter:title", content: title }],
+      ["meta", { name: "twitter:description", content: description }],
+    ];
+  },
   // Public docs must not publish product-local design notes or operator runbooks.
   srcExclude: ["internal/**/*.md", "operations/**/*.md"],
   cleanUrls: true,
