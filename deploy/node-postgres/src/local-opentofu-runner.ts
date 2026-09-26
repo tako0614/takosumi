@@ -59,6 +59,7 @@ import type {
 import { RUN_EXECUTION_EVIDENCE_CONTRACT } from "../../../contract/runs.ts";
 import { assertRunExecutionEvidence } from "../../../contract/runs.ts";
 import { handleRunnerRequest } from "../../../runner/entrypoint.ts";
+import { readResponseBytesWithCap } from "../../../runner/lib/exec.ts";
 
 export const LOCAL_OPENTOFU_RUNNER_PROFILE_ID = "local-opentofu";
 const PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES = 1024 * 1024;
@@ -592,6 +593,97 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     };
   }
 
+  private async restoreProviderLockArtifact(
+    applyRunId: string,
+    planRun: OpenTofuApplyJob["planRun"],
+    planArtifact: OpenTofuPlanArtifact,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const artifact = planRun.providerLockArtifact;
+    if (artifact === undefined) return; // Historical PlanRun without a lock artifact.
+    if (artifact === null) {
+      if (planRun.providerLockDigest) {
+        throw new Error("provider-free Plan has an unexpected lock digest");
+      }
+      return;
+    }
+    const expectedRef = `local-opentofu://runs/${planRun.id}/provider-lockfile`;
+    const expectedDigest = planRun.providerLockDigest;
+    const expectedSize = artifact.sizeBytes;
+    if (
+      artifact.kind !== "local" ||
+      artifact.ref !== expectedRef ||
+      runnerLocalPlanRunId(planArtifact) !== planRun.id ||
+      (planRun.planDigest !== undefined &&
+        planArtifact.digest !== planRun.planDigest) ||
+      !expectedDigest ||
+      !/^sha256:[0-9a-f]{64}$/u.test(expectedDigest) ||
+      artifact.digest !== expectedDigest ||
+      expectedSize === undefined ||
+      !Number.isSafeInteger(expectedSize) ||
+      expectedSize < 0 ||
+      expectedSize > PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES ||
+      (artifact.contentType !== undefined &&
+        artifact.contentType !== PROVIDER_LOCKFILE_CONTENT_TYPE)
+    ) {
+      throw new Error("local reviewed Plan provider lock authority is invalid");
+    }
+    const read = this.stateStore.readProviderLockfile;
+    if (typeof read !== "function") {
+      throw new Error("local provider lockfile artifact store is unavailable");
+    }
+    const committed = await read.call(this.stateStore, expectedRef);
+    if (
+      !committed ||
+      committed.ref !== expectedRef ||
+      committed.runId !== planRun.id ||
+      committed.digest !== expectedDigest ||
+      committed.sizeBytes !== expectedSize ||
+      committed.bytes.byteLength !== expectedSize
+    ) {
+      throw new Error(
+        "local reviewed Plan provider lock immutable identity mismatch",
+      );
+    }
+    await assertDigest(
+      committed.bytes,
+      expectedDigest,
+      "reviewed provider lockfile",
+    );
+    const response = await this.transport.fetch(
+      `/runs/${encodeURIComponent(applyRunId)}/provider-lockfile/restore`,
+      {
+        method: "PUT",
+        headers: { "content-type": PROVIDER_LOCKFILE_CONTENT_TYPE },
+        body: arrayBufferFromBytes(committed.bytes),
+        ...(signal ? { signal } : {}),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(
+        `local reviewed Plan provider lock restore failed: ${response.status}`,
+      );
+    }
+    const acknowledged: unknown = JSON.parse(
+      new TextDecoder().decode(
+        await readResponseBytesWithCap(
+          response,
+          4096,
+          "provider lock restore acknowledgement",
+        ),
+      ),
+    );
+    if (
+      !isRecord(acknowledged) ||
+      acknowledged.digest !== expectedDigest ||
+      acknowledged.sizeBytes !== expectedSize
+    ) {
+      throw new Error(
+        "local reviewed Plan provider lock restore acknowledgement mismatch",
+      );
+    }
+  }
+
   async apply(
     job: OpenTofuApplyJob,
     control?: RunExecutionControl,
@@ -621,6 +713,12 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       this.transport,
       job.applyRun.id,
       job.planRun.id,
+      job.planArtifact,
+      control?.signal,
+    );
+    await this.restoreProviderLockArtifact(
+      job.applyRun.id,
+      job.planRun,
       job.planArtifact,
       control?.signal,
     );
@@ -731,6 +829,12 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       this.transport,
       job.applyRun.id,
       job.planRun.id,
+      job.planArtifact,
+      control?.signal,
+    );
+    await this.restoreProviderLockArtifact(
+      job.applyRun.id,
+      job.planRun,
       job.planArtifact,
       control?.signal,
     );

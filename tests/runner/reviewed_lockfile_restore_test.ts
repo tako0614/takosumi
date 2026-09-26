@@ -38,6 +38,12 @@ test("apply restores the exact reviewed lock and initializes without registry re
       join(workspace.sourceRoot, "main.tf"),
       `terraform { required_providers { null = { source = "hashicorp/null" } } }\nresource "null_resource" "example" {}\n`,
     );
+    // The nested module lock is not the generated root's dependency lock.
+    // A successful Plan may legitimately seal different root lock bytes.
+    await writeFile(
+      join(workspace.sourceRoot, ".terraform.lock.hcl"),
+      'provider "registry.opentofu.org/hashicorp/null" { version = "0.0.0" }\n',
+    );
     await writeFile(workspace.planPath, planBytes);
     await writeFile(
       join(bin, "tofu"),
@@ -108,7 +114,7 @@ esac
     ).toBe(LOCK);
 
     await writeFile(
-      join(workspace.sourceRoot, ".terraform.lock.hcl"),
+      join(workspace.generatedRootDir, ".terraform.lock.hcl"),
       'provider "registry.opentofu.org/hashicorp/null" { version = "0.0.0" }\n',
     );
     const conflicted = await handleRunnerRequest(applyRequest());
@@ -116,7 +122,7 @@ esac
     expect((await conflicted.json()).stderr).toContain(
       "source module lockfile conflicts with reviewed Plan lockfile",
     );
-    await rm(join(workspace.sourceRoot, ".terraform.lock.hcl"));
+    await writeFile(join(workspace.generatedRootDir, ".terraform.lock.hcl"), LOCK);
     await rm(join(workspace.root, "restored-provider-lockfile.hcl"));
     const missing = await handleRunnerRequest(applyRequest());
     expect(missing.status).toBe(500);

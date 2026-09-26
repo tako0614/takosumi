@@ -23,7 +23,7 @@ import {
 } from "./credentials.ts";
 
 export async function readResponseBytesWithCap(
-  response: Response,
+  response: Pick<Request, "headers" | "body">,
   maxBytes: number,
   label: string,
 ): Promise<Uint8Array> {

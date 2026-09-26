@@ -1226,9 +1226,15 @@ async function restoreReviewedProviderLockfile(
     }
     return undefined;
   }
+  const planRunId = stringField(planRun, "id");
+  const artifactKind = stringField(artifact, "kind");
   if (
     !isRecord(artifact) ||
-    stringField(artifact, "kind") !== "object-storage"
+    (artifactKind !== "object-storage" && artifactKind !== "local") ||
+    (artifactKind === "local" &&
+      (!planRunId ||
+        stringField(artifact, "ref") !==
+          `local-opentofu://runs/${planRunId}/provider-lockfile`))
   ) {
     throw new Error("reviewed Plan provider lock artifact is invalid");
   }
@@ -1247,19 +1253,6 @@ async function restoreReviewedProviderLockfile(
     throw new Error(
       "reviewed Plan provider lock bytes were not restored exactly",
     );
-  }
-  if (moduleDir === workspace.generatedRootDir) {
-    const childLock = await readProviderLockfileBytes(
-      join(workspace.childModuleDir, ".terraform.lock.hcl"),
-    );
-    if (
-      childLock !== undefined &&
-      (await digestBytes(childLock)) !== rawDigest
-    ) {
-      throw new Error(
-        "source module lockfile conflicts with reviewed Plan lockfile",
-      );
-    }
   }
   const target = join(moduleDir, ".terraform.lock.hcl");
   const existing = await readProviderLockfileBytes(target);

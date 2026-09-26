@@ -683,6 +683,8 @@ test("HTTP OpenTofu runner carries direct provider evidence through apply and de
   const installedDigest = `sha256:${"d".repeat(64)}`;
   const planBytes = new TextEncoder().encode("reviewed direct-provider plan");
   const planDigest = await sha256(planBytes);
+  const lockBytes = new TextEncoder().encode("# reviewed provider lock\n");
+  const lockDigest = await sha256(lockBytes);
   const stateBytes = new TextEncoder().encode('{"serial":1}');
   const installation = {
     provider,
@@ -715,6 +717,15 @@ test("HTTP OpenTofu runner carries direct provider evidence through apply and de
         )
       ) {
         return Response.json({ ok: true });
+      }
+      if (
+        request.method === "PUT" &&
+        /^\/runs\/(apply_http_direct|destroy_http_direct)\/provider-lockfile\/restore$/u.test(
+          url.pathname,
+        )
+      ) {
+        expect(new Uint8Array(await request.arrayBuffer())).toEqual(lockBytes);
+        return Response.json({ digest: lockDigest, sizeBytes: lockBytes.byteLength });
       }
       const runMatch =
         /^\/runs\/(apply_http_direct|destroy_http_direct)$/u.exec(url.pathname);
@@ -760,6 +771,12 @@ test("HTTP OpenTofu runner carries direct provider evidence through apply and de
     },
     readRawOutput: async () => undefined,
     commitRawOutput: async <T>(artifact: T): Promise<T> => artifact,
+    readProviderLockfile: async (ref: string) => {
+      const runId = /^local-opentofu:\/\/runs\/(plan_http_apply|plan_http_destroy)\/provider-lockfile$/u.exec(ref)?.[1];
+      return runId
+        ? { ref, runId, digest: lockDigest, sizeBytes: lockBytes.byteLength, bytes: lockBytes }
+        : undefined;
+    },
   };
 
   try {
@@ -783,7 +800,17 @@ test("HTTP OpenTofu runner carries direct provider evidence through apply and de
     ];
     const apply = await runner.apply({
       applyRun: { id: "apply_http_direct" },
-      planRun: { id: "plan_http_apply", planDigest },
+      planRun: {
+        id: "plan_http_apply",
+        planDigest,
+        providerLockDigest: lockDigest,
+        providerLockArtifact: {
+          kind: "local",
+          ref: "local-opentofu://runs/plan_http_apply/provider-lockfile",
+          digest: lockDigest,
+          sizeBytes: lockBytes.byteLength,
+        },
+      },
       planArtifact: {
         kind: "runner-local",
         ref: "runner-local://plan_http_apply/tfplan",
@@ -810,7 +837,17 @@ test("HTTP OpenTofu runner carries direct provider evidence through apply and de
 
     const destroy = await runner.destroy({
       applyRun: { id: "destroy_http_direct" },
-      planRun: { id: "plan_http_destroy", planDigest },
+      planRun: {
+        id: "plan_http_destroy",
+        planDigest,
+        providerLockDigest: lockDigest,
+        providerLockArtifact: {
+          kind: "local",
+          ref: "local-opentofu://runs/plan_http_destroy/provider-lockfile",
+          digest: lockDigest,
+          sizeBytes: lockBytes.byteLength,
+        },
+      },
       planArtifact: {
         kind: "runner-local",
         ref: "runner-local://plan_http_destroy/tfplan",
@@ -837,12 +874,90 @@ test("HTTP OpenTofu runner carries direct provider evidence through apply and de
     expect(requests).toEqual([
       "GET /runs/plan_http_apply/artifacts/tfplan",
       "PUT /runs/apply_http_direct/artifacts/tfplan",
+      "PUT /runs/apply_http_direct/provider-lockfile/restore",
       "POST /runs/apply_http_direct",
       "GET /runs/apply_http_direct/artifacts/tfstate",
       "GET /runs/plan_http_destroy/artifacts/tfplan",
       "PUT /runs/destroy_http_direct/artifacts/tfplan",
+      "PUT /runs/destroy_http_direct/provider-lockfile/restore",
       "POST /runs/destroy_http_direct",
       "GET /runs/destroy_http_direct/artifacts/tfstate",
+    ]);
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("local reviewed Plan refuses a foreign lock ref before provider dispatch", async () => {
+  const planBytes = new TextEncoder().encode("reviewed plan");
+  const planDigest = await sha256(planBytes);
+  const lockDigest = await sha256(new TextEncoder().encode("# lock\n"));
+  const requests: string[] = [];
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      requests.push(`${request.method} ${path}`);
+      if (request.method === "GET" && path === "/runs/plan_owned/artifacts/tfplan") {
+        return new Response(planBytes);
+      }
+      if (request.method === "PUT" && path === "/runs/apply_foreign/artifacts/tfplan") {
+        return Response.json({ ok: true });
+      }
+      return Response.json({ error: "must not dispatch" }, { status: 500 });
+    },
+  });
+  try {
+    const runner = createHttpOpenTofuRunner({
+      stateStore: {
+        read: async () => undefined,
+        commit: async <T>(artifact: T): Promise<T> => artifact,
+        readRawOutput: async () => undefined,
+        commitRawOutput: async <T>(artifact: T): Promise<T> => artifact,
+        readProviderLockfile: async () => {
+          throw new Error("foreign ref must be rejected before store access");
+        },
+      },
+      archiveStore: {
+        write: async () => {},
+        read: async () => {
+          throw new Error("not used");
+        },
+      },
+      baseUrl: server.url.href,
+    });
+    await expect(
+      runner.apply({
+        applyRun: { id: "apply_foreign" },
+        planRun: {
+          id: "plan_owned",
+          planDigest,
+          providerLockDigest: lockDigest,
+          providerLockArtifact: {
+            kind: "local",
+            ref: "local-opentofu://runs/other-plan/provider-lockfile",
+            digest: lockDigest,
+            sizeBytes: 7,
+          },
+        },
+        planArtifact: {
+          kind: "runner-local",
+          ref: "runner-local://plan_owned/tfplan",
+          digest: planDigest,
+        },
+        runnerProfile: { id: "opentofu-default", executorId: "opentofu.default" },
+        stateScope: {
+          workspaceId: "workspace_foreign",
+          subject: { kind: "resource", id: "resource_foreign" },
+          environment: "production",
+          generation: 1,
+          stateRef: "state://foreign",
+        },
+      } as Parameters<typeof runner.apply>[0]),
+    ).rejects.toThrow("local reviewed Plan provider lock authority is invalid");
+    expect(requests).toEqual([
+      "GET /runs/plan_owned/artifacts/tfplan",
+      "PUT /runs/apply_foreign/artifacts/tfplan",
     ]);
   } finally {
     server.stop(true);
