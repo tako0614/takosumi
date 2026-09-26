@@ -1482,6 +1482,8 @@ test.describe("Takosumi dashboard browser surface", () => {
     const destinations = page.locator(".iv-connection-list select");
     await expect(destinations).toHaveCount(2);
     const summary = page.getByTestId("install-source-summary");
+    await expect(page.getByRole("region", { name: "Configuration and connections" })).toBeVisible();
+    await expect(summary.locator("dt").first()).toHaveText("Configuration");
     await expect(summary.getByTestId("install-selected-module")).toHaveText("deploy/opentofu/portable");
     const packages = summary.getByTestId("install-provider-packages");
     await expect(packages.locator("li")).toHaveCount(3);

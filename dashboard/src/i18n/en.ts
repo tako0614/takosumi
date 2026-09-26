@@ -26,8 +26,8 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.moduleMissing":
     "No installable root module was found in this repository revision.",
   "installStore.moduleRequirements": "Provider details",
-  "installStore.sourceSummary": "OpenTofu source and connections",
-  "installStore.selectedModule": "OpenTofu module",
+  "installStore.sourceSummary": "Configuration and connections",
+  "installStore.selectedModule": "Configuration",
   "installStore.sourceScope": "Repository subtree",
   "installStore.detectedProviders": "Providers in this module",
   "installStore.noProviderPackages": "No provider packages were detected in this module.",

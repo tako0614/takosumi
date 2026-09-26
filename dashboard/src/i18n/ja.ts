@@ -31,8 +31,8 @@ export const ja = {
   "installStore.moduleMissing":
     "このリポジトリ版には追加できるroot moduleがありません。",
   "installStore.moduleRequirements": "プロバイダーの詳細",
-  "installStore.sourceSummary": "OpenTofuソースと接続",
-  "installStore.selectedModule": "OpenTofu module",
+  "installStore.sourceSummary": "構成と接続",
+  "installStore.selectedModule": "構成",
   "installStore.sourceScope": "リポジトリ内の範囲",
   "installStore.detectedProviders": "このmoduleのプロバイダー",
   "installStore.noProviderPackages": "このmoduleからプロバイダーパッケージは検出されませんでした。",
