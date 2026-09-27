@@ -617,6 +617,13 @@ runner image that advertises the refresh capability. While the Run remains
 fenced and active, the broker reissues only that binding ahead of expiry and
 the runner atomically replaces one private `0600` file; the provider rereads
 that path on each request. Plan and Apply have distinct runner refresh owners.
+
+The reference recipe catalog may separately describe a provider's renewable
+credential capability for release composition. That descriptive metadata is
+not part of an installed CredentialRecipe and does not opt any auth mode into
+renewable delivery; only an installed run-issued recipe's explicit descriptor
+does so.
+
 The controller checks the same running Run and held Capsule lease immediately
 before and after each mint, discarding a value if either check loses; the
 runner also requires an active matching claim. The runner never receives

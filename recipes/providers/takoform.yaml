@@ -11,6 +11,10 @@ env_names:
   - TAKOFORM_TOKEN
 required_env_groups:
   - [TAKOFORM_TOKEN]
+renewable_env_capability:
+  source_env_name: TAKOFORM_TOKEN
+  file_env_name: TAKOFORM_TOKEN_FILE
+  minimum_provider_version: 4.1.0
 auth_modes:
   token:
     runtime_inputs:

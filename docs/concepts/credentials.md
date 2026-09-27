@@ -111,6 +111,10 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/credential-recipes" \
 Recipe が無い provider も、generic な env / file の Connection を作れば同じように
 実行できます。
 
+参照 catalog に provider の renewable 対応が記述されていても、それは release composition
+向けの説明情報であり、登録された Recipe や Connection の opt-in にはなりません。
+実際の renewable delivery は、run-issued Recipe に明示された descriptor だけが有効です。
+
 ## 非 secret の設定と混ぜないでください
 
 endpoint や region のような非 secret の値は、Connection ではなく module の変数や

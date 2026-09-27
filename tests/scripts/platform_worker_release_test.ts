@@ -11,6 +11,7 @@ import {
   bindingNames,
   hasHostedDiscovery,
   injectPlatformExecutionEvidencePins,
+  matchesHostedRenewableEnvDescriptor,
   inspectPlatformWorkerStatus,
   parsePlatformWorkerReleaseArgs,
   parsePlatformContainerDetail,
@@ -29,6 +30,10 @@ import {
   type PlatformReleaseCommand,
   waitForPlatformContainerReadback,
 } from "../../scripts/platform-worker-release.ts";
+import {
+  REFERENCE_CREDENTIAL_RECIPES,
+  REFERENCE_PROVIDER_RENEWABLE_ENV_CAPABILITIES,
+} from "../../providers/credential-recipes.generated.ts";
 
 const root = resolve(import.meta.dir, "../..");
 const PROVED_RUNNER_IMAGE =
@@ -1104,11 +1109,15 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
     mapArgument: "runtime_inputs",
     minimumProviderVersion: "4.0.0",
   };
-  const renewableEnv = {
-    sourceEnvName: "TAKOFORM_TOKEN",
-    fileEnvName: "TAKOFORM_TOKEN_FILE",
-    minimumProviderVersion: "4.1.0",
-  };
+  const providerSource = "registry.terraform.io/tako0614/takoform";
+  const renewableCapability =
+    REFERENCE_PROVIDER_RENEWABLE_ENV_CAPABILITIES.find((entry) =>
+      entry.terraformSource.includes(providerSource),
+    );
+  if (!renewableCapability) {
+    throw new Error("takoform_renewable_capability_missing");
+  }
+  const renewableEnv = renewableCapability.renewableEnv;
   // Existing realized configs retain their exact ten-key composition until
   // the operator explicitly opts in to the newer provider protocol.
   expect(() => assertConfigTargetsSource(withBroker({}), "production")).not.toThrow();
@@ -1130,17 +1139,51 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
     ).toThrow("platform_worker_release_config_source_invalid");
   }
   for (const envNames of [
-    ["TAKOFORM_ENDPOINT", "TAKOFORM_SPACE", "TAKOFORM_OTHER"],
+    ["PROVIDER_ENDPOINT", "PROVIDER_SPACE", "PROVIDER_OTHER"],
     [
-      "TAKOFORM_ENDPOINT",
-      "TAKOFORM_TOKEN",
-      "TAKOFORM_TOKEN_FILE",
+      "PROVIDER_ENDPOINT",
+      renewableEnv.sourceEnvName,
+      renewableEnv.fileEnvName,
     ],
   ]) {
     expect(() =>
       assertConfigTargetsSource(withBroker({ envNames, renewableEnv }), "production"),
     ).toThrow("platform_worker_release_config_source_invalid");
   }
+  const referenceRecipe = REFERENCE_CREDENTIAL_RECIPES.find(
+    (recipe) => recipe.id === "takoform",
+  );
+  expect(referenceRecipe?.authModes.token?.renewableEnv).toBeUndefined();
+  expect(
+    matchesHostedRenewableEnvDescriptor(
+      renewableEnv,
+      referenceRecipe?.envNames,
+      providerSource,
+    ),
+  ).toBeTrue();
+  expect(
+    matchesHostedRenewableEnvDescriptor(
+      renewableEnv,
+      referenceRecipe?.envNames,
+      providerSource,
+      [],
+    ),
+  ).toBeFalse();
+  expect(
+    matchesHostedRenewableEnvDescriptor(
+      renewableEnv,
+      referenceRecipe?.envNames,
+      providerSource,
+      [renewableCapability, renewableCapability],
+    ),
+  ).toBeFalse();
+  expect(
+    matchesHostedRenewableEnvDescriptor(
+      { ...renewableEnv, minimumProviderVersion: "4.2.0" },
+      referenceRecipe?.envNames,
+      providerSource,
+    ),
+  ).toBeFalse();
   for (const overrides of [
     { publicInputExchangePath: undefined },
     { publicInputCapabilities: undefined },

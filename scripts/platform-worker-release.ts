@@ -24,6 +24,8 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
+import { isCredentialRecipeRenewableEnv } from "../contract/credential-recipes.ts";
+import { REFERENCE_PROVIDER_RENEWABLE_ENV_CAPABILITIES } from "../providers/credential-recipes.generated.ts";
 import { lineageVerdict } from "./lib/deploy-lineage.ts";
 import {
   assertPlatformReleaseConfigPathless,
@@ -7332,7 +7334,11 @@ function matchesHostedProviderCredentialBroker(value: unknown): boolean {
   return (
     (exactLegacyShape || exactRenewableShape) &&
     (!exactRenewableShape ||
-      matchesHostedRenewableEnv(value.renewableEnv, value.envNames)) &&
+      matchesHostedRenewableEnvDescriptor(
+        value.renewableEnv,
+        value.envNames,
+        value.providerSource,
+      )) &&
     value.publicInputExchangePath === "/public-inputs/http-endpoint" &&
     Array.isArray(value.publicInputCapabilities) &&
     JSON.stringify(value.publicInputCapabilities) ===
@@ -7356,19 +7362,35 @@ function matchesHostedProviderCredentialBroker(value: unknown): boolean {
   );
 }
 
-function matchesHostedRenewableEnv(value: unknown, envNames: unknown): boolean {
+type ReferenceProviderRenewableEnvCapability =
+  (typeof REFERENCE_PROVIDER_RENEWABLE_ENV_CAPABILITIES)[number];
+
+export function matchesHostedRenewableEnvDescriptor(
+  value: unknown,
+  envNames: unknown,
+  providerSource: unknown,
+  capabilities: readonly ReferenceProviderRenewableEnvCapability[] =
+    REFERENCE_PROVIDER_RENEWABLE_ENV_CAPABILITIES,
+): boolean {
+  if (!record(value) || !Array.isArray(envNames) || typeof providerSource !== "string") {
+    return false;
+  }
+  const matches = capabilities.filter(
+    (capability) => capability.terraformSource.includes(providerSource),
+  );
+  if (matches.length !== 1) return false;
+  const expected = matches[0]?.renewableEnv;
   return (
-    record(value) &&
-    Array.isArray(envNames) &&
+    isCredentialRecipeRenewableEnv(expected) &&
     JSON.stringify(Object.keys(value).sort()) ===
       JSON.stringify(
         ["fileEnvName", "minimumProviderVersion", "sourceEnvName"].sort(),
       ) &&
-    value.sourceEnvName === "TAKOFORM_TOKEN" &&
-    value.fileEnvName === "TAKOFORM_TOKEN_FILE" &&
-    value.minimumProviderVersion === "4.1.0" &&
-    envNames.includes(value.sourceEnvName) &&
-    !envNames.includes(value.fileEnvName)
+    value.sourceEnvName === expected.sourceEnvName &&
+    value.fileEnvName === expected.fileEnvName &&
+    value.minimumProviderVersion === expected.minimumProviderVersion &&
+    envNames.includes(expected.sourceEnvName) &&
+    !envNames.includes(expected.fileEnvName)
   );
 }
 
