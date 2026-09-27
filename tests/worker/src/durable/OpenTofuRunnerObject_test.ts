@@ -5154,25 +5154,36 @@ async function seedEncryptedPlan(
   );
 }
 
-test("OpenTofu runner forwards only sequenced renewable updates for the active dispatched ApplyRun", async () => {
+test("OpenTofu runner accepts renewal during slow restore then forwards only exact dispatched updates", async () => {
   const planRunId = "plan_renewable_do_gate";
   const applyRunId = `apply_${planRunId}`;
   const r2 = new FakeR2Bucket();
   await seedEncryptedPlan(r2, planRunId);
   const storage = new FakeDoStorage();
   const gate = deferredGate();
+  const restoreGate = deferredGate();
   let capturedRefresh: Record<string, unknown> | undefined;
+  let readyCredentials: Record<string, unknown> | undefined;
   const container: ContainerRequestFetcher = {
     async containerFetch(request) {
       const path = new URL(request.url).pathname;
       if (request.method === "PUT" && path === `/runs/${planRunId}/artifacts/tfplan`) {
+        restoreGate.enter();
+        await restoreGate.wait;
         return Response.json({ ok: true });
       }
       if (request.method === "PUT" && path === `/runs/${planRunId}/credentials`) {
         capturedRefresh = await request.json() as Record<string, unknown>;
         return Response.json({ ok: true, status: "updated" });
       }
+      if (request.method === "GET" && path === `/runs/${planRunId}/credentials`) {
+        return Response.json({ owner: { kind: "apply", id: applyRunId },
+          runnerRunId: planRunId, manifestDigest: readyCredentials?.manifestDigest,
+          sequence: readyCredentials?.refreshSequence ?? 0 });
+      }
       if (request.method === "POST" && path === `/runs/${planRunId}`) {
+        const body = await request.json() as { request: { credentials: Record<string, unknown> } };
+        readyCredentials = body.request.credentials;
         gate.enter();
         await gate.wait;
         return Response.json({
@@ -5247,8 +5258,6 @@ test("OpenTofu runner forwards only sequenced renewable updates for the active d
     headers: { "content-type": "application/json" },
     body: JSON.stringify(envelope),
   }));
-  await gate.entered;
-
   const update = {
     owner: { kind: "apply", id: applyRunId },
     runnerRunId: planRunId,
@@ -5263,6 +5272,29 @@ test("OpenTofu runner forwards only sequenced renewable updates for the active d
       value: "next-opaque-token",
     }],
   };
+  await restoreGate.entered;
+  const staged = await runner.fetch(new Request(
+    `https://runner/runs/${planRunId}/credentials`,
+    { method: "PUT", body: JSON.stringify(update) },
+  ));
+  assert.equal(staged.status, 200);
+  assert.equal(capturedRefresh, undefined);
+  assert.equal(JSON.stringify(storage.entries()).includes("next-opaque-token"), false);
+  update.sequence = 2;
+  update.credentials[0]!.value = "latest-preparation-token";
+  const restaged = await runner.fetch(new Request(
+    `https://runner/runs/${planRunId}/credentials`,
+    { method: "PUT", body: JSON.stringify(update) },
+  ));
+  assert.equal(restaged.status, 200);
+  assert.equal(capturedRefresh, undefined);
+  restoreGate.release();
+  await gate.entered;
+  assert.equal((readyCredentials?.env as Record<string, string>).ROTATING_TOKEN, "latest-preparation-token");
+  assert.equal(JSON.stringify(readyCredentials).includes("next-opaque-token"), false);
+  assert.equal(readyCredentials?.refreshSequence, 2);
+  update.sequence = 3;
+  update.credentials[0]!.value = "post-dispatch-opaque-token";
   const wrongOwner = await runner.fetch(new Request(
     `https://runner/runs/${planRunId}/credentials`,
     {
@@ -5298,11 +5330,12 @@ test("OpenTofu runner forwards only sequenced renewable updates for the active d
 
   const afterTerminal = await runner.fetch(new Request(
     `https://runner/runs/${planRunId}/credentials`,
-    { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...update, sequence: 2 }) },
+    { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...update, sequence: 4 }) },
   ));
   assert.equal(afterTerminal.status, 409);
   assert.equal(JSON.stringify(storage.entries()).includes("initial-opaque-token"), false);
   assert.equal(JSON.stringify(storage.entries()).includes("next-opaque-token"), false);
+  assert.equal(JSON.stringify(storage.entries()).includes("latest-preparation-token"), false);
 });
 
 test("OpenTofu runner scopes Plan refresh to its active PlanRun and rejects terminal updates", async () => {
@@ -5310,6 +5343,8 @@ test("OpenTofu runner scopes Plan refresh to its active PlanRun and rejects term
   const r2 = new FakeR2Bucket();
   const gate = deferredGate();
   let capturedRefresh: Record<string, unknown> | undefined;
+  let readyCredentials: Record<string, unknown> | undefined;
+  let readinessProbes = 0;
   const container: ContainerRequestFetcher = {
     async containerFetch(request) {
       const path = new URL(request.url).pathname;
@@ -5317,7 +5352,16 @@ test("OpenTofu runner scopes Plan refresh to its active PlanRun and rejects term
         capturedRefresh = await request.json() as Record<string, unknown>;
         return Response.json({ ok: true, status: "updated" });
       }
+      if (request.method === "GET" && path === `/runs/${planRunId}/credentials`) {
+        readinessProbes += 1;
+        if (readinessProbes === 1) return Response.json({ error: "not ready" }, { status: 409 });
+        return Response.json({ owner: { kind: "plan", id: planRunId },
+          runnerRunId: planRunId, manifestDigest: readyCredentials?.manifestDigest,
+          sequence: readyCredentials?.refreshSequence ?? 0 });
+      }
       if (request.method === "POST" && path === `/runs/${planRunId}`) {
+        const body = await request.json() as { request: { credentials: Record<string, unknown> } };
+        readyCredentials = body.request.credentials;
         gate.enter();
         await gate.wait;
         return Response.json({ status: "succeeded", exitCode: 0 });
@@ -5412,6 +5456,7 @@ test("OpenTofu runner scopes Plan refresh to its active PlanRun and rejects term
   ));
   assert.equal(accepted.status, 200);
   assert.deepEqual(capturedRefresh, update);
+  assert.equal(readinessProbes, 2);
   gate.release();
   assert.equal((await run).status, 200);
   const terminal = await runner.fetch(new Request(

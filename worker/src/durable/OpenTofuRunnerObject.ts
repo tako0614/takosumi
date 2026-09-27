@@ -415,6 +415,8 @@ interface ActiveCredentialRefreshClaim {
   sequence: number;
   busy: boolean;
   poisoned: boolean;
+  containerStarted?: boolean;
+  readonly staged?: Map<string, { readonly value: string; readonly expiresAt: string }>;
 }
 
 type RunnerMutationAuthorityClaim =
@@ -870,7 +872,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       if (runDispatch) {
         const dispatchRunId = new URL(request.url).pathname.match(/^\/runs\/([^/]+)$/)?.[1];
         if (dispatchRunId) {
-          this.#activeCredentialRefreshClaims.delete(decodeURIComponent(dispatchRunId));
+          const id = decodeURIComponent(dispatchRunId);
+          const active = this.#activeCredentialRefreshClaims.get(id);
+          if (active?.signal === request.signal) {
+            active.staged?.clear();
+            this.#activeCredentialRefreshClaims.delete(id);
+          }
         }
       }
       if (runDispatch && !mutationIndeterminate) {
@@ -912,7 +919,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     } catch {
       return Response.json({ error: "credential refresh is not active" }, { status: 400 });
     }
-    if (!credentialRefreshUpdateMatches(update, active)) {
+    if (active.busy || active.poisoned ||
+      !credentialRefreshUpdateMatches(update, active)) {
       return Response.json({ error: "credential refresh is not active" }, { status: 409 });
     }
     active.busy = true;
@@ -922,7 +930,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       );
       if (active.owner.kind === "apply") {
         if (
-          !durable || durable.phase !== "dispatched" ||
+          !durable ||
+          (active.containerStarted
+            ? durable.phase !== "dispatched"
+            : durable.phase !== "preparing" && durable.phase !== "dispatched") ||
           durable.semanticDigest !== active.semanticDigest ||
           (durable.action !== "apply" && durable.action !== "destroy") ||
           active.action !== durable.action
@@ -934,12 +945,36 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       ) {
         return Response.json({ error: "credential refresh is not active" }, { status: 409 });
       }
+      if (active.signal?.aborted || request.signal.aborted ||
+        this.#activeCredentialRefreshClaims.get(runnerRunId) !== active) {
+        return Response.json({ error: "credential refresh is not active" }, { status: 409 });
+      }
+      if (!active.containerStarted) {
+        // Preparation owns a bounded latest-value slot per pinned binding. No
+        // credential is persisted or sent to source/build commands. At dispatch
+        // the snapshot and accepted sequence move to the runner in one payload.
+        const value = (update.credentials as Record<string, unknown>[])[0]!;
+        active.staged!.set(value.sourceEnvName as string, {
+          value: value.value as string,
+          expiresAt: value.expiresAt as string,
+        });
+        active.sequence = update.sequence as number;
+        return Response.json({ ok: true, status: "updated" });
+      }
+      await this.#awaitCredentialSessionReady(runnerRunId, active, request);
+      if (active.signal?.aborted || request.signal.aborted ||
+        this.#activeCredentialRefreshClaims.get(runnerRunId) !== active) {
+        return Response.json({ error: "credential refresh is not active" }, { status: 409 });
+      }
       const response = await this.#containerFetch(
         new Request(request.url, {
           method: "PUT",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(update),
-          signal: request.signal,
+          signal: AbortSignal.any([
+            request.signal,
+            ...(active.signal ? [active.signal] : []),
+          ]),
         }),
       );
       if (!response.ok) {
@@ -958,6 +993,41 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     } finally {
       active.busy = false;
     }
+  }
+
+  async #awaitCredentialSessionReady(
+    runnerRunId: string,
+    active: ActiveCredentialRefreshClaim,
+    request: Request,
+  ): Promise<void> {
+    const deadline = Date.now() + 10_000;
+    const signal = AbortSignal.any([
+      request.signal,
+      ...(active.signal ? [active.signal] : []),
+      AbortSignal.timeout(10_000),
+    ]);
+    while (Date.now() < deadline) {
+      signal.throwIfAborted();
+      if (active.signal?.aborted || request.signal.aborted ||
+        this.#activeCredentialRefreshClaims.get(runnerRunId) !== active) {
+        throw new Error("credential refresh is no longer active");
+      }
+      const response = await this.#containerFetch(new Request(request.url, {
+        method: "GET", signal,
+      }));
+      if (response.ok) {
+        const ready = await readJsonObject(response, 4_096);
+        const owner = recordField(ready, "owner");
+        if (isRecord(owner) && owner.kind === active.owner.kind &&
+          owner.id === active.owner.id && ready.runnerRunId === runnerRunId &&
+          ready.manifestDigest === active.manifestDigest &&
+          ready.sequence === active.sequence) return;
+        throw new Error("credential refresh readiness does not match active owner");
+      }
+      if (response.status !== 409) throw new Error("credential refresh readiness failed");
+      await sleep(10);
+    }
+    throw new Error("credential refresh readiness timed out");
   }
 
   async #startContainerIfSupported(): Promise<void> {
@@ -1646,13 +1716,39 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         assertRawOutputRefForScope(stateScope, applyRunId, rawOutputRef);
       }
     }
-    const dispatchRequest = () =>
-      new Request(request.url, {
+    let dispatchBody: string | undefined;
+    const dispatchRequest = () => {
+      if (dispatchBody === undefined) {
+        const active = this.#activeCredentialRefreshClaims.get(runId);
+        if (active && active.signal === request.signal) {
+          const credentials = recordField(envelope.request, "credentials");
+          if (!isRecord(credentials) || !isRecord(credentials.env) ||
+            !Array.isArray(credentials.renewable)) {
+            throw new Error("renewable dispatch projection is unavailable");
+          }
+          for (const descriptor of credentials.renewable) {
+            if (!isRecord(descriptor)) throw new Error("renewable dispatch descriptor is invalid");
+            const staged = active.staged?.get(descriptor.sourceEnvName as string);
+            if (staged) {
+              credentials.env[descriptor.sourceEnvName as string] = staged.value;
+              descriptor.expiresAt = staged.expiresAt;
+            }
+          }
+          credentials.refreshSequence = active.sequence;
+          active.containerStarted = true;
+          active.staged?.clear();
+          dispatchBody = JSON.stringify(envelope);
+        } else {
+          dispatchBody = bodyText;
+        }
+      }
+      return new Request(request.url, {
         method: request.method,
         headers: runnerRequestHeaders(request),
-        body: bodyText,
+        body: dispatchBody,
         signal: request.signal,
       });
+    };
     let mutationPreparation: RunnerMutationDispatchRecord | undefined;
     let mutationDispatch: RunnerMutationDispatchRecord | undefined;
     let mutationRequest: Request | undefined;
@@ -1684,6 +1780,14 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         return adopted ?? runnerMutationIndeterminateResponse(envelope.action);
       }
       mutationPreparation = claim.record;
+      if (credentialRefreshClaim) {
+        this.#activeCredentialRefreshClaims.set(runId, {
+          ...credentialRefreshClaim,
+          semanticDigest: mutationPreparation.semanticDigest,
+          signal: request.signal,
+          staged: new Map(),
+        });
+      }
       if (stateScope) {
         const gated = await this.#gateExistingStateTarget(
           stateScope,
@@ -1709,6 +1813,16 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           : runnerReleaseIndeterminateResponse();
       }
       releasePreparation = claim.record;
+    }
+    if (credentialRefreshClaim && envelope.action === "plan") {
+      if (this.#activeCredentialRefreshClaims.has(runId)) {
+        throw new Error("renewable Plan owner is already active");
+      }
+      this.#activeCredentialRefreshClaims.set(runId, {
+        ...credentialRefreshClaim,
+        signal: request.signal,
+        staged: new Map(),
+      });
     }
     try {
       // M2: restore the snapshotted source tree into the container before any
@@ -1741,12 +1855,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       }
       await this.#ensureContainerReady(url);
       if (mutationPreparation) {
-        // Construct and preflight before advancing the durable phase. An
-        // already-aborted request is a provable pre-dispatch failure.
-        mutationRequest = dispatchRequest();
-        if (mutationRequest.signal.aborted) {
-          throw mutationRequest.signal.reason instanceof Error
-            ? mutationRequest.signal.reason
+        // Preflight cancellation before advancing the durable phase. Snapshot
+        // renewable material after that await so preparation updates are not lost.
+        // An already-aborted request is a provable pre-dispatch failure.
+        if (request.signal.aborted) {
+          throw request.signal.reason instanceof Error
+            ? request.signal.reason
             : new DOMException(
                 "OpenTofu runner mutation was aborted before dispatch",
                 "AbortError",
@@ -1759,14 +1873,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
             mutationPreparation.action,
           );
         }
-        if (credentialRefreshClaim) {
-          this.#activeCredentialRefreshClaims.set(runId, {
-            ...credentialRefreshClaim,
-            action: envelope.action as "apply" | "destroy",
-            semanticDigest: mutationDispatch.semanticDigest,
-            signal: request.signal,
-          });
-        }
+        mutationRequest = dispatchRequest();
       }
       if (releasePreparation) {
         releaseRequest = dispatchRequest();
@@ -1806,12 +1913,6 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         releaseDispatch,
       );
     } else {
-      if (credentialRefreshClaim && envelope.action === "plan") {
-        this.#activeCredentialRefreshClaims.set(runId, {
-          ...credentialRefreshClaim,
-          signal: request.signal,
-        });
-      }
       unboundedRunnerResponse = await this.#containerFetchAfterReady(
         dispatchRequest,
         url,
@@ -5649,6 +5750,11 @@ async function renewableCredentialRefreshClaim(
 ): Promise<Omit<ActiveCredentialRefreshClaim, "semanticDigest"> | undefined> {
   const credentials = recordField(requestPayload, "credentials");
   if (!isRecord(credentials)) return undefined;
+  // This handoff cursor is assigned only after this DO accepts preparation
+  // updates. A controller dispatch cannot nominate an initial sequence.
+  if (credentials.refreshSequence !== undefined) {
+    throw new Error("credential refresh sequence is owned by runner handoff");
+  }
   const manifest = recordField(credentials, "manifest");
   const declaredRenewableBindings = isRecord(manifest) && Array.isArray(manifest.bindings)
     ? manifest.bindings.filter((binding) =>
@@ -5764,6 +5870,7 @@ function credentialRefreshUpdateMatches(
     stringField(update, "manifestDigest") !== active.manifestDigest ||
     update.sequence !== active.sequence + 1 ||
     !Number.isSafeInteger(update.sequence) ||
+    (update.sequence as number) > 2_048 ||
     !Array.isArray(update.credentials) || update.credentials.length !== 1
   ) return false;
   const seen = new Set<string>();

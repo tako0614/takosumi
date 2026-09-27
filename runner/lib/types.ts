@@ -141,6 +141,8 @@ export interface CommandContext {
   /** Value-free identity of the exact run credential manifest. */
   readonly credentialManifestDigest?: string;
   readonly credentialRefreshOwner?: CredentialRefreshOwner;
+  /** Initial accepted refresh sequence, supplied by the private runner relay. */
+  readonly credentialRefreshSequence?: number;
   /**
    * Apply-only sensitive provider inputs supplied to `tofu` on standard input as
    * an ephemeral variable file. Present for plan and apply alike so OpenTofu's
@@ -175,6 +177,13 @@ export interface RunCredentialRefreshUpdate {
     readonly expiresAt: string;
     readonly value: string;
   }[];
+}
+
+export interface CredentialRefreshSessionMetadata {
+  readonly owner: CredentialRefreshOwner;
+  readonly runnerRunId: string;
+  readonly manifestDigest: string;
+  readonly sequence: number;
 }
 
 export interface CredentialRefreshOwner {

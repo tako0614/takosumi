@@ -2,9 +2,10 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { chmod, copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { join } from "node:path";
 
 import { workspaceForRun } from "../../runner/lib/artifacts.ts";
+import { credentialDirPrefixForWorkspace } from "../../runner/lib/credentials.ts";
 import { handleRunnerRequest } from "../../runner/lib/http_server.ts";
 import { runPlan } from "../../runner/lib/plan_apply.ts";
 import { RunCredentialBroker } from "../../core/domains/deploy-control/run_credential_broker.ts";
@@ -252,8 +253,9 @@ resource "takoform_module_worker" "example" {
     expect(issueCount).toBe(2);
     expect(JSON.stringify(body)).not.toContain(INITIAL);
     expect(JSON.stringify(body)).not.toContain(RENEWED);
-    const siblings = await readdir(dirname(workspace.root));
-    expect(siblings.some((name) => name.startsWith(`${basename(workspace.root)}-credentials-`))).toBe(false);
+    const ownedCredentialPrefix = await credentialDirPrefixForWorkspace(workspace);
+    const privateDirectoryNames = await readdir("/tmp");
+    expect(privateDirectoryNames.some((name) => name.startsWith(ownedCredentialPrefix))).toBe(false);
   } finally {
     host.stop(true);
     if (originalMirror === undefined) delete Bun.env.OPENTOFU_PROVIDER_MIRROR;

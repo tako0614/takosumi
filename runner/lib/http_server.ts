@@ -13,6 +13,9 @@ import {
   refreshRunCredentials,
   setRunRedactionValues,
   clearRunRedactionValues,
+  beginRunCredentialRefreshSession,
+  endRunCredentialRefreshSession,
+  runCredentialRefreshSessionMetadata,
 } from "./credentials.ts";
 import {
   isSourceSyncRequest,
@@ -64,6 +67,13 @@ export async function handleRunnerRequestWithDependencies(
     }
     const credentialRefreshMatch = /^\/runs\/([^/]+)\/credentials$/.exec(url.pathname);
     if (credentialRefreshMatch) {
+      const runId = decodeURIComponent(credentialRefreshMatch[1]!);
+      if (request.method === "GET") {
+        const metadata = runCredentialRefreshSessionMetadata(runId);
+        return metadata
+          ? Response.json(metadata)
+          : Response.json({ error: "credential refresh is not active" }, { status: 409 });
+      }
       if (request.method !== "PUT") {
         return Response.json({ error: "method not allowed" }, {
           status: 405,
@@ -73,7 +83,7 @@ export async function handleRunnerRequestWithDependencies(
       try {
         const body = await readBoundedJsonObject(request, 64 * 1024);
         await refreshRunCredentials(
-          decodeURIComponent(credentialRefreshMatch[1]!),
+          runId,
           body as unknown as RunCredentialRefreshUpdate,
         );
         return Response.json({ ok: true, status: "updated" });
@@ -232,10 +242,18 @@ export async function handleRunnerRequestWithDependencies(
 
     const mutationRedactionScope =
       action === "plan" || action === "apply" || action === "destroy";
-    if (mutationRedactionScope) {
-      setRunRedactionValues(runId, requestRedactionValues);
-    }
+    let credentialRefreshSessionHandle: object | undefined;
     try {
+      if (mutationRedactionScope) {
+        credentialRefreshSessionHandle = await beginRunCredentialRefreshSession(
+          runId,
+          action as "plan" | "apply" | "destroy",
+          body.request,
+          request.signal,
+          requestRedactionValues,
+        );
+        setRunRedactionValues(runId, requestRedactionValues);
+      }
       const result =
         action === "compatibility_check"
           ? await runCompatibilityCheck(runId, body.request)
@@ -277,6 +295,7 @@ export async function handleRunnerRequestWithDependencies(
       );
     } finally {
       if (mutationRedactionScope) {
+        await endRunCredentialRefreshSession(runId, credentialRefreshSessionHandle);
         clearRunRedactionValues(runId, requestRedactionValues);
       }
     }

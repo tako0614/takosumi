@@ -15,7 +15,6 @@ import {
 } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { stableJsonDigest } from "../../core/adapters/source/digest.ts";
 import { dirname, join } from "node:path";
 import {
   isProviderEnvName,
@@ -31,12 +30,14 @@ import type {
   PreparedProviderCredentialFiles,
   RenewableCredentialProjection,
   RunCredentialRefreshUpdate,
+  CredentialRefreshSessionMetadata,
 } from "./types.ts";
 import { BASE_COMMAND_ENV_NAMES } from "./constants.ts";
 import {
   isRecord,
   recordField,
   stringField,
+  digestBytes,
   shredCredentialDir,
 } from "./util.ts";
 import {
@@ -59,31 +60,106 @@ const MAX_ROTATIONS_PER_RUN = 2_048;
 const MAX_RENEWABLE_CREDENTIALS = 32;
 const MAX_REDACTION_VALUES_PER_RUN = 4_096;
 const MAX_REDACTION_VALUE_BYTES_PER_RUN = 16 * 1024 * 1024;
+type RenewableCredentialIdentity = Omit<RenewableCredentialProjection, "initialValue">;
 const activeCredentialRefreshSessions = new Map<string, CredentialRefreshSession>();
 const activeRunRedactionValues = new Map<string, string[]>();
 
+async function stableCredentialManifestDigest(value: unknown): Promise<string> {
+  return await digestBytes(new TextEncoder().encode(stableCredentialJson(value)));
+}
+
+function stableCredentialJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableCredentialJson(item)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) =>
+    `${JSON.stringify(key)}:${stableCredentialJson(record[key])}`
+  ).join(",")}}`;
+}
+
+function sameRenewableDescriptors(
+  left: readonly RenewableCredentialIdentity[],
+  right: readonly RenewableCredentialIdentity[],
+): boolean {
+  const key = (item: RenewableCredentialIdentity) =>
+    `${item.providerSource}\0${item.connectionId}\0${item.sourceEnvName}\0${item.fileEnvName}`;
+  const leftKeys = [...left].map(key).sort();
+  const rightKeys = [...right].map(key).sort();
+  return leftKeys.length === rightKeys.length &&
+    leftKeys.every((value, index) => value === rightKeys[index]);
+}
+
+export async function credentialDirPrefixForWorkspace(
+  workspace: RunWorkspace,
+): Promise<string> {
+  const digest = await digestBytes(new TextEncoder().encode(workspace.root));
+  return `takosumi-run-credentials-${digest.slice("sha256:".length, "sha256:".length + 16)}-`;
+}
+
 class CredentialRefreshSession {
-  #sequence = 0;
+  #sequence: number;
   #closed = false;
   #rotations = 0;
   #tail: Promise<void> = Promise.resolve();
+  #promoted = false;
+  #currentByFileEnvName: Map<string, { descriptor: RenewableCredentialIdentity; value: string }>;
+  #filesByEnvName = new Map<string, string>();
 
   constructor(
     readonly runId: string,
     readonly owner: NonNullable<CommandContext["credentialRefreshOwner"]>,
     readonly manifestDigest: string,
-    readonly descriptors: readonly RenewableCredentialProjection[],
-    readonly filesByEnvName: ReadonlyMap<string, string>,
+    descriptors: readonly RenewableCredentialProjection[],
     readonly redactionValues: string[],
     readonly signal?: AbortSignal,
-  ) {}
+    initialSequence = 0,
+  ) {
+    this.#sequence = initialSequence;
+    this.#rotations = initialSequence;
+    this.descriptors = descriptors.map(({ initialValue: _initialValue, ...descriptor }) => descriptor);
+    this.#currentByFileEnvName = new Map(descriptors.map(({ initialValue, ...descriptor }) => [
+      descriptor.fileEnvName,
+      { descriptor, value: initialValue },
+    ]));
+  }
+
+  readonly descriptors: readonly RenewableCredentialIdentity[];
+
+  get metadata() {
+    return {
+      owner: this.owner,
+      runnerRunId: this.runId,
+      manifestDigest: this.manifestDigest,
+      sequence: this.#sequence,
+    } as const;
+  }
+
+  matches(context: CommandContext): boolean {
+    const owner = context.credentialRefreshOwner;
+    return !!owner && owner.kind === this.owner.kind && owner.id === this.owner.id &&
+      context.credentialManifestDigest === this.manifestDigest &&
+      sameRenewableDescriptors(context.renewableCredentials ?? [], this.descriptors);
+  }
+
+  async promote(filesByEnvName: ReadonlyMap<string, string>): Promise<void> {
+    await this.#serialize(async () => {
+      if (this.#closed || this.signal?.aborted) throw new Error("credential refresh is no longer active");
+      if (this.#promoted) throw new Error("credential refresh session is already promoted");
+      for (const descriptor of this.descriptors) {
+        const target = filesByEnvName.get(descriptor.fileEnvName);
+        const current = this.#currentByFileEnvName.get(descriptor.fileEnvName);
+        if (!target || !current) throw new Error("credential refresh projection is incomplete");
+        await replaceCredentialFile(target, current.value);
+      }
+      this.#filesByEnvName = new Map(filesByEnvName);
+      this.#promoted = true;
+    });
+  }
 
   async update(update: RunCredentialRefreshUpdate): Promise<void> {
-    const previous = this.#tail;
-    let release!: () => void;
-    this.#tail = new Promise<void>((resolve) => { release = resolve; });
-    await previous;
-    try {
+    await this.#serialize(async () => {
       if (this.#closed || this.signal?.aborted) throw new Error("credential refresh is no longer active");
       if (
         update.owner.kind !== this.owner.kind ||
@@ -94,31 +170,20 @@ class CredentialRefreshSession {
         update.credentials.length !== 1 ||
         this.descriptors.length > MAX_RENEWABLE_CREDENTIALS ||
         this.#rotations >= MAX_ROTATIONS_PER_RUN
-      ) {
-        throw new Error("credential refresh identity or sequence mismatch");
-      }
-      const mapped = new Map(this.descriptors.map((item) => [
-        `${item.providerSource}\0${item.connectionId}\0${item.sourceEnvName}\0${item.fileEnvName}`,
-        item,
-      ]));
-      const updates = update.credentials.map((item) => {
-        const descriptor = mapped.get(`${item.providerSource}\0${item.connectionId}\0${item.sourceEnvName}\0${item.fileEnvName}`);
-        if (
-          !descriptor || typeof item.value !== "string" || !validCredentialValue(item.value) ||
-          !Number.isFinite(Date.parse(item.expiresAt))
-        ) throw new Error("credential refresh descriptor mismatch");
-        return { descriptor, value: item.value };
-      });
+      ) throw new Error("credential refresh identity or sequence mismatch");
+      const item = update.credentials[0]!;
+      const descriptor = this.descriptors.find((candidate) =>
+        candidate.providerSource === item.providerSource &&
+        candidate.connectionId === item.connectionId &&
+        candidate.sourceEnvName === item.sourceEnvName &&
+        candidate.fileEnvName === item.fileEnvName,
+      );
       if (
-        new Set(updates.map(({ descriptor }) => descriptor.sourceEnvName)).size !== updates.length ||
-        new Set(updates.map(({ descriptor }) => descriptor.fileEnvName)).size !== updates.length
-      ) {
-        throw new Error("credential refresh contains duplicate descriptors");
-      }
-      // Validate every destination before writing any update. The directory is
-      // mode 0700, but still refuse a replaced/symlink target explicitly.
-      for (const { descriptor } of updates) {
-        const target = this.filesByEnvName.get(descriptor.fileEnvName);
+        !descriptor || !validCredentialValue(item.value) ||
+        !Number.isFinite(Date.parse(item.expiresAt))
+      ) throw new Error("credential refresh descriptor mismatch");
+      const target = this.#filesByEnvName.get(descriptor.fileEnvName);
+      if (this.#promoted) {
         if (!target) throw new Error("credential refresh target is unavailable");
         const info = await lstat(target);
         if (
@@ -126,30 +191,37 @@ class CredentialRefreshSession {
           (typeof process.getuid === "function" && info.uid !== process.getuid())
         ) throw new Error("credential refresh target is not a private runner file");
       }
-      // Redact every accepted candidate before the first asynchronous file
-      // operation: a provider can emit the value while replacement is in flight.
-      const addedValues = [...new Set(updates.map(({ value }) => value))]
-        .filter((value) => !this.redactionValues.includes(value));
+      const addedBytes = this.redactionValues.includes(item.value)
+        ? 0
+        : new TextEncoder().encode(item.value).byteLength;
       const currentBytes = this.redactionValues.reduce(
         (total, value) => total + new TextEncoder().encode(value).byteLength,
         0,
       );
-      const addedBytes = addedValues.reduce(
-        (total, value) => total + new TextEncoder().encode(value).byteLength,
-        0,
-      );
       if (
-        this.redactionValues.length + addedValues.length > MAX_REDACTION_VALUES_PER_RUN ||
+        (!this.redactionValues.includes(item.value) && this.redactionValues.length >= MAX_REDACTION_VALUES_PER_RUN) ||
         currentBytes + addedBytes > MAX_REDACTION_VALUE_BYTES_PER_RUN
       ) throw new Error("credential refresh redaction history limit exceeded");
-      for (const { value } of updates) {
-        if (!this.redactionValues.includes(value)) this.redactionValues.push(value);
-      }
-      for (const { descriptor, value } of updates) {
-        await replaceCredentialFile(this.filesByEnvName.get(descriptor.fileEnvName)!, value);
-      }
+      // Redaction admission precedes filesystem writes and pending-session
+      // replacement, so even an ambiguous failed promotion cannot leak it.
+      if (!this.redactionValues.includes(item.value)) this.redactionValues.push(item.value);
+      if (this.#promoted) await replaceCredentialFile(target!, item.value);
+      this.#currentByFileEnvName.set(descriptor.fileEnvName, {
+        descriptor: { ...descriptor, expiresAt: item.expiresAt },
+        value: item.value,
+      });
       this.#sequence = update.sequence;
       this.#rotations += 1;
+    });
+  }
+
+  async #serialize(work: () => Promise<void>): Promise<void> {
+    const previous = this.#tail;
+    let release!: () => void;
+    this.#tail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      await work();
     } finally {
       release();
     }
@@ -158,6 +230,8 @@ class CredentialRefreshSession {
   async close(): Promise<void> {
     this.#closed = true;
     await this.#tail;
+    this.#currentByFileEnvName.clear();
+    this.#filesByEnvName.clear();
   }
 }
 
@@ -202,6 +276,70 @@ export function clearRunRedactionValues(runId: string, values: string[]): void {
   if (activeRunRedactionValues.get(runId) === values) activeRunRedactionValues.delete(runId);
 }
 
+export async function beginRunCredentialRefreshSession(
+  runId: string,
+  action: "plan" | "apply" | "destroy",
+  request: unknown,
+  signal: AbortSignal | undefined,
+  redactionValues: string[],
+): Promise<object | undefined> {
+  const profile = recordField(request, "runnerProfile");
+  const context = commandContextFromRequest(
+    request,
+    isRecord(profile) ? profile : undefined,
+    signal,
+    runId,
+  );
+  const descriptors = context.renewableCredentials ?? [];
+  if (descriptors.length === 0) {
+    if (context.credentialRefreshSequence !== undefined) {
+      throw new Error("credential refresh sequence has no renewable descriptors");
+    }
+    return undefined;
+  }
+  const owner = context.credentialRefreshOwner;
+  const expectedKind = action === "plan" ? "plan" : "apply";
+  if (!owner || owner.kind !== expectedKind || !context.credentialManifestDigest) {
+    throw new Error("renewable credentials have no exact action owner");
+  }
+  if (
+    !context.credentialManifest ||
+    await stableCredentialManifestDigest(context.credentialManifest) !== context.credentialManifestDigest
+  ) throw new Error("renewable credential manifest digest mismatch");
+  if (activeCredentialRefreshSessions.has(runId)) {
+    throw new Error("credential refresh session already exists for run");
+  }
+  if (signal?.aborted) throw new Error("credential refresh is no longer active");
+  const session = new CredentialRefreshSession(
+    runId,
+    owner,
+    context.credentialManifestDigest,
+    descriptors,
+    redactionValues,
+    signal,
+    context.credentialRefreshSequence ?? 0,
+  );
+  activeCredentialRefreshSessions.set(runId, session);
+  return session;
+}
+
+export function runCredentialRefreshSessionMetadata(
+  runId: string,
+): CredentialRefreshSessionMetadata | undefined {
+  return activeCredentialRefreshSessions.get(runId)?.metadata;
+}
+
+export async function endRunCredentialRefreshSession(
+  runId: string,
+  handle: object | undefined,
+): Promise<void> {
+  if (!handle) return;
+  const session = activeCredentialRefreshSessions.get(runId);
+  if (!session || session !== handle) return;
+  activeCredentialRefreshSessions.delete(runId);
+  await session.close();
+}
+
 function redactionValuesForRun(runId: string | undefined, fallback: string[]): string[] {
   return runId ? (activeRunRedactionValues.get(runId) ?? fallback) : fallback;
 }
@@ -227,6 +365,7 @@ export function commandContextFromRequest(
   const credentialFiles = providerCredentialFilesFromRequest(request);
   const renewableCredentials = renewableCredentialsFromRequest(request);
   const credentialManifestDigest = credentialManifestDigestFromRequest(request);
+  const credentialRefreshSequence = credentialRefreshSequenceFromRequest(request);
   const applyRun = recordField(request, "applyRun");
   const applyRunId = isRecord(applyRun)
     ? stringField(applyRun, "id")
@@ -267,6 +406,8 @@ export function commandContextFromRequest(
       if (!env[credential.sourceEnvName]) {
         throw new Error("renewable provider credential is missing its initial value");
       }
+      // Keep bearer values in the in-memory session until private-file promotion.
+      delete env[credential.sourceEnvName];
     }
   }
   return {
@@ -277,6 +418,7 @@ export function commandContextFromRequest(
     ...(renewableCredentials.length > 0 ? { renewableCredentials } : {}),
     ...(credentialManifestDigest ? { credentialManifestDigest } : {}),
     ...(credentialRefreshOwner ? { credentialRefreshOwner } : {}),
+    ...(credentialRefreshSequence !== undefined ? { credentialRefreshSequence } : {}),
     ...(runtimeInputs.length > 0 ? { runtimeInputs } : {}),
     ...(redactionValues.length > 0 ? { redactionValues } : {}),
     ...(maxRunSeconds ? { timeoutMs: maxRunSeconds * 1000 } : {}),
@@ -297,6 +439,18 @@ function credentialManifestDigestFromRequest(request: unknown): string | undefin
     throw new Error("run credential manifest digest is malformed");
   }
   return digest;
+}
+
+function credentialRefreshSequenceFromRequest(request: unknown): number | undefined {
+  const credentials = recordField(request, "credentials");
+  if (!isRecord(credentials)) return undefined;
+  const sequence = credentials.refreshSequence;
+  if (sequence === undefined) return undefined;
+  if (
+    !Number.isSafeInteger(sequence) || (sequence as number) < 0 ||
+    (sequence as number) > MAX_ROTATIONS_PER_RUN
+  ) throw new Error("run credential refresh sequence is malformed");
+  return sequence as number;
 }
 
 export function renewableCredentialsFromRequest(
@@ -629,7 +783,7 @@ export function sourceCredentialRedactionValuesFromRequest(
 
 export async function prepareProviderCredentialFiles(
   context: CommandContext,
-  _workspace: RunWorkspace,
+  workspace: RunWorkspace,
   runId?: string,
 ): Promise<PreparedProviderCredentialFiles> {
   const files = context.credentialFiles ?? [];
@@ -644,13 +798,43 @@ export async function prepareProviderCredentialFiles(
   if (!tmpInfo.isDirectory() || tmpInfo.isSymbolicLink()) {
     throw new Error("run credential parent directory is unsafe");
   }
-  const credentialDir = await mkdtemp("/tmp/takosumi-run-credentials-");
+  const credentialDir = await mkdtemp(`/tmp/${await credentialDirPrefixForWorkspace(workspace)}`);
   let session: CredentialRefreshSession | undefined;
   let sessionRegistered = false;
+  let createdSession = false;
   try {
     await chmod(credentialDir, 0o700);
     const env: Record<string, string> = { ...context.env };
     const renewableFiles = new Map<string, string>();
+    if (renewable.length > 0) {
+      if (!runId || !context.credentialRefreshOwner || !context.credentialManifestDigest) {
+        throw new Error("renewable credentials lost run identity or manifest digest");
+      }
+      if (
+        !context.credentialManifest ||
+        await stableCredentialManifestDigest(context.credentialManifest) !== context.credentialManifestDigest
+      ) throw new Error("renewable credential manifest digest mismatch");
+      const pendingSession = activeCredentialRefreshSessions.get(runId);
+      if (pendingSession) {
+        if (!pendingSession.matches(context)) {
+          throw new Error("pending credential refresh session does not match dispatch");
+        }
+        session = pendingSession;
+      } else {
+        session = new CredentialRefreshSession(
+          runId,
+          context.credentialRefreshOwner,
+          context.credentialManifestDigest,
+          renewable,
+          (context.redactionValues ?? []) as string[],
+          context.signal,
+          context.credentialRefreshSequence ?? 0,
+        );
+        activeCredentialRefreshSessions.set(runId, session);
+        sessionRegistered = true;
+        createdSession = true;
+      }
+    }
     for (const file of files) {
       assertSafeCredentialFileName(file.path);
       assertSafeCredentialFileMode(file.mode);
@@ -668,37 +852,11 @@ export async function prepareProviderCredentialFiles(
     }
     for (const credential of renewable) {
       const target = join(credentialDir, `renewable-${randomUUID()}`);
-      await replaceCredentialFile(target, credential.initialValue);
-      await chmod(target, 0o600);
       delete env[credential.sourceEnvName];
       env[credential.fileEnvName] = target;
       renewableFiles.set(credential.fileEnvName, target);
     }
-    if (renewable.length > 0) {
-      if (!runId || !context.credentialRefreshOwner || !context.credentialManifestDigest) {
-        throw new Error("renewable credentials lost run identity or manifest digest");
-      }
-      if (
-        !context.credentialManifest ||
-        await stableJsonDigest(context.credentialManifest) !== context.credentialManifestDigest
-      ) {
-        throw new Error("renewable credential manifest digest mismatch");
-      }
-      if (activeCredentialRefreshSessions.has(runId)) {
-        throw new Error("credential refresh session already exists for run");
-      }
-      session = new CredentialRefreshSession(
-        runId,
-        context.credentialRefreshOwner,
-        context.credentialManifestDigest,
-        renewable,
-        renewableFiles,
-        (context.redactionValues ?? []) as string[],
-        context.signal,
-      );
-      activeCredentialRefreshSessions.set(runId, session);
-      sessionRegistered = true;
-    }
+    if (session) await session.promote(renewableFiles);
     return {
       context: {
         ...context,
@@ -719,10 +877,12 @@ export async function prepareProviderCredentialFiles(
       },
     };
   } catch (error) {
-    if (sessionRegistered && runId && activeCredentialRefreshSessions.get(runId) === session) {
+    if (session && runId) {
+      await session.close().catch(() => {});
+    }
+    if ((sessionRegistered || createdSession) && runId && activeCredentialRefreshSessions.get(runId) === session) {
       activeCredentialRefreshSessions.delete(runId);
     }
-    await session?.close().catch(() => {});
     await shredCredentialDir(credentialDir);
     throw error;
   }
