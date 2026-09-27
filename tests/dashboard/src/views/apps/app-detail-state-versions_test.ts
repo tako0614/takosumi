@@ -364,8 +364,8 @@ describe("Capsule detail StateVersion surface", () => {
     expect(source).toContain('t("app.setupIncomplete.body")');
     expect(source).toContain('t("app.setupIncomplete.review")');
     expect(source).toContain('t("app.setupIncomplete.delete")');
-    expect(source).toContain(
-      'inst().status !== "destroyed" && !currentStateVersionId()',
+    expect(source).toMatch(
+      /inst\(\)\.id === capsuleId\(\)\s*&&\s*inst\(\)\.status !== "destroyed"\s*&&\s*!currentStateVersionId\(\)/,
     );
     expect(source).toContain(
       "href={`/workloads/${encodeURIComponent(capsuleId())}/deploys`}",
