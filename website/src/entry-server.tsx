@@ -3,7 +3,7 @@ import { createHandler, StartServer } from "@solidjs/start/server";
 
 // schema.org identity for the landing. Takosumi is the OpenTofu-native control
 // plane — NOT the chat/docs product (that is Takos).
-const SITE_TITLE = "Takosumi — your service, your server.";
+const SITE_TITLE = "Takosumi | OpenTofu-native deploy control plane";
 const SITE_DESC =
   "ブラウザから自分のクラウドへサービスを追加・更新・デプロイ。鍵、状態、履歴、監査を管理する OpenTofu-native control plane。";
 

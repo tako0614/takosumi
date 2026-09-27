@@ -12,8 +12,8 @@ export default function Hero() {
       </div>
       <div class="container hero-center">
         <h1>
-          <span class="hero-line">your service,</span>
-          <span class="hero-line grad-text">your server.</span>
+          <span class="hero-line">your cloud,</span>
+          <span class="hero-line grad-text">your control plane.</span>
         </h1>
         <p class="lede">
           アプリやインフラを、ブラウザから自分のクラウドへ。
