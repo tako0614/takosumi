@@ -48,8 +48,9 @@ export default function WhyOperatorOwned() {
       </div>
       <RunHistory />
       <p class="pv-caption">
-        デプロイ履歴と状態の履歴は、サービスごとに残ります。
-        以前の状態に戻すこともできます。
+        デプロイ履歴は実行ごとに残り、いつ・誰が・何を変えたかを
+        さかのぼれます。失敗した実行も同じ場所に残るので、原因の確認が
+        すぐにできます。
       </p>
     </Section>
   );
