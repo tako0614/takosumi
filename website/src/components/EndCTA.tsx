@@ -2,7 +2,6 @@ export default function EndCTA() {
   return (
     <section class="end-cta">
       <div class="container">
-        <p class="sec-label">get started</p>
         <h2>始めよう。</h2>
         <p class="lede">
           Takosumi ならブラウザから。セルフホストなら自分のインフラに。

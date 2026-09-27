@@ -16,12 +16,6 @@ export function ProductShot(props: {
 }): JSX.Element {
   return (
     <figure class="pv pv-shot" aria-label={props.label}>
-      <div class="pv-chrome" aria-hidden="true">
-        <span class="pv-dot" />
-        <span class="pv-dot" />
-        <span class="pv-dot" />
-        <span class="pv-host">app.takosumi.com</span>
-      </div>
       <img
         src={props.src}
         alt={props.alt}

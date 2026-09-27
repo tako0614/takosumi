@@ -1,7 +1,5 @@
 import { For } from "solid-js";
-import SplatField from "./SplatField";
 import { ProductShot } from "./ProductVisuals";
-import { useParallax } from "~/lib/interactions";
 
 const SPEC = [
   "projects",
@@ -13,14 +11,8 @@ const SPEC = [
 ];
 
 export default function Hero() {
-  let splatRef: HTMLDivElement | undefined;
-  useParallax(() => splatRef, 0.16);
-
   return (
     <section class="hero">
-      <div ref={splatRef} class="hero-splat-wrap" aria-hidden="true">
-        <SplatField density="hero" />
-      </div>
       <div class="container hero-grid">
         <div class="hero-copy">
           <p class="hero-kicker">OpenTofu-native · self-hosted · AGPL-3.0</p>

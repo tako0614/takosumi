@@ -26,7 +26,6 @@ export default function WhyOperatorOwned() {
   return (
     <Section
       id="why"
-      label="why takosumi"
       title="なぜ Takosumi か。"
       lede={
         <>
@@ -38,9 +37,8 @@ export default function WhyOperatorOwned() {
     >
       <div class="why-points">
         <For each={POINTS}>
-          {(p, i) => (
+          {(p) => (
             <div class="why-point">
-              <span class="why-num">{String(i() + 1).padStart(2, "0")}</span>
               <h3>{p.title}</h3>
               <p>{p.body}</p>
             </div>

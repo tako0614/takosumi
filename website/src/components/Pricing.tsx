@@ -6,7 +6,6 @@ export default function Pricing() {
   return (
     <Section
       id="pricing"
-      label="pricing"
       title="自分で持つか、公式ホスティングか。"
       lede={
         <>

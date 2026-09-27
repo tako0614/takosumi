@@ -20,7 +20,7 @@ export default function Nav() {
   onMount(() => {
     const onScroll = () => {
       // Hero is min-100vh; flip nav state once the user is past ~70vh
-      setScrolled(globalThis.scrollY > globalThis.innerHeight * 0.7);
+      setScrolled(globalThis.scrollY > 24);
     };
     onScroll();
     globalThis.addEventListener("scroll", onScroll, { passive: true });

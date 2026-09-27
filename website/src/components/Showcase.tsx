@@ -26,7 +26,6 @@ export default function Showcase() {
   return (
     <Section
       id="how"
-      label="how it works"
       title="3 ステップでホスト。"
       lede={
         <>
@@ -39,7 +38,7 @@ export default function Showcase() {
         <For each={STEPS}>
           {(s, i) => (
             <li>
-              <span>{i() + 1}</span>
+              <span class="step-num">{i() + 1}.</span>
               <strong>{s.title}</strong>
               <p>{s.body}</p>
             </li>

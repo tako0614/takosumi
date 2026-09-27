@@ -25,7 +25,7 @@ const STATS: readonly Stat[] = [
 
 export default function Stats() {
   return (
-    <Section class="stats" label="facts" title="預けるのではなく、持つ。">
+    <Section class="stats" title="預けるのではなく、持つ。">
       <div class="stats-grid">
         <For each={STATS}>
           {(s) => (
