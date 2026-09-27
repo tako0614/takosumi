@@ -113,7 +113,9 @@ Its worker connects to a Takosumi endpoint as an external client.
 - [Repository manifest](docs/en/reference/repository-manifest.md) — repository-owned metadata and the `InstallConfig` boundary
 - [API reference](docs/en/reference/api.md)
 - [CLI reference](docs/en/reference/cli.md)
+- [Configuration reference](docs/en/reference/configuration.md)
 - [Operator runbooks](docs/operations/README.md)
+- [Hosted-properties deploy runbook](DEPLOY.md) — procedures for the hosted surfaces this repo's operator owns
 
 ## Development
 
