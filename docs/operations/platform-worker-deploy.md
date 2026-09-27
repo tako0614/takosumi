@@ -73,10 +73,8 @@ the new image in one full deploy and call it atomic.
    A's immutable digest, then use the owner full platform plan/execute with
    source pin **A**. Its Worker/DO still has the old behavior while the image
    rolls out; do not pin the older predecessor after A becomes the remote tip.
-   If replacing
-   instances would interrupt active provider mutations, first stop only new
-   Apply/Destroy admissions and let those in-flight Runs settle; do not freeze
-   the database or all read-only Runs.
+   Container replacement can interrupt an active provider mutation; this
+   sequence does not promise uninterrupted execution.
 2. Require authoritative Container readback showing that the new immutable
    image is effective, healthy, and fully converged with no active rollout.
    If the image release or readback is incomplete, do not activate B.
@@ -87,7 +85,19 @@ the new image in one full deploy and call it atomic.
    Container configuration change. The runner build proof belongs to A; the
    release contract permits its image and the Worker source to be different
    commits of the same owning repository. Reconfirm the image and serving
-   Worker Version after activation before reopening any scoped admission hold.
+   Worker Version after activation.
+
+There is currently no product-owned command to pause and resume new
+Apply/Destroy admissions for one Workspace. Workspace-management `draining`
+belongs to management transfer, not a temporary rollout hold; do not use it
+or the database-wide schema maintenance fence for this purpose. An operator
+requiring zero interruption must establish an actual scoped quiescence
+mechanism before replacing instances, but that is not a prerequisite for the
+ordinary A-then-B protocol rollout. If a Run is interrupted after provider
+dispatch, preserve its durable evidence and reconcile only against the exact
+immutable state/output target. Without authoritative readback, the operation
+remains indeterminate; handle it as an incident, never by automatically
+replaying the provider mutation.
 
 The four combinations have distinct outcomes: old DO/old image retains the
 predecessor path; old DO/new image uses post-init digest verification; new
