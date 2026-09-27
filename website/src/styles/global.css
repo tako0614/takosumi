@@ -461,6 +461,9 @@ section > .container {
     margin-right: 0;
     transform: none;
   }
+  .hero-splat-wrap {
+    opacity: 0.34;
+  }
 }
 .hero h1 {
   font-family: var(--tg-font-display);

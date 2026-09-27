@@ -31,7 +31,6 @@ const HERO: readonly Splat[] = [
   // droplet — an intentional cluster, not a scatter.
   { top: "-14%", right: "-12%", size: 620, rotate: 14, color: "red", variant: 2, opacity: 0.5 },
   { bottom: "6%", left: "-8%", size: 300, rotate: -30, color: "blue", variant: 4, opacity: 0.34 },
-  { top: "18%", left: "34%", size: 120, rotate: 55, color: "blue", variant: 5, opacity: 0.3 },
 ];
 
 const SECTION: readonly Splat[] = [
