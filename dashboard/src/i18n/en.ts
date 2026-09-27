@@ -146,6 +146,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.checkExistingStatus": "Check existing status",
   "installStore.viewExistingRun": "Open existing Plan",
   "installStore.resumeSameAttempt": "Resume same attempt",
+  "installStore.switchToAttemptWorkspace": "Switch to attempt Workspace",
   "installStore.listingUnavailable":
     "This service is no longer available from the Store.",
   // --- common -------------------------------------------------------------

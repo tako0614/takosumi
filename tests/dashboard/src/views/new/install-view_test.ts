@@ -278,7 +278,7 @@ describe("single-screen install surface", () => {
     expect(view).toContain('when={pendingInstallAttempt()?.planRunId}');
     expect(view).toContain("idempotencyKey: attempt.idempotencyKey");
     const uncertainBranchStart = view.indexOf(
-      "if (shouldKeepInstallAttemptAfterFailure(cause))",
+      "if (\n        retainedPendingInstallAttempt(",
       view.indexOf("const preparePlan = async"),
     );
     const uncertainBranchEnd = view.indexOf(
@@ -288,6 +288,14 @@ describe("single-screen install surface", () => {
     expect(view.slice(uncertainBranchStart, uncertainBranchEnd)).not.toContain(
       "setInstallPlanIdempotencyKey",
     );
+    const resumeStart = view.indexOf("const resumePendingInstallPlan = async");
+    const resumePost = view.indexOf("const resumedResponse = await createReviewableGitInstallPlan", resumeStart);
+    expect(view.slice(resumeStart, resumePost)).toContain(
+      "isPendingInstallWorkspaceSelected(",
+    );
+    expect(view.slice(resumeStart, resumePost)).toContain('setPhase("pending-timeout")');
+    expect(view).toContain("pendingInstallResumeCompletion(");
+    expect(view).toContain('t("installStore.switchToAttemptWorkspace")');
     const readStart = api.indexOf("export async function getGitInstallPlan(");
     const readEnd = api.indexOf("/** Starts the durable Capsule-local", readStart);
     const readHelper = api.slice(readStart, readEnd);

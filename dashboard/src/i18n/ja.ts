@@ -151,6 +151,7 @@ export const ja = {
   "installStore.checkExistingStatus": "既存の準備状況を確認",
   "installStore.viewExistingRun": "既存のPlanを開く",
   "installStore.resumeSameAttempt": "同じ試行を再開",
+  "installStore.switchToAttemptWorkspace": "試行元のWorkspaceに切り替え",
   "installStore.listingUnavailable":
     "このサービスをStoreから取得できませんでした。",
   // --- common -------------------------------------------------------------

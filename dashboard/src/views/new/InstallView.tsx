@@ -124,8 +124,10 @@ import {
   type StoreInstallFeature,
 } from "./install-helpers.ts";
 import {
+  isPendingInstallWorkspaceSelected,
   pendingInstallRecoveryAction,
-  shouldKeepInstallAttemptAfterFailure,
+  pendingInstallResumeCompletion,
+  retainedPendingInstallAttempt,
 } from "./install-recovery.ts";
 import InstallExecution from "./InstallExecution.tsx";
 import "./install-view.css";
@@ -1341,6 +1343,21 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const resumePendingInstallPlan = async () => {
     const attempt = pendingInstallAttempt();
     if (!attempt || busy()) return;
+    if (
+      !isPendingInstallWorkspaceSelected(
+        attempt.workspaceId,
+        currentWorkspaceId(),
+        workspaceId(),
+      )
+    ) {
+      setPendingInstallStatus(
+        t("installStore.pendingWorkspaceMismatch", {
+          workspaceId: attempt.workspaceId,
+        }),
+      );
+      setPhase("pending-timeout");
+      return;
+    }
     setPhase("preparing");
     setPreparationStage("plan");
     setBusy(true);
@@ -1355,23 +1372,30 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           onProgress: (progress) => recordInstallPlanProgress(attempt, progress),
         },
       );
-      const action = pendingInstallRecoveryAction(
+      const completion = pendingInstallResumeCompletion(
         attempt.workspaceId,
         currentWorkspaceId(),
         workspaceId(),
         resumedResponse.nextAction,
       );
-      if (action === "show-review") {
+      if (completion.action === "show-review") {
         showReviewableInstallPlan(attempt.workspaceId, resumedResponse);
-      } else if (action === "workspace-mismatch") {
+      } else if (completion.action === "workspace-mismatch") {
         setPendingInstallStatus(
           t("installStore.pendingWorkspaceMismatch", {
             workspaceId: attempt.workspaceId,
           }),
         );
       }
+      setPhase(completion.phase);
     } catch (cause) {
-      if (shouldKeepInstallAttemptAfterFailure(cause)) {
+      if (
+        retainedPendingInstallAttempt(
+          attempt,
+          pendingInstallAttempt(),
+          cause,
+        )
+      ) {
         setPendingInstallStatus(
           pendingInstallAttempt()?.installPlanId
             ? undefined
@@ -1426,6 +1450,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setPhase("preparing");
     setBusy(true);
     setError(undefined);
+    let installAttempt: PendingInstallAttempt | undefined;
     try {
       if (!workspaceIsCurrent(workspace)) return;
       const exactSourceId = sourceId() ?? checked.sourceId;
@@ -1477,6 +1502,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         request,
         idempotencyKey: installPlanIdempotencyKey(),
       };
+      installAttempt = attempt;
       setPendingInstallAttempt(attempt);
       const response = await createReviewableGitInstallPlan(
         workspace,
@@ -1490,7 +1516,13 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       showReviewableInstallPlan(workspace, response);
     } catch (cause) {
       if (!workspaceIsCurrent(workspace)) return;
-      if (shouldKeepInstallAttemptAfterFailure(cause)) {
+      if (
+        retainedPendingInstallAttempt(
+          installAttempt,
+          pendingInstallAttempt(),
+          cause,
+        )
+      ) {
         setPendingInstallStatus(
           pendingInstallAttempt()?.installPlanId
             ? undefined
@@ -2053,11 +2085,40 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                 </Button>
               )}
             </Show>
+            <Show
+              when={
+                pendingInstallAttempt() &&
+                !isPendingInstallWorkspaceSelected(
+                  pendingInstallAttempt()!.workspaceId,
+                  currentWorkspaceId(),
+                  workspaceId(),
+                )
+              }
+            >
+              <Button
+                type="button"
+                variant="secondary"
+                busy={busy()}
+                onClick={() => {
+                  const attempt = pendingInstallAttempt();
+                  if (attempt) setCurrentWorkspaceId(attempt.workspaceId);
+                }}
+              >
+                {t("installStore.switchToAttemptWorkspace")}
+              </Button>
+            </Show>
             <Button
               type="button"
               variant="primary"
               busy={busy()}
-              disabled={!pendingInstallAttempt()}
+              disabled={
+                !pendingInstallAttempt() ||
+                !isPendingInstallWorkspaceSelected(
+                  pendingInstallAttempt()!.workspaceId,
+                  currentWorkspaceId(),
+                  workspaceId(),
+                )
+              }
               onClick={() => void resumePendingInstallPlan()}
             >
               {t("installStore.resumeSameAttempt")}
