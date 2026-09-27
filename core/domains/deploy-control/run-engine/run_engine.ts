@@ -2619,6 +2619,7 @@ export class RunEngine {
       throw new OpenTofuControllerError(
         "failed_precondition",
         "repository_install_ux_snapshot_mismatch: an initial Plan cannot replace the reviewed SourceSnapshot pin",
+        { reason: "repository_install_ux_snapshot_mismatch" },
       );
     }
     const adoptedSnapshot =
@@ -2689,6 +2690,7 @@ export class RunEngine {
       throw new OpenTofuControllerError(
         "failed_precondition",
         "repository_install_ux_snapshot_mismatch: the initial Plan snapshot does not match the reviewed install configuration",
+        { reason: "repository_install_ux_snapshot_mismatch" },
       );
     }
     // The Capsule's current state generation drives the dispatch

@@ -149,6 +149,21 @@ export async function handleCapsuleRevisionPlans(
       ctx.request,
     );
   }
+  // Repository install UX pins its reviewed snapshot until the first Apply.
+  // The canonical Plan controller rejects a different pin during that time.
+  if (
+    !capsule.currentStateVersionId &&
+    installConfig.installExperience?.repositoryInstallUx?.status === "accepted"
+  ) {
+    return errorJson(
+      "failed_precondition",
+      "Review and apply the initial Capsule Plan before revising its Git ref.",
+      409,
+      ctx.request,
+      {},
+      { reason: "revision_requires_applied_state" },
+    );
+  }
   const adoptedSourceRevision =
     await ctx.operations.getCapsuleAdoptedSourceRevision(capsule.id);
   if (capsule.currentStateVersionId && !adoptedSourceRevision) {
@@ -395,6 +410,12 @@ function permanentRevisionControllerDiagnostic(
         code: "compatibility_evidence_incomplete",
         message:
           "The deterministic compatibility evidence is incomplete and cannot be adopted safely.",
+      };
+    case "repository_install_ux_snapshot_mismatch":
+      return {
+        code: "repository_install_ux_snapshot_mismatch",
+        message:
+          "The initial install review pins a different SourceSnapshot. Apply that Plan before revising.",
       };
     default:
       return undefined;
@@ -644,6 +665,16 @@ async function assertRevisionIdentity(
     installConfig.modulePath,
   );
   const base = plan.revision.base;
+  if (
+    !base.capsuleStateVersionId &&
+    !capsule.currentStateVersionId &&
+    installConfig.installExperience?.repositoryInstallUx?.status === "accepted"
+  ) {
+    throw permanent(
+      "revision_requires_applied_state",
+      "Review and apply the initial Capsule Plan before revising its Git ref.",
+    );
+  }
   if (
     capsule.id !== plan.capsuleId ||
     capsule.workspaceId !== plan.workspaceId ||
