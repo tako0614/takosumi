@@ -23,12 +23,12 @@ test("preserves the complete check phase order and commands", () => {
     "import-boundaries",
     "test-source-boundary",
     "generalization-boundaries",
-    "tests",
     "typescript",
+    "worker-types",
+    "tests",
     "dashboard",
     "dashboard-browser",
     "docs-browser",
-    "worker-types",
     "cloudflare-worker-build",
   ]);
   expect(PORTABLE_GATE_PHASES.map((phase) => phase.command.join(" "))).toEqual([
@@ -44,15 +44,42 @@ test("preserves the complete check phase order and commands", () => {
     "bun run check:import-boundaries",
     "bun run check:test-source-boundary",
     "bun run check:generalization-boundaries",
-    "bun run test",
     "tsc --noEmit",
+    "bun run check:worker-types",
+    "bun run test",
     "bun run check:dashboard",
     "bun run check:dashboard-browser",
     "bun run docs:test:browser",
-    "bun run check:worker-types",
     "bun run check:cloudflare-worker-build",
   ]);
 });
+
+for (const failingCommand of ["tsc --noEmit", "bun run check:worker-types"]) {
+  test(`${failingCommand} fails before tests and browser builds start`, async () => {
+    const commands: string[] = [];
+    await expect(
+      runPortableGate({
+        write: () => {},
+        run: async (command) => {
+          const invocation = command.join(" ");
+          commands.push(invocation);
+          return invocation === failingCommand ? 2 : 0;
+        },
+      }),
+    ).rejects.toMatchObject({ exitCode: 2 });
+    expect(commands[0]).toBe("bun run check:tools");
+    expect(commands.at(-1)).toBe(failingCommand);
+    for (const deferredCommand of [
+      "bun run test",
+      "bun run check:dashboard",
+      "bun run check:dashboard-browser",
+      "bun run docs:test:browser",
+      "bun run check:cloudflare-worker-build",
+    ]) {
+      expect(commands).not.toContain(deferredCommand);
+    }
+  });
+}
 
 test("rejects duplicate phases and missing global sweeps", () => {
   expect(() =>
