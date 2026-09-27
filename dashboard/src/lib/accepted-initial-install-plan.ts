@@ -5,6 +5,35 @@ import { initialPlanRetryReport } from "./initial-plan-retry.ts";
 export const INITIAL_PLAN_RUN_LOOKUP_LIMIT = 500;
 
 /**
+ * Applied Capsules derive their tracking ref from applied provenance, so an
+ * InstallConfig read outage must not disable their ordinary revision flow.
+ * Before the first apply, however, the config must be read and matched before
+ * offering a revision that could bypass accepted install UX.
+ */
+export function canReviewSourceRevision(
+  capsule: Capsule | undefined,
+  routeCapsuleId: string,
+  sourceRevision: string | undefined,
+  installConfig: InstallConfig | undefined,
+): boolean {
+  if (
+    !capsule ||
+    capsule.id !== routeCapsuleId ||
+    typeof sourceRevision !== "string" ||
+    sourceRevision.trim().length === 0
+  ) {
+    return false;
+  }
+  if (capsule.currentStateVersionId || capsule.currentStateGeneration > 0) {
+    return true;
+  }
+  return (
+    installConfig?.id === capsule.installConfigId &&
+    installConfig.installExperience?.repositoryInstallUx?.status !== "accepted"
+  );
+}
+
+/**
  * Find the original review Run for an accepted repository install UX that has
  * not produced a StateVersion yet. The Capsule's initial compatibility report
  * is the public evidence tying the Run to initial installation; snapshot IDs

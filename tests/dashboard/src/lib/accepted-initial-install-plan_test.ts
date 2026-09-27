@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { Capsule, InstallConfig, Run } from "../../../../dashboard/src/lib/control-api.ts";
-import { acceptedInitialInstallPlan } from "../../../../dashboard/src/lib/accepted-initial-install-plan.ts";
+import {
+  acceptedInitialInstallPlan,
+  canReviewSourceRevision,
+} from "../../../../dashboard/src/lib/accepted-initial-install-plan.ts";
 
 const capsule = {
   id: "capsule_one",
@@ -41,6 +44,58 @@ describe("accepted repository initial install review routing", () => {
 
     expect(selected?.id).toBe("plan_original");
     expect(selected).not.toHaveProperty("sourceSnapshotId");
+  });
+
+  test("applied plain-Git revisions survive InstallConfig read failures", () => {
+    expect(
+      canReviewSourceRevision(
+        { ...capsule, currentStateVersionId: "state_applied" },
+        capsule.id,
+        "main",
+        undefined,
+      ),
+    ).toBe(true);
+    expect(
+      canReviewSourceRevision(
+        { ...capsule, currentStateVersionId: "state_applied" },
+        capsule.id,
+        "main",
+        config,
+      ),
+    ).toBe(true);
+    expect(
+      canReviewSourceRevision(
+        { ...capsule, currentStateGeneration: 1 },
+        capsule.id,
+        "main",
+        undefined,
+      ),
+    ).toBe(true);
+  });
+
+  test("unapplied revisions require exact loaded config and remain blocked for accepted UX", () => {
+    expect(canReviewSourceRevision(capsule, capsule.id, "main", undefined))
+      .toBe(false);
+    expect(
+      canReviewSourceRevision(
+        capsule,
+        capsule.id,
+        "main",
+        { ...config, installExperience: {} },
+      ),
+    ).toBe(true);
+    expect(canReviewSourceRevision(capsule, capsule.id, "main", config))
+      .toBe(false);
+    expect(
+      canReviewSourceRevision(
+        { ...capsule, installConfigId: "another_config" },
+        capsule.id,
+        "main",
+        config,
+      ),
+    ).toBe(false);
+    expect(canReviewSourceRevision(capsule, "another_capsule", "main", config))
+      .toBe(false);
   });
 
   test("plain Git installs keep the revision path and do not get an initial-plan route", () => {

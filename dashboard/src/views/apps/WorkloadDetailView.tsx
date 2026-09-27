@@ -126,6 +126,7 @@ import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import {
   acceptedInitialInstallPlan,
+  canReviewSourceRevision,
   INITIAL_PLAN_RUN_LOOKUP_LIMIT,
 } from "../../lib/accepted-initial-install-plan.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
@@ -209,7 +210,7 @@ function Inner() {
   // Fetched on every tab (not just settings): the header shows the store
   // display name, which lives on the install config's store metadata.
   const installConfigId = () => capsuleData()?.installConfigId ?? null;
-  const [installConfig] = createResource(
+  const [installConfig, { refetch: refetchInstallConfig }] = createResource(
     installConfigId,
     getInstallConfig,
   );
@@ -271,6 +272,21 @@ function Inner() {
         installConfig()?.installExperience?.repositoryInstallUx?.status ===
           "accepted",
     );
+  };
+  const initialInstallConfigDecisionPending = () => {
+    const inst = capsuleData();
+    if (
+      !inst ||
+      inst.id !== capsuleId() ||
+      inst.status === "destroyed" ||
+      inst.currentStateVersionId ||
+      inst.currentStateGeneration !== 0 ||
+      (inst.status !== "pending" && inst.status !== "error")
+    ) {
+      return false;
+    }
+    const config = installConfig.error ? undefined : installConfig();
+    return !config || config.id !== inst.installConfigId;
   };
   // Source metadata is displayed on the Updates tab and in Settings' support
   // disclosure. Keep each resource scoped to its tab; revision mutations use
@@ -358,16 +374,8 @@ function Inner() {
   const sourceRevisionReady = () => {
     const inst = capsuleData();
     const config = installConfig.error ? undefined : installConfig();
-    if (
-      !inst ||
-      inst.id !== capsuleId() ||
-      !config ||
-      config.id !== inst.installConfigId
-    ) {
-      return false;
-    }
     const revision = currentSourceRevision();
-    return typeof revision === "string" && revision.trim().length > 0;
+    return canReviewSourceRevision(inst, capsuleId(), revision, config);
   };
   const { confirm } = useConfirmDialog();
   const producers = createMemo(() =>
@@ -689,8 +697,8 @@ function Inner() {
                 {(message) => <Toast tone="error">{message()}</Toast>}
               </Show>
 
-              {/* A service that never successfully applied (no StateVersion)
-                  is stuck mid-setup — say so and offer the two ways out. */}
+              {/* A service with no applied StateVersion is still in setup;
+                  preserve its initial review when accepted install UX owns it. */}
               <Show
                 when={
                   inst().id === capsuleId() &&
@@ -702,32 +710,62 @@ function Inner() {
                   <p class="av-setup-incomplete-text">
                     {initialReviewRequired()
                       ? t("app.setupIncomplete.initialReviewBody")
-                      : t("app.setupIncomplete.body")}
+                      : initialInstallConfigDecisionPending()
+                        ? t(
+                            installConfig.error
+                              ? "app.setupIncomplete.installConfigUnavailable"
+                              : "app.setupIncomplete.checkingInstallConfig",
+                          )
+                        : t("app.setupIncomplete.body")}
                   </p>
                   <div class="av-actions">
                     <Show
                       when={initialReviewRequired()}
                       fallback={
-                        <>
-                          {/* Hide the 更新タブへ button when already on the 更新
-                              (deploys) tab — otherwise it is a self-link. */}
-                          <Show when={tab() !== "deploys"}>
+                        <Show
+                          when={initialInstallConfigDecisionPending()}
+                          fallback={
+                            <>
+                              {/* Hide the 更新タブへ button when already on the 更新
+                                  (deploys) tab — otherwise it is a self-link. */}
+                              <Show when={tab() !== "deploys"}>
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  href={`/workloads/${encodeURIComponent(capsuleId())}/deploys`}
+                                >
+                                  {t("app.setupIncomplete.review")}
+                                </Button>
+                              </Show>
+                              <Button
+                                variant="danger"
+                                size="sm"
+                                href={`/workloads/${encodeURIComponent(capsuleId())}/danger`}
+                              >
+                                {t("app.setupIncomplete.delete")}
+                              </Button>
+                            </>
+                          }
+                        >
+                          <Show
+                            when={installConfig.error}
+                            fallback={
+                              <p class="muted" role="status">
+                                {t("app.setupIncomplete.checkingInstallConfig")}
+                              </p>
+                            }
+                          >
                             <Button
                               variant="secondary"
                               size="sm"
-                              href={`/workloads/${encodeURIComponent(capsuleId())}/deploys`}
+                              disabled={installConfig.loading}
+                              busy={installConfig.loading}
+                              onClick={() => void refetchInstallConfig()}
                             >
-                              {t("app.setupIncomplete.review")}
+                              {t("app.setupIncomplete.retryInstallConfig")}
                             </Button>
                           </Show>
-                          <Button
-                            variant="danger"
-                            size="sm"
-                            href={`/workloads/${encodeURIComponent(capsuleId())}/danger`}
-                          >
-                            {t("app.setupIncomplete.delete")}
-                          </Button>
-                        </>
+                        </Show>
                       }
                     >
                       <Show when={acceptedInitialPlan()}>
@@ -794,6 +832,13 @@ function Inner() {
                       sourceRevision={currentSourceRevision()}
                       sourceRevisionReady={sourceRevisionReady()}
                       initialReviewRequired={initialReviewRequired()}
+                      initialInstallConfigPending={
+                        initialInstallConfigDecisionPending()
+                      }
+                      revisionReviewBlocked={
+                        initialReviewRequired() ||
+                        initialInstallConfigDecisionPending()
+                      }
                       initialPlan={acceptedInitialPlan()}
                       initialPlanLoading={initialPlanRuns.loading}
                       initialPlanError={Boolean(initialPlanRuns.error)}
@@ -1154,6 +1199,8 @@ function DeploysTab(props: {
   readonly sourceRevision?: string;
   readonly sourceRevisionReady: boolean;
   readonly initialReviewRequired: boolean;
+  readonly initialInstallConfigPending: boolean;
+  readonly revisionReviewBlocked: boolean;
   readonly initialPlan?: Pick<Run, "id">;
   readonly initialPlanLoading: boolean;
   readonly initialPlanError: boolean;
@@ -1192,7 +1239,7 @@ function DeploysTab(props: {
   };
   return (
     <>
-      <Show when={!props.initialReviewRequired}>
+      <Show when={!props.revisionReviewBlocked}>
         <Card>
           <CardHeader
             title={t("app.deploys.sourceVersionTitle")}
@@ -1259,11 +1306,15 @@ function DeploysTab(props: {
           title={
             props.initialReviewRequired
               ? t("app.deploys.initialReviewTitle")
+              : props.initialInstallConfigPending
+                ? t("app.setupIncomplete.checkingInstallConfig")
               : t("app.deploys.reviewTitle")
           }
           subtitle={
             props.initialReviewRequired
               ? t("app.deploys.initialReviewSubtitle")
+              : props.initialInstallConfigPending
+                ? t("app.setupIncomplete.installConfigWaitHint")
               : t("app.deploys.reviewSubtitle")
           }
           actions={
@@ -1271,16 +1322,18 @@ function DeploysTab(props: {
               <Show
                 when={props.initialReviewRequired}
                 fallback={
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    type="button"
-                    disabled={props.reviewBusy || !props.sourceRevisionReady}
-                    busy={props.reviewBusy}
-                    onClick={() => props.onReview()}
-                  >
-                    {t("apps.reviewChanges")}
-                  </Button>
+                  <Show when={!props.revisionReviewBlocked}>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      type="button"
+                      disabled={props.reviewBusy || !props.sourceRevisionReady}
+                      busy={props.reviewBusy}
+                      onClick={() => props.onReview()}
+                    >
+                      {t("apps.reviewChanges")}
+                    </Button>
+                  </Show>
                 }
               >
                 <Show when={props.initialPlan}>
@@ -1298,9 +1351,16 @@ function DeploysTab(props: {
             </div>
           }
         />
-        <Show when={props.initialReviewRequired && !props.initialPlan}>
+        <Show
+          when={
+            (props.initialReviewRequired && !props.initialPlan) ||
+            props.initialInstallConfigPending
+          }
+        >
           <p class="muted" role="status">
-            {props.initialPlanLoading
+            {props.initialInstallConfigPending
+              ? t("app.setupIncomplete.installConfigWaitHint")
+              : props.initialPlanLoading
               ? t("app.setupIncomplete.loadingInitialReview")
               : props.initialPlanError
                 ? t("app.setupIncomplete.initialReviewUnavailable")

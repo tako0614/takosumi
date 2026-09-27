@@ -23,7 +23,10 @@ test("Workload revisions use the Capsule-local coordinator and applied provenanc
   expect(viewSource).toContain("idempotencyKey");
   expect(viewSource).toContain("!props.sourceRevisionReady");
   expect(viewSource).toContain("!revisionCandidate()");
-  expect(viewSource).toContain('when={!props.initialReviewRequired}');
+  expect(viewSource).toContain('when={!props.revisionReviewBlocked}');
+  expect(viewSource).toContain("canReviewSourceRevision(");
+  expect(viewSource).toContain("initialInstallConfigDecisionPending()");
+  expect(viewSource).toContain("refetchInstallConfig()");
   expect(viewSource).toContain('acceptedInitialInstallPlan(');
   expect(viewSource).toContain("listRuns(workspaceId, INITIAL_PLAN_RUN_LOOKUP_LIMIT)");
   expect(viewSource).toContain(

@@ -604,6 +604,13 @@ export const ja = {
   "app.setupIncomplete.loadingInitialReview": "最初のPlanを読み込んでいます…",
   "app.setupIncomplete.initialReviewUnavailable":
     "最初のPlanを見つけられませんでした。このページを再読み込みしてください。",
+  "app.setupIncomplete.checkingInstallConfig":
+    "追加方法を確認してから、次の操作をご案内します。",
+  "app.setupIncomplete.installConfigUnavailable":
+    "追加方法を読み込めませんでした。再試行してから確認を続けてください。",
+  "app.setupIncomplete.installConfigWaitHint":
+    "上の確認を完了すると、次の操作に進めます。",
+  "app.setupIncomplete.retryInstallConfig": "追加方法を再確認",
   "app.setupIncomplete.review": "更新タブへ",
   "app.setupIncomplete.delete": "削除オプション",
 

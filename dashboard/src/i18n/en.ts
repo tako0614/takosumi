@@ -601,6 +601,13 @@ export const en: Record<keyof typeof ja, string> = {
   "app.setupIncomplete.loadingInitialReview": "Loading the initial review…",
   "app.setupIncomplete.initialReviewUnavailable":
     "The initial review could not be found. Reload this page to try again.",
+  "app.setupIncomplete.checkingInstallConfig":
+    "Checking the install configuration before offering a review.",
+  "app.setupIncomplete.installConfigUnavailable":
+    "Couldn't load the install configuration. Retry here before reviewing.",
+  "app.setupIncomplete.installConfigWaitHint":
+    "Complete the install check above before reviewing.",
+  "app.setupIncomplete.retryInstallConfig": "Retry install check",
   "app.setupIncomplete.review": "Open updates",
   "app.setupIncomplete.delete": "Delete options",
 
