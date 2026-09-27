@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { lstat, readFile } from "node:fs/promises";
+import { lstat, readFile, readdir } from "node:fs/promises";
 import { stableJsonDigest } from "../../core/adapters/source/digest.ts";
 import {
   assertCredentialEnvAvailable,
@@ -7,7 +7,11 @@ import {
   prepareProviderCredentialFiles,
   refreshRunCredentials,
 } from "../../runner/lib/credentials.ts";
-import type { RunWorkspace } from "../../runner/lib/types.ts";
+import type {
+  CommandContext,
+  RenewableCredentialProjection,
+  RunWorkspace,
+} from "../../runner/lib/types.ts";
 import { redactRunnerOutput } from "../../runner/lib/redaction.ts";
 import { handleRunnerRequest } from "../../runner/lib/http_server.ts";
 
@@ -276,4 +280,42 @@ test("Plan sessions require the PlanRun owner discriminant", async () => {
       value: "post-terminal-plan-token",
     }],
   })).rejects.toThrow();
+});
+
+test("failed credential-file preparation shreds files written by earlier descriptors", async () => {
+  const before = new Set(await readdir("/tmp"));
+  const first: RenewableCredentialProjection = {
+    providerSource: "registry.opentofu.org/example/probe",
+    connectionId: "conn_first",
+    sourceEnvName: "FIRST_TOKEN",
+    fileEnvName: "FIRST_TOKEN_FILE",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    initialValue: "partial-preparation-secret",
+  };
+  const invalidSecond = {
+    providerSource: "registry.opentofu.org/example/probe",
+    connectionId: "conn_second",
+    sourceEnvName: "SECOND_TOKEN",
+    fileEnvName: "SECOND_TOKEN_FILE",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    initialValue: undefined,
+  } as unknown as RenewableCredentialProjection;
+  const context: CommandContext = {
+    env: {},
+    renewableCredentials: [first, invalidSecond],
+    credentialRefreshOwner: { kind: "plan", id: "plan_partial_preparation" },
+    credentialManifestDigest: `sha256:${"a".repeat(64)}`,
+  };
+
+  await expect(prepareProviderCredentialFiles(
+    context,
+    workspace(),
+    "plan_partial_preparation",
+  )).rejects.toThrow();
+
+  const after = await readdir("/tmp");
+  const leakedDirs = after.filter((name) =>
+    name.startsWith("takosumi-run-credentials-") && !before.has(name),
+  );
+  expect(leakedDirs).toEqual([]);
 });

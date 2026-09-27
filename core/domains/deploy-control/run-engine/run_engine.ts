@@ -7125,7 +7125,19 @@ export class RunEngine {
       owner,
       runnerRunId: input.planRun.id,
     });
+    // A cold runner capability probe can outlive the credential that passed
+    // the first admission check. Revalidate the exact Run/lease and expiry at
+    // the final pre-dispatch boundary; never start a child with an expired or
+    // nearly expired bearer and hope the timer wins the race.
+    await assertHeldLease();
     if (signal.aborted) throw signal.reason;
+    if ([...expires.values()].some((expiry) => expiry - this.#now() < 120_000)) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "renewable run credential has insufficient dispatch lifetime after runner capability probe",
+        { reason: CREDENTIAL_SERVICE_UNAVAILABLE_REASON },
+      );
+    }
 
     const child = new AbortController();
     const abortChild = () => child.abort(signal.reason);

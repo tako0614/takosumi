@@ -1521,6 +1521,48 @@ test("renewable provider floor rejects a selected older version before runner di
   expect(applyCalls).toBe(0);
 });
 
+test("a delayed runner capability probe cannot dispatch an expired initial credential", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { applyRunId, vault, issueCount } =
+    await seedRenewableApplyFixture(store, "refresh_delayed_capability");
+  let resolveProbeStarted!: () => void;
+  const probeStarted = new Promise<void>((resolve) => { resolveProbeStarted = resolve; });
+  let releaseProbe!: () => void;
+  const probeHold = new Promise<void>((resolve) => { releaseProbe = resolve; });
+  let applyCalls = 0;
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
+  try {
+    const controller = controllerWith(store, {
+      vault, now: () => Date.now(), runRenewalIntervalMs: 0,
+      assertCredentialRefreshCapability: async () => {
+        resolveProbeStarted();
+        await probeHold;
+      },
+      refreshCredentials: async () => {},
+      apply: async () => {
+        applyCalls += 1;
+        return fixtureStateCommit();
+      },
+    });
+    const pending = controller.runQueuedApply(applyRunId);
+    await probeStarted;
+    expect(issueCount()).toBe(1);
+    jest.advanceTimersByTime(121_000);
+    releaseProbe();
+    const response = await pending;
+    expect(response.applyRun.status).toBe("failed");
+    expect(response.applyRun.diagnostics?.map((item) => item.code)).toContain(
+      "credential_service_unavailable",
+    );
+    expect(applyCalls).toBe(0);
+    expect(issueCount()).toBe(1);
+  } finally {
+    releaseProbe();
+    jest.useRealTimers();
+  }
+});
+
 test("renewable ApplyRun loses its Run fence before mint and delivers nothing", async () => {
   const store = new LoseApplyHeartbeatStore();
   const { applyRunId, vault, issueCount } =
