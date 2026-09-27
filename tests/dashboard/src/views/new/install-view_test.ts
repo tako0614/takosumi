@@ -278,15 +278,22 @@ describe("single-screen install surface", () => {
     expect(view).toContain('when={pendingInstallAttempt()?.planRunId}');
     expect(view).toContain("idempotencyKey: attempt.idempotencyKey");
     const uncertainBranchStart = view.indexOf(
-      "if (\n        retainedPendingInstallAttempt(",
+      "const failureAction = installPlanAttemptFailureAction(",
       view.indexOf("const preparePlan = async"),
     );
-    const uncertainBranchEnd = view.indexOf(
-      "setInstallPlanIdempotencyKey(crypto.randomUUID())",
+    const retainBranchStart = view.indexOf(
+      'if (failureAction === "retain")',
       uncertainBranchStart,
     );
-    expect(view.slice(uncertainBranchStart, uncertainBranchEnd)).not.toContain(
+    const retainBranchEnd = view.indexOf(
+      "setPendingInstallAttempt(undefined)",
+      retainBranchStart,
+    );
+    expect(view.slice(retainBranchStart, retainBranchEnd)).not.toContain(
       "setInstallPlanIdempotencyKey",
+    );
+    expect(view.slice(uncertainBranchStart, retainBranchStart)).toContain(
+      'if (failureAction === "stale") return;',
     );
     const resumeStart = view.indexOf("const resumePendingInstallPlan = async");
     const resumePost = view.indexOf("const resumedResponse = await createReviewableGitInstallPlan", resumeStart);

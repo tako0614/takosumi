@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { installPlanAttemptFailureAction } from "../../../../dashboard/src/views/new/install-recovery.ts";
 import {
   createReviewableGitInstallPlan,
   createReviewableGitRevisionPlan,
@@ -209,4 +210,51 @@ test("install: unknown create acknowledgement never invents a coordinator ID", a
   ).rejects.toMatchObject({ code: "install_plan_reconcile_timeout" });
 
   expect(progressId).toBeUndefined();
+});
+
+test("install: known coordinator survives reconcile 409 without starting another create", async () => {
+  const calls: Array<{ url: string; method: string; key: string | null }> = [];
+  const startedAttempt = {
+    workspaceId: "ws_1",
+    idempotencyKey: "stable_attempt",
+    request,
+  };
+  let currentAttempt: typeof startedAttempt & { installPlanId?: string } | undefined = startedAttempt;
+  let failureAction: string | undefined;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    calls.push({ url, method, key: new Headers(init?.headers).get("idempotency-key") });
+    if (url.endsWith("/reconcile")) {
+      return new Response(JSON.stringify({ code: "reconcile_in_progress", message: "already running" }), {
+        status: 409,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return response("install", "reconcile");
+  }) as typeof fetch;
+
+  try {
+    await createReviewableGitInstallPlan("ws_1", request, {
+      idempotencyKey: startedAttempt.idempotencyKey,
+      onProgress: (progress) => {
+        currentAttempt = { ...startedAttempt, installPlanId: progress.installPlan.id };
+      },
+    });
+  } catch (error) {
+    failureAction = installPlanAttemptFailureAction(startedAttempt, currentAttempt, error);
+  }
+
+  expect(calls.map(({ url }) => url)).toEqual([
+    "/api/v1/workspaces/ws_1/install-plans",
+    "/api/v1/install-plans/install_1/reconcile",
+  ]);
+  expect(calls.filter(({ method, url }) => method === "POST" && url.endsWith("/install-plans"))).toHaveLength(1);
+  expect(calls[0]?.key).toBe("stable_attempt");
+  expect(failureAction).toBe("retain");
+  expect(currentAttempt).toMatchObject({
+    workspaceId: "ws_1",
+    idempotencyKey: "stable_attempt",
+    installPlanId: "install_1",
+  });
 });

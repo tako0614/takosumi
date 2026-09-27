@@ -5,10 +5,10 @@ import {
   isMutationOutcomeUnknown,
 } from "../../../../../dashboard/src/lib/control-api.ts";
 import {
+  installPlanAttemptFailureAction,
   isPendingInstallWorkspaceSelected,
   pendingInstallRecoveryAction,
   pendingInstallResumeCompletion,
-  retainedPendingInstallAttempt,
   shouldKeepInstallAttemptAfterFailure,
 } from "../../../../../dashboard/src/views/new/install-recovery.ts";
 
@@ -72,22 +72,43 @@ test("a 5xx keeps the exact acknowledged attempt identity and idempotency key", 
     capsuleId: "cap_known",
     planRunId: "plan_known",
   };
-  const retained = retainedPendingInstallAttempt(
+  const action = installPlanAttemptFailureAction(
     attempt,
     attempt,
     new ControlApiError(503, "unavailable", "response lost after commit"),
   );
-  expect(retained).toBe(attempt);
-  expect(retained?.idempotencyKey).toBe("install-key-1");
-  expect(retained?.installPlanId).toBe("gip_known");
-  expect(retained?.planRunId).toBe("plan_known");
+  expect(action).toBe("retain");
+  expect(attempt.idempotencyKey).toBe("install-key-1");
+  expect(attempt.installPlanId).toBe("gip_known");
+  expect(attempt.planRunId).toBe("plan_known");
   expect(
-    retainedPendingInstallAttempt(
+    installPlanAttemptFailureAction(
       attempt,
       { ...attempt, idempotencyKey: "replacement-key" },
       new ControlApiError(503, "unavailable", "late failure"),
     ),
-  ).toBeUndefined();
+  ).toBe("stale");
+});
+
+test("a reconcile 409 preserves a known coordinator while a definite create 409 can clear", () => {
+  const acknowledged = {
+    idempotencyKey: "same-key",
+    installPlanId: "gip_known",
+  };
+  expect(
+    installPlanAttemptFailureAction(
+      acknowledged,
+      acknowledged,
+      new ControlApiError(409, "reconcile_in_progress", "already running"),
+    ),
+  ).toBe("retain");
+  expect(
+    installPlanAttemptFailureAction(
+      { idempotencyKey: "same-key" },
+      { idempotencyKey: "same-key" },
+      new ControlApiError(409, "install_conflict", "create rejected"),
+    ),
+  ).toBe("clear");
 });
 
 test("a reviewable Plan only promotes when both Workspace scopes still match", () => {

@@ -59,17 +59,18 @@ export function shouldKeepInstallAttemptAfterFailure(error: unknown): boolean {
   return isMutationOutcomeUnknown(error);
 }
 
-export function retainedPendingInstallAttempt<T extends { idempotencyKey: string }>(
+export function installPlanAttemptFailureAction<
+  T extends { idempotencyKey: string; installPlanId?: string },
+>(
   attempt: T | undefined,
   current: T | undefined,
   error: unknown,
-): T | undefined {
-  if (
-    !attempt ||
-    attempt.idempotencyKey !== current?.idempotencyKey ||
-    !shouldKeepInstallAttemptAfterFailure(error)
-  ) {
-    return undefined;
-  }
-  return current;
+): "retain" | "clear" | "stale" {
+  if (!attempt) return current ? "stale" : "clear";
+  if (!current || attempt.idempotencyKey !== current.idempotencyKey) return "stale";
+  // Once the server has acknowledged a coordinator identity, even a 4xx from
+  // a later reconcile belongs to that coordinator and must not erase it.
+  return current.installPlanId || shouldKeepInstallAttemptAfterFailure(error)
+    ? "retain"
+    : "clear";
 }

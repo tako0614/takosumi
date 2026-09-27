@@ -125,9 +125,9 @@ import {
 } from "./install-helpers.ts";
 import {
   isPendingInstallWorkspaceSelected,
+  installPlanAttemptFailureAction,
   pendingInstallRecoveryAction,
   pendingInstallResumeCompletion,
-  retainedPendingInstallAttempt,
 } from "./install-recovery.ts";
 import InstallExecution from "./InstallExecution.tsx";
 import "./install-view.css";
@@ -1389,13 +1389,13 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       }
       setPhase(completion.phase);
     } catch (cause) {
-      if (
-        retainedPendingInstallAttempt(
-          attempt,
-          pendingInstallAttempt(),
-          cause,
-        )
-      ) {
+      const failureAction = installPlanAttemptFailureAction(
+        attempt,
+        pendingInstallAttempt(),
+        cause,
+      );
+      if (failureAction === "stale") return;
+      if (failureAction === "retain") {
         setPendingInstallStatus(
           pendingInstallAttempt()?.installPlanId
             ? undefined
@@ -1516,13 +1516,13 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       showReviewableInstallPlan(workspace, response);
     } catch (cause) {
       if (!workspaceIsCurrent(workspace)) return;
-      if (
-        retainedPendingInstallAttempt(
-          installAttempt,
-          pendingInstallAttempt(),
-          cause,
-        )
-      ) {
+      const failureAction = installPlanAttemptFailureAction(
+        installAttempt,
+        pendingInstallAttempt(),
+        cause,
+      );
+      if (failureAction === "stale") return;
+      if (failureAction === "retain") {
         setPendingInstallStatus(
           pendingInstallAttempt()?.installPlanId
             ? undefined
