@@ -123,6 +123,10 @@ import {
   type StoreInputField,
   type StoreInstallFeature,
 } from "./install-helpers.ts";
+import {
+  pendingInstallRecoveryAction,
+  shouldKeepInstallAttemptAfterFailure,
+} from "./install-recovery.ts";
 import InstallExecution from "./InstallExecution.tsx";
 import "./install-view.css";
 
@@ -758,7 +762,14 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     // immutable snapshot below.
     resetPreparedSource({ preserveModuleSelection: true });
     setError(undefined);
-    setPhase(listing() || gitUrl() ? "configure" : "browse");
+    setPendingInstallStatus(undefined);
+    setPhase(
+      pendingInstallAttempt()
+        ? "pending-timeout"
+        : listing() || gitUrl()
+          ? "configure"
+          : "browse",
+    );
   });
 
   const chooseListing = (selected: TcsListing) => {
@@ -1269,7 +1280,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const showReviewableInstallPlan = (
     workspace: string,
     response: Awaited<ReturnType<typeof createReviewableGitInstallPlan>>,
-  ) => {
+  ): boolean => {
+    if (!workspaceIsCurrent(workspace)) return false;
     const currentCapsuleId = response.installPlan.capsuleId;
     const runId = response.installPlan.planRunId;
     if (!currentCapsuleId || !runId) {
@@ -1284,12 +1296,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setPendingInstallStatus(undefined);
     setError(undefined);
     setPhase("review");
+    return true;
   };
-
-  const isUncertainInstallPlanFailure = (cause: unknown): boolean =>
-    (cause instanceof ControlApiError &&
-      (cause.code === "install_plan_reconcile_timeout" || cause.status === 0)) ||
-    cause instanceof TypeError;
 
   const checkPendingInstallPlan = async () => {
     const attempt = pendingInstallAttempt();
@@ -1300,9 +1308,21 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     try {
       const response = await getGitInstallPlan(attempt.installPlanId);
       recordInstallPlanProgress(attempt, response);
-      if (response.nextAction === "review_run") {
+      const action = pendingInstallRecoveryAction(
+        attempt.workspaceId,
+        currentWorkspaceId(),
+        workspaceId(),
+        response.nextAction,
+      );
+      if (action === "show-review") {
         showReviewableInstallPlan(attempt.workspaceId, response);
-      } else if (response.nextAction === "none") {
+      } else if (action === "workspace-mismatch") {
+        setPendingInstallStatus(
+          t("installStore.pendingWorkspaceMismatch", {
+            workspaceId: attempt.workspaceId,
+          }),
+        );
+      } else if (action === "stopped") {
         setPendingInstallStatus(
           response.installPlan.diagnostic?.message ??
             t("installStore.pendingStopped"),
@@ -1335,9 +1355,23 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           onProgress: (progress) => recordInstallPlanProgress(attempt, progress),
         },
       );
-      showReviewableInstallPlan(attempt.workspaceId, resumedResponse);
+      const action = pendingInstallRecoveryAction(
+        attempt.workspaceId,
+        currentWorkspaceId(),
+        workspaceId(),
+        resumedResponse.nextAction,
+      );
+      if (action === "show-review") {
+        showReviewableInstallPlan(attempt.workspaceId, resumedResponse);
+      } else if (action === "workspace-mismatch") {
+        setPendingInstallStatus(
+          t("installStore.pendingWorkspaceMismatch", {
+            workspaceId: attempt.workspaceId,
+          }),
+        );
+      }
     } catch (cause) {
-      if (isUncertainInstallPlanFailure(cause)) {
+      if (shouldKeepInstallAttemptAfterFailure(cause)) {
         setPendingInstallStatus(
           pendingInstallAttempt()?.installPlanId
             ? undefined
@@ -1455,7 +1489,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       if (!workspaceIsCurrent(workspace)) return;
       showReviewableInstallPlan(workspace, response);
     } catch (cause) {
-      if (isUncertainInstallPlanFailure(cause)) {
+      if (!workspaceIsCurrent(workspace)) return;
+      if (shouldKeepInstallAttemptAfterFailure(cause)) {
         setPendingInstallStatus(
           pendingInstallAttempt()?.installPlanId
             ? undefined
@@ -1978,6 +2013,15 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         >
           <h2>{t("installStore.pendingTitle")}</h2>
           <p>{t("installStore.pendingHint")}</p>
+          <Show when={pendingInstallAttempt()}>
+            {(attempt) => (
+              <p>
+                {t("installStore.pendingWorkspace", {
+                  workspaceId: attempt().workspaceId,
+                })}
+              </p>
+            )}
+          </Show>
           <Show when={pendingInstallStatus()}>
             {(status) => <p>{status()}</p>}
           </Show>

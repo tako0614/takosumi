@@ -138,6 +138,9 @@ export const ja = {
   "installStore.pendingTitle": "追加の準備状況を確認してください",
   "installStore.pendingHint":
     "確認用Planの準備が期限内に終わりませんでした。既存の試行がサーバーで続いている可能性があります。新しい追加処理は始めず、状態確認または同じ試行の再開を選んでください。",
+  "installStore.pendingWorkspace": "この試行のWorkspace: {workspaceId}",
+  "installStore.pendingWorkspaceMismatch":
+    "この試行はWorkspace {workspaceId} に属します。現在のWorkspace画面には移さず、同じWorkspaceの状態として保持しています。",
   "installStore.pendingCoordinator": "既存の準備ID",
   "installStore.pendingChecking": "既存の準備状況を読み取っています。",
   "installStore.pendingStillRunning": "既存の準備はまだ続いています。",

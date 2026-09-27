@@ -131,6 +131,9 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.pendingTitle": "Check the existing install preparation",
   "installStore.pendingHint":
     "The review Plan was not ready before the deadline. The existing attempt may still be running on the server. Check its status or explicitly resume the same attempt; do not start a new install.",
+  "installStore.pendingWorkspace": "Workspace for this attempt: {workspaceId}",
+  "installStore.pendingWorkspaceMismatch":
+    "This attempt belongs to Workspace {workspaceId}. It was kept with that Workspace instead of being moved into the currently selected Workspace.",
   "installStore.pendingCoordinator": "Existing preparation ID",
   "installStore.pendingChecking": "Reading the existing preparation status.",
   "installStore.pendingStillRunning": "The existing preparation is still running.",

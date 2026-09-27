@@ -278,7 +278,8 @@ describe("single-screen install surface", () => {
     expect(view).toContain('when={pendingInstallAttempt()?.planRunId}');
     expect(view).toContain("idempotencyKey: attempt.idempotencyKey");
     const uncertainBranchStart = view.indexOf(
-      "if (isUncertainInstallPlanFailure(cause))",
+      "if (shouldKeepInstallAttemptAfterFailure(cause))",
+      view.indexOf("const preparePlan = async"),
     );
     const uncertainBranchEnd = view.indexOf(
       "setInstallPlanIdempotencyKey(crypto.randomUUID())",

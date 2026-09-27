@@ -1646,7 +1646,7 @@ function isCapsuleResponse(value: unknown): value is Capsule {
   );
 }
 
-function isMutationOutcomeUnknown(error: unknown): boolean {
+export function isMutationOutcomeUnknown(error: unknown): boolean {
   if (error instanceof ControlApiIndeterminateError) return true;
   if (error instanceof ControlApiError) {
     return error.status === 0 || error.status >= 500;
