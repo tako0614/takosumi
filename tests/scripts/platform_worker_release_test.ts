@@ -1129,6 +1129,18 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
       ),
     ).toThrow("platform_worker_release_config_source_invalid");
   }
+  for (const envNames of [
+    ["TAKOFORM_ENDPOINT", "TAKOFORM_SPACE", "TAKOFORM_OTHER"],
+    [
+      "TAKOFORM_ENDPOINT",
+      "TAKOFORM_TOKEN",
+      "TAKOFORM_TOKEN_FILE",
+    ],
+  ]) {
+    expect(() =>
+      assertConfigTargetsSource(withBroker({ envNames, renewableEnv }), "production"),
+    ).toThrow("platform_worker_release_config_source_invalid");
+  }
   for (const overrides of [
     { publicInputExchangePath: undefined },
     { publicInputCapabilities: undefined },

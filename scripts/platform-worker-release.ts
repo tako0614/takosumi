@@ -7331,7 +7331,8 @@ function matchesHostedProviderCredentialBroker(value: unknown): boolean {
     JSON.stringify([...legacyKeys, "renewableEnv"].sort());
   return (
     (exactLegacyShape || exactRenewableShape) &&
-    (!exactRenewableShape || matchesHostedRenewableEnv(value.renewableEnv)) &&
+    (!exactRenewableShape ||
+      matchesHostedRenewableEnv(value.renewableEnv, value.envNames)) &&
     value.publicInputExchangePath === "/public-inputs/http-endpoint" &&
     Array.isArray(value.publicInputCapabilities) &&
     JSON.stringify(value.publicInputCapabilities) ===
@@ -7355,16 +7356,19 @@ function matchesHostedProviderCredentialBroker(value: unknown): boolean {
   );
 }
 
-function matchesHostedRenewableEnv(value: unknown): boolean {
+function matchesHostedRenewableEnv(value: unknown, envNames: unknown): boolean {
   return (
     record(value) &&
+    Array.isArray(envNames) &&
     JSON.stringify(Object.keys(value).sort()) ===
       JSON.stringify(
         ["fileEnvName", "minimumProviderVersion", "sourceEnvName"].sort(),
       ) &&
     value.sourceEnvName === "TAKOFORM_TOKEN" &&
     value.fileEnvName === "TAKOFORM_TOKEN_FILE" &&
-    value.minimumProviderVersion === "4.1.0"
+    value.minimumProviderVersion === "4.1.0" &&
+    envNames.includes(value.sourceEnvName) &&
+    !envNames.includes(value.fileEnvName)
   );
 }
 
