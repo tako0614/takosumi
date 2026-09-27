@@ -5792,6 +5792,7 @@ async function renewableCredentialRefreshClaim(
   ) {
     throw new Error("renewable credential dispatch manifest is invalid");
   }
+  const bindings = manifest.bindings;
   const descriptors = raw.map((value) => {
     if (!isRecord(value)) throw new Error("renewable credential dispatch is malformed");
     if (
@@ -5803,7 +5804,7 @@ async function renewableCredentialRefreshClaim(
     const sourceEnvName = stringField(value, "sourceEnvName");
     const fileEnvName = stringField(value, "fileEnvName");
     const expiresAt = stringField(value, "expiresAt");
-    const binding = manifest.bindings.find((candidate) =>
+    const binding = bindings.find((candidate) =>
       isRecord(candidate) &&
       stringField(candidate, "providerSource") === providerSource &&
       stringField(candidate, "connectionId") === connectionId,
