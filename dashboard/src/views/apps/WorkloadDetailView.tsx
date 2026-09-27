@@ -49,6 +49,7 @@ import {
   type Capsule,
   ControlApiError,
   type InstallConfig,
+  type Run,
   type ProviderBinding,
   type ProviderBindings,
   type ProviderConnection,
@@ -64,6 +65,7 @@ import {
   getCapsuleConfigurationContext,
   getWorkspaceGraph,
   listActivity,
+  listRuns,
   listStateVersions,
   listProviderConnections,
   listSources,
@@ -122,6 +124,10 @@ import {
 import { autoApplyRunPath } from "../../lib/auto-apply-consent.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
+import {
+  acceptedInitialInstallPlan,
+  INITIAL_PLAN_RUN_LOOKUP_LIMIT,
+} from "../../lib/accepted-initial-install-plan.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import {
   getOrCreateRevisionPlanAttempt,
@@ -215,6 +221,57 @@ function Inner() {
     if (installConfig.error) return undefined;
     return capsuleDisplayName(installConfig(), locale());
   });
+  const initialPlanLookupKey = () => {
+    const inst = capsuleData();
+    const config = installConfig.error ? undefined : installConfig();
+    if (
+      !inst ||
+      inst.id !== capsuleId() ||
+      !config ||
+      config.id !== inst.installConfigId ||
+      config.installExperience?.repositoryInstallUx?.status !== "accepted" ||
+      inst.currentStateVersionId ||
+      inst.currentStateGeneration !== 0 ||
+      (inst.status !== "pending" && inst.status !== "error")
+    ) {
+      return null;
+    }
+    return { workspaceId: inst.workspaceId, capsuleId: inst.id };
+  };
+  // The initial review is a canonical Run, not a revision. Locate it through
+  // the Capsule's exact initial compatibility report; workspace/capsule keys
+  // scope this async read so a route switch cannot show another app's Run.
+  const [initialPlanRuns] = createResource(
+    initialPlanLookupKey,
+    ({ workspaceId }) =>
+      listRuns(workspaceId, INITIAL_PLAN_RUN_LOOKUP_LIMIT),
+  );
+  const acceptedInitialPlan = createMemo(() =>
+    (() => {
+      const inst = capsuleData();
+      if (!inst || inst.id !== capsuleId()) return undefined;
+      return acceptedInitialInstallPlan(
+        initialPlanRuns.error ? undefined : initialPlanRuns(),
+        inst,
+        installConfig.error ? undefined : installConfig(),
+      );
+    })(),
+  );
+  const initialReviewRequired = () => {
+    const inst = capsuleData();
+    return Boolean(
+      inst &&
+        inst.id === capsuleId() &&
+        inst.status !== "destroyed" &&
+        !inst.currentStateVersionId &&
+        inst.currentStateGeneration === 0 &&
+        (inst.status === "pending" || inst.status === "error") &&
+        !installConfig.error &&
+        installConfig()?.id === inst.installConfigId &&
+        installConfig()?.installExperience?.repositoryInstallUx?.status ===
+          "accepted",
+    );
+  };
   // Source metadata is displayed on the Updates tab and in Settings' support
   // disclosure. Keep each resource scoped to its tab; revision mutations use
   // the Capsule-local coordinator and never patch this shared Source.
@@ -299,6 +356,16 @@ function Inner() {
   const currentSourceRevision = () =>
     capsuleData()?.adoptedSourceRevision?.ref ?? source()?.defaultRef;
   const sourceRevisionReady = () => {
+    const inst = capsuleData();
+    const config = installConfig.error ? undefined : installConfig();
+    if (
+      !inst ||
+      inst.id !== capsuleId() ||
+      !config ||
+      config.id !== inst.installConfigId
+    ) {
+      return false;
+    }
     const revision = currentSourceRevision();
     return typeof revision === "string" && revision.trim().length > 0;
   };
@@ -625,32 +692,63 @@ function Inner() {
               {/* A service that never successfully applied (no StateVersion)
                   is stuck mid-setup — say so and offer the two ways out. */}
               <Show
-                when={inst().status !== "destroyed" && !currentStateVersionId()}
+                when={
+                  inst().id === capsuleId() &&
+                    inst().status !== "destroyed" &&
+                    !currentStateVersionId()
+                }
               >
                 <div class="av-setup-incomplete" role="status">
                   <p class="av-setup-incomplete-text">
-                    {t("app.setupIncomplete.body")}
+                    {initialReviewRequired()
+                      ? t("app.setupIncomplete.initialReviewBody")
+                      : t("app.setupIncomplete.body")}
                   </p>
                   <div class="av-actions">
-                    {/* Hide the 更新タブへ button when already on the 更新
-                        (deploys) tab — otherwise it is a self-link that goes
-                        nowhere. */}
-                    <Show when={tab() !== "deploys"}>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        href={`/workloads/${encodeURIComponent(capsuleId())}/deploys`}
-                      >
-                        {t("app.setupIncomplete.review")}
-                      </Button>
-                    </Show>
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      href={`/workloads/${encodeURIComponent(capsuleId())}/danger`}
+                    <Show
+                      when={initialReviewRequired()}
+                      fallback={
+                        <>
+                          {/* Hide the 更新タブへ button when already on the 更新
+                              (deploys) tab — otherwise it is a self-link. */}
+                          <Show when={tab() !== "deploys"}>
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              href={`/workloads/${encodeURIComponent(capsuleId())}/deploys`}
+                            >
+                              {t("app.setupIncomplete.review")}
+                            </Button>
+                          </Show>
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            href={`/workloads/${encodeURIComponent(capsuleId())}/danger`}
+                          >
+                            {t("app.setupIncomplete.delete")}
+                          </Button>
+                        </>
+                      }
                     >
-                      {t("app.setupIncomplete.delete")}
-                    </Button>
+                      <Show when={acceptedInitialPlan()}>
+                        {(run) => (
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            href={`/runs/${encodeURIComponent(run().id)}`}
+                          >
+                            {t("app.setupIncomplete.openInitialReview")}
+                          </Button>
+                        )}
+                      </Show>
+                      <Show when={!acceptedInitialPlan()}>
+                        <p class="muted" role="status">
+                          {initialPlanRuns.loading
+                            ? t("app.setupIncomplete.loadingInitialReview")
+                            : t("app.setupIncomplete.initialReviewUnavailable")}
+                        </p>
+                      </Show>
+                    </Show>
                   </div>
                 </div>
               </Show>
@@ -695,6 +793,10 @@ function Inner() {
                       sourceLoading={deploySources.loading}
                       sourceRevision={currentSourceRevision()}
                       sourceRevisionReady={sourceRevisionReady()}
+                      initialReviewRequired={initialReviewRequired()}
+                      initialPlan={acceptedInitialPlan()}
+                      initialPlanLoading={initialPlanRuns.loading}
+                      initialPlanError={Boolean(initialPlanRuns.error)}
                       loading={stateVersions.loading}
                       error={
                         stateVersions.error
@@ -1051,6 +1153,10 @@ function DeploysTab(props: {
   readonly sourceLoading: boolean;
   readonly sourceRevision?: string;
   readonly sourceRevisionReady: boolean;
+  readonly initialReviewRequired: boolean;
+  readonly initialPlan?: Pick<Run, "id">;
+  readonly initialPlanLoading: boolean;
+  readonly initialPlanError: boolean;
   readonly loading: boolean;
   readonly error?: string;
   readonly history: readonly {
@@ -1086,79 +1192,121 @@ function DeploysTab(props: {
   };
   return (
     <>
-      <Card>
-        <CardHeader
-          title={t("app.deploys.sourceVersionTitle")}
-          subtitle={t("app.deploys.sourceVersionSubtitle")}
-        />
-        <KVList
-          items={[
-            {
-              label: t("app.deploys.sourceVersionCurrent"),
-              value: <code>{currentRevision() || "—"}</code>,
-            },
-          ]}
-        />
-        <Show when={!props.source && props.sourceLoading}>
-          <p class="muted">{t("app.source.loading")}</p>
-        </Show>
-        <Show when={!props.source && !props.sourceLoading && !currentRevision()}>
-          <p class="muted">{t("app.deploys.sourceVersionUnavailable")}</p>
-        </Show>
-        <details class="wb-disclosure">
-          <summary>{t("app.deploys.sourceVersionChange")}</summary>
-          <div class="wa-form-actions">
-            <FormField
-              label={t("app.deploys.sourceVersionInput")}
-              hint={t("app.deploys.sourceVersionHint")}
-            >
-              <Input
-                value={revisionInput()}
-                placeholder={props.source?.defaultRef ?? currentRevision()}
-                spellcheck={false}
-                autocomplete="off"
-                onInput={(event) => setRevisionInput(event.currentTarget.value)}
-              />
-            </FormField>
-            <Button
-              variant="secondary"
-              type="button"
-              disabled={props.reviewBusy || !revisionCandidate()}
-              busy={props.reviewBusy}
-              onClick={() => void submitRevision()}
-            >
-              {t("app.deploys.sourceVersionApply")}
-            </Button>
-          </div>
-          <Show when={props.reviewError}>
-            {(message) => (
-              <p class="wa-error" role="alert">
-                {message()}
-              </p>
-            )}
+      <Show when={!props.initialReviewRequired}>
+        <Card>
+          <CardHeader
+            title={t("app.deploys.sourceVersionTitle")}
+            subtitle={t("app.deploys.sourceVersionSubtitle")}
+          />
+          <KVList
+            items={[
+              {
+                label: t("app.deploys.sourceVersionCurrent"),
+                value: <code>{currentRevision() || "—"}</code>,
+              },
+            ]}
+          />
+          <Show when={!props.source && props.sourceLoading}>
+            <p class="muted">{t("app.source.loading")}</p>
           </Show>
-        </details>
-      </Card>
+          <Show
+            when={!props.source && !props.sourceLoading && !currentRevision()}
+          >
+            <p class="muted">{t("app.deploys.sourceVersionUnavailable")}</p>
+          </Show>
+          <details class="wb-disclosure">
+            <summary>{t("app.deploys.sourceVersionChange")}</summary>
+            <div class="wa-form-actions">
+              <FormField
+                label={t("app.deploys.sourceVersionInput")}
+                hint={t("app.deploys.sourceVersionHint")}
+              >
+                <Input
+                  value={revisionInput()}
+                  placeholder={props.source?.defaultRef ?? currentRevision()}
+                  spellcheck={false}
+                  autocomplete="off"
+                  onInput={(event) => setRevisionInput(event.currentTarget.value)}
+                />
+              </FormField>
+              <Button
+                variant="secondary"
+                type="button"
+                disabled={
+                  props.reviewBusy ||
+                  !props.sourceRevisionReady ||
+                  !revisionCandidate()
+                }
+                busy={props.reviewBusy}
+                onClick={() => void submitRevision()}
+              >
+                {t("app.deploys.sourceVersionApply")}
+              </Button>
+            </div>
+            <Show when={props.reviewError}>
+              {(message) => (
+                <p class="wa-error" role="alert">
+                  {message()}
+                </p>
+              )}
+            </Show>
+          </details>
+        </Card>
+      </Show>
 
       <Card>
         <CardHeader
-          title={t("app.deploys.reviewTitle")}
-          subtitle={t("app.deploys.reviewSubtitle")}
+          title={
+            props.initialReviewRequired
+              ? t("app.deploys.initialReviewTitle")
+              : t("app.deploys.reviewTitle")
+          }
+          subtitle={
+            props.initialReviewRequired
+              ? t("app.deploys.initialReviewSubtitle")
+              : t("app.deploys.reviewSubtitle")
+          }
           actions={
             <div class="av-actions">
-              <Button
-                variant="primary"
-                size="sm"
-                type="button"
-                disabled={props.reviewBusy || !props.sourceRevisionReady}
-                busy={props.reviewBusy}
-                onClick={() => props.onReview()}
+              <Show
+                when={props.initialReviewRequired}
+                fallback={
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    type="button"
+                    disabled={props.reviewBusy || !props.sourceRevisionReady}
+                    busy={props.reviewBusy}
+                    onClick={() => props.onReview()}
+                  >
+                    {t("apps.reviewChanges")}
+                  </Button>
+                }
               >
-                {t("apps.reviewChanges")}
-              </Button>
+                <Show when={props.initialPlan}>
+                  {(run) => (
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      href={`/runs/${encodeURIComponent(run().id)}`}
+                    >
+                      {t("app.setupIncomplete.openInitialReview")}
+                    </Button>
+                  )}
+                </Show>
+              </Show>
             </div>
           }
         />
+        <Show when={props.initialReviewRequired && !props.initialPlan}>
+          <p class="muted" role="status">
+            {props.initialPlanLoading
+              ? t("app.setupIncomplete.loadingInitialReview")
+              : props.initialPlanError
+                ? t("app.setupIncomplete.initialReviewUnavailable")
+                : t("app.setupIncomplete.initialReviewUnavailable")}
+          </p>
+        </Show>
         <Show when={props.reviewError}>
           {(m) => (
             <p class="wa-error" role="alert">

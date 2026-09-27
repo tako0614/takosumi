@@ -469,6 +469,9 @@ export const en: Record<keyof typeof ja, string> = {
   "app.deploys.reviewTitle": "Update service",
   "app.deploys.reviewSubtitle":
     "Check available changes before deploying them.",
+  "app.deploys.initialReviewTitle": "Finish the initial install",
+  "app.deploys.initialReviewSubtitle":
+    "The original review is still available. Open it to continue setup; no new revision is needed.",
   "app.deploys.sourceVersionTitle": "Source version",
   "app.deploys.sourceVersionSubtitle":
     "Choose a Git branch, tag, or commit before reviewing changes.",
@@ -591,7 +594,13 @@ export const en: Record<keyof typeof ja, string> = {
     "This deletes {name}. If it has never been deployed it is removed immediately and cannot be recovered.",
   "app.danger.destroyCta": "Review deletion",
   "app.setupIncomplete.body":
-    "Setup didn't finish. Retry from the update review, or delete this service and start over.",
+    "Setup didn't finish. Open updates to continue the review.",
+  "app.setupIncomplete.initialReviewBody":
+    "The initial review is still available. Open it, review the changes, and apply to finish setup.",
+  "app.setupIncomplete.openInitialReview": "Open initial review",
+  "app.setupIncomplete.loadingInitialReview": "Loading the initial review…",
+  "app.setupIncomplete.initialReviewUnavailable":
+    "The initial review could not be found. Reload this page to try again.",
   "app.setupIncomplete.review": "Open updates",
   "app.setupIncomplete.delete": "Delete options",
 

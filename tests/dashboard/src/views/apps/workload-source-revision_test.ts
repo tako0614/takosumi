@@ -21,9 +21,11 @@ test("Workload revisions use the Capsule-local coordinator and applied provenanc
     "reviewBusy={plan.busy() || revisionActionBusy()}",
   );
   expect(viewSource).toContain("idempotencyKey");
-  expect(viewSource).toContain(
-    'disabled={props.reviewBusy || !props.sourceRevisionReady}',
-  );
+  expect(viewSource).toContain("!props.sourceRevisionReady");
+  expect(viewSource).toContain("!revisionCandidate()");
+  expect(viewSource).toContain('when={!props.initialReviewRequired}');
+  expect(viewSource).toContain('acceptedInitialInstallPlan(');
+  expect(viewSource).toContain("listRuns(workspaceId, INITIAL_PLAN_RUN_LOOKUP_LIMIT)");
   expect(viewSource).toContain(
     '<summary>{t("app.deploys.sourceVersionChange")}</summary>',
   );
@@ -36,6 +38,18 @@ test("Workload revisions use the Capsule-local coordinator and applied provenanc
   expect(viewSource).not.toContain("isImmutableSourceRevision");
   expect(viewSource).not.toContain("authConnectionId");
   expect(viewSource).not.toContain("credential");
+});
+
+test("accepted installs preserve the initial Plan instead of offering a revision", () => {
+  for (const dictionary of [en, ja]) {
+    expect(dictionary["app.setupIncomplete.initialReviewBody"]).toBeTruthy();
+    expect(dictionary["app.setupIncomplete.openInitialReview"]).toBeTruthy();
+    expect(dictionary["app.deploys.initialReviewTitle"]).toBeTruthy();
+  }
+  expect(en["app.setupIncomplete.body"]).not.toMatch(/delete|start over/iu);
+  expect(ja["app.setupIncomplete.body"]).not.toMatch(/削除|やり直/iu);
+  expect(viewSource).toContain("acceptedInitialPlan()");
+  expect(viewSource).toContain("app.setupIncomplete.openInitialReview");
 });
 
 test("revision copy accepts backend-safe refs instead of requiring immutable commits", () => {

@@ -471,6 +471,9 @@ export const ja = {
   "app.deploys.reviewTitle": "サービスを更新",
   "app.deploys.reviewSubtitle":
     "変更がある場合は内容を確認してからデプロイできます。",
+  "app.deploys.initialReviewTitle": "最初の追加を完了する",
+  "app.deploys.initialReviewSubtitle":
+    "最初に確認したPlanを開いてセットアップを続けられます。新しい変更確認は不要です。",
   "app.deploys.sourceVersionTitle": "取得元のバージョン",
   "app.deploys.sourceVersionSubtitle":
     "変更を確認する前に、Git のブランチ、タグ、またはコミットを指定してください。",
@@ -594,7 +597,13 @@ export const ja = {
     "{name} を削除します。まだデプロイされていない場合はこの場で完全に削除され、元に戻せません。",
   "app.danger.destroyCta": "削除の確認を開く",
   "app.setupIncomplete.body":
-    "追加が完了していません。変更の確認からやり直すか、削除してやり直せます。",
+    "追加が完了していません。更新タブで確認を続けられます。",
+  "app.setupIncomplete.initialReviewBody":
+    "最初に確認したPlanはそのまま利用できます。内容を確認してApplyすると、追加を完了できます。",
+  "app.setupIncomplete.openInitialReview": "最初の確認を開く",
+  "app.setupIncomplete.loadingInitialReview": "最初のPlanを読み込んでいます…",
+  "app.setupIncomplete.initialReviewUnavailable":
+    "最初のPlanを見つけられませんでした。このページを再読み込みしてください。",
   "app.setupIncomplete.review": "更新タブへ",
   "app.setupIncomplete.delete": "削除オプション",
 
