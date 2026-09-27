@@ -9,6 +9,7 @@ import {
   isPendingInstallWorkspaceSelected,
   pendingInstallRecoveryAction,
   pendingInstallResumeCompletion,
+  pendingInstallRunIdForSelectedWorkspace,
   shouldKeepInstallAttemptAfterFailure,
 } from "../../../../../dashboard/src/views/new/install-recovery.ts";
 
@@ -62,6 +63,18 @@ test("a delayed old-workspace Plan response stays pending instead of promoting i
 test("resume is not allowed to POST until the captured Workspace is explicitly selected", () => {
   expect(isPendingInstallWorkspaceSelected("ws_old", "ws_new", "ws_new")).toBe(false);
   expect(isPendingInstallWorkspaceSelected("ws_old", "ws_old", "ws_old")).toBe(true);
+});
+
+test("an existing Plan link is only exposed while viewing its attempt Workspace", () => {
+  expect(
+    pendingInstallRunIdForSelectedWorkspace("plan_a", "ws_a", "ws_b", "ws_b"),
+  ).toBeUndefined();
+  expect(
+    pendingInstallRunIdForSelectedWorkspace("plan_a", "ws_a", "ws_a", "ws_a"),
+  ).toBe("plan_a");
+  expect(
+    pendingInstallRunIdForSelectedWorkspace(undefined, "ws_a", "ws_a", "ws_a"),
+  ).toBeUndefined();
 });
 
 test("a 5xx keeps the exact acknowledged attempt identity and idempotency key", () => {

@@ -128,6 +128,7 @@ import {
   installPlanAttemptFailureAction,
   pendingInstallRecoveryAction,
   pendingInstallResumeCompletion,
+  pendingInstallRunIdForSelectedWorkspace,
 } from "./install-recovery.ts";
 import InstallExecution from "./InstallExecution.tsx";
 import "./install-view.css";
@@ -2075,7 +2076,16 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                 {t("installStore.checkExistingStatus")}
               </Button>
             </Show>
-            <Show when={pendingInstallAttempt()?.planRunId}>
+            <Show
+              when={
+                pendingInstallRunIdForSelectedWorkspace(
+                  pendingInstallAttempt()?.planRunId,
+                  pendingInstallAttempt()?.workspaceId,
+                  currentWorkspaceId(),
+                  workspaceId(),
+                )
+              }
+            >
               {(runId) => (
                 <Button
                   href={`/runs/${encodeURIComponent(runId())}`}

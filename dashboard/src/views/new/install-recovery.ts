@@ -55,6 +55,26 @@ export function isPendingInstallWorkspaceSelected(
   );
 }
 
+export function pendingInstallRunIdForSelectedWorkspace(
+  planRunId: string | undefined,
+  attemptWorkspaceId: string | undefined,
+  currentWorkspaceId: string,
+  viewWorkspaceId: string,
+): string | undefined {
+  if (
+    !planRunId ||
+    !attemptWorkspaceId ||
+    !isPendingInstallWorkspaceSelected(
+      attemptWorkspaceId,
+      currentWorkspaceId,
+      viewWorkspaceId,
+    )
+  ) {
+    return undefined;
+  }
+  return planRunId;
+}
+
 export function shouldKeepInstallAttemptAfterFailure(error: unknown): boolean {
   return isMutationOutcomeUnknown(error);
 }
