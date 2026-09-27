@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   changeCountsForRun,
   changeCountsKnownForRun,
+  changeCountEvidenceForApplyWithOriginatingPlan,
   changeCountsForApplyWithOriginatingPlan,
   changesFromLogs,
   runHasChangeSummary,
@@ -43,6 +44,26 @@ describe("run log change extraction", () => {
       create: 15,
       update: 0,
       delete: 0,
+    });
+    expect(
+      changeCountEvidenceForApplyWithOriginatingPlan(
+        { ...apply, status: "failed" },
+        plan,
+        [],
+      ),
+    ).toEqual({
+      counts: { create: 15, update: 0, delete: 0 },
+      source: "originating_plan",
+    });
+    expect(
+      changeCountEvidenceForApplyWithOriginatingPlan(
+        { ...apply, summary: { add: 15, change: 0, destroy: 0 } },
+        plan,
+        [],
+      ),
+    ).toEqual({
+      counts: { create: 15, update: 0, delete: 0 },
+      source: "current_run",
     });
     expect(
       changeCountsForApplyWithOriginatingPlan(apply, plan, [

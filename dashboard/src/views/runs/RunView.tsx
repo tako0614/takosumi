@@ -72,7 +72,7 @@ import {
 } from "../../lib/run-provider-connections.ts";
 import { createAction } from "../account/lib/action.tsx";
 import {
-  changeCountsForApplyWithOriginatingPlan,
+  changeCountEvidenceForApplyWithOriginatingPlan,
   changeCountsForRun,
   changeCountsKnownForRun,
   changesFromLogs,
@@ -1040,13 +1040,14 @@ function Inner() {
     changesFromLogs(logData()?.auditEvents ?? []),
   );
   const planResources = createMemo(() => run.latest?.planResources ?? []);
-  const changeCountsFromPlan = createMemo(() =>
-    changeCountsForApplyWithOriginatingPlan(
+  const changeCountEvidence = createMemo(() =>
+    changeCountEvidenceForApplyWithOriginatingPlan(
       run.latest,
       originatingPlanData(),
       logData()?.auditEvents ?? [],
     ),
   );
+  const changeCountsFromPlan = createMemo(() => changeCountEvidence()?.counts);
   const changeCounts = createMemo(
     () =>
       changeCountsFromPlan() ??
@@ -2201,16 +2202,18 @@ function Inner() {
                   }
                 >
                   <Card>
-                    {/* Past tense once an apply-family run has settled — the
-                        changes HAPPENED; a review run keeps the future tense
-                        (its changes are still a proposal). */}
+                    {/* Apply-owned terminal summaries use past tense. When the
+                        exact originating Plan supplies counts, keep the label
+                        explicitly in planned tense instead. */}
                     <CardHeader
                       title={t(
-                        (r().type === "apply" ||
-                          r().type === "destroy_apply") &&
-                          isTerminalRunStatus(r().status)
-                          ? "run.changes.titleDone"
-                          : "run.changes.title",
+                        changeCountEvidence()?.source === "originating_plan"
+                          ? "run.changes.titlePlanned"
+                          : (r().type === "apply" ||
+                                r().type === "destroy_apply") &&
+                              isTerminalRunStatus(r().status)
+                            ? "run.changes.titleDone"
+                            : "run.changes.title",
                       )}
                     />
                     {/* Unknown counts are never rendered as zero. An in-flight

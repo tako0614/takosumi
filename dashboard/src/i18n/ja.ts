@@ -759,6 +759,7 @@ export const ja = {
   "run.cost.quotaCta": "使用量を確認",
   "run.changes.title": "変更される内容",
   "run.changes.titleDone": "変更された内容",
+  "run.changes.titlePlanned": "このApplyで予定していた変更",
   "run.changes.noRecord": "変更内容の記録はありません",
   "run.changes.pending": "変更内容を確認中です",
   "run.changes.create": "作成",

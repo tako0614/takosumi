@@ -30,6 +30,12 @@ export interface ChangeCounts {
   readonly delete: number;
 }
 
+export interface ChangeCountEvidence {
+  readonly counts: ChangeCounts;
+  /** Whether counts describe the current Run or only its originating Plan. */
+  readonly source: "current_run" | "originating_plan";
+}
+
 /** A Run is terminal once it has reached a final status. */
 export function isTerminalRunStatus(status: Run["status"]): boolean {
   return (
@@ -108,15 +114,38 @@ export function changeCountsForApplyWithOriginatingPlan(
   planRun: Run | undefined,
   auditEvents: readonly AuditEventRecord[],
 ): ChangeCounts | undefined {
+  return changeCountEvidenceForApplyWithOriginatingPlan(
+    applyRun,
+    planRun,
+    auditEvents,
+  )?.counts;
+}
+
+/** Resolve counts and preserve which Run supplied them for truthful labels. */
+export function changeCountEvidenceForApplyWithOriginatingPlan(
+  applyRun: Run | undefined,
+  planRun: Run | undefined,
+  auditEvents: readonly AuditEventRecord[],
+): ChangeCountEvidence | undefined {
   if (runHasChangeSummary(applyRun)) {
-    return changeCountsForRun(applyRun, auditEvents);
+    return {
+      counts: changeCountsForRun(applyRun, auditEvents),
+      source: "current_run",
+    };
   }
   if (matchesOriginatingPlan(applyRun, planRun) && runHasChangeSummary(planRun)) {
-    return changeCountsForRun(planRun, []);
+    return {
+      counts: changeCountsForRun(planRun, []),
+      source: "originating_plan",
+    };
   }
-  return changeCountsKnownForRun(applyRun, auditEvents)
-    ? changeCountsForRun(applyRun, auditEvents)
-    : undefined;
+  if (changeCountsKnownForRun(applyRun, auditEvents)) {
+    return {
+      counts: changeCountsForRun(applyRun, auditEvents),
+      source: "current_run",
+    };
+  }
+  return undefined;
 }
 
 function matchesOriginatingPlan(
