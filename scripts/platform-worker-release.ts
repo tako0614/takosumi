@@ -7311,22 +7311,27 @@ function matchesHostedRunCredential(value: unknown): boolean {
  */
 function matchesHostedProviderCredentialBroker(value: unknown): boolean {
   if (!record(value)) return false;
+  const legacyKeys = [
+    "connectionId",
+    "displayName",
+    "envNames",
+    "exchangePath",
+    "providerSource",
+    "publicInputCapabilities",
+    "publicInputExchangePath",
+    "recipeId",
+    "runCredentialSettings",
+    "runtimeInputs",
+  ];
+  const keys = Object.keys(value).sort();
+  const exactLegacyShape =
+    JSON.stringify(keys) === JSON.stringify([...legacyKeys].sort());
+  const exactRenewableShape =
+    JSON.stringify(keys) ===
+    JSON.stringify([...legacyKeys, "renewableEnv"].sort());
   return (
-    JSON.stringify(Object.keys(value).sort()) ===
-      JSON.stringify(
-        [
-          "connectionId",
-          "displayName",
-          "envNames",
-          "exchangePath",
-          "providerSource",
-          "publicInputCapabilities",
-          "publicInputExchangePath",
-          "recipeId",
-          "runCredentialSettings",
-          "runtimeInputs",
-        ].sort(),
-      ) &&
+    (exactLegacyShape || exactRenewableShape) &&
+    (!exactRenewableShape || matchesHostedRenewableEnv(value.renewableEnv)) &&
     value.publicInputExchangePath === "/public-inputs/http-endpoint" &&
     Array.isArray(value.publicInputCapabilities) &&
     JSON.stringify(value.publicInputCapabilities) ===
@@ -7347,6 +7352,19 @@ function matchesHostedProviderCredentialBroker(value: unknown): boolean {
         typeof name === "string" && /^[A-Z][A-Z0-9_]{0,63}$/u.test(name),
     ) &&
     new Set(value.envNames).size === value.envNames.length
+  );
+}
+
+function matchesHostedRenewableEnv(value: unknown): boolean {
+  return (
+    record(value) &&
+    JSON.stringify(Object.keys(value).sort()) ===
+      JSON.stringify(
+        ["fileEnvName", "minimumProviderVersion", "sourceEnvName"].sort(),
+      ) &&
+    value.sourceEnvName === "TAKOFORM_TOKEN" &&
+    value.fileEnvName === "TAKOFORM_TOKEN_FILE" &&
+    value.minimumProviderVersion === "4.1.0"
   );
 }
 

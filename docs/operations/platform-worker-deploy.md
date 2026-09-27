@@ -283,8 +283,9 @@ the optional default `authMode` and empty `selfServicePatScopes`,
 keys is a composition mismatch. Takoserver owns actual Resource/backend
 readback, while Takosumi owns the Run/StateVersion/Output/Audit lifecycle.
 
-The sponsorship descriptor's `providerCredentialBroker` declares exactly ten
-keys. Six are the broker identity — `connectionId`, `recipeId`,
+The sponsorship descriptor's `providerCredentialBroker` accepts either the
+legacy exact ten-key shape or the opt-in exact eleven-key shape. Six are the
+broker identity — `connectionId`, `recipeId`,
 `providerSource`, `displayName`, `exchangePath`, `envNames` — and
 `runCredentialSettings` carries the provider floor for run-issued credentials.
 The remaining three are required, not optional, for an official release:
@@ -301,6 +302,19 @@ The remaining three are required, not optional, for an official release:
   which those arguments exist. Without it a broker Connection is invisible to
   the run-scoped sensitive-input lane, so a Capsule asking for
   binding-delivered values has nowhere to deliver them.
+
+The legacy shape remains valid and does not enable renewable credentials. The
+optional eleventh key, `renewableEnv`, is accepted only with the exact profile
+`{"sourceEnvName":"TAKOFORM_TOKEN","fileEnvName":"TAKOFORM_TOKEN_FILE","minimumProviderVersion":"4.1.0"}`.
+This is an explicit composition opt-in, not a global provider-floor change.
+Before adding it to the realized Hosted descriptor, first verify that the OSS
+runtime and released platform runner support renewable credential files, then
+publish Takoform provider 4.1.0 or newer to the exact source pinned by the
+Hosted Connection. Only after those prerequisites are available should the
+operator activate `renewableEnv`. Keep `runtimeInputs.minimumProviderVersion`
+at its existing value unless a separate protocol change requires otherwise;
+do not globally upgrade provider requirements to activate this optional
+profile.
 
 Exactly one realized route may declare `publicInputExchangePath`. A Capsule has
 one public origin and no rule for splitting it, so the runtime seam throws when

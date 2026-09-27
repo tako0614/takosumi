@@ -1104,6 +1104,31 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
     mapArgument: "runtime_inputs",
     minimumProviderVersion: "4.0.0",
   };
+  const renewableEnv = {
+    sourceEnvName: "TAKOFORM_TOKEN",
+    fileEnvName: "TAKOFORM_TOKEN_FILE",
+    minimumProviderVersion: "4.1.0",
+  };
+  // Existing realized configs retain their exact ten-key composition until
+  // the operator explicitly opts in to the newer provider protocol.
+  expect(() => assertConfigTargetsSource(withBroker({}), "production")).not.toThrow();
+  // The new descriptor is accepted only as the exact eleventh-key shape.
+  expect(() =>
+    assertConfigTargetsSource(withBroker({ renewableEnv }), "production"),
+  ).not.toThrow();
+  for (const renewableOverride of [
+    { ...renewableEnv, minimumProviderVersion: "4.0.0" },
+    { ...renewableEnv, sourceEnvName: "TAKOFORM_ENDPOINT" },
+    { ...renewableEnv, fileEnvName: "TAKOFORM_TOKEN" },
+    { ...renewableEnv, unrecognized: true },
+  ]) {
+    expect(() =>
+      assertConfigTargetsSource(
+        withBroker({ renewableEnv: renewableOverride }),
+        "production",
+      ),
+    ).toThrow("platform_worker_release_config_source_invalid");
+  }
   for (const overrides of [
     { publicInputExchangePath: undefined },
     { publicInputCapabilities: undefined },
