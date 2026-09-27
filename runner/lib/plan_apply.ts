@@ -105,7 +105,7 @@ import {
   requiredProviderSourcesFromTerraformTree,
   assertProviderSetStableAfterInit,
   assertRunnerPolicyBeforeInit,
-  generatedRootTreeHasNoProviderUsage,
+  generatedRootScanHasNoProviderUsage,
   providersFromPlanJson,
   normalizedProviderList,
   providerInstallationEvidence,
@@ -235,7 +235,7 @@ export async function runGeneratedRootPlan(
       preparedCredentials.context,
       {
         allowProviderFreeGeneratedRoot:
-          await generatedRootTreeHasNoProviderUsage(workspace.generatedRootDir),
+          generatedRootScanHasNoProviderUsage(providerScan),
         requiredProviders,
         providerScanComplete: providerScan.complete,
       },
@@ -344,7 +344,7 @@ export async function runDirectRootPlan(
       preparedCredentials.context,
       {
         allowProviderFreeGeneratedRoot:
-          await generatedRootTreeHasNoProviderUsage(moduleDir),
+          generatedRootScanHasNoProviderUsage(providerScan),
         requiredProviders,
         providerScanComplete: providerScan.complete,
       },
@@ -731,7 +731,7 @@ export async function runReviewedPlanApply(
       preparedCredentials.context,
       {
         allowProviderFreeGeneratedRoot:
-          await generatedRootTreeHasNoProviderUsage(moduleDir),
+          generatedRootScanHasNoProviderUsage(providerScan),
         requiredProviders,
         providerScanComplete: providerScan.complete,
       },

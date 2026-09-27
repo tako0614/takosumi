@@ -422,6 +422,17 @@ export async function generatedRootTreeHasNoProviderUsage(
   rootDir: string,
 ): Promise<boolean> {
   const scan = await requiredProviderSourcesFromTerraformTree(rootDir);
+  return generatedRootScanHasNoProviderUsage(scan);
+}
+
+/**
+ * Determine whether a completed provider scan proves that a root has no
+ * installable-provider usage. Callers that already scanned the tree can reuse
+ * that exact snapshot rather than walking it a second time.
+ */
+export function generatedRootScanHasNoProviderUsage(
+  scan: TerraformTreeProviderScan,
+): boolean {
   if (!scan.complete || scan.files.length === 0 || scan.providers.length > 0) {
     return false;
   }

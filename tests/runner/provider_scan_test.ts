@@ -12,6 +12,7 @@ import { expect, test } from "bun:test";
 import {
   assertRunnerPolicyBeforeInit,
   assertProviderSetStableAfterInit,
+  generatedRootScanHasNoProviderUsage,
   generatedRootTreeHasNoProviderUsage,
   hasProviderUsageBeforeInit,
   requiredProvidersForGeneratedRoot,
@@ -382,7 +383,7 @@ test("builtin-only provider usage needs no dependency lock but rejects an imposs
       requirements: [],
     });
     const allowProviderFreeGeneratedRoot =
-      await generatedRootTreeHasNoProviderUsage(root);
+      generatedRootScanHasNoProviderUsage(scan);
     expect(allowProviderFreeGeneratedRoot).toBe(true);
     expect(hasProviderUsageBeforeInit(builtinSource)).toBe(false);
     expect(
@@ -515,12 +516,20 @@ test("runner derivation binds every exact compatibility-reviewed provider identi
 test("a JSON config file means the root is not provably provider-free", async () => {
   await withRoot(async (root) => {
     await writeFile(join(root, "main.tf"), 'output "ok" { value = 1 }\n');
-    expect(await generatedRootTreeHasNoProviderUsage(root)).toBe(true);
+    const providerFreeScan = await requiredProviderSourcesFromTerraformTree(root);
+    expect(generatedRootScanHasNoProviderUsage(providerFreeScan)).toBe(true);
+    expect(await generatedRootTreeHasNoProviderUsage(root)).toBe(
+      generatedRootScanHasNoProviderUsage(providerFreeScan),
+    );
     await writeFile(
       join(root, "external.tf"),
       'resource "aws_instance" "external" {}\n',
     );
-    expect(await generatedRootTreeHasNoProviderUsage(root)).toBe(false);
+    const providerUsageScan = await requiredProviderSourcesFromTerraformTree(root);
+    expect(generatedRootScanHasNoProviderUsage(providerUsageScan)).toBe(false);
+    expect(await generatedRootTreeHasNoProviderUsage(root)).toBe(
+      generatedRootScanHasNoProviderUsage(providerUsageScan),
+    );
     await rm(join(root, "external.tf"));
     await writeFile(
       join(root, "providers.tf.json"),
@@ -528,7 +537,37 @@ test("a JSON config file means the root is not provably provider-free", async ()
         terraform: { required_providers: { evil: { source: "attacker/evil" } } },
       }),
     );
-    expect(await generatedRootTreeHasNoProviderUsage(root)).toBe(false);
+    const jsonScan = await requiredProviderSourcesFromTerraformTree(root);
+    expect(generatedRootScanHasNoProviderUsage(jsonScan)).toBe(false);
+    expect(await generatedRootTreeHasNoProviderUsage(root)).toBe(
+      generatedRootScanHasNoProviderUsage(jsonScan),
+    );
+  });
+});
+
+test("provider-free scan predicate rejects empty, incomplete, and backend roots", async () => {
+  await withRoot(async (root) => {
+    const emptyScan = await requiredProviderSourcesFromTerraformTree(root);
+    expect(emptyScan.complete).toBe(false);
+    expect(emptyScan.files).toHaveLength(0);
+    expect(generatedRootScanHasNoProviderUsage(emptyScan)).toBe(false);
+
+    await writeFile(join(root, "broken.tf.json"), "{ not json");
+    const incompleteScan = await requiredProviderSourcesFromTerraformTree(root);
+    expect(incompleteScan.complete).toBe(false);
+    expect(generatedRootScanHasNoProviderUsage(incompleteScan)).toBe(false);
+
+    await rm(join(root, "broken.tf.json"));
+    await writeFile(
+      join(root, "backend.tf"),
+      'terraform { backend "local" { path = "state.tfstate" } }\n',
+    );
+    const backendScan = await requiredProviderSourcesFromTerraformTree(root);
+    expect(backendScan.complete).toBe(true);
+    expect(generatedRootScanHasNoProviderUsage(backendScan)).toBe(false);
+    expect(await generatedRootTreeHasNoProviderUsage(root)).toBe(
+      generatedRootScanHasNoProviderUsage(backendScan),
+    );
   });
 });
 
