@@ -1,4 +1,5 @@
 import { join, relative, resolve, sep } from "node:path";
+import { resolveDashboardBrowserPort } from "./browser-port.ts";
 import {
   PORTABLE_CAPSULES,
   PORTABLE_SESSION_COOKIE,
@@ -7,10 +8,7 @@ import {
   workspacesResponse,
 } from "./fixture-data.ts";
 
-const port = Number(process.env.TAKOSUMI_E2E_PORT ?? "4179");
-if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-  throw new Error("TAKOSUMI_E2E_PORT must be a valid TCP port");
-}
+const port = resolveDashboardBrowserPort();
 
 const distRoot = resolve(import.meta.dir, "../../../dashboard/dist");
 const indexFile = Bun.file(join(distRoot, "index.html"));

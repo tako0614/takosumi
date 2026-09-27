@@ -17,6 +17,7 @@ import {
 } from "./traffic-policy.ts";
 import { validateExpectedWorkerVersionId } from "../../../scripts/dashboard-browser-e2e/live-inputs.ts";
 import { assertExpectedResponseUrl } from "../../../scripts/dashboard-browser-e2e/version-contract.ts";
+import { dashboardBrowserOrigin } from "./browser-port.ts";
 
 type Expectations = {
   readonly workspaceName: string;
@@ -48,7 +49,7 @@ function requiredLive(name: string): string {
 
 const mutationOrigin =
   mode === "portable"
-    ? "http://127.0.0.1:4179"
+    ? dashboardBrowserOrigin()
     : (process.env.TAKOSUMI_E2E_BASE_URL?.trim() ?? "");
 
 const expectations: Expectations =
