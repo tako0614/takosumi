@@ -1,7 +1,10 @@
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "@playwright/test";
-import { resolveDashboardBrowserPort } from "./browser-port.ts";
+import {
+  DEFAULT_DASHBOARD_BROWSER_PORT,
+  resolveDashboardBrowserPortForMode,
+} from "./browser-port.ts";
 import {
   resolveExternalStorageState,
   validateExpectedWorkerVersionId,
@@ -76,8 +79,11 @@ function publicLiveConfig(): { readonly baseURL: string } {
 
 const live = mode === "live" ? liveConfig() : undefined;
 const publicLive = mode === "public-live" ? publicLiveConfig() : undefined;
-const dashboardPort = resolveDashboardBrowserPort();
-const dashboardOrigin = `http://127.0.0.1:${dashboardPort}`;
+const dashboardPort = resolveDashboardBrowserPortForMode(mode);
+const dashboardOrigin =
+  dashboardPort === undefined
+    ? `http://127.0.0.1:${DEFAULT_DASHBOARD_BROWSER_PORT}`
+    : `http://127.0.0.1:${dashboardPort}`;
 const baseURL =
   live?.baseURL ?? publicLive?.baseURL ?? dashboardOrigin;
 const portableStorageState = {

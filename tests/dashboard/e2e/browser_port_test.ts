@@ -3,6 +3,7 @@ import {
   dashboardBrowserOrigin,
   DEFAULT_DASHBOARD_BROWSER_PORT,
   resolveDashboardBrowserPort,
+  resolveDashboardBrowserPortForMode,
 } from "./browser-port.ts";
 
 test("uses the default local dashboard browser port", () => {
@@ -22,4 +23,19 @@ test("rejects invalid dashboard browser ports", () => {
       resolveDashboardBrowserPort({ TAKOSUMI_DASHBOARD_BROWSER_PORT: value }),
     ).toThrow(/TAKOSUMI_DASHBOARD_BROWSER_PORT/);
   }
+});
+
+test("only portable mode resolves the dashboard browser port", () => {
+  const environment = {
+    TAKOSUMI_DASHBOARD_BROWSER_PORT: "not-a-port",
+    TAKOSUMI_E2E_BASE_URL: "https://dashboard.example.test",
+  };
+
+  expect(() =>
+    resolveDashboardBrowserPortForMode("portable", environment),
+  ).toThrow(/TAKOSUMI_DASHBOARD_BROWSER_PORT/);
+  expect(resolveDashboardBrowserPortForMode("live", environment)).toBeUndefined();
+  expect(
+    resolveDashboardBrowserPortForMode("public-live", environment),
+  ).toBeUndefined();
 });

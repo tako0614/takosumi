@@ -5,6 +5,8 @@ type DashboardBrowserEnvironment = {
   TAKOSUMI_DASHBOARD_BROWSER_PORT?: string;
 };
 
+export type DashboardBrowserMode = "portable" | "live" | "public-live";
+
 export function resolveDashboardBrowserPort(
   environment: DashboardBrowserEnvironment = process.env,
 ): number {
@@ -26,6 +28,15 @@ export function resolveDashboardBrowserPort(
   }
 
   return port;
+}
+
+export function resolveDashboardBrowserPortForMode(
+  mode: DashboardBrowserMode,
+  environment: DashboardBrowserEnvironment = process.env,
+): number | undefined {
+  return mode === "portable"
+    ? resolveDashboardBrowserPort(environment)
+    : undefined;
 }
 
 export function dashboardBrowserOrigin(
