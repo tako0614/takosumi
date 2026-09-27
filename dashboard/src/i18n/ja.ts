@@ -760,6 +760,7 @@ export const ja = {
   "run.changes.title": "変更される内容",
   "run.changes.titleDone": "変更された内容",
   "run.changes.noRecord": "変更内容の記録はありません",
+  "run.changes.pending": "変更内容を確認中です",
   "run.changes.create": "作成",
   "run.changes.update": "変更",
   "run.changes.delete": "削除",

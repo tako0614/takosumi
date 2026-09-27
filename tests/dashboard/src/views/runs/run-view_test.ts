@@ -73,12 +73,17 @@ describe("RunView", () => {
     // "no record", never 作成0/変更0/削除0; apply-family terminal runs get the
     // past-tense heading.
     expect(source).toContain("changeCountsKnownForRun");
+    expect(source).toContain("changeCountsForApplyWithOriginatingPlan");
+    expect(source).toContain("createResource(originatingPlanId, getRun)");
     expect(source).toContain('t("run.changes.noRecord")');
+    expect(source).toContain('t("run.changes.pending")');
     expect(source).toContain('"run.changes.titleDone"');
     expect(ja["run.changes.titleDone"]).toBe("変更された内容");
     expect(en["run.changes.titleDone"]).toBe("What changed");
     expect(ja["run.changes.noRecord"].length).toBeGreaterThan(0);
     expect(en["run.changes.noRecord"].length).toBeGreaterThan(0);
+    expect(ja["run.changes.pending"].length).toBeGreaterThan(0);
+    expect(en["run.changes.pending"].length).toBeGreaterThan(0);
     // 2b: unknown counts must gate as destructive (explicit confirmation)...
     expect(source).toMatch(
       /changeCounts\(\)\.delete > 0 \|\|\s*\n?\s*!changeCountsKnown\(\)\)/,

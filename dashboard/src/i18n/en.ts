@@ -758,6 +758,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.changes.title": "What will change",
   "run.changes.titleDone": "What changed",
   "run.changes.noRecord": "No record of the changes is available",
+  "run.changes.pending": "Checking the change details…",
   "run.changes.create": "Create",
   "run.changes.update": "Update",
   "run.changes.delete": "Delete",

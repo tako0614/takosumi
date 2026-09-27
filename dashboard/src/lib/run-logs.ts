@@ -97,6 +97,60 @@ export function changeCountsForRun(
   };
 }
 
+/**
+ * Use the exact originating Plan summary when an Apply Run omitted its own
+ * summary. The Plan must come from the authorized Run endpoint requested by
+ * `applyRun.planRunId`, and its workspace, Capsule, and source provenance must
+ * agree exactly. Missing or mismatched provenance stays unknown.
+ */
+export function changeCountsForApplyWithOriginatingPlan(
+  applyRun: Run | undefined,
+  planRun: Run | undefined,
+  auditEvents: readonly AuditEventRecord[],
+): ChangeCounts | undefined {
+  if (runHasChangeSummary(applyRun)) {
+    return changeCountsForRun(applyRun, auditEvents);
+  }
+  if (matchesOriginatingPlan(applyRun, planRun) && runHasChangeSummary(planRun)) {
+    return changeCountsForRun(planRun, []);
+  }
+  return changeCountsKnownForRun(applyRun, auditEvents)
+    ? changeCountsForRun(applyRun, auditEvents)
+    : undefined;
+}
+
+function matchesOriginatingPlan(
+  applyRun: Run | undefined,
+  planRun: Run | undefined,
+): boolean {
+  if (!applyRun || !planRun || !applyRun.planRunId) return false;
+  const isApply = applyRun.type === "apply" || applyRun.type === "destroy_apply";
+  const expectedPlanType = applyRun.type === "destroy_apply" ? "destroy_plan" : "plan";
+  if (
+    !isApply ||
+    planRun.type !== expectedPlanType ||
+    planRun.status !== "succeeded" ||
+    planRun.id !== applyRun.planRunId ||
+    planRun.workspaceId !== applyRun.workspaceId ||
+    !applyRun.capsuleId ||
+    planRun.capsuleId !== applyRun.capsuleId ||
+    !applyRun.sourceSnapshotId ||
+    planRun.sourceSnapshotId !== applyRun.sourceSnapshotId
+  ) {
+    return false;
+  }
+
+  // These optional public provenance fields are still exact constraints: if
+  // one response has a value and the other does not (or they differ), do not
+  // attach the Plan's counts to this Apply.
+  return (
+    planRun.dependencySnapshotId === applyRun.dependencySnapshotId &&
+    planRun.sourceId === applyRun.sourceId &&
+    planRun.ref === applyRun.ref &&
+    planRun.resolvedCommit === applyRun.resolvedCommit
+  );
+}
+
 /** True when the Run carries an authoritative backend change summary.
  * `run.summary` is OPTIONAL on the wire — when it is absent the counts from
  * {@link changeCountsForRun} are merely log-derived best effort, and an empty

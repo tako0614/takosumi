@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   changeCountsForRun,
   changeCountsKnownForRun,
+  changeCountsForApplyWithOriginatingPlan,
   changesFromLogs,
   runHasChangeSummary,
 } from "../../../../dashboard/src/lib/run-logs.ts";
@@ -18,6 +19,81 @@ const BASE_RUN: Run = {
 };
 
 describe("run log change extraction", () => {
+  test("uses only the exact, same-scope and same-source originating Plan summary for Apply counts", () => {
+    const apply: Run = {
+      ...BASE_RUN,
+      id: "apply_1",
+      type: "apply",
+      status: "running",
+      planRunId: "plan_1",
+      sourceSnapshotId: "snapshot_1",
+      capsuleId: "capsule_1",
+    };
+    const plan: Run = {
+      ...BASE_RUN,
+      id: "plan_1",
+      type: "plan",
+      status: "succeeded",
+      sourceSnapshotId: "snapshot_1",
+      capsuleId: "capsule_1",
+      summary: { add: 15, change: 0, destroy: 0 },
+    };
+
+    expect(changeCountsForApplyWithOriginatingPlan(apply, plan, [])).toEqual({
+      create: 15,
+      update: 0,
+      delete: 0,
+    });
+    expect(
+      changeCountsForApplyWithOriginatingPlan(apply, plan, [
+        {
+          data: {
+            resourceChanges: [{ action: "update", address: "one.partial.log.item" }],
+          },
+        },
+      ]),
+    ).toEqual({ create: 15, update: 0, delete: 0 });
+    expect(
+      changeCountsForApplyWithOriginatingPlan(apply, { ...plan, id: "plan_other" }, []),
+    ).toBeUndefined();
+    expect(
+      changeCountsForApplyWithOriginatingPlan(apply, { ...plan, status: "failed" }, []),
+    ).toBeUndefined();
+    expect(
+      changeCountsForApplyWithOriginatingPlan(apply, { ...plan, capsuleId: "capsule_other" }, []),
+    ).toBeUndefined();
+    expect(
+      changeCountsForApplyWithOriginatingPlan(apply, { ...plan, workspaceId: "workspace_other" }, []),
+    ).toBeUndefined();
+    expect(
+      changeCountsForApplyWithOriginatingPlan(apply, { ...plan, sourceSnapshotId: "snapshot_other" }, []),
+    ).toBeUndefined();
+    expect(
+      changeCountsForApplyWithOriginatingPlan(apply, { ...plan, sourceSnapshotId: undefined }, []),
+    ).toBeUndefined();
+    expect(
+      changeCountsForApplyWithOriginatingPlan(
+        { ...apply, sourceId: "source_1" },
+        { ...plan, sourceId: "source_other" },
+        [],
+      ),
+    ).toBeUndefined();
+    expect(
+      changeCountsForApplyWithOriginatingPlan(
+        { ...apply, dependencySnapshotId: "dependencies_1" },
+        { ...plan, dependencySnapshotId: "dependencies_other" },
+        [],
+      ),
+    ).toBeUndefined();
+    expect(
+      changeCountsForApplyWithOriginatingPlan(
+        { ...apply, type: "destroy_apply" },
+        plan,
+        [],
+      ),
+    ).toBeUndefined();
+  });
+
   test("changeCountsForRun prefers the public plan summary over audit-log details", () => {
     expect(
       changeCountsForRun(

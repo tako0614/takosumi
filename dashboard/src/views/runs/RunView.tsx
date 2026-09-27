@@ -72,6 +72,7 @@ import {
 } from "../../lib/run-provider-connections.ts";
 import { createAction } from "../account/lib/action.tsx";
 import {
+  changeCountsForApplyWithOriginatingPlan,
   changeCountsForRun,
   changeCountsKnownForRun,
   changesFromLogs,
@@ -724,6 +725,23 @@ function Inner() {
     if (latest) setLogsSnapshot(latest);
   });
   const logData = (): RunLogs | undefined => logsSnapshot();
+  const originatingPlanId = createMemo(() => {
+    const current = run.latest;
+    if (
+      !current ||
+      (current.type !== "apply" && current.type !== "destroy_apply") ||
+      runHasChangeSummary(current)
+    ) {
+      return undefined;
+    }
+    return current.planRunId;
+  });
+  // The ApplyRun summary is not always projected on the wire. Resolve only
+  // its exact planRunId through the ordinary authorized Run endpoint; the
+  // count helper below rejects mismatched IDs, scope, or source provenance.
+  const [originatingPlan] = createResource(originatingPlanId, getRun);
+  const originatingPlanData = (): Run | undefined =>
+    originatingPlan.error ? undefined : originatingPlan.latest;
   const [cost] = createResource(runId, async (id) => {
     try {
       return await getRunCostInfo(id);
@@ -1022,8 +1040,17 @@ function Inner() {
     changesFromLogs(logData()?.auditEvents ?? []),
   );
   const planResources = createMemo(() => run.latest?.planResources ?? []);
-  const changeCounts = createMemo(() =>
-    changeCountsForRun(run.latest, logData()?.auditEvents ?? []),
+  const changeCountsFromPlan = createMemo(() =>
+    changeCountsForApplyWithOriginatingPlan(
+      run.latest,
+      originatingPlanData(),
+      logData()?.auditEvents ?? [],
+    ),
+  );
+  const changeCounts = createMemo(
+    () =>
+      changeCountsFromPlan() ??
+      changeCountsForRun(run.latest, logData()?.auditEvents ?? []),
   );
   // `run.summary` is optional on the wire — when the backend recorded neither
   // a summary nor log-parsable change items, changeCounts() is an all-zero
@@ -1031,7 +1058,10 @@ function Inner() {
   // card must both distinguish "0 changes" from "unknown".
   const changeCountsKnown = createMemo(() => {
     if (run.error) return false;
-    return changeCountsKnownForRun(run.latest, logData()?.auditEvents ?? []);
+    return (
+      changeCountsFromPlan() !== undefined ||
+      changeCountsKnownForRun(run.latest, logData()?.auditEvents ?? [])
+    );
   });
   // A destroy plan that reports 削除0 is not a recorded fact — a removal
   // deletes resources by definition, so the backend simply did not record the
@@ -2183,21 +2213,21 @@ function Inner() {
                           : "run.changes.title",
                       )}
                     />
-                    {/* Honest zero: a settled run with neither a backend
-                        summary nor log-derived items must say "no record",
-                        never 作成0/変更0/削除0 (live-verified false zeros on a
-                        real apply). A destroy reporting 削除0 is likewise not a
-                        fact (see changeCountsTrustworthy) — it must not sit next
-                        to the "既存リソースの削除が含まれます" warning. While the log
-                        refetch is in flight the strip stays (record may arrive). */}
+                    {/* Unknown counts are never rendered as zero. An in-flight
+                        run (or unresolved log/Plan read) gets explicit pending
+                        copy; a settled run with no trustworthy summary gets
+                        "no record". A destroy reporting 削除0 is likewise not a
+                        fact (see changeCountsTrustworthy). */}
                     <Show
-                      when={
-                        changeCountsTrustworthy() ||
-                        !isTerminalRunStatus(r().status) ||
-                        logs.loading
-                      }
+                      when={changeCountsTrustworthy()}
                       fallback={
-                        <p class="muted">{t("run.changes.noRecord")}</p>
+                        <p class="muted">
+                          {!isTerminalRunStatus(r().status) ||
+                          logs.loading ||
+                          originatingPlan.loading
+                            ? t("run.changes.pending")
+                            : t("run.changes.noRecord")}
+                        </p>
                       }
                     >
                       <div class="wa-change-strip">
