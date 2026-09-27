@@ -53,7 +53,10 @@ import {
   usesDeclaredEnvCredentialRecipe,
 } from "takosumi-contract/connections";
 import { providerVersionMeetsRuntimeInputFloor } from "takosumi-contract/credential-recipes";
-import { isOpenTofuBuiltinProviderSource } from "takosumi-contract/provider-env-rules";
+import {
+  isOpenTofuBuiltinProviderSource,
+  sameProviderSource,
+} from "takosumi-contract/provider-env-rules";
 import type {
   Dependency,
   DependencySnapshot,
@@ -120,7 +123,9 @@ import {
   OpenTofuControllerError,
   OpenTofuRunnerExecutionError,
   OpenTofuRunnerInfrastructureError,
+  CREDENTIAL_SERVICE_UNAVAILABLE_REASON,
   PROVIDER_CONNECTION_SETUP_REQUIRED_REASON,
+  RENEWABLE_PROVIDER_VERSION_UNPROVEN_REASON,
   RUNNER_INFRASTRUCTURE_REQUEUED_REASON,
   RUNTIME_INPUT_MATERIALIZER_UNAVAILABLE_REASON,
   RUNTIME_INPUTS_MATERIAL_UNUSABLE_REASON,
@@ -6862,7 +6867,10 @@ export class RunEngine {
     run: PlanRun | ApplyRun | Run,
     leaseToken: string,
     lease: LeaseHandle | undefined,
-    work: (signal: AbortSignal) => Promise<T>,
+    work: (
+      signal: AbortSignal,
+      assertHeldLease: () => Promise<void>,
+    ) => Promise<T>,
   ): Promise<T> {
     const abortController = new AbortController();
     const initialFenceAt = run.heartbeatAt ?? this.#now();
@@ -6982,13 +6990,14 @@ export class RunEngine {
       activeTick = pending;
       return pending;
     };
+    const assertHeldLease = async (): Promise<void> => {
+      await runTick();
+      if (abortController.signal.aborted) throw abortController.signal.reason;
+    };
     // Validate both fences immediately before the external dispatch. This closes
     // the claim-to-dispatch window instead of waiting one interval to discover a
     // takeover that already happened.
-    await runTick();
-    if (abortController.signal.aborted) {
-      throw abortController.signal.reason;
-    }
+    await assertHeldLease();
     const intervalMs = this.#runRenewalIntervalMs;
     const timer =
       intervalMs > 0
@@ -7003,7 +7012,7 @@ export class RunEngine {
     let workError: unknown;
     let workFailed = false;
     try {
-      result = await work(abortController.signal);
+      result = await work(abortController.signal, assertHeldLease);
     } catch (error) {
       workFailed = true;
       workError = error;
@@ -7026,6 +7035,223 @@ export class RunEngine {
       throw renewalError;
     }
     if (workFailed) throw workError;
+    return result as T;
+  }
+
+  /**
+   * A provider process cannot inherit a renewed environment variable. Keep the
+   * short-lived credential alive only while this exact PlanRun or ApplyRun is executing;
+   * the runner projects each value to a private file that the provider rereads.
+   * This loop is subordinate to the heartbeat/lease guard and never redispatches
+   * an OpenTofu mutation after a renewal failure.
+   */
+  async #withCredentialRenewal<T>(
+    input: {
+      readonly running: PlanRun | ApplyRun;
+      readonly planRun: PlanRun;
+      readonly profile: RunnerProfile;
+      readonly credentials: RunCredentials | undefined;
+      readonly phase: "plan" | "apply" | "destroy";
+    },
+    signal: AbortSignal,
+    assertHeldLease: () => Promise<void>,
+    work: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const descriptors = input.credentials?.renewable ?? [];
+    if (descriptors.length === 0) return await work(signal);
+    const runner = this.#runnerForProfile(input.profile);
+    if (
+      !runner.refreshCredentials ||
+      !runner.assertCredentialRefreshCapability ||
+      !input.credentials?.manifestDigest
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "runner does not support renewable run credentials",
+        { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+      );
+    }
+    const manifestDigest = input.credentials.manifestDigest;
+    const owner = {
+      kind: input.phase === "plan" ? "plan" as const : "apply" as const,
+      id: input.running.id,
+    };
+    const uniqueConnections = new Set(descriptors.map((item) => item.connectionId));
+    if (uniqueConnections.size !== descriptors.length) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "renewable credential bindings are ambiguous",
+        { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+      );
+    }
+    const expires = new Map<string, number>();
+    for (const descriptor of descriptors) {
+      const pinnedMode = input.credentials.manifest.bindings.find((binding) =>
+        binding.connectionId === descriptor.connectionId &&
+        sameProviderSource(binding.providerSource, descriptor.providerSource)
+      )?.renewableEnv;
+      const selectedVersion = input.planRun.requiredProviderRequirements?.find(
+        (requirement) => sameProviderSource(
+          requirement.source,
+          descriptor.providerSource,
+        ),
+      )?.version;
+      if (
+        !pinnedMode ||
+        pinnedMode.sourceEnvName !== descriptor.sourceEnvName ||
+        pinnedMode.fileEnvName !== descriptor.fileEnvName ||
+        !providerVersionMeetsRuntimeInputFloor(
+          selectedVersion,
+          pinnedMode.minimumProviderVersion,
+        )
+      ) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `renewable credential provider version is not proven for ${descriptor.providerSource}; re-plan against an exact supported provider release`,
+          { reason: RENEWABLE_PROVIDER_VERSION_UNPROVEN_REASON },
+        );
+      }
+      const expiry = Date.parse(descriptor.expiresAt);
+      if (!Number.isFinite(expiry) || expiry - this.#now() < 120_000) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "renewable run credential has insufficient dispatch lifetime",
+          { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+        );
+      }
+      expires.set(descriptor.connectionId, expiry);
+    }
+    await runner.assertCredentialRefreshCapability({
+      owner,
+      runnerRunId: input.planRun.id,
+    });
+    if (signal.aborted) throw signal.reason;
+
+    const child = new AbortController();
+    const abortChild = () => child.abort(signal.reason);
+    signal.addEventListener("abort", abortChild, { once: true });
+    if (signal.aborted) abortChild();
+    let stopped = false;
+    let sequence = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let expiryWatchdog: ReturnType<typeof setTimeout> | undefined;
+    let activeTick: Promise<void> | undefined;
+    let refreshError: unknown;
+    const schedule = () => {
+      if (stopped || child.signal.aborted) return;
+      if (timer) clearTimeout(timer);
+      if (expiryWatchdog) clearTimeout(expiryWatchdog);
+      const nextExpiry = Math.min(...expires.values());
+      const delay = Math.max(1, nextExpiry - this.#now() - 90_000);
+      timer = setTimeout(() => { activeTick = tick(); }, delay);
+      (timer as { unref?: () => void }).unref?.();
+      expiryWatchdog = setTimeout(() => {
+        if (stopped || child.signal.aborted) return;
+        refreshError = new OpenTofuControllerError(
+          "failed_precondition",
+          "run credential expired before renewal completed",
+          { reason: CREDENTIAL_SERVICE_UNAVAILABLE_REASON },
+        );
+        child.abort(refreshError);
+      }, Math.max(1, nextExpiry - this.#now()));
+      (expiryWatchdog as { unref?: () => void }).unref?.();
+    };
+    const tick = async (): Promise<void> => {
+      try {
+        for (const descriptor of descriptors) {
+          if (stopped || child.signal.aborted) return;
+          if ((expires.get(descriptor.connectionId) ?? 0) - this.#now() > 90_000) {
+            continue;
+          }
+          // The interval guard can be delayed while issuance is pending.
+          // Revalidate this exact Run and Capsule lease on both sides of mint,
+          // never delivering a late value after a known fence loss.
+          await assertHeldLease();
+          if (stopped || child.signal.aborted) return;
+          const renewed = await this.#runEnv.renewRunCredential(
+            input.planRun,
+            input.phase,
+            input.running.id,
+            descriptor.connectionId,
+          );
+          const newDescriptor = renewed.renewable?.[0];
+          const value = renewed.env[descriptor.sourceEnvName];
+          const newExpiry = Date.parse(newDescriptor?.expiresAt ?? "");
+          if (
+            !newDescriptor ||
+            newDescriptor.providerSource !== descriptor.providerSource ||
+            newDescriptor.connectionId !== descriptor.connectionId ||
+            newDescriptor.sourceEnvName !== descriptor.sourceEnvName ||
+            newDescriptor.fileEnvName !== descriptor.fileEnvName ||
+            typeof value !== "string" ||
+            !Number.isFinite(newExpiry) ||
+            newExpiry - this.#now() < 120_000
+          ) {
+            throw new Error("renewed credential does not match the pinned binding");
+          }
+          await assertHeldLease();
+          if (stopped || child.signal.aborted) return;
+          await runner.refreshCredentials!({
+            owner,
+            runnerRunId: input.planRun.id,
+            manifestDigest,
+            sequence: ++sequence,
+            credentials: [{ ...newDescriptor, value }],
+          }, { signal: child.signal });
+          expires.set(descriptor.connectionId, newExpiry);
+        }
+        schedule();
+      } catch (error) {
+        if (!stopped && !child.signal.aborted) {
+          refreshError = error;
+          child.abort(error);
+        }
+      }
+    };
+    schedule();
+    let result: T | undefined;
+    let workError: unknown;
+    try {
+      result = await work(child.signal);
+    } catch (error) {
+      workError = error;
+    } finally {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      if (expiryWatchdog) clearTimeout(expiryWatchdog);
+      // A remote issuer may finish after cancellation. Its result is fenced
+      // by `stopped` above and can never be delivered to the runner. Do not
+      // make teardown wait forever on an issuer that ignores cancellation.
+      if (!child.signal.aborted) child.abort(new Error("run credential renewal scope closed"));
+      if (activeTick) {
+        let boundedWait: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            activeTick,
+            new Promise<void>((resolve) => {
+              boundedWait = setTimeout(resolve, 100);
+            }),
+          ]);
+        } finally {
+          if (boundedWait) clearTimeout(boundedWait);
+        }
+      }
+      signal.removeEventListener("abort", abortChild);
+    }
+    // The runner may throw an authoritative indeterminate/partial-state error
+    // after cancellation. A background refresh failure must not erase its
+    // recovery classification. Only a plain abort caused by this refresh loop
+    // is reported as the refresh failure itself.
+    if (workError !== undefined) {
+      if (
+        refreshError !== undefined &&
+        workError instanceof DOMException &&
+        workError.name === "AbortError"
+      ) {
+        throw refreshError;
+      }
+      throw workError;
+    }
     return result as T;
   }
 
@@ -7756,7 +7982,20 @@ export class RunEngine {
         effectiveRunning,
         leaseToken,
         undefined,
-        (signal) => dispatchPlan(effectiveRunEnvironment, signal),
+        (signal, assertHeldLease) =>
+          this.#withCredentialRenewal(
+            {
+              running: effectiveRunning,
+              planRun: effectiveRunning,
+              profile,
+              credentials: effectiveRunEnvironment.credentials,
+              phase: "plan",
+            },
+            signal,
+            assertHeldLease,
+            (credentialSignal) =>
+              dispatchPlan(effectiveRunEnvironment, credentialSignal),
+          ),
       );
       const now = this.#now();
       const verdict = await this.#evaluatePlanCompletion({
@@ -8397,21 +8636,30 @@ export class RunEngine {
         runningWithEnv,
         leaseToken,
         lease,
-        (signal) =>
-          this.#dispatchApply({
-            running: runningWithEnv,
-            planRun,
-            profile,
-            dispatch,
-            credentials: runEnvironment.credentials,
-            // Flip the runner-dispatched flag ONLY when the runner is actually
-            // invoked, so a throw from the pre-dispatch env/policy resolution does
-            // not record runner-minute usage (matches the pre-extraction order).
-            onDispatch: () => {
-              runnerDispatched = true;
+        (signal, assertHeldLease) =>
+          this.#withCredentialRenewal(
+            {
+              running: runningWithEnv,
+              planRun,
+              profile,
+              credentials: runEnvironment.credentials,
+              phase: "apply",
             },
             signal,
-          }),
+            assertHeldLease,
+            (credentialSignal) =>
+              this.#dispatchApply({
+                running: runningWithEnv,
+                planRun,
+                profile,
+                dispatch,
+                credentials: runEnvironment.credentials,
+                onDispatch: () => {
+                  runnerDispatched = true;
+                },
+                signal: credentialSignal,
+              }),
+          ),
       );
       const now = this.#now();
       if (result.providerExecutionFailure) {
@@ -10558,7 +10806,6 @@ export class RunEngine {
           effectiveRunning = persistedLifecycle.run as ApplyRun;
         }
       }
-      runnerDispatched = true;
       const destroyFn = runner.destroy;
       // Renewal harness: destroy is ONE awaited blocking fetch for the whole
       // tofu teardown; re-stamp the heartbeat + renew the lease around it so a
@@ -10568,8 +10815,20 @@ export class RunEngine {
         effectiveRunning,
         leaseToken,
         lease,
-        (signal) =>
-          destroyFn.call(
+        (signal, assertHeldLease) =>
+          this.#withCredentialRenewal(
+            {
+              running: effectiveRunning,
+              planRun,
+              profile,
+              credentials,
+              phase: "destroy",
+            },
+            signal,
+            assertHeldLease,
+            (credentialSignal) => {
+              runnerDispatched = true;
+              return destroyFn.call(
             runner,
             {
               applyRun: effectiveRunning,
@@ -10613,7 +10872,9 @@ export class RunEngine {
                 : {}),
               ...(credentials ? { credentials } : {}),
             },
-            { signal },
+            { signal: credentialSignal },
+              );
+            },
           ),
       );
       const now = this.#now();

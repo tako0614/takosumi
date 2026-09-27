@@ -399,6 +399,24 @@ interface RunnerMutationDispatchRecord {
   readonly redispatchBlocked: true;
 }
 
+interface ActiveCredentialRefreshClaim {
+  readonly owner: { readonly kind: "plan" | "apply"; readonly id: string };
+  readonly runnerRunId: string;
+  readonly action: "plan" | "apply" | "destroy";
+  readonly semanticDigest?: string;
+  readonly signal?: AbortSignal;
+  readonly manifestDigest: string;
+  readonly descriptors: readonly {
+    readonly providerSource: string;
+    readonly connectionId: string;
+    readonly sourceEnvName: string;
+    readonly fileEnvName: string;
+  }[];
+  sequence: number;
+  busy: boolean;
+  poisoned: boolean;
+}
+
 type RunnerMutationAuthorityClaim =
   | {
       readonly kind: "preparing";
@@ -507,6 +525,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   #stateCryptoInstance: StateArtifactCrypto | undefined;
   #lastStartupSeconds: number | undefined;
   readonly #activeMutationPreparations = new Set<string>();
+  readonly #activeCredentialRefreshClaims = new Map<string, ActiveCredentialRefreshClaim>();
   readonly #activeReleasePreparations = new Set<string>();
   readonly #restoreAuthorityLock = new AsyncSerialLock();
   readonly #localRunnerProxyUrl: URL | undefined;
@@ -848,6 +867,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         { status: 500 },
       );
     } finally {
+      if (runDispatch) {
+        const dispatchRunId = new URL(request.url).pathname.match(/^\/runs\/([^/]+)$/)?.[1];
+        if (dispatchRunId) {
+          this.#activeCredentialRefreshClaims.delete(decodeURIComponent(dispatchRunId));
+        }
+      }
       if (runDispatch && !mutationIndeterminate) {
         await this.#shutdownContainerIfSupported();
       }
@@ -868,6 +893,71 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       request,
       this.defaultPort,
     );
+  }
+
+  async #forwardCredentialRefresh(
+    runnerRunId: string,
+    request: Request,
+  ): Promise<Response> {
+    const active = this.#activeCredentialRefreshClaims.get(runnerRunId);
+    if (
+      !active || active.busy || active.poisoned || request.signal.aborted ||
+      active.signal?.aborted
+    ) {
+      return Response.json({ error: "credential refresh is not active" }, { status: 409 });
+    }
+    let update: Record<string, unknown>;
+    try {
+      update = await readBoundedRequestJsonObject(request, 64 * 1024);
+    } catch {
+      return Response.json({ error: "credential refresh is not active" }, { status: 400 });
+    }
+    if (!credentialRefreshUpdateMatches(update, active)) {
+      return Response.json({ error: "credential refresh is not active" }, { status: 409 });
+    }
+    active.busy = true;
+    try {
+      const durable = parseRunnerMutationDispatchRecord(
+        await this.ctx.storage.get<unknown>(RUNNER_MUTATION_AUTHORITY_STORAGE_KEY),
+      );
+      if (active.owner.kind === "apply") {
+        if (
+          !durable || durable.phase !== "dispatched" ||
+          durable.semanticDigest !== active.semanticDigest ||
+          (durable.action !== "apply" && durable.action !== "destroy") ||
+          active.action !== durable.action
+        ) {
+          return Response.json({ error: "credential refresh is not active" }, { status: 409 });
+        }
+      } else if (
+        active.owner.id !== active.runnerRunId || active.action !== "plan"
+      ) {
+        return Response.json({ error: "credential refresh is not active" }, { status: 409 });
+      }
+      const response = await this.#containerFetch(
+        new Request(request.url, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(update),
+          signal: request.signal,
+        }),
+      );
+      if (!response.ok) {
+        if (response.status >= 500) active.poisoned = true;
+        return Response.json({ error: "credential refresh was rejected" }, {
+          status: response.status === 409 ? 409 : 502,
+        });
+      }
+      active.sequence = update.sequence as number;
+      return Response.json({ ok: true, status: "updated" });
+    } catch {
+      // A lost acknowledgement may follow an atomic container write. Refuse
+      // further updates rather than guessing whether this sequence committed.
+      active.poisoned = true;
+      return Response.json({ error: "credential refresh delivery is ambiguous" }, { status: 502 });
+    } finally {
+      active.busy = false;
+    }
   }
 
   async #startContainerIfSupported(): Promise<void> {
@@ -1465,6 +1555,32 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
 
   async #fetchWithDurablePlanArtifacts(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === "/capabilities" && request.method === "GET") {
+      const ownerKind = url.searchParams.get("ownerKind");
+      const ownerId = url.searchParams.get("ownerId")?.trim();
+      const runnerRunId = url.searchParams.get("runnerRunId")?.trim();
+      if (
+        (ownerKind !== "plan" && ownerKind !== "apply") || !ownerId || !runnerRunId ||
+        (ownerKind === "plan" && ownerId !== runnerRunId)
+      ) return Response.json({ error: "credential refresh owner required" }, { status: 400 });
+      await this.#ensureContainerReady(url);
+      const health = await this.#containerFetch(
+        new Request(containerHealthUrl(url), { method: "GET" }),
+      );
+      if (!health.ok) return Response.json({ error: "runner capability probe failed" }, { status: 503 });
+      const payload = await health.json().catch(() => undefined) as unknown;
+      const capabilities = isRecord(payload) && Array.isArray(payload.capabilities)
+        ? payload.capabilities.filter((value): value is string => typeof value === "string")
+        : [];
+      return Response.json({ owner: { kind: ownerKind, id: ownerId }, runnerRunId, capabilities });
+    }
+    const refreshMatch = /^\/runs\/([^/]+)\/credentials$/.exec(url.pathname);
+    if (refreshMatch && request.method === "PUT") {
+      return await this.#forwardCredentialRefresh(
+        decodeURIComponent(refreshMatch[1]!),
+        request,
+      );
+    }
     const match = /^\/runs\/([^/]+)$/.exec(url.pathname);
     if (!match || request.method !== "POST") {
       return await this.#containerFetch(request);
@@ -1503,6 +1619,17 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     }
     const sourceArchive = parseSourceArchiveRestore(envelope.request);
     const depStates = parseDepStates(envelope.request);
+    const credentialRefreshOwner = envelope.action === "plan"
+      ? { kind: "plan" as const, id: runId }
+      : applyRunId
+        ? { kind: "apply" as const, id: applyRunId }
+        : undefined;
+    const credentialRefreshClaim = await renewableCredentialRefreshClaim(
+      credentialRefreshOwner,
+      runId,
+      envelope.action,
+      envelope.request,
+    );
     const stateKeys = stateScope
       ? []
       : await stateArtifactKeys(envelope.request);
@@ -1632,6 +1759,14 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
             mutationPreparation.action,
           );
         }
+        if (credentialRefreshClaim) {
+          this.#activeCredentialRefreshClaims.set(runId, {
+            ...credentialRefreshClaim,
+            action: envelope.action as "apply" | "destroy",
+            semanticDigest: mutationDispatch.semanticDigest,
+            signal: request.signal,
+          });
+        }
       }
       if (releasePreparation) {
         releaseRequest = dispatchRequest();
@@ -1671,6 +1806,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         releaseDispatch,
       );
     } else {
+      if (credentialRefreshClaim && envelope.action === "plan") {
+        this.#activeCredentialRefreshClaims.set(runId, {
+          ...credentialRefreshClaim,
+          signal: request.signal,
+        });
+      }
       unboundedRunnerResponse = await this.#containerFetchAfterReady(
         dispatchRequest,
         url,
@@ -5500,6 +5641,190 @@ function isRunnerMutationAction(
   return action === "apply" || action === "destroy";
 }
 
+async function renewableCredentialRefreshClaim(
+  owner: { readonly kind: "plan" | "apply"; readonly id: string } | undefined,
+  runnerRunId: string,
+  action: string | undefined,
+  requestPayload: unknown,
+): Promise<Omit<ActiveCredentialRefreshClaim, "semanticDigest"> | undefined> {
+  const credentials = recordField(requestPayload, "credentials");
+  if (!isRecord(credentials)) return undefined;
+  const manifest = recordField(credentials, "manifest");
+  const declaredRenewableBindings = isRecord(manifest) && Array.isArray(manifest.bindings)
+    ? manifest.bindings.filter((binding) =>
+        isRecord(binding) && recordField(binding, "renewableEnv") !== undefined,
+      )
+    : [];
+  const raw = credentials.renewable;
+  if (raw === undefined) {
+    if (declaredRenewableBindings.length > 0) {
+      throw new Error("renewable credential projection is missing");
+    }
+    return undefined;
+  }
+  if (!Array.isArray(raw)) throw new Error("renewable credential dispatch is malformed");
+  if (raw.length === 0) {
+    if (declaredRenewableBindings.length > 0) {
+      throw new Error("renewable credential projection is missing");
+    }
+    return undefined;
+  }
+  if (
+    !owner ||
+    (action === "plan"
+      ? owner.kind !== "plan" || owner.id !== runnerRunId
+      : !isRunnerMutationAction(action) || owner.kind !== "apply")
+  ) {
+    throw new Error("renewable credentials require an exact active run owner");
+  }
+  const env = recordField(credentials, "env");
+  const manifestDigest = stringField(credentials, "manifestDigest");
+  if (
+    !isRecord(manifest) || !Array.isArray(manifest.bindings) || !isRecord(env) ||
+    !manifestDigest || !/^sha256:[0-9a-f]{64}$/u.test(manifestDigest) ||
+    await stableJsonDigest(manifest) !== manifestDigest
+  ) {
+    throw new Error("renewable credential dispatch manifest is invalid");
+  }
+  const descriptors = raw.map((value) => {
+    if (!isRecord(value)) throw new Error("renewable credential dispatch is malformed");
+    if (
+      Object.keys(value).sort().join(",") !==
+      "connectionId,expiresAt,fileEnvName,providerSource,sourceEnvName"
+    ) throw new Error("renewable credential dispatch descriptor is malformed");
+    const providerSource = stringField(value, "providerSource");
+    const connectionId = stringField(value, "connectionId");
+    const sourceEnvName = stringField(value, "sourceEnvName");
+    const fileEnvName = stringField(value, "fileEnvName");
+    const expiresAt = stringField(value, "expiresAt");
+    const binding = manifest.bindings.find((candidate) =>
+      isRecord(candidate) &&
+      stringField(candidate, "providerSource") === providerSource &&
+      stringField(candidate, "connectionId") === connectionId,
+    );
+    const renewal = isRecord(binding) ? recordField(binding, "renewableEnv") : undefined;
+    const envNames = isRecord(binding) ? binding.envNames : undefined;
+    const fileEnvNames = isRecord(binding) ? binding.fileEnvNames : undefined;
+    if (
+      !providerSource || !connectionId || !sourceEnvName || !fileEnvName ||
+      !expiresAt || !Number.isFinite(Date.parse(expiresAt)) ||
+      typeof env[sourceEnvName] !== "string" ||
+      !Array.isArray(envNames) || !envNames.includes(sourceEnvName) ||
+      !Array.isArray(fileEnvNames) || !fileEnvNames.includes(fileEnvName) ||
+      !isRecord(renewal) ||
+      stringField(renewal, "sourceEnvName") !== sourceEnvName ||
+      stringField(renewal, "fileEnvName") !== fileEnvName
+    ) {
+      throw new Error("renewable credential dispatch descriptor mismatches manifest");
+    }
+    return { providerSource, connectionId, sourceEnvName, fileEnvName };
+  });
+  if (
+    new Set(descriptors.map((item) => item.sourceEnvName)).size !== descriptors.length ||
+    new Set(descriptors.map((item) => item.fileEnvName)).size !== descriptors.length
+  ) {
+    throw new Error("renewable credential dispatch contains duplicate descriptors");
+  }
+  const runnerProfile = recordField(requestPayload, "runnerProfile");
+  const resourceLimits = isRecord(runnerProfile)
+    ? recordField(runnerProfile, "resourceLimits")
+    : undefined;
+  const maxRunSeconds = isRecord(resourceLimits)
+    ? resourceLimits.maxRunSeconds
+    : undefined;
+  const estimatedCredentialValues =
+    descriptors.length * (Math.ceil((typeof maxRunSeconds === "number" && Number.isFinite(maxRunSeconds) && maxRunSeconds > 0 ? maxRunSeconds : 900) / 30) + 1);
+  // The runner retains every superseded bearer until terminal output is
+  // redacted. Reject unusually long custom profiles before provider dispatch
+  // rather than exhausting the bounded redaction history mid-run.
+  if (estimatedCredentialValues > 1_792) {
+    throw new Error("renewable credential run profile exceeds bounded refresh history");
+  }
+  return {
+    owner,
+    runnerRunId,
+    action: action as "plan" | "apply" | "destroy",
+    manifestDigest,
+    descriptors,
+    sequence: 0,
+    busy: false,
+    poisoned: false,
+  };
+}
+
+function credentialRefreshUpdateMatches(
+  update: Record<string, unknown>,
+  active: ActiveCredentialRefreshClaim,
+): boolean {
+  if (
+    !isRecord(update.owner) ||
+    stringField(update.owner, "kind") !== active.owner.kind ||
+    stringField(update.owner, "id") !== active.owner.id ||
+    stringField(update, "runnerRunId") !== active.runnerRunId ||
+    stringField(update, "manifestDigest") !== active.manifestDigest ||
+    update.sequence !== active.sequence + 1 ||
+    !Number.isSafeInteger(update.sequence) ||
+    !Array.isArray(update.credentials) || update.credentials.length !== 1
+  ) return false;
+  const seen = new Set<string>();
+  for (const value of update.credentials) {
+    if (!isRecord(value)) return false;
+    const providerSource = stringField(value, "providerSource");
+    const connectionId = stringField(value, "connectionId");
+    const sourceEnvName = stringField(value, "sourceEnvName");
+    const fileEnvName = stringField(value, "fileEnvName");
+    const expiresAt = stringField(value, "expiresAt");
+    const token = stringField(value, "value");
+    const key = `${providerSource}\0${connectionId}\0${sourceEnvName}\0${fileEnvName}`;
+    if (
+      !active.descriptors.some((item) =>
+        item.providerSource === providerSource && item.connectionId === connectionId &&
+        item.sourceEnvName === sourceEnvName && item.fileEnvName === fileEnvName
+      ) || seen.has(key) || !expiresAt || !Number.isFinite(Date.parse(expiresAt)) ||
+      !token || new TextEncoder().encode(token).byteLength > 8192 || token.includes("\0")
+    ) return false;
+    seen.add(key);
+  }
+  return true;
+}
+
+async function readBoundedRequestJsonObject(
+  request: Request,
+  maxBytes: number,
+): Promise<Record<string, unknown>> {
+  const declaredLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new Error("request too large");
+  }
+  if (!request.body) throw new Error("request body is missing");
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel();
+        throw new Error("request too large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  const value = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  if (!isRecord(value)) throw new Error("request body must be an object");
+  return value;
+}
+
 function parseRunnerMutationDispatchRecord(
   value: unknown,
 ): RunnerMutationDispatchRecord | undefined {
@@ -6550,6 +6875,7 @@ async function runnerMutationSemanticDigest(
     requestPayload,
     action,
     env,
+    runId,
   );
   return await digestText(
     canonicalRunnerMutationJson({
@@ -6589,6 +6915,7 @@ async function runnerMutationCredentialSemantics(
   requestPayload: Readonly<Record<string, unknown>>,
   action: RunnerMutationAction,
   env: CloudflareWorkerEnv,
+  runnerRunId: string,
 ): Promise<unknown> {
   if (value === undefined) return null;
   if (!isRecord(value)) {
@@ -6628,6 +6955,31 @@ async function runnerMutationCredentialSemantics(
   const runtimeInputs = runnerMutationRuntimeInputSemantics(
     value.runtimeInputs,
   );
+  const applyRunId = parseApplyRunId(requestPayload);
+  const owner = applyRunId
+    ? { kind: "apply" as const, id: applyRunId }
+    : undefined;
+  const renewableClaim = await renewableCredentialRefreshClaim(
+    owner,
+    runnerRunId,
+    action,
+    requestPayload,
+  );
+  const manifest = recordField(value, "manifest");
+  const renewableBindings = isRecord(manifest) && Array.isArray(manifest.bindings)
+    ? manifest.bindings.filter((binding) =>
+        isRecord(binding) && recordField(binding, "renewableEnv") !== undefined,
+      )
+    : [];
+  if (
+    renewableBindings.length > 0 &&
+    (!renewableClaim || renewableClaim.descriptors.length !== renewableBindings.length)
+  ) {
+    throw new Error("renewable credential projection is incomplete");
+  }
+  const renewableSourceNames = new Set(
+    renewableClaim?.descriptors.map((descriptor) => descriptor.sourceEnvName) ?? [],
+  );
   const secretEntries = [
     ...Object.entries(rawEnv).map(([name, entry]) => ({
       delivery: `env:${name}`,
@@ -6656,7 +7008,10 @@ async function runnerMutationCredentialSemantics(
   }
   const staticMaterialDigests = await Promise.all(
     secretEntries
-      .filter((entry) => !isRunCredentialToken(entry.value))
+      .filter((entry) =>
+        !isRunCredentialToken(entry.value) &&
+        !(entry.delivery.startsWith("env:") && renewableSourceNames.has(entry.delivery.slice(4)))
+      )
       .map(async (entry) => ({
         delivery: entry.delivery,
         digest: await digestText(entry.value),
@@ -6677,6 +7032,18 @@ async function runnerMutationCredentialSemantics(
       ),
     ),
     manifest: value.manifest ?? null,
+    ...(renewableClaim
+      ? {
+          renewableCredentials: {
+            kind: "takosumi.runner-renewable-credential-projection@v1",
+            manifestDigest: renewableClaim.manifestDigest,
+            expiryClass: "finite-expiry",
+            descriptors: [...renewableClaim.descriptors].sort((left, right) =>
+              canonicalRunnerMutationJson(left).localeCompare(canonicalRunnerMutationJson(right)),
+            ),
+          },
+        }
+      : {}),
     authorities,
     // Value-free: only the variable and its declared binding names. The values
     // themselves appear exclusively as one-way digests above.

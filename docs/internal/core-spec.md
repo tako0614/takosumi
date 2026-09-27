@@ -603,6 +603,31 @@ providers. A guided recipe catalog is descriptive metadata, not an execution
 allowlist. Core does not branch on a provider name and does not silently inject
 provider credentials.
 
+An installed run-issued CredentialRecipe may opt one declared env value into
+renewable delivery by naming its source env and the provider's file-path env.
+The descriptor is value-free and pinned with the Provider Connection and Run
+credential manifest. Plan/Apply/Destroy obtain each short-lived value through
+the same canonical Run, policy, binding, and issuer checks. A renewable recipe
+also pins a minimum exact provider version; an older or unproven selected
+version fails before runner dispatch. A renewable issuer request must exceed
+120 seconds, and actual issued material must have at least 120 seconds left;
+an issuer-selected shorter lifetime fails closed rather than starting a Run.
+Before dispatch, Takosumi requires a
+runner image that advertises the refresh capability. While the Run remains
+fenced and active, the broker reissues only that binding ahead of expiry and
+the runner atomically replaces one private `0600` file; the provider rereads
+that path on each request. Plan and Apply have distinct runner refresh owners.
+The controller checks the same running Run and held Capsule lease immediately
+before and after each mint, discarding a value if either check loses; the
+runner also requires an active matching claim. The runner never receives
+signing authority or a durable refresh token, and renewal never replays an
+accepted OpenTofu mutation. A known lost Run fence, expired credential, failed
+renewal, or cancel stops delivery and terminates the child under normal
+failed/indeterminate state reconciliation. Already-issued bearers retain their
+normal short expiry; cross-store checks do not promise instantaneous revocation.
+Static credentials and providers without file support retain their existing
+env/file behavior.
+
 Secrets are write-only at the control-object boundary. Secret values never
 enter Resource specs, Interface documents, Outputs, state, Run logs, audit
 payloads, or public discovery. Sensitive OpenTofu values remain in encrypted

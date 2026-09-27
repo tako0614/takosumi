@@ -136,6 +136,11 @@ export interface CommandContext {
   readonly signal?: AbortSignal;
   readonly credentialManifest?: import("../../contract/credential-recipes.ts").RunCredentialRecipeManifest;
   readonly credentialFiles?: readonly ProviderCredentialFile[];
+  /** Run-scoped provider env values projected into atomically rotated files. */
+  readonly renewableCredentials?: readonly RenewableCredentialProjection[];
+  /** Value-free identity of the exact run credential manifest. */
+  readonly credentialManifestDigest?: string;
+  readonly credentialRefreshOwner?: CredentialRefreshOwner;
   /**
    * Apply-only sensitive provider inputs supplied to `tofu` on standard input as
    * an ephemeral variable file. Present for plan and apply alike so OpenTofu's
@@ -146,6 +151,35 @@ export interface CommandContext {
   readonly timeoutMs?: number;
   readonly sourceArchiveMaxBytes?: number;
   readonly sourceArchiveMaxDecompressedBytes?: number;
+}
+
+export interface RenewableCredentialProjection {
+  readonly providerSource: string;
+  readonly connectionId: string;
+  readonly sourceEnvName: string;
+  readonly fileEnvName: string;
+  readonly expiresAt: string;
+  readonly initialValue: string;
+}
+
+export interface RunCredentialRefreshUpdate {
+  readonly owner: CredentialRefreshOwner;
+  readonly runnerRunId: string;
+  readonly manifestDigest: string;
+  readonly sequence: number;
+  readonly credentials: readonly {
+    readonly providerSource: string;
+    readonly connectionId: string;
+    readonly sourceEnvName: string;
+    readonly fileEnvName: string;
+    readonly expiresAt: string;
+    readonly value: string;
+  }[];
+}
+
+export interface CredentialRefreshOwner {
+  readonly kind: "plan" | "apply";
+  readonly id: string;
 }
 
 export interface ProviderCredentialFile {

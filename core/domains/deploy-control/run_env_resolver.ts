@@ -40,7 +40,7 @@ export const RUN_ENV_REDACTION_PROFILE_ID = "redact_provider_material" as const;
 type RunCredentialMintPort = Pick<
   RunCredentialBroker,
   "mintRunCredentials" | "mintReleaseCommandCredentials"
->;
+> & Partial<Pick<RunCredentialBroker, "renewRunCredential">>;
 
 export interface RunEnvResolverDependencies {
   readonly credentials: RunCredentialMintPort;
@@ -94,6 +94,28 @@ export class RunEnvResolver {
   constructor(dependencies: RunEnvResolverDependencies) {
     this.#credentials = dependencies.credentials;
     this.#resolveRunProviderBindings = dependencies.resolveRunProviderBindings;
+  }
+
+  /** Re-checks the plan-pinned binding before issuing one replacement bearer. */
+  async renewRunCredential(
+    planRun: PlanRun,
+    phase: "plan" | "apply" | "destroy",
+    auditRunId: string,
+    connectionId: string,
+  ): Promise<RunCredentials> {
+    if (!this.#credentials.renewRunCredential) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "run credential renewal broker is unavailable",
+        { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+      );
+    }
+    return await this.#credentials.renewRunCredential(
+      planRun,
+      phase,
+      auditRunId,
+      connectionId,
+    );
   }
 
   async resolveRunEnvironment(

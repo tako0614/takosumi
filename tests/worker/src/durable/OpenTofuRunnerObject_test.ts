@@ -5154,6 +5154,277 @@ async function seedEncryptedPlan(
   );
 }
 
+test("OpenTofu runner forwards only sequenced renewable updates for the active dispatched ApplyRun", async () => {
+  const planRunId = "plan_renewable_do_gate";
+  const applyRunId = `apply_${planRunId}`;
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, planRunId);
+  const storage = new FakeDoStorage();
+  const gate = deferredGate();
+  let capturedRefresh: Record<string, unknown> | undefined;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT" && path === `/runs/${planRunId}/artifacts/tfplan`) {
+        return Response.json({ ok: true });
+      }
+      if (request.method === "PUT" && path === `/runs/${planRunId}/credentials`) {
+        capturedRefresh = await request.json() as Record<string, unknown>;
+        return Response.json({ ok: true, status: "updated" });
+      }
+      if (request.method === "POST" && path === `/runs/${planRunId}`) {
+        gate.enter();
+        await gate.wait;
+        return Response.json({
+          status: "succeeded",
+          exitCode: 0,
+          providerInstallation: [{
+            provider: RUN_CREDENTIAL_PROVIDER,
+            attested: true,
+            installedDigest: `sha256:${"c".repeat(64)}`,
+          }],
+        });
+      }
+      if (request.method === "GET" && path === `/runs/${planRunId}/artifacts/tfstate`) {
+        return new Response(STATE_BYTES, {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+  const runner = runnerWithContainer(r2, container, {
+    storage,
+    env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET },
+    healthFetch: async () => Response.json({
+      ok: true,
+      capabilities: ["takosumi.runner-credential-refresh@v1"],
+    }),
+  });
+  const capability = await runner.fetch(new Request(
+    `https://runner/capabilities?ownerKind=apply&ownerId=${applyRunId}&runnerRunId=${planRunId}`,
+  ));
+  assert.equal(capability.status, 200);
+  assert.deepEqual(await capability.json(), {
+    owner: { kind: "apply", id: applyRunId },
+    runnerRunId: planRunId,
+    capabilities: ["takosumi.runner-credential-refresh@v1"],
+  });
+
+  const signedToken = await signedMutationToken(planRunId, {
+    jti: "renewable-test-initial",
+  });
+  const baseRequest = signedMutationRequest(planRunId, signedToken);
+  const envelope = await baseRequest.json() as Record<string, unknown>;
+  const requestPayload = envelope.request as Record<string, unknown>;
+  const credentials = requestPayload.credentials as Record<string, unknown>;
+  const manifest = credentials.manifest as { bindings: Record<string, unknown>[] };
+  manifest.bindings[0] = {
+    ...manifest.bindings[0],
+    envNames: ["PROVIDER_RUN_TOKEN", "ROTATING_TOKEN"],
+    fileEnvNames: ["ROTATING_TOKEN_FILE"],
+    requiredEnvGroups: [["PROVIDER_RUN_TOKEN", "ROTATING_TOKEN"]],
+    renewableEnv: {
+      sourceEnvName: "ROTATING_TOKEN",
+      fileEnvName: "ROTATING_TOKEN_FILE",
+      minimumProviderVersion: "4.1.0",
+    },
+  };
+  credentials.env = {
+    ...(credentials.env as Record<string, string>),
+    ROTATING_TOKEN: "initial-opaque-token",
+  };
+  credentials.manifestDigest = await stableJsonDigest(manifest);
+  credentials.renewable = [{
+    providerSource: RUN_CREDENTIAL_PROVIDER,
+    connectionId: "connection_semantic",
+    sourceEnvName: "ROTATING_TOKEN",
+    fileEnvName: "ROTATING_TOKEN_FILE",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  }];
+  const runResponse = runner.fetch(new Request(`https://runner/runs/${planRunId}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(envelope),
+  }));
+  await gate.entered;
+
+  const update = {
+    owner: { kind: "apply", id: applyRunId },
+    runnerRunId: planRunId,
+    manifestDigest: credentials.manifestDigest,
+    sequence: 1,
+    credentials: [{
+      providerSource: RUN_CREDENTIAL_PROVIDER,
+      connectionId: "connection_semantic",
+      sourceEnvName: "ROTATING_TOKEN",
+      fileEnvName: "ROTATING_TOKEN_FILE",
+      expiresAt: "2099-02-01T00:00:00.000Z",
+      value: "next-opaque-token",
+    }],
+  };
+  const wrongOwner = await runner.fetch(new Request(
+    `https://runner/runs/${planRunId}/credentials`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...update, owner: { kind: "plan", id: planRunId } }),
+    },
+  ));
+  assert.equal(wrongOwner.status, 409);
+  const batch = await runner.fetch(new Request(
+    `https://runner/runs/${planRunId}/credentials`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...update, credentials: [...update.credentials, ...update.credentials] }),
+    },
+  ));
+  assert.equal(batch.status, 409);
+  const accepted = await runner.fetch(new Request(
+    `https://runner/runs/${planRunId}/credentials`,
+    { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(update) },
+  ));
+  assert.equal(accepted.status, 200);
+  assert.deepEqual(capturedRefresh, update);
+
+  const replay = await runner.fetch(new Request(
+    `https://runner/runs/${planRunId}/credentials`,
+    { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(update) },
+  ));
+  assert.equal(replay.status, 409);
+  gate.release();
+  assert.equal((await runResponse).status, 200);
+
+  const afterTerminal = await runner.fetch(new Request(
+    `https://runner/runs/${planRunId}/credentials`,
+    { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...update, sequence: 2 }) },
+  ));
+  assert.equal(afterTerminal.status, 409);
+  assert.equal(JSON.stringify(storage.entries()).includes("initial-opaque-token"), false);
+  assert.equal(JSON.stringify(storage.entries()).includes("next-opaque-token"), false);
+});
+
+test("OpenTofu runner scopes Plan refresh to its active PlanRun and rejects terminal updates", async () => {
+  const planRunId = "plan_renewable_owner_scope";
+  const r2 = new FakeR2Bucket();
+  const gate = deferredGate();
+  let capturedRefresh: Record<string, unknown> | undefined;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT" && path === `/runs/${planRunId}/credentials`) {
+        capturedRefresh = await request.json() as Record<string, unknown>;
+        return Response.json({ ok: true, status: "updated" });
+      }
+      if (request.method === "POST" && path === `/runs/${planRunId}`) {
+        gate.enter();
+        await gate.wait;
+        return Response.json({ status: "succeeded", exitCode: 0 });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+  const runner = runnerWithContainer(r2, container, {
+    healthFetch: async () => Response.json({
+      ok: true,
+      capabilities: ["takosumi.runner-credential-refresh@v1"],
+    }),
+  });
+  const capability = await runner.fetch(new Request(
+    `https://runner/capabilities?ownerKind=plan&ownerId=${planRunId}&runnerRunId=${planRunId}`,
+  ));
+  assert.equal(capability.status, 200);
+  assert.deepEqual(await capability.json(), {
+    owner: { kind: "plan", id: planRunId },
+    runnerRunId: planRunId,
+    capabilities: ["takosumi.runner-credential-refresh@v1"],
+  });
+
+  const manifest = {
+    bindings: [{
+      providerSource: RUN_CREDENTIAL_PROVIDER,
+      connectionId: "connection_plan_rotation",
+      recipeId: "probe",
+      authMode: "run-issued",
+      envNames: ["ROTATING_TOKEN"],
+      fileEnvNames: ["ROTATING_TOKEN_FILE"],
+      requiredEnvGroups: [["ROTATING_TOKEN"]],
+      renewableEnv: {
+        sourceEnvName: "ROTATING_TOKEN",
+        fileEnvName: "ROTATING_TOKEN_FILE",
+        minimumProviderVersion: "4.1.0",
+      },
+    }],
+  };
+  const manifestDigest = await stableJsonDigest(manifest);
+  const run = runner.fetch(new Request(`https://runner/runs/${planRunId}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      kind: "takosumi.opentofu-run@v1",
+      action: "plan",
+      runId: planRunId,
+      request: {
+        runnerProfile: { resourceLimits: { maxRunSeconds: 900 } },
+        credentials: {
+          env: { ROTATING_TOKEN: "plan-initial-token" },
+          manifest,
+          manifestDigest,
+          renewable: [{
+            providerSource: RUN_CREDENTIAL_PROVIDER,
+            connectionId: "connection_plan_rotation",
+            sourceEnvName: "ROTATING_TOKEN",
+            fileEnvName: "ROTATING_TOKEN_FILE",
+            expiresAt: "2099-01-01T00:00:00.000Z",
+          }],
+        },
+      },
+    }),
+  }));
+  await gate.entered;
+  const update = {
+    owner: { kind: "plan", id: planRunId },
+    runnerRunId: planRunId,
+    manifestDigest,
+    sequence: 1,
+    credentials: [{
+      providerSource: RUN_CREDENTIAL_PROVIDER,
+      connectionId: "connection_plan_rotation",
+      sourceEnvName: "ROTATING_TOKEN",
+      fileEnvName: "ROTATING_TOKEN_FILE",
+      expiresAt: "2099-02-01T00:00:00.000Z",
+      value: "plan-next-token",
+    }],
+  };
+  const wrongOwner = await runner.fetch(new Request(
+    `https://runner/runs/${planRunId}/credentials`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...update, owner: { kind: "apply", id: `apply_${planRunId}` } }),
+    },
+  ));
+  assert.equal(wrongOwner.status, 409);
+  const accepted = await runner.fetch(new Request(
+    `https://runner/runs/${planRunId}/credentials`,
+    { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(update) },
+  ));
+  assert.equal(accepted.status, 200);
+  assert.deepEqual(capturedRefresh, update);
+  gate.release();
+  assert.equal((await run).status, 200);
+  const terminal = await runner.fetch(new Request(
+    `https://runner/runs/${planRunId}/credentials`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...update, sequence: 2 }),
+    },
+  ));
+  assert.equal(terminal.status, 409);
+});
+
 function mutationRequest(
   runId: string,
   action: "apply" | "destroy",

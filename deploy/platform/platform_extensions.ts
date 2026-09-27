@@ -14,7 +14,9 @@ import {
 } from "takosumi-contract/provider-env-rules";
 import { canonicalRunCredentialSettings } from "takosumi-contract/connections";
 import {
+  isCredentialRecipeRenewableEnv,
   isProviderRuntimeInputs,
+  type CredentialRecipeRenewableEnv,
   type CredentialRecipeRuntimeInputs,
 } from "takosumi-contract/credential-recipes";
 import type { JsonValue } from "takosumi-contract";
@@ -93,6 +95,8 @@ export interface PlatformExtensionProviderCredentialBroker {
   /** Relative path appended to this route's basePath. */
   readonly exchangePath: `/${string}`;
   readonly envNames: readonly string[];
+  /** Provider-declared run-issued env value projected to a rotating file. */
+  readonly renewableEnv?: CredentialRecipeRenewableEnv;
   /** Bounded non-secret policy passed to this broker on every Run. */
   readonly runCredentialSettings?: Readonly<Record<string, JsonValue>>;
   /**
@@ -402,6 +406,7 @@ function optionalProviderCredentialBroker(
     "publicInputExchangePath",
     "publicInputCapabilities",
     "runtimeInputs",
+    "renewableEnv",
   ];
   const actualKeys = Object.keys(record).sort();
   if (
@@ -499,6 +504,17 @@ function optionalProviderCredentialBroker(
       `${label}.providerCredentialBroker.runtimeInputs is invalid`,
     );
   }
+  const renewableEnv = record.renewableEnv;
+  if (
+    renewableEnv !== undefined &&
+    (!isCredentialRecipeRenewableEnv(renewableEnv) ||
+      !envNames.includes(renewableEnv.sourceEnvName) ||
+      !isProviderEnvName(renewableEnv.fileEnvName) ||
+      isReservedProviderEnvName(renewableEnv.fileEnvName) ||
+      envNames.includes(renewableEnv.fileEnvName))
+  ) {
+    throw new TypeError(`${label}.providerCredentialBroker.renewableEnv is invalid`);
+  }
   let runCredentialSettings: Readonly<Record<string, JsonValue>> | undefined;
   try {
     runCredentialSettings = canonicalRunCredentialSettings(
@@ -529,6 +545,7 @@ function optionalProviderCredentialBroker(
         }
       : {}),
     ...(runtimeInputs ? { runtimeInputs: Object.freeze(runtimeInputs) } : {}),
+    ...(renewableEnv ? { renewableEnv: Object.freeze(renewableEnv) } : {}),
   });
 }
 

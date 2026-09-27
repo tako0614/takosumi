@@ -117,6 +117,8 @@ function brokerFor(resolved: readonly ResolvedCapsuleProviderBinding[]): {
             connectionId: entry.connectionId,
             temporary: true,
             ttlEnforced: true,
+            expiresAt: new Date(Date.parse(NOW) + 300_000).toISOString(),
+            ttlSeconds: 300,
           })),
         ),
       );
@@ -180,6 +182,57 @@ test("a credential-free provider set mints nothing at all", async () => {
   expect(mintedEntries).toEqual([]);
   expect(credentials?.env).toEqual({});
   expect(credentials?.manifest.bindings).toEqual([]);
+});
+
+test("one renewable binding is re-minted under the same plan without broadening delivery", async () => {
+  const renewable = {
+    ...CLOUDFLARE,
+    connection: {
+      ...CLOUDFLARE.connection,
+      credentialRecipe: {
+        id: "test-run-issued",
+        authMode: "run",
+        renewableEnv: {
+          sourceEnvName: "CLOUDFLARE_API_TOKEN",
+          fileEnvName: "CLOUDFLARE_API_TOKEN_FILE",
+          minimumProviderVersion: "4.1.0",
+        },
+      },
+    },
+  } satisfies ResolvedCapsuleProviderBinding;
+  const { broker, mintedEntries } = brokerFor([renewable, AWS]);
+  const plan = planRun([
+    "registry.opentofu.org/cloudflare/cloudflare",
+    "registry.opentofu.org/hashicorp/aws",
+  ]);
+  const initial = await broker.mintRunCredentials(plan, "apply", "apply_1");
+  expect(initial?.renewable).toEqual([{
+    providerSource: renewable.provider,
+    connectionId: renewable.connection.id,
+    sourceEnvName: "CLOUDFLARE_API_TOKEN",
+    fileEnvName: "CLOUDFLARE_API_TOKEN_FILE",
+    expiresAt: new Date(Date.parse(NOW) + 300_000).toISOString(),
+  }]);
+  expect(initial?.manifest.bindings[0]?.renewableEnv?.minimumProviderVersion).toBe("4.1.0");
+  expect(initial?.manifestDigest).toStartWith("sha256:");
+  expect(initial?.manifest.bindings[0]?.fileEnvNames).toEqual([
+    "CLOUDFLARE_API_TOKEN_FILE",
+  ]);
+  const renewed = await broker.renewRunCredential(
+    plan,
+    "apply",
+    "apply_1",
+    renewable.connection.id,
+  );
+  expect(mintedEntries.map((entries) => entries.map((entry) => entry.connectionId))).toEqual([
+    ["conn_cloudflare", "conn_aws"],
+    ["conn_cloudflare"],
+  ]);
+  expect(renewed.runtimeInputs).toBeUndefined();
+  expect(Object.keys(renewed.env)).toEqual(["CLOUDFLARE_API_TOKEN"]);
+  expect(renewed.renewable?.[0]?.connectionId).toBe("conn_cloudflare");
+  const planned = await broker.mintRunCredentials(plan, "plan", plan.id);
+  expect(planned?.renewable?.[0]?.connectionId).toBe("conn_cloudflare");
 });
 
 test("broker rejects a wrong recipe before vault mint even when binding bypasses UI", async () => {

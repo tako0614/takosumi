@@ -78,6 +78,7 @@ import {
 } from "../connections/mod.ts";
 import type { RunCredentials, RunCredentialRuntimeInputs } from "./mod.ts";
 import type { RunCredentialRecipeManifest } from "takosumi-contract/credential-recipes";
+import { stableJsonDigest } from "../../adapters/source/digest.ts";
 
 /**
  * Ports the controller injects into {@link RunCredentialBroker}. The vault and
@@ -151,6 +152,30 @@ export class RunCredentialBroker {
     return await this.#mintCredentials(planRun, phase, auditRunId);
   }
 
+  /** Re-mint only one plan-pinned rotating credential; no runtime inputs. */
+  async renewRunCredential(
+    planRun: PlanRun,
+    phase: "plan" | "apply" | "destroy",
+    auditRunId: string,
+    connectionId: string,
+  ): Promise<RunCredentials> {
+    const renewed = await this.#mintCredentials(
+      planRun,
+      phase,
+      auditRunId,
+      auditRunId,
+      { onlyConnectionId: connectionId, skipRuntimeInputs: true },
+    );
+    if (!renewed || renewed.renewable?.length !== 1) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "run credential renewal requires one pinned renewable binding",
+        { reason: CREDENTIAL_SERVICE_UNAVAILABLE_REASON },
+      );
+    }
+    return renewed;
+  }
+
   async mintReleaseCommandCredentials(
     planRun: PlanRun,
     phase: "apply" | "destroy",
@@ -171,7 +196,11 @@ export class RunCredentialBroker {
     phase: "plan" | "apply" | "destroy",
     auditRunId: string,
     credentialRunId: string = auditRunId,
-    options: { readonly releaseCommand?: boolean } = {},
+    options: {
+      readonly releaseCommand?: boolean;
+      readonly onlyConnectionId?: string;
+      readonly skipRuntimeInputs?: boolean;
+    } = {},
   ): Promise<RunCredentials | undefined> {
     if (planRun.requiredProviders.length === 0) {
       return undefined;
@@ -227,10 +256,19 @@ export class RunCredentialBroker {
       // The digest fence above stays on the FULL resolved set — it pins what
       // the reviewer saw, not what this phase materializes.
       const mintable = resolved.filter((entry) =>
+        (options.onlyConnectionId === undefined ||
+          entry.connection.id === options.onlyConnectionId) &&
         planRun.requiredProviders.some((required) =>
           sameProviderSource(required, entry.provider),
         ),
       );
+      if (options.onlyConnectionId !== undefined && mintable.length !== 1) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "run credential renewal binding is absent or ambiguous",
+          { reason: PROVIDER_CONNECTION_CHANGED_REASON },
+        );
+      }
       const policy = await this.#policyForPlanRun(planRun);
       const connectionPolicyReasons = mintable.flatMap((entry) =>
         evaluateProviderConnectionCredentialPolicy(entry.connection, policy),
@@ -258,12 +296,14 @@ export class RunCredentialBroker {
       // Run-scoped sensitive provider inputs travel on this same dispatch-only
       // bundle. They are minted here, and only here, because this is the one
       // channel that is never persisted and never logged.
-      const runtimeInputs = await this.#mintRuntimeInputs(
-        planRun,
-        phase,
-        mintable,
-        options.releaseCommand === true,
-      );
+      const runtimeInputs = options.skipRuntimeInputs
+        ? undefined
+        : await this.#mintRuntimeInputs(
+            planRun,
+            phase,
+            mintable,
+            options.releaseCommand === true,
+          );
       const bundle = new CredentialBundle({});
       if (providerEntries.length === 0) {
         await this.#recordProviderCredentialMintEvents(
@@ -333,12 +373,43 @@ export class RunCredentialBroker {
       );
       const env = { ...bundle.env, ...recipeResponse.env };
       const manifest = credentialManifest(mintable, recipeResponse.files);
+      const renewable = options.releaseCommand
+        ? []
+        : mintable.flatMap((entry) => {
+            const descriptor = entry.connection.credentialRecipe?.renewableEnv;
+            if (!descriptor) return [];
+            const mintedEvidence = evidence.find((item) =>
+              item.connectionId === entry.connection.id
+            );
+            if (
+              !mintedEvidence?.temporary ||
+              !mintedEvidence.ttlEnforced ||
+              !mintedEvidence.expiresAt ||
+              typeof env[descriptor.sourceEnvName] !== "string"
+            ) {
+              throw new OpenTofuControllerError(
+                "failed_precondition",
+                "renewable credential lacks temporary expiry evidence",
+                { reason: CREDENTIAL_MINT_FAILED_REASON },
+              );
+            }
+            return [{
+              providerSource: entry.provider,
+              connectionId: entry.connection.id,
+              sourceEnvName: descriptor.sourceEnvName,
+              fileEnvName: descriptor.fileEnvName,
+              expiresAt: mintedEvidence.expiresAt,
+            }];
+          });
       return {
         env,
         ...(recipeResponse.files && recipeResponse.files.length > 0
           ? { files: recipeResponse.files }
           : {}),
         manifest,
+        ...(renewable.length > 0
+          ? { renewable, manifestDigest: await stableJsonDigest(manifest) }
+          : {}),
         ...(runtimeInputs ? { runtimeInputs } : {}),
       };
     } catch (error) {
@@ -607,7 +678,17 @@ function credentialManifest(
         recipeId: entry.connection.credentialRecipe?.id ?? "legacy",
         authMode: entry.connection.credentialRecipe?.authMode ?? "legacy",
         envNames: [...entry.connection.envNames].sort(),
-        fileEnvNames: [...(entry.connection.fileEnvNames ?? [])].sort(),
+        // The rotating path is supplied by the runner, not minted as a Vault
+        // file. Admit its env name in the dispatch manifest only.
+        fileEnvNames: [
+          ...(entry.connection.fileEnvNames ?? []),
+          ...(entry.connection.credentialRecipe?.renewableEnv
+            ? [entry.connection.credentialRecipe.renewableEnv.fileEnvName]
+            : []),
+        ].sort(),
+        ...(entry.connection.credentialRecipe?.renewableEnv
+          ? { renewableEnv: entry.connection.credentialRecipe.renewableEnv }
+          : {}),
         requiredEnvGroups: (
           entry.connection.credentialRecipe?.requiredEnvGroups ?? []
         ).map((group) => [...group].sort()),

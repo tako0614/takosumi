@@ -113,6 +113,9 @@ export function platformExtensionProviderCredentialComposition(
             ...(broker.runtimeInputs
               ? { runtimeInputs: broker.runtimeInputs }
               : {}),
+            ...(broker.renewableEnv
+              ? { renewableEnv: broker.renewableEnv }
+              : {}),
           }),
         }),
       });

@@ -154,6 +154,7 @@ export async function runGeneratedRootPlan(
     request,
     runnerProfile,
     signal,
+    runId,
   );
   // Fail before any `tofu` process exists when the reviewed root does not
   // declare the exact ephemeral variables this dispatch targets.
@@ -220,6 +221,7 @@ export async function runGeneratedRootPlan(
   const preparedCredentials = await prepareProviderCredentialFiles(
     commandContext,
     workspace,
+    runId,
   );
   try {
     const providerScan = await requiredProvidersForGeneratedRoot(
@@ -286,6 +288,7 @@ export async function runDirectRootPlan(
     request,
     runnerProfile,
     signal,
+    runId,
   );
   // The direct-root lane executes the Capsule's own module as the OpenTofu
   // root, so Takosumi owns no provider block and declares no ephemeral
@@ -327,6 +330,7 @@ export async function runDirectRootPlan(
   const preparedCredentials = await prepareProviderCredentialFiles(
     commandContext,
     workspace,
+    runId,
   );
   try {
     const providerScan = await requiredProvidersForGeneratedRoot(
@@ -669,6 +673,7 @@ export async function runReviewedPlanApply(
     request,
     runnerProfile,
     signal,
+    runId,
   );
   const workspace = workspaceForRun(runId);
   const timer = new RunnerPhaseTimer();
@@ -712,6 +717,7 @@ export async function runReviewedPlanApply(
   const preparedCredentials = await prepareProviderCredentialFiles(
     commandContext,
     workspace,
+    runId,
   );
   try {
     const providerScan = await requiredProvidersForGeneratedRoot(

@@ -571,6 +571,47 @@ test("container runner retries transient Cloudflare container capacity exhaustio
   expect(result.planDigest).toBe(PLAN_DIGEST);
 });
 
+test("container runner preserves a typed mutation receipt when refresh cancellation races its response", async () => {
+  const abort = new AbortController();
+  let resolveResponse!: () => void;
+  let markEntered!: () => void;
+  const entered = new Promise<void>((resolve) => { markEntered = resolve; });
+  const responseGate = new Promise<void>((resolve) => { resolveResponse = resolve; });
+  const runner = new CloudflareContainerOpenTofuRunner({
+    RUNNER: {
+      idFromName: (name: string) => name,
+      get: () => ({
+        fetch: async () => {
+          markEntered();
+          await responseGate;
+          return Response.json({
+            errorCode: RUNNER_MUTATION_INDETERMINATE_CODE,
+            action: "apply",
+            status: "failed",
+            retryable: false,
+            detail: "mutation may have changed provider state",
+          }, { status: 409 });
+        },
+      }),
+    },
+  } as unknown as CloudflareWorkerEnv);
+  const pending = runner.apply({
+    planRun: { id: "plan_abort_race" },
+    applyRun: { id: "apply_abort_race" },
+    planArtifact: {
+      kind: "runner-local",
+      ref: "runner-local://plan_abort_race/tfplan",
+      digest: PLAN_DIGEST,
+    },
+  } as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0], {
+    signal: abort.signal,
+  });
+  await entered;
+  abort.abort();
+  resolveResponse();
+  await expect(pending).rejects.toBeInstanceOf(OpenTofuRunnerExecutionError);
+});
+
 test("container runner returns provider installation attestation from apply and destroy results", async () => {
   const providerInstallation = [
     {

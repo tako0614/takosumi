@@ -91,6 +91,7 @@ const MAX_RUNNER_EXECUTION_DETAIL_CHARS = 4_096;
 const UNSAFE_PROVIDER_FAILURE_DETAIL_LINE =
   /(?:\b(?:authorization|bearer|cookie|token|password|passwd|secret|credential|api[_-]?key|body)\b|\/work\/)/iu;
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
+const RUNNER_CREDENTIAL_REFRESH_CAPABILITY = "takosumi.runner-credential-refresh@v1";
 const PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES = 1024 * 1024;
 const PROVIDER_LOCKFILE_CONTENT_TYPE = "application/vnd.opentofu.lock.hcl";
 type ContainerRunnerAction = OpenTofuRunAction | "release" | "stable_semver_tag";
@@ -106,6 +107,89 @@ export class CloudflareContainerOpenTofuRunner
       readonly observability?: WorkerMetricSink;
     } = {},
   ) {}
+
+  async assertCredentialRefreshCapability(input: {
+    readonly owner: { readonly kind: "plan" | "apply"; readonly id: string };
+    readonly runnerRunId: string;
+  }): Promise<void> {
+    if (!this.env.RUNNER) throw new Error("RUNNER binding is not configured");
+    if (!input.owner.id.trim() || !input.runnerRunId.trim()) {
+      throw new Error("renewable credential capability requires exact run identity");
+    }
+    const id = this.env.RUNNER.idFromName(input.owner.id);
+    let response: Response;
+    try {
+      response = await this.env.RUNNER.get(id).fetch(
+        new Request(
+          `https://opentofu-runner.internal/capabilities?ownerKind=${input.owner.kind}&ownerId=${encodeURIComponent(input.owner.id)}&runnerRunId=${encodeURIComponent(input.runnerRunId)}`,
+          { method: "GET" },
+        ),
+      );
+    } catch {
+      throw new Error("runner credential refresh capability is unavailable");
+    }
+    if (!response.ok) {
+      throw new Error("runner credential refresh capability is unavailable");
+    }
+    const payload = await response.json().catch(() => undefined) as unknown;
+    if (
+      !isRecordValue(payload) ||
+      !isRecordValue(payload.owner) ||
+      stringFromRecord(payload.owner, "kind") !== input.owner.kind ||
+      stringFromRecord(payload.owner, "id") !== input.owner.id ||
+      stringFromRecord(payload, "runnerRunId") !== input.runnerRunId ||
+      !stringArrayFromRecord(payload, "capabilities")?.includes(RUNNER_CREDENTIAL_REFRESH_CAPABILITY)
+    ) {
+      throw new Error("runner credential refresh capability is unavailable");
+    }
+  }
+
+  async refreshCredentials(
+    update: {
+      readonly owner: { readonly kind: "plan" | "apply"; readonly id: string };
+      readonly runnerRunId: string;
+      readonly manifestDigest: string;
+      readonly sequence: number;
+      readonly credentials: readonly {
+        readonly providerSource: string;
+        readonly connectionId: string;
+        readonly sourceEnvName: string;
+        readonly fileEnvName: string;
+        readonly expiresAt: string;
+        readonly value: string;
+      }[];
+    },
+    control?: RunExecutionControl,
+  ): Promise<void> {
+    if (!this.env.RUNNER) throw new Error("RUNNER binding is not configured");
+    if (control?.signal?.aborted) throw abortReason(control.signal);
+    const body = JSON.stringify(update);
+    if (new TextEncoder().encode(body).byteLength > 64 * 1024) {
+      throw new Error("credential refresh payload exceeds the runner limit");
+    }
+    const id = this.env.RUNNER.idFromName(update.owner.id);
+    let response: Response;
+    try {
+      response = await this.env.RUNNER.get(id).fetch(
+        new Request(
+          `https://opentofu-runner.internal/runs/${encodeURIComponent(update.runnerRunId)}/credentials`,
+          {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body,
+            ...(control?.signal ? { signal: control.signal } : {}),
+          },
+        ),
+      );
+    } catch {
+      // Do not retry: the container may have atomically accepted the update
+      // before transport acknowledgement was lost.
+      throw new Error("credential refresh delivery is ambiguous");
+    }
+    if (!response.ok) {
+      throw new Error("credential refresh was rejected by the active runner");
+    }
+  }
 
   async plan(
     job: OpenTofuPlanJob,
@@ -726,6 +810,14 @@ export class CloudflareContainerOpenTofuRunner
           }
           return payload;
         } catch (error) {
+          // Preserve a typed DO terminal/indeterminate receipt that raced an
+          // abort; replacing it with AbortError can erase partial-state evidence.
+          if (
+            error instanceof OpenTofuRunnerExecutionError ||
+            error instanceof OpenTofuRunnerInfrastructureError
+          ) {
+            throw error;
+          }
           if (options.signal?.aborted) {
             throw abortReason(options.signal);
           }
@@ -771,6 +863,10 @@ export class CloudflareContainerOpenTofuRunner
       tags: { operation_kind: action, status: "running" },
     });
   }
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function restoreRunnerObjectName(

@@ -28,6 +28,11 @@ const ROUTES = JSON.stringify([
       displayName: "Takosumi Hosted",
       exchangePath: "/provider-credentials/takoform",
       envNames: ["TAKOFORM_ENDPOINT", "TAKOFORM_SPACE", "TAKOFORM_TOKEN"],
+      renewableEnv: {
+        sourceEnvName: "TAKOFORM_TOKEN",
+        fileEnvName: "TAKOFORM_TOKEN_FILE",
+        minimumProviderVersion: "4.1.0",
+      },
       runCredentialSettings: { requiredAvailableMinor: 2300 },
     },
   },
@@ -76,6 +81,15 @@ test("a configured extension contributes one exact run-issued provider broker", 
     id: "takosumi-hosted-takoform-run",
     terraformSource: ["registry.terraform.io/tako0614/takoform"],
     envNames: ["TAKOFORM_ENDPOINT", "TAKOFORM_SPACE", "TAKOFORM_TOKEN"],
+    authModes: {
+      broker: {
+        renewableEnv: {
+          sourceEnvName: "TAKOFORM_TOKEN",
+          fileEnvName: "TAKOFORM_TOKEN_FILE",
+          minimumProviderVersion: "4.1.0",
+        },
+      },
+    },
   });
   const driver =
     composition?.credentialRecipeDrivers["takosumi-hosted-takoform-run/broker"];
