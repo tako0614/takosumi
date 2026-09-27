@@ -33,6 +33,25 @@ export function canReviewSourceRevision(
   );
 }
 
+/** Whether an unapplied Capsule's install marker is still unknown or stale. */
+export function isInitialInstallConfigDecisionPending(
+  capsule: Capsule | undefined,
+  routeCapsuleId: string,
+  installConfig: InstallConfig | undefined,
+): boolean {
+  if (
+    !capsule ||
+    capsule.id !== routeCapsuleId ||
+    capsule.status === "destroyed" ||
+    capsule.currentStateVersionId ||
+    capsule.currentStateGeneration !== 0 ||
+    (capsule.status !== "pending" && capsule.status !== "error")
+  ) {
+    return false;
+  }
+  return !installConfig || installConfig.id !== capsule.installConfigId;
+}
+
 /**
  * Find the original review Run for an accepted repository install UX that has
  * not produced a StateVersion yet. The Capsule's initial compatibility report

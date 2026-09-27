@@ -127,6 +127,7 @@ import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.
 import {
   acceptedInitialInstallPlan,
   canReviewSourceRevision,
+  isInitialInstallConfigDecisionPending,
   INITIAL_PLAN_RUN_LOOKUP_LIMIT,
 } from "../../lib/accepted-initial-install-plan.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
@@ -274,19 +275,11 @@ function Inner() {
     );
   };
   const initialInstallConfigDecisionPending = () => {
-    const inst = capsuleData();
-    if (
-      !inst ||
-      inst.id !== capsuleId() ||
-      inst.status === "destroyed" ||
-      inst.currentStateVersionId ||
-      inst.currentStateGeneration !== 0 ||
-      (inst.status !== "pending" && inst.status !== "error")
-    ) {
-      return false;
-    }
-    const config = installConfig.error ? undefined : installConfig();
-    return !config || config.id !== inst.installConfigId;
+    return isInitialInstallConfigDecisionPending(
+      capsuleData(),
+      capsuleId(),
+      installConfig.error ? undefined : installConfig(),
+    );
   };
   // Source metadata is displayed on the Updates tab and in Settings' support
   // disclosure. Keep each resource scoped to its tab; revision mutations use
@@ -712,9 +705,9 @@ function Inner() {
                       ? t("app.setupIncomplete.initialReviewBody")
                       : initialInstallConfigDecisionPending()
                         ? t(
-                            installConfig.error
-                              ? "app.setupIncomplete.installConfigUnavailable"
-                              : "app.setupIncomplete.checkingInstallConfig",
+                            installConfig.loading
+                              ? "app.setupIncomplete.checkingInstallConfig"
+                              : "app.setupIncomplete.installConfigUnavailable",
                           )
                         : t("app.setupIncomplete.body")}
                   </p>
@@ -748,7 +741,7 @@ function Inner() {
                           }
                         >
                           <Show
-                            when={installConfig.error}
+                            when={!installConfig.loading}
                             fallback={
                               <p class="muted" role="status">
                                 {t("app.setupIncomplete.checkingInstallConfig")}

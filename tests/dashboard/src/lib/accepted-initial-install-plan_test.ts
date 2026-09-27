@@ -3,6 +3,7 @@ import type { Capsule, InstallConfig, Run } from "../../../../dashboard/src/lib/
 import {
   acceptedInitialInstallPlan,
   canReviewSourceRevision,
+  isInitialInstallConfigDecisionPending,
 } from "../../../../dashboard/src/lib/accepted-initial-install-plan.ts";
 
 const capsule = {
@@ -96,6 +97,24 @@ describe("accepted repository initial install review routing", () => {
     ).toBe(false);
     expect(canReviewSourceRevision(capsule, "another_capsule", "main", config))
       .toBe(false);
+  });
+
+  test("settled null or mismatched config stays blocked and can be retried", () => {
+    expect(
+      isInitialInstallConfigDecisionPending(capsule, capsule.id, undefined),
+    ).toBe(true);
+    expect(
+      isInitialInstallConfigDecisionPending(capsule, capsule.id, {
+        ...config,
+        id: "stale_config",
+      }),
+    ).toBe(true);
+    expect(
+      isInitialInstallConfigDecisionPending(capsule, capsule.id, config),
+    ).toBe(false);
+    expect(
+      isInitialInstallConfigDecisionPending(capsule, "another_capsule", undefined),
+    ).toBe(false);
   });
 
   test("plain Git installs keep the revision path and do not get an initial-plan route", () => {

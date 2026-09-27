@@ -27,6 +27,7 @@ test("Workload revisions use the Capsule-local coordinator and applied provenanc
   expect(viewSource).toContain("canReviewSourceRevision(");
   expect(viewSource).toContain("initialInstallConfigDecisionPending()");
   expect(viewSource).toContain("refetchInstallConfig()");
+  expect(viewSource).toContain("when={!installConfig.loading}");
   expect(viewSource).toContain('acceptedInitialInstallPlan(');
   expect(viewSource).toContain("listRuns(workspaceId, INITIAL_PLAN_RUN_LOOKUP_LIMIT)");
   expect(viewSource).toContain(
