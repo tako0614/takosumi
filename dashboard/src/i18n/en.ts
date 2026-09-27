@@ -128,6 +128,21 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.invalidName":
     "Use lowercase letters, numbers, and hyphens for the service name.",
   "installStore.planMissing": "The Plan response could not be identified.",
+  "installStore.pendingTitle": "Check the existing install preparation",
+  "installStore.pendingHint":
+    "The review Plan was not ready before the deadline. The existing attempt may still be running on the server. Check its status or explicitly resume the same attempt; do not start a new install.",
+  "installStore.pendingCoordinator": "Existing preparation ID",
+  "installStore.pendingChecking": "Reading the existing preparation status.",
+  "installStore.pendingStillRunning": "The existing preparation is still running.",
+  "installStore.pendingStopped":
+    "The existing preparation has stopped. Check its technical details.",
+  "installStore.pendingStatusUnavailable":
+    "The existing preparation status could not be read.",
+  "installStore.pendingUnknown":
+    "No preparation ID was confirmed in the response. The ID was not guessed; only the same attempt can be resumed.",
+  "installStore.checkExistingStatus": "Check existing status",
+  "installStore.viewExistingRun": "Open existing Plan",
+  "installStore.resumeSameAttempt": "Resume same attempt",
   "installStore.listingUnavailable":
     "This service is no longer available from the Store.",
   // --- common -------------------------------------------------------------

@@ -135,6 +135,19 @@ export const ja = {
   "installStore.invalidName":
     "サービス名は半角小文字・数字・ハイフンで入力してください。",
   "installStore.planMissing": "Planの開始結果を確認できませんでした。",
+  "installStore.pendingTitle": "追加の準備状況を確認してください",
+  "installStore.pendingHint":
+    "確認用Planの準備が期限内に終わりませんでした。既存の試行がサーバーで続いている可能性があります。新しい追加処理は始めず、状態確認または同じ試行の再開を選んでください。",
+  "installStore.pendingCoordinator": "既存の準備ID",
+  "installStore.pendingChecking": "既存の準備状況を読み取っています。",
+  "installStore.pendingStillRunning": "既存の準備はまだ続いています。",
+  "installStore.pendingStopped": "既存の準備は終了しました。技術的な詳細を確認してください。",
+  "installStore.pendingStatusUnavailable": "既存の準備状況を読み取れませんでした。",
+  "installStore.pendingUnknown":
+    "応答から準備IDを確認できませんでした。IDは推測せず、同じ試行だけを再開できます。",
+  "installStore.checkExistingStatus": "既存の準備状況を確認",
+  "installStore.viewExistingRun": "既存のPlanを開く",
+  "installStore.resumeSameAttempt": "同じ試行を再開",
   "installStore.listingUnavailable":
     "このサービスをStoreから取得できませんでした。",
   // --- common -------------------------------------------------------------

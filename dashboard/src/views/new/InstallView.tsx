@@ -40,6 +40,7 @@ import {
   createReviewableGitInstallPlan,
   createWorkspace,
   extractRunId,
+  getGitInstallPlan,
   getInstallConfig,
   listConnectionsWithSignal,
   listReleaseOwnedProviderConnectionsWithSignal,
@@ -130,6 +131,7 @@ type Phase =
   | "configure"
   | "module-select"
   | "preparing"
+  | "pending-timeout"
   | "connections"
   | "setup"
   | "review"
@@ -139,6 +141,15 @@ type Phase =
 const UI_SURFACE_READBACK_ATTEMPTS = 10;
 const UI_SURFACE_READBACK_DELAY_MS = 3_000;
 const INSTALL_PREPARATION_TIMEOUT_MS = 60_000;
+
+type PendingInstallAttempt = {
+  readonly workspaceId: string;
+  readonly request: Parameters<typeof createReviewableGitInstallPlan>[1];
+  readonly idempotencyKey: string;
+  readonly installPlanId?: string;
+  readonly capsuleId?: string;
+  readonly planRunId?: string;
+};
 
 type PreparationStage =
   | "workspace"
@@ -257,6 +268,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const [planRunId, setPlanRunId] = createSignal<string>();
   const [installPlanIdempotencyKey, setInstallPlanIdempotencyKey] =
     createSignal(crypto.randomUUID());
+  const [pendingInstallAttempt, setPendingInstallAttempt] =
+    createSignal<PendingInstallAttempt>();
+  const [pendingInstallStatus, setPendingInstallStatus] =
+    createSignal<string>();
   const [error, setError] = createSignal<string>();
   const [busy, setBusy] = createSignal(false);
   const [preparationStage, setPreparationStage] =
@@ -312,6 +327,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       case "review":
       case "finishing":
       case "done":
+      case "pending-timeout":
         return "review";
       case "preparing":
         return preparationStage() === "plan" ? "review" : "source";
@@ -1235,6 +1251,109 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     void prepareInstall();
   };
 
+  const recordInstallPlanProgress = (
+    attempt: PendingInstallAttempt,
+    response: Awaited<ReturnType<typeof createReviewableGitInstallPlan>>,
+  ) => {
+    setPendingInstallAttempt((current) => {
+      if (current?.idempotencyKey !== attempt.idempotencyKey) return current;
+      return {
+        ...current,
+        installPlanId: response.installPlan.id,
+        capsuleId: response.installPlan.capsuleId ?? current.capsuleId,
+        planRunId: response.installPlan.planRunId ?? current.planRunId,
+      };
+    });
+  };
+
+  const showReviewableInstallPlan = (
+    workspace: string,
+    response: Awaited<ReturnType<typeof createReviewableGitInstallPlan>>,
+  ) => {
+    const currentCapsuleId = response.installPlan.capsuleId;
+    const runId = response.installPlan.planRunId;
+    if (!currentCapsuleId || !runId) {
+      throw new Error(t("installStore.planMissing"));
+    }
+    setCapsuleId(currentCapsuleId);
+    clearCapsuleListCache(workspace);
+    clearCurrentStateVersionCache(workspace);
+    clearDashboardOverviewCache(workspace);
+    setPlanRunId(runId);
+    setPendingInstallAttempt(undefined);
+    setPendingInstallStatus(undefined);
+    setError(undefined);
+    setPhase("review");
+  };
+
+  const isUncertainInstallPlanFailure = (cause: unknown): boolean =>
+    (cause instanceof ControlApiError &&
+      (cause.code === "install_plan_reconcile_timeout" || cause.status === 0)) ||
+    cause instanceof TypeError;
+
+  const checkPendingInstallPlan = async () => {
+    const attempt = pendingInstallAttempt();
+    if (!attempt?.installPlanId || busy()) return;
+    setBusy(true);
+    setError(undefined);
+    setPendingInstallStatus(t("installStore.pendingChecking"));
+    try {
+      const response = await getGitInstallPlan(attempt.installPlanId);
+      recordInstallPlanProgress(attempt, response);
+      if (response.nextAction === "review_run") {
+        showReviewableInstallPlan(attempt.workspaceId, response);
+      } else if (response.nextAction === "none") {
+        setPendingInstallStatus(
+          response.installPlan.diagnostic?.message ??
+            t("installStore.pendingStopped"),
+        );
+      } else {
+        setPendingInstallStatus(t("installStore.pendingStillRunning"));
+      }
+    } catch (cause) {
+      setError(friendlyError(cause, t).message);
+      setPendingInstallStatus(t("installStore.pendingStatusUnavailable"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resumePendingInstallPlan = async () => {
+    const attempt = pendingInstallAttempt();
+    if (!attempt || busy()) return;
+    setPhase("preparing");
+    setPreparationStage("plan");
+    setBusy(true);
+    setError(undefined);
+    setPendingInstallStatus(undefined);
+    try {
+      const resumedResponse = await createReviewableGitInstallPlan(
+        attempt.workspaceId,
+        attempt.request,
+        {
+          idempotencyKey: attempt.idempotencyKey,
+          onProgress: (progress) => recordInstallPlanProgress(attempt, progress),
+        },
+      );
+      showReviewableInstallPlan(attempt.workspaceId, resumedResponse);
+    } catch (cause) {
+      if (isUncertainInstallPlanFailure(cause)) {
+        setPendingInstallStatus(
+          pendingInstallAttempt()?.installPlanId
+            ? undefined
+            : t("installStore.pendingUnknown"),
+        );
+        setPhase("pending-timeout");
+      } else {
+        setError(friendlyError(cause, t).message);
+        setPendingInstallStatus(t("installStore.pendingStatusUnavailable"));
+        setPhase("pending-timeout");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const preparePlan = async (
     workspace = workspaceId(),
     checked = compatibility(),
@@ -1289,53 +1408,64 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           "The exact successful install preflight is unavailable.",
         );
       }
+      const request = {
+        source: {
+          name: name().trim(),
+          url: gitUrl().trim(),
+          ref: gitRef().trim() || "HEAD",
+          path: sourcePath(),
+          ...(sourceAuthConnectionId()
+            ? { authConnectionId: sourceAuthConnectionId() }
+            : {}),
+        },
+        capsule: { name: name().trim(), environment: "production" as const },
+        options: {
+          modulePath: modulePath().trim(),
+          providerBindings: rows.map((row) => ({
+            provider: row.provider,
+            moduleLocalName: row.moduleLocalName,
+            ...(row.childAlias ? { childAlias: row.childAlias } : {}),
+            ...(row.rootAlias ? { rootAlias: row.rootAlias } : {}),
+            connectionId: row.connectionId,
+          })),
+        },
+        preflight: {
+          sourceId: exactSourceId,
+          sourceSnapshotId: exactSnapshotId,
+          compatibilityCheckRunId: checked.compatibilityCheckRunId,
+          compatibilityReportId: checked.reportId,
+          installConfigId: config.id,
+        },
+        ...(vars ? { variables: vars } : {}),
+      };
+      const attempt: PendingInstallAttempt = {
+        workspaceId: workspace,
+        request,
+        idempotencyKey: installPlanIdempotencyKey(),
+      };
+      setPendingInstallAttempt(attempt);
       const response = await createReviewableGitInstallPlan(
         workspace,
+        request,
         {
-          source: {
-            name: name().trim(),
-            url: gitUrl().trim(),
-            ref: gitRef().trim() || "HEAD",
-            path: sourcePath(),
-            ...(sourceAuthConnectionId()
-              ? { authConnectionId: sourceAuthConnectionId() }
-              : {}),
-          },
-          capsule: { name: name().trim(), environment: "production" },
-          options: {
-            modulePath: modulePath().trim(),
-            providerBindings: rows.map((row) => ({
-              provider: row.provider,
-              moduleLocalName: row.moduleLocalName,
-              ...(row.childAlias ? { childAlias: row.childAlias } : {}),
-              ...(row.rootAlias ? { rootAlias: row.rootAlias } : {}),
-              connectionId: row.connectionId,
-            })),
-          },
-          preflight: {
-            sourceId: exactSourceId,
-            sourceSnapshotId: exactSnapshotId,
-            compatibilityCheckRunId: checked.compatibilityCheckRunId,
-            compatibilityReportId: checked.reportId,
-            installConfigId: config.id,
-          },
-          ...(vars ? { variables: vars } : {}),
+          idempotencyKey: attempt.idempotencyKey,
+          onProgress: (progress) => recordInstallPlanProgress(attempt, progress),
         },
-        { idempotencyKey: installPlanIdempotencyKey() },
       );
       if (!workspaceIsCurrent(workspace)) return;
-      const currentCapsuleId = response.installPlan.capsuleId;
-      const runId = response.installPlan.planRunId;
-      if (!currentCapsuleId || !runId) {
-        throw new Error(t("installStore.planMissing"));
-      }
-      setCapsuleId(currentCapsuleId);
-      clearCapsuleListCache(workspace);
-      clearCurrentStateVersionCache(workspace);
-      clearDashboardOverviewCache(workspace);
-      setPlanRunId(runId);
-      setPhase("review");
+      showReviewableInstallPlan(workspace, response);
     } catch (cause) {
+      if (isUncertainInstallPlanFailure(cause)) {
+        setPendingInstallStatus(
+          pendingInstallAttempt()?.installPlanId
+            ? undefined
+            : t("installStore.pendingUnknown"),
+        );
+        setError(undefined);
+        setPhase("pending-timeout");
+        return;
+      }
+      setPendingInstallAttempt(undefined);
       if (
         cause instanceof ControlApiError &&
         cause.status > 0 &&
@@ -1403,6 +1533,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setCapsuleId(undefined);
     setPlanRunId(undefined);
     setInstallPlanIdempotencyKey(crypto.randomUUID());
+    setPendingInstallAttempt(undefined);
+    setPendingInstallStatus(undefined);
     setStoreValues({});
     setStoreInputTouched({});
     setStoreFeatureSelections({});
@@ -1834,6 +1966,59 @@ function Inner(props: { readonly installingPrincipalId: string }) {
               {t("common.cancel")}
             </Button>
           </Show>
+        </section>
+      </Show>
+
+      <Show when={phase() === "pending-timeout"}>
+        <section
+          class="iv-workbench iv-centered"
+          role="status"
+          aria-live="polite"
+          data-testid="install-plan-pending-recovery"
+        >
+          <h2>{t("installStore.pendingTitle")}</h2>
+          <p>{t("installStore.pendingHint")}</p>
+          <Show when={pendingInstallStatus()}>
+            {(status) => <p>{status()}</p>}
+          </Show>
+          <Show when={pendingInstallAttempt()?.installPlanId}>
+            {(installPlanId) => (
+              <p>
+                {t("installStore.pendingCoordinator")}: <code>{installPlanId()}</code>
+              </p>
+            )}
+          </Show>
+          <div class="iv-action-row">
+            <Show when={pendingInstallAttempt()?.installPlanId}>
+              <Button
+                type="button"
+                variant="secondary"
+                busy={busy()}
+                onClick={() => void checkPendingInstallPlan()}
+              >
+                {t("installStore.checkExistingStatus")}
+              </Button>
+            </Show>
+            <Show when={pendingInstallAttempt()?.planRunId}>
+              {(runId) => (
+                <Button
+                  href={`/runs/${encodeURIComponent(runId())}`}
+                  variant="secondary"
+                >
+                  {t("installStore.viewExistingRun")}
+                </Button>
+              )}
+            </Show>
+            <Button
+              type="button"
+              variant="primary"
+              busy={busy()}
+              disabled={!pendingInstallAttempt()}
+              onClick={() => void resumePendingInstallPlan()}
+            >
+              {t("installStore.resumeSameAttempt")}
+            </Button>
+          </div>
         </section>
       </Show>
 

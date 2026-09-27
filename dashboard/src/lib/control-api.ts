@@ -1427,6 +1427,18 @@ export async function reconcileGitInstallPlan(
   );
 }
 
+/** Reads one durable install coordinator without claiming or advancing it. */
+export async function getGitInstallPlan(
+  installPlanId: string,
+  options: { readonly signal?: AbortSignal } = {},
+): Promise<GitInstallPlanResponse> {
+  throwIfAborted(options.signal);
+  return await controlFetch<GitInstallPlanResponse>(
+    `${BASE}/install-plans/${encodeURIComponent(installPlanId)}`,
+    { signal: options.signal },
+  );
+}
+
 /** Starts the durable Capsule-local Git revision coordinator. */
 export async function createGitRevisionPlan(
   capsuleId: string,
@@ -1555,6 +1567,8 @@ export async function createReviewableGitInstallPlan(
     readonly idempotencyKey?: string;
     /** Bounds the entire coordinator wait; defaults to two minutes. */
     readonly timeoutMs?: number;
+    /** Reports only coordinator responses received before the shared deadline. */
+    readonly onProgress?: (response: GitInstallPlanResponse) => void;
   } = {},
 ): Promise<GitInstallPlanResponse> {
   return await withGitPlanDeadline("install", options.timeoutMs, async (signal) => {
@@ -1565,6 +1579,7 @@ export async function createReviewableGitInstallPlan(
       { signal },
     );
     throwIfAborted(signal);
+    options.onProgress?.(response);
     const max = options.maxReconciles ?? 120;
     for (let attempt = 0; response.nextAction === "reconcile"; attempt += 1) {
       if (attempt >= max) {
@@ -1572,6 +1587,7 @@ export async function createReviewableGitInstallPlan(
       }
       response = await reconcileGitInstallPlan(response.installPlan.id, { signal });
       throwIfAborted(signal);
+      options.onProgress?.(response);
       if (response.nextAction === "reconcile") {
         await new Promise((resolve) => setTimeout(resolve, 250));
       }

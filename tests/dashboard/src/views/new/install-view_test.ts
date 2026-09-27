@@ -265,6 +265,37 @@ describe("single-screen install surface", () => {
     expect(view).not.toContain("putCapsuleProviderBindingSet");
   });
 
+  test("install timeout preserves the exact attempt and exposes read-only recovery", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const api = read("dashboard/src/lib/control-api.ts");
+    expect(view).toContain('setPhase("pending-timeout");');
+    expect(view).toContain("onProgress: (progress) => recordInstallPlanProgress(attempt, progress)");
+    expect(view).toContain("installPlanId: response.installPlan.id");
+    expect(view).toContain("getGitInstallPlan(attempt.installPlanId)");
+    expect(view).toContain("showReviewableInstallPlan(attempt.workspaceId, response)");
+    expect(view).toContain("attempt.request");
+    expect(view).toContain('when={pendingInstallAttempt()?.installPlanId}');
+    expect(view).toContain('when={pendingInstallAttempt()?.planRunId}');
+    expect(view).toContain("idempotencyKey: attempt.idempotencyKey");
+    const uncertainBranchStart = view.indexOf(
+      "if (isUncertainInstallPlanFailure(cause))",
+    );
+    const uncertainBranchEnd = view.indexOf(
+      "setInstallPlanIdempotencyKey(crypto.randomUUID())",
+      uncertainBranchStart,
+    );
+    expect(view.slice(uncertainBranchStart, uncertainBranchEnd)).not.toContain(
+      "setInstallPlanIdempotencyKey",
+    );
+    const readStart = api.indexOf("export async function getGitInstallPlan(");
+    const readEnd = api.indexOf("/** Starts the durable Capsule-local", readStart);
+    const readHelper = api.slice(readStart, readEnd);
+    expect(readHelper).toContain(
+      '`${BASE}/install-plans/${encodeURIComponent(installPlanId)}`',
+    );
+    expect(readHelper).not.toContain("method: \"POST\"");
+  });
+
   test("aborted InstallConfig preparation returns to configure before mutations", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     const configRead =

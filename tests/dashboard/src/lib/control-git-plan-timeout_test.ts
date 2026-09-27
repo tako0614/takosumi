@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import {
   createReviewableGitInstallPlan,
   createReviewableGitRevisionPlan,
+  getGitInstallPlan,
 } from "../../../../dashboard/src/lib/control-api.ts";
 
 const realFetch = globalThis.fetch;
@@ -117,3 +118,95 @@ for (const kind of ["install", "revision"] as const) {
     expect(calls).toHaveLength(2);
   });
 }
+
+test("install: timeout retains a known coordinator and read-only status finds its late Plan", async () => {
+  const calls: Array<{ url: string; method: string; key: string | null }> = [];
+  let progressId: string | undefined;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    calls.push({
+      url,
+      method,
+      key: new Headers(init?.headers).get("idempotency-key"),
+    });
+    if (method === "GET") {
+      return new Response(
+        JSON.stringify({
+          installPlan: {
+            id: "install_1",
+            capsuleId: "cap_1",
+            planRunId: "plan_1",
+            phase: "reviewable",
+          },
+          nextAction: "review_run",
+          links: {
+            self: "/api/v1/install-plans/install_1",
+            run: "/api/v1/runs/plan_1",
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.endsWith("/reconcile")) {
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(new DOMException("aborted", "AbortError")),
+          { once: true },
+        );
+      });
+    }
+    return response("install", "reconcile");
+  }) as typeof fetch;
+
+  await expect(
+    createReviewableGitInstallPlan("ws_1", request, {
+      idempotencyKey: "stable_attempt",
+      timeoutMs: 25,
+      onProgress: (value) => {
+        progressId = value.installPlan.id;
+      },
+    }),
+  ).rejects.toMatchObject({ code: "install_plan_reconcile_timeout" });
+
+  expect(progressId).toBe("install_1");
+  const status = await getGitInstallPlan(progressId!);
+  expect(status).toMatchObject({
+    nextAction: "review_run",
+    installPlan: { id: "install_1", capsuleId: "cap_1", planRunId: "plan_1" },
+  });
+  expect(calls).toEqual([
+    {
+      url: "/api/v1/workspaces/ws_1/install-plans",
+      method: "POST",
+      key: "stable_attempt",
+    },
+    {
+      url: "/api/v1/install-plans/install_1/reconcile",
+      method: "POST",
+      key: null,
+    },
+    { url: "/api/v1/install-plans/install_1", method: "GET", key: null },
+  ]);
+});
+
+test("install: unknown create acknowledgement never invents a coordinator ID", async () => {
+  let progressId: string | undefined;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) =>
+    await new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+    })) as typeof fetch;
+
+  await expect(
+    createReviewableGitInstallPlan("ws_1", request, {
+      idempotencyKey: "stable_attempt",
+      timeoutMs: 25,
+      onProgress: (value) => {
+        progressId = value.installPlan.id;
+      },
+    }),
+  ).rejects.toMatchObject({ code: "install_plan_reconcile_timeout" });
+
+  expect(progressId).toBeUndefined();
+});
