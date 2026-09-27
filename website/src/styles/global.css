@@ -73,20 +73,31 @@ main {
 }
 
 section {
-  padding: var(--tg-s-9) 0;
+  padding: var(--tg-s-8) 0;
   position: relative;
 }
 
-/* One continuous ink layer behind all post-hero sections. Sections stay
-   transparent so the single .splat-field flows across them without per-section
-   repetition or dividing lines. */
-.ink-canvas {
-  position: relative;
+/* Sections sit on a shared hairline grid — the spec-sheet rhythm that
+   carries the page instead of decorative wallpaper. */
+main > section + section {
+  border-top: 1px solid var(--tg-line);
 }
-.ink-canvas > .splat-field {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
+main {
+  counter-reset: sec;
+}
+.sec-label {
+  counter-increment: sec;
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--tg-accent-text);
+  margin: 0 0 var(--tg-s-4);
+}
+.sec-label::before {
+  content: counter(sec, decimal-leading-zero) " / ";
+  color: var(--tg-fg-subtle);
 }
 section h2 {
   font-family: var(--tg-font-display);
@@ -396,57 +407,80 @@ section > .container {
    so page-field splats are capped faint enough for body copy to hold AA
    (takos-control/docs/reference/design-language.md §A11y). Hero ink is
    dimmed separately via .hero-splat-wrap. */
-@media (max-width: 720px) {
-  .ink-canvas > .splat-field .splat {
-    opacity: 0.16 !important;
-  }
-}
 
-/* ===== Simple centered hero (login / signup focused) ===== */
-.hero-simple .hero-center {
+
+/* ===== Hero — split: copy left, real product screen right ===== */
+.hero-grid {
   position: relative;
   z-index: 2;
   flex: 1;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
   align-items: center;
-  justify-content: center;
-  text-align: center;
-  gap: var(--tg-s-5);
-  padding: var(--tg-s-8) 0;
+  gap: var(--tg-s-9);
+  padding: var(--tg-s-7) 0;
 }
-.hero-simple .hero-center .lede {
-  max-width: 48ch;
-  margin: 0 auto;
+.hero-kicker {
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--tg-accent-text);
+  margin: 0 0 var(--tg-s-5);
 }
-.hero-simple .cta-row {
-  justify-content: center;
+.hero-spec {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2) var(--tg-s-4);
+  margin: var(--tg-s-7) 0 0;
+  padding: var(--tg-s-4) 0 0;
+  border-top: 1px solid var(--tg-line);
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-xs);
+  letter-spacing: 0.06em;
+  color: var(--tg-fg-muted);
+}
+.hero-visual {
+  min-width: 0;
+  position: relative;
+  z-index: 2;
+}
+.hero-visual .pv {
+  margin: 0;
+  margin-right: calc((var(--tg-container) - 100vw) / 2);
+  transform: rotate(0.6deg);
+}
+@media (max-width: 960px) {
+  .hero-grid {
+    grid-template-columns: 1fr;
+    gap: var(--tg-s-7);
+  }
+  .hero-visual .pv {
+    margin-right: 0;
+    transform: none;
+  }
 }
 .hero h1 {
   font-family: var(--tg-font-display);
-  font-size: clamp(3rem, 9.5vw, 7rem);
+  font-size: clamp(2.8rem, 5.2vw, 4.6rem);
   line-height: 0.94;
   letter-spacing: -0.045em;
   text-wrap: balance;
-  margin: 0 0 var(--tg-s-6);
+  margin: 0 0 var(--tg-s-5);
   font-weight: 800;
 }
 .hero h1 .hero-line {
   display: block;
 }
-.hero h1 .hero-line:first-child {
-  color: rgba(250, 250, 250, 0.55);
-}
-.hero h1 .grad-text {
-  background: linear-gradient(105deg, #ff6a5a 0%, #ef4444 45%, #dc2626 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+.hero h1 .hero-accent {
+  color: var(--tg-accent);
 }
 .hero .lede {
   color: rgba(250, 250, 250, 0.7);
-  font-size: clamp(1.05rem, 1.4vw, 1.25rem);
-  max-width: 540px;
+  font-size: clamp(1rem, 1.3vw, 1.15rem);
+  max-width: 46ch;
   margin: 0 0 var(--tg-s-6);
 }
 .hero .cta-row {
@@ -473,37 +507,6 @@ section > .container {
   color: #ef4444;
   background: rgba(239, 68, 68, 0.06);
 }
-/* Scroll indicator at the bottom of h-screen hero */
-.hero-scroll {
-  position: relative;
-  z-index: 2;
-  text-align: center;
-  padding-top: var(--tg-s-5);
-  color: rgba(250, 250, 250, 0.42);
-  font-family: var(--tg-font-mono);
-  font-size: var(--tg-fs-xs);
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-.hero-scroll svg {
-  display: block;
-  margin: var(--tg-s-2) auto 0;
-  width: 18px;
-  height: 18px;
-  animation: scrollHint 1.8s ease-in-out infinite;
-}
-@keyframes scrollHint {
-  0%,
-  100% {
-    transform: translateY(0);
-    opacity: 0.7;
-  }
-  50% {
-    transform: translateY(6px);
-    opacity: 1;
-  }
-}
-
 /* Comparison */
 .comparison {
   border: 1px solid var(--tg-line);
@@ -531,6 +534,9 @@ section > .container {
   color: var(--tg-fg-subtle);
   font-weight: 700;
   font-family: var(--tg-font-mono);
+}
+.comparison thead th:nth-child(2) {
+  color: var(--tg-accent-text);
 }
 .comparison tbody th[scope="row"] {
   background: transparent;
@@ -646,7 +652,6 @@ section > .container {
 
 /* End CTA */
 .end-cta {
-  text-align: center;
   padding: var(--tg-s-10) 0;
   position: relative;
 }
@@ -659,10 +664,9 @@ section > .container {
 .cta-flow {
   list-style: none;
   padding: 0;
-  margin: var(--tg-s-7) auto;
+  margin: var(--tg-s-7) 0;
   display: grid;
   gap: var(--tg-s-4);
-  max-width: 820px;
   text-align: left;
 }
 @media (min-width: 780px) {
@@ -762,67 +766,25 @@ footer.site .copy {
   }
 }
 
-/* WhatYouCanHost — conveyor belt (edge-to-edge, auto-scrolling loop) */
-.product-belt-section {
-  overflow: hidden;
-}
-.product-belt {
-  position: relative;
-  width: 100%;
-  mask-image: linear-gradient(
-    90deg,
-    transparent 0%,
-    #000 8%,
-    #000 92%,
-    transparent 100%
-  );
-  -webkit-mask-image: linear-gradient(
-    90deg,
-    transparent 0%,
-    #000 8%,
-    #000 92%,
-    transparent 100%
-  );
-}
-.product-belt-track {
-  display: flex;
+/* WhatYouCanHost — static grid of the installable starters/products */
+.product-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: var(--tg-s-4);
-  width: max-content;
-  animation: belt 40s linear infinite;
-}
-.product-belt:hover .product-belt-track {
-  animation-play-state: paused;
-}
-@keyframes belt {
-  0% {
-    transform: translateX(0);
-  }
-  100% {
-    transform: translateX(-50%);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .product-belt-track {
-    animation: none;
-  }
+  margin-top: var(--tg-s-6);
 }
 .product-card {
-  flex: 0 0 300px;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-lg);
   padding: var(--tg-s-6);
-  background: var(--tg-bg-elev);
   text-decoration: none;
   color: inherit;
-  transition:
-    border-color 160ms ease,
-    transform 160ms ease;
+  transition: border-color 160ms ease;
 }
 .product-card:hover {
   border-color: var(--tg-accent);
-  transform: translateY(-3px);
   color: inherit;
 }
 .product-card-body {
@@ -913,12 +875,12 @@ footer.site .copy {
   .hero-splat-wrap {
     opacity: 0.54;
   }
-  .hero-simple .hero-center {
-    gap: var(--tg-s-4);
-    padding: var(--tg-s-7) 0 var(--tg-s-5);
+  .hero-grid {
+    gap: var(--tg-s-6);
+    padding: var(--tg-s-6) 0 var(--tg-s-4);
   }
   .hero h1 {
-    font-size: 4.1rem;
+    font-size: 3.4rem;
     line-height: 0.98;
     margin-bottom: var(--tg-s-4);
   }
@@ -941,7 +903,7 @@ footer.site .copy {
 
 @media (max-width: 420px) {
   .hero h1 {
-    font-size: 3.45rem;
+    font-size: 2.9rem;
   }
   .hero .cta-row {
     flex-direction: column;
@@ -1069,9 +1031,9 @@ footer.site .copy {
   text-align: left;
 }
 .pv-caption {
-  margin: var(--tg-s-4) auto 0;
+  margin: var(--tg-s-4) 0 0;
   max-width: 62ch;
-  text-align: center;
+  text-align: left;
   color: var(--tg-fg-subtle);
   font-size: var(--tg-fs-sm);
 }
@@ -1080,4 +1042,25 @@ footer.site .copy {
   display: block;
   width: 100%;
   height: auto;
+}
+.pv-chrome {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--tg-line);
+  background: var(--tg-bg-elev);
+}
+.pv-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tg-line-strong);
+}
+.pv-host {
+  margin-left: var(--tg-s-2);
+  font-family: var(--tg-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--tg-fg-subtle);
 }

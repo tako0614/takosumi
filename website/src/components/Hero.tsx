@@ -1,56 +1,66 @@
+import { For } from "solid-js";
 import SplatField from "./SplatField";
+import { ProductShot } from "./ProductVisuals";
 import { useParallax } from "~/lib/interactions";
+
+const SPEC = [
+  "projects",
+  "capsules",
+  "plan → apply → destroy",
+  "state",
+  "audit events",
+  "any provider",
+];
 
 export default function Hero() {
   let splatRef: HTMLDivElement | undefined;
   useParallax(() => splatRef, 0.16);
 
   return (
-    <section class="hero hero-simple">
+    <section class="hero">
       <div ref={splatRef} class="hero-splat-wrap" aria-hidden="true">
         <SplatField density="hero" />
       </div>
-      <div class="container hero-center">
-        <h1>
-          <span class="hero-line">your cloud,</span>
-          <span class="hero-line grad-text">your control plane.</span>
-        </h1>
-        <p class="lede">
-          アプリやインフラを、ブラウザから自分のクラウドへ。
-          <br />
-          <em class="em">鍵も、状態も、履歴も</em>、Takosumi が管理します。
-        </p>
-        <div class="cta-row">
-          <a
-            class="btn btn-primary"
-            href="https://app.takosumi.com/"
-            rel="noopener"
-          >
-            Takosumi を開く
-          </a>
-          <a
-            class="btn btn-secondary"
-            href="/docs/getting-started/quickstart"
-            rel="external"
-          >
-            セルフホストで始める
-          </a>
+      <div class="container hero-grid">
+        <div class="hero-copy">
+          <p class="hero-kicker">OpenTofu-native · self-hosted · AGPL-3.0</p>
+          <h1>
+            <span class="hero-line">your cloud,</span>
+            <span class="hero-line hero-accent">your control plane.</span>
+          </h1>
+          <p class="lede">
+            アプリやインフラを、ブラウザから自分のクラウドへ。
+            <br />
+            <em class="em">鍵も、状態も、履歴も</em>、Takosumi が管理します。
+          </p>
+          <div class="cta-row">
+            <a
+              class="btn btn-primary"
+              href="https://app.takosumi.com/"
+              rel="noopener"
+            >
+              Takosumi を開く
+            </a>
+            <a
+              class="btn btn-secondary"
+              href="/docs/getting-started/quickstart"
+              rel="external"
+            >
+              セルフホストで始める
+            </a>
+          </div>
+          <ul class="hero-spec" aria-label="contents">
+            <For each={SPEC}>{(s) => <li>{s}</li>}</For>
+          </ul>
+        </div>
+        <div class="hero-visual">
+          <ProductShot
+            src="/screens/home.webp"
+            label="Takosumi ダッシュボードのホーム画面"
+            alt="Takosumi ダッシュボードの実画面。自分のワークスペースのサイドバーと、インストール済みの 5 つのアプリ (takos, takos-office, takos-computer, yurucommu, road-to-me) が並ぶホーム。"
+          />
         </div>
       </div>
-      <a class="hero-scroll" href="#why" aria-label="下へスクロール">
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <path d="M6 9l6 6 6-6" />
-        </svg>
-      </a>
     </section>
   );
 }

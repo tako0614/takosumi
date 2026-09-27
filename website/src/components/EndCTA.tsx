@@ -2,11 +2,12 @@ export default function EndCTA() {
   return (
     <section class="end-cta">
       <div class="container">
+        <p class="sec-label">get started</p>
         <h2>始めよう。</h2>
-        <p class="lede" style="margin-left: auto; margin-right: auto;">
+        <p class="lede">
           Takosumi ならブラウザから。セルフホストなら自分のインフラに。
         </p>
-        <div class="cta-row" style="justify-content: center;">
+        <div class="cta-row">
           <a
             class="btn btn-primary"
             href="https://app.takosumi.com/"

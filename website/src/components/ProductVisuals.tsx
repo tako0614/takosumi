@@ -9,13 +9,19 @@
  */
 import type { JSX } from "solid-js";
 
-function Shot(props: {
+export function ProductShot(props: {
   src: string;
   alt: string;
   label: string;
 }): JSX.Element {
   return (
     <figure class="pv pv-shot" aria-label={props.label}>
+      <div class="pv-chrome" aria-hidden="true">
+        <span class="pv-dot" />
+        <span class="pv-dot" />
+        <span class="pv-dot" />
+        <span class="pv-host">app.takosumi.com</span>
+      </div>
       <img
         src={props.src}
         alt={props.alt}
@@ -30,7 +36,7 @@ function Shot(props: {
 
 export function ProductHome(): JSX.Element {
   return (
-    <Shot
+    <ProductShot
       src="/screens/home.webp"
       label="Takosumi ダッシュボードのホーム画面"
       alt="Takosumi ダッシュボードの実画面。自分のワークスペースのサイドバーと、インストール済みの 5 つのアプリ (takos, takos-office, takos-computer, yurucommu, road-to-me) が並ぶホーム。"
@@ -40,7 +46,7 @@ export function ProductHome(): JSX.Element {
 
 export function PlanReview(): JSX.Element {
   return (
-    <Shot
+    <ProductShot
       src="/screens/plan.webp"
       label="変更の確認画面"
       alt="変更の確認画面の実画面。承認待ちバッジ、承認ボタン、作成 2 / 変更 1 / 削除 1 の集計と、変更予定のリソース一覧。"
@@ -50,7 +56,7 @@ export function PlanReview(): JSX.Element {
 
 export function RunHistory(): JSX.Element {
   return (
-    <Shot
+    <ProductShot
       src="/screens/runs.webp"
       label="デプロイ履歴"
       alt="デプロイ履歴の実画面。デプロイ・変更の確認・内容の取得・ズレの確認の実行記録が、成否と時刻つきで並ぶ。"

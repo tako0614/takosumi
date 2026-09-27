@@ -26,6 +26,7 @@ export default function WhyOperatorOwned() {
   return (
     <Section
       id="why"
+      label="why takosumi"
       title="なぜ Takosumi か。"
       lede={
         <>

@@ -41,6 +41,7 @@ export default function Comparison() {
   return (
     <Section
       id="compare"
+      label="vs saas & paas"
       title="ほかの選択肢と、何が違うか。"
       lede={
         <>

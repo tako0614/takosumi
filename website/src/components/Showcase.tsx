@@ -26,6 +26,7 @@ export default function Showcase() {
   return (
     <Section
       id="how"
+      label="how it works"
       title="3 ステップでホスト。"
       lede={
         <>
