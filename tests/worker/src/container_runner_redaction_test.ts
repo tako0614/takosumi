@@ -772,10 +772,23 @@ test("container runner returns a typed failed apply with persisted partial state
             durationMs: 384_000,
           },
           {
-            phase: "tofu_apply_bad_date",
+            phase: "tofu_apply",
             startedAt: "not-a-date",
             finishedAt: "2026-09-27T10:06:24.000Z",
             durationMs: 384_000,
+          },
+          {
+            phase: "tofu_apply",
+            startedAt:
+              "Sun, 27 Sep 2026 10:00:00 GMT (password=provider-secret)",
+            finishedAt: "2026-09-27T10:06:24.000Z",
+            durationMs: 384_000,
+          },
+          {
+            phase: "passwordsecretabc",
+            startedAt: "2026-09-27T10:00:00.000Z",
+            finishedAt: "2026-09-27T10:06:24.000Z",
+            durationMs: 1,
           },
         ],
         outputs: {
@@ -831,6 +844,8 @@ test("container runner returns a typed failed apply with persisted partial state
     },
   ]);
   expect(JSON.stringify(result)).not.toContain("must-not-survive");
+  expect(JSON.stringify(result.diagnostics)).not.toContain("provider-secret");
+  expect(JSON.stringify(result.diagnostics)).not.toContain("passwordsecretabc");
 });
 
 test("container runner returns a typed failed destroy with persisted partial state", async () => {

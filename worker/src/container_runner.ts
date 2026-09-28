@@ -87,6 +87,29 @@ const RUNNER_PROVIDER_FAILURE_CODES = new Set([
   "apply_failed",
   RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
 ]);
+// Keep this finite allowlist aligned with RunnerPhaseTimer.measure calls in
+// runner/lib/plan_apply.ts and runner/lib/source_sync.ts. Diagnostics must not
+// echo an untrusted phase label from a failed runner response.
+const RUNNER_PHASE_TIMING_PHASES = new Set([
+  "tofu_init",
+  "tofu_plan",
+  "tofu_state_reconcile",
+  "tofu_plan_json",
+  "tofu_apply",
+  "tofu_output",
+  "source_host_policy",
+  "source_git_credentials",
+  "source_ref_resolve",
+  "source_clone",
+  "source_repository_metadata",
+  "source_repository_manifest",
+  "source_subtree",
+  "source_repository_modules",
+  "source_snapshot_reuse",
+  "source_archive",
+  "source_archive_read",
+  "source_archive_digest",
+]);
 const MAX_RUNNER_EXECUTION_DETAIL_CHARS = 4_096;
 const UNSAFE_PROVIDER_FAILURE_DETAIL_LINE =
   /(?:\b(?:authorization|bearer|cookie|token|password|passwd|secret|credential|api[_-]?key|body)\b|\/work\/)/iu;
@@ -1283,7 +1306,7 @@ function phaseTimingsFromContainerResult(
     const startedAt = stringFromRecord(entry, "startedAt");
     const finishedAt = stringFromRecord(entry, "finishedAt");
     const durationMs = entry.durationMs;
-    if (!phase || !/^[a-z][a-z0-9_]{0,63}$/u.test(phase)) return [];
+    if (!phase || !RUNNER_PHASE_TIMING_PHASES.has(phase)) return [];
     if (!startedAt || !isIsoLikeDate(startedAt)) return [];
     if (!finishedAt || !isIsoLikeDate(finishedAt)) return [];
     if (
@@ -1299,7 +1322,10 @@ function phaseTimingsFromContainerResult(
 }
 
 function isIsoLikeDate(value: string): boolean {
-  return Number.isFinite(Date.parse(value));
+  const timestamp = Date.parse(value);
+  return (
+    Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value
+  );
 }
 
 function planResourceChangesFromContainerResult(

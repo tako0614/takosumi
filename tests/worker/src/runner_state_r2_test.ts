@@ -1212,10 +1212,23 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
                 durationMs: 384_000,
               },
               {
-                phase: "tofu_apply_bad_date",
+                phase: "tofu_apply",
                 startedAt: "not-a-date",
                 finishedAt: "2026-09-27T10:06:24.000Z",
                 durationMs: 384_000,
+              },
+              {
+                phase: "tofu_apply",
+                startedAt:
+                  "Sun, 27 Sep 2026 10:00:00 GMT (password=provider-secret)",
+                finishedAt: "2026-09-27T10:06:24.000Z",
+                durationMs: 384_000,
+              },
+              {
+                phase: "passwordsecretabc",
+                startedAt: "2026-09-27T10:00:00.000Z",
+                finishedAt: "2026-09-27T10:06:24.000Z",
+                durationMs: 1,
               },
             ],
             providerExecutionFailure: {
@@ -1280,6 +1293,8 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
       durationMs: 384_000,
     },
   ]);
+  assert.equal(JSON.stringify(firstPayload).includes("provider-secret"), false);
+  assert.equal(JSON.stringify(firstPayload).includes("passwordsecretabc"), false);
   assert.deepEqual(firstPayload.providerExecutionFailure, {
     kind: "provider_execution_failed",
     statePersistence: "persisted",
@@ -1344,6 +1359,8 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
   assert.equal(providerPosts, 1);
   const replayPayload = (await replay.json()) as Record<string, unknown>;
   assert.equal(replayPayload.errorCode, "provider_execution_failed");
+  assert.equal(JSON.stringify(replayPayload).includes("provider-secret"), false);
+  assert.equal(JSON.stringify(replayPayload).includes("passwordsecretabc"), false);
   assert.deepEqual(replayPayload.providerExecutionFailure, {
     kind: "provider_execution_failed",
     statePersistence: "persisted",

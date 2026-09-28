@@ -55,6 +55,29 @@ const RUNNER_PROVIDER_FAILURE_CODES = new Set([
   "apply_failed",
   RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
 ]);
+// Keep this finite allowlist aligned with RunnerPhaseTimer.measure calls in
+// runner/lib/plan_apply.ts and runner/lib/source_sync.ts. Failure payloads must
+// not echo an untrusted phase label into durable/public diagnostics.
+const RUNNER_PHASE_TIMING_PHASES = new Set([
+  "tofu_init",
+  "tofu_plan",
+  "tofu_state_reconcile",
+  "tofu_plan_json",
+  "tofu_apply",
+  "tofu_output",
+  "source_host_policy",
+  "source_git_credentials",
+  "source_ref_resolve",
+  "source_clone",
+  "source_repository_metadata",
+  "source_repository_manifest",
+  "source_subtree",
+  "source_repository_modules",
+  "source_snapshot_reuse",
+  "source_archive",
+  "source_archive_read",
+  "source_archive_digest",
+]);
 const RUNNER_PLAN_EXECUTION_FAILURE_CODES = new Set([
   "provider_source_invalid",
   "provider_package_unavailable",
@@ -6937,9 +6960,9 @@ function runnerPhaseTimingsFromPayload(
     const startedAt = stringField(entry, "startedAt");
     const finishedAt = stringField(entry, "finishedAt");
     const durationMs = entry.durationMs;
-    if (!phase || !/^[a-z][a-z0-9_]{0,63}$/u.test(phase)) return [];
-    if (!startedAt || !Number.isFinite(Date.parse(startedAt))) return [];
-    if (!finishedAt || !Number.isFinite(Date.parse(finishedAt))) return [];
+    if (!phase || !RUNNER_PHASE_TIMING_PHASES.has(phase)) return [];
+    if (!startedAt || !isCanonicalIsoTimestamp(startedAt)) return [];
+    if (!finishedAt || !isCanonicalIsoTimestamp(finishedAt)) return [];
     if (
       typeof durationMs !== "number" ||
       !Number.isFinite(durationMs) ||
@@ -6950,6 +6973,13 @@ function runnerPhaseTimingsFromPayload(
     return [{ phase, startedAt, finishedAt, durationMs }];
   });
   return timings.length > 0 ? timings : undefined;
+}
+
+function isCanonicalIsoTimestamp(value: string): boolean {
+  const timestamp = Date.parse(value);
+  return (
+    Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value
+  );
 }
 
 async function readJsonObject(
