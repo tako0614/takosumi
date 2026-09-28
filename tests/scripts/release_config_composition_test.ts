@@ -342,6 +342,8 @@ test("real release flow accepts a proved runner image across Worker commits and 
     { mode: 0o600 },
   );
   const planPath = join(operatorRoot, "platform-plan.json");
+  const checkedPlanEnvironments: string[] = [];
+  const planRuntime = platformPlanRuntime(repositoryRoot);
   await runPlatformWorkerRelease(
     [
       "plan",
@@ -353,8 +355,14 @@ test("real release flow accepts a proved runner image across Worker commits and 
       planPath,
     ],
     "staging",
-    platformPlanRuntime(repositoryRoot),
+    {
+      ...planRuntime,
+      assertCleanAndPushed: async (environment) => {
+        checkedPlanEnvironments.push(environment);
+      },
+    },
   );
+  expect(checkedPlanEnvironments).toEqual(["staging", "staging"]);
   const platformPlan = JSON.parse(
     readFileSync(planPath, "utf8"),
   ) as PlatformReleasePlan;

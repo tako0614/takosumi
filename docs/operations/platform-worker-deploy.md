@@ -101,11 +101,14 @@ bun run deploy -- takosumi-platform-staging materialize-source \
 That is a fresh, disposable, depth-1 tracking checkout of the remote default
 branch. Materialization refuses unless that branch's current remote tip is the
 pinned commit; it does not detach HEAD or create a synthetic release branch.
-Install the toolchain there and run `plan` from it. Every later source-lineage
-check re-reads remote `HEAD` and refuses if the checkout's attached branch is no
-longer the remote default, even when that old branch still points at the pinned
-commit. The recovery path is the same command against the commit the stored plan
-recorded, so a restore no longer depends on one directory continuing to exist.
+Install the toolchain there and run `plan` from it. For an official staging
+feature-branch release, use a clean attached checkout of the already-pushed
+branch at its exact remote tip instead. Plan, execute, recover, and restore
+recheck that the local tracking ref and a fresh remote branch read still equal
+the checkout commit. Production additionally requires the attached branch to
+remain the freshly advertised remote default. The recovery path is the same
+materialization command against the commit the stored plan recorded, so a
+restore no longer depends on one directory continuing to exist.
 
 Advancing the pin is part of cutting a release: set `commit` to the reviewed
 source commit, then plan and execute.
@@ -254,7 +257,8 @@ to the sponsorship descriptor, and set `takosumi-ai.workspaceContext` to
 ## Official staging release
 
 The official staging target is a reviewed two-step owner surface. Plan is
-read-only: it requires clean pushed source, binds its exact repository/commit
+read-only: it requires a clean attached checkout at the freshly read tip of its
+pushed branch (not necessarily `main`), binds its exact repository/commit
 authority into the confirmed plan, and consumes the operator-private runner
 build evidence for the configured immutable image. Every matching published v3
 record is fully validated. Valid historical records without proof are ignored,
