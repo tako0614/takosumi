@@ -1121,10 +1121,39 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
   // Existing realized configs retain their exact ten-key composition until
   // the operator explicitly opts in to the newer provider protocol.
   expect(() => assertConfigTargetsSource(withBroker({}), "production")).not.toThrow();
-  // The new descriptor is accepted only as the exact eleventh-key shape.
+  // The old fixed Connection must never be upgraded in place: the opt-in
+  // descriptor carries a second, exact Connection id.
   expect(() =>
     assertConfigTargetsSource(withBroker({ renewableEnv }), "production"),
+  ).toThrow("platform_worker_release_config_source_invalid");
+  expect(() =>
+    assertConfigTargetsSource(
+      withBroker({
+        renewableEnv,
+        renewableConnectionId: "conn_takoserverTakoformRenew01",
+      }),
+      "production",
+    ),
   ).not.toThrow();
+  for (const renewableConnectionId of [
+    "conn_takoserverTakoform01",
+    "conn_takoserverTakoformRenew02",
+  ]) {
+    expect(() =>
+      assertConfigTargetsSource(
+        withBroker({ renewableEnv, renewableConnectionId }),
+        "production",
+      ),
+    ).toThrow("platform_worker_release_config_source_invalid");
+  }
+  expect(() =>
+    assertConfigTargetsSource(
+      withBroker({
+        renewableConnectionId: "conn_takoserverTakoformRenew01",
+      }),
+      "production",
+    ),
+  ).toThrow("platform_worker_release_config_source_invalid");
   for (const renewableOverride of [
     { ...renewableEnv, minimumProviderVersion: "4.0.0" },
     { ...renewableEnv, sourceEnvName: "TAKOFORM_ENDPOINT" },
@@ -1133,7 +1162,10 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
   ]) {
     expect(() =>
       assertConfigTargetsSource(
-        withBroker({ renewableEnv: renewableOverride }),
+        withBroker({
+          renewableEnv: renewableOverride,
+          renewableConnectionId: "conn_takoserverTakoformRenew01",
+        }),
         "production",
       ),
     ).toThrow("platform_worker_release_config_source_invalid");
@@ -1147,7 +1179,14 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
     ],
   ]) {
     expect(() =>
-      assertConfigTargetsSource(withBroker({ envNames, renewableEnv }), "production"),
+      assertConfigTargetsSource(
+        withBroker({
+          envNames,
+          renewableEnv,
+          renewableConnectionId: "conn_takoserverTakoformRenew01",
+        }),
+        "production",
+      ),
     ).toThrow("platform_worker_release_config_source_invalid");
   }
   const referenceRecipe = REFERENCE_CREDENTIAL_RECIPES.find(

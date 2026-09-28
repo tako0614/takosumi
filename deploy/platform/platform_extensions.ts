@@ -97,6 +97,8 @@ export interface PlatformExtensionProviderCredentialBroker {
   readonly envNames: readonly string[];
   /** Provider-declared run-issued env value projected to a rotating file. */
   readonly renewableEnv?: CredentialRecipeRenewableEnv;
+  /** Additional opt-in fixed Connection; leaves the original broker mode static. */
+  readonly renewableConnectionId?: string;
   /** Bounded non-secret policy passed to this broker on every Run. */
   readonly runCredentialSettings?: Readonly<Record<string, JsonValue>>;
   /**
@@ -407,6 +409,7 @@ function optionalProviderCredentialBroker(
     "publicInputCapabilities",
     "runtimeInputs",
     "renewableEnv",
+    "renewableConnectionId",
   ];
   const actualKeys = Object.keys(record).sort();
   if (
@@ -515,6 +518,18 @@ function optionalProviderCredentialBroker(
   ) {
     throw new TypeError(`${label}.providerCredentialBroker.renewableEnv is invalid`);
   }
+  const renewableConnectionId = record.renewableConnectionId;
+  if (
+    renewableConnectionId !== undefined &&
+    (typeof renewableConnectionId !== "string" ||
+      !/^conn_[0-9A-Za-z]{8,64}$/u.test(renewableConnectionId) ||
+      renewableConnectionId === connectionId ||
+      renewableEnv === undefined)
+  ) {
+    throw new TypeError(
+      `${label}.providerCredentialBroker.renewableConnectionId requires a distinct valid Connection id and renewableEnv`,
+    );
+  }
   let runCredentialSettings: Readonly<Record<string, JsonValue>> | undefined;
   try {
     runCredentialSettings = canonicalRunCredentialSettings(
@@ -546,6 +561,7 @@ function optionalProviderCredentialBroker(
       : {}),
     ...(runtimeInputs ? { runtimeInputs: Object.freeze(runtimeInputs) } : {}),
     ...(renewableEnv ? { renewableEnv: Object.freeze(renewableEnv) } : {}),
+    ...(renewableConnectionId ? { renewableConnectionId } : {}),
   });
 }
 
@@ -757,7 +773,21 @@ function sameProviderCredentialBroker(
     left?.providerSource === right?.providerSource &&
     left?.displayName === right?.displayName &&
     left?.exchangePath === right?.exchangePath &&
-    sameStrings(left?.envNames, right?.envNames)
+    sameStrings(left?.envNames, right?.envNames) &&
+    left?.renewableConnectionId === right?.renewableConnectionId &&
+    left?.renewableEnv?.sourceEnvName === right?.renewableEnv?.sourceEnvName &&
+    left?.renewableEnv?.fileEnvName === right?.renewableEnv?.fileEnvName &&
+    left?.renewableEnv?.minimumProviderVersion ===
+      right?.renewableEnv?.minimumProviderVersion &&
+    left?.runtimeInputs?.contract === right?.runtimeInputs?.contract &&
+    left?.runtimeInputs?.nonceArgument === right?.runtimeInputs?.nonceArgument &&
+    left?.runtimeInputs?.mapArgument === right?.runtimeInputs?.mapArgument &&
+    left?.runtimeInputs?.minimumProviderVersion ===
+      right?.runtimeInputs?.minimumProviderVersion &&
+    JSON.stringify(left?.runCredentialSettings) ===
+      JSON.stringify(right?.runCredentialSettings) &&
+    left?.publicInputExchangePath === right?.publicInputExchangePath &&
+    sameStrings(left?.publicInputCapabilities, right?.publicInputCapabilities)
   );
 }
 

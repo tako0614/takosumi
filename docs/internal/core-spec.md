@@ -612,6 +612,14 @@ also pins a minimum exact provider version; an older or unproven selected
 version fails before runner dispatch. A renewable issuer request must exceed
 120 seconds, and actual issued material must have at least 120 seconds left;
 an issuer-selected shorter lifetime fails closed rather than starting a Run.
+For a platform-extension broker with an existing fixed static Connection, an
+optional distinct `renewableConnectionId` pairs with `renewableEnv` to install a
+second `broker-renewable` auth mode and fixed Connection. The original `broker`
+mode, Connection ID, and its pinned descriptor remain unchanged. A Capsule opts
+in only by explicitly selecting the new Connection through its ProviderBinding;
+recipe installation alone does not migrate existing bindings. A generic broker
+that already declares `renewableEnv` without the second ID retains its existing
+single-mode behavior.
 Before dispatch, Takosumi requires a
 runner image that advertises the refresh capability. While the Run remains
 fenced and active, the broker reissues only that binding ahead of expiry and

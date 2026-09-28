@@ -308,15 +308,23 @@ The remaining three are required, not optional, for an official release:
   the run-scoped sensitive-input lane, so a Capsule asking for
   binding-delivered values has nowhere to deliver them.
 
-The legacy shape remains valid and does not enable renewable credentials. The
-optional eleventh key, `renewableEnv`, is accepted only with the exact profile
-`{"sourceEnvName":"TAKOFORM_TOKEN","fileEnvName":"TAKOFORM_TOKEN_FILE","minimumProviderVersion":"4.1.0"}`.
-This is an explicit composition opt-in, not a global provider-floor change.
+The legacy ten-key shape remains valid and keeps the existing fixed Connection
+static. For this official Hosted broker, renewable delivery requires the exact
+paired twelve-key shape: `renewableEnv` with profile
+`{"sourceEnvName":"TAKOFORM_TOKEN","fileEnvName":"TAKOFORM_TOKEN_FILE","minimumProviderVersion":"4.1.0"}`
+and `renewableConnectionId: "conn_takoserverTakoformRenew01"`. The standalone
+eleventh-key shape is refused because it would change the installed auth mode
+of the existing `conn_takoserverTakoform01` and invalidate its pinned static
+Connections. Generic operator brokers retain the standalone descriptor where
+already used; this exact pairing rule belongs to the realized Hosted release
+gate. The new fixed Connection is available only for explicit Capsule
+ProviderBinding selection, not as an automatic migration. This is an explicit
+composition opt-in, not a global provider-floor change.
 Before adding it to the realized Hosted descriptor, first verify that the OSS
 runtime and released platform runner support renewable credential files, then
 publish Takoform provider 4.1.0 or newer to the exact source pinned by the
 Hosted Connection. Only after those prerequisites are available should the
-operator activate `renewableEnv`. Keep `runtimeInputs.minimumProviderVersion`
+operator activate the paired descriptor. Keep `runtimeInputs.minimumProviderVersion`
 at its existing value unless a separate protocol change requires otherwise;
 do not globally upgrade provider requirements to activate this optional
 profile.

@@ -7300,7 +7300,9 @@ function matchesHostedRunCredential(value: unknown): boolean {
 }
 
 /**
- * The realized sponsorship broker, pinned byte-for-byte.
+ * The realized sponsorship broker, pinned byte-for-byte. Renewable delivery
+ * must use a second fixed Connection: flipping the existing id's installed
+ * broker mode would invalidate every previously pinned static Connection.
  *
  * The three public-input/runtime-input fields are REQUIRED, not merely allowed.
  * `deploy/platform/platform_extension_provider_credentials.ts` learns a
@@ -7330,15 +7332,16 @@ function matchesHostedProviderCredentialBroker(value: unknown): boolean {
     JSON.stringify(keys) === JSON.stringify([...legacyKeys].sort());
   const exactRenewableShape =
     JSON.stringify(keys) ===
-    JSON.stringify([...legacyKeys, "renewableEnv"].sort());
+    JSON.stringify([...legacyKeys, "renewableConnectionId", "renewableEnv"].sort());
   return (
     (exactLegacyShape || exactRenewableShape) &&
     (!exactRenewableShape ||
-      matchesHostedRenewableEnvDescriptor(
-        value.renewableEnv,
-        value.envNames,
-        value.providerSource,
-      )) &&
+      (value.renewableConnectionId === "conn_takoserverTakoformRenew01" &&
+        matchesHostedRenewableEnvDescriptor(
+          value.renewableEnv,
+          value.envNames,
+          value.providerSource,
+        ))) &&
     value.publicInputExchangePath === "/public-inputs/http-endpoint" &&
     Array.isArray(value.publicInputCapabilities) &&
     JSON.stringify(value.publicInputCapabilities) ===

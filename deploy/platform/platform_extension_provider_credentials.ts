@@ -24,6 +24,7 @@ import {
 } from "./platform_extensions.ts";
 
 const AUTH_MODE = "broker";
+const RENEWABLE_AUTH_MODE = "broker-renewable";
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const EVIDENCE_ISSUER = "platform_extension_provider_credential";
 const PUBLIC_INPUT_AUTH_KIND = "provider-public-input";
@@ -87,6 +88,26 @@ export function platformExtensionProviderCredentialComposition(
     routes.map((route) => {
       const broker = route.providerCredentialBroker!;
       const issuance = route.runCredential!;
+      const brokerMode = Object.freeze({
+        preRun: Object.freeze({
+          type: "platform_extension_provider_credential",
+        }),
+        runIssuance: Object.freeze({
+          context: "capsule-run.v1" as const,
+          operatorConnection: "workspace-bindable" as const,
+          storedMaterial: "none" as const,
+          audience: issuance.audience,
+          scopes: issuance.requiredScopes,
+        }),
+        // The existing mode remains byte-equivalent when an opt-in second
+        // Connection is added. Existing pinned Connections must not change.
+        ...(broker.runtimeInputs
+          ? { runtimeInputs: broker.runtimeInputs }
+          : {}),
+        ...(broker.renewableEnv && !broker.renewableConnectionId
+          ? { renewableEnv: broker.renewableEnv }
+          : {}),
+      });
       return Object.freeze({
         id: broker.recipeId,
         displayName: broker.displayName,
@@ -96,27 +117,15 @@ export function platformExtensionProviderCredentialComposition(
           broker.envNames.map((name) => Object.freeze([name])),
         ),
         authModes: Object.freeze({
-          [AUTH_MODE]: Object.freeze({
-            preRun: Object.freeze({
-              type: "platform_extension_provider_credential",
-            }),
-            runIssuance: Object.freeze({
-              context: "capsule-run.v1" as const,
-              operatorConnection: "workspace-bindable" as const,
-              storedMaterial: "none" as const,
-              audience: issuance.audience,
-              scopes: issuance.requiredScopes,
-            }),
-            // A broker Connection that does not declare the protocol cannot
-            // carry the Capsule's runtime binding profile at all: the run-scoped
-            // wiring selects ONLY on this pinned, value-free descriptor.
-            ...(broker.runtimeInputs
-              ? { runtimeInputs: broker.runtimeInputs }
-              : {}),
-            ...(broker.renewableEnv
-              ? { renewableEnv: broker.renewableEnv }
-              : {}),
-          }),
+          [AUTH_MODE]: brokerMode,
+          ...(broker.renewableConnectionId
+            ? {
+                [RENEWABLE_AUTH_MODE]: Object.freeze({
+                  ...brokerMode,
+                  renewableEnv: broker.renewableEnv!,
+                }),
+              }
+            : {}),
         }),
       });
     });
@@ -128,7 +137,7 @@ export function platformExtensionProviderCredentialComposition(
     const broker = route.providerCredentialBroker!;
     const issuance = route.runCredential!;
     const handler = platformExtensionCredentialHandler(env, route.handlerKey);
-    credentialRecipeDrivers[`${broker.recipeId}/${AUTH_MODE}`] = {
+    const driver: CredentialRecipeHostComposition["credentialRecipeDrivers"][string] = {
       evidenceIssuer: EVIDENCE_ISSUER,
       verify: async () => ({ ok: true }),
       mint: async (context) =>
@@ -147,15 +156,19 @@ export function platformExtensionProviderCredentialComposition(
             : options.capsulePublicOriginReservations,
         ),
     };
+    credentialRecipeDrivers[`${broker.recipeId}/${AUTH_MODE}`] = driver;
+    if (broker.renewableConnectionId) {
+      credentialRecipeDrivers[`${broker.recipeId}/${RENEWABLE_AUTH_MODE}`] = driver;
+    }
   }
   return Object.freeze({
     credentialRecipes: Object.freeze([...credentialRecipes]),
     credentialRecipeDrivers: Object.freeze(credentialRecipeDrivers),
     credentialRequiredProviderSources,
     operatorProviderConnections: Object.freeze(
-      routes.map((route) => {
+      routes.flatMap((route) => {
         const broker = route.providerCredentialBroker!;
-        return Object.freeze({
+        const existing = Object.freeze({
           id: broker.connectionId,
           providerSource: broker.providerSource,
           displayName: broker.displayName,
@@ -167,6 +180,19 @@ export function platformExtensionProviderCredentialComposition(
             ? { runCredentialSettings: broker.runCredentialSettings }
             : {}),
         });
+        return broker.renewableConnectionId
+          ? [
+              existing,
+              Object.freeze({
+                ...existing,
+                id: broker.renewableConnectionId,
+                credentialRecipe: Object.freeze({
+                  id: broker.recipeId,
+                  authMode: RENEWABLE_AUTH_MODE,
+                }),
+              }),
+            ]
+          : [existing];
       }),
     ),
   });
