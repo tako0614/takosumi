@@ -156,6 +156,18 @@ immutability is the no-overwrite property. If publication acknowledgement or
 manifest readback is missing or ambiguous, evidence records an unknown
 publication outcome and does not claim an immutable identity.
 
+A timed-out `wrangler containers push` is also an unknown publication outcome.
+The release command terminates its direct child process group and returns after
+the direct child exits or a bounded termination grace, but Wrangler may have
+started a detached Docker transport outside that group. Returning from the
+command does **not** prove that transport stopped or that the remote tag is
+absent. Keep the `publication-started` attempt unresolved until the operator
+has identified the exact owned transport for this attempt and confirmed it is
+quiescent. Do not run exact-tag reconciliation, infer absence, or start another
+build while that transport may still be running. If its identity or quiescence
+cannot be established, retain the unknown state for investigation; do not use
+a broad process kill or a second push as a shortcut.
+
 Any unresolved journal entry blocks every future build before a new nonce or
 push. The environment plus checked publication repository select one fixed
 operator-account journal locator. The locator binds the exact journal path and

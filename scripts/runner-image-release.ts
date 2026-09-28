@@ -271,6 +271,7 @@ const RELEASE_MUTATION_COMMAND_TIMEOUT_MS = 15 * 60_000;
 const RELEASE_BUILD_COMMAND_TIMEOUT_MS = 30 * 60_000;
 const RUNNER_BOOT_SMOKE_TIMEOUT_MS = 30_000;
 const COMMAND_TERMINATION_GRACE_MS = 5_000;
+const COMMAND_KILL_REAP_GRACE_MS = 1_000;
 
 export {
   RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE,
@@ -3496,7 +3497,7 @@ function boundedDiagnosticText(value: string): string {
     .slice(0, 2_048);
 }
 
-async function runCommand(
+export async function runCommand(
   executable: string,
   args: readonly string[],
   cwd: string,
@@ -3512,17 +3513,38 @@ async function runCommand(
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let directChildExited = false;
     let stopError: Error | null = null;
     let outputBytes = 0;
     const boundedOutput = executable === "docker" &&
       (args[0] === "run" || args[0] === "exec" || args[0] === "rm");
     let terminationTimer: ReturnType<typeof setTimeout> | undefined;
+    let reapTimer: ReturnType<typeof setTimeout> | undefined;
+    const settleAbnormal = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (terminationTimer) clearTimeout(terminationTimer);
+      if (reapTimer) clearTimeout(reapTimer);
+      // A detached grandchild can inherit these fds even after the direct child
+      // exits. Closing our read ends must not be mistaken for stopping it.
+      child.stdout.destroy();
+      child.stderr.destroy();
+      reject(error);
+    };
     const stop = (error: Error) => {
       if (settled || stopError) return;
       stopError = error;
+      if (directChildExited) {
+        settleAbnormal(error);
+        return;
+      }
       terminateCommand(child, "SIGTERM");
       terminationTimer = setTimeout(() => {
         terminateCommand(child, "SIGKILL");
+        // A child stuck past SIGKILL cannot hold the caller forever. Its
+        // termination is unconfirmed; the publication outcome stays unknown.
+        reapTimer = setTimeout(() => settleAbnormal(error), COMMAND_KILL_REAP_GRACE_MS);
       }, COMMAND_TERMINATION_GRACE_MS);
     };
     const timeout = setTimeout(() => {
@@ -3548,15 +3570,16 @@ async function runCommand(
     child.stdout.on("data", (value: string) => capture("stdout", value));
     child.stderr.on("data", (value: string) => capture("stderr", value));
     child.on("error", (error) => {
-      clearTimeout(timeout);
-      if (terminationTimer) clearTimeout(terminationTimer);
-      if (settled) return;
-      settled = true;
-      reject(stopError ?? error);
+      settleAbnormal(stopError ?? error);
+    });
+    child.on("exit", () => {
+      directChildExited = true;
+      if (stopError) settleAbnormal(stopError);
     });
     child.on("close", (code) => {
       clearTimeout(timeout);
       if (terminationTimer) clearTimeout(terminationTimer);
+      if (reapTimer) clearTimeout(reapTimer);
       if (settled) return;
       settled = true;
       if (stopError) {

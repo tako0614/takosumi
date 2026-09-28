@@ -20,6 +20,7 @@ import { basename, dirname, join, relative } from "node:path";
 
 import {
   parseRunnerImageReleaseArgs,
+  runCommand,
   runRunnerImageRelease,
 } from "../../scripts/runner-image-release.ts";
 import {
@@ -5139,6 +5140,61 @@ test("real Docker-client failures are bounded and reaped before container cleanu
     expect(readFileSync(input.state, "utf8")).toBe("");
   }
 });
+
+test.skipIf(process.platform === "win32")(
+  "timed-out real command settles when an escaped descendant retains its output pipes",
+  async () => {
+    const directory = mkdtempSync(join(tmpdir(), "runner-release-process-"));
+    const descendantPidFile = join(directory, "descendant.pid");
+    const parentTerminatedFile = join(directory, "parent-terminated");
+    const descendantCode = "setTimeout(() => process.exit(0), 5000)";
+    const parentCode = `
+      import { spawn } from "node:child_process";
+      import { writeFileSync } from "node:fs";
+      const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(descendantCode)}], {
+        detached: true,
+        stdio: ["ignore", "inherit", "inherit"],
+      });
+      descendant.unref();
+      writeFileSync(${JSON.stringify(descendantPidFile)}, String(descendant.pid));
+      process.on("SIGTERM", () => {
+        writeFileSync(${JSON.stringify(parentTerminatedFile)}, "terminated");
+        process.exit(0);
+      });
+      setInterval(() => {}, 1000);
+    `;
+    const outcome = runCommand(process.execPath, ["-e", parentCode], directory, 400)
+      .then(() => "resolved", (error: unknown) =>
+        error instanceof Error ? error.name : "unknown-error"
+      );
+    let descendantPid: number | undefined;
+    try {
+      for (let attempt = 0; attempt < 100 && !existsSync(descendantPidFile); attempt++) {
+        await Bun.sleep(10);
+      }
+      expect(existsSync(descendantPidFile)).toBeTrue();
+      descendantPid = Number(readFileSync(descendantPidFile, "utf8"));
+      expect(Number.isSafeInteger(descendantPid) && descendantPid > 0).toBeTrue();
+
+      const result = await Promise.race([
+        outcome,
+        Bun.sleep(1_500).then(() => "still-pending"),
+      ]);
+      expect(existsSync(parentTerminatedFile)).toBeTrue();
+      expect(result).toBe("CommandTimeoutError");
+    } finally {
+      if (descendantPid) {
+        try {
+          process.kill(descendantPid, "SIGTERM");
+        } catch {
+          // The finite fixture may already have exited.
+        }
+      }
+      await Promise.race([outcome, Bun.sleep(1_000)]);
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 test("build rejects a missing or invalid local image descriptor before publication", async () => {
   for (const localImageInspect of [
