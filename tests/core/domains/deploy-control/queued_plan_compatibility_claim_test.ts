@@ -502,8 +502,19 @@ test("active queued Plan compatibility preclaim persists its report through the 
   ).toHaveLength(0);
 });
 
-test("successful Plan Core timing diagnostic partitions delayed claim, resolution, dispatch, renewal, and runner", async () => {
+test("successful Plan Core timing diagnostic partitions delayed preclaim, claim, resolution, dispatch, renewal, and runner", async () => {
   const fixture = await createQueuedPlanFixture();
+  const getPlanRun = fixture.store.getPlanRun.bind(fixture.store);
+  let delayFirstRunRead = true;
+  const planReadSpy = spyOn(fixture.store, "getPlanRun").mockImplementation(
+    async (id) => {
+      if (delayFirstRunRead) {
+        delayFirstRunRead = false;
+        await Bun.sleep(65);
+      }
+      return await getPlanRun(id);
+    },
+  );
   const transitionRun = fixture.store.transitionRun.bind(fixture.store);
   const resolveRunEnvironment = RunEnvResolver.prototype.resolveRunEnvironment;
   const executionDispatch = RunVerificationService.prototype.executionDispatch;
@@ -549,6 +560,7 @@ test("successful Plan Core timing diagnostic partitions delayed claim, resolutio
     expect(Object.keys(detail).sort()).toEqual([
       "claimMs",
       "dispatchPreparationMs",
+      "preClaimPreparationMs",
       "renewalOutsideRunnerMs",
       "resolveRunEnvironmentMs",
       "runnerPlanMs",
@@ -556,6 +568,7 @@ test("successful Plan Core timing diagnostic partitions delayed claim, resolutio
     expect(Object.values(detail).every(
       (value) => typeof value === "number" && Number.isFinite(value) && value >= 0,
     )).toBe(true);
+    expect(detail.preClaimPreparationMs).toBeGreaterThanOrEqual(60);
     expect(detail.claimMs).toBeGreaterThanOrEqual(20);
     expect(detail.resolveRunEnvironmentMs).toBeGreaterThanOrEqual(30);
     expect(detail.dispatchPreparationMs).toBeGreaterThanOrEqual(40);
@@ -564,6 +577,7 @@ test("successful Plan Core timing diagnostic partitions delayed claim, resolutio
     expect(JSON.stringify(timing)).not.toContain("runner-local://");
     expect((await fixture.store.getPlanRun(result!.id))?.diagnostics).toContainEqual(timing);
   } finally {
+    planReadSpy.mockRestore();
     transitionSpy.mockRestore();
     environmentSpy.mockRestore();
     dispatchSpy.mockRestore();

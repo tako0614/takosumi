@@ -1395,6 +1395,7 @@ function assertRunnerLifecycleCredentialModes(
 }
 
 interface CorePlanElapsedTimings {
+  readonly preClaimPreparationMs: number;
   readonly claimMs: number;
   readonly resolveRunEnvironmentMs: number;
   readonly dispatchPreparationMs: number;
@@ -5279,6 +5280,7 @@ export class RunEngine {
    * store.
    */
   async runQueuedPlan(runId: string): Promise<PlanRun | undefined> {
+    const preClaimStartedAt = performance.now();
     let planRun = await this.#store.getPlanRun(runId);
     if (!planRun) {
       throw new OpenTofuControllerError(
@@ -5316,6 +5318,10 @@ export class RunEngine {
       return (await this.#failUnclaimedPlanRun(planRun, error)).run;
     }
     const claimStartedAt = performance.now();
+    const preClaimPreparationMs = finiteElapsedMs(
+      preClaimStartedAt,
+      claimStartedAt,
+    );
     const claim = await this.#markPlanRunning(planRun);
     const claimMs = finiteElapsedMs(claimStartedAt, performance.now());
     if (!claim.won) {
@@ -5346,7 +5352,7 @@ export class RunEngine {
         variables,
         runEnvironment,
         dispatch,
-        { claimMs, resolveRunEnvironmentMs },
+        { preClaimPreparationMs, claimMs, resolveRunEnvironmentMs },
       );
     } catch (error) {
       if (isRunnerInfrastructureRequeueError(error)) throw error;
@@ -7710,6 +7716,7 @@ export class RunEngine {
     runEnvironment: ResolvedRunEnvironment,
     dispatch: RunModuleDispatch,
     preDispatchTimings: {
+      readonly preClaimPreparationMs: number;
       readonly claimMs: number;
       readonly resolveRunEnvironmentMs: number;
     },
@@ -7810,6 +7817,7 @@ export class RunEngine {
         performance.now(),
       );
       const coreTimings = {
+        preClaimPreparationMs: preDispatchTimings.preClaimPreparationMs,
         claimMs: preDispatchTimings.claimMs,
         resolveRunEnvironmentMs: preDispatchTimings.resolveRunEnvironmentMs,
         dispatchPreparationMs,

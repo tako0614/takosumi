@@ -23,6 +23,10 @@ A successfully completed non-destroy Plan may also include an informational
 `core_plan_elapsed_timings` diagnostic. Its JSON `detail` has exactly these
 finite, non-negative millisecond durations:
 
+- `preClaimPreparationMs`: from entry to `runQueuedPlan`, before its first
+  awaited read, until immediately before the running claim. It includes Run and
+  prepared-input reads, profile selection, and compatibility checks. It does
+  not include delivery time before the consumer enters this function.
 - `claimMs`: from immediately before the running claim through its fenced CAS.
 - `resolveRunEnvironmentMs`: dispatch-time environment and credential resolution.
 - `dispatchPreparationMs`: Core execution dispatch, policy reads, and runner
@@ -33,13 +37,17 @@ finite, non-negative millisecond durations:
   after the runner returns.
 - `runnerPlanMs`: the complete `runner.plan` call, including the Worker adapter.
 
-The Core intervals are sequential and can be added to approximate the measured
-claim-to-runner-return portion of the Plan. `workerAdapterRpcMs` is nested inside
-`runnerPlanMs`; subtract it rather than adding it when locating time outside the
-Worker RPC. These are monotonic durations, not timestamps. Synchronous handoff
-between intervals and time from runner return to `finishedAt` are not assigned
-to a Core key. A single sample can locate a stage but does not establish its
-cause or a latency improvement.
+The Core intervals are sequential. The five keys from `claimMs` through
+`runnerPlanMs` approximate the measured claim-to-runner-return portion of the
+Plan; adding `preClaimPreparationMs` approximates consumer-entry-to-runner-return.
+Neither sum is a measure of delivery delay. In particular, a gap from Run
+`createdAt` to `startedAt` can include both time before `runQueuedPlan` starts
+and its pre-claim work, so it must not be labeled queue-only.
+`workerAdapterRpcMs` is nested inside `runnerPlanMs`; subtract it rather than
+adding it when locating time outside the Worker RPC. These are monotonic
+durations, not timestamps. Synchronous handoff between intervals and time from
+runner return to `finishedAt` are not assigned to a Core key. A single sample
+can locate a stage but does not establish its cause or a latency improvement.
 
 The Worker timing diagnostic is optional for older runner responses. Neither
 timing diagnostic carries timestamps, source/input data, artifact identifiers,
