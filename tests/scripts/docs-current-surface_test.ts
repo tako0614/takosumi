@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { test } from "bun:test";
+import { FEATURED_APPS } from "../../website/src/content/apps.ts";
 
 const ROOT = new URL("../../", import.meta.url);
 
@@ -103,11 +104,11 @@ const SOURCE_DOCS_WITH_PUBLIC_SURFACE_WORDING = [
   "CONVENTIONS.md",
   "contract/README.md",
   "core/README.md",
-  "website/src/components/EndCTA.tsx",
-  "website/src/components/Showcase.tsx",
+  "website/src/routes/index.tsx",
+  "website/src/components/Hero.tsx",
+  "website/src/components/AppWorkbench.tsx",
   "website/src/components/Footer.tsx",
-  "website/src/content/why.ts",
-  "website/src/content/ecosystem.ts",
+  "website/src/content/apps.ts",
   "tests/proofs/opentofu-output-proof.ts",
   "package.json",
 ] as const;
@@ -351,6 +352,27 @@ test("source docs keep current source-module and modulePath vocabulary", async (
 
   assert.match(docs, /takosumi-contract/);
   assert.match(docs, /module path/);
+});
+
+test("website starts with app selection and keeps Git installation an explicit handoff", async () => {
+  assert.deepEqual(FEATURED_APPS.map((app) => app.id), ["takos", "yurucommu", "office"]);
+  const expected = new Map([
+    ["takos", ["https://github.com/tako0614/takos.git", "deploy/opentofu/cloudflare"]],
+    ["yurucommu", ["https://github.com/tako0614/yurucommu.git", "deploy/takoform"]],
+    ["office", ["https://github.com/tako0614/takos-office.git", "."]],
+  ]);
+  for (const app of FEATURED_APPS) {
+    const url = new URL(app.install);
+    assert.equal(url.origin, "https://app.takosumi.com");
+    assert.equal(url.pathname, "/install");
+    assert.deepEqual([...url.searchParams.keys()].sort(), ["git", "name", "path", "ref"]);
+    assert.deepEqual(
+      [url.searchParams.get("git"), url.searchParams.get("path")],
+      expected.get(app.id),
+    );
+    assert.ok(url.searchParams.get("ref"), `missing pinned ref for ${app.id}`);
+    assert.equal(url.searchParams.get("name"), app.name === "Takos" ? "takos" : app.name);
+  }
 });
 
 test("core spec names the final OSS model and excludes operator-provided capacity", async () => {

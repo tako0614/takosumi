@@ -1,9 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="Takosumi — Git-based OpenTofu control plane">
-  <!-- Source sketch for og-cover.png: the page's own dark ground, the
-       real face mark on its tile — not the retired three-bar placeholder. -->
-  <rect width="1200" height="630" fill="#0a0a0a"/>
-  <image href="../tako.png" x="96" y="120" width="150" height="150"/>
-  <text x="96" y="360" font-family="'Helvetica Neue', Arial, sans-serif" font-size="112" font-weight="800" letter-spacing="-4" fill="#fafafa">Takosumi</text>
-  <text x="96" y="440" font-family="'Helvetica Neue', Arial, sans-serif" font-size="38" font-weight="600" fill="#a3a3a3">Git-based OpenTofu control plane.</text>
-  <text x="96" y="566" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="26" fill="#6b6b6b">AGPL-3.0 · github.com/tako0614/takosumi · takosumi.com</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#0a0a0b"/>
+  <rect x="66" y="62" width="1068" height="506" rx="18" fill="#151517" stroke="#37373d" stroke-width="2"/>
+  <rect x="66" y="62" width="1068" height="64" rx="18" fill="#1c1c1f"/>
+  <path d="M66 126h1068" stroke="#37373d" stroke-width="2"/>
+  <rect x="96" y="82" width="26" height="26" rx="6" fill="#f5483d"/>
+  <circle cx="104" cy="92" r="2" fill="#0a0a0b"/>
+  <circle cx="114" cy="92" r="2" fill="#0a0a0b"/>
+  <path d="M105 100q7 7 11 0" fill="none" stroke="#0a0a0b" stroke-width="2"/>
+  <text x="138" y="103" fill="#f5f5f6" font-family="DejaVu Sans,sans-serif" font-size="24" font-weight="700">Takosumi</text>
+  <text x="104" y="313" fill="#f5f5f6" font-family="DejaVu Sans" font-size="90" font-weight="700">Takosumi</text>
+  <text x="110" y="367" fill="#a1a1a8" font-family="DejaVu Sans,sans-serif" font-size="27">Apps from Git, in your own environment.</text>
+  <path d="M106 436h986" stroke="#37373d" stroke-width="2"/>
+  <text x="110" y="493" fill="#ff8b83" font-family="DejaVu Sans,sans-serif" font-size="23" font-weight="600">Git</text>
+  <circle cx="196" cy="485" r="4" fill="#37373d"/>
+  <text x="223" y="493" fill="#a1a1a8" font-family="DejaVu Sans,sans-serif" font-size="23">OpenTofu</text>
+  <circle cx="409" cy="485" r="4" fill="#37373d"/>
+  <text x="436" y="493" fill="#a1a1a8" font-family="DejaVu Sans,sans-serif" font-size="23">Your workspace</text>
 </svg>

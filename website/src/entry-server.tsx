@@ -1,11 +1,10 @@
 // @refresh reload
 import { createHandler, StartServer } from "@solidjs/start/server";
 
-// schema.org identity for the landing. Takosumi is the OpenTofu-native control
-// plane — NOT the chat/docs product (that is Takos).
+// The public site introduces the dashboard and links to source-prefilled install.
 const SITE_TITLE = "Takosumi";
 const SITE_DESC =
-  "ブラウザから自分のクラウドへサービスを追加・更新・デプロイ。鍵、状態、履歴、監査を管理する OpenTofu-native control plane。";
+  "Gitで公開されたアプリを、自分の環境へ。OpenTofu定義と接続・設定を確認してインストールし、Takosumiのワークスペースで管理できます。";
 
 const JSON_LD = JSON.stringify({
   "@context": "https://schema.org",
@@ -43,7 +42,7 @@ export default createHandler(() => (
           <meta property="og:image:type" content="image/png" />
           <meta property="og:image:width" content="1200" />
           <meta property="og:image:height" content="630" />
-          <meta property="og:image:alt" content={SITE_TITLE} />
+          <meta property="og:image:alt" content="Takosumi" />
           <meta name="twitter:card" content="summary_large_image" />
           <meta name="twitter:title" content={SITE_TITLE} />
           <meta name="twitter:description" content={SITE_DESC} />
@@ -51,7 +50,8 @@ export default createHandler(() => (
             name="twitter:image"
             content="https://takosumi.com/brand/og-cover.png"
           />
-          <meta name="theme-color" content="#0a0a0a" />
+          <meta name="theme-color" content="#0a0a0b" />
+          <script src="/theme-init.js" />
           <link rel="icon" href="/tako.png" />
           <link rel="apple-touch-icon" href="/tako.png" />
           <script type="application/ld+json" innerHTML={JSON_LD} />

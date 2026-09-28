@@ -1,101 +1,43 @@
 <!doctype html>
 <html lang="ja">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="robots" content="noindex" />
-    <meta name="color-scheme" content="dark" />
-    <title>ページが見つかりません - Takosumi</title>
-    <link rel="icon" type="image/png" href="/tako.png" />
-    <style>
-      :root {
-        --tg-bg: #0a0a0a;
-        --tg-fg: #fafafa;
-        --tg-fg-muted: #a3a3a3;
-        --tg-accent: #ef4444;
-        --tg-accent-text: #fca5a5;
-        --tg-border: #262626;
-      }
-      * { box-sizing: border-box; margin: 0; }
-      body {
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        padding: 2rem;
-        background:
-          radial-gradient(circle at 85% 10%, rgb(239 68 68 / 10%), transparent 40%),
-          radial-gradient(circle at 10% 90%, rgb(59 130 246 / 8%), transparent 40%),
-          var(--tg-bg);
-        color: var(--tg-fg);
-        font-family:
-          'Bricolage Grotesque Variable', 'Bricolage Grotesque', -apple-system,
-          BlinkMacSystemFont, 'Hiragino Kaku Gothic ProN', 'Yu Gothic UI',
-          'Segoe UI', Roboto, sans-serif;
-        text-align: center;
-      }
-      .code {
-        font-family:
-          'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace,
-          Menlo, Consolas, monospace;
-        font-size: 0.85rem;
-        letter-spacing: 0.2em;
-        color: var(--tg-accent-text);
-        text-transform: uppercase;
-      }
-      h1 {
-        margin: 0.9rem 0 0.8rem;
-        font-size: clamp(2.2rem, 6vw, 3.4rem);
-        font-weight: 800;
-        letter-spacing: -0.03em;
-        line-height: 1.1;
-      }
-      p {
-        max-width: 30rem;
-        margin: 0 auto;
-        color: var(--tg-fg-muted);
-        font-size: 1rem;
-        line-height: 1.8;
-      }
-      p.en {
-        margin-top: 0.4rem;
-        font-size: 0.85rem;
-      }
-      nav {
-        margin-top: 2rem;
-        display: flex;
-        gap: 0.75rem;
-        justify-content: center;
-        flex-wrap: wrap;
-      }
-      a {
-        display: inline-block;
-        padding: 0.65rem 1.4rem;
-        border-radius: 0.5rem;
-        font-size: 0.92rem;
-        font-weight: 600;
-        text-decoration: none;
-        color: var(--tg-fg);
-        border: 1px solid var(--tg-border);
-      }
-      a:hover { border-color: var(--tg-fg-muted); }
-      a.primary {
-        background: var(--tg-accent);
-        border-color: var(--tg-accent);
-        color: #fff;
-      }
-      a.primary:hover { filter: brightness(1.1); }
-    </style>
-  </head>
-  <body>
-    <main>
-      <p class="code">404 · not found</p>
-      <h1>ページが見つかりません</h1>
-      <p>お探しのページは移動したか、存在しません。</p>
-      <p class="en">The page you are looking for has moved or does not exist.</p>
-      <nav>
-        <a class="primary" href="/">Takosumi トップへ</a>
-        <a href="/docs/">ドキュメント</a>
-      </nav>
-    </main>
-  </body>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <meta name="color-scheme" content="dark light" />
+  <meta name="theme-color" content="#0a0a0b" />
+  <title>Takosumi</title>
+  <link rel="icon" type="image/png" href="/tako.png" />
+  <script src="/theme-init.js"></script>
+  <style>
+    :root { color-scheme: dark; --bg: #0a0a0b; --surface: #151517; --ink: #f5f5f6; --muted: #a1a1a8; --line: #262629; --red: #d63a2f; --accent-text: #ff8b83; }
+    :root[data-theme='light'] { color-scheme: light; --bg:#f7f7f8; --surface:#fff; --ink:#18181b; --muted:#52525b; --line:#e4e4e7; --accent-text:#b91c1c; }
+    @media (prefers-color-scheme:light) { :root:not([data-theme]) { color-scheme: light; --bg:#f7f7f8; --surface:#fff; --ink:#18181b; --muted:#52525b; --line:#e4e4e7; --accent-text:#b91c1c; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100svh; display: flex; flex-direction: column; background: var(--bg); color: var(--ink); font-family: "Bricolage Grotesque", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", sans-serif; }
+    header, main, footer { width: min(calc(100% - 32px), 1180px); margin-inline: auto; }
+    header { min-height: 76px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); font-weight: 800; }
+    header img { width: 30px; height: 30px; border-radius: 7px; }
+    main { margin-block: auto; padding-block: 90px; }
+    h1 { font-size: clamp(3.8rem, 11vw, 8rem); line-height: 1; letter-spacing: -.06em; margin: 0; }
+    .error-code { margin: 0 0 20px; color: var(--accent-text); font-size: .86rem; font-weight: 700; }
+    p { color: var(--muted); font-size: 1.1rem; line-height: 1.7; margin: 24px 0 30px; }
+    nav { display: flex; gap: 16px 24px; flex-wrap: wrap; align-items: center; }
+    a { color: var(--ink); font-weight: 700; text-decoration: none; }
+    a.primary { background: var(--red); color: white; padding: 12px 18px; border-radius: 8px; }
+    a:hover { text-decoration: underline; }
+    a:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 4px; }
+    footer { border-top: 1px solid var(--line); padding-block: 24px; color: var(--muted); font-size: .82rem; }
+  </style>
+</head>
+<body>
+  <header><img src="/tako.png" alt="" />Takosumi</header>
+  <main>
+    <p class="error-code">404 / ページが見つかりません</p>
+    <h1>Takosumi</h1>
+    <p>ページが移動したか、URL が違うようです。</p>
+    <nav><a class="primary" href="/">ホームへ戻る ↗</a><a href="/docs/">ドキュメント ↗</a></nav>
+  </main>
+  <footer>Git で公開されたアプリを、自分の環境へ。</footer>
+</body>
 </html>

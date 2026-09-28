@@ -1,46 +1,16 @@
-import { For } from "solid-js";
-import { PRICING_PLANS } from "~/content/pricing";
-import Section from "./Section";
-
 export default function Pricing() {
   return (
-    <Section
-      id="pricing"
-      title="料金"
-      lede={
-        <>
-          セルフホストは無料のオープンソース。Takosumi
-          は公式ホスティング版で、ブラウザからサービスを追加・更新できる。
-        </>
-      }
-    >
-      <For each={PRICING_PLANS}>
-        {(plan) => (
-          <div class="install-item">
-            <div class="record-head">
-              <span
-                class={plan.id === "platform" ? "rec-dot rec-plan" : "rec-dot rec-self"}
-                aria-hidden="true"
-              />
-              <span class="rec-label">{plan.id}</span>
-              <h3 class="rec-plan-name">{plan.name}</h3>
-              <span class="rec-meta">{plan.price}</span>
-            </div>
-            <p>{plan.priceNote}</p>
-            <ul class="fact-list">
-              <For each={plan.features}>{(f) => <li>{f.label}</li>}</For>
-            </ul>
-            <a class="link" href={plan.cta.href} rel="external">
-              {plan.cta.label}
-            </a>
-          </div>
-        )}
-      </For>
-
-      <p class="plan-footnote">
-        従量単価は公開料金表に基づく。操作前の Preview
-        で見積もりを確認でき、クレジット追加や自動チャージの設定は自分で管理できる。
-      </p>
-    </Section>
+    <section class="pricing" id="pricing" aria-labelledby="pricing-title">
+      <div class="container pricing-layout">
+        <div class="pricing-copy">
+          <h2 id="pricing-title">動かす場所も、自分で選ぶ。</h2>
+          <p>Takosumi はオープンソース。自分で動かす方法と、Hosted を使う方法があります。アプリの実行先に必要なクラウド料金は、どちらも別に確認してください。</p>
+        </div>
+        <div class="pricing-options">
+          <div class="pricing-option"><h3>セルフホスト</h3><p>Takosumi 自体を自分の環境で運用します。実行環境と接続を自分で管理します。</p><a href="/docs/concepts/self-host">導入方法を見る <span aria-hidden="true">↗</span></a></div>
+          <div class="pricing-option"><h3>Hosted</h3><p>Takosumi の管理画面を使います。管理・実行の利用料と、アプリの実行先にかかる費用を確認して進めます。</p><a href="https://app.takosumi.com/docs/pricing">公開料金を見る <span aria-hidden="true">↗</span></a></div>
+        </div>
+      </div>
+    </section>
   );
 }

@@ -20,17 +20,7 @@ export default function AdringWidget() {
   onCleanup(() => dispose?.());
 
   return (
-    <aside
-      aria-label="広告"
-      style={{
-        "box-sizing": "border-box",
-        width: "100%",
-        "max-width": "488px",
-        "min-height": "196px",
-        margin: "0 auto",
-        padding: "24px",
-      }}
-    >
+    <aside aria-label="広告" class="adring-slot">
       <div ref={container} />
     </aside>
   );

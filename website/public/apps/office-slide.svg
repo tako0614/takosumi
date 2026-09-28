@@ -1,0 +1,22 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 96 96"
+  role="img"
+  aria-label="Slide"
+>
+  <rect width="96" height="96" rx="20" fill="#f97316" />
+  <rect x="20" y="23" width="56" height="39" rx="6" fill="#fff7ed" />
+  <path
+    d="M29 35h38"
+    stroke="#f97316"
+    stroke-width="4"
+    stroke-linecap="round"
+  />
+  <path d="M30 53h36L55 40 48 49 43 44z" fill="#fdba74" />
+  <path
+    d="M48 62v12M36 76h24"
+    stroke="#fff7ed"
+    stroke-width="5"
+    stroke-linecap="round"
+  />
+</svg>

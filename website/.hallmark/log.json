@@ -1,0 +1,35 @@
+[
+  {
+    "date": "2026-09-28",
+    "macrostructure": "product workbench story",
+    "theme": "Takosumi dashboard dark",
+    "enrichment": "actual dashboard captures",
+    "brief": "Show Takosumi itself first, then source selection, setup, review, and installed-app management.",
+    "scope": "website"
+  },
+  {
+    "date": "2026-09-28",
+    "structure": "single source-to-app composition",
+    "theme": "custom bespoke",
+    "theme_axes": "warm paper / heavy vermilion sans / red source field",
+    "enrichment": "real source linked to real app; native radio selection; real screens disclosed",
+    "brief": "User rejected equal yellow app shelf. Explain Takosumi itself by attaching Git source and app handoff; keep product-name-only heading.",
+    "visual_review": "320 and desktop inspected; mobile vertical gaps reduced, connector aligned; technical checks do not imply user acceptance."
+  },
+  {
+    "date": "2026-09-28",
+    "structure": "open app shelf",
+    "theme": "custom bespoke",
+    "theme_axes": "lemon yellow / heavy sans / vermilion",
+    "enrichment": "real app marks; screens available on demand",
+    "brief": "Bold colour and pop, sparse visible copy; product name only in main and browser title"
+  },
+  {
+    "date": "2026-09-28",
+    "macrostructure": "App workbench",
+    "theme": "custom",
+    "theme_axes": "dark product / bold sans / vermilion",
+    "enrichment": "real product screenshots",
+    "brief": "Select and install Git-published OpenTofu OSS with the chosen app's use UI as the focal point"
+  }
+]
