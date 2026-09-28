@@ -28,7 +28,10 @@ import {
   validateRequiredProviderBindingIdentities,
 } from "../connections/mod.ts";
 import type { RunCredentials } from "./mod.ts";
-import type { RunCredentialBroker } from "./run_credential_broker.ts";
+import type {
+  PlanCredentialBrokerTimings,
+  RunCredentialBroker,
+} from "./run_credential_broker.ts";
 import {
   OpenTofuControllerError,
   PROVIDER_CONNECTION_CHANGED_REASON,
@@ -45,7 +48,12 @@ function finiteElapsedMs(startedAt: number, finishedAt: number): number {
 type RunCredentialMintPort = Pick<
   RunCredentialBroker,
   "mintRunCredentials" | "mintReleaseCommandCredentials"
-> & Partial<Pick<RunCredentialBroker, "renewRunCredential">>;
+> & Partial<
+  Pick<
+    RunCredentialBroker,
+    "mintPlanRunCredentialsWithTimings" | "renewRunCredential"
+  >
+>;
 
 export interface RunEnvResolverDependencies {
   readonly credentials: RunCredentialMintPort;
@@ -80,7 +88,7 @@ export interface ResolvedRunEnvironment {
   readonly planTimings?: {
     readonly providerBindingResolutionMs: number;
     readonly credentialMintMs: number;
-  };
+  } & PlanCredentialBrokerTimings;
 }
 
 export class RunEnvironmentResolutionError extends OpenTofuControllerError {
@@ -161,21 +169,40 @@ export class RunEnvResolver {
       );
     }
     const credentialMintStartedAt = planOnly ? performance.now() : undefined;
-    const credentials =
-      input.mintCredentials === false
-        ? undefined
-        : input.credentialContext === "release_command"
-          ? await this.#credentials.mintReleaseCommandCredentials(
-              input.planRun,
-              releaseCommandCredentialPhase(input.phase),
-              input.auditRunId,
-              input.credentialRunId ?? input.auditRunId,
-            )
-          : await this.#credentials.mintRunCredentials(
-              input.planRun,
-              input.phase,
-              input.auditRunId,
-            );
+    let brokerTimings: PlanCredentialBrokerTimings = {
+      brokerBindingResolutionMs: 0,
+      brokerPrePolicyMs: 0,
+      brokerRuntimeInputsMs: 0,
+      vaultMintMs: 0,
+      credentialValidationMs: 0,
+      postMintPolicyAuditMs: 0,
+    };
+    let credentials: RunCredentials | undefined;
+    if (input.mintCredentials !== false) {
+      if (
+        planOnly &&
+        input.credentialContext !== "release_command" &&
+        this.#credentials.mintPlanRunCredentialsWithTimings
+      ) {
+        const result = await this.#credentials
+          .mintPlanRunCredentialsWithTimings(input.planRun, input.auditRunId);
+        credentials = result.credentials;
+        brokerTimings = result.timings;
+      } else if (input.credentialContext === "release_command") {
+        credentials = await this.#credentials.mintReleaseCommandCredentials(
+          input.planRun,
+          releaseCommandCredentialPhase(input.phase),
+          input.auditRunId,
+          input.credentialRunId ?? input.auditRunId,
+        );
+      } else {
+        credentials = await this.#credentials.mintRunCredentials(
+          input.planRun,
+          input.phase,
+          input.auditRunId,
+        );
+      }
+    }
     const credentialMintMs = planOnly
       ? finiteElapsedMs(credentialMintStartedAt!, performance.now())
       : undefined;
@@ -186,9 +213,10 @@ export class RunEnvResolver {
       credentials,
       planOnly
         ? {
-            providerBindingResolutionMs: providerBindingResolutionMs!,
-            credentialMintMs: credentialMintMs!,
-          }
+          providerBindingResolutionMs: providerBindingResolutionMs!,
+          credentialMintMs: credentialMintMs!,
+          ...brokerTimings,
+        }
         : undefined,
     );
   }

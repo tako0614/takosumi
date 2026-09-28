@@ -3,6 +3,7 @@ import type { PlanRun } from "../../../../contract/internal-deploy-control-api.t
 import type { ProviderConnection } from "../../../../contract/connections.ts";
 import type { Workspace } from "../../../../contract/workspaces.ts";
 import { RunCredentialBroker } from "../../../../core/domains/deploy-control/run_credential_broker.ts";
+import { RunEnvResolver } from "../../../../core/domains/deploy-control/run_env_resolver.ts";
 import type { ResolvedCapsuleProviderBinding } from "../../../../core/domains/connections/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import {
@@ -184,6 +185,59 @@ test("a credential-free provider set mints nothing at all", async () => {
   expect(credentials?.manifest.bindings).toEqual([]);
 });
 
+test("Plan broker timing projection is numeric and excludes credential identities and values", async () => {
+  const { broker } = brokerFor([CLOUDFLARE]);
+  const resolver = new RunEnvResolver({
+    credentials: broker,
+    resolveRunProviderBindings: async () => [CLOUDFLARE],
+  });
+  const resolved = await resolver.resolveRunEnvironment({
+    planRun: planRun([CLOUDFLARE.provider]),
+    phase: "plan",
+    auditRunId: "private-plan-identity",
+  });
+  const timings = resolved.planTimings;
+
+  expect(Object.keys(timings ?? {}).sort()).toEqual([
+    "brokerBindingResolutionMs",
+    "brokerPrePolicyMs",
+    "brokerRuntimeInputsMs",
+    "credentialMintMs",
+    "credentialValidationMs",
+    "postMintPolicyAuditMs",
+    "providerBindingResolutionMs",
+    "vaultMintMs",
+  ]);
+  expect(Object.values(timings ?? {}).every(
+    (value) => typeof value === "number" && Number.isFinite(value) && value >= 0,
+  )).toBe(true);
+  const serializedTimingDiagnostic = JSON.stringify(timings);
+  for (const value of [
+    "minted:conn_cloudflare",
+    "conn_cloudflare",
+    CLOUDFLARE.provider,
+    "workspace_1",
+    "private-plan-identity",
+  ]) {
+    expect(serializedTimingDiagnostic).not.toContain(value);
+  }
+  expect(resolved.credentials?.env.CLOUDFLARE_API_TOKEN).toBe(
+    "minted:conn_cloudflare",
+  );
+});
+
+test("Plan broker timing variant preserves the no-provider fast path", async () => {
+  const { broker, mintedEntries } = brokerFor([CLOUDFLARE]);
+  const result = await broker.mintPlanRunCredentialsWithTimings(
+    planRun([]),
+    "private-plan-identity",
+  );
+
+  expect(result.credentials).toBeUndefined();
+  expect(mintedEntries).toEqual([]);
+  expect(Object.values(result.timings)).toEqual([0, 0, 0, 0, 0, 0]);
+});
+
 test("one renewable binding is re-minted under the same plan without broadening delivery", async () => {
   const renewable = {
     ...CLOUDFLARE,
@@ -278,6 +332,12 @@ test("broker rejects a wrong recipe before vault mint even when binding bypasses
       planRun([CLOUDFLARE.provider]),
       "plan",
       "run_wrong_recipe",
+    ),
+  ).rejects.toThrow(/credential_policy_failed.*cloudflare:oauth/);
+  await expect(
+    broker.mintPlanRunCredentialsWithTimings(
+      planRun([CLOUDFLARE.provider]),
+      "run_wrong_recipe_timed",
     ),
   ).rejects.toThrow(/credential_policy_failed.*cloudflare:oauth/);
   expect(mintCalled).toBe(false);

@@ -36,6 +36,18 @@ finite, non-negative millisecond durations:
   binding re-resolution and policy checks, Vault validation and mint, any
   platform credential exchange, and post-mint evidence/policy/audit work. It is
   not a measurement of Hosted exchange alone.
+- `brokerBindingResolutionMs`: the broker's second, run-scoped Provider Binding
+  resolution and the apply/destroy digest fence when applicable. It is separate
+  from the initial Plan binding resolution above.
+- `brokerPrePolicyMs`: the broker's pre-mint policy lookup and connection-policy
+  evaluation.
+- `brokerRuntimeInputsMs`: existing runtime-input descriptor and materialization
+  work in the broker; no extra materializer call is made for timing.
+- `vaultMintMs`: the existing Vault provider-binding mint call only.
+- `credentialValidationMs`: conversion of the returned mint bundle and
+  validation of its evidence against the resolved bindings and values.
+- `postMintPolicyAuditMs`: the post-mint policy re-read/assertion and existing
+  credential-mint audit writes.
 - `dispatchPreparationMs`: Core execution dispatch, policy reads, and runner
   selection before the renewal guard starts.
 - `renewalOutsideRunnerMs`: elapsed time inside the renewal guard but outside
@@ -46,7 +58,9 @@ finite, non-negative millisecond durations:
 
 The five top-level Core intervals from `claimMs` through `runnerPlanMs` are
 sequential. `providerBindingResolutionMs` and `credentialMintMs` subdivide
-`resolveRunEnvironmentMs`; do not add them to the outer value. The top-level
+`resolveRunEnvironmentMs`; the six `broker*` / Vault / validation / post-mint
+fields further subdivide `credentialMintMs`. Do not add nested values to their
+outer values. The top-level
 intervals approximate the measured claim-to-runner-return portion of the Plan;
 adding `preClaimPreparationMs` approximates consumer-entry-to-runner-return.
 Neither sum is a measure of delivery delay. In particular, a gap from Run

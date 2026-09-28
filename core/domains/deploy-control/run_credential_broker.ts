@@ -111,6 +111,41 @@ export interface RunCredentialBrokerDependencies {
   readonly runtimeInputMaterializer?: RuntimeInputMaterializer;
 }
 
+/** Numeric-only, invocation-local Plan broker timings for diagnostics. */
+export interface PlanCredentialBrokerTimings {
+  readonly brokerBindingResolutionMs: number;
+  readonly brokerPrePolicyMs: number;
+  readonly brokerRuntimeInputsMs: number;
+  readonly vaultMintMs: number;
+  readonly credentialValidationMs: number;
+  readonly postMintPolicyAuditMs: number;
+}
+
+export interface PlanCredentialBrokerResult {
+  readonly credentials: RunCredentials | undefined;
+  readonly timings: PlanCredentialBrokerTimings;
+}
+
+type MutablePlanCredentialBrokerTimings = {
+  -readonly [Key in keyof PlanCredentialBrokerTimings]: number;
+};
+
+function finiteElapsedMs(startedAt: number, finishedAt: number): number {
+  const elapsed = finishedAt - startedAt;
+  return Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
+}
+
+function emptyPlanCredentialBrokerTimings(): MutablePlanCredentialBrokerTimings {
+  return {
+    brokerBindingResolutionMs: 0,
+    brokerPrePolicyMs: 0,
+    brokerRuntimeInputsMs: 0,
+    vaultMintMs: 0,
+    credentialValidationMs: 0,
+    postMintPolicyAuditMs: 0,
+  };
+}
+
 /**
  * Collaborator owning the run-credential mint subsystem: the per-phase provider
  * credential mint, the post-mint mint-policy assertion, and the non-secret
@@ -150,6 +185,22 @@ export class RunCredentialBroker {
     auditRunId: string,
   ): Promise<RunCredentials | undefined> {
     return await this.#mintCredentials(planRun, phase, auditRunId);
+  }
+
+  /** Plan-only variant that returns value-free stage timings beside credentials. */
+  async mintPlanRunCredentialsWithTimings(
+    planRun: PlanRun,
+    auditRunId: string,
+  ): Promise<PlanCredentialBrokerResult> {
+    const timings = emptyPlanCredentialBrokerTimings();
+    const credentials = await this.#mintCredentials(
+      planRun,
+      "plan",
+      auditRunId,
+      auditRunId,
+      { planTimings: timings },
+    );
+    return { credentials, timings };
   }
 
   /** Re-mint only one plan-pinned rotating credential; no runtime inputs. */
@@ -200,6 +251,7 @@ export class RunCredentialBroker {
       readonly releaseCommand?: boolean;
       readonly onlyConnectionId?: string;
       readonly skipRuntimeInputs?: boolean;
+      readonly planTimings?: MutablePlanCredentialBrokerTimings;
     } = {},
   ): Promise<RunCredentials | undefined> {
     if (planRun.requiredProviders.length === 0) {
@@ -215,6 +267,9 @@ export class RunCredentialBroker {
       }
       // Resolve the Capsule's Provider Bindings once. The same resolution feeds
       // rootgen's non-secret provider configuration and run-scoped recipe mint.
+      const bindingResolutionStartedAt = options.planTimings
+        ? performance.now()
+        : undefined;
       const resolved = await this.#resolveRunProviderBindings(planRun);
       if (!resolved) {
         throw new OpenTofuControllerError(
@@ -244,6 +299,12 @@ export class RunCredentialBroker {
           );
         }
       }
+      if (options.planTimings) {
+        options.planTimings.brokerBindingResolutionMs = finiteElapsedMs(
+          bindingResolutionStartedAt!,
+          performance.now(),
+        );
+      }
       // The same resolved entries that produced rootgen provider blocks select
       // the Credential Recipes materialized for the runner dispatch.
       // Every recipe uses the same provider-neutral env/file path. Rootgen may
@@ -269,10 +330,19 @@ export class RunCredentialBroker {
           { reason: PROVIDER_CONNECTION_CHANGED_REASON },
         );
       }
+      const prePolicyStartedAt = options.planTimings
+        ? performance.now()
+        : undefined;
       const policy = await this.#policyForPlanRun(planRun);
       const connectionPolicyReasons = mintable.flatMap((entry) =>
         evaluateProviderConnectionCredentialPolicy(entry.connection, policy),
       );
+      if (options.planTimings) {
+        options.planTimings.brokerPrePolicyMs = finiteElapsedMs(
+          prePolicyStartedAt!,
+          performance.now(),
+        );
+      }
       if (connectionPolicyReasons.length > 0) {
         throw new OpenTofuControllerError(
           "failed_precondition",
@@ -296,6 +366,9 @@ export class RunCredentialBroker {
       // Run-scoped sensitive provider inputs travel on this same dispatch-only
       // bundle. They are minted here, and only here, because this is the one
       // channel that is never persisted and never logged.
+      const runtimeInputsStartedAt = options.planTimings
+        ? performance.now()
+        : undefined;
       const runtimeInputs = options.skipRuntimeInputs
         ? undefined
         : await this.#mintRuntimeInputs(
@@ -304,8 +377,17 @@ export class RunCredentialBroker {
             mintable,
             options.releaseCommand === true,
           );
+      if (options.planTimings) {
+        options.planTimings.brokerRuntimeInputsMs = finiteElapsedMs(
+          runtimeInputsStartedAt!,
+          performance.now(),
+        );
+      }
       const bundle = new CredentialBundle({});
       if (providerEntries.length === 0) {
+        const postMintPolicyAuditStartedAt = options.planTimings
+          ? performance.now()
+          : undefined;
         await this.#recordProviderCredentialMintEvents(
           planRun,
           mintable,
@@ -321,6 +403,12 @@ export class RunCredentialBroker {
           policy,
           mintable.map((entry) => entry.connection),
         );
+        if (options.planTimings) {
+          options.planTimings.postMintPolicyAuditMs = finiteElapsedMs(
+            postMintPolicyAuditStartedAt!,
+            performance.now(),
+          );
+        }
         return {
           env: { ...bundle.env },
           manifest: credentialManifest(mintable),
@@ -328,6 +416,9 @@ export class RunCredentialBroker {
         };
       }
       const capsuleId = planRun.capsuleContext?.capsuleId ?? planRun.capsuleId;
+      const vaultMintStartedAt = options.planTimings
+        ? performance.now()
+        : undefined;
       const recipeBundle = await vault!.mintForCapsuleProviderBindings(
         planRun.workspaceId,
         providerEntries,
@@ -337,6 +428,15 @@ export class RunCredentialBroker {
           ...(capsuleId ? { capsuleId } : {}),
         },
       );
+      if (options.planTimings) {
+        options.planTimings.vaultMintMs = finiteElapsedMs(
+          vaultMintStartedAt!,
+          performance.now(),
+        );
+      }
+      const validationStartedAt = options.planTimings
+        ? performance.now()
+        : undefined;
       const recipeResponse = recipeBundle.toMintResponse();
       // Treat a Vault implementation as an untrusted persistence boundary:
       // validate every evidence row against the exact resolved Connection and
@@ -351,10 +451,19 @@ export class RunCredentialBroker {
         mintable,
         recipeResponse,
       );
+      if (options.planTimings) {
+        options.planTimings.credentialValidationMs = finiteElapsedMs(
+          validationStartedAt!,
+          performance.now(),
+        );
+      }
       // Vault mint is an external persistence/issuance boundary. Re-read the
       // layered Workspace + InstallConfig policy after it returns so a policy
       // change during issuance cannot turn into credentials handed to the
       // runner under the stale pre-mint snapshot.
+      const postMintPolicyAuditStartedAt = options.planTimings
+        ? performance.now()
+        : undefined;
       const postMintPolicy = await this.#policyForPlanRun(planRun);
       await this.#assertProviderCredentialPolicy(
         planRun,
@@ -371,6 +480,12 @@ export class RunCredentialBroker {
         auditRunId,
         evidence,
       );
+      if (options.planTimings) {
+        options.planTimings.postMintPolicyAuditMs = finiteElapsedMs(
+          postMintPolicyAuditStartedAt!,
+          performance.now(),
+        );
+      }
       const env = { ...bundle.env, ...recipeResponse.env };
       const manifest = credentialManifest(mintable, recipeResponse.files);
       const renewable = options.releaseCommand

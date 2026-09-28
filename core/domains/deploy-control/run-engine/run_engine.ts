@@ -1406,6 +1406,12 @@ interface CorePlanElapsedTimings {
   readonly resolveRunEnvironmentMs: number;
   readonly providerBindingResolutionMs: number;
   readonly credentialMintMs: number;
+  readonly brokerBindingResolutionMs: number;
+  readonly brokerPrePolicyMs: number;
+  readonly brokerRuntimeInputsMs: number;
+  readonly vaultMintMs: number;
+  readonly credentialValidationMs: number;
+  readonly postMintPolicyAuditMs: number;
   readonly dispatchPreparationMs: number;
   readonly renewalOutsideRunnerMs: number;
   readonly runnerPlanMs: number;
@@ -5367,6 +5373,17 @@ export class RunEngine {
           providerBindingResolutionMs:
             runEnvironment.planTimings?.providerBindingResolutionMs ?? 0,
           credentialMintMs: runEnvironment.planTimings?.credentialMintMs ?? 0,
+          brokerBindingResolutionMs:
+            runEnvironment.planTimings?.brokerBindingResolutionMs ?? 0,
+          brokerPrePolicyMs:
+            runEnvironment.planTimings?.brokerPrePolicyMs ?? 0,
+          brokerRuntimeInputsMs:
+            runEnvironment.planTimings?.brokerRuntimeInputsMs ?? 0,
+          vaultMintMs: runEnvironment.planTimings?.vaultMintMs ?? 0,
+          credentialValidationMs:
+            runEnvironment.planTimings?.credentialValidationMs ?? 0,
+          postMintPolicyAuditMs:
+            runEnvironment.planTimings?.postMintPolicyAuditMs ?? 0,
         },
       );
     } catch (error) {
@@ -7978,6 +7995,12 @@ export class RunEngine {
       readonly resolveRunEnvironmentMs: number;
       readonly providerBindingResolutionMs: number;
       readonly credentialMintMs: number;
+      readonly brokerBindingResolutionMs: number;
+      readonly brokerPrePolicyMs: number;
+      readonly brokerRuntimeInputsMs: number;
+      readonly vaultMintMs: number;
+      readonly credentialValidationMs: number;
+      readonly postMintPolicyAuditMs: number;
     },
   ): Promise<PlanRun> {
     try {
@@ -8095,6 +8118,13 @@ export class RunEngine {
         providerBindingResolutionMs:
           preDispatchTimings.providerBindingResolutionMs,
         credentialMintMs: preDispatchTimings.credentialMintMs,
+        brokerBindingResolutionMs:
+          preDispatchTimings.brokerBindingResolutionMs,
+        brokerPrePolicyMs: preDispatchTimings.brokerPrePolicyMs,
+        brokerRuntimeInputsMs: preDispatchTimings.brokerRuntimeInputsMs,
+        vaultMintMs: preDispatchTimings.vaultMintMs,
+        credentialValidationMs: preDispatchTimings.credentialValidationMs,
+        postMintPolicyAuditMs: preDispatchTimings.postMintPolicyAuditMs,
         dispatchPreparationMs,
         renewalOutsideRunnerMs: Math.max(0, withRunRenewalMs - runnerPlanMs),
         runnerPlanMs,

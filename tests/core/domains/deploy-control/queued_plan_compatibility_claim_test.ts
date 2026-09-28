@@ -558,14 +558,20 @@ test("successful Plan Core timing diagnostic partitions delayed preclaim, claim,
     });
     const detail = JSON.parse(timing?.detail ?? "null") as Record<string, number>;
     expect(Object.keys(detail).sort()).toEqual([
+      "brokerBindingResolutionMs",
+      "brokerPrePolicyMs",
+      "brokerRuntimeInputsMs",
       "claimMs",
       "credentialMintMs",
+      "credentialValidationMs",
       "dispatchPreparationMs",
+      "postMintPolicyAuditMs",
       "preClaimPreparationMs",
       "providerBindingResolutionMs",
       "renewalOutsideRunnerMs",
       "resolveRunEnvironmentMs",
       "runnerPlanMs",
+      "vaultMintMs",
     ]);
     expect(Object.values(detail).every(
       (value) => typeof value === "number" && Number.isFinite(value) && value >= 0,
@@ -575,6 +581,12 @@ test("successful Plan Core timing diagnostic partitions delayed preclaim, claim,
     expect(detail.resolveRunEnvironmentMs).toBeGreaterThanOrEqual(30);
     expect(detail.providerBindingResolutionMs).toBeGreaterThanOrEqual(0);
     expect(detail.credentialMintMs).toBeGreaterThanOrEqual(0);
+    expect(detail.brokerBindingResolutionMs).toBeGreaterThanOrEqual(0);
+    expect(detail.brokerPrePolicyMs).toBeGreaterThanOrEqual(0);
+    expect(detail.brokerRuntimeInputsMs).toBeGreaterThanOrEqual(0);
+    expect(detail.vaultMintMs).toBeGreaterThanOrEqual(0);
+    expect(detail.credentialValidationMs).toBeGreaterThanOrEqual(0);
+    expect(detail.postMintPolicyAuditMs).toBeGreaterThanOrEqual(0);
     expect(detail.dispatchPreparationMs).toBeGreaterThanOrEqual(40);
     expect(detail.renewalOutsideRunnerMs).toBeGreaterThanOrEqual(40);
     expect(detail.runnerPlanMs).toBeGreaterThanOrEqual(50);

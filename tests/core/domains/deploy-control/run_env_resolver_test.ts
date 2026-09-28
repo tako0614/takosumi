@@ -224,6 +224,12 @@ test("RunEnvResolver reports numeric timing splits only for Plan phases", async 
   expect(plan.planTimings).toEqual({
     providerBindingResolutionMs: expect.any(Number),
     credentialMintMs: expect.any(Number),
+    brokerBindingResolutionMs: 0,
+    brokerPrePolicyMs: 0,
+    brokerRuntimeInputsMs: 0,
+    vaultMintMs: 0,
+    credentialValidationMs: 0,
+    postMintPolicyAuditMs: 0,
   });
   expect(Object.values(plan.planTimings ?? {}).every(
     (value) => Number.isFinite(value) && value >= 0,
