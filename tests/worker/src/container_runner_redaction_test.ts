@@ -10,6 +10,30 @@ import { RUNNER_MUTATION_INDETERMINATE_CODE } from "../../../worker/src/runner_p
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+// Actual RunnerPhaseTimer.measure labels across plan_apply.ts and source_sync.ts.
+const RUNNER_PHASE_TIMING_PHASES = [
+  "provider_scan_policy",
+  "provider_lockfile_restore",
+  "source_build",
+  "tofu_init",
+  "tofu_plan",
+  "tofu_state_reconcile",
+  "tofu_plan_json",
+  "tofu_apply",
+  "tofu_output",
+  "source_host_policy",
+  "source_git_credentials",
+  "source_ref_resolve",
+  "source_clone",
+  "source_repository_metadata",
+  "source_repository_manifest",
+  "source_subtree",
+  "source_repository_modules",
+  "source_snapshot_reuse",
+  "source_archive",
+  "source_archive_read",
+  "source_archive_digest",
+] as const;
 
 // The remote/container adapter does not execute this closure, but Restore's
 // public runner boundary requires Core's source authority control. Keep the
@@ -799,13 +823,15 @@ test("container runner returns a typed failed apply with persisted partial state
         },
         state: { digest: stateDigest },
         phaseTimings: [
-          {
-            phase: "tofu_apply",
+          ...RUNNER_PHASE_TIMING_PHASES.map((phase) => ({
+            phase,
             startedAt: "2026-09-27T10:00:00.000Z",
             finishedAt: "2026-09-27T10:06:24.000Z",
             durationMs: 384_000,
-            secret: "must-not-survive",
-          },
+            ...(phase === "tofu_apply"
+              ? { secret: "must-not-survive" }
+              : {}),
+          })),
           {
             phase: "invalid phase",
             startedAt: "2026-09-27T10:00:00.000Z",
@@ -817,6 +843,19 @@ test("container runner returns a typed failed apply with persisted partial state
             startedAt: "not-a-date",
             finishedAt: "2026-09-27T10:06:24.000Z",
             durationMs: 384_000,
+          },
+          {
+            phase: "tofu_apply",
+            startedAt:
+              "Sun, 27 Sep 2026 10:00:00 GMT (password=provider-secret)",
+            finishedAt: "2026-09-27T10:06:24.000Z",
+            durationMs: 384_000,
+          },
+          {
+            phase: "passwordsecretabc",
+            startedAt: "2026-09-27T10:00:00.000Z",
+            finishedAt: "2026-09-27T10:06:24.000Z",
+            durationMs: 1,
           },
         ],
         outputs: {
@@ -868,10 +907,14 @@ test("container runner returns a typed failed apply with persisted partial state
     {
       severity: "info",
       message: "runner phase timings recorded",
-      detail: "tofu_apply=384000ms",
+      detail: RUNNER_PHASE_TIMING_PHASES.map(
+        (phase) => `${phase}=384000ms`,
+      ).join(", "),
     },
   ]);
   expect(JSON.stringify(result)).not.toContain("must-not-survive");
+  expect(JSON.stringify(result.diagnostics)).not.toContain("provider-secret");
+  expect(JSON.stringify(result.diagnostics)).not.toContain("passwordsecretabc");
 });
 
 test("container runner returns a typed failed destroy with persisted partial state", async () => {
