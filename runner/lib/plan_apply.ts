@@ -43,6 +43,7 @@ import {
   assertDirectory,
   assertRealPathInsideSourceRoot,
   resolveModulePath,
+  pathExists,
 } from "./util.ts";
 import { redactRunnerOutput } from "./redaction.ts";
 import { RunnerPhaseTimer, withPhaseTimings } from "./timing.ts";
@@ -410,6 +411,11 @@ export async function initPlanAndBuildResponse(
   );
   const commandContext =
     strictMirrorInit?.commandContext ?? options.commandContext;
+  const tfDataDir = commandContext.env.TF_DATA_DIR?.trim() || ".terraform";
+  const [priorStatePresent, terraformDataDirPresent] = await Promise.all([
+    pathExists(join(moduleDir, "terraform.tfstate")),
+    pathExists(resolve(moduleDir, tfDataDir)),
+  ]);
   const init = await timer.measure("tofu_init", () =>
     withProviderPluginCacheInitLock(strictMirrorInit, () =>
       runCommand(["tofu", "init", "-input=false", "-no-color"], {
@@ -417,6 +423,9 @@ export async function initPlanAndBuildResponse(
         context: commandContext,
         isolateProcessGroup: true,
       }),
+      options.providerScan,
+      priorStatePresent,
+      terraformDataDirPresent,
     ),
   );
   if (init.exitCode !== 0) {
@@ -763,6 +772,11 @@ export async function runReviewedPlanApply(
     const applyContext =
       strictMirrorInit?.commandContext ?? preparedCredentials.context;
 
+    const tfDataDir = applyContext.env.TF_DATA_DIR?.trim() || ".terraform";
+    const [priorStatePresent, terraformDataDirPresent] = await Promise.all([
+      pathExists(join(moduleDir, "terraform.tfstate")),
+      pathExists(resolve(moduleDir, tfDataDir)),
+    ]);
     const init = await timer.measure("tofu_init", () =>
       withProviderPluginCacheInitLock(strictMirrorInit, () =>
         runCommand(
@@ -779,6 +793,9 @@ export async function runReviewedPlanApply(
             isolateProcessGroup: true,
           },
         ),
+        providerScan,
+        priorStatePresent,
+        terraformDataDirPresent,
       ),
     );
     if (init.exitCode !== 0) {
@@ -1117,12 +1134,20 @@ export async function runCompatibilityCheck(
     undefined,
   );
   const commandContext = providerInit?.commandContext ?? context;
+  const tfDataDir = commandContext.env.TF_DATA_DIR?.trim() || ".terraform";
+  const [priorStatePresent, terraformDataDirPresent] = await Promise.all([
+    pathExists(join(moduleRoot, "terraform.tfstate")),
+    pathExists(resolve(moduleRoot, tfDataDir)),
+  ]);
   const init = await timer.measure("tofu_init", () =>
     withProviderPluginCacheInitLock(providerInit, () =>
       runCommand(["tofu", "init", "-input=false", "-no-color"], {
         cwd: moduleRoot,
         context: commandContext,
       }),
+      preInitProviderScan,
+      priorStatePresent,
+      terraformDataDirPresent,
     ),
   );
   if (init.exitCode !== 0) {

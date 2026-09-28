@@ -620,7 +620,23 @@ export function providerPluginCacheForWorkspace(workspace: RunWorkspace): {
 export async function withProviderPluginCacheInitLock<T>(
   init: ProviderMirrorInit | undefined,
   run: () => Promise<T>,
+  providerScan: TerraformTreeProviderScan | undefined,
+  priorStatePresent: boolean | undefined,
+  terraformDataDirPresent: boolean | undefined,
 ): Promise<T> {
+  // OpenTofu may need providers referenced only by prior state, including a
+  // state file selected by a local backend. Skip serialization only for a
+  // provider-free root with no state or cached backend metadata. The raw token
+  // check intentionally over-locks comments/strings to reject uncertain root
+  // configuration (including comments between backend and its label).
+  const safeProviderFreeRoot =
+    providerScan !== undefined &&
+    generatedRootScanHasNoProviderUsage(providerScan) &&
+    normalizedProviderList(providerScan.providers).length === 0 &&
+    !providerScan.files.some((file) => /\bterraform\b/u.test(file.text)) &&
+    priorStatePresent === false &&
+    terraformDataDirPresent === false;
+  if (safeProviderFreeRoot) return await run();
   if (!init?.sharedProviderCache || !init.providerCacheDir) return await run();
   const key = init.providerCacheDir;
   const previous = providerCacheInitLocks.get(key) ?? Promise.resolve();

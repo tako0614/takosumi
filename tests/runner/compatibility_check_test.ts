@@ -18,6 +18,8 @@ import {
   providerInstallationEvidence,
   providerPluginCacheForWorkspace,
   providersFromPlanJson,
+  generatedRootScanHasNoProviderUsage,
+  requiredProviderSourcesFromTerraformTree,
   withProviderPluginCacheInitLock,
 } from "../../runner/lib/providers.ts";
 import type { RunWorkspace } from "../../runner/lib/types.ts";
@@ -1059,43 +1061,275 @@ test("provider plugin cache can be shared by runner container env", async () => 
   }
 });
 
-test("shared provider plugin cache serializes tofu init per cache path", async () => {
+test("shared provider cache locks only when provider initialization may write it", async () => {
   const root = await mkdtemp(join(tmpdir(), "takosumi-cache-lock-root-"));
   const sharedCache = join(root, "shared-provider-cache");
   const previousCache = Bun.env.TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR;
   try {
     Bun.env.TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR = sharedCache;
-    const init = await prepareStrictProviderMirrorInit(
-      testWorkspace(join(root, "run")),
+    const providerFreeWorkspace = testWorkspace(join(root, "run"));
+    await mkdir(providerFreeWorkspace.moduleDir, { recursive: true });
+    await writeFile(
+      join(providerFreeWorkspace.moduleDir, "main.tf"),
+      'resource "terraform_data" "local" { input = "only builtin" }\n',
+    );
+    const providerFreeScan = await requiredProviderSourcesFromTerraformTree(
+      providerFreeWorkspace.moduleDir,
+    );
+    expect(providerFreeScan.complete).toBe(true);
+    expect(providerFreeScan.providers).toEqual([]);
+
+    const providerFreeInit = await prepareStrictProviderMirrorInit(
+      providerFreeWorkspace,
       { env: {} },
-      ["registry.opentofu.org/cloudflare/cloudflare"],
+      providerFreeScan.providers,
+      undefined,
+    );
+    const localBackendWorkspace = testWorkspace(join(root, "backend-run"));
+    await mkdir(localBackendWorkspace.moduleDir, { recursive: true });
+    await writeFile(
+      join(localBackendWorkspace.moduleDir, "main.tf"),
+      [
+        'terraform { backend /* inline comment */ "local" { path = "old.tfstate" } }',
+        'output "ok" { value = true }',
+        "",
+      ].join("\n"),
+    );
+    const localBackendScan = await requiredProviderSourcesFromTerraformTree(
+      localBackendWorkspace.moduleDir,
+    );
+    expect(localBackendScan.complete).toBe(true);
+    expect(localBackendScan.providers).toEqual([]);
+    expect(generatedRootScanHasNoProviderUsage(localBackendScan)).toBe(true);
+    await writeFile(
+      join(localBackendWorkspace.moduleDir, "old.tfstate"),
+      JSON.stringify({
+        version: 4,
+        terraform_version: "1.12.5",
+        serial: 1,
+        lineage: "provider-cache-lock-backend-state-only",
+        resources: [{
+          mode: "managed",
+          type: "null_resource",
+          name: "previous",
+          provider: "provider[\"registry.opentofu.org/hashicorp/null\"]",
+          instances: [],
+        }],
+      }),
+    );
+    await mkdir(join(localBackendWorkspace.moduleDir, ".terraform"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(localBackendWorkspace.moduleDir, ".terraform", "terraform.tfstate"),
+      JSON.stringify({
+        version: 3,
+        backend: { type: "local", config: { path: "old.tfstate" } },
+      }),
+    );
+    expect(
+      await Bun.file(
+        join(localBackendWorkspace.moduleDir, "terraform.tfstate"),
+      ).exists(),
+    ).toBe(false);
+    expect(
+      await Bun.file(
+        join(localBackendWorkspace.moduleDir, ".terraform", "terraform.tfstate"),
+      ).exists(),
+    ).toBe(true);
+    const localBackendInit = await prepareStrictProviderMirrorInit(
+      localBackendWorkspace,
+      { env: {} },
+      localBackendScan.providers,
+      undefined,
+    );
+    const providerWorkspace = testWorkspace(join(root, "provider-run"));
+    await mkdir(providerWorkspace.moduleDir, { recursive: true });
+    await writeFile(
+      join(providerWorkspace.moduleDir, "main.tf"),
+      [
+        "terraform {",
+        "  required_providers {",
+        "    cloudflare = { source = \"cloudflare/cloudflare\" }",
+        "  }",
+        "}",
+        "resource \"cloudflare_zone\" \"example\" {}",
+        "",
+      ].join("\n"),
+    );
+    const providerScan = await requiredProviderSourcesFromTerraformTree(
+      providerWorkspace.moduleDir,
+    );
+    expect(providerScan.complete).toBe(true);
+    expect(providerScan.providers).toEqual([
+      "registry.opentofu.org/cloudflare/cloudflare",
+    ]);
+    const providerInit = await prepareStrictProviderMirrorInit(
+      providerWorkspace,
+      { env: {} },
+      providerScan.providers,
       { requireMirror: false },
     );
-    expect(init?.sharedProviderCache).toBe(true);
-    const events: string[] = [];
-    let releaseFirst!: () => void;
-    let enteredFirst!: () => void;
-    const firstEntered = new Promise<void>((resolve) => {
-      enteredFirst = resolve;
-    });
-    const first = withProviderPluginCacheInitLock(init, async () => {
-      events.push("first:start");
-      enteredFirst();
-      await new Promise<void>((resolve) => {
-        releaseFirst = resolve;
-      });
-      events.push("first:end");
-    });
-    await firstEntered;
-    const second = withProviderPluginCacheInitLock(init, async () => {
-      events.push("second:start");
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(events).toEqual(["first:start"]);
+    const incompleteWorkspace = testWorkspace(join(root, "incomplete-run"));
+    await mkdir(incompleteWorkspace.moduleDir, { recursive: true });
+    await writeFile(
+      join(incompleteWorkspace.moduleDir, "main.tf"),
+      'module "remote" { source = "example/acme/remote/cloud" }\n',
+    );
+    const incompleteScan = await requiredProviderSourcesFromTerraformTree(
+      incompleteWorkspace.moduleDir,
+    );
+    expect(incompleteScan.complete).toBe(false);
+    expect(incompleteScan.diagnostics.map((diagnostic) => diagnostic.code))
+      .toContain("remote_module_source_unresolved");
+    const incompleteInit = await prepareStrictProviderMirrorInit(
+      incompleteWorkspace,
+      { env: {} },
+      incompleteScan.providers,
+      undefined,
+    );
+    expect(providerFreeInit?.sharedProviderCache).toBe(true);
+    expect(localBackendInit?.sharedProviderCache).toBe(true);
+    expect(providerInit?.sharedProviderCache).toBe(true);
+    expect(incompleteInit?.sharedProviderCache).toBe(true);
 
-    releaseFirst();
-    await Promise.all([first, second]);
-    expect(events).toEqual(["first:start", "first:end", "second:start"]);
+    const observeConcurrency = async (
+      init: typeof providerFreeInit,
+      scan: typeof providerFreeScan,
+      priorStatePresent: boolean | undefined,
+      terraformDataDirPresent: boolean | undefined,
+      expectedBeforeRelease: readonly string[],
+    ) => {
+      const events: string[] = [];
+      let releaseFirst!: () => void;
+      let enteredFirst!: () => void;
+      const firstEntered = new Promise<void>((resolve) => {
+        enteredFirst = resolve;
+      });
+      const first = withProviderPluginCacheInitLock(init, async () => {
+        events.push("first:start");
+        enteredFirst();
+        await new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+        events.push("first:end");
+      }, scan, priorStatePresent, terraformDataDirPresent);
+      await firstEntered;
+      const second = withProviderPluginCacheInitLock(
+        init,
+        async () => {
+          events.push("second:start");
+        },
+        scan,
+        priorStatePresent,
+        terraformDataDirPresent,
+      );
+      await Promise.resolve();
+      expect(events).toEqual(expectedBeforeRelease);
+
+      releaseFirst();
+      await Promise.all([first, second]);
+      return events;
+    };
+
+    expect(
+      await observeConcurrency(
+        providerFreeInit,
+        providerFreeScan,
+        false,
+        false,
+        ["first:start", "second:start"],
+      ),
+    ).toEqual(["first:start", "second:start", "first:end"]);
+    await mkdir(join(providerFreeWorkspace.moduleDir, ".terraform"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(providerFreeWorkspace.moduleDir, ".terraform", "terraform.tfstate"),
+      JSON.stringify({
+        version: 3,
+        backend: { type: "local", config: { path: "old.tfstate" } },
+      }),
+    );
+    expect(
+      await Bun.file(
+        join(providerFreeWorkspace.moduleDir, ".terraform", "terraform.tfstate"),
+      ).exists(),
+    ).toBe(true);
+    expect(
+      await observeConcurrency(
+        providerFreeInit,
+        providerFreeScan,
+        false,
+        true,
+        ["first:start"],
+      ),
+    ).toEqual(["first:start", "first:end", "second:start"]);
+    expect(
+      await observeConcurrency(
+        providerFreeInit,
+        providerFreeScan,
+        undefined,
+        false,
+        ["first:start"],
+      ),
+    ).toEqual(["first:start", "first:end", "second:start"]);
+    expect(
+      await observeConcurrency(
+        localBackendInit,
+        localBackendScan,
+        false,
+        true,
+        ["first:start"],
+      ),
+    ).toEqual(["first:start", "first:end", "second:start"]);
+    await writeFile(
+      join(providerFreeWorkspace.moduleDir, "terraform.tfstate"),
+      JSON.stringify({
+        version: 4,
+        terraform_version: "1.12.5",
+        serial: 1,
+        lineage: "provider-cache-lock-state-only",
+        resources: [{
+          mode: "managed",
+          type: "null_resource",
+          name: "previous",
+          provider: "provider[\"registry.opentofu.org/hashicorp/null\"]",
+          instances: [],
+        }],
+      }),
+    );
+    const priorStatePresent = await Bun.file(
+      join(providerFreeWorkspace.moduleDir, "terraform.tfstate"),
+    ).exists();
+    expect(priorStatePresent).toBe(true);
+    expect(
+      await observeConcurrency(
+        providerFreeInit,
+        providerFreeScan,
+        priorStatePresent,
+        true,
+        ["first:start"],
+      ),
+    ).toEqual(["first:start", "first:end", "second:start"]);
+    expect(
+      await observeConcurrency(
+        providerInit,
+        providerScan,
+        false,
+        false,
+        ["first:start"],
+      ),
+    ).toEqual(["first:start", "first:end", "second:start"]);
+    expect(
+      await observeConcurrency(
+        incompleteInit,
+        incompleteScan,
+        false,
+        false,
+        ["first:start"],
+      ),
+    ).toEqual(["first:start", "first:end", "second:start"]);
   } finally {
     if (previousCache === undefined) {
       delete Bun.env.TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR;
