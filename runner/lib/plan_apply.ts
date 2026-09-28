@@ -287,6 +287,11 @@ export async function runDirectRootPlan(
     commandContext.runtimeInputs ?? [],
     undefined,
   );
+  const successfulPlanTiming =
+    operation === "create" || operation === "update"
+      ? new RunnerPhaseTimer()
+      : undefined;
+  const finishPreparation = successfulPlanTiming?.start("runner_plan_prepare");
   const workspace = workspaceForRun(runId);
   await mkdir(workspace.root, { recursive: true });
   await ensureSourceAvailable(source, workspace.sourceRoot);
@@ -336,10 +341,12 @@ export async function runDirectRootPlan(
         ? (source.commit ??
           (await gitRevParseHead(workspace.sourceRoot, commandContext)))
         : undefined;
+    finishPreparation?.();
     return await initPlanAndBuildResponse(runId, workspace, moduleDir, {
       operation,
       ...(refreshOnly ? { refreshOnly: true } : {}),
       commandContext: preparedCredentials.context,
+      ...(successfulPlanTiming ? { successfulPlanTiming } : {}),
       requiredProviders,
       providerScan,
       variableFilePath,
@@ -359,13 +366,17 @@ export async function runDirectRootPlan(
   }
 }
 
+type PlanResponseOptionsWithSuccessfulTiming = PlanResponseOptions & {
+  readonly successfulPlanTiming?: RunnerPhaseTimer;
+};
+
 // Shared init+plan+show pipeline for generated-root lanes. `moduleDir` is the
 // tofu root, normally /work/generated-root.
 export async function initPlanAndBuildResponse(
   runId: string,
   workspace: RunWorkspace,
   moduleDir: string,
-  options: PlanResponseOptions,
+  options: PlanResponseOptionsWithSuccessfulTiming,
 ): Promise<JsonRecord> {
   const { operation } = options;
   if (options.refreshOnly && operation === "destroy") {
@@ -539,6 +550,8 @@ export async function initPlanAndBuildResponse(
     }
   }
 
+  const finishSuccessfulPlanFinalization =
+    options.successfulPlanTiming?.start("runner_plan_finalize");
   const planBytes = await readFile(workspace.planPath);
   const planDigest = await digestBytes(planBytes);
   const planJsonArtifact = planJson
@@ -561,7 +574,7 @@ export async function initPlanAndBuildResponse(
   const plannedOutputs = planJson
     ? plannedOutputsFromPlanJson(planJson, options.outputAllowlist)
     : undefined;
-  return withPhaseTimings(
+  const timedResponse = withPhaseTimings(
     {
       runId,
       action: "plan",
@@ -625,6 +638,22 @@ export async function initPlanAndBuildResponse(
     },
     timer,
   );
+  finishSuccessfulPlanFinalization?.();
+  if (!options.successfulPlanTiming) return timedResponse;
+  const phaseTimings = timedResponse.phaseTimings;
+  const successfulPlanTimings = options.successfulPlanTiming.json();
+  return {
+    ...timedResponse,
+    phaseTimings: [
+      ...successfulPlanTimings.filter(
+        (entry) => entry.phase === "runner_plan_prepare",
+      ),
+      ...(Array.isArray(phaseTimings) ? phaseTimings : []),
+      ...successfulPlanTimings.filter(
+        (entry) => entry.phase === "runner_plan_finalize",
+      ),
+    ],
+  };
 }
 
 export function mergeBuildLog(

@@ -3,7 +3,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { workspaceForRun } from "../../runner/lib/artifacts.ts";
-import { runPlan } from "../../runner/lib/plan_apply.ts";
+import { runPlan, runReviewedPlanApply } from "../../runner/lib/plan_apply.ts";
 import { generateOpenTofuChildModuleRoot } from "../../lib/rootgen/src/mod.ts";
 
 test("legacy source-less destroy operator modules require the internal drain marker and generated root", async () => {
@@ -178,7 +178,7 @@ test("restored Git SourceSnapshot modules plan directly as the OpenTofu root", a
   );
 
   try {
-    const result = await runPlan(runId, {
+    const request = {
       planRun: {
         operation: "create",
         source: {
@@ -192,12 +192,22 @@ test("restored Git SourceSnapshot modules plan directly as the OpenTofu root", a
       outputAllowlist: {
         message: { from: "message" },
       },
-    });
+    };
+    const result = await runPlan(runId, request);
 
     expect(result.status).toBe("succeeded");
     expect(result.plannedOutputs).toEqual({
       message: { sensitive: false, value: "plain-module" },
     });
+    const phaseTimings = result.phaseTimings as
+      | readonly { readonly phase: string; readonly durationMs: number }[]
+      | undefined;
+    for (const phase of ["runner_plan_prepare", "runner_plan_finalize"]) {
+      const timing = phaseTimings?.find((entry) => entry.phase === phase);
+      expect(timing).toBeDefined();
+      expect(Number.isFinite(timing?.durationMs)).toBe(true);
+      expect(timing?.durationMs).toBeGreaterThan(0);
+    }
 
     const moduleInfo = JSON.parse(
       await readFile(workspace.moduleInfoPath, "utf8"),
@@ -209,8 +219,108 @@ test("restored Git SourceSnapshot modules plan directly as the OpenTofu root", a
         await readFile(join(workspace.root, "run-inputs.tfvars.json"), "utf8"),
       ),
     ).toEqual({ message: "plain-module" });
+
+    const apply = await runReviewedPlanApply(
+      runId,
+      "apply",
+      { ...request, planArtifact: { digest: result.planDigest } },
+    );
+    expect(apply.status).toBe("succeeded");
+    expect(
+      (apply.phaseTimings as readonly { readonly phase: string }[]).some(
+        (entry) => entry.phase.startsWith("runner_plan_"),
+      ),
+    ).toBe(false);
   } finally {
     await rm(workspace.root, { recursive: true, force: true });
     await rm(workspace.depsDir, { recursive: true, force: true });
+  }
+});
+
+test("direct-root failed and destroy plans do not expose successful-plan-only timers", async () => {
+  const failedRunId = `direct-root-failed-${crypto.randomUUID()}`;
+  const failedWorkspace = workspaceForRun(failedRunId);
+  const failedModuleDir = join(failedWorkspace.sourceRoot, "infra");
+  await mkdir(failedModuleDir, { recursive: true });
+  await writeFile(
+    join(failedModuleDir, "main.tf"),
+    [
+      'variable "reject" {',
+      "  type = bool",
+      "  validation {",
+      "    condition     = var.reject",
+      '    error_message = "intentional validation failure"',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  const destroyRunId = `direct-root-destroy-${crypto.randomUUID()}`;
+  const destroyWorkspace = workspaceForRun(destroyRunId);
+  const destroyModuleDir = join(destroyWorkspace.sourceRoot, "infra");
+  await mkdir(destroyModuleDir, { recursive: true });
+  await writeFile(
+    join(destroyModuleDir, "main.tf"),
+    'output "message" {\n  value = "destroy-plan"\n}\n',
+  );
+
+  try {
+    const failed = await runPlan(failedRunId, {
+      planRun: {
+        operation: "create",
+        source: {
+          kind: "git",
+          url: "https://git.example.com/example/capsule.git",
+          commit: "0123456789abcdef0123456789abcdef01234567",
+          modulePath: "infra",
+        },
+      },
+      variables: { reject: false },
+    });
+    expect(failed.status).toBe("failed");
+    expect(
+      (failed.phaseTimings as readonly { readonly phase: string }[]).some(
+        (entry) => entry.phase.startsWith("runner_plan_"),
+      ),
+    ).toBe(false);
+
+    const destroyRequest = {
+      planRun: {
+        operation: "destroy",
+        source: {
+          kind: "git",
+          url: "https://git.example.com/example/capsule.git",
+          commit: "0123456789abcdef0123456789abcdef01234567",
+          modulePath: "infra",
+        },
+      },
+    };
+    const destroyPlan = await runPlan(destroyRunId, destroyRequest);
+    expect(destroyPlan.status).toBe("succeeded");
+    expect(
+      (destroyPlan.phaseTimings as readonly { readonly phase: string }[]).some(
+        (entry) => entry.phase.startsWith("runner_plan_"),
+      ),
+    ).toBe(false);
+    const destroy = await runReviewedPlanApply(
+      destroyRunId,
+      "destroy",
+      {
+        ...destroyRequest,
+        planArtifact: { digest: destroyPlan.planDigest },
+      },
+    );
+    expect(destroy.status).toBe("succeeded");
+    expect(
+      (destroy.phaseTimings as readonly { readonly phase: string }[]).some(
+        (entry) => entry.phase.startsWith("runner_plan_"),
+      ),
+    ).toBe(false);
+  } finally {
+    for (const workspace of [failedWorkspace, destroyWorkspace]) {
+      await rm(workspace.root, { recursive: true, force: true });
+      await rm(workspace.depsDir, { recursive: true, force: true });
+    }
   }
 });
