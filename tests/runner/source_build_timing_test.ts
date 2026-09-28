@@ -5,6 +5,25 @@ import { expect, test } from "bun:test";
 
 import { handleRunnerRequest } from "../../runner/entrypoint.ts";
 import { workspaceForRun } from "../../runner/lib/artifacts.ts";
+import { RunnerPhaseTimer } from "../../runner/lib/timing.ts";
+
+test("provider scan policy phase is measured once and records failures", async () => {
+  const timer = new RunnerPhaseTimer();
+  const failure = new Error("provider policy rejected the request");
+  let observed: unknown;
+  try {
+    await timer.measure("provider_scan_policy", async () => {
+      throw failure;
+    });
+  } catch (error) {
+    observed = error;
+  }
+
+  expect(observed).toBe(failure);
+  expect(timer.json()).toHaveLength(1);
+  expect(timer.json()[0]).toMatchObject({ phase: "provider_scan_policy" });
+  expect(timer.json()[0]?.durationMs).toBeGreaterThanOrEqual(0);
+});
 
 test("Plan reports sourceBuild separately from OpenTofu init and plan", async () => {
   const runId = `source-build-timing-${crypto.randomUUID()}`;
@@ -73,9 +92,19 @@ esac
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.status).toBe("succeeded");
-    expect(body.phaseTimings.map((timing: { phase: string }) => timing.phase)).toEqual(
-      expect.arrayContaining(["source_build", "tofu_init", "tofu_plan"]),
+    const phases = body.phaseTimings.map((timing: { phase: string }) =>
+      timing.phase
     );
+    expect(phases).toEqual(
+      expect.arrayContaining([
+        "source_build",
+        "provider_scan_policy",
+        "tofu_init",
+        "tofu_plan",
+      ]),
+    );
+    expect(phases.filter((phase: string) => phase === "provider_scan_policy"))
+      .toHaveLength(1);
   } finally {
     if (oldPath === undefined) delete Bun.env.PATH;
     else Bun.env.PATH = oldPath;

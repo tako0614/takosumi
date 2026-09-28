@@ -224,20 +224,26 @@ export async function runGeneratedRootPlan(
     runId,
   );
   try {
-    const providerScan = await requiredProvidersForGeneratedRoot(
-      request,
-      workspace.generatedRootDir,
-    );
-    const requiredProviders = providerScan.providers;
-    assertRunnerPolicyBeforeInit(
-      request,
-      runnerProfile,
-      preparedCredentials.context,
-      {
-        allowProviderFreeGeneratedRoot:
-          generatedRootScanHasNoProviderUsage(providerScan),
-        requiredProviders,
-        providerScanComplete: providerScan.complete,
+    const { providerScan, requiredProviders } = await timer.measure(
+      "provider_scan_policy",
+      async () => {
+        const providerScan = await requiredProvidersForGeneratedRoot(
+          request,
+          workspace.generatedRootDir,
+        );
+        const requiredProviders = providerScan.providers;
+        assertRunnerPolicyBeforeInit(
+          request,
+          runnerProfile,
+          preparedCredentials.context,
+          {
+            allowProviderFreeGeneratedRoot:
+              generatedRootScanHasNoProviderUsage(providerScan),
+            requiredProviders,
+            providerScanComplete: providerScan.complete,
+          },
+        );
+        return { providerScan, requiredProviders };
       },
     );
     return await initPlanAndBuildResponse(
@@ -333,20 +339,26 @@ export async function runDirectRootPlan(
     runId,
   );
   try {
-    const providerScan = await requiredProvidersForGeneratedRoot(
-      request,
-      moduleDir,
-    );
-    const requiredProviders = providerScan.providers;
-    assertRunnerPolicyBeforeInit(
-      request,
-      runnerProfile,
-      preparedCredentials.context,
-      {
-        allowProviderFreeGeneratedRoot:
-          generatedRootScanHasNoProviderUsage(providerScan),
-        requiredProviders,
-        providerScanComplete: providerScan.complete,
+    const { providerScan, requiredProviders } = await timer.measure(
+      "provider_scan_policy",
+      async () => {
+        const providerScan = await requiredProvidersForGeneratedRoot(
+          request,
+          moduleDir,
+        );
+        const requiredProviders = providerScan.providers;
+        assertRunnerPolicyBeforeInit(
+          request,
+          runnerProfile,
+          preparedCredentials.context,
+          {
+            allowProviderFreeGeneratedRoot:
+              generatedRootScanHasNoProviderUsage(providerScan),
+            requiredProviders,
+            providerScanComplete: providerScan.complete,
+          },
+        );
+        return { providerScan, requiredProviders };
       },
     );
     const sourceCommit =
@@ -720,20 +732,26 @@ export async function runReviewedPlanApply(
     runId,
   );
   try {
-    const providerScan = await requiredProvidersForGeneratedRoot(
-      request,
-      moduleDir,
-    );
-    const requiredProviders = providerScan.providers;
-    assertRunnerPolicyBeforeInit(
-      request,
-      runnerProfile,
-      preparedCredentials.context,
-      {
-        allowProviderFreeGeneratedRoot:
-          generatedRootScanHasNoProviderUsage(providerScan),
-        requiredProviders,
-        providerScanComplete: providerScan.complete,
+    const { providerScan, requiredProviders } = await timer.measure(
+      "provider_scan_policy",
+      async () => {
+        const providerScan = await requiredProvidersForGeneratedRoot(
+          request,
+          moduleDir,
+        );
+        const requiredProviders = providerScan.providers;
+        assertRunnerPolicyBeforeInit(
+          request,
+          runnerProfile,
+          preparedCredentials.context,
+          {
+            allowProviderFreeGeneratedRoot:
+              generatedRootScanHasNoProviderUsage(providerScan),
+            requiredProviders,
+            providerScanComplete: providerScan.complete,
+          },
+        );
+        return { providerScan, requiredProviders };
       },
     );
     const strictMirrorInit = await prepareStrictProviderMirrorInit(
