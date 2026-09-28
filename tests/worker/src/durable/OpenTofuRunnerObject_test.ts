@@ -101,11 +101,13 @@ test("local runner proxy is test-bed gated and preserves the runner path", async
 test("OpenTofu runner Durable Object promotes runner-local plan artifact to R2", async () => {
   const calls: string[] = [];
   const r2 = new FakeR2Bucket();
+  let now = 100;
   const runner = runnerWithContainer(r2, {
     async containerFetch(request) {
       calls.push(`${request.method} ${new URL(request.url).pathname}`);
       const path = new URL(request.url).pathname;
       if (request.method === "POST" && path === "/runs/plan_1") {
+        now += 30;
         return Response.json({
           status: "succeeded",
           exitCode: 0,
@@ -122,6 +124,7 @@ test("OpenTofu runner Durable Object promotes runner-local plan artifact to R2",
         request.method === "GET" &&
         path === "/runs/plan_1/artifacts/tfplan"
       ) {
+        now += 5;
         return new Response(PLAN_BYTES, {
           headers: { "content-type": "application/vnd.opentofu.plan" },
         });
@@ -131,24 +134,47 @@ test("OpenTofu runner Durable Object promotes runner-local plan artifact to R2",
         request.method === "GET" &&
         path === "/runs/plan_1/artifacts/tfplan-json"
       ) {
+        now += 5;
         return Response.json({ error: "not found" }, { status: 404 });
       }
       return Response.json({ error: "unexpected" }, { status: 500 });
     },
+  }, {
+    healthFetch: async () => {
+      now += 10;
+      return Response.json({ ok: true });
+    },
   });
 
-  const response = await runner.fetch(
-    new Request("https://runner/runs/plan_1", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        kind: "takosumi.opentofu-run@v1",
-        action: "plan",
-        runId: "plan_1",
-        request: {},
-      }),
-    }),
+  const performanceNowDescriptor = Object.getOwnPropertyDescriptor(
+    performance,
+    "now",
   );
+  Object.defineProperty(performance, "now", {
+    configurable: true,
+    value: () => now,
+  });
+  let response: Response;
+  try {
+    response = await runner.fetch(
+      new Request("https://runner/runs/plan_1", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "plan",
+          runId: "plan_1",
+          request: {},
+        }),
+      }),
+    );
+  } finally {
+    if (performanceNowDescriptor) {
+      Object.defineProperty(performance, "now", performanceNowDescriptor);
+    } else {
+      Reflect.deleteProperty(performance, "now");
+    }
+  }
 
   assert.equal(response.status, 200);
   assert.deepEqual(calls, [
@@ -157,6 +183,11 @@ test("OpenTofu runner Durable Object promotes runner-local plan artifact to R2",
     "GET /runs/plan_1/artifacts/tfplan-json",
   ]);
   const payload = (await response.json()) as Record<string, unknown>;
+  assert.deepEqual(payload.workerTimings, {
+    doInputRestoreReadinessMs: 10,
+    doContainerExecutionResponseBufferMs: 30,
+    doPlanArtifactPersistenceMs: 10,
+  });
   const artifact = payload.planArtifact as Record<string, unknown>;
   assert.equal(artifact.kind, "object-storage");
   // The object-storage ref still names the plaintext key (the DO maps it to the
@@ -1327,10 +1358,13 @@ test("OpenTofu runner Durable Object destroys a successful run container by defa
   );
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
+  const payload = (await response.json()) as Record<string, unknown>;
+  const { workerTimings, ...result } = payload;
+  assert.deepEqual(result, {
     status: "succeeded",
     run: "plan_1",
   });
+  assertFiniteWorkerTimings(workerTimings);
   assert.equal(runner.sleepAfter, "30s");
   assert.deepEqual(calls, ["fetch POST /runs/plan_1", "destroy"]);
 });
@@ -1367,10 +1401,13 @@ test("OpenTofu runner Durable Object destroys after a successful run when keepal
   );
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
+  const payload = (await response.json()) as Record<string, unknown>;
+  const { workerTimings, ...result } = payload;
+  assert.deepEqual(result, {
     status: "succeeded",
     run: "plan_1",
   });
+  assertFiniteWorkerTimings(workerTimings);
   assert.equal(runner.sleepAfter, "30s");
   assert.deepEqual(calls, ["fetch POST /runs/plan_1", "destroy"]);
 });
@@ -1407,10 +1444,13 @@ test("OpenTofu runner Durable Object falls back to stop when keepalive is disabl
   );
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
+  const payload = (await response.json()) as Record<string, unknown>;
+  const { workerTimings, ...result } = payload;
+  assert.deepEqual(result, {
     status: "succeeded",
     run: "plan_1",
   });
+  assertFiniteWorkerTimings(workerTimings);
   assert.deepEqual(calls, ["fetch POST /runs/plan_1", "stop"]);
 });
 
@@ -4992,6 +5032,24 @@ function runnerWithContainer(
     });
   }
   return runner;
+}
+
+function assertFiniteWorkerTimings(value: unknown): void {
+  assert.ok(value && typeof value === "object" && !Array.isArray(value));
+  const timings = value as Record<string, unknown>;
+  assert.deepEqual(Object.keys(timings).sort(), [
+    "doContainerExecutionResponseBufferMs",
+    "doInputRestoreReadinessMs",
+    "doPlanArtifactPersistenceMs",
+  ]);
+  assert.ok(
+    Object.values(timings).every(
+      (duration) =>
+        typeof duration === "number" &&
+        Number.isFinite(duration) &&
+        duration >= 0,
+    ),
+  );
 }
 
 async function seedEncryptedPlan(

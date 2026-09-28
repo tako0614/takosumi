@@ -54,6 +54,7 @@ Cloud 側のリポジトリで管理します。
 ### 日常運用と障害対応
 
 - [troubleshooting](./troubleshooting.md)
+- [runner timing diagnostics](./runner-timing-diagnostics.md)
 - [incident response](./incident-response.md)
 - [on-call](./oncall.md)
 - [cost monitoring](./cost-monitoring.md)

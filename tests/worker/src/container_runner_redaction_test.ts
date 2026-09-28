@@ -191,6 +191,58 @@ test("container runner threads phase timings into non-secret diagnostics", async
   );
 });
 
+test("plan diagnostics expose finite Worker elapsed timings as closed numeric JSON", async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(performance, "now");
+  let now = 100;
+  Object.defineProperty(performance, "now", {
+    configurable: true,
+    value: () => now,
+  });
+  try {
+    const runner = new CloudflareContainerOpenTofuRunner(
+      envReturning({
+        planDigest: PLAN_DIGEST,
+        planArtifact: {
+          kind: "runner-local",
+          ref: "runner-local://plan_worker_timing/tfplan",
+          digest: PLAN_DIGEST,
+        },
+        workerTimings: {
+          doInputRestoreReadinessMs: 20,
+          doContainerExecutionResponseBufferMs: 30,
+          doPlanArtifactPersistenceMs: 40,
+          workerAdapterRpcMs: -1,
+          startedAt: "2026-06-28T00:00:00.000Z",
+          providerText: "diag-provider-secret",
+        },
+      }),
+    );
+    const plan = runner.plan({
+      planRun: { id: "plan_worker_timing" },
+    } as Parameters<CloudflareContainerOpenTofuRunner["plan"]>[0]);
+    now = 112;
+    const result = await plan;
+    const timingDiagnostic = result.diagnostics?.find(
+      (diagnostic) => diagnostic.code === "runner_elapsed_timings",
+    );
+    expect(timingDiagnostic?.message).toBe("runner elapsed timings (ms)");
+    expect(timingDiagnostic?.detail).toBeDefined();
+    expect(JSON.parse(timingDiagnostic!.detail!)).toEqual({
+      workerAdapterRpcMs: 12,
+      doInputRestoreReadinessMs: 20,
+      doContainerExecutionResponseBufferMs: 30,
+      doPlanArtifactPersistenceMs: 40,
+    });
+    expect(JSON.stringify(result.diagnostics)).not.toContain(
+      "diag-provider-secret",
+    );
+    expect(timingDiagnostic!.detail).not.toContain("startedAt");
+  } finally {
+    if (descriptor) Object.defineProperty(performance, "now", descriptor);
+    else Reflect.deleteProperty(performance, "now");
+  }
+});
+
 test("container runner returns sanitized source sync phase timings", async () => {
   const runner = new CloudflareContainerOpenTofuRunner(
     envReturning({

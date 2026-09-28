@@ -116,6 +116,12 @@ const UNSAFE_PROVIDER_FAILURE_DETAIL_LINE =
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
 const PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES = 1024 * 1024;
 const PROVIDER_LOCKFILE_CONTENT_TYPE = "application/vnd.opentofu.lock.hcl";
+const WORKER_ELAPSED_TIMING_FIELDS = [
+  "doInputRestoreReadinessMs",
+  "doContainerExecutionResponseBufferMs",
+  "doPlanArtifactPersistenceMs",
+  "workerAdapterRpcMs",
+] as const;
 type ContainerRunnerAction = OpenTofuRunAction | "release" | "stable_semver_tag";
 
 export class CloudflareContainerOpenTofuRunner
@@ -673,6 +679,7 @@ export class CloudflareContainerOpenTofuRunner
     const id = this.env.RUNNER.idFromName(
       options.runnerObjectName ?? runId,
     );
+    const workerAdapterRpcStartedAt = monotonicNow();
     const timeoutMs = positiveTimeoutMs(options.timeoutMs);
     const controller =
       timeoutMs || options.signal ? new AbortController() : undefined;
@@ -708,6 +715,10 @@ export class CloudflareContainerOpenTofuRunner
           );
           const { payload, redactedText } =
             await readResponseJsonObject(response);
+          const payloadWithWorkerTiming = withWorkerAdapterElapsedTiming(
+            payload,
+            elapsedMilliseconds(workerAdapterRpcStartedAt),
+          );
           const startupSeconds = positiveNumberHeader(
             response.headers.get(RUNNER_STARTUP_SECONDS_HEADER),
           );
@@ -724,20 +735,20 @@ export class CloudflareContainerOpenTofuRunner
           if (!response.ok) {
             if (
               (action === "apply" || action === "destroy") &&
-              providerExecutionFailureFromContainerResult(payload)
+              providerExecutionFailureFromContainerResult(payloadWithWorkerTiming)
             ) {
-              return failedProviderExecutionResult(payload);
+              return failedProviderExecutionResult(payloadWithWorkerTiming);
             }
             const failure = runnerFailureEnvelope(
-              payload,
+              payloadWithWorkerTiming,
               redactedText,
               response.status,
               action,
             );
-            const executionError = runnerExecutionErrorFromPayload(payload, action);
+            const executionError = runnerExecutionErrorFromPayload(payloadWithWorkerTiming, action);
             if (executionError) throw executionError;
             const relayInfrastructureError =
-              runnerInfrastructureErrorFromPayload(payload);
+              runnerInfrastructureErrorFromPayload(payloadWithWorkerTiming);
             if (relayInfrastructureError) {
               throw relayInfrastructureError;
             }
@@ -747,7 +758,7 @@ export class CloudflareContainerOpenTofuRunner
             }
             throw runnerErrorFromFailureEnvelope(failure);
           }
-          return payload;
+          return payloadWithWorkerTiming;
         } catch (error) {
           if (options.signal?.aborted) {
             throw abortReason(options.signal);
@@ -1282,7 +1293,67 @@ function diagnosticsFromContainerResult(
       detail: phaseTimingDetail,
     });
   }
+  const workerElapsedTimingDetail = workerElapsedTimingDetailFromContainerResult(result);
+  if (workerElapsedTimingDetail) {
+    diagnostics.push({
+      severity: "info",
+      code: "runner_elapsed_timings",
+      message: "runner elapsed timings (ms)",
+      detail: workerElapsedTimingDetail,
+    });
+  }
   return diagnostics;
+}
+
+function workerElapsedTimingDetailFromContainerResult(
+  result: Record<string, unknown>,
+): string | undefined {
+  const timings = workerElapsedTimingsFromContainerResult(result);
+  return timings ? JSON.stringify(timings) : undefined;
+}
+
+function workerElapsedTimingsFromContainerResult(
+  result: Record<string, unknown>,
+): Partial<Record<(typeof WORKER_ELAPSED_TIMING_FIELDS)[number], number>> | undefined {
+  const raw = recordFromRecord(result, "workerTimings");
+  if (!raw) return undefined;
+  const timings: Partial<
+    Record<(typeof WORKER_ELAPSED_TIMING_FIELDS)[number], number>
+  > = {};
+  for (const field of WORKER_ELAPSED_TIMING_FIELDS) {
+    const durationMs = raw[field];
+    if (
+      typeof durationMs === "number" &&
+      Number.isFinite(durationMs) &&
+      durationMs >= 0
+    ) {
+      timings[field] = durationMs;
+    }
+  }
+  return Object.keys(timings).length > 0 ? timings : undefined;
+}
+
+function withWorkerAdapterElapsedTiming(
+  payload: Record<string, unknown>,
+  workerAdapterRpcMs: number,
+): Record<string, unknown> {
+  const existing = workerElapsedTimingsFromContainerResult(payload) ?? {};
+  return {
+    ...payload,
+    workerTimings: {
+      ...existing,
+      workerAdapterRpcMs,
+    },
+  };
+}
+
+function monotonicNow(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
+function elapsedMilliseconds(startedAt: number): number {
+  const elapsed = monotonicNow() - startedAt;
+  return Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
 }
 
 function phaseTimingDetailFromContainerResult(
