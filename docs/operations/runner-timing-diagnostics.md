@@ -58,3 +58,21 @@ classification, retry policy, replay behavior, and runner side effects are
 unchanged. These measurements partition the measured Core and Worker paths;
 they do not by themselves identify a bottleneck or include time outside those
 paths.
+
+Successful create/update Plans using the direct OpenTofu root also expose two
+entries in the Runner response's existing `phaseTimings` array:
+
+- `runner_plan_prepare`: source availability/build, module and state preparation,
+  input/credential/provider-policy preparation and source revision lookup, before
+  the shared init/plan pipeline starts.
+- `runner_plan_finalize`: reading and hashing plan artifacts, constructing
+  evidence and planned outputs, and building the response after command phases.
+
+Like the existing command entries, these include `phase`, `startedAt`,
+`finishedAt` and `durationMs`. The new durations use a monotonic clock; the
+timestamps are wall-clock labels. They are separate from the numeric-only
+Core and Worker diagnostics above. The intervals sit inside Runner execution,
+not alongside its outer Worker duration. They do not cover all transport or
+serialization time. Failed Plans, Apply and Destroy omit these two entries.
+Worker code deployment does not add them to an older immutable Runner image;
+that image must be published and selected separately.
