@@ -7,7 +7,7 @@ import {
   onMount,
   Show,
 } from "solid-js";
-import { useLocation } from "@solidjs/router";
+import { useLocation, useNavigate } from "@solidjs/router";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -41,6 +41,7 @@ import {
   createWorkspace,
   extractRunId,
   getGitInstallPlan,
+  reconcileGitInstallPlan,
   getInstallConfig,
   listConnectionsWithSignal,
   listReleaseOwnedProviderConnectionsWithSignal,
@@ -52,6 +53,7 @@ import {
   type ProviderConnection,
   type SourceCreateReconciliationToken,
 } from "../../lib/control-api.ts";
+import type { GitInstallPlanResponse } from "takosumi-contract";
 import {
   installConfigRequiresUiSurface,
   listAuthorizedUiSurfaces,
@@ -129,6 +131,10 @@ import {
   pendingInstallRecoveryAction,
   pendingInstallResumeCompletion,
   pendingInstallRunIdForSelectedWorkspace,
+  hasInstallPlanRecoveryLocator,
+  installPlanRecoveryId,
+  installPlanRecoveryMatchesIdentity,
+  installPlanRecoverySearch,
 } from "./install-recovery.ts";
 import InstallExecution from "./InstallExecution.tsx";
 import "./install-view.css";
@@ -170,6 +176,11 @@ type WorkspacePolicyState =
   | { readonly status: "unavailable" }
   | { readonly status: "ready"; readonly policy?: PolicyConfig };
 
+type InstallPlanRecoveryState =
+  | { readonly status: "loading" }
+  | { readonly status: "ready"; readonly response: GitInstallPlanResponse }
+  | { readonly status: "unavailable" };
+
 function sameProviderSource(required: string, connected: string): boolean {
   return providerConnectionMatchesProviderSource(required, {
     providerSource: connected,
@@ -204,6 +215,7 @@ export default function InstallView() {
 
 function Inner(props: { readonly installingPrincipalId: string }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const { confirm } = useConfirmDialog();
   const initial = parseInstallPrefill(location.search);
   // A query path is only a user hint. It is accepted as install authority only
@@ -279,6 +291,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     createSignal<PendingInstallAttempt>();
   const [pendingInstallStatus, setPendingInstallStatus] =
     createSignal<string>();
+  const [installPlanRecovery, setInstallPlanRecovery] =
+    createSignal<InstallPlanRecoveryState>({ status: "unavailable" });
+  const [installPlanRecoveryBusy, setInstallPlanRecoveryBusy] =
+    createSignal(false);
   const [error, setError] = createSignal<string>();
   const [busy, setBusy] = createSignal(false);
   const [preparationStage, setPreparationStage] =
@@ -693,6 +709,72 @@ function Inner(props: { readonly installingPrincipalId: string }) {
 
   const workspaceIsCurrent = (workspace: string): boolean =>
     workspace === currentWorkspaceId() && workspace === workspaceId();
+
+  const loadInstallPlanRecovery = async (
+    planId: string,
+    signal?: AbortSignal,
+    selectedWorkspace = currentWorkspaceId(),
+  ) => {
+    setInstallPlanRecovery({ status: "loading" });
+    try {
+      const response = await getGitInstallPlan(planId, { signal });
+      if (
+        signal?.aborted ||
+        installPlanRecoveryId(location.search) !== planId
+      ) {
+        return;
+      }
+      if (
+        !installPlanRecoveryMatchesIdentity(
+          response,
+          selectedWorkspace,
+          props.installingPrincipalId,
+        )
+      ) {
+        setInstallPlanRecovery({ status: "unavailable" });
+        return;
+      }
+      setInstallPlanRecovery({ status: "ready", response });
+    } catch {
+      if (
+        !signal?.aborted &&
+        installPlanRecoveryId(location.search) === planId
+      ) {
+        // Do not reveal whether the locator is missing or inaccessible.
+        setInstallPlanRecovery({ status: "unavailable" });
+      }
+    }
+  };
+
+  createEffect(() => {
+    const search = location.search;
+    const selectedWorkspace = currentWorkspaceId();
+    if (!hasInstallPlanRecoveryLocator(search)) {
+      setInstallPlanRecovery({ status: "unavailable" });
+      return;
+    }
+    const planId = installPlanRecoveryId(search);
+    if (!planId) {
+      setInstallPlanRecovery({ status: "unavailable" });
+      return;
+    }
+    const controller = new AbortController();
+    void loadInstallPlanRecovery(planId, controller.signal, selectedWorkspace);
+    onCleanup(() => controller.abort());
+  });
+
+  const publishInstallPlanRecoveryLocator = (planId: string) => {
+    navigate(
+      `${location.pathname}${installPlanRecoverySearch(planId)}${location.hash}`,
+      { replace: true },
+    );
+  };
+
+  const clearInstallPlanRecoveryLocator = () => {
+    navigate(location.pathname, { replace: true });
+    setInstallPlanRecovery({ status: "unavailable" });
+    reset();
+  };
 
   const validateBasic = (): string | undefined => {
     if (!gitUrl().trim()) return t("installStore.invalidSource");
@@ -1269,15 +1351,27 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     attempt: PendingInstallAttempt,
     response: Awaited<ReturnType<typeof createReviewableGitInstallPlan>>,
   ) => {
-    setPendingInstallAttempt((current) => {
-      if (current?.idempotencyKey !== attempt.idempotencyKey) return current;
-      return {
-        ...current,
-        installPlanId: response.installPlan.id,
-        capsuleId: response.installPlan.capsuleId ?? current.capsuleId,
-        planRunId: response.installPlan.planRunId ?? current.planRunId,
-      };
-    });
+    if (
+      !installPlanRecoveryMatchesIdentity(
+        response,
+        attempt.workspaceId,
+        props.installingPrincipalId,
+      )
+    ) return;
+    if (pendingInstallAttempt()?.idempotencyKey === attempt.idempotencyKey) {
+      setPendingInstallAttempt((current) => {
+        if (current?.idempotencyKey !== attempt.idempotencyKey) return current;
+        return {
+          ...current,
+          installPlanId: response.installPlan.id,
+          capsuleId: response.installPlan.capsuleId ?? current.capsuleId,
+          planRunId: response.installPlan.planRunId ?? current.planRunId,
+        };
+      });
+    }
+    // The locator is the only value carried across reloads. Request contents
+    // and the idempotency key remain confined to this tab's pending attempt.
+    publishInstallPlanRecoveryLocator(response.installPlan.id);
   };
 
   const showReviewableInstallPlan = (
@@ -1285,6 +1379,15 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     response: Awaited<ReturnType<typeof createReviewableGitInstallPlan>>,
   ): boolean => {
     if (!workspaceIsCurrent(workspace)) return false;
+    if (
+      !installPlanRecoveryMatchesIdentity(
+        response,
+        workspace,
+        props.installingPrincipalId,
+      )
+    ) {
+      throw new Error(t("installStore.planMissing"));
+    }
     const currentCapsuleId = response.installPlan.capsuleId;
     const runId = response.installPlan.planRunId;
     if (!currentCapsuleId || !runId) {
@@ -1298,6 +1401,9 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setPendingInstallAttempt(undefined);
     setPendingInstallStatus(undefined);
     setError(undefined);
+    if (hasInstallPlanRecoveryLocator(location.search)) {
+      navigate(location.pathname, { replace: true });
+    }
     setPhase("review");
     return true;
   };
@@ -1341,6 +1447,140 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     }
   };
 
+  const continueInstallPlanRecovery = async () => {
+    const state = installPlanRecovery();
+    const planId = installPlanRecoveryId(location.search);
+    if (
+      state.status !== "ready" ||
+      state.response.nextAction !== "reconcile" ||
+      !planId ||
+      installPlanRecoveryBusy()
+    ) {
+      return;
+    }
+    if (
+      !installPlanRecoveryMatchesIdentity(
+        state.response,
+        currentWorkspaceId(),
+        props.installingPrincipalId,
+      )
+    ) {
+      setInstallPlanRecovery({ status: "unavailable" });
+      return;
+    }
+    setInstallPlanRecoveryBusy(true);
+    try {
+      const response = await reconcileGitInstallPlan(planId);
+      if (
+        !installPlanRecoveryMatchesIdentity(
+          response,
+          currentWorkspaceId(),
+          props.installingPrincipalId,
+        )
+      ) {
+        setInstallPlanRecovery({ status: "unavailable" });
+        return;
+      }
+      setInstallPlanRecovery({ status: "ready", response });
+    } catch {
+      // A failed explicit Continue is not automatically replayed.
+      setInstallPlanRecovery({ status: "unavailable" });
+    } finally {
+      setInstallPlanRecoveryBusy(false);
+    }
+  };
+
+  const recoveryResponse = (): GitInstallPlanResponse | undefined => {
+    const state = installPlanRecovery();
+    return state.status === "ready" ? state.response : undefined;
+  };
+
+  const refreshInstallPlanRecovery = () => {
+    const planId = installPlanRecoveryId(location.search);
+    if (planId) void loadInstallPlanRecovery(planId);
+  };
+
+  const installPlanRecoveryView = () => (
+    <main class="iv-page">
+      <section
+        class="iv-workbench iv-centered"
+        data-testid="install-plan-recovery"
+      >
+        <Show when={installPlanRecovery().status === "loading"}>
+          <Spinner size={24} />
+          <h2>{t("common.loading")}</h2>
+        </Show>
+        <Show when={installPlanRecovery().status === "unavailable"}>
+          <h2>{t("installStore.planMissing")}</h2>
+          <p>{t("common.fetchFailedGeneric")}</p>
+          <div class="iv-action-row">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={refreshInstallPlanRecovery}
+            >
+              {t("common.retry")}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={clearInstallPlanRecoveryLocator}
+            >
+              {t("installStore.chooseAnother")}
+            </Button>
+          </div>
+        </Show>
+        <Show when={recoveryResponse()}>
+          {(recovery) => {
+            const response = recovery();
+            const plan = response.installPlan;
+            return (
+              <>
+                <h2>{t("installStore.preparing")}</h2>
+                <p data-testid="install-plan-recovery-phase">{plan.phase}</p>
+                <Show when={plan.diagnostic?.message}>
+                  {(message) => <p role="status">{message()}</p>}
+                </Show>
+                <div class="iv-action-row">
+                  <Show when={response.nextAction === "reconcile"}>
+                    <Button
+                      type="button"
+                      variant="primary"
+                      busy={installPlanRecoveryBusy()}
+                      onClick={() => void continueInstallPlanRecovery()}
+                    >
+                      {t("installStore.continue")}
+                    </Button>
+                  </Show>
+                  <Show
+                    when={
+                      response.nextAction === "review_run" &&
+                      plan.planRunId
+                    }
+                  >
+                    <Button
+                      href={`/runs/${encodeURIComponent(plan.planRunId!)}`}
+                      variant="primary"
+                    >
+                      {t("installStore.stepReview")}
+                    </Button>
+                  </Show>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={clearInstallPlanRecoveryLocator}
+                  >
+                    {t("installStore.chooseAnother")}
+                  </Button>
+                </div>
+              </>
+            );
+          }}
+        </Show>
+      </section>
+    </main>
+  );
+
   const resumePendingInstallPlan = async () => {
     const attempt = pendingInstallAttempt();
     if (!attempt || busy()) return;
@@ -1365,6 +1605,32 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setError(undefined);
     setPendingInstallStatus(undefined);
     try {
+      if (attempt.installPlanId) {
+        const response = await reconcileGitInstallPlan(attempt.installPlanId);
+        recordInstallPlanProgress(attempt, response);
+        const action = pendingInstallRecoveryAction(
+          attempt.workspaceId,
+          currentWorkspaceId(),
+          workspaceId(),
+          response.nextAction,
+        );
+        if (action === "show-review") {
+          showReviewableInstallPlan(attempt.workspaceId, response);
+          return;
+        }
+        setPendingInstallStatus(
+          action === "workspace-mismatch"
+            ? t("installStore.pendingWorkspaceMismatch", {
+                workspaceId: attempt.workspaceId,
+              })
+            : action === "stopped"
+              ? response.installPlan.diagnostic?.message ??
+                t("installStore.pendingStopped")
+              : t("installStore.pendingStillRunning"),
+        );
+        setPhase("pending-timeout");
+        return;
+      }
       const resumedResponse = await createReviewableGitInstallPlan(
         attempt.workspaceId,
         attempt.request,
@@ -1563,6 +1829,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   };
 
   const loadTcsListing = async () => {
+    if (hasInstallPlanRecoveryLocator(location.search)) return;
     const tcs = parseInitialTcsHandoff(location.search);
     if (!tcs) return;
     setBusy(true);
@@ -1717,6 +1984,14 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     const result = compatibility();
     return result && result.level !== "ready" ? result : undefined;
   };
+
+  const recoveryMode = () => {
+    if (!hasInstallPlanRecoveryLocator(location.search)) return false;
+    const locator = installPlanRecoveryId(location.search);
+    return !locator || pendingInstallAttempt()?.installPlanId !== locator;
+  };
+
+  if (recoveryMode()) return installPlanRecoveryView();
 
   return (
     <main class="iv-page">

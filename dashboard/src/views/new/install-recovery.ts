@@ -1,4 +1,39 @@
 import { isMutationOutcomeUnknown } from "../../lib/control-api.ts";
+import type { GitInstallPlanResponse } from "takosumi-contract";
+
+const INSTALL_PLAN_ID_PATTERN = /^gip_[a-f0-9]{16}$/u;
+
+/** An install plan id is an untrusted locator, never install authority. */
+export function installPlanRecoveryId(search: string): string | undefined {
+  const values = new URLSearchParams(search).getAll("installPlan");
+  const value = values.length === 1 ? values[0] : undefined;
+  return value && INSTALL_PLAN_ID_PATTERN.test(value) ? value : undefined;
+}
+
+export function hasInstallPlanRecoveryLocator(search: string): boolean {
+  return new URLSearchParams(search).has("installPlan");
+}
+
+/** Replace all query data with the one opaque id needed for status recovery. */
+export function installPlanRecoverySearch(planId: string): string {
+  if (!INSTALL_PLAN_ID_PATTERN.test(planId)) {
+    throw new TypeError("Invalid install plan locator.");
+  }
+  return `?installPlan=${encodeURIComponent(planId)}`;
+}
+
+export function installPlanRecoveryMatchesIdentity(
+  response: GitInstallPlanResponse,
+  workspaceId: string,
+  principalId: string,
+): boolean {
+  return Boolean(
+    workspaceId &&
+      principalId &&
+      response.installPlan.workspaceId === workspaceId &&
+      response.installPlan.createdBy === principalId,
+  );
+}
 
 export type PendingInstallRecoveryNextAction =
   | "reconcile"

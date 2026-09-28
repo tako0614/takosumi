@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   ControlApiError,
   ControlApiIndeterminateError,
@@ -6,12 +8,118 @@ import {
 } from "../../../../../dashboard/src/lib/control-api.ts";
 import {
   installPlanAttemptFailureAction,
+  installPlanRecoveryId,
+  hasInstallPlanRecoveryLocator,
+  installPlanRecoveryMatchesIdentity,
+  installPlanRecoverySearch,
   isPendingInstallWorkspaceSelected,
   pendingInstallRecoveryAction,
   pendingInstallResumeCompletion,
   pendingInstallRunIdForSelectedWorkspace,
   shouldKeepInstallAttemptAfterFailure,
 } from "../../../../../dashboard/src/views/new/install-recovery.ts";
+
+const root = resolve(import.meta.dir, "../../../../../");
+const read = (path: string): string =>
+  readFileSync(resolve(root, path), "utf8");
+
+test("recovery query retains only one validated opaque install plan id", () => {
+  const search = installPlanRecoverySearch("gip_0123456789abcdef");
+  expect(search).toBe("?installPlan=gip_0123456789abcdef");
+  expect(installPlanRecoveryId(search)).toBe("gip_0123456789abcdef");
+  expect(
+    installPlanRecoveryId(
+      "?installPlan=bad&installPlan=gip_0123456789abcdef",
+    ),
+  ).toBeUndefined();
+  expect(installPlanRecoveryId("?installPlan=gip_0123456789ABCDEF")).toBeUndefined();
+  expect(hasInstallPlanRecoveryLocator("?installPlan=invalid")).toBe(true);
+  expect(hasInstallPlanRecoveryLocator("?git=https%3A%2F%2Fexample.test")).toBe(false);
+  expect(() => installPlanRecoverySearch("not-a-plan-id")).toThrow();
+});
+
+test("recovery plan readback must match the selected Workspace and Principal", () => {
+  const response = {
+    installPlan: {
+      id: "gip_0123456789abcdef",
+      workspaceId: "ws_selected",
+      createdBy: "principal_current",
+    },
+  } as Parameters<typeof installPlanRecoveryMatchesIdentity>[0];
+  expect(
+    installPlanRecoveryMatchesIdentity(
+      response,
+      "ws_selected",
+      "principal_current",
+    ),
+  ).toBe(true);
+  expect(
+    installPlanRecoveryMatchesIdentity(
+      response,
+      "ws_other",
+      "principal_current",
+    ),
+  ).toBe(false);
+  expect(
+    installPlanRecoveryMatchesIdentity(
+      response,
+      "ws_selected",
+      "principal_other",
+    ),
+  ).toBe(false);
+});
+
+test("an acknowledged attempt reloads by GET and advances only on explicit Continue", () => {
+  const view = read("dashboard/src/views/new/InstallView.tsx");
+  const recordStart = view.indexOf("const recordInstallPlanProgress =");
+  const recordEnd = view.indexOf("const showReviewableInstallPlan", recordStart);
+  const recordProgress = view.slice(recordStart, recordEnd);
+  const loadStart = view.indexOf("const loadInstallPlanRecovery =");
+  const loadEnd = view.indexOf("const publishInstallPlanRecoveryLocator", loadStart);
+  const loadRecovery = view.slice(loadStart, loadEnd);
+  const continueStart = view.indexOf("const continueInstallPlanRecovery =");
+  const continueEnd = view.indexOf("const recoveryResponse", continueStart);
+  const continueRecovery = view.slice(continueStart, continueEnd);
+  const recoveryStart = view.indexOf("const installPlanRecoveryView =");
+  const recoveryEnd = view.indexOf("const continueAfterConnections", recoveryStart);
+  const recoveryView = view.slice(recoveryStart, recoveryEnd);
+
+  expect(recordProgress.indexOf("installPlanRecoveryMatchesIdentity(")).toBeLessThan(
+    recordProgress.indexOf("publishInstallPlanRecoveryLocator(response.installPlan.id)"),
+  );
+  expect(recordProgress).toContain("setPendingInstallAttempt((current) =>");
+  expect(recordProgress).not.toContain("attempt.request,");
+  expect(recordProgress).not.toContain("attempt.idempotencyKey,");
+  expect(loadRecovery).toContain("getGitInstallPlan(planId, { signal })");
+  expect(loadRecovery).toContain("installPlanRecoveryMatchesIdentity(");
+  expect(loadRecovery).not.toContain("reconcileGitInstallPlan(");
+  expect(view).toContain("createEffect(() => {\n    const search = location.search;");
+  expect(continueRecovery).toContain("state.response.nextAction !== \"reconcile\"");
+  expect(continueRecovery).toContain("await reconcileGitInstallPlan(planId)");
+  expect(continueRecovery).not.toContain("createReviewableGitInstallPlan(");
+  expect(recoveryView).toContain('data-testid="install-plan-recovery"');
+  expect(recoveryView).toContain('data-testid="install-plan-recovery-phase"');
+  expect(recoveryView).toContain("plan.diagnostic?.message");
+  expect(recoveryView).toContain('response.nextAction === "review_run"');
+  expect(recoveryView).toContain("/runs/${encodeURIComponent(plan.planRunId!)}");
+  expect(recoveryView).toContain('response.nextAction === "reconcile"');
+
+  const knownIdResumeStart = view.indexOf(
+    "if (attempt.installPlanId) {",
+    view.indexOf("const resumePendingInstallPlan = async"),
+  );
+  const newAttemptPost = view.indexOf(
+    "const resumedResponse = await createReviewableGitInstallPlan",
+    knownIdResumeStart,
+  );
+  expect(knownIdResumeStart).toBeGreaterThan(0);
+  expect(view.slice(knownIdResumeStart, newAttemptPost)).toContain(
+    "await reconcileGitInstallPlan(attempt.installPlanId)",
+  );
+  expect(view.slice(knownIdResumeStart, newAttemptPost)).not.toContain(
+    "createReviewableGitInstallPlan(",
+  );
+});
 
 test("install mutation uncertainty includes indeterminate, 5xx, and transport failures", () => {
   expect(
