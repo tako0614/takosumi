@@ -681,7 +681,7 @@ export const en: Record<keyof typeof ja, string> = {
   "runError.planFailed":
     "The change review failed. Check the details, then try again.",
   "runError.applyFailed":
-    "The deploy failed. Check the details, then try again.",
+    "Check the details, then review the changes again if needed.",
   "runError.runFailed": "The run failed. Please try again.",
   "runError.backupFailed":
     "The restore point could not be created. Please try again.",

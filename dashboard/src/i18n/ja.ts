@@ -686,7 +686,7 @@ export const ja = {
   "runError.planFailed":
     "変更内容の確認に失敗しました。詳細を確認して、もう一度お試しください。",
   "runError.applyFailed":
-    "デプロイに失敗しました。詳細を確認して、もう一度お試しください。",
+    "詳細を確認してから、必要なら変更内容をもう一度確認してください。",
   "runError.runFailed": "実行に失敗しました。もう一度お試しください。",
   "runError.backupFailed":
     "復元ポイントの作成に失敗しました。もう一度お試しください。",

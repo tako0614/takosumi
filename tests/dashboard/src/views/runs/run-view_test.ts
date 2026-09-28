@@ -13,6 +13,15 @@ const source = readFileSync(
 );
 
 describe("RunView", () => {
+  test("Apply failure hint points to details and a fresh review without repeating the failure", () => {
+    expect(ja["runError.applyFailed"]).toBe(
+      "詳細を確認してから、必要なら変更内容をもう一度確認してください。",
+    );
+    expect(en["runError.applyFailed"]).toBe(
+      "Check the details, then review the changes again if needed.",
+    );
+  });
+
   test("the Run ledger no longer becomes a second install screen", () => {
     expect(source).not.toContain("InstallProgressCard");
     expect(source).not.toContain("installScreen");
