@@ -482,6 +482,19 @@ export default function InstallExecution(props: Props) {
           <div class="iv-error" role="alert">
             <AlertCircle size={18} aria-hidden="true" />
             <p>{message()}</p>
+            <Show when={readiness.latest === "activation_failed" && run.latest}>
+              {(currentRun) => (
+                <div class="iv-action-row">
+                  <Button
+                    href={`/runs/${encodeURIComponent(currentRun().id)}`}
+                    variant="secondary"
+                    icon={<ExternalLink size={16} />}
+                  >
+                    {t("installStore.runDetails")}
+                  </Button>
+                </div>
+              )}
+            </Show>
           </div>
         )}
       </Show>

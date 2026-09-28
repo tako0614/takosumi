@@ -66,6 +66,19 @@ test("post-apply readiness fails closed when activity cannot be read", () => {
   expect(source).toContain('t("installStore.runDetails")');
 });
 
+test("activation failure exposes the existing Apply Run technical details", () => {
+  const activationError = source.match(
+    /<Show when=\{error\(\) && !readiness\.error\}>([\s\S]*?)<\/Show>/,
+  )?.[1];
+
+  expect(activationError).toBeDefined();
+  expect(activationError).toContain('readiness.latest === "activation_failed"');
+  expect(activationError).toContain(
+    "href={`/runs/${encodeURIComponent(currentRun().id)}`}",
+  );
+  expect(activationError).toContain('t("installStore.runDetails")');
+});
+
 test("boundedRead retries transient failures and stops at its finite budget", async () => {
   let attempts = 0;
   const delays: number[] = [];
