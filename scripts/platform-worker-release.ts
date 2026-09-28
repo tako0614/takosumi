@@ -1947,7 +1947,7 @@ export type PlatformReleasePlanClosureInput = Readonly<{
  */
 export type PlatformReleasePlanRuntime = Readonly<{
   repositoryRoot: string;
-  assertCleanAndPushed: () => Promise<void>;
+  assertCleanAndPushed: (environment: PlatformEnvironment) => Promise<void>;
   checkoutIdentity: () => Readonly<{ repository: string; commit: string }>;
   buildDashboard: (
     environment: PlatformEnvironment,
@@ -2548,7 +2548,7 @@ async function buildPlatformDashboardOnce(
 function productionPlatformReleasePlanRuntime(): PlatformReleasePlanRuntime {
   return {
     repositoryRoot: ROOT,
-    assertCleanAndPushed: () => assertCleanAndPushed(ROOT),
+    assertCleanAndPushed: (environment) => assertCleanAndPushed(ROOT, environment),
     checkoutIdentity: () => ({
       repository: gitAt(ROOT, ["remote", "get-url", "origin"]).trim(),
       commit: gitAt(ROOT, ["rev-parse", "HEAD"]).trim(),
@@ -2877,7 +2877,7 @@ async function plan(
   environment: PlatformEnvironment,
   runtime: PlatformReleasePlanRuntime,
 ): Promise<void> {
-  await runtime.assertCleanAndPushed();
+  await runtime.assertCleanAndPushed(environment);
   assertReadableConfig(options.config);
   assertExternalAbsent(options.planOut);
   const closurePath = `${options.planOut}.closure`;
@@ -2951,7 +2951,7 @@ async function plan(
     throw error;
   }
   const secrets = await runtime.readSecretNames(sealed.configPath);
-  await runtime.assertCleanAndPushed();
+  await runtime.assertCleanAndPushed(environment);
 
   const releasePlan = createPlatformReleasePlan({
     kind: "takosumi.platform-worker-release-plan@v6" as const,
@@ -3000,7 +3000,7 @@ async function execute(
   assertExternalAbsent(options.evidence);
   let releasePlan: PlatformReleasePlan | undefined;
   try {
-    await assertCleanAndPushed();
+    await assertCleanAndPushed(ROOT, environment);
     assertPrivateFile(options.plan);
     if (!/^operator:[A-Za-z0-9._@-]{3,128}$/u.test(options.reviewer)) {
       throw new Error("platform_worker_release_reviewer_invalid");
@@ -3029,7 +3029,7 @@ async function recover(
   assertExternalAbsent(options.evidence);
   let releasePlan: PlatformReleasePlan | undefined;
   try {
-    await assertCleanAndPushed();
+    await assertCleanAndPushed(ROOT, environment);
     assertPrivateFile(options.plan);
     if (!/^operator:[A-Za-z0-9._@-]{3,128}$/u.test(options.reviewer)) {
       throw new Error("platform_worker_release_reviewer_invalid");
@@ -3058,7 +3058,7 @@ async function restore(
   assertExternalAbsent(options.evidence);
   let releasePlan: PlatformReleasePlan | undefined;
   try {
-    await assertCleanAndPushed();
+    await assertCleanAndPushed(ROOT, environment);
     assertPrivateFile(options.plan);
     if (!/^operator:[A-Za-z0-9._@-]{3,128}$/u.test(options.reviewer)) {
       throw new Error("platform_worker_release_reviewer_invalid");
@@ -7436,46 +7436,57 @@ export function remoteBranchContainsCommit(
 }
 
 /**
- * The shared `production-routine` lineage class, plus this surface's own
- * tightening.
- *
- * The shared predicate (scripts/lib/deploy-lineage.ts) is what control's
- * corpus is run against, and it closes the hole this function used to have:
- * it accepted ANY branch, so a production Worker release could be cut from a
- * feature branch that happened to be pushed. A surface may only tighten the
- * class it declares, and this one does: the attached branch must still be the
- * freshly advertised remote default and HEAD must equal that branch's exact
- * remote tip, not merely be an ancestor of it.
+ * Official platform releases always need one clean, attached, obtainable
+ * source commit. Staging may use an exact pushed feature-branch tip, while
+ * production additionally runs the shared production-routine predicate and
+ * requires the freshly advertised remote default branch at its exact tip.
+ * Both lanes refuse stale local tracking refs and a remote advance after plan.
  */
-export async function assertCleanAndPushed(root: string = ROOT): Promise<void> {
-  const answer = await lineageVerdict("production-routine", { cwd: root });
-  if (answer.verdict !== "accept") {
-    throw new Error(
-      answer.reason === "dirty-worktree"
-        ? "platform_worker_release_source_dirty"
-        : "platform_worker_release_source_not_pushed",
-    );
+export async function assertCleanAndPushed(
+  root: string = ROOT,
+  environment: PlatformEnvironment = "production",
+): Promise<void> {
+  if (environment === "production") {
+    const answer = await lineageVerdict("production-routine", { cwd: root });
+    if (answer.verdict !== "accept") {
+      throw new Error(
+        answer.reason === "dirty-worktree"
+          ? "platform_worker_release_source_dirty"
+          : "platform_worker_release_source_not_pushed",
+      );
+    }
+  } else {
+    let status: string;
+    try {
+      status = gitAt(root, ["status", "--porcelain=v1", "--untracked-files=all"]);
+    } catch {
+      throw new Error("platform_worker_release_source_not_pushed");
+    }
+    if (status.trim()) throw new Error("platform_worker_release_source_dirty");
   }
-  const commit = gitAt(root, ["rev-parse", "HEAD"]).trim();
-  const branch = gitAt(root, ["rev-parse", "--abbrev-ref", "HEAD"]).trim();
-  const remote = gitAt(root, [
-    "ls-remote",
-    "--symref",
-    "origin",
-    "HEAD",
-    `refs/heads/${branch}`,
-  ]);
-  let remoteHead: ReturnType<typeof parseRemoteDefaultBranch>;
   try {
-    remoteHead = parseRemoteDefaultBranch(remote);
+    const commit = gitAt(root, ["--no-replace-objects", "rev-parse", "HEAD"]).trim();
+    const branch = gitAt(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]).trim();
+    const tracked = gitAt(root, [
+      "--no-replace-objects",
+      "rev-parse",
+      "--verify",
+      `refs/remotes/origin/${branch}`,
+    ]).trim();
+    const remote = gitAt(root, environment === "production"
+      ? ["ls-remote", "--symref", "origin", "HEAD", `refs/heads/${branch}`]
+      : ["ls-remote", "--exit-code", "origin", `refs/heads/${branch}`]);
+    if (!COMMIT.test(commit) || !branch || tracked !== commit ||
+        !remoteBranchContainsCommit(remote, branch, commit)) {
+      throw new Error("platform_worker_release_source_not_pushed");
+    }
+    if (environment === "production") {
+      const remoteHead = parseRemoteDefaultBranch(remote);
+      if (remoteHead.branch !== branch || remoteHead.commit !== commit) {
+        throw new Error("platform_worker_release_source_not_pushed");
+      }
+    }
   } catch {
-    throw new Error("platform_worker_release_source_not_pushed");
-  }
-  if (
-    remoteHead.branch !== branch ||
-    remoteHead.commit !== commit ||
-    !remoteBranchContainsCommit(remote, branch, commit)
-  ) {
     throw new Error("platform_worker_release_source_not_pushed");
   }
 }

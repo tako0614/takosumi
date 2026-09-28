@@ -57,9 +57,10 @@ post-init check; an explicitly provider-free Plan has no lock digest to check.
 Missing restored bytes never authorize legacy mode when the marker is present.
 
 This protocol requires **two dependent source commits and two release stages**.
-The owner release plan pins the current remote default-branch tip, so an image
-built from a combined runner-plus-new-DO commit cannot be paired with a
-predecessor Worker commit in a production plan. Commit A must contain the
+The production owner release plan pins the current remote default-branch tip;
+staging may pin the exact current tip of a pushed attached feature branch. In
+production, an image built from a combined runner-plus-new-DO commit cannot be
+paired with a predecessor Worker commit in a plan. Commit A must contain the
 compatibility runner but retain the old DO dispatch behavior (no lock restore
 PUT or marker). Commit B, descended from A, adds the verified DO restore and
 marker sender only after A's image has converged. Cloudflare [activates Worker and DO code before starting a
@@ -156,7 +157,7 @@ never contained — while staging pointed at a different tree entirely, so the t
 environments could no longer be released from one checkout, and neither config
 could say **which commit** it meant.
 
-Materialize the pinned source when the current checkout is not it:
+Materialize the pinned production/default-branch source when the current checkout is not it:
 
 ```bash
 bun run deploy -- takosumi-platform-staging materialize-source \
@@ -166,11 +167,15 @@ bun run deploy -- takosumi-platform-staging materialize-source \
 That is a fresh, disposable, depth-1 tracking checkout of the remote default
 branch. Materialization refuses unless that branch's current remote tip is the
 pinned commit; it does not detach HEAD or create a synthetic release branch.
-Install the toolchain there and run `plan` from it. Every later source-lineage
-check re-reads remote `HEAD` and refuses if the checkout's attached branch is no
-longer the remote default, even when that old branch still points at the pinned
-commit. The recovery path is the same command against the commit the stored plan
-recorded, so a restore no longer depends on one directory continuing to exist.
+Install the toolchain there and run `plan` from it. This command materializes
+only the remote default branch; for a staging feature-branch release, use a clean
+attached checkout of that already-pushed branch at its exact remote tip. Plan,
+execute, recover, and restore check that the local tracking ref and a fresh
+remote branch read still equal the checkout commit. Production additionally
+re-reads remote `HEAD` and refuses if the attached branch is no longer the
+remote default. The production recovery path is the same materialization command
+against the commit the stored plan recorded, so restore does not depend on one
+directory continuing to exist.
 
 Advancing the pin is part of cutting a release: set `commit` to the reviewed
 source commit, then plan and execute.
@@ -333,7 +338,8 @@ to the sponsorship descriptor, and set `takosumi-ai.workspaceContext` to
 ## Official staging release
 
 The official staging target is a reviewed two-step owner surface. Plan is
-read-only: it requires clean pushed source, binds its exact repository/commit
+read-only: it requires a clean attached checkout at the freshly read tip of its
+pushed branch (not necessarily `main`), binds its exact repository/commit
 authority into the confirmed plan, and consumes the operator-private runner
 build evidence for the configured immutable image. Every matching published v3
 record is fully validated. Valid historical records without proof are ignored,

@@ -3008,3 +3008,69 @@ test("release lineage refuses when the remote default ref switches after materia
     "platform_worker_release_source_not_pushed",
   );
 });
+
+test("staging full release accepts only a clean attached pushed branch at its fresh remote tip", async () => {
+  const root = mkdtempSync(join(tmpdir(), "takosumi-platform-staging-lineage-"));
+  roots.push(root);
+  const remote = join(root, "origin.git");
+  const seed = join(root, "seed");
+  const checkout = join(root, "checkout");
+  gitCommand(["init", "--quiet", "--bare", "--initial-branch=main", remote], root);
+  gitCommand(["init", "--quiet", "--initial-branch=main", seed], root);
+  writeFileSync(join(seed, "README.md"), "main\n");
+  gitCommand(["add", "README.md"], seed);
+  gitCommand(["commit", "--quiet", "--message", "main"], seed);
+  gitCommand(["remote", "add", "origin", remote], seed);
+  gitCommand(["push", "--quiet", "--set-upstream", "origin", "main"], seed);
+  const mainCommit = gitCommand(["rev-parse", "HEAD"], seed);
+  gitCommand(["checkout", "--quiet", "-b", "feature/staging-release"], seed);
+  writeFileSync(join(seed, "README.md"), "feature\n");
+  gitCommand(["commit", "--quiet", "--all", "--message", "feature"], seed);
+  gitCommand(["push", "--quiet", "--set-upstream", "origin", "feature/staging-release"], seed);
+  gitCommand(["clone", "--quiet", remote, checkout], root);
+  gitCommand(["checkout", "--quiet", "--track", "origin/feature/staging-release"], checkout);
+
+  await expect(assertCleanAndPushed(checkout, "staging")).resolves.toBeUndefined();
+  await expect(assertCleanAndPushed(checkout, "production")).rejects.toThrow(
+    "platform_worker_release_source_not_pushed",
+  );
+
+  writeFileSync(join(checkout, "untracked.txt"), "dirty\n");
+  await expect(assertCleanAndPushed(checkout, "staging")).rejects.toThrow(
+    "platform_worker_release_source_dirty",
+  );
+  rmSync(join(checkout, "untracked.txt"));
+
+  gitCommand(["checkout", "--quiet", "--detach"], checkout);
+  await expect(assertCleanAndPushed(checkout, "staging")).rejects.toThrow(
+    "platform_worker_release_source_not_pushed",
+  );
+  gitCommand(["checkout", "--quiet", "feature/staging-release"], checkout);
+
+  writeFileSync(join(checkout, "README.md"), "unpushed\n");
+  gitCommand(["commit", "--quiet", "--all", "--message", "unpushed"], checkout);
+  await expect(assertCleanAndPushed(checkout, "staging")).rejects.toThrow(
+    "platform_worker_release_source_not_pushed",
+  );
+  gitCommand(["push", "--quiet", "origin", "feature/staging-release"], checkout);
+  await expect(assertCleanAndPushed(checkout, "staging")).resolves.toBeUndefined();
+
+  // A forged/stale tracking ref cannot stand in for the current remote tip.
+  gitCommand(["update-ref", "refs/remotes/origin/feature/staging-release", mainCommit], checkout);
+  await expect(assertCleanAndPushed(checkout, "staging")).rejects.toThrow(
+    "platform_worker_release_source_not_pushed",
+  );
+  gitCommand(["fetch", "--quiet", "origin", "feature/staging-release"], checkout);
+  await expect(assertCleanAndPushed(checkout, "staging")).resolves.toBeUndefined();
+
+  // Even when local HEAD and its tracking ref remain unchanged, a remote
+  // advance after planning invalidates execution/recovery/restore preflight.
+  gitCommand(["fetch", "--quiet", "origin", "feature/staging-release"], seed);
+  gitCommand(["merge", "--quiet", "--ff-only", "origin/feature/staging-release"], seed);
+  writeFileSync(join(seed, "README.md"), "remote advanced\n");
+  gitCommand(["commit", "--quiet", "--all", "--message", "advance"], seed);
+  gitCommand(["push", "--quiet", "origin", "feature/staging-release"], seed);
+  await expect(assertCleanAndPushed(checkout, "staging")).rejects.toThrow(
+    "platform_worker_release_source_not_pushed",
+  );
+});
