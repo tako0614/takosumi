@@ -3544,7 +3544,12 @@ export async function runCommand(
         terminateCommand(child, "SIGKILL");
         // A child stuck past SIGKILL cannot hold the caller forever. Its
         // termination is unconfirmed; the publication outcome stays unknown.
-        reapTimer = setTimeout(() => settleAbnormal(error), COMMAND_KILL_REAP_GRACE_MS);
+        reapTimer = setTimeout(() => {
+          // If SIGKILL still has not produced exit, do not retain the CLI's
+          // event loop through the unreaped ChildProcess handle.
+          if (!directChildExited) child.unref();
+          settleAbnormal(error);
+        }, COMMAND_KILL_REAP_GRACE_MS);
       }, COMMAND_TERMINATION_GRACE_MS);
     };
     const timeout = setTimeout(() => {
