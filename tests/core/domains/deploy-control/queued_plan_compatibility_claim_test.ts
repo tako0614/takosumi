@@ -559,8 +559,10 @@ test("successful Plan Core timing diagnostic partitions delayed preclaim, claim,
     const detail = JSON.parse(timing?.detail ?? "null") as Record<string, number>;
     expect(Object.keys(detail).sort()).toEqual([
       "claimMs",
+      "credentialMintMs",
       "dispatchPreparationMs",
       "preClaimPreparationMs",
+      "providerBindingResolutionMs",
       "renewalOutsideRunnerMs",
       "resolveRunEnvironmentMs",
       "runnerPlanMs",
@@ -571,6 +573,8 @@ test("successful Plan Core timing diagnostic partitions delayed preclaim, claim,
     expect(detail.preClaimPreparationMs).toBeGreaterThanOrEqual(60);
     expect(detail.claimMs).toBeGreaterThanOrEqual(20);
     expect(detail.resolveRunEnvironmentMs).toBeGreaterThanOrEqual(30);
+    expect(detail.providerBindingResolutionMs).toBeGreaterThanOrEqual(0);
+    expect(detail.credentialMintMs).toBeGreaterThanOrEqual(0);
     expect(detail.dispatchPreparationMs).toBeGreaterThanOrEqual(40);
     expect(detail.renewalOutsideRunnerMs).toBeGreaterThanOrEqual(40);
     expect(detail.runnerPlanMs).toBeGreaterThanOrEqual(50);

@@ -354,8 +354,10 @@ test("a provider pinned at or above the floor receives the run-scoped sensitive 
   const timings = JSON.parse(diagnostics[0]?.detail ?? "null");
   expect(Object.keys(timings).sort()).toEqual([
     "claimMs",
+    "credentialMintMs",
     "dispatchPreparationMs",
     "preClaimPreparationMs",
+    "providerBindingResolutionMs",
     "renewalOutsideRunnerMs",
     "resolveRunEnvironmentMs",
     "runnerPlanMs",

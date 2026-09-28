@@ -29,6 +29,13 @@ finite, non-negative millisecond durations:
   not include delivery time before the consumer enters this function.
 - `claimMs`: from immediately before the running claim through its fenced CAS.
 - `resolveRunEnvironmentMs`: dispatch-time environment and credential resolution.
+- `providerBindingResolutionMs`: initial Plan-time binding resolution, reviewed
+  binding fence, and non-secret provider configuration projection, before the
+  credential broker runs.
+- `credentialMintMs`: the full credential broker call. It includes the broker's
+  binding re-resolution and policy checks, Vault validation and mint, any
+  platform credential exchange, and post-mint evidence/policy/audit work. It is
+  not a measurement of Hosted exchange alone.
 - `dispatchPreparationMs`: Core execution dispatch, policy reads, and runner
   selection before the renewal guard starts.
 - `renewalOutsideRunnerMs`: elapsed time inside the renewal guard but outside
@@ -37,9 +44,11 @@ finite, non-negative millisecond durations:
   initial check, and any pending renewal tick after the runner returns.
 - `runnerPlanMs`: the complete `runner.plan` call, including the Worker adapter.
 
-The Core intervals are sequential. The five keys from `claimMs` through
-`runnerPlanMs` approximate the measured claim-to-runner-return portion of the
-Plan; adding `preClaimPreparationMs` approximates consumer-entry-to-runner-return.
+The five top-level Core intervals from `claimMs` through `runnerPlanMs` are
+sequential. `providerBindingResolutionMs` and `credentialMintMs` subdivide
+`resolveRunEnvironmentMs`; do not add them to the outer value. The top-level
+intervals approximate the measured claim-to-runner-return portion of the Plan;
+adding `preClaimPreparationMs` approximates consumer-entry-to-runner-return.
 Neither sum is a measure of delivery delay. In particular, a gap from Run
 `createdAt` to `startedAt` can include both time before `runQueuedPlan` starts
 and its pre-claim work, so it must not be labeled queue-only.

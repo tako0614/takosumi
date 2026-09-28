@@ -196,6 +196,61 @@ test("RunEnvResolver resolves secret Provider Connections without hashing secret
   expect(first.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);
 });
 
+test("RunEnvResolver reports numeric timing splits only for Plan phases", async () => {
+  const resolved = [{
+    provider: CLOUDFLARE_PROVIDER,
+    materialization: "secret" as const,
+    connection: connection(),
+  }];
+  const subject = new RunEnvResolver({
+    credentials: {
+      mintRunCredentials: async () => {
+        await Bun.sleep(25);
+        return runCredentials({ CLOUDFLARE_API_TOKEN: "not-returned-in-timing" });
+      },
+      mintReleaseCommandCredentials: async () => undefined,
+    },
+    resolveRunProviderBindings: async () => {
+      await Bun.sleep(25);
+      return resolved;
+    },
+  });
+
+  const plan = await subject.resolveRunEnvironment({
+    planRun: planRun(),
+    phase: "plan",
+    auditRunId: "plan_1",
+  });
+  expect(plan.planTimings).toEqual({
+    providerBindingResolutionMs: expect.any(Number),
+    credentialMintMs: expect.any(Number),
+  });
+  expect(Object.values(plan.planTimings ?? {}).every(
+    (value) => Number.isFinite(value) && value >= 0,
+  )).toBe(true);
+  expect(plan.planTimings?.providerBindingResolutionMs).toBeGreaterThanOrEqual(20);
+  expect(plan.planTimings?.credentialMintMs).toBeGreaterThanOrEqual(20);
+  expect(JSON.stringify(plan.planTimings)).not.toContain("not-returned-in-timing");
+
+  const repeatedPlan = await subject.resolveRunEnvironment({
+    planRun: planRun(),
+    phase: "plan",
+    auditRunId: "plan_1",
+  });
+  expect(repeatedPlan.runEnvironmentEvidenceDigest).toBe(
+    plan.runEnvironmentEvidenceDigest,
+  );
+
+  for (const phase of ["apply", "destroy"] as const) {
+    const nonPlan = await subject.resolveRunEnvironment({
+      planRun: planRun(),
+      phase,
+      auditRunId: "plan_1",
+    });
+    expect(nonPlan.planTimings).toBeUndefined();
+  }
+});
+
 test("RunEnvResolver records the exact required child alias resolution", async () => {
   const subject = resolver({
     resolved: [

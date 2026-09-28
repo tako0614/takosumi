@@ -1404,6 +1404,8 @@ interface CorePlanElapsedTimings {
   readonly preClaimPreparationMs: number;
   readonly claimMs: number;
   readonly resolveRunEnvironmentMs: number;
+  readonly providerBindingResolutionMs: number;
+  readonly credentialMintMs: number;
   readonly dispatchPreparationMs: number;
   readonly renewalOutsideRunnerMs: number;
   readonly runnerPlanMs: number;
@@ -5358,7 +5360,14 @@ export class RunEngine {
         variables,
         runEnvironment,
         dispatch,
-        { preClaimPreparationMs, claimMs, resolveRunEnvironmentMs },
+        {
+          preClaimPreparationMs,
+          claimMs,
+          resolveRunEnvironmentMs,
+          providerBindingResolutionMs:
+            runEnvironment.planTimings?.providerBindingResolutionMs ?? 0,
+          credentialMintMs: runEnvironment.planTimings?.credentialMintMs ?? 0,
+        },
       );
     } catch (error) {
       if (isRunnerInfrastructureRequeueError(error)) throw error;
@@ -7967,6 +7976,8 @@ export class RunEngine {
       readonly preClaimPreparationMs: number;
       readonly claimMs: number;
       readonly resolveRunEnvironmentMs: number;
+      readonly providerBindingResolutionMs: number;
+      readonly credentialMintMs: number;
     },
   ): Promise<PlanRun> {
     try {
@@ -8081,6 +8092,9 @@ export class RunEngine {
         preClaimPreparationMs: preDispatchTimings.preClaimPreparationMs,
         claimMs: preDispatchTimings.claimMs,
         resolveRunEnvironmentMs: preDispatchTimings.resolveRunEnvironmentMs,
+        providerBindingResolutionMs:
+          preDispatchTimings.providerBindingResolutionMs,
+        credentialMintMs: preDispatchTimings.credentialMintMs,
         dispatchPreparationMs,
         renewalOutsideRunnerMs: Math.max(0, withRunRenewalMs - runnerPlanMs),
         runnerPlanMs,

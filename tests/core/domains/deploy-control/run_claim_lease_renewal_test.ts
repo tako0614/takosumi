@@ -1497,8 +1497,10 @@ test("renewable PlanRun refreshes under its own plan owner", async () => {
       Record<string, unknown>;
     expect(Object.keys(timings).sort()).toEqual([
       "claimMs",
+      "credentialMintMs",
       "dispatchPreparationMs",
       "preClaimPreparationMs",
+      "providerBindingResolutionMs",
       "renewalOutsideRunnerMs",
       "resolveRunEnvironmentMs",
       "runnerPlanMs",

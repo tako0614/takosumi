@@ -37,6 +37,11 @@ import {
 
 export const RUN_ENV_REDACTION_PROFILE_ID = "redact_provider_material" as const;
 
+function finiteElapsedMs(startedAt: number, finishedAt: number): number {
+  const elapsed = finishedAt - startedAt;
+  return Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
+}
+
 type RunCredentialMintPort = Pick<
   RunCredentialBroker,
   "mintRunCredentials" | "mintReleaseCommandCredentials"
@@ -71,6 +76,11 @@ export interface ResolvedRunEnvironment {
   readonly providerConfigurations: ProviderConfigurationsEnvelope;
   readonly runEnvironmentEvidenceDigest: string;
   readonly redactionProfileId: typeof RUN_ENV_REDACTION_PROFILE_ID;
+  /** Internal Plan-only timings, excluded from evidence digests and dispatch. */
+  readonly planTimings?: {
+    readonly providerBindingResolutionMs: number;
+    readonly credentialMintMs: number;
+  };
 }
 
 export class RunEnvironmentResolutionError extends OpenTofuControllerError {
@@ -121,12 +131,19 @@ export class RunEnvResolver {
   async resolveRunEnvironment(
     input: ResolveRunEnvironmentInput,
   ): Promise<ResolvedRunEnvironment> {
+    const planOnly = input.phase === "plan";
+    const providerBindingResolutionStartedAt = planOnly
+      ? performance.now()
+      : undefined;
     const resolution = await this.#providerResolutionContext(input);
     await assertPlanFencedResolvedBindings(input, resolution.resolvedBindings);
     const providerResolutions = resolution.providerResolutions;
     const providerConfigurations = providerConfigurationsFromResolved(
       resolution.resolvedBindings,
     );
+    const providerBindingResolutionMs = planOnly
+      ? finiteElapsedMs(providerBindingResolutionStartedAt!, performance.now())
+      : undefined;
     const blocked = providerResolutions.find(
       (resolution) => resolution.evidence.kind === "blocked",
     );
@@ -143,6 +160,7 @@ export class RunEnvResolver {
         runEnvironment,
       );
     }
+    const credentialMintStartedAt = planOnly ? performance.now() : undefined;
     const credentials =
       input.mintCredentials === false
         ? undefined
@@ -158,11 +176,20 @@ export class RunEnvResolver {
               input.phase,
               input.auditRunId,
             );
+    const credentialMintMs = planOnly
+      ? finiteElapsedMs(credentialMintStartedAt!, performance.now())
+      : undefined;
     return await this.#buildRunEnvironmentEvidence(
       input,
       providerResolutions,
       providerConfigurations,
       credentials,
+      planOnly
+        ? {
+            providerBindingResolutionMs: providerBindingResolutionMs!,
+            credentialMintMs: credentialMintMs!,
+          }
+        : undefined,
     );
   }
 
@@ -171,6 +198,7 @@ export class RunEnvResolver {
     providerResolutions: readonly ProviderResolution[],
     providerConfigurations: ProviderConfigurationsEnvelope,
     credentials: RunCredentials | undefined,
+    planTimings?: ResolvedRunEnvironment["planTimings"],
   ): Promise<ResolvedRunEnvironment> {
     const credentialEnvNames =
       credentialEnvNamesFromRunCredentials(credentials);
@@ -192,6 +220,7 @@ export class RunEnvResolver {
       providerConfigurations,
       runEnvironmentEvidenceDigest,
       redactionProfileId: RUN_ENV_REDACTION_PROFILE_ID,
+      ...(planTimings ? { planTimings } : {}),
     };
   }
 
