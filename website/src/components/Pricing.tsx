@@ -6,7 +6,7 @@ export default function Pricing() {
   return (
     <Section
       id="pricing"
-      title="自分で持つか、公式ホスティングか。"
+      title="料金"
       lede={
         <>
           セルフホストは<em class="em">無料</em>
@@ -30,15 +30,7 @@ export default function Pricing() {
               <ul class="plan-features">
                 <For each={plan.features}>{(f) => <li>{f.label}</li>}</For>
               </ul>
-              <a
-                class="btn"
-                classList={{
-                  "btn-primary": plan.highlight,
-                  "btn-secondary": !plan.highlight,
-                }}
-                href={plan.cta.href}
-                rel="external"
-              >
+              <a class="link-go" href={plan.cta.href} rel="external">
                 {plan.cta.label} →
               </a>
             </article>

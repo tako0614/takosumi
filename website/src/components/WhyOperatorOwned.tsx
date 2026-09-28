@@ -26,7 +26,7 @@ export default function WhyOperatorOwned() {
   return (
     <Section
       id="why"
-      title="なぜ Takosumi か。"
+      title="何を管理するか"
       lede={
         <>
           クラウドごとの管理画面に任せきりにすると、鍵は散らばり、変更履歴は追いにくくなります。

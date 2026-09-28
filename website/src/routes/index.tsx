@@ -4,7 +4,6 @@ import Hero from "~/components/Hero";
 import Why from "~/components/WhyOperatorOwned";
 import WhatYouCanHost from "~/components/WhatYouCanHost";
 import Showcase from "~/components/Showcase";
-import Stats from "~/components/Stats";
 import Comparison from "~/components/Comparison";
 import Pricing from "~/components/Pricing";
 import EndCTA from "~/components/EndCTA";
@@ -14,14 +13,13 @@ import AdringWidget from "~/components/AdringWidget";
 export default function Home() {
   return (
     <>
-      <Title>Takosumi | OpenTofu-native deploy control plane</Title>
+      <Title>Takosumi</Title>
       <Nav />
       <main id="main">
         <Hero />
         <WhatYouCanHost />
         <Why />
         <Showcase />
-        <Stats />
         <Comparison />
         <Pricing />
         <EndCTA />

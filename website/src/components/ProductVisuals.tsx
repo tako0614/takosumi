@@ -13,15 +13,16 @@ export function ProductShot(props: {
   src: string;
   alt: string;
   label: string;
+  w?: number;
+  h?: number;
 }): JSX.Element {
   return (
     <figure class="pv pv-shot" aria-label={props.label}>
       <img
         src={props.src}
         alt={props.alt}
-        width="1600"
-        height="1000"
-        loading="lazy"
+        width={props.w ?? 1600}
+        height={props.h ?? 1000}
         decoding="async"
       />
     </figure>
@@ -52,6 +53,8 @@ export function RunHistory(): JSX.Element {
   return (
     <ProductShot
       src="/screens/runs.webp"
+      w={1600}
+      h={720}
       label="デプロイ履歴"
       alt="デプロイ履歴の実画面。デプロイ・変更の確認・内容の取得・ズレの確認の実行記録が、成否と時刻つきで並ぶ。"
     />

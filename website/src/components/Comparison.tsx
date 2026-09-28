@@ -41,7 +41,7 @@ export default function Comparison() {
   return (
     <Section
       id="compare"
-      title="ほかの選択肢と、何が違うか。"
+      title="SaaS / PaaS との違い"
       lede={
         <>
           便利な SaaS や PaaS と、自分で持つ Takosumi を、

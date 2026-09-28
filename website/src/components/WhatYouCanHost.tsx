@@ -6,11 +6,12 @@ export default function WhatYouCanHost() {
   return (
     <section id="what">
       <div class="container">
-        <h2>スターターから、自分のサービスまで。</h2>
+        <h2>登録できるサービス</h2>
         <p class="lede">
           公式スターターも、自分の Git リポジトリも、同じ
           <em class="em">サービス</em>
-          として扱います。Takosumi は、必要な接続と変更内容を先に見せてから公開します。
+          として扱います。Takosumi
+          は、必要な接続と変更内容を先に見せてから公開します。
         </p>
         <ul class="host-list">
           <For each={USE_CASES}>

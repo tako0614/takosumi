@@ -97,64 +97,21 @@ section h2 + .lede {
   max-width: 64ch;
 }
 
-/* Buttons */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--tg-s-2);
-  padding: 0.9em 1.55em;
-  border-radius: var(--tg-r-md);
+/* Text links — the only action style on this page. */
+.link-go {
   font-weight: 600;
   font-size: var(--tg-fs-sm);
-  border: 1px solid transparent;
-  transition:
-    transform 120ms ease,
-    background 120ms ease,
-    border-color 120ms ease;
-  white-space: nowrap;
-  font-family: var(--tg-font-display);
-  letter-spacing: -0.005em;
-}
-.btn:hover {
-  transform: translateY(-1px);
-}
-.btn-primary {
-  background: var(--tg-accent);
-  color: #ffffff;
-}
-.btn-primary:hover {
-  color: #ffffff;
-  background: var(--tg-accent-hover);
-}
-.btn-secondary {
-  background: transparent;
   color: var(--tg-fg);
-  border-color: var(--tg-line-strong);
 }
-.btn-secondary:hover {
-  border-color: var(--tg-accent);
+.link-go:hover {
   color: var(--tg-accent);
 }
-.btn-ghost {
-  background: transparent;
-  color: var(--tg-fg-muted);
-  padding: 0.5em 0.8em;
-}
-.btn-ghost:hover {
-  color: var(--tg-fg);
-  background: var(--tg-bg-subtle);
-}
-
-.grad-text {
-  background: linear-gradient(
-    120deg,
-    var(--tg-grad-from),
-    var(--tg-grad-mid) 55%,
-    var(--tg-grad-to)
-  );
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+.intro-links {
+  display: flex;
+  gap: var(--tg-s-5);
+  flex-wrap: wrap;
+  align-items: baseline;
+  margin: 0 0 var(--tg-s-4);
 }
 
 /* Skip-to-content link — visually hidden until focused (WCAG 2.4.1) */
@@ -267,10 +224,11 @@ section h2 + .lede {
   background: var(--tg-bg-subtle);
 }
 
-.nav-cta {
-  padding: 0.55em 1em !important;
-  font-size: var(--tg-fs-sm) !important;
+.nav-use {
+  font-size: var(--tg-fs-sm);
+  font-weight: 600;
   margin-left: var(--tg-s-2);
+  white-space: nowrap;
 }
 
 /* Mobile disclosure menu — <details>/<summary>, zero JS, SSR-safe.
@@ -333,19 +291,7 @@ section h2 + .lede {
   border-top: none;
 }
 .hero-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
-  align-items: center;
-  gap: var(--tg-s-8);
-}
-.hero-kicker {
-  font-family: var(--tg-font-mono);
-  font-size: var(--tg-fs-xs);
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--tg-accent-text);
-  margin: 0 0 var(--tg-s-5);
+  display: block;
 }
 .hero-spec {
   list-style: none;
@@ -362,44 +308,24 @@ section h2 + .lede {
 }
 .hero-visual {
   min-width: 0;
-}
-@media (max-width: 960px) {
-  .hero-grid {
-    grid-template-columns: 1fr;
-    gap: var(--tg-s-7);
-  }
+  margin-top: var(--tg-s-7);
 }
 .hero h1 {
   font-family: var(--tg-font-display);
-  font-size: clamp(2.8rem, 5.2vw, 4.6rem);
-  line-height: 0.94;
-  letter-spacing: -0.045em;
-  text-wrap: balance;
+  font-size: clamp(1.9rem, 3.4vw, 2.6rem);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
   margin: 0 0 var(--tg-s-5);
-  font-weight: 800;
-}
-.hero h1 .hero-line {
-  display: block;
-}
-.hero h1 .hero-accent {
-  color: var(--tg-accent);
+  font-weight: 700;
 }
 .hero .lede {
   color: var(--tg-fg-muted);
-  font-size: clamp(1rem, 1.3vw, 1.15rem);
-  max-width: 52ch;
-  margin: 0 0 var(--tg-s-6);
-  text-wrap: pretty;
-}
-.hero .cta-row {
-  display: flex;
-  gap: var(--tg-s-3);
-  flex-wrap: wrap;
+  font-size: var(--tg-fs-base);
+  max-width: 58ch;
+  margin: 0 0 var(--tg-s-5);
 }
 /* Comparison */
 .comparison {
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-lg);
   overflow-x: auto;
 }
 .comparison table {
@@ -410,65 +336,39 @@ section h2 + .lede {
 }
 .comparison th,
 .comparison td {
-  padding: var(--tg-s-3) var(--tg-s-4);
+  padding: var(--tg-s-3) var(--tg-s-3) var(--tg-s-3) 0;
   border-bottom: 1px solid var(--tg-line);
   text-align: left;
   vertical-align: top;
 }
 .comparison thead th {
-  background: var(--tg-bg-subtle);
   font-size: var(--tg-fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.04em;
   color: var(--tg-fg-subtle);
-  font-weight: 700;
+  font-weight: 600;
   font-family: var(--tg-font-mono);
-}
-.comparison thead th:nth-child(2) {
-  color: var(--tg-accent-text);
+  border-bottom: 1px solid var(--tg-line-strong);
 }
 .comparison tbody th[scope="row"] {
-  background: transparent;
   color: var(--tg-fg);
   font-weight: 700;
 }
 .comparison td.us {
-  background: color-mix(in srgb, var(--tg-accent-soft) 70%, transparent);
   font-weight: 600;
   color: var(--tg-fg);
 }
 
 /* Pricing — self-host (free / OSS) vs hosted Takosumi (prepaid credit + usage) */
 .plan-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: var(--tg-s-5);
   margin-bottom: var(--tg-s-7);
-}
-@media (max-width: 880px) {
-  .plan-grid {
-    grid-template-columns: 1fr;
-  }
+  border-top: 1px solid var(--tg-line);
 }
 .plan {
   display: flex;
   flex-direction: column;
-  gap: var(--tg-s-5);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-lg);
-  padding: var(--tg-s-6);
-  background: var(--tg-bg-elev);
-  transition: border-color 160ms ease;
-}
-.plan:hover {
-  border-color: var(--tg-accent);
-}
-.plan.featured {
-  border-color: var(--tg-line-strong);
-  background: color-mix(in srgb, var(--tg-accent-soft) 40%, var(--tg-bg-elev));
-}
-.plan.featured:hover {
-  border-color: var(--tg-accent);
+  gap: var(--tg-s-4);
+  padding: var(--tg-s-5) 0;
+  border-bottom: 1px solid var(--tg-line);
 }
 .plan-head h3 {
   font-family: var(--tg-font-display);
@@ -517,14 +417,13 @@ section h2 + .lede {
   line-height: var(--tg-lh-snug);
 }
 .plan-features li::before {
-  content: "→";
+  content: "—";
   position: absolute;
   left: 0;
   top: 0;
-  color: var(--tg-accent-text);
-  font-family: var(--tg-font-mono);
+  color: var(--tg-fg-subtle);
 }
-.plan .btn {
+.plan .link-go {
   align-self: flex-start;
 }
 .plan-ownership {
@@ -589,7 +488,6 @@ footer.site {
   padding: var(--tg-s-7) 0;
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
-  background: var(--tg-bg-subtle);
 }
 footer.site .container {
   display: grid;
@@ -708,70 +606,52 @@ footer.site .copy {
 
 /* ===== Ported polish primitives (parity with takos house style) ========= */
 
-/* Inline accent emphasis on key nouns in body copy */
+/* Inline emphasis on key nouns in body copy */
 .em {
   font-style: normal;
-  color: var(--tg-accent-text);
-  font-weight: 600;
+  color: var(--tg-fg);
+  font-weight: 700;
 }
 
 @media (max-width: 720px) {
   .hero {
     padding-top: calc(var(--tg-nav-h) + var(--tg-s-6));
   }
-  .hero-grid {
-    gap: var(--tg-s-6);
-  }
   .hero h1 {
-    font-size: 2.8rem;
-    line-height: 0.98;
+    font-size: 1.9rem;
     margin-bottom: var(--tg-s-4);
   }
-  .hero .cta-row {
-    width: 100%;
-    max-width: 360px;
-    gap: var(--tg-s-2);
-  }
-  .hero .cta-row .btn {
-    flex: 1 1 0;
-    justify-content: center;
-    min-width: 0;
-    padding: 0.88em 1em;
-  }
-}
-
-@media (max-width: 420px) {
-  .hero h1 {
-    font-size: 2.9rem;
-  }
-  .hero .cta-row {
+  .intro-links {
     flex-direction: column;
+    gap: var(--tg-s-3);
   }
 }
 
-/* Why — numbered 3-point grid (red top rule) */
+/* Why — flat rows, term left / detail right */
 .why-points {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: var(--tg-s-6);
   margin-top: var(--tg-s-6);
-}
-@media (max-width: 880px) {
-  .why-points {
-    grid-template-columns: 1fr;
-    gap: var(--tg-s-5);
-  }
+  border-top: 1px solid var(--tg-line);
 }
 .why-point {
-  border-top: 2px solid var(--tg-accent);
-  padding-top: var(--tg-s-4);
+  display: grid;
+  grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+  gap: var(--tg-s-3) var(--tg-s-6);
+  align-items: baseline;
+  padding: var(--tg-s-4) 0;
+  border-bottom: 1px solid var(--tg-line);
+}
+@media (max-width: 720px) {
+  .why-point {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--tg-s-1);
+  }
 }
 .why-point h3 {
   font-family: var(--tg-font-display);
-  font-size: var(--tg-fs-xl);
-  font-weight: 800;
-  letter-spacing: -0.015em;
-  margin: var(--tg-s-2) 0;
+  font-size: var(--tg-fs-base);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0;
 }
 .why-point p {
   margin: 0;
@@ -779,80 +659,12 @@ footer.site .copy {
   font-size: var(--tg-fs-base);
 }
 
-/* Stats — big-number row (transparent so the page ink shows through) */
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: var(--tg-s-4);
-}
-@media (max-width: 880px) {
-  .stats-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-@media (max-width: 480px) {
-  .stats-grid {
-    grid-template-columns: 1fr;
-  }
-}
-.stat {
-  padding: var(--tg-s-5) var(--tg-s-3);
-  border-left: 1px solid var(--tg-line);
-}
-.stat:first-child {
-  border-left: none;
-}
-@media (max-width: 880px) {
-  .stat:nth-child(3) {
-    border-left: none;
-  }
-}
-@media (max-width: 480px) {
-  .stat {
-    border-left: none;
-    border-top: 1px solid var(--tg-line);
-    padding-top: var(--tg-s-5);
-  }
-  .stat:first-child {
-    border-top: none;
-  }
-}
-.stat-num {
-  font-family: var(--tg-font-display);
-  font-size: clamp(2.8rem, 6vw, 4.4rem);
-  line-height: 1;
-  letter-spacing: -0.04em;
-  font-weight: 800;
-  color: var(--tg-fg);
-}
-.stat-label {
-  font-family: var(--tg-font-mono);
-  font-size: var(--tg-fs-sm);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--tg-accent-text);
-  margin: var(--tg-s-2) 0;
-}
-.stat-note {
-  color: var(--tg-fg-muted);
-  font-size: var(--tg-fs-sm);
-  margin: 0;
-}
-
-/* ===== Product visuals — faithful renderings of the real dashboard =====
- * Sources: dashboard/src/views/apps/AppListView.tsx (launcher + shell nav),
- * views/runs/RunView.tsx (変更の確認), views/runs/RunsListView.tsx
- * (デプロイ履歴), views/apps/WorkloadDetailView.tsx (更新履歴 / Generation).
- * Vocabulary and layout mirror the product; styling stays on this site's
- * --tg-* tokens. All "controls" inside are inert spans — the figures are
- * illustrations, not interactive UI. */
+/* ===== Product visuals — real screenshots of the running dashboard
+ * (public/screens, captured from the actual SPA). Plain figures:
+ * a 1px image rule and a caption line — no re-drawn chrome. */
 
 .pv {
   margin: var(--tg-s-6) 0 0;
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-md);
-  background: var(--tg-bg-elev);
-  overflow: hidden;
   text-align: left;
 }
 .pv-caption {
@@ -867,4 +679,6 @@ footer.site .copy {
   display: block;
   width: 100%;
   height: auto;
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-sm);
 }

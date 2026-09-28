@@ -26,7 +26,7 @@ export default function Showcase() {
   return (
     <Section
       id="how"
-      title="3 ステップでホスト。"
+      title="使い方"
       lede={
         <>
           難しい設定は前面に出しません。サービスを選び、接続して、変更内容を確認するだけ。
