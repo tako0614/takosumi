@@ -149,6 +149,7 @@ export const ja = {
   "installStore.pendingUnknown":
     "応答から準備IDを確認できませんでした。IDは推測せず、同じ試行だけを再開できます。",
   "installStore.checkExistingStatus": "既存の準備状況を確認",
+  "installStore.openInstallStatus": "インストール状況を開く",
   "installStore.viewExistingRun": "既存のPlanを開く",
   "installStore.resumeSameAttempt": "同じ試行を再開",
   "installStore.switchToAttemptWorkspace": "試行元のWorkspaceに切り替え",

@@ -1379,12 +1379,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       currentAttempt?.idempotencyKey !== attempt.idempotencyKey ||
       (acknowledgedPlanId !== undefined &&
         (acknowledgedPlanId !== response.installPlan.id ||
-          currentLocator !== response.installPlan.id)) ||
-      (acknowledgedPlanId === undefined &&
-        (location.search !== attempt.startSearch ||
-          location.hash !== attempt.startHash ||
-          (hasInstallPlanRecoveryLocator(location.search) &&
+          (currentLocator !== undefined &&
             currentLocator !== response.installPlan.id))) ||
+      (acknowledgedPlanId === undefined &&
+        hasInstallPlanRecoveryLocator(location.search) &&
+        currentLocator !== response.installPlan.id) ||
       !installPlanRecoveryMatchesIdentity(
         response,
         attempt.workspaceId,
@@ -1400,7 +1399,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         planRunId: response.installPlan.planRunId ?? current.planRunId,
       };
     });
-    if (acknowledgedPlanId === undefined) {
+    if (
+      acknowledgedPlanId === undefined &&
+      location.search === attempt.startSearch &&
+      location.hash === attempt.startHash
+    ) {
       // The locator is the only value carried across reloads. Request contents
       // and the idempotency key remain confined to this tab's pending attempt.
       publishInstallPlanRecoveryLocator(response.installPlan.id);
@@ -1690,7 +1693,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         );
         if (action === "show-review") {
           if (!showReviewableInstallPlan(attempt.workspaceId, response, attempt)) {
-            setPendingInstallStatus(t("installStore.pendingUnknown"));
+            setPendingInstallStatus(
+              pendingInstallAttempt()?.installPlanId
+                ? undefined
+                : t("installStore.pendingUnknown"),
+            );
             setPhase("pending-timeout");
           }
           return;
@@ -1726,7 +1733,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         if (
           !showReviewableInstallPlan(attempt.workspaceId, resumedResponse, attempt)
         ) {
-          setPendingInstallStatus(t("installStore.pendingUnknown"));
+          setPendingInstallStatus(
+            pendingInstallAttempt()?.installPlanId
+              ? undefined
+              : t("installStore.pendingUnknown"),
+          );
           setPhase("pending-timeout");
           return;
         }
@@ -1871,7 +1882,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           installViewActive &&
           pendingInstallAttempt()?.idempotencyKey === attempt.idempotencyKey
         ) {
-          setPendingInstallStatus(t("installStore.pendingUnknown"));
+          setPendingInstallStatus(
+            pendingInstallAttempt()?.installPlanId
+              ? undefined
+              : t("installStore.pendingUnknown"),
+          );
           setPhase("pending-timeout");
         }
       }
@@ -2443,6 +2458,20 @@ function Inner(props: { readonly installingPrincipalId: string }) {
               >
                 {t("installStore.checkExistingStatus")}
               </Button>
+            </Show>
+            <Show when={pendingInstallAttempt()?.installPlanId}>
+              {(installPlanId) => (
+                <Button
+                  href={`/new?installPlan=${encodeURIComponent(installPlanId())}`}
+                  variant="secondary"
+                  onClick={() => {
+                    setPendingInstallAttempt(undefined);
+                    setPendingInstallStatus(undefined);
+                  }}
+                >
+                  {t("installStore.openInstallStatus")}
+                </Button>
+              )}
             </Show>
             <Show
               when={

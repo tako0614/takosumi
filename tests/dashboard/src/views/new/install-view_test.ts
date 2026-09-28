@@ -272,7 +272,9 @@ describe("single-screen install surface", () => {
     expect(view).toContain("onProgress: (progress) => recordInstallPlanProgress(attempt, progress)");
     expect(view).toContain("installPlanId: response.installPlan.id");
     expect(view).toContain("getGitInstallPlan(attempt.installPlanId)");
-    expect(view).toContain("showReviewableInstallPlan(attempt.workspaceId, response)");
+    expect(view).toContain(
+      "showReviewableInstallPlan(attempt.workspaceId, response, attempt)",
+    );
     expect(view).toContain("attempt.request");
     expect(view).toContain('when={pendingInstallAttempt()?.installPlanId}');
     expect(view).toContain("pendingInstallRunIdForSelectedWorkspace(");

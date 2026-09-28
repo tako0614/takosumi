@@ -144,6 +144,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.pendingUnknown":
     "No preparation ID was confirmed in the response. The ID was not guessed; only the same attempt can be resumed.",
   "installStore.checkExistingStatus": "Check existing status",
+  "installStore.openInstallStatus": "Open install status",
   "installStore.viewExistingRun": "Open existing Plan",
   "installStore.resumeSameAttempt": "Resume same attempt",
   "installStore.switchToAttemptWorkspace": "Switch to attempt Workspace",

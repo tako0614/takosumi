@@ -1831,9 +1831,10 @@ test.describe("Takosumi dashboard browser surface", () => {
     await assertNoPageErrors(errors);
   });
 
-  test("same-route query changes keep acknowledged install recovery resumable", async ({
-    page,
-  }) => {
+  for (const scenario of ["route-leave", "same-route"] as const) {
+    test(`${scenario} changes keep acknowledged install recovery safe`, async ({
+      page,
+    }) => {
     test.skip(
       mode !== "portable",
       "the deterministic install API fixture is portable-only",
@@ -1854,6 +1855,10 @@ test.describe("Takosumi dashboard browser surface", () => {
     let installPlanRecord: Record<string, unknown> | undefined;
     let automaticReconcileCalls = 0;
     let automaticReconcileCompleted = false;
+    let releaseCreateAcknowledgement!: () => void;
+    const createAcknowledgementHold = new Promise<void>((resolve) => {
+      releaseCreateAcknowledgement = resolve;
+    });
     let releaseAutomaticReconcile!: () => void;
     const automaticReconcileHold = new Promise<void>((resolve) => {
       releaseAutomaticReconcile = resolve;
@@ -2123,6 +2128,9 @@ test.describe("Takosumi dashboard browser surface", () => {
           createdAt: now,
           updatedAt: now,
         };
+        if (scenario === "route-leave") {
+          await createAcknowledgementHold;
+        }
         return route.fulfill({
           status: 201,
           json: {
@@ -2139,12 +2147,14 @@ test.describe("Takosumi dashboard browser surface", () => {
         path === `/api/v1/install-plans/${installPlanId}` &&
         request.method() === "GET"
       ) {
+        const reviewable = installPlanRecord?.phase === "reviewable";
         return route.fulfill({
           json: {
             installPlan: installPlanRecord,
-            nextAction: "reconcile",
+            nextAction: reviewable ? "review_run" : "reconcile",
             links: {
               self: `/api/v1/install-plans/${installPlanId}`,
+              ...(reviewable ? { run: "/api/v1/runs/run_plan_e2e" } : {}),
               reconcile: `/api/v1/install-plans/${installPlanId}/reconcile`,
             },
           },
@@ -2155,7 +2165,9 @@ test.describe("Takosumi dashboard browser surface", () => {
         request.method() === "POST"
       ) {
         automaticReconcileCalls += 1;
-        await automaticReconcileHold;
+        if (scenario === "same-route") {
+          await automaticReconcileHold;
+        }
         installPlanRecord = {
           ...installPlanRecord,
           capsuleId: "cap_install_e2e",
@@ -2268,26 +2280,54 @@ test.describe("Takosumi dashboard browser surface", () => {
     ]);
     expect(syncBodies).toEqual([{ expectedRef: resolvedCommit }]);
 
-    await expect(page).toHaveURL(new RegExp(`/new\\?installPlan=${installPlanId}$`));
-    await expect.poll(() => automaticReconcileCalls).toBe(1);
-    await page.getByRole("link", { name: "Store" }).click();
-    await expect(page).toHaveURL(/\/new$/u);
-    releaseAutomaticReconcile();
-    await expect.poll(() => automaticReconcileCompleted).toBe(true);
-    await expect(page).toHaveURL(/\/new$/u);
-    expect(new URL(page.url()).searchParams.has("installPlan")).toBe(false);
-    await assertNoPageErrors(errors);
-    await expect(page.getByTestId("install-plan-pending-recovery")).toBeVisible();
-    await page
-      .getByRole("button", { name: /resume|再開/iu })
-      .click();
-    await expect.poll(() => automaticReconcileCalls).toBe(2);
-    await expect(page.getByTestId("install-plan-pending-recovery")).toBeVisible();
-    await expect(page).toHaveURL(/\/new$/u);
-    expect(new URL(page.url()).searchParams.has("installPlan")).toBe(false);
-    expect(automaticReconcileCalls).toBe(2);
+    if (scenario === "route-leave") {
+      await expect.poll(() => installPlanBodies.length).toBe(1);
+      await page.getByRole("link", { name: /settings|設定/iu }).click();
+      await expect(page).toHaveURL(/\/settings$/u);
+      releaseCreateAcknowledgement();
+      await page.waitForLoadState("networkidle");
+      await expect.poll(() => automaticReconcileCalls).toBe(1);
+      await expect.poll(() => automaticReconcileCompleted).toBe(true);
+      await expect(page).toHaveURL(/\/settings$/u);
+      expect(new URL(page.url()).searchParams.has("installPlan")).toBe(false);
+    } else {
+      await expect(page).toHaveURL(
+        new RegExp(`/new\\?installPlan=${installPlanId}$`),
+      );
+      await expect.poll(() => automaticReconcileCalls).toBe(1);
+      await page.getByRole("link", { name: "Store" }).click();
+      await expect(page).toHaveURL(/\/new$/u);
+      releaseAutomaticReconcile();
+      await expect.poll(() => automaticReconcileCompleted).toBe(true);
+      await expect(page).toHaveURL(/\/new$/u);
+      expect(new URL(page.url()).searchParams.has("installPlan")).toBe(false);
+      await assertNoPageErrors(errors);
+      await expect(
+        page.getByTestId("install-plan-pending-recovery"),
+      ).toBeVisible();
+      await page
+        .getByRole("link", {
+          name: /open install status|インストール状況を開く/iu,
+        })
+        .click();
+      await expect(page).toHaveURL(
+        new RegExp(`/new\\?installPlan=${installPlanId}$`),
+      );
+      await expect(page.getByTestId("install-plan-recovery")).toBeVisible();
+      await expect(page.getByTestId("install-plan-recovery-phase")).toHaveText(
+        "reviewable",
+      );
+      await expect(
+        page.getByRole("link", { name: /review|レビュー/iu }),
+      ).toHaveAttribute("href", /\/runs\/run_plan_e2e$/u);
+      await expect(
+        page.getByTestId("install-plan-pending-recovery"),
+      ).toHaveCount(0);
+      expect(automaticReconcileCalls).toBe(1);
+    }
     traffic.assertNoFailures();
-  });
+    });
+  }
 
   test("Workload settings submit one complete Configuration Plan and open its Run review", async ({
     page,
