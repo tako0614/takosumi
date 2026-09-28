@@ -21,9 +21,9 @@ export default function Home() {
         <Showcase />
         <Pricing />
       </main>
+      <AdringWidget />
       <CurlRule />
       <Footer />
-      <AdringWidget />
     </>
   );
 }
