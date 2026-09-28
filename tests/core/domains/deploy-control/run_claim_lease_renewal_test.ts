@@ -1496,14 +1496,20 @@ test("renewable PlanRun refreshes under its own plan owner", async () => {
     const timings = JSON.parse(timingDiagnostics?.[0]?.detail ?? "null") as
       Record<string, unknown>;
     expect(Object.keys(timings).sort()).toEqual([
+      "brokerBindingResolutionMs",
+      "brokerPrePolicyMs",
+      "brokerRuntimeInputsMs",
       "claimMs",
       "credentialMintMs",
+      "credentialValidationMs",
       "dispatchPreparationMs",
+      "postMintPolicyAuditMs",
       "preClaimPreparationMs",
       "providerBindingResolutionMs",
       "renewalOutsideRunnerMs",
       "resolveRunEnvironmentMs",
       "runnerPlanMs",
+      "vaultMintMs",
     ].sort());
     expect(Object.values(timings).every((value) =>
       typeof value === "number" && Number.isFinite(value) && value >= 0

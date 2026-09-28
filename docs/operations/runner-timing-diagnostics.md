@@ -37,8 +37,9 @@ finite, non-negative millisecond durations:
   platform credential exchange, and post-mint evidence/policy/audit work. It is
   not a measurement of Hosted exchange alone.
 - `brokerBindingResolutionMs`: the broker's second, run-scoped Provider Binding
-  resolution and the apply/destroy digest fence when applicable. It is separate
-  from the initial Plan binding resolution above.
+  resolution during Plan. Apply/destroy still enforce their digest fence, which
+  is not measured by this Plan-only diagnostic. This is separate from the
+  initial Plan binding resolution above.
 - `brokerPrePolicyMs`: the broker's pre-mint policy lookup and connection-policy
   evaluation.
 - `brokerRuntimeInputsMs`: existing runtime-input descriptor and materialization

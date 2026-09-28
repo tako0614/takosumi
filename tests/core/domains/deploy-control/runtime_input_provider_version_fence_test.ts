@@ -353,14 +353,20 @@ test("a provider pinned at or above the floor receives the run-scoped sensitive 
   expect(diagnostics[0]?.severity).toBe("info");
   const timings = JSON.parse(diagnostics[0]?.detail ?? "null");
   expect(Object.keys(timings).sort()).toEqual([
+    "brokerBindingResolutionMs",
+    "brokerPrePolicyMs",
+    "brokerRuntimeInputsMs",
     "claimMs",
     "credentialMintMs",
+    "credentialValidationMs",
     "dispatchPreparationMs",
+    "postMintPolicyAuditMs",
     "preClaimPreparationMs",
     "providerBindingResolutionMs",
     "renewalOutsideRunnerMs",
     "resolveRunEnvironmentMs",
     "runnerPlanMs",
+    "vaultMintMs",
   ].sort());
   expect(Object.values(timings).every(
     (value) => typeof value === "number" && Number.isFinite(value) && value >= 0,
