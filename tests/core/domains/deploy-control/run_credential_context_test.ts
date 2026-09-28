@@ -501,6 +501,49 @@ describe("canonical Capsule Run credential context", () => {
       ).toMatchObject({ ok: true, context: { phase } });
     }
 
+    const destroyPlan = { ...plan, operation: "destroy" };
+    const destroyInput = {
+      workspaceId: "workspace_1",
+      capsuleId: "capsule_1",
+      runId: "apply_1",
+      phase: "destroy" as const,
+    };
+    const destroyRows = {
+      capsule,
+      plan: destroyPlan,
+      apply: { ...APPLY, operation: "destroy" },
+      priorApply,
+      stateVersion,
+      output,
+      safety: { phase: "terminating", runId: "apply_1", runType: "destroy_apply" },
+      priorSafety: safety,
+    };
+    expect(
+      await resolveCanonicalCapsuleRunCredentialContext(
+        ledger(destroyRows), destroyInput,
+      ),
+    ).toMatchObject({ ok: true, context: { lifecycleIntent: "destroy" } });
+    for (const staleRows of [
+      { capsule: { ...capsule, currentStateVersionId: "state_other" } },
+      { capsule: { ...capsule, currentOutputId: "output_other" } },
+      { stateVersion: { ...stateVersion, createdByRunId: "apply_other" } },
+      { output: { ...output, stateGeneration: 8 } },
+      {
+        capsule: {
+          ...capsule,
+          currentStateVersionId: undefined,
+          currentOutputId: undefined,
+        },
+        plan: { ...destroyPlan, capsuleCurrentStateVersionId: undefined },
+      },
+    ]) {
+      expect(
+        await resolveCanonicalCapsuleRunCredentialContext(
+          ledger({ ...destroyRows, ...staleRows }), destroyInput,
+        ),
+      ).toEqual({ ok: false, reason: "runtime_safety_mismatch" });
+    }
+
     for (const lifecycleActionStatus of [
       "failed",
       "skipped",

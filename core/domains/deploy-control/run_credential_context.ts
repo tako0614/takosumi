@@ -223,12 +223,19 @@ export async function capsuleRunRuntimeSafetyMatches(
     capsule.currentStateVersionId === undefined ||
     plannedCapsuleStateVersionId !== capsule.currentStateVersionId
   ) return false;
-  return await persistedProviderPartialApplyMatches(
-    store,
-    priorSafety.runId,
-    workspaceId,
-    capsuleId,
-    capsule.currentStateVersionId,
+  return (
+    (await persistedProviderPartialApplyMatches(
+      store,
+      priorSafety.runId,
+      workspaceId,
+      capsuleId,
+      capsule.currentStateVersionId,
+    )) ||
+    (await committedPostApplyRecoveryRowsMatch(
+      store,
+      priorSafety.runId,
+      capsule,
+    ))
   );
 }
 
