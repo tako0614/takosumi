@@ -1728,13 +1728,118 @@ test.describe("Takosumi dashboard browser surface", () => {
     traffic.assertNoFailures();
   });
 
-  test("Store setup edits keep the ready compatibility fence and continue to Plan", async ({
+  test("install recovery follows same-route history and ignores a stale reconcile response", async ({
+    page,
+  }) => {
+    test.skip(
+      mode !== "portable",
+      "the deterministic install recovery fixture is portable-only",
+    );
+    const errors = pageErrors(page);
+    const firstId = "gip_aaaaaaaaaaaaaaaa";
+    const secondId = "gip_bbbbbbbbbbbbbbbb";
+    let firstReads = 0;
+    let secondReads = 0;
+    let reconcileCalls = 0;
+    let releaseReconcile!: () => void;
+    const reconcileHold = new Promise<void>((resolve) => {
+      releaseReconcile = resolve;
+    });
+    const planResponse = (
+      id: string,
+      phase: string,
+      nextAction: "reconcile" | "review_run",
+      planRunId?: string,
+    ) => ({
+      installPlan: {
+        id,
+        workspaceId: "ws_alpha",
+        createdBy: "sub_portable_e2e",
+        phase,
+        capsuleId: `cap_${id}`,
+        planRunId,
+        diagnostic: undefined,
+      },
+      nextAction,
+      links: {
+        self: `/api/v1/install-plans/${id}`,
+        ...(planRunId ? { run: `/api/v1/runs/${planRunId}` } : {}),
+      },
+    });
+    await page.route("**/api/v1/**", async (route) => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (request.method() === "GET" && path === `/api/v1/install-plans/${firstId}`) {
+        firstReads += 1;
+        return route.fulfill({ json: planResponse(firstId, "planning", "reconcile") });
+      }
+      if (request.method() === "GET" && path === `/api/v1/install-plans/${secondId}`) {
+        secondReads += 1;
+        return route.fulfill({
+          json: planResponse(secondId, "reviewable", "review_run", "run_second"),
+        });
+      }
+      if (
+        request.method() === "POST" &&
+        path === `/api/v1/install-plans/${firstId}/reconcile`
+      ) {
+        reconcileCalls += 1;
+        await reconcileHold;
+        return route.fulfill({
+          json: planResponse(firstId, "still_planning", "reconcile"),
+        });
+      }
+      return route.fallback();
+    });
+
+    await gotoDashboardDocument(page, `/new?installPlan=${firstId}`);
+    await expect(page.getByTestId("install-plan-recovery-phase")).toHaveText("planning");
+    await expect(page.getByRole("button", { name: /continue|続ける/iu })).toBeVisible();
+    expect(firstReads).toBeGreaterThanOrEqual(1);
+    expect(reconcileCalls).toBe(0);
+
+    await page.getByRole("button", { name: /continue|続ける/iu }).click();
+    await expect.poll(() => reconcileCalls).toBe(1);
+    await page.evaluate((id) => {
+      history.pushState({}, "", `/new?installPlan=${id}`);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }, secondId);
+    await expect(page.getByTestId("install-plan-recovery-phase")).toHaveText("reviewable");
+    await expect(page.getByRole("link", { name: /review|確認/iu })).toHaveAttribute(
+      "href",
+      "/runs/run_second",
+    );
+    releaseReconcile();
+    await expect.poll(() => page.locator("body").innerText()).toContain("reviewable");
+    expect(await page.locator('[data-testid="install-plan-recovery-phase"]').innerText()).toBe(
+      "reviewable",
+    );
+
+    await page.goBack();
+    await expect(page).toHaveURL(new RegExp(`/new\\?installPlan=${firstId}$`));
+    await expect(page.getByTestId("install-plan-recovery-phase")).toHaveText("planning");
+    await page.goForward();
+    await expect(page).toHaveURL(new RegExp(`/new\\?installPlan=${secondId}$`));
+    await expect(page.getByTestId("install-plan-recovery-phase")).toHaveText("reviewable");
+    expect(reconcileCalls).toBe(1);
+
+    await page.getByRole("button", { name: /add another service|別のサービスを追加/iu }).click();
+    await expect(page).toHaveURL(/\/new$/u);
+    await expect(page.getByTestId("install-steps")).toBeVisible();
+    expect(firstReads).toBeGreaterThanOrEqual(2);
+    expect(secondReads).toBeGreaterThanOrEqual(2);
+    await assertNoPageErrors(errors);
+  });
+
+  test("late create acknowledgement after leaving Install does not publish on the new route", async ({
     page,
   }) => {
     test.skip(
       mode !== "portable",
       "the deterministic install API fixture is portable-only",
     );
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
     const now = "2026-08-04T00:00:00.000Z";
     const resolvedCommit = "0123456789abcdef0123456789abcdef01234567";
     const seenMutations: string[] = [];
@@ -1745,6 +1850,15 @@ test.describe("Takosumi dashboard browser surface", () => {
     const sourcePostBodies: unknown[] = [];
     const syncBodies: unknown[] = [];
     const installPlanBodies: unknown[] = [];
+    const installPlanId = "gip_cccccccccccccccc";
+    let installPlanRecord: Record<string, unknown> | undefined;
+    let createAckCompleted = false;
+    let releaseCreateAck!: () => void;
+    const createAckHold = new Promise<void>((resolve) => {
+      releaseCreateAck = resolve;
+    });
+    let automaticReconcileCalls = 0;
+    let automaticReconcileCompleted = false;
     const sourceState: SourceCreateFixtureState = {
       sourceListReads: [],
       sourcePosts: [],
@@ -1993,32 +2107,72 @@ test.describe("Takosumi dashboard browser surface", () => {
       ) {
         const body = request.postDataJSON() as Record<string, unknown>;
         installPlanBodies.push(body);
+        installPlanRecord = {
+          id: installPlanId,
+          workspaceId: "ws_alpha",
+          createdBy: "sub_portable_e2e",
+          requestDigest: `sha256:${"3".repeat(64)}`,
+          source: body.source,
+          capsule: body.capsule,
+          options: body.options ?? {},
+          preflight: body.preflight,
+          sourceId: "src_install_e2e",
+          sourceSnapshotId: "snap_install_e2e",
+          installConfigId: "cfg_install_e2e",
+          phase: "compiling_install",
+          generation: 1,
+          createdAt: now,
+          updatedAt: now,
+        };
+        await createAckHold;
+        createAckCompleted = true;
         return route.fulfill({
           status: 201,
           json: {
-            installPlan: {
-              id: "install_plan_e2e",
-              workspaceId: "ws_alpha",
-              createdBy: "portable-e2e",
-              requestDigest: `sha256:${"3".repeat(64)}`,
-              source: body.source,
-              capsule: body.capsule,
-              options: body.options ?? {},
-              preflight: body.preflight,
-              sourceId: "src_install_e2e",
-              sourceSnapshotId: "snap_install_e2e",
-              installConfigId: "cfg_install_e2e",
-              capsuleId: "cap_install_e2e",
-              planRunId: "run_plan_e2e",
-              phase: "reviewable",
-              generation: 1,
-              createdAt: now,
-              updatedAt: now,
-            },
-            nextAction: "review_run",
+            installPlan: installPlanRecord,
+            nextAction: "reconcile",
             links: {
-              self: "/api/v1/install-plans/install_plan_e2e",
-              run: "/api/v1/runs/run_plan_e2e",
+              self: `/api/v1/install-plans/${installPlanId}`,
+              reconcile: `/api/v1/install-plans/${installPlanId}/reconcile`,
+            },
+          },
+        });
+      }
+      if (
+        path === `/api/v1/install-plans/${installPlanId}` &&
+        request.method() === "GET"
+      ) {
+        return route.fulfill({
+          json: {
+            installPlan: installPlanRecord,
+            nextAction: "reconcile",
+            links: {
+              self: `/api/v1/install-plans/${installPlanId}`,
+              reconcile: `/api/v1/install-plans/${installPlanId}/reconcile`,
+            },
+          },
+        });
+      }
+      if (
+        path === `/api/v1/install-plans/${installPlanId}/reconcile` &&
+        request.method() === "POST"
+      ) {
+        automaticReconcileCalls += 1;
+        installPlanRecord = {
+          ...installPlanRecord,
+          phase: "failed",
+          diagnostic: {
+            code: "fixture_failed",
+            message: "The fixture plan stopped.",
+          },
+        };
+        automaticReconcileCompleted = true;
+        return route.fulfill({
+          json: {
+            installPlan: installPlanRecord,
+            nextAction: "none",
+            links: {
+              self: `/api/v1/install-plans/${installPlanId}`,
             },
           },
         });
@@ -2116,6 +2270,18 @@ test.describe("Takosumi dashboard browser surface", () => {
       }),
     ]);
     expect(syncBodies).toEqual([{ expectedRef: resolvedCommit }]);
+
+    await page.getByRole("link", { name: "Settings" }).click();
+    await expect(page).toHaveURL(/\/settings$/u);
+    releaseCreateAck();
+    await expect.poll(() => createAckCompleted).toBe(true);
+    await expect.poll(() => automaticReconcileCalls).toBe(1);
+    await expect.poll(() => automaticReconcileCompleted).toBe(true);
+    await expect(page).toHaveURL(/\/settings$/u);
+    expect(new URL(page.url()).searchParams.has("installPlan")).toBe(false);
+    await assertNoPageErrors(errors);
+    expect(automaticReconcileCalls).toBe(1);
+    traffic.assertNoFailures();
   });
 
   test("Workload settings submit one complete Configuration Plan and open its Run review", async ({
