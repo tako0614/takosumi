@@ -17,11 +17,22 @@ Publication, local recovery, and platform deployment have separate authorities:
   only full Worker and Container configuration mutation. Runner `verify` is a
   readback-only post-step and never invokes `wrangler deploy`.
 
+`reconcile` changes no image or provider configuration, but it obtains a fresh
+temporary pull-only registry credential and performs a local Docker login before
+the exact-tag readback. This is external credential issuance, not a purely
+local read. It uses the operator's existing Wrangler authentication and requires
+`CLOUDFLARE_ACCOUNT_ID` for the exact account recorded in the attempt;
+account mismatch fails before issuance. The credential never enters ordinary
+command diagnostics. Docker uses a new private `0700` configuration directory
+with its config file set to `0600`, removed after readback or failure. Auth
+failure, including an expired or unauthorized token, leaves the journal
+unresolved; it is never evidence that the transport tag is absent.
+
 All commands are exposed through Takosumi's single `bun run deploy` entrypoint.
 `build` and `verify` are read-only without `--execute`; executing either
 requires a bounded named `--review` identity. `recover-journal` always requires
-both `--execute` and a named reviewer. `reconcile` is always externally
-read-only and never accepts `--execute`.
+both `--execute` and a named reviewer. `reconcile` is image-readback-only and
+never accepts `--execute`.
 
 ## Source and configuration gates
 
