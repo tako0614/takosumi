@@ -641,6 +641,11 @@ test("container runner returns provider installation attestation from apply and 
     envReturning({
       providerInstallation,
       state: { digest: `sha256:${"d".repeat(64)}` },
+      workerTimings: {
+        doInputRestoreReadinessMs: 20,
+        doContainerExecutionResponseBufferMs: 30,
+        doPlanArtifactPersistenceMs: 40,
+      },
     }),
   );
 
@@ -674,6 +679,14 @@ test("container runner returns provider installation attestation from apply and 
     attested: true,
   });
   expect(destroy.stateDigest).toBe(`sha256:${"d".repeat(64)}`);
+  expect(apply).not.toHaveProperty("workerTimings");
+  expect(destroy).not.toHaveProperty("workerTimings");
+  expect(apply.diagnostics?.some(
+    (diagnostic) => diagnostic.code === "runner_elapsed_timings",
+  )).toBe(false);
+  expect(destroy.diagnostics?.some(
+    (diagnostic) => diagnostic.code === "runner_elapsed_timings",
+  )).toBe(false);
 });
 
 test("container runner redacts stderr before apply diagnostics are returned", async () => {

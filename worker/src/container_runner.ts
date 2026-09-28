@@ -198,7 +198,7 @@ export class CloudflareContainerOpenTofuRunner
         : {}),
       ...(planResourceChanges ? { planResourceChanges } : {}),
       ...(plannedOutputs ? { plannedOutputs } : {}),
-      diagnostics: diagnosticsFromContainerResult(result),
+      diagnostics: diagnosticsFromContainerResult(result, true),
     };
   }
 
@@ -715,10 +715,13 @@ export class CloudflareContainerOpenTofuRunner
           );
           const { payload, redactedText } =
             await readResponseJsonObject(response);
-          const payloadWithWorkerTiming = withWorkerAdapterElapsedTiming(
-            payload,
-            elapsedMilliseconds(workerAdapterRpcStartedAt),
-          );
+          const payloadWithWorkerTiming =
+            action === "plan"
+              ? withWorkerAdapterElapsedTiming(
+                  payload,
+                  elapsedMilliseconds(workerAdapterRpcStartedAt),
+                )
+              : payload;
           const startupSeconds = positiveNumberHeader(
             response.headers.get(RUNNER_STARTUP_SECONDS_HEADER),
           );
@@ -1261,6 +1264,7 @@ function boundedDiagnosticText(text: string, maxLength: number): string {
 
 function diagnosticsFromContainerResult(
   result: Record<string, unknown>,
+  includeWorkerElapsedTimings = false,
 ): OpenTofuPlanResult["diagnostics"] {
   const diagnostics: Array<
     NonNullable<OpenTofuPlanResult["diagnostics"]>[number]
@@ -1293,14 +1297,17 @@ function diagnosticsFromContainerResult(
       detail: phaseTimingDetail,
     });
   }
-  const workerElapsedTimingDetail = workerElapsedTimingDetailFromContainerResult(result);
-  if (workerElapsedTimingDetail) {
-    diagnostics.push({
-      severity: "info",
-      code: "runner_elapsed_timings",
-      message: "runner elapsed timings (ms)",
-      detail: workerElapsedTimingDetail,
-    });
+  if (includeWorkerElapsedTimings) {
+    const workerElapsedTimingDetail =
+      workerElapsedTimingDetailFromContainerResult(result);
+    if (workerElapsedTimingDetail) {
+      diagnostics.push({
+        severity: "info",
+        code: "runner_elapsed_timings",
+        message: "runner elapsed timings (ms)",
+        detail: workerElapsedTimingDetail,
+      });
+    }
   }
   return diagnostics;
 }
@@ -1314,7 +1321,9 @@ function workerElapsedTimingDetailFromContainerResult(
 
 function workerElapsedTimingsFromContainerResult(
   result: Record<string, unknown>,
-): Partial<Record<(typeof WORKER_ELAPSED_TIMING_FIELDS)[number], number>> | undefined {
+):
+  | Partial<Record<(typeof WORKER_ELAPSED_TIMING_FIELDS)[number], number>>
+  | undefined {
   const raw = recordFromRecord(result, "workerTimings");
   if (!raw) return undefined;
   const timings: Partial<
