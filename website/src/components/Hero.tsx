@@ -1,4 +1,3 @@
-import { ProductShot } from "./ProductVisuals";
 import CurlRule from "./CurlRule";
 
 /** Page head: the mark's face tile + product name, one factual paragraph,
@@ -37,19 +36,9 @@ export default function Hero() {
           <a href="https://github.com/tako0614/takosumi" rel="noopener">
             GitHub
           </a>
-          <a href="/docs/" rel="external">
-            Docs
-          </a>
         </div>
       </div>
       <CurlRule />
-      <div class="head-shot">
-        <ProductShot
-          hero
-          src="/screens/home.webp"
-          alt="Takosumi ダッシュボードの実画面。自分のワークスペースのサイドバーと、インストール済みの 5 つのアプリ (takos, takos-office, takos-computer, yurucommu, road-to-me) が並ぶホーム。"
-        />
-      </div>
     </section>
   );
 }

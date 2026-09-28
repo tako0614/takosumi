@@ -1,6 +1,5 @@
 import { For } from "solid-js";
 import Section from "./Section";
-import { RunHistory } from "./ProductVisuals";
 
 const POINTS: readonly string[] = [
   "リソースは各 provider に、管理データは Takosumi の設置先に残る",
@@ -26,7 +25,6 @@ export default function WhyOperatorOwned() {
       <ul class="fact-list">
         <For each={POINTS}>{(p) => <li>{p}</li>}</For>
       </ul>
-      <RunHistory />
     </Section>
   );
 }

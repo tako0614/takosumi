@@ -17,10 +17,15 @@ export default function Pricing() {
       <For each={PRICING_PLANS}>
         {(plan) => (
           <div class="install-item">
-            <h3>
-              {plan.name}
-              <span class="plan-price-inline">{plan.price}</span>
-            </h3>
+            <div class="record-head">
+              <span
+                class={plan.id === "platform" ? "rec-dot rec-plan" : "rec-dot rec-self"}
+                aria-hidden="true"
+              />
+              <span class="rec-label">{plan.id}</span>
+              <h3 class="rec-plan-name">{plan.name}</h3>
+              <span class="rec-meta">{plan.price}</span>
+            </div>
             <p>{plan.priceNote}</p>
             <ul class="fact-list">
               <For each={plan.features}>{(f) => <li>{f.label}</li>}</For>

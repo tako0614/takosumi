@@ -13,12 +13,15 @@ export default function WhatYouCanHost() {
         <ul class="fact-list">
           <For each={USE_CASES}>
             {(u) => (
-              <li>
+              <li class="host-row">
                 <a class="host-name" href={u.href} rel="noopener">
                   {u.name}
                 </a>
                 <span class="host-note">
                   {u.desc}。{u.note}
+                </span>
+                <span class="host-arrow" aria-hidden="true">
+                  ↗
                 </span>
               </li>
             )}

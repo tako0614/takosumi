@@ -8,8 +8,9 @@ interface NavLink {
 }
 
 const NAV_LINKS: readonly NavLink[] = [
-  { href: "#why", label: "なぜ" },
-  { href: "#how", label: "使い方" },
+  { href: "#flow", label: "流れ" },
+  { href: "#what", label: "サービス" },
+  { href: "#why", label: "管理" },
   { href: "#pricing", label: "料金" },
   { href: "/docs/", label: "ドキュメント", rel: "external" },
 ];

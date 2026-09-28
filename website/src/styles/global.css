@@ -387,58 +387,73 @@ section h2 + .intro {
   background: url("/brand/curl.svg") no-repeat right center / contain;
 }
 
-/* The product itself is the hero: the real dashboard starts at the text
- * column's left edge and runs off the right edge of the viewport. */
-.head-shot {
-  padding-left: max(
-    var(--tg-s-5),
-    calc((100vw - var(--tg-container)) / 2 + var(--tg-s-5))
-  );
+/* ===== Ledger — the deploy lifecycle as the product's own records.
+ * Each record: a mono header row (status dot + ledger label + meta, the
+ * same shape as the product's run rows), the real screen framed by one
+ * hairline with square edges, and one caption sentence. ===== */
+.record {
+  margin: 0 0 var(--tg-s-8);
 }
-.shot-hero {
-  width: 100%;
-  height: auto;
-  max-height: 76vh;
-  object-fit: cover;
-  object-position: top left;
+.record:last-child {
+  margin-bottom: 0;
+}
+.record-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--tg-s-3);
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-xs);
+  padding-bottom: var(--tg-s-3);
+  border-bottom: 1px solid var(--tg-line);
+  margin-bottom: var(--tg-s-4);
+}
+.rec-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  align-self: center;
+}
+.rec-ok {
+  background: var(--tg-success);
+}
+.rec-review {
+  background: var(--tg-warn);
+}
+.rec-label {
+  color: var(--tg-fg);
+  font-weight: 700;
+}
+.rec-name {
+  color: var(--tg-fg-muted);
+}
+.rec-meta {
+  margin-left: auto;
+  color: var(--tg-fg-subtle);
+  text-align: right;
+}
+.rec-plan {
+  background: var(--tg-accent);
+}
+.rec-self {
+  background: var(--tg-fg-subtle);
+}
+.record .shot {
+  margin-top: 0;
+}
+.record-cap {
+  margin: var(--tg-s-4) 0 0;
+  font-size: var(--tg-fs-sm);
+  color: var(--tg-fg-muted);
+  max-width: 64ch;
 }
 
-/* Real screenshots of the running dashboard — full width, square edges. */
+/* Real screenshots of the running dashboard — one hairline frame,
+ * square edges like the mark's tile. */
 .shot {
   display: block;
   width: 100%;
   height: auto;
   border: 1px solid var(--tg-line);
-  margin-top: var(--tg-s-6);
-}
-.shot-hero {
-  margin-top: 0;
-}
-
-/* ===== Steps — heading, one sentence ===== */
-.step {
-  margin-top: var(--tg-s-7);
-}
-.step h3 {
-  font-family: var(--tg-font-display);
-  font-size: var(--tg-fs-xl);
-  font-weight: 800;
-  letter-spacing: -0.01em;
-  margin: 0 0 var(--tg-s-2);
-}
-.step h3::before {
-  content: "";
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  margin-right: var(--tg-s-2);
-  background: var(--tg-accent);
-}
-.step p {
-  margin: 0;
-  color: var(--tg-fg-muted);
-  font-size: var(--tg-fs-sm);
-  max-width: 64ch;
 }
 
 /* ===== Plain fact list — square bullets of the mark's red ===== */
@@ -497,21 +512,49 @@ section h2 + .intro {
   color: var(--tg-fg-subtle);
 }
 
-/* WhatYouCanHost — installable products as a plain linked list */
+/* WhatYouCanHost — installable products as ledger rows: mono name,
+ * one-line note, arrow out. */
+.host-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(0, 1fr) auto;
+  gap: var(--tg-s-4);
+  align-items: baseline;
+  padding: var(--tg-s-3) 0;
+  border-bottom: 1px solid var(--tg-line);
+}
+.fact-list li.host-row::before {
+  content: none;
+}
+.host-row:first-child {
+  border-top: 1px solid var(--tg-line);
+}
 .host-name {
   font-family: var(--tg-font-mono);
   font-size: var(--tg-fs-base);
   font-weight: 700;
   color: var(--tg-fg);
 }
-.host-name::after {
-  content: " — ";
-  color: var(--tg-fg-subtle);
-  font-weight: 400;
+.host-name:hover {
+  color: var(--tg-accent-hover);
 }
 .host-note {
   font-size: var(--tg-fs-sm);
   color: var(--tg-fg-muted);
+}
+.host-arrow {
+  color: var(--tg-fg-subtle);
+  font-size: var(--tg-fs-sm);
+}
+
+/* Pricing — plans as ledger records too. */
+.install-item .record-head {
+  margin-bottom: var(--tg-s-2);
+}
+.rec-plan-name {
+  font-size: var(--tg-fs-sm);
+  font-weight: 700;
+  margin: 0;
+  color: var(--tg-fg);
 }
 
 /* ===== Footer — the page closes on the mark's own field. The face tile
@@ -583,8 +626,13 @@ footer.site :focus-visible {
     width: 80px;
     height: 80px;
   }
-  .shot-hero {
-    max-height: 60vh;
+  .record-head {
+    flex-wrap: wrap;
+  }
+  .rec-meta {
+    width: 100%;
+    margin-left: 0;
+    text-align: left;
   }
 }
 

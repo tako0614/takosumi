@@ -1,9 +1,9 @@
 import { Title } from "@solidjs/meta";
 import Nav from "~/components/Nav";
 import Hero from "~/components/Hero";
+import Ledger from "~/components/Ledger";
 import Why from "~/components/WhyOperatorOwned";
 import WhatYouCanHost from "~/components/WhatYouCanHost";
-import Showcase from "~/components/Showcase";
 import Pricing from "~/components/Pricing";
 import CurlRule from "~/components/CurlRule";
 import Footer from "~/components/Footer";
@@ -16,9 +16,9 @@ export default function Home() {
       <Nav />
       <main id="main">
         <Hero />
+        <Ledger />
         <WhatYouCanHost />
         <Why />
-        <Showcase />
         <Pricing />
       </main>
       <AdringWidget />
