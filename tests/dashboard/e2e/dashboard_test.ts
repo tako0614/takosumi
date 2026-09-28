@@ -388,8 +388,10 @@ async function stubProviderDestinationFixture(
   const snapshotId = "snap_provider_destination_e2e";
   const syncRunId = "run_provider_source_sync_e2e";
   const planRunId = "run_provider_plan_e2e";
+  const installPlanId = "gip_0123456789abcdef";
   let sourceName = "cloudflare-service";
   let sourceUrl = "https://github.com/example/cloudflare-service.git";
+  let installPlanRecord: Record<string, unknown> | undefined;
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -587,36 +589,52 @@ async function stubProviderDestinationFixture(
     ) {
       state.installPlanBody =
         request.postDataJSON() as ProviderDestinationFixtureState["installPlanBody"];
+      installPlanRecord = {
+        id: installPlanId,
+        workspaceId: "ws_alpha",
+        createdBy: "sub_portable_e2e",
+        requestDigest: `sha256:${"2".repeat(64)}`,
+        source: {
+          name: sourceName,
+          url: sourceUrl,
+          ref: PORTABLE_SOURCE_COMMIT,
+          path: sourcePath,
+        },
+        capsule: { name: sourceName, environment: "production" },
+        options: state.installPlanBody?.options ?? {},
+        preflight: state.installPlanBody?.preflight,
+        sourceId,
+        sourceSnapshotId: snapshotId,
+        installConfigId: "cfg-default-opentofu-capsule",
+        capsuleId: "cap_provider_destination_e2e",
+        planRunId,
+        phase: "reviewable",
+        generation: 1,
+        createdAt: "2026-08-01T00:00:00.000Z",
+        updatedAt: "2026-08-01T00:00:00.000Z",
+      };
       return route.fulfill({
         status: 201,
         json: {
-          installPlan: {
-            id: "install_provider_destination_e2e",
-            workspaceId: "ws_alpha",
-            createdBy: "portable-e2e",
-            requestDigest: `sha256:${"2".repeat(64)}`,
-            source: {
-              name: sourceName,
-              url: sourceUrl,
-              ref: PORTABLE_SOURCE_COMMIT,
-              path: sourcePath,
-            },
-            capsule: { name: sourceName, environment: "production" },
-            options: state.installPlanBody?.options ?? {},
-            preflight: state.installPlanBody?.preflight,
-            sourceId,
-            sourceSnapshotId: snapshotId,
-            installConfigId: "cfg-default-opentofu-capsule",
-            capsuleId: "cap_provider_destination_e2e",
-            planRunId,
-            phase: "reviewable",
-            generation: 1,
-            createdAt: "2026-08-01T00:00:00.000Z",
-            updatedAt: "2026-08-01T00:00:00.000Z",
-          },
+          installPlan: installPlanRecord,
           nextAction: "review_run",
           links: {
-            self: "/api/v1/install-plans/install_provider_destination_e2e",
+            self: `/api/v1/install-plans/${installPlanId}`,
+            run: `/api/v1/runs/${planRunId}`,
+          },
+        },
+      });
+    }
+    if (
+      path === `/api/v1/install-plans/${installPlanId}` &&
+      request.method() === "GET"
+    ) {
+      return route.fulfill({
+        json: {
+          installPlan: installPlanRecord,
+          nextAction: "review_run",
+          links: {
+            self: `/api/v1/install-plans/${installPlanId}`,
             run: `/api/v1/runs/${planRunId}`,
           },
         },
