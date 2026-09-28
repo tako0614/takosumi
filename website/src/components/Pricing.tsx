@@ -9,38 +9,32 @@ export default function Pricing() {
       title="料金"
       lede={
         <>
-          セルフホストは<em class="em">無料</em>
-          のオープンソース。自分のインフラに置いて、自分で所有します。Takosumi
-          は公式ホスティング版で、ブラウザからサービスを追加・更新できます。
+          セルフホストは無料のオープンソース。Takosumi
+          は公式ホスティング版で、ブラウザからサービスを追加・更新できる。
         </>
       }
     >
-      <div class="plan-grid">
-        <For each={PRICING_PLANS}>
-          {(plan) => (
-            <article class="plan" classList={{ featured: plan.highlight }}>
-              <div class="plan-head">
-                <h3>{plan.name}</h3>
-                <p class="plan-tagline">{plan.tagline}</p>
-              </div>
-              <div class="plan-price">
-                <span class="plan-price-value">{plan.price}</span>
-                <span class="plan-price-note">{plan.priceNote}</span>
-              </div>
-              <ul class="plan-features">
-                <For each={plan.features}>{(f) => <li>{f.label}</li>}</For>
-              </ul>
-              <a class="link-go" href={plan.cta.href} rel="external">
-                {plan.cta.label} →
-              </a>
-            </article>
-          )}
-        </For>
-      </div>
+      <For each={PRICING_PLANS}>
+        {(plan) => (
+          <div class="install-item">
+            <h3>
+              {plan.name}
+              <span class="plan-price-inline">{plan.price}</span>
+            </h3>
+            <p>{plan.priceNote}</p>
+            <ul class="fact-list">
+              <For each={plan.features}>{(f) => <li>{f.label}</li>}</For>
+            </ul>
+            <a class="link" href={plan.cta.href} rel="external">
+              {plan.cta.label}
+            </a>
+          </div>
+        )}
+      </For>
 
       <p class="plan-footnote">
-        従量単価は公開料金表に基づきます。操作前の Preview
-        で見積もりを確認でき、クレジット追加や自動チャージの設定は自分で管理できます。
+        従量単価は公開料金表に基づく。操作前の Preview
+        で見積もりを確認でき、クレジット追加や自動チャージの設定は自分で管理できる。
       </p>
     </Section>
   );

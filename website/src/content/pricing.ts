@@ -16,10 +16,8 @@ export interface PricingPlan {
   /** Short, honest price line. Never a fabricated number. */
   readonly price: string;
   readonly priceNote: string;
-  readonly tagline: string;
   readonly features: readonly PlanFeature[];
   readonly cta: { readonly label: string; readonly href: string };
-  readonly highlight?: boolean;
 }
 
 export const PRICING_PLANS: readonly PricingPlan[] = [
@@ -28,7 +26,6 @@ export const PRICING_PLANS: readonly PricingPlan[] = [
     name: "自分で動かす (セルフホスト)",
     price: "無料",
     priceNote: "オープンソース。Takosumi への利用料はありません。",
-    tagline: "あなたのインフラに、あなたが置く。",
     features: [
       {
         label:
@@ -48,7 +45,6 @@ export const PRICING_PLANS: readonly PricingPlan[] = [
     price: "月額固定費なし",
     priceNote:
       "$5 からプリペイドクレジットを追加。自動チャージは初期状態で無効です。",
-    tagline: "公式ホスティング版。セットアップ不要ですぐ使えます。",
     features: [
       { label: "公式ホスティング。ブラウザからサービスを追加・更新できます" },
       {
@@ -65,6 +61,5 @@ export const PRICING_PLANS: readonly PricingPlan[] = [
       },
     ],
     cta: { label: "Takosumi を開く", href: "https://app.takosumi.com/" },
-    highlight: true,
   },
 ];

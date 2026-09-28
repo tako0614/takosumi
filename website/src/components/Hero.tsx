@@ -1,56 +1,38 @@
-import { For } from "solid-js";
 import { ProductShot } from "./ProductVisuals";
 
-const SPEC = [
-  "projects",
-  "capsules",
-  "plan → apply → destroy",
-  "state",
-  "audit events",
-  "any provider",
-];
-
+/** Page head: product name, one factual paragraph, a plain fact line, the
+ *  primary links — then the real dashboard at full width. */
 export default function Hero() {
   return (
-    <section class="hero">
-      <div class="container hero-grid">
-        <div class="hero-copy">
-          <h1>OpenTofu-native deploy control plane.</h1>
-          <p class="lede">
-            アプリやインフラを、ブラウザから自分のクラウドへ。
-            <br />
-            <em class="em">鍵も、状態も、履歴も</em>、Takosumi が管理します。
-          </p>
-          <p class="intro-links">
-            <a class="link-go" href="https://app.takosumi.com/" rel="noopener">
-              Takosumi を開く →
-            </a>
-            <a
-              class="link-go"
-              href="/docs/getting-started/quickstart"
-              rel="external"
-            >
-              セルフホストで始める →
-            </a>
-            <a
-              class="link-go"
-              href="https://github.com/tako0614/takosumi"
-              rel="noopener"
-            >
-              GitHub →
-            </a>
-          </p>
-          <ul class="hero-spec" aria-label="contents">
-            <For each={SPEC}>{(s) => <li>{s}</li>}</For>
-          </ul>
+    <section class="page-head">
+      <div class="container">
+        <h1 class="page-title">Takosumi</h1>
+        <p class="page-desc">
+          Git-based OpenTofu control
+          plane。アプリやインフラを、ブラウザから自分のクラウドへ公開・管理する。接続・状態・履歴・監査をひとつの場所で扱う。
+        </p>
+        <p class="page-facts">
+          AGPL-3.0 · github.com/tako0614/takosumi · OpenTofu · Cloudflare / AWS
+          / GCP / VM
+        </p>
+        <div class="page-actions">
+          <a class="btn" href="https://app.takosumi.com/" rel="noopener">
+            Takosumi を開く
+          </a>
+          <a href="/docs/getting-started/quickstart" rel="external">
+            セルフホストで始める
+          </a>
+          <a href="https://github.com/tako0614/takosumi" rel="noopener">
+            GitHub
+          </a>
+          <a href="/docs/" rel="external">
+            Docs
+          </a>
         </div>
-        <div class="hero-visual">
-          <ProductShot
-            src="/screens/home.webp"
-            label="Takosumi ダッシュボードのホーム画面"
-            alt="Takosumi ダッシュボードの実画面。自分のワークスペースのサイドバーと、インストール済みの 5 つのアプリ (takos, takos-office, takos-computer, yurucommu, road-to-me) が並ぶホーム。"
-          />
-        </div>
+        <ProductShot
+          src="/screens/home.webp"
+          alt="Takosumi ダッシュボードの実画面。自分のワークスペースのサイドバーと、インストール済みの 5 つのアプリ (takos, takos-office, takos-computer, yurucommu, road-to-me) が並ぶホーム。"
+        />
       </div>
     </section>
   );

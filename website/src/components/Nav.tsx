@@ -55,7 +55,7 @@ export default function Nav() {
             </svg>
           </a>
           <a class="nav-use" href="https://app.takosumi.com/" rel="noopener">
-            始める →
+            始める
           </a>
           <details class="nav-menu">
             <summary class="nav-icon nav-menu-toggle" aria-label="メニュー">

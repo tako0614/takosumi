@@ -16,7 +16,7 @@ export default function Section(props: Props): JSX.Element {
           <h2>{props.title}</h2>
         </Show>
         <Show when={props.lede}>
-          <p class="lede">{props.lede}</p>
+          <p class="intro">{props.lede}</p>
         </Show>
         {props.children}
       </div>
