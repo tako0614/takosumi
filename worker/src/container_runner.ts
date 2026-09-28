@@ -819,6 +819,7 @@ function failedProviderExecutionResult(
   const state = recordFromRecord(result, "state");
   const stateDigest = state ? stringFromRecord(state, "digest") : undefined;
   const detail = providerExecutionDetailFromPayload(result);
+  const phaseTimings = phaseTimingsFromContainerResult(result);
   return {
     status: "failed",
     errorCode: failure?.errorCode ?? RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
@@ -828,6 +829,7 @@ function failedProviderExecutionResult(
     },
     ...(detail ? { detail } : {}),
     ...(stateDigest ? { state: { digest: stateDigest } } : {}),
+    ...(phaseTimings ? { phaseTimings } : {}),
     // Preserve the immutable mutation receipt + attested provider installation.
     // A persisted provider failure is committed as a terminal mutation, which
     // requires the same execution evidence as a success; stripping it here made

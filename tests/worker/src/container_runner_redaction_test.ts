@@ -757,6 +757,27 @@ test("container runner returns a typed failed apply with persisted partial state
           statePersistence: "persisted",
         },
         state: { digest: stateDigest },
+        phaseTimings: [
+          {
+            phase: "tofu_apply",
+            startedAt: "2026-09-27T10:00:00.000Z",
+            finishedAt: "2026-09-27T10:06:24.000Z",
+            durationMs: 384_000,
+            secret: "must-not-survive",
+          },
+          {
+            phase: "invalid phase",
+            startedAt: "2026-09-27T10:00:00.000Z",
+            finishedAt: "2026-09-27T10:06:24.000Z",
+            durationMs: 384_000,
+          },
+          {
+            phase: "tofu_apply_bad_date",
+            startedAt: "not-a-date",
+            finishedAt: "2026-09-27T10:06:24.000Z",
+            durationMs: 384_000,
+          },
+        ],
         outputs: {
           must_not_publish: { sensitive: false, value: "stale" },
         },
@@ -803,7 +824,13 @@ test("container runner returns a typed failed apply with persisted partial state
       message: "OpenTofu provider execution failed after dispatch",
       detail: expect.stringContaining(safeFailureDetail),
     },
+    {
+      severity: "info",
+      message: "runner phase timings recorded",
+      detail: "tofu_apply=384000ms",
+    },
   ]);
+  expect(JSON.stringify(result)).not.toContain("must-not-survive");
 });
 
 test("container runner returns a typed failed destroy with persisted partial state", async () => {
