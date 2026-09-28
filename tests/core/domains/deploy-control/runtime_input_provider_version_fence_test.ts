@@ -139,6 +139,7 @@ async function seedFenceModel(
     /** Profile override, for a Capsule that also delivers OIDC by bindings. */
     readonly installConfig?: InstallConfig;
     readonly oidcClient?: RuntimeInputOidcClientSource;
+    readonly runnerEchoesPlanDiagnostics?: boolean;
   },
 ) {
   const config = options.installConfig ?? installConfig;
@@ -278,7 +279,12 @@ async function seedFenceModel(
     runner: {
       plan: async (job) => {
         observed.plan = job;
-        return planResult();
+        return {
+          ...planResult(),
+          ...(options.runnerEchoesPlanDiagnostics
+            ? { diagnostics: job.planRun.diagnostics }
+            : {}),
+        };
       },
       apply: async (job) => ({
         stateDigest: `sha256:${"d".repeat(64)}`,
@@ -341,7 +347,22 @@ test("a provider pinned at or above the floor receives the run-scoped sensitive 
   expect(observed.plan?.credentials?.runtimeInputs).toEqual([
     { variableName: VARIABLE, names: ["ENCRYPTION_KEY"], values: {} },
   ]);
-  expect(planned.planRun.diagnostics ?? []).toEqual([]);
+  const diagnostics = planned.planRun.diagnostics ?? [];
+  expect(diagnostics).toHaveLength(1);
+  expect(diagnostics[0]?.code).toBe("core_plan_elapsed_timings");
+  expect(diagnostics[0]?.severity).toBe("info");
+  const timings = JSON.parse(diagnostics[0]?.detail ?? "null");
+  expect(Object.keys(timings).sort()).toEqual([
+    "claimMs",
+    "dispatchPreparationMs",
+    "preClaimPreparationMs",
+    "renewalOutsideRunnerMs",
+    "resolveRunEnvironmentMs",
+    "runnerPlanMs",
+  ].sort());
+  expect(Object.values(timings).every(
+    (value) => typeof value === "number" && Number.isFinite(value) && value >= 0,
+  )).toBe(true);
 });
 
 test("a provider below the floor stays inert and the plan says why", async () => {
@@ -350,6 +371,7 @@ test("a provider below the floor stays inert and the plan says why", async () =>
     await seedFenceModel(store, {
       providerVersion: "3.0.0",
       capsuleId: "cap_fence_old",
+      runnerEchoesPlanDiagnostics: true,
     });
 
   const planned = await controller.createCapsulePlan(
@@ -376,12 +398,39 @@ test("a provider below the floor stays inert and the plan says why", async () =>
   );
   expect(diagnostic?.severity).toBe("warning");
   expect(diagnostic?.message).toContain("4.0.0");
+  expect(planned.planRun.diagnostics).toEqual(stored?.diagnostics);
+  expect((stored?.diagnostics ?? []).filter(
+    (entry) => entry.code === "runtime_inputs_provider_version_unproven",
+  )).toHaveLength(1);
+  expect((stored?.diagnostics ?? []).filter(
+    (entry) => entry.code === "core_plan_elapsed_timings",
+  )).toHaveLength(1);
   // The notice names the floor and the pinned version, and nothing else.
   expect(JSON.stringify(stored?.diagnostics)).not.toContain("ENCRYPTION_KEY");
   // No material was minted for a Capsule the path never reached.
   expect(
     await store.getSecretBlob(`runtime_input_${seeded.capsule.id}`),
   ).toBeUndefined();
+});
+
+test("a pre-dispatch provider warning survives when the runner returns no diagnostics", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { seeded, controller, compatibilityReportId } = await seedFenceModel(store, {
+    providerVersion: "3.0.0",
+    capsuleId: "cap_fence_no_runner_diagnostics",
+  });
+  const planned = await controller.createCapsulePlan(
+    seeded.capsule.id,
+    {},
+    { compatibilityReportId },
+  );
+  expect(planned.planRun.status).toBe("succeeded");
+  const stored = await store.getPlanRun(planned.planRun.id);
+  expect(stored?.diagnostics?.map((diagnostic) => diagnostic.code)).toEqual([
+    "runtime_inputs_provider_version_unproven",
+    "core_plan_elapsed_timings",
+  ]);
+  expect(planned.planRun.diagnostics).toEqual(stored?.diagnostics);
 });
 
 test("destroy carries stable nonce-only provider wiring without opening runtime input material", async () => {

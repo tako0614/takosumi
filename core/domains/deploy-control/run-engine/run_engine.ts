@@ -8062,7 +8062,23 @@ export class RunEngine {
       policyDecisionDigest,
       requiresApproval,
     } = verdict;
-    const diagnostics = redactRunDiagnostics(result.diagnostics);
+    // Dispatch can record value-free diagnostics before the runner starts.
+    // Keep those on the terminal Run and avoid duplicating one if the runner
+    // echoes it back alongside its own diagnostics.
+    const diagnostics = [...(redactRunDiagnostics(running.diagnostics) ?? [])];
+    for (const diagnostic of redactRunDiagnostics(result.diagnostics) ?? []) {
+      if (
+        !diagnostics.some(
+          (existing) =>
+            existing.severity === diagnostic.severity &&
+            existing.code === diagnostic.code &&
+            existing.message === diagnostic.message &&
+            existing.detail === diagnostic.detail,
+        )
+      ) {
+        diagnostics.push(diagnostic);
+      }
+    }
     const planArtifact = normalizePlanArtifact({
       artifact: result.planArtifact,
       planDigest: result.planDigest,
@@ -8089,7 +8105,7 @@ export class RunEngine {
       : "failed";
     const completedDiagnostics =
       completedStatus === "succeeded" && running.operation !== "destroy"
-        ? [...(diagnostics ?? []), corePlanElapsedDiagnostic(input.coreTimings)]
+        ? [...diagnostics, corePlanElapsedDiagnostic(input.coreTimings)]
         : diagnostics;
     return {
       ...running,
@@ -8110,7 +8126,9 @@ export class RunEngine {
       ...(result.planResourceChanges
         ? { planResourceChanges: result.planResourceChanges }
         : {}),
-      ...(completedDiagnostics ? { diagnostics: completedDiagnostics } : {}),
+      ...(completedDiagnostics.length > 0
+        ? { diagnostics: completedDiagnostics }
+        : {}),
       ...(requiresApproval ? { requiresApproval: true } : {}),
       auditEvents: [
         ...running.auditEvents,
