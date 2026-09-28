@@ -1,11 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="Takosumi — Git-based OpenTofu control plane">
+  <!-- Source sketch for og-cover.png: the page's own dark ground, the
+       real face mark on its tile — not the retired three-bar placeholder. -->
   <rect width="1200" height="630" fill="#0a0a0a"/>
-  <g transform="translate(96,200)">
-    <rect x="0" y="0" width="132" height="42" rx="10" fill="#dc2626" opacity="0.55"/>
-    <rect x="16" y="56" width="132" height="42" rx="10" fill="#dc2626" opacity="0.78"/>
-    <rect x="32" y="112" width="132" height="42" rx="10" fill="#dc2626"/>
-  </g>
-  <text x="320" y="292" font-family="'Bricolage Grotesque', 'Helvetica Neue', Arial, sans-serif" font-size="118" font-weight="800" letter-spacing="-4" fill="#fafafa">Takosumi</text>
-  <text x="324" y="360" font-family="'Bricolage Grotesque', 'Helvetica Neue', Arial, sans-serif" font-size="38" font-weight="600" fill="#a3a3a3">Git-based OpenTofu control plane.</text>
+  <image href="../tako.png" x="96" y="120" width="150" height="150"/>
+  <text x="96" y="360" font-family="'Helvetica Neue', Arial, sans-serif" font-size="112" font-weight="800" letter-spacing="-4" fill="#fafafa">Takosumi</text>
+  <text x="96" y="440" font-family="'Helvetica Neue', Arial, sans-serif" font-size="38" font-weight="600" fill="#a3a3a3">Git-based OpenTofu control plane.</text>
   <text x="96" y="566" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="26" fill="#6b6b6b">AGPL-3.0 · github.com/tako0614/takosumi · takosumi.com</text>
 </svg>
