@@ -635,6 +635,16 @@ normal short expiry; cross-store checks do not promise instantaneous revocation.
 Static credentials and providers without file support retain their existing
 env/file behavior.
 
+The existing Workspace-authorized Run logs response includes only typed,
+value-free provider mint evidence for that exact Run: connection/provider,
+mint time, temporary/TTL-enforced flags, optional expiry/TTL, and issuer. A
+`credential.refresh.accepted` Run audit event records the refresh sequence,
+connection/provider, prior/new expiry, and acknowledgement time only after the
+runner accepts the replacement. Its append is fenced to the active Run owner;
+heartbeat and terminal writes preserve the append-only audit trail. Neither
+projection carries token/env values, file paths, or the credential manifest
+digest.
+
 Secrets are write-only at the control-object boundary. Secret values never
 enter Resource specs, Interface documents, Outputs, state, Run logs, audit
 payloads, or public discovery. Sensitive OpenTofu values remain in encrypted

@@ -878,13 +878,48 @@ test("bootstrap wires host release activator into apply lifecycle", async () => 
 });
 
 test("run logs/events expose diagnostics + audit trail (§30)", async () => {
-  const { app, capsuleId } = await seedCapsuleViaRoutes(fakeRunner());
+  const { app, capsuleId, store, workspaceId } = await seedCapsuleViaRoutes(fakeRunner());
   const planRes = await app.request(`/internal/v1/capsules/${capsuleId}/plan`, {
     method: "POST",
     headers: headers(),
   });
   const planRun = ((await planRes.json()) as { run: Run }).run;
   const plan = await readInternalPlanRun(app, planRun.id);
+
+  await store.putCredentialMintEvent({
+    id: "mint_visible",
+    runId: planRun.id,
+    workspaceId,
+    connectionId: "connection_visible",
+    phase: "plan",
+    capabilities: ["cloudflare"],
+    createdAt: "2026-09-27T00:00:00.000Z",
+    providerCredentialEvidence: [{
+      connectionId: "connection_visible",
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+      temporary: true,
+      ttlEnforced: true,
+      ttlSeconds: 121,
+      expiresAt: "2026-09-27T00:02:01.000Z",
+      issuer: "issuer-safe",
+      token: "SECRET_SENTINEL",
+      filePath: "/private/sentinel",
+      manifestDigest: "sha256:private-sentinel",
+    }],
+  } as never);
+  await store.putCredentialMintEvent({
+    id: "mint_other_workspace",
+    runId: planRun.id,
+    workspaceId: "other_workspace",
+    connectionId: "connection_other",
+    phase: "plan",
+    capabilities: ["cloudflare"],
+    createdAt: "2026-09-27T00:00:01.000Z",
+    providerCredentialEvidence: [{
+      connectionId: "connection_other", provider: "cloudflare",
+      temporary: true, ttlEnforced: true,
+    }],
+  });
 
   const logsRes = await app.request(`/internal/v1/runs/${planRun.id}/logs`, {
     headers: headers(),
@@ -893,6 +928,24 @@ test("run logs/events expose diagnostics + audit trail (§30)", async () => {
   const logs = await logsRes.json();
   expect(Array.isArray(logs.diagnostics)).toBe(true);
   expect(Array.isArray(logs.auditEvents)).toBe(true);
+  expect(logs.credentialMints).toContainEqual({
+    connectionId: "connection_visible",
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
+    createdAt: "2026-09-27T00:00:00.000Z",
+    temporary: true,
+    ttlEnforced: true,
+    ttlSeconds: 121,
+    expiresAt: "2026-09-27T00:02:01.000Z",
+    issuer: "issuer-safe",
+  });
+  expect(logs.credentialMints.some((mint: { connectionId: string }) =>
+    mint.connectionId === "connection_other"
+  )).toBe(false);
+  expect(JSON.stringify(logs)).not.toContain("SECRET_SENTINEL");
+  expect(JSON.stringify(logs)).not.toContain("/private/sentinel");
+  expect(JSON.stringify(logs)).not.toContain("sha256:private-sentinel");
+  const unauthenticated = await app.request(`/internal/v1/runs/${planRun.id}/logs`);
+  expect(unauthenticated.status).toBe(401);
   // The plan recorded at least a plan.requested / plan.completed audit event.
   expect(logs.auditEvents.length).toBeGreaterThan(0);
 

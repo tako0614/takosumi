@@ -7115,6 +7115,7 @@ export class RunEngine {
       readonly profile: RunnerProfile;
       readonly credentials: RunCredentials | undefined;
       readonly phase: "plan" | "apply" | "destroy";
+      readonly leaseToken: string;
     },
     signal: AbortSignal,
     assertHeldLease: () => Promise<void>,
@@ -7212,6 +7213,8 @@ export class RunEngine {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let expiryWatchdog: ReturnType<typeof setTimeout> | undefined;
     let activeTick: Promise<void> | undefined;
+    let activeAuditWrite: Promise<boolean> | undefined;
+    let refreshDeliveryPending = false;
     let refreshError: unknown;
     const schedule = () => {
       if (stopped || child.signal.aborted) return;
@@ -7267,13 +7270,55 @@ export class RunEngine {
           }
           await assertHeldLease();
           if (stopped || child.signal.aborted) return;
-          await runner.refreshCredentials!({
-            owner,
-            runnerRunId: input.planRun.id,
-            manifestDigest,
-            sequence: ++sequence,
-            credentials: [{ ...newDescriptor, value }],
-          }, { signal: child.signal });
+          const previousExpiresAt = new Date(expires.get(descriptor.connectionId)!).toISOString();
+          const refreshSequence = ++sequence;
+          refreshDeliveryPending = true;
+          try {
+            await runner.refreshCredentials!({
+              owner,
+              runnerRunId: input.planRun.id,
+              manifestDigest,
+              sequence: refreshSequence,
+              credentials: [{ ...newDescriptor, value }],
+            }, { signal: child.signal });
+          } catch (error) {
+            // Teardown may already have stopped the tick after the child
+            // completed. A failed dispatched refresh still cannot be treated
+            // as a successful Run merely because the outer catch suppresses
+            // post-stop background errors.
+            refreshError ??= error;
+            throw error;
+          } finally {
+            refreshDeliveryPending = false;
+          }
+          const acknowledgedAt = this.#now();
+          activeAuditWrite = this.#store.appendRunningRunAuditEvent({
+            id: input.running.id,
+            kind: owner.kind,
+            workspaceId: input.running.workspaceId,
+            leaseToken: input.leaseToken,
+            event: {
+              id: this.#newId("credential_refresh_ack"),
+              type: "credential.refresh.accepted",
+              at: acknowledgedAt,
+              data: {
+                sequence: refreshSequence,
+                connectionId: descriptor.connectionId,
+                provider: descriptor.providerSource,
+                previousExpiresAt,
+                expiresAt: newDescriptor.expiresAt,
+                acknowledgedAt: new Date(acknowledgedAt).toISOString(),
+              },
+            },
+          });
+          const recorded = await activeAuditWrite;
+          if (!recorded) {
+            throw new OpenTofuControllerError(
+              "failed_precondition",
+              "run owner lost before credential refresh acknowledgement was recorded",
+            );
+          }
+          activeAuditWrite = undefined;
           expires.set(descriptor.connectionId, newExpiry);
         }
         schedule();
@@ -7299,6 +7344,9 @@ export class RunEngine {
       // by `stopped` above and can never be delivered to the runner. Do not
       // make teardown wait forever on an issuer that ignores cancellation.
       if (!child.signal.aborted) child.abort(new Error("run credential renewal scope closed"));
+      // Pre-ACK issuer/transport work may ignore cancellation, so teardown
+      // waits only briefly for it. An ACK that arrives during this window can
+      // begin a durable audit write; inspect that write AFTER the wait.
       if (activeTick) {
         let boundedWait: ReturnType<typeof setTimeout> | undefined;
         try {
@@ -7310,6 +7358,28 @@ export class RunEngine {
           ]);
         } finally {
           if (boundedWait) clearTimeout(boundedWait);
+        }
+      }
+      if (refreshDeliveryPending) {
+        // The runner may ACK after its child has already completed. A pending
+        // delivery cannot be published as a successful Run with no evidence.
+        refreshError ??= new OpenTofuControllerError(
+          "failed_precondition",
+          "credential refresh acknowledgement is unresolved after run completion",
+          { reason: CREDENTIAL_SERVICE_UNAVAILABLE_REASON },
+        );
+      }
+      if (activeAuditWrite) {
+        try {
+          const recorded = await activeAuditWrite;
+          if (!recorded) {
+            throw new OpenTofuControllerError(
+              "failed_precondition",
+              "run owner lost before credential refresh acknowledgement was recorded",
+            );
+          }
+        } catch (error) {
+          refreshError ??= error;
         }
       }
       signal.removeEventListener("abort", abortChild);
@@ -8100,6 +8170,7 @@ export class RunEngine {
               profile,
               credentials: effectiveRunEnvironment.credentials,
               phase: "plan",
+              leaseToken,
             },
             signal,
             assertHeldLease,
@@ -8801,6 +8872,7 @@ export class RunEngine {
               profile,
               credentials: runEnvironment.credentials,
               phase: "apply",
+              leaseToken,
             },
             signal,
             assertHeldLease,
@@ -10995,6 +11067,7 @@ export class RunEngine {
               profile,
               credentials,
               phase: "destroy",
+              leaseToken,
             },
             signal,
             assertHeldLease,

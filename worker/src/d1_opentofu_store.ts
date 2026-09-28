@@ -156,6 +156,7 @@ import type {
   CapsuleListPageParams,
   TransitionRunInput,
   TransitionRunResult,
+  AppendRunningRunAuditEventInput,
   WorkspaceManagement,
   WorkspaceManagementAuthority,
   ConnectionActorAuthority,
@@ -2848,7 +2849,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
                     settlementExpectedPlanOrApply!.heartbeatAt,
                   ),
             );
-    const runJson = d1RunJsonPreservingAuthority(persisted);
+    const runJson = input.kind === "plan" || input.kind === "apply"
+      ? d1RunJsonPreservingAuditEvents(persisted as PlanRun | ApplyRun)
+      : d1RunJsonPreservingAuthority(persisted);
     const result = await this.#orm
       .update(schema.runs)
       .set({
@@ -2923,6 +2926,33 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
             ? await this.getSourceSyncRun(input.id)
             : await this.getBackupRun(input.id);
     return { won: false, ...(current ? { run: current } : {}) };
+  }
+
+  async appendRunningRunAuditEvent(
+    input: AppendRunningRunAuditEventInput,
+  ): Promise<boolean> {
+    await this.#ensureSchema();
+    const types = input.kind === "plan"
+      ? [RUN_KIND_PLAN, "destroy_plan", "drift_check"]
+      : [RUN_KIND_APPLY, "destroy_apply"];
+    const result = await this.#orm.update(schema.runs).set({
+      runJson: sql`json_insert(
+        ${schema.runs.runJson}, '$.auditEvents[#]', json(${JSON.stringify(input.event)})
+      )`,
+    }).where(and(
+      eq(schema.runs.id, input.id),
+      eq(schema.runs.workspaceId, input.workspaceId),
+      inArray(schema.runs.type, types),
+      eq(schema.runs.status, "running"),
+      eq(schema.runs.leaseToken, input.leaseToken),
+      sql`json_extract(${schema.runs.runJson}, '$.id') = ${input.id}`,
+      sql`json_extract(${schema.runs.runJson}, '$.workspaceId') = ${input.workspaceId}`,
+      sql`NOT EXISTS (
+        SELECT 1 FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS existing
+        WHERE json_extract(existing.value, '$.id') = ${input.event.id}
+      )`,
+    )).run();
+    return changes(result as D1Result) === 1;
   }
 
   async commitSourceSyncSuccess(
@@ -10585,7 +10615,10 @@ function d1UpsertRunStmt(
   };
   const set = {
     ...values,
-    runJson: d1RunJsonPreservingAuthority(publicRun),
+    runJson: type === RUN_KIND_PLAN || type === "destroy_plan" || type === "drift_check" ||
+        type === RUN_KIND_APPLY || type === "destroy_apply"
+      ? d1RunJsonPreservingAuditEvents(publicRun as PlanRun | ApplyRun)
+      : d1RunJsonPreservingAuthority(publicRun),
   };
   return orm
     .insert(schema.runs)
@@ -11608,6 +11641,30 @@ function d1RunJsonPreservingAuthority(
     END
     ELSE json(${serialized})
   END`;
+}
+
+/** Preserve a concurrent refresh acknowledgement through heartbeat/terminal writes. */
+function d1RunJsonPreservingAuditEvents(run: PlanRun | ApplyRun): SQL {
+  const current = schema.runs.runJson;
+  const candidateEvents = JSON.stringify(run.auditEvents);
+  return sql`json_set(
+    ${d1RunJsonPreservingAuthority(run)}, '$.auditEvents',
+    json((
+      SELECT json_group_array(json(events.value)) FROM (
+        SELECT existing.value AS value, 0 AS source, CAST(existing.key AS integer) AS position
+        FROM json_each(${current}, '$.auditEvents') AS existing
+        UNION ALL
+        SELECT candidate.value AS value, 1 AS source, CAST(candidate.key AS integer) AS position
+        FROM json_each(${candidateEvents}, '$') AS candidate
+        WHERE NOT EXISTS (
+          SELECT 1 FROM json_each(${current}, '$.auditEvents') AS existing
+          WHERE json_extract(existing.value, '$.id') =
+            json_extract(candidate.value, '$.id')
+        )
+        ORDER BY source, position
+      ) AS events
+    ))
+  )`;
 }
 
 /** SourceSync keeps the historical helper name for its existing callers. */

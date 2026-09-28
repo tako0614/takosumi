@@ -149,6 +149,7 @@ import type {
   RunManagementAuthorityInput,
   TransitionRunInput,
   TransitionRunResult,
+  AppendRunningRunAuditEventInput,
 } from "./store.ts";
 import {
   assertExactRunTransitionInput,
@@ -2443,9 +2444,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         .update(pgSchema.runs)
         .set({
           status: runForWrite.status,
-          runJson: runJsonPreservingManagementAuthority(
-            runForWrite as StoredRunRecord,
-          ),
+          runJson: input.kind === "plan" || input.kind === "apply"
+            ? runJsonPreservingAuditEvents(runForWrite as PlanRun | ApplyRun)
+            : runJsonPreservingManagementAuthority(runForWrite as StoredRunRecord),
           ...(input.clearHeartbeat
             ? { heartbeatAt: null }
             : heartbeatAt === undefined
@@ -2616,6 +2617,36 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
             ? await this.getSourceSyncRun(input.id)
             : await this.getBackupRun(input.id);
     return { won: false, ...(current ? { run: current } : {}) };
+  }
+
+  async appendRunningRunAuditEvent(
+    input: AppendRunningRunAuditEventInput,
+  ): Promise<boolean> {
+    const kinds = input.kind === "plan"
+      ? [...RUN_KINDS_PLAN, "drift_check"]
+      : [...RUN_KINDS_APPLY];
+    const eventJson = JSON.stringify(input.event);
+    const rows = await this.#db.update(pgSchema.runs).set({
+      runJson: sql`jsonb_set(
+        ${pgSchema.runs.runJson}, '{auditEvents}',
+        COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb) || ${eventJson}::jsonb
+      )`,
+    }).where(and(
+      eq(pgSchema.runs.id, input.id),
+      eq(pgSchema.runs.workspaceId, input.workspaceId),
+      inArray(pgSchema.runs.kind, kinds),
+      eq(pgSchema.runs.status, "running"),
+      eq(pgSchema.runs.leaseToken, input.leaseToken),
+      sql`${pgSchema.runs.runJson} ->> 'id' = ${input.id}`,
+      sql`${pgSchema.runs.runJson} ->> 'workspaceId' = ${input.workspaceId}`,
+      sql`NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(
+          COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
+        ) AS existing(value)
+        WHERE existing.value ->> 'id' = ${input.event.id}
+      )`,
+    )).returning({ id: pgSchema.runs.id });
+    return rows.length === 1;
   }
 
   async commitSourceSyncSuccess(
@@ -9994,6 +10025,27 @@ function runJsonPreservingManagementAuthority(
   END`;
 }
 
+/** Merge the current append-only audit trail into a same-row Run replacement. */
+function runJsonPreservingAuditEvents(run: PlanRun | ApplyRun): SQL {
+  const current = pgSchema.runs.runJson;
+  const candidateEvents = JSON.stringify(run.auditEvents);
+  return sql`jsonb_set(
+    ${runJsonPreservingManagementAuthority(run)}, '{auditEvents}',
+    COALESCE(${current} -> 'auditEvents', '[]'::jsonb) ||
+    COALESCE((
+      SELECT jsonb_agg(candidate.value ORDER BY candidate.ordinality)
+      FROM jsonb_array_elements(${candidateEvents}::jsonb)
+        WITH ORDINALITY AS candidate(value, ordinality)
+      WHERE NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(
+          COALESCE(${current} -> 'auditEvents', '[]'::jsonb)
+        ) AS existing(value)
+        WHERE existing.value ->> 'id' = candidate.value ->> 'id'
+      )
+    ), '[]'::jsonb)
+  )`;
+}
+
 function sourceSyncRunJsonPreservingAuthority(run: SourceSyncRun): SQL {
   return runJsonPreservingManagementAuthority(run);
 }
@@ -10095,9 +10147,7 @@ async function pgUpsertRun(
         leaseToken: values.leaseToken,
         heartbeatAt: values.heartbeatAt,
         createdAt: values.createdAt,
-        runJson: runJsonPreservingManagementAuthority(
-          publicRun as StoredRunRecord,
-        ),
+        runJson: runJsonPreservingAuditEvents(publicRun),
       },
       setWhere: and(
         eq(pgSchema.runs.kind, kind),
@@ -10129,9 +10179,10 @@ async function pgUpdateTerminalRunWithLease(
     leaseToken: null as string | null,
     heartbeatAt: publicRun.heartbeatAt ?? null,
     createdAt: String(publicRun.createdAt),
-    runJson: runJsonPreservingManagementAuthority(
-      publicRun as StoredRunRecord,
-    ),
+    runJson: kind === "plan" || kind === "destroy_plan" || kind === "drift_check" ||
+        kind === "apply" || kind === "destroy_apply"
+      ? runJsonPreservingAuditEvents(publicRun as PlanRun | ApplyRun)
+      : runJsonPreservingManagementAuthority(publicRun as StoredRunRecord),
   };
   const rows = await db
     .update(pgSchema.runs)
