@@ -1689,7 +1689,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           response.nextAction,
         );
         if (action === "show-review") {
-          showReviewableInstallPlan(attempt.workspaceId, response, attempt);
+          if (!showReviewableInstallPlan(attempt.workspaceId, response, attempt)) {
+            setPendingInstallStatus(t("installStore.pendingUnknown"));
+            setPhase("pending-timeout");
+          }
           return;
         }
         setPendingInstallStatus(
@@ -1720,7 +1723,13 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         resumedResponse.nextAction,
       );
       if (completion.action === "show-review") {
-        showReviewableInstallPlan(attempt.workspaceId, resumedResponse, attempt);
+        if (
+          !showReviewableInstallPlan(attempt.workspaceId, resumedResponse, attempt)
+        ) {
+          setPendingInstallStatus(t("installStore.pendingUnknown"));
+          setPhase("pending-timeout");
+          return;
+        }
       } else if (completion.action === "workspace-mismatch") {
         setPendingInstallStatus(
           t("installStore.pendingWorkspaceMismatch", {
@@ -1857,7 +1866,15 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         },
       );
       if (!workspaceIsCurrent(workspace)) return;
-      showReviewableInstallPlan(workspace, response, attempt);
+      if (!showReviewableInstallPlan(workspace, response, attempt)) {
+        if (
+          installViewActive &&
+          pendingInstallAttempt()?.idempotencyKey === attempt.idempotencyKey
+        ) {
+          setPendingInstallStatus(t("installStore.pendingUnknown"));
+          setPhase("pending-timeout");
+        }
+      }
     } catch (cause) {
       if (!workspaceIsCurrent(workspace)) return;
       const failureAction = installPlanAttemptFailureAction(

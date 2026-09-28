@@ -1831,7 +1831,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await assertNoPageErrors(errors);
   });
 
-  test("late create acknowledgement after leaving Install does not publish on the new route", async ({
+  test("same-route query changes keep acknowledged install recovery resumable", async ({
     page,
   }) => {
     test.skip(
@@ -1852,13 +1852,12 @@ test.describe("Takosumi dashboard browser surface", () => {
     const installPlanBodies: unknown[] = [];
     const installPlanId = "gip_cccccccccccccccc";
     let installPlanRecord: Record<string, unknown> | undefined;
-    let createAckCompleted = false;
-    let releaseCreateAck!: () => void;
-    const createAckHold = new Promise<void>((resolve) => {
-      releaseCreateAck = resolve;
-    });
     let automaticReconcileCalls = 0;
     let automaticReconcileCompleted = false;
+    let releaseAutomaticReconcile!: () => void;
+    const automaticReconcileHold = new Promise<void>((resolve) => {
+      releaseAutomaticReconcile = resolve;
+    });
     const sourceState: SourceCreateFixtureState = {
       sourceListReads: [],
       sourcePosts: [],
@@ -2124,8 +2123,6 @@ test.describe("Takosumi dashboard browser surface", () => {
           createdAt: now,
           updatedAt: now,
         };
-        await createAckHold;
-        createAckCompleted = true;
         return route.fulfill({
           status: 201,
           json: {
@@ -2158,21 +2155,21 @@ test.describe("Takosumi dashboard browser surface", () => {
         request.method() === "POST"
       ) {
         automaticReconcileCalls += 1;
+        await automaticReconcileHold;
         installPlanRecord = {
           ...installPlanRecord,
-          phase: "failed",
-          diagnostic: {
-            code: "fixture_failed",
-            message: "The fixture plan stopped.",
-          },
+          capsuleId: "cap_install_e2e",
+          planRunId: "run_plan_e2e",
+          phase: "reviewable",
         };
         automaticReconcileCompleted = true;
         return route.fulfill({
           json: {
             installPlan: installPlanRecord,
-            nextAction: "none",
+            nextAction: "review_run",
             links: {
               self: `/api/v1/install-plans/${installPlanId}`,
+              run: "/api/v1/runs/run_plan_e2e",
             },
           },
         });
@@ -2271,16 +2268,24 @@ test.describe("Takosumi dashboard browser surface", () => {
     ]);
     expect(syncBodies).toEqual([{ expectedRef: resolvedCommit }]);
 
-    await page.getByRole("link", { name: "Settings" }).click();
-    await expect(page).toHaveURL(/\/settings$/u);
-    releaseCreateAck();
-    await expect.poll(() => createAckCompleted).toBe(true);
+    await expect(page).toHaveURL(new RegExp(`/new\\?installPlan=${installPlanId}$`));
     await expect.poll(() => automaticReconcileCalls).toBe(1);
+    await page.getByRole("link", { name: "Store" }).click();
+    await expect(page).toHaveURL(/\/new$/u);
+    releaseAutomaticReconcile();
     await expect.poll(() => automaticReconcileCompleted).toBe(true);
-    await expect(page).toHaveURL(/\/settings$/u);
+    await expect(page).toHaveURL(/\/new$/u);
     expect(new URL(page.url()).searchParams.has("installPlan")).toBe(false);
     await assertNoPageErrors(errors);
-    expect(automaticReconcileCalls).toBe(1);
+    await expect(page.getByTestId("install-plan-pending-recovery")).toBeVisible();
+    await page
+      .getByRole("button", { name: /resume|再開/iu })
+      .click();
+    await expect.poll(() => automaticReconcileCalls).toBe(2);
+    await expect(page.getByTestId("install-plan-pending-recovery")).toBeVisible();
+    await expect(page).toHaveURL(/\/new$/u);
+    expect(new URL(page.url()).searchParams.has("installPlan")).toBe(false);
+    expect(automaticReconcileCalls).toBe(2);
     traffic.assertNoFailures();
   });
 
