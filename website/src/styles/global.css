@@ -22,13 +22,25 @@ body {
   font-feature-settings: "ss01", "ss02";
 }
 
+/* ===== Takosumi design language: the face mark, made structural.
+ * The product mark is a red square face — two black eyes and an arm that
+ * ends in a spiral curl. The site carries that geometry instead of generic
+ * rounded rectangles: every block is a sharp square like the tile, section
+ * markers are miniature faces, hairlines end in the curl, and the page
+ * closes on the mark's own red field. The mark is flat — no glow, no
+ * soft shadows. */
+
+:root {
+  --tsm-mark-red: #ff0000; /* the face tile's own field red */
+}
+
 a {
   color: inherit;
   text-decoration: none;
   transition: color 120ms ease;
 }
 a:hover {
-  color: var(--tg-accent);
+  color: var(--tg-accent-hover);
 }
 
 ::selection {
@@ -45,7 +57,6 @@ code {
   background: var(--tg-code-bg);
   color: var(--tg-code-fg);
   padding: 0.12em 0.42em;
-  border-radius: 5px;
 }
 pre code {
   background: none;
@@ -77,18 +88,28 @@ section {
   position: relative;
 }
 
-/* Sections sit on a shared hairline grid — the spec-sheet rhythm that
-   carries the page instead of decorative wallpaper. */
+/* Sections sit on a shared hairline grid — the page's rhythm. */
 main > section + section {
   border-top: 1px solid var(--tg-line);
 }
 section h2 {
   font-family: var(--tg-font-display);
-  font-size: clamp(1.3rem, 2vw, 1.5rem);
-  line-height: 1.2;
-  letter-spacing: -0.015em;
+  font-size: clamp(1.7rem, 3vw, 2.4rem);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
   margin: 0 0 var(--tg-s-4);
-  font-weight: 700;
+  font-weight: 800;
+}
+/* Section marker — a miniature of the face: red tile, two black eyes. */
+section h2::before {
+  content: "";
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  margin-right: var(--tg-s-3);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23ef4444'/%3E%3Ccircle cx='5' cy='6.5' r='2' fill='%230a0a0a'/%3E%3Ccircle cx='11' cy='6.5' r='2' fill='%230a0a0a'/%3E%3C/svg%3E");
+  background-size: contain;
+  background-repeat: no-repeat;
 }
 section h2 + .intro {
   color: var(--tg-fg-muted);
@@ -97,15 +118,14 @@ section h2 + .intro {
   max-width: 64ch;
 }
 
-/* Primary action — one real button; everything else is a plain link. */
+/* Primary action — a square tile of the mark's red; flat, like the mark. */
 .btn {
   display: inline-block;
   background: var(--tg-accent);
   color: var(--tg-accent-fg);
-  font-weight: 600;
+  font-weight: 700;
   font-size: var(--tg-fs-sm);
-  padding: 0.6em 1.15em;
-  border-radius: var(--tg-r-sm);
+  padding: 0.75em 1.4em;
 }
 .btn:hover {
   background: var(--tg-accent-hover);
@@ -125,7 +145,6 @@ section h2 + .intro {
   padding: var(--tg-s-2) var(--tg-s-4);
   background: var(--tg-accent);
   color: #fff;
-  border-radius: var(--tg-r-md);
   font-size: var(--tg-fs-sm);
   font-weight: 600;
   transition: top 120ms ease;
@@ -148,7 +167,7 @@ section h2 + .intro {
   transition:
     background 200ms ease,
     border-color 200ms ease;
-  color: #fafafa; /* default over dark hero */
+  color: #fafafa;
 }
 .nav.is-scrolled {
   background: color-mix(in srgb, var(--tg-bg) 80%, transparent);
@@ -174,6 +193,9 @@ section h2 + .intro {
   color: inherit;
   font-family: var(--tg-font-display);
 }
+.wordmark-mark {
+  flex: none;
+}
 .wordmark-text {
   font-size: var(--tg-fs-lg);
   letter-spacing: -0.015em;
@@ -194,6 +216,7 @@ section h2 + .intro {
 }
 .nav-links a:hover {
   opacity: 1;
+  color: inherit;
 }
 
 /* Right-side actions */
@@ -208,7 +231,6 @@ section h2 + .intro {
   justify-content: center;
   width: 36px;
   height: 36px;
-  border-radius: var(--tg-r-md);
   background: transparent;
   color: inherit;
   border: 1px solid transparent;
@@ -228,21 +250,19 @@ section h2 + .intro {
 
 .nav-use {
   font-size: var(--tg-fs-sm);
-  font-weight: 600;
+  font-weight: 700;
   margin-left: var(--tg-s-2);
   white-space: nowrap;
   background: var(--tg-accent);
   color: var(--tg-accent-fg);
-  padding: 0.45em 0.95em;
-  border-radius: var(--tg-r-sm);
+  padding: 0.5em 1em;
 }
 .nav-use:hover {
   background: var(--tg-accent-hover);
   color: var(--tg-accent-fg);
 }
 
-/* Mobile disclosure menu — <details>/<summary>, zero JS, SSR-safe.
-   Hidden on desktop; replaces the section nav below 720px. */
+/* Mobile disclosure menu — <details>/<summary>, zero JS, SSR-safe. */
 .nav-menu {
   display: none;
   position: relative;
@@ -264,7 +284,6 @@ section h2 + .intro {
   gap: var(--tg-s-3);
   background: var(--tg-bg-elev);
   border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-md);
   box-shadow: var(--tg-shadow-lg);
 }
 .nav-menu-panel a {
@@ -292,37 +311,49 @@ section h2 + .intro {
   }
 }
 
-/* ===== Page head — name, factual paragraph, fact line, links, then the
- *  real dashboard at full width. No tagline, no spec ribbon. ===== */
+/* ===== Page head — face tile + name, factual paragraph, fact line,
+ *  links — then the real dashboard bleeding to the viewport edge. ===== */
 .page-head {
-  padding-top: calc(var(--tg-nav-h) + var(--tg-s-8));
+  padding-top: calc(var(--tg-nav-h) + var(--tg-s-7));
   border-top: none;
+  overflow: hidden;
+}
+.head-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-5);
+}
+.head-mark {
+  width: 112px;
+  height: 112px;
+  flex: none;
 }
 .page-title {
   font-family: var(--tg-font-display);
-  font-size: clamp(2rem, 4vw, 2.6rem);
+  font-size: clamp(3rem, 7.5vw, 5.6rem);
   line-height: 1;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.04em;
   font-weight: 800;
   margin: 0;
 }
 .page-desc {
-  font-size: var(--tg-fs-base);
-  max-width: 62ch;
-  margin: var(--tg-s-5) 0 0;
+  font-size: clamp(1.05rem, 1.5vw, 1.25rem);
+  color: var(--tg-fg);
+  max-width: 56ch;
+  margin: var(--tg-s-6) 0 0;
 }
 .page-facts {
   font-family: var(--tg-font-mono);
   font-size: var(--tg-fs-xs);
   color: var(--tg-fg-subtle);
-  margin: var(--tg-s-3) 0 0;
+  margin: var(--tg-s-4) 0 0;
 }
 .page-actions {
   display: flex;
   gap: var(--tg-s-5);
   flex-wrap: wrap;
   align-items: center;
-  margin: var(--tg-s-5) 0 0;
+  margin: var(--tg-s-6) 0 0;
   font-size: var(--tg-fs-sm);
 }
 .page-actions a:not(.btn) {
@@ -332,16 +363,76 @@ section h2 + .intro {
   color: var(--tg-fg);
 }
 
+/* The mark's arm: a hairline that ends in the spiral curl. The flex line
+ * stretches with the column; the curl glyph stays fixed at its end. */
+.curl-rule-wrap {
+  margin: var(--tg-s-7) 0 var(--tg-s-6);
+}
+.curl-rule {
+  display: flex;
+  align-items: flex-end;
+}
+.curl-rule::before {
+  content: "";
+  flex: 1;
+  height: 1px;
+  margin-bottom: 10px;
+  background: var(--tg-line-strong);
+}
+.curl-rule::after {
+  content: "";
+  flex: none;
+  width: 56px;
+  height: 28px;
+  background: url("/brand/curl.svg") no-repeat right center / contain;
+}
+
+/* The product itself is the hero: the real dashboard starts at the text
+ * column's left edge and runs off the right edge of the viewport. */
+.head-shot {
+  padding-left: max(
+    var(--tg-s-5),
+    calc((100vw - var(--tg-container)) / 2 + var(--tg-s-5))
+  );
+}
+.shot-hero {
+  width: 100%;
+  height: auto;
+  max-height: 76vh;
+  object-fit: cover;
+  object-position: top left;
+}
+
+/* Real screenshots of the running dashboard — full width, square edges. */
+.shot {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--tg-line);
+  margin-top: var(--tg-s-6);
+}
+.shot-hero {
+  margin-top: 0;
+}
+
 /* ===== Steps — heading, one sentence ===== */
 .step {
-  margin-top: var(--tg-s-6);
+  margin-top: var(--tg-s-7);
 }
 .step h3 {
   font-family: var(--tg-font-display);
-  font-size: var(--tg-fs-base);
-  font-weight: 700;
+  font-size: var(--tg-fs-xl);
+  font-weight: 800;
   letter-spacing: -0.01em;
   margin: 0 0 var(--tg-s-2);
+}
+.step h3::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: var(--tg-s-2);
+  background: var(--tg-accent);
 }
 .step p {
   margin: 0;
@@ -350,17 +441,26 @@ section h2 + .intro {
   max-width: 64ch;
 }
 
-/* ===== Plain fact list ===== */
+/* ===== Plain fact list — square bullets of the mark's red ===== */
 .fact-list {
   margin: var(--tg-s-5) 0 0;
-  padding-left: 1.4em;
+  padding: 0;
+  list-style: none;
 }
 .fact-list li {
+  position: relative;
+  padding-left: var(--tg-s-5);
   margin: var(--tg-s-3) 0;
   color: var(--tg-fg-muted);
 }
-.fact-list li::marker {
-  color: var(--tg-fg-subtle);
+.fact-list li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.52em;
+  width: 8px;
+  height: 8px;
+  background: var(--tg-accent);
 }
 
 /* ===== Pricing — two plain options ===== */
@@ -397,11 +497,29 @@ section h2 + .intro {
   color: var(--tg-fg-subtle);
 }
 
-/* Footer */
-footer.site {
-  border-top: 1px solid var(--tg-line);
-  padding: var(--tg-s-7) 0;
+/* WhatYouCanHost — installable products as a plain linked list */
+.host-name {
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-base);
+  font-weight: 700;
+  color: var(--tg-fg);
+}
+.host-name::after {
+  content: " — ";
+  color: var(--tg-fg-subtle);
+  font-weight: 400;
+}
+.host-note {
+  font-size: var(--tg-fs-sm);
   color: var(--tg-fg-muted);
+}
+
+/* ===== Footer — the page closes on the mark's own field. The face tile
+ * blends into the red; black type sits on it like the mark's features. */
+footer.site {
+  background: var(--tsm-mark-red);
+  padding: var(--tg-s-6) 0;
+  color: #0a0a0a;
   font-size: var(--tg-fs-sm);
 }
 footer.site .container {
@@ -419,11 +537,20 @@ footer.site nav {
   gap: var(--tg-s-5);
   flex-wrap: wrap;
 }
+footer.site nav a {
+  font-weight: 600;
+}
 footer.site nav a:hover {
-  color: var(--tg-fg);
+  color: #0a0a0a;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 footer.site .copy {
   font-size: var(--tg-fs-xs);
+  color: rgba(10, 10, 10, 0.7);
+}
+footer.site .wordmark {
+  color: #0a0a0a;
 }
 
 /* Visually-hidden but accessible to assistive tech */
@@ -443,7 +570,22 @@ footer.site .copy {
 :focus-visible {
   outline: 2px solid var(--tg-accent);
   outline-offset: 3px;
-  border-radius: var(--tg-r-sm);
+}
+footer.site :focus-visible {
+  outline-color: #0a0a0a;
+}
+
+@media (max-width: 720px) {
+  .page-head {
+    padding-top: calc(var(--tg-nav-h) + var(--tg-s-6));
+  }
+  .head-mark {
+    width: 80px;
+    height: 80px;
+  }
+  .shot-hero {
+    max-height: 60vh;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -456,40 +598,4 @@ footer.site .copy {
   html {
     scroll-behavior: auto;
   }
-}
-
-/* WhatYouCanHost — installable products as a plain linked list */
-.host-name {
-  font-family: var(--tg-font-mono);
-  font-size: var(--tg-fs-base);
-  font-weight: 700;
-  color: var(--tg-fg);
-}
-.host-name::after {
-  content: ' — ';
-  color: var(--tg-fg-subtle);
-  font-weight: 400;
-}
-.host-note {
-  font-size: var(--tg-fs-sm);
-  color: var(--tg-fg-muted);
-}
-
-@media (max-width: 720px) {
-  .page-head {
-    padding-top: calc(var(--tg-nav-h) + var(--tg-s-6));
-  }
-}
-
-/* ===== Product visuals — real screenshots of the running dashboard
- * (public/screens, captured from the actual SPA). Full width, no frame
- * chrome, no caption. */
-
-.shot {
-  display: block;
-  width: 100%;
-  height: auto;
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-sm);
-  margin-top: var(--tg-s-6);
 }

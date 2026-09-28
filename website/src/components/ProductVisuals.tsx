@@ -14,15 +14,15 @@ export function ProductShot(props: {
   alt: string;
   w?: number;
   h?: number;
+  hero?: boolean;
 }): JSX.Element {
   return (
     <img
-      class="shot"
+      class={props.hero ? "shot shot-hero" : "shot"}
       src={props.src}
       alt={props.alt}
       width={props.w ?? 1600}
       height={props.h ?? 1000}
-      loading="lazy"
       decoding="async"
     />
   );

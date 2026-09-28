@@ -5,6 +5,7 @@ import Why from "~/components/WhyOperatorOwned";
 import WhatYouCanHost from "~/components/WhatYouCanHost";
 import Showcase from "~/components/Showcase";
 import Pricing from "~/components/Pricing";
+import CurlRule from "~/components/CurlRule";
 import Footer from "~/components/Footer";
 import AdringWidget from "~/components/AdringWidget";
 
@@ -20,6 +21,7 @@ export default function Home() {
         <Showcase />
         <Pricing />
       </main>
+      <CurlRule />
       <Footer />
       <AdringWidget />
     </>

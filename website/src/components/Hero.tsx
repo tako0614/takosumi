@@ -1,12 +1,24 @@
 import { ProductShot } from "./ProductVisuals";
+import CurlRule from "./CurlRule";
 
-/** Page head: product name, one factual paragraph, a plain fact line, the
- *  primary links — then the real dashboard at full width. */
+/** Page head: the mark's face tile + product name, one factual paragraph,
+ *  a plain fact line, the primary links — then the real dashboard bleeding
+ *  off the right viewport edge. */
 export default function Hero() {
   return (
     <section class="page-head">
       <div class="container">
-        <h1 class="page-title">Takosumi</h1>
+        <div class="head-brand">
+          <img
+            class="head-mark"
+            src="/tako.png"
+            alt=""
+            width="660"
+            height="660"
+            decoding="async"
+          />
+          <h1 class="page-title">Takosumi</h1>
+        </div>
         <p class="page-desc">
           Git-based OpenTofu control
           plane。アプリやインフラを、ブラウザから自分のクラウドへ公開・管理する。接続・状態・履歴・監査をひとつの場所で扱う。
@@ -29,7 +41,11 @@ export default function Hero() {
             Docs
           </a>
         </div>
+      </div>
+      <CurlRule />
+      <div class="head-shot">
         <ProductShot
+          hero
           src="/screens/home.webp"
           alt="Takosumi ダッシュボードの実画面。自分のワークスペースのサイドバーと、インストール済みの 5 つのアプリ (takos, takos-office, takos-computer, yurucommu, road-to-me) が並ぶホーム。"
         />
