@@ -3970,12 +3970,18 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
 
   async getCapsuleRuntimeSafety(
     capsuleId: string,
+    options: { readonly excludeRunId?: string } = {},
   ): Promise<CapsuleRuntimeSafety | undefined> {
     const rows = await this.#drizzleManyJson<ApplyRun | Run>(
       schema.runs,
       schema.runs.runJson,
       {
-        where: d1RuntimeSafetyCandidateWhere(capsuleId),
+        where: and(
+          d1RuntimeSafetyCandidateWhere(capsuleId),
+          options.excludeRunId
+            ? ne(schema.runs.id, options.excludeRunId)
+            : undefined,
+        ),
         orderBy: [
           desc(d1RunRuntimeSafetyInFlightOrder()),
           desc(d1RunRuntimeSafetyEffectAtMillisOrder()),

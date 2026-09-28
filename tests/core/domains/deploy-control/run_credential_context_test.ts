@@ -359,6 +359,62 @@ describe("canonical Capsule Run credential context", () => {
     }
   });
 
+  test("Destroy issuance accepts only the exact persisted partial-state predecessor", async () => {
+    const capsule = { ...CAPSULE, currentStateVersionId: "state_partial_1" };
+    const plan = {
+      ...PLAN,
+      operation: "destroy",
+      capsuleCurrentStateVersionId: "state_partial_1",
+    };
+    const apply = { ...APPLY, operation: "destroy" };
+    const safety = {
+      phase: "terminating",
+      runId: "apply_1",
+      runType: "destroy_apply",
+    };
+    const priorSafety = {
+      phase: "unknown",
+      runId: "apply_failed_partial",
+      runType: "apply",
+    };
+    const priorApply = {
+      ...APPLY,
+      id: "apply_failed_partial",
+      status: "failed",
+      stateVersionId: "state_partial_1",
+      auditEvents: [{
+        type: "apply.failed",
+        data: {
+          providerDispatched: true,
+          providerApplySucceeded: false,
+          statePersistence: "persisted",
+          stateVersionId: "state_partial_1",
+        },
+      }],
+    };
+    const input = {
+      workspaceId: "workspace_1",
+      capsuleId: "capsule_1",
+      runId: "apply_1",
+      phase: "destroy" as const,
+    };
+    expect(await resolveCanonicalCapsuleRunCredentialContext(
+      ledger({ capsule, plan, apply, safety, priorSafety, priorApply }), input,
+    )).toMatchObject({ ok: true, context: { lifecycleIntent: "destroy" } });
+    expect(await resolveCanonicalCapsuleRunCredentialContext(
+      ledger({
+        capsule, plan, apply, safety, priorSafety,
+        priorApply: { ...priorApply, stateVersionId: "state_other" },
+      }), input,
+    )).toEqual({ ok: false, reason: "runtime_safety_mismatch" });
+    expect(await resolveCanonicalCapsuleRunCredentialContext(
+      ledger({
+        capsule, plan, apply, safety, priorSafety,
+        priorApply: { ...priorApply, auditEvents: [] },
+      }), input,
+    )).toEqual({ ok: false, reason: "runtime_safety_mismatch" });
+  });
+
   test("allows a fresh plan and apply after an exact committed post-apply failure", async () => {
     const capsule = {
       ...CAPSULE,
@@ -668,6 +724,7 @@ function ledger(
     readonly stateVersion?: Record<string, unknown> | null;
     readonly output?: Record<string, unknown> | null;
     readonly safety?: Record<string, unknown>;
+    readonly priorSafety?: Record<string, unknown>;
   } = {},
 ): CapsuleRunCredentialLedger {
   const capsule = overrides.capsule ?? CAPSULE;
@@ -684,6 +741,9 @@ function ledger(
     getStateVersion: async (id) =>
       (id === stateVersion?.id ? stateVersion : undefined) as never,
     getOutput: async (id) => (id === output?.id ? output : undefined) as never,
-    getCapsuleRuntimeSafety: async () => overrides.safety as never,
+    getCapsuleRuntimeSafety: async (_capsuleId, options) =>
+      (options?.excludeRunId === overrides.safety?.runId
+        ? overrides.priorSafety
+        : overrides.safety) as never,
   };
 }

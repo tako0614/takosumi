@@ -269,6 +269,7 @@ function controllerWith(
       job: OpenTofuApplyJob,
       control?: RunExecutionControl,
     ) => Promise<OpenTofuApplyResult>;
+    destroy?: NonNullable<OpenTofuRunner["destroy"]>;
     sourceSync?: (job: OpenTofuSourceSyncJob) => Promise<OpenTofuSourceSyncResult>;
     restore?: (
       job: OpenTofuRestoreJob,
@@ -331,6 +332,7 @@ function controllerWith(
             fixtureExecutionEvidence(job, "apply"),
         };
       },
+      ...(options.destroy ? { destroy: options.destroy } : {}),
       ...(options.sourceSync ? { sourceSync: options.sourceSync } : {}),
       ...(options.restore ? { restore: options.restore } : {}),
       ...(options.restoreServiceData
@@ -1442,6 +1444,8 @@ test("renewable PlanRun refreshes under its own plan owner", async () => {
   });
   let resolveStarted!: () => void;
   const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+  let resolveRefreshEntered!: () => void;
+  const refreshEntered = new Promise<void>((resolve) => { resolveRefreshEntered = resolve; });
   let completePlan!: (value: OpenTofuPlanResult) => void;
   const refreshes: unknown[] = [];
   const capabilities: unknown[] = [];
@@ -1451,7 +1455,10 @@ test("renewable PlanRun refreshes under its own plan owner", async () => {
     const controller = controllerWith(store, {
       vault, now: () => Date.now(), runRenewalIntervalMs: 0,
       assertCredentialRefreshCapability: async (input) => { capabilities.push(input); },
-      refreshCredentials: async (update) => { refreshes.push(update); },
+      refreshCredentials: async (update) => {
+        refreshes.push(update);
+        resolveRefreshEntered();
+      },
       plan: async () => {
         resolveStarted();
         return await new Promise<OpenTofuPlanResult>((resolve) => {
@@ -1466,7 +1473,7 @@ test("renewable PlanRun refreshes under its own plan owner", async () => {
       runnerRunId: planRunId,
     }]);
     jest.advanceTimersByTime(31_000);
-    await settleAsyncUntil(() => refreshes.length === 1);
+    await refreshEntered;
     expect(issueCount()).toBe(2);
     expect(refreshes).toMatchObject([{
       owner: { kind: "plan", id: planRunId },
@@ -1745,6 +1752,240 @@ test("refresh failure preserves a typed provider-failed partial-state receipt", 
   } finally {
     jest.useRealTimers();
   }
+});
+
+test("refresh failure cannot turn a late successful Apply receipt into a succeeded Run", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { applyRunId, vault } =
+    await seedRenewableApplyFixture(store, "refresh_late_apply_success");
+  let resolveStarted!: () => void;
+  const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+  let returnedStateDigest: string | undefined;
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
+  try {
+    const controller = controllerWith(store, {
+      vault, now: () => Date.now(), runRenewalIntervalMs: 0,
+      assertCredentialRefreshCapability: async () => {},
+      refreshCredentials: async () => { throw new Error("refresh delivery unavailable"); },
+      apply: async (_job, control) => {
+        resolveStarted();
+        const signal = control?.signal;
+        if (!signal) throw new Error("fixture runner requires a signal");
+        if (!signal.aborted) {
+          await new Promise<void>((resolve) =>
+            signal.addEventListener("abort", () => resolve(), { once: true })
+          );
+        }
+        const result = fixtureStateCommit({
+          providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+        });
+        returnedStateDigest = result.stateDigest;
+        return result;
+      },
+    });
+    const pending = controller.runQueuedApply(applyRunId);
+    await started;
+    jest.advanceTimersByTime(31_000);
+    const response = await pending;
+    expect(returnedStateDigest).toBeDefined();
+    expect(response.applyRun.status).toBe("failed");
+    expect(response.applyRun.auditEvents.some((event) =>
+      event.data?.providerDispatched === true
+    )).toBe(true);
+    expect(capsuleRuntimeSafetyFromRun(response.applyRun).phase).toBe("unknown");
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test("refresh failure cannot publish a late successful Plan artifact or timing", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { planRunId, vault } =
+    await seedRenewableApplyFixture(store, "refresh_late_plan_success");
+  const prepared = await store.getPlanRun(planRunId);
+  if (!prepared) throw new Error("renewable Plan fixture is missing");
+  await store.putPlanRun({
+    ...prepared,
+    status: "queued",
+    planDigest: undefined,
+    planArtifact: undefined,
+    policyDecisionDigest: undefined,
+  });
+  let resolveStarted!: () => void;
+  const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
+  try {
+    const controller = controllerWith(store, {
+      vault, now: () => Date.now(), runRenewalIntervalMs: 0,
+      assertCredentialRefreshCapability: async () => {},
+      refreshCredentials: async () => { throw new Error("refresh delivery unavailable"); },
+      plan: async (_job, control) => {
+        resolveStarted();
+        const signal = control?.signal;
+        if (!signal) throw new Error("fixture runner requires a signal");
+        if (!signal.aborted) {
+          await new Promise<void>((resolve) =>
+            signal.addEventListener("abort", () => resolve(), { once: true })
+          );
+        }
+        return {
+          planDigest: PLAN_DIGEST,
+          planArtifact: planArtifact(),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+          providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+        };
+      },
+    });
+    const pending = controller.runQueuedPlan(planRunId);
+    await started;
+    jest.advanceTimersByTime(31_000);
+    const result = await pending;
+    expect(result?.status).toBe("failed");
+    expect(result?.planDigest).toBeUndefined();
+    expect(result?.planArtifact).toBeUndefined();
+    expect(result?.diagnostics?.some((diagnostic) =>
+      diagnostic.code === "core_plan_elapsed_timings"
+    )).toBeFalsy();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test("an unknown Apply blocks a credentialless new Apply on the stale state generation", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const capsuleId = "cap_unknown_credentialless_apply";
+  const applyRunId = "apply_unknown_credentialless_original";
+  await seedApply(store, {
+    capsuleId,
+    planRunId: "plan_unknown_credentialless_apply",
+    applyRunId,
+  });
+  const original = await store.getApplyRun(applyRunId);
+  if (!original) throw new Error("original Apply fixture is missing");
+  await store.putApplyRun({
+    ...original,
+    status: "failed",
+    startedAt: 2,
+    finishedAt: 3,
+    updatedAt: 3,
+    auditEvents: [{
+      id: "audit_unknown_credentialless_original",
+      type: "apply.failed",
+      at: 3,
+      data: { providerDispatched: true },
+    }],
+  });
+  expect(await store.getCapsuleRuntimeSafety(capsuleId)).toMatchObject({
+    phase: "unknown",
+    runId: applyRunId,
+  });
+  const subsequentId = "apply_unknown_credentialless_subsequent";
+  const capsule = await store.getCapsule(capsuleId);
+  const management = await store.getWorkspaceManagement(original.workspaceId);
+  if (!capsule || !management) throw new Error("admission fixture is missing");
+  const admission = await store.beginApplyRun({
+    ...original,
+    id: subsequentId,
+    status: "queued",
+    auditEvents: [],
+    updatedAt: 4,
+  }, {
+    workspaceId: original.workspaceId,
+    managementState: "active",
+    managementEpoch: management.managementEpoch,
+  }, capsuleApplyRunAdmissionFence(
+    capsule,
+    await store.getCapsuleExecutionAuthorityEpoch(capsuleId) ?? 1,
+  ));
+  expect(admission.status).toBe("created");
+  let providerDispatches = 0;
+  const response = await controllerWith(store, {
+    now: () => 5,
+    apply: async () => {
+      providerDispatches += 1;
+      return fixtureStateCommit();
+    },
+  }).runQueuedApply(subsequentId);
+  expect(response.applyRun.status).toBe("failed");
+  expect(response.applyRun.diagnostics?.map((item) => item.code)).toContain(
+    "runtime_safety_mismatch",
+  );
+  expect(providerDispatches).toBe(0);
+  expect(await store.getCapsuleRuntimeSafety(capsuleId)).toMatchObject({
+    phase: "unknown",
+    runId: applyRunId,
+  });
+});
+
+test("an unknown Apply blocks a credentialless ordinary Destroy beneath its own terminating projection", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const capsuleId = "cap_unknown_credentialless_destroy";
+  const originalId = "apply_unknown_before_destroy";
+  const planRunId = "plan_unknown_credentialless_destroy";
+  await seedApply(store, { capsuleId, planRunId, applyRunId: originalId });
+  const original = await store.getApplyRun(originalId);
+  const plan = await store.getPlanRun(planRunId);
+  if (!original || !plan) throw new Error("Destroy fixture is missing");
+  await store.putApplyRun({
+    ...original,
+    status: "failed",
+    startedAt: 2,
+    finishedAt: 3,
+    updatedAt: 3,
+    auditEvents: [{
+      id: "audit_unknown_before_destroy",
+      type: "apply.failed",
+      at: 3,
+      data: { providerDispatched: true },
+    }],
+  });
+  await store.putPlanRun({ ...plan, operation: "destroy" });
+  const destroyId = "destroy_unknown_credentialless_subsequent";
+  const capsule = await store.getCapsule(capsuleId);
+  const management = await store.getWorkspaceManagement(original.workspaceId);
+  if (!capsule || !management) throw new Error("Destroy admission fixture is missing");
+  const admission = await store.beginApplyRun({
+    ...original,
+    id: destroyId,
+    operation: "destroy",
+    status: "queued",
+    auditEvents: [],
+    updatedAt: 4,
+  }, {
+    workspaceId: original.workspaceId,
+    managementState: "active",
+    managementEpoch: management.managementEpoch,
+  }, capsuleApplyRunAdmissionFence(
+    capsule,
+    await store.getCapsuleExecutionAuthorityEpoch(capsuleId) ?? 1,
+  ));
+  expect(admission.status).toBe("created");
+  expect(await store.getCapsuleRuntimeSafety(capsuleId)).toMatchObject({
+    phase: "terminating",
+    runId: destroyId,
+  });
+  expect(await store.getCapsuleRuntimeSafety(capsuleId, {
+    excludeRunId: destroyId,
+  })).toMatchObject({ phase: "unknown", runId: originalId });
+  let providerDispatches = 0;
+  const response = await controllerWith(store, {
+    now: () => 5,
+    destroy: async () => {
+      providerDispatches += 1;
+      throw new Error("Destroy must not dispatch against unknown state");
+    },
+  }).runQueuedApply(destroyId);
+  expect(response.applyRun.status).toBe("failed");
+  expect(response.applyRun.diagnostics?.map((item) => item.code)).toContain(
+    "runtime_safety_mismatch",
+  );
+  expect(providerDispatches).toBe(0);
+  expect(await store.getCapsuleRuntimeSafety(capsuleId, {
+    excludeRunId: destroyId,
+  })).toMatchObject({ phase: "unknown", runId: originalId });
 });
 
 test("refresh failure without runner receipt remains unknown after dispatch", async () => {

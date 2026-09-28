@@ -3216,6 +3216,7 @@ export interface OpenTofuControlStore {
   /** Latest decisive mutation for runtime Interface safety, if one exists. */
   getCapsuleRuntimeSafety(
     capsuleId: string,
+    options?: { readonly excludeRunId?: string },
   ): Promise<CapsuleRuntimeSafety | undefined>;
   /**
    * Internal scheduler safety net read: returns oldest-first dispatchable
@@ -4603,24 +4604,27 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
 
   #capsuleRuntimeSafetyCandidate(
     capsuleId: string,
+    excludeRunId?: string,
   ): ApplyRun | Run | undefined {
     const rows = Array.from(this.#runs.values()).filter(
       (run): run is ApplyRun | Run =>
+        run.id !== excludeRunId &&
         (isApplyRunRecord(run) || isPublicRunRecord(run)) &&
         runtimeSafetyCandidate(run, capsuleId),
     );
     return rows.sort(compareRuntimeSafetyCandidatesDesc)[0];
   }
 
-  #capsuleRuntimeSafety(capsuleId: string): CapsuleRuntimeSafety | undefined {
-    const latest = this.#capsuleRuntimeSafetyCandidate(capsuleId);
+  #capsuleRuntimeSafety(capsuleId: string, excludeRunId?: string): CapsuleRuntimeSafety | undefined {
+    const latest = this.#capsuleRuntimeSafetyCandidate(capsuleId, excludeRunId);
     return latest ? capsuleRuntimeSafetyFromRun(latest) : undefined;
   }
 
   getCapsuleRuntimeSafety(
     capsuleId: string,
+    options: { readonly excludeRunId?: string } = {},
   ): Promise<CapsuleRuntimeSafety | undefined> {
-    return Promise.resolve(this.#capsuleRuntimeSafety(capsuleId));
+    return Promise.resolve(this.#capsuleRuntimeSafety(capsuleId, options.excludeRunId));
   }
 
   listRecoverableOpenTofuRuns(

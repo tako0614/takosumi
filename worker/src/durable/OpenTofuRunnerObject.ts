@@ -1265,16 +1265,13 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
    * target before provider dispatch is authorized.
    *
    * The controller allocates `stateScope.stateRef` only for the ledger's next
-   * generation, so a protocol-written object at that exact slot is always an
-   * uncommitted remnant of a run whose post-persist ledger commit never
-   * landed — never a committed generation. A remnant left by a different
-   * ApplyRun is discarded so this run's conditional persist can recreate it;
-   * its execution-evidence sidecar goes with it because evidence is written
-   * create-only under the writer's run identity. A remnant left by THIS
-   * ApplyRun means the durable dispatch authority was lost after the persist;
-   * the completed object is adopted only when it authenticates, never
-   * re-dispatched. An object without the protocol's metadata is foreign and
-   * keeps the orphaned block.
+   * generation. A protocol-written object at that slot may be a completed
+   * external mutation whose Core ledger commit was interrupted. R2 metadata
+   * alone cannot prove a different ApplyRun's target is disposable. Only this
+   * exact ApplyRun may adopt the object after authenticating its existing
+   * durable dispatch authority; every other claimant remains blocked without
+   * deleting the state or its execution-evidence sidecar. A foreign object
+   * without protocol metadata also remains blocked.
    */
   async #gateExistingStateTarget(
     scope: StateScope,
@@ -1312,13 +1309,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       }
       return await this.#blockPreparedMutationWithExistingTarget(preparation);
     }
-    await bucket.delete(scope.stateRef);
-    await bucket.delete(executionEvidenceObjectKey(scope.stateRef));
-    console.warn("OpenTofu runner discarded an uncommitted state remnant", {
-      action,
-      generation: scope.generation,
-    });
-    return undefined;
+    return await this.#blockPreparedMutationWithExistingTarget(preparation);
   }
 
   async #markMutationDispatched(

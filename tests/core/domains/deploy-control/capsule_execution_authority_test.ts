@@ -366,6 +366,48 @@ async function expectInitiallyDestroyedDefault(
 }
 
 describe("Capsule execution authority", () => {
+  test("workerd D1 runtime-safety read excludes only the queued Destroy", async () => {
+    const runtime = new Miniflare({
+      compatibilityDate: "2026-07-17",
+      modules: [{ type: "ESModule", path: "runtime-safety-read.mjs", contents: "export default {fetch(){return new Response('ok')}}" }],
+      d1Databases: { CONTROL: "runtime-safety-read" },
+    });
+    try {
+      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const store = new CloudflareD1OpenTofuControlStore(database);
+      await store.putCapsule(capsule());
+      const prior: ApplyRun = {
+        ...terminatingRun("failed"),
+        id: "run_prior_unknown_apply",
+        planRunId: "plan_prior_unknown_apply",
+        operation: "update",
+        expected: {
+          ...terminatingRun("failed").expected,
+          planRunId: "plan_prior_unknown_apply",
+        },
+        auditEvents: [{
+          id: "audit_prior_unknown_apply",
+          type: "apply.failed",
+          at: 2,
+          data: { providerDispatched: true },
+        }],
+      };
+      const destroy = terminatingRun("queued");
+      await store.putApplyRun(prior);
+      await store.putApplyRun(destroy);
+      expect(await store.getCapsuleRuntimeSafety(CAPSULE_ID)).toEqual({
+        phase: "terminating", runId: destroy.id, runType: "destroy_apply",
+      });
+      expect(await store.getCapsuleRuntimeSafety(CAPSULE_ID, {
+        excludeRunId: destroy.id,
+      })).toEqual({
+        phase: "unknown", runId: prior.id, runType: "apply",
+      });
+    } finally {
+      await runtime.dispose();
+    }
+  }, 30_000);
+
   test("InMemory keeps the same private terminal-transition semantics", async () => {
     const store = new InMemoryOpenTofuControlStore();
     await expectLifecycleParity([store]);

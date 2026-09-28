@@ -113,6 +113,7 @@ import {
 } from "../../sources/capsule_compatibility.ts";
 import type { ObservabilitySink } from "../../observability/mod.ts";
 import { CapsuleQuery, requireCapsule } from "../capsule_query.ts";
+import { capsuleRunRuntimeSafetyMatches } from "../run_credential_context.ts";
 import { getCapsuleAdoptedSourceSnapshot } from "../capsule_source_revision.ts";
 import {
   accountsOidcModuleVariableProfile,
@@ -7092,6 +7093,7 @@ export class RunEngine {
     signal: AbortSignal,
     assertHeldLease: () => Promise<void>,
     work: (signal: AbortSignal) => Promise<T>,
+    retainsTypedFailureReceipt?: (result: T) => boolean,
   ): Promise<T> {
     const descriptors = input.credentials?.renewable ?? [];
     if (descriptors.length === 0) return await work(signal);
@@ -7300,6 +7302,16 @@ export class RunEngine {
       }
       throw workError;
     }
+    // A runner transport can acknowledge success after the refresh loop has
+    // already aborted its child. The external mutation may have happened, but
+    // the credential failure means Core must keep the Run unknown rather than
+    // publish a successful Plan or commit a stale Apply/Destroy projection.
+    // A typed provider-failed receipt is different: its persisted partial
+    // state must still reach the owning failed-mutation commit path.
+    if (
+      refreshError !== undefined &&
+      (result === undefined || !retainsTypedFailureReceipt?.(result))
+    ) throw refreshError;
     return result as T;
   }
 
@@ -8677,6 +8689,7 @@ export class RunEngine {
       const plannedCapsule = await this.#assertApplyPreconditions(
         planRun,
         dispatch,
+        running,
       );
       await this.#revalidateModuleVariableMaterialization(
         planRun,
@@ -8759,6 +8772,7 @@ export class RunEngine {
                 },
                 signal: credentialSignal,
               }),
+            (outcome) => Boolean(outcome.result.providerExecutionFailure),
           ),
       );
       const now = this.#now();
@@ -9110,6 +9124,7 @@ export class RunEngine {
   async #assertApplyPreconditions(
     planRun: PlanRun,
     dispatch: RunModuleDispatch,
+    applyRun: ApplyRun,
   ): Promise<Capsule | undefined> {
     if (!planRun.planArtifact) {
       throw new OpenTofuControllerError(
@@ -9135,6 +9150,19 @@ export class RunEngine {
     // State generation guard: reject when the target's state advanced past the
     // generation this plan was created against (a stale plan over newer state).
     assertStateGenerationMatches(planRun, plannedCapsule);
+    if (plannedCapsule && !(await capsuleRunRuntimeSafetyMatches(this.#store, {
+      capsule: plannedCapsule,
+      runId: applyRun.id,
+      phase: planRun.operation === "destroy" ? "destroy" : "apply",
+      planOperation: planRun.operation,
+      plannedCapsuleStateVersionId: planRun.capsuleCurrentStateVersionId,
+    }))) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `Capsule ${plannedCapsule.id} runtime safety does not permit ApplyRun ${applyRun.id}`,
+        { reason: "runtime_safety_mismatch" },
+      );
+    }
     // Env-driven runs guard against the Environment's latest StateVersion
     // generation instead of an Capsule generation (M2).
     await this.#verification.assertCapsuleStateGeneration(planRun);
@@ -10975,6 +11003,7 @@ export class RunEngine {
             { signal: credentialSignal },
               );
             },
+            (outcome) => Boolean(outcome.providerExecutionFailure),
           ),
       );
       const now = this.#now();

@@ -850,6 +850,12 @@ export class CloudflareContainerOpenTofuRunner
             }
             throw runnerErrorFromFailureEnvelope(failure);
           }
+          // A Container/DO may finish despite a cancelled fetch. Never turn a
+          // late successful body into a successful Run; keep typed failed
+          // mutation receipts above this check so partial state is not erased.
+          if (controller?.signal.aborted) {
+            throw abortReason(controller.signal);
+          }
           return payloadWithWorkerTiming;
         } catch (error) {
           // Preserve a typed DO terminal/indeterminate receipt that raced an

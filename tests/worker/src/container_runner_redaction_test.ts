@@ -690,6 +690,82 @@ test("container runner preserves a typed mutation receipt when refresh cancellat
   await expect(pending).rejects.toBeInstanceOf(OpenTofuRunnerExecutionError);
 });
 
+test("container runner rejects a late successful Plan response after cancellation", async () => {
+  const abort = new AbortController();
+  let resolveResponse!: () => void;
+  let markEntered!: () => void;
+  const entered = new Promise<void>((resolve) => { markEntered = resolve; });
+  const responseGate = new Promise<void>((resolve) => { resolveResponse = resolve; });
+  const runner = new CloudflareContainerOpenTofuRunner({
+    RUNNER: {
+      idFromName: (name: string) => name,
+      get: () => ({
+        fetch: async () => {
+          markEntered();
+          await responseGate;
+          return Response.json({
+            status: "succeeded",
+            planDigest: PLAN_DIGEST,
+            planArtifact: {
+              kind: "runner-local",
+              ref: "runner-local://plan_late_success/tfplan",
+              digest: PLAN_DIGEST,
+            },
+          });
+        },
+      }),
+    },
+  } as unknown as CloudflareWorkerEnv);
+  const pending = runner.plan({
+    planRun: { id: "plan_late_success" },
+  } as Parameters<CloudflareContainerOpenTofuRunner["plan"]>[0], {
+    signal: abort.signal,
+  });
+  await entered;
+  abort.abort(new Error("refresh delivery unavailable"));
+  resolveResponse();
+  await expect(pending).rejects.toThrow("runner_request_aborted");
+});
+
+test("container runner rejects a late successful Apply response after cancellation", async () => {
+  const abort = new AbortController();
+  let resolveResponse!: () => void;
+  let markEntered!: () => void;
+  const entered = new Promise<void>((resolve) => { markEntered = resolve; });
+  const responseGate = new Promise<void>((resolve) => { resolveResponse = resolve; });
+  const runner = new CloudflareContainerOpenTofuRunner({
+    RUNNER: {
+      idFromName: (name: string) => name,
+      get: () => ({
+        fetch: async () => {
+          markEntered();
+          await responseGate;
+          return Response.json({
+            status: "succeeded",
+            state: { digest: PLAN_DIGEST },
+            rawOutputRef: "runner-local://apply_late_success/outputs",
+          });
+        },
+      }),
+    },
+  } as unknown as CloudflareWorkerEnv);
+  const pending = runner.apply({
+    planRun: { id: "plan_late_success" },
+    applyRun: { id: "apply_late_success" },
+    planArtifact: {
+      kind: "runner-local",
+      ref: "runner-local://plan_late_success/tfplan",
+      digest: PLAN_DIGEST,
+    },
+  } as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0], {
+    signal: abort.signal,
+  });
+  await entered;
+  abort.abort(new Error("refresh delivery unavailable"));
+  resolveResponse();
+  await expect(pending).rejects.toThrow("runner_request_aborted");
+});
+
 test("container runner returns provider installation attestation from apply and destroy results", async () => {
   const providerInstallation = [
     {

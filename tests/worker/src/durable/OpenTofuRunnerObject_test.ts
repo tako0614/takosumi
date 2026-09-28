@@ -2603,16 +2603,17 @@ test("OpenTofu runner adopts completed state only after fresh exact mutation aut
   );
 });
 
-test("OpenTofu runner replaces an uncommitted state remnant from a different ApplyRun", async () => {
+test("OpenTofu runner retains another ApplyRun's completed target and evidence for exact recovery", async () => {
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
   const stateScope = capsuleStateScope();
   const env = {
     TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET,
   };
-  // Run A persists generation 1 at the allocated target, then loses its
-  // ledger commit — the R2 remnant outlives the run.
+  // Run A can persist generation 1 even if its Core credential renewal fails
+  // before the successful DO response reaches the controller.
   const planRunIdA = "plan_remnant_origin";
+  const originStorage = new FakeDoStorage();
   await seedEncryptedPlan(artifacts, planRunIdA);
   let providerCallsA = 0;
   const tokenA = await signedMutationToken(planRunIdA, {
@@ -2624,7 +2625,7 @@ test("OpenTofu runner replaces an uncommitted state remnant from a different App
     mutationSuccessContainer(planRunIdA, () => {
       providerCallsA += 1;
     }),
-    { storage: new FakeDoStorage(), stateBucket: state, env },
+    { storage: originStorage, stateBucket: state, env },
   ).fetch(
     signedMutationRequest(planRunIdA, tokenA, {
       action: "destroy",
@@ -2632,8 +2633,14 @@ test("OpenTofu runner replaces an uncommitted state remnant from a different App
     }),
   );
   assert.equal(first.status, 200);
+  const firstPayload = (await first.json()) as { readonly executionEvidence?: unknown };
   assert.equal(providerCallsA, 1);
   assert.ok(state.body(stateScope.stateRef));
+  const evidenceKey = `${stateScope.stateRef}.execution-evidence.json`;
+  const retainedState = state.body(stateScope.stateRef)?.slice();
+  const retainedEvidence = state.body(evidenceKey)?.slice();
+  assert.ok(retainedState);
+  assert.ok(retainedEvidence);
   const remnant = await state.get(stateScope.stateRef);
   assert.equal(
     remnant?.customMetadata?.["takosumi-run-id"],
@@ -2641,8 +2648,9 @@ test("OpenTofu runner replaces an uncommitted state remnant from a different App
   );
 
   // Run B — a different ApplyRun on a different Durable Object (fresh
-  // storage) — is allocated the same generation slot by the controller. The
-  // uncommitted remnant must not deadlock it.
+  // storage) — is allocated the same stale Core generation. It cannot know
+  // whether Run A's external mutation took effect, so it must not delete A's
+  // target/evidence or dispatch its own provider mutation.
   const planRunIdB = "plan_remnant_successor";
   await seedEncryptedPlan(artifacts, planRunIdB);
   let providerCallsB = 0;
@@ -2662,20 +2670,37 @@ test("OpenTofu runner replaces an uncommitted state remnant from a different App
       stateScope,
     }),
   );
-  assert.equal(second.status, 200);
-  assert.equal(providerCallsB, 1);
-  const replacement = await state.get(stateScope.stateRef);
+  assert.equal(second.status, 409);
+  assertMutationIndeterminateResponse(await second.text(), "destroy");
+  assert.equal(providerCallsB, 0);
+  assert.deepEqual(state.body(stateScope.stateRef), retainedState);
+  assert.deepEqual(state.body(evidenceKey), retainedEvidence);
+  const retained = await state.get(stateScope.stateRef);
   assert.equal(
-    replacement?.customMetadata?.["takosumi-run-id"],
-    `apply_${planRunIdB}`,
+    retained?.customMetadata?.["takosumi-run-id"],
+    `apply_${planRunIdA}`,
   );
-  const evidence = await state.get(
-    `${stateScope.stateRef}.execution-evidence.json`,
-  );
+  const evidence = await state.get(evidenceKey);
   assert.equal(
     evidence?.customMetadata?.["takosumi-evidence-run-id"],
-    `apply_${planRunIdB}`,
+    `apply_${planRunIdA}`,
   );
+  const exactReplay = await runnerWithContainer(
+    artifacts,
+    mutationSuccessContainer(planRunIdA, () => {
+      providerCallsA += 1;
+    }),
+    { storage: originStorage, stateBucket: state, env },
+  ).fetch(
+    signedMutationRequest(planRunIdA, tokenA, {
+      action: "destroy",
+      stateScope,
+    }),
+  );
+  assert.equal(exactReplay.status, 200);
+  assert.equal(providerCallsA, 1);
+  const replayPayload = (await exactReplay.json()) as { readonly executionEvidence?: unknown };
+  assert.deepEqual(replayPayload.executionEvidence, firstPayload.executionEvidence);
 });
 
 test("OpenTofu runner keeps a foreign state target fenced without provider dispatch", async () => {

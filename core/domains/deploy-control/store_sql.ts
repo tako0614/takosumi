@@ -3763,12 +3763,18 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
 
   async getCapsuleRuntimeSafety(
     capsuleId: string,
+    options: { readonly excludeRunId?: string } = {},
   ): Promise<CapsuleRuntimeSafety | undefined> {
     const rows = await this.#pgManyJson<ApplyRun | Run>(
       pgSchema.runs,
       pgSchema.runs.runJson,
       {
-        where: pgRuntimeSafetyCandidateWhere(capsuleId),
+        where: and(
+          pgRuntimeSafetyCandidateWhere(capsuleId),
+          options.excludeRunId
+            ? ne(pgSchema.runs.id, options.excludeRunId)
+            : undefined,
+        ),
         orderBy: [
           desc(pgRunRuntimeSafetyInFlightOrder()),
           desc(pgRunRuntimeSafetyEffectAtMillisOrder()),
