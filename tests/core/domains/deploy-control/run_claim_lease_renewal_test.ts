@@ -340,6 +340,22 @@ function controllerWith(
   });
 }
 
+test("Apply completion never receives the Plan-only Core timing diagnostic", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  await seedApply(store, {
+    capsuleId: "cap_apply_plan_timing_exclusion",
+    planRunId: "plan_apply_plan_timing_exclusion",
+    applyRunId: "apply_plan_timing_exclusion",
+  });
+  const response = await controllerWith(store).runQueuedApply(
+    "apply_plan_timing_exclusion",
+  );
+  expect(response.applyRun.status).toBe("succeeded");
+  expect(response.applyRun.diagnostics?.some(
+    (diagnostic) => diagnostic.code === "core_plan_elapsed_timings",
+  )).toBeFalsy();
+});
+
 async function seedQueuedRestore(
   store: InMemoryOpenTofuControlStore,
   controller: OpenTofuController,
@@ -1466,6 +1482,26 @@ test("renewable PlanRun refreshes under its own plan owner", async () => {
     });
     const result = await pending;
     expect(result?.status).toBe("succeeded");
+    const timingDiagnostics = result?.diagnostics?.filter(
+      (diagnostic) => diagnostic.code === "core_plan_elapsed_timings",
+    );
+    expect(timingDiagnostics).toHaveLength(1);
+    const timings = JSON.parse(timingDiagnostics?.[0]?.detail ?? "null") as
+      Record<string, unknown>;
+    expect(Object.keys(timings).sort()).toEqual([
+      "claimMs",
+      "dispatchPreparationMs",
+      "preClaimPreparationMs",
+      "renewalOutsideRunnerMs",
+      "resolveRunEnvironmentMs",
+      "runnerPlanMs",
+    ].sort());
+    expect(Object.values(timings).every((value) =>
+      typeof value === "number" && Number.isFinite(value) && value >= 0
+    )).toBe(true);
+    expect(JSON.stringify(result?.diagnostics)).not.toContain(
+      "local_renewable_token",
+    );
   } finally {
     jest.useRealTimers();
   }

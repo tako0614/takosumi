@@ -62,6 +62,8 @@ const RUNNER_PHASE_TIMING_PHASES = new Set([
   "provider_scan_policy",
   "provider_lockfile_restore",
   "source_build",
+  "runner_plan_prepare",
+  "runner_plan_finalize",
   "tofu_init",
   "tofu_plan",
   "tofu_state_reconcile",
@@ -1682,6 +1684,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       return await this.#containerFetch(request);
     }
     const runId = decodeURIComponent(match[1]!);
+    const inputRestoreReadinessStartedAt = monotonicNow();
     const bodyText = await request.text();
     const envelope = parseRunEnvelope(bodyText);
     // Source-sync runs (LANE M1) never touch OpenTofu state; they run, leave the
@@ -1927,6 +1930,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       throw error;
     }
 
+    const doInputRestoreReadinessMs = elapsedMilliseconds(
+      inputRestoreReadinessStartedAt,
+    );
+    const containerExecutionResponseBufferStartedAt = monotonicNow();
     let unboundedRunnerResponse: Response;
     if (mutationDispatch && mutationRequest) {
       unboundedRunnerResponse = await this.#dispatchMutationOnce(
@@ -1964,6 +1971,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       }
       throw error;
     }
+    const doContainerExecutionResponseBufferMs = elapsedMilliseconds(
+      containerExecutionResponseBufferStartedAt,
+    );
     if (
       releaseDispatch &&
       runnerResponse.headers.get(RUNNER_MUTATION_INDETERMINATE_HEADER) === "1"
@@ -2054,6 +2064,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       runnerResponse,
       url,
       stateScope,
+      {
+        doInputRestoreReadinessMs,
+        doContainerExecutionResponseBufferMs,
+      },
     );
   }
 
@@ -3395,14 +3409,30 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runnerResponse: Response,
     baseUrl: URL,
     stateScope: StateScope | undefined,
+    workerTimings: Readonly<{
+      readonly doInputRestoreReadinessMs: number;
+      readonly doContainerExecutionResponseBufferMs: number;
+    }>,
   ): Promise<Response> {
+    const planArtifactPersistenceStartedAt = monotonicNow();
     const payload = await readJsonObject(
       runnerResponse,
       this.#artifactLimits.runnerResponse,
     );
     const artifact = recordField(payload, "planArtifact");
     if (!artifact || stringField(artifact, "kind") !== "runner-local") {
-      return jsonResponse(payload, runnerResponse.status);
+      return jsonResponse(
+        {
+          ...payload,
+          workerTimings: {
+            ...workerTimings,
+            doPlanArtifactPersistenceMs: elapsedMilliseconds(
+              planArtifactPersistenceStartedAt,
+            ),
+          },
+        },
+        runnerResponse.status,
+      );
     }
     const artifactResponse = await this.#containerFetch(
       new Request(artifactUrl(baseUrl, runId), { method: "GET" }),
@@ -3461,6 +3491,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     return jsonResponse(
       {
         ...payload,
+        workerTimings: {
+          ...workerTimings,
+          doPlanArtifactPersistenceMs: elapsedMilliseconds(
+            planArtifactPersistenceStartedAt,
+          ),
+        },
         planArtifact: {
           kind: "object-storage",
           ref: planArtifactRef(bucket, key),
@@ -7839,6 +7875,11 @@ function withRunnerStartupHeader(
 
 function monotonicNow(): number {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
+function elapsedMilliseconds(startedAt: number): number {
+  const elapsed = monotonicNow() - startedAt;
+  return Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
 }
 
 function runnerRequestHeaders(request: Request): Headers {

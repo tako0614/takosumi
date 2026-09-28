@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
 import {
   OpenTofuController,
@@ -11,6 +11,8 @@ import {
 } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import { SourcesService } from "../../../../core/domains/sources/mod.ts";
+import { RunEnvResolver } from "../../../../core/domains/deploy-control/run_env_resolver.ts";
+import { RunVerificationService } from "../../../../core/domains/deploy-control/run_verification.ts";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { OpenTofuPlanArtifact, PlanRun } from "@takosumi/internal/deploy-control-api";
 import {
@@ -500,6 +502,98 @@ test("active queued Plan compatibility preclaim persists its report through the 
   ).toHaveLength(0);
 });
 
+test("successful Plan Core timing diagnostic partitions delayed preclaim, claim, resolution, dispatch, renewal, and runner", async () => {
+  const fixture = await createQueuedPlanFixture();
+  const getPlanRun = fixture.store.getPlanRun.bind(fixture.store);
+  let delayFirstRunRead = true;
+  const planReadSpy = spyOn(fixture.store, "getPlanRun").mockImplementation(
+    async (id) => {
+      if (delayFirstRunRead) {
+        delayFirstRunRead = false;
+        await Bun.sleep(65);
+      }
+      return await getPlanRun(id);
+    },
+  );
+  const transitionRun = fixture.store.transitionRun.bind(fixture.store);
+  const resolveRunEnvironment = RunEnvResolver.prototype.resolveRunEnvironment;
+  const executionDispatch = RunVerificationService.prototype.executionDispatch;
+  const transitionSpy = spyOn(fixture.store, "transitionRun").mockImplementation(
+    async (input) => {
+      if (input.kind === "plan" && input.setLeaseToken) await Bun.sleep(25);
+      if (
+        input.kind === "plan" &&
+        input.run.status === "running" &&
+        input.expectLeaseToken &&
+        !input.setLeaseToken
+      ) await Bun.sleep(25);
+      return await transitionRun(input);
+    },
+  );
+  const environmentSpy = spyOn(
+    RunEnvResolver.prototype,
+    "resolveRunEnvironment",
+  ).mockImplementation(async function (this: RunEnvResolver, input) {
+    await Bun.sleep(35);
+    return await resolveRunEnvironment.call(this, input);
+  });
+  const dispatchSpy = spyOn(
+    RunVerificationService.prototype,
+    "executionDispatch",
+  ).mockImplementation(async function (this: RunVerificationService, ...args) {
+    await Bun.sleep(45);
+    return await executionDispatch.apply(this, args);
+  });
+  fixture.runner.onPlan = async () => { await Bun.sleep(55); };
+
+  try {
+    const result = await fixture.controller.runQueuedPlan(fixture.planRun.id);
+    expect(result?.status).toBe("succeeded");
+    const timing = result?.diagnostics?.find(
+      (diagnostic) => diagnostic.code === "core_plan_elapsed_timings",
+    );
+    expect(timing).toMatchObject({
+      severity: "info",
+      message: "core Plan elapsed timings (ms)",
+    });
+    const detail = JSON.parse(timing?.detail ?? "null") as Record<string, number>;
+    expect(Object.keys(detail).sort()).toEqual([
+      "claimMs",
+      "dispatchPreparationMs",
+      "preClaimPreparationMs",
+      "renewalOutsideRunnerMs",
+      "resolveRunEnvironmentMs",
+      "runnerPlanMs",
+    ]);
+    expect(Object.values(detail).every(
+      (value) => typeof value === "number" && Number.isFinite(value) && value >= 0,
+    )).toBe(true);
+    expect(detail.preClaimPreparationMs).toBeGreaterThanOrEqual(60);
+    expect(detail.claimMs).toBeGreaterThanOrEqual(20);
+    expect(detail.resolveRunEnvironmentMs).toBeGreaterThanOrEqual(30);
+    expect(detail.dispatchPreparationMs).toBeGreaterThanOrEqual(40);
+    expect(detail.renewalOutsideRunnerMs).toBeGreaterThanOrEqual(40);
+    expect(detail.runnerPlanMs).toBeGreaterThanOrEqual(50);
+    expect(JSON.stringify(timing)).not.toContain("runner-local://");
+    expect((await fixture.store.getPlanRun(result!.id))?.diagnostics).toContainEqual(timing);
+  } finally {
+    planReadSpy.mockRestore();
+    transitionSpy.mockRestore();
+    environmentSpy.mockRestore();
+    dispatchSpy.mockRestore();
+  }
+});
+
+test("destroy Plan does not add Core timing diagnostic", async () => {
+  const fixture = await createQueuedPlanFixture();
+  await fixture.store.putPlanRun({ ...fixture.planRun, operation: "destroy" });
+  const result = await fixture.controller.runQueuedPlan(fixture.planRun.id);
+  expect(result?.status).toBe("waiting_approval");
+  expect(result?.diagnostics?.some(
+    (diagnostic) => diagnostic.code === "core_plan_elapsed_timings",
+  )).toBeFalsy();
+});
+
 type PreclaimFailurePhase =
   | "prepared-inputs"
   | "compatibility-ensure"
@@ -778,6 +872,9 @@ test("a won leased Plan failure deletes inputs before notifying, once", async ()
   fixture.runner.onPlan = async () => { throw new Error("injected runner failure"); };
   const result = await fixture.controller.runQueuedPlan(fixture.planRun.id);
   expect(result?.status).toBe("failed");
+  expect(result?.diagnostics?.some(
+    (diagnostic) => diagnostic.code === "core_plan_elapsed_timings",
+  )).toBeFalsy();
   expect(fixture.store.inputDeletes).toEqual([fixture.planRun.id]);
   expect(notifications).toEqual(["failed:true"]);
 });

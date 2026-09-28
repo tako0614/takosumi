@@ -1399,6 +1399,29 @@ function assertRunnerLifecycleCredentialModes(
   }
 }
 
+interface CorePlanElapsedTimings {
+  readonly preClaimPreparationMs: number;
+  readonly claimMs: number;
+  readonly resolveRunEnvironmentMs: number;
+  readonly dispatchPreparationMs: number;
+  readonly renewalOutsideRunnerMs: number;
+  readonly runnerPlanMs: number;
+}
+
+function finiteElapsedMs(startedAt: number, finishedAt: number): number {
+  const elapsed = finishedAt - startedAt;
+  return Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
+}
+
+function corePlanElapsedDiagnostic(timings: CorePlanElapsedTimings): RunDiagnostic {
+  return {
+    severity: "info",
+    code: "core_plan_elapsed_timings",
+    message: "core Plan elapsed timings (ms)",
+    detail: JSON.stringify(timings),
+  };
+}
+
 /** Shared dependencies the controller injects into its single RunEngine. */
 export interface RunEngineDependencies {
   readonly store: OpenTofuControlStore;
@@ -5262,6 +5285,7 @@ export class RunEngine {
    * store.
    */
   async runQueuedPlan(runId: string): Promise<PlanRun | undefined> {
+    const preClaimStartedAt = performance.now();
     let planRun = await this.#store.getPlanRun(runId);
     if (!planRun) {
       throw new OpenTofuControllerError(
@@ -5298,7 +5322,13 @@ export class RunEngine {
     } catch (error) {
       return (await this.#failUnclaimedPlanRun(planRun, error)).run;
     }
+    const claimStartedAt = performance.now();
+    const preClaimPreparationMs = finiteElapsedMs(
+      preClaimStartedAt,
+      claimStartedAt,
+    );
     const claim = await this.#markPlanRunning(planRun);
+    const claimMs = finiteElapsedMs(claimStartedAt, performance.now());
     if (!claim.won) {
       // A sibling consumer already claimed this run (or a cancel won the row).
       // Do NOT dispatch the runner; return the row the winner persisted.
@@ -5306,11 +5336,16 @@ export class RunEngine {
     }
     const running = claim.run;
     try {
+      const environmentStartedAt = performance.now();
       const runEnvironment = await this.#runEnv.resolveRunEnvironment({
         planRun,
         phase: "plan",
         auditRunId: planRun.id,
       });
+      const resolveRunEnvironmentMs = finiteElapsedMs(
+        environmentStartedAt,
+        performance.now(),
+      );
       const runningWithEnv = withRunEnvironmentEvidence(
         running,
         runEnvironment,
@@ -5322,6 +5357,7 @@ export class RunEngine {
         variables,
         runEnvironment,
         dispatch,
+        { preClaimPreparationMs, claimMs, resolveRunEnvironmentMs },
       );
     } catch (error) {
       if (isRunnerInfrastructureRequeueError(error)) throw error;
@@ -7915,8 +7951,14 @@ export class RunEngine {
     variables: Readonly<Record<string, JsonValue>>,
     runEnvironment: ResolvedRunEnvironment,
     dispatch: RunModuleDispatch,
+    preDispatchTimings: {
+      readonly preClaimPreparationMs: number;
+      readonly claimMs: number;
+      readonly resolveRunEnvironmentMs: number;
+    },
   ): Promise<PlanRun> {
     try {
+      const dispatchPreparationStartedAt = performance.now();
       const effectiveRunning = running;
       const effectiveRunEnvironment = runEnvironment;
       // A plan restores against the CURRENT generation
@@ -7934,61 +7976,71 @@ export class RunEngine {
           : undefined;
       const scopeSelectors = planScopeSelectors(planPolicy?.scopeBoundary);
       const runner = this.#runnerForProfile(profile);
-      const dispatchPlan = (
+      let runnerPlanMs = 0;
+      const dispatchPlan = async (
         environment: ResolvedRunEnvironment,
         signal: AbortSignal,
-      ) =>
-        runner.plan(
-          {
-            planRun: effectiveRunning,
-            runnerProfile: profile,
-            variables,
-            ...(providerInstallationPolicy
-              ? { providerInstallationPolicy }
-              : {}),
-            ...(scopeSelectors.length > 0 ? { scopeSelectors } : {}),
-            // Capsules use a generated root only when explicit provider configuration
-            // requires a child-module wrapper.
-            ...(dispatch.generatedRoot
-              ? { generatedRoot: dispatch.generatedRoot }
-              : {}),
-            ...(dispatch.operatorModule
-              ? {
-                  operatorModule: dispatch.operatorModule,
-                  legacySourcelessDestroyRecovery: true as const,
-                }
-              : {}),
-            ...(dispatch.sourceBuild
-              ? { sourceBuild: dispatch.sourceBuild }
-              : {}),
-            ...((dispatch.workspaceOutputAllowlist ?? dispatch.outputAllowlist)
-              ? {
-                  outputAllowlist:
-                    dispatch.workspaceOutputAllowlist ??
-                    dispatch.outputAllowlist,
-                }
-              : {}),
-            // M2 env dispatch (state scope + source archive). Absent without env ctx.
-            ...(envDispatch.stateScope
-              ? { stateScope: envDispatch.stateScope }
-              : {}),
-            ...(envDispatch.stateAdoption
-              ? { stateAdoption: envDispatch.stateAdoption }
-              : {}),
-            ...(envDispatch.sourceArchive
-              ? { sourceArchive: envDispatch.sourceArchive }
-              : {}),
-            // remote_state dependency states materialized into /work/deps (spec §15).
-            ...(envDispatch.depStates
-              ? { depStates: envDispatch.depStates }
-              : {}),
-            // Dispatch-only: the minted env never lands on the persisted run.
-            ...(environment.credentials
-              ? { credentials: environment.credentials }
-              : {}),
-          },
-          { signal },
-        );
+      ) => {
+        const job = {
+          planRun: effectiveRunning,
+          runnerProfile: profile,
+          variables,
+          ...(providerInstallationPolicy
+            ? { providerInstallationPolicy }
+            : {}),
+          ...(scopeSelectors.length > 0 ? { scopeSelectors } : {}),
+          // Capsules use a generated root only when explicit provider configuration
+          // requires a child-module wrapper.
+          ...(dispatch.generatedRoot
+            ? { generatedRoot: dispatch.generatedRoot }
+            : {}),
+          ...(dispatch.operatorModule
+            ? {
+                operatorModule: dispatch.operatorModule,
+                legacySourcelessDestroyRecovery: true as const,
+              }
+            : {}),
+          ...(dispatch.sourceBuild
+            ? { sourceBuild: dispatch.sourceBuild }
+            : {}),
+          ...((dispatch.workspaceOutputAllowlist ?? dispatch.outputAllowlist)
+            ? {
+                outputAllowlist:
+                  dispatch.workspaceOutputAllowlist ??
+                  dispatch.outputAllowlist,
+              }
+            : {}),
+          // M2 env dispatch (state scope + source archive). Absent without env ctx.
+          ...(envDispatch.stateScope
+            ? { stateScope: envDispatch.stateScope }
+            : {}),
+          ...(envDispatch.stateAdoption
+            ? { stateAdoption: envDispatch.stateAdoption }
+            : {}),
+          ...(envDispatch.sourceArchive
+            ? { sourceArchive: envDispatch.sourceArchive }
+            : {}),
+          // remote_state dependency states materialized into /work/deps (spec §15).
+          ...(envDispatch.depStates
+            ? { depStates: envDispatch.depStates }
+            : {}),
+          // Dispatch-only: the minted env never lands on the persisted run.
+          ...(environment.credentials
+            ? { credentials: environment.credentials }
+            : {}),
+        };
+        const runnerPlanStartedAt = performance.now();
+        try {
+          return await runner.plan(job, { signal });
+        } finally {
+          runnerPlanMs = finiteElapsedMs(runnerPlanStartedAt, performance.now());
+        }
+      };
+      const dispatchPreparationMs = finiteElapsedMs(
+        dispatchPreparationStartedAt,
+        performance.now(),
+      );
+      const renewalStartedAt = performance.now();
       const result = await this.#withRunRenewal(
         "plan",
         effectiveRunning,
@@ -8009,6 +8061,18 @@ export class RunEngine {
               dispatchPlan(effectiveRunEnvironment, credentialSignal),
           ),
       );
+      const withRunRenewalMs = finiteElapsedMs(
+        renewalStartedAt,
+        performance.now(),
+      );
+      const coreTimings = {
+        preClaimPreparationMs: preDispatchTimings.preClaimPreparationMs,
+        claimMs: preDispatchTimings.claimMs,
+        resolveRunEnvironmentMs: preDispatchTimings.resolveRunEnvironmentMs,
+        dispatchPreparationMs,
+        renewalOutsideRunnerMs: Math.max(0, withRunRenewalMs - runnerPlanMs),
+        runnerPlanMs,
+      };
       const now = this.#now();
       const verdict = await this.#evaluatePlanCompletion({
         running: effectiveRunning,
@@ -8021,6 +8085,7 @@ export class RunEngine {
         result,
         verdict,
         now,
+        coreTimings,
       });
       // plan→apply TOCTOU pin (S2): hash the resolved provider env bindings this
       // plan was reviewed against onto the plan (capsule-context runs only),
@@ -8233,6 +8298,7 @@ export class RunEngine {
     readonly result: OpenTofuPlanResult;
     readonly verdict: PlanCompletionVerdict;
     readonly now: number;
+    readonly coreTimings: CorePlanElapsedTimings;
   }): PlanRun {
     const { running, result, verdict, now } = input;
     const {
@@ -8245,7 +8311,23 @@ export class RunEngine {
       policyDecisionDigest,
       requiresApproval,
     } = verdict;
-    const diagnostics = redactRunDiagnostics(result.diagnostics);
+    // Dispatch can record value-free diagnostics before the runner starts.
+    // Keep those on the terminal Run and avoid duplicating one if the runner
+    // echoes it back alongside its own diagnostics.
+    const diagnostics = [...(redactRunDiagnostics(running.diagnostics) ?? [])];
+    for (const diagnostic of redactRunDiagnostics(result.diagnostics) ?? []) {
+      if (
+        !diagnostics.some(
+          (existing) =>
+            existing.severity === diagnostic.severity &&
+            existing.code === diagnostic.code &&
+            existing.message === diagnostic.message &&
+            existing.detail === diagnostic.detail,
+        )
+      ) {
+        diagnostics.push(diagnostic);
+      }
+    }
     const planArtifact = normalizePlanArtifact({
       artifact: result.planArtifact,
       planDigest: result.planDigest,
@@ -8270,6 +8352,10 @@ export class RunEngine {
         ? "waiting_approval"
         : "succeeded"
       : "failed";
+    const completedDiagnostics =
+      completedStatus === "succeeded" && running.operation !== "destroy"
+        ? [...diagnostics, corePlanElapsedDiagnostic(input.coreTimings)]
+        : diagnostics;
     return {
       ...running,
       status: completedStatus,
@@ -8289,7 +8375,9 @@ export class RunEngine {
       ...(result.planResourceChanges
         ? { planResourceChanges: result.planResourceChanges }
         : {}),
-      ...(diagnostics ? { diagnostics } : {}),
+      ...(completedDiagnostics.length > 0
+        ? { diagnostics: completedDiagnostics }
+        : {}),
       ...(requiresApproval ? { requiresApproval: true } : {}),
       auditEvents: [
         ...running.auditEvents,

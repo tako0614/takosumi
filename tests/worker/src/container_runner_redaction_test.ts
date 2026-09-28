@@ -15,6 +15,8 @@ const RUNNER_PHASE_TIMING_PHASES = [
   "provider_scan_policy",
   "provider_lockfile_restore",
   "source_build",
+  "runner_plan_prepare",
+  "runner_plan_finalize",
   "tofu_init",
   "tofu_plan",
   "tofu_state_reconcile",
@@ -213,6 +215,58 @@ test("container runner threads phase timings into non-secret diagnostics", async
   expect(JSON.stringify(result.diagnostics)).not.toContain(
     "bad phase with spaces",
   );
+});
+
+test("plan diagnostics expose finite Worker elapsed timings as closed numeric JSON", async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(performance, "now");
+  let now = 100;
+  Object.defineProperty(performance, "now", {
+    configurable: true,
+    value: () => now,
+  });
+  try {
+    const runner = new CloudflareContainerOpenTofuRunner(
+      envReturning({
+        planDigest: PLAN_DIGEST,
+        planArtifact: {
+          kind: "runner-local",
+          ref: "runner-local://plan_worker_timing/tfplan",
+          digest: PLAN_DIGEST,
+        },
+        workerTimings: {
+          doInputRestoreReadinessMs: 20,
+          doContainerExecutionResponseBufferMs: 30,
+          doPlanArtifactPersistenceMs: 40,
+          workerAdapterRpcMs: -1,
+          startedAt: "2026-06-28T00:00:00.000Z",
+          providerText: "diag-provider-secret",
+        },
+      }),
+    );
+    const plan = runner.plan({
+      planRun: { id: "plan_worker_timing" },
+    } as Parameters<CloudflareContainerOpenTofuRunner["plan"]>[0]);
+    now = 112;
+    const result = await plan;
+    const timingDiagnostic = result.diagnostics?.find(
+      (diagnostic) => diagnostic.code === "runner_elapsed_timings",
+    );
+    expect(timingDiagnostic?.message).toBe("runner elapsed timings (ms)");
+    expect(timingDiagnostic?.detail).toBeDefined();
+    expect(JSON.parse(timingDiagnostic!.detail!)).toEqual({
+      workerAdapterRpcMs: 12,
+      doInputRestoreReadinessMs: 20,
+      doContainerExecutionResponseBufferMs: 30,
+      doPlanArtifactPersistenceMs: 40,
+    });
+    expect(JSON.stringify(result.diagnostics)).not.toContain(
+      "diag-provider-secret",
+    );
+    expect(timingDiagnostic!.detail).not.toContain("startedAt");
+  } finally {
+    if (descriptor) Object.defineProperty(performance, "now", descriptor);
+    else Reflect.deleteProperty(performance, "now");
+  }
 });
 
 test("container runner returns sanitized source sync phase timings", async () => {
@@ -654,6 +708,11 @@ test("container runner returns provider installation attestation from apply and 
     envReturning({
       providerInstallation,
       state: { digest: `sha256:${"d".repeat(64)}` },
+      workerTimings: {
+        doInputRestoreReadinessMs: 20,
+        doContainerExecutionResponseBufferMs: 30,
+        doPlanArtifactPersistenceMs: 40,
+      },
     }),
   );
 
@@ -687,6 +746,14 @@ test("container runner returns provider installation attestation from apply and 
     attested: true,
   });
   expect(destroy.stateDigest).toBe(`sha256:${"d".repeat(64)}`);
+  expect(apply).not.toHaveProperty("workerTimings");
+  expect(destroy).not.toHaveProperty("workerTimings");
+  expect(apply.diagnostics?.some(
+    (diagnostic) => diagnostic.code === "runner_elapsed_timings",
+  )).toBe(false);
+  expect(destroy.diagnostics?.some(
+    (diagnostic) => diagnostic.code === "runner_elapsed_timings",
+  )).toBe(false);
 });
 
 test("container runner redacts stderr before apply diagnostics are returned", async () => {
@@ -839,7 +906,7 @@ test("container runner returns a typed failed apply with persisted partial state
             durationMs: 384_000,
           },
           {
-            phase: "tofu_apply_bad_date",
+            phase: "tofu_apply",
             startedAt: "not-a-date",
             finishedAt: "2026-09-27T10:06:24.000Z",
             durationMs: 384_000,

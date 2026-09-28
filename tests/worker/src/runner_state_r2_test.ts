@@ -25,6 +25,8 @@ const RUNNER_PHASE_TIMING_PHASES = [
   "provider_scan_policy",
   "provider_lockfile_restore",
   "source_build",
+  "runner_plan_prepare",
+  "runner_plan_finalize",
   "tofu_init",
   "tofu_plan",
   "tofu_state_reconcile",
@@ -1238,7 +1240,7 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
                 durationMs: 384_000,
               },
               {
-                phase: "tofu_apply_bad_date",
+                phase: "tofu_apply",
                 startedAt: "not-a-date",
                 finishedAt: "2026-09-27T10:06:24.000Z",
                 durationMs: 384_000,
