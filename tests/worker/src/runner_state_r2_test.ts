@@ -1197,6 +1197,27 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
             status: "failed",
             exitCode: 1,
             errorCode: "provider-raw-code",
+            phaseTimings: [
+              {
+                phase: "tofu_apply",
+                startedAt: "2026-09-27T10:00:00.000Z",
+                finishedAt: "2026-09-27T10:06:24.000Z",
+                durationMs: 384_000,
+                secret: "must-not-survive",
+              },
+              {
+                phase: "invalid phase",
+                startedAt: "2026-09-27T10:00:00.000Z",
+                finishedAt: "2026-09-27T10:06:24.000Z",
+                durationMs: 384_000,
+              },
+              {
+                phase: "tofu_apply_bad_date",
+                startedAt: "not-a-date",
+                finishedAt: "2026-09-27T10:06:24.000Z",
+                durationMs: 384_000,
+              },
+            ],
             providerExecutionFailure: {
               kind: "provider_execution_failed",
             },
@@ -1251,6 +1272,14 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
   assert.equal(first.status, 500);
   const firstPayload = (await first.json()) as Record<string, unknown>;
   assert.equal(firstPayload.errorCode, "provider_execution_failed");
+  assert.deepEqual(firstPayload.phaseTimings, [
+    {
+      phase: "tofu_apply",
+      startedAt: "2026-09-27T10:00:00.000Z",
+      finishedAt: "2026-09-27T10:06:24.000Z",
+      durationMs: 384_000,
+    },
+  ]);
   assert.deepEqual(firstPayload.providerExecutionFailure, {
     kind: "provider_execution_failed",
     statePersistence: "persisted",

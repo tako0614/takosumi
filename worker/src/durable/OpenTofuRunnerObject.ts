@@ -7447,6 +7447,7 @@ function failedProviderExecutionPayload(
   const errorCode =
     providerFailureErrorCode(payload) ?? RUNNER_PROVIDER_EXECUTION_FAILED_CODE;
   const detail = normalizedRunnerExecutionFailureDetail(payload, errorCode);
+  const phaseTimings = runnerPhaseTimingsFromPayload(payload);
   return {
     status: "failed",
     phase: action,
@@ -7457,6 +7458,7 @@ function failedProviderExecutionPayload(
     },
     ...(detail ? { detail } : {}),
     ...(state ? { state } : {}),
+    ...(phaseTimings ? { phaseTimings } : {}),
     // Mirror the container's attested provider installation. A persisted
     // failure is still a terminal mutation: the controller cross-checks the
     // reviewed provider set against this observation before committing the
@@ -7466,6 +7468,39 @@ function failedProviderExecutionPayload(
       ? { providerInstallation: payload.providerInstallation }
       : {}),
   };
+}
+
+function runnerPhaseTimingsFromPayload(
+  payload: Record<string, unknown>,
+):
+  | Array<{
+      phase: string;
+      startedAt: string;
+      finishedAt: string;
+      durationMs: number;
+    }>
+  | undefined {
+  const value = payload.phaseTimings;
+  if (!Array.isArray(value)) return undefined;
+  const timings = value.flatMap((entry) => {
+    if (!isRecord(entry)) return [];
+    const phase = stringField(entry, "phase");
+    const startedAt = stringField(entry, "startedAt");
+    const finishedAt = stringField(entry, "finishedAt");
+    const durationMs = entry.durationMs;
+    if (!phase || !/^[a-z][a-z0-9_]{0,63}$/u.test(phase)) return [];
+    if (!startedAt || !Number.isFinite(Date.parse(startedAt))) return [];
+    if (!finishedAt || !Number.isFinite(Date.parse(finishedAt))) return [];
+    if (
+      typeof durationMs !== "number" ||
+      !Number.isFinite(durationMs) ||
+      durationMs < 0
+    ) {
+      return [];
+    }
+    return [{ phase, startedAt, finishedAt, durationMs }];
+  });
+  return timings.length > 0 ? timings : undefined;
 }
 
 async function readJsonObject(
