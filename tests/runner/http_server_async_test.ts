@@ -171,6 +171,123 @@ esac
   }
 });
 
+test("accepted async release outlives abort, rejects replay, and becomes unknown after process restart", async () => {
+  const runId = `async-release-${crypto.randomUUID()}`;
+  const applyRunId = `apply-${runId}`;
+  const workspace = workspaceForRun(runId);
+  const marker = join(workspace.sourceRoot, "release-finished.txt");
+  const abortController = new AbortController();
+  try {
+    await mkdir(workspace.sourceRoot, { recursive: true });
+    const body = {
+      action: "release",
+      runId,
+      request: {
+        release: {
+          commands: [{
+            id: "post-apply-delay",
+            command: [
+              globalThis.process.execPath,
+              "-e",
+              `await Bun.sleep(250); await (await import("node:fs/promises")).appendFile(${JSON.stringify(marker)}, "finished")`,
+            ],
+          }],
+        },
+        activation: {
+          applyRunId,
+          sourceSnapshotId: `snapshot-${runId}`,
+          sourceCommit: "2".repeat(40),
+        },
+      },
+    };
+    const accepted = await handleRunnerRequest(new Request(
+      `http://runner/runs/${encodeURIComponent(runId)}`,
+      {
+        method: "POST",
+        signal: abortController.signal,
+        headers: { "content-type": "application/json", prefer: "respond-async" },
+        body: JSON.stringify(body),
+      },
+    ));
+    expect(accepted.status).toBe(202);
+    expect(await accepted.json()).toEqual({
+      kind: "takosumi.runner-mutation-pending@v1",
+      runId,
+      applyRunId,
+      action: "release",
+      status: "accepted",
+    });
+    abortController.abort();
+
+    const duplicate = await handleRunnerRequest(new Request(
+      `http://runner/runs/${encodeURIComponent(runId)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", prefer: "respond-async" },
+        body: JSON.stringify(body),
+      },
+    ));
+    expect(duplicate.status).toBe(409);
+
+    const running = await handleRunnerRequest(new Request(
+      `http://runner/runs/${encodeURIComponent(runId)}/result`,
+    ));
+    expect(running.status).toBe(202);
+    expect(await running.json()).toEqual({
+      kind: "takosumi.runner-mutation-pending@v1",
+      runId,
+      applyRunId,
+      action: "release",
+      status: "running",
+    });
+
+    let terminal: Response | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const response = await handleRunnerRequest(new Request(
+        `http://runner/runs/${encodeURIComponent(runId)}/result`,
+      ));
+      if (response.status !== 202) {
+        terminal = response;
+        break;
+      }
+      await Bun.sleep(5);
+    }
+    expect(terminal?.status).toBe(200);
+    expect(await terminal!.json()).toMatchObject({
+      runId,
+      action: "release",
+      status: "succeeded",
+      exitCode: 0,
+      commandCount: 1,
+    });
+    expect(await Bun.file(marker).text()).toBe("finished");
+
+    const moduleUrl = new URL("../../runner/lib/http_server.ts", import.meta.url).href;
+    const script = [
+      `import { handleRunnerRequest } from ${JSON.stringify(moduleUrl)};`,
+      `const response = await handleRunnerRequest(new Request(${JSON.stringify(`http://runner/runs/${runId}/result`)}));`,
+      `console.log(JSON.stringify({ status: response.status, body: await response.json() }));`,
+    ].join("\n");
+    const child = Bun.spawn([globalThis.process.execPath, "-e", script], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect(exitCode, stderr).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({
+      status: 404,
+      body: { error: "run result not found" },
+    });
+  } finally {
+    await rm(workspace.root, { recursive: true, force: true });
+    await rm(workspace.depsDir, { recursive: true, force: true });
+  }
+});
+
 test("async mutation result for an unaccepted run is unknown", async () => {
   const runId = `async-mutation-unknown-${crypto.randomUUID()}`;
   const response = await handleRunnerRequest(new Request(
