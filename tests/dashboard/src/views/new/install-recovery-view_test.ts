@@ -9,6 +9,8 @@ test("reload resumes an acknowledged coordinator by read-only GET", () => {
   const view = read("dashboard/src/views/new/InstallView.tsx");
   const load = view.slice(view.indexOf("const loadRecovery ="), view.indexOf("const continueRecovery ="));
   expect(load).toContain("getGitInstallPlan(id, { signal })");
+  expect(load).toContain("const epoch = recoveryFence.begin();");
+  expect(load).toContain("recoveryFence.isCurrent(epoch)");
   expect(load).toContain("installRecoveryMatches(response, id, workspace, props.installingPrincipalId)");
   expect(load).toContain("const search = location.search;");
   expect(load).toContain("const workspace = currentWorkspaceId();");
@@ -21,6 +23,13 @@ test("reload resumes an acknowledged coordinator by read-only GET", () => {
   expect(resume).toContain("await reconcileGitInstallPlan(id)");
   expect(resume).not.toContain("createApplyRun(");
   expect(view).toContain('data-testid="install-plan-recovery"');
+  expect(view).toContain('presentation === "failed" ? t("installStore.recoveryFailed")');
+  expect(view).toContain('presentation === "failed_run" ? t("installStore.recoveryFailedRun")');
+  expect(view).toContain('presentation === "review" ? t("installStore.recoveryReview")');
+  const recoveryView = view.slice(view.indexOf('data-testid="install-plan-recovery"'), view.indexOf('<Show when={!hasInstallRecoveryLocator'));
+  expect(recoveryView).not.toContain('<h2>{t("installStore.preparing")}</h2>');
+  expect(recoveryView).toContain('<Show when={presentation === "failed_run"}>');
+  expect(recoveryView).toContain('href={`/runs/${encodeURIComponent(response.installPlan.planRunId!)}`}');
 });
 
 test("accepted initial review does not offer a revision Plan as recovery", () => {

@@ -55,9 +55,11 @@ import {
 } from "../../lib/control-api.ts";
 import type { GitInstallPlanResponse } from "takosumi-contract";
 import {
+  createInstallRecoveryFence,
   hasInstallRecoveryLocator,
   installRecoveryId,
   installRecoveryMatches,
+  installRecoveryPresentation,
   installRecoveryRouteMatches,
   installRecoverySearch,
 } from "../../lib/install-recovery.ts";
@@ -277,6 +279,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     | { readonly status: "ready"; readonly response: GitInstallPlanResponse }
   >({ status: "unavailable" });
   const [recoveryBusy, setRecoveryBusy] = createSignal(false);
+  const recoveryFence = createInstallRecoveryFence();
   let disposed = false;
   const [error, setError] = createSignal<string>();
   const [busy, setBusy] = createSignal(false);
@@ -772,10 +775,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     workspace === currentWorkspaceId() && workspace === workspaceId();
 
   const loadRecovery = async (id: string, workspace: string, signal?: AbortSignal) => {
+    const epoch = recoveryFence.begin();
     setRecovery({ status: "loading" });
     try {
       const response = await getGitInstallPlan(id, { signal });
-      if (disposed || signal?.aborted || installRecoveryId(location.search) !== id) return;
+      if (disposed || signal?.aborted || !recoveryFence.isCurrent(epoch) || installRecoveryId(location.search) !== id) return;
       setRecovery(
         workspaceIsCurrent(workspace) &&
           installRecoveryMatches(response, id, workspace, props.installingPrincipalId)
@@ -783,7 +787,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           : { status: "unavailable" },
       );
     } catch {
-      if (!disposed && !signal?.aborted && installRecoveryId(location.search) === id) {
+      if (!disposed && !signal?.aborted && recoveryFence.isCurrent(epoch) && installRecoveryId(location.search) === id) {
         setRecovery({ status: "unavailable" });
       }
     }
@@ -793,7 +797,9 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     const search = location.search;
     const workspace = currentWorkspaceId();
     const id = installRecoveryId(search);
+    setRecoveryBusy(false);
     if (!id || !workspace) {
+      recoveryFence.invalidate();
       setRecovery({ status: "unavailable" });
       return;
     }
@@ -811,26 +817,29 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       !id || !workspaceIsCurrent(workspace) || recoveryBusy() ||
       !installRecoveryMatches(state.response, id, workspace, props.installingPrincipalId)
     ) return;
+    const epoch = recoveryFence.begin();
     setRecoveryBusy(true);
     try {
       const response = await reconcileGitInstallPlan(id);
-      if (disposed || installRecoveryId(location.search) !== id || !workspaceIsCurrent(workspace)) return;
+      if (disposed || !recoveryFence.isCurrent(epoch) || installRecoveryId(location.search) !== id || !workspaceIsCurrent(workspace)) return;
       setRecovery(
         installRecoveryMatches(response, id, workspace, props.installingPrincipalId)
           ? { status: "ready", response }
           : { status: "unavailable" },
       );
     } catch {
-      if (!disposed && installRecoveryId(location.search) === id && workspaceIsCurrent(workspace)) {
+      if (!disposed && recoveryFence.isCurrent(epoch) && installRecoveryId(location.search) === id && workspaceIsCurrent(workspace)) {
         // A failed explicit mutation is unknown, so only a fresh GET is offered.
         setRecovery({ status: "unavailable" });
       }
     } finally {
-      setRecoveryBusy(false);
+      if (recoveryFence.isCurrent(epoch)) setRecoveryBusy(false);
     }
   };
 
   const clearRecovery = () => {
+    recoveryFence.invalidate();
+    setRecoveryBusy(false);
     navigate(location.pathname, { replace: true });
     setRecovery({ status: "unavailable" });
     reset();
@@ -1773,23 +1782,42 @@ function Inner(props: { readonly installingPrincipalId: string }) {
             <Show when={recovery().status === "ready" ? recovery() as { status: "ready"; response: GitInstallPlanResponse } : undefined}>
               {(ready) => {
                 const response = ready().response;
+                const presentation = installRecoveryPresentation(response);
                 return (
                   <>
-                    <h2>{t("installStore.preparing")}</h2>
+                    <h2>{
+                      presentation === "review" ? t("installStore.recoveryReview") :
+                      presentation === "failed_run" ? t("installStore.recoveryFailedRun") :
+                      presentation === "failed" ? t("installStore.recoveryFailed") :
+                      presentation === "continue" ? t("installStore.recoveryContinue") :
+                      t("installStore.recoveryUnverified")
+                    }</h2>
+                    <p>{
+                      presentation === "review" ? t("installStore.recoveryReviewHint") :
+                      presentation === "failed_run" ? t("installStore.recoveryFailedRunHint") :
+                      presentation === "failed" ? t("installStore.recoveryFailedHint") :
+                      presentation === "continue" ? t("installStore.recoveryContinueHint") :
+                      t("installStore.recoveryUnverifiedHint")
+                    }</p>
                     <p data-testid="install-plan-recovery-phase">{response.installPlan.phase}</p>
                     <Show when={response.installPlan.diagnostic?.message}>
                       {(message) => <p role="status">{message()}</p>}
                     </Show>
                     <div class="iv-action-row">
-                      <Show when={response.nextAction === "reconcile"}>
+                      <Show when={presentation === "continue"}>
                         <Button type="button" variant="primary" busy={recoveryBusy()}
                           onClick={() => void continueRecovery()}>
                           {t("installStore.continue")}
                         </Button>
                       </Show>
-                      <Show when={response.nextAction === "review_run" && response.installPlan.planRunId}>
+                      <Show when={presentation === "review"}>
                         <Button variant="primary" href={`/runs/${encodeURIComponent(response.installPlan.planRunId!)}`}>
                           {t("installStore.stepReview")}
+                        </Button>
+                      </Show>
+                      <Show when={presentation === "failed_run"}>
+                        <Button variant="secondary" href={`/runs/${encodeURIComponent(response.installPlan.planRunId!)}`}>
+                          {t("installStore.runDetails")}
                         </Button>
                       </Show>
                       <Button type="button" variant="ghost" onClick={clearRecovery}>

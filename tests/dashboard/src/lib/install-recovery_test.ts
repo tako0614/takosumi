@@ -1,9 +1,11 @@
 import { expect, test } from "bun:test";
 import type { GitInstallPlanResponse } from "takosumi-contract";
 import {
+  createInstallRecoveryFence,
   hasInstallRecoveryLocator,
   installRecoveryId,
   installRecoveryMatches,
+  installRecoveryPresentation,
   installRecoveryRouteMatches,
   installRecoverySearch,
 } from "../../../../dashboard/src/lib/install-recovery.ts";
@@ -39,4 +41,28 @@ test("a delayed response cannot promote across a changed route or locator", () =
   expect(installRecoveryRouteMatches("/other", installRecoverySearch(id), "/new", "?git=original", id)).toBe(false);
   expect(installRecoveryRouteMatches("/new", "?git=other", "/new", "?git=original", id)).toBe(false);
   expect(installRecoveryRouteMatches("/new", "?installPlan=gip_ffffffffffffffff", "/new", "?git=original", id)).toBe(false);
+});
+
+test("recovered coordinator copy distinguishes review, stopped and explicit continuation", () => {
+  const withState = (phase: string, nextAction: string, planRunId?: string) => ({
+    ...response,
+    installPlan: { ...response.installPlan, phase, ...(planRunId ? { planRunId } : {}) },
+    nextAction,
+  } as GitInstallPlanResponse);
+  expect(installRecoveryPresentation(withState("planning", "reconcile"))).toBe("continue");
+  expect(installRecoveryPresentation(withState("reviewable", "review_run", "plan_one"))).toBe("review");
+  expect(installRecoveryPresentation(withState("failed", "none"))).toBe("failed");
+  expect(installRecoveryPresentation(withState("failed", "none", "plan_failed"))).toBe("failed_run");
+  expect(installRecoveryPresentation(withState("reviewable", "review_run"))).toBe("unverified");
+  expect(installRecoveryPresentation(withState("planning", "none"))).toBe("unverified");
+});
+
+test("a late retry GET cannot replace a newer back/forward readback", () => {
+  const fence = createInstallRecoveryFence();
+  const firstRead = fence.begin();
+  const newerRead = fence.begin();
+  expect(fence.isCurrent(firstRead)).toBe(false);
+  expect(fence.isCurrent(newerRead)).toBe(true);
+  fence.invalidate();
+  expect(fence.isCurrent(newerRead)).toBe(false);
 });

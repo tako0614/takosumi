@@ -46,3 +46,29 @@ export function installRecoveryRouteMatches(
   return currentPath === requestPath &&
     (currentSearch === requestSearch || installRecoveryId(currentSearch) === planId);
 }
+
+/** Copy describes evidence and the next user action, never assumed progress. */
+export function installRecoveryPresentation(
+  response: GitInstallPlanResponse,
+): "continue" | "review" | "failed_run" | "failed" | "unverified" {
+  if (response.installPlan.phase === "failed") {
+    return response.installPlan.planRunId ? "failed_run" : "failed";
+  }
+  if (
+    response.installPlan.phase === "reviewable" &&
+    response.nextAction === "review_run" &&
+    response.installPlan.planRunId
+  ) return "review";
+  if (response.nextAction === "reconcile") return "continue";
+  return "unverified";
+}
+
+/** Invalidates late GET/reconcile completions after a route or workspace change. */
+export function createInstallRecoveryFence() {
+  let epoch = 0;
+  return {
+    begin: () => ++epoch,
+    invalidate: () => { epoch += 1; },
+    isCurrent: (token: number) => token === epoch,
+  };
+}
