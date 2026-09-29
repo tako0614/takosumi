@@ -797,6 +797,34 @@ function storeInstallConfigsForSource(
  * server is authoritative; this client-side check only prevents malformed
  * responses from becoming an executable selection.
  */
+/** How one requested directory resolves against the scanned root modules. */
+export type ScannedModuleChoice =
+  | { readonly kind: "adopt"; readonly path: string }
+  | { readonly kind: "choose"; readonly path: string }
+  | { readonly kind: "missing" };
+
+/**
+ * A link, a Store listing, or the user can name one module directory, but only
+ * the immutable scan is authority. A path the scan proves is adopted as-is. A
+ * proven *hint* is the preselected choice: when the app's OpenTofu files define
+ * more than one root module, every one of them stays selectable instead of the
+ * entry path collapsing the repository to a single destination. A path the scan
+ * does not expose is missing, never a silent fallback.
+ */
+function scannedModuleChoice(input: {
+  readonly modules: readonly { readonly path: string }[];
+  readonly requestedPath: string;
+  readonly requestedPathIsHint: boolean;
+}): ScannedModuleChoice {
+  const requested = input.requestedPath.trim();
+  const selected = input.modules.find((module) => module.path === requested);
+  if (!selected) return { kind: "missing" };
+  if (input.requestedPathIsHint && input.modules.length > 1) {
+    return { kind: "choose", path: selected.path };
+  }
+  return { kind: "adopt", path: selected.path };
+}
+
 function installModuleCatalogFromSnapshot(
   catalog: SourceSnapshotInstallModulesResponse,
 ): InstallModuleCatalog {
@@ -1271,6 +1299,7 @@ export {
   storeSourceMatchesCoordinate,
   storeInstallConfigsForSource,
   installModuleCatalogFromSnapshot,
+  scannedModuleChoice,
   uniqueStoreInstallConfigForSource,
   storeMetadataFromStoreListing,
   storeEntryIdFromStoreListing,

@@ -120,6 +120,7 @@ import {
   slugInputValue,
   storeDefaultInputValue,
   installModuleCatalogFromSnapshot,
+  scannedModuleChoice,
   storeEntryFromStoreListing,
   storeInputIsDerived,
   storeInputJsonValue,
@@ -1178,19 +1179,24 @@ function Inner(props: { readonly installingPrincipalId: string }) {
             setPhase("configure");
             return;
           } else if (modulePathExplicit()) {
-            const requestedPath = modulePath().trim();
-            const selected = catalog.modules.find(
-              (module) => module.path === requestedPath,
-            );
-            if (!selected) {
+            const choice = scannedModuleChoice({
+              modules: catalog.modules,
+              requestedPath: modulePath(),
+              requestedPathIsHint: modulePathHint(),
+            });
+            if (choice.kind === "missing") {
               setError(t("installStore.moduleUnavailable"));
               setPhase("configure");
               return;
             }
-            // Preserve an explicit direct Git path exactly after canonical
-            // validation against the immutable scan.
-            setModulePath(selected.path);
-            setModuleSelectionConfirmed(true);
+            // Preserve the requested directory exactly after canonical
+            // validation against the immutable scan. A path the user typed is
+            // the whole choice; a proven link or listing hint only preselects
+            // the destination, so a repository whose OpenTofu files define
+            // more than one root still reaches the chooser below with every
+            // candidate selectable.
+            setModulePath(choice.path);
+            setModuleSelectionConfirmed(choice.kind === "adopt");
           } else if (catalog.modules.length === 1) {
             setModulePath(catalog.modules[0]!.path);
             // A single scanned module is the only noninteractive choice. Keep
