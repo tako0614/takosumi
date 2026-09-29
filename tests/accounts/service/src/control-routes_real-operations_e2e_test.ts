@@ -3463,6 +3463,127 @@ test("no-state Capsule DELETE rejects any runtime effect but permits pre-dispatc
   );
 });
 
+test("compatibility check refuses a repository-relative modulePath for a path-scoped snapshot with one contract diagnostic", async () => {
+  const accountStore = new InMemoryAccountsStore();
+  const cookie = seedSession(accountStore);
+  const deployStore = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: deployStore,
+    opentofuRunner: runner,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+  });
+  const seeded = await seedCapsuleModel(deployStore, {
+    workspaceId: "ws_compat_module_path_scope",
+    capsuleId: "cap_compat_module_path_scope",
+    installConfigId: "icfg_compat_module_path_scope",
+    installConfig: { modulePath: "." },
+  });
+  // A Source registered at `defaultPath: "deploy/takoform"` captures exactly
+  // that subtree, so the snapshot archive root already IS the repository path
+  // the caller wants to install.
+  await deployStore.putSource({
+    ...seeded.source,
+    defaultPath: "deploy/takoform",
+  });
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    path: "deploy/takoform",
+    repositoryModules: {
+      status: "ready",
+      scopePath: "deploy/takoform",
+      modules: [
+        { path: ".", providerPackages: [], rootProviderRequirements: [] },
+      ],
+    },
+  });
+
+  const contractRefusal = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly message: string;
+      readonly details?: { readonly diagnosticCode?: string };
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        capsuleName: "repo-default",
+        compileInstallUx: true,
+        modulePath: "deploy/takoform",
+      },
+    },
+    400,
+  );
+  expect(contractRefusal.error).toMatchObject({
+    code: "repository_install_ux_invalid",
+    details: {
+      diagnosticCode: "repository_install_ux_module_path_repository_relative",
+    },
+  });
+  expect(contractRefusal.error.message).toContain("deploy/takoform");
+
+  // The same wrong coordinate without the repository install UX preflight is a
+  // caller-input refusal too. A path the snapshot cannot contain must never be
+  // reported as an inspection-runner failure.
+  const plainRefusal = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly message: string;
+      readonly details?: { readonly diagnosticCode?: string };
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        modulePath: "deploy/takoform",
+      },
+    },
+    400,
+  );
+  expect(plainRefusal.error).toMatchObject({
+    code: "invalid_argument",
+    details: {
+      diagnosticCode: "repository_install_ux_module_path_repository_relative",
+    },
+  });
+  expect(runner.capsuleSourceFileJobs).toHaveLength(0);
+
+  // The archive-relative coordinate for the same snapshot still resolves.
+  const accepted = await controlJson<{
+    readonly report: { readonly level: string; readonly modulePath: string };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        capsuleName: "repo-default",
+        compileInstallUx: true,
+        modulePath: ".",
+      },
+    },
+    201,
+  );
+  expect(accepted.report.level).toBe("ready");
+  expect(accepted.report.modulePath).toBe(".");
+});
+
 test("repository preflight resolves the sole indexed module before exact compatibility while manual Git keeps explicit modulePath", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
