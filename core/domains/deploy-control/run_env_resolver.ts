@@ -66,6 +66,8 @@ export interface ResolveRunEnvironmentInput {
   readonly planRun: PlanRun;
   readonly phase: "plan" | "apply" | "destroy";
   readonly auditRunId: string;
+  /** Opaque generation derived from the winning Run execution lease. */
+  readonly issuanceGenerationRef?: `sha256:${string}`;
   /** Exact canonical PlanRun/ApplyRun used for credential authority. */
   readonly credentialRunId?: string;
   readonly credentialContext?: "opentofu" | "release_command";
@@ -120,6 +122,7 @@ export class RunEnvResolver {
     phase: "plan" | "apply" | "destroy",
     auditRunId: string,
     connectionId: string,
+    issuanceGenerationRef?: `sha256:${string}`,
   ): Promise<RunCredentials> {
     if (!this.#credentials.renewRunCredential) {
       throw new OpenTofuControllerError(
@@ -133,6 +136,7 @@ export class RunEnvResolver {
       phase,
       auditRunId,
       connectionId,
+      issuanceGenerationRef,
     );
   }
 
@@ -185,7 +189,11 @@ export class RunEnvResolver {
         this.#credentials.mintPlanRunCredentialsWithTimings
       ) {
         const result = await this.#credentials
-          .mintPlanRunCredentialsWithTimings(input.planRun, input.auditRunId);
+          .mintPlanRunCredentialsWithTimings(
+            input.planRun,
+            input.auditRunId,
+            input.issuanceGenerationRef,
+          );
         credentials = result.credentials;
         brokerTimings = result.timings;
       } else if (input.credentialContext === "release_command") {
@@ -200,6 +208,7 @@ export class RunEnvResolver {
           input.planRun,
           input.phase,
           input.auditRunId,
+          input.issuanceGenerationRef,
         );
       }
     }

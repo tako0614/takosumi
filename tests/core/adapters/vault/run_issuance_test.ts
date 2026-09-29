@@ -18,6 +18,7 @@ import {
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
+import { connectionCredentialIssuanceAttemptRef } from "../../../../core/domains/deploy-control/credential_issuance_attempt.ts";
 
 const PROVIDER = "registry.example/operator/provider";
 const AUDIENCE = "extension.example.v1";
@@ -102,6 +103,7 @@ describe("Vault run-issued credential recipe", () => {
   test("stores zero material and mints only after canonical Run revalidation", async () => {
     let verifyValues: Readonly<Record<string, string>> | undefined;
     let mintRun: CredentialRecipeDriverRunContext | undefined;
+    let mintAttemptRef: string | undefined;
     let retainedIssue: CredentialRecipeIssueRunCredential | undefined;
     let boundIssue:
       | Parameters<CredentialRecipeRunCredentialIssuer>[0]
@@ -126,6 +128,7 @@ describe("Vault run-issued credential recipe", () => {
             throw new Error("canonical Run issuer callback missing");
           }
           mintRun = context.run;
+          mintAttemptRef = context.issuanceAttemptRef;
           retainedIssue = context.issueRunCredential;
           const issued = await context.issueRunCredential({ ttlSeconds: 600 });
           return {
@@ -152,6 +155,11 @@ describe("Vault run-issued credential recipe", () => {
             ttlSeconds: input.request.ttlSeconds ?? 900,
           };
         },
+        renewableEnv: {
+          sourceEnvName: "RUN_CREDENTIAL_TOKEN",
+          fileEnvName: "RUN_CREDENTIAL_TOKEN_FILE",
+          minimumProviderVersion: "4.1.0",
+        },
       },
     );
 
@@ -176,7 +184,12 @@ describe("Vault run-issued credential recipe", () => {
     const bundle = await vault.mintForCapsuleProviderBindings(
       "workspace_1",
       [{ provider: PROVIDER, connectionId: connection.id }],
-      { phase: "plan", capsuleId: "capsule_1", runId: "plan_1" },
+      {
+        phase: "plan",
+        capsuleId: "capsule_1",
+        runId: "plan_1",
+        issuanceGenerationRef: `sha256:${"a".repeat(64)}`,
+      },
     );
     expect(bundle.env).toEqual({
       RUN_CREDENTIAL_TOKEN: "signed:extension.example.v1:plan_1",
@@ -189,6 +202,10 @@ describe("Vault run-issued credential recipe", () => {
       phase: "plan",
       lifecycleIntent: "provision",
     });
+    expect(mintAttemptRef).toBe(await connectionCredentialIssuanceAttemptRef(
+      `sha256:${"a".repeat(64)}`,
+      connection.id,
+    ));
     expect(boundIssue).toEqual({
       connection: verified,
       run: mintRun,
