@@ -585,6 +585,12 @@ export const en: Record<keyof typeof ja, string> = {
     "Setup didn't finish. Retry from the update review, or delete this service and start over.",
   "app.setupIncomplete.review": "Open updates",
   "app.setupIncomplete.delete": "Delete options",
+  "app.setupIncomplete.initialReviewBody": "This install has an accepted initial review. Open that Plan to finish setup; creating a revision would not resume it.",
+  "app.setupIncomplete.openInitialReview": "Open initial review",
+  "app.setupIncomplete.loadingInitialReview": "Finding the initial review…",
+  "app.setupIncomplete.initialReviewUnavailable": "The initial review could not be identified. Check the install Run history before trying again.",
+  "installStore.recoveryUnverified": "Install status could not be verified",
+  "installStore.recoveryUnverifiedHint": "The original install may still be running. Retry this status read or check Workloads and Run history before starting another install.",
 
   // --- run view --------------------------------------------------------------
   "run.title.plan": "Review changes",

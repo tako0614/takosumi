@@ -590,6 +590,12 @@ export const ja = {
     "追加が完了していません。変更の確認からやり直すか、削除してやり直せます。",
   "app.setupIncomplete.review": "更新タブへ",
   "app.setupIncomplete.delete": "削除オプション",
+  "app.setupIncomplete.initialReviewBody": "初回導入の確認待ちです。元のプランを開いて続行してください。更新プランを作っても初回導入は再開しません。",
+  "app.setupIncomplete.openInitialReview": "初回導入の確認を開く",
+  "app.setupIncomplete.loadingInitialReview": "初回導入の確認を探しています…",
+  "app.setupIncomplete.initialReviewUnavailable": "初回導入の確認を特定できません。再試行前に導入時の実行履歴を確認してください。",
+  "installStore.recoveryUnverified": "導入状況を確認できません",
+  "installStore.recoveryUnverifiedHint": "元の導入がまだ進行中の可能性があります。新しい導入を始める前に状況を再取得するか、実行履歴を確認してください。",
 
   // --- run view --------------------------------------------------------------
   "run.title.plan": "変更の確認",

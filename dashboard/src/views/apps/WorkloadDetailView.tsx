@@ -49,6 +49,7 @@ import {
   type Capsule,
   ControlApiError,
   type InstallConfig,
+  type Run,
   type ProviderBinding,
   type ProviderBindings,
   type ProviderConnection,
@@ -64,6 +65,7 @@ import {
   getCapsuleConfigurationContext,
   getWorkspaceGraph,
   listActivity,
+  listRuns,
   listStateVersions,
   listProviderConnections,
   listSources,
@@ -122,6 +124,7 @@ import {
 import { autoApplyRunPath } from "../../lib/auto-apply-consent.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
+import { acceptedInitialInstallPlan, INITIAL_PLAN_RUN_LOOKUP_LIMIT } from "../../lib/accepted-initial-install-plan.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import {
   getOrCreateRevisionPlanAttempt,
@@ -215,6 +218,36 @@ function Inner() {
     if (installConfig.error) return undefined;
     return capsuleDisplayName(installConfig(), locale());
   });
+  const initialReviewRequired = () => {
+    const inst = capsuleData();
+    const config = installConfig.error ? undefined : installConfig();
+    return Boolean(
+      inst && inst.id === capsuleId() && config &&
+      config.id === inst.installConfigId &&
+      config.installExperience?.repositoryInstallUx?.status === "accepted" &&
+      !inst.currentStateVersionId && inst.currentStateGeneration === 0 &&
+      (inst.status === "pending" || inst.status === "error"),
+    );
+  };
+  const initialPlanLookupKey = () => {
+    const inst = capsuleData();
+    return initialReviewRequired() && inst
+      ? { workspaceId: inst.workspaceId, capsuleId: inst.id }
+      : null;
+  };
+  const [initialPlanRuns] = createResource(
+    initialPlanLookupKey,
+    ({ workspaceId }) => listRuns(workspaceId, INITIAL_PLAN_RUN_LOOKUP_LIMIT),
+  );
+  const acceptedInitialPlan = createMemo(() => {
+    const inst = capsuleData();
+    if (!initialReviewRequired() || !inst || inst.id !== capsuleId()) return undefined;
+    return acceptedInitialInstallPlan(
+      initialPlanRuns.error ? undefined : initialPlanRuns(),
+      inst,
+      installConfig.error ? undefined : installConfig(),
+    );
+  });
   // Source metadata is displayed on the Updates tab and in Settings' support
   // disclosure. Keep each resource scoped to its tab; revision mutations use
   // the Capsule-local coordinator and never patch this shared Source.
@@ -299,6 +332,12 @@ function Inner() {
   const currentSourceRevision = () =>
     capsuleData()?.adoptedSourceRevision?.ref ?? source()?.defaultRef;
   const sourceRevisionReady = () => {
+    const inst = capsuleData();
+    const config = installConfig.error ? undefined : installConfig();
+    if (
+      !inst || inst.id !== capsuleId() || !config ||
+      config.id !== inst.installConfigId || initialReviewRequired()
+    ) return false;
     const revision = currentSourceRevision();
     return typeof revision === "string" && revision.trim().length > 0;
   };
@@ -375,6 +414,13 @@ function Inner() {
   const [revisionActionBusy, setRevisionActionBusy] = createSignal(false);
 
   const createRevisionRun = async (requestedRevision?: string) => {
+    if (!sourceRevisionReady()) {
+      throw new ControlApiError(
+        409,
+        "revision_unavailable",
+        "The current installation has not become revision-ready.",
+      );
+    }
     const revision = (requestedRevision ?? currentSourceRevision())?.trim();
     if (!revision) {
       throw new ControlApiError(
@@ -625,17 +671,33 @@ function Inner() {
               {/* A service that never successfully applied (no StateVersion)
                   is stuck mid-setup — say so and offer the two ways out. */}
               <Show
-                when={inst().status !== "destroyed" && !currentStateVersionId()}
+                when={inst().id === capsuleId() && inst().status !== "destroyed" && !currentStateVersionId()}
               >
                 <div class="av-setup-incomplete" role="status">
                   <p class="av-setup-incomplete-text">
-                    {t("app.setupIncomplete.body")}
+                    {initialReviewRequired()
+                      ? t("app.setupIncomplete.initialReviewBody")
+                      : t("app.setupIncomplete.body")}
                   </p>
                   <div class="av-actions">
                     {/* Hide the 更新タブへ button when already on the 更新
                         (deploys) tab — otherwise it is a self-link that goes
                         nowhere. */}
-                    <Show when={tab() !== "deploys"}>
+                    <Show when={initialReviewRequired() && acceptedInitialPlan()}>
+                      {(run) => (
+                        <Button variant="primary" size="sm" href={`/runs/${encodeURIComponent(run().id)}`}>
+                          {t("app.setupIncomplete.openInitialReview")}
+                        </Button>
+                      )}
+                    </Show>
+                    <Show when={initialReviewRequired() && !acceptedInitialPlan()}>
+                      <p class="muted" role="status">
+                        {initialPlanRuns.loading
+                          ? t("app.setupIncomplete.loadingInitialReview")
+                          : t("app.setupIncomplete.initialReviewUnavailable")}
+                      </p>
+                    </Show>
+                    <Show when={!initialReviewRequired() && tab() !== "deploys"}>
                       <Button
                         variant="secondary"
                         size="sm"
@@ -695,6 +757,9 @@ function Inner() {
                       sourceLoading={deploySources.loading}
                       sourceRevision={currentSourceRevision()}
                       sourceRevisionReady={sourceRevisionReady()}
+                      initialReviewRequired={initialReviewRequired()}
+                      initialPlan={acceptedInitialPlan()}
+                      initialPlanLoading={initialPlanRuns.loading}
                       loading={stateVersions.loading}
                       error={
                         stateVersions.error
@@ -1051,6 +1116,9 @@ function DeploysTab(props: {
   readonly sourceLoading: boolean;
   readonly sourceRevision?: string;
   readonly sourceRevisionReady: boolean;
+  readonly initialReviewRequired: boolean;
+  readonly initialPlan?: Pick<Run, "id">;
+  readonly initialPlanLoading: boolean;
   readonly loading: boolean;
   readonly error?: string;
   readonly history: readonly {
@@ -1086,6 +1154,27 @@ function DeploysTab(props: {
   };
   return (
     <>
+      <Show when={props.initialReviewRequired}>
+        <Card>
+          <CardHeader title={t("app.setupIncomplete.openInitialReview")} subtitle={t("app.setupIncomplete.initialReviewBody")}
+            actions={
+              <Show when={props.initialPlan}>
+                {(run) => <Button variant="primary" size="sm" href={`/runs/${encodeURIComponent(run().id)}`}>
+                  {t("app.setupIncomplete.openInitialReview")}
+                </Button>}
+              </Show>
+            }
+          />
+          <Show when={!props.initialPlan}>
+            <p class="muted" role="status">
+              {props.initialPlanLoading
+                ? t("app.setupIncomplete.loadingInitialReview")
+                : t("app.setupIncomplete.initialReviewUnavailable")}
+            </p>
+          </Show>
+        </Card>
+      </Show>
+      <Show when={!props.initialReviewRequired}>
       <Card>
         <CardHeader
           title={t("app.deploys.sourceVersionTitle")}
@@ -1123,7 +1212,7 @@ function DeploysTab(props: {
             <Button
               variant="secondary"
               type="button"
-              disabled={props.reviewBusy || !revisionCandidate()}
+              disabled={props.reviewBusy || !props.sourceRevisionReady || !revisionCandidate()}
               busy={props.reviewBusy}
               onClick={() => void submitRevision()}
             >
@@ -1279,6 +1368,7 @@ function DeploysTab(props: {
           </div>
         </details>
       </Card>
+      </Show>
 
       <DeployedResourcesDisclosure
         inventory={props.resourceInventory}
