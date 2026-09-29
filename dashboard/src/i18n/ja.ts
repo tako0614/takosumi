@@ -693,6 +693,8 @@ export const ja = {
   "runError.applyFailed":
     "詳細を確認してから、必要なら変更内容をもう一度確認してください。",
   "runError.runFailed": "実行に失敗しました。もう一度お試しください。",
+  "runError.mutationIndeterminate":
+    "実行結果を確認できません。処理はすでに反映されている可能性があり、リソースが作成・変更・削除されていないとは判断できません。新しいデプロイや削除を始める前に、このRunの「参照情報」>「識別情報」でRun IDを確認し、診断とログを確認してください。",
   "runError.backupFailed":
     "復元ポイントの作成に失敗しました。もう一度お試しください。",
   "run.summary.connectionVerificationRequired":

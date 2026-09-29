@@ -1,5 +1,5 @@
 /**
- * Run failure display — friendly one-sentence explanations for run error
+ * Run failure display — concise explanations for run error
  * codes. The public Run carries a stable `errorCode` copied from structured
  * diagnostic/error reasons (never recovered from prose); a general
  * user must never see the raw token. Known codes map to a plain sentence with
@@ -22,6 +22,7 @@ const KNOWN_RUN_ERROR_HINTS: Readonly<Record<string, MessageKey>> = {
   apply_failed: "runError.applyFailed",
   run_failed: "runError.runFailed",
   backup_failed: "runError.backupFailed",
+  runner_mutation_indeterminate: "runError.mutationIndeterminate",
 };
 
 /** Friendly failure hint for a run summary — never the raw error code. */
