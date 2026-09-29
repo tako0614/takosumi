@@ -289,7 +289,7 @@ keys is a composition mismatch. Takoserver owns actual Resource/backend
 readback, while Takosumi owns the Run/StateVersion/Output/Audit lifecycle.
 
 The sponsorship descriptor's `providerCredentialBroker` accepts either the
-legacy exact ten-key shape or the opt-in exact eleven-key shape. Six are the
+legacy exact ten-key shape or the opt-in exact twelve-key shape. Six are the
 broker identity — `connectionId`, `recipeId`,
 `providerSource`, `displayName`, `exchangePath`, `envNames` — and
 `runCredentialSettings` carries the provider floor for run-issued credentials.
