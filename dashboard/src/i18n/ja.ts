@@ -44,7 +44,7 @@ export const ja = {
   "installStore.moduleRequirement":
     "{source}・module {module}{alias} {version}",
   "installStore.stepsLabel": "追加ステップ",
-  "installStore.stepSource": "Source",
+  "installStore.stepSource": "取得元",
   "installStore.stepConfigure": "設定",
   "installStore.stepReview": "確認",
   "installStore.name": "サービス名",
@@ -101,7 +101,7 @@ export const ja = {
     "シークレットはこのフォームから変数として送信しません。",
   "installStore.reviewing": "変更内容を確認しています",
   "installStore.reviewingHint": "安全に適用できるかPlanを確認しています。",
-  "installStore.reviewTitle": "インストール前の確認",
+  "installStore.reviewTitle": "追加前の確認",
   "installStore.reviewHint": "Takosumiが行う変更です。",
   "installStore.changes": "変更数",
   "installStore.createCount": "作成",
@@ -112,9 +112,9 @@ export const ja = {
   "installStore.confirmHint":
     "削除または明示承認が必要な変更を含みます。内容を確認してください。",
   "installStore.confirm": "変更内容を確認しました",
-  "installStore.install": "インストール",
+  "installStore.install": "追加する",
   "installStore.runDetails": "技術的な詳細",
-  "installStore.installing": "インストールしています",
+  "installStore.installing": "追加しています",
   "installStore.installingHint": "この画面を開いたままお待ちください。",
   "installStore.planBlocked": "このPlanは適用できません",
   "installStore.planBlockedHint":
@@ -128,7 +128,7 @@ export const ja = {
     "サービスを開くためのリンクが利用可能になるまで待っています。",
   "installStore.launchNotReady":
     "サービスは適用されましたが、起動リンクをまだ確認できません。再確認するか、サービスの詳細を開いてください。",
-  "installStore.runFailed": "インストールを完了できませんでした",
+  "installStore.runFailed": "追加を完了できませんでした",
   "installStore.runFailedHint":
     "技術的な詳細を確認して、もう一度お試しください。",
   "installStore.restartWithLatestSource": "最新のソースでやり直す",
@@ -1235,7 +1235,7 @@ export const ja = {
   "account.theme.title": "表示",
   "account.preferences.title": "表示設定",
   "account.preferences.body": "言語と見た目を変更できます。",
-  "account.installTarget.title": "ストアからのインストール先",
+  "account.installTarget.title": "ストアからの追加先",
   "account.installTarget.body":
     "ストアの「追加」ボタンを、この端末ではこの Takosumi で開くようブラウザに登録します。登録後は、別のストアからでもここに着地します。",
   "account.installTarget.register": "この端末を登録",

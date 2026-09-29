@@ -74,6 +74,26 @@ describe("i18n dictionaries", () => {
     }
   });
 
+  test("the install flow keeps one verb for adding a service", () => {
+    // tests/dashboard/src/views/store/store-browser-ui_test.ts already forbids
+    // インストール in the store's own table: the card, the progress line, the
+    // done line and the error line all say 追加, so a button on another verb
+    // made one click read as two different actions. The shared dictionary kept
+    // four installStore keys on the other verb, outside that guard's reach.
+    const keys = (Object.keys(ja) as (keyof typeof ja)[]).filter(
+      (key) =>
+        key.startsWith("installStore.") ||
+        key.startsWith("account.installTarget."),
+    );
+    expect(keys.length).toBeGreaterThan(0);
+    for (const key of keys) {
+      const value = ja[key];
+      expect({ key, value }).not.toEqual(
+        expect.objectContaining({ value: expect.stringContaining("インストール") }),
+      );
+    }
+  });
+
   test("no dictionary key is left behind by removed UI", () => {
     // Key-set parity is compile-enforced, but nothing caught copy whose SCREEN
     // was deleted — 10 such keys had accumulated, including a copy-to-clipboard

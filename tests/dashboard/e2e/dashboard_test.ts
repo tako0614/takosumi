@@ -1557,7 +1557,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await page.getByRole("button", { name: /続ける|Continue/u }).click();
 
     await expect(
-      page.getByRole("heading", { name: /Review before install/u }),
+      page.getByRole("heading", { name: /追加前の確認|Review before adding/u }),
     ).toBeVisible();
     await expect(
       page.locator('[data-install-provider-destination="auto-selected"]'),

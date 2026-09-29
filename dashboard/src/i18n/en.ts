@@ -95,7 +95,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Secrets are never sent as variables from this form.",
   "installStore.reviewing": "Reviewing changes",
   "installStore.reviewingHint": "Checking the Plan before anything is applied.",
-  "installStore.reviewTitle": "Review before install",
+  "installStore.reviewTitle": "Review before adding",
   "installStore.reviewHint": "These are the changes Takosumi will make.",
   "installStore.changes": "Changes",
   "installStore.createCount": "Create",
@@ -106,9 +106,9 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.confirmHint":
     "The Plan includes deletion or another explicitly reviewed change.",
   "installStore.confirm": "I reviewed these changes",
-  "installStore.install": "Install",
+  "installStore.install": "Add",
   "installStore.runDetails": "Technical details",
-  "installStore.installing": "Installing",
+  "installStore.installing": "Adding",
   "installStore.installingHint":
     "Keep this page open while installation finishes.",
   "installStore.planBlocked": "This Plan cannot be applied",
