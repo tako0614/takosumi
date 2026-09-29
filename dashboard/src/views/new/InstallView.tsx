@@ -142,6 +142,12 @@ import {
 import InstallExecution from "./InstallExecution.tsx";
 import "./install-view.css";
 
+/** One scanned root-module candidate from the immutable SourceSnapshot index. */
+type InstallModuleCatalogEntry = Extract<
+  InstallModuleCatalog,
+  { readonly status: "ready" }
+>["modules"][number];
+
 type Phase =
   | "browse"
   | "configure"
@@ -329,6 +335,31 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const selectedModuleProviderRequirements = createMemo(
     () => selectedModule()?.rootProviderRequirements ?? [],
   );
+
+  /**
+   * The chooser is the one place the user picks a destination, so every
+   * candidate carries the provider set Takosumi derived from that exact
+   * scanned directory. The list is read from the immutable scan; nothing is
+   * inferred from Store metadata or a repository manifest.
+   */
+  const moduleCandidateLabel = (
+    module: InstallModuleCatalogEntry,
+  ): string => {
+    const providers = [
+      ...new Set(
+        module.providerPackages.map((provider) =>
+          providerDisplayName(provider.source),
+        ),
+      ),
+    ];
+    return t("installStore.moduleOption", {
+      path: module.path,
+      providers:
+        providers.length > 0
+          ? providers.join(", ")
+          : t("installStore.moduleNoProviders"),
+    });
+  };
 
   type InstallStep = "source" | "configure" | "review";
   const activeInstallStep = (): InstallStep => {
@@ -1970,7 +2001,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                       value={module.path}
                       selected={module.path === modulePath()}
                     >
-                      {module.path}
+                      {moduleCandidateLabel(module)}
                     </option>
                   )}
                 </For>

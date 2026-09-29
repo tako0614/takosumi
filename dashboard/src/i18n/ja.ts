@@ -23,7 +23,9 @@ export const ja = {
     "名前を確認したら追加できます。リポジトリ解析はその後に行います。",
   "installStore.moduleTitle": "モジュールを選択",
   "installStore.moduleHint":
-    "この固定されたリポジトリ版で宣言されたモジュールから、追加するディレクトリを選びます。",
+    "この固定されたリポジトリ版を走査して見つかったモジュールから、追加するディレクトリを選びます。末尾はそのmoduleが必要とするプロバイダーです。",
+  "installStore.moduleOption": "{path} — {providers}",
+  "installStore.moduleNoProviders": "プロバイダー不要",
   "installStore.moduleChoose": "モジュールディレクトリ",
   "installStore.moduleConfirm": "このモジュールで続ける",
   "installStore.moduleUnavailable":

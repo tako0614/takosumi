@@ -2221,10 +2221,12 @@ test.describe("Takosumi dashboard browser surface", () => {
       name: /モジュールディレクトリ|Module directory/u,
     });
     await expect(moduleOption).toHaveValue("");
+    // Each candidate carries the provider set derived from that exact scanned
+    // directory, so the choice names the destination instead of a bare path.
     await expect(moduleOption.locator("option")).toHaveText([
       /モジュールディレクトリ|Module directory/u,
-      ".",
-      "deploy/takoform",
+      ". — Cloudflare",
+      "deploy/takoform — AWS, Cloudflare",
     ]);
     await moduleOption.selectOption("deploy/takoform");
     await moduleChooser

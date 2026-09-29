@@ -347,6 +347,21 @@ describe("single-screen install surface", () => {
     expect(view).not.toContain("moduleFiles");
   });
 
+  test("labels every module candidate with the providers derived from it", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain("moduleCandidateLabel");
+    expect(view).toContain("{moduleCandidateLabel(module)}");
+    const helperStart = view.indexOf("const moduleCandidateLabel =");
+    expect(helperStart).toBeGreaterThan(-1);
+    const helper = view.slice(helperStart, helperStart + 900);
+    // The label is read from the scanned candidate, never guessed from a
+    // manifest, Store listing, or provider allowlist.
+    expect(helper).toContain("module.providerPackages");
+    expect(helper).toContain("providerDisplayName(provider.source)");
+    expect(helper).toContain('t("installStore.moduleOption"');
+    expect(helper).toContain('t("installStore.moduleNoProviders")');
+  });
+
   test("module changes clear every compiled and planned artifact", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     const chooserStart = view.indexOf("const chooseInstallModule =");
