@@ -1849,10 +1849,12 @@ test.describe("Takosumi dashboard browser surface", () => {
     await assertNoPageErrors(errors);
   });
 
-  for (const scenario of ["route-leave", "same-route"] as const) {
-    test(`${scenario} changes keep acknowledged install recovery safe`, async ({
-      page,
-    }) => {
+  for (const scenario of ["route-leave", "same-route", "apply-failure"] as const) {
+    test(
+      scenario === "apply-failure"
+        ? "install Apply failure replaces progress and links to the failed Run"
+        : `${scenario} changes keep acknowledged install recovery safe`,
+      async ({ page }) => {
     test.skip(
       mode !== "portable",
       "the deterministic install API fixture is portable-only",
@@ -1870,6 +1872,10 @@ test.describe("Takosumi dashboard browser surface", () => {
     const syncBodies: unknown[] = [];
     const installPlanBodies: unknown[] = [];
     const installPlanId = "gip_cccccccccccccccc";
+    const applyRunId = "run_apply_install_failure_e2e";
+    let applyRunStatus: "running" | "failed" = "running";
+    let applyRunReads = 0;
+    let applyPosts = 0;
     let installPlanRecord: Record<string, unknown> | undefined;
     let automaticReconcileCalls = 0;
     let automaticReconcileCompleted = false;
@@ -2204,6 +2210,79 @@ test.describe("Takosumi dashboard browser surface", () => {
           },
         });
       }
+      if (path === "/api/v1/runs/run_plan_e2e/stream") {
+        return route.fulfill({
+          contentType: "text/event-stream",
+          body: "",
+        });
+      }
+      if (path === "/api/v1/runs/run_plan_e2e" && request.method() === "GET") {
+        return route.fulfill({
+          json: {
+            run: {
+              id: "run_plan_e2e",
+              workspaceId: "ws_alpha",
+              capsuleId: "cap_install_e2e",
+              sourceSnapshotId: "snap_install_e2e",
+              type: "plan",
+              status: "succeeded",
+              summary: { add: 1, change: 0, destroy: 0 },
+              policyStatus: "pass",
+              createdBy: "portable-e2e",
+              createdAt: now,
+            },
+          },
+        });
+      }
+      if (
+        path === `/api/v1/runs/run_plan_e2e/apply` &&
+        request.method() === "POST"
+      ) {
+        applyPosts += 1;
+        return route.fulfill({
+          status: 201,
+          json: {
+            run: {
+              id: applyRunId,
+              workspaceId: "ws_alpha",
+              capsuleId: "cap_install_e2e",
+              planRunId: "run_plan_e2e",
+              sourceSnapshotId: "snap_install_e2e",
+              type: "apply",
+              status: "running",
+              createdBy: "portable-e2e",
+              createdAt: now,
+            },
+          },
+        });
+      }
+      if (path === `/api/v1/runs/${applyRunId}/stream`) {
+        return route.fulfill({
+          contentType: "text/event-stream",
+          body: "",
+        });
+      }
+      if (path === `/api/v1/runs/${applyRunId}` && request.method() === "GET") {
+        applyRunReads += 1;
+        return route.fulfill({
+          json: {
+            run: {
+              id: applyRunId,
+              workspaceId: "ws_alpha",
+              capsuleId: "cap_install_e2e",
+              planRunId: "run_plan_e2e",
+              sourceSnapshotId: "snap_install_e2e",
+              type: "apply",
+              status: applyRunStatus,
+              ...(applyRunStatus === "failed"
+                ? { errorCode: "fixture_runner_failed" }
+                : {}),
+              createdBy: "portable-e2e",
+              createdAt: now,
+            },
+          },
+        });
+      }
       return route.fallback();
     });
 
@@ -2298,7 +2377,49 @@ test.describe("Takosumi dashboard browser surface", () => {
     ]);
     expect(syncBodies).toEqual([{ expectedRef: resolvedCommit }]);
 
-    if (scenario === "route-leave") {
+    if (scenario === "apply-failure") {
+      await expect.poll(() => automaticReconcileCompleted).toBe(true);
+      await expect(
+        page.getByRole("heading", {
+          name: /Review before install|インストール前の確認/u,
+        }),
+      ).toBeVisible();
+      await page.getByRole("button", { name: /Install|インストール/u }).click();
+      await expect.poll(() => applyPosts).toBe(1);
+
+      await expect(
+        page.getByRole("heading", {
+          name: /Installing|インストールしています/u,
+        }),
+      ).toBeVisible();
+      await expect(page.getByText(/Deploying|デプロイを実行しています/u)).toBeVisible();
+      await expect(
+        page.getByRole("link", {
+          name: /Technical details|技術的な詳細/u,
+        }),
+      ).toHaveAttribute("href", `/runs/${applyRunId}`);
+
+      applyRunStatus = "failed";
+      await expect.poll(() => applyRunReads).toBeGreaterThan(1);
+      await expect(
+        page.getByRole("heading", {
+          name: /Service setup did not finish|インストールを完了できませんでした/u,
+        }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("heading", {
+          name: /Installing|インストールしています/u,
+        }),
+      ).toHaveCount(0);
+      await expect(page.getByText("fixture_runner_failed")).toBeVisible();
+      await expect(
+        page.getByRole("link", {
+          name: /Technical details|技術的な詳細/u,
+        }),
+      ).toHaveAttribute("href", `/runs/${applyRunId}`);
+      expect(applyPosts).toBe(1);
+      await assertNoPageErrors(errors);
+    } else if (scenario === "route-leave") {
       await expect.poll(() => installPlanBodies.length).toBe(1);
       await page.getByRole("link", { name: /settings|設定/iu }).click();
       await expect(page).toHaveURL(/\/settings$/u);
@@ -2344,7 +2465,8 @@ test.describe("Takosumi dashboard browser surface", () => {
       expect(automaticReconcileCalls).toBe(1);
     }
     traffic.assertNoFailures();
-    });
+      },
+    );
   }
 
   test("Workload settings submit one complete Configuration Plan and open its Run review", async ({
