@@ -7,7 +7,7 @@ import {
   onMount,
   Show,
 } from "solid-js";
-import { useLocation } from "@solidjs/router";
+import { useLocation, useNavigate } from "@solidjs/router";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -40,17 +40,29 @@ import {
   createReviewableGitInstallPlan,
   createWorkspace,
   extractRunId,
+  getGitInstallPlan,
   getInstallConfig,
   listConnectionsWithSignal,
   listReleaseOwnedProviderConnectionsWithSignal,
   listSourceSnapshotInstallModules,
   prepareCapsuleSourceSnapshot,
+  reconcileGitInstallPlan,
   type CapsuleCompatibilityResult,
   type InstallConfig,
   type PolicyConfig,
   type ProviderConnection,
   type SourceCreateReconciliationToken,
 } from "../../lib/control-api.ts";
+import type { GitInstallPlanResponse } from "takosumi-contract";
+import {
+  createInstallRecoveryFence,
+  hasInstallRecoveryLocator,
+  installRecoveryId,
+  installRecoveryMatches,
+  installRecoveryPresentation,
+  installRecoveryRouteMatches,
+  installRecoverySearch,
+} from "../../lib/install-recovery.ts";
 import {
   installConfigRequiresUiSurface,
   listAuthorizedUiSurfaces,
@@ -191,6 +203,7 @@ export default function InstallView() {
 
 function Inner(props: { readonly installingPrincipalId: string }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const { confirm } = useConfirmDialog();
   const initial = parseInstallPrefill(location.search);
   // A query path is only a user hint. It is accepted as install authority only
@@ -261,6 +274,13 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const [capsuleId, setCapsuleId] = createSignal<string>();
   const [planRunId, setPlanRunId] = createSignal<string>();
   let installPlanAttempt: InstallPlanAttempt | undefined;
+  const [recovery, setRecovery] = createSignal<
+    | { readonly status: "loading" | "unavailable" }
+    | { readonly status: "ready"; readonly response: GitInstallPlanResponse }
+  >({ status: "unavailable" });
+  const [recoveryBusy, setRecoveryBusy] = createSignal(false);
+  const recoveryFence = createInstallRecoveryFence();
+  let disposed = false;
   const [error, setError] = createSignal<string>();
   const [busy, setBusy] = createSignal(false);
   const [preparationStage, setPreparationStage] =
@@ -270,7 +290,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const [interfaceUrl, setInterfaceUrl] = createSignal<string>();
   let completionAttempt = 0;
   let activePreparationController: AbortController | undefined;
-  onCleanup(() => activePreparationController?.abort());
+  onCleanup(() => {
+    disposed = true;
+    activePreparationController?.abort();
+  });
 
   const preparationStageHint = (): string => {
     switch (preparationStage()) {
@@ -750,6 +773,77 @@ function Inner(props: { readonly installingPrincipalId: string }) {
 
   const workspaceIsCurrent = (workspace: string): boolean =>
     workspace === currentWorkspaceId() && workspace === workspaceId();
+
+  const loadRecovery = async (id: string, workspace: string, signal?: AbortSignal) => {
+    const epoch = recoveryFence.begin();
+    setRecovery({ status: "loading" });
+    try {
+      const response = await getGitInstallPlan(id, { signal });
+      if (disposed || signal?.aborted || !recoveryFence.isCurrent(epoch) || installRecoveryId(location.search) !== id) return;
+      setRecovery(
+        workspaceIsCurrent(workspace) &&
+          installRecoveryMatches(response, id, workspace, props.installingPrincipalId)
+          ? { status: "ready", response }
+          : { status: "unavailable" },
+      );
+    } catch {
+      if (!disposed && !signal?.aborted && recoveryFence.isCurrent(epoch) && installRecoveryId(location.search) === id) {
+        setRecovery({ status: "unavailable" });
+      }
+    }
+  };
+
+  createEffect(() => {
+    const search = location.search;
+    const workspace = currentWorkspaceId();
+    const id = installRecoveryId(search);
+    setRecoveryBusy(false);
+    if (!id || !workspace) {
+      recoveryFence.invalidate();
+      setRecovery({ status: "unavailable" });
+      return;
+    }
+    const controller = new AbortController();
+    void loadRecovery(id, workspace, controller.signal);
+    onCleanup(() => controller.abort());
+  });
+
+  const continueRecovery = async () => {
+    const state = recovery();
+    const id = installRecoveryId(location.search);
+    const workspace = currentWorkspaceId();
+    if (
+      state.status !== "ready" || state.response.nextAction !== "reconcile" ||
+      !id || !workspaceIsCurrent(workspace) || recoveryBusy() ||
+      !installRecoveryMatches(state.response, id, workspace, props.installingPrincipalId)
+    ) return;
+    const epoch = recoveryFence.begin();
+    setRecoveryBusy(true);
+    try {
+      const response = await reconcileGitInstallPlan(id);
+      if (disposed || !recoveryFence.isCurrent(epoch) || installRecoveryId(location.search) !== id || !workspaceIsCurrent(workspace)) return;
+      setRecovery(
+        installRecoveryMatches(response, id, workspace, props.installingPrincipalId)
+          ? { status: "ready", response }
+          : { status: "unavailable" },
+      );
+    } catch {
+      if (!disposed && recoveryFence.isCurrent(epoch) && installRecoveryId(location.search) === id && workspaceIsCurrent(workspace)) {
+        // A failed explicit mutation is unknown, so only a fresh GET is offered.
+        setRecovery({ status: "unavailable" });
+      }
+    } finally {
+      if (recoveryFence.isCurrent(epoch)) setRecoveryBusy(false);
+    }
+  };
+
+  const clearRecovery = () => {
+    recoveryFence.invalidate();
+    setRecoveryBusy(false);
+    navigate(location.pathname, { replace: true });
+    setRecovery({ status: "unavailable" });
+    reset();
+  };
 
   const validateBasic = (): string | undefined => {
     if (!gitUrl().trim()) return t("installStore.invalidSource");
@@ -1422,6 +1516,13 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const submitInstallPlan = async (attempt: InstallPlanAttempt) => {
     const workspace = attempt.workspaceId;
     if (!workspaceIsCurrent(workspace)) return;
+    const requestPath = location.pathname;
+    const requestSearch = location.search;
+    let acknowledgedPlanId: string | undefined;
+    const routeStillOwnsPlan = (id: string) =>
+      installRecoveryRouteMatches(
+        location.pathname, location.search, requestPath, requestSearch, id,
+      );
     setPreparationStage("plan");
     setPhase("preparing");
     setBusy(true);
@@ -1430,9 +1531,31 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       const response = await createReviewableGitInstallPlan(
         workspace,
         installPlanAttemptRequest(attempt),
-        { idempotencyKey: attempt.idempotencyKey },
+        {
+          idempotencyKey: attempt.idempotencyKey,
+          onProgress: (progress) => {
+            if (
+              !disposed && installPlanAttempt === attempt &&
+              workspaceIsCurrent(workspace) &&
+              routeStillOwnsPlan(progress.installPlan.id) &&
+              installRecoveryMatches(
+                progress, progress.installPlan.id, workspace, props.installingPrincipalId,
+              )
+            ) {
+              acknowledgedPlanId = progress.installPlan.id;
+              // Only the opaque acknowledged ID survives reload. Never persist
+              // variables, request JSON, idempotency keys, or approval consent.
+              navigate(`${location.pathname}${installRecoverySearch(progress.installPlan.id)}`, {
+                replace: true,
+              });
+            }
+          },
+        },
       );
-      if (!workspaceIsCurrent(workspace)) return;
+      if (
+        disposed || installPlanAttempt !== attempt ||
+        !workspaceIsCurrent(workspace) || !routeStillOwnsPlan(response.installPlan.id)
+      ) return;
       const currentCapsuleId = response.installPlan.capsuleId;
       const runId = response.installPlan.planRunId;
       if (!currentCapsuleId || !runId) {
@@ -1443,12 +1566,17 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       clearCurrentStateVersionCache(workspace);
       clearDashboardOverviewCache(workspace);
       setPlanRunId(runId);
+      if (hasInstallRecoveryLocator(location.search)) {
+        navigate(location.pathname, { replace: true });
+      }
       setPhase("review");
     } catch (cause) {
+      if (disposed || installPlanAttempt !== attempt || !workspaceIsCurrent(workspace)) return;
       if (
         cause instanceof ControlApiError &&
         cause.status > 0 &&
-        cause.status < 500
+        cause.status < 500 &&
+        !acknowledgedPlanId
       ) {
         if (installPlanAttempt === attempt) installPlanAttempt = undefined;
       }
@@ -1630,6 +1758,80 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   };
 
   return (
+    <>
+      <Show when={hasInstallRecoveryLocator(location.search)}>
+        <main class="iv-page">
+          <section class="iv-workbench iv-centered" data-testid="install-plan-recovery">
+            <Show when={recovery().status === "loading"}>
+              <Spinner size={24} />
+              <h2>{t("common.loading")}</h2>
+            </Show>
+            <Show when={recovery().status === "unavailable"}>
+              <h2>{t("installStore.recoveryUnverified")}</h2>
+              <p>{t("installStore.recoveryUnverifiedHint")}</p>
+              <div class="iv-action-row">
+                <Button type="button" variant="secondary" onClick={() => {
+                  const id = installRecoveryId(location.search);
+                  if (id) void loadRecovery(id, currentWorkspaceId());
+                }}>{t("common.retry")}</Button>
+                <Button type="button" variant="ghost" onClick={clearRecovery}>
+                  {t("installStore.chooseAnother")}
+                </Button>
+              </div>
+            </Show>
+            <Show when={recovery().status === "ready" ? recovery() as { status: "ready"; response: GitInstallPlanResponse } : undefined}>
+              {(ready) => {
+                const response = ready().response;
+                const presentation = installRecoveryPresentation(response);
+                return (
+                  <>
+                    <h2>{
+                      presentation === "review" ? t("installStore.recoveryReview") :
+                      presentation === "failed_run" ? t("installStore.recoveryFailedRun") :
+                      presentation === "failed" ? t("installStore.recoveryFailed") :
+                      presentation === "continue" ? t("installStore.recoveryContinue") :
+                      t("installStore.recoveryUnverified")
+                    }</h2>
+                    <p>{
+                      presentation === "review" ? t("installStore.recoveryReviewHint") :
+                      presentation === "failed_run" ? t("installStore.recoveryFailedRunHint") :
+                      presentation === "failed" ? t("installStore.recoveryFailedHint") :
+                      presentation === "continue" ? t("installStore.recoveryContinueHint") :
+                      t("installStore.recoveryUnverifiedHint")
+                    }</p>
+                    <p data-testid="install-plan-recovery-phase">{response.installPlan.phase}</p>
+                    <Show when={response.installPlan.diagnostic?.message}>
+                      {(message) => <p role="status">{message()}</p>}
+                    </Show>
+                    <div class="iv-action-row">
+                      <Show when={presentation === "continue"}>
+                        <Button type="button" variant="primary" busy={recoveryBusy()}
+                          onClick={() => void continueRecovery()}>
+                          {t("installStore.continue")}
+                        </Button>
+                      </Show>
+                      <Show when={presentation === "review"}>
+                        <Button variant="primary" href={`/runs/${encodeURIComponent(response.installPlan.planRunId!)}`}>
+                          {t("installStore.stepReview")}
+                        </Button>
+                      </Show>
+                      <Show when={presentation === "failed_run"}>
+                        <Button variant="secondary" href={`/runs/${encodeURIComponent(response.installPlan.planRunId!)}`}>
+                          {t("installStore.runDetails")}
+                        </Button>
+                      </Show>
+                      <Button type="button" variant="ghost" onClick={clearRecovery}>
+                        {t("installStore.chooseAnother")}
+                      </Button>
+                    </div>
+                  </>
+                );
+              }}
+            </Show>
+          </section>
+        </main>
+      </Show>
+      <Show when={!hasInstallRecoveryLocator(location.search)}>
     <main class="iv-page">
       <header class="iv-hero">
         <div>
@@ -2247,5 +2449,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         </section>
       </Show>
     </main>
+      </Show>
+    </>
   );
 }
