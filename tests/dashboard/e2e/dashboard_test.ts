@@ -1220,6 +1220,66 @@ test.describe("Takosumi dashboard browser surface", () => {
     traffic.assertNoFailures();
   });
 
+  test("reload reads the accepted install coordinator and links a terminal Plan without automatic mutation", async ({
+    page,
+  }) => {
+    test.skip(mode !== "portable", "acknowledged install recovery fixture is portable-only");
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
+    const planId = "gip_0123456789abcdef";
+    const runId = "plan_0123456789abcdef";
+    const recoveryUrl = `/new?installPlan=${planId}`;
+    const coordinatorReads: string[] = [];
+    const mutations: string[] = [];
+    let phase: "reviewable" | "failed" = "reviewable";
+    page.on("request", (request) => {
+      const path = new URL(request.url()).pathname;
+      if (path.startsWith("/api/v1/") && request.method() !== "GET") {
+        mutations.push(`${request.method()} ${path}`);
+      }
+    });
+    await page.route(`**/api/v1/install-plans/${planId}`, async (route) => {
+      const request = route.request();
+      expect(request.method()).toBe("GET");
+      coordinatorReads.push(request.url());
+      await route.fulfill({
+        json: {
+          installPlan: {
+            id: planId,
+            operation: "install",
+            workspaceId: "ws_alpha",
+            createdBy: "sub_portable_e2e",
+            planRunId: runId,
+            phase,
+            generation: phase === "reviewable" ? 5 : 6,
+          },
+          nextAction: phase === "reviewable" ? "review_run" : "none",
+          links: { self: `/api/v1/install-plans/${planId}`, run: `/api/v1/runs/${runId}` },
+        },
+      });
+    });
+
+    await gotoDashboardDocument(page, recoveryUrl);
+    await expect(page.getByTestId("install-plan-recovery-phase")).toHaveText("reviewable");
+    await expect(page.getByRole("heading", { name: /初回導入の確認|Initial review is ready/u })).toBeVisible();
+    await expect(page.locator(`[data-testid="install-plan-recovery"] a[href="/runs/${runId}"]`)).toBeVisible();
+    expect(coordinatorReads).toHaveLength(1);
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("install-plan-recovery-phase")).toHaveText("reviewable");
+    expect(coordinatorReads).toHaveLength(2);
+
+    phase = "failed";
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("install-plan-recovery-phase")).toHaveText("failed");
+    await expect(page.getByRole("heading", { name: /導入の準備は停止|Install preparation stopped/u })).toBeVisible();
+    await expect(page.locator(`[data-testid="install-plan-recovery"] a[href="/runs/${runId}"]`)).toBeVisible();
+    expect(coordinatorReads).toHaveLength(3);
+    expect(mutations).toEqual([]);
+    await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
+  });
+
   test("supported resources show every compatible Host/account before Plan", async ({
     page,
   }) => {
