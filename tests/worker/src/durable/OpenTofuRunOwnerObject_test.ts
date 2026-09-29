@@ -8,6 +8,60 @@ import {
 import { OpenTofuRunOwnerObject } from "../../../../worker/src/durable/OpenTofuRunOwnerObject.ts";
 import { createVirtualAlarmClock } from "../../../helpers/lifecycle/virtual_alarm_clock.ts";
 import type { CloudflareWorkerEnv } from "../../../../worker/src/bindings.ts";
+import type { QueuedMutationFence } from "../../../../core/domains/deploy-control/run-engine/run_engine.ts";
+
+for (const action of ["apply", "destroy"] as const) {
+  test(`OpenTofu ${action} mutation survives multiple owner reconstructions beyond 15 minutes`, async () => {
+    const startedAt = Date.parse("2026-06-22T08:00:00.000Z");
+    const clock = createVirtualAlarmClock({ startedAt, maxDispatches: 100, minDelayMs: 10_000 });
+    const fence: QueuedMutationFence = {
+      kind: "takosumi.queued-mutation-fence@v1",
+      runId: "run_1",
+      workspaceId: "space_1",
+      planRunId: "plan_1",
+      action,
+      runLeaseToken: "private-run-lease-token",
+      coordinationLease: { scope: "plan:plan_1", holderId: "run_1", token: "private-coordination-token" },
+      phase: "prepared",
+      credentialSequence: 0,
+    };
+    let begins = 0;
+    let advances = 0;
+    const deps = {
+      now: clock.now,
+      beginMutation: async () => {
+        begins += 1;
+        return { kind: "pending" as const, fence };
+      },
+      advanceMutation: async (current: QueuedMutationFence) => {
+        advances += 1;
+        assert.equal(current.runId, "run_1");
+        assert.equal(current.credentialSequence, advances - 1);
+        return advances > 95
+          ? { kind: "settled" as const, status: "succeeded" as const }
+          : { kind: "pending" as const, fence: { ...current, phase: "observing" as const, credentialSequence: advances } };
+      },
+    };
+    let owner = new OpenTofuRunOwnerObject({ storage: clock.storage }, {} as CloudflareWorkerEnv, deps);
+    await start(owner, action);
+    const run = await clock.drain(async () => {
+      if (advances === 31 || advances === 67) {
+        owner = new OpenTofuRunOwnerObject({ storage: clock.storage }, {} as CloudflareWorkerEnv, deps);
+      }
+      await owner.alarm();
+      const debug = await owner.fetch(new Request("https://run-owner/debug"));
+      const text = await debug.text();
+      assert.equal(text.includes("private-run-lease-token"), false);
+      assert.equal(text.includes("private-coordination-token"), false);
+    });
+    assert.equal(begins, 1);
+    assert.equal(advances, 96);
+    assert.ok(clock.now() - startedAt > 15 * 60_000);
+    assert.equal(run.dispatches, 96);
+    assert.equal((await clock.storage.get<{ status: string }>("run"))?.status, "succeeded");
+    assert.equal(await clock.storage.get("mutation-fence"), undefined);
+  });
+}
 
 test("OpenTofu run owner stores identity only and schedules an alarm", async () => {
   const storage = new FakeDoStorage();

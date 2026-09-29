@@ -3192,6 +3192,19 @@ export interface OpenTofuControlStore {
     expectedCapsule?: CapsuleApplyRunAdmissionFence,
   ): Promise<BeginApplyRunResult>;
   getApplyRun(id: string): Promise<ApplyRun | undefined>;
+  /**
+   * Under the Plan or Capsule lease, reject a different Apply while a prior
+   * mutation may still be live or has no authoritative state receipt. A queued
+   * sibling is blocking only when it precedes the contender in stable order;
+   * otherwise two queued siblings would deadlock. An expired lease/heartbeat
+   * is not evidence that the provider process stopped.
+   */
+  hasBlockingApplyRunForPlan(
+    planRunId: string,
+    excludeApplyRunId: string,
+    workspaceId: string,
+    candidate?: Pick<ApplyRun, "id" | "createdAt">,
+  ): Promise<boolean>;
 
   /**
    * Status-conditional, lease-fenced compare-and-set transition of a run row.
@@ -4166,6 +4179,24 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(
       run && isApplyRunRecord(run) ? publicStoredRun(coerceRunRowStatus(run)!) : undefined,
     );
+  }
+
+  hasBlockingApplyRunForPlan(
+    planRunId: string,
+    excludeApplyRunId: string,
+    workspaceId: string,
+    candidate?: Pick<ApplyRun, "id" | "createdAt">,
+  ): Promise<boolean> {
+    for (const row of this.#runs.values()) {
+      if (
+        isApplyRunRecord(row) &&
+        row.id !== excludeApplyRunId &&
+        row.workspaceId === workspaceId &&
+        row.planRunId === planRunId &&
+        blocksAnotherApplyForPlan(row, candidate)
+      ) return Promise.resolve(true);
+    }
+    return Promise.resolve(false);
   }
 
   /**
@@ -7413,6 +7444,31 @@ export function applyRunMutationDispatched(row: ApplyRun): boolean {
     (event) => event.data?.providerDispatched === true,
   );
   return providerRunnerInvoked && !applyRunStoppedBeforeProviderMutation(row);
+}
+
+/**
+ * A different Apply of the same Plan cannot infer safety from a stale
+ * heartbeat, expired coordination lease, or a terminal error without an exact
+ * runner receipt. This predicate is shared by memory/Postgres/D1 adapters.
+ */
+export function blocksAnotherApplyForPlan(
+  row: ApplyRun,
+  candidate?: Pick<ApplyRun, "id" | "createdAt">,
+): boolean {
+  if (row.status === "queued") {
+    if (!candidate || !Number.isFinite(row.createdAt) ||
+      !Number.isFinite(candidate.createdAt) || !candidate.id) return true;
+    return row.createdAt < candidate.createdAt ||
+      (row.createdAt === candidate.createdAt && row.id < candidate.id);
+  }
+  if (row.status === "running") return true;
+  if (row.status === "succeeded") return true;
+  if (row.status === "expired" && row.startedAt !== undefined) return true;
+  if (
+    (row.status === "failed" || row.status === "cancelled") &&
+    applyRunMutationDispatched(row)
+  ) return true;
+  return false;
 }
 
 export function capsuleRuntimeSafetyFromRun(

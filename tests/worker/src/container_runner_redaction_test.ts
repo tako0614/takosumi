@@ -966,6 +966,160 @@ test("container runner release observer sends only the exact value-free selector
   }]);
 });
 
+test("async mutation and release keep exact observation pending across lost acknowledgements", async () => {
+  const calls: { id: string; path: string; body: unknown }[] = [];
+  const attempts = new Map<string, number>();
+  const env = {
+    RUNNER: {
+      idFromName: (name: string) => name,
+      get: (id: string) => ({
+        fetch: async (request: Request) => {
+          const path = new URL(request.url).pathname;
+          const body = request.method === "POST" ? await request.clone().json() : undefined;
+          calls.push({ id, path, body });
+          const attemptKey = `${id} ${path}`;
+          const attempt = (attempts.get(attemptKey) ?? 0) + 1;
+          attempts.set(attemptKey, attempt);
+          if (attempt === 1 && (path.endsWith("/observe") || path === "/runs/plan_lost_ack" || path === "/runs/release_apply_lost_ack")) {
+            throw new Error("simulated DO response loss");
+          }
+          return Response.json(
+            path.endsWith("/observe") || path === "/runs/plan_lost_ack" || path === "/runs/release_apply_lost_ack"
+              ? { kind: "pending" }
+              : { error: "unexpected route" },
+            { status: path.endsWith("/observe") || path === "/runs/plan_lost_ack" || path === "/runs/release_apply_lost_ack" ? 202 : 500 },
+          );
+        },
+      }),
+    },
+  } as unknown as CloudflareWorkerEnv;
+  const runner = new CloudflareContainerOpenTofuRunner(env);
+  const mutation = {
+    action: "apply" as const,
+    job: {
+      applyRun: { id: "apply_lost_ack" },
+      planRun: { id: "plan_lost_ack" },
+      planArtifact: {
+        kind: "runner-local",
+        ref: "runner-local://plan_lost_ack/tfplan",
+        digest: PLAN_DIGEST,
+      },
+    } as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0],
+  };
+  const mutationSelector = {
+    kind: "takosumi.runner-mutation-observation@v1" as const,
+    action: "apply" as const,
+    applyRunId: "apply_lost_ack",
+    runnerRunId: "plan_lost_ack",
+    planRunId: "plan_lost_ack",
+    stateScope: {
+      workspaceId: "workspace_lost_ack",
+      subject: { kind: "resource" as const, id: "resource_lost_ack" },
+      environment: "production",
+      generation: 1,
+      stateRef: "states/lost-ack.tfstate",
+    },
+    commit: { stateVersionId: "state-version-lost-ack" },
+    plan: { digest: PLAN_DIGEST, artifactDigest: PLAN_DIGEST },
+  };
+  const releaseJob = {
+    runId: "release_apply_lost_ack",
+    applyRunId: "apply_lost_ack",
+    actionIds: ["activate"],
+    commands: [{ id: "activate", command: ["true"] }],
+    sourceSnapshot: {
+      id: "snapshot_lost_ack",
+      archiveRef: "runner-local://snapshot_lost_ack/archive.tar.gz",
+      archiveDigest: PLAN_DIGEST,
+      resolvedCommit: "commit_lost_ack",
+    },
+    capsuleId: "capsule_lost_ack",
+    stateVersionId: "state-version-lost-ack",
+    nonSensitiveOutputs: {},
+    providerConfigurations: [],
+  } as unknown as Parameters<CloudflareContainerOpenTofuRunner["submitRelease"]>[0];
+  const releaseSelector = {
+    kind: "takosumi.runner-release-observation@v1" as const,
+    releaseRunId: "release_apply_lost_ack",
+    applyRunId: "apply_lost_ack",
+    actionIds: ["activate"],
+  };
+
+  expect(await runner.submitMutation(mutation)).toEqual({ kind: "pending" });
+  expect(await runner.observeMutation(mutationSelector)).toEqual({ kind: "pending" });
+  expect(await runner.observeMutation(mutationSelector)).toEqual({ kind: "pending" });
+  expect(await runner.submitRelease(releaseJob)).toEqual({ kind: "pending" });
+  expect(await runner.observeRelease(releaseSelector)).toEqual({ kind: "pending" });
+  expect(await runner.observeRelease(releaseSelector)).toEqual({ kind: "pending" });
+
+  expect(calls.filter((call) => call.path === "/runs/plan_lost_ack")).toHaveLength(1);
+  expect(calls.filter((call) => call.path === "/runs/plan_lost_ack/observe")).toHaveLength(2);
+  expect(calls.filter((call) => call.path === "/runs/release_apply_lost_ack")).toHaveLength(1);
+  expect(calls.filter((call) => call.path === "/runs/release_apply_lost_ack/observe")).toHaveLength(2);
+  expect(calls.some((call) => call.path.endsWith("/stop"))).toBe(false);
+});
+
+test("container runner stop requests forward only exact observation selectors", async () => {
+  const calls: { id: string; path: string; body: unknown; timeout: boolean }[] = [];
+  const env = {
+    RUNNER: {
+      idFromName: (name: string) => name,
+      get: (id: string) => ({
+        fetch: async (request: Request) => {
+          calls.push({
+            id,
+            path: new URL(request.url).pathname,
+            body: await request.clone().json(),
+            timeout: request.signal.aborted === false,
+          });
+          return Response.json({ kind: "acknowledged" });
+        },
+      }),
+    },
+  } as unknown as CloudflareWorkerEnv;
+  const runner = new CloudflareContainerOpenTofuRunner(env);
+  const mutationSelector = {
+    kind: "takosumi.runner-mutation-observation@v1" as const,
+    action: "apply" as const,
+    applyRunId: "apply_async_stop_adapter",
+    runnerRunId: "plan_async_stop_adapter",
+    planRunId: "plan_async_stop_adapter",
+    stateScope: {
+      workspaceId: "workspace_async_stop_adapter",
+      subject: { kind: "resource" as const, id: "resource_async_stop_adapter" },
+      environment: "production",
+      generation: 1,
+      stateRef: "states/async-stop-adapter.tfstate",
+    },
+    rawOutputRef: "outputs/async-stop-adapter.enc",
+    commit: { stateVersionId: "state-version-async-stop-adapter", outputId: "output-async-stop-adapter" },
+    plan: { digest: PLAN_DIGEST, artifactDigest: PLAN_DIGEST },
+  };
+  const releaseSelector = {
+    kind: "takosumi.runner-release-observation@v1" as const,
+    releaseRunId: "release_apply_async_stop_adapter",
+    applyRunId: "apply_async_stop_adapter",
+    actionIds: ["activate"],
+  };
+
+  expect(await runner.stopMutation(mutationSelector)).toBe("acknowledged");
+  expect(await runner.stopRelease(releaseSelector)).toBe("acknowledged");
+  expect(calls).toEqual([
+    {
+      id: mutationSelector.applyRunId,
+      path: `/runs/${mutationSelector.runnerRunId}/stop`,
+      body: mutationSelector,
+      timeout: true,
+    },
+    {
+      id: releaseSelector.applyRunId,
+      path: `/runs/${releaseSelector.releaseRunId}/stop`,
+      body: releaseSelector,
+      timeout: true,
+    },
+  ]);
+});
+
 test("container runner redacts stderr before apply diagnostics are returned", async () => {
   const runner = new CloudflareContainerOpenTofuRunner(
     envReturning({

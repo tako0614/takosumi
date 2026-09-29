@@ -1,6 +1,6 @@
 import type { Capsule } from "takosumi-contract/capsules";
 
-import type { OpenTofuControlStore } from "./store.ts";
+import { applyRunMutationDispatched, type OpenTofuControlStore } from "./store.ts";
 import { exactCommittedPostApplyRecoveryRowsMatch } from "./committed_post_apply_recovery.ts";
 
 export type CapsuleRunCredentialPhase = "plan" | "apply" | "destroy";
@@ -208,6 +208,24 @@ export async function capsuleRunRuntimeSafetyMatches(
           persistedProviderPartialApplyRecoveryMatches ||
           committedPostApplyRecoveryMatches;
   if (!runtimeSafetyMatches) return false;
+  if (currentApplyExecutionMatches) {
+    // A newly claimed Apply is the newest unknown safety candidate and must
+    // not hide an older provider process after its coordination TTL expires.
+    const prior = await store.getCapsuleRuntimeSafety(capsuleId, { excludeRunId: runId });
+    if (prior === undefined || prior.phase === "safe") return true;
+    if (prior.phase !== "unknown" || prior.runType !== "apply") return false;
+    const priorRun = await store.getApplyRun(prior.runId);
+    if (priorRun && (priorRun.status === "failed" || priorRun.status === "cancelled") &&
+      !applyRunMutationDispatched(priorRun)) return true;
+    if (capsule.currentStateVersionId === undefined ||
+      plannedCapsuleStateVersionId !== capsule.currentStateVersionId) return false;
+    return (
+      (await persistedProviderPartialApplyMatches(
+        store, prior.runId, workspaceId, capsuleId, capsule.currentStateVersionId,
+      )) ||
+      (await committedPostApplyRecoveryRowsMatch(store, prior.runId, capsule))
+    );
+  }
   if (phase !== "destroy") return true;
 
   // A queued/running Destroy is deliberately the latest runtime-safety

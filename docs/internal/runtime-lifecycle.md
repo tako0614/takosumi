@@ -71,3 +71,47 @@ operator は immediate predecessor または out-of-band database tooling で in
 `maxDispatches` を超えた再武装と `minDelayMs` を下回る再武装を失敗にする。
 「alarm を 2 回呼んで counter を assert する」テストは、ループが止まることを
 何も証明しない (テストが止まっただけ) ため、この harness を通す。
+
+## Mutating Run の private continuation
+
+Cloudflare の Apply / Destroy は、RUN_OWNER alarm が OpenTofu の完了まで一回の
+`fetch` を待たない。Core は既存の ApplyRun と Coordination lease を先に確保し、
+RUN_OWNER は両 token と非秘密の phase を main owner record とは別の private
+storage key に書き終えてから次の一歩を実行する。main record を返す debug route に
+lease token、credential value、operator job URL を載せない。
+
+各 alarm は Run heartbeat と Coordination lease の同一 token を更新した後、
+既存 Runner DO の exact claim に一回だけ submit するか、immutable target witness
+に一致する value-free selector で observe する。selector は権限そのものではなく、
+private Core→Runner binding と現在の Run/lease custody が前提である。失われた
+submit ACK、DO 再構築、container 消失は新しい provider POST の許可ではない。
+Core は provider selector と `observing` phase を最初の POST より前に保存する。
+POST が届かなかった場合も、再開時は新しい credential を mint／再 submit せず、
+exact claim/receipt の readback がなければ indeterminate とする。
+`preparing` と `dispatched` の境界、exact R2 receipt、Core の Run/State/Output/Capsule
+atomic CAS がそれぞれ別の証拠を持つ。diagnostic inspection の witness は単独の
+adoption authority ではない。
+Runner DO の private observation は稼働中 container のみへ no-start で接続し、
+有効な Run/lease から来た pending 観測だけが activity timeout を延長する。
+通常 cadence は 10 秒で、owner 停止後は延長されず container が停止し得る。
+この場合も結果不明を再 dispatch しない。durable receipt 消費後には exact result
+ACK を再試行し、container 内の terminal response を破棄する。
+
+Destroy の `pre_destroy` runner command → operator job → provider teardown、Apply の
+provider mutation → `post_apply` runner command → operator job → atomic terminal commit
+という順序を保つ。RUN_OWNER は各 runner/partner POST の前に private send fence を
+checkpoint し、再開時には runner release claim または保存済み operator job reference
+だけを observe する。operator POST ACK を失って job reference が不明なら再 POST
+せず indeterminate にする。provider receipt だけでは post-apply 完了でも Capsule
+active でもない。pre-destroy success audit は provider teardown より前に Core CAS
+で保存する。
+
+Runner の accepted credential sequence/expiry は値なしで照合し、更新が必要な時だけ
+broker から sequence `N+1` を mint する。PUT ACK 消失は Runner の同一 sequence
+readback でのみ解決する。旧 sequence 0 を poll ごとに mint し直さない。lease 喪失、
+資格更新失敗、または cancel で停止要求を送れても、stop ACK は provider の不実行や
+成功を証明しない。exact receipt がない限り同 scope の別 write を許さず、operator
+による明示的な解決を要する。
+同一 Plan の別 Apply は create/update/destroy すべてで、先行 queued Run、実行中 Run、
+dispatch 後未解決 Run によって遮断する。queued 同士は作成時刻と ID の安定順で
+先行 Run のみを優先し、互いの待ちによる停止を避ける。

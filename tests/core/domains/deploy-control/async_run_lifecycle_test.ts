@@ -9,7 +9,10 @@ import {
   type OpenTofuRunner,
   OpenTofuRunnerExecutionError,
   OpenTofuRunnerInfrastructureError,
+  type OpenTofuMutationRequest,
+  type OpenTofuMutationCredentialStatus,
 } from "../../../../core/domains/deploy-control/mod.ts";
+import { CapsuleLeaseBusyError, InMemoryCapsuleCoordination, type CapsuleCoordination, type CapsuleLease } from "../../../../core/domains/deploy-control/capsule_lease.ts";
 import {
   type BeginApplyRunResult,
   type CapsuleApplyRunAdmissionFence,
@@ -38,9 +41,11 @@ import {
 } from "../../../../core/adapters/vault/mod.ts";
 import type {
   ApplyRun,
+  InstallConfig,
   ProviderConnection,
   CreatePlanRunRequest,
 } from "@takosumi/internal/deploy-control-api";
+import { CAPSULE_LIFECYCLE_COMMAND_CAPABILITY } from "takosumi-contract/install-configs";
 
 const SOURCE = {
   kind: "git",
@@ -67,6 +72,680 @@ const CLOUDFLARE_MIRROR_EVIDENCE = {
 const RUNNER_CONTAINER_CAPACITY_EXCEEDED =
   "OpenTofu runner rejected destroy-plan run plan_live: 500 (Maximum number of running container instances exceeded. Try again later, or try configuring a higher value for max_instances)";
 
+test("a fenced Apply is observed past 15 minutes without another provider submit", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let now = Date.parse("2026-06-22T08:00:00.000Z");
+  const ordinary = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: () => now,
+    newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner: stubRunner(),
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+  });
+  const { planRun: queuedPlan } = await ordinary.createPlanRun(
+    await seedUpdatable(store, { capsuleId: "cap_durable_apply" }),
+  );
+  await ordinary.runQueuedPlan(queuedPlan.id);
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  const { applyRun } = await ordinary.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  let submitCalls = 0;
+  let observeCalls = 0;
+  let accepted: OpenTofuMutationRequest | undefined;
+  const runner: OpenTofuRunner = {
+    ...stubRunner(),
+    submitMutation: async (mutation) => {
+      submitCalls += 1;
+      accepted = mutation;
+      return { kind: "pending" };
+    },
+    observeMutation: async (selector) => {
+      observeCalls += 1;
+      expect(selector.applyRunId).toBe(applyRun.id);
+      expect(selector.planRunId).toBe(planRun.id);
+      expect(selector.runnerRunId).toBe(planRun.id);
+      expect(selector.action).toBe("apply");
+      if (observeCalls < 31) return { kind: "pending" };
+      const job = accepted!.job as OpenTofuApplyJob;
+      return { kind: "completed", result: fixtureStateCommit({
+        rawOutputRef: job.rawOutputRef,
+        providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        executionEvidence: fixtureExecutionEvidence(job, "apply"),
+      }) };
+    },
+    inspectMutationCredentials: async () => ({ kind: "none" }),
+  };
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: () => now,
+    newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner,
+    capsuleCoordination: new InMemoryCapsuleCoordination({ now: () => now }),
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+  });
+  const begun = await controller.beginQueuedMutation(applyRun.id);
+  expect(begun.kind).toBe("pending");
+  if (begun.kind !== "pending") return;
+  let fence = begun.fence;
+  for (let step = 0; step < 32; step += 1) {
+    const outcome = await controller.advanceQueuedMutation(fence, async (next) => { fence = next; });
+    if (outcome.kind === "settled") {
+      expect(outcome.status).toBe("succeeded");
+      break;
+    }
+    expect(outcome.kind).toBe("pending");
+    if (outcome.kind !== "pending") return;
+    fence = outcome.fence;
+    now += 30_000;
+  }
+  expect(now - Date.parse("2026-06-22T08:00:00.000Z")).toBeGreaterThanOrEqual(15 * 60_000);
+  expect(submitCalls).toBe(1);
+  expect(observeCalls).toBe(31);
+  expect((await store.getApplyRun(applyRun.id))?.status).toBe("succeeded");
+});
+
+test("lost provider submit ACK restarts in observation without stop, redispatch, or ordinal-zero remint", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let now = Date.parse("2026-06-22T08:00:00.000Z");
+  const ids = deterministicIds();
+  const vault = fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } });
+  const ordinary = new OpenTofuController({
+    store, artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: () => now, newId: ids, executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner: stubRunner(), vault, enqueueRun: noopEnqueue,
+  });
+  const { planRun: queued } = await ordinary.createPlanRun(
+    await seedUpdatable(store, { capsuleId: "cap_lost_submit_ack" }),
+  );
+  await ordinary.runQueuedPlan(queued.id);
+  const plan = (await store.getPlanRun(queued.id))!;
+  const { applyRun } = await ordinary.createApplyRun({
+    planRunId: plan.id, expected: applyExpectedGuardFromPlanRun(plan),
+  });
+  let submits = 0;
+  let observes = 0;
+  let stops = 0;
+  let accepted: OpenTofuMutationRequest | undefined;
+  const controller = new OpenTofuController({
+    store, artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: () => now, newId: ids, executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner: {
+      ...stubRunner(),
+      submitMutation: async (mutation) => {
+        submits++;
+        accepted = mutation;
+        throw new Error("lost runner submit acknowledgement");
+      },
+      observeMutation: async (selector) => {
+        observes++;
+        expect(selector.applyRunId).toBe(applyRun.id);
+        if (observes < 32) return { kind: "pending" };
+        const job = accepted!.job as OpenTofuApplyJob;
+        return { kind: "completed", result: fixtureStateCommit({
+          rawOutputRef: job.rawOutputRef,
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+          executionEvidence: fixtureExecutionEvidence(job, "apply"),
+        }) };
+      },
+      inspectMutationCredentials: async () => ({ kind: "none" }),
+      stopMutation: async () => { stops++; return "acknowledged"; },
+    },
+    capsuleCoordination: new InMemoryCapsuleCoordination({ now: () => now }),
+    vault, enqueueRun: noopEnqueue,
+  });
+  const begun = await controller.beginQueuedMutation(applyRun.id);
+  expect(begun.kind).toBe("pending");
+  if (begun.kind !== "pending") return;
+  let fence = begun.fence;
+  await expect(controller.advanceQueuedMutation(fence, async (next) => { fence = next; }))
+    .rejects.toThrow("lost runner submit acknowledgement");
+  expect(fence.phase).toBe("observing");
+  for (let poll = 0; poll < 32; poll++) {
+    now += 30_000;
+    const step = await controller.advanceQueuedMutation(fence, async (next) => { fence = next; });
+    if (step.kind === "settled") {
+      expect(step.status).toBe("succeeded");
+      break;
+    }
+    expect(step.kind).toBe("pending");
+    if (step.kind !== "pending") return;
+    fence = step.fence;
+  }
+  expect(submits).toBe(1);
+  expect(observes).toBe(32);
+  expect(stops).toBe(0);
+  expect((await store.getApplyRun(applyRun.id))?.status).toBe("succeeded");
+});
+
+test("an expired Capsule lease cannot admit another Apply of the same update or destroy Plan", async () => {
+  for (const operation of ["update", "destroy"] as const) {
+    const store = new InMemoryOpenTofuControlStore();
+    let now = Date.parse("2026-06-22T08:00:00.000Z");
+    const ids = deterministicIds();
+    const vault = fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } });
+    const ordinary = new OpenTofuController({
+      store, artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+      now: () => now, newId: ids, executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+      runner: stubRunner(), vault, enqueueRun: noopEnqueue,
+    });
+    const capsuleId = `cap_same_plan_${operation}`;
+    const updateRequest = await seedUpdatable(store, { capsuleId });
+    if (operation === "destroy") {
+      const seededCapsule = (await store.getCapsule(capsuleId))!;
+      await store.putCapsule({ ...seededCapsule, currentStateVersionId: undefined, status: "pending" });
+      const { planRun: initial } = await ordinary.createCapsulePlan(capsuleId);
+      await ordinary.runQueuedPlan(initial.id);
+      const prepared = (await store.getPlanRun(initial.id))!;
+      const applied = await ordinary.createApplyRun({
+        planRunId: prepared.id, expected: applyExpectedGuardFromPlanRun(prepared),
+      });
+      expect((await ordinary.runQueuedApply(applied.applyRun.id))?.applyRun.status).toBe("succeeded");
+    }
+    const queued = operation === "destroy"
+      ? await ordinary.createCapsuleDestroyPlan(capsuleId)
+      : await ordinary.createPlanRun(updateRequest);
+    await ordinary.runQueuedPlan(queued.planRun.id);
+    if (operation === "destroy") await ordinary.approveRun(queued.planRun.id);
+    const plan = (await store.getPlanRun(queued.planRun.id))!;
+    const first = await ordinary.createApplyRun({
+      planRunId: plan.id, expected: applyExpectedGuardFromPlanRun(plan),
+    });
+    const second = await ordinary.createApplyRun({
+      planRunId: plan.id, expected: applyExpectedGuardFromPlanRun(plan),
+    });
+    expect(second.applyRun.id).not.toBe(first.applyRun.id);
+    const controller = new OpenTofuController({
+      store, artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+      now: () => now, newId: ids, executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+      runner: {
+        ...stubRunner(),
+        submitMutation: async () => ({ kind: "pending" }),
+        observeMutation: async () => ({ kind: "pending" }),
+      },
+      capsuleCoordination: new InMemoryCapsuleCoordination({ now: () => now }),
+      vault, enqueueRun: noopEnqueue,
+    });
+    expect((await controller.beginQueuedMutation(first.applyRun.id)).kind).toBe("pending");
+    // The owner disappeared without releasing its lease. Expiry is not proof
+    // that its provider process has stopped or that another Apply is safe.
+    now += 16 * 60_000;
+    let denied: unknown;
+    try {
+      await controller.beginQueuedMutation(second.applyRun.id);
+    } catch (error) {
+      denied = error;
+    }
+    expect(denied).toBeInstanceOf(CapsuleLeaseBusyError);
+    expect(denied).toMatchObject({ activeHolderId: "prior unresolved apply" });
+    expect((await store.getApplyRun(second.applyRun.id))?.status).toBe("queued");
+  }
+});
+
+test("lost Coordination lease requests exact stop without terminalizing an unknown provider", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let now = Date.parse("2026-06-22T08:00:00.000Z");
+  const ids = deterministicIds();
+  const vault = fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } });
+  const ordinary = new OpenTofuController({
+    store, artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: () => now, newId: ids, executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner: stubRunner(), vault, enqueueRun: noopEnqueue,
+  });
+  const { planRun: queuedPlan } = await ordinary.createPlanRun(
+    await seedUpdatable(store, { capsuleId: "cap_lost_durable_lease" }),
+  );
+  await ordinary.runQueuedPlan(queuedPlan.id);
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  const { applyRun } = await ordinary.createApplyRun({
+    planRunId: planRun.id, expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  const inner = new InMemoryCapsuleCoordination({ now: () => now });
+  let denyRenewal = false;
+  let acquired: CapsuleLease | undefined;
+  const coordination: CapsuleCoordination = {
+    acquireLease: async (input) => { acquired = await inner.acquireLease(input); return acquired; },
+    renewLease: (input) => denyRenewal
+      ? Promise.resolve({ ...acquired!, acquired: false })
+      : inner.renewLease(input),
+    releaseLease: (input) => inner.releaseLease(input),
+  };
+  let submits = 0;
+  let observes = 0;
+  let stops = 0;
+  const controller = new OpenTofuController({
+    store, artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: () => now, newId: ids, executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner: {
+      ...stubRunner(),
+      submitMutation: async () => { submits++; return { kind: "pending" }; },
+      observeMutation: async () => { observes++; return { kind: "pending" }; },
+      inspectMutationCredentials: async () => ({ kind: "none" }),
+      stopMutation: async (selector) => {
+        expect(selector.applyRunId).toBe(applyRun.id);
+        expect(selector.runnerRunId).toBe(planRun.id);
+        stops++;
+        return "acknowledged";
+      },
+    },
+    vault, enqueueRun: noopEnqueue, capsuleCoordination: coordination,
+  });
+  const begun = await controller.beginQueuedMutation(applyRun.id);
+  expect(begun.kind).toBe("pending");
+  if (begun.kind !== "pending") return;
+  let fence = begun.fence;
+  const first = await controller.advanceQueuedMutation(fence, async (next) => { fence = next; });
+  expect(first.kind).toBe("pending");
+  if (first.kind !== "pending") return;
+  fence = first.fence;
+  denyRenewal = true;
+  now += 30_000;
+  const stopped = await controller.advanceQueuedMutation(fence, async (next) => { fence = next; });
+  expect(stopped.kind).toBe("indeterminate");
+  expect(fence.stop?.provider).toBe("acknowledged");
+  expect(submits).toBe(1);
+  expect(observes).toBe(0);
+  expect(stops).toBe(1);
+  expect((await store.getApplyRun(applyRun.id))?.status).toBe("running");
+});
+
+test("observed renewable credential reconciles a lost PUT ACK across its initial expiry", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let now = Date.parse("2026-06-22T08:00:00.000Z");
+  const ids = deterministicIds();
+  const capsuleId = "cap_durable_renewable";
+  const request = await seedUpdatable(store, { capsuleId, providerVersion: "4.1.0" });
+  const connectionId = `conn_${capsuleId}`;
+  const connection = (await store.getConnection(connectionId))!;
+  await store.putConnection({
+    ...connection, materialization: "run-issued",
+    credentialRecipe: {
+      id: "test-renewable", authMode: "run",
+      envNames: ["CLOUDFLARE_API_TOKEN"], fileEnvNames: [],
+      requiredEnvGroups: [["CLOUDFLARE_API_TOKEN"]],
+      renewableEnv: {
+        sourceEnvName: "CLOUDFLARE_API_TOKEN", fileEnvName: "CLOUDFLARE_API_TOKEN_FILE",
+        minimumProviderVersion: "1.0.0",
+      },
+    },
+  });
+  let issues = 0;
+  let applyInitialMintNumber = 0;
+  const issuanceRefs: string[] = [];
+  const vault: ConnectionVault = {
+    ...fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    mintForCapsuleProviderBindings: async (_workspaceId, entries, options) => {
+      issues++;
+      issuanceRefs.push(options?.issuanceGenerationRef ?? "");
+      return new PhaseMintBundle(
+        { env: { CLOUDFLARE_API_TOKEN: `renewable-token-${issues}` } }, [],
+        entries.map((entry) => ({
+          provider: entry.provider, connectionId: entry.connectionId,
+          temporary: true, ttlEnforced: true,
+          ttlSeconds: issues === applyInitialMintNumber ? 121 : 300,
+          expiresAt: new Date(now + (issues === applyInitialMintNumber ? 121_000 : 300_000)).toISOString(),
+        })),
+      );
+    },
+  };
+  const ordinary = new OpenTofuController({
+    store, artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: () => now, newId: ids, executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner: { ...stubRunner(), assertCredentialRefreshCapability: async () => {},
+      refreshCredentials: async () => {} }, vault, enqueueRun: noopEnqueue,
+  });
+  const { planRun: queuedPlan } = await ordinary.createPlanRun(request);
+  await ordinary.runQueuedPlan(queuedPlan.id);
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  expect(planRun.status).toBe("succeeded");
+  applyInitialMintNumber = issues + 1;
+  const { applyRun } = await ordinary.createApplyRun({
+    planRunId: planRun.id, expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  let accepted: OpenTofuMutationRequest | undefined;
+  let credentialStatus: OpenTofuMutationCredentialStatus = { kind: "none" };
+  let submits = 0;
+  let observes = 0;
+  let refreshes = 0;
+  const runner: OpenTofuRunner = {
+    ...stubRunner(),
+    assertCredentialRefreshCapability: async () => {},
+    submitMutation: async (mutation) => {
+      submits++;
+      accepted = mutation;
+      const credentials = mutation.job.credentials!;
+      credentialStatus = {
+        kind: "active", manifestDigest: credentials.manifestDigest!,
+        sequence: 0, credentials: credentials.renewable!,
+      };
+      return { kind: "pending" };
+    },
+    observeMutation: async () => {
+      observes++;
+      if (observes < 7) return { kind: "pending" };
+      const job = accepted!.job as OpenTofuApplyJob;
+      return { kind: "completed", result: fixtureStateCommit({
+        rawOutputRef: job.rawOutputRef,
+        providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        executionEvidence: fixtureExecutionEvidence(job, "apply"),
+      }) };
+    },
+    inspectMutationCredentials: async () => credentialStatus,
+    refreshCredentials: async (update) => {
+      refreshes++;
+      credentialStatus = {
+        kind: "active", manifestDigest: update.manifestDigest,
+        sequence: update.sequence,
+        credentials: update.credentials.map(({ value: _value, ...descriptor }) => descriptor),
+      };
+      // The container committed this sequence, but its PUT ACK was lost.
+      throw new Error("lost credential PUT ACK");
+    },
+  };
+  const controller = new OpenTofuController({
+    store, artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: () => now, newId: ids, executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner, vault, enqueueRun: noopEnqueue,
+    capsuleCoordination: new InMemoryCapsuleCoordination({ now: () => now }),
+  });
+  const begun = await controller.beginQueuedMutation(applyRun.id);
+  expect(begun.kind).toBe("pending");
+  if (begun.kind !== "pending") return;
+  let fence = begun.fence;
+  let settled = false;
+  for (let poll = 0; poll < 9; poll++) {
+    const step = await controller.advanceQueuedMutation(fence, async (next) => { fence = next; });
+    if (step.kind === "settled") { settled = true; break; }
+    expect(step.kind).toBe("pending");
+    if (step.kind !== "pending") return;
+    fence = step.fence;
+    now += 30_000;
+  }
+  expect(settled).toBe(true);
+  expect((await store.getApplyRun(applyRun.id))?.status).toBe("succeeded");
+  expect(now - Date.parse("2026-06-22T08:00:00.000Z")).toBeGreaterThan(121_000);
+  expect(submits).toBe(1);
+  expect(issues).toBe(applyInitialMintNumber + 1);
+  expect(refreshes).toBe(1);
+  expect(issuanceRefs.slice(-2)[0]).not.toBe(issuanceRefs.slice(-2)[1]);
+  expect(JSON.stringify(await store.getApplyRun(applyRun.id))).not.toContain("renewable-token-");
+});
+
+test("post-apply operator job survives owner polling without re-POST or early ledger commit", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let now = Date.parse("2026-06-22T08:00:00.000Z");
+  const ids = deterministicIds();
+  const vault = fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } });
+  const ordinary = new OpenTofuController({
+    store, artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: () => now, newId: ids, executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner: stubRunner(), vault, enqueueRun: noopEnqueue,
+  });
+  const { planRun: queuedPlan } = await ordinary.createPlanRun(await seedUpdatable(store, {
+    capsuleId: "cap_durable_post_apply", installConfig: lifecycleConfig("post_apply"),
+  }));
+  await ordinary.runQueuedPlan(queuedPlan.id);
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  const { applyRun } = await ordinary.createApplyRun({
+    planRunId: planRun.id, expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  let submitCount = 0;
+  let observeCount = 0;
+  let operatorPosts = 0;
+  let operatorGets = 0;
+  let accepted: OpenTofuMutationRequest | undefined;
+  const runner: OpenTofuRunner = {
+    ...stubRunner(),
+    submitMutation: async (mutation) => { submitCount++; accepted = mutation; return { kind: "pending" }; },
+    observeMutation: async () => {
+      observeCount++;
+      const job = accepted!.job as OpenTofuApplyJob;
+      return { kind: "completed", result: fixtureStateCommit({
+        rawOutputRef: job.rawOutputRef,
+        providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        executionEvidence: fixtureExecutionEvidence(job, "apply"),
+      }) };
+    },
+    inspectMutationCredentials: async () => ({ kind: "none" }),
+  };
+  const controller = new OpenTofuController({
+    store, artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: () => now, newId: ids, executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner, vault, enqueueRun: noopEnqueue,
+    capsuleCoordination: new InMemoryCapsuleCoordination({ now: () => now }),
+    releaseActivator: {
+      activate: async () => { throw new Error("blocking activation must not run"); },
+      submitOperator: async () => {
+        operatorPosts++;
+        return { kind: "pending", job: { jobId: "operator-job-1" } };
+      },
+      observeOperator: async (job) => {
+        expect(job.jobId).toBe("operator-job-1");
+        operatorGets++;
+        if (operatorGets === 1) throw new Error("transient operator status GET outage");
+        return operatorGets < 31 ? { kind: "pending", job } :
+          { kind: "settled", result: { status: "succeeded" } };
+      },
+    },
+  });
+  const begun = await controller.beginQueuedMutation(applyRun.id);
+  expect(begun.kind).toBe("pending");
+  if (begun.kind !== "pending") return;
+  let fence = begun.fence;
+  let settled = false;
+  for (let poll = 0; poll < 35; poll++) {
+    const step = await controller.advanceQueuedMutation(fence, async (next) => { fence = next; });
+    if (step.kind === "settled") { settled = true; break; }
+    expect(step.kind).toBe("pending");
+    if (step.kind !== "pending") return;
+    fence = step.fence;
+    if (operatorGets > 0 && operatorGets < 31) {
+      expect((await store.getApplyRun(applyRun.id))?.status).toBe("running");
+      expect((await store.getCapsule("cap_durable_post_apply"))?.currentStateGeneration).toBe(0);
+    }
+    now += 30_000;
+  }
+  expect(settled).toBe(true);
+  expect(now - Date.parse("2026-06-22T08:00:00.000Z")).toBeGreaterThanOrEqual(15 * 60_000);
+  expect(submitCount).toBe(1);
+  expect(observeCount).toBeGreaterThan(1);
+  expect(operatorPosts).toBe(1);
+  expect(operatorGets).toBe(31);
+  expect((await store.getApplyRun(applyRun.id))?.status).toBe("succeeded");
+});
+
+test("pre-destroy operator job finishes before the single provider destroy dispatch", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let now = Date.parse("2026-06-22T08:00:00.000Z");
+  const ids = deterministicIds();
+  const vault = fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } });
+  const ordinary = new OpenTofuController({
+    store, artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: () => now, newId: ids, executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner: stubRunner(), vault, enqueueRun: noopEnqueue,
+  });
+  await seedUpdatable(store, {
+    capsuleId: "cap_durable_pre_destroy", installConfig: lifecycleConfig("pre_destroy", true),
+  });
+  const seededCapsule = (await store.getCapsule("cap_durable_pre_destroy"))!;
+  await store.putCapsule({ ...seededCapsule, currentStateVersionId: undefined, status: "pending" });
+  const { planRun: initialPlan } = await ordinary.createCapsulePlan("cap_durable_pre_destroy");
+  await ordinary.runQueuedPlan(initialPlan.id);
+  const planned = (await store.getPlanRun(initialPlan.id))!;
+  const first = await ordinary.createApplyRun({
+    planRunId: planned.id, expected: applyExpectedGuardFromPlanRun(planned),
+  });
+  expect((await ordinary.runQueuedApply(first.applyRun.id))?.applyRun.status).toBe("succeeded");
+  const { planRun: destroyPlan } = await ordinary.createCapsuleDestroyPlan("cap_durable_pre_destroy");
+  await ordinary.runQueuedPlan(destroyPlan.id);
+  await ordinary.approveRun(destroyPlan.id);
+  const approved = (await store.getPlanRun(destroyPlan.id))!;
+  const { applyRun } = await ordinary.createApplyRun({
+    planRunId: approved.id, expected: applyExpectedGuardFromPlanRun(approved),
+  });
+  let providerSubmits = 0;
+  let providerObserves = 0;
+  let operatorPosts = 0;
+  let operatorGets = 0;
+  let runnerSubmits = 0;
+  let runnerGets = 0;
+  let runnerDone = false;
+  let accepted: OpenTofuMutationRequest | undefined;
+  const runner: OpenTofuRunner = {
+    ...stubRunner(),
+    submitMutation: async (mutation) => {
+      providerSubmits++;
+      accepted = mutation;
+      return { kind: "pending" };
+    },
+    observeMutation: async () => {
+      providerObserves++;
+      const job = accepted!.job as OpenTofuDestroyJob;
+      return { kind: "completed", result: fixtureStateCommit({
+        providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        executionEvidence: fixtureExecutionEvidence(job, "destroy"),
+      }) };
+    },
+    inspectMutationCredentials: async () => ({ kind: "none" }),
+  };
+  const controller = new OpenTofuController({
+    store, artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: () => now, newId: ids, executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner, vault, enqueueRun: noopEnqueue,
+    capsuleCoordination: new InMemoryCapsuleCoordination({ now: () => now }),
+    releaseActivator: {
+      activate: async () => { throw new Error("blocking activation must not run"); },
+      submitRunner: async () => { runnerSubmits++; return { kind: "pending" }; },
+      observeRunner: async () => {
+        runnerGets++;
+        if (runnerGets === 1) throw new Error("transient runner result GET outage");
+        if (runnerGets < 31) return { kind: "pending" };
+        runnerDone = true;
+        return { kind: "settled", result: { status: "succeeded" } };
+      },
+      submitOperator: async () => {
+        expect(runnerDone).toBe(true);
+        operatorPosts++;
+        return { kind: "pending", job: { jobId: "pre-destroy-job-1" } };
+      },
+      observeOperator: async () => {
+        operatorGets++;
+        expect(providerSubmits).toBe(0);
+        return operatorGets < 31 ? { kind: "pending" } :
+          { kind: "settled", result: { status: "succeeded" } };
+      },
+    },
+  });
+  const begun = await controller.beginQueuedMutation(applyRun.id);
+  expect(begun.kind).toBe("pending");
+  if (begun.kind !== "pending") return;
+  let fence = begun.fence;
+  let settled = false;
+  for (let poll = 0; poll < 68; poll++) {
+    const step = await controller.advanceQueuedMutation(fence, async (next) => { fence = next; });
+    if (step.kind === "settled") { settled = true; break; }
+    expect(step.kind).toBe("pending");
+    if (step.kind !== "pending") return;
+    fence = step.fence;
+    now += 30_000;
+  }
+  expect(settled).toBe(true);
+  expect(runnerSubmits).toBe(1);
+  expect(runnerGets).toBe(31);
+  expect(operatorPosts).toBe(1);
+  expect(operatorGets).toBe(31);
+  expect(providerSubmits).toBe(1);
+  expect(providerObserves).toBe(1);
+  expect((await store.getApplyRun(applyRun.id))?.auditEvents.some((event) =>
+    event.type === "lifecycle_action.pre_destroy.succeeded")).toBe(true);
+  expect((await store.getCapsule("cap_durable_pre_destroy"))?.status).toBe("destroyed");
+});
+
+test("pre-destroy failure stops provider and a lost operator POST ACK is never retried", async () => {
+  for (const mode of ["failed_job", "lost_ack"] as const) {
+    const store = new InMemoryOpenTofuControlStore();
+    let now = Date.parse("2026-06-22T08:00:00.000Z");
+    const ids = deterministicIds();
+    const vault = fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } });
+    const ordinary = new OpenTofuController({
+      store, artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+      now: () => now, newId: ids, executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+      runner: stubRunner(), vault, enqueueRun: noopEnqueue,
+    });
+    const capsuleId = `cap_durable_${mode}`;
+    await seedUpdatable(store, { capsuleId, installConfig: lifecycleConfig("pre_destroy") });
+    const seededCapsule = (await store.getCapsule(capsuleId))!;
+    await store.putCapsule({ ...seededCapsule, currentStateVersionId: undefined, status: "pending" });
+    const { planRun: initialPlan } = await ordinary.createCapsulePlan(capsuleId);
+    await ordinary.runQueuedPlan(initialPlan.id);
+    const planned = (await store.getPlanRun(initialPlan.id))!;
+    const first = await ordinary.createApplyRun({
+      planRunId: planned.id, expected: applyExpectedGuardFromPlanRun(planned),
+    });
+    expect((await ordinary.runQueuedApply(first.applyRun.id))?.applyRun.status).toBe("succeeded");
+    const { planRun: destroyPlan } = await ordinary.createCapsuleDestroyPlan(capsuleId);
+    await ordinary.runQueuedPlan(destroyPlan.id);
+    await ordinary.approveRun(destroyPlan.id);
+    const approved = (await store.getPlanRun(destroyPlan.id))!;
+    const { applyRun } = await ordinary.createApplyRun({
+      planRunId: approved.id, expected: applyExpectedGuardFromPlanRun(approved),
+    });
+    let providerSubmits = 0;
+    let operatorPosts = 0;
+    const controller = new OpenTofuController({
+      store, artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+      now: () => now, newId: ids, executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+      runner: {
+        ...stubRunner(),
+        submitMutation: async () => { providerSubmits++; return { kind: "pending" }; },
+        observeMutation: async () => ({ kind: "indeterminate" }),
+        inspectMutationCredentials: async () => ({ kind: "none" }),
+      },
+      vault, enqueueRun: noopEnqueue,
+      capsuleCoordination: new InMemoryCapsuleCoordination({ now: () => now }),
+      releaseActivator: {
+        activate: async () => { throw new Error("blocking activation must not run"); },
+        submitOperator: async () => {
+          operatorPosts++;
+          if (mode === "lost_ack") throw new Error("simulated lost POST acknowledgement");
+          return { kind: "pending", job: { jobId: "failed-pre-destroy-job" } };
+        },
+        observeOperator: async () => ({ kind: "settled", result: { status: "failed" } }),
+      },
+    });
+    const begun = await controller.beginQueuedMutation(applyRun.id);
+    expect(begun.kind).toBe("pending");
+    if (begun.kind !== "pending") continue;
+    let fence = begun.fence;
+    const firstStep = await controller.advanceQueuedMutation(fence, async (next) => { fence = next; });
+    if (mode === "lost_ack") {
+      expect(firstStep.kind).toBe("indeterminate");
+      now += 30_000;
+      const restarted = await controller.advanceQueuedMutation(fence, async (next) => { fence = next; });
+      expect(restarted.kind).toBe("indeterminate");
+      expect((await store.getApplyRun(applyRun.id))?.status).toBe("running");
+    } else {
+      expect(firstStep.kind).toBe("pending");
+      if (firstStep.kind !== "pending") continue;
+      fence = firstStep.fence;
+      now += 30_000;
+      const completed = await controller.advanceQueuedMutation(fence, async (next) => { fence = next; });
+      expect(completed.kind).toBe("settled");
+      expect((await store.getApplyRun(applyRun.id))?.status).toBe("failed");
+    }
+    expect(providerSubmits).toBe(0);
+    expect(operatorPosts).toBe(1);
+    expect((await store.getCapsule(capsuleId))?.status).toBe("active");
+  }
+});
+
 /**
  * Seeds the Workspace-direct Capsule model (spec §5) and returns an UPDATE
  * plan-run request bound to the seeded Capsule (raw `createPlanRun` now
@@ -76,12 +755,13 @@ const RUNNER_CONTAINER_CAPACITY_EXCEEDED =
  */
 async function seedUpdatable(
   store: InMemoryOpenTofuControlStore,
-  options: { capsuleId: string; generation?: number },
+  options: { capsuleId: string; generation?: number; installConfig?: Partial<InstallConfig>; providerVersion?: string },
 ): Promise<CreatePlanRunRequest> {
   const generation = options.generation ?? 0;
   const { capsule } = await seedCapsuleModel(store, {
     workspaceId: "ws_lifecycle",
     capsuleId: options.capsuleId,
+    ...(options.installConfig ? { installConfig: options.installConfig } : {}),
   });
   await store.putConnection({
     id: `conn_${options.capsuleId}`,
@@ -125,9 +805,35 @@ async function seedUpdatable(
     capsuleId: capsule.id,
     operation: "update",
     source: SOURCE,
-    requiredProviderRequirements:
-      providerRequirementsForFixture([CLOUDFLARE]),
+    requiredProviderRequirements: providerRequirementsForFixture([CLOUDFLARE]).map(
+      (requirement) => ({ ...requirement, ...(options.providerVersion ? { version: options.providerVersion } : {}) }),
+    ),
     requiredProviders: [CLOUDFLARE],
+  };
+}
+
+function lifecycleConfig(
+  phase: "post_apply" | "pre_destroy",
+  withRunner = false,
+): Partial<InstallConfig> {
+  return {
+    lifecycleActions: [
+      ...(withRunner ? [{
+        apiVersion: "takosumi.dev/v1alpha1" as const, kind: "command" as const,
+        id: `runner-${phase}`, phase, executor: "runner" as const,
+        runnerCapability: CAPSULE_LIFECYCLE_COMMAND_CAPABILITY,
+        command: ["bun", "run", "runner-release"],
+      }] : []),
+      {
+        apiVersion: "takosumi.dev/v1alpha1", kind: "command", id: `action-${phase}`,
+        phase, executor: "operator", runnerCapability: CAPSULE_LIFECYCLE_COMMAND_CAPABILITY,
+        command: ["bun", "run", "release"],
+      },
+    ],
+    policy: { lifecycleActions: {
+      allowedExecutors: withRunner ? ["runner", "operator"] : ["operator"],
+      allowedRunnerCapabilities: [CAPSULE_LIFECYCLE_COMMAND_CAPABILITY],
+    } },
   };
 }
 

@@ -245,6 +245,12 @@ export class CloudflareContainerOpenTofuRunner
     return await this.#mutationProgress(selector, "observe", control);
   }
 
+  async stopMutation(
+    selector: OpenTofuMutationObservationSelector,
+  ): Promise<"acknowledged" | "unavailable"> {
+    return await this.#stopMutation(selector);
+  }
+
   async inspectMutationCredentials(
     selector: OpenTofuMutationObservationSelector,
   ): Promise<OpenTofuMutationCredentialStatus> {
@@ -283,6 +289,12 @@ export class CloudflareContainerOpenTofuRunner
     control?: RunExecutionControl,
   ): Promise<OpenTofuReleaseMutationProgress> {
     return await this.#releaseProgress(selector, "observe", control);
+  }
+
+  async stopRelease(
+    selector: OpenTofuReleaseObservationSelector,
+  ): Promise<"acknowledged" | "unavailable"> {
+    return await this.#stopMutation(selector);
   }
 
   async plan(
@@ -848,13 +860,13 @@ export class CloudflareContainerOpenTofuRunner
     } catch {
       // Submit may have reached the DO before acknowledgement loss; observation
       // transport is also an uncertain read. Neither grants a second submit.
-      return { kind: "indeterminate" };
+      return { kind: "pending" };
     }
     let decoded: { payload: Record<string, unknown>; redactedText: string };
     try {
-      decoded = await readResponseJsonObject(response);
+      decoded = await readResponseJsonObject(response, true);
     } catch {
-      return { kind: "indeterminate" };
+      return { kind: "pending" };
     }
     const { payload, redactedText } = decoded;
     if (response.status === 202) {
@@ -894,6 +906,38 @@ export class CloudflareContainerOpenTofuRunner
         ? applyResultFromRunnerPayload(payload)
         : destroyResultFromRunnerPayload(payload),
     };
+  }
+
+  async #stopMutation(
+    selector: OpenTofuMutationObservationSelector | OpenTofuReleaseObservationSelector,
+  ): Promise<"acknowledged" | "unavailable"> {
+    if (!this.env.RUNNER) return "unavailable";
+    const runnerRunId = "runnerRunId" in selector
+      ? selector.runnerRunId
+      : selector.releaseRunId;
+    const action = "action" in selector ? selector.action : "release";
+    const body = JSON.stringify(selector);
+    if (new TextEncoder().encode(body).byteLength > 256 * 1024) return "unavailable";
+    try {
+      const response = await this.env.RUNNER.get(
+        this.env.RUNNER.idFromName(selector.applyRunId),
+      ).fetch(new Request(
+        `https://opentofu-runner.internal/runs/${encodeURIComponent(runnerRunId)}/stop`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+          signal: AbortSignal.timeout(30_000),
+        },
+      ));
+      if (!response.ok) return "unavailable";
+      const payload = await response.json().catch(() => undefined) as unknown;
+      return isRecord(payload) && payload.kind === "acknowledged"
+        ? "acknowledged"
+        : "unavailable";
+    } catch {
+      return "unavailable";
+    }
   }
 
   async #releaseProgress(
@@ -936,13 +980,13 @@ export class CloudflareContainerOpenTofuRunner
         ...(control?.signal ? { signal: control.signal } : {}),
       }));
     } catch {
-      return { kind: "indeterminate" };
+      return { kind: "pending" };
     }
     let decoded: { payload: Record<string, unknown>; redactedText: string };
     try {
-      decoded = await readResponseJsonObject(response);
+      decoded = await readResponseJsonObject(response, true);
     } catch {
-      return { kind: "indeterminate" };
+      return { kind: "pending" };
     }
     const { payload, redactedText } = decoded;
     if (response.status === 202) {
@@ -1553,24 +1597,30 @@ function artifactPointerFromContainerResult(
   return pointer;
 }
 
-async function readResponseJsonObject(response: Response): Promise<{
+async function readResponseJsonObject(
+  response: Response,
+  strict = false,
+): Promise<{
   readonly payload: Record<string, unknown>;
   readonly redactedText: string;
 }> {
   const text = await response.text();
-  if (text.length === 0) return { payload: {}, redactedText: "" };
+  if (text.length === 0) {
+    if (strict) throw new Error("OpenTofu runner response body is empty");
+    return { payload: {}, redactedText: "" };
+  }
   const redactedText = redactRunnerDiagnosticText(text);
   let value: unknown;
   try {
     value = JSON.parse(text) as unknown;
   } catch (error) {
-    if (!response.ok) return { payload: {}, redactedText };
+    if (!response.ok && !strict) return { payload: {}, redactedText };
     throw error;
   }
   if (typeof value === "object" && value !== null && !Array.isArray(value)) {
     return { payload: value as Record<string, unknown>, redactedText };
   }
-  if (!response.ok) return { payload: {}, redactedText };
+  if (!response.ok && !strict) return { payload: {}, redactedText };
   throw new Error("OpenTofu runner response must be a JSON object");
 }
 

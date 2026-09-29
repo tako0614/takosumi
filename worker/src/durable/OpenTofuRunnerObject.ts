@@ -283,6 +283,15 @@ export interface ContainerRequestFetcher {
   containerFetch(request: Request, port?: number): Promise<Response>;
 }
 
+interface RunningContainerPort {
+  fetch(input: string | URL | Request, init?: RequestInit): Promise<Response>;
+}
+
+interface RunningContainerControl {
+  readonly running: boolean;
+  getTcpPort(port: number): RunningContainerPort;
+}
+
 interface ContainerStartWaiter {
   startAndWaitForPorts(
     ports?: number | number[],
@@ -396,6 +405,12 @@ const RUNNER_MUTATION_INDETERMINATE_HEADER =
   "x-takosumi-runner-mutation-indeterminate";
 const RUNNER_MUTATION_PENDING_HEADER =
   "x-takosumi-runner-mutation-pending";
+// Internal DO-to-DO marker: the body is this ApplyRun's already-persisted
+// immutable receipt, not a fresh container observation. The wrapping relay must
+// not re-persist it, and the child's terminal result only needs its idempotent
+// purge retried.
+const RUNNER_MUTATION_RECEIPT_HEADER =
+  "x-takosumi-runner-mutation-receipt";
 // This is a permanent authority slot, not a schema-versioned cache key. An
 // unrecognized record at this key fails closed instead of letting a future
 // record-format migration accidentally grant a second provider dispatch.
@@ -929,7 +944,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   }
 
   async fetch(request: Request): Promise<Response> {
-    const privateReadOnlyMutationRoute = /\/runs\/[^/]+\/(?:observe|credentials\/inspect)$/.test(
+    const privateReadOnlyMutationRoute = /\/runs\/[^/]+\/(?:observe|stop|credentials\/inspect)$/.test(
       new URL(request.url).pathname,
     );
     if (this.#containerRuntimeUnavailable() && !privateReadOnlyMutationRoute) {
@@ -1200,6 +1215,42 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     );
   }
 
+  /**
+   * Read/stop/ack traffic must never resurrect a stopped child. The Container
+   * SDK's containerFetch starts stopped instances, so observers use the raw
+   * DO container TCP binding only after checking `running`.
+   */
+  async #containerFetchIfRunning(request: Request): Promise<Response | undefined> {
+    if (this.#localRunnerProxyUrl) {
+      return await proxyLocalOpenTofuRunnerRequest(
+        request,
+        this.#localRunnerProxyUrl,
+      );
+    }
+    const container = (this.ctx as unknown as {
+      readonly container?: RunningContainerControl;
+    }).container;
+    if (container) {
+      if (!container.running) return undefined;
+      return await container.getTcpPort(this.defaultPort).fetch(
+        request.url.replace("https:", "http:"),
+        request,
+      );
+    }
+    // Unit tests inject an own-property fetch spy without a workerd container.
+    // The production Container base class never uses this fallback.
+    if (Object.hasOwn(this, "containerFetch")) {
+      return await this.#containerFetch(request);
+    }
+    return undefined;
+  }
+
+  #renewContainerActivityTimeout(): void {
+    const renew = (this as unknown as { renewActivityTimeout?: () => void })
+      .renewActivityTimeout;
+    if (typeof renew === "function") renew.call(this);
+  }
+
   async #readMutationObservation(
     selector: RunnerMutationObservationSelector,
   ): Promise<{
@@ -1259,11 +1310,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (recipe?.kind === "none") return { kind: "none" };
     if (!recipe || recipe.kind !== "active") return { kind: "indeterminate" };
     try {
-      const response = await this.#containerFetch(new Request(
+      const response = await this.#containerFetchIfRunning(new Request(
         `https://opentofu-runner.internal/runs/${encodeURIComponent(selector.runnerRunId)}/credentials`,
-        { method: "GET" },
+        { method: "GET", signal: AbortSignal.timeout(30_000) },
       ));
-      if (!response.ok) return { kind: "indeterminate" };
+      if (!response?.ok) return { kind: "indeterminate" };
       const metadata = await readJsonObject(response, 8_192);
       const claim = {
         owner: { kind: "apply" as const, id: selector.applyRunId },
@@ -1370,7 +1421,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         this.#activeCredentialRefreshClaims.get(runnerRunId) !== active) {
         return Response.json({ error: "credential refresh is not active" }, { status: 409 });
       }
-      const response = await this.#containerFetch(
+      const response = await this.#containerFetchIfRunning(
         new Request(request.url, {
           method: "PUT",
           headers: { "content-type": "application/json" },
@@ -1381,6 +1432,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           ]),
         }),
       );
+      if (!response) {
+        active.poisoned = true;
+        return Response.json({ error: "credential refresh runner is unavailable" }, { status: 502 });
+      }
       if (!response.ok) {
         if (response.status >= 500) active.poisoned = true;
         return Response.json({ error: "credential refresh was rejected" }, {
@@ -1416,9 +1471,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         this.#activeCredentialRefreshClaims.get(runnerRunId) !== active) {
         throw new Error("credential refresh is no longer active");
       }
-      const response = await this.#containerFetch(new Request(request.url, {
+      const response = await this.#containerFetchIfRunning(new Request(request.url, {
         method: "GET", signal,
       }));
+      if (!response) throw new Error("credential refresh runner is not running");
       if (response.ok) {
         const ready = await readJsonObject(response, 4_096);
         const owner = recordField(ready, "owner");
@@ -1820,11 +1876,32 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     credentialRefreshClaim: Omit<ActiveCredentialRefreshClaim, "semanticDigest"> | undefined,
     dispatch: RunnerMutationDispatchRecord,
   ): Promise<Response> {
+    // If the R2 relay committed before its ACK was lost, consume the exact
+    // receipt first and retry the child's idempotent purge without reading or
+    // replaying retained terminal output.
+    if (applyRunId && stateScope) {
+      try {
+        const adopted = await this.#adoptCompletedStateMutationFromR2(
+          applyRunId,
+          stateScope,
+          action,
+          rawOutputRef,
+        );
+        if (adopted) {
+          await this.#ackAsyncMutationResult(runId, applyRunId, action);
+          return adopted;
+        }
+      } catch (error) {
+        // Continue to the live result path. If the immutable target exists but
+        // cannot be validated, the subsequent conditional relay still fails
+        // closed and cannot overwrite it.
+      }
+    }
     let response: Response | undefined;
     try {
-      response = await this.#containerFetch(new Request(
+      response = await this.#containerFetchIfRunning(new Request(
         `https://opentofu-runner.internal/runs/${encodeURIComponent(runId)}/result`,
-        { method: "GET" },
+        { method: "GET", signal: AbortSignal.timeout(30_000) },
       ));
     } catch {
       response = undefined;
@@ -1837,9 +1914,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         applyRunId,
         credentialRefreshClaim,
         dispatch,
+        true,
       );
     }
-    if (response && response.status !== 404 && response.status !== 410 && response.ok) {
+    if (response && response.status !== 404 && response.status !== 410) {
       return response;
     }
     // A fresh, exact state/output/evidence receipt remains the only alternate
@@ -1861,6 +1939,46 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     return runnerMutationIndeterminateResponse(action);
   }
 
+  /**
+   * Releases the child Container's retained terminal JSON only after this DO
+   * has already observed/adopted the exact durable completion receipt. The
+   * ack is deliberately best effort: if its response is lost, the immutable
+   * R2 receipt remains authoritative and a later observation can retry it.
+   */
+  async #ackAsyncMutationResult(
+    runId: string,
+    applyRunId: string,
+    action: RunnerMutationAction | "release",
+  ): Promise<void> {
+    try {
+      const response = await this.#containerFetchIfRunning(new Request(
+        `https://opentofu-runner.internal/runs/${encodeURIComponent(runId)}/result/ack`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            kind: "takosumi.runner-mutation-result-ack@v1",
+            runId,
+            applyRunId,
+            action,
+          }),
+          signal: AbortSignal.timeout(30_000),
+        },
+      ));
+      if (!response?.ok) {
+        console.warn("OpenTofu runner terminal result acknowledgement was not accepted", {
+          action,
+          ...(response ? { status: response.status } : {}),
+        });
+      }
+    } catch (error) {
+      console.warn("OpenTofu runner terminal result acknowledgement is unavailable", {
+        action,
+        errorName: safeRunnerErrorName(error),
+      });
+    }
+  }
+
   async #pendingMutationResponse(
     response: Response,
     runId: string,
@@ -1868,6 +1986,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     applyRunId: string | undefined,
     credentialRefreshClaim: Omit<ActiveCredentialRefreshClaim, "semanticDigest"> | undefined,
     dispatch: RunnerMutationDispatchRecord,
+    renewActivityTimeout = false,
   ): Promise<Response> {
     let payload: Record<string, unknown>;
     try {
@@ -1900,6 +2019,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         dispatch,
       );
     }
+    if (renewActivityTimeout) this.#renewContainerActivityTimeout();
     return Response.json(
       { kind: "pending" },
       { status: 202, headers: { [RUNNER_MUTATION_PENDING_HEADER]: "1" } },
@@ -1912,15 +2032,15 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   ): Promise<Response> {
     let response: Response | undefined;
     try {
-      response = await this.#containerFetch(new Request(
+      response = await this.#containerFetchIfRunning(new Request(
         `https://opentofu-runner.internal/runs/${encodeURIComponent(runId)}/result`,
-        { method: "GET" },
+        { method: "GET", signal: AbortSignal.timeout(30_000) },
       ));
     } catch {
       response = undefined;
     }
     if (response?.status === 202) {
-      return await this.#pendingReleaseResponse(response, runId, dispatch);
+      return await this.#pendingReleaseResponse(response, runId, dispatch, true);
     }
     if (response && response.status !== 404 && response.status !== 410) {
       return response;
@@ -1935,6 +2055,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     response: Response,
     runId: string,
     dispatch: RunnerReleaseDispatchRecord,
+    renewActivityTimeout = false,
   ): Promise<Response> {
     let payload: Record<string, unknown>;
     try {
@@ -1957,6 +2078,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         new Error("runner release pending acknowledgement identity mismatched"),
       );
     }
+    if (renewActivityTimeout) this.#renewContainerActivityTimeout();
     return Response.json(
       { kind: "pending" },
       { status: 202, headers: { [RUNNER_MUTATION_PENDING_HEADER]: "1" } },
@@ -1975,11 +2097,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       current.owner.kind === "apply" && current.owner.id === applyRunId &&
       current.action === action && !current.poisoned) return;
     try {
-      const ready = await this.#containerFetch(new Request(
+      const ready = await this.#containerFetchIfRunning(new Request(
         `https://opentofu-runner.internal/runs/${encodeURIComponent(runnerRunId)}/credentials`,
-        { method: "GET" },
+        { method: "GET", signal: AbortSignal.timeout(30_000) },
       ));
-      if (!ready.ok) return;
+      if (!ready?.ok) return;
       const metadata = await readJsonObject(ready, 8_192);
       if (!mutationCredentialMetadataMatches(metadata, runnerRunId, applyRunId, claim)) return;
       const durable = parseRunnerMutationDispatchRecord(
@@ -2274,6 +2396,75 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     }
     const refreshMatch = /^\/runs\/([^/]+)\/credentials$/.exec(url.pathname);
     const credentialInspectMatch = /^\/runs\/([^/]+)\/credentials\/inspect$/.exec(url.pathname);
+    const stopMatch = /^\/runs\/([^/]+)\/stop$/.exec(url.pathname);
+    if (stopMatch && request.method !== "POST") {
+      return Response.json({ error: "method not allowed" }, {
+        status: 405,
+        headers: { allow: "POST" },
+      });
+    }
+    if (stopMatch && request.method === "POST") {
+      const runnerRunId = decodeURIComponent(stopMatch[1]!);
+      let value: unknown;
+      try {
+        value = await readBoundedRequestJsonObject(request, 256 * 1024);
+      } catch {
+        return Response.json({ kind: "unavailable" });
+      }
+      const mutationSelector = parseRunnerMutationObservationSelector(value, runnerRunId);
+      if (mutationSelector) {
+        const bound = await this.#readMutationObservation(mutationSelector);
+        if (!bound) return Response.json({ kind: "unavailable" });
+        try {
+          const response = await this.#containerFetchIfRunning(new Request(
+            `https://opentofu-runner.internal/runs/${encodeURIComponent(runnerRunId)}/stop`,
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                kind: "takosumi.runner-mutation-stop@v1",
+                runId: runnerRunId,
+                applyRunId: mutationSelector.applyRunId,
+                action: mutationSelector.action,
+              }),
+              signal: AbortSignal.timeout(30_000),
+            },
+          ));
+          const result = await response?.json().catch(() => undefined) as unknown;
+          return response?.ok && isRecord(result) && result.ok === true
+            ? Response.json({ kind: "acknowledged" })
+            : Response.json({ kind: "unavailable" });
+        } catch {
+          return Response.json({ kind: "unavailable" });
+        }
+      }
+      const releaseSelector = parseRunnerReleaseObservationSelector(value, runnerRunId);
+      if (!releaseSelector || !await this.#readReleaseObservation(releaseSelector)) {
+        return Response.json({ kind: "unavailable" });
+      }
+      try {
+        const response = await this.#containerFetchIfRunning(new Request(
+          `https://opentofu-runner.internal/runs/${encodeURIComponent(runnerRunId)}/stop`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              kind: "takosumi.runner-mutation-stop@v1",
+              runId: runnerRunId,
+              applyRunId: releaseSelector.applyRunId,
+              action: "release",
+            }),
+            signal: AbortSignal.timeout(30_000),
+          },
+        ));
+        const result = await response?.json().catch(() => undefined) as unknown;
+        return response?.ok && isRecord(result) && result.ok === true
+          ? Response.json({ kind: "acknowledged" })
+          : Response.json({ kind: "unavailable" });
+      } catch {
+        return Response.json({ kind: "unavailable" });
+      }
+    }
     if (credentialInspectMatch && request.method === "POST") {
       const runnerRunId = decodeURIComponent(credentialInspectMatch[1]!);
       let selector: RunnerMutationObservationSelector | undefined;
@@ -2335,7 +2526,14 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
               witness.action,
               witness.rawOutputRef,
             );
-            if (adopted) return adopted;
+            if (adopted) {
+              await this.#ackAsyncMutationResult(
+                runId,
+                witness.applyRunId,
+                witness.action,
+              );
+              return adopted;
+            }
           } catch { /* exact R2 receipt was not adoptable */ }
           return runnerMutationIndeterminateResponse(witness.action);
         }
@@ -2376,6 +2574,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         observedRelease = await this.#readReleaseObservation(releaseSelector);
         if (!observedRelease) return runnerReleaseIndeterminateResponse();
         if (observedRelease.phase === "completed" && observedRelease.outcome) {
+          await this.#ackAsyncMutationResult(
+            runId,
+            observedRelease.applyRunId,
+            "release",
+          );
           return runnerCompletedReleaseResponse(observedRelease);
         }
         envelope = parseRunEnvelope(JSON.stringify({
@@ -2740,6 +2943,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         applyRunId,
         credentialRefreshClaim,
         mutationDispatch,
+        observingMutation,
       );
     }
     if (
@@ -2750,6 +2954,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         unboundedRunnerResponse,
         runId,
         releaseDispatch,
+        observingMutation,
       );
     }
     if (
@@ -2781,6 +2986,15 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       unboundedRunnerResponse.status === 202 &&
       unboundedRunnerResponse.headers.get(RUNNER_MUTATION_PENDING_HEADER) === "1"
     ) return unboundedRunnerResponse;
+    if (
+      unboundedRunnerResponse.headers.get(RUNNER_MUTATION_RECEIPT_HEADER) === "1"
+    ) {
+      // This ApplyRun's immutable receipt is already durable. The observation
+      // that produced it retried the child's idempotent terminal-result purge;
+      // running the relay again would rebuild state and evidence from a live
+      // container that may no longer exist.
+      return unboundedRunnerResponse;
+    }
     // Bound every container result before any state/plan persistence. This also
     // covers legacy state paths that do not otherwise parse the JSON payload.
     let runnerResponse: Response;
@@ -2795,7 +3009,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       }
       if (
         mutationDispatch &&
-        !(error instanceof RunnerArtifactSizeLimitError)
+        (asyncMutation || !(error instanceof RunnerArtifactSizeLimitError))
       ) {
         return await this.#recordMutationIndeterminate(mutationDispatch, error);
       }
@@ -2804,6 +3018,55 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const doContainerExecutionResponseBufferMs = elapsedMilliseconds(
       containerExecutionResponseBufferStartedAt,
     );
+    if (asyncMutation && (mutationDispatch || releaseDispatch)) {
+      let terminalPayload: Record<string, unknown> | undefined;
+      try {
+        terminalPayload = await readJsonObject(
+          runnerResponse.clone(),
+          this.#artifactLimits.runnerResponse,
+        );
+      } catch {
+        // Existing response parsing below records malformed terminal material
+        // as indeterminate. This branch only handles the child's explicit
+        // typed wrapper/retention failure signal.
+      }
+      if (
+        terminalPayload?.status === "indeterminate" ||
+        terminalPayload?.errorCode === "runner_result_size_limit_exceeded" ||
+        terminalPayload?.errorCode === "runner_result_indeterminate"
+      ) {
+        if (mutationDispatch && applyRunId && stateScope) {
+          try {
+            const adopted = await this.#adoptCompletedStateMutationFromR2(
+              applyRunId,
+              stateScope,
+              mutationDispatch.action,
+              rawOutputRef,
+            );
+            if (adopted) {
+              await this.#ackAsyncMutationResult(
+                runId,
+                applyRunId,
+                mutationDispatch.action,
+              );
+              return adopted;
+            }
+          } catch {
+            // An unavailable or mismatched receipt cannot turn this uncertain
+            // provider outcome into a success or a proven provider failure.
+          }
+        }
+        return releaseDispatch
+          ? await this.#recordReleaseIndeterminate(
+              releaseDispatch,
+              new Error("runner async terminal result is indeterminate"),
+            )
+          : await this.#recordMutationIndeterminate(
+              mutationDispatch!,
+              new Error("runner async terminal result is indeterminate"),
+            );
+      }
+    }
     if (
       releaseDispatch &&
       runnerResponse.headers.get(RUNNER_MUTATION_INDETERMINATE_HEADER) === "1"
@@ -2834,6 +3097,13 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           new Error("release completion authority changed before commit"),
         );
       }
+      if (asyncMutation) {
+        await this.#ackAsyncMutationResult(
+          runId,
+          releaseDispatch.applyRunId,
+          "release",
+        );
+      }
     }
     const providerExecutionFailed =
       (envelope.action === "apply" || envelope.action === "destroy") &&
@@ -2849,7 +3119,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       (runnerResponse.ok || providerExecutionFailed)
     ) {
       if (stateScope) {
-        return await this.#persistStateToR2State(
+        const persisted = await this.#persistStateToR2State(
           runId,
           applyRunId!,
           envelope.request,
@@ -2861,6 +3131,17 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           providerExecutionFailed,
           mutationDispatch!,
         );
+        if (
+          asyncMutation &&
+          persisted.headers.get(RUNNER_MUTATION_INDETERMINATE_HEADER) !== "1"
+        ) {
+          await this.#ackAsyncMutationResult(
+            runId,
+            applyRunId!,
+            envelope.action,
+          );
+        }
+        return persisted;
       }
       if (runnerResponse.ok && stateKeys.length > 0) {
         const indeterminate = await this.#persistStateArtifact(
@@ -2876,6 +3157,13 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           mutationDispatch!,
         );
         if (indeterminate) return indeterminate;
+        if (asyncMutation) {
+          await this.#ackAsyncMutationResult(
+            runId,
+            applyRunId!,
+            envelope.action,
+          );
+        }
       }
     }
     if (envelope.action !== "plan" || !runnerResponse.ok) {
@@ -3791,6 +4079,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           ...(providerInstallation ? { providerInstallation } : {}),
         },
         500,
+        receiptMarkerHeaders(),
       );
     }
     return jsonResponse(
@@ -3805,6 +4094,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           : {}),
       },
       200,
+      receiptMarkerHeaders(),
     );
   }
 
@@ -9061,8 +9351,17 @@ async function readRunnerFailureDetail(
   return trimmed.length > 0 ? trimmed.slice(0, 500) : undefined;
 }
 
-function jsonResponse(payload: unknown, status: number): Response {
-  return Response.json(payload, { status });
+function jsonResponse(
+  payload: unknown,
+  status: number,
+  headers?: HeadersInit,
+): Response {
+  return Response.json(payload, { status, ...(headers ? { headers } : {}) });
+}
+
+/** Marks a response whose body is an already-persisted immutable receipt. */
+function receiptMarkerHeaders(): HeadersInit {
+  return { [RUNNER_MUTATION_RECEIPT_HEADER]: "1" };
 }
 
 function runnerKeepaliveSeconds(env: CloudflareWorkerEnv): number {

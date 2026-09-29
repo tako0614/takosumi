@@ -1735,6 +1735,133 @@ test("runtime safety treats lifecycle-only mutation evidence identically in memo
   }
 });
 
+test("a create Plan blocks another Apply while its prior mutation is running or unresolved across stores", async () => {
+  for (const [label, store] of await stores()) {
+    const planRunId = `plan_create_mutation_${label}`;
+    const run = (id: string, status: ApplyRun["status"], providerDispatched: boolean): ApplyRun => {
+      const base = applyRunForSafety({
+        id,
+        operation: "create",
+        status: "failed",
+        effectAt: 200,
+        auditEvents: [{
+          id: `audit_${id}`,
+          type: "apply.failed",
+          at: 200,
+          data: { providerDispatched },
+        }],
+      });
+      return {
+        ...base,
+        planRunId,
+        expected: { ...base.expected, planRunId },
+        status,
+        ...(status === "running" ? { finishedAt: undefined } : {}),
+      };
+    };
+    const prior = run(`apply_prior_${label}`, "running", false);
+    await store.putApplyRun(run(prior.id, "queued", false));
+    expect(
+      await store.hasBlockingApplyRunForPlan(planRunId, `apply_first_${label}`, prior.workspaceId,
+        { id: `apply_first_${label}`, createdAt: prior.createdAt - 1 }),
+      label,
+    ).toBe(false);
+    expect(
+      await store.hasBlockingApplyRunForPlan(planRunId, `apply_later_${label}`, prior.workspaceId,
+        { id: `apply_later_${label}`, createdAt: prior.createdAt + 1 }),
+      label,
+    ).toBe(true);
+    expect(
+      await store.hasBlockingApplyRunForPlan(planRunId, `apply_new_${label}`, prior.workspaceId),
+      label,
+    ).toBe(true);
+    await store.putApplyRun(prior);
+    expect(
+      await store.hasBlockingApplyRunForPlan(planRunId, `apply_new_${label}`, prior.workspaceId),
+      label,
+    ).toBe(true);
+    expect(
+      await store.hasBlockingApplyRunForPlan(planRunId, prior.id, prior.workspaceId),
+      label,
+    ).toBe(false);
+
+    await store.putApplyRun(run(prior.id, "failed", true));
+    expect(
+      await store.hasBlockingApplyRunForPlan(planRunId, `apply_new_${label}`, prior.workspaceId),
+      label,
+    ).toBe(true);
+
+    // Provider receipt alone cannot prove a later lifecycle phase committed.
+    await store.putApplyRun({
+      ...run(prior.id, "failed", true),
+      executionEvidence: { kind: "test-provider-receipt" } as never,
+    });
+    expect(
+      await store.hasBlockingApplyRunForPlan(planRunId, `apply_new_${label}`, prior.workspaceId),
+      label,
+    ).toBe(true);
+
+    await store.putApplyRun(run(prior.id, "failed", false));
+    expect(
+      await store.hasBlockingApplyRunForPlan(planRunId, `apply_new_${label}`, prior.workspaceId),
+      label,
+    ).toBe(false);
+    expect(
+      await store.hasBlockingApplyRunForPlan(`other_${planRunId}`, `apply_new_${label}`, prior.workspaceId),
+      label,
+    ).toBe(false);
+  }
+});
+
+test("create Plan quarantine scans past 100 harmless pre-dispatch failures", async () => {
+  for (const [label, store] of await stores()) {
+    const planRunId = `plan_many_safe_${label}`;
+    for (let i = 0; i < 105; i += 1) {
+      const base = applyRunForSafety({
+        id: `apply_many_safe_${label}_${String(i).padStart(3, "0")}`,
+        operation: "create",
+        status: "failed",
+        effectAt: 200 + i,
+      });
+      await store.putApplyRun({
+        ...base,
+        planRunId,
+        expected: { ...base.expected, planRunId },
+      });
+    }
+    expect(
+      await store.hasBlockingApplyRunForPlan(planRunId, `apply_new_${label}`, "workspace_runtime_safety"),
+      label,
+    ).toBe(false);
+  }
+}, 60_000);
+
+test("SQL-backed create Plan quarantine fails closed on physical/JSON status drift and malformed D1 JSON", async () => {
+  const pg = await PGliteSqlClient.create();
+  pgClients.push(pg);
+  const d1 = new SqliteFakeD1();
+  for (const [label, store, corrupt] of [
+    ["postgres", new SqlOpenTofuControlStore({ client: pg }), async (id: string) => {
+      await pg.query("UPDATE takosumi_runs SET status = 'running' WHERE id = $1", [id]);
+    }],
+    ["d1", new CloudflareD1OpenTofuControlStore(d1), async (id: string) => {
+      await d1.prepare("UPDATE runs SET status = 'running' WHERE id = ?").bind(id).run();
+    }],
+  ] as const) {
+    const base = applyRunForSafety({ id: `apply_drift_${label}`, operation: "create", status: "failed", effectAt: 300 });
+    const planRunId = `plan_drift_${label}`;
+    await store.putApplyRun({ ...base, planRunId, expected: { ...base.expected, planRunId } });
+    expect(await store.hasBlockingApplyRunForPlan(planRunId, "new", base.workspaceId)).toBe(false);
+    await corrupt(base.id);
+    expect(await store.hasBlockingApplyRunForPlan(planRunId, "new", base.workspaceId), label).toBe(true);
+  }
+  await d1.prepare("UPDATE runs SET status = 'failed', run_json = '{' WHERE id = ?")
+    .bind("apply_drift_d1").run();
+  expect(await new CloudflareD1OpenTofuControlStore(d1).hasBlockingApplyRunForPlan(
+    "plan_drift_d1", "new", "workspace_runtime_safety",
+  )).toBe(true);
+}, 30_000);
+
 test("runtime safety excludes only the named Destroy and retains the preceding unknown Run across stores", async () => {
   for (const [label, store] of await stores()) {
     const capsuleId = `capsule_excluded_destroy_${label}`;

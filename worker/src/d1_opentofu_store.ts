@@ -189,6 +189,7 @@ import {
   capsuleApplyRunAdmissionFenceMatchesRun,
   capsuleAbandonmentTerminalMatches,
   capsuleRuntimeSafetyFromRun,
+  blocksAnotherApplyForPlan,
   CapsuleStateVersionGuardConflict,
   CapsuleStateGenerationGuardConflict,
   isApplyRunRecord,
@@ -2640,6 +2641,44 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       "destroy_apply",
     ]);
     return coerceRunRowStatus(run && isApplyRunRecord(run) ? run : undefined);
+  }
+
+  async hasBlockingApplyRunForPlan(
+    planRunId: string,
+    excludeApplyRunId: string,
+    workspaceId: string,
+    contender?: Pick<ApplyRun, "id" | "createdAt">,
+  ): Promise<boolean> {
+    await this.#ensureSchema();
+    // Seek immutable IDs in bounded pages; a 101st harmless prior attempt is
+    // not itself an unsafe Plan. Malformed same-Workspace rows remain blockers.
+    let cursor: string | undefined;
+    for (;;) {
+      const rows = await this.#orm
+        // Read malformed JSON as raw text so Drizzle's JSON decoder cannot
+        // throw before the quarantine predicate can fail closed.
+        .select({ id: schema.runs.id, json: sql<string>`${schema.runs.runJson}`, status: schema.runs.status })
+        .from(schema.runs)
+        .where(and(
+          inArray(schema.runs.type, [RUN_KIND_APPLY, "destroy_apply"]),
+          ne(schema.runs.id, excludeApplyRunId),
+          eq(schema.runs.workspaceId, workspaceId),
+          sql`(CASE WHEN json_valid(${schema.runs.runJson}) = 1 THEN json_extract(${schema.runs.runJson}, '$.planRunId') ELSE NULL END = ${planRunId} OR CASE WHEN json_valid(${schema.runs.runJson}) = 1 THEN json_extract(${schema.runs.runJson}, '$.planRunId') ELSE NULL END IS NULL)`,
+          cursor ? gt(schema.runs.id, cursor) : undefined,
+        ))
+        .orderBy(asc(schema.runs.id))
+        .limit(100);
+      for (const row of rows) {
+        const candidate = d1StoredRunFromD1Value(row.json);
+        if (!candidate || !isApplyRunRecord(candidate) ||
+          candidate.planRunId !== planRunId || candidate.status !== row.status ||
+          blocksAnotherApplyForPlan(candidate, contender)) return true;
+      }
+      if (rows.length < 100) return false;
+      const next = rows.at(-1)!.id;
+      if (cursor !== undefined && next <= cursor) return true;
+      cursor = next;
+    }
   }
 
   /**

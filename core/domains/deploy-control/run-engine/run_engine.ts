@@ -142,6 +142,8 @@ import { rootgenErrorForController } from "../rootgen_error.ts";
 import {
   DEFAULT_CAPSULE_LEASE_TTL_MS,
   CapsuleLeaseBusyError,
+  capsuleLeaseScope,
+  planLeaseScope,
   type CapsuleCoordination,
   type LeaseHandle,
   withCapsuleLease,
@@ -318,20 +320,28 @@ import type {
   GenericRootDispatchContext,
   GenericRootPlanContext,
   OpenTofuApplyResult,
+  OpenTofuApplyJob,
   OpenTofuCapsuleSourceFile,
   OpenTofuDestroyResult,
+  OpenTofuDestroyJob,
   OpenTofuPlanResult,
   OpenTofuRestoreResult,
   OpenTofuRestoreSourceState,
   OpenTofuRunDispatch,
   OpenTofuRunner,
+  OpenTofuMutationProgress,
+  OpenTofuMutationRequest,
+  OpenTofuMutationObservationSelector,
+  OpenTofuReleaseObservationSelector,
   OpenTofuRunnerExecutorRegistry,
   PlanCompletionVerdict,
   PlanPolicyLayers,
   PlanRunInternalContext,
   ReleaseActivationAction,
   ReleaseActivationCommand,
+  ReleaseActivationInput,
   ReleaseActivationResult,
+  ReleaseActivationStep,
   ReleaseActivationStatus,
   ReleaseActivator,
   RunClaimResult,
@@ -471,6 +481,29 @@ const RUNNER_INFRASTRUCTURE_RETRY_LIMIT = 1;
 const PLAN_CREATION_STAGE_TIMEOUT_MS = 25_000;
 const RUN_EXECUTION_LEASE_LOST_REASON = "run_execution_lease_lost";
 const APPLY_EXECUTION_LEASE_LOST = Symbol("apply_execution_lease_lost");
+const APPLY_MUTATION_PENDING = Symbol("apply_mutation_pending");
+const APPLY_MUTATION_INDETERMINATE = Symbol("apply_mutation_indeterminate");
+class MutationStillPending extends Error {
+  constructor(readonly fence: QueuedMutationFence) {
+    super("fenced mutation remains in progress");
+    this.name = "MutationStillPending";
+  }
+}
+class MutationIndeterminate extends Error {
+  constructor() {
+    super("durable mutation outcome is indeterminate");
+    this.name = "MutationIndeterminate";
+  }
+}
+function releaseObservationIndeterminate(error: unknown): boolean {
+  return error !== null && typeof error === "object" &&
+    "code" in error && error.code === "release_activation_indeterminate";
+}
+function releasePhaseWasExternallyFenced(fence: QueuedMutationFence | undefined): boolean {
+  const release = fence?.release;
+  return Boolean(release?.runnerSelector ||
+    (release && ["operator_sent", "operator_observing", "operator_done"].includes(release.stage)));
+}
 const APPLY_MATERIALIZATION_SOURCE_RUN_ID = Symbol(
   "apply_materialization_source_run_id",
 );
@@ -508,9 +541,85 @@ type RunRenewalTarget = "run_heartbeat" | "capsule_lease";
 type RunRenewalFailure = "lost" | "unavailable";
 type ApplyRunExecutionResponse = ApplyRunResponse & {
   readonly [APPLY_EXECUTION_LEASE_LOST]?: true;
+  readonly [APPLY_MUTATION_PENDING]?: QueuedMutationFence;
+  readonly [APPLY_MUTATION_INDETERMINATE]?: true;
   /** Internal-only provenance for the post-lease Interface intent drain. */
   readonly [APPLY_MATERIALIZATION_SOURCE_RUN_ID]?: string;
 };
+
+/** Private RunOwner continuation. Never project this through a public route. */
+export interface QueuedMutationFence {
+  readonly kind: "takosumi.queued-mutation-fence@v1";
+  readonly runId: string;
+  readonly workspaceId: string;
+  readonly planRunId: string;
+  readonly action: "apply" | "destroy";
+  readonly runLeaseToken: string;
+  readonly coordinationLease: {
+    readonly scope: string;
+    readonly holderId: string;
+    readonly token: string;
+    readonly referenceId?: string;
+  };
+  readonly phase: "prepared" | "observing" | "pre_destroy" | "post_apply";
+  readonly credentialSequence: number;
+  readonly mutationSelector?: OpenTofuMutationObservationSelector;
+  readonly stop?: {
+    readonly at: number;
+    readonly provider?: "acknowledged" | "unavailable";
+    readonly release?: "acknowledged" | "unavailable";
+  };
+  readonly release?: {
+    readonly stage:
+      | "runner_ready" | "runner_sent" | "runner_observing" | "runner_done"
+      | "operator_ready" | "operator_sent" | "operator_observing" | "operator_done";
+    readonly runnerStatus?: ReleaseActivationStatus;
+    readonly operatorStatus?: ReleaseActivationStatus;
+    readonly operatorJob?: { readonly jobId: string; readonly statusUrl?: string };
+    readonly runnerSelector?: OpenTofuReleaseObservationSelector;
+  };
+}
+
+export type QueuedMutationStep =
+  | { readonly kind: "pending"; readonly fence: QueuedMutationFence }
+  | { readonly kind: "settled"; readonly status: RunStatus }
+  | { readonly kind: "indeterminate" };
+
+function mutationObservationSelector(
+  mutation: OpenTofuMutationRequest,
+): OpenTofuMutationObservationSelector {
+  const { job } = mutation;
+  const scope = job.stateScope;
+  const planDigest = job.planRun.planDigest;
+  const artifactDigest = job.planArtifact.digest;
+  const commit = job.executionEvidenceCommit;
+  const outputId = commit && "outputId" in commit ? commit.outputId : undefined;
+  if (!scope || !planDigest || !artifactDigest || !commit?.stateVersionId ||
+    (mutation.action === "apply" && !outputId)) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "mutation observation lacks immutable target coordinates",
+    );
+  }
+  const { priorState: _priorState, ...stateScope } = scope;
+  void _priorState;
+  return {
+    kind: "takosumi.runner-mutation-observation@v1",
+    action: mutation.action,
+    applyRunId: job.applyRun.id,
+    runnerRunId: job.planRun.id,
+    planRunId: job.planRun.id,
+    stateScope,
+    ...(mutation.action === "apply" ? { rawOutputRef: mutation.job.rawOutputRef } : {}),
+    commit: {
+      stateVersionId: commit.stateVersionId,
+      ...(mutation.action === "apply"
+        ? { outputId }
+        : {}),
+    },
+    plan: { digest: planDigest, artifactDigest },
+  };
+}
 
 async function planCreationStage<T>(
   stage: string,
@@ -4740,6 +4849,191 @@ export class RunEngine {
     await this.runQueuedApply(dispatch.runId);
   }
 
+  /**
+   * Claim the durable Run and its write scope without touching the runner.
+   * RUN_OWNER persists the returned private fence before calling advance.
+   */
+  async beginQueuedMutation(runId: string): Promise<QueuedMutationStep> {
+    const applyRun = await this.#store.getApplyRun(runId);
+    if (!applyRun) throw new OpenTofuControllerError("not_found", `apply run ${runId} not found`);
+    if (applyRun.status !== "queued") {
+      return isTerminalStatus(applyRun.status)
+        ? { kind: "settled", status: applyRun.status }
+        : { kind: "indeterminate" };
+    }
+    const planRun = await this.#requirePlanRun(applyRun.planRunId);
+    const profile = await this.#requireRunnerProfile(applyRun.runnerProfileId);
+    const runner = this.#runnerForProfile(profile);
+    if (!runner.submitMutation || !runner.observeMutation || !this.#capsuleCoordination) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "resumable mutation requires a durable runner and coordination lease",
+      );
+    }
+    const scope = planRun.capsuleId
+      ? capsuleLeaseScope(
+          planRun.capsuleId,
+          planRun.capsuleContext?.environment ??
+            (await this.#requireCapsule(planRun.capsuleId)).environment,
+        )
+      : planLeaseScope(planRun.id);
+    const coordination = this.#capsuleCoordination;
+    const acquired = await coordination.acquireLease({
+      scope,
+      holderId: applyRun.id,
+      ttlMs: DEFAULT_CAPSULE_LEASE_TTL_MS,
+    });
+    if (!acquired.acquired) throw new CapsuleLeaseBusyError(scope, acquired.holderId);
+    let retained = false;
+    try {
+      if (
+        await this.#store.hasBlockingApplyRunForPlan(planRun.id, applyRun.id, applyRun.workspaceId, applyRun)
+      ) {
+        throw new CapsuleLeaseBusyError(scope, "prior unresolved apply");
+      }
+      const claim = await this.#markApplyRunning(applyRun, profile, this.#now());
+      if (!claim.won) {
+        return isTerminalStatus(claim.run.status)
+          ? { kind: "settled", status: claim.run.status }
+          : { kind: "indeterminate" };
+      }
+      retained = true;
+      return {
+        kind: "pending",
+        fence: {
+          kind: "takosumi.queued-mutation-fence@v1",
+          runId: claim.run.id,
+          workspaceId: claim.run.workspaceId,
+          planRunId: planRun.id,
+          action: planRun.operation === "destroy" ? "destroy" : "apply",
+          runLeaseToken: claim.leaseToken,
+          coordinationLease: {
+            scope,
+            holderId: acquired.holderId,
+            token: acquired.token,
+            ...(acquired.referenceId ? { referenceId: acquired.referenceId } : {}),
+          },
+          phase: planRun.operation === "destroy" ? "pre_destroy" : "prepared",
+          credentialSequence: 0,
+        },
+      };
+    } finally {
+      if (!retained) {
+        await coordination.releaseLease({
+          scope,
+          holderId: acquired.holderId,
+          token: acquired.token,
+          ...(acquired.referenceId ? { referenceId: acquired.referenceId } : {}),
+        });
+      }
+    }
+  }
+
+  /** One bounded owner alarm step; never creates a fresh provider dispatch ID. */
+  async advanceQueuedMutation(
+    fence: QueuedMutationFence,
+    checkpoint: (fence: QueuedMutationFence) => Promise<void>,
+  ): Promise<QueuedMutationStep> {
+    if (fence.kind !== "takosumi.queued-mutation-fence@v1" ||
+      !fence.runId || !fence.runLeaseToken || !fence.coordinationLease.token) {
+      return { kind: "indeterminate" };
+    }
+    const run = await this.#store.getApplyRun(fence.runId);
+    if (!run || run.workspaceId !== fence.workspaceId || run.planRunId !== fence.planRunId) {
+      return { kind: "indeterminate" };
+    }
+    let currentFence = fence;
+    const save = async (next: QueuedMutationFence): Promise<void> => {
+      await checkpoint(next);
+      currentFence = next;
+    };
+    const requestStop = async (): Promise<void> => {
+      if (!currentFence.mutationSelector && !currentFence.release?.runnerSelector) return;
+      const profile = await this.#requireRunnerProfile(run.runnerProfileId).catch(() => undefined);
+      const runner = profile ? this.#runnerForProfile(profile) : undefined;
+      const provider = currentFence.mutationSelector
+        ? await runner?.stopMutation?.(currentFence.mutationSelector).catch(() => "unavailable" as const)
+          ?? "unavailable"
+        : undefined;
+      const release = currentFence.release?.runnerSelector
+        ? await runner?.stopRelease?.(currentFence.release.runnerSelector).catch(() => "unavailable" as const)
+          ?? "unavailable"
+        : undefined;
+      await save({ ...currentFence, stop: {
+        at: this.#now(),
+        ...(provider ? { provider } : {}),
+        ...(release ? { release } : {}),
+      } }).catch(() => undefined);
+    };
+    if (isTerminalStatus(run.status)) {
+      if (run.status === "cancelled") await requestStop();
+      return { kind: "settled", status: run.status };
+    }
+    if (run.status !== "running" || !this.#capsuleCoordination) {
+      await requestStop();
+      return { kind: "indeterminate" };
+    }
+    const heartbeat = await this.#heartbeatRunningRun("apply", run, fence.runLeaseToken)
+      .catch(() => undefined);
+    if (!heartbeat?.won) {
+      await requestStop();
+      return { kind: "indeterminate" };
+    }
+    const renewed = await this.#capsuleCoordination.renewLease({
+        ...fence.coordinationLease,
+        ttlMs: DEFAULT_CAPSULE_LEASE_TTL_MS,
+      }).catch(() => undefined);
+    if (!renewed?.acquired || renewed.token !== fence.coordinationLease.token) {
+      await requestStop();
+      return { kind: "indeterminate" };
+    }
+    const planRun = await this.#requirePlanRun(fence.planRunId);
+    if ((planRun.operation === "destroy" ? "destroy" : "apply") !== fence.action) {
+      return { kind: "indeterminate" };
+    }
+    const profile = await this.#requireRunnerProfile(run.runnerProfileId);
+    const inputs = planRun.appliedApplyRunId
+      ? undefined
+      : await this.#requirePreparedPlanRunInputs(planRun);
+    const dispatch = moduleDispatchFromInputs(inputs);
+    const handle: LeaseHandle = {
+      scope: fence.coordinationLease.scope,
+      holderId: fence.coordinationLease.holderId,
+      token: fence.coordinationLease.token,
+      renew: (ttlMs) => this.#capsuleCoordination!.renewLease({
+        ...fence.coordinationLease,
+        ttlMs: ttlMs ?? DEFAULT_CAPSULE_LEASE_TTL_MS,
+      }),
+    };
+    let response: ApplyRunExecutionResponse;
+    try {
+      response = await this.#runSerialized(planRun.capsuleId ?? planRun.id, () =>
+        this.#executeApply(run, planRun, profile, dispatch, inputs, handle, fence, save)
+      );
+    } catch (error) {
+      // A lost submit/observe ACK is not lost execution authority. Keep the
+      // exact phase fence and observe on the next alarm; stopping a healthy
+      // provider here would turn a transient transport error into partial work.
+      throw error;
+    }
+    if (response[APPLY_MUTATION_PENDING] !== undefined) {
+      return { kind: "pending", fence: response[APPLY_MUTATION_PENDING] };
+    }
+    if (response[APPLY_MUTATION_INDETERMINATE] === true ||
+      response[APPLY_EXECUTION_LEASE_LOST] === true) {
+      await requestStop();
+      return { kind: "indeterminate" };
+    }
+    if (isTerminalStatus(response.applyRun.status)) {
+      await this.#capsuleCoordination.releaseLease({
+        ...fence.coordinationLease,
+      });
+      await this.#notifyPostApplyLeaseReleased(response);
+      return { kind: "settled", status: response.applyRun.status };
+    }
+    return { kind: "indeterminate" };
+  }
+
   async runQueuedRestore(runId: string): Promise<Run | undefined> {
     const run = await this.#store.getBackupRun(runId);
     if (!run || run.type !== "restore") return undefined;
@@ -7114,6 +7408,127 @@ export class RunEngine {
    * This loop is subordinate to the heartbeat/lease guard and never redispatches
    * an OpenTofu mutation after a renewal failure.
    */
+  /** One value-free renewal step for a provider process owned by another alarm. */
+  async #renewObservedMutationCredentials(input: {
+    readonly selector: OpenTofuMutationObservationSelector;
+    readonly running: ApplyRun;
+    readonly planRun: PlanRun;
+    readonly profile: RunnerProfile;
+    readonly leaseToken: string;
+    readonly expectedSequence: number;
+    readonly signal: AbortSignal;
+    readonly assertHeldLease: () => Promise<void>;
+  }): Promise<number> {
+    const runner = this.#runnerForProfile(input.profile);
+    if (!runner.inspectMutationCredentials) {
+      throw new OpenTofuControllerError("failed_precondition", "runner cannot reconcile renewable credentials");
+    }
+    const inspect = () => runner.inspectMutationCredentials!(input.selector);
+    let accepted = await inspect();
+    if (!accepted || accepted.kind === "indeterminate") {
+      throw new OpenTofuRunnerExecutionError("credential renewal authority is indeterminate", {
+        reason: "runner_mutation_indeterminate",
+      });
+    }
+    if (accepted.kind === "none") {
+      if (input.expectedSequence !== 0) throw new OpenTofuRunnerExecutionError(
+        "renewable credential authority disappeared",
+        { reason: "runner_mutation_indeterminate" },
+      );
+      return 0;
+    }
+    if (!runner.refreshCredentials || !Number.isSafeInteger(accepted.sequence) ||
+      accepted.sequence < input.expectedSequence) {
+      throw new OpenTofuRunnerExecutionError("credential renewal sequence is indeterminate", {
+        reason: "runner_mutation_indeterminate",
+      });
+    }
+    const descriptors = accepted.credentials;
+    for (const descriptor of descriptors) {
+      const current = accepted.credentials.find((item) => item.connectionId === descriptor.connectionId);
+      if (!current || !sameProviderSource(current.providerSource, descriptor.providerSource) ||
+        current.sourceEnvName !== descriptor.sourceEnvName || current.fileEnvName !== descriptor.fileEnvName) {
+        throw new OpenTofuRunnerExecutionError("credential binding changed during mutation", {
+          reason: "runner_mutation_indeterminate",
+        });
+      }
+      const expiry = Date.parse(current.expiresAt);
+      if (!Number.isFinite(expiry) || expiry <= this.#now()) {
+        throw new OpenTofuRunnerExecutionError("runner credential expired before observation", {
+          reason: "runner_mutation_indeterminate",
+        });
+      }
+      if (expiry - this.#now() > 120_000) continue;
+      await input.assertHeldLease();
+      if (input.signal.aborted) throw input.signal.reason;
+      const nextSequence = accepted.sequence + 1;
+      const renewed = await this.#runEnv.renewRunCredential(
+        input.planRun,
+        input.selector.action,
+        input.running.id,
+        descriptor.connectionId,
+        await credentialIssuanceAttemptRef(input.running.id, input.leaseToken, nextSequence),
+      );
+      const next = renewed.renewable?.[0];
+      const value = renewed.env[descriptor.sourceEnvName];
+      const nextExpiry = Date.parse(next?.expiresAt ?? "");
+      if (!next || next.connectionId !== descriptor.connectionId ||
+        !sameProviderSource(next.providerSource, descriptor.providerSource) ||
+        next.sourceEnvName !== descriptor.sourceEnvName || next.fileEnvName !== descriptor.fileEnvName ||
+        typeof value !== "string" || !Number.isFinite(nextExpiry) || nextExpiry - this.#now() < 120_000) {
+        throw new OpenTofuControllerError("failed_precondition", "renewed credential does not match the pinned binding");
+      }
+      await input.assertHeldLease();
+      if (input.signal.aborted) throw input.signal.reason;
+      try {
+        await runner.refreshCredentials({
+          owner: { kind: "apply", id: input.running.id },
+          runnerRunId: input.planRun.id,
+          manifestDigest: accepted.manifestDigest,
+          sequence: nextSequence,
+          credentials: [{ ...next, value }],
+        }, { signal: input.signal });
+      } catch {
+        // The PUT may have committed while its ACK was lost. Only the runner's
+        // exact accepted sequence and expiry can resolve that ambiguity.
+      }
+      const observed = await inspect().catch(() => undefined);
+      const observedDescriptor = observed?.kind === "active"
+        ? observed.credentials.find((item) => item.connectionId === descriptor.connectionId)
+        : undefined;
+      if (!observed || observed.kind !== "active" || observed.manifestDigest !== accepted.manifestDigest ||
+        observed.sequence !== nextSequence || observedDescriptor?.expiresAt !== next.expiresAt) {
+        throw new OpenTofuRunnerExecutionError("credential refresh acknowledgement is unresolved", {
+          reason: "runner_mutation_indeterminate",
+        });
+      }
+      const recorded = await this.#store.appendRunningRunAuditEvent({
+        id: input.running.id,
+        kind: "apply",
+        workspaceId: input.running.workspaceId,
+        leaseToken: input.leaseToken,
+        event: {
+          id: this.#newId("credential_refresh_ack"),
+          type: "credential.refresh.accepted",
+          at: this.#now(),
+          data: {
+            sequence: nextSequence,
+            connectionId: descriptor.connectionId,
+            provider: descriptor.providerSource,
+            previousExpiresAt: current.expiresAt,
+            expiresAt: next.expiresAt,
+            acknowledgedAt: new Date(this.#now()).toISOString(),
+          },
+        },
+      });
+      if (!recorded) throw new OpenTofuRunnerExecutionError("run owner lost after credential refresh", {
+        reason: "runner_mutation_indeterminate",
+      });
+      accepted = observed;
+    }
+    return accepted.sequence;
+  }
+
   async #withCredentialRenewal<T>(
     input: {
       readonly running: PlanRun | ApplyRun;
@@ -8797,9 +9212,13 @@ export class RunEngine {
     dispatch: RunModuleDispatch,
     inputs: PlanRunInputs | undefined,
     lease?: LeaseHandle,
+    continuation?: QueuedMutationFence,
+    checkpoint?: (fence: QueuedMutationFence) => Promise<void>,
   ): Promise<ApplyRunExecutionResponse> {
-    const startedAt = this.#now();
-    const claim = await this.#markApplyRunning(applyRun, profile, startedAt);
+    const startedAt = continuation ? applyRun.startedAt ?? this.#now() : this.#now();
+    const claim: RunClaimResult<ApplyRun> = continuation
+      ? { won: true, run: applyRun, leaseToken: continuation.runLeaseToken }
+      : await this.#markApplyRunning(applyRun, profile, startedAt);
     if (!claim.won) {
       // A sibling consumer already claimed this apply (or a cancel won the row).
       // Do NOT dispatch the runner; return the row the winner persisted.
@@ -8810,6 +9229,11 @@ export class RunEngine {
     let runningForFailure = running;
     let runnerDispatched = false;
     let ledgerCommitted = false;
+    let latestContinuation = continuation;
+    const durableCheckpoint = checkpoint && (async (next: QueuedMutationFence): Promise<void> => {
+      latestContinuation = next;
+      await checkpoint(next);
+    });
 
     try {
       const plannedCapsule = await this.#assertApplyPreconditions(
@@ -8839,11 +9263,9 @@ export class RunEngine {
         planRun,
         phase: planRun.operation === "destroy" ? "destroy" : "apply",
         auditRunId: running.id,
-        issuanceGenerationRef: await credentialIssuanceAttemptRef(
-          running.id,
-          leaseToken,
-          0,
-        ),
+        ...(continuation && continuation.phase !== "prepared"
+          ? { mintCredentials: false }
+          : { issuanceGenerationRef: await credentialIssuanceAttemptRef(running.id, leaseToken, 0) }),
       });
       const runningWithEnv = withRunEnvironmentEvidence(
         running,
@@ -8862,6 +9284,8 @@ export class RunEngine {
           inputs,
           leaseToken,
           lease,
+          continuation,
+          durableCheckpoint,
         );
       }
       // Renewal harness: #dispatchApply's runner.apply() is ONE awaited blocking
@@ -8880,8 +9304,23 @@ export class RunEngine {
         runningWithEnv,
         leaseToken,
         lease,
-        (signal, assertHeldLease) =>
-          this.#withCredentialRenewal(
+        (signal, assertHeldLease) => {
+          const dispatchOnce = (credentialSignal: AbortSignal) =>
+            this.#dispatchApply({
+              running: runningWithEnv,
+              planRun,
+              profile,
+              dispatch,
+              credentials: runEnvironment.credentials,
+              onDispatch: () => { runnerDispatched = true; },
+              signal: credentialSignal,
+              assertHeldLease,
+              continuation,
+              checkpoint: durableCheckpoint,
+            });
+          return continuation?.phase === "observing"
+            ? dispatchOnce(signal)
+            : this.#withCredentialRenewal(
             {
               running: runningWithEnv,
               planRun,
@@ -8892,20 +9331,10 @@ export class RunEngine {
             },
             signal,
             assertHeldLease,
-            (credentialSignal) =>
-              this.#dispatchApply({
-                running: runningWithEnv,
-                planRun,
-                profile,
-                dispatch,
-                credentials: runEnvironment.credentials,
-                onDispatch: () => {
-                  runnerDispatched = true;
-                },
-                signal: credentialSignal,
-              }),
+            dispatchOnce,
             (outcome) => Boolean(outcome.result.providerExecutionFailure),
-          ),
+          );
+        },
       );
       const now = this.#now();
       if (result.providerExecutionFailure) {
@@ -8989,7 +9418,7 @@ export class RunEngine {
         runningWithEnv,
         leaseToken,
         lease,
-        (signal) =>
+        (signal, assertHeldLease) =>
           this.#activateReleaseAfterApply({
             planRun,
             applyRun: providerApplied,
@@ -9000,6 +9429,8 @@ export class RunEngine {
             lifecycleActions: dispatch.lifecycleActions,
             sourceBuild: dispatch.sourceBuild,
             signal,
+            assertHeldLease,
+            ...(continuation && durableCheckpoint ? { continuation, checkpoint: durableCheckpoint } : {}),
           }),
       );
       const completed = this.#applyPostApplyLifecycleOutcome({
@@ -9071,6 +9502,16 @@ export class RunEngine {
         now,
       });
     } catch (error) {
+      if (error instanceof MutationStillPending) {
+        return { applyRun: runningForFailure, [APPLY_MUTATION_PENDING]: error.fence };
+      }
+      if (error instanceof MutationIndeterminate) {
+        return { applyRun: runningForFailure, [APPLY_MUTATION_INDETERMINATE]: true };
+      }
+      if (continuation && error instanceof OpenTofuRunnerExecutionError &&
+        error.reason === "runner_mutation_indeterminate") {
+        return { applyRun: runningForFailure, [APPLY_MUTATION_INDETERMINATE]: true };
+      }
       // A busy Capsule lease is a queue contention signal, not an Apply
       // failure. Leave the claimed Run retryable so the queue owner redelivers
       // after the lease holder releases the shared scope.
@@ -9096,6 +9537,14 @@ export class RunEngine {
           applyRun: finalized,
           ...(currentCapsule ? { capsule: currentCapsule } : {}),
         };
+      }
+      const externallyFenced = Boolean(latestContinuation?.mutationSelector ||
+        releasePhaseWasExternallyFenced(latestContinuation));
+      if (continuation && externallyFenced &&
+        !(error instanceof CapsuleLifecycleActionError)) {
+        // A detached provider process may still be running. The RunOwner will
+        // request an exact stop, then retain the unresolved fence/receipt.
+        throw error;
       }
       if (error instanceof ArtifactLedgerTailAmbiguousError) {
         const operationKind =
@@ -9436,8 +9885,11 @@ export class RunEngine {
     readonly dispatch: RunModuleDispatch;
     readonly credentials: RunCredentials | undefined;
     readonly signal: AbortSignal;
+    readonly assertHeldLease?: () => Promise<void>;
     /** Fired immediately before the runner is invoked (runner-dispatched flag). */
     readonly onDispatch: () => void;
+    readonly continuation?: QueuedMutationFence;
+    readonly checkpoint?: (fence: QueuedMutationFence) => Promise<void>;
   }): Promise<{
     result: OpenTofuApplyResult;
     envDispatch: RunExecutionDispatch;
@@ -9487,8 +9939,7 @@ export class RunEngine {
         : undefined;
     input.onDispatch();
     const runner = this.#runnerForProfile(profile);
-    const result = await runner.apply(
-      {
+    const job: OpenTofuApplyJob = {
         applyRun: running,
         planRun,
         planArtifact,
@@ -9521,9 +9972,56 @@ export class RunEngine {
         // remote_state dependency states materialized into /work/deps (spec §15).
         ...(envDispatch.depStates ? { depStates: envDispatch.depStates } : {}),
         ...(credentials ? { credentials } : {}),
-      },
-      { signal: input.signal },
-    );
+      };
+    let result: OpenTofuApplyResult;
+    if (input.continuation) {
+      const mutation: OpenTofuMutationRequest = { action: "apply", job };
+      const selector = mutationObservationSelector(mutation);
+      let continuation = input.continuation;
+      const firstSubmit = continuation.phase === "prepared";
+      if (continuation.phase === "prepared") {
+        if (!input.checkpoint) throw new MutationIndeterminate();
+        // A lost submit ACK must restart in observation, not mint ordinal 0
+        // again or issue another POST. If the process dies before the first
+        // POST, absence of a Runner DO claim is conservatively indeterminate.
+        continuation = { ...continuation, phase: "observing", mutationSelector: selector };
+        await input.checkpoint(continuation);
+      } else if (JSON.stringify(continuation.mutationSelector) !== JSON.stringify(selector)) {
+        throw new MutationIndeterminate();
+      }
+      await input.assertHeldLease?.();
+      const progress = firstSubmit
+        ? await runner.submitMutation!(mutation, { signal: input.signal })
+        : await runner.observeMutation!(selector, { signal: input.signal });
+      if (progress.kind === "pending") {
+        const credentialSequence = !firstSubmit
+          ? await this.#renewObservedMutationCredentials({
+              selector,
+              running,
+              planRun,
+              profile,
+              leaseToken: continuation.runLeaseToken,
+              expectedSequence: continuation.credentialSequence,
+              signal: input.signal,
+              assertHeldLease: input.assertHeldLease!,
+            })
+          : continuation.credentialSequence;
+        throw new MutationStillPending({
+          ...continuation,
+          phase: "observing",
+          credentialSequence,
+        });
+      }
+      if (progress.kind === "indeterminate") {
+        throw new OpenTofuRunnerExecutionError(
+          "runner mutation outcome is indeterminate",
+          { reason: "runner_mutation_indeterminate" },
+        );
+      }
+      result = progress.result as OpenTofuApplyResult;
+    } else {
+      result = await runner.apply(job, { signal: input.signal });
+    }
     if (result.providerExecutionFailure) {
       const stateWasPersisted =
         result.providerExecutionFailure.statePersistence === "persisted";
@@ -9945,6 +10443,144 @@ export class RunEngine {
     return { applyRun: input.failed, capsule: input.capsule };
   }
 
+  /** A release phase owns exactly one runner dispatch and one operator POST. */
+  async #activateDurableRelease(
+    input: ReleaseActivationInput,
+    initial: QueuedMutationFence,
+    checkpoint: (fence: QueuedMutationFence) => Promise<void>,
+    signal: AbortSignal,
+    phase: "pre_destroy" | "post_apply",
+    assertHeldLease: () => Promise<void>,
+  ): Promise<ReleaseActivationResult> {
+    const activator = this.#releaseActivator;
+    if (!activator) return { status: "pending" };
+    const runnerCommands = input.commands.filter((command) => command.executor === "runner");
+    const operatorCommands = input.commands.filter((command) => command.executor === "operator");
+    const runnerSelector: OpenTofuReleaseObservationSelector = {
+      kind: "takosumi.runner-release-observation@v1",
+      releaseRunId: releaseCommandRunId(input.applyRun.id),
+      applyRunId: input.applyRun.id,
+      actionIds: runnerCommands.map((command) => command.id),
+    };
+    let fence = initial;
+    const persist = async (next: QueuedMutationFence): Promise<void> => {
+      await checkpoint(next);
+      fence = next;
+    };
+    if (fence.phase !== phase || !fence.release) {
+      await persist({ ...fence, phase, release: { stage: "runner_ready" } });
+    }
+    let release = fence.release!;
+    if (release.stage === "runner_ready") {
+      if (runnerCommands.length === 0 || !activator.submitRunner) {
+        await persist({ ...fence, release: {
+          ...release, stage: "runner_done",
+          runnerStatus: runnerCommands.length === 0 ? "skipped" : "pending",
+        } });
+      } else {
+        await persist({ ...fence, release: { ...release, stage: "runner_sent", runnerSelector } });
+        try {
+          await assertHeldLease();
+          const step = await activator.submitRunner(input, { signal });
+          if (step.kind === "pending") {
+            await persist({ ...fence, release: { ...fence.release!, stage: "runner_observing" } });
+            throw new MutationStillPending(fence);
+          }
+          await persist({ ...fence, release: {
+            ...fence.release!, stage: "runner_done", runnerStatus: step.result.status,
+          } });
+        } catch (error) {
+          if (error instanceof MutationStillPending) throw error;
+          // The pre-submit fence may have reached the DO. Recovery is observe-only.
+          throw new MutationStillPending(fence);
+        }
+      }
+    }
+    release = fence.release!;
+    if (release.stage === "runner_sent" || release.stage === "runner_observing") {
+      if (JSON.stringify(release.runnerSelector) !== JSON.stringify(runnerSelector)) {
+        throw new MutationIndeterminate();
+      }
+      if (!activator.observeRunner) throw new MutationIndeterminate();
+      await assertHeldLease();
+      let step: ReleaseActivationStep;
+      try {
+        step = await activator.observeRunner(input, { signal });
+      } catch (error) {
+        if (releaseObservationIndeterminate(error)) throw new MutationIndeterminate();
+        // The exact release authority remains; an unavailable observation is
+        // neither a failed command nor permission to run it again.
+        throw new MutationStillPending(fence);
+      }
+      if (step.kind === "pending") {
+        if (release.stage !== "runner_observing") {
+          await persist({ ...fence, release: { ...release, stage: "runner_observing" } });
+        }
+        throw new MutationStillPending(fence);
+      }
+      await persist({ ...fence, release: {
+        ...release, stage: "runner_done", runnerStatus: step.result.status,
+      } });
+    }
+    release = fence.release!;
+    if (release.stage === "runner_done" || release.stage === "operator_ready") {
+      if (operatorCommands.length === 0 || !activator.submitOperator) {
+        await persist({ ...fence, release: {
+          ...release, stage: "operator_done",
+          operatorStatus: operatorCommands.length === 0 ? "skipped" : "pending",
+        } });
+      } else {
+        await persist({ ...fence, release: { ...release, stage: "operator_sent" } });
+        let step;
+        try {
+          await assertHeldLease();
+          step = await activator.submitOperator(input, { signal });
+        } catch {
+          // No trusted job ref: a lost POST acknowledgement cannot be retried.
+          throw new MutationIndeterminate();
+        }
+        if (step.kind === "pending") {
+          if (!step.job) throw new MutationIndeterminate();
+          await persist({ ...fence, release: {
+            ...fence.release!, stage: "operator_observing", operatorJob: step.job,
+          } });
+          throw new MutationStillPending(fence);
+        }
+        await persist({ ...fence, release: {
+          ...fence.release!, stage: "operator_done", operatorStatus: step.result.status,
+        } });
+      }
+    }
+    release = fence.release!;
+    if (release.stage === "operator_sent") throw new MutationIndeterminate();
+    if (release.stage === "operator_observing") {
+      if (!release.operatorJob || !activator.observeOperator) throw new MutationIndeterminate();
+      await assertHeldLease();
+      let step: ReleaseActivationStep;
+      try {
+        step = await activator.observeOperator(release.operatorJob, { signal });
+      } catch (error) {
+        if (releaseObservationIndeterminate(error)) throw new MutationIndeterminate();
+        // Keep polling only the already-accepted job reference. A GET outage
+        // cannot become a terminal lifecycle failure while the job may run.
+        throw new MutationStillPending(fence);
+      }
+      if (step.kind === "pending") throw new MutationStillPending(fence);
+      await persist({ ...fence, release: {
+        ...release, stage: "operator_done", operatorStatus: step.result.status,
+      } });
+    }
+    release = fence.release!;
+    if (release.stage !== "operator_done" || !release.runnerStatus || !release.operatorStatus) {
+      throw new MutationIndeterminate();
+    }
+    const statuses = [release.runnerStatus, release.operatorStatus];
+    const status: ReleaseActivationStatus = statuses.includes("failed") ? "failed"
+      : statuses.includes("pending") ? "pending"
+      : statuses.includes("succeeded") ? "succeeded" : "skipped";
+    return { status, kind: "takosumi.release-activation.composite@v1" };
+  }
+
   async #activateReleaseAfterApply(input: {
     readonly planRun: PlanRun;
     readonly applyRun: ApplyRun;
@@ -9955,6 +10591,9 @@ export class RunEngine {
     readonly lifecycleActions: InstallConfig["lifecycleActions"];
     readonly sourceBuild: InstallConfig["sourceBuild"];
     readonly signal: AbortSignal;
+    readonly assertHeldLease?: () => Promise<void>;
+    readonly continuation?: QueuedMutationFence;
+    readonly checkpoint?: (fence: QueuedMutationFence) => Promise<void>;
   }): Promise<LifecycleActionOutcome | undefined> {
     const commands = releaseActivationCommands(
       input.lifecycleActions,
@@ -9981,14 +10620,16 @@ export class RunEngine {
           "post-apply lifecycle actions declared but no release activator is configured",
       };
     }
-    await this.#recordReleaseActivationActivity({
-      ...input,
-      status: "pending",
-      kind: "takosumi.install-config-actions@v1",
-      message: "post-apply lifecycle actions are running",
-      commandCount: commands.length,
-      outputCount: Object.keys(nonSensitiveOutputs).length,
-    });
+    if (!input.continuation?.release) {
+      await this.#recordReleaseActivationActivity({
+        ...input,
+        status: "pending",
+        kind: "takosumi.install-config-actions@v1",
+        message: "post-apply lifecycle actions are running",
+        commandCount: commands.length,
+        outputCount: Object.keys(nonSensitiveOutputs).length,
+      });
+    }
     let actionDispatched = false;
     try {
       const releaseEnvironment = await this.#releaseEnvironmentForCommands({
@@ -9996,15 +10637,19 @@ export class RunEngine {
         applyRun: input.applyRun,
         commands,
         phase: "apply",
+        mintCredentials: !input.continuation?.release ||
+          input.continuation.release.stage === "runner_ready",
       });
       const runtimeSecretFileBundle =
-        await this.#materializeRuntimeSecretFileAfterApply({
+        input.continuation?.release && input.continuation.release.stage !== "runner_ready"
+          ? undefined
+          : await this.#materializeRuntimeSecretFileAfterApply({
           capsule: input.capsule,
           commands,
         });
       let result: ReleaseActivationResult;
       actionDispatched = true;
-      result = await this.#releaseActivator.activate(
+      const activationInput: ReleaseActivationInput =
         {
           planRun: input.planRun,
           applyRun: input.applyRun,
@@ -10020,9 +10665,13 @@ export class RunEngine {
           commands,
           ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
           ...(sourceSnapshot ? { sourceSnapshot } : {}),
-        },
-        { signal: input.signal },
-      );
+        };
+      result = input.continuation && input.checkpoint
+        ? await this.#activateDurableRelease(
+            activationInput, input.continuation, input.checkpoint, input.signal, "post_apply",
+            input.assertHeldLease!,
+          )
+        : await this.#releaseActivator.activate(activationInput, { signal: input.signal });
       if (result.status === "skipped" && commands.length > 0) {
         return {
           ...base,
@@ -10050,6 +10699,12 @@ export class RunEngine {
         metadataKeys: Object.keys(result.metadata ?? {}).sort(),
       };
     } catch (error) {
+      if (error instanceof MutationStillPending || error instanceof MutationIndeterminate) throw error;
+      if (releasePhaseWasExternallyFenced(input.continuation)) {
+        // An already-sent runner command or operator job may still complete;
+        // losing its read/config context is not a terminal action failure.
+        throw new MutationStillPending(input.continuation!);
+      }
       return {
         ...base,
         reportedStatus: "error",
@@ -10310,6 +10965,9 @@ export class RunEngine {
     readonly lifecycleActions: InstallConfig["lifecycleActions"];
     readonly sourceBuild: InstallConfig["sourceBuild"];
     readonly signal: AbortSignal;
+    readonly assertHeldLease?: () => Promise<void>;
+    readonly continuation?: QueuedMutationFence;
+    readonly checkpoint?: (fence: QueuedMutationFence) => Promise<void>;
   }): Promise<LifecycleActionOutcome | undefined> {
     const commands = releaseActivationCommands(
       input.lifecycleActions,
@@ -10429,16 +11087,18 @@ export class RunEngine {
         outputCount: Object.keys(nonSensitiveOutputs).length,
       });
     }
-    await this.#recordReleaseActivationActivity({
-      applyRun: input.applyRun,
-      capsule: input.capsule,
-      stateVersion,
-      status: "pending",
-      kind: "takosumi.install-config-actions@v1",
-      message: "pre-destroy lifecycle actions are running",
-      commandCount: commands.length,
-      outputCount: Object.keys(nonSensitiveOutputs).length,
-    });
+    if (!input.continuation?.release) {
+      await this.#recordReleaseActivationActivity({
+        applyRun: input.applyRun,
+        capsule: input.capsule,
+        stateVersion,
+        status: "pending",
+        kind: "takosumi.install-config-actions@v1",
+        message: "pre-destroy lifecycle actions are running",
+        commandCount: commands.length,
+        outputCount: Object.keys(nonSensitiveOutputs).length,
+      });
+    }
     let result: ReleaseActivationResult;
     let actionDispatched = false;
     try {
@@ -10447,9 +11107,11 @@ export class RunEngine {
         applyRun: input.applyRun,
         commands,
         phase: "destroy",
+        mintCredentials: !input.continuation?.release ||
+          input.continuation.release.stage === "runner_ready",
       });
       actionDispatched = true;
-      result = await this.#releaseActivator.activate(
+      const activationInput: ReleaseActivationInput =
         {
           planRun: input.planRun,
           applyRun: input.applyRun,
@@ -10464,10 +11126,18 @@ export class RunEngine {
           commands,
           ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
           ...(sourceSnapshot ? { sourceSnapshot } : {}),
-        },
-        { signal: input.signal },
-      );
+        };
+      result = input.continuation && input.checkpoint
+        ? await this.#activateDurableRelease(
+            activationInput, input.continuation, input.checkpoint, input.signal, "pre_destroy",
+            input.assertHeldLease!,
+          )
+        : await this.#releaseActivator.activate(activationInput, { signal: input.signal });
     } catch (error) {
+      if (error instanceof MutationStillPending || error instanceof MutationIndeterminate) throw error;
+      if (releasePhaseWasExternallyFenced(input.continuation)) {
+        throw new MutationStillPending(input.continuation!);
+      }
       const outcome: LifecycleActionOutcome = {
         phase: "pre_destroy",
         reportedStatus: "error",
@@ -10527,6 +11197,7 @@ export class RunEngine {
     readonly applyRun: ApplyRun;
     readonly commands: readonly ReleaseActivationAction[];
     readonly phase: "apply" | "destroy";
+    readonly mintCredentials?: boolean;
   }): Promise<ResolvedRunEnvironment> {
     return await this.#runEnv.resolveRunEnvironment({
       planRun: input.planRun,
@@ -10534,7 +11205,7 @@ export class RunEngine {
       auditRunId: releaseCommandRunId(input.applyRun.id),
       credentialRunId: input.applyRun.id,
       credentialContext: "release_command",
-      mintCredentials: input.commands.some(
+      mintCredentials: input.mintCredentials !== false && input.commands.some(
         (command) =>
           command.kind !== "resource_migration" &&
           command.useProviderCredentials === true,
@@ -10929,7 +11600,9 @@ export class RunEngine {
     inputs: PlanRunInputs | undefined,
     leaseToken: string,
     lease?: LeaseHandle,
-  ): Promise<ApplyRunResponse> {
+    continuation?: QueuedMutationFence,
+    checkpoint?: (fence: QueuedMutationFence) => Promise<void>,
+  ): Promise<ApplyRunExecutionResponse> {
     if (!planRun.planArtifact) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -10970,6 +11643,7 @@ export class RunEngine {
       stateVersionId: await stateVersionIdForApplyRun(running.id),
     };
     let runnerDispatched = false;
+    let lifecycleDispatched = false;
     let effectiveRunning = running;
     let ledgerCommitted = false;
     try {
@@ -10983,12 +11657,24 @@ export class RunEngine {
           "runner does not implement destroy; refusing to mark capsule destroyed without teardown",
         );
       }
-      const lifecycleOutcome = await this.#withRunRenewal(
+      const hasPreDestroyAudit = running.auditEvents.some((event) =>
+        event.type === "lifecycle_action.pre_destroy.succeeded" ||
+        event.type === "lifecycle_action.pre_destroy.not_applicable"
+      );
+      if (continuation && continuation.phase !== "pre_destroy" &&
+        releaseActivationCommands(dispatch.lifecycleActions, "pre_destroy").length > 0 &&
+        !hasPreDestroyAudit) {
+        throw new MutationIndeterminate();
+      }
+      const lifecycleOutcome = hasPreDestroyAudit ||
+        (continuation && continuation.phase !== "pre_destroy")
+        ? undefined
+        : await this.#withRunRenewal(
         "apply",
         running,
         leaseToken,
         lease,
-        (signal) =>
+        (signal, assertHeldLease) =>
           this.#activateReleaseBeforeDestroy({
             planRun,
             applyRun: running,
@@ -10996,6 +11682,13 @@ export class RunEngine {
             lifecycleActions: dispatch.lifecycleActions,
             sourceBuild: dispatch.sourceBuild,
             signal,
+            assertHeldLease,
+            ...(continuation && checkpoint ? { continuation, checkpoint: async (next: QueuedMutationFence) => {
+              if (next.release?.stage === "runner_sent" || next.release?.stage === "operator_sent") {
+                lifecycleDispatched = true;
+              }
+              await checkpoint(next);
+            } } : {}),
           }),
       );
       if (lifecycleOutcome) {
@@ -11066,6 +11759,16 @@ export class RunEngine {
           effectiveRunning = persistedLifecycle.run as ApplyRun;
         }
       }
+      if (continuation?.phase === "pre_destroy") {
+        if (!checkpoint) throw new MutationIndeterminate();
+        const providerFence: QueuedMutationFence = {
+          ...continuation,
+          phase: "prepared",
+          release: undefined,
+        };
+        await checkpoint(providerFence);
+        throw new MutationStillPending(providerFence);
+      }
       const destroyFn = runner.destroy;
       // Renewal harness: destroy is ONE awaited blocking fetch for the whole
       // tofu teardown; re-stamp the heartbeat + renew the lease around it so a
@@ -11075,8 +11778,70 @@ export class RunEngine {
         effectiveRunning,
         leaseToken,
         lease,
-        (signal, assertHeldLease) =>
-          this.#withCredentialRenewal(
+        (signal, assertHeldLease) => {
+          const dispatchOnce = async (credentialSignal: AbortSignal): Promise<OpenTofuDestroyResult> => {
+            runnerDispatched = true;
+            const job: OpenTofuDestroyJob = {
+              applyRun: effectiveRunning,
+              planRun,
+              planArtifact: planRun.planArtifact!,
+              capsule,
+              runnerProfile: profile,
+              executionEvidenceAuthority,
+              executionEvidenceCommit,
+              ...(providerInstallationPolicy ? { providerInstallationPolicy } : {}),
+              ...(dispatch.generatedRoot ? { generatedRoot: dispatch.generatedRoot } : {}),
+              ...(dispatch.operatorModule ? { operatorModule: dispatch.operatorModule, legacySourcelessDestroyRecovery: true as const } : {}),
+              ...(dispatch.sourceBuild ? { sourceBuild: dispatch.sourceBuild } : {}),
+              ...(envDispatch.stateScope ? { stateScope: envDispatch.stateScope } : {}),
+              ...(envDispatch.stateAdoption ? { stateAdoption: envDispatch.stateAdoption } : {}),
+              ...(envDispatch.sourceArchive ? { sourceArchive: envDispatch.sourceArchive } : {}),
+              ...(envDispatch.depStates ? { depStates: envDispatch.depStates } : {}),
+              ...(credentials ? { credentials } : {}),
+            };
+            if (!continuation) return destroyFn.call(runner, job, { signal: credentialSignal });
+            const mutation: OpenTofuMutationRequest = { action: "destroy", job };
+            const selector = mutationObservationSelector(mutation);
+            let providerFence = continuation;
+            const firstSubmit = providerFence.phase === "prepared";
+            if (providerFence.phase === "prepared") {
+              if (!checkpoint) throw new MutationIndeterminate();
+              providerFence = { ...providerFence, phase: "observing", mutationSelector: selector };
+              await checkpoint(providerFence);
+            } else if (JSON.stringify(providerFence.mutationSelector) !== JSON.stringify(selector)) {
+              throw new MutationIndeterminate();
+            }
+            await assertHeldLease();
+            const progress = firstSubmit
+              ? await runner.submitMutation!(mutation, { signal: credentialSignal })
+              : await runner.observeMutation!(selector, { signal: credentialSignal });
+            if (progress.kind === "pending") {
+              const credentialSequence = !firstSubmit
+                ? await this.#renewObservedMutationCredentials({
+                    selector,
+                    running: effectiveRunning,
+                    planRun,
+                    profile,
+                    leaseToken,
+                    expectedSequence: providerFence.credentialSequence,
+                    signal: credentialSignal,
+                    assertHeldLease,
+                  })
+                : providerFence.credentialSequence;
+              throw new MutationStillPending({
+                ...providerFence,
+                phase: "observing",
+                credentialSequence,
+              });
+            }
+            if (progress.kind === "indeterminate") throw new OpenTofuRunnerExecutionError(
+              "runner mutation outcome is indeterminate", { reason: "runner_mutation_indeterminate" },
+            );
+            return progress.result as OpenTofuDestroyResult;
+          };
+          return continuation?.phase === "observing"
+            ? dispatchOnce(signal)
+            : this.#withCredentialRenewal(
             {
               running: effectiveRunning,
               planRun,
@@ -11087,57 +11852,10 @@ export class RunEngine {
             },
             signal,
             assertHeldLease,
-            (credentialSignal) => {
-              runnerDispatched = true;
-              return destroyFn.call(
-            runner,
-            {
-              applyRun: effectiveRunning,
-              planRun,
-              planArtifact: planRun.planArtifact!,
-              capsule,
-              runnerProfile: profile,
-              executionEvidenceAuthority,
-              executionEvidenceCommit,
-              ...(providerInstallationPolicy
-                ? { providerInstallationPolicy }
-                : {}),
-              // Generated-root dispatch: destroy tofu in the reviewed root.
-              ...(dispatch.generatedRoot
-                ? { generatedRoot: dispatch.generatedRoot }
-                : {}),
-              ...(dispatch.operatorModule
-                ? {
-                    operatorModule: dispatch.operatorModule,
-                    legacySourcelessDestroyRecovery: true as const,
-                  }
-                : {}),
-              ...(dispatch.sourceBuild
-                ? { sourceBuild: dispatch.sourceBuild }
-                : {}),
-              // M2 env dispatch (state scope at base+1 + source archive).
-              ...(envDispatch.stateScope
-                ? { stateScope: envDispatch.stateScope }
-                : {}),
-              ...(envDispatch.stateAdoption
-                ? { stateAdoption: envDispatch.stateAdoption }
-                : {}),
-              ...(envDispatch.sourceArchive
-                ? { sourceArchive: envDispatch.sourceArchive }
-                : {}),
-              // remote_state dependency states materialized into /work/deps (§15):
-              // the teardown config still refreshes its `terraform_remote_state` data
-              // sources, so the producer state files must be present.
-              ...(envDispatch.depStates
-                ? { depStates: envDispatch.depStates }
-                : {}),
-              ...(credentials ? { credentials } : {}),
-            },
-            { signal: credentialSignal },
-              );
-            },
+            dispatchOnce,
             (outcome) => Boolean(outcome.providerExecutionFailure),
-          ),
+          );
+        },
       );
       const now = this.#now();
       if (result.providerExecutionFailure) {
@@ -11339,6 +12057,16 @@ export class RunEngine {
         capsule: publicCapsule(patched ?? capsule),
       };
     } catch (error) {
+      if (error instanceof MutationStillPending) {
+        return { applyRun: effectiveRunning, [APPLY_MUTATION_PENDING]: error.fence };
+      }
+      if (error instanceof MutationIndeterminate) {
+        return { applyRun: effectiveRunning, [APPLY_MUTATION_INDETERMINATE]: true };
+      }
+      if (continuation && error instanceof OpenTofuRunnerExecutionError &&
+        error.reason === "runner_mutation_indeterminate") {
+        return { applyRun: effectiveRunning, [APPLY_MUTATION_INDETERMINATE]: true };
+      }
       if (ledgerCommitted) {
         const persisted = (await this.#store.getApplyRun(running.id))!;
         const finalized = await this.#tryFinalizeApplyBilling(
@@ -11355,6 +12083,10 @@ export class RunEngine {
           applyRun: finalized,
           capsule: publicCapsule(currentCapsule ?? capsule),
         };
+      }
+      if (continuation && (runnerDispatched || lifecycleDispatched) &&
+        !(error instanceof CapsuleLifecycleActionError)) {
+        throw error;
       }
       if (error instanceof ArtifactLedgerTailAmbiguousError) {
         const recovered =

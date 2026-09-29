@@ -193,6 +193,7 @@ import {
   capsuleApplyRunAdmissionFenceMatchesRun,
   capsuleApplyRunAdmissionFenceMatchesCurrent,
   capsuleRuntimeSafetyFromRun,
+  blocksAnotherApplyForPlan,
   CapsuleStateVersionGuardConflict,
   CapsuleStateGenerationGuardConflict,
   WorkspaceManagementAdmissionConflictError,
@@ -2100,6 +2101,43 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return coerceRunRowStatus(
       run && isApplyRunRecord(run) ? publicStoredRun(run) : undefined,
     );
+  }
+
+  async hasBlockingApplyRunForPlan(
+    planRunId: string,
+    excludeApplyRunId: string,
+    workspaceId: string,
+    contender?: Pick<ApplyRun, "id" | "createdAt">,
+  ): Promise<boolean> {
+    // The existing kind/workspace indexes bound this to plausible mutation rows;
+    // the JSON predicate selects the exact Plan without a schema migration.
+    // Seek pages by immutable Run ID so harmless historical failures do not
+    // create an arbitrary new limit on the number of Plan attempts.
+    let cursor: string | undefined;
+    for (;;) {
+      const rows = await this.#db
+        .select({ id: pgSchema.runs.id, json: pgSchema.runs.runJson, status: pgSchema.runs.status })
+        .from(pgSchema.runs)
+        .where(and(
+          inArray(pgSchema.runs.kind, [...RUN_KINDS_APPLY]),
+          ne(pgSchema.runs.id, excludeApplyRunId),
+          eq(pgSchema.runs.workspaceId, workspaceId),
+          sql`(${pgSchema.runs.runJson} ->> 'planRunId' = ${planRunId} OR ${pgSchema.runs.runJson} ->> 'planRunId' IS NULL)`,
+          cursor ? gt(pgSchema.runs.id, cursor) : undefined,
+        ))
+        .orderBy(asc(pgSchema.runs.id))
+        .limit(100);
+      for (const row of rows) {
+        const candidate = parseRow(row) as StoredRunRecord | undefined;
+        if (!candidate || !isApplyRunRecord(candidate) ||
+          candidate.planRunId !== planRunId || candidate.status !== row.status ||
+          blocksAnotherApplyForPlan(candidate, contender)) return true;
+      }
+      if (rows.length < 100) return false;
+      const next = rows.at(-1)!.id;
+      if (cursor !== undefined && next <= cursor) return true;
+      cursor = next;
+    }
   }
 
   /**

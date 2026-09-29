@@ -918,6 +918,14 @@ export interface TakosumiOperations {
     runId: string;
     workspaceId: string;
   }): Promise<void>;
+  /** Internal durable mutation continuation; not part of public Host APIs. */
+  beginQueuedMutation(
+    runId: string,
+  ): Promise<import("./domains/deploy-control/run-engine/run_engine.ts").QueuedMutationStep>;
+  advanceQueuedMutation(
+    fence: import("./domains/deploy-control/run-engine/run_engine.ts").QueuedMutationFence,
+    checkpoint: (fence: import("./domains/deploy-control/run-engine/run_engine.ts").QueuedMutationFence) => Promise<void>,
+  ): Promise<import("./domains/deploy-control/run-engine/run_engine.ts").QueuedMutationStep>;
   // --- Sources (Core Specification §6) ---
   createSource(
     request: CreateSourceRequest,
@@ -1970,6 +1978,10 @@ export async function createTakosumiService(
       : {}),
     dispatchQueuedRun: (dispatch) =>
       opentofuController.dispatchQueuedRun(dispatch),
+    beginQueuedMutation: (runId) =>
+      opentofuController.beginQueuedMutation(runId),
+    advanceQueuedMutation: (fence, checkpoint) =>
+      opentofuController.advanceQueuedMutation(fence, checkpoint),
     createSource: (request, expectedWorkspaceManagementAuthority) =>
       opentofuController.createSource(
         request,

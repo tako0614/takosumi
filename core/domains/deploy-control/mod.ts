@@ -718,7 +718,34 @@ export interface ReleaseActivator {
     input: ReleaseActivationInput,
     control?: RunExecutionControl,
   ): Promise<ReleaseActivationResult>;
+  /** Private bounded lifecycle phases for a durable Run owner. */
+  submitRunner?(
+    input: ReleaseActivationInput,
+    control?: RunExecutionControl,
+  ): Promise<ReleaseActivationStep>;
+  observeRunner?(
+    input: ReleaseActivationInput,
+    control?: RunExecutionControl,
+  ): Promise<ReleaseActivationStep>;
+  submitOperator?(
+    input: ReleaseActivationInput,
+    control?: RunExecutionControl,
+  ): Promise<ReleaseActivationStep>;
+  observeOperator?(
+    job: ReleaseActivationJob,
+    control?: RunExecutionControl,
+  ): Promise<ReleaseActivationStep>;
 }
+
+/** Value-free private selector. Only RUN_OWNER private storage may retain it. */
+export interface ReleaseActivationJob {
+  readonly jobId: string;
+  readonly statusUrl?: string;
+}
+
+export type ReleaseActivationStep =
+  | { readonly kind: "pending"; readonly job?: ReleaseActivationJob }
+  | { readonly kind: "settled"; readonly result: ReleaseActivationResult };
 
 export interface OpenTofuDestroyResult {
   readonly diagnostics?: readonly RunDiagnostic[];
@@ -829,6 +856,41 @@ export interface OpenTofuRunner {
     job: OpenTofuApplyJob,
     control?: RunExecutionControl,
   ): Promise<OpenTofuApplyResult>;
+  /**
+   * Internal resumable mutation transport. A pending acknowledgement means the
+   * exact provider dispatch is fenced at the runner, not that it may be sent
+   * again. Hosts without this capability keep using the synchronous methods.
+   */
+  submitMutation?(
+    mutation: OpenTofuMutationRequest,
+    control?: RunExecutionControl,
+  ): Promise<OpenTofuMutationProgress>;
+  /** Observe the same fenced dispatch; this method must never start a child. */
+  observeMutation?(
+    selector: OpenTofuMutationObservationSelector,
+    control?: RunExecutionControl,
+  ): Promise<OpenTofuMutationProgress>;
+  /** Requests termination of the exact dispatched process; ACK is not an outcome receipt. */
+  stopMutation?(
+    selector: OpenTofuMutationObservationSelector,
+  ): Promise<"acknowledged" | "unavailable">;
+  /** Internal resumable post-Apply/pre-Destroy lifecycle command transport. */
+  submitRelease?(
+    job: ReleaseCommandRunJob,
+    control?: RunExecutionControl,
+  ): Promise<OpenTofuReleaseMutationProgress>;
+  /** Observe the same exact release dispatch; this method must never redispatch. */
+  observeRelease?(
+    selector: OpenTofuReleaseObservationSelector,
+    control?: RunExecutionControl,
+  ): Promise<OpenTofuReleaseMutationProgress>;
+  stopRelease?(
+    selector: OpenTofuReleaseObservationSelector,
+  ): Promise<"acknowledged" | "unavailable">;
+  /** Value-free runner acknowledgement used to resume credential renewal. */
+  inspectMutationCredentials?(
+    selector: OpenTofuMutationObservationSelector,
+  ): Promise<OpenTofuMutationCredentialStatus>;
   /** Optional capability; a renewable Run must fail before dispatch without it. */
   refreshCredentials?(
     update: {
@@ -887,6 +949,60 @@ export interface OpenTofuRunner {
     job: OpenTofuStableSourceTagResolutionJob,
   ): Promise<OpenTofuStableSourceTagResolutionResult>;
 }
+
+export type OpenTofuMutationRequest =
+  | { readonly action: "apply"; readonly job: OpenTofuApplyJob }
+  | { readonly action: "destroy"; readonly job: OpenTofuDestroyJob };
+
+/** Exact value-free coordinates for observing an already-fenced mutation. */
+export interface OpenTofuMutationObservationSelector {
+  readonly kind: "takosumi.runner-mutation-observation@v1";
+  readonly action: "apply" | "destroy";
+  readonly applyRunId: string;
+  readonly runnerRunId: string;
+  readonly planRunId: string;
+  readonly stateScope: Omit<DispatchStateScope, "priorState">;
+  readonly rawOutputRef?: string;
+  readonly commit: { readonly stateVersionId: string; readonly outputId?: string };
+  readonly plan: { readonly digest: string; readonly artifactDigest: string };
+}
+
+export type OpenTofuMutationProgress =
+  | { readonly kind: "pending" }
+  | {
+      readonly kind: "completed";
+      readonly result: OpenTofuApplyResult | OpenTofuDestroyResult;
+    }
+  | { readonly kind: "indeterminate" };
+
+export type OpenTofuReleaseMutationProgress =
+  | { readonly kind: "pending" }
+  | { readonly kind: "completed"; readonly result: ReleaseCommandRunResult }
+  | { readonly kind: "indeterminate" };
+
+/** Exact value-free selector for observing an existing release fence. */
+export interface OpenTofuReleaseObservationSelector {
+  readonly kind: "takosumi.runner-release-observation@v1";
+  readonly releaseRunId: string;
+  readonly applyRunId: string;
+  readonly actionIds: readonly string[];
+}
+
+export type OpenTofuMutationCredentialStatus =
+  | { readonly kind: "none" }
+  | { readonly kind: "indeterminate" }
+  | {
+      readonly kind: "active";
+      readonly manifestDigest: string;
+      readonly sequence: number;
+      readonly credentials: readonly {
+        readonly providerSource: string;
+        readonly connectionId: string;
+        readonly sourceEnvName: string;
+        readonly fileEnvName: string;
+        readonly expiresAt: string;
+      }[];
+    };
 
 /**
  * Host-composed executor adapters keyed by the exact open token declared on a
@@ -1908,6 +2024,19 @@ export class OpenTofuController {
 
   dispatchQueuedRun(dispatch: OpenTofuRunDispatch): Promise<void> {
     return this.#runEngine.dispatchQueuedRun(dispatch);
+  }
+
+  /** Private RUN_OWNER continuation; never exposed through the Host API. */
+  beginQueuedMutation(runId: string): Promise<import("./run-engine/run_engine.ts").QueuedMutationStep> {
+    return this.#runEngine.beginQueuedMutation(runId);
+  }
+
+  /** One fenced, bounded mutation pump step. */
+  advanceQueuedMutation(
+    fence: import("./run-engine/run_engine.ts").QueuedMutationFence,
+    checkpoint: (fence: import("./run-engine/run_engine.ts").QueuedMutationFence) => Promise<void>,
+  ): Promise<import("./run-engine/run_engine.ts").QueuedMutationStep> {
+    return this.#runEngine.advanceQueuedMutation(fence, checkpoint);
   }
 
   runQueuedRestore(runId: string): Promise<Run | undefined> {

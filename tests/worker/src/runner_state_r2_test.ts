@@ -3106,9 +3106,31 @@ function runnerWithContainer(
           : PLAN_DIGEST;
       const executionRunId =
         typeof applyRun.id === "string" ? applyRun.id : runId;
+      // The relay witnesses every state-scoped mutation's exact immutable
+      // identity before provider dispatch, so a compatible-looking envelope
+      // must carry the same Run/Plan/action coordinates production composition
+      // supplies. Fixtures below stay minimal; only the closed identity is
+      // completed here.
+      const operation = envelope.action === "destroy" ? "destroy" : "update";
+      const stateScope =
+        mutation.stateScope &&
+        typeof mutation.stateScope === "object" &&
+        !Array.isArray(mutation.stateScope)
+          ? (mutation.stateScope as Record<string, unknown>)
+          : undefined;
+      const scopeWorkspaceId =
+        stateScope && typeof stateScope.workspaceId === "string"
+          ? stateScope.workspaceId
+          : undefined;
       envelope.request = {
         ...mutation,
-        applyRun: { ...applyRun, id: executionRunId },
+        applyRun: {
+          ...applyRun,
+          id: executionRunId,
+          planRunId: runId,
+          operation,
+          ...(scopeWorkspaceId ? { workspaceId: scopeWorkspaceId } : {}),
+        },
         planRun: {
           ...planRun,
           id: typeof planRun.id === "string" ? planRun.id : runId,
@@ -3116,6 +3138,8 @@ function runnerWithContainer(
             typeof planRun.planDigest === "string"
               ? planRun.planDigest
               : planDigest,
+          operation,
+          ...(scopeWorkspaceId ? { workspaceId: scopeWorkspaceId } : {}),
           runnerProfileId:
             typeof planRun.runnerProfileId === "string"
               ? planRun.runnerProfileId
@@ -3234,6 +3258,32 @@ class FakeDoStorage {
 
   delete(key: string): Promise<boolean> {
     return Promise.resolve(this.#values.delete(key));
+  }
+
+  // The mutation claim commits its v2 authority pair with the diagnostic
+  // target witness in one Durable Object storage transaction. Stage the writes
+  // and commit them together so a fixture that aborts inside the callback
+  // cannot leave a half-written claim behind.
+  async transaction<T>(
+    callback: (transaction: {
+      get<V = unknown>(key: string): Promise<V | undefined>;
+      put<V = unknown>(key: string, value: V): Promise<void>;
+      delete(key: string): Promise<boolean>;
+    }) => Promise<T>,
+  ): Promise<T> {
+    const staged = new Map(this.#values);
+    const result = await callback({
+      get: <V = unknown>(key: string): Promise<V | undefined> =>
+        Promise.resolve(staged.get(key) as V | undefined),
+      put: <V = unknown>(key: string, value: V): Promise<void> => {
+        staged.set(key, value);
+        return Promise.resolve();
+      },
+      delete: (key: string): Promise<boolean> =>
+        Promise.resolve(staged.delete(key)),
+    });
+    this.#values = staged;
+    return result;
   }
 }
 

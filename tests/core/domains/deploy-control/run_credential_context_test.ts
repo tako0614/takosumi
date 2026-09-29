@@ -196,6 +196,58 @@ describe("canonical Capsule Run credential context", () => {
     }
   });
 
+  test("a newly claimed Apply cannot hide an older unresolved provider process", async () => {
+    const safety = { phase: "unknown", runId: "apply_1", runType: "apply" };
+    const priorSafety = { phase: "unknown", runId: "apply_old", runType: "apply" };
+    const priorApply = {
+      ...APPLY,
+      id: "apply_old",
+      status: "running",
+      auditEvents: [{
+        type: "apply.started",
+        data: { providerDispatched: true },
+      }],
+    };
+    const input = {
+      workspaceId: "workspace_1",
+      capsuleId: "capsule_1",
+      runId: "apply_1",
+      phase: "apply" as const,
+    };
+    expect(await resolveCanonicalCapsuleRunCredentialContext(
+      ledger({ safety, priorSafety, priorApply }), input,
+    )).toEqual({ ok: false, reason: "runtime_safety_mismatch" });
+    expect(await resolveCanonicalCapsuleRunCredentialContext(
+      ledger({ safety, priorSafety, priorApply: {
+        ...priorApply,
+        status: "failed",
+        auditEvents: [],
+      } }), input,
+    )).toMatchObject({ ok: true });
+    expect(await resolveCanonicalCapsuleRunCredentialContext(
+      ledger({
+        capsule: { ...CAPSULE, currentStateVersionId: "state_partial_1" },
+        plan: { ...PLAN, capsuleCurrentStateVersionId: "state_partial_1" },
+        safety,
+        priorSafety,
+        priorApply: {
+          ...priorApply,
+          status: "failed",
+          stateVersionId: "state_partial_1",
+          auditEvents: [{
+            type: "apply.failed",
+            data: {
+              providerDispatched: true,
+              providerApplySucceeded: false,
+              statePersistence: "persisted",
+              stateVersionId: "state_partial_1",
+            },
+          }],
+        },
+      }), input,
+    )).toMatchObject({ ok: true });
+  });
+
   test("allows only the current terminating destroy Run for destroy issuance", async () => {
     const destroyPlan = { ...PLAN, operation: "destroy" };
     const destroyApply = { ...APPLY, operation: "destroy" };

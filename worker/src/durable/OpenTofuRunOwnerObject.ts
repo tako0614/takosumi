@@ -19,8 +19,17 @@ import {
   RUN_PROGRESS_PHASE,
   runIsInFlight,
 } from "takosumi-contract/runs";
+import type {
+  QueuedMutationFence,
+  QueuedMutationStep,
+} from "../../../core/domains/deploy-control/run-engine/run_engine.ts";
 
 const RUN_OWNER_RECORD_KEY = "run";
+/** Private DO storage: never include lease tokens in the debug owner record. */
+const RUN_OWNER_MUTATION_FENCE_KEY = "mutation-fence";
+// The private observe-and-keepalive step must renew container activity well
+// inside the runner's 30-second idle-stop window.
+const RUN_OWNER_MUTATION_POLL_MS = 10_000;
 const RUN_OWNER_MAX_ATTEMPTS = 3;
 const RUN_OWNER_RETRY_BASE_DELAY_MS = 10_000;
 const RUN_OWNER_RETRY_MAX_DELAY_MS = 60_000;
@@ -134,6 +143,12 @@ interface DurableObjectStorage {
 
 export interface OpenTofuRunOwnerObjectDeps {
   readonly now?: () => number;
+  readonly beginMutation?: (runId: string, env: CloudflareWorkerEnv) => Promise<QueuedMutationStep>;
+  readonly advanceMutation?: (
+    fence: QueuedMutationFence,
+    env: CloudflareWorkerEnv,
+    checkpoint: (fence: QueuedMutationFence) => Promise<void>,
+  ) => Promise<QueuedMutationStep>;
   readonly dispatch?: (
     dispatch: {
       readonly action: DispatchableRunAction;
@@ -176,6 +191,9 @@ export class OpenTofuRunOwnerObject {
   readonly #markRetriesExhausted: NonNullable<
     OpenTofuRunOwnerObjectDeps["markRetriesExhausted"]
   >;
+  readonly #beginMutation: NonNullable<OpenTofuRunOwnerObjectDeps["beginMutation"]>;
+  readonly #advanceMutation: NonNullable<OpenTofuRunOwnerObjectDeps["advanceMutation"]>;
+  readonly #legacyDispatchOverride: boolean;
 
   constructor(
     readonly state: DurableObjectState,
@@ -184,9 +202,12 @@ export class OpenTofuRunOwnerObject {
   ) {
     this.#now = deps.now ?? (() => Date.now());
     this.#dispatch = deps.dispatch ?? dispatchToController;
+    this.#legacyDispatchOverride = deps.dispatch !== undefined;
     this.#readRunStatus = deps.readRunStatus ?? readRunStatusFromController;
     this.#markRetriesExhausted =
       deps.markRetriesExhausted ?? markRunRetriesExhausted;
+    this.#beginMutation = deps.beginMutation ?? beginMutationFromController;
+    this.#advanceMutation = deps.advanceMutation ?? advanceMutationFromController;
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -335,6 +356,10 @@ export class OpenTofuRunOwnerObject {
   ): Promise<void> {
     const record = await this.#readRecord();
     if (!record) return;
+    if (record.action === "apply" && !this.#legacyDispatchOverride) {
+      await this.#pumpMutation(record);
+      return;
+    }
     if (isTerminalOwnerStatus(record.status)) {
       await this.state.storage.deleteAlarm?.();
       return;
@@ -412,6 +437,96 @@ export class OpenTofuRunOwnerObject {
         await this.#dispatchDueRun({ drainControllerRetry: false });
       }
     }
+  }
+
+  /** Each alarm owns only a short, restartable step of the same fenced mutation. */
+  async #pumpMutation(record: RunOwnerRecord): Promise<void> {
+    const now = this.#now();
+    if (record.nextAttemptAt && parseIsoMs(record.nextAttemptAt, now) > now) {
+      await this.#scheduleAlarm(parseIsoMs(record.nextAttemptAt, now));
+      return;
+    }
+    if (isTerminalOwnerStatus(record.status)) {
+      await this.state.storage.deleteAlarm?.();
+      return;
+    }
+    let fence = await this.state.storage.get<QueuedMutationFence>(RUN_OWNER_MUTATION_FENCE_KEY);
+    try {
+      if (!fence) {
+        const begun = await this.#beginMutation(record.runId, this.env);
+        if (begun.kind !== "pending") {
+          await this.#recordMutationStep(record, begun);
+          return;
+        }
+        // This private storage write must complete before any runner call.
+        fence = begun.fence;
+        await this.state.storage.put(RUN_OWNER_MUTATION_FENCE_KEY, fence);
+      }
+      if (fence.runId !== record.runId || fence.workspaceId !== record.workspaceId) {
+        await this.#recordMutationStep(record, { kind: "indeterminate" });
+        return;
+      }
+      const step = await this.#advanceMutation(
+        fence,
+        this.env,
+        (next) => this.state.storage.put(RUN_OWNER_MUTATION_FENCE_KEY, next),
+      );
+      if (step.kind === "pending") {
+        await this.state.storage.put(RUN_OWNER_MUTATION_FENCE_KEY, step.fence);
+      }
+      await this.#recordMutationStep(record, step);
+    } catch (error) {
+      // After a private fence exists, retries may observe only that exact
+      // identity; they must not re-enter the fresh queued-run claim path.
+      if (fence) {
+        await this.#writeRecord({
+          ...record,
+          status: "running",
+          updatedAt: new Date(now).toISOString(),
+          lastError: runDispatchFailureMessage(error),
+        });
+        await this.#scheduleAlarm(now + RUN_OWNER_MUTATION_POLL_MS);
+        return;
+      }
+      await this.#recordDispatchFailure(record, error, false);
+    }
+  }
+
+  async #recordMutationStep(record: RunOwnerRecord, step: QueuedMutationStep): Promise<void> {
+    const now = this.#now();
+    const updatedAt = new Date(now).toISOString();
+    if (step.kind === "pending") {
+      await this.#writeRecord({
+        ...clearRetryState(record),
+        status: "running",
+        startedAt: record.startedAt ?? updatedAt,
+        updatedAt,
+        lastError: undefined,
+      });
+      await this.#scheduleAlarm(now + RUN_OWNER_MUTATION_POLL_MS);
+      return;
+    }
+    if (step.kind === "indeterminate") {
+      await this.#writeRecord({
+        ...record,
+        status: "failed",
+        finishedAt: updatedAt,
+        updatedAt,
+        lastError: "mutation authority indeterminate; exact dispatch retained for recovery",
+      });
+      await this.state.storage.deleteAlarm?.();
+      return;
+    }
+    await this.#writeRecord({
+      ...clearRetryState(record),
+      status: step.status as RunOwnerStatus,
+      observedRunStatus: step.status as Exclude<RunStatus, "queued" | "running">,
+      finishedAt: updatedAt,
+      updatedAt,
+      lastError: undefined,
+    });
+    await this.state.storage.delete(RUN_OWNER_MUTATION_FENCE_KEY);
+    await this.state.storage.deleteAlarm?.();
   }
 
   /**
@@ -673,6 +788,23 @@ async function dispatchToController(
 ): Promise<void> {
   const service = await cachedRunOwnerDeployControlService(env);
   await service.operations.dispatchQueuedRun(dispatch);
+}
+
+async function beginMutationFromController(
+  runId: string,
+  env: CloudflareWorkerEnv,
+): Promise<QueuedMutationStep> {
+  const service = await cachedRunOwnerDeployControlService(env);
+  return await service.operations.beginQueuedMutation(runId);
+}
+
+async function advanceMutationFromController(
+  fence: QueuedMutationFence,
+  env: CloudflareWorkerEnv,
+  checkpoint: (fence: QueuedMutationFence) => Promise<void>,
+): Promise<QueuedMutationStep> {
+  const service = await cachedRunOwnerDeployControlService(env);
+  return await service.operations.advanceQueuedMutation(fence, checkpoint);
 }
 
 async function readRunStatusFromController(
