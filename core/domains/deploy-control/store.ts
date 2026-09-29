@@ -109,6 +109,7 @@ import {
   RUN_LIST_MAX_LIMIT,
   type ArtifactRecord,
   type Run,
+  type RunAuditEvent,
   type RunGroup,
 } from "takosumi-contract/runs";
 import type { BackupRecord } from "takosumi-contract/backups";
@@ -2293,6 +2294,29 @@ export interface TransitionRunInput {
   readonly requireStoredManagementAuthority?: boolean;
 }
 
+/** Append-only audit write accepted only from the current running Run owner. */
+export interface AppendRunningRunAuditEventInput {
+  readonly id: string;
+  readonly kind: "plan" | "apply";
+  readonly workspaceId: string;
+  readonly leaseToken: string;
+  readonly event: RunAuditEvent;
+}
+
+export function mergeRunAuditEvents<R extends PlanRun | ApplyRun>(
+  candidate: R,
+  current: R,
+): R {
+  const currentIds = new Set(current.auditEvents.map((event) => event.id));
+  return {
+    ...candidate,
+    auditEvents: [
+      ...current.auditEvents,
+      ...candidate.auditEvents.filter((event) => !currentIds.has(event.id)),
+    ],
+  };
+}
+
 /** The existing cancellation states, with no queued execution evidence. */
 export function runCanCancelDuringDrain(run: StoredRunRecord): run is PlanRun | ApplyRun {
   const plan = isPlanRunRecord(run);
@@ -3178,6 +3202,8 @@ export interface OpenTofuControlStore {
    */
   transitionRun(input: TransitionRunInput): Promise<TransitionRunResult>;
 
+  appendRunningRunAuditEvent(input: AppendRunningRunAuditEventInput): Promise<boolean>;
+
   /**
    * Lease-fenced atomic commit of a succeeded SourceSyncRun and its canonical
    * SourceSnapshot. A lost fence writes neither record.
@@ -3216,6 +3242,7 @@ export interface OpenTofuControlStore {
   /** Latest decisive mutation for runtime Interface safety, if one exists. */
   getCapsuleRuntimeSafety(
     capsuleId: string,
+    options?: { readonly excludeRunId?: string },
   ): Promise<CapsuleRuntimeSafety | undefined>;
   /**
    * Internal scheduler safety net read: returns oldest-first dispatchable
@@ -4253,13 +4280,18 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     ) {
       return Promise.resolve({ won: false, run: publicStoredRun(current) });
     }
-    const persisted: PlanRun | ApplyRun | SourceSyncRun | Run =
+    let persisted: PlanRun | ApplyRun | SourceSyncRun | Run =
       input.clearHeartbeat
         ? stripRunHeartbeat(input.run)
         : ({
             ...input.run,
             ...resolvedHeartbeat(input),
           } as PlanRun | ApplyRun | SourceSyncRun | Run);
+    if (input.kind === "plan" && isPlanRunRecord(current)) {
+      persisted = mergeRunAuditEvents(persisted as PlanRun, current);
+    } else if (input.kind === "apply" && isApplyRunRecord(current)) {
+      persisted = mergeRunAuditEvents(persisted as ApplyRun, current);
+    }
     this.#runs.set(input.id, preserveStoredRunManagementAuthority(persisted, current));
     if (input.clearLeaseToken) {
       this.#runLeases.delete(input.id);
@@ -4267,6 +4299,21 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       this.#runLeases.set(input.id, input.setLeaseToken);
     }
     return Promise.resolve({ won: true, run: publicStoredRun(persisted) });
+  }
+
+  appendRunningRunAuditEvent(input: AppendRunningRunAuditEventInput): Promise<boolean> {
+    const current = this.#runs.get(input.id);
+    if (
+      !current || current.workspaceId !== input.workspaceId ||
+      transitionKindForRun(current) !== input.kind || current.status !== "running" ||
+      this.#runLeases.get(input.id) !== input.leaseToken ||
+      !(isPlanRunRecord(current) || isApplyRunRecord(current))
+    ) return Promise.resolve(false);
+    if (current.auditEvents.some((event) => event.id === input.event.id)) {
+      return Promise.resolve(false);
+    }
+    this.#runs.set(input.id, { ...current, auditEvents: [...current.auditEvents, input.event] });
+    return Promise.resolve(true);
   }
 
   async commitSourceSyncSuccess(
@@ -4603,24 +4650,27 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
 
   #capsuleRuntimeSafetyCandidate(
     capsuleId: string,
+    excludeRunId?: string,
   ): ApplyRun | Run | undefined {
     const rows = Array.from(this.#runs.values()).filter(
       (run): run is ApplyRun | Run =>
+        run.id !== excludeRunId &&
         (isApplyRunRecord(run) || isPublicRunRecord(run)) &&
         runtimeSafetyCandidate(run, capsuleId),
     );
     return rows.sort(compareRuntimeSafetyCandidatesDesc)[0];
   }
 
-  #capsuleRuntimeSafety(capsuleId: string): CapsuleRuntimeSafety | undefined {
-    const latest = this.#capsuleRuntimeSafetyCandidate(capsuleId);
+  #capsuleRuntimeSafety(capsuleId: string, excludeRunId?: string): CapsuleRuntimeSafety | undefined {
+    const latest = this.#capsuleRuntimeSafetyCandidate(capsuleId, excludeRunId);
     return latest ? capsuleRuntimeSafetyFromRun(latest) : undefined;
   }
 
   getCapsuleRuntimeSafety(
     capsuleId: string,
+    options: { readonly excludeRunId?: string } = {},
   ): Promise<CapsuleRuntimeSafety | undefined> {
-    return Promise.resolve(this.#capsuleRuntimeSafety(capsuleId));
+    return Promise.resolve(this.#capsuleRuntimeSafety(capsuleId, options.excludeRunId));
   }
 
   listRecoverableOpenTofuRuns(
@@ -6088,8 +6138,12 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         );
       }
     }
+    const currentApplyRun = input.applyRunTerminal && this.#runs.get(input.applyRunTerminal.id);
     const applyRunTerminal = input.applyRunTerminal && preserveStoredRunManagementAuthority(
-      input.applyRunTerminal, this.#runs.get(input.applyRunTerminal.id));
+      currentApplyRun && isApplyRunRecord(currentApplyRun)
+        ? mergeRunAuditEvents(input.applyRunTerminal, currentApplyRun)
+        : input.applyRunTerminal,
+      currentApplyRun);
     const planRunApplied = input.planRunApplied && preserveStoredRunManagementAuthority(
       input.planRunApplied, this.#runs.get(input.planRunApplied.id));
     if (input.stateVersion) {

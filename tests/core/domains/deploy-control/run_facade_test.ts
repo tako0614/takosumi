@@ -245,6 +245,7 @@ test("getRun returns a source-scoped compatibility_check run", async () => {
       },
     ],
     auditEvents: [],
+    credentialMints: [],
   });
 });
 

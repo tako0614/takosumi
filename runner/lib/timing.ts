@@ -15,6 +15,23 @@ export interface RunnerPhaseTiming {
 export class RunnerPhaseTimer {
   readonly #timings: RunnerPhaseTiming[] = [];
 
+  start(phase: string): () => void {
+    const startedAtMs = Date.now();
+    const startedAtMonotonicMs = performance.now();
+    let finished = false;
+    return () => {
+      if (finished) return;
+      finished = true;
+      const finishedAtMs = Date.now();
+      this.#timings.push({
+        phase,
+        startedAt: new Date(startedAtMs).toISOString(),
+        finishedAt: new Date(finishedAtMs).toISOString(),
+        durationMs: Math.max(0, performance.now() - startedAtMonotonicMs),
+      });
+    };
+  }
+
   async measure<T>(phase: string, run: () => Promise<T>): Promise<T> {
     const startedAtMs = Date.now();
     try {

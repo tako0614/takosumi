@@ -12,6 +12,8 @@ import { expect, test } from "bun:test";
 
 import { handleRunnerRequest, safeRunId } from "../../runner/entrypoint.ts";
 import { handleRunnerRequestWithDependencies } from "../../runner/lib/http_server.ts";
+import { credentialDirPrefixForWorkspace } from "../../runner/lib/credentials.ts";
+import { workspaceForRun } from "../../runner/lib/artifacts.ts";
 import type { RuntimeSecretFileSystem } from "../../runner/lib/runtime_secrets.ts";
 
 const RUN_ROOT = Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT ?? "/tmp/takosumi-runs";
@@ -554,8 +556,9 @@ test("release action cleans partial runtime secret setup failures without leakin
     const runtimeSecret = `runtime-setup-${stage}-secret-0123456789abcdef`;
     const runtimeContent = JSON.stringify({ ONLY_SECRET: runtimeSecret });
     const providerSecret =
-      `provider-setup-${stage}-secret-0123456789abcdef`;
-    const credentialPrefix = `${safeRunId(runId)}-credentials-`;
+      `provider-setup-${runId}-secret-0123456789abcdef`;
+    // Provider material is deliberately outside the source/workspace tree.
+    const credentialPrefix = await credentialDirPrefixForWorkspace(workspaceForRun(runId));
     let runtimeDir = "";
     let target = "";
     let chmodCalls = 0;
@@ -566,9 +569,10 @@ test("release action cleans partial runtime secret setup failures without leakin
       );
     const runtimeSecretFileSystem: Partial<RuntimeSecretFileSystem> = {
       mkdtemp: async (prefix) => {
-        credentialDirsBeforeFailure = (await readdir(RUN_ROOT)).filter(
-          (entry) => entry.startsWith(credentialPrefix),
-        );
+        // Observe only this unique run's private directory names. Never read
+        // another run's credential files or infer ownership from global timing.
+        credentialDirsBeforeFailure = (await readdir("/tmp"))
+          .filter((entry) => entry.startsWith(credentialPrefix));
         runtimeDir = await mkdtemp(prefix);
         target = join(runtimeDir, "runtime.json");
         return runtimeDir;
@@ -662,20 +666,18 @@ test("release action cleans partial runtime secret setup failures without leakin
         expect(body.stderr).not.toContain(leaked);
       }
       expect(credentialDirsBeforeFailure).toHaveLength(1);
-      expect(
-        (await readdir(RUN_ROOT)).filter((entry) =>
-          entry.startsWith(credentialPrefix),
-        ),
-      ).toHaveLength(0);
+      for (const entry of credentialDirsBeforeFailure) {
+        await expect(stat(join("/tmp", entry))).rejects.toMatchObject({ code: "ENOENT" });
+      }
       await expect(stat(runtimeDir)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(stat(target)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(stat(join(sourceRoot, "runtime-setup-ran"))).rejects
         .toMatchObject({ code: "ENOENT" });
     } finally {
       await rm(root, { recursive: true, force: true });
-      for (const entry of await readdir(RUN_ROOT)) {
+      for (const entry of credentialDirsBeforeFailure) {
         if (entry.startsWith(credentialPrefix)) {
-          await rm(join(RUN_ROOT, entry), { recursive: true, force: true });
+          await rm(join("/tmp", entry), { recursive: true, force: true });
         }
       }
       if (runtimeDir !== "") {

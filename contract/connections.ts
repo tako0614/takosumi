@@ -2,6 +2,7 @@ import type { JsonValue } from "./types.ts";
 import { containsSecretLikeString, isSecretKey } from "./redaction.ts";
 import type {
   CredentialRecipeRunIssuance,
+  CredentialRecipeRenewableEnv,
   CredentialRecipeRuntimeInputs,
 } from "./credential-recipes.ts";
 import type { SourceGitConnectionKind } from "./sources.ts";
@@ -61,6 +62,8 @@ export interface ProviderConnectionRecipeRef {
   readonly preRunAction?: string;
   /** Server-resolved run-issuance authority pinned from the installed mode. */
   readonly runIssuance?: CredentialRecipeRunIssuance;
+  /** Server-resolved, value-free rotating-file delivery pinned at registration. */
+  readonly renewableEnv?: CredentialRecipeRenewableEnv;
   /**
    * Server-resolved run-scoped sensitive input protocol pinned from the
    * installed mode. Value-free: it names only the two provider-block arguments

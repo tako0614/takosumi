@@ -3,12 +3,10 @@ import {
   lstat,
   link,
   mkdir,
-  mkdtemp,
   rm,
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
@@ -80,7 +78,10 @@ test("provider lockfile relay returns exact regular-file bytes, including empty"
 
 test("provider lockfile relay refuses symlink and hardlink paths without reading secret bytes", async () => {
   await withWorkspace(async (workspace, runId) => {
-    const scratch = await mkdtemp(join(tmpdir(), "takosumi-lockfile-relay-"));
+    // Keep the hardlink source on the same filesystem as the run workspace;
+    // TMPDIR may be mounted separately from RUN_ROOT in CI and local sandboxes.
+    const scratch = join(workspace.root, "lockfile-relay-fixture");
+    await mkdir(scratch, { recursive: true });
     const secret = "relay-secret-symlink-hardlink";
     const target = join(scratch, "secret-lockfile");
     try {

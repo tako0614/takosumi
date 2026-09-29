@@ -143,6 +143,84 @@ test("Git revision plan reconciles an existing Capsule to one reviewable pinned 
   expect(denied.status).toBe(403);
 });
 
+test("Git revision cannot replace an un-applied accepted install review", async () => {
+  const fixture = revisionFixture({
+    unAppliedInitialInstall: true,
+    acceptedRepositoryInstallUx: true,
+  });
+  const response = await fixture.request(
+    "/api/v1/capsules/cap_revision/revision-plans",
+    "POST",
+    { ref: "release/v2" },
+    { "idempotency-key": "revision-before-first-apply" },
+  );
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({
+    error: {
+      code: "failed_precondition",
+      details: { reason: "revision_requires_applied_state" },
+    },
+  });
+  expect(fixture.counts).toEqual({ sync: 0, compatibility: 0, plan: 0 });
+});
+
+test("an already persisted pre-Apply revision stops instead of retrying Plan forever", async () => {
+  const earlier = revisionFixture({ acceptedRepositoryInstallUx: true });
+  const created = await earlier.request(
+    "/api/v1/capsules/cap_revision/revision-plans",
+    "POST",
+    { ref: "release/v2" },
+    { "idempotency-key": "legacy-revision-before-first-apply" },
+  );
+  const id = (await created.json()).revisionPlan.id as string;
+  const original = (await earlier.planStore.get(id))!;
+  const fixture = revisionFixture({
+    unAppliedInitialInstall: true,
+    acceptedRepositoryInstallUx: true,
+  });
+  await fixture.planStore.create({
+    ...original,
+    phase: "planning",
+    revision: {
+      ...original.revision!,
+      base: {
+        ...original.revision!.base,
+        capsuleStateGeneration: 0,
+        capsuleStateVersionId: undefined,
+      },
+    },
+  }, original.workspaceManagementAuthority);
+
+  const stopped = await fixture.reconcile(id);
+  expect(stopped.status).toBe(200);
+  expect((await stopped.json()).revisionPlan).toMatchObject({
+    phase: "failed",
+    diagnostic: { code: "revision_requires_applied_state" },
+  });
+  expect(fixture.counts.plan).toBe(0);
+});
+
+test("plain Git revision remains available before first Apply", async () => {
+  const fixture = revisionFixture({ unAppliedInitialInstall: true });
+  const created = await fixture.request(
+    "/api/v1/capsules/cap_revision/revision-plans",
+    "POST",
+    { ref: "release/v2" },
+    { "idempotency-key": "plain-git-revision-before-first-apply" },
+  );
+  expect(created.status).toBe(201);
+  const id = (await created.json()).revisionPlan.id as string;
+  await fixture.reconcile(id);
+  fixture.succeedSourceSync();
+  await fixture.reconcile(id);
+  await fixture.reconcile(id);
+  const reviewable = await fixture.reconcile(id);
+  expect((await reviewable.json()).revisionPlan).toMatchObject({
+    phase: "reviewable",
+    planRunId: expect.stringMatching(/^plan_/u),
+  });
+});
+
 test("Git revision POST rejects preparation captured before drain and resume", async () => {
   const fixture = revisionFixture({ pausePreparation: true });
   const pending = fixture.request(
@@ -376,6 +454,29 @@ test("Git revision plan terminalizes deterministic evidence identity conflicts",
   }
 });
 
+test("Git revision Plan does not retry a rejected initial install snapshot pin", async () => {
+  const fixture = revisionFixture({ deterministicConflict: "plan_snapshot" });
+  const created = await fixture.request(
+    "/api/v1/capsules/cap_revision/revision-plans",
+    "POST",
+    { ref: "release/v2" },
+    { "idempotency-key": "revision-initial-pin-conflict" },
+  );
+  const id = (await created.json()).revisionPlan.id as string;
+  await fixture.reconcile(id);
+  fixture.succeedSourceSync();
+  await fixture.reconcile(id);
+  await fixture.reconcile(id);
+
+  const stopped = await fixture.reconcile(id);
+  expect(stopped.status).toBe(200);
+  expect((await stopped.json()).revisionPlan).toMatchObject({
+    phase: "failed",
+    diagnostic: { code: "repository_install_ux_snapshot_mismatch" },
+  });
+  expect(fixture.counts.plan).toBe(0);
+});
+
 test("Git revision plan stops before Plan creation when compatibility is not runnable", async () => {
   const fixture = revisionFixture({ compatibilityLevel: "needs_patch" });
   const created = await fixture.request(
@@ -503,13 +604,15 @@ type LostAckMutation = "sync" | "compatibility" | "plan";
 function revisionFixture(
   options: {
     readonly loseAckOnce?: readonly LostAckMutation[];
-    readonly deterministicConflict?: "sync" | "compatibility";
+    readonly deterministicConflict?: "sync" | "compatibility" | "plan_snapshot";
     readonly compatibilityLevel?: CapsuleCompatibilityReport["level"];
     readonly mutateInstallConfigDuringPlan?: boolean;
     readonly sourceDefaultPath?: string;
     readonly adoptedPath?: string;
     readonly pausePreparation?: boolean;
     readonly raceAfterClaimBeforeSourceSync?: boolean;
+    readonly unAppliedInitialInstall?: boolean;
+    readonly acceptedRepositoryInstallUx?: boolean;
   } = {},
 ) {
   const managementStore = new InMemoryOpenTofuControlStore();
@@ -558,8 +661,9 @@ function revisionFixture(
     sourceId: source.id,
     installConfigId: "cfg_revision",
     installingPrincipalId: WORKSPACE.ownerUserId,
-    currentStateVersionId: "sv_three",
-    currentStateGeneration: 3,
+    ...(options.unAppliedInitialInstall
+      ? { currentStateGeneration: 0 }
+      : { currentStateVersionId: "sv_three", currentStateGeneration: 3 }),
     status: "active",
     createdAt: "2026-08-20T00:00:00.000Z",
     updatedAt: "2026-08-20T00:00:00.000Z",
@@ -569,6 +673,9 @@ function revisionFixture(
     id: "cfg_revision",
     workspaceId: WORKSPACE.id,
     modulePath: "deploy/app",
+    ...(options.acceptedRepositoryInstallUx
+      ? { installExperience: { repositoryInstallUx: { status: "accepted" } } }
+      : {}),
   };
   const syncRuns = new Map<string, SourceSyncRun>();
   const snapshots = new Map<string, SourceSnapshot>();
@@ -806,6 +913,13 @@ function revisionFixture(
     ) => {
       const existing = runs.get(input.planRunId!);
       if (existing) return { planRun: existing as never };
+      if (options.deterministicConflict === "plan_snapshot") {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "The initial install review pins a different SourceSnapshot.",
+          { reason: "repository_install_ux_snapshot_mismatch" },
+        );
+      }
       counts.plan += 1;
       const run: Run = {
         id: input.planRunId!,

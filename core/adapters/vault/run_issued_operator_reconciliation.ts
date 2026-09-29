@@ -6,6 +6,7 @@ import {
   type FixedOperatorProviderConnectionDeclaration,
 } from "takosumi-contract";
 import {
+  isCredentialRecipeRenewableEnv,
   isProviderRuntimeInputs,
   PROVIDER_RUNTIME_INPUTS_CONTRACT,
   type CredentialRecipe,
@@ -150,6 +151,17 @@ export function resolveTargetConnection(
   const fileEnvNames = Object.values(mode.files ?? {})
     .flatMap((file) => (file.envName ? [file.envName] : []))
     .sort();
+  if (
+    mode.renewableEnv !== undefined &&
+    (!isCredentialRecipeRenewableEnv(mode.renewableEnv) ||
+      !envNames.includes(mode.renewableEnv.sourceEnvName) ||
+      envNames.includes(mode.renewableEnv.fileEnvName))
+  ) {
+    throw reconcileError(
+      "invalid_descriptor",
+      "installed run-issued recipe has an invalid renewable credential projection",
+    );
+  }
   if (envNames.length === 0 && fileEnvNames.length === 0) {
     throw reconcileError(
       "invalid_descriptor",
@@ -173,6 +185,7 @@ export function resolveTargetConnection(
       audience: mode.runIssuance.audience,
       scopes: [...mode.runIssuance.scopes].sort(),
     },
+    ...(mode.renewableEnv ? { renewableEnv: mode.renewableEnv } : {}),
     // The installed mode's run-scoped sensitive input protocol is recipe
     // authority exactly like `runIssuance`. Dropping it here would silently
     // un-wire a run-issued recipe that declares it, and the failure would only

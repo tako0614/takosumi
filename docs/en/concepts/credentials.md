@@ -49,6 +49,17 @@ Verify a Connection with `/test`. To take one out of service, use `/revoke` rath
 deleting it. A revoked Connection cannot be used by later Runs, and the records of past
 Runs remain.
 
+For some supported providers, a Connection configured for credential renewal during a Run
+is labeled **Auto-renewing**. To use it, explicitly choose that labeled Connection when
+setting up the Capsule's provider assignment. A catalog or Recipe entry alone does not
+enable it, and Takosumi does not switch an existing static Connection or assignment
+automatically.
+
+The required provider version depends on the provider. For example, renewal through
+`TAKOFORM_TOKEN_FILE` requires version 4.1.0 or later of the `tako0614/takoform`
+Terraform provider. This floor applies only to that provider; it is not a minimum version
+for providers across Takosumi.
+
 ## How far the values travel
 
 Values reach the runner sandbox only while a Run is executing, and they are gone when it
@@ -113,7 +124,10 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/credential-recipes" \
 ```
 
 A provider with no Recipe runs just as well once you create a generic env or file
-Connection for it.
+Connection for it. A renewable capability listed in the reference catalog does not opt a
+Recipe or Connection in by itself. Actual renewal during a Run is enabled only by an
+explicit renewal descriptor on a run-issued Credential Recipe. It also requires selecting
+the corresponding Connection and meeting that provider's version requirement.
 
 ## Keep non-secret settings out
 

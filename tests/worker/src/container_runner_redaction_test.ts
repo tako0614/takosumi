@@ -10,6 +10,32 @@ import { RUNNER_MUTATION_INDETERMINATE_CODE } from "../../../worker/src/runner_p
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+// Actual RunnerPhaseTimer.measure labels across plan_apply.ts and source_sync.ts.
+const RUNNER_PHASE_TIMING_PHASES = [
+  "provider_scan_policy",
+  "provider_lockfile_restore",
+  "source_build",
+  "runner_plan_prepare",
+  "runner_plan_finalize",
+  "tofu_init",
+  "tofu_plan",
+  "tofu_state_reconcile",
+  "tofu_plan_json",
+  "tofu_apply",
+  "tofu_output",
+  "source_host_policy",
+  "source_git_credentials",
+  "source_ref_resolve",
+  "source_clone",
+  "source_repository_metadata",
+  "source_repository_manifest",
+  "source_subtree",
+  "source_repository_modules",
+  "source_snapshot_reuse",
+  "source_archive",
+  "source_archive_read",
+  "source_archive_digest",
+] as const;
 
 // The remote/container adapter does not execute this closure, but Restore's
 // public runner boundary requires Core's source authority control. Keep the
@@ -189,6 +215,58 @@ test("container runner threads phase timings into non-secret diagnostics", async
   expect(JSON.stringify(result.diagnostics)).not.toContain(
     "bad phase with spaces",
   );
+});
+
+test("plan diagnostics expose finite Worker elapsed timings as closed numeric JSON", async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(performance, "now");
+  let now = 100;
+  Object.defineProperty(performance, "now", {
+    configurable: true,
+    value: () => now,
+  });
+  try {
+    const runner = new CloudflareContainerOpenTofuRunner(
+      envReturning({
+        planDigest: PLAN_DIGEST,
+        planArtifact: {
+          kind: "runner-local",
+          ref: "runner-local://plan_worker_timing/tfplan",
+          digest: PLAN_DIGEST,
+        },
+        workerTimings: {
+          doInputRestoreReadinessMs: 20,
+          doContainerExecutionResponseBufferMs: 30,
+          doPlanArtifactPersistenceMs: 40,
+          workerAdapterRpcMs: -1,
+          startedAt: "2026-06-28T00:00:00.000Z",
+          providerText: "diag-provider-secret",
+        },
+      }),
+    );
+    const plan = runner.plan({
+      planRun: { id: "plan_worker_timing" },
+    } as Parameters<CloudflareContainerOpenTofuRunner["plan"]>[0]);
+    now = 112;
+    const result = await plan;
+    const timingDiagnostic = result.diagnostics?.find(
+      (diagnostic) => diagnostic.code === "runner_elapsed_timings",
+    );
+    expect(timingDiagnostic?.message).toBe("runner elapsed timings (ms)");
+    expect(timingDiagnostic?.detail).toBeDefined();
+    expect(JSON.parse(timingDiagnostic!.detail!)).toEqual({
+      workerAdapterRpcMs: 12,
+      doInputRestoreReadinessMs: 20,
+      doContainerExecutionResponseBufferMs: 30,
+      doPlanArtifactPersistenceMs: 40,
+    });
+    expect(JSON.stringify(result.diagnostics)).not.toContain(
+      "diag-provider-secret",
+    );
+    expect(timingDiagnostic!.detail).not.toContain("startedAt");
+  } finally {
+    if (descriptor) Object.defineProperty(performance, "now", descriptor);
+    else Reflect.deleteProperty(performance, "now");
+  }
 });
 
 test("container runner returns sanitized source sync phase timings", async () => {
@@ -571,6 +649,123 @@ test("container runner retries transient Cloudflare container capacity exhaustio
   expect(result.planDigest).toBe(PLAN_DIGEST);
 });
 
+test("container runner preserves a typed mutation receipt when refresh cancellation races its response", async () => {
+  const abort = new AbortController();
+  let resolveResponse!: () => void;
+  let markEntered!: () => void;
+  const entered = new Promise<void>((resolve) => { markEntered = resolve; });
+  const responseGate = new Promise<void>((resolve) => { resolveResponse = resolve; });
+  const runner = new CloudflareContainerOpenTofuRunner({
+    RUNNER: {
+      idFromName: (name: string) => name,
+      get: () => ({
+        fetch: async () => {
+          markEntered();
+          await responseGate;
+          return Response.json({
+            errorCode: RUNNER_MUTATION_INDETERMINATE_CODE,
+            action: "apply",
+            status: "failed",
+            retryable: false,
+            detail: "mutation may have changed provider state",
+          }, { status: 409 });
+        },
+      }),
+    },
+  } as unknown as CloudflareWorkerEnv);
+  const pending = runner.apply({
+    planRun: { id: "plan_abort_race" },
+    applyRun: { id: "apply_abort_race" },
+    planArtifact: {
+      kind: "runner-local",
+      ref: "runner-local://plan_abort_race/tfplan",
+      digest: PLAN_DIGEST,
+    },
+  } as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0], {
+    signal: abort.signal,
+  });
+  await entered;
+  abort.abort();
+  resolveResponse();
+  await expect(pending).rejects.toBeInstanceOf(OpenTofuRunnerExecutionError);
+});
+
+test("container runner rejects a late successful Plan response after cancellation", async () => {
+  const abort = new AbortController();
+  let resolveResponse!: () => void;
+  let markEntered!: () => void;
+  const entered = new Promise<void>((resolve) => { markEntered = resolve; });
+  const responseGate = new Promise<void>((resolve) => { resolveResponse = resolve; });
+  const runner = new CloudflareContainerOpenTofuRunner({
+    RUNNER: {
+      idFromName: (name: string) => name,
+      get: () => ({
+        fetch: async () => {
+          markEntered();
+          await responseGate;
+          return Response.json({
+            status: "succeeded",
+            planDigest: PLAN_DIGEST,
+            planArtifact: {
+              kind: "runner-local",
+              ref: "runner-local://plan_late_success/tfplan",
+              digest: PLAN_DIGEST,
+            },
+          });
+        },
+      }),
+    },
+  } as unknown as CloudflareWorkerEnv);
+  const pending = runner.plan({
+    planRun: { id: "plan_late_success" },
+  } as Parameters<CloudflareContainerOpenTofuRunner["plan"]>[0], {
+    signal: abort.signal,
+  });
+  await entered;
+  abort.abort(new Error("refresh delivery unavailable"));
+  resolveResponse();
+  await expect(pending).rejects.toThrow("runner_request_aborted");
+});
+
+test("container runner rejects a late successful Apply response after cancellation", async () => {
+  const abort = new AbortController();
+  let resolveResponse!: () => void;
+  let markEntered!: () => void;
+  const entered = new Promise<void>((resolve) => { markEntered = resolve; });
+  const responseGate = new Promise<void>((resolve) => { resolveResponse = resolve; });
+  const runner = new CloudflareContainerOpenTofuRunner({
+    RUNNER: {
+      idFromName: (name: string) => name,
+      get: () => ({
+        fetch: async () => {
+          markEntered();
+          await responseGate;
+          return Response.json({
+            status: "succeeded",
+            state: { digest: PLAN_DIGEST },
+            rawOutputRef: "runner-local://apply_late_success/outputs",
+          });
+        },
+      }),
+    },
+  } as unknown as CloudflareWorkerEnv);
+  const pending = runner.apply({
+    planRun: { id: "plan_late_success" },
+    applyRun: { id: "apply_late_success" },
+    planArtifact: {
+      kind: "runner-local",
+      ref: "runner-local://plan_late_success/tfplan",
+      digest: PLAN_DIGEST,
+    },
+  } as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0], {
+    signal: abort.signal,
+  });
+  await entered;
+  abort.abort(new Error("refresh delivery unavailable"));
+  resolveResponse();
+  await expect(pending).rejects.toThrow("runner_request_aborted");
+});
+
 test("container runner returns provider installation attestation from apply and destroy results", async () => {
   const providerInstallation = [
     {
@@ -589,6 +784,11 @@ test("container runner returns provider installation attestation from apply and 
     envReturning({
       providerInstallation,
       state: { digest: `sha256:${"d".repeat(64)}` },
+      workerTimings: {
+        doInputRestoreReadinessMs: 20,
+        doContainerExecutionResponseBufferMs: 30,
+        doPlanArtifactPersistenceMs: 40,
+      },
     }),
   );
 
@@ -622,6 +822,14 @@ test("container runner returns provider installation attestation from apply and 
     attested: true,
   });
   expect(destroy.stateDigest).toBe(`sha256:${"d".repeat(64)}`);
+  expect(apply).not.toHaveProperty("workerTimings");
+  expect(destroy).not.toHaveProperty("workerTimings");
+  expect(apply.diagnostics?.some(
+    (diagnostic) => diagnostic.code === "runner_elapsed_timings",
+  )).toBe(false);
+  expect(destroy.diagnostics?.some(
+    (diagnostic) => diagnostic.code === "runner_elapsed_timings",
+  )).toBe(false);
 });
 
 test("container runner redacts stderr before apply diagnostics are returned", async () => {
@@ -757,6 +965,42 @@ test("container runner returns a typed failed apply with persisted partial state
           statePersistence: "persisted",
         },
         state: { digest: stateDigest },
+        phaseTimings: [
+          ...RUNNER_PHASE_TIMING_PHASES.map((phase) => ({
+            phase,
+            startedAt: "2026-09-27T10:00:00.000Z",
+            finishedAt: "2026-09-27T10:06:24.000Z",
+            durationMs: 384_000,
+            ...(phase === "tofu_apply"
+              ? { secret: "must-not-survive" }
+              : {}),
+          })),
+          {
+            phase: "invalid phase",
+            startedAt: "2026-09-27T10:00:00.000Z",
+            finishedAt: "2026-09-27T10:06:24.000Z",
+            durationMs: 384_000,
+          },
+          {
+            phase: "tofu_apply",
+            startedAt: "not-a-date",
+            finishedAt: "2026-09-27T10:06:24.000Z",
+            durationMs: 384_000,
+          },
+          {
+            phase: "tofu_apply",
+            startedAt:
+              "Sun, 27 Sep 2026 10:00:00 GMT (password=provider-secret)",
+            finishedAt: "2026-09-27T10:06:24.000Z",
+            durationMs: 384_000,
+          },
+          {
+            phase: "passwordsecretabc",
+            startedAt: "2026-09-27T10:00:00.000Z",
+            finishedAt: "2026-09-27T10:06:24.000Z",
+            durationMs: 1,
+          },
+        ],
         outputs: {
           must_not_publish: { sensitive: false, value: "stale" },
         },
@@ -803,7 +1047,17 @@ test("container runner returns a typed failed apply with persisted partial state
       message: "OpenTofu provider execution failed after dispatch",
       detail: expect.stringContaining(safeFailureDetail),
     },
+    {
+      severity: "info",
+      message: "runner phase timings recorded",
+      detail: RUNNER_PHASE_TIMING_PHASES.map(
+        (phase) => `${phase}=384000ms`,
+      ).join(", "),
+    },
   ]);
+  expect(JSON.stringify(result)).not.toContain("must-not-survive");
+  expect(JSON.stringify(result.diagnostics)).not.toContain("provider-secret");
+  expect(JSON.stringify(result.diagnostics)).not.toContain("passwordsecretabc");
 });
 
 test("container runner returns a typed failed destroy with persisted partial state", async () => {

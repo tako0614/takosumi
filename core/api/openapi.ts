@@ -4391,10 +4391,26 @@ function runSchemas(): Record<string, Record<string, unknown>> {
     },
     RunLogsResponse: {
       type: "object",
-      required: ["diagnostics", "auditEvents"],
+      required: ["diagnostics", "auditEvents", "credentialMints"],
       properties: {
         diagnostics: { type: "array", items: ref("RunDiagnostic") },
         auditEvents: { type: "array", items: ref("RunAuditEvent") },
+        credentialMints: { type: "array", items: ref("RunCredentialMintEvidence") },
+      },
+      additionalProperties: false,
+    },
+    RunCredentialMintEvidence: {
+      type: "object",
+      required: ["connectionId", "provider", "createdAt", "temporary", "ttlEnforced"],
+      properties: {
+        connectionId: { type: "string" },
+        provider: { type: "string" },
+        createdAt: { type: "string" },
+        temporary: { type: "boolean" },
+        ttlEnforced: { type: "boolean" },
+        expiresAt: { type: "string" },
+        ttlSeconds: { type: "number" },
+        issuer: { type: "string" },
       },
       additionalProperties: false,
     },

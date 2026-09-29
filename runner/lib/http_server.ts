@@ -4,12 +4,18 @@
 //
 // Pure code-motion out of runner/entrypoint.ts (P3 god-file split). No
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
-import type { RunRequest } from "./types.ts";
+import type { RunCredentialRefreshUpdate, RunRequest } from "./types.ts";
 import { readJsonObject, parseAction } from "./util.ts";
 import { redactRunnerOutput } from "./redaction.ts";
 import {
   redactionValuesFromRequest,
   sourceCredentialRedactionValuesFromRequest,
+  refreshRunCredentials,
+  setRunRedactionValues,
+  clearRunRedactionValues,
+  beginRunCredentialRefreshSession,
+  endRunCredentialRefreshSession,
+  runCredentialRefreshSessionMetadata,
 } from "./credentials.ts";
 import {
   isSourceSyncRequest,
@@ -53,7 +59,39 @@ export async function handleRunnerRequestWithDependencies(
   {
     const url = new URL(request.url);
     if (url.pathname === "/healthz" || url.pathname === "/container/health") {
-      return Response.json({ ok: true, runner: "opentofu" });
+      return Response.json({
+        ok: true,
+        runner: "opentofu",
+        capabilities: ["takosumi.runner-credential-refresh@v1"],
+      });
+    }
+    const credentialRefreshMatch = /^\/runs\/([^/]+)\/credentials$/.exec(url.pathname);
+    if (credentialRefreshMatch) {
+      const runId = decodeURIComponent(credentialRefreshMatch[1]!);
+      if (request.method === "GET") {
+        const metadata = runCredentialRefreshSessionMetadata(runId);
+        return metadata
+          ? Response.json(metadata)
+          : Response.json({ error: "credential refresh is not active" }, { status: 409 });
+      }
+      if (request.method !== "PUT") {
+        return Response.json({ error: "method not allowed" }, {
+          status: 405,
+          headers: { allow: "PUT" },
+        });
+      }
+      try {
+        const body = await readBoundedJsonObject(request, 64 * 1024);
+        await refreshRunCredentials(
+          runId,
+          body as unknown as RunCredentialRefreshUpdate,
+        );
+        return Response.json({ ok: true, status: "updated" });
+      } catch {
+        // Never echo the update or a filesystem diagnostic: either may contain
+        // bearer material or a private run path.
+        return Response.json({ error: "credential refresh rejected" }, { status: 409 });
+      }
     }
     const match = /^\/runs\/([^/]+)$/.exec(url.pathname);
     const artifactMatch = /^\/runs\/([^/]+)\/artifacts\/tfplan$/.exec(
@@ -202,7 +240,20 @@ export async function handleRunnerRequestWithDependencies(
       );
     }
 
+    const mutationRedactionScope =
+      action === "plan" || action === "apply" || action === "destroy";
+    let credentialRefreshSessionHandle: object | undefined;
     try {
+      if (mutationRedactionScope) {
+        credentialRefreshSessionHandle = await beginRunCredentialRefreshSession(
+          runId,
+          action as "plan" | "apply" | "destroy",
+          body.request,
+          request.signal,
+          requestRedactionValues,
+        );
+        setRunRedactionValues(runId, requestRedactionValues);
+      }
       const result =
         action === "compatibility_check"
           ? await runCompatibilityCheck(runId, body.request)
@@ -242,6 +293,50 @@ export async function handleRunnerRequestWithDependencies(
         },
         { status: 500 },
       );
+    } finally {
+      if (mutationRedactionScope) {
+        await endRunCredentialRefreshSession(runId, credentialRefreshSessionHandle);
+        clearRunRedactionValues(runId, requestRedactionValues);
+      }
     }
   }
+}
+
+async function readBoundedJsonObject(
+  request: Request,
+  maxBytes: number,
+): Promise<Record<string, unknown>> {
+  const contentLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new Error("request too large");
+  }
+  if (!request.body) throw new Error("request body is missing");
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel();
+        throw new Error("request too large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  const value = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("request body must be an object");
+  }
+  return value as Record<string, unknown>;
 }

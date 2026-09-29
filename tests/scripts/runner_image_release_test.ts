@@ -20,13 +20,17 @@ import { basename, dirname, join, relative } from "node:path";
 
 import {
   parseRunnerImageReleaseArgs,
-  runRunnerImageRelease,
+  runCommand,
+  runRunnerImageRelease as runRunnerImageReleaseImpl,
+  type RunnerImageReleaseOptions,
+  type RunnerImageReleaseRuntime,
 } from "../../scripts/runner-image-release.ts";
 import {
   dashboardAssetTreeSeal,
   injectPlatformSourcePaths,
 } from "../../scripts/platform-worker-release.ts";
 import { platformReleaseSourceAuthorityDigest } from "../../scripts/lib/platform-release-source.ts";
+import { authorizeRunnerRegistryPull } from "../../scripts/lib/runner-image-registry-auth.ts";
 import {
   RUNNER_IMAGE_NATIVE_CANDIDATE_KIND,
   RUNNER_IMAGE_NATIVE_PROOF_KIND,
@@ -61,6 +65,22 @@ const DOCKER_29_SINGLE_MANIFEST_ID =
   "sha256:aadeb8bcd4a034e70bb181f1bf617c5d9b2e07485eb19fc04cc17c69e1977c50";
 const DOCKER_29_SINGLE_MANIFEST_REF =
   `${PREVIOUS.slice(0, PREVIOUS.indexOf("@"))}@${DOCKER_29_SINGLE_MANIFEST_ID}`;
+
+function runRunnerImageRelease(
+  options: RunnerImageReleaseOptions,
+  runtime: RunnerImageReleaseRuntime = {},
+): Promise<unknown> {
+  return runRunnerImageReleaseImpl(
+    options,
+    options.command === "reconcile"
+      ? {
+          accountId: "b".repeat(32),
+          registryPullAuth: async () => {},
+          ...runtime,
+        }
+      : runtime,
+  );
+}
 
 afterEach(() => {
   for (const root of roots.splice(0)) {
@@ -1050,12 +1070,18 @@ function withLegacyLocalImageProof(
   handler: (
     executable: string,
     args: readonly string[],
+    options?: Readonly<{ dockerConfig?: string }>,
   ) => Promise<{ exitCode: number; stdout: string; stderr: string }>,
 ) {
-  return async (executable: string, args: readonly string[]) =>
+  return async (
+    executable: string,
+    args: readonly string[],
+    _cwd: string,
+    options?: Readonly<{ dockerConfig?: string }>,
+  ) =>
     executable === "docker" && args[0] === "image"
       ? legacyLocalImageInspect()
-      : handler(executable, args);
+      : handler(executable, args, options);
 }
 
 async function bindDescriptorAwareAttemptThroughBuild(
@@ -2028,6 +2054,7 @@ test("an unresolved publication blocks every later nonce until exact read-only r
   ).rejects.toThrow("runner_image_publication_journal_unbound");
   expect(nonceCalls).toBe(0);
 
+  const pullAuthCalls: Array<{ registry: string; config: string }> = [];
   const reconciled = await runRunnerImageRelease(
     {
       ...buildOptions(input),
@@ -2037,8 +2064,12 @@ test("an unresolved publication blocks every later nonce until exact read-only r
       repositoryRoot: input.repository,
       git: gitFor("fix/TASK-0032-runner-image"),
       materializeSource: materializeFixtureSource,
-      command: withLegacyLocalImageProof(async (_executable, args) => {
+      registryPullAuth: async (registry: string, config: string) => {
+        pullAuthCalls.push({ registry, config });
+      },
+      command: withLegacyLocalImageProof(async (_executable, args, commandOptions) => {
         expect(args).toEqual(["manifest", "inspect", "--verbose", TRANSPORT_REF]);
+        expect(commandOptions?.dockerConfig).toBe(pullAuthCalls[0]?.config);
         return {
           exitCode: 0,
           stdout: JSON.stringify({
@@ -2058,6 +2089,8 @@ test("an unresolved publication blocks every later nonce until exact read-only r
       }),
     },
   );
+  expect(pullAuthCalls).toHaveLength(1);
+  expect(pullAuthCalls[0]!.registry).toBe("registry.cloudflare.com");
   expect(reconciled).toMatchObject({ status: "published", image: { immutableRef: NEXT } });
 });
 
@@ -3959,6 +3992,142 @@ test("read-only reconciliation can prove an exact recorded transport tag absent"
   ).resolves.toMatchObject({ status: "planned" });
 });
 
+test("fresh pull authentication failure leaves the exact publication attempt unresolved", async () => {
+  const input = fixture();
+  writePrivate(input.state, `${JSON.stringify(publicationAttempt(input))}\n`);
+  const calls: string[][] = [];
+  await expect(
+    runRunnerImageRelease(
+      { ...buildOptions(input), command: "reconcile" },
+      {
+        repositoryRoot: input.repository,
+        git: gitFor("fix/TASK-0032-runner-image"),
+        materializeSource: materializeFixtureSource,
+        registryPullAuth: async () => {
+          throw new Error("runner_image_pull_auth_credentials_failed");
+        },
+        command: withLegacyLocalImageProof(async (executable, args) => {
+          calls.push([executable, ...args]);
+          throw new Error("manifest must not run without fresh pull auth");
+        }),
+      },
+    ),
+  ).rejects.toThrow("runner_image_pull_auth_credentials_failed");
+  expect(calls).toEqual([]);
+  expect(readFileSync(input.state, "utf8").trim().split("\n")).toHaveLength(1);
+  const evidence = readFileSync(input.evidence, "utf8");
+  expect(evidence).toContain('"status":"incomplete"');
+  expect(evidence).not.toContain("published");
+});
+
+test("reconcile refuses a different registry account before minting pull credentials", async () => {
+  const input = fixture();
+  writePrivate(input.state, `${JSON.stringify(publicationAttempt(input))}\n`);
+  let minted = false;
+  await expect(runRunnerImageRelease(
+    { ...buildOptions(input), command: "reconcile" },
+    {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+      accountId: "c".repeat(32),
+      materializeSource: materializeFixtureSource,
+      registryPullAuth: async () => { minted = true; },
+      command: withLegacyLocalImageProof(async () => {
+        throw new Error("manifest must not run for a different account");
+      }),
+    },
+  )).rejects.toThrow("runner_image_publication_account_mismatch");
+  expect(minted).toBeFalse();
+  expect(readFileSync(input.state, "utf8").trim().split("\n")).toHaveLength(1);
+});
+
+test("fresh pull credentials use an isolated Docker config and never enter diagnostics", async () => {
+  const input = fixture();
+  const bin = join(input.operator, "auth-bin");
+  const config = join(input.operator, "docker-config");
+  const trace = join(input.operator, "auth-trace.jsonl");
+  const fail = join(input.operator, "auth-fail");
+  const secret = "fixture-password-never-log";
+  mkdirSync(bin, { mode: 0o700 });
+  mkdirSync(config, { mode: 0o700 });
+  writeFileSync(join(bin, "bunx"), [
+    `#!${process.execPath}`,
+    'import { appendFileSync, existsSync } from "node:fs";',
+    `const trace=${JSON.stringify(trace)},secret=${JSON.stringify(secret)},fail=${JSON.stringify(fail)};`,
+    'appendFileSync(trace, JSON.stringify({kind:"issue",args:process.argv.slice(2),account:process.env.CLOUDFLARE_ACCOUNT_ID,logs:process.env.WRANGLER_WRITE_LOGS,metrics:process.env.WRANGLER_SEND_METRICS,tokenPresent:Boolean(process.env.CLOUDFLARE_API_TOKEN)})+"\\n");',
+    'if(existsSync(fail)){process.stdout.write(secret);process.stderr.write(secret);process.exit(1);}',
+    'process.stdout.write(JSON.stringify({username:"v1",password:secret}));',
+  ].join("\n"), { mode: 0o755 });
+  writeFileSync(join(bin, "docker"), [
+    `#!${process.execPath}`,
+    'import { appendFileSync, readFileSync, writeFileSync } from "node:fs";',
+    'import { join } from "node:path";',
+    `const trace=${JSON.stringify(trace)},secret=${JSON.stringify(secret)};`,
+    'const args=process.argv.slice(2),password=readFileSync(0,"utf8");',
+    'appendFileSync(trace, JSON.stringify({kind:"login",args,passwordMatches:password===secret,envDockerConfig:process.env.DOCKER_CONFIG??null})+"\\n");',
+    'writeFileSync(join(args[1],"config.json"),"{}",{mode:0o644});',
+  ].join("\n"), { mode: 0o755 });
+  const previousPath = process.env.PATH;
+  const previousToken = process.env.CLOUDFLARE_API_TOKEN;
+  try {
+    process.env.PATH = `${bin}:${previousPath ?? ""}`;
+    delete process.env.CLOUDFLARE_API_TOKEN;
+    await authorizeRunnerRegistryPull(
+      "registry.cloudflare.com", config, input.repository, input.config, "b".repeat(32),
+    );
+    const records = readFileSync(trace, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({
+      kind: "issue",
+      args: ["--no-install", "wrangler", "containers", "registries", "credentials", "registry.cloudflare.com", "--pull", "--json", "--config", input.config],
+      account: "b".repeat(32),
+      logs: "false",
+      metrics: "false",
+      tokenPresent: false,
+    });
+    expect(records[1]).toMatchObject({
+      kind: "login",
+      args: ["--config", config, "login", "--password-stdin", "--username", "v1", "registry.cloudflare.com"],
+      passwordMatches: true,
+      envDockerConfig: null,
+    });
+    expect(statSync(join(config, "config.json")).mode & 0o777).toBe(0o600);
+    expect(readFileSync(trace, "utf8")).not.toContain(secret);
+
+    writeFileSync(fail, "true");
+    await expect(authorizeRunnerRegistryPull(
+      "registry.cloudflare.com", config, input.repository, input.config, "b".repeat(32),
+    )).rejects.toThrow("runner_image_pull_auth_credentials_failed");
+    expect(readFileSync(trace, "utf8")).not.toContain(secret);
+
+    writePrivate(input.state, `${JSON.stringify(publicationAttempt(input))}\n`);
+    await expect(runRunnerImageRelease(
+      { ...buildOptions(input), command: "reconcile" },
+      {
+        repositoryRoot: input.repository,
+        git: gitFor("fix/TASK-0032-runner-image"),
+        materializeSource: materializeFixtureSource,
+        registryPullAuth: authorizeRunnerRegistryPull,
+        command: withLegacyLocalImageProof(async () => {
+          throw new Error("manifest must not run after auth failure");
+        }),
+      },
+    )).rejects.toThrow("runner_image_pull_auth_credentials_failed");
+    const evidence = readFileSync(input.evidence, "utf8");
+    expect(evidence).toContain('"status":"incomplete"');
+    expect(evidence).not.toContain(secret);
+    expect(readFileSync(input.state, "utf8").trim().split("\n")).toHaveLength(1);
+    expect(readdirSync(input.operator).some((name) =>
+      name.startsWith(".takosumi-runner-reconcile-")
+    )).toBeFalse();
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousToken === undefined) delete process.env.CLOUDFLARE_API_TOKEN;
+    else process.env.CLOUDFLARE_API_TOKEN = previousToken;
+  }
+});
+
 test("candidate build authenticates and loads exact native bytes without rebuilding or rerunning them", async () => {
   const input = fixture();
   writeCandidateArtifacts(input);
@@ -5137,6 +5306,83 @@ test("real Docker-client failures are bounded and reaped before container cleanu
       .toEqual(["started", "terminated", "late-create", "cleanup"]);
     expect(existsSync(container)).toBeFalse();
     expect(readFileSync(input.state, "utf8")).toBe("");
+  }
+});
+
+test.skipIf(process.platform === "win32")(
+  "timed-out real command settles when an escaped descendant retains its output pipes",
+  async () => {
+    const directory = mkdtempSync(join(tmpdir(), "runner-release-process-"));
+    const descendantPidFile = join(directory, "descendant.pid");
+    const parentTerminatedFile = join(directory, "parent-terminated");
+    const descendantCode = "setTimeout(() => process.exit(0), 5000)";
+    const parentCode = `
+      import { spawn } from "node:child_process";
+      import { writeFileSync } from "node:fs";
+      const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(descendantCode)}], {
+        detached: true,
+        stdio: ["ignore", "inherit", "inherit"],
+      });
+      descendant.unref();
+      writeFileSync(${JSON.stringify(descendantPidFile)}, String(descendant.pid));
+      process.on("SIGTERM", () => {
+        writeFileSync(${JSON.stringify(parentTerminatedFile)}, "terminated");
+        process.exit(0);
+      });
+      setInterval(() => {}, 1000);
+    `;
+    const outcome = runCommand(process.execPath, ["-e", parentCode], directory, 400)
+      .then(() => "resolved", (error: unknown) =>
+        error instanceof Error ? error.name : "unknown-error"
+      );
+    let descendantPid: number | undefined;
+    try {
+      for (let attempt = 0; attempt < 100 && !existsSync(descendantPidFile); attempt++) {
+        await Bun.sleep(10);
+      }
+      expect(existsSync(descendantPidFile)).toBeTrue();
+      descendantPid = Number(readFileSync(descendantPidFile, "utf8"));
+      expect(Number.isSafeInteger(descendantPid) && descendantPid > 0).toBeTrue();
+
+      const result = await Promise.race([
+        outcome,
+        Bun.sleep(1_500).then(() => "still-pending"),
+      ]);
+      expect(existsSync(parentTerminatedFile)).toBeTrue();
+      expect(result).toBe("CommandTimeoutError");
+    } finally {
+      if (descendantPid) {
+        try {
+          process.kill(descendantPid, "SIGTERM");
+        } catch {
+          // The finite fixture may already have exited.
+        }
+      }
+      await Promise.race([outcome, Bun.sleep(1_000)]);
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test("the manifest command's private Docker config does not mutate process environment", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "runner-release-docker-config-"));
+  const previous = process.env.DOCKER_CONFIG;
+  try {
+    process.env.DOCKER_CONFIG = "caller-docker-config";
+    const result = await runCommand(
+      process.execPath,
+      ["-e", "process.stdout.write(process.env.DOCKER_CONFIG ?? '')"],
+      directory,
+      2_000,
+      { dockerConfig: join(directory, "private-docker-config") },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(join(directory, "private-docker-config"));
+    expect(process.env.DOCKER_CONFIG).toBe("caller-docker-config");
+  } finally {
+    if (previous === undefined) delete process.env.DOCKER_CONFIG;
+    else process.env.DOCKER_CONFIG = previous;
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

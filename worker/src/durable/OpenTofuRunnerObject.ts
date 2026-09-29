@@ -55,6 +55,34 @@ const RUNNER_PROVIDER_FAILURE_CODES = new Set([
   "apply_failed",
   RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
 ]);
+// Keep this finite allowlist aligned with RunnerPhaseTimer.measure calls in
+// runner/lib/plan_apply.ts and runner/lib/source_sync.ts. Failure payloads must
+// not echo an untrusted phase label into durable/public diagnostics.
+const RUNNER_PHASE_TIMING_PHASES = new Set([
+  "provider_scan_policy",
+  "provider_lockfile_restore",
+  "source_build",
+  "runner_plan_prepare",
+  "runner_plan_finalize",
+  "tofu_init",
+  "tofu_plan",
+  "tofu_state_reconcile",
+  "tofu_plan_json",
+  "tofu_apply",
+  "tofu_output",
+  "source_host_policy",
+  "source_git_credentials",
+  "source_ref_resolve",
+  "source_clone",
+  "source_repository_metadata",
+  "source_repository_manifest",
+  "source_subtree",
+  "source_repository_modules",
+  "source_snapshot_reuse",
+  "source_archive",
+  "source_archive_read",
+  "source_archive_digest",
+]);
 const RUNNER_PLAN_EXECUTION_FAILURE_CODES = new Set([
   "provider_source_invalid",
   "provider_package_unavailable",
@@ -471,6 +499,26 @@ interface RunnerMutationDispatchRecord {
   readonly redispatchBlocked: true;
 }
 
+interface ActiveCredentialRefreshClaim {
+  readonly owner: { readonly kind: "plan" | "apply"; readonly id: string };
+  readonly runnerRunId: string;
+  readonly action: "plan" | "apply" | "destroy";
+  readonly semanticDigest?: string;
+  readonly signal?: AbortSignal;
+  readonly manifestDigest: string;
+  readonly descriptors: readonly {
+    readonly providerSource: string;
+    readonly connectionId: string;
+    readonly sourceEnvName: string;
+    readonly fileEnvName: string;
+  }[];
+  sequence: number;
+  busy: boolean;
+  poisoned: boolean;
+  containerStarted?: boolean;
+  readonly staged?: Map<string, { readonly value: string; readonly expiresAt: string }>;
+}
+
 type RunnerMutationAuthorityClaim =
   | {
       readonly kind: "preparing";
@@ -579,6 +627,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   #stateCryptoInstance: StateArtifactCrypto | undefined;
   #lastStartupSeconds: number | undefined;
   readonly #activeMutationPreparations = new Set<string>();
+  readonly #activeCredentialRefreshClaims = new Map<string, ActiveCredentialRefreshClaim>();
   readonly #activeReleasePreparations = new Set<string>();
   readonly #restoreAuthorityLock = new AsyncSerialLock();
   readonly #localRunnerProxyUrl: URL | undefined;
@@ -920,6 +969,17 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         { status: 500 },
       );
     } finally {
+      if (runDispatch) {
+        const dispatchRunId = new URL(request.url).pathname.match(/^\/runs\/([^/]+)$/)?.[1];
+        if (dispatchRunId) {
+          const id = decodeURIComponent(dispatchRunId);
+          const active = this.#activeCredentialRefreshClaims.get(id);
+          if (active?.signal === request.signal) {
+            active.staged?.clear();
+            this.#activeCredentialRefreshClaims.delete(id);
+          }
+        }
+      }
       if (runDispatch && !mutationIndeterminate) {
         await this.#shutdownContainerIfSupported();
       }
@@ -1071,6 +1131,134 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       request,
       this.defaultPort,
     );
+  }
+
+  async #forwardCredentialRefresh(
+    runnerRunId: string,
+    request: Request,
+  ): Promise<Response> {
+    const active = this.#activeCredentialRefreshClaims.get(runnerRunId);
+    if (
+      !active || active.busy || active.poisoned || request.signal.aborted ||
+      active.signal?.aborted
+    ) {
+      return Response.json({ error: "credential refresh is not active" }, { status: 409 });
+    }
+    let update: Record<string, unknown>;
+    try {
+      update = await readBoundedRequestJsonObject(request, 64 * 1024);
+    } catch {
+      return Response.json({ error: "credential refresh is not active" }, { status: 400 });
+    }
+    if (active.busy || active.poisoned ||
+      !credentialRefreshUpdateMatches(update, active)) {
+      return Response.json({ error: "credential refresh is not active" }, { status: 409 });
+    }
+    active.busy = true;
+    try {
+      const durable = parseRunnerMutationDispatchRecord(
+        await this.ctx.storage.get<unknown>(RUNNER_MUTATION_AUTHORITY_STORAGE_KEY),
+      );
+      if (active.owner.kind === "apply") {
+        if (
+          !durable ||
+          (active.containerStarted
+            ? durable.phase !== "dispatched"
+            : durable.phase !== "preparing" && durable.phase !== "dispatched") ||
+          durable.semanticDigest !== active.semanticDigest ||
+          (durable.action !== "apply" && durable.action !== "destroy") ||
+          active.action !== durable.action
+        ) {
+          return Response.json({ error: "credential refresh is not active" }, { status: 409 });
+        }
+      } else if (
+        active.owner.id !== active.runnerRunId || active.action !== "plan"
+      ) {
+        return Response.json({ error: "credential refresh is not active" }, { status: 409 });
+      }
+      if (active.signal?.aborted || request.signal.aborted ||
+        this.#activeCredentialRefreshClaims.get(runnerRunId) !== active) {
+        return Response.json({ error: "credential refresh is not active" }, { status: 409 });
+      }
+      if (!active.containerStarted) {
+        // Preparation owns a bounded latest-value slot per pinned binding. No
+        // credential is persisted or sent to source/build commands. At dispatch
+        // the snapshot and accepted sequence move to the runner in one payload.
+        const value = (update.credentials as Record<string, unknown>[])[0]!;
+        active.staged!.set(value.sourceEnvName as string, {
+          value: value.value as string,
+          expiresAt: value.expiresAt as string,
+        });
+        active.sequence = update.sequence as number;
+        return Response.json({ ok: true, status: "updated" });
+      }
+      await this.#awaitCredentialSessionReady(runnerRunId, active, request);
+      if (active.signal?.aborted || request.signal.aborted ||
+        this.#activeCredentialRefreshClaims.get(runnerRunId) !== active) {
+        return Response.json({ error: "credential refresh is not active" }, { status: 409 });
+      }
+      const response = await this.#containerFetch(
+        new Request(request.url, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(update),
+          signal: AbortSignal.any([
+            request.signal,
+            ...(active.signal ? [active.signal] : []),
+          ]),
+        }),
+      );
+      if (!response.ok) {
+        if (response.status >= 500) active.poisoned = true;
+        return Response.json({ error: "credential refresh was rejected" }, {
+          status: response.status === 409 ? 409 : 502,
+        });
+      }
+      active.sequence = update.sequence as number;
+      return Response.json({ ok: true, status: "updated" });
+    } catch {
+      // A lost acknowledgement may follow an atomic container write. Refuse
+      // further updates rather than guessing whether this sequence committed.
+      active.poisoned = true;
+      return Response.json({ error: "credential refresh delivery is ambiguous" }, { status: 502 });
+    } finally {
+      active.busy = false;
+    }
+  }
+
+  async #awaitCredentialSessionReady(
+    runnerRunId: string,
+    active: ActiveCredentialRefreshClaim,
+    request: Request,
+  ): Promise<void> {
+    const deadline = Date.now() + 10_000;
+    const signal = AbortSignal.any([
+      request.signal,
+      ...(active.signal ? [active.signal] : []),
+      AbortSignal.timeout(10_000),
+    ]);
+    while (Date.now() < deadline) {
+      signal.throwIfAborted();
+      if (active.signal?.aborted || request.signal.aborted ||
+        this.#activeCredentialRefreshClaims.get(runnerRunId) !== active) {
+        throw new Error("credential refresh is no longer active");
+      }
+      const response = await this.#containerFetch(new Request(request.url, {
+        method: "GET", signal,
+      }));
+      if (response.ok) {
+        const ready = await readJsonObject(response, 4_096);
+        const owner = recordField(ready, "owner");
+        if (isRecord(owner) && owner.kind === active.owner.kind &&
+          owner.id === active.owner.id && ready.runnerRunId === runnerRunId &&
+          ready.manifestDigest === active.manifestDigest &&
+          ready.sequence === active.sequence) return;
+        throw new Error("credential refresh readiness does not match active owner");
+      }
+      if (response.status !== 409) throw new Error("credential refresh readiness failed");
+      await sleep(10);
+    }
+    throw new Error("credential refresh readiness timed out");
   }
 
   async #startContainerIfSupported(): Promise<void> {
@@ -1280,16 +1468,13 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
    * target before provider dispatch is authorized.
    *
    * The controller allocates `stateScope.stateRef` only for the ledger's next
-   * generation, so a protocol-written object at that exact slot is always an
-   * uncommitted remnant of a run whose post-persist ledger commit never
-   * landed — never a committed generation. A remnant left by a different
-   * ApplyRun is discarded so this run's conditional persist can recreate it;
-   * its execution-evidence sidecar goes with it because evidence is written
-   * create-only under the writer's run identity. A remnant left by THIS
-   * ApplyRun means the durable dispatch authority was lost after the persist;
-   * the completed object is adopted only when it authenticates, never
-   * re-dispatched. An object without the protocol's metadata is foreign and
-   * keeps the orphaned block.
+   * generation. A protocol-written object at that slot may be a completed
+   * external mutation whose Core ledger commit was interrupted. R2 metadata
+   * alone cannot prove a different ApplyRun's target is disposable. Only this
+   * exact ApplyRun may adopt the object after authenticating its existing
+   * durable dispatch authority; every other claimant remains blocked without
+   * deleting the state or its execution-evidence sidecar. A foreign object
+   * without protocol metadata also remains blocked.
    */
   async #gateExistingStateTarget(
     scope: StateScope,
@@ -1327,13 +1512,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       }
       return await this.#blockPreparedMutationWithExistingTarget(preparation);
     }
-    await bucket.delete(scope.stateRef);
-    await bucket.delete(executionEvidenceObjectKey(scope.stateRef));
-    console.warn("OpenTofu runner discarded an uncommitted state remnant", {
-      action,
-      generation: scope.generation,
-    });
-    return undefined;
+    return await this.#blockPreparedMutationWithExistingTarget(preparation);
   }
 
   async #markMutationDispatched(
@@ -1707,11 +1886,38 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
 
   async #fetchWithDurablePlanArtifacts(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === "/capabilities" && request.method === "GET") {
+      const ownerKind = url.searchParams.get("ownerKind");
+      const ownerId = url.searchParams.get("ownerId")?.trim();
+      const runnerRunId = url.searchParams.get("runnerRunId")?.trim();
+      if (
+        (ownerKind !== "plan" && ownerKind !== "apply") || !ownerId || !runnerRunId ||
+        (ownerKind === "plan" && ownerId !== runnerRunId)
+      ) return Response.json({ error: "credential refresh owner required" }, { status: 400 });
+      await this.#ensureContainerReady(url);
+      const health = await this.#containerFetch(
+        new Request(containerHealthUrl(url), { method: "GET" }),
+      );
+      if (!health.ok) return Response.json({ error: "runner capability probe failed" }, { status: 503 });
+      const payload = await health.json().catch(() => undefined) as unknown;
+      const capabilities = isRecord(payload) && Array.isArray(payload.capabilities)
+        ? payload.capabilities.filter((value): value is string => typeof value === "string")
+        : [];
+      return Response.json({ owner: { kind: ownerKind, id: ownerId }, runnerRunId, capabilities });
+    }
+    const refreshMatch = /^\/runs\/([^/]+)\/credentials$/.exec(url.pathname);
+    if (refreshMatch && request.method === "PUT") {
+      return await this.#forwardCredentialRefresh(
+        decodeURIComponent(refreshMatch[1]!),
+        request,
+      );
+    }
     const match = /^\/runs\/([^/]+)$/.exec(url.pathname);
     if (!match || request.method !== "POST") {
       return await this.#containerFetch(request);
     }
     const runId = decodeURIComponent(match[1]!);
+    const inputRestoreReadinessStartedAt = monotonicNow();
     const bodyText = await request.text();
     const envelope = parseRunEnvelope(bodyText);
     // Source-sync runs (LANE M1) never touch OpenTofu state; they run, leave the
@@ -1745,6 +1951,17 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     }
     const sourceArchive = parseSourceArchiveRestore(envelope.request);
     const depStates = parseDepStates(envelope.request);
+    const credentialRefreshOwner = envelope.action === "plan"
+      ? { kind: "plan" as const, id: runId }
+      : applyRunId
+        ? { kind: "apply" as const, id: applyRunId }
+        : undefined;
+    const credentialRefreshClaim = await renewableCredentialRefreshClaim(
+      credentialRefreshOwner,
+      runId,
+      envelope.action,
+      envelope.request,
+    );
     const stateKeys = stateScope
       ? []
       : await stateArtifactKeys(envelope.request);
@@ -1761,13 +1978,39 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         assertRawOutputRefForScope(stateScope, applyRunId, rawOutputRef);
       }
     }
-    const dispatchRequest = () =>
-      new Request(request.url, {
+    let dispatchBody: string | undefined;
+    const dispatchRequest = () => {
+      if (dispatchBody === undefined) {
+        const active = this.#activeCredentialRefreshClaims.get(runId);
+        if (active && active.signal === request.signal) {
+          const credentials = recordField(envelope.request, "credentials");
+          if (!isRecord(credentials) || !isRecord(credentials.env) ||
+            !Array.isArray(credentials.renewable)) {
+            throw new Error("renewable dispatch projection is unavailable");
+          }
+          for (const descriptor of credentials.renewable) {
+            if (!isRecord(descriptor)) throw new Error("renewable dispatch descriptor is invalid");
+            const staged = active.staged?.get(descriptor.sourceEnvName as string);
+            if (staged) {
+              credentials.env[descriptor.sourceEnvName as string] = staged.value;
+              descriptor.expiresAt = staged.expiresAt;
+            }
+          }
+          credentials.refreshSequence = active.sequence;
+          active.containerStarted = true;
+          active.staged?.clear();
+          dispatchBody = JSON.stringify(envelope);
+        } else {
+          dispatchBody = bodyText;
+        }
+      }
+      return new Request(request.url, {
         method: request.method,
         headers: runnerRequestHeaders(request),
-        body: bodyText,
+        body: dispatchBody,
         signal: request.signal,
       });
+    };
     let mutationPreparation: RunnerMutationDispatchRecord | undefined;
     let mutationDispatch: RunnerMutationDispatchRecord | undefined;
     let mutationRequest: Request | undefined;
@@ -1826,6 +2069,14 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         return adopted ?? runnerMutationIndeterminateResponse(envelope.action);
       }
       mutationPreparation = claim.record;
+      if (credentialRefreshClaim) {
+        this.#activeCredentialRefreshClaims.set(runId, {
+          ...credentialRefreshClaim,
+          semanticDigest: mutationPreparation.semanticDigest,
+          signal: request.signal,
+          staged: new Map(),
+        });
+      }
       if (stateScope) {
         const gated = await this.#gateExistingStateTarget(
           stateScope,
@@ -1851,6 +2102,16 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           : runnerReleaseIndeterminateResponse();
       }
       releasePreparation = claim.record;
+    }
+    if (credentialRefreshClaim && envelope.action === "plan") {
+      if (this.#activeCredentialRefreshClaims.has(runId)) {
+        throw new Error("renewable Plan owner is already active");
+      }
+      this.#activeCredentialRefreshClaims.set(runId, {
+        ...credentialRefreshClaim,
+        signal: request.signal,
+        staged: new Map(),
+      });
     }
     try {
       // M2: restore the snapshotted source tree into the container before any
@@ -1883,12 +2144,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       }
       await this.#ensureContainerReady(url);
       if (mutationPreparation) {
-        // Construct and preflight before advancing the durable phase. An
-        // already-aborted request is a provable pre-dispatch failure.
-        mutationRequest = dispatchRequest();
-        if (mutationRequest.signal.aborted) {
-          throw mutationRequest.signal.reason instanceof Error
-            ? mutationRequest.signal.reason
+        // Preflight cancellation before advancing the durable phase. Snapshot
+        // renewable material after that await so preparation updates are not lost.
+        // An already-aborted request is a provable pre-dispatch failure.
+        if (request.signal.aborted) {
+          throw request.signal.reason instanceof Error
+            ? request.signal.reason
             : new DOMException(
                 "OpenTofu runner mutation was aborted before dispatch",
                 "AbortError",
@@ -1901,6 +2162,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
             mutationPreparation.action,
           );
         }
+        mutationRequest = dispatchRequest();
       }
       if (releasePreparation) {
         releaseRequest = dispatchRequest();
@@ -1928,6 +2190,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       throw error;
     }
 
+    const doInputRestoreReadinessMs = elapsedMilliseconds(
+      inputRestoreReadinessStartedAt,
+    );
+    const containerExecutionResponseBufferStartedAt = monotonicNow();
     let unboundedRunnerResponse: Response;
     if (mutationDispatch && mutationRequest) {
       unboundedRunnerResponse = await this.#dispatchMutationOnce(
@@ -1965,6 +2231,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       }
       throw error;
     }
+    const doContainerExecutionResponseBufferMs = elapsedMilliseconds(
+      containerExecutionResponseBufferStartedAt,
+    );
     if (
       releaseDispatch &&
       runnerResponse.headers.get(RUNNER_MUTATION_INDETERMINATE_HEADER) === "1"
@@ -2055,6 +2324,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       runnerResponse,
       url,
       stateScope,
+      {
+        doInputRestoreReadinessMs,
+        doContainerExecutionResponseBufferMs,
+      },
     );
   }
 
@@ -3420,14 +3693,30 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runnerResponse: Response,
     baseUrl: URL,
     stateScope: StateScope | undefined,
+    workerTimings: Readonly<{
+      readonly doInputRestoreReadinessMs: number;
+      readonly doContainerExecutionResponseBufferMs: number;
+    }>,
   ): Promise<Response> {
+    const planArtifactPersistenceStartedAt = monotonicNow();
     const payload = await readJsonObject(
       runnerResponse,
       this.#artifactLimits.runnerResponse,
     );
     const artifact = recordField(payload, "planArtifact");
     if (!artifact || stringField(artifact, "kind") !== "runner-local") {
-      return jsonResponse(payload, runnerResponse.status);
+      return jsonResponse(
+        {
+          ...payload,
+          workerTimings: {
+            ...workerTimings,
+            doPlanArtifactPersistenceMs: elapsedMilliseconds(
+              planArtifactPersistenceStartedAt,
+            ),
+          },
+        },
+        runnerResponse.status,
+      );
     }
     const artifactResponse = await this.#containerFetch(
       new Request(artifactUrl(baseUrl, runId), { method: "GET" }),
@@ -3486,6 +3775,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     return jsonResponse(
       {
         ...payload,
+        workerTimings: {
+          ...workerTimings,
+          doPlanArtifactPersistenceMs: elapsedMilliseconds(
+            planArtifactPersistenceStartedAt,
+          ),
+        },
         planArtifact: {
           kind: "object-storage",
           ref: planArtifactRef(bucket, key),
@@ -5793,6 +6088,197 @@ function isRunnerMutationAction(
   return action === "apply" || action === "destroy";
 }
 
+async function renewableCredentialRefreshClaim(
+  owner: { readonly kind: "plan" | "apply"; readonly id: string } | undefined,
+  runnerRunId: string,
+  action: string | undefined,
+  requestPayload: unknown,
+): Promise<Omit<ActiveCredentialRefreshClaim, "semanticDigest"> | undefined> {
+  const credentials = recordField(requestPayload, "credentials");
+  if (!isRecord(credentials)) return undefined;
+  // This handoff cursor is assigned only after this DO accepts preparation
+  // updates. A controller dispatch cannot nominate an initial sequence.
+  if (credentials.refreshSequence !== undefined) {
+    throw new Error("credential refresh sequence is owned by runner handoff");
+  }
+  const manifest = recordField(credentials, "manifest");
+  const declaredRenewableBindings = isRecord(manifest) && Array.isArray(manifest.bindings)
+    ? manifest.bindings.filter((binding) =>
+        isRecord(binding) && recordField(binding, "renewableEnv") !== undefined,
+      )
+    : [];
+  const raw = credentials.renewable;
+  if (raw === undefined) {
+    if (declaredRenewableBindings.length > 0) {
+      throw new Error("renewable credential projection is missing");
+    }
+    return undefined;
+  }
+  if (!Array.isArray(raw)) throw new Error("renewable credential dispatch is malformed");
+  if (raw.length === 0) {
+    if (declaredRenewableBindings.length > 0) {
+      throw new Error("renewable credential projection is missing");
+    }
+    return undefined;
+  }
+  if (
+    !owner ||
+    (action === "plan"
+      ? owner.kind !== "plan" || owner.id !== runnerRunId
+      : !isRunnerMutationAction(action) || owner.kind !== "apply")
+  ) {
+    throw new Error("renewable credentials require an exact active run owner");
+  }
+  const env = recordField(credentials, "env");
+  const manifestDigest = stringField(credentials, "manifestDigest");
+  if (
+    !isRecord(manifest) || !Array.isArray(manifest.bindings) || !isRecord(env) ||
+    !manifestDigest || !/^sha256:[0-9a-f]{64}$/u.test(manifestDigest) ||
+    await stableJsonDigest(manifest) !== manifestDigest
+  ) {
+    throw new Error("renewable credential dispatch manifest is invalid");
+  }
+  const bindings = manifest.bindings;
+  const descriptors = raw.map((value) => {
+    if (!isRecord(value)) throw new Error("renewable credential dispatch is malformed");
+    if (
+      Object.keys(value).sort().join(",") !==
+      "connectionId,expiresAt,fileEnvName,providerSource,sourceEnvName"
+    ) throw new Error("renewable credential dispatch descriptor is malformed");
+    const providerSource = stringField(value, "providerSource");
+    const connectionId = stringField(value, "connectionId");
+    const sourceEnvName = stringField(value, "sourceEnvName");
+    const fileEnvName = stringField(value, "fileEnvName");
+    const expiresAt = stringField(value, "expiresAt");
+    const binding = bindings.find((candidate) =>
+      isRecord(candidate) &&
+      stringField(candidate, "providerSource") === providerSource &&
+      stringField(candidate, "connectionId") === connectionId,
+    );
+    const renewal = isRecord(binding) ? recordField(binding, "renewableEnv") : undefined;
+    const envNames = isRecord(binding) ? binding.envNames : undefined;
+    const fileEnvNames = isRecord(binding) ? binding.fileEnvNames : undefined;
+    if (
+      !providerSource || !connectionId || !sourceEnvName || !fileEnvName ||
+      !expiresAt || !Number.isFinite(Date.parse(expiresAt)) ||
+      typeof env[sourceEnvName] !== "string" ||
+      !Array.isArray(envNames) || !envNames.includes(sourceEnvName) ||
+      !Array.isArray(fileEnvNames) || !fileEnvNames.includes(fileEnvName) ||
+      !isRecord(renewal) ||
+      stringField(renewal, "sourceEnvName") !== sourceEnvName ||
+      stringField(renewal, "fileEnvName") !== fileEnvName
+    ) {
+      throw new Error("renewable credential dispatch descriptor mismatches manifest");
+    }
+    return { providerSource, connectionId, sourceEnvName, fileEnvName };
+  });
+  if (
+    new Set(descriptors.map((item) => item.sourceEnvName)).size !== descriptors.length ||
+    new Set(descriptors.map((item) => item.fileEnvName)).size !== descriptors.length
+  ) {
+    throw new Error("renewable credential dispatch contains duplicate descriptors");
+  }
+  const runnerProfile = recordField(requestPayload, "runnerProfile");
+  const resourceLimits = isRecord(runnerProfile)
+    ? recordField(runnerProfile, "resourceLimits")
+    : undefined;
+  const maxRunSeconds = isRecord(resourceLimits)
+    ? resourceLimits.maxRunSeconds
+    : undefined;
+  const estimatedCredentialValues =
+    descriptors.length * (Math.ceil((typeof maxRunSeconds === "number" && Number.isFinite(maxRunSeconds) && maxRunSeconds > 0 ? maxRunSeconds : 900) / 30) + 1);
+  // The runner retains every superseded bearer until terminal output is
+  // redacted. Reject unusually long custom profiles before provider dispatch
+  // rather than exhausting the bounded redaction history mid-run.
+  if (estimatedCredentialValues > 1_792) {
+    throw new Error("renewable credential run profile exceeds bounded refresh history");
+  }
+  return {
+    owner,
+    runnerRunId,
+    action: action as "plan" | "apply" | "destroy",
+    manifestDigest,
+    descriptors,
+    sequence: 0,
+    busy: false,
+    poisoned: false,
+  };
+}
+
+function credentialRefreshUpdateMatches(
+  update: Record<string, unknown>,
+  active: ActiveCredentialRefreshClaim,
+): boolean {
+  if (
+    !isRecord(update.owner) ||
+    stringField(update.owner, "kind") !== active.owner.kind ||
+    stringField(update.owner, "id") !== active.owner.id ||
+    stringField(update, "runnerRunId") !== active.runnerRunId ||
+    stringField(update, "manifestDigest") !== active.manifestDigest ||
+    update.sequence !== active.sequence + 1 ||
+    !Number.isSafeInteger(update.sequence) ||
+    (update.sequence as number) > 2_048 ||
+    !Array.isArray(update.credentials) || update.credentials.length !== 1
+  ) return false;
+  const seen = new Set<string>();
+  for (const value of update.credentials) {
+    if (!isRecord(value)) return false;
+    const providerSource = stringField(value, "providerSource");
+    const connectionId = stringField(value, "connectionId");
+    const sourceEnvName = stringField(value, "sourceEnvName");
+    const fileEnvName = stringField(value, "fileEnvName");
+    const expiresAt = stringField(value, "expiresAt");
+    const token = stringField(value, "value");
+    const key = `${providerSource}\0${connectionId}\0${sourceEnvName}\0${fileEnvName}`;
+    if (
+      !active.descriptors.some((item) =>
+        item.providerSource === providerSource && item.connectionId === connectionId &&
+        item.sourceEnvName === sourceEnvName && item.fileEnvName === fileEnvName
+      ) || seen.has(key) || !expiresAt || !Number.isFinite(Date.parse(expiresAt)) ||
+      !token || new TextEncoder().encode(token).byteLength > 8192 || token.includes("\0")
+    ) return false;
+    seen.add(key);
+  }
+  return true;
+}
+
+async function readBoundedRequestJsonObject(
+  request: Request,
+  maxBytes: number,
+): Promise<Record<string, unknown>> {
+  const declaredLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new Error("request too large");
+  }
+  if (!request.body) throw new Error("request body is missing");
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel();
+        throw new Error("request too large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  const value = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  if (!isRecord(value)) throw new Error("request body must be an object");
+  return value;
+}
+
 function parseRunnerMutationDispatchRecord(
   value: unknown,
 ): RunnerMutationDispatchRecord | undefined {
@@ -6964,6 +7450,7 @@ async function runnerMutationSemanticDigest(
     requestPayload,
     action,
     env,
+    runId,
   );
   return await digestText(
     canonicalRunnerMutationJson({
@@ -7003,6 +7490,7 @@ async function runnerMutationCredentialSemantics(
   requestPayload: Readonly<Record<string, unknown>>,
   action: RunnerMutationAction,
   env: CloudflareWorkerEnv,
+  runnerRunId: string,
 ): Promise<unknown> {
   if (value === undefined) return null;
   if (!isRecord(value)) {
@@ -7042,6 +7530,31 @@ async function runnerMutationCredentialSemantics(
   const runtimeInputs = runnerMutationRuntimeInputSemantics(
     value.runtimeInputs,
   );
+  const applyRunId = parseApplyRunId(requestPayload);
+  const owner = applyRunId
+    ? { kind: "apply" as const, id: applyRunId }
+    : undefined;
+  const renewableClaim = await renewableCredentialRefreshClaim(
+    owner,
+    runnerRunId,
+    action,
+    requestPayload,
+  );
+  const manifest = recordField(value, "manifest");
+  const renewableBindings = isRecord(manifest) && Array.isArray(manifest.bindings)
+    ? manifest.bindings.filter((binding) =>
+        isRecord(binding) && recordField(binding, "renewableEnv") !== undefined,
+      )
+    : [];
+  if (
+    renewableBindings.length > 0 &&
+    (!renewableClaim || renewableClaim.descriptors.length !== renewableBindings.length)
+  ) {
+    throw new Error("renewable credential projection is incomplete");
+  }
+  const renewableSourceNames = new Set(
+    renewableClaim?.descriptors.map((descriptor) => descriptor.sourceEnvName) ?? [],
+  );
   const secretEntries = [
     ...Object.entries(rawEnv).map(([name, entry]) => ({
       delivery: `env:${name}`,
@@ -7070,7 +7583,10 @@ async function runnerMutationCredentialSemantics(
   }
   const staticMaterialDigests = await Promise.all(
     secretEntries
-      .filter((entry) => !isRunCredentialToken(entry.value))
+      .filter((entry) =>
+        !isRunCredentialToken(entry.value) &&
+        !(entry.delivery.startsWith("env:") && renewableSourceNames.has(entry.delivery.slice(4)))
+      )
       .map(async (entry) => ({
         delivery: entry.delivery,
         digest: await digestText(entry.value),
@@ -7091,6 +7607,18 @@ async function runnerMutationCredentialSemantics(
       ),
     ),
     manifest: value.manifest ?? null,
+    ...(renewableClaim
+      ? {
+          renewableCredentials: {
+            kind: "takosumi.runner-renewable-credential-projection@v1",
+            manifestDigest: renewableClaim.manifestDigest,
+            expiryClass: "finite-expiry",
+            descriptors: [...renewableClaim.descriptors].sort((left, right) =>
+              canonicalRunnerMutationJson(left).localeCompare(canonicalRunnerMutationJson(right)),
+            ),
+          },
+        }
+      : {}),
     authorities,
     // Value-free: only the variable and its declared binding names. The values
     // themselves appear exclusively as one-way digests above.
@@ -7386,6 +7914,7 @@ function failedProviderExecutionPayload(
   const errorCode =
     providerFailureErrorCode(payload) ?? RUNNER_PROVIDER_EXECUTION_FAILED_CODE;
   const detail = normalizedRunnerExecutionFailureDetail(payload, errorCode);
+  const phaseTimings = runnerPhaseTimingsFromPayload(payload);
   return {
     status: "failed",
     phase: action,
@@ -7396,6 +7925,7 @@ function failedProviderExecutionPayload(
     },
     ...(detail ? { detail } : {}),
     ...(state ? { state } : {}),
+    ...(phaseTimings ? { phaseTimings } : {}),
     // Mirror the container's attested provider installation. A persisted
     // failure is still a terminal mutation: the controller cross-checks the
     // reviewed provider set against this observation before committing the
@@ -7405,6 +7935,46 @@ function failedProviderExecutionPayload(
       ? { providerInstallation: payload.providerInstallation }
       : {}),
   };
+}
+
+function runnerPhaseTimingsFromPayload(
+  payload: Record<string, unknown>,
+):
+  | Array<{
+      phase: string;
+      startedAt: string;
+      finishedAt: string;
+      durationMs: number;
+    }>
+  | undefined {
+  const value = payload.phaseTimings;
+  if (!Array.isArray(value)) return undefined;
+  const timings = value.flatMap((entry) => {
+    if (!isRecord(entry)) return [];
+    const phase = stringField(entry, "phase");
+    const startedAt = stringField(entry, "startedAt");
+    const finishedAt = stringField(entry, "finishedAt");
+    const durationMs = entry.durationMs;
+    if (!phase || !RUNNER_PHASE_TIMING_PHASES.has(phase)) return [];
+    if (!startedAt || !isCanonicalIsoTimestamp(startedAt)) return [];
+    if (!finishedAt || !isCanonicalIsoTimestamp(finishedAt)) return [];
+    if (
+      typeof durationMs !== "number" ||
+      !Number.isFinite(durationMs) ||
+      durationMs < 0
+    ) {
+      return [];
+    }
+    return [{ phase, startedAt, finishedAt, durationMs }];
+  });
+  return timings.length > 0 ? timings : undefined;
+}
+
+function isCanonicalIsoTimestamp(value: string): boolean {
+  const timestamp = Date.parse(value);
+  return (
+    Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value
+  );
 }
 
 async function readJsonObject(
@@ -7710,6 +8280,11 @@ function withRunnerStartupHeader(
 
 function monotonicNow(): number {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
+function elapsedMilliseconds(startedAt: number): number {
+  const elapsed = monotonicNow() - startedAt;
+  return Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
 }
 
 function runnerRequestHeaders(request: Request): Headers {

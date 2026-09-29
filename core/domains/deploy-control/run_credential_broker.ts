@@ -78,6 +78,7 @@ import {
 } from "../connections/mod.ts";
 import type { RunCredentials, RunCredentialRuntimeInputs } from "./mod.ts";
 import type { RunCredentialRecipeManifest } from "takosumi-contract/credential-recipes";
+import { stableJsonDigest } from "../../adapters/source/digest.ts";
 
 /**
  * Ports the controller injects into {@link RunCredentialBroker}. The vault and
@@ -108,6 +109,41 @@ export interface RunCredentialBrokerDependencies {
   ) => Promise<readonly DispatchRuntimeInputs[] | undefined>;
   /** Host materializer for run-scoped sensitive provider inputs. */
   readonly runtimeInputMaterializer?: RuntimeInputMaterializer;
+}
+
+/** Numeric-only, invocation-local Plan broker timings for diagnostics. */
+export interface PlanCredentialBrokerTimings {
+  readonly brokerBindingResolutionMs: number;
+  readonly brokerPrePolicyMs: number;
+  readonly brokerRuntimeInputsMs: number;
+  readonly vaultMintMs: number;
+  readonly credentialValidationMs: number;
+  readonly postMintPolicyAuditMs: number;
+}
+
+export interface PlanCredentialBrokerResult {
+  readonly credentials: RunCredentials | undefined;
+  readonly timings: PlanCredentialBrokerTimings;
+}
+
+type MutablePlanCredentialBrokerTimings = {
+  -readonly [Key in keyof PlanCredentialBrokerTimings]: number;
+};
+
+function finiteElapsedMs(startedAt: number, finishedAt: number): number {
+  const elapsed = finishedAt - startedAt;
+  return Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
+}
+
+function emptyPlanCredentialBrokerTimings(): MutablePlanCredentialBrokerTimings {
+  return {
+    brokerBindingResolutionMs: 0,
+    brokerPrePolicyMs: 0,
+    brokerRuntimeInputsMs: 0,
+    vaultMintMs: 0,
+    credentialValidationMs: 0,
+    postMintPolicyAuditMs: 0,
+  };
 }
 
 /**
@@ -151,6 +187,46 @@ export class RunCredentialBroker {
     return await this.#mintCredentials(planRun, phase, auditRunId);
   }
 
+  /** Plan-only variant that returns value-free stage timings beside credentials. */
+  async mintPlanRunCredentialsWithTimings(
+    planRun: PlanRun,
+    auditRunId: string,
+  ): Promise<PlanCredentialBrokerResult> {
+    const timings = emptyPlanCredentialBrokerTimings();
+    const credentials = await this.#mintCredentials(
+      planRun,
+      "plan",
+      auditRunId,
+      auditRunId,
+      { planTimings: timings },
+    );
+    return { credentials, timings };
+  }
+
+  /** Re-mint only one plan-pinned rotating credential; no runtime inputs. */
+  async renewRunCredential(
+    planRun: PlanRun,
+    phase: "plan" | "apply" | "destroy",
+    auditRunId: string,
+    connectionId: string,
+  ): Promise<RunCredentials> {
+    const renewed = await this.#mintCredentials(
+      planRun,
+      phase,
+      auditRunId,
+      auditRunId,
+      { onlyConnectionId: connectionId, skipRuntimeInputs: true },
+    );
+    if (!renewed || renewed.renewable?.length !== 1) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "run credential renewal requires one pinned renewable binding",
+        { reason: CREDENTIAL_SERVICE_UNAVAILABLE_REASON },
+      );
+    }
+    return renewed;
+  }
+
   async mintReleaseCommandCredentials(
     planRun: PlanRun,
     phase: "apply" | "destroy",
@@ -171,7 +247,12 @@ export class RunCredentialBroker {
     phase: "plan" | "apply" | "destroy",
     auditRunId: string,
     credentialRunId: string = auditRunId,
-    options: { readonly releaseCommand?: boolean } = {},
+    options: {
+      readonly releaseCommand?: boolean;
+      readonly onlyConnectionId?: string;
+      readonly skipRuntimeInputs?: boolean;
+      readonly planTimings?: MutablePlanCredentialBrokerTimings;
+    } = {},
   ): Promise<RunCredentials | undefined> {
     if (planRun.requiredProviders.length === 0) {
       return undefined;
@@ -186,6 +267,9 @@ export class RunCredentialBroker {
       }
       // Resolve the Capsule's Provider Bindings once. The same resolution feeds
       // rootgen's non-secret provider configuration and run-scoped recipe mint.
+      const bindingResolutionStartedAt = options.planTimings
+        ? performance.now()
+        : undefined;
       const resolved = await this.#resolveRunProviderBindings(planRun);
       if (!resolved) {
         throw new OpenTofuControllerError(
@@ -215,6 +299,12 @@ export class RunCredentialBroker {
           );
         }
       }
+      if (options.planTimings) {
+        options.planTimings.brokerBindingResolutionMs = finiteElapsedMs(
+          bindingResolutionStartedAt!,
+          performance.now(),
+        );
+      }
       // The same resolved entries that produced rootgen provider blocks select
       // the Credential Recipes materialized for the runner dispatch.
       // Every recipe uses the same provider-neutral env/file path. Rootgen may
@@ -227,14 +317,32 @@ export class RunCredentialBroker {
       // The digest fence above stays on the FULL resolved set — it pins what
       // the reviewer saw, not what this phase materializes.
       const mintable = resolved.filter((entry) =>
+        (options.onlyConnectionId === undefined ||
+          entry.connection.id === options.onlyConnectionId) &&
         planRun.requiredProviders.some((required) =>
           sameProviderSource(required, entry.provider),
         ),
       );
+      if (options.onlyConnectionId !== undefined && mintable.length !== 1) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "run credential renewal binding is absent or ambiguous",
+          { reason: PROVIDER_CONNECTION_CHANGED_REASON },
+        );
+      }
+      const prePolicyStartedAt = options.planTimings
+        ? performance.now()
+        : undefined;
       const policy = await this.#policyForPlanRun(planRun);
       const connectionPolicyReasons = mintable.flatMap((entry) =>
         evaluateProviderConnectionCredentialPolicy(entry.connection, policy),
       );
+      if (options.planTimings) {
+        options.planTimings.brokerPrePolicyMs = finiteElapsedMs(
+          prePolicyStartedAt!,
+          performance.now(),
+        );
+      }
       if (connectionPolicyReasons.length > 0) {
         throw new OpenTofuControllerError(
           "failed_precondition",
@@ -258,14 +366,28 @@ export class RunCredentialBroker {
       // Run-scoped sensitive provider inputs travel on this same dispatch-only
       // bundle. They are minted here, and only here, because this is the one
       // channel that is never persisted and never logged.
-      const runtimeInputs = await this.#mintRuntimeInputs(
-        planRun,
-        phase,
-        mintable,
-        options.releaseCommand === true,
-      );
+      const runtimeInputsStartedAt = options.planTimings
+        ? performance.now()
+        : undefined;
+      const runtimeInputs = options.skipRuntimeInputs
+        ? undefined
+        : await this.#mintRuntimeInputs(
+            planRun,
+            phase,
+            mintable,
+            options.releaseCommand === true,
+          );
+      if (options.planTimings) {
+        options.planTimings.brokerRuntimeInputsMs = finiteElapsedMs(
+          runtimeInputsStartedAt!,
+          performance.now(),
+        );
+      }
       const bundle = new CredentialBundle({});
       if (providerEntries.length === 0) {
+        const postMintPolicyAuditStartedAt = options.planTimings
+          ? performance.now()
+          : undefined;
         await this.#recordProviderCredentialMintEvents(
           planRun,
           mintable,
@@ -281,6 +403,12 @@ export class RunCredentialBroker {
           policy,
           mintable.map((entry) => entry.connection),
         );
+        if (options.planTimings) {
+          options.planTimings.postMintPolicyAuditMs = finiteElapsedMs(
+            postMintPolicyAuditStartedAt!,
+            performance.now(),
+          );
+        }
         return {
           env: { ...bundle.env },
           manifest: credentialManifest(mintable),
@@ -288,6 +416,9 @@ export class RunCredentialBroker {
         };
       }
       const capsuleId = planRun.capsuleContext?.capsuleId ?? planRun.capsuleId;
+      const vaultMintStartedAt = options.planTimings
+        ? performance.now()
+        : undefined;
       const recipeBundle = await vault!.mintForCapsuleProviderBindings(
         planRun.workspaceId,
         providerEntries,
@@ -297,6 +428,15 @@ export class RunCredentialBroker {
           ...(capsuleId ? { capsuleId } : {}),
         },
       );
+      if (options.planTimings) {
+        options.planTimings.vaultMintMs = finiteElapsedMs(
+          vaultMintStartedAt!,
+          performance.now(),
+        );
+      }
+      const validationStartedAt = options.planTimings
+        ? performance.now()
+        : undefined;
       const recipeResponse = recipeBundle.toMintResponse();
       // Treat a Vault implementation as an untrusted persistence boundary:
       // validate every evidence row against the exact resolved Connection and
@@ -311,10 +451,19 @@ export class RunCredentialBroker {
         mintable,
         recipeResponse,
       );
+      if (options.planTimings) {
+        options.planTimings.credentialValidationMs = finiteElapsedMs(
+          validationStartedAt!,
+          performance.now(),
+        );
+      }
       // Vault mint is an external persistence/issuance boundary. Re-read the
       // layered Workspace + InstallConfig policy after it returns so a policy
       // change during issuance cannot turn into credentials handed to the
       // runner under the stale pre-mint snapshot.
+      const postMintPolicyAuditStartedAt = options.planTimings
+        ? performance.now()
+        : undefined;
       const postMintPolicy = await this.#policyForPlanRun(planRun);
       await this.#assertProviderCredentialPolicy(
         planRun,
@@ -331,14 +480,51 @@ export class RunCredentialBroker {
         auditRunId,
         evidence,
       );
+      if (options.planTimings) {
+        options.planTimings.postMintPolicyAuditMs = finiteElapsedMs(
+          postMintPolicyAuditStartedAt!,
+          performance.now(),
+        );
+      }
       const env = { ...bundle.env, ...recipeResponse.env };
       const manifest = credentialManifest(mintable, recipeResponse.files);
+      const renewable = options.releaseCommand
+        ? []
+        : mintable.flatMap((entry) => {
+            const descriptor = entry.connection.credentialRecipe?.renewableEnv;
+            if (!descriptor) return [];
+            const mintedEvidence = evidence.find((item) =>
+              item.connectionId === entry.connection.id
+            );
+            if (
+              !mintedEvidence?.temporary ||
+              !mintedEvidence.ttlEnforced ||
+              !mintedEvidence.expiresAt ||
+              typeof env[descriptor.sourceEnvName] !== "string"
+            ) {
+              throw new OpenTofuControllerError(
+                "failed_precondition",
+                "renewable credential lacks temporary expiry evidence",
+                { reason: CREDENTIAL_MINT_FAILED_REASON },
+              );
+            }
+            return [{
+              providerSource: entry.provider,
+              connectionId: entry.connection.id,
+              sourceEnvName: descriptor.sourceEnvName,
+              fileEnvName: descriptor.fileEnvName,
+              expiresAt: mintedEvidence.expiresAt,
+            }];
+          });
       return {
         env,
         ...(recipeResponse.files && recipeResponse.files.length > 0
           ? { files: recipeResponse.files }
           : {}),
         manifest,
+        ...(renewable.length > 0
+          ? { renewable, manifestDigest: await stableJsonDigest(manifest) }
+          : {}),
         ...(runtimeInputs ? { runtimeInputs } : {}),
       };
     } catch (error) {
@@ -607,7 +793,17 @@ function credentialManifest(
         recipeId: entry.connection.credentialRecipe?.id ?? "legacy",
         authMode: entry.connection.credentialRecipe?.authMode ?? "legacy",
         envNames: [...entry.connection.envNames].sort(),
-        fileEnvNames: [...(entry.connection.fileEnvNames ?? [])].sort(),
+        // The rotating path is supplied by the runner, not minted as a Vault
+        // file. Admit its env name in the dispatch manifest only.
+        fileEnvNames: [
+          ...(entry.connection.fileEnvNames ?? []),
+          ...(entry.connection.credentialRecipe?.renewableEnv
+            ? [entry.connection.credentialRecipe.renewableEnv.fileEnvName]
+            : []),
+        ].sort(),
+        ...(entry.connection.credentialRecipe?.renewableEnv
+          ? { renewableEnv: entry.connection.credentialRecipe.renewableEnv }
+          : {}),
         requiredEnvGroups: (
           entry.connection.credentialRecipe?.requiredEnvGroups ?? []
         ).map((group) => [...group].sort()),

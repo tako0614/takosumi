@@ -124,54 +124,13 @@ export async function resolveCanonicalCapsuleRunCredentialContext(
     plannedCapsuleStateVersionId = planRun.capsuleCurrentStateVersionId;
   }
 
-  const runtimeSafety = await store.getCapsuleRuntimeSafety(capsuleId);
-  const persistedProviderPartialApplyRecoveryMatches =
-    input.phase !== "destroy" &&
-    planOperation !== "destroy" &&
-    runtimeSafety?.phase === "unknown" &&
-    runtimeSafety.runType === "apply" &&
-    capsule.currentStateVersionId !== undefined &&
-    plannedCapsuleStateVersionId === capsule.currentStateVersionId &&
-    (await persistedProviderPartialApplyMatches(
-      store,
-      runtimeSafety.runId,
-      workspaceId,
-      capsuleId,
-      capsule.currentStateVersionId,
-    ));
-  const committedPostApplyRecoveryMatches =
-    input.phase !== "destroy" &&
-    planOperation !== "destroy" &&
-    runtimeSafety?.phase === "unknown" &&
-    runtimeSafety.runType === "apply" &&
-    capsule.currentStateVersionId !== undefined &&
-    plannedCapsuleStateVersionId === capsule.currentStateVersionId &&
-    (await committedPostApplyRecoveryRowsMatch(
-      store,
-      runtimeSafety.runId,
-      capsule,
-    ));
-  const currentApplyExecutionMatches =
-    input.phase === "apply" &&
-    planOperation !== "destroy" &&
-    runtimeSafety?.phase === "unknown" &&
-    runtimeSafety.runType === "apply" &&
-    runtimeSafety.runId === runId;
-  const runtimeSafetyMatches =
-    input.phase === "destroy"
-      ? runtimeSafety?.phase === "terminating" &&
-        runtimeSafety.runType === "destroy_apply" &&
-        runtimeSafety.runId === runId
-      : input.phase === "plan" && planOperation === "destroy"
-        ? runtimeSafety === undefined ||
-          runtimeSafety.phase === "safe" ||
-          runtimeSafety.phase === "unknown"
-        : runtimeSafety === undefined ||
-          runtimeSafety.phase === "safe" ||
-          currentApplyExecutionMatches ||
-          persistedProviderPartialApplyRecoveryMatches ||
-          committedPostApplyRecoveryMatches;
-  if (!runtimeSafetyMatches) {
+  if (!(await capsuleRunRuntimeSafetyMatches(store, {
+    capsule,
+    runId,
+    phase: input.phase,
+    planOperation,
+    plannedCapsuleStateVersionId,
+  }))) {
     return { ok: false, reason: "runtime_safety_mismatch" };
   }
 
@@ -186,6 +145,98 @@ export async function resolveCanonicalCapsuleRunCredentialContext(
       lifecycleIntent: planOperation === "destroy" ? "destroy" : "provision",
     },
   };
+}
+
+/** Shared non-secret mutation admission: credentials are not required to use this fence. */
+export async function capsuleRunRuntimeSafetyMatches(
+  store: CapsuleRunCredentialLedger,
+  input: {
+    readonly capsule: Capsule;
+    readonly runId: string;
+    readonly phase: CapsuleRunCredentialPhase;
+    readonly planOperation: "create" | "update" | "destroy" | undefined;
+    readonly plannedCapsuleStateVersionId: string | null | undefined;
+  },
+): Promise<boolean> {
+  const { capsule, runId, phase, planOperation, plannedCapsuleStateVersionId } = input;
+  const { workspaceId, id: capsuleId } = capsule;
+  const runtimeSafety = await store.getCapsuleRuntimeSafety(capsuleId);
+  const persistedProviderPartialApplyRecoveryMatches =
+    phase !== "destroy" &&
+    planOperation !== "destroy" &&
+    runtimeSafety?.phase === "unknown" &&
+    runtimeSafety.runType === "apply" &&
+    capsule.currentStateVersionId !== undefined &&
+    plannedCapsuleStateVersionId === capsule.currentStateVersionId &&
+    (await persistedProviderPartialApplyMatches(
+      store,
+      runtimeSafety.runId,
+      workspaceId,
+      capsuleId,
+      capsule.currentStateVersionId,
+    ));
+  const committedPostApplyRecoveryMatches =
+    phase !== "destroy" &&
+    planOperation !== "destroy" &&
+    runtimeSafety?.phase === "unknown" &&
+    runtimeSafety.runType === "apply" &&
+    capsule.currentStateVersionId !== undefined &&
+    plannedCapsuleStateVersionId === capsule.currentStateVersionId &&
+    (await committedPostApplyRecoveryRowsMatch(
+      store,
+      runtimeSafety.runId,
+      capsule,
+    ));
+  const currentApplyExecutionMatches =
+    phase === "apply" &&
+    planOperation !== "destroy" &&
+    runtimeSafety?.phase === "unknown" &&
+    runtimeSafety.runType === "apply" &&
+    runtimeSafety.runId === runId;
+  const runtimeSafetyMatches =
+    phase === "destroy"
+      ? runtimeSafety?.phase === "terminating" &&
+        runtimeSafety.runType === "destroy_apply" &&
+        runtimeSafety.runId === runId
+      : phase === "plan" && planOperation === "destroy"
+        ? runtimeSafety === undefined ||
+          runtimeSafety.phase === "safe" ||
+          runtimeSafety.phase === "unknown"
+        : runtimeSafety === undefined ||
+          runtimeSafety.phase === "safe" ||
+          currentApplyExecutionMatches ||
+          persistedProviderPartialApplyRecoveryMatches ||
+          committedPostApplyRecoveryMatches;
+  if (!runtimeSafetyMatches) return false;
+  if (phase !== "destroy") return true;
+
+  // A queued/running Destroy is deliberately the latest runtime-safety
+  // candidate. Exclude only THIS Run to examine the state it is about to
+  // mutate; its own terminating projection cannot certify a stale base safe.
+  const priorSafety = await store.getCapsuleRuntimeSafety(capsuleId, {
+    excludeRunId: runId,
+  });
+  if (priorSafety === undefined || priorSafety.phase === "safe") return true;
+  if (
+    priorSafety.phase !== "unknown" ||
+    priorSafety.runType !== "apply" ||
+    capsule.currentStateVersionId === undefined ||
+    plannedCapsuleStateVersionId !== capsule.currentStateVersionId
+  ) return false;
+  return (
+    (await persistedProviderPartialApplyMatches(
+      store,
+      priorSafety.runId,
+      workspaceId,
+      capsuleId,
+      capsule.currentStateVersionId,
+    )) ||
+    (await committedPostApplyRecoveryRowsMatch(
+      store,
+      priorSafety.runId,
+      capsule,
+    ))
+  );
 }
 
 /**

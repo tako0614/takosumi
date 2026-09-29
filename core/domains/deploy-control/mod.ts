@@ -345,6 +345,16 @@ export function publicPlanRun(planRun: PlanRun): PublicPlanRun {
  */
 export type RunCredentials = {
   readonly env: Readonly<Record<string, string>>;
+  /** Run-private rotating-file projections. Values remain in env until runner entry. */
+  readonly renewable?: readonly {
+    readonly providerSource: string;
+    readonly connectionId: string;
+    readonly sourceEnvName: string;
+    readonly fileEnvName: string;
+    readonly expiresAt: string;
+  }[];
+  /** Digest of the value-free manifest, never of bearer material. */
+  readonly manifestDigest?: string;
   readonly files?: readonly {
     readonly path: string;
     readonly mode: number;
@@ -806,6 +816,11 @@ export interface OpenTofuRestoreResult {
 }
 
 export interface OpenTofuRunner {
+  /** Confirms the pinned image supports rotation before a mutation is sent. */
+  assertCredentialRefreshCapability?(input: {
+    readonly owner: { readonly kind: "plan" | "apply"; readonly id: string };
+    readonly runnerRunId: string;
+  }): Promise<void>;
   plan(
     job: OpenTofuPlanJob,
     control?: RunExecutionControl,
@@ -814,6 +829,24 @@ export interface OpenTofuRunner {
     job: OpenTofuApplyJob,
     control?: RunExecutionControl,
   ): Promise<OpenTofuApplyResult>;
+  /** Optional capability; a renewable Run must fail before dispatch without it. */
+  refreshCredentials?(
+    update: {
+      readonly owner: { readonly kind: "plan" | "apply"; readonly id: string };
+      readonly runnerRunId: string;
+      readonly manifestDigest: string;
+      readonly sequence: number;
+      readonly credentials: readonly {
+        readonly providerSource: string;
+        readonly connectionId: string;
+        readonly sourceEnvName: string;
+        readonly fileEnvName: string;
+        readonly expiresAt: string;
+        readonly value: string;
+      }[];
+    },
+    control?: RunExecutionControl,
+  ): Promise<void>;
   destroy?(
     job: OpenTofuDestroyJob,
     control?: RunExecutionControl,

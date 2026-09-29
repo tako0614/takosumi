@@ -31,6 +31,74 @@ const RUN_ISSUANCE = {
 } as const;
 
 describe("Vault run-issued credential recipe", () => {
+  test("pins a renewable file protocol only from the installed recipe", async () => {
+    const { store, vault } = fixture(issuingDriver(), {
+      renewableEnv: {
+        sourceEnvName: "RUN_CREDENTIAL_TOKEN",
+        fileEnvName: "RUN_CREDENTIAL_TOKEN_FILE",
+        minimumProviderVersion: "4.1.0",
+      },
+    });
+    const registered = await register(vault);
+    expect(registered.credentialRecipe?.renewableEnv).toEqual({
+      sourceEnvName: "RUN_CREDENTIAL_TOKEN",
+      fileEnvName: "RUN_CREDENTIAL_TOKEN_FILE",
+      minimumProviderVersion: "4.1.0",
+    });
+    expect(registered.fileEnvNames).toBeUndefined();
+    await expect(vault.register({
+      provider: PROVIDER,
+      scope: "operator",
+      credentialRecipe: {
+        id: "run-issued",
+        authMode: "broker",
+        renewableEnv: {
+          sourceEnvName: "RUN_CREDENTIAL_TOKEN",
+          fileEnvName: "INJECTED_FILE",
+          minimumProviderVersion: "4.1.0",
+        },
+      } as never,
+      values: {},
+    }, undefined, null)).rejects.toThrow(/resolved only from the installed recipe/);
+    await vault.test(registered.id, undefined, null);
+    await seedRunningPlan(store);
+    expect((await vault.mintForCapsuleProviderBindings(
+      "workspace_1",
+      [{ provider: PROVIDER, connectionId: registered.id }],
+      { phase: "plan", capsuleId: "capsule_1", runId: "plan_1" },
+    )).env.RUN_CREDENTIAL_TOKEN).toBe("issued:plan_1");
+  });
+
+  test("rejects an explicitly too-short renewable issuer request before issuance", async () => {
+    let issuerCalls = 0;
+    const { store, vault } = fixture({
+      ...issuingDriver(),
+      mint: async ({ issueRunCredential }) => {
+        if (!issueRunCredential) throw new Error("issuer missing");
+        await issueRunCredential({ ttlSeconds: 120 });
+        throw new Error("short renewable issuance was incorrectly admitted");
+      },
+    }, {
+      renewableEnv: {
+        sourceEnvName: "RUN_CREDENTIAL_TOKEN",
+        fileEnvName: "RUN_CREDENTIAL_TOKEN_FILE",
+        minimumProviderVersion: "4.1.0",
+      },
+      runCredentialIssuer: async (input) => {
+        issuerCalls += 1;
+        return await defaultRunCredentialIssuer(input);
+      },
+    });
+    const connection = await verifiedConnection(store, vault);
+    await seedRunningPlan(store);
+    await expect(vault.mintForCapsuleProviderBindings(
+      "workspace_1",
+      [{ provider: PROVIDER, connectionId: connection.id }],
+      { phase: "plan", capsuleId: "capsule_1", runId: "plan_1" },
+    )).rejects.toThrow(/credential driver failed/);
+    expect(issuerCalls).toBe(0);
+  });
+
   test("stores zero material and mints only after canonical Run revalidation", async () => {
     let verifyValues: Readonly<Record<string, string>> | undefined;
     let mintRun: CredentialRecipeDriverRunContext | undefined;
@@ -518,6 +586,11 @@ function fixture(
   options: {
     readonly runCredentialIssuer?: CredentialRecipeRunCredentialIssuer | null;
     readonly operatorProviderConnections?: readonly ProviderConnection[];
+    readonly renewableEnv?: {
+      readonly sourceEnvName: string;
+      readonly fileEnvName: string;
+      readonly minimumProviderVersion: string;
+    };
   } = {},
 ): {
   readonly store: InMemoryOpenTofuControlStore;
@@ -542,6 +615,9 @@ function fixture(
               broker: {
                 preRun: { type: "issue_run_credential" },
                 runIssuance: RUN_ISSUANCE,
+                ...(options.renewableEnv
+                  ? { renewableEnv: options.renewableEnv }
+                  : {}),
               },
             },
           }

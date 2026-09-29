@@ -603,6 +603,56 @@ providers. A guided recipe catalog is descriptive metadata, not an execution
 allowlist. Core does not branch on a provider name and does not silently inject
 provider credentials.
 
+An installed run-issued CredentialRecipe may opt one declared env value into
+renewable delivery by naming its source env and the provider's file-path env.
+The descriptor is value-free and pinned with the Provider Connection and Run
+credential manifest. Plan/Apply/Destroy obtain each short-lived value through
+the same canonical Run, policy, binding, and issuer checks. A renewable recipe
+also pins a minimum exact provider version; an older or unproven selected
+version fails before runner dispatch. A renewable issuer request must exceed
+120 seconds, and actual issued material must have at least 120 seconds left;
+an issuer-selected shorter lifetime fails closed rather than starting a Run.
+For a platform-extension broker with an existing fixed static Connection, an
+optional distinct `renewableConnectionId` pairs with `renewableEnv` to install a
+second `broker-renewable` auth mode and fixed Connection. The original `broker`
+mode, Connection ID, and its pinned descriptor remain unchanged. A Capsule opts
+in only by explicitly selecting the new Connection through its ProviderBinding;
+recipe installation alone does not migrate existing bindings. A generic broker
+that already declares `renewableEnv` without the second ID retains its existing
+single-mode behavior.
+Before dispatch, Takosumi requires a
+runner image that advertises the refresh capability. While the Run remains
+fenced and active, the broker reissues only that binding ahead of expiry and
+the runner atomically replaces one private `0600` file; the provider rereads
+that path on each request. Plan and Apply have distinct runner refresh owners.
+
+The reference recipe catalog may separately describe a provider's renewable
+credential capability for release composition. That descriptive metadata is
+not part of an installed CredentialRecipe and does not opt any auth mode into
+renewable delivery; only an installed run-issued recipe's explicit descriptor
+does so.
+
+The controller checks the same running Run and held Capsule lease immediately
+before and after each mint, discarding a value if either check loses; the
+runner also requires an active matching claim. The runner never receives
+signing authority or a durable refresh token, and renewal never replays an
+accepted OpenTofu mutation. A known lost Run fence, expired credential, failed
+renewal, or cancel stops delivery and terminates the child under normal
+failed/indeterminate state reconciliation. Already-issued bearers retain their
+normal short expiry; cross-store checks do not promise instantaneous revocation.
+Static credentials and providers without file support retain their existing
+env/file behavior.
+
+The existing Workspace-authorized Run logs response includes only typed,
+value-free provider mint evidence for that exact Run: connection/provider,
+mint time, temporary/TTL-enforced flags, optional expiry/TTL, and issuer. A
+`credential.refresh.accepted` Run audit event records the refresh sequence,
+connection/provider, prior/new expiry, and acknowledgement time only after the
+runner accepts the replacement. Its append is fenced to the active Run owner;
+heartbeat and terminal writes preserve the append-only audit trail. Neither
+projection carries token/env values, file paths, or the credential manifest
+digest.
+
 Secrets are write-only at the control-object boundary. Secret values never
 enter Resource specs, Interface documents, Outputs, state, Run logs, audit
 payloads, or public discovery. Sensitive OpenTofu values remain in encrypted

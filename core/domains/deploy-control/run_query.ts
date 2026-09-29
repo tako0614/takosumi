@@ -24,6 +24,7 @@ import type {
   Run,
   RunCostInfo,
   RunEventsResponse,
+  RunCredentialMintEvidence,
   RunLogsResponse,
 } from "takosumi-contract/runs";
 import {
@@ -157,7 +158,25 @@ export class RunQueryService {
   async getRunLogs(id: string): Promise<RunLogsResponse> {
     requireNonEmptyString(id, "runId");
     const record = await this.#requireRunRecordWithLogs(id);
-    return { diagnostics: record.diagnostics, auditEvents: record.auditEvents };
+    const mints = await this.#store.listCredentialMintEventsForRun(id);
+    const credentialMints: RunCredentialMintEvidence[] = [];
+    for (const mint of mints) {
+      if (mint.workspaceId !== record.workspaceId) continue;
+      for (const evidence of mint.providerCredentialEvidence ?? []) {
+        if (evidence.connectionId !== mint.connectionId) continue;
+        credentialMints.push({
+          connectionId: evidence.connectionId,
+          provider: evidence.provider,
+          createdAt: mint.createdAt,
+          temporary: evidence.temporary,
+          ttlEnforced: evidence.ttlEnforced,
+          ...(evidence.expiresAt ? { expiresAt: evidence.expiresAt } : {}),
+          ...(evidence.ttlSeconds !== undefined ? { ttlSeconds: evidence.ttlSeconds } : {}),
+          ...(evidence.issuer ? { issuer: evidence.issuer } : {}),
+        });
+      }
+    }
+    return { diagnostics: record.diagnostics, auditEvents: record.auditEvents, credentialMints };
   }
 
   /**
@@ -204,12 +223,14 @@ export class RunQueryService {
    * credential material or sensitive output value enters these projections.
    */
   async #requireRunRecordWithLogs(id: string): Promise<{
+    readonly workspaceId: string;
     readonly diagnostics: readonly RunDiagnostic[];
     readonly auditEvents: readonly DeployControlAuditEvent[];
   }> {
     const planRun = await this.#store.getPlanRun(id);
     if (planRun) {
       return {
+        workspaceId: planRun.workspaceId,
         diagnostics: planRun.diagnostics ?? [],
         auditEvents: planRun.auditEvents,
       };
@@ -217,6 +238,7 @@ export class RunQueryService {
     const applyRun = await this.#store.getApplyRun(id);
     if (applyRun) {
       return {
+        workspaceId: applyRun.workspaceId,
         diagnostics: applyRun.diagnostics ?? [],
         auditEvents: applyRun.auditEvents,
       };
@@ -224,6 +246,7 @@ export class RunQueryService {
     const sync = await this.#store.getSourceSyncRun(id);
     if (sync) {
       return {
+        workspaceId: sync.workspaceId,
         diagnostics: sourceSyncDiagnostics(sync),
         auditEvents: [],
       };
@@ -231,6 +254,7 @@ export class RunQueryService {
     const compatibilityCheck = await this.#store.getCompatibilityCheckRun(id);
     if (compatibilityCheck) {
       return {
+        workspaceId: compatibilityCheck.workspaceId,
         diagnostics: compatibilityCheck.errorCode
           ? [
               {
@@ -246,6 +270,7 @@ export class RunQueryService {
     const backupRun = await this.#store.getBackupRun(id);
     if (backupRun) {
       return {
+        workspaceId: backupRun.workspaceId,
         diagnostics: backupRun.errorCode
           ? [
               {

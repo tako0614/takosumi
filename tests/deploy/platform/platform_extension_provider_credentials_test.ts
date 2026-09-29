@@ -1,5 +1,10 @@
 import { expect, spyOn, test } from "bun:test";
 import type { Capsule } from "../../../contract/capsules.ts";
+import { resolveTargetConnection } from "../../../core/adapters/vault/run_issued_operator_reconciliation.ts";
+import { StaticSecretConnectionVault } from "../../../core/adapters/vault/mod.ts";
+import { PartitionedSecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
+import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
+import { seedCapsuleModel } from "../../helpers/deploy-control/model_fixture.ts";
 import type {
   OpenTofuControlStore,
   UpdateCapsuleLifecycleCommand,
@@ -28,10 +33,170 @@ const ROUTES = JSON.stringify([
       displayName: "Takosumi Hosted",
       exchangePath: "/provider-credentials/takoform",
       envNames: ["TAKOFORM_ENDPOINT", "TAKOFORM_SPACE", "TAKOFORM_TOKEN"],
+      renewableEnv: {
+        sourceEnvName: "TAKOFORM_TOKEN",
+        fileEnvName: "TAKOFORM_TOKEN_FILE",
+        minimumProviderVersion: "4.1.0",
+      },
       runCredentialSettings: { requiredAvailableMinor: 2300 },
     },
   },
 ]);
+
+const PAIRED_ROUTES = JSON.stringify(
+  (JSON.parse(ROUTES) as Array<Record<string, unknown>>).map((route) => ({
+    ...route,
+    providerCredentialBroker: {
+      ...(route.providerCredentialBroker as Record<string, unknown>),
+      renewableConnectionId: "conn_takoserverTakoformRenew01",
+    },
+  })),
+);
+
+test("an opt-in renewable broker preserves the static Connection and mints both through the canonical Run", async () => {
+  let exchanges = 0;
+  const composition = platformExtensionProviderCredentialComposition({
+    TAKOSUMI_PLATFORM_EXTENSIONS: PAIRED_ROUTES,
+    TAKOSUMI_ACCOUNTS_ISSUER: "https://app-staging.takosumi.com",
+    HOSTED: {
+      exchangeProviderCredential: async () => {
+        exchanges += 1;
+        return {
+          status: 200,
+          body: JSON.stringify({
+            kind: "takosumi.provider-run-credential@v1",
+            env: {
+              TAKOFORM_ENDPOINT: "https://api.takoserver.test",
+              TAKOFORM_SPACE: "tenant:test",
+              TAKOFORM_TOKEN: "runner-only-token",
+            },
+            expiresAt: "2026-08-18T00:05:00.000Z",
+          }),
+        };
+      },
+    },
+  });
+  expect(composition).toBeDefined();
+  const recipe = composition!.credentialRecipes[0]!;
+  const staticRoutes = JSON.stringify(
+    (JSON.parse(ROUTES) as Array<Record<string, unknown>>).map((route) => {
+      const { renewableEnv: _renewableEnv, ...staticBroker } =
+        route.providerCredentialBroker as Record<string, unknown>;
+      return { ...route, providerCredentialBroker: staticBroker };
+    }),
+  );
+  const staticComposition = platformExtensionProviderCredentialComposition({
+    TAKOSUMI_PLATFORM_EXTENSIONS: staticRoutes,
+    TAKOSUMI_ACCOUNTS_ISSUER: "https://app-staging.takosumi.com",
+  })!;
+  expect(recipe.authModes.broker).toEqual(
+    staticComposition.credentialRecipes[0]!.authModes.broker,
+  );
+  expect(composition!.operatorProviderConnections[0]).toEqual(
+    staticComposition.operatorProviderConnections[0],
+  );
+  expect(recipe.authModes.broker?.renewableEnv).toBeUndefined();
+  expect(recipe.authModes["broker-renewable"]?.renewableEnv).toEqual({
+    sourceEnvName: "TAKOFORM_TOKEN",
+    fileEnvName: "TAKOFORM_TOKEN_FILE",
+    minimumProviderVersion: "4.1.0",
+  });
+  expect(Object.keys(composition!.credentialRecipeDrivers).sort()).toEqual([
+    "takosumi-hosted-takoform-run/broker",
+    "takosumi-hosted-takoform-run/broker-renewable",
+  ]);
+  expect(composition!.operatorProviderConnections.map((entry) => [
+    entry.id,
+    entry.credentialRecipe.authMode,
+  ])).toEqual([
+    ["conn_takosumiHostedTakoform01", "broker"],
+    ["conn_takoserverTakoformRenew01", "broker-renewable"],
+  ]);
+
+  const recipes = new Map(composition!.credentialRecipes.map((entry) => [entry.id, entry]));
+  const connections = composition!.operatorProviderConnections.map((entry) =>
+    resolveTargetConnection(
+      entry,
+      (id) => recipes.get(id),
+      composition!.credentialRecipeDrivers,
+      "1970-01-01T00:00:00.000Z",
+    )
+  );
+  expect(connections[0]!.credentialRecipe?.renewableEnv).toBeUndefined();
+  expect(connections[1]!.credentialRecipe?.renewableEnv).toEqual(
+    recipe.authModes["broker-renewable"]?.renewableEnv,
+  );
+  const store = new InMemoryOpenTofuControlStore();
+  const vault = new StaticSecretConnectionVault({
+    store,
+    crypto: new PartitionedSecretBoundaryCrypto({
+      globalPassphrase: "test-passphrase-0123456789-abcdef-0123456789",
+    }),
+    now: () => new Date("2026-08-18T00:00:00.000Z"),
+    credentialRecipeResolver: (id) => recipes.get(id),
+    credentialDrivers: composition!.credentialRecipeDrivers,
+    operatorProviderConnections: connections,
+    runCredentialIssuer: async ({ request }) => ({
+      token: "run-only-token",
+      expiresAt: "2026-08-18T00:10:00.000Z",
+      ttlSeconds: request.ttlSeconds ?? 600,
+    }),
+  });
+  const { capsule } = await seedCapsuleModel(store, {
+    workspaceId: "workspace_1",
+    capsuleId: "capsule_1",
+    installConfig: { workspaceId: "workspace_1" },
+  });
+  await store.putCapsule({
+    ...capsule,
+    status: "active",
+    installingPrincipalId: "principal_installer",
+  });
+  await store.putPlanRun({
+    id: "plan_1",
+    workspaceId: "workspace_1",
+    capsuleId: "capsule_1",
+    capsuleContext: {
+      workspaceId: "workspace_1",
+      capsuleId: "capsule_1",
+      environment: "production",
+    },
+    source: { kind: "git", url: "https://example.test/app.git", ref: "main" },
+    sourceDigest: "sha256:source",
+    operation: "update",
+    runnerProfileId: "opentofu-default",
+    variablesDigest: "sha256:variables",
+    requiredProviders: ["registry.terraform.io/tako0614/takoform"],
+    status: "running",
+    policy: { status: "passed", reasons: [], checkedAt: 1 },
+    policyDecisionDigest: "sha256:policy",
+    auditEvents: [],
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  for (const connection of connections) {
+    const bundle = await vault.mintForCapsuleProviderBindings(
+      "workspace_1",
+      [{ provider: connection.providerSource, connectionId: connection.id }],
+      { phase: "plan", capsuleId: "capsule_1", runId: "plan_1" },
+    );
+    expect(bundle.env.TAKOFORM_TOKEN).toBe("runner-only-token");
+    expect(bundle.providerCredentialEvidence[0]?.connectionId).toBe(connection.id);
+  }
+  expect(await store.getConnection(connections[0]!.id)).toBeUndefined();
+  expect(await store.getConnection(connections[1]!.id)).toBeUndefined();
+  expect(exchanges).toBe(2);
+  const stopped = (await store.getPlanRun("plan_1"))!;
+  await store.putPlanRun({ ...stopped, status: "failed" });
+  for (const connection of connections) {
+    await expect(vault.mintForCapsuleProviderBindings(
+      "workspace_1",
+      [{ provider: connection.providerSource, connectionId: connection.id }],
+      { phase: "plan", capsuleId: "capsule_1", runId: "plan_1" },
+    )).rejects.toThrow();
+  }
+  expect(exchanges).toBe(2);
+});
 
 test("a configured extension contributes one exact run-issued provider broker", async () => {
   const calls: unknown[] = [];
@@ -76,6 +241,15 @@ test("a configured extension contributes one exact run-issued provider broker", 
     id: "takosumi-hosted-takoform-run",
     terraformSource: ["registry.terraform.io/tako0614/takoform"],
     envNames: ["TAKOFORM_ENDPOINT", "TAKOFORM_SPACE", "TAKOFORM_TOKEN"],
+    authModes: {
+      broker: {
+        renewableEnv: {
+          sourceEnvName: "TAKOFORM_TOKEN",
+          fileEnvName: "TAKOFORM_TOKEN_FILE",
+          minimumProviderVersion: "4.1.0",
+        },
+      },
+    },
   });
   const driver =
     composition?.credentialRecipeDrivers["takosumi-hosted-takoform-run/broker"];

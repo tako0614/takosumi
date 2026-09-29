@@ -102,11 +102,13 @@ test("local runner proxy is test-bed gated and preserves the runner path", async
 test("OpenTofu runner Durable Object promotes runner-local plan artifact to R2", async () => {
   const calls: string[] = [];
   const r2 = new FakeR2Bucket();
+  let now = 100;
   const runner = runnerWithContainer(r2, {
     async containerFetch(request) {
       calls.push(`${request.method} ${new URL(request.url).pathname}`);
       const path = new URL(request.url).pathname;
       if (request.method === "POST" && path === "/runs/plan_1") {
+        now += 30;
         return Response.json({
           status: "succeeded",
           exitCode: 0,
@@ -123,6 +125,7 @@ test("OpenTofu runner Durable Object promotes runner-local plan artifact to R2",
         request.method === "GET" &&
         path === "/runs/plan_1/artifacts/tfplan"
       ) {
+        now += 5;
         return new Response(PLAN_BYTES, {
           headers: { "content-type": "application/vnd.opentofu.plan" },
         });
@@ -132,24 +135,47 @@ test("OpenTofu runner Durable Object promotes runner-local plan artifact to R2",
         request.method === "GET" &&
         path === "/runs/plan_1/artifacts/tfplan-json"
       ) {
+        now += 5;
         return Response.json({ error: "not found" }, { status: 404 });
       }
       return Response.json({ error: "unexpected" }, { status: 500 });
     },
+  }, {
+    healthFetch: async () => {
+      now += 10;
+      return Response.json({ ok: true });
+    },
   });
 
-  const response = await runner.fetch(
-    new Request("https://runner/runs/plan_1", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        kind: "takosumi.opentofu-run@v1",
-        action: "plan",
-        runId: "plan_1",
-        request: {},
-      }),
-    }),
+  const performanceNowDescriptor = Object.getOwnPropertyDescriptor(
+    performance,
+    "now",
   );
+  Object.defineProperty(performance, "now", {
+    configurable: true,
+    value: () => now,
+  });
+  let response: Response;
+  try {
+    response = await runner.fetch(
+      new Request("https://runner/runs/plan_1", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "plan",
+          runId: "plan_1",
+          request: {},
+        }),
+      }),
+    );
+  } finally {
+    if (performanceNowDescriptor) {
+      Object.defineProperty(performance, "now", performanceNowDescriptor);
+    } else {
+      Reflect.deleteProperty(performance, "now");
+    }
+  }
 
   assert.equal(response.status, 200);
   assert.deepEqual(calls, [
@@ -158,6 +184,11 @@ test("OpenTofu runner Durable Object promotes runner-local plan artifact to R2",
     "GET /runs/plan_1/artifacts/tfplan-json",
   ]);
   const payload = (await response.json()) as Record<string, unknown>;
+  assert.deepEqual(payload.workerTimings, {
+    doInputRestoreReadinessMs: 10,
+    doContainerExecutionResponseBufferMs: 30,
+    doPlanArtifactPersistenceMs: 10,
+  });
   const artifact = payload.planArtifact as Record<string, unknown>;
   assert.equal(artifact.kind, "object-storage");
   // The object-storage ref still names the plaintext key (the DO maps it to the
@@ -1328,10 +1359,13 @@ test("OpenTofu runner Durable Object destroys a successful run container by defa
   );
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
+  const payload = (await response.json()) as Record<string, unknown>;
+  const { workerTimings, ...result } = payload;
+  assert.deepEqual(result, {
     status: "succeeded",
     run: "plan_1",
   });
+  assertFiniteWorkerTimings(workerTimings);
   assert.equal(runner.sleepAfter, "30s");
   assert.deepEqual(calls, ["fetch POST /runs/plan_1", "destroy"]);
 });
@@ -1368,10 +1402,13 @@ test("OpenTofu runner Durable Object destroys after a successful run when keepal
   );
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
+  const payload = (await response.json()) as Record<string, unknown>;
+  const { workerTimings, ...result } = payload;
+  assert.deepEqual(result, {
     status: "succeeded",
     run: "plan_1",
   });
+  assertFiniteWorkerTimings(workerTimings);
   assert.equal(runner.sleepAfter, "30s");
   assert.deepEqual(calls, ["fetch POST /runs/plan_1", "destroy"]);
 });
@@ -1408,10 +1445,13 @@ test("OpenTofu runner Durable Object falls back to stop when keepalive is disabl
   );
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
+  const payload = (await response.json()) as Record<string, unknown>;
+  const { workerTimings, ...result } = payload;
+  assert.deepEqual(result, {
     status: "succeeded",
     run: "plan_1",
   });
+  assertFiniteWorkerTimings(workerTimings);
   assert.deepEqual(calls, ["fetch POST /runs/plan_1", "stop"]);
 });
 
@@ -2577,16 +2617,17 @@ test("OpenTofu runner adopts completed state only after fresh exact mutation aut
   );
 });
 
-test("OpenTofu runner replaces an uncommitted state remnant from a different ApplyRun", async () => {
+test("OpenTofu runner retains another ApplyRun's completed target and evidence for exact recovery", async () => {
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
   const stateScope = capsuleStateScope();
   const env = {
     TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET,
   };
-  // Run A persists generation 1 at the allocated target, then loses its
-  // ledger commit — the R2 remnant outlives the run.
+  // Run A can persist generation 1 even if its Core credential renewal fails
+  // before the successful DO response reaches the controller.
   const planRunIdA = "plan_remnant_origin";
+  const originStorage = new FakeDoStorage();
   await seedEncryptedPlan(artifacts, planRunIdA);
   let providerCallsA = 0;
   const tokenA = await signedMutationToken(planRunIdA, {
@@ -2598,7 +2639,7 @@ test("OpenTofu runner replaces an uncommitted state remnant from a different App
     mutationSuccessContainer(planRunIdA, () => {
       providerCallsA += 1;
     }),
-    { storage: new FakeDoStorage(), stateBucket: state, env },
+    { storage: originStorage, stateBucket: state, env },
   ).fetch(
     signedMutationRequest(planRunIdA, tokenA, {
       action: "destroy",
@@ -2606,8 +2647,14 @@ test("OpenTofu runner replaces an uncommitted state remnant from a different App
     }),
   );
   assert.equal(first.status, 200);
+  const firstPayload = (await first.json()) as { readonly executionEvidence?: unknown };
   assert.equal(providerCallsA, 1);
   assert.ok(state.body(stateScope.stateRef));
+  const evidenceKey = `${stateScope.stateRef}.execution-evidence.json`;
+  const retainedState = state.body(stateScope.stateRef)?.slice();
+  const retainedEvidence = state.body(evidenceKey)?.slice();
+  assert.ok(retainedState);
+  assert.ok(retainedEvidence);
   const remnant = await state.get(stateScope.stateRef);
   assert.equal(
     remnant?.customMetadata?.["takosumi-run-id"],
@@ -2615,8 +2662,9 @@ test("OpenTofu runner replaces an uncommitted state remnant from a different App
   );
 
   // Run B — a different ApplyRun on a different Durable Object (fresh
-  // storage) — is allocated the same generation slot by the controller. The
-  // uncommitted remnant must not deadlock it.
+  // storage) — is allocated the same stale Core generation. It cannot know
+  // whether Run A's external mutation took effect, so it must not delete A's
+  // target/evidence or dispatch its own provider mutation.
   const planRunIdB = "plan_remnant_successor";
   await seedEncryptedPlan(artifacts, planRunIdB);
   let providerCallsB = 0;
@@ -2636,20 +2684,37 @@ test("OpenTofu runner replaces an uncommitted state remnant from a different App
       stateScope,
     }),
   );
-  assert.equal(second.status, 200);
-  assert.equal(providerCallsB, 1);
-  const replacement = await state.get(stateScope.stateRef);
+  assert.equal(second.status, 409);
+  assertMutationIndeterminateResponse(await second.text(), "destroy");
+  assert.equal(providerCallsB, 0);
+  assert.deepEqual(state.body(stateScope.stateRef), retainedState);
+  assert.deepEqual(state.body(evidenceKey), retainedEvidence);
+  const retained = await state.get(stateScope.stateRef);
   assert.equal(
-    replacement?.customMetadata?.["takosumi-run-id"],
-    `apply_${planRunIdB}`,
+    retained?.customMetadata?.["takosumi-run-id"],
+    `apply_${planRunIdA}`,
   );
-  const evidence = await state.get(
-    `${stateScope.stateRef}.execution-evidence.json`,
-  );
+  const evidence = await state.get(evidenceKey);
   assert.equal(
     evidence?.customMetadata?.["takosumi-evidence-run-id"],
-    `apply_${planRunIdB}`,
+    `apply_${planRunIdA}`,
   );
+  const exactReplay = await runnerWithContainer(
+    artifacts,
+    mutationSuccessContainer(planRunIdA, () => {
+      providerCallsA += 1;
+    }),
+    { storage: originStorage, stateBucket: state, env },
+  ).fetch(
+    signedMutationRequest(planRunIdA, tokenA, {
+      action: "destroy",
+      stateScope,
+    }),
+  );
+  assert.equal(exactReplay.status, 200);
+  assert.equal(providerCallsA, 1);
+  const replayPayload = (await exactReplay.json()) as { readonly executionEvidence?: unknown };
+  assert.deepEqual(replayPayload.executionEvidence, firstPayload.executionEvidence);
 });
 
 test("OpenTofu runner keeps a foreign state target fenced without provider dispatch", async () => {
@@ -5331,6 +5396,24 @@ function runnerWithContainer(
   return runner;
 }
 
+function assertFiniteWorkerTimings(value: unknown): void {
+  assert.ok(value && typeof value === "object" && !Array.isArray(value));
+  const timings = value as Record<string, unknown>;
+  assert.deepEqual(Object.keys(timings).sort(), [
+    "doContainerExecutionResponseBufferMs",
+    "doInputRestoreReadinessMs",
+    "doPlanArtifactPersistenceMs",
+  ]);
+  assert.ok(
+    Object.values(timings).every(
+      (duration) =>
+        typeof duration === "number" &&
+        Number.isFinite(duration) &&
+        duration >= 0,
+    ),
+  );
+}
+
 async function seedEncryptedPlan(
   r2: FakeR2Bucket,
   runId: string,
@@ -5350,6 +5433,322 @@ async function seedEncryptedPlan(
     },
   );
 }
+
+test("OpenTofu runner accepts renewal during slow restore then forwards only exact dispatched updates", async () => {
+  const planRunId = "plan_renewable_do_gate";
+  const applyRunId = `apply_${planRunId}`;
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, planRunId);
+  const storage = new FakeDoStorage();
+  const gate = deferredGate();
+  const restoreGate = deferredGate();
+  let capturedRefresh: Record<string, unknown> | undefined;
+  let readyCredentials: Record<string, unknown> | undefined;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT" && path === `/runs/${planRunId}/artifacts/tfplan`) {
+        restoreGate.enter();
+        await restoreGate.wait;
+        return Response.json({ ok: true });
+      }
+      if (request.method === "PUT" && path === `/runs/${planRunId}/credentials`) {
+        capturedRefresh = await request.json() as Record<string, unknown>;
+        return Response.json({ ok: true, status: "updated" });
+      }
+      if (request.method === "GET" && path === `/runs/${planRunId}/credentials`) {
+        return Response.json({ owner: { kind: "apply", id: applyRunId },
+          runnerRunId: planRunId, manifestDigest: readyCredentials?.manifestDigest,
+          sequence: readyCredentials?.refreshSequence ?? 0 });
+      }
+      if (request.method === "POST" && path === `/runs/${planRunId}`) {
+        const body = await request.json() as { request: { credentials: Record<string, unknown> } };
+        readyCredentials = body.request.credentials;
+        gate.enter();
+        await gate.wait;
+        return Response.json({
+          status: "succeeded",
+          exitCode: 0,
+          providerInstallation: [{
+            provider: RUN_CREDENTIAL_PROVIDER,
+            attested: true,
+            installedDigest: `sha256:${"c".repeat(64)}`,
+          }],
+        });
+      }
+      if (request.method === "GET" && path === `/runs/${planRunId}/artifacts/tfstate`) {
+        return new Response(STATE_BYTES, {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+  const runner = runnerWithContainer(r2, container, {
+    storage,
+    env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET },
+    healthFetch: async () => Response.json({
+      ok: true,
+      capabilities: ["takosumi.runner-credential-refresh@v1"],
+    }),
+  });
+  const capability = await runner.fetch(new Request(
+    `https://runner/capabilities?ownerKind=apply&ownerId=${applyRunId}&runnerRunId=${planRunId}`,
+  ));
+  assert.equal(capability.status, 200);
+  assert.deepEqual(await capability.json(), {
+    owner: { kind: "apply", id: applyRunId },
+    runnerRunId: planRunId,
+    capabilities: ["takosumi.runner-credential-refresh@v1"],
+  });
+
+  const signedToken = await signedMutationToken(planRunId, {
+    jti: "renewable-test-initial",
+  });
+  const baseRequest = signedMutationRequest(planRunId, signedToken);
+  const envelope = await baseRequest.json() as Record<string, unknown>;
+  const requestPayload = envelope.request as Record<string, unknown>;
+  const credentials = requestPayload.credentials as Record<string, unknown>;
+  const manifest = credentials.manifest as { bindings: Record<string, unknown>[] };
+  manifest.bindings[0] = {
+    ...manifest.bindings[0],
+    envNames: ["PROVIDER_RUN_TOKEN", "ROTATING_TOKEN"],
+    fileEnvNames: ["ROTATING_TOKEN_FILE"],
+    requiredEnvGroups: [["PROVIDER_RUN_TOKEN", "ROTATING_TOKEN"]],
+    renewableEnv: {
+      sourceEnvName: "ROTATING_TOKEN",
+      fileEnvName: "ROTATING_TOKEN_FILE",
+      minimumProviderVersion: "4.1.0",
+    },
+  };
+  credentials.env = {
+    ...(credentials.env as Record<string, string>),
+    ROTATING_TOKEN: "initial-opaque-token",
+  };
+  credentials.manifestDigest = await stableJsonDigest(manifest);
+  credentials.renewable = [{
+    providerSource: RUN_CREDENTIAL_PROVIDER,
+    connectionId: "connection_semantic",
+    sourceEnvName: "ROTATING_TOKEN",
+    fileEnvName: "ROTATING_TOKEN_FILE",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  }];
+  const runResponse = runner.fetch(new Request(`https://runner/runs/${planRunId}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(envelope),
+  }));
+  const update = {
+    owner: { kind: "apply", id: applyRunId },
+    runnerRunId: planRunId,
+    manifestDigest: credentials.manifestDigest,
+    sequence: 1,
+    credentials: [{
+      providerSource: RUN_CREDENTIAL_PROVIDER,
+      connectionId: "connection_semantic",
+      sourceEnvName: "ROTATING_TOKEN",
+      fileEnvName: "ROTATING_TOKEN_FILE",
+      expiresAt: "2099-02-01T00:00:00.000Z",
+      value: "next-opaque-token",
+    }],
+  };
+  await restoreGate.entered;
+  const staged = await runner.fetch(new Request(
+    `https://runner/runs/${planRunId}/credentials`,
+    { method: "PUT", body: JSON.stringify(update) },
+  ));
+  assert.equal(staged.status, 200);
+  assert.equal(capturedRefresh, undefined);
+  assert.equal(JSON.stringify(storage.entries()).includes("next-opaque-token"), false);
+  update.sequence = 2;
+  update.credentials[0]!.value = "latest-preparation-token";
+  const restaged = await runner.fetch(new Request(
+    `https://runner/runs/${planRunId}/credentials`,
+    { method: "PUT", body: JSON.stringify(update) },
+  ));
+  assert.equal(restaged.status, 200);
+  assert.equal(capturedRefresh, undefined);
+  restoreGate.release();
+  await gate.entered;
+  assert.equal((readyCredentials?.env as Record<string, string>).ROTATING_TOKEN, "latest-preparation-token");
+  assert.equal(JSON.stringify(readyCredentials).includes("next-opaque-token"), false);
+  assert.equal(readyCredentials?.refreshSequence, 2);
+  update.sequence = 3;
+  update.credentials[0]!.value = "post-dispatch-opaque-token";
+  const wrongOwner = await runner.fetch(new Request(
+    `https://runner/runs/${planRunId}/credentials`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...update, owner: { kind: "plan", id: planRunId } }),
+    },
+  ));
+  assert.equal(wrongOwner.status, 409);
+  const batch = await runner.fetch(new Request(
+    `https://runner/runs/${planRunId}/credentials`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...update, credentials: [...update.credentials, ...update.credentials] }),
+    },
+  ));
+  assert.equal(batch.status, 409);
+  const accepted = await runner.fetch(new Request(
+    `https://runner/runs/${planRunId}/credentials`,
+    { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(update) },
+  ));
+  assert.equal(accepted.status, 200);
+  assert.deepEqual(capturedRefresh, update);
+
+  const replay = await runner.fetch(new Request(
+    `https://runner/runs/${planRunId}/credentials`,
+    { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(update) },
+  ));
+  assert.equal(replay.status, 409);
+  gate.release();
+  assert.equal((await runResponse).status, 200);
+
+  const afterTerminal = await runner.fetch(new Request(
+    `https://runner/runs/${planRunId}/credentials`,
+    { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...update, sequence: 4 }) },
+  ));
+  assert.equal(afterTerminal.status, 409);
+  assert.equal(JSON.stringify(storage.entries()).includes("initial-opaque-token"), false);
+  assert.equal(JSON.stringify(storage.entries()).includes("next-opaque-token"), false);
+  assert.equal(JSON.stringify(storage.entries()).includes("latest-preparation-token"), false);
+});
+
+test("OpenTofu runner scopes Plan refresh to its active PlanRun and rejects terminal updates", async () => {
+  const planRunId = "plan_renewable_owner_scope";
+  const r2 = new FakeR2Bucket();
+  const gate = deferredGate();
+  let capturedRefresh: Record<string, unknown> | undefined;
+  let readyCredentials: Record<string, unknown> | undefined;
+  let readinessProbes = 0;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT" && path === `/runs/${planRunId}/credentials`) {
+        capturedRefresh = await request.json() as Record<string, unknown>;
+        return Response.json({ ok: true, status: "updated" });
+      }
+      if (request.method === "GET" && path === `/runs/${planRunId}/credentials`) {
+        readinessProbes += 1;
+        if (readinessProbes === 1) return Response.json({ error: "not ready" }, { status: 409 });
+        return Response.json({ owner: { kind: "plan", id: planRunId },
+          runnerRunId: planRunId, manifestDigest: readyCredentials?.manifestDigest,
+          sequence: readyCredentials?.refreshSequence ?? 0 });
+      }
+      if (request.method === "POST" && path === `/runs/${planRunId}`) {
+        const body = await request.json() as { request: { credentials: Record<string, unknown> } };
+        readyCredentials = body.request.credentials;
+        gate.enter();
+        await gate.wait;
+        return Response.json({ status: "succeeded", exitCode: 0 });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+  const runner = runnerWithContainer(r2, container, {
+    healthFetch: async () => Response.json({
+      ok: true,
+      capabilities: ["takosumi.runner-credential-refresh@v1"],
+    }),
+  });
+  const capability = await runner.fetch(new Request(
+    `https://runner/capabilities?ownerKind=plan&ownerId=${planRunId}&runnerRunId=${planRunId}`,
+  ));
+  assert.equal(capability.status, 200);
+  assert.deepEqual(await capability.json(), {
+    owner: { kind: "plan", id: planRunId },
+    runnerRunId: planRunId,
+    capabilities: ["takosumi.runner-credential-refresh@v1"],
+  });
+
+  const manifest = {
+    bindings: [{
+      providerSource: RUN_CREDENTIAL_PROVIDER,
+      connectionId: "connection_plan_rotation",
+      recipeId: "probe",
+      authMode: "run-issued",
+      envNames: ["ROTATING_TOKEN"],
+      fileEnvNames: ["ROTATING_TOKEN_FILE"],
+      requiredEnvGroups: [["ROTATING_TOKEN"]],
+      renewableEnv: {
+        sourceEnvName: "ROTATING_TOKEN",
+        fileEnvName: "ROTATING_TOKEN_FILE",
+        minimumProviderVersion: "4.1.0",
+      },
+    }],
+  };
+  const manifestDigest = await stableJsonDigest(manifest);
+  const run = runner.fetch(new Request(`https://runner/runs/${planRunId}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      kind: "takosumi.opentofu-run@v1",
+      action: "plan",
+      runId: planRunId,
+      request: {
+        runnerProfile: { resourceLimits: { maxRunSeconds: 900 } },
+        credentials: {
+          env: { ROTATING_TOKEN: "plan-initial-token" },
+          manifest,
+          manifestDigest,
+          renewable: [{
+            providerSource: RUN_CREDENTIAL_PROVIDER,
+            connectionId: "connection_plan_rotation",
+            sourceEnvName: "ROTATING_TOKEN",
+            fileEnvName: "ROTATING_TOKEN_FILE",
+            expiresAt: "2099-01-01T00:00:00.000Z",
+          }],
+        },
+      },
+    }),
+  }));
+  await gate.entered;
+  const update = {
+    owner: { kind: "plan", id: planRunId },
+    runnerRunId: planRunId,
+    manifestDigest,
+    sequence: 1,
+    credentials: [{
+      providerSource: RUN_CREDENTIAL_PROVIDER,
+      connectionId: "connection_plan_rotation",
+      sourceEnvName: "ROTATING_TOKEN",
+      fileEnvName: "ROTATING_TOKEN_FILE",
+      expiresAt: "2099-02-01T00:00:00.000Z",
+      value: "plan-next-token",
+    }],
+  };
+  const wrongOwner = await runner.fetch(new Request(
+    `https://runner/runs/${planRunId}/credentials`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...update, owner: { kind: "apply", id: `apply_${planRunId}` } }),
+    },
+  ));
+  assert.equal(wrongOwner.status, 409);
+  const accepted = await runner.fetch(new Request(
+    `https://runner/runs/${planRunId}/credentials`,
+    { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(update) },
+  ));
+  assert.equal(accepted.status, 200);
+  assert.deepEqual(capturedRefresh, update);
+  assert.equal(readinessProbes, 2);
+  gate.release();
+  assert.equal((await run).status, 200);
+  const terminal = await runner.fetch(new Request(
+    `https://runner/runs/${planRunId}/credentials`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...update, sequence: 2 }),
+    },
+  ));
+  assert.equal(terminal.status, 409);
+});
 
 function mutationRequest(
   runId: string,

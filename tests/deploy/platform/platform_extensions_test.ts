@@ -77,6 +77,87 @@ test("run credential route descriptors cannot grant admin", () => {
   ).toThrow("cannot grant admin");
 });
 
+test("renewable broker pairing is opt-in and rejects missing or colliding Connection ids", () => {
+  const renewableEnv = {
+    sourceEnvName: "EXAMPLE_TOKEN",
+    fileEnvName: "EXAMPLE_TOKEN_FILE",
+    minimumProviderVersion: "4.1.0",
+  };
+  const broker = {
+    connectionId: "conn_exampleProvider01",
+    recipeId: "example-provider-run",
+    providerSource: "registry.terraform.io/example/provider",
+    displayName: "Example Provider",
+    exchangePath: "/provider-credentials/example",
+    envNames: ["EXAMPLE_TOKEN"],
+  };
+  const descriptor = (providerCredentialBroker: Record<string, unknown>) => ({
+    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([{
+      basePath: "/extensions/example",
+      handlerKey: "EXAMPLE_EXTENSION",
+      authDelivery: "context",
+      runCredential: {
+        audience: "operator.example.provider.v1",
+        requiredScopes: ["example.invoke"],
+      },
+      providerCredentialBroker,
+    }]),
+  });
+  // Existing generic operators may still use the single renewable mode.
+  expect(platformExtensionRoutes(descriptor({ ...broker, renewableEnv }))[0]
+    ?.providerCredentialBroker?.renewableConnectionId).toBeUndefined();
+  expect(platformExtensionRoutes(descriptor({
+    ...broker,
+    renewableEnv,
+    renewableConnectionId: "conn_exampleProviderRenew01",
+  }))[0]?.providerCredentialBroker?.renewableConnectionId).toBe(
+    "conn_exampleProviderRenew01",
+  );
+  for (const invalid of [
+    { renewableConnectionId: "conn_exampleProviderRenew01" },
+    { renewableEnv, renewableConnectionId: broker.connectionId },
+    { renewableEnv, renewableConnectionId: "conn_short" },
+  ]) {
+    expect(() => platformExtensionRoutes(descriptor({ ...broker, ...invalid })))
+      .toThrow("renewableConnectionId requires a distinct valid Connection id and renewableEnv");
+  }
+});
+
+test("same-path broker duplicates cannot disagree on renewable pairing", () => {
+  const broker = {
+    connectionId: "conn_exampleProvider01",
+    recipeId: "example-provider-run",
+    providerSource: "registry.terraform.io/example/provider",
+    displayName: "Example Provider",
+    exchangePath: "/provider-credentials/example",
+    envNames: ["EXAMPLE_TOKEN"],
+  };
+  const route = (providerCredentialBroker: Record<string, unknown>) => ({
+    basePath: "/extensions/example",
+    handlerKey: "EXAMPLE_EXTENSION",
+    authDelivery: "context",
+    runCredential: {
+      audience: "operator.example.provider.v1",
+      requiredScopes: ["example.invoke"],
+    },
+    providerCredentialBroker,
+  });
+  expect(() => platformExtensionRoutes({
+    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+      route(broker),
+      route({
+        ...broker,
+        renewableEnv: {
+          sourceEnvName: "EXAMPLE_TOKEN",
+          fileEnvName: "EXAMPLE_TOKEN_FILE",
+          minimumProviderVersion: "4.1.0",
+        },
+        renewableConnectionId: "conn_exampleProviderRenew01",
+      }),
+    ]),
+  })).toThrow("multiple owners");
+});
+
 test("extension descriptors parse exact request scope rules without changing the audience base", () => {
   const [route] = platformExtensionRoutes({
     TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([

@@ -585,6 +585,19 @@ export interface RunAuditEvent {
 export interface RunLogsResponse {
   readonly diagnostics: readonly RunDiagnostic[];
   readonly auditEvents: readonly RunAuditEvent[];
+  /** Non-secret provider mint evidence for this exact Run. */
+  readonly credentialMints: readonly RunCredentialMintEvidence[];
+}
+
+export interface RunCredentialMintEvidence {
+  readonly connectionId: string;
+  readonly provider: string;
+  readonly createdAt: string;
+  readonly temporary: boolean;
+  readonly ttlEnforced: boolean;
+  readonly expiresAt?: string;
+  readonly ttlSeconds?: number;
+  readonly issuer?: string;
 }
 
 /**

@@ -32,6 +32,8 @@ export const CREDENTIAL_SERVICE_UNAVAILABLE_REASON =
   "credential_service_unavailable";
 export const CREDENTIAL_MINT_FAILED_REASON = "credential_mint_failed";
 export const CREDENTIAL_POLICY_FAILED_REASON = "credential_policy_failed";
+export const RENEWABLE_PROVIDER_VERSION_UNPROVEN_REASON =
+  "renewable_provider_version_unproven";
 
 /**
  * Run-scoped sensitive provider input failures. Every one is fail-closed: the

@@ -2255,6 +2255,38 @@ test("Capsule Plan facade retains the earlier Workspace management epoch", async
   ).toHaveLength(0);
 });
 
+test("an un-applied repository install cannot replace its reviewed SourceSnapshot through the Plan facade", async () => {
+  const fixture = await reAdoptionRouteFixture("initial-revision-pin", {
+    genericDefault: true,
+  });
+  const { capsule, installConfig, snapshot } = fixture.seeded;
+  await fixture.deployStore.putInstallConfig({
+    ...installConfig,
+    installExperience: {
+      ...installConfig.installExperience,
+      repositoryInstallUx: { status: "accepted" },
+    },
+  });
+  const revisedSnapshotId = "snap_initial_revision_pin_revised";
+  await fixture.deployStore.putSourceSnapshot({
+    ...snapshot,
+    id: revisedSnapshotId,
+    resolvedCommit: "a".repeat(40),
+  });
+
+  await expect(fixture.operations.createCapsulePlan(capsule.id, {
+    sourceSnapshotId: revisedSnapshotId,
+    planRunId: "plan_initial_revision_pin",
+    actor: "git-revision-plan:grp_initial_revision_pin",
+  })).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "repository_install_ux_snapshot_mismatch" },
+  });
+  expect((await fixture.operations.listRuns(capsule.workspaceId)).filter(
+    (run) => run.type === "plan",
+  )).toHaveLength(0);
+});
+
 test("configuration Plan cannot move existing successor authority after Workspace drain", async () => {
   const { fixture, path, body } = await configurationPlanRouteFixture(
     "configuration-plan-drain-before-rebind",
