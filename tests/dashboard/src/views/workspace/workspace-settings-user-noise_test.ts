@@ -107,16 +107,18 @@ describe("Workspace settings user-facing noise", () => {
     );
     expect(en["conn.add.open"]).toBe("Connect account");
     expect(ja["conn.add.open"]).toBe("アカウントを接続");
-    expect(en["conn.empty.title"]).toBe(
-      "Connect an external provider with your own key",
+    expect(en["conn.empty.title"]).toBe("Add a connection for your services");
+    expect(ja["conn.empty.title"]).toBe("サービスで使う接続を追加");
+    expect(en["conn.empty.message"]).toContain(
+      "may use a connection to access an external service",
     );
-    expect(ja["conn.empty.title"]).toBe("自分のカギで外部プロバイダーを接続");
-    expect(en["conn.empty.message"]).toContain("policy");
-    expect(en["conn.empty.message"]).toContain("approval");
-    expect(en["conn.empty.message"]).toContain("billing");
-    expect(ja["conn.empty.message"]).toContain("policy");
-    expect(ja["conn.empty.message"]).toContain("approval");
-    expect(ja["conn.empty.message"]).toContain("billing");
+    expect(en["conn.empty.message"]).toContain("does not create resources");
+    expect(ja["conn.empty.message"]).toContain(
+      "外部サービスへのアクセスに接続を使うことがあります",
+    );
+    expect(ja["conn.empty.message"]).toContain("リソースは作成されません");
+    expect(en["conn.subtitle"]).toContain("provided by your operator");
+    expect(ja["conn.subtitle"]).toContain("運営者が用意するものがあります");
     expect(en["conn.empty.message"]).not.toContain("any provider runs");
     expect(ja["conn.empty.message"]).not.toContain("どのプロバイダーでも");
   });
