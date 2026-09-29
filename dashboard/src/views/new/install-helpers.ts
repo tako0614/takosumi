@@ -1027,10 +1027,11 @@ function storeMetadataFromStoreListing(listing: TcsListing): StoreMetadata {
     en: suggestedName,
   };
   return {
-    // `InstallConfigStoreSource.path` exists in older control-plane rows. Keep
-    // the runtime projection URL-only so no Store path can leak into an
-    // install handoff; the cast lets this dashboard read those old rows while
-    // the contract migrates.
+    // `InstallConfigStoreSource.path` exists in older control-plane rows. The
+    // runtime projection stays URL-only because a listing's reviewed module is
+    // an install hint the add flow revalidates against the snapshot scan, never
+    // install-config authority; the cast lets this dashboard read those old
+    // rows while the contract migrates.
     source: { url: listing.source.url } as StoreMetadata["source"],
     order: 1_000,
     surface: storeSurfaceFromStoreListing(listing.surface),

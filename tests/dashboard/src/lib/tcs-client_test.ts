@@ -233,6 +233,29 @@ describe("TCS repo metadata", () => {
     expect(page.items[0]?.provider).toBeUndefined();
   });
 
+  test("keeps the module a v2 listing reviewed", async () => {
+    const v2 = wireListing({
+      kind: undefined,
+      surface: undefined,
+      provider: undefined,
+      category: undefined,
+      source: {
+        git: "https://github.com/tako0614/example.git",
+        path: "deploy/takoform",
+      },
+    });
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ items: [v2] }), {
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
+
+    const page = await fetchTcsListingsPage("https://store.example.test");
+    expect(page.items[0]?.source).toEqual({
+      url: "https://github.com/tako0614/example",
+      path: "deploy/takoform",
+    });
+  });
+
   test("accepts display metadata but ignores repo-owned setup authority", () => {
     const metadata = parseTcsRepoMetadata({
       schemaVersion: "tcs.repo/v1",
@@ -461,8 +484,8 @@ describe("TCS repo metadata", () => {
     }
   });
 
-  test("ignores every legacy path spelling instead of treating it as install authority", async () => {
-    for (const path of [".", "deploy/opentofu", "../secret", "/absolute"]) {
+  test("keeps a canonical reviewed module and drops every other path spelling", async () => {
+    for (const path of [".", "../secret", "/absolute", "./deploy/opentofu/"]) {
       globalThis.fetch = (async () =>
         new Response(
           JSON.stringify({
@@ -475,6 +498,28 @@ describe("TCS repo metadata", () => {
         url: "https://example.test/app",
       });
     }
+
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          items: [
+            wireListing({
+              source: {
+                git: "https://example.test/app.git",
+                path: "deploy/opentofu",
+              },
+            }),
+          ],
+        }),
+        { headers: { "content-type": "application/json" } },
+      )) as typeof fetch;
+    const page = await fetchTcsListingsPage("https://store.example.test");
+    // The reviewed module is a hint the add flow revalidates against the
+    // immutable snapshot scan; it is not install authority by itself.
+    expect(page.items[0]?.source).toEqual({
+      url: "https://example.test/app",
+      path: "deploy/opentofu",
+    });
   });
 
   test("merges only display presentation observed by Source sync", () => {

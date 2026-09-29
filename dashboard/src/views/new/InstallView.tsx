@@ -142,6 +142,12 @@ import {
 import InstallExecution from "./InstallExecution.tsx";
 import "./install-view.css";
 
+/** One scanned root-module candidate from the immutable SourceSnapshot index. */
+type InstallModuleCatalogEntry = Extract<
+  InstallModuleCatalog,
+  { readonly status: "ready" }
+>["modules"][number];
+
 type Phase =
   | "browse"
   | "configure"
@@ -230,6 +236,13 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const [sourcePath, setSourcePath] = createSignal(initial?.sourcePath ?? ".");
   const [modulePath, setModulePath] = createSignal(initial?.path || ".");
   const [modulePathExplicit, setModulePathExplicit] = createSignal(
+    initialModulePathExplicit,
+  );
+  // True while the module path arrived with a link or a listing and the user
+  // has not touched it. A catalog entry can go stale, so a hint the immutable
+  // scan cannot prove falls back to the scan's own choice instead of a hard
+  // error.
+  const [modulePathHint, setModulePathHint] = createSignal(
     initialModulePathExplicit,
   );
   const [name, setName] = createSignal(
@@ -329,6 +342,31 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const selectedModuleProviderRequirements = createMemo(
     () => selectedModule()?.rootProviderRequirements ?? [],
   );
+
+  /**
+   * The chooser is the one place the user picks a destination, so every
+   * candidate carries the provider set Takosumi derived from that exact
+   * scanned directory. The list is read from the immutable scan; nothing is
+   * inferred from Store metadata or a repository manifest.
+   */
+  const moduleCandidateLabel = (
+    module: InstallModuleCatalogEntry,
+  ): string => {
+    const providers = [
+      ...new Set(
+        module.providerPackages.map((provider) =>
+          providerDisplayName(provider.source),
+        ),
+      ),
+    ];
+    return t("installStore.moduleOption", {
+      path: module.path,
+      providers:
+        providers.length > 0
+          ? providers.join(", ")
+          : t("installStore.moduleNoProviders"),
+    });
+  };
 
   type InstallStep = "source" | "configure" | "review";
   const activeInstallStep = (): InstallStep => {
@@ -886,6 +924,9 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     const preservedModulePathExplicit = options?.preserveModuleSelection
       ? modulePathExplicit()
       : false;
+    const preservedModulePathHint = options?.preserveModuleSelection
+      ? modulePathHint()
+      : false;
     setSourceId(undefined);
     setSourceSnapshotId(undefined);
     setSourceCreateReconciliationToken(undefined);
@@ -893,6 +934,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setInstallModuleCatalog({ status: "none", modules: [] });
     setModulePath(preservedModulePath);
     setModulePathExplicit(preservedModulePathExplicit);
+    setModulePathHint(preservedModulePathHint);
     setModuleSelectionConfirmed(false);
     resetCompiledPreparation();
   };
@@ -926,8 +968,13 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setGitRef("");
     setGitRefResolvedFromListing(false);
     setSourcePath(".");
-    setModulePath(".");
-    setModulePathExplicit(false);
+    // The listing names the module it reviewed. Keep it as an explicit hint;
+    // the scan below still has to prove the directory before it becomes
+    // install authority.
+    setModulePath(selected.source.path ?? ".");
+    setModulePathExplicit(Boolean(selected.source.path));
+    setModulePathHint(Boolean(selected.source.path));
+    setModuleSelectionConfirmed(Boolean(selected.source.path));
     setName(slugInputValue(selected.suggestedName));
     setSourceAuthConnectionId("");
     setError(undefined);
@@ -944,6 +991,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     resetCompiledPreparation();
     setModulePath(path);
     setModulePathExplicit(true);
+    setModulePathHint(false);
     setModuleSelectionConfirmed(false);
     setError(undefined);
   };
@@ -1106,6 +1154,22 @@ function Inner(props: { readonly installingPrincipalId: string }) {
             setError(t("installStore.moduleUnavailable"));
             setPhase("configure");
             return;
+          }
+          // A module path that arrived with a link or a listing is a hint the
+          // catalog cannot verify. When the immutable scan does not expose that
+          // exact directory, drop the hint and let the scan choose — the single
+          // installed root, or the user. A typed path still fails loudly below.
+          if (
+            modulePathExplicit() &&
+            modulePathHint() &&
+            !catalog.modules.some(
+              (module) => module.path === modulePath().trim(),
+            )
+          ) {
+            setModulePathHint(false);
+            setModulePathExplicit(false);
+            setModuleSelectionConfirmed(false);
+            setModulePath("");
           }
           if (catalog.modules.length === 0) {
             // An empty ready scan is a valid observation, but there is no
@@ -1411,6 +1475,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     }
     // A confirmed chooser selection becomes an explicit module authority for
     // the compile request, including an explicit repository root (`.`).
+    setModulePathHint(false);
     setModulePathExplicit(true);
     setModuleSelectionConfirmed(true);
     void prepareInstall();
@@ -1626,6 +1691,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setSourcePath(".");
     setModulePath(".");
     setModulePathExplicit(false);
+    setModulePathHint(false);
     setName("");
     setSourceId(undefined);
     setSourceSnapshotId(undefined);
@@ -1970,7 +2036,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                       value={module.path}
                       selected={module.path === modulePath()}
                     >
-                      {module.path}
+                      {moduleCandidateLabel(module)}
                     </option>
                   )}
                 </For>
@@ -2088,6 +2154,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                       onInput={(event) => {
                         resetPreparedSource();
                         setModulePathExplicit(true);
+                        setModulePathHint(false);
                         setModulePath(event.currentTarget.value);
                       }}
                     />

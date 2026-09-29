@@ -9,7 +9,6 @@
  * Access-Control-Allow-Origin: * on its read surface).
  */
 
-import type { GitAddress } from "takosumi-contract";
 import {
   parseTcsListingSource,
   tcsListingSourceIdentity,
@@ -22,11 +21,14 @@ export interface TcsLocalizedText {
 
 /**
  * Store discovery is adapted to Takosumi's local `url` field only after the
- * Store-owned v2 `{ git }` wire source has passed its runtime parser. Legacy
- * v1 `{ git, path }` rows are accepted for the migration read path, but the
- * path is discarded before it reaches the dashboard.
+ * Store-owned v2 `{ git, path? }` wire source has passed its runtime parser.
+ * The reviewed module travels as `path`, which the add flow revalidates
+ * against the immutable snapshot scan before it becomes a module.
  */
-export type TcsListingSource = Pick<GitAddress, "url">;
+export interface TcsListingSource {
+  readonly url: string;
+  readonly path?: string;
+}
 
 /** Operator-defined presentation tokens; neither field grants execution authority. */
 export type TcsListingKind = string;
@@ -36,6 +38,7 @@ export interface TcsListing {
   readonly id: string;
   /** Dashboard aggregation hint used to rehydrate `/new` hand-offs. */
   readonly primaryServer?: string;
+  /** Module the listing reviewed, when the catalog names a non-root one. */
   readonly source: TcsListingSource;
   /** Optional v2 presentation facets; absence must not affect install policy. */
   readonly kind?: TcsListingKind;
@@ -211,10 +214,13 @@ export function sanitizeTcsListingSource(value: unknown): TcsListingSource {
   const source = parseTcsListingSource(value);
   if (!source) {
     throw new Error(
-      "listing source must be the canonical TCS v2 { git } source",
+      "listing source must be the canonical TCS v2 { git, path? } source",
     );
   }
-  return { url: source.git };
+  return {
+    url: source.git,
+    ...(source.path ? { path: source.path } : {}),
+  };
 }
 
 function sanitizeTcsListingsPage(page: TcsListingsPage): TcsListingsPage {

@@ -347,6 +347,34 @@ describe("single-screen install surface", () => {
     expect(view).not.toContain("moduleFiles");
   });
 
+  test("takes the module a listing reviewed without asking again", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    // The reviewed module arrives as an explicit hint, and only the immutable
+    // scan can promote it: a stale catalog entry falls back to the scan's own
+    // choice instead of stranding the install on a path the repository lacks.
+    expect(view).toContain("const [modulePathHint, setModulePathHint]");
+    expect(view).toContain('setModulePath(selected.source.path ?? ".")');
+    expect(view).toContain("setModulePathHint(Boolean(selected.source.path))");
+    expect(view).toContain("modulePathExplicit() &&");
+    expect(view).toContain("modulePathHint() &&");
+    expect(view).toContain("setModulePathHint(false);");
+  });
+
+  test("labels every module candidate with the providers derived from it", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain("moduleCandidateLabel");
+    expect(view).toContain("{moduleCandidateLabel(module)}");
+    const helperStart = view.indexOf("const moduleCandidateLabel =");
+    expect(helperStart).toBeGreaterThan(-1);
+    const helper = view.slice(helperStart, helperStart + 900);
+    // The label is read from the scanned candidate, never guessed from a
+    // manifest, Store listing, or provider allowlist.
+    expect(helper).toContain("module.providerPackages");
+    expect(helper).toContain("providerDisplayName(provider.source)");
+    expect(helper).toContain('t("installStore.moduleOption"');
+    expect(helper).toContain('t("installStore.moduleNoProviders")');
+  });
+
   test("module changes clear every compiled and planned artifact", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     const chooserStart = view.indexOf("const chooseInstallModule =");
