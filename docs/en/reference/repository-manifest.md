@@ -371,6 +371,6 @@ A future metadata section requires a new `apiVersion`; unknown fields continue t
 - Do not backport the new field while retaining a v1/v2 identifier.
 
 The Store does not proxy this manifest. See [Store API](./store-api.md) for the
-TCS 2.0 URL-only handoff and integration boundary. A repository install takes a
+TCS 2.0 handoff and integration boundary. A repository install takes a
 Git URL, ref, and optional module-path hint; module/provider candidates come
 from the exact SourceSnapshot's OpenTofu scan.

@@ -347,6 +347,19 @@ describe("single-screen install surface", () => {
     expect(view).not.toContain("moduleFiles");
   });
 
+  test("takes the module a listing reviewed without asking again", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    // The reviewed module arrives as an explicit hint, and only the immutable
+    // scan can promote it: a stale catalog entry falls back to the scan's own
+    // choice instead of stranding the install on a path the repository lacks.
+    expect(view).toContain("const [modulePathHint, setModulePathHint]");
+    expect(view).toContain('setModulePath(selected.source.path ?? ".")');
+    expect(view).toContain("setModulePathHint(Boolean(selected.source.path))");
+    expect(view).toContain("modulePathExplicit() &&");
+    expect(view).toContain("modulePathHint() &&");
+    expect(view).toContain("setModulePathHint(false);");
+  });
+
   test("labels every module candidate with the providers derived from it", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).toContain("moduleCandidateLabel");

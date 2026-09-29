@@ -338,7 +338,7 @@ fail closed のままにします。
   `sourceBuild` を追加します。
 - v1/v2 の文書に field だけ backport してはいけません。
 
-Store はこの manifest を代理しません。TCS 2.0 との接続と URL-only handoff は
+Store はこの manifest を代理しません。TCS 2.0 との接続と handoff は
 [Store API](./store-api.md)を参照してください。repository install の入力は Git URL、ref、
 optional module path hint であり、module/provider 候補は exact SourceSnapshot の
 OpenTofu scan から得ます。

@@ -1888,8 +1888,14 @@ test.describe("Takosumi dashboard browser surface", () => {
     traffic.assertNoFailures();
   });
 
-  const storeSetupRetryTest = (retryMode: "none" | "unchanged" | "edited") => {
-  test(`Store setup edits keep the ready compatibility fence and continue to Plan (${retryMode})`, async ({
+  const storeSetupRetryTest = (
+    retryMode: "none" | "unchanged" | "edited",
+    reviewedModule?: { readonly path: string; readonly exposed: boolean },
+  ) => {
+  const reviewedLabel = reviewedModule
+    ? `, reviewed ${reviewedModule.path}${reviewedModule.exposed ? "" : " (stale)"}`
+    : "";
+  test(`Store setup edits keep the ready compatibility fence and continue to Plan (${retryMode}${reviewedLabel})`, async ({
     page,
   }) => {
     test.skip(
@@ -1916,7 +1922,11 @@ test.describe("Takosumi dashboard browser surface", () => {
         contentType: "application/json",
         body: JSON.stringify({
           id: "example/service",
-          source: { git: "https://github.com/example/service.git" },
+          // A catalog that reviewed one module of a multi-module repository.
+          source: {
+            git: "https://github.com/example/service.git",
+            ...(reviewedModule ? { path: reviewedModule.path } : {}),
+          },
           suggestedName: "example-service",
           name: { ja: "Example Service", en: "Example Service" },
           description: { ja: "Example", en: "Example" },
@@ -2207,36 +2217,47 @@ test.describe("Takosumi dashboard browser surface", () => {
     expect(prematureConfigReads).toEqual([]);
     await page.getByRole("button", { name: /追加|Add/u }).last().click();
     const moduleChooser = page.getByTestId("install-module-chooser");
-    await expect(moduleChooser).toBeVisible();
+    if (reviewedModule?.exposed) {
+      // The listing named the module it reviewed and the immutable scan exposes
+      // it, so the add flow must not ask again: the compatibility request
+      // already carries that exact directory.
+      await expect(moduleChooser).toHaveCount(0);
+      await expect
+        .poll(() => compatibilityBodies.length)
+        .toBe(1);
+    } else {
+      await expect(moduleChooser).toBeVisible();
+      // No compatibility check may run before the user confirms a module.
+      expect(seenMutations).not.toContain(
+        "POST /api/v1/sources/src_install_e2e/compatibility-check",
+      );
+      const moduleOption = moduleChooser.getByRole("combobox", {
+        name: /モジュールディレクトリ|Module directory/u,
+      });
+      await expect(moduleOption).toHaveValue("");
+      // Each candidate carries the provider set derived from that exact scanned
+      // directory, so the choice names the destination instead of a bare path.
+      await expect(moduleOption.locator("option")).toHaveText([
+        /モジュールディレクトリ|Module directory/u,
+        ". — Cloudflare",
+        "deploy/takoform — AWS, Cloudflare",
+      ]);
+      await moduleOption.selectOption("deploy/takoform");
+      await moduleChooser
+        .getByRole("button", {
+          name: /このモジュールで続ける|Continue with this module/u,
+        })
+        .click();
+      await expect
+        .poll(() => compatibilityBodies.length)
+        .toBe(1);
+    }
     await expect
       .poll(() => installModuleRequests.length)
       .toBe(1);
     expect(installModuleRequests).toEqual([
       "/api/v1/sources/src_install_e2e/snapshots/snap_install_e2e/install-modules",
     ]);
-    expect(seenMutations).not.toContain(
-      "POST /api/v1/sources/src_install_e2e/compatibility-check",
-    );
-    const moduleOption = moduleChooser.getByRole("combobox", {
-      name: /モジュールディレクトリ|Module directory/u,
-    });
-    await expect(moduleOption).toHaveValue("");
-    // Each candidate carries the provider set derived from that exact scanned
-    // directory, so the choice names the destination instead of a bare path.
-    await expect(moduleOption.locator("option")).toHaveText([
-      /モジュールディレクトリ|Module directory/u,
-      ". — Cloudflare",
-      "deploy/takoform — AWS, Cloudflare",
-    ]);
-    await moduleOption.selectOption("deploy/takoform");
-    await moduleChooser
-      .getByRole("button", {
-        name: /このモジュールで続ける|Continue with this module/u,
-      })
-      .click();
-    await expect
-      .poll(() => compatibilityBodies.length)
-      .toBe(1);
     expect(compatibilityBodies[0]).toMatchObject({
       compileInstallUx: true,
       modulePath: "deploy/takoform",
@@ -2308,6 +2329,10 @@ test.describe("Takosumi dashboard browser surface", () => {
   storeSetupRetryTest("none");
   storeSetupRetryTest("unchanged");
   storeSetupRetryTest("edited");
+  // Store handoff: the reviewed module is used as-is when the snapshot exposes
+  // it, and the scan's own choice is offered when a stale entry does not.
+  storeSetupRetryTest("none", { path: "deploy/takoform", exposed: true });
+  storeSetupRetryTest("none", { path: "deploy/moved", exposed: false });
 
   test("Workload settings submit one complete Configuration Plan and open its Run review", async ({
     page,
