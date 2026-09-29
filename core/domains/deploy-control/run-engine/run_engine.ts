@@ -97,6 +97,7 @@ import {
   stableJsonDigest,
   stableStringify,
 } from "../../../adapters/source/digest.ts";
+import { credentialIssuanceAttemptRef } from "../credential_issuance_attempt.ts";
 import { log } from "../../../shared/log.ts";
 import {
   ConnectionsService,
@@ -5350,6 +5351,11 @@ export class RunEngine {
         planRun,
         phase: "plan",
         auditRunId: planRun.id,
+        issuanceGenerationRef: await credentialIssuanceAttemptRef(
+          running.id,
+          claim.leaseToken,
+          0,
+        ),
       });
       const resolveRunEnvironmentMs = finiteElapsedMs(
         environmentStartedAt,
@@ -7252,6 +7258,11 @@ export class RunEngine {
             input.phase,
             input.running.id,
             descriptor.connectionId,
+            await credentialIssuanceAttemptRef(
+              input.running.id,
+              input.leaseToken,
+              sequence + 1,
+            ),
           );
           const newDescriptor = renewed.renewable?.[0];
           const value = renewed.env[descriptor.sourceEnvName];
@@ -8828,6 +8839,11 @@ export class RunEngine {
         planRun,
         phase: planRun.operation === "destroy" ? "destroy" : "apply",
         auditRunId: running.id,
+        issuanceGenerationRef: await credentialIssuanceAttemptRef(
+          running.id,
+          leaseToken,
+          0,
+        ),
       });
       const runningWithEnv = withRunEnvironmentEvidence(
         running,

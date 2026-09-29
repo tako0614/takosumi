@@ -1332,6 +1332,7 @@ async function seedRenewableApplyFixture(
   readonly planRunId: string;
   readonly vault: ConnectionVault;
   readonly issueCount: () => number;
+  readonly issuanceGenerationRefs: () => readonly string[];
 }> {
   const provider = "registry.opentofu.org/cloudflare/cloudflare";
   const capsuleId = `cap_${label}`;
@@ -1362,9 +1363,15 @@ async function seedRenewableApplyFixture(
     },
   });
   let issues = 0;
+  const issuanceGenerationRefs: string[] = [];
   const vault = {
-    mintForCapsuleProviderBindings: async () => {
+    mintForCapsuleProviderBindings: async (
+      _workspaceId: string,
+      _entries: unknown,
+      options: { readonly issuanceGenerationRef?: string },
+    ) => {
       issues += 1;
+      issuanceGenerationRefs.push(options.issuanceGenerationRef ?? "");
       await onIssue?.(issues);
       const token = `local_renewable_token_${issues}_0123456789abcdef`;
       return new PhaseMintBundle(
@@ -1375,12 +1382,18 @@ async function seedRenewableApplyFixture(
       );
     },
   } as unknown as ConnectionVault;
-  return { applyRunId, planRunId, vault, issueCount: () => issues };
+  return {
+    applyRunId,
+    planRunId,
+    vault,
+    issueCount: () => issues,
+    issuanceGenerationRefs: () => issuanceGenerationRefs,
+  };
 }
 
 test("renewable ApplyRun reissues before expiry and stops after terminal result", async () => {
   const store = new InMemoryOpenTofuControlStore();
-  const { applyRunId, planRunId, vault, issueCount } =
+  const { applyRunId, planRunId, vault, issueCount, issuanceGenerationRefs } =
     await seedRenewableApplyFixture(store, "credential_renewal");
   let resolveStarted!: () => void;
   const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
@@ -1410,6 +1423,10 @@ test("renewable ApplyRun reissues before expiry and stops after terminal result"
     // drain those asynchronous continuations without advancing the expiry clock.
     await settleAsyncUntil(() => refreshes.length === 1);
     expect(issueCount()).toBe(2);
+    expect(issuanceGenerationRefs()).toHaveLength(2);
+    expect(issuanceGenerationRefs()[0]).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    expect(issuanceGenerationRefs()[1]).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    expect(issuanceGenerationRefs()[1]).not.toBe(issuanceGenerationRefs()[0]);
     expect(applySignal?.aborted).toBe(false);
     expect(refreshes).toMatchObject([{
       owner: { kind: "apply", id: applyRunId },

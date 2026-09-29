@@ -90,6 +90,7 @@ import {
 import type { SecretBoundaryCrypto } from "../secret-store/memory.ts";
 import type { SecretPartition } from "../secret-store/types.ts";
 import { resolveCanonicalCapsuleRunCredentialContext } from "../../domains/deploy-control/run_credential_context.ts";
+import { connectionCredentialIssuanceAttemptRef } from "../../domains/deploy-control/credential_issuance_attempt.ts";
 
 const CREDENTIAL_BUNDLE_MARKER = "[credential-bundle]";
 const CREDENTIAL_VERIFICATION_KIND =
@@ -245,6 +246,8 @@ export interface CapsuleProviderBindingMintOptions {
   readonly phase?: MintPhase;
   readonly capsuleId?: string;
   readonly runId?: string;
+  /** Opaque winning-lease mint generation; never the raw lease token. */
+  readonly issuanceGenerationRef?: `sha256:${string}`;
 }
 
 export interface ConnectionVault {
@@ -1337,6 +1340,12 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         connection,
         run,
         runCredentialSettings,
+        run && options?.issuanceGenerationRef
+          ? await connectionCredentialIssuanceAttemptRef(
+              options.issuanceGenerationRef,
+              connection.id,
+            )
+          : undefined,
       );
       evidence.push(minted.evidence);
       mergeCredentialEnv(env, minted.values, entry);
@@ -1776,6 +1785,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     connection: ProviderConnection,
     run?: CredentialRecipeDriverRunContext,
     runCredentialSettings?: CapsuleProviderBindingMintEntry["runCredentialSettings"],
+    issuanceAttemptRef?: `sha256:${string}`,
   ): Promise<MintedProviderValues> {
     if (connectionIsExpired(connection, this.#now())) {
       await this.#markConnectionExpired(connection);
@@ -1815,6 +1825,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       const issuedSecretValues: string[] = [];
       const baseContext = {
         connection,
+        ...(issuanceAttemptRef ? { issuanceAttemptRef } : {}),
         ...(runCredentialSettings ? { runCredentialSettings } : {}),
         values: material.env,
         files: material.files,

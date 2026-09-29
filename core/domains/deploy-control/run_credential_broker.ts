@@ -183,14 +183,18 @@ export class RunCredentialBroker {
     planRun: PlanRun,
     phase: "plan" | "apply" | "destroy",
     auditRunId: string,
+    issuanceGenerationRef?: `sha256:${string}`,
   ): Promise<RunCredentials | undefined> {
-    return await this.#mintCredentials(planRun, phase, auditRunId);
+    return await this.#mintCredentials(planRun, phase, auditRunId, auditRunId, {
+      issuanceGenerationRef,
+    });
   }
 
   /** Plan-only variant that returns value-free stage timings beside credentials. */
   async mintPlanRunCredentialsWithTimings(
     planRun: PlanRun,
     auditRunId: string,
+    issuanceGenerationRef?: `sha256:${string}`,
   ): Promise<PlanCredentialBrokerResult> {
     const timings = emptyPlanCredentialBrokerTimings();
     const credentials = await this.#mintCredentials(
@@ -198,7 +202,7 @@ export class RunCredentialBroker {
       "plan",
       auditRunId,
       auditRunId,
-      { planTimings: timings },
+      { planTimings: timings, issuanceGenerationRef },
     );
     return { credentials, timings };
   }
@@ -209,13 +213,14 @@ export class RunCredentialBroker {
     phase: "plan" | "apply" | "destroy",
     auditRunId: string,
     connectionId: string,
+    issuanceGenerationRef?: `sha256:${string}`,
   ): Promise<RunCredentials> {
     const renewed = await this.#mintCredentials(
       planRun,
       phase,
       auditRunId,
       auditRunId,
-      { onlyConnectionId: connectionId, skipRuntimeInputs: true },
+      { onlyConnectionId: connectionId, skipRuntimeInputs: true, issuanceGenerationRef },
     );
     if (!renewed || renewed.renewable?.length !== 1) {
       throw new OpenTofuControllerError(
@@ -252,6 +257,7 @@ export class RunCredentialBroker {
       readonly onlyConnectionId?: string;
       readonly skipRuntimeInputs?: boolean;
       readonly planTimings?: MutablePlanCredentialBrokerTimings;
+      readonly issuanceGenerationRef?: `sha256:${string}`;
     } = {},
   ): Promise<RunCredentials | undefined> {
     if (planRun.requiredProviders.length === 0) {
@@ -425,6 +431,9 @@ export class RunCredentialBroker {
         {
           phase,
           runId: credentialRunId,
+          ...(options.issuanceGenerationRef
+            ? { issuanceGenerationRef: options.issuanceGenerationRef }
+            : {}),
           ...(capsuleId ? { capsuleId } : {}),
         },
       );

@@ -278,6 +278,7 @@ test("a configured extension contributes one exact run-issued provider broker", 
       updatedAt: "2026-08-18T00:00:00.000Z",
     },
     runCredentialSettings: { requiredAvailableMinor: 2300 },
+    issuanceAttemptRef: `sha256:${"a".repeat(64)}`,
     values: {},
     files: [],
     run: {
@@ -326,6 +327,7 @@ test("a configured extension contributes one exact run-issued provider broker", 
     url: string;
     request: Record<string, unknown>;
     context: Record<string, unknown>;
+    issuanceAttemptRef?: string;
   };
   expect(call.url).toBe(
     "https://app-staging.takosumi.com/extensions/hosted/marketplace/provider-credentials/takoform?workspaceId=ws_1",
@@ -335,6 +337,7 @@ test("a configured extension contributes one exact run-issued provider broker", 
     providerSource: "registry.terraform.io/tako0614/takoform",
     settings: { requiredAvailableMinor: 2300 },
   });
+  expect(call.issuanceAttemptRef).toBe(`sha256:${"a".repeat(64)}`);
   expect(call.context).toEqual({
     authKind: "run-credential",
     subject: "acct_1",

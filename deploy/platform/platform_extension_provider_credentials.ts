@@ -230,6 +230,7 @@ async function mintPlatformExtensionProviderCredential(
     logCredentialExchangeFailure("context_unavailable");
     throw new Error("provider credential exchange requires a canonical Run");
   }
+  const issuanceAttemptRef = context.issuanceAttemptRef;
   const declaredSettings = context.runCredentialSettings ?? Object.freeze({});
   // The plan-pinned reservation travels with the Apply-phase exchange so the
   // extension can bind its host's endpoint to the exact origin this Capsule's
@@ -297,6 +298,7 @@ async function mintPlatformExtensionProviderCredential(
           url: url.href,
           request: exchangeRequest,
           context: exchangeContext,
+          ...(issuanceAttemptRef ? { issuanceAttemptRef } : {}),
         }),
       );
       if (
@@ -442,6 +444,7 @@ interface PlatformExtensionCredentialHandler {
   exchangeProviderCredential?(input: {
     readonly url: string;
     readonly request: Readonly<Record<string, unknown>>;
+    readonly issuanceAttemptRef?: `sha256:${string}`;
     readonly context: {
       readonly authKind: "run-credential";
       readonly subject: string;
