@@ -2362,9 +2362,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                     <Input
                       value={modulePath()}
                       onInput={(event) => {
+                        const path = event.currentTarget.value;
                         resetPreparedSource();
                         setModulePathExplicit(true);
-                        setModulePath(event.currentTarget.value);
+                        setModulePath(path);
                       }}
                     />
                   </FormField>

@@ -8,6 +8,128 @@ const read = (path: string): string =>
   readFileSync(resolve(root, path), "utf8");
 
 describe("single-screen install surface", () => {
+  test("preserves typed module path through its actual input callback", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const fieldStart = view.indexOf(
+      '<FormField label={t("installStore.modulePath")}',
+    );
+    const fieldEnd = view.indexOf("</FormField>", fieldStart);
+    const field = view.slice(fieldStart, fieldEnd);
+    expect(fieldStart).toBeGreaterThanOrEqual(0);
+
+    const callbackStart = field.indexOf("onInput={(event) => {");
+    const callbackBodyStart = callbackStart + "onInput={(event) => {".length;
+    const callbackBodyEnd = field.indexOf("\n                      }}", callbackBodyStart);
+    expect(callbackStart).toBeGreaterThanOrEqual(0);
+    expect(callbackBodyEnd).toBeGreaterThan(callbackBodyStart);
+    const callbackBody = field.slice(callbackBodyStart, callbackBodyEnd);
+    const runCallback = new Function(
+      "event",
+      "resetPreparedSource",
+      "setModulePathExplicit",
+      "setModulePath",
+      callbackBody,
+    ) as (
+      event: { readonly currentTarget: { value: string } },
+      resetPreparedSource: () => void,
+      setModulePathExplicit: (value: boolean) => void,
+      setModulePath: (path: string) => void,
+    ) => void;
+    const event = { currentTarget: { value: "deploy/takoform" } };
+    const calls: string[] = [];
+
+    runCallback(
+      event,
+      () => {
+        calls.push("reset");
+        event.currentTarget.value = ".";
+      },
+      (value) => calls.push(`explicit:${value}`),
+      (path) => calls.push(`path:${path}`),
+    );
+
+    expect(calls).toEqual(["reset", "explicit:true", "path:deploy/takoform"]);
+    expect(event.currentTarget.value).toBe(".");
+  });
+
+  test("accepts mixed registry/versioned module projections", () => {
+    expect(
+      installModuleCatalogFromSnapshot({
+        status: "ready",
+        scopePath: ".",
+        modules: [
+          {
+            path: ".",
+            providerPackages: [
+              {
+                source: "registry.opentofu.org/cloudflare/cloudflare",
+                version: "5.19.1",
+              },
+              { source: "registry.opentofu.org/hashicorp/http" },
+              { source: "registry.opentofu.org/hashicorp/random" },
+            ],
+            rootProviderRequirements: [
+              {
+                source: "registry.opentofu.org/cloudflare/cloudflare",
+                moduleLocalName: "cloudflare",
+                version: "5.19.1",
+              },
+              {
+                source: "registry.opentofu.org/hashicorp/http",
+                moduleLocalName: "http",
+              },
+              {
+                source: "registry.opentofu.org/hashicorp/random",
+                moduleLocalName: "random",
+              },
+            ],
+          },
+          {
+            path: "deploy/takoform",
+            providerPackages: [
+              {
+                source: "registry.terraform.io/tako0614/takoform",
+                version: "4.1.0",
+              },
+            ],
+            rootProviderRequirements: [
+              {
+                source: "registry.terraform.io/tako0614/takoform",
+                moduleLocalName: "takoform",
+                version: "4.1.0",
+              },
+            ],
+          },
+          {
+            path: "deploy/takoform/actor-candidate",
+            providerPackages: [
+              {
+                source: "registry.terraform.io/tako0614/takoform",
+                version: "0.0.0-dev",
+              },
+            ],
+            rootProviderRequirements: [
+              {
+                source: "registry.terraform.io/tako0614/takoform",
+                moduleLocalName: "takoform",
+                version: "0.0.0-dev",
+              },
+            ],
+          },
+        ],
+        sourceSnapshotId: "snap_mixed_module_fixture",
+      }),
+    ).toMatchObject({
+      status: "ready",
+      sourceSnapshotId: "snap_mixed_module_fixture",
+      modules: [
+        { path: "." },
+        { path: "deploy/takoform" },
+        { path: "deploy/takoform/actor-candidate" },
+      ],
+    });
+  });
+
   test("normalizes the bounded module projection without exposing files", () => {
     expect(
       installModuleCatalogFromSnapshot({
