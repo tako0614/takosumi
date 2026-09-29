@@ -729,6 +729,155 @@ test("durable webhook release activator validates persisted status URLs before G
   expect(requestCount).toBe(0);
 });
 
+test("webhook release activator exposes bounded operator submit and observe", async () => {
+  const requests: Request[] = [];
+  const activator = createWebhookReleaseActivator({
+    url: "https://materializer.example.test/activate",
+    token: "release-token",
+    fetcher: async (input, init) => {
+      const request = new Request(input, init);
+      requests.push(request);
+      return request.method === "POST"
+        ? Response.json(
+            {
+              status: "pending",
+              jobId: "rel_job_2",
+            },
+            { status: 202 },
+          )
+        : Response.json({ status: "succeeded", message: "done" });
+    },
+  });
+  const input = {
+    ...fakeOperatorActivationInput(),
+    credentials: { env: { CLOUDFLARE_API_TOKEN: "must-not-cross" } },
+  } as ReleaseActivationInput;
+
+  const submitted = await activator.submitOperator!(input);
+  expect(submitted).toEqual({
+    kind: "pending",
+    job: { jobId: "rel_job_2" },
+  });
+  const body = (await requests[0]!.clone().json()) as Record<string, unknown>;
+  expect(body).not.toHaveProperty("credentials");
+
+  await expect(activator.observeOperator!(submitted.job!)).resolves.toEqual({
+    kind: "settled",
+    result: { status: "succeeded", message: "done" },
+  });
+  expect(requests.map((request) => request.method)).toEqual(["POST", "GET"]);
+});
+
+test("runner release activator submits and observes the same release job without sync dispatch", async () => {
+  let submittedRunId: string | undefined;
+  let observedRunId: string | undefined;
+  let syncCalls = 0;
+  const activator = createRunnerReleaseActivator({
+    release: async () => {
+      syncCalls += 1;
+      throw new Error("sync release must not run");
+    },
+    submitRelease: async (job) => {
+      submittedRunId = job.runId;
+      return { kind: "pending" };
+    },
+    observeRelease: async (job) => {
+      observedRunId = job.runId;
+      return {
+        kind: "completed",
+        result: {
+          status: "succeeded",
+          runId: job.runId,
+          commandCount: job.commands.length,
+        },
+      };
+    },
+  });
+  const input = fakeRunnerActivationInput();
+
+  await expect(activator!.submitRunner!(input)).resolves.toEqual({
+    kind: "pending",
+  });
+  await expect(activator!.observeRunner!(input)).resolves.toEqual({
+    kind: "settled",
+    result: {
+      status: "succeeded",
+      kind: "takosumi.release-commands@v1",
+      message: "ran 1 post-apply release command(s)",
+      metadata: {
+        releaseRunId: "release_run_apply_1",
+        commandCount: 1,
+      },
+    },
+  });
+  expect(submittedRunId).toBe("release_run_apply_1");
+  expect(observedRunId).toBe(submittedRunId);
+  expect(syncCalls).toBe(0);
+});
+
+test("composite release activator surfaces bounded methods with executor-filtered inputs", async () => {
+  let runnerCommands: ReleaseActivationInput["commands"] = [];
+  let operatorCommands: ReleaseActivationInput["commands"] = [];
+  const runner = {
+    async activate() {
+      return { status: "succeeded" as const };
+    },
+    async submitRunner(input: ReleaseActivationInput) {
+      runnerCommands = input.commands;
+      return { kind: "pending" as const };
+    },
+    async observeRunner(input: ReleaseActivationInput) {
+      runnerCommands = input.commands;
+      return { kind: "pending" as const };
+    },
+  };
+  const operator = {
+    async activate() {
+      return { status: "succeeded" as const };
+    },
+    async submitOperator(input: ReleaseActivationInput) {
+      operatorCommands = input.commands;
+      expect(Object.hasOwn(input, "credentials")).toBe(false);
+      expect(Object.hasOwn(input, "runtimeSecretFileBundle")).toBe(false);
+      return { kind: "pending" as const, job: { jobId: "operator-job" } };
+    },
+    async observeOperator() {
+      return { kind: "pending" as const, job: { jobId: "operator-job" } };
+    },
+  };
+  const composite = createCompositeReleaseActivator({ runner, operator })!;
+  const input = {
+    ...fakeActivationInput([
+      {
+        id: "runner-activate",
+        phase: "post_apply",
+        executor: "runner",
+        command: ["bun", "run", "activate"],
+      },
+      {
+        id: "operator-publish",
+        phase: "post_apply",
+        executor: "operator",
+        command: ["bun", "run", "publish"],
+      },
+    ]),
+    credentials: { env: { CLOUDFLARE_API_TOKEN: "must-not-cross" } },
+    runtimeSecretFileBundle: fakeRuntimeSecretFileBundle(),
+  } as ReleaseActivationInput;
+
+  await composite.submitRunner!(input);
+  const operatorStep = await composite.submitOperator!(input);
+  await composite.observeRunner!(input);
+  await composite.observeOperator!(operatorStep.kind === "pending" ? operatorStep.job! : { jobId: "wrong" });
+
+  expect(runnerCommands.map((command) => command.id)).toEqual([
+    "runner-activate",
+  ]);
+  expect(operatorCommands.map((command) => command.id)).toEqual([
+    "operator-publish",
+  ]);
+});
+
 test("webhook release activator polls accepted operator jobs", async () => {
   const requests: Request[] = [];
   const activator = createWebhookReleaseActivator({

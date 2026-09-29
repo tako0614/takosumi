@@ -1,9 +1,14 @@
 import type {
   ReleaseActivationInput,
   ReleaseActivationCommand,
+  ReleaseActivationJob,
   ReleaseActivationResult,
+  ReleaseActivationStep,
   ReleaseActivator,
   ReleaseActivationStatus,
+  ReleaseCommandRunJob,
+  ReleaseCommandRunResult,
+  OpenTofuReleaseMutationProgress,
   RunExecutionControl,
   OpenTofuRunner,
 } from "../../core/domains/deploy-control/mod.ts";
@@ -29,14 +34,8 @@ export interface WebhookReleaseActivatorOptions {
   readonly timeoutMs?: number;
 }
 
-export interface DurableReleaseActivationJob {
-  readonly jobId: string;
-  readonly statusUrl?: string;
-}
-
-export type DurableReleaseActivationStep =
-  | { readonly kind: "pending"; readonly job: DurableReleaseActivationJob }
-  | { readonly kind: "settled"; readonly result: ReleaseActivationResult };
+export type DurableReleaseActivationJob = ReleaseActivationJob;
+export type DurableReleaseActivationStep = ReleaseActivationStep;
 
 export interface DurableWebhookReleaseActivator {
   submit(
@@ -209,6 +208,7 @@ export function createWebhookReleaseActivator(
   const fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
   const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? 3000);
   const timeoutMs = Math.max(pollIntervalMs, options.timeoutMs ?? 45 * 60_000);
+  const durableActivator = createDurableWebhookReleaseActivator(options);
   return {
     async activate(input, control) {
       throwIfAborted(control?.signal);
@@ -273,6 +273,18 @@ export function createWebhookReleaseActivator(
       }
       return result;
     },
+    async submitOperator(input, control) {
+      const operatorCommands = input.commands.filter(
+        (command) => command.executor === "operator",
+      );
+      return await durableActivator.submit(
+        operatorActivationInput(input, operatorCommands),
+        control,
+      );
+    },
+    async observeOperator(job, control) {
+      return await durableActivator.observe(job, control);
+    },
   };
 }
 
@@ -320,6 +332,57 @@ export function createCompositeReleaseActivator(options: {
         operatorResult,
       });
     },
+    ...(options.runner?.submitRunner
+      ? {
+          async submitRunner(input: ReleaseActivationInput, control?: RunExecutionControl) {
+            const runnerCommands = input.commands.filter(isRunnerExecutableCommand);
+            if (runnerCommands.length === 0) {
+              return { kind: "settled" as const, result: { status: "skipped" as const } };
+            }
+            return await options.runner!.submitRunner!(
+              { ...input, commands: runnerCommands },
+              control,
+            );
+          },
+        }
+      : {}),
+    ...(options.runner?.observeRunner
+      ? {
+          async observeRunner(input: ReleaseActivationInput, control?: RunExecutionControl) {
+            const runnerCommands = input.commands.filter(isRunnerExecutableCommand);
+            if (runnerCommands.length === 0) {
+              return { kind: "settled" as const, result: { status: "skipped" as const } };
+            }
+            return await options.runner!.observeRunner!(
+              { ...input, commands: runnerCommands },
+              control,
+            );
+          },
+        }
+      : {}),
+    ...(options.operator?.submitOperator
+      ? {
+          async submitOperator(input: ReleaseActivationInput, control?: RunExecutionControl) {
+            const operatorCommands = input.commands.filter(
+              (command) => command.executor === "operator",
+            );
+            if (operatorCommands.length === 0) {
+              return { kind: "settled" as const, result: { status: "skipped" as const } };
+            }
+            return await options.operator!.submitOperator!(
+              operatorActivationInput(input, operatorCommands),
+              control,
+            );
+          },
+        }
+      : {}),
+    ...(options.operator?.observeOperator
+      ? {
+          async observeOperator(job: ReleaseActivationJob, control?: RunExecutionControl) {
+            return await options.operator!.observeOperator!(job, control);
+          },
+        }
+      : {}),
   };
 }
 
@@ -352,85 +415,169 @@ function missingReleaseActivatorResult(
 }
 
 export function createRunnerReleaseActivator(
-  runner: Pick<OpenTofuRunner, "release">,
+  runner: Pick<
+    OpenTofuRunner,
+    "release" | "submitRelease" | "observeRelease"
+  >,
 ): ReleaseActivator | undefined {
-  if (typeof runner.release !== "function") return undefined;
+  const supportsDurableRelease =
+    typeof runner.submitRelease === "function" &&
+    typeof runner.observeRelease === "function";
+  if (typeof runner.release !== "function" && !supportsDurableRelease) {
+    return undefined;
+  }
   return {
     async activate(input, control) {
       throwIfAborted(control?.signal);
-      if (input.commands.length === 0) return { status: "skipped" };
-      const operatorCommands = input.commands.filter(
-        (command) => command.executor === "operator",
-      );
-      const phase = releaseCommandPhaseLabel(input.commands);
-      if (operatorCommands.length > 0) {
-        const metadata: Readonly<Record<string, JsonValue>> = {
-          commandCount: input.commands.length,
-          operatorCommandCount: operatorCommands.length,
-        };
-        return {
-          status: "pending",
-          kind: RELEASE_ACTIVATOR_KIND,
-          message: `${phase} release commands require an operator release activator`,
-          metadata,
-        };
-      }
-      if (!input.sourceSnapshot) {
+      const prepared = prepareRunnerReleaseJob(input);
+      if (prepared.kind === "settled") return prepared.result;
+      if (typeof runner.release !== "function") {
         return {
           status: "pending",
           kind: "takosumi.release-commands@v1",
-          message: `${phase} release commands require a source snapshot archive`,
+          message: `${prepared.phase} release requires durable runner support`,
         };
       }
-      if (
-        input.runtimeSecretFileBundle &&
-        input.commands.some((command) => command.phase !== "post_apply")
-      ) {
-        throw new TypeError(
-          "runtime secret files are available only to post-apply runner commands",
-        );
-      }
-      const workspaceId = input.applyRun.workspaceId;
-      const runnerCommands = input.commands.filter(isRunnerExecutableCommand);
-      if (runnerCommands.length !== input.commands.length) {
-        return {
-          status: "pending",
-          kind: RELEASE_ACTIVATOR_KIND,
-          message: `${phase} typed operator actions require an operator release activator`,
-        };
-      }
-      const result = await runner.release!(
-        {
-          runId: releaseCommandRunId(input.applyRun.id),
-          commands: runnerCommands,
-          sourceSnapshot: input.sourceSnapshot,
-          nonSensitiveOutputs: input.nonSensitiveOutputs,
-          providerConfigurations: input.providerConfigurations,
-          ...(input.credentials ? { credentials: input.credentials } : {}),
-          ...(input.runtimeSecretFileBundle
-            ? {
-                runtimeSecrets:
-                  input.runtimeSecretFileBundle.toRunnerDispatch(),
-              }
-            : {}),
-          ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
-          applyRunId: input.applyRun.id,
-          workspaceId,
-          capsuleId: input.capsule.id,
-          stateVersionId: input.stateVersion.id,
+      const result = await runner.release(prepared.job, control);
+      return runnerReleaseActivationResult(result, prepared.phase);
+    },
+    ...(supportsDurableRelease
+      ? {
+          async submitRunner(input: ReleaseActivationInput, control?: RunExecutionControl) {
+            throwIfAborted(control?.signal);
+            const prepared = prepareRunnerReleaseJob(input);
+            if (prepared.kind === "settled") {
+              return { kind: "settled" as const, result: prepared.result };
+            }
+            const progress = await runner.submitRelease!(prepared.job, control);
+            return runnerReleaseActivationStep(progress, prepared.phase);
+          },
+          async observeRunner(input: ReleaseActivationInput, control?: RunExecutionControl) {
+            throwIfAborted(control?.signal);
+            const prepared = prepareRunnerReleaseJob(input);
+            if (prepared.kind === "settled") {
+              return { kind: "settled" as const, result: prepared.result };
+            }
+            const progress = await runner.observeRelease!(prepared.job, control);
+            return runnerReleaseActivationStep(progress, prepared.phase);
+          },
+        }
+      : {}),
+  };
+}
+
+type PreparedRunnerReleaseJob =
+  | { readonly kind: "settled"; readonly result: ReleaseActivationResult }
+  | {
+      readonly kind: "ready";
+      readonly phase: ReturnType<typeof releaseCommandPhaseLabel>;
+      readonly job: ReleaseCommandRunJob;
+    };
+
+function prepareRunnerReleaseJob(
+  input: ReleaseActivationInput,
+): PreparedRunnerReleaseJob {
+  if (input.commands.length === 0) {
+    return { kind: "settled", result: { status: "skipped" } };
+  }
+  const phase = releaseCommandPhaseLabel(input.commands);
+  const operatorCommands = input.commands.filter(
+    (command) => command.executor === "operator",
+  );
+  if (operatorCommands.length > 0) {
+    return {
+      kind: "settled",
+      result: {
+        status: "pending",
+        kind: RELEASE_ACTIVATOR_KIND,
+        message: `${phase} release commands require an operator release activator`,
+        metadata: {
+          commandCount: input.commands.length,
+          operatorCommandCount: operatorCommands.length,
         },
-        control,
-      );
-      const metadata: Readonly<Record<string, JsonValue>> = {
-        releaseRunId: result.runId,
-        commandCount: result.commandCount,
-      };
-      return {
-        status: "succeeded",
+      },
+    };
+  }
+  if (!input.sourceSnapshot) {
+    return {
+      kind: "settled",
+      result: {
+        status: "pending",
         kind: "takosumi.release-commands@v1",
-        message: `ran ${result.commandCount} ${phase} release command(s)`,
-        metadata,
-      };
+        message: `${phase} release commands require a source snapshot archive`,
+      },
+    };
+  }
+  if (
+    input.runtimeSecretFileBundle &&
+    input.commands.some((command) => command.phase !== "post_apply")
+  ) {
+    throw new TypeError(
+      "runtime secret files are available only to post-apply runner commands",
+    );
+  }
+  const runnerCommands = input.commands.filter(isRunnerExecutableCommand);
+  if (runnerCommands.length !== input.commands.length) {
+    return {
+      kind: "settled",
+      result: {
+        status: "pending",
+        kind: RELEASE_ACTIVATOR_KIND,
+        message: `${phase} typed operator actions require an operator release activator`,
+      },
+    };
+  }
+  return {
+    kind: "ready",
+    phase,
+    job: {
+      runId: releaseCommandRunId(input.applyRun.id),
+      commands: runnerCommands,
+      sourceSnapshot: input.sourceSnapshot,
+      nonSensitiveOutputs: input.nonSensitiveOutputs,
+      providerConfigurations: input.providerConfigurations,
+      ...(input.credentials ? { credentials: input.credentials } : {}),
+      ...(input.runtimeSecretFileBundle
+        ? {
+            runtimeSecrets: input.runtimeSecretFileBundle.toRunnerDispatch(),
+          }
+        : {}),
+      ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
+      applyRunId: input.applyRun.id,
+      workspaceId: input.applyRun.workspaceId,
+      capsuleId: input.capsule.id,
+      stateVersionId: input.stateVersion.id,
+    },
+  };
+}
+
+function runnerReleaseActivationStep(
+  progress: OpenTofuReleaseMutationProgress,
+  phase: ReturnType<typeof releaseCommandPhaseLabel>,
+): ReleaseActivationStep {
+  if (progress.kind === "pending") return { kind: "pending" };
+  if (progress.kind === "indeterminate") {
+    throw new ReleaseActivationIndeterminateError(
+      "runner release dispatch outcome is indeterminate; do not resubmit",
+    );
+  }
+  return {
+    kind: "settled",
+    result: runnerReleaseActivationResult(progress.result, phase),
+  };
+}
+
+function runnerReleaseActivationResult(
+  result: ReleaseCommandRunResult,
+  phase: ReturnType<typeof releaseCommandPhaseLabel>,
+): ReleaseActivationResult {
+  return {
+    status: "succeeded",
+    kind: "takosumi.release-commands@v1",
+    message: `ran ${result.commandCount} ${phase} release command(s)`,
+    metadata: {
+      releaseRunId: result.runId,
+      commandCount: result.commandCount,
     },
   };
 }
