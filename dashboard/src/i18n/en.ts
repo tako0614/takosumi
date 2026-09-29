@@ -970,7 +970,7 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
-    "Connect an external provider with your own credentials. Availability follows the operator provider policy, runner capability, and Run approval rules.",
+    "Manage connections to external services. Some are added by you, and others are provided by your operator.",
   "conn.providerConnections.title": "Connected accounts",
   "conn.providerConnection.autoRenewing": "Auto-renewing",
   "conn.expiresAt": "Expires: {date}",
@@ -1002,9 +1002,9 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.add.displayNamePlaceholder": "Optional label",
   "conn.guided.openProvider": "Open {provider} access page",
   "conn.guided.instructions": "Show steps",
-  "conn.byok.title": "Connect an external provider with your own key",
+  "conn.byok.title": "Add a connection with your own credentials",
   "conn.byok.body":
-    "Enter the provider source and the environment variables it requires. The connection remains subject to provider policy, runner capability, and Run approval.",
+    "Enter the provider identifier and required environment variables. Availability depends on operator settings and runtime support; approval may be required before a run.",
   "conn.byok.noBillingNote":
     "Any Takosumi charge is shown during preview. Charges from the external provider are billed separately by that provider.",
   "conn.byok.usePreset": "Use an installed recipe instead",
@@ -1027,9 +1027,9 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.genericEnv.oneRequired": "Enter at least one value.",
   "conn.error.invalidProvider": "Invalid connection target.",
   "conn.error.fieldRequired": "{field} is required.",
-  "conn.empty.title": "Connect an external provider with your own key",
+  "conn.empty.title": "Add a connection for your services",
   "conn.empty.message":
-    "Connect your own credentials to use an external provider within the installed policy, runner, approval, and billing rules.",
+    "A service may use a connection to access an external service. Adding one does not create resources.",
   "conn.test": "Check access",
   "conn.testing": "Checking…",
   "conn.test.notReady": "The account is not ready yet (status: {status}).",

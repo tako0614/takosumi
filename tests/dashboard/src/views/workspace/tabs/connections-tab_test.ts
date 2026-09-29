@@ -15,6 +15,37 @@ const source = readFileSync(
   ),
   "utf8",
 );
+const japaneseCopy = readFileSync(
+  resolve(import.meta.dir, "../../../../../../dashboard/src/i18n/ja.ts"),
+  "utf8",
+);
+const englishCopy = readFileSync(
+  resolve(import.meta.dir, "../../../../../../dashboard/src/i18n/en.ts"),
+  "utf8",
+);
+
+describe("ConnectionsTab user-facing copy", () => {
+  test("explains who provides connections and that adding one creates no resources", () => {
+    expect(japaneseCopy).toContain(
+      '"conn.subtitle":\n    "外部サービスへの接続を管理します。接続には、自分で登録するものと運営者が用意するものがあります。"',
+    );
+    expect(japaneseCopy).toContain(
+      "接続を追加しただけでは、リソースは作成されません。",
+    );
+    expect(japaneseCopy).toContain("実行前に承認が必要な場合があります。");
+    expect(japaneseCopy).not.toContain(
+      "provider policy、runner capability、Run approval",
+    );
+    expect(englishCopy).toContain(
+      '"conn.subtitle":\n    "Manage connections to external services.',
+    );
+    expect(englishCopy).toContain(
+      "Some are added by you, and others are provided by your operator.",
+    );
+    expect(englishCopy).toContain("Adding one does not create resources.");
+    expect(englishCopy).toContain("approval may be required before a run.");
+  });
+});
 
 describe("ConnectionsTab per-connection test state", () => {
   test("busy and error state are keyed by connection id", () => {

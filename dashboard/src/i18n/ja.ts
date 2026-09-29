@@ -973,7 +973,7 @@ export const ja = {
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
-    "自分の認証情報で外部プロバイダーを接続します。利用可否は operator の provider policy、runner capability、Run approval に従います。",
+    "外部サービスへの接続を管理します。接続には、自分で登録するものと運営者が用意するものがあります。",
   "conn.providerConnections.title": "接続済みアカウント",
   "conn.providerConnection.autoRenewing": "自動更新",
   "conn.expiresAt": "期限: {date}",
@@ -1005,9 +1005,9 @@ export const ja = {
   "conn.add.displayNamePlaceholder": "任意の名前",
   "conn.guided.openProvider": "{provider} のアクセス設定を開く",
   "conn.guided.instructions": "手順を表示",
-  "conn.byok.title": "自分のカギで外部プロバイダーを接続",
+  "conn.byok.title": "自分の認証情報で接続を追加",
   "conn.byok.body":
-    "プロバイダーの取得元 (source) と必要な環境変数を入力します。この接続にも provider policy、runner capability、Run approval が適用されます。",
+    "プロバイダーの識別子と必要な環境変数を入力します。利用可否は運営者の設定と実行環境によって異なり、実行前に承認が必要な場合があります。",
   "conn.byok.noBillingNote":
     "Takosumi の料金がある場合は preview に表示されます。外部プロバイダーの料金は、そのプロバイダーから別途請求されます。",
   "conn.byok.usePreset": "インストール済み Recipe を使う",
@@ -1031,9 +1031,9 @@ export const ja = {
   "conn.genericEnv.oneRequired": "環境変数を 1 つ以上入力してください。",
   "conn.error.invalidProvider": "接続先が不正です。",
   "conn.error.fieldRequired": "{field} は必須です。",
-  "conn.empty.title": "自分のカギで外部プロバイダーを接続",
+  "conn.empty.title": "サービスで使う接続を追加",
   "conn.empty.message":
-    "自分の認証情報を接続し、インストール済みの policy、runner、approval、billing の範囲で外部プロバイダーを利用します。",
+    "サービスでは、外部サービスへのアクセスに接続を使うことがあります。接続を追加しただけでは、リソースは作成されません。",
   "conn.test": "アクセス確認",
   "conn.testing": "確認中…",
   "conn.test.notReady":
