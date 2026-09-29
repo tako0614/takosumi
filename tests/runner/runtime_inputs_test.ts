@@ -154,6 +154,11 @@ test("run-scoped sensitive inputs reach tofu without entering any artifact", asy
       baseRequest({ generatedRoot, runtimeInputs: dispatch }),
     );
     expect(plan.status).toBe("succeeded");
+    expect(
+      plan.phaseTimings?.filter((timing) =>
+        timing.phase === "provider_scan_policy"
+      ),
+    ).toHaveLength(1);
 
     const apply = await runReviewedPlanApply(
       runId,
@@ -172,6 +177,11 @@ test("run-scoped sensitive inputs reach tofu without entering any artifact", asy
       undefined,
     );
     expect(apply.status).toBe("succeeded");
+    expect(
+      apply.phaseTimings?.filter((timing) =>
+        timing.phase === "provider_scan_policy"
+      ),
+    ).toHaveLength(1);
 
     // The validation block above only passes when the map was delivered, so a
     // succeeded apply IS the positive delivery proof. Everything below proves

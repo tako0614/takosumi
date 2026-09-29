@@ -17,11 +17,22 @@ Publication, local recovery, and platform deployment have separate authorities:
   only full Worker and Container configuration mutation. Runner `verify` is a
   readback-only post-step and never invokes `wrangler deploy`.
 
+`reconcile` changes no image or provider configuration, but it obtains a fresh
+temporary pull-only registry credential and performs a local Docker login before
+the exact-tag readback. This is external credential issuance, not a purely
+local read. It uses the operator's existing Wrangler authentication and requires
+`CLOUDFLARE_ACCOUNT_ID` for the exact account recorded in the attempt;
+account mismatch fails before issuance. The credential never enters ordinary
+command diagnostics. Docker uses a new private `0700` configuration directory
+with its config file set to `0600`, removed after readback or failure. Auth
+failure, including an expired or unauthorized token, leaves the journal
+unresolved; it is never evidence that the transport tag is absent.
+
 All commands are exposed through Takosumi's single `bun run deploy` entrypoint.
 `build` and `verify` are read-only without `--execute`; executing either
 requires a bounded named `--review` identity. `recover-journal` always requires
-both `--execute` and a named reviewer. `reconcile` is always externally
-read-only and never accepts `--execute`.
+both `--execute` and a named reviewer. `reconcile` is image-readback-only and
+never accepts `--execute`.
 
 ## Source and configuration gates
 
@@ -155,6 +166,18 @@ is the resulting content-addressed descriptor
 immutability is the no-overwrite property. If publication acknowledgement or
 manifest readback is missing or ambiguous, evidence records an unknown
 publication outcome and does not claim an immutable identity.
+
+A timed-out `wrangler containers push` is also an unknown publication outcome.
+The release command terminates its direct child process group and returns after
+the direct child exits or a bounded termination grace, but Wrangler may have
+started a detached Docker transport outside that group. Returning from the
+command does **not** prove that transport stopped or that the remote tag is
+absent. Keep the `publication-started` attempt unresolved until the operator
+has identified the exact owned transport for this attempt and confirmed it is
+quiescent. Do not run exact-tag reconciliation, infer absence, or start another
+build while that transport may still be running. If its identity or quiescence
+cannot be established, retain the unknown state for investigation; do not use
+a broad process kill or a second push as a shortcut.
 
 Any unresolved journal entry blocks every future build before a new nonce or
 push. The environment plus checked publication repository select one fixed

@@ -28,7 +28,10 @@ import {
   validateRequiredProviderBindingIdentities,
 } from "../connections/mod.ts";
 import type { RunCredentials } from "./mod.ts";
-import type { RunCredentialBroker } from "./run_credential_broker.ts";
+import type {
+  PlanCredentialBrokerTimings,
+  RunCredentialBroker,
+} from "./run_credential_broker.ts";
 import {
   OpenTofuControllerError,
   PROVIDER_CONNECTION_CHANGED_REASON,
@@ -37,9 +40,19 @@ import {
 
 export const RUN_ENV_REDACTION_PROFILE_ID = "redact_provider_material" as const;
 
+function finiteElapsedMs(startedAt: number, finishedAt: number): number {
+  const elapsed = finishedAt - startedAt;
+  return Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
+}
+
 type RunCredentialMintPort = Pick<
   RunCredentialBroker,
   "mintRunCredentials" | "mintReleaseCommandCredentials"
+> & Partial<
+  Pick<
+    RunCredentialBroker,
+    "mintPlanRunCredentialsWithTimings" | "renewRunCredential"
+  >
 >;
 
 export interface RunEnvResolverDependencies {
@@ -53,6 +66,8 @@ export interface ResolveRunEnvironmentInput {
   readonly planRun: PlanRun;
   readonly phase: "plan" | "apply" | "destroy";
   readonly auditRunId: string;
+  /** Opaque generation derived from the winning Run execution lease. */
+  readonly issuanceGenerationRef?: `sha256:${string}`;
   /** Exact canonical PlanRun/ApplyRun used for credential authority. */
   readonly credentialRunId?: string;
   readonly credentialContext?: "opentofu" | "release_command";
@@ -71,6 +86,11 @@ export interface ResolvedRunEnvironment {
   readonly providerConfigurations: ProviderConfigurationsEnvelope;
   readonly runEnvironmentEvidenceDigest: string;
   readonly redactionProfileId: typeof RUN_ENV_REDACTION_PROFILE_ID;
+  /** Internal Plan-only timings, excluded from evidence digests and dispatch. */
+  readonly planTimings?: {
+    readonly providerBindingResolutionMs: number;
+    readonly credentialMintMs: number;
+  } & PlanCredentialBrokerTimings;
 }
 
 export class RunEnvironmentResolutionError extends OpenTofuControllerError {
@@ -96,15 +116,46 @@ export class RunEnvResolver {
     this.#resolveRunProviderBindings = dependencies.resolveRunProviderBindings;
   }
 
+  /** Re-checks the plan-pinned binding before issuing one replacement bearer. */
+  async renewRunCredential(
+    planRun: PlanRun,
+    phase: "plan" | "apply" | "destroy",
+    auditRunId: string,
+    connectionId: string,
+    issuanceGenerationRef?: `sha256:${string}`,
+  ): Promise<RunCredentials> {
+    if (!this.#credentials.renewRunCredential) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "run credential renewal broker is unavailable",
+        { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+      );
+    }
+    return await this.#credentials.renewRunCredential(
+      planRun,
+      phase,
+      auditRunId,
+      connectionId,
+      issuanceGenerationRef,
+    );
+  }
+
   async resolveRunEnvironment(
     input: ResolveRunEnvironmentInput,
   ): Promise<ResolvedRunEnvironment> {
+    const planOnly = input.phase === "plan";
+    const providerBindingResolutionStartedAt = planOnly
+      ? performance.now()
+      : undefined;
     const resolution = await this.#providerResolutionContext(input);
     await assertPlanFencedResolvedBindings(input, resolution.resolvedBindings);
     const providerResolutions = resolution.providerResolutions;
     const providerConfigurations = providerConfigurationsFromResolved(
       resolution.resolvedBindings,
     );
+    const providerBindingResolutionMs = planOnly
+      ? finiteElapsedMs(providerBindingResolutionStartedAt!, performance.now())
+      : undefined;
     const blocked = providerResolutions.find(
       (resolution) => resolution.evidence.kind === "blocked",
     );
@@ -121,26 +172,61 @@ export class RunEnvResolver {
         runEnvironment,
       );
     }
-    const credentials =
-      input.mintCredentials === false
-        ? undefined
-        : input.credentialContext === "release_command"
-          ? await this.#credentials.mintReleaseCommandCredentials(
-              input.planRun,
-              releaseCommandCredentialPhase(input.phase),
-              input.auditRunId,
-              input.credentialRunId ?? input.auditRunId,
-            )
-          : await this.#credentials.mintRunCredentials(
-              input.planRun,
-              input.phase,
-              input.auditRunId,
-            );
+    const credentialMintStartedAt = planOnly ? performance.now() : undefined;
+    let brokerTimings: PlanCredentialBrokerTimings = {
+      brokerBindingResolutionMs: 0,
+      brokerPrePolicyMs: 0,
+      brokerRuntimeInputsMs: 0,
+      vaultMintMs: 0,
+      credentialValidationMs: 0,
+      postMintPolicyAuditMs: 0,
+    };
+    let credentials: RunCredentials | undefined;
+    if (input.mintCredentials !== false) {
+      if (
+        planOnly &&
+        input.credentialContext !== "release_command" &&
+        this.#credentials.mintPlanRunCredentialsWithTimings
+      ) {
+        const result = await this.#credentials
+          .mintPlanRunCredentialsWithTimings(
+            input.planRun,
+            input.auditRunId,
+            input.issuanceGenerationRef,
+          );
+        credentials = result.credentials;
+        brokerTimings = result.timings;
+      } else if (input.credentialContext === "release_command") {
+        credentials = await this.#credentials.mintReleaseCommandCredentials(
+          input.planRun,
+          releaseCommandCredentialPhase(input.phase),
+          input.auditRunId,
+          input.credentialRunId ?? input.auditRunId,
+        );
+      } else {
+        credentials = await this.#credentials.mintRunCredentials(
+          input.planRun,
+          input.phase,
+          input.auditRunId,
+          input.issuanceGenerationRef,
+        );
+      }
+    }
+    const credentialMintMs = planOnly
+      ? finiteElapsedMs(credentialMintStartedAt!, performance.now())
+      : undefined;
     return await this.#buildRunEnvironmentEvidence(
       input,
       providerResolutions,
       providerConfigurations,
       credentials,
+      planOnly
+        ? {
+          providerBindingResolutionMs: providerBindingResolutionMs!,
+          credentialMintMs: credentialMintMs!,
+          ...brokerTimings,
+        }
+        : undefined,
     );
   }
 
@@ -149,6 +235,7 @@ export class RunEnvResolver {
     providerResolutions: readonly ProviderResolution[],
     providerConfigurations: ProviderConfigurationsEnvelope,
     credentials: RunCredentials | undefined,
+    planTimings?: ResolvedRunEnvironment["planTimings"],
   ): Promise<ResolvedRunEnvironment> {
     const credentialEnvNames =
       credentialEnvNamesFromRunCredentials(credentials);
@@ -170,6 +257,7 @@ export class RunEnvResolver {
       providerConfigurations,
       runEnvironmentEvidenceDigest,
       redactionProfileId: RUN_ENV_REDACTION_PROFILE_ID,
+      ...(planTimings ? { planTimings } : {}),
     };
   }
 

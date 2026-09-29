@@ -1,10 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, jest, test } from "bun:test";
 
 import {
   OpenTofuController,
   type OpenTofuApplyJob,
+  type OpenTofuPlanJob,
   type OpenTofuPlanResult,
   type OpenTofuApplyResult,
+  type OpenTofuRunner,
   type OpenTofuRestoreJob,
   type OpenTofuRestoreResult,
   type OpenTofuSourceSyncJob,
@@ -25,9 +27,11 @@ import {
 } from "../../../../core/domains/deploy-control/capsule_lease.ts";
 import {
   InMemoryOpenTofuControlStore,
+  capsuleRuntimeSafetyFromRun,
   capsuleApplyRunAdmissionFence,
   planRunExecutionInputsDigestMaterial,
   type StoredSource,
+  type AppendRunningRunAuditEventInput,
   type TransitionRunInput,
   type TransitionRunResult,
 } from "../../../../core/domains/deploy-control/store.ts";
@@ -37,8 +41,12 @@ import {
   FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   fixtureExecutionEvidence,
   fixtureStateCommit,
+  FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
+  providerRequirementsForFixture,
   seedCapsuleModel,
+  seedProviderConnections,
 } from "../../../helpers/deploy-control/model_fixture.ts";
+import { PhaseMintBundle, type ConnectionVault } from "../../../../core/adapters/vault/mod.ts";
 import type {
   ApplyRun,
   PlanRun,
@@ -49,6 +57,7 @@ import type { SourceSyncRun } from "takosumi-contract/sources";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const LOCK_DIGEST = `sha256:${"f".repeat(64)}`;
 
 function restoreAck(
   job: OpenTofuRestoreJob,
@@ -93,6 +102,7 @@ async function seedApply(
     planRunId: string;
     applyRunId: string;
     environment?: string;
+    requiredProviders?: readonly string[];
   },
 ): Promise<{ environment: string }> {
   const environment = ids.environment ?? "production";
@@ -104,7 +114,13 @@ async function seedApply(
     snapshotId: `snap_${ids.capsuleId}`,
     installConfigId: `cfg_${ids.capsuleId}`,
     environment,
+    ...(ids.requiredProviders ? { requiredProviders: ids.requiredProviders } : {}),
   });
+  if (ids.requiredProviders?.length) {
+    await seedProviderConnections(store, capsule, {
+      requiredProviders: ids.requiredProviders,
+    });
+  }
   await store.putCapsule({
     ...capsule,
     currentStateVersionId: seedStateVersionId,
@@ -146,7 +162,12 @@ async function seedApply(
     executionInputsDigest: await stableJsonDigest(
       planRunExecutionInputsDigestMaterial(inputs, undefined),
     ),
-    requiredProviders: [],
+    requiredProviders: ids.requiredProviders ?? [],
+    ...(ids.requiredProviders?.length
+      ? { requiredProviderRequirements: providerRequirementsForFixture(
+          ids.requiredProviders,
+        ).map((requirement) => ({ ...requirement, version: "1.0.0" })) }
+      : {}),
     status: "succeeded",
     policy: { status: "passed", reasons: [], checkedAt: 1 },
     policyDecisionDigest: "sha256:policy",
@@ -241,8 +262,15 @@ function controllerWith(
   options: {
     coordination?: CapsuleCoordination;
     now?: () => number;
-    plan?: () => Promise<OpenTofuPlanResult>;
-    apply?: (job: OpenTofuApplyJob) => Promise<OpenTofuApplyResult>;
+    plan?: (
+      job: OpenTofuPlanJob,
+      control?: RunExecutionControl,
+    ) => Promise<OpenTofuPlanResult>;
+    apply?: (
+      job: OpenTofuApplyJob,
+      control?: RunExecutionControl,
+    ) => Promise<OpenTofuApplyResult>;
+    destroy?: NonNullable<OpenTofuRunner["destroy"]>;
     sourceSync?: (job: OpenTofuSourceSyncJob) => Promise<OpenTofuSourceSyncResult>;
     restore?: (
       job: OpenTofuRestoreJob,
@@ -256,12 +284,16 @@ function controllerWith(
     runRenewalIntervalMs?: number;
     runnerProfiles?: readonly RunnerProfile[];
     defaultRunnerProfileId?: string;
+    vault?: ConnectionVault;
+    assertCredentialRefreshCapability?: OpenTofuRunner["assertCredentialRefreshCapability"];
+    refreshCredentials?: OpenTofuRunner["refreshCredentials"];
   } = {},
 ) {
   const apply =
     options.apply ?? (() => Promise.resolve(fixtureStateCommit()));
   return new OpenTofuController({
     store,
+    ...(options.vault ? { vault: options.vault } : {}),
     ...(options.runnerProfiles
       ? { runnerProfiles: options.runnerProfiles }
       : {}),
@@ -285,12 +317,23 @@ function controllerWith(
       return (p) => `${p}_${(n += 1).toString().padStart(4, "0")}`;
     })(),
     runner: {
+      ...(options.assertCredentialRefreshCapability
+        ? { assertCredentialRefreshCapability: options.assertCredentialRefreshCapability }
+        : {}),
+      ...(options.refreshCredentials
+        ? { refreshCredentials: options.refreshCredentials }
+        : {}),
       plan: options.plan ?? (() => Promise.reject(new Error("not used"))),
-      apply: async (job) => ({
-        ...(await apply(job)),
-        rawOutputRef: job.rawOutputRef,
-        executionEvidence: fixtureExecutionEvidence(job, "apply"),
-      }),
+      apply: async (job, control) => {
+        const result = await apply(job, control);
+        return {
+          ...result,
+          rawOutputRef: job.rawOutputRef,
+          executionEvidence: result.executionEvidence ??
+            fixtureExecutionEvidence(job, "apply"),
+        };
+      },
+      ...(options.destroy ? { destroy: options.destroy } : {}),
       ...(options.sourceSync ? { sourceSync: options.sourceSync } : {}),
       ...(options.restore ? { restore: options.restore } : {}),
       ...(options.restoreServiceData
@@ -299,6 +342,22 @@ function controllerWith(
     },
   });
 }
+
+test("Apply completion never receives the Plan-only Core timing diagnostic", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  await seedApply(store, {
+    capsuleId: "cap_apply_plan_timing_exclusion",
+    planRunId: "plan_apply_plan_timing_exclusion",
+    applyRunId: "apply_plan_timing_exclusion",
+  });
+  const response = await controllerWith(store).runQueuedApply(
+    "apply_plan_timing_exclusion",
+  );
+  expect(response.applyRun.status).toBe("succeeded");
+  expect(response.applyRun.diagnostics?.some(
+    (diagnostic) => diagnostic.code === "core_plan_elapsed_timings",
+  )).toBeFalsy();
+});
 
 async function seedQueuedRestore(
   store: InMemoryOpenTofuControlStore,
@@ -405,6 +464,17 @@ class HeartbeatCountingStore extends InMemoryOpenTofuControlStore {
   ): Promise<TransitionRunResult> {
     if (isApplyHeartbeatRenewal(input)) {
       this.heartbeatRenewalAttempts += 1;
+    }
+    return await super.transitionRun(input);
+  }
+}
+
+class LoseApplyHeartbeatStore extends HeartbeatCountingStore {
+  loseHeldRun = false;
+
+  override async transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
+    if (this.loseHeldRun && isApplyHeartbeatRenewal(input)) {
+      return { won: false, run: await this.getApplyRun(input.id) };
     }
     return await super.transitionRun(input);
   }
@@ -1233,6 +1303,1213 @@ test("two concurrent queued claims for the same apply: exactly one dispatches", 
 });
 
 // --- heartbeat + lease renewal during a long apply ---
+
+async function settleAsyncUntil(predicate: () => boolean): Promise<void> {
+  for (let index = 0; index < 500 && !predicate(); index++) {
+    await Promise.resolve();
+    if (index % 20 === 19) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  }
+  expect(predicate()).toBe(true);
+}
+
+function awaitExecutionAbort(control: RunExecutionControl | undefined): Promise<OpenTofuApplyResult> {
+  const signal = control?.signal;
+  if (!signal) throw new Error("fixture runner requires an execution signal");
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<OpenTofuApplyResult>((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+}
+
+async function seedRenewableApplyFixture(
+  store: InMemoryOpenTofuControlStore,
+  label: string,
+  onIssue?: (count: number) => Promise<void>,
+  issueExpiry?: (input: {
+    readonly issues: number;
+    readonly attemptRef: string;
+  }) => string,
+): Promise<{
+  readonly applyRunId: string;
+  readonly planRunId: string;
+  readonly vault: ConnectionVault;
+  readonly issueCount: () => number;
+  readonly issuanceGenerationRefs: () => readonly string[];
+}> {
+  const provider = "registry.opentofu.org/cloudflare/cloudflare";
+  const capsuleId = `cap_${label}`;
+  const planRunId = `plan_${label}`;
+  const applyRunId = `apply_${label}`;
+  await seedApply(store, {
+    capsuleId,
+    planRunId,
+    applyRunId,
+    requiredProviders: [provider],
+  });
+  const workspaceId = `ws_${capsuleId}`;
+  const connectionId = `conn_fixture_${workspaceId}_cloudflare`;
+  const original = await store.getConnection(connectionId);
+  if (!original) throw new Error("renewable fixture connection is missing");
+  await store.putConnection({
+    ...original,
+    materialization: "run-issued",
+    credentialRecipe: {
+      id: "test-renewable", authMode: "run",
+      envNames: ["CLOUDFLARE_API_TOKEN"], fileEnvNames: [],
+      requiredEnvGroups: [["CLOUDFLARE_API_TOKEN"]],
+      renewableEnv: {
+        sourceEnvName: "CLOUDFLARE_API_TOKEN",
+        fileEnvName: "CLOUDFLARE_API_TOKEN_FILE",
+        minimumProviderVersion: "1.0.0",
+      },
+    },
+  });
+  let issues = 0;
+  const issuanceGenerationRefs: string[] = [];
+  const vault = {
+    mintForCapsuleProviderBindings: async (
+      _workspaceId: string,
+      _entries: unknown,
+      options?: { readonly issuanceGenerationRef?: string },
+    ) => {
+      issues += 1;
+      const attemptRef = options?.issuanceGenerationRef ?? "";
+      issuanceGenerationRefs.push(attemptRef);
+      await onIssue?.(issues);
+      const token = `local_renewable_token_${issues}_0123456789abcdef`;
+      const issuedAt = Date.now();
+      const expiresAt = issueExpiry
+        ? issueExpiry({ issues, attemptRef })
+        : new Date(issuedAt + 121_000).toISOString();
+      return new PhaseMintBundle(
+        { env: { CLOUDFLARE_API_TOKEN: token } }, [],
+        [{ provider, connectionId, temporary: true, ttlEnforced: true,
+          ttlSeconds: Math.round((Date.parse(expiresAt) - issuedAt) / 1000),
+          expiresAt }],
+      );
+    },
+  } as unknown as ConnectionVault;
+  return {
+    applyRunId,
+    planRunId,
+    vault,
+    issueCount: () => issues,
+    issuanceGenerationRefs: () => issuanceGenerationRefs,
+  };
+}
+
+test("renewable ApplyRun reissues before expiry and stops after terminal result", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { applyRunId, planRunId, vault, issueCount, issuanceGenerationRefs } =
+    await seedRenewableApplyFixture(store, "credential_renewal");
+  let resolveStarted!: () => void;
+  const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+  let completeApply!: (value: OpenTofuApplyResult) => void;
+  let applySignal: AbortSignal | undefined;
+  const refreshes: unknown[] = [];
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
+  try {
+    const controller = controllerWith(store, {
+      vault, now: () => Date.now(), runRenewalIntervalMs: 0,
+      assertCredentialRefreshCapability: async () => {},
+      refreshCredentials: async (update) => { refreshes.push(update); },
+      apply: async (_job, control) => {
+        applySignal = control?.signal;
+        resolveStarted();
+        return await new Promise<OpenTofuApplyResult>((resolve) => {
+          completeApply = resolve;
+        });
+      },
+    });
+    const pending = controller.runQueuedApply(applyRunId);
+    await started;
+    expect(issueCount()).toBe(1);
+    jest.advanceTimersByTime(31_000);
+    // Renewal includes a fresh Run/lease CAS and the full broker policy path;
+    // drain those asynchronous continuations without advancing the expiry clock.
+    await settleAsyncUntil(() => refreshes.length === 1);
+    expect(issueCount()).toBe(2);
+    expect(issuanceGenerationRefs()).toHaveLength(2);
+    expect(issuanceGenerationRefs()[0]).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    expect(issuanceGenerationRefs()[1]).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    expect(issuanceGenerationRefs()[1]).not.toBe(issuanceGenerationRefs()[0]);
+    expect(applySignal?.aborted).toBe(false);
+    expect(refreshes).toMatchObject([{
+      owner: { kind: "apply", id: applyRunId },
+      runnerRunId: planRunId,
+      sequence: 1,
+      credentials: [{ value: "local_renewable_token_2_0123456789abcdef" }],
+    }]);
+    completeApply(fixtureStateCommit({
+      providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+    }));
+    const response = await pending;
+    expect(response.applyRun.status).toBe("succeeded");
+    const accepted = (await store.getApplyRun(applyRunId))?.auditEvents.filter(
+      (event) => event.type === "credential.refresh.accepted",
+    );
+    expect(accepted).toHaveLength(1);
+    expect(accepted?.[0]?.data).toMatchObject({
+      sequence: 1,
+      connectionId: "conn_fixture_ws_cap_credential_renewal_cloudflare",
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+      acknowledgedAt: expect.any(String),
+      previousExpiresAt: expect.any(String),
+      expiresAt: expect.any(String),
+    });
+    const logs = await controller.getRunLogs(applyRunId);
+    expect(logs.auditEvents).toContainEqual(accepted?.[0]);
+    expect(logs.credentialMints.length).toBeGreaterThan(0);
+    expect(JSON.stringify(logs)).not.toContain("local_renewable_token_");
+    jest.advanceTimersByTime(300_000);
+    for (let index = 0; index < 5; index++) await Promise.resolve();
+    expect(issueCount()).toBe(2);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test("a renewal never replays the retained issuance identity of the initial mint", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let retainedExpiry = "";
+  let retainedAttemptRef = "";
+  const { applyRunId, vault, issueCount, issuanceGenerationRefs } =
+    await seedRenewableApplyFixture(store, "credential_replay", undefined, ({
+      issues,
+      attemptRef,
+    }) => {
+      if (issues === 1) {
+        retainedAttemptRef = attemptRef;
+        retainedExpiry = new Date(Date.now() + 121_000).toISOString();
+        return retainedExpiry;
+      }
+      // The sponsorship authority retains one issuance operation per exact
+      // exchange identity and replays its bytes. A renewal that reuses the
+      // initial exchange identity therefore receives the already-issued
+      // expiry -- the observed production failure -- while a distinct renewal
+      // attempt buys a new lifetime.
+      return attemptRef === retainedAttemptRef
+        ? retainedExpiry
+        : new Date(Date.now() + 300_000).toISOString();
+    });
+  let resolveStarted!: () => void;
+  const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+  const refreshes: unknown[] = [];
+  let applySignal: AbortSignal | undefined;
+  let abortedWith: unknown;
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
+  try {
+    const controller = controllerWith(store, {
+      vault, now: () => Date.now(), runRenewalIntervalMs: 0,
+      assertCredentialRefreshCapability: async () => {},
+      refreshCredentials: async (update) => { refreshes.push(update); },
+      apply: async (_job, control) => {
+        applySignal = control?.signal;
+        resolveStarted();
+        try {
+          return await awaitExecutionAbort(control);
+        } catch (error) {
+          abortedWith ??= error;
+          throw error;
+        }
+      },
+    });
+    const pending = controller.runQueuedApply(applyRunId);
+    void pending.catch(() => {});
+    await started;
+    expect(issueCount()).toBe(1);
+    jest.advanceTimersByTime(31_000);
+    await settleAsyncUntil(
+      () => refreshes.length === 1 || (applySignal?.aborted ?? false),
+    );
+    // Delivery is the contract: a replayed issuance leaves the pinned
+    // binding with too little lifetime, and the observed production failure
+    // aborts the child with `renewed credential does not match the pinned
+    // binding` instead of delivering a refreshed credential.
+    expect(abortedWith).toBeUndefined();
+    expect(refreshes).toHaveLength(1);
+    expect(applySignal?.aborted).toBe(false);
+    expect(issuanceGenerationRefs()).toHaveLength(2);
+    expect(issuanceGenerationRefs()[1]).not.toBe(issuanceGenerationRefs()[0]);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test("an acknowledged refresh waits for durable audit before terminal Apply commit", async () => {
+  let enteredAudit!: () => void;
+  const auditEntered = new Promise<void>((resolve) => { enteredAudit = resolve; });
+  let releaseAudit!: () => void;
+  const auditRelease = new Promise<void>((resolve) => { releaseAudit = resolve; });
+  class DeferredAuditStore extends InMemoryOpenTofuControlStore {
+    override async appendRunningRunAuditEvent(
+      input: AppendRunningRunAuditEventInput,
+    ): Promise<boolean> {
+      enteredAudit();
+      await auditRelease;
+      return await super.appendRunningRunAuditEvent(input);
+    }
+  }
+  const store = new DeferredAuditStore();
+  const { applyRunId, vault } = await seedRenewableApplyFixture(store, "refresh_audit_deferred");
+  let startedApply!: () => void;
+  const started = new Promise<void>((resolve) => { startedApply = resolve; });
+  let completeApply!: (value: OpenTofuApplyResult) => void;
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
+  try {
+    const controller = controllerWith(store, {
+      vault, now: () => Date.now(), runRenewalIntervalMs: 0,
+      assertCredentialRefreshCapability: async () => {},
+      refreshCredentials: async () => {},
+      apply: async () => {
+        startedApply();
+        return await new Promise<OpenTofuApplyResult>((resolve) => {
+          completeApply = resolve;
+        });
+      },
+    });
+    const pending = controller.runQueuedApply(applyRunId);
+    let settled = false;
+    void pending.then(() => { settled = true; });
+    await started;
+    jest.advanceTimersByTime(31_000);
+    await auditEntered;
+    completeApply(fixtureStateCommit({
+      providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+    }));
+    jest.advanceTimersByTime(101);
+    for (let index = 0; index < 10; index++) await Promise.resolve();
+    expect(settled).toBe(false);
+    expect((await store.getApplyRun(applyRunId))?.status).toBe("running");
+    releaseAudit();
+    expect((await pending).applyRun.status).toBe("succeeded");
+    expect((await store.getApplyRun(applyRunId))?.auditEvents.some(
+      (event) => event.type === "credential.refresh.accepted",
+    )).toBe(true);
+  } finally {
+    releaseAudit();
+    jest.useRealTimers();
+  }
+});
+
+test("an ACK arriving during bounded teardown still waits for its audit write", async () => {
+  let enteredAudit!: () => void;
+  const auditEntered = new Promise<void>((resolve) => { enteredAudit = resolve; });
+  let releaseAudit!: () => void;
+  const auditRelease = new Promise<void>((resolve) => { releaseAudit = resolve; });
+  class DeferredAuditStore extends InMemoryOpenTofuControlStore {
+    override async appendRunningRunAuditEvent(
+      input: AppendRunningRunAuditEventInput,
+    ): Promise<boolean> {
+      enteredAudit();
+      await auditRelease;
+      return await super.appendRunningRunAuditEvent(input);
+    }
+  }
+  const store = new DeferredAuditStore();
+  const { applyRunId, vault } = await seedRenewableApplyFixture(store, "refresh_ack_during_teardown");
+  let startedApply!: () => void;
+  const started = new Promise<void>((resolve) => { startedApply = resolve; });
+  let enteredRefresh!: () => void;
+  const refreshEntered = new Promise<void>((resolve) => { enteredRefresh = resolve; });
+  let acknowledgeRefresh!: () => void;
+  const refreshAck = new Promise<void>((resolve) => { acknowledgeRefresh = resolve; });
+  let completeApply!: (value: OpenTofuApplyResult) => void;
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
+  try {
+    const controller = controllerWith(store, {
+      vault, now: () => Date.now(), runRenewalIntervalMs: 0,
+      assertCredentialRefreshCapability: async () => {},
+      refreshCredentials: async () => {
+        enteredRefresh();
+        await refreshAck;
+      },
+      apply: async () => {
+        startedApply();
+        return await new Promise<OpenTofuApplyResult>((resolve) => {
+          completeApply = resolve;
+        });
+      },
+    });
+    const pending = controller.runQueuedApply(applyRunId);
+    let settled = false;
+    void pending.then(() => { settled = true; });
+    await started;
+    jest.advanceTimersByTime(31_000);
+    await refreshEntered;
+    completeApply(fixtureStateCommit({
+      providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+    }));
+    for (let index = 0; index < 10; index++) await Promise.resolve();
+    acknowledgeRefresh();
+    await auditEntered;
+    jest.advanceTimersByTime(101);
+    for (let index = 0; index < 10; index++) await Promise.resolve();
+    expect(settled).toBe(false);
+    expect((await store.getApplyRun(applyRunId))?.status).toBe("running");
+    releaseAudit();
+    expect((await pending).applyRun.status).toBe("succeeded");
+    expect((await store.getApplyRun(applyRunId))?.auditEvents.some(
+      (event) => event.type === "credential.refresh.accepted",
+    )).toBe(true);
+  } finally {
+    acknowledgeRefresh();
+    releaseAudit();
+    jest.useRealTimers();
+  }
+});
+
+test("an unresolved dispatched refresh cannot publish a successful Apply", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { applyRunId, vault } = await seedRenewableApplyFixture(store, "refresh_ack_unresolved");
+  let startedApply!: () => void;
+  const started = new Promise<void>((resolve) => { startedApply = resolve; });
+  let enteredRefresh!: () => void;
+  const refreshEntered = new Promise<void>((resolve) => { enteredRefresh = resolve; });
+  let releaseRefresh!: () => void;
+  const refreshRelease = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+  let completeApply!: (value: OpenTofuApplyResult) => void;
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
+  try {
+    const controller = controllerWith(store, {
+      vault, now: () => Date.now(), runRenewalIntervalMs: 0,
+      assertCredentialRefreshCapability: async () => {},
+      refreshCredentials: async () => {
+        enteredRefresh();
+        await refreshRelease;
+      },
+      apply: async () => {
+        startedApply();
+        return await new Promise<OpenTofuApplyResult>((resolve) => {
+          completeApply = resolve;
+        });
+      },
+    });
+    const pending = controller.runQueuedApply(applyRunId);
+    await started;
+    jest.advanceTimersByTime(31_000);
+    await refreshEntered;
+    completeApply(fixtureStateCommit({
+      providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+    }));
+    for (let index = 0; index < 10; index++) await Promise.resolve();
+    jest.advanceTimersByTime(101);
+    const response = await pending;
+    expect(response.applyRun.status).not.toBe("succeeded");
+    expect((await store.getApplyRun(applyRunId))?.auditEvents.some(
+      (event) => event.type === "credential.refresh.accepted",
+    )).toBe(false);
+  } finally {
+    releaseRefresh();
+    jest.useRealTimers();
+  }
+});
+
+test("a refresh rejected during teardown cannot publish a successful Apply or ack", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { applyRunId, vault } = await seedRenewableApplyFixture(store, "refresh_reject_teardown");
+  let startedApply!: () => void;
+  const started = new Promise<void>((resolve) => { startedApply = resolve; });
+  let enteredRefresh!: () => void;
+  const refreshEntered = new Promise<void>((resolve) => { enteredRefresh = resolve; });
+  let rejectRefresh!: (error: Error) => void;
+  const refreshResult = new Promise<void>((_resolve, reject) => { rejectRefresh = reject; });
+  let completeApply!: (value: OpenTofuApplyResult) => void;
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
+  try {
+    const controller = controllerWith(store, {
+      vault, now: () => Date.now(), runRenewalIntervalMs: 0,
+      assertCredentialRefreshCapability: async () => {},
+      refreshCredentials: async () => {
+        enteredRefresh();
+        await refreshResult;
+      },
+      apply: async () => {
+        startedApply();
+        return await new Promise<OpenTofuApplyResult>((resolve) => {
+          completeApply = resolve;
+        });
+      },
+    });
+    const pending = controller.runQueuedApply(applyRunId);
+    await started;
+    jest.advanceTimersByTime(31_000);
+    await refreshEntered;
+    completeApply(fixtureStateCommit({
+      providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+    }));
+    for (let index = 0; index < 10; index++) await Promise.resolve();
+    rejectRefresh(new Error("refresh delivery failed during teardown"));
+    expect((await pending).applyRun.status).not.toBe("succeeded");
+    expect((await store.getApplyRun(applyRunId))?.auditEvents.some(
+      (event) => event.type === "credential.refresh.accepted",
+    )).toBe(false);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test("refresh acknowledgement survives stale heartbeat and terminal writes but a stale owner cannot append", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { applyRunId } = await seedRenewableApplyFixture(store, "refresh_audit_cas");
+  const queued = await store.getApplyRun(applyRunId);
+  if (!queued) throw new Error("Apply fixture is missing");
+  const claim = await store.transitionRun({
+    id: applyRunId,
+    kind: "apply",
+    expectFrom: ["queued"],
+    run: { ...queued, status: "running", heartbeatAt: 10 },
+    setLeaseToken: "owner-a",
+    heartbeatAt: 10,
+  });
+  expect(claim.won).toBe(true);
+  const stale = claim.run as ApplyRun;
+  const event = {
+    id: `${applyRunId}:credential.refresh.accepted:1`,
+    type: "credential.refresh.accepted",
+    at: 11,
+    data: { sequence: 1, connectionId: "conn_fixture", provider: "cloudflare" },
+  };
+  expect(await store.appendRunningRunAuditEvent({
+    id: applyRunId, kind: "apply", workspaceId: stale.workspaceId,
+    leaseToken: "owner-a", event,
+  })).toBe(true);
+  expect((await store.transitionRun({
+    id: applyRunId, kind: "apply", expectFrom: ["running"],
+    expectLeaseToken: "owner-a", heartbeatAt: 12,
+    run: { ...stale, heartbeatAt: 12, updatedAt: 12 },
+  })).won).toBe(true);
+  const finished = await store.transitionRun({
+    id: applyRunId, kind: "apply", expectFrom: ["running"],
+    expectLeaseToken: "owner-a", clearLeaseToken: true,
+    run: { ...stale, status: "failed", updatedAt: 13, finishedAt: 13 },
+  });
+  expect(finished.won).toBe(true);
+  expect((await store.getApplyRun(applyRunId))?.auditEvents.filter(
+    (item) => item.type === "credential.refresh.accepted",
+  )).toEqual([event]);
+  expect(await store.appendRunningRunAuditEvent({
+    id: applyRunId, kind: "apply", workspaceId: stale.workspaceId,
+    leaseToken: "owner-a", event: { ...event, id: `${event.id}:late` },
+  })).toBe(false);
+});
+
+test("a stale-running successor may record its first refresh without colliding with the prior attempt", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { applyRunId } = await seedRenewableApplyFixture(store, "refresh_audit_takeover");
+  const queued = await store.getApplyRun(applyRunId);
+  if (!queued) throw new Error("Apply fixture is missing");
+  const first = await store.transitionRun({
+    id: applyRunId, kind: "apply", expectFrom: ["queued"],
+    run: { ...queued, status: "running", heartbeatAt: 10 },
+    setLeaseToken: "owner-a", heartbeatAt: 10,
+  });
+  expect(first.won).toBe(true);
+  const running = first.run as ApplyRun;
+  const event = {
+    type: "credential.refresh.accepted", at: 11,
+    data: { sequence: 1, connectionId: "conn_fixture", provider: "cloudflare" },
+  };
+  expect(await store.appendRunningRunAuditEvent({
+    id: applyRunId, kind: "apply", workspaceId: running.workspaceId,
+    leaseToken: "owner-a", event: { ...event, id: "attempt-a-ack" },
+  })).toBe(true);
+  const takeover = await store.transitionRun({
+    id: applyRunId, kind: "apply", expectFrom: ["running"],
+    expectHeartbeatAt: 10,
+    run: { ...running, heartbeatAt: 20, updatedAt: 20 },
+    setLeaseToken: "owner-b", heartbeatAt: 20,
+  });
+  expect(takeover.won).toBe(true);
+  expect(await store.appendRunningRunAuditEvent({
+    id: applyRunId, kind: "apply", workspaceId: running.workspaceId,
+    leaseToken: "owner-a", event: { ...event, id: "attempt-a-late" },
+  })).toBe(false);
+  expect(await store.appendRunningRunAuditEvent({
+    id: applyRunId, kind: "apply", workspaceId: running.workspaceId,
+    leaseToken: "owner-b", event: { ...event, id: "attempt-b-ack" },
+  })).toBe(true);
+  expect((await store.getApplyRun(applyRunId))?.auditEvents.filter(
+    (item) => item.type === "credential.refresh.accepted",
+  ).map((item) => item.id)).toEqual(["attempt-a-ack", "attempt-b-ack"]);
+});
+
+test("renewable PlanRun refreshes under its own plan owner", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { planRunId, vault, issueCount } =
+    await seedRenewableApplyFixture(store, "plan_credential_renewal");
+  const prepared = await store.getPlanRun(planRunId);
+  if (!prepared) throw new Error("renewable Plan fixture is missing");
+  await store.putPlanRun({
+    ...prepared,
+    status: "queued",
+    planDigest: undefined,
+    planArtifact: undefined,
+    policyDecisionDigest: undefined,
+  });
+  let resolveStarted!: () => void;
+  const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+  let resolveRefreshEntered!: () => void;
+  const refreshEntered = new Promise<void>((resolve) => { resolveRefreshEntered = resolve; });
+  let completePlan!: (value: OpenTofuPlanResult) => void;
+  const refreshes: unknown[] = [];
+  const capabilities: unknown[] = [];
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
+  try {
+    const controller = controllerWith(store, {
+      vault, now: () => Date.now(), runRenewalIntervalMs: 0,
+      assertCredentialRefreshCapability: async (input) => { capabilities.push(input); },
+      refreshCredentials: async (update) => {
+        refreshes.push(update);
+        resolveRefreshEntered();
+      },
+      plan: async () => {
+        resolveStarted();
+        return await new Promise<OpenTofuPlanResult>((resolve) => {
+          completePlan = resolve;
+        });
+      },
+    });
+    const pending = controller.runQueuedPlan(planRunId);
+    await started;
+    expect(capabilities).toMatchObject([{
+      owner: { kind: "plan", id: planRunId },
+      runnerRunId: planRunId,
+    }]);
+    jest.advanceTimersByTime(31_000);
+    await refreshEntered;
+    expect(issueCount()).toBe(2);
+    expect(refreshes).toMatchObject([{
+      owner: { kind: "plan", id: planRunId },
+      runnerRunId: planRunId,
+      sequence: 1,
+    }]);
+    completePlan({
+      planDigest: PLAN_DIGEST,
+      planArtifact: planArtifact(),
+      providerLockDigest: LOCK_DIGEST,
+      requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+      providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+    });
+    const result = await pending;
+    expect(result?.status).toBe("succeeded");
+    const timingDiagnostics = result?.diagnostics?.filter(
+      (diagnostic) => diagnostic.code === "core_plan_elapsed_timings",
+    );
+    expect(timingDiagnostics).toHaveLength(1);
+    const timings = JSON.parse(timingDiagnostics?.[0]?.detail ?? "null") as
+      Record<string, unknown>;
+    expect(Object.keys(timings).sort()).toEqual([
+      "brokerBindingResolutionMs",
+      "brokerPrePolicyMs",
+      "brokerRuntimeInputsMs",
+      "claimMs",
+      "credentialMintMs",
+      "credentialValidationMs",
+      "dispatchPreparationMs",
+      "postMintPolicyAuditMs",
+      "preClaimPreparationMs",
+      "providerBindingResolutionMs",
+      "renewalOutsideRunnerMs",
+      "resolveRunEnvironmentMs",
+      "runnerPlanMs",
+      "vaultMintMs",
+    ].sort());
+    expect(Object.values(timings).every((value) =>
+      typeof value === "number" && Number.isFinite(value) && value >= 0
+    )).toBe(true);
+    expect(JSON.stringify(result?.diagnostics)).not.toContain(
+      "local_renewable_token",
+    );
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test("renewable provider floor rejects a selected older version before runner dispatch", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { applyRunId, planRunId, vault } =
+    await seedRenewableApplyFixture(store, "refresh_provider_floor");
+  const planRun = await store.getPlanRun(planRunId);
+  if (!planRun?.requiredProviderRequirements) {
+    throw new Error("renewable floor fixture Plan provider requirement is missing");
+  }
+  await store.putPlanRun({
+    ...planRun,
+    requiredProviderRequirements: planRun.requiredProviderRequirements.map(
+      (requirement) => ({ ...requirement, version: "4.0.0" }),
+    ),
+  });
+  const connectionId = "conn_fixture_ws_cap_refresh_provider_floor_cloudflare";
+  const connection = await store.getConnection(connectionId);
+  if (!connection?.credentialRecipe?.renewableEnv) {
+    throw new Error("renewable floor fixture connection is missing");
+  }
+  await store.putConnection({
+    ...connection,
+    credentialRecipe: {
+      ...connection.credentialRecipe,
+      renewableEnv: {
+        ...connection.credentialRecipe.renewableEnv,
+        minimumProviderVersion: "4.1.0",
+      },
+    },
+  });
+  let capabilityChecks = 0;
+  let applyCalls = 0;
+  const controller = controllerWith(store, {
+    vault,
+    now: () => Date.parse("2026-09-27T07:00:00.000Z"),
+    assertCredentialRefreshCapability: async () => { capabilityChecks += 1; },
+    refreshCredentials: async () => {},
+    apply: async () => {
+      applyCalls += 1;
+      return fixtureStateCommit();
+    },
+  });
+  const response = await controller.runQueuedApply(applyRunId);
+  expect(response.applyRun.status).toBe("failed");
+  expect(response.applyRun.diagnostics?.map((item) => item.code)).toContain(
+    "renewable_provider_version_unproven",
+  );
+  expect(capabilityChecks).toBe(0);
+  expect(applyCalls).toBe(0);
+});
+
+test("a delayed runner capability probe cannot dispatch an expired initial credential", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { applyRunId, vault, issueCount } =
+    await seedRenewableApplyFixture(store, "refresh_delayed_capability");
+  let resolveProbeStarted!: () => void;
+  const probeStarted = new Promise<void>((resolve) => { resolveProbeStarted = resolve; });
+  let releaseProbe!: () => void;
+  const probeHold = new Promise<void>((resolve) => { releaseProbe = resolve; });
+  let applyCalls = 0;
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
+  try {
+    const controller = controllerWith(store, {
+      vault, now: () => Date.now(), runRenewalIntervalMs: 0,
+      assertCredentialRefreshCapability: async () => {
+        resolveProbeStarted();
+        await probeHold;
+      },
+      refreshCredentials: async () => {},
+      apply: async () => {
+        applyCalls += 1;
+        return fixtureStateCommit();
+      },
+    });
+    const pending = controller.runQueuedApply(applyRunId);
+    await probeStarted;
+    expect(issueCount()).toBe(1);
+    jest.advanceTimersByTime(121_000);
+    releaseProbe();
+    const response = await pending;
+    expect(response.applyRun.status).toBe("failed");
+    expect(response.applyRun.diagnostics?.map((item) => item.code)).toContain(
+      "credential_service_unavailable",
+    );
+    expect(applyCalls).toBe(0);
+    expect(issueCount()).toBe(1);
+  } finally {
+    releaseProbe();
+    jest.useRealTimers();
+  }
+});
+
+test("renewable ApplyRun loses its Run fence before mint and delivers nothing", async () => {
+  const store = new LoseApplyHeartbeatStore();
+  const { applyRunId, vault, issueCount } =
+    await seedRenewableApplyFixture(store, "refresh_lost_run_before_mint");
+  let resolveStarted!: () => void;
+  const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+  const refreshes: unknown[] = [];
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
+  try {
+    const controller = controllerWith(store, {
+      vault, now: () => Date.now(), runRenewalIntervalMs: 0,
+      assertCredentialRefreshCapability: async () => {},
+      refreshCredentials: async (update) => { refreshes.push(update); },
+      apply: async (_job, control) => {
+        resolveStarted();
+        return await awaitExecutionAbort(control);
+      },
+    });
+    const pending = controller.runQueuedApply(applyRunId);
+    await started;
+    expect(issueCount()).toBe(1);
+    store.loseHeldRun = true;
+    jest.advanceTimersByTime(31_000);
+    const response = await pending;
+    expect(response.applyRun.status).toBe("failed");
+    expect(response.applyRun.diagnostics?.map((item) => item.code)).toContain("run_heartbeat_lost");
+    expect(issueCount()).toBe(1);
+    expect(refreshes).toEqual([]);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test("renewable ApplyRun discards an issued value when Capsule lease is lost during mint", async () => {
+  const store = new HeartbeatCountingStore();
+  let secondMintStarted = false;
+  let releaseSecondMint!: () => void;
+  const secondMintHold = new Promise<void>((resolve) => { releaseSecondMint = resolve; });
+  const { applyRunId, vault, issueCount } =
+    await seedRenewableApplyFixture(store, "refresh_lost_capsule_during_mint", async (count) => {
+      if (count === 2) {
+        secondMintStarted = true;
+        await secondMintHold;
+      }
+    });
+  let loseCapsuleLease = false;
+  const inner = new InMemoryCapsuleCoordination({ now: () => Date.now() });
+  const coordination: CapsuleCoordination = {
+    acquireLease: (input) => inner.acquireLease(input),
+    releaseLease: (input) => inner.releaseLease(input),
+    renewLease: async (input) => loseCapsuleLease
+      ? {
+          scope: input.scope,
+          holderId: input.holderId,
+          token: input.token,
+          acquired: false,
+          expiresAt: new Date(Date.now()).toISOString(),
+        }
+      : await inner.renewLease(input),
+  };
+  let resolveStarted!: () => void;
+  const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+  const refreshes: unknown[] = [];
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
+  try {
+    const controller = controllerWith(store, {
+      vault, coordination, now: () => Date.now(), runRenewalIntervalMs: 0,
+      assertCredentialRefreshCapability: async () => {},
+      refreshCredentials: async (update) => { refreshes.push(update); },
+      apply: async (_job, control) => {
+        resolveStarted();
+        return await awaitExecutionAbort(control);
+      },
+    });
+    const pending = controller.runQueuedApply(applyRunId);
+    await started;
+    jest.advanceTimersByTime(31_000);
+    await settleAsyncUntil(() => secondMintStarted);
+    loseCapsuleLease = true;
+    releaseSecondMint();
+    const response = await pending;
+    expect(response.applyRun.status).toBe("failed");
+    expect(response.applyRun.diagnostics?.map((item) => item.code)).toContain("capsule_lease_lost");
+    expect(issueCount()).toBe(2);
+    expect(refreshes).toEqual([]);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test("refresh failure preserves a typed provider-failed partial-state receipt", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { applyRunId, vault } =
+    await seedRenewableApplyFixture(store, "refresh_partial_state");
+  let resolveStarted!: () => void;
+  const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+  let refreshAttempts = 0;
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
+  try {
+    const controller = controllerWith(store, {
+      vault, now: () => Date.now(), runRenewalIntervalMs: 0,
+      assertCredentialRefreshCapability: async () => {},
+      refreshCredentials: async () => {
+        refreshAttempts += 1;
+        throw new Error("refresh delivery unavailable");
+      },
+      apply: async (job, control) => {
+        resolveStarted();
+        const signal = control?.signal;
+        if (!signal) throw new Error("fixture runner requires a signal");
+        if (!signal.aborted) {
+          await new Promise<void>((resolve) =>
+            signal.addEventListener("abort", () => resolve(), { once: true })
+          );
+        }
+        return fixtureStateCommit({
+          providerExecutionFailure: {
+            kind: "provider_execution_failed" as const,
+            statePersistence: "persisted" as const,
+            errorCode: "partial_provider_failure",
+          },
+          providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+          executionEvidence: fixtureExecutionEvidence(job, "apply", {
+            outcome: "provider_failed_state_persisted",
+          }),
+        });
+      },
+    });
+    const pending = controller.runQueuedApply(applyRunId);
+    await started;
+    jest.advanceTimersByTime(31_000);
+    const response = await pending;
+    expect(refreshAttempts).toBe(1);
+    expect(response.applyRun.status).toBe("failed");
+    expect(response.applyRun.diagnostics?.map((item) => item.code)).toContain(
+      "partial_provider_failure",
+    );
+    const capsule = await store.getCapsule(response.applyRun.capsuleId!);
+    expect(capsule?.currentStateGeneration).toBe(1);
+    expect(capsuleRuntimeSafetyFromRun(response.applyRun).phase).toBe("unknown");
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test("refresh failure cannot turn a late successful Apply receipt into a succeeded Run", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { applyRunId, vault } =
+    await seedRenewableApplyFixture(store, "refresh_late_apply_success");
+  let resolveStarted!: () => void;
+  const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+  let returnedStateDigest: string | undefined;
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
+  try {
+    const controller = controllerWith(store, {
+      vault, now: () => Date.now(), runRenewalIntervalMs: 0,
+      assertCredentialRefreshCapability: async () => {},
+      refreshCredentials: async () => { throw new Error("refresh delivery unavailable"); },
+      apply: async (_job, control) => {
+        resolveStarted();
+        const signal = control?.signal;
+        if (!signal) throw new Error("fixture runner requires a signal");
+        if (!signal.aborted) {
+          await new Promise<void>((resolve) =>
+            signal.addEventListener("abort", () => resolve(), { once: true })
+          );
+        }
+        const result = fixtureStateCommit({
+          providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+        });
+        returnedStateDigest = result.stateDigest;
+        return result;
+      },
+    });
+    const pending = controller.runQueuedApply(applyRunId);
+    await started;
+    jest.advanceTimersByTime(31_000);
+    const response = await pending;
+    expect(returnedStateDigest).toBeDefined();
+    expect(response.applyRun.status).toBe("failed");
+    expect((await store.getApplyRun(applyRunId))?.auditEvents.some(
+      (event) => event.type === "credential.refresh.accepted",
+    )).toBe(false);
+    expect(response.applyRun.auditEvents.some((event) =>
+      event.data?.providerDispatched === true
+    )).toBe(true);
+    expect(capsuleRuntimeSafetyFromRun(response.applyRun).phase).toBe("unknown");
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test("refresh failure cannot publish a late successful Plan artifact or timing", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { planRunId, vault } =
+    await seedRenewableApplyFixture(store, "refresh_late_plan_success");
+  const prepared = await store.getPlanRun(planRunId);
+  if (!prepared) throw new Error("renewable Plan fixture is missing");
+  await store.putPlanRun({
+    ...prepared,
+    status: "queued",
+    planDigest: undefined,
+    planArtifact: undefined,
+    policyDecisionDigest: undefined,
+  });
+  let resolveStarted!: () => void;
+  const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
+  try {
+    const controller = controllerWith(store, {
+      vault, now: () => Date.now(), runRenewalIntervalMs: 0,
+      assertCredentialRefreshCapability: async () => {},
+      refreshCredentials: async () => { throw new Error("refresh delivery unavailable"); },
+      plan: async (_job, control) => {
+        resolveStarted();
+        const signal = control?.signal;
+        if (!signal) throw new Error("fixture runner requires a signal");
+        if (!signal.aborted) {
+          await new Promise<void>((resolve) =>
+            signal.addEventListener("abort", () => resolve(), { once: true })
+          );
+        }
+        return {
+          planDigest: PLAN_DIGEST,
+          planArtifact: planArtifact(),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+          providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+        };
+      },
+    });
+    const pending = controller.runQueuedPlan(planRunId);
+    await started;
+    jest.advanceTimersByTime(31_000);
+    const result = await pending;
+    expect(result?.status).toBe("failed");
+    expect(result?.planDigest).toBeUndefined();
+    expect(result?.planArtifact).toBeUndefined();
+    expect(result?.diagnostics?.some((diagnostic) =>
+      diagnostic.code === "core_plan_elapsed_timings"
+    )).toBeFalsy();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test("an unknown Apply blocks a credentialless new Apply on the stale state generation", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const capsuleId = "cap_unknown_credentialless_apply";
+  const applyRunId = "apply_unknown_credentialless_original";
+  await seedApply(store, {
+    capsuleId,
+    planRunId: "plan_unknown_credentialless_apply",
+    applyRunId,
+  });
+  const original = await store.getApplyRun(applyRunId);
+  if (!original) throw new Error("original Apply fixture is missing");
+  await store.putApplyRun({
+    ...original,
+    status: "failed",
+    startedAt: 2,
+    finishedAt: 3,
+    updatedAt: 3,
+    auditEvents: [{
+      id: "audit_unknown_credentialless_original",
+      type: "apply.failed",
+      at: 3,
+      data: { providerDispatched: true },
+    }],
+  });
+  expect(await store.getCapsuleRuntimeSafety(capsuleId)).toMatchObject({
+    phase: "unknown",
+    runId: applyRunId,
+  });
+  const subsequentId = "apply_unknown_credentialless_subsequent";
+  const capsule = await store.getCapsule(capsuleId);
+  const management = await store.getWorkspaceManagement(original.workspaceId);
+  if (!capsule || !management) throw new Error("admission fixture is missing");
+  const admission = await store.beginApplyRun({
+    ...original,
+    id: subsequentId,
+    status: "queued",
+    auditEvents: [],
+    updatedAt: 4,
+  }, {
+    workspaceId: original.workspaceId,
+    managementState: "active",
+    managementEpoch: management.managementEpoch,
+  }, capsuleApplyRunAdmissionFence(
+    capsule,
+    await store.getCapsuleExecutionAuthorityEpoch(capsuleId) ?? 1,
+  ));
+  expect(admission.status).toBe("created");
+  let providerDispatches = 0;
+  const response = await controllerWith(store, {
+    now: () => 5,
+    apply: async () => {
+      providerDispatches += 1;
+      return fixtureStateCommit();
+    },
+  }).runQueuedApply(subsequentId);
+  expect(response.applyRun.status).toBe("failed");
+  expect(response.applyRun.diagnostics?.map((item) => item.code)).toContain(
+    "runtime_safety_mismatch",
+  );
+  expect(providerDispatches).toBe(0);
+  expect(await store.getCapsuleRuntimeSafety(capsuleId)).toMatchObject({
+    phase: "unknown",
+    runId: applyRunId,
+  });
+});
+
+test("an unknown Apply blocks a credentialless ordinary Destroy beneath its own terminating projection", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const capsuleId = "cap_unknown_credentialless_destroy";
+  const originalId = "apply_unknown_before_destroy";
+  const planRunId = "plan_unknown_credentialless_destroy";
+  await seedApply(store, { capsuleId, planRunId, applyRunId: originalId });
+  const original = await store.getApplyRun(originalId);
+  const plan = await store.getPlanRun(planRunId);
+  if (!original || !plan) throw new Error("Destroy fixture is missing");
+  await store.putApplyRun({
+    ...original,
+    status: "failed",
+    startedAt: 2,
+    finishedAt: 3,
+    updatedAt: 3,
+    auditEvents: [{
+      id: "audit_unknown_before_destroy",
+      type: "apply.failed",
+      at: 3,
+      data: { providerDispatched: true },
+    }],
+  });
+  await store.putPlanRun({ ...plan, operation: "destroy" });
+  const destroyId = "destroy_unknown_credentialless_subsequent";
+  const capsule = await store.getCapsule(capsuleId);
+  const management = await store.getWorkspaceManagement(original.workspaceId);
+  if (!capsule || !management) throw new Error("Destroy admission fixture is missing");
+  const admission = await store.beginApplyRun({
+    ...original,
+    id: destroyId,
+    operation: "destroy",
+    status: "queued",
+    auditEvents: [],
+    updatedAt: 4,
+  }, {
+    workspaceId: original.workspaceId,
+    managementState: "active",
+    managementEpoch: management.managementEpoch,
+  }, capsuleApplyRunAdmissionFence(
+    capsule,
+    await store.getCapsuleExecutionAuthorityEpoch(capsuleId) ?? 1,
+  ));
+  expect(admission.status).toBe("created");
+  expect(await store.getCapsuleRuntimeSafety(capsuleId)).toMatchObject({
+    phase: "terminating",
+    runId: destroyId,
+  });
+  expect(await store.getCapsuleRuntimeSafety(capsuleId, {
+    excludeRunId: destroyId,
+  })).toMatchObject({ phase: "unknown", runId: originalId });
+  let providerDispatches = 0;
+  const response = await controllerWith(store, {
+    now: () => 5,
+    destroy: async () => {
+      providerDispatches += 1;
+      throw new Error("Destroy must not dispatch against unknown state");
+    },
+  }).runQueuedApply(destroyId);
+  expect(response.applyRun.status).toBe("failed");
+  expect(response.applyRun.diagnostics?.map((item) => item.code)).toContain(
+    "runtime_safety_mismatch",
+  );
+  expect(providerDispatches).toBe(0);
+  expect(await store.getCapsuleRuntimeSafety(capsuleId, {
+    excludeRunId: destroyId,
+  })).toMatchObject({ phase: "unknown", runId: originalId });
+});
+
+test("refresh failure without runner receipt remains unknown after dispatch", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { applyRunId, vault } =
+    await seedRenewableApplyFixture(store, "refresh_unknown_receipt");
+  let resolveStarted!: () => void;
+  const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+  let applyCalls = 0;
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
+  try {
+    const controller = controllerWith(store, {
+      vault, now: () => Date.now(), runRenewalIntervalMs: 0,
+      assertCredentialRefreshCapability: async () => {},
+      refreshCredentials: async () => { throw new Error("refresh delivery unavailable"); },
+      apply: async (_job, control) => {
+        applyCalls += 1;
+        resolveStarted();
+        try {
+          return await awaitExecutionAbort(control);
+        } catch {
+          throw new DOMException("runner fetch aborted without receipt", "AbortError");
+        }
+      },
+    });
+    const pending = controller.runQueuedApply(applyRunId);
+    await started;
+    jest.advanceTimersByTime(31_000);
+    const response = await pending;
+    expect(response.applyRun.status).toBe("failed");
+    expect(applyCalls).toBe(1);
+    expect(response.applyRun.auditEvents.some((event) =>
+      event.data?.providerDispatched === true
+    )).toBe(true);
+    expect(capsuleRuntimeSafetyFromRun(response.applyRun).phase).toBe("unknown");
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test("expired credential aborts the child and never adopts a late mint", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let secondMintStarted = false;
+  let secondMintReturned = false;
+  let releaseSecondMint!: () => void;
+  const secondMintHold = new Promise<void>((resolve) => { releaseSecondMint = resolve; });
+  const { applyRunId, vault, issueCount } =
+    await seedRenewableApplyFixture(store, "refresh_expiry_watchdog", async (count) => {
+      if (count === 2) {
+        secondMintStarted = true;
+        await secondMintHold;
+        secondMintReturned = true;
+      }
+    });
+  let resolveStarted!: () => void;
+  const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+  const refreshes: unknown[] = [];
+  let childAborted = false;
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
+  try {
+    const controller = controllerWith(store, {
+      vault, now: () => Date.now(), runRenewalIntervalMs: 0,
+      assertCredentialRefreshCapability: async () => {},
+      refreshCredentials: async (update) => { refreshes.push(update); },
+      apply: async (_job, control) => {
+        resolveStarted();
+        try {
+          return await awaitExecutionAbort(control);
+        } finally {
+          childAborted = true;
+        }
+      },
+    });
+    const pending = controller.runQueuedApply(applyRunId);
+    await started;
+    jest.advanceTimersByTime(31_000);
+    await settleAsyncUntil(() => secondMintStarted);
+    jest.advanceTimersByTime(90_000);
+    await settleAsyncUntil(() => childAborted);
+    // The teardown waits at most 100ms for an issuer that ignores cancellation.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    jest.advanceTimersByTime(100);
+    const response = await pending;
+    expect(response.applyRun.status).toBe("failed");
+    expect(response.applyRun.diagnostics?.map((item) => item.code)).toContain(
+      "credential_service_unavailable",
+    );
+    releaseSecondMint();
+    await settleAsyncUntil(() => secondMintReturned);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(issueCount()).toBe(2);
+    expect(refreshes).toEqual([]);
+    expect(capsuleRuntimeSafetyFromRun(response.applyRun).phase).toBe("unknown");
+  } finally {
+    releaseSecondMint();
+    jest.useRealTimers();
+  }
+});
 
 test("one transient run-heartbeat transport failure recovers before apply dispatch", async () => {
   const store = new OneTransientHeartbeatFailureStore();

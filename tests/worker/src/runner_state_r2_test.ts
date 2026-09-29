@@ -20,6 +20,32 @@ const PLAN_BYTES = new TextEncoder().encode("reviewed tfplan bytes");
 const PLAN_DIGEST =
   "sha256:0fd9817656d95201f5c8073b9b4b4c2d5bfe8468b69e7bf771e5311b122a90e7";
 const NEW_STATE_BYTES = new TextEncoder().encode('{"version":4,"serial":2}');
+// Actual RunnerPhaseTimer.measure labels across plan_apply.ts and source_sync.ts.
+const RUNNER_PHASE_TIMING_PHASES = [
+  "provider_scan_policy",
+  "provider_lockfile_restore",
+  "source_build",
+  "runner_plan_prepare",
+  "runner_plan_finalize",
+  "tofu_init",
+  "tofu_plan",
+  "tofu_state_reconcile",
+  "tofu_plan_json",
+  "tofu_apply",
+  "tofu_output",
+  "source_host_policy",
+  "source_git_credentials",
+  "source_ref_resolve",
+  "source_clone",
+  "source_repository_metadata",
+  "source_repository_manifest",
+  "source_subtree",
+  "source_repository_modules",
+  "source_snapshot_reuse",
+  "source_archive",
+  "source_archive_read",
+  "source_archive_digest",
+] as const;
 
 const STATE_PREFIX =
   "workspaces/spc_1/capsules/inst_1/environments/production/state-versions";
@@ -1197,6 +1223,42 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
             status: "failed",
             exitCode: 1,
             errorCode: "provider-raw-code",
+            phaseTimings: [
+              ...RUNNER_PHASE_TIMING_PHASES.map((phase) => ({
+                phase,
+                startedAt: "2026-09-27T10:00:00.000Z",
+                finishedAt: "2026-09-27T10:06:24.000Z",
+                durationMs: 384_000,
+                ...(phase === "tofu_apply"
+                  ? { secret: "must-not-survive" }
+                  : {}),
+              })),
+              {
+                phase: "invalid phase",
+                startedAt: "2026-09-27T10:00:00.000Z",
+                finishedAt: "2026-09-27T10:06:24.000Z",
+                durationMs: 384_000,
+              },
+              {
+                phase: "tofu_apply",
+                startedAt: "not-a-date",
+                finishedAt: "2026-09-27T10:06:24.000Z",
+                durationMs: 384_000,
+              },
+              {
+                phase: "tofu_apply",
+                startedAt:
+                  "Sun, 27 Sep 2026 10:00:00 GMT (password=provider-secret)",
+                finishedAt: "2026-09-27T10:06:24.000Z",
+                durationMs: 384_000,
+              },
+              {
+                phase: "passwordsecretabc",
+                startedAt: "2026-09-27T10:00:00.000Z",
+                finishedAt: "2026-09-27T10:06:24.000Z",
+                durationMs: 1,
+              },
+            ],
             providerExecutionFailure: {
               kind: "provider_execution_failed",
             },
@@ -1251,6 +1313,17 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
   assert.equal(first.status, 500);
   const firstPayload = (await first.json()) as Record<string, unknown>;
   assert.equal(firstPayload.errorCode, "provider_execution_failed");
+  assert.deepEqual(
+    firstPayload.phaseTimings,
+    RUNNER_PHASE_TIMING_PHASES.map((phase) => ({
+      phase,
+      startedAt: "2026-09-27T10:00:00.000Z",
+      finishedAt: "2026-09-27T10:06:24.000Z",
+      durationMs: 384_000,
+    })),
+  );
+  assert.equal(JSON.stringify(firstPayload).includes("provider-secret"), false);
+  assert.equal(JSON.stringify(firstPayload).includes("passwordsecretabc"), false);
   assert.deepEqual(firstPayload.providerExecutionFailure, {
     kind: "provider_execution_failed",
     statePersistence: "persisted",
@@ -1315,6 +1388,8 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
   assert.equal(providerPosts, 1);
   const replayPayload = (await replay.json()) as Record<string, unknown>;
   assert.equal(replayPayload.errorCode, "provider_execution_failed");
+  assert.equal(JSON.stringify(replayPayload).includes("provider-secret"), false);
+  assert.equal(JSON.stringify(replayPayload).includes("passwordsecretabc"), false);
   assert.deepEqual(replayPayload.providerExecutionFailure, {
     kind: "provider_execution_failed",
     statePersistence: "persisted",

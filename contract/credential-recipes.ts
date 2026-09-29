@@ -1,4 +1,8 @@
-import { isOpenTofuIdentifier } from "./provider-env-rules.ts";
+import {
+  isOpenTofuIdentifier,
+  isProviderEnvName,
+  isReservedProviderEnvName,
+} from "./provider-env-rules.ts";
 
 export type CredentialRecipeMaterialSource =
   "secret" | "value" | "generated" | "literal" | "user_defined";
@@ -72,6 +76,8 @@ export interface CredentialRecipeAuthMode {
    * a contract revision instead of provider-name or URL inference.
    */
   readonly runIssuance?: CredentialRecipeRunIssuance;
+  /** Value-free opt-in for a provider that rereads a runner-owned token file. */
+  readonly renewableEnv?: CredentialRecipeRenewableEnv;
   /**
    * Run-scoped sensitive provider inputs this auth mode's provider understands.
    * It declares only the PROTOCOL SHAPE — the two provider-block argument names
@@ -87,6 +93,30 @@ export interface CredentialRecipeAuthMode {
    */
   readonly inputHints?: Readonly<Record<string, CredentialRecipeInputHint>>;
   readonly presentation?: CredentialRecipeAuthModePresentation;
+}
+
+/** One run-issued env value is projected to a rotating, run-private file. */
+export interface CredentialRecipeRenewableEnv {
+  readonly sourceEnvName: string;
+  readonly fileEnvName: string;
+  /** First exact provider release known to read the rotating file. */
+  readonly minimumProviderVersion: string;
+}
+
+export function isCredentialRecipeRenewableEnv(
+  value: unknown,
+): value is CredentialRecipeRenewableEnv {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return Object.keys(record).length === 3 &&
+    typeof record.sourceEnvName === "string" &&
+    typeof record.fileEnvName === "string" &&
+    isProviderEnvName(record.sourceEnvName) &&
+    isProviderEnvName(record.fileEnvName) &&
+    !isReservedProviderEnvName(record.sourceEnvName) &&
+    !isReservedProviderEnvName(record.fileEnvName) &&
+    isExactProviderVersion(record.minimumProviderVersion) &&
+    record.sourceEnvName !== record.fileEnvName;
 }
 
 export interface CredentialRecipeRunIssuance {
@@ -286,6 +316,7 @@ export interface RunCredentialRecipeBinding {
   readonly envNames: readonly string[];
   readonly fileEnvNames: readonly string[];
   readonly requiredEnvGroups: readonly (readonly string[])[];
+  readonly renewableEnv?: CredentialRecipeRenewableEnv;
 }
 
 export interface RunCredentialRecipeManifest {

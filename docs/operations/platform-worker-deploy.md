@@ -152,7 +152,7 @@ never contained — while staging pointed at a different tree entirely, so the t
 environments could no longer be released from one checkout, and neither config
 could say **which commit** it meant.
 
-Materialize the pinned source when the current checkout is not it:
+Materialize the pinned production/default-branch source when the current checkout is not it:
 
 ```bash
 bun run deploy -- takosumi-platform-staging materialize-source \
@@ -282,8 +282,9 @@ the optional default `authMode` and empty `selfServicePatScopes`,
 keys is a composition mismatch. Takoserver owns actual Resource/backend
 readback, while Takosumi owns the Run/StateVersion/Output/Audit lifecycle.
 
-The sponsorship descriptor's `providerCredentialBroker` declares exactly ten
-keys. Six are the broker identity — `connectionId`, `recipeId`,
+The sponsorship descriptor's `providerCredentialBroker` accepts either the
+legacy exact ten-key shape or the opt-in exact twelve-key shape. Six are the
+broker identity — `connectionId`, `recipeId`,
 `providerSource`, `displayName`, `exchangePath`, `envNames` — and
 `runCredentialSettings` carries the provider floor for run-issued credentials.
 The remaining three are required, not optional, for an official release:
@@ -300,6 +301,27 @@ The remaining three are required, not optional, for an official release:
   which those arguments exist. Without it a broker Connection is invisible to
   the run-scoped sensitive-input lane, so a Capsule asking for
   binding-delivered values has nowhere to deliver them.
+
+The legacy ten-key shape remains valid and keeps the existing fixed Connection
+static. For this official Hosted broker, renewable delivery requires the exact
+paired twelve-key shape: `renewableEnv` with profile
+`{"sourceEnvName":"TAKOFORM_TOKEN","fileEnvName":"TAKOFORM_TOKEN_FILE","minimumProviderVersion":"4.1.0"}`
+and `renewableConnectionId: "conn_takoserverTakoformRenew01"`. The standalone
+eleventh-key shape is refused because it would change the installed auth mode
+of the existing `conn_takoserverTakoform01` and invalidate its pinned static
+Connections. Generic operator brokers retain the standalone descriptor where
+already used; this exact pairing rule belongs to the realized Hosted release
+gate. The new fixed Connection is available only for explicit Capsule
+ProviderBinding selection, not as an automatic migration. This is an explicit
+composition opt-in, not a global provider-floor change.
+Before adding it to the realized Hosted descriptor, first verify that the OSS
+runtime and released platform runner support renewable credential files, then
+publish Takoform provider 4.1.0 or newer to the exact source pinned by the
+Hosted Connection. Only after those prerequisites are available should the
+operator activate the paired descriptor. Keep `runtimeInputs.minimumProviderVersion`
+at its existing value unless a separate protocol change requires otherwise;
+do not globally upgrade provider requirements to activate this optional
+profile.
 
 Exactly one realized route may declare `publicInputExchangePath`. A Capsule has
 one public origin and no rule for splitting it, so the runtime seam throws when

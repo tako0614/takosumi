@@ -30,6 +30,7 @@ import {
   type RunnerImageRuntimeInputPlanProof,
 } from "./runner-image-release-contract.ts";
 import { lineageVerdict } from "./lib/deploy-lineage.ts";
+import { authorizeRunnerRegistryPull } from "./lib/runner-image-registry-auth.ts";
 import {
   DOCKER_SCHEMA2_MANIFEST_MEDIA_TYPE,
   githubRepositoryFromRemote,
@@ -81,6 +82,8 @@ type CommandResult = Readonly<{
   stdout: string;
   stderr: string;
 }>;
+
+type CommandOptions = Readonly<{ dockerConfig?: string }>;
 
 type RepositoryIdentity = Readonly<{
   root: string;
@@ -271,6 +274,7 @@ const RELEASE_MUTATION_COMMAND_TIMEOUT_MS = 15 * 60_000;
 const RELEASE_BUILD_COMMAND_TIMEOUT_MS = 30 * 60_000;
 const RUNNER_BOOT_SMOKE_TIMEOUT_MS = 30_000;
 const COMMAND_TERMINATION_GRACE_MS = 5_000;
+const COMMAND_KILL_REAP_GRACE_MS = 1_000;
 
 export {
   RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE,
@@ -297,7 +301,10 @@ export type RunnerImageReleaseRuntime = Readonly<{
     executable: string,
     args: readonly string[],
     cwd: string,
+    options?: CommandOptions,
   ) => Promise<CommandResult>;
+  /** Isolated test seam; the public CLI always mints fresh pull-only credentials. */
+  registryPullAuth?: typeof authorizeRunnerRegistryPull;
   git?: (root: string, args: readonly string[]) => Promise<string>;
   /** Test/operator override for the fixed external journal locator directory. */
   publicationJournalRoot?: string;
@@ -745,6 +752,8 @@ export async function runRunnerImageRelease(
           git,
           [repositoryRoot],
           runtime.materializeSource,
+          runtime.accountId ?? process.env.CLOUDFLARE_ACCOUNT_ID,
+          runtime.registryPullAuth ?? authorizeRunnerRegistryPull,
         ),
       true,
       runtime.publicationLockHook,
@@ -1652,6 +1661,8 @@ async function reconcileRunnerImage(
   git: NonNullable<RunnerImageReleaseRuntime["git"]>,
   sourceRoots: readonly string[],
   materializeSource: RunnerImageReleaseRuntime["materializeSource"],
+  accountId: string | undefined,
+  registryPullAuth: typeof authorizeRunnerRegistryPull,
 ): Promise<unknown> {
   if (!options.state) throw new Error("reconcile requires --state");
   const publicationStateContext = runnerPublicationStateContext(options, context);
@@ -1687,6 +1698,10 @@ async function reconcileRunnerImage(
   }
   let workspace: string | null = null;
   try {
+    const imageRepository = publicationTargetRepository(context, accountId, true);
+    if (imageRepository !== runnerImageRepository(attempt.config.previousImage)) {
+      throw new Error("runner_image_publication_account_mismatch");
+    }
     await assertHistoricalPublicationCommit(context.repository, attempt, git);
     await publicationJournal.assertBound();
     workspace = await mkdtemp(
@@ -1726,11 +1741,31 @@ async function reconcileRunnerImage(
       );
     }
     await publicationJournal.assertBound();
+    const dockerConfig = join(workspace, "docker-config");
+    await mkdir(dockerConfig, { mode: 0o700 });
+    await chmod(dockerConfig, 0o700);
+    await registryPullAuth(
+      "registry.cloudflare.com",
+      dockerConfig,
+      context.repository.root,
+      context.config.path,
+      accountId!,
+    );
+    await publicationJournal.assertBound();
+    if (
+      sha256(await readStablePhysicalFile(
+        context.config.path,
+        "reconciliation config path",
+      )) !== attempt.config.buildSha256
+    ) {
+      throw new Error("runner_image_publication_reconciliation_identity_mismatch");
+    }
     const manifest = await checkedCommand(
       command,
       "docker",
       ["manifest", "inspect", "--verbose", attempt.image.transportRef],
       context.repository.root,
+      { dockerConfig },
     );
     const image = parseRemoteRunnerManifest(
       `Pushed image: ${attempt.image.transportRef}`,
@@ -3335,8 +3370,9 @@ async function checkedCommand(
   executable: string,
   args: readonly string[],
   cwd: string,
+  commandOptions?: CommandOptions,
 ): Promise<CommandResult> {
-  const result = await command(executable, args, cwd);
+  const result = await command(executable, args, cwd, commandOptions);
   if (result.exitCode !== 0) {
     throw new ReleaseCommandError(
       releaseCommandLabel(executable, args),
@@ -3369,7 +3405,7 @@ function releaseCommand(
   runtimeCommand: RunnerImageReleaseRuntime["command"],
   timeoutOverride: number | undefined,
 ): NonNullable<RunnerImageReleaseRuntime["command"]> {
-  return (executable, args, cwd) => {
+  return (executable, args, cwd, commandOptions) => {
     const timeoutMilliseconds =
       timeoutOverride ?? releaseCommandTimeout(executable, args);
     if (runtimeCommand) {
@@ -3379,9 +3415,10 @@ function releaseCommand(
         args,
         cwd,
         timeoutMilliseconds,
+        commandOptions,
       );
     }
-    return runCommand(executable, args, cwd, timeoutMilliseconds);
+    return runCommand(executable, args, cwd, timeoutMilliseconds, commandOptions);
   };
 }
 
@@ -3391,6 +3428,7 @@ async function runInjectedCommandWithTimeout(
   args: readonly string[],
   cwd: string,
   timeoutMilliseconds: number,
+  commandOptions?: CommandOptions,
 ): Promise<CommandResult> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const timeoutResult = new Promise<never>((_resolve, reject) => {
@@ -3405,7 +3443,7 @@ async function runInjectedCommandWithTimeout(
   });
   try {
     return await Promise.race([
-      Promise.resolve().then(() => command(executable, args, cwd)),
+      Promise.resolve().then(() => command(executable, args, cwd, commandOptions)),
       timeoutResult,
     ]);
   } finally {
@@ -3496,33 +3534,60 @@ function boundedDiagnosticText(value: string): string {
     .slice(0, 2_048);
 }
 
-async function runCommand(
+export async function runCommand(
   executable: string,
   args: readonly string[],
   cwd: string,
   timeoutMilliseconds: number,
+  commandOptions?: CommandOptions,
 ): Promise<CommandResult> {
   return new Promise((resolveResult, reject) => {
     const child = spawn(executable, [...args], {
       cwd,
-      env: runnerChildEnvironment(),
+      env: runnerChildEnvironment(commandOptions),
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let directChildExited = false;
     let stopError: Error | null = null;
     let outputBytes = 0;
     const boundedOutput = executable === "docker" &&
       (args[0] === "run" || args[0] === "exec" || args[0] === "rm");
     let terminationTimer: ReturnType<typeof setTimeout> | undefined;
+    let reapTimer: ReturnType<typeof setTimeout> | undefined;
+    const settleAbnormal = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (terminationTimer) clearTimeout(terminationTimer);
+      if (reapTimer) clearTimeout(reapTimer);
+      // A detached grandchild can inherit these fds even after the direct child
+      // exits. Closing our read ends must not be mistaken for stopping it.
+      child.stdout.destroy();
+      child.stderr.destroy();
+      reject(error);
+    };
     const stop = (error: Error) => {
       if (settled || stopError) return;
       stopError = error;
+      if (directChildExited) {
+        settleAbnormal(error);
+        return;
+      }
       terminateCommand(child, "SIGTERM");
       terminationTimer = setTimeout(() => {
         terminateCommand(child, "SIGKILL");
+        // A child stuck past SIGKILL cannot hold the caller forever. Its
+        // termination is unconfirmed; the publication outcome stays unknown.
+        reapTimer = setTimeout(() => {
+          // If SIGKILL still has not produced exit, do not retain the CLI's
+          // event loop through the unreaped ChildProcess handle.
+          if (!directChildExited) child.unref();
+          settleAbnormal(error);
+        }, COMMAND_KILL_REAP_GRACE_MS);
       }, COMMAND_TERMINATION_GRACE_MS);
     };
     const timeout = setTimeout(() => {
@@ -3548,15 +3613,16 @@ async function runCommand(
     child.stdout.on("data", (value: string) => capture("stdout", value));
     child.stderr.on("data", (value: string) => capture("stderr", value));
     child.on("error", (error) => {
-      clearTimeout(timeout);
-      if (terminationTimer) clearTimeout(terminationTimer);
-      if (settled) return;
-      settled = true;
-      reject(stopError ?? error);
+      settleAbnormal(stopError ?? error);
+    });
+    child.on("exit", () => {
+      directChildExited = true;
+      if (stopError) settleAbnormal(stopError);
     });
     child.on("close", (code) => {
       clearTimeout(timeout);
       if (terminationTimer) clearTimeout(terminationTimer);
+      if (reapTimer) clearTimeout(reapTimer);
       if (settled) return;
       settled = true;
       if (stopError) {
@@ -3568,7 +3634,7 @@ async function runCommand(
   });
 }
 
-function runnerChildEnvironment(): NodeJS.ProcessEnv {
+function runnerChildEnvironment(commandOptions?: CommandOptions): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
     HOME: process.env.HOME ?? "/root",
@@ -3589,6 +3655,9 @@ function runnerChildEnvironment(): NodeJS.ProcessEnv {
   ]) {
     const value = process.env[key];
     if (value !== undefined) environment[key] = value;
+  }
+  if (commandOptions?.dockerConfig !== undefined) {
+    environment.DOCKER_CONFIG = commandOptions.dockerConfig;
   }
   return environment;
 }

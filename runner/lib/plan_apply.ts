@@ -106,7 +106,7 @@ import {
   requiredProviderSourcesFromTerraformTree,
   assertProviderSetStableAfterInit,
   assertRunnerPolicyBeforeInit,
-  generatedRootTreeHasNoProviderUsage,
+  generatedRootScanHasNoProviderUsage,
   providersFromPlanJson,
   normalizedProviderList,
   providerInstallationEvidence,
@@ -155,6 +155,7 @@ export async function runGeneratedRootPlan(
     request,
     runnerProfile,
     signal,
+    runId,
   );
   // Fail before any `tofu` process exists when the reviewed root does not
   // declare the exact ephemeral variables this dispatch targets.
@@ -164,6 +165,7 @@ export async function runGeneratedRootPlan(
   );
 
   const workspace = await prepareGeneratedRootWorkspace(runId);
+  const timer = new RunnerPhaseTimer();
   let sourceCommit: string | undefined;
   let buildLog: string | undefined;
 
@@ -183,12 +185,17 @@ export async function runGeneratedRootPlan(
       throw new Error("operator_module source requires operatorModule");
     }
     await ensureSourceAvailable(source, workspace.sourceRoot);
-    buildLog = await runSourceBuild(sourceBuild, workspace.sourceRoot, {
-      ...(commandContext.timeoutMs
-        ? { timeoutMs: commandContext.timeoutMs }
-        : {}),
-      ...(commandContext.signal ? { signal: commandContext.signal } : {}),
-    });
+    buildLog = await runTimedSourceBuild(
+      sourceBuild,
+      workspace.sourceRoot,
+      {
+        ...(commandContext.timeoutMs
+          ? { timeoutMs: commandContext.timeoutMs }
+          : {}),
+        ...(commandContext.signal ? { signal: commandContext.signal } : {}),
+      },
+      timer,
+    );
     const moduleDir = resolveModulePath(
       workspace.sourceRoot,
       source.modulePath,
@@ -215,22 +222,29 @@ export async function runGeneratedRootPlan(
   const preparedCredentials = await prepareProviderCredentialFiles(
     commandContext,
     workspace,
+    runId,
   );
   try {
-    const providerScan = await requiredProvidersForGeneratedRoot(
-      request,
-      workspace.generatedRootDir,
-    );
-    const requiredProviders = providerScan.providers;
-    assertRunnerPolicyBeforeInit(
-      request,
-      runnerProfile,
-      preparedCredentials.context,
-      {
-        allowProviderFreeGeneratedRoot:
-          await generatedRootTreeHasNoProviderUsage(workspace.generatedRootDir),
-        requiredProviders,
-        providerScanComplete: providerScan.complete,
+    const { providerScan, requiredProviders } = await timer.measure(
+      "provider_scan_policy",
+      async () => {
+        const providerScan = await requiredProvidersForGeneratedRoot(
+          request,
+          workspace.generatedRootDir,
+        );
+        const requiredProviders = providerScan.providers;
+        assertRunnerPolicyBeforeInit(
+          request,
+          runnerProfile,
+          preparedCredentials.context,
+          {
+            allowProviderFreeGeneratedRoot:
+              generatedRootScanHasNoProviderUsage(providerScan),
+            requiredProviders,
+            providerScanComplete: providerScan.complete,
+          },
+        );
+        return { providerScan, requiredProviders };
       },
     );
     return await initPlanAndBuildResponse(
@@ -256,6 +270,7 @@ export async function runGeneratedRootPlan(
           ...(sourceCommit ? { sourceCommit } : {}),
         },
       },
+      timer,
     );
   } finally {
     await preparedCredentials.cleanup();
@@ -280,6 +295,7 @@ export async function runDirectRootPlan(
     request,
     runnerProfile,
     signal,
+    runId,
   );
   // The direct-root lane executes the Capsule's own module as the OpenTofu
   // root, so Takosumi owns no provider block and declares no ephemeral
@@ -289,15 +305,26 @@ export async function runDirectRootPlan(
     commandContext.runtimeInputs ?? [],
     undefined,
   );
+  const successfulPlanTiming =
+    operation === "create" || operation === "update"
+      ? new RunnerPhaseTimer()
+      : undefined;
+  const finishPreparation = successfulPlanTiming?.start("runner_plan_prepare");
   const workspace = workspaceForRun(runId);
+  const timer = new RunnerPhaseTimer();
   await mkdir(workspace.root, { recursive: true });
   await ensureSourceAvailable(source, workspace.sourceRoot);
-  const buildLog = await runSourceBuild(sourceBuild, workspace.sourceRoot, {
-    ...(commandContext.timeoutMs
-      ? { timeoutMs: commandContext.timeoutMs }
-      : {}),
-    ...(commandContext.signal ? { signal: commandContext.signal } : {}),
-  });
+  const buildLog = await runTimedSourceBuild(
+    sourceBuild,
+    workspace.sourceRoot,
+    {
+      ...(commandContext.timeoutMs
+        ? { timeoutMs: commandContext.timeoutMs }
+        : {}),
+      ...(commandContext.signal ? { signal: commandContext.signal } : {}),
+    },
+    timer,
+  );
   const moduleDir = resolveModulePath(workspace.sourceRoot, source.modulePath);
   await assertDirectory(moduleDir, "source module directory");
   await assertRealPathInsideSourceRoot(
@@ -315,22 +342,29 @@ export async function runDirectRootPlan(
   const preparedCredentials = await prepareProviderCredentialFiles(
     commandContext,
     workspace,
+    runId,
   );
   try {
-    const providerScan = await requiredProvidersForGeneratedRoot(
-      request,
-      moduleDir,
-    );
-    const requiredProviders = providerScan.providers;
-    assertRunnerPolicyBeforeInit(
-      request,
-      runnerProfile,
-      preparedCredentials.context,
-      {
-        allowProviderFreeGeneratedRoot:
-          await generatedRootTreeHasNoProviderUsage(moduleDir),
-        requiredProviders,
-        providerScanComplete: providerScan.complete,
+    const { providerScan, requiredProviders } = await timer.measure(
+      "provider_scan_policy",
+      async () => {
+        const providerScan = await requiredProvidersForGeneratedRoot(
+          request,
+          moduleDir,
+        );
+        const requiredProviders = providerScan.providers;
+        assertRunnerPolicyBeforeInit(
+          request,
+          runnerProfile,
+          preparedCredentials.context,
+          {
+            allowProviderFreeGeneratedRoot:
+              generatedRootScanHasNoProviderUsage(providerScan),
+            requiredProviders,
+            providerScanComplete: providerScan.complete,
+          },
+        );
+        return { providerScan, requiredProviders };
       },
     );
     const sourceCommit =
@@ -338,10 +372,12 @@ export async function runDirectRootPlan(
         ? (source.commit ??
           (await gitRevParseHead(workspace.sourceRoot, commandContext)))
         : undefined;
+    finishPreparation?.();
     return await initPlanAndBuildResponse(runId, workspace, moduleDir, {
       operation,
       ...(refreshOnly ? { refreshOnly: true } : {}),
       commandContext: preparedCredentials.context,
+      ...(successfulPlanTiming ? { successfulPlanTiming } : {}),
       requiredProviders,
       providerScan,
       variableFilePath,
@@ -355,11 +391,15 @@ export async function runDirectRootPlan(
         : {}),
       ...(buildLog ? { buildLog } : {}),
       extra: { ...(sourceCommit ? { sourceCommit } : {}) },
-    });
+    }, timer);
   } finally {
     await preparedCredentials.cleanup();
   }
 }
+
+type PlanResponseOptionsWithSuccessfulTiming = PlanResponseOptions & {
+  readonly successfulPlanTiming?: RunnerPhaseTimer;
+};
 
 // Shared init+plan+show pipeline for generated-root lanes. `moduleDir` is the
 // tofu root, normally /work/generated-root.
@@ -367,13 +407,13 @@ export async function initPlanAndBuildResponse(
   runId: string,
   workspace: RunWorkspace,
   moduleDir: string,
-  options: PlanResponseOptions,
+  options: PlanResponseOptionsWithSuccessfulTiming,
+  timer = new RunnerPhaseTimer(),
 ): Promise<JsonRecord> {
   const { operation } = options;
   if (options.refreshOnly && operation === "destroy") {
     throw new Error("refreshOnly cannot be combined with destroy");
   }
-  const timer = new RunnerPhaseTimer();
   const strictMirrorInit = await prepareStrictProviderMirrorInit(
     workspace,
     options.commandContext,
@@ -549,6 +589,8 @@ export async function initPlanAndBuildResponse(
     }
   }
 
+  const finishSuccessfulPlanFinalization =
+    options.successfulPlanTiming?.start("runner_plan_finalize");
   const planBytes = await readFile(workspace.planPath);
   const planDigest = await digestBytes(planBytes);
   const planJsonArtifact = planJson
@@ -571,7 +613,7 @@ export async function initPlanAndBuildResponse(
   const plannedOutputs = planJson
     ? plannedOutputsFromPlanJson(planJson, options.outputAllowlist)
     : undefined;
-  return withPhaseTimings(
+  const timedResponse = withPhaseTimings(
     {
       runId,
       action: "plan",
@@ -635,6 +677,22 @@ export async function initPlanAndBuildResponse(
     },
     timer,
   );
+  finishSuccessfulPlanFinalization?.();
+  if (!options.successfulPlanTiming) return timedResponse;
+  const phaseTimings = timedResponse.phaseTimings;
+  const successfulPlanTimings = options.successfulPlanTiming.json();
+  return {
+    ...timedResponse,
+    phaseTimings: [
+      ...successfulPlanTimings.filter(
+        (entry) => entry.phase === "runner_plan_prepare",
+      ),
+      ...(Array.isArray(phaseTimings) ? phaseTimings : []),
+      ...successfulPlanTimings.filter(
+        (entry) => entry.phase === "runner_plan_finalize",
+      ),
+    ],
+  };
 }
 
 export function mergeBuildLog(
@@ -665,8 +723,10 @@ export async function runReviewedPlanApply(
     request,
     runnerProfile,
     signal,
+    runId,
   );
   const workspace = workspaceForRun(runId);
+  const timer = new RunnerPhaseTimer();
   const planArtifact = parsePlanArtifact(request);
   assertNoLegacyArtifactDispatch(request);
   await verifyPlanArtifact(workspace.planPath, planArtifact);
@@ -685,14 +745,15 @@ export async function runReviewedPlanApply(
         generatedRoot,
         operatorModule,
         sourceBuild,
+        timer,
       )
     : await restoreDirectRootApplyWorkspace(
         runId,
         parseSource(request),
         commandContext,
         sourceBuild,
+        timer,
       );
-  const timer = new RunnerPhaseTimer();
   const reviewedProviderLock = await timer.measure(
     "provider_lockfile_restore",
     () =>
@@ -706,22 +767,29 @@ export async function runReviewedPlanApply(
   const preparedCredentials = await prepareProviderCredentialFiles(
     commandContext,
     workspace,
+    runId,
   );
   try {
-    const providerScan = await requiredProvidersForGeneratedRoot(
-      request,
-      moduleDir,
-    );
-    const requiredProviders = providerScan.providers;
-    assertRunnerPolicyBeforeInit(
-      request,
-      runnerProfile,
-      preparedCredentials.context,
-      {
-        allowProviderFreeGeneratedRoot:
-          await generatedRootTreeHasNoProviderUsage(moduleDir),
-        requiredProviders,
-        providerScanComplete: providerScan.complete,
+    const { providerScan, requiredProviders } = await timer.measure(
+      "provider_scan_policy",
+      async () => {
+        const providerScan = await requiredProvidersForGeneratedRoot(
+          request,
+          moduleDir,
+        );
+        const requiredProviders = providerScan.providers;
+        assertRunnerPolicyBeforeInit(
+          request,
+          runnerProfile,
+          preparedCredentials.context,
+          {
+            allowProviderFreeGeneratedRoot:
+              generatedRootScanHasNoProviderUsage(providerScan),
+            requiredProviders,
+            providerScanComplete: providerScan.complete,
+          },
+        );
+        return { providerScan, requiredProviders };
       },
     );
     const strictMirrorInit = await prepareStrictProviderMirrorInit(
@@ -910,6 +978,7 @@ export async function restoreGeneratedRootApplyWorkspace(
   generatedRoot: GeneratedRoot,
   operatorModule?: OperatorModule,
   sourceBuild?: SourceBuildConfig,
+  timer?: RunnerPhaseTimer,
 ): Promise<string> {
   const workspace = workspaceForRun(runId);
   await mkdir(workspace.root, { recursive: true });
@@ -929,10 +998,15 @@ export async function restoreGeneratedRootApplyWorkspace(
       throw new Error("operator_module source requires operatorModule");
     }
     await ensureSourceAvailable(source, workspace.sourceRoot);
-    await runSourceBuild(sourceBuild, workspace.sourceRoot, {
-      ...(context.timeoutMs ? { timeoutMs: context.timeoutMs } : {}),
-      ...(context.signal ? { signal: context.signal } : {}),
-    });
+    await runTimedSourceBuild(
+      sourceBuild,
+      workspace.sourceRoot,
+      {
+        ...(context.timeoutMs ? { timeoutMs: context.timeoutMs } : {}),
+        ...(context.signal ? { signal: context.signal } : {}),
+      },
+      timer,
+    );
     const moduleDir = resolveModulePath(
       workspace.sourceRoot,
       source.modulePath,
@@ -958,14 +1032,20 @@ export async function restoreDirectRootApplyWorkspace(
   source: OpenTofuModuleSource,
   context: CommandContext,
   sourceBuild?: SourceBuildConfig,
+  timer?: RunnerPhaseTimer,
 ): Promise<string> {
   const workspace = workspaceForRun(runId);
   await mkdir(workspace.root, { recursive: true });
   await ensureSourceAvailable(source, workspace.sourceRoot);
-  await runSourceBuild(sourceBuild, workspace.sourceRoot, {
-    ...(context.timeoutMs ? { timeoutMs: context.timeoutMs } : {}),
-    ...(context.signal ? { signal: context.signal } : {}),
-  });
+  await runTimedSourceBuild(
+    sourceBuild,
+    workspace.sourceRoot,
+    {
+      ...(context.timeoutMs ? { timeoutMs: context.timeoutMs } : {}),
+      ...(context.signal ? { signal: context.signal } : {}),
+    },
+    timer,
+  );
   const moduleDir = resolveModulePath(workspace.sourceRoot, source.modulePath);
   await assertDirectory(moduleDir, "source module directory");
   await assertRealPathInsideSourceRoot(
@@ -976,6 +1056,18 @@ export async function restoreDirectRootApplyWorkspace(
   await restoreUploadedState(workspace, moduleDir);
   await writeModuleInfo(workspace, moduleDir);
   return moduleDir;
+}
+
+async function runTimedSourceBuild(
+  sourceBuild: SourceBuildConfig | undefined,
+  sourceRoot: string,
+  options: { readonly timeoutMs?: number; readonly signal?: AbortSignal },
+  timer?: RunnerPhaseTimer,
+): Promise<string | undefined> {
+  const run = () => runSourceBuild(sourceBuild, sourceRoot, options);
+  return sourceBuild && timer
+    ? await timer.measure("source_build", run)
+    : await run();
 }
 
 // Fresh per-run workspace for a generated-root plan. Preserve a SourceSnapshot

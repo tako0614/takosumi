@@ -24,6 +24,8 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
+import { isCredentialRecipeRenewableEnv } from "../contract/credential-recipes.ts";
+import { REFERENCE_PROVIDER_RENEWABLE_ENV_CAPABILITIES } from "../providers/credential-recipes.generated.ts";
 import { lineageVerdict } from "./lib/deploy-lineage.ts";
 import {
   assertPlatformReleaseConfigPathless,
@@ -7298,7 +7300,9 @@ function matchesHostedRunCredential(value: unknown): boolean {
 }
 
 /**
- * The realized sponsorship broker, pinned byte-for-byte.
+ * The realized sponsorship broker, pinned byte-for-byte. Renewable delivery
+ * must use a second fixed Connection: flipping the existing id's installed
+ * broker mode would invalidate every previously pinned static Connection.
  *
  * The three public-input/runtime-input fields are REQUIRED, not merely allowed.
  * `deploy/platform/platform_extension_provider_credentials.ts` learns a
@@ -7311,22 +7315,33 @@ function matchesHostedRunCredential(value: unknown): boolean {
  */
 function matchesHostedProviderCredentialBroker(value: unknown): boolean {
   if (!record(value)) return false;
+  const legacyKeys = [
+    "connectionId",
+    "displayName",
+    "envNames",
+    "exchangePath",
+    "providerSource",
+    "publicInputCapabilities",
+    "publicInputExchangePath",
+    "recipeId",
+    "runCredentialSettings",
+    "runtimeInputs",
+  ];
+  const keys = Object.keys(value).sort();
+  const exactLegacyShape =
+    JSON.stringify(keys) === JSON.stringify([...legacyKeys].sort());
+  const exactRenewableShape =
+    JSON.stringify(keys) ===
+    JSON.stringify([...legacyKeys, "renewableConnectionId", "renewableEnv"].sort());
   return (
-    JSON.stringify(Object.keys(value).sort()) ===
-      JSON.stringify(
-        [
-          "connectionId",
-          "displayName",
-          "envNames",
-          "exchangePath",
-          "providerSource",
-          "publicInputCapabilities",
-          "publicInputExchangePath",
-          "recipeId",
-          "runCredentialSettings",
-          "runtimeInputs",
-        ].sort(),
-      ) &&
+    (exactLegacyShape || exactRenewableShape) &&
+    (!exactRenewableShape ||
+      (value.renewableConnectionId === "conn_takoserverTakoformRenew01" &&
+        matchesHostedRenewableEnvDescriptor(
+          value.renewableEnv,
+          value.envNames,
+          value.providerSource,
+        ))) &&
     value.publicInputExchangePath === "/public-inputs/http-endpoint" &&
     Array.isArray(value.publicInputCapabilities) &&
     JSON.stringify(value.publicInputCapabilities) ===
@@ -7347,6 +7362,38 @@ function matchesHostedProviderCredentialBroker(value: unknown): boolean {
         typeof name === "string" && /^[A-Z][A-Z0-9_]{0,63}$/u.test(name),
     ) &&
     new Set(value.envNames).size === value.envNames.length
+  );
+}
+
+type ReferenceProviderRenewableEnvCapability =
+  (typeof REFERENCE_PROVIDER_RENEWABLE_ENV_CAPABILITIES)[number];
+
+export function matchesHostedRenewableEnvDescriptor(
+  value: unknown,
+  envNames: unknown,
+  providerSource: unknown,
+  capabilities: readonly ReferenceProviderRenewableEnvCapability[] =
+    REFERENCE_PROVIDER_RENEWABLE_ENV_CAPABILITIES,
+): boolean {
+  if (!record(value) || !Array.isArray(envNames) || typeof providerSource !== "string") {
+    return false;
+  }
+  const matches = capabilities.filter(
+    (capability) => capability.terraformSource.includes(providerSource),
+  );
+  if (matches.length !== 1) return false;
+  const expected = matches[0]?.renewableEnv;
+  return (
+    isCredentialRecipeRenewableEnv(expected) &&
+    JSON.stringify(Object.keys(value).sort()) ===
+      JSON.stringify(
+        ["fileEnvName", "minimumProviderVersion", "sourceEnvName"].sort(),
+      ) &&
+    value.sourceEnvName === expected.sourceEnvName &&
+    value.fileEnvName === expected.fileEnvName &&
+    value.minimumProviderVersion === expected.minimumProviderVersion &&
+    envNames.includes(expected.sourceEnvName) &&
+    !envNames.includes(expected.fileEnvName)
   );
 }
 

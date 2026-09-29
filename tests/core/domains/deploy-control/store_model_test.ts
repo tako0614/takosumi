@@ -1735,6 +1735,54 @@ test("runtime safety treats lifecycle-only mutation evidence identically in memo
   }
 });
 
+test("runtime safety excludes only the named Destroy and retains the preceding unknown Run across stores", async () => {
+  for (const [label, store] of await stores()) {
+    const capsuleId = `capsule_excluded_destroy_${label}`;
+    const failedId = `apply_unknown_before_destroy_${label}`;
+    const destroyId = `destroy_in_flight_${label}`;
+    await store.putApplyRun(applyRunForSafety({
+      id: failedId,
+      capsuleId,
+      operation: "update",
+      status: "failed",
+      effectAt: 100,
+      auditEvents: [{
+        id: `audit_unknown_before_destroy_${label}`,
+        type: "apply.failed",
+        at: 100,
+        data: { providerDispatched: true },
+      }],
+    }));
+    await store.putApplyRun(applyRunForSafety({
+      id: destroyId,
+      capsuleId,
+      operation: "destroy",
+      status: "queued",
+      effectAt: 200,
+    }));
+
+    expect(await store.getCapsuleRuntimeSafety(capsuleId), label).toEqual({
+      phase: "terminating",
+      runId: destroyId,
+      runType: "destroy_apply",
+    });
+    expect(await store.getCapsuleRuntimeSafety(capsuleId, {
+      excludeRunId: destroyId,
+    }), label).toEqual({
+      phase: "unknown",
+      runId: failedId,
+      runType: "apply",
+    });
+    expect(await store.getCapsuleRuntimeSafety(capsuleId, {
+      excludeRunId: failedId,
+    }), label).toEqual({
+      phase: "terminating",
+      runId: destroyId,
+      runType: "destroy_apply",
+    });
+  }
+});
+
 test("runtime safety ignores a later structured pre-provider runner failure across every store", async () => {
   for (const [label, store] of await stores()) {
     const capsuleId = `capsule_pre_provider_failure_${label}`;

@@ -12,8 +12,14 @@ import {
   isProviderEnvName,
   isReservedProviderEnvName,
 } from "../../contract/provider-env-rules.ts";
-import { REFERENCE_CREDENTIAL_RECIPES } from "../../providers/credential-recipes.generated.ts";
-import { GUIDED_PROVIDER_SETUPS } from "../../providers/registry.ts";
+import {
+  REFERENCE_CREDENTIAL_RECIPES,
+  REFERENCE_PROVIDER_RENEWABLE_ENV_CAPABILITIES,
+} from "../../providers/credential-recipes.generated.ts";
+import {
+  GUIDED_PROVIDER_SETUPS,
+  REFERENCE_INSTALLED_CREDENTIAL_RECIPES,
+} from "../../providers/registry.ts";
 
 const RECIPE_DIR = join(import.meta.dir, "../../recipes/providers");
 
@@ -24,6 +30,7 @@ interface ParsedRecipe {
   readonly env_names?: readonly string[];
   readonly required_env_groups?: readonly (readonly string[])[];
   readonly declared_env?: boolean;
+  readonly renewable_env_capability?: Record<string, unknown>;
   readonly auth_modes?: Record<string, unknown>;
   readonly runtime_inputs?: Record<string, unknown>;
   readonly constraints?: Record<string, unknown>;
@@ -254,4 +261,44 @@ test("the generated recipe asset carries the protocol shape and no value source"
       expect(mode.runtimeInputs).toBeUndefined();
     }
   }
+});
+
+test("Takoform renewable support is reference capability, not recipe opt-in", () => {
+  const sourceRecipe = RECIPES_BY_ID.get("takoform");
+  const declaredCapability = sourceRecipe?.renewable_env_capability;
+  expect(isRecord(declaredCapability)).toBe(true);
+  expect(Object.keys(declaredCapability ?? {}).sort()).toEqual([
+    "file_env_name",
+    "minimum_provider_version",
+    "source_env_name",
+  ]);
+
+  const capabilityEntries =
+    REFERENCE_PROVIDER_RENEWABLE_ENV_CAPABILITIES.filter((entry) =>
+      entry.terraformSource.includes("registry.terraform.io/tako0614/takoform"),
+    );
+  expect(capabilityEntries).toHaveLength(1);
+  expect(capabilityEntries[0]?.renewableEnv).toEqual({
+    sourceEnvName: declaredCapability?.source_env_name,
+    fileEnvName: declaredCapability?.file_env_name,
+    minimumProviderVersion: declaredCapability?.minimum_provider_version,
+  });
+
+  const referenceRecipe = REFERENCE_CREDENTIAL_RECIPES.find(
+    (recipe) => recipe.id === "takoform",
+  );
+  const installedRecipe = REFERENCE_INSTALLED_CREDENTIAL_RECIPES.find(
+    (recipe) => recipe.id === "takoform",
+  );
+  expect(referenceRecipe?.authModes.token?.renewableEnv).toBeUndefined();
+  expect(installedRecipe).toEqual(referenceRecipe);
+  expect(
+    Object.hasOwn(installedRecipe ?? {}, "renewableEnvCapability"),
+  ).toBe(false);
+  expect(installedRecipe?.authModes.token?.renewableEnv).toBeUndefined();
+  const tokenMode = sourceRecipe?.auth_modes?.token;
+  expect(isRecord(tokenMode)).toBe(true);
+  expect(tokenMode?.pre_run).toBeUndefined();
+  expect(tokenMode?.run_issuance).toBeUndefined();
+  expect(tokenMode?.renewable_env).toBeUndefined();
 });

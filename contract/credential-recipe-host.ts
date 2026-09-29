@@ -45,6 +45,8 @@ export type CredentialRecipeIssueRunCredential = (
 
 interface CredentialRecipeDriverBaseContext {
   readonly connection: ProviderConnection;
+  /** Per-connection mint attempt, distinct from the canonical Run identity. */
+  readonly issuanceAttemptRef?: `sha256:${string}`;
   /** Canonical non-secret parameters from this exact ProviderBinding. */
   readonly runCredentialSettings?: ProviderBinding["runCredentialSettings"];
   readonly values: Readonly<Record<string, string>>;

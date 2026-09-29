@@ -494,7 +494,7 @@ test("source compatibility-check creates and reads a Capsule report", async () =
     },
   );
   expect(logs.status).toBe(200);
-  expect(await logs.json()).toEqual({ diagnostics: [], auditEvents: [] });
+  expect(await logs.json()).toEqual({ diagnostics: [], auditEvents: [], credentialMints: [] });
 
   const events = await app.request(
     `/internal/v1/runs/${compatibilityRunId}/events`,

@@ -47,6 +47,7 @@ import type {
   CredentialRecipeVerifiedScopeHintKeys,
 } from "takosumi-contract";
 import {
+  isCredentialRecipeRenewableEnv,
   isProviderRuntimeInputs,
   PROVIDER_RUNTIME_INPUTS_CONTRACT,
   sameProviderRuntimeInputs,
@@ -89,6 +90,7 @@ import {
 import type { SecretBoundaryCrypto } from "../secret-store/memory.ts";
 import type { SecretPartition } from "../secret-store/types.ts";
 import { resolveCanonicalCapsuleRunCredentialContext } from "../../domains/deploy-control/run_credential_context.ts";
+import { connectionCredentialIssuanceAttemptRef } from "../../domains/deploy-control/credential_issuance_attempt.ts";
 
 const CREDENTIAL_BUNDLE_MARKER = "[credential-bundle]";
 const CREDENTIAL_VERIFICATION_KIND =
@@ -244,6 +246,8 @@ export interface CapsuleProviderBindingMintOptions {
   readonly phase?: MintPhase;
   readonly capsuleId?: string;
   readonly runId?: string;
+  /** Opaque winning-lease mint generation; never the raw lease token. */
+  readonly issuanceGenerationRef?: `sha256:${string}`;
 }
 
 export interface ConnectionVault {
@@ -547,6 +551,28 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
     }
     const runtimeInputs = resolvedRuntimeInputs(recipeMode.runtimeInputs);
+    if (
+      (requestedRecipe as { readonly renewableEnv?: unknown }).renewableEnv !==
+      undefined
+    ) {
+      throw new ConnectionVaultError(
+        "invalid_argument",
+        "credentialRecipe.renewableEnv is resolved only from the installed recipe",
+      );
+    }
+    const renewableEnv = recipeMode.renewableEnv;
+    if (
+      renewableEnv !== undefined &&
+      (!runIssuance ||
+        !isCredentialRecipeRenewableEnv(renewableEnv) ||
+        !(recipeDefinition.envNames ?? []).includes(renewableEnv.sourceEnvName) ||
+        (recipeDefinition.envNames ?? []).includes(renewableEnv.fileEnvName))
+    ) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        "installed Credential Recipe has an invalid renewableEnv descriptor",
+      );
+    }
     const connectionScope =
       input.scope ?? (workspaceId ? "workspace" : "operator");
     if (requestedRecipe.runIssuance !== undefined) {
@@ -681,6 +707,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       ...(recipeDefinition.declaredEnv === true ? { declaredEnv: true } : {}),
       ...(recipeMode.preRun ? { preRunAction: recipeMode.preRun.type } : {}),
       ...(runIssuance ? { runIssuance } : {}),
+      ...(renewableEnv ? { renewableEnv } : {}),
       ...(runtimeInputs ? { runtimeInputs } : {}),
     };
 
@@ -1313,6 +1340,12 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         connection,
         run,
         runCredentialSettings,
+        run && options?.issuanceGenerationRef
+          ? await connectionCredentialIssuanceAttemptRef(
+              options.issuanceGenerationRef,
+              connection.id,
+            )
+          : undefined,
       );
       evidence.push(minted.evidence);
       mergeCredentialEnv(env, minted.values, entry);
@@ -1719,14 +1752,29 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   #assertPinnedRuntimeInputsStillInstalled(connection: ProviderConnection): void {
     const recipe = connection.credentialRecipe;
     const pinned = recipe?.runtimeInputs;
-    if (!recipe || pinned === undefined) return;
-    const installed = this.#credentialRecipeResolver(recipe.id)?.authModes[
+    if (!recipe) return;
+    const installedMode = this.#credentialRecipeResolver(recipe.id)?.authModes[
       recipe.authMode
-    ]?.runtimeInputs;
-    if (!sameProviderRuntimeInputs(pinned, installed)) {
+    ];
+    if (pinned && !sameProviderRuntimeInputs(pinned, installedMode?.runtimeInputs)) {
       throw new ConnectionVaultError(
         "failed_precondition",
         `connection ${connection.id} pins a run-scoped sensitive input protocol the installed Credential Recipe no longer declares; re-register the Provider Connection`,
+        undefined,
+        "provider_connection_setup_required",
+      );
+    }
+    const pinnedRenewable = recipe.renewableEnv;
+    const installedRenewable = installedMode?.renewableEnv;
+    if (
+      pinnedRenewable?.sourceEnvName !== installedRenewable?.sourceEnvName ||
+      pinnedRenewable?.fileEnvName !== installedRenewable?.fileEnvName ||
+      pinnedRenewable?.minimumProviderVersion !==
+        installedRenewable?.minimumProviderVersion
+    ) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `connection ${connection.id} pins a renewable credential protocol the installed Credential Recipe no longer declares; re-register the Provider Connection`,
         undefined,
         "provider_connection_setup_required",
       );
@@ -1737,6 +1785,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     connection: ProviderConnection,
     run?: CredentialRecipeDriverRunContext,
     runCredentialSettings?: CapsuleProviderBindingMintEntry["runCredentialSettings"],
+    issuanceAttemptRef?: `sha256:${string}`,
   ): Promise<MintedProviderValues> {
     if (connectionIsExpired(connection, this.#now())) {
       await this.#markConnectionExpired(connection);
@@ -1776,6 +1825,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       const issuedSecretValues: string[] = [];
       const baseContext = {
         connection,
+        ...(issuanceAttemptRef ? { issuanceAttemptRef } : {}),
         ...(runCredentialSettings ? { runCredentialSettings } : {}),
         values: material.env,
         files: material.files,
@@ -1843,6 +1893,18 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     }
     return async (request) => {
       const exactRequest = exactRunCredentialIssueRequest(request);
+      if (
+        connection.credentialRecipe?.renewableEnv &&
+        exactRequest.ttlSeconds !== undefined &&
+        exactRequest.ttlSeconds <= 120
+      ) {
+        throw new ConnectionVaultError(
+          "failed_precondition",
+          `renewable Run credential ${connection.id} requires more than 120 seconds of requested lifetime`,
+          undefined,
+          "credential_service_unavailable",
+        );
+      }
       const currentConnection = await this.#connectionById(connection.id);
       const canonicalBoundProvider = canonicalProviderSource(
         connection.provider,
@@ -1867,7 +1929,13 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         !sameCapsuleRunCredentialIssuance(
           currentConnection.credentialRecipe?.runIssuance,
           issuance,
-        )
+        ) ||
+        currentConnection.credentialRecipe?.renewableEnv?.sourceEnvName !==
+          connection.credentialRecipe?.renewableEnv?.sourceEnvName ||
+        currentConnection.credentialRecipe?.renewableEnv?.fileEnvName !==
+          connection.credentialRecipe?.renewableEnv?.fileEnvName ||
+        currentConnection.credentialRecipe?.renewableEnv?.minimumProviderVersion !==
+          connection.credentialRecipe?.renewableEnv?.minimumProviderVersion
       ) {
         throw new ConnectionVaultError(
           "failed_precondition",
@@ -1911,6 +1979,17 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         }),
       });
       const exact = exactIssuedRunCredential(issued, this.#now());
+      if (
+        currentConnection.credentialRecipe?.renewableEnv &&
+        Date.parse(exact.expiresAt) - this.#now().getTime() < 120_000
+      ) {
+        throw new ConnectionVaultError(
+          "failed_precondition",
+          `renewable Run credential ${connection.id} has insufficient issued lifetime`,
+          undefined,
+          "credential_service_unavailable",
+        );
+      }
       onIssued(exact.token);
       return exact;
     };

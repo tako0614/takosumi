@@ -155,6 +155,7 @@ export type {
   RunCostInfo,
   RunCostResponse,
   RunDiagnostic,
+  RunCredentialMintEvidence,
   RunEventsResponse,
   RunGroup,
   RunGroupResponse,

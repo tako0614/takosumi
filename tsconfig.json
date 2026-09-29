@@ -100,6 +100,7 @@
     "accounts/contract",
     "accounts/service",
     "cli",
+    "runner",
     "deploy/accounts-cloudflare",
     "deploy/node-postgres",
     "shims"

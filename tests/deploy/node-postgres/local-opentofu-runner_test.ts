@@ -969,6 +969,82 @@ test("local reviewed Plan refuses a foreign lock ref before provider dispatch", 
   }
 });
 
+test("local reviewed Plan refuses a foreign lock ref before provider dispatch", async () => {
+  const planBytes = new TextEncoder().encode("reviewed plan");
+  const planDigest = await sha256(planBytes);
+  const lockDigest = await sha256(new TextEncoder().encode("# lock\n"));
+  const requests: string[] = [];
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      requests.push(`${request.method} ${path}`);
+      if (request.method === "GET" && path === "/runs/plan_owned/artifacts/tfplan") {
+        return new Response(planBytes);
+      }
+      if (request.method === "PUT" && path === "/runs/apply_foreign/artifacts/tfplan") {
+        return Response.json({ ok: true });
+      }
+      return Response.json({ error: "must not dispatch" }, { status: 500 });
+    },
+  });
+  try {
+    const runner = createHttpOpenTofuRunner({
+      stateStore: {
+        read: async () => undefined,
+        commit: async <T>(artifact: T): Promise<T> => artifact,
+        readRawOutput: async () => undefined,
+        commitRawOutput: async <T>(artifact: T): Promise<T> => artifact,
+        readProviderLockfile: async () => {
+          throw new Error("foreign ref must be rejected before store access");
+        },
+      },
+      archiveStore: {
+        write: async () => {},
+        read: async () => {
+          throw new Error("not used");
+        },
+      },
+      baseUrl: server.url.href,
+    });
+    await expect(
+      runner.apply({
+        applyRun: { id: "apply_foreign" },
+        planRun: {
+          id: "plan_owned",
+          planDigest,
+          providerLockDigest: lockDigest,
+          providerLockArtifact: {
+            kind: "local",
+            ref: "local-opentofu://runs/other-plan/provider-lockfile",
+            digest: lockDigest,
+            sizeBytes: 7,
+          },
+        },
+        planArtifact: {
+          kind: "runner-local",
+          ref: "runner-local://plan_owned/tfplan",
+          digest: planDigest,
+        },
+        runnerProfile: { id: "opentofu-default", executorId: "opentofu.default" },
+        stateScope: {
+          workspaceId: "workspace_foreign",
+          subject: { kind: "resource", id: "resource_foreign" },
+          environment: "production",
+          generation: 1,
+          stateRef: "state://foreign",
+        },
+      } as Parameters<typeof runner.apply>[0]),
+    ).rejects.toThrow("local reviewed Plan provider lock authority is invalid");
+    expect(requests).toEqual([
+      "GET /runs/plan_owned/artifacts/tfplan",
+      "PUT /runs/apply_foreign/artifacts/tfplan",
+    ]);
+  } finally {
+    server.stop(true);
+  }
+});
+
 test("HTTP OpenTofu runner durably returns failed apply state without replaying provider execution", async () => {
   const planBytes = new TextEncoder().encode("reviewed plan");
   const planDigest = await sha256(planBytes);

@@ -42,8 +42,9 @@ export class PortableGateFailure extends Error {
 
 /**
  * Keep the complete Takosumi owner gate serial. Each phase corresponds to one
- * command from the package's original `check` script, so nested package
- * scripts retain their own fail-fast behavior and no capability is skipped.
+ * command from the package's original `check` script. Both TypeScript sweeps
+ * precede tests and browser builds so type errors fail quickly; nested scripts
+ * retain their own fail-fast behavior and no capability is skipped.
  */
 export const PORTABLE_GATE_PHASES: readonly PortableGatePhase[] = [
   // First, because a gate that cannot exercise a capability must refuse rather
@@ -89,12 +90,12 @@ export const PORTABLE_GATE_PHASES: readonly PortableGatePhase[] = [
     "run",
     "check:generalization-boundaries",
   ]),
-  phase("tests", ["bun", "run", "test"]),
   phase("typescript", ["tsc", "--noEmit"]),
+  phase("worker-types", ["bun", "run", "check:worker-types"]),
+  phase("tests", ["bun", "run", "test"]),
   phase("dashboard", ["bun", "run", "check:dashboard"]),
   phase("dashboard-browser", ["bun", "run", "check:dashboard-browser"]),
   phase("docs-browser", ["bun", "run", "docs:test:browser"]),
-  phase("worker-types", ["bun", "run", "check:worker-types"]),
   phase("cloudflare-worker-build", [
     "bun",
     "run",
