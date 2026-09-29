@@ -54,9 +54,11 @@ interface AsyncMutationJob {
   readonly runId: string;
   readonly applyRunId: string;
   readonly action: "apply" | "destroy" | "release";
+  readonly controller: AbortController;
   status: "running" | "terminal";
   responseStatus?: number;
   responseBody?: string;
+  resultAcknowledged: boolean;
 }
 
 // This is deliberately container-local. A replacement container cannot
@@ -99,10 +101,10 @@ function oversizedAsyncMutationResult(runId: string, action: "apply" | "destroy"
   return Response.json({
     runId,
     action,
-    status: "failed",
+    status: "indeterminate",
     exitCode: 1,
     errorCode: "runner_result_size_limit_exceeded",
-    stderr: "runner result exceeded its in-process response limit",
+    stderr: "runner terminal result could not be retained within the response limit",
   }, { status: 500 });
 }
 
@@ -124,6 +126,7 @@ async function runAsyncMutation(
         method: "POST",
         headers,
         body: JSON.stringify(body),
+        signal: job.controller.signal,
       }),
       dependencies,
     );
@@ -144,9 +147,10 @@ async function runAsyncMutation(
     const failure = Response.json({
       runId: job.runId,
       action: job.action,
-      status: "failed",
+      status: "indeterminate",
       exitCode: 1,
-      stderr: "runner mutation failed",
+      errorCode: "runner_result_indeterminate",
+      stderr: "runner terminal result could not be retained",
     }, { status: 500 });
     job.responseStatus = failure.status;
     job.responseBody = await failure.text();
@@ -172,6 +176,94 @@ export async function handleRunnerRequestWithDependencies(
       });
     }
     const resultMatch = /^\/runs\/([^/]+)\/result$/.exec(url.pathname);
+    const resultAckMatch = /^\/runs\/([^/]+)\/result\/ack$/.exec(url.pathname);
+    const stopMatch = /^\/runs\/([^/]+)\/stop$/.exec(url.pathname);
+    if (stopMatch) {
+      if (request.method !== "POST") {
+        return Response.json({ error: "method not allowed" }, {
+          status: 405,
+          headers: { allow: "POST" },
+        });
+      }
+      const runId = decodeURIComponent(stopMatch[1]!);
+      const job = asyncMutationJobs.get(runId);
+      if (!job) {
+        return Response.json({
+          kind: "takosumi.runner-mutation-stop-unavailable@v1",
+          reason: "run_not_found",
+        }, { status: 404 });
+      }
+      let body: Record<string, unknown>;
+      try {
+        body = await readBoundedJsonObject(request, 4 * 1024);
+      } catch {
+        return Response.json({ error: "invalid stop request" }, { status: 400 });
+      }
+      const expectedKeys = ["action", "applyRunId", "kind", "runId"];
+      const actualKeys = Object.keys(body).sort();
+      if (
+        actualKeys.length !== expectedKeys.length ||
+        actualKeys.some((key, index) => key !== expectedKeys[index]) ||
+        body.kind !== "takosumi.runner-mutation-stop@v1" ||
+        body.runId !== runId ||
+        body.applyRunId !== job.applyRunId ||
+        body.action !== job.action
+      ) {
+        return Response.json({
+          kind: "takosumi.runner-mutation-stop-unavailable@v1",
+          reason: "identity_mismatch",
+        }, { status: 409 });
+      }
+      if (job.controller.signal.aborted) return Response.json({ ok: true });
+      if (job.status !== "running") {
+        return Response.json({
+          kind: "takosumi.runner-mutation-stop-unavailable@v1",
+          reason: "not_running",
+        }, { status: 409 });
+      }
+      job.controller.abort();
+      return job.controller.signal.aborted
+        ? Response.json({ ok: true })
+        : Response.json({
+            kind: "takosumi.runner-mutation-stop-unavailable@v1",
+            reason: "abort_not_requested",
+          }, { status: 409 });
+    }
+    if (resultAckMatch) {
+      if (request.method !== "POST") {
+        return Response.json({ error: "method not allowed" }, {
+          status: 405,
+          headers: { allow: "POST" },
+        });
+      }
+      const runId = decodeURIComponent(resultAckMatch[1]!);
+      const job = asyncMutationJobs.get(runId);
+      if (!job) return Response.json({ error: "run result not found" }, { status: 404 });
+      let body: Record<string, unknown>;
+      try {
+        body = await readBoundedJsonObject(request, 4 * 1024);
+      } catch {
+        return Response.json({ error: "invalid result acknowledgement" }, { status: 400 });
+      }
+      const expectedKeys = ["action", "applyRunId", "kind", "runId"];
+      const actualKeys = Object.keys(body).sort();
+      if (
+        actualKeys.length !== expectedKeys.length ||
+        actualKeys.some((key, index) => key !== expectedKeys[index]) ||
+        body.kind !== "takosumi.runner-mutation-result-ack@v1" ||
+        body.runId !== runId ||
+        body.applyRunId !== job.applyRunId ||
+        body.action !== job.action
+      ) {
+        return Response.json({ error: "result acknowledgement identity mismatch" }, { status: 409 });
+      }
+      if (job.status !== "terminal") {
+        return Response.json({ error: "run result is not terminal" }, { status: 409 });
+      }
+      job.responseBody = undefined;
+      job.resultAcknowledged = true;
+      return Response.json({ ok: true });
+    }
     if (resultMatch) {
       if (request.method !== "GET") {
         return Response.json({ error: "method not allowed" }, {
@@ -184,6 +276,9 @@ export async function handleRunnerRequestWithDependencies(
       if (!job) return Response.json({ error: "run result not found" }, { status: 404 });
       if (job.status === "running") {
         return Response.json(asyncMutationPayload(job, "running"), { status: 202 });
+      }
+      if (job.resultAcknowledged || job.responseBody === undefined) {
+        return Response.json({ error: "run result already acknowledged" }, { status: 410 });
       }
       return new Response(job.responseBody ?? "{}", {
         status: job.responseStatus ?? 500,
@@ -381,7 +476,9 @@ export async function handleRunnerRequestWithDependencies(
         runId,
         applyRunId,
         action,
+        controller: new AbortController(),
         status: "running",
+        resultAcknowledged: false,
       };
       // Reserve synchronously before yielding so concurrent duplicate POSTs
       // cannot start a second provider process.
