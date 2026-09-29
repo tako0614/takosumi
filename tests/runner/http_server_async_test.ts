@@ -23,6 +23,44 @@ function asyncMutationRequest(runId: string, action = "apply") {
   });
 }
 
+function resultAckRequest(
+  runId: string,
+  applyRunId: string,
+  action: string,
+  overrides: Record<string, unknown> = {},
+) {
+  return new Request(`http://runner/runs/${encodeURIComponent(runId)}/result/ack`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      kind: "takosumi.runner-mutation-result-ack@v1",
+      runId,
+      applyRunId,
+      action,
+      ...overrides,
+    }),
+  });
+}
+
+function mutationStopRequest(
+  runId: string,
+  applyRunId: string,
+  action: string,
+  overrides: Record<string, unknown> = {},
+) {
+  return new Request(`http://runner/runs/${encodeURIComponent(runId)}/stop`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      kind: "takosumi.runner-mutation-stop@v1",
+      runId,
+      applyRunId,
+      action,
+      ...overrides,
+    }),
+  });
+}
+
 test("async mutation accepts once, exposes only bounded terminal result, and rejects replay", async () => {
   const runId = `async-mutation-${crypto.randomUUID()}`;
   const accepted = await handleRunnerRequest(asyncMutationRequest(runId));
@@ -68,6 +106,67 @@ test("async mutation accepts once, exposes only bounded terminal result, and rej
     exitCode: 1,
   });
   expect(JSON.stringify(terminal)).not.toContain("must-not-be-returned-or-logged");
+  const stopAfterTerminal = await handleRunnerRequest(mutationStopRequest(
+    runId,
+    `apply-${runId}`,
+    "apply",
+  ));
+  expect(stopAfterTerminal.status).toBe(409);
+  expect(await stopAfterTerminal.json()).toEqual({
+    kind: "takosumi.runner-mutation-stop-unavailable@v1",
+    reason: "not_running",
+  });
+
+  // Reads are observations only: the terminal bytes remain available until
+  // the DO acknowledges its exact durable receipt.
+  const observedAgain = await handleRunnerRequest(new Request(
+    `http://runner/runs/${encodeURIComponent(runId)}/result`,
+  ));
+  expect(observedAgain.status).toBe(500);
+  expect(await observedAgain.json()).toEqual(terminal);
+
+  const wrongRun = await handleRunnerRequest(resultAckRequest(
+    runId,
+    `apply-${runId}`,
+    "apply",
+    { runId: `other-${runId}` },
+  ));
+  const wrongApply = await handleRunnerRequest(resultAckRequest(
+    runId,
+    `other-apply-${runId}`,
+    "apply",
+  ));
+  const wrongAction = await handleRunnerRequest(resultAckRequest(
+    runId,
+    `apply-${runId}`,
+    "destroy",
+  ));
+  expect([wrongRun.status, wrongApply.status, wrongAction.status]).toEqual([409, 409, 409]);
+  const stillAvailable = await handleRunnerRequest(new Request(
+    `http://runner/runs/${encodeURIComponent(runId)}/result`,
+  ));
+  expect(await stillAvailable.json()).toEqual(terminal);
+
+  const acknowledgement = await handleRunnerRequest(resultAckRequest(
+    runId,
+    `apply-${runId}`,
+    "apply",
+  ));
+  expect(acknowledgement.status).toBe(200);
+  expect(await acknowledgement.json()).toEqual({ ok: true });
+  const lostAcknowledgementRetry = await handleRunnerRequest(resultAckRequest(
+    runId,
+    `apply-${runId}`,
+    "apply",
+  ));
+  expect(lostAcknowledgementRetry.status).toBe(200);
+  expect(await lostAcknowledgementRetry.json()).toEqual({ ok: true });
+  const cleared = await handleRunnerRequest(new Request(
+    `http://runner/runs/${encodeURIComponent(runId)}/result`,
+  ));
+  expect(cleared.status).toBe(410);
+  const replay = await handleRunnerRequest(asyncMutationRequest(runId));
+  expect(replay.status).toBe(409);
 });
 
 test("accepted async Apply outlives its submit request signal and keeps sync terminal shape", async () => {
@@ -147,6 +246,16 @@ esac
       action: "apply",
       status: "running",
     });
+    const prematureAck = await handleRunnerRequest(resultAckRequest(
+      runId,
+      applyRunId,
+      "apply",
+    ));
+    expect(prematureAck.status).toBe(409);
+    const stillRunning = await handleRunnerRequest(new Request(
+      `http://runner/runs/${encodeURIComponent(runId)}/result`,
+    ));
+    expect(stillRunning.status).toBe(202);
 
     let terminal: Response | undefined;
     for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -261,6 +370,20 @@ test("accepted async release outlives abort, rejects replay, and becomes unknown
       commandCount: 1,
     });
     expect(await Bun.file(marker).text()).toBe("finished");
+    const releaseAck = await handleRunnerRequest(resultAckRequest(
+      runId,
+      applyRunId,
+      "release",
+    ));
+    expect(releaseAck.status).toBe(200);
+    expect(await releaseAck.json()).toEqual({ ok: true });
+    const releaseAckRetry = await handleRunnerRequest(resultAckRequest(
+      runId,
+      applyRunId,
+      "release",
+    ));
+    expect(releaseAckRetry.status).toBe(200);
+    expect(await releaseAckRetry.json()).toEqual({ ok: true });
 
     const moduleUrl = new URL("../../runner/lib/http_server.ts", import.meta.url).href;
     const script = [
@@ -288,6 +411,104 @@ test("accepted async release outlives abort, rejects replay, and becomes unknown
   }
 });
 
+test("stop requests abort only the exact live mutation slot and never clear its result", async () => {
+  const runId = `async-stop-release-${crypto.randomUUID()}`;
+  const applyRunId = `apply-${runId}`;
+  const workspace = workspaceForRun(runId);
+  const marker = join(workspace.sourceRoot, "release-should-not-finish.txt");
+  try {
+    await mkdir(workspace.sourceRoot, { recursive: true });
+    const accepted = await handleRunnerRequest(new Request(
+      `http://runner/runs/${encodeURIComponent(runId)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", prefer: "respond-async" },
+        body: JSON.stringify({
+          action: "release",
+          runId,
+          request: {
+            release: {
+              commands: [{
+                id: "long-release",
+                command: [
+                  globalThis.process.execPath,
+                  "-e",
+                  `await Bun.sleep(1500); await Bun.write(${JSON.stringify(marker)}, "unexpected")`,
+                ],
+              }],
+            },
+            activation: {
+              applyRunId,
+              sourceSnapshotId: `snapshot-${runId}`,
+              sourceCommit: "3".repeat(40),
+            },
+          },
+        }),
+      },
+    ));
+    expect(accepted.status).toBe(202);
+
+    const wrongIdentity = await handleRunnerRequest(mutationStopRequest(
+      runId,
+      `other-${applyRunId}`,
+      "release",
+    ));
+    expect(wrongIdentity.status).toBe(409);
+    expect(await wrongIdentity.json()).toEqual({
+      kind: "takosumi.runner-mutation-stop-unavailable@v1",
+      reason: "identity_mismatch",
+    });
+    const wrongAction = await handleRunnerRequest(mutationStopRequest(
+      runId,
+      applyRunId,
+      "apply",
+    ));
+    expect(wrongAction.status).toBe(409);
+    const stillRunning = await handleRunnerRequest(new Request(
+      `http://runner/runs/${encodeURIComponent(runId)}/result`,
+    ));
+    expect(stillRunning.status).toBe(202);
+
+    const stopped = await handleRunnerRequest(mutationStopRequest(
+      runId,
+      applyRunId,
+      "release",
+    ));
+    expect(stopped.status).toBe(200);
+    expect(await stopped.json()).toEqual({ ok: true });
+
+    let terminal: Response | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const response = await handleRunnerRequest(new Request(
+        `http://runner/runs/${encodeURIComponent(runId)}/result`,
+      ));
+      if (response.status !== 202) {
+        terminal = response;
+        break;
+      }
+      await Bun.sleep(5);
+    }
+    expect(terminal?.status).toBe(500);
+    expect((await terminal!.json()).status).toBe("failed");
+    expect(await Bun.file(marker).exists()).toBe(false);
+
+    const stopRetry = await handleRunnerRequest(mutationStopRequest(
+      runId,
+      applyRunId,
+      "release",
+    ));
+    expect(stopRetry.status).toBe(200);
+    expect(await stopRetry.json()).toEqual({ ok: true });
+    const stillRetained = await handleRunnerRequest(new Request(
+      `http://runner/runs/${encodeURIComponent(runId)}/result`,
+    ));
+    expect(stillRetained.status).toBe(500);
+  } finally {
+    await rm(workspace.root, { recursive: true, force: true });
+    await rm(workspace.depsDir, { recursive: true, force: true });
+  }
+});
+
 test("async mutation result for an unaccepted run is unknown", async () => {
   const runId = `async-mutation-unknown-${crypto.randomUUID()}`;
   const response = await handleRunnerRequest(new Request(
@@ -296,6 +517,22 @@ test("async mutation result for an unaccepted run is unknown", async () => {
 
   expect(response.status).toBe(404);
   expect(await response.json()).toEqual({ error: "run result not found" });
+  const ack = await handleRunnerRequest(resultAckRequest(
+    runId,
+    `apply-${runId}`,
+    "apply",
+  ));
+  expect(ack.status).toBe(404);
+  const stop = await handleRunnerRequest(mutationStopRequest(
+    runId,
+    `apply-${runId}`,
+    "apply",
+  ));
+  expect(stop.status).toBe(404);
+  expect(await stop.json()).toEqual({
+    kind: "takosumi.runner-mutation-stop-unavailable@v1",
+    reason: "run_not_found",
+  });
 });
 
 test("a replacement container process reports an accepted predecessor result as unknown", async () => {
