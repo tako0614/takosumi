@@ -25,6 +25,7 @@ import {
   handlePlanJsonArtifactRequest,
   handlePlanArtifactRequest,
   handleProviderLockfileArtifactRequest,
+  handleProviderLockfileRestoreRequest,
   handleStateArtifactRequest,
 } from "./artifacts.ts";
 import { runBackup, runRelease } from "./backup.ts";
@@ -35,6 +36,7 @@ import {
 } from "./plan_apply.ts";
 import { classifyOpenTofuFailure } from "./exec.ts";
 import type { RuntimeSecretFileSystem } from "./runtime_secrets.ts";
+import { PROVIDER_LOCK_RESTORE_DIGEST_HEADER } from "./transport.ts";
 
 interface RunnerRequestDependencies {
   readonly runtimeSecretFileSystem?: Partial<RuntimeSecretFileSystem>;
@@ -61,6 +63,8 @@ export async function handleRunnerRequestWithDependencies(
       /^\/runs\/([^/]+)\/artifacts\/tfplan-json$/.exec(url.pathname);
     const providerLockfileArtifactMatch =
       /^\/runs\/([^/]+)\/artifacts\/tf-lockfile$/.exec(url.pathname);
+    const providerLockfileRestoreMatch =
+      /^\/runs\/([^/]+)\/provider-lockfile\/restore$/.exec(url.pathname);
     const stateArtifactMatch = /^\/runs\/([^/]+)\/artifacts\/tfstate$/.exec(
       url.pathname,
     );
@@ -98,6 +102,12 @@ export async function handleRunnerRequestWithDependencies(
     if (providerLockfileArtifactMatch) {
       return await handleProviderLockfileArtifactRequest(
         decodeURIComponent(providerLockfileArtifactMatch[1]!),
+        request,
+      );
+    }
+    if (providerLockfileRestoreMatch) {
+      return await handleProviderLockfileRestoreRequest(
+        decodeURIComponent(providerLockfileRestoreMatch[1]!),
         request,
       );
     }
@@ -212,6 +222,8 @@ export async function handleRunnerRequestWithDependencies(
                     action,
                     body.request,
                     request.signal,
+                    request.headers.get(PROVIDER_LOCK_RESTORE_DIGEST_HEADER) ??
+                      undefined,
                   );
       return Response.json(result, {
         status: result.exitCode === 0 ? 200 : 500,

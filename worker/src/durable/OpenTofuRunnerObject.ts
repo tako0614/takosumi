@@ -1596,6 +1596,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       }
       if (envelope.action === "apply" || envelope.action === "destroy") {
         await this.#restorePlanArtifact(runId, envelope.request, url);
+        await this.#verifyReviewedProviderLockfileWithoutRestore(
+          runId,
+          envelope.request,
+        );
       }
       if (stateScope) {
         await this.#restoreStateFromR2State(
@@ -3471,6 +3475,78 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         `container plan artifact restore failed: ${response.status}`,
       );
     }
+  }
+
+  // Compatibility image release: preserve the reviewed artifact authority
+  // check before dispatch, but do not PUT to the old runner's missing route.
+  // The image independently fences the post-init digest before provider work.
+  async #verifyReviewedProviderLockfileWithoutRestore(
+    runId: string,
+    requestPayload: unknown,
+  ): Promise<void> {
+    const planRun = recordField(requestPayload, "planRun");
+    if (!planRun) return;
+    const rawArtifact = planRun.providerLockArtifact;
+    if (rawArtifact === undefined || rawArtifact === null) {
+      if (rawArtifact === null && stringField(planRun, "providerLockDigest")) {
+        throw new Error("provider-free Plan has an unexpected lock digest");
+      }
+      return;
+    }
+    const artifact = recordField(planRun, "providerLockArtifact");
+    const planArtifact = recordField(requestPayload, "planArtifact");
+    if (
+      !artifact ||
+      stringField(planRun, "id") !== runId ||
+      !planArtifact ||
+      stringField(artifact, "kind") !== "object-storage"
+    ) {
+      throw new Error("reviewed Plan provider lock authority is invalid");
+    }
+    const expectedDigest = requiredSha256DigestField(
+      planRun,
+      "providerLockDigest",
+    );
+    if (requiredSha256DigestField(artifact, "digest") !== expectedDigest) {
+      throw new Error("reviewed Plan provider lock digest mismatch");
+    }
+    const expectedSize = nonNegativeIntegerField(artifact, "sizeBytes");
+    assertArtifactSize(
+      "provider_lockfile",
+      this.#artifactLimits.providerLockfile,
+      expectedSize,
+    );
+    if (
+      stringField(artifact, "contentType") !== undefined &&
+      stringField(artifact, "contentType") !== PROVIDER_LOCKFILE_CONTENT_TYPE
+    ) {
+      throw new Error("reviewed Plan provider lock content type is invalid");
+    }
+    const bucket = this.#planArtifactBucket();
+    const planKey = planArtifactKeyFromRef(
+      requiredStringField(planArtifact, "ref"),
+      bucket,
+    );
+    const ownLegacyPlanKey = planArtifactKey(runId);
+    const ownScopedPlanSuffix = `/runs/${safeKeySegment(runId)}/plan.bin`;
+    if (
+      planKey !== ownLegacyPlanKey &&
+      !planKey.endsWith(ownScopedPlanSuffix)
+    ) {
+      throw new Error("reviewed Plan artifact does not belong to this run");
+    }
+    const expectedKey = `${planKey.slice(0, planKey.lastIndexOf("/"))}/provider-lockfile.hcl`;
+    if (requiredStringField(artifact, "ref") !== planArtifactRef(bucket, expectedKey)) {
+      throw new Error(
+        "reviewed Plan provider lock ref does not match Plan artifact",
+      );
+    }
+    await this.#readProviderLockfilePlaintext(
+      expectedKey,
+      runId,
+      expectedDigest,
+      expectedSize,
+    );
   }
 
   async #readPlanArtifactPlaintext(
