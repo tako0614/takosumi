@@ -19,6 +19,7 @@ import {
 import { t } from "../../i18n/index.ts";
 import { Badge, Button, Checkbox, Spinner } from "../../components/ui/index.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
+import { runStatusLabel } from "../../lib/labels.ts";
 import {
   stateVersionReadinessAfterApply,
   type StateVersionReadiness,
@@ -268,12 +269,20 @@ export default function InstallExecution(props: Props) {
               <div>
                 <h2 id="iv-review-title">
                   {current().type === "apply"
-                    ? t("installStore.installing")
+                    ? failed()
+                      ? t("installStore.runFailed")
+                      : current().status === "succeeded"
+                        ? t("installStore.checkingReadiness")
+                        : t("installStore.installing")
                     : t("installStore.reviewTitle")}
                 </h2>
                 <p>
                   {current().type === "apply"
-                    ? t("installStore.installingHint")
+                    ? failed()
+                      ? t("installStore.runFailedHint")
+                      : current().status === "succeeded"
+                        ? t("installStore.checkingReadinessHint")
+                        : t("installStore.installingHint")
                     : t("installStore.reviewHint")}
                 </p>
               </div>
@@ -286,7 +295,7 @@ export default function InstallExecution(props: Props) {
                       : "info"
                 }
               >
-                {current().status}
+                {runStatusLabel(current().status)}
               </Badge>
             </div>
 
@@ -397,8 +406,24 @@ export default function InstallExecution(props: Props) {
               <div class="iv-status" role="status" aria-live="polite">
                 <Spinner size={18} />
                 <div>
-                  <strong>{t("installStore.installing")}</strong>
-                  <span>{t("installStore.installingHint")}</span>
+                  <strong>
+                    {current().status === "queued"
+                      ? t("run.summary.queued")
+                      : current().status === "running"
+                        ? t("run.summary.applying")
+                        : readiness.latest === "activation_pending"
+                          ? t("run.summary.activationPending")
+                          : t("run.summary.finishing")}
+                  </strong>
+                  <div class="iv-action-row">
+                    <Button
+                      href={`/runs/${encodeURIComponent(current().id)}`}
+                      variant="ghost"
+                      icon={<ExternalLink size={16} />}
+                    >
+                      {t("installStore.runDetails")}
+                    </Button>
+                  </div>
                 </div>
               </div>
             </Show>
@@ -449,7 +474,6 @@ export default function InstallExecution(props: Props) {
 
             <Show when={failed()}>
               <div class="iv-error" role="alert">
-                <strong>{t("installStore.runFailed")}</strong>
                 <p>{current().errorCode ?? t("installStore.runFailedHint")}</p>
                 <div class="iv-action-row">
                   <Show when={current().type === "plan"}>

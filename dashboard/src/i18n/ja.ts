@@ -105,7 +105,11 @@ export const ja = {
   "installStore.install": "インストール",
   "installStore.runDetails": "技術的な詳細",
   "installStore.installing": "インストールしています",
-  "installStore.installingHint": "この画面を開いたままお待ちください。",
+  "installStore.installingHint":
+    "画面を離れても Apply の Run はサーバー上で続きます。追加ウィザードは自動で再開されないため、「技術的な詳細」から Run を確認してください。",
+  "installStore.checkingReadiness": "サービスの準備状況を確認しています",
+  "installStore.checkingReadinessHint":
+    "Apply Run は成功しました。保存されたサービス状態を確認しています。画面を離れると追加ウィザードは自動で再開されません。",
   "installStore.planBlocked": "このPlanは適用できません",
   "installStore.planBlockedHint":
     "ポリシーまたはPlanの詳細を確認してください。",

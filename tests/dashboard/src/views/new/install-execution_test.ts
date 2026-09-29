@@ -53,6 +53,33 @@ test("waiting approval exposes technical run details before approval", () => {
   expect(waitingApproval).toContain('t("installStore.approve")');
 });
 
+test("in-progress install explains Run durability and links to its details", () => {
+  const applyProgress = source.match(
+    /<Show\s+when=\{\s*current\(\)\.type === "apply"[\s\S]*?\n\s*\}\s*>\s*<div class="iv-status"[\s\S]*?<\/Show>/,
+  )?.[0];
+
+  expect(applyProgress).toBeDefined();
+  expect(applyProgress).toContain('t("run.summary.queued")');
+  expect(applyProgress).toContain('t("run.summary.applying")');
+  expect(applyProgress).toContain('t("run.summary.activationPending")');
+  expect(applyProgress).toContain('t("run.summary.finishing")');
+  expect(applyProgress).toContain(
+    "href={`/runs/${encodeURIComponent(current().id)}`}",
+  );
+  expect(applyProgress).toContain('t("installStore.runDetails")');
+  expect(source).toContain("runStatusLabel(current().status)");
+  expect(source).toContain('t("installStore.checkingReadinessHint")');
+  expect(source).toContain('? t("installStore.runFailed")');
+  expect(source).not.toContain("{current().status}</Badge>");
+
+  const failedRun = source.match(
+    /<Show when=\{failed\(\)\}>([\s\S]*?)<\/Show>/,
+  )?.[1];
+  expect(failedRun).toBeDefined();
+  expect(failedRun).toContain("current().errorCode");
+  expect(failedRun).toContain('t("installStore.runFailedHint")');
+});
+
 test("post-apply readiness fails closed when activity cannot be read", () => {
   expect(source).toContain("listActivity(workspaceId, 100)");
   expect(source).not.toContain("listActivity(workspaceId, 100).catch(() => [])");
