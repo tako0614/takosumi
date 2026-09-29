@@ -347,7 +347,7 @@ describe("single-screen install surface", () => {
     expect(view).not.toContain("moduleFiles");
   });
 
-  test("takes the module a listing reviewed without asking again", () => {
+  test("preselects the module a listing reviewed without narrowing the scan", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     // The reviewed module arrives as an explicit hint, and only the immutable
     // scan can promote it: a stale catalog entry falls back to the scan's own
@@ -358,6 +358,12 @@ describe("single-screen install surface", () => {
     expect(view).toContain("modulePathExplicit() &&");
     expect(view).toContain("modulePathHint() &&");
     expect(view).toContain("setModulePathHint(false);");
+    // A proven hint preselects one scanned directory. It is not the whole
+    // choice: every other root module the repository's OpenTofu files define
+    // stays selectable in the chooser.
+    expect(view).toContain("scannedModuleChoice({");
+    expect(view).toContain("requestedPathIsHint: modulePathHint(),");
+    expect(view).toContain('choice.kind === "adopt"');
   });
 
   test("labels every module candidate with the providers derived from it", () => {

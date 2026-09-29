@@ -15,6 +15,7 @@ import {
   storeUsesRepositoryInstallUx,
   uniqueStoreInstallConfigForSource,
   sourceBuildPreview,
+  scannedModuleChoice,
 } from "../../../../../dashboard/src/views/new/install-helpers.ts";
 import type { TcsListing } from "../../../../../dashboard/src/lib/tcs-client.ts";
 import type { InstallConfig } from "../../../../../dashboard/src/lib/control-api.ts";
@@ -100,6 +101,63 @@ describe("plain environment variable names", () => {
     expect(isSafePlainEnvName("API_KEY")).toBe(true);
     expect(isSafePlainEnvName("lowercase")).toBe(false);
     expect(isSafePlainEnvName("BAD-NAME")).toBe(false);
+  });
+});
+
+describe("scanned module choice", () => {
+  const TWO_ROOTS = [{ path: "." }, { path: "deploy/takoform" }] as const;
+
+  test("adopts the single root a listing or link named", () => {
+    expect(
+      scannedModuleChoice({
+        modules: [{ path: "." }],
+        requestedPath: ".",
+        requestedPathIsHint: true,
+      }),
+    ).toEqual({ kind: "adopt", path: "." });
+  });
+
+  test("keeps every scanned root selectable when a hint is proven among several", () => {
+    // A listing reviews one module of a repository. The scan found two, so the
+    // entry path is the preselected destination and the chooser still offers
+    // the other root the app's OpenTofu files define.
+    expect(
+      scannedModuleChoice({
+        modules: [...TWO_ROOTS],
+        requestedPath: "deploy/takoform",
+        requestedPathIsHint: true,
+      }),
+    ).toEqual({ kind: "choose", path: "deploy/takoform" });
+  });
+
+  test("keeps a typed path authoritative even when the scan finds several roots", () => {
+    expect(
+      scannedModuleChoice({
+        modules: [...TWO_ROOTS],
+        requestedPath: "deploy/takoform",
+        requestedPathIsHint: false,
+      }),
+    ).toEqual({ kind: "adopt", path: "deploy/takoform" });
+  });
+
+  test("fails a path the immutable scan does not expose", () => {
+    expect(
+      scannedModuleChoice({
+        modules: [...TWO_ROOTS],
+        requestedPath: "deploy/moved",
+        requestedPathIsHint: false,
+      }),
+    ).toEqual({ kind: "missing" });
+  });
+
+  test("normalizes the requested directory before matching", () => {
+    expect(
+      scannedModuleChoice({
+        modules: [...TWO_ROOTS],
+        requestedPath: " deploy/takoform ",
+        requestedPathIsHint: false,
+      }),
+    ).toEqual({ kind: "adopt", path: "deploy/takoform" });
   });
 });
 

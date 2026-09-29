@@ -2217,41 +2217,38 @@ test.describe("Takosumi dashboard browser surface", () => {
     expect(prematureConfigReads).toEqual([]);
     await page.getByRole("button", { name: /追加|Add/u }).last().click();
     const moduleChooser = page.getByTestId("install-module-chooser");
-    if (reviewedModule?.exposed) {
-      // The listing named the module it reviewed and the immutable scan exposes
-      // it, so the add flow must not ask again: the compatibility request
-      // already carries that exact directory.
-      await expect(moduleChooser).toHaveCount(0);
-      await expect
-        .poll(() => compatibilityBodies.length)
-        .toBe(1);
-    } else {
-      await expect(moduleChooser).toBeVisible();
-      // No compatibility check may run before the user confirms a module.
-      expect(seenMutations).not.toContain(
-        "POST /api/v1/sources/src_install_e2e/compatibility-check",
-      );
-      const moduleOption = moduleChooser.getByRole("combobox", {
-        name: /モジュールディレクトリ|Module directory/u,
-      });
-      await expect(moduleOption).toHaveValue("");
-      // Each candidate carries the provider set derived from that exact scanned
-      // directory, so the choice names the destination instead of a bare path.
-      await expect(moduleOption.locator("option")).toHaveText([
-        /モジュールディレクトリ|Module directory/u,
-        ". — Cloudflare",
-        "deploy/takoform — AWS, Cloudflare",
-      ]);
-      await moduleOption.selectOption("deploy/takoform");
-      await moduleChooser
-        .getByRole("button", {
-          name: /このモジュールで続ける|Continue with this module/u,
-        })
-        .click();
-      await expect
-        .poll(() => compatibilityBodies.length)
-        .toBe(1);
-    }
+    // This revision's tracked OpenTofu files expose two root modules, so the
+    // chooser is where the destination comes from. A Store listing that
+    // reviewed one of them makes that module the preselected choice; it never
+    // replaces the repository's other roots with a single entry path.
+    await expect(moduleChooser).toBeVisible();
+    // No compatibility check may run before the user confirms a module.
+    expect(seenMutations).not.toContain(
+      "POST /api/v1/sources/src_install_e2e/compatibility-check",
+    );
+    const moduleOption = moduleChooser.getByRole("combobox", {
+      name: /モジュールディレクトリ|Module directory/u,
+    });
+    await expect(moduleOption).toHaveValue(
+      reviewedModule?.exposed ? reviewedModule.path : "",
+    );
+    // Each candidate carries the provider set derived from that exact scanned
+    // directory, so the choice names the destination instead of a bare path:
+    // the Cloudflare root and the takoform root stay selectable either way.
+    await expect(moduleOption.locator("option")).toHaveText([
+      /モジュールディレクトリ|Module directory/u,
+      ". — Cloudflare",
+      "deploy/takoform — AWS, Cloudflare",
+    ]);
+    await moduleOption.selectOption("deploy/takoform");
+    await moduleChooser
+      .getByRole("button", {
+        name: /このモジュールで続ける|Continue with this module/u,
+      })
+      .click();
+    await expect
+      .poll(() => compatibilityBodies.length)
+      .toBe(1);
     await expect
       .poll(() => installModuleRequests.length)
       .toBe(1);
@@ -2329,8 +2326,9 @@ test.describe("Takosumi dashboard browser surface", () => {
   storeSetupRetryTest("none");
   storeSetupRetryTest("unchanged");
   storeSetupRetryTest("edited");
-  // Store handoff: the reviewed module is used as-is when the snapshot exposes
-  // it, and the scan's own choice is offered when a stale entry does not.
+  // Store handoff: a reviewed module the snapshot proves is preselected, a
+  // stale entry falls back to the scan's own choice, and in both cases every
+  // root module of the scanned revision stays selectable.
   storeSetupRetryTest("none", { path: "deploy/takoform", exposed: true });
   storeSetupRetryTest("none", { path: "deploy/moved", exposed: false });
 
