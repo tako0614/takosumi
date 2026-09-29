@@ -2,6 +2,8 @@ import { expect, mock, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+import { en } from "../../../../../dashboard/src/i18n/en.ts";
+import { ja } from "../../../../../dashboard/src/i18n/ja.ts";
 import { installRunNeedsFallbackRead } from "../../../../../dashboard/src/views/new/install-run-polling.ts";
 
 const source = readFileSync(
@@ -72,12 +74,26 @@ test("in-progress install explains Run durability and links to its details", () 
   expect(source).toContain('? t("installStore.runFailed")');
   expect(source).not.toContain("{current().status}</Badge>");
 
-  const failedRun = source.match(
-    /<Show when=\{failed\(\)\}>([\s\S]*?)<\/Show>/,
-  )?.[1];
-  expect(failedRun).toBeDefined();
-  expect(failedRun).toContain("current().errorCode");
-  expect(failedRun).toContain('t("installStore.runFailedHint")');
+  expect(source).toContain(
+    "current().errorCode ?? t(\"installStore.runFailedHint\")",
+  );
+  expect(source).toContain('<Show when={current().type === "plan"}>');
+  expect(source).toContain('<strong>{t("installStore.runFailed")}</strong>');
+});
+
+test("install progress copy is user-facing and honest about resume behavior", () => {
+  expect(en["installStore.installingHint"]).toBe(
+    "Leaving this page won't stop the install. Use Technical details to check progress. This page won't reopen the install automatically.",
+  );
+  expect(ja["installStore.installingHint"]).toBe(
+    "画面を離れてもインストールは続きます。進捗は「技術的な詳細」から確認できます。この追加画面は自動では復元されません。",
+  );
+  expect(en["installStore.checkingReadinessHint"]).toBe(
+    "Deployment is complete. Checking the service state. This page won't reopen the install automatically if you leave.",
+  );
+  expect(ja["installStore.checkingReadinessHint"]).toBe(
+    "デプロイは完了しました。サービスの状態を確認しています。画面を離れると、この追加画面は自動では復元されません。",
+  );
 });
 
 test("post-apply readiness fails closed when activity cannot be read", () => {

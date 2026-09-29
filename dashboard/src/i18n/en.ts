@@ -100,10 +100,10 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.runDetails": "Technical details",
   "installStore.installing": "Installing",
   "installStore.installingHint":
-    "The Apply Run continues on the server if you leave. The install wizard will not resume automatically; use Technical details to follow the Run.",
+    "Leaving this page won't stop the install. Use Technical details to check progress. This page won't reopen the install automatically.",
   "installStore.checkingReadiness": "Checking service readiness",
   "installStore.checkingReadinessHint":
-    "The Apply Run succeeded. Takosumi is checking the saved service state; the install wizard will not resume automatically if you leave.",
+    "Deployment is complete. Checking the service state. This page won't reopen the install automatically if you leave.",
   "installStore.planBlocked": "This Plan cannot be applied",
   "installStore.planBlockedHint": "Review the policy or Plan details.",
   "installStore.readinessFailed":

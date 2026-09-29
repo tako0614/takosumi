@@ -474,6 +474,9 @@ export default function InstallExecution(props: Props) {
 
             <Show when={failed()}>
               <div class="iv-error" role="alert">
+                <Show when={current().type === "plan"}>
+                  <strong>{t("installStore.runFailed")}</strong>
+                </Show>
                 <p>{current().errorCode ?? t("installStore.runFailedHint")}</p>
                 <div class="iv-action-row">
                   <Show when={current().type === "plan"}>
