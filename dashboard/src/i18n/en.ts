@@ -18,7 +18,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Confirm the name and add. Repository analysis happens next.",
   "installStore.moduleTitle": "Choose a module",
   "installStore.moduleHint":
-    "Choose one module directory found by scanning this fixed repository revision. The trailing labels are the providers that module needs.",
+    "Choose a module found by scanning this repository revision. The trailing labels are the providers it needs.",
   "installStore.moduleOption": "{path} — {providers}",
   "installStore.moduleNoProviders": "No providers",
   "installStore.moduleChoose": "Module directory",
