@@ -36,6 +36,38 @@ const RUN_OWNER_CONTROLLER_POLL_MAX_DELAY_MS = 60_000;
 const RUN_OWNER_CONTROLLER_POLL_DEADLINE_MS = 15 * 60 * 1000;
 
 /**
+ * How long a run's heartbeat has to be silent before the controller will take
+ * the run over from the invocation that was driving it.
+ *
+ * This is the same window the controller enforces (RUN_HEARTBEAT_STALE_MS); it
+ * is duplicated here as a *scheduling* horizon, never as an authority: the
+ * controller still decides whether a re-dispatch may take a run over.
+ */
+const RUN_OWNER_HEARTBEAT_STALE_MS = 10 * 60 * 1000;
+
+/**
+ * Margin past the staleness horizon for the owner's own re-entry, so a re-entry
+ * lands strictly after the boundary even when the run's last heartbeat was
+ * written at the instant this owner dispatched it.
+ */
+const RUN_OWNER_STALE_REENTRY_MARGIN_MS = 2 * 60 * 1000;
+
+/**
+ * A run gets exactly one post-staleness re-entry from this owner.
+ *
+ * The poll budget below is measured from the first poll, and a blocking
+ * apply/plan never reaches a first poll: the dispatch call itself is the whole
+ * mutation. A run whose Core invocation died therefore outlives the poll budget
+ * with its ledger row still `running` and nobody left to dispatch it. Parking
+ * at that point strands the run until the scheduled repair sweep, whose cadence
+ * is a separate operational knob. One bounded re-entry, scheduled from the
+ * dispatch start and past the heartbeat-staleness boundary, is what lets the
+ * controller take that run over — and it is bounded so a run that can never
+ * settle still parks instead of poking the controller forever.
+ */
+const RUN_OWNER_STALE_REENTRY_MAX_ATTEMPTS = 1;
+
+/**
  * Waiting for the controller/ledger is a POLL, not a retry: a run that is still
  * `queued` because the runner pool is full, or a ledger read that timed out, is
  * a normal state and must not burn the dispatch retry budget. It must also not
@@ -117,6 +149,12 @@ interface RunOwnerRecord {
   readonly pollAttempts?: number;
   readonly pollingSince?: string;
   readonly lastPolledStatus?: string;
+  /**
+   * Post-staleness re-entries this owner has already scheduled for this run.
+   * Absent on records written before the re-entry existed; absent is "none
+   * scheduled yet", which is exactly the state a run needs the re-entry in.
+   */
+  readonly staleReentryAttempts?: number;
 }
 
 interface DurableObjectState {
@@ -424,7 +462,16 @@ export class OpenTofuRunOwnerObject {
     readonly record: RunOwnerRecord;
     readonly base: RunOwnerRecord;
     readonly startedAt: string;
-    readonly observedStatus: string;
+    /**
+     * The ledger status this poll observed, or a synthetic token when the
+     * ledger could not be read (`unknown`) or answered with a requeue
+     * (`runner_requeued`). Only a real in-flight status is evidence that a run
+     * is still there to re-enter.
+     */
+    readonly observedStatus:
+      | RunStatus
+      | "unknown"
+      | typeof CONTROLLER_REQUEUE_STATUS;
     readonly reason: string;
   }): Promise<void> {
     const now = this.#now();
@@ -456,6 +503,58 @@ export class OpenTofuRunOwnerObject {
         deadlineMs: decision.deadlineMs,
         reason: decision.reason,
       });
+      // A non-terminal ledger row after the poll budget is not proof that this
+      // run failed. It is the shape of a run whose Core invocation died: the
+      // row is still `running`, the heartbeat stops, and the controller takes
+      // the run over only once that heartbeat is stale. Spend the one bounded
+      // re-entry past that boundary first; park only when it is already spent.
+      const reentries = input.record.staleReentryAttempts ?? 0;
+      const observedRunStatus: RunStatus | undefined =
+        input.observedStatus === "unknown" ||
+          input.observedStatus === CONTROLLER_REQUEUE_STATUS
+          ? undefined
+          : input.observedStatus;
+      if (
+        isRunStillDispatchable(observedRunStatus) &&
+        reentries < RUN_OWNER_STALE_REENTRY_MAX_ATTEMPTS
+      ) {
+        const reentryAt = Math.max(
+          // One requeue tick, so this is a scheduled re-entry rather than a
+          // same-tick re-arm of the alarm that just hit the deadline.
+          now + RUN_OWNER_CONTROLLER_REQUEUE_DELAY_MS,
+          parseIsoMs(input.record.startedAt ?? input.startedAt, now) +
+            RUN_OWNER_HEARTBEAT_STALE_MS +
+            RUN_OWNER_STALE_REENTRY_MARGIN_MS,
+        );
+        log.warn("takosumi.run_owner.stale_reentry_scheduled", {
+          ...fields,
+          poll: decision.poll,
+          elapsedMs: decision.elapsedMs,
+          reentryAt,
+          staleReentryAttempts: reentries + 1,
+        });
+        await this.#writeRecord({
+          ...input.base,
+          status: "scheduled",
+          startedAt: input.record.startedAt ?? input.startedAt,
+          updatedAt: new Date(now).toISOString(),
+          nextAttemptAt: new Date(reentryAt).toISOString(),
+          lastScheduleCause: "controller_retry",
+          lastError: `${decision.reason} (poll deadline exceeded after ${decision.elapsedMs}ms; post-staleness re-entry scheduled)`,
+          // The poll budget is deliberately NOT restarted: the re-entry buys
+          // exactly one dispatch, not another fifteen minutes of polling.
+          ...(input.record.pollAttempts !== undefined
+            ? { pollAttempts: input.record.pollAttempts }
+            : {}),
+          ...(input.record.pollingSince
+            ? { pollingSince: input.record.pollingSince }
+            : {}),
+          lastPolledStatus: input.observedStatus,
+          staleReentryAttempts: reentries + 1,
+        });
+        await this.#scheduleAlarm(reentryAt);
+        return;
+      }
       // Park instead of looping. The scheduled run-repair sweep is the backstop
       // for a run whose ledger row is still non-terminal, and a terminal owner
       // record makes that sweep able to re-arm this object.
@@ -466,7 +565,10 @@ export class OpenTofuRunOwnerObject {
         startedAt: input.record.startedAt ?? input.startedAt,
         finishedAt,
         updatedAt: finishedAt,
-        lastError: `${decision.reason} (poll deadline exceeded after ${decision.elapsedMs}ms)`,
+        lastError: reentries > 0
+          ? `${decision.reason} (poll deadline exceeded after ${decision.elapsedMs}ms; post-staleness re-entry did not settle the run)`
+          : `${decision.reason} (poll deadline exceeded after ${decision.elapsedMs}ms)`,
+        ...(reentries > 0 ? { staleReentryAttempts: reentries } : {}),
       });
       await this.state.storage.deleteAlarm?.();
       return;
