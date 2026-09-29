@@ -1,6 +1,7 @@
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import {
   parseRepositoryModulesSnapshot,
+  repositoryRelativeModulePathDiagnostic,
   type RepositoryModuleRootProviderRequirement,
   type Source,
   type SourceSnapshot,
@@ -870,6 +871,17 @@ export function resolveRepoOwnedInstallModulePath(input: {
       (module) => module.path === canonicalModulePath,
     );
     if (!selected) {
+      // A repository-relative path that re-states the snapshot's own scope is
+      // a coordinate mistake, not a missing module: name the contract instead
+      // of reporting that the pinned tree lacks a module it actually contains.
+      const repositoryRelative = repositoryRelativeModulePathDiagnostic({
+        snapshotPath: input.sourceSnapshot.path,
+        modulePath: input.modulePath,
+        repositoryModules: input.sourceSnapshot.repositoryModules,
+      });
+      if (repositoryRelative) {
+        return { ok: false, diagnostic: repositoryRelative };
+      }
       return {
         ok: false,
         diagnostic: {
