@@ -180,6 +180,20 @@ describe("RunView", () => {
     expect(en["run.cancelConfirm.message"]).toContain("{operation}");
   });
 
+  test("the cancel control only offers what the run API accepts", () => {
+    // A live apply sat in `running` for ~29 minutes while this screen kept
+    // offering Cancel and `POST /api/v1/runs/:id/cancel` answered 409 every
+    // time. Visibility now derives from the shared predicate that mirrors
+    // `#cancelRun` (`lib/run-cancel.ts`), not from a blanket status list.
+    expect(source).toContain(
+      'import { canCancelRun } from "../../lib/run-cancel.ts";',
+    );
+    expect(source).toContain("canCancelRun(r)");
+    // The old inline `queued || running || waiting_approval` union must not
+    // come back: `running` is precisely what the API refuses to cancel.
+    expect(source).not.toMatch(/s === "queued" \|\| s === "running"/);
+  });
+
   test("distinguishes a missing run from a transient load failure", () => {
     expect(source).toContain("function isRunNotFound(");
     expect(source).toContain(

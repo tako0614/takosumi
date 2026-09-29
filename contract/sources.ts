@@ -489,6 +489,87 @@ export function sourceSnapshotInstallModulesProjection(
     : { ...observation, sourceSnapshotId, modules: [] };
 }
 
+/**
+ * Contract diagnostic for a caller-supplied module path that re-states the
+ * SourceSnapshot's own scope.
+ *
+ * Every OpenTofu module coordinate Takosumi resolves is relative to the pinned
+ * SourceSnapshot archive — the subtree `Source.defaultPath` captured — never to
+ * the repository root (see `docs/reference/api.md`, the dashboard install-link
+ * prefill, and the smoke CLI help). A repository-relative path therefore names
+ * a directory *inside* the captured subtree, which is how a path-scoped
+ * snapshot ends up looking for its module inside itself and reporting a
+ * missing module for a tree that actually contains it.
+ *
+ * The diagnostic is returned only when the pinned module index proves the path
+ * is absent from this exact snapshot, so a real module whose directory happens
+ * to repeat the scope path stays selectable.
+ */
+export function repositoryRelativeModulePathDiagnostic(input: {
+  /** SourceSnapshot `path`: the Git subtree the archive is rooted at. */
+  readonly snapshotPath: string | undefined;
+  /** Caller-supplied module path, in repository or archive coordinates. */
+  readonly modulePath: string | undefined;
+  /** Module index captured by the same source sync as the archive. */
+  readonly repositoryModules: unknown;
+}):
+  | {
+      readonly code: "repository_install_ux_module_path_repository_relative";
+      readonly message: string;
+    }
+  | undefined {
+  const scopePath = canonicalModuleCoordinate(input.snapshotPath);
+  if (
+    scopePath === "." ||
+    !isCanonicalRepositoryDirectoryPath(scopePath)
+  ) {
+    return undefined;
+  }
+  const modulePath = canonicalModuleCoordinate(input.modulePath);
+  if (
+    modulePath === "." ||
+    !isCanonicalRepositoryDirectoryPath(modulePath)
+  ) {
+    return undefined;
+  }
+  if (modulePath !== scopePath && !modulePath.startsWith(`${scopePath}/`)) {
+    return undefined;
+  }
+  const observation = parseRepositoryModulesSnapshot(input.repositoryModules);
+  if (observation?.status !== "ready" || observation.scopePath !== scopePath) {
+    return undefined;
+  }
+  if (observation.modules.some((module) => module.path === modulePath)) {
+    return undefined;
+  }
+  const insideSnapshot =
+    modulePath === scopePath ? "." : modulePath.slice(scopePath.length + 1);
+  return {
+    code: "repository_install_ux_module_path_repository_relative",
+    message:
+      `modulePath ${boundedModuleCoordinate(modulePath)} is repository-relative, ` +
+      `but this SourceSnapshot is already scoped to ${boundedModuleCoordinate(scopePath)}. ` +
+      `Resolve the module inside that subtree by sending ${boundedModuleCoordinate(insideSnapshot)}, ` +
+      `or omit modulePath to select the snapshot root.`,
+  };
+}
+
+/** Canonical module coordinate; `.` is the snapshot/archive root. */
+function canonicalModuleCoordinate(value: string | undefined): string {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (!trimmed) return ".";
+  const normalized = trimmed
+    .replace(/\\/gu, "/")
+    .replace(/^\.\/+/u, "")
+    .replace(/\/+$/u, "");
+  return normalized && normalized !== "." ? normalized : ".";
+}
+
+/** Bound a repository-controlled path before it reaches a public diagnostic. */
+function boundedModuleCoordinate(value: string): string {
+  return JSON.stringify(value.replace(/[\0-\u001f\u007f]/gu, "").slice(0, 96));
+}
+
 const REPOSITORY_MODULES_INVALID_REASONS = new Set<RepositoryModulesInvalidReason>([
   "scan_unavailable",
   "scan_failed",

@@ -9,8 +9,8 @@ function listing(extra: Partial<TcsListing> = {}): TcsListing {
     id: "installable-worker",
     source: {
       url: "https://github.com/tako0614/takosumi-template.git",
-      // Optional Store presentation must not become install authority.
-      ref: "0123456789abcdef0123456789abcdef01234567",
+      // The module the listing reviewed. It is a hint the installer proves
+      // against its own snapshot scan, never install authority.
       path: "modules/worker",
     },
     kind: "worker",
@@ -28,7 +28,7 @@ function listing(extra: Partial<TcsListing> = {}): TcsListing {
 }
 
 describe("store link handoff", () => {
-  test("store listings hand off as Git sources", () => {
+  test("store listings hand off as Git sources with their reviewed module", () => {
     const query = buildNewQuery(
       listing({
         primaryServer: "https://store.takosumi.com/",
@@ -42,7 +42,7 @@ describe("store link handoff", () => {
       "https://github.com/tako0614/takosumi-template.git",
     );
     expect(params.has("ref")).toBe(false);
-    expect(params.has("path")).toBe(false);
+    expect(params.get("path")).toBe("modules/worker");
     expect(params.has("var.project_name")).toBe(false);
   });
 
@@ -57,8 +57,22 @@ describe("store link handoff", () => {
       "https://github.com/tako0614/takosumi-template.git",
     );
     expect(params.has("ref")).toBe(false);
-    expect(params.has("path")).toBe(false);
+    expect(params.get("path")).toBe("modules/worker");
     expect(params.has("var.project_name")).toBe(false);
+  });
+
+  test("a listing that reviews the repository root hands off no module path", () => {
+    const params = new URLSearchParams(
+      buildNewQuery(
+        listing({
+          source: { url: "https://github.com/tako0614/takosumi-template.git" },
+        }),
+      ),
+    );
+    expect(params.get("git")).toBe(
+      "https://github.com/tako0614/takosumi-template.git",
+    );
+    expect(params.has("path")).toBe(false);
   });
 
   test("store handoff never carries setup defaults", () => {
@@ -111,3 +125,4 @@ describe("store link handoff", () => {
     expect(params.has("path")).toBe(false);
   });
 });
+

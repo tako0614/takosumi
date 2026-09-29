@@ -76,6 +76,7 @@ export type RepositoryInstallUxDiagnosticCode =
   | "repository_install_ux_document_invalid"
   | "repository_install_ux_module_missing"
   | "repository_install_ux_module_path_invalid"
+  | "repository_install_ux_module_path_repository_relative"
   | "repository_install_ux_compatibility_report_mismatch"
   | "repository_install_ux_compatibility_report_unsupported"
   | "repository_install_ux_variable_metadata_unavailable"

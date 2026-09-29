@@ -3,24 +3,38 @@ import { sanitizeTcsListingSource } from "../../../../dashboard/src/lib/tcs-clie
 
 const TCS_LISTING_SOURCE_FIXTURES = [
   {
-    name: "v2 source drops the retired nested module path",
+    name: "keeps the module the listing reviewed",
+    input: {
+      git: "https://GitHub.com/Acme/Widget.git/",
+      path: "Modules/OpenTofu",
+    },
+    expected: {
+      url: "https://github.com/Acme/Widget",
+      path: "Modules/OpenTofu",
+    },
+  },
+  {
+    name: "a non-canonical module spelling is dropped, the repository kept",
     input: {
       git: "https://GitHub.com/Acme/Widget.git/",
       path: "./Modules/OpenTofu/",
     },
-    expected: {
-      git: "https://github.com/Acme/Widget",
-    },
+    expected: { url: "https://github.com/Acme/Widget" },
+  },
+  {
+    name: "the repository root stays implicit",
+    input: { git: "https://example.com/acme/widget.git", path: "." },
+    expected: { url: "https://example.com/acme/widget" },
   },
   {
     name: "legacy root path is ignored",
     input: { git: "https://example.com/acme/widget.git", path: "" },
-    expected: { git: "https://example.com/acme/widget" },
+    expected: { url: "https://example.com/acme/widget" },
   },
   {
     name: "legacy parent traversal is ignored",
     input: { git: "https://example.com/acme/widget", path: "../secret" },
-    expected: { git: "https://example.com/acme/widget" },
+    expected: { url: "https://example.com/acme/widget" },
   },
   {
     name: "malformed legacy path shape is rejected",
@@ -53,9 +67,8 @@ describe("dashboard TCS source adapter", () => {
         );
         return;
       }
-      expect(sanitizeTcsListingSource(fixture.input)).toEqual({
-        url: fixture.expected.git,
-      });
+      expect(sanitizeTcsListingSource(fixture.input)).toEqual(fixture.expected);
     });
   }
 });
+

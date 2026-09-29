@@ -35,7 +35,10 @@ import {
   type Page,
   type PageParams,
 } from "takosumi-contract/pagination";
-import type { SourceSnapshot } from "takosumi-contract/sources";
+import {
+  repositoryRelativeModulePathDiagnostic,
+  type SourceSnapshot,
+} from "takosumi-contract/sources";
 import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import {
   OpenTofuControllerError,
@@ -776,6 +779,25 @@ export class SourcesService {
       sourceId,
       request.sourceSnapshotId,
     );
+    // A caller-supplied module path is resolved inside this snapshot archive.
+    // Refuse a repository-relative path that re-states the snapshot's own
+    // scope before any runner work, so a coordinate mistake can never surface
+    // as an inspection-runner failure. An existing Capsule executes its own
+    // InstallConfig path, so the request hint is not consulted there.
+    if (!capsuleId && request.modulePath !== undefined) {
+      const repositoryRelative = repositoryRelativeModulePathDiagnostic({
+        snapshotPath: snapshot.path,
+        modulePath: request.modulePath,
+        repositoryModules: snapshot.repositoryModules,
+      });
+      if (repositoryRelative) {
+        throw new OpenTofuControllerError(
+          "invalid_argument",
+          repositoryRelative.message,
+          { diagnosticCode: repositoryRelative.code },
+        );
+      }
+    }
     // Policy precedence: an existing Capsule's own InstallConfig wins. Before a
     // Capsule exists, the service-side InstallConfig only gates the
     // pre-install check against bounded policy/module-path hints; Store

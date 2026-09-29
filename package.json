@@ -40,7 +40,7 @@
     "test:accounts": "bun test ./tests/accounts ./tests/deploy/node-postgres ./tests/deploy/accounts-cloudflare",
     "test:cli": "bun test ./tests/cli",
     "test:control-d1-schema": "bun test tests/deploy/platform/control_d1_schema_test.ts tests/deploy/platform/control_d1_release_capability_test.ts tests/worker/src/d1_opentofu_store_schema_boot_test.ts tests/core/adapters/storage/drizzle/schema/schema_mirror_test.ts",
-    "test:dashboard-new-flow": "bun test tests/dashboard/src/views/new/provider-connections-return_test.ts tests/dashboard/src/views/new/new-flow-guidance_test.ts",
+    "test:dashboard-new-flow": "bun test tests/dashboard/src/views/new/",
     "dashboard:e2e:live": "bun scripts/run-dashboard-browser-e2e.ts live",
     "dashboard:e2e:public-live": "bun scripts/run-dashboard-browser-e2e.ts public-live",
     "test:dashboard-browser-harness": "bun test tests/dashboard/e2e/harness_test.ts",
@@ -94,7 +94,7 @@
     "age-encryption": "^0.3.0",
     "commander": "^12.1.0",
     "drizzle-orm": "^0.45.2",
-    "hono": "^4.12.34",
+    "hono": "^4.13.5",
     "pg": "^8.11.0",
     "yaml": "^2.8.2"
   },
@@ -113,8 +113,8 @@
   "overrides": {
     "esbuild": "0.28.1",
     "fast-uri": "3.1.7",
-    "sharp": "0.35.3",
-    "undici": "7.29.0",
+    "sharp": "0.35.4",
+    "undici": "7.29.1",
     "ws": "8.21.0"
   }
 }
