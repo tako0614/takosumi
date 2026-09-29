@@ -133,6 +133,8 @@ class CredentialRefreshSession {
       runnerRunId: this.runId,
       manifestDigest: this.manifestDigest,
       sequence: this.#sequence,
+      credentials: [...this.#currentByFileEnvName.values()]
+        .map(({ descriptor }) => ({ ...descriptor })),
     } as const;
   }
 

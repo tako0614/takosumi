@@ -184,6 +184,8 @@ export interface CredentialRefreshSessionMetadata {
   readonly runnerRunId: string;
   readonly manifestDigest: string;
   readonly sequence: number;
+  /** Value-free accepted expiry for each renewable credential binding. */
+  readonly credentials: readonly Omit<RenewableCredentialProjection, "initialValue">[];
 }
 
 export interface CredentialRefreshOwner {

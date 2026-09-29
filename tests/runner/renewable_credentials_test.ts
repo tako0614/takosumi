@@ -498,6 +498,13 @@ test("refresh received during blocked source-build is promoted into the later Pl
       runnerRunId: planRunId,
       manifestDigest,
       sequence: 5,
+      credentials: [{
+        providerSource: "registry.opentofu.org/example/probe",
+        connectionId: "conn_pending",
+        sourceEnvName: "PROBE_TOKEN",
+        fileEnvName: "PROBE_TOKEN_FILE",
+        expiresAt: "2099-01-01T00:00:00.000Z",
+      }],
     });
 
     const accepted = await handleRunnerRequest(new Request(
@@ -574,6 +581,13 @@ test("refresh received during blocked source-build is promoted into the later Pl
       runnerRunId: planRunId,
       manifestDigest,
       sequence: 0,
+      credentials: [{
+        providerSource: "registry.opentofu.org/example/probe",
+        connectionId: "conn_pending",
+        sourceEnvName: "PROBE_TOKEN",
+        fileEnvName: "PROBE_TOKEN_FILE",
+        expiresAt: "2099-01-01T00:00:00.000Z",
+      }],
     });
     const applyRefresh = await handleRunnerRequest(new Request(
       `http://runner/runs/${planRunId}/credentials`,
@@ -597,6 +611,23 @@ test("refresh received during blocked source-build is promoted into the later Pl
       },
     ));
     expect(applyRefresh.status).toBe(200);
+    // A caller may lose the PUT acknowledgement. The follow-up value-free
+    // metadata GET identifies the accepted sequence and expiry without
+    // exposing the rotated credential value.
+    const reconciled = await handleRunnerRequest(new Request(
+      `http://runner/runs/${planRunId}/credentials`,
+      { method: "GET" },
+    ));
+    const reconciledMetadata = await reconciled.json();
+    expect(reconciledMetadata.sequence).toBe(1);
+    expect(reconciledMetadata.credentials).toEqual([{
+      providerSource: "registry.opentofu.org/example/probe",
+      connectionId: "conn_pending",
+      sourceEnvName: "PROBE_TOKEN",
+      fileEnvName: "PROBE_TOKEN_FILE",
+      expiresAt: "2099-02-01T00:00:00.000Z",
+    }]);
+    expect(JSON.stringify(reconciledMetadata)).not.toContain(APPLY_TOKEN);
     releaseApplySourceBuild();
     const applyResponse = await applyPromise;
     expect(applyResponse.status).toBe(500);

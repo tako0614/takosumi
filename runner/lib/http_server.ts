@@ -48,6 +48,101 @@ interface RunnerRequestDependencies {
   readonly runtimeSecretFileSystem?: Partial<RuntimeSecretFileSystem>;
 }
 
+const MAX_ASYNC_MUTATION_RESULT_BYTES = 6 * 1024 * 1024;
+
+interface AsyncMutationJob {
+  readonly runId: string;
+  readonly applyRunId: string;
+  readonly action: "apply" | "destroy";
+  status: "running" | "terminal";
+  responseStatus?: number;
+  responseBody?: string;
+}
+
+// This is deliberately container-local. A replacement container cannot
+// pretend it knows the outcome of work that may have been interrupted with
+// the old process; GET then returns 404 and the caller must treat it as unknown.
+const asyncMutationJobs = new Map<string, AsyncMutationJob>();
+
+function prefersAsyncMutation(request: Request): boolean {
+  return (request.headers.get("prefer") ?? "")
+    .split(",")
+    .some((preference) => preference.split(";")[0]?.trim().toLowerCase() === "respond-async");
+}
+
+function asyncMutationIdentity(request: unknown): string | undefined {
+  if (typeof request !== "object" || request === null || Array.isArray(request)) return;
+  const applyRun = (request as Record<string, unknown>).applyRun;
+  if (typeof applyRun !== "object" || applyRun === null || Array.isArray(applyRun)) return;
+  const id = (applyRun as Record<string, unknown>).id;
+  return typeof id === "string" && id.trim().length > 0 ? id : undefined;
+}
+
+function asyncMutationPayload(job: AsyncMutationJob, status: "accepted" | "running") {
+  return {
+    kind: "takosumi.runner-mutation-pending@v1",
+    runId: job.runId,
+    applyRunId: job.applyRunId,
+    action: job.action,
+    status,
+  } as const;
+}
+
+function oversizedAsyncMutationResult(runId: string, action: "apply" | "destroy") {
+  return Response.json({
+    runId,
+    action,
+    status: "failed",
+    exitCode: 1,
+    errorCode: "runner_result_size_limit_exceeded",
+    stderr: "runner result exceeded its in-process response limit",
+  }, { status: 500 });
+}
+
+async function runAsyncMutation(
+  requestUrl: string,
+  requestHeaders: Headers,
+  body: RunRequest,
+  job: AsyncMutationJob,
+): Promise<void> {
+  try {
+    // Do not propagate the submit request's AbortSignal: its response has
+    // already completed, while accepted provider work must remain observable.
+    const headers = new Headers({ "content-type": "application/json" });
+    const lockDigest = requestHeaders.get(PROVIDER_LOCK_RESTORE_DIGEST_HEADER);
+    if (lockDigest !== null) headers.set(PROVIDER_LOCK_RESTORE_DIGEST_HEADER, lockDigest);
+    const terminal = await handleRunnerRequest(new Request(requestUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    }));
+    const responseBody = await terminal.text();
+    const responseBytes = new TextEncoder().encode(responseBody).byteLength;
+    if (responseBytes > MAX_ASYNC_MUTATION_RESULT_BYTES) {
+      const bounded = oversizedAsyncMutationResult(job.runId, job.action);
+      job.responseStatus = bounded.status;
+      job.responseBody = await bounded.text();
+    } else {
+      job.responseStatus = terminal.status;
+      job.responseBody = responseBody;
+    }
+    job.status = "terminal";
+  } catch {
+    // Never retain or return an internal exception that could contain secret
+    // request material, filesystem paths, or provider diagnostics.
+    const failure = Response.json({
+      runId: job.runId,
+      action: job.action,
+      status: "failed",
+      exitCode: 1,
+      stderr: "runner mutation failed",
+    }, { status: 500 });
+    job.responseStatus = failure.status;
+    job.responseBody = await failure.text();
+    job.status = "terminal";
+  }
+}
+
 export async function handleRunnerRequest(request: Request): Promise<Response> {
   return await handleRunnerRequestWithDependencies(request);
 }
@@ -63,6 +158,25 @@ export async function handleRunnerRequestWithDependencies(
         ok: true,
         runner: "opentofu",
         capabilities: ["takosumi.runner-credential-refresh@v1"],
+      });
+    }
+    const resultMatch = /^\/runs\/([^/]+)\/result$/.exec(url.pathname);
+    if (resultMatch) {
+      if (request.method !== "GET") {
+        return Response.json({ error: "method not allowed" }, {
+          status: 405,
+          headers: { allow: "GET" },
+        });
+      }
+      const runId = decodeURIComponent(resultMatch[1]!);
+      const job = asyncMutationJobs.get(runId);
+      if (!job) return Response.json({ error: "run result not found" }, { status: 404 });
+      if (job.status === "running") {
+        return Response.json(asyncMutationPayload(job, "running"), { status: 202 });
+      }
+      return new Response(job.responseBody ?? "{}", {
+        status: job.responseStatus ?? 500,
+        headers: { "content-type": "application/json; charset=utf-8" },
       });
     }
     const credentialRefreshMatch = /^\/runs\/([^/]+)\/credentials$/.exec(url.pathname);
@@ -238,6 +352,30 @@ export async function handleRunnerRequestWithDependencies(
         { error: "invalid OpenTofu action" },
         { status: 400 },
       );
+    }
+
+    if (prefersAsyncMutation(request) && (action === "apply" || action === "destroy")) {
+      const applyRunId = asyncMutationIdentity(body.request);
+      if (!applyRunId) {
+        return Response.json({ error: "invalid async mutation identity" }, { status: 400 });
+      }
+      const existing = asyncMutationJobs.get(runId);
+      if (existing) {
+        return Response.json({ error: "run already accepted" }, { status: 409 });
+      }
+      const job: AsyncMutationJob = {
+        runId,
+        applyRunId,
+        action,
+        status: "running",
+      };
+      // Reserve synchronously before yielding so concurrent duplicate POSTs
+      // cannot start a second provider process.
+      asyncMutationJobs.set(runId, job);
+      queueMicrotask(() => {
+        void runAsyncMutation(request.url, request.headers, body, job);
+      });
+      return Response.json(asyncMutationPayload(job, "accepted"), { status: 202 });
     }
 
     const mutationRedactionScope =
