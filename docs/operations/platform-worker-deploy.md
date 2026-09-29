@@ -40,6 +40,67 @@ Run queue, coordination/run-owner Durable Objects, and an OpenTofu runner.
 `deploy/platform/wrangler.toml` is a placeholder reference. Realized bindings,
 origins, IDs, and secrets belong to operator state outside the repository.
 
+## Exact Plan lockfile rollout boundary
+
+The reviewed provider lockfile optimization has a private DO-to-runner protocol.
+The main integration candidate is rollout stage A: before dispatch, the DO
+validates the Plan/artifact identity and reads the exact encrypted-R2 lock bytes,
+but does not PUT them to the runner or send a restore marker. The compatible
+runner therefore keeps the historical `tofu init` path for this stage and
+compares the resulting `.terraform.lock.hcl` SHA-256 with the Plan's recorded
+digest **before** state reconciliation or provider apply. A mismatch fails
+closed; once dispatch has been recorded, the Run is indeterminate and must not
+be automatically retried. A digest-only historical Plan uses the same post-init
+check; an explicitly provider-free Plan has no lock digest to check.
+
+The later stage B protocol adds the runner restore endpoint and marker. For
+Apply/Destroy with a lock artifact, the stage B DO PUTs exact encrypted-R2 bytes
+to the runner, checks the returned digest and size, and only then sends
+`x-takosumi-provider-lock-restore-digest` on dispatch. The runner accepts that
+marker only when it equals the Plan digest and the restored bytes match; it then
+runs `tofu init -lockfile=readonly`. Missing restored bytes never authorize
+legacy mode when the marker is present. Stage B is not activated by this
+integration candidate; it must follow the image-convergence sequence below.
+
+This protocol requires **two dependent source commits and two release stages**.
+The owner release plan pins the current remote default-branch tip, so an image
+built from a combined runner-plus-new-DO commit cannot be paired with a
+predecessor Worker commit in a production plan. Commit A must contain the
+compatibility runner but retain the old DO dispatch behavior (no lock restore
+PUT or marker). Commit B, descended from A, adds the verified DO restore and
+marker sender only after A's image has converged. Cloudflare [activates Worker and DO code before starting a
+Container image rollout](https://developers.cloudflare.com/containers/configuration/rollouts/);
+even `immediate` only shortens the mixed window. Do not release new DO code and
+the new image in one full deploy and call it atomic.
+
+1. Review and publish commit A to the required remote branch, set the realized
+   source pin to A, and publish A's compatibility image through
+   `takosumi-runner-image build`. Replace only the realized image literal with
+   A's immutable digest, then use the owner full platform plan/execute with
+   source pin **A**. Its Worker/DO still has the old behavior while the image
+   rolls out; do not pin the older predecessor after A becomes the remote tip.
+   If replacing
+   instances would interrupt active provider mutations, first stop only new
+   Apply/Destroy admissions and let those in-flight Runs settle; do not freeze
+   the database or all read-only Runs.
+2. Require authoritative Container readback showing that the new immutable
+   image is effective, healthy, and fully converged with no active rollout.
+   If the image release or readback is incomplete, do not activate B.
+3. Review and publish descendant commit B to the required remote branch, move
+   the realized source pin to B, and activate B's Worker code against the
+   **unchanged A image digest**. Staging may use the existing Worker-only code
+   lane; production uses the owner full platform plan/execute with no effective
+   Container configuration change. The runner build proof belongs to A; the
+   release contract permits its image and the Worker source to be different
+   commits of the same owning repository. Reconfirm the image and serving
+   Worker Version after activation before reopening any scoped admission hold.
+
+The four combinations have distinct outcomes: old DO/old image retains the
+predecessor path; old DO/new image uses post-init digest verification; new
+DO/old image gets a 404 from the lock restore PUT and stops before provider
+dispatch; new DO/new image uses exact restore plus readonly init. The third
+combination is a fail-closed safety net, not an intended release phase.
+
 ## The realized config names a source identity, not a path
 
 A realized config declares no `main` and no `[assets] directory`. It declares

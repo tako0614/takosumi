@@ -43,6 +43,7 @@ import {
   assertDirectory,
   assertRealPathInsideSourceRoot,
   resolveModulePath,
+  pathExists,
 } from "./util.ts";
 import { redactRunnerOutput } from "./redaction.ts";
 import { RunnerPhaseTimer, withPhaseTimings } from "./timing.ts";
@@ -78,6 +79,7 @@ import {
   writePlanJsonArtifact,
   readProviderLockfileBytes,
   providerLockfilePath,
+  restoredProviderLockfilePath,
   workspaceForRun,
   writeModuleInfo,
   restoreUploadedState,
@@ -380,6 +382,11 @@ export async function initPlanAndBuildResponse(
   );
   const commandContext =
     strictMirrorInit?.commandContext ?? options.commandContext;
+  const tfDataDir = commandContext.env.TF_DATA_DIR?.trim() || ".terraform";
+  const [priorStatePresent, terraformDataDirPresent] = await Promise.all([
+    pathExists(join(moduleDir, "terraform.tfstate")),
+    pathExists(resolve(moduleDir, tfDataDir)),
+  ]);
   const init = await timer.measure("tofu_init", () =>
     withProviderPluginCacheInitLock(strictMirrorInit, () =>
       runCommand(["tofu", "init", "-input=false", "-no-color"], {
@@ -387,6 +394,9 @@ export async function initPlanAndBuildResponse(
         context: commandContext,
         isolateProcessGroup: true,
       }),
+      options.providerScan,
+      priorStatePresent,
+      terraformDataDirPresent,
     ),
   );
   if (init.exitCode !== 0) {
@@ -644,6 +654,7 @@ export async function runReviewedPlanApply(
   action: "apply" | "destroy",
   request: unknown,
   signal?: AbortSignal,
+  restoredProviderLockDigest?: string,
 ): Promise<JsonRecord> {
   const generatedRoot = parseGeneratedRoot(request);
   const legacyRecovery = parseLegacySourcelessDestroyRecovery(request);
@@ -682,6 +693,16 @@ export async function runReviewedPlanApply(
         sourceBuild,
       );
   const timer = new RunnerPhaseTimer();
+  const reviewedProviderLock = await timer.measure(
+    "provider_lockfile_restore",
+    () =>
+      restoreReviewedProviderLockfile(
+        workspace,
+        moduleDir,
+        request,
+        restoredProviderLockDigest,
+      ),
+  );
   const preparedCredentials = await prepareProviderCredentialFiles(
     commandContext,
     workspace,
@@ -712,13 +733,30 @@ export async function runReviewedPlanApply(
     const applyContext =
       strictMirrorInit?.commandContext ?? preparedCredentials.context;
 
+    const tfDataDir = applyContext.env.TF_DATA_DIR?.trim() || ".terraform";
+    const [priorStatePresent, terraformDataDirPresent] = await Promise.all([
+      pathExists(join(moduleDir, "terraform.tfstate")),
+      pathExists(resolve(moduleDir, tfDataDir)),
+    ]);
     const init = await timer.measure("tofu_init", () =>
       withProviderPluginCacheInitLock(strictMirrorInit, () =>
-        runCommand(["tofu", "init", "-input=false", "-no-color"], {
-          cwd: moduleDir,
-          context: applyContext,
-          isolateProcessGroup: true,
-        }),
+        runCommand(
+          [
+            "tofu",
+            "init",
+            "-input=false",
+            "-no-color",
+            ...(reviewedProviderLock.readonlyInit ? ["-lockfile=readonly"] : []),
+          ],
+          {
+            cwd: moduleDir,
+            context: applyContext,
+            isolateProcessGroup: true,
+          },
+        ),
+        providerScan,
+        priorStatePresent,
+        terraformDataDirPresent,
       ),
     );
     if (init.exitCode !== 0) {
@@ -734,6 +772,19 @@ export async function runReviewedPlanApply(
       postInitProviderScan,
       await readDependencyLockIfPresent(moduleDir),
     );
+    if (reviewedProviderLock.digest) {
+      const afterInitBytes = await readProviderLockfileBytes(
+        join(moduleDir, ".terraform.lock.hcl"),
+      );
+      if (
+        afterInitBytes === undefined ||
+        (await digestBytes(afterInitBytes)) !== reviewedProviderLock.digest
+      ) {
+        throw new Error(
+          "OpenTofu dependency lock differs from reviewed Plan",
+        );
+      }
+    }
     const providerInstallation = await providerInstallationEvidence(
       moduleDir,
       parseRequiredProviders(request),
@@ -1020,12 +1071,20 @@ export async function runCompatibilityCheck(
     undefined,
   );
   const commandContext = providerInit?.commandContext ?? context;
+  const tfDataDir = commandContext.env.TF_DATA_DIR?.trim() || ".terraform";
+  const [priorStatePresent, terraformDataDirPresent] = await Promise.all([
+    pathExists(join(moduleRoot, "terraform.tfstate")),
+    pathExists(resolve(moduleRoot, tfDataDir)),
+  ]);
   const init = await timer.measure("tofu_init", () =>
     withProviderPluginCacheInitLock(providerInit, () =>
       runCommand(["tofu", "init", "-input=false", "-no-color"], {
         cwd: moduleRoot,
         context: commandContext,
       }),
+      preInitProviderScan,
+      priorStatePresent,
+      terraformDataDirPresent,
     ),
   );
   if (init.exitCode !== 0) {
@@ -1176,6 +1235,97 @@ async function readDependencyLockIfPresent(
     if (code === "ENOENT") return undefined;
     throw error;
   }
+}
+
+/**
+ * A current DO proves successful private lockfile PUT by an internal header.
+ * Only that mode installs exact bytes and uses readonly init. An older DO has
+ * no marker, so the legacy init path is allowed but the post-init lock digest
+ * must still match the reviewed Plan before reconcile or provider apply.
+ */
+async function restoreReviewedProviderLockfile(
+  workspace: RunWorkspace,
+  moduleDir: string,
+  request: unknown,
+  restoredProviderLockDigest?: string,
+): Promise<{ readonly digest?: string; readonly readonlyInit: boolean }> {
+  const planRun = recordField(request, "planRun");
+  const artifact = recordField(planRun, "providerLockArtifact");
+  const rawDigest = stringField(planRun, "providerLockDigest");
+  if (artifact === undefined || artifact === null) {
+    if (restoredProviderLockDigest !== undefined) {
+      throw new Error("provider lock restore marker has no reviewed artifact");
+    }
+    if (artifact === null && rawDigest !== undefined) {
+      throw new Error(
+        "provider-free reviewed Plan has an unexpected lock digest",
+      );
+    }
+    if (rawDigest !== undefined && !/^sha256:[0-9a-f]{64}$/u.test(rawDigest)) {
+      throw new Error("reviewed Plan provider lock digest is invalid");
+    }
+    return { digest: rawDigest, readonlyInit: false };
+  }
+  const planRunId = stringField(planRun, "id");
+  const artifactKind = stringField(artifact, "kind");
+  if (
+    !isRecord(artifact) ||
+    (artifactKind !== "object-storage" && artifactKind !== "local") ||
+    (artifactKind === "local" &&
+      (!planRunId ||
+        stringField(artifact, "ref") !==
+          `local-opentofu://runs/${planRunId}/provider-lockfile`))
+  ) {
+    throw new Error("reviewed Plan provider lock artifact is invalid");
+  }
+  const artifactDigest = stringField(artifact, "digest");
+  if (
+    !rawDigest ||
+    !/^sha256:[0-9a-f]{64}$/u.test(rawDigest) ||
+    artifactDigest !== rawDigest
+  ) {
+    throw new Error("reviewed Plan provider lock digest is invalid");
+  }
+  if (restoredProviderLockDigest === undefined) {
+    // A pre-rollout DO never attempted the PUT. No absence-of-file inference:
+    // the fallback is selected solely by the private transport marker.
+    return { digest: rawDigest, readonlyInit: false };
+  }
+  if (restoredProviderLockDigest !== rawDigest) {
+    throw new Error("provider lock restore marker differs from reviewed Plan");
+  }
+  const restored = await readProviderLockfileBytes(
+    restoredProviderLockfilePath(workspace),
+  );
+  if (!restored || (await digestBytes(restored)) !== rawDigest) {
+    throw new Error(
+      "reviewed Plan provider lock bytes were not restored exactly",
+    );
+  }
+  const target = join(moduleDir, ".terraform.lock.hcl");
+  const existing = await readProviderLockfileBytes(target);
+  if (existing !== undefined) {
+    if ((await digestBytes(existing)) !== rawDigest) {
+      throw new Error(
+        "source module lockfile conflicts with reviewed Plan lockfile",
+      );
+    }
+  } else {
+    const file = await open(
+      target,
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        fsConstants.O_NOFOLLOW,
+      0o600,
+    );
+    try {
+      await file.writeFile(restored);
+    } finally {
+      await file.close();
+    }
+  }
+  return { digest: rawDigest, readonlyInit: true };
 }
 
 async function captureProviderLockfile(

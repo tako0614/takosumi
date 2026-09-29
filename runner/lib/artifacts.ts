@@ -4,7 +4,7 @@
 //
 // Pure code-motion out of runner/entrypoint.ts (P3 god-file split). No
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
-import { mkdir, open, readFile, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { constants as fsConstants, type Stats } from "node:fs";
 import { join } from "node:path";
@@ -15,6 +15,7 @@ import {
   DEFAULT_PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES,
 } from "./constants.ts";
 import { isRecord, safeRunId, digestBytes } from "./util.ts";
+import { readResponseBytesWithCap } from "./exec.ts";
 
 // Stores the full `tofu show -json tfplan` JSON next to the plan binary so the
 // DO/relay can promote it. The DO already promotes the tfplan binary; the
@@ -47,6 +48,11 @@ export function planJsonPath(workspace: RunWorkspace): string {
 /** Stable runner-local path for the captured post-init lockfile bytes. */
 export function providerLockfilePath(workspace: RunWorkspace): string {
   return workspace.providerLockfilePath;
+}
+
+/** Separate from the Plan-produced capture: Apply never mutates that artifact. */
+export function restoredProviderLockfilePath(workspace: RunWorkspace): string {
+  return join(workspace.root, "restored-provider-lockfile.hcl");
 }
 
 /**
@@ -252,6 +258,82 @@ export async function handleProviderLockfileArtifactRequest(
       { status: 404 },
     );
   }
+}
+
+/** Private, bounded Plan-lock restore before an Apply/Destroy run is dispatched. */
+export async function handleProviderLockfileRestoreRequest(
+  runId: string,
+  request: Request,
+): Promise<Response> {
+  if (request.method !== "PUT") {
+    return Response.json(
+      { error: "method not allowed" },
+      { status: 405, headers: { allow: "PUT" } },
+    );
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = await readResponseBytesWithCap(
+      request,
+      DEFAULT_PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES,
+      "provider lockfile restore",
+    );
+  } catch {
+    return Response.json(
+      { error: "provider lockfile restore exceeds limit" },
+      { status: 413 },
+    );
+  }
+  const workspace = workspaceForRun(runId);
+  const path = restoredProviderLockfilePath(workspace);
+  await mkdir(workspace.root, { recursive: true, mode: 0o700 });
+  let file: FileHandle | undefined;
+  try {
+    file = await open(
+      path,
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        fsConstants.O_NOFOLLOW,
+      0o600,
+    );
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? String((error as { readonly code?: unknown }).code)
+        : "";
+    if (code !== "EEXIST") throw error;
+    const existing = await readProviderLockfileBytes(path).catch(
+      () => undefined,
+    );
+    if (
+      existing === undefined ||
+      !Buffer.from(existing).equals(Buffer.from(bytes))
+    ) {
+      return Response.json(
+        { error: "provider lockfile restore conflict" },
+        { status: 409 },
+      );
+    }
+    return Response.json({
+      runId,
+      digest: await digestBytes(bytes),
+      sizeBytes: bytes.byteLength,
+    });
+  }
+  try {
+    await file.writeFile(bytes);
+  } catch (error) {
+    await file.close();
+    await rm(path, { force: true });
+    throw error;
+  }
+  await file.close();
+  return Response.json({
+    runId,
+    digest: await digestBytes(bytes),
+    sizeBytes: bytes.byteLength,
+  });
 }
 
 export function workspaceForRun(runId: string): RunWorkspace {
