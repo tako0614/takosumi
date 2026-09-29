@@ -89,7 +89,7 @@ test("install progress copy is user-facing and honest about resume behavior", ()
     "画面を離れてもインストールは続きます。進捗は「技術的な詳細」から確認できます。この追加画面は自動では復元されません。",
   );
   expect(en["installStore.checkingReadinessHint"]).toBe(
-    "Deployment is complete. Checking the service state. This page won't reopen the install automatically if you leave.",
+    "Your changes have been applied. Checking the service state. This page won't reopen the install automatically if you leave.",
   );
   expect(ja["installStore.checkingReadinessHint"]).toBe(
     "デプロイは完了しました。サービスの状態を確認しています。画面を離れると、この追加画面は自動では復元されません。",

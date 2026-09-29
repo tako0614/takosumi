@@ -103,7 +103,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Leaving this page won't stop the install. Use Technical details to check progress. This page won't reopen the install automatically.",
   "installStore.checkingReadiness": "Checking service readiness",
   "installStore.checkingReadinessHint":
-    "Deployment is complete. Checking the service state. This page won't reopen the install automatically if you leave.",
+    "Your changes have been applied. Checking the service state. This page won't reopen the install automatically if you leave.",
   "installStore.planBlocked": "This Plan cannot be applied",
   "installStore.planBlockedHint": "Review the policy or Plan details.",
   "installStore.readinessFailed":
