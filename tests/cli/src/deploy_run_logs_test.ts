@@ -93,11 +93,26 @@ test("logs renders accepted credential refresh and mint timing without unknown d
   );
 });
 
-test("logs reports empty records clearly and rejects malformed responses", async () => {
+test("logs describes empty legacy evidence and rejects malformed responses", async () => {
   await withRunLogsResponse(
     { diagnostics: [], auditEvents: [] },
     async (_requests, stdout, stderr) => {
       const code = await main(["logs", "run_empty"], {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      });
+      expect(code).toEqual(0);
+      expect(stdout).toEqual([
+        "No diagnostics or audit events were returned; credential-mint evidence is not included in this response.",
+      ]);
+      expect(stderr).toEqual([]);
+    },
+  );
+
+  await withRunLogsResponse(
+    { diagnostics: [], auditEvents: [], credentialMints: [] },
+    async (_requests, stdout, stderr) => {
+      const code = await main(["logs", "run_empty_complete"], {
         stdout: (line) => stdout.push(line),
         stderr: (line) => stderr.push(line),
       });

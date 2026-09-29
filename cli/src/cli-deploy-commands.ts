@@ -42,7 +42,11 @@ export async function runDeployLogs(
     body.auditEvents.length === 0 &&
     body.credentialMints.length === 0
   ) {
-    io.stdout("No run log entries are available.");
+    io.stdout(
+      body.credentialMintsIncluded
+        ? "No run log entries are available."
+        : "No diagnostics or audit events were returned; credential-mint evidence is not included in this response.",
+    );
   }
   return 0;
 }
@@ -72,6 +76,7 @@ interface CliRunLogsResponse {
   readonly diagnostics: readonly CliRunDiagnostic[];
   readonly auditEvents: readonly CliRunAuditEvent[];
   readonly credentialMints: readonly CliCredentialMint[];
+  readonly credentialMintsIncluded: boolean;
 }
 
 function parseRunLogsResponse(value: unknown): CliRunLogsResponse {
@@ -150,6 +155,7 @@ function parseRunLogsResponse(value: unknown): CliRunLogsResponse {
     diagnostics: parsedDiagnostics,
     auditEvents: parsedEvents,
     credentialMints: parsedMints,
+    credentialMintsIncluded: hasCredentialMints,
   };
 }
 
