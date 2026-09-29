@@ -1698,9 +1698,10 @@ function readyProviderConnectionsForProvider(
 
 function providerConnectionLabel(
   providerConnection: ProviderConnection,
+  renewableLabel?: string,
 ): string {
   return (
-    providerConnectionDisplayName(providerConnection) ||
+    providerConnectionDisplayName(providerConnection, renewableLabel) ||
     providerDisplayName(providerConnection.providerSource)
   );
 }
@@ -1713,11 +1714,14 @@ function providerDisplayName(provider: string): string {
 function boundConnectionLabel(
   row: ProviderBindingRow,
   providerConnections: readonly ProviderConnection[],
+  renewableLabel?: string,
 ): string {
   const match = providerConnections.find(
     (connection) => connection.id === row.connectionId,
   );
-  return match ? providerConnectionLabel(match) : t("common.none");
+  return match
+    ? providerConnectionLabel(match, renewableLabel)
+    : t("common.none");
 }
 
 function boundProviderLabel(
@@ -2246,6 +2250,7 @@ function SettingsTab(props: {
                 value: boundConnectionLabel(
                   row,
                   props.availableProviderConnections,
+                  t("conn.providerConnection.autoRenewing"),
                 ),
               }))}
             />
@@ -2305,7 +2310,10 @@ function SettingsTab(props: {
                                     connection.id === row().connectionId
                                   }
                                 >
-                                  {providerConnectionLabel(connection)}
+                                  {providerConnectionLabel(
+                                    connection,
+                                    t("conn.providerConnection.autoRenewing"),
+                                  )}
                                 </option>
                               )}
                             </For>

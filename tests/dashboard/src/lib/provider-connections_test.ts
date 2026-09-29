@@ -135,6 +135,39 @@ describe("dashboard ProviderConnection candidates", () => {
     expect(providerConnectionDisplayName(connection())).toBe("connection_1");
   });
 
+  test("distinguishes renewable delivery without changing the base connection label", () => {
+    const fixed = connection({
+      id: "conn_takosumiHostedTakoform01",
+      scope: "operator",
+      displayName: "Takosumi Hosted",
+      credentialRecipe: {
+        id: "takosumi-hosted-takoform-run",
+        authMode: "broker",
+      },
+    });
+    const renewable = connection({
+      id: "conn_takosumiHostedTakoformRenew01",
+      scope: "operator",
+      displayName: "Takosumi Hosted",
+      credentialRecipe: {
+        id: "takosumi-hosted-takoform-run",
+        authMode: "broker-renewable",
+        renewableEnv: {
+          sourceEnvName: "TAKOFORM_TOKEN",
+          fileEnvName: "TAKOFORM_TOKEN_FILE",
+          minimumProviderVersion: "4.1.0",
+        },
+      },
+    });
+
+    expect(providerConnectionDisplayName(fixed, "Auto-renewing")).toBe(
+      "Takosumi Hosted",
+    );
+    expect(
+      providerConnectionDisplayName(renewable, "Auto-renewing"),
+    ).toBe("Takosumi Hosted · Auto-renewing");
+  });
+
   test("requires an explicit destination when workspace and operator choices coexist", () => {
     const managed = connection({
       id: "connection_managed",

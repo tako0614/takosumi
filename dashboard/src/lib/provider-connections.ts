@@ -198,8 +198,13 @@ export function providerConnectionMatchesProviderSource(
  */
 export function providerConnectionDisplayName(
   connection: ProviderConnection,
+  renewableLabel?: string,
 ): string {
-  return connection.displayName || connection.id;
+  const displayName = connection.displayName || connection.id;
+  const isRenewable = connection.credentialRecipe?.renewableEnv !== undefined;
+  return isRenewable && renewableLabel
+    ? `${displayName} · ${renewableLabel}`
+    : displayName;
 }
 
 function intersectOptionalLists<T extends string>(

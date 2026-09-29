@@ -522,7 +522,8 @@ describe("single-screen install surface", () => {
     expect(view).toContain('t("installStore.destinationSummary"');
     expect(view).toContain('data-install-provider-destination="auto-selected"');
     expect(view).toContain("data-provider-connection-id");
-    expect(view).toContain("providerConnectionDisplayName(destination())");
+    expect(view).toContain('t("conn.providerConnection.autoRenewing")');
+    expect(view).toContain("providerConnectionDisplayName(");
     expect(view).toContain("setAutoSelectedProviderRows");
     expect(view).toContain("setAutoSelectedProviderRows(new Set<string>());");
   });
@@ -533,7 +534,8 @@ describe("single-screen install surface", () => {
     expect(view).toContain('data-testid="install-module-chooser"');
     expect(view).toContain('t("installStore.providerModule")');
     expect(view).toContain("providerModuleLabel(row)");
-    expect(view).toContain("providerConnectionDisplayName(connection)");
+    expect(view).toContain('t("conn.providerConnection.autoRenewing")');
+    expect(view).toContain("providerConnectionDisplayName(");
     expect(view).not.toContain("deploymentProfile");
   });
 

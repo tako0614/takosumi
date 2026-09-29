@@ -508,7 +508,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           data-install-provider-destination="auto-selected"
           data-provider-connection-id={destination().id}
           title={t("installStore.destinationSummary", {
-            destination: providerConnectionDisplayName(destination()),
+            destination: providerConnectionDisplayName(
+              destination(),
+              t("conn.providerConnection.autoRenewing"),
+            ),
           })}
         >
           <span>{t("installStore.destination")}</span>{" "}
@@ -519,7 +522,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
             data-provider-connection-id={destination().id}
           >
             <option value={destination().id}>
-              {providerConnectionDisplayName(destination())}
+              {providerConnectionDisplayName(
+                destination(),
+                t("conn.providerConnection.autoRenewing"),
+              )}
             </option>
           </Select>
         </div>
@@ -2377,7 +2383,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                         <For each={sourceCandidates()}>
                           {(connection) => (
                             <option value={connection.id}>
-                              {providerConnectionDisplayName(connection)}
+                              {providerConnectionDisplayName(
+                                connection,
+                                t("conn.providerConnection.autoRenewing"),
+                              )}
                             </option>
                           )}
                         </For>
@@ -2584,7 +2593,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                               value={connection.id}
                               selected={connection.id === row.connectionId}
                             >
-                              {providerConnectionDisplayName(connection)}
+                              {providerConnectionDisplayName(
+                                connection,
+                                t("conn.providerConnection.autoRenewing"),
+                              )}
                             </option>
                           )}
                         </For>

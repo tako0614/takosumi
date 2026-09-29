@@ -132,6 +132,7 @@ describe("Capsule detail StateVersion surface", () => {
 
   test("keeps provider binding editing behind advanced service settings", () => {
     expect(source).toContain("providerConnectionDisplayName");
+    expect(source).toContain('t("conn.providerConnection.autoRenewing")');
     expect(source).toContain("isProviderConnectionCandidate");
     expect(source).not.toContain("managedProvider");
     expect(source).toContain("function boundConnectionLabel");

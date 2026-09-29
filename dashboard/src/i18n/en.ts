@@ -972,6 +972,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.subtitle":
     "Connect an external provider with your own credentials. Availability follows the operator provider policy, runner capability, and Run approval rules.",
   "conn.providerConnections.title": "Connected accounts",
+  "conn.providerConnection.autoRenewing": "Auto-renewing",
   "conn.expiresAt": "Expires: {date}",
   "conn.oauth.connected": "Provider connection saved.",
   "conn.oauth.failed": "Connection failed. Please try again.",

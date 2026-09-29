@@ -975,6 +975,7 @@ export const ja = {
   "conn.subtitle":
     "自分の認証情報で外部プロバイダーを接続します。利用可否は operator の provider policy、runner capability、Run approval に従います。",
   "conn.providerConnections.title": "接続済みアカウント",
+  "conn.providerConnection.autoRenewing": "自動更新",
   "conn.expiresAt": "期限: {date}",
   "conn.oauth.connected": "プロバイダー接続を保存しました。",
   "conn.oauth.failed": "接続に失敗しました。もう一度お試しください。",
