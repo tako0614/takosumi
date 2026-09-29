@@ -2096,7 +2096,11 @@ for (const mutation of [
     assert.match(storedEvidence, /takosumi\.runner-mutation-dispatch@v2/);
     assert.match(storedEvidence, /sha256:[0-9a-f]{64}/);
     assert.match(storedEvidence, /"phase":"indeterminate"/);
-    assert.equal(destroyCalls, 0);
+    // A durably terminal outcome owns its container. Redispatch is blocked
+    // forever and every later read is answered from R2, so a runner left alive
+    // here could only burn capacity — this is the leak that let
+    // apply_ebe44829d77e4e04 sit running long after its run had terminated.
+    assert.equal(destroyCalls, 1);
 
     // Recreate the Durable Object around the same persistent storage to prove
     // the no-replay fence survives isolate eviction/restart.
@@ -2113,7 +2117,9 @@ for (const mutation of [
       false,
     );
     assert.equal(providerCalls, 1);
-    assert.equal(destroyCalls, 0);
+    // The restart re-asserts the same terminal cleanup: a replay of a fenced
+    // dispatch identity must not leave a container behind either.
+    assert.equal(destroyCalls, 2);
 
     // The run-level authority fence also rejects request-digest drift instead
     // of treating a changed payload as fresh mutation authority.
@@ -2128,7 +2134,7 @@ for (const mutation of [
       false,
     );
     assert.equal(providerCalls, 1);
-    assert.equal(destroyCalls, 0);
+    assert.equal(destroyCalls, 2);
   });
 }
 
@@ -2424,7 +2430,15 @@ test("OpenTofu runner adopts completed state only after fresh exact mutation aut
     readonly executionEvidence?: unknown;
   };
   assert.ok(firstPayload.executionEvidence);
-  assert.match(JSON.stringify(storage.entries()), /"phase":"dispatched"/);
+  // The state, its evidence sidecar, and current.json are durable, so the
+  // dispatch authority must record the determined completion (and its
+  // value-free receipt) instead of holding the pre-completion phase forever.
+  const completedEvidence = JSON.stringify(storage.entries());
+  assert.match(completedEvidence, /"phase":"completed"/);
+  assert.match(
+    completedEvidence,
+    /takosumi\.runner-mutation-completion@v1/,
+  );
 
   const expiredToken = await signedMutationToken(planRunId, {
     action: "destroy",
@@ -3356,14 +3370,14 @@ test("OpenTofu runner Durable Object treats a response-body transport loss after
   assertMutationIndeterminateResponse(firstText, "apply");
   assert.equal(firstText.includes("stream-raw-secret"), false);
   assert.equal(providerCalls, 1);
-  assert.equal(destroyCalls, 0);
+  assert.equal(destroyCalls, 1);
 
   const replay = await runnerWithContainer(r2, container, options).fetch(
     request(),
   );
   assert.equal(replay.status, 409);
   assert.equal(providerCalls, 1);
-  assert.equal(destroyCalls, 0);
+  assert.equal(destroyCalls, 2);
 });
 
 test("OpenTofu runner Durable Object treats post-apply state transport loss as indeterminate", async () => {
@@ -5076,6 +5090,189 @@ function deferredGate(): {
 // At-rest encryption (M2) requires a secret-store passphrase; supply a fixed one
 // so the runner DO seals/opens plan binaries + state with real AES-GCM in tests.
 const TEST_PASSPHRASE = "takosumi-runner-container-test-passphrase-0123456789";
+
+test("OpenTofu runner records a value-free completion receipt a lost caller can adopt", async () => {
+  const planRunId = "plan_completion_receipt";
+  const applyRunId = `apply_${planRunId}`;
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  await seedEncryptedPlan(artifacts, planRunId);
+  const storage = new FakeDoStorage();
+  let providerCalls = 0;
+  const container = mutationSuccessContainer(planRunId, () => {
+    providerCalls += 1;
+  });
+  const options = {
+    storage,
+    stateBucket: state,
+    env: {
+      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET,
+    },
+  };
+  const stateScope = capsuleStateScope();
+  const rawOutputRef = rawOutputRefFor(planRunId);
+  const token = await signedMutationToken(planRunId, {
+    jti: "completion-receipt",
+  });
+
+  const first = await runnerWithContainer(artifacts, container, options).fetch(
+    signedMutationRequest(planRunId, token, { rawOutputRef, stateScope }),
+  );
+  assert.equal(first.status, 200);
+  assert.equal(providerCalls, 1);
+  const firstPayload = (await first.json()) as {
+    readonly state?: { readonly digest?: string };
+    readonly rawOutputRef?: string;
+  };
+  const stateDigest = firstPayload.state?.digest;
+  assert.ok(stateDigest);
+  assert.equal(firstPayload.rawOutputRef, rawOutputRef);
+
+  // The caller's invocation is gone: an evicted object must still know that
+  // this exact dispatch identity has a determined outcome.
+  const evicted = runnerWithContainer(artifacts, container, options);
+  const inspection = await evicted.inspectMutationAuthority(
+    applyRunId,
+    "apply",
+  );
+  assert.equal(inspection.authority.status, "valid");
+  if (inspection.authority.status !== "valid") throw new Error("unreachable");
+  assert.equal(inspection.authority.phase, "completed");
+  assert.equal(inspection.authority.redispatchBlocked, true);
+  const receipt = inspection.authority.completion;
+  assert.ok(receipt);
+  assert.equal(receipt.applyRunId, applyRunId);
+  assert.equal(receipt.stateGeneration, stateScope.generation);
+  assert.equal(receipt.stateRef, stateScope.stateRef);
+  assert.equal(receipt.contentDigest, stateDigest);
+  assert.equal(receipt.rawOutputRef, rawOutputRef);
+  assert.equal(receipt.providerExecutionFailed, false);
+  // Value-free: the receipt names coordinates, never provider values or secrets.
+  assert.equal(
+    /secret|passphrase|bearer|token|\{"serial"/iu.test(JSON.stringify(receipt)),
+    false,
+  );
+
+  // Convergence for exactly this allocation, without the original request
+  // bytes and without a second provider execution.
+  const adopted = await evicted.adoptDeterminedMutation(
+    applyRunId,
+    "apply",
+    { stateScope, rawOutputRef },
+  );
+  assert.equal(adopted.status, 200);
+  const adoptedPayload = (await adopted.json()) as {
+    readonly state?: { readonly digest?: string };
+    readonly rawOutputRef?: string;
+  };
+  assert.equal(adoptedPayload.state?.digest, stateDigest);
+  assert.equal(adoptedPayload.rawOutputRef, rawOutputRef);
+  assert.equal(providerCalls, 1);
+
+  // Anything that is not exactly this allocation stays fenced, and adoption
+  // never reaches the container.
+  const driftedGeneration = await evicted.adoptDeterminedMutation(
+    applyRunId,
+    "apply",
+    {
+      stateScope: { ...stateScope, generation: stateScope.generation + 1 },
+      rawOutputRef,
+    },
+  );
+  assert.equal(driftedGeneration.status, 409);
+  assertMutationIndeterminateResponse(
+    await driftedGeneration.text(),
+    "apply",
+  );
+  const driftedRawOutput = await evicted.adoptDeterminedMutation(
+    applyRunId,
+    "apply",
+    { stateScope, rawOutputRef: rawOutputRefFor("plan_someone_else") },
+  );
+  assert.equal(driftedRawOutput.status, 409);
+  assertMutationIndeterminateResponse(
+    await driftedRawOutput.text(),
+    "apply",
+  );
+  assert.equal(
+    (await evicted.inspectMutationAuthority(applyRunId, "destroy")).authority
+      .status,
+    "mismatch",
+  );
+  assert.equal(providerCalls, 1);
+});
+
+test("OpenTofu runner refuses determined adoption for a dispatch that never completed", async () => {
+  const planRunId = "plan_completion_absent";
+  const applyRunId = `apply_${planRunId}`;
+  const artifacts = new FakeR2Bucket();
+  await seedEncryptedPlan(artifacts, planRunId);
+  const storage = new FakeDoStorage();
+  const stateScope = capsuleStateScope();
+  const rawOutputRef = rawOutputRefFor(planRunId);
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT") return Response.json({ ok: true });
+      if (request.method === "POST" && path === `/runs/${planRunId}`) {
+        throw new Error("container transport lost after dispatch");
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+  const options = {
+    storage,
+    stateBucket: new FakeR2Bucket(),
+    env: {
+      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET,
+    },
+  };
+  const token = await signedMutationToken(planRunId, {
+    jti: "completion-absent",
+  });
+  const runner = runnerWithContainer(artifacts, container, options);
+  const lost = await runner.fetch(
+    signedMutationRequest(planRunId, token, { rawOutputRef, stateScope }),
+  );
+  assert.equal(lost.status, 409);
+  assertMutationIndeterminateResponse(await lost.text(), "apply");
+
+  const inspection = await runner.inspectMutationAuthority(applyRunId, "apply");
+  assert.equal(inspection.authority.status, "valid");
+  if (inspection.authority.status !== "valid") throw new Error("unreachable");
+  assert.equal(inspection.authority.phase, "indeterminate");
+  assert.equal(inspection.authority.completion, undefined);
+  const adopted = await runner.adoptDeterminedMutation(applyRunId, "apply", {
+    stateScope,
+    rawOutputRef,
+  });
+  assert.equal(adopted.status, 409);
+  assertMutationIndeterminateResponse(await adopted.text(), "apply");
+});
+
+test("OpenTofu runner reports no authority for an unknown dispatch identity", async () => {
+  const runner = runnerWithContainer(
+    new FakeR2Bucket(),
+    {
+      async containerFetch() {
+        return Response.json({ error: "unexpected" }, { status: 500 });
+      },
+    },
+    { stateBucket: new FakeR2Bucket() },
+  );
+  const inspection = await runner.inspectMutationAuthority(
+    "apply_never_dispatched",
+    "apply",
+  );
+  assert.equal(inspection.authority.status, "absent");
+  const adopted = await runner.adoptDeterminedMutation(
+    "apply_never_dispatched",
+    "apply",
+    { stateScope: capsuleStateScope() },
+  );
+  assert.equal(adopted.status, 409);
+  assertMutationIndeterminateResponse(await adopted.text(), "apply");
+});
 
 function runnerWithContainer(
   r2: R2Bucket,

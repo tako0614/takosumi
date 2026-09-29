@@ -184,6 +184,15 @@ export class CloudflareContainerOpenTofuRunner
       {
         signal: control?.signal,
         runnerObjectName: job.applyRun.id,
+        adoption: {
+          applyRunId: job.applyRun.id,
+          ...(job.stateScope === undefined
+            ? {}
+            : { stateScope: job.stateScope }),
+          ...(job.rawOutputRef === undefined
+            ? {}
+            : { rawOutputRef: job.rawOutputRef }),
+        },
       },
     );
     // The DO echoes the persisted state digest and opaque raw-output ref. Thread
@@ -259,6 +268,12 @@ export class CloudflareContainerOpenTofuRunner
       {
         signal: control?.signal,
         runnerObjectName: job.applyRun.id,
+        adoption: {
+          applyRunId: job.applyRun.id,
+          ...(job.stateScope === undefined
+            ? {}
+            : { stateScope: job.stateScope }),
+        },
       },
     );
     const state = recordFromRecord(result, "state");
@@ -639,6 +654,16 @@ export class CloudflareContainerOpenTofuRunner
        * Plan's Container: its activity shutdown can race the mutation.
        */
       readonly runnerObjectName?: string;
+      /**
+       * Core's own allocation for a mutating dispatch. It is the only thing
+       * this adapter may present when adopting a durably completed mutation
+       * whose response was lost.
+       */
+      readonly adoption?: {
+        readonly applyRunId: string;
+        readonly stateScope?: unknown;
+        readonly rawOutputRef?: string;
+      };
     } = {},
   ): Promise<Record<string, unknown>> {
     if (!this.env.RUNNER) {
@@ -704,6 +729,27 @@ export class CloudflareContainerOpenTofuRunner
               providerExecutionFailureFromContainerResult(payload)
             ) {
               return failedProviderExecutionResult(payload);
+            }
+            // A lost mutating response is indistinguishable from a lost
+            // provider execution, so the runner answers indeterminate. That
+            // answer is not proof of failure: when the object durably recorded
+            // this exact dispatch identity as completed, it can hand back the
+            // determined outcome from its own artifacts. This is the only
+            // convergence attempt, it presents nothing but Core's allocation,
+            // and it can never reach the container.
+            if (
+              (action === "apply" || action === "destroy") &&
+              options.adoption !== undefined &&
+              payload.retryable === false &&
+              payload.errorCode === RUNNER_MUTATION_INDETERMINATE_CODE
+            ) {
+              const adopted = await adoptDeterminedMutationFromObject(
+                this.env.RUNNER,
+                id,
+                action,
+                options.adoption,
+              );
+              if (adopted) return adopted;
             }
             const failure = runnerFailureEnvelope(
               payload,
@@ -1063,6 +1109,78 @@ function runnerExecutionErrorFromPayload(
     );
   }
   return undefined;
+}
+
+/**
+ * One bounded convergence read for a dispatched mutation whose response was
+ * lost.
+ *
+ * `runner_mutation_indeterminate` is an honest answer: it means the runner could
+ * not prove the outcome from the request it just handled. It is not proof of
+ * failure. When the same Durable Object durably recorded that this exact
+ * dispatch identity completed — and the artifact its value-free receipt names
+ * still authenticates under this run's identity — the determined outcome is
+ * still available from R2.
+ *
+ * The only input this presents is Core's own allocation (apply run id, state
+ * scope, raw output ref); the object decides, and every unprovable case —
+ * including an older object without the RPC, a mismatched allocation, or an
+ * artifact that no longer authenticates — returns undefined so the caller
+ * keeps the indeterminate failure exactly as before. Nothing here can reach
+ * the container or dispatch a second provider execution.
+ */
+async function adoptDeterminedMutationFromObject(
+  namespace: CloudflareWorkerEnv["RUNNER"],
+  id: ReturnType<NonNullable<CloudflareWorkerEnv["RUNNER"]>["idFromName"]>,
+  action: "apply" | "destroy",
+  allocation: {
+    readonly applyRunId: string;
+    readonly stateScope?: unknown;
+    readonly rawOutputRef?: string;
+  },
+): Promise<Record<string, unknown> | undefined> {
+  if (!namespace) return undefined;
+  const stub = namespace.get(id) as unknown as {
+    adoptDeterminedMutation?: (
+      applyRunId: string,
+      action: "apply" | "destroy",
+      allocation: {
+        readonly stateScope?: unknown;
+        readonly rawOutputRef?: unknown;
+      },
+    ) => Promise<Response>;
+  };
+  const adopt = stub.adoptDeterminedMutation;
+  if (typeof adopt !== "function") return undefined;
+  try {
+    const response = await adopt.call(stub, allocation.applyRunId, action, {
+      ...(allocation.stateScope === undefined
+        ? {}
+        : { stateScope: allocation.stateScope }),
+      ...(allocation.rawOutputRef === undefined
+        ? {}
+        : { rawOutputRef: allocation.rawOutputRef }),
+    });
+    const { payload } = await readResponseJsonObject(response);
+    if (payload.errorCode === RUNNER_MUTATION_INDETERMINATE_CODE) {
+      return undefined;
+    }
+    // Accept only a determined success or a determined provider failure; the
+    // caller's own result projection still validates the state/output
+    // coordinates it allocated before anything is committed.
+    if (payload.status === "succeeded") {
+      // A completed mutation is only determined if the object can also produce
+      // the persisted state coordinate it completed. Without a digest there is
+      // nothing this call could report, so the reply is not an adoption.
+      const state = recordFromRecord(payload, "state");
+      const digest = state ? stringFromRecord(state, "digest") : undefined;
+      return digest ? payload : undefined;
+    }
+    if (providerExecutionFailureFromContainerResult(payload)) return payload;
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function isTerminalReleaseCommandFailurePayload(

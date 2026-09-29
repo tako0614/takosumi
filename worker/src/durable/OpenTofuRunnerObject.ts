@@ -370,6 +370,8 @@ const RUNNER_MUTATION_INDETERMINATE_HEADER =
 // record-format migration accidentally grant a second provider dispatch.
 const RUNNER_MUTATION_AUTHORITY_STORAGE_KEY = "runner-mutation-authority";
 const RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX = "runner-mutation-dispatch@v2:";
+const RUNNER_MUTATION_COMPLETION_KIND =
+  "takosumi.runner-mutation-completion@v1" as const;
 const RUNNER_RELEASE_AUTHORITY_STORAGE_KEY = "runner-release-authority";
 const RUNNER_RELEASE_DISPATCH_STORAGE_PREFIX = "runner-release-dispatch@v1:";
 const RUNNER_RESTORE_AUTHORITY_STORAGE_PREFIX =
@@ -382,6 +384,63 @@ const RUNNER_RESTORE_STAGE_COLLECT_LIMIT = 16;
 const RUNNER_RESTORE_STAGE_COLLECT_RETRY_MS = 5 * 60 * 1_000;
 const RUNNER_RESTORE_STAGE_COLLECT_CONTINUE_MS = 1_000;
 
+/**
+ * Value-free durable completion receipt for one dispatched mutation.
+ *
+ * It carries only the exact run identity and the immutable artifact
+ * coordinates the runner durably published, so it is safe to store, inspect,
+ * and log: no provider values, no plaintext state, no credential material.
+ * It also grants no authority of its own. A reader may use it only to *name*
+ * the artifact that must still authenticate under this run's identity, and a
+ * `completed` claim whose artifact does not authenticate fails closed exactly
+ * like any other indeterminate outcome.
+ */
+export interface RunnerMutationCompletionReceipt {
+  readonly kind: "takosumi.runner-mutation-completion@v1";
+  readonly applyRunId: string;
+  readonly action: RunnerMutationAction;
+  /** Exact dispatch identity this receipt terminates. */
+  readonly semanticDigest: string;
+  readonly version: number;
+  readonly fence: number;
+  readonly stateGeneration: number;
+  /** Host-allocated immutable state target for the committed generation. */
+  readonly stateRef: string;
+  readonly contentDigest: string;
+  readonly ciphertextLength: number;
+  readonly evidenceRef: string;
+  readonly evidenceDigest: string;
+  /** Core-allocated raw output coordinate, when the mutation declared one. */
+  readonly rawOutputRef?: string;
+  /** Determined provider failure: the state is persisted, values are not. */
+  readonly providerExecutionFailed: boolean;
+}
+
+/**
+ * Read-only view of one run's mutation authority.
+ *
+ * It exists so a controller or operator can tell "this dispatch identity has a
+ * determined outcome whose artifact is durable" apart from "nobody knows",
+ * without gaining the ability to adopt, replay, or terminate anything. The
+ * receipt it exposes is value-free; adopting the artifact it names still
+ * requires the artifact to authenticate under the same run identity.
+ */
+export type RunnerMutationAuthorityInspection = {
+  readonly kind: "takosumi.runner-mutation-inspection@v1";
+  readonly runId: string;
+  readonly authority:
+    | { readonly status: "absent" | "malformed" | "mismatch" }
+    | {
+        readonly status: "valid";
+        readonly action: RunnerMutationAction;
+        readonly phase: RunnerMutationDispatchRecord["phase"];
+        readonly version: number;
+        readonly fence: number;
+        readonly redispatchBlocked: true;
+        readonly completion?: RunnerMutationCompletionReceipt;
+      };
+};
+
 interface RunnerMutationDispatchRecord {
   readonly kind: "takosumi.runner-mutation-dispatch@v2";
   readonly action: RunnerMutationAction;
@@ -392,9 +451,22 @@ interface RunnerMutationDispatchRecord {
   readonly fence: number;
   /**
    * `preparing` is provably before provider dispatch; `orphaned` means a
-   * target existed before this request had durable dispatch authority.
+   * target existed before this request had durable dispatch authority;
+   * `completed` means the provider mutation finished and its state/output
+   * artifacts are durable, so the exact dispatch identity has a determined
+   * outcome even if the response never reached the caller.
    */
-  readonly phase: "preparing" | "dispatched" | "indeterminate" | "orphaned";
+  readonly phase:
+    | "preparing"
+    | "dispatched"
+    | "completed"
+    | "indeterminate"
+    | "orphaned";
+  /**
+   * Present exactly when `phase` is `completed`. This is the durable proof
+   * that lets a lost completion converge instead of ending indeterminate.
+   */
+  readonly completion?: RunnerMutationCompletionReceipt;
   /** Once dispatched, this durable claim permanently forbids redispatch. */
   readonly redispatchBlocked: true;
 }
@@ -855,6 +927,137 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     }
   }
 
+  /**
+   * Read-only inspection of this run's mutation authority.
+   *
+   * It reports whether the exact dispatch identity has a determined outcome,
+   * and, when it does, the value-free completion receipt that names the
+   * immutable artifact which proves it. It dispatches nothing, adopts
+   * nothing, and terminates nothing: it can never authorize a provider
+   * execution or a Core ledger transition on its own.
+   */
+  async inspectMutationAuthority(
+    applyRunId: string,
+    expectedAction: RunnerMutationAction,
+  ): Promise<RunnerMutationAuthorityInspection> {
+    const kind = "takosumi.runner-mutation-inspection@v1";
+    const rawAuthority = await this.ctx.storage.get<unknown>(
+      RUNNER_MUTATION_AUTHORITY_STORAGE_KEY,
+    );
+    if (rawAuthority === undefined) {
+      return { kind, runId: applyRunId, authority: { status: "absent" } };
+    }
+    const record = parseRunnerMutationDispatchRecord(rawAuthority);
+    if (!record) {
+      return { kind, runId: applyRunId, authority: { status: "malformed" } };
+    }
+    if (
+      record.action !== expectedAction ||
+      (record.completion !== undefined &&
+        record.completion.applyRunId !== applyRunId)
+    ) {
+      return { kind, runId: applyRunId, authority: { status: "mismatch" } };
+    }
+    return {
+      kind,
+      runId: applyRunId,
+      authority: {
+        status: "valid",
+        action: record.action,
+        phase: record.phase,
+        version: record.version,
+        fence: record.fence,
+        redispatchBlocked: true,
+        ...(record.completion ? { completion: record.completion } : {}),
+      },
+    };
+  }
+
+  /**
+   * Adopt the determined outcome of a mutation this object already dispatched.
+   *
+   * This is the convergence path for a caller that lost the mutating response:
+   * it supplies only its own allocation — the state scope it allocated and the
+   * raw-output coordinate it allocated — never the original request bytes, and
+   * it can succeed only when the durable completion receipt names exactly that
+   * allocation *and* the immutable artifact the receipt names still
+   * authenticates under this run's identity.
+   *
+   * It never contacts the container, never re-dispatches a provider execution,
+   * and answers every unprovable case with the ordinary indeterminate response,
+   * so an indeterminate outcome stays fenced exactly as before.
+   */
+  async adoptDeterminedMutation(
+    applyRunId: string,
+    action: "apply" | "destroy",
+    allocation: {
+      readonly stateScope?: unknown;
+      readonly rawOutputRef?: unknown;
+    },
+  ): Promise<Response> {
+    const indeterminate = (): Response =>
+      runnerMutationIndeterminateResponse(action);
+    if (action !== "apply" && action !== "destroy") return indeterminate();
+    if (typeof applyRunId !== "string" || applyRunId.length === 0) {
+      return indeterminate();
+    }
+    let scope: StateScope;
+    let rawOutputRef: string | undefined;
+    try {
+      const parsedScope = parseStateScope({
+        stateScope: allocation?.stateScope,
+      });
+      if (!parsedScope) return indeterminate();
+      // The caller's allocation is validated by recomputation, never trusted:
+      // a scope whose stateRef does not derive from its own workspace, subject,
+      // environment, and generation is not an allocation this object serves.
+      assertStateRefForScope(parsedScope);
+      rawOutputRef = parseRawOutputRef({
+        rawOutputRef: allocation?.rawOutputRef,
+      });
+      if (rawOutputRef !== undefined) {
+        assertRawOutputRefForScope(parsedScope, applyRunId, rawOutputRef);
+      }
+      scope = parsedScope;
+    } catch {
+      return indeterminate();
+    }
+    const inspection = await this.inspectMutationAuthority(applyRunId, action);
+    if (inspection.authority.status !== "valid") return indeterminate();
+    const receipt = inspection.authority.completion;
+    if (
+      inspection.authority.phase !== "completed" ||
+      receipt === undefined ||
+      !completionMatchesMutationReply(receipt, {
+        applyRunId,
+        action,
+        stateGeneration: scope.generation,
+        stateRef: scope.stateRef,
+        rawOutputRef,
+      })
+    ) {
+      return indeterminate();
+    }
+    try {
+      const adopted = await this.#adoptCompletedStateMutationFromR2(
+        applyRunId,
+        scope,
+        action,
+        rawOutputRef,
+      );
+      return adopted ?? indeterminate();
+    } catch (error) {
+      // The receipt named an artifact that no longer authenticates under this
+      // run's identity. That is a conflict, not a completion: stay fenced.
+      console.error("OpenTofu runner determined mutation adoption failed", {
+        action,
+        errorName: safeRunnerErrorName(error),
+        redispatchBlocked: true,
+      });
+      return indeterminate();
+    }
+  }
+
   #containerRuntimeUnavailable(): boolean {
     const fetcher = (this as unknown as Partial<ContainerRequestFetcher>)
       .containerFetch;
@@ -1248,7 +1451,46 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         },
       );
     }
+    // The outcome is now durably terminal for this dispatch: redispatch stays
+    // blocked forever and no later request consults the container for it. A
+    // live container therefore holds no authority and only burns capacity, so
+    // concluding the mutation owns shutting it down. A killed invocation can
+    // still lose this cleanup; the replay branch above repeats it whenever the
+    // same dispatch identity is touched again.
+    await this.#shutdownContainerIfSupported();
     return runnerMutationIndeterminateResponse(record.action);
+  }
+
+  /**
+   * Durably record the determined completion of one dispatched mutation.
+   *
+   * Called only after the state object, its execution-evidence sidecar, and
+   * `current.json` are durable. The receipt is value-free and is written to the
+   * same atomic pair of keys as the dispatch authority, so a reader either sees
+   * the pre-dispatch phase or the completion — never a half-written claim.
+   *
+   * A storage failure here must not fail a mutation that already succeeded and
+   * is already durable: the mutation response is still returned, the authority
+   * simply keeps its `dispatched` phase, and convergence falls back to
+   * authenticating the artifact directly (as it did before this receipt).
+   */
+  async #recordMutationCompletion(
+    record: RunnerMutationDispatchRecord,
+    receipt: RunnerMutationCompletionReceipt,
+  ): Promise<void> {
+    try {
+      await this.#writeMutationDispatchRecord({
+        ...record,
+        phase: "completed",
+        completion: receipt,
+      });
+    } catch (error) {
+      console.error("OpenTofu runner mutation completion receipt failed", {
+        action: record.action,
+        errorName: safeRunnerErrorName(error),
+        redispatchBlocked: true,
+      });
+    }
   }
 
   async #claimReleasePreparation(
@@ -1545,8 +1787,24 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         // A completed state/output target is only adoptable after the current
         // credential has been freshly verified and the exact stable semantic
         // digest matches the durable dispatch authority.
+        //
+        // When that authority carries a completion receipt, the receipt is the
+        // adoption predicate: it must name this reply's exact run, action,
+        // generation, state target, and raw-output coordinate. A `completed`
+        // record can never reach this branch without a parsed receipt, and a
+        // receipt that does not describe this reply fails closed exactly like an
+        // unrecorded dispatch.
+        const completion = claim.record.completion;
         const adopted =
-          stateScope && applyRunId
+          stateScope &&
+          applyRunId &&
+          completionMatchesMutationReply(completion, {
+            applyRunId,
+            action: envelope.action,
+            stateGeneration: stateScope.generation,
+            stateRef: stateScope.stateRef,
+            rawOutputRef,
+          })
             ? await this.#adoptCompletedStateMutationFromR2(
                 applyRunId,
                 stateScope,
@@ -1554,6 +1812,17 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
                 rawOutputRef,
               )
             : undefined;
+        // A durably terminal mutation has no live container left to serve: the
+        // dispatch is fenced forever and every later read is answered from R2.
+        // Re-assert that here, because the invocation that concluded the
+        // mutation may have been killed before its own cleanup ran (a lost
+        // caller), which is how a runner container survives its run today.
+        if (
+          claim.record.phase === "completed" ||
+          claim.record.phase === "indeterminate"
+        ) {
+          await this.#shutdownContainerIfSupported();
+        }
         return adopted ?? runnerMutationIndeterminateResponse(envelope.action);
       }
       mutationPreparation = claim.record;
@@ -2432,6 +2701,30 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       ciphertextLength: sealed.ciphertextLength,
     };
     await writeCurrentStateCache(bucket, scope, current);
+    // The provider mutation is now durably complete: the immutable state
+    // object, its execution-evidence sidecar, and the current pointer are all
+    // published under this exact ApplyRun. Record the value-free completion
+    // receipt in the same durable authority the dispatch fence lives in, so a
+    // caller that lost this response can converge on a determined outcome
+    // instead of being fenced as indeterminate.
+    await this.#recordMutationCompletion(mutationDispatch, {
+      kind: RUNNER_MUTATION_COMPLETION_KIND,
+      applyRunId,
+      action,
+      semanticDigest: mutationDispatch.semanticDigest,
+      version: mutationDispatch.version,
+      fence: mutationDispatch.fence,
+      stateGeneration: scope.generation,
+      stateRef: objectKey,
+      contentDigest: sealed.contentDigest,
+      ciphertextLength: sealed.ciphertextLength,
+      evidenceRef: evidenceArtifact.ref,
+      evidenceDigest: evidenceArtifact.digest,
+      ...(persistedRawOutputRef === undefined
+        ? {}
+        : { rawOutputRef: persistedRawOutputRef }),
+      providerExecutionFailed,
+    });
     const persistedState = {
       generation: scope.generation,
       stateRef: objectKey,
@@ -5523,10 +5816,27 @@ function parseRunnerMutationDispatchRecord(
     (fence as number) < 1 ||
     (phase !== "preparing" &&
       phase !== "dispatched" &&
+      phase !== "completed" &&
       phase !== "indeterminate" &&
       phase !== "orphaned") ||
     value.redispatchBlocked !== true
   ) {
+    return undefined;
+  }
+  // A terminal completion claim is only authority-bearing together with its
+  // value-free receipt. A `completed` record without one (or with a malformed
+  // one) is a malformed record: it must fence exactly like an unknown record
+  // rather than let a later replay adopt an unnamed artifact.
+  const completion =
+    value.completion === undefined
+      ? undefined
+      : parseRunnerMutationCompletionReceipt(value.completion, {
+          action,
+          semanticDigest,
+          version: version as number,
+          fence: fence as number,
+        });
+  if (phase === "completed" ? !completion : completion !== undefined) {
     return undefined;
   }
   return {
@@ -5536,8 +5846,112 @@ function parseRunnerMutationDispatchRecord(
     version: version as number,
     fence: fence as number,
     phase,
+    ...(completion ? { completion } : {}),
     redispatchBlocked: true,
   };
+}
+
+/**
+ * Parse a durable completion receipt against the dispatch record that claims
+ * it. Every field is validated together with its identity binding, so a
+ * receipt can never be re-attributed to another action, dispatch digest,
+ * version, or fence.
+ */
+function parseRunnerMutationCompletionReceipt(
+  value: unknown,
+  binding: {
+    readonly action: RunnerMutationAction;
+    readonly semanticDigest: string;
+    readonly version: number;
+    readonly fence: number;
+  },
+): RunnerMutationCompletionReceipt | undefined {
+  if (!isRecord(value)) return undefined;
+  const applyRunId = stringField(value, "applyRunId");
+  const action = stringField(value, "action");
+  const semanticDigest = stringField(value, "semanticDigest");
+  const stateRef = stringField(value, "stateRef");
+  const contentDigest = stringField(value, "contentDigest");
+  const evidenceRef = stringField(value, "evidenceRef");
+  const evidenceDigest = stringField(value, "evidenceDigest");
+  const rawOutputRef = stringField(value, "rawOutputRef");
+  const stateGeneration = value.stateGeneration;
+  const ciphertextLength = value.ciphertextLength;
+  if (
+    value.kind !== RUNNER_MUTATION_COMPLETION_KIND ||
+    !applyRunId ||
+    !isRunnerMutationAction(action) ||
+    action !== binding.action ||
+    semanticDigest !== binding.semanticDigest ||
+    !stateRef ||
+    !contentDigest ||
+    !/^sha256:[0-9a-f]{64}$/u.test(contentDigest) ||
+    !evidenceRef ||
+    !evidenceDigest ||
+    !/^sha256:[0-9a-f]{64}$/u.test(evidenceDigest) ||
+    (rawOutputRef !== undefined && rawOutputRef.length === 0) ||
+    typeof value.providerExecutionFailed !== "boolean" ||
+    !Number.isSafeInteger(stateGeneration) ||
+    (stateGeneration as number) < 1 ||
+    !Number.isSafeInteger(ciphertextLength) ||
+    (ciphertextLength as number) < 1 ||
+    value.version !== binding.version ||
+    value.fence !== binding.fence
+  ) {
+    return undefined;
+  }
+  return {
+    kind: RUNNER_MUTATION_COMPLETION_KIND,
+    applyRunId,
+    action,
+    semanticDigest,
+    version: binding.version,
+    fence: binding.fence,
+    stateGeneration: stateGeneration as number,
+    stateRef,
+    contentDigest,
+    ciphertextLength: ciphertextLength as number,
+    evidenceRef,
+    evidenceDigest,
+    ...(rawOutputRef === undefined ? {} : { rawOutputRef }),
+    providerExecutionFailed: value.providerExecutionFailed,
+  };
+}
+
+/**
+ * Does a durable completion receipt describe exactly this mutation reply?
+ *
+ * Returning true never grants authority by itself: it only permits the caller
+ * to attempt to authenticate the immutable artifact the receipt names under
+ * this exact run identity. A receipt that describes a different run, action,
+ * generation, state target, or raw-output coordinate is a conflict, and the
+ * reply stays indeterminate.
+ *
+ * An absent receipt means the authority predates completion recording (or the
+ * recording write failed), which keeps the previous adopt-on-authentication
+ * behaviour rather than inventing a completion.
+ */
+function completionMatchesMutationReply(
+  completion: RunnerMutationCompletionReceipt | undefined,
+  reply: {
+    readonly applyRunId: string;
+    readonly action: RunnerMutationAction;
+    readonly stateGeneration: number;
+    readonly stateRef: string;
+    readonly rawOutputRef: string | undefined;
+  },
+): boolean {
+  if (!completion) return true;
+  if (
+    completion.applyRunId !== reply.applyRunId ||
+    completion.action !== reply.action ||
+    completion.stateGeneration !== reply.stateGeneration ||
+    completion.stateRef !== reply.stateRef
+  ) {
+    return false;
+  }
+  if (completion.providerExecutionFailed) return true;
+  return completion.rawOutputRef === reply.rawOutputRef;
 }
 
 /**
