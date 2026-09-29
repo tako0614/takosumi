@@ -53,7 +53,7 @@ const MAX_ASYNC_MUTATION_RESULT_BYTES = 6 * 1024 * 1024;
 interface AsyncMutationJob {
   readonly runId: string;
   readonly applyRunId: string;
-  readonly action: "apply" | "destroy";
+  readonly action: "apply" | "destroy" | "release";
   status: "running" | "terminal";
   responseStatus?: number;
   responseBody?: string;
@@ -70,11 +70,18 @@ function prefersAsyncMutation(request: Request): boolean {
     .some((preference) => preference.split(";")[0]?.trim().toLowerCase() === "respond-async");
 }
 
-function asyncMutationIdentity(request: unknown): string | undefined {
+function asyncMutationApplyRunId(
+  request: unknown,
+  action: "apply" | "destroy" | "release",
+): string | undefined {
   if (typeof request !== "object" || request === null || Array.isArray(request)) return;
-  const applyRun = (request as Record<string, unknown>).applyRun;
+  const applyRun = (request as Record<string, unknown>)[
+    action === "release" ? "activation" : "applyRun"
+  ];
   if (typeof applyRun !== "object" || applyRun === null || Array.isArray(applyRun)) return;
-  const id = (applyRun as Record<string, unknown>).id;
+  const id = (applyRun as Record<string, unknown>)[
+    action === "release" ? "applyRunId" : "id"
+  ];
   return typeof id === "string" && id.trim().length > 0 ? id : undefined;
 }
 
@@ -88,7 +95,7 @@ function asyncMutationPayload(job: AsyncMutationJob, status: "accepted" | "runni
   } as const;
 }
 
-function oversizedAsyncMutationResult(runId: string, action: "apply" | "destroy") {
+function oversizedAsyncMutationResult(runId: string, action: "apply" | "destroy" | "release") {
   return Response.json({
     runId,
     action,
@@ -104,6 +111,7 @@ async function runAsyncMutation(
   requestHeaders: Headers,
   body: RunRequest,
   job: AsyncMutationJob,
+  dependencies: RunnerRequestDependencies,
 ): Promise<void> {
   try {
     // Do not propagate the submit request's AbortSignal: its response has
@@ -111,11 +119,14 @@ async function runAsyncMutation(
     const headers = new Headers({ "content-type": "application/json" });
     const lockDigest = requestHeaders.get(PROVIDER_LOCK_RESTORE_DIGEST_HEADER);
     if (lockDigest !== null) headers.set(PROVIDER_LOCK_RESTORE_DIGEST_HEADER, lockDigest);
-    const terminal = await handleRunnerRequest(new Request(requestUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-    }));
+    const terminal = await handleRunnerRequestWithDependencies(
+      new Request(requestUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      }),
+      dependencies,
+    );
     const responseBody = await terminal.text();
     const responseBytes = new TextEncoder().encode(responseBody).byteLength;
     if (responseBytes > MAX_ASYNC_MUTATION_RESULT_BYTES) {
@@ -354,8 +365,11 @@ export async function handleRunnerRequestWithDependencies(
       );
     }
 
-    if (prefersAsyncMutation(request) && (action === "apply" || action === "destroy")) {
-      const applyRunId = asyncMutationIdentity(body.request);
+    if (
+      prefersAsyncMutation(request) &&
+      (action === "apply" || action === "destroy" || action === "release")
+    ) {
+      const applyRunId = asyncMutationApplyRunId(body.request, action);
       if (!applyRunId) {
         return Response.json({ error: "invalid async mutation identity" }, { status: 400 });
       }
@@ -373,7 +387,7 @@ export async function handleRunnerRequestWithDependencies(
       // cannot start a second provider process.
       asyncMutationJobs.set(runId, job);
       queueMicrotask(() => {
-        void runAsyncMutation(request.url, request.headers, body, job);
+        void runAsyncMutation(request.url, request.headers, body, job, dependencies);
       });
       return Response.json(asyncMutationPayload(job, "accepted"), { status: 202 });
     }
