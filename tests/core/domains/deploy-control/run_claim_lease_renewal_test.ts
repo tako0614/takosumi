@@ -1327,6 +1327,10 @@ async function seedRenewableApplyFixture(
   store: InMemoryOpenTofuControlStore,
   label: string,
   onIssue?: (count: number) => Promise<void>,
+  issueExpiry?: (input: {
+    readonly issues: number;
+    readonly attemptRef: string;
+  }) => string,
 ): Promise<{
   readonly applyRunId: string;
   readonly planRunId: string;
@@ -1368,17 +1372,22 @@ async function seedRenewableApplyFixture(
     mintForCapsuleProviderBindings: async (
       _workspaceId: string,
       _entries: unknown,
-      options: { readonly issuanceGenerationRef?: string },
+      options?: { readonly issuanceGenerationRef?: string },
     ) => {
       issues += 1;
-      issuanceGenerationRefs.push(options.issuanceGenerationRef ?? "");
+      const attemptRef = options?.issuanceGenerationRef ?? "";
+      issuanceGenerationRefs.push(attemptRef);
       await onIssue?.(issues);
       const token = `local_renewable_token_${issues}_0123456789abcdef`;
+      const issuedAt = Date.now();
+      const expiresAt = issueExpiry
+        ? issueExpiry({ issues, attemptRef })
+        : new Date(issuedAt + 121_000).toISOString();
       return new PhaseMintBundle(
         { env: { CLOUDFLARE_API_TOKEN: token } }, [],
         [{ provider, connectionId, temporary: true, ttlEnforced: true,
-          ttlSeconds: 121,
-          expiresAt: new Date(Date.now() + 121_000).toISOString() }],
+          ttlSeconds: Math.round((Date.parse(expiresAt) - issuedAt) / 1000),
+          expiresAt }],
       );
     },
   } as unknown as ConnectionVault;
@@ -1458,6 +1467,74 @@ test("renewable ApplyRun reissues before expiry and stops after terminal result"
     jest.advanceTimersByTime(300_000);
     for (let index = 0; index < 5; index++) await Promise.resolve();
     expect(issueCount()).toBe(2);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test("a renewal never replays the retained issuance identity of the initial mint", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let retainedExpiry = "";
+  let retainedAttemptRef = "";
+  const { applyRunId, vault, issueCount, issuanceGenerationRefs } =
+    await seedRenewableApplyFixture(store, "credential_replay", undefined, ({
+      issues,
+      attemptRef,
+    }) => {
+      if (issues === 1) {
+        retainedAttemptRef = attemptRef;
+        retainedExpiry = new Date(Date.now() + 121_000).toISOString();
+        return retainedExpiry;
+      }
+      // The sponsorship authority retains one issuance operation per exact
+      // exchange identity and replays its bytes. A renewal that reuses the
+      // initial exchange identity therefore receives the already-issued
+      // expiry -- the observed production failure -- while a distinct renewal
+      // attempt buys a new lifetime.
+      return attemptRef === retainedAttemptRef
+        ? retainedExpiry
+        : new Date(Date.now() + 300_000).toISOString();
+    });
+  let resolveStarted!: () => void;
+  const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+  const refreshes: unknown[] = [];
+  let applySignal: AbortSignal | undefined;
+  let abortedWith: unknown;
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
+  try {
+    const controller = controllerWith(store, {
+      vault, now: () => Date.now(), runRenewalIntervalMs: 0,
+      assertCredentialRefreshCapability: async () => {},
+      refreshCredentials: async (update) => { refreshes.push(update); },
+      apply: async (_job, control) => {
+        applySignal = control?.signal;
+        resolveStarted();
+        try {
+          return await awaitExecutionAbort(control);
+        } catch (error) {
+          abortedWith ??= error;
+          throw error;
+        }
+      },
+    });
+    const pending = controller.runQueuedApply(applyRunId);
+    void pending.catch(() => {});
+    await started;
+    expect(issueCount()).toBe(1);
+    jest.advanceTimersByTime(31_000);
+    await settleAsyncUntil(
+      () => refreshes.length === 1 || (applySignal?.aborted ?? false),
+    );
+    // Delivery is the contract: a replayed issuance leaves the pinned
+    // binding with too little lifetime, and the observed production failure
+    // aborts the child with `renewed credential does not match the pinned
+    // binding` instead of delivering a refreshed credential.
+    expect(abortedWith).toBeUndefined();
+    expect(refreshes).toHaveLength(1);
+    expect(applySignal?.aborted).toBe(false);
+    expect(issuanceGenerationRefs()).toHaveLength(2);
+    expect(issuanceGenerationRefs()[1]).not.toBe(issuanceGenerationRefs()[0]);
   } finally {
     jest.useRealTimers();
   }
