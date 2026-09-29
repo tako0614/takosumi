@@ -60,6 +60,10 @@ Cloud 側のリポジトリで管理します。
 - [cost monitoring](./cost-monitoring.md)
 - [ローカルネットワークでの開発](./lan-dev-setup.md)
 
+### 品質と検証
+
+- [install → serving E2E を 1 コマンドで回す](./install-serving-e2e.md)
+
 ### Resource と Form package
 
 - [Form package の導入](./form-package-installation.md)
