@@ -461,7 +461,10 @@ export default function ConnectionsTab(props: {
     // Same name fallback as the list row: never a raw conn_… id, and an
     // empty-string displayName must not slip through `??` and render 「」.
     const name =
-      providerConnectionDisplayName(connection) ||
+      providerConnectionDisplayName(
+        connection,
+        t("conn.providerConnection.autoRenewing"),
+      ) ||
       providerConnectionProviderLabel(connection, providerOptions());
     const ok = await confirm({
       title: t("conn.remove.confirmTitle"),
@@ -484,7 +487,10 @@ export default function ConnectionsTab(props: {
           <li class="wc-conn-row">
             <div class="wc-conn-head">
               <span class="wc-conn-name">
-                {providerConnectionDisplayName(connection) ||
+                {providerConnectionDisplayName(
+                  connection,
+                  t("conn.providerConnection.autoRenewing"),
+                ) ||
                   providerConnectionProviderLabel(
                     connection,
                     providerOptions(),

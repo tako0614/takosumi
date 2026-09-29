@@ -70,6 +70,29 @@ describe("Workspace settings user-facing noise", () => {
     expect(connectionsTabSource).not.toContain("c.envNames.join");
   });
 
+  test("disambiguates renewable connections in the list and removal confirmation", () => {
+    const removal = connectionsTabSource.slice(
+      connectionsTabSource.indexOf("const confirmRemoveProviderConnection"),
+      connectionsTabSource.indexOf("const providerConnectionList"),
+    );
+    const list = connectionsTabSource.slice(
+      connectionsTabSource.indexOf("const providerConnectionList"),
+      connectionsTabSource.indexOf("<Show when={providerConnectionRows().length > 0}>",
+        connectionsTabSource.indexOf("const providerConnectionList"),
+      ),
+    );
+    const renewableLabel = 't("conn.providerConnection.autoRenewing")';
+
+    expect(removal).toContain(renewableLabel);
+    expect(removal).toMatch(
+      /providerConnectionDisplayName\(\s*connection,\s*t\("conn\.providerConnection\.autoRenewing"\)/,
+    );
+    expect(list).toContain(renewableLabel);
+    expect(list).toMatch(
+      /providerConnectionDisplayName\(\s*connection,\s*t\("conn\.providerConnection\.autoRenewing"\)/,
+    );
+  });
+
   test("keeps connection creation behind an explicit action", () => {
     expect(connectionsTabSource).toContain("const shouldShowCreateForm = ()");
     expect(connectionsTabSource).toContain("const hasProviderConnections = ()");

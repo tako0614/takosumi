@@ -22,6 +22,13 @@ describe("RunView", () => {
     );
   });
 
+  test("labels renewable ProviderConnection evidence in the Run details", () => {
+    expect(source).toContain('t("conn.providerConnection.autoRenewing")');
+    expect(source).toMatch(
+      /providerConnectionName\(\s*connectionId,\s*connectionsById,\s*renewableLabel,\s*\)/,
+    );
+  });
+
   test("the Run ledger no longer becomes a second install screen", () => {
     expect(source).not.toContain("InstallProgressCard");
     expect(source).not.toContain("installScreen");

@@ -489,11 +489,12 @@ function providerResolutionNeedsAttention(row: ProviderResolutionRow): boolean {
 function providerConnectionName(
   connectionId: string | undefined,
   connectionsById: ReadonlyMap<string, ProviderConnection>,
+  renewableLabel?: string,
 ): string | undefined {
   if (!connectionId) return undefined;
   const connection = connectionsById.get(connectionId);
   return connection
-    ? providerConnectionDisplayName(connection) ||
+    ? providerConnectionDisplayName(connection, renewableLabel) ||
         providerDisplayName(connection.providerSource)
     : undefined;
 }
@@ -501,6 +502,7 @@ function providerConnectionName(
 function providerResolutionRows(
   run: Run | undefined,
   connectionsById: ReadonlyMap<string, ProviderConnection>,
+  renewableLabel?: string,
 ): readonly ProviderResolutionRow[] {
   return (run?.providerResolutions ?? []).map((resolution) => {
     const evidence = resolution.evidence;
@@ -515,7 +517,11 @@ function providerResolutionRows(
     return {
       provider: providerRequirementLabel(resolution),
       connectionId,
-      connectionName: providerConnectionName(connectionId, connectionsById),
+      connectionName: providerConnectionName(
+        connectionId,
+        connectionsById,
+        renewableLabel,
+      ),
       status: resolution.status,
       blockedReason:
         resolution.blockedReason ??
@@ -1096,7 +1102,11 @@ function Inner() {
       ),
   );
   const providerRows = createMemo(() =>
-    providerResolutionRows(run.latest, providerConnectionsById()),
+    providerResolutionRows(
+      run.latest,
+      providerConnectionsById(),
+      t("conn.providerConnection.autoRenewing"),
+    ),
   );
   const providerRowsNeedingAttention = createMemo(() =>
     providerRows().filter(providerResolutionNeedsAttention),
