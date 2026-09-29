@@ -85,6 +85,7 @@ import {
   isDeployApprovalCandidate,
   isReviewRun,
 } from "../../lib/run-approval.ts";
+import { canCancelRun } from "../../lib/run-cancel.ts";
 import { initialPlanRetryReport } from "../../lib/initial-plan-retry.ts";
 import {
   stateVersionReadinessAfterApply,
@@ -1480,10 +1481,13 @@ function Inner() {
     if (!ok) return;
     await cancel.run();
   };
-  // A queued/running run (or a parked review) can still be stopped.
+  // Only the states the run API's cancel route actually accepts: a `running`
+  // apply (or plan) is not stoppable, and offering the control there answered
+  // 409 on every click. The rule lives in lib/run-cancel.ts so it stays
+  // mirrored with `#cancelRun`.
   const cancellable = () => {
-    const s = run.latest?.status;
-    return s === "queued" || s === "running" || s === "waiting_approval";
+    const r = run.latest;
+    return r !== undefined && canCancelRun(r);
   };
 
   const costInfo = () => cost.latest;
