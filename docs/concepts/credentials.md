@@ -49,9 +49,9 @@ API では `POST /api/v1/connections` です。`/api/v1/provider-connections` �
 を明示的に選んでください。カタログや Recipe に対応情報があるだけでは有効にならず、既存の
 静的な Connection や割り当ても自動では切り替わりません。
 
-必要な provider のバージョンは provider ごとに異なります。たとえば Takoform provider の
-更新対応では `TAKOFORM_TOKEN_FILE` を使うため、4.1.0 以上が必要です。これは Takoform 固有の
-条件であり、Takosumi 全体の provider バージョン要件ではありません。
+必要な provider のバージョンは provider ごとに異なります。たとえば `TAKOFORM_TOKEN_FILE`
+による更新には Terraform provider `tako0614/takoform` の 4.1.0 以上が必要です。これはこの
+provider 固有の条件であり、Takosumi 全体の provider バージョン要件ではありません。
 
 ## 値がどこまで行くか
 
@@ -121,8 +121,9 @@ Recipe が無い provider も、generic な env / file の Connection を作れ�
 実行できます。
 
 参照 catalog に provider の更新対応が記述されていても、それだけでは登録された Recipe や
-Connection の opt-in にはなりません。実際に利用できるかは、選択した Connection、Recipe、
-provider の対応状況とバージョンによって決まります。
+Connection の opt-in にはなりません。実際の実行中更新は、更新 descriptor が明示された
+run-issued Credential Recipe によってのみ有効になります。利用には対応する Connection の
+選択と provider ごとの必要バージョンも満たす必要があります。
 
 ## 非 secret の設定と混ぜないでください
 
