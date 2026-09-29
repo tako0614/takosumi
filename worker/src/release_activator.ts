@@ -9,6 +9,7 @@ import type {
   ReleaseCommandRunJob,
   ReleaseCommandRunResult,
   OpenTofuReleaseMutationProgress,
+  OpenTofuReleaseObservationSelector,
   RunExecutionControl,
   OpenTofuRunner,
 } from "../../core/domains/deploy-control/mod.ts";
@@ -454,11 +455,11 @@ export function createRunnerReleaseActivator(
           },
           async observeRunner(input: ReleaseActivationInput, control?: RunExecutionControl) {
             throwIfAborted(control?.signal);
-            const prepared = prepareRunnerReleaseJob(input);
+            const prepared = prepareRunnerReleaseObservation(input);
             if (prepared.kind === "settled") {
               return { kind: "settled" as const, result: prepared.result };
             }
-            const progress = await runner.observeRelease!(prepared.job, control);
+            const progress = await runner.observeRelease!(prepared.selector, control);
             return runnerReleaseActivationStep(progress, prepared.phase);
           },
         }
@@ -477,6 +478,44 @@ type PreparedRunnerReleaseJob =
 function prepareRunnerReleaseJob(
   input: ReleaseActivationInput,
 ): PreparedRunnerReleaseJob {
+  const validated = validateRunnerReleaseCommands(input);
+  if (validated.kind === "settled") return validated;
+  const { phase, commands } = validated;
+  return {
+    kind: "ready",
+    phase,
+    job: {
+      runId: releaseCommandRunId(input.applyRun.id),
+      commands,
+      sourceSnapshot: input.sourceSnapshot!,
+      nonSensitiveOutputs: input.nonSensitiveOutputs,
+      providerConfigurations: input.providerConfigurations,
+      ...(input.credentials ? { credentials: input.credentials } : {}),
+      ...(input.runtimeSecretFileBundle
+        ? {
+            runtimeSecrets: input.runtimeSecretFileBundle.toRunnerDispatch(),
+          }
+        : {}),
+      ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
+      applyRunId: input.applyRun.id,
+      workspaceId: input.applyRun.workspaceId,
+      capsuleId: input.capsule.id,
+      stateVersionId: input.stateVersion.id,
+    },
+  };
+}
+
+type ValidatedRunnerReleaseCommands =
+  | { readonly kind: "settled"; readonly result: ReleaseActivationResult }
+  | {
+      readonly kind: "ready";
+      readonly phase: ReturnType<typeof releaseCommandPhaseLabel>;
+      readonly commands: readonly ReleaseActivationCommand[];
+    };
+
+function validateRunnerReleaseCommands(
+  input: ReleaseActivationInput,
+): ValidatedRunnerReleaseCommands {
   if (input.commands.length === 0) {
     return { kind: "settled", result: { status: "skipped" } };
   }
@@ -530,23 +569,31 @@ function prepareRunnerReleaseJob(
   return {
     kind: "ready",
     phase,
-    job: {
-      runId: releaseCommandRunId(input.applyRun.id),
-      commands: runnerCommands,
-      sourceSnapshot: input.sourceSnapshot,
-      nonSensitiveOutputs: input.nonSensitiveOutputs,
-      providerConfigurations: input.providerConfigurations,
-      ...(input.credentials ? { credentials: input.credentials } : {}),
-      ...(input.runtimeSecretFileBundle
-        ? {
-            runtimeSecrets: input.runtimeSecretFileBundle.toRunnerDispatch(),
-          }
-        : {}),
-      ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
+    commands: runnerCommands,
+  };
+}
+
+type PreparedRunnerReleaseObservation =
+  | { readonly kind: "settled"; readonly result: ReleaseActivationResult }
+  | {
+      readonly kind: "ready";
+      readonly phase: ReturnType<typeof releaseCommandPhaseLabel>;
+      readonly selector: OpenTofuReleaseObservationSelector;
+    };
+
+function prepareRunnerReleaseObservation(
+  input: ReleaseActivationInput,
+): PreparedRunnerReleaseObservation {
+  const validated = validateRunnerReleaseCommands(input);
+  if (validated.kind === "settled") return validated;
+  return {
+    kind: "ready",
+    phase: validated.phase,
+    selector: {
+      kind: "takosumi.runner-release-observation@v1",
+      releaseRunId: releaseCommandRunId(input.applyRun.id),
       applyRunId: input.applyRun.id,
-      workspaceId: input.applyRun.workspaceId,
-      capsuleId: input.capsule.id,
-      stateVersionId: input.stateVersion.id,
+      actionIds: validated.commands.map((command) => command.id),
     },
   };
 }

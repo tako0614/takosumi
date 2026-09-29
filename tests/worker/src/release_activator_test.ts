@@ -768,9 +768,9 @@ test("webhook release activator exposes bounded operator submit and observe", as
   expect(requests.map((request) => request.method)).toEqual(["POST", "GET"]);
 });
 
-test("runner release activator submits and observes the same release job without sync dispatch", async () => {
+test("runner release activator observes with a value-free selector and no sync dispatch", async () => {
   let submittedRunId: string | undefined;
-  let observedRunId: string | undefined;
+  let observedSelector: unknown;
   let syncCalls = 0;
   const activator = createRunnerReleaseActivator({
     release: async () => {
@@ -781,19 +781,22 @@ test("runner release activator submits and observes the same release job without
       submittedRunId = job.runId;
       return { kind: "pending" };
     },
-    observeRelease: async (job) => {
-      observedRunId = job.runId;
+    observeRelease: async (selector) => {
+      observedSelector = selector;
       return {
         kind: "completed",
         result: {
           status: "succeeded",
-          runId: job.runId,
-          commandCount: job.commands.length,
+          runId: selector.releaseRunId,
+          commandCount: selector.actionIds.length,
         },
       };
     },
   });
-  const input = fakeRunnerActivationInput();
+  const input = {
+    ...fakeRunnerActivationInput(),
+    runtimeSecretFileBundle: fakeRuntimeSecretFileBundle(),
+  } as ReleaseActivationInput;
 
   await expect(activator!.submitRunner!(input)).resolves.toEqual({
     kind: "pending",
@@ -811,7 +814,15 @@ test("runner release activator submits and observes the same release job without
     },
   });
   expect(submittedRunId).toBe("release_run_apply_1");
-  expect(observedRunId).toBe(submittedRunId);
+  expect(observedSelector).toEqual({
+    kind: "takosumi.runner-release-observation@v1",
+    releaseRunId: "release_run_apply_1",
+    applyRunId: "run_apply_1",
+    actionIds: ["activate"],
+  });
+  expect(observedSelector).not.toHaveProperty("credentials");
+  expect(observedSelector).not.toHaveProperty("runtimeSecrets");
+  expect(observedSelector).not.toHaveProperty("providerConfigurations");
   expect(syncCalls).toBe(0);
 });
 
