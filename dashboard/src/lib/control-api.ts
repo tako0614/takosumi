@@ -673,6 +673,11 @@ export interface Run {
 
 export interface SourceSnapshotWaitProgress {
   readonly elapsedMs: number;
+  /**
+   * Snapshots returned by the most recent listing this wait performed. It is
+   * `0` while no listing was authoritative (the sync Run is still queued or
+   * running), which is the normal case for most of the wait.
+   */
   readonly snapshotsCount: number;
   readonly run?: Run;
 }
@@ -1478,6 +1483,153 @@ function gitPlanTimeout(kind: "install" | "revision"): ControlApiError {
   );
 }
 
+/**
+ * Cadence for the coordinator reconcile loop.
+ *
+ * Every `reconcile` round trip is a command: it claims the coordinator lease
+ * and advances the state machine one step (see the install-plan reconcile
+ * route). A round that returns the same `phase` and the same CAS `generation`
+ * therefore advanced nothing — the coordinator is waiting on work the browser
+ * does not drive, such as a Source sync Run, a container-backed compatibility
+ * analysis, or a Plan Run. Repeating the command at a flat 4 Hz while it waits
+ * only re-pages the same durable rows, so the delay doubles from the floor up
+ * to the ceiling until a round observes real progress and resets it.
+ *
+ * The floor is what a *progressing* coordinator waits, so removing the flat
+ * delay here never slows a step that is actually advancing.
+ */
+export interface GitPlanPollCadence {
+  /** Delay after a round that advanced the coordinator. Defaults to 250 ms. */
+  readonly minDelayMs?: number;
+  /** Ceiling for the stalled-round delay. Defaults to 2_000 ms. */
+  readonly maxDelayMs?: number;
+  /** Jitter source for the stalled-round delay; defaults to `Math.random`. */
+  readonly jitter?: () => number;
+  /** How the loop spends a delay. Defaults to a real timer. */
+  readonly wait?: (milliseconds: number) => Promise<void>;
+}
+
+const DEFAULT_GIT_PLAN_POLL_FLOOR_MS = 250;
+const DEFAULT_GIT_PLAN_POLL_CEILING_MS = 2_000;
+
+interface ResolvedGitPlanPollCadence {
+  readonly minDelayMs: number;
+  readonly maxDelayMs: number;
+  readonly jitter: () => number;
+  readonly wait: (milliseconds: number) => Promise<void>;
+}
+
+/**
+ * Delay before the next reconcile command.
+ *
+ * `stalledRounds` counts consecutive rounds that observed no coordinator
+ * progress; `0` means the previous round advanced, which resets the cadence to
+ * its floor. `jitter` is the full-jitter ratio for the current ceiling, so two
+ * clients that are both waiting on the same slow step do not re-synchronize.
+ */
+export function gitPlanReconcileDelayMs(input: {
+  readonly stalledRounds: number;
+  readonly minDelayMs: number;
+  readonly maxDelayMs: number;
+  readonly jitter: number;
+}): number {
+  // The floor is at least 1 ms: a caller asking for no floor must still not
+  // turn a stalled coordinator into a busy loop.
+  const floor = Math.max(1, Math.trunc(input.minDelayMs));
+  const ceiling = Math.max(floor, Math.trunc(input.maxDelayMs));
+  // `stalledRounds` can only grow while a step is stuck; cap the exponent so a
+  // pathological loop cannot produce an unbounded multiply.
+  const growth = 2 ** Math.min(16, Math.max(0, input.stalledRounds - 1));
+  const target = Math.min(ceiling, floor * growth);
+  if (target <= floor) return floor;
+  const ratio = Math.min(1, Math.max(0, input.jitter));
+  return Math.round(floor + ratio * (target - floor));
+}
+
+function resolveGitPlanPollCadence(
+  cadence: GitPlanPollCadence | undefined,
+): ResolvedGitPlanPollCadence {
+  const minDelayMs = cadence?.minDelayMs ?? DEFAULT_GIT_PLAN_POLL_FLOOR_MS;
+  const maxDelayMs = cadence?.maxDelayMs ?? DEFAULT_GIT_PLAN_POLL_CEILING_MS;
+  if (!Number.isSafeInteger(minDelayMs) || minDelayMs < 0) {
+    throw new TypeError("Git plan pollCadence.minDelayMs must be a non-negative integer");
+  }
+  if (!Number.isSafeInteger(maxDelayMs) || maxDelayMs < minDelayMs) {
+    throw new TypeError(
+      "Git plan pollCadence.maxDelayMs must be an integer that is at least minDelayMs",
+    );
+  }
+  return {
+    minDelayMs,
+    maxDelayMs,
+    jitter: cadence?.jitter ?? Math.random,
+    wait:
+      cadence?.wait ??
+      ((milliseconds: number) =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, milliseconds);
+        })),
+  };
+}
+
+/** The coordinator facts a round trip can advance. */
+interface GitPlanProgressObservation {
+  readonly phase: string;
+  readonly generation: number;
+}
+
+/**
+ * Drives one Git plan coordinator until it stops asking for reconciliation.
+ *
+ * Shared by the install and revision coordinators so both spend the same
+ * bounded, progress-aware cadence instead of two copies of a flat sleep.
+ */
+async function driveGitPlanReconcile<T>(input: {
+  readonly kind: "install" | "revision";
+  readonly maxReconciles: number;
+  readonly signal: AbortSignal;
+  readonly cadence: ResolvedGitPlanPollCadence;
+  readonly initial: T;
+  readonly nextAction: (response: T) => GitInstallPlanResponse["nextAction"];
+  readonly observe: (response: T) => GitPlanProgressObservation;
+  readonly reconcile: (response: T) => Promise<T>;
+  readonly onProgress?: (response: T) => void;
+}): Promise<T> {
+  let response = input.initial;
+  let observed = input.observe(response);
+  let stalledRounds = 0;
+  for (
+    let attempt = 0;
+    input.nextAction(response) === "reconcile";
+    attempt += 1
+  ) {
+    if (attempt >= input.maxReconciles) {
+      throw gitPlanTimeout(input.kind);
+    }
+    response = await input.reconcile(response);
+    throwIfAborted(input.signal);
+    const nextObserved = input.observe(response);
+    stalledRounds =
+      nextObserved.phase !== observed.phase ||
+      nextObserved.generation !== observed.generation
+        ? 0
+        : stalledRounds + 1;
+    observed = nextObserved;
+    input.onProgress?.(response);
+    if (input.nextAction(response) !== "reconcile") continue;
+    await input.cadence.wait(
+      gitPlanReconcileDelayMs({
+        stalledRounds,
+        minDelayMs: input.cadence.minDelayMs,
+        maxDelayMs: input.cadence.maxDelayMs,
+        jitter: input.cadence.jitter(),
+      }),
+    );
+    throwIfAborted(input.signal);
+  }
+  return response;
+}
+
 /** Bounds create, reconciliation, and response bodies with one shared deadline. */
 async function withGitPlanDeadline<T>(
   kind: "install" | "revision",
@@ -1518,27 +1670,33 @@ export async function createReviewableGitRevisionPlan(
     readonly idempotencyKey?: string;
     /** Bounds the entire coordinator wait; defaults to two minutes. */
     readonly timeoutMs?: number;
+    /** Reconcile cadence; see {@link GitPlanPollCadence}. */
+    readonly pollCadence?: GitPlanPollCadence;
   } = {},
 ): Promise<GitRevisionPlanResponse> {
+  const cadence = resolveGitPlanPollCadence(options.pollCadence);
   return await withGitPlanDeadline("revision", options.timeoutMs, async (signal) => {
-    let response = await createGitRevisionPlan(
+    const first = await createGitRevisionPlan(
       capsuleId,
       request,
       options.idempotencyKey,
       { signal },
     );
     throwIfAborted(signal);
-    const max = options.maxReconciles ?? 120;
-    for (let attempt = 0; response.nextAction === "reconcile"; attempt += 1) {
-      if (attempt >= max) {
-        throw gitPlanTimeout("revision");
-      }
-      response = await reconcileGitRevisionPlan(response.revisionPlan.id, { signal });
-      throwIfAborted(signal);
-      if (response.nextAction === "reconcile") {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
-    }
+    const response = await driveGitPlanReconcile<GitRevisionPlanResponse>({
+      kind: "revision",
+      maxReconciles: options.maxReconciles ?? 120,
+      signal,
+      cadence,
+      initial: first,
+      nextAction: (current) => current.nextAction,
+      observe: (current) => ({
+        phase: current.revisionPlan.phase,
+        generation: current.revisionPlan.generation,
+      }),
+      reconcile: (current) =>
+        reconcileGitRevisionPlan(current.revisionPlan.id, { signal }),
+    });
     if (
       response.nextAction !== "review_run" ||
       !response.revisionPlan.planRunId
@@ -1569,29 +1727,35 @@ export async function createReviewableGitInstallPlan(
     readonly timeoutMs?: number;
     /** Acknowledged coordinator records only; never replays request contents. */
     readonly onProgress?: (response: GitInstallPlanResponse) => void;
+    /** Reconcile cadence; see {@link GitPlanPollCadence}. */
+    readonly pollCadence?: GitPlanPollCadence;
   } = {},
 ): Promise<GitInstallPlanResponse> {
+  const cadence = resolveGitPlanPollCadence(options.pollCadence);
   return await withGitPlanDeadline("install", options.timeoutMs, async (signal) => {
-    let response = await createGitInstallPlan(
+    const first = await createGitInstallPlan(
       workspaceId,
       request,
       options.idempotencyKey,
       { signal },
     );
     throwIfAborted(signal);
-    options.onProgress?.(response);
-    const max = options.maxReconciles ?? 120;
-    for (let attempt = 0; response.nextAction === "reconcile"; attempt += 1) {
-      if (attempt >= max) {
-        throw gitPlanTimeout("install");
-      }
-      response = await reconcileGitInstallPlan(response.installPlan.id, { signal });
-      throwIfAborted(signal);
-      options.onProgress?.(response);
-      if (response.nextAction === "reconcile") {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
-    }
+    options.onProgress?.(first);
+    const response = await driveGitPlanReconcile<GitInstallPlanResponse>({
+      kind: "install",
+      maxReconciles: options.maxReconciles ?? 120,
+      signal,
+      cadence,
+      initial: first,
+      nextAction: (current) => current.nextAction,
+      observe: (current) => ({
+        phase: current.installPlan.phase,
+        generation: current.installPlan.generation,
+      }),
+      reconcile: (current) =>
+        reconcileGitInstallPlan(current.installPlan.id, { signal }),
+      onProgress: (current) => options.onProgress?.(current),
+    });
     if (
       response.nextAction !== "review_run" ||
       !response.installPlan.planRunId
@@ -3288,6 +3452,43 @@ export async function listSourceSnapshots(
   );
 }
 
+/**
+ * Resolves one Snapshot identity by paging until the page that contains it.
+ *
+ * `listSourceSnapshots` answers "what did this Source produce?" and therefore
+ * walks every page. Resolving an identity a Run already named does not need
+ * the whole history, and stopping at the first matching page is equivalent
+ * because Snapshot ids are unique.
+ */
+async function findSourceSnapshotById(
+  sourceId: string,
+  sourceSnapshotId: string,
+  options: { readonly signal?: AbortSignal } = {},
+): Promise<SourceSnapshot | undefined> {
+  const basePath = `${BASE}/sources/${encodeURIComponent(sourceId)}/snapshots`;
+  let cursor: string | undefined;
+  for (let guard = 0; guard < 10_000; guard += 1) {
+    const sep = basePath.includes("?") ? "&" : "?";
+    const path =
+      cursor === undefined
+        ? basePath
+        : `${basePath}${sep}cursor=${encodeURIComponent(cursor)}`;
+    const body = await controlFetch<{
+      nextCursor?: string;
+      snapshots?: readonly SourceSnapshot[];
+    }>(path, { signal: options.signal });
+    const found = (body.snapshots ?? []).find(
+      (snapshot) => snapshot.id === sourceSnapshotId,
+    );
+    if (found) return found;
+    if (typeof body.nextCursor !== "string" || body.nextCursor === "") {
+      return undefined;
+    }
+    cursor = body.nextCursor;
+  }
+  return undefined;
+}
+
 export async function resolveStableSourceTag(
   workspaceId: string,
   url: string,
@@ -3341,7 +3542,12 @@ export async function waitForLatestSourceSnapshot(
         const message = await sourceSyncFailureMessage(run, options.signal);
         throw new ControlApiError(409, "source_sync_failed", message, {
           run,
-          snapshots: lastSnapshots,
+          // A fresh listing for diagnostics only. The Run failure is the
+          // primary error, so a listing that also fails must not replace it.
+          snapshots: await sourceSnapshotsForDiagnostics(
+            sourceId,
+            options.signal,
+          ),
         });
       }
       if (
@@ -3364,18 +3570,23 @@ export async function waitForLatestSourceSnapshot(
       }
     }
 
-    lastSnapshots = await listSourceSnapshots(sourceId, {
-      signal: options.signal,
-    });
     if (options.runId) {
       // Do not accept a pre-existing snapshot while this requested sync is
       // queued/running. Update plans must pin the exact immutable snapshot
       // produced by the requested SourceSyncRun.
       if (run?.status === "succeeded" && run.sourceSnapshotId) {
-        const exact = lastSnapshots.find(
-          (snapshot) => snapshot.id === run.sourceSnapshotId,
+        // The Run already names the exact Snapshot, so page until that
+        // identity appears instead of listing the whole history. The listing
+        // endpoint is paginated: polling it while the Run was still running
+        // re-read every page of the Workspace's Snapshot history at 1/1.5 s
+        // without being able to decide the wait.
+        const exact = await findSourceSnapshotById(
+          sourceId,
+          run.sourceSnapshotId,
+          { signal: options.signal },
         );
         if (exact) {
+          lastSnapshots = [exact];
           if (
             options.expectedRef !== undefined &&
             (!sameGitRef(exact.ref, options.expectedRef) ||
@@ -3389,6 +3600,10 @@ export async function waitForLatestSourceSnapshot(
         }
       }
     } else {
+      // Without a Run to observe, the Snapshot listing *is* the poll.
+      lastSnapshots = await listSourceSnapshots(sourceId, {
+        signal: options.signal,
+      });
       const latest = [...lastSnapshots].sort((a, b) =>
         b.fetchedAt.localeCompare(a.fetchedAt),
       )[0];
@@ -3410,6 +3625,21 @@ export async function waitForLatestSourceSnapshot(
     "Source contents are still being fetched.",
     { sourceId, snapshots: lastSnapshots },
   );
+}
+
+/**
+ * Best-effort Snapshot listing for an error payload. The Run failure is the
+ * primary error, so a diagnostics listing that also fails must not replace it.
+ */
+async function sourceSnapshotsForDiagnostics(
+  sourceId: string,
+  signal?: AbortSignal,
+): Promise<readonly SourceSnapshot[]> {
+  try {
+    return await listSourceSnapshots(sourceId, signal ? { signal } : {});
+  } catch {
+    return [];
+  }
 }
 
 async function sourceSyncFailureMessage(
