@@ -29,7 +29,8 @@ slot cannot identify a digest; otherwise it is `absent`, `malformed`,
 their finite identity and phase fields, **not** that provider execution
 succeeded, state was persisted, or adoption is safe.
 
-For future state-scoped mutations, the initial verified `preparing` claim also
+For future state-scoped mutations carrying complete immutable Run, plan, and
+commit identity, the initial verified `preparing` claim also
 atomically stores an immutable, diagnostic-only
 `runner-mutation-target-witness@v1:<semanticDigest>` companion. It records the
 exact ApplyRun and PlanRun identities, action, canonical allocated R2_STATE
@@ -37,8 +38,11 @@ generation target, raw-output coordinate (Apply only), and minimal plan/commit
 identity. The v2 claim alone remains dispatch authority; the companion cannot
 authorize adoption, replay, or a Core terminal transition. Existing claims,
 including an already `preparing` claim resumed after restart, are never
-backfilled. A legacy claim without the companion therefore has
+backfilled. A legacy or incomplete low-level dispatch without the companion
+therefore has
 `target.status: "unknown"` even if a current request offers a target.
+Missing diagnostic identity never becomes a new provider-dispatch rejection;
+the existing Runner/Core request validators retain that decision.
 
 The read-only RPC snapshots all three DO records and reads R2 only when the
 paired v2 records match and the witness matches the exact Core ApplyRun,

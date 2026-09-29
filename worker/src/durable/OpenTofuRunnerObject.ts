@@ -1444,14 +1444,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         targetWitness = mutationTargetWitnessForRequest(
           runId, action, requestPayload, semanticDigest,
         );
-      } catch (error) {
-        this.#activeMutationPreparations.delete(semanticDigest);
-        console.error("OpenTofu runner mutation target rejected", {
-          action,
-          errorName: safeRunnerErrorName(error),
-          redispatchBlocked: true,
-        });
-        return { kind: "blocked" };
+      } catch {
+        // Witnessing is observation, not a new dispatch precondition. The
+        // existing runner/Core validation remains the only request gate.
+        targetWitness = undefined;
       }
       const record: RunnerMutationDispatchRecord = {
         kind: "takosumi.runner-mutation-dispatch@v2",
@@ -6323,9 +6319,13 @@ function mutationTargetWitnessForRequest(
     !isSha256Digest(artifactDigest) ||
     (action === "apply" && (!rawOutputRef || !outputId)) ||
     (action === "destroy" && (outputId || rawOutputRef))
-  ) throw new Error("mutation target witness lacks immutable run/plan/commit identity");
-  assertStateRefForScope(scope);
-  if (rawOutputRef) assertRawOutputRefForScope(scope, applyRunId, rawOutputRef);
+  ) return undefined;
+  try {
+    assertStateRefForScope(scope);
+    if (rawOutputRef) assertRawOutputRefForScope(scope, applyRunId, rawOutputRef);
+  } catch {
+    return undefined;
+  }
   const witness: RunnerMutationTargetWitness = {
     kind: "takosumi.runner-mutation-target-witness@v1",
     action,
@@ -6346,10 +6346,7 @@ function mutationTargetWitnessForRequest(
     commit: { stateVersionId, ...(outputId ? { outputId } : {}) },
     plan: { digest: planDigest, artifactDigest },
   };
-  if (!parseRunnerMutationTargetWitness(witness)) {
-    throw new Error("mutation target witness is invalid");
-  }
-  return witness;
+  return parseRunnerMutationTargetWitness(witness);
 }
 
 function parseRunnerMutationTargetWitness(

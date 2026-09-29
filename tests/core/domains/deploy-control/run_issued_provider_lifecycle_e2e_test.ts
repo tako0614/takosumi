@@ -238,6 +238,35 @@ test("generic run-issued credentials reach plan, apply, and destroy runner dispa
   expect(runner.planJobs).toHaveLength(2);
   expect(runner.applyJobs).toHaveLength(1);
   expect(runner.destroyJobs).toHaveLength(1);
+  // The actual Core producer supplies the complete immutable identity needed
+  // for a future Runner target witness. Low-level legacy dispatches may omit
+  // these optional diagnostic fields without gaining a witness.
+  for (const job of [runner.applyJobs[0]!, runner.destroyJobs[0]!]) {
+    const scope = job.stateScope;
+    expect(scope).toBeDefined();
+    expect(job.applyRun.planRunId).toBe(job.planRun.id);
+    expect(job.applyRun.workspaceId).toBe(scope?.workspaceId);
+    expect(job.planRun.workspaceId).toBe(scope?.workspaceId);
+    expect(job.applyRun.operation).toBe(job.planRun.operation);
+    expect(job.planRun.planDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(job.planArtifact.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(job.executionEvidenceCommit?.stateVersionId).toBeTruthy();
+    const subject = scope?.subject;
+    const collection = subject?.kind === "resource" ? "resources" : "capsules";
+    expect(scope?.stateRef).toBe(
+      `workspaces/${scope?.workspaceId}/${collection}/${subject?.id}/environments/${scope?.environment}/state-versions/${String(scope?.generation).padStart(8, "0")}.tfstate.enc`,
+    );
+  }
+  const applyJob = runner.applyJobs[0]!;
+  const applyScope = applyJob.stateScope!;
+  expect(["create", "update"]).toContain(applyJob.applyRun.operation);
+  expect(runner.destroyJobs[0]?.applyRun.operation).toBe("destroy");
+  expect(applyJob.rawOutputRef).toBe(
+    `workspaces/${applyScope.workspaceId}/capsules/${applyScope.subject.id}/runs/${applyJob.applyRun.id}/outputs.raw.json.enc`,
+  );
+  expect("outputId" in (runner.applyJobs[0]?.executionEvidenceCommit ?? {})).toBe(true);
+  expect(runner.destroyJobs[0]?.rawOutputRef).toBeUndefined();
+  expect("outputId" in (runner.destroyJobs[0]?.executionEvidenceCommit ?? {})).toBe(false);
   const dispatched = [
     { job: runner.planJobs[0]!, phase: "plan" as const },
     { job: runner.applyJobs[0]!, phase: "apply" as const },

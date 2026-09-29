@@ -342,16 +342,52 @@ test("future destroy witness validates its exact target without raw Output", asy
     async containerFetch() { throw new Error("inspection must not contact container"); },
   }, options).inspectMutationAuthority(`apply_${planRunId}`, "destroy", "workspace_semantic")).target.status, "conflicting");
   const invalidStorage = new FakeDoStorage();
+  let legacyProviderCalls = 0;
   const invalid = await runnerWithContainer(artifacts, mutationSuccessContainer(
-    planRunId, () => { throw new Error("provider must not run"); },
-  ), { ...options, storage: invalidStorage }).fetch(signedMutationRequest(
+    planRunId, () => { legacyProviderCalls += 1; },
+  ), { ...options, storage: invalidStorage, stateBucket: new FakeR2Bucket() }).fetch(signedMutationRequest(
     planRunId, token, {
       action: "destroy", stateScope: capsuleStateScope(),
       rawOutputRef: rawOutputRefFor(planRunId),
     },
   ));
-  assert.equal(invalid.status, 409, await invalid.text());
-  assert.deepEqual(invalidStorage.entries(), []);
+  assert.equal(invalid.status, 200, await invalid.text());
+  assert.equal(legacyProviderCalls, 1);
+  assert.equal(invalidStorage.entries().some(([key]) => key.startsWith("runner-mutation-target-witness@v1:")), false);
+});
+
+test("scoped mutation without optional witness identity keeps the existing dispatch path", async () => {
+  const planRunId = "plan_target_legacy_shape";
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  await seedEncryptedPlan(artifacts, planRunId);
+  const token = await signedMutationToken(planRunId, {});
+  const full = signedMutationRequest(planRunId, token, {
+    stateScope: capsuleStateScope(), rawOutputRef: rawOutputRefFor(planRunId),
+  });
+  const envelope = await full.json() as { request: { applyRun: Record<string, unknown> } };
+  delete envelope.request.applyRun.planRunId;
+  let providerCalls = 0;
+  const response = await runnerWithContainer(
+    artifacts,
+    mutationSuccessContainer(planRunId, () => { providerCalls += 1; }),
+    {
+      stateBucket: state, storage,
+      env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET },
+    },
+  ).fetch(new Request(full.url, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(envelope),
+  }));
+  assert.equal(response.status, 200, await response.text());
+  assert.equal(providerCalls, 1);
+  assert.equal(storage.entries().some(([key]) => key.startsWith("runner-mutation-target-witness@v1:")), false);
+  assert.equal((await runnerWithContainer(artifacts, {
+    async containerFetch() { throw new Error("inspection must not contact container"); },
+  }, { storage, stateBucket: state }).inspectMutationAuthority(
+    `apply_${planRunId}`, "apply", "workspace_semantic",
+  )).target.status, "unknown");
 });
 
 interface RestoreSourceDescriptor {
