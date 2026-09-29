@@ -16,6 +16,7 @@ import {
   type RunnerMutationAction,
   type RunnerMutationIndeterminatePayload,
 } from "../runner_protocol.ts";
+import type { OpenTofuMutationCredentialStatus } from "../../../core/domains/deploy-control/mod.ts";
 import {
   isRunCredentialToken,
   runCredentialTokenSecret,
@@ -41,7 +42,7 @@ const DEFAULT_PLAN_JSON_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024;
 const DEFAULT_PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES = 1 * 1024 * 1024;
 // At-rest content type for AES-GCM ciphertext blobs (state/plan .enc objects).
 const ENCRYPTED_ARTIFACT_CONTENT_TYPE = "application/octet-stream";
-const RUNNER_REQUEST_HEADER_ALLOWLIST = new Set(["content-type"]);
+const RUNNER_REQUEST_HEADER_ALLOWLIST = new Set(["content-type", "prefer"]);
 const R2_PUT_RETRY_ATTEMPTS = 8;
 const R2_PUT_RETRY_BASE_MS = 500;
 const R2_PUT_RETRY_MAX_MS = 10_000;
@@ -393,6 +394,8 @@ const MAX_RUNNER_KEEPALIVE_SECONDS = 900;
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
 const RUNNER_MUTATION_INDETERMINATE_HEADER =
   "x-takosumi-runner-mutation-indeterminate";
+const RUNNER_MUTATION_PENDING_HEADER =
+  "x-takosumi-runner-mutation-pending";
 // This is a permanent authority slot, not a schema-versioned cache key. An
 // unrecognized record at this key fails closed instead of letting a future
 // record-format migration accidentally grant a second provider dispatch.
@@ -443,6 +446,58 @@ interface RunnerMutationTargetWitness {
   readonly rawOutputRef?: string;
   readonly commit: { readonly stateVersionId: string; readonly outputId?: string };
   readonly plan: { readonly digest: string; readonly artifactDigest: string };
+  /** Nonsecret completion projection needed to persist an async terminal result. */
+  readonly completion?: RunnerMutationCompletionRecipe;
+  readonly credentialRefresh?: RunnerMutationCredentialRecipe;
+}
+
+interface RunnerMutationCompletionRecipe {
+  readonly runnerProfileId: string;
+  readonly executorId: string;
+  readonly requiredProviders: readonly string[];
+  readonly executionEvidenceAuthority: {
+    readonly controllerArtifact: Record<string, unknown>;
+    readonly runnerArtifact: Record<string, unknown>;
+    readonly executorArtifact: Record<string, unknown>;
+  };
+}
+
+type RunnerMutationCredentialRecipe =
+  | { readonly kind: "none" }
+  | {
+      readonly kind: "active";
+      readonly manifestDigest: string;
+      readonly descriptors: readonly {
+        readonly providerSource: string;
+        readonly connectionId: string;
+        readonly sourceEnvName: string;
+        readonly fileEnvName: string;
+      }[];
+    };
+
+interface RunnerMutationObservationSelector {
+  readonly kind: "takosumi.runner-mutation-observation@v1";
+  readonly action: RunnerMutationAction;
+  readonly applyRunId: string;
+  readonly runnerRunId: string;
+  readonly planRunId: string;
+  readonly stateScope: {
+    readonly workspaceId: string;
+    readonly subject: { readonly kind: "capsule" | "resource"; readonly id: string };
+    readonly environment: string;
+    readonly generation: number;
+    readonly stateRef: string;
+  };
+  readonly rawOutputRef?: string;
+  readonly commit: { readonly stateVersionId: string; readonly outputId?: string };
+  readonly plan: { readonly digest: string; readonly artifactDigest: string };
+}
+
+interface RunnerReleaseObservationSelector {
+  readonly kind: "takosumi.runner-release-observation@v1";
+  readonly releaseRunId: string;
+  readonly applyRunId: string;
+  readonly actionIds: readonly string[];
 }
 
 export type RunnerMutationInspection = {
@@ -874,7 +929,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   }
 
   async fetch(request: Request): Promise<Response> {
-    if (this.#containerRuntimeUnavailable()) {
+    const privateReadOnlyMutationRoute = /\/runs\/[^/]+\/(?:observe|credentials\/inspect)$/.test(
+      new URL(request.url).pathname,
+    );
+    if (this.#containerRuntimeUnavailable() && !privateReadOnlyMutationRoute) {
       return Response.json(
         {
           error: "OpenTofu runner container runtime is unavailable",
@@ -886,11 +944,13 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     }
     const runDispatch = isRunDispatchRequest(request);
     let mutationIndeterminate = false;
+    let mutationPending = false;
     try {
       this.#lastStartupSeconds = undefined;
       const response = await this.#fetchWithDurablePlanArtifacts(request);
       mutationIndeterminate =
         response.headers.get(RUNNER_MUTATION_INDETERMINATE_HEADER) === "1";
+      mutationPending = response.headers.get(RUNNER_MUTATION_PENDING_HEADER) === "1";
       const output = runDispatch
         ? await bufferedResponse(response, this.#artifactLimits.runnerResponse)
         : response;
@@ -942,8 +1002,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         { status: 500 },
       );
     } finally {
-      if (runDispatch) {
-        const dispatchRunId = new URL(request.url).pathname.match(/^\/runs\/([^/]+)$/)?.[1];
+      if (runDispatch && !mutationPending) {
+        const dispatchRunId = new URL(request.url).pathname.match(/^\/runs\/([^/]+)(?:\/observe)?$/)?.[1];
         if (dispatchRunId) {
           const id = decodeURIComponent(dispatchRunId);
           const active = this.#activeCredentialRefreshClaims.get(id);
@@ -953,7 +1013,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           }
         }
       }
-      if (runDispatch && !mutationIndeterminate) {
+      if (runDispatch && !mutationIndeterminate && !mutationPending) {
         await this.#shutdownContainerIfSupported();
       }
       this.#lastStartupSeconds = undefined;
@@ -1138,6 +1198,112 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       request,
       this.defaultPort,
     );
+  }
+
+  async #readMutationObservation(
+    selector: RunnerMutationObservationSelector,
+  ): Promise<{
+    readonly dispatch: RunnerMutationDispatchRecord;
+    readonly witness: RunnerMutationTargetWitness;
+  } | undefined> {
+    return await this.ctx.storage.transaction(async (storage) => {
+      const authority = parseRunnerMutationDispatchRecord(
+        await storage.get<unknown>(RUNNER_MUTATION_AUTHORITY_STORAGE_KEY),
+      );
+      if (
+        !authority || authority.action !== selector.action ||
+        (authority.phase !== "dispatched" && authority.phase !== "indeterminate")
+      ) return undefined;
+      const rawDispatch = await storage.get<unknown>(
+        `${RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX}${authority.semanticDigest}`,
+      );
+      const dispatch = parseRunnerMutationDispatchRecord(rawDispatch);
+      const witness = parseRunnerMutationTargetWitness(await storage.get<unknown>(
+        `${RUNNER_MUTATION_TARGET_WITNESS_STORAGE_PREFIX}${authority.semanticDigest}`,
+      ));
+      if (
+        !dispatch || !witness || dispatch.action !== authority.action ||
+        dispatch.semanticDigest !== authority.semanticDigest ||
+        dispatch.version !== authority.version || dispatch.fence !== authority.fence ||
+        dispatch.phase !== authority.phase || witness.action !== authority.action ||
+        witness.semanticDigest !== authority.semanticDigest ||
+        witness.version !== authority.version || witness.fence !== authority.fence ||
+        !mutationObservationSelectorMatchesWitness(selector, witness)
+      ) return undefined;
+      return { dispatch: authority, witness };
+    });
+  }
+
+  async #readReleaseObservation(
+    selector: RunnerReleaseObservationSelector,
+  ): Promise<RunnerReleaseDispatchRecord | undefined> {
+    const record = parseRunnerReleaseDispatchRecord(
+      await this.ctx.storage.get<unknown>(RUNNER_RELEASE_AUTHORITY_STORAGE_KEY),
+    );
+    if (
+      !record || record.releaseRunId !== selector.releaseRunId ||
+      record.applyRunId !== selector.applyRunId ||
+      !sameOrderedStrings(record.actionIds, selector.actionIds) ||
+      (record.phase !== "dispatched" && record.phase !== "completed" &&
+        record.phase !== "indeterminate")
+    ) return undefined;
+    return record;
+  }
+
+  async #inspectMutationCredentials(
+    selector: RunnerMutationObservationSelector,
+  ): Promise<OpenTofuMutationCredentialStatus> {
+    const bound = await this.#readMutationObservation(selector);
+    if (!bound) return { kind: "indeterminate" };
+    const recipe = bound.witness.credentialRefresh;
+    if (recipe?.kind === "none") return { kind: "none" };
+    if (!recipe || recipe.kind !== "active") return { kind: "indeterminate" };
+    try {
+      const response = await this.#containerFetch(new Request(
+        `https://opentofu-runner.internal/runs/${encodeURIComponent(selector.runnerRunId)}/credentials`,
+        { method: "GET" },
+      ));
+      if (!response.ok) return { kind: "indeterminate" };
+      const metadata = await readJsonObject(response, 8_192);
+      const claim = {
+        owner: { kind: "apply" as const, id: selector.applyRunId },
+        runnerRunId: selector.runnerRunId,
+        action: selector.action,
+        semanticDigest: bound.dispatch.semanticDigest,
+        manifestDigest: recipe.manifestDigest,
+        descriptors: recipe.descriptors,
+        sequence: 0,
+        busy: false,
+        poisoned: false,
+      };
+      if (!mutationCredentialMetadataMatches(metadata, selector.runnerRunId, selector.applyRunId, claim)) {
+        return { kind: "indeterminate" };
+      }
+      const active: ActiveCredentialRefreshClaim = {
+        ...claim,
+        sequence: metadata.sequence as number,
+        busy: false,
+        poisoned: false,
+        containerStarted: true,
+        staged: new Map(),
+      };
+      this.#activeCredentialRefreshClaims.set(selector.runnerRunId, active);
+      const credentials = (metadata.credentials as Record<string, unknown>[]).map((entry) => ({
+        providerSource: entry.providerSource as string,
+        connectionId: entry.connectionId as string,
+        sourceEnvName: entry.sourceEnvName as string,
+        fileEnvName: entry.fileEnvName as string,
+        expiresAt: entry.expiresAt as string,
+      }));
+      return {
+        kind: "active",
+        manifestDigest: recipe.manifestDigest,
+        sequence: metadata.sequence as number,
+        credentials,
+      };
+    } catch {
+      return { kind: "indeterminate" };
+    }
   }
 
   async #forwardCredentialRefresh(
@@ -1381,6 +1547,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runId: string,
     action: RunnerMutationAction,
     requestPayload: unknown,
+    requireCompletionRecipe = false,
   ): Promise<RunnerMutationAuthorityClaim> {
     let semanticDigest: string;
     try {
@@ -1442,7 +1609,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       let targetWitness: RunnerMutationTargetWitness | undefined;
       try {
         targetWitness = mutationTargetWitnessForRequest(
-          runId, action, requestPayload, semanticDigest,
+          runId, action, requestPayload, semanticDigest, requireCompletionRecipe,
         );
       } catch (error) {
         this.#activeMutationPreparations.delete(semanticDigest);
@@ -1644,6 +1811,202 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     }
   }
 
+  async #observeAsyncMutationResult(
+    runId: string,
+    action: RunnerMutationAction,
+    applyRunId: string | undefined,
+    stateScope: StateScope | undefined,
+    rawOutputRef: string | undefined,
+    credentialRefreshClaim: Omit<ActiveCredentialRefreshClaim, "semanticDigest"> | undefined,
+    dispatch: RunnerMutationDispatchRecord,
+  ): Promise<Response> {
+    let response: Response | undefined;
+    try {
+      response = await this.#containerFetch(new Request(
+        `https://opentofu-runner.internal/runs/${encodeURIComponent(runId)}/result`,
+        { method: "GET" },
+      ));
+    } catch {
+      response = undefined;
+    }
+    if (response?.status === 202) {
+      return await this.#pendingMutationResponse(
+        response,
+        runId,
+        action,
+        applyRunId,
+        credentialRefreshClaim,
+        dispatch,
+      );
+    }
+    if (response && response.status !== 404 && response.status !== 410 && response.ok) {
+      return response;
+    }
+    // A fresh, exact state/output/evidence receipt remains the only alternate
+    // completion path when the Container no longer has the result. A missing
+    // or restarted Container by itself never proves that mutation did not run.
+    if (applyRunId && stateScope) {
+      try {
+        const adopted = await this.#adoptCompletedStateMutationFromR2(
+          applyRunId,
+          stateScope,
+          action,
+          rawOutputRef,
+        );
+        if (adopted) return adopted;
+      } catch {
+        // Fall through to the stable typed indeterminate response.
+      }
+    }
+    return runnerMutationIndeterminateResponse(action);
+  }
+
+  async #pendingMutationResponse(
+    response: Response,
+    runId: string,
+    action: RunnerMutationAction,
+    applyRunId: string | undefined,
+    credentialRefreshClaim: Omit<ActiveCredentialRefreshClaim, "semanticDigest"> | undefined,
+    dispatch: RunnerMutationDispatchRecord,
+  ): Promise<Response> {
+    let payload: Record<string, unknown>;
+    try {
+      payload = await readJsonObject(response, 4_096);
+    } catch {
+      return await this.#recordMutationIndeterminate(
+        dispatch,
+        new Error("runner pending acknowledgement was malformed"),
+      );
+    }
+    if (
+      !applyRunId ||
+      payload.kind !== "takosumi.runner-mutation-pending@v1" ||
+      payload.runId !== runId ||
+      payload.applyRunId !== applyRunId ||
+      payload.action !== action ||
+      (payload.status !== "accepted" && payload.status !== "running")
+    ) {
+      return await this.#recordMutationIndeterminate(
+        dispatch,
+        new Error("runner pending acknowledgement identity mismatched"),
+      );
+    }
+    if (credentialRefreshClaim) {
+      await this.#restoreActiveMutationCredentialClaim(
+        runId,
+        action,
+        applyRunId,
+        credentialRefreshClaim,
+        dispatch,
+      );
+    }
+    return Response.json(
+      { kind: "pending" },
+      { status: 202, headers: { [RUNNER_MUTATION_PENDING_HEADER]: "1" } },
+    );
+  }
+
+  async #observeAsyncReleaseResult(
+    runId: string,
+    dispatch: RunnerReleaseDispatchRecord,
+  ): Promise<Response> {
+    let response: Response | undefined;
+    try {
+      response = await this.#containerFetch(new Request(
+        `https://opentofu-runner.internal/runs/${encodeURIComponent(runId)}/result`,
+        { method: "GET" },
+      ));
+    } catch {
+      response = undefined;
+    }
+    if (response?.status === 202) {
+      return await this.#pendingReleaseResponse(response, runId, dispatch);
+    }
+    if (response && response.status !== 404 && response.status !== 410) {
+      return response;
+    }
+    return await this.#recordReleaseIndeterminate(
+      dispatch,
+      new Error("runner release result is unavailable after dispatch"),
+    );
+  }
+
+  async #pendingReleaseResponse(
+    response: Response,
+    runId: string,
+    dispatch: RunnerReleaseDispatchRecord,
+  ): Promise<Response> {
+    let payload: Record<string, unknown>;
+    try {
+      payload = await readJsonObject(response, 4_096);
+    } catch {
+      return await this.#recordReleaseIndeterminate(
+        dispatch,
+        new Error("runner release pending acknowledgement was malformed"),
+      );
+    }
+    if (
+      payload.kind !== "takosumi.runner-mutation-pending@v1" ||
+      payload.runId !== runId ||
+      payload.applyRunId !== dispatch.applyRunId ||
+      payload.action !== "release" ||
+      (payload.status !== "accepted" && payload.status !== "running")
+    ) {
+      return await this.#recordReleaseIndeterminate(
+        dispatch,
+        new Error("runner release pending acknowledgement identity mismatched"),
+      );
+    }
+    return Response.json(
+      { kind: "pending" },
+      { status: 202, headers: { [RUNNER_MUTATION_PENDING_HEADER]: "1" } },
+    );
+  }
+
+  async #restoreActiveMutationCredentialClaim(
+    runnerRunId: string,
+    action: RunnerMutationAction,
+    applyRunId: string,
+    claim: Omit<ActiveCredentialRefreshClaim, "semanticDigest">,
+    dispatch: RunnerMutationDispatchRecord,
+  ): Promise<void> {
+    const current = this.#activeCredentialRefreshClaims.get(runnerRunId);
+    if (current && current.semanticDigest === dispatch.semanticDigest &&
+      current.owner.kind === "apply" && current.owner.id === applyRunId &&
+      current.action === action && !current.poisoned) return;
+    try {
+      const ready = await this.#containerFetch(new Request(
+        `https://opentofu-runner.internal/runs/${encodeURIComponent(runnerRunId)}/credentials`,
+        { method: "GET" },
+      ));
+      if (!ready.ok) return;
+      const metadata = await readJsonObject(ready, 8_192);
+      if (!mutationCredentialMetadataMatches(metadata, runnerRunId, applyRunId, claim)) return;
+      const durable = parseRunnerMutationDispatchRecord(
+        await this.ctx.storage.get<unknown>(RUNNER_MUTATION_AUTHORITY_STORAGE_KEY),
+      );
+      if (!durable || durable.phase !== "dispatched" ||
+        durable.action !== dispatch.action ||
+        durable.semanticDigest !== dispatch.semanticDigest ||
+        durable.version !== dispatch.version || durable.fence !== dispatch.fence) return;
+      this.#activeCredentialRefreshClaims.set(runnerRunId, {
+        ...claim,
+        owner: { kind: "apply", id: applyRunId },
+        runnerRunId,
+        action,
+        semanticDigest: dispatch.semanticDigest,
+        sequence: metadata.sequence as number,
+        busy: false,
+        poisoned: false,
+        containerStarted: true,
+        staged: new Map(),
+      });
+    } catch {
+      // An unavailable or mismatched side channel fails closed; it never blocks
+      // the read-only result poll and the next exact observation may retry.
+    }
+  }
+
   async #recordMutationIndeterminate(
     record: RunnerMutationDispatchRecord,
     error: unknown,
@@ -1833,7 +2196,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       );
       if (
         !current ||
-        current.phase !== "dispatched" ||
+        (current.phase !== "dispatched" && current.phase !== "indeterminate") ||
         !sameReleaseDispatchIdentity(current, record)
       ) {
         return undefined;
@@ -1910,20 +2273,124 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       return Response.json({ owner: { kind: ownerKind, id: ownerId }, runnerRunId, capabilities });
     }
     const refreshMatch = /^\/runs\/([^/]+)\/credentials$/.exec(url.pathname);
+    const credentialInspectMatch = /^\/runs\/([^/]+)\/credentials\/inspect$/.exec(url.pathname);
+    if (credentialInspectMatch && request.method === "POST") {
+      const runnerRunId = decodeURIComponent(credentialInspectMatch[1]!);
+      let selector: RunnerMutationObservationSelector | undefined;
+      try {
+        selector = parseRunnerMutationObservationSelector(
+          await readBoundedRequestJsonObject(request, 256 * 1024),
+          runnerRunId,
+        );
+      } catch {
+        selector = undefined;
+      }
+      if (!selector) return Response.json({ kind: "indeterminate" });
+      return Response.json(await this.#inspectMutationCredentials(selector));
+    }
     if (refreshMatch && request.method === "PUT") {
       return await this.#forwardCredentialRefresh(
         decodeURIComponent(refreshMatch[1]!),
         request,
       );
     }
+    const observeMatch = /^\/runs\/([^/]+)\/observe$/.exec(url.pathname);
     const match = /^\/runs\/([^/]+)$/.exec(url.pathname);
-    if (!match || request.method !== "POST") {
+    if ((!match && !observeMatch) || request.method !== "POST") {
       return await this.#containerFetch(request);
     }
-    const runId = decodeURIComponent(match[1]!);
+    const runId = decodeURIComponent((observeMatch ?? match)![1]!);
+    const observingMutation = Boolean(observeMatch);
+    const asyncMutation = observingMutation ||
+      request.headers.get("prefer")?.trim().toLowerCase() === "respond-async";
+    // Observation is a private DO route. All restore and relay helpers below
+    // continue to address the stable container `/runs/:PlanRun.id` coordinate.
+    if (observingMutation) url.pathname = `/runs/${encodeURIComponent(runId)}`;
     const inputRestoreReadinessStartedAt = monotonicNow();
     const bodyText = await request.text();
-    const envelope = parseRunEnvelope(bodyText);
+    let observedMutation: {
+      readonly dispatch: RunnerMutationDispatchRecord;
+      readonly witness: RunnerMutationTargetWitness;
+    } | undefined;
+    let observedRelease: RunnerReleaseDispatchRecord | undefined;
+    let envelope: ReturnType<typeof parseRunEnvelope>;
+    if (observingMutation) {
+      let value: unknown;
+      try {
+        value = JSON.parse(bodyText) as unknown;
+      } catch {
+        return runnerMutationIndeterminateResponse("apply");
+      }
+      const mutationSelector = parseRunnerMutationObservationSelector(value, runId);
+      if (mutationSelector) {
+        observedMutation = await this.#readMutationObservation(mutationSelector);
+        if (!observedMutation) return runnerMutationIndeterminateResponse(mutationSelector.action);
+        const { witness, dispatch } = observedMutation;
+        const completion = witness.completion;
+        if (!completion) {
+          try {
+            const adopted = await this.#adoptCompletedStateMutationFromR2(
+              witness.applyRunId,
+              witness.stateScope,
+              witness.action,
+              witness.rawOutputRef,
+            );
+            if (adopted) return adopted;
+          } catch { /* exact R2 receipt was not adoptable */ }
+          return runnerMutationIndeterminateResponse(witness.action);
+        }
+        envelope = parseRunEnvelope(JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: witness.action,
+          runId: witness.planRunId,
+          request: {
+            applyRun: { id: witness.applyRunId },
+            planRun: {
+              id: witness.planRunId,
+              planDigest: witness.plan.digest,
+              requiredProviders: completion.requiredProviders,
+            },
+            planArtifact: { digest: witness.plan.artifactDigest },
+            runnerProfile: {
+              id: completion.runnerProfileId,
+              executorId: completion.executorId,
+            },
+            executionEvidenceAuthority: completion.executionEvidenceAuthority,
+            executionEvidenceCommit: witness.commit,
+            stateScope: {
+              workspaceId: witness.stateScope.workspaceId,
+              subject: {
+                kind: witness.stateScope.subjectKind,
+                id: witness.stateScope.subjectId,
+              },
+              environment: witness.stateScope.environment,
+              generation: witness.stateScope.generation,
+              stateRef: witness.stateScope.stateRef,
+            },
+            ...(witness.rawOutputRef ? { rawOutputRef: witness.rawOutputRef } : {}),
+          },
+        }));
+      } else {
+        const releaseSelector = parseRunnerReleaseObservationSelector(value, runId);
+        if (!releaseSelector) return runnerReleaseIndeterminateResponse();
+        observedRelease = await this.#readReleaseObservation(releaseSelector);
+        if (!observedRelease) return runnerReleaseIndeterminateResponse();
+        if (observedRelease.phase === "completed" && observedRelease.outcome) {
+          return runnerCompletedReleaseResponse(observedRelease);
+        }
+        envelope = parseRunEnvelope(JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "release",
+          runId,
+          request: {
+            activation: { applyRunId: observedRelease.applyRunId },
+            actionIds: observedRelease.actionIds,
+          },
+        }));
+      }
+    } else {
+      envelope = parseRunEnvelope(bodyText);
+    }
     // Source-sync runs (LANE M1) never touch OpenTofu state; they run, leave the
     // archive on the container, and the DO pulls + persists it to R2_SOURCE.
     if (isSourceSyncEnvelope(envelope)) {
@@ -2008,7 +2475,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           dispatchBody = bodyText;
         }
       }
-      return new Request(request.url, {
+      return new Request(url, {
         method: request.method,
         headers: runnerRequestHeaders(request),
         body: dispatchBody,
@@ -2018,67 +2485,91 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     let mutationPreparation: RunnerMutationDispatchRecord | undefined;
     let mutationDispatch: RunnerMutationDispatchRecord | undefined;
     let mutationRequest: Request | undefined;
+    let mutationReplayObservation = false;
     let releasePreparation: RunnerReleaseDispatchRecord | undefined;
     let releaseDispatch: RunnerReleaseDispatchRecord | undefined;
     let releaseRequest: Request | undefined;
+    let releaseReplayObservation = false;
     if (isRunnerMutationAction(envelope.action)) {
-      const claim = await this.#claimMutationPreparation(
-        runId,
-        envelope.action,
-        envelope.request,
-      );
-      if (claim.kind === "blocked") {
-        return runnerMutationIndeterminateResponse(envelope.action);
-      }
-      if (claim.kind === "replay") {
-        // A completed state/output target is only adoptable after the current
-        // credential has been freshly verified and the exact stable semantic
-        // digest matches the durable dispatch authority.
-        const adopted =
-          stateScope && applyRunId
+      if (observedMutation) {
+        mutationDispatch = observedMutation.dispatch;
+        mutationReplayObservation = true;
+      } else {
+        const claim = await this.#claimMutationPreparation(
+          runId,
+          envelope.action,
+          envelope.request,
+          asyncMutation,
+        );
+        if (claim.kind === "blocked") {
+          return runnerMutationIndeterminateResponse(envelope.action);
+        }
+        if (claim.kind === "replay") {
+          const adopted = stateScope && applyRunId
             ? await this.#adoptCompletedStateMutationFromR2(
-                applyRunId,
-                stateScope,
-                envelope.action,
-                rawOutputRef,
+                applyRunId, stateScope, envelope.action, rawOutputRef,
               )
             : undefined;
-        return adopted ?? runnerMutationIndeterminateResponse(envelope.action);
-      }
-      mutationPreparation = claim.record;
-      if (credentialRefreshClaim) {
-        this.#activeCredentialRefreshClaims.set(runId, {
-          ...credentialRefreshClaim,
-          semanticDigest: mutationPreparation.semanticDigest,
-          signal: request.signal,
-          staged: new Map(),
-        });
-      }
-      if (stateScope) {
-        const gated = await this.#gateExistingStateTarget(
-          stateScope,
-          envelope.action,
-          applyRunId!,
-          rawOutputRef,
-          mutationPreparation,
-        );
-        if (gated) return gated;
+          if (adopted) return adopted;
+          if (!asyncMutation) return runnerMutationIndeterminateResponse(envelope.action);
+          mutationDispatch = claim.record;
+          mutationReplayObservation = true;
+        } else if (observingMutation) {
+          await this.#releaseMutationPreparation(claim.record);
+          return runnerMutationIndeterminateResponse(envelope.action);
+        } else {
+          mutationPreparation = claim.record;
+        }
+        if (mutationPreparation && credentialRefreshClaim) {
+          this.#activeCredentialRefreshClaims.set(runId, {
+            ...credentialRefreshClaim,
+            semanticDigest: mutationPreparation.semanticDigest,
+            signal: asyncMutation ? undefined : request.signal,
+            staged: new Map(),
+          });
+        }
+        if (mutationPreparation && stateScope) {
+          const gated = await this.#gateExistingStateTarget(
+            stateScope, envelope.action, applyRunId!, rawOutputRef, mutationPreparation,
+          );
+          if (gated) return gated;
+        }
       }
     }
     if (envelope.action === "release") {
-      const claim = await this.#claimReleasePreparation(
-        runId,
-        envelope.request,
-      );
-      if (claim.kind === "blocked") {
-        return runnerReleaseIndeterminateResponse();
+      if (observedRelease) {
+        releaseDispatch = observedRelease;
+        releaseReplayObservation = true;
+      } else {
+        const claim = await this.#claimReleasePreparation(
+          runId,
+          envelope.request,
+        );
+        if (claim.kind === "blocked") {
+          return runnerReleaseIndeterminateResponse();
+        }
+        if (claim.kind === "replay") {
+          if (claim.record.phase === "completed" && claim.record.outcome) {
+            return runnerCompletedReleaseResponse(claim.record);
+          }
+          if (!asyncMutation || observingMutation) {
+            if (observingMutation && asyncMutation) {
+              releaseDispatch = claim.record;
+              releaseReplayObservation = true;
+            } else {
+              return runnerReleaseIndeterminateResponse();
+            }
+          } else {
+            releaseDispatch = claim.record;
+            releaseReplayObservation = true;
+          }
+        } else if (observingMutation) {
+          await this.#releaseReleasePreparation(claim.record);
+          return runnerReleaseIndeterminateResponse();
+        } else {
+          releasePreparation = claim.record;
+        }
       }
-      if (claim.kind === "replay") {
-        return claim.record.phase === "completed" && claim.record.outcome
-          ? runnerCompletedReleaseResponse(claim.record)
-          : runnerReleaseIndeterminateResponse();
-      }
-      releasePreparation = claim.record;
     }
     if (credentialRefreshClaim && envelope.action === "plan") {
       if (this.#activeCredentialRefreshClaims.has(runId)) {
@@ -2091,35 +2582,41 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       });
     }
     try {
-      // M2: restore the snapshotted source tree into the container before any
-      // build/plan phase (mirrors the plan-artifact restore protocol).
-      if (sourceArchive) {
-        await this.#restoreSourceArchive(runId, sourceArchive, url);
+      // An exact replay after dispatch is observation only. In particular, do
+      // not restore state/artifacts into a Container that may still be running
+      // the accepted Apply/Destroy task, and do not start a replacement before
+      // checking for its exact result.
+      if (!mutationReplayObservation && !releaseReplayObservation) {
+        // M2: restore the snapshotted source tree into the container before any
+        // build/plan phase (mirrors the plan-artifact restore protocol).
+        if (sourceArchive) {
+          await this.#restoreSourceArchive(runId, sourceArchive, url);
+        }
+        // remote_state dependencies (spec §15): fetch + decrypt each producer
+        // state and stream it to the container BEFORE init/plan/apply.
+        if (depStates.length > 0) {
+          await this.#restoreDepStates(runId, depStates, url);
+        }
+        if (envelope.action === "apply" || envelope.action === "destroy") {
+          await this.#restorePlanArtifact(runId, envelope.request, url);
+          await this.#verifyReviewedProviderLockfileWithoutRestore(
+            runId,
+            envelope.request,
+          );
+        }
+        if (stateScope) {
+          await this.#restoreStateFromR2State(
+            runId,
+            stateScope,
+            url,
+            envelope.action,
+            stateAdoption,
+          );
+        } else if (stateKeys.length > 0) {
+          await this.#restoreStateArtifact(runId, stateKeys, url);
+        }
+        await this.#ensureContainerReady(url);
       }
-      // remote_state dependencies (spec §15): fetch + decrypt each producer
-      // state and stream it to the container BEFORE init/plan/apply.
-      if (depStates.length > 0) {
-        await this.#restoreDepStates(runId, depStates, url);
-      }
-      if (envelope.action === "apply" || envelope.action === "destroy") {
-        await this.#restorePlanArtifact(runId, envelope.request, url);
-        await this.#verifyReviewedProviderLockfileWithoutRestore(
-          runId,
-          envelope.request,
-        );
-      }
-      if (stateScope) {
-        await this.#restoreStateFromR2State(
-          runId,
-          stateScope,
-          url,
-          envelope.action,
-          stateAdoption,
-        );
-      } else if (stateKeys.length > 0) {
-        await this.#restoreStateArtifact(runId, stateKeys, url);
-      }
-      await this.#ensureContainerReady(url);
       if (mutationPreparation) {
         // Preflight cancellation before advancing the durable phase. Snapshot
         // renewable material after that await so preparation updates are not lost.
@@ -2172,22 +2669,118 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     );
     const containerExecutionResponseBufferStartedAt = monotonicNow();
     let unboundedRunnerResponse: Response;
-    if (mutationDispatch && mutationRequest) {
-      unboundedRunnerResponse = await this.#dispatchMutationOnce(
-        mutationRequest,
-        mutationDispatch,
-      );
-    } else if (releaseDispatch && releaseRequest) {
-      unboundedRunnerResponse = await this.#dispatchReleaseOnce(
-        releaseRequest,
+    if (releaseDispatch && releaseReplayObservation) {
+      unboundedRunnerResponse = await this.#observeAsyncReleaseResult(
+        runId,
         releaseDispatch,
       );
+    } else if (mutationDispatch && mutationReplayObservation) {
+      unboundedRunnerResponse = await this.#observeAsyncMutationResult(
+        runId,
+        envelope.action as RunnerMutationAction,
+        applyRunId,
+        stateScope,
+        rawOutputRef,
+        credentialRefreshClaim,
+        mutationDispatch,
+      );
+    } else if (mutationDispatch && mutationRequest) {
+      if (!asyncMutation) {
+        unboundedRunnerResponse = await this.#dispatchMutationOnce(
+          mutationRequest,
+          mutationDispatch,
+        );
+      } else {
+        try {
+          unboundedRunnerResponse = await this.#containerFetch(mutationRequest);
+        } catch {
+          // The POST may have been accepted before its acknowledgement was
+          // lost. A result read is safe; a second mutation POST is not.
+          unboundedRunnerResponse = await this.#observeAsyncMutationResult(
+            runId,
+            envelope.action as RunnerMutationAction,
+            applyRunId,
+            stateScope,
+            rawOutputRef,
+            credentialRefreshClaim,
+            mutationDispatch,
+          );
+        }
+      }
+    } else if (releaseDispatch && releaseRequest) {
+      if (!asyncMutation) {
+        unboundedRunnerResponse = await this.#dispatchReleaseOnce(
+          releaseRequest,
+          releaseDispatch,
+        );
+      } else {
+        try {
+          unboundedRunnerResponse = await this.#containerFetch(releaseRequest);
+        } catch {
+          unboundedRunnerResponse = await this.#observeAsyncReleaseResult(
+            runId,
+            releaseDispatch,
+          );
+        }
+      }
     } else {
       unboundedRunnerResponse = await this.#containerFetchAfterReady(
         dispatchRequest,
         url,
       );
     }
+    if (
+      asyncMutation && mutationDispatch && unboundedRunnerResponse.status === 202 &&
+      unboundedRunnerResponse.headers.get(RUNNER_MUTATION_PENDING_HEADER) !== "1"
+    ) {
+      return await this.#pendingMutationResponse(
+        unboundedRunnerResponse,
+        runId,
+        envelope.action as RunnerMutationAction,
+        applyRunId,
+        credentialRefreshClaim,
+        mutationDispatch,
+      );
+    }
+    if (
+      asyncMutation && releaseDispatch && unboundedRunnerResponse.status === 202 &&
+      unboundedRunnerResponse.headers.get(RUNNER_MUTATION_PENDING_HEADER) !== "1"
+    ) {
+      return await this.#pendingReleaseResponse(
+        unboundedRunnerResponse,
+        runId,
+        releaseDispatch,
+      );
+    }
+    if (
+      asyncMutation && mutationDispatch && !mutationReplayObservation &&
+      unboundedRunnerResponse.status === 409
+    ) {
+      unboundedRunnerResponse = await this.#observeAsyncMutationResult(
+        runId,
+        envelope.action as RunnerMutationAction,
+        applyRunId,
+        stateScope,
+        rawOutputRef,
+        credentialRefreshClaim,
+        mutationDispatch,
+      );
+      if (unboundedRunnerResponse.status === 202) return unboundedRunnerResponse;
+    }
+    if (
+      asyncMutation && releaseDispatch && !releaseReplayObservation &&
+      unboundedRunnerResponse.status === 409
+    ) {
+      unboundedRunnerResponse = await this.#observeAsyncReleaseResult(
+        runId,
+        releaseDispatch,
+      );
+      if (unboundedRunnerResponse.status === 202) return unboundedRunnerResponse;
+    }
+    if (
+      unboundedRunnerResponse.status === 202 &&
+      unboundedRunnerResponse.headers.get(RUNNER_MUTATION_PENDING_HEADER) === "1"
+    ) return unboundedRunnerResponse;
     // Bound every container result before any state/plan persistence. This also
     // covers legacy state paths that do not otherwise parse the JSON payload.
     let runnerResponse: Response;
@@ -4442,7 +5035,7 @@ function providerLockfileArtifactUrl(baseUrl: URL, runId: string): string {
 
 function isRunDispatchRequest(request: Request): boolean {
   if (request.method !== "POST") return false;
-  return /^\/runs\/[^/]+$/.test(new URL(request.url).pathname);
+  return /^\/runs\/[^/]+(?:\/observe)?$/.test(new URL(request.url).pathname);
 }
 
 function runnerRelayOperation(request: Request): "run_dispatch" | "other" {
@@ -6169,6 +6762,44 @@ async function renewableCredentialRefreshClaim(
   };
 }
 
+function mutationCredentialMetadataMatches(
+  metadata: Record<string, unknown>,
+  runnerRunId: string,
+  applyRunId: string,
+  claim: Omit<ActiveCredentialRefreshClaim, "semanticDigest">,
+): boolean {
+  if (
+    metadata.runnerRunId !== runnerRunId ||
+    metadata.manifestDigest !== claim.manifestDigest ||
+    !Number.isSafeInteger(metadata.sequence) ||
+    (metadata.sequence as number) < 0 ||
+    !isRecord(metadata.owner) ||
+    metadata.owner.kind !== "apply" ||
+    metadata.owner.id !== applyRunId ||
+    !Array.isArray(metadata.credentials) ||
+    metadata.credentials.length !== claim.descriptors.length
+  ) return false;
+  const entries = metadata.credentials;
+  const seen = new Set<string>();
+  for (const descriptor of claim.descriptors) {
+    const match = entries.find((entry) =>
+      isRecord(entry) &&
+      entry.providerSource === descriptor.providerSource &&
+      entry.connectionId === descriptor.connectionId &&
+      entry.sourceEnvName === descriptor.sourceEnvName &&
+      entry.fileEnvName === descriptor.fileEnvName,
+    );
+    if (
+      !isRecord(match) ||
+      typeof match.expiresAt !== "string" ||
+      !Number.isFinite(Date.parse(match.expiresAt)) ||
+      seen.has(descriptor.sourceEnvName)
+    ) return false;
+    seen.add(descriptor.sourceEnvName);
+  }
+  return seen.size === entries.length;
+}
+
 function credentialRefreshUpdateMatches(
   update: Record<string, unknown>,
   active: ActiveCredentialRefreshClaim,
@@ -6294,11 +6925,17 @@ function mutationTargetWitnessForRequest(
   action: RunnerMutationAction,
   requestPayload: unknown,
   semanticDigest: string,
+  requireCompletionRecipe = false,
 ): RunnerMutationTargetWitness | undefined {
   const scope = parseStateScope(requestPayload);
   // Legacy no-stateScope dispatches keep their v2 fence, but have no exact
   // R2_STATE coordinate to witness. Never infer one later from a replay.
-  if (!scope) return undefined;
+  if (!scope) {
+    if (requireCompletionRecipe) {
+      throw new Error("async mutation requires an exact state target witness");
+    }
+    return undefined;
+  }
   const applyRun = recordField(requestPayload, "applyRun");
   const planRun = recordField(requestPayload, "planRun");
   const planArtifact = recordField(requestPayload, "planArtifact");
@@ -6311,6 +6948,8 @@ function mutationTargetWitnessForRequest(
   const planDigest = planRun && stringField(planRun, "planDigest");
   const artifactDigest = planArtifact && stringField(planArtifact, "digest");
   const operation = applyRun && stringField(applyRun, "operation");
+  const completion = mutationCompletionRecipeFromRequest(requestPayload);
+  const credentialRefresh = mutationCredentialRecipeFromRequest(requestPayload);
   if (
     !applyRunId || !planRunId || planRunId !== runnerRunId ||
     stringField(applyRun, "planRunId") !== planRunId ||
@@ -6324,6 +6963,9 @@ function mutationTargetWitnessForRequest(
     (action === "apply" && (!rawOutputRef || !outputId)) ||
     (action === "destroy" && (outputId || rawOutputRef))
   ) throw new Error("mutation target witness lacks immutable run/plan/commit identity");
+  if (requireCompletionRecipe && (!completion || !credentialRefresh)) {
+    throw new Error("async mutation lacks a verified nonsecret continuation recipe");
+  }
   assertStateRefForScope(scope);
   if (rawOutputRef) assertRawOutputRefForScope(scope, applyRunId, rawOutputRef);
   const witness: RunnerMutationTargetWitness = {
@@ -6345,6 +6987,8 @@ function mutationTargetWitnessForRequest(
     ...(rawOutputRef ? { rawOutputRef } : {}),
     commit: { stateVersionId, ...(outputId ? { outputId } : {}) },
     plan: { digest: planDigest, artifactDigest },
+    ...(completion ? { completion } : {}),
+    ...(credentialRefresh ? { credentialRefresh } : {}),
   };
   if (!parseRunnerMutationTargetWitness(witness)) {
     throw new Error("mutation target witness is invalid");
@@ -6373,6 +7017,8 @@ function parseRunnerMutationTargetWitness(
   const outputId = stringField(commit, "outputId");
   const digest = stringField(plan, "digest");
   const artifactDigest = stringField(plan, "artifactDigest");
+  const completion = parseRunnerMutationCompletionRecipe(value.completion);
+  const credentialRefresh = parseRunnerMutationCredentialRecipe(value.credentialRefresh);
   if (!applyRunId || !planRunId || !stateVersionId ||
     !isSha256Digest(digest) || !isSha256Digest(artifactDigest) ||
     (action === "apply" && (!rawOutputRef || !outputId)) ||
@@ -6410,6 +7056,222 @@ function parseRunnerMutationTargetWitness(
     ...(rawOutputRef ? { rawOutputRef } : {}),
     commit: { stateVersionId, ...(outputId ? { outputId } : {}) },
     plan: { digest, artifactDigest },
+    ...(completion ? { completion } : {}),
+    ...(credentialRefresh ? { credentialRefresh } : {}),
+  };
+}
+
+function mutationCredentialRecipeFromRequest(
+  requestPayload: unknown,
+): RunnerMutationCredentialRecipe | undefined {
+  const credentials = recordField(requestPayload, "credentials");
+  if (!credentials) return undefined;
+  const renewable = credentials.renewable;
+  if (!Array.isArray(renewable)) {
+    const manifest = recordField(credentials, "manifest");
+    const declaredRenewable = isRecord(manifest) && Array.isArray(manifest.bindings) &&
+      manifest.bindings.some((binding) =>
+        isRecord(binding) && recordField(binding, "renewableEnv") !== undefined,
+      );
+    return declaredRenewable ? undefined : { kind: "none" };
+  }
+  if (renewable.length === 0) return { kind: "none" };
+  const manifestDigest = stringField(credentials, "manifestDigest");
+  if (!manifestDigest || !isSha256Digest(manifestDigest)) return undefined;
+  const descriptors = renewable.map((entry) => {
+    if (!isRecord(entry)) return undefined;
+    const providerSource = stringField(entry, "providerSource");
+    const connectionId = stringField(entry, "connectionId");
+    const sourceEnvName = stringField(entry, "sourceEnvName");
+    const fileEnvName = stringField(entry, "fileEnvName");
+    const expiresAt = stringField(entry, "expiresAt");
+    if (
+      !providerSource || !connectionId || !sourceEnvName || !fileEnvName ||
+      !expiresAt || !Number.isFinite(Date.parse(expiresAt))
+    ) return undefined;
+    return { providerSource, connectionId, sourceEnvName, fileEnvName };
+  });
+  if (descriptors.some((descriptor) => !descriptor)) return undefined;
+  return {
+    kind: "active",
+    manifestDigest,
+    descriptors: descriptors as NonNullable<typeof descriptors[number]>[],
+  };
+}
+
+function parseRunnerMutationCredentialRecipe(
+  value: unknown,
+): RunnerMutationCredentialRecipe | undefined {
+  if (isRecord(value) && value.kind === "none") return { kind: "none" };
+  if (!isRecord(value) || value.kind !== "active") return undefined;
+  const manifestDigest = stringField(value, "manifestDigest");
+  if (!manifestDigest || !isSha256Digest(manifestDigest) || !Array.isArray(value.descriptors)) {
+    return undefined;
+  }
+  const descriptors = value.descriptors.map((entry) => {
+    if (!isRecord(entry)) return undefined;
+    const providerSource = stringField(entry, "providerSource");
+    const connectionId = stringField(entry, "connectionId");
+    const sourceEnvName = stringField(entry, "sourceEnvName");
+    const fileEnvName = stringField(entry, "fileEnvName");
+    if (!providerSource || !connectionId || !sourceEnvName || !fileEnvName) return undefined;
+    return { providerSource, connectionId, sourceEnvName, fileEnvName };
+  });
+  if (descriptors.some((descriptor) => !descriptor) || descriptors.length === 0) return undefined;
+  return {
+    kind: "active",
+    manifestDigest,
+    descriptors: descriptors as NonNullable<typeof descriptors[number]>[],
+  };
+}
+
+function parseRunnerMutationObservationSelector(
+  value: unknown,
+  routeRunId: string,
+): RunnerMutationObservationSelector | undefined {
+  if (!isRecord(value) || value.kind !== "takosumi.runner-mutation-observation@v1") {
+    return undefined;
+  }
+  const action = stringField(value, "action");
+  const applyRunId = stringField(value, "applyRunId");
+  const runnerRunId = stringField(value, "runnerRunId");
+  const planRunId = stringField(value, "planRunId");
+  const stateScope = value.stateScope;
+  const rawOutputRef = stringField(value, "rawOutputRef");
+  const commit = recordField(value, "commit");
+  const plan = recordField(value, "plan");
+  if (
+    !isRunnerMutationAction(action) || !applyRunId || runnerRunId !== routeRunId ||
+    planRunId !== routeRunId || !isRecord(stateScope) || !commit || !plan
+  ) return undefined;
+  const parsedScope = parseStateScope({ stateScope });
+  const stateVersionId = stringField(commit, "stateVersionId");
+  const outputId = stringField(commit, "outputId");
+  const digest = stringField(plan, "digest");
+  const artifactDigest = stringField(plan, "artifactDigest");
+  if (
+    !parsedScope || !stateVersionId || !isSha256Digest(digest) ||
+    !isSha256Digest(artifactDigest) ||
+    (action === "apply" && (!rawOutputRef || !outputId)) ||
+    (action === "destroy" && (rawOutputRef || outputId))
+  ) return undefined;
+  try {
+    assertStateRefForScope(parsedScope);
+    if (rawOutputRef) assertRawOutputRefForScope(parsedScope, applyRunId, rawOutputRef);
+  } catch {
+    return undefined;
+  }
+  return {
+    kind: "takosumi.runner-mutation-observation@v1",
+    action,
+    applyRunId,
+    runnerRunId,
+    planRunId,
+    stateScope: {
+      workspaceId: parsedScope.workspaceId,
+      subject: { kind: parsedScope.subjectKind, id: parsedScope.subjectId },
+      environment: parsedScope.environment,
+      generation: parsedScope.generation,
+      stateRef: parsedScope.stateRef,
+    },
+    ...(rawOutputRef ? { rawOutputRef } : {}),
+    commit: { stateVersionId, ...(outputId ? { outputId } : {}) },
+    plan: { digest, artifactDigest },
+  };
+}
+
+function mutationObservationSelectorMatchesWitness(
+  selector: RunnerMutationObservationSelector,
+  witness: RunnerMutationTargetWitness,
+): boolean {
+  const scope = selector.stateScope;
+  const recordedScope = witness.stateScope;
+  return selector.kind === "takosumi.runner-mutation-observation@v1" &&
+    selector.action === witness.action &&
+    selector.applyRunId === witness.applyRunId &&
+    selector.runnerRunId === witness.planRunId &&
+    selector.planRunId === witness.planRunId &&
+    selector.rawOutputRef === witness.rawOutputRef &&
+    selector.commit.stateVersionId === witness.commit.stateVersionId &&
+    selector.commit.outputId === witness.commit.outputId &&
+    selector.plan.digest === witness.plan.digest &&
+    selector.plan.artifactDigest === witness.plan.artifactDigest &&
+    scope.workspaceId === recordedScope.workspaceId &&
+    scope.subject.kind === recordedScope.subjectKind &&
+    scope.subject.id === recordedScope.subjectId &&
+    scope.environment === recordedScope.environment &&
+    scope.generation === recordedScope.generation &&
+    scope.stateRef === recordedScope.stateRef;
+}
+
+function parseRunnerReleaseObservationSelector(
+  value: unknown,
+  routeRunId: string,
+): RunnerReleaseObservationSelector | undefined {
+  if (!isRecord(value) || value.kind !== "takosumi.runner-release-observation@v1") {
+    return undefined;
+  }
+  const releaseRunId = stringField(value, "releaseRunId");
+  const applyRunId = stringField(value, "applyRunId");
+  const actionIds = value.actionIds;
+  if (
+    releaseRunId !== routeRunId || !applyRunId || !Array.isArray(actionIds) ||
+    !actionIds.length || !actionIds.every((id) => typeof id === "string" && id.length > 0) ||
+    releaseRunId !== `release_${safeKeySegment(applyRunId)}`
+  ) return undefined;
+  return { kind: "takosumi.runner-release-observation@v1", releaseRunId, applyRunId, actionIds };
+}
+
+function mutationCompletionRecipeFromRequest(
+  requestPayload: unknown,
+): RunnerMutationCompletionRecipe | undefined {
+  const runnerProfile = recordField(requestPayload, "runnerProfile");
+  const planRun = recordField(requestPayload, "planRun");
+  const rawAuthority = recordField(requestPayload, "executionEvidenceAuthority");
+  const controllerArtifact = rawAuthority && recordField(rawAuthority, "controllerArtifact");
+  const runnerArtifact = rawAuthority && recordField(rawAuthority, "runnerArtifact");
+  const executorArtifact = rawAuthority && recordField(rawAuthority, "executorArtifact");
+  const runnerProfileId = runnerProfile && stringField(runnerProfile, "id");
+  const executorId = runnerProfile && stringField(runnerProfile, "executorId");
+  const requiredProviders = planRun?.requiredProviders;
+  if (
+    !runnerProfileId || !executorId || !Array.isArray(requiredProviders) ||
+    !requiredProviders.every((provider) => typeof provider === "string") ||
+    !isRecord(controllerArtifact) || !isRecord(runnerArtifact) ||
+    !isRecord(executorArtifact)
+  ) return undefined;
+  return {
+    runnerProfileId,
+    executorId,
+    requiredProviders: [...requiredProviders],
+    executionEvidenceAuthority: {
+      controllerArtifact,
+      runnerArtifact,
+      executorArtifact,
+    },
+  };
+}
+
+function parseRunnerMutationCompletionRecipe(
+  value: unknown,
+): RunnerMutationCompletionRecipe | undefined {
+  if (!isRecord(value) || !isRecord(value.executionEvidenceAuthority)) return undefined;
+  const runnerProfileId = stringField(value, "runnerProfileId");
+  const executorId = stringField(value, "executorId");
+  const requiredProviders = value.requiredProviders;
+  const controllerArtifact = recordField(value.executionEvidenceAuthority, "controllerArtifact");
+  const runnerArtifact = recordField(value.executionEvidenceAuthority, "runnerArtifact");
+  const executorArtifact = recordField(value.executionEvidenceAuthority, "executorArtifact");
+  if (
+    !runnerProfileId || !executorId || !Array.isArray(requiredProviders) ||
+    !requiredProviders.every((provider) => typeof provider === "string") ||
+    !controllerArtifact || !runnerArtifact || !executorArtifact
+  ) return undefined;
+  return {
+    runnerProfileId,
+    executorId,
+    requiredProviders: [...requiredProviders] as string[],
+    executionEvidenceAuthority: { controllerArtifact, runnerArtifact, executorArtifact },
   };
 }
 

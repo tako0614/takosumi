@@ -832,6 +832,140 @@ test("container runner returns provider installation attestation from apply and 
   )).toBe(false);
 });
 
+test("container runner uses exact RUNNER DO async mutation submit and observe routes", async () => {
+  const calls: { id: string; method: string; path: string; prefer: string | null; body: unknown }[] = [];
+  let observations = 0;
+  const env = {
+    RUNNER: {
+      idFromName: (name: string) => name,
+      get: (id: string) => ({
+        fetch: async (request: Request) => {
+          const body = request.method === "POST" ? await request.clone().json() : undefined;
+          const path = new URL(request.url).pathname;
+          calls.push({ id, method: request.method, path, prefer: request.headers.get("prefer"), body });
+          if (path === "/runs/plan_async_adapter/credentials/inspect") {
+            return Response.json({ kind: "none" });
+          }
+          if (path === "/runs/plan_async_adapter") {
+            return Response.json({ kind: "pending" }, { status: 202 });
+          }
+          if (path === "/runs/plan_async_adapter/observe") {
+            observations += 1;
+            return Response.json({
+              status: "succeeded",
+              exitCode: 0,
+              outputs: { endpoint: "async.example.test" },
+              state: { digest: `sha256:${"d".repeat(64)}` },
+              rawOutputRef: "outputs.raw.enc",
+              providerInstallation: [],
+              diagnostics: [],
+            });
+          }
+          return Response.json({ error: "unexpected" }, { status: 500 });
+        },
+      }),
+    },
+  } as unknown as CloudflareWorkerEnv;
+  const runner = new CloudflareContainerOpenTofuRunner(env);
+  const mutation = {
+    action: "apply" as const,
+    job: {
+      applyRun: { id: "apply_async_adapter" },
+      planRun: { id: "plan_async_adapter" },
+      planArtifact: {
+        kind: "runner-local",
+        ref: "runner-local://plan_async_adapter/tfplan",
+        digest: PLAN_DIGEST,
+      },
+    } as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0],
+  };
+  const selector = {
+    kind: "takosumi.runner-mutation-observation@v1" as const,
+    action: "apply" as const,
+    applyRunId: "apply_async_adapter",
+    runnerRunId: "plan_async_adapter",
+    planRunId: "plan_async_adapter",
+    stateScope: {
+      workspaceId: "workspace_async_adapter",
+      subject: { kind: "resource" as const, id: "resource_async_adapter" },
+      environment: "production",
+      generation: 1,
+      stateRef: "states/async-adapter.tfstate",
+    },
+    rawOutputRef: "outputs/async-adapter.enc",
+    commit: {
+      stateVersionId: "state-version-async-adapter",
+      outputId: "output-async-adapter",
+    },
+    plan: { digest: PLAN_DIGEST, artifactDigest: PLAN_DIGEST },
+  };
+
+  expect(await runner.submitMutation(mutation)).toEqual({ kind: "pending" });
+  const completed = await runner.observeMutation(selector);
+  expect(completed.kind).toBe("completed");
+  if (completed.kind === "completed") {
+    expect(completed.result).toMatchObject({
+      outputs: { endpoint: "async.example.test" },
+      stateDigest: `sha256:${"d".repeat(64)}`,
+      rawOutputRef: "outputs.raw.enc",
+    });
+  }
+  expect(await runner.inspectMutationCredentials(selector)).toEqual({ kind: "none" });
+  expect(observations).toBe(1);
+  expect(calls.map(({ id, method, path, prefer }) => ({ id, method, path, prefer }))).toEqual([
+    {
+      id: "apply_async_adapter",
+      method: "POST",
+      path: "/runs/plan_async_adapter",
+      prefer: "respond-async",
+    },
+    {
+      id: "apply_async_adapter",
+      method: "POST",
+      path: "/runs/plan_async_adapter/observe",
+      prefer: null,
+    },
+    {
+      id: "apply_async_adapter",
+      method: "POST",
+      path: "/runs/plan_async_adapter/credentials/inspect",
+      prefer: null,
+    },
+  ]);
+  expect(calls[1]?.body).toEqual(selector);
+  expect(calls[2]?.body).toEqual(selector);
+});
+
+test("container runner release observer sends only the exact value-free selector", async () => {
+  const calls: { id: string; path: string; body: unknown }[] = [];
+  const env = {
+    RUNNER: {
+      idFromName: (name: string) => name,
+      get: (id: string) => ({
+        fetch: async (request: Request) => {
+          const body = await request.clone().json();
+          const path = new URL(request.url).pathname;
+          calls.push({ id, path, body });
+          return Response.json({ kind: "pending" }, { status: 202 });
+        },
+      }),
+    },
+  } as unknown as CloudflareWorkerEnv;
+  const runner = new CloudflareContainerOpenTofuRunner(env);
+  const selector = {
+    kind: "takosumi.runner-release-observation@v1" as const,
+    releaseRunId: "release_apply_async_release_adapter",
+    applyRunId: "apply_async_release_adapter",
+    actionIds: ["activate", "post-migrate"],
+  };
+  expect(await runner.observeRelease(selector)).toEqual({ kind: "pending" });
+  expect(calls).toEqual([{
+    id: selector.applyRunId,
+    path: `/runs/${selector.releaseRunId}/observe`,
+    body: selector,
+  }]);
+});
+
 test("container runner redacts stderr before apply diagnostics are returned", async () => {
   const runner = new CloudflareContainerOpenTofuRunner(
     envReturning({

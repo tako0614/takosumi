@@ -1381,6 +1381,223 @@ test("OpenTofu runner Durable Object starts the container before dispatch", asyn
   assert.deepEqual(calls, ["start [8080]", "fetch POST /runs/plan_1"]);
 });
 
+test("async mutation submit is fenced once and observation relays only the exact terminal result", async () => {
+  const planRunId = "plan_async_mutation";
+  const applyRunId = `apply_${planRunId}`;
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  await seedEncryptedPlan(artifacts, planRunId);
+  const calls: string[] = [];
+  let resultReady = false;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      calls.push(`${request.method} ${path}${request.headers.get("prefer") ? ` prefer=${request.headers.get("prefer")}` : ""}`);
+      if (request.method === "PUT") return Response.json({ ok: true });
+      if (request.method === "POST" && path === `/runs/${planRunId}`) {
+        return Response.json({
+          kind: "takosumi.runner-mutation-pending@v1",
+          runId: planRunId,
+          applyRunId,
+          action: "apply",
+          status: "accepted",
+        }, { status: 202 });
+      }
+      if (request.method === "GET" && path === `/runs/${planRunId}/result`) {
+        if (!resultReady) {
+          return Response.json({
+            kind: "takosumi.runner-mutation-pending@v1",
+            runId: planRunId,
+            applyRunId,
+            action: "apply",
+            status: "running",
+          }, { status: 202 });
+        }
+        return Response.json({
+          status: "succeeded",
+          exitCode: 0,
+          outputs: { endpoint: "example.test" },
+          providerInstallation: [{
+            provider: RUN_CREDENTIAL_PROVIDER,
+            attested: true,
+            installedDigest: `sha256:${"c".repeat(64)}`,
+          }],
+        });
+      }
+      if (request.method === "GET" && path === `/runs/${planRunId}/artifacts/tfstate`) {
+        return new Response(STATE_BYTES, {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+  const options = {
+    storage,
+    stateBucket: state,
+    env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET },
+  };
+  const submitToken = await signedMutationToken(planRunId, { jti: "async-submit" });
+  const submit = signedMutationRequest(planRunId, submitToken, {
+    stateScope: capsuleStateScope(),
+    rawOutputRef: rawOutputRefFor(planRunId),
+  });
+  const submitted = await runnerWithContainer(artifacts, container, options).fetch(
+    new Request(submit.url, {
+      method: "POST",
+      headers: { "content-type": "application/json", prefer: "respond-async" },
+      body: await submit.text(),
+    }),
+  );
+  assert.equal(submitted.status, 202);
+  assert.deepEqual(await submitted.json(), { kind: "pending" });
+  assert.equal(state.keys().length, 0);
+  assert.equal((storage.valueByPrefix("runner-mutation-dispatch@v2:") as Record<string, unknown>).phase, "dispatched");
+
+  const scope = capsuleStateScope();
+  const observeBody = JSON.stringify({
+    kind: "takosumi.runner-mutation-observation@v1",
+    action: "apply",
+    applyRunId,
+    runnerRunId: planRunId,
+    planRunId,
+    stateScope: scope,
+    rawOutputRef: rawOutputRefFor(planRunId),
+    commit: {
+      stateVersionId: `state_apply_${planRunId}`,
+      outputId: `output_apply_${planRunId}`,
+    },
+    plan: { digest: PLAN_DIGEST, artifactDigest: PLAN_DIGEST },
+  });
+  const mismatchedSelector = JSON.parse(observeBody) as Record<string, unknown>;
+  mismatchedSelector.applyRunId = "apply_different_run";
+  const mismatch = await runnerWithContainer(artifacts, container, options).fetch(
+    new Request(`https://runner/runs/${planRunId}/observe`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(mismatchedSelector),
+    }),
+  );
+  assert.equal(mismatch.status, 409);
+  assert.equal(calls.some((call) => call === `GET /runs/${planRunId}/result`), false);
+  const inspected = await runnerWithContainer(artifacts, container, options).fetch(
+    new Request(`https://runner/runs/${planRunId}/credentials/inspect`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: observeBody,
+    }),
+  );
+  assert.equal(inspected.status, 200);
+  assert.deepEqual(await inspected.json(), { kind: "none" });
+  const observedWhileRunning = await runnerWithContainer(artifacts, container, options).fetch(
+    new Request(`https://runner/runs/${planRunId}/observe`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: observeBody,
+    }),
+  );
+  assert.equal(observedWhileRunning.status, 202, `${JSON.stringify(calls)} ${await observedWhileRunning.clone().text()}`);
+  assert.deepEqual(await observedWhileRunning.json(), { kind: "pending" });
+  assert.deepEqual(calls.filter((call) => call.startsWith("POST ")), [
+    `POST /runs/${planRunId} prefer=respond-async`,
+  ]);
+
+  resultReady = true;
+  const completed = await runnerWithContainer(artifacts, container, options).fetch(
+    new Request(`https://runner/runs/${planRunId}/observe`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: observeBody,
+    }),
+  );
+  assert.equal(completed.status, 200);
+  const result = await completed.json() as Record<string, unknown>;
+  assert.deepEqual(result.outputs, { endpoint: "example.test" });
+  assert.match(String((result.state as Record<string, unknown> | undefined)?.digest), /^sha256:[0-9a-f]{64}$/u);
+  assert.ok(state.body(capsuleStateScope().stateRef));
+  assert.equal((storage.valueByPrefix("runner-mutation-dispatch@v2:") as Record<string, unknown>).phase, "dispatched");
+  assert.ok(state.body(`${capsuleStateScope().stateRef}.execution-evidence.json`));
+  assert.equal(calls.filter((call) => call.startsWith("POST ")).length, 1);
+  assert.equal(calls.filter((call) => call === `GET /runs/${planRunId}/result`).length, 2);
+});
+
+test("release observation uses only the exact value-free fence and never redispatches", async () => {
+  const applyRunId = "apply_async_release";
+  const releaseRunId = `release_${applyRunId}`;
+  const calls: string[] = [];
+  let completed = false;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      calls.push(`${request.method} ${path}${request.headers.get("prefer") ? ` prefer=${request.headers.get("prefer")}` : ""}`);
+      if (request.method === "POST" && path === `/runs/${releaseRunId}`) {
+        return Response.json({
+          kind: "takosumi.runner-mutation-pending@v1",
+          runId: releaseRunId,
+          applyRunId,
+          action: "release",
+          status: "accepted",
+        }, { status: 202 });
+      }
+      if (request.method === "GET" && path === `/runs/${releaseRunId}/result`) {
+        return completed
+          ? Response.json({ runId: releaseRunId, action: "release", status: "succeeded", exitCode: 0, commandCount: 1 })
+          : Response.json({
+              kind: "takosumi.runner-mutation-pending@v1",
+              runId: releaseRunId,
+              applyRunId,
+              action: "release",
+              status: "running",
+            }, { status: 202 });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+  const runner = runnerWithContainer(new FakeR2Bucket(), container, {
+    stateBucket: new FakeR2Bucket(),
+  });
+  const release = durableReleaseRequest(applyRunId);
+  const submitted = await runner.fetch(new Request(release.url, {
+    method: "POST",
+    headers: { "content-type": "application/json", prefer: "respond-async" },
+    body: await release.text(),
+  }));
+  assert.equal(submitted.status, 202);
+  assert.deepEqual(await submitted.json(), { kind: "pending" });
+  const selector = JSON.stringify({
+    kind: "takosumi.runner-release-observation@v1",
+    releaseRunId,
+    applyRunId,
+    actionIds: ["activate"],
+  });
+  const observed = await runner.fetch(new Request(`https://runner/runs/${releaseRunId}/observe`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: selector,
+  }));
+  assert.equal(observed.status, 202);
+  assert.deepEqual(await observed.json(), { kind: "pending" });
+  completed = true;
+  const result = await runner.fetch(new Request(`https://runner/runs/${releaseRunId}/observe`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: selector,
+  }));
+  assert.equal(result.status, 200);
+  assert.deepEqual(await result.json(), {
+    runId: releaseRunId,
+    action: "release",
+    status: "succeeded",
+    exitCode: 0,
+    commandCount: 1,
+  });
+  assert.deepEqual(calls.filter((call) => call.startsWith("POST ")), [
+    `POST /runs/${releaseRunId} prefer=respond-async`,
+  ]);
+  assert.equal(calls.filter((call) => call === `GET /runs/${releaseRunId}/result`).length, 2);
+});
+
 test("OpenTofu runner Durable Object retries when health check races a stopped container", async () => {
   const calls: string[] = [];
   let healthAttempts = 0;

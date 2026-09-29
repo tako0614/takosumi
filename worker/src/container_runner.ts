@@ -13,6 +13,12 @@ import type {
   OpenTofuDestroyResult,
   OpenTofuPlanJob,
   OpenTofuPlanResult,
+  OpenTofuMutationCredentialStatus,
+  OpenTofuMutationObservationSelector,
+  OpenTofuMutationProgress,
+  OpenTofuMutationRequest,
+  OpenTofuReleaseMutationProgress,
+  OpenTofuReleaseObservationSelector,
   OpenTofuRestoreAuthority,
   OpenTofuRestoreExecutionControl,
   OpenTofuRestoreJob,
@@ -223,6 +229,60 @@ export class CloudflareContainerOpenTofuRunner
     if (!response.ok) {
       throw new Error("credential refresh was rejected by the active runner");
     }
+  }
+
+  async submitMutation(
+    mutation: OpenTofuMutationRequest,
+    control?: RunExecutionControl,
+  ): Promise<OpenTofuMutationProgress> {
+    return await this.#mutationProgress(mutation, "submit", control);
+  }
+
+  async observeMutation(
+    selector: OpenTofuMutationObservationSelector,
+    control?: RunExecutionControl,
+  ): Promise<OpenTofuMutationProgress> {
+    return await this.#mutationProgress(selector, "observe", control);
+  }
+
+  async inspectMutationCredentials(
+    selector: OpenTofuMutationObservationSelector,
+  ): Promise<OpenTofuMutationCredentialStatus> {
+    if (!this.env.RUNNER) return { kind: "indeterminate" };
+    const applyRunId = selector.applyRunId;
+    const runnerRunId = selector.runnerRunId;
+    const body = JSON.stringify(selector);
+    if (new TextEncoder().encode(body).byteLength > 256 * 1024) {
+      throw new Error("mutation credential inspection payload exceeds the runner limit");
+    }
+    const id = this.env.RUNNER.idFromName(applyRunId);
+    let response: Response;
+    try {
+      response = await this.env.RUNNER.get(id).fetch(new Request(
+        `https://opentofu-runner.internal/runs/${encodeURIComponent(runnerRunId)}/credentials/inspect`,
+        { method: "POST", headers: { "content-type": "application/json" }, body },
+      ));
+    } catch {
+      return { kind: "indeterminate" };
+    }
+    if (!response.ok) return { kind: "indeterminate" };
+    const payload = await response.json().catch(() => undefined) as unknown;
+    const status = mutationCredentialStatusFromPayload(payload);
+    return status ?? { kind: "indeterminate" };
+  }
+
+  async submitRelease(
+    job: ReleaseCommandRunJob,
+    control?: RunExecutionControl,
+  ): Promise<OpenTofuReleaseMutationProgress> {
+    return await this.#releaseProgress(job, "submit", control);
+  }
+
+  async observeRelease(
+    selector: OpenTofuReleaseObservationSelector,
+    control?: RunExecutionControl,
+  ): Promise<OpenTofuReleaseMutationProgress> {
+    return await this.#releaseProgress(selector, "observe", control);
   }
 
   async plan(
@@ -741,6 +801,181 @@ export class CloudflareContainerOpenTofuRunner
       status: status === "unsupported" ? "unsupported" : "missing",
       runId,
       reason,
+    };
+  }
+
+  async #mutationProgress(
+    mutation: OpenTofuMutationRequest | OpenTofuMutationObservationSelector,
+    mode: "submit" | "observe",
+    control?: RunExecutionControl,
+  ): Promise<OpenTofuMutationProgress> {
+    if (!this.env.RUNNER) throw new Error("RUNNER binding is not configured");
+    if (control?.signal?.aborted) throw abortReason(control.signal);
+    const isSubmit = mode === "submit";
+    let runnerRunId: string;
+    let applyRunId: string;
+    let body: string;
+    if (isSubmit) {
+      if (!("job" in mutation)) return { kind: "indeterminate" };
+      runnerRunId = runnerRunIdFromPlanArtifact(mutation.job.planArtifact) ?? mutation.job.planRun.id;
+      applyRunId = mutation.job.applyRun.id;
+      body = JSON.stringify(mutationEnvelope(mutation.action, runnerRunId, mutation.job));
+    } else {
+      if ("job" in mutation) return { kind: "indeterminate" };
+      runnerRunId = mutation.runnerRunId;
+      applyRunId = mutation.applyRunId;
+      body = JSON.stringify(mutation);
+    }
+    if (new TextEncoder().encode(body).byteLength > 256 * 1024) {
+      throw new Error("mutation payload exceeds the runner limit");
+    }
+    const path = mode === "submit"
+      ? `/runs/${encodeURIComponent(runnerRunId)}`
+      : `/runs/${encodeURIComponent(runnerRunId)}/observe`;
+    let response: Response;
+    try {
+      response = await this.env.RUNNER.get(
+        this.env.RUNNER.idFromName(applyRunId),
+      ).fetch(new Request(`https://opentofu-runner.internal${path}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(mode === "submit" ? { prefer: "respond-async" } : {}),
+        },
+        body,
+        ...(control?.signal ? { signal: control.signal } : {}),
+      }));
+    } catch {
+      // Submit may have reached the DO before acknowledgement loss; observation
+      // transport is also an uncertain read. Neither grants a second submit.
+      return { kind: "indeterminate" };
+    }
+    let decoded: { payload: Record<string, unknown>; redactedText: string };
+    try {
+      decoded = await readResponseJsonObject(response);
+    } catch {
+      return { kind: "indeterminate" };
+    }
+    const { payload, redactedText } = decoded;
+    if (response.status === 202) {
+      return payload.kind === "pending"
+        ? { kind: "pending" }
+        : { kind: "indeterminate" };
+    }
+    if (
+      response.status === 409 &&
+      stringFromRecord(payload, "errorCode") === RUNNER_MUTATION_INDETERMINATE_CODE
+    ) return { kind: "indeterminate" };
+    if (!response.ok) {
+      const providerFailure = providerExecutionFailureFromContainerResult(payload);
+      if (providerFailure) {
+        return {
+          kind: "completed",
+          result: mutation.action === "apply"
+            ? applyResultFromRunnerPayload(payload)
+            : destroyResultFromRunnerPayload(payload),
+        };
+      }
+      const failure = runnerFailureEnvelope(
+        payload,
+        redactedText,
+        response.status,
+        mutation.action,
+      );
+      const executionError = runnerExecutionErrorFromPayload(payload, mutation.action);
+      if (executionError) throw executionError;
+      const infrastructureError = runnerInfrastructureErrorFromPayload(payload);
+      if (infrastructureError) throw infrastructureError;
+      throw runnerErrorFromFailureEnvelope(failure);
+    }
+    return {
+      kind: "completed",
+      result: mutation.action === "apply"
+        ? applyResultFromRunnerPayload(payload)
+        : destroyResultFromRunnerPayload(payload),
+    };
+  }
+
+  async #releaseProgress(
+    input: ReleaseCommandRunJob | OpenTofuReleaseObservationSelector,
+    mode: "submit" | "observe",
+    control?: RunExecutionControl,
+  ): Promise<OpenTofuReleaseMutationProgress> {
+    if (!this.env.RUNNER) throw new Error("RUNNER binding is not configured");
+    if (control?.signal?.aborted) throw abortReason(control.signal);
+    if (mode === "submit" && !("commands" in input)) return { kind: "indeterminate" };
+    if (mode === "observe" && "commands" in input) return { kind: "indeterminate" };
+    const job = mode === "submit" ? input as ReleaseCommandRunJob : undefined;
+    const selector = mode === "observe" ? input as OpenTofuReleaseObservationSelector : undefined;
+    const releaseRunId = job?.runId ?? selector!.releaseRunId;
+    const applyRunId = job?.applyRunId ?? selector!.applyRunId;
+    const body = JSON.stringify(job ? {
+      kind: "takosumi.opentofu-run@v1",
+      action: "release",
+      runId: job.runId,
+      requestedAt: new Date().toISOString(),
+      request: releaseRequestPayload(job),
+    } : selector);
+    if (new TextEncoder().encode(body).byteLength > 256 * 1024) {
+      throw new Error("release payload exceeds the runner limit");
+    }
+    const path = mode === "submit"
+      ? `/runs/${encodeURIComponent(releaseRunId)}`
+      : `/runs/${encodeURIComponent(releaseRunId)}/observe`;
+    let response: Response;
+    try {
+      response = await this.env.RUNNER.get(
+        this.env.RUNNER.idFromName(applyRunId),
+      ).fetch(new Request(`https://opentofu-runner.internal${path}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(mode === "submit" ? { prefer: "respond-async" } : {}),
+        },
+        body,
+        ...(control?.signal ? { signal: control.signal } : {}),
+      }));
+    } catch {
+      return { kind: "indeterminate" };
+    }
+    let decoded: { payload: Record<string, unknown>; redactedText: string };
+    try {
+      decoded = await readResponseJsonObject(response);
+    } catch {
+      return { kind: "indeterminate" };
+    }
+    const { payload, redactedText } = decoded;
+    if (response.status === 202) {
+      return payload.kind === "pending"
+        ? { kind: "pending" }
+        : { kind: "indeterminate" };
+    }
+    if (
+      response.status === 409 &&
+      stringFromRecord(payload, "errorCode") === RUNNER_MUTATION_INDETERMINATE_CODE
+    ) return { kind: "indeterminate" };
+    if (!response.ok) {
+      const failure = runnerFailureEnvelope(payload, redactedText, response.status, "release");
+      const executionError = runnerExecutionErrorFromPayload(payload, "release");
+      if (executionError) throw executionError;
+      const infrastructureError = runnerInfrastructureErrorFromPayload(payload);
+      if (infrastructureError) throw infrastructureError;
+      throw runnerErrorFromFailureEnvelope(failure);
+    }
+    const runId = stringFromRecord(payload, "runId");
+    const commandCount = payload.commandCount;
+    if (
+      payload.status !== "succeeded" || runId !== releaseRunId ||
+      typeof commandCount !== "number" || !Number.isSafeInteger(commandCount) || commandCount < 0
+    ) return { kind: "indeterminate" };
+    return {
+      kind: "completed",
+      result: {
+        status: "succeeded",
+        runId,
+        commandCount,
+        ...(stringFromRecord(payload, "stdout") ? { stdout: stringFromRecord(payload, "stdout") } : {}),
+      },
     };
   }
 
@@ -1684,6 +1919,169 @@ function providerLockfileObjectRefMatchesRun(ref: string, runId: string): boolea
         `/opentofu-plan-runs/${sanitizedRunId}/provider-lockfile.hcl`,
       ))
   );
+}
+
+function mutationEnvelope(
+  action: "apply" | "destroy",
+  runnerRunId: string,
+  job: OpenTofuApplyJob | OpenTofuDestroyJob,
+): Record<string, unknown> {
+  return {
+    kind: "takosumi.opentofu-run@v1",
+    action,
+    runId: runnerRunId,
+    requestedAt: new Date().toISOString(),
+    request: job,
+  };
+}
+
+function releaseRequestPayload(job: ReleaseCommandRunJob): Record<string, unknown> {
+  return {
+    release: {
+      commands: job.commands.map((command) => ({
+        id: command.id,
+        command: [...command.command],
+        ...(command.workingDirectory
+          ? { workingDirectory: command.workingDirectory }
+          : {}),
+        ...(command.env ? { env: command.env } : {}),
+        ...(command.timeoutSeconds
+          ? { timeoutSeconds: command.timeoutSeconds }
+          : {}),
+      })),
+      ...(job.sourceBuild ? { sourceBuild: job.sourceBuild } : {}),
+    },
+    sourceArchive: {
+      ref: job.sourceSnapshot.archiveRef,
+      digest: job.sourceSnapshot.archiveDigest,
+    },
+    outputs: job.nonSensitiveOutputs,
+    providerConfigurations: job.providerConfigurations,
+    ...(job.credentials ? { credentials: job.credentials } : {}),
+    ...(job.runtimeSecrets ? { runtimeSecrets: job.runtimeSecrets } : {}),
+    activation: {
+      applyRunId: job.applyRunId,
+      ...(job.workspaceId ? { workspaceId: job.workspaceId } : {}),
+      capsuleId: job.capsuleId,
+      stateVersionId: job.stateVersionId,
+      sourceSnapshotId: job.sourceSnapshot.id,
+      sourceCommit: job.sourceSnapshot.resolvedCommit,
+    },
+  };
+}
+
+function mutationCredentialStatusFromPayload(
+  value: unknown,
+): OpenTofuMutationCredentialStatus | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.kind === "none" || value.kind === "indeterminate") {
+    return { kind: value.kind };
+  }
+  if (value.kind !== "active") return undefined;
+  const manifestDigest = stringFromRecord(value, "manifestDigest");
+  const sequence = value.sequence;
+  const raw = value.credentials;
+  if (
+    !manifestDigest || !/^sha256:[0-9a-f]{64}$/u.test(manifestDigest) ||
+    !Number.isSafeInteger(sequence) || (sequence as number) < 0 ||
+    !Array.isArray(raw) || raw.length === 0
+  ) return undefined;
+  const credentials = [];
+  for (const entry of raw) {
+    if (!isRecord(entry)) return undefined;
+    const providerSource = stringFromRecord(entry, "providerSource");
+    const connectionId = stringFromRecord(entry, "connectionId");
+    const sourceEnvName = stringFromRecord(entry, "sourceEnvName");
+    const fileEnvName = stringFromRecord(entry, "fileEnvName");
+    const expiresAt = stringFromRecord(entry, "expiresAt");
+    if (
+      !providerSource || !connectionId || !sourceEnvName || !fileEnvName ||
+      !expiresAt || !Number.isFinite(Date.parse(expiresAt))
+    ) return undefined;
+    credentials.push({ providerSource, connectionId, sourceEnvName, fileEnvName, expiresAt });
+  }
+  if (new Set(credentials.map((entry) => entry.sourceEnvName)).size !== credentials.length) {
+    return undefined;
+  }
+  return { kind: "active", manifestDigest, sequence: sequence as number, credentials };
+}
+
+function applyResultFromRunnerPayload(
+  result: Record<string, unknown>,
+): OpenTofuApplyResult {
+  const state = recordFromRecord(result, "state");
+  const providerExecutionFailure = providerExecutionFailureFromContainerResult(result);
+  if (providerExecutionFailure) {
+    const stateDigest = state ? stringFromRecord(state, "digest") : undefined;
+    if ((providerExecutionFailure.statePersistence === "persisted") !== Boolean(stateDigest)) {
+      throw new Error("runner failed-state persistence evidence is inconsistent");
+    }
+    return {
+      providerExecutionFailure,
+      ...(executionEvidenceFromContainerResult(result)
+        ? { executionEvidence: executionEvidenceFromContainerResult(result) }
+        : {}),
+      ...(stateDigest ? { stateDigest } : {}),
+      ...(providerInstallationFromContainerResult(result)
+        ? { providerInstallation: providerInstallationFromContainerResult(result) }
+        : {}),
+      diagnostics: diagnosticsFromContainerResult(result),
+    };
+  }
+  return {
+    ...(recordFromRecord(result, "outputs")
+      ? { outputs: recordFromRecord(result, "outputs") as OpenTofuApplyResult["outputs"] }
+      : {}),
+    ...(state && stringFromRecord(state, "digest")
+      ? { stateDigest: stringFromRecord(state, "digest") }
+      : {}),
+    ...(stringFromRecord(result, "rawOutputRef")
+      ? { rawOutputRef: stringFromRecord(result, "rawOutputRef") }
+      : {}),
+    ...(executionEvidenceFromContainerResult(result)
+      ? { executionEvidence: executionEvidenceFromContainerResult(result) }
+      : {}),
+    ...(providerInstallationFromContainerResult(result)
+      ? { providerInstallation: providerInstallationFromContainerResult(result) }
+      : {}),
+    diagnostics: diagnosticsFromContainerResult(result),
+  };
+}
+
+function destroyResultFromRunnerPayload(
+  result: Record<string, unknown>,
+): OpenTofuDestroyResult {
+  const state = recordFromRecord(result, "state");
+  const providerExecutionFailure = providerExecutionFailureFromContainerResult(result);
+  if (providerExecutionFailure) {
+    const stateDigest = state ? stringFromRecord(state, "digest") : undefined;
+    if ((providerExecutionFailure.statePersistence === "persisted") !== Boolean(stateDigest)) {
+      throw new Error("runner failed-state persistence evidence is inconsistent");
+    }
+    return {
+      providerExecutionFailure,
+      ...(executionEvidenceFromContainerResult(result)
+        ? { executionEvidence: executionEvidenceFromContainerResult(result) }
+        : {}),
+      ...(stateDigest ? { stateDigest } : {}),
+      ...(providerInstallationFromContainerResult(result)
+        ? { providerInstallation: providerInstallationFromContainerResult(result) }
+        : {}),
+      diagnostics: diagnosticsFromContainerResult(result),
+    };
+  }
+  return {
+    ...(state && stringFromRecord(state, "digest")
+      ? { stateDigest: stringFromRecord(state, "digest") }
+      : {}),
+    ...(providerInstallationFromContainerResult(result)
+      ? { providerInstallation: providerInstallationFromContainerResult(result) }
+      : {}),
+    ...(executionEvidenceFromContainerResult(result)
+      ? { executionEvidence: executionEvidenceFromContainerResult(result) }
+      : {}),
+    diagnostics: diagnosticsFromContainerResult(result),
+  };
 }
 
 function runnerRunIdFromPlanArtifact(
