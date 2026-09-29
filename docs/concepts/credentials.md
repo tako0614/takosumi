@@ -44,6 +44,15 @@ API では `POST /api/v1/connections` です。`/api/v1/provider-connections` �
 検証は `/test`、無効化は削除ではなく `/revoke` です。失効させると以降の Run では
 使えなくなり、過去の Run の記録は残ります。
 
+一部の対応 provider では、実行中の認証情報更新が設定された Connection に「自動更新」と
+表示します。使う場合は、Capsule の provider 接続を設定するときに、その表示がある Connection
+を明示的に選んでください。カタログや Recipe に対応情報があるだけでは有効にならず、既存の
+静的な Connection や割り当ても自動では切り替わりません。
+
+必要な provider のバージョンは provider ごとに異なります。たとえば Takoform provider の
+更新対応では `TAKOFORM_TOKEN_FILE` を使うため、4.1.0 以上が必要です。これは Takoform 固有の
+条件であり、Takosumi 全体の provider バージョン要件ではありません。
+
 ## 値がどこまで行くか
 
 値が runner sandbox に渡るのは、Run が実行されている間だけです。実行が終われば
@@ -111,9 +120,9 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/credential-recipes" \
 Recipe が無い provider も、generic な env / file の Connection を作れば同じように
 実行できます。
 
-参照 catalog に provider の renewable 対応が記述されていても、それは release composition
-向けの説明情報であり、登録された Recipe や Connection の opt-in にはなりません。
-実際の renewable delivery は、run-issued Recipe に明示された descriptor だけが有効です。
+参照 catalog に provider の更新対応が記述されていても、それだけでは登録された Recipe や
+Connection の opt-in にはなりません。実際に利用できるかは、選択した Connection、Recipe、
+provider の対応状況とバージョンによって決まります。
 
 ## 非 secret の設定と混ぜないでください
 
