@@ -3691,7 +3691,11 @@ export async function handlePlatformRunnerMutationInspectionRequest(
   let rawInspection: unknown;
   try {
     const runner = env.RUNNER.get(env.RUNNER.idFromName(run.id)) as unknown as {
-      inspectMutationAuthority?: () => Promise<unknown>;
+      inspectMutationAuthority?: (
+        runId: string,
+        action: "apply" | "destroy",
+        workspaceId: string,
+      ) => Promise<unknown>;
     };
     if (typeof runner.inspectMutationAuthority !== "function") {
       return Response.json(
@@ -3699,7 +3703,11 @@ export async function handlePlatformRunnerMutationInspectionRequest(
         { status: 503 },
       );
     }
-    rawInspection = await runner.inspectMutationAuthority();
+    rawInspection = await runner.inspectMutationAuthority(
+      run.id,
+      run.operation === "destroy" ? "destroy" : "apply",
+      run.workspaceId,
+    );
   } catch {
     return Response.json(
       { error: "runner mutation inspection unavailable" },
@@ -3718,7 +3726,12 @@ export async function handlePlatformRunnerMutationInspectionRequest(
     inspection.authority.status === "valid" &&
     inspection.authority.action !== (run.operation === "destroy" ? "destroy" : "apply");
   return Response.json(
-    { runId, runType, inspection },
+    {
+      runId, runType,
+      inspection: actionMismatch
+        ? { ...inspection, target: { status: "conflicting" } }
+        : inspection,
+    },
     {
       status: actionMismatch ? 409 : 200,
       headers: { "cache-control": "no-store" },
@@ -3751,6 +3764,10 @@ type PlatformRunnerMutationInspection = {
       | "malformed"
       | "conflicting";
   };
+  readonly target: {
+    readonly status:
+      | "unknown" | "conflicting" | "absent" | "present" | "mismatch" | "unavailable";
+  };
 };
 
 function parsePlatformRunnerMutationInspection(
@@ -3760,20 +3777,26 @@ function parsePlatformRunnerMutationInspection(
     !isRecord(value) ||
     value.kind !== "takosumi.runner-mutation-inspection@v1" ||
     !isRecord(value.authority) ||
-    !isRecord(value.dispatch)
+    !isRecord(value.dispatch) ||
+    !isRecord(value.target)
   ) return undefined;
   const authority = value.authority;
   const dispatch = value.dispatch;
+  const target = value.target;
+  if (![
+    "unknown", "conflicting", "absent", "present", "mismatch", "unavailable",
+  ].includes(target.status as string)) return undefined;
   if (
     authority.status === "absent" ||
     authority.status === "unknown" ||
     authority.status === "malformed"
   ) {
-    if (dispatch.status !== "not_checked") return undefined;
+    if (dispatch.status !== "not_checked" || target.status !== "unknown") return undefined;
     return {
       kind: "takosumi.runner-mutation-inspection@v1",
       authority: { status: authority.status },
       dispatch: { status: "not_checked" },
+      target: { status: target.status as PlatformRunnerMutationInspection["target"]["status"] },
     };
   }
   if (
@@ -3789,7 +3812,9 @@ function parsePlatformRunnerMutationInspection(
     authority.redispatchBlocked !== true ||
     !["matching", "absent", "unknown", "malformed", "conflicting"].includes(
       dispatch.status as string,
-    )
+    ) ||
+    (dispatch.status !== "matching" &&
+      target.status !== "unknown" && target.status !== "conflicting")
   ) return undefined;
   return {
     kind: "takosumi.runner-mutation-inspection@v1",
@@ -3804,6 +3829,7 @@ function parsePlatformRunnerMutationInspection(
     dispatch: {
       status: dispatch.status as PlatformRunnerMutationInspection["dispatch"]["status"],
     },
+    target: { status: target.status as PlatformRunnerMutationInspection["target"]["status"] },
   };
 }
 

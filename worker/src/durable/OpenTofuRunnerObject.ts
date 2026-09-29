@@ -398,6 +398,9 @@ const RUNNER_MUTATION_INDETERMINATE_HEADER =
 // record-format migration accidentally grant a second provider dispatch.
 const RUNNER_MUTATION_AUTHORITY_STORAGE_KEY = "runner-mutation-authority";
 const RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX = "runner-mutation-dispatch@v2:";
+const RUNNER_MUTATION_TARGET_WITNESS_STORAGE_PREFIX =
+  "runner-mutation-target-witness@v1:";
+class RunnerTargetReadUnavailableError extends Error {}
 const RUNNER_RELEASE_AUTHORITY_STORAGE_KEY = "runner-release-authority";
 const RUNNER_RELEASE_DISPATCH_STORAGE_PREFIX = "runner-release-dispatch@v1:";
 const RUNNER_RESTORE_AUTHORITY_STORAGE_PREFIX =
@@ -427,6 +430,21 @@ interface RunnerMutationDispatchRecord {
   readonly redispatchBlocked: true;
 }
 
+/** Diagnostic coordinate only. It never grants dispatch, adoption, or a Core transition. */
+interface RunnerMutationTargetWitness {
+  readonly kind: "takosumi.runner-mutation-target-witness@v1";
+  readonly action: RunnerMutationAction;
+  readonly semanticDigest: string;
+  readonly version: number;
+  readonly fence: number;
+  readonly applyRunId: string;
+  readonly planRunId: string;
+  readonly stateScope: Omit<StateScope, "priorState">;
+  readonly rawOutputRef?: string;
+  readonly commit: { readonly stateVersionId: string; readonly outputId?: string };
+  readonly plan: { readonly digest: string; readonly artifactDigest: string };
+}
+
 export type RunnerMutationInspection = {
   readonly kind: "takosumi.runner-mutation-inspection@v1";
   readonly authority:
@@ -447,6 +465,10 @@ export type RunnerMutationInspection = {
       | "malformed"
       | "conflicting"
       | "matching";
+  };
+  readonly target: {
+    readonly status:
+      | "unknown" | "conflicting" | "absent" | "present" | "mismatch" | "unavailable";
   };
 };
 
@@ -939,11 +961,15 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   }
 
   /** No fetch fallback: an older DO without this RPC must fail closed. */
-  async inspectMutationAuthority(): Promise<RunnerMutationInspection> {
+  async inspectMutationAuthority(
+    applyRunId: string,
+    expectedAction: RunnerMutationAction,
+    expectedWorkspaceId: string,
+  ): Promise<RunnerMutationInspection> {
     const kind = "takosumi.runner-mutation-inspection@v1";
     // One read-only storage snapshot prevents a concurrent phase transition
     // from appearing as a conflict between otherwise atomically paired keys.
-    return await this.ctx.storage.transaction(async (storage) => {
+    const snapshot = await this.ctx.storage.transaction(async (storage) => {
       const rawAuthority = await storage.get<unknown>(
         RUNNER_MUTATION_AUTHORITY_STORAGE_KEY,
       );
@@ -951,6 +977,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         return {
           kind, authority: { status: "absent" },
           dispatch: { status: "not_checked" },
+          target: { status: "unknown" },
         } as const;
       }
       const authority = parseRunnerMutationDispatchRecord(rawAuthority);
@@ -962,6 +989,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
               ? "unknown" : "malformed",
           },
           dispatch: { status: "not_checked" },
+          target: { status: "unknown" },
         } as const;
       }
       const rawDispatch = await storage.get<unknown>(
@@ -979,6 +1007,22 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
             dispatch.fence === authority.fence &&
             dispatch.phase === authority.phase
           ? "matching" : "conflicting";
+      const rawWitness = await storage.get<unknown>(
+        `${RUNNER_MUTATION_TARGET_WITNESS_STORAGE_PREFIX}${authority.semanticDigest}`,
+      );
+      const witness = rawWitness === undefined
+        ? undefined : parseRunnerMutationTargetWitness(rawWitness);
+      const targetStatus = dispatchStatus !== "matching" ||
+          authority.action !== expectedAction
+        ? "conflicting"
+        : rawWitness === undefined ? "unknown"
+        : !witness || witness.action !== authority.action ||
+            witness.semanticDigest !== authority.semanticDigest ||
+            witness.version !== authority.version ||
+            witness.fence !== authority.fence ||
+            witness.applyRunId !== applyRunId ||
+            witness.stateScope.workspaceId !== expectedWorkspaceId
+        ? "conflicting" : "ready";
       return {
         kind,
         authority: {
@@ -990,8 +1034,95 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           redispatchBlocked: true,
         },
         dispatch: { status: dispatchStatus },
-      } as RunnerMutationInspection;
+        target: { status: targetStatus },
+        ...(targetStatus === "ready" ? { witness } : {}),
+      };
     });
+    const witness = "witness" in snapshot ? snapshot.witness : undefined;
+    if (snapshot.target.status !== "ready" || !witness) {
+      return {
+        kind: snapshot.kind,
+        authority: snapshot.authority,
+        dispatch: snapshot.dispatch,
+        target: { status: snapshot.target.status },
+      } as RunnerMutationInspection;
+    }
+    return {
+      kind: snapshot.kind,
+      authority: snapshot.authority,
+      dispatch: snapshot.dispatch,
+      target: { status: await this.#inspectMutationTarget(witness) },
+    } as RunnerMutationInspection;
+  }
+
+  async #inspectMutationTarget(
+    witness: RunnerMutationTargetWitness,
+  ): Promise<RunnerMutationInspection["target"]["status"]> {
+    try {
+      const bucket = this.#r2State();
+      const object = await bucket.head(witness.stateScope.stateRef);
+      if (!object) return "absent";
+      const metadata = object.customMetadata;
+      const scope = witness.stateScope;
+      const evidenceRef = executionEvidenceObjectKey(scope.stateRef);
+      const evidenceDigest = metadata?.["takosumi-execution-evidence-digest"];
+      const recordedLength = metadata?.["takosumi-ciphertext-length"];
+      const providerFailed = metadata?.["takosumi-provider-execution"] === "failed";
+      if (
+        metadata?.["takosumi-run-id"] !== witness.applyRunId ||
+        metadata?.["takosumi-action"] !== witness.action ||
+        metadata?.["takosumi-generation"] !== String(scope.generation) ||
+        metadata?.["takosumi-workspace-id"] !== scope.workspaceId ||
+        metadata?.[scope.subjectKind === "capsule"
+          ? "takosumi-capsule-id" : "takosumi-resource-id"] !== scope.subjectId ||
+        metadata?.["takosumi-environment"] !== scope.environment ||
+        metadata?.["takosumi-logical-target-state-ref"] !== scope.stateRef ||
+        !isSha256Digest(metadata?.["takosumi-content-digest"]) ||
+        !Number.isSafeInteger(object.size) ||
+        recordedLength !== String(object.size) || object.size < 1 ||
+        metadata?.["takosumi-encryption-format"] !== "aes-gcm-bytes-v2" ||
+        (metadata?.["takosumi-provider-execution"] !== undefined &&
+          !providerFailed) ||
+        object.httpMetadata?.contentType !== ENCRYPTED_ARTIFACT_CONTENT_TYPE ||
+        metadata?.["takosumi-execution-evidence-ref"] !== evidenceRef ||
+        !isSha256Digest(evidenceDigest) ||
+        (witness.action === "apply"
+          ? providerFailed
+            ? metadata?.["takosumi-raw-output-status"] !== "none" ||
+              metadata?.["takosumi-raw-output-ref"] !== undefined
+            : metadata?.["takosumi-raw-output-ref"] !== witness.rawOutputRef ||
+              metadata?.["takosumi-raw-output-status"] !== undefined
+          : metadata?.["takosumi-raw-output-status"] !== "none" ||
+            metadata?.["takosumi-raw-output-ref"] !== undefined)
+      ) return "mismatch";
+      let evidence: RunExecutionEvidence;
+      try {
+        evidence = await this.#readExecutionEvidenceObject(
+          bucket, evidenceRef, witness.applyRunId, witness.action,
+          evidenceDigest,
+        );
+      } catch (error) {
+        return error instanceof RunnerTargetReadUnavailableError
+          ? "unavailable" : "mismatch";
+      }
+      const commit = evidence.commit;
+      if (
+        evidence.planRunId !== witness.planRunId ||
+        evidence.plan.digest !== witness.plan.digest ||
+        evidence.plan.artifactDigest !== witness.plan.artifactDigest ||
+        evidence.receipt.operationId !== witness.applyRunId ||
+        evidence.receipt.version !== witness.version ||
+        evidence.receipt.fence !== witness.fence ||
+        (providerFailed && evidence.outcome !== "provider_failed_state_persisted") ||
+        (!providerFailed && evidence.outcome !== "committed") ||
+        commit.stateVersionId !== witness.commit.stateVersionId ||
+        (evidence.outcome === "committed" && witness.action === "apply" &&
+          ("outputId" in commit ? commit.outputId : undefined) !== witness.commit.outputId)
+      ) return "mismatch";
+      return "present";
+    } catch {
+      return "unavailable";
+    }
   }
 
   #containerRuntimeUnavailable(): boolean {
@@ -1305,6 +1436,23 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         return { kind: "preparing", record: existingRecord };
       }
 
+      // Only a new verified claim may gain a diagnostic target. An existing
+      // v2 claim, including `preparing`, remains valid under its original
+      // request contract and is never backfilled or revalidated as v1 witness.
+      let targetWitness: RunnerMutationTargetWitness | undefined;
+      try {
+        targetWitness = mutationTargetWitnessForRequest(
+          runId, action, requestPayload, semanticDigest,
+        );
+      } catch (error) {
+        this.#activeMutationPreparations.delete(semanticDigest);
+        console.error("OpenTofu runner mutation target rejected", {
+          action,
+          errorName: safeRunnerErrorName(error),
+          redispatchBlocked: true,
+        });
+        return { kind: "blocked" };
+      }
       const record: RunnerMutationDispatchRecord = {
         kind: "takosumi.runner-mutation-dispatch@v2",
         action,
@@ -1314,7 +1462,23 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         phase: "preparing",
         redispatchBlocked: true,
       };
-      await this.#writeMutationDispatchRecord(record);
+      if (targetWitness) {
+        // The diagnostic coordinate and both v2 authority copies commit in
+        // one transaction. It is never added to an existing/legacy claim.
+        await this.ctx.storage.transaction(async (storage) => {
+          await storage.put(RUNNER_MUTATION_AUTHORITY_STORAGE_KEY, record);
+          await storage.put(
+            `${RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX}${semanticDigest}`,
+            record,
+          );
+          await storage.put(
+            `${RUNNER_MUTATION_TARGET_WITNESS_STORAGE_PREFIX}${semanticDigest}`,
+            targetWitness,
+          );
+        });
+      } else {
+        await this.#writeMutationDispatchRecord(record);
+      }
       return { kind: "preparing", record };
     } catch (error) {
       this.#activeMutationPreparations.delete(semanticDigest);
@@ -1443,7 +1607,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       const evidenceDelete = this.ctx.storage.delete(
         `${RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX}${preparation.semanticDigest}`,
       );
-      await Promise.all([authorityDelete, evidenceDelete]);
+      const targetWitnessDelete = this.ctx.storage.delete(
+        `${RUNNER_MUTATION_TARGET_WITNESS_STORAGE_PREFIX}${preparation.semanticDigest}`,
+      );
+      await Promise.all([authorityDelete, evidenceDelete, targetWitnessDelete]);
     } finally {
       this.#activeMutationPreparations.delete(preparation.semanticDigest);
     }
@@ -2592,7 +2759,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     expectedDigest: string,
   ): Promise<RunExecutionEvidence> {
     assertSafeArtifactObjectKey(ref, "execution evidence");
-    const object = await bucket.get(ref);
+    let object: R2ObjectBody | null;
+    try {
+      object = await bucket.get(ref);
+    } catch {
+      throw new RunnerTargetReadUnavailableError();
+    }
     if (!object) throw new Error("completed mutation evidence object is missing");
     const metadata = object.customMetadata;
     if (
@@ -2603,11 +2775,17 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     ) {
       throw new Error("completed mutation evidence object authority mismatch");
     }
-    const bytes = await readBoundedR2ObjectBytes(
-      object,
-      "runner_response",
-      this.#artifactLimits.runnerResponse,
-    );
+    let bytes: Uint8Array;
+    try {
+      bytes = await readBoundedR2ObjectBytes(
+        object,
+        "runner_response",
+        this.#artifactLimits.runnerResponse,
+      );
+    } catch (error) {
+      if (error instanceof RunnerArtifactSizeLimitError) throw error;
+      throw new RunnerTargetReadUnavailableError();
+    }
     const actualDigest = await digestBytes(bytes);
     if (actualDigest !== expectedDigest) {
       throw new Error("completed mutation evidence object digest mismatch");
@@ -6108,6 +6286,130 @@ function parseRunnerMutationDispatchRecord(
     fence: fence as number,
     phase,
     redispatchBlocked: true,
+  };
+}
+
+function mutationTargetWitnessForRequest(
+  runnerRunId: string,
+  action: RunnerMutationAction,
+  requestPayload: unknown,
+  semanticDigest: string,
+): RunnerMutationTargetWitness | undefined {
+  const scope = parseStateScope(requestPayload);
+  // Legacy no-stateScope dispatches keep their v2 fence, but have no exact
+  // R2_STATE coordinate to witness. Never infer one later from a replay.
+  if (!scope) return undefined;
+  const applyRun = recordField(requestPayload, "applyRun");
+  const planRun = recordField(requestPayload, "planRun");
+  const planArtifact = recordField(requestPayload, "planArtifact");
+  const rawCommit = recordField(requestPayload, "executionEvidenceCommit");
+  const applyRunId = applyRun && stringField(applyRun, "id");
+  const planRunId = planRun && stringField(planRun, "id");
+  const rawOutputRef = parseRawOutputRef(requestPayload);
+  const stateVersionId = rawCommit && stringField(rawCommit, "stateVersionId");
+  const outputId = rawCommit && stringField(rawCommit, "outputId");
+  const planDigest = planRun && stringField(planRun, "planDigest");
+  const artifactDigest = planArtifact && stringField(planArtifact, "digest");
+  const operation = applyRun && stringField(applyRun, "operation");
+  if (
+    !applyRunId || !planRunId || planRunId !== runnerRunId ||
+    stringField(applyRun, "planRunId") !== planRunId ||
+    stringField(applyRun, "workspaceId") !== scope.workspaceId ||
+    stringField(planRun, "workspaceId") !== scope.workspaceId ||
+    stringField(planRun, "operation") !== operation ||
+    (action === "destroy" ? operation !== "destroy"
+      : operation !== "create" && operation !== "update") ||
+    !stateVersionId || !isSha256Digest(planDigest) ||
+    !isSha256Digest(artifactDigest) ||
+    (action === "apply" && (!rawOutputRef || !outputId)) ||
+    (action === "destroy" && (outputId || rawOutputRef))
+  ) throw new Error("mutation target witness lacks immutable run/plan/commit identity");
+  assertStateRefForScope(scope);
+  if (rawOutputRef) assertRawOutputRefForScope(scope, applyRunId, rawOutputRef);
+  const witness: RunnerMutationTargetWitness = {
+    kind: "takosumi.runner-mutation-target-witness@v1",
+    action,
+    semanticDigest,
+    version: 1,
+    fence: 1,
+    applyRunId,
+    planRunId,
+    stateScope: {
+      workspaceId: scope.workspaceId,
+      subjectKind: scope.subjectKind,
+      subjectId: scope.subjectId,
+      environment: scope.environment,
+      generation: scope.generation,
+      stateRef: scope.stateRef,
+    },
+    ...(rawOutputRef ? { rawOutputRef } : {}),
+    commit: { stateVersionId, ...(outputId ? { outputId } : {}) },
+    plan: { digest: planDigest, artifactDigest },
+  };
+  if (!parseRunnerMutationTargetWitness(witness)) {
+    throw new Error("mutation target witness is invalid");
+  }
+  return witness;
+}
+
+function parseRunnerMutationTargetWitness(
+  value: unknown,
+): RunnerMutationTargetWitness | undefined {
+  const action = isRecord(value) ? stringField(value, "action") : undefined;
+  if (!isRecord(value) ||
+    value.kind !== "takosumi.runner-mutation-target-witness@v1" ||
+    !isRunnerMutationAction(action) ||
+    !isSha256Digest(stringField(value, "semanticDigest")) ||
+    !Number.isSafeInteger(value.version) || (value.version as number) < 1 ||
+    !Number.isSafeInteger(value.fence) || (value.fence as number) < 1) return undefined;
+  const scope = value.stateScope;
+  const commit = value.commit;
+  const plan = value.plan;
+  if (!isRecord(scope) || !isRecord(commit) || !isRecord(plan)) return undefined;
+  const applyRunId = stringField(value, "applyRunId");
+  const planRunId = stringField(value, "planRunId");
+  const rawOutputRef = stringField(value, "rawOutputRef");
+  const stateVersionId = stringField(commit, "stateVersionId");
+  const outputId = stringField(commit, "outputId");
+  const digest = stringField(plan, "digest");
+  const artifactDigest = stringField(plan, "artifactDigest");
+  if (!applyRunId || !planRunId || !stateVersionId ||
+    !isSha256Digest(digest) || !isSha256Digest(artifactDigest) ||
+    (action === "apply" && (!rawOutputRef || !outputId)) ||
+    (action === "destroy" && (outputId || rawOutputRef)) ||
+    typeof scope.workspaceId !== "string" || !scope.workspaceId ||
+    (scope.subjectKind !== "capsule" && scope.subjectKind !== "resource") ||
+    typeof scope.subjectId !== "string" || !scope.subjectId ||
+    typeof scope.environment !== "string" || !scope.environment ||
+    !Number.isSafeInteger(scope.generation) ||
+    (scope.generation as number) < 0 ||
+    typeof scope.stateRef !== "string") return undefined;
+  const stateScope: RunnerMutationTargetWitness["stateScope"] = {
+    workspaceId: scope.workspaceId,
+    subjectKind: scope.subjectKind,
+    subjectId: scope.subjectId,
+    environment: scope.environment,
+    generation: scope.generation as number,
+    stateRef: scope.stateRef,
+  };
+  try {
+    assertStateRefForScope(stateScope);
+    if (rawOutputRef) assertRawOutputRefForScope(stateScope, applyRunId, rawOutputRef);
+  } catch {
+    return undefined;
+  }
+  return {
+    kind: "takosumi.runner-mutation-target-witness@v1",
+    action,
+    semanticDigest: value.semanticDigest as string,
+    version: value.version as number,
+    fence: value.fence as number,
+    applyRunId,
+    planRunId,
+    stateScope,
+    ...(rawOutputRef ? { rawOutputRef } : {}),
+    commit: { stateVersionId, ...(outputId ? { outputId } : {}) },
+    plan: { digest, artifactDigest },
   };
 }
 

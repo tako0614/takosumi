@@ -69,13 +69,14 @@ test("runner mutation inspection reads paired authority without container or wri
     stop: async () => { calls.push("stop"); },
     destroy: async () => { calls.push("destroy"); },
   });
-  assert.deepEqual(await runner.inspectMutationAuthority(), {
+  assert.deepEqual(await runner.inspectMutationAuthority("apply_exact", "apply", "workspace_semantic"), {
     kind: "takosumi.runner-mutation-inspection@v1",
     authority: {
       status: "valid", action: "apply", phase: "indeterminate",
       version: 2, fence: 3, redispatchBlocked: true,
     },
     dispatch: { status: "matching" },
+    target: { status: "unknown" },
   });
   assert.equal(storage.putCalls, writesBefore);
   assert.equal(await storage.getAlarm(), null);
@@ -87,25 +88,28 @@ test("runner mutation inspection classifies absent, malformed, and conflicting e
   const runner = runnerWithContainer(new FakeR2Bucket(), {
     async containerFetch() { throw new Error("container must not be contacted"); },
   }, { storage });
-  assert.deepEqual(await runner.inspectMutationAuthority(), {
+  assert.deepEqual(await runner.inspectMutationAuthority("apply_exact", "apply", "workspace_semantic"), {
     kind: "takosumi.runner-mutation-inspection@v1",
     authority: { status: "absent" },
     dispatch: { status: "not_checked" },
+    target: { status: "unknown" },
   });
   await storage.put("runner-mutation-authority", { secret: "hidden" });
-  assert.deepEqual(await runner.inspectMutationAuthority(), {
+  assert.deepEqual(await runner.inspectMutationAuthority("apply_exact", "apply", "workspace_semantic"), {
     kind: "takosumi.runner-mutation-inspection@v1",
     authority: { status: "malformed" },
     dispatch: { status: "not_checked" },
+    target: { status: "unknown" },
   });
   await storage.put("runner-mutation-authority", {
     kind: "takosumi.runner-mutation-dispatch@v3",
     secret: "hidden",
   });
-  assert.deepEqual(await runner.inspectMutationAuthority(), {
+  assert.deepEqual(await runner.inspectMutationAuthority("apply_exact", "apply", "workspace_semantic"), {
     kind: "takosumi.runner-mutation-inspection@v1",
     authority: { status: "unknown" },
     dispatch: { status: "not_checked" },
+    target: { status: "unknown" },
   });
   const authority = {
     kind: "takosumi.runner-mutation-dispatch@v2", action: "apply",
@@ -113,15 +117,241 @@ test("runner mutation inspection classifies absent, malformed, and conflicting e
     phase: "dispatched", redispatchBlocked: true,
   };
   await storage.put("runner-mutation-authority", authority);
-  assert.equal((await runner.inspectMutationAuthority()).dispatch.status, "absent");
+  assert.equal((await runner.inspectMutationAuthority("apply_exact", "apply", "workspace_semantic")).dispatch.status, "absent");
   await storage.put(`runner-mutation-dispatch@v2:${MUTATION_DIGEST}`, { ...authority, phase: "indeterminate" });
-  assert.equal((await runner.inspectMutationAuthority()).dispatch.status, "conflicting");
+  assert.equal((await runner.inspectMutationAuthority("apply_exact", "apply", "workspace_semantic")).dispatch.status, "conflicting");
   await storage.put(`runner-mutation-dispatch@v2:${MUTATION_DIGEST}`, { secret: "hidden" });
-  assert.equal((await runner.inspectMutationAuthority()).dispatch.status, "malformed");
+  assert.equal((await runner.inspectMutationAuthority("apply_exact", "apply", "workspace_semantic")).dispatch.status, "malformed");
   await storage.put(`runner-mutation-dispatch@v2:${MUTATION_DIGEST}`, {
     kind: "takosumi.runner-mutation-dispatch@v3", secret: "hidden",
   });
-  assert.equal((await runner.inspectMutationAuthority()).dispatch.status, "unknown");
+  assert.equal((await runner.inspectMutationAuthority("apply_exact", "apply", "workspace_semantic")).dispatch.status, "unknown");
+});
+
+test("future target witness commits atomically with initial claim and survives restart", async () => {
+  const planRunId = "plan_target_atomic";
+  const artifacts = new FakeR2Bucket();
+  await seedEncryptedPlan(artifacts, planRunId);
+  const state = new FakeR2Bucket();
+  const token = await signedMutationToken(planRunId, {});
+  const request = () => signedMutationRequest(planRunId, token, {
+    stateScope: capsuleStateScope(), rawOutputRef: rawOutputRefFor(planRunId),
+  });
+  const options = {
+    stateBucket: state,
+    env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET },
+  };
+  const rejected = new FakeDoStorage();
+  rejected.failPutBeforeCommit(3);
+  let providerCalls = 0;
+  const container = mutationSuccessContainer(planRunId, () => { providerCalls += 1; });
+  assert.equal((await runnerWithContainer(artifacts, container, {
+    ...options, storage: rejected,
+  }).fetch(request())).status, 500);
+  assert.deepEqual(rejected.entries(), []);
+  assert.equal(providerCalls, 0);
+
+  const committed = new FakeDoStorage();
+  committed.failPutAfterCommit(3);
+  assert.equal((await runnerWithContainer(artifacts, container, {
+    ...options, storage: committed,
+  }).fetch(request())).status, 500);
+  assert.equal(providerCalls, 0);
+  assert.equal(committed.entries().length, 3);
+  const witness = committed.valueByPrefix("runner-mutation-target-witness@v1:") as Record<string, unknown>;
+  assert.equal(witness.applyRunId, `apply_${planRunId}`);
+  assert.equal(witness.planRunId, planRunId);
+  assert.equal((witness.stateScope as Record<string, unknown>).stateRef, capsuleStateScope().stateRef);
+  assert.equal(JSON.stringify(witness).includes(token), false);
+  const restarted = runnerWithContainer(artifacts, {
+    async containerFetch() { throw new Error("inspection must not contact container"); },
+  }, { ...options, storage: committed });
+  assert.equal((await restarted.inspectMutationAuthority(`apply_${planRunId}`, "apply", "workspace_semantic")).target.status, "absent");
+  const readsBefore = state.readCalls;
+  assert.equal((await restarted.inspectMutationAuthority("apply_another", "apply", "workspace_semantic")).target.status, "conflicting");
+  assert.equal((await restarted.inspectMutationAuthority(`apply_${planRunId}`, "destroy", "workspace_semantic")).target.status, "conflicting");
+  assert.equal((await restarted.inspectMutationAuthority(`apply_${planRunId}`, "apply", "workspace_foreign")).target.status, "conflicting");
+  assert.equal(state.readCalls, readsBefore);
+  const noR2 = runnerWithContainer(artifacts, container, { storage: committed });
+  assert.equal((await noR2.inspectMutationAuthority(`apply_${planRunId}`, "apply", "workspace_semantic")).target.status, "unavailable");
+  const failingR2 = new FakeR2Bucket();
+  Object.defineProperty(failingR2, "head", { value: async () => { throw new Error("private R2 failure"); } });
+  const failingRunner = runnerWithContainer(artifacts, container, {
+    ...options, storage: committed, stateBucket: failingR2,
+  });
+  assert.equal((await failingRunner.inspectMutationAuthority(`apply_${planRunId}`, "apply", "workspace_semantic")).target.status, "unavailable");
+});
+
+test("future target inspection validates exact state and sidecar without GET side effects", async () => {
+  const planRunId = "plan_target_present";
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  await seedEncryptedPlan(artifacts, planRunId);
+  const token = await signedMutationToken(planRunId, {});
+  const options = {
+    stateBucket: state, storage,
+    env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET },
+  };
+  let providerCalls = 0;
+  const container = mutationSuccessContainer(planRunId, () => { providerCalls += 1; });
+  const response = await runnerWithContainer(artifacts, container, options).fetch(
+    signedMutationRequest(planRunId, token, {
+      stateScope: capsuleStateScope(), rawOutputRef: rawOutputRefFor(planRunId),
+    }),
+  );
+  assert.equal(response.status, 200);
+  assert.equal(providerCalls, 1);
+  const witnessBefore = JSON.stringify(storage.valueByPrefix("runner-mutation-target-witness@v1:"));
+  assert.equal(storage.putKeys.filter((key) => key.startsWith("runner-mutation-target-witness@v1:")).length, 1);
+  const writesBefore = storage.putCalls;
+  const keysBefore = state.keys();
+  const runner = runnerWithContainer(artifacts, {
+    async containerFetch() { throw new Error("inspection must not contact container"); },
+  }, { ...options, startAndWaitForPorts: async () => { throw new Error("no start"); } });
+  const applyRunId = `apply_${planRunId}`;
+  assert.equal((await runner.inspectMutationAuthority(applyRunId, "apply", "workspace_semantic")).target.status, "present");
+  assert.equal(storage.putCalls, writesBefore);
+  assert.deepEqual(state.keys(), keysBefore);
+  assert.equal(JSON.stringify(storage.valueByPrefix("runner-mutation-target-witness@v1:")), witnessBefore);
+
+  const key = capsuleStateScope().stateRef;
+  const original = await state.get(key);
+  assert.ok(original);
+  const bytes = await original.arrayBuffer();
+  await state.put(key, bytes, {
+    httpMetadata: original.httpMetadata,
+    customMetadata: { ...original.customMetadata, "takosumi-run-id": "apply_foreign" },
+  });
+  assert.equal((await runner.inspectMutationAuthority(applyRunId, "apply", "workspace_semantic")).target.status, "mismatch");
+  await state.put(key, bytes, {
+    httpMetadata: original.httpMetadata,
+    customMetadata: original.customMetadata,
+  });
+  const evidenceRef = `${key}.execution-evidence.json`;
+  const evidence = await state.get(evidenceRef);
+  assert.ok(evidence);
+  await state.put(evidenceRef, "{}", {
+    httpMetadata: evidence.httpMetadata,
+    customMetadata: evidence.customMetadata,
+  });
+  assert.equal((await runner.inspectMutationAuthority(applyRunId, "apply", "workspace_semantic")).target.status, "mismatch");
+  storage.replaceValueByPrefix("runner-mutation-target-witness@v1:", {
+    ...JSON.parse(witnessBefore), applyRunId: "apply_foreign",
+    privateValue: "must-never-be-returned",
+  });
+  const readsBeforeConflict = state.readCalls;
+  const conflict = await runner.inspectMutationAuthority(applyRunId, "apply", "workspace_semantic");
+  assert.equal(conflict.target.status, "conflicting");
+  assert.equal(state.readCalls, readsBeforeConflict);
+  assert.equal(JSON.stringify(conflict).includes("must-never-be-returned"), false);
+});
+
+test("resuming a legacy preparing claim never backfills a missing target witness", async () => {
+  const planRunId = "plan_target_legacy_preparing";
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  await seedEncryptedPlan(artifacts, planRunId);
+  storage.failPutAfterCommit(3);
+  const options = {
+    storage, stateBucket: state,
+    env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET },
+  };
+  const container = mutationSuccessContainer(planRunId, () => undefined);
+  const token = await signedMutationToken(planRunId, {});
+  const request = () => signedMutationRequest(planRunId, token, {
+    stateScope: capsuleStateScope(), rawOutputRef: rawOutputRefFor(planRunId),
+  });
+  assert.equal((await runnerWithContainer(artifacts, container, options).fetch(request())).status, 500);
+  storage.deleteByPrefix("runner-mutation-target-witness@v1:");
+  assert.equal((await runnerWithContainer(artifacts, container, options).fetch(request())).status, 200);
+  assert.equal(storage.entries().some(([key]) => key.startsWith("runner-mutation-target-witness@v1:")), false);
+  assert.equal((await runnerWithContainer(artifacts, container, options).inspectMutationAuthority(
+    `apply_${planRunId}`, "apply", "workspace_semantic",
+  )).target.status, "unknown");
+});
+
+test("historical v2 preparing claim keeps its existing path without modern witness fields", async () => {
+  const planRunId = "plan_historical_witnessless";
+  const applyRunId = `apply_${planRunId}`;
+  const requestPayload = {
+    applyRun: { id: applyRunId },
+    stateScope: capsuleStateScope(),
+    rawOutputRef: rawOutputRefFor(planRunId),
+  };
+  const semanticDigest = await stableJsonDigest({
+    kind: "takosumi.runner-mutation-semantics@v2",
+    runId: planRunId,
+    action: "apply",
+    request: { ...requestPayload, credentials: null },
+  });
+  const record = {
+    kind: "takosumi.runner-mutation-dispatch@v2",
+    action: "apply", semanticDigest,
+    version: 1, fence: 1, phase: "preparing", redispatchBlocked: true,
+  };
+  const storage = new FakeDoStorage();
+  await storage.put("runner-mutation-authority", record);
+  await storage.put(`runner-mutation-dispatch@v2:${semanticDigest}`, record);
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  let providerCalls = 0;
+  const runner = runnerWithContainer(
+    artifacts,
+    mutationSuccessContainer(planRunId, () => { providerCalls += 1; }),
+    { storage, stateBucket: state },
+  );
+  const response = await runner.fetch(new Request(`https://runner/runs/${planRunId}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "apply", request: requestPayload }),
+  }));
+  assert.equal(providerCalls, 1);
+  assert.equal((storage.valueByPrefix("runner-mutation-dispatch@v2:") as Record<string, unknown>).phase, "dispatched");
+  assert.equal(storage.entries().some(([key]) => key.startsWith("runner-mutation-target-witness@v1:")), false);
+  assert.equal(response.status, 500); // old payload cannot construct modern terminal evidence
+});
+
+test("future destroy witness validates its exact target without raw Output", async () => {
+  const planRunId = "plan_target_destroy";
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  await seedEncryptedPlan(artifacts, planRunId);
+  const token = await signedMutationToken(planRunId, { action: "destroy" });
+  const options = {
+    storage, stateBucket: state,
+    env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET },
+  };
+  const response = await runnerWithContainer(
+    artifacts, mutationSuccessContainer(planRunId, () => undefined), options,
+  ).fetch(signedMutationRequest(planRunId, token, {
+    action: "destroy", stateScope: capsuleStateScope(),
+  }));
+  assert.equal(response.status, 200);
+  const witness = storage.valueByPrefix("runner-mutation-target-witness@v1:") as Record<string, unknown>;
+  assert.equal(witness.rawOutputRef, undefined);
+  assert.equal((await runnerWithContainer(artifacts, {
+    async containerFetch() { throw new Error("inspection must not contact container"); },
+  }, options).inspectMutationAuthority(`apply_${planRunId}`, "destroy", "workspace_semantic")).target.status, "present");
+  storage.replaceValueByPrefix("runner-mutation-target-witness@v1:", {
+    ...witness, rawOutputRef: rawOutputRefFor(planRunId),
+  });
+  assert.equal((await runnerWithContainer(artifacts, {
+    async containerFetch() { throw new Error("inspection must not contact container"); },
+  }, options).inspectMutationAuthority(`apply_${planRunId}`, "destroy", "workspace_semantic")).target.status, "conflicting");
+  const invalidStorage = new FakeDoStorage();
+  const invalid = await runnerWithContainer(artifacts, mutationSuccessContainer(
+    planRunId, () => { throw new Error("provider must not run"); },
+  ), { ...options, storage: invalidStorage }).fetch(signedMutationRequest(
+    planRunId, token, {
+      action: "destroy", stateScope: capsuleStateScope(),
+      rawOutputRef: rawOutputRefFor(planRunId),
+    },
+  ));
+  assert.equal(invalid.status, 409, await invalid.text());
+  assert.deepEqual(invalidStorage.entries(), []);
 });
 
 interface RestoreSourceDescriptor {
@@ -6050,6 +6280,7 @@ class FakeDoStorage {
   #values = new Map<string, unknown>();
   #alarm: number | null = null;
   #putCalls = 0;
+  readonly putKeys: string[] = [];
   #transactionTail: Promise<void> = Promise.resolve();
   readonly #putFailuresBeforeCommit = new Set<number>();
   readonly #putFailuresAfterCommit = new Set<number>();
@@ -6074,6 +6305,7 @@ class FakeDoStorage {
 
   put<T = unknown>(key: string, value: T): Promise<void> {
     this.#putCalls += 1;
+    this.putKeys.push(key);
     if (this.#putFailuresBeforeCommit.delete(this.#putCalls)) {
       return Promise.reject(
         new Error("simulated Durable Object storage pre-commit failure"),
@@ -6131,6 +6363,7 @@ class FakeDoStorage {
         Promise.resolve(values.get(key) as V | undefined),
       put: <V = unknown>(key: string, value: V): Promise<void> => {
         this.#putCalls += 1;
+        this.putKeys.push(key);
         if (this.#putFailuresBeforeCommit.delete(this.#putCalls)) {
           return Promise.reject(
             new Error("simulated Durable Object storage pre-commit failure"),
@@ -6369,6 +6602,7 @@ class FakeRestoreLedgerStatement implements D1PreparedStatement {
 class FakeR2Bucket implements R2Bucket {
   readonly #objects = new Map<string, FakeR2ObjectBody>();
   #nextEtag = 1;
+  readCalls = 0;
 
   async put(
     key: string,
@@ -6402,10 +6636,12 @@ class FakeR2Bucket implements R2Bucket {
   }
 
   get(key: string): Promise<R2ObjectBody | null> {
+    this.readCalls += 1;
     return Promise.resolve(this.#objects.get(key) ?? null);
   }
 
   head(key: string): Promise<R2Object | null> {
+    this.readCalls += 1;
     return Promise.resolve(this.#objects.get(key) ?? null);
   }
 

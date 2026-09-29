@@ -11,8 +11,8 @@ function fixture(operation = "create") {
     RUNNER: {
       idFromName: (name: string) => `id:${name}`,
       get: (id: unknown) => ({
-        inspectMutationAuthority: async () => {
-          calls.push({ id, method: "RPC", path: "inspectMutationAuthority" });
+        inspectMutationAuthority: async (runId: string, action: string, workspaceId: string) => {
+          calls.push({ id, method: "RPC", path: `inspectMutationAuthority:${runId}:${action}:${workspaceId}` });
           return {
             kind: "takosumi.runner-mutation-inspection@v1",
             authority: {
@@ -24,6 +24,11 @@ function fixture(operation = "create") {
               redispatchBlocked: true,
             },
             dispatch: { status: "matching" },
+            target: {
+              status: "present",
+              stateRef: "must-never-return-state-path",
+              rawOutputRef: "must-never-return-output-path",
+            },
             secret: "must-never-be-returned",
           };
         },
@@ -89,7 +94,8 @@ test("runner mutation inspection addresses exact Runner DO and strips unknown pa
     new Request(url, { headers: authorization }), url, env, { getApplyRun },
   );
   expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({
+  const body = await response.json();
+  expect(body).toEqual({
     runId: "apply_76f606db8cc34ac7",
     runType: "apply",
     inspection: {
@@ -103,13 +109,15 @@ test("runner mutation inspection addresses exact Runner DO and strips unknown pa
         redispatchBlocked: true,
       },
       dispatch: { status: "matching" },
+      target: { status: "present" },
     },
   });
   expect(calls).toEqual([{
     id: "id:apply_76f606db8cc34ac7",
     method: "RPC",
-    path: "inspectMutationAuthority",
+    path: "inspectMutationAuthority:apply_76f606db8cc34ac7:apply:space_1",
   }]);
+  expect(JSON.stringify(body)).not.toContain("must-never-return");
 });
 
 test("runner mutation inspection treats mismatched action as conflict, without leaking DO fields", async () => {
@@ -119,7 +127,9 @@ test("runner mutation inspection treats mismatched action as conflict, without l
     new Request(url, { headers: authorization }), url, env, { getApplyRun },
   );
   expect(response.status).toBe(409);
-  expect(JSON.stringify(await response.json())).not.toContain("must-never-be-returned");
+  const body = await response.json() as { inspection: { target: { status: string } } };
+  expect(body.inspection.target.status).toBe("conflicting");
+  expect(JSON.stringify(body)).not.toContain("must-never-be-returned");
 });
 
 test("runner mutation inspection fails closed on malformed DO response", async () => {
