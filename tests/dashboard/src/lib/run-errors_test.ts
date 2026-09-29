@@ -12,14 +12,20 @@ const runView = readFileSync(
 );
 
 describe("Run failure hints", () => {
-  test("runner mutation indeterminate explains that the operation may have run", () => {
+  test("runner mutation indeterminate warns not to retry or delete and gives the operator path", () => {
     setLocale("ja");
     expect(runFailureHint("runner_mutation_indeterminate")).toBe(
       ja["runError.mutationIndeterminate"],
     );
+    expect(ja["runError.mutationIndeterminate"]).toBe(
+      "実行結果を確認できず、処理がすでにリソースを変更した可能性があります。状態が確認できるまで再実行や削除はせず、このRunの「参照情報」>「識別情報」にあるRun IDを添えて運営者に確認してください。",
+    );
     setLocale("en");
     expect(runFailureHint("runner_mutation_indeterminate")).toBe(
       en["runError.mutationIndeterminate"],
+    );
+    expect(en["runError.mutationIndeterminate"]).toBe(
+      "The result is unknown; the operation may already have changed resources. Do not retry or delete anything until the state is confirmed; ask your operator or administrator and include this Run's ID from Reference info > Identifiers.",
     );
   });
 
@@ -50,5 +56,12 @@ describe("Run failure hints", () => {
     expect(en["runError.mutationIndeterminate"]).toContain(
       "Reference info > Identifiers",
     );
+  });
+
+  test("indeterminate copy does not recommend logs as confirmation or a retry", () => {
+    expect(ja["runError.mutationIndeterminate"]).not.toContain("ログ");
+    expect(ja["runError.mutationIndeterminate"]).not.toContain("もう一度");
+    expect(en["runError.mutationIndeterminate"]).not.toContain("logs");
+    expect(en["runError.mutationIndeterminate"]).not.toContain("try again");
   });
 });

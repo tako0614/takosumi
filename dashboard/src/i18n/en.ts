@@ -688,7 +688,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Check the details, then review the changes again if needed.",
   "runError.runFailed": "The run failed. Please try again.",
   "runError.mutationIndeterminate":
-    "The result could not be confirmed. The operation may already have changed resources, so do not assume that nothing was created, changed, or deleted. Before starting another deploy or deletion, open this Run's Reference info > Identifiers for its Run ID, then review the diagnostics and logs.",
+    "The result is unknown; the operation may already have changed resources. Do not retry or delete anything until the state is confirmed; ask your operator or administrator and include this Run's ID from Reference info > Identifiers.",
   "runError.backupFailed":
     "The restore point could not be created. Please try again.",
   "run.summary.failedHint":
