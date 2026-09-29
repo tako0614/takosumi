@@ -4,8 +4,10 @@ import { RuntimeSecretFileBundle } from "../../../core/domains/deploy-control/ru
 import type { CloudflareWorkerEnv } from "../../../worker/src/bindings.ts";
 import {
   createCompositeReleaseActivator,
+  createDurableWebhookReleaseActivator,
   createRunnerReleaseActivator,
   createWebhookReleaseActivator,
+  ReleaseActivationIndeterminateError,
   releaseActivatorFromEnv,
 } from "../../../worker/src/release_activator.ts";
 
@@ -599,6 +601,132 @@ test("webhook release activator treats 204 as succeeded", async () => {
   ).resolves.toEqual({
     status: "succeeded",
   });
+});
+
+test("durable webhook release activator submits once then observes one GET", async () => {
+  const requests: Request[] = [];
+  const activator = createDurableWebhookReleaseActivator({
+    url: "https://materializer.example.test/activate",
+    token: "release-token",
+    fetcher: async (input, init) => {
+      const request = new Request(input, init);
+      requests.push(request);
+      if (request.method === "POST") {
+        return Response.json(
+          {
+            status: "pending",
+            jobId: "rel_job_1",
+            statusUrl: "https://materializer.example.test/jobs/rel_job_1",
+          },
+          { status: 202 },
+        );
+      }
+      return Response.json({
+        status: "succeeded",
+        message: "done",
+        metadata: { jobId: "rel_job_1" },
+      });
+    },
+  });
+
+  const submitted = await activator.submit(fakeOperatorActivationInput());
+  expect(submitted).toEqual({
+    kind: "pending",
+    job: {
+      jobId: "rel_job_1",
+      statusUrl: "https://materializer.example.test/jobs/rel_job_1",
+    },
+  });
+  expect(requests.map((request) => request.method)).toEqual(["POST"]);
+  expect(requests[0]?.headers.get("authorization")).toBe(
+    "Bearer release-token",
+  );
+
+  const observed = await activator.observe(submitted.job);
+  expect(observed).toEqual({
+    kind: "settled",
+    result: {
+      status: "succeeded",
+      message: "done",
+      metadata: { jobId: "rel_job_1" },
+    },
+  });
+  expect(requests.map((request) => request.method)).toEqual(["POST", "GET"]);
+  expect(requests[1]?.url).toBe(
+    "https://materializer.example.test/jobs/rel_job_1",
+  );
+});
+
+test("durable webhook release activator treats POST 204 as terminal", async () => {
+  const activator = createDurableWebhookReleaseActivator({
+    url: "https://materializer.example.test/activate",
+    token: "release-token",
+    fetcher: async () => new Response(null, { status: 204 }),
+  });
+
+  await expect(
+    activator.submit(fakeOperatorActivationInput()),
+  ).resolves.toEqual({
+    kind: "settled",
+    result: { status: "succeeded" },
+  });
+});
+
+test("durable webhook release activator rejects pending without a safe job reference", async () => {
+  for (const responseBody of [
+    { status: "pending" },
+    {
+      status: "pending",
+      jobId: "rel_job_1",
+      statusUrl: "https://foreign.example.test/jobs/rel_job_1",
+    },
+  ]) {
+    const activator = createDurableWebhookReleaseActivator({
+      url: "https://materializer.example.test/activate",
+      token: "release-token",
+      fetcher: async () => Response.json(responseBody, { status: 202 }),
+    });
+    await expect(
+      activator.submit(fakeOperatorActivationInput()),
+    ).rejects.toBeInstanceOf(ReleaseActivationIndeterminateError);
+  }
+});
+
+test("durable webhook release activator reports lost POST acknowledgement without retrying", async () => {
+  let postCount = 0;
+  const activator = createDurableWebhookReleaseActivator({
+    url: "https://materializer.example.test/activate",
+    token: "release-token",
+    fetcher: async (_input, init) => {
+      if (init?.method === "POST") postCount += 1;
+      throw new Error("socket closed after request write");
+    },
+  });
+
+  await expect(
+    activator.submit(fakeOperatorActivationInput()),
+  ).rejects.toBeInstanceOf(ReleaseActivationIndeterminateError);
+  expect(postCount).toBe(1);
+});
+
+test("durable webhook release activator validates persisted status URLs before GET", async () => {
+  let requestCount = 0;
+  const activator = createDurableWebhookReleaseActivator({
+    url: "https://materializer.example.test/activate",
+    token: "release-token",
+    fetcher: async () => {
+      requestCount += 1;
+      return Response.json({ status: "succeeded" });
+    },
+  });
+
+  await expect(
+    activator.observe({
+      jobId: "rel_job_1",
+      statusUrl: "https://foreign.example.test/jobs/rel_job_1",
+    }),
+  ).rejects.toThrow("same-origin");
+  expect(requestCount).toBe(0);
 });
 
 test("webhook release activator polls accepted operator jobs", async () => {

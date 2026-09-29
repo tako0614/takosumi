@@ -4,6 +4,7 @@ import type {
   ReleaseActivationResult,
   ReleaseActivator,
   ReleaseActivationStatus,
+  RunExecutionControl,
   OpenTofuRunner,
 } from "../../core/domains/deploy-control/mod.ts";
 import type { JsonValue } from "takosumi-contract/reference/compat";
@@ -26,6 +27,168 @@ export interface WebhookReleaseActivatorOptions {
   readonly allowInsecure?: boolean;
   readonly pollIntervalMs?: number;
   readonly timeoutMs?: number;
+}
+
+export interface DurableReleaseActivationJob {
+  readonly jobId: string;
+  readonly statusUrl?: string;
+}
+
+export type DurableReleaseActivationStep =
+  | { readonly kind: "pending"; readonly job: DurableReleaseActivationJob }
+  | { readonly kind: "settled"; readonly result: ReleaseActivationResult };
+
+export interface DurableWebhookReleaseActivator {
+  submit(
+    input: ReleaseActivationInput,
+    control?: RunExecutionControl,
+  ): Promise<DurableReleaseActivationStep>;
+  observe(
+    job: DurableReleaseActivationJob,
+    control?: RunExecutionControl,
+  ): Promise<DurableReleaseActivationStep>;
+}
+
+/**
+ * Submission can be accepted remotely even when the caller loses the HTTP
+ * acknowledgement. Callers must record this state and must not resubmit.
+ */
+export class ReleaseActivationIndeterminateError extends Error {
+  readonly code = "release_activation_indeterminate";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ReleaseActivationIndeterminateError";
+  }
+}
+
+/**
+ * Creates a one-request-at-a-time webhook bridge for durable orchestration.
+ * The caller owns scheduling and persistence; submit never retries POST and
+ * observe performs exactly one GET.
+ */
+export function createDurableWebhookReleaseActivator(
+  options: WebhookReleaseActivatorOptions,
+): DurableWebhookReleaseActivator {
+  const endpoint = parseReleaseActivatorUrl(
+    options.url,
+    options.allowInsecure === true,
+  );
+  const token = options.token.trim();
+  if (!token) throw new Error("release activator token is required");
+  const fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
+  return {
+    async submit(input, control) {
+      throwIfAborted(control?.signal);
+      const operatorCommands = input.commands.filter(
+        (command) => command.executor === "operator",
+      );
+      if (operatorCommands.length === 0) {
+        const result: ReleaseActivationResult = {
+          status: input.commands.length === 0 ? "skipped" : "pending",
+          kind: RELEASE_ACTIVATOR_KIND,
+          message:
+            "operator release activator only accepts executor=operator commands",
+          metadata: {
+            commandCount: input.commands.length,
+            runnerCommandCount: input.commands.length,
+          },
+        };
+        return { kind: "settled", result };
+      }
+
+      let response: Response;
+      try {
+        response = await fetcher(endpoint, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${token}`,
+            accept: "application/json",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(
+            releaseActivationWebhookPayload(
+              { ...input, commands: operatorCommands },
+              { sourceArchiveBucket: options.sourceArchiveBucket },
+            ),
+          ),
+          ...(control?.signal ? { signal: control.signal } : {}),
+        });
+      } catch {
+        throw new ReleaseActivationIndeterminateError(
+          "release activator submission outcome is unknown; do not resubmit",
+        );
+      }
+      if (response.status === 204) {
+        return { kind: "settled", result: { status: "succeeded" } };
+      }
+      if (!response.ok) {
+        const detail = await releaseActivatorFailureDetail(response);
+        const message = `release activator request failed: ${response.status}${detail ? `: ${detail}` : ""}`;
+        if (response.status >= 500) {
+          throw new ReleaseActivationIndeterminateError(
+            "release activator submission outcome is unknown; do not resubmit",
+          );
+        }
+        throw new Error(message);
+      }
+
+      let rawResponse: unknown;
+      try {
+        rawResponse = await response.json();
+      } catch {
+        throw new ReleaseActivationIndeterminateError(
+          "release activator submission returned no usable acknowledgement; do not resubmit",
+        );
+      }
+      let result: ReleaseActivationResult;
+      try {
+        result = parseReleaseActivatorResponse(rawResponse);
+      } catch {
+        throw new ReleaseActivationIndeterminateError(
+          "release activator submission returned an invalid acknowledgement; do not resubmit",
+        );
+      }
+      if (result.status !== "pending") {
+        return { kind: "settled", result };
+      }
+      const job = durableReleaseActivatorJobReference(rawResponse, endpoint);
+      if (!job) {
+        throw new ReleaseActivationIndeterminateError(
+          "release activator returned pending without a valid job reference; do not resubmit",
+        );
+      }
+      return { kind: "pending", job };
+    },
+    async observe(job, control) {
+      throwIfAborted(control?.signal);
+      const safeJob = validateDurableReleaseActivatorJob(job, endpoint);
+      const response = await fetcher(
+        safeJob.statusUrl ?? statusUrlForJob(endpoint, safeJob.jobId),
+        {
+          method: "GET",
+          headers: {
+            accept: "application/json",
+            authorization: `Bearer ${token}`,
+          },
+          ...(control?.signal ? { signal: control.signal } : {}),
+        },
+      );
+      if (response.status === 204) {
+        return { kind: "settled", result: { status: "succeeded" } };
+      }
+      if (!response.ok) {
+        const detail = await releaseActivatorFailureDetail(response);
+        throw new Error(
+          `release activator job status failed: ${response.status}${detail ? `: ${detail}` : ""}`,
+        );
+      }
+      const result = parseReleaseActivatorResponse(await response.json());
+      return result.status === "pending"
+        ? { kind: "pending", job: safeJob }
+        : { kind: "settled", result };
+    },
+  };
 }
 
 /**
@@ -503,6 +666,48 @@ async function pollReleaseActivatorJob(input: {
 interface ReleaseActivatorJobReference {
   readonly jobId: string;
   readonly statusUrl?: string;
+}
+
+function durableReleaseActivatorJobReference(
+  value: unknown,
+  endpoint: string,
+): DurableReleaseActivationJob | undefined {
+  if (!isRecord(value)) return undefined;
+  const rawJobId =
+    typeof value.jobId === "string"
+      ? value.jobId
+      : isRecord(value.metadata) && typeof value.metadata.jobId === "string"
+        ? value.metadata.jobId
+        : undefined;
+  const jobId = rawJobId?.trim();
+  if (!jobId) return undefined;
+
+  if (value.statusUrl !== undefined) {
+    if (typeof value.statusUrl !== "string") return undefined;
+    const statusUrl = sameOriginStatusUrl(value.statusUrl, endpoint);
+    if (!statusUrl) return undefined;
+    return { jobId, statusUrl };
+  }
+  return { jobId };
+}
+
+function validateDurableReleaseActivatorJob(
+  value: DurableReleaseActivationJob,
+  endpoint: string,
+): DurableReleaseActivationJob {
+  if (!isRecord(value) || typeof value.jobId !== "string" || !value.jobId.trim()) {
+    throw new TypeError("release activator job reference is invalid");
+  }
+  const jobId = value.jobId.trim();
+  if (value.statusUrl === undefined) return { jobId };
+  if (typeof value.statusUrl !== "string") {
+    throw new TypeError("release activator job status URL is invalid");
+  }
+  const statusUrl = sameOriginStatusUrl(value.statusUrl, endpoint);
+  if (!statusUrl) {
+    throw new TypeError("release activator job status URL must be same-origin");
+  }
+  return { jobId, statusUrl };
 }
 
 function releaseActivatorJobReference(
