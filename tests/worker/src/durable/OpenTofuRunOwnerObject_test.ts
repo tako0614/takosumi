@@ -608,6 +608,88 @@ test("OpenTofu run owner stops polling an unreadable ledger at the deadline", as
   assert.equal(await clock.storage.getAlarm(), null);
 });
 
+// The incident shape: the Core invocation that owned the run died, so the run
+// row stays `running` with a silently stale heartbeat and nothing left to drive
+// it. The controller takes such a run over only once that heartbeat is stale, so
+// an owner that parks at its poll deadline strands the run until the scheduled
+// repair sweep -- whose cadence is a separate operational knob. These tests pin
+// the owner's own bounded re-entry: exactly one dispatch past the staleness
+// boundary, then a loud park.
+test("OpenTofu run owner re-enters a run whose heartbeat went stale before parking", async () => {
+  const startedAt = Date.parse("2026-06-22T08:00:00.000Z");
+  const clock = createVirtualAlarmClock({
+    startedAt,
+    maxDispatches: 1_000,
+    minDelayMs: 1_000,
+  });
+  const dispatchedAt: number[] = [];
+  const owner = new OpenTofuRunOwnerObject(
+    { storage: clock.storage },
+    {} as CloudflareWorkerEnv,
+    {
+      now: clock.now,
+      dispatch: () => {
+        dispatchedAt.push(clock.now());
+        return Promise.resolve();
+      },
+      // Never settles: this is the row a dead Core invocation leaves behind.
+      readRunStatus: () => Promise.resolve("running" as const),
+    },
+  );
+
+  await start(owner, "apply");
+  const run = await clock.drain(() => owner.alarm());
+
+  const staleAt = startedAt + 10 * 60 * 1000;
+  assert.equal(run.dispatches > 1, true);
+  // The last dispatch is the re-entry, and it lands past the staleness
+  // boundary -- before it, every dispatch is one the controller may still
+  // refuse because the heartbeat is fresh.
+  assert.equal(dispatchedAt[dispatchedAt.length - 1] >= staleAt, true);
+  const record = await clock.storage.get<Record<string, unknown>>("run");
+  assert.equal(record?.staleReentryAttempts, 1);
+  assert.equal(record?.status, "failed");
+  assert.equal(
+    typeof record?.lastError === "string" &&
+      record.lastError.includes(
+        "post-staleness re-entry did not settle the run",
+      ),
+    true,
+  );
+  assert.equal(await clock.storage.getAlarm(), null);
+
+  // Bounded: a parked owner never re-enters the same run again.
+  const dispatchesBefore = dispatchedAt.length;
+  await owner.alarm();
+  assert.equal(dispatchedAt.length, dispatchesBefore);
+});
+
+test("OpenTofu run owner never arms a post-staleness re-entry for a settled run", async () => {
+  const startedAt = Date.parse("2026-06-22T08:00:00.000Z");
+  const clock = createVirtualAlarmClock({
+    startedAt,
+    maxDispatches: 10,
+    minDelayMs: 1_000,
+  });
+  const owner = new OpenTofuRunOwnerObject(
+    { storage: clock.storage },
+    {} as CloudflareWorkerEnv,
+    {
+      now: clock.now,
+      dispatch: () => Promise.resolve(),
+      readRunStatus: () => Promise.resolve("succeeded" as const),
+    },
+  );
+
+  await start(owner, "apply");
+  await clock.drain(() => owner.alarm());
+
+  const record = await clock.storage.get<Record<string, unknown>>("run");
+  assert.equal(record?.status, "succeeded");
+  assert.equal(record?.staleReentryAttempts, undefined);
+  assert.equal(await clock.storage.getAlarm(), null);
+});
+
 test("OpenTofu run owner stops re-dispatching a run that stays queued", async () => {
   const startedAt = Date.parse("2026-06-22T08:00:00.000Z");
   const clock = createVirtualAlarmClock({
