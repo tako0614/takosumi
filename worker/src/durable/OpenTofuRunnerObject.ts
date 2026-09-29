@@ -427,6 +427,29 @@ interface RunnerMutationDispatchRecord {
   readonly redispatchBlocked: true;
 }
 
+export type RunnerMutationInspection = {
+  readonly kind: "takosumi.runner-mutation-inspection@v1";
+  readonly authority:
+    | { readonly status: "absent" | "unknown" | "malformed" }
+    | {
+        readonly status: "valid";
+        readonly action: RunnerMutationAction;
+        readonly phase: RunnerMutationDispatchRecord["phase"];
+        readonly version: number;
+        readonly fence: number;
+        readonly redispatchBlocked: true;
+      };
+  readonly dispatch: {
+    readonly status:
+      | "not_checked"
+      | "absent"
+      | "unknown"
+      | "malformed"
+      | "conflicting"
+      | "matching";
+  };
+};
+
 interface ActiveCredentialRefreshClaim {
   readonly owner: { readonly kind: "plan" | "apply"; readonly id: string };
   readonly runnerRunId: string;
@@ -913,6 +936,62 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       }
       this.#lastStartupSeconds = undefined;
     }
+  }
+
+  /** No fetch fallback: an older DO without this RPC must fail closed. */
+  async inspectMutationAuthority(): Promise<RunnerMutationInspection> {
+    const kind = "takosumi.runner-mutation-inspection@v1";
+    // One read-only storage snapshot prevents a concurrent phase transition
+    // from appearing as a conflict between otherwise atomically paired keys.
+    return await this.ctx.storage.transaction(async (storage) => {
+      const rawAuthority = await storage.get<unknown>(
+        RUNNER_MUTATION_AUTHORITY_STORAGE_KEY,
+      );
+      if (rawAuthority === undefined) {
+        return {
+          kind, authority: { status: "absent" },
+          dispatch: { status: "not_checked" },
+        } as const;
+      }
+      const authority = parseRunnerMutationDispatchRecord(rawAuthority);
+      if (!authority) {
+        return {
+          kind,
+          authority: {
+            status: isUnknownMutationRecordKind(rawAuthority)
+              ? "unknown" : "malformed",
+          },
+          dispatch: { status: "not_checked" },
+        } as const;
+      }
+      const rawDispatch = await storage.get<unknown>(
+        `${RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX}${authority.semanticDigest}`,
+      );
+      const dispatch = rawDispatch === undefined
+        ? "absent"
+        : parseRunnerMutationDispatchRecord(rawDispatch);
+      const dispatchStatus = dispatch === "absent" ? "absent"
+        : !dispatch ? isUnknownMutationRecordKind(rawDispatch)
+          ? "unknown" : "malformed"
+        : dispatch.action === authority.action &&
+            dispatch.semanticDigest === authority.semanticDigest &&
+            dispatch.version === authority.version &&
+            dispatch.fence === authority.fence &&
+            dispatch.phase === authority.phase
+          ? "matching" : "conflicting";
+      return {
+        kind,
+        authority: {
+          status: "valid",
+          action: authority.action,
+          phase: authority.phase,
+          version: authority.version,
+          fence: authority.fence,
+          redispatchBlocked: true,
+        },
+        dispatch: { status: dispatchStatus },
+      } as RunnerMutationInspection;
+    });
   }
 
   #containerRuntimeUnavailable(): boolean {
@@ -5984,6 +6063,12 @@ async function readBoundedRequestJsonObject(
   const value = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
   if (!isRecord(value)) throw new Error("request body must be an object");
   return value;
+}
+
+function isUnknownMutationRecordKind(value: unknown): boolean {
+  return isRecord(value) &&
+    typeof value.kind === "string" &&
+    value.kind !== "takosumi.runner-mutation-dispatch@v2";
 }
 
 function parseRunnerMutationDispatchRecord(

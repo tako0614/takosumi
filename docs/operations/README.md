@@ -55,6 +55,7 @@ Cloud 側のリポジトリで管理します。
 
 - [troubleshooting](./troubleshooting.md)
 - [runner timing diagnostics](./runner-timing-diagnostics.md)
+- [Runner mutation authority inspection](./runner-mutation-inspection.md)
 - [incident response](./incident-response.md)
 - [on-call](./oncall.md)
 - [cost monitoring](./cost-monitoring.md)

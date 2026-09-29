@@ -40,6 +40,89 @@ const RESTORE_STATE_PREFIX =
   "workspaces/space_1/capsules/inst_1/environments/production/state-versions";
 const RESTORE_TARGET_KEY = `${RESTORE_STATE_PREFIX}/00000002.tfstate.enc`;
 const RESTORE_CURRENT_KEY = `${RESTORE_STATE_PREFIX}/current.json`;
+const MUTATION_DIGEST = `sha256:${"a".repeat(64)}`;
+
+test("runner mutation inspection reads paired authority without container or writes", async () => {
+  const storage = new FakeDoStorage();
+  const record = {
+    kind: "takosumi.runner-mutation-dispatch@v2",
+    action: "apply",
+    semanticDigest: MUTATION_DIGEST,
+    version: 2,
+    fence: 3,
+    phase: "indeterminate",
+    redispatchBlocked: true,
+    secret: "must-never-be-returned",
+  };
+  await storage.put("runner-mutation-authority", record);
+  await storage.put(`runner-mutation-dispatch@v2:${MUTATION_DIGEST}`, record);
+  const writesBefore = storage.putCalls;
+  const calls: string[] = [];
+  const runner = runnerWithContainer(new FakeR2Bucket(), {
+    async containerFetch(request) {
+      calls.push(request.url);
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  }, {
+    storage,
+    startAndWaitForPorts: async () => { calls.push("start"); },
+    stop: async () => { calls.push("stop"); },
+    destroy: async () => { calls.push("destroy"); },
+  });
+  assert.deepEqual(await runner.inspectMutationAuthority(), {
+    kind: "takosumi.runner-mutation-inspection@v1",
+    authority: {
+      status: "valid", action: "apply", phase: "indeterminate",
+      version: 2, fence: 3, redispatchBlocked: true,
+    },
+    dispatch: { status: "matching" },
+  });
+  assert.equal(storage.putCalls, writesBefore);
+  assert.equal(await storage.getAlarm(), null);
+  assert.deepEqual(calls, []);
+});
+
+test("runner mutation inspection classifies absent, malformed, and conflicting evidence", async () => {
+  const storage = new FakeDoStorage();
+  const runner = runnerWithContainer(new FakeR2Bucket(), {
+    async containerFetch() { throw new Error("container must not be contacted"); },
+  }, { storage });
+  assert.deepEqual(await runner.inspectMutationAuthority(), {
+    kind: "takosumi.runner-mutation-inspection@v1",
+    authority: { status: "absent" },
+    dispatch: { status: "not_checked" },
+  });
+  await storage.put("runner-mutation-authority", { secret: "hidden" });
+  assert.deepEqual(await runner.inspectMutationAuthority(), {
+    kind: "takosumi.runner-mutation-inspection@v1",
+    authority: { status: "malformed" },
+    dispatch: { status: "not_checked" },
+  });
+  await storage.put("runner-mutation-authority", {
+    kind: "takosumi.runner-mutation-dispatch@v3",
+    secret: "hidden",
+  });
+  assert.deepEqual(await runner.inspectMutationAuthority(), {
+    kind: "takosumi.runner-mutation-inspection@v1",
+    authority: { status: "unknown" },
+    dispatch: { status: "not_checked" },
+  });
+  const authority = {
+    kind: "takosumi.runner-mutation-dispatch@v2", action: "apply",
+    semanticDigest: MUTATION_DIGEST, version: 1, fence: 1,
+    phase: "dispatched", redispatchBlocked: true,
+  };
+  await storage.put("runner-mutation-authority", authority);
+  assert.equal((await runner.inspectMutationAuthority()).dispatch.status, "absent");
+  await storage.put(`runner-mutation-dispatch@v2:${MUTATION_DIGEST}`, { ...authority, phase: "indeterminate" });
+  assert.equal((await runner.inspectMutationAuthority()).dispatch.status, "conflicting");
+  await storage.put(`runner-mutation-dispatch@v2:${MUTATION_DIGEST}`, { secret: "hidden" });
+  assert.equal((await runner.inspectMutationAuthority()).dispatch.status, "malformed");
+  await storage.put(`runner-mutation-dispatch@v2:${MUTATION_DIGEST}`, {
+    kind: "takosumi.runner-mutation-dispatch@v3", secret: "hidden",
+  });
+  assert.equal((await runner.inspectMutationAuthority()).dispatch.status, "unknown");
+});
 
 interface RestoreSourceDescriptor {
   readonly stateVersionId: string;
@@ -5976,6 +6059,8 @@ class FakeDoStorage {
         readonly wait: Promise<void>;
       }
     | undefined;
+
+  get putCalls(): number { return this.#putCalls; }
 
   async get<T = unknown>(key: string): Promise<T | undefined> {
     const gate = this.#nextGetGate;

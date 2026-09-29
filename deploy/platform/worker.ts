@@ -63,6 +63,7 @@ import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
 import {
   DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE,
+  type ApplyRun,
   type ProviderConnection,
 } from "@takosumi/internal/deploy-control-api";
 import {
@@ -701,6 +702,9 @@ export default {
     }
     if (url.pathname === INTERNAL_PLATFORM_RUN_OWNER_PATH) {
       return handlePlatformRunOwnerRequest(request, url, env);
+    }
+    if (url.pathname === INTERNAL_PLATFORM_RUNNER_MUTATION_PATH) {
+      return handlePlatformRunnerMutationInspectionRequest(request, url, env);
     }
     if (isOperatorBillingPath(url.pathname)) {
       const response = await handleOperatorBillingRequest(
@@ -3625,7 +3629,183 @@ function handleHardeningGatesRequest(
 }
 
 const INTERNAL_PLATFORM_RUN_OWNER_PATH = "/internal/platform/run-owner";
+const INTERNAL_PLATFORM_RUNNER_MUTATION_PATH =
+  "/internal/platform/runner-mutation";
 const RUN_OWNER_RUN_ID_PATTERN = /^[a-z][a-z0-9_]{1,31}_[0-9a-zA-Z]{8,96}$/;
+
+/** Operator-only observation; this never repairs, replays, or adopts a Run. */
+export async function handlePlatformRunnerMutationInspectionRequest(
+  request: Request,
+  url: URL,
+  env: CloudflareWorkerEnv,
+  deps: { readonly getApplyRun?: (id: string) => Promise<ApplyRun | undefined> } = {},
+): Promise<Response> {
+  if (request.method !== "GET") {
+    return Response.json({ error: "method not allowed" }, { status: 405 });
+  }
+  const auth = requireDeployControlBearer(request, env);
+  if (auth) return auth;
+  const runIds = url.searchParams.getAll("runId");
+  const runId = runIds[0] ?? "";
+  if (
+    runIds.length !== 1 ||
+    url.searchParams.size !== 1 ||
+    !/^apply_[0-9a-zA-Z]{8,96}$/.test(runId)
+  ) {
+    return Response.json({ error: "invalid runId" }, { status: 400 });
+  }
+  let run: ApplyRun | undefined;
+  try {
+    // Force the existing store's predeployed, SELECT-only schema verification.
+    // The general service composition may bootstrap DDL on a cold request.
+    const getApplyRun = deps.getApplyRun ?? ((id: string) =>
+      createCloudflareD1OpenTofuControlStore(env.TAKOSUMI_CONTROL_DB, {
+        schemaMode: "predeployed",
+      }).getApplyRun(id));
+    run = await getApplyRun(runId);
+  } catch (error) {
+    if (error instanceof OpenTofuControllerError) {
+      return Response.json(
+        { error: error.code },
+        { status: DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE[error.code] },
+      );
+    }
+    return Response.json({ error: "run lookup unavailable" }, { status: 503 });
+  }
+  if (
+    !run ||
+    run.id !== runId ||
+    !run.workspaceId ||
+    (run.operation !== "create" &&
+      run.operation !== "update" &&
+      run.operation !== "destroy")
+  ) {
+    return Response.json({ error: "not an exact ApplyRun" }, { status: 409 });
+  }
+  if (!env.RUNNER) {
+    return Response.json(
+      { error: "RUNNER binding is not configured" },
+      { status: 503 },
+    );
+  }
+  let rawInspection: unknown;
+  try {
+    const runner = env.RUNNER.get(env.RUNNER.idFromName(run.id)) as unknown as {
+      inspectMutationAuthority?: () => Promise<unknown>;
+    };
+    if (typeof runner.inspectMutationAuthority !== "function") {
+      return Response.json(
+        { error: "runner mutation inspection unavailable" },
+        { status: 503 },
+      );
+    }
+    rawInspection = await runner.inspectMutationAuthority();
+  } catch {
+    return Response.json(
+      { error: "runner mutation inspection unavailable" },
+      { status: 503 },
+    );
+  }
+  const inspection = parsePlatformRunnerMutationInspection(rawInspection);
+  if (!inspection) {
+    return Response.json(
+      { error: "runner mutation inspection malformed" },
+      { status: 502 },
+    );
+  }
+  const runType = run.operation === "destroy" ? "destroy_apply" : "apply";
+  const actionMismatch =
+    inspection.authority.status === "valid" &&
+    inspection.authority.action !== (run.operation === "destroy" ? "destroy" : "apply");
+  return Response.json(
+    { runId, runType, inspection },
+    {
+      status: actionMismatch ? 409 : 200,
+      headers: { "cache-control": "no-store" },
+    },
+  );
+}
+
+type PlatformRunnerMutationInspection = {
+  readonly kind: "takosumi.runner-mutation-inspection@v1";
+  readonly authority:
+    | { readonly status: "absent" | "unknown" | "malformed" }
+    | {
+        readonly status: "valid";
+        readonly action: "apply" | "destroy";
+        readonly phase:
+          | "preparing"
+          | "dispatched"
+          | "indeterminate"
+          | "orphaned";
+        readonly version: number;
+        readonly fence: number;
+        readonly redispatchBlocked: true;
+      };
+  readonly dispatch: {
+    readonly status:
+      | "not_checked"
+      | "matching"
+      | "absent"
+      | "unknown"
+      | "malformed"
+      | "conflicting";
+  };
+};
+
+function parsePlatformRunnerMutationInspection(
+  value: unknown,
+): PlatformRunnerMutationInspection | undefined {
+  if (
+    !isRecord(value) ||
+    value.kind !== "takosumi.runner-mutation-inspection@v1" ||
+    !isRecord(value.authority) ||
+    !isRecord(value.dispatch)
+  ) return undefined;
+  const authority = value.authority;
+  const dispatch = value.dispatch;
+  if (
+    authority.status === "absent" ||
+    authority.status === "unknown" ||
+    authority.status === "malformed"
+  ) {
+    if (dispatch.status !== "not_checked") return undefined;
+    return {
+      kind: "takosumi.runner-mutation-inspection@v1",
+      authority: { status: authority.status },
+      dispatch: { status: "not_checked" },
+    };
+  }
+  if (
+    authority.status !== "valid" ||
+    (authority.action !== "apply" && authority.action !== "destroy") ||
+    !["preparing", "dispatched", "indeterminate", "orphaned"].includes(
+      authority.phase as string,
+    ) ||
+    !Number.isSafeInteger(authority.version) ||
+    (authority.version as number) < 1 ||
+    !Number.isSafeInteger(authority.fence) ||
+    (authority.fence as number) < 1 ||
+    authority.redispatchBlocked !== true ||
+    !["matching", "absent", "unknown", "malformed", "conflicting"].includes(
+      dispatch.status as string,
+    )
+  ) return undefined;
+  return {
+    kind: "takosumi.runner-mutation-inspection@v1",
+    authority: {
+      status: "valid",
+      action: authority.action,
+      phase: authority.phase as "preparing" | "dispatched" | "indeterminate" | "orphaned",
+      version: authority.version as number,
+      fence: authority.fence as number,
+      redispatchBlocked: true,
+    },
+    dispatch: {
+      status: dispatch.status as PlatformRunnerMutationInspection["dispatch"]["status"],
+    },
+  };
+}
 
 export async function handlePlatformRunOwnerRequest(
   request: Request,
