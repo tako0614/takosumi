@@ -32,6 +32,7 @@ import {
 import { platformReleaseSourceAuthorityDigest } from "../../scripts/lib/platform-release-source.ts";
 import { authorizeRunnerRegistryPull } from "../../scripts/lib/runner-image-registry-auth.ts";
 import {
+  parseRunnerImageNativeCandidateRecord,
   RUNNER_IMAGE_NATIVE_CANDIDATE_KIND,
   RUNNER_IMAGE_NATIVE_PROOF_KIND,
 } from "../../scripts/lib/runner-image-native-proof.ts";
@@ -357,6 +358,7 @@ function writeCandidateArtifacts(
         kind: RUNNER_IMAGE_NATIVE_PROOF_KIND,
         descriptorDigest,
         hardenedRuntimeInputPlan: "passed",
+        savedPlanStateMetadata: "passed",
         fullHttpPlanApply: "passed",
       },
     })}\n`,
@@ -427,7 +429,8 @@ function writeBuildEvidence(
       imageConfigDigest: `sha256:${"f".repeat(64)}`,
     },
     runtimeInputPlanProof: {
-      kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+      kind: "takosumi.runner-image-runtime-input-plan-proof@v2",
+      savedPlanStateMetadata: "passed",
       image: overrides.immutableRef ?? NEXT,
     },
     review: overrides.review ?? "operator:builder",
@@ -2746,7 +2749,8 @@ test("a proof-bearing lost acknowledgement preserves its image proof through rec
   expect(attempt).toMatchObject({
     status: "publication-started",
     runtimeInputPlanProof: {
-      kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+      kind: "takosumi.runner-image-runtime-input-plan-proof@v2",
+      savedPlanStateMetadata: "passed",
       image: immutableRef,
     },
   });
@@ -2782,7 +2786,8 @@ test("a proof-bearing lost acknowledgement preserves its image proof through rec
     status: "published",
     image: { immutableRef, imageConfigDigest },
     runtimeInputPlanProof: {
-      kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+      kind: "takosumi.runner-image-runtime-input-plan-proof@v2",
+      savedPlanStateMetadata: "passed",
       image: immutableRef,
     },
   });
@@ -2794,7 +2799,8 @@ test("a proof-bearing lost acknowledgement preserves its image proof through rec
     status: "published",
     build: {
       runtimeInputPlanProof: {
-        kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+        kind: "takosumi.runner-image-runtime-input-plan-proof@v2",
+      savedPlanStateMetadata: "passed",
         image: immutableRef,
       },
     },
@@ -4161,7 +4167,8 @@ test("candidate build authenticates and loads exact native bytes without rebuild
     source: { commit: COMMIT },
     image: { immutableRef: NEXT },
     runtimeInputPlanProof: {
-      kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+      kind: "takosumi.runner-image-runtime-input-plan-proof@v2",
+      savedPlanStateMetadata: "passed",
       image: NEXT,
     },
   });
@@ -4218,6 +4225,25 @@ test("candidate build authenticates and loads exact native bytes without rebuild
   ]);
   expect(imageStore.hasFixedTag()).toBeFalse();
   expect(imageStore.removals()).toBe(1);
+});
+
+test("historical native candidate parses but ingestion refuses before Docker load", async () => {
+  const input = fixture();
+  writeCandidateArtifacts(input);
+  const historical = JSON.parse(readFileSync(input.candidateRecord, "utf8"));
+  historical.nativeProof.kind = "takosumi.runner-image-native-proof@v1";
+  delete historical.nativeProof.savedPlanStateMetadata;
+  writePrivate(input.candidateRecord, `${JSON.stringify(historical)}\n`);
+  expect(parseRunnerImageNativeCandidateRecord(JSON.stringify(historical))).toEqual(historical);
+  const observed: string[][] = [];
+  const imageStore = candidateLocalImageStore();
+  await expect(runRunnerImageRelease(candidateBuildOptions(input), {
+    ...buildRuntime(input, successfulCandidatePublicationCommand, observed, imageStore.command),
+  })).rejects.toThrow("runner_image_native_candidate_metadata_proof_required");
+  expect(observed.some(([executable, first, second]) =>
+    executable === "docker" && first === "image" && second === "load"
+  )).toBeFalse();
+  expect(readFileSync(input.state, "utf8")).toBe("");
 });
 
 test("candidate archive work receives a bounded long timeout without widening normal release command budgets", async () => {
@@ -5109,7 +5135,8 @@ test("build boots the image's native entrypoint and cleans up before publication
   expect(script).toContain(RUNNER_BOOT_SMOKE_MARKER);
   expect(record).toMatchObject({
     runtimeInputPlanProof: {
-      kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+      kind: "takosumi.runner-image-runtime-input-plan-proof@v2",
+      savedPlanStateMetadata: "passed",
       image: NEXT,
     },
   });
@@ -5624,6 +5651,32 @@ test("verify accepts historical build evidence from a different config path when
     image: NEXT,
     platform: { deployedVersionId: DEPLOYED_VERSION },
   });
+});
+
+test("verify retains historical v1 identity and health readback without metadata qualification", async () => {
+  const input = fixture(NEXT);
+  writeBuildEvidence(input);
+  const historical = JSON.parse(readFileSync(input.buildEvidence, "utf8"));
+  historical.runtimeInputPlanProof = {
+    kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+    image: NEXT,
+  };
+  writePrivate(input.buildEvidence, `${JSON.stringify(historical)}\n`);
+  writePlatformEvidence(input);
+  const runtime = verificationCommand();
+  const record = await runRunnerImageRelease(verifyOptions(input), {
+    repositoryRoot: input.repository,
+    git: gitFor("fix/TASK-0032-runner-image"),
+    command: runtime.command,
+  });
+  expect(record).toMatchObject({
+    status: "verified",
+    image: NEXT,
+    runtimeInputPlanProofKind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+    application: { image: NEXT, state: "ready" },
+  });
+  expect(JSON.stringify(record)).not.toContain("savedPlanStateMetadata");
+  expect(runtime.calls.length).toBeGreaterThan(0);
 });
 
 test("verify consumes exact platform evidence and performs no Worker mutation", async () => {
