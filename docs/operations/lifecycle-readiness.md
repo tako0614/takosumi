@@ -27,9 +27,9 @@ image は稼働中 Container を、Worker Version の readback はアプリの�
 | Evidence | 確認できること | 確認できないこと |
 | --- | --- | --- |
 | Source / portable | exact source tree に対する `bun run check` と、その commit に対する exact-head quality CI。`bun run test:critical-journeys` は既存の portable Bun tests を使う read-only lane で、source install、Plan/Apply approval、Output readback、Destroy/recreate と dashboard install contract の負例を確認する | 公開済み Runner image、deployed Worker、live install、recovery/DR |
-| Native image qualification | 既存 local-image build path では exact local image startup、`/healthz`、provider-free runtime-input Plan を確認する。選択可能な exact-commit CI candidate path では `runner proof` workflow の `linux/amd64` image、candidate record、image を使う native smoke と real HTTP Plan/Apply proof、および両 artifact を覆う GitHub Actions attestation を検証する | どちらの経路も、それだけでは registry への公開、稼働中 Container、platform Worker の deploy を証明しない。CI candidate は公開済み image ではない |
-| Image publication | `takosumi-runner-image build` が記録する exact source/config と immutable OCI descriptor digest。local-image path は `/healthz` と provider-free runtime-input Plan を実行し、CI candidate path はその exact candidate と attestation を検証する | private route の published-image readback、Worker rollout、実サービス lifecycle |
-| Pre-Worker route readback | **現在は運用commandと証跡生成手順がない。** 下記の未解決項目を参照 | `/healthz`、通常の Plan、local image の runtime-input Plan ではこのrouteを通った証拠にならない |
+| Native image qualification | proof v1 は exact local image の startup、`/healthz`、provider-free Plan を確認し、metadata route は呼ばない。v2 proof を生成する source が導入された場合、その proof は同じ local image 内で同一runの bounded `tfplan` bytes を取得してsize/SHA-256を照合し、private metadata route の期待 `{ lineage, serial }` と誤digest時の generic 409 を確認する。exact-commit CI candidate は、そのsourceに含まれる `runner proof` の image、record、native smoke / HTTP Plan-Apply proof と attestation を検証する | proof v1 は metadata route を確認しない。v2 proof は source/proof の導入後も local same-image proofであり、registry publication や、起動済み Container への pre-Worker readbackを証明しない |
+| Image publication | `takosumi-runner-image build` が記録する exact source/config と immutable OCI descriptor digest。v2 proof を含む source / native record を使う場合、publication evidence は `savedPlanStateMetadata: "passed"` を同じ image descriptor digest に束縛する | digestをregistryへ公開しただけではruntime Containerはactivateされず、そのContainerに対するpre-Worker route readback、Worker rollout、実サービス lifecycle も証明しない |
+| Pre-Worker route readback | **起動済み Container への route-specific readback command と証跡手順は未実装。** 下記の未解決項目を参照 | proof v1の `/healthz` / Plan-only evidence と、v2 proof導入後のlocal same-image route evidenceは、公開後・Worker activation前のruntime Container readbackを代替しない |
 | Deployed version | platform release の immutable Worker Version と binding readback。Runner image の postdeploy `verify` は選択した image digest と Container application identity、active/ready、rollout / instance health を照合する | `/runs/:id/plan-state-metadata` の事前readback、利用者の install/serving journey、recovery/DR |
 | Real journey | install-serving E2E は app-staging 上の Yurucommu source → install plan → Plan → Apply → Output 由来の HTTP body → Destroy / URL 404 を確認する。dashboard `live` は supplied storage state、exact Worker UUID、Workspace / switch Workspace / app / URL / bucket の読み取り確認で、mutation を拒否する。`public-live` は base URL と exact Worker UUID を使い、unauthenticated OIDC/JWKS/401/deep SPA/install return link と zero-mutation を確認する | Container/native actor lifecycle や production の証拠。header 単体は source provenance / live install の証拠ではない |
 | Recovery / DR | owner の実 adapter、backup、restore target で実施した private drill evidence | partial `BackupRecord` export、source-only recovery composition、StateVersion が存在するという事実だけでは restore / DR capability を証明しない |
@@ -66,12 +66,20 @@ image publication や image-literal-only full deploy だけで route の事前�
   そろうまで、route に依存する Worker を先行して有効化しません。運用可能な呼び出し手順と
   証跡の owner が用意されるまでは、この段階は未確認です。
 
-既存 image build の local `/healthz` と provider-free runtime-input Plan は image 起動と別の
-Plan path を確認するものです。postdeploy `verify` は Worker rollout 後に Container を読む
-ので、pre-Worker確認を代替しません。health 200、通常の Plan 成功、旧 image が route を持つ
-という推測から先へ進みません。public/driver API 経由で private route を呼ばず、本番の既存 Run
-を資格確認用に流用しません。確認対象がなければ新しい application や権限を作らず、未確認のまま
-owner procedure の不足として扱います。
+runtime-input Plan proof v1 が確認するのは local image の `/healthz` と provider-free Plan までで、
+metadata route は呼びません。v2 proof を生成する source が導入された場合、その proof は同じ
+local image の Plan response から同一runの exact artifact ref / size / digest を得て bounded
+`tfplan` bytes を GET し、size と SHA-256 を確認したうえで private metadata route に POST
+します。応答はその archive の期待 `{ lineage, serial }` と照合し、1桁違うdigestが generic 409
+になることも確認します。その v2 proof を含む native record の publication evidence は
+`savedPlanStateMetadata: "passed"` を同じ immutable image descriptor に束縛します。
+
+この local evidence は registry publication 後に稼働する Container の route readback とは別です。
+postdeploy `verify` は Worker rollout 後に Container を読むので、pre-Worker確認を代替しません。
+health 200、v1の通常 Plan 成功、または旧 image が route を持つという推測から先へ進みません。
+public/driver API 経由で private route を呼ばず、本番の既存 Run を資格確認用に流用しません。
+確認対象がなければ新しい application や権限を作らず、未確認のまま owner procedure の不足として
+扱います。
 
 ## Lifecycle と recovery の読み方
 
