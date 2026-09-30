@@ -4204,7 +4204,7 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         environment: { type: "string" },
         type: {
           description:
-            "Run type. `restore` is a destructive Backup-backed state restore that is created waiting_approval and dispatches only after approval.",
+            "Run type. `restore` is a destructive Backup-backed state restore that is created waiting_approval and dispatches only after approval. `state_recovery` records an operator-only state attachment; it does not execute OpenTofu or publish Outputs.",
           enum: [
             "source_sync",
             "compatibility_check",
@@ -4216,6 +4216,7 @@ function runSchemas(): Record<string, Record<string, unknown>> {
             "drift_check",
             "backup",
             "restore",
+            "state_recovery",
           ],
         },
         status: {
@@ -4255,6 +4256,7 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         restoredStateVersionId: { type: "string" },
         restoredFromStateVersionId: { type: "string" },
         restoredServiceData: ref("RunServiceDataRestoreResult"),
+        stateRecovery: ref("RunStateRecovery"),
         errorCode: { type: "string" },
         createdBy: { type: "string" },
         createdAt: { type: "string", format: "date-time" },
@@ -4272,6 +4274,20 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         digest: { type: "string" },
         sizeBytes: { type: "integer" },
         restoredCount: { type: "integer" },
+      },
+      additionalProperties: false,
+    },
+    RunStateRecovery: {
+      type: "object",
+      description: "Value-free provenance for operator state-only recovery. State bytes and artifact coordinates are not public Run fields.",
+      required: ["failedApplyRunId", "recoveredStateVersionId", "sourceSnapshotId", "artifactEvidenceDigest", "plaintextSha256", "encryptedDigest"],
+      properties: {
+        failedApplyRunId: { type: "string" },
+        recoveredStateVersionId: { type: "string" },
+        sourceSnapshotId: { type: "string" },
+        artifactEvidenceDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        plaintextSha256: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        encryptedDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
       },
       additionalProperties: false,
     },

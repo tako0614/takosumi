@@ -94,6 +94,8 @@ export class RunQueryService {
     if (compatibilityCheck) return compatibilityCheck;
     const backupRun = await this.#store.getBackupRun(id);
     if (backupRun) return backupRun;
+    const recoveryRun = await this.#store.getStateRecoveryRun(id);
+    if (recoveryRun) return recoveryRun;
     throw new OpenTofuControllerError("not_found", `run ${id} not found`);
   }
 
@@ -280,6 +282,14 @@ export class RunQueryService {
               },
             ]
           : [],
+        auditEvents: [],
+      };
+    }
+    const recoveryRun = await this.#store.getStateRecoveryRun(id);
+    if (recoveryRun) {
+      return {
+        workspaceId: recoveryRun.workspaceId,
+        diagnostics: [],
         auditEvents: [],
       };
     }

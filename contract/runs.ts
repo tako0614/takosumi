@@ -31,6 +31,8 @@ export type RunType =
   | "destroy_apply"
   | "drift_check"
   | "backup"
+  /** State-only operator recovery; it never dispatches a runner or publishes Output. */
+  | "state_recovery"
   // `restore` is a destructive Backup-backed state restore. It is created in
   // `waiting_approval`; approval dispatches it to write a new StateVersion
   // generation and mark downstream consumers stale. Service-data restore is
@@ -536,6 +538,15 @@ export interface Run {
   readonly restoredStateVersionId?: string;
   readonly restoredFromStateVersionId?: string;
   readonly restoredServiceData?: RunServiceDataRestoreResult;
+  /** Value-free provenance for a state-only recovery. No artifact reference or state bytes. */
+  readonly stateRecovery?: {
+    readonly failedApplyRunId: string;
+    readonly recoveredStateVersionId: string;
+    readonly sourceSnapshotId: string;
+    readonly artifactEvidenceDigest: `sha256:${string}`;
+    readonly plaintextSha256: `sha256:${string}`;
+    readonly encryptedDigest: `sha256:${string}`;
+  };
   readonly errorCode?: string;
   readonly createdBy: string;
   readonly createdAt: string;

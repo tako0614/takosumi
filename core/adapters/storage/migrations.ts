@@ -4924,4 +4924,16 @@ alter table takosumi_workspaces
   add constraint takosumi_connections_status_check
     check (status in ('pending', 'verified', 'revoked', 'expired', 'error'));`,
     },
+    {
+      id: "deploy.state_recovery_run_kind.add",
+      version: 115,
+      domain: "deploy",
+      description:
+        "Allow value-free state-only recovery in the existing Run ledger without replacing historical rows or weakening the resource_operation kind.",
+      sql: `alter table takosumi_runs
+  drop constraint if exists takosumi_runs_kind_check;
+alter table takosumi_runs
+  add constraint takosumi_runs_kind_check
+  check (kind in ('source_sync','compatibility_check','plan','apply','destroy_plan','destroy_apply','drift_check','backup','restore','resource_operation','state_recovery'));`,
+    },
   ]);

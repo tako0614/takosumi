@@ -187,6 +187,21 @@ v114 を知らない旧 catalog の process 再起動は rollback 手段とし�
 修正 artifact も v114 を保持し、制約を旧三状態へ戻す down migration は行いません。
 失敗時は一つの ALTER の原子性と ledger を照合し、前進修正します。
 
+## State-recovery Run kind expansion (Postgres v115)
+
+v115 は `takosumi_runs` の既存 Run kind CHECK に `state_recovery` を追加する
+`expand` です。履歴の `resource_operation` を含む従来の kind を全て保持し、
+Run 行や暗号化 state artifact は書き換えません。D1 は既存の Run JSON 保存形を
+利用するため、この変更に対応する D1 schema migration はありません。
+
+明示的な廃棄許可のない対象 DB は protected として扱います。適用は operator の
+predeploy migration job に限定し、事前に v114 schema の CHECK と代表的な
+`resource_operation` 行を含む fixture で旧 kind の保持、新 kind の受理、
+transaction rollback を検証します。v115 適用後は v115 を知らない旧 catalog の
+process を起動せず、障害時は schema と migration ledger を照合して前進修正します。
+この migration は state-only recovery の artifact 検証や operator authorization
+を実装・許可しません。
+
 ## Failure and reversal procedure
 
 `expand` / `backfill`:
