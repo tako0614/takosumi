@@ -1,5 +1,4 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
 import { chown, chmod, link, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,7 +14,7 @@ import type {
   OperatorRecoveryJournalStaged,
 } from "../../deploy/platform/operator_state_recovery.ts";
 
-const BASE = existsSync("/root/hdd/takos-dev/tmp") ? "/root/hdd/takos-dev/tmp" : tmpdir();
+const BASE = tmpdir();
 const SOURCE = fileURLToPath(new URL("../../", import.meta.url));
 const DIGEST = `sha256:${"a".repeat(64)}` as const;
 const CUSTODY = `sha256:${"b".repeat(64)}` as const;
