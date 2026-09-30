@@ -62,7 +62,9 @@ Cloud 側のリポジトリで管理します。
 
 ### 品質と検証
 
+- [OSS の lifecycle evidence map](./lifecycle-readiness.md)
 - [install → serving E2E を 1 コマンドで回す](./install-serving-e2e.md)
+- [dashboard browser E2E](./dashboard-browser-e2e.md)
 
 ### Resource と Form package
 
