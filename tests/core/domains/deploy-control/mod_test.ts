@@ -1596,6 +1596,53 @@ test("plan policy blocks strict Cloudflare scope when plan metadata is missing",
   );
 });
 
+test("plan policy blocks a no-op import outside the resource allowlist", async () => {
+  const { store, request } = await seedUpdatableCapsule();
+  const seeded = await store.getCapsule(request.capsuleId!);
+  const installConfig = await store.getInstallConfig(seeded!.installConfigId);
+  await store.putInstallConfig({
+    ...installConfig!,
+    policy: {
+      ...installConfig!.policy,
+      allowedResourceTypes: [],
+    },
+  });
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    vault: fakeProviderVault() as never,
+    store,
+    now: sequenceNow(41),
+    newId: deterministicIds(),
+    runner: {
+      plan: () =>
+        Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: testPlanArtifact("import-disallowed"),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+          planResourceChanges: [
+            {
+              address: "cloudflare_r2_bucket.imported",
+              type: "cloudflare_r2_bucket",
+              actions: ["no-op"],
+              importing: true,
+            },
+          ],
+        }),
+      apply: () => Promise.resolve({}),
+    },
+  });
+
+  const { planRun } = await controller.createPlanRun(request);
+
+  expect(planRun.status).toBe("failed");
+  expect(planRun.policy.status).toBe("blocked");
+  expect(planRun.policy.reasons.join("\n")).toContain(
+    "resource type cloudflare_r2_bucket is not allowed by policy",
+  );
+});
+
 test("plan policy admits matching scope metadata and blocks quota overflow", async () => {
   const { store, request } = await seedUpdatableCapsule();
   const seeded = await store.getCapsule(request.capsuleId!);

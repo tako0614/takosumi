@@ -123,6 +123,18 @@ test("resource allowlist ignores no-op/read changes", () => {
   expect(result.disallowedResourceTypes).toEqual([]);
 });
 
+test("resource allowlist checks a no-op import as state mutation", () => {
+  const changes: readonly PlanResourceChange[] = [
+    { address: "x.imported", type: "x", actions: ["no-op"], importing: true },
+  ];
+  expect(evaluateResourceAllowlist(changes, []).disallowedResourceTypes).toEqual([
+    "x",
+  ]);
+  expect(
+    evaluateResourceAllowlist(changes, ["x"]).disallowedResourceTypes,
+  ).toEqual([]);
+});
+
 test("undefined allowlist skips the layer (not configured)", () => {
   const result = evaluateResourceAllowlist(CHANGES, undefined);
   expect(result.disallowedResourceTypes).toEqual([]);
@@ -159,6 +171,14 @@ test("action policy allows create/update without approval", () => {
   ]);
   expect(result.requiresApproval).toBe(false);
   expect(result.reasons).toEqual([]);
+});
+
+test("action policy requires approval for a no-op import", () => {
+  const result = evaluateActionPolicy([
+    { address: "x.imported", type: "x", actions: ["no-op"], importing: true },
+  ]);
+  expect(result.requiresApproval).toBe(true);
+  expect(result.reasons.join("\n")).toMatch(/x/);
 });
 
 test("action policy requires approval for a delete", () => {
@@ -330,6 +350,23 @@ test("scope boundary ignores read-only resources", () => {
   expect(result.outOfScope).toEqual([]);
 });
 
+test("strict scope boundary checks a no-op import", () => {
+  const result = evaluateScopeBoundary(
+    [
+      {
+        address: "cloudflare_r2_bucket.imported",
+        type: "cloudflare_r2_bucket",
+        actions: ["no-op"],
+        importing: true,
+      },
+    ],
+    ACCOUNT_SCOPE_POLICY,
+  );
+  expect(result.outOfScope).toEqual([
+    "cloudflare_r2_bucket.imported missing scope dimension account_id",
+  ]);
+});
+
 // --- §25 layer 10: quota ----------------------------------------------------
 
 test("quota policy enforces total and per-resource mutating counts", () => {
@@ -349,6 +386,17 @@ test("quota policy enforces total and per-resource mutating counts", () => {
     "resources.total count 2 exceeds 1",
   ]);
   expect(result.reasons.join("\n")).toMatch(/quota/);
+});
+
+test("quota policy counts a no-op import", () => {
+  const result = evaluateQuotaPolicy(
+    [{ address: "x.imported", type: "x", actions: ["no-op"], importing: true }],
+    { "resources.total": 0, x: 0 },
+  );
+  expect(result.exceeded).toEqual([
+    "resources.total count 1 exceeds 0",
+    "x count 1 exceeds 0",
+  ]);
 });
 
 test("quota policy treats invalid limits as deny reasons", () => {

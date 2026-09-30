@@ -392,6 +392,37 @@ test("a destructive update stops at waiting_approval and is never auto-applied",
   expect(autoPlan?.appliedApplyRunId).toBeUndefined();
 });
 
+test("a no-op import requires approval and is never auto-applied", async () => {
+  const { store, controller, runner, initialApplyCalls } = await buildActiveCapsule({
+    autoUpdate: true,
+  });
+  runner.planResourceChanges = [
+    {
+      address: "cloudflare_workers_script.imported",
+      type: "cloudflare_workers_script",
+      actions: ["no-op"],
+      importing: true,
+    },
+  ];
+
+  await syncNewCommit(controller);
+
+  const plans = await planRunsOf(controller, store);
+  const autoPlan = plans.find((run) => run.autoApplyRequested === true);
+  expect(autoPlan?.status).toBe("succeeded");
+  expect(autoPlan?.requiresApproval).toBe(true);
+  expect(autoPlan?.planResourceChanges?.[0]?.importing).toBe(true);
+  expect(autoPlan?.appliedApplyRunId).toBeUndefined();
+  expect(runner.applyCalls).toBe(initialApplyCalls);
+  if (!autoPlan) throw new Error("auto-update Plan was not created");
+  await expect(
+    controller.createApplyRun({
+      planRunId: autoPlan.id,
+      expected: applyExpectedGuardFromPlanRun(autoPlan),
+    }),
+  ).rejects.toThrow(/awaiting approval/);
+});
+
 test("auto-update never applies a Plan whose exact prepared inputs changed", async () => {
   const store = new CorruptingAutoApplyInputsStore();
   const { controller, runner, initialPlanCalls, initialApplyCalls } =
