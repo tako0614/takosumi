@@ -1,4 +1,9 @@
 import { expect, test } from "bun:test";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
 import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
@@ -17,6 +22,7 @@ import {
   type OperatorRecoveryJournalStaged,
   type OperatorSourceRecoveryPorts,
 } from "../../../deploy/platform/operator_state_recovery.ts";
+import { openOperatorStateRecoveryJournal } from "../../../scripts/lib/operator-state-recovery-journal.ts";
 
 const NOW = "2026-09-30T00:00:00.000Z";
 const D = `sha256:${"a".repeat(64)}` as const;
@@ -408,4 +414,49 @@ test("plaintext is bounded and never surfaced in refusal", async () => {
   await expect(composeOperatorSourceRecovery(ports, f.request)).rejects.toThrow(/refused/);
   expect(f.stages).toBe(0);
   expect(f.journal.intent).toBeDefined();
+});
+
+test("physical journal faults fence Core and preserve one retry identity through R2 stage", async () => {
+  for (const interrupted of ["intent.before-file-sync", "staged.before-dir-sync"] as const) {
+    const base = existsSync("/root/hdd/takos-dev/tmp") ? "/root/hdd/takos-dev/tmp" : tmpdir();
+    const root = await mkdtemp(join(base, "operator-recovery-compose-test-"));
+    const directory = join(root, "journal");
+    await mkdir(directory, { mode: 0o700 });
+    const f = await fixture(`physical_${interrupted.replaceAll(".", "_")}`);
+    let fired = false;
+    let ids = 0;
+    const journal = await openOperatorStateRecoveryJournal({
+      directory,
+      sourceCheckouts: [fileURLToPath(new URL("../../../", import.meta.url))],
+      testOnlyFault: (step) => {
+        if (step === interrupted && !fired) { fired = true; throw new Error("private injected cause"); }
+      },
+    });
+    const ports = { ...f.ports, journal, newRecoveryRunId: () => {
+      ids++;
+      return `run_operator_physical_${interrupted.replaceAll(".", "_")}`;
+    } };
+    try {
+      await expect(composeOperatorSourceRecovery(ports, f.request)).rejects.toThrow(/refused/);
+      expect(fired).toBe(true);
+      expect(await f.store.getStateRecoveryRun(`run_operator_physical_${interrupted.replaceAll(".", "_")}`))
+        .toBeUndefined();
+      expect((await f.store.getApplyRun(f.failed.id))?.status).toBe("failed");
+      expect((await f.store.getCapsule(f.seeded.capsule.id))?.currentOutputId).toBeUndefined();
+      if (interrupted === "intent.before-file-sync") {
+        await expect(composeOperatorSourceRecovery(ports, f.request)).rejects.toThrow(/refused/);
+        expect(ids).toBe(1);
+        expect(f.loads).toBe(0);
+      } else {
+        expect((await composeOperatorSourceRecovery(ports, f.request)).status).toBe("committed");
+        expect(ids).toBe(1);
+        expect(f.stages).toBe(1);
+        expect(f.handles.size).toBe(1);
+        expect(f.bucket.deletes).toBe(0);
+      }
+    } finally {
+      await journal.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  }
 });
