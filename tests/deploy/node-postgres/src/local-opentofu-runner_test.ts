@@ -23,7 +23,10 @@ import {
 import { generateOpenTofuChildModuleRoot } from "../../../../lib/rootgen/src/mod.ts";
 import { workspaceForRun } from "../../../../runner/lib/artifacts.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
-import { OpenTofuRunnerInfrastructureError } from "../../../../core/domains/deploy-control/errors.ts";
+import {
+  OpenTofuRunnerExecutionError,
+  OpenTofuRunnerInfrastructureError,
+} from "../../../../core/domains/deploy-control/errors.ts";
 
 const TEST_STATE_CRYPTO = new PartitionedSecretBoundaryCrypto({
   globalPassphrase: "local-opentofu-state-test-passphrase-32-bytes-minimum",
@@ -549,6 +552,287 @@ test("local OpenTofu plan promotes exact post-init provider lockfile bytes", asy
   }
 });
 
+test("HTTP OpenTofu runner preserves status with safe diagnostics for proxy and malformed responses", async () => {
+  const proxyMarker = "customer-output-and-token-must-not-leak";
+  const proxyHtml = `<html><body>gateway timeout ${proxyMarker}</body></html>`;
+  const cases = [
+    { status: 503, body: proxyHtml, expectedStatus: "HTTP 503" },
+    { status: 200, body: proxyHtml, expectedStatus: "HTTP 200" },
+    {
+      status: 200,
+      body: `${proxyMarker}${"x".repeat(2 * 1024 * 1024 + 1)}`,
+      expectedStatus: "HTTP 200",
+    },
+  ] as const;
+
+  for (const scenario of cases) {
+    const runId = `plan_http_error_${scenario.status}_${crypto.randomUUID()}`;
+    const server = Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Response(scenario.body, {
+          status: scenario.status,
+          headers: { "content-type": "text/html" },
+        }),
+    });
+    try {
+      const runner = createHttpOpenTofuRunner({
+        archiveStore: {
+          write: async () => {},
+          read: async () => new Uint8Array(),
+        },
+        stateStore: emptyLocalStateStore(),
+        baseUrl: server.url.href,
+      });
+      let failure: unknown;
+      try {
+        await runner.plan({
+          planRun: localPlanRun(runId, "create"),
+          runnerProfile: createLocalOpenTofuRunnerProfile(),
+          variables: {},
+        });
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(OpenTofuRunnerExecutionError);
+      expect((failure as Error).message).toContain(scenario.expectedStatus);
+      expect((failure as Error).message).not.toContain(proxyMarker);
+    } finally {
+      server.stop(true);
+    }
+  }
+});
+
+test("HTTP OpenTofu runner allows large successful JSON and preserves body stream aborts", async () => {
+  const runId = `plan_http_large_${crypto.randomUUID()}`;
+  const digest = `sha256:${"a".repeat(64)}`;
+  const largeSuccess = {
+    status: "succeeded",
+    planDigest: digest,
+    planArtifact: {
+      kind: "runner-local",
+      ref: `runner-local://${runId}/tfplan`,
+      digest,
+    },
+    diagnostics: [],
+    stdout: "x".repeat(2 * 1024 * 1024 + 1),
+  };
+  const server = Bun.serve({
+    port: 0,
+    fetch() {
+      return Response.json(largeSuccess);
+    },
+  });
+  try {
+    const runner = createHttpOpenTofuRunner({
+      archiveStore: {
+        write: async () => {},
+        read: async () => new Uint8Array(),
+      },
+      stateStore: emptyLocalStateStore(),
+      baseUrl: server.url.href,
+    });
+    const result = await runner.plan({
+      planRun: localPlanRun(runId, "create"),
+      runnerProfile: createLocalOpenTofuRunnerProfile(),
+      variables: {},
+    });
+    expect(result.planDigest).toBe(digest);
+  } finally {
+    server.stop(true);
+  }
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(new DOMException("fixture abort", "AbortError"));
+        },
+      }),
+    );
+  try {
+    const runner = createHttpOpenTofuRunner({
+      archiveStore: {
+        write: async () => {},
+        read: async () => new Uint8Array(),
+      },
+      stateStore: emptyLocalStateStore(),
+      baseUrl: "http://runner.invalid/",
+    });
+    await expect(
+      runner.plan({
+        planRun: localPlanRun(`plan_http_abort_${crypto.randomUUID()}`, "create"),
+        runnerProfile: createLocalOpenTofuRunnerProfile(),
+        variables: {},
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("HTTP OpenTofu runner preserves status when a non-JSON error stream is already failed", async () => {
+  const runId = `plan_http_failed_stream_${crypto.randomUUID()}`;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(new Error("private proxy detail"));
+        },
+      }),
+      {
+        status: 500,
+        headers: { "content-type": "text/html" },
+      },
+    );
+  try {
+    const runner = createHttpOpenTofuRunner({
+      archiveStore: {
+        write: async () => {},
+        read: async () => new Uint8Array(),
+      },
+      stateStore: emptyLocalStateStore(),
+      baseUrl: "http://runner.invalid/",
+    });
+    let failure: unknown;
+    try {
+      await runner.plan({
+        planRun: localPlanRun(runId, "create"),
+        runnerProfile: createLocalOpenTofuRunnerProfile(),
+        variables: {},
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(OpenTofuRunnerExecutionError);
+    expect((failure as Error).message).toContain("HTTP 500");
+    expect((failure as Error).message).not.toContain("private proxy detail");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("HTTP OpenTofu runner preserves structured error codes without echoing response details", async () => {
+  const runId = `plan_http_code_${crypto.randomUUID()}`;
+  const privateDetail = "provider output and credential must not be copied";
+  const server = Bun.serve({
+    port: 0,
+    fetch: () =>
+      Response.json(
+        { errorCode: "capacity_exhausted", stderr: privateDetail },
+        { status: 503 },
+      ),
+  });
+  try {
+    const runner = createHttpOpenTofuRunner({
+      archiveStore: {
+        write: async () => {},
+        read: async () => new Uint8Array(),
+      },
+      stateStore: emptyLocalStateStore(),
+      baseUrl: server.url.href,
+    });
+    let failure: unknown;
+    try {
+      await runner.plan({
+        planRun: localPlanRun(runId, "create"),
+        runnerProfile: createLocalOpenTofuRunnerProfile(),
+        variables: {},
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(OpenTofuRunnerExecutionError);
+    expect((failure as OpenTofuRunnerExecutionError).reason).toBe(
+      "capacity_exhausted",
+    );
+    expect((failure as Error).message).toContain("HTTP 503");
+    expect((failure as OpenTofuRunnerExecutionError).detail).not.toContain(
+      privateDetail,
+    );
+    expect((failure as Error).message).not.toContain(privateDetail);
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("HTTP OpenTofu runner does not replay an ambiguous mutation response", async () => {
+  const runId = `apply_http_ambiguous_${crypto.randomUUID()}`;
+  const planRunId = `plan_${runId}`;
+  const proxyMarker = "customer-output-and-token-must-not-leak";
+  const planBytes = new TextEncoder().encode("immutable-reviewed-plan");
+  const planDigest = `sha256:${createHash("sha256")
+    .update(planBytes)
+    .digest("hex")}`;
+  let applyRequests = 0;
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url);
+      if (
+        request.method === "GET" &&
+        url.pathname.endsWith("/artifacts/tfplan")
+      ) {
+        return new Response(planBytes);
+      }
+      if (request.method === "PUT") return new Response(null, { status: 204 });
+      if (request.method === "POST" && url.pathname === `/runs/${runId}`) {
+        applyRequests += 1;
+        return new Response(`<html>${proxyMarker}</html>`, {
+          status: 500,
+          headers: { "content-type": "text/html" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    },
+  });
+  try {
+    const runner = createHttpOpenTofuRunner({
+      archiveStore: {
+        write: async () => {},
+        read: async () => new Uint8Array(),
+      },
+      stateStore: emptyLocalStateStore(),
+      baseUrl: server.url.href,
+    });
+    let failure: unknown;
+    try {
+      await runner.apply!({
+        applyRun: localApplyRun(runId, planRunId, "create"),
+        planRun: localPlanRun(planRunId, "create"),
+        planArtifact: {
+          kind: "runner-local",
+          ref: `runner-local://${planRunId}/tfplan`,
+          digest: planDigest,
+        },
+        runnerProfile: createLocalOpenTofuRunnerProfile(),
+        executionEvidenceAuthority: testExecutionEvidenceAuthority(),
+        executionEvidenceCommit: {
+          stateVersionId: "state_version_fixture",
+          outputId: "output_fixture",
+        },
+        stateScope: {
+          workspaceId: "workspace_local",
+          subject: { kind: "resource", id: "resource_local" },
+          environment: "default",
+          generation: 1,
+          stateRef: "state://resource_local/1",
+        },
+      } as never);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(OpenTofuRunnerExecutionError);
+    expect((failure as Error).message).toContain("HTTP 500");
+    expect((failure as Error).message).not.toContain(proxyMarker);
+    expect(applyRequests).toBe(1);
+  } finally {
+    server.stop(true);
+  }
+});
+
 test("local provider lockfile store preserves an empty present artifact separately from absence", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "takosumi-local-lockfile-empty-"));
   try {
@@ -625,6 +909,15 @@ function localApplyRun(
     auditEvents: [],
     createdAt: 1,
     updatedAt: 1,
+  };
+}
+
+function emptyLocalStateStore() {
+  return {
+    read: async () => undefined,
+    commit: async <T>(artifact: T): Promise<T> => artifact,
+    readRawOutput: async () => undefined,
+    commitRawOutput: async <T>(artifact: T): Promise<T> => artifact,
   };
 }
 

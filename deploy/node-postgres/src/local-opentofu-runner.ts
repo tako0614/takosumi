@@ -1579,25 +1579,63 @@ async function runRunner(
     }),
     ...(signal ? { signal } : {}),
   });
+  if (
+    (!response.ok || response.headers.has("content-type")) &&
+    !isJsonResponse(response)
+  ) {
+    await response.body?.cancel().catch(() => {});
+    throw safeRunnerResponseError(action, runId, response.status, false);
+  }
   const text = await response.text();
-  const body = text.trim().length > 0 ? parseObject(text) : {};
+  let body: Record<string, unknown> = {};
+  if (text.trim().length > 0) {
+    try {
+      body = parseObject(text);
+    } catch {
+      throw safeRunnerResponseError(action, runId, response.status, response.ok);
+    }
+  }
   if (
     !response.ok &&
     !((action === "apply" || action === "destroy") &&
       runnerProviderExecutionFailed(body))
   ) {
     const reason = stringValue(body, "errorCode");
-    const detail =
-      stringValue(body, "detail") ??
-      stringValue(body, "error") ??
-      stringValue(body, "stderr") ??
-      text.slice(0, 500);
     throw new OpenTofuRunnerExecutionError(
-      `OpenTofu runner rejected ${action} run ${runId}: ${response.status}${detail ? ` (${detail})` : ""}`,
-      { ...(reason ? { reason } : {}) },
+      `OpenTofu runner rejected ${action} run ${runId}: HTTP ${response.status}`,
+      {
+        reason: reason && /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(reason)
+          ? reason
+          : "runner_http_error",
+        detail: "runner returned a non-success HTTP status",
+      },
     );
   }
   return body;
+}
+
+function isJsonResponse(response: Response): boolean {
+  return /(?:application|text)\/(?:[a-z0-9.+-]*\+)?json(?:\s*;|$)/iu.test(
+    response.headers.get("content-type") ?? "",
+  );
+}
+
+function safeRunnerResponseError(
+  action: string,
+  runId: string,
+  status: number,
+  ok: boolean,
+): OpenTofuRunnerExecutionError {
+  const responseKind = ok ? "malformed response" : "HTTP error response";
+  return new OpenTofuRunnerExecutionError(
+    `OpenTofu runner ${responseKind} for ${action} run ${runId}: HTTP ${status}`,
+    {
+      reason: ok ? "runner_invalid_response" : "runner_http_error",
+      detail: ok
+        ? "runner response was not a valid JSON object"
+        : "runner returned a non-success HTTP status with an invalid response body",
+    },
+  );
 }
 
 function runnerProviderExecutionFailed(
