@@ -39,6 +39,7 @@ Cloud 側のリポジトリで管理します。
 - [online migration](./online-db-migrations.md)
 - [backup と restore の訓練](./backup-restore-drills.md)
 - [disaster recovery](./disaster-recovery.md)
+- [SOURCE recovery の private retry journal](./operator-state-recovery-journal.md)
 - [Resource state の取り込み](./resource-state-adoption.md)
 - [Output / Interface migration](./output-interface-migration.md)
 - [FormRef migration](./exact-formref-migration.md)

@@ -125,9 +125,48 @@ function exact(left: unknown, right: unknown): boolean {
   return stableStringify(left) === stableStringify(right);
 }
 
-function validIdentifier(value: unknown): value is string {
+export function validOperatorRecoveryIdentifier(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 384 &&
     value.trim() === value && value !== "*" && !/[\x00-\x1f\x7f]/u.test(value);
+}
+
+const INTENT_KEYS = "actorId,capsuleId,custodyEvidenceDigest,environment,failedApplyRunId,format,plaintextSha256,recoveryRunId,requestDigest,timestamp,workspaceId";
+
+/** Closed, detached journal records shared by the composition and POSIX journal. */
+export function parseOperatorRecoveryJournalIntent(value: unknown): OperatorRecoveryJournalIntent {
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype) refuse();
+  const keys = Reflect.ownKeys(value);
+  if (keys.some((key) => typeof key !== "string") || keys.sort().join(",") !== INTENT_KEYS) refuse();
+  const source = value as Record<string, unknown>;
+  const fields: Record<string, unknown> = {};
+  for (const key of Object.keys(source)) {
+    const descriptor = Object.getOwnPropertyDescriptor(source, key);
+    if (!descriptor || !("value" in descriptor)) refuse();
+    fields[key] = descriptor.value;
+  }
+  const identifiers = ["workspaceId", "capsuleId", "environment", "failedApplyRunId", "recoveryRunId", "actorId"];
+  if (fields.format !== JOURNAL_FORMAT || identifiers.some((key) => !validOperatorRecoveryIdentifier(fields[key])) ||
+    typeof fields.plaintextSha256 !== "string" || !SHA256.test(fields.plaintextSha256) ||
+    typeof fields.custodyEvidenceDigest !== "string" || !SHA256.test(fields.custodyEvidenceDigest) ||
+    typeof fields.requestDigest !== "string" || !SHA256.test(fields.requestDigest) ||
+    typeof fields.timestamp !== "string" || !Number.isFinite(Date.parse(fields.timestamp)) ||
+    new Date(fields.timestamp).toISOString() !== fields.timestamp) refuse();
+  return Object.freeze(fields) as unknown as OperatorRecoveryJournalIntent;
+}
+
+export function parseOperatorRecoveryJournalStaged(value: unknown): OperatorRecoveryJournalStaged {
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype) refuse();
+  const keys = Reflect.ownKeys(value);
+  if (keys.some((key) => typeof key !== "string") || keys.sort().join(",") !== "artifactHandle,intent") refuse();
+  const source = value as Record<string, unknown>;
+  const handle = Object.getOwnPropertyDescriptor(source, "artifactHandle");
+  const intent = Object.getOwnPropertyDescriptor(source, "intent");
+  if (!handle || !("value" in handle) || !intent || !("value" in intent) ||
+    typeof handle.value !== "string" || handle.value.length === 0 || handle.value.length > 4096 ||
+    /[\x00-\x1f\x7f]/u.test(handle.value)) refuse();
+  return Object.freeze({ intent: parseOperatorRecoveryJournalIntent(intent.value), artifactHandle: handle.value });
 }
 
 async function authorize(
@@ -150,29 +189,24 @@ async function authorize(
   if (!exact(presented, binding) ||
     await stableJsonDigest({ kind: "takosumi.operator-source-recovery-authorization@v1", binding }) !== requestDigest) refuse();
   if (resolved.format !== DECISION_FORMAT || resolved.requestDigest !== requestDigest ||
-    !validIdentifier(resolved.actorId) ||
+    !validOperatorRecoveryIdentifier(resolved.actorId) ||
     (expectedActor !== undefined && resolved.actorId !== expectedActor)) return refuse();
   return resolved;
 }
 
 function assertIntent(value: OperatorRecoveryJournalIntent, binding: OperatorRecoveryBinding,
   actorId: string, requestDigest: string): void {
-  if (!value || Object.keys(value).sort().join(",") !==
-    "actorId,capsuleId,custodyEvidenceDigest,environment,failedApplyRunId,format,plaintextSha256,recoveryRunId,requestDigest,timestamp,workspaceId" ||
-    value.format !== JOURNAL_FORMAT || !exact({
-      workspaceId: value.workspaceId, capsuleId: value.capsuleId,
-      environment: value.environment, failedApplyRunId: value.failedApplyRunId,
-      recoveryRunId: value.recoveryRunId, plaintextSha256: value.plaintextSha256,
-      custodyEvidenceDigest: value.custodyEvidenceDigest,
-    }, binding) || value.actorId !== actorId || value.requestDigest !== requestDigest ||
-    !Number.isFinite(Date.parse(value.timestamp)) || new Date(value.timestamp).toISOString() !== value.timestamp) refuse();
+  const record = parseOperatorRecoveryJournalIntent(value);
+  if (!exact({
+    workspaceId: record.workspaceId, capsuleId: record.capsuleId,
+    environment: record.environment, failedApplyRunId: record.failedApplyRunId,
+    recoveryRunId: record.recoveryRunId, plaintextSha256: record.plaintextSha256,
+    custodyEvidenceDigest: record.custodyEvidenceDigest,
+  }, binding) || record.actorId !== actorId || record.requestDigest !== requestDigest) refuse();
 }
 
 function assertStaged(value: OperatorRecoveryJournalStaged, intent: OperatorRecoveryJournalIntent): void {
-  if (!value || Object.keys(value).sort().join(",") !== "artifactHandle,intent" ||
-    !exact(value.intent, intent) || typeof value.artifactHandle !== "string" ||
-    value.artifactHandle.length === 0 || value.artifactHandle.length > 4096 ||
-    /[\x00-\x1f\x7f]/u.test(value.artifactHandle)) refuse();
+  if (!exact(parseOperatorRecoveryJournalStaged(value).intent, intent)) refuse();
 }
 
 /**
@@ -184,14 +218,14 @@ export async function composeOperatorSourceRecovery(
   request: OperatorSourceRecoveryRequest,
 ): Promise<OperatorSourceRecoveryResult> {
   const selectedRequest = Object.freeze({ ...request });
-  if (!validIdentifier(selectedRequest.failedApplyRunId) || !SHA256.test(selectedRequest.plaintextSha256) ||
+  if (!validOperatorRecoveryIdentifier(selectedRequest.failedApplyRunId) || !SHA256.test(selectedRequest.plaintextSha256) ||
     !SHA256.test(selectedRequest.custodyEvidenceDigest)) refuse();
   let failed: Awaited<ReturnType<OpenTofuControlStore["getApplyRun"]>>;
   try { failed = await ports.store.getApplyRun(selectedRequest.failedApplyRunId); } catch { return refuse(); }
   if (!failed || failed.status !== "failed" || failed.operation !== "create" || !failed.capsuleId) refuse();
   let capsule: Awaited<ReturnType<OpenTofuControlStore["getCapsule"]>>;
   try { capsule = await ports.store.getCapsule(failed.capsuleId); } catch { return refuse(); }
-  if (!capsule || capsule.workspaceId !== failed.workspaceId || !validIdentifier(capsule.environment)) refuse();
+  if (!capsule || capsule.workspaceId !== failed.workspaceId || !validOperatorRecoveryIdentifier(capsule.environment)) refuse();
 
   let prior: Awaited<ReturnType<OperatorRecoveryJournal["read"]>>;
   try { prior = await ports.journal.read(failed.id); } catch { return refuse(); }
@@ -202,7 +236,7 @@ export async function composeOperatorSourceRecovery(
   });
   let recoveryRunId: string;
   try { recoveryRunId = priorIntent?.recoveryRunId ?? ports.newRecoveryRunId(); } catch { return refuse(); }
-  if (!validIdentifier(recoveryRunId)) refuse();
+  if (!validOperatorRecoveryIdentifier(recoveryRunId)) refuse();
   const binding: OperatorRecoveryBinding = Object.freeze({
     workspaceId: capsule.workspaceId, capsuleId: capsule.id, environment: capsule.environment,
     failedApplyRunId: failed.id, recoveryRunId,
