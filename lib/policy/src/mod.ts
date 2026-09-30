@@ -42,11 +42,14 @@ import {
  * (`resource_changes`). Mirrors the contract `PlanResourceChange` shape so the
  * package stays contract-free: `actions` mirrors the OpenTofu change actions,
  * e.g. `["create"]`, `["delete"]`, `["delete","create"]` (replace), `["no-op"]`.
+ * An import can report `no-op` while still adopting a resource into state.
  */
 export interface PlanResourceChange {
   readonly address: string;
   readonly type: string;
   readonly actions: readonly string[];
+  /** Value-free evidence that this change adopts a resource into state. */
+  readonly importing?: true;
   readonly scope?: PlanResourceScope;
 }
 
@@ -147,8 +150,9 @@ export interface ResourceAllowlistResult {
 
 /**
  * Evaluates the resource-type allowlist for the plan's mutating changes (§25
- * layer 5). A change that only no-ops/reads neither mutates nor needs
- * allowlisting. An `undefined` allowlist means "not configured" — no resource
+ * layer 5). A plain no-op/read neither mutates nor needs allowlisting, but an
+ * import adopts managed state even if OpenTofu reports `no-op`. An `undefined`
+ * allowlist means "not configured" — no resource
  * type is enforced (the layer is skipped). An empty `[]` allowlist enforces
  * that NO mutating resource type is permitted. Pure; no store state.
  */
@@ -162,7 +166,7 @@ export function evaluateResourceAllowlist(
   const allowed = new Set(allowedResourceTypes);
   const disallowed = new Set<string>();
   for (const change of changes) {
-    if (!isMutating(change.actions)) continue;
+    if (!isMutating(change)) continue;
     if (!allowed.has(change.type)) disallowed.add(change.type);
   }
   const disallowedResourceTypes = Array.from(disallowed).sort();
@@ -180,8 +184,8 @@ export interface ActionPolicyResult {
   /**
    * True when any change carries an action outside the approval-free set
    * ({@link APPROVAL_FREE_ACTIONS}) — a delete/replace, a state removal such as
-   * `"forget"`, or an action this policy does not recognize. create / update /
-   * no-op / read are allowed without approval.
+   * `"forget"`, an import, or an action this policy does not recognize. Plain
+   * create / update / no-op / read are allowed without approval.
    */
   readonly requiresApproval: boolean;
   /** Reasons describing why approval is required (never includes values). */
@@ -206,7 +210,7 @@ export function evaluateScopeBoundary(
   const strict = normalizedPolicy.mode === "strict";
   const violations = new Set<string>();
   for (const change of changes) {
-    if (!isMutating(change.actions)) continue;
+    if (!isMutating(change)) continue;
     const facts = normalizePlanResourceScope(change.scope)?.facts ?? {};
     for (const rule of normalizedPolicy.rules) {
       if (!resourceTypeMatchesPattern(change.type, rule.resourceTypePattern)) {
@@ -250,7 +254,7 @@ export function evaluateQuotaPolicy(
   quota: Readonly<Record<string, number>> | undefined,
 ): QuotaResult {
   if (quota === undefined) return { exceeded: [], reasons: [] };
-  const mutating = changes.filter((change) => isMutating(change.actions));
+  const mutating = changes.filter(isMutating);
   const counts = new Map<string, number>([
     ["resources", mutating.length],
     ["resources.total", mutating.length],
@@ -276,8 +280,9 @@ export function evaluateQuotaPolicy(
 
 /**
  * Evaluates the §25 action policy over the plan's changes: only the
- * approval-free actions (create, update, no-op, read) apply unreviewed. Any
- * other action requires approval — `"delete"` (which OpenTofu also uses for a
+ * approval-free actions (create, update, no-op, read) apply unreviewed when
+ * they do not import. An import changes managed state even with a `no-op`
+ * action and must be reviewed. Any other action requires approval — `"delete"` (which OpenTofu also uses for a
  * replace `["delete","create"]`), the `"forget"` a `removed {}` block emits to
  * drop a resource out of state, and any action string this policy does not
  * recognize. Testing against an allow set rather than for `"delete"` is what
@@ -292,7 +297,7 @@ export function evaluateActionPolicy(
 ): ActionPolicyResult {
   const destructiveTypes = new Set<string>();
   for (const change of changes) {
-    if (needsApproval(change.actions)) destructiveTypes.add(change.type);
+    if (needsApproval(change)) destructiveTypes.add(change.type);
   }
   const requiresApproval = destructiveTypes.size > 0;
   const reasons = requiresApproval
@@ -300,7 +305,7 @@ export function evaluateActionPolicy(
         .sort()
         .map(
           (type) =>
-            `resource type ${type} has a delete/replace or otherwise unapproved change requiring approval`,
+            `resource type ${type} has an import, delete/replace, or otherwise unapproved change requiring approval`,
         )
     : [];
   return { requiresApproval, reasons };
@@ -310,13 +315,15 @@ export function evaluateActionPolicy(
 // internals
 // ---------------------------------------------------------------------------
 
-function isMutating(actions: readonly string[]): boolean {
-  return actions.some((action) => !NON_MUTATING_ACTIONS.has(action));
+function isMutating(change: PlanResourceChange): boolean {
+  return change.importing === true ||
+    change.actions.some((action) => !NON_MUTATING_ACTIONS.has(action));
 }
 
-/** §25 layer 7: any action outside the allow set gates the plan on approval. */
-function needsApproval(actions: readonly string[]): boolean {
-  return actions.some((action) => !APPROVAL_FREE_ACTIONS.has(action));
+/** §25 layer 7: state adoption or an action outside the allow set needs approval. */
+function needsApproval(change: PlanResourceChange): boolean {
+  return change.importing === true ||
+    change.actions.some((action) => !APPROVAL_FREE_ACTIONS.has(action));
 }
 
 function evaluateScopedValue(input: {
