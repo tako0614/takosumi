@@ -7,7 +7,9 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { Buffer } from "node:buffer";
+import { constants as fsConstants } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
 import type {
   OpenTofuApplyJob,
   OpenTofuApplyResult,
@@ -69,6 +71,9 @@ import {
 } from "../../../core/shared/open-tofu-state-metadata.ts";
 
 const LOCAL_PLAN_STATE_METADATA_MAX_BYTES = 4096;
+// A 16 MiB state is base64-encoded inside encrypted JSON, then base64-encoded
+// again in the v3 envelope. This cap includes both expansions and metadata.
+const LOCAL_RECOVERY_STATE_ENVELOPE_MAX_BYTES = 32 * 1024 * 1024;
 
 export const LOCAL_OPENTOFU_RUNNER_PROFILE_ID = "local-opentofu";
 const PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES = 1024 * 1024;
@@ -96,6 +101,24 @@ export interface LocalOpenTofuStateArtifact {
   readonly stateBytes: Uint8Array;
   readonly result:
     OpenTofuApplyResult | OpenTofuDestroyResult | OpenTofuRestoreResult;
+}
+
+/** State-only recovery custody. No runner result or Apply execution evidence exists. */
+export interface LocalOpenTofuRecoveryStateArtifact {
+  readonly stateRef: string;
+  readonly workspaceId: string;
+  readonly subject: { readonly kind: "capsule"; readonly id: string };
+  readonly environment: string;
+  readonly generation: 1;
+  readonly createdByRunId: string;
+  readonly action: "state_recovery";
+  readonly failedApplyRunId: string;
+  readonly custodyEvidenceDigest: string;
+  readonly stateDigest: string;
+  readonly stateBytes: Uint8Array;
+  /** Digest of the actual immutable v3 ciphertext, not a caller assertion. */
+  readonly encryptedDigest: string;
+  readonly result?: never;
 }
 
 export interface LocalOpenTofuRawOutputArtifact {
@@ -127,7 +150,7 @@ export interface LocalOpenTofuProviderLockfileArtifact {
  * is fenced before OpenTofu can execute provider side effects.
  */
 export interface LocalOpenTofuStateArtifactStore {
-  read(stateRef: string): Promise<LocalOpenTofuStateArtifact | undefined>;
+  read(stateRef: string): Promise<LocalOpenTofuStateArtifact | LocalOpenTofuRecoveryStateArtifact | undefined>;
   commit(
     artifact: LocalOpenTofuStateArtifact,
   ): Promise<LocalOpenTofuStateArtifact>;
@@ -146,6 +169,15 @@ export interface LocalOpenTofuStateArtifactStore {
   ): Promise<LocalOpenTofuProviderLockfileArtifact>;
 }
 
+/** Explicit staging capability; ordinary runner stores need only the mutation port. */
+export interface LocalOpenTofuRecoveryCommitStore extends LocalOpenTofuStateArtifactStore {
+  /** Bounded exact-object reader; never falls back to a historical v2 result. */
+  readRecovery(stateRef: string): Promise<LocalOpenTofuRecoveryStateArtifact | undefined>;
+  commitRecovery(
+    artifact: Omit<LocalOpenTofuRecoveryStateArtifact, "encryptedDigest">,
+  ): Promise<LocalOpenTofuRecoveryStateArtifact>;
+}
+
 export function createFileSourceArchiveStore(root: string): SourceArchiveStore {
   const normalizedRoot = resolve(root);
   return {
@@ -162,20 +194,25 @@ export function createFileSourceArchiveStore(root: string): SourceArchiveStore {
 export function createFileOpenTofuStateArtifactStore(
   root: string,
   cryptoBoundary: SecretBoundaryCrypto,
-): LocalOpenTofuStateArtifactStore {
+): LocalOpenTofuRecoveryCommitStore {
   const normalizedRoot = resolve(root);
   const read = async (
     stateRef: string,
-  ): Promise<LocalOpenTofuStateArtifact | undefined> => {
+  ): Promise<LocalOpenTofuStateArtifact | LocalOpenTofuRecoveryStateArtifact | undefined> => {
     const path = await stateArtifactPath(normalizedRoot, stateRef);
-    let text: string;
-    try {
-      text = await readFile(path, "utf8");
-    } catch (error) {
-      if (isErrno(error, "ENOENT")) return undefined;
-      throw error;
-    }
+    const text = await readStateArtifactFile(path);
+    if (text === undefined) return undefined;
     return await parseStateArtifactEnvelope(text, stateRef, cryptoBoundary);
+  };
+  const readRecovery = async (stateRef: string): Promise<LocalOpenTofuRecoveryStateArtifact | undefined> => {
+    const path = await stateArtifactPath(normalizedRoot, stateRef);
+    const text = await readStateArtifactFile(path, true);
+    if (text === undefined) return undefined;
+    const artifact = await parseStateArtifactEnvelope(text, stateRef, cryptoBoundary);
+    if (artifact.action !== "state_recovery") {
+      throw new Error(`local OpenTofu recovery target ${stateRef} is occupied by a mutation`);
+    }
+    return artifact;
   };
   const readRawOutput = async (
     rawOutputRef: string,
@@ -213,6 +250,69 @@ export function createFileOpenTofuStateArtifactStore(
   };
   return {
     read,
+    readRecovery,
+    commitRecovery: async (artifact) => {
+      await assertLocalRecoveryStateArtifact(artifact);
+      const path = await stateArtifactPath(normalizedRoot, artifact.stateRef);
+      const artifactDirectory = dirname(path);
+      await mkdir(normalizedRoot, { recursive: true });
+      await syncDirectory(dirname(normalizedRoot));
+      await mkdir(artifactDirectory, { recursive: true });
+      await syncDirectory(normalizedRoot);
+      const temporaryPath = `${path}.${crypto.randomUUID()}.tmp`;
+      const metadata = {
+        version: 3 as const, kind: "state_recovery" as const,
+        stateRef: artifact.stateRef, workspaceId: artifact.workspaceId,
+        subject: artifact.subject, environment: artifact.environment,
+        generation: 1 as const, createdByRunId: artifact.createdByRunId,
+        action: "state_recovery" as const,
+        failedApplyRunId: artifact.failedApplyRunId,
+        custodyEvidenceDigest: artifact.custodyEvidenceDigest,
+        stateDigest: artifact.stateDigest,
+      };
+      const sealed = await cryptoBoundary.seal(
+        JSON.stringify({ stateBase64: Buffer.from(artifact.stateBytes).toString("base64") }),
+        "global", localRecoveryStateArtifactAad(metadata),
+      );
+      const encryptedDigest = await digestBytes(sealed);
+      const envelope = `${JSON.stringify({ ...metadata, encryptedDigest,
+        ciphertextBase64: Buffer.from(sealed).toString("base64") })}\n`;
+      if (Buffer.byteLength(envelope, "utf8") > LOCAL_RECOVERY_STATE_ENVELOPE_MAX_BYTES) {
+        throw new Error("local OpenTofu recovery artifact exceeds envelope size limit");
+      }
+      try {
+        const temporary = await open(temporaryPath, "wx", 0o600);
+        try {
+          await temporary.writeFile(envelope);
+          await temporary.sync();
+        } finally {
+          await temporary.close();
+        }
+        try {
+          await link(temporaryPath, path);
+          await syncDirectory(artifactDirectory);
+          const committed = await readRecovery(artifact.stateRef);
+          if (!committed ||
+            committed.encryptedDigest !== encryptedDigest) {
+            throw new Error(`local OpenTofu recovery target ${artifact.stateRef} readback is invalid`);
+          }
+          assertSameRecoveryState(committed, artifact);
+          return committed;
+        } catch (error) {
+          if (!isErrno(error, "EEXIST")) throw error;
+          const existing = await readRecovery(artifact.stateRef);
+          if (!existing) {
+            throw new Error(`local OpenTofu recovery target ${artifact.stateRef} is already owned by a mutation`);
+          }
+          assertSameRecoveryState(existing, artifact);
+          return existing;
+        }
+      } finally {
+        await unlink(temporaryPath).catch((error) => {
+          if (!isErrno(error, "ENOENT")) throw error;
+        });
+      }
+    },
     commit: async (artifact) => {
       await assertLocalStateArtifact(artifact);
       const path = await stateArtifactPath(normalizedRoot, artifact.stateRef);
@@ -266,6 +366,9 @@ export function createFileOpenTofuStateArtifactStore(
             throw new Error(
               `local OpenTofu state ${artifact.stateRef} disappeared during immutable commit`,
             );
+          }
+          if (existing.action === "state_recovery") {
+            throw new Error(`local OpenTofu state ${artifact.stateRef} is already owned by recovery custody`);
           }
           assertSameStateMutation(existing, artifact);
           return existing;
@@ -1036,6 +1139,9 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         `local OpenTofu restore source ${job.sourceState.stateRef} does not match the exact StateVersion descriptor and restore scope`,
       );
     }
+    if (source.action === "state_recovery") {
+      await assertLocalRecoveryStateArtifact(source);
+    }
     control?.signal?.throwIfAborted();
 
     // The host allocates the target reference in the StateScope. The local
@@ -1077,7 +1183,6 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     };
     const existing = await this.stateStore.read(stateRef);
     if (existing) {
-      await assertLocalStateArtifact(existing);
       if (
         existing.action !== "restore" ||
         existing.createdByRunId !== job.runId
@@ -1086,6 +1191,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
           `local OpenTofu restore target ${stateRef} is already owned by a different mutation`,
         );
       }
+      await assertLocalStateArtifact(existing);
       assertSameStateMutation(existing, candidate);
       return existing.result as OpenTofuRestoreResult;
     }
@@ -1328,6 +1434,9 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         `local OpenTofu exact prior state ${prior.stateRef} does not match its ledger descriptor`,
       );
     }
+    if (artifact?.action === "state_recovery") {
+      await assertLocalRecoveryStateArtifact(artifact);
+    }
     if (job.stateScope && artifact) {
       assertLocalMutationScope(
         artifact,
@@ -1422,6 +1531,9 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         throw new Error(
           `local OpenTofu exact prior state ${prior.stateRef} does not match its ledger descriptor`,
         );
+      }
+      if (artifact.action === "state_recovery") {
+        await assertLocalRecoveryStateArtifact(artifact);
       }
       if (job.stateScope) {
         assertLocalMutationScope(
@@ -2487,6 +2599,51 @@ async function stateArtifactPath(
   return resolve(root, key.slice(0, 2), `${key}.json`);
 }
 
+async function readStateArtifactFile(
+  path: string,
+  recoveryOnly = false,
+): Promise<string | undefined> {
+  let file: Awaited<ReturnType<typeof open>>;
+  try {
+    file = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) return undefined;
+    throw error;
+  }
+  try {
+    const before = await file.stat();
+    if (!before.isFile() || !Number.isSafeInteger(before.size) || before.size < 1) {
+      throw new Error("local OpenTofu state artifact physical file is invalid");
+    }
+    // Normal v2 files were written with version first. Preserve their existing
+    // size/reader behavior; cap v3 and unrecognized envelopes before allocation.
+    const prefix = Buffer.alloc(Math.min(before.size, 32));
+    const { bytesRead: prefixRead } = await file.read(prefix, 0, prefix.length, 0);
+    if (prefixRead !== prefix.length) {
+      throw new Error("local OpenTofu state artifact changed during read");
+    }
+    const canonicalV2 = prefix.toString("utf8").startsWith('{"version":2,');
+    if ((recoveryOnly || !canonicalV2) &&
+      before.size > LOCAL_RECOVERY_STATE_ENVELOPE_MAX_BYTES) {
+      throw new Error("local OpenTofu recovery artifact exceeds envelope size limit");
+    }
+    const bytes = Buffer.alloc(before.size);
+    for (let offset = 0; offset < bytes.length;) {
+      const { bytesRead } = await file.read(bytes, offset, bytes.length - offset, offset);
+      if (bytesRead === 0) throw new Error("local OpenTofu state artifact changed during read");
+      offset += bytesRead;
+    }
+    const after = await file.stat();
+    if (after.dev !== before.dev || after.ino !== before.ino ||
+      after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
+      throw new Error("local OpenTofu state artifact changed during read");
+    }
+    return bytes.toString("utf8");
+  } finally {
+    await file.close();
+  }
+}
+
 async function rawOutputArtifactPath(
   root: string,
   rawOutputRef: string,
@@ -2530,8 +2687,11 @@ async function parseStateArtifactEnvelope(
   text: string,
   expectedStateRef: string,
   cryptoBoundary: SecretBoundaryCrypto,
-): Promise<LocalOpenTofuStateArtifact> {
+): Promise<LocalOpenTofuStateArtifact | LocalOpenTofuRecoveryStateArtifact> {
   const envelope = parseObject(text);
+  if (envelope.version === 3) {
+    return await parseRecoveryStateArtifactEnvelope(envelope, expectedStateRef, cryptoBoundary);
+  }
   if (
     envelope.version !== 2 ||
     stringValue(envelope, "stateRef") !== expectedStateRef ||
@@ -2598,6 +2758,81 @@ async function parseStateArtifactEnvelope(
   };
   await assertLocalStateArtifact(artifact);
   return artifact;
+}
+
+async function parseRecoveryStateArtifactEnvelope(
+  envelope: Record<string, unknown>,
+  expectedStateRef: string,
+  cryptoBoundary: SecretBoundaryCrypto,
+): Promise<LocalOpenTofuRecoveryStateArtifact> {
+  const metadata = {
+    version: 3 as const,
+    kind: "state_recovery" as const,
+    stateRef: expectedStateRef,
+    workspaceId: requiredString(envelope, "workspaceId"),
+    subject: parseStateSubject(envelope.subject),
+    environment: requiredString(envelope, "environment"),
+    generation: envelope.generation,
+    createdByRunId: requiredString(envelope, "createdByRunId"),
+    action: "state_recovery" as const,
+    failedApplyRunId: requiredString(envelope, "failedApplyRunId"),
+    custodyEvidenceDigest: requiredString(envelope, "custodyEvidenceDigest"),
+    stateDigest: requiredString(envelope, "stateDigest"),
+  };
+  if (textKeySet(envelope) !== textKeySet({ ...metadata, encryptedDigest: "", ciphertextBase64: "" }) ||
+    envelope.kind !== "state_recovery" || envelope.action !== "state_recovery" ||
+    envelope.stateRef !== expectedStateRef || metadata.subject?.kind !== "capsule" ||
+    metadata.generation !== 1 || !/^sha256:[0-9a-f]{64}$/u.test(requiredString(envelope, "encryptedDigest")) ||
+    !stringValue(envelope, "ciphertextBase64")) {
+    throw new Error(`local OpenTofu recovery artifact ${expectedStateRef} is malformed`);
+  }
+  const exactMetadata = { ...metadata, subject: metadata.subject, generation: 1 as const };
+  const ciphertext = decodeCanonicalBase64(requiredString(envelope, "ciphertextBase64"),
+    `local OpenTofu recovery artifact ${expectedStateRef} ciphertext`);
+  if (await digestBytes(ciphertext) !== envelope.encryptedDigest) {
+    throw new Error(`local OpenTofu recovery artifact ${expectedStateRef} encrypted digest mismatch`);
+  }
+  const payload = parseObject(await cryptoBoundary.open(ciphertext, "global",
+    localRecoveryStateArtifactAad(exactMetadata)));
+  if (textKeySet(payload) !== "stateBase64") {
+    throw new Error(`local OpenTofu recovery artifact ${expectedStateRef} is not resultless`);
+  }
+  const artifact: LocalOpenTofuRecoveryStateArtifact = {
+    stateRef: expectedStateRef, workspaceId: metadata.workspaceId,
+    subject: metadata.subject, environment: metadata.environment,
+    generation: 1, createdByRunId: metadata.createdByRunId,
+    action: "state_recovery", failedApplyRunId: metadata.failedApplyRunId,
+    custodyEvidenceDigest: metadata.custodyEvidenceDigest,
+    stateDigest: metadata.stateDigest,
+    stateBytes: decodeCanonicalBase64(requiredString(payload, "stateBase64"),
+      `local OpenTofu recovery artifact ${expectedStateRef} state`),
+    encryptedDigest: requiredString(envelope, "encryptedDigest"),
+  };
+  await assertLocalRecoveryStateArtifact(artifact);
+  return artifact;
+}
+
+function localRecoveryStateArtifactAad(metadata: {
+  readonly version: 3;
+  readonly kind: "state_recovery";
+  readonly stateRef: string;
+  readonly workspaceId: string;
+  readonly subject: { readonly kind: "capsule"; readonly id: string };
+  readonly environment: string;
+  readonly generation: 1;
+  readonly createdByRunId: string;
+  readonly action: "state_recovery";
+  readonly failedApplyRunId: string;
+  readonly custodyEvidenceDigest: string;
+  readonly stateDigest: string;
+}): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify({
+    domain: "takosumi.local-state-recovery-artifact@v3", ...metadata,
+  }));
+}
+
+function textKeySet(record: Record<string, unknown>): string {
+  return Object.keys(record).sort().join(",");
 }
 
 function localStateArtifactAad(metadata: {
@@ -2783,7 +3018,9 @@ async function assertLocalStateArtifact(
     !Number.isSafeInteger(artifact.generation) ||
     artifact.generation < 0 ||
     !artifact.createdByRunId.trim() ||
-    !artifact.stateDigest.trim()
+    !artifact.stateDigest.trim() ||
+    (artifact.action !== "apply" && artifact.action !== "destroy" && artifact.action !== "restore") ||
+    !artifact.result || typeof artifact.result !== "object" || Array.isArray(artifact.result)
   ) {
     throw new Error("local OpenTofu state artifact metadata is invalid");
   }
@@ -2805,6 +3042,85 @@ async function assertLocalStateArtifact(
     artifact.stateDigest,
     `local OpenTofu state ${artifact.stateRef}`,
   );
+}
+
+async function assertLocalRecoveryStateArtifact(
+  artifact: Omit<LocalOpenTofuRecoveryStateArtifact, "encryptedDigest"> & { readonly encryptedDigest?: string },
+): Promise<void> {
+  const safeSegment = (value: unknown): value is string =>
+    typeof value === "string" && /^[A-Za-z0-9._-]{1,128}$/u.test(value) && !value.includes("..");
+  if (artifact.action !== "state_recovery" || Object.hasOwn(artifact, "result") ||
+    artifact.subject?.kind !== "capsule" || artifact.generation !== 1 ||
+    !safeSegment(artifact.workspaceId) || !safeSegment(artifact.subject.id) ||
+    !safeSegment(artifact.environment) || !safeSegment(artifact.createdByRunId) ||
+    !safeSegment(artifact.failedApplyRunId) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(artifact.stateDigest) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(artifact.custodyEvidenceDigest) ||
+    (artifact.encryptedDigest !== undefined &&
+      !/^sha256:[0-9a-f]{64}$/u.test(artifact.encryptedDigest)) ||
+    !(artifact.stateBytes instanceof Uint8Array) ||
+    artifact.stateBytes.byteLength === 0 ||
+    artifact.stateBytes.byteLength > 16 * 1024 * 1024 ||
+    !validLocalRecoveryStateBytes(artifact.stateBytes) ||
+    artifact.stateRef !== new ObjectKeyArtifactReferenceAllocator().allocate({
+      kind: "state", workspaceId: artifact.workspaceId,
+      subject: artifact.subject, environment: artifact.environment,
+      generation: 1,
+    })) {
+    throw new Error("local OpenTofu recovery artifact scope or custody is invalid");
+  }
+  await assertDigest(artifact.stateBytes, artifact.stateDigest,
+    `local OpenTofu recovery state ${artifact.stateRef}`);
+}
+
+function validLocalRecoveryStateBytes(bytes: Uint8Array): boolean {
+  let value: unknown;
+  try {
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch { return false; }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const state = value as Record<string, unknown>;
+  if (state.version !== 4 || !Number.isSafeInteger(state.serial) ||
+    (state.serial as number) < 0 ||
+    typeof state.lineage !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(state.lineage) ||
+    typeof state.terraform_version !== "string" ||
+    !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(state.terraform_version) ||
+    !state.outputs || typeof state.outputs !== "object" || Array.isArray(state.outputs) ||
+    !Array.isArray(state.resources)) return false;
+  return state.resources.every((resource) => {
+    if (!resource || typeof resource !== "object" || Array.isArray(resource)) return false;
+    const row = resource as Record<string, unknown>;
+    return (row.module === undefined || typeof row.module === "string") &&
+      (row.mode === "managed" || row.mode === "data") &&
+      typeof row.type === "string" && row.type.length > 0 &&
+      typeof row.name === "string" && row.name.length > 0 &&
+      typeof row.provider === "string" && row.provider.length > 0 &&
+      Array.isArray(row.instances) && row.instances.every((instance: unknown) => {
+        if (!instance || typeof instance !== "object" || Array.isArray(instance)) return false;
+        const item = instance as Record<string, unknown>;
+        return item.attributes !== null && typeof item.attributes === "object" &&
+          !Array.isArray(item.attributes) && Number.isSafeInteger(item.schema_version) &&
+          (item.schema_version as number) >= 0;
+      });
+  });
+}
+
+function assertSameRecoveryState(
+  existing: LocalOpenTofuRecoveryStateArtifact,
+  candidate: Omit<LocalOpenTofuRecoveryStateArtifact, "encryptedDigest">,
+): void {
+  if (existing.stateRef !== candidate.stateRef ||
+    existing.workspaceId !== candidate.workspaceId ||
+    !sameStateSubject(existing.subject, candidate.subject) ||
+    existing.environment !== candidate.environment ||
+    existing.generation !== candidate.generation ||
+    existing.createdByRunId !== candidate.createdByRunId ||
+    existing.failedApplyRunId !== candidate.failedApplyRunId ||
+    existing.custodyEvidenceDigest !== candidate.custodyEvidenceDigest ||
+    existing.stateDigest !== candidate.stateDigest) {
+    throw new Error(`local OpenTofu recovery target ${candidate.stateRef} is already committed by another custody identity`);
+  }
 }
 
 function assertLocalRestoreResult(artifact: LocalOpenTofuStateArtifact): void {
@@ -3025,10 +3341,10 @@ function sameStateSubject(
 }
 
 function assertLocalMutationScope(
-  artifact: LocalOpenTofuStateArtifact,
+  artifact: LocalOpenTofuStateArtifact | LocalOpenTofuRecoveryStateArtifact,
   scope: DispatchStateScope,
   runId: string,
-  action: "apply" | "destroy" | "restore",
+  action: "apply" | "destroy" | "restore" | "state_recovery",
 ): void {
   const subject = requiredStateSubject(scope, runId);
   if (

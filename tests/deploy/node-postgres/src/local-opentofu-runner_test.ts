@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import {
   mkdir,
   mkdtemp,
+  open,
   readFile,
   rm,
   unlink,
@@ -20,6 +21,7 @@ import {
   type LocalOpenTofuProviderLockfileArtifact,
   type SourceArchiveStore,
 } from "../../../../deploy/node-postgres/src/local-opentofu-runner.ts";
+import { stateVersionIdForRecoveryRun } from "../../../../core/domains/deploy-control/operator_state_recovery.ts";
 import { generateOpenTofuChildModuleRoot } from "../../../../lib/rootgen/src/mod.ts";
 import { workspaceForRun } from "../../../../runner/lib/artifacts.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
@@ -1227,6 +1229,187 @@ test("local provider lockfile store preserves an empty present artifact separate
     expect(committed.sizeBytes).toBe(0);
     expect(reopened?.digest).toBe(digest);
     expect(reopened?.bytes).toEqual(bytes);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("local state store durably keeps recovered state resultless and adopts only an exact retry", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "takosumi-local-recovery-"));
+  try {
+    const stateRef = "workspaces/workspace_local/capsules/inst_local/environments/production/state-versions/00000001.tfstate.enc";
+    const stateBytes = new TextEncoder().encode('{"version":4,"terraform_version":"1.9.8","serial":1,"lineage":"b8d6c5f4-8f27-4d16-8b90-839c7f770001","outputs":{},"resources":[]}');
+    const stateDigest = `sha256:${createHash("sha256").update(stateBytes).digest("hex")}`;
+    const store = createFileOpenTofuStateArtifactStore(join(tempDir, "state"), TEST_STATE_CRYPTO);
+    const input = {
+      stateRef, workspaceId: "workspace_local", subject: { kind: "capsule" as const, id: "inst_local" },
+      environment: "production", generation: 1 as const,
+      createdByRunId: "run_recovery_local", action: "state_recovery" as const,
+      failedApplyRunId: "apply_failed_local", custodyEvidenceDigest: `sha256:${"a".repeat(64)}`,
+      stateDigest, stateBytes,
+    };
+    const committed = await store.commitRecovery(input);
+    expect(committed.action).toBe("state_recovery");
+    expect("result" in committed).toBe(false);
+    expect(committed.encryptedDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const reopened = await createFileOpenTofuStateArtifactStore(join(tempDir, "state"), TEST_STATE_CRYPTO).read(stateRef);
+    expect(reopened).toEqual(committed);
+    expect(await store.readRecovery(stateRef)).toEqual(committed);
+    expect(await store.commitRecovery(input)).toEqual(committed);
+    await expect(store.commitRecovery({ ...input, failedApplyRunId: "apply_other" })).rejects.toThrow();
+    await expect(store.commitRecovery({ ...input, stateDigest: `sha256:${"b".repeat(64)}` })).rejects.toThrow();
+    await expect(store.commitRecovery({ ...input, result: {} } as never)).rejects.toThrow();
+    await expect(store.commit({ ...input, result: { stateDigest } } as never)).rejects.toThrow();
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("local recovery readback rejects an oversized occupied v3 file before allocation", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "takosumi-local-recovery-oversize-"));
+  try {
+    const stateRef = "workspaces/workspace_local/capsules/inst_local/environments/production/state-versions/00000001.tfstate.enc";
+    const key = createHash("sha256").update(stateRef).digest("hex");
+    const path = join(tempDir, "state", key.slice(0, 2), `${key}.json`);
+    await mkdir(join(tempDir, "state", key.slice(0, 2)), { recursive: true });
+    await writeFile(path, '{"version":3,"kind":"state_recovery"');
+    const file = await open(path, "r+");
+    try { await file.truncate(33 * 1024 * 1024); } finally { await file.close(); }
+    const store = createFileOpenTofuStateArtifactStore(join(tempDir, "state"), TEST_STATE_CRYPTO);
+    await expect(store.read(stateRef)).rejects.toThrow(/recovery.*size limit/);
+    await writeFile(path, '{"version":2,"kind":"spoofed-v2-prefix"');
+    const spoofed = await open(path, "r+");
+    try { await spoofed.truncate(33 * 1024 * 1024); } finally { await spoofed.close(); }
+    await expect(store.readRecovery(stateRef)).rejects.toThrow(/recovery.*size limit/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("local recovery reader rejects altered v3 custody metadata and fabricated results", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "takosumi-local-recovery-tamper-"));
+  try {
+    const stateRef = "workspaces/workspace_local/capsules/inst_local/environments/production/state-versions/00000001.tfstate.enc";
+    const stateBytes = new TextEncoder().encode('{"version":4,"terraform_version":"1.9.8","serial":1,"lineage":"b8d6c5f4-8f27-4d16-8b90-839c7f770001","outputs":{},"resources":[]}');
+    const stateDigest = `sha256:${createHash("sha256").update(stateBytes).digest("hex")}`;
+    const store = createFileOpenTofuStateArtifactStore(join(tempDir, "state"), TEST_STATE_CRYPTO);
+    const candidate = { stateRef, workspaceId: "workspace_local",
+      subject: { kind: "capsule" as const, id: "inst_local" }, environment: "production",
+      generation: 1 as const, createdByRunId: "run_recovery_local", action: "state_recovery" as const,
+      failedApplyRunId: "apply_failed_local", custodyEvidenceDigest: `sha256:${"a".repeat(64)}`,
+      stateDigest, stateBytes };
+    await store.commitRecovery(candidate);
+    const key = createHash("sha256").update(stateRef).digest("hex");
+    const path = join(tempDir, "state", key.slice(0, 2), `${key}.json`);
+    const original = await readFile(path, "utf8");
+    for (const patch of [
+      { action: "apply" },
+      { failedApplyRunId: "apply_other" },
+      { custodyEvidenceDigest: `sha256:${"b".repeat(64)}` },
+      { encryptedDigest: `sha256:${"b".repeat(64)}` },
+      { result: { stateDigest } },
+    ]) {
+      await writeFile(path, `${JSON.stringify({ ...JSON.parse(original), ...patch })}\n`);
+      await expect(store.read(stateRef)).rejects.toThrow();
+      await expect(store.commitRecovery(candidate)).rejects.toThrow();
+    }
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("local HTTP Plan and Destroy Plan consume resultless recovered prior state without provider dispatch", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "takosumi-local-recovery-plan-"));
+  const stateRef = "workspaces/workspace_local/capsules/inst_local/environments/production/state-versions/00000001.tfstate.enc";
+  const stateBytes = new TextEncoder().encode('{"version":4,"terraform_version":"1.9.8","serial":1,"lineage":"b8d6c5f4-8f27-4d16-8b90-839c7f770001","outputs":{},"resources":[]}');
+  const stateDigest = `sha256:${createHash("sha256").update(stateBytes).digest("hex")}`;
+  const store = createFileOpenTofuStateArtifactStore(join(tempDir, "state"), TEST_STATE_CRYPTO);
+  const recovered = await store.commitRecovery({
+    stateRef, workspaceId: "workspace_local", subject: { kind: "capsule", id: "inst_local" },
+    environment: "production", generation: 1, createdByRunId: "run_recovery_local",
+    action: "state_recovery", failedApplyRunId: "apply_failed_local",
+    custodyEvidenceDigest: `sha256:${"a".repeat(64)}`, stateDigest, stateBytes,
+  });
+  const restored: Uint8Array[] = [];
+  let planPosts = 0;
+  const server = Bun.serve({ port: 0, async fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path === "/healthz") return Response.json({ ok: true, mutationCustodyMode: "local-http" });
+    if (request.method === "PUT" && path.endsWith("/artifacts/tfstate")) {
+      restored.push(new Uint8Array(await request.arrayBuffer()));
+      return new Response(null, { status: 204 });
+    }
+    if (request.method === "POST") {
+      planPosts += 1;
+      return new Response("plan runner unavailable", { status: 503 });
+    }
+    return new Response("not found", { status: 404 });
+  } });
+  try {
+    const runner = createHttpOpenTofuRunner({
+      archiveStore: { write: async () => {}, read: async () => new Uint8Array() },
+      stateStore: createFileOpenTofuStateArtifactStore(join(tempDir, "state"), TEST_STATE_CRYPTO),
+      baseUrl: server.url.href,
+    });
+    for (const operation of ["create", "destroy"] as const) {
+      await expect(runner.plan({
+        planRun: { ...localPlanRun(`plan_recovered_${operation}`, operation),
+          capsuleId: "inst_local" },
+        runnerProfile: createLocalOpenTofuRunnerProfile(), variables: {},
+        stateScope: {
+          workspaceId: "workspace_local", subject: { kind: "capsule", id: "inst_local" },
+          environment: "production", generation: 1, stateRef,
+          priorState: { generation: 1, stateRef,
+            digest: recovered.stateDigest, createdByRunId: recovered.createdByRunId },
+        },
+      } as never)).rejects.toBeInstanceOf(OpenTofuRunnerExecutionError);
+    }
+    expect(restored).toEqual([stateBytes, stateBytes]);
+    expect(planPosts).toBe(2); // Plan execution only; no Apply/Destroy mutation.
+    expect((await store.read(stateRef))?.action).toBe("state_recovery");
+  } finally {
+    server.stop(true);
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("local Restore accepts a recovered source only through exact Core source authority", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "takosumi-local-recovery-restore-"));
+  try {
+    const sourceRef = "workspaces/workspace_local/capsules/inst_local/environments/production/state-versions/00000001.tfstate.enc";
+    const targetRef = "workspaces/workspace_local/capsules/inst_local/environments/production/state-versions/00000002.tfstate.enc";
+    const stateBytes = new TextEncoder().encode('{"version":4,"terraform_version":"1.9.8","serial":1,"lineage":"b8d6c5f4-8f27-4d16-8b90-839c7f770001","outputs":{},"resources":[]}');
+    const digest = `sha256:${createHash("sha256").update(stateBytes).digest("hex")}`;
+    const store = createFileOpenTofuStateArtifactStore(join(tempDir, "state"), TEST_STATE_CRYPTO);
+    await store.commitRecovery({
+      stateRef: sourceRef, workspaceId: "workspace_local",
+      subject: { kind: "capsule", id: "inst_local" }, environment: "production",
+      generation: 1, createdByRunId: "run_recovery_local", action: "state_recovery",
+      failedApplyRunId: "apply_failed_local", custodyEvidenceDigest: `sha256:${"a".repeat(64)}`,
+      stateDigest: digest, stateBytes,
+    });
+    const runner = createHttpOpenTofuRunner({
+      archiveStore: { write: async () => {}, read: async () => new Uint8Array() },
+      stateStore: store, baseUrl: "http://127.0.0.1:1",
+    });
+    const sourceState = {
+      stateVersionId: await stateVersionIdForRecoveryRun("run_recovery_local"),
+      workspaceId: "workspace_local", capsuleId: "inst_local", environment: "production",
+      generation: 1, stateRef: sourceRef, digest, createdByRunId: "run_recovery_local",
+    };
+    const job = { runId: "restore_recovered_local", sourceState,
+      stateScope: { workspaceId: "workspace_local", subject: { kind: "capsule", id: "inst_local" },
+        environment: "production", generation: 2, stateRef: targetRef } };
+    await expect(runner.restore!(job as never, {
+      sourceAuthority: { readExact: async () => ({ ...sourceState, digest: `sha256:${"b".repeat(64)}` }) },
+    } as never)).rejects.toThrow(/Core StateVersion authority/);
+    expect(await store.read(targetRef)).toBeUndefined();
+    const restored = await runner.restore!(job as never, {
+      sourceAuthority: { readExact: async () => sourceState },
+    } as never);
+    expect(restored.state.digest).toBe(digest);
+    expect((await store.read(sourceRef))?.action).toBe("state_recovery");
+    expect((await store.read(targetRef))?.action).toBe("restore");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
