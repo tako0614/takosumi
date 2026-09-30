@@ -25,7 +25,6 @@ export async function stateVersionIdForRecoveryRun(runId: string): Promise<strin
   const digest = await stableJsonDigest({ kind: "takosumi.state-recovery-state-version-id@v1", runId });
   return `state_${digest.slice("sha256:".length)}`;
 }
-
 /** Returned only by an operator-selected encrypted state adapter verifier. */
 export interface VerifiedRecoveryArtifact {
   readonly format: typeof VERIFIED_RECOVERY_ARTIFACT_FORMAT;

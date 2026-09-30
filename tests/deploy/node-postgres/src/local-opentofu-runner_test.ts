@@ -826,6 +826,9 @@ async function assertAmbiguousMutationResponse(
         }
         return Response.json({ status: "absent" }, { status: 404 });
       }
+      if (url.pathname === `/runs/${runId}/plan-state-metadata`) {
+        return Response.json({ lineage: "", serial: 0 });
+      }
       if (url.pathname === `/runs/${runId}/mutation-reservation`) {
         return Response.json({ token: crypto.randomUUID() }, { status: 201 });
       }
@@ -864,6 +867,7 @@ async function assertAmbiguousMutationResponse(
           kind: "runner-local",
           ref: `runner-local://${planRunId}/tfplan`,
           digest: planDigest,
+          sizeBytes: planBytes.byteLength,
         },
         runnerProfile: createLocalOpenTofuRunnerProfile(),
         executionEvidenceAuthority: testExecutionEvidenceAuthority(),
@@ -901,6 +905,305 @@ test.each(["absent", "unavailable"] as const)(
   "HTTP OpenTofu runner does not replay an ambiguous mutation response with %s completion",
   assertAmbiguousMutationResponse,
 );
+
+test.each([
+  { lineage: "canonical-lineage", serial: 8 },
+  { lineage: "different-lineage", serial: 7 },
+] as const)(
+  "local runner rejects a saved Plan with stale state metadata before reserving or restoring state",
+  async (planMetadata) => {
+    const runId = `apply_stale_${crypto.randomUUID()}`;
+    const planRunId = `plan_${runId}`;
+    const planBytes = new TextEncoder().encode("captured-reviewed-plan");
+    const planDigest = `sha256:${createHash("sha256")
+      .update(planBytes)
+      .digest("hex")}`;
+    const priorStateBytes = new TextEncoder().encode(
+      JSON.stringify({ version: 4, lineage: "canonical-lineage", serial: 7 }),
+    );
+    const priorStateDigest = `sha256:${createHash("sha256")
+      .update(priorStateBytes)
+      .digest("hex")}`;
+    const requests: string[] = [];
+    let reserveCount = 0;
+    let stateWrites = 0;
+    let providerPosts = 0;
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        requests.push(`${request.method} ${url.pathname}`);
+        if (url.pathname === "/healthz") {
+          return Response.json({ ok: true, mutationCustodyMode: "local-http" });
+        }
+        if (url.pathname === `/runs/${runId}/completion`) {
+          return Response.json({ status: "absent" }, { status: 404 });
+        }
+        if (url.pathname === `/runs/${planRunId}/artifacts/tfplan`) {
+          return new Response(planBytes);
+        }
+        if (url.pathname === `/runs/${runId}/plan-state-metadata`) {
+          expect(request.method).toBe("POST");
+          expect(request.headers.get("x-takosumi-plan-digest")).toBe(planDigest);
+          expect(new Uint8Array(await request.arrayBuffer())).toEqual(planBytes);
+          return Response.json(planMetadata);
+        }
+        if (url.pathname === `/runs/${runId}/mutation-reservation`) {
+          reserveCount += 1;
+          return Response.json({ token: crypto.randomUUID() }, { status: 201 });
+        }
+        if (request.method === "PUT") {
+          stateWrites += 1;
+          return new Response(null, { status: 204 });
+        }
+        if (request.method === "POST" && url.pathname === `/runs/${runId}`) {
+          providerPosts += 1;
+          return Response.json({ status: "succeeded" });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    try {
+      const runner = createHttpOpenTofuRunner({
+        archiveStore: {
+          write: async () => {},
+          read: async () => new Uint8Array(),
+        },
+        stateStore: {
+          ...emptyLocalStateStore(),
+          read: async (stateRef: string) => stateRef === "state://resource_local/1"
+            ? {
+              stateRef,
+              workspaceId: "workspace_local",
+              subject: { kind: "resource", id: "resource_local" },
+              environment: "default",
+              generation: 1,
+              createdByRunId: "apply_prior",
+              action: "apply" as const,
+              stateDigest: priorStateDigest,
+              stateBytes: priorStateBytes,
+              result: {} as never,
+            }
+            : undefined,
+        },
+        baseUrl: server.url.href,
+      });
+      await expect(runner.apply!({
+        applyRun: localApplyRun(runId, planRunId, "create"),
+        planRun: { ...localPlanRun(planRunId, "create"), planDigest, planArtifact: {
+          kind: "runner-local",
+          ref: `runner-local://${planRunId}/tfplan`,
+          digest: planDigest,
+          sizeBytes: planBytes.byteLength,
+        } },
+        planArtifact: {
+          kind: "runner-local",
+          ref: `runner-local://${planRunId}/tfplan`,
+          digest: planDigest,
+          sizeBytes: planBytes.byteLength,
+        },
+        runnerProfile: createLocalOpenTofuRunnerProfile(),
+        executionEvidenceAuthority: testExecutionEvidenceAuthority(),
+        executionEvidenceCommit: {
+          stateVersionId: "state_version_fixture",
+          outputId: "output_fixture",
+        },
+        stateScope: {
+          ...stateScope(2, "state://resource_local/2", {
+            generation: 1,
+            stateRef: "state://resource_local/1",
+            digest: priorStateDigest,
+            createdByRunId: "apply_prior",
+          }),
+        },
+      } as never)).rejects.toThrow("local saved Plan metadata preflight failed");
+      expect(reserveCount).toBe(0);
+      expect(stateWrites).toBe(0);
+      expect(providerPosts).toBe(0);
+      expect(requests).not.toContain(`PUT /runs/${runId}/artifacts/tfstate`);
+    } finally {
+      server.stop(true);
+    }
+  },
+);
+
+test("local runner permits a legacy missing-size first saved Plan against absent canonical state", async () => {
+  const runId = `apply_initial_${crypto.randomUUID()}`;
+  const planRunId = `plan_${runId}`;
+  const planBytes = new TextEncoder().encode("captured-initial-plan");
+  const planDigest = `sha256:${createHash("sha256")
+    .update(planBytes)
+    .digest("hex")}`;
+  let reserveCount = 0;
+  let restoredPlanBytes: Uint8Array | undefined;
+  let applyPostCount = 0;
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url);
+      if (url.pathname === "/healthz") {
+        return Response.json({ ok: true, mutationCustodyMode: "local-http" });
+      }
+      if (url.pathname === `/runs/${runId}/completion`) {
+        return Response.json({ status: "absent" }, { status: 404 });
+      }
+      if (url.pathname === `/runs/${planRunId}/artifacts/tfplan`) {
+        return new Response(planBytes);
+      }
+      if (url.pathname === `/runs/${runId}/plan-state-metadata`) {
+        expect(request.headers.get("x-takosumi-plan-digest")).toBe(planDigest);
+        expect(new Uint8Array(await request.arrayBuffer())).toEqual(planBytes);
+        return Response.json({ lineage: "", serial: 0 });
+      }
+      if (url.pathname === `/runs/${runId}/mutation-reservation`) {
+        reserveCount += 1;
+        return Response.json({ token: crypto.randomUUID() }, { status: 201 });
+      }
+      if (request.method === "PUT" && url.pathname.endsWith("/artifacts/tfplan")) {
+        restoredPlanBytes = new Uint8Array(await request.arrayBuffer());
+        return new Response(null, { status: 204 });
+      }
+      if (request.method === "POST" && url.pathname === `/runs/${runId}`) {
+        applyPostCount += 1;
+        return new Response("provider runner unavailable", { status: 503 });
+      }
+      return new Response("not found", { status: 404 });
+    },
+  });
+  try {
+    const runner = createHttpOpenTofuRunner({
+      archiveStore: { write: async () => {}, read: async () => new Uint8Array() },
+      stateStore: emptyLocalStateStore(),
+      baseUrl: server.url.href,
+    });
+    await expect(runner.apply!({
+      applyRun: localApplyRun(runId, planRunId, "create"),
+      planRun: localPlanRun(planRunId, "create"),
+      planArtifact: {
+        kind: "runner-local",
+        ref: `runner-local://${planRunId}/tfplan`,
+        digest: planDigest,
+      },
+      runnerProfile: createLocalOpenTofuRunnerProfile(),
+      executionEvidenceAuthority: testExecutionEvidenceAuthority(),
+      executionEvidenceCommit: {
+        stateVersionId: "state_version_fixture",
+        outputId: "output_fixture",
+      },
+      stateScope: stateScope(1, "state://resource_local/1"),
+    } as never)).rejects.toBeInstanceOf(OpenTofuRunnerExecutionError);
+    expect(reserveCount).toBe(1);
+    expect(restoredPlanBytes).toEqual(planBytes);
+    expect(applyPostCount).toBe(1);
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("local runner restores the exact captured saved Plan and prior state bytes", async () => {
+  const runId = `apply_same_bytes_${crypto.randomUUID()}`;
+  const planRunId = `plan_${runId}`;
+  const planBytes = new TextEncoder().encode("captured-reviewed-plan-with-prior-state");
+  const planDigest = `sha256:${createHash("sha256")
+    .update(planBytes)
+    .digest("hex")}`;
+  const priorStateBytes = new TextEncoder().encode(
+    '{ "version": 4, "lineage": "stable-lineage", "serial": 12 }\n',
+  );
+  const priorStateDigest = `sha256:${createHash("sha256")
+    .update(priorStateBytes)
+    .digest("hex")}`;
+  let priorStateReads = 0;
+  let restoredPlanBytes: Uint8Array | undefined;
+  let restoredStateBytes: Uint8Array | undefined;
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url);
+      if (url.pathname === "/healthz") {
+        return Response.json({ ok: true, mutationCustodyMode: "local-http" });
+      }
+      if (url.pathname === `/runs/${runId}/completion`) {
+        return Response.json({ status: "absent" }, { status: 404 });
+      }
+      if (url.pathname === `/runs/${planRunId}/artifacts/tfplan`) {
+        return new Response(planBytes);
+      }
+      if (url.pathname === `/runs/${runId}/plan-state-metadata`) {
+        expect(new Uint8Array(await request.arrayBuffer())).toEqual(planBytes);
+        return Response.json({ lineage: "stable-lineage", serial: 12 });
+      }
+      if (url.pathname === `/runs/${runId}/mutation-reservation`) {
+        return Response.json({ token: crypto.randomUUID() }, { status: 201 });
+      }
+      if (request.method === "PUT" && url.pathname.endsWith("/artifacts/tfstate")) {
+        restoredStateBytes = new Uint8Array(await request.arrayBuffer());
+        return new Response(null, { status: 204 });
+      }
+      if (request.method === "PUT" && url.pathname.endsWith("/artifacts/tfplan")) {
+        restoredPlanBytes = new Uint8Array(await request.arrayBuffer());
+        return new Response(null, { status: 204 });
+      }
+      if (request.method === "POST" && url.pathname === `/runs/${runId}`) {
+        return new Response("provider runner unavailable", { status: 503 });
+      }
+      return new Response("not found", { status: 404 });
+    },
+  });
+  try {
+    const runner = createHttpOpenTofuRunner({
+      archiveStore: { write: async () => {}, read: async () => new Uint8Array() },
+      stateStore: {
+        ...emptyLocalStateStore(),
+        async read(stateRef: string) {
+          if (stateRef === "state://resource_local/1") priorStateReads += 1;
+          return stateRef === "state://resource_local/1"
+            ? {
+              stateRef,
+              workspaceId: "workspace_local",
+              subject: { kind: "resource", id: "resource_local" },
+              environment: "default",
+              generation: 1,
+              createdByRunId: "apply_prior",
+              action: "apply" as const,
+              stateDigest: priorStateDigest,
+              stateBytes: priorStateBytes,
+              result: {} as never,
+            }
+            : undefined;
+        },
+      },
+      baseUrl: server.url.href,
+    });
+    await expect(runner.apply!({
+      applyRun: localApplyRun(runId, planRunId, "create"),
+      planRun: localPlanRun(planRunId, "create"),
+      planArtifact: {
+        kind: "runner-local",
+        ref: `runner-local://${planRunId}/tfplan`,
+        digest: planDigest,
+        sizeBytes: planBytes.byteLength,
+      },
+      runnerProfile: createLocalOpenTofuRunnerProfile(),
+      executionEvidenceAuthority: testExecutionEvidenceAuthority(),
+      executionEvidenceCommit: {
+        stateVersionId: "state_version_fixture",
+        outputId: "output_fixture",
+      },
+      stateScope: stateScope(2, "state://resource_local/2", {
+        generation: 1,
+        stateRef: "state://resource_local/1",
+        digest: priorStateDigest,
+        createdByRunId: "apply_prior",
+      }),
+    } as never)).rejects.toBeInstanceOf(OpenTofuRunnerExecutionError);
+    expect(priorStateReads).toBe(1);
+    expect(restoredPlanBytes).toEqual(planBytes);
+    expect(restoredStateBytes).toEqual(priorStateBytes);
+  } finally {
+    server.stop(true);
+  }
+});
 
 test("local provider lockfile store preserves an empty present artifact separately from absence", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "takosumi-local-lockfile-empty-"));

@@ -226,7 +226,6 @@ no lifecycle-start/dispatch or positive provider-success evidence contradicts
 it. Its marker names the recovery Run as the StateVersion creator and the
 original failed Apply separately. This is not a claim that the provider failed
 or that cleanup ran.
-
 Current Capsule lifecycle code does not release historical public-host
 reservation rows or perform unrelated bulk OIDC-client cleanup; physical
 retirement of those historical rows waits for operator inventory.

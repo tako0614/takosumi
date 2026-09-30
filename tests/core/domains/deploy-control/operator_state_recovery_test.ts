@@ -56,7 +56,6 @@ class CountD1Bindings extends SqliteFakeD1 {
     };
   }
 }
-
 const NOW = "2026-06-07T00:00:00.000Z";
 const DIGEST = `sha256:${"a".repeat(64)}` as const;
 const ENCRYPTED = `sha256:${"b".repeat(64)}` as const;
@@ -450,7 +449,6 @@ test("recovery rejects a changed public Plan and Workspace management epoch", as
       .toBeUndefined();
   }
 });
-
 test("recovery rejects changed scope, capsule, configuration and newer work without a partial state", async () => {
   for (const [label, store] of await stores()) {
     const command = await fixture(store, `guard_${label}`);

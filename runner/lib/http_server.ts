@@ -5,6 +5,7 @@
 // Pure code-motion out of runner/entrypoint.ts (P3 god-file split). No
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
 import type { RunCredentialRefreshUpdate, RunRequest } from "./types.ts";
+import { savedPlanStateMetadata, SAVED_PLAN_PREFLIGHT_MAX_BYTES } from "./saved_plan_state_metadata.ts";
 import { readJsonObject, parseAction } from "./util.ts";
 import { redactRunnerOutput } from "./redaction.ts";
 import {
@@ -142,6 +143,28 @@ export async function handleRunnerRequestWithDependencies(
     const reservationMatch = /^\/runs\/([^/]+)\/mutation-reservation$/.exec(
       url.pathname,
     );
+    const planMetadataMatch = /^\/runs\/([^/]+)\/plan-state-metadata$/.exec(
+      url.pathname,
+    );
+    if (planMetadataMatch) {
+      if (request.method !== "POST") {
+        return Response.json({ error: "method not allowed" }, {
+          status: 405, headers: { allow: "POST" },
+        });
+      }
+      try {
+        const expectedDigest = request.headers.get("x-takosumi-plan-digest") ?? "";
+        const bytes = await readBoundedRequestBytes(
+          request, SAVED_PLAN_PREFLIGHT_MAX_BYTES,
+        );
+        return Response.json(await savedPlanStateMetadata(bytes, expectedDigest));
+      } catch {
+        // Never expose ZIP members or state values in an HTTP error.
+        return Response.json({ error: "saved Plan metadata rejected" }, {
+          status: 409,
+        });
+      }
+    }
     if (reservationMatch) {
       if (custodyMode !== "local-http")
         return Response.json({ error: "not found" }, { status: 404 });
@@ -535,4 +558,39 @@ async function readBoundedJsonObject(
     throw new Error("request body must be an object");
   }
   return value as Record<string, unknown>;
+}
+
+async function readBoundedRequestBytes(
+  request: Request,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  const declared = request.headers.get("content-length");
+  if (declared !== null && Number(declared) > maxBytes) {
+    throw new Error("request too large");
+  }
+  if (!request.body) throw new Error("request body is missing");
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel();
+        throw new Error("request too large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }

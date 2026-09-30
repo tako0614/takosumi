@@ -729,6 +729,10 @@ test("HTTP OpenTofu runner carries direct provider evidence through apply and de
       if (url.pathname === "/healthz")
         return Response.json({ ok: true, mutationCustodyMode: "local-http" });
       requests.push(`${request.method} ${url.pathname}`);
+      if (request.method === "POST" &&
+          /^\/runs\/(apply_http_direct|destroy_http_direct)\/plan-state-metadata$/u.test(url.pathname)) {
+        return Response.json({ lineage: "", serial: 0 });
+      }
       if (
         request.method === "PUT" &&
         /^\/runs\/(apply_http_direct|destroy_http_direct)\/mutation-reservation$/u.test(
@@ -935,15 +939,17 @@ test("HTTP OpenTofu runner carries direct provider evidence through apply and de
     expect(stored).toHaveLength(2);
     expect(requests).toEqual([
       "GET /runs/apply_http_direct/completion",
-      "PUT /runs/apply_http_direct/mutation-reservation",
       "GET /runs/plan_http_apply/artifacts/tfplan",
+      "POST /runs/apply_http_direct/plan-state-metadata",
+      "PUT /runs/apply_http_direct/mutation-reservation",
       "PUT /runs/apply_http_direct/artifacts/tfplan",
       "PUT /runs/apply_http_direct/provider-lockfile/restore",
       "POST /runs/apply_http_direct",
       "GET /runs/apply_http_direct/artifacts/tfstate",
       "GET /runs/destroy_http_direct/completion",
-      "PUT /runs/destroy_http_direct/mutation-reservation",
       "GET /runs/plan_http_destroy/artifacts/tfplan",
+      "POST /runs/destroy_http_direct/plan-state-metadata",
+      "PUT /runs/destroy_http_direct/mutation-reservation",
       "PUT /runs/destroy_http_direct/artifacts/tfplan",
       "PUT /runs/destroy_http_direct/provider-lockfile/restore",
       "POST /runs/destroy_http_direct",
@@ -967,6 +973,9 @@ test("local reviewed Plan refuses a foreign lock ref before provider dispatch", 
       if (path === "/healthz")
         return Response.json({ ok: true, mutationCustodyMode: "local-http" });
       requests.push(`${request.method} ${path}`);
+      if (request.method === "POST" && path === "/runs/apply_foreign/plan-state-metadata") {
+        return Response.json({ lineage: "", serial: 0 });
+      }
       if (
         request.method === "PUT" &&
         path === "/runs/apply_foreign/mutation-reservation"
@@ -1050,8 +1059,9 @@ test("local reviewed Plan refuses a foreign lock ref before provider dispatch", 
     ).rejects.toThrow("local reviewed Plan provider lock authority is invalid");
     expect(requests).toEqual([
       "GET /runs/apply_foreign/completion",
-      "PUT /runs/apply_foreign/mutation-reservation",
       "GET /runs/plan_owned/artifacts/tfplan",
+      "POST /runs/apply_foreign/plan-state-metadata",
+      "PUT /runs/apply_foreign/mutation-reservation",
       "PUT /runs/apply_foreign/artifacts/tfplan",
     ]);
   } finally {
@@ -1071,6 +1081,9 @@ test("local reviewed Plan refuses a foreign lock ref before provider dispatch", 
       if (path === "/healthz")
         return Response.json({ ok: true, mutationCustodyMode: "local-http" });
       requests.push(`${request.method} ${path}`);
+      if (request.method === "POST" && path === "/runs/apply_foreign/plan-state-metadata") {
+        return Response.json({ lineage: "", serial: 0 });
+      }
       if (
         request.method === "PUT" &&
         path === "/runs/apply_foreign/mutation-reservation"
@@ -1154,8 +1167,9 @@ test("local reviewed Plan refuses a foreign lock ref before provider dispatch", 
     ).rejects.toThrow("local reviewed Plan provider lock authority is invalid");
     expect(requests).toEqual([
       "GET /runs/apply_foreign/completion",
-      "PUT /runs/apply_foreign/mutation-reservation",
       "GET /runs/plan_owned/artifacts/tfplan",
+      "POST /runs/apply_foreign/plan-state-metadata",
+      "PUT /runs/apply_foreign/mutation-reservation",
       "PUT /runs/apply_foreign/artifacts/tfplan",
     ]);
   } finally {
@@ -1229,6 +1243,9 @@ esac
     port: 0,
     async fetch(request) {
       const path = new URL(request.url).pathname;
+      if (request.method === "POST" && path === `/runs/${runId}/plan-state-metadata`) {
+        return Response.json({ lineage: "", serial: 0 });
+      }
       if (
         request.method === "PUT" &&
         path === `/runs/${runId}/source-archive/restore`
@@ -1487,6 +1504,9 @@ test("HTTP OpenTofu runner durably returns failed apply state without replaying 
       if (url.pathname === "/healthz")
         return Response.json({ ok: true, mutationCustodyMode: "local-http" });
       requests.push(`${request.method} ${url.pathname}`);
+      if (request.method === "POST" && url.pathname === "/runs/apply_partial/plan-state-metadata") {
+        return Response.json({ lineage: "", serial: 0 });
+      }
       if (
         request.method === "GET" &&
         url.pathname === "/runs/apply_partial/completion"
@@ -1648,6 +1668,9 @@ test("HTTP OpenTofu runner durably returns failed destroy state without replayin
       if (url.pathname === "/healthz")
         return Response.json({ ok: true, mutationCustodyMode: "local-http" });
       requests.push(`${request.method} ${url.pathname}`);
+      if (request.method === "POST" && url.pathname === "/runs/destroy_partial/plan-state-metadata") {
+        return Response.json({ lineage: "", serial: 0 });
+      }
       if (
         request.method === "GET" &&
         url.pathname === "/runs/destroy_partial/completion"
