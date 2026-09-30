@@ -37,6 +37,7 @@ test("runner image copies the whole runtime import closure", async () => {
     "contract/reference/ip-classification.ts",
     "contract/repository-manifest.ts",
     "contract/sources.ts",
+    "core/shared/open-tofu-state-metadata.ts",
     "lib/opentofu-configuration/src/mod.ts",
     "lib/rootgen/src/mod.ts",
   ]);

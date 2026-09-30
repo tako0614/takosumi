@@ -30,8 +30,8 @@ import { PROVIDER_LOCK_RESTORE_DIGEST_HEADER } from "../../../../runner/lib/tran
 const PLAN_BYTES = new TextEncoder().encode("reviewed tfplan bytes");
 const PLAN_DIGEST =
   "sha256:0fd9817656d95201f5c8073b9b4b4c2d5bfe8468b69e7bf771e5311b122a90e7";
-const STATE_BYTES = new TextEncoder().encode('{"serial":1}');
-const UPDATED_STATE_BYTES = new TextEncoder().encode('{"serial":2}');
+const STATE_BYTES = new TextEncoder().encode('{"lineage":"","serial":0}');
+const UPDATED_STATE_BYTES = new TextEncoder().encode('{"lineage":"","serial":1}');
 const RUN_CREDENTIAL_SIGNING_SECRET =
   "0123456789abcdef0123456789abcdef0123456789abcdef";
 const RUN_CREDENTIAL_PROVIDER =
@@ -1844,7 +1844,7 @@ test("OpenTofu runner Durable Object rejects an unknown release command id from 
   assert.equal(JSON.stringify(storage.entries()).includes(secret), false);
 });
 
-test("OpenTofu runner Durable Object restores reviewed R2 plan artifact before apply", async () => {
+test("OpenTofu runner Durable Object restores a legacy missing-size reviewed Plan before apply", async () => {
   const calls: string[] = [];
   const r2 = new FakeR2Bucket();
   const crypto = StateArtifactCrypto.fromEnv({
@@ -1969,6 +1969,7 @@ test("compatibility DO dispatches artifact Plan without a lock restore marker", 
             kind: "object-storage",
             ref: `r2://takos-artifacts/opentofu-plan-runs/${runId}/tfplan`,
             digest: PLAN_DIGEST,
+            sizeBytes: PLAN_BYTES.byteLength,
           },
           planRun: {
             id: runId,
@@ -2022,6 +2023,7 @@ test("OpenTofu runner refuses a destroy Plan lock from another artifact before p
             kind: "object-storage",
             ref: `r2://takos-artifacts/opentofu-plan-runs/${runId}/tfplan`,
             digest: PLAN_DIGEST,
+            sizeBytes: PLAN_BYTES.byteLength,
           },
           planRun: {
             id: runId,
@@ -2100,6 +2102,7 @@ for (const mutation of [
               kind: "object-storage",
               ref: `r2://takos-artifacts/opentofu-plan-runs/${mutation.runId}/tfplan`,
               digest: PLAN_DIGEST,
+              sizeBytes: PLAN_BYTES.byteLength,
             },
             env: {
               PROVIDER_TOKEN:
@@ -3563,6 +3566,7 @@ test("OpenTofu runner Durable Object releases a provable pre-dispatch preparatio
             kind: "object-storage",
             ref: `r2://takos-artifacts/opentofu-plan-runs/${runId}/tfplan`,
             digest: PLAN_DIGEST,
+            sizeBytes: PLAN_BYTES.byteLength,
           },
         },
       }),
@@ -3719,6 +3723,7 @@ test("OpenTofu runner Durable Object restores and persists operator-managed stat
             kind: "object-storage",
             ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
             digest: PLAN_DIGEST,
+            sizeBytes: PLAN_BYTES.byteLength,
           },
           executionEvidenceAuthority: {
             controllerArtifact: {
@@ -5353,6 +5358,7 @@ function runnerWithContainer(
     readonly destroy?: () => Promise<void>;
     readonly stop?: () => Promise<void>;
     readonly storage?: FakeDoStorage;
+    readonly planMetadata?: { readonly lineage: string; readonly serial: number };
   } = {},
 ): OpenTofuRunnerObject {
   const runner = new OpenTofuRunnerObject({
@@ -5370,6 +5376,9 @@ function runnerWithContainer(
   } as CloudflareWorkerEnv);
   Object.defineProperty(runner, "containerFetch", {
     value(request: Request, _port?: number) {
+      if (/^\/runs\/[^/]+\/plan-state-metadata$/u.test(new URL(request.url).pathname)) {
+        return Response.json(options.planMetadata ?? { lineage: "", serial: 0 });
+      }
       if (new URL(request.url).pathname === "/healthz") {
         return options.healthFetch
           ? options.healthFetch(request)
@@ -5432,6 +5441,40 @@ async function seedEncryptedPlan(
       },
     },
   );
+}
+
+for (const [label, planMetadata] of [
+  ["stale serial", { lineage: "", serial: 1 }],
+  ["stale lineage", { lineage: "different", serial: 0 }],
+] as const) {
+  test(`OpenTofu runner rejects ${label} before durable dispatch or provider work`, async () => {
+    const planRunId = `plan_metadata_${label.replace(" ", "_")}`;
+    const artifacts = new FakeR2Bucket();
+    const state = new FakeR2Bucket();
+    const storage = new FakeDoStorage();
+    await seedEncryptedPlan(artifacts, planRunId);
+    let providerCalls = 0;
+    const token = await signedMutationToken(planRunId, {
+      jti: `metadata-${label.replace(" ", "-")}`,
+    });
+    const response = await runnerWithContainer(
+      artifacts,
+      mutationSuccessContainer(planRunId, () => { providerCalls++; }),
+      {
+        stateBucket: state,
+        storage,
+        planMetadata,
+        env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET },
+      },
+    ).fetch(signedMutationRequest(planRunId, token, {
+      rawOutputRef: rawOutputRefFor(planRunId),
+      stateScope: capsuleStateScope(),
+    }));
+    assert.equal(response.status, 500);
+    assert.equal(providerCalls, 0);
+    assert.equal(JSON.stringify(storage.entries()).includes('"phase":"dispatched"'), false);
+    assert.equal(state.body(capsuleStateScope().stateRef), undefined);
+  });
 }
 
 test("OpenTofu runner accepts renewal during slow restore then forwards only exact dispatched updates", async () => {
@@ -5768,6 +5811,7 @@ function mutationRequest(
           kind: "object-storage",
           ref: `r2://takos-artifacts/opentofu-plan-runs/${runId}/tfplan`,
           digest: PLAN_DIGEST,
+          sizeBytes: PLAN_BYTES.byteLength,
         },
       },
     }),
@@ -5925,6 +5969,7 @@ function signedMutationRequest(
     kind: "object-storage",
     ref: `r2://takos-artifacts/opentofu-plan-runs/${planRunId}/tfplan`,
     digest: PLAN_DIGEST,
+    sizeBytes: PLAN_BYTES.byteLength,
   };
   return new Request(`https://runner/runs/${planRunId}`, {
     method: "POST",

@@ -106,6 +106,7 @@ COPY contract/reference/ip-classification.ts ./contract/reference/ip-classificat
 COPY contract/reference/host-blocklist.ts ./contract/reference/host-blocklist.ts
 COPY lib/opentofu-configuration/src/mod.ts ./lib/opentofu-configuration/src/mod.ts
 COPY lib/rootgen/src/mod.ts ./lib/rootgen/src/mod.ts
+COPY core/shared/open-tofu-state-metadata.ts ./core/shared/open-tofu-state-metadata.ts
 COPY runner/entrypoint.ts ./runner/entrypoint.ts
 # entrypoint.ts is a thin re-export/server shell; the runner implementation
 # lives in runner/lib/*.ts (P3 god-file split). These MUST be copied or the
@@ -114,7 +115,7 @@ COPY runner/lib/ ./runner/lib/
 COPY runner/start.sh ./runner/start.sh
 # Sealed/private source checkouts may have owner-only source modes. COPY keeps
 # those modes, so normalize only the immutable runtime closure before USER bun.
-RUN chmod -R a+rX ./contract ./lib ./runner \
+RUN chmod -R a+rX ./contract ./core ./lib ./runner \
     && chmod 0755 ./runner/start.sh
 
 # Provider/module code is untrusted workload input. The reference runner must

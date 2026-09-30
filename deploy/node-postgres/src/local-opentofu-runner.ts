@@ -60,7 +60,15 @@ import { RUN_EXECUTION_EVIDENCE_CONTRACT } from "../../../contract/runs.ts";
 import { assertRunExecutionEvidence } from "../../../contract/runs.ts";
 import { handleRunnerRequestWithDependencies } from "../../../runner/entrypoint.ts";
 import { readResponseBytesWithCap } from "../../../runner/lib/exec.ts";
+import { SAVED_PLAN_PREFLIGHT_MAX_BYTES } from "../../../runner/lib/saved_plan_state_metadata.ts";
 import { mutationRequestDigest } from "../../../runner/lib/run_completion.ts";
+import {
+  ABSENT_OPENTOFU_STATE_METADATA,
+  assertSavedPlanMatchesState,
+  parseOpenTofuStateMetadata,
+} from "../../../core/shared/open-tofu-state-metadata.ts";
+
+const LOCAL_PLAN_STATE_METADATA_MAX_BYTES = 4096;
 
 export const LOCAL_OPENTOFU_RUNNER_PROFILE_ID = "local-opentofu";
 const PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES = 1024 * 1024;
@@ -480,7 +488,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       job.sourceArchive,
       control?.signal,
     );
-    await this.restorePriorState(job.planRun.id, "plan", job, control?.signal);
+    await this.restorePriorState(job.planRun.id, "plan", job, undefined, control?.signal);
     const result = await runRunner(
       this.transport,
       "plan",
@@ -704,6 +712,13 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       expectedRestoredProviderLockDigest(job.planRun),
     );
     if (!result) {
+      const prepared = await this.preflightSavedPlan(
+        job.applyRun.id,
+        job,
+        job.planRun.id,
+        job.planArtifact,
+        control?.signal,
+      );
       const reservation = await reserveLocalMutationBeforePreparation(
         this.transport,
         "apply",
@@ -720,13 +735,13 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         job.applyRun.id,
         "apply",
         job,
+        prepared.priorStateBytes,
         control?.signal,
       );
-      await copyRunnerLocalPlanArtifact(
+      await restoreRunnerLocalPlanArtifact(
         this.transport,
         job.applyRun.id,
-        job.planRun.id,
-        job.planArtifact,
+        prepared.planBytes,
         control?.signal,
       );
       const restoredProviderLockDigest = await this.restoreProviderLockArtifact(
@@ -846,6 +861,13 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       expectedRestoredProviderLockDigest(job.planRun),
     );
     if (!result) {
+      const prepared = await this.preflightSavedPlan(
+        job.applyRun.id,
+        job,
+        job.planRun.id,
+        job.planArtifact,
+        control?.signal,
+      );
       const reservation = await reserveLocalMutationBeforePreparation(
         this.transport,
         "destroy",
@@ -862,13 +884,13 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         job.applyRun.id,
         "destroy",
         job,
+        prepared.priorStateBytes,
         control?.signal,
       );
-      await copyRunnerLocalPlanArtifact(
+      await restoreRunnerLocalPlanArtifact(
         this.transport,
         job.applyRun.id,
-        job.planRun.id,
-        job.planArtifact,
+        prepared.planBytes,
         control?.signal,
       );
       const restoredProviderLockDigest = await this.restoreProviderLockArtifact(
@@ -1266,6 +1288,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       readonly priorState?: DispatchPriorState;
       readonly stateAdoption?: DispatchStateAdoption;
     },
+    capturedStateBytes?: Uint8Array,
     signal?: AbortSignal,
   ): Promise<void> {
     const prior = canonicalLocalPriorState(job);
@@ -1286,23 +1309,26 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         `local OpenTofu exact prior state generation mismatch: expected ${expectedGeneration}`,
       );
     }
-    const artifact = await this.stateStore.read(prior.stateRef);
-    if (!artifact) {
+    const artifact = capturedStateBytes
+      ? undefined
+      : await this.stateStore.read(prior.stateRef);
+    if (!capturedStateBytes && !artifact) {
       throw new Error(
         `local OpenTofu exact prior state ${prior.stateRef} was not found`,
       );
     }
     if (
-      artifact.generation !== prior.generation ||
-      (prior.digest !== undefined && artifact.stateDigest !== prior.digest) ||
-      (prior.createdByRunId !== undefined &&
-        artifact.createdByRunId !== prior.createdByRunId)
+      artifact &&
+      (artifact.generation !== prior.generation ||
+        (prior.digest !== undefined && artifact.stateDigest !== prior.digest) ||
+        (prior.createdByRunId !== undefined &&
+          artifact.createdByRunId !== prior.createdByRunId))
     ) {
       throw new Error(
         `local OpenTofu exact prior state ${prior.stateRef} does not match its ledger descriptor`,
       );
     }
-    if (job.stateScope) {
+    if (job.stateScope && artifact) {
       assertLocalMutationScope(
         artifact,
         {
@@ -1314,12 +1340,13 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         artifact.action,
       );
     }
+    const stateBytes = capturedStateBytes ?? artifact!.stateBytes;
     const response = await this.transport.fetch(
       `/runs/${encodeURIComponent(runId)}/artifacts/tfstate`,
       {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: arrayBufferFromBytes(artifact.stateBytes),
+        body: arrayBufferFromBytes(stateBytes),
         ...(signal ? { signal } : {}),
       },
     );
@@ -1328,6 +1355,133 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         `OpenTofu runner failed to restore exact state for ${runId}: ${await response.text()}`,
       );
     }
+  }
+
+  private async preflightSavedPlan(
+    runId: string,
+    job: {
+      readonly stateScope?: OpenTofuPlanJob["stateScope"];
+      readonly priorState?: DispatchPriorState;
+      readonly stateAdoption?: DispatchStateAdoption;
+    },
+    planRunId: string,
+    planArtifact: OpenTofuPlanArtifact,
+    signal?: AbortSignal,
+  ): Promise<{ readonly planBytes: Uint8Array; readonly priorStateBytes?: Uint8Array }> {
+    const sizeBytes = planArtifact.sizeBytes;
+    if (sizeBytes !== undefined &&
+        (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0 ||
+          sizeBytes > SAVED_PLAN_PREFLIGHT_MAX_BYTES)) {
+      throw new Error("local reviewed Plan artifact size is invalid");
+    }
+    const sourceRunId = runnerLocalPlanRunId(planArtifact) ?? planRunId;
+    const planBytes = await fetchRunnerArtifact(
+      this.transport,
+      sourceRunId,
+      `/runs/${encodeURIComponent(sourceRunId)}/artifacts/tfplan`,
+      signal,
+      sizeBytes ?? SAVED_PLAN_PREFLIGHT_MAX_BYTES,
+    );
+    if (planBytes.byteLength === 0 ||
+        (sizeBytes !== undefined && planBytes.byteLength !== sizeBytes)) {
+      throw new Error("local reviewed Plan artifact size mismatch");
+    }
+    await assertDigest(planBytes, planArtifact.digest, "plan artifact");
+
+    const prior = canonicalLocalPriorState(job);
+    const expectedGeneration = Math.max(
+      0,
+      (job.stateScope?.generation ?? 0) - 1,
+    );
+    let priorStateBytes: Uint8Array | undefined;
+    let stateMetadata = ABSENT_OPENTOFU_STATE_METADATA;
+    if (!prior) {
+      if (expectedGeneration > 0) {
+        throw new Error(
+          `local OpenTofu run ${runId} has generation ${expectedGeneration} without an exact prior state descriptor`,
+        );
+      }
+    } else {
+      if (prior.generation !== expectedGeneration) {
+        throw new Error(
+          `local OpenTofu exact prior state generation mismatch: expected ${expectedGeneration}`,
+        );
+      }
+      const artifact = await this.stateStore.read(prior.stateRef);
+      if (!artifact) {
+        throw new Error(
+          `local OpenTofu exact prior state ${prior.stateRef} was not found`,
+        );
+      }
+      if (
+        artifact.generation !== prior.generation ||
+        (prior.digest !== undefined && artifact.stateDigest !== prior.digest) ||
+        (prior.createdByRunId !== undefined &&
+          artifact.createdByRunId !== prior.createdByRunId)
+      ) {
+        throw new Error(
+          `local OpenTofu exact prior state ${prior.stateRef} does not match its ledger descriptor`,
+        );
+      }
+      if (job.stateScope) {
+        assertLocalMutationScope(
+          artifact,
+          { ...job.stateScope, generation: prior.generation, stateRef: prior.stateRef },
+          artifact.createdByRunId,
+          artifact.action,
+        );
+      }
+      // Freeze the validated generation: a mutable store buffer must not turn
+      // the pre-reservation comparison into a different post-reservation PUT.
+      priorStateBytes = new Uint8Array(artifact.stateBytes);
+      await assertDigest(priorStateBytes, artifact.stateDigest, "canonical prior state");
+      stateMetadata = parseOpenTofuStateMetadata(priorStateBytes);
+    }
+
+    let planMetadata: ReturnType<typeof parseOpenTofuStateMetadata>;
+    try {
+      const response = await this.transport.fetch(
+        `/runs/${encodeURIComponent(runId)}/plan-state-metadata`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/vnd.opentofu.plan",
+            "x-takosumi-plan-digest": planArtifact.digest,
+          },
+          body: arrayBufferFromBytes(planBytes),
+          ...(signal ? { signal } : {}),
+        },
+      );
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {});
+        throw new Error("metadata endpoint rejected request");
+      }
+      const body = parseObject(
+        new TextDecoder().decode(
+          await readResponseBytesWithCap(
+            response,
+            LOCAL_PLAN_STATE_METADATA_MAX_BYTES,
+            "saved Plan state metadata",
+          ),
+        ),
+      );
+      if (
+        typeof body.lineage !== "string" ||
+        !Number.isSafeInteger(body.serial) ||
+        (body.serial as number) < 0
+      ) {
+        throw new Error("metadata response invalid");
+      }
+      planMetadata = { lineage: body.lineage, serial: body.serial as number };
+    } catch {
+      throw new Error("local saved Plan metadata preflight failed");
+    }
+    try {
+      assertSavedPlanMatchesState(planMetadata, stateMetadata);
+    } catch {
+      throw new Error("local saved Plan metadata preflight failed");
+    }
+    return { planBytes, ...(priorStateBytes ? { priorStateBytes } : {}) };
   }
 
   private async adoptCommittedStateMutation(
@@ -1563,21 +1717,12 @@ function normalizeRunnerBaseUrl(baseUrl: string): URL {
   return url;
 }
 
-async function copyRunnerLocalPlanArtifact(
+async function restoreRunnerLocalPlanArtifact(
   transport: RunnerTransport,
   applyRunId: string,
-  planRunId: string,
-  artifact: OpenTofuPlanArtifact,
+  bytes: Uint8Array,
   signal?: AbortSignal,
 ): Promise<void> {
-  const sourceRunId = runnerLocalPlanRunId(artifact) ?? planRunId;
-  const bytes = await fetchRunnerArtifact(
-    transport,
-    sourceRunId,
-    `/runs/${encodeURIComponent(sourceRunId)}/artifacts/tfplan`,
-    signal,
-  );
-  await assertDigest(bytes, artifact.digest, "plan artifact");
   const response = await transport.fetch(
     `/runs/${encodeURIComponent(applyRunId)}/artifacts/tfplan`,
     {
@@ -2003,7 +2148,7 @@ async function fetchRunnerArtifact(
   });
   if (!response.ok) {
     throw new Error(
-      `OpenTofu runner artifact fetch failed for ${runId}: ${response.status} ${await response.text()}`,
+      `OpenTofu runner artifact fetch failed for ${runId}: ${response.status}`,
     );
   }
   const declaredLength = response.headers.get("content-length");
@@ -2015,7 +2160,9 @@ async function fetchRunnerArtifact(
       );
     }
   }
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const bytes = maxBytes === undefined
+    ? new Uint8Array(await response.arrayBuffer())
+    : await readResponseBytesWithCap(response, maxBytes, "OpenTofu runner artifact");
   if (maxBytes !== undefined && bytes.byteLength > maxBytes) {
     throw new Error(
       `OpenTofu runner ${path} artifact exceeds ${maxBytes} byte limit`,

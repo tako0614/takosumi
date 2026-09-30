@@ -19,7 +19,7 @@ const TEST_PASSPHRASE = "takosumi-runner-r2-state-test-passphrase-0123456789";
 const PLAN_BYTES = new TextEncoder().encode("reviewed tfplan bytes");
 const PLAN_DIGEST =
   "sha256:0fd9817656d95201f5c8073b9b4b4c2d5bfe8468b69e7bf771e5311b122a90e7";
-const NEW_STATE_BYTES = new TextEncoder().encode('{"version":4,"serial":2}');
+const NEW_STATE_BYTES = new TextEncoder().encode('{"version":4,"lineage":"","serial":2}');
 // Actual RunnerPhaseTimer.measure labels across plan_apply.ts and source_sync.ts.
 const RUNNER_PHASE_TIMING_PHASES = [
   "provider_scan_policy",
@@ -117,7 +117,7 @@ async function seedCanonicalPriorState(
     readonly generation: number;
     readonly stateRef: string;
   },
-  plaintext = new TextEncoder().encode('{"version":4,"serial":1}'),
+  plaintext = new TextEncoder().encode('{"version":4,"lineage":"","serial":1}'),
   createdByRunId = "apply_prior",
 ) {
   const generation = scope.generation - 1;
@@ -294,7 +294,7 @@ test("oversized chunked state with a forged Content-Length fails with no partial
     "opentofu-plan-runs/plan_1/tfplan.enc",
     sealedPlan.ciphertext,
   );
-  const stateLimit = 32;
+  const stateLimit = 64;
   const oversizedState = new Uint8Array(stateLimit + 1).fill(0x61);
   const runner = runnerWithContainer(
     artifacts,
@@ -511,7 +511,7 @@ test("confirmed adoption restores only the exact legacy state and writes the nex
   const crypto = StateArtifactCrypto.fromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
   });
-  const legacyState = new TextEncoder().encode('{"version":4,"serial":7}');
+  const legacyState = new TextEncoder().encode('{"version":4,"lineage":"","serial":7}');
   const sealedLegacy = await crypto.seal(legacyState);
   await state.put(LEGACY_ADOPTION_KEY, sealedLegacy.ciphertext, {
     customMetadata: {
@@ -613,7 +613,7 @@ test("confirmed adoption is refused when canonical Resource state already exists
   const crypto = StateArtifactCrypto.fromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
   });
-  const legacyState = new TextEncoder().encode('{"version":4,"serial":7}');
+  const legacyState = new TextEncoder().encode('{"version":4,"lineage":"","serial":7}');
   const sealedLegacy = await crypto.seal(legacyState);
   await state.put(LEGACY_ADOPTION_KEY, sealedLegacy.ciphertext, {
     customMetadata: {
@@ -621,7 +621,7 @@ test("confirmed adoption is refused when canonical Resource state already exists
     },
   });
   const canonicalKey = `${RESOURCE_STATE_PREFIX}/00000007.tfstate.enc`;
-  const canonicalState = new TextEncoder().encode('{"version":4,"serial":700}');
+  const canonicalState = new TextEncoder().encode('{"version":4,"lineage":"","serial":700}');
   const sealedCanonical = await crypto.seal(canonicalState);
   await state.put(canonicalKey, sealedCanonical.ciphertext, {
     customMetadata: {
@@ -891,7 +891,7 @@ test("apply does not adopt completed state without matching durable mutation aut
     generation: 1,
     stateRef: targetStateKey,
   };
-  const completedState = new TextEncoder().encode('{"version":4,"serial":1}');
+  const completedState = new TextEncoder().encode('{"version":4,"lineage":"","serial":1}');
   const sealedState = await crypto.seal(completedState);
   await state.put(targetStateKey, sealedState.ciphertext, {
     customMetadata: {
@@ -1595,7 +1595,7 @@ test("destroy does not adopt completed state without matching durable mutation a
     stateRef: targetStateKey,
   };
   const completedState = new TextEncoder().encode(
-    '{"version":4,"serial":2,"resources":[]}',
+    '{"version":4,"lineage":"","serial":2,"resources":[]}',
   );
   const sealedState = await crypto.seal(completedState);
   await state.put(targetStateKey, sealedState.ciphertext, {
@@ -1673,7 +1673,7 @@ test("preseeded opposite-action state without dispatch authority is blocked befo
     stateRef: targetStateKey,
   };
   const sealedState = await crypto.seal(
-    new TextEncoder().encode('{"version":4,"serial":2,"resources":[]}'),
+    new TextEncoder().encode('{"version":4,"lineage":"","serial":2,"resources":[]}'),
   );
   await state.put(targetStateKey, sealedState.ciphertext, {
     customMetadata: {
@@ -1736,7 +1736,7 @@ test("preseeded opposite-action raw output without dispatch authority is blocked
     stateRef: targetStateKey,
   };
   const sealedState = await crypto.seal(
-    new TextEncoder().encode('{"version":4,"serial":1}'),
+    new TextEncoder().encode('{"version":4,"lineage":"","serial":1}'),
   );
   await state.put(targetStateKey, sealedState.ciphertext, {
     customMetadata: {
@@ -1889,7 +1889,7 @@ test("apply does not adopt another run's preseeded target without dispatch autho
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
   });
   const targetStateKey = `${STATE_PREFIX}/00000001.tfstate.enc`;
-  const completedState = new TextEncoder().encode('{"version":4,"serial":1}');
+  const completedState = new TextEncoder().encode('{"version":4,"lineage":"","serial":1}');
   const sealedState = await crypto.seal(completedState);
   await state.put(targetStateKey, sealedState.ciphertext, {
     customMetadata: {
@@ -1964,7 +1964,7 @@ test("apply with stateScope restores the encrypted current state before apply", 
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
   });
   // Seed generation 1 as the current state.
-  const priorState = new TextEncoder().encode('{"version":4,"serial":1}');
+  const priorState = new TextEncoder().encode('{"version":4,"lineage":"","serial":1}');
   const priorKey = `${STATE_PREFIX}/00000001.tfstate.enc`;
   const sealedPrior = await crypto.seal(priorState);
   await state.put(priorKey, sealedPrior.ciphertext, {
@@ -2077,8 +2077,8 @@ test("plan restores only the exact canonical prior descriptor and ignores an orp
   const crypto = StateArtifactCrypto.fromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
   });
-  const canonicalBytes = new TextEncoder().encode('{"version":4,"serial":2}');
-  const orphanBytes = new TextEncoder().encode('{"version":4,"serial":3}');
+  const canonicalBytes = new TextEncoder().encode('{"version":4,"lineage":"","serial":2}');
+  const orphanBytes = new TextEncoder().encode('{"version":4,"lineage":"","serial":3}');
   const canonical = await crypto.seal(canonicalBytes);
   const orphan = await crypto.seal(orphanBytes);
   const canonicalKey = `${STATE_PREFIX}/00000002.tfstate.enc`;
@@ -2147,7 +2147,7 @@ test("plan restores a legacy digest-missing Resource only from its exact stateRe
   const crypto = StateArtifactCrypto.fromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
   });
-  const priorBytes = new TextEncoder().encode('{"version":4,"serial":2}');
+  const priorBytes = new TextEncoder().encode('{"version":4,"lineage":"","serial":2}');
   const sealed = await crypto.seal(priorBytes);
   const exactKey = `${STATE_PREFIX}/00000002.tfstate.enc`;
   // Pre-transition objects may also predate the current custom metadata. The
@@ -2205,7 +2205,7 @@ test("missing exact canonical generation fails even when a lower generation rema
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
   });
   const lower = await crypto.seal(
-    new TextEncoder().encode('{"version":4,"serial":1}'),
+    new TextEncoder().encode('{"version":4,"lineage":"","serial":1}'),
   );
   await state.put(`${STATE_PREFIX}/00000001.tfstate.enc`, lower.ciphertext, {
     customMetadata: {
@@ -2256,7 +2256,7 @@ test("canonical prior descriptor fails closed on ref, digest, or creator mismatc
   const crypto = StateArtifactCrypto.fromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
   });
-  const bytes = new TextEncoder().encode('{"version":4,"serial":2}');
+  const bytes = new TextEncoder().encode('{"version":4,"lineage":"","serial":2}');
   const sealed = await crypto.seal(bytes);
   const exactKey = `${STATE_PREFIX}/00000002.tfstate.enc`;
   const valid = {
@@ -2332,7 +2332,7 @@ test("exact prior restore performs zero R2 list calls with a large state history
   const crypto = StateArtifactCrypto.fromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
   });
-  const bytes = new TextEncoder().encode('{"version":4,"serial":250}');
+  const bytes = new TextEncoder().encode('{"version":4,"lineage":"","serial":250}');
   const sealed = await crypto.seal(bytes);
   for (let generation = 1; generation <= 250; generation += 1) {
     await state.put(
@@ -2399,7 +2399,7 @@ test("a preseeded target owned by another ApplyRun is never overwritten", async 
     sealedPlan.ciphertext,
   );
   const targetKey = `${STATE_PREFIX}/00000001.tfstate.enc`;
-  const staleBytes = new TextEncoder().encode('{"version":4,"serial":99}');
+  const staleBytes = new TextEncoder().encode('{"version":4,"lineage":"","serial":99}');
   const stale = await crypto.seal(staleBytes);
   await state.put(targetKey, stale.ciphertext, {
     customMetadata: {
@@ -2466,8 +2466,8 @@ test("plan never discovers prior state from object history when the ledger descr
   const crypto = StateArtifactCrypto.fromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
   });
-  const generationOne = new TextEncoder().encode('{"version":4,"serial":1}');
-  const generationTwo = new TextEncoder().encode('{"version":4,"serial":2}');
+  const generationOne = new TextEncoder().encode('{"version":4,"lineage":"","serial":1}');
+  const generationTwo = new TextEncoder().encode('{"version":4,"lineage":"","serial":2}');
   const sealedOne = await crypto.seal(generationOne);
   const sealedTwo = await crypto.seal(generationTwo);
   await state.put(
@@ -2551,8 +2551,8 @@ test("apply restores the exact prior descriptor instead of lower object history"
   const crypto = StateArtifactCrypto.fromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
   });
-  const generationOne = new TextEncoder().encode('{"version":4,"serial":1}');
-  const generationTwo = new TextEncoder().encode('{"version":4,"serial":2}');
+  const generationOne = new TextEncoder().encode('{"version":4,"lineage":"","serial":1}');
+  const generationTwo = new TextEncoder().encode('{"version":4,"lineage":"","serial":2}');
   const sealedOne = await crypto.seal(generationOne);
   const sealedTwo = await crypto.seal(generationTwo);
   await state.put(
@@ -2658,7 +2658,7 @@ test("state restore fails closed when the stored ciphertext is tampered", async 
   const crypto = StateArtifactCrypto.fromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
   });
-  const priorState = new TextEncoder().encode('{"version":4,"serial":1}');
+  const priorState = new TextEncoder().encode('{"version":4,"lineage":"","serial":1}');
   const priorKey = `${STATE_PREFIX}/00000001.tfstate.enc`;
   const sealedPrior = await crypto.seal(priorState);
   // Flip a byte in the persisted ciphertext.
@@ -2743,7 +2743,7 @@ test("plan with depStates fetches + decrypts the producer state into /work/deps"
   });
   // The PRODUCER state (another Installation) sealed in R2_STATE at gen 3.
   const producerState = new TextEncoder().encode(
-    '{"version":4,"serial":3,"outputs":{"base_domain":{"value":"x"}}}',
+    '{"version":4,"lineage":"","serial":3,"outputs":{"base_domain":{"value":"x"}}}',
   );
   const producerPrefix =
     "workspaces/spc_1/capsules/inst_producer/environments/production/state-versions";
@@ -2819,7 +2819,7 @@ test("depStates restore fails closed when the producer ciphertext is tampered", 
   const crypto = StateArtifactCrypto.fromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
   });
-  const producerState = new TextEncoder().encode('{"version":4,"serial":3}');
+  const producerState = new TextEncoder().encode('{"version":4,"lineage":"","serial":3}');
   const producerKey =
     "workspaces/spc_1/capsules/inst_producer/environments/production/state-versions/00000003.tfstate.enc";
   const sealedProducer = await crypto.seal(producerState);
@@ -2877,7 +2877,7 @@ test("depStates restore rejects a stateRef that escapes the producer prefix", as
   const crypto = StateArtifactCrypto.fromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
   });
-  const producerState = new TextEncoder().encode('{"version":4,"serial":3}');
+  const producerState = new TextEncoder().encode('{"version":4,"lineage":"","serial":3}');
   // A key that does NOT match the descriptor's installationId/environment prefix.
   const crossTenantKey =
     "workspaces/spc_1/capsules/inst_other/environments/production/state-versions/00000003.tfstate.enc";
@@ -2931,7 +2931,7 @@ test("legacy apply without stateScope keeps using the R2_ARTIFACTS state path", 
   const state = new FakeR2Bucket();
   const stateBackendRef = "state://takosumi/opentofu-default";
   const legacyStateKey = `${await legacyBackendPrefix(stateBackendRef)}/capsules/inst_1/terraform.tfstate`;
-  const priorState = new TextEncoder().encode('{"serial":1}');
+  const priorState = new TextEncoder().encode('{"lineage":"","serial":1}');
   const crypto = StateArtifactCrypto.fromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
   });
@@ -3048,6 +3048,7 @@ function runnerWithContainer(
   container: ContainerRequestFetcher,
   envOverrides: Readonly<Record<string, unknown>> = {},
 ): OpenTofuRunnerObject {
+  let restoredStateSerial = 0;
   const runner = new OpenTofuRunnerObject({ storage: new FakeDoStorage() }, {
     TAKOSUMI_CONTROL_DB: {} as CloudflareWorkerEnv["TAKOSUMI_CONTROL_DB"],
     R2_ARTIFACTS: artifacts,
@@ -3167,6 +3168,16 @@ function runnerWithContainer(
     value: async (request: Request, _port?: number) => {
       if (new URL(request.url).pathname === "/healthz") {
         return Response.json({ ok: true });
+      }
+      if (/^\/runs\/[^/]+\/plan-state-metadata$/u.test(new URL(request.url).pathname)) {
+        return Response.json({ lineage: "", serial: restoredStateSerial });
+      }
+      if (request.method === "PUT" &&
+          /^\/runs\/[^/]+\/artifacts\/tfstate$/u.test(new URL(request.url).pathname)) {
+        const state = await request.clone().json().catch(() => undefined) as
+          | { readonly serial?: number }
+          | undefined;
+        if (Number.isSafeInteger(state?.serial)) restoredStateSerial = state!.serial!;
       }
       const response = await container.containerFetch(request);
       // The container fixtures predate the execution-evidence response field.
