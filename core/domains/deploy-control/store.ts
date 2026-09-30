@@ -6194,7 +6194,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async commitRecoveredState(input: CommitRecoveredStateInput): Promise<CommitRecoveredStateResult> {
-    assertRecoveryCommitCandidate(input);
+    await assertRecoveryCommitCandidate(input);
     const run = this.#runs.get(input.recoveryRun.id);
     const existingRun = run && isPublicRunRecord(run) ? publicStoredRun(run) : undefined;
     const existingState = this.#stateVersions.get(input.stateVersion.id);
@@ -6205,13 +6205,18 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       return { status: "replayed", run: existingRun!, stateVersion: existingState!, capsule: capsule! };
     }
     const management = this.#workspaceManagement.get(input.expectedCapsule.workspaceId);
+    const storedPlan = this.#runs.get(input.expectedPlanRun.id) as PlanRun | undefined;
+    const storedFailedApply = this.#runs.get(input.expectedFailedApplyRun.id) as ApplyRun | undefined;
+    const storedConfig = this.#installConfigs.get(input.expectedInstallConfig.id);
+    if (this.#runLeases.has(input.expectedPlanRun.id) ||
+      this.#runLeases.has(input.expectedFailedApplyRun.id)) return { status: "conflict" };
     const observed = {
       capsule,
-      installConfig: this.#installConfigs.get(input.expectedInstallConfig.id),
+      installConfig: storedConfig ? publicStoredInstallConfig(storedConfig) : undefined,
       source: this.#sources.get(input.expectedSource.id),
       sourceSnapshot: this.#sourceSnapshots.get(input.expectedSourceSnapshot.id),
-      planRun: this.#runs.get(input.expectedPlanRun.id) as PlanRun | undefined,
-      failedApplyRun: this.#runs.get(input.expectedFailedApplyRun.id) as ApplyRun | undefined,
+      planRun: storedPlan ? publicStoredRun(storedPlan) : undefined,
+      failedApplyRun: storedFailedApply ? publicStoredRun(storedFailedApply) : undefined,
       workspaceManagement: management?.managementState === "active" ? management as WorkspaceManagementAuthority : undefined,
       executionAuthorityEpoch: this.#capsuleExecutionAuthorityEpochs.get(input.expectedCapsule.id),
       existingRun,

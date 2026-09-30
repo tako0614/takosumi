@@ -25,6 +25,9 @@ import {
 } from "../../../../worker/src/state_crypto.ts";
 import { createRunCredentialToken } from "../../../../core/shared/run_credential_tokens.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
+import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
+import { stateVersionIdForRecoveryRun } from "../../../../core/domains/deploy-control/operator_state_recovery.ts";
+import { R2RecoveryStateArtifactStore } from "../../../../worker/src/state_recovery_artifact_store.ts";
 import { PROVIDER_LOCK_RESTORE_DIGEST_HEADER } from "../../../../runner/lib/transport.ts";
 
 const PLAN_BYTES = new TextEncoder().encode("reviewed tfplan bytes");
@@ -3919,6 +3922,98 @@ test("OpenTofu runner Restore rejects an incomplete or mismatched canonical sour
   }
 });
 
+test("OpenTofu runner Restore consumes an adapter-staged recovered StateVersion only with exact ledger lineage", async () => {
+  const state = new HookedR2Bucket();
+  const ledger = new FakeRestoreLedgerDatabase();
+  const { source } = await seedRecoveredRestoreSource(state, ledger);
+  const response = await restoreRunner(state, new FakeDoStorage(), ledger).fetch(
+    restoreRequest("restore_recovered_exact", source),
+  );
+  assert.equal(response.status, 200, await response.text());
+  assert.equal(state.restoreStageKeys().length, 1);
+  assert.equal(ledger.sourceQueryCount, 1);
+});
+
+test("OpenTofu runner Restore rejects forged recovered identity, ledger, metadata, and ciphertext", async () => {
+  const cases = [
+    "state-version-id", "creator", "scope", "digest", "run-status",
+    "run-backlink", "failed-apply", "action", "custody", "ciphertext",
+  ] as const;
+  for (const kind of cases) {
+    const state = new HookedR2Bucket();
+    const ledger = new FakeRestoreLedgerDatabase();
+    const { source, recoveryRunId, failedApplyRunId } =
+      await seedRecoveredRestoreSource(state, ledger);
+    let descriptor: RestoreSourceDescriptor = source;
+    if (kind === "state-version-id") descriptor = { ...source, stateVersionId: "state_forged" };
+    if (kind === "creator") descriptor = { ...source, createdByRunId: "run_forged" };
+    if (kind === "scope") descriptor = { ...source, workspaceId: "space_forged" };
+    if (kind === "digest") descriptor = { ...source, digest: `sha256:${"b".repeat(64)}` };
+    if (kind === "run-status") ledger.mutateRecoveryRun(recoveryRunId, { status: "failed" });
+    if (kind === "run-backlink") ledger.mutateRecoveryRun(recoveryRunId, {
+      stateRecovery: { recoveredStateVersionId: "state_forged" },
+    });
+    if (kind === "failed-apply") ledger.mutateRecoveryRun(failedApplyRunId, { status: "succeeded" });
+    if (kind === "action" || kind === "custody" || kind === "ciphertext") {
+      const object = await state.get(source.stateRef);
+      assert.ok(object);
+      const bytes = new Uint8Array(await object.arrayBuffer());
+      if (kind === "ciphertext") bytes[bytes.length - 1] ^= 1;
+      await state.put(source.stateRef, bytes, {
+        httpMetadata: object.httpMetadata,
+        customMetadata: {
+          ...object.customMetadata,
+          ...(kind === "action" ? { "takosumi-action": "apply" } : {}),
+          ...(kind === "custody" ? {
+            "takosumi-recovery-custody-evidence-digest": `sha256:${"b".repeat(64)}`,
+          } : {}),
+        },
+      });
+    }
+    const response = await restoreRunner(state, new FakeDoStorage(), ledger).fetch(
+      restoreRequest(`restore_recovered_reject_${kind}`, descriptor),
+    );
+    assert.notEqual(response.status, 200, kind);
+    assert.equal(state.restoreStageKeys().length, 0, kind);
+  }
+});
+
+test("OpenTofu runner Plan and Destroy Plan restore the exact adapter-staged recovered priorState", async () => {
+  for (const operation of ["update", "destroy"] as const) {
+    const state = new FakeR2Bucket();
+    const ledger = new FakeRestoreLedgerDatabase();
+    const { source } = await seedRecoveredRestoreSource(state, ledger);
+    const expected = await restoreTestCrypto().open(state.body(source.stateRef)!, source.digest);
+    let restored: Uint8Array | undefined;
+    const runner = runnerWithContainer(new FakeR2Bucket(), {
+      async containerFetch(request) {
+        const path = new URL(request.url).pathname;
+        if (request.method === "PUT" && path.endsWith("/artifacts/tfstate")) {
+          restored = new Uint8Array(await request.arrayBuffer());
+          return Response.json({ ok: true });
+        }
+        return Response.json({ error: "stop after priorState restore" }, { status: 503 });
+      },
+    }, { stateBucket: state });
+    const response = await runner.fetch(new Request(`https://runner/runs/plan_recovered_${operation}`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "takosumi.opentofu-run@v1", action: "plan",
+        runId: `plan_recovered_${operation}`,
+        request: { operation, stateScope: {
+          workspaceId: source.workspaceId,
+          subject: { kind: "capsule", id: source.capsuleId },
+          environment: source.environment, generation: 1,
+          stateRef: source.stateRef,
+          priorState: { generation: 1, stateRef: source.stateRef,
+            digest: source.digest, createdByRunId: source.createdByRunId },
+        } },
+      }),
+    }));
+    assert.equal(response.status, 503, operation);
+    assert.deepEqual(restored, expected, operation);
+  }
+});
+
 test("OpenTofu runner Restore rejects a Restore-origin StateVersion id not bound to its object", async () => {
   const state = new HookedR2Bucket();
   const storage = new FakeDoStorage();
@@ -5024,6 +5119,69 @@ async function seedRestoreSource(
     digest: sealed.contentDigest,
     createdByRunId,
   };
+}
+
+async function seedRecoveredRestoreSource(state: FakeR2Bucket, ledger: FakeRestoreLedgerDatabase): Promise<{
+  readonly source: RestoreSourceDescriptor;
+  readonly recoveryRunId: string;
+  readonly failedApplyRunId: string;
+}> {
+  const plaintext = new TextEncoder().encode(JSON.stringify({
+    version: 4, terraform_version: "1.9.8", serial: 2,
+    lineage: "b8d6c5f4-8f27-4d16-8b90-839c7f770001", outputs: {},
+    resources: [{ mode: "managed", type: "example_resource", name: "fixture",
+      provider: 'provider["registry.example/example"]',
+      instances: [{ schema_version: 0, attributes: {} }] }],
+  }));
+  const failedApplyRunId = "apply_recovery_failed";
+  const recoveryRunId = "run_recovery_durable";
+  const snapshotId = "snapshot_recovery_durable";
+  const planId = "plan_recovery_durable";
+  const adapter = new R2RecoveryStateArtifactStore({
+    bucket: state,
+    crypto: restoreTestCrypto(),
+    allocator: new ObjectKeyArtifactReferenceAllocator(),
+  });
+  const staged = await adapter.stage({
+    workspaceId: "space_1", capsuleId: "inst_1", environment: "production",
+    generation: 1, failedApplyRunId, recoveryRunId,
+    plaintextSha256: await digestBytes(plaintext),
+    custodyEvidenceDigest: `sha256:${"a".repeat(64)}`,
+    plaintext,
+  });
+  const source: RestoreSourceDescriptor = {
+    stateVersionId: await stateVersionIdForRecoveryRun(recoveryRunId),
+    workspaceId: "space_1", capsuleId: "inst_1", environment: "production",
+    generation: 1, stateRef: staged.artifact.stateRef,
+    digest: staged.artifact.plaintextSha256, createdByRunId: recoveryRunId,
+  };
+  ledger.referenceExactStateVersion(source);
+  ledger.referenceRecoveryLineage({
+    capsule: { id: "inst_1", workspaceId: "space_1", environment: "production",
+      sourceId: "source_recovery_durable" },
+    snapshot: { id: snapshotId, workspaceId: "space_1",
+      sourceId: "source_recovery_durable", origin: "git",
+      url: "https://example.invalid/recovery.git", resolvedCommit: "abcdef123456" },
+    runs: [
+      { id: recoveryRunId, type: "state_recovery", status: "succeeded",
+        workspaceId: "space_1", capsuleId: "inst_1", environment: "production",
+        planRunId: planId, sourceSnapshotId: snapshotId,
+        stateRecovery: { failedApplyRunId, recoveredStateVersionId: source.stateVersionId,
+          sourceSnapshotId: snapshotId,
+          artifactEvidenceDigest: staged.artifact.evidenceDigest,
+          plaintextSha256: source.digest, encryptedDigest: staged.artifact.encryptedDigest } },
+      { id: failedApplyRunId, status: "failed", operation: "create",
+        workspaceId: "space_1", capsuleId: "inst_1", planRunId: planId },
+      { id: planId, status: "succeeded", operation: "create",
+        baseStateGeneration: 0,
+        workspaceId: "space_1", capsuleId: "inst_1", sourceSnapshotId: snapshotId,
+        capsuleContext: { workspaceId: "space_1", capsuleId: "inst_1",
+          environment: "production" },
+        source: { kind: "git", url: "https://example.invalid/recovery.git",
+          commit: "abcdef123456" } },
+    ],
+  });
+  return { source, recoveryRunId, failedApplyRunId };
 }
 
 async function testStateVersionIdForApplyRun(
@@ -6414,6 +6572,9 @@ class FakeRestoreLedgerDatabase implements D1Database {
   readonly #stateVersions = new Map<string, string>();
   readonly #exactStateVersions = new Map<string, RestoreSourceDescriptor>();
   readonly #runStatuses = new Map<string, string>();
+  readonly #recoveryRuns = new Map<string, Record<string, unknown>>();
+  #recoveryCapsule?: Record<string, unknown>;
+  #recoverySnapshot?: Record<string, unknown>;
   unavailable = false;
   queryCount = 0;
   sourceQueryCount = 0;
@@ -6431,9 +6592,28 @@ class FakeRestoreLedgerDatabase implements D1Database {
     this.#runStatuses.set(runId, status);
   }
 
+  referenceRecoveryLineage(input: {
+    readonly capsule: Record<string, unknown>;
+    readonly snapshot: Record<string, unknown>;
+    readonly runs: readonly Record<string, unknown>[];
+  }): void {
+    this.#recoveryCapsule = input.capsule;
+    this.#recoverySnapshot = input.snapshot;
+    for (const run of input.runs) this.#recoveryRuns.set(String(run.id), run);
+  }
+
+  mutateRecoveryRun(id: string, patch: Record<string, unknown>): void {
+    const run = this.#recoveryRuns.get(id);
+    if (run) this.#recoveryRuns.set(id, { ...run, ...patch });
+  }
+
   prepare(query: string): D1PreparedStatement {
-    assert.match(query, /from state_versions/u);
-    if (!query.includes("exact_state_version_count")) {
+    if (!this.#recoveryCapsule || !/from (?:capsules|source_snapshots|runs)/u.test(query)) {
+      assert.match(query, /from state_versions/u);
+    }
+    if (!query.includes("exact_state_version_count") &&
+      !query.includes("select run_json") &&
+      !query.includes("select record_json")) {
       assert.match(query, /from runs/u);
     }
     return new FakeRestoreLedgerStatement(this, query, []);
@@ -6446,6 +6626,29 @@ class FakeRestoreLedgerDatabase implements D1Database {
   }
 
   result(query: string, values: readonly unknown[]): unknown {
+    if (query.includes("select run_json from runs")) {
+      if (this.unavailable) throw new Error("simulated D1 unavailable");
+      const [id, type, status, workspaceId, capsuleId, environment] = values;
+      const run = this.#recoveryRuns.get(String(id));
+      const matches = run && run.workspaceId === workspaceId && run.capsuleId === capsuleId &&
+        (type === "apply" || (run.environment ?? "production") === environment) &&
+        run.status === status &&
+        (type === "state_recovery" ? run.type === type :
+          type === "apply" ? run.operation === "create" : run.operation === "create");
+      return matches ? { run_json: JSON.stringify(run) } : null;
+    }
+    if (query.includes("from capsules")) {
+      if (this.unavailable) throw new Error("simulated D1 unavailable");
+      const capsule = this.#recoveryCapsule;
+      return capsule?.id === values[0] && capsule.workspaceId === values[1] &&
+        capsule.environment === values[2]
+        ? { record_json: JSON.stringify(capsule) } : null;
+    }
+    if (query.includes("from source_snapshots")) {
+      if (this.unavailable) throw new Error("simulated D1 unavailable");
+      return this.#recoverySnapshot?.id === values[0]
+        ? { record_json: JSON.stringify(this.#recoverySnapshot) } : null;
+    }
     if (query.includes("exact_state_version_count")) {
       this.sourceQueryCount += 1;
       if (this.unavailable) throw new Error("simulated D1 unavailable");
@@ -6689,6 +6892,14 @@ class FakeR2ObjectBody implements R2ObjectBody {
   readonly uploaded = new Date("2026-06-03T00:00:00.000Z");
   readonly httpMetadata?: R2Object["httpMetadata"];
   readonly customMetadata?: Record<string, string>;
+
+  get body(): ReadableStream<Uint8Array> {
+    const bytes = this.bytes.slice();
+    return new ReadableStream({ start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    } });
+  }
 
   constructor(
     readonly key: string,

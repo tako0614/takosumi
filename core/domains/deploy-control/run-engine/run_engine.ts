@@ -116,7 +116,7 @@ import type { ObservabilitySink } from "../../observability/mod.ts";
 import { CapsuleQuery, requireCapsule } from "../capsule_query.ts";
 import { capsuleRunRuntimeSafetyMatches } from "../run_credential_context.ts";
 import { getCapsuleAdoptedSourceSnapshot } from "../capsule_source_revision.ts";
-import { recoveryPlanForStateVersion } from "../operator_state_recovery.ts";
+import { recoveryPlanForStateVersion, stateVersionIdForRecoveryRun } from "../operator_state_recovery.ts";
 import {
   accountsOidcModuleVariableProfile,
   type AccountsOidcModuleVariableProfile,
@@ -661,6 +661,7 @@ interface LifecycleActionOutcome {
   readonly pairedActionIds?: readonly string[];
   readonly stateVersionId?: string;
   readonly creatorRunId?: string;
+  readonly failedApplyRunId?: string;
   readonly reason?: string;
   readonly kind?: string;
   readonly message?: string;
@@ -4862,6 +4863,21 @@ export class RunEngine {
     }
   }
 
+  async #assertRecoveryRestoreSource(capsule: Capsule, state: StateVersion): Promise<void> {
+    const recoveryStateId = await stateVersionIdForRecoveryRun(state.createdByRunId);
+    const recoveryRun = await this.#store.getStateRecoveryRun(state.createdByRunId);
+    // The canonical recovery id also identifies a deleted creator. Do not
+    // silently reclassify an orphaned recovery as a legacy Apply state.
+    if (!recoveryRun && state.id !== recoveryStateId) return;
+    if (state.id !== recoveryStateId ||
+      !await recoveryPlanForStateVersion(this.#store, capsule, state)) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "restore source recovery lineage is missing or changed",
+      );
+    }
+  }
+
   async #completeRestoreRun(
     run: Run,
     leaseToken: string,
@@ -4938,6 +4954,7 @@ export class RunEngine {
         `exact restore source StateVersion ${run.restoredFromStateVersionId} is missing or changed before dispatch`,
       );
     }
+    await this.#assertRecoveryRestoreSource(capsule, source);
     const sourceState = restoreSourceStateFromStateVersion(source);
     // Bind the read-only authority to the selected StateVersion id, rather
     // than closing over its first read. Restore adapters must re-read this
@@ -4946,6 +4963,7 @@ export class RunEngine {
     const sourceAuthority = {
       readExact: async () => {
         const exact = await this.#store.getStateVersion(source.id);
+        if (exact) await this.#assertRecoveryRestoreSource(capsule, exact);
         return exact ? restoreSourceStateFromStateVersion(exact) : undefined;
       },
     };
@@ -10144,8 +10162,10 @@ export class RunEngine {
   /**
    * Proves that a pre-destroy action is compensating for a failed first apply
    * rather than tearing down a live Capsule. This is intentionally narrow:
-   * only generation 1, provider-dispatched create failures with durable state
-   * and no Output may use the cleanup pairing. Any missing or contradictory
+   * only generation 1 with no Output and either a persisted provider failure
+   * or exact state-only recovery may use the cleanup pairing. Recovery proves
+   * state custody and absent paired post_apply, not the provider outcome.
+   * Any missing or contradictory
    * evidence returns `undefined`, leaving the normal missing-Output guard in
    * force.
    */
@@ -10156,6 +10176,7 @@ export class RunEngine {
     readonly lifecycleActions: InstallConfig["lifecycleActions"];
   }): Promise<{
     readonly creatorRunId: string;
+    readonly failedApplyRunId?: string;
     readonly pairedActionIds: readonly string[];
     readonly reason: string;
     readonly alreadyPersisted: boolean;
@@ -10200,14 +10221,22 @@ export class RunEngine {
     }
 
     const creatorRunId = input.stateVersion.createdByRunId;
-    const creatorRun = await this.#store.getApplyRun(creatorRunId);
+    const recoveryRun = await this.#store.getStateRecoveryRun(creatorRunId);
+    if (recoveryRun &&
+      (input.stateVersion.id !== await stateVersionIdForRecoveryRun(creatorRunId) ||
+        !await recoveryPlanForStateVersion(this.#store, input.capsule, input.stateVersion))) {
+      return undefined;
+    }
+    const failedApplyRunId = recoveryRun?.stateRecovery?.failedApplyRunId;
+    const creatorRun = await this.#store.getApplyRun(failedApplyRunId ?? creatorRunId);
     if (
       !creatorRun ||
-      creatorRun.id !== creatorRunId ||
+      creatorRun.id !== (failedApplyRunId ?? creatorRunId) ||
+      creatorRun.workspaceId !== input.capsule.workspaceId ||
       creatorRun.capsuleId !== input.capsule.id ||
       creatorRun.operation !== "create" ||
       creatorRun.status !== "failed" ||
-      creatorRun.stateVersionId !== input.stateVersion.id ||
+      (recoveryRun ? creatorRun.stateVersionId !== undefined : creatorRun.stateVersionId !== input.stateVersion.id) ||
       creatorRun.outputId !== undefined
     ) {
       return undefined;
@@ -10225,7 +10254,9 @@ export class RunEngine {
       return undefined;
     }
 
-    const providerFailureEvidence = creatorRun.auditEvents.some((event) => {
+    const cleanupProvenanceMatches = recoveryRun ? !creatorRun.auditEvents.some(
+      (event) => event.data?.providerApplySucceeded === true,
+    ) : creatorRun.auditEvents.some((event) => {
       if (event.type !== "apply.failed") return false;
       const data = event.data;
       return (
@@ -10235,7 +10266,7 @@ export class RunEngine {
         data.stateVersionId === input.stateVersion.id
       );
     });
-    if (!providerFailureEvidence) return undefined;
+    if (!cleanupProvenanceMatches) return undefined;
 
     // Any lifecycle dispatch on the creator run invalidates the compensation
     // proof. In particular, a post_apply action may have mutated an external
@@ -10248,12 +10279,17 @@ export class RunEngine {
       return (
         data?.lifecycleActionDispatched === true ||
         (event.type.startsWith("lifecycle_action.") &&
-          data?.actionDispatched === true)
+          data?.actionDispatched === true) ||
+        (recoveryRun !== undefined &&
+          (event.type.startsWith("lifecycle_action.post_apply.") ||
+            data?.phase === "post_apply" || data?.lifecycleActionPhase === "post_apply"))
       );
     });
     if (lifecycleDispatched) return undefined;
 
-    const reason = "provider_failed_before_post_apply";
+    // State recovery proves custody, not the provider outcome. The exemption
+    // concerns only the paired post_apply action that could not have run.
+    const reason = recoveryRun ? "recovered_failed_create_before_post_apply" : "provider_failed_before_post_apply";
     const marker = input.applyRun.auditEvents.find((event) => {
       if (event.type !== "lifecycle_action.pre_destroy.not_applicable") {
         return false;
@@ -10262,6 +10298,8 @@ export class RunEngine {
       if (
         data?.stateVersionId !== input.stateVersion.id ||
         data.creatorRunId !== creatorRunId ||
+        data.failedApplyRunId !== failedApplyRunId ||
+        data.reason !== reason ||
         data.actionDispatched !== false
       ) {
         return false;
@@ -10283,6 +10321,7 @@ export class RunEngine {
 
     return {
       creatorRunId,
+      ...(failedApplyRunId ? { failedApplyRunId } : {}),
       pairedActionIds,
       reason,
       alreadyPersisted: marker !== undefined,
@@ -10294,6 +10333,7 @@ export class RunEngine {
     readonly capsule: Capsule;
     readonly stateVersion: StateVersion;
     readonly creatorRunId: string;
+    readonly failedApplyRunId?: string;
     readonly pairedActionIds: readonly string[];
     readonly reason: string;
   }): Promise<void> {
@@ -10307,6 +10347,7 @@ export class RunEngine {
         capsuleId: input.capsule.id,
         stateVersionId: input.stateVersion.id,
         creatorRunId: input.creatorRunId,
+        ...(input.failedApplyRunId ? { failedApplyRunId: input.failedApplyRunId } : {}),
         pairedActionIds: [...input.pairedActionIds],
         reason: input.reason,
       },
@@ -10364,6 +10405,7 @@ export class RunEngine {
           capsule: input.capsule,
           stateVersion,
           creatorRunId: cleanupEvidence.creatorRunId,
+          ...(cleanupEvidence.failedApplyRunId ? { failedApplyRunId: cleanupEvidence.failedApplyRunId } : {}),
           pairedActionIds: cleanupEvidence.pairedActionIds,
           reason: cleanupEvidence.reason,
         });
@@ -10378,6 +10420,7 @@ export class RunEngine {
         pairedActionIds: cleanupEvidence.pairedActionIds,
         stateVersionId: stateVersion.id,
         creatorRunId: cleanupEvidence.creatorRunId,
+        ...(cleanupEvidence.failedApplyRunId ? { failedApplyRunId: cleanupEvidence.failedApplyRunId } : {}),
         reason: cleanupEvidence.reason,
         commandCount: commands.length,
         outputCount: 0,
@@ -11042,6 +11085,7 @@ export class RunEngine {
                         stateVersionId: lifecycleOutcome.stateVersionId,
                         stateVersionGeneration: 1,
                         creatorRunId: lifecycleOutcome.creatorRunId,
+                        ...(lifecycleOutcome.failedApplyRunId ? { failedApplyRunId: lifecycleOutcome.failedApplyRunId } : {}),
                         reason: lifecycleOutcome.reason,
                       }
                     : {}),

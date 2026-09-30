@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { Miniflare } from "miniflare";
 
 import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
 import type { BackupRecord } from "takosumi-contract/backups";
@@ -20,6 +21,7 @@ import {
   APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT,
   type CommitBackupRunInput,
   type CommitCompatibilityCheckRunInput,
+  type CommitRecoveredStateInput,
   type CapsuleLifecycleMutation,
   InMemoryOpenTofuControlStore,
   WorkspaceManagementAdmissionConflictError,
@@ -48,8 +50,131 @@ import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_clie
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
+import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
+import {
+  VERIFIED_RECOVERY_ARTIFACT_FORMAT,
+  type VerifiedRecoveryArtifact,
+} from "../../../../core/domains/deploy-control/operator_state_recovery.ts";
 
 const pgClients: PGliteSqlClient[] = [];
+
+const RECOVERY_DIGEST = `sha256:${"a".repeat(64)}` as const;
+const RECOVERY_ENCRYPTED = `sha256:${"b".repeat(64)}` as const;
+const RECOVERY_EVIDENCE = `sha256:${"c".repeat(64)}` as const;
+
+async function recoveryCommand(
+  store: OpenTofuControlStore,
+  label: string,
+  workspaceId = `freeze-recovery-${label}`,
+): Promise<CommitRecoveredStateInput> {
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId,
+    capsuleId: `freeze-recovery-capsule-${label}`,
+    sourceId: `freeze-recovery-source-${label}`,
+    snapshotId: `freeze-recovery-snapshot-${label}`,
+    installConfigId: `freeze-recovery-config-${label}`,
+    name: `freeze-recovery-${label}`,
+  });
+  const epoch = await store.getCapsuleExecutionAuthorityEpoch(seeded.capsule.id);
+  if (epoch === undefined) throw new Error("missing fixture execution epoch");
+  const runId = `freeze-recovery-run-${label}`;
+  const plan: PlanRun = {
+    id: `freeze-recovery-plan-${label}`, workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id, capsuleCurrentStateVersionId: null,
+    capsuleExecutionAuthorityEpoch: epoch,
+    capsuleContext: {
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      environment: seeded.capsule.environment,
+    },
+    source: { kind: "git", url: seeded.snapshot.url, commit: seeded.snapshot.resolvedCommit },
+    sourceDigest: RECOVERY_DIGEST, operation: "create", runnerProfileId: "opentofu-default",
+    variablesDigest: RECOVERY_DIGEST, requiredProviders: [], status: "succeeded",
+    policy: { status: "passed", reasons: [], checkedAt: 1 },
+    policyDecisionDigest: RECOVERY_DIGEST, planDigest: RECOVERY_DIGEST,
+    planArtifact: { kind: "object-storage", ref: "opaque-plan", digest: RECOVERY_DIGEST },
+    sourceSnapshotId: seeded.snapshot.id, baseStateGeneration: 0,
+    appliedApplyRunId: `freeze-recovery-apply-${label}`,
+    planResourceChanges: [{ address: "example_resource.a", type: "example_resource", actions: ["create"] }],
+    auditEvents: [], createdAt: 1, updatedAt: 1,
+  };
+  const failed: ApplyRun = {
+    id: `freeze-recovery-apply-${label}`, planRunId: plan.id,
+    workspaceId: seeded.workspace.id, capsuleId: seeded.capsule.id,
+    operation: "create", runnerProfileId: plan.runnerProfileId, status: "failed",
+    expected: {
+      planRunId: plan.id, capsuleId: seeded.capsule.id,
+      currentStateVersionId: null, capsuleExecutionAuthorityEpoch: epoch,
+      runnerProfileId: plan.runnerProfileId, sourceDigest: plan.sourceDigest,
+      variablesDigest: plan.variablesDigest, policyDecisionDigest: plan.policyDecisionDigest,
+      planDigest: RECOVERY_DIGEST, planArtifactDigest: RECOVERY_DIGEST,
+    },
+    stateBackend: { kind: "operator-managed", ref: "opaque-backend" },
+    stateLock: { status: "recorded", backendRef: "opaque-backend" },
+    auditEvents: [{ id: `freeze-recovery-event-${label}`, type: "apply.failed", at: 2,
+      data: { providerDispatched: true } }],
+    createdAt: 2, updatedAt: 3, finishedAt: 3,
+  };
+  await store.putPlanRun(plan);
+  await store.putApplyRun(failed);
+  const capsule = await store.patchCapsule(
+    seeded.capsule.id, { status: "error", updatedAt: "2026-09-11T00:00:00.000Z" },
+    { currentStateVersionId: undefined, status: "pending" },
+  );
+  if (!capsule) throw new Error("missing fixture Capsule");
+  const stateIdDigest = await stableJsonDigest({
+    kind: "takosumi.state-recovery-state-version-id@v1", runId,
+  });
+  const stateVersionId = `state_${stateIdDigest.slice("sha256:".length)}`;
+  const activityIdDigest = await stableJsonDigest({
+    kind: "takosumi.state-recovery-activity-id@v1", runId,
+  });
+  const artifact: VerifiedRecoveryArtifact = {
+    format: VERIFIED_RECOVERY_ARTIFACT_FORMAT,
+    immutable: true, adapterAllocated: true, readbackVerified: true,
+    generation: 1, stateRef: `workspaces/${seeded.workspace.id}/recovery.tfstate.enc`,
+    encryptedDigest: RECOVERY_ENCRYPTED, plaintextSha256: RECOVERY_DIGEST,
+    evidenceDigest: RECOVERY_EVIDENCE,
+    workspaceId: seeded.workspace.id, capsuleId: capsule.id,
+    environment: capsule.environment, recoveryRunId: runId,
+  };
+  const now = "2026-09-11T00:00:00.000Z";
+  const run: Run = {
+    id: runId, workspaceId: seeded.workspace.id, capsuleId: capsule.id,
+    environment: capsule.environment, planRunId: plan.id,
+    sourceSnapshotId: seeded.snapshot.id, type: "state_recovery", status: "succeeded",
+    createdBy: "operator_test", createdAt: now, startedAt: now, finishedAt: now,
+    stateRecovery: {
+      failedApplyRunId: failed.id, recoveredStateVersionId: stateVersionId,
+      sourceSnapshotId: seeded.snapshot.id, artifactEvidenceDigest: RECOVERY_EVIDENCE,
+      plaintextSha256: RECOVERY_DIGEST, encryptedDigest: RECOVERY_ENCRYPTED,
+    },
+  };
+  const stateVersion: StateVersion = {
+    id: stateVersionId, workspaceId: seeded.workspace.id, capsuleId: capsule.id,
+    environment: capsule.environment, generation: 1, stateRef: artifact.stateRef,
+    digest: RECOVERY_DIGEST, createdByRunId: runId, createdAt: now,
+  };
+  return {
+    expectedCapsule: capsule, expectedInstallConfig: seeded.installConfig,
+    expectedSource: seeded.source, expectedSourceSnapshot: seeded.snapshot,
+    expectedPlanRun: plan, expectedFailedApplyRun: failed,
+    expectedWorkspaceManagement: {
+      workspaceId: seeded.workspace.id, managementState: "active", managementEpoch: 1,
+    },
+    expectedExecutionAuthorityEpoch: epoch, artifact, recoveryRun: run, stateVersion,
+    activity: {
+      id: `activity_${activityIdDigest.slice("sha256:".length)}`,
+      workspaceId: seeded.workspace.id, actorId: run.createdBy,
+      action: "capsule.state_recovered", targetType: "capsule", targetId: capsule.id,
+      runId, createdAt: now,
+      metadata: {
+        failedApplyRunId: failed.id, stateVersionId,
+        sourceSnapshotId: seeded.snapshot.id, artifactEvidenceDigest: RECOVERY_EVIDENCE,
+      },
+    },
+  };
+}
 
 test("Postgres claim loses when the persisted Run Workspace changes after observation", async () => {
   const pg = await PGliteSqlClient.create();
@@ -1217,6 +1342,179 @@ test("Workspace freezes an empty draining namespace with CAS parity", async () =
     ).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
   }
 });
+
+test("Postgres and D1 workspace freeze settles only exact state-recovery provenance", async () => {
+  const pgClient = await PGliteSqlClient.create();
+  pgClients.push(pgClient);
+  const d1 = new SqliteFakeD1();
+  const adapters = [
+    {
+      label: "postgres",
+      store: new SqlOpenTofuControlStore({ client: pgClient }),
+      async corrupt(caseName: string, workspaceId: string, runId: string, stateId: string) {
+        if (caseName === "unfinished") {
+          await pgClient.query(
+            "update takosumi_runs set status = 'running', run_json = jsonb_set(run_json, '{status}', '\"running\"'::jsonb) where id = $1",
+            [runId],
+          );
+        } else if (caseName === "malformed") {
+          await pgClient.query(
+            "update takosumi_runs set run_json = jsonb_set(run_json, '{stateRecovery,plaintextSha256}', '\"bad\"'::jsonb) where id = $1",
+            [runId],
+          );
+        } else if (caseName === "wrong_scope") {
+          await pgClient.query(
+            "update takosumi_state_versions set space_id = $1, snapshot_json = jsonb_set(snapshot_json, '{workspaceId}', to_jsonb($1::text)) where id = $2",
+            [`wrong-${workspaceId}`, stateId],
+          );
+        } else {
+          await pgClient.query(
+            "update takosumi_runs set run_json = jsonb_set(run_json, '{stateRecovery,failedApplyRunId}', '\"missing-apply\"'::jsonb) where id = $1",
+            [runId],
+          );
+        }
+      },
+    },
+    {
+      label: "d1",
+      store: new CloudflareD1OpenTofuControlStore(d1),
+      async corrupt(caseName: string, workspaceId: string, runId: string, stateId: string) {
+        if (caseName === "unfinished") {
+          await d1.prepare(
+            "update runs set status = 'running', run_json = json_set(run_json, '$.status', 'running') where id = ?",
+          ).bind(runId).run();
+        } else if (caseName === "malformed") {
+          await d1.prepare(
+            "update runs set run_json = json_set(run_json, '$.stateRecovery.plaintextSha256', 'bad') where id = ?",
+          ).bind(runId).run();
+        } else if (caseName === "wrong_scope") {
+          await d1.prepare(
+            "update state_versions set space_id = ? where id = ?",
+          ).bind(`wrong-${workspaceId}`, stateId).run();
+        } else {
+          await d1.prepare(
+            "update runs set run_json = json_set(run_json, '$.stateRecovery.failedApplyRunId', 'missing-apply') where id = ?",
+          ).bind(runId).run();
+        }
+      },
+    },
+  ];
+
+  for (const adapter of adapters) {
+    const verify = async (suffix: string, corruption?: string) => {
+      const command = await recoveryCommand(adapter.store, `${adapter.label}-${suffix}`);
+      expect((await adapter.store.commitRecoveredState(command)).status, adapter.label).toBe("committed");
+      const workspaceId = command.expectedCapsule.workspaceId;
+      const draining = await adapter.store.beginWorkspaceDraining(workspaceId, {
+        workspaceId, managementState: "active", managementEpoch: 1,
+      });
+      expect(draining.status, adapter.label).toBe("started");
+      if (corruption) {
+        await adapter.corrupt(
+          corruption, workspaceId, command.recoveryRun.id, command.stateVersion.id,
+        );
+      }
+      const result = await adapter.store.freezeWorkspaceManagementIfQuiescent({
+        workspaceId, managementState: "draining", managementEpoch: 2,
+      });
+      expect(result.status, `${adapter.label}:${corruption ?? "valid"}`).toBe(
+        corruption ? "blocked" : "frozen",
+      );
+    };
+    await verify("valid");
+    await verify("unfinished", "unfinished");
+    await verify("malformed", "malformed");
+    await verify("wrong-scope", "wrong_scope");
+    await verify("missing-lineage", "missing_lineage");
+
+    const verifySharedWorkspace = async (suffix: string, recoverSecond: boolean) => {
+      const workspaceId = `freeze-recovery-shared-${adapter.label}-${suffix}`;
+      const first = await recoveryCommand(
+        adapter.store, `${adapter.label}-shared-first-${suffix}`, workspaceId,
+      );
+      const second = await recoveryCommand(
+        adapter.store, `${adapter.label}-shared-second-${suffix}`, workspaceId,
+      );
+      expect((await adapter.store.commitRecoveredState(first)).status, adapter.label).toBe("committed");
+      if (recoverSecond) {
+        expect((await adapter.store.commitRecoveredState(second)).status, adapter.label).toBe("committed");
+      }
+      const draining = await adapter.store.beginWorkspaceDraining(workspaceId, {
+        workspaceId, managementState: "active", managementEpoch: 1,
+      });
+      expect(draining.status, adapter.label).toBe("started");
+      const result = await adapter.store.freezeWorkspaceManagementIfQuiescent({
+        workspaceId, managementState: "draining", managementEpoch: 2,
+      });
+      expect(result.status, `${adapter.label}:second-${recoverSecond ? "recovered" : "unrecovered"}`)
+        .toBe(recoverSecond ? "frozen" : "blocked");
+    };
+    await verifySharedWorkspace("only-first-proof", false);
+    await verifySharedWorkspace("both-proofs", true);
+  }
+});
+
+test("workerd D1 freeze keeps recovery proof scoped to each failed create", async () => {
+  const runtime = new Miniflare({
+    compatibilityDate: "2026-07-17",
+    modules: [{
+      type: "ESModule",
+      path: "workspace-freeze-recovery-workerd.mjs",
+      contents: "export default {fetch(){return new Response('ok')}}",
+    }],
+    d1Databases: { CONTROL: "workspace-freeze-recovery-workerd" },
+  });
+  try {
+    const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+    const store = new CloudflareD1OpenTofuControlStore(database);
+    const workspaceId = "workerd-freeze-recovery-shared";
+    const first = await recoveryCommand(store, "workerd-first", workspaceId);
+    const second = await recoveryCommand(store, "workerd-second", workspaceId);
+    expect((await store.commitRecoveredState(first)).status).toBe("committed");
+    expect(await store.beginWorkspaceDraining(workspaceId, {
+      workspaceId, managementState: "active", managementEpoch: 1,
+    })).toMatchObject({ status: "started" });
+    const draining = {
+      workspaceId, managementState: "draining" as const, managementEpoch: 2,
+    };
+    expect((await store.freezeWorkspaceManagementIfQuiescent(draining)).status)
+      .toBe("blocked");
+
+    // A second Capsule's failed Apply cannot borrow the first Capsule's proof.
+    await database.prepare(
+      "update runs set run_json = json_set(run_json, '$.stateRecovery.failedApplyRunId', ?) where id = ?",
+    ).bind(second.expectedFailedApplyRun.id, first.recoveryRun.id).run();
+    expect((await store.freezeWorkspaceManagementIfQuiescent(draining)).status)
+      .toBe("blocked");
+
+    const settledWorkspaceId = "workerd-freeze-recovery-settled";
+    const settledFirst = await recoveryCommand(store, "workerd-settled-first", settledWorkspaceId);
+    const settledSecond = await recoveryCommand(store, "workerd-settled-second", settledWorkspaceId);
+    expect((await store.commitRecoveredState(settledFirst)).status).toBe("committed");
+    expect((await store.commitRecoveredState(settledSecond)).status).toBe("committed");
+    expect(await store.beginWorkspaceDraining(settledWorkspaceId, {
+      workspaceId: settledWorkspaceId, managementState: "active", managementEpoch: 1,
+    })).toMatchObject({ status: "started" });
+    expect((await store.freezeWorkspaceManagementIfQuiescent({
+      workspaceId: settledWorkspaceId, managementState: "draining", managementEpoch: 2,
+    })).status).toBe("frozen");
+
+    const malformed = await recoveryCommand(store, "workerd-malformed");
+    expect((await store.commitRecoveredState(malformed)).status).toBe("committed");
+    expect(await store.beginWorkspaceDraining(malformed.expectedCapsule.workspaceId, {
+      workspaceId: malformed.expectedCapsule.workspaceId,
+      managementState: "active", managementEpoch: 1,
+    })).toMatchObject({ status: "started" });
+    await database.prepare("update runs set run_json = '{' where id = ?")
+      .bind(malformed.recoveryRun.id).run();
+    expect((await store.freezeWorkspaceManagementIfQuiescent({
+      workspaceId: malformed.expectedCapsule.workspaceId,
+      managementState: "draining", managementEpoch: 2,
+    })).status).toBe("blocked");
+  } finally {
+    await runtime.dispose();
+  }
+}, 30_000);
 
 test("Workspace freeze observes terminal Plan, finalizer, and Interface lineage blockers", async () => {
   for (const { label, store } of await adapters()) {

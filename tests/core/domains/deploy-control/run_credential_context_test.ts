@@ -3,6 +3,7 @@ import {
   resolveCanonicalCapsuleRunCredentialContext,
   type CapsuleRunCredentialLedger,
 } from "../../../../core/domains/deploy-control/run_credential_context.ts";
+import { stateVersionIdForRecoveryRun } from "../../../../core/domains/deploy-control/operator_state_recovery.ts";
 
 const CAPSULE = {
   id: "capsule_1",
@@ -415,6 +416,145 @@ describe("canonical Capsule Run credential context", () => {
     )).toEqual({ ok: false, reason: "runtime_safety_mismatch" });
   });
 
+  test("only exact recovered initial-create state admits a newly reviewed destroy", async () => {
+    const stateId = await stateVersionIdForRecoveryRun("recovery_1");
+    const digest = `sha256:${"a".repeat(64)}`;
+    const capsule = {
+      ...CAPSULE,
+      status: "error",
+      sourceId: "source_1",
+      environment: "production",
+      currentStateVersionId: stateId,
+      currentStateGeneration: 1,
+    };
+    const plan = {
+      ...PLAN,
+      operation: "destroy",
+      status: "succeeded",
+      baseStateGeneration: 1,
+      capsuleCurrentStateVersionId: stateId,
+      capsuleExecutionAuthorityEpoch: 2,
+      approval: { approvedAt: 2 },
+    };
+    const apply = {
+      ...APPLY,
+      operation: "destroy",
+      expected: { currentStateVersionId: stateId, capsuleExecutionAuthorityEpoch: 2 },
+    };
+    const originalPlan = {
+      ...PLAN,
+      id: "plan_initial",
+      operation: "create",
+      status: "succeeded",
+      baseStateGeneration: 0,
+      sourceSnapshotId: "snapshot_initial",
+      source: { kind: "git", url: "https://example.test/repo.git", commit: "a".repeat(40) },
+    };
+    const failed = {
+      ...APPLY,
+      id: "apply_failed_initial",
+      planRunId: originalPlan.id,
+      operation: "create",
+      status: "failed",
+      auditEvents: [{ type: "apply.failed", data: { providerDispatched: true, statePersistence: "unavailable" } }],
+    };
+    const recovery = {
+      id: "recovery_1",
+      workspaceId: "workspace_1",
+      capsuleId: "capsule_1",
+      environment: "production",
+      type: "state_recovery",
+      status: "succeeded",
+      finishedAt: "2026-09-30T00:00:00.000Z",
+      planRunId: originalPlan.id,
+      sourceSnapshotId: "snapshot_initial",
+      stateRecovery: {
+        failedApplyRunId: failed.id,
+        recoveredStateVersionId: stateId,
+        sourceSnapshotId: "snapshot_initial",
+        plaintextSha256: digest,
+      },
+    };
+    const stateVersion = {
+      id: stateId,
+      workspaceId: "workspace_1",
+      capsuleId: "capsule_1",
+      environment: "production",
+      generation: 1,
+      digest,
+      createdByRunId: recovery.id,
+      createdAt: "2026-09-30T00:00:00.000Z",
+    };
+    const snapshot = {
+      id: "snapshot_initial",
+      workspaceId: "workspace_1",
+      sourceId: "source_1",
+      origin: "git",
+      url: "https://example.test/repo.git",
+      resolvedCommit: "a".repeat(40),
+    };
+    const safety = { phase: "terminating", runId: apply.id, runType: "destroy_apply" };
+    const priorSafety = { phase: "unknown", runId: failed.id, runType: "apply" };
+    const rows = { capsule, plan, apply, originalPlan, priorApply: failed, recovery, stateVersion, snapshot, safety, priorSafety };
+    const input = { workspaceId: "workspace_1", capsuleId: "capsule_1", runId: apply.id, phase: "destroy" as const };
+
+    expect(await resolveCanonicalCapsuleRunCredentialContext(ledger(rows), input))
+      .toMatchObject({ ok: true, context: { lifecycleIntent: "destroy" } });
+
+    for (const overrides of [
+      { priorSafety: { ...priorSafety, runId: "apply_other" } },
+      { priorSafety: { ...priorSafety, runType: "restore" } },
+      { recovery: { ...recovery, status: "failed" } },
+      { recovery: { ...recovery, executionEvidence: {} } },
+      { recovery: { ...recovery, stateRecovery: { ...recovery.stateRecovery, failedApplyRunId: "apply_other" } } },
+      { recovery: { ...recovery, stateRecovery: { ...recovery.stateRecovery, recoveredStateVersionId: "state_other" } } },
+      { stateVersion: { ...stateVersion, id: "state_other" } },
+      { stateVersion: { ...stateVersion, digest: `sha256:${"b".repeat(64)}` } },
+      { stateVersion: { ...stateVersion, workspaceId: "workspace_other" } },
+      { stateVersion: { ...stateVersion, createdByRunId: "recovery_other" } },
+      { stateVersion: { ...stateVersion, createdAt: "2026-09-30T00:00:01.000Z" } },
+      {
+        capsule: { ...capsule, currentStateVersionId: "state_forged" },
+        stateVersion: { ...stateVersion, id: "state_forged" },
+        plan: { ...plan, capsuleCurrentStateVersionId: "state_forged" },
+        apply: { ...apply, expected: { ...apply.expected, currentStateVersionId: "state_forged" } },
+        recovery: {
+          ...recovery,
+          stateRecovery: { ...recovery.stateRecovery, recoveredStateVersionId: "state_forged" },
+        },
+      },
+      { capsule: { ...capsule, currentStateGeneration: 2 } },
+      { capsule: { ...capsule, currentOutputId: "output_other" } },
+      { plan: { ...plan, baseStateGeneration: 0 } },
+      { plan: { ...plan, approval: undefined } },
+      { plan: { ...plan, capsuleExecutionAuthorityEpoch: 1 } },
+      { plan: { ...plan, capsuleCurrentStateVersionId: "state_other" } },
+      { apply: { ...apply, expected: { currentStateVersionId: "state_other" } } },
+      { originalPlan: { ...originalPlan, sourceSnapshotId: "snapshot_other" } },
+      { originalPlan: { ...originalPlan, baseStateGeneration: 1 } },
+      { originalPlan: { ...originalPlan, capsuleCurrentStateVersionId: "state_other" } },
+      { originalPlan: { ...originalPlan, capsuleId: "capsule_other" } },
+      { priorApply: { ...failed, stateVersionId: stateId } },
+      { priorApply: { ...failed, workspaceId: "workspace_other" } },
+      { priorApply: { ...failed, executionEvidence: {} } },
+      { snapshot: { ...snapshot, sourceId: "source_other" } },
+    ]) {
+      expect(await resolveCanonicalCapsuleRunCredentialContext(ledger({ ...rows, ...overrides }), input))
+        .toEqual({ ok: false, reason: "runtime_safety_mismatch" });
+    }
+
+    const ordinaryPlan = { ...plan, operation: "update", status: "running" };
+    const ordinaryApply = { ...apply, operation: "update" };
+    expect(await resolveCanonicalCapsuleRunCredentialContext(
+      ledger({ ...rows, plan: ordinaryPlan, apply: ordinaryApply, safety: priorSafety }),
+      { ...input, runId: plan.id, phase: "plan" },
+    )).toEqual({ ok: false, reason: "runtime_safety_mismatch" });
+    expect(await resolveCanonicalCapsuleRunCredentialContext(
+      ledger({ ...rows, plan: ordinaryPlan, apply: ordinaryApply, safety: priorSafety }),
+      { ...input, phase: "apply" },
+    )).toEqual({ ok: false, reason: "runtime_safety_mismatch" });
+  });
+
   test("allows a fresh plan and apply after an exact committed post-apply failure", async () => {
     const capsule = {
       ...CAPSULE,
@@ -764,6 +904,9 @@ function ledger(
     readonly plan?: Record<string, unknown>;
     readonly apply?: Record<string, unknown>;
     readonly priorApply?: Record<string, unknown>;
+    readonly originalPlan?: Record<string, unknown>;
+    readonly recovery?: Record<string, unknown>;
+    readonly snapshot?: Record<string, unknown>;
     readonly stateVersion?: Record<string, unknown> | null;
     readonly output?: Record<string, unknown> | null;
     readonly safety?: Record<string, unknown>;
@@ -778,11 +921,16 @@ function ledger(
   const output = overrides.output ?? undefined;
   return {
     getCapsule: async (id) => (id === capsule.id ? capsule : undefined) as never,
-    getPlanRun: async (id) => (id === plan.id ? plan : undefined) as never,
+    getPlanRun: async (id) =>
+      (id === plan.id ? plan : id === overrides.originalPlan?.id ? overrides.originalPlan : undefined) as never,
     getApplyRun: async (id) =>
       (id === apply.id ? apply : id === priorApply?.id ? priorApply : undefined) as never,
     getStateVersion: async (id) =>
       (id === stateVersion?.id ? stateVersion : undefined) as never,
+    getStateRecoveryRun: async (id) =>
+      (id === overrides.recovery?.id ? overrides.recovery : undefined) as never,
+    getSourceSnapshot: async (id) =>
+      (id === overrides.snapshot?.id ? overrides.snapshot : undefined) as never,
     getOutput: async (id) => (id === output?.id ? output : undefined) as never,
     getCapsuleRuntimeSafety: async (_capsuleId, options) =>
       (options?.excludeRunId === overrides.safety?.runId

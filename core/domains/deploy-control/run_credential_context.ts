@@ -2,6 +2,7 @@ import type { Capsule } from "takosumi-contract/capsules";
 
 import type { OpenTofuControlStore } from "./store.ts";
 import { exactCommittedPostApplyRecoveryRowsMatch } from "./committed_post_apply_recovery.ts";
+import { recoveryPlanForStateVersion, stateVersionIdForRecoveryRun } from "./operator_state_recovery.ts";
 
 export type CapsuleRunCredentialPhase = "plan" | "apply" | "destroy";
 export type CapsuleRunCredentialLifecycleIntent = "provision" | "destroy";
@@ -45,6 +46,8 @@ export type CapsuleRunCredentialLedger = Pick<
   | "getStateVersion"
   | "getOutput"
   | "getCapsuleRuntimeSafety"
+  | "getStateRecoveryRun"
+  | "getSourceSnapshot"
 >;
 
 export async function resolveCanonicalCapsuleRunCredentialContext(
@@ -235,8 +238,81 @@ export async function capsuleRunRuntimeSafetyMatches(
       store,
       priorSafety.runId,
       capsule,
+    )) ||
+    (await recoveredInitialCreateDestroyMatches(
+      store,
+      priorSafety.runId,
+      capsule,
+      runId,
+      plannedCapsuleStateVersionId,
     ))
   );
+}
+
+/** A recovered initial create has no provider-success receipt. Only a newly
+ * reviewed destroy of its exact generation-one state may consume that state. */
+async function recoveredInitialCreateDestroyMatches(
+  store: CapsuleRunCredentialLedger,
+  failedApplyRunId: string,
+  capsule: Capsule,
+  destroyApplyRunId: string,
+  plannedStateVersionId: string,
+): Promise<boolean> {
+  if (
+    capsule.status !== "error" || capsule.currentStateGeneration !== 1 ||
+    capsule.currentOutputId !== undefined ||
+    capsule.currentStateVersionId !== plannedStateVersionId
+  ) return false;
+
+  const [state, destroyApply] = await Promise.all([
+    store.getStateVersion(plannedStateVersionId),
+    store.getApplyRun(destroyApplyRunId),
+  ]);
+  if (
+    !state || state.id !== plannedStateVersionId ||
+    state.workspaceId !== capsule.workspaceId || state.capsuleId !== capsule.id ||
+    state.environment !== capsule.environment || state.generation !== 1 ||
+    !destroyApply || destroyApply.id !== destroyApplyRunId ||
+    destroyApply.status !== "running" || destroyApply.operation !== "destroy" ||
+    destroyApply.workspaceId !== capsule.workspaceId ||
+    destroyApply.capsuleId !== capsule.id ||
+    destroyApply.expected.currentStateVersionId !== state.id ||
+    destroyApply.stateVersionId !== undefined || destroyApply.outputId !== undefined
+  ) return false;
+
+  const [recovery, destroyPlan] = await Promise.all([
+    store.getStateRecoveryRun(state.createdByRunId),
+    store.getPlanRun(destroyApply.planRunId),
+  ]);
+  if (
+    !recovery || recovery.id !== state.createdByRunId ||
+    recovery.type !== "state_recovery" || recovery.status !== "succeeded" ||
+    recovery.executionEvidence !== undefined ||
+    recovery.stateRecovery?.failedApplyRunId !== failedApplyRunId ||
+    recovery.stateRecovery.recoveredStateVersionId !== state.id ||
+    recovery.stateRecovery.plaintextSha256 !== state.digest ||
+    state.createdAt !== recovery.finishedAt ||
+    state.id !== await stateVersionIdForRecoveryRun(recovery.id) ||
+    !destroyPlan || destroyPlan.id !== destroyApply.planRunId ||
+    destroyPlan.status !== "succeeded" || destroyPlan.operation !== "destroy" ||
+    destroyPlan.approval === undefined ||
+    destroyPlan.workspaceId !== capsule.workspaceId ||
+    destroyPlan.capsuleId !== capsule.id ||
+    destroyPlan.baseStateGeneration !== 1 ||
+    destroyPlan.capsuleCurrentStateVersionId !== state.id ||
+    destroyPlan.capsuleExecutionAuthorityEpoch !==
+      destroyApply.expected.capsuleExecutionAuthorityEpoch ||
+    (destroyPlan.appliedApplyRunId !== undefined &&
+      destroyPlan.appliedApplyRunId !== destroyApply.id)
+  ) return false;
+
+  const originalPlan = await recoveryPlanForStateVersion(store, capsule, state);
+  if (!originalPlan) return false;
+  const failed = await store.getApplyRun(failedApplyRunId);
+  return failed?.id === failedApplyRunId &&
+    failed.planRunId === originalPlan.id &&
+    failed.executionEvidence === undefined &&
+    failed.stateVersionId === undefined && failed.outputId === undefined;
 }
 
 /**

@@ -562,6 +562,101 @@ const D1_WORKSPACE_FREEZE_PLAN_APPROVAL_SETTLED_SQL = `
   )
 `;
 
+/** Exact state-only recovery evidence required before it can settle a failed create. */
+function d1WorkspaceFreezeStateRecoverySettledSql(candidate: string): string {
+  const runJson = `(case when json_valid(${candidate}.run_json) = 1
+    then ${candidate}.run_json else '{}' end)`;
+  const text = (path: string) => `json_type(${runJson}, '${path}') = 'text'
+    and trim(json_extract(${runJson}, '${path}')) <> ''`;
+  const digest = (path: string) => `length(json_extract(${runJson}, '${path}')) = 71
+    and substr(json_extract(${runJson}, '${path}'), 1, 7) = 'sha256:'
+    and substr(json_extract(${runJson}, '${path}'), 8) not glob '*[^0-9a-f]*'`;
+  return d1WorkspaceFreezeAll([
+    `${candidate}.lease_token is null`,
+    `${candidate}.type = 'state_recovery'`,
+    `${candidate}.status = 'succeeded'`,
+    `json_valid(${candidate}.run_json) = 1`,
+    `json_type(${runJson}) = 'object'`,
+    text("$.id"),
+    `json_extract(${runJson}, '$.id') is ${candidate}.id`,
+    text("$.workspaceId"),
+    `json_extract(${runJson}, '$.workspaceId') is ${candidate}.space_id`,
+    `json_extract(${runJson}, '$.status') is ${candidate}.status`,
+    `${candidate}.source_id is null`,
+    `json_type(${runJson}, '$.sourceId') is null`,
+    text("$.capsuleId"),
+    `json_extract(${runJson}, '$.capsuleId') is ${candidate}.installation_id`,
+    text("$.environment"),
+    `json_extract(${runJson}, '$.environment') is ${candidate}.environment`,
+    text("$.createdAt"),
+    `json_extract(${runJson}, '$.createdAt') is ${candidate}.created_at`,
+    `json_type(${runJson}, '$.heartbeatAt') is null
+      and ${candidate}.heartbeat_at is null
+      or json_type(${runJson}, '$.heartbeatAt') = 'integer'
+        and ${candidate}.heartbeat_at between 0 and 9007199254740991
+        and json_extract(${runJson}, '$.heartbeatAt') is ${candidate}.heartbeat_at`,
+    `json_type(${runJson}, '$.startedAt') is null
+      or json_type(${runJson}, '$.startedAt') = 'text'
+        and trim(json_extract(${runJson}, '$.startedAt')) <> ''`,
+    `json_type(${runJson}, '$.finishedAt') is null
+      or json_type(${runJson}, '$.finishedAt') = 'text'
+        and trim(json_extract(${runJson}, '$.finishedAt')) <> ''`,
+    `json_extract(${runJson}, '$.type') = 'state_recovery'`,
+    `json_type(${runJson}, '$.kind') is null`,
+    `json_type(${runJson}, '$.operation') is null`,
+    text("$.planRunId"),
+    text("$.sourceSnapshotId"),
+    `json_type(${runJson}, '$.stateRecovery') = 'object'`,
+    text("$.stateRecovery.failedApplyRunId"),
+    text("$.stateRecovery.recoveredStateVersionId"),
+    text("$.stateRecovery.sourceSnapshotId"),
+    `json_extract(${runJson}, '$.stateRecovery.sourceSnapshotId')
+      is json_extract(${runJson}, '$.sourceSnapshotId')`,
+    text("$.stateRecovery.plaintextSha256"),
+    digest("$.stateRecovery.plaintextSha256"),
+    text("$.stateRecovery.encryptedDigest"),
+    digest("$.stateRecovery.encryptedDigest"),
+    text("$.stateRecovery.artifactEvidenceDigest"),
+    digest("$.stateRecovery.artifactEvidenceDigest"),
+    `exists (
+      select 1
+        from state_versions as recovery_state
+        join runs as failed_apply
+          on failed_apply.id = json_extract(
+            ${runJson}, '$.stateRecovery.failedApplyRunId'
+          )
+       where recovery_state.id = json_extract(
+           ${runJson}, '$.stateRecovery.recoveredStateVersionId'
+         )
+         and recovery_state.space_id = ${candidate}.space_id
+         and recovery_state.installation_id = ${candidate}.installation_id
+         and recovery_state.environment = ${candidate}.environment
+         and typeof(recovery_state.generation) = 'integer'
+         and recovery_state.generation = 1
+         and recovery_state.created_by_run_id = ${candidate}.id
+         and recovery_state.digest = json_extract(
+           ${runJson}, '$.stateRecovery.plaintextSha256'
+         )
+         and failed_apply.type = 'apply'
+         and failed_apply.status = 'failed'
+         and failed_apply.space_id = ${candidate}.space_id
+         and failed_apply.installation_id = ${candidate}.installation_id
+         and json_valid(failed_apply.run_json) = 1
+         and json_type(failed_apply.run_json) = 'object'
+         and json_extract(failed_apply.run_json, '$.id') is failed_apply.id
+         and json_extract(failed_apply.run_json, '$.workspaceId') is failed_apply.space_id
+         and json_extract(failed_apply.run_json, '$.status') is failed_apply.status
+         and json_extract(failed_apply.run_json, '$.operation') = 'create'
+         and json_extract(failed_apply.run_json, '$.planRunId') is
+           json_extract(${runJson}, '$.planRunId')
+         and json_extract(failed_apply.run_json, '$.capsuleId') is
+           json_extract(${runJson}, '$.capsuleId')
+         and json_type(failed_apply.run_json, '$.stateVersionId') is null
+         and json_type(failed_apply.run_json, '$.outputId') is null
+    )`,
+  ]);
+}
+
 const D1_WORKSPACE_FREEZE_APPLY_SETTLED_SQL = `
   ${D1_WORKSPACE_FREEZE_VALID_APPLY_AUDIT_SQL}
   and ${D1_WORKSPACE_FREEZE_APPLY_FINALIZERS_SETTLED_SQL}
@@ -577,30 +672,42 @@ const D1_WORKSPACE_FREEZE_APPLY_SETTLED_SQL = `
       and json_type(
         ${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.executionEvidence'
       ) is null
-      and not (${D1_WORKSPACE_FREEZE_APPLY_DISPATCHED_SQL})
-      and exists (
-        select 1
-          from json_each(
-            ${D1_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}
-          ) as audit_event
-         where (
-             json_extract(
-                 case when json_valid(audit_event.value) = 1
-                   then audit_event.value else '{}' end,
-                 '$.type'
-               ) = 'apply.failed'
-             or run.type = 'destroy_apply'
-               and json_extract(
-                 case when json_valid(audit_event.value) = 1
-                   then audit_event.value else '{}' end,
-                 '$.type'
-               ) = 'destroy.failed'
-           )
-           and json_type(
-                 case when json_valid(audit_event.value) = 1
-                   then audit_event.value else '{}' end,
-                 '$.data.providerDispatched'
-               ) = 'false'
+      and (
+        exists (
+          select 1
+            from freeze_recovery_proofs as recovery
+           where recovery.workspace_id = run.space_id
+             and recovery.failed_apply_run_id = run.id
+             and recovery.capsule_id = run.installation_id
+             and json_extract(run.run_json, '$.operation') = 'create'
+        )
+        or (
+          not (${D1_WORKSPACE_FREEZE_APPLY_DISPATCHED_SQL})
+          and exists (
+            select 1
+              from json_each(
+                ${D1_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}
+              ) as audit_event
+             where (
+                 json_extract(
+                     case when json_valid(audit_event.value) = 1
+                       then audit_event.value else '{}' end,
+                     '$.type'
+                   ) = 'apply.failed'
+                 or run.type = 'destroy_apply'
+                   and json_extract(
+                     case when json_valid(audit_event.value) = 1
+                       then audit_event.value else '{}' end,
+                     '$.type'
+                   ) = 'destroy.failed'
+               )
+               and json_type(
+                     case when json_valid(audit_event.value) = 1
+                       then audit_event.value else '{}' end,
+                     '$.data.providerDispatched'
+                   ) = 'false'
+          )
+        )
       )
     else
       json_type(
@@ -815,7 +922,7 @@ const D1_WORKSPACE_FREEZE_RUN_BLOCKER_SQL = `
       run.lease_token is null
       and run.type in (
         'plan', 'destroy_plan', 'drift_check', 'apply', 'destroy_apply',
-        'source_sync', 'compatibility_check', 'backup', 'restore'
+        'source_sync', 'compatibility_check', 'backup', 'restore', 'state_recovery'
       )
       and run.status in ('succeeded', 'failed', 'cancelled', 'expired')
     `,
@@ -1222,6 +1329,11 @@ const D1_WORKSPACE_FREEZE_RUN_BLOCKER_SQL = `
         ) is null
         and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.expected') is null
         and ${D1_WORKSPACE_FREEZE_RESTORE_SETTLED_SQL}
+      when 'state_recovery' then
+        exists (
+          select 1 from freeze_recovery_proofs as recovery
+           where recovery.run_id = run.id
+        )
       else 0
     end`,
   ])}
@@ -4424,6 +4536,23 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
             join freeze_expected as expected
               on expected.workspace_id = run.space_id
           ),
+          freeze_recovery_proofs as materialized (
+            select
+              recovery_run.id as run_id,
+              recovery_run.space_id as workspace_id,
+              recovery_run.installation_id as capsule_id,
+              json_extract(
+                case when json_valid(recovery_run.run_json) = 1
+                  then recovery_run.run_json else '{}' end,
+                '$.stateRecovery.failedApplyRunId'
+              ) as failed_apply_run_id
+            from runs as recovery_run
+            where recovery_run.space_id = (
+                    select workspace_id from freeze_expected
+                  )
+              and recovery_run.type = 'state_recovery'
+              and ${d1WorkspaceFreezeStateRecoverySettledSql("recovery_run")}
+          ),
           freeze_restore_state_pairs as materialized (
             ${D1_WORKSPACE_FREEZE_RESTORE_STATE_PAIRS_SQL}
           ),
@@ -7213,7 +7342,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
 
   async commitRecoveredState(input: CommitRecoveredStateInput): Promise<CommitRecoveredStateResult> {
     assertD1AtomicCommitBatch(this.db, "commitRecoveredState");
-    assertRecoveryCommitCandidate(input);
+    await assertRecoveryCommitCandidate(input);
     await this.#ensureSchema();
     const capsule = await this.getCapsule(input.expectedCapsule.id);
     const existingRun = await this.getStateRecoveryRun(input.recoveryRun.id);
@@ -7225,24 +7354,69 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     if (exactRecoveryReplay(existingRun, input, existingStateVersion, capsule, currentEpoch, existingActivity)) {
       return { status: "replayed", run: existingRun!, stateVersion: existingStateVersion!, capsule: capsule! };
     }
-    const [installConfig, source, sourceSnapshot, planRun, failedApplyRun,
+    const [installConfig, storedInstallConfig, source, sourceSnapshot, planRun, failedApplyRun,
       workspaceManagement, executionAuthorityEpoch, runRows, generationRow] = await Promise.all([
       this.getInstallConfig(input.expectedInstallConfig.id),
+      this.#getRawInstallConfig(input.expectedInstallConfig.id),
       this.getSource(input.expectedSource.id),
       this.getSourceSnapshot(input.expectedSourceSnapshot.id),
       this.getPlanRun(input.expectedPlanRun.id),
       this.getApplyRun(input.expectedFailedApplyRun.id),
       this.getWorkspaceManagement(input.expectedCapsule.workspaceId),
       this.getCapsuleExecutionAuthorityEpoch(input.expectedCapsule.id),
-      this.#orm.select({ json: schema.runs.runJson }).from(schema.runs)
+      this.#orm.select({
+        id: schema.runs.id,
+        workspaceId: schema.runs.workspaceId,
+        capsuleId: schema.runs.capsuleId,
+        type: schema.runs.type,
+        status: schema.runs.status,
+        leaseToken: schema.runs.leaseToken,
+        json: schema.runs.runJson,
+      }).from(schema.runs)
         .where(eq(schema.runs.capsuleId, input.expectedCapsule.id)).all(),
       this.#orm.select({ id: schema.stateVersions.id }).from(schema.stateVersions)
         .where(and(eq(schema.stateVersions.capsuleId, input.expectedCapsule.id),
           eq(schema.stateVersions.environment, input.expectedCapsule.environment),
           eq(schema.stateVersions.generation, 1))).get(),
     ]);
+    const planPhysicalRow = runRows.find((row) => row.id === input.expectedPlanRun.id);
+    const storedPlanRun = planPhysicalRow && d1StoredRunFromD1Value(planPhysicalRow.json);
+    const planPhysicalMatches = planPhysicalRow?.workspaceId === input.expectedCapsule.workspaceId &&
+      planPhysicalRow.capsuleId === input.expectedCapsule.id && planPhysicalRow.type === "plan" &&
+      planPhysicalRow.status === "succeeded" && planPhysicalRow.leaseToken === null &&
+      storedPlanRun !== undefined && isPlanRunRecord(storedPlanRun) &&
+      storedPlanRun?.id === planPhysicalRow.id &&
+      storedPlanRun.workspaceId === planPhysicalRow.workspaceId &&
+      storedPlanRun.capsuleId === planPhysicalRow.capsuleId &&
+      storedPlanRun.status === planPhysicalRow.status;
+    const failedApplyPhysicalRow = runRows.find((row) => row.id === input.expectedFailedApplyRun.id);
+    const storedFailedApplyRun = failedApplyPhysicalRow && d1StoredRunFromD1Value(failedApplyPhysicalRow.json);
+    const failedApplyPhysicalMatches = failedApplyPhysicalRow?.workspaceId === input.expectedCapsule.workspaceId &&
+      failedApplyPhysicalRow.capsuleId === input.expectedCapsule.id && failedApplyPhysicalRow.type === "apply" &&
+      failedApplyPhysicalRow.status === "failed" && failedApplyPhysicalRow.leaseToken === null &&
+      storedFailedApplyRun !== undefined && isApplyRunRecord(storedFailedApplyRun) &&
+      storedFailedApplyRun?.id === failedApplyPhysicalRow.id &&
+      storedFailedApplyRun.workspaceId === failedApplyPhysicalRow.workspaceId &&
+      storedFailedApplyRun.capsuleId === failedApplyPhysicalRow.capsuleId &&
+      storedFailedApplyRun.status === failedApplyPhysicalRow.status;
+    const projectedInstallConfig = storedInstallConfig &&
+      publicStoredInstallConfig(storedInstallConfig);
+    const projectedPlanRun = storedPlanRun && planPhysicalMatches && isPlanRunRecord(storedPlanRun)
+      ? publicStoredRun(storedPlanRun) as PlanRun
+      : undefined;
+    const projectedFailedApplyRun = storedFailedApplyRun && failedApplyPhysicalMatches &&
+      isApplyRunRecord(storedFailedApplyRun)
+      ? publicStoredRun(storedFailedApplyRun) as ApplyRun
+      : undefined;
     const observed = {
-      capsule, installConfig, source, sourceSnapshot, planRun, failedApplyRun,
+      capsule,
+      installConfig: stableStringify(installConfig) === stableStringify(projectedInstallConfig)
+        ? projectedInstallConfig : undefined,
+      source, sourceSnapshot,
+      planRun: stableStringify(planRun) === stableStringify(projectedPlanRun)
+        ? projectedPlanRun : undefined,
+      failedApplyRun: stableStringify(failedApplyRun) === stableStringify(projectedFailedApplyRun)
+        ? projectedFailedApplyRun : undefined,
       workspaceManagement: workspaceManagement?.managementState === "active"
         ? workspaceManagement as WorkspaceManagementAuthority : undefined,
       executionAuthorityEpoch, existingRun, existingStateVersion,
@@ -7260,7 +7434,11 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const state = input.stateVersion;
     try {
       await this.#orm.batch([
-        d1RecoveredStateCandidateGuardStmt(this.#orm, input),
+        d1RecoveredStateCandidateGuardStmt(this.#orm, input, {
+          installConfig: storedInstallConfig,
+          planRun: storedPlanRun,
+          failedApplyRun: storedFailedApplyRun,
+        }),
         this.#orm.insert(schema.runs).values({
           id: run.id, runGroupId: null, workspaceId: run.workspaceId,
           sourceId: null, capsuleId: run.capsuleId ?? null,
@@ -12066,6 +12244,11 @@ function d1InvalidWorkspaceManagementGuardRow(runId: string) {
 function d1RecoveredStateCandidateGuardStmt(
   orm: DrizzleD1Database<typeof schema>,
   input: CommitRecoveredStateInput,
+  observedRaw: {
+    readonly installConfig?: InstallConfig;
+    readonly planRun?: StoredRunRecord;
+    readonly failedApplyRun?: StoredRunRecord;
+  },
 ) {
   const capsule = input.expectedCapsule;
   const failed = input.expectedFailedApplyRun;
@@ -12083,7 +12266,7 @@ function d1RecoveredStateCandidateGuardStmt(
         AND ${schema.capsules.recordJson} = ${JSON.stringify(capsule)})
     AND EXISTS (SELECT 1 FROM ${schema.installConfigs}
       WHERE ${schema.installConfigs.id} = ${input.expectedInstallConfig.id}
-        AND ${schema.installConfigs.recordJson} = ${JSON.stringify(input.expectedInstallConfig)})
+        AND ${schema.installConfigs.recordJson} = ${JSON.stringify(observedRaw.installConfig)})
     AND EXISTS (SELECT 1 FROM ${schema.sources}
       WHERE ${schema.sources.id} = ${input.expectedSource.id}
         AND ${schema.sources.recordJson} = ${JSON.stringify(input.expectedSource)})
@@ -12092,10 +12275,20 @@ function d1RecoveredStateCandidateGuardStmt(
         AND ${schema.sourceSnapshots.recordJson} = ${JSON.stringify(input.expectedSourceSnapshot)})
     AND EXISTS (SELECT 1 FROM ${schema.runs}
       WHERE ${schema.runs.id} = ${input.expectedPlanRun.id}
-        AND ${schema.runs.runJson} = ${JSON.stringify(input.expectedPlanRun)})
+        AND ${schema.runs.workspaceId} = ${input.expectedCapsule.workspaceId}
+        AND ${schema.runs.capsuleId} = ${input.expectedCapsule.id}
+        AND ${schema.runs.type} = 'plan'
+        AND ${schema.runs.status} = 'succeeded'
+        AND ${schema.runs.leaseToken} IS NULL
+        AND ${schema.runs.runJson} = ${JSON.stringify(observedRaw.planRun)})
     AND EXISTS (SELECT 1 FROM ${schema.runs}
       WHERE ${schema.runs.id} = ${failed.id}
-        AND ${schema.runs.runJson} = ${JSON.stringify(failed)})
+        AND ${schema.runs.workspaceId} = ${input.expectedCapsule.workspaceId}
+        AND ${schema.runs.capsuleId} = ${input.expectedCapsule.id}
+        AND ${schema.runs.type} = 'apply'
+        AND ${schema.runs.status} = 'failed'
+        AND ${schema.runs.leaseToken} IS NULL
+        AND ${schema.runs.runJson} = ${JSON.stringify(observedRaw.failedApplyRun)})
     AND NOT EXISTS (SELECT 1 FROM ${schema.runs}
       WHERE ${schema.runs.id} = ${input.recoveryRun.id})
     AND NOT EXISTS (SELECT 1 FROM ${schema.auditEvents}
