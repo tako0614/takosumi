@@ -83,6 +83,23 @@ a commercial host extension and are not part of this public distribution.
 
 ## Operator notes
 
+- Local failed-create state recovery uses the separate
+  `LocalOpenTofuStateRecoveryArtifactStore` and the file store's explicit
+  `commitRecovery` and `readRecovery` capabilities. It stages bounded, operator-selected state under
+  the canonical generation-one Capsule reference and verifies an immutable
+  encrypted readback. Its v3 state-only envelope contains no runner result;
+  ordinary v2 Apply/Destroy/Restore envelopes retain their existing semantics.
+  Recovery readback caps the physical encrypted envelope at 32 MiB before
+  allocation, including an occupied file with a misleading v2 prefix. The
+  historical v2 reader remains uncapped for compatibility and requires a
+  trusted operator-owned local filesystem; this bound is not a general file
+  store guarantee.
+  This is a composition library, not an enabled CLI or authenticated recovery
+  route. An operator workflow must use the same control store, crypto boundary
+  and artifact root as the selected deployment, authorize the exact recovery
+  scope, and preserve stable retry identity and custody outside Git. See the
+  [Core state contract](../../docs/internal/core-spec.md). A recovered partial
+  state does not prove a complete resource inventory or provider success.
 - Run `bun run cli -- accounts migrate` against Postgres before first start, or use the docker-compose `migrations`
   init container which does it for you. See `cli-accounts-db.ts` for the migration entry point.
 - A custom Node composition that supplies a durable `opentofuControlStore` to

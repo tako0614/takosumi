@@ -255,8 +255,27 @@ local runner uses that callback; the Worker runner instead validates D1 lineage
 before claiming the operation, then validates the R2 artifact under its claim.
 The Worker adapter checks the canonical state identity, ledger backlinks,
 encrypted-byte digest and custody metadata; it does not perform a second D1
-lineage read at the local runner's source-read fence. Local runner recovery
-staging is not implemented by this R2 adapter and is not claimed as qualified.
+lineage read at the local runner's source-read fence.
+
+The Bun/Postgres substrate has a separate local recovery artifact adapter. It
+uses the same canonical generation-1 Capsule reference, but stores a resultless
+v3 encrypted file envelope with its own authenticated metadata. Its exact
+failed Apply, recovery Run, scope, plaintext digest and custody-evidence digest
+are bound to the actual ciphertext readback. Atomic no-replace publication and
+exact retry preserve an occupied coordinate; normal v2 mutation artifacts still
+require their runner result. Recovery-only readback enforces a 32 MiB physical
+envelope cap before allocation regardless of an occupied file's prefix; the
+historical v2 reader retains its uncapped, trusted-local-filesystem contract.
+Recovery is a prior-state source, never a runner
+execution action or an inferred successful Apply. Core validates the recovery
+lineage before Plan/Destroy Plan dispatch; local Restore additionally uses the
+source-read authority callback. The local adapter does not add a second Core
+lineage read to the Plan dispatch contract.
+Portable tests exercise local encrypted staging, the actual Core recovery
+commit and byte-identical state delivery to a captured runner transport. This
+does not qualify a live runner, a complete resource inventory, or an operator
+recovery entrypoint. Neither the local adapter nor the R2 adapter authorizes
+recovery, mounts a route, or repairs an existing environment by itself.
 
 ## Capsule InstallConfig re-adoption
 
