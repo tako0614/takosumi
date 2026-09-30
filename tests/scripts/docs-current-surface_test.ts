@@ -320,6 +320,10 @@ test("Takosumi internal authority docs stay outside the public docs surface", as
   assert.match(productGoal, /github\.com\/tako0614\/takoform\/blob\/main\/spec\/README\.md/);
   assert.match(productGoal, /github\.com\/tako0614\/takosumi-hosted\/blob\/main\/README\.md/);
   assert.match(productGoal, /Takoserver owns[\s\S]*managed supply/);
+  assert.match(productGoal, /Both Takosumi and Takoserver are self-hostable software/);
+  assert.match(productGoal, /offer hosting services for both[\s\S]*self-host\s+operations and offered hosting/);
+  assert.match(productGoal, /single-owner personal deployment model is not a blanket model/);
+  assert.match(productGoal, /not a claim that either hosting service is already live or GA/);
   assert.match(productGoal, /without\s+importing Takosumi or Takoserver source/);
   assert.match(productGoal, /credential values never enter\s+Outputs,/);
   assert.doesNotMatch(productGoal, /published compatibility distribution is|independent current design target is/);

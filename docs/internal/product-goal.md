@@ -34,6 +34,17 @@ capacity, and reseller contracts. Hosted consumes the public reseller API;
 its retail price and settlement do not become OSS defaults or Host authority.
 Other managed providers retain their own supply authority.
 
+Both Takosumi and Takoserver are self-hostable software. Product policy is to
+offer hosting services for both, so the completion premise covers self-host
+operations and offered hosting for each product. The two paths need their own
+installation, lifecycle, recovery, and operator evidence; hosting additionally
+needs the owning service's customer/tenant isolation and operating controls.
+Takos/Yurucommu's single-owner personal deployment model is not a blanket model
+for the Takosumi/Takoserver hosting operations layer. This is product policy,
+not a claim that either hosting service is already live or GA. Takoserver's
+software and hosting readiness belong to its owner; the generic Takosumi OSS
+Stack flow remains usable without Takoserver.
+
 OSS GA and Hosted GA are separate release decisions. A green OSS check does
 not claim hosted availability; a Marketplace listing or source fixture does
 not claim production GA. Each owning product must prove its own contract and
