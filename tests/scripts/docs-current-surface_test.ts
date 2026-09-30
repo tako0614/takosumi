@@ -313,9 +313,16 @@ test("Takosumi internal authority docs stay outside the public docs surface", as
   assert.match(productGoal, /current public Takoform contract/);
   assert.match(productGoal, /source candidate[\s\S]*isolated staging/);
   assert.match(productGoal, /Production[\s\S]*immutable published identity/);
-  assert.match(productGoal, /self-host[\s\S]*hosted Cloud/);
+  assert.match(productGoal, /OSS GA and (?:Hosted|hosted Cloud) GA are separate release decisions/);
   assert.match(productGoal, /Core Spec/);
-  assert.match(productGoal, /Cloud GA smoke/);
+  assert.doesNotMatch(productGoal, /github\.com\/tako0614\/takosumi-cloud\//);
+  assert.match(productGoal, /Takoform is optional/);
+  assert.match(productGoal, /github\.com\/tako0614\/takoform\/blob\/main\/spec\/README\.md/);
+  assert.match(productGoal, /github\.com\/tako0614\/takosumi-hosted\/blob\/main\/README\.md/);
+  assert.match(productGoal, /Takoserver owns[\s\S]*managed supply/);
+  assert.match(productGoal, /without\s+importing Takosumi or Takoserver source/);
+  assert.match(productGoal, /credential values never enter\s+Outputs,/);
+  assert.doesNotMatch(productGoal, /published compatibility distribution is|independent current design target is/);
   assert.doesNotMatch(productGoal, /Final Plan.*current|authoritative.*roadmap/i);
 
   const historicalFormEvidence = await readText(
