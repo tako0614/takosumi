@@ -2454,6 +2454,26 @@ test.describe("Takosumi dashboard browser surface", () => {
       if (path === `/api/v1/capsules/${capsuleId}/state-versions`) {
         return route.fulfill({ json: { stateVersions: [stateVersion] } });
       }
+      if (
+        path === `/api/v1/capsules/${capsuleId}/backups` &&
+        request.method() === "POST"
+      ) {
+        return route.fulfill({
+          status: 201,
+          json: {
+            backup: {
+              id: "bkp_partial_export_e2e",
+              workspaceId: "ws_alpha",
+              capsuleId,
+              environment: "production",
+              ref: "backup_control/ws_alpha/bkp_partial_export_e2e/control.tar.zst",
+              digest: `sha256:${"b".repeat(64)}`,
+              sizeBytes: 256,
+              createdAt: now,
+            },
+          },
+        });
+      }
       if (path === `/api/v1/capsules/${capsuleId}/current-resource-inventory`) {
         return route.fulfill({
           json: {
@@ -2714,6 +2734,28 @@ test.describe("Takosumi dashboard browser surface", () => {
     expect(seenMutations).toEqual([]);
     await page.screenshot({ path: test.info().outputPath("updates-1180.png") });
 
+    const exportActions = versionCard.locator("details").filter({
+      has: page.locator("summary", { hasText: /^(必要なときだけ使う操作|Extra actions)$/u }),
+    });
+    await exportActions.locator("summary").click();
+    await expect(exportActions).toContainText(/ワークスペースの管理情報の一部|selected workspace management records/u);
+    await expect(exportActions).toContainText(/このデータの取り込み・復元には対応していません|This export cannot be imported or used to restore a service/u);
+    const createExport = exportActions.getByRole("button", { name: /^(管理情報の一部を書き出す|Create partial export)$/u });
+    for (const width of [320, 375, 414, 768]) {
+      await page.setViewportSize({ width, height: 844 });
+      await expect(createExport).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+    }
+    await createExport.click();
+    const exportNotice = versionCard.locator(".wa-notice");
+    await expect(exportNotice).toContainText(/管理情報の一部を書き出しました|Partial export created/u);
+    await expect(exportNotice).toContainText(/このデータの取り込み・復元には対応していません|This export cannot be imported or used to restore a service/u);
+    await expect(exportNotice.locator("code")).toBeHidden();
+    await expect(exportNotice.locator("summary")).toHaveText(/^(書き出し ID|Export ID)$/u);
+    expect(seenMutations).toEqual([`POST /api/v1/capsules/${capsuleId}/backups`]);
+    await page.screenshot({ path: test.info().outputPath("partial-export-768.png") });
+    await page.setViewportSize({ width: 1180, height: 757 });
+
     await gotoDashboardDocument(
       page,
       `/workloads/${capsuleId}/settings`,
@@ -2750,6 +2792,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       },
     ]);
     expect(seenMutations).toEqual([
+      `POST /api/v1/capsules/${capsuleId}/backups`,
       `POST /api/v1/capsules/${capsuleId}/configuration-plans`,
     ]);
     await expect(page).toHaveURL(new RegExp(`/runs/${planRunId}$`, "u"));

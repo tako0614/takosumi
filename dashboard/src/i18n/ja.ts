@@ -220,7 +220,7 @@ export const ja = {
   "settings.manage.activity": "だれが何を変更したかの操作履歴",
   "settings.manage.workspace":
     "アクセスと共有、キー、バックアップ、ポリシー",
-  "settings.manage.backups": "復元ポイントの作成と復元",
+  "settings.manage.backups": "管理情報の一部の書き出し",
   "settings.manage.shares": "サービス間で共有する値の管理",
   "settings.manage.interfaceRecovery":
     "永続化に失敗したInterfaceを確認し、再試行をキューに追加",
@@ -477,10 +477,11 @@ export const ja = {
   "app.deploys.restoreDisclosure": "以前の状態に戻す",
   "app.deploys.advancedActions": "必要なときだけ使う操作",
   "app.deploys.advancedActionsBody":
-    "復元ポイントやバックアップが必要な場合だけ使います。",
-  "app.deploys.backup": "バックアップを作成",
-  "app.deploys.backupCreated": "バックアップを作成しました。",
-  "app.deploys.backupSupportRef": "バックアップ ID",
+    "ワークスペースの管理情報の一部を書き出します。このデータの取り込み・復元には対応していません。",
+  "app.deploys.backup": "管理情報の一部を書き出す",
+  "app.deploys.backupCreated":
+    "管理情報の一部を書き出しました。このデータの取り込み・復元には対応していません。",
+  "app.deploys.backupSupportRef": "書き出し ID",
   "app.deploys.inventoryTitle": "デプロイ済みリソース",
   "app.deploys.inventoryRecordedNote":
     "現在の適用状態に記録された内容です。ライブ稼働状態ではありません。",

@@ -214,7 +214,7 @@ export const en: Record<keyof typeof ja, string> = {
   "settings.manage.activity": "Who changed what, and when",
   "settings.manage.workspace":
     "Access and sharing, keys, backups, and policy",
-  "settings.manage.backups": "Create and restore restore points",
+  "settings.manage.backups": "Export selected management records",
   "settings.manage.shares": "Manage values shared between services",
   "settings.manage.interfaceRecovery":
     "Review and queue durable Interface materialization retries",
@@ -474,10 +474,11 @@ export const en: Record<keyof typeof ja, string> = {
   "app.deploys.restoreDisclosure": "Restore a previous version",
   "app.deploys.advancedActions": "Extra actions",
   "app.deploys.advancedActionsBody":
-    "Use these only when you need a restore point or backup.",
-  "app.deploys.backup": "Create backup",
-  "app.deploys.backupCreated": "Backup created.",
-  "app.deploys.backupSupportRef": "Backup ID",
+    "Exports selected workspace management records. This export cannot be imported or used to restore a service.",
+  "app.deploys.backup": "Create partial export",
+  "app.deploys.backupCreated":
+    "Partial export created. This export cannot be imported or used to restore a service.",
+  "app.deploys.backupSupportRef": "Export ID",
   "app.deploys.inventoryTitle": "Deployed resources",
   "app.deploys.inventoryRecordedNote":
     "Recorded in the current applied state; this is not live health.",
