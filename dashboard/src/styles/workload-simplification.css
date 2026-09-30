@@ -1,0 +1,28 @@
+/* Keep declared setting labels beside the edit; reference keys live in details. */
+.av-store-variable-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.wa-output-url .av-output-url-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.av-primary-surface,
+.av-primary-surface-link {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.av-surface-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+@media (max-width: 768px) {
+  .av-store-variable-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
