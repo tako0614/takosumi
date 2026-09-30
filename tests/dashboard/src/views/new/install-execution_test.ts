@@ -39,6 +39,31 @@ mock.module(resolve(root, "dashboard/src/components/ui/index.ts"), () => ({
 const { boundedRead } = await import(
   resolve(root, "dashboard/src/views/new/InstallExecution.tsx")
 );
+const { installRunStatusTone } = await import(
+  resolve(root, "dashboard/src/views/new/InstallExecution.tsx")
+);
+const { runFailureHint } = await import(
+  resolve(root, "dashboard/src/lib/run-errors.ts")
+);
+
+test("successful Apply stays neutral until post-apply readiness is ready", () => {
+  expect(installRunStatusTone("apply", "succeeded", undefined)).toBe("info");
+  expect(installRunStatusTone("apply", "succeeded", "settling")).toBe("info");
+  expect(installRunStatusTone("apply", "succeeded", "activation_pending")).toBe(
+    "info",
+  );
+  expect(installRunStatusTone("apply", "succeeded", "activation_failed")).toBe(
+    "danger",
+  );
+  expect(installRunStatusTone("apply", "succeeded", "ready")).toBe("ok");
+  expect(installRunStatusTone("plan", "succeeded", undefined)).toBe("ok");
+});
+
+test("install failure hint localizes known codes and hides raw codes", () => {
+  expect(runFailureHint("apply_failed")).not.toContain("apply_failed");
+  expect(runFailureHint("extension_private_failure"))
+    .not.toContain("extension_private_failure");
+});
 
 test("waiting approval exposes technical run details before approval", () => {
   const waitingApproval = source.match(

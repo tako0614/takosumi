@@ -123,7 +123,6 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.launchNotReady":
     "The service was applied, but its launch link is not ready yet. Retry the check or open the service details.",
   "installStore.runFailed": "Service setup did not finish",
-  "installStore.runFailedHint": "Open the technical details and try again.",
   "installStore.restartWithLatestSource": "Start again from the latest source",
   "installStore.restartConfirmTitle": "Start again from the latest source?",
   "installStore.restartConfirmMessage":
