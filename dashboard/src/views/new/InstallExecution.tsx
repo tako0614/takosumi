@@ -19,6 +19,7 @@ import {
 import { t } from "../../i18n/index.ts";
 import { Badge, Button, Checkbox, Spinner } from "../../components/ui/index.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
+import { runFailureHint } from "../../lib/run-errors.ts";
 import {
   stateVersionReadinessAfterApply,
   type StateVersionReadiness,
@@ -34,6 +35,21 @@ interface Props {
 
 const READINESS_READ_ATTEMPTS = 3;
 const READINESS_RETRY_DELAY_MS = 1_000;
+
+export function installRunStatusTone(
+  type: string,
+  status: string,
+  readiness: StateVersionReadiness | undefined,
+): "danger" | "ok" | "info" {
+  if (status === "failed" || status === "cancelled" || status === "expired") {
+    return "danger";
+  }
+  if (type === "apply" && readiness === "activation_failed") return "danger";
+  if (status === "succeeded" && (type !== "apply" || readiness === "ready")) {
+    return "ok";
+  }
+  return "info";
+}
 
 export interface BoundedReadOptions {
   readonly attempts?: number;
@@ -278,13 +294,11 @@ export default function InstallExecution(props: Props) {
                 </p>
               </div>
               <Badge
-                tone={
-                  failed()
-                    ? "danger"
-                    : current().status === "succeeded"
-                      ? "ok"
-                      : "info"
-                }
+                tone={installRunStatusTone(
+                  current().type,
+                  current().status,
+                  readiness.latest,
+                )}
               >
                 {current().status}
               </Badge>
@@ -397,8 +411,16 @@ export default function InstallExecution(props: Props) {
               <div class="iv-status" role="status" aria-live="polite">
                 <Spinner size={18} />
                 <div>
-                  <strong>{t("installStore.installing")}</strong>
-                  <span>{t("installStore.installingHint")}</span>
+                  <strong>
+                    {current().status === "succeeded"
+                      ? t("installStore.finalizing")
+                      : t("installStore.installing")}
+                  </strong>
+                  <span>
+                    {current().status === "succeeded"
+                      ? t("installStore.finalizingHint")
+                      : t("installStore.installingHint")}
+                  </span>
                 </div>
               </div>
             </Show>
@@ -450,7 +472,7 @@ export default function InstallExecution(props: Props) {
             <Show when={failed()}>
               <div class="iv-error" role="alert">
                 <strong>{t("installStore.runFailed")}</strong>
-                <p>{current().errorCode ?? t("installStore.runFailedHint")}</p>
+                <p>{runFailureHint(current().errorCode)}</p>
                 <div class="iv-action-row">
                   <Show when={current().type === "plan"}>
                     <Button

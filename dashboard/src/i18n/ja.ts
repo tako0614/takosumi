@@ -129,8 +129,6 @@ export const ja = {
   "installStore.launchNotReady":
     "サービスは適用されましたが、起動リンクをまだ確認できません。再確認するか、サービスの詳細を開いてください。",
   "installStore.runFailed": "追加を完了できませんでした",
-  "installStore.runFailedHint":
-    "技術的な詳細を確認して、もう一度お試しください。",
   "installStore.restartWithLatestSource": "最新のソースでやり直す",
   "installStore.restartConfirmTitle": "最新のソースで最初からやり直しますか？",
   "installStore.restartConfirmMessage":
