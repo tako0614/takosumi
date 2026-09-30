@@ -446,6 +446,7 @@ describe("canonical Capsule Run credential context", () => {
       id: "plan_initial",
       operation: "create",
       status: "succeeded",
+      baseStateGeneration: 0,
       sourceSnapshotId: "snapshot_initial",
       source: { kind: "git", url: "https://example.test/repo.git", commit: "a".repeat(40) },
     };
@@ -530,6 +531,8 @@ describe("canonical Capsule Run credential context", () => {
       { plan: { ...plan, capsuleCurrentStateVersionId: "state_other" } },
       { apply: { ...apply, expected: { currentStateVersionId: "state_other" } } },
       { originalPlan: { ...originalPlan, sourceSnapshotId: "snapshot_other" } },
+      { originalPlan: { ...originalPlan, baseStateGeneration: 1 } },
+      { originalPlan: { ...originalPlan, capsuleCurrentStateVersionId: "state_other" } },
       { originalPlan: { ...originalPlan, capsuleId: "capsule_other" } },
       { priorApply: { ...failed, stateVersionId: stateId } },
       { priorApply: { ...failed, workspaceId: "workspace_other" } },

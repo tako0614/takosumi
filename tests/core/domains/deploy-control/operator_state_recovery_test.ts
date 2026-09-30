@@ -277,19 +277,22 @@ test("recovery commit rejects a noncanonical StateVersion id despite matching ba
   }
 });
 
-test("recovery provenance rejects a Plan backlink changed after commit", async () => {
+test("recovery provenance rejects a Plan cursor or backlink changed after commit", async () => {
   for (const [label, store] of await stores()) {
     const command = await fixture(store, `changed_plan_backlink_${label}`);
     const committed = await store.commitRecoveredState(command);
     expect(committed.status, label).toBe("committed");
     const capsule = await store.getCapsule(command.expectedCapsule.id);
     if (!capsule) throw new Error("missing recovered Capsule");
-    await store.putPlanRun({
-      ...command.expectedPlanRun,
-      appliedApplyRunId: `other_apply_${label}`,
-    });
-    expect(await recoveryPlanForStateVersion(store, capsule, command.stateVersion), label)
-      .toBeUndefined();
+    for (const changed of [
+      { appliedApplyRunId: `other_apply_${label}` },
+      { baseStateGeneration: 1 },
+      { capsuleCurrentStateVersionId: `other_state_${label}` },
+    ]) {
+      await store.putPlanRun({ ...command.expectedPlanRun, ...changed });
+      expect(await recoveryPlanForStateVersion(store, capsule, command.stateVersion), label)
+        .toBeUndefined();
+    }
   }
 });
 

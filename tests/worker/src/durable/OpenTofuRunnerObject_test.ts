@@ -5173,6 +5173,7 @@ async function seedRecoveredRestoreSource(state: FakeR2Bucket, ledger: FakeResto
       { id: failedApplyRunId, status: "failed", operation: "create",
         workspaceId: "space_1", capsuleId: "inst_1", planRunId: planId },
       { id: planId, status: "succeeded", operation: "create",
+        baseStateGeneration: 0,
         workspaceId: "space_1", capsuleId: "inst_1", sourceSnapshotId: snapshotId,
         capsuleContext: { workspaceId: "space_1", capsuleId: "inst_1",
           environment: "production" },
