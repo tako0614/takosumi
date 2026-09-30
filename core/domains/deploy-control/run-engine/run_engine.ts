@@ -116,6 +116,7 @@ import type { ObservabilitySink } from "../../observability/mod.ts";
 import { CapsuleQuery, requireCapsule } from "../capsule_query.ts";
 import { capsuleRunRuntimeSafetyMatches } from "../run_credential_context.ts";
 import { getCapsuleAdoptedSourceSnapshot } from "../capsule_source_revision.ts";
+import { recoveryPlanForStateVersion } from "../operator_state_recovery.ts";
 import {
   accountsOidcModuleVariableProfile,
   type AccountsOidcModuleVariableProfile,
@@ -4377,6 +4378,9 @@ export class RunEngine {
         : undefined;
     }
 
+    const recoveredPlan = await recoveryPlanForStateVersion(this.#store, capsule, stateVersion);
+    if (recoveredPlan) return recoveredPlan;
+
     const restoreRun = await this.#store.getBackupRun(
       stateVersion.createdByRunId,
     );
@@ -4418,6 +4422,12 @@ export class RunEngine {
     const applyRun = await this.#store.getApplyRun(snapshot.createdByRunId);
     if (applyRun) {
       return await this.#store.getPlanRun(applyRun.planRunId);
+    }
+
+    const capsule = await this.#store.getCapsule(snapshot.capsuleId);
+    if (capsule) {
+      const recoveredPlan = await recoveryPlanForStateVersion(this.#store, capsule, snapshot);
+      if (recoveredPlan) return recoveredPlan;
     }
 
     const restoreRun = await this.#store.getBackupRun(snapshot.createdByRunId);

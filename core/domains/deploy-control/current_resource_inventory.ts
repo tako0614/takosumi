@@ -21,6 +21,7 @@ import {
 } from "takosumi-contract/current-resource-inventory";
 import type { StateVersion } from "takosumi-contract/state-versions";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
+import { recoveryPlanForStateVersion } from "./operator_state_recovery.ts";
 import type { OpenTofuControlStore } from "./store.ts";
 
 /** Deterministic response bound for one current Capsule inventory. */
@@ -76,6 +77,23 @@ export async function getCurrentResourceInventory(
     throw lineageMismatch("Capsule current StateVersion is not available");
   }
   assertStateVersionLineage(capsule, stateVersion);
+
+  const recoveryRun = await store.getStateRecoveryRun(stateVersion.createdByRunId);
+  if (recoveryRun) {
+    const plan = await recoveryPlanForStateVersion(store, capsule, stateVersion);
+    if (!plan || !recoveryRun.stateRecovery) {
+      throw lineageMismatch("Recovery Run does not match the current Capsule state");
+    }
+    return { inventory: {
+      kind: CAPSULE_CURRENT_RESOURCE_INVENTORY_KIND,
+      capsuleId: capsule.id, workspaceId: capsule.workspaceId,
+      environment: capsule.environment, stateVersionId: stateVersion.id,
+      generation: stateVersion.generation,
+      // This is the failed source Apply, not the StateVersion creator.
+      applyRunId: recoveryRun.stateRecovery.failedApplyRunId, planRunId: plan.id, recordedAt: stateVersion.createdAt,
+      availability: "recovery_unknown", recoveryRunId: recoveryRun.id,
+    } };
+  }
 
   const applyRun = await store.getApplyRun(stateVersion.createdByRunId);
   if (!applyRun) {

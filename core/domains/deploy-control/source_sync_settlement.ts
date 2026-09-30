@@ -22,6 +22,7 @@ export const SOURCE_SYNC_SETTLEMENT_READ_PATHS = {
   apply: ["$.id", "$.workspaceId", "$.capsuleId", "$.stateVersionId", "$.planRunId", "$.expected", "$.status", "$.operation"],
   plan: ["$.id", "$.workspaceId", "$.capsuleId", "$.operation", "$.appliedApplyRunId", "$.capsuleContext", "$.sourceSnapshotId", "$.source", "$.sourceDigest", "$.variablesDigest"],
   restore: ["$.id", "$.type", "$.kind", "$.sourceDigest", "$.variablesDigest", "$.planRunId", "$.expected", "$.status", "$.workspaceId", "$.capsuleId", "$.environment", "$.restoredStateVersionId", "$.restoredFromStateVersionId"],
+  recovery: ["$.id", "$.type", "$.status", "$.workspaceId", "$.capsuleId", "$.environment", "$.planRunId", "$.sourceSnapshotId", "$.stateRecovery"],
   snapshot: ["$.id", "$.origin", "$.workspaceId", "$.sourceId", "$.url", "$.ref", "$.path", "$.resolvedCommit"],
 } as const;
 
@@ -133,6 +134,7 @@ export async function observeSourceSyncSettlement(
     getStateVersion: (id) => read("state", id, () => reader.getStateVersion(id)),
     getApplyRun: (id) => read("apply", id, () => reader.getApplyRun(id)),
     getBackupRun: (id) => read("restore", id, () => reader.getBackupRun(id)),
+    getStateRecoveryRun: (id) => read("recovery", id, () => reader.getStateRecoveryRun(id)),
     getPlanRun: (id) => read("plan", id, () => reader.getPlanRun(id)),
     getSourceSnapshot: (id) => read("snapshot", id, () => reader.getSourceSnapshot(id)),
   };

@@ -110,6 +110,7 @@ const OPERATION: Record<string, MessageKey> = {
   artifact: "op.artifact",
   backup: "op.backup",
   restore: "op.restore",
+  state_recovery: "op.state_recovery",
   // Activity metadata records the INTERNAL plan operation (create / update /
   // destroy), not the §19 RunType — map those too so feed lines ("〜の準備が
   // できました" / "〜に失敗しました") never degrade to the generic 操作 noun.

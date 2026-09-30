@@ -1419,9 +1419,15 @@ function DeployedResourcesDisclosure(props: {
 
   return (
     <details class="wb-disclosure">
-      <summary>{t("app.deploys.inventoryTitle")}</summary>
+      <summary>
+        {props.inventory?.availability === "recovery_unknown"
+          ? t("app.deploys.inventoryRecoveryUnknownTitle")
+          : t("app.deploys.inventoryTitle")}
+      </summary>
       <Card>
-        <p class="muted">{t("app.deploys.inventoryRecordedNote")}</p>
+        <Show when={props.inventory?.availability !== "recovery_unknown"}>
+          <p class="muted">{t("app.deploys.inventoryRecordedNote")}</p>
+        </Show>
         <Switch>
           <Match when={props.loading}>
             <Skeleton variant="row" count={2} />
@@ -1433,6 +1439,9 @@ function DeployedResourcesDisclosure(props: {
           </Match>
           <Match when={props.inventory?.availability === "legacy_unavailable"}>
             <p class="muted">{t("app.deploys.inventoryLegacyUnavailable")}</p>
+          </Match>
+          <Match when={props.inventory?.availability === "recovery_unknown"}>
+            <p class="muted">{t("app.deploys.inventoryRecoveryUnknownNote")}</p>
           </Match>
           <Match when={recordedInventory()}>
             {(inventory) => (
@@ -1491,6 +1500,9 @@ function DeployedResourcesDisclosure(props: {
 function activityEventTitle(event: ActivityEvent): string {
   if (event.action.startsWith("release_activation.")) {
     return t("app.recentActivity.releaseActivation");
+  }
+  if (event.action === "capsule.state_recovered") {
+    return operationLabel("state_recovery");
   }
   return operationLabel(
     typeof event.metadata.operation === "string"

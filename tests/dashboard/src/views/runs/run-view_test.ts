@@ -95,6 +95,16 @@ describe("RunView", () => {
     expect(source).not.toContain("confirmDestructive");
   });
 
+  test("successful state recovery is not presented as a successful deploy", () => {
+    expect(source).toContain('r.type === "state_recovery" && r.status === "succeeded"');
+    expect(source).toContain('t("run.summary.stateRecoverySucceeded")');
+    expect(source).toContain('t("run.summary.stateRecoverySucceededHint")');
+    expect(ja["run.summary.stateRecoverySucceeded"]).toContain("状態データ");
+    expect(ja["run.summary.stateRecoverySucceededHint"]).toContain("失敗したまま");
+    expect(en["run.summary.stateRecoverySucceeded"]).toContain("does not mean the deploy succeeded");
+    expect(en["run.summary.stateRecoverySucceededHint"]).toContain("remains failed");
+  });
+
   test("refetches never unmount the console into a skeleton", () => {
     // The 3s fallback poll / visibility refetch / approve refetch all flip
     // run.loading — the skeleton is for the INITIAL load only (mirrors

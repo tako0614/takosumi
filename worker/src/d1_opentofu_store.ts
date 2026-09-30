@@ -73,6 +73,13 @@ import type {
 } from "takosumi-contract/dependencies";
 import type { OutputShare, Output as Output } from "takosumi-contract/outputs";
 import type { ArtifactRecord, Run, RunGroup } from "takosumi-contract/runs";
+import {
+  assertRecoveryCommitCandidate,
+  exactRecoveryReplay,
+  recoveryObservationMatches,
+  type CommitRecoveredStateInput,
+  type CommitRecoveredStateResult,
+} from "../../core/domains/deploy-control/operator_state_recovery.ts";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import {
   clampPageLimit,
@@ -3976,6 +3983,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return await this.#getRun<Run>(id, [RUN_KIND_BACKUP, RUN_KIND_RESTORE]);
   }
 
+  async getStateRecoveryRun(id: string): Promise<Run | undefined> {
+    return await this.#getRun<Run>(id, ["state_recovery"]);
+  }
+
   async listRunsByWorkspace(
     workspaceId: string,
     options: { readonly limit?: number } = {},
@@ -7200,6 +7211,102 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return { capsule: updated };
   }
 
+  async commitRecoveredState(input: CommitRecoveredStateInput): Promise<CommitRecoveredStateResult> {
+    assertD1AtomicCommitBatch(this.db, "commitRecoveredState");
+    assertRecoveryCommitCandidate(input);
+    await this.#ensureSchema();
+    const capsule = await this.getCapsule(input.expectedCapsule.id);
+    const existingRun = await this.getStateRecoveryRun(input.recoveryRun.id);
+    const existingStateVersion = await this.getStateVersion(input.stateVersion.id);
+    const existingActivityRow = await this.#orm.select({ json: schema.auditEvents.recordJson })
+      .from(schema.auditEvents).where(eq(schema.auditEvents.id, input.activity.id)).get();
+    const existingActivity = existingActivityRow?.json as ActivityEvent | undefined;
+    const currentEpoch = await this.getCapsuleExecutionAuthorityEpoch(input.expectedCapsule.id);
+    if (exactRecoveryReplay(existingRun, input, existingStateVersion, capsule, currentEpoch, existingActivity)) {
+      return { status: "replayed", run: existingRun!, stateVersion: existingStateVersion!, capsule: capsule! };
+    }
+    const [installConfig, source, sourceSnapshot, planRun, failedApplyRun,
+      workspaceManagement, executionAuthorityEpoch, runRows, generationRow] = await Promise.all([
+      this.getInstallConfig(input.expectedInstallConfig.id),
+      this.getSource(input.expectedSource.id),
+      this.getSourceSnapshot(input.expectedSourceSnapshot.id),
+      this.getPlanRun(input.expectedPlanRun.id),
+      this.getApplyRun(input.expectedFailedApplyRun.id),
+      this.getWorkspaceManagement(input.expectedCapsule.workspaceId),
+      this.getCapsuleExecutionAuthorityEpoch(input.expectedCapsule.id),
+      this.#orm.select({ json: schema.runs.runJson }).from(schema.runs)
+        .where(eq(schema.runs.capsuleId, input.expectedCapsule.id)).all(),
+      this.#orm.select({ id: schema.stateVersions.id }).from(schema.stateVersions)
+        .where(and(eq(schema.stateVersions.capsuleId, input.expectedCapsule.id),
+          eq(schema.stateVersions.environment, input.expectedCapsule.environment),
+          eq(schema.stateVersions.generation, 1))).get(),
+    ]);
+    const observed = {
+      capsule, installConfig, source, sourceSnapshot, planRun, failedApplyRun,
+      workspaceManagement: workspaceManagement?.managementState === "active"
+        ? workspaceManagement as WorkspaceManagementAuthority : undefined,
+      executionAuthorityEpoch, existingRun, existingStateVersion,
+      existingGenerationOne: generationRow ? input.stateVersion : undefined,
+      existingActivity,
+      runsForCapsule: runRows.map((row) => row.json as StoredRunRecord),
+    };
+    if (!recoveryObservationMatches(input, observed)) return { status: "conflict" };
+    const updated: Capsule = {
+      ...capsule!, currentStateVersionId: input.stateVersion.id,
+      currentStateGeneration: 1, currentOutputId: undefined,
+      status: "error", updatedAt: input.recoveryRun.finishedAt!,
+    };
+    const run = input.recoveryRun;
+    const state = input.stateVersion;
+    try {
+      await this.#orm.batch([
+        d1RecoveredStateCandidateGuardStmt(this.#orm, input),
+        this.#orm.insert(schema.runs).values({
+          id: run.id, runGroupId: null, workspaceId: run.workspaceId,
+          sourceId: null, capsuleId: run.capsuleId ?? null,
+          environment: run.environment ?? null, type: "state_recovery",
+          status: "succeeded", leaseToken: null, heartbeatAt: null,
+          runJson: run, createdAt: run.createdAt,
+        }),
+        this.#orm.insert(schema.stateVersions).values({
+          id: state.id, workspaceId: state.workspaceId, capsuleId: state.capsuleId,
+          environment: state.environment, generation: 1, stateRef: state.stateRef,
+          digest: state.digest, createdByRunId: run.id, createdAt: state.createdAt,
+        }),
+        this.#orm.insert(schema.auditEvents).values({
+          id: input.activity.id, workspaceId: input.activity.workspaceId,
+          actorId: input.activity.actorId ?? null, action: input.activity.action,
+          targetType: input.activity.targetType, targetId: input.activity.targetId,
+          runId: input.activity.runId ?? null, recordJson: input.activity,
+          createdAt: input.activity.createdAt,
+        }),
+        this.#orm.update(schema.capsules).set({
+          currentStateVersionId: state.id, currentStateGeneration: 1,
+          currentOutputId: null, status: "error", recordJson: updated,
+          updatedAt: updated.updatedAt,
+          executionAuthorityEpoch: input.expectedExecutionAuthorityEpoch + 1,
+        }).where(and(eq(schema.capsules.id, updated.id),
+          eq(schema.capsules.executionAuthorityEpoch, input.expectedExecutionAuthorityEpoch),
+          eq(schema.capsules.recordJson, input.expectedCapsule))),
+      ]);
+    } catch (error) {
+      // The batch may have committed before its acknowledgement was lost.
+      // Read back the exact same-key row; never dispatch or blindly repeat it.
+      const [readRun, readState, readCapsule, readEpoch, readActivityRow] = await Promise.all([
+        this.getStateRecoveryRun(run.id), this.getStateVersion(state.id), this.getCapsule(updated.id),
+        this.getCapsuleExecutionAuthorityEpoch(updated.id),
+        this.#orm.select({ json: schema.auditEvents.recordJson }).from(schema.auditEvents)
+          .where(eq(schema.auditEvents.id, input.activity.id)).get(),
+      ]);
+      if (exactRecoveryReplay(readRun, input, readState, readCapsule, readEpoch, readActivityRow?.json as ActivityEvent | undefined)) {
+        return { status: "replayed", run: readRun!, stateVersion: readState!, capsule: readCapsule! };
+      }
+      if (isD1CapsuleStateGuardError(error) || isD1RecoveryCandidateGuardError(error)) return { status: "conflict" };
+      throw error;
+    }
+    return { status: "committed", run, stateVersion: state, capsule: updated };
+  }
+
   async commitRestoredState(
     input: CommitRestoredStateInput,
   ): Promise<CommitRestoredStateResult> {
@@ -9148,6 +9255,14 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return event;
   }
 
+  async getActivityEvent(id: string): Promise<ActivityEvent | undefined> {
+    return await this.#drizzleFirstJson<ActivityEvent>(
+      schema.auditEvents,
+      schema.auditEvents.recordJson,
+      eq(schema.auditEvents.id, id),
+    );
+  }
+
   async listActivityEvents(
     workspaceId: string,
     options: { readonly limit?: number } = {},
@@ -10198,6 +10313,12 @@ function d1SourceSyncSettlementRunClassifier(
         AND ${normalizedJson} IS NOT NULL
         AND json_type(${normalizedJson}, '$') = 'object'
       )`;
+    case "recovery":
+      return `(
+        ${alias}.type = 'state_recovery'
+        AND ${normalizedJson} IS NOT NULL
+        AND json_type(${normalizedJson}, '$') = 'object'
+      )`;
     default:
       return "0";
   }
@@ -10298,6 +10419,7 @@ function d1SourceSyncSettlementGuardSql(): string {
         WHEN 'apply' THEN ${present("apply")}
         WHEN 'plan' THEN ${present("plan")}
         WHEN 'restore' THEN ${present("restore")}
+        WHEN 'recovery' THEN ${present("recovery")}
         ELSE 1
       END
     ))
@@ -10309,6 +10431,7 @@ function d1SourceSyncSettlementGuardSql(): string {
         WHEN 'apply' THEN NOT ${reads("apply")}
         WHEN 'plan' THEN NOT ${reads("plan")}
         WHEN 'restore' THEN NOT ${reads("restore")}
+        WHEN 'recovery' THEN NOT ${reads("recovery")}
         ELSE 1
       END
     ))
@@ -11939,6 +12062,71 @@ function d1InvalidWorkspaceManagementGuardRow(runId: string) {
   };
 }
 
+/** First statement of the recovery batch: exact authority and no newer work. */
+function d1RecoveredStateCandidateGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  input: CommitRecoveredStateInput,
+) {
+  const capsule = input.expectedCapsule;
+  const failed = input.expectedFailedApplyRun;
+  const exact = sql`EXISTS (SELECT 1 FROM ${schema.workspaces}
+      WHERE ${schema.workspaces.id} = ${capsule.workspaceId}
+        AND ${schema.workspaces.managementState} = 'active'
+        AND ${schema.workspaces.managementEpoch} = ${input.expectedWorkspaceManagement.managementEpoch})
+    AND EXISTS (SELECT 1 FROM ${schema.capsules}
+      WHERE ${schema.capsules.id} = ${capsule.id}
+        AND ${schema.capsules.executionAuthorityEpoch} = ${input.expectedExecutionAuthorityEpoch}
+        AND ${schema.capsules.currentStateVersionId} IS NULL
+        AND ${schema.capsules.currentStateGeneration} = 0
+        AND ${schema.capsules.currentOutputId} IS NULL
+        AND ${schema.capsules.status} = 'error'
+        AND ${schema.capsules.recordJson} = ${JSON.stringify(capsule)})
+    AND EXISTS (SELECT 1 FROM ${schema.installConfigs}
+      WHERE ${schema.installConfigs.id} = ${input.expectedInstallConfig.id}
+        AND ${schema.installConfigs.recordJson} = ${JSON.stringify(input.expectedInstallConfig)})
+    AND EXISTS (SELECT 1 FROM ${schema.sources}
+      WHERE ${schema.sources.id} = ${input.expectedSource.id}
+        AND ${schema.sources.recordJson} = ${JSON.stringify(input.expectedSource)})
+    AND EXISTS (SELECT 1 FROM ${schema.sourceSnapshots}
+      WHERE ${schema.sourceSnapshots.id} = ${input.expectedSourceSnapshot.id}
+        AND ${schema.sourceSnapshots.recordJson} = ${JSON.stringify(input.expectedSourceSnapshot)})
+    AND EXISTS (SELECT 1 FROM ${schema.runs}
+      WHERE ${schema.runs.id} = ${input.expectedPlanRun.id}
+        AND ${schema.runs.runJson} = ${JSON.stringify(input.expectedPlanRun)})
+    AND EXISTS (SELECT 1 FROM ${schema.runs}
+      WHERE ${schema.runs.id} = ${failed.id}
+        AND ${schema.runs.runJson} = ${JSON.stringify(failed)})
+    AND NOT EXISTS (SELECT 1 FROM ${schema.runs}
+      WHERE ${schema.runs.id} = ${input.recoveryRun.id})
+    AND NOT EXISTS (SELECT 1 FROM ${schema.auditEvents}
+      WHERE ${schema.auditEvents.id} = ${input.activity.id})
+    AND NOT EXISTS (SELECT 1 FROM ${schema.stateVersions}
+      WHERE ${schema.stateVersions.id} = ${input.stateVersion.id}
+         OR (${schema.stateVersions.capsuleId} = ${capsule.id}
+             AND ${schema.stateVersions.environment} = ${capsule.environment}
+             AND ${schema.stateVersions.generation} = 1))
+    AND NOT EXISTS (SELECT 1 FROM ${schema.runs}
+      WHERE ${schema.runs.capsuleId} = ${capsule.id}
+        AND ${schema.runs.id} NOT IN (${input.expectedPlanRun.id}, ${failed.id})
+        AND (CASE WHEN typeof(json_extract(${schema.runs.runJson}, '$.createdAt')) = 'integer'
+              THEN CAST(json_extract(${schema.runs.runJson}, '$.createdAt') AS INTEGER)
+              ELSE COALESCE(unixepoch(json_extract(${schema.runs.runJson}, '$.createdAt')) * 1000, 9223372036854775807)
+             END >= ${failed.createdAt}
+             OR ${schema.runs.status} IN ('queued','running','waiting_approval')))`;
+  return orm.insert(schema.runs).select(
+    orm.select(d1InvalidWorkspaceManagementGuardRow(input.recoveryRun.id))
+      .from(sql`(select 1) as recovery_guard_source`)
+      .where(sql`NOT (${exact})`),
+  );
+}
+
+function isD1RecoveryCandidateGuardError(error: unknown): boolean {
+  return error instanceof Error && (
+    error.message.includes("runs.space_id") ||
+    error.message.includes("runs.workspace_id")
+  );
+}
+
 /**
  * Deliberately invalid Capsule row selected only when a batch guard loses.
  * Using a constant one-row source makes concurrent deletion fail closed too:
@@ -11981,6 +12169,7 @@ function assertD1AtomicCommitBatch(
     | "revokeConnectionIfUnchanged"
     | "commitConnectionTestResult"
     | "commitRunState"
+    | "commitRecoveredState"
     | "commitRestoredState"
     | "commitSourceSyncSuccess"
     | "commitCapsuleAbandonment"

@@ -1520,6 +1520,13 @@ function Inner() {
         sub: t("run.summary.expiredHint"),
       };
     }
+    if (r.type === "state_recovery" && r.status === "succeeded") {
+      return {
+        kind: "action",
+        text: t("run.summary.stateRecoverySucceeded"),
+        sub: t("run.summary.stateRecoverySucceededHint"),
+      };
+    }
     const name = appName();
     if (r.type === "apply" || r.type === "destroy_apply") {
       const isRemoval = r.type === "destroy_apply";
