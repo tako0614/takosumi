@@ -104,6 +104,10 @@ test("stateful action addresses exclude pure creates", () => {
       { address: "res.del", change: { actions: ["delete"] } },
       { address: "res.rep", change: { actions: ["delete", "create"] } },
       { address: "res.noop", change: { actions: ["no-op"] } },
+      {
+        address: "res.imported",
+        change: { actions: ["no-op"], importing: { id: "existing" } },
+      },
     ],
   });
   expect([...statefulActionAddressesFromPlanJson(planJson)].sort()).toEqual([
@@ -324,4 +328,60 @@ test("a first apply whose saved plan is all creates needs no reconcile calls", a
     enumeratePlanPath: join(tofu.root, "tfreconcile.plan"),
   });
   expect(summary).toBeUndefined();
+});
+
+test("apply-workspace reconcile leaves planned imports to the saved plan", async () => {
+  const savedPlan = planJsonFixture({
+    changes: [
+      {
+        address: "res.imported",
+        change: { actions: ["no-op"], importing: { id: "existing" } },
+      },
+    ],
+  });
+  const tofu = await fakeTofu({ savedPlanJson: savedPlan });
+  const summary = await reconcileApplyWorkspaceState({
+    moduleDir: tofu.moduleDir,
+    planPath: join(tofu.root, "tfplan"),
+    context: tofu.context,
+    workspaceRoot: tofu.root,
+    enumeratePlanPath: join(tofu.root, "tfreconcile.plan"),
+  });
+  expect(summary).toBeUndefined();
+  const log = await readFile(tofu.logPath, "utf8");
+  expect(log).toContain("show -json");
+  expect(log).toContain("state list -no-color");
+  expect(log).not.toMatch(/^plan /mu);
+  expect(log).not.toMatch(/^import /mu);
+});
+
+test("apply-workspace reconcile recovers other missing state without importing a planned import", async () => {
+  const savedPlan = planJsonFixture({
+    changes: [
+      {
+        address: "res.imported",
+        change: { actions: ["no-op"], importing: { id: "existing" } },
+      },
+      { address: "res.stray", change: { actions: ["update"] } },
+    ],
+  });
+  const enumeration = planJsonFixture({
+    planned: [resource("res.imported"), resource("res.stray")],
+  });
+  const tofu = await fakeTofu({
+    savedPlanJson: savedPlan,
+    enumeratePlanJson: enumeration,
+  });
+  const summary = await reconcileApplyWorkspaceState({
+    moduleDir: tofu.moduleDir,
+    planPath: join(tofu.root, "tfplan"),
+    context: tofu.context,
+    workspaceRoot: tofu.root,
+    enumeratePlanPath: join(tofu.root, "tfreconcile.plan"),
+  });
+  expect(summary?.status).toBe("reconciled");
+  expect(summary?.imported).toEqual(["res.stray"]);
+  const log = await readFile(tofu.logPath, "utf8");
+  expect(log).toContain("import -input=false -no-color res.stray stray");
+  expect(log).not.toContain("res.imported");
 });

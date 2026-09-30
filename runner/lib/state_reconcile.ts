@@ -215,16 +215,24 @@ export async function reconcileStateFromPlanJson(args: {
   readonly context: CommandContext;
   readonly variableFilePath?: string;
   readonly workspaceRoot: string;
+  /** Addresses an enclosing reviewed plan will handle without auto-import. */
+  readonly excludedAddresses?: ReadonlySet<string>;
 }): Promise<StateReconcileSummary> {
   const missing = missingReconcileCandidates(args.planJson);
+  const candidates = missing.candidates.filter(
+    (candidate) => !args.excludedAddresses?.has(candidate.address),
+  );
+  const unresolvable = missing.unresolvable.filter(
+    (address) => !args.excludedAddresses?.has(address),
+  );
   const imported: string[] = [];
   const absent: string[] = [];
-  const skipped: ReconcileSkip[] = missing.unresolvable.map((address) => ({
+  const skipped: ReconcileSkip[] = unresolvable.map((address) => ({
     address,
     reason: "name_unresolved" as const,
   }));
 
-  for (const candidate of missing.candidates) {
+  for (const candidate of candidates) {
     const variableFile = await prepareRuntimeInputVariableFile(
       args.context.runtimeInputs ?? [],
       args.workspaceRoot,
@@ -372,8 +380,9 @@ export function reconcilePlanPath(workspaceRoot: string): string {
 /**
  * Every resource address the saved plan expects to already exist in state —
  * per `resource_changes`, the addresses whose action is anything but a pure
- * create. A pure create needs no prior state entry, so a healthy first apply
- * produces an empty set here and costs the reconcile no provider calls.
+ * create, excluding imports already represented by the saved plan. A pure
+ * create needs no prior state entry, and a planned import must be performed by
+ * that plan rather than a pre-apply `tofu import` that would stale it.
  */
 export function statefulActionAddressesFromPlanJson(
   planJson: string,
@@ -387,11 +396,27 @@ export function statefulActionAddressesFromPlanJson(
     const address = change["address"];
     const inner = change["change"];
     const actions = isRecord(inner) ? inner["actions"] : undefined;
-    if (!Array.isArray(actions)) continue;
+    const importing = isRecord(inner) ? inner["importing"] : undefined;
+    if (!Array.isArray(actions) || isRecord(importing)) continue;
     const pureCreate = actions.length === 1 && actions[0] === "create";
     if (!pureCreate && typeof address === "string" && address.length > 0) {
       addresses.add(address);
     }
+  }
+  return addresses;
+}
+
+function plannedImportAddressesFromPlanJson(
+  planJson: string,
+): ReadonlySet<string> {
+  const addresses = new Set<string>();
+  const changes = parsedPlan(planJson)?.["resource_changes"];
+  if (!Array.isArray(changes)) return addresses;
+  for (const change of changes) {
+    if (!isRecord(change) || typeof change["address"] !== "string") continue;
+    const inner = change["change"];
+    const importing = isRecord(inner) ? inner["importing"] : undefined;
+    if (isRecord(importing)) addresses.add(change["address"]);
   }
   return addresses;
 }
@@ -457,6 +482,7 @@ export async function reconcileApplyWorkspaceState(args: {
     stateListAddresses(args.moduleDir, args.context),
   ]);
   if (planJson === undefined) return undefined;
+  const plannedImports = plannedImportAddressesFromPlanJson(planJson);
   const planned = statefulActionAddressesFromPlanJson(planJson);
   const missing = [...planned].filter((address) => !recorded.has(address));
   if (missing.length === 0) return undefined;
@@ -480,5 +506,6 @@ export async function reconcileApplyWorkspaceState(args: {
       ? {}
       : { variableFilePath: args.variableFilePath }),
     workspaceRoot: args.workspaceRoot,
+    excludedAddresses: plannedImports,
   });
 }
