@@ -675,15 +675,11 @@ const D1_WORKSPACE_FREEZE_APPLY_SETTLED_SQL = `
       and (
         exists (
           select 1
-            from runs as recovery_run
-           where recovery_run.space_id = run.space_id
-             and json_extract(
-               recovery_run.run_json, '$.stateRecovery.failedApplyRunId'
-             ) = run.id
-             and json_extract(recovery_run.run_json, '$.capsuleId')
-               = json_extract(run.run_json, '$.capsuleId')
+            from freeze_recovery_proofs as recovery
+           where recovery.workspace_id = run.space_id
+             and recovery.failed_apply_run_id = run.id
+             and recovery.capsule_id = run.installation_id
              and json_extract(run.run_json, '$.operation') = 'create'
-             and ${d1WorkspaceFreezeStateRecoverySettledSql("recovery_run")}
         )
         or (
           not (${D1_WORKSPACE_FREEZE_APPLY_DISPATCHED_SQL})
@@ -1334,7 +1330,10 @@ const D1_WORKSPACE_FREEZE_RUN_BLOCKER_SQL = `
         and json_type(${D1_WORKSPACE_FREEZE_RUN_JSON_SQL}, '$.expected') is null
         and ${D1_WORKSPACE_FREEZE_RESTORE_SETTLED_SQL}
       when 'state_recovery' then
-        ${d1WorkspaceFreezeStateRecoverySettledSql("run")}
+        exists (
+          select 1 from freeze_recovery_proofs as recovery
+           where recovery.run_id = run.id
+        )
       else 0
     end`,
   ])}
@@ -4536,6 +4535,23 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
             from runs as run
             join freeze_expected as expected
               on expected.workspace_id = run.space_id
+          ),
+          freeze_recovery_proofs as materialized (
+            select
+              recovery_run.id as run_id,
+              recovery_run.space_id as workspace_id,
+              recovery_run.installation_id as capsule_id,
+              json_extract(
+                case when json_valid(recovery_run.run_json) = 1
+                  then recovery_run.run_json else '{}' end,
+                '$.stateRecovery.failedApplyRunId'
+              ) as failed_apply_run_id
+            from runs as recovery_run
+            where recovery_run.space_id = (
+                    select workspace_id from freeze_expected
+                  )
+              and recovery_run.type = 'state_recovery'
+              and ${d1WorkspaceFreezeStateRecoverySettledSql("recovery_run")}
           ),
           freeze_restore_state_pairs as materialized (
             ${D1_WORKSPACE_FREEZE_RESTORE_STATE_PAIRS_SQL}

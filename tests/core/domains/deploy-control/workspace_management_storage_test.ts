@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { Miniflare } from "miniflare";
 
 import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
 import type { BackupRecord } from "takosumi-contract/backups";
@@ -1452,6 +1453,68 @@ test("Postgres and D1 workspace freeze settles only exact state-recovery provena
     await verifySharedWorkspace("both-proofs", true);
   }
 });
+
+test("workerd D1 freeze keeps recovery proof scoped to each failed create", async () => {
+  const runtime = new Miniflare({
+    compatibilityDate: "2026-07-17",
+    modules: [{
+      type: "ESModule",
+      path: "workspace-freeze-recovery-workerd.mjs",
+      contents: "export default {fetch(){return new Response('ok')}}",
+    }],
+    d1Databases: { CONTROL: "workspace-freeze-recovery-workerd" },
+  });
+  try {
+    const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+    const store = new CloudflareD1OpenTofuControlStore(database);
+    const workspaceId = "workerd-freeze-recovery-shared";
+    const first = await recoveryCommand(store, "workerd-first", workspaceId);
+    const second = await recoveryCommand(store, "workerd-second", workspaceId);
+    expect((await store.commitRecoveredState(first)).status).toBe("committed");
+    expect(await store.beginWorkspaceDraining(workspaceId, {
+      workspaceId, managementState: "active", managementEpoch: 1,
+    })).toMatchObject({ status: "started" });
+    const draining = {
+      workspaceId, managementState: "draining" as const, managementEpoch: 2,
+    };
+    expect((await store.freezeWorkspaceManagementIfQuiescent(draining)).status)
+      .toBe("blocked");
+
+    // A second Capsule's failed Apply cannot borrow the first Capsule's proof.
+    await database.prepare(
+      "update runs set run_json = json_set(run_json, '$.stateRecovery.failedApplyRunId', ?) where id = ?",
+    ).bind(second.expectedFailedApplyRun.id, first.recoveryRun.id).run();
+    expect((await store.freezeWorkspaceManagementIfQuiescent(draining)).status)
+      .toBe("blocked");
+
+    const settledWorkspaceId = "workerd-freeze-recovery-settled";
+    const settledFirst = await recoveryCommand(store, "workerd-settled-first", settledWorkspaceId);
+    const settledSecond = await recoveryCommand(store, "workerd-settled-second", settledWorkspaceId);
+    expect((await store.commitRecoveredState(settledFirst)).status).toBe("committed");
+    expect((await store.commitRecoveredState(settledSecond)).status).toBe("committed");
+    expect(await store.beginWorkspaceDraining(settledWorkspaceId, {
+      workspaceId: settledWorkspaceId, managementState: "active", managementEpoch: 1,
+    })).toMatchObject({ status: "started" });
+    expect((await store.freezeWorkspaceManagementIfQuiescent({
+      workspaceId: settledWorkspaceId, managementState: "draining", managementEpoch: 2,
+    })).status).toBe("frozen");
+
+    const malformed = await recoveryCommand(store, "workerd-malformed");
+    expect((await store.commitRecoveredState(malformed)).status).toBe("committed");
+    expect(await store.beginWorkspaceDraining(malformed.expectedCapsule.workspaceId, {
+      workspaceId: malformed.expectedCapsule.workspaceId,
+      managementState: "active", managementEpoch: 1,
+    })).toMatchObject({ status: "started" });
+    await database.prepare("update runs set run_json = '{' where id = ?")
+      .bind(malformed.recoveryRun.id).run();
+    expect((await store.freezeWorkspaceManagementIfQuiescent({
+      workspaceId: malformed.expectedCapsule.workspaceId,
+      managementState: "draining", managementEpoch: 2,
+    })).status).toBe("blocked");
+  } finally {
+    await runtime.dispose();
+  }
+}, 30_000);
 
 test("Workspace freeze observes terminal Plan, finalizer, and Interface lineage blockers", async () => {
   for (const { label, store } of await adapters()) {
