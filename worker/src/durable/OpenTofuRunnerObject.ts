@@ -23,6 +23,12 @@ import {
   type RunCredentialTokenPayload,
 } from "../../../core/shared/run_credential_tokens.ts";
 import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
+import {
+  ABSENT_OPENTOFU_STATE_METADATA,
+  assertSavedPlanMatchesState,
+  parseOpenTofuStateMetadata,
+  type OpenTofuStateMetadata,
+} from "../../../core/shared/open-tofu-state-metadata.ts";
 import { isOpenTofuBuiltinProviderSource } from "takosumi-contract/provider-env-rules";
 import { redactString } from "takosumi-contract/redaction";
 import {
@@ -2114,6 +2120,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       });
     }
     try {
+      let planStateMetadata: OpenTofuStateMetadata | undefined;
+      let canonicalStateMetadata = ABSENT_OPENTOFU_STATE_METADATA;
       // M2: restore the snapshotted source tree into the container before any
       // build/plan phase (mirrors the plan-artifact restore protocol).
       if (sourceArchive) {
@@ -2125,14 +2133,16 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         await this.#restoreDepStates(runId, depStates, url);
       }
       if (envelope.action === "apply" || envelope.action === "destroy") {
-        await this.#restorePlanArtifact(runId, envelope.request, url);
+        planStateMetadata = await this.#restorePlanArtifact(
+          runId, envelope.request, url,
+        );
         await this.#verifyReviewedProviderLockfileWithoutRestore(
           runId,
           envelope.request,
         );
       }
       if (stateScope) {
-        await this.#restoreStateFromR2State(
+        canonicalStateMetadata = await this.#restoreStateFromR2State(
           runId,
           stateScope,
           url,
@@ -2140,10 +2150,16 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           stateAdoption,
         );
       } else if (stateKeys.length > 0) {
-        await this.#restoreStateArtifact(runId, stateKeys, url);
+        canonicalStateMetadata = await this.#restoreStateArtifact(
+          runId, stateKeys, url,
+        ) ?? ABSENT_OPENTOFU_STATE_METADATA;
       }
       await this.#ensureContainerReady(url);
       if (mutationPreparation) {
+        if (!planStateMetadata) {
+          throw new Error("OpenTofu saved Plan metadata is unavailable");
+        }
+        assertSavedPlanMatchesState(planStateMetadata, canonicalStateMetadata);
         // Preflight cancellation before advancing the durable phase. Snapshot
         // renewable material after that await so preparation updates are not lost.
         // An already-aborted request is a provable pre-dispatch failure.
@@ -2616,7 +2632,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     baseUrl: URL,
     action: string | undefined,
     adoption: StateAdoption | undefined,
-  ): Promise<void> {
+  ): Promise<OpenTofuStateMetadata> {
     const bucket = this.#r2State();
     assertStateRefForScope(scope);
     const expectedGeneration = priorStateGeneration(scope, action);
@@ -2654,7 +2670,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         `canonical priorState is required for generation ${expectedGeneration}`,
       );
     }
-    if (!resolved) return;
+    if (!resolved) return ABSENT_OPENTOFU_STATE_METADATA;
     const { pointer, object } = resolved;
     const ciphertext = await readBoundedR2ObjectBytes(
       object,
@@ -2670,6 +2686,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       this.#artifactLimits.state,
       plaintext.byteLength,
     );
+    const metadata = parseOpenTofuStateMetadata(plaintext);
     await this.#ensureContainerReady(baseUrl);
     const response = await this.#containerFetch(
       new Request(stateArtifactUrl(baseUrl, runId), {
@@ -2683,6 +2700,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         `container state artifact restore failed: ${response.status}`,
       );
     }
+    return metadata;
   }
 
   // M2 state persist: pull the new plaintext tfstate from the container, encrypt
@@ -4040,17 +4058,28 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runId: string,
     requestPayload: unknown,
     baseUrl: URL,
-  ): Promise<void> {
+  ): Promise<OpenTofuStateMetadata> {
     const artifact = recordField(requestPayload, "planArtifact");
-    if (!artifact || stringField(artifact, "kind") !== "object-storage") return;
+    if (!artifact || stringField(artifact, "kind") !== "object-storage") {
+      throw new Error("OpenTofu saved Plan artifact is unavailable");
+    }
     const key = planArtifactKeyFromRef(
       requiredStringField(artifact, "ref"),
       this.#planArtifactBucket(),
     );
-    const expectedDigest = requiredStringField(artifact, "digest");
+    const expectedDigest = requiredSha256DigestField(artifact, "digest");
+    const expectedSize = artifact.sizeBytes === undefined
+      ? undefined
+      : positiveIntegerField(artifact, "sizeBytes");
+    if (expectedSize !== undefined) {
+      assertArtifactSize("plan", this.#artifactLimits.plan, expectedSize);
+    }
     // The plan binary is stored encrypted at `<key>.enc`; plaintext plan
     // objects are not a valid restore source.
     const bytes = await this.#readPlanArtifactPlaintext(key, expectedDigest);
+    if (expectedSize !== undefined && bytes.byteLength !== expectedSize) {
+      throw new Error("OpenTofu saved Plan artifact size mismatch");
+    }
     const response = await this.#containerFetch(
       new Request(artifactUrl(baseUrl, runId), {
         method: "PUT",
@@ -4063,6 +4092,21 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         `container plan artifact restore failed: ${response.status}`,
       );
     }
+    const metadataResponse = await this.#containerFetch(
+      new Request(new URL(`/runs/${encodeURIComponent(runId)}/plan-state-metadata`, baseUrl), {
+        method: "POST",
+        headers: { "content-type": PLAN_ARTIFACT_CONTENT_TYPE,
+          "x-takosumi-plan-digest": expectedDigest },
+        body: toArrayBuffer(bytes),
+      }),
+    );
+    if (!metadataResponse.ok) {
+      throw new Error("OpenTofu saved Plan metadata preflight rejected");
+    }
+    const metadataBytes = await readBoundedResponseBytes(
+      metadataResponse, "runner_response", 1024,
+    );
+    return parseRunnerStateMetadata(metadataBytes);
   }
 
   // Compatibility image release: preserve the reviewed artifact authority
@@ -4162,7 +4206,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runId: string,
     keys: readonly string[],
     baseUrl: URL,
-  ): Promise<void> {
+  ): Promise<OpenTofuStateMetadata | undefined> {
     for (const key of keys) {
       const object = await this.env.R2_ARTIFACTS.get(encryptedKey(key));
       if (!object) continue;
@@ -4176,6 +4220,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         object.customMetadata?.["takosumi-content-digest"],
       );
       assertArtifactSize("state", this.#artifactLimits.state, bytes.byteLength);
+      const metadata = parseOpenTofuStateMetadata(bytes);
       await this.#ensureContainerReady(baseUrl);
       const response = await this.#containerFetch(
         new Request(stateArtifactUrl(baseUrl, runId), {
@@ -4189,7 +4234,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           `container state artifact restore failed: ${response.status}`,
         );
       }
-      return;
+      return metadata;
     }
   }
 
@@ -5858,6 +5903,20 @@ function requiredSha256DigestField(
     throw new Error(`${key} must be a sha256 digest`);
   }
   return digest as `sha256:${string}`;
+}
+
+function parseRunnerStateMetadata(bytes: Uint8Array): OpenTofuStateMetadata {
+  let value: unknown;
+  try {
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    throw new Error("OpenTofu saved Plan metadata response is invalid");
+  }
+  if (!isRecord(value) || typeof value.lineage !== "string" ||
+      !Number.isSafeInteger(value.serial) || (value.serial as number) < 0) {
+    throw new Error("OpenTofu saved Plan metadata response is invalid");
+  }
+  return { lineage: value.lineage, serial: value.serial as number };
 }
 
 function positiveIntegerField(
