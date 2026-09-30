@@ -12,6 +12,9 @@ change cannot diverge from the plan you reviewed.
 
 **The plan you reviewed and the change that is applied cannot diverge**, because the
 Apply Run is pinned to that plan.
+The runner does not infer an import for resources missing from state before an
+ordinary plan, destroy plan, or saved-plan apply. To adopt an existing object,
+include an explicit OpenTofu `import` block in the module and review that plan.
 
 ## Everything starts with a plan
 

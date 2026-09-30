@@ -60,15 +60,6 @@ import {
   prepareRuntimeInputVariableFile,
 } from "./runtime_inputs.ts";
 import {
-  enumeratePlanJsonForReconcile,
-  missingReconcileCandidates,
-  reconcileApplyWorkspaceState,
-  reconcileEnumerationFailed,
-  reconcilePlanPath,
-  reconcileStateFromPlanJson,
-  type StateReconcileSummary,
-} from "./state_reconcile.ts";
-import {
   commandContextFromRequest,
   prepareProviderCredentialFiles,
   buildPhaseEnv,
@@ -513,81 +504,14 @@ export async function initPlanAndBuildResponse(
       timer,
     );
 
-  // A destroy plan covers only recorded state, so resources a previous
-  // interrupted mutation left live but unrecorded would deadlock the destroy
-  // against the host's dependency fences. Reconcile them into state first so
-  // the reviewed plan names the complete deletion set.
-  let stateReconcile: StateReconcileSummary | undefined;
-  if (operation === "destroy" && !options.refreshOnly) {
-    stateReconcile = await timer.measure("tofu_state_reconcile", async () => {
-      const enumeration = await enumeratePlanJsonForReconcile({
-        moduleDir,
-        context: commandContext,
-        ...(options.variableFilePath === undefined
-          ? {}
-          : { variableFilePath: options.variableFilePath }),
-        workspaceRoot: workspace.root,
-        planPath: reconcilePlanPath(workspace.root),
-      });
-      if (enumeration.planJson === undefined) {
-        return reconcileEnumerationFailed(enumeration.error);
-      }
-      return await reconcileStateFromPlanJson({
-        planJson: enumeration.planJson,
-        moduleDir,
-        context: commandContext,
-        ...(options.variableFilePath === undefined
-          ? {}
-          : { variableFilePath: options.variableFilePath }),
-        workspaceRoot: workspace.root,
-      });
-    });
-  }
-
-  let plan = await runPlanPhase();
+  const plan = await runPlanPhase();
   if (plan.exitCode !== 0) {
     return planFailure(plan);
   }
 
-  let planJson = await timer.measure("tofu_plan_json", () =>
+  const planJson = await timer.measure("tofu_plan_json", () =>
     readOpenTofuPlanJson(moduleDir, workspace, commandContext),
   );
-
-  // A create/update plan that names resources prior state does not record can
-  // converge the same divergence: import each stray, then re-plan so the
-  // reviewed artifact reflects the post-import update set rather than a stale
-  // create the host would refuse as a name conflict. A first apply has an
-  // empty prior state, so nothing could have diverged and no probe runs.
-  if (
-    stateReconcile === undefined &&
-    !options.refreshOnly &&
-    planJson !== undefined
-  ) {
-    const missing = missingReconcileCandidates(planJson);
-    if (missing.recordedAddresses > 0 && missing.candidates.length > 0) {
-      const enumeratedPlanJson = planJson;
-      stateReconcile = await timer.measure("tofu_state_reconcile", () =>
-        reconcileStateFromPlanJson({
-          planJson: enumeratedPlanJson,
-          moduleDir,
-          context: commandContext,
-          ...(options.variableFilePath === undefined
-            ? {}
-            : { variableFilePath: options.variableFilePath }),
-          workspaceRoot: workspace.root,
-        }),
-      );
-      if (stateReconcile.imported.length > 0) {
-        plan = await runPlanPhase();
-        if (plan.exitCode !== 0) {
-          return planFailure(plan);
-        }
-        planJson = await timer.measure("tofu_plan_json", () =>
-          readOpenTofuPlanJson(moduleDir, workspace, commandContext),
-        );
-      }
-    }
-  }
 
   const finishSuccessfulPlanFinalization =
     options.successfulPlanTiming?.start("runner_plan_finalize");
@@ -620,7 +544,6 @@ export async function initPlanAndBuildResponse(
       status: "succeeded",
       exitCode: 0,
       planDigest,
-      ...(stateReconcile === undefined ? {} : { stateReconcile }),
       planArtifact: {
         kind: "runner-local",
         ref: `runner-local://${runId}/tfplan`,
@@ -858,32 +781,6 @@ export async function runReviewedPlanApply(
       parseRequiredProviders(request),
       strictMirrorInit?.attestation,
     );
-    // A plan that adopted strays into state never persisted them — only
-    // apply/destroy runs persist state — so the restored workspace can lack
-    // the resources the reviewed plan now updates or deletes. Re-import the
-    // same set before applying; on a healthy state the check costs two local
-    // reads and no provider call.
-    const applyVariables = parseVariables(request);
-    let applyVariableFilePath: string | undefined;
-    if (!generatedRoot && Object.keys(applyVariables).length > 0) {
-      applyVariableFilePath = join(workspace.root, "run-inputs.tfvars.json");
-      await writeFile(
-        applyVariableFilePath,
-        `${JSON.stringify(applyVariables)}\n`,
-      );
-    }
-    const applyReconcile = await timer.measure("tofu_state_reconcile", () =>
-      reconcileApplyWorkspaceState({
-        moduleDir,
-        planPath: workspace.planPath,
-        context: applyContext,
-        ...(applyVariableFilePath === undefined
-          ? {}
-          : { variableFilePath: applyVariableFilePath }),
-        workspaceRoot: workspace.root,
-        enumeratePlanPath: reconcilePlanPath(workspace.root),
-      }),
-    );
     // A saved plan carries no ephemeral variable value, so apply re-supplies the
     // map here, through the same run-private FIFO the plan used.
     const runtimeInputVariableFile = await prepareRuntimeInputVariableFile(
@@ -927,9 +824,6 @@ export async function runReviewedPlanApply(
         status: result.exitCode === 0 ? "succeeded" : "failed",
         exitCode: result.exitCode,
         providerInstallation,
-        ...(applyReconcile === undefined
-          ? {}
-          : { stateReconcile: applyReconcile }),
         ...(outputs ? { outputs } : {}),
         stdout: redactRunnerOutput(
           [init.stdout, result.stdout].filter(Boolean).join("\n"),
@@ -1333,7 +1227,7 @@ async function readDependencyLockIfPresent(
  * A current DO proves successful private lockfile PUT by an internal header.
  * Only that mode installs exact bytes and uses readonly init. An older DO has
  * no marker, so the legacy init path is allowed but the post-init lock digest
- * must still match the reviewed Plan before reconcile or provider apply.
+ * must still match the reviewed Plan before provider apply.
  */
 async function restoreReviewedProviderLockfile(
   workspace: RunWorkspace,

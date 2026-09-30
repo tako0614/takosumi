@@ -48,7 +48,7 @@ validates the Plan/artifact identity and reads the exact encrypted-R2 lock bytes
 but does not PUT them to the runner or send a restore marker. The compatible
 runner therefore keeps the historical `tofu init` path for this stage and
 compares the resulting `.terraform.lock.hcl` SHA-256 with the Plan's recorded
-digest **before** state reconciliation or provider apply. A mismatch fails
+digest **before** provider apply. A mismatch fails
 closed; once dispatch has been recorded, the Run is indeterminate and must not
 be automatically retried. A digest-only historical Plan uses the same post-init
 check; an explicitly provider-free Plan has no lock digest to check.

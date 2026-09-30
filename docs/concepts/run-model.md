@@ -10,6 +10,9 @@ Run は Takosumi における実行の記録単位です。計画、適用、破
 state generation などを再検証するため、確認した計画からずれません。
 
 **確認した計画と、適用される内容が食い違わない**ように、Apply Run はこの plan に固定されます。
+runner は通常の Plan、破棄計画、保存済み Plan の Apply の前に、state にない resource を
+名前から推測して import しません。既存の実物を state に取り込む必要がある場合は、
+module の明示的な OpenTofu `import` block を Plan に含め、その差分を確認します。
 
 ## 計画から始まります
 
