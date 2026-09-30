@@ -7,9 +7,61 @@ import {
   OpenTofuRunnerInfrastructureError,
 } from "../../../core/domains/deploy-control/mod.ts";
 import { RUNNER_MUTATION_INDETERMINATE_CODE } from "../../../worker/src/runner_protocol.ts";
+import {
+  evaluateActionPolicy,
+  evaluateQuotaPolicy,
+  evaluateResourceAllowlist,
+} from "../../../lib/policy/src/mod.ts";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+test("container Plan preserves only explicit import evidence through the approval policy", async () => {
+  for (const importing of [true, "true", 1, {}, false]) {
+    const runner = new CloudflareContainerOpenTofuRunner(
+      envReturning({
+        planDigest: PLAN_DIGEST,
+        planArtifact: {
+          kind: "runner-local",
+          ref: "runner-local://plan_import/tfplan",
+          digest: PLAN_DIGEST,
+        },
+        planResourceChanges: [
+          {
+            address: "cloudflare_r2_bucket.existing",
+            type: "cloudflare_r2_bucket",
+            providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+            actions: ["no-op"],
+            importing,
+          },
+        ],
+      }),
+    );
+
+    const result = await runner.plan({
+      planRun: { id: "plan_import" },
+    } as Parameters<CloudflareContainerOpenTofuRunner["plan"]>[0]);
+    expect(result.planResourceChanges).toEqual([
+      {
+        address: "cloudflare_r2_bucket.existing",
+        type: "cloudflare_r2_bucket",
+        providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+        actions: ["no-op"],
+        ...(importing === true ? { importing: true } : {}),
+      },
+    ]);
+    const changes = result.planResourceChanges ?? [];
+    expect(evaluateActionPolicy(changes).requiresApproval).toBe(
+      importing === true,
+    );
+    expect(
+      evaluateResourceAllowlist(changes, []).disallowedResourceTypes,
+    ).toEqual(importing === true ? ["cloudflare_r2_bucket"] : []);
+    expect(evaluateQuotaPolicy(changes, { resources: 0 }).exceeded).toEqual(
+      importing === true ? ["resources count 1 exceeds 0"] : [],
+    );
+  }
+});
 // Actual RunnerPhaseTimer.measure labels across plan_apply.ts and source_sync.ts.
 const RUNNER_PHASE_TIMING_PHASES = [
   "provider_scan_policy",

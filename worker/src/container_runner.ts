@@ -1644,6 +1644,7 @@ function planResourceChangesFromContainerResult(
     const type = stringFromRecord(entry, "type");
     const actions = stringArrayFromRecord(entry, "actions");
     if (!address || !type || !actions) return [];
+    const providerSource = stringFromRecord(entry, "providerSource");
     const scope = recordFromRecord(entry, "scope");
     const projectedScope = normalizePlanResourceScope(scope);
     return [
@@ -1651,6 +1652,8 @@ function planResourceChangesFromContainerResult(
         address,
         type,
         actions,
+        ...(providerSource ? { providerSource } : {}),
+        ...(entry.importing === true ? { importing: true as const } : {}),
         ...(projectedScope ? { scope: projectedScope } : {}),
       },
     ];
