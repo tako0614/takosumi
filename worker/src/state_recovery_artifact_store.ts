@@ -7,6 +7,7 @@
 import type { ArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
 import {
   VERIFIED_RECOVERY_ARTIFACT_FORMAT,
+  assertVerifiedRecoveryArtifact,
   type RecoveryArtifactVerifier,
   type VerifiedRecoveryArtifact,
 } from "../../core/domains/deploy-control/operator_state_recovery.ts";
@@ -49,6 +50,38 @@ export interface StagedRecoveryStateArtifact {
   /** Opaque, deterministic retry handle; it is not an object key or URL. */
   readonly handle: string;
   readonly artifact: VerifiedRecoveryArtifact;
+}
+
+/**
+ * Pure adapter-owned assertion for a host's independently authorized scope.
+ * `verify()` proves an opaque handle against the occupied R2 object, while
+ * this binds that verified descriptor back to the separately approved custody
+ * digest and failed Apply. It neither reads nor writes R2.
+ */
+export async function assertRecoveryArtifactMatchesAuthorizedScope(input: {
+  readonly scope: RecoveryStateArtifactScope;
+  readonly artifactHandle: string;
+  readonly artifact: VerifiedRecoveryArtifact;
+}): Promise<void> {
+  const { scope, artifactHandle: handle, artifact } = input;
+  validateScope(scope);
+  assertVerifiedRecoveryArtifact(artifact);
+  const parts = recoveryHandleParts(handle);
+  if (parts.workspaceId !== scope.workspaceId || parts.capsuleId !== scope.capsuleId ||
+    parts.environment !== scope.environment || parts.failedApplyRunId !== scope.failedApplyRunId ||
+    parts.recoveryRunId !== scope.recoveryRunId || parts.plaintextSha256 !== scope.plaintextSha256 ||
+    parts.custodyEvidenceDigest !== scope.custodyEvidenceDigest) {
+    throw recoveryArtifactError("staged recovery artifact scope is invalid");
+  }
+  const stateRef = canonicalRecoveryStateRef(scope);
+  if (artifact.workspaceId !== scope.workspaceId || artifact.capsuleId !== scope.capsuleId ||
+    artifact.environment !== scope.environment || artifact.generation !== 1 ||
+    artifact.recoveryRunId !== scope.recoveryRunId || artifact.stateRef !== stateRef ||
+    artifact.plaintextSha256 !== scope.plaintextSha256 ||
+    await handleFor(scope, stateRef) !== handle ||
+    await custodyEvidenceDigest(scope, stateRef, artifact.encryptedDigest, handle) !== artifact.evidenceDigest) {
+    throw recoveryArtifactError("staged recovery artifact custody is invalid");
+  }
 }
 
 /**
@@ -213,7 +246,7 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
     } catch {
       throw recoveryArtifactError("recovery state allocation failed");
     }
-    const canonical = `workspaces/${safeSegment(scope.workspaceId)}/capsules/${safeSegment(scope.capsuleId)}/environments/${safeSegment(scope.environment)}/state-versions/00000001.tfstate.enc`;
+    const canonical = canonicalRecoveryStateRef(scope);
     if (ref !== canonical) throw recoveryArtifactError("recovery state allocation is not canonical");
     return ref;
   }
@@ -436,6 +469,10 @@ function requireIdentifier(value: string): void {
 
 function safeSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/gu, "_");
+}
+
+function canonicalRecoveryStateRef(scope: RecoveryStateArtifactScope): string {
+  return `workspaces/${safeSegment(scope.workspaceId)}/capsules/${safeSegment(scope.capsuleId)}/environments/${safeSegment(scope.environment)}/state-versions/00000001.tfstate.enc`;
 }
 
 function validateOpenTofuState(bytes: Uint8Array): void {

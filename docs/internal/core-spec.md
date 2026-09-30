@@ -276,6 +276,16 @@ commit and byte-identical state delivery to a captured runner transport. This
 does not qualify a live runner, a complete resource inventory, or an operator
 recovery entrypoint. Neither the local adapter nor the R2 adapter authorizes
 recovery, mounts a route, or repairs an existing environment by itself.
+The dormant platform SOURCE-only composition likewise has no route or CLI. A
+future private one-shot host must independently verify the operator actor and
+the exact Workspace, Capsule, environment, failed Apply, recovery Run, plaintext
+digest, and custody-evidence digest before plaintext selection and again before
+Core commit. It must supply a durable operator-private no-overwrite retry journal
+with access/integrity protection (`0700` directory, `0600` files) outside source:
+fixed actor, IDs, timestamp, digests, and opaque staged handle only, never state
+bytes or credentials. An interrupted stage retries that same identity; a Core
+conflict reports a value-free possible orphan for manual inventory, never
+automatic deletion. This composition is not an activated operator workflow.
 
 ## Capsule InstallConfig re-adoption
 
