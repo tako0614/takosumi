@@ -58,8 +58,9 @@ import type {
 } from "@takosumi/internal/deploy-control-api";
 import { RUN_EXECUTION_EVIDENCE_CONTRACT } from "../../../contract/runs.ts";
 import { assertRunExecutionEvidence } from "../../../contract/runs.ts";
-import { handleRunnerRequest } from "../../../runner/entrypoint.ts";
+import { handleRunnerRequestWithDependencies } from "../../../runner/entrypoint.ts";
 import { readResponseBytesWithCap } from "../../../runner/lib/exec.ts";
+import { mutationRequestDigest } from "../../../runner/lib/run_completion.ts";
 
 export const LOCAL_OPENTOFU_RUNNER_PROFILE_ID = "local-opentofu";
 const PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES = 1024 * 1024;
@@ -67,6 +68,7 @@ const PROVIDER_LOCKFILE_CONTENT_TYPE = "application/vnd.opentofu.lock.hcl";
 
 interface RunnerTransport {
   fetch(path: string, init?: RequestInit): Promise<Response>;
+  readonly requiresCustodyModeHandshake?: boolean;
 }
 
 export interface SourceArchiveStore {
@@ -85,9 +87,7 @@ export interface LocalOpenTofuStateArtifact {
   readonly stateDigest: string;
   readonly stateBytes: Uint8Array;
   readonly result:
-    | OpenTofuApplyResult
-    | OpenTofuDestroyResult
-    | OpenTofuRestoreResult;
+    OpenTofuApplyResult | OpenTofuDestroyResult | OpenTofuRestoreResult;
 }
 
 export interface LocalOpenTofuRawOutputArtifact {
@@ -197,7 +197,11 @@ export function createFileOpenTofuStateArtifactStore(
       if (isErrno(error, "ENOENT")) return undefined;
       throw error;
     }
-    return await parseProviderLockfileArtifactEnvelope(text, ref, cryptoBoundary);
+    return await parseProviderLockfileArtifactEnvelope(
+      text,
+      ref,
+      cryptoBoundary,
+    );
   };
   return {
     read,
@@ -476,12 +480,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       job.sourceArchive,
       control?.signal,
     );
-    await this.restorePriorState(
-      job.planRun.id,
-      "plan",
-      job,
-      control?.signal,
-    );
+    await this.restorePriorState(job.planRun.id, "plan", job, control?.signal);
     const result = await runRunner(
       this.transport,
       "plan",
@@ -496,12 +495,11 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       job.planRun.id,
       providerLockDigest,
     );
-    const durableProviderLockArtifact =
-      await this.persistProviderLockArtifact(
-        job.planRun.id,
-        providerLockArtifact,
-        control?.signal,
-      );
+    const durableProviderLockArtifact = await this.persistProviderLockArtifact(
+      job.planRun.id,
+      providerLockArtifact,
+      control?.signal,
+    );
     return {
       planDigest,
       planArtifact: parsePlanArtifact(result, job.planRun.id, planDigest),
@@ -511,9 +509,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       ...(stringValue(result, "sourceCommit")
         ? { sourceCommit: stringValue(result, "sourceCommit") }
         : {}),
-      ...(providerLockDigest
-        ? { providerLockDigest }
-        : {}),
+      ...(providerLockDigest ? { providerLockDigest } : {}),
       ...(durableProviderLockArtifact !== undefined
         ? { providerLockArtifact: durableProviderLockArtifact }
         : {}),
@@ -699,38 +695,56 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       if (replayResult.providerExecutionFailure) return replayResult;
       return await this.confirmRawOutput(job, replay);
     }
-    await this.restoreSourceArchive(
-      job.applyRun.id,
-      job.sourceArchive,
-      control?.signal,
-    );
-    await this.restorePriorState(
-      job.applyRun.id,
-      "apply",
-      job,
-      control?.signal,
-    );
-    await copyRunnerLocalPlanArtifact(
-      this.transport,
-      job.applyRun.id,
-      job.planRun.id,
-      job.planArtifact,
-      control?.signal,
-    );
-    const restoredProviderLockDigest = await this.restoreProviderLockArtifact(
-      job.applyRun.id,
-      job.planRun,
-      job.planArtifact,
-      control?.signal,
-    );
-    const result = await runRunner(
+    await assertLocalMutationCustodyMode(this.transport);
+    let result = await readLocalMutationCompletionBeforePreparation(
       this.transport,
       "apply",
       job.applyRun.id,
       job,
-      control?.signal,
-      restoredProviderLockDigest,
+      expectedRestoredProviderLockDigest(job.planRun),
     );
+    if (!result) {
+      const reservation = await reserveLocalMutationBeforePreparation(
+        this.transport,
+        "apply",
+        job.applyRun.id,
+        job,
+        expectedRestoredProviderLockDigest(job.planRun),
+      );
+      await this.restoreSourceArchive(
+        job.applyRun.id,
+        job.sourceArchive,
+        control?.signal,
+      );
+      await this.restorePriorState(
+        job.applyRun.id,
+        "apply",
+        job,
+        control?.signal,
+      );
+      await copyRunnerLocalPlanArtifact(
+        this.transport,
+        job.applyRun.id,
+        job.planRun.id,
+        job.planArtifact,
+        control?.signal,
+      );
+      const restoredProviderLockDigest = await this.restoreProviderLockArtifact(
+        job.applyRun.id,
+        job.planRun,
+        job.planArtifact,
+        control?.signal,
+      );
+      result = await runLocalMutationWithCustody(
+        this.transport,
+        "apply",
+        job.applyRun.id,
+        job,
+        control?.signal,
+        restoredProviderLockDigest,
+        reservation,
+      );
+    }
     if (runnerProviderExecutionFailed(result)) {
       const stateBytes = await fetchRunnerArtifactIfPresent(
         this.transport,
@@ -744,6 +758,13 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         stateBytes ? await digestBytes(stateBytes) : undefined,
         "apply",
       );
+      const completionDigest = stringValue(result, "stateDigest");
+      if (
+        Boolean(completionDigest) !== Boolean(stateBytes) ||
+        (stateBytes && completionDigest !== (await digestBytes(stateBytes)))
+      ) {
+        throw new Error("local runner completion state digest mismatch");
+      }
       const failedEvidence = stateBytes
         ? mutationExecutionEvidence(
             job,
@@ -816,38 +837,56 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       job.stateScope,
     );
     if (replay) return replay.result as OpenTofuDestroyResult;
-    await this.restoreSourceArchive(
-      job.applyRun.id,
-      job.sourceArchive,
-      control?.signal,
-    );
-    await this.restorePriorState(
-      job.applyRun.id,
-      "destroy",
-      job,
-      control?.signal,
-    );
-    await copyRunnerLocalPlanArtifact(
-      this.transport,
-      job.applyRun.id,
-      job.planRun.id,
-      job.planArtifact,
-      control?.signal,
-    );
-    const restoredProviderLockDigest = await this.restoreProviderLockArtifact(
-      job.applyRun.id,
-      job.planRun,
-      job.planArtifact,
-      control?.signal,
-    );
-    const result = await runRunner(
+    await assertLocalMutationCustodyMode(this.transport);
+    let result = await readLocalMutationCompletionBeforePreparation(
       this.transport,
       "destroy",
       job.applyRun.id,
       job,
-      control?.signal,
-      restoredProviderLockDigest,
+      expectedRestoredProviderLockDigest(job.planRun),
     );
+    if (!result) {
+      const reservation = await reserveLocalMutationBeforePreparation(
+        this.transport,
+        "destroy",
+        job.applyRun.id,
+        job,
+        expectedRestoredProviderLockDigest(job.planRun),
+      );
+      await this.restoreSourceArchive(
+        job.applyRun.id,
+        job.sourceArchive,
+        control?.signal,
+      );
+      await this.restorePriorState(
+        job.applyRun.id,
+        "destroy",
+        job,
+        control?.signal,
+      );
+      await copyRunnerLocalPlanArtifact(
+        this.transport,
+        job.applyRun.id,
+        job.planRun.id,
+        job.planArtifact,
+        control?.signal,
+      );
+      const restoredProviderLockDigest = await this.restoreProviderLockArtifact(
+        job.applyRun.id,
+        job.planRun,
+        job.planArtifact,
+        control?.signal,
+      );
+      result = await runLocalMutationWithCustody(
+        this.transport,
+        "destroy",
+        job.applyRun.id,
+        job,
+        control?.signal,
+        restoredProviderLockDigest,
+        reservation,
+      );
+    }
     if (runnerProviderExecutionFailed(result)) {
       const stateBytes = await fetchRunnerArtifactIfPresent(
         this.transport,
@@ -861,6 +900,13 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         stateBytes ? await digestBytes(stateBytes) : undefined,
         "destroy",
       );
+      const completionDigest = stringValue(result, "stateDigest");
+      if (
+        Boolean(completionDigest) !== Boolean(stateBytes) ||
+        (stateBytes && completionDigest !== (await digestBytes(stateBytes)))
+      ) {
+        throw new Error("local runner completion state digest mismatch");
+      }
       const failedEvidence = stateBytes
         ? mutationExecutionEvidence(
             job,
@@ -925,9 +971,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     const sourceDescriptor = job.sourceState;
     const sourceAuthority = control?.sourceAuthority;
     if (!sourceAuthority || typeof sourceAuthority.readExact !== "function") {
-      throw new Error(
-        "local OpenTofu restore requires Core source authority",
-      );
+      throw new Error("local OpenTofu restore requires Core source authority");
     }
     let authoritativeSource: OpenTofuRestoreSourceState | undefined;
     try {
@@ -1026,7 +1070,9 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     const committed = await this.stateStore.commit(candidate);
     await assertLocalStateArtifact(committed);
     if (committed.action !== "restore") {
-      throw new Error("local OpenTofu restore commit returned a non-restore artifact");
+      throw new Error(
+        "local OpenTofu restore commit returned a non-restore artifact",
+      );
     }
     return committed.result as OpenTofuRestoreResult;
   }
@@ -1106,7 +1152,11 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       result.repositoryModules,
     );
     const resolvedCommit = requiredString(result, "resolvedCommit");
-    if (!archiveDigest || archiveSizeBytes === undefined || !repositoryModules) {
+    if (
+      !archiveDigest ||
+      archiveSizeBytes === undefined ||
+      !repositoryModules
+    ) {
       throw new Error(`source_sync ${job.runId} returned incomplete metadata`);
     }
     if (archive && stringValue(archive, "kind") === "object-storage") {
@@ -1244,8 +1294,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     }
     if (
       artifact.generation !== prior.generation ||
-      (prior.digest !== undefined &&
-        artifact.stateDigest !== prior.digest) ||
+      (prior.digest !== undefined && artifact.stateDigest !== prior.digest) ||
       (prior.createdByRunId !== undefined &&
         artifact.createdByRunId !== prior.createdByRunId)
     ) {
@@ -1387,16 +1436,17 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
 
 type LocalMutationJob = Pick<
   OpenTofuApplyJob | OpenTofuDestroyJob,
-  "applyRun" | "planRun" | "planArtifact" | "runnerProfile" | "executionEvidenceAuthority"
+  | "applyRun"
+  | "planRun"
+  | "planArtifact"
+  | "runnerProfile"
+  | "executionEvidenceAuthority"
 >;
 
 function mutationExecutionEvidence(
   job: LocalMutationJob,
   action: "apply" | "destroy",
-  result:
-    | OpenTofuApplyResult
-    | OpenTofuDestroyResult
-    | undefined,
+  result: OpenTofuApplyResult | OpenTofuDestroyResult | undefined,
   commit: RunExecutionCommit | undefined,
   outcome: "committed" | "provider_failed_state_persisted",
 ): RunExecutionEvidence {
@@ -1466,7 +1516,10 @@ function mutationExecutionEvidence(
 }
 
 function requireStateVersionId(
-  job: Pick<OpenTofuApplyJob | OpenTofuDestroyJob, "executionEvidenceCommit" | "applyRun">,
+  job: Pick<
+    OpenTofuApplyJob | OpenTofuDestroyJob,
+    "executionEvidenceCommit" | "applyRun"
+  >,
 ): string {
   const commit = job.executionEvidenceCommit;
   if (!commit || !("stateVersionId" in commit) || !commit.stateVersionId) {
@@ -1479,8 +1532,9 @@ function requireStateVersionId(
 
 const inProcessRunnerTransport: RunnerTransport = {
   fetch: async (path, init) =>
-    await handleRunnerRequest(
+    await handleRunnerRequestWithDependencies(
       new Request(`https://local-opentofu-runner${path}`, init),
+      { mutationCustodyMode: "local-http" },
     ),
 };
 
@@ -1488,6 +1542,7 @@ function httpRunnerTransport(baseUrl: string): RunnerTransport {
   const endpoint = normalizeRunnerBaseUrl(baseUrl);
   return {
     fetch: async (path, init) => await fetch(new URL(path, endpoint), init),
+    requiresCustodyModeHandshake: true,
   };
 }
 
@@ -1559,8 +1614,10 @@ async function runRunner(
   request: unknown,
   signal?: AbortSignal,
   restoredProviderLockDigest?: string,
+  reservation?: string,
 ): Promise<Record<string, unknown>> {
   const headers = new Headers({ "content-type": "application/json" });
+  if (reservation) headers.set("x-takosumi-mutation-reservation", reservation);
   if (restoredProviderLockDigest !== undefined) {
     headers.set(
       "x-takosumi-provider-lock-restore-digest",
@@ -1592,26 +1649,283 @@ async function runRunner(
     try {
       body = parseObject(text);
     } catch {
-      throw safeRunnerResponseError(action, runId, response.status, response.ok);
+      throw safeRunnerResponseError(
+        action,
+        runId,
+        response.status,
+        response.ok,
+      );
     }
   }
   if (
     !response.ok &&
-    !((action === "apply" || action === "destroy") &&
-      runnerProviderExecutionFailed(body))
+    !(
+      (action === "apply" || action === "destroy") &&
+      runnerProviderExecutionFailed(body)
+    )
   ) {
     const reason = stringValue(body, "errorCode");
     throw new OpenTofuRunnerExecutionError(
       `OpenTofu runner rejected ${action} run ${runId}: HTTP ${response.status}`,
       {
-        reason: reason && /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(reason)
-          ? reason
-          : "runner_http_error",
+        reason:
+          reason && /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(reason)
+            ? reason
+            : "runner_http_error",
         detail: "runner returned a non-success HTTP status",
       },
     );
   }
   return body;
+}
+
+/** Fail before workspace preparation if an HTTP runner is not operator-selected
+ * for local filesystem custody. Request headers cannot change the mode. */
+async function assertLocalMutationCustodyMode(
+  transport: RunnerTransport,
+): Promise<void> {
+  if (!transport.requiresCustodyModeHandshake) return;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await transport.fetch("/healthz", {
+      method: "GET",
+      signal: controller.signal,
+    });
+    if (!response.ok || !isJsonResponse(response))
+      throw new Error("local runner mutation custody mode mismatch");
+    const body = parseObject(
+      new TextDecoder().decode(
+        await readResponseBytesWithCap(response, 4096, "runner health"),
+      ),
+    );
+    if (body.mutationCustodyMode !== "local-http")
+      throw new Error("local runner mutation custody mode mismatch");
+  } catch {
+    throw new OpenTofuRunnerExecutionError(
+      "local runner mutation custody mode mismatch",
+      { reason: "runner_mutation_custody_mode_mismatch" },
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** A lost HTTP response is resolved by a read, never a second provider POST. */
+async function reserveLocalMutationBeforePreparation(
+  transport: RunnerTransport,
+  action: "apply" | "destroy",
+  runId: string,
+  request: unknown,
+  restoredProviderLockDigest?: string,
+): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await transport.fetch(
+      `/runs/${encodeURIComponent(runId)}/mutation-reservation`,
+      {
+        method: "PUT",
+        signal: controller.signal,
+        headers: {
+          "content-type": "application/json",
+          ...(restoredProviderLockDigest
+            ? {
+                "x-takosumi-provider-lock-restore-digest":
+                  restoredProviderLockDigest,
+              }
+            : {}),
+        },
+        body: JSON.stringify({ runId, action, request }),
+      },
+    );
+    if (response.status !== 201 || !isJsonResponse(response))
+      throw new Error("local runner mutation reservation is indeterminate");
+    const body = parseObject(
+      new TextDecoder().decode(
+        await readResponseBytesWithCap(
+          response,
+          1024,
+          "local mutation reservation",
+        ),
+      ),
+    );
+    if (typeof body.token !== "string" || !/^[0-9a-f-]{36}$/u.test(body.token))
+      throw new Error("local runner mutation reservation is indeterminate");
+    return body.token;
+  } catch {
+    throw new OpenTofuRunnerExecutionError(
+      "local runner mutation reservation is indeterminate",
+      { reason: "runner_mutation_indeterminate" },
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function expectedRestoredProviderLockDigest(
+  planRun: OpenTofuApplyJob["planRun"],
+): string | undefined {
+  const artifact = planRun.providerLockArtifact;
+  if (
+    !artifact ||
+    !planRun.providerLockDigest ||
+    artifact.digest !== planRun.providerLockDigest
+  )
+    return undefined;
+  return planRun.providerLockDigest;
+}
+
+async function readLocalMutationCompletionBeforePreparation(
+  transport: RunnerTransport,
+  action: "apply" | "destroy",
+  runId: string,
+  request: unknown,
+  restoredProviderLockDigest?: string,
+): Promise<Record<string, unknown> | undefined> {
+  const requestDigest = await mutationRequestDigest(
+    runId,
+    action,
+    request,
+    restoredProviderLockDigest,
+  );
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  const deadline = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener(
+      "abort",
+      () =>
+        reject(new Error("local runner mutation completion deadline exceeded")),
+      { once: true },
+    );
+  });
+  const withinDeadline = <T>(promise: Promise<T>): Promise<T> =>
+    Promise.race([promise, deadline]);
+  try {
+    const response = await withinDeadline(
+      transport.fetch(`/runs/${encodeURIComponent(runId)}/completion`, {
+        method: "GET",
+        signal: controller.signal,
+        headers: {
+          "x-takosumi-mutation-action": action,
+          "x-takosumi-mutation-digest": requestDigest,
+          ...(restoredProviderLockDigest
+            ? {
+                "x-takosumi-provider-lock-restore-digest":
+                  restoredProviderLockDigest,
+              }
+            : {}),
+        },
+      }),
+    );
+    if (response.status === 404) {
+      if (!isJsonResponse(response))
+        throw new Error("local runner mutation completion is indeterminate");
+      const missing = parseObject(
+        new TextDecoder().decode(
+          await withinDeadline(
+            readResponseBytesWithCap(
+              response,
+              16 * 1024,
+              "local mutation completion",
+            ),
+          ),
+        ),
+      );
+      if (missing.status === "absent") return undefined;
+      throw new Error("local runner mutation completion is indeterminate");
+    }
+    if (response.status !== 500 || !isJsonResponse(response)) {
+      await response.body?.cancel().catch(() => {});
+      throw new Error("local runner mutation completion is indeterminate");
+    }
+    const body = parseObject(
+      new TextDecoder().decode(
+        await withinDeadline(
+          readResponseBytesWithCap(
+            response,
+            16 * 1024,
+            "local mutation completion",
+          ),
+        ),
+      ),
+    );
+    if (!runnerProviderExecutionFailed(body))
+      throw new Error("local runner mutation completion is indeterminate");
+    return body;
+  } catch {
+    throw new OpenTofuRunnerExecutionError(
+      "local runner mutation completion is indeterminate",
+      { reason: "runner_mutation_indeterminate" },
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function runLocalMutationWithCustody(
+  transport: RunnerTransport,
+  action: "apply" | "destroy",
+  runId: string,
+  request: unknown,
+  signal?: AbortSignal,
+  restoredProviderLockDigest?: string,
+  reservation?: string,
+): Promise<Record<string, unknown>> {
+  // The digest is an identity check only. The runner stores neither the raw
+  // request nor credential material in its completion record.
+  let directResult: Record<string, unknown>;
+  try {
+    directResult = await runRunner(
+      transport,
+      action,
+      runId,
+      request,
+      signal,
+      restoredProviderLockDigest,
+      reservation,
+    );
+  } catch (originalError) {
+    try {
+      const result = await readLocalMutationCompletionBeforePreparation(
+        transport,
+        action,
+        runId,
+        request,
+        restoredProviderLockDigest,
+      );
+      if (result) return result;
+    } catch {
+      // No authoritative completion is available after a possible dispatch.
+    }
+    // Preserve only the finite HTTP classification from our own sanitized
+    // error. A transport's raw message may contain provider or credential data.
+    const status =
+      originalError instanceof OpenTofuRunnerExecutionError
+        ? /HTTP ([0-9]{3})$/.exec(originalError.message)?.[1]
+        : undefined;
+    throw new OpenTofuRunnerExecutionError(
+      `local runner mutation dispatch response is indeterminate${status ? `: HTTP ${status}` : ""}`,
+      {
+        reason: "runner_mutation_indeterminate",
+        detail: "provider dispatch may have occurred; authoritative completion is unavailable",
+      },
+    );
+  }
+  if (!runnerProviderExecutionFailed(directResult)) return directResult;
+  const completion = await readLocalMutationCompletionBeforePreparation(
+    transport,
+    action,
+    runId,
+    request,
+    restoredProviderLockDigest,
+  );
+  if (!completion)
+    throw new OpenTofuRunnerExecutionError(
+      "local runner mutation completion is indeterminate",
+      { reason: "runner_mutation_indeterminate" },
+    );
+  return completion;
 }
 
 function isJsonResponse(response: Response): boolean {
@@ -1695,10 +2009,7 @@ async function fetchRunnerArtifact(
   const declaredLength = response.headers.get("content-length");
   if (maxBytes !== undefined && declaredLength !== null) {
     const parsedLength = Number(declaredLength);
-    if (
-      Number.isSafeInteger(parsedLength) &&
-      parsedLength > maxBytes
-    ) {
+    if (Number.isSafeInteger(parsedLength) && parsedLength > maxBytes) {
       throw new Error(
         `OpenTofu runner ${path} artifact exceeds ${maxBytes} byte limit`,
       );
@@ -1782,7 +2093,9 @@ function parseProviderLockArtifact(
   }
   const artifact = recordValue(result, "providerLockArtifact");
   if (!artifact) {
-    throw new Error("OpenTofu runner providerLockArtifact must be an object or null");
+    throw new Error(
+      "OpenTofu runner providerLockArtifact must be an object or null",
+    );
   }
   const kind = requiredString(artifact, "kind");
   const ref = requiredString(artifact, "ref");
@@ -1855,7 +2168,7 @@ function providerInstallation(
                 attestationMethod:
                   "runner_observed_installed_artifact" as const,
               }
-          : {}),
+            : {}),
         ...(stringValue(entry, "cliConfigDigest")
           ? { cliConfigDigest: stringValue(entry, "cliConfigDigest") }
           : {}),
@@ -2134,9 +2447,7 @@ async function parseStateArtifactEnvelope(
     stateDigest: metadata.stateDigest,
     stateBytes,
     result: result as unknown as
-      | OpenTofuApplyResult
-      | OpenTofuDestroyResult
-      | OpenTofuRestoreResult,
+      OpenTofuApplyResult | OpenTofuDestroyResult | OpenTofuRestoreResult,
   };
   await assertLocalStateArtifact(artifact);
   return artifact;
@@ -2349,9 +2660,7 @@ async function assertLocalStateArtifact(
   );
 }
 
-function assertLocalRestoreResult(
-  artifact: LocalOpenTofuStateArtifact,
-): void {
+function assertLocalRestoreResult(artifact: LocalOpenTofuStateArtifact): void {
   const state = (artifact.result as OpenTofuRestoreResult).state;
   const authority = state?.restoreAuthority;
   if (
@@ -2453,7 +2762,9 @@ async function assertLocalProviderLockfileArtifact(
     artifact.bytes.byteLength !== artifact.sizeBytes ||
     !/^sha256:[0-9a-f]{64}$/u.test(artifact.digest)
   ) {
-    throw new Error("local OpenTofu provider lockfile artifact metadata is invalid");
+    throw new Error(
+      "local OpenTofu provider lockfile artifact metadata is invalid",
+    );
   }
   const refRunId = artifact.ref.slice(
     "local-opentofu://runs/".length,
@@ -2613,7 +2924,10 @@ function canonicalLocalPriorState(job: {
         "local OpenTofu state adoption cannot replace canonical prior state",
       );
     }
-    if (Boolean(prior.digest?.trim()) === (prior.legacyDigestMissing === true)) {
+    if (
+      Boolean(prior.digest?.trim()) ===
+      (prior.legacyDigestMissing === true)
+    ) {
       throw new Error(
         "local OpenTofu prior state requires exactly one of digest or legacyDigestMissing",
       );

@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, test } from "bun:test";
 
-import { handleRunnerRequest, safeRunId } from "../../runner/entrypoint.ts";
+import { handleRunnerRequestWithDependencies, safeRunId } from "../../runner/entrypoint.ts";
 import { analyzeOpenTofuCapsuleFiles } from "../../core/domains/sources/capsule_compatibility.ts";
 import type { SourceSnapshot } from "../../contract/sources.ts";
 import {
@@ -25,6 +25,8 @@ import {
 import type { RunWorkspace } from "../../runner/lib/types.ts";
 
 const RUN_ROOT = Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT ?? "/tmp/takosumi-runs";
+const handleRunnerRequest = (request: Request) =>
+  handleRunnerRequestWithDependencies(request, { mutationCustodyMode: "local-http" });
 const RESTORED_GIT_SOURCE = {
   kind: "git",
   url: "https://git.example.com/example/capsule.git",
@@ -52,6 +54,24 @@ async function digestBytes(bytes: Uint8Array): Promise<string> {
   return `sha256:${Array.from(hash, (byte) =>
     byte.toString(16).padStart(2, "0"),
   ).join("")}`;
+}
+
+async function reserveLocalMutation(
+  runId: string,
+  action: "apply" | "destroy",
+  requestBody: Record<string, unknown>,
+): Promise<string> {
+  const response = await handleRunnerRequest(
+    new Request(`https://runner/runs/${runId}/mutation-reservation`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action, runId, request: requestBody }),
+    }),
+  );
+  expect(response.status).toBe(201);
+  const body = (await response.json()) as { readonly token?: string };
+  expect(body.token).toEqual(expect.any(String));
+  return body.token!;
 }
 
 test("compatibility_check returns restored OpenTofu source files only", async () => {
@@ -1601,45 +1621,55 @@ esac
     await chmod(tofuPath, 0o755);
     Bun.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
 
+    const mutationRequest = {
+      applyRun: { id: runId },
+      planRun: {
+        id: runId,
+        source: RESTORED_GIT_SOURCE,
+        requiredProviders: [],
+      },
+      planArtifact: {
+        kind: "runner-local",
+        ref: `runner-local://${runId}/tfplan`,
+        digest: planDigest,
+      },
+      runnerProfile: {
+        allowedProviders: [],
+      },
+      generatedRoot: {
+        files: {
+          "main.tf": [
+            'module "child" {',
+            '  source = "./module"',
+            "}",
+            "",
+          ].join("\n"),
+          "outputs.tf": [
+            'output "worker_name" { value = module.child.worker_name }',
+            'output "url" { value = module.child.url }',
+            "",
+          ].join("\n"),
+        },
+      },
+      variables: {},
+    };
+    const reservation = await reserveLocalMutation(
+      runId,
+      "apply",
+      mutationRequest,
+    );
     const response = await handleRunnerRequest(
       new Request(`https://runner/runs/${runId}`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          "x-takosumi-mutation-reservation": reservation,
+        },
         body: JSON.stringify({
           kind: "takosumi.opentofu-run@v1",
           action: "apply",
           runId,
-          request: {
-            planRun: {
-              id: runId,
-              source: RESTORED_GIT_SOURCE,
-              requiredProviders: [],
-            },
-            planArtifact: {
-              kind: "runner-local",
-              ref: `runner-local://${runId}/tfplan`,
-              digest: planDigest,
-            },
-            runnerProfile: {
-              allowedProviders: [],
-            },
-            generatedRoot: {
-              files: {
-                "main.tf": [
-                  'module "child" {',
-                  '  source = "./module"',
-                  "}",
-                  "",
-                ].join("\n"),
-                "outputs.tf": [
-                  'output "worker_name" { value = module.child.worker_name }',
-                  'output "url" { value = module.child.url }',
-                  "",
-                ].join("\n"),
-              },
-            },
-            variables: {},
-          },
+          request: mutationRequest,
         }),
       }),
     );
@@ -1711,38 +1741,49 @@ esac
     await chmod(tofuPath, 0o755);
     Bun.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
 
+    const mutationRequest = {
+      applyRun: { id: runId },
+      planRun: {
+        id: runId,
+        source: RESTORED_GIT_SOURCE,
+        requiredProviders: [],
+      },
+      planArtifact: {
+        kind: "runner-local",
+        ref: `runner-local://${runId}/tfplan`,
+        digest: planDigest,
+      },
+      runnerProfile: { allowedProviders: [] },
+      generatedRoot: {
+        files: {
+          "main.tf": [
+            'module "child" {',
+            '  source = "./module"',
+            "}",
+            "",
+          ].join("\n"),
+        },
+      },
+      variables: {},
+    };
+    const reservation = await reserveLocalMutation(
+      runId,
+      "apply",
+      mutationRequest,
+    );
+
     const response = await handleRunnerRequest(
       new Request(`https://runner/runs/${runId}`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          "x-takosumi-mutation-reservation": reservation,
+        },
         body: JSON.stringify({
           kind: "takosumi.opentofu-run@v1",
           action: "apply",
           runId,
-          request: {
-            planRun: {
-              id: runId,
-              source: RESTORED_GIT_SOURCE,
-              requiredProviders: [],
-            },
-            planArtifact: {
-              kind: "runner-local",
-              ref: `runner-local://${runId}/tfplan`,
-              digest: planDigest,
-            },
-            runnerProfile: { allowedProviders: [] },
-            generatedRoot: {
-              files: {
-                "main.tf": [
-                  'module "child" {',
-                  '  source = "./module"',
-                  "}",
-                  "",
-                ].join("\n"),
-              },
-            },
-            variables: {},
-          },
+          request: mutationRequest,
         }),
       }),
     );
@@ -1823,39 +1864,50 @@ esac
     await chmod(tofuPath, 0o755);
     Bun.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
 
+    const mutationRequest = {
+      applyRun: { id: runId },
+      planRun: {
+        id: runId,
+        operation: "destroy",
+        source: RESTORED_GIT_SOURCE,
+        requiredProviders: [],
+      },
+      planArtifact: {
+        kind: "runner-local",
+        ref: `runner-local://${runId}/tfplan`,
+        digest: planDigest,
+      },
+      runnerProfile: { allowedProviders: [] },
+      generatedRoot: {
+        files: {
+          "main.tf": [
+            'module "child" {',
+            '  source = "./module"',
+            "}",
+            "",
+          ].join("\n"),
+        },
+      },
+      variables: {},
+    };
+    const reservation = await reserveLocalMutation(
+      runId,
+      "destroy",
+      mutationRequest,
+    );
+
     const response = await handleRunnerRequest(
       new Request(`https://runner/runs/${runId}`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          "x-takosumi-mutation-reservation": reservation,
+        },
         body: JSON.stringify({
           kind: "takosumi.opentofu-run@v1",
           action: "destroy",
           runId,
-          request: {
-            planRun: {
-              id: runId,
-              operation: "destroy",
-              source: RESTORED_GIT_SOURCE,
-              requiredProviders: [],
-            },
-            planArtifact: {
-              kind: "runner-local",
-              ref: `runner-local://${runId}/tfplan`,
-              digest: planDigest,
-            },
-            runnerProfile: { allowedProviders: [] },
-            generatedRoot: {
-              files: {
-                "main.tf": [
-                  'module "child" {',
-                  '  source = "./module"',
-                  "}",
-                  "",
-                ].join("\n"),
-              },
-            },
-            variables: {},
-          },
+          request: mutationRequest,
         }),
       }),
     );

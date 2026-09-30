@@ -43,9 +43,32 @@ import {
 import { classifyOpenTofuFailure } from "./exec.ts";
 import type { RuntimeSecretFileSystem } from "./runtime_secrets.ts";
 import { PROVIDER_LOCK_RESTORE_DIGEST_HEADER } from "./transport.ts";
+import {
+  completeLocalMutation,
+  consumeLocalMutationReservation,
+  inspectLocalMutation,
+  localMutationCompletionResponse,
+  reserveLocalMutation,
+} from "./run_completion.ts";
 
 interface RunnerRequestDependencies {
   readonly runtimeSecretFileSystem?: Partial<RuntimeSecretFileSystem>;
+  /** Test/composition override; HTTP callers cannot select custody. */
+  readonly mutationCustodyMode?: RunnerMutationCustodyMode;
+}
+
+type RunnerMutationCustodyMode = "cloudflare-do" | "local-http";
+const MUTATION_CUSTODY_MODE_ENV = "TAKOSUMI_RUNNER_MUTATION_CUSTODY_MODE";
+
+function runnerMutationCustodyMode(
+  override?: RunnerMutationCustodyMode,
+): RunnerMutationCustodyMode | undefined {
+  if (override) return override;
+  const configured = Bun.env[MUTATION_CUSTODY_MODE_ENV];
+  if (configured === undefined || configured === "cloudflare-do")
+    return "cloudflare-do";
+  if (configured === "local-http") return "local-http";
+  return undefined;
 }
 
 export async function handleRunnerRequest(request: Request): Promise<Response> {
@@ -57,28 +80,46 @@ export async function handleRunnerRequestWithDependencies(
   dependencies: RunnerRequestDependencies = {},
 ): Promise<Response> {
   {
+    const custodyMode = runnerMutationCustodyMode(
+      dependencies.mutationCustodyMode,
+    );
+    if (!custodyMode) {
+      return Response.json(
+        { errorCode: "runner_mutation_custody_mode_invalid" },
+        { status: 503 },
+      );
+    }
     const url = new URL(request.url);
     if (url.pathname === "/healthz" || url.pathname === "/container/health") {
       return Response.json({
         ok: true,
         runner: "opentofu",
         capabilities: ["takosumi.runner-credential-refresh@v1"],
+        mutationCustodyMode: custodyMode,
       });
     }
-    const credentialRefreshMatch = /^\/runs\/([^/]+)\/credentials$/.exec(url.pathname);
+    const credentialRefreshMatch = /^\/runs\/([^/]+)\/credentials$/.exec(
+      url.pathname,
+    );
     if (credentialRefreshMatch) {
       const runId = decodeURIComponent(credentialRefreshMatch[1]!);
       if (request.method === "GET") {
         const metadata = runCredentialRefreshSessionMetadata(runId);
         return metadata
           ? Response.json(metadata)
-          : Response.json({ error: "credential refresh is not active" }, { status: 409 });
+          : Response.json(
+              { error: "credential refresh is not active" },
+              { status: 409 },
+            );
       }
       if (request.method !== "PUT") {
-        return Response.json({ error: "method not allowed" }, {
-          status: 405,
-          headers: { allow: "PUT" },
-        });
+        return Response.json(
+          { error: "method not allowed" },
+          {
+            status: 405,
+            headers: { allow: "PUT" },
+          },
+        );
       }
       try {
         const body = await readBoundedJsonObject(request, 64 * 1024);
@@ -90,10 +131,98 @@ export async function handleRunnerRequestWithDependencies(
       } catch {
         // Never echo the update or a filesystem diagnostic: either may contain
         // bearer material or a private run path.
-        return Response.json({ error: "credential refresh rejected" }, { status: 409 });
+        return Response.json(
+          { error: "credential refresh rejected" },
+          { status: 409 },
+        );
       }
     }
     const match = /^\/runs\/([^/]+)$/.exec(url.pathname);
+    const completionMatch = /^\/runs\/([^/]+)\/completion$/.exec(url.pathname);
+    const reservationMatch = /^\/runs\/([^/]+)\/mutation-reservation$/.exec(
+      url.pathname,
+    );
+    if (reservationMatch) {
+      if (custodyMode !== "local-http")
+        return Response.json({ error: "not found" }, { status: 404 });
+      if (request.method !== "PUT") {
+        return Response.json(
+          { error: "method not allowed" },
+          { status: 405, headers: { allow: "PUT" } },
+        );
+      }
+      const runId = decodeURIComponent(reservationMatch[1]!);
+      const envelope = await readBoundedJsonObject(request, 1024 * 1024);
+      const action = envelope.action;
+      const embeddedRun =
+        envelope.request &&
+        typeof envelope.request === "object" &&
+        "applyRun" in envelope.request
+          ? envelope.request.applyRun
+          : undefined;
+      if (
+        (action !== "apply" && action !== "destroy") ||
+        envelope.runId !== runId ||
+        !envelope.request ||
+        typeof envelope.request !== "object" ||
+        !embeddedRun ||
+        typeof embeddedRun !== "object" ||
+        !("id" in embeddedRun) ||
+        embeddedRun.id !== runId
+      ) {
+        return Response.json(
+          { errorCode: "runner_mutation_indeterminate", retryable: false },
+          { status: 409 },
+        );
+      }
+      const token = await reserveLocalMutation(
+        runId,
+        action,
+        envelope.request,
+        request.headers.get(PROVIDER_LOCK_RESTORE_DIGEST_HEADER) ?? undefined,
+      );
+      return token
+        ? Response.json({ token }, { status: 201 })
+        : Response.json(
+            { errorCode: "runner_mutation_indeterminate", retryable: false },
+            { status: 409 },
+          );
+    }
+    if (completionMatch) {
+      if (custodyMode !== "local-http")
+        return Response.json({ error: "not found" }, { status: 404 });
+      if (request.method !== "GET") {
+        return Response.json(
+          { error: "method not allowed" },
+          { status: 405, headers: { allow: "GET" } },
+        );
+      }
+      const runId = decodeURIComponent(completionMatch[1]!);
+      const action = request.headers.get("x-takosumi-mutation-action");
+      const digest = request.headers.get("x-takosumi-mutation-digest");
+      const restoredProviderLockDigest =
+        request.headers.get(PROVIDER_LOCK_RESTORE_DIGEST_HEADER) ?? undefined;
+      if ((action !== "apply" && action !== "destroy") || !digest) {
+        return Response.json(
+          { errorCode: "runner_mutation_indeterminate", retryable: false },
+          { status: 409 },
+        );
+      }
+      const inspection = await inspectLocalMutation(
+        runId,
+        action,
+        digest,
+        restoredProviderLockDigest,
+      );
+      return inspection === "absent"
+        ? Response.json({ status: "absent" }, { status: 404 })
+        : inspection === "indeterminate"
+          ? Response.json(
+              { errorCode: "runner_mutation_indeterminate", retryable: false },
+              { status: 409 },
+            )
+          : localMutationCompletionResponse(inspection);
+    }
     const artifactMatch = /^\/runs\/([^/]+)\/artifacts\/tfplan$/.exec(
       url.pathname,
     );
@@ -240,6 +369,50 @@ export async function handleRunnerRequestWithDependencies(
       );
     }
 
+    if ((action === "apply" || action === "destroy") && custodyMode === "local-http") {
+      const embeddedRun =
+        body.request &&
+        typeof body.request === "object" &&
+        "applyRun" in body.request
+          ? body.request.applyRun
+          : undefined;
+      if (
+        body.runId !== runId ||
+        !body.request ||
+        typeof body.request !== "object" ||
+        (embeddedRun !== undefined &&
+          (typeof embeddedRun !== "object" ||
+            embeddedRun === null ||
+            !("id" in embeddedRun) ||
+            embeddedRun.id !== runId))
+      ) {
+        return Response.json(
+          { errorCode: "runner_mutation_indeterminate", retryable: false },
+          { status: 409 },
+        );
+      }
+      const marker =
+        request.headers.get(PROVIDER_LOCK_RESTORE_DIGEST_HEADER) ?? undefined;
+      const reservation = request.headers.get(
+        "x-takosumi-mutation-reservation",
+      );
+      const accepted = reservation
+        ? await consumeLocalMutationReservation(
+            runId,
+            action,
+            body.request,
+            marker,
+            reservation,
+          )
+        : false;
+      if (!accepted) {
+        return Response.json(
+          { errorCode: "runner_mutation_indeterminate", retryable: false },
+          { status: 409 },
+        );
+      }
+    }
+
     const mutationRedactionScope =
       action === "plan" || action === "apply" || action === "destroy";
     let credentialRefreshSessionHandle: object | undefined;
@@ -276,6 +449,26 @@ export async function handleRunnerRequestWithDependencies(
                     request.headers.get(PROVIDER_LOCK_RESTORE_DIGEST_HEADER) ??
                       undefined,
                   );
+      if ((action === "apply" || action === "destroy") && custodyMode === "local-http") {
+        const completion = await completeLocalMutation(
+          runId,
+          action,
+          body.request,
+          result,
+          request.headers.get(PROVIDER_LOCK_RESTORE_DIGEST_HEADER) ?? undefined,
+        );
+        if (completion.outcome === "provider_failed") {
+          return Response.json(
+            {
+              ...result,
+              ...(completion.stateDigest
+                ? { stateDigest: completion.stateDigest }
+                : {}),
+            },
+            { status: 500 },
+          );
+        }
+      }
       return Response.json(result, {
         status: result.exitCode === 0 ? 200 : 500,
       });
@@ -295,7 +488,10 @@ export async function handleRunnerRequestWithDependencies(
       );
     } finally {
       if (mutationRedactionScope) {
-        await endRunCredentialRefreshSession(runId, credentialRefreshSessionHandle);
+        await endRunCredentialRefreshSession(
+          runId,
+          credentialRefreshSessionHandle,
+        );
         clearRunRedactionValues(runId, requestRedactionValues);
       }
     }

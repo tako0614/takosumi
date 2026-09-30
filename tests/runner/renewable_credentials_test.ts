@@ -31,6 +31,7 @@ test("runner health advertises the exact renewable credential transport capabili
     ok: true,
     runner: "opentofu",
     capabilities: ["takosumi.runner-credential-refresh@v1"],
+    mutationCustodyMode: "cloudflare-do",
   });
 });
 

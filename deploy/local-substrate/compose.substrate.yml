@@ -161,9 +161,14 @@ services:
   # sandbox for source sync / plan / apply / destroy.
   opentofu-runner:
     profiles: ["postgres", "workers"]
+    environment:
+      TAKOSUMI_RUNNER_MUTATION_CUSTODY_MODE: local-http
+      TAKOSUMI_OPENTOFU_RUN_ROOT: /tmp/takosumi-runs
     build:
       context: ../../../takosumi
       dockerfile: runner/Dockerfile
+    volumes:
+      - substrate-opentofu-runner-runs:/tmp/takosumi-runs
     restart: unless-stopped
     healthcheck:
       test:
@@ -536,6 +541,7 @@ volumes:
   substrate-postgres-data:
   substrate-redis-data:
   substrate-minio-data:
+  substrate-opentofu-runner-runs:
   takosumi-service-worker-data:
 
 networks:
