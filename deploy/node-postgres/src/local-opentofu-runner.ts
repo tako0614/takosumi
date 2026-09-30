@@ -1889,6 +1889,7 @@ function planResourceChanges(
         address,
         type,
         actions,
+        ...(entry.importing === true ? { importing: true as const } : {}),
         ...(projectedScope ? { scope: projectedScope } : {}),
       },
     ];

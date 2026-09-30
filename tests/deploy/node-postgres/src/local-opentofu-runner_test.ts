@@ -714,6 +714,50 @@ test("HTTP OpenTofu runner preserves status when a non-JSON error stream is alre
   }
 });
 
+test("HTTP OpenTofu runner preserves planned import evidence without accepting lookalike values", async () => {
+  const runId = `plan_http_import_${crypto.randomUUID()}`;
+  const digest = `sha256:${"a".repeat(64)}`;
+  const server = Bun.serve({
+    port: 0,
+    fetch: () => Response.json({
+      status: "succeeded",
+      planDigest: digest,
+      planArtifact: {
+        kind: "runner-local",
+        ref: `runner-local://${runId}/tfplan`,
+        digest,
+      },
+      planResourceChanges: [
+        { address: "resource.imported", type: "example_resource", actions: ["no-op"], importing: true },
+        { address: "resource.ordinary", type: "example_resource", actions: ["no-op"] },
+        { address: "resource.lookalike", type: "example_resource", actions: ["no-op"], importing: "true" },
+      ],
+    }),
+  });
+  try {
+    const runner = createHttpOpenTofuRunner({
+      archiveStore: {
+        write: async () => {},
+        read: async () => new Uint8Array(),
+      },
+      stateStore: emptyLocalStateStore(),
+      baseUrl: server.url.href,
+    });
+    const result = await runner.plan({
+      planRun: localPlanRun(runId, "create"),
+      runnerProfile: createLocalOpenTofuRunnerProfile(),
+      variables: {},
+    });
+    expect(result.planResourceChanges).toEqual([
+      { address: "resource.imported", type: "example_resource", actions: ["no-op"], importing: true },
+      { address: "resource.ordinary", type: "example_resource", actions: ["no-op"] },
+      { address: "resource.lookalike", type: "example_resource", actions: ["no-op"] },
+    ]);
+  } finally {
+    server.stop(true);
+  }
+});
+
 test("HTTP OpenTofu runner preserves structured error codes without echoing response details", async () => {
   const runId = `plan_http_code_${crypto.randomUUID()}`;
   const privateDetail = "provider output and credential must not be copied";
