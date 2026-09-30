@@ -189,6 +189,7 @@ import type {
   CapsuleCurrentResourceInventoryResponse,
 } from "takosumi-contract/current-resource-inventory";
 import { getCapsuleAdoptedSourceSnapshot } from "./capsule_source_revision.ts";
+import { recoveryPlanForStateVersion } from "./operator_state_recovery.ts";
 import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
 import type { SensitiveOutputResolver } from "../output-shares/mod.ts";
 import type {
@@ -2096,6 +2097,11 @@ export class OpenTofuController {
     if (applyRun) {
       return (await this.#store.getPlanRun(applyRun.planRunId))
         ?.sourceSnapshotId;
+    }
+    const capsule = await this.#store.getCapsule(stateVersion.capsuleId);
+    if (capsule) {
+      const recoveredPlan = await recoveryPlanForStateVersion(this.#store, capsule, stateVersion);
+      if (recoveredPlan) return recoveredPlan.sourceSnapshotId;
     }
     const restoreRun = await this.#store.getBackupRun(
       stateVersion.createdByRunId,

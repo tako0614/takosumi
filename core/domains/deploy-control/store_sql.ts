@@ -60,6 +60,13 @@ import type {
 } from "takosumi-contract/dependencies";
 import type { OutputShare, Output } from "takosumi-contract/outputs";
 import type { ArtifactRecord, Run, RunGroup } from "takosumi-contract/runs";
+import {
+  assertRecoveryCommitCandidate,
+  exactRecoveryReplay,
+  recoveryObservationMatches,
+  type CommitRecoveredStateInput,
+  type CommitRecoveredStateResult,
+} from "./operator_state_recovery.ts";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import {
   clampPageLimit,
@@ -3775,6 +3782,11 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return run ? (publicStoredRun(run) as Run) : undefined;
   }
 
+  async getStateRecoveryRun(id: string): Promise<Run | undefined> {
+    const run = await this.#getRun<StoredRunRecord>(id, ["state_recovery"]);
+    return run ? (publicStoredRun(run) as Run) : undefined;
+  }
+
   async listRunsByWorkspace(
     workspaceId: string,
     options: { readonly limit?: number } = {},
@@ -7135,6 +7147,109 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
+  async commitRecoveredState(input: CommitRecoveredStateInput): Promise<CommitRecoveredStateResult> {
+    assertRecoveryCommitCandidate(input);
+    return await this.#client.transaction(async (transaction: SqlTransaction) => {
+      const db = this.#drizzleForClient(transaction);
+      // All mutable authority rows are locked before the candidate is checked.
+      // The Capsule lock also serializes ordinary admission against this cursor.
+      for (const [table, id] of [
+        ["takosumi_workspaces", input.expectedCapsule.workspaceId],
+        ["takosumi_install_configs", input.expectedInstallConfig.id],
+        ["takosumi_sources", input.expectedSource.id],
+        ["takosumi_source_snapshots", input.expectedSourceSnapshot.id],
+        ["takosumi_runs", input.expectedPlanRun.id],
+        ["takosumi_runs", input.expectedFailedApplyRun.id],
+        ["takosumi_capsules", input.expectedCapsule.id],
+      ] as const) {
+        await transaction.query(`select id from ${table} where id = $1 for update`, [id]);
+      }
+      const first = async <T>(table: PgTable, column: PgColumn, id: string): Promise<T | undefined> => {
+        const rows = await db.select({ json: column }).from(table).where(eq((table as typeof pgSchema.runs).id, id)).limit(1);
+        return parseRow(rows[0]) as T | undefined;
+      };
+      const capsule = await this.#getCapsuleOn(db, input.expectedCapsule.id);
+      const installConfig = await first<InstallConfig>(pgSchema.installConfigs, pgSchema.installConfigs.configJson, input.expectedInstallConfig.id);
+      const source = await first<StoredSource>(pgSchema.sources, pgSchema.sources.sourceJson, input.expectedSource.id);
+      const sourceSnapshot = await first<SourceSnapshot>(pgSchema.sourceSnapshots, pgSchema.sourceSnapshots.snapshotJson, input.expectedSourceSnapshot.id);
+      const planRun = await first<PlanRun>(pgSchema.runs, pgSchema.runs.runJson, input.expectedPlanRun.id);
+      const failedApplyRun = await first<ApplyRun>(pgSchema.runs, pgSchema.runs.runJson, input.expectedFailedApplyRun.id);
+      const existingRun = await first<Run>(pgSchema.runs, pgSchema.runs.runJson, input.recoveryRun.id);
+      const existingStateVersion = await first<StateVersion>(pgSchema.stateVersions, pgSchema.stateVersions.snapshotJson, input.stateVersion.id);
+      const [managementRow] = await db.select({ state: pgSchema.workspaces.managementState, epoch: pgSchema.workspaces.managementEpoch })
+        .from(pgSchema.workspaces).where(eq(pgSchema.workspaces.id, input.expectedCapsule.workspaceId));
+      const [epochRow] = await db.select({ epoch: pgSchema.capsules.executionAuthorityEpoch })
+        .from(pgSchema.capsules).where(eq(pgSchema.capsules.id, input.expectedCapsule.id));
+      const existingActivity = await first<ActivityEvent>(pgSchema.auditEvents, pgSchema.auditEvents.eventJson, input.activity.id);
+      if (exactRecoveryReplay(existingRun, input, existingStateVersion, capsule, epochRow?.epoch, existingActivity)) {
+        return { status: "replayed", run: existingRun!, stateVersion: existingStateVersion!, capsule: capsule! };
+      }
+      const [generationRow] = await db.select({ json: pgSchema.stateVersions.snapshotJson }).from(pgSchema.stateVersions)
+        .where(and(eq(pgSchema.stateVersions.capsuleId, input.expectedCapsule.id),
+          eq(pgSchema.stateVersions.environment, input.expectedCapsule.environment),
+          eq(pgSchema.stateVersions.generation, 1)));
+      const runRows = await db.select({ json: pgSchema.runs.runJson }).from(pgSchema.runs)
+        .where(eq(pgSchema.runs.capsuleId, input.expectedCapsule.id));
+      const observed = {
+        capsule, installConfig, source, sourceSnapshot,
+        planRun: planRun && publicStoredRun(planRun),
+        failedApplyRun: failedApplyRun && publicStoredRun(failedApplyRun),
+        workspaceManagement: managementRow?.state === "active"
+          ? { workspaceId: input.expectedCapsule.workspaceId, managementState: "active" as const, managementEpoch: managementRow.epoch }
+          : undefined,
+        executionAuthorityEpoch: epochRow?.epoch,
+        existingRun, existingStateVersion,
+        existingGenerationOne: generationRow && parseRow(generationRow) as StateVersion | undefined,
+        existingActivity,
+        runsForCapsule: runRows.map((row) => publicStoredRun(parseRow(row) as StoredRunRecord)),
+      };
+      if (!recoveryObservationMatches(input, observed)) return { status: "conflict" };
+      const updated: Capsule = {
+        ...capsule!, currentStateVersionId: input.stateVersion.id,
+        currentStateGeneration: 1, currentOutputId: undefined,
+        status: "error", updatedAt: input.recoveryRun.finishedAt!,
+      };
+      await db.insert(pgSchema.runs).values({
+        id: input.recoveryRun.id, kind: "state_recovery", workspaceId: input.recoveryRun.workspaceId,
+        sourceId: null, capsuleId: input.recoveryRun.capsuleId ?? null,
+        status: "succeeded", leaseToken: null, heartbeatAt: null,
+        createdAt: input.recoveryRun.createdAt, runJson: input.recoveryRun,
+      });
+      await db.insert(pgSchema.stateVersions).values({
+        id: input.stateVersion.id, workspaceId: input.stateVersion.workspaceId,
+        capsuleId: input.stateVersion.capsuleId, environment: input.stateVersion.environment,
+        generation: 1, snapshotJson: input.stateVersion, createdAt: input.stateVersion.createdAt,
+      });
+      await db.insert(pgSchema.auditEvents).values({
+        id: input.activity.id, workspaceId: input.activity.workspaceId,
+        actorId: input.activity.actorId ?? null, action: input.activity.action,
+        targetType: input.activity.targetType, targetId: input.activity.targetId,
+        runId: input.activity.runId ?? null, eventJson: input.activity,
+        createdAt: input.activity.createdAt,
+      });
+      const values = capsuleValues(updated);
+      const rows = await db.update(pgSchema.capsules).set({
+        currentStateVersionId: values.currentStateVersionId,
+        status: values.status, capsuleJson: values.capsuleJson, updatedAt: values.updatedAt,
+      }).where(and(
+        eq(pgSchema.capsules.id, updated.id),
+        isNull(pgSchema.capsules.currentStateVersionId),
+        eq(pgSchema.capsules.executionAuthorityEpoch, input.expectedExecutionAuthorityEpoch),
+        sql`${pgSchema.capsules.capsuleJson} = ${JSON.stringify(input.expectedCapsule)}::jsonb`,
+      )).returning({ json: pgSchema.capsules.capsuleJson });
+      if (rows.length !== 1) throw new Error("state recovery Capsule CAS lost after ledger insert");
+      // v108's BEFORE UPDATE OF status trigger rewrites the epoch to OLD even
+      // for error -> error. A separate epoch-only UPDATE avoids that trigger.
+      const epochRows = await db.update(pgSchema.capsules).set({
+        executionAuthorityEpoch: input.expectedExecutionAuthorityEpoch + 1,
+      }).where(and(eq(pgSchema.capsules.id, updated.id),
+        eq(pgSchema.capsules.executionAuthorityEpoch, input.expectedExecutionAuthorityEpoch)))
+        .returning({ epoch: pgSchema.capsules.executionAuthorityEpoch });
+      if (epochRows.length !== 1) throw new Error("state recovery epoch CAS lost after ledger insert");
+      return { status: "committed", run: input.recoveryRun, stateVersion: input.stateVersion, capsule: updated };
+    });
+  }
+
   async commitRestoredState(
     input: CommitRestoredStateInput,
   ): Promise<CommitRestoredStateResult> {
@@ -9238,6 +9353,14 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return event;
   }
 
+  async getActivityEvent(id: string): Promise<ActivityEvent | undefined> {
+    return await this.#pgFirstJson<ActivityEvent>(
+      pgSchema.auditEvents,
+      pgSchema.auditEvents.eventJson,
+      eq(pgSchema.auditEvents.id, id),
+    );
+  }
+
   async listActivityEvents(
     workspaceId: string,
     options: { readonly limit?: number } = {},
@@ -10580,7 +10703,8 @@ async function pgSourceSyncSettlementPhysicalReadMatches(
     }
     case "apply":
     case "plan":
-    case "restore": {
+    case "restore":
+    case "recovery": {
       const rows = await transaction.query<PgSourceSyncSettlementRunRow>(
         `select id,
                 kind,
@@ -10603,14 +10727,14 @@ async function pgSourceSyncSettlementPhysicalReadMatches(
 
 /** Match the physical Run discriminator to the getter family before commit. */
 function pgSourceSyncSettlementRunFamilyMatches(
-  kind: Extract<SourceSyncSettlementRead["kind"], "apply" | "plan" | "restore">,
+  kind: Extract<SourceSyncSettlementRead["kind"], "apply" | "plan" | "restore" | "recovery">,
   row: PgSourceSyncSettlementRunRow,
 ): boolean {
   const allowed = kind === "apply"
     ? ["apply", "destroy_apply"]
     : kind === "plan"
       ? ["plan", "destroy_plan", "drift_check"]
-      : ["backup", "restore"];
+      : kind === "recovery" ? ["state_recovery"] : ["backup", "restore"];
   if (!allowed.includes(row.kind)) return false;
   let value: unknown;
   try {

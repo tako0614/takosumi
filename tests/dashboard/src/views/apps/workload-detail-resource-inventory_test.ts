@@ -31,3 +31,19 @@ test("Workload detail presents current recorded resources as a read-only disclos
   expect(viewSource).not.toContain("deleteResource");
   expect(viewSource).not.toContain("importResource");
 });
+
+test("recovered state inventory is explicitly unknown, not an applied resource list", () => {
+  expect(viewSource).toContain('availability === "recovery_unknown"');
+  expect(viewSource).toContain('t("app.deploys.inventoryRecoveryUnknownTitle")');
+  expect(viewSource).toContain('t("app.deploys.inventoryRecoveryUnknownNote")');
+  expect(viewSource).toContain('availability !== "recovery_unknown"');
+  expect(ja["app.deploys.inventoryRecoveryUnknownNote"]).toContain(
+    "元のデプロイは失敗したまま",
+  );
+  expect(en["app.deploys.inventoryRecoveryUnknownNote"]).toContain(
+    "original deploy remains failed",
+  );
+  expect(en["app.deploys.inventoryRecoveryUnknownNote"]).toContain(
+    "not been verified",
+  );
+});

@@ -378,6 +378,7 @@ export const en: Record<keyof typeof ja, string> = {
   "op.artifact": "Stage artifact",
   "op.backup": "Backup",
   "op.restore": "Restore",
+  "op.state_recovery": "State recovery",
   // Internal plan-operation nouns recorded on Activity metadata
   // (create/update/destroy) — mapped so feeds never fall back to "Operation".
   "op.create": "Add",
@@ -484,6 +485,9 @@ export const en: Record<keyof typeof ja, string> = {
   "app.deploys.inventoryTitle": "Deployed resources",
   "app.deploys.inventoryRecordedNote":
     "Recorded in the current applied state; this is not live health.",
+  "app.deploys.inventoryRecoveryUnknownTitle": "Resources after state recovery",
+  "app.deploys.inventoryRecoveryUnknownNote":
+    "Only state data was adopted. The original deploy remains failed; resource existence and provider-operation success have not been verified.",
   "app.deploys.inventoryLoadError":
     "The recorded resource inventory could not be loaded.",
   "app.deploys.inventoryLegacyUnavailable":
@@ -624,6 +628,10 @@ export const en: Record<keyof typeof ja, string> = {
   "run.summary.destroyReadyGeneric":
     "This service is ready to be deleted. This cannot be undone once run.",
   "run.summary.applied": "Deploy started. It will take a moment to settle.",
+  "run.summary.stateRecoverySucceeded":
+    "State data recovered. This does not mean the deploy succeeded.",
+  "run.summary.stateRecoverySucceededHint":
+    "The original deploy remains failed. Resource and provider-operation outcomes are unknown, and service availability has not been confirmed.",
   "run.summary.alreadyApplied":
     "This change's deploy has already been run. See Activity for the result.",
   "run.summary.applying": "Deploying…",

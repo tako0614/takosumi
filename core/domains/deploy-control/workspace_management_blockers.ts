@@ -38,9 +38,9 @@ function hasTerminalStatus(run: RecordValue): boolean {
 }
 
 /** Unknown or contradictory families cannot become settled by default. */
-function runFamily(run: RecordValue): "plan" | "apply" | "source_sync" | "backup" | "compatibility_check" | "restore" | undefined {
-  const plan = "sourceDigest" in run || "variablesDigest" in run;
-  const apply = "planRunId" in run || "expected" in run;
+function runFamily(run: RecordValue): "plan" | "apply" | "source_sync" | "backup" | "compatibility_check" | "restore" | "state_recovery" | undefined {
+  const plan = run.type === undefined && ("sourceDigest" in run || "variablesDigest" in run);
+  const apply = run.type === undefined && ("planRunId" in run || "expected" in run);
   const source = run.kind === "source_sync";
   if (Number(plan) + Number(apply) + Number(source) > 1) return undefined;
   if (plan || apply) {
@@ -54,7 +54,7 @@ function runFamily(run: RecordValue): "plan" | "apply" | "source_sync" | "backup
   }
   if (source) return run.type === undefined && text(run.sourceId) ? "source_sync" : undefined;
   if (run.kind !== undefined || run.operation !== undefined) return undefined;
-  if (run.type === "backup" || run.type === "compatibility_check" || run.type === "restore") return run.type;
+  if (run.type === "backup" || run.type === "compatibility_check" || run.type === "restore" || run.type === "state_recovery") return run.type;
   return undefined;
 }
 
@@ -118,6 +118,36 @@ function restoreIsSettled(run: RecordValue, ledgers: WorkspaceManagementLedgers)
   return true;
 }
 
+function recoveryIsSettled(run: RecordValue, ledgers: WorkspaceManagementLedgers): boolean {
+  const evidence = run.stateRecovery;
+  if (run.status !== "succeeded" || !record(evidence) || !text(run.capsuleId) ||
+    !text(run.environment) || !text(run.planRunId) ||
+    !text(evidence.failedApplyRunId) || !text(evidence.recoveredStateVersionId) ||
+    !text(evidence.sourceSnapshotId) || evidence.sourceSnapshotId !== run.sourceSnapshotId ||
+    !/^sha256:[0-9a-f]{64}$/u.test(String(evidence.plaintextSha256)) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(String(evidence.encryptedDigest)) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(String(evidence.artifactEvidenceDigest))) return false;
+  const state = ledgers.stateVersions.get(evidence.recoveredStateVersionId);
+  const failed = ledgers.runs.get(evidence.failedApplyRunId);
+  return matchingState(state, run) && state.id === evidence.recoveredStateVersionId &&
+    state.generation === 1 && state.createdByRunId === run.id &&
+    state.digest === evidence.plaintextSha256 && record(failed) &&
+    failed.status === "failed" && failed.operation === "create" &&
+    failed.id === evidence.failedApplyRunId && failed.planRunId === run.planRunId &&
+    failed.workspaceId === run.workspaceId && failed.capsuleId === run.capsuleId &&
+    failed.stateVersionId === undefined && failed.outputId === undefined;
+}
+
+function failedApplyHasRecovery(run: RecordValue, ledgers: WorkspaceManagementLedgers): boolean {
+  if (run.status !== "failed" || run.operation !== "create" ||
+    run.stateVersionId !== undefined || run.outputId !== undefined) return false;
+  return [...ledgers.runs.values()].some((candidate) =>
+    record(candidate) && candidate.type === "state_recovery" &&
+    record(candidate.stateRecovery) && candidate.stateRecovery.failedApplyRunId === run.id &&
+    recoveryIsSettled(candidate, ledgers)
+  );
+}
+
 /** This is quiescence, not Run progress or whole-record business validation. */
 export function runBlocksWorkspaceManagement(value: unknown, ledgers: WorkspaceManagementLedgers): boolean {
   if (!record(value) || !text(value.id) || !text(value.workspaceId) || !hasTerminalStatus(value)) return true;
@@ -132,6 +162,7 @@ export function runBlocksWorkspaceManagement(value: unknown, ledgers: WorkspaceM
   }
   if (family === "source_sync") return value.status !== "succeeded" && value.status !== "failed";
   if (family === "restore") return !restoreIsSettled(value, ledgers);
+  if (family === "state_recovery") return !recoveryIsSettled(value, ledgers);
   if (family === "plan") {
     if ((value.requiresApproval !== undefined && typeof value.requiresApproval !== "boolean") ||
       !absentOrText(value.appliedApplyRunId) ||
@@ -147,6 +178,7 @@ export function runBlocksWorkspaceManagement(value: unknown, ledgers: WorkspaceM
   const apply = value as unknown as ApplyRun;
   if (applyRunBillingCapturePending(apply) || applyRunRuntimeSecretRetirementPending(apply)) return true;
   if (apply.status === "succeeded") return false;
+  if (failedApplyHasRecovery(value, ledgers)) return false;
   if (dispatched(apply) || hasApplyEffects(value)) return true;
   if (apply.status === "failed") {
     // The queued/DLQ failure writer historically used apply.failed for destroy

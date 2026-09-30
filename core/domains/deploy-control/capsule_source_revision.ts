@@ -14,6 +14,7 @@ import type { Capsule } from "takosumi-contract/capsules";
 import type { StateVersion } from "takosumi-contract/state-versions";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import { OpenTofuControllerError } from "./errors.ts";
+import { recoveryPlanForStateVersion } from "./operator_state_recovery.ts";
 import type { OpenTofuControlStore } from "./store.ts";
 
 /** The provenance reader, reusable inside a storage transaction/observation. */
@@ -23,6 +24,7 @@ export type CapsuleSourceRevisionReader = Pick<
   | "getStateVersion"
   | "getApplyRun"
   | "getBackupRun"
+  | "getStateRecoveryRun"
   | "getPlanRun"
   | "getSourceSnapshot"
 >;
@@ -156,6 +158,8 @@ async function planRunForStateVersion(
     return planRun;
   }
 
+  const recoveredPlan = await recoveryPlanForStateVersion(store, capsule, stateVersion);
+  if (recoveredPlan) return recoveredPlan;
   const restoreRun = await store.getBackupRun(stateVersion.createdByRunId);
   if (
     !restoreRun ||

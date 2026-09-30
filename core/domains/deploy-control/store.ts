@@ -29,6 +29,13 @@ import type {
 import { coerceRunStatus } from "@takosumi/internal/deploy-control-api";
 import { planRunAwaitsApproval } from "./projection_run.ts";
 import {
+  assertRecoveryCommitCandidate,
+  exactRecoveryReplay,
+  recoveryObservationMatches,
+  type CommitRecoveredStateInput,
+  type CommitRecoveredStateResult,
+} from "./operator_state_recovery.ts";
+import {
   MAX_SOURCE_RECONCILIATION_CAPSULES,
   observeSourceSyncSettlement,
   sourceSyncSettlementCensusMatches,
@@ -3235,6 +3242,7 @@ export interface OpenTofuControlStore {
   commitBackupRun(input: CommitBackupRunInput): Promise<CommitBackupRunResult>;
   beginRestoreRun(run: Run, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<BeginRestoreRunResult>;
   getBackupRun(id: string): Promise<Run | undefined>;
+  getStateRecoveryRun(id: string): Promise<Run | undefined>;
   listRunsByWorkspace(
     workspaceId: string,
     options?: { readonly limit?: number },
@@ -3481,6 +3489,8 @@ export interface OpenTofuControlStore {
 
   /** Atomically commits terminal Run + StateVersion + optional Output + Capsule cursor. */
   commitRunState(input: CommitRunStateInput): Promise<CommitRunStateResult>;
+  /** Operator-only state recovery. Does not dispatch or create an Output. */
+  commitRecoveredState(input: CommitRecoveredStateInput): Promise<CommitRecoveredStateResult>;
   /** Internal recovery/test read; this is never projected through the public API. */
   getCapsuleInterfaceMaterializationIntent(
     id: string,
@@ -3722,6 +3732,8 @@ export interface OpenTofuControlStore {
   // Workspace-scoped audit ledger surfaced in the dashboard Activity view. Listing
   // orders newest first (createdAt desc, id desc) and defaults to 100 rows.
   putActivityEvent(event: ActivityEvent): Promise<ActivityEvent>;
+  /** Exact immutable audit-row read for authority-fenced recovery replay. */
+  getActivityEvent(id: string): Promise<ActivityEvent | undefined>;
   listActivityEvents(
     workspaceId: string,
     options?: { readonly limit?: number },
@@ -4633,6 +4645,12 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         ? publicStoredRun(run)
         : undefined,
     );
+  }
+
+  getStateRecoveryRun(id: string): Promise<Run | undefined> {
+    const run = this.#runs.get(id);
+    return Promise.resolve(run && isPublicRunRecord(run) && run.type === "state_recovery"
+      ? publicStoredRun(run) : undefined);
   }
 
   listRunsByWorkspace(
@@ -6175,6 +6193,49 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return { capsule: updated };
   }
 
+  async commitRecoveredState(input: CommitRecoveredStateInput): Promise<CommitRecoveredStateResult> {
+    assertRecoveryCommitCandidate(input);
+    const run = this.#runs.get(input.recoveryRun.id);
+    const existingRun = run && isPublicRunRecord(run) ? publicStoredRun(run) : undefined;
+    const existingState = this.#stateVersions.get(input.stateVersion.id);
+    const capsule = this.#capsules.get(input.expectedCapsule.id);
+    const epoch = this.#capsuleExecutionAuthorityEpochs.get(input.expectedCapsule.id);
+    const existingActivity = this.#activityEvents.get(input.activity.id);
+    if (exactRecoveryReplay(existingRun, input, existingState, capsule, epoch, existingActivity)) {
+      return { status: "replayed", run: existingRun!, stateVersion: existingState!, capsule: capsule! };
+    }
+    const management = this.#workspaceManagement.get(input.expectedCapsule.workspaceId);
+    const observed = {
+      capsule,
+      installConfig: this.#installConfigs.get(input.expectedInstallConfig.id),
+      source: this.#sources.get(input.expectedSource.id),
+      sourceSnapshot: this.#sourceSnapshots.get(input.expectedSourceSnapshot.id),
+      planRun: this.#runs.get(input.expectedPlanRun.id) as PlanRun | undefined,
+      failedApplyRun: this.#runs.get(input.expectedFailedApplyRun.id) as ApplyRun | undefined,
+      workspaceManagement: management?.managementState === "active" ? management as WorkspaceManagementAuthority : undefined,
+      executionAuthorityEpoch: this.#capsuleExecutionAuthorityEpochs.get(input.expectedCapsule.id),
+      existingRun,
+      existingStateVersion: existingState,
+      existingGenerationOne: [...this.#stateVersions.values()].find((state) =>
+        state.capsuleId === input.expectedCapsule.id && state.environment === input.expectedCapsule.environment && state.generation === 1),
+      existingActivity,
+      runsForCapsule: [...this.#runs.values()].filter((row) => "capsuleId" in row && row.capsuleId === input.expectedCapsule.id),
+    };
+    if (!recoveryObservationMatches(input, observed)) return { status: "conflict" };
+    const updated = normalizeCapsule({
+      ...capsule!, currentStateVersionId: input.stateVersion.id,
+      currentStateGeneration: 1, currentOutputId: undefined, status: "error",
+      updatedAt: input.recoveryRun.finishedAt!,
+    });
+    // No await or throw between writes: this is one in-memory ledger operation.
+    this.#runs.set(input.recoveryRun.id, input.recoveryRun);
+    this.#stateVersions.set(input.stateVersion.id, input.stateVersion);
+    this.#activityEvents.set(input.activity.id, input.activity);
+    this.#capsuleExecutionAuthorityEpochs.set(input.expectedCapsule.id, epoch! + 1);
+    this.#setCapsule(updated);
+    return { status: "committed", run: input.recoveryRun, stateVersion: input.stateVersion, capsule: updated };
+  }
+
   getCapsuleInterfaceMaterializationIntent(
     id: string,
   ): Promise<CapsuleInterfaceMaterializationIntent | undefined> {
@@ -7113,6 +7174,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   putActivityEvent(event: ActivityEvent): Promise<ActivityEvent> {
     this.#activityEvents.set(event.id, event);
     return Promise.resolve(event);
+  }
+
+  getActivityEvent(id: string): Promise<ActivityEvent | undefined> {
+    return Promise.resolve(this.#activityEvents.get(id));
   }
 
   listActivityEvents(

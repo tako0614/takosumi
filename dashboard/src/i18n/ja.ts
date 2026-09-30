@@ -384,6 +384,7 @@ export const ja = {
   "op.artifact": "成果物の準備",
   "op.backup": "バックアップ",
   "op.restore": "復元",
+  "op.state_recovery": "状態の復旧",
   // Internal plan-operation nouns recorded on Activity metadata
   // (create/update/destroy) — mapped so feeds never fall back to 操作.
   "op.create": "追加",
@@ -487,6 +488,9 @@ export const ja = {
   "app.deploys.inventoryTitle": "デプロイ済みリソース",
   "app.deploys.inventoryRecordedNote":
     "現在の適用状態に記録された内容です。ライブ稼働状態ではありません。",
+  "app.deploys.inventoryRecoveryUnknownTitle": "復旧した状態のリソース",
+  "app.deploys.inventoryRecoveryUnknownNote":
+    "状態データだけを採用しました。元のデプロイは失敗したままで、リソースやプロバイダー操作の成功は確認されていません。",
   "app.deploys.inventoryLoadError":
     "記録済みリソース一覧を読み込めませんでした。",
   "app.deploys.inventoryLegacyUnavailable":
@@ -629,6 +633,10 @@ export const ja = {
     "このサービスを削除する準備ができました。実行すると元に戻せません。",
   "run.summary.applied":
     "デプロイを開始しました。反映までしばらくお待ちください。",
+  "run.summary.stateRecoverySucceeded":
+    "状態データを復旧しました。デプロイの成功を示すものではありません。",
+  "run.summary.stateRecoverySucceededHint":
+    "元のデプロイは失敗したままです。リソースとプロバイダー操作の結果は不明で、サービスは利用可能と確認されていません。",
   "run.summary.alreadyApplied":
     "この変更のデプロイは実行済みです。結果はアクティビティから確認できます。",
   "run.summary.applying": "デプロイを実行しています…",

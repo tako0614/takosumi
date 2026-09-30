@@ -266,6 +266,7 @@ function isRunType(value: unknown): value is RunType {
     value === "destroy_apply" ||
     value === "drift_check" ||
     value === "backup" ||
+    value === "state_recovery" ||
     value === "restore"
   );
 }

@@ -206,9 +206,33 @@ and the Plan request is fenced against the same current StateVersion cursor. A
 missing or changed provenance fails closed. Destroy never stores or reads a
 `CompatibilityReport` id, because compatibility reports are create/update
 admission evidence and never a teardown lock.
+
+For a state-only recovery of a failed initial create, the StateVersion creator
+is instead a successful `state_recovery` Run. Its value-free provenance must
+resolve through the exact failed `create` ApplyRun to its successful pinned
+PlanRun and SourceSnapshot, with Workspace, Capsule, environment, generation,
+digest, and backlinks checked. The failed ApplyRun remains failed; recovery
+does not relabel it as a successful Apply or fabricate a runner receipt. This
+lineage supports subsequent source observation and a new reviewed Destroy Plan.
+The current inventory reports `recovery_unknown`: it does not infer resource
+identities or assert that a provider operation succeeded.
+
 Current Capsule lifecycle code does not release historical public-host
 reservation rows or perform unrelated bulk OIDC-client cleanup; physical
 retirement of those historical rows waits for operator inventory.
+
+The state-only recovery Core primitive is dormant and operator-only. It has no
+public route, artifact stager/verifier implementation, or operator
+authorization entrypoint. It accepts only a verifier-supplied immutable,
+adapter-allocated, encrypted state artifact descriptor scoped to the failed
+initial create. Memory, PostgreSQL, and D1 commit one generation-1
+StateVersion, a `state_recovery` Run, Capsule pointer and execution-authority
+epoch advancement, and value-free Activity evidence atomically against the
+exact prior records. The Capsule remains `error`, has no current Output, and
+gets no invented runner execution evidence. Reusing the primitive in an
+operator workflow requires a concrete artifact verifier and authorization gate
+with separate proof before activation; a passing ledger test alone is not
+permission to recover live state.
 
 ## Capsule InstallConfig re-adoption
 

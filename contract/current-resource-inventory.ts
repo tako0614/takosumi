@@ -21,6 +21,7 @@ export type CapsuleCurrentResourceInventory = {
   readonly environment: string;
   readonly stateVersionId: string;
   readonly generation: number;
+  /** Original Apply lineage; for recovery_unknown it failed and did not create this state. */
   readonly applyRunId: string;
   readonly planRunId: string;
   readonly recordedAt: string;
@@ -34,6 +35,11 @@ export type CapsuleCurrentResourceInventory = {
     | {
         /** Legacy plans have no persisted resource-change projection. */
         readonly availability: "legacy_unavailable";
+      }
+    | {
+        /** Recovered state is authoritative bytes, but no value-free inventory was observed. */
+        readonly availability: "recovery_unknown";
+        readonly recoveryRunId: string;
       }
   );
 

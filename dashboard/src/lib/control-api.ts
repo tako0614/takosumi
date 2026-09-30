@@ -579,7 +579,8 @@ export type RunType =
   | "destroy_apply"
   | "drift_check"
   | "backup"
-  | "restore";
+  | "restore"
+  | "state_recovery";
 
 export type RunStatus =
   | "queued"
