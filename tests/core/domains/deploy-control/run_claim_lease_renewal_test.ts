@@ -37,6 +37,7 @@ import {
 } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
+import { stateVersionIdForRecoveryRun } from "../../../../core/domains/deploy-control/operator_state_recovery.ts";
 import {
   FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   fixtureExecutionEvidence,
@@ -359,31 +360,82 @@ test("Apply completion never receives the Plan-only Core timing diagnostic", asy
   )).toBeFalsy();
 });
 
+class RecoveryRestoreStore extends InMemoryOpenTofuControlStore {
+  readonly recoveryRuns = new Map<string, Run>();
+
+  override getStateRecoveryRun(id: string): Promise<Run | undefined> {
+    return Promise.resolve(this.recoveryRuns.get(id));
+  }
+}
+
 async function seedQueuedRestore(
   store: InMemoryOpenTofuControlStore,
   controller: OpenTofuController,
   label: string,
   restoreServiceData = false,
+  stateCreator: "apply" | "state_recovery" | "orphan_recovery" = "apply",
 ): Promise<{
   readonly runId: string;
   readonly capsuleId: string;
   readonly environment: string;
 }> {
-  const { capsule } = await seedCapsuleModel(store, {
+  const { capsule, snapshot } = await seedCapsuleModel(store, {
     workspaceId: `ws_restore_renewal_${label}`,
     capsuleId: `cap_restore_renewal_${label}`,
   });
+  const createdByRunId = stateCreator !== "apply"
+    ? `recovery_restore_renewal_${label}` : `apply_restore_renewal_${label}`;
+  const stateVersionId = stateCreator !== "apply"
+    ? await stateVersionIdForRecoveryRun(createdByRunId) : `state_restore_renewal_${label}`;
   await store.putStateVersion({
-    id: `state_restore_renewal_${label}`,
+    id: stateVersionId,
     workspaceId: capsule.workspaceId,
     capsuleId: capsule.id,
     environment: capsule.environment,
     generation: 1,
     stateRef: `state/restore-renewal/${label}`,
     digest: PLAN_DIGEST,
-    createdByRunId: `apply_restore_renewal_${label}`,
+    createdByRunId,
     createdAt: "2026-08-29T00:00:00.000Z",
   });
+  if (stateCreator === "state_recovery") {
+    const planRunId = `plan_restore_recovery_${label}`;
+    const failedApplyRunId = `apply_restore_recovery_${label}`;
+    await store.putPlanRun({
+      id: planRunId, workspaceId: capsule.workspaceId, capsuleId: capsule.id,
+      capsuleContext: { workspaceId: capsule.workspaceId, capsuleId: capsule.id, environment: capsule.environment },
+      source: { kind: "git", url: snapshot.url, commit: snapshot.resolvedCommit },
+      sourceSnapshotId: snapshot.id, sourceDigest: PLAN_DIGEST,
+      operation: "create", runnerProfileId: "opentofu-default",
+      variablesDigest: PLAN_DIGEST, requiredProviders: [], status: "succeeded",
+      policy: { status: "passed", reasons: [], checkedAt: 1 }, policyDecisionDigest: PLAN_DIGEST,
+      planDigest: PLAN_DIGEST, planArtifact: planArtifact(), baseStateGeneration: 0,
+      auditEvents: [], createdAt: 1, updatedAt: 1,
+    });
+    await store.putApplyRun({
+      id: failedApplyRunId, planRunId, workspaceId: capsule.workspaceId, capsuleId: capsule.id,
+      operation: "create", runnerProfileId: "opentofu-default", status: "failed",
+      expected: {
+        planRunId, capsuleId: capsule.id, runnerProfileId: "opentofu-default",
+        sourceDigest: PLAN_DIGEST, variablesDigest: PLAN_DIGEST,
+        policyDecisionDigest: PLAN_DIGEST, planDigest: PLAN_DIGEST,
+      },
+      stateBackend: { kind: "operator-managed", ref: "opaque_backend" },
+      stateLock: { status: "recorded", backendRef: "opaque_backend" },
+      auditEvents: [], createdAt: 2, updatedAt: 3, finishedAt: 3,
+    });
+    if (!(store instanceof RecoveryRestoreStore)) throw new Error("recovery fixture requires its recovery reader");
+    store.recoveryRuns.set(createdByRunId, {
+      id: createdByRunId, type: "state_recovery", status: "succeeded",
+      workspaceId: capsule.workspaceId, capsuleId: capsule.id, environment: capsule.environment,
+      planRunId, sourceSnapshotId: snapshot.id, createdBy: "ops",
+      createdAt: "2026-08-29T00:00:00.000Z", finishedAt: "2026-08-29T00:00:00.000Z",
+      stateRecovery: {
+        failedApplyRunId, recoveredStateVersionId: stateVersionId, sourceSnapshotId: snapshot.id,
+        plaintextSha256: PLAN_DIGEST, encryptedDigest: LOCK_DIGEST, artifactEvidenceDigest: LOCK_DIGEST,
+      },
+    });
+  }
   const serviceData = {
     ref: `backup/restore-renewal/${label}/service-data`,
     digest: PLAN_DIGEST,
@@ -428,6 +480,52 @@ async function seedQueuedRestore(
     environment: capsule.environment,
   };
 }
+
+test("Restore refuses recovery state with missing recovery lineage before runner dispatch", async () => {
+  const store = new RecoveryRestoreStore();
+  let dispatched = 0;
+  const controller = controllerWith(store, {
+    disableEnqueue: true,
+    restore: async (job) => {
+      dispatched += 1;
+      return restoreAck(job);
+    },
+  });
+  const target = await seedQueuedRestore(store, controller, "orphan_recovery", false, "orphan_recovery");
+  await expect(controller.runQueuedRestore(target.runId)).rejects.toThrow("recovery lineage");
+  expect(dispatched).toBe(0);
+});
+
+test("Restore accepts exact recovery lineage and rechecks it before the adapter write", async () => {
+  const store = new RecoveryRestoreStore();
+  let dispatched = 0;
+  const controller = controllerWith(store, {
+    disableEnqueue: true,
+    restore: async (job, options) => {
+      dispatched += 1;
+      expect(await options?.sourceAuthority?.readExact()).toEqual(job.sourceState);
+      return restoreAck(job);
+    },
+  });
+  const target = await seedQueuedRestore(store, controller, "valid_recovery", false, "state_recovery");
+  expect((await controller.runQueuedRestore(target.runId))?.status).toBe("succeeded");
+  expect(dispatched).toBe(1);
+});
+
+test("Restore rejects changed recovery lineage at the adapter write fence", async () => {
+  const store = new RecoveryRestoreStore();
+  const controller = controllerWith(store, {
+    disableEnqueue: true,
+    restore: async (job, options) => {
+      const recovery = (await store.getStateRecoveryRun(job.sourceState.createdByRunId))!;
+      store.recoveryRuns.set(recovery.id, { ...recovery, stateRecovery: { ...recovery.stateRecovery!, plaintextSha256: LOCK_DIGEST } });
+      await options?.sourceAuthority?.readExact();
+      throw new Error("must not reach the target artifact write");
+    },
+  });
+  const target = await seedQueuedRestore(store, controller, "changed_recovery", false, "state_recovery");
+  await expect(controller.runQueuedRestore(target.runId)).rejects.toThrow("recovery lineage");
+});
 
 function isApplyHeartbeatRenewal(input: TransitionRunInput): boolean {
   return (

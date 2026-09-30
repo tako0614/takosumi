@@ -20,6 +20,12 @@ import { OpenTofuControllerError } from "./errors.ts";
 export const VERIFIED_RECOVERY_ARTIFACT_FORMAT =
   "takosumi.verified-state-recovery-artifact/v1" as const;
 
+/** Stable canonical identity shared by the recovery writer and state readers. */
+export async function stateVersionIdForRecoveryRun(runId: string): Promise<string> {
+  const digest = await stableJsonDigest({ kind: "takosumi.state-recovery-state-version-id@v1", runId });
+  return `state_${digest.slice("sha256:".length)}`;
+}
+
 /** Returned only by an operator-selected encrypted state adapter verifier. */
 export interface VerifiedRecoveryArtifact {
   readonly format: typeof VERIFIED_RECOVERY_ARTIFACT_FORMAT;
@@ -72,6 +78,7 @@ export type CommitRecoveredStateResult =
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 
 export interface RecoveryCommitObservation {
+  /** Adapter-projected public view; private authority is fenced separately. */
   readonly capsule?: Capsule;
   readonly installConfig?: InstallConfig;
   readonly source?: StoredSource;
@@ -141,7 +148,9 @@ export async function recoveryPlanForStateVersion(
   state: StateVersion,
 ): Promise<PlanRun | undefined> {
   const run = await reader.getStateRecoveryRun(state.createdByRunId);
-  if (!run || run.type !== "state_recovery" || run.status !== "succeeded" ||
+  if (!run || run.id !== state.createdByRunId ||
+    state.id !== await stateVersionIdForRecoveryRun(run.id) ||
+    run.type !== "state_recovery" || run.status !== "succeeded" ||
     run.workspaceId !== capsule.workspaceId || run.capsuleId !== capsule.id ||
     run.environment !== capsule.environment || run.executionEvidence !== undefined ||
     state.workspaceId !== capsule.workspaceId || state.capsuleId !== capsule.id ||
@@ -161,6 +170,8 @@ export async function recoveryPlanForStateVersion(
     failed.stateVersionId === undefined && failed.outputId === undefined &&
     failed.planRunId === plan?.id &&
     plan?.status === "succeeded" && plan.operation === "create" &&
+    plan.baseStateGeneration === 0 && plan.capsuleCurrentStateVersionId == null &&
+    (plan.appliedApplyRunId === undefined || plan.appliedApplyRunId === failed.id) &&
     plan.workspaceId === capsule.workspaceId && plan.capsuleId === capsule.id &&
     plan.sourceSnapshotId === run.sourceSnapshotId &&
     snapshot !== undefined && recoveryPlanMatchesSource(capsule, plan, snapshot)
@@ -201,11 +212,14 @@ export function exactRecoveryReplay(
 }
 
 /** Pure candidate validation; every store repeats it after reading its atomic snapshot. */
-export function assertRecoveryCommitCandidate(input: CommitRecoveredStateInput): void {
+export async function assertRecoveryCommitCandidate(input: CommitRecoveredStateInput): Promise<void> {
   const { expectedCapsule: capsule, expectedInstallConfig: config, expectedSource: source, expectedSourceSnapshot: snapshot,
     expectedPlanRun: plan, expectedFailedApplyRun: failed, expectedWorkspaceManagement: management,
     expectedExecutionAuthorityEpoch: epoch, artifact, recoveryRun: run, stateVersion: state } = input;
   assertVerifiedRecoveryArtifact(artifact);
+  if (state.id !== await stateVersionIdForRecoveryRun(run.id)) {
+    throw recoveryConflict("state recovery StateVersion identity is not canonical for its creator Run");
+  }
   if (capsule.status !== "error" || capsule.currentStateGeneration !== 0 ||
     capsule.currentStateVersionId !== undefined || capsule.currentOutputId !== undefined ||
     config.id !== capsule.installConfigId || config.workspaceId !== capsule.workspaceId ||
@@ -305,8 +319,7 @@ export async function recoverFailedInitialCreateState(input: {
     artifactHandle: input.artifactHandle,
   });
   assertVerifiedRecoveryArtifact(artifact);
-  const stateDigest = await stableJsonDigest({ kind: "takosumi.state-recovery-state-version-id@v1", runId: input.recoveryRunId });
-  const stateVersionId = `state_${stateDigest.slice("sha256:".length)}`;
+  const stateVersionId = await stateVersionIdForRecoveryRun(input.recoveryRunId);
   const run: Run = {
     id: input.recoveryRunId, workspaceId: capsule.workspaceId, capsuleId: capsule.id,
     environment: capsule.environment, planRunId: plan.id, sourceSnapshotId: snapshot.id,
@@ -369,6 +382,6 @@ export async function recoverFailedInitialCreateState(input: {
     }
     return { status: "replayed", run: existing, stateVersion: currentState!, capsule };
   }
-  assertRecoveryCommitCandidate(command);
+  await assertRecoveryCommitCandidate(command);
   return await input.store.commitRecoveredState(command);
 }

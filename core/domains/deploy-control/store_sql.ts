@@ -342,7 +342,7 @@ const PG_WORKSPACE_FREEZE_VALID_APPLY_AUDIT_SQL = `
                  and jsonb_typeof(
                    audit_event.value -> 'data' -> 'providerDispatched'
                  ) is distinct from 'boolean'
-               )
+            )
                or (
                  audit_event.value -> 'data' ? 'lifecycleActionDispatched'
                  and jsonb_typeof(
@@ -423,12 +423,110 @@ const PG_WORKSPACE_FREEZE_APPLY_FINALIZERS_SETTLED_SQL = `
   )
 `;
 
+/** Exact state-only recovery evidence required before it can settle a failed create. */
+const PG_WORKSPACE_FREEZE_STATE_RECOVERY_SETTLED_SQL = (candidate: string) => `
+  ${candidate}.lease_token is null
+  and ${candidate}.kind = 'state_recovery'
+  and ${candidate}.status = 'succeeded'
+  and jsonb_typeof(${candidate}.run_json) = 'object'
+  and jsonb_typeof(${candidate}.run_json -> 'id') = 'string'
+  and btrim(${candidate}.run_json ->> 'id') <> ''
+  and ${candidate}.run_json ->> 'id' = ${candidate}.id
+  and jsonb_typeof(${candidate}.run_json -> 'workspaceId') = 'string'
+  and btrim(${candidate}.run_json ->> 'workspaceId') <> ''
+  and ${candidate}.run_json ->> 'workspaceId' = ${candidate}.space_id
+  and jsonb_typeof(${candidate}.run_json -> 'status') = 'string'
+  and ${candidate}.run_json ->> 'status' = ${candidate}.status
+  and ${candidate}.source_id is null
+  and not (${candidate}.run_json ? 'sourceId')
+  and jsonb_typeof(${candidate}.run_json -> 'capsuleId') = 'string'
+  and btrim(${candidate}.run_json ->> 'capsuleId') <> ''
+  and ${candidate}.run_json ->> 'capsuleId' = ${candidate}.installation_id
+  and jsonb_typeof(${candidate}.run_json -> 'environment') = 'string'
+  and btrim(${candidate}.run_json ->> 'environment') <> ''
+  and jsonb_typeof(${candidate}.run_json -> 'createdAt') = 'string'
+  and btrim(${candidate}.run_json ->> 'createdAt') <> ''
+  and ${candidate}.run_json ->> 'createdAt' = ${candidate}.created_at
+  and (
+    not (${candidate}.run_json ? 'heartbeatAt')
+    and ${candidate}.heartbeat_at is null
+    or jsonb_typeof(${candidate}.run_json -> 'heartbeatAt') = 'number'
+      and ${candidate}.heartbeat_at between 0 and 9007199254740991
+      and ${candidate}.run_json -> 'heartbeatAt' = to_jsonb(${candidate}.heartbeat_at)
+  )
+  and (
+    not (${candidate}.run_json ? 'startedAt')
+    or jsonb_typeof(${candidate}.run_json -> 'startedAt') = 'string'
+      and btrim(${candidate}.run_json ->> 'startedAt') <> ''
+  )
+  and (
+    not (${candidate}.run_json ? 'finishedAt')
+    or jsonb_typeof(${candidate}.run_json -> 'finishedAt') = 'string'
+      and btrim(${candidate}.run_json ->> 'finishedAt') <> ''
+  )
+  and jsonb_typeof(${candidate}.run_json -> 'type') = 'string'
+  and ${candidate}.run_json ->> 'type' = 'state_recovery'
+  and not (${candidate}.run_json ? 'kind')
+  and not (${candidate}.run_json ? 'operation')
+  and jsonb_typeof(${candidate}.run_json -> 'capsuleId') = 'string'
+  and jsonb_typeof(${candidate}.run_json -> 'planRunId') = 'string'
+  and btrim(${candidate}.run_json ->> 'planRunId') <> ''
+  and jsonb_typeof(${candidate}.run_json -> 'sourceSnapshotId') = 'string'
+  and btrim(${candidate}.run_json ->> 'sourceSnapshotId') <> ''
+  and jsonb_typeof(${candidate}.run_json -> 'stateRecovery') = 'object'
+  and jsonb_typeof(${candidate}.run_json -> 'stateRecovery' -> 'failedApplyRunId') = 'string'
+  and btrim(${candidate}.run_json -> 'stateRecovery' ->> 'failedApplyRunId') <> ''
+  and jsonb_typeof(${candidate}.run_json -> 'stateRecovery' -> 'recoveredStateVersionId') = 'string'
+  and btrim(${candidate}.run_json -> 'stateRecovery' ->> 'recoveredStateVersionId') <> ''
+  and jsonb_typeof(${candidate}.run_json -> 'stateRecovery' -> 'sourceSnapshotId') = 'string'
+  and ${candidate}.run_json -> 'stateRecovery' ->> 'sourceSnapshotId' =
+    ${candidate}.run_json ->> 'sourceSnapshotId'
+  and jsonb_typeof(${candidate}.run_json -> 'stateRecovery' -> 'plaintextSha256') = 'string'
+  and ${candidate}.run_json -> 'stateRecovery' ->> 'plaintextSha256' ~ '^sha256:[0-9a-f]{64}$'
+  and jsonb_typeof(${candidate}.run_json -> 'stateRecovery' -> 'encryptedDigest') = 'string'
+  and ${candidate}.run_json -> 'stateRecovery' ->> 'encryptedDigest' ~ '^sha256:[0-9a-f]{64}$'
+  and jsonb_typeof(${candidate}.run_json -> 'stateRecovery' -> 'artifactEvidenceDigest') = 'string'
+  and ${candidate}.run_json -> 'stateRecovery' ->> 'artifactEvidenceDigest' ~ '^sha256:[0-9a-f]{64}$'
+  and exists (
+    select 1
+      from takosumi_state_versions as recovery_state
+      join takosumi_runs as failed_apply
+        on failed_apply.id = ${candidate}.run_json -> 'stateRecovery' ->> 'failedApplyRunId'
+     where recovery_state.id =
+         ${candidate}.run_json -> 'stateRecovery' ->> 'recoveredStateVersionId'
+       and recovery_state.space_id = ${candidate}.space_id
+       and recovery_state.installation_id = ${candidate}.installation_id
+       and recovery_state.environment = ${candidate}.run_json ->> 'environment'
+       and recovery_state.generation = 1
+       and recovery_state.snapshot_json -> 'id' = to_jsonb(recovery_state.id)
+       and recovery_state.snapshot_json -> 'workspaceId' = to_jsonb(recovery_state.space_id)
+       and recovery_state.snapshot_json -> 'capsuleId' = to_jsonb(recovery_state.installation_id)
+       and recovery_state.snapshot_json -> 'environment' = to_jsonb(recovery_state.environment)
+       and recovery_state.snapshot_json -> 'generation' = to_jsonb(recovery_state.generation)
+       and recovery_state.snapshot_json -> 'createdByRunId' = to_jsonb(${candidate}.id)
+       and recovery_state.snapshot_json -> 'digest' =
+         ${candidate}.run_json -> 'stateRecovery' -> 'plaintextSha256'
+       and failed_apply.kind = 'apply'
+       and failed_apply.status = 'failed'
+       and failed_apply.space_id = ${candidate}.space_id
+       and failed_apply.installation_id = ${candidate}.installation_id
+       and failed_apply.run_json ->> 'id' = failed_apply.id
+       and failed_apply.run_json ->> 'workspaceId' = failed_apply.space_id
+       and failed_apply.run_json ->> 'status' = failed_apply.status
+       and failed_apply.run_json ->> 'operation' = 'create'
+       and failed_apply.run_json ->> 'planRunId' = ${candidate}.run_json ->> 'planRunId'
+       and failed_apply.run_json ->> 'capsuleId' = ${candidate}.run_json ->> 'capsuleId'
+       and not (failed_apply.run_json ? 'stateVersionId')
+       and not (failed_apply.run_json ? 'outputId')
+  )
+`;
+
 const PG_WORKSPACE_FREEZE_RUN_BLOCKER_SQL = `
   not coalesce((
     run.lease_token is null
     and run.kind in (
       'plan', 'destroy_plan', 'drift_check', 'apply', 'destroy_apply',
-      'source_sync', 'compatibility_check', 'backup', 'restore'
+      'source_sync', 'compatibility_check', 'backup', 'restore', 'state_recovery'
     )
     and run.status in ('succeeded', 'failed', 'cancelled', 'expired')
     and jsonb_typeof(run.run_json) = 'object'
@@ -621,14 +719,27 @@ const PG_WORKSPACE_FREEZE_RUN_BLOCKER_SQL = `
             not (run.run_json ? 'stateVersionId')
             and not (run.run_json ? 'outputId')
             and not (run.run_json ? 'executionEvidence')
-            and not (${PG_WORKSPACE_FREEZE_APPLY_DISPATCHED_SQL})
-            and exists (
+            and (
+              exists (
+                select 1
+                  from takosumi_runs as recovery_run
+                 where recovery_run.space_id = run.space_id
+                   and recovery_run.run_json -> 'stateRecovery' ->> 'failedApplyRunId' = run.id
+                   and recovery_run.run_json ->> 'capsuleId' = run.run_json ->> 'capsuleId'
+                   and run.run_json ->> 'operation' = 'create'
+                   and ${PG_WORKSPACE_FREEZE_STATE_RECOVERY_SETTLED_SQL("recovery_run")}
+              )
+              or (
+                not (${PG_WORKSPACE_FREEZE_APPLY_DISPATCHED_SQL})
+                and exists (
               select 1
                 from jsonb_array_elements(
                   ${PG_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}
                 ) as audit_event(value)
                where audit_event.value ->> 'type' = 'apply.failed'
                  and audit_event.value -> 'data' -> 'providerDispatched' = 'false'::jsonb
+                )
+              )
             )
           else
             not (run.run_json ? 'stateVersionId')
@@ -745,7 +856,7 @@ const PG_WORKSPACE_FREEZE_RUN_BLOCKER_SQL = `
                 and btrim(
                   run.run_json -> 'restoredServiceData' ->> 'digest'
                 ) <> ''
-            )
+               )
             and exists (
               select 1
                 from takosumi_state_versions as target_state
@@ -833,6 +944,8 @@ const PG_WORKSPACE_FREEZE_RUN_BLOCKER_SQL = `
             )
           else false
         end
+      when 'state_recovery' then
+        ${PG_WORKSPACE_FREEZE_STATE_RECOVERY_SETTLED_SQL("run")}
       else false
     end
   ), false)
@@ -7148,7 +7261,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async commitRecoveredState(input: CommitRecoveredStateInput): Promise<CommitRecoveredStateResult> {
-    assertRecoveryCommitCandidate(input);
+    await assertRecoveryCommitCandidate(input);
     return await this.#client.transaction(async (transaction: SqlTransaction) => {
       const db = this.#drizzleForClient(transaction);
       // All mutable authority rows are locked before the candidate is checked.
@@ -7169,11 +7282,10 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         return parseRow(rows[0]) as T | undefined;
       };
       const capsule = await this.#getCapsuleOn(db, input.expectedCapsule.id);
-      const installConfig = await first<InstallConfig>(pgSchema.installConfigs, pgSchema.installConfigs.configJson, input.expectedInstallConfig.id);
+      const storedInstallConfig = await first<InstallConfig>(pgSchema.installConfigs, pgSchema.installConfigs.configJson, input.expectedInstallConfig.id);
+      const installConfig = storedInstallConfig && publicStoredInstallConfig(storedInstallConfig);
       const source = await first<StoredSource>(pgSchema.sources, pgSchema.sources.sourceJson, input.expectedSource.id);
       const sourceSnapshot = await first<SourceSnapshot>(pgSchema.sourceSnapshots, pgSchema.sourceSnapshots.snapshotJson, input.expectedSourceSnapshot.id);
-      const planRun = await first<PlanRun>(pgSchema.runs, pgSchema.runs.runJson, input.expectedPlanRun.id);
-      const failedApplyRun = await first<ApplyRun>(pgSchema.runs, pgSchema.runs.runJson, input.expectedFailedApplyRun.id);
       const existingRun = await first<Run>(pgSchema.runs, pgSchema.runs.runJson, input.recoveryRun.id);
       const existingStateVersion = await first<StateVersion>(pgSchema.stateVersions, pgSchema.stateVersions.snapshotJson, input.stateVersion.id);
       const [managementRow] = await db.select({ state: pgSchema.workspaces.managementState, epoch: pgSchema.workspaces.managementEpoch })
@@ -7188,12 +7300,41 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         .where(and(eq(pgSchema.stateVersions.capsuleId, input.expectedCapsule.id),
           eq(pgSchema.stateVersions.environment, input.expectedCapsule.environment),
           eq(pgSchema.stateVersions.generation, 1)));
-      const runRows = await db.select({ json: pgSchema.runs.runJson }).from(pgSchema.runs)
+      const runRows = await db.select({
+        id: pgSchema.runs.id,
+        workspaceId: pgSchema.runs.workspaceId,
+        capsuleId: pgSchema.runs.capsuleId,
+        kind: pgSchema.runs.kind,
+        status: pgSchema.runs.status,
+        leaseToken: pgSchema.runs.leaseToken,
+        json: pgSchema.runs.runJson,
+      }).from(pgSchema.runs)
         .where(eq(pgSchema.runs.capsuleId, input.expectedCapsule.id));
+      const planRow = runRows.find((row) => row.id === input.expectedPlanRun.id);
+      const planRecord = planRow && parseJson(planRow.json) as StoredRunRecord | undefined;
+      const planRun = planRow && planRecord && planRow.workspaceId === input.expectedCapsule.workspaceId &&
+        planRow.capsuleId === input.expectedCapsule.id && planRow.kind === "plan" &&
+        planRow.status === "succeeded" && planRow.leaseToken === null &&
+        isPlanRunRecord(planRecord) &&
+        planRecord.id === planRow.id && planRecord.workspaceId === planRow.workspaceId &&
+        planRecord.capsuleId === planRow.capsuleId && planRecord.status === planRow.status
+        ? publicStoredRun(planRecord) : undefined;
+      const failedApplyRow = runRows.find((row) => row.id === input.expectedFailedApplyRun.id);
+      const failedApplyRecord = failedApplyRow && parseJson(failedApplyRow.json) as StoredRunRecord | undefined;
+      const failedApplyRun = failedApplyRow && failedApplyRecord &&
+        failedApplyRow.workspaceId === input.expectedCapsule.workspaceId &&
+        failedApplyRow.capsuleId === input.expectedCapsule.id && failedApplyRow.kind === "apply" &&
+        failedApplyRow.status === "failed" && failedApplyRow.leaseToken === null &&
+        isApplyRunRecord(failedApplyRecord) &&
+        failedApplyRecord.id === failedApplyRow.id &&
+        failedApplyRecord.workspaceId === failedApplyRow.workspaceId &&
+        failedApplyRecord.capsuleId === failedApplyRow.capsuleId &&
+        failedApplyRecord.status === failedApplyRow.status
+        ? publicStoredRun(failedApplyRecord) : undefined;
       const observed = {
         capsule, installConfig, source, sourceSnapshot,
-        planRun: planRun && publicStoredRun(planRun),
-        failedApplyRun: failedApplyRun && publicStoredRun(failedApplyRun),
+        planRun,
+        failedApplyRun,
         workspaceManagement: managementRow?.state === "active"
           ? { workspaceId: input.expectedCapsule.workspaceId, managementState: "active" as const, managementEpoch: managementRow.epoch }
           : undefined,

@@ -74,6 +74,7 @@ import type {
   PlanResourceChange,
   RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
+import type { Run } from "takosumi-contract/runs";
 import type {
   Capsule,
   CapsuleCompatibilityReport,
@@ -107,6 +108,10 @@ import {
 } from "../../../../core/domains/deploy-control/runtime_secret_file_materializer.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { deriveCommittedPostApplyRecoveryProof } from "../../../../core/domains/deploy-control/committed_post_apply_recovery.ts";
+import {
+  recoverFailedInitialCreateState,
+  VERIFIED_RECOVERY_ARTIFACT_FORMAT,
+} from "../../../../core/domains/deploy-control/operator_state_recovery.ts";
 import type {
   CloudflareWorkerEnv,
   R2Bucket,
@@ -1111,6 +1116,165 @@ async function failedFirstApplyScenario(
     controller,
     activations,
     failedCreateApplyId: createApply.applyRun.id,
+  };
+}
+
+class RecoveryRunProjectionStore extends InMemoryOpenTofuControlStore {
+  recoveryRunProjection: ((run: Run | undefined) => Run | undefined) | undefined;
+
+  override async getStateRecoveryRun(id: string): Promise<Run | undefined> {
+    const run = await super.getStateRecoveryRun(id);
+    return this.recoveryRunProjection
+      ? this.recoveryRunProjection(run)
+      : run;
+  }
+}
+
+type RecoveryLifecycleActionInput = Omit<
+  Extract<InstallConfigLifecycleAction, { readonly kind: "command" }>,
+  "apiVersion" | "kind" | "runnerCapability"
+>;
+
+async function recoveredFailedInitialCreateScenario(
+  actions: readonly RecoveryLifecycleActionInput[],
+  options: {
+    readonly providerApplySucceeded?: boolean | "ambiguous";
+    readonly postApplyDispatched?: boolean;
+  } = {},
+): Promise<{
+  readonly store: RecoveryRunProjectionStore;
+  readonly runner: RecordingRunner;
+  readonly controller: OpenTofuController;
+  readonly failedApplyId: string;
+  readonly recoveredStateVersionId: string;
+  readonly recoveryRunId: string;
+}> {
+  const store = new RecoveryRunProjectionStore();
+  const runner = recordingRunner();
+  runner.apply = async (job) => {
+    runner.applyJobs.push(job);
+    return {
+      providerExecutionFailure: {
+        kind: "provider_execution_failed" as const,
+        statePersistence: "unavailable" as const,
+        errorCode: "apply_failed",
+      },
+      diagnostics: [
+        { severity: "warning", message: "provider failed after dispatch" },
+      ],
+    };
+  };
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: lifecycleInstallConfig(actions),
+  });
+  const controller = controllerWith(store, runner);
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  const failedResponse = await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  expect(failedResponse.applyRun.status).toBe("failed");
+  expect(failedResponse.applyRun.stateVersionId).toBeUndefined();
+  expect(failedResponse.applyRun.outputId).toBeUndefined();
+  expect(failedResponse.capsule).toMatchObject({
+    status: "error",
+    currentStateGeneration: 0,
+  });
+
+  const failedApply = (await store.getApplyRun(failedResponse.applyRun.id))!;
+  const auditEvents = failedApply.auditEvents.map((event) => {
+    if (event.type !== "apply.failed") return event;
+    const { providerApplySucceeded: _providerApplySucceeded, ...data } =
+      event.data ?? {};
+    return {
+      ...event,
+      data: {
+        ...data,
+        providerDispatched: true,
+        ...(options.providerApplySucceeded === "ambiguous"
+          ? {}
+          : {
+              providerApplySucceeded:
+                options.providerApplySucceeded ?? false,
+            }),
+        ...(options.postApplyDispatched
+          ? { lifecycleActionDispatched: true }
+          : {}),
+      },
+    };
+  });
+  await store.putApplyRun({ ...failedApply, auditEvents });
+  const originalFailedApply = (await store.getApplyRun(failedApply.id))!;
+  expect(originalFailedApply.auditEvents).toContainEqual(
+    expect.objectContaining({
+      type: "apply.failed",
+      data: expect.objectContaining({
+        providerDispatched: true,
+        statePersistence: "unavailable",
+        ...(options.providerApplySucceeded === "ambiguous"
+          ? {}
+          : {
+              providerApplySucceeded:
+                options.providerApplySucceeded ?? false,
+            }),
+      }),
+    }),
+  );
+  if (options.providerApplySucceeded === "ambiguous") {
+    const failedEvidence = originalFailedApply.auditEvents.find(
+      (event) => event.type === "apply.failed",
+    );
+    expect(failedEvidence?.data).not.toHaveProperty(
+      "providerApplySucceeded",
+    );
+  }
+
+  const recoveryRunId = "run_recovery_fixture1";
+  const artifact = {
+    format: VERIFIED_RECOVERY_ARTIFACT_FORMAT,
+    immutable: true as const,
+    adapterAllocated: true as const,
+    readbackVerified: true as const,
+    workspaceId: "ws_test001",
+    capsuleId: "cap_fixture1",
+    environment: "preview",
+    generation: 1 as const,
+    recoveryRunId,
+    stateRef: "workspaces/ws_test001/state-versions/00000001.tfstate.enc",
+    encryptedDigest: `sha256:${"b".repeat(64)}` as const,
+    plaintextSha256: STATE_DIGEST as `sha256:${string}`,
+    evidenceDigest: `sha256:${"c".repeat(64)}` as const,
+  };
+  const recovered = await recoverFailedInitialCreateState({
+    store,
+    verifier: { verify: async () => artifact },
+    artifactHandle: "opaque-recovery-handle",
+    failedApplyRunId: failedApply.id,
+    recoveryRunId,
+    createdBy: "operator_test",
+    now: "2026-09-30T00:00:00.000Z",
+  });
+  expect(recovered.status).toBe("committed");
+  if (recovered.status !== "committed") {
+    throw new Error("recovery fixture did not commit verified state");
+  }
+  expect(recovered.stateVersion.createdByRunId).toBe(recoveryRunId);
+  expect(recovered.stateVersion.generation).toBe(1);
+  expect(recovered.capsule.currentOutputId).toBeUndefined();
+  expect((await store.getApplyRun(failedApply.id))?.status).toBe("failed");
+  expect((await store.getApplyRun(failedApply.id))?.stateVersionId).toBeUndefined();
+  expect((await store.getApplyRun(failedApply.id))?.outputId).toBeUndefined();
+  expect((await store.getStateRecoveryRun(recoveryRunId))?.executionEvidence)
+    .toBeUndefined();
+
+  return {
+    store,
+    runner,
+    controller,
+    failedApplyId: failedApply.id,
+    recoveredStateVersionId: recovered.stateVersion.id,
+    recoveryRunId,
   };
 }
 
@@ -9407,6 +9571,219 @@ test("capsule apply emits generation base+1, records StateVersion + Output, and 
   expect(capsule?.currentStateGeneration).toEqual(1);
   expect(capsule?.currentStateVersionId).toEqual(applyRun.stateVersionId);
   expect(capsule?.currentOutputId).toEqual(applyRun.outputId);
+});
+
+test("a reviewed Destroy after state-only recovery skips only the paired pre_destroy cleanup", async () => {
+  const scenario = await recoveredFailedInitialCreateScenario([
+    {
+      id: "takos-product-activate-v1",
+      phase: "post_apply",
+      executor: "operator",
+      command: ["bun", "run", "activate"],
+    },
+    {
+      id: "takos-product-pre-destroy-v1",
+      phase: "pre_destroy",
+      cleanupFor: "takos-product-activate-v1",
+      executor: "operator",
+      command: ["bun", "run", "cleanup"],
+    },
+  ]);
+  const recoveredState = await scenario.store.getStateVersion(
+    scenario.recoveredStateVersionId,
+  );
+  const failedApply = (await scenario.store.getApplyRun(scenario.failedApplyId))!;
+  expect(recoveredState).toMatchObject({
+    generation: 1,
+    createdByRunId: scenario.recoveryRunId,
+  });
+  expect(failedApply).toMatchObject({
+    status: "failed",
+  });
+  expect(failedApply.stateVersionId).toBeUndefined();
+  expect(failedApply.outputId).toBeUndefined();
+  expect(failedApply.auditEvents).toContainEqual(
+    expect.objectContaining({
+      type: "apply.failed",
+      data: expect.objectContaining({
+        providerDispatched: true,
+        providerApplySucceeded: false,
+        statePersistence: "unavailable",
+      }),
+    }),
+  );
+
+  const destroy = await scenario.controller.createCapsuleDestroyPlan(
+    "cap_fixture1",
+  );
+  await scenario.controller.approveRun(destroy.planRun.id);
+  const response = await scenario.controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(response.applyRun.status).toBe("succeeded");
+  expect(scenario.runner.destroyJobs).toHaveLength(1);
+  expect(response.applyRun.auditEvents).toContainEqual(
+    expect.objectContaining({
+      type: "lifecycle_action.pre_destroy.not_applicable",
+      data: expect.objectContaining({
+        pairedActionId: "takos-product-activate-v1",
+        stateVersionId: scenario.recoveredStateVersionId,
+        creatorRunId: scenario.recoveryRunId,
+        failedApplyRunId: scenario.failedApplyId,
+        reason: "recovered_failed_create_before_post_apply",
+        actionDispatched: false,
+      }),
+    }),
+  );
+  expect(
+    response.applyRun.auditEvents.some(
+      (event) =>
+        event.type.startsWith("lifecycle_action.") &&
+        event.data?.actionDispatched === true,
+    ),
+  ).toBe(false);
+});
+
+test("recovered state destroy fails closed when recovery lineage is missing or cross-scope", async () => {
+  for (const projectRecoveryRun of [
+    () => undefined,
+    (run: Run | undefined) =>
+      run ? { ...run, workspaceId: "ws_other" } : undefined,
+  ]) {
+    const scenario = await recoveredFailedInitialCreateScenario([]);
+    scenario.store.recoveryRunProjection = projectRecoveryRun;
+
+    await expect(
+      scenario.controller.createCapsuleDestroyPlan("cap_fixture1"),
+    ).rejects.toMatchObject({
+      code: "failed_precondition",
+      details: { reason: "destroy_provenance_missing" },
+    });
+    expect(scenario.runner.destroyJobs).toHaveLength(0);
+  }
+});
+
+test("recovered state cleanup remains blocked by dispatched lifecycle or uncertain provider evidence", async () => {
+  const pairedActions = [
+    {
+      id: "takos-product-activate-v1",
+      phase: "post_apply" as const,
+      executor: "operator" as const,
+      command: ["bun", "run", "activate"],
+    },
+    {
+      id: "takos-product-pre-destroy-v1",
+      phase: "pre_destroy" as const,
+      cleanupFor: "takos-product-activate-v1",
+      executor: "operator" as const,
+      command: ["bun", "run", "cleanup"],
+    },
+  ];
+  const scenarios = [
+    await recoveredFailedInitialCreateScenario(pairedActions, {
+      postApplyDispatched: true,
+    }),
+    await recoveredFailedInitialCreateScenario(pairedActions, {
+      providerApplySucceeded: true,
+    }),
+  ];
+
+  for (const scenario of scenarios) {
+    const destroy = await scenario.controller.createCapsuleDestroyPlan(
+      "cap_fixture1",
+    );
+    await scenario.controller.approveRun(destroy.planRun.id);
+    const response = await scenario.controller.createApplyRun({
+      planRunId: destroy.planRun.id,
+      expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+    });
+
+    expect(response.applyRun.status).toBe("failed");
+    expect(response.applyRun.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "capsule_lifecycle_action_failed" }),
+    );
+    expect(scenario.runner.destroyJobs).toHaveLength(0);
+    expect(response.applyRun.auditEvents).not.toContainEqual(
+      expect.objectContaining({
+        type: "lifecycle_action.pre_destroy.not_applicable",
+      }),
+    );
+  }
+});
+
+test("recovered cleanup does not infer provider success from ambiguous apply evidence", async () => {
+  const scenario = await recoveredFailedInitialCreateScenario(
+    [
+      {
+        id: "takos-product-activate-v1",
+        phase: "post_apply",
+        executor: "operator",
+        command: ["bun", "run", "activate"],
+      },
+      {
+        id: "takos-product-pre-destroy-v1",
+        phase: "pre_destroy",
+        cleanupFor: "takos-product-activate-v1",
+        executor: "operator",
+        command: ["bun", "run", "cleanup"],
+      },
+    ],
+    { providerApplySucceeded: "ambiguous" },
+  );
+  const destroy = await scenario.controller.createCapsuleDestroyPlan(
+    "cap_fixture1",
+  );
+  await scenario.controller.approveRun(destroy.planRun.id);
+  const response = await scenario.controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(response.applyRun.status).toBe("succeeded");
+  expect(scenario.runner.destroyJobs).toHaveLength(1);
+  expect(response.applyRun.auditEvents).toContainEqual(
+    expect.objectContaining({
+      type: "lifecycle_action.pre_destroy.not_applicable",
+      data: expect.objectContaining({
+        creatorRunId: scenario.recoveryRunId,
+        failedApplyRunId: scenario.failedApplyId,
+        reason: "recovered_failed_create_before_post_apply",
+        actionDispatched: false,
+      }),
+    }),
+  );
+});
+
+test("recovered state destroy remains blocked for an unpaired pre_destroy action", async () => {
+  const scenario = await recoveredFailedInitialCreateScenario([
+    {
+      id: "takos-product-pre-destroy-v1",
+      phase: "pre_destroy",
+      executor: "operator",
+      command: ["bun", "run", "cleanup"],
+    },
+  ]);
+  const destroy = await scenario.controller.createCapsuleDestroyPlan(
+    "cap_fixture1",
+  );
+  await scenario.controller.approveRun(destroy.planRun.id);
+  const response = await scenario.controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(response.applyRun.status).toBe("failed");
+  expect(response.applyRun.diagnostics).toContainEqual(
+    expect.objectContaining({ code: "capsule_lifecycle_action_failed" }),
+  );
+  expect(scenario.runner.destroyJobs).toHaveLength(0);
+  expect(response.applyRun.auditEvents).not.toContainEqual(
+    expect.objectContaining({
+      type: "lifecycle_action.pre_destroy.not_applicable",
+    }),
+  );
 });
 
 test("paired first-apply cleanup proves missing Output and skips lifecycle dispatch", async () => {

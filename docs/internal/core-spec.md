@@ -217,22 +217,47 @@ lineage supports subsequent source observation and a new reviewed Destroy Plan.
 The current inventory reports `recovery_unknown`: it does not infer resource
 identities or assert that a provider operation succeeded.
 
+A reviewed Destroy may settle the original failed create's `unknown` runtime
+safety only through that exact current recovered StateVersion and its failed
+Apply lineage; ordinary Apply/update remains blocked by the unknown outcome.
+Paired `pre_destroy` cleanup for an unexecuted `post_apply` may be recorded as
+not applicable only when the recovery lineage is exact, no Output exists, and
+no lifecycle-start/dispatch or positive provider-success evidence contradicts
+it. Its marker names the recovery Run as the StateVersion creator and the
+original failed Apply separately. This is not a claim that the provider failed
+or that cleanup ran.
+
 Current Capsule lifecycle code does not release historical public-host
 reservation rows or perform unrelated bulk OIDC-client cleanup; physical
 retirement of those historical rows waits for operator inventory.
 
 The state-only recovery Core primitive is dormant and operator-only. It has no
-public route, artifact stager/verifier implementation, or operator
-authorization entrypoint. It accepts only a verifier-supplied immutable,
+public route or operator authorization entrypoint. Its Worker R2 adapter can
+stage operator-selected, bounded OpenTofu state bytes and verify an opaque
+handle against an immutable encrypted generation-1 object. It does not accept
+an arbitrary URL or object key, overwrite an occupied coordinate, or infer
+provider success from state contents. A lost PUT acknowledgement is resolved
+only by bounded exact-object readback. The adapter requires scope components
+that round-trip the canonical object-key allocator and the runner reader;
+unsupported punctuation and `..` are rejected before storage I/O.
+The primitive accepts only a verifier-supplied immutable,
 adapter-allocated, encrypted state artifact descriptor scoped to the failed
 initial create. Memory, PostgreSQL, and D1 commit one generation-1
 StateVersion, a `state_recovery` Run, Capsule pointer and execution-authority
 epoch advancement, and value-free Activity evidence atomically against the
 exact prior records. The Capsule remains `error`, has no current Output, and
 gets no invented runner execution evidence. Reusing the primitive in an
-operator workflow requires a concrete artifact verifier and authorization gate
-with separate proof before activation; a passing ledger test alone is not
-permission to recover live state.
+operator workflow still requires an authorization gate with separate proof
+before activation; a passing ledger or adapter test alone is not permission to
+recover live state. The Worker runner can consume this exact recovered state
+for Plan, Destroy Plan and Restore. Core Restore validates the recovery lineage
+before dispatch and provides a source-read callback that revalidates it. The
+local runner uses that callback; the Worker runner instead validates D1 lineage
+before claiming the operation, then validates the R2 artifact under its claim.
+The Worker adapter checks the canonical state identity, ledger backlinks,
+encrypted-byte digest and custody metadata; it does not perform a second D1
+lineage read at the local runner's source-read fence. Local runner recovery
+staging is not implemented by this R2 adapter and is not claimed as qualified.
 
 ## Capsule InstallConfig re-adoption
 

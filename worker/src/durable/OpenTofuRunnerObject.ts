@@ -23,6 +23,15 @@ import {
   type RunCredentialTokenPayload,
 } from "../../../core/shared/run_credential_tokens.ts";
 import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
+import {
+  recoveryPlanForStateVersion,
+  stateVersionIdForRecoveryRun,
+} from "../../../core/domains/deploy-control/operator_state_recovery.ts";
+import type { Capsule } from "takosumi-contract/capsules";
+import type { StateVersion } from "takosumi-contract/state-versions";
+import type { Run } from "takosumi-contract/runs";
+import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
+import type { SourceSnapshot } from "takosumi-contract/sources";
 import { isOpenTofuBuiltinProviderSource } from "takosumi-contract/provider-env-rules";
 import { redactString } from "takosumi-contract/redaction";
 import {
@@ -3302,8 +3311,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     assertRequestNotAborted(signal);
     assertStateRefForScope(scope);
     const sourceRefKind = await validateRestoreSourceDescriptor(
-      scope,
-      restoreState,
+      this.env.TAKOSUMI_CONTROL_DB, scope, restoreState,
     );
     if (sourceRefKind.kind === "restore_stage") {
       await assertExactRestoreOriginStateVersion(
@@ -3338,7 +3346,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         );
       }
       await this.#restoreFencedStep(claim, signal, async () => {
-        assertExactRestoreSourceObject(
+        await assertExactRestoreSourceObject(
           object,
           restoreState,
           sourceRefKind,
@@ -3355,6 +3363,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
             signal,
           ),
       );
+      if (sourceRefKind.kind === "recovery") {
+        await this.#restoreFencedStep(claim, signal, async () =>
+          assertExactRecoveryCiphertext(ciphertext, sourceRefKind.encryptedDigest));
+      }
       const plaintext = await this.#restoreFencedStep(
         claim,
         signal,
@@ -5286,6 +5298,7 @@ function classifyLedgerPriorStateRef(
 
 type RestoreSourceRefKind =
   | { readonly kind: "canonical"; readonly logicalTargetStateRef: string }
+  | { readonly kind: "recovery"; readonly logicalTargetStateRef: string; readonly encryptedDigest: string; readonly failedApplyRunId: string; readonly evidenceDigest: string }
   | {
       readonly kind: "restore_stage";
       readonly logicalTargetStateRef: string;
@@ -5294,6 +5307,7 @@ type RestoreSourceRefKind =
     };
 
 async function validateRestoreSourceDescriptor(
+  database: CloudflareWorkerEnv["TAKOSUMI_CONTROL_DB"],
   target: StateScope,
   source: RestoreState,
 ): Promise<RestoreSourceRefKind> {
@@ -5338,6 +5352,13 @@ async function validateRestoreSourceDescriptor(
     source.generation,
   );
   if (source.stateRef === logicalTargetStateRef) {
+    if (source.generation === 1 &&
+      source.stateVersionId === await stateVersionIdForRecoveryRun(source.createdByRunId)) {
+      return {
+        kind: "recovery", logicalTargetStateRef,
+        ...await assertExactRecoveredStateVersion(database, source),
+      };
+    }
     const expectedStateVersionId = await stateVersionIdForApplyRun(
       source.createdByRunId,
     );
@@ -5369,6 +5390,147 @@ async function validateRestoreSourceDescriptor(
     operationId: suffix.slice(0, -".tfstate.enc".length),
     fence,
   };
+}
+
+interface RecoverySourceProof {
+  readonly encryptedDigest: string;
+  readonly failedApplyRunId: string;
+  readonly evidenceDigest: string;
+}
+
+async function readExactLedgerRun<T extends { readonly id: string; readonly workspaceId: string; readonly capsuleId?: string; readonly environment?: string; readonly status: string; readonly type?: string }>(
+  database: CloudflareWorkerEnv["TAKOSUMI_CONTROL_DB"],
+  id: string,
+  type: string,
+  status: string,
+  source: RestoreState,
+): Promise<T | undefined> {
+  // ApplyRun has no environment field in its contract; D1 indexes it as NULL.
+  // Its exact Capsule/Plan environment is checked by the Core lineage helper.
+  const environmentPredicate = type === "apply" ? "" : " and environment = ?";
+  const row = await database.prepare(
+    `select run_json from runs where id = ? and type = ? and status = ?
+       and space_id = ? and installation_id = ?${environmentPredicate}`,
+  ).bind(id, type, status, source.workspaceId, source.capsuleId,
+    ...(type === "apply" ? [] : [source.environment]))
+    .first<{ readonly run_json: unknown }>();
+  if (typeof row?.run_json !== "string") return undefined;
+  let run: T;
+  try { run = JSON.parse(row.run_json) as T; } catch { return undefined; }
+  return run && run.id === id && run.workspaceId === source.workspaceId &&
+    run.capsuleId === source.capsuleId &&
+    (type !== "state_recovery" || run.environment === source.environment) &&
+    run.status === status &&
+    (type === "state_recovery" ? run.type === type : run.type === undefined || run.type === type)
+    ? run : undefined;
+}
+
+async function assertExactRecoveredStateVersion(
+  database: CloudflareWorkerEnv["TAKOSUMI_CONTROL_DB"],
+  source: RestoreState,
+): Promise<RecoverySourceProof> {
+  const exact = await database.prepare(
+    `select count(*) as exact_state_version_count from state_versions
+       where id = ? and space_id = ? and installation_id = ? and environment = ?
+         and generation = ? and object_key = ? and digest = ? and created_by_run_id = ?`,
+  ).bind(source.stateVersionId, source.workspaceId, source.capsuleId,
+    source.environment, source.generation, source.stateRef, source.digest,
+    source.createdByRunId).first<{ readonly exact_state_version_count: unknown }>();
+  if (exact?.exact_state_version_count !== 1) {
+    throw new Error("recovery source StateVersion is not exactly bound to the ledger");
+  }
+  const capsuleRow = await database.prepare(
+    `select record_json from capsules where id = ? and space_id = ? and environment = ?`,
+  ).bind(source.capsuleId, source.workspaceId, source.environment)
+    .first<{ readonly record_json: unknown }>();
+  let capsule: Capsule | undefined;
+  try {
+    capsule = typeof capsuleRow?.record_json === "string"
+      ? JSON.parse(capsuleRow.record_json) as Capsule : undefined;
+  } catch { /* malformed ledger rows fail closed below */ }
+  if (capsule?.id !== source.capsuleId || capsule.workspaceId !== source.workspaceId ||
+    capsule.environment !== source.environment) {
+    throw new Error("recovery source Capsule ledger scope is invalid");
+  }
+  const run = await readExactLedgerRun<Run>(database, source.createdByRunId,
+    "state_recovery", "succeeded", source);
+  if (!run?.stateRecovery || run.stateRecovery.recoveredStateVersionId !== source.stateVersionId ||
+    run.stateRecovery.plaintextSha256 !== source.digest ||
+    !/^sha256:[0-9a-f]{64}$/u.test(run.stateRecovery.encryptedDigest) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(run.stateRecovery.artifactEvidenceDigest)) {
+    throw new Error("recovery source Run ledger backlink is invalid");
+  }
+  const state: StateVersion = {
+    id: source.stateVersionId, workspaceId: source.workspaceId,
+    capsuleId: source.capsuleId, environment: source.environment,
+    generation: source.generation, stateRef: source.stateRef,
+    digest: source.digest, createdByRunId: source.createdByRunId,
+    createdAt: run.finishedAt ?? "",
+  };
+  const reader = {
+    getStateRecoveryRun: async (id: string) => id === run.id ? run : undefined,
+    getApplyRun: async (id: string) => readExactLedgerRun<ApplyRun>(database, id,
+      "apply", "failed", source),
+    getPlanRun: async (id: string) => readExactLedgerRun<PlanRun>(database, id,
+      "plan", "succeeded", source),
+    getSourceSnapshot: async (id: string): Promise<SourceSnapshot | undefined> => {
+      const row = await database.prepare(
+        `select record_json from source_snapshots where id = ?`,
+      ).bind(id).first<{ readonly record_json: unknown }>();
+      if (typeof row?.record_json !== "string") return undefined;
+      try {
+        const snapshot = JSON.parse(row.record_json) as SourceSnapshot;
+        return snapshot.id === id ? snapshot : undefined;
+      } catch { return undefined; }
+    },
+  };
+  if (!(await recoveryPlanForStateVersion(reader, capsule, state))) {
+    throw new Error("recovery source failed Apply and pinned Plan lineage is invalid");
+  }
+  return {
+    encryptedDigest: run.stateRecovery.encryptedDigest,
+    failedApplyRunId: run.stateRecovery.failedApplyRunId,
+    evidenceDigest: run.stateRecovery.artifactEvidenceDigest,
+  };
+}
+
+async function assertExactRecoveryCiphertext(
+  ciphertext: Uint8Array,
+  encryptedDigest: string,
+): Promise<void> {
+  if (await digestBytes(ciphertext) !== encryptedDigest) {
+    throw new Error("recovery source encrypted digest does not match the ledger");
+  }
+}
+
+async function assertExactRecoverySourceObject(
+  object: R2Object,
+  source: RestoreState,
+  proof: RecoverySourceProof,
+): Promise<void> {
+  const metadata = object.customMetadata;
+  const custodyDigest = metadata?.["takosumi-recovery-custody-evidence-digest"];
+  const handle = metadata?.["takosumi-recovery-handle"];
+  if (metadata?.["takosumi-recovery-format"] !== "takosumi-state-recovery-artifact@v1" ||
+    metadata?.["takosumi-action"] !== "state_recovery" ||
+    metadata?.["takosumi-recovery-run-id"] !== source.createdByRunId ||
+    metadata?.["takosumi-recovery-failed-apply-run-id"] !== proof.failedApplyRunId ||
+    metadata?.["takosumi-recovery-encrypted-digest"] !== proof.encryptedDigest ||
+    !custodyDigest || !/^sha256:[0-9a-f]{64}$/u.test(custodyDigest) || !handle) {
+    throw new Error("recovery source immutable object authority metadata is invalid");
+  }
+  const evidenceDigest = await stableJsonDigest({
+    kind: "takosumi.state-recovery-custody@v1",
+    workspaceId: source.workspaceId, capsuleId: source.capsuleId,
+    environment: source.environment, generation: 1,
+    failedApplyRunId: proof.failedApplyRunId,
+    recoveryRunId: source.createdByRunId, stateRef: source.stateRef,
+    encryptedDigest: proof.encryptedDigest, plaintextSha256: source.digest,
+    custodyEvidenceDigest: custodyDigest, handle,
+  });
+  if (evidenceDigest !== proof.evidenceDigest) {
+    throw new Error("recovery source custody evidence does not match the ledger");
+  }
 }
 
 async function assertExactRestoreOriginStateVersion(
@@ -5411,11 +5573,11 @@ async function assertExactRestoreOriginStateVersion(
   }
 }
 
-function assertExactRestoreSourceObject(
+async function assertExactRestoreSourceObject(
   object: R2Object,
   source: RestoreState,
   refKind: RestoreSourceRefKind,
-): void {
+): Promise<void> {
   const metadata = object.customMetadata;
   const ciphertextLength = Number(
     metadata?.["takosumi-ciphertext-length"],
@@ -5447,6 +5609,9 @@ function assertExactRestoreSourceObject(
     throw new Error(
       "canonical Restore source StateVersion has no Apply authority metadata",
     );
+  }
+  if (refKind.kind === "recovery") {
+    await assertExactRecoverySourceObject(object, source, refKind);
   }
   if (
     refKind.kind === "restore_stage" &&
