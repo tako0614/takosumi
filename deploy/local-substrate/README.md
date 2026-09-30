@@ -20,6 +20,19 @@ probe host 経由の run ledger surface を検証する。postgres profile の O
 から建てた `opentofu-runner` service に HTTP dispatch する。これは production Cloudflare Container runner と同じ
 `takosumi.opentofu-run@v1` envelope と provider mirror を使うため、Cloudflare provider を含む self-host import
 rehearsal が provider-free in-process smoke runner に落ちない。
+この service は runner プロセスだけで `TAKOSUMI_RUNNER_MUTATION_CUSTODY_MODE=local-http`
+を選び、Apply/Destroy の private filesystem custody を有効にする。Cloudflare Container
+は既定の `cloudflare-do` mode のまま Durable Object が mutation authority を持つ。
+`substrate-opentofu-runner-runs` named volume は runner の `/tmp/takosumi-runs` 全体を保持する。
+claim / completion receipt だけでなく、失敗した provider 実行の state readback も同じ volume に
+必要なため、custody directory だけを mount しない。通常の `up --build`、container の
+`--force-recreate`、volume を削除しない `down` / `up` の間はこの volume を維持する。
+`down -v`、volume の手動削除、volume なしの新しい host への切替は mutation authority と
+runner-local state を失わせる。既存 Run が provider に届いた可能性を否定できない場合、
+同じ ApplyRun / Destroy Run を再送してはならない。実 provider と Core の state を operator が
+照合し、未確定 Run を別途修復するまで mutation を停止する。volume を別 container に同時
+mount せず、untrusted workload に公開しない。backup / restore が必要なら operator-private な
+場所で source・state・credential material を含み得るデータとして保護し、repo に保存しない。
 
 ## Scope — Takosumi-only
 

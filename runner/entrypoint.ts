@@ -13,6 +13,7 @@ import { port, RUNNER_START_SERVER_ENV } from "./lib/constants.ts";
 
 // --- Public surface re-exports (unchanged from the pre-split entrypoint) ---
 export { handleRunnerRequest } from "./lib/http_server.ts";
+export { handleRunnerRequestWithDependencies } from "./lib/http_server.ts";
 export { redactRunnerOutput } from "./lib/redaction.ts";
 export {
   isSourceSyncRequest,

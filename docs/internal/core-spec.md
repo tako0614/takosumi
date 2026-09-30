@@ -27,15 +27,15 @@ It does not host a Form Registry or Form resource lifecycle.
 
 ## Ownership boundary
 
-| Area                                                                                                                                                                                      | Owner                                            |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| Git sources, OpenTofu/Terraform init/validate/plan/apply/destroy, Runs, state, Outputs, audit, provider connections, credential recipes, provider bindings, Interfaces, InterfaceBindings | Takosumi OSS                                     |
-| Host API, identity grammar, package/trust format, and generic conformance | Takoform API specification |
-| Verifier, SDK, and CLI implementation of the pinned API contract | Core library implementation |
-| Exact Form definitions, runtime Interface/Binding semantics, package bytes, signatures, and family conformance | Each Form publisher |
-| Provider source address, typed resource/state/import mappings, and Provider releases | Each Terraform/OpenTofu Provider implementation |
-| Managed Form resources, backend execution, provider credentials, capacity, Offerings, and supply lifecycle | Takoserver or another independent Host/operator |
-| Retail Marketplace, retail prepaid/Stripe, reseller client, and customer support | Takosumi Hosted or another retail operator; not OSS Core |
+| Area                                                                                                                                                                                      | Owner                                                    |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| Git sources, OpenTofu/Terraform init/validate/plan/apply/destroy, Runs, state, Outputs, audit, provider connections, credential recipes, provider bindings, Interfaces, InterfaceBindings | Takosumi OSS                                             |
+| Host API, identity grammar, package/trust format, and generic conformance                                                                                                                 | Takoform API specification                               |
+| Verifier, SDK, and CLI implementation of the pinned API contract                                                                                                                          | Core library implementation                              |
+| Exact Form definitions, runtime Interface/Binding semantics, package bytes, signatures, and family conformance                                                                            | Each Form publisher                                      |
+| Provider source address, typed resource/state/import mappings, and Provider releases                                                                                                      | Each Terraform/OpenTofu Provider implementation          |
+| Managed Form resources, backend execution, provider credentials, capacity, Offerings, and supply lifecycle                                                                                | Takoserver or another independent Host/operator          |
+| Retail Marketplace, retail prepaid/Stripe, reseller client, and customer support                                                                                                          | Takosumi Hosted or another retail operator; not OSS Core |
 
 These external specifications, publishers, and Providers do not own Takosumi's
 Run, StateVersion, Output, credential, or runtime Interface/InterfaceBinding
@@ -267,9 +267,9 @@ Capsule JSON, and execution authority epoch, and requires no blocking
 queued/running Plan or Apply. Missing or drifted
 receipt/Run/StateVersion/Output/config/Capsule/epoch, provider uncertainty or
 persisted `providerApplySucceeded=false` partial state, destroy/restore, a
-newer safety candidate, or queued/running Plan or Apply returns
-409. A successful rebind changes only `installConfigId`, `updatedAt`, and epoch
-+ 1; `status=error`, state/output pointers, generation, and
+newer safety candidate, or queued/running Plan or Apply returns 409. A
+successful rebind changes only `installConfigId`, `updatedAt`, and epoch + 1;
+`status=error`, state/output pointers, generation, and
 `runtimeSafety=unknown` remain unchanged. The rebind does not dispatch
 provider work. A fresh reviewed Plan and Apply is required, and only its
 successful Apply may restore the Capsule to `active` / `safe`.
@@ -589,6 +589,33 @@ indeterminate. Plan, read-only work, and a provable pre-dispatch preparation
 failure may retry without granting mutation authority. Mutation-authority,
 relay, and container-lifecycle failure logs use only finite classifications and
 never include raw messages, stacks, request bodies, or credential material.
+
+The local HTTP runner has a separate private dispatch fence for Apply/Destroy
+under a trusted, single-operator local deployment. The operator must set
+`TAKOSUMI_RUNNER_MUTATION_CUSTODY_MODE=local-http` on the runner process;
+the shared image otherwise uses `cloudflare-do` mode, in which the existing
+runner Durable Object owns mutation identity and this private filesystem fence
+is neither consulted nor exposed. Unknown modes fail closed. The local adapter
+checks the runner's reported mode before any Apply/Destroy workspace preparation;
+HTTP callers cannot switch it with a header. Before invoking OpenTofu it
+durably claims the exact Run, action, dispatched request digest, and restored
+provider-lock marker outside the mutable run workspace. A completed provider
+failure records a bounded, value-free typed result and the digest of any
+runner-local partial state before the HTTP reply. Before any preparation that
+can replace the run workspace, the local adapter reads this exact completion
+and durably reserves an absent Run. A concurrent reservation cannot prepare
+that workspace; a lost reservation reply stays indeterminate. The first failed
+reply uses the same receipt. It checks the state
+bytes against the receipt before the existing failed-provider state commit.
+Neither a second POST nor a bare state file grants completion authority. A
+missing, malformed, unfinished, or mismatched completion remains indeterminate.
+Completed success is fenced against re-dispatch but this private readback does
+not publish success Outputs or repair an already terminal Core Run. The private
+HTTP route has no application authentication; isolation of the runner transport
+and trust in same-UID source/provider code are operator assumptions, not a
+hostile or multi-tenant at-most-once guarantee. The exact request digest also
+includes credential bytes: refreshed equivalent credentials can make an
+otherwise recoverable failure indeterminate rather than authorizing adoption.
 
 ## Provider-neutral execution
 

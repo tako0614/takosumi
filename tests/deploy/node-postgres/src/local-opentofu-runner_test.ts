@@ -802,7 +802,9 @@ test("HTTP OpenTofu runner preserves structured error codes without echoing resp
   }
 });
 
-test("HTTP OpenTofu runner does not replay an ambiguous mutation response", async () => {
+async function assertAmbiguousMutationResponse(
+  completionStatus: "absent" | "unavailable",
+): Promise<void> {
   const runId = `apply_http_ambiguous_${crypto.randomUUID()}`;
   const planRunId = `plan_${runId}`;
   const proxyMarker = "customer-output-and-token-must-not-leak";
@@ -815,6 +817,18 @@ test("HTTP OpenTofu runner does not replay an ambiguous mutation response", asyn
     port: 0,
     async fetch(request) {
       const url = new URL(request.url);
+      if (url.pathname === "/healthz") {
+        return Response.json({ ok: true, mutationCustodyMode: "local-http" });
+      }
+      if (url.pathname === `/runs/${runId}/completion`) {
+        if (applyRequests > 0 && completionStatus === "unavailable") {
+          return new Response(`<html>${proxyMarker}</html>`, { status: 503 });
+        }
+        return Response.json({ status: "absent" }, { status: 404 });
+      }
+      if (url.pathname === `/runs/${runId}/mutation-reservation`) {
+        return Response.json({ token: crypto.randomUUID() }, { status: 201 });
+      }
       if (
         request.method === "GET" &&
         url.pathname.endsWith("/artifacts/tfplan")
@@ -870,12 +884,23 @@ test("HTTP OpenTofu runner does not replay an ambiguous mutation response", asyn
     }
     expect(failure).toBeInstanceOf(OpenTofuRunnerExecutionError);
     expect((failure as Error).message).toContain("HTTP 500");
+    expect((failure as OpenTofuRunnerExecutionError).reason).toBe(
+      "runner_mutation_indeterminate",
+    );
     expect((failure as Error).message).not.toContain(proxyMarker);
+    expect((failure as OpenTofuRunnerExecutionError).detail).not.toContain(
+      proxyMarker,
+    );
     expect(applyRequests).toBe(1);
   } finally {
     server.stop(true);
   }
-});
+}
+
+test.each(["absent", "unavailable"] as const)(
+  "HTTP OpenTofu runner does not replay an ambiguous mutation response with %s completion",
+  assertAmbiguousMutationResponse,
+);
 
 test("local provider lockfile store preserves an empty present artifact separately from absence", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "takosumi-local-lockfile-empty-"));

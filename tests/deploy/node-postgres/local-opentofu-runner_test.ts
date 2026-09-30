@@ -1,4 +1,12 @@
 import { expect, test } from "bun:test";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { handleRunnerRequestWithDependencies } from "../../../runner/entrypoint.ts";
+import {
+  mutationRequestDigest,
+  reserveLocalMutation,
+} from "../../../runner/lib/run_completion.ts";
 
 import type { SourceSnapshot } from "../../../contract/sources.ts";
 import type {
@@ -16,6 +24,26 @@ const FIXTURE_EXECUTION_EVIDENCE_AUTHORITY = {
   runnerArtifact: { digest: `sha256:${"b".repeat(64)}`, immutable: true },
   executorArtifact: { digest: `sha256:${"c".repeat(64)}`, immutable: true },
 } as const;
+const handleRunnerRequest = (request: Request) =>
+  handleRunnerRequestWithDependencies(request, { mutationCustodyMode: "local-http" });
+
+test("local HTTP mutation mode mismatch refuses before completion, preparation or dispatch", async () => {
+  const requests: string[] = [];
+  const server = Bun.serve({ port: 0, fetch(request) {
+    const path = new URL(request.url).pathname;
+    requests.push(`${request.method} ${path}`);
+    return Response.json({ ok: true, mutationCustodyMode: "cloudflare-do" });
+  } });
+  try {
+    const runner = createHttpOpenTofuRunner({ stateStore: unusedStateStore,
+      archiveStore: { write: async () => {}, read: async () => { throw new Error("must not prepare"); } }, baseUrl: server.url.href });
+    await expect(runner.apply({ applyRun: { id: "apply_mode" }, planRun: { id: "plan_mode" },
+      planArtifact: { kind: "runner-local", ref: "runner-local://plan_mode/tfplan", digest: `sha256:${"a".repeat(64)}` },
+      stateScope: { workspaceId: "workspace_mode", subject: { kind: "resource", id: "resource_mode" }, environment: "integration", generation: 1, stateRef: "state://mode" },
+    } as Parameters<typeof runner.apply>[0])).rejects.toMatchObject({ name: "OpenTofuRunnerExecutionError", reason: "runner_mutation_custody_mode_mismatch" });
+    expect(requests).toEqual(["GET /healthz"]);
+  } finally { server.stop(true); }
+});
 
 test("local OpenTofu runner restores an exact source into an operation-scoped immutable artifact", async () => {
   const stateBytes = new TextEncoder().encode('{"version":4,"serial":1}');
@@ -300,10 +328,7 @@ test("local OpenTofu runner fails closed before a target commit without exact so
       // This case intentionally exercises malformed runtime input. The public
       // boundary requires control at compile time; the cast keeps the
       // fail-closed missing-authority regression covered without weakening it.
-      runner.restore(
-        job,
-        entry.control as OpenTofuRestoreExecutionControl,
-      ),
+      runner.restore(job, entry.control as OpenTofuRestoreExecutionControl),
       entry.name,
     ).rejects.toThrow();
   }
@@ -701,7 +726,28 @@ test("HTTP OpenTofu runner carries direct provider evidence through apply and de
     port: 0,
     async fetch(request) {
       const url = new URL(request.url);
+      if (url.pathname === "/healthz")
+        return Response.json({ ok: true, mutationCustodyMode: "local-http" });
       requests.push(`${request.method} ${url.pathname}`);
+      if (
+        request.method === "PUT" &&
+        /^\/runs\/(apply_http_direct|destroy_http_direct)\/mutation-reservation$/u.test(
+          url.pathname,
+        )
+      ) {
+        return Response.json(
+          { token: "00000000-0000-4000-8000-000000000000" },
+          { status: 201 },
+        );
+      }
+      if (
+        request.method === "GET" &&
+        /^\/runs\/(apply_http_direct|destroy_http_direct)\/completion$/u.test(
+          url.pathname,
+        )
+      ) {
+        return Response.json({ status: "absent" }, { status: 404 });
+      }
       const planArtifactMatch =
         /^\/runs\/(plan_http_apply|plan_http_destroy)\/artifacts\/tfplan$/u.exec(
           url.pathname,
@@ -726,7 +772,10 @@ test("HTTP OpenTofu runner carries direct provider evidence through apply and de
         )
       ) {
         expect(new Uint8Array(await request.arrayBuffer())).toEqual(lockBytes);
-        return Response.json({ digest: lockDigest, sizeBytes: lockBytes.byteLength });
+        return Response.json({
+          digest: lockDigest,
+          sizeBytes: lockBytes.byteLength,
+        });
       }
       const runMatch =
         /^\/runs\/(apply_http_direct|destroy_http_direct)$/u.exec(url.pathname);
@@ -776,9 +825,18 @@ test("HTTP OpenTofu runner carries direct provider evidence through apply and de
     readRawOutput: async () => undefined,
     commitRawOutput: async <T>(artifact: T): Promise<T> => artifact,
     readProviderLockfile: async (ref: string) => {
-      const runId = /^local-opentofu:\/\/runs\/(plan_http_apply|plan_http_destroy)\/provider-lockfile$/u.exec(ref)?.[1];
+      const runId =
+        /^local-opentofu:\/\/runs\/(plan_http_apply|plan_http_destroy)\/provider-lockfile$/u.exec(
+          ref,
+        )?.[1];
       return runId
-        ? { ref, runId, digest: lockDigest, sizeBytes: lockBytes.byteLength, bytes: lockBytes }
+        ? {
+            ref,
+            runId,
+            digest: lockDigest,
+            sizeBytes: lockBytes.byteLength,
+            bytes: lockBytes,
+          }
         : undefined;
     },
   };
@@ -876,11 +934,15 @@ test("HTTP OpenTofu runner carries direct provider evidence through apply and de
     );
     expect(stored).toHaveLength(2);
     expect(requests).toEqual([
+      "GET /runs/apply_http_direct/completion",
+      "PUT /runs/apply_http_direct/mutation-reservation",
       "GET /runs/plan_http_apply/artifacts/tfplan",
       "PUT /runs/apply_http_direct/artifacts/tfplan",
       "PUT /runs/apply_http_direct/provider-lockfile/restore",
       "POST /runs/apply_http_direct",
       "GET /runs/apply_http_direct/artifacts/tfstate",
+      "GET /runs/destroy_http_direct/completion",
+      "PUT /runs/destroy_http_direct/mutation-reservation",
       "GET /runs/plan_http_destroy/artifacts/tfplan",
       "PUT /runs/destroy_http_direct/artifacts/tfplan",
       "PUT /runs/destroy_http_direct/provider-lockfile/restore",
@@ -902,12 +964,35 @@ test("local reviewed Plan refuses a foreign lock ref before provider dispatch", 
     port: 0,
     async fetch(request) {
       const path = new URL(request.url).pathname;
+      if (path === "/healthz")
+        return Response.json({ ok: true, mutationCustodyMode: "local-http" });
       requests.push(`${request.method} ${path}`);
-      if (request.method === "GET" && path === "/runs/plan_owned/artifacts/tfplan") {
+      if (
+        request.method === "PUT" &&
+        path === "/runs/apply_foreign/mutation-reservation"
+      ) {
+        return Response.json(
+          { token: "00000000-0000-4000-8000-000000000000" },
+          { status: 201 },
+        );
+      }
+      if (
+        request.method === "GET" &&
+        path === "/runs/plan_owned/artifacts/tfplan"
+      ) {
         return new Response(planBytes);
       }
-      if (request.method === "PUT" && path === "/runs/apply_foreign/artifacts/tfplan") {
+      if (
+        request.method === "PUT" &&
+        path === "/runs/apply_foreign/artifacts/tfplan"
+      ) {
         return Response.json({ ok: true });
+      }
+      if (
+        request.method === "GET" &&
+        path === "/runs/apply_foreign/completion"
+      ) {
+        return Response.json({ status: "absent" }, { status: 404 });
       }
       return Response.json({ error: "must not dispatch" }, { status: 500 });
     },
@@ -950,7 +1035,10 @@ test("local reviewed Plan refuses a foreign lock ref before provider dispatch", 
           ref: "runner-local://plan_owned/tfplan",
           digest: planDigest,
         },
-        runnerProfile: { id: "opentofu-default", executorId: "opentofu.default" },
+        runnerProfile: {
+          id: "opentofu-default",
+          executorId: "opentofu.default",
+        },
         stateScope: {
           workspaceId: "workspace_foreign",
           subject: { kind: "resource", id: "resource_foreign" },
@@ -961,6 +1049,8 @@ test("local reviewed Plan refuses a foreign lock ref before provider dispatch", 
       } as Parameters<typeof runner.apply>[0]),
     ).rejects.toThrow("local reviewed Plan provider lock authority is invalid");
     expect(requests).toEqual([
+      "GET /runs/apply_foreign/completion",
+      "PUT /runs/apply_foreign/mutation-reservation",
       "GET /runs/plan_owned/artifacts/tfplan",
       "PUT /runs/apply_foreign/artifacts/tfplan",
     ]);
@@ -978,12 +1068,35 @@ test("local reviewed Plan refuses a foreign lock ref before provider dispatch", 
     port: 0,
     async fetch(request) {
       const path = new URL(request.url).pathname;
+      if (path === "/healthz")
+        return Response.json({ ok: true, mutationCustodyMode: "local-http" });
       requests.push(`${request.method} ${path}`);
-      if (request.method === "GET" && path === "/runs/plan_owned/artifacts/tfplan") {
+      if (
+        request.method === "PUT" &&
+        path === "/runs/apply_foreign/mutation-reservation"
+      ) {
+        return Response.json(
+          { token: "00000000-0000-4000-8000-000000000000" },
+          { status: 201 },
+        );
+      }
+      if (
+        request.method === "GET" &&
+        path === "/runs/plan_owned/artifacts/tfplan"
+      ) {
         return new Response(planBytes);
       }
-      if (request.method === "PUT" && path === "/runs/apply_foreign/artifacts/tfplan") {
+      if (
+        request.method === "PUT" &&
+        path === "/runs/apply_foreign/artifacts/tfplan"
+      ) {
         return Response.json({ ok: true });
+      }
+      if (
+        request.method === "GET" &&
+        path === "/runs/apply_foreign/completion"
+      ) {
+        return Response.json({ status: "absent" }, { status: 404 });
       }
       return Response.json({ error: "must not dispatch" }, { status: 500 });
     },
@@ -1026,7 +1139,10 @@ test("local reviewed Plan refuses a foreign lock ref before provider dispatch", 
           ref: "runner-local://plan_owned/tfplan",
           digest: planDigest,
         },
-        runnerProfile: { id: "opentofu-default", executorId: "opentofu.default" },
+        runnerProfile: {
+          id: "opentofu-default",
+          executorId: "opentofu.default",
+        },
         stateScope: {
           workspaceId: "workspace_foreign",
           subject: { kind: "resource", id: "resource_foreign" },
@@ -1037,12 +1153,322 @@ test("local reviewed Plan refuses a foreign lock ref before provider dispatch", 
       } as Parameters<typeof runner.apply>[0]),
     ).rejects.toThrow("local reviewed Plan provider lock authority is invalid");
     expect(requests).toEqual([
+      "GET /runs/apply_foreign/completion",
+      "PUT /runs/apply_foreign/mutation-reservation",
       "GET /runs/plan_owned/artifacts/tfplan",
       "PUT /runs/apply_foreign/artifacts/tfplan",
     ]);
   } finally {
     server.stop(true);
   }
+});
+
+test("local HTTP custody recovers a typed partial failure after proxy HTML 500 without a second provider POST", async () => {
+  const runId = `apply_custody_${crypto.randomUUID().replace(/-/g, "")}`;
+  const planId = `plan_custody_${crypto.randomUUID().replace(/-/g, "")}`;
+  const runRoot = Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT ?? "/tmp/takosumi-runs";
+  const applyRoot = join(runRoot, runId);
+  const planRoot = join(runRoot, planId);
+  const fakeBin = join(tmpdir(), `takosumi-custody-bin-${crypto.randomUUID()}`);
+  const callsPath = join(fakeBin, "provider-calls");
+  const priorPath = Bun.env.PATH;
+  const planBytes = new TextEncoder().encode("reviewed plan for custody");
+  const planDigest = await sha256(planBytes);
+  const archiveBytes = new TextEncoder().encode("source archive fixture");
+  const archiveDigest = await sha256(archiveBytes);
+  const partialState = '{"version":4,"serial":1,"resources":[]}\n';
+  let posts = 0;
+  let sourceRestores = 0;
+  let planRestores = 0;
+  let firstReadbackLost = false;
+  let tamperStateReadback = false;
+  let initialCompletionChecks = 0;
+  let releaseInitialChecks: (() => void) | undefined;
+  const initialChecks = new Promise<void>((resolve) => {
+    releaseInitialChecks = resolve;
+  });
+  let stored: LocalOpenTofuStateArtifact | undefined;
+  const stateStore = {
+    read: async (ref: string) =>
+      stored?.stateRef === ref ? stored : undefined,
+    commit: async (artifact: LocalOpenTofuStateArtifact) => {
+      stored = artifact;
+      return artifact;
+    },
+    readRawOutput: async () => undefined,
+    commitRawOutput: async () => {
+      throw new Error("failed apply cannot publish output");
+    },
+  };
+  await mkdir(join(applyRoot, "source"), { recursive: true });
+  await mkdir(planRoot, { recursive: true });
+  await mkdir(fakeBin, { recursive: true });
+  await writeFile(join(applyRoot, "source", "main.tf"), "terraform {}\n");
+  await writeFile(join(planRoot, "tfplan"), planBytes);
+  await writeFile(
+    join(fakeBin, "tofu"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  init) exit 0 ;;
+  apply)
+    echo called >> '${callsPath}'
+    cat > terraform.tfstate <<'JSON'
+${partialState.trimEnd()}
+JSON
+    echo "provider failed after partial state" >&2
+    exit 1
+    ;;
+  *) exit 0 ;;
+esac
+`,
+  );
+  await chmod(join(fakeBin, "tofu"), 0o755);
+  Bun.env.PATH = `${fakeBin}:${priorPath ?? ""}`;
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (
+        request.method === "PUT" &&
+        path === `/runs/${runId}/source-archive/restore`
+      ) {
+        sourceRestores += 1;
+        if (sourceRestores > 1)
+          await rm(join(applyRoot, "source", "terraform.tfstate"), {
+            force: true,
+          });
+        return Response.json({ ok: true });
+      }
+      if (
+        request.method === "PUT" &&
+        path === `/runs/${runId}/artifacts/tfplan`
+      ) {
+        planRestores += 1;
+      }
+      if (
+        request.method === "GET" &&
+        path === `/runs/${runId}/completion` &&
+        posts === 0
+      ) {
+        const absent = await handleRunnerRequest(request);
+        initialCompletionChecks += 1;
+        if (initialCompletionChecks === 2) releaseInitialChecks?.();
+        await initialChecks;
+        return absent;
+      }
+      if (
+        request.method === "GET" &&
+        path === `/runs/${runId}/completion` &&
+        posts > 0 &&
+        !firstReadbackLost
+      ) {
+        firstReadbackLost = true;
+        return Response.json(
+          { error: "temporary readback failure" },
+          { status: 503 },
+        );
+      }
+      if (
+        request.method === "GET" &&
+        path === `/runs/${runId}/artifacts/tfstate` &&
+        tamperStateReadback
+      ) {
+        return new Response('{"version":4,"serial":999,"resources":[]}\n');
+      }
+      if (request.method === "POST" && path === `/runs/${runId}`) {
+        posts += 1;
+        const completed = await handleRunnerRequest(request);
+        expect(completed.status).toBe(500);
+        expect(
+          ((await completed.json()) as { stateDigest?: string }).stateDigest,
+        ).toBe(await sha256(new TextEncoder().encode(partialState)));
+        return new Response("<html>upstream timeout</html>", {
+          status: 500,
+          headers: { "content-type": "text/html" },
+        });
+      }
+      return await handleRunnerRequest(request);
+    },
+  });
+  try {
+    const runner = createHttpOpenTofuRunner({
+      stateStore,
+      archiveStore: { write: async () => {}, read: async () => archiveBytes },
+      baseUrl: server.url.href,
+    });
+    const job = {
+      applyRun: { id: runId },
+      planRun: {
+        id: planId,
+        planDigest,
+        source: {
+          kind: "git",
+          url: "https://git.example.com/example/capsule.git",
+          commit: "0123456789abcdef0123456789abcdef01234567",
+        },
+        requiredProviders: [],
+      },
+      planArtifact: {
+        kind: "runner-local",
+        ref: `runner-local://${planId}/tfplan`,
+        digest: planDigest,
+      },
+      sourceArchive: {
+        ref: "source://custody",
+        digest: archiveDigest,
+        sizeBytes: archiveBytes.byteLength,
+      },
+      runnerProfile: {
+        id: "opentofu-default",
+        executorId: "opentofu.default",
+        allowedProviders: [],
+      },
+      executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+      executionEvidenceCommit: {
+        stateVersionId: "state_custody",
+        outputId: "output_custody",
+      },
+      stateScope: {
+        workspaceId: "workspace_1",
+        subject: { kind: "capsule", id: "capsule_1" },
+        environment: "preview",
+        generation: 1,
+        stateRef: `workspaces/workspace_1/capsules/capsule_1/environments/preview/state-versions/${runId}.tfstate.enc`,
+      },
+      rawOutputRef: `workspaces/workspace_1/capsules/capsule_1/runs/${runId}/outputs.raw.json.enc`,
+    } as Parameters<typeof runner.apply>[0];
+    const concurrent = await Promise.allSettled([
+      runner.apply(job),
+      runner.apply(job),
+    ]);
+    expect(concurrent.map((outcome) => outcome.status)).toEqual([
+      "rejected",
+      "rejected",
+    ]);
+    expect(initialCompletionChecks).toBe(2);
+    expect(stored).toBeUndefined();
+    expect(posts).toBe(1);
+    const changedBeforeAdoption = {
+      ...job,
+      planRun: {
+        ...job.planRun,
+        planDigest: `sha256:${"0".repeat(64)}`,
+      },
+    };
+    await expect(runner.apply(changedBeforeAdoption)).rejects.toThrow(
+      "local runner mutation completion is indeterminate",
+    );
+    expect(sourceRestores).toBe(1);
+    expect(posts).toBe(1);
+    tamperStateReadback = true;
+    await expect(runner.apply(job)).rejects.toThrow(
+      "local runner completion state digest mismatch",
+    );
+    expect(posts).toBe(1);
+    expect(sourceRestores).toBe(1);
+    expect(stored).toBeUndefined();
+    tamperStateReadback = false;
+    const first = await runner.apply(job);
+    expect(first.providerExecutionFailure).toMatchObject({
+      kind: "provider_execution_failed",
+      statePersistence: "persisted",
+    });
+    expect(first.stateDigest).toBe(
+      await sha256(new TextEncoder().encode(partialState)),
+    );
+    expect(first.outputs).toBeUndefined();
+    expect(stored?.stateBytes).toEqual(new TextEncoder().encode(partialState));
+    expect(posts).toBe(1);
+    expect(sourceRestores).toBe(1);
+    expect(planRestores).toBe(1);
+    const changed = {
+      ...job,
+      planRun: { ...job.planRun, planDigest: `sha256:${"0".repeat(64)}` },
+    };
+    const mismatch = await handleRunnerRequest(
+      new Request(`http://runner/runs/${runId}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "apply",
+          runId,
+          request: changed,
+        }),
+      }),
+    );
+    expect(mismatch.status).toBe(409);
+    const wrongDigest = await handleRunnerRequest(
+      new Request(`http://runner/runs/${runId}/completion`, {
+        headers: {
+          "x-takosumi-mutation-action": "apply",
+          "x-takosumi-mutation-digest": `sha256:${"0".repeat(64)}`,
+        },
+      }),
+    );
+    expect(wrongDigest.status).toBe(409);
+    const wrongLockMarker = await handleRunnerRequest(
+      new Request(`http://runner/runs/${runId}/completion`, {
+        headers: {
+          "x-takosumi-mutation-action": "apply",
+          "x-takosumi-mutation-digest": await mutationRequestDigest(
+            runId,
+            "apply",
+            job,
+          ),
+          "x-takosumi-provider-lock-restore-digest": `sha256:${"a".repeat(64)}`,
+        },
+      }),
+    );
+    expect(wrongLockMarker.status).toBe(409);
+    const again = await runner.apply(job);
+    expect(again).toEqual(first);
+    expect(posts).toBe(1);
+    expect((await readFile(callsPath, "utf8")).trim().split("\n")).toHaveLength(
+      1,
+    );
+  } finally {
+    server.stop(true);
+    if (priorPath === undefined) delete Bun.env.PATH;
+    else Bun.env.PATH = priorPath;
+    await rm(applyRoot, { recursive: true, force: true });
+    await rm(planRoot, { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
+test("local HTTP custody never redispatches an unfinished exact mutation", async () => {
+  const runId = `apply_unfinished_${crypto.randomUUID().replace(/-/g, "")}`;
+  const request = {
+    applyRun: { id: runId },
+    planRun: { id: "plan_unfinished" },
+  };
+  const reservation = await reserveLocalMutation(runId, "apply", request);
+  expect(reservation).toBeString();
+  const digest = await mutationRequestDigest(runId, "apply", request);
+  const readback = await handleRunnerRequest(
+    new Request(`http://runner/runs/${runId}/completion`, {
+      headers: {
+        "x-takosumi-mutation-action": "apply",
+        "x-takosumi-mutation-digest": digest,
+      },
+    }),
+  );
+  expect(readback.status).toBe(409);
+  const replay = await handleRunnerRequest(
+    new Request(`http://runner/runs/${runId}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "apply",
+        runId,
+        request,
+      }),
+    }),
+  );
+  expect(replay.status).toBe(409);
 });
 
 test("HTTP OpenTofu runner durably returns failed apply state without replaying provider execution", async () => {
@@ -1053,11 +1479,40 @@ test("HTTP OpenTofu runner durably returns failed apply state without replaying 
   );
   const requests: string[] = [];
   let providerPosts = 0;
+  let completionDigest: string | undefined;
   const server = Bun.serve({
     port: 0,
     async fetch(request) {
       const url = new URL(request.url);
+      if (url.pathname === "/healthz")
+        return Response.json({ ok: true, mutationCustodyMode: "local-http" });
       requests.push(`${request.method} ${url.pathname}`);
+      if (
+        request.method === "GET" &&
+        url.pathname === "/runs/apply_partial/completion"
+      ) {
+        return completionDigest
+          ? Response.json(
+              {
+                status: "failed",
+                exitCode: 1,
+                errorCode: "apply_failed",
+                providerExecutionFailure: { kind: "provider_execution_failed" },
+                stateDigest: await sha256(partialState),
+              },
+              { status: 500 },
+            )
+          : Response.json({ status: "absent" }, { status: 404 });
+      }
+      if (
+        request.method === "PUT" &&
+        url.pathname === "/runs/apply_partial/mutation-reservation"
+      ) {
+        return Response.json(
+          { token: "00000000-0000-4000-8000-000000000000" },
+          { status: 201 },
+        );
+      }
       if (
         request.method === "GET" &&
         url.pathname === "/runs/plan_partial/artifacts/tfplan"
@@ -1070,10 +1525,13 @@ test("HTTP OpenTofu runner durably returns failed apply state without replaying 
       ) {
         return Response.json({ ok: true });
       }
-      if (
-        request.method === "POST" &&
-        url.pathname === "/runs/apply_partial"
-      ) {
+      if (request.method === "POST" && url.pathname === "/runs/apply_partial") {
+        const envelope = (await request.json()) as { request: unknown };
+        completionDigest = await mutationRequestDigest(
+          "apply_partial",
+          "apply",
+          envelope.request,
+        );
         providerPosts += 1;
         return Response.json(
           {
@@ -1182,11 +1640,40 @@ test("HTTP OpenTofu runner durably returns failed destroy state without replayin
   );
   const requests: string[] = [];
   let providerPosts = 0;
+  let completionDigest: string | undefined;
   const server = Bun.serve({
     port: 0,
     async fetch(request) {
       const url = new URL(request.url);
+      if (url.pathname === "/healthz")
+        return Response.json({ ok: true, mutationCustodyMode: "local-http" });
       requests.push(`${request.method} ${url.pathname}`);
+      if (
+        request.method === "GET" &&
+        url.pathname === "/runs/destroy_partial/completion"
+      ) {
+        return completionDigest
+          ? Response.json(
+              {
+                status: "failed",
+                exitCode: 1,
+                errorCode: "apply_failed",
+                providerExecutionFailure: { kind: "provider_execution_failed" },
+                stateDigest: await sha256(partialState),
+              },
+              { status: 500 },
+            )
+          : Response.json({ status: "absent" }, { status: 404 });
+      }
+      if (
+        request.method === "PUT" &&
+        url.pathname === "/runs/destroy_partial/mutation-reservation"
+      ) {
+        return Response.json(
+          { token: "00000000-0000-4000-8000-000000000000" },
+          { status: 201 },
+        );
+      }
       if (
         request.method === "GET" &&
         url.pathname === "/runs/plan_destroy_partial/artifacts/tfplan"
@@ -1203,6 +1690,12 @@ test("HTTP OpenTofu runner durably returns failed destroy state without replayin
         request.method === "POST" &&
         url.pathname === "/runs/destroy_partial"
       ) {
+        const envelope = (await request.json()) as { request: unknown };
+        completionDigest = await mutationRequestDigest(
+          "destroy_partial",
+          "destroy",
+          envelope.request,
+        );
         providerPosts += 1;
         return Response.json(
           {
