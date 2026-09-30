@@ -1276,7 +1276,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     throw new Error("credential refresh readiness timed out");
   }
 
-  async #startContainerIfSupported(): Promise<void> {
+  async #startContainerIfSupported(signal?: AbortSignal): Promise<void> {
     if (this.#localRunnerProxyUrl) return;
     const startAndWaitForPorts = (
       this as unknown as Partial<ContainerStartWaiter>
@@ -1294,6 +1294,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         instanceGetTimeoutMS: CONTAINER_START_TIMEOUT_MS,
         portReadyTimeoutMS: CONTAINER_PORT_READY_TIMEOUT_MS,
         waitInterval: CONTAINER_START_POLL_INTERVAL_MS,
+        ...(signal ? { abort: signal } : {}),
       },
       {
         envVars: this.envVars,
@@ -1328,19 +1329,27 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     }
   }
 
-  async #ensureContainerReady(baseUrl: URL): Promise<void> {
+  async #ensureContainerReady(
+    baseUrl: URL,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const startedAt = monotonicNow();
     let lastError: unknown;
     for (let attempt = 1; attempt <= CONTAINER_READY_ATTEMPTS; attempt += 1) {
       try {
-        await this.#startContainerIfSupported();
+        signal?.throwIfAborted();
+        await this.#startContainerIfSupported(signal);
         const response = await this.#containerFetch(
-          new Request(containerHealthUrl(baseUrl), { method: "GET" }),
+          new Request(containerHealthUrl(baseUrl), {
+            method: "GET",
+            ...(signal ? { signal } : {}),
+          }),
         );
         if (!response.ok) {
           const failure = await readRunnerFailureDetail(
             response,
             this.#artifactLimits.failureDetail,
+            signal,
           );
           throw new Error(
             `container health check failed: ${response.status}${failure ? ` (${failure})` : ""}`,
@@ -1350,6 +1359,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           Math.max(0, monotonicNow() - startedAt) / 1000;
         return;
       } catch (error) {
+        signal?.throwIfAborted();
         lastError = error;
         if (
           attempt >= CONTAINER_READY_ATTEMPTS ||
@@ -1361,7 +1371,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           "OpenTofu runner container was not running after start; retrying",
           { attempt },
         );
-        await sleep(CONTAINER_START_POLL_INTERVAL_MS * attempt);
+        await abortableRunnerSleep(
+          CONTAINER_START_POLL_INTERVAL_MS * attempt,
+          signal,
+        );
       }
     }
     throw lastError instanceof Error
@@ -2134,7 +2147,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       // M2: restore the snapshotted source tree into the container before any
       // build/plan phase (mirrors the plan-artifact restore protocol).
       if (sourceArchive) {
-        await this.#restoreSourceArchive(runId, sourceArchive, url);
+        await this.#restoreSourceArchive(
+          runId,
+          sourceArchive,
+          url,
+          request.signal,
+        );
       }
       // remote_state dependencies (spec §15): fetch + decrypt each producer
       // state and stream it to the container BEFORE init/plan/apply.
@@ -2538,6 +2556,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runId: string,
     sourceArchive: SourceArchiveRestore,
     baseUrl: URL,
+    requestSignal: AbortSignal,
   ): Promise<void> {
     assertSafeSourceArchiveRestoreKey(sourceArchive.ref);
     const bucket = this.env.R2_SOURCE;
@@ -2550,31 +2569,100 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (!object) {
       throw new Error(`source archive object not found: ${sourceArchive.ref}`);
     }
-    const bytes = await readBoundedR2ObjectBytes(
+    assertR2ObjectDeclaredSize(
       object,
       "source_archive",
       this.#artifactLimits.sourceArchive,
     );
-    const digest = await digestBytes(bytes);
-    if (digest !== sourceArchive.digest) {
-      throw new Error(`source archive digest mismatch on restore: ${digest}`);
-    }
-    await this.#ensureContainerReady(baseUrl);
-    const response = await this.#containerFetch(
-      new Request(sourceArchiveRestoreUrl(baseUrl, runId), {
-        method: "PUT",
-        headers: { "content-type": SOURCE_ARCHIVE_CONTENT_TYPE },
-        body: toArrayBuffer(bytes),
-      }),
+
+    // Runner startup and the bounded R2 read/digest occupy independent waits.
+    // Start only after object existence and declared-size validation, and do
+    // not hand any bytes to the runner until both preparation steps succeed.
+    const preparation = new AbortController();
+    const abortPreparation = (): void => {
+      preparation.abort(requestSignal.reason);
+    };
+    if (requestSignal.aborted) abortPreparation();
+    else requestSignal.addEventListener("abort", abortPreparation, { once: true });
+
+    // Startup and the health request are bounded by the existing container
+    // startup/readiness budgets. The same signal also reaches the container
+    // platform's cancellable startAndWaitForPorts contract.
+    const readinessSignal = AbortSignal.any([
+      preparation.signal,
+      AbortSignal.timeout(
+        CONTAINER_START_TIMEOUT_MS + CONTAINER_PORT_READY_TIMEOUT_MS,
+      ),
+    ]);
+    const archiveBytes = (async () => {
+      const bytes = await readBoundedR2ObjectBytes(
+        object,
+        "source_archive",
+        this.#artifactLimits.sourceArchive,
+        preparation.signal,
+      );
+      const digest = await digestBytes(bytes);
+      if (digest !== sourceArchive.digest) {
+        throw new Error(`source archive digest mismatch on restore: ${digest}`);
+      }
+      return bytes;
+    })();
+    const containerReady = this.#ensureContainerReady(
+      baseUrl,
+      readinessSignal,
     );
-    if (!response.ok) {
-      const failure = await readRunnerFailureDetail(
-        response,
-        this.#artifactLimits.failureDetail,
+    // Each failure cancels the sibling, and allSettled joins both operations
+    // before the caller's finally block can destroy the container. This avoids
+    // a detached startup racing shutdown while still settling a known-bad
+    // archive promptly.
+    const observedArchive = archiveBytes.catch((error: unknown) => {
+      preparation.abort(error);
+      throw error;
+    });
+    const observedReadiness = containerReady.catch((error: unknown) => {
+      preparation.abort(error);
+      throw error;
+    });
+    try {
+      const [archiveResult, readinessResult] = await Promise.allSettled([
+        observedArchive,
+        observedReadiness,
+      ]);
+      if (requestSignal.aborted) assertRequestNotAborted(requestSignal);
+      // Preserve archive-error precedence. A sibling-cancellation AbortError
+      // is not a source error, so return the readiness failure in that case.
+      if (
+        archiveResult.status === "rejected" &&
+        (readinessResult.status === "fulfilled" ||
+          !(archiveResult.reason instanceof DOMException &&
+            archiveResult.reason.name === "AbortError"))
+      ) {
+        throw archiveResult.reason;
+      }
+      if (readinessResult.status === "rejected") {
+        throw readinessResult.reason;
+      }
+      if (archiveResult.status === "rejected") throw archiveResult.reason;
+      const bytes = archiveResult.value;
+      const response = await this.#containerFetch(
+        new Request(sourceArchiveRestoreUrl(baseUrl, runId), {
+          method: "PUT",
+          headers: { "content-type": SOURCE_ARCHIVE_CONTENT_TYPE },
+          body: toArrayBuffer(bytes),
+          signal: requestSignal,
+        }),
       );
-      throw new Error(
-        `container source archive restore failed: ${response.status}${failure ? ` (${failure})` : ""}`,
-      );
+      if (!response.ok) {
+        const failure = await readRunnerFailureDetail(
+          response,
+          this.#artifactLimits.failureDetail,
+        );
+        throw new Error(
+          `container source archive restore failed: ${response.status}${failure ? ` (${failure})` : ""}`,
+        );
+      }
+    } finally {
+      requestSignal.removeEventListener("abort", abortPreparation);
     }
   }
 
@@ -4720,10 +4808,7 @@ async function readBoundedR2ObjectBytes(
   signal?: AbortSignal,
 ): Promise<Uint8Array> {
   if (signal) assertRequestNotAborted(signal);
-  if (!Number.isSafeInteger(object.size) || object.size < 0) {
-    throw new RunnerArtifactSizeLimitError(artifact, maxBytes, maxBytes + 1);
-  }
-  assertArtifactSize(artifact, maxBytes, object.size);
+  assertR2ObjectDeclaredSize(object, artifact, maxBytes);
   // The current Cloudflare R2ObjectBody exposes `body`, while the repository's
   // narrow binding/test doubles still model only arrayBuffer(). Prefer the real
   // stream so a future adapter cannot forge `size` and force an unbounded read.
@@ -4749,6 +4834,17 @@ async function readBoundedR2ObjectBytes(
   // as well keeps test doubles and future adapters fail-closed.
   assertArtifactSize(artifact, maxBytes, bytes.byteLength);
   return bytes;
+}
+
+function assertR2ObjectDeclaredSize(
+  object: R2Object,
+  artifact: RunnerArtifactKind,
+  maxBytes: number,
+): void {
+  if (!Number.isSafeInteger(object.size) || object.size < 0) {
+    throw new RunnerArtifactSizeLimitError(artifact, maxBytes, maxBytes + 1);
+  }
+  assertArtifactSize(artifact, maxBytes, object.size);
 }
 
 function parseContentLength(value: string | null): number | undefined {
@@ -8441,9 +8537,23 @@ function runnerFailurePhase(phase: string | undefined): RunnerFailurePhase {
 async function readRunnerFailureDetail(
   response: Response,
   maxBytes: number,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
+  if (signal?.aborted) {
+    try {
+      void response.body?.cancel().catch(() => undefined);
+    } catch {
+      // Best-effort cancellation must not delay propagation of the abort.
+    }
+    signal.throwIfAborted();
+  }
   const text = new TextDecoder().decode(
-    await readBoundedResponseBytes(response, "failure_detail", maxBytes),
+    await readBoundedResponseBytes(
+      response,
+      "failure_detail",
+      maxBytes,
+      signal,
+    ),
   );
   if (text.length === 0) return undefined;
   const redactedText = redactString(text, { redactedValue: "[redacted]" });
