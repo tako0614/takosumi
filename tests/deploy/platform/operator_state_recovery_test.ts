@@ -460,3 +460,154 @@ test("physical journal faults fence Core and preserve one retry identity through
     }
   }
 });
+
+test("physical journal reopen resumes a staged artifact without reaching Core before interruption", async () => {
+  const base = existsSync("/root/hdd/takos-dev/tmp") ? "/root/hdd/takos-dev/tmp" : tmpdir();
+  const root = await mkdtemp(join(base, "operator-recovery-reopen-stage-"));
+  const directory = join(root, "journal");
+  await mkdir(directory, { mode: 0o700 });
+  const f = await fixture("physical_reopen_stage");
+  const recoveryRunId = "run_operator_physical_reopen_stage";
+  let fired = false;
+  let ids = 0;
+  let journal = await openOperatorStateRecoveryJournal({
+    directory,
+    sourceCheckouts: [fileURLToPath(new URL("../../../", import.meta.url))],
+    testOnlyFault: (step) => {
+      if (step === "staged.after-link" && !fired) { fired = true; throw new Error("private lost staged acknowledgement"); }
+    },
+  });
+  try {
+    const firstPorts = { ...f.ports, journal, newRecoveryRunId: () => {
+      ids++;
+      return recoveryRunId;
+    } };
+    await expect(composeOperatorSourceRecovery(firstPorts, f.request)).rejects.toThrow(/refused/);
+    expect(fired).toBe(true);
+    expect(await f.store.getStateRecoveryRun(recoveryRunId)).toBeUndefined();
+    expect((await f.store.getApplyRun(f.failed.id))?.status).toBe("failed");
+    expect((await f.store.getCapsule(f.seeded.capsule.id))?.currentOutputId).toBeUndefined();
+    expect(f.loads).toBe(1);
+    expect(f.stages).toBe(1);
+    await journal.close();
+
+    journal = await openOperatorStateRecoveryJournal({
+      directory,
+      sourceCheckouts: [fileURLToPath(new URL("../../../", import.meta.url))],
+    });
+    const retryPorts = { ...f.ports, journal, newRecoveryRunId: () => {
+      ids++;
+      return "run_operator_must_not_be_used";
+    } };
+    expect(await composeOperatorSourceRecovery(retryPorts, f.request)).toEqual({
+      status: "committed", recoveryRunId,
+    });
+    const reopened = await journal.read(f.failed.id);
+    expect(reopened?.intent.recoveryRunId).toBe(recoveryRunId);
+    expect(reopened?.staged?.artifactHandle).toMatch(/^recovery-state-v1\./u);
+    expect(f.handles.has(reopened!.staged!.artifactHandle)).toBe(true);
+    expect(ids).toBe(1);
+    expect(f.loads).toBe(1);
+    expect(f.stages).toBe(1);
+    expect(f.bucket.puts).toBe(1);
+    const recoveryRuns = (await f.store.listRunsByWorkspace(f.seeded.workspace.id))
+      .filter((run) => run.type === "state_recovery" && run.capsuleId === f.seeded.capsule.id);
+    const stateVersions = await f.store.listStateVersions(f.seeded.capsule.id, f.seeded.capsule.environment);
+    const recoveryActivities = (await f.store.listActivityEvents(f.seeded.workspace.id))
+      .filter((event) => event.action === "capsule.state_recovered" && event.targetId === f.seeded.capsule.id);
+    expect(recoveryRuns.map((run) => run.id)).toEqual([recoveryRunId]);
+    expect(stateVersions).toHaveLength(1);
+    expect(stateVersions[0]?.createdByRunId).toBe(recoveryRunId);
+    expect(stateVersions[0]?.generation).toBe(1);
+    expect(recoveryActivities).toHaveLength(1);
+    expect(recoveryActivities[0]?.runId).toBe(recoveryRunId);
+    expect((await f.store.getApplyRun(f.failed.id))?.status).toBe("failed");
+    expect((await f.store.getCapsule(f.seeded.capsule.id))?.currentOutputId).toBeUndefined();
+  } finally {
+    await journal.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("physical journal reopen exact-replays after Core commit acknowledgement is lost", async () => {
+  const base = existsSync("/root/hdd/takos-dev/tmp") ? "/root/hdd/takos-dev/tmp" : tmpdir();
+  const root = await mkdtemp(join(base, "operator-recovery-reopen-core-ack-"));
+  const directory = join(root, "journal");
+  await mkdir(directory, { mode: 0o700 });
+  const f = await fixture("physical_reopen_core_ack");
+  const recoveryRunId = "run_operator_physical_reopen_core_ack";
+  let ids = 0;
+  let loseAcknowledgement = true;
+  const originalCommit = f.store.commitRecoveredState.bind(f.store);
+  f.store.commitRecoveredState = async (input) => {
+    const result = await originalCommit(input);
+    if (loseAcknowledgement && result.status === "committed") {
+      loseAcknowledgement = false;
+      throw new Error("private simulated lost Core commit acknowledgement");
+    }
+    return result;
+  };
+  let journal = await openOperatorStateRecoveryJournal({
+    directory,
+    sourceCheckouts: [fileURLToPath(new URL("../../../", import.meta.url))],
+  });
+  try {
+    const firstPorts = { ...f.ports, journal, newRecoveryRunId: () => {
+      ids++;
+      return recoveryRunId;
+    } };
+    expect(await composeOperatorSourceRecovery(firstPorts, f.request)).toEqual({
+      status: "needs_reconciliation",
+      possibleOrphan: {
+        workspaceId: f.seeded.workspace.id,
+        capsuleId: f.seeded.capsule.id,
+        environment: f.seeded.capsule.environment,
+        failedApplyRunId: f.failed.id,
+        recoveryRunId,
+        artifactHandle: expect.stringMatching(/^recovery-state-v1\./u),
+      },
+    });
+    expect(await f.store.getStateRecoveryRun(recoveryRunId)).toBeDefined();
+    expect((await f.store.getApplyRun(f.failed.id))?.status).toBe("failed");
+    expect((await f.store.getCapsule(f.seeded.capsule.id))?.currentOutputId).toBeUndefined();
+    expect(f.loads).toBe(1);
+    expect(f.stages).toBe(1);
+    const stagedHandle = (await journal.read(f.failed.id))?.staged?.artifactHandle;
+    expect(stagedHandle).toMatch(/^recovery-state-v1\./u);
+    await journal.close();
+
+    journal = await openOperatorStateRecoveryJournal({
+      directory,
+      sourceCheckouts: [fileURLToPath(new URL("../../../", import.meta.url))],
+    });
+    const retryPorts = { ...f.ports, journal, newRecoveryRunId: () => {
+      ids++;
+      return "run_operator_must_not_be_used";
+    } };
+    expect(await composeOperatorSourceRecovery(retryPorts, f.request)).toEqual({
+      status: "replayed", recoveryRunId,
+    });
+    expect(ids).toBe(1);
+    expect(f.loads).toBe(1);
+    expect(f.stages).toBe(1);
+    expect(f.bucket.puts).toBe(1);
+    expect((await journal.read(f.failed.id))?.staged?.artifactHandle).toBe(stagedHandle);
+    expect(f.handles.has(stagedHandle!)).toBe(true);
+    const recoveryRuns = (await f.store.listRunsByWorkspace(f.seeded.workspace.id))
+      .filter((run) => run.type === "state_recovery" && run.capsuleId === f.seeded.capsule.id);
+    const stateVersions = await f.store.listStateVersions(f.seeded.capsule.id, f.seeded.capsule.environment);
+    const recoveryActivities = (await f.store.listActivityEvents(f.seeded.workspace.id))
+      .filter((event) => event.action === "capsule.state_recovered" && event.targetId === f.seeded.capsule.id);
+    expect(recoveryRuns.map((run) => run.id)).toEqual([recoveryRunId]);
+    expect(stateVersions).toHaveLength(1);
+    expect(stateVersions[0]?.createdByRunId).toBe(recoveryRunId);
+    expect(stateVersions[0]?.generation).toBe(1);
+    expect(recoveryActivities).toHaveLength(1);
+    expect(recoveryActivities[0]?.runId).toBe(recoveryRunId);
+    expect((await f.store.getApplyRun(f.failed.id))?.status).toBe("failed");
+    expect((await f.store.getCapsule(f.seeded.capsule.id))?.currentOutputId).toBeUndefined();
+  } finally {
+    await journal.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
