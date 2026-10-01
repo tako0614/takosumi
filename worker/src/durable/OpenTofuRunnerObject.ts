@@ -20,8 +20,8 @@ import {
   isRunCredentialToken,
   runCredentialTokenSecret,
   verifyRunCredentialTokenAuthority,
-  type RunCredentialTokenPayload,
 } from "../../../core/shared/run_credential_tokens.ts";
+import { runnerMutationIdentity } from "../../../core/shared/runner_mutation_semantics.ts";
 import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
 import {
   recoveryPlanForStateVersion,
@@ -7728,17 +7728,6 @@ function runnerReleaseIndeterminateResponse(): Response {
   );
 }
 
-const MUTABLE_RUN_EVIDENCE_FIELDS = new Set([
-  "auditEvents",
-  "createdAt",
-  "diagnostics",
-  "finishedAt",
-  "heartbeatAt",
-  "startedAt",
-  "status",
-  "updatedAt",
-]);
-
 interface RunnerVerifiedCredentialAuthority {
   readonly kind: "takosumi.run-credential-authority@v1";
   readonly tokenType: string;
@@ -7764,346 +7753,30 @@ async function runnerMutationSemanticDigest(
   requestPayload: unknown,
   env: CloudflareWorkerEnv,
 ): Promise<string> {
-  if (!isRecord(requestPayload)) {
-    throw new Error("runner mutation request must be an object");
-  }
-  const request: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(requestPayload)) {
-    if (key === "credentials") continue;
-    if (key === "applyRun" || key === "planRun") {
-      request[key] = stableMutationRunEvidence(value, key);
-      continue;
-    }
-    request[key] = value;
-  }
-  request.credentials = await runnerMutationCredentialSemantics(
-    requestPayload.credentials,
-    requestPayload,
-    action,
-    env,
-    runId,
-  );
-  return await digestText(
-    canonicalRunnerMutationJson({
-      kind: "takosumi.runner-mutation-semantics@v2",
-      runId,
-      action,
-      request,
-    }),
-  );
-}
-
-function stableMutationRunEvidence(value: unknown, label: string): unknown {
-  if (!isRecord(value)) {
-    throw new Error(`${label} must be an object`);
-  }
-  const stable: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (MUTABLE_RUN_EVIDENCE_FIELDS.has(key)) continue;
-    if (key === "stateLock" && isRecord(entry)) {
-      stable.stateLock = {
-        ...(stringField(entry, "backendRef")
-          ? { backendRef: stringField(entry, "backendRef")! }
-          : {}),
-        ...(stringField(entry, "lockRef")
-          ? { lockRef: stringField(entry, "lockRef")! }
-          : {}),
-      };
-      continue;
-    }
-    stable[key] = entry;
-  }
-  return stable;
-}
-
-async function runnerMutationCredentialSemantics(
-  value: unknown,
-  requestPayload: Readonly<Record<string, unknown>>,
-  action: RunnerMutationAction,
-  env: CloudflareWorkerEnv,
-  runnerRunId: string,
-): Promise<unknown> {
-  if (value === undefined) return null;
-  if (!isRecord(value)) {
-    throw new Error("runner mutation credentials must be an object");
-  }
-  const rawEnv = recordField(value, "env") ?? {};
-  const envNames = Object.keys(rawEnv).sort();
-  if (Object.values(rawEnv).some((entry) => typeof entry !== "string")) {
-    throw new Error("runner mutation credential env must contain strings");
-  }
-  const rawFiles = value.files;
-  if (rawFiles !== undefined && !Array.isArray(rawFiles)) {
-    throw new Error("runner mutation credential files must be an array");
-  }
-  const fileSemantics = (Array.isArray(rawFiles) ? rawFiles : []).map(
-    (entry) => {
-      if (!isRecord(entry)) {
-        throw new Error("runner mutation credential file must be an object");
-      }
-      const path = stringField(entry, "path");
-      const content = stringField(entry, "content");
-      const mode = entry.mode;
-      if (!path || content === undefined || typeof mode !== "number") {
-        throw new Error(
-          "runner mutation credential file requires path, mode, and content",
-        );
-      }
-      return {
-        path,
-        mode,
-        ...(stringField(entry, "envName")
-          ? { envName: stringField(entry, "envName")! }
-          : {}),
-      };
-    },
-  );
-  const runtimeInputs = runnerMutationRuntimeInputSemantics(
-    value.runtimeInputs,
-  );
   const applyRunId = parseApplyRunId(requestPayload);
-  const owner = applyRunId
-    ? { kind: "apply" as const, id: applyRunId }
-    : undefined;
   const renewableClaim = await renewableCredentialRefreshClaim(
-    owner,
-    runnerRunId,
+    applyRunId ? { kind: "apply", id: applyRunId } : undefined,
+    runId,
     action,
     requestPayload,
   );
-  const manifest = recordField(value, "manifest");
-  const renewableBindings = isRecord(manifest) && Array.isArray(manifest.bindings)
-    ? manifest.bindings.filter((binding) =>
-        isRecord(binding) && recordField(binding, "renewableEnv") !== undefined,
-      )
-    : [];
-  if (
-    renewableBindings.length > 0 &&
-    (!renewableClaim || renewableClaim.descriptors.length !== renewableBindings.length)
-  ) {
-    throw new Error("renewable credential projection is incomplete");
-  }
-  const renewableSourceNames = new Set(
-    renewableClaim?.descriptors.map((descriptor) => descriptor.sourceEnvName) ?? [],
-  );
-  const secretEntries = [
-    ...Object.entries(rawEnv).map(([name, entry]) => ({
-      delivery: `env:${name}`,
-      value: entry as string,
-    })),
-    ...(Array.isArray(rawFiles)
-      ? rawFiles.flatMap((entry) =>
-          isRecord(entry) &&
-          typeof entry.path === "string" &&
-          typeof entry.content === "string"
-            ? [{ delivery: `file:${entry.path}`, value: entry.content }]
-            : [],
-        )
-      : []),
-    // Run-scoped sensitive provider inputs join the SAME one-way digest lane as
-    // env and file material: two dispatches that differ only in these values
-    // must not collapse onto one at-most-once mutation identity.
-    ...runtimeInputs.secretEntries,
-  ];
-  const signedTokenDeliveries = new Map<string, Set<string>>();
-  for (const entry of secretEntries) {
-    if (!isRunCredentialToken(entry.value)) continue;
-    const deliveries = signedTokenDeliveries.get(entry.value) ?? new Set();
-    deliveries.add(entry.delivery);
-    signedTokenDeliveries.set(entry.value, deliveries);
-  }
-  const staticMaterialDigests = await Promise.all(
-    secretEntries
-      .filter((entry) =>
-        !isRunCredentialToken(entry.value) &&
-        !(entry.delivery.startsWith("env:") && renewableSourceNames.has(entry.delivery.slice(4)))
-      )
-      .map(async (entry) => ({
-        delivery: entry.delivery,
-        digest: await digestText(entry.value),
-      })),
-  );
-  const authorities = await verifiedRunnerCredentialAuthorities(
-    signedTokenDeliveries,
-    requestPayload,
-    action,
-    value,
-    env,
-  );
-  return {
-    envNames,
-    files: fileSemantics.sort((left, right) =>
-      canonicalRunnerMutationJson(left).localeCompare(
-        canonicalRunnerMutationJson(right),
-      ),
-    ),
-    manifest: value.manifest ?? null,
-    ...(renewableClaim
-      ? {
-          renewableCredentials: {
-            kind: "takosumi.runner-renewable-credential-projection@v1",
-            manifestDigest: renewableClaim.manifestDigest,
-            expiryClass: "finite-expiry",
-            descriptors: [...renewableClaim.descriptors].sort((left, right) =>
-              canonicalRunnerMutationJson(left).localeCompare(canonicalRunnerMutationJson(right)),
-            ),
-          },
-        }
-      : {}),
-    authorities,
-    // Value-free: only the variable and its declared binding names. The values
-    // themselves appear exclusively as one-way digests above.
-    ...(runtimeInputs.semantics.length > 0
-      ? { runtimeInputs: runtimeInputs.semantics }
-      : {}),
-    staticMaterialDigests: staticMaterialDigests.sort((left, right) =>
-      left.delivery.localeCompare(right.delivery),
-    ),
-  };
-}
-
-/**
- * Projects `credentials.runtimeInputs` into its value-free semantics plus the
- * secret entries that feed the one-way digest lane. No raw value is ever copied
- * into the returned semantics object.
- */
-function runnerMutationRuntimeInputSemantics(value: unknown): {
-  readonly semantics: readonly {
-    readonly variableName: string;
-    readonly names: readonly string[];
-  }[];
-  readonly secretEntries: readonly {
-    readonly delivery: string;
-    readonly value: string;
-  }[];
-} {
-  if (value === undefined) return { semantics: [], secretEntries: [] };
-  if (!Array.isArray(value)) {
-    throw new Error("runner mutation credential runtimeInputs must be an array");
-  }
-  const semantics: {
-    readonly variableName: string;
-    readonly names: readonly string[];
-  }[] = [];
-  const secretEntries: { readonly delivery: string; readonly value: string }[] =
-    [];
-  for (const entry of value) {
-    if (!isRecord(entry)) {
-      throw new Error(
-        "runner mutation credential runtimeInputs entry must be an object",
-      );
-    }
-    const variableName = stringField(entry, "variableName");
-    const names = entry.names;
-    const values = entry.values;
-    if (
-      !variableName ||
-      !Array.isArray(names) ||
-      names.some((name) => typeof name !== "string") ||
-      !isRecord(values) ||
-      Object.values(values).some((item) => typeof item !== "string")
-    ) {
-      throw new Error(
-        "runner mutation credential runtimeInputs entry is malformed",
-      );
-    }
-    semantics.push({
-      variableName,
-      names: [...(names as string[])].sort(),
-    });
-    for (const [name, item] of Object.entries(values)) {
-      secretEntries.push({
-        delivery: `runtime-input:${variableName}:${name}`,
-        value: item as string,
-      });
-    }
-  }
-  return {
-    semantics: semantics.sort((left, right) =>
-      left.variableName.localeCompare(right.variableName),
-    ),
-    secretEntries,
-  };
-}
-
-async function verifiedRunnerCredentialAuthorities(
-  tokenDeliveries: ReadonlyMap<string, ReadonlySet<string>>,
-  requestPayload: Readonly<Record<string, unknown>>,
-  action: RunnerMutationAction,
-  credentials: Readonly<Record<string, unknown>>,
-  env: CloudflareWorkerEnv,
-): Promise<readonly RunnerVerifiedCredentialAuthority[]> {
-  if (tokenDeliveries.size === 0) return [];
-  const secret = runCredentialTokenSecret(env as Record<string, unknown>);
-  if (!secret) {
-    throw new Error("Run credential verification authority is unavailable");
-  }
-  const context = mutationCredentialExpectedContext(requestPayload, action);
-  const bindings = mutationCredentialManifestBindings(credentials);
-  const signingAuthorityDigest = await digestText(secret);
-  const authorities: RunnerVerifiedCredentialAuthority[] = [];
-  for (const [token, deliveries] of tokenDeliveries) {
-    const verified = await verifyRunCredentialTokenAuthority(token, { secret });
-    if (!verified.ok) {
-      throw new Error(`Run credential verification failed: ${verified.reason}`);
-    }
-    assertMutationCredentialAuthority(verified.payload, context, bindings);
-    authorities.push({
-      kind: "takosumi.run-credential-authority@v1",
-      tokenType: verified.payload.typ,
-      tokenVersion: verified.payload.v,
-      signingAuthorityDigest,
-      audience: verified.payload.aud,
-      subject: verified.payload.sub,
-      workspaceId: verified.payload.workspaceId,
-      capsuleId: verified.payload.capsuleId,
-      runId: verified.payload.runId,
-      installingPrincipalId: verified.payload.installingPrincipalId,
-      connectionId: verified.payload.connectionId,
-      provider: verified.payload.provider,
-      phase: action,
-      scopes: [...verified.payload.scopes].sort(),
-      deliveries: [...deliveries].sort(),
-    });
-  }
-  return authorities.sort((left, right) =>
-    canonicalRunnerMutationJson(left).localeCompare(
-      canonicalRunnerMutationJson(right),
-    ),
-  );
-}
-
-function mutationCredentialExpectedContext(
-  requestPayload: Readonly<Record<string, unknown>>,
-  action: RunnerMutationAction,
-): {
-  readonly workspaceId: string;
-  readonly capsuleId: string;
-  readonly runId: string;
-  readonly action: RunnerMutationAction;
-} {
-  const applyRun = recordField(requestPayload, "applyRun");
-  const planRun = recordField(requestPayload, "planRun");
-  const workspaceId = applyRun && stringField(applyRun, "workspaceId");
-  const capsuleId =
-    (applyRun && stringField(applyRun, "capsuleId")) ??
-    (planRun && stringField(planRun, "capsuleId"));
-  const runId = applyRun && stringField(applyRun, "id");
-  if (!workspaceId || !capsuleId || !runId) {
-    throw new Error(
-      "signed Run credentials require exact ApplyRun Workspace and Capsule context",
-    );
-  }
-  if (
-    planRun &&
-    ((stringField(planRun, "workspaceId") !== undefined &&
-      stringField(planRun, "workspaceId") !== workspaceId) ||
-      (stringField(planRun, "capsuleId") !== undefined &&
-        stringField(planRun, "capsuleId") !== capsuleId))
-  ) {
-    throw new Error("signed Run credential context mismatches the PlanRun");
-  }
-  return { workspaceId, capsuleId, runId, action };
+  const identity = await runnerMutationIdentity(runId, action, requestPayload, {
+    // Preserve the pre-existing DO renewable projection policy. No other caller
+    // receives this opt-in by default.
+    renewableProjection: renewableClaim ? {
+      manifestDigest: renewableClaim.manifestDigest,
+      descriptors: renewableClaim.descriptors,
+    } : undefined,
+    allowMalformedRunCredentialAsOpaque: true,
+    verifyCredentialToken: async (token) => {
+      const secret = runCredentialTokenSecret(env as Record<string, unknown>);
+      if (!secret) throw new Error("Run credential verification authority is unavailable");
+      const verified = await verifyRunCredentialTokenAuthority(token, { secret });
+      if (!verified.ok) throw new Error(`Run credential verification failed: ${verified.reason}`);
+      return { payload: verified.payload, signingAuthorityDigest: await digestText(secret) };
+    },
+  });
+  return identity.semanticDigest;
 }
 
 function mutationCredentialManifestBindings(
@@ -8120,33 +7793,6 @@ function mutationCredentialManifestBindings(
     }
     return binding;
   });
-}
-
-function assertMutationCredentialAuthority(
-  payload: RunCredentialTokenPayload,
-  context: ReturnType<typeof mutationCredentialExpectedContext>,
-  bindings: readonly Readonly<Record<string, unknown>>[],
-): void {
-  if (
-    payload.workspaceId !== context.workspaceId ||
-    payload.capsuleId !== context.capsuleId ||
-    payload.runId !== context.runId ||
-    payload.phase !== context.action ||
-    payload.sub !== payload.installingPrincipalId
-  ) {
-    throw new Error("signed Run credential authority mismatches the mutation");
-  }
-  if (
-    !bindings.some(
-      (binding) =>
-        stringField(binding, "connectionId") === payload.connectionId &&
-        stringField(binding, "providerSource") === payload.provider,
-    )
-  ) {
-    throw new Error(
-      "signed Run credential authority mismatches the credential manifest",
-    );
-  }
 }
 
 function canonicalRunnerMutationJson(value: unknown): string {

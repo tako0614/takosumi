@@ -2327,6 +2327,135 @@ test("OpenTofu runner rejects changed credential authority or immutable mutation
   assert.equal(providerCalls, 1);
 });
 
+test("OpenTofu runner preserves original persisted mutation semantic digests", async () => {
+  // These are actual runner-mutation-authority digests captured from the
+  // unmodified 637830c27 DO with the fixtures below, not helper self-output.
+  const golden: Readonly<Record<string, string>> = {
+    signedBase: "sha256:bd719758cede2280fa068f1fc0f4a458767013a3c947aa0f5120f6a3c41d004a",
+    signedRemint: "sha256:bd719758cede2280fa068f1fc0f4a458767013a3c947aa0f5120f6a3c41d004a",
+    mutableRun: "sha256:bd719758cede2280fa068f1fc0f4a458767013a3c947aa0f5120f6a3c41d004a",
+    changedSource: "sha256:a1a3e020a84b324c80f560a0ff830318b847e824389dca0bf6502867d37e7697",
+    staticOne: "sha256:f7e5c0ca47b61473bac6344e57967857d40c19c33758ab075197426a7d2b9e77",
+    staticTwo: "sha256:5e58cc94eb7502fea108e84613a8f5631a06f896a4e6573560a1cd0bf0a2e9a7",
+    runtimeInput: "sha256:57752982fe76c5bfe38cd3b4be539540af8024035fd247d77448a4b05272c645",
+    stateScope: "sha256:dd3cd443f892776d63de99476da49be8be56490104fc5b8da61bf73dc9b43e65",
+    renewableOne: "sha256:06e0752c390762ebce1debccf69d06d680201aa09e152517087125e09f21380b",
+    renewableTwo: "sha256:06e0752c390762ebce1debccf69d06d680201aa09e152517087125e09f21380b",
+  };
+  const planRunId = "plan_semantic_golden";
+  async function capturedDigest(
+    label: keyof typeof golden,
+    mutate?: (payload: Record<string, unknown>) => Promise<void> | void,
+  ): Promise<string> {
+    const r2 = new FakeR2Bucket();
+    await seedEncryptedPlan(r2, planRunId);
+    const storage = new FakeDoStorage();
+    // Lose the first storage acknowledgement after the preparing record is
+    // committed. This observes the exact persisted semantic digest without
+    // allowing provider dispatch.
+    storage.failPutAfterCommit(1);
+    let providerCalls = 0;
+    const signedToken = await signedMutationToken(planRunId, { jti: label });
+    const envelope = await signedMutationRequest(planRunId, signedToken).json() as Record<string, unknown>;
+    const payload = envelope.request as Record<string, unknown>;
+    await mutate?.(payload);
+    const response = await runnerWithContainer(
+      r2,
+      mutationSuccessContainer(planRunId, () => { providerCalls += 1; }),
+      {
+        storage,
+        stateBucket: new FakeR2Bucket(),
+        env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET },
+      },
+    ).fetch(new Request(`https://runner/runs/${planRunId}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(envelope),
+    }));
+    assert.equal(response.status, 500, label);
+    assert.equal(providerCalls, 0, label);
+    const record = storage.valueByPrefix("runner-mutation-authority") as { semanticDigest: string };
+    assert.equal(record.semanticDigest, golden[label], label);
+    const stored = JSON.stringify(storage.entries());
+    assert.equal(stored.includes(signedToken), false, label);
+    assert.equal(stored.includes(RUN_CREDENTIAL_SIGNING_SECRET), false, label);
+    return record.semanticDigest;
+  }
+  const signedBase = await capturedDigest("signedBase");
+  assert.equal(await capturedDigest("signedRemint"), signedBase);
+  assert.equal(await capturedDigest("mutableRun", (payload) => {
+    const applyRun = payload.applyRun as Record<string, unknown>;
+    applyRun.status = "succeeded";
+    applyRun.heartbeatAt = 2;
+    applyRun.updatedAt = 2;
+    (applyRun.stateLock as Record<string, unknown>).acquiredAt = 2;
+    const planRun = payload.planRun as Record<string, unknown>;
+    planRun.status = "running";
+    planRun.auditEvents = [{ kind: "artificial-heartbeat" }];
+  }), signedBase);
+  assert.notEqual(await capturedDigest("changedSource", (payload) => {
+    const source = (payload.planRun as Record<string, unknown>).source as Record<string, unknown>;
+    source.ref = "fedcba9876543210fedcba9876543210fedcba98";
+  }), signedBase);
+  const staticValue = async (payload: Record<string, unknown>, value: string) => {
+    const credentials = payload.credentials as { env: Record<string, string> };
+    credentials.env.STATIC_KEY = value;
+  };
+  const staticOne = await capturedDigest("staticOne", (payload) => staticValue(payload, "artificial-static-one"));
+  assert.notEqual(await capturedDigest("staticTwo", (payload) => staticValue(payload, "artificial-static-two")), staticOne);
+  await capturedDigest("runtimeInput", (payload) => {
+    (payload.credentials as Record<string, unknown>).runtimeInputs = [{
+      variableName: "artificial_probe",
+      names: ["ARTIFICIAL_KEY"],
+      values: { ARTIFICIAL_KEY: "artificial-input-one" },
+    }];
+  });
+  await capturedDigest("stateScope", (payload) => {
+    payload.stateScope = capsuleStateScope();
+    payload.rawOutputRef = rawOutputRefFor(planRunId);
+  });
+  const renewable = async (payload: Record<string, unknown>, value: string) => {
+    const credentials = payload.credentials as Record<string, unknown>;
+    const manifest = credentials.manifest as { bindings: Record<string, unknown>[] };
+    manifest.bindings[0] = {
+      ...manifest.bindings[0],
+      envNames: ["PROVIDER_RUN_TOKEN", "ROTATING_TOKEN"],
+      fileEnvNames: ["ROTATING_TOKEN_FILE"],
+      requiredEnvGroups: [["PROVIDER_RUN_TOKEN", "ROTATING_TOKEN"]],
+      renewableEnv: {
+        sourceEnvName: "ROTATING_TOKEN",
+        fileEnvName: "ROTATING_TOKEN_FILE",
+        minimumProviderVersion: "4.1.0",
+      },
+    };
+    credentials.env = { ...(credentials.env as Record<string, string>), ROTATING_TOKEN: value };
+    credentials.manifestDigest = await stableJsonDigest(manifest);
+    credentials.renewable = [{
+      providerSource: RUN_CREDENTIAL_PROVIDER,
+      connectionId: "connection_semantic",
+      sourceEnvName: "ROTATING_TOKEN",
+      fileEnvName: "ROTATING_TOKEN_FILE",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    }];
+  };
+  const renewableOne = await capturedDigest("renewableOne", (payload) => renewable(payload, "artificial-renewable-one"));
+  assert.equal(await capturedDigest("renewableTwo", (payload) => renewable(payload, "artificial-renewable-two")), renewableOne);
+
+  const deniedRunId = "plan_semantic_golden_denied";
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, deniedRunId);
+  const storage = new FakeDoStorage();
+  let providerCalls = 0;
+  const denied = await runnerWithContainer(
+    r2,
+    mutationSuccessContainer(deniedRunId, () => { providerCalls += 1; }),
+    { storage, env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET } },
+  ).fetch(signedMutationRequest(deniedRunId, "takrct_v1.invalid"));
+  assert.equal(denied.status, 409);
+  assert.equal(providerCalls, 0);
+  assert.equal(storage.entries().some(([key]) => key === "runner-mutation-authority"), false);
+});
+
 test("run-scoped sensitive input values change mutation identity without ever being stored", async () => {
   const planRunId = "plan_runtime_input_semantics";
   const r2 = new FakeR2Bucket();
