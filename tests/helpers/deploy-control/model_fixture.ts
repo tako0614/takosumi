@@ -30,10 +30,7 @@ import {
   stableJsonDigest,
   stableStringify,
 } from "../../../core/adapters/source/digest.ts";
-import type {
-  OpenTofuApplyJob,
-  OpenTofuDestroyJob,
-} from "../../../core/domains/deploy-control/mod.ts";
+import type { OpenTofuApplyJob } from "../../../core/domains/deploy-control/mod.ts";
 import {
   RUN_EXECUTION_EVIDENCE_CONTRACT,
   type RunExecutionCommit,
@@ -161,9 +158,23 @@ export const FIXTURE_EXECUTION_EVIDENCE_AUTHORITY = {
   executorArtifact: { digest: `sha256:${"c".repeat(64)}`, immutable: true },
 } as const;
 
-/** Build the exact evidence a successful fixture runner must return. */
+type FixtureExecutionEvidenceJob = {
+  readonly applyRun: Pick<OpenTofuApplyJob["applyRun"], "id">;
+  readonly planRun: Pick<
+    OpenTofuApplyJob["planRun"],
+    "id" | "planDigest" | "requiredProviders"
+  >;
+  readonly planArtifact: Pick<OpenTofuApplyJob["planArtifact"], "digest">;
+  readonly runnerProfile: Pick<
+    OpenTofuApplyJob["runnerProfile"],
+    "id" | "executorId"
+  >;
+  readonly executionEvidenceCommit?: RunExecutionCommit;
+};
+
+/** Build the exact evidence a fixture runner must return. */
 export function fixtureExecutionEvidence(
-  job: OpenTofuApplyJob | OpenTofuDestroyJob,
+  job: FixtureExecutionEvidenceJob,
   action: "apply" | "destroy",
   options: {
     readonly providerArtifacts?: RunExecutionEvidence["authority"]["providerArtifacts"];
@@ -176,6 +187,20 @@ export function fixtureExecutionEvidence(
   }
   if (!job.planRun.planDigest) {
     throw new Error("fixture runner plan is missing plan digest");
+  }
+  const commit = options.commit ?? job.executionEvidenceCommit;
+  if (!commit) {
+    throw new Error("fixture runner job is missing execution evidence commit");
+  }
+  let evidenceCommit = commit;
+  if (options.outcome === "provider_failed_state_persisted" && !options.commit) {
+    const stateVersionId = job.executionEvidenceCommit?.stateVersionId;
+    if (typeof stateVersionId !== "string") {
+      throw new Error(
+        "fixture provider-failure evidence requires a state version",
+      );
+    }
+    evidenceCommit = { stateVersionId };
   }
   return {
     format: RUN_EXECUTION_EVIDENCE_CONTRACT,
@@ -195,12 +220,7 @@ export function fixtureExecutionEvidence(
       digest: job.planRun.planDigest as `sha256:${string}`,
       artifactDigest: job.planArtifact.digest as `sha256:${string}`,
     },
-    commit:
-      options.commit ??
-      (options.outcome === "provider_failed_state_persisted" &&
-      "stateVersionId" in job.executionEvidenceCommit
-        ? { stateVersionId: job.executionEvidenceCommit.stateVersionId }
-        : job.executionEvidenceCommit),
+    commit: evidenceCommit,
     receipt: { operationId: job.applyRun.id, version: 1, fence: 1 },
     committedAt: "2026-06-06T00:00:00.000Z",
   };
@@ -299,6 +319,7 @@ export async function seedCapsuleModel(
     workspaceId,
     name: "Default",
     slug: "default",
+    projectJson: {},
     createdAt: now,
     updatedAt: now,
   };
@@ -337,7 +358,6 @@ export async function seedCapsuleModel(
   }
   const installConfig: InstallConfig = {
     id: options.installConfigId ?? "cfg_fixture",
-    workspaceId,
     name: `${name}-config`,
     variableMapping: {},
     outputAllowlist: {
@@ -414,7 +434,6 @@ export async function seedProviderConnections(
         declaredEnv: true,
       },
       secretPartition: "provider-credentials",
-      kind: providerConnectionKind(shortName),
       status: "verified",
       materialization,
       envNames: providerEnvNames(provider),
@@ -609,15 +628,6 @@ function providerEnvNames(provider: string): readonly string[] {
   if (provider.includes("integrations/github")) return ["GITHUB_TOKEN"];
   if (provider.includes("hashicorp/kubernetes")) return ["KUBE_CONFIG_PATH"];
   return [`${providerShortName(provider).toUpperCase()}_TOKEN`];
-}
-
-function providerConnectionKind(shortName: string): ProviderConnection["kind"] {
-  if (shortName === "cloudflare") return "cloudflare_api_token";
-  if (shortName === "aws") return "aws_assume_role";
-  if (shortName === "google" || shortName === "gcp") {
-    return "gcp_service_account_json";
-  }
-  return "generic_env_provider";
 }
 
 function sanitizeId(value: string): string {
