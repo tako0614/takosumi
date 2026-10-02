@@ -20,8 +20,8 @@ import {
   isRunCredentialToken,
   runCredentialTokenSecret,
   verifyRunCredentialTokenAuthority,
-  type RunCredentialTokenPayload,
 } from "../../../core/shared/run_credential_tokens.ts";
+import { runnerMutationIdentity } from "../../../core/shared/runner_mutation_semantics.ts";
 import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
 import {
   recoveryPlanForStateVersion,
@@ -1276,7 +1276,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     throw new Error("credential refresh readiness timed out");
   }
 
-  async #startContainerIfSupported(): Promise<void> {
+  async #startContainerIfSupported(signal?: AbortSignal): Promise<void> {
     if (this.#localRunnerProxyUrl) return;
     const startAndWaitForPorts = (
       this as unknown as Partial<ContainerStartWaiter>
@@ -1294,6 +1294,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         instanceGetTimeoutMS: CONTAINER_START_TIMEOUT_MS,
         portReadyTimeoutMS: CONTAINER_PORT_READY_TIMEOUT_MS,
         waitInterval: CONTAINER_START_POLL_INTERVAL_MS,
+        ...(signal ? { abort: signal } : {}),
       },
       {
         envVars: this.envVars,
@@ -1328,19 +1329,27 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     }
   }
 
-  async #ensureContainerReady(baseUrl: URL): Promise<void> {
+  async #ensureContainerReady(
+    baseUrl: URL,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const startedAt = monotonicNow();
     let lastError: unknown;
     for (let attempt = 1; attempt <= CONTAINER_READY_ATTEMPTS; attempt += 1) {
       try {
-        await this.#startContainerIfSupported();
+        signal?.throwIfAborted();
+        await this.#startContainerIfSupported(signal);
         const response = await this.#containerFetch(
-          new Request(containerHealthUrl(baseUrl), { method: "GET" }),
+          new Request(containerHealthUrl(baseUrl), {
+            method: "GET",
+            ...(signal ? { signal } : {}),
+          }),
         );
         if (!response.ok) {
           const failure = await readRunnerFailureDetail(
             response,
             this.#artifactLimits.failureDetail,
+            signal,
           );
           throw new Error(
             `container health check failed: ${response.status}${failure ? ` (${failure})` : ""}`,
@@ -1350,6 +1359,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           Math.max(0, monotonicNow() - startedAt) / 1000;
         return;
       } catch (error) {
+        signal?.throwIfAborted();
         lastError = error;
         if (
           attempt >= CONTAINER_READY_ATTEMPTS ||
@@ -1361,7 +1371,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           "OpenTofu runner container was not running after start; retrying",
           { attempt },
         );
-        await sleep(CONTAINER_START_POLL_INTERVAL_MS * attempt);
+        await abortableRunnerSleep(
+          CONTAINER_START_POLL_INTERVAL_MS * attempt,
+          signal,
+        );
       }
     }
     throw lastError instanceof Error
@@ -2134,7 +2147,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       // M2: restore the snapshotted source tree into the container before any
       // build/plan phase (mirrors the plan-artifact restore protocol).
       if (sourceArchive) {
-        await this.#restoreSourceArchive(runId, sourceArchive, url);
+        await this.#restoreSourceArchive(
+          runId,
+          sourceArchive,
+          url,
+          request.signal,
+        );
       }
       // remote_state dependencies (spec §15): fetch + decrypt each producer
       // state and stream it to the container BEFORE init/plan/apply.
@@ -2538,6 +2556,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runId: string,
     sourceArchive: SourceArchiveRestore,
     baseUrl: URL,
+    requestSignal: AbortSignal,
   ): Promise<void> {
     assertSafeSourceArchiveRestoreKey(sourceArchive.ref);
     const bucket = this.env.R2_SOURCE;
@@ -2550,31 +2569,100 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (!object) {
       throw new Error(`source archive object not found: ${sourceArchive.ref}`);
     }
-    const bytes = await readBoundedR2ObjectBytes(
+    assertR2ObjectDeclaredSize(
       object,
       "source_archive",
       this.#artifactLimits.sourceArchive,
     );
-    const digest = await digestBytes(bytes);
-    if (digest !== sourceArchive.digest) {
-      throw new Error(`source archive digest mismatch on restore: ${digest}`);
-    }
-    await this.#ensureContainerReady(baseUrl);
-    const response = await this.#containerFetch(
-      new Request(sourceArchiveRestoreUrl(baseUrl, runId), {
-        method: "PUT",
-        headers: { "content-type": SOURCE_ARCHIVE_CONTENT_TYPE },
-        body: toArrayBuffer(bytes),
-      }),
+
+    // Runner startup and the bounded R2 read/digest occupy independent waits.
+    // Start only after object existence and declared-size validation, and do
+    // not hand any bytes to the runner until both preparation steps succeed.
+    const preparation = new AbortController();
+    const abortPreparation = (): void => {
+      preparation.abort(requestSignal.reason);
+    };
+    if (requestSignal.aborted) abortPreparation();
+    else requestSignal.addEventListener("abort", abortPreparation, { once: true });
+
+    // Startup and the health request are bounded by the existing container
+    // startup/readiness budgets. The same signal also reaches the container
+    // platform's cancellable startAndWaitForPorts contract.
+    const readinessSignal = AbortSignal.any([
+      preparation.signal,
+      AbortSignal.timeout(
+        CONTAINER_START_TIMEOUT_MS + CONTAINER_PORT_READY_TIMEOUT_MS,
+      ),
+    ]);
+    const archiveBytes = (async () => {
+      const bytes = await readBoundedR2ObjectBytes(
+        object,
+        "source_archive",
+        this.#artifactLimits.sourceArchive,
+        preparation.signal,
+      );
+      const digest = await digestBytes(bytes);
+      if (digest !== sourceArchive.digest) {
+        throw new Error(`source archive digest mismatch on restore: ${digest}`);
+      }
+      return bytes;
+    })();
+    const containerReady = this.#ensureContainerReady(
+      baseUrl,
+      readinessSignal,
     );
-    if (!response.ok) {
-      const failure = await readRunnerFailureDetail(
-        response,
-        this.#artifactLimits.failureDetail,
+    // Each failure cancels the sibling, and allSettled joins both operations
+    // before the caller's finally block can destroy the container. This avoids
+    // a detached startup racing shutdown while still settling a known-bad
+    // archive promptly.
+    const observedArchive = archiveBytes.catch((error: unknown) => {
+      preparation.abort(error);
+      throw error;
+    });
+    const observedReadiness = containerReady.catch((error: unknown) => {
+      preparation.abort(error);
+      throw error;
+    });
+    try {
+      const [archiveResult, readinessResult] = await Promise.allSettled([
+        observedArchive,
+        observedReadiness,
+      ]);
+      if (requestSignal.aborted) assertRequestNotAborted(requestSignal);
+      // Preserve archive-error precedence. A sibling-cancellation AbortError
+      // is not a source error, so return the readiness failure in that case.
+      if (
+        archiveResult.status === "rejected" &&
+        (readinessResult.status === "fulfilled" ||
+          !(archiveResult.reason instanceof DOMException &&
+            archiveResult.reason.name === "AbortError"))
+      ) {
+        throw archiveResult.reason;
+      }
+      if (readinessResult.status === "rejected") {
+        throw readinessResult.reason;
+      }
+      if (archiveResult.status === "rejected") throw archiveResult.reason;
+      const bytes = archiveResult.value;
+      const response = await this.#containerFetch(
+        new Request(sourceArchiveRestoreUrl(baseUrl, runId), {
+          method: "PUT",
+          headers: { "content-type": SOURCE_ARCHIVE_CONTENT_TYPE },
+          body: toArrayBuffer(bytes),
+          signal: requestSignal,
+        }),
       );
-      throw new Error(
-        `container source archive restore failed: ${response.status}${failure ? ` (${failure})` : ""}`,
-      );
+      if (!response.ok) {
+        const failure = await readRunnerFailureDetail(
+          response,
+          this.#artifactLimits.failureDetail,
+        );
+        throw new Error(
+          `container source archive restore failed: ${response.status}${failure ? ` (${failure})` : ""}`,
+        );
+      }
+    } finally {
+      requestSignal.removeEventListener("abort", abortPreparation);
     }
   }
 
@@ -4720,10 +4808,7 @@ async function readBoundedR2ObjectBytes(
   signal?: AbortSignal,
 ): Promise<Uint8Array> {
   if (signal) assertRequestNotAborted(signal);
-  if (!Number.isSafeInteger(object.size) || object.size < 0) {
-    throw new RunnerArtifactSizeLimitError(artifact, maxBytes, maxBytes + 1);
-  }
-  assertArtifactSize(artifact, maxBytes, object.size);
+  assertR2ObjectDeclaredSize(object, artifact, maxBytes);
   // The current Cloudflare R2ObjectBody exposes `body`, while the repository's
   // narrow binding/test doubles still model only arrayBuffer(). Prefer the real
   // stream so a future adapter cannot forge `size` and force an unbounded read.
@@ -4749,6 +4834,17 @@ async function readBoundedR2ObjectBytes(
   // as well keeps test doubles and future adapters fail-closed.
   assertArtifactSize(artifact, maxBytes, bytes.byteLength);
   return bytes;
+}
+
+function assertR2ObjectDeclaredSize(
+  object: R2Object,
+  artifact: RunnerArtifactKind,
+  maxBytes: number,
+): void {
+  if (!Number.isSafeInteger(object.size) || object.size < 0) {
+    throw new RunnerArtifactSizeLimitError(artifact, maxBytes, maxBytes + 1);
+  }
+  assertArtifactSize(artifact, maxBytes, object.size);
 }
 
 function parseContentLength(value: string | null): number | undefined {
@@ -7632,17 +7728,6 @@ function runnerReleaseIndeterminateResponse(): Response {
   );
 }
 
-const MUTABLE_RUN_EVIDENCE_FIELDS = new Set([
-  "auditEvents",
-  "createdAt",
-  "diagnostics",
-  "finishedAt",
-  "heartbeatAt",
-  "startedAt",
-  "status",
-  "updatedAt",
-]);
-
 interface RunnerVerifiedCredentialAuthority {
   readonly kind: "takosumi.run-credential-authority@v1";
   readonly tokenType: string;
@@ -7668,346 +7753,30 @@ async function runnerMutationSemanticDigest(
   requestPayload: unknown,
   env: CloudflareWorkerEnv,
 ): Promise<string> {
-  if (!isRecord(requestPayload)) {
-    throw new Error("runner mutation request must be an object");
-  }
-  const request: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(requestPayload)) {
-    if (key === "credentials") continue;
-    if (key === "applyRun" || key === "planRun") {
-      request[key] = stableMutationRunEvidence(value, key);
-      continue;
-    }
-    request[key] = value;
-  }
-  request.credentials = await runnerMutationCredentialSemantics(
-    requestPayload.credentials,
-    requestPayload,
-    action,
-    env,
-    runId,
-  );
-  return await digestText(
-    canonicalRunnerMutationJson({
-      kind: "takosumi.runner-mutation-semantics@v2",
-      runId,
-      action,
-      request,
-    }),
-  );
-}
-
-function stableMutationRunEvidence(value: unknown, label: string): unknown {
-  if (!isRecord(value)) {
-    throw new Error(`${label} must be an object`);
-  }
-  const stable: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (MUTABLE_RUN_EVIDENCE_FIELDS.has(key)) continue;
-    if (key === "stateLock" && isRecord(entry)) {
-      stable.stateLock = {
-        ...(stringField(entry, "backendRef")
-          ? { backendRef: stringField(entry, "backendRef")! }
-          : {}),
-        ...(stringField(entry, "lockRef")
-          ? { lockRef: stringField(entry, "lockRef")! }
-          : {}),
-      };
-      continue;
-    }
-    stable[key] = entry;
-  }
-  return stable;
-}
-
-async function runnerMutationCredentialSemantics(
-  value: unknown,
-  requestPayload: Readonly<Record<string, unknown>>,
-  action: RunnerMutationAction,
-  env: CloudflareWorkerEnv,
-  runnerRunId: string,
-): Promise<unknown> {
-  if (value === undefined) return null;
-  if (!isRecord(value)) {
-    throw new Error("runner mutation credentials must be an object");
-  }
-  const rawEnv = recordField(value, "env") ?? {};
-  const envNames = Object.keys(rawEnv).sort();
-  if (Object.values(rawEnv).some((entry) => typeof entry !== "string")) {
-    throw new Error("runner mutation credential env must contain strings");
-  }
-  const rawFiles = value.files;
-  if (rawFiles !== undefined && !Array.isArray(rawFiles)) {
-    throw new Error("runner mutation credential files must be an array");
-  }
-  const fileSemantics = (Array.isArray(rawFiles) ? rawFiles : []).map(
-    (entry) => {
-      if (!isRecord(entry)) {
-        throw new Error("runner mutation credential file must be an object");
-      }
-      const path = stringField(entry, "path");
-      const content = stringField(entry, "content");
-      const mode = entry.mode;
-      if (!path || content === undefined || typeof mode !== "number") {
-        throw new Error(
-          "runner mutation credential file requires path, mode, and content",
-        );
-      }
-      return {
-        path,
-        mode,
-        ...(stringField(entry, "envName")
-          ? { envName: stringField(entry, "envName")! }
-          : {}),
-      };
-    },
-  );
-  const runtimeInputs = runnerMutationRuntimeInputSemantics(
-    value.runtimeInputs,
-  );
   const applyRunId = parseApplyRunId(requestPayload);
-  const owner = applyRunId
-    ? { kind: "apply" as const, id: applyRunId }
-    : undefined;
   const renewableClaim = await renewableCredentialRefreshClaim(
-    owner,
-    runnerRunId,
+    applyRunId ? { kind: "apply", id: applyRunId } : undefined,
+    runId,
     action,
     requestPayload,
   );
-  const manifest = recordField(value, "manifest");
-  const renewableBindings = isRecord(manifest) && Array.isArray(manifest.bindings)
-    ? manifest.bindings.filter((binding) =>
-        isRecord(binding) && recordField(binding, "renewableEnv") !== undefined,
-      )
-    : [];
-  if (
-    renewableBindings.length > 0 &&
-    (!renewableClaim || renewableClaim.descriptors.length !== renewableBindings.length)
-  ) {
-    throw new Error("renewable credential projection is incomplete");
-  }
-  const renewableSourceNames = new Set(
-    renewableClaim?.descriptors.map((descriptor) => descriptor.sourceEnvName) ?? [],
-  );
-  const secretEntries = [
-    ...Object.entries(rawEnv).map(([name, entry]) => ({
-      delivery: `env:${name}`,
-      value: entry as string,
-    })),
-    ...(Array.isArray(rawFiles)
-      ? rawFiles.flatMap((entry) =>
-          isRecord(entry) &&
-          typeof entry.path === "string" &&
-          typeof entry.content === "string"
-            ? [{ delivery: `file:${entry.path}`, value: entry.content }]
-            : [],
-        )
-      : []),
-    // Run-scoped sensitive provider inputs join the SAME one-way digest lane as
-    // env and file material: two dispatches that differ only in these values
-    // must not collapse onto one at-most-once mutation identity.
-    ...runtimeInputs.secretEntries,
-  ];
-  const signedTokenDeliveries = new Map<string, Set<string>>();
-  for (const entry of secretEntries) {
-    if (!isRunCredentialToken(entry.value)) continue;
-    const deliveries = signedTokenDeliveries.get(entry.value) ?? new Set();
-    deliveries.add(entry.delivery);
-    signedTokenDeliveries.set(entry.value, deliveries);
-  }
-  const staticMaterialDigests = await Promise.all(
-    secretEntries
-      .filter((entry) =>
-        !isRunCredentialToken(entry.value) &&
-        !(entry.delivery.startsWith("env:") && renewableSourceNames.has(entry.delivery.slice(4)))
-      )
-      .map(async (entry) => ({
-        delivery: entry.delivery,
-        digest: await digestText(entry.value),
-      })),
-  );
-  const authorities = await verifiedRunnerCredentialAuthorities(
-    signedTokenDeliveries,
-    requestPayload,
-    action,
-    value,
-    env,
-  );
-  return {
-    envNames,
-    files: fileSemantics.sort((left, right) =>
-      canonicalRunnerMutationJson(left).localeCompare(
-        canonicalRunnerMutationJson(right),
-      ),
-    ),
-    manifest: value.manifest ?? null,
-    ...(renewableClaim
-      ? {
-          renewableCredentials: {
-            kind: "takosumi.runner-renewable-credential-projection@v1",
-            manifestDigest: renewableClaim.manifestDigest,
-            expiryClass: "finite-expiry",
-            descriptors: [...renewableClaim.descriptors].sort((left, right) =>
-              canonicalRunnerMutationJson(left).localeCompare(canonicalRunnerMutationJson(right)),
-            ),
-          },
-        }
-      : {}),
-    authorities,
-    // Value-free: only the variable and its declared binding names. The values
-    // themselves appear exclusively as one-way digests above.
-    ...(runtimeInputs.semantics.length > 0
-      ? { runtimeInputs: runtimeInputs.semantics }
-      : {}),
-    staticMaterialDigests: staticMaterialDigests.sort((left, right) =>
-      left.delivery.localeCompare(right.delivery),
-    ),
-  };
-}
-
-/**
- * Projects `credentials.runtimeInputs` into its value-free semantics plus the
- * secret entries that feed the one-way digest lane. No raw value is ever copied
- * into the returned semantics object.
- */
-function runnerMutationRuntimeInputSemantics(value: unknown): {
-  readonly semantics: readonly {
-    readonly variableName: string;
-    readonly names: readonly string[];
-  }[];
-  readonly secretEntries: readonly {
-    readonly delivery: string;
-    readonly value: string;
-  }[];
-} {
-  if (value === undefined) return { semantics: [], secretEntries: [] };
-  if (!Array.isArray(value)) {
-    throw new Error("runner mutation credential runtimeInputs must be an array");
-  }
-  const semantics: {
-    readonly variableName: string;
-    readonly names: readonly string[];
-  }[] = [];
-  const secretEntries: { readonly delivery: string; readonly value: string }[] =
-    [];
-  for (const entry of value) {
-    if (!isRecord(entry)) {
-      throw new Error(
-        "runner mutation credential runtimeInputs entry must be an object",
-      );
-    }
-    const variableName = stringField(entry, "variableName");
-    const names = entry.names;
-    const values = entry.values;
-    if (
-      !variableName ||
-      !Array.isArray(names) ||
-      names.some((name) => typeof name !== "string") ||
-      !isRecord(values) ||
-      Object.values(values).some((item) => typeof item !== "string")
-    ) {
-      throw new Error(
-        "runner mutation credential runtimeInputs entry is malformed",
-      );
-    }
-    semantics.push({
-      variableName,
-      names: [...(names as string[])].sort(),
-    });
-    for (const [name, item] of Object.entries(values)) {
-      secretEntries.push({
-        delivery: `runtime-input:${variableName}:${name}`,
-        value: item as string,
-      });
-    }
-  }
-  return {
-    semantics: semantics.sort((left, right) =>
-      left.variableName.localeCompare(right.variableName),
-    ),
-    secretEntries,
-  };
-}
-
-async function verifiedRunnerCredentialAuthorities(
-  tokenDeliveries: ReadonlyMap<string, ReadonlySet<string>>,
-  requestPayload: Readonly<Record<string, unknown>>,
-  action: RunnerMutationAction,
-  credentials: Readonly<Record<string, unknown>>,
-  env: CloudflareWorkerEnv,
-): Promise<readonly RunnerVerifiedCredentialAuthority[]> {
-  if (tokenDeliveries.size === 0) return [];
-  const secret = runCredentialTokenSecret(env as Record<string, unknown>);
-  if (!secret) {
-    throw new Error("Run credential verification authority is unavailable");
-  }
-  const context = mutationCredentialExpectedContext(requestPayload, action);
-  const bindings = mutationCredentialManifestBindings(credentials);
-  const signingAuthorityDigest = await digestText(secret);
-  const authorities: RunnerVerifiedCredentialAuthority[] = [];
-  for (const [token, deliveries] of tokenDeliveries) {
-    const verified = await verifyRunCredentialTokenAuthority(token, { secret });
-    if (!verified.ok) {
-      throw new Error(`Run credential verification failed: ${verified.reason}`);
-    }
-    assertMutationCredentialAuthority(verified.payload, context, bindings);
-    authorities.push({
-      kind: "takosumi.run-credential-authority@v1",
-      tokenType: verified.payload.typ,
-      tokenVersion: verified.payload.v,
-      signingAuthorityDigest,
-      audience: verified.payload.aud,
-      subject: verified.payload.sub,
-      workspaceId: verified.payload.workspaceId,
-      capsuleId: verified.payload.capsuleId,
-      runId: verified.payload.runId,
-      installingPrincipalId: verified.payload.installingPrincipalId,
-      connectionId: verified.payload.connectionId,
-      provider: verified.payload.provider,
-      phase: action,
-      scopes: [...verified.payload.scopes].sort(),
-      deliveries: [...deliveries].sort(),
-    });
-  }
-  return authorities.sort((left, right) =>
-    canonicalRunnerMutationJson(left).localeCompare(
-      canonicalRunnerMutationJson(right),
-    ),
-  );
-}
-
-function mutationCredentialExpectedContext(
-  requestPayload: Readonly<Record<string, unknown>>,
-  action: RunnerMutationAction,
-): {
-  readonly workspaceId: string;
-  readonly capsuleId: string;
-  readonly runId: string;
-  readonly action: RunnerMutationAction;
-} {
-  const applyRun = recordField(requestPayload, "applyRun");
-  const planRun = recordField(requestPayload, "planRun");
-  const workspaceId = applyRun && stringField(applyRun, "workspaceId");
-  const capsuleId =
-    (applyRun && stringField(applyRun, "capsuleId")) ??
-    (planRun && stringField(planRun, "capsuleId"));
-  const runId = applyRun && stringField(applyRun, "id");
-  if (!workspaceId || !capsuleId || !runId) {
-    throw new Error(
-      "signed Run credentials require exact ApplyRun Workspace and Capsule context",
-    );
-  }
-  if (
-    planRun &&
-    ((stringField(planRun, "workspaceId") !== undefined &&
-      stringField(planRun, "workspaceId") !== workspaceId) ||
-      (stringField(planRun, "capsuleId") !== undefined &&
-        stringField(planRun, "capsuleId") !== capsuleId))
-  ) {
-    throw new Error("signed Run credential context mismatches the PlanRun");
-  }
-  return { workspaceId, capsuleId, runId, action };
+  const identity = await runnerMutationIdentity(runId, action, requestPayload, {
+    // Preserve the pre-existing DO renewable projection policy. No other caller
+    // receives this opt-in by default.
+    renewableProjection: renewableClaim ? {
+      manifestDigest: renewableClaim.manifestDigest,
+      descriptors: renewableClaim.descriptors,
+    } : undefined,
+    allowMalformedRunCredentialAsOpaque: true,
+    verifyCredentialToken: async (token) => {
+      const secret = runCredentialTokenSecret(env as Record<string, unknown>);
+      if (!secret) throw new Error("Run credential verification authority is unavailable");
+      const verified = await verifyRunCredentialTokenAuthority(token, { secret });
+      if (!verified.ok) throw new Error(`Run credential verification failed: ${verified.reason}`);
+      return { payload: verified.payload, signingAuthorityDigest: await digestText(secret) };
+    },
+  });
+  return identity.semanticDigest;
 }
 
 function mutationCredentialManifestBindings(
@@ -8024,33 +7793,6 @@ function mutationCredentialManifestBindings(
     }
     return binding;
   });
-}
-
-function assertMutationCredentialAuthority(
-  payload: RunCredentialTokenPayload,
-  context: ReturnType<typeof mutationCredentialExpectedContext>,
-  bindings: readonly Readonly<Record<string, unknown>>[],
-): void {
-  if (
-    payload.workspaceId !== context.workspaceId ||
-    payload.capsuleId !== context.capsuleId ||
-    payload.runId !== context.runId ||
-    payload.phase !== context.action ||
-    payload.sub !== payload.installingPrincipalId
-  ) {
-    throw new Error("signed Run credential authority mismatches the mutation");
-  }
-  if (
-    !bindings.some(
-      (binding) =>
-        stringField(binding, "connectionId") === payload.connectionId &&
-        stringField(binding, "providerSource") === payload.provider,
-    )
-  ) {
-    throw new Error(
-      "signed Run credential authority mismatches the credential manifest",
-    );
-  }
 }
 
 function canonicalRunnerMutationJson(value: unknown): string {
@@ -8441,9 +8183,23 @@ function runnerFailurePhase(phase: string | undefined): RunnerFailurePhase {
 async function readRunnerFailureDetail(
   response: Response,
   maxBytes: number,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
+  if (signal?.aborted) {
+    try {
+      void response.body?.cancel().catch(() => undefined);
+    } catch {
+      // Best-effort cancellation must not delay propagation of the abort.
+    }
+    signal.throwIfAborted();
+  }
   const text = new TextDecoder().decode(
-    await readBoundedResponseBytes(response, "failure_detail", maxBytes),
+    await readBoundedResponseBytes(
+      response,
+      "failure_detail",
+      maxBytes,
+      signal,
+    ),
   );
   if (text.length === 0) return undefined;
   const redactedText = redactString(text, { redactedValue: "[redacted]" });
