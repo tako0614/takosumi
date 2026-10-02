@@ -123,6 +123,17 @@ export class PGliteSqlClient implements SqlClient {
    */
   static async create(): Promise<PGliteSqlClient> {
     const snapshot = await PGliteSqlClient.latestMigrationSnapshot();
+    return await PGliteSqlClient.fromDataDirSnapshot(snapshot);
+  }
+
+  /**
+   * Reopens an exact data-bearing PGlite artifact without applying migrations
+   * or seeding rows. This models fresh database/Core instances loaded from the
+   * same persisted data artifact; it does not simulate an OS process restart.
+   */
+  static async fromDataDirSnapshot(
+    snapshot: Blob,
+  ): Promise<PGliteSqlClient> {
     const db = await PGlite.create({ loadDataDir: snapshot });
     return new PGliteSqlClient(db);
   }
@@ -236,6 +247,11 @@ export class PGliteSqlClient implements SqlClient {
     sql: string,
   ): Promise<{ readonly rows: readonly Row[] }> {
     return this.#db.query<Row>(sql);
+  }
+
+  /** Captures this database's complete data directory as a restorable artifact. */
+  snapshotDataDir(): Promise<Blob> {
+    return this.#db.dumpDataDir("none");
   }
 
   get closed(): boolean {
