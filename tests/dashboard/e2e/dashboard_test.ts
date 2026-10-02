@@ -4,11 +4,13 @@ import {
   test,
   type Locator,
   type Page,
+  type Route,
 } from "@playwright/test";
 import {
   PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
   PORTABLE_EXPECTATIONS,
   PORTABLE_SOURCE_COMMIT,
+  PORTABLE_UI_SURFACES,
 } from "./fixture-data.ts";
 import { monitorDashboardTraffic } from "./traffic-monitor.ts";
 import {
@@ -656,11 +658,366 @@ async function stubProviderDestinationFixture(
   return state;
 }
 
+type ReadinessRouteHandler = (route: Route) => Promise<void>;
+
+interface ReadinessBrowserFixture {
+  readonly applyPosts: string[];
+  readonly startApply: () => Promise<void>;
+}
+
+/** Drive the real InstallExecution route with synthetic external API replies. */
+async function startReadinessBrowserFixture(
+  page: Page,
+  onReadinessRead: ReadinessRouteHandler,
+  onActivityRead?: ReadinessRouteHandler,
+): Promise<ReadinessBrowserFixture> {
+  const applyPosts: string[] = [];
+  await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+  await stubProviderDestinationFixture(page, [], []);
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (
+      path === "/api/v1/runs/run_provider_plan_e2e/apply" &&
+      request.method() === "POST"
+    ) {
+      applyPosts.push(path);
+      return route.fulfill({ json: { run: {
+        id: "run_provider_apply_e2e",
+        workspaceId: "ws_alpha",
+        capsuleId: "cap_provider_destination_e2e",
+        type: "apply",
+        status: "succeeded",
+        createdBy: "portable-e2e",
+        createdAt: "2026-08-01T00:00:00.000Z",
+      } } });
+    }
+    if (path === "/api/v1/runs/run_provider_apply_e2e") {
+      return route.fulfill({ json: { run: {
+        id: "run_provider_apply_e2e",
+        workspaceId: "ws_alpha",
+        capsuleId: "cap_provider_destination_e2e",
+        type: "apply",
+        status: "succeeded",
+        createdBy: "portable-e2e",
+        createdAt: "2026-08-01T00:00:00.000Z",
+      } } });
+    }
+    if (path === "/api/v1/runs/run_provider_apply_e2e/stream") {
+      return route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: "",
+      });
+    }
+    if (path === "/api/v1/capsules/cap_provider_destination_e2e/state-versions") {
+      return onReadinessRead(route);
+    }
+    if (path === "/api/v1/workspaces/ws_alpha/activity") {
+      if (onActivityRead) {
+        return onActivityRead(route);
+      }
+      return route.fulfill({ json: { events: [] } });
+    }
+    return route.fallback();
+  });
+  return {
+    applyPosts,
+    startApply: async () => {
+      await page.goto(
+        `/new?git=${encodeURIComponent("https://github.com/example/cloudflare-service.git")}` +
+          `&ref=${PORTABLE_SOURCE_COMMIT}&path=.&name=cloudflare-service`,
+        { waitUntil: "domcontentloaded" },
+      );
+      await page.getByRole("button", { name: "Add", exact: true }).click();
+      await expect(page.locator(".iv-execution")).toBeVisible();
+      await page
+        .locator(".iv-execution")
+        .getByRole("button", { name: "Add", exact: true })
+        .click();
+      await expect.poll(() => applyPosts.length).toBe(1);
+    },
+  };
+}
 test.describe("Takosumi dashboard browser surface", () => {
   test.skip(
     mode === "public-live",
     "public-live is an unauthenticated read-only profile",
   );
+
+  test("readiness requests abort on navigation without stale failure or Open", async ({ page }) => {
+    test.skip(mode !== "portable", "synthetic readiness cancellation is portable-only");
+    const errors = pageErrors(page);
+    let markReadsStarted!: () => void;
+    const readsStarted = new Promise<void>((resolve) => {
+      markReadsStarted = resolve;
+    });
+    let releaseInterceptions!: () => void;
+    const releaseSignal = new Promise<void>((resolve) => {
+      releaseInterceptions = resolve;
+    });
+    let heldReads = 0;
+    const holdRead = async (route: Route) => {
+      heldReads += 1;
+      if (heldReads === 2) markReadsStarted();
+      await releaseSignal;
+      await route.abort("failed").catch(() => undefined);
+    };
+    const failedReadErrors = new Map<string, string | undefined>();
+    const failedReads = new Promise<void>((resolve) => {
+      page.on("requestfailed", (request) => {
+        const path = new URL(request.url()).pathname;
+        if (
+          path === "/api/v1/capsules/cap_provider_destination_e2e/state-versions" ||
+          path === "/api/v1/workspaces/ws_alpha/activity"
+        ) {
+          failedReadErrors.set(path, request.failure()?.errorText);
+          if (failedReadErrors.size === 2) resolve();
+        }
+      });
+    });
+    const fixture = await startReadinessBrowserFixture(page, holdRead, holdRead);
+    await fixture.startApply();
+    await readsStarted;
+    await expect(page.getByRole("link", { name: "Open service" })).toHaveCount(0);
+
+    await page.locator('a[href="/settings"]').first().click();
+    await expect(page).toHaveURL(/\/settings$/u);
+    await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+    await failedReads;
+    releaseInterceptions();
+    expect([...failedReadErrors.keys()].sort()).toEqual(
+      [
+        "/api/v1/capsules/cap_provider_destination_e2e/state-versions",
+        "/api/v1/workspaces/ws_alpha/activity",
+      ].sort(),
+    );
+    for (const failure of failedReadErrors.values()) {
+      expect(failure).toMatch(/ERR_ABORTED/u);
+    }
+
+    await expect(page.locator(".iv-execution")).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Something went wrong" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Open service" })).toHaveCount(0);
+    expect(fixture.applyPosts).toHaveLength(1);
+    await assertNoPageErrors(errors);
+  });
+  test("Store install waits for apply-linked readiness before opening", async ({ page }) => {
+    test.skip(mode !== "portable", "synthetic install lifecycle is portable-only");
+    const errors = pageErrors(page);
+    const requests: string[] = [];
+    const applyPosts: string[] = [];
+    let readinessReadFailures = 3;
+    let activationAction = "release_activation.pending";
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      requests.push(`${request.method()} ${url.origin}${url.pathname}${url.search}`);
+    });
+    await page.addInitScript(() => {
+      localStorage.setItem("tg_lang", "en");
+      localStorage.setItem("tcs.stores", JSON.stringify(["https://store.example.test"]));
+    });
+    await page.route("https://store.example.test/tcs/v2/listings**", async (route) => {
+      await route.fulfill({ json: { items: [
+        {
+          id: "fixtures/noise-service",
+          source: { git: "https://github.com/example/noise-service.git" },
+          suggestedName: "noise-service",
+          name: { ja: "Noise Service", en: "Noise Service" },
+          description: { ja: "Not the selected fixture.", en: "Not the selected fixture." },
+          badge: { ja: "Add", en: "Add" },
+          createdAt: "2026-08-04T00:00:00.000Z",
+          updatedAt: "2026-08-04T00:00:00.000Z",
+        },
+        {
+          id: "fixtures/readiness-service",
+          source: { git: "https://github.com/example/cloudflare-service.git" },
+          suggestedName: "readiness-service",
+          name: { ja: "Readiness Service", en: "Readiness Service" },
+          description: { ja: "Synthetic fixture: input and activation gated.", en: "Synthetic fixture: input and activation gated." },
+          badge: { ja: "Add", en: "Add" },
+          createdAt: "2026-08-04T00:00:00.000Z",
+          updatedAt: "2026-08-04T00:00:00.000Z",
+        },
+      ] } });
+    });
+    const install = await stubProviderDestinationFixture(page);
+    await page.route("**/api/v1/**", async (route) => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path === "/api/v1/workspaces/ws_alpha/source-ref-resolutions/stable-semver" && request.method() === "POST") {
+        return route.fulfill({ json: { tag: "v1.0.0", commit: PORTABLE_SOURCE_COMMIT } });
+      }
+      if (path === "/api/v1/runs/run_provider_source_sync_e2e") {
+        return route.fulfill({ json: { run: {
+          id: "run_provider_source_sync_e2e", workspaceId: "ws_alpha",
+          sourceId: "src_provider_destination_e2e", type: "source_sync", status: "succeeded",
+          sourceSnapshotId: "snap_provider_destination_e2e", ref: PORTABLE_SOURCE_COMMIT,
+          createdBy: "portable-e2e", createdAt: "2026-08-01T00:00:00.000Z",
+        } } });
+      }
+      if (path === "/api/v1/capsule-configs/cfg-default-opentofu-capsule") {
+        return route.fulfill({ json: { installConfig: {
+          id: "cfg-default-opentofu-capsule",
+          name: "readiness-service",
+          policy: {},
+          variableMapping: {},
+          variablePresentation: [{
+            name: "region", type: "string", required: true,
+            label: { en: "Region", ja: "Region" }, defaultValue: "fixture-default",
+          }],
+          outputAllowlist: {},
+          interfaceBlueprints: [{
+            key: "launcher", name: "app.launcher",
+            spec: {
+              type: "interface.ui.surface", version: "1",
+              document: { launcher: true, display: { title: "Synthetic readiness service" } },
+              inputs: { url: { source: "capsule_output", capsuleId: "cap_provider_destination_e2e", outputName: "url" } },
+              access: { visibility: "workspace" },
+            },
+            bindings: [{ key: "launcher.installer", subject: { source: "installing_principal" }, permissions: ["ui.open"], delivery: { type: "none" } }],
+          }],
+          createdAt: "2026-08-01T00:00:00.000Z", updatedAt: "2026-08-01T00:00:00.000Z",
+        } } });
+      }
+      if (path === "/api/v1/runs/run_provider_plan_e2e") {
+        return route.fulfill({ json: { run: {
+          id: "run_provider_plan_e2e", workspaceId: "ws_alpha",
+          capsuleId: "cap_provider_destination_e2e", type: "plan", status: "succeeded",
+          summary: { add: 1, change: 0, destroy: 1 }, policyStatus: "pass",
+          requiresApproval: false, createdBy: "portable-e2e", createdAt: "2026-08-01T00:00:00.000Z",
+        } } });
+      }
+      if (path === "/api/v1/runs/run_provider_plan_e2e/apply" && request.method() === "POST") {
+        applyPosts.push(path);
+        return route.fulfill({ json: { run: {
+          id: "run_provider_apply_e2e", workspaceId: "ws_alpha",
+          capsuleId: "cap_provider_destination_e2e", type: "apply", status: "succeeded",
+          createdBy: "portable-e2e", createdAt: "2026-08-01T00:00:00.000Z",
+        } } });
+      }
+      if (path === "/api/v1/runs/run_provider_apply_e2e") {
+        return route.fulfill({ json: { run: {
+          id: "run_provider_apply_e2e", workspaceId: "ws_alpha",
+          capsuleId: "cap_provider_destination_e2e", type: "apply", status: "succeeded",
+          createdBy: "portable-e2e", createdAt: "2026-08-01T00:00:00.000Z",
+        } } });
+      }
+      if (path === "/api/v1/runs/run_provider_apply_e2e/stream") {
+        return route.fulfill({ status: 200, contentType: "text/event-stream", body: "" });
+      }
+      if (path === "/api/v1/capsules/cap_provider_destination_e2e/state-versions") {
+        if (readinessReadFailures > 0) {
+          readinessReadFailures -= 1;
+          return route.fulfill({ status: 503, json: { error: "synthetic_readback_unavailable" } });
+        }
+        return route.fulfill({ json: { stateVersions: [{
+          id: "sv_provider_apply_e2e", workspaceId: "ws_alpha",
+          capsuleId: "cap_provider_destination_e2e", environment: "production",
+          generation: 1, createdByRunId: "run_provider_apply_e2e",
+          createdAt: "2026-08-01T00:00:00.000Z",
+        }] } });
+      }
+      if (path === "/api/v1/workspaces/ws_alpha/activity") {
+        return route.fulfill({ json: { events: [{
+          id: "activity_provider_activation_e2e", workspaceId: "ws_alpha",
+          action: activationAction, targetType: "Capsule", targetId: "cap_provider_destination_e2e",
+          runId: "run_provider_apply_e2e",
+          metadata: { applyRunId: "run_provider_apply_e2e", stateVersionId: "sv_provider_apply_e2e", capsuleId: "cap_provider_destination_e2e" },
+          createdAt: activationAction === "release_activation.succeeded" ? "2026-08-01T00:00:02.000Z" : "2026-08-01T00:00:01.000Z",
+        }] } });
+      }
+      if (path === "/api/v1/workspaces/ws_alpha/ui-surfaces") {
+        return route.fulfill({ json: { interfaces: [{
+          apiVersion: "takosumi.dev/v1alpha1", kind: "Interface",
+          metadata: {
+            id: "if_provider_readiness_e2e", workspaceId: "ws_alpha", name: "app.launcher",
+            ownerRef: { kind: "Capsule", id: "cap_provider_destination_e2e" }, generation: 1,
+            createdAt: "2026-08-01T00:00:00.000Z", updatedAt: "2026-08-01T00:00:00.000Z",
+          },
+          spec: {
+            type: "interface.ui.surface", version: "1",
+            document: { launcher: true, display: { title: "Synthetic readiness service" } },
+            inputs: { url: { source: "capsule_output", capsuleId: "cap_provider_destination_e2e", outputName: "url" } },
+            access: { visibility: "workspace" },
+          },
+          status: { phase: "Resolved", observedGeneration: 1, resolvedRevision: 1, resolvedInputs: { url: "https://service.example.test/fixture" } },
+        }] } });
+      }
+      return route.fallback();
+    });
+    await page.context().route("https://service.example.test/**", async (route) => {
+      await route.fulfill({ contentType: "text/html", body: "<main>Synthetic app fixture</main>" });
+    });
+
+    await page.goto("/new", { waitUntil: "domcontentloaded" });
+    const search = page.getByRole("searchbox", { name: "Search services…" });
+    await expect(search).toBeVisible();
+    await search.fill("Readiness");
+    await expect(page.getByRole("heading", { name: "Readiness Service" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Noise Service" })).toHaveCount(0);
+    await page.getByRole("button", { name: "Readiness Service", exact: true }).click();
+    const details = page.getByRole("dialog", { name: "Readiness Service" });
+    await expect(details.getByText("Synthetic fixture: input and activation gated.")).toBeVisible();
+    await details.locator("details.tcs-advanced summary").click();
+    await expect(details.getByText("https://github.com/example/cloudflare-service")).toBeVisible();
+    await details.getByRole("button", { name: "Add Readiness Service", exact: true }).click();
+
+    await page.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Choose a Host / account" })).toBeVisible();
+    await page.getByRole("combobox", { name: "Host / account" }).selectOption("pc_takosumi_cloud");
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await expect(page.getByRole("heading", { name: /Set up the service/u })).toBeVisible();
+    await page.getByLabel("Region").fill("us-west-2");
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await expect(page.getByRole("heading", { name: /Review before adding/u })).toBeVisible();
+    const addButton = page.getByRole("button", { name: "Add", exact: true });
+    await expect(addButton).toBeDisabled();
+    expect(install.installPlanBody).toMatchObject({
+      variables: { region: "us-west-2" },
+      options: { providerBindings: [expect.objectContaining({
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        connectionId: "pc_takosumi_cloud",
+      })] },
+    });
+
+    await expect(page.locator("body")).not.toContainText("$0.00");
+
+    await page.getByRole("checkbox", { name: "I reviewed these changes" }).check();
+    await expect(addButton).toBeEnabled();
+    await addButton.click();
+    await expect.poll(() => applyPosts.length).toBe(1);
+    await assertNoPageErrors(errors);
+    await expect(page.getByRole("alert")).toContainText(/readiness state could not be checked/u);
+    await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Technical details" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open service" })).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    await expect(page.getByText("Waiting for the service launch link to become available.")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open service" })).toHaveCount(0);
+    activationAction = "release_activation.succeeded";
+    const openService = page.getByRole("link", { name: "Open service" });
+    await expect(openService).toBeVisible({ timeout: 15_000 });
+    await expect(openService).toHaveAttribute("href", "https://service.example.test/fixture");
+    expect(requests).toContain("GET http://127.0.0.1:4179/api/v1/capsules/cap_provider_destination_e2e/state-versions");
+    expect(requests).toContain("GET http://127.0.0.1:4179/api/v1/workspaces/ws_alpha/activity?limit=100");
+    expect(requests.filter((entry) => entry === "POST http://127.0.0.1:4179/api/v1/runs/run_provider_plan_e2e/apply")).toHaveLength(1);
+
+    const popupPromise = page.waitForEvent("popup");
+    await openService.click();
+    const popup = await popupPromise;
+    await expect(popup).toHaveURL("https://service.example.test/fixture");
+    await expect(popup.getByText("Synthetic app fixture")).toBeVisible();
+    await popup.close();
+    await assertNoPageErrors(errors);
+    expect(requests.every((entry) =>
+      entry.startsWith("GET http://127.0.0.1:4179/") ||
+      entry.startsWith("POST http://127.0.0.1:4179/") ||
+      entry.startsWith("GET https://store.example.test/") ||
+      entry.startsWith("GET https://service.example.test/"),
+    )).toBe(true);
+  });
 
   for (const change of ["none", "review", "applied"] as const) {
     const title = change === "applied"
@@ -1199,23 +1556,72 @@ test.describe("Takosumi dashboard browser surface", () => {
   }) => {
     const errors = pageErrors(page);
     const traffic = monitorDashboardTraffic(page, mode);
+    if (mode === "portable") {
+      await page.addInitScript(() => {
+        localStorage.setItem("tg_lang", "ja");
+        localStorage.setItem("tcs.stores", JSON.stringify(["https://store.example.test"]));
+      });
+      await page.route("https://store.example.test/tcs/v2/listings?**", async (route) => {
+        await route.fulfill({
+          json: {
+            items: [{
+              id: "example/service",
+              source: { git: "https://github.com/example/service.git" },
+              suggestedName: "example-service",
+              name: { ja: "Example Service", en: "Example Service" },
+              description: { ja: "サービスの説明", en: "Service description" },
+              badge: { ja: "追加", en: "Add" },
+              createdAt: "2026-08-04T00:00:00.000Z",
+              updatedAt: "2026-08-04T00:00:00.000Z",
+            }],
+          },
+        });
+      });
+    }
+    await page.setViewportSize({ width: 1180, height: 757 });
     await page.goto("/new", { waitUntil: "domcontentloaded" });
     await expect(
       page.getByRole("heading", {
-        name: /サービスを探す|Find a service/u,
+        name: /サービスを追加|Add a service/u,
       }),
     ).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+    await expect(page.getByTestId("install-steps")).toHaveCount(0);
+    const search = page.locator('input[name="storeSearch"]');
+    await expect(search).toBeVisible();
+    const searchBox = await search.boundingBox();
+    expect(searchBox, "Store search must have a visible layout box").not.toBeNull();
+    expect(searchBox!.y, "search belongs near the title at 1180 × 757").toBeLessThan(300);
+    if (mode === "portable") {
+      await expect(page.getByRole("heading", { name: "Example Service" })).toBeVisible();
+    }
+    await page.screenshot({ path: test.info().outputPath("new-1180.png") });
     await expect(page.locator("body")).not.toContainText("undefined.trim");
-    await page.setViewportSize({ width: 390, height: 844 });
-    await expect(
-      page.getByRole("heading", { name: /サービスを追加|Add a service/u }),
-    ).toBeVisible();
-    expect(
-      await page.evaluate(
-        () => document.documentElement.scrollWidth - window.innerWidth,
-      ),
-      "the install view must not overflow the mobile viewport",
-    ).toBeLessThanOrEqual(1);
+    for (const width of [320, 375, 414, 768]) {
+      await page.setViewportSize({ width, height: 844 });
+      await expect(search).toBeVisible();
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth - window.innerWidth,
+        ),
+        `the install view must not overflow at ${width}px`,
+      ).toBeLessThanOrEqual(1);
+    }
+    await page.setViewportSize({ width: 375, height: 844 });
+    await page.screenshot({ path: test.info().outputPath("new-375.png") });
+    const manual = page.locator("details.iv-manual");
+    await expect(manual).not.toHaveAttribute("open");
+    await manual.locator("summary").click();
+    await expect(manual.getByRole("textbox", { name: /Git URL/u })).toBeVisible();
+    if (mode === "portable") {
+      await page.getByRole("button", { name: "追加: Example Service", exact: true }).click();
+      await expect(page.getByRole("heading", { level: 1 })).toHaveText("Example Service");
+      await expect(page.getByRole("heading", { level: 2, name: "Example Service" })).toHaveCount(0);
+      await expect(page.getByTestId("install-steps")).toHaveCount(0);
+      await expect(page.getByRole("textbox", { name: /サービス名|Service name/u })).toHaveValue("example-service");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+      await page.screenshot({ path: test.info().outputPath("selected-375.png") });
+    }
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
   });
@@ -2347,6 +2753,8 @@ test.describe("Takosumi dashboard browser surface", () => {
     const sourceId = `src_${capsuleId}`;
     const planRunId = "run_configuration_plan_e2e";
     const authorityGuard = `sha256:${"a".repeat(64)}`;
+    const stateVersionId = "sv_configuration_e2e";
+    let multipleSurfaces = false;
     const configurationPlanBodies: unknown[] = [];
     const seenMutations: string[] = [];
     const capsule = {
@@ -2357,11 +2765,21 @@ test.describe("Takosumi dashboard browser surface", () => {
       sourceId,
       installConfigId,
       environment: "production",
+      currentStateVersionId: stateVersionId,
       currentStateGeneration: 1,
       status: "active",
       freshness: "fresh",
       createdAt: now,
       updatedAt: now,
+    };
+    const stateVersion = {
+      id: stateVersionId,
+      workspaceId: "ws_alpha",
+      capsuleId,
+      environment: "production",
+      generation: 1,
+      createdByRunId: "run_original_apply",
+      createdAt: now,
     };
 
     await page.route("**/api/v1/**", async (route) => {
@@ -2385,6 +2803,71 @@ test.describe("Takosumi dashboard browser surface", () => {
             installConfigReAdoption: { authorityGuard },
           },
         });
+      }
+      if (path === `/api/v1/state-versions/${stateVersionId}`) {
+        return route.fulfill({ json: { stateVersion } });
+      }
+      if (path === `/api/v1/capsules/${capsuleId}/state-versions`) {
+        return route.fulfill({ json: { stateVersions: [stateVersion] } });
+      }
+      if (
+        path === `/api/v1/capsules/${capsuleId}/backups` &&
+        request.method() === "POST"
+      ) {
+        return route.fulfill({
+          status: 201,
+          json: {
+            backup: {
+              id: "bkp_partial_export_e2e",
+              workspaceId: "ws_alpha",
+              capsuleId,
+              environment: "production",
+              ref: "backup_control/ws_alpha/bkp_partial_export_e2e/control.tar.zst",
+              digest: `sha256:${"b".repeat(64)}`,
+              sizeBytes: 256,
+              createdAt: now,
+            },
+          },
+        });
+      }
+      if (path === `/api/v1/capsules/${capsuleId}/current-resource-inventory`) {
+        return route.fulfill({
+          json: {
+            inventory: {
+              kind: "takosumi.capsule-current-resource-inventory@v1",
+              capsuleId,
+              workspaceId: "ws_alpha",
+              environment: "production",
+              stateVersionId,
+              generation: 1,
+              applyRunId: "run_original_apply",
+              planRunId: "run_original_plan",
+              recordedAt: now,
+              availability: "recorded",
+              resources: [],
+            },
+          },
+        });
+      }
+      if (path === "/api/v1/workspaces/ws_alpha/ui-surfaces" && multipleSurfaces) {
+        const original = PORTABLE_UI_SURFACES.ws_alpha[0];
+        const surface = (id: string, title: string, sortOrder: number) => ({
+          ...original,
+          metadata: { ...original.metadata, id: `if_${id}`, name: `app.${id}` },
+          spec: {
+            ...original.spec,
+            document: { launcher: true, display: { title, sortOrder } },
+            inputs: { url: { source: "capsule_output", capsuleId, outputName: `${id}_url` } },
+          },
+          status: { ...original.status, resolvedInputs: { url: `https://apps.example.test/${id}` } },
+        });
+        // The API order differs from the Interface's declared primary order.
+        return route.fulfill({
+          json: { interfaces: [surface("documentation", "Documentation", 20), surface("control", "Control panel", 10)] },
+        });
+      }
+      if (path === "/api/v1/workspaces/ws_alpha/graph") {
+        return route.fulfill({ json: { nodes: [], edges: [] } });
       }
       if (path === `/api/v1/capsule-configs/${installConfigId}`) {
         return route.fulfill({
@@ -2538,12 +3021,118 @@ test.describe("Takosumi dashboard browser surface", () => {
       return route.fallback();
     });
 
+    await page.setViewportSize({ width: 1180, height: 757 });
+    await gotoDashboardDocument(page, `/workloads/${capsuleId}`);
+    const header = page.locator(".tg-page-header");
+    const openApp = page.getByRole("link", { name: /Open Repository Office|Repository Office.*開/u });
+    await expect(openApp).toBeVisible();
+    await expect(openApp).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
+    await expect(openApp).toHaveAttribute("rel", "noreferrer noopener");
+    const openBox = await openApp.boundingBox();
+    expect(openBox!.y, "Open app belongs in the visible header").toBeLessThan(300);
+    const urlDetails = page.locator("details").filter({
+      has: page.locator("summary", { hasText: /URLとアクセス情報|URLs and access information/u }),
+    });
+    await expect(urlDetails).not.toHaveAttribute("open");
+    await expect(urlDetails.locator("code")).toBeHidden();
+    await expect(page.getByRole("button", { name: /削除の確認|Review deletion/u })).toHaveCount(0);
+    await page.screenshot({ path: test.info().outputPath("overview-1180.png") });
+    await urlDetails.locator("summary").click();
+    await expect(urlDetails.locator("code")).toHaveText(PORTABLE_EXPECTATIONS.appUrl);
+    await expect(urlDetails.locator(".muted")).toBeVisible();
+    multipleSurfaces = true;
+    await page.reload({ waitUntil: "domcontentloaded" });
+    const namedOpen = header.getByRole("link", { name: "Open Control panel in a new tab" });
+    await expect(namedOpen).toBeVisible();
+    await expect(namedOpen).toContainText("Control panel");
+    await expect(namedOpen).toHaveAttribute("href", "https://apps.example.test/control");
+    await expect(header.locator(".tg-btn-primary")).toHaveCount(1);
+    await expect(urlDetails).not.toHaveAttribute("open");
+    await expect(header.getByRole("link", { name: "Open Documentation in a new tab" })).toHaveCount(0);
+    for (const width of [320, 375, 414, 768]) {
+      await page.setViewportSize({ width, height: 844 });
+      await expect(namedOpen).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+    }
+    await page.screenshot({ path: test.info().outputPath("overview-multiple-768.png") });
+    await page.setViewportSize({ width: 1180, height: 757 });
+    multipleSurfaces = false;
+    // Bookmarked /danger routes still reach the warning and the same delete flow.
+    await page.goto(`/workloads/${capsuleId}/danger`, { waitUntil: "domcontentloaded" });
+    await expect(page).toHaveURL(new RegExp(`/workloads/${capsuleId}/settings#delete$`, "u"));
+    const deletion = page.locator("details#delete");
+    await expect(deletion).toHaveAttribute("open", "");
+    await expect(deletion.getByRole("button", { name: /削除の確認|Review deletion/u })).toBeVisible();
+    await expect(deletion).toContainText(PORTABLE_EXPECTATIONS.appName);
+    await expect(page.getByRole("button", { name: /削除の確認|Review deletion/u })).toHaveCount(1);
+    await expect(header.getByRole("link", { name: /削除|Delete/u })).toHaveCount(0);
+    expect(seenMutations).toEqual([]);
+
+    await gotoDashboardDocument(page, `/workloads/${capsuleId}/deploys`);
+    const versionCard = page.locator(".tg-card").filter({
+      has: page.locator(".tg-card-title", { hasText: /^(取得元のバージョン|Source version)$/u }),
+    });
+    await expect(versionCard).toHaveCount(1);
+    const trackedRef = versionCard.locator("code", { hasText: PORTABLE_SOURCE_COMMIT });
+    const changeVersion = versionCard.locator("summary", { hasText: /^(バージョンを変更|Change version)$/u });
+    const updateReview = versionCard.getByRole("button", { name: /^(変更を確認|Review changes)$/u });
+    await expect(trackedRef).toBeVisible();
+    await expect(changeVersion).toBeVisible();
+    await expect(updateReview).toBeEnabled();
+    expect((await trackedRef.boundingBox())!.y).toBeLessThan((await changeVersion.boundingBox())!.y);
+    expect((await changeVersion.boundingBox())!.y).toBeLessThan((await updateReview.boundingBox())!.y);
+    const revision = versionCard.getByRole("textbox", { name: /ブランチ・タグ・コミット|Git ref/u, includeHidden: true });
+    await expect(revision).toBeHidden();
+    await changeVersion.click();
+    await expect(revision).toBeVisible();
+    await revision.fill("v1.2.3");
+    await expect(versionCard.getByRole("button", { name: /このバージョンを確認|Review this version/u })).toBeEnabled();
+    expect(seenMutations).toEqual([]);
+    await page.screenshot({ path: test.info().outputPath("updates-1180.png") });
+
+    const exportActions = versionCard.locator("details").filter({
+      has: page.locator("summary", { hasText: /^(必要なときだけ使う操作|Extra actions)$/u }),
+    });
+    await exportActions.locator("summary").click();
+    await expect(exportActions).toContainText(/ワークスペースの管理情報の一部|selected workspace management records/u);
+    await expect(exportActions).toContainText(/このデータの取り込み・復元には対応していません|This export cannot be imported or used to restore a service/u);
+    const createExport = exportActions.getByRole("button", { name: /^(管理情報の一部を書き出す|Create partial export)$/u });
+    for (const width of [320, 375, 414, 768]) {
+      await page.setViewportSize({ width, height: 844 });
+      await expect(createExport).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+    }
+    await createExport.click();
+    const exportNotice = versionCard.locator(".wa-notice");
+    await expect(exportNotice).toContainText(/管理情報の一部を書き出しました|Partial export created/u);
+    await expect(exportNotice).toContainText(/このデータの取り込み・復元には対応していません|This export cannot be imported or used to restore a service/u);
+    await expect(exportNotice.locator("code")).toBeHidden();
+    await expect(exportNotice.locator("summary")).toHaveText(/^(書き出し ID|Export ID)$/u);
+    expect(seenMutations).toEqual([`POST /api/v1/capsules/${capsuleId}/backups`]);
+    await page.screenshot({ path: test.info().outputPath("partial-export-768.png") });
+    await page.setViewportSize({ width: 1180, height: 757 });
+
     await gotoDashboardDocument(
       page,
       `/workloads/${capsuleId}/settings`,
     );
-    const region = page.getByLabel(/リージョン|Region/u);
+    const region = page.getByRole("textbox", { name: /^(リージョン|Region)$/u });
     await expect(region).toHaveValue("initial");
+    await expect(page.locator(".tg-card-title").filter({ hasText: /^(設定値|Settings)$/u })).toHaveCount(1);
+    await expect(page.locator("code", { hasText: /^region$/u })).toBeHidden();
+    const autoUpdate = page.locator("details").filter({
+      has: page.locator("summary", { hasText: /自動更新|Automatic updates/u }),
+    });
+    await expect(autoUpdate).not.toHaveAttribute("open");
+    expect((await region.boundingBox())!.y).toBeLessThan((await autoUpdate.boundingBox())!.y);
+    await expect(deletion).not.toHaveAttribute("open");
+    await page.screenshot({ path: test.info().outputPath("settings-1180.png") });
+    for (const width of [320, 375, 414, 768]) {
+      await page.setViewportSize({ width, height: 844 });
+      await expect(region).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+    }
+    await page.setViewportSize({ width: 1180, height: 757 });
     await region.fill("edited");
     await page
       .getByRole("button", { name: /変更を確認|Review changes/u })
@@ -2559,6 +3148,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       },
     ]);
     expect(seenMutations).toEqual([
+      `POST /api/v1/capsules/${capsuleId}/backups`,
       `POST /api/v1/capsules/${capsuleId}/configuration-plans`,
     ]);
     await expect(page).toHaveURL(new RegExp(`/runs/${planRunId}$`, "u"));

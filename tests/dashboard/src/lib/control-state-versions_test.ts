@@ -20,6 +20,7 @@ import {
   createStateVersionRollbackPlan,
   extractRunId,
   getStateVersion,
+  listActivity,
   listStateVersions,
   listWorkspaceCurrentStateVersions,
   type PublicStateVersion,
@@ -28,6 +29,7 @@ import {
 interface Captured {
   readonly url: string;
   readonly method: string;
+  readonly signal?: AbortSignal | null;
 }
 
 const realFetch = globalThis.fetch;
@@ -39,6 +41,7 @@ function stubFetch(body: unknown, status = 200): () => Captured {
     captured = {
       url: typeof input === "string" ? input : String(input),
       method: (init?.method ?? "GET").toUpperCase(),
+      signal: init?.signal,
     };
     return new Response(JSON.stringify(body), {
       status,
@@ -76,6 +79,37 @@ describe("listStateVersions", () => {
     expect(rows).toEqual([STATE_VERSION]);
   });
 
+  test("forwards an optional cancellation signal to the request", async () => {
+    const controller = new AbortController();
+    const captured = stubFetch({ stateVersions: [STATE_VERSION] });
+
+    await listStateVersions("capsule_1", { signal: controller.signal });
+
+    expect(captured().signal).toBe(controller.signal);
+  });
+
+  test("keeps the cancellation signal on every paginated request", async () => {
+    const controller = new AbortController();
+    const signals: (AbortSignal | null | undefined)[] = [];
+    let requests = 0;
+    globalThis.fetch = async (_input, init) => {
+      signals.push(init?.signal);
+      requests += 1;
+      const body =
+        requests === 1
+          ? { stateVersions: [], nextCursor: "next-page" }
+          : { stateVersions: [] };
+      return new Response(JSON.stringify(body), {
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    await listStateVersions("capsule_1", { signal: controller.signal });
+
+    expect(requests).toBe(2);
+    expect(signals).toEqual([controller.signal, controller.signal]);
+  });
+
   test("defaults to an empty list when the body omits `stateVersions`", async () => {
     stubFetch({});
     expect(await listStateVersions("capsule_1")).toEqual([]);
@@ -88,6 +122,18 @@ describe("listStateVersions", () => {
     expect("objectKey" in (row as object)).toBe(false);
     expect("digest" in (row as object)).toBe(false);
     expect("outputsPublic" in (row as object)).toBe(false);
+  });
+});
+
+describe("listActivity", () => {
+  test("forwards an optional cancellation signal to the request", async () => {
+    const controller = new AbortController();
+    const captured = stubFetch({ events: [] });
+
+    await listActivity("workspace_1", 100, { signal: controller.signal });
+
+    expect(captured().url).toBe("/api/v1/workspaces/workspace_1/activity?limit=100");
+    expect(captured().signal).toBe(controller.signal);
   });
 });
 

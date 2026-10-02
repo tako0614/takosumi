@@ -19,7 +19,6 @@ import {
   type JsonValue,
 } from "takosumi-contract";
 import Page from "../account/components/auth/Page.tsx";
-import AppFace from "../../components/AppFace.tsx";
 import { StoreBrowser } from "../store/StoreBrowser.tsx";
 import {
   Badge,
@@ -142,6 +141,7 @@ import {
 } from "./install-helpers.ts";
 import InstallExecution from "./InstallExecution.tsx";
 import "./install-view.css";
+import "./install-simplification.css";
 
 /** One scanned root-module candidate from the immutable SourceSnapshot index. */
 type InstallModuleCatalogEntry = Extract<
@@ -1904,21 +1904,27 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         </main>
       </Show>
       <Show when={!hasInstallRecoveryLocator(location.search)}>
-    <main class="iv-page">
-      <header class="iv-hero">
+    <main
+      class="iv-page"
+      classList={{
+        "iv-browse-page": phase() === "browse",
+        "iv-configure-page": phase() === "configure",
+      }}
+    >
+      <header
+        class="iv-hero iv-page-heading"
+        classList={{ "iv-configure-heading": phase() === "configure" }}
+      >
         <div>
-          <span class="iv-kicker">TAKOSUMI STORE</span>
-          <h1>{t("installStore.title")}</h1>
-          <p>{t("installStore.subtitle")}</p>
+          <h1>
+            {phase() === "configure"
+              ? selectedTitle()
+              : t("installStore.title")}
+          </h1>
+          <Show when={phase() === "configure"}>
+            <p>{t("installStore.configureHint")}</p>
+          </Show>
         </div>
-        <Show
-          when={
-            phase() !== "browse" &&
-            phase() !== "done"
-          }
-        >
-          <Badge tone="info">{selectedTitle()}</Badge>
-        </Show>
       </header>
 
       <Show when={appHandoff}>
@@ -1941,32 +1947,39 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         )}
       </Show>
 
-      <nav
-        class="iv-steps"
-        aria-label={t("installStore.stepsLabel")}
-        data-testid="install-steps"
+      <Show
+        when={
+          phase() !== "browse" &&
+          phase() !== "configure" &&
+          phase() !== "done"
+        }
       >
-        <ol>
-          <For each={installStepProgress()}>
-            {(step) => (
-              <li
-                data-install-step={step.id}
-                data-state={step.state}
-                aria-current={step.state === "active" ? "step" : undefined}
-              >
-                <span>{installStepLabel(step.id)}</span>
-              </li>
-            )}
-          </For>
-        </ol>
-      </nav>
+        <nav
+          class="iv-steps"
+          aria-label={t("installStore.stepsLabel")}
+          data-testid="install-steps"
+        >
+          <ol>
+            <For each={installStepProgress()}>
+              {(step) => (
+                <li
+                  data-install-step={step.id}
+                  data-state={step.state}
+                  aria-current={step.state === "active" ? "step" : undefined}
+                >
+                  <span>{installStepLabel(step.id)}</span>
+                </li>
+              )}
+            </For>
+          </ol>
+        </nav>
+      </Show>
 
       <Show when={phase() === "browse"}>
-        <section class="iv-catalogue" aria-labelledby="iv-catalogue-title">
-          <div class="iv-section-head">
-            <h2 id="iv-catalogue-title">{t("installStore.browseTitle")}</h2>
-            <p>{t("installStore.browseHint")}</p>
-          </div>
+        <section
+          class="iv-catalogue iv-catalogue-browse"
+          aria-label={t("installStore.browseTitle")}
+        >
           <StoreBrowser
             locale={locale()}
             onConfigure={chooseListing}
@@ -1989,6 +2002,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                 value={gitUrl()}
                 onInput={(event) => setGitUrl(event.currentTarget.value)}
                 placeholder="https://github.com/example/service.git"
+                aria-label={t("installStore.sourceUrl")}
                 spellcheck={false}
               />
               <Button type="submit" variant="secondary">
@@ -2071,13 +2085,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           >
             {t("installStore.back")}
           </Button>
-          <div class="iv-app-summary">
-            <AppFace name={selectedTitle()} iconUrl={listing()?.iconUrl} />
-            <div>
-              <h2>{selectedTitle()}</h2>
-              <p>{t("installStore.configureHint")}</p>
-            </div>
-          </div>
           {selectedModuleDetails()}
           <Show when={installModulesLoading()}>
             <aside class="iv-setup-note" role="status">

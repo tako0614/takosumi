@@ -36,7 +36,7 @@ mock.module(resolve(root, "dashboard/src/components/ui/index.ts"), () => ({
   Spinner: noop,
 }));
 
-const { boundedRead } = await import(
+const { boundedRead, readInstallReadiness } = await import(
   resolve(root, "dashboard/src/views/new/InstallExecution.tsx")
 );
 const { installRunStatusTone } = await import(
@@ -78,17 +78,31 @@ test("waiting approval exposes technical run details before approval", () => {
   expect(waitingApproval).toContain('t("installStore.approve")');
 });
 
-test("post-apply readiness fails closed when activity cannot be read", () => {
-  expect(source).toContain("listActivity(workspaceId, 100)");
+test("readiness read failures stay retryable without swallowing auth or cancellation", () => {
+  expect(source).toContain(
+    "readers.listActivity(workspaceId, 100, { signal: retry.signal })",
+  );
   expect(source).not.toContain("listActivity(workspaceId, 100).catch(() => [])");
-  expect(source).toContain('setError(t("installStore.readinessFailed"))');
-  expect(source).toContain("if (readiness.error) {");
-  expect(source).toContain("return;");
-  expect(source).toContain("!readiness.error");
-  expect(source).toContain("readinessFailure()");
+  expect(source).toContain('kind: "read-failed"');
+  expect(source).toContain("isAbortError(cause)");
+  expect(source).toContain("cause instanceof ControlApiError && cause.status === 401");
+  expect(source).toContain("cause instanceof ControlApiError || cause instanceof TypeError");
+  expect(source).toContain("throw cause");
+  expect(source).toContain("const readinessFailure = createMemo(() => {");
+  expect(source).toContain("if (readiness.loading) return undefined;");
   expect(source).toContain("onClick={retryReadiness}");
   expect(source).toContain('t("common.details")');
   expect(source).toContain('t("installStore.runDetails")');
+  expect(source).toContain("!readinessFailure()");
+
+  const readinessEffect = source.match(
+    /createEffect\(\(\) => \{\n    if \(!readinessKey\(\)\) return;([\s\S]*?)\n  \}\);/,
+  )?.[1];
+  expect(readinessEffect).toBeDefined();
+  expect(readinessEffect?.indexOf("if (readinessFailure()) return;")).toBeLessThan(
+    readinessEffect?.indexOf('if (state === "ready") {'),
+  );
+  expect(readinessEffect).toContain("props.onDone();");
 });
 
 test("boundedRead retries transient failures and stops at its finite budget", async () => {
@@ -122,6 +136,69 @@ test("boundedRead retries transient failures and stops at its finite budget", as
     ),
   ).rejects.toThrow("permanent");
   expect(permanentAttempts).toBe(3);
+});
+
+test("readInstallReadiness forwards one cancellation signal to both readers", async () => {
+  const controller = new AbortController();
+  let stateVersionsSignal: AbortSignal | undefined;
+  let activitySignal: AbortSignal | undefined;
+
+  const readiness = await readInstallReadiness(
+    JSON.stringify(["workspace_1", "capsule_1", "run_apply_1"]),
+    {
+      listStateVersions: async (_capsuleId, options) => {
+        stateVersionsSignal = options?.signal;
+        return [];
+      },
+      listActivity: async (_workspaceId, _limit, options) => {
+        activitySignal = options?.signal;
+        return [];
+      },
+    },
+    { signal: controller.signal },
+  );
+
+  expect(readiness).toBe("settling");
+  expect(stateVersionsSignal).toBe(controller.signal);
+  expect(activitySignal).toBe(controller.signal);
+});
+
+test("boundedRead propagates AbortError without retrying or delaying", async () => {
+  const abortError = new DOMException("Request aborted", "AbortError");
+  let attempts = 0;
+  const delays: number[] = [];
+
+  await expect(
+    boundedRead(
+      async () => {
+        attempts += 1;
+        throw abortError;
+      },
+      {
+        attempts: 3,
+        delayMs: 17,
+        sleep: async (delay) => delays.push(delay),
+      },
+    ),
+  ).rejects.toBe(abortError);
+
+  expect(attempts).toBe(1);
+  expect(delays).toEqual([]);
+
+  const controller = new AbortController();
+  const alreadyAborted = new DOMException("Request aborted", "AbortError");
+  controller.abort(alreadyAborted);
+  let skippedAttempts = 0;
+  await expect(
+    boundedRead(
+      async () => {
+        skippedAttempts += 1;
+        return "unexpected";
+      },
+      { signal: controller.signal },
+    ),
+  ).rejects.toBe(alreadyAborted);
+  expect(skippedAttempts).toBe(0);
 });
 
 test("install Run keeps a fallback read until a terminal state", () => {

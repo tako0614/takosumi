@@ -1,0 +1,36 @@
+.iv-page.iv-browse-page {
+  padding-top: var(--tg-s-5);
+}
+
+.iv-browse-page .iv-page-heading {
+  margin-bottom: var(--tg-s-4);
+}
+
+.iv-browse-page .iv-page-heading h1 {
+  font-size: clamp(1.8rem, 4vw, 2.5rem);
+  line-height: 1.1;
+}
+
+.iv-page .iv-catalogue.iv-catalogue-browse {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.iv-configure-page .iv-configure-heading {
+  width: min(100%, 46rem);
+  margin: 0 auto var(--tg-s-4);
+}
+
+.iv-configure-heading h1 {
+  font-size: clamp(1.6rem, 4vw, 2.4rem);
+  line-height: 1.1;
+}
+
+@media (max-width: 39.99rem) {
+  .iv-page.iv-browse-page {
+    padding-top: var(--tg-s-4);
+  }
+}

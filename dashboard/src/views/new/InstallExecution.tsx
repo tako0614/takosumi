@@ -9,6 +9,7 @@ import {
 import { AlertCircle, ExternalLink, ShieldAlert } from "lucide-solid";
 import {
   approveRun,
+  ControlApiError,
   createApplyRun,
   getRun,
   listActivity,
@@ -55,11 +56,35 @@ export interface BoundedReadOptions {
   readonly attempts?: number;
   readonly delayMs?: number;
   readonly sleep?: (delayMs: number) => Promise<void>;
+  readonly signal?: AbortSignal;
 }
 
 export interface InstallReadinessReaders {
-  readonly listStateVersions: typeof listStateVersions;
-  readonly listActivity: typeof listActivity;
+  readonly listStateVersions: (
+    capsuleId: string,
+    opts?: { readonly signal?: AbortSignal },
+  ) => ReturnType<typeof listStateVersions>;
+  readonly listActivity: (
+    workspaceId: string,
+    limit?: number,
+    opts?: { readonly signal?: AbortSignal },
+  ) => ReturnType<typeof listActivity>;
+}
+
+type InstallReadinessResult =
+  | { readonly kind: "state"; readonly value: StateVersionReadiness }
+  | { readonly kind: "read-failed"; readonly cause: unknown };
+
+function isAbortError(cause: unknown): boolean {
+  return (
+    (cause instanceof DOMException && cause.name === "AbortError") ||
+    (cause instanceof Error && cause.name === "AbortError")
+  );
+}
+
+function throwReadAbort(signal: AbortSignal): never {
+  if (isAbortError(signal.reason)) throw signal.reason;
+  throw new DOMException("Request was aborted.", "AbortError");
 }
 
 const defaultReadinessReaders: InstallReadinessReaders = {
@@ -90,9 +115,12 @@ export async function boundedRead<T>(
       new Promise<void>((resolve) => globalThis.setTimeout(resolve, duration)));
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (options.signal?.aborted) throwReadAbort(options.signal);
     try {
       return await read();
     } catch (cause) {
+      if (isAbortError(cause)) throw cause;
+      if (options.signal?.aborted) throwReadAbort(options.signal);
       lastError = cause;
       if (attempt + 1 < attempts) await sleep(delayMs);
     }
@@ -121,8 +149,8 @@ export async function readInstallReadiness(
   ];
   return await boundedRead(async () => {
     const [versions, activity] = await Promise.all([
-      readers.listStateVersions(capsuleId),
-      readers.listActivity(workspaceId, 100),
+      readers.listStateVersions(capsuleId, { signal: retry.signal }),
+      readers.listActivity(workspaceId, 100, { signal: retry.signal }),
     ]);
     return stateVersionReadinessAfterApply(
       versions.find((version) => version.createdByRunId === applyRunId),
@@ -166,23 +194,66 @@ export default function InstallExecution(props: Props) {
       ? JSON.stringify([latest.workspaceId, props.capsuleId, latest.id])
       : null;
   };
+  let activeReadinessController: AbortController | undefined;
   const [readiness, { refetch: refetchReadiness }] = createResource(
     readinessKey,
-    (key) => readInstallReadiness(key),
+    async (key): Promise<InstallReadinessResult> => {
+      activeReadinessController?.abort();
+      const controller = new AbortController();
+      activeReadinessController = controller;
+      try {
+        return {
+          kind: "state",
+          value: await readInstallReadiness(key, defaultReadinessReaders, {
+            signal: controller.signal,
+          }),
+        };
+      } catch (cause) {
+        // controlFetch already redirects expired sessions to sign-in. Keep
+        // that authority transition (and resource cancellation) intact; only
+        // ordinary readback failures are represented as local retry state.
+        if (
+          isAbortError(cause) ||
+          (cause instanceof ControlApiError && cause.status === 401)
+        ) {
+          throw cause;
+        }
+        if (cause instanceof ControlApiError || cause instanceof TypeError) {
+          return { kind: "read-failed", cause };
+        }
+        throw cause;
+      } finally {
+        if (activeReadinessController === controller) {
+          activeReadinessController = undefined;
+        }
+      }
+    },
   );
+  createEffect(() => {
+    if (readinessKey() !== null) return;
+    activeReadinessController?.abort();
+    activeReadinessController = undefined;
+  });
+  onCleanup(() => activeReadinessController?.abort());
+
+  const readinessState = () => {
+    const result = readiness.latest;
+    return result?.kind === "state" ? result.value : undefined;
+  };
 
   const readinessFailure = createMemo(() => {
-    const cause = readiness.error;
-    return cause ? friendlyError(cause, t) : undefined;
+    if (readiness.loading) return undefined;
+    const result = readiness.latest;
+    return result?.kind === "read-failed"
+      ? friendlyError(result.cause, t)
+      : undefined;
   });
 
   createEffect(() => {
     if (!readinessKey()) return;
-    if (readiness.error) {
-      setError(t("installStore.readinessFailed"));
-      return;
-    }
-    const state = readiness.latest;
+    if (readiness.loading) return;
+    if (readinessFailure()) return;
+    const state = readinessState();
     if (state === "ready") {
       props.onDone();
       return;
@@ -297,7 +368,7 @@ export default function InstallExecution(props: Props) {
                 tone={installRunStatusTone(
                   current().type,
                   current().status,
-                  readiness.latest,
+                  readinessState(),
                 )}
               >
                 {current().status}
@@ -404,8 +475,8 @@ export default function InstallExecution(props: Props) {
               when={
                 current().type === "apply" &&
                 !failed() &&
-                !readiness.error &&
-                readiness.latest !== "activation_failed"
+                !readinessFailure() &&
+                readinessState() !== "activation_failed"
               }
             >
               <div class="iv-status" role="status" aria-live="polite">
@@ -499,7 +570,7 @@ export default function InstallExecution(props: Props) {
         )}
       </Show>
 
-      <Show when={error() && !readiness.error}>
+      <Show when={error() && !readinessFailure()}>
         {(message) => (
           <div class="iv-error" role="alert">
             <AlertCircle size={18} aria-hidden="true" />
