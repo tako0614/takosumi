@@ -161,6 +161,29 @@ export const FIXTURE_EXECUTION_EVIDENCE_AUTHORITY = {
   executorArtifact: { digest: `sha256:${"c".repeat(64)}`, immutable: true },
 } as const;
 
+/**
+ * Preserve explicit fixture overrides verbatim; normalize only the derived
+ * default commit for a provider-failed outcome.
+ */
+export function fixtureExecutionEvidenceCommit(
+  outcome: RunExecutionEvidence["outcome"],
+  defaultCommit: RunExecutionCommit,
+  override?: RunExecutionCommit,
+): RunExecutionCommit {
+  if (override !== undefined) return override;
+  if (outcome !== "provider_failed_state_persisted") return defaultCommit;
+  if (
+    !("stateVersionId" in defaultCommit) ||
+    typeof defaultCommit.stateVersionId !== "string" ||
+    defaultCommit.stateVersionId.length === 0
+  ) {
+    throw new Error(
+      "fixture provider-failed outcome requires a retained state version",
+    );
+  }
+  return { stateVersionId: defaultCommit.stateVersionId };
+}
+
 /** Build the exact evidence a successful fixture runner must return. */
 export function fixtureExecutionEvidence(
   job: OpenTofuApplyJob | OpenTofuDestroyJob,
@@ -177,12 +200,18 @@ export function fixtureExecutionEvidence(
   if (!job.planRun.planDigest) {
     throw new Error("fixture runner plan is missing plan digest");
   }
+  const outcome = options.outcome ?? "committed";
+  const evidenceCommit = fixtureExecutionEvidenceCommit(
+    outcome,
+    job.executionEvidenceCommit,
+    options.commit,
+  );
   return {
     format: RUN_EXECUTION_EVIDENCE_CONTRACT,
     runId: job.applyRun.id,
     planRunId: job.planRun.id,
     action,
-    outcome: options.outcome ?? "committed",
+    outcome,
     authority: {
       ...FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
       runnerProfileId: job.runnerProfile.id,
@@ -195,12 +224,7 @@ export function fixtureExecutionEvidence(
       digest: job.planRun.planDigest as `sha256:${string}`,
       artifactDigest: job.planArtifact.digest as `sha256:${string}`,
     },
-    commit:
-      options.commit ??
-      (options.outcome === "provider_failed_state_persisted" &&
-      "stateVersionId" in job.executionEvidenceCommit
-        ? { stateVersionId: job.executionEvidenceCommit.stateVersionId }
-        : job.executionEvidenceCommit),
+    commit: evidenceCommit,
     receipt: { operationId: job.applyRun.id, version: 1, fence: 1 },
     committedAt: "2026-06-06T00:00:00.000Z",
   };
@@ -299,6 +323,7 @@ export async function seedCapsuleModel(
     workspaceId,
     name: "Default",
     slug: "default",
+    projectJson: {},
     createdAt: now,
     updatedAt: now,
   };
@@ -337,7 +362,6 @@ export async function seedCapsuleModel(
   }
   const installConfig: InstallConfig = {
     id: options.installConfigId ?? "cfg_fixture",
-    workspaceId,
     name: `${name}-config`,
     variableMapping: {},
     outputAllowlist: {
@@ -414,7 +438,6 @@ export async function seedProviderConnections(
         declaredEnv: true,
       },
       secretPartition: "provider-credentials",
-      kind: providerConnectionKind(shortName),
       status: "verified",
       materialization,
       envNames: providerEnvNames(provider),
@@ -609,15 +632,6 @@ function providerEnvNames(provider: string): readonly string[] {
   if (provider.includes("integrations/github")) return ["GITHUB_TOKEN"];
   if (provider.includes("hashicorp/kubernetes")) return ["KUBE_CONFIG_PATH"];
   return [`${providerShortName(provider).toUpperCase()}_TOKEN`];
-}
-
-function providerConnectionKind(shortName: string): ProviderConnection["kind"] {
-  if (shortName === "cloudflare") return "cloudflare_api_token";
-  if (shortName === "aws") return "aws_assume_role";
-  if (shortName === "google" || shortName === "gcp") {
-    return "gcp_service_account_json";
-  }
-  return "generic_env_provider";
 }
 
 function sanitizeId(value: string): string {
