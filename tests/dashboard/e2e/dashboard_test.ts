@@ -4,6 +4,7 @@ import {
   test,
   type Locator,
   type Page,
+  type Route,
 } from "@playwright/test";
 import {
   PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
@@ -657,11 +658,180 @@ async function stubProviderDestinationFixture(
   return state;
 }
 
+type ReadinessRouteHandler = (route: Route) => Promise<void>;
+
+interface ReadinessBrowserFixture {
+  readonly applyPosts: string[];
+  readonly readinessRequests: string[];
+  readonly originatingInstallPath: string;
+  readonly startApply: () => Promise<void>;
+}
+
+/** Drive the real InstallExecution route with synthetic external API replies. */
+async function startReadinessBrowserFixture(
+  page: Page,
+  onReadinessRead: ReadinessRouteHandler,
+): Promise<ReadinessBrowserFixture> {
+  const applyPosts: string[] = [];
+  const readinessRequests: string[] = [];
+  let originatingInstallPath = "";
+  await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+  await stubProviderDestinationFixture(page, [], []);
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (
+      path === "/api/v1/runs/run_provider_plan_e2e/apply" &&
+      request.method() === "POST"
+    ) {
+      applyPosts.push(path);
+      return route.fulfill({ json: { run: {
+        id: "run_provider_apply_e2e",
+        workspaceId: "ws_alpha",
+        capsuleId: "cap_provider_destination_e2e",
+        type: "apply",
+        status: "succeeded",
+        createdBy: "portable-e2e",
+        createdAt: "2026-08-01T00:00:00.000Z",
+      } } });
+    }
+    if (path === "/api/v1/runs/run_provider_apply_e2e") {
+      return route.fulfill({ json: { run: {
+        id: "run_provider_apply_e2e",
+        workspaceId: "ws_alpha",
+        capsuleId: "cap_provider_destination_e2e",
+        type: "apply",
+        status: "succeeded",
+        createdBy: "portable-e2e",
+        createdAt: "2026-08-01T00:00:00.000Z",
+      } } });
+    }
+    if (path === "/api/v1/runs/run_provider_apply_e2e/stream") {
+      return route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: "",
+      });
+    }
+    if (path === "/api/v1/capsules/cap_provider_destination_e2e/state-versions") {
+      readinessRequests.push(`${request.method()} ${path}`);
+      return onReadinessRead(route);
+    }
+    if (path === "/api/v1/workspaces/ws_alpha/activity") {
+      return route.fulfill({ json: { events: [] } });
+    }
+    return route.fallback();
+  });
+  return {
+    applyPosts,
+    readinessRequests,
+    get originatingInstallPath() {
+      return originatingInstallPath;
+    },
+    startApply: async () => {
+      await page.goto(
+        `/new?git=${encodeURIComponent("https://github.com/example/cloudflare-service.git")}` +
+          `&ref=${PORTABLE_SOURCE_COMMIT}&path=.&name=cloudflare-service`,
+        { waitUntil: "domcontentloaded" },
+      );
+      await page.getByRole("button", { name: "Add", exact: true }).click();
+      await expect(page.locator(".iv-execution")).toBeVisible();
+      const installUrl = new URL(page.url());
+      originatingInstallPath = `${installUrl.pathname}${installUrl.search}`;
+      await page
+        .locator(".iv-execution")
+        .getByRole("button", { name: "Add", exact: true })
+        .click();
+      await expect.poll(() => applyPosts.length).toBe(1);
+    },
+  };
+}
+
 test.describe("Takosumi dashboard browser surface", () => {
   test.skip(
     mode === "public-live",
     "public-live is an unauthenticated read-only profile",
   );
+
+  test("readiness 401 follows sign-in return without reopening Apply", async ({ page }) => {
+    test.skip(mode !== "portable", "synthetic readiness auth is portable-only");
+    const errors = pageErrors(page);
+    const fixture = await startReadinessBrowserFixture(page, async (route) =>
+      route.fulfill({ status: 401, json: { error: "unauthorized" } }),
+    );
+    await fixture.startApply();
+
+    await expect(page.locator(".sign-in-return-context")).toBeVisible();
+    await expect(page).toHaveURL(/\/sign-in\?return=/u);
+    expect(new URL(page.url()).searchParams.get("return")).toBe(
+      fixture.originatingInstallPath,
+    );
+    await expect(page.getByRole("link", { name: "Open service" })).toHaveCount(0);
+    await expect(page.locator(".iv-execution")).toHaveCount(0);
+    expect(fixture.applyPosts).toHaveLength(1);
+    expect(fixture.readinessRequests.length).toBeGreaterThan(0);
+    await assertNoPageErrors(errors);
+  });
+
+  test("late readiness network failure after navigation stays off the new route", async ({ page }) => {
+    test.skip(mode !== "portable", "synthetic readiness cancellation is portable-only");
+    const errors = pageErrors(page);
+    let markReadStarted!: () => void;
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    let abortRead!: () => void;
+    const abortSignal = new Promise<void>((resolve) => {
+      abortRead = resolve;
+    });
+    let readAborted = false;
+    const fixture = await startReadinessBrowserFixture(page, async (route) => {
+      markReadStarted();
+      await abortSignal;
+      await route.abort("failed");
+      readAborted = true;
+    });
+    await fixture.startApply();
+    await readStarted;
+    await expect(page.getByRole("link", { name: "Open service" })).toHaveCount(0);
+
+    await page.locator('a[href="/settings"]').first().click();
+    await expect(page).toHaveURL(/\/settings$/u);
+    await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+    // This aborts the outstanding browser request after InstallExecution has
+    // unmounted; it does not exercise its DOMException AbortError classifier.
+    abortRead();
+    await expect.poll(() => readAborted).toBe(true);
+
+    await expect(page.locator(".iv-execution")).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Something went wrong" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Open service" })).toHaveCount(0);
+    expect(fixture.applyPosts).toHaveLength(1);
+    await assertNoPageErrors(errors);
+  });
+
+  test("unexpected readiness errors fail closed without showing Open", async ({ page }) => {
+    test.skip(mode !== "portable", "synthetic readiness errors are portable-only");
+    const errors = pageErrors(page);
+    await page.addInitScript(() => {
+      const fetchNative = window.fetch.bind(window);
+      window.fetch = (input, init) =>
+        String(input).includes("/capsules/cap_provider_destination_e2e/state-versions")
+          ? Promise.reject(new Error("synthetic unexpected readiness failure"))
+          : fetchNative(input, init);
+    });
+    const fixture = await startReadinessBrowserFixture(page, async (route) =>
+      route.fulfill({ json: { stateVersions: [] } }),
+    );
+    await fixture.startApply();
+
+    await expect(page.getByRole("heading", { name: "Something went wrong" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open service" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
+    expect(fixture.applyPosts).toHaveLength(1);
+    expect(fixture.readinessRequests).toHaveLength(0);
+    await assertNoPageErrors(errors);
+  });
 
   test("Store install waits for apply-linked readiness before opening", async ({ page }) => {
     test.skip(mode !== "portable", "synthetic install lifecycle is portable-only");
