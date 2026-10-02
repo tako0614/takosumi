@@ -36,7 +36,7 @@ mock.module(resolve(root, "dashboard/src/components/ui/index.ts"), () => ({
   Spinner: noop,
 }));
 
-const { boundedRead } = await import(
+const { boundedRead, readInstallReadiness } = await import(
   resolve(root, "dashboard/src/views/new/InstallExecution.tsx")
 );
 const { installRunStatusTone } = await import(
@@ -79,7 +79,9 @@ test("waiting approval exposes technical run details before approval", () => {
 });
 
 test("readiness read failures stay retryable without swallowing auth or cancellation", () => {
-  expect(source).toContain("listActivity(workspaceId, 100)");
+  expect(source).toContain(
+    "readers.listActivity(workspaceId, 100, { signal: retry.signal })",
+  );
   expect(source).not.toContain("listActivity(workspaceId, 100).catch(() => [])");
   expect(source).toContain('kind: "read-failed"');
   expect(source).toContain("isAbortError(cause)");
@@ -134,6 +136,69 @@ test("boundedRead retries transient failures and stops at its finite budget", as
     ),
   ).rejects.toThrow("permanent");
   expect(permanentAttempts).toBe(3);
+});
+
+test("readInstallReadiness forwards one cancellation signal to both readers", async () => {
+  const controller = new AbortController();
+  let stateVersionsSignal: AbortSignal | undefined;
+  let activitySignal: AbortSignal | undefined;
+
+  const readiness = await readInstallReadiness(
+    JSON.stringify(["workspace_1", "capsule_1", "run_apply_1"]),
+    {
+      listStateVersions: async (_capsuleId, options) => {
+        stateVersionsSignal = options?.signal;
+        return [];
+      },
+      listActivity: async (_workspaceId, _limit, options) => {
+        activitySignal = options?.signal;
+        return [];
+      },
+    },
+    { signal: controller.signal },
+  );
+
+  expect(readiness).toBe("settling");
+  expect(stateVersionsSignal).toBe(controller.signal);
+  expect(activitySignal).toBe(controller.signal);
+});
+
+test("boundedRead propagates AbortError without retrying or delaying", async () => {
+  const abortError = new DOMException("Request aborted", "AbortError");
+  let attempts = 0;
+  const delays: number[] = [];
+
+  await expect(
+    boundedRead(
+      async () => {
+        attempts += 1;
+        throw abortError;
+      },
+      {
+        attempts: 3,
+        delayMs: 17,
+        sleep: async (delay) => delays.push(delay),
+      },
+    ),
+  ).rejects.toBe(abortError);
+
+  expect(attempts).toBe(1);
+  expect(delays).toEqual([]);
+
+  const controller = new AbortController();
+  const alreadyAborted = new DOMException("Request aborted", "AbortError");
+  controller.abort(alreadyAborted);
+  let skippedAttempts = 0;
+  await expect(
+    boundedRead(
+      async () => {
+        skippedAttempts += 1;
+        return "unexpected";
+      },
+      { signal: controller.signal },
+    ),
+  ).rejects.toBe(alreadyAborted);
+  expect(skippedAttempts).toBe(0);
 });
 
 test("install Run keeps a fallback read until a terminal state", () => {
