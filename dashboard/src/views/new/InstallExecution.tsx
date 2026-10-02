@@ -9,6 +9,7 @@ import {
 import { AlertCircle, ExternalLink, ShieldAlert } from "lucide-solid";
 import {
   approveRun,
+  ControlApiError,
   createApplyRun,
   getRun,
   listActivity,
@@ -60,6 +61,17 @@ export interface BoundedReadOptions {
 export interface InstallReadinessReaders {
   readonly listStateVersions: typeof listStateVersions;
   readonly listActivity: typeof listActivity;
+}
+
+type InstallReadinessResult =
+  | { readonly kind: "state"; readonly value: StateVersionReadiness }
+  | { readonly kind: "read-failed"; readonly cause: unknown };
+
+function isAbortError(cause: unknown): boolean {
+  return (
+    (cause instanceof DOMException && cause.name === "AbortError") ||
+    (cause instanceof Error && cause.name === "AbortError")
+  );
 }
 
 const defaultReadinessReaders: InstallReadinessReaders = {
@@ -168,21 +180,45 @@ export default function InstallExecution(props: Props) {
   };
   const [readiness, { refetch: refetchReadiness }] = createResource(
     readinessKey,
-    (key) => readInstallReadiness(key),
+    async (key): Promise<InstallReadinessResult> => {
+      try {
+        return { kind: "state", value: await readInstallReadiness(key) };
+      } catch (cause) {
+        // controlFetch already redirects expired sessions to sign-in. Keep
+        // that authority transition (and resource cancellation) intact; only
+        // ordinary readback failures are represented as local retry state.
+        if (
+          isAbortError(cause) ||
+          (cause instanceof ControlApiError && cause.status === 401)
+        ) {
+          throw cause;
+        }
+        if (cause instanceof ControlApiError || cause instanceof TypeError) {
+          return { kind: "read-failed", cause };
+        }
+        throw cause;
+      }
+    },
   );
 
+  const readinessState = () => {
+    const result = readiness.latest;
+    return result?.kind === "state" ? result.value : undefined;
+  };
+
   const readinessFailure = createMemo(() => {
-    const cause = readiness.error;
-    return cause ? friendlyError(cause, t) : undefined;
+    if (readiness.loading) return undefined;
+    const result = readiness.latest;
+    return result?.kind === "read-failed"
+      ? friendlyError(result.cause, t)
+      : undefined;
   });
 
   createEffect(() => {
     if (!readinessKey()) return;
-    if (readiness.error) {
-      setError(t("installStore.readinessFailed"));
-      return;
-    }
-    const state = readiness.latest;
+    if (readiness.loading) return;
+    if (readinessFailure()) return;
+    const state = readinessState();
     if (state === "ready") {
       props.onDone();
       return;
@@ -297,7 +333,7 @@ export default function InstallExecution(props: Props) {
                 tone={installRunStatusTone(
                   current().type,
                   current().status,
-                  readiness.latest,
+                  readinessState(),
                 )}
               >
                 {current().status}
@@ -404,8 +440,8 @@ export default function InstallExecution(props: Props) {
               when={
                 current().type === "apply" &&
                 !failed() &&
-                !readiness.error &&
-                readiness.latest !== "activation_failed"
+                !readinessFailure() &&
+                readinessState() !== "activation_failed"
               }
             >
               <div class="iv-status" role="status" aria-live="polite">
@@ -499,7 +535,7 @@ export default function InstallExecution(props: Props) {
         )}
       </Show>
 
-      <Show when={error() && !readiness.error}>
+      <Show when={error() && !readinessFailure()}>
         {(message) => (
           <div class="iv-error" role="alert">
             <AlertCircle size={18} aria-hidden="true" />
