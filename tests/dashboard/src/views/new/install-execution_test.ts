@@ -78,17 +78,29 @@ test("waiting approval exposes technical run details before approval", () => {
   expect(waitingApproval).toContain('t("installStore.approve")');
 });
 
-test("post-apply readiness fails closed when activity cannot be read", () => {
+test("readiness read failures stay retryable without swallowing auth or cancellation", () => {
   expect(source).toContain("listActivity(workspaceId, 100)");
   expect(source).not.toContain("listActivity(workspaceId, 100).catch(() => [])");
-  expect(source).toContain('setError(t("installStore.readinessFailed"))');
-  expect(source).toContain("if (readiness.error) {");
-  expect(source).toContain("return;");
-  expect(source).toContain("!readiness.error");
-  expect(source).toContain("readinessFailure()");
+  expect(source).toContain('kind: "read-failed"');
+  expect(source).toContain("isAbortError(cause)");
+  expect(source).toContain("cause instanceof ControlApiError && cause.status === 401");
+  expect(source).toContain("cause instanceof ControlApiError || cause instanceof TypeError");
+  expect(source).toContain("throw cause");
+  expect(source).toContain("const readinessFailure = createMemo(() => {");
+  expect(source).toContain("if (readiness.loading) return undefined;");
   expect(source).toContain("onClick={retryReadiness}");
   expect(source).toContain('t("common.details")');
   expect(source).toContain('t("installStore.runDetails")');
+  expect(source).toContain("!readinessFailure()");
+
+  const readinessEffect = source.match(
+    /createEffect\(\(\) => \{\n    if \(!readinessKey\(\)\) return;([\s\S]*?)\n  \}\);/,
+  )?.[1];
+  expect(readinessEffect).toBeDefined();
+  expect(readinessEffect?.indexOf("if (readinessFailure()) return;")).toBeLessThan(
+    readinessEffect?.indexOf('if (state === "ready") {'),
+  );
+  expect(readinessEffect).toContain("props.onDone();");
 });
 
 test("boundedRead retries transient failures and stops at its finite budget", async () => {
