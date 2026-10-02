@@ -19,10 +19,16 @@ import { PartitionedSecretBoundaryCrypto } from "../../core/adapters/secret-stor
 import { createTakosumiService } from "../../core/bootstrap.ts";
 import { InMemoryOpenTofuControlStore } from "../../core/domains/deploy-control/store.ts";
 import {
+  assertSavedPlanMatchesState,
+  parseOpenTofuStateMetadata,
+  type OpenTofuStateMetadata,
+} from "../../core/shared/open-tofu-state-metadata.ts";
+import {
   createFileOpenTofuStateArtifactStore,
   createFileSourceArchiveStore,
   createHttpOpenTofuRunner,
   createLocalOpenTofuRunnerProfile,
+  type LocalOpenTofuStateArtifact,
 } from "../../deploy/node-postgres/src/local-opentofu-runner.ts";
 import {
   FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
@@ -30,6 +36,7 @@ import {
 } from "../helpers/deploy-control/model_fixture.ts";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { SourceSnapshot } from "takosumi-contract/sources";
+import type { PublicStateVersion, StateVersion } from "takosumi-contract/state-versions";
 
 const IMAGE_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 const ORIGIN = "https://local-proof.example.test";
@@ -41,6 +48,48 @@ const HTTP_TIMEOUT_MS = 25_000;
 const MAX_RUNNER_RESPONSE_BYTES = 256 * 1024;
 const MAX_RUNNER_ARTIFACT_BYTES = 8 * 1024 * 1024;
 const OWNER_LABEL = "takosumi.local-core-http-proof.owner";
+
+export interface SavedPlanStateMetadataReceipt {
+  /** Run ID used by the runner HTTP metadata route (ApplyRun during preflight). */
+  readonly runnerRunId: string;
+  readonly planDigest: string;
+  readonly lineage: string;
+  readonly serial: number;
+}
+
+export function assertUpdatePlanStateMetadataReceipt(input: {
+  readonly runnerRunId: string;
+  readonly applyRunPlanRunId: string;
+  readonly planRunId: string;
+  readonly planArtifact: { readonly kind: string; readonly ref: string; readonly digest: string } | undefined;
+  readonly planDigest: string;
+  readonly priorStateBytes: Uint8Array;
+  readonly receipt: SavedPlanStateMetadataReceipt | undefined;
+}): void {
+  const prior = parseOpenTofuStateMetadata(input.priorStateBytes);
+  const receipt = input.receipt;
+  if (
+    !prior.lineage || prior.serial < 1 ||
+    input.applyRunPlanRunId !== input.planRunId ||
+    !input.planArtifact || input.planArtifact.kind !== "runner-local" ||
+    input.planArtifact.ref !== `runner-local://${input.planRunId}/tfplan` ||
+    input.planArtifact.digest !== input.planDigest ||
+    !receipt || receipt.runnerRunId !== input.runnerRunId ||
+    receipt.planDigest !== input.planDigest ||
+    !Number.isSafeInteger(receipt.serial) || receipt.serial < 0 ||
+    !/^sha256:[a-f0-9]{64}$/u.test(receipt.planDigest)
+  ) {
+    throw new Error("update Plan metadata receipt did not match its canonical prior State");
+  }
+  try {
+    assertSavedPlanMatchesState(
+      { lineage: receipt.lineage, serial: receipt.serial },
+      prior,
+    );
+  } catch {
+    throw new Error("update Plan metadata receipt did not match its canonical prior State");
+  }
+}
 
 export function parseProofArgs(args: readonly string[]): { image: string } {
   const values = args[0] === "--" ? args.slice(1) : args;
@@ -65,6 +114,58 @@ export function requireLocalDockerEndpoint(
     throw new Error("selected Docker Unix socket path is invalid");
   }
   return path;
+}
+
+export function assertRunnerImageDeclaresNonRootUser(user: string): void {
+  const principal = user.split(":", 1)[0] ?? "";
+  const numericUid = /^\d+$/u.test(principal) ? Number(principal) : undefined;
+  assert(
+    principal.length > 0 && principal.toLowerCase() !== "root" &&
+      !(numericUid !== undefined && numericUid === 0),
+    "runner image must declare a non-root user",
+  );
+}
+
+export async function assertRunnerContainerRunsAsNonRoot(input: {
+  readonly containerId: string;
+  readonly imageUser: string;
+  readonly runDocker: DockerCommand;
+}): Promise<void> {
+  assertRunnerImageDeclaresNonRootUser(input.imageUser);
+  const uidText = await input.runDocker("exec", input.containerId, "id", "-u");
+  assert(/^\d+$/u.test(uidText), "runner container effective UID could not be verified");
+  const uid = Number(uidText);
+  assert(Number.isSafeInteger(uid) && uid > 0, "runner container must execute as a non-root UID");
+}
+
+export function assertStateVersionArtifactContinuity(input: {
+  readonly listedStateVersion: Pick<PublicStateVersion, "id" | "createdByRunId" | "generation">;
+  readonly stateVersion: StateVersion | undefined;
+  readonly artifact: Pick<LocalOpenTofuStateArtifact, "stateRef" | "workspaceId" | "environment" | "generation" | "createdByRunId" | "stateDigest" | "stateBytes" | "action"> | undefined;
+  readonly expectedRunId: string;
+  readonly expectedGeneration: number;
+  readonly expectedAction: "apply" | "destroy";
+}): void {
+  const stateVersion = input.stateVersion;
+  const artifact = input.artifact;
+  assert(stateVersion, "ledger StateVersion is missing");
+  assert.equal(input.listedStateVersion.id, stateVersion.id, "public StateVersion ID differs from ledger ID");
+  assert.equal(input.listedStateVersion.createdByRunId, input.expectedRunId);
+  assert.equal(input.listedStateVersion.generation, input.expectedGeneration);
+  assert.equal(stateVersion.createdByRunId, input.expectedRunId);
+  assert.equal(stateVersion.generation, input.expectedGeneration);
+  assert.match(stateVersion.digest, IMAGE_PATTERN, "ledger StateVersion digest is invalid");
+  assert(artifact && "stateBytes" in artifact, "stored state artifact is missing");
+  assert.equal(artifact.stateRef, stateVersion.stateRef, "stored artifact ref differs from ledger");
+  assert.equal(artifact.workspaceId, stateVersion.workspaceId);
+  assert.equal(artifact.environment, stateVersion.environment);
+  assert.equal(artifact.generation, stateVersion.generation);
+  assert.equal(artifact.createdByRunId, stateVersion.createdByRunId);
+  assert.equal(artifact.stateDigest, stateVersion.digest, "stored artifact digest differs from ledger");
+  assert.equal(artifact.action, input.expectedAction, "stored artifact action differs from lifecycle Run");
+  const metadata = parseOpenTofuStateMetadata(artifact.stateBytes);
+  assert(metadata.lineage.length > 0, "stored artifact has no OpenTofu lineage");
+  assert(Number.isSafeInteger(metadata.serial) && metadata.serial > 0, "stored artifact has no valid serial");
 }
 
 function childEnv(): Record<string, string> {
@@ -114,6 +215,7 @@ export function boundedRunnerFetch(
   baseUrl: string,
   originalFetch: typeof fetch,
   signal?: AbortSignal,
+  onSavedPlanMetadataReceipt?: (receipt: SavedPlanStateMetadataReceipt) => void,
 ): typeof fetch {
   const runnerOrigin = new URL(baseUrl).origin;
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -135,6 +237,32 @@ export function boundedRunnerFetch(
       throw new Error("runner response exceeded local proof byte cap");
     }
     const bytes = await readCappedBytes(response.body, maxBytes);
+    const metadataRoute = /^\/runs\/([^/]+)\/plan-state-metadata$/u.exec(url.pathname);
+    const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+    if (method.toUpperCase() === "POST" && response.ok && metadataRoute && onSavedPlanMetadataReceipt) {
+      try {
+        const headers = new Headers(input instanceof Request ? input.headers : undefined);
+        new Headers(init?.headers).forEach((value, key) => headers.set(key, value));
+        const value = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
+        const planDigest = headers.get("x-takosumi-plan-digest");
+        if (
+          typeof value.lineage === "string" &&
+          Number.isSafeInteger(value.serial) &&
+          (value.serial as number) >= 0 &&
+          typeof planDigest === "string"
+        ) {
+          onSavedPlanMetadataReceipt({
+            runnerRunId: decodeURIComponent(metadataRoute[1]!),
+            planDigest,
+            lineage: value.lineage,
+            serial: value.serial as number,
+          });
+        }
+      } catch {
+        // The runner adapter remains responsible for rejecting invalid receipts.
+        // A missing captured receipt makes the proof fail its explicit assertion.
+      }
+    }
     return new Response(response.status === 204 || response.status === 304 ? null : new Uint8Array(bytes), {
       status: response.status,
       statusText: response.statusText,
@@ -256,7 +384,7 @@ async function startRunner(
   const inspected = await docker("image", "inspect", image, "--format", "{{.Id}} {{.Config.User}}");
   const [actualId, user] = inspected.split(" ");
   assert.equal(actualId, image, "local image ID differs from explicit --image");
-  assert(user && user !== "root" && user !== "0", "runner image must declare a non-root user");
+  assertRunnerImageDeclaresNonRootUser(user ?? "");
   assert.equal(await containerIdAtName(name, docker), undefined, "proof container name is occupied");
 
   onStarting();
@@ -281,6 +409,11 @@ async function startRunner(
     launchedId,
     "Docker run returned an unowned or changed container",
   );
+  await assertRunnerContainerRunsAsNonRoot({
+    containerId: launchedId,
+    imageUser: user!,
+    runDocker: docker,
+  });
   const binding = await docker("port", name, "8080/tcp");
   assert.match(binding, /^127\.0\.0\.1:[0-9]+$/u, "runner port must bind loopback only");
   const baseUrl = `http://${binding}`;
@@ -362,16 +495,24 @@ export async function prove(
   root: string,
   signal?: AbortSignal,
 ): Promise<{
-  kind: "takosumi.local-core-http-lifecycle-proof/v1";
+  kind: "takosumi.local-core-http-lifecycle-proof/v2";
   status: "passed";
   image: string;
   source: string;
   publicRouteLifecycle: readonly string[];
   stateGenerations: readonly number[];
   negativeControl: string;
+  savedPlanStateMetadata: "passed";
+  updatePlanPriorStateMetadata: "matched";
 }> {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = boundedRunnerFetch(baseUrl, originalFetch, signal);
+  const metadataReceipts: SavedPlanStateMetadataReceipt[] = [];
+  globalThis.fetch = boundedRunnerFetch(
+    baseUrl,
+    originalFetch,
+    signal,
+    (receipt) => { metadataReceipts.push(receipt); },
+  );
   try {
     const store = new InMemoryOpenTofuControlStore();
     const accounts = new InMemoryAccountsStore();
@@ -510,11 +651,32 @@ export async function prove(
       throw new Error(`first apply ended with ${first.run.status}`);
     }
     assert.equal(first.run.status, "succeeded");
-    const firstState = await control<{ stateVersions: Array<{ id: string; createdByRunId: string }> }>(
+    const firstState = await control<{ stateVersions: Array<Pick<PublicStateVersion, "id" | "createdByRunId" | "generation">> }>(
       operations, accounts, cookie, "GET", `/api/v1/capsules/${cap}/state-versions`, 200,
     );
     assert.equal(firstState.stateVersions.length, 1);
-    assert(firstState.stateVersions.some((state) => state.createdByRunId === first.run.id));
+    const firstListedState = firstState.stateVersions[0]!;
+    assert.equal(firstListedState.createdByRunId, first.run.id);
+    assert.equal(firstListedState.generation, 1);
+    const firstStateVersion = await store.getStateVersion(firstListedState.id);
+    assert(firstStateVersion, "generation one is missing from the StateVersion store");
+    const firstStateArtifact = await stateStore.read(firstStateVersion.stateRef);
+    assertStateVersionArtifactContinuity({
+      listedStateVersion: firstListedState,
+      stateVersion: firstStateVersion,
+      artifact: firstStateArtifact && "stateBytes" in firstStateArtifact && firstStateArtifact.action !== "state_recovery"
+        ? firstStateArtifact
+        : undefined,
+      expectedRunId: first.run.id,
+      expectedGeneration: 1,
+      expectedAction: "apply",
+    });
+    assert(firstStateArtifact && "stateBytes" in firstStateArtifact);
+    const firstStateMetadata: OpenTofuStateMetadata = parseOpenTofuStateMetadata(
+      firstStateArtifact.stateBytes,
+    );
+    assert(firstStateMetadata.lineage.length > 0);
+    assert(firstStateMetadata.serial > 0);
     const firstOutput = await control<{ output: { publicOutputs: Record<string, unknown> } }>(
       operations, accounts, cookie, "GET", `/api/v1/capsules/${cap}/outputs`, 200,
     );
@@ -545,15 +707,51 @@ export async function prove(
       `/api/v1/runs/${updated.configurationPlan.planRunId}/apply`, 201,
     );
     assert.equal(second.run.status, "succeeded");
+    const updatePlanRun = await store.getPlanRun(updated.configurationPlan.planRunId);
+    assert(updatePlanRun?.planDigest);
+    assert.equal(updatePlanRun.id, updated.configurationPlan.planRunId);
+    assert(updatePlanRun.planArtifact, "update PlanRun has no saved Plan artifact");
+    const updateApplyRun = await store.getApplyRun(second.run.id);
+    assert(updateApplyRun, "update ApplyRun is missing from the Core ledger");
+    assert.equal(updateApplyRun.planRunId, updatePlanRun.id);
+    const updateReceipts = metadataReceipts.filter(
+      (receipt) => receipt.runnerRunId === second.run.id,
+    );
+    assert.equal(updateReceipts.length, 1, "update ApplyRun did not produce exactly one metadata receipt");
+    const updateReceipt = updateReceipts[0]!;
+    assertUpdatePlanStateMetadataReceipt({
+      runnerRunId: second.run.id,
+      applyRunPlanRunId: updateApplyRun.planRunId,
+      planRunId: updatePlanRun.id,
+      planArtifact: updatePlanRun.planArtifact,
+      planDigest: updatePlanRun.planDigest,
+      priorStateBytes: firstStateArtifact.stateBytes,
+      receipt: updateReceipt,
+    });
     const secondOutput = await control<{ output: { publicOutputs: Record<string, unknown> } }>(
       operations, accounts, cookie, "GET", `/api/v1/capsules/${cap}/outputs`, 200,
     );
     assert.equal(secondOutput.output.publicOutputs.launch_url, "https://second.example.test");
-    const secondState = await control<{ stateVersions: Array<{ id: string; createdByRunId: string }> }>(
+    const secondState = await control<{ stateVersions: Array<Pick<PublicStateVersion, "id" | "createdByRunId" | "generation">> }>(
       operations, accounts, cookie, "GET", `/api/v1/capsules/${cap}/state-versions`, 200,
     );
     assert.equal(secondState.stateVersions.length, 2);
-    assert(secondState.stateVersions.some((state) => state.createdByRunId === second.run.id));
+    const secondListedState = secondState.stateVersions.find((state) => state.createdByRunId === second.run.id);
+    assert(secondListedState, "generation two is not present in the public StateVersion ledger");
+    const secondStateVersion = await store.getStateVersion(secondListedState.id);
+    const secondStateArtifact = secondStateVersion
+      ? await stateStore.read(secondStateVersion.stateRef)
+      : undefined;
+    assertStateVersionArtifactContinuity({
+      listedStateVersion: secondListedState,
+      stateVersion: secondStateVersion,
+      artifact: secondStateArtifact && "stateBytes" in secondStateArtifact && secondStateArtifact.action !== "state_recovery"
+        ? secondStateArtifact
+        : undefined,
+      expectedRunId: second.run.id,
+      expectedGeneration: 2,
+      expectedAction: "apply",
+    });
 
     const destroyPlan = await control<PublicRun>(
       operations, accounts, cookie, "POST", `/api/v1/capsules/${cap}/destroy-plan`, 201,
@@ -575,6 +773,43 @@ export async function prove(
     const finalCapsule = await store.getCapsule(cap);
     assert.equal(finalCapsule?.status, "destroyed");
     assert.equal(finalCapsule?.currentStateGeneration, 3);
+    const finalState = await control<{
+      stateVersions: Array<Pick<PublicStateVersion, "id" | "createdByRunId" | "generation">>;
+    }>(operations, accounts, cookie, "GET", `/api/v1/capsules/${cap}/state-versions`, 200);
+    assert.equal(finalState.stateVersions.length, 3, "lifecycle did not persist all three StateVersion rows");
+    const destroyedListedState = finalState.stateVersions.find(
+      (state) => state.createdByRunId === destroyed.run.id,
+    );
+    assert(destroyedListedState, "destroy StateVersion is not present in the public ledger");
+    const destroyedStateVersion = await store.getStateVersion(destroyedListedState.id);
+    const destroyedStateArtifact = destroyedStateVersion
+      ? await stateStore.read(destroyedStateVersion.stateRef)
+      : undefined;
+    assertStateVersionArtifactContinuity({
+      listedStateVersion: destroyedListedState,
+      stateVersion: destroyedStateVersion,
+      artifact: destroyedStateArtifact && "stateBytes" in destroyedStateArtifact && destroyedStateArtifact.action !== "state_recovery"
+        ? destroyedStateArtifact
+        : undefined,
+      expectedRunId: destroyed.run.id,
+      expectedGeneration: 3,
+      expectedAction: "destroy",
+    });
+    const verifiedStateGenerations = finalState.stateVersions
+      .map((state) => state.generation)
+      .sort((left, right) => left - right);
+    assert.deepEqual(verifiedStateGenerations, [1, 2, 3]);
+    assert.deepEqual(
+      finalState.stateVersions
+        .map(({ id, createdByRunId, generation }) => ({ id, createdByRunId, generation }))
+        .sort((left, right) => left.generation - right.generation),
+      [
+        { id: firstListedState.id, createdByRunId: first.run.id, generation: 1 },
+        { id: secondListedState.id, createdByRunId: second.run.id, generation: 2 },
+        { id: destroyedListedState.id, createdByRunId: destroyed.run.id, generation: 3 },
+      ],
+      "final StateVersion ledger identities differ from verified lifecycle Runs",
+    );
     const firstPlanRow = await store.getPlanRun(planned.run.id);
     const updatePlanRow = await store.getPlanRun(updated.configurationPlan.planRunId);
     const destroyPlanRow = await store.getPlanRun(destroyPlan.run.id);
@@ -588,13 +823,15 @@ export async function prove(
       assert((applied?.auditEvents.length ?? 0) > 0, "terminal run has no audit evidence");
     }
     return {
-      kind: "takosumi.local-core-http-lifecycle-proof/v1",
+      kind: "takosumi.local-core-http-lifecycle-proof/v2",
       status: "passed",
       image,
       source: "fixture SourceSnapshot with exact local archive; post-source-sync only",
       publicRouteLifecycle: ["plan", "apply", "configuration-plan", "apply", "destroy-plan", "approve", "destroy"],
-      stateGenerations: [1, 2, 3],
+      stateGenerations: verifiedStateGenerations,
       negativeControl: "foreign-workspace-apply-rejected-before-mutation",
+      savedPlanStateMetadata: "passed",
+      updatePlanPriorStateMetadata: "matched",
     };
   } finally {
     globalThis.fetch = originalFetch;

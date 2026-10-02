@@ -134,6 +134,38 @@ describe("single-screen install surface", () => {
     expect(router).not.toContain('path="/composition/install"');
   });
 
+  test("keeps the browse page focused on search and the service list", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const styles = read("dashboard/src/views/new/install-simplification.css");
+
+    expect(view).toContain('class="iv-hero iv-page-heading"');
+    expect(view).not.toContain("TAKOSUMI STORE");
+    expect(view).not.toContain('t("installStore.subtitle")');
+    expect(view).not.toContain("t(\"installStore.browseHint\")");
+    expect(view).toContain('class="iv-catalogue iv-catalogue-browse"');
+    expect(view).toContain('aria-label={t("installStore.browseTitle")}');
+    expect(view).toContain('aria-label={t("installStore.sourceUrl")}');
+    expect(view).toContain('class="iv-manual"');
+    expect(styles).toContain(".iv-catalogue.iv-catalogue-browse");
+    expect(styles).toContain("background: transparent");
+  });
+
+  test("centers configuration on the selected service and name field", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const configureStart = view.indexOf('<Show when={phase() === "configure"}>');
+    const configure = view.slice(configureStart);
+
+    expect(view).toContain('"iv-configure-page": phase() === "configure"');
+    expect(view).toContain("? selectedTitle()");
+    expect(configure).not.toContain('class="iv-app-summary"');
+    expect(configure.indexOf('label={t("installStore.name")}')).toBeGreaterThan(-1);
+    expect(configure.indexOf('label={t("installStore.name")}')).toBeLessThan(
+      configure.indexOf('summary>{t("installStore.sourceDetails")}'),
+    );
+    expect(view).toContain('phase() !== "configure"');
+    expect(view).toContain('phase() !== "browse"');
+  });
+
   test("Add starts preparation before compatibility or providers are known", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).toContain("StoreBrowser");
