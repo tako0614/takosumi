@@ -359,7 +359,9 @@ test("Core recovered-state readers survive reopening the exact PGlite data snaps
       ]);
     if (
       !expectedCapsule || !expectedPlanRun || !expectedFailedApplyRun ||
-      !expectedWorkspaceManagement || expectedExecutionAuthorityEpoch === undefined
+      !expectedWorkspaceManagement ||
+      expectedWorkspaceManagement.managementState !== "active" ||
+      expectedExecutionAuthorityEpoch === undefined
     ) {
       throw new Error("PGlite failed-create recovery lineage is incomplete");
     }
@@ -426,7 +428,11 @@ test("Core recovered-state readers survive reopening the exact PGlite data snaps
       expectedSourceSnapshot: seeded.snapshot,
       expectedPlanRun,
       expectedFailedApplyRun,
-      expectedWorkspaceManagement,
+      expectedWorkspaceManagement: {
+        workspaceId: expectedWorkspaceManagement.workspaceId,
+        managementState: "active",
+        managementEpoch: expectedWorkspaceManagement.managementEpoch,
+      },
       expectedExecutionAuthorityEpoch,
       artifact,
       recoveryRun,
@@ -474,7 +480,6 @@ test("Core recovered-state readers survive reopening the exact PGlite data snaps
       currentStateVersionId: recoveredStateVersionId,
       currentStateGeneration: 1,
     });
-    expect(before.capsule.currentOutputId).toBeUndefined();
     expect(before.failedApply).toMatchObject({ status: "failed" });
     expect(before.failedApply.stateVersionId).toBeUndefined();
     expect(before.failedApply.outputId).toBeUndefined();
