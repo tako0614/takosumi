@@ -50,14 +50,18 @@ const MAX_RUNNER_ARTIFACT_BYTES = 8 * 1024 * 1024;
 const OWNER_LABEL = "takosumi.local-core-http-proof.owner";
 
 export interface SavedPlanStateMetadataReceipt {
-  readonly runId: string;
+  /** Run ID used by the runner HTTP metadata route (ApplyRun during preflight). */
+  readonly runnerRunId: string;
   readonly planDigest: string;
   readonly lineage: string;
   readonly serial: number;
 }
 
 export function assertUpdatePlanStateMetadataReceipt(input: {
-  readonly runId: string;
+  readonly runnerRunId: string;
+  readonly applyRunPlanRunId: string;
+  readonly planRunId: string;
+  readonly planArtifact: { readonly kind: string; readonly ref: string; readonly digest: string } | undefined;
   readonly planDigest: string;
   readonly priorStateBytes: Uint8Array;
   readonly receipt: SavedPlanStateMetadataReceipt | undefined;
@@ -66,7 +70,11 @@ export function assertUpdatePlanStateMetadataReceipt(input: {
   const receipt = input.receipt;
   if (
     !prior.lineage || prior.serial < 1 ||
-    !receipt || receipt.runId !== input.runId ||
+    input.applyRunPlanRunId !== input.planRunId ||
+    !input.planArtifact || input.planArtifact.kind !== "runner-local" ||
+    input.planArtifact.ref !== `runner-local://${input.planRunId}/tfplan` ||
+    input.planArtifact.digest !== input.planDigest ||
+    !receipt || receipt.runnerRunId !== input.runnerRunId ||
     receipt.planDigest !== input.planDigest ||
     !Number.isSafeInteger(receipt.serial) || receipt.serial < 0 ||
     !/^sha256:[a-f0-9]{64}$/u.test(receipt.planDigest)
@@ -244,7 +252,7 @@ export function boundedRunnerFetch(
           typeof planDigest === "string"
         ) {
           onSavedPlanMetadataReceipt({
-            runId: decodeURIComponent(metadataRoute[1]!),
+            runnerRunId: decodeURIComponent(metadataRoute[1]!),
             planDigest,
             lineage: value.lineage,
             serial: value.serial as number,
@@ -701,11 +709,21 @@ export async function prove(
     assert.equal(second.run.status, "succeeded");
     const updatePlanRun = await store.getPlanRun(updated.configurationPlan.planRunId);
     assert(updatePlanRun?.planDigest);
-    const updateReceipt = metadataReceipts.find(
-      (receipt) => receipt.runId === updated.configurationPlan.planRunId,
+    assert.equal(updatePlanRun.id, updated.configurationPlan.planRunId);
+    assert(updatePlanRun.planArtifact, "update PlanRun has no saved Plan artifact");
+    const updateApplyRun = await store.getApplyRun(second.run.id);
+    assert(updateApplyRun, "update ApplyRun is missing from the Core ledger");
+    assert.equal(updateApplyRun.planRunId, updatePlanRun.id);
+    const updateReceipts = metadataReceipts.filter(
+      (receipt) => receipt.runnerRunId === second.run.id,
     );
+    assert.equal(updateReceipts.length, 1, "update ApplyRun did not produce exactly one metadata receipt");
+    const updateReceipt = updateReceipts[0]!;
     assertUpdatePlanStateMetadataReceipt({
-      runId: updated.configurationPlan.planRunId,
+      runnerRunId: second.run.id,
+      applyRunPlanRunId: updateApplyRun.planRunId,
+      planRunId: updatePlanRun.id,
+      planArtifact: updatePlanRun.planArtifact,
       planDigest: updatePlanRun.planDigest,
       priorStateBytes: firstStateArtifact.stateBytes,
       receipt: updateReceipt,

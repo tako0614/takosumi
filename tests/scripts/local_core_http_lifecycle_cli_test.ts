@@ -138,18 +138,26 @@ test("cleanup failure suppresses the passing marker", async () => {
 
 test("update Plan metadata receipt must match its exact Plan and canonical prior State", () => {
   const receipt = {
-    runId: "plan_update_1",
+    runnerRunId: "apply_update_1",
     planDigest: `sha256:${"a".repeat(64)}`,
     lineage: "lineage-existing-state",
     serial: 4,
   };
+  const planRunId = "plan_update_1";
   const priorStateBytes = new TextEncoder().encode(JSON.stringify({
     version: 4,
     lineage: "lineage-existing-state",
     serial: 4,
   }));
   const expected = {
-    runId: receipt.runId,
+    runnerRunId: receipt.runnerRunId,
+    applyRunPlanRunId: planRunId,
+    planRunId,
+    planArtifact: {
+      kind: "runner-local",
+      ref: `runner-local://${planRunId}/tfplan`,
+      digest: receipt.planDigest,
+    },
     planDigest: receipt.planDigest,
     priorStateBytes,
     receipt,
@@ -158,11 +166,23 @@ test("update Plan metadata receipt must match its exact Plan and canonical prior
   expect(() => assertUpdatePlanStateMetadataReceipt(expected)).not.toThrow();
   expect(() => assertUpdatePlanStateMetadataReceipt({
     ...expected,
-    receipt: { ...receipt, runId: "another_plan" },
+    receipt: { ...receipt, runnerRunId: "plan_update_1" },
   })).toThrow("update Plan metadata receipt did not match its canonical prior State");
   expect(() => assertUpdatePlanStateMetadataReceipt({
     ...expected,
     receipt: { ...receipt, planDigest: `sha256:${"b".repeat(64)}` },
+  })).toThrow("update Plan metadata receipt did not match its canonical prior State");
+  expect(() => assertUpdatePlanStateMetadataReceipt({
+    ...expected,
+    applyRunPlanRunId: "another_plan",
+  })).toThrow("update Plan metadata receipt did not match its canonical prior State");
+  expect(() => assertUpdatePlanStateMetadataReceipt({
+    ...expected,
+    planArtifact: { ...expected.planArtifact, ref: "runner-local://another_plan/tfplan" },
+  })).toThrow("update Plan metadata receipt did not match its canonical prior State");
+  expect(() => assertUpdatePlanStateMetadataReceipt({
+    ...expected,
+    planArtifact: { ...expected.planArtifact, digest: `sha256:${"d".repeat(64)}` },
   })).toThrow("update Plan metadata receipt did not match its canonical prior State");
   expect(() => assertUpdatePlanStateMetadataReceipt({
     ...expected,
@@ -226,7 +246,7 @@ test("proof StateVersion generations require exact ledger and stored artifact co
 
 test("bounded runner transport captures only successful metadata receipts with exact Run and Plan identity", async () => {
   const receipts: Array<{
-    runId: string;
+    runnerRunId: string;
     planDigest: string;
     lineage: string;
     serial: number;
@@ -241,24 +261,27 @@ test("bounded runner transport captures only successful metadata receipts with e
     undefined,
     (receipt) => { receipts.push(receipt); },
   );
+  const planRunId = "plan_update_1";
+  const applyRunId = "apply_update_1";
 
-  await request("http://127.0.0.1:4321/runs/plan_update_1/plan-state-metadata", {
+  await request(`http://127.0.0.1:4321/runs/${applyRunId}/plan-state-metadata`, {
     method: "POST",
     headers: { "x-takosumi-plan-digest": planDigest },
     body: new Uint8Array([1, 2, 3]),
   });
-  await request("http://127.0.0.1:4321/runs/plan_initial_1/plan-state-metadata", {
+  await request("http://127.0.0.1:4321/runs/apply_initial_1/plan-state-metadata", {
     method: "POST",
     headers: { "x-takosumi-plan-digest": `sha256:${"d".repeat(64)}` },
     body: new Uint8Array([1]),
   });
 
   expect(receipts).toEqual([{
-    runId: "plan_update_1",
+    runnerRunId: applyRunId,
     planDigest,
     lineage: "lineage-existing-state",
     serial: 4,
   }]);
+  expect(receipts.find((receipt) => receipt.runnerRunId === planRunId)).toBeUndefined();
 });
 
 test("proof-scoped runner HTTP caps reject oversized artifacts and streamed replies", async () => {
