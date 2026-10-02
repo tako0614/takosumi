@@ -671,17 +671,19 @@ async function trackedOpenTofuSourceFiles(input: {
     readonly size: number;
   }> = [];
   let totalBytes = 0;
+  const subtreePath = relative(input.repositoryRoot, input.subtree).replace(
+    /\\/gu,
+    "/",
+  );
+  const pathspecs =
+    subtreePath === ""
+      ? ["*.tf", "*.tofu", "*.tf.json", "*.tofu.json"]
+      : ["tf", "tofu", "tf.json", "tofu.json"].map(
+          (suffix) =>
+            `:(top,glob)${escapeGitGlobPathspec(subtreePath)}/**/*.${suffix}`,
+        );
   const tracked = await runCommand(
-    [
-      "git",
-      "ls-files",
-      "-z",
-      "--",
-      "*.tf",
-      "*.tofu",
-      "*.tf.json",
-      "*.tofu.json",
-    ],
+    ["git", "ls-files", "-z", "--", ...pathspecs],
     { cwd: input.repositoryRoot, context: input.git.context },
   );
   if (tracked.exitCode !== 0) {
@@ -750,6 +752,14 @@ async function trackedOpenTofuSourceFiles(input: {
     files.push({ path: path.subtreeRelative, text });
   }
   return files;
+}
+
+function escapeGitGlobPathspec(path: string): string {
+  return [...path]
+    .map((character) =>
+      "\\*?[]".includes(character) ? `\\${character}` : character,
+    )
+    .join("");
 }
 
 function repositoryModuleDiscoveryReason(

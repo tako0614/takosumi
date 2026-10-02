@@ -2,11 +2,13 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  readFile,
   rm,
   stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
@@ -1086,6 +1088,197 @@ test("readRepositoryModules keeps Source scope separate from subtree-relative mo
       ],
     });
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("readRepositoryModules enumerates only the selected literal subtree", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-module-literal-scope-"));
+  const fakeBin = join(root, "bin");
+  const selectedPath = "apps/[prod] *? config/nested";
+  const subtree = join(root, selectedPath);
+  const gitOutput = join(root, "scoped-git-output.bin");
+  const gitArgs = join(root, "scoped-git-args.bin");
+  const previousPath = Bun.env.PATH;
+  try {
+    git(root, ["init", "-b", "main"]);
+    await mkdir(join(subtree, "worker"), { recursive: true });
+    await mkdir(join(subtree, "docs"), { recursive: true });
+    await mkdir(join(root, "apps", "other"), { recursive: true });
+    await mkdir(join(root, "unrelated"), { recursive: true });
+    await writeFile(join(root, "main.tf"), 'resource "root_only" "x" {}\n');
+    await writeFile(
+      join(subtree, "main.tf"),
+      'terraform { required_providers { aws = { source = "hashicorp/aws" } } }\n',
+    );
+    await writeFile(
+      join(subtree, "worker", "main.tf"),
+      'resource "random_id" "worker" { byte_length = 8 }\n',
+    );
+    await writeFile(join(subtree, "extra.tofu"), "# OpenTofu config\n");
+    await writeFile(join(subtree, "extra.tf.json"), "{}\n");
+    await writeFile(join(subtree, "worker", "extra.tofu.json"), "{}\n");
+    await writeFile(
+      join(root, "apps", "other", "main.tf"),
+      'resource "sibling_only" "x" {}\n',
+    );
+    await Promise.all(
+      Array.from({ length: 80 }, (_, index) =>
+        writeFile(
+          join(root, "unrelated", `module-${index}.tf`),
+          `resource "unrelated" "item_${index}" {}\n`,
+        ),
+      ),
+    );
+    await Promise.all(
+      Array.from({ length: 80 }, (_, index) =>
+        writeFile(
+          join(subtree, "docs", `README-${index}.md`),
+          `selected subtree documentation ${index}\n`,
+        ),
+      ),
+    );
+    git(root, ["add", "."]);
+
+    const fullListing = Bun.spawnSync(
+      [
+        "git",
+        "ls-files",
+        "-z",
+        "--",
+        "*.tf",
+        "*.tofu",
+        "*.tf.json",
+        "*.tofu.json",
+      ],
+      { cwd: root, stdout: "pipe", stderr: "pipe", env: commandEnv() },
+    );
+    expect(fullListing.exitCode).toBe(0);
+
+    await mkdir(fakeBin, { recursive: true });
+    const gitWrapper = join(fakeBin, "git");
+    const realGit = Bun.which("git");
+    if (realGit === null) throw new Error("git executable is unavailable");
+    await writeFile(
+      gitWrapper,
+      [
+        "#!/bin/sh",
+        "set -eu",
+        'if [ "$1" = "ls-files" ]; then',
+        `  printf '%s\\0' "$@" >> ${shellQuote(gitArgs)}`,
+        `  ${shellQuote(realGit)} "$@" | tee ${shellQuote(gitOutput)}`,
+        "else",
+        `  exec ${shellQuote(realGit)} "$@"`,
+        "fi",
+        "",
+      ].join("\n"),
+    );
+    await chmod(gitWrapper, 0o755);
+    const gitContext = {
+      context: {
+        env: { ...commandEnv(), PATH: `${fakeBin}:${previousPath ?? ""}` },
+      },
+    };
+
+    const result = await readRepositoryModules({
+      repositoryRoot: root,
+      subtree,
+      scopePath: selectedPath,
+      git: gitContext,
+    });
+
+    expect(result).toEqual({
+      status: "ready",
+      scopePath: selectedPath,
+      modules: [
+        {
+          path: ".",
+          providerPackages: [
+            { source: "registry.opentofu.org/hashicorp/aws" },
+          ],
+          rootProviderRequirements: [
+            {
+              source: "registry.opentofu.org/hashicorp/aws",
+              moduleLocalName: "aws",
+            },
+          ],
+        },
+        {
+          path: "worker",
+          providerPackages: [
+            { source: "registry.opentofu.org/hashicorp/random" },
+          ],
+          rootProviderRequirements: [
+            {
+              source: "registry.opentofu.org/hashicorp/random",
+              moduleLocalName: "random",
+            },
+          ],
+        },
+      ],
+    });
+
+    const scopedBytes = await readFile(gitOutput);
+    const scopedPaths = scopedBytes.toString("utf8").split("\0").filter(Boolean);
+    const scopedArgs = (await readFile(gitArgs)).toString("utf8").split("\0");
+    const fullCount = fullListing.stdout.toString("utf8").split("\0").length - 1;
+    const scopedCount = scopedBytes.toString("utf8").split("\0").length - 1;
+    const pathspecs = scopedArgs.filter((argument) =>
+      argument.startsWith(":(top,glob)"),
+    );
+    expect(pathspecs).toEqual(
+      ["tf", "tofu", "tf.json", "tofu.json"].map(
+        (suffix) =>
+          `:(top,glob)apps/\\[prod\\] \\*\\? config/nested/**/*.${suffix}`,
+      ),
+    );
+    expect(scopedPaths).toEqual([
+      `${selectedPath}/extra.tf.json`,
+      `${selectedPath}/extra.tofu`,
+      `${selectedPath}/main.tf`,
+      `${selectedPath}/worker/extra.tofu.json`,
+      `${selectedPath}/worker/main.tf`,
+    ]);
+    expect(scopedCount).toBe(5);
+    expect(scopedBytes.byteLength).toBeLessThan(fullListing.stdout.byteLength);
+    expect(scopedCount).toBeLessThan(fullCount);
+
+    const mirror = join(root, "selected-only-mirror");
+    await mkdir(join(mirror, "worker"), { recursive: true });
+    await mkdir(join(mirror, "docs"), { recursive: true });
+    await writeFile(
+      join(mirror, "main.tf"),
+      'terraform { required_providers { aws = { source = "hashicorp/aws" } } }\n',
+    );
+    await writeFile(
+      join(mirror, "worker", "main.tf"),
+      'resource "random_id" "worker" { byte_length = 8 }\n',
+    );
+    await writeFile(join(mirror, "extra.tofu"), "# OpenTofu config\n");
+    await writeFile(join(mirror, "extra.tf.json"), "{}\n");
+    await writeFile(join(mirror, "worker", "extra.tofu.json"), "{}\n");
+    await Promise.all(
+      Array.from({ length: 80 }, (_, index) =>
+        writeFile(
+          join(mirror, "docs", `README-${index}.md`),
+          `selected subtree documentation ${index}\n`,
+        ),
+      ),
+    );
+    const selectedArchive = join(root, "selected.tar.zst");
+    const mirrorArchive = join(root, "mirror.tar.zst");
+    await createDeterministicArchive(subtree, selectedArchive, gitContext);
+    await createDeterministicArchive(mirror, mirrorArchive, gitContext);
+    const selectedArchiveDigest = createHash("sha256")
+      .update(await readFile(selectedArchive))
+      .digest("hex");
+    const mirrorArchiveDigest = createHash("sha256")
+      .update(await readFile(mirrorArchive))
+      .digest("hex");
+    expect(selectedArchiveDigest).toBe(mirrorArchiveDigest);
+  } finally {
+    if (previousPath === undefined) delete Bun.env.PATH;
+    else Bun.env.PATH = previousPath;
     await rm(root, { recursive: true, force: true });
   }
 });
