@@ -56,11 +56,19 @@ export interface BoundedReadOptions {
   readonly attempts?: number;
   readonly delayMs?: number;
   readonly sleep?: (delayMs: number) => Promise<void>;
+  readonly signal?: AbortSignal;
 }
 
 export interface InstallReadinessReaders {
-  readonly listStateVersions: typeof listStateVersions;
-  readonly listActivity: typeof listActivity;
+  readonly listStateVersions: (
+    capsuleId: string,
+    opts?: { readonly signal?: AbortSignal },
+  ) => ReturnType<typeof listStateVersions>;
+  readonly listActivity: (
+    workspaceId: string,
+    limit?: number,
+    opts?: { readonly signal?: AbortSignal },
+  ) => ReturnType<typeof listActivity>;
 }
 
 type InstallReadinessResult =
@@ -72,6 +80,11 @@ function isAbortError(cause: unknown): boolean {
     (cause instanceof DOMException && cause.name === "AbortError") ||
     (cause instanceof Error && cause.name === "AbortError")
   );
+}
+
+function throwReadAbort(signal: AbortSignal): never {
+  if (isAbortError(signal.reason)) throw signal.reason;
+  throw new DOMException("Request was aborted.", "AbortError");
 }
 
 const defaultReadinessReaders: InstallReadinessReaders = {
@@ -102,9 +115,12 @@ export async function boundedRead<T>(
       new Promise<void>((resolve) => globalThis.setTimeout(resolve, duration)));
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (options.signal?.aborted) throwReadAbort(options.signal);
     try {
       return await read();
     } catch (cause) {
+      if (isAbortError(cause)) throw cause;
+      if (options.signal?.aborted) throwReadAbort(options.signal);
       lastError = cause;
       if (attempt + 1 < attempts) await sleep(delayMs);
     }
@@ -133,8 +149,8 @@ export async function readInstallReadiness(
   ];
   return await boundedRead(async () => {
     const [versions, activity] = await Promise.all([
-      readers.listStateVersions(capsuleId),
-      readers.listActivity(workspaceId, 100),
+      readers.listStateVersions(capsuleId, { signal: retry.signal }),
+      readers.listActivity(workspaceId, 100, { signal: retry.signal }),
     ]);
     return stateVersionReadinessAfterApply(
       versions.find((version) => version.createdByRunId === applyRunId),
@@ -178,11 +194,20 @@ export default function InstallExecution(props: Props) {
       ? JSON.stringify([latest.workspaceId, props.capsuleId, latest.id])
       : null;
   };
+  let activeReadinessController: AbortController | undefined;
   const [readiness, { refetch: refetchReadiness }] = createResource(
     readinessKey,
     async (key): Promise<InstallReadinessResult> => {
+      activeReadinessController?.abort();
+      const controller = new AbortController();
+      activeReadinessController = controller;
       try {
-        return { kind: "state", value: await readInstallReadiness(key) };
+        return {
+          kind: "state",
+          value: await readInstallReadiness(key, defaultReadinessReaders, {
+            signal: controller.signal,
+          }),
+        };
       } catch (cause) {
         // controlFetch already redirects expired sessions to sign-in. Keep
         // that authority transition (and resource cancellation) intact; only
@@ -197,9 +222,19 @@ export default function InstallExecution(props: Props) {
           return { kind: "read-failed", cause };
         }
         throw cause;
+      } finally {
+        if (activeReadinessController === controller) {
+          activeReadinessController = undefined;
+        }
       }
     },
   );
+  createEffect(() => {
+    if (readinessKey() !== null) return;
+    activeReadinessController?.abort();
+    activeReadinessController = undefined;
+  });
+  onCleanup(() => activeReadinessController?.abort());
 
   const readinessState = () => {
     const result = readiness.latest;
