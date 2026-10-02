@@ -199,11 +199,25 @@ export function fixtureExecutionEvidence(
       options.commit ??
       (options.outcome === "provider_failed_state_persisted" &&
       "stateVersionId" in job.executionEvidenceCommit
-        ? { stateVersionId: job.executionEvidenceCommit.stateVersionId }
+        ? fixturePersistedFailureCommit(job.executionEvidenceCommit)
         : job.executionEvidenceCommit),
     receipt: { operationId: job.applyRun.id, version: 1, fence: 1 },
     committedAt: "2026-06-06T00:00:00.000Z",
   };
+}
+
+function fixturePersistedFailureCommit(
+  commit: RunExecutionCommit,
+): RunExecutionCommit {
+  if ("destroyed" in commit) {
+    if (typeof commit.stateVersionId !== "string") {
+      throw new Error(
+        "fixture provider-failed execution requires a persisted state version",
+      );
+    }
+    return { stateVersionId: commit.stateVersionId };
+  }
+  return { stateVersionId: commit.stateVersionId };
 }
 
 /** A successful runner mutation always returns evidence of its durable state. */
@@ -299,6 +313,7 @@ export async function seedCapsuleModel(
     workspaceId,
     name: "Default",
     slug: "default",
+    projectJson: {},
     createdAt: now,
     updatedAt: now,
   };
@@ -337,7 +352,6 @@ export async function seedCapsuleModel(
   }
   const installConfig: InstallConfig = {
     id: options.installConfigId ?? "cfg_fixture",
-    workspaceId,
     name: `${name}-config`,
     variableMapping: {},
     outputAllowlist: {
@@ -414,7 +428,6 @@ export async function seedProviderConnections(
         declaredEnv: true,
       },
       secretPartition: "provider-credentials",
-      kind: providerConnectionKind(shortName),
       status: "verified",
       materialization,
       envNames: providerEnvNames(provider),
@@ -609,15 +622,6 @@ function providerEnvNames(provider: string): readonly string[] {
   if (provider.includes("integrations/github")) return ["GITHUB_TOKEN"];
   if (provider.includes("hashicorp/kubernetes")) return ["KUBE_CONFIG_PATH"];
   return [`${providerShortName(provider).toUpperCase()}_TOKEN`];
-}
-
-function providerConnectionKind(shortName: string): ProviderConnection["kind"] {
-  if (shortName === "cloudflare") return "cloudflare_api_token";
-  if (shortName === "aws") return "aws_assume_role";
-  if (shortName === "google" || shortName === "gcp") {
-    return "gcp_service_account_json";
-  }
-  return "generic_env_provider";
 }
 
 function sanitizeId(value: string): string {
