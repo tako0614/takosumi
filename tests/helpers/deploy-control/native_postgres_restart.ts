@@ -25,6 +25,18 @@ const CONTAINER_PURPOSE_LABEL = "io.takosumi.test.purpose";
 const CONTAINER_DATA_LABEL = "io.takosumi.test.pgdata";
 const PGDATA_CONTAINER_PATH = "/var/lib/postgresql/data";
 const DEFAULT_DATA_ROOT = "/root/hdd/takos-dev";
+const DOCKER_INSPECTION_FORMAT = [
+  '{"Id":{{json .Id}},"Name":{{json .Name}},',
+  '"Config":{"Image":{{json .Config.Image}},"Labels":{',
+  '"io.takosumi.test.owner":{{json (index .Config.Labels "io.takosumi.test.owner")}},',
+  '"io.takosumi.test.purpose":{{json (index .Config.Labels "io.takosumi.test.purpose")}},',
+  '"io.takosumi.test.pgdata":{{json (index .Config.Labels "io.takosumi.test.pgdata")}}}},',
+  '"State":{"Running":{{json .State.Running}},"Status":{{json .State.Status}},',
+  '"Pid":{{json .State.Pid}},"Health":{"Status":{{json .State.Health.Status}}}},',
+  '"NetworkSettings":{"Ports":{',
+  '"5432/tcp":{{json (index .NetworkSettings.Ports "5432/tcp")}}}},',
+  '"Mounts":{{json .Mounts}}}',
+].join("");
 
 interface DockerInspection {
   readonly Id: string;
@@ -156,7 +168,7 @@ async function inspectContainer(
   const output = await runDocker([
     "inspect",
     "--format",
-    "{{json .}}",
+    DOCKER_INSPECTION_FORMAT,
     reference,
   ]);
   const parsed: unknown = JSON.parse(output);

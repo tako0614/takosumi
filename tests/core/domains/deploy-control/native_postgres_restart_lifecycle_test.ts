@@ -42,6 +42,7 @@ function fakeDocker(options: {
   readonly removeFailureAfterRemoval?: Error;
   readonly lowercaseNotFound?: boolean;
   readonly mismatchedNotFoundReference?: boolean;
+  readonly oversizedUnusedInspectionFields?: boolean;
 } = {}): { readonly run: DockerCommand; readonly commands: string[][]; readonly exists: () => boolean } {
   const commands: string[][] = [];
   let container:
@@ -80,6 +81,9 @@ function fakeDocker(options: {
         Config: {
           Image:
             "postgres@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229",
+          ...(options.oversizedUnusedInspectionFields
+            ? { Env: [`UNUSED=${"x".repeat(5_000)}`] }
+            : {}),
           Labels: {
             ...labels,
             ...(options.foreignRunReadback
@@ -91,7 +95,12 @@ function fakeDocker(options: {
           Running: true,
           Status: "running",
           Pid: 501,
-          Health: { Status: "healthy" },
+          Health: {
+            Status: "healthy",
+            ...(options.oversizedUnusedInspectionFields
+              ? { Log: [{ Output: "unrelated health log ".repeat(300) }] }
+              : {}),
+          },
         },
         NetworkSettings: {
           Ports: {
@@ -129,7 +138,36 @@ function fakeDocker(options: {
             : `Error: No such object: ${missingReference}`,
         });
       }
-      return JSON.stringify(container.inspection);
+      const format = args[args.indexOf("--format") + 1];
+      const output = format === "{{json .}}"
+        ? JSON.stringify(container.inspection)
+        : JSON.stringify({
+          Id: container.inspection.Id,
+          Name: container.inspection.Name,
+          Config: {
+            Image: (container.inspection.Config as Record<string, unknown>).Image,
+            Labels: (container.inspection.Config as Record<string, unknown>).Labels,
+          },
+          State: (() => {
+            const state = container.inspection.State as Record<string, unknown>;
+            return {
+              Running: state.Running,
+              Status: state.Status,
+              Pid: state.Pid,
+              Health: {
+                Status: (state.Health as Record<string, unknown>).Status,
+              },
+            };
+          })(),
+          NetworkSettings: {
+            Ports: (container.inspection.NetworkSettings as Record<string, unknown>).Ports,
+          },
+          Mounts: container.inspection.Mounts,
+        });
+      if (options.oversizedUnusedInspectionFields && Buffer.byteLength(output) > 4096) {
+        throw new Error("response exceeded local proof byte cap");
+      }
+      return output;
     }
     if (args[0] === "stop" && container) {
       const state = container.inspection.State as Record<string, unknown>;
@@ -165,6 +203,39 @@ function fakeDocker(options: {
   };
   return { run, commands, exists: () => container !== undefined };
 }
+
+test("container readback projects only required fields under the real 4096-byte transport cap", async () => {
+  await withTemporaryDataRoot(async (dataRoot) => {
+    const fake = fakeDocker({ oversizedUnusedInspectionFields: true });
+    const fixture = await createNativePostgresRestartContainer({
+      dataRoot,
+      runDocker: fake.run,
+      verifyMappedTcp: async () => "2026-10-02T00:00:00.000Z",
+    });
+
+    try {
+      const inspect = fake.commands.find((args) => args[0] === "inspect");
+      expect(inspect).toBeDefined();
+      const format = inspect?.[inspect.indexOf("--format") + 1] ?? "";
+      expect(format).toContain('{{json .Id}}');
+      expect(format).toContain('{{json .Name}}');
+      expect(format).toContain('{{json .Config.Image}}');
+      expect(format).toContain('index .Config.Labels "io.takosumi.test.owner"');
+      expect(format).toContain('index .Config.Labels "io.takosumi.test.purpose"');
+      expect(format).toContain('index .Config.Labels "io.takosumi.test.pgdata"');
+      expect(format).toContain('{{json .State.Pid}}');
+      expect(format).toContain('{{json .State.Health.Status}}');
+      expect(format).toContain('index .NetworkSettings.Ports "5432/tcp"');
+      expect(format).toContain("{{json .Mounts}}");
+      expect(format).not.toContain("{{json .}}");
+      expect(format).not.toContain(".Config.Env");
+      expect(format).not.toContain(".State.Health.Log");
+      expect(fake.exists()).toBe(true);
+    } finally {
+      await fixture.close();
+    }
+  });
+});
 
 async function withTemporaryDataRoot<T>(
   body: (dataRoot: string) => Promise<T>,
