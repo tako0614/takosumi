@@ -663,6 +663,223 @@ test.describe("Takosumi dashboard browser surface", () => {
     "public-live is an unauthenticated read-only profile",
   );
 
+  test("Store install waits for apply-linked readiness before opening", async ({ page }) => {
+    test.skip(mode !== "portable", "synthetic install lifecycle is portable-only");
+    const errors = pageErrors(page);
+    const requests: string[] = [];
+    const applyPosts: string[] = [];
+    let readinessReadFailures = 3;
+    let activationAction = "release_activation.pending";
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      requests.push(`${request.method()} ${url.origin}${url.pathname}${url.search}`);
+    });
+    await page.addInitScript(() => {
+      localStorage.setItem("tg_lang", "en");
+      localStorage.setItem("tcs.stores", JSON.stringify(["https://store.example.test"]));
+    });
+    await page.route("https://store.example.test/tcs/v2/listings**", async (route) => {
+      await route.fulfill({ json: { items: [
+        {
+          id: "fixtures/noise-service",
+          source: { git: "https://github.com/example/noise-service.git" },
+          suggestedName: "noise-service",
+          name: { ja: "Noise Service", en: "Noise Service" },
+          description: { ja: "Not the selected fixture.", en: "Not the selected fixture." },
+          badge: { ja: "Add", en: "Add" },
+          createdAt: "2026-08-04T00:00:00.000Z",
+          updatedAt: "2026-08-04T00:00:00.000Z",
+        },
+        {
+          id: "fixtures/readiness-service",
+          source: { git: "https://github.com/example/cloudflare-service.git" },
+          suggestedName: "readiness-service",
+          name: { ja: "Readiness Service", en: "Readiness Service" },
+          description: { ja: "Synthetic fixture: input and activation gated.", en: "Synthetic fixture: input and activation gated." },
+          badge: { ja: "Add", en: "Add" },
+          createdAt: "2026-08-04T00:00:00.000Z",
+          updatedAt: "2026-08-04T00:00:00.000Z",
+        },
+      ] } });
+    });
+    const install = await stubProviderDestinationFixture(page);
+    await page.route("**/api/v1/**", async (route) => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path === "/api/v1/workspaces/ws_alpha/source-ref-resolutions/stable-semver" && request.method() === "POST") {
+        return route.fulfill({ json: { tag: "v1.0.0", commit: PORTABLE_SOURCE_COMMIT } });
+      }
+      if (path === "/api/v1/runs/run_provider_source_sync_e2e") {
+        return route.fulfill({ json: { run: {
+          id: "run_provider_source_sync_e2e", workspaceId: "ws_alpha",
+          sourceId: "src_provider_destination_e2e", type: "source_sync", status: "succeeded",
+          sourceSnapshotId: "snap_provider_destination_e2e", ref: PORTABLE_SOURCE_COMMIT,
+          createdBy: "portable-e2e", createdAt: "2026-08-01T00:00:00.000Z",
+        } } });
+      }
+      if (path === "/api/v1/capsule-configs/cfg-default-opentofu-capsule") {
+        return route.fulfill({ json: { installConfig: {
+          id: "cfg-default-opentofu-capsule",
+          name: "readiness-service",
+          policy: {},
+          variableMapping: {},
+          variablePresentation: [{
+            name: "region", type: "string", required: true,
+            label: { en: "Region", ja: "Region" }, defaultValue: "fixture-default",
+          }],
+          outputAllowlist: {},
+          interfaceBlueprints: [{
+            key: "launcher", name: "app.launcher",
+            spec: {
+              type: "interface.ui.surface", version: "1",
+              document: { launcher: true, display: { title: "Synthetic readiness service" } },
+              inputs: { url: { source: "capsule_output", capsuleId: "cap_provider_destination_e2e", outputName: "url" } },
+              access: { visibility: "workspace" },
+            },
+            bindings: [{ key: "launcher.installer", subject: { source: "installing_principal" }, permissions: ["ui.open"], delivery: { type: "none" } }],
+          }],
+          createdAt: "2026-08-01T00:00:00.000Z", updatedAt: "2026-08-01T00:00:00.000Z",
+        } } });
+      }
+      if (path === "/api/v1/runs/run_provider_plan_e2e") {
+        return route.fulfill({ json: { run: {
+          id: "run_provider_plan_e2e", workspaceId: "ws_alpha",
+          capsuleId: "cap_provider_destination_e2e", type: "plan", status: "succeeded",
+          summary: { add: 1, change: 0, destroy: 1 }, policyStatus: "pass",
+          requiresApproval: false, createdBy: "portable-e2e", createdAt: "2026-08-01T00:00:00.000Z",
+        } } });
+      }
+      if (path === "/api/v1/runs/run_provider_plan_e2e/apply" && request.method() === "POST") {
+        applyPosts.push(path);
+        return route.fulfill({ json: { run: {
+          id: "run_provider_apply_e2e", workspaceId: "ws_alpha",
+          capsuleId: "cap_provider_destination_e2e", type: "apply", status: "succeeded",
+          createdBy: "portable-e2e", createdAt: "2026-08-01T00:00:00.000Z",
+        } } });
+      }
+      if (path === "/api/v1/runs/run_provider_apply_e2e") {
+        return route.fulfill({ json: { run: {
+          id: "run_provider_apply_e2e", workspaceId: "ws_alpha",
+          capsuleId: "cap_provider_destination_e2e", type: "apply", status: "succeeded",
+          createdBy: "portable-e2e", createdAt: "2026-08-01T00:00:00.000Z",
+        } } });
+      }
+      if (path === "/api/v1/runs/run_provider_apply_e2e/stream") {
+        return route.fulfill({ status: 200, contentType: "text/event-stream", body: "" });
+      }
+      if (path === "/api/v1/capsules/cap_provider_destination_e2e/state-versions") {
+        if (readinessReadFailures > 0) {
+          readinessReadFailures -= 1;
+          return route.fulfill({ status: 503, json: { error: "synthetic_readback_unavailable" } });
+        }
+        return route.fulfill({ json: { stateVersions: [{
+          id: "sv_provider_apply_e2e", workspaceId: "ws_alpha",
+          capsuleId: "cap_provider_destination_e2e", environment: "production",
+          generation: 1, createdByRunId: "run_provider_apply_e2e",
+          createdAt: "2026-08-01T00:00:00.000Z",
+        }] } });
+      }
+      if (path === "/api/v1/workspaces/ws_alpha/activity") {
+        return route.fulfill({ json: { events: [{
+          id: "activity_provider_activation_e2e", workspaceId: "ws_alpha",
+          action: activationAction, targetType: "Capsule", targetId: "cap_provider_destination_e2e",
+          runId: "run_provider_apply_e2e",
+          metadata: { applyRunId: "run_provider_apply_e2e", stateVersionId: "sv_provider_apply_e2e", capsuleId: "cap_provider_destination_e2e" },
+          createdAt: activationAction === "release_activation.succeeded" ? "2026-08-01T00:00:02.000Z" : "2026-08-01T00:00:01.000Z",
+        }] } });
+      }
+      if (path === "/api/v1/workspaces/ws_alpha/ui-surfaces") {
+        return route.fulfill({ json: { interfaces: [{
+          apiVersion: "takosumi.dev/v1alpha1", kind: "Interface",
+          metadata: {
+            id: "if_provider_readiness_e2e", workspaceId: "ws_alpha", name: "app.launcher",
+            ownerRef: { kind: "Capsule", id: "cap_provider_destination_e2e" }, generation: 1,
+            createdAt: "2026-08-01T00:00:00.000Z", updatedAt: "2026-08-01T00:00:00.000Z",
+          },
+          spec: {
+            type: "interface.ui.surface", version: "1",
+            document: { launcher: true, display: { title: "Synthetic readiness service" } },
+            inputs: { url: { source: "capsule_output", capsuleId: "cap_provider_destination_e2e", outputName: "url" } },
+            access: { visibility: "workspace" },
+          },
+          status: { phase: "Resolved", observedGeneration: 1, resolvedRevision: 1, resolvedInputs: { url: "https://service.example.test/fixture" } },
+        }] } });
+      }
+      return route.fallback();
+    });
+    await page.context().route("https://service.example.test/**", async (route) => {
+      await route.fulfill({ contentType: "text/html", body: "<main>Synthetic app fixture</main>" });
+    });
+
+    await page.goto("/new", { waitUntil: "domcontentloaded" });
+    const search = page.getByRole("searchbox", { name: "Search services…" });
+    await expect(search).toBeVisible();
+    await search.fill("Readiness");
+    await expect(page.getByRole("heading", { name: "Readiness Service" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Noise Service" })).toHaveCount(0);
+    await page.getByRole("button", { name: "Readiness Service", exact: true }).click();
+    const details = page.getByRole("dialog", { name: "Readiness Service" });
+    await expect(details.getByText("Synthetic fixture: input and activation gated.")).toBeVisible();
+    await details.locator("details.tcs-advanced summary").click();
+    await expect(details.getByText("https://github.com/example/cloudflare-service")).toBeVisible();
+    await details.getByRole("button", { name: "Add Readiness Service", exact: true }).click();
+
+    await page.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Choose a Host / account" })).toBeVisible();
+    await page.getByRole("combobox", { name: "Host / account" }).selectOption("pc_takosumi_cloud");
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await expect(page.getByRole("heading", { name: /Set up the service/u })).toBeVisible();
+    await page.getByLabel("Region").fill("us-west-2");
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await expect(page.getByRole("heading", { name: /Review before adding/u })).toBeVisible();
+    const addButton = page.getByRole("button", { name: "Add", exact: true });
+    await expect(addButton).toBeDisabled();
+    expect(install.installPlanBody).toMatchObject({
+      variables: { region: "us-west-2" },
+      options: { providerBindings: [expect.objectContaining({
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        connectionId: "pc_takosumi_cloud",
+      })] },
+    });
+
+    await expect(page.locator("body")).not.toContainText("$0.00");
+
+    await page.getByRole("checkbox", { name: "I reviewed these changes" }).check();
+    await expect(addButton).toBeEnabled();
+    await addButton.click();
+    await expect.poll(() => applyPosts.length).toBe(1);
+    await assertNoPageErrors(errors);
+    await expect(page.getByRole("alert")).toContainText(/readiness state could not be checked/u);
+    await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Technical details" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open service" })).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    await expect(page.getByText("Waiting for the service launch link to become available.")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open service" })).toHaveCount(0);
+    activationAction = "release_activation.succeeded";
+    const openService = page.getByRole("link", { name: "Open service" });
+    await expect(openService).toBeVisible({ timeout: 15_000 });
+    await expect(openService).toHaveAttribute("href", "https://service.example.test/fixture");
+    expect(requests).toContain("GET http://127.0.0.1:4179/api/v1/capsules/cap_provider_destination_e2e/state-versions");
+    expect(requests).toContain("GET http://127.0.0.1:4179/api/v1/workspaces/ws_alpha/activity?limit=100");
+    expect(requests.filter((entry) => entry === "POST http://127.0.0.1:4179/api/v1/runs/run_provider_plan_e2e/apply")).toHaveLength(1);
+
+    const popupPromise = page.waitForEvent("popup");
+    await openService.click();
+    const popup = await popupPromise;
+    await expect(popup).toHaveURL("https://service.example.test/fixture");
+    await expect(popup.getByText("Synthetic app fixture")).toBeVisible();
+    await popup.close();
+    await assertNoPageErrors(errors);
+    expect(requests.every((entry) =>
+      entry.startsWith("GET http://127.0.0.1:4179/") ||
+      entry.startsWith("POST http://127.0.0.1:4179/") ||
+      entry.startsWith("GET https://store.example.test/") ||
+      entry.startsWith("GET https://service.example.test/"),
+    )).toBe(true);
+  });
+
   for (const change of ["none", "review", "applied"] as const) {
     const title = change === "applied"
       ? "refuses a failed initial Plan retry when another Apply commits before the click"
