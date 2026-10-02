@@ -28,12 +28,14 @@ import {
   type RunnerImageBuildRecord,
   type RunnerImageReleaseEnvironment,
   type RunnerImageRuntimeInputPlanProof,
+  type RunnerImageAnyRuntimeInputPlanProof,
 } from "./runner-image-release-contract.ts";
 import { lineageVerdict } from "./lib/deploy-lineage.ts";
 import { authorizeRunnerRegistryPull } from "./lib/runner-image-registry-auth.ts";
 import {
   DOCKER_SCHEMA2_MANIFEST_MEDIA_TYPE,
   githubRepositoryFromRemote,
+  isMetadataQualifiedRunnerImageNativeCandidateRecord,
   materializeRunnerSource,
   OCI_IMAGE_MANIFEST_MEDIA_TYPE,
   parseRunnerImageNativeCandidateRecord,
@@ -134,7 +136,7 @@ type RunnerPublicationAttempt = Readonly<{
     /** Explicit descriptor authority written by descriptor-aware publishers. */
     localDescriptorDigest?: string;
   };
-  runtimeInputPlanProof?: RunnerImageRuntimeInputPlanProof;
+  runtimeInputPlanProof?: RunnerImageAnyRuntimeInputPlanProof;
   review: string;
 }>;
 
@@ -871,9 +873,10 @@ async function buildRunnerImage(
       flag: "wx",
     });
     let localIdentity: LocalRunnerImageIdentity;
+    let metadataProof: { descriptorDigest: string; savedPlanStateMetadata: "passed" };
     const candidate = runnerImageCandidateInputs(options);
     if (candidate) {
-      localIdentity = await consumeRunnerImageNativeCandidate(
+      const consumed = await consumeRunnerImageNativeCandidate(
         candidate,
         context,
         materialized,
@@ -882,6 +885,8 @@ async function buildRunnerImage(
         workspace,
         sourceRoots,
       );
+      localIdentity = consumed.identity;
+      metadataProof = consumed.nativeProof;
     } else {
       await verifyRunnerOpenTofuSigstore(
         new TextDecoder("utf-8", { fatal: true }).decode(dockerfileSource),
@@ -920,15 +925,20 @@ async function buildRunnerImage(
         workspace,
       );
       localIdentity = parseLocalRunnerImageIdentity(localImage.stdout);
-      await proveRunnerImageHardenedNative(
+      metadataProof = await proveRunnerImageHardenedNative(
         localIdentity,
         transportTag,
         command,
         workspace,
       );
     }
+    if (metadataProof.descriptorDigest !== localIdentity.descriptorDigest ||
+        metadataProof.savedPlanStateMetadata !== "passed") {
+      throw new Error("runner_image_saved_plan_metadata_proof_invalid");
+    }
     const runtimeInputPlanProof = runnerImageRuntimeInputPlanProof(
       `${imageRepository}@${localIdentity.descriptorDigest}`,
+      metadataProof,
     );
     const attempt: RunnerPublicationAttempt = {
       kind: "takosumi.runner-image-publication-state@v2",
@@ -1154,7 +1164,7 @@ async function consumeRunnerImageNativeCandidate(
   command: NonNullable<RunnerImageReleaseRuntime["command"]>,
   workspace: string,
   sourceRoots: readonly string[],
-): Promise<LocalRunnerImageIdentity> {
+): Promise<{ identity: LocalRunnerImageIdentity; nativeProof: RunnerImageNativeCandidateRecord["nativeProof"] }> {
   if (
     basename(candidate.image) !== "runner-image.tar" ||
     basename(candidate.record) !== "candidate.json" ||
@@ -1245,6 +1255,9 @@ async function consumeRunnerImageNativeCandidate(
       candidateRecordSource,
     ),
   );
+  if (!isMetadataQualifiedRunnerImageNativeCandidateRecord(record)) {
+    throw new Error("runner_image_native_candidate_metadata_proof_required");
+  }
   assertRunnerImageNativeCandidateMatchesSource(record, context, materialized);
   if (
     record.archive.size !== custody.image.size ||
@@ -1309,7 +1322,7 @@ async function consumeRunnerImageNativeCandidate(
       });
     }
     candidateTagMayExist = false;
-    return retagged;
+    return { identity: retagged, nativeProof: record.nativeProof };
   } catch (error) {
     if (candidateTagMayExist) {
       const cleanupError = await removeExactCandidateLocalTag(
@@ -1947,11 +1960,13 @@ function isExactRemoteManifestAbsence(
 
 function runnerImageRuntimeInputPlanProof(
   image: string,
+  nativeProof: { descriptorDigest: string; savedPlanStateMetadata: "passed" },
 ): RunnerImageRuntimeInputPlanProof {
-  if (!DIGEST_IMAGE.test(image)) {
+  if (!DIGEST_IMAGE.test(image) || !image.endsWith(`@${nativeProof.descriptorDigest}`) ||
+      nativeProof.savedPlanStateMetadata !== "passed") {
     throw new Error("runner_image_runtime_input_plan_proof_invalid");
   }
-  return { kind: RUNNER_IMAGE_RUNTIME_INPUT_PLAN_PROOF_KIND, image };
+  return { kind: RUNNER_IMAGE_RUNTIME_INPUT_PLAN_PROOF_KIND, image, savedPlanStateMetadata: "passed" };
 }
 
 async function proveLegacyPublicationLocalIdentity(
@@ -2719,9 +2734,10 @@ async function verifyRunnerImage(
   if (!immutableRef || !DIGEST_IMAGE.test(immutableRef)) {
     throw new Error("build evidence has no immutable runner image");
   }
-  if (
-    runnerImageRuntimeInputPlanProofFromBuildRecord(build, immutableRef) === null
-  ) {
+  const historicalOrCurrentProof = runnerImageRuntimeInputPlanProofFromBuildRecord(
+    build, immutableRef,
+  );
+  if (historicalOrCurrentProof === null) {
     throw new Error("runner_image_runtime_input_plan_proof_required");
   }
   if (
@@ -2776,6 +2792,7 @@ async function verifyRunnerImage(
       authoritySha256: context.releaseSource.authoritySha256,
     },
     image: immutableRef,
+    runtimeInputPlanProofKind: historicalOrCurrentProof.kind,
     platformVersionId: platform.deployedVersionId,
   } as const;
   if (!options.execute) return planned;
@@ -3226,7 +3243,7 @@ function buildRecord(
   immutableRef: string | null,
   expectedActivationSha256: string | null,
   status: RunnerImageBuildRecord["status"],
-  runtimeInputPlanProof?: RunnerImageRuntimeInputPlanProof,
+  runtimeInputPlanProof?: RunnerImageAnyRuntimeInputPlanProof,
 ): RunnerImageBuildRecord {
   return {
     kind: "takosumi.runner-image-release@v3",
