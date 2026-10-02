@@ -25,6 +25,16 @@ const capsulesUiSource = readFileSync(
   "utf8",
 );
 
+function section(startMarker: string, endMarker: string): string {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  return start >= 0 && end >= 0 ? source.slice(start, end) : "";
+}
+
+function occurrences(text: string, needle: string): number {
+  return text.split(needle).length - 1;
+}
+
 describe("Capsule detail StateVersion surface", () => {
   test("renders public-surface and update-history sections via the dictionary", () => {
     expect(source).toContain('t("app.surfaces.title")');
@@ -33,6 +43,10 @@ describe("Capsule detail StateVersion surface", () => {
   });
 
   test("keeps update review in the update-history surface", () => {
+    const deploys = section(
+      "function DeploysTab",
+      "function DeployedResourcesDisclosure",
+    );
     expect(source).toContain("function DeploysTab");
     expect(source).toContain(
       "onReview={(revision) => void plan.run(revision)}",
@@ -45,21 +59,20 @@ describe("Capsule detail StateVersion surface", () => {
     expect(source).toContain(
       '{ href: `${base}/settings`, label: t("app.tab.settings") }',
     );
-    expect(source.indexOf('t("apps.reviewChanges")')).toBeGreaterThan(
-      source.indexOf("function DeploysTab"),
+    expect(deploys).toContain('t("app.deploys.sourceVersionTitle")');
+    expect(deploys).toContain('t("app.deploys.sourceVersionChange")');
+    expect(deploys).toContain('t("app.deploys.reviewTitle")');
+    expect(deploys.indexOf('t("app.deploys.sourceVersionTitle")')).toBeLessThan(
+      deploys.indexOf('t("app.deploys.sourceVersionChange")'),
     );
-    expect(source).toContain("icon={<Trash2 size={16} />}");
-    expect(source).toContain('t("common.delete")');
-    expect(source).toContain("deleteCapsule(capsuleId())");
-    expect(source).toContain('navigate("/workloads")');
-    expect(source.indexOf('t("common.delete")')).toBeLessThan(
-      source.indexOf("<Tabs items={tabItems()}"),
+    expect(deploys.indexOf('t("app.deploys.sourceVersionChange")')).toBeLessThan(
+      deploys.indexOf('t("app.deploys.reviewTitle")'),
     );
-    expect(source.indexOf('t("app.deploys.backup")')).toBeGreaterThan(
-      source.indexOf('t("app.deploys.advancedActions")'),
+    expect(deploys.indexOf('t("app.deploys.backup")')).toBeGreaterThan(
+      deploys.indexOf('t("app.deploys.advancedActions")'),
     );
-    expect(source.indexOf('t("app.settings.openCta")')).toBeGreaterThan(
-      source.indexOf('t("app.deploys.advancedActions")'),
+    expect(deploys.indexOf('t("app.settings.openCta")')).toBeGreaterThan(
+      deploys.indexOf('t("app.deploys.advancedActions")'),
     );
   });
 
@@ -69,40 +82,74 @@ describe("Capsule detail StateVersion surface", () => {
     expect(source).not.toContain('t("app.deploys.backupCreated", { id:');
   });
 
-  test("keeps technical source details out of the default overview; deletion lives on the 削除 tab only", () => {
+  test("keeps URLs collapsed in overview and redirects legacy deletion routes into settings", () => {
+    const overview = section(
+      "function OverviewTab",
+      "function DependencyList",
+    );
+    const settings = section(
+      "function SettingsTab",
+      "function rowPresentsDefault",
+    );
     expect(source).toContain("function OverviewTab");
     expect(source).toContain("function SettingsTab");
-    // ONE delete flow: no duplicate delete section at the bottom of settings —
-    // the tab strip and the header button both route to the danger tab.
-    expect(source).not.toContain('t("app.settings.removeTitle")');
-    expect(source).not.toContain('t("app.settings.removeCta")');
+    expect(source).toContain('raw === "danger"');
+    expect(source).toContain('`${base}/settings#delete`');
     expect(source).toContain(
       '{ href: `${base}/settings`, label: t("app.tab.settings") }',
     );
-    expect(source).toContain(
-      '{ href: `${base}/danger`, label: t("app.tab.danger") }',
-    );
+    expect(source).not.toContain('label: t("app.tab.danger")');
+    expect(source).not.toContain('href: `${base}/danger`');
     expect(source).not.toContain('t("app.nextSteps.title")');
-    expect(source.indexOf('t("app.source.title")')).toBeGreaterThan(
-      source.indexOf("function SettingsTab"),
+    expect(overview).toMatch(
+      /<details class="wb-disclosure">\s*<summary>\{t\("app\.surfaces\.details"\)\}<\/summary>[\s\S]*<code class="av-output-url-text">\{surface\.url\}<\/code>/,
     );
-    expect(source).toContain('t("app.settings.supportDetails")');
-    expect(source.indexOf('t("app.source.title")')).toBeGreaterThan(
-      source.indexOf('t("app.settings.supportDetails")'),
-    );
-    expect(source).toMatch(
-      /<summary>\{t\("app\.settings\.supportDetails"\)\}<\/summary>[\s\S]*<summary>\{t\("app\.source\.title"\)\}<\/summary>/,
+    expect(settings).toContain('t("app.settings.supportDetails")');
+    expect(settings).toContain('t("app.source.title")');
+    expect(settings.indexOf('t("app.source.title")')).toBeGreaterThan(
+      settings.indexOf('t("app.settings.supportDetails")'),
     );
   });
 
   test("delete is confirmed once — at destroy-apply, not with an upfront modal", () => {
-    // Header: a link into the plan-first danger flow, not a duplicate modal.
-    expect(source).toContain(
-      "href={`/workloads/${encodeURIComponent(capsuleId())}/danger`}",
+    const headerActions = section(
+      "<PageHeader",
+      '<Show when={update.error()'
     );
-    expect(source).toContain(
-      'inst().status !== "destroyed" && tab() !== "danger"',
+    const settingsTabIndex = source.indexOf(
+      '<Match when={tab() === "settings"}>',
     );
+    const deleteFlowIndex = source.search(/<details\s+id="delete"/);
+    const deleteGuardIndex = source.lastIndexOf(
+      '<Show when={inst().status !== "destroyed"}>',
+      deleteFlowIndex,
+    );
+    const deleteFlow = source.slice(
+      deleteFlowIndex,
+      source.indexOf("</details>", deleteFlowIndex),
+    );
+
+    // Header actions contain no deletion affordance. The only delete flow is
+    // guarded inside Settings and the legacy /danger route redirects there.
+    expect(headerActions).toMatch(
+      /RuntimeSurfaceLink\s+surface=\{surface\(\)\}\s+primary/,
+    );
+    expect(headerActions).toContain("serviceOpenable() && uiSurfaceList()[0]");
+    expect(headerActions).not.toContain('t("app.danger.destroyTitle")');
+    expect(headerActions).not.toContain("confirmDestroy");
+    expect(headerActions).not.toContain("deleteCapsule");
+    expect(headerActions).not.toContain("settings#delete");
+    expect(settingsTabIndex).toBeGreaterThan(-1);
+    expect(deleteFlowIndex).toBeGreaterThan(settingsTabIndex);
+    expect(deleteGuardIndex).toBeGreaterThan(settingsTabIndex);
+    expect(deleteFlowIndex).toBeGreaterThan(deleteGuardIndex);
+    expect(source.match(/<details\s+id="delete"/g)).toHaveLength(1);
+    expect(deleteFlow).toContain('open={location.hash === "#delete"}');
+    expect(deleteFlow).toContain('onClick={() => void confirmDestroy()}');
+    expect(occurrences(source, 'onClick={() => void confirmDestroy()}')).toBe(1);
+    expect(source).toContain('inst().status !== "destroyed"');
+    expect(occurrences(source, 't("app.danger.destroyCta")')).toBe(2);
+    expect(occurrences(source, "deleteCapsule(capsuleId())")).toBe(1);
     // Creating a plan removes nothing; for an APPLIED service the single
     // confirmation stays on the run screen at destroy-apply (RunView's
     // destructive-confirm block), where the plan is visible.
@@ -122,9 +169,9 @@ describe("Capsule detail StateVersion surface", () => {
     // unsaved-edits guard still use confirmation.
     expect(source).toContain('title: t("app.settings.leaveConfirm.title")');
     expect(source.match(/await confirm\(/g)?.length).toBe(2);
-    // The danger tab still names the service in its warning header.
-    expect(source).toContain(
-      't("app.danger.destroyBody", {\n                          name: serviceLabel(),\n                        })',
+    // The guarded settings disclosure still names the service in its warning.
+    expect(source).toMatch(
+      /t\("app\.danger\.destroyBody",\s*\{\s*name:\s*serviceLabel\(\),\s*\}\)/,
     );
     expect(ja["app.danger.destroyBody"]).toContain("{name}");
     expect(en["app.danger.destroyBody"]).toContain("{name}");
@@ -206,8 +253,9 @@ describe("Capsule detail StateVersion surface", () => {
     expect(source).toContain("resetToDefault: row.hasExistingValue");
     expect(source).toContain('t("app.config.undoReset")');
     expect(source).toContain(
-      't("app.config.undoResetAria", { name: row().name })',
+      't("app.config.undoResetAria", { name: row().label })',
     );
+    expect(source).toContain('t("app.config.resetAria", { name: row().label })');
     expect(source).toContain('t("app.config.resetPendingHint")');
     expect(source).toContain('t("app.config.defaultBadge")');
     expect(capsulesUiSource).toContain("row.storeField && row.resetToDefault");
@@ -304,14 +352,32 @@ describe("Capsule detail StateVersion surface", () => {
     expect(source).toContain("type AuthorizedUiSurface");
   });
 
-  test("公開リンク rows use Interface display names, one primary button, and an inline URL", () => {
+  test("the header opens only the first authorized Interface and overview URLs stay disclosed", () => {
+    const headerActions = section(
+      "<PageHeader",
+      '<Show when={update.error()'
+    );
+    const overview = section(
+      "function OverviewTab",
+      "function DependencyList",
+    );
+    const link = section("function RuntimeSurfaceLink", "function DeploysTab");
     expect(source).toContain("surface.name ??");
     expect(source).toContain('t("app.surfaces.defaultName"');
-    expect(source).toContain("primary={index === 0}");
-    expect(source).toContain(
+    expect(headerActions).toContain("!uiSurfaces.loading");
+    expect(headerActions).toContain("!uiSurfaces.error");
+    expect(headerActions).toContain("serviceOpenable() && uiSurfaceList()[0]");
+    expect(headerActions).toMatch(
+      /RuntimeSurfaceLink\s+surface=\{surface\(\)\}\s+primary/,
+    );
+    expect(link).toContain(
       'variant={props.primary ? "primary" : "secondary"}',
     );
-    expect(source).toContain('class="av-output-url-text"');
+    expect(link).toContain('aria-label={t("app.surfaces.openAria"');
+    expect(link).toContain('t("app.surfaces.open")');
+    expect(overview).toContain('<summary>{t("app.surfaces.details")}</summary>');
+    expect(overview).toContain('class="av-output-url-text"');
+    expect(overview).toContain("surface.url");
     expect(source).not.toContain("publicLinkRowLabels");
   });
 
@@ -334,14 +400,21 @@ describe("Capsule detail StateVersion surface", () => {
   });
 
   test("does not offer stale open links for deleted services", () => {
+    const headerActions = section(
+      "<PageHeader",
+      '<Show when={update.error()'
+    );
+    const link = section("function RuntimeSurfaceLink", "function DeploysTab");
     expect(source).toContain("serviceOpenable");
     // capsuleData() is the crash-safe last-good accessor (never throws on a
     // failed refetch); the destroyed-status gate on openability is unchanged.
     expect(source).toContain('capsuleData()?.status !== "destroyed"');
     expect(source).toContain("isStateVersionRuntimeReady");
     expect(source).toContain('t("app.surfaces.deletedSubtitle")');
-    expect(source).toContain("openable={props.serviceOpenable}");
-    expect(source).toContain("props.openable !== false");
+    expect(headerActions).toContain("serviceOpenable() && uiSurfaceList()[0]");
+    expect(link).toContain("props.openable !== false");
+    expect(link).toContain("props.openable === false");
+    expect(link).toContain("<code>{props.surface.url}</code>");
   });
 
   test("公開リンク copy is one state machine: deleted / preparing / deployed are mutually exclusive", () => {
@@ -363,7 +436,7 @@ describe("Capsule detail StateVersion surface", () => {
     expect(source).toContain('class="av-setup-incomplete"');
     expect(source).toContain('t("app.setupIncomplete.body")');
     expect(source).toContain('t("app.setupIncomplete.review")');
-    expect(source).toContain('t("app.setupIncomplete.delete")');
+    expect(source).toContain('t("app.settings.openCta")');
     expect(source).toContain(
       'inst().status !== "destroyed" && !currentStateVersionId()',
     );
@@ -382,20 +455,50 @@ describe("Capsule detail StateVersion surface", () => {
   });
 
   test("listing-declared settings show localized labels with read-only keys; free-form rows stay advanced", () => {
-    // A store input's key renders as muted mono text, not an editable textbox,
-    // and the value field carries the localized store label.
-    expect(source).toContain('class="av-config-key"');
-    expect(source).toMatch(/when=\{!row\(\)\.storeField\}/);
-    expect(source).toContain(
+    const settings = section(
+      "function SettingsTab",
+      "function rowPresentsDefault",
+    );
+    const variableRows = section(
+      "function VariableRows",
+      "function ConfigVariableInput",
+    );
+    const settingsRoute = section(
+      '<Match when={tab() === "settings"}>',
+      "</Switch>",
+    );
+    const support = settings.slice(
+      settings.indexOf('t("app.settings.supportDetails")'),
+    );
+
+    // Listing-owned values lead the settings view. Their keys are not edited
+    // alongside values; raw keys appear only in the explicit support disclosure.
+    expect(variableRows).toMatch(/when=\{!row\(\)\.storeField\}/);
+    expect(variableRows).toContain(
       'label={row().storeField ? row().label : t("app.config.value")}',
     );
-    // Free-form key+value rows never surface in the primary list.
-    expect(source).toContain("row.storeField && (!row.advanced");
-    // The clear/remove button names its variable for screen readers.
-    expect(source).toContain('t("app.config.resetAria", { name: row().name })');
-    expect(source).toContain('t("app.config.removeAria"');
-    // Legacy projection variables remain hidden from free-form settings, but
-    // the retired automatic Capsule OIDC state is not presented as current UI.
+    expect(settings).toContain("row.storeField && (!row.advanced");
+    expect(settings.indexOf("rows={primaryVariableRows()}")).toBeLessThan(
+      settings.indexOf('<summary>{t("app.config.advanced")}</summary>'),
+    );
+    expect(
+      settings.indexOf('<summary>{t("app.config.advanced")}</summary>'),
+    ).toBeLessThan(settings.indexOf('t("app.settings.supportDetails")'));
+    expect(support).toContain('t("app.config.internalNames")');
+    expect(support).toContain("value: <code>{row.name}</code>");
+    expect(settings.indexOf("value: <code>{row.name}</code>")).toBeGreaterThan(
+      settings.indexOf('t("app.config.internalNames")'),
+    );
+    expect(settingsRoute.indexOf("<SettingsTab")).toBeLessThan(
+      settingsRoute.indexOf('<summary>{t("app.autoUpdate.title")}</summary>'),
+    );
+    expect(variableRows).toContain(
+      't("app.config.resetAria", { name: row().label })',
+    );
+    expect(variableRows).toContain(
+      't("app.config.undoResetAria", { name: row().label })',
+    );
+    expect(variableRows).toContain('t("app.config.removeAria"');
     expect(source).toContain("installExperienceOidcClient");
   });
 });

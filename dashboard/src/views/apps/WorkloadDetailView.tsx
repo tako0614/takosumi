@@ -12,6 +12,7 @@
 import "../../styles/wave-a.css";
 import "../../styles/wave-b.css";
 import "../../styles/app-views.css";
+import "../../styles/workload-simplification.css";
 import {
   createEffect,
   createMemo,
@@ -25,14 +26,19 @@ import {
   Show,
   Switch,
 } from "solid-js";
-import { A, useBeforeLeave, useNavigate, useParams } from "@solidjs/router";
+import {
+  A,
+  useBeforeLeave,
+  useLocation,
+  useNavigate,
+  useParams,
+} from "@solidjs/router";
 import {
   Archive,
   ArrowLeft,
   RefreshCw,
   RotateCcw,
   Settings2,
-  Trash2,
 } from "lucide-solid";
 import {
   installExperienceArtifact,
@@ -138,7 +144,7 @@ import {
 } from "../../lib/ui-surface-interfaces.ts";
 import { isProviderConnectionCandidate } from "../../lib/provider-connections.ts";
 
-type TabId = "overview" | "deploys" | "settings" | "danger";
+type TabId = "overview" | "deploys" | "settings";
 
 export default function WorkloadDetailView() {
   return <Page title={t("app.capsuleSub")}>{() => <Inner />}</Page>;
@@ -156,6 +162,7 @@ function isCapsuleNotFound(error: unknown): boolean {
 
 function Inner() {
   const params = useParams();
+  const location = useLocation();
   const navigate = useNavigate();
   const capsuleId = () => params.id ?? "";
 
@@ -174,22 +181,21 @@ function Inner() {
   const configurationAuthorityGuard = () => capsule.latest?.authorityGuard;
   const tab = (): TabId => {
     const raw = params.tab;
-    const resolved =
-      raw === "deploys" || raw === "settings" || raw === "danger"
-        ? raw
-        : "overview";
-    // A destroyed service has no delete action — the 削除 tab is hidden from
-    // the strip, so a direct /danger URL falls back to overview instead of
-    // rendering a dead 削除の確認 CTA. `.latest` never throws (unlike a read of
-    // an errored resource).
-    if (
-      resolved === "danger" &&
-      capsule.latest?.capsule.status === "destroyed"
-    ) {
-      return "overview";
+    if (raw === "danger") {
+      return capsuleData()?.status === "destroyed" ? "overview" : "settings";
     }
-    return resolved;
+    return raw === "deploys" || raw === "settings" ? raw : "overview";
   };
+  // Existing list/bookmark links keep reaching the same plan-first deletion
+  // flow, now within Settings rather than a second tab.
+  createEffect(() => {
+    if (params.tab !== "danger" || !capsuleData()) return;
+    const base = `/workloads/${encodeURIComponent(capsuleId())}`;
+    navigate(
+      capsuleData()?.status === "destroyed" ? base : `${base}/settings#delete`,
+      { replace: true },
+    );
+  });
   const workspaceId = () => capsuleData()?.workspaceId;
   const settingsCapsuleId = () => (tab() === "settings" ? capsuleId() : null);
   const settingsWorkspaceId = () =>
@@ -538,9 +544,6 @@ function Inner() {
       { href: `${base}/deploys`, label: t("app.tab.deploys") },
       { href: `${base}/settings`, label: t("app.tab.settings") },
     ];
-    if (capsuleData()?.status !== "destroyed") {
-      items.push({ href: `${base}/danger`, label: t("app.tab.danger") });
-    }
     return items;
   };
 
@@ -625,6 +628,24 @@ function Inner() {
                 }
                 actions={
                   <div class="av-actions">
+                    <Show
+                      when={
+                        tab() === "overview" && !uiSurfaces.loading &&
+                        !uiSurfaces.error && serviceOpenable() && uiSurfaceList()[0]
+                      }
+                    >
+                      {(surface) => (
+                        <RuntimeSurfaceLink
+                          surface={surface()}
+                          primary
+                          displayName={
+                            uiSurfaceList().length > 1
+                              ? surface().name || t("app.surfaces.defaultName", { n: 1 })
+                              : undefined
+                          }
+                        />
+                      )}
+                    </Show>
                     {/* /workloads is the list this detail belongs to; home only
                         shows services that expose a screen, so returning there
                         can look like the service disappeared. */}
@@ -633,7 +654,7 @@ function Inner() {
                     </Button>
                     <Show when={effectiveCapsuleStatus(inst()) === "stale"}>
                       <Button
-                        variant="primary"
+                        variant="secondary"
                         type="button"
                         busy={update.busy()}
                         disabled={
@@ -645,19 +666,6 @@ function Inner() {
                         icon={<RefreshCw size={16} />}
                       >
                         {t("app.updateNow")}
-                      </Button>
-                    </Show>
-                    {/* One delete flow: the header button routes to the 削除
-                        tab (plan-first) instead of opening a duplicate modal. */}
-                    <Show
-                      when={inst().status !== "destroyed" && tab() !== "danger"}
-                    >
-                      <Button
-                        variant="danger"
-                        href={`/workloads/${encodeURIComponent(capsuleId())}/danger`}
-                        icon={<Trash2 size={16} />}
-                      >
-                        {t("common.delete")}
                       </Button>
                     </Show>
                   </div>
@@ -707,11 +715,11 @@ function Inner() {
                       </Button>
                     </Show>
                     <Button
-                      variant="danger"
+                      variant="secondary"
                       size="sm"
-                      href={`/workloads/${encodeURIComponent(capsuleId())}/danger`}
+                      href={`/workloads/${encodeURIComponent(capsuleId())}/settings`}
                     >
-                      {t("app.setupIncomplete.delete")}
+                      {t("app.settings.openCta")}
                     </Button>
                   </div>
                 </div>
@@ -790,32 +798,6 @@ function Inner() {
                     />
                   </Match>
                   <Match when={tab() === "settings"}>
-                    <Card>
-                      <CardHeader
-                        title={t("app.autoUpdate.title")}
-                        subtitle={t("app.autoUpdate.body")}
-                        actions={
-                          <Button
-                            variant={
-                              inst().autoUpdate === true
-                                ? "secondary"
-                                : "primary"
-                            }
-                            type="button"
-                            busy={autoUpdateToggle.busy()}
-                            disabled={autoUpdateToggle.busy()}
-                            onClick={() => void autoUpdateToggle.run()}
-                          >
-                            {inst().autoUpdate === true
-                              ? t("app.autoUpdate.disable")
-                              : t("app.autoUpdate.enable")}
-                          </Button>
-                        }
-                      />
-                      <Show when={autoUpdateToggle.error()}>
-                        {(message) => <Toast tone="error">{message()}</Toast>}
-                      </Show>
-                    </Card>
                     <SettingsTab
                       source={source()}
                       adoptedSourceRevision={capsuleData()?.adoptedSourceRevision}
@@ -828,34 +810,70 @@ function Inner() {
                       authorityGuard={configurationAuthorityGuard()}
                       onPlanned={(planRunId) => navigate(`/runs/${planRunId}`)}
                     />
-                  </Match>
-                  <Match when={tab() === "danger"}>
-                    <Card>
-                      <CardHeader
-                        title={t("app.danger.destroyTitle")}
-                        subtitle={t("app.danger.destroyBody", {
-                          name: serviceLabel(),
-                        })}
-                      />
-                      <div class="wa-form-actions">
-                        <Button
-                          variant="danger"
-                          type="button"
-                          disabled={destroyPlan.busy()}
-                          busy={destroyPlan.busy()}
-                          onClick={() => void confirmDestroy()}
-                        >
-                          {t("app.danger.destroyCta")}
-                        </Button>
-                      </div>
-                      <Show when={destroyPlan.error()}>
-                        {(m) => (
-                          <p class="wa-error" role="alert">
-                            {m()}
-                          </p>
-                        )}
-                      </Show>
-                    </Card>
+                    <details class="wb-disclosure">
+                      <summary>{t("app.autoUpdate.title")}</summary>
+                      <Card>
+                        <CardHeader
+                          title={t("app.autoUpdate.title")}
+                          subtitle={t("app.autoUpdate.body")}
+                          actions={
+                            <Button
+                              variant={
+                                inst().autoUpdate === true
+                                  ? "secondary"
+                                  : "primary"
+                              }
+                              type="button"
+                              busy={autoUpdateToggle.busy()}
+                              disabled={autoUpdateToggle.busy()}
+                              onClick={() => void autoUpdateToggle.run()}
+                            >
+                              {inst().autoUpdate === true
+                                ? t("app.autoUpdate.disable")
+                                : t("app.autoUpdate.enable")}
+                            </Button>
+                          }
+                        />
+                        <Show when={autoUpdateToggle.error()}>
+                          {(message) => <Toast tone="error">{message()}</Toast>}
+                        </Show>
+                      </Card>
+                    </details>
+                    <Show when={inst().status !== "destroyed"}>
+                      <details
+                        id="delete"
+                        class="wb-disclosure"
+                        open={location.hash === "#delete"}
+                      >
+                        <summary>{t("app.danger.destroyTitle")}</summary>
+                        <Card>
+                          <CardHeader
+                            title={t("app.danger.destroyTitle")}
+                            subtitle={t("app.danger.destroyBody", {
+                              name: serviceLabel(),
+                            })}
+                          />
+                          <div class="wa-form-actions">
+                            <Button
+                              variant="danger"
+                              type="button"
+                              disabled={destroyPlan.busy()}
+                              busy={destroyPlan.busy()}
+                              onClick={() => void confirmDestroy()}
+                            >
+                              {t("app.danger.destroyCta")}
+                            </Button>
+                          </div>
+                          <Show when={destroyPlan.error()}>
+                            {(m) => (
+                              <p class="wa-error" role="alert">
+                                {m()}
+                              </p>
+                            )}
+                          </Show>
+                        </Card>
+                      </details>
+                    </Show>
                   </Match>
                 </Switch>
               </div>
@@ -974,7 +992,7 @@ function OverviewTab(props: {
                 ? t("app.surfaces.activationPending")
                 : props.releaseActivationStatus === "failed"
                   ? t("app.surfaces.activationFailed")
-                  : t("app.surfaces.subtitle")
+                  : undefined
           }
         />
         <Switch>
@@ -996,22 +1014,25 @@ function OverviewTab(props: {
             </p>
           </Match>
           <Match when={props.uiSurfaces.length > 0}>
-            <KVList
-              items={props.uiSurfaces.map((surface, index) => ({
-                label:
-                  surface.name ??
-                  t("app.surfaces.defaultName", { n: index + 1 }),
-                value: (
-                  <RuntimeSurfaceLink
-                    surface={surface}
-                    openable={props.serviceOpenable}
-                    // Only the first/primary link keeps the filled style; a
-                    // column of identical filled buttons reads as noise.
-                    primary={index === 0}
-                  />
-                ),
-              }))}
-            />
+            <details class="wb-disclosure">
+              <summary>{t("app.surfaces.details")}</summary>
+              <p class="muted">{t("app.surfaces.subtitle")}</p>
+              <KVList
+                items={props.uiSurfaces.map((surface, index) => ({
+                  label:
+                    surface.name ??
+                    t("app.surfaces.defaultName", { n: index + 1 }),
+                  value: (
+                    <span class="wa-output-url">
+                      <Show when={index > 0 && props.serviceOpenable}>
+                        <RuntimeSurfaceLink surface={surface} />
+                      </Show>
+                      <code class="av-output-url-text">{surface.url}</code>
+                    </span>
+                  ),
+                }))}
+              />
+            </details>
           </Match>
         </Switch>
       </Card>
@@ -1069,13 +1090,19 @@ function RuntimeSurfaceLink(props: {
   readonly openable?: boolean;
   /** Only the first/primary link row keeps the filled button style. */
   readonly primary?: boolean;
+  /** Name the selected destination when the service exposes several screens. */
+  readonly displayName?: string;
 }): JSX.Element {
   return (
     <Switch>
       <Match when={props.openable !== false}>
-        <span class="wa-output-url">
+        <span
+          class="wa-output-url"
+          classList={{ "av-primary-surface": props.primary }}
+        >
           <Button
             variant={props.primary ? "primary" : "secondary"}
+            class={props.primary ? "av-primary-surface-link" : undefined}
             size="sm"
             href={props.surface.url}
             target="_blank"
@@ -1087,10 +1114,10 @@ function RuntimeSurfaceLink(props: {
             })}
           >
             {t("app.surfaces.open")}
+            <Show when={props.displayName}>
+              {(name) => <span class="av-surface-label">· {name()}</span>}
+            </Show>
           </Button>
-          {/* Inline muted URL: the old ▶アドレス disclosure repeated the row
-              label and hid the one value the card exists to show. */}
-          <code class="av-output-url-text">{props.surface.url}</code>
         </span>
       </Match>
       <Match when={props.openable === false}>
@@ -1178,7 +1205,6 @@ function DeploysTab(props: {
       <Card>
         <CardHeader
           title={t("app.deploys.sourceVersionTitle")}
-          subtitle={t("app.deploys.sourceVersionSubtitle")}
         />
         <KVList
           items={[
@@ -1196,6 +1222,7 @@ function DeploysTab(props: {
         </Show>
         <details class="wb-disclosure">
           <summary>{t("app.deploys.sourceVersionChange")}</summary>
+          <p class="muted">{t("app.deploys.sourceVersionSubtitle")}</p>
           <div class="wa-form-actions">
             <FormField
               label={t("app.deploys.sourceVersionInput")}
@@ -1227,9 +1254,6 @@ function DeploysTab(props: {
             )}
           </Show>
         </details>
-      </Card>
-
-      <Card>
         <CardHeader
           title={t("app.deploys.reviewTitle")}
           subtitle={t("app.deploys.reviewSubtitle")}
@@ -2013,8 +2037,6 @@ function SettingsTab(props: {
 
   return (
     <>
-      <details class="wb-disclosure" open>
-        <summary>{t("app.config.title")}</summary>
         <Card>
           <CardHeader
             title={t("app.config.title")}
@@ -2028,9 +2050,6 @@ function SettingsTab(props: {
               <p class="muted">{t("app.config.notReady")}</p>
             </Match>
             <Match when={props.installConfig}>
-              <Show when={configSummary().length > 0}>
-                <KVList items={configSummary()} />
-              </Show>
               <form
                 class="wb-input-vars"
                 onSubmit={(e) => {
@@ -2081,7 +2100,39 @@ function SettingsTab(props: {
             </Match>
           </Switch>
         </Card>
-      </details>
+
+      <Card>
+        <CardHeader
+          title={t("apps.reviewChanges")}
+          subtitle={t("app.deploys.reviewSubtitle")}
+          actions={
+            <Button
+              variant="primary"
+              type="button"
+              disabled={
+                reviewConfiguration.busy() ||
+                !props.installConfig ||
+                !props.authorityGuard ||
+                props.providerBindings === undefined ||
+                !isDirty()
+              }
+              busy={reviewConfiguration.busy()}
+              onClick={() => void reviewConfiguration.run()}
+            >
+              {reviewConfiguration.busy()
+                ? t("installStore.preparingPlan")
+                : t("apps.reviewChanges")}
+            </Button>
+          }
+        />
+        <Show when={reviewConfiguration.error()}>
+          {(message) => (
+            <p class="wa-error" role="alert">
+              {message()}
+            </p>
+          )}
+        </Show>
+      </Card>
 
       <details class="wb-disclosure">
         <summary>{t("app.interfaces.title")}</summary>
@@ -2319,39 +2370,6 @@ function SettingsTab(props: {
         </Card>
       </details>
 
-      <Card>
-        <CardHeader
-          title={t("apps.reviewChanges")}
-          subtitle={t("app.deploys.reviewSubtitle")}
-          actions={
-            <Button
-              variant="primary"
-              type="button"
-              disabled={
-                reviewConfiguration.busy() ||
-                !props.installConfig ||
-                !props.authorityGuard ||
-                props.providerBindings === undefined ||
-                !isDirty()
-              }
-              busy={reviewConfiguration.busy()}
-              onClick={() => void reviewConfiguration.run()}
-            >
-              {reviewConfiguration.busy()
-                ? t("installStore.preparingPlan")
-                : t("apps.reviewChanges")}
-            </Button>
-          }
-        />
-        <Show when={reviewConfiguration.error()}>
-          {(message) => (
-            <p class="wa-error" role="alert">
-              {message()}
-            </p>
-          )}
-        </Show>
-      </Card>
-
       <details class="wb-disclosure">
         <summary>{t("app.settings.supportDetails")}</summary>
         <Card>
@@ -2359,6 +2377,20 @@ function SettingsTab(props: {
             title={t("app.settings.supportDetails")}
             subtitle={t("app.source.supportBody")}
           />
+          <Show when={configSummary().length > 0}>
+            <KVList items={configSummary()} />
+          </Show>
+          <details class="wb-inline-details">
+            <summary>{t("app.config.internalNames")}</summary>
+            <KVList
+              items={variableRows()
+                .filter((row) => row.storeField && !row.deleted)
+                .map((row) => ({
+                  label: row.label,
+                  value: <code>{row.name}</code>,
+                }))}
+            />
+          </details>
           <details class="wb-inline-details">
             <summary>{t("app.source.title")}</summary>
             <Show
@@ -2400,9 +2432,6 @@ function SettingsTab(props: {
           </details>
         </Card>
       </details>
-      {/* No bottom delete section here: deletion lives on the 削除 tab (one
-          plan-first flow), which the tab strip and header button already
-          point at. */}
     </>
   );
 }
@@ -2444,19 +2473,13 @@ function VariableRows(props: {
     <div class="wb-variable-list">
       <Index each={props.rows}>
         {(row) => (
-          <div class="wb-variable-row">
-            {/* A listing-declared variable's KEY is fixed by the store input —
-                show it as muted mono text, not an editable textbox. Only
-                free-form variables keep an editable name field. */}
-            <Show
-              when={!row().storeField}
-              fallback={
-                <div class="tg-field">
-                  <span class="tg-field-label">{t("app.config.name")}</span>
-                  <code class="av-config-key">{row().name}</code>
-                </div>
-              }
-            >
+          <div
+            class="wb-variable-row"
+            classList={{ "av-store-variable-row": row().storeField }}
+          >
+            {/* Declared keys are fixed and listed in support details. Only
+                free-form variables need an editable name field here. */}
+            <Show when={!row().storeField}>
               <FormField label={t("app.config.name")}>
                 <Input
                   id={configControlId(row(), "name")}
@@ -2488,8 +2511,8 @@ function VariableRows(props: {
               aria-label={
                 row().storeField
                   ? row().resetToDefault
-                    ? t("app.config.undoResetAria", { name: row().name })
-                    : t("app.config.resetAria", { name: row().name })
+                    ? t("app.config.undoResetAria", { name: row().label })
+                    : t("app.config.resetAria", { name: row().label })
                   : t("app.config.removeAria", {
                       name: row().name || t("app.config.customName"),
                     })
