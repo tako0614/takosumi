@@ -12,11 +12,7 @@
  */
 export const ja = {
   "installStore.title": "サービスを追加",
-  "installStore.subtitle":
-    "見つけて、追加する。それだけです。必要な設定は追加後にこの画面で案内します。",
   "installStore.browseTitle": "サービスを探す",
-  "installStore.browseHint":
-    "ストアから選ぶか、公開Gitリポジトリを指定します。",
   "installStore.manual": "Gitリポジトリから追加",
   "installStore.back": "選び直す",
   "installStore.configureHint":
@@ -224,7 +220,7 @@ export const ja = {
   "settings.manage.activity": "だれが何を変更したかの操作履歴",
   "settings.manage.workspace":
     "アクセスと共有、キー、バックアップ、ポリシー",
-  "settings.manage.backups": "復元ポイントの作成と復元",
+  "settings.manage.backups": "管理情報の一部の書き出し",
   "settings.manage.shares": "サービス間で共有する値の管理",
   "settings.manage.interfaceRecovery":
     "永続化に失敗したInterfaceを確認し、再試行をキューに追加",
@@ -428,7 +424,6 @@ export const ja = {
   "app.tab.overview": "概要",
   "app.tab.deploys": "更新",
   "app.tab.settings": "設定",
-  "app.tab.danger": "削除",
   "app.notFound": "サービスが見つかりません",
   "app.backToList": "一覧へ",
   "app.loadFailedTitle": "サービスを読み込めませんでした",
@@ -436,6 +431,7 @@ export const ja = {
     "最新の状態を取得できませんでした。表示は最後に取得した内容です。",
   "app.notFoundMessage": "削除されたか、リンクが違う可能性があります。",
   "app.surfaces.title": "公開リンク",
+  "app.surfaces.details": "URLとアクセス情報",
   "app.surfaces.subtitle":
     "このサービスが宣言し、あなたに利用が許可された画面を表示します。",
   "app.surfaces.deletedSubtitle":
@@ -450,7 +446,7 @@ export const ja = {
   "app.surfaces.none": "このサービスには利用可能な公開リンクがありません。",
   "app.surfaces.defaultName": "画面 {n}",
   "app.surfaces.openAria": "{name} を新しいタブで開く",
-  "app.surfaces.open": "公開リンクを開く",
+  "app.surfaces.open": "アプリを開く",
   "app.deps.title": "連携しているサービス",
   "app.deps.dependsOn": "このサービスが使うサービス",
   "app.deps.usedBy": "このサービスを使っているサービス",
@@ -481,10 +477,11 @@ export const ja = {
   "app.deploys.restoreDisclosure": "以前の状態に戻す",
   "app.deploys.advancedActions": "必要なときだけ使う操作",
   "app.deploys.advancedActionsBody":
-    "復元ポイントやバックアップが必要な場合だけ使います。",
-  "app.deploys.backup": "バックアップを作成",
-  "app.deploys.backupCreated": "バックアップを作成しました。",
-  "app.deploys.backupSupportRef": "バックアップ ID",
+    "ワークスペースの管理情報の一部を書き出します。このデータの取り込み・復元には対応していません。",
+  "app.deploys.backup": "管理情報の一部を書き出す",
+  "app.deploys.backupCreated":
+    "管理情報の一部を書き出しました。このデータの取り込み・復元には対応していません。",
+  "app.deploys.backupSupportRef": "書き出し ID",
   "app.deploys.inventoryTitle": "デプロイ済みリソース",
   "app.deploys.inventoryRecordedNote":
     "現在の適用状態に記録された内容です。ライブ稼働状態ではありません。",
@@ -525,8 +522,9 @@ export const ja = {
   "app.bindings.errorConnection":
     "{provider} の利用可能な接続済みアカウントを選択してください。",
   "app.config.title": "設定値",
+  "app.config.internalNames": "設定の参照名",
   "app.config.subtitle":
-    "公開名、URL、初期ログイン、サービスが使う値を変更できます。送信すると一つのデプロイ確認を作り、この場では適用しません。",
+    "変更を確認してから適用します。この画面では適用しません。",
   "app.config.publicUrl": "公開URL",
   "app.config.subdomain": "公開サブドメイン",
   "app.config.updatedAt": "最終更新",
@@ -591,9 +589,8 @@ export const ja = {
     "{name} を削除します。まだデプロイされていない場合はこの場で完全に削除され、元に戻せません。",
   "app.danger.destroyCta": "削除の確認を開く",
   "app.setupIncomplete.body":
-    "追加が完了していません。変更の確認からやり直すか、削除してやり直せます。",
+    "追加が完了していません。変更の確認からやり直すか、設定から削除してやり直せます。",
   "app.setupIncomplete.review": "更新タブへ",
-  "app.setupIncomplete.delete": "削除オプション",
   "app.setupIncomplete.initialReviewBody": "初回導入の確認待ちです。元のプランを開いて続行してください。更新プランを作っても初回導入は再開しません。",
   "app.setupIncomplete.openInitialReview": "初回導入の確認を開く",
   "app.setupIncomplete.loadingInitialReview": "初回導入の確認を探しています…",

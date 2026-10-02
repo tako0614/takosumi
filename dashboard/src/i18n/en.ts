@@ -7,11 +7,7 @@ import type { ja } from "./ja.ts";
  */
 export const en: Record<keyof typeof ja, string> = {
   "installStore.title": "Add a service",
-  "installStore.subtitle":
-    "Find it, then add it. Any required setup appears here after you add.",
   "installStore.browseTitle": "Find a service",
-  "installStore.browseHint":
-    "Choose from a store or enter a public Git repository.",
   "installStore.manual": "Add from a Git repository",
   "installStore.back": "Choose again",
   "installStore.configureHint":
@@ -218,7 +214,7 @@ export const en: Record<keyof typeof ja, string> = {
   "settings.manage.activity": "Who changed what, and when",
   "settings.manage.workspace":
     "Access and sharing, keys, backups, and policy",
-  "settings.manage.backups": "Create and restore restore points",
+  "settings.manage.backups": "Export selected management records",
   "settings.manage.shares": "Manage values shared between services",
   "settings.manage.interfaceRecovery":
     "Review and queue durable Interface materialization retries",
@@ -423,7 +419,6 @@ export const en: Record<keyof typeof ja, string> = {
   "app.tab.overview": "Overview",
   "app.tab.deploys": "Updates",
   "app.tab.settings": "Settings",
-  "app.tab.danger": "Delete",
   "app.notFound": "Service not found",
   "app.backToList": "Back to list",
   "app.loadFailedTitle": "Couldn't load this service",
@@ -431,6 +426,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Couldn't fetch the latest state — showing the last loaded version.",
   "app.notFoundMessage": "It may have been deleted, or the link may be wrong.",
   "app.surfaces.title": "Public links",
+  "app.surfaces.details": "URLs and access information",
   "app.surfaces.subtitle":
     "Screens this service declares and you are allowed to open appear here.",
   "app.surfaces.deletedSubtitle":
@@ -446,7 +442,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.surfaces.none": "This service has no authorized public link.",
   "app.surfaces.defaultName": "Screen {n}",
   "app.surfaces.openAria": "Open {name} in a new tab",
-  "app.surfaces.open": "Open public link",
+  "app.surfaces.open": "Open app",
   "app.deps.title": "Connected services",
   "app.deps.dependsOn": "Services this uses",
   "app.deps.usedBy": "Used by",
@@ -478,10 +474,11 @@ export const en: Record<keyof typeof ja, string> = {
   "app.deploys.restoreDisclosure": "Restore a previous version",
   "app.deploys.advancedActions": "Extra actions",
   "app.deploys.advancedActionsBody":
-    "Use these only when you need a restore point or backup.",
-  "app.deploys.backup": "Create backup",
-  "app.deploys.backupCreated": "Backup created.",
-  "app.deploys.backupSupportRef": "Backup ID",
+    "Exports selected workspace management records. This export cannot be imported or used to restore a service.",
+  "app.deploys.backup": "Create partial export",
+  "app.deploys.backupCreated":
+    "Partial export created. This export cannot be imported or used to restore a service.",
+  "app.deploys.backupSupportRef": "Export ID",
   "app.deploys.inventoryTitle": "Deployed resources",
   "app.deploys.inventoryRecordedNote":
     "Recorded in the current applied state; this is not live health.",
@@ -522,8 +519,9 @@ export const en: Record<keyof typeof ja, string> = {
   "app.bindings.errorConnection":
     "Select a ready connected account for {provider}.",
   "app.config.title": "Settings",
+  "app.config.internalNames": "Setting reference names",
   "app.config.subtitle":
-    "Change the public name, URL, first sign-in value, and service variables. Submitting creates one deployment review; nothing is applied immediately.",
+    "Review your changes before applying them. Nothing is applied here.",
   "app.config.publicUrl": "Public URL",
   "app.config.subdomain": "Public subdomain",
   "app.config.updatedAt": "Updated",
@@ -587,9 +585,8 @@ export const en: Record<keyof typeof ja, string> = {
     "This deletes {name}. If it has never been deployed it is removed immediately and cannot be recovered.",
   "app.danger.destroyCta": "Review deletion",
   "app.setupIncomplete.body":
-    "Setup didn't finish. Retry from the update review, or delete this service and start over.",
+    "Setup didn't finish. Retry from the update review, or delete this service in Settings and start over.",
   "app.setupIncomplete.review": "Open updates",
-  "app.setupIncomplete.delete": "Delete options",
   "app.setupIncomplete.initialReviewBody": "This install has an accepted initial review. Open that Plan to finish setup; creating a revision would not resume it.",
   "app.setupIncomplete.openInitialReview": "Open initial review",
   "app.setupIncomplete.loadingInitialReview": "Finding the initial review…",
