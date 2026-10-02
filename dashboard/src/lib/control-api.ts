@@ -2328,9 +2328,11 @@ export async function deleteDependency(dependencyId: string): Promise<void> {
 export async function listActivity(
   workspaceId: string,
   limit?: number,
+  opts: { readonly signal?: AbortSignal } = {},
 ): Promise<readonly ActivityEvent[]> {
   const body = await controlFetch<{ events?: readonly ActivityEvent[] }>(
     `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/activity${query({ limit })}`,
+    { signal: opts.signal },
   );
   return body.events ?? [];
 }
@@ -3995,12 +3997,31 @@ export async function cancelRun(runId: string): Promise<{ readonly run: Run }> {
  * Lists a Capsule's StateVersion history for the dashboard session. Rows are
  * browser-safe metadata and arrive newest-first.
  */
+type ListStateVersionsOptions = { readonly signal?: AbortSignal };
+// Existing dashboard resources pass Solid's fetcher info as argument two.
+type ResourceFetcherInfoCompatibility = {
+  readonly value: unknown;
+  readonly refetching: unknown;
+};
+
+export function listStateVersions(
+  capsuleId: string,
+  opts?: ListStateVersionsOptions,
+): Promise<readonly PublicStateVersion[]>;
+export function listStateVersions(
+  capsuleId: string,
+  info: ResourceFetcherInfoCompatibility,
+): Promise<readonly PublicStateVersion[]>;
 export async function listStateVersions(
   capsuleId: string,
+  optsOrInfo?: ListStateVersionsOptions | ResourceFetcherInfoCompatibility,
 ): Promise<readonly PublicStateVersion[]> {
+  const opts =
+    optsOrInfo && "signal" in optsOrInfo ? optsOrInfo : undefined;
   return await fetchAllPages<PublicStateVersion>(
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}/state-versions`,
     (body) => (body.stateVersions as readonly PublicStateVersion[]) ?? [],
+    { signal: opts?.signal },
   );
 }
 
