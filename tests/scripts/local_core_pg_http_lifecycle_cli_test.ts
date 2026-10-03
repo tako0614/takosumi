@@ -11,6 +11,7 @@ import {
 } from "../proofs/local-core-http-lifecycle.ts";
 import { parsePgHttpProofArgs } from "../proofs/local-core-pg-http-lifecycle.ts";
 import {
+  cleanupNativePostgresResources,
   createNativePostgresRestartContainer,
   NativePostgresPhaseFailure,
   runNativePostgresPhase,
@@ -223,6 +224,155 @@ test("PostgreSQL cleanup failure is reported separately when lifecycle work succ
   expect(summary).toContain("failure=cleanup-only cleanup=Error@");
   expect(summary).not.toContain("private");
 });
+
+test("PostgreSQL cleanup diagnostic includes a typed leaf phase inside cleanup aggregates", async () => {
+  const privateCause = new Error("private run-root cleanup detail");
+  const leafFailure = new NativePostgresPhaseFailure(
+    "cleanup.run-root.remove",
+    privateCause,
+  );
+  let failure: unknown;
+
+  try {
+    await runWithNativePostgresCleanup(
+      async () => "completed",
+      () => cleanupNativePostgresResources([], () =>
+        runNativePostgresPhase("container.cleanup", () =>
+          cleanupNativePostgresResources(
+            [async () => { throw leafFailure; }],
+            async () => {},
+          )
+        )
+      ),
+    );
+  } catch (error) {
+    failure = error;
+  }
+
+  expect(failure).toBeInstanceOf(AggregateError);
+  expect(formatNativePostgresLifecycleFailure(failure)).toContain(
+    "cleanup-operation-phases=container.cleanup,cleanup.run-root.remove",
+  );
+  const outerCleanupFailure = (failure as AggregateError).errors[0] as AggregateError;
+  const containerCleanupFailure = outerCleanupFailure.errors[0] as NativePostgresPhaseFailure;
+  const innerCleanupFailure = containerCleanupFailure.cause as AggregateError;
+  expect(innerCleanupFailure.errors[0]).toBe(leafFailure);
+  expect((leafFailure as Error).cause).toBe(privateCause);
+  expect(formatNativePostgresLifecycleFailure(failure)).not.toContain("private");
+});
+
+test("PostgreSQL cleanup diagnostic safely stops at cyclic and over-depth aggregates", async () => {
+  const cyclic = new AggregateError([], "private cyclic cleanup aggregate");
+  cyclic.errors.push(cyclic);
+  const cyclicFailure = await captureFailure(() =>
+    runWithNativePostgresCleanup(
+      async () => "completed",
+      () => cleanupNativePostgresResources([], () =>
+        runNativePostgresPhase("container.cleanup", async () => { throw cyclic; })
+      ),
+    )
+  );
+  const cyclicSummary = formatNativePostgresLifecycleFailure(cyclicFailure);
+  expect(cyclicSummary).toContain("cleanup-operation-phase=container.cleanup");
+  expect(cyclicSummary).not.toContain("private");
+
+  let deepAggregate: AggregateError = new AggregateError([
+    new NativePostgresPhaseFailure(
+      "cleanup.run-root.remove",
+      new Error("private over-depth cleanup cause"),
+    ),
+  ]);
+  for (let depth = 0; depth < 10; depth += 1) {
+    deepAggregate = new AggregateError([deepAggregate]);
+  }
+  const deepFailure = await captureFailure(() =>
+    runWithNativePostgresCleanup(
+      async () => "completed",
+      () => cleanupNativePostgresResources([], () =>
+        runNativePostgresPhase("container.cleanup", async () => { throw deepAggregate; })
+      ),
+    )
+  );
+  const deepSummary = formatNativePostgresLifecycleFailure(deepFailure);
+  expect(deepSummary).toContain("cleanup-operation-phase=container.cleanup");
+  expect(deepSummary).not.toContain("cleanup.run-root.remove");
+  expect(deepSummary).not.toContain("private");
+});
+
+test("PostgreSQL cleanup diagnostics snapshot phases and ignore throwing nested accessors", async () => {
+  const captureCleanupFailure = async (failure: unknown) => {
+    const lifecycleFailure = await captureFailure(() =>
+      runWithNativePostgresCleanup(
+        async () => "completed",
+        () => cleanupNativePostgresResources([], async () => { throw failure; }),
+      )
+    );
+    return {
+      failure: lifecycleFailure,
+      summary: formatNativePostgresLifecycleFailure(lifecycleFailure),
+    };
+  };
+
+  let phaseReads = 0;
+  const mutablePhaseFailure = new NativePostgresPhaseFailure(
+    "cleanup.run-root.remove",
+    new Error("private phase cause"),
+  );
+  Object.defineProperty(mutablePhaseFailure, "phase", {
+    configurable: true,
+    get: () => {
+      phaseReads += 1;
+      return phaseReads === 1
+        ? "cleanup.run-root.remove"
+        : phaseReads === 2
+        ? "container.cleanup"
+        : "phase-secret";
+    },
+  });
+  const mutable = await captureCleanupFailure(mutablePhaseFailure);
+  expect(phaseReads).toBe(1);
+  expect(mutable.summary).toContain("cleanup-operation-phase=cleanup.run-root.remove");
+  expect(mutable.summary).not.toContain("phase-secret");
+  expect(mutable.summary).not.toContain("private");
+  const mutableCleanup = (mutable.failure as AggregateError).errors[0] as AggregateError;
+  expect(mutableCleanup.errors[0]).toBe(mutablePhaseFailure);
+
+  const throwingCauseFailure = new NativePostgresPhaseFailure(
+    "cleanup.run-root.remove",
+    new Error("private initial cause"),
+  );
+  Object.defineProperty(throwingCauseFailure, "cause", {
+    configurable: true,
+    get: () => { throw new Error("cause-secret"); },
+  });
+  const causeResult = await captureCleanupFailure(throwingCauseFailure);
+  expect(causeResult.summary).toContain("cleanup-operation-phase=cleanup.run-root.remove");
+  expect(causeResult.summary).not.toContain("cause-secret");
+  const causeCleanup = (causeResult.failure as AggregateError).errors[0] as AggregateError;
+  expect(causeCleanup.errors[0]).toBe(throwingCauseFailure);
+
+  const throwingErrorsFailure = new AggregateError([], "private aggregate");
+  Object.defineProperty(throwingErrorsFailure, "errors", {
+    configurable: true,
+    get: () => { throw new Error("errors-secret"); },
+  });
+  const errorsResult = await captureCleanupFailure(throwingErrorsFailure);
+  expect(errorsResult.summary).toContain("cleanup-operation-phase=cleanup.container-close");
+  expect(errorsResult.summary).not.toContain("errors-secret");
+  expect(errorsResult.summary).not.toContain("private");
+  const errorsCleanup = (errorsResult.failure as AggregateError).errors[0] as AggregateError;
+  const closeFailure = errorsCleanup.errors[0] as NativePostgresPhaseFailure;
+  expect(closeFailure.cause).toBe(throwingErrorsFailure);
+});
+
+async function captureFailure<T>(operation: () => Promise<T>): Promise<unknown> {
+  try {
+    await operation();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected operation to fail");
+}
 
 test("outer runner cleanup diagnostic preserves a nested PostgreSQL primary and cleanup", async () => {
   const primary = new Error("private Core HTTP cause");

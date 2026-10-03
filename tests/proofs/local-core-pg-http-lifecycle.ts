@@ -182,6 +182,79 @@ function safePhaseFields(label: string, error: unknown): readonly string[] {
   return [];
 }
 
+function nativeCleanupPhaseFailures(error: unknown): readonly string[] {
+  const phases: string[] = [];
+  const visited = new Set<object>();
+  let visitedCount = 0;
+
+  const visit = (candidate: unknown, depth: number): void => {
+    if (
+      depth > 8 ||
+      visitedCount >= 16 ||
+      !(candidate instanceof NativePostgresPhaseFailure || candidate instanceof AggregateError) ||
+      visited.has(candidate)
+    ) {
+      return;
+    }
+    visited.add(candidate);
+    visitedCount += 1;
+
+    if (candidate instanceof NativePostgresPhaseFailure) {
+      let phase: unknown;
+      try {
+        phase = candidate.phase;
+      } catch {
+        return;
+      }
+
+      if (
+        typeof phase !== "string" ||
+        !isNativePostgresPhase(phase) ||
+        (phase !== "container.cleanup" && !phase.startsWith("cleanup."))
+      ) {
+        return;
+      }
+      if (!phases.includes(phase)) phases.push(phase);
+
+      let cause: unknown;
+      try {
+        cause = candidate.cause;
+      } catch {
+        return;
+      }
+      if (cause instanceof NativePostgresPhaseFailure || cause instanceof AggregateError) {
+        visit(cause, depth + 1);
+      }
+      return;
+    }
+
+    let nestedErrors: unknown[];
+    try {
+      const errors: unknown = candidate.errors;
+      if (!Array.isArray(errors)) return;
+      nestedErrors = errors.slice(0, 4);
+    } catch {
+      return;
+    }
+
+    for (const nested of nestedErrors) {
+      if (nested instanceof NativePostgresPhaseFailure || nested instanceof AggregateError) {
+        visit(nested, depth + 1);
+      }
+    }
+  };
+
+  visit(error, 0);
+  return phases;
+}
+
+function safeCleanupPhaseFields(label: string, error: unknown): readonly string[] {
+  const phases = nativeCleanupPhaseFailures(error);
+  if (phases.length === 1) return [`${label}-phase=${phases[0]}`];
+  if (phases.length > 1) return [`${label}-phases=${phases.join(",")}`];
+  return [];
+}
+
 /** Safe diagnostic: fixed phase, error classes, and allowlisted source locations only. */
 export function formatNativePostgresProofFailure(
   phase: string,
@@ -224,7 +297,7 @@ export function formatNativePostgresLifecycleFailure(error: unknown): string {
       `phase=${error.cleanupPhase}`,
       "failure=primary-and-outer-cleanup",
       `primary-diagnostic=[${formatNativePostgresPrimaryFailure(error.errors[0])}]`,
-      ...safePhaseFields("cleanup-operation", error.errors[1]),
+      ...safeCleanupPhaseFields("cleanup-operation", error.errors[1]),
       `cleanup-phase=${error.cleanupPhase} cleanup=${safeFailureClassAndLocation(error.errors[1])}`,
     ].join(" ");
   }
@@ -243,7 +316,7 @@ export function formatNativePostgresLifecycleFailure(error: unknown): string {
     return [
       "phase=postgres.cleanup",
       "failure=cleanup-only",
-      ...safePhaseFields("cleanup-operation", error.cleanupFailure),
+      ...safeCleanupPhaseFields("cleanup-operation", error.cleanupFailure),
       `cleanup=${safeFailureClassAndLocation(error.cleanupFailure)}`,
     ].join(" ");
   }
@@ -259,7 +332,7 @@ export function formatNativePostgresLifecycleFailure(error: unknown): string {
       ...safePhaseFields("primary", primary.cause),
       `primary=${safeFailureClassAndLocation(primary.cause)}`,
       context,
-      ...safePhaseFields("cleanup-operation", error.cleanupFailure),
+      ...safeCleanupPhaseFields("cleanup-operation", error.cleanupFailure),
       `cleanup-phase=postgres.cleanup cleanup=${safeFailureClassAndLocation(error.cleanupFailure)}`,
     ].join(" ");
   }
@@ -269,7 +342,7 @@ export function formatNativePostgresLifecycleFailure(error: unknown): string {
       "failure=primary-and-cleanup",
       ...safePhaseFields("primary", primary.cause),
       `primary=${safeFailureClassAndLocation(primary.cause)}`,
-      ...safePhaseFields("cleanup-operation", error.cleanupFailure),
+      ...safeCleanupPhaseFields("cleanup-operation", error.cleanupFailure),
       `cleanup-phase=postgres.cleanup cleanup=${safeFailureClassAndLocation(error.cleanupFailure)}`,
     ].join(" ");
   }
@@ -278,7 +351,7 @@ export function formatNativePostgresLifecycleFailure(error: unknown): string {
       `phase=${isNativePostgresPhase(primary.phase) ? primary.phase : "postgres.lifecycle"}`,
       "failure=primary-and-cleanup",
       `primary=${safeFailureClassAndLocation(primary)}`,
-      ...safePhaseFields("cleanup-operation", error.cleanupFailure),
+      ...safeCleanupPhaseFields("cleanup-operation", error.cleanupFailure),
       `cleanup-phase=postgres.cleanup cleanup=${safeFailureClassAndLocation(error.cleanupFailure)}`,
     ].join(" ");
   }
@@ -287,7 +360,7 @@ export function formatNativePostgresLifecycleFailure(error: unknown): string {
     "failure=primary-and-cleanup",
     ...safePhaseFields("primary", primary),
     `primary=${safeFailureClassAndLocation(primary)}`,
-    ...safePhaseFields("cleanup-operation", error.cleanupFailure),
+    ...safeCleanupPhaseFields("cleanup-operation", error.cleanupFailure),
     `cleanup-phase=postgres.cleanup cleanup=${safeFailureClassAndLocation(error.cleanupFailure)}`,
   ].join(" ");
 }
