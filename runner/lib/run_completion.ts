@@ -48,8 +48,10 @@ interface PreparationCompletion {
   readonly processInstanceId: string;
   readonly attemptDigest: string;
   readonly epoch: number;
-  readonly outcome: "provider_failed" | "other";
+  readonly outcome: "provider_failed" | "other" | "succeeded";
   readonly stateDigest?: string;
+  readonly resultDigest?: string;
+  readonly outputDigest?: string;
   readonly errorCode?: string;
   readonly providerInstallation?: readonly Record<string, unknown>[];
 }
@@ -84,6 +86,45 @@ interface PreparationOwner {
 }
 
 const runGateTails = new Map<string, Promise<void>>();
+const MAX_SUCCESS_CACHE_ENTRIES = 16;
+const MAX_SUCCESS_CACHE_BYTES = 2 * 1024 * 1024;
+interface CachedSuccess {
+  readonly completion: PreparationCompletion;
+  readonly resultBytes: Uint8Array;
+}
+const successfulResults = new Map<string, CachedSuccess>();
+let successfulResultBytes = 0;
+
+function cacheSuccessfulResult(runId: string, entry: CachedSuccess): void {
+  if (entry.resultBytes.byteLength > MAX_SUCCESS_CACHE_BYTES) return;
+  const existing = successfulResults.get(runId);
+  if (existing) successfulResultBytes -= existing.resultBytes.byteLength;
+  successfulResults.delete(runId);
+  successfulResults.set(runId, entry);
+  successfulResultBytes += entry.resultBytes.byteLength;
+  while (successfulResults.size > MAX_SUCCESS_CACHE_ENTRIES ||
+    successfulResultBytes > MAX_SUCCESS_CACHE_BYTES) {
+    const oldest = successfulResults.keys().next().value;
+    if (oldest === undefined) break;
+    const removed = successfulResults.get(oldest);
+    if (removed) successfulResultBytes -= removed.resultBytes.byteLength;
+    successfulResults.delete(oldest);
+  }
+}
+
+function successProjection(result: Record<string, unknown>): Record<string, unknown> {
+  return {
+    runId: result.runId,
+    action: result.action,
+    status: "succeeded",
+    exitCode: 0,
+    ...(Array.isArray(result.providerInstallation)
+      ? { providerInstallation: result.providerInstallation }
+      : {}),
+    ...(isRecord(result.outputs) ? { outputs: result.outputs } : {}),
+    ...(typeof result.stderr === "string" ? { stderr: result.stderr } : {}),
+  };
+}
 
 /** Serialize whole same-run HTTP mutations, including body reads and child exit. */
 export async function withLocalMutationGate<T>(
@@ -603,9 +644,15 @@ export async function inspectLocalMutationPreparationCompletion(
       completion.processInstanceId !== LOCAL_PROCESS_INSTANCE_ID ||
       completion.attemptDigest !== owner.attemptDigest ||
       completion.epoch !== owner.epoch ||
-      (completion.outcome !== "provider_failed" && completion.outcome !== "other") ||
+      (completion.outcome !== "provider_failed" && completion.outcome !== "other" && completion.outcome !== "succeeded") ||
       (completion.stateDigest !== undefined &&
         (typeof completion.stateDigest !== "string" || !DIGEST_PATTERN.test(completion.stateDigest))) ||
+      (completion.outcome === "succeeded" &&
+        (typeof completion.stateDigest !== "string" || !DIGEST_PATTERN.test(completion.stateDigest) ||
+          typeof completion.resultDigest !== "string" || !DIGEST_PATTERN.test(completion.resultDigest) ||
+          typeof completion.outputDigest !== "string" || !DIGEST_PATTERN.test(completion.outputDigest))) ||
+      (completion.outcome !== "succeeded" &&
+        (completion.resultDigest !== undefined || completion.outputDigest !== undefined)) ||
       (completion.errorCode !== undefined &&
         (typeof completion.errorCode !== "string" || !/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(completion.errorCode))) ||
       (completion.providerInstallation !== undefined && !Array.isArray(completion.providerInstallation)))
@@ -856,8 +903,10 @@ export async function completeLocalMutation(
   const failure =
     isRecord(result.providerExecutionFailure) &&
     result.providerExecutionFailure.kind === "provider_execution_failed";
+  const successfulV2 = claim.kind === "takosumi.local-mutation-completion@v2" &&
+    !failure && result.status === "succeeded" && result.exitCode === 0;
   let stateDigest: string | undefined;
-  if (failure) {
+  if (failure || successfulV2) {
     try {
       const moduleDir = await readModuleDir(workspaceForRun(runId));
       stateDigest = await digestBytes(
@@ -867,6 +916,14 @@ export async function completeLocalMutation(
       if (!isErrno(error, "ENOENT")) throw error;
     }
   }
+  const projection = successfulV2 && stateDigest ? successProjection(result) : undefined;
+  const resultBytes = projection
+    ? new TextEncoder().encode(JSON.stringify(projection))
+    : undefined;
+  const resultDigest = resultBytes ? await digestBytes(resultBytes) : undefined;
+  const outputDigest = projection
+    ? await digestBytes(new TextEncoder().encode(JSON.stringify(projection.outputs ?? {})))
+    : undefined;
   const errorCode =
     typeof result.errorCode === "string" &&
     /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(result.errorCode)
@@ -896,10 +953,12 @@ export async function completeLocalMutation(
     : undefined;
   const completion = {
     ...claim,
-    outcome: failure ? "provider_failed" : "other",
+    outcome: failure ? "provider_failed" : projection ? "succeeded" : "other",
     ...(stateDigest ? { stateDigest } : {}),
-    ...(errorCode ? { errorCode } : {}),
-    ...(providerInstallation ? { providerInstallation } : {}),
+    ...(resultDigest ? { resultDigest } : {}),
+    ...(outputDigest ? { outputDigest } : {}),
+    ...(errorCode && !projection ? { errorCode } : {}),
+    ...(providerInstallation && !projection ? { providerInstallation } : {}),
   } as Completion | PreparationCompletion;
   const temporary = `${paths.completion}.${crypto.randomUUID()}.tmp`;
   if (!(await createExclusive(temporary, completion)))
@@ -934,7 +993,53 @@ export async function completeLocalMutation(
       await directory.close();
     }
   }
+  if (completion.kind === "takosumi.local-mutation-completion@v2" &&
+    completion.outcome === "succeeded" && resultBytes) {
+    cacheSuccessfulResult(runId, { completion, resultBytes });
+  }
   return completion;
+}
+
+/** Success is adoptable only by the current same-process, same-attempt caller. */
+export async function localMutationSuccessReadbackResponse(
+  completion: PreparationCompletion,
+  attemptId: string | null,
+  epochText: string | null,
+): Promise<Response> {
+  const indeterminate = () => Response.json(
+    { errorCode: "runner_mutation_indeterminate", retryable: false },
+    { status: 409 },
+  );
+  if (completion.outcome !== "succeeded" || !validAttemptId(attemptId) ||
+    epochText !== String(completion.epoch) ||
+    completion.attemptDigest !== await digestBytes(new TextEncoder().encode(attemptId)))
+    return indeterminate();
+  const cached = successfulResults.get(completion.runId);
+  if (!cached || JSON.stringify(cached.completion) !== JSON.stringify(completion) ||
+    !completion.resultDigest || !completion.outputDigest || !completion.stateDigest ||
+    await digestBytes(cached.resultBytes) !== completion.resultDigest)
+    return indeterminate();
+  try {
+    const result = JSON.parse(new TextDecoder().decode(cached.resultBytes)) as unknown;
+    if (!isRecord(result) || result.runId !== completion.runId ||
+      result.action !== completion.action || result.status !== "succeeded" ||
+      result.exitCode !== 0 ||
+      await digestBytes(new TextEncoder().encode(JSON.stringify(result.outputs ?? {}))) !== completion.outputDigest)
+      return indeterminate();
+    const moduleDir = await readModuleDir(workspaceForRun(completion.runId));
+    const stateBytes = new Uint8Array(await readFile(join(moduleDir, "terraform.tfstate")));
+    if (await digestBytes(stateBytes) !== completion.stateDigest)
+      return indeterminate();
+    return Response.json({
+      kind: "takosumi.local-mutation-success-readback@v2",
+      result,
+      resultDigest: completion.resultDigest,
+      stateDigest: completion.stateDigest,
+      outputDigest: completion.outputDigest,
+    });
+  } catch {
+    return indeterminate();
+  }
 }
 
 export function localMutationCompletionResponse(

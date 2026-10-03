@@ -676,8 +676,9 @@ reply uses the same receipt. It checks the state
 bytes against the receipt before the existing failed-provider state commit.
 Neither a second POST nor a bare state file grants completion authority. A
 missing, malformed, unfinished, or mismatched completion remains indeterminate.
-Completed success is fenced against re-dispatch but this private readback does
-not publish success Outputs or repair an already terminal Core Run. The private
+For v1, completed success is fenced against re-dispatch but this private
+readback does not publish success Outputs. The narrow in-flight v2 exception
+below does not repair an already terminal Core Run. The private
 HTTP route has no application authentication; isolation of the runner transport
 and trust in same-UID source/provider code are operator assumptions, not a
 hostile or multi-tenant at-most-once guarantee. The exact request digest also
@@ -694,8 +695,30 @@ The claim binds a random process instance, so an unfinished claim from a
 restarted or overlapping runner process remains indeterminate. This is not
 cross-process restart recovery, and neither an elapsed TTL, missing state file,
 nor changed credential bytes proves a safe takeover. Post-dispatch remains
-read-only/indeterminate unless the existing exact failed-provider receipt is
-available; there is no second provider POST or successful-Output repair.
+read-only and never authorizes a second provider POST. The existing exact
+failed-provider receipt is still adoptable. In addition, only a still
+nonterminal, same in-flight Core Apply/Destroy invocation may recover its own
+lost successful POST acknowledgement: its private v2 completion GET must carry
+the original reservation attempt and epoch, and the serving Runner must match
+the exact Run, action, dispatched request bytes (including credential bytes),
+restored provider-lock marker, process instance, current attempt and epoch
+against durable claim, dispatch and completion records. The successful
+completion persists only digests of a minimal successful result projection,
+runner state bytes and Outputs, never raw Outputs or credentials. The same
+serving Runner keeps that projection only in a bounded in-memory cache, and
+serves it only after durable completion and independent comparison of the
+cached projection and current state/output bytes with those digests. The adapter
+verifies the returned response, state and Output digests before using its
+existing encrypted state artifact and normal Core State/Output commit path
+exactly once. A cache miss, torn or mismatched record, missing or mismatched
+state, changed credential bytes, restarted Runner or no longer in-flight Core
+call remains indeterminate; neither terminal Core repair nor re-dispatch is
+permitted. This does not make preparation-v2 the default, change
+cloudflare-do custody, or add a public Host API or Form contract.
+The Runner cannot independently observe Core terminality: the adapter calls
+this success readback only from the catch path of its original POST in the
+same invocation, while Core owns the nonterminal guard. The private attempt
+header is a custody match, not application authentication.
 
 ## Provider-neutral execution
 

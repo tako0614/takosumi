@@ -53,6 +53,7 @@ import {
   inspectLocalMutationPreparation,
   inspectLocalMutationPreparationCompletion,
   localMutationCompletionResponse,
+  localMutationSuccessReadbackResponse,
   reserveLocalMutation,
   reserveLocalMutationPreparation,
   withLocalMutationGate,
@@ -324,7 +325,15 @@ export async function handleRunnerRequestWithDependencies(
       if (preparation === "preparing")
         return Response.json({ status: "preparing" }, { status: 202 });
       if (preparation === "indeterminate") return indeterminate();
-      if (preparation !== "not-v2") return localMutationCompletionResponse(preparation);
+      if (preparation !== "not-v2") {
+        return preparation.outcome === "succeeded"
+          ? await localMutationSuccessReadbackResponse(
+              preparation,
+              request.headers.get("x-takosumi-preparation-attempt"),
+              request.headers.get("x-takosumi-preparation-epoch"),
+            )
+          : localMutationCompletionResponse(preparation);
+      }
       const inspection = await inspectLocalMutation(
         runId,
         action,

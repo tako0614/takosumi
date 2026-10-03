@@ -88,6 +88,11 @@ type LocalMutationReservation =
   | { readonly kind: "v1"; readonly token: string }
   | { readonly kind: "v2"; readonly attemptId: string; readonly epoch: number };
 
+interface LocalMutationSuccessReadback {
+  readonly result: Record<string, unknown>;
+  readonly stateDigest: string;
+}
+
 function preparationHeaders(reservation?: LocalMutationReservation): Record<string, string> {
   return reservation?.kind === "v2"
     ? {
@@ -821,6 +826,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       return await this.confirmRawOutput(job, replay);
     }
     const preparationV2 = await assertLocalMutationCustodyMode(this.transport);
+    let successfulReadback: LocalMutationSuccessReadback | undefined;
     let result = await readLocalMutationCompletionBeforePreparation(
       this.transport,
       "apply",
@@ -873,7 +879,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         control?.signal,
         reservation,
       );
-      result = await runLocalMutationWithCustody(
+      const dispatched = await runLocalMutationWithCustody(
         this.transport,
         "apply",
         job.applyRun.id,
@@ -882,6 +888,8 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         restoredProviderLockDigest,
         reservation,
       );
+      result = dispatched.result;
+      successfulReadback = dispatched.successfulReadback;
     }
     if (runnerProviderExecutionFailed(result)) {
       const stateBytes = await fetchRunnerArtifactIfPresent(
@@ -925,13 +933,21 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       );
       return committed.result as OpenTofuApplyResult;
     }
-    const stateBytes = await fetchRunnerArtifact(
-      this.transport,
-      job.applyRun.id,
-      `/runs/${encodeURIComponent(job.applyRun.id)}/artifacts/tfstate`,
-      control?.signal,
-    );
+    let stateBytes: Uint8Array;
+    try {
+      stateBytes = await fetchRunnerArtifact(
+        this.transport,
+        job.applyRun.id,
+        `/runs/${encodeURIComponent(job.applyRun.id)}/artifacts/tfstate`,
+        control?.signal,
+      );
+    } catch (error) {
+      if (successfulReadback) throw localSuccessReadbackIndeterminate();
+      throw error;
+    }
     const stateDigest = await digestBytes(stateBytes);
+    if (successfulReadback && stateDigest !== successfulReadback.stateDigest)
+      throw localSuccessReadbackIndeterminate();
     const normalizedProviderInstallation = providerInstallation(result);
     const normalizedResult: OpenTofuApplyResult = {
       ...(recordValue(result, "outputs")
@@ -976,6 +992,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     );
     if (replay) return replay.result as OpenTofuDestroyResult;
     const preparationV2 = await assertLocalMutationCustodyMode(this.transport);
+    let successfulReadback: LocalMutationSuccessReadback | undefined;
     let result = await readLocalMutationCompletionBeforePreparation(
       this.transport,
       "destroy",
@@ -1028,7 +1045,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         control?.signal,
         reservation,
       );
-      result = await runLocalMutationWithCustody(
+      const dispatched = await runLocalMutationWithCustody(
         this.transport,
         "destroy",
         job.applyRun.id,
@@ -1037,6 +1054,8 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         restoredProviderLockDigest,
         reservation,
       );
+      result = dispatched.result;
+      successfulReadback = dispatched.successfulReadback;
     }
     if (runnerProviderExecutionFailed(result)) {
       const stateBytes = await fetchRunnerArtifactIfPresent(
@@ -1080,13 +1099,21 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       );
       return committed.result as OpenTofuDestroyResult;
     }
-    const stateBytes = await fetchRunnerArtifact(
-      this.transport,
-      job.applyRun.id,
-      `/runs/${encodeURIComponent(job.applyRun.id)}/artifacts/tfstate`,
-      control?.signal,
-    );
+    let stateBytes: Uint8Array;
+    try {
+      stateBytes = await fetchRunnerArtifact(
+        this.transport,
+        job.applyRun.id,
+        `/runs/${encodeURIComponent(job.applyRun.id)}/artifacts/tfstate`,
+        control?.signal,
+      );
+    } catch (error) {
+      if (successfulReadback) throw localSuccessReadbackIndeterminate();
+      throw error;
+    }
     const stateDigest = await digestBytes(stateBytes);
+    if (successfulReadback && stateDigest !== successfulReadback.stateDigest)
+      throw localSuccessReadbackIndeterminate();
     const normalizedProviderInstallation = providerInstallation(result);
     const normalizedResult: OpenTofuDestroyResult = {
       ...(normalizedProviderInstallation
@@ -2168,6 +2195,84 @@ async function readLocalMutationCompletionBeforePreparation(
   }
 }
 
+function localSuccessReadbackIndeterminate(): OpenTofuRunnerExecutionError {
+  return new OpenTofuRunnerExecutionError(
+    "local runner mutation completion is indeterminate",
+    { reason: "runner_mutation_indeterminate" },
+  );
+}
+
+/** Only the same post-POST catch path can present its original v2 reservation. */
+async function readLocalMutationSuccessAfterLostAck(
+  transport: RunnerTransport,
+  action: "apply" | "destroy",
+  runId: string,
+  request: unknown,
+  restoredProviderLockDigest: string | undefined,
+  reservation: Extract<LocalMutationReservation, { kind: "v2" }>,
+): Promise<LocalMutationSuccessReadback> {
+  const requestDigest = await mutationRequestDigest(
+    runId, action, request, restoredProviderLockDigest,
+  );
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  const deadline = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener(
+      "abort",
+      () => reject(localSuccessReadbackIndeterminate()),
+      { once: true },
+    );
+  });
+  const withinDeadline = <T>(promise: Promise<T>): Promise<T> =>
+    Promise.race([promise, deadline]);
+  try {
+    const response = await withinDeadline(transport.fetch(
+      `/runs/${encodeURIComponent(runId)}/completion`,
+      {
+        method: "GET",
+        signal: controller.signal,
+        headers: {
+          "x-takosumi-mutation-action": action,
+          "x-takosumi-mutation-digest": requestDigest,
+          ...preparationHeaders(reservation),
+          ...(restoredProviderLockDigest
+            ? { "x-takosumi-provider-lock-restore-digest": restoredProviderLockDigest }
+            : {}),
+        },
+      },
+    ));
+    if (response.status !== 200 || !isJsonResponse(response)) {
+      await response.body?.cancel().catch(() => {});
+      throw localSuccessReadbackIndeterminate();
+    }
+    const body = parseObject(new TextDecoder().decode(
+      await withinDeadline(readResponseBytesWithCap(
+        response, 2 * 1024 * 1024 + 1024, "local mutation success readback",
+      )),
+    ));
+    const result = recordValue(body, "result");
+    const resultDigest = stringValue(body, "resultDigest");
+    const stateDigest = stringValue(body, "stateDigest");
+    const outputDigest = stringValue(body, "outputDigest");
+    const validDigest = (value: string | undefined): value is string =>
+      value !== undefined && /^sha256:[0-9a-f]{64}$/u.test(value);
+    if (body.kind !== "takosumi.local-mutation-success-readback@v2" ||
+      !result || result.runId !== runId || result.action !== action ||
+      result.status !== "succeeded" || result.exitCode !== 0 ||
+      result.stdout !== undefined || runnerProviderExecutionFailed(result) ||
+      !validDigest(resultDigest) || !validDigest(stateDigest) ||
+      !validDigest(outputDigest) ||
+      resultDigest !== await digestBytes(new TextEncoder().encode(JSON.stringify(result))) ||
+      outputDigest !== await digestBytes(new TextEncoder().encode(JSON.stringify(result.outputs ?? {}))))
+      throw localSuccessReadbackIndeterminate();
+    return { result, stateDigest };
+  } catch {
+    throw localSuccessReadbackIndeterminate();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function runLocalMutationWithCustody(
   transport: RunnerTransport,
   action: "apply" | "destroy",
@@ -2176,7 +2281,10 @@ async function runLocalMutationWithCustody(
   signal?: AbortSignal,
   restoredProviderLockDigest?: string,
   reservation?: LocalMutationReservation,
-): Promise<Record<string, unknown>> {
+): Promise<{
+  readonly result: Record<string, unknown>;
+  readonly successfulReadback?: LocalMutationSuccessReadback;
+}> {
   // The digest is an identity check only. The runner stores neither the raw
   // request nor credential material in its completion record.
   let directResult: Record<string, unknown>;
@@ -2191,6 +2299,16 @@ async function runLocalMutationWithCustody(
       reservation,
     );
   } catch (originalError) {
+    if (reservation?.kind === "v2") {
+      try {
+        const successfulReadback = await readLocalMutationSuccessAfterLostAck(
+          transport, action, runId, request, restoredProviderLockDigest, reservation,
+        );
+        return { result: successfulReadback.result, successfulReadback };
+      } catch {
+        // A cache miss or any mismatched/torn receipt cannot adopt success.
+      }
+    }
     try {
       const result = await readLocalMutationCompletionBeforePreparation(
         transport,
@@ -2199,7 +2317,7 @@ async function runLocalMutationWithCustody(
         request,
         restoredProviderLockDigest,
       );
-      if (result) return result;
+      if (result) return { result };
     } catch {
       // No authoritative completion is available after a possible dispatch.
     }
@@ -2217,7 +2335,7 @@ async function runLocalMutationWithCustody(
       },
     );
   }
-  if (!runnerProviderExecutionFailed(directResult)) return directResult;
+  if (!runnerProviderExecutionFailed(directResult)) return { result: directResult };
   const completion = await readLocalMutationCompletionBeforePreparation(
     transport,
     action,
@@ -2230,7 +2348,7 @@ async function runLocalMutationWithCustody(
       "local runner mutation completion is indeterminate",
       { reason: "runner_mutation_indeterminate" },
     );
-  return completion;
+  return { result: completion };
 }
 
 function isJsonResponse(response: Response): boolean {

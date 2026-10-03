@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleRunnerRequestWithDependencies } from "../../../runner/entrypoint.ts";
 import { RUN_ROOT } from "../../../runner/lib/constants.ts";
+import { readModuleDir, workspaceForRun } from "../../../runner/lib/artifacts.ts";
 import {
   mutationRequestDigest,
   reserveLocalMutation,
@@ -712,7 +713,9 @@ test("HTTP OpenTofu runner keeps an unchanged object-storage source archive with
   }
 });
 
-test.each(["v1", "v2"] as const)("HTTP OpenTofu runner carries direct provider evidence through apply and destroy commits with %s custody", async (custodyVersion) => {
+test.each(["v1", "v2", "v2-ack-loss", "v2-ack-loss-result-mismatch", "v2-ack-loss-output-mismatch", "v2-ack-loss-state-mismatch", "v2-ack-loss-state-missing"] as const)("HTTP OpenTofu runner carries direct provider evidence through apply and destroy commits with %s custody", async (variant) => {
+  const custodyVersion = variant === "v1" ? "v1" : "v2";
+  const ackLoss = variant.startsWith("v2-ack-loss");
   const provider = "registry.opentofu.org/example/direct";
   const installedDigest = `sha256:${"d".repeat(64)}`;
   const planBytes = new TextEncoder().encode("reviewed direct-provider plan");
@@ -731,6 +734,8 @@ test.each(["v1", "v2"] as const)("HTTP OpenTofu runner carries direct provider e
   };
   const requests: string[] = [];
   const restoreMarkers: (string | null)[] = [];
+  const attempts = new Map<string, string>();
+  const completed = new Map<string, Record<string, unknown>>();
   const server = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -752,6 +757,10 @@ test.each(["v1", "v2"] as const)("HTTP OpenTofu runner carries direct provider e
           url.pathname,
         )
       ) {
+        if (custodyVersion === "v2") {
+          const reservation = await request.json() as { runId: string; attemptId: string };
+          attempts.set(reservation.runId, reservation.attemptId);
+        }
         return Response.json(
           custodyVersion === "v2" ? { epoch: 1 } : { token: "00000000-0000-4000-8000-000000000000" },
           { status: 201 },
@@ -763,6 +772,36 @@ test.each(["v1", "v2"] as const)("HTTP OpenTofu runner carries direct provider e
           url.pathname,
         )
       ) {
+        const runId = url.pathname.split("/")[2]!;
+        const result = completed.get(runId);
+        if (ackLoss && result) {
+          if (!request.headers.has("x-takosumi-preparation-attempt"))
+            return Response.json({ errorCode: "runner_mutation_indeterminate" }, { status: 409 });
+          expect(request.headers.get("x-takosumi-preparation-attempt")).toBe(attempts.get(runId));
+          expect(request.headers.get("x-takosumi-preparation-epoch")).toBe("1");
+          expect(request.headers.get("x-takosumi-provider-lock-restore-digest")).toBe(lockDigest);
+          const projection = {
+            runId,
+            action: runId.startsWith("apply") ? "apply" : "destroy",
+            status: "succeeded",
+            exitCode: 0,
+            ...(result.outputs ? { outputs: result.outputs } : {}),
+            providerInstallation: result.providerInstallation,
+          };
+          return Response.json({
+            kind: "takosumi.local-mutation-success-readback@v2",
+            result: projection,
+            resultDigest: variant === "v2-ack-loss-result-mismatch"
+              ? `sha256:${"a".repeat(64)}`
+              : await sha256(new TextEncoder().encode(JSON.stringify(projection))),
+            stateDigest: variant === "v2-ack-loss-state-mismatch"
+              ? `sha256:${"b".repeat(64)}`
+              : await sha256(stateBytes),
+            outputDigest: variant === "v2-ack-loss-output-mismatch"
+              ? `sha256:${"c".repeat(64)}`
+              : await sha256(new TextEncoder().encode(JSON.stringify(projection.outputs ?? {}))),
+          });
+        }
         return Response.json({ status: "absent" }, { status: 404 });
       }
       const planArtifactMatch =
@@ -812,7 +851,7 @@ test.each(["v1", "v2"] as const)("HTTP OpenTofu runner carries direct provider e
         restoreMarkers.push(
           request.headers.get("x-takosumi-provider-lock-restore-digest"),
         );
-        return Response.json({
+        const result = {
           status: "succeeded",
           exitCode: 0,
           ...(runMatch[1] === "apply_http_direct"
@@ -827,7 +866,11 @@ test.each(["v1", "v2"] as const)("HTTP OpenTofu runner carries direct provider e
               }
             : {}),
           providerInstallation: [installation],
-        });
+        };
+        completed.set(runMatch[1]!, result);
+        return ackLoss
+          ? Response.json({ error: "ack lost" }, { status: 503 })
+          : Response.json(result);
       }
       if (
         request.method === "GET" &&
@@ -835,6 +878,8 @@ test.each(["v1", "v2"] as const)("HTTP OpenTofu runner carries direct provider e
           url.pathname,
         )
       ) {
+        if (variant === "v2-ack-loss-state-missing")
+          return Response.json({ error: "state absent" }, { status: 404 });
         return new Response(stateBytes, {
           headers: { "content-type": "application/json" },
         });
@@ -889,7 +934,7 @@ test.each(["v1", "v2"] as const)("HTTP OpenTofu runner carries direct provider e
     const expectedArtifacts = [
       { source: provider, digest: installedDigest, attested: true },
     ];
-    const apply = await runner.apply({
+    const applyJob = {
       applyRun: { id: "apply_http_direct" },
       planRun: {
         id: "plan_http_apply",
@@ -921,10 +966,21 @@ test.each(["v1", "v2"] as const)("HTTP OpenTofu runner carries direct provider e
         stateRef: "state://http/direct-apply",
       },
       rawOutputRef: "output://http/direct-apply",
-    } as Parameters<typeof runner.apply>[0]);
+    } as Parameters<typeof runner.apply>[0];
+    if (variant.endsWith("mismatch") || variant.endsWith("missing")) {
+      await expect(runner.apply(applyJob)).rejects.toMatchObject({
+        name: "OpenTofuRunnerExecutionError",
+        reason: "runner_mutation_indeterminate",
+      });
+      expect(stored).toHaveLength(0);
+      expect(requests.filter((value) => value === "POST /runs/apply_http_direct")).toHaveLength(1);
+      return;
+    }
+    const apply = await runner.apply(applyJob);
     expect(apply.executionEvidence?.authority.providerArtifacts).toEqual(
       expectedArtifacts,
     );
+    expect(apply.outputs?.public_url?.value).toBe("https://direct.example");
 
     const destroy = await runner.destroy({
       applyRun: { id: "destroy_http_direct" },
@@ -970,6 +1026,7 @@ test.each(["v1", "v2"] as const)("HTTP OpenTofu runner carries direct provider e
       "PUT /runs/apply_http_direct/artifacts/tfplan",
       "PUT /runs/apply_http_direct/provider-lockfile/restore",
       "POST /runs/apply_http_direct",
+      ...(ackLoss ? ["GET /runs/apply_http_direct/completion"] : []),
       "GET /runs/apply_http_direct/artifacts/tfstate",
       "GET /runs/destroy_http_direct/completion",
       "GET /runs/plan_http_destroy/artifacts/tfplan",
@@ -978,6 +1035,7 @@ test.each(["v1", "v2"] as const)("HTTP OpenTofu runner carries direct provider e
       "PUT /runs/destroy_http_direct/artifacts/tfplan",
       "PUT /runs/destroy_http_direct/provider-lockfile/restore",
       "POST /runs/destroy_http_direct",
+      ...(ackLoss ? ["GET /runs/destroy_http_direct/completion"] : []),
       "GET /runs/destroy_http_direct/artifacts/tfstate",
     ]);
     expect(restoreMarkers).toEqual([lockDigest, lockDigest]);
@@ -1969,7 +2027,7 @@ case "$1" in
 JSON
     ${outcome === "provider_failed" ? 'echo "provider rejected a resource" >&2; exit 1' : "echo apply"}
     ;;
-  output) printf '{}' ;;
+  output) printf '%s' '{"public_url":{"sensitive":false,"type":"string","value":"https://v2.example"}}' ;;
   *) echo "unexpected tofu command: $*" >&2; exit 2 ;;
 esac
 `);
@@ -1991,10 +2049,57 @@ esac
           headers: {
             "x-takosumi-mutation-action": "apply",
             "x-takosumi-mutation-digest": digest,
+            ...(outcome === "succeeded" ? preparationHeaders : {}),
           },
         },
       ));
-      expect(completion.status).toBe(outcome === "succeeded" ? 409 : 500);
+      expect(completion.status).toBe(outcome === "succeeded" ? 200 : 500);
+      if (outcome === "succeeded") {
+        const receipt = await completion.json() as Record<string, unknown>;
+        expect(receipt.kind).toBe("takosumi.local-mutation-success-readback@v2");
+        const adopted = receipt.result as Record<string, unknown>;
+        expect(adopted.status).toBe("succeeded");
+        expect(adopted.exitCode).toBe(0);
+        expect(adopted.outputs).toEqual({
+          public_url: { sensitive: false, type: "string", value: "https://v2.example" },
+        });
+        expect(adopted.stdout).toBeUndefined();
+        expect(receipt.resultDigest).toBe(await sha256(new TextEncoder().encode(JSON.stringify(adopted))));
+        expect(receipt.stateDigest).toBe(await sha256(new TextEncoder().encode(
+          '{"version":4,"serial":1,"lineage":"v2-post","resources":[]}\n',
+        )));
+        expect(receipt.outputDigest).toBe(await sha256(new TextEncoder().encode(JSON.stringify(adopted.outputs))));
+        const claimName = (await sha256(new TextEncoder().encode(runId))).slice(7);
+        const persisted = await readFile(join(RUN_ROOT, ".mutation-custody", `${claimName}.completion.json`), "utf8");
+        const metadata = JSON.parse(persisted) as Record<string, unknown>;
+        expect(metadata.outcome).toBe("succeeded");
+        expect(metadata.resultDigest).toBe(receipt.resultDigest);
+        expect(metadata.outputDigest).toBe(receipt.outputDigest);
+        expect(persisted).not.toContain("https://v2.example");
+        const completionFor = (headers: Record<string, string>) =>
+          handleRunnerRequestV2(new Request(`http://runner/runs/${runId}/completion`, {
+            headers: {
+              "x-takosumi-mutation-action": "apply",
+              "x-takosumi-mutation-digest": digest,
+              ...headers,
+            },
+          }));
+        expect((await completionFor({})).status).toBe(409);
+        expect((await completionFor({
+          ...preparationHeaders,
+          "x-takosumi-mutation-digest": `sha256:${"f".repeat(64)}`,
+        })).status).toBe(409);
+        expect((await completionFor({
+          ...preparationHeaders,
+          "x-takosumi-preparation-attempt": crypto.randomUUID(),
+        })).status).toBe(409);
+        const statePath = join(await readModuleDir(workspaceForRun(runId)), "terraform.tfstate");
+        const originalState = await readFile(statePath);
+        await writeFile(statePath, '{"version":4,"serial":999,"resources":[]}\n');
+        expect((await completionFor(preparationHeaders)).status).toBe(409);
+        await writeFile(statePath, originalState);
+        expect((await completionFor(preparationHeaders)).status).toBe(200);
+      }
       if (outcome === "provider_failed") {
         const receipt = await completion.json() as Record<string, unknown>;
         expect(receipt.providerExecutionFailure).toEqual({ kind: "provider_execution_failed" });
