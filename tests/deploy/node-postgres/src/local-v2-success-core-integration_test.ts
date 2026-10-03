@@ -5,29 +5,63 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
-import { sha256Digest } from "../../../../core/adapters/source/digest.ts";
-import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
-import {
-  ObjectKeyArtifactReferenceAllocator,
-  type ArtifactReferenceAllocation,
-} from "../../../../core/adapters/storage/artifact-references.ts";
-import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
-import {
-  applyExpectedGuardFromPlanRun,
-  type OpenTofuRunner,
-} from "../../../../core/domains/deploy-control/mod.ts";
-import { createTakosumiService } from "../../../../core/bootstrap.ts";
-import {
-  createFileOpenTofuStateArtifactStore,
-  createHttpOpenTofuRunner,
-  createLocalOpenTofuRunnerProfile,
-} from "../../../../deploy/node-postgres/src/local-opentofu-runner.ts";
-import { handleRunnerRequestWithDependencies } from "../../../../runner/entrypoint.ts";
-import {
-  FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
-  seedCapsuleModel,
-} from "../../../helpers/deploy-control/model_fixture.ts";
-import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
+import type { ArtifactReferenceAllocation } from "../../../../core/adapters/storage/artifact-references.ts";
+import type { OpenTofuRunner } from "../../../../core/domains/deploy-control/mod.ts";
+import type { RunRootOwnership } from "../../../../runner/lib/run_root_ownership.ts";
+
+if (Bun.env.TAKOSUMI_TEST_PRIVATE_RUN_ROOT_CHILD !== "1") {
+  test("local v2 success Core integration in a private root", async () => {
+    const root = await mkdtemp(join(tmpdir(), "takosumi-local-v2-root-"));
+    await chmod(root, 0o700);
+    let child: ReturnType<typeof Bun.spawn> | undefined;
+    let safeToRemove = false;
+    let timedOut = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      child = Bun.spawn([process.execPath, "--no-env-file", "test", import.meta.path], {
+        stdout: "pipe", stderr: "pipe",
+        env: {
+          ...process.env,
+          TAKOSUMI_OPENTOFU_RUN_ROOT: root,
+          TAKOSUMI_TEST_PRIVATE_RUN_ROOT_CHILD: "1",
+        },
+      });
+      timeout = setTimeout(() => {
+        timedOut = true;
+        child?.kill("SIGKILL");
+      }, 30_000);
+      const [output, error, code] = await Promise.all([
+        boundedChildOutput(child.stdout), boundedChildOutput(child.stderr), child.exited,
+      ]);
+      const summary = `${output}\n${error}`.match(/(\d+) pass\s+(\d+) fail/u);
+      if (timedOut || code !== 0 || !summary || Number(summary[2]) !== 0)
+        throw new Error(`private local v2 integration failed (exit ${code}, timeout ${timedOut}, summary ${summary?.[0] ?? "missing"})`);
+      console.log(`private local v2 Core child: ${summary[1]} pass, ${summary[2]} fail`);
+      safeToRemove = true;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      await child?.exited;
+      if (safeToRemove) await rm(root, { recursive: true, force: true });
+      else console.error(`private local v2 Core fixture retained after uncertain child result: ${root}`);
+    }
+  });
+} else {
+const { sha256Digest } = await import("../../../../core/adapters/source/digest.ts");
+const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
+const { ObjectKeyArtifactReferenceAllocator } = await import("../../../../core/adapters/storage/artifact-references.ts");
+const { SqlOpenTofuControlStore } = await import("../../../../core/domains/deploy-control/store_sql.ts");
+const { applyExpectedGuardFromPlanRun } = await import("../../../../core/domains/deploy-control/mod.ts");
+const { createTakosumiService } = await import("../../../../core/bootstrap.ts");
+const { createFileOpenTofuStateArtifactStore, createHttpOpenTofuRunner, createLocalOpenTofuRunnerProfile } =
+  await import("../../../../deploy/node-postgres/src/local-opentofu-runner.ts");
+const { handleRunnerRequestWithDependencies } = await import("../../../../runner/entrypoint.ts");
+const { RUN_ROOT } = await import("../../../../runner/lib/constants.ts");
+const { ensureCustodyDirectory } = await import("../../../../runner/lib/run_completion.ts");
+const { acquireRunRootOwnership } = await import("../../../../runner/lib/run_root_ownership.ts");
+const { FIXTURE_EXECUTION_EVIDENCE_AUTHORITY, seedCapsuleModel } =
+  await import("../../../helpers/deploy-control/model_fixture.ts");
+const { PGliteSqlClient } = await import("../../../helpers/deploy-control/pglite_sql_client.ts");
 
 const STATE_CRYPTO = new PartitionedSecretBoundaryCrypto({
   globalPassphrase: "local-v2-success-readback-test-passphrase-32-bytes",
@@ -59,6 +93,7 @@ test("a lost successful local v2 ACK settles through Core once and commits its s
   const archivePath = join(tempDir, "source.tar.zst");
   const previousPath = Bun.env.PATH;
   let runnerServer: ReturnType<typeof Bun.serve> | undefined;
+  let runRootOwner: RunRootOwnership | undefined;
   let ackLossProxy: ReturnType<typeof Bun.serve> | undefined;
   try {
     await mkdir(fakeBin, { recursive: true });
@@ -163,11 +198,14 @@ esac
     await chmod(join(fakeBin, "tofu"), 0o755);
     Bun.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
 
+    await ensureCustodyDirectory(true);
+    runRootOwner = await acquireRunRootOwnership(RUN_ROOT);
     runnerServer = Bun.serve({
       port: 0,
       fetch: (request) => handleRunnerRequestWithDependencies(request, {
         mutationCustodyMode: "local-http",
         localPreparationV2: true,
+        runRootOwnership: runRootOwner,
       }),
     });
     let applyPosts = 0;
@@ -337,8 +375,26 @@ esac
     if (previousPath === undefined) delete Bun.env.PATH;
     else Bun.env.PATH = previousPath;
     ackLossProxy?.stop(true);
-    runnerServer?.stop(true);
+    await runnerServer?.stop();
+    await runRootOwner?.close();
     await client.close();
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+}
+
+async function boundedChildOutput(stream: ReadableStream<Uint8Array>): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let output = "";
+  let bytes = 0;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) return output + decoder.decode();
+      bytes += chunk.value.byteLength;
+      if (bytes > 64 * 1024) throw new Error("private test child output exceeded bound");
+      output += decoder.decode(chunk.value, { stream: true });
+    }
+  } finally { reader.releaseLock(); }
+}

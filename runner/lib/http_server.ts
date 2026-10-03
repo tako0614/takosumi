@@ -43,6 +43,13 @@ import {
 } from "./plan_apply.ts";
 import { classifyOpenTofuFailure } from "./exec.ts";
 import type { RuntimeSecretFileSystem } from "./runtime_secrets.ts";
+import {
+  assertRunRootOwnershipFor,
+  RunRootOwnershipUnavailableError,
+  withRunRootWriter,
+  type RunRootOwnership,
+} from "./run_root_ownership.ts";
+import { RUN_ROOT } from "./constants.ts";
 import { PROVIDER_LOCK_RESTORE_DIGEST_HEADER } from "./transport.ts";
 import {
   completeLocalMutation,
@@ -68,12 +75,14 @@ interface RunnerRequestDependencies {
   readonly localPreparationV2?: boolean;
   /** Private filesystem fault injection; never selectable by an HTTP caller. */
   readonly localMutationSyncFault?: LocalMutationSyncFault;
+  /** Acquired for the canonical RUN_ROOT before the server accepts requests. */
+  readonly runRootOwnership?: RunRootOwnership;
 }
 
-type RunnerMutationCustodyMode = "cloudflare-do" | "local-http";
+export type RunnerMutationCustodyMode = "cloudflare-do" | "local-http";
 const MUTATION_CUSTODY_MODE_ENV = "TAKOSUMI_RUNNER_MUTATION_CUSTODY_MODE";
 
-function runnerMutationCustodyMode(
+export function runnerMutationCustodyMode(
   override?: RunnerMutationCustodyMode,
 ): RunnerMutationCustodyMode | undefined {
   if (override) return override;
@@ -92,16 +101,47 @@ export async function handleRunnerRequestWithDependencies(
   request: Request,
   dependencies: RunnerRequestDependencies = {},
 ): Promise<Response> {
-  {
-    const custodyMode = runnerMutationCustodyMode(
-      dependencies.mutationCustodyMode,
+  const custodyMode = runnerMutationCustodyMode(dependencies.mutationCustodyMode);
+  if (!custodyMode) {
+    return Response.json(
+      { errorCode: "runner_mutation_custody_mode_invalid" },
+      { status: 503 },
     );
-    if (!custodyMode) {
-      return Response.json(
-        { errorCode: "runner_mutation_custody_mode_invalid" },
-        { status: 503 },
-      );
+  }
+  const owner = dependencies.runRootOwnership;
+  const v2 = custodyMode === "local-http" && dependencies.localPreparationV2 === true;
+  const mayWrite = request.method !== "GET" && request.method !== "HEAD" && request.method !== "OPTIONS";
+  if (v2 && !owner) return rootOwnershipUnavailable();
+  if (custodyMode === "local-http" && owner && (v2 || mayWrite)) {
+    try {
+      assertRunRootOwnershipFor(owner, RUN_ROOT);
+      if (mayWrite) {
+        return await withRunRootWriter(owner, () =>
+          handleRunnerRequestBody(request, dependencies, custodyMode));
+      }
+    } catch (error) {
+      if (error instanceof RunRootOwnershipUnavailableError) {
+        return rootOwnershipUnavailable();
+      }
+      throw error;
     }
+  }
+  return await handleRunnerRequestBody(request, dependencies, custodyMode);
+}
+
+function rootOwnershipUnavailable(): Response {
+  return Response.json(
+    { errorCode: "runner_run_root_ownership_unavailable" },
+    { status: 503 },
+  );
+}
+
+async function handleRunnerRequestBody(
+  request: Request,
+  dependencies: RunnerRequestDependencies,
+  custodyMode: RunnerMutationCustodyMode,
+): Promise<Response> {
+  {
     const url = new URL(request.url);
     const indeterminate = () => Response.json(
       { errorCode: "runner_mutation_indeterminate", retryable: false },

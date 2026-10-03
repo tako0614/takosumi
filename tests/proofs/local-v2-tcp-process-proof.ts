@@ -17,7 +17,7 @@ import {
   type LocalOpenTofuRawOutputArtifact,
   type LocalOpenTofuStateArtifact,
 } from "../../deploy/node-postgres/src/local-opentofu-runner.ts";
-import { handleRunnerRequestWithDependencies } from "../../runner/entrypoint.ts";
+import { startRunnerHttpServer } from "../../runner/entrypoint.ts";
 import { FIXTURE_EXECUTION_EVIDENCE_AUTHORITY } from "../helpers/deploy-control/model_fixture.ts";
 import { boundedRunnerFetch } from "./local-core-http-lifecycle.ts";
 
@@ -216,15 +216,13 @@ async function client(mode: "a" | "b"): Promise<void> {
 }
 
 async function runnerServer(): Promise<void> {
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    fetch: (request) => handleRunnerRequestWithDependencies(request, {
-      mutationCustodyMode: "local-http",
-      localPreparationV2: true,
-    }),
+  const running = await startRunnerHttpServer({
+    hostname: "127.0.0.1", port: 0, localPreparationV2: true,
   });
-  protocolLine({ phase: "ready", port: server.port, pid: process.pid });
+  const onSignal = () => { void running.close().catch(() => { process.exitCode = 1; }); };
+  process.on("SIGTERM", onSignal);
+  process.on("SIGINT", onSignal);
+  protocolLine({ phase: "ready", port: running.server.port, pid: process.pid });
 }
 
 class LineReader {
@@ -499,6 +497,7 @@ async function prove(): Promise<void> {
         ...commandEnv,
         PATH: `${binDir}:/usr/bin:/bin`,
         TAKOSUMI_OPENTOFU_RUN_ROOT: join(root, "runs"),
+        TAKOSUMI_RUNNER_MUTATION_CUSTODY_MODE: "local-http",
       },
     });
     ownedRunner = await captureOwnedChild(runner);
