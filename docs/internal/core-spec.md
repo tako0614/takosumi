@@ -684,6 +684,19 @@ hostile or multi-tenant at-most-once guarantee. The exact request digest also
 includes credential bytes: refreshed equivalent credentials can make an
 otherwise recoverable failure indeterminate rather than authorizing adoption.
 
+The private local HTTP preparation-v2 candidate is opt-in and is not yet the
+default advertised runner protocol. It permits an exact byte-identical
+Apply/Destroy request to reprepare before the POST dispatch marker only within
+the same serving runner process. The process-local gate holds through each
+workspace writer (including source extraction); a new attempt cannot take over
+until that writer has finished, and the old attempt cannot write after transfer.
+The claim binds a random process instance, so an unfinished claim from a
+restarted or overlapping runner process remains indeterminate. This is not
+cross-process restart recovery, and neither an elapsed TTL, missing state file,
+nor changed credential bytes proves a safe takeover. Post-dispatch remains
+read-only/indeterminate unless the existing exact failed-provider receipt is
+available; there is no second provider POST or successful-Output repair.
+
 ## Provider-neutral execution
 
 Plain Stack execution accepts any runner-installable OpenTofu/Terraform

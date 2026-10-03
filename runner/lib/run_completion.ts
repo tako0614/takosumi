@@ -10,6 +10,7 @@ import {
   mkdir,
   open,
   readFile,
+  rm,
   stat,
   unlink,
 } from "node:fs/promises";
@@ -36,6 +37,70 @@ interface Completion extends Claim {
   readonly stateDigest?: string;
   readonly errorCode?: string;
   readonly providerInstallation?: readonly Record<string, unknown>[];
+}
+
+interface PreparationCompletion {
+  readonly kind: "takosumi.local-mutation-completion@v2";
+  readonly runId: string;
+  readonly action: MutationAction;
+  readonly requestDigest: string;
+  readonly restoredProviderLockDigest?: string;
+  readonly processInstanceId: string;
+  readonly attemptDigest: string;
+  readonly epoch: number;
+  readonly outcome: "provider_failed" | "other";
+  readonly stateDigest?: string;
+  readonly errorCode?: string;
+  readonly providerInstallation?: readonly Record<string, unknown>[];
+}
+
+// An unfinished v2 preparation is transferable only inside this exact serving
+// process. A replacement runner process cannot prove that an old tar/source
+// child has stopped writing to the shared workspace, so it must refuse it.
+const LOCAL_PROCESS_INSTANCE_ID = crypto.randomUUID();
+const MAX_PREPARATION_EPOCH = 64;
+/** Private test seam for a failed custody fsync; production always uses real fsync. */
+export type LocalMutationSyncFault = (
+  step: "file" | "directory",
+  path: string,
+) => void | Promise<void>;
+interface PreparationClaim {
+  readonly kind: "takosumi.local-mutation-preparation@v2";
+  readonly runId: string;
+  readonly action: MutationAction;
+  readonly requestDigest: string;
+  readonly restoredProviderLockDigest?: string;
+  readonly processInstanceId: string;
+  readonly attemptDigest: string;
+  readonly epoch: 1;
+}
+interface PreparationOwner {
+  readonly kind: "takosumi.local-mutation-preparation-owner@v2";
+  readonly runId: string;
+  readonly requestDigest: string;
+  readonly processInstanceId: string;
+  readonly attemptDigest: string;
+  readonly epoch: number;
+}
+
+const runGateTails = new Map<string, Promise<void>>();
+
+/** Serialize whole same-run HTTP mutations, including body reads and child exit. */
+export async function withLocalMutationGate<T>(
+  runId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const preceding = runGateTails.get(runId);
+  let release!: () => void;
+  const tail = new Promise<void>((resolve) => { release = resolve; });
+  runGateTails.set(runId, tail);
+  if (preceding) await preceding;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (runGateTails.get(runId) === tail) runGateTails.delete(runId);
+  }
 }
 
 function custodyDirectory(runRoot = RUN_ROOT): string {
@@ -220,7 +285,11 @@ function matchesClaim(value: unknown, claim: Claim): value is Claim {
   );
 }
 
-async function createExclusive(path: string, value: unknown): Promise<boolean> {
+async function createExclusive(
+  path: string,
+  value: unknown,
+  syncFault?: LocalMutationSyncFault,
+): Promise<boolean> {
   const bytes = new TextEncoder().encode(`${JSON.stringify(value)}\n`);
   if (bytes.byteLength > MAX_RECORD_BYTES)
     throw new Error("local mutation custody record too large");
@@ -240,6 +309,7 @@ async function createExclusive(path: string, value: unknown): Promise<boolean> {
   }
   try {
     await file.writeFile(bytes);
+    await syncFault?.("file", path);
     await file.sync();
   } finally {
     await file.close();
@@ -249,11 +319,300 @@ async function createExclusive(path: string, value: unknown): Promise<boolean> {
     fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
   );
   try {
+    await syncFault?.("directory", path);
     await directory.sync();
   } finally {
     await directory.close();
   }
   return true;
+}
+
+/** A visible record is not durable authority after an uncertain prior fsync. */
+async function readDurable(
+  path: string,
+  syncFault?: LocalMutationSyncFault,
+  allowLinkedTemporary = false,
+): Promise<unknown | undefined> {
+  const before = await readBounded(path, allowLinkedTemporary);
+  if (before === undefined) return undefined;
+  try {
+    const file = await open(
+      path,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
+    );
+    try {
+      const info = await file.stat();
+      if (!info.isFile() ||
+        (info.nlink !== 1 && !(allowLinkedTemporary && info.nlink === 2)) ||
+        info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0)
+        return undefined;
+      await syncFault?.("file", path);
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    await syncFault?.("directory", path);
+    await syncDirectory(dirname(path));
+    const after = await readBounded(path, allowLinkedTemporary);
+    return JSON.stringify(before) === JSON.stringify(after) ? after : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function validAttemptId(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f-]{36}$/u.test(value);
+}
+
+async function occupied(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) return false;
+    throw error;
+  }
+}
+
+function ownerPath(claimPath: string, epoch: number): string {
+  return `${claimPath}.owner-${epoch}.json`;
+}
+
+function readyPath(claimPath: string, epoch: number): string {
+  return `${claimPath}.ready-${epoch}.json`;
+}
+
+function isPreparationClaim(value: unknown, runId: string): value is PreparationClaim {
+  return isRecord(value) &&
+    value.kind === "takosumi.local-mutation-preparation@v2" &&
+    value.runId === runId &&
+    (value.action === "apply" || value.action === "destroy") &&
+    typeof value.requestDigest === "string" && DIGEST_PATTERN.test(value.requestDigest) &&
+    (value.restoredProviderLockDigest === undefined ||
+      (typeof value.restoredProviderLockDigest === "string" && DIGEST_PATTERN.test(value.restoredProviderLockDigest))) &&
+    typeof value.processInstanceId === "string" && validAttemptId(value.processInstanceId) &&
+    typeof value.attemptDigest === "string" && DIGEST_PATTERN.test(value.attemptDigest) &&
+    value.epoch === 1;
+}
+
+async function currentPreparationOwner(
+  claimPath: string,
+  claim: PreparationClaim,
+  historicalAttempts?: Set<string>,
+  syncFault?: LocalMutationSyncFault,
+): Promise<PreparationOwner | undefined> {
+  const attempts = new Set<string>([claim.attemptDigest]);
+  let current: PreparationOwner = {
+    kind: "takosumi.local-mutation-preparation-owner@v2",
+    runId: claim.runId,
+    requestDigest: claim.requestDigest,
+    processInstanceId: claim.processInstanceId,
+    attemptDigest: claim.attemptDigest,
+    epoch: 1,
+  };
+  for (let epoch = 2; epoch <= MAX_PREPARATION_EPOCH + 1; epoch++) {
+    const path = ownerPath(claimPath, epoch);
+    const next = await readDurable(path, syncFault);
+    if (next === undefined) {
+      if (await occupied(path)) return undefined;
+      for (const attempt of attempts) historicalAttempts?.add(attempt);
+      return current;
+    }
+    if (!isRecord(next) ||
+      next.kind !== current.kind ||
+      next.runId !== claim.runId ||
+      next.requestDigest !== claim.requestDigest ||
+      next.processInstanceId !== claim.processInstanceId ||
+      typeof next.attemptDigest !== "string" || !DIGEST_PATTERN.test(next.attemptDigest) ||
+      next.epoch !== epoch || attempts.has(next.attemptDigest)) return undefined;
+    attempts.add(next.attemptDigest);
+    current = next as unknown as PreparationOwner;
+  }
+  return undefined;
+}
+
+async function preparationReady(
+  claimPath: string,
+  owner: PreparationOwner,
+  syncFault?: LocalMutationSyncFault,
+): Promise<boolean> {
+  const path = readyPath(claimPath, owner.epoch);
+  const record = await readDurable(path, syncFault);
+  return isRecord(record) &&
+    record.kind === "takosumi.local-mutation-preparation-ready@v2" &&
+    record.runId === owner.runId &&
+    record.requestDigest === owner.requestDigest &&
+    record.processInstanceId === owner.processInstanceId &&
+    record.attemptDigest === owner.attemptDigest &&
+    record.epoch === owner.epoch;
+}
+
+async function resetPreparationWorkspace(runId: string): Promise<void> {
+  const workspace = workspaceForRun(runId);
+  await rm(workspace.root, { recursive: true, force: true });
+  await rm(workspace.depsDir, { recursive: true, force: true });
+}
+
+/** Caller must hold withLocalMutationGate for the entire acquisition/reset. */
+export async function reserveLocalMutationPreparation(
+  runId: string,
+  action: MutationAction,
+  request: unknown,
+  attemptId: string,
+  restoredProviderLockDigest?: string,
+  syncFault?: LocalMutationSyncFault,
+): Promise<number | undefined> {
+  if (!/^[A-Za-z0-9_-]{1,128}$/u.test(runId) || !validAttemptId(attemptId)) return undefined;
+  const requestDigest = await mutationRequestDigest(runId, action, request, restoredProviderLockDigest);
+  const attemptDigest = await digestBytes(new TextEncoder().encode(attemptId));
+  await ensureCustodyDirectory(true);
+  const paths = await recordPaths(runId);
+  const initial: PreparationClaim = {
+    kind: "takosumi.local-mutation-preparation@v2",
+    runId, action, requestDigest,
+    ...(restoredProviderLockDigest ? { restoredProviderLockDigest } : {}),
+    processInstanceId: LOCAL_PROCESS_INSTANCE_ID,
+    attemptDigest,
+    epoch: 1,
+  };
+  await createExclusive(paths.claim, initial, syncFault);
+  const value = await readDurable(paths.claim, syncFault);
+  if (!isPreparationClaim(value, runId) ||
+    value.action !== action || value.requestDigest !== requestDigest ||
+    value.restoredProviderLockDigest !== restoredProviderLockDigest ||
+    value.processInstanceId !== LOCAL_PROCESS_INSTANCE_ID ||
+    await occupied(`${paths.claim}.dispatched`)) return undefined;
+  const historicalAttempts = new Set<string>();
+  const current = await currentPreparationOwner(paths.claim, value, historicalAttempts, syncFault);
+  if (!current) return undefined;
+  let owner = current;
+  if (current.attemptDigest !== attemptDigest) {
+    if (current.epoch >= MAX_PREPARATION_EPOCH || historicalAttempts.has(attemptDigest)) return undefined;
+    owner = { ...current, attemptDigest, epoch: current.epoch + 1 };
+    if (!(await createExclusive(ownerPath(paths.claim, owner.epoch), owner, syncFault))) return undefined;
+  }
+  if (!(await preparationReady(paths.claim, owner, syncFault))) {
+    if (await occupied(readyPath(paths.claim, owner.epoch))) return undefined;
+    await resetPreparationWorkspace(runId);
+    if (!(await createExclusive(readyPath(paths.claim, owner.epoch), {
+      kind: "takosumi.local-mutation-preparation-ready@v2",
+      runId, requestDigest, processInstanceId: LOCAL_PROCESS_INSTANCE_ID,
+      attemptDigest: owner.attemptDigest, epoch: owner.epoch,
+    }, syncFault))) return undefined;
+  }
+  // A returned epoch is authority: re-read and sync its exact immutable files.
+  if (!(await preparationReady(paths.claim, owner, syncFault))) return undefined;
+  const verified = await currentPreparationOwner(paths.claim, value, undefined, syncFault);
+  if (!verified || verified.epoch !== owner.epoch ||
+    verified.attemptDigest !== owner.attemptDigest) return undefined;
+  return owner.epoch;
+}
+
+export async function inspectLocalMutationPreparation(runId: string): Promise<"absent" | "legacy" | "indeterminate" | PreparationOwner> {
+  if (!/^[A-Za-z0-9_-]{1,128}$/u.test(runId)) return "indeterminate";
+  if (!(await ensureCustodyDirectory(false))) return "absent";
+  const paths = await recordPaths(runId);
+  const value = await readBounded(paths.claim);
+  if (value === undefined) return (await occupied(paths.claim)) ? "indeterminate" : "absent";
+  if (isRecord(value) && value.kind === "takosumi.local-mutation-claim@v1") return "legacy";
+  const durable = await readDurable(paths.claim);
+  if (!isPreparationClaim(durable, runId) || durable.processInstanceId !== LOCAL_PROCESS_INSTANCE_ID) return "indeterminate";
+  return (await currentPreparationOwner(paths.claim, durable)) ?? "indeterminate";
+}
+
+/** Caller holds the same-run gate through the entire mutating handler. */
+export async function authorizeLocalMutationPreparation(
+  runId: string,
+  attemptId: string | null,
+  epochText: string | null,
+): Promise<"legacy" | "allowed" | "indeterminate"> {
+  const owner = await inspectLocalMutationPreparation(runId);
+  if (owner === "absent" || owner === "legacy") return "legacy";
+  if (owner === "indeterminate" || !validAttemptId(attemptId) ||
+    epochText !== String(owner.epoch) ||
+    owner.attemptDigest !== await digestBytes(new TextEncoder().encode(attemptId))) return "indeterminate";
+  const paths = await recordPaths(runId);
+  if (await occupied(`${paths.claim}.dispatched`) ||
+    !(await preparationReady(paths.claim, owner))) return "indeterminate";
+  return "allowed";
+}
+
+/** Persist dispatch before any OpenTofu preparation or provider invocation. */
+export async function consumeLocalMutationPreparation(
+  runId: string,
+  action: MutationAction,
+  request: unknown,
+  restoredProviderLockDigest: string | undefined,
+  attemptId: string | null,
+  epochText: string | null,
+  syncFault?: LocalMutationSyncFault,
+): Promise<boolean> {
+  if ((await authorizeLocalMutationPreparation(runId, attemptId, epochText)) !== "allowed") return false;
+  const paths = await recordPaths(runId);
+  const value = await readDurable(paths.claim, syncFault);
+  if (!isPreparationClaim(value, runId) || value.action !== action ||
+    value.restoredProviderLockDigest !== restoredProviderLockDigest ||
+    value.requestDigest !== await mutationRequestDigest(runId, action, request, restoredProviderLockDigest)) return false;
+  const owner = await currentPreparationOwner(paths.claim, value);
+  if (!owner || owner.epoch !== Number(epochText)) return false;
+  return await createExclusive(`${paths.claim}.dispatched`, {
+    kind: "takosumi.local-mutation-dispatched@v2",
+    runId, action, requestDigest: value.requestDigest,
+    processInstanceId: LOCAL_PROCESS_INSTANCE_ID,
+    attemptDigest: owner.attemptDigest,
+    epoch: owner.epoch,
+  }, syncFault);
+}
+
+export async function inspectLocalMutationPreparationCompletion(
+  runId: string,
+  action: MutationAction,
+  requestDigest: string,
+  restoredProviderLockDigest?: string,
+): Promise<"not-v2" | "preparing" | "indeterminate" | PreparationCompletion> {
+  if (!/^[A-Za-z0-9_-]{1,128}$/u.test(runId) || !DIGEST_PATTERN.test(requestDigest))
+    return "indeterminate";
+  if (!(await ensureCustodyDirectory(false))) return "not-v2";
+  const paths = await recordPaths(runId);
+  const initial = await readBounded(paths.claim);
+  if (!isRecord(initial) || initial.kind !== "takosumi.local-mutation-preparation@v2")
+    return "not-v2";
+  const value = await readDurable(paths.claim);
+  if (!isPreparationClaim(value, runId) || value.action !== action ||
+    value.requestDigest !== requestDigest ||
+    value.restoredProviderLockDigest !== restoredProviderLockDigest ||
+    value.processInstanceId !== LOCAL_PROCESS_INSTANCE_ID) return "indeterminate";
+  const owner = await currentPreparationOwner(paths.claim, value);
+  if (!owner || !(await preparationReady(paths.claim, owner))) return "indeterminate";
+  const dispatchedPath = `${paths.claim}.dispatched`;
+  if (await occupied(dispatchedPath)) {
+    const dispatched = await readDurable(dispatchedPath);
+    if (!isRecord(dispatched) ||
+      dispatched.kind !== "takosumi.local-mutation-dispatched@v2" ||
+      dispatched.runId !== runId || dispatched.action !== action ||
+      dispatched.requestDigest !== requestDigest ||
+      dispatched.processInstanceId !== LOCAL_PROCESS_INSTANCE_ID ||
+      dispatched.attemptDigest !== owner.attemptDigest ||
+      dispatched.epoch !== owner.epoch) return "indeterminate";
+    const completion = await readDurable(paths.completion, undefined, true);
+    if (!isRecord(completion) ||
+      completion.kind !== "takosumi.local-mutation-completion@v2" ||
+      completion.runId !== runId || completion.action !== action ||
+      completion.requestDigest !== requestDigest ||
+      completion.restoredProviderLockDigest !== restoredProviderLockDigest ||
+      completion.processInstanceId !== LOCAL_PROCESS_INSTANCE_ID ||
+      completion.attemptDigest !== owner.attemptDigest ||
+      completion.epoch !== owner.epoch ||
+      (completion.outcome !== "provider_failed" && completion.outcome !== "other") ||
+      (completion.stateDigest !== undefined &&
+        (typeof completion.stateDigest !== "string" || !DIGEST_PATTERN.test(completion.stateDigest))) ||
+      (completion.errorCode !== undefined &&
+        (typeof completion.errorCode !== "string" || !/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(completion.errorCode))) ||
+      (completion.providerInstallation !== undefined && !Array.isArray(completion.providerInstallation)))
+      return "indeterminate";
+    return completion as unknown as PreparationCompletion;
+  }
+  return "preparing";
 }
 
 /** Claim before the first possible tofu apply, or return a proven old outcome. */
@@ -446,14 +805,14 @@ export async function completeLocalMutation(
   request: unknown,
   result: Record<string, unknown>,
   restoredProviderLockDigest?: string,
-): Promise<Completion> {
+): Promise<Completion | PreparationCompletion> {
   const requestDigest = await mutationRequestDigest(
     runId,
     action,
     request,
     restoredProviderLockDigest,
   );
-  let claim: Claim = {
+  let claim: Claim | Omit<PreparationCompletion, "outcome"> = {
     kind: "takosumi.local-mutation-claim@v1",
     runId,
     action,
@@ -462,10 +821,37 @@ export async function completeLocalMutation(
   };
   const paths = await recordPaths(runId);
   const existing = await readBounded(paths.claim);
-  if (!matchesClaim(existing, claim))
+  const durableExisting = isRecord(existing) &&
+      existing.kind === "takosumi.local-mutation-preparation@v2"
+    ? await readDurable(paths.claim)
+    : undefined;
+  if (matchesClaim(existing, claim)) {
+    if (isRecord(existing) && typeof existing.reservationDigest === "string") {
+      claim = { ...claim, reservationDigest: existing.reservationDigest };
+    }
+  } else if (isPreparationClaim(durableExisting, runId) &&
+    durableExisting.action === action && durableExisting.requestDigest === requestDigest &&
+    durableExisting.restoredProviderLockDigest === restoredProviderLockDigest &&
+    durableExisting.processInstanceId === LOCAL_PROCESS_INSTANCE_ID) {
+    const owner = await currentPreparationOwner(paths.claim, durableExisting);
+    const dispatched = await readDurable(`${paths.claim}.dispatched`);
+    if (!owner || !isRecord(dispatched) ||
+      dispatched.kind !== "takosumi.local-mutation-dispatched@v2" ||
+      dispatched.runId !== runId || dispatched.action !== action ||
+      dispatched.requestDigest !== requestDigest ||
+      dispatched.processInstanceId !== LOCAL_PROCESS_INSTANCE_ID ||
+      dispatched.attemptDigest !== owner.attemptDigest ||
+      dispatched.epoch !== owner.epoch) throw new Error("local mutation dispatch mismatch");
+    claim = {
+      kind: "takosumi.local-mutation-completion@v2",
+      runId, action, requestDigest,
+      ...(restoredProviderLockDigest ? { restoredProviderLockDigest } : {}),
+      processInstanceId: LOCAL_PROCESS_INSTANCE_ID,
+      attemptDigest: owner.attemptDigest,
+      epoch: owner.epoch,
+    };
+  } else {
     throw new Error("local mutation claim mismatch");
-  if (isRecord(existing) && typeof existing.reservationDigest === "string") {
-    claim = { ...claim, reservationDigest: existing.reservationDigest };
   }
   const failure =
     isRecord(result.providerExecutionFailure) &&
@@ -508,13 +894,13 @@ export async function completeLocalMutation(
           ),
         )
     : undefined;
-  const completion: Completion = {
+  const completion = {
     ...claim,
     outcome: failure ? "provider_failed" : "other",
     ...(stateDigest ? { stateDigest } : {}),
     ...(errorCode ? { errorCode } : {}),
     ...(providerInstallation ? { providerInstallation } : {}),
-  };
+  } as Completion | PreparationCompletion;
   const temporary = `${paths.completion}.${crypto.randomUUID()}.tmp`;
   if (!(await createExclusive(temporary, completion)))
     throw new Error("local mutation completion temporary conflict");
@@ -523,12 +909,7 @@ export async function completeLocalMutation(
       await link(temporary, paths.completion);
     } catch (error) {
       if (!isErrno(error, "EEXIST")) throw error;
-      const prior = await readLocalMutationCompletion(
-        runId,
-        action,
-        requestDigest,
-        restoredProviderLockDigest,
-      );
+      const prior = await readBounded(paths.completion, true);
       if (!prior || JSON.stringify(prior) !== JSON.stringify(completion))
         throw new Error("local mutation completion conflict");
     }
@@ -557,7 +938,7 @@ export async function completeLocalMutation(
 }
 
 export function localMutationCompletionResponse(
-  completion: Completion,
+  completion: Completion | PreparationCompletion,
 ): Response {
   if (completion.outcome !== "provider_failed") {
     return Response.json(

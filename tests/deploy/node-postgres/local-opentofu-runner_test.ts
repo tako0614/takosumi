@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleRunnerRequestWithDependencies } from "../../../runner/entrypoint.ts";
+import { RUN_ROOT } from "../../../runner/lib/constants.ts";
 import {
   mutationRequestDigest,
   reserveLocalMutation,
@@ -25,7 +26,15 @@ const FIXTURE_EXECUTION_EVIDENCE_AUTHORITY = {
   executorArtifact: { digest: `sha256:${"c".repeat(64)}`, immutable: true },
 } as const;
 const handleRunnerRequest = (request: Request) =>
-  handleRunnerRequestWithDependencies(request, { mutationCustodyMode: "local-http" });
+  handleRunnerRequestWithDependencies(request, {
+    mutationCustodyMode: "local-http",
+    localPreparationV2: false,
+  });
+const handleRunnerRequestV2 = (request: Request) =>
+  handleRunnerRequestWithDependencies(request, {
+    mutationCustodyMode: "local-http",
+    localPreparationV2: true,
+  });
 
 test("local HTTP mutation mode mismatch refuses before completion, preparation or dispatch", async () => {
   const requests: string[] = [];
@@ -703,7 +712,7 @@ test("HTTP OpenTofu runner keeps an unchanged object-storage source archive with
   }
 });
 
-test("HTTP OpenTofu runner carries direct provider evidence through apply and destroy commits", async () => {
+test.each(["v1", "v2"] as const)("HTTP OpenTofu runner carries direct provider evidence through apply and destroy commits with %s custody", async (custodyVersion) => {
   const provider = "registry.opentofu.org/example/direct";
   const installedDigest = `sha256:${"d".repeat(64)}`;
   const planBytes = new TextEncoder().encode("reviewed direct-provider plan");
@@ -727,7 +736,11 @@ test("HTTP OpenTofu runner carries direct provider evidence through apply and de
     async fetch(request) {
       const url = new URL(request.url);
       if (url.pathname === "/healthz")
-        return Response.json({ ok: true, mutationCustodyMode: "local-http" });
+        return Response.json({
+          ok: true,
+          mutationCustodyMode: "local-http",
+          ...(custodyVersion === "v2" ? { capabilities: ["takosumi.local-mutation-preparation@v2"] } : {}),
+        });
       requests.push(`${request.method} ${url.pathname}`);
       if (request.method === "POST" &&
           /^\/runs\/(apply_http_direct|destroy_http_direct)\/plan-state-metadata$/u.test(url.pathname)) {
@@ -735,12 +748,12 @@ test("HTTP OpenTofu runner carries direct provider evidence through apply and de
       }
       if (
         request.method === "PUT" &&
-        /^\/runs\/(apply_http_direct|destroy_http_direct)\/mutation-reservation$/u.test(
+        new RegExp(`^/runs/(apply_http_direct|destroy_http_direct)/mutation-${custodyVersion === "v2" ? "preparation" : "reservation"}$`, "u").test(
           url.pathname,
         )
       ) {
         return Response.json(
-          { token: "00000000-0000-4000-8000-000000000000" },
+          custodyVersion === "v2" ? { epoch: 1 } : { token: "00000000-0000-4000-8000-000000000000" },
           { status: 201 },
         );
       }
@@ -767,6 +780,10 @@ test("HTTP OpenTofu runner carries direct provider evidence through apply and de
           url.pathname,
         )
       ) {
+        if (custodyVersion === "v2") {
+          expect(request.headers.get("x-takosumi-preparation-attempt")).toMatch(/^[0-9a-f-]{36}$/u);
+          expect(request.headers.get("x-takosumi-preparation-epoch")).toBe("1");
+        }
         return Response.json({ ok: true });
       }
       if (
@@ -775,6 +792,10 @@ test("HTTP OpenTofu runner carries direct provider evidence through apply and de
           url.pathname,
         )
       ) {
+        if (custodyVersion === "v2") {
+          expect(request.headers.get("x-takosumi-preparation-attempt")).toMatch(/^[0-9a-f-]{36}$/u);
+          expect(request.headers.get("x-takosumi-preparation-epoch")).toBe("1");
+        }
         expect(new Uint8Array(await request.arrayBuffer())).toEqual(lockBytes);
         return Response.json({
           digest: lockDigest,
@@ -784,6 +805,10 @@ test("HTTP OpenTofu runner carries direct provider evidence through apply and de
       const runMatch =
         /^\/runs\/(apply_http_direct|destroy_http_direct)$/u.exec(url.pathname);
       if (request.method === "POST" && runMatch) {
+        if (custodyVersion === "v2") {
+          expect(request.headers.get("x-takosumi-preparation-attempt")).toMatch(/^[0-9a-f-]{36}$/u);
+          expect(request.headers.get("x-takosumi-preparation-epoch")).toBe("1");
+        }
         restoreMarkers.push(
           request.headers.get("x-takosumi-provider-lock-restore-digest"),
         );
@@ -941,7 +966,7 @@ test("HTTP OpenTofu runner carries direct provider evidence through apply and de
       "GET /runs/apply_http_direct/completion",
       "GET /runs/plan_http_apply/artifacts/tfplan",
       "POST /runs/apply_http_direct/plan-state-metadata",
-      "PUT /runs/apply_http_direct/mutation-reservation",
+      `PUT /runs/apply_http_direct/mutation-${custodyVersion === "v2" ? "preparation" : "reservation"}`,
       "PUT /runs/apply_http_direct/artifacts/tfplan",
       "PUT /runs/apply_http_direct/provider-lockfile/restore",
       "POST /runs/apply_http_direct",
@@ -949,7 +974,7 @@ test("HTTP OpenTofu runner carries direct provider evidence through apply and de
       "GET /runs/destroy_http_direct/completion",
       "GET /runs/plan_http_destroy/artifacts/tfplan",
       "POST /runs/destroy_http_direct/plan-state-metadata",
-      "PUT /runs/destroy_http_direct/mutation-reservation",
+      `PUT /runs/destroy_http_direct/mutation-${custodyVersion === "v2" ? "preparation" : "reservation"}`,
       "PUT /runs/destroy_http_direct/artifacts/tfplan",
       "PUT /runs/destroy_http_direct/provider-lockfile/restore",
       "POST /runs/destroy_http_direct",
@@ -1486,6 +1511,591 @@ test("local HTTP custody never redispatches an unfinished exact mutation", async
     }),
   );
   expect(replay.status).toBe(409);
+});
+
+test("a preparing local HTTP mutation can transfer to an exact new attempt without letting the stale owner replace its plan or dispatch", async () => {
+  const runId = `apply_preparing_${crypto.randomUUID().replace(/-/g, "")}`;
+  const request = { applyRun: { id: runId }, planRun: { id: "plan_exact" } };
+  const attemptA = crypto.randomUUID();
+  const attemptB = crypto.randomUUID();
+  const acquire = (attemptId: string) =>
+    handleRunnerRequestV2(
+      new Request(`http://runner/runs/${runId}/mutation-preparation`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ runId, action: "apply", request, attemptId }),
+      }),
+    );
+  const first = await acquire(attemptA);
+  expect(first.status).toBe(201);
+  expect((await first.json()).epoch).toBe(1);
+
+  const transferred = await acquire(attemptB);
+  expect(transferred.status).toBe(201);
+  expect((await transferred.json()).epoch).toBe(2);
+
+  const planBytes = new TextEncoder().encode("exact reviewed plan");
+  const currentPlan = await handleRunnerRequestV2(
+    new Request(`http://runner/runs/${runId}/artifacts/tfplan`, {
+      method: "PUT",
+      headers: {
+        "x-takosumi-preparation-attempt": attemptB,
+        "x-takosumi-preparation-epoch": "2",
+      },
+      body: planBytes,
+    }),
+  );
+  expect(currentPlan.status).toBe(200);
+
+  const staleRestore = await handleRunnerRequestV2(
+    new Request(`http://runner/runs/${runId}/source-archive/restore`, {
+      method: "PUT",
+      headers: {
+        "x-takosumi-preparation-attempt": attemptA,
+        "x-takosumi-preparation-epoch": "1",
+      },
+      body: new Uint8Array([1, 2, 3]),
+    }),
+  );
+  expect(staleRestore.status).toBe(409);
+  const readback = await handleRunnerRequestV2(
+    new Request(`http://runner/runs/${runId}/artifacts/tfplan`),
+  );
+  expect(new Uint8Array(await readback.arrayBuffer())).toEqual(planBytes);
+
+  const stalePost = await handleRunnerRequestV2(
+    new Request(`http://runner/runs/${runId}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-takosumi-preparation-attempt": attemptA,
+        "x-takosumi-preparation-epoch": "1",
+      },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "apply",
+        runId,
+        request,
+      }),
+    }),
+  );
+  expect(stalePost.status).toBe(409);
+});
+
+test("a superseded v2 attempt cannot reclaim ownership through a late reservation retry", async () => {
+  const runId = `apply_old_attempt_${crypto.randomUUID().replace(/-/g, "")}`;
+  const request = { applyRun: { id: runId }, planRun: { id: "plan_exact" } };
+  const attemptA = crypto.randomUUID();
+  const attemptB = crypto.randomUUID();
+  const acquire = (attemptId: string) => handleRunnerRequestV2(new Request(
+    `http://runner/runs/${runId}/mutation-preparation`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ runId, action: "apply", request, attemptId }),
+    },
+  ));
+  expect((await acquire(attemptA)).status).toBe(201);
+  const transferred = await acquire(attemptB);
+  expect(transferred.status).toBe(201);
+  expect((await transferred.json()).epoch).toBe(2);
+  expect((await acquire(attemptA)).status).toBe(409);
+  const currentRetry = await acquire(attemptB);
+  expect(currentRetry.status).toBe(201);
+  expect((await currentRetry.json()).epoch).toBe(2);
+  const stale = await handleRunnerRequestV2(new Request(
+    `http://runner/runs/${runId}/artifacts/tfplan`, {
+      method: "PUT",
+      headers: {
+        "x-takosumi-preparation-attempt": attemptA,
+        "x-takosumi-preparation-epoch": "1",
+      },
+      body: new TextEncoder().encode("stale"),
+    },
+  ));
+  expect(stale.status).toBe(409);
+});
+
+test.each([
+  ["claim", "file"], ["claim", "directory"],
+  ["owner-2", "file"], ["owner-2", "directory"],
+  ["ready-1", "file"], ["ready-1", "directory"],
+] as const)(
+  "a v2 %s record with failed %s fsync is not adopted until exact file and parent re-sync",
+  async (record, failedStep) => {
+    const runId = `apply_sync_${crypto.randomUUID().replace(/-/g, "")}`;
+    const request = { applyRun: { id: runId }, planRun: { id: "plan_sync" } };
+    const attemptA = crypto.randomUUID();
+    const attemptB = crypto.randomUUID();
+    const pathMatches = (path: string) => record === "claim"
+      ? path.endsWith(".claim.json")
+      : path.endsWith(`.claim.json.${record}.json`);
+    const failure = () => handleRunnerRequestWithDependencies(new Request(
+      `http://runner/runs/${runId}/mutation-preparation`, {
+        method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ runId, action: "apply", request,
+          attemptId: record === "owner-2" ? attemptB : attemptA }),
+      },
+    ), {
+      mutationCustodyMode: "local-http", localPreparationV2: true,
+      localMutationSyncFault: (step, path) => {
+        if (step === failedStep && pathMatches(path))
+          throw new Error("injected fsync failure");
+      },
+    });
+    const acquire = (attemptId: string) => handleRunnerRequestV2(new Request(
+      `http://runner/runs/${runId}/mutation-preparation`, {
+        method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ runId, action: "apply", request, attemptId }),
+      },
+    ));
+    if (record === "owner-2") expect((await acquire(attemptA)).status).toBe(201);
+    expect((await failure()).status).toBe(409);
+    expect((await failure()).status).toBe(409);
+    const recovered = await acquire(record === "owner-2" ? attemptB : attemptA);
+    expect(recovered.status).toBe(201);
+    expect((await recovered.json()).epoch).toBe(record === "owner-2" ? 2 : 1);
+  },
+);
+
+test("a failed v2 dispatch fsync returns indeterminate without provider execution or a second POST", async () => {
+  const runId = `apply_dispatch_sync_${crypto.randomUUID().replace(/-/g, "")}`;
+  const request = { applyRun: { id: runId }, planRun: { id: "plan_sync" } };
+  const attemptId = crypto.randomUUID();
+  const acquire = await handleRunnerRequestV2(new Request(`http://runner/runs/${runId}/mutation-preparation`, {
+    method: "PUT", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ runId, action: "apply", request, attemptId }),
+  }));
+  expect(acquire.status).toBe(201);
+  const postRequest = () => new Request(`http://runner/runs/${runId}`, {
+    method: "POST", headers: {
+      "content-type": "application/json",
+      "x-takosumi-preparation-attempt": attemptId,
+      "x-takosumi-preparation-epoch": "1",
+    },
+    body: JSON.stringify({ kind: "takosumi.opentofu-run@v1", runId, action: "apply", request }),
+  });
+  const refused = await handleRunnerRequestWithDependencies(postRequest(), {
+    mutationCustodyMode: "local-http", localPreparationV2: true,
+    localMutationSyncFault: (step, path) => {
+      if (step === "directory" && path.endsWith(".dispatched"))
+        throw new Error("injected dispatch fsync failure");
+    },
+  });
+  expect(refused.status).toBe(409);
+  expect((await refused.json()).errorCode).toBe("runner_mutation_indeterminate");
+  expect((await handleRunnerRequestV2(postRequest())).status).toBe(409);
+});
+
+test("a local HTTP preparing claim is readable only for the exact request and never masquerades as a completion", async () => {
+  const runId = `apply_preparing_read_${crypto.randomUUID().replace(/-/g, "")}`;
+  const request = { applyRun: { id: runId }, planRun: { id: "plan_exact" } };
+  const attemptId = crypto.randomUUID();
+  const first = await handleRunnerRequestV2(new Request(`http://runner/runs/${runId}/mutation-preparation`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ runId, action: "apply", request, attemptId }),
+  }));
+  expect(first.status).toBe(201);
+  const sameAttempt = await handleRunnerRequestV2(new Request(`http://runner/runs/${runId}/mutation-preparation`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ runId, action: "apply", request, attemptId }),
+  }));
+  expect(sameAttempt.status).toBe(201);
+  expect((await sameAttempt.json()).epoch).toBe(1);
+  const digest = await mutationRequestDigest(runId, "apply", request);
+  const preparing = await handleRunnerRequestV2(new Request(`http://runner/runs/${runId}/completion`, {
+    headers: {
+      "x-takosumi-mutation-action": "apply",
+      "x-takosumi-mutation-digest": digest,
+    },
+  }));
+  expect(preparing.status).toBe(202);
+  expect(await preparing.json()).toEqual({ status: "preparing" });
+  const wrong = await handleRunnerRequestV2(new Request(`http://runner/runs/${runId}/completion`, {
+    headers: {
+      "x-takosumi-mutation-action": "apply",
+      "x-takosumi-mutation-digest": `sha256:${"0".repeat(64)}`,
+    },
+  }));
+  expect(wrong.status).toBe(409);
+});
+
+test("the HTTP adapter can reprepare an exact interrupted Destroy without a provider POST", async () => {
+  const runId = `destroy_reprepare_${crypto.randomUUID().replace(/-/g, "")}`;
+  const planId = `plan_${runId}`;
+  const planBytes = new TextEncoder().encode("reviewed destroy plan");
+  const planDigest = await sha256(planBytes);
+  const epochs: number[] = [];
+  const reservationAttempts: string[] = [];
+  let reservationAckLost = false;
+  let providerPosts = 0;
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "GET" && path === `/runs/${planId}/artifacts/tfplan`)
+        return new Response(planBytes);
+      if (request.method === "POST" && path === `/runs/${runId}/plan-state-metadata`)
+        return Response.json({ lineage: "", serial: 0 });
+      if (request.method === "PUT" && path === `/runs/${runId}/mutation-preparation`) {
+        const envelope = await request.clone().json() as { attemptId: string };
+        reservationAttempts.push(envelope.attemptId);
+        const response = await handleRunnerRequestV2(request);
+        if (response.status === 201) {
+          const body = await response.clone().json() as { epoch: number };
+          epochs.push(body.epoch);
+          if (!reservationAckLost) {
+            reservationAckLost = true;
+            return Response.json({ error: "ack lost" }, { status: 503 });
+          }
+        }
+        return response;
+      }
+      if (request.method === "PUT" && path === `/runs/${runId}/artifacts/tfplan`)
+        return Response.json({ error: "interrupted before dispatch" }, { status: 503 });
+      if (request.method === "POST" && path === `/runs/${runId}`) providerPosts += 1;
+      return await handleRunnerRequestV2(request);
+    },
+  });
+  try {
+    const runner = createHttpOpenTofuRunner({
+      stateStore: {
+        read: async () => undefined,
+        commit: async <T>(artifact: T): Promise<T> => artifact,
+        readRawOutput: async () => undefined,
+        commitRawOutput: async <T>(artifact: T): Promise<T> => artifact,
+      },
+      archiveStore: { write: async () => {}, read: async () => { throw new Error("unused"); } },
+      baseUrl: server.url.href,
+    });
+    const job = {
+      applyRun: { id: runId },
+      planRun: { id: planId, planDigest },
+      planArtifact: { kind: "runner-local", ref: `runner-local://${planId}/tfplan`, digest: planDigest },
+      runnerProfile: { id: "opentofu-default", executorId: "opentofu.default" },
+      stateScope: {
+        workspaceId: "workspace_reprepare",
+        subject: { kind: "resource", id: "resource_reprepare" },
+        environment: "production", generation: 1, stateRef: `state://reprepare/${runId}`,
+      },
+    } as Parameters<typeof runner.destroy>[0];
+    await expect(runner.destroy(job)).rejects.toThrow("failed to restore plan artifact");
+    await expect(runner.destroy(job)).rejects.toThrow("failed to restore plan artifact");
+    expect(epochs).toEqual([1, 1, 2]);
+    expect(reservationAttempts[0]).toBe(reservationAttempts[1]);
+    expect(reservationAttempts[2]).not.toBe(reservationAttempts[1]);
+    expect(providerPosts).toBe(0);
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("an unfinished v2 preparation cannot transfer to another runner process", async () => {
+  const runId = `apply_process_${crypto.randomUUID().replace(/-/g, "")}`;
+  const request = { applyRun: { id: runId }, planRun: { id: "plan_process" } };
+  const first = await handleRunnerRequestV2(new Request(`http://runner/runs/${runId}/mutation-preparation`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ runId, action: "apply", request, attemptId: crypto.randomUUID() }),
+  }));
+  expect(first.status).toBe(201);
+  const child = Bun.spawn([
+    process.execPath,
+    "-e",
+    `import { handleRunnerRequestWithDependencies } from "./runner/entrypoint.ts";
+     const runId = ${JSON.stringify(runId)};
+     const request = ${JSON.stringify(request)};
+     const response = await handleRunnerRequestWithDependencies(
+       new Request("http://runner/runs/" + runId + "/mutation-preparation", {
+         method: "PUT", headers: { "content-type": "application/json" },
+         body: JSON.stringify({ runId, action: "apply", request, attemptId: crypto.randomUUID() }),
+       }),
+       { mutationCustodyMode: "local-http", localPreparationV2: true },
+     );
+     process.stdout.write(String(response.status));`,
+  ], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
+  const childStatus = await new Response(child.stdout).text();
+  expect(await child.exited).toBe(0);
+  expect(childStatus).toBe("409");
+});
+
+test("a v2 preparation excludes every same-run workspace writer and unrelated action", async () => {
+  const runId = `apply_closure_${crypto.randomUUID().replace(/-/g, "")}`;
+  const request = { applyRun: { id: runId }, planRun: { id: "plan_closure" } };
+  const attemptA = crypto.randomUUID();
+  const attemptB = crypto.randomUUID();
+  for (const attemptId of [attemptA, attemptB]) {
+    const acquired = await handleRunnerRequestV2(new Request(`http://runner/runs/${runId}/mutation-preparation`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ runId, action: "apply", request, attemptId }),
+    }));
+    expect(acquired.status).toBe(201);
+  }
+  for (const suffix of [
+    "source-archive/restore",
+    "artifacts/tfstate",
+    "artifacts/tfplan",
+    "provider-lockfile/restore",
+    "deps/producer/restore",
+  ]) {
+    const stale = await handleRunnerRequestV2(new Request(`http://runner/runs/${runId}/${suffix}`, {
+      method: "PUT",
+      headers: {
+        "x-takosumi-preparation-attempt": attemptA,
+        "x-takosumi-preparation-epoch": "1",
+      },
+      body: new TextEncoder().encode("stale"),
+    }));
+    expect(stale.status).toBe(409);
+  }
+  const refresh = await handleRunnerRequestV2(new Request(`http://runner/runs/${runId}/credentials`, {
+    method: "PUT", body: "{}", headers: { "content-type": "application/json" },
+  }));
+  expect(refresh.status).toBe(409);
+  for (const action of ["plan", "compatibility_check", "backup", "release"]) {
+    const unrelated = await handleRunnerRequestV2(new Request(`http://runner/runs/${runId}`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "takosumi.opentofu-run@v1", runId, action, request: {} }),
+    }));
+    expect(unrelated.status).toBe(409);
+  }
+  for (const action of ["source_sync", "stable_semver_tag"]) {
+    const unrelated = await handleRunnerRequestV2(new Request(`http://runner/runs/${runId}`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "takosumi.opentofu-run@v1", runId, action, request: { action } }),
+    }));
+    expect(unrelated.status).toBe(409);
+  }
+});
+
+test("a v2 dispatched request never transfers or repeats after its reply is unknown", async () => {
+  const runId = `apply_dispatched_${crypto.randomUUID().replace(/-/g, "")}`;
+  const request = { applyRun: { id: runId }, planRun: { id: "plan_dispatched" } };
+  const attemptId = crypto.randomUUID();
+  const acquire = (id: string, body: unknown = request) => handleRunnerRequestV2(
+    new Request(`http://runner/runs/${runId}/mutation-preparation`, {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ runId, action: "apply", request: body, attemptId: id }),
+    }),
+  );
+  expect((await acquire(attemptId)).status).toBe(201);
+  const mismatch = await acquire(crypto.randomUUID(), {
+    ...request, planRun: { id: "different_plan" },
+  });
+  expect(mismatch.status).toBe(409);
+  const changedCredentialBytes = await acquire(crypto.randomUUID(), {
+    ...request, credentials: { env: { PROVIDER_TOKEN: "new-secret-bytes" } },
+  });
+  expect(changedCredentialBytes.status).toBe(409);
+  const post = () => handleRunnerRequestV2(new Request(`http://runner/runs/${runId}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-takosumi-preparation-attempt": attemptId,
+      "x-takosumi-preparation-epoch": "1",
+    },
+    body: JSON.stringify({ kind: "takosumi.opentofu-run@v1", runId, action: "apply", request }),
+  }));
+  expect((await post()).status).toBe(500); // Incomplete fixture fails after durable dispatch.
+  const completion = await handleRunnerRequestV2(new Request(`http://runner/runs/${runId}/completion`, {
+    headers: {
+      "x-takosumi-mutation-action": "apply",
+      "x-takosumi-mutation-digest": await mutationRequestDigest(runId, "apply", request),
+    },
+  }));
+  expect(completion.status).toBe(409);
+  expect((await acquire(crypto.randomUUID())).status).toBe(409);
+  expect((await post()).status).toBe(409);
+});
+
+test.each(["succeeded", "provider_failed"] as const)(
+  "a real v2 runner POST %s outcome has at-most-once provider dispatch and exact completion readback",
+  async (outcome) => {
+    const runId = `apply_v2_post_${crypto.randomUUID().replace(/-/g, "")}`;
+    const runRoot = join(RUN_ROOT, runId);
+    const fakeBin = await mkdtemp(join(tmpdir(), "takosumi-v2-post-bin-"));
+    const previousPath = Bun.env.PATH;
+    const planBytes = new TextEncoder().encode("fake-reviewed-plan");
+    const planDigest = await sha256(planBytes);
+    const marker = join(fakeBin, "provider-posts");
+    const attemptId = crypto.randomUUID();
+    const request = {
+      applyRun: { id: runId },
+      planRun: {
+        id: runId,
+        source: {
+          kind: "git", url: "https://git.example.com/capsule.git",
+          commit: "0123456789abcdef0123456789abcdef01234567",
+        },
+        requiredProviders: [],
+      },
+      planArtifact: { kind: "runner-local", ref: `runner-local://${runId}/tfplan`, digest: planDigest },
+      runnerProfile: { allowedProviders: [] },
+      generatedRoot: { files: { "main.tf": "module \"child\" { source = \"./module\" }\n" } },
+      variables: {},
+    };
+    try {
+      const acquire = await handleRunnerRequestV2(new Request(
+        `http://runner/runs/${runId}/mutation-preparation`, {
+          method: "PUT", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ runId, action: "apply", request, attemptId }),
+        },
+      ));
+      expect(acquire.status).toBe(201);
+      expect((await acquire.json()).epoch).toBe(1);
+      await mkdir(join(runRoot, "source"), { recursive: true });
+      await writeFile(join(runRoot, "source", "main.tf"), "terraform {}\n");
+      const preparationHeaders = {
+        "x-takosumi-preparation-attempt": attemptId,
+        "x-takosumi-preparation-epoch": "1",
+      };
+      const plan = await handleRunnerRequestV2(new Request(
+        `http://runner/runs/${runId}/artifacts/tfplan`, {
+          method: "PUT", headers: preparationHeaders, body: planBytes,
+        },
+      ));
+      expect(plan.status).toBe(200);
+      const tofuPath = join(fakeBin, "tofu");
+      await writeFile(tofuPath, `#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  init) echo init ;;
+  apply)
+    echo apply >> "${marker}"
+    cat > terraform.tfstate <<'JSON'
+{"version":4,"serial":1,"lineage":"v2-post","resources":[]}
+JSON
+    ${outcome === "provider_failed" ? 'echo "provider rejected a resource" >&2; exit 1' : "echo apply"}
+    ;;
+  output) printf '{}' ;;
+  *) echo "unexpected tofu command: $*" >&2; exit 2 ;;
+esac
+`);
+      await chmod(tofuPath, 0o755);
+      Bun.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
+      const post = () => handleRunnerRequestV2(new Request(`http://runner/runs/${runId}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...preparationHeaders },
+        body: JSON.stringify({ kind: "takosumi.opentofu-run@v1", runId, action: "apply", request }),
+      }));
+      const response = await post();
+      expect(response.status).toBe(outcome === "succeeded" ? 200 : 500);
+      const direct = await response.json() as Record<string, unknown>;
+      expect(direct.status).toBe(outcome === "succeeded" ? "succeeded" : "failed");
+      expect(await readFile(marker, "utf8")).toBe("apply\n");
+      const digest = await mutationRequestDigest(runId, "apply", request);
+      const completion = await handleRunnerRequestV2(new Request(
+        `http://runner/runs/${runId}/completion`, {
+          headers: {
+            "x-takosumi-mutation-action": "apply",
+            "x-takosumi-mutation-digest": digest,
+          },
+        },
+      ));
+      expect(completion.status).toBe(outcome === "succeeded" ? 409 : 500);
+      if (outcome === "provider_failed") {
+        const receipt = await completion.json() as Record<string, unknown>;
+        expect(receipt.providerExecutionFailure).toEqual({ kind: "provider_execution_failed" });
+        expect(receipt.stateDigest).toBe(direct.stateDigest);
+      }
+      expect((await post()).status).toBe(409);
+      expect(await readFile(marker, "utf8")).toBe("apply\n");
+    } finally {
+      if (previousPath === undefined) delete Bun.env.PATH;
+      else Bun.env.PATH = previousPath;
+      await rm(runRoot, { recursive: true, force: true });
+      await rm(fakeBin, { recursive: true, force: true });
+    }
+  },
+);
+
+test("a torn local preparation owner record fails closed without a workspace write", async () => {
+  const runId = `apply_torn_${crypto.randomUUID().replace(/-/g, "")}`;
+  const request = { applyRun: { id: runId }, planRun: { id: "plan_torn" } };
+  const attemptA = crypto.randomUUID();
+  const acquire = (attemptId: string) => handleRunnerRequestV2(new Request(`http://runner/runs/${runId}/mutation-preparation`, {
+    method: "PUT", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ runId, action: "apply", request, attemptId }),
+  }));
+  expect((await acquire(attemptA)).status).toBe(201);
+  const name = (await sha256(new TextEncoder().encode(runId))).slice(7);
+  const claimPath = join(RUN_ROOT, ".mutation-custody", `${name}.claim.json`);
+  await writeFile(`${claimPath}.owner-2.json`, "{", { mode: 0o600 });
+  expect((await acquire(crypto.randomUUID())).status).toBe(409);
+  const stale = await handleRunnerRequestV2(new Request(`http://runner/runs/${runId}/artifacts/tfplan`, {
+    method: "PUT",
+    headers: {
+      "x-takosumi-preparation-attempt": attemptA,
+      "x-takosumi-preparation-epoch": "1",
+    },
+    body: new TextEncoder().encode("must not write"),
+  }));
+  expect(stale.status).toBe(409);
+  const missing = await handleRunnerRequestV2(new Request(`http://runner/runs/${runId}/artifacts/tfplan`));
+  expect(missing.status).toBe(404);
+});
+
+test.each([
+  "source-archive/restore",
+  "artifacts/tfstate",
+  "artifacts/tfplan",
+  "provider-lockfile/restore",
+  "deps/producer/restore",
+])("local HTTP preparation transfer waits for the whole %s writer", async (suffix) => {
+  const runId = `apply_stream_${crypto.randomUUID().replace(/-/g, "")}`;
+  const request = { applyRun: { id: runId }, planRun: { id: "plan_stream" } };
+  const attemptA = crypto.randomUUID();
+  const attemptB = crypto.randomUUID();
+  const acquire = async (attemptId: string) =>
+    await handleRunnerRequestV2(new Request(`http://runner/runs/${runId}/mutation-preparation`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ runId, action: "apply", request, attemptId }),
+    }));
+  expect((await acquire(attemptA)).status).toBe(201);
+  let releaseBody!: () => void;
+  let bodyEntered!: () => void;
+  const entered = new Promise<void>((resolve) => { bodyEntered = resolve; });
+  const bodyRelease = new Promise<void>((resolve) => { releaseBody = resolve; });
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      bodyEntered();
+      await bodyRelease;
+      controller.enqueue(new TextEncoder().encode("not an archive"));
+      controller.close();
+    },
+  });
+  const writing = handleRunnerRequestV2(new Request(`http://runner/runs/${runId}/${suffix}`, {
+    method: "PUT",
+    headers: {
+      "x-takosumi-preparation-attempt": attemptA,
+      "x-takosumi-preparation-epoch": "1",
+    },
+    body,
+  }));
+  await entered;
+  const transfer = acquire(attemptB);
+  const premature = await Promise.race([
+    transfer.then(() => "transferred"),
+    new Promise<string>((resolve) => setTimeout(() => resolve("waiting"), 10)),
+  ]);
+  expect(premature).toBe("waiting");
+  releaseBody();
+  await writing;
+  const response = await transfer;
+  expect(response.status).toBe(201);
+  expect((await response.json()).epoch).toBe(2);
+  const stale = await handleRunnerRequestV2(new Request(`http://runner/runs/${runId}/${suffix}`, {
+    method: "PUT",
+    headers: {
+      "x-takosumi-preparation-attempt": attemptA,
+      "x-takosumi-preparation-epoch": "1",
+    },
+    body: new TextEncoder().encode("stale"),
+  }));
+  expect(stale.status).toBe(409);
 });
 
 test("HTTP OpenTofu runner durably returns failed apply state without replaying provider execution", async () => {

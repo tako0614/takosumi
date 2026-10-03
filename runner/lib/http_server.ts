@@ -46,16 +46,27 @@ import type { RuntimeSecretFileSystem } from "./runtime_secrets.ts";
 import { PROVIDER_LOCK_RESTORE_DIGEST_HEADER } from "./transport.ts";
 import {
   completeLocalMutation,
+  authorizeLocalMutationPreparation,
   consumeLocalMutationReservation,
+  consumeLocalMutationPreparation,
   inspectLocalMutation,
+  inspectLocalMutationPreparation,
+  inspectLocalMutationPreparationCompletion,
   localMutationCompletionResponse,
   reserveLocalMutation,
+  reserveLocalMutationPreparation,
+  withLocalMutationGate,
+  type LocalMutationSyncFault,
 } from "./run_completion.ts";
 
 interface RunnerRequestDependencies {
   readonly runtimeSecretFileSystem?: Partial<RuntimeSecretFileSystem>;
   /** Test/composition override; HTTP callers cannot select custody. */
   readonly mutationCustodyMode?: RunnerMutationCustodyMode;
+  /** Private test/composition opt-in; default remains v1 until owner review. */
+  readonly localPreparationV2?: boolean;
+  /** Private filesystem fault injection; never selectable by an HTTP caller. */
+  readonly localMutationSyncFault?: LocalMutationSyncFault;
 }
 
 type RunnerMutationCustodyMode = "cloudflare-do" | "local-http";
@@ -91,11 +102,45 @@ export async function handleRunnerRequestWithDependencies(
       );
     }
     const url = new URL(request.url);
+    const indeterminate = () => Response.json(
+      { errorCode: "runner_mutation_indeterminate", retryable: false },
+      { status: 409 },
+    );
+    const guardedWorkspaceMutation = async (
+      runId: string,
+      execute: () => Promise<Response>,
+    ): Promise<Response> => {
+      if (custodyMode !== "local-http") return await execute();
+      return await withLocalMutationGate(runId, async () => {
+        const authorization = await authorizeLocalMutationPreparation(
+          runId,
+          request.headers.get("x-takosumi-preparation-attempt"),
+          request.headers.get("x-takosumi-preparation-epoch"),
+        );
+        return authorization === "indeterminate" ? indeterminate() : await execute();
+      });
+    };
+    const guardedNonMutationPost = async (
+      runId: string,
+      execute: () => Promise<Response>,
+    ): Promise<Response> => {
+      if (custodyMode !== "local-http") return await execute();
+      return await withLocalMutationGate(runId, async () => {
+        const preparation = await inspectLocalMutationPreparation(runId);
+        return preparation === "absent" || preparation === "legacy"
+          ? await execute()
+          : indeterminate();
+      });
+    };
     if (url.pathname === "/healthz" || url.pathname === "/container/health") {
       return Response.json({
         ok: true,
         runner: "opentofu",
-        capabilities: ["takosumi.runner-credential-refresh@v1"],
+        capabilities: [
+          "takosumi.runner-credential-refresh@v1",
+          ...(custodyMode === "local-http" && dependencies.localPreparationV2 === true
+            ? ["takosumi.local-mutation-preparation@v2"] : []),
+        ],
         mutationCustodyMode: custodyMode,
       });
     }
@@ -122,7 +167,7 @@ export async function handleRunnerRequestWithDependencies(
           },
         );
       }
-      try {
+      const refresh = async (): Promise<Response> => { try {
         const body = await readBoundedJsonObject(request, 64 * 1024);
         await refreshRunCredentials(
           runId,
@@ -136,11 +181,22 @@ export async function handleRunnerRequestWithDependencies(
           { error: "credential refresh rejected" },
           { status: 409 },
         );
-      }
+      } };
+      if (custodyMode !== "local-http") return await refresh();
+      return await withLocalMutationGate(runId, async () => {
+        const preparation = await inspectLocalMutationPreparation(runId);
+        if (preparation === "indeterminate") return indeterminate();
+        if (preparation !== "absent" && preparation !== "legacy" &&
+          !runCredentialRefreshSessionMetadata(runId)) return indeterminate();
+        return await refresh();
+      });
     }
     const match = /^\/runs\/([^/]+)$/.exec(url.pathname);
     const completionMatch = /^\/runs\/([^/]+)\/completion$/.exec(url.pathname);
     const reservationMatch = /^\/runs\/([^/]+)\/mutation-reservation$/.exec(
+      url.pathname,
+    );
+    const preparationMatch = /^\/runs\/([^/]+)\/mutation-preparation$/.exec(
       url.pathname,
     );
     const planMetadataMatch = /^\/runs\/([^/]+)\/plan-state-metadata$/.exec(
@@ -164,6 +220,39 @@ export async function handleRunnerRequestWithDependencies(
           status: 409,
         });
       }
+    }
+    if (preparationMatch) {
+      if (custodyMode !== "local-http" || dependencies.localPreparationV2 !== true)
+        return Response.json({ error: "not found" }, { status: 404 });
+      if (request.method !== "PUT")
+        return Response.json({ error: "method not allowed" }, { status: 405, headers: { allow: "PUT" } });
+      const runId = decodeURIComponent(preparationMatch[1]!);
+      let envelope: Record<string, unknown>;
+      try {
+        envelope = await readBoundedJsonObject(request, 1024 * 1024);
+      } catch {
+        return indeterminate();
+      }
+      const action = envelope.action;
+      const embeddedRun = envelope.request && typeof envelope.request === "object" &&
+        "applyRun" in envelope.request ? envelope.request.applyRun : undefined;
+      if ((action !== "apply" && action !== "destroy") || envelope.runId !== runId ||
+        !envelope.request || typeof envelope.request !== "object" ||
+        !embeddedRun || typeof embeddedRun !== "object" ||
+        !("id" in embeddedRun) || embeddedRun.id !== runId ||
+        typeof envelope.attemptId !== "string") return indeterminate();
+      return await withLocalMutationGate(runId, async () => {
+        try {
+          const epoch = await reserveLocalMutationPreparation(
+            runId, action, envelope.request, envelope.attemptId as string,
+            request.headers.get(PROVIDER_LOCK_RESTORE_DIGEST_HEADER) ?? undefined,
+            dependencies.localMutationSyncFault,
+          );
+          return epoch === undefined ? indeterminate() : Response.json({ epoch }, { status: 201 });
+        } catch {
+          return indeterminate();
+        }
+      });
     }
     if (reservationMatch) {
       if (custodyMode !== "local-http")
@@ -198,12 +287,10 @@ export async function handleRunnerRequestWithDependencies(
           { status: 409 },
         );
       }
-      const token = await reserveLocalMutation(
-        runId,
-        action,
-        envelope.request,
+      const token = await withLocalMutationGate(runId, () => reserveLocalMutation(
+        runId, action, envelope.request,
         request.headers.get(PROVIDER_LOCK_RESTORE_DIGEST_HEADER) ?? undefined,
-      );
+      ));
       return token
         ? Response.json({ token }, { status: 201 })
         : Response.json(
@@ -231,6 +318,13 @@ export async function handleRunnerRequestWithDependencies(
           { status: 409 },
         );
       }
+      const preparation = await inspectLocalMutationPreparationCompletion(
+        runId, action, digest, restoredProviderLockDigest,
+      );
+      if (preparation === "preparing")
+        return Response.json({ status: "preparing" }, { status: 202 });
+      if (preparation === "indeterminate") return indeterminate();
+      if (preparation !== "not-v2") return localMutationCompletionResponse(preparation);
       const inspection = await inspectLocalMutation(
         runId,
         action,
@@ -265,17 +359,16 @@ export async function handleRunnerRequestWithDependencies(
     const depStateRestoreMatch =
       /^\/runs\/([^/]+)\/deps\/([^/]+)\/restore$/.exec(url.pathname);
     if (depStateRestoreMatch) {
-      return await handleDepStateRestoreRequest(
-        decodeURIComponent(depStateRestoreMatch[1]!),
-        decodeURIComponent(depStateRestoreMatch[2]!),
-        request,
-      );
+      const runId = decodeURIComponent(depStateRestoreMatch[1]!);
+      return request.method === "PUT"
+        ? await guardedWorkspaceMutation(runId, () => handleDepStateRestoreRequest(runId, decodeURIComponent(depStateRestoreMatch[2]!), request))
+        : await handleDepStateRestoreRequest(runId, decodeURIComponent(depStateRestoreMatch[2]!), request);
     }
     if (sourceArchiveRestoreMatch) {
-      return await handleSourceArchiveRestoreRequest(
-        decodeURIComponent(sourceArchiveRestoreMatch[1]!),
-        request,
-      );
+      const runId = decodeURIComponent(sourceArchiveRestoreMatch[1]!);
+      return request.method === "PUT"
+        ? await guardedWorkspaceMutation(runId, () => handleSourceArchiveRestoreRequest(runId, request))
+        : await handleSourceArchiveRestoreRequest(runId, request);
     }
     if (sourceArchiveArtifactMatch) {
       return await handleSourceArchiveArtifactRequest(
@@ -296,22 +389,22 @@ export async function handleRunnerRequestWithDependencies(
       );
     }
     if (providerLockfileRestoreMatch) {
-      return await handleProviderLockfileRestoreRequest(
-        decodeURIComponent(providerLockfileRestoreMatch[1]!),
-        request,
-      );
+      const runId = decodeURIComponent(providerLockfileRestoreMatch[1]!);
+      return request.method === "PUT"
+        ? await guardedWorkspaceMutation(runId, () => handleProviderLockfileRestoreRequest(runId, request))
+        : await handleProviderLockfileRestoreRequest(runId, request);
     }
     if (artifactMatch) {
-      return await handlePlanArtifactRequest(
-        decodeURIComponent(artifactMatch[1]!),
-        request,
-      );
+      const runId = decodeURIComponent(artifactMatch[1]!);
+      return request.method === "PUT"
+        ? await guardedWorkspaceMutation(runId, () => handlePlanArtifactRequest(runId, request))
+        : await handlePlanArtifactRequest(runId, request);
     }
     if (stateArtifactMatch) {
-      return await handleStateArtifactRequest(
-        decodeURIComponent(stateArtifactMatch[1]!),
-        request,
-      );
+      const runId = decodeURIComponent(stateArtifactMatch[1]!);
+      return request.method === "PUT"
+        ? await guardedWorkspaceMutation(runId, () => handleStateArtifactRequest(runId, request))
+        : await handleStateArtifactRequest(runId, request);
     }
     if (!match) {
       return Response.json({ error: "not found" }, { status: 404 });
@@ -339,7 +432,7 @@ export async function handleRunnerRequestWithDependencies(
       ? sourceCredentialRedactionValuesFromRequest(body.request)
       : redactionValuesFromRequest(body.request);
     if (isSourceSyncRequest(body.request)) {
-      try {
+      return await guardedNonMutationPost(runId, async () => { try {
         const result = await runSourceSync(runId, body.request);
         return Response.json(result, { status: 200 });
       } catch (error) {
@@ -359,12 +452,12 @@ export async function handleRunnerRequestWithDependencies(
           },
           { status: 500 },
         );
-      }
+      } });
     }
 
     if (isStableSemverTagRequest(body.request)) {
       const action = "stable_semver_tag";
-      try {
+      return await guardedNonMutationPost(runId, async () => { try {
         const result = await runStableSemverTagResolution(runId, body.request);
         return Response.json(result, { status: 200 });
       } catch (error) {
@@ -381,7 +474,7 @@ export async function handleRunnerRequestWithDependencies(
           },
           { status: 500 },
         );
-      }
+      } });
     }
 
     const action = parseAction(body.action);
@@ -419,15 +512,26 @@ export async function handleRunnerRequestWithDependencies(
       const reservation = request.headers.get(
         "x-takosumi-mutation-reservation",
       );
-      const accepted = reservation
-        ? await consumeLocalMutationReservation(
-            runId,
-            action,
-            body.request,
-            marker,
-            reservation,
-          )
-        : false;
+      const accepted = await withLocalMutationGate(runId, async () => {
+        const preparation = await inspectLocalMutationPreparation(runId);
+        if (preparation === "indeterminate") return false;
+        if (preparation !== "absent" && preparation !== "legacy") {
+          try {
+            return await consumeLocalMutationPreparation(
+              runId, action, body.request, marker,
+              request.headers.get("x-takosumi-preparation-attempt"),
+              request.headers.get("x-takosumi-preparation-epoch"),
+              dependencies.localMutationSyncFault,
+            );
+          } catch {
+            // A visible marker after uncertain fsync is not dispatch authority.
+            return false;
+          }
+        }
+        return reservation
+          ? await consumeLocalMutationReservation(runId, action, body.request, marker, reservation)
+          : false;
+      });
       if (!accepted) {
         return Response.json(
           { errorCode: "runner_mutation_indeterminate", retryable: false },
@@ -436,6 +540,7 @@ export async function handleRunnerRequestWithDependencies(
       }
     }
 
+    const executeRun = async (): Promise<Response> => {
     const mutationRedactionScope =
       action === "plan" || action === "apply" || action === "destroy";
     let credentialRefreshSessionHandle: object | undefined;
@@ -518,6 +623,10 @@ export async function handleRunnerRequestWithDependencies(
         clearRunRedactionValues(runId, requestRedactionValues);
       }
     }
+    };
+    return action === "apply" || action === "destroy"
+      ? await executeRun()
+      : await guardedNonMutationPost(runId, executeRun);
   }
 }
 
