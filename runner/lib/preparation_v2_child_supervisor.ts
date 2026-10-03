@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { dlopen, FFIType, ptr, toArrayBuffer } from "bun:ffi";
+import { dlopen, FFIType, ptr, toArrayBuffer, type Pointer } from "bun:ffi";
 import {
   assertRunRootOwnershipFor,
   type RunRootOwnership,
@@ -47,7 +47,7 @@ interface LinuxChildApi {
       argument5: bigint,
     ) => number;
     readonly waitpid: (pid: number, status: number, options: number) => number;
-    readonly __errno_location: () => number;
+    readonly __errno_location: () => Pointer;
   };
   close(): void;
 }
