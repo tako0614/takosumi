@@ -7,10 +7,18 @@
 import { strict as assert } from "node:assert";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { InMemoryAccountsStore } from "../../accounts/service/src/store.ts";
+import { handleControlRoute } from "../../accounts/service/src/control-routes.ts";
 import { createTakosumiService } from "../../core/bootstrap.ts";
+import { PartitionedSecretBoundaryCrypto } from "../../core/adapters/secret-store/memory.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
 import { StorageMigrationRunner } from "../../core/adapters/storage/migration-runner/mod.ts";
-import { createHttpOpenTofuRunner } from "../../deploy/node-postgres/src/local-opentofu-runner.ts";
+import {
+  createFileOpenTofuStateArtifactStore,
+  createFileSourceArchiveStore,
+  createHttpOpenTofuRunner,
+  createLocalOpenTofuRunnerProfile,
+} from "../../deploy/node-postgres/src/local-opentofu-runner.ts";
 import { SqlOpenTofuControlStore } from "../../core/domains/deploy-control/store_sql.ts";
 import { FIXTURE_EXECUTION_EVIDENCE_AUTHORITY } from "../helpers/deploy-control/model_fixture.ts";
 import {
@@ -26,8 +34,13 @@ import {
   RUNNER_HTTP_PROOF_LABELS,
   LocalCoreHttpCleanupFailure,
   prove as proveCoreHttpLifecycle,
+  createLocalCoreHttpProofAccounts,
+  type LocalCoreHttpProofRuntimeInput,
   type RunnerHttpProofEventPhase,
   type RunnerHttpProofLabel,
+  type RunnerHttpProofObserver,
+  type SavedPlanStateMetadataReceipt,
+  boundedRunnerFetch,
   parseProofArgs,
   runAndEmitAfterCleanup,
   withLocalCoreHttpRunner,
@@ -413,7 +426,548 @@ export function parsePgHttpProofArgs(
   return parseProofArgs(args);
 }
 
+/** Sends one public Core route request to a proof-owned loopback child host. */
+export function createCoreHostHttpControlRequest(
+  baseUrl: string,
+  fetchImpl: typeof fetch = fetch,
+): (request: Request) => Promise<Response> {
+  let childOrigin: URL;
+  try {
+    childOrigin = new URL(baseUrl);
+  } catch {
+    throw new Error("Core proof child must use loopback HTTP");
+  }
+  if (
+    childOrigin.protocol !== "http:" ||
+    childOrigin.hostname !== "127.0.0.1" ||
+    childOrigin.username !== "" ||
+    childOrigin.password !== "" ||
+    childOrigin.pathname !== "/" ||
+    childOrigin.search !== "" ||
+    childOrigin.hash !== ""
+  ) {
+    throw new Error("Core proof child must use loopback HTTP");
+  }
+
+  return async (request) => {
+    const source = new URL(request.url);
+    if (
+      source.origin !== "https://local-proof.example.test" ||
+      !source.pathname.startsWith("/api/v1/") ||
+      source.search !== "" ||
+      source.hash !== ""
+    ) {
+      throw new Error("Core proof refused a non-local control request");
+    }
+
+    const headers = new Headers();
+    for (const name of ["cookie", "content-type", "idempotency-key"] as const) {
+      const value = request.headers.get(name);
+      if (value !== null) headers.set(name, value);
+    }
+    const body = request.method === "GET" || request.method === "HEAD"
+      ? undefined
+      : await request.arrayBuffer();
+    return await fetchImpl(new URL(source.pathname, childOrigin), {
+      method: request.method,
+      headers,
+      body,
+      signal: request.signal,
+      redirect: "error",
+      cache: "no-store",
+    });
+  };
+}
+
 type NativeClient = Awaited<ReturnType<typeof openNativePostgresSqlClient>>;
+
+const CORE_HOST_EVENT_HEADER = "x-takosumi-local-proof-events";
+const CORE_HOST_START_TIMEOUT_MS = 15_000;
+const CORE_HOST_STOP_TIMEOUT_MS = 15_000;
+const CORE_HOST_PROTOCOL_LINE_MAX_BYTES = 16 * 1024;
+
+interface CoreHostChildStartup {
+  readonly type: "start-core-host/v1";
+  readonly databaseUrl: string;
+  readonly runnerBaseUrl: string;
+  readonly artifactRoot: string;
+  readonly artifactEncryptionPassphrase: string;
+  readonly syntheticSessionIds: LocalCoreHttpProofRuntimeInput["syntheticSessionIds"];
+}
+
+interface CoreHostEventSnapshot {
+  readonly runnerDispatches: readonly string[];
+  readonly metadataReceipts: readonly SavedPlanStateMetadataReceipt[];
+  readonly runnerEvents: readonly {
+    readonly label: RunnerHttpProofLabel;
+    readonly phase: RunnerHttpProofEventPhase;
+  }[];
+}
+
+interface CoreHostReadyMessage {
+  readonly type: "ready-core-host/v1";
+  readonly pid: number;
+  readonly port: number;
+}
+
+interface CoreHostFailedMessage {
+  readonly type: "failed-core-host/v1";
+  readonly errorClass: string;
+}
+
+interface CoreHostProcess {
+  readonly pid: number;
+  readonly controlRequest: (request: Request) => Promise<Response>;
+  close(): Promise<void>;
+}
+
+export function parseCoreHostReadyMessage(
+  line: string,
+  expectedPid: number,
+): { readonly pid: number; readonly port: number } {
+  let message: CoreHostReadyMessage | CoreHostFailedMessage;
+  try {
+    message = JSON.parse(line) as CoreHostReadyMessage | CoreHostFailedMessage;
+  } catch {
+    throw new Error("Core child returned an invalid readiness message");
+  }
+  if (message.type === "failed-core-host/v1") {
+    if (!SAFE_ERROR_CLASS_NAMES.has(message.errorClass)) {
+      throw new Error("Core child startup failed (OtherError)");
+    }
+    throw new Error("Core child startup failed (" + message.errorClass + ")");
+  }
+  if (
+    message.type !== "ready-core-host/v1" || message.pid !== expectedPid ||
+    !Number.isSafeInteger(message.port) || message.port < 1 || message.port > 65_535
+  ) {
+    throw new Error("Core child returned invalid readiness evidence");
+  }
+  return { pid: message.pid, port: message.port };
+}
+
+export async function closeCoreHostBeforePostgresRestart<T>(input: {
+  readonly closeCoreHost: () => Promise<void>;
+  readonly closeObserverSqlClient: () => Promise<void>;
+  readonly restartPostgresDaemon: () => Promise<T>;
+}): Promise<T> {
+  await input.closeCoreHost();
+  await input.closeObserverSqlClient();
+  return await input.restartPostgresDaemon();
+}
+
+async function* readProtocolLines(
+  stream: ReadableStream<Uint8Array>,
+): AsyncGenerator<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      pending += decoder.decode(value, { stream: !done });
+      let newline = pending.indexOf("\n");
+      while (newline >= 0) {
+        const line = pending.slice(0, newline);
+        pending = pending.slice(newline + 1);
+        if (new TextEncoder().encode(line).byteLength > CORE_HOST_PROTOCOL_LINE_MAX_BYTES) {
+          throw new Error("Core child protocol line exceeded the local size bound");
+        }
+        yield line;
+        newline = pending.indexOf("\n");
+      }
+      if (pending.length > CORE_HOST_PROTOCOL_LINE_MAX_BYTES || done) {
+        if (done && pending.length > 0) throw new Error("Core child protocol ended mid-message");
+        return;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function parseCoreHostEvents(headers: Headers): CoreHostEventSnapshot {
+  const encoded = headers.get(CORE_HOST_EVENT_HEADER);
+  if (!encoded || encoded.length > CORE_HOST_PROTOCOL_LINE_MAX_BYTES) {
+    throw new Error("Core child omitted bounded proof event data");
+  }
+  try {
+    const value: unknown = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+    if (!value || typeof value !== "object") throw new Error();
+    const candidate = value as Record<string, unknown>;
+    if (
+      !Array.isArray(candidate.runnerDispatches) || candidate.runnerDispatches.length > 256 ||
+      !candidate.runnerDispatches.every((id) => typeof id === "string" && id.length <= 128) ||
+      !Array.isArray(candidate.metadataReceipts) || candidate.metadataReceipts.length > 256 ||
+      !Array.isArray(candidate.runnerEvents) || candidate.runnerEvents.length > 512
+    ) {
+      throw new Error();
+    }
+    const metadataReceipts = candidate.metadataReceipts as SavedPlanStateMetadataReceipt[];
+    if (!metadataReceipts.every((receipt) =>
+      receipt && typeof receipt.runnerRunId === "string" && receipt.runnerRunId.length <= 128 &&
+      typeof receipt.planDigest === "string" && receipt.planDigest.length <= 80 &&
+      typeof receipt.lineage === "string" && receipt.lineage.length <= 128 &&
+      Number.isSafeInteger(receipt.serial) && receipt.serial >= 0
+    )) {
+      throw new Error();
+    }
+    const runnerEvents = candidate.runnerEvents as CoreHostEventSnapshot["runnerEvents"];
+    if (!runnerEvents.every((event) =>
+      event && RUNNER_HTTP_PROOF_LABELS.includes(event.label) &&
+      (event.phase === "start" || event.phase === "completed" || event.phase === "failed")
+    )) {
+      throw new Error();
+    }
+    return {
+      runnerDispatches: candidate.runnerDispatches as string[],
+      metadataReceipts,
+      runnerEvents,
+    };
+  } catch {
+    throw new Error("Core child returned invalid bounded proof event data");
+  }
+}
+
+async function waitForChildExit(
+  child: ReturnType<typeof Bun.spawn>,
+  timeoutMs: number,
+): Promise<number> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([
+      child.exited,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("Core child exit exceeded the local deadline")), timeoutMs);
+      }),
+    ]);
+    return result;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function startCoreHostProcess(
+  input: LocalCoreHttpProofRuntimeInput,
+  databaseUrl: string,
+  onChildSpawn: (child: ReturnType<typeof Bun.spawn>) => void,
+): Promise<CoreHostProcess> {
+  if (!process.argv[1]) throw new Error("Core child entrypoint is unavailable");
+  const child = Bun.spawn([
+    process.execPath,
+    "--no-env-file",
+    process.argv[1],
+    "--core-host-child",
+  ], {
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+    env: {
+      PATH: process.env.PATH ?? "/usr/bin:/bin",
+      HOME: process.env.HOME ?? "/nonexistent",
+      LC_ALL: "C",
+    },
+  });
+  onChildSpawn(child);
+  void child.stderr.pipeTo(new WritableStream({ write() {} })).catch(() => undefined);
+  const lines = readProtocolLines(child.stdout)[Symbol.asyncIterator]();
+  let exitConfirmed = false;
+  try {
+    const startup: CoreHostChildStartup = {
+      type: "start-core-host/v1",
+      databaseUrl,
+      runnerBaseUrl: input.baseUrl,
+      artifactRoot: input.artifactRoot,
+      artifactEncryptionPassphrase: input.artifactEncryptionPassphrase,
+      syntheticSessionIds: input.syntheticSessionIds,
+    };
+    child.stdin.write(JSON.stringify(startup) + "\n");
+    await child.stdin.flush();
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let firstLine: IteratorResult<string>;
+    try {
+      firstLine = await Promise.race([
+        lines.next(),
+        child.exited.then(() => { throw new Error("Core child exited before readiness"); }),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error("Core child readiness exceeded the local deadline")),
+            CORE_HOST_START_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+    if (firstLine.done) throw new Error("Core child exited before readiness");
+
+    const ready = parseCoreHostReadyMessage(firstLine.value, child.pid);
+    const baseUrl = "http://127.0.0.1:" + ready.port;
+    const send = createCoreHostHttpControlRequest(baseUrl, input.fetchImpl);
+    let dispatchCount = 0;
+    let receiptCount = 0;
+    let eventCount = 0;
+    let closed = false;
+    return {
+      pid: child.pid,
+      async controlRequest(request: Request): Promise<Response> {
+        if (closed) throw new Error("Core child is already closed");
+        const response = await send(request);
+        const events = parseCoreHostEvents(response.headers);
+        if (
+          events.runnerDispatches.length < dispatchCount ||
+          events.metadataReceipts.length < receiptCount ||
+          events.runnerEvents.length < eventCount
+        ) {
+          throw new Error("Core child proof event sequence regressed");
+        }
+        for (const runId of events.runnerDispatches.slice(dispatchCount)) input.onRunDispatch(runId);
+        for (const receipt of events.metadataReceipts.slice(receiptCount)) {
+          input.onSavedPlanMetadataReceipt(receipt);
+        }
+        for (const event of events.runnerEvents.slice(eventCount)) {
+          input.observeRunnerHttp(event.label, event.phase);
+        }
+        dispatchCount = events.runnerDispatches.length;
+        receiptCount = events.metadataReceipts.length;
+        eventCount = events.runnerEvents.length;
+        const headers = new Headers(response.headers);
+        headers.delete(CORE_HOST_EVENT_HEADER);
+        return new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers,
+        });
+      },
+      async close(): Promise<void> {
+        if (closed) return;
+        if (child.exitCode !== null) {
+          exitConfirmed = true;
+          closed = true;
+          throw new Error("Core child exited before owned shutdown");
+        }
+        child.stdin.write("{\"type\":\"shutdown-core-host/v1\"}\n");
+        await child.stdin.flush();
+        child.stdin.end();
+        let exitCode: number;
+        try {
+          exitCode = await waitForChildExit(child, CORE_HOST_STOP_TIMEOUT_MS);
+        } catch {
+          child.kill("SIGTERM");
+          try {
+            exitCode = await waitForChildExit(child, CORE_HOST_STOP_TIMEOUT_MS);
+          } catch {
+            throw new Error("Core child exit remains unconfirmed; PostgreSQL custody is retained");
+          }
+          exitConfirmed = true;
+          closed = true;
+          throw new Error("Core child exceeded its graceful shutdown deadline");
+        }
+        exitConfirmed = true;
+        closed = true;
+        if (exitCode !== 0) throw new Error("Core child did not exit cleanly");
+      },
+    };
+  } catch (error) {
+    if (!exitConfirmed && child.exitCode === null) {
+      child.kill("SIGTERM");
+      try {
+        await waitForChildExit(child, CORE_HOST_STOP_TIMEOUT_MS);
+        exitConfirmed = true;
+      } catch {
+        throw new AggregateError(
+          [error],
+          "Core child startup failed and owned child exit is unconfirmed",
+        );
+      }
+    }
+    throw new Error("Core child startup failed (" + safeErrorClass(error) + ")");
+  }
+}
+
+function validateCoreHostChildStartup(value: unknown): CoreHostChildStartup {
+  if (!value || typeof value !== "object") throw new Error("invalid Core child startup input");
+  const candidate = value as Record<string, unknown>;
+  if (
+    candidate.type !== "start-core-host/v1" ||
+    typeof candidate.databaseUrl !== "string" ||
+    typeof candidate.runnerBaseUrl !== "string" ||
+    typeof candidate.artifactRoot !== "string" ||
+    typeof candidate.artifactEncryptionPassphrase !== "string" ||
+    !candidate.syntheticSessionIds || typeof candidate.syntheticSessionIds !== "object"
+  ) {
+    throw new Error("invalid Core child startup input");
+  }
+  let databaseUrl: URL;
+  let runnerBaseUrl: URL;
+  try {
+    databaseUrl = new URL(candidate.databaseUrl);
+    runnerBaseUrl = new URL(candidate.runnerBaseUrl);
+  } catch {
+    throw new Error("invalid local Core child endpoint");
+  }
+  const sessions = candidate.syntheticSessionIds as Record<string, unknown>;
+  if (
+    !["postgres:", "postgresql:"].includes(databaseUrl.protocol) ||
+    databaseUrl.hostname !== "127.0.0.1" || !databaseUrl.port ||
+    runnerBaseUrl.protocol !== "http:" || runnerBaseUrl.hostname !== "127.0.0.1" ||
+    !runnerBaseUrl.port || !candidate.artifactRoot.startsWith("/") ||
+    candidate.artifactEncryptionPassphrase.length < 32 ||
+    candidate.artifactEncryptionPassphrase.length > 512 ||
+    typeof sessions.actor !== "string" ||
+    !/^sess_local_core_http_[a-f0-9]{32}$/u.test(sessions.actor) ||
+    typeof sessions.foreignActor !== "string" ||
+    !/^sess_foreign_core_http_[a-f0-9]{32}$/u.test(sessions.foreignActor) ||
+    !Number.isSafeInteger(sessions.createdAt) ||
+    !Number.isSafeInteger(sessions.expiresAt) ||
+    (sessions.expiresAt as number) <= (sessions.createdAt as number)
+  ) {
+    throw new Error("invalid local Core child startup input");
+  }
+  return value as CoreHostChildStartup;
+}
+
+async function runCoreHostChild(): Promise<void> {
+  let client: NativeClient | undefined;
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  const originalFetch = globalThis.fetch;
+  let exitCode = 0;
+  try {
+    const lines = readProtocolLines(Bun.stdin.stream())[Symbol.asyncIterator]();
+    const first = await lines.next();
+    if (first.done) throw new Error("Core child startup input is absent");
+    const startup = validateCoreHostChildStartup(JSON.parse(first.value));
+    client = await openNativePostgresSqlClient(startup.databaseUrl);
+    const profile = createLocalOpenTofuRunnerProfile();
+    const store = new SqlOpenTofuControlStore({ client: client.client });
+    const archiveStore = createFileSourceArchiveStore(join(startup.artifactRoot, "archives"));
+    const stateStore = createFileOpenTofuStateArtifactStore(
+      join(startup.artifactRoot, "state"),
+      new PartitionedSecretBoundaryCrypto({
+        globalPassphrase: startup.artifactEncryptionPassphrase,
+      }),
+    );
+    const { operations } = await createTakosumiService({
+      role: "takosumi-api",
+      runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+      sqlClient: client.client,
+      opentofuControlStore: store,
+      opentofuRunner: createHttpOpenTofuRunner({
+        archiveStore,
+        stateStore,
+        baseUrl: startup.runnerBaseUrl,
+      }),
+      runnerProfiles: [profile],
+      defaultRunnerProfileId: profile.id,
+      artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+      executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    });
+    const accounts = createLocalCoreHttpProofAccounts(startup.syntheticSessionIds);
+    const runnerDispatches: string[] = [];
+    const metadataReceipts: SavedPlanStateMetadataReceipt[] = [];
+    const runnerEvents: CoreHostEventSnapshot["runnerEvents"][number][] = [];
+    globalThis.fetch = boundedRunnerFetch(
+      startup.runnerBaseUrl,
+      originalFetch,
+      undefined,
+      (receipt) => { metadataReceipts.push(receipt); },
+      (runId) => { runnerDispatches.push(runId); },
+      (label, phase) => {
+        recordRunnerHttpProofEvent(runnerHttpTrace, label, phase);
+        runnerEvents.push({ label, phase });
+      },
+    );
+    const runnerHttpTrace: RunnerHttpProofTrace = {};
+    server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        let response: Response;
+        if (
+          url.hostname !== "127.0.0.1" ||
+          url.search !== "" || url.hash !== "" ||
+          !url.pathname.startsWith("/api/v1/")
+        ) {
+          response = new Response("{\"error\":{\"code\":\"local_proof_route_rejected\"}}", {
+            status: 404,
+            headers: { "content-type": "application/json" },
+          });
+        } else {
+          try {
+            response = await handleControlRoute({
+              request,
+              url,
+              store: accounts,
+              operations,
+            }) ?? new Response(null, { status: 404 });
+          } catch {
+            response = new Response("{\"error\":{\"code\":\"local_proof_request_failed\"}}", {
+              status: 500,
+              headers: { "content-type": "application/json" },
+            });
+          }
+        }
+        const eventData = Buffer.from(JSON.stringify({
+          runnerDispatches,
+          metadataReceipts,
+          runnerEvents,
+        })).toString("base64url");
+        if (eventData.length > CORE_HOST_PROTOCOL_LINE_MAX_BYTES) {
+          return new Response("{\"error\":{\"code\":\"local_proof_event_limit\"}}", {
+            status: 500,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        const headers = new Headers(response.headers);
+        headers.set(CORE_HOST_EVENT_HEADER, eventData);
+        return new Response(
+          response.status === 204 || response.status === 304 ? null : response.body,
+          { status: response.status, statusText: response.statusText, headers },
+        );
+      },
+    });
+    process.stdout.write(JSON.stringify({
+      type: "ready-core-host/v1",
+      pid: process.pid,
+      port: server.port,
+    }) + "\n");
+
+    const shutdown = await lines.next();
+    if (shutdown.done) throw new Error("Core child shutdown request is absent");
+    const command: unknown = JSON.parse(shutdown.value);
+    if (
+      !command || typeof command !== "object" ||
+      (command as Record<string, unknown>).type !== "shutdown-core-host/v1"
+    ) {
+      throw new Error("invalid Core child shutdown request");
+    }
+  } catch (error) {
+    process.stdout.write(JSON.stringify({
+      type: "failed-core-host/v1",
+      errorClass: safeErrorClass(error),
+    }) + "\n");
+    exitCode = 1;
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (server) {
+      try {
+        await server.stop(true);
+      } catch {
+        exitCode = 1;
+      }
+    }
+    if (client) {
+      try {
+        await client.close();
+      } catch {
+        exitCode = 1;
+      }
+    }
+  }
+  process.exitCode = exitCode;
+}
 
 async function proveWithDatabase(input: {
   readonly baseUrl: string;
@@ -426,6 +980,10 @@ async function proveWithDatabase(input: {
   readonly status: "passed";
   readonly runnerImage: string;
   readonly restart: NativePostgresRestartEvidence;
+  readonly coreHostRestart: {
+    readonly processCount: 2;
+    readonly distinctProcessIds: true;
+  };
   readonly stateGenerations: readonly number[];
   readonly lifecycle: readonly ["plan", "apply-gen1", "restart-replay-gen1", "update-apply-gen2", "approved-destroy-gen3"];
   readonly limits: readonly string[];
@@ -443,6 +1001,9 @@ async function proveWithDatabase(input: {
   const closed = new Set<NativeClient>();
   let currentClient: NativeClient | undefined;
   let restart: NativePostgresRestartEvidence | undefined;
+  let activeCoreHost: CoreHostProcess | undefined;
+  let startingCoreHostChild: ReturnType<typeof Bun.spawn> | undefined;
+  const coreHostProcessIds: number[] = [];
 
   const openClient = async (): Promise<NativeClient> => {
     const client = await runNativePostgresPhase(
@@ -484,34 +1045,38 @@ async function proveWithDatabase(input: {
       input.root,
       input.signal,
       {
-        currentSqlClient: () => {
-          if (!currentClient || closed.has(currentClient)) {
-            throw new Error("fresh SQL client is not open for Core construction");
-          }
-          return currentClient.client;
-        },
-        createRuntime: async ({ baseUrl, archiveStore, stateStore, profile, sqlClient }) => {
-          const store = new SqlOpenTofuControlStore({ client: sqlClient });
-          const { operations } = await createTakosumiService({
-            role: "takosumi-api",
-            runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
-            sqlClient,
-            opentofuControlStore: store,
-            opentofuRunner: createHttpOpenTofuRunner({ archiveStore, stateStore, baseUrl }),
-            runnerProfiles: [profile],
-            defaultRunnerProfileId: profile.id,
-            artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
-            executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
-          });
-          return { store, operations };
+        createRuntime: async (runtimeInput) => {
+          const observerStore = new SqlOpenTofuControlStore({ client: currentClient!.client });
+          const child = await startCoreHostProcess(
+            runtimeInput,
+            database.databaseUrl,
+            (spawned) => { startingCoreHostChild = spawned; },
+          );
+          startingCoreHostChild = undefined;
+          activeCoreHost = child;
+          coreHostProcessIds.push(child.pid);
+          return {
+            store: observerStore,
+            controlRequest: child.controlRequest,
+          };
         },
         afterInitialApply: async () => {
           assert(currentClient, "initial SQL client is missing at the restart boundary");
-          await runNativePostgresPhase("pool.first.close", () => closeClient(currentClient!));
-          restart = await runNativePostgresPhase(
-            "daemon.restart",
-            () => database.restartPostgresDaemon(),
-          );
+          assert(activeCoreHost, "initial Core Host process is missing at the restart boundary");
+          restart = await closeCoreHostBeforePostgresRestart({
+            closeCoreHost: () => runNativePostgresPhase("core-host.first.close", async () => {
+              await activeCoreHost!.close();
+              activeCoreHost = undefined;
+            }),
+            closeObserverSqlClient: () => runNativePostgresPhase(
+              "pool.first.close",
+              () => closeClient(currentClient!),
+            ),
+            restartPostgresDaemon: () => runNativePostgresPhase(
+              "daemon.restart",
+              () => database.restartPostgresDaemon(),
+            ),
+          });
           currentClient = await openClient();
           const freshMigrationStatus = await runNativePostgresPhase(
             "migration.verify-after-restart",
@@ -533,22 +1098,43 @@ async function proveWithDatabase(input: {
     assert.equal(proof.status, "passed");
     assert.deepEqual(proof.stateGenerations, [1, 2, 3]);
     assert(restart, "proof returned without crossing the PostgreSQL restart boundary");
+    assert(activeCoreHost, "fresh Core Host process is missing after the restart lifecycle");
+    await runNativePostgresPhase("core-host.fresh.close", async () => {
+      await activeCoreHost!.close();
+      activeCoreHost = undefined;
+    });
+    assert.equal(coreHostProcessIds.length, 2, "proof did not start exactly two Core Host processes");
+    assert.notEqual(coreHostProcessIds[0], coreHostProcessIds[1], "Core Host process ID was reused across restart");
     return {
       kind: "takosumi.local-core-pg-http-lifecycle-proof/v1",
       status: "passed",
       runnerImage: input.image,
       restart,
+      coreHostRestart: { processCount: 2, distinctProcessIds: true },
       stateGenerations: proof.stateGenerations,
       lifecycle: ["plan", "apply-gen1", "restart-replay-gen1", "update-apply-gen2", "approved-destroy-gen3"],
       limits: [
         "synthetic in-memory Accounts/session fixture; real login and authentication persistence are not exercised",
         "provider-free local SourceSnapshot archive; Git fetch/install coordination is not exercised",
         "the existing real local HTTP/OpenTofu runner executes the provider-free configuration; no cloud provider mutation is exercised",
-        "native PostgreSQL daemon restart is local and run-owned; Core is rebuilt in the same proof process, not an OS-process restart",
+        "native PostgreSQL daemon restart is local and run-owned; two separate Core Host processes are started by the same proof orchestrator",
+        "Core process restart is a clean operator-controlled shutdown, not OS reboot or crash-in-flight recovery",
         "not production or Takosumi Hosted qualification",
       ],
     };
   }, async () => {
+    if (startingCoreHostChild) {
+      if (startingCoreHostChild.exitCode === null) {
+        throw new Error("Core child startup exit is unconfirmed; PostgreSQL custody is retained");
+      }
+      startingCoreHostChild = undefined;
+    }
+    if (activeCoreHost) {
+      await runNativePostgresPhase("core-host.cleanup.close", async () => {
+        await activeCoreHost!.close();
+        activeCoreHost = undefined;
+      });
+    }
     await cleanupNativePostgresResources(
       clients.map((client) => () => closeClient(client)),
       () => database.close(),
@@ -628,4 +1214,7 @@ async function main(): Promise<void> {
   }
 }
 
-if (import.meta.main) await main();
+if (import.meta.main) {
+  if (Bun.argv[2] === "--core-host-child") await runCoreHostChild();
+  else await main();
+}

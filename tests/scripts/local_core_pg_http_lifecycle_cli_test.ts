@@ -24,6 +24,9 @@ import {
   NativePostgresCoreHttpFailure,
   recordRunnerHttpProofEvent,
   runWithNativePostgresCleanup,
+  createCoreHostHttpControlRequest,
+  closeCoreHostBeforePostgresRestart,
+  parseCoreHostReadyMessage,
   type RunnerHttpProofTrace,
 } from "../proofs/local-core-pg-http-lifecycle.ts";
 
@@ -66,6 +69,119 @@ test("runner replay evidence observes only actual POST dispatch routes", async (
   await wrappedFetch("http://runner.local/runs/apply-1/completion", { method: "POST" });
 
   expect(dispatched).toEqual(["apply-1"]);
+});
+
+test("Core host control transport forwards only proof routes to a loopback child", async () => {
+  let observed: { method: string; path: string; cookie: string | null; body: string } | undefined;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: async (request) => {
+      observed = {
+        method: request.method,
+        path: new URL(request.url).pathname,
+        cookie: request.headers.get("cookie"),
+        body: request.method === "POST" ? await request.text() : "",
+      };
+      return new Response("{\"accepted\":true}", {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  try {
+    const send = createCoreHostHttpControlRequest(
+      `http://127.0.0.1:${server.port}`,
+    );
+    const request = new Request("https://local-proof.example.test/api/v1/runs/run_fixture/apply", {
+      method: "POST",
+      headers: {
+        cookie: "takosumi_account_session=synthetic-session",
+        "content-type": "application/json",
+      },
+      body: "{\"approval\":\"fixture\"}",
+    });
+    const response = await send(request);
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ accepted: true });
+    expect(observed).toEqual({
+      method: "POST",
+      path: "/api/v1/runs/run_fixture/apply",
+      cookie: "takosumi_account_session=synthetic-session",
+      body: "{\"approval\":\"fixture\"}",
+    });
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("Core host control transport refuses non-loopback endpoints and non-API routes", async () => {
+  expect(() => createCoreHostHttpControlRequest("http://example.test")).toThrow(
+    "Core proof child must use loopback HTTP",
+  );
+  expect(() => createCoreHostHttpControlRequest("http://localhost:8080")).toThrow(
+    "Core proof child must use loopback HTTP",
+  );
+
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("ok") });
+  try {
+    const send = createCoreHostHttpControlRequest(`http://127.0.0.1:${server.port}`);
+    await expect(send(new Request("https://example.test/api/v1/runs/run_fixture/apply", {
+      method: "POST",
+    }))).rejects.toThrow("Core proof refused a non-local control request");
+    await expect(send(new Request("https://local-proof.example.test/not-api")))
+      .rejects.toThrow("Core proof refused a non-local control request");
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("Core child readiness protocol binds the exact child PID and a valid loopback port", () => {
+  expect(parseCoreHostReadyMessage(JSON.stringify({
+    type: "ready-core-host/v1",
+    pid: 1234,
+    port: 4321,
+  }), 1234)).toEqual({ pid: 1234, port: 4321 });
+
+  for (const line of [
+    JSON.stringify({ type: "ready-core-host/v1", pid: 1235, port: 4321 }),
+    JSON.stringify({ type: "ready-core-host/v1", pid: 1234, port: 0 }),
+    JSON.stringify({ type: "ready-core-host/v1", pid: 1234, port: 65_536 }),
+    JSON.stringify({ type: "failed-core-host/v1", errorClass: "OtherError", detail: "private" }),
+    "not-json",
+  ]) {
+    expect(() => parseCoreHostReadyMessage(line, 1234)).toThrow();
+  }
+  expect(() => parseCoreHostReadyMessage(JSON.stringify({
+    type: "failed-core-host/v1",
+    errorClass: "DatabasePassword",
+  }), 1234)).toThrow("Core child startup failed (OtherError)");
+});
+
+test("Core child and observer pool close before PostgreSQL restarts, and failures retain custody", async () => {
+  const order: string[] = [];
+  const result = await closeCoreHostBeforePostgresRestart({
+    closeCoreHost: async () => { order.push("child-exit-confirmed"); },
+    closeObserverSqlClient: async () => { order.push("observer-pool-closed"); },
+    restartPostgresDaemon: async () => { order.push("postgres-restarted"); return "restarted"; },
+  });
+  expect(result).toBe("restarted");
+  expect(order).toEqual([
+    "child-exit-confirmed",
+    "observer-pool-closed",
+    "postgres-restarted",
+  ]);
+
+  const childCloseFailure = new Error("private child shutdown failure");
+  const blockedOrder: string[] = [];
+  await expect(closeCoreHostBeforePostgresRestart({
+    closeCoreHost: async () => { blockedOrder.push("child-close"); throw childCloseFailure; },
+    closeObserverSqlClient: async () => { blockedOrder.push("pool-close"); },
+    restartPostgresDaemon: async () => { blockedOrder.push("restart"); return "unsafe"; },
+  })).rejects.toBe(childCloseFailure);
+  expect(blockedOrder).toEqual(["child-close"]);
 });
 
 test("runner HTTP diagnostics record only fixed route labels and preserve the original failure", async () => {

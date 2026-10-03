@@ -21,7 +21,6 @@ import { PartitionedSecretBoundaryCrypto } from "../../core/adapters/secret-stor
 import { createTakosumiService } from "../../core/bootstrap.ts";
 import { InMemoryOpenTofuControlStore } from "../../core/domains/deploy-control/store.ts";
 import type { OpenTofuControlStore } from "../../core/domains/deploy-control/store.ts";
-import type { SqlClient } from "../../core/adapters/storage/sql.ts";
 import {
   assertSavedPlanMatchesState,
   parseOpenTofuStateMetadata,
@@ -625,7 +624,8 @@ type Operations = Awaited<ReturnType<typeof createTakosumiService>>["operations"
 
 export interface LocalCoreHttpProofRuntime {
   readonly store: OpenTofuControlStore;
-  readonly operations: Operations;
+  readonly operations?: Operations;
+  readonly controlRequest?: (request: Request) => Promise<Response>;
 }
 
 export interface LocalCoreHttpProofRuntimeInput {
@@ -633,13 +633,61 @@ export interface LocalCoreHttpProofRuntimeInput {
   readonly archiveStore: ReturnType<typeof createFileSourceArchiveStore>;
   readonly stateStore: ReturnType<typeof createFileOpenTofuStateArtifactStore>;
   readonly profile: ReturnType<typeof createLocalOpenTofuRunnerProfile>;
-  readonly sqlClient: SqlClient;
+  readonly artifactRoot: string;
+  readonly artifactEncryptionPassphrase: string;
+  readonly syntheticSessionIds: LocalCoreHttpProofSyntheticSessions;
+  readonly fetchImpl: typeof fetch;
+  readonly onRunDispatch: (runId: string) => void;
+  readonly onSavedPlanMetadataReceipt: (receipt: SavedPlanStateMetadataReceipt) => void;
+  readonly observeRunnerHttp: RunnerHttpProofObserver;
+}
+
+export interface LocalCoreHttpProofSyntheticSessions {
+  readonly actor: string;
+  readonly foreignActor: string;
+  readonly createdAt: number;
+  readonly expiresAt: number;
+}
+
+/** Recreates only the explicitly synthetic in-memory identities for a proof process. */
+export function createLocalCoreHttpProofAccounts(
+  sessions: LocalCoreHttpProofSyntheticSessions,
+  includeForeignActor = true,
+): InMemoryAccountsStore {
+  const accounts = new InMemoryAccountsStore();
+  accounts.saveAccount({
+    subject: ACTOR,
+    email: "local-core-http@example.test",
+    displayName: "Local Core HTTP Proof",
+    createdAt: sessions.createdAt,
+    updatedAt: sessions.createdAt,
+  });
+  accounts.saveAccountSession({
+    sessionId: sessions.actor,
+    subject: ACTOR,
+    createdAt: sessions.createdAt,
+    expiresAt: sessions.expiresAt,
+  });
+  if (includeForeignActor) {
+    accounts.saveAccount({
+      subject: FOREIGN_ACTOR,
+      email: "foreign-core-http@example.test",
+      displayName: "Foreign Proof User",
+      createdAt: sessions.createdAt,
+      updatedAt: sessions.createdAt,
+    });
+    accounts.saveAccountSession({
+      sessionId: sessions.foreignActor,
+      subject: FOREIGN_ACTOR,
+      createdAt: sessions.createdAt,
+      expiresAt: sessions.expiresAt,
+    });
+  }
+  return accounts;
 }
 
 export interface LocalCoreHttpProofHooks {
-  /** Returns the currently opened SQL client; changes only after the restart hook. */
-  readonly currentSqlClient: () => SqlClient;
-  /** Creates a fresh Core runtime over the caller's current persistence client. */
+  /** Creates a fresh Core runtime after the caller's restart boundary. */
   readonly createRuntime: (
     input: LocalCoreHttpProofRuntimeInput,
   ) => Promise<LocalCoreHttpProofRuntime>;
@@ -670,7 +718,7 @@ export function assertNoAdditionalRunnerDispatches(
 }
 
 async function control<T>(
-  operations: Operations,
+  runtime: LocalCoreHttpProofRuntime,
   accounts: InMemoryAccountsStore,
   cookie: string,
   method: string,
@@ -690,7 +738,11 @@ async function control<T>(
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
   });
-  const response = await handleControlRoute({ request, url, store: accounts, operations });
+  const response = runtime.controlRequest
+    ? await runtime.controlRequest(request)
+    : runtime.operations
+    ? await handleControlRoute({ request, url, store: accounts, operations: runtime.operations })
+    : undefined;
   assert(response, `no control route for ${method} ${path}`);
   const text = await readCapped(response.body, 64 * 1024);
   const payload = JSON.parse(text) as {
@@ -754,25 +806,20 @@ export async function prove(
     if (Boolean(hooks) !== Boolean(hooks?.createRuntime && hooks.afterInitialApply)) {
       throw new TypeError("local Core HTTP proof restart hooks must be supplied together");
     }
-    const accounts = new InMemoryAccountsStore();
     const now = Date.now();
-    accounts.saveAccount({
-      subject: ACTOR,
-      email: "local-core-http@example.test",
-      displayName: "Local Core HTTP Proof",
-      createdAt: now,
-      updatedAt: now,
-    });
-    const sessionId = `sess_local_core_http_${randomUUID().replaceAll("-", "")}`;
-    accounts.saveAccountSession({
-      sessionId,
-      subject: ACTOR,
+    const sessionIds: LocalCoreHttpProofSyntheticSessions = {
+      actor: `sess_local_core_http_${randomUUID().replaceAll("-", "")}`,
+      foreignActor: `sess_foreign_core_http_${randomUUID().replaceAll("-", "")}`,
       createdAt: now,
       expiresAt: now + 180_000,
-    });
+    };
+    const accounts = createLocalCoreHttpProofAccounts(sessionIds, Boolean(hooks));
+    const sessionId = sessionIds.actor;
+    const foreignSessionId = sessionIds.foreignActor;
     const cookie = `${ACCOUNT_SESSION_COOKIE_NAME}=${sessionId}`;
+    const artifactEncryptionPassphrase = randomUUID() + randomUUID();
     const cryptoBoundary = new PartitionedSecretBoundaryCrypto({
-      globalPassphrase: randomUUID() + randomUUID(),
+      globalPassphrase: artifactEncryptionPassphrase,
     });
     const archiveStore = createFileSourceArchiveStore(join(root, "archives"));
     const stateStore = createFileOpenTofuStateArtifactStore(join(root, "state"), cryptoBoundary);
@@ -784,7 +831,13 @@ export async function prove(
           archiveStore,
           stateStore,
           profile,
-          sqlClient: hooks.currentSqlClient(),
+          artifactRoot: root,
+          artifactEncryptionPassphrase,
+          syntheticSessionIds: sessionIds,
+          fetchImpl: originalFetch,
+          onRunDispatch: (runId) => { runnerDispatches.push(runId); },
+          onSavedPlanMetadataReceipt: (receipt) => { metadataReceipts.push(receipt); },
+          observeRunnerHttp: hooks.observeRunnerHttp ?? (() => {}),
         });
       }
       const store = new InMemoryOpenTofuControlStore();
@@ -802,7 +855,9 @@ export async function prove(
     };
     let runtime = await openRuntime();
     let store = runtime.store;
-    let operations = runtime.operations;
+    if (!runtime.operations && !runtime.controlRequest) {
+      throw new TypeError("local Core HTTP proof runtime has no route transport");
+    }
     const seeded = await seedCapsuleModel(store, {
       workspaceId: "ws_core_http_proof",
       capsuleId: "cap_core_http_proof",
@@ -870,44 +925,45 @@ export async function prove(
     const cap = seeded.capsule.id;
     type PublicRun = { run: { id: string; status: string; planDigest?: string } };
     const planned = await control<PublicRun>(
-      operations, accounts, cookie, "POST", `/api/v1/capsules/${cap}/plan`, 201,
+      runtime, accounts, cookie, "POST", `/api/v1/capsules/${cap}/plan`, 201,
     );
     assert.equal(planned.run.status, "succeeded");
     assert.match(planned.run.planDigest ?? "", IMAGE_PATTERN);
     const before = await control<{ output: unknown }>(
-      operations, accounts, cookie, "GET", `/api/v1/capsules/${cap}/outputs`, 200,
+      runtime, accounts, cookie, "GET", `/api/v1/capsules/${cap}/outputs`, 200,
     );
     assert.equal(before.output, null);
 
     // Negative control: a foreign Workspace session cannot apply this Plan.
-    accounts.saveAccount({
-      subject: FOREIGN_ACTOR,
-      email: "foreign-core-http@example.test",
-      displayName: "Foreign Proof User",
-      createdAt: now,
-      updatedAt: now,
-    });
-    const foreignSessionId = `sess_foreign_core_http_${randomUUID().replaceAll("-", "")}`;
-    accounts.saveAccountSession({
-      sessionId: foreignSessionId,
-      subject: FOREIGN_ACTOR,
-      createdAt: now,
-      expiresAt: now + 180_000,
-    });
+    if (!hooks) {
+      accounts.saveAccount({
+        subject: FOREIGN_ACTOR,
+        email: "foreign-core-http@example.test",
+        displayName: "Foreign Proof User",
+        createdAt: now,
+        updatedAt: now,
+      });
+      accounts.saveAccountSession({
+        sessionId: foreignSessionId,
+        subject: FOREIGN_ACTOR,
+        createdAt: now,
+        expiresAt: sessionIds.expiresAt,
+      });
+    }
     await control(
-      operations, accounts, `${ACCOUNT_SESSION_COOKIE_NAME}=${foreignSessionId}`,
+      runtime, accounts, `${ACCOUNT_SESSION_COOKIE_NAME}=${foreignSessionId}`,
       "POST", `/api/v1/runs/${planned.run.id}/apply`, 403,
     );
     assert.equal((await store.getCapsule(cap))?.currentStateGeneration, 0);
     const first = await control<{ run: { id: string; status: string } }>(
-      operations, accounts, cookie, "POST", `/api/v1/runs/${planned.run.id}/apply`, 201,
+      runtime, accounts, cookie, "POST", `/api/v1/runs/${planned.run.id}/apply`, 201,
     );
     if (first.run.status !== "succeeded") {
       throw new Error(`first apply ended with ${first.run.status}`);
     }
     assert.equal(first.run.status, "succeeded");
     const firstState = await control<{ stateVersions: Array<Pick<PublicStateVersion, "id" | "createdByRunId" | "generation">> }>(
-      operations, accounts, cookie, "GET", `/api/v1/capsules/${cap}/state-versions`, 200,
+      runtime, accounts, cookie, "GET", `/api/v1/capsules/${cap}/state-versions`, 200,
     );
     assert.equal(firstState.stateVersions.length, 1);
     const firstListedState = firstState.stateVersions[0]!;
@@ -933,7 +989,7 @@ export async function prove(
     assert(firstStateMetadata.lineage.length > 0);
     assert(firstStateMetadata.serial > 0);
     const firstOutput = await control<{ output: { publicOutputs: Record<string, unknown> } }>(
-      operations, accounts, cookie, "GET", `/api/v1/capsules/${cap}/outputs`, 200,
+      runtime, accounts, cookie, "GET", `/api/v1/capsules/${cap}/outputs`, 200,
     );
     assert.equal(firstOutput.output.publicOutputs.launch_url, "https://first.example.test");
 
@@ -948,11 +1004,10 @@ export async function prove(
         createRuntime: openRuntime,
       });
       store = runtime.store;
-      operations = runtime.operations;
 
       const dispatchesBeforeReplay = [...runnerDispatches];
       const replay = await control<{ run: { id: string; status: string } }>(
-        operations,
+        runtime,
         accounts,
         cookie,
         "POST",
@@ -964,11 +1019,11 @@ export async function prove(
 
       const recoveredState = await control<{
         stateVersions: Array<Pick<PublicStateVersion, "id" | "createdByRunId" | "generation">>;
-      }>(operations, accounts, cookie, "GET", `/api/v1/capsules/${cap}/state-versions`, 200);
+      }>(runtime, accounts, cookie, "GET", `/api/v1/capsules/${cap}/state-versions`, 200);
       assert.deepEqual(recoveredState.stateVersions, firstState.stateVersions);
       const recoveredOutput = await control<{
         output: { publicOutputs: Record<string, unknown> };
-      }>(operations, accounts, cookie, "GET", `/api/v1/capsules/${cap}/outputs`, 200);
+      }>(runtime, accounts, cookie, "GET", `/api/v1/capsules/${cap}/outputs`, 200);
       assert.deepEqual(recoveredOutput.output, firstOutput.output);
       const recoveredStateVersion = await store.getStateVersion(firstListedState.id);
       assert(recoveredStateVersion, "fresh Core lost the generation-one StateVersion ledger row");
@@ -989,27 +1044,31 @@ export async function prove(
     }
 
     const detail = await control<{ installConfigReAdoption: { authorityGuard: string } }>(
-      operations, accounts, cookie, "GET", `/api/v1/capsules/${cap}`, 200,
+      runtime, accounts, cookie, "GET", `/api/v1/capsules/${cap}`, 200,
     );
-    const bindingSet = await operations.capsules.getProviderBindingSetByCapsule(cap, seeded.capsule.environment);
-    assert(bindingSet);
+    const providerBindingSet = await runtime.store.getProviderBindingSetByCapsule(
+      cap,
+      seeded.capsule.environment,
+    );
+    assert(providerBindingSet, "provider-free fixture lost its persisted ProviderBindingSet");
+    assert.deepEqual(providerBindingSet.bindings, [], "provider-free fixture unexpectedly acquired Provider bindings");
     const updated = await control<{ configurationPlan: { planRunId: string } }>(
-      operations, accounts, cookie, "POST", `/api/v1/capsules/${cap}/configuration-plans`, 201,
+      runtime, accounts, cookie, "POST", `/api/v1/capsules/${cap}/configuration-plans`, 201,
       {
         variablePatch: { set: { message: "second" }, remove: [] },
-        providerBindings: bindingSet.bindings,
+        providerBindings: providerBindingSet.bindings,
         interfaceBlueprints: [],
         expected: { authorityGuard: detail.installConfigReAdoption.authorityGuard },
       },
       { "idempotency-key": "local-core-http-update" },
     );
     const unchanged = await control<{ output: { publicOutputs: Record<string, unknown> } }>(
-      operations, accounts, cookie, "GET", `/api/v1/capsules/${cap}/outputs`, 200,
+      runtime, accounts, cookie, "GET", `/api/v1/capsules/${cap}/outputs`, 200,
     );
     assert.equal(unchanged.output.publicOutputs.launch_url, "https://first.example.test");
     assert.equal((await store.getCapsule(cap))?.currentStateGeneration, 1);
     const second = await control<{ run: { id: string; status: string } }>(
-      operations, accounts, cookie, "POST",
+      runtime, accounts, cookie, "POST",
       `/api/v1/runs/${updated.configurationPlan.planRunId}/apply`, 201,
     );
     assert.equal(second.run.status, "succeeded");
@@ -1035,11 +1094,11 @@ export async function prove(
       receipt: updateReceipt,
     });
     const secondOutput = await control<{ output: { publicOutputs: Record<string, unknown> } }>(
-      operations, accounts, cookie, "GET", `/api/v1/capsules/${cap}/outputs`, 200,
+      runtime, accounts, cookie, "GET", `/api/v1/capsules/${cap}/outputs`, 200,
     );
     assert.equal(secondOutput.output.publicOutputs.launch_url, "https://second.example.test");
     const secondState = await control<{ stateVersions: Array<Pick<PublicStateVersion, "id" | "createdByRunId" | "generation">> }>(
-      operations, accounts, cookie, "GET", `/api/v1/capsules/${cap}/state-versions`, 200,
+      runtime, accounts, cookie, "GET", `/api/v1/capsules/${cap}/state-versions`, 200,
     );
     assert.equal(secondState.stateVersions.length, 2);
     const secondListedState = secondState.stateVersions.find((state) => state.createdByRunId === second.run.id);
@@ -1060,20 +1119,20 @@ export async function prove(
     });
 
     const destroyPlan = await control<PublicRun>(
-      operations, accounts, cookie, "POST", `/api/v1/capsules/${cap}/destroy-plan`, 201,
+      runtime, accounts, cookie, "POST", `/api/v1/capsules/${cap}/destroy-plan`, 201,
     );
     assert.equal(destroyPlan.run.status, "waiting_approval");
     const approved = await control<PublicRun>(
-      operations, accounts, cookie, "POST", `/api/v1/runs/${destroyPlan.run.id}/approve`, 200,
+      runtime, accounts, cookie, "POST", `/api/v1/runs/${destroyPlan.run.id}/approve`, 200,
       { reason: "local provider-free proof" },
     );
     assert.equal(approved.run.status, "succeeded");
     const destroyed = await control<{ run: { id: string; status: string } }>(
-      operations, accounts, cookie, "POST", `/api/v1/runs/${destroyPlan.run.id}/apply`, 201,
+      runtime, accounts, cookie, "POST", `/api/v1/runs/${destroyPlan.run.id}/apply`, 201,
     );
     assert.equal(destroyed.run.status, "succeeded");
     const finalOutput = await control<{ output: unknown }>(
-      operations, accounts, cookie, "GET", `/api/v1/capsules/${cap}/outputs`, 200,
+      runtime, accounts, cookie, "GET", `/api/v1/capsules/${cap}/outputs`, 200,
     );
     assert.equal(finalOutput.output, null);
     const finalCapsule = await store.getCapsule(cap);
@@ -1081,7 +1140,7 @@ export async function prove(
     assert.equal(finalCapsule?.currentStateGeneration, 3);
     const finalState = await control<{
       stateVersions: Array<Pick<PublicStateVersion, "id" | "createdByRunId" | "generation">>;
-    }>(operations, accounts, cookie, "GET", `/api/v1/capsules/${cap}/state-versions`, 200);
+    }>(runtime, accounts, cookie, "GET", `/api/v1/capsules/${cap}/state-versions`, 200);
     assert.equal(finalState.stateVersions.length, 3, "lifecycle did not persist all three StateVersion rows");
     const destroyedListedState = finalState.stateVersions.find(
       (state) => state.createdByRunId === destroyed.run.id,
