@@ -12,7 +12,11 @@ import {
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
-import { createHttpOpenTofuRunner } from "../../deploy/node-postgres/src/local-opentofu-runner.ts";
+import {
+  createHttpOpenTofuRunner,
+  type LocalOpenTofuRawOutputArtifact,
+  type LocalOpenTofuStateArtifact,
+} from "../../deploy/node-postgres/src/local-opentofu-runner.ts";
 import { handleRunnerRequestWithDependencies } from "../../runner/entrypoint.ts";
 import { FIXTURE_EXECUTION_EVIDENCE_AUTHORITY } from "../helpers/deploy-control/model_fixture.ts";
 import { boundedRunnerFetch } from "./local-core-http-lifecycle.ts";
@@ -168,6 +172,8 @@ async function client(mode: "a" | "b"): Promise<void> {
     }
     return response;
   }) as typeof fetch;
+  let committedState: LocalOpenTofuStateArtifact | undefined;
+  let committedOutput: LocalOpenTofuRawOutputArtifact | undefined;
   const runner = createHttpOpenTofuRunner({
     baseUrl: input.baseUrl,
     archiveStore: {
@@ -175,25 +181,35 @@ async function client(mode: "a" | "b"): Promise<void> {
       write: async () => { throw new Error("unexpected archive write"); },
     },
     stateStore: {
-      read: async () => undefined,
-      commit: async () => { throw new Error("unexpected state commit after unknown ACK"); },
-      readRawOutput: async () => undefined,
-      commitRawOutput: async () => { throw new Error("unexpected Output commit after unknown ACK"); },
+      read: async () => committedState,
+      commit: async (artifact: LocalOpenTofuStateArtifact) => {
+        committedState = artifact;
+        return artifact;
+      },
+      readRawOutput: async () => committedOutput,
+      commitRawOutput: async (artifact: LocalOpenTofuRawOutputArtifact) => {
+        committedOutput = artifact;
+        return artifact;
+      },
     },
   });
   try {
-    await runner.apply(jobFor(input) as Parameters<typeof runner.apply>[0]);
-    throw new Error("adapter falsely reported success after unknown acknowledgement");
-  } catch (error) {
-    if (mode === "a") throw error;
+    const result = await runner.apply(jobFor(input) as Parameters<typeof runner.apply>[0]);
+    assert.equal(mode, "b", "client A unexpectedly completed provider dispatch");
     assert(prepostSent, "client B never reached provider dispatch");
     assert.equal(directStatus, 200, "real Runner success was not observed");
-    assert.equal(
-      (error as { readonly reason?: unknown }).reason,
-      "runner_mutation_indeterminate",
-      "adapter did not preserve unknown-ACK indeterminacy",
-    );
-    protocolLine({ phase: "indeterminate", directStatus });
+    assert(committedState, "same-call ACK recovery did not commit state");
+    assert(committedOutput, "same-call ACK recovery did not commit Output");
+    assert.equal(result.stateDigest, committedState.stateDigest);
+    assert.equal(committedOutput.stateDigest, committedState.stateDigest);
+    assert.equal(committedOutput.outputDigest, digest(new TextEncoder().encode(
+      JSON.stringify(result.outputs ?? {}),
+    )));
+    protocolLine({
+      phase: "adopted", directStatus,
+      stateDigest: committedState.stateDigest,
+      outputDigest: committedOutput.outputDigest,
+    });
   } finally {
     globalThis.fetch = nativeFetch;
   }
@@ -580,9 +596,11 @@ async function prove(): Promise<void> {
     assert.deepEqual(await processIdentity(runner.pid), identity);
     clientB.stdin.write("continue\n");
     clientB.stdin.end();
-    const indeterminate = await clientBLines.next();
-    assert.equal(indeterminate.phase, "indeterminate");
-    assert.equal(indeterminate.directStatus, 200);
+    const adopted = await clientBLines.next();
+    assert.equal(adopted.phase, "adopted");
+    assert.equal(adopted.directStatus, 200);
+    assert(typeof adopted.stateDigest === "string" && /^sha256:[0-9a-f]{64}$/u.test(adopted.stateDigest));
+    assert(typeof adopted.outputDigest === "string" && /^sha256:[0-9a-f]{64}$/u.test(adopted.outputDigest));
     assert.equal(await clientB.exited, 0);
     const claimName = digest(new TextEncoder().encode(runId)).slice(7);
     const claimPath = join(root, "runs", ".mutation-custody", `${claimName}.claim.json`);
@@ -594,10 +612,15 @@ async function prove(): Promise<void> {
     assert.equal(claim.kind, "takosumi.local-mutation-preparation@v2");
     assert.equal(dispatched.kind, "takosumi.local-mutation-dispatched@v2");
     assert.equal(completion.kind, "takosumi.local-mutation-completion@v2");
-    assert.equal(completion.outcome, "other", "successful result must not be adopted from readback");
+    assert.equal(completion.outcome, "succeeded", "successful result lacks durable receipt");
     assert.equal(completion.epoch, 2);
     assert.equal(dispatched.requestDigest, claim.requestDigest);
     assert.equal(completion.requestDigest, claim.requestDigest);
+    assert.equal(completion.stateDigest, adopted.stateDigest);
+    assert.equal(completion.outputDigest, adopted.outputDigest);
+    assert(typeof completion.resultDigest === "string" && /^sha256:[0-9a-f]{64}$/u.test(completion.resultDigest));
+    assert.equal(completion.outputs, undefined, "raw Outputs were persisted in completion");
+    assert.equal(completion.result, undefined, "raw success result was persisted in completion");
     const duplicate = await runnerFetch(baseUrl, `/runs/${runId}`, {
       method: "POST",
       headers: {
@@ -616,10 +639,28 @@ async function prove(): Promise<void> {
         "x-takosumi-mutation-digest": claim.requestDigest as string,
       },
     });
-    assert.equal(receipt.status, 409, "successful private completion must stay indeterminate");
+    assert.equal(receipt.status, 409, "success without the original reservation was adopted");
+    const adoptableReceipt = await runnerFetch(baseUrl, `/runs/${runId}/completion`, {
+      headers: {
+        "x-takosumi-mutation-action": "apply",
+        "x-takosumi-mutation-digest": claim.requestDigest as string,
+        "x-takosumi-preparation-attempt": prepost.attemptId,
+        "x-takosumi-preparation-epoch": "2",
+      },
+    });
+    assert.equal(adoptableReceipt.status, 200, "same-attempt success was not readable");
+    const success = await adoptableReceipt.json() as Record<string, unknown>;
+    assert.equal(success.kind, "takosumi.local-mutation-success-readback@v2");
+    assert.equal(success.stateDigest, completion.stateDigest);
+    assert.equal(success.resultDigest, completion.resultDigest);
+    assert.equal(success.outputDigest, completion.outputDigest);
+    assert.equal(digest(new TextEncoder().encode(JSON.stringify(success.result))), completion.resultDigest);
+    const successResult = success.result as Record<string, unknown>;
+    assert.equal(digest(new TextEncoder().encode(JSON.stringify(successResult.outputs ?? {}))), completion.outputDigest);
     const state = await runnerFetch(baseUrl, `/runs/${runId}/artifacts/tfstate`);
     assert.equal(state.status, 200);
     const stateBytes = new Uint8Array(await state.arrayBuffer());
+    assert.equal(digest(stateBytes), completion.stateDigest);
     const stateBody = JSON.parse(new TextDecoder().decode(stateBytes)) as {
       readonly resources?: readonly { readonly type?: string }[];
     };
@@ -634,7 +675,9 @@ async function prove(): Promise<void> {
       planDigest: plan.planDigest, stateDigest: digest(stateBytes),
       clientAInterrupted: true, transferEpoch: 2, staleWriterStatus: staleRestore.status,
       staleDispatchStatus: stalePost.status, duplicateDispatchStatus: duplicate.status,
-      completionReadbackStatus: receipt.status, applyExecutions: 1,
+      completionReadbackStatus: receipt.status,
+      adoptableReadbackStatus: adoptableReceipt.status,
+      applyExecutions: 1,
     };
   } finally {
     if (deadline) clearTimeout(deadline);
