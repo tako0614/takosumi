@@ -28,6 +28,7 @@ import {
   type NativePostgresRestartOptions,
   runNativePostgresPhase,
 } from "../../../helpers/deploy-control/native_postgres_restart.ts";
+import { createDockerCommandFailure } from "../../../helpers/deploy-control/docker_command_failure.ts";
 
 const NATIVE_POSTGRES_OPT_IN =
   process.env.TAKOSUMI_TEST_NATIVE_POSTGRES_RESTART === "1";
@@ -42,6 +43,13 @@ function fakeDocker(options: {
   readonly removeFailureAfterRemoval?: Error;
   readonly lowercaseNotFound?: boolean;
   readonly mismatchedNotFoundReference?: boolean;
+  readonly malformedNotFound?: boolean;
+  readonly permissionNotFound?: boolean;
+  readonly timeoutNotFound?: boolean;
+  readonly killedNotFound?: boolean;
+  readonly signalNotFound?: boolean;
+  readonly legacyMixedStderr?: boolean;
+  readonly oversizedUnusedInspectionFields?: boolean;
 } = {}): { readonly run: DockerCommand; readonly commands: string[][]; readonly exists: () => boolean } {
   const commands: string[][] = [];
   let container:
@@ -80,6 +88,9 @@ function fakeDocker(options: {
         Config: {
           Image:
             "postgres@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229",
+          ...(options.oversizedUnusedInspectionFields
+            ? { Env: [`UNUSED=${"x".repeat(5_000)}`] }
+            : {}),
           Labels: {
             ...labels,
             ...(options.foreignRunReadback
@@ -91,7 +102,12 @@ function fakeDocker(options: {
           Running: true,
           Status: "running",
           Pid: 501,
-          Health: { Status: "healthy" },
+          Health: {
+            Status: "healthy",
+            ...(options.oversizedUnusedInspectionFields
+              ? { Log: [{ Output: "unrelated health log ".repeat(300) }] }
+              : {}),
+          },
         },
         NetworkSettings: {
           Ports: {
@@ -123,13 +139,59 @@ function fakeDocker(options: {
         const missingReference = options.mismatchedNotFoundReference
           ? `${reference}-unrelated`
           : reference;
-        throw Object.assign(new Error(`missing ${reference}`), {
-          stderr: options.lowercaseNotFound
-            ? `error: no such object: ${missingReference}`
-            : `Error: No such object: ${missingReference}`,
-        });
+        const stderr = options.permissionNotFound
+          ? `permission denied while inspecting ${reference}`
+          : options.malformedNotFound
+            ? `Error: permission denied\nError: No such object: ${missingReference}`
+            : options.lowercaseNotFound
+              ? `error: no such object: ${missingReference}`
+              : `Error: No such object: ${missingReference}`;
+        if (options.legacyMixedStderr) {
+          throw Object.assign(new Error("private adapter failure"), {
+            stderr: `Error: permission denied\nError: No such object: ${reference}`,
+          });
+        }
+        throw createDockerCommandFailure(
+          ["docker", ...args],
+          1,
+          stderr,
+          {
+            timedOut: options.timeoutNotFound,
+            killed: options.killedNotFound,
+            signal: options.signalNotFound ? "SIGTERM" : undefined,
+          },
+        );
       }
-      return JSON.stringify(container.inspection);
+      const format = args[args.indexOf("--format") + 1];
+      const output = format === "{{json .}}"
+        ? JSON.stringify(container.inspection)
+        : JSON.stringify({
+          Id: container.inspection.Id,
+          Name: container.inspection.Name,
+          Config: {
+            Image: (container.inspection.Config as Record<string, unknown>).Image,
+            Labels: (container.inspection.Config as Record<string, unknown>).Labels,
+          },
+          State: (() => {
+            const state = container.inspection.State as Record<string, unknown>;
+            return {
+              Running: state.Running,
+              Status: state.Status,
+              Pid: state.Pid,
+              Health: {
+                Status: (state.Health as Record<string, unknown>).Status,
+              },
+            };
+          })(),
+          NetworkSettings: {
+            Ports: (container.inspection.NetworkSettings as Record<string, unknown>).Ports,
+          },
+          Mounts: container.inspection.Mounts,
+        });
+      if (options.oversizedUnusedInspectionFields && Buffer.byteLength(output) > 4096) {
+        throw new Error("response exceeded local proof byte cap");
+      }
+      return output;
     }
     if (args[0] === "stop" && container) {
       const state = container.inspection.State as Record<string, unknown>;
@@ -166,6 +228,39 @@ function fakeDocker(options: {
   return { run, commands, exists: () => container !== undefined };
 }
 
+test("container readback projects only required fields under the real 4096-byte transport cap", async () => {
+  await withTemporaryDataRoot(async (dataRoot) => {
+    const fake = fakeDocker({ oversizedUnusedInspectionFields: true });
+    const fixture = await createNativePostgresRestartContainer({
+      dataRoot,
+      runDocker: fake.run,
+      verifyMappedTcp: async () => "2026-10-02T00:00:00.000Z",
+    });
+
+    try {
+      const inspect = fake.commands.find((args) => args[0] === "inspect");
+      expect(inspect).toBeDefined();
+      const format = inspect?.[inspect.indexOf("--format") + 1] ?? "";
+      expect(format).toContain('{{json .Id}}');
+      expect(format).toContain('{{json .Name}}');
+      expect(format).toContain('{{json .Config.Image}}');
+      expect(format).toContain('index .Config.Labels "io.takosumi.test.owner"');
+      expect(format).toContain('index .Config.Labels "io.takosumi.test.purpose"');
+      expect(format).toContain('index .Config.Labels "io.takosumi.test.pgdata"');
+      expect(format).toContain('{{json .State.Pid}}');
+      expect(format).toContain('{{json .State.Health.Status}}');
+      expect(format).toContain('index .NetworkSettings.Ports "5432/tcp"');
+      expect(format).toContain("{{json .Mounts}}");
+      expect(format).not.toContain("{{json .}}");
+      expect(format).not.toContain(".Config.Env");
+      expect(format).not.toContain(".State.Health.Log");
+      expect(fake.exists()).toBe(true);
+    } finally {
+      await fixture.close();
+    }
+  });
+});
+
 async function withTemporaryDataRoot<T>(
   body: (dataRoot: string) => Promise<T>,
 ): Promise<T> {
@@ -179,10 +274,11 @@ async function withTemporaryDataRoot<T>(
 
 test("lost Docker create acknowledgement resolves exact run ownership before cleanup", async () => {
   await withTemporaryDataRoot(async (dataRoot) => {
+    const runFailure = Object.assign(new Error("create acknowledgement timed out"), {
+      code: "ETIMEDOUT",
+    });
     const fake = fakeDocker({
-      runFailure: Object.assign(new Error("create acknowledgement timed out"), {
-        code: "ETIMEDOUT",
-      }),
+      runFailure,
     });
     await expect(
       createNativePostgresRestartContainer({
@@ -190,7 +286,11 @@ test("lost Docker create acknowledgement resolves exact run ownership before cle
         runDocker: fake.run,
         verifyMappedTcp: async () => "2026-10-02T00:00:00.000Z",
       }),
-    ).rejects.toThrow(/create acknowledgement timed out/u);
+    ).rejects.toMatchObject({
+      phase: "container.create",
+      message: "native PostgreSQL phase failed",
+      cause: runFailure,
+    });
     expect(fake.exists()).toBe(false);
     expect(fake.commands.some((args) => args[0] === "rm")).toBe(true);
     const removeIndex = fake.commands.findIndex((args) => args[0] === "rm");
@@ -307,7 +407,9 @@ test("loopback bind failure does not retry create or discard unresolved PGDATA c
       /custody is retained; operator recovery path/u,
     );
     expect((error as AggregateError).errors[1]).toMatchObject({
-      message: expect.stringContaining("no-effect is not proven"),
+      phase: "container.setup.resolve-cleanup",
+      message: "native PostgreSQL phase failed",
+      cause: { message: expect.stringContaining("no-effect is not proven") },
     });
     expect(fake.commands.filter((args) => args[0] === "run")).toHaveLength(1);
     expect(fake.exists()).toBe(false);
@@ -430,13 +532,53 @@ test("lowercase not-found for a different reference does not prove absence", asy
   });
 });
 
+test("permission, mixed diagnostics, and inspect timeout do not prove exact absence", async () => {
+  for (const option of [
+    { permissionNotFound: true },
+    { malformedNotFound: true },
+    { timeoutNotFound: true },
+    { killedNotFound: true },
+    { signalNotFound: true },
+    { legacyMixedStderr: true },
+  ] as const) {
+    await withTemporaryDataRoot(async (dataRoot) => {
+      const fake = fakeDocker({
+        runFailure: Object.assign(new Error("create acknowledgement timed out"), {
+          code: "ETIMEDOUT",
+        }),
+        createContainerBeforeRunFailure: false,
+        ...option,
+      });
+      const error = await createNativePostgresRestartContainer({
+        dataRoot,
+        runDocker: fake.run,
+        verifyMappedTcp: async () => "2026-10-02T00:00:00.000Z",
+      }).then(() => undefined, (failure: unknown) => failure);
+
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as AggregateError).message).toMatch(
+        /custody is retained; operator recovery path/u,
+      );
+      expect(fake.exists()).toBe(false);
+      expect(fake.commands.some((args) => args[0] === "rm")).toBe(false);
+      const [runRootName] = await readdir(dataRoot);
+      expect(runRootName).toBeString();
+      expect((await readdir(join(dataRoot, runRootName!))).sort()).toEqual([
+        "pgdata",
+        "postgres.env",
+      ]);
+    });
+  }
+});
+
 test("pool close failure still attempts exact container cleanup and preserves the error", async () => {
   const events: string[] = [];
+  const poolFailure = new Error("pool close failed");
   const result = await cleanupNativePostgresResources(
     [
       async () => {
         events.push("pool-failed");
-        throw new Error("pool close failed");
+        throw poolFailure;
       },
       async () => {
         events.push("pool-closed");
@@ -448,7 +590,11 @@ test("pool close failure still attempts exact container cleanup and preserves th
   ).then(() => undefined, (error: unknown) => error);
   expect(result).toBeInstanceOf(AggregateError);
   expect((result as AggregateError).errors).toContainEqual(
-    expect.objectContaining({ message: "pool close failed" }),
+    expect.objectContaining({
+      phase: "cleanup.pool-close",
+      message: "native PostgreSQL phase failed",
+      cause: poolFailure,
+    }),
   );
   expect(events).toEqual([
     "pool-failed",

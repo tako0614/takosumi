@@ -7,6 +7,11 @@ import { join } from "node:path";
 import { Pool } from "pg";
 
 import {
+  createDockerCommandFailure,
+  isExactDockerInspectNotFound,
+} from "./docker_command_failure.ts";
+
+import {
   wrapPgResult,
   type PgResultLike,
 } from "../../../core/adapters/storage/pg_result.ts";
@@ -25,6 +30,18 @@ const CONTAINER_PURPOSE_LABEL = "io.takosumi.test.purpose";
 const CONTAINER_DATA_LABEL = "io.takosumi.test.pgdata";
 const PGDATA_CONTAINER_PATH = "/var/lib/postgresql/data";
 const DEFAULT_DATA_ROOT = "/root/hdd/takos-dev";
+const DOCKER_INSPECTION_FORMAT = [
+  '{"Id":{{json .Id}},"Name":{{json .Name}},',
+  '"Config":{"Image":{{json .Config.Image}},"Labels":{',
+  '"io.takosumi.test.owner":{{json (index .Config.Labels "io.takosumi.test.owner")}},',
+  '"io.takosumi.test.purpose":{{json (index .Config.Labels "io.takosumi.test.purpose")}},',
+  '"io.takosumi.test.pgdata":{{json (index .Config.Labels "io.takosumi.test.pgdata")}}}},',
+  '"State":{"Running":{{json .State.Running}},"Status":{{json .State.Status}},',
+  '"Pid":{{json .State.Pid}},"Health":{"Status":{{json .State.Health.Status}}}},',
+  '"NetworkSettings":{"Ports":{',
+  '"5432/tcp":{{json (index .NetworkSettings.Ports "5432/tcp")}}}},',
+  '"Mounts":{{json .Mounts}}}',
+].join("");
 
 interface DockerInspection {
   readonly Id: string;
@@ -92,26 +109,90 @@ export interface NativePostgresSqlClient {
   close(): Promise<void>;
 }
 
-/** Keeps test lifecycle phase boundaries explicit without logging fixture details. */
-export async function runNativePostgresPhase<T>(
-  _phase: string,
-  operation: () => T | Promise<T>,
-): Promise<T> {
-  return await operation();
+export const NATIVE_POSTGRES_PHASES = [
+  "cleanup.all",
+  "cleanup.container-close",
+  "cleanup.container.readback-after-stop",
+  "cleanup.container.readback-before-remove",
+  "cleanup.container.readback-before-stop",
+  "cleanup.container.remove",
+  "cleanup.container.stop",
+  "cleanup.pool-close",
+  "cleanup.readback.container-id",
+  "cleanup.readback.container-name",
+  "cleanup.run-root.remove",
+  "container.cleanup",
+  "container.create",
+  "container.create.readback",
+  "container.preflight.engine",
+  "container.preflight.image",
+  "container.setup.cleanup",
+  "container.setup.resolve-cleanup",
+  "container.setup.root-cleanup",
+  "container.startup.health",
+  "core.apply",
+  "core.bootstrap.first",
+  "core.bootstrap.restarted",
+  "core.lineage.after-restart",
+  "core.lineage.before-restart",
+  "core.plan",
+  "core.replay",
+  "daemon.before.readback",
+  "daemon.postmaster.after.host-pid",
+  "daemon.postmaster.before.host-pid",
+  "daemon.postmaster.before.start-time",
+  "daemon.postmaster.start-time.pool-close",
+  "daemon.postmaster.start-time.query",
+  "daemon.restart",
+  "daemon.restart-lifecycle",
+  "daemon.start.command",
+  "daemon.start.health",
+  "daemon.start.port-readback",
+  "daemon.stop.command",
+  "daemon.stop.readback",
+  "daemon.unavailable.pool-close",
+  "daemon.unavailable.probe",
+  "daemon.unavailable.query",
+  "fixture.create",
+  "migration.apply-pending",
+  "migration.verify-after-restart",
+  "migration.verify-current",
+  "pool.first.close",
+  "pool.first.open",
+  "pool.fresh.open",
+  "pool.restarted.open",
+  "postgres.fixture.create",
+  "seed.fixture",
+] as const;
+
+const nativePostgresPhaseSet: ReadonlySet<string> = new Set(NATIVE_POSTGRES_PHASES);
+
+export function isNativePostgresPhase(value: string): value is typeof NATIVE_POSTGRES_PHASES[number] {
+  return nativePostgresPhaseSet.has(value);
 }
 
-class DockerCommandError extends Error {
-  readonly stderr: string;
-  readonly command: string;
+export class NativePostgresPhaseFailure extends Error {
+  constructor(
+    readonly phase: string,
+    cause: unknown,
+  ) {
+    super("native PostgreSQL phase failed", { cause });
+    this.name = "NativePostgresPhaseFailure";
+  }
+}
 
-  constructor(command: string, stderr: string, cause?: unknown) {
-    const detail = (stderr || (cause instanceof Error ? cause.message : ""))
-      .trim()
-      .slice(0, 500);
-    super(`docker ${command} failed: ${detail}`, { cause });
-    this.name = "DockerCommandError";
-    this.command = command;
-    this.stderr = stderr;
+/** Keeps test lifecycle phase boundaries explicit without logging fixture details. */
+export async function runNativePostgresPhase<T>(
+  phase: string,
+  operation: () => T | Promise<T>,
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (cause) {
+    if (cause instanceof NativePostgresPhaseFailure || !isNativePostgresPhase(phase)) {
+      throw cause;
+    }
+    throw new NativePostgresPhaseFailure(phase, cause);
   }
 }
 
@@ -132,21 +213,28 @@ async function runLocalDocker(args: readonly string[]): Promise<string> {
     });
     return result.stdout.trim();
   } catch (error) {
-    const failure = error as Error & { readonly stderr?: string };
-    throw new DockerCommandError(args[0] ?? "command", failure.stderr ?? "", error);
+    const failure = error as Error & {
+      readonly code?: unknown;
+      readonly killed?: boolean;
+      readonly signal?: string | null;
+      readonly stderr?: string;
+    };
+    const exitCode = typeof failure.code === "number" ? failure.code : -1;
+    throw createDockerCommandFailure(
+      ["docker", ...args],
+      exitCode,
+      failure.stderr ?? "",
+      {
+        timedOut: failure.code === "ETIMEDOUT",
+        killed: failure.killed,
+        signal: failure.signal,
+      },
+    );
   }
 }
 
 function isExactNotFound(error: unknown, reference: string): boolean {
-  const detail = error instanceof Error
-    ? String((error as Error & { readonly stderr?: string }).stderr ?? "")
-    : "";
-  const exactReference = reference.toLowerCase();
-  return detail.trim().split("\n").some((line) => {
-    const normalized = line.trim().toLowerCase();
-    return normalized.endsWith(`no such object: ${exactReference}`) ||
-      normalized.endsWith(`no such container: ${exactReference}`);
-  });
+  return isExactDockerInspectNotFound(error, reference);
 }
 
 async function inspectContainer(
@@ -156,7 +244,7 @@ async function inspectContainer(
   const output = await runDocker([
     "inspect",
     "--format",
-    "{{json .}}",
+    DOCKER_INSPECTION_FORMAT,
     reference,
   ]);
   const parsed: unknown = JSON.parse(output);
