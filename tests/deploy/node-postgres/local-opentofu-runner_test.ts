@@ -1,25 +1,65 @@
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handleRunnerRequestWithDependencies } from "../../../runner/entrypoint.ts";
-import { RUN_ROOT } from "../../../runner/lib/constants.ts";
-import { readModuleDir, workspaceForRun } from "../../../runner/lib/artifacts.ts";
-import {
-  mutationRequestDigest,
-  reserveLocalMutation,
-} from "../../../runner/lib/run_completion.ts";
+import type { RunRootOwnership } from "../../../runner/lib/run_root_ownership.ts";
 
 import type { SourceSnapshot } from "../../../contract/sources.ts";
 import type {
   OpenTofuRestoreExecutionControl,
   OpenTofuRestoreSourceState,
 } from "../../../core/domains/deploy-control/mod.ts";
-import {
-  createHttpOpenTofuRunner,
-  createLocalOpenTofuRunner,
-  type LocalOpenTofuStateArtifact,
-} from "../../../deploy/node-postgres/src/local-opentofu-runner.ts";
+import type { LocalOpenTofuStateArtifact } from "../../../deploy/node-postgres/src/local-opentofu-runner.ts";
+
+// A Bun test command shares the runner module cache across files. Run this
+// suite in a fresh Bun process so its constant RUN_ROOT is never inherited from
+// a prior test or an existing operator-owned /tmp/takosumi-runs directory.
+if (Bun.env.TAKOSUMI_TEST_PRIVATE_RUN_ROOT_CHILD !== "1") {
+  test("local OpenTofu HTTP runner suite in a private root", async () => {
+    const root = await mkdtemp(join(tmpdir(), "takosumi-local-runner-test-"));
+    await chmod(root, 0o700);
+    let child: ReturnType<typeof Bun.spawn> | undefined;
+    let safeToRemove = false;
+    let timedOut = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      child = Bun.spawn([process.execPath, "--no-env-file", "test", import.meta.path], {
+        stdout: "pipe", stderr: "pipe",
+        env: {
+          ...process.env,
+          TAKOSUMI_OPENTOFU_RUN_ROOT: root,
+          TAKOSUMI_TEST_PRIVATE_RUN_ROOT_CHILD: "1",
+        },
+      });
+      timeout = setTimeout(() => {
+        timedOut = true;
+        child?.kill("SIGKILL");
+      }, 30_000);
+      const [output, error, code] = await Promise.all([
+        boundedChildOutput(child.stdout), boundedChildOutput(child.stderr), child.exited,
+      ]);
+      const summary = `${output}\n${error}`.match(/(\d+) pass\s+(\d+) fail/u);
+      if (timedOut || code !== 0 || !summary || Number(summary[2]) !== 0)
+        throw new Error(`private local runner suite failed (exit ${code}, timeout ${timedOut}, summary ${summary?.[0] ?? "missing"})`);
+      console.log(`private local runner child: ${summary[1]} pass, ${summary[2]} fail`);
+      safeToRemove = true;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      await child?.exited;
+      if (safeToRemove) await rm(root, { recursive: true, force: true });
+      else console.error(`private local runner fixture retained after uncertain child result: ${root}`);
+    }
+  });
+} else {
+const { handleRunnerRequestWithDependencies } = await import("../../../runner/entrypoint.ts");
+const { RUN_ROOT } = await import("../../../runner/lib/constants.ts");
+const { readModuleDir, workspaceForRun } = await import("../../../runner/lib/artifacts.ts");
+const { ensureCustodyDirectory, mutationRequestDigest, reserveLocalMutation } =
+  await import("../../../runner/lib/run_completion.ts");
+const { acquireRunRootOwnership } = await import("../../../runner/lib/run_root_ownership.ts");
+const { createHttpOpenTofuRunner, createLocalOpenTofuRunner } =
+  await import("../../../deploy/node-postgres/src/local-opentofu-runner.ts");
 
 const FIXTURE_EXECUTION_EVIDENCE_AUTHORITY = {
   controllerArtifact: { digest: `sha256:${"a".repeat(64)}`, immutable: true },
@@ -31,10 +71,19 @@ const handleRunnerRequest = (request: Request) =>
     mutationCustodyMode: "local-http",
     localPreparationV2: false,
   });
+let v2RunRootOwner: RunRootOwnership;
+beforeAll(async () => {
+  await ensureCustodyDirectory(true);
+  v2RunRootOwner = await acquireRunRootOwnership(RUN_ROOT);
+});
+afterAll(async () => {
+  await v2RunRootOwner?.close();
+});
 const handleRunnerRequestV2 = (request: Request) =>
   handleRunnerRequestWithDependencies(request, {
     mutationCustodyMode: "local-http",
     localPreparationV2: true,
+    runRootOwnership: v2RunRootOwner,
   });
 
 test("local HTTP mutation mode mismatch refuses before completion, preparation or dispatch", async () => {
@@ -1695,6 +1744,7 @@ test.each([
       },
     ), {
       mutationCustodyMode: "local-http", localPreparationV2: true,
+      runRootOwnership: v2RunRootOwner,
       localMutationSyncFault: (step, path) => {
         if (step === failedStep && pathMatches(path))
           throw new Error("injected fsync failure");
@@ -1734,6 +1784,7 @@ test("a failed v2 dispatch fsync returns indeterminate without provider executio
   });
   const refused = await handleRunnerRequestWithDependencies(postRequest(), {
     mutationCustodyMode: "local-http", localPreparationV2: true,
+    runRootOwnership: v2RunRootOwner,
     localMutationSyncFault: (step, path) => {
       if (step === "directory" && path.endsWith(".dispatched"))
         throw new Error("injected dispatch fsync failure");
@@ -1858,10 +1909,15 @@ test("an unfinished v2 preparation cannot transfer to another runner process", a
     body: JSON.stringify({ runId, action: "apply", request, attemptId: crypto.randomUUID() }),
   }));
   expect(first.status).toBe(201);
+  await v2RunRootOwner.close();
+  try {
   const child = Bun.spawn([
     process.execPath,
     "-e",
     `import { handleRunnerRequestWithDependencies } from "./runner/entrypoint.ts";
+     import { acquireRunRootOwnership } from "./runner/lib/run_root_ownership.ts";
+     import { RUN_ROOT } from "./runner/lib/constants.ts";
+     const owner = await acquireRunRootOwnership(RUN_ROOT);
      const runId = ${JSON.stringify(runId)};
      const request = ${JSON.stringify(request)};
      const response = await handleRunnerRequestWithDependencies(
@@ -1869,13 +1925,20 @@ test("an unfinished v2 preparation cannot transfer to another runner process", a
          method: "PUT", headers: { "content-type": "application/json" },
          body: JSON.stringify({ runId, action: "apply", request, attemptId: crypto.randomUUID() }),
        }),
-       { mutationCustodyMode: "local-http", localPreparationV2: true },
+       { mutationCustodyMode: "local-http", localPreparationV2: true, runRootOwnership: owner },
      );
-     process.stdout.write(String(response.status));`,
-  ], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
+     process.stdout.write(String(response.status));
+     await owner.close();`,
+  ], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe",
+    env: { ...process.env, TAKOSUMI_OPENTOFU_RUN_ROOT: RUN_ROOT },
+  });
   const childStatus = await new Response(child.stdout).text();
-  expect(await child.exited).toBe(0);
+  const childError = await new Response(child.stderr).text();
+  expect(`${await child.exited}:${childError.slice(0, 300)}`).toBe("0:");
   expect(childStatus).toBe("409");
+  } finally {
+    v2RunRootOwner = await acquireRunRootOwnership(RUN_ROOT);
+  }
 });
 
 test("a v2 preparation excludes every same-run workspace writer and unrelated action", async () => {
@@ -2555,6 +2618,23 @@ function sourceSnapshot(archiveDigest: string): SourceSnapshot {
     fetchedByRunId: "sync_1",
     fetchedAt: "2026-07-08T00:00:00.000Z",
   };
+}
+}
+
+async function boundedChildOutput(stream: ReadableStream<Uint8Array>): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let output = "";
+  let bytes = 0;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) return output + decoder.decode();
+      bytes += chunk.value.byteLength;
+      if (bytes > 64 * 1024) throw new Error("private test child output exceeded bound");
+      output += decoder.decode(chunk.value, { stream: true });
+    }
+  } finally { reader.releaseLock(); }
 }
 
 async function sha256(bytes: Uint8Array): Promise<string> {

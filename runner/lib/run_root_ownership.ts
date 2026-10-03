@@ -1,4 +1,4 @@
-import { constants } from "node:fs";
+import { constants, fstatSync, lstatSync, realpathSync } from "node:fs";
 import { lstat, open, realpath, type FileHandle } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
@@ -26,6 +26,11 @@ export class RunRootOwnershipUnavailableError extends Error {
 
 interface OwnershipState {
   readonly lockHandle: FileHandle;
+  readonly canonicalRoot: string;
+  readonly rootDev: number;
+  readonly rootIno: number;
+  readonly lockDev: number;
+  readonly lockIno: number;
   closing: boolean;
   closed: boolean;
   activeWriters: number;
@@ -51,7 +56,8 @@ const ownershipStates = new WeakMap<object, OwnershipState>();
 export async function acquireRunRootOwnership(
   runRoot: string,
 ): Promise<RunRootOwnership> {
-  const lockHandle = await openLockFile(runRoot);
+  const { lockHandle, canonicalRoot, rootDev, rootIno, lockDev, lockIno } =
+    await openLockFile(runRoot);
   let acquired = false;
   try {
     const acquirer = Bun.spawn(
@@ -78,12 +84,52 @@ export async function acquireRunRootOwnership(
 
   const state: OwnershipState = {
     lockHandle,
+    canonicalRoot,
+    rootDev,
+    rootIno,
+    lockDev,
+    lockIno,
     closing: false,
     closed: false,
     activeWriters: 0,
   };
   const owner = createOwnershipHandle(state);
   return owner;
+}
+
+/** Reject a token for any other root, or a replaced root/lockfile inode. */
+export function assertRunRootOwnershipFor(
+  owner: RunRootOwnership,
+  runRoot: string,
+): void {
+  const state = ownershipStates.get(owner as object);
+  if (!state || state.closing || state.closed) {
+    throw new RunRootOwnershipUnavailableError();
+  }
+  try {
+    const absoluteRoot = resolve(runRoot);
+    const rootStat = lstatSync(absoluteRoot);
+    const canonicalRoot = realpathSync(absoluteRoot);
+    const lockStat = lstatSync(join(canonicalRoot, LOCK_FILE_NAME));
+    const heldLockStat = fstatSync(state.lockHandle.fd);
+    const uid = process.getuid?.();
+    if (
+      uid === undefined || !rootStat.isDirectory() || rootStat.uid !== uid ||
+      (rootStat.mode & 0o077) !== 0 || (rootStat.mode & 0o700) !== 0o700 ||
+      canonicalRoot !== state.canonicalRoot ||
+      rootStat.dev !== state.rootDev || rootStat.ino !== state.rootIno ||
+      !lockStat.isFile() || lockStat.uid !== uid || lockStat.nlink !== 1 ||
+      (lockStat.mode & 0o777) !== 0o600 ||
+      lockStat.dev !== state.lockDev || lockStat.ino !== state.lockIno ||
+      !heldLockStat.isFile() || heldLockStat.uid !== uid || heldLockStat.nlink !== 1 ||
+      (heldLockStat.mode & 0o777) !== 0o600 ||
+      heldLockStat.dev !== state.lockDev || heldLockStat.ino !== state.lockIno
+    ) {
+      throw new Error();
+    }
+  } catch {
+    throw new RunRootOwnershipUnavailableError();
+  }
 }
 
 /** Run one workspace writer while retaining the lifetime root owner. */
@@ -182,7 +228,14 @@ async function waitForLockAcquirer(
   throw new RunRootOwnershipUnavailableError();
 }
 
-async function openLockFile(runRoot: string): Promise<FileHandle> {
+async function openLockFile(runRoot: string): Promise<{
+  lockHandle: FileHandle;
+  canonicalRoot: string;
+  rootDev: number;
+  rootIno: number;
+  lockDev: number;
+  lockIno: number;
+}> {
   let handle: FileHandle | undefined;
   try {
     if (process.platform !== "linux" || process.getuid === undefined) {
@@ -217,7 +270,14 @@ async function openLockFile(runRoot: string): Promise<FileHandle> {
     ) {
       throw new Error();
     }
-    return handle;
+    return {
+      lockHandle: handle,
+      canonicalRoot,
+      rootDev: rootStat.dev,
+      rootIno: rootStat.ino,
+      lockDev: lockStat.dev,
+      lockIno: lockStat.ino,
+    };
   } catch {
     await handle?.close().catch(() => {});
     throw new RunRootOwnershipUnavailableError();
