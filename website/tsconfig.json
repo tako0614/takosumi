@@ -12,7 +12,7 @@
     "isolatedModules": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "types": ["vinxi/types/client"],
+    "types": ["vite/client", "node"],
     "paths": {
       "~/*": ["./src/*"]
     }

@@ -5,7 +5,7 @@
 # Cloudflare Pages serves the landing and docs from one Pages artifact. This
 # script:
 #
-#   1. Builds the Solid Start landing (`vinxi build`) → `.output/public/`
+#   1. Builds and prerenders the Solid landing with Vite → `.output/public/`
 #   2. Builds the VitePress docs (`takosumi/docs/`) → `.vitepress/dist/`
 #      and copies it onto `.output/public/docs/`
 # The merged `.output/public/` is the `pages_build_output_dir` declared
@@ -24,16 +24,16 @@ install_node_modules() {
   npm --loglevel=error ci --no-fund --no-audit
 }
 
-# 1. Landing build (Solid Start, static prerender).
-echo "[takosumi/website] build landing (vinxi build)"
+# 1. Landing build (Solid, static prerender).
+echo "[takosumi/website] build static landing (Vite + Solid prerender)"
 cd "${WEBSITE_DIR}"
 if [ ! -d node_modules ]; then
   install_node_modules
 fi
-./node_modules/.bin/vinxi build
+npm run build
 
 if [ ! -d "${OUTPUT_PUBLIC}" ]; then
-  echo "[takosumi/website] FATAL: ${OUTPUT_PUBLIC} not produced by vinxi build" >&2
+  echo "[takosumi/website] FATAL: ${OUTPUT_PUBLIC} not produced by the static landing build" >&2
   exit 1
 fi
 
