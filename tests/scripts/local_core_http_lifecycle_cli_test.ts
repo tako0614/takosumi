@@ -12,6 +12,10 @@ import {
   assertRunnerContainerRunsAsNonRoot,
   assertStateVersionArtifactContinuity,
 } from "../proofs/local-core-http-lifecycle.ts";
+import {
+  createDockerCommandFailure,
+  isExactDockerInspectNotFound,
+} from "../helpers/deploy-control/docker_command_failure.ts";
 
 const IMAGE = `sha256:${"a".repeat(64)}`;
 
@@ -125,6 +129,43 @@ test("owned Docker cleanup removes the inspected immutable ID and confirms absen
   await cleanupOwnedContainer({ name: "proof-name", ownerNonce: nonce, image: IMAGE, runDocker });
   expect(removals).toEqual([id]);
   expect(present).toBe(false);
+});
+
+test("Docker command failures classify only exact inspect absence without retaining stderr", () => {
+  const reference = "b".repeat(64);
+  const argv = ["docker", "inspect", "--format", "{}", reference];
+  const absent = createDockerCommandFailure(
+    argv,
+    1,
+    `Error: No such container: ${reference}\n`,
+  );
+  expect(isExactDockerInspectNotFound(absent, reference)).toBe(true);
+  expect(isExactDockerInspectNotFound(absent, "c".repeat(64))).toBe(false);
+  expect(absent.message).toBe("docker exited 1; stderr bytes=91");
+  expect(absent).not.toHaveProperty("stderr");
+
+  for (const [args, stderr, timedOut] of [
+    [argv, `Error: No such object: ${"c".repeat(64)}\n`, false],
+    [argv, "permission denied\n", false],
+    [argv, `Error: No such object: ${reference}\nextra diagnostic\n`, false],
+    [argv, `Error: No such object: ${reference}\n`, true],
+    [["docker", "ps", "--format", "{{.ID}}"], `Error: No such object: ${reference}\n`, false],
+  ] as const) {
+    const failure = createDockerCommandFailure(args, 1, stderr, { timedOut });
+    expect(isExactDockerInspectNotFound(failure, reference)).toBe(false);
+    expect(failure.message).not.toContain(reference);
+    expect(failure).not.toHaveProperty("stderr");
+  }
+
+  for (const termination of [{ killed: true }, { signal: "SIGTERM" }] as const) {
+    const failure = createDockerCommandFailure(
+      argv,
+      1,
+      `Error: No such container: ${reference}\n`,
+      termination,
+    );
+    expect(isExactDockerInspectNotFound(failure, reference)).toBe(false);
+  }
 });
 
 test("cleanup failure suppresses the passing marker", async () => {

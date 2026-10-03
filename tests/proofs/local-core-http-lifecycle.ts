@@ -10,6 +10,8 @@ import { strict as assert } from "node:assert";
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+
+import { createDockerCommandFailure } from "../helpers/deploy-control/docker_command_failure.ts";
 import { ACCOUNT_SESSION_COOKIE_NAME } from "../../accounts/service/src/account-session.ts";
 import { genericOpenTofuVariableContractDigest } from "../../accounts/service/src/control/generic-opentofu-variable-contract.ts";
 import { handleControlRoute } from "../../accounts/service/src/control-routes.ts";
@@ -420,7 +422,11 @@ async function command(
     stderr: "pipe",
   });
   activeChild = child;
-  const timeout = setTimeout(() => child.kill("SIGKILL"), options.timeoutMs ?? COMMAND_TIMEOUT_MS);
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    child.kill("SIGKILL");
+  }, options.timeoutMs ?? COMMAND_TIMEOUT_MS);
   try {
     const [stdout, stderr, exitCode] = await Promise.all([
       readCapped(child.stdout),
@@ -429,7 +435,7 @@ async function command(
     ]);
     if (exitCode !== 0) {
       // Docker and tar diagnostics can include paths or environment details.
-      throw new Error(`${argv[0]} exited ${exitCode}; stderr bytes=${stderr.length}`);
+      throw createDockerCommandFailure(argv, exitCode, stderr, { timedOut });
     }
     return stdout.trim();
   } finally {

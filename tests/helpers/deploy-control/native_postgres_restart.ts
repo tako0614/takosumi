@@ -7,6 +7,11 @@ import { join } from "node:path";
 import { Pool } from "pg";
 
 import {
+  createDockerCommandFailure,
+  isExactDockerInspectNotFound,
+} from "./docker_command_failure.ts";
+
+import {
   wrapPgResult,
   type PgResultLike,
 } from "../../../core/adapters/storage/pg_result.ts";
@@ -191,21 +196,6 @@ export async function runNativePostgresPhase<T>(
   }
 }
 
-class DockerCommandError extends Error {
-  readonly stderr: string;
-  readonly command: string;
-
-  constructor(command: string, stderr: string, cause?: unknown) {
-    const detail = (stderr || (cause instanceof Error ? cause.message : ""))
-      .trim()
-      .slice(0, 500);
-    super(`docker ${command} failed: ${detail}`, { cause });
-    this.name = "DockerCommandError";
-    this.command = command;
-    this.stderr = stderr;
-  }
-}
-
 function assertNativeOptIn(): void {
   if (process.env[OPT_IN_ENV] !== "1") {
     throw new Error(
@@ -223,21 +213,28 @@ async function runLocalDocker(args: readonly string[]): Promise<string> {
     });
     return result.stdout.trim();
   } catch (error) {
-    const failure = error as Error & { readonly stderr?: string };
-    throw new DockerCommandError(args[0] ?? "command", failure.stderr ?? "", error);
+    const failure = error as Error & {
+      readonly code?: unknown;
+      readonly killed?: boolean;
+      readonly signal?: string | null;
+      readonly stderr?: string;
+    };
+    const exitCode = typeof failure.code === "number" ? failure.code : -1;
+    throw createDockerCommandFailure(
+      ["docker", ...args],
+      exitCode,
+      failure.stderr ?? "",
+      {
+        timedOut: failure.code === "ETIMEDOUT",
+        killed: failure.killed,
+        signal: failure.signal,
+      },
+    );
   }
 }
 
 function isExactNotFound(error: unknown, reference: string): boolean {
-  const detail = error instanceof Error
-    ? String((error as Error & { readonly stderr?: string }).stderr ?? "")
-    : "";
-  const exactReference = reference.toLowerCase();
-  return detail.trim().split("\n").some((line) => {
-    const normalized = line.trim().toLowerCase();
-    return normalized.endsWith(`no such object: ${exactReference}`) ||
-      normalized.endsWith(`no such container: ${exactReference}`);
-  });
+  return isExactDockerInspectNotFound(error, reference);
 }
 
 async function inspectContainer(

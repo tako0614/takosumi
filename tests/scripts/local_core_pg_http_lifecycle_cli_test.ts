@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmod, mkdtemp, rm } from "node:fs/promises";
+import { access, chmod, mkdtemp, rm } from "node:fs/promises";
 
 import {
   assertNoAdditionalRunnerDispatches,
@@ -16,6 +16,7 @@ import {
   NativePostgresPhaseFailure,
   runNativePostgresPhase,
 } from "../helpers/deploy-control/native_postgres_restart.ts";
+import { createDockerCommandFailure } from "../helpers/deploy-control/docker_command_failure.ts";
 import {
   formatNativePostgresProofFailure,
   formatCoreHttpLifecycleFailure,
@@ -533,6 +534,105 @@ test("fixture diagnostics preserve setup and cleanup locations without error det
   );
   expect(spoofed).toContain("source-location-unavailable");
   expect(spoofed).not.toContain("987654");
+});
+
+test("the HTTP Docker adapter proves exact post-remove ID and name absence", async () => {
+  const dataRoot = await mkdtemp("/dev/shm/takosumi-pg-inspect-adapter-");
+  await chmod(dataRoot, 0o700);
+  const containerId = "b".repeat(64);
+  let containerName = "";
+  let dataDirectory = "";
+  let publishedPort = "";
+  let present = false;
+  let running = false;
+  const labels: Record<string, string> = {};
+  const inspectReferences: string[] = [];
+  const runDocker = async (args: readonly string[]): Promise<string> => {
+    if (args[0] === "image") {
+      return "sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229";
+    }
+    if (args[0] === "version") return "29.1.3";
+    if (args[0] === "run") {
+      containerName = args[args.indexOf("--name") + 1]!;
+      for (let index = 0; index < args.length; index += 1) {
+        if (args[index] === "--label") {
+          const [key, ...valueParts] = args[index + 1]!.split("=");
+          labels[key!] = valueParts.join("=");
+        }
+      }
+      dataDirectory = /source=([^,]+)/u.exec(args[args.indexOf("--mount") + 1]!)![1]!;
+      publishedPort = /^127\.0\.0\.1:([0-9]+):5432$/u.exec(
+        args[args.indexOf("--publish") + 1]!,
+      )![1]!;
+      present = true;
+      running = true;
+      return containerId;
+    }
+    if (args[0] === "inspect") {
+      const reference = args.at(-1)!;
+      inspectReferences.push(reference);
+      if (!present) {
+        // This is the same safe failure factory used by the real Docker command adapter.
+        throw createDockerCommandFailure(
+          ["docker", ...args],
+          1,
+          `Error: No such ${reference === containerId ? "container" : "object"}: ${reference}\n`,
+        );
+      }
+      return JSON.stringify({
+        Id: containerId,
+        Name: `/${containerName}`,
+        Config: {
+          Image: "postgres@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229",
+          Labels: labels,
+        },
+        State: {
+          Running: running,
+          Status: running ? "running" : "exited",
+          Pid: running ? 42 : 0,
+          Health: { Status: "healthy" },
+        },
+        NetworkSettings: {
+          Ports: { "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: publishedPort }] },
+        },
+        Mounts: [{
+          Type: "bind",
+          Source: dataDirectory,
+          Destination: "/var/lib/postgresql/data",
+          RW: true,
+        }],
+      });
+    }
+    if (args[0] === "exec") return args.at(-1) === "/proc/1/comm" ? "postgres" : "42";
+    if (args[0] === "stop") {
+      running = false;
+      return containerId;
+    }
+    if (args[0] === "rm") {
+      present = false;
+      return containerId;
+    }
+    throw new Error("unexpected fake Docker operation");
+  };
+
+  try {
+    const fixture = await createNativePostgresRestartContainer({
+      runDocker,
+      dataRoot,
+      verifyMappedTcp: async () => "2026-10-03 00:00:00+00",
+    });
+    let closeFailure: unknown;
+    try {
+      await fixture.close();
+    } catch (error) {
+      closeFailure = error;
+    }
+    expect(closeFailure).toBeUndefined();
+    expect(inspectReferences.slice(-2)).toEqual([containerId, containerName]);
+    await expect(access(fixture.dataDirectory)).rejects.toThrow();
+  } finally {
+    await rm(dataRoot, { recursive: true, force: true });
+  }
 });
 
 test("injected Docker setup and recovery failures retain only known phases and safe classes", async () => {

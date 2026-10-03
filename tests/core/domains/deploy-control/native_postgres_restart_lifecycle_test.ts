@@ -28,6 +28,7 @@ import {
   type NativePostgresRestartOptions,
   runNativePostgresPhase,
 } from "../../../helpers/deploy-control/native_postgres_restart.ts";
+import { createDockerCommandFailure } from "../../../helpers/deploy-control/docker_command_failure.ts";
 
 const NATIVE_POSTGRES_OPT_IN =
   process.env.TAKOSUMI_TEST_NATIVE_POSTGRES_RESTART === "1";
@@ -42,6 +43,12 @@ function fakeDocker(options: {
   readonly removeFailureAfterRemoval?: Error;
   readonly lowercaseNotFound?: boolean;
   readonly mismatchedNotFoundReference?: boolean;
+  readonly malformedNotFound?: boolean;
+  readonly permissionNotFound?: boolean;
+  readonly timeoutNotFound?: boolean;
+  readonly killedNotFound?: boolean;
+  readonly signalNotFound?: boolean;
+  readonly legacyMixedStderr?: boolean;
   readonly oversizedUnusedInspectionFields?: boolean;
 } = {}): { readonly run: DockerCommand; readonly commands: string[][]; readonly exists: () => boolean } {
   const commands: string[][] = [];
@@ -132,11 +139,28 @@ function fakeDocker(options: {
         const missingReference = options.mismatchedNotFoundReference
           ? `${reference}-unrelated`
           : reference;
-        throw Object.assign(new Error(`missing ${reference}`), {
-          stderr: options.lowercaseNotFound
-            ? `error: no such object: ${missingReference}`
-            : `Error: No such object: ${missingReference}`,
-        });
+        const stderr = options.permissionNotFound
+          ? `permission denied while inspecting ${reference}`
+          : options.malformedNotFound
+            ? `Error: permission denied\nError: No such object: ${missingReference}`
+            : options.lowercaseNotFound
+              ? `error: no such object: ${missingReference}`
+              : `Error: No such object: ${missingReference}`;
+        if (options.legacyMixedStderr) {
+          throw Object.assign(new Error("private adapter failure"), {
+            stderr: `Error: permission denied\nError: No such object: ${reference}`,
+          });
+        }
+        throw createDockerCommandFailure(
+          ["docker", ...args],
+          1,
+          stderr,
+          {
+            timedOut: options.timeoutNotFound,
+            killed: options.killedNotFound,
+            signal: options.signalNotFound ? "SIGTERM" : undefined,
+          },
+        );
       }
       const format = args[args.indexOf("--format") + 1];
       const output = format === "{{json .}}"
@@ -506,6 +530,45 @@ test("lowercase not-found for a different reference does not prove absence", asy
       "postgres.env",
     ]);
   });
+});
+
+test("permission, mixed diagnostics, and inspect timeout do not prove exact absence", async () => {
+  for (const option of [
+    { permissionNotFound: true },
+    { malformedNotFound: true },
+    { timeoutNotFound: true },
+    { killedNotFound: true },
+    { signalNotFound: true },
+    { legacyMixedStderr: true },
+  ] as const) {
+    await withTemporaryDataRoot(async (dataRoot) => {
+      const fake = fakeDocker({
+        runFailure: Object.assign(new Error("create acknowledgement timed out"), {
+          code: "ETIMEDOUT",
+        }),
+        createContainerBeforeRunFailure: false,
+        ...option,
+      });
+      const error = await createNativePostgresRestartContainer({
+        dataRoot,
+        runDocker: fake.run,
+        verifyMappedTcp: async () => "2026-10-02T00:00:00.000Z",
+      }).then(() => undefined, (failure: unknown) => failure);
+
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as AggregateError).message).toMatch(
+        /custody is retained; operator recovery path/u,
+      );
+      expect(fake.exists()).toBe(false);
+      expect(fake.commands.some((args) => args[0] === "rm")).toBe(false);
+      const [runRootName] = await readdir(dataRoot);
+      expect(runRootName).toBeString();
+      expect((await readdir(join(dataRoot, runRootName!))).sort()).toEqual([
+        "pgdata",
+        "postgres.env",
+      ]);
+    });
+  }
 });
 
 test("pool close failure still attempts exact container cleanup and preserves the error", async () => {
