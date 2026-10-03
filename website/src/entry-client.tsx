@@ -1,8 +1,10 @@
-// @refresh reload
-import { mount, StartClient } from "@solidjs/start/client";
+import { hydrate, render } from "solid-js/web";
+import App from "./app";
 
-function start() {
-  return mount(() => <StartClient />, document.getElementById("app")!);
+const root = document.getElementById("app")!;
+
+if (root.dataset.prerendered === "true") {
+  hydrate(() => <App />, root);
+} else {
+  render(() => <App />, root);
 }
-
-export default start();

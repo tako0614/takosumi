@@ -4,7 +4,7 @@ Source for the `takosumi.com` Cloudflare Pages property.
 
 The build is a single Pages artifact:
 
-1. Solid Start landing from `website/`.
+1. Solid landing prerendered by Vite from `website/`.
 2. VitePress docs from `docs/`, served under `/docs/`.
 
 ## Build
@@ -12,6 +12,8 @@ The build is a single Pages artifact:
 ```bash
 bash website/build.sh
 ```
+
+For the landing alone, run `npm run build` from `website/`.
 
 ## Deploy
 
