@@ -278,6 +278,72 @@ async function withTemporaryDataRoot<T>(
   }
 }
 
+test("native PostgreSQL phase progress is opt-in, safe, and non-interfering", async () => {
+  const optInName = "TAKOSUMI_TEST_NATIVE_POSTGRES_RESTART";
+  const previousOptIn = process.env[optInName];
+  const previousInfo = console.info;
+  const records: string[] = [];
+  const phaseFailure = new Error("phase failure canary");
+  try {
+    delete process.env[optInName];
+    console.info = (...values: unknown[]) => {
+      records.push(
+        values.length === 1 && typeof values[0] === "string"
+          ? values[0]
+          : "<unexpected-log-shape>",
+      );
+    };
+
+    expect(await runNativePostgresPhase("core.apply", () => "opt-out")).toBe(
+      "opt-out",
+    );
+    expect(records).toEqual([]);
+
+    process.env[optInName] = "1";
+    expect(await runNativePostgresPhase("core.apply", () => "ok")).toBe("ok");
+    await expect(
+      runNativePostgresPhase("core.apply", () => Promise.reject(phaseFailure)),
+    ).rejects.toMatchObject({
+      phase: "core.apply",
+      message: "native PostgreSQL phase failed",
+      cause: phaseFailure,
+    });
+    expect(await runNativePostgresPhase("unlisted.phase", () => "ignored")).toBe(
+      "ignored",
+    );
+
+    expect(records).toHaveLength(4);
+    expect(records[0]).toBe(
+      "[native-postgres-phase] core.apply start elapsed_ms=0",
+    );
+    expect(records[1]).toMatch(
+      /^\[native-postgres-phase\] core\.apply ok elapsed_ms=\d+$/u,
+    );
+    expect(records[2]).toBe(
+      "[native-postgres-phase] core.apply start elapsed_ms=0",
+    );
+    expect(records[3]).toMatch(
+      /^\[native-postgres-phase\] core\.apply failed elapsed_ms=\d+$/u,
+    );
+    expect(records.join("\n")).not.toContain("phase failure canary");
+    expect(records.join("\n")).not.toContain("unlisted.phase");
+
+    console.info = () => {
+      throw new Error("logger failure canary");
+    };
+    expect(await runNativePostgresPhase("core.apply", () => "logger-safe")).toBe(
+      "logger-safe",
+    );
+    await expect(
+      runNativePostgresPhase("core.apply", () => Promise.reject(phaseFailure)),
+    ).rejects.toMatchObject({ cause: phaseFailure });
+  } finally {
+    console.info = previousInfo;
+    if (previousOptIn === undefined) delete process.env[optInName];
+    else process.env[optInName] = previousOptIn;
+  }
+});
+
 test("lost Docker create acknowledgement resolves exact run ownership before cleanup", async () => {
   await withTemporaryDataRoot(async (dataRoot) => {
     const runFailure = Object.assign(new Error("create acknowledgement timed out"), {

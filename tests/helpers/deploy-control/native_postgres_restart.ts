@@ -181,14 +181,50 @@ export class NativePostgresPhaseFailure extends Error {
   }
 }
 
+function emitNativePostgresPhaseProgress(
+  phase: typeof NATIVE_POSTGRES_PHASES[number],
+  status: "start" | "ok" | "failed",
+  elapsedMs: number,
+): void {
+  try {
+    console.info(
+      `[native-postgres-phase] ${phase} ${status} elapsed_ms=${Math.max(0, Math.round(elapsedMs))}`,
+    );
+  } catch {
+    // Optional diagnostics must never change fixture or cleanup behavior.
+  }
+}
+
 /** Keeps test lifecycle phase boundaries explicit without logging fixture details. */
 export async function runNativePostgresPhase<T>(
   phase: string,
   operation: () => T | Promise<T>,
 ): Promise<T> {
+  const knownPhase = isNativePostgresPhase(phase) ? phase : undefined;
+  const reportProgress =
+    knownPhase !== undefined && process.env[OPT_IN_ENV] === "1";
+  const startedAt = reportProgress ? performance.now() : 0;
+  if (reportProgress) {
+    emitNativePostgresPhaseProgress(knownPhase, "start", 0);
+  }
   try {
-    return await operation();
+    const result = await operation();
+    if (reportProgress) {
+      emitNativePostgresPhaseProgress(
+        knownPhase,
+        "ok",
+        performance.now() - startedAt,
+      );
+    }
+    return result;
   } catch (cause) {
+    if (reportProgress) {
+      emitNativePostgresPhaseProgress(
+        knownPhase,
+        "failed",
+        performance.now() - startedAt,
+      );
+    }
     if (cause instanceof NativePostgresPhaseFailure || !isNativePostgresPhase(phase)) {
       throw cause;
     }
