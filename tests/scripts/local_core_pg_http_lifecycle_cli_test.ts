@@ -12,6 +12,8 @@ import {
 import { parsePgHttpProofArgs } from "../proofs/local-core-pg-http-lifecycle.ts";
 import {
   createNativePostgresRestartContainer,
+  NativePostgresPhaseFailure,
+  runNativePostgresPhase,
 } from "../helpers/deploy-control/native_postgres_restart.ts";
 import {
   formatNativePostgresProofFailure,
@@ -381,4 +383,92 @@ test("fixture diagnostics preserve setup and cleanup locations without error det
   );
   expect(spoofed).toContain("source-location-unavailable");
   expect(spoofed).not.toContain("987654");
+});
+
+test("injected Docker setup and recovery failures retain only known phases and safe classes", async () => {
+  const dataRoot = await mkdtemp("/dev/shm/takosumi-pg-phase-diagnostic-");
+  await chmod(dataRoot, 0o700);
+  const secretMarker = "postgres://phase-secret:credential@private.invalid/db";
+  let containerName = "";
+  const runDocker = async (args: readonly string[]): Promise<string> => {
+    if (args[0] === "image") {
+      return "sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229";
+    }
+    if (args[0] === "version") return "29.1.3";
+    if (args[0] === "run") {
+      containerName = args[args.indexOf("--name") + 1]!;
+      throw Object.assign(new Error(`private create detail ${secretMarker}`), {
+        stderr: `private create stderr ${secretMarker}`,
+      });
+    }
+    if (args[0] === "inspect") {
+      const reference = args.at(-1)!;
+      throw Object.assign(new Error(`private inspect detail ${secretMarker}`), {
+        stderr: `Error: No such container: ${reference}`,
+      });
+    }
+    throw new Error(`unexpected fake Docker operation ${secretMarker}`);
+  };
+
+  let failure: unknown;
+  try {
+    await runWithNativePostgresCleanup(
+      () => runNativePostgresPhase(
+        "fixture.create",
+        () => createNativePostgresRestartContainer({ runDocker, dataRoot }),
+      ),
+      () => runNativePostgresPhase("cleanup.container-close", async () => {
+        throw new Error(`private outer cleanup detail ${secretMarker}`);
+      }),
+    );
+  } catch (error) {
+    failure = error;
+  } finally {
+    await rm(dataRoot, { recursive: true, force: false });
+  }
+
+  expect(failure).toBeInstanceOf(AggregateError);
+  const [setupFailure] = (failure as AggregateError).errors;
+  expect(setupFailure).toBeInstanceOf(NativePostgresPhaseFailure);
+  expect(setupFailure.phase).toBe("fixture.create");
+  expect(setupFailure.cause).toBeInstanceOf(AggregateError);
+  const [createPhaseFailure] = (setupFailure.cause as AggregateError).errors;
+  expect(createPhaseFailure).toBeInstanceOf(NativePostgresPhaseFailure);
+  expect(createPhaseFailure.message).toBe("native PostgreSQL phase failed");
+  expect(createPhaseFailure.toString()).not.toContain(secretMarker);
+  expect(createPhaseFailure.cause).toBeInstanceOf(Error);
+  expect((createPhaseFailure.cause as Error).message).toContain(secretMarker);
+  const setupSummary = formatNativePostgresProofFailure(
+    "postgres.fixture.create",
+    setupFailure,
+  );
+  expect(setupSummary).toContain("setup-phase=container.create setup=Error");
+  expect(setupSummary).toContain("cleanup-phase=container.setup.resolve-cleanup cleanup=Error");
+
+  const summary = formatNativePostgresLifecycleFailure(failure);
+  expect(summary).toContain("failure=primary-and-cleanup");
+  expect(summary).toContain("phase=fixture.create");
+  expect(summary).toContain("cleanup-operation-phase=cleanup.container-close");
+  expect(summary).toContain("cleanup-phase=postgres.cleanup cleanup=Error");
+  expect(summary).not.toContain(secretMarker);
+  expect(summary).not.toContain(dataRoot);
+  expect(summary).not.toContain(containerName);
+
+  const unknownPhaseCause = new Error(secretMarker);
+  let unknownPhaseFailure: unknown;
+  try {
+    await runNativePostgresPhase("unrecognized.secret-phase", async () => {
+      throw unknownPhaseCause;
+    });
+  } catch (error) {
+    unknownPhaseFailure = error;
+  }
+  const unknownSummary = formatNativePostgresProofFailure(
+    "unrecognized.secret-phase",
+    new NativePostgresPhaseFailure("unrecognized.secret-phase", unknownPhaseFailure),
+  );
+  expect(unknownPhaseFailure).toBe(unknownPhaseCause);
+  expect(unknownSummary).toContain("phase=postgres.lifecycle");
+  expect(unknownSummary).not.toContain("unrecognized.secret-phase");
+  expect(unknownSummary).not.toContain(secretMarker);
 });

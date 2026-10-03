@@ -250,10 +250,11 @@ async function withTemporaryDataRoot<T>(
 
 test("lost Docker create acknowledgement resolves exact run ownership before cleanup", async () => {
   await withTemporaryDataRoot(async (dataRoot) => {
+    const runFailure = Object.assign(new Error("create acknowledgement timed out"), {
+      code: "ETIMEDOUT",
+    });
     const fake = fakeDocker({
-      runFailure: Object.assign(new Error("create acknowledgement timed out"), {
-        code: "ETIMEDOUT",
-      }),
+      runFailure,
     });
     await expect(
       createNativePostgresRestartContainer({
@@ -261,7 +262,11 @@ test("lost Docker create acknowledgement resolves exact run ownership before cle
         runDocker: fake.run,
         verifyMappedTcp: async () => "2026-10-02T00:00:00.000Z",
       }),
-    ).rejects.toThrow(/create acknowledgement timed out/u);
+    ).rejects.toMatchObject({
+      phase: "container.create",
+      message: "native PostgreSQL phase failed",
+      cause: runFailure,
+    });
     expect(fake.exists()).toBe(false);
     expect(fake.commands.some((args) => args[0] === "rm")).toBe(true);
     const removeIndex = fake.commands.findIndex((args) => args[0] === "rm");
@@ -378,7 +383,9 @@ test("loopback bind failure does not retry create or discard unresolved PGDATA c
       /custody is retained; operator recovery path/u,
     );
     expect((error as AggregateError).errors[1]).toMatchObject({
-      message: expect.stringContaining("no-effect is not proven"),
+      phase: "container.setup.resolve-cleanup",
+      message: "native PostgreSQL phase failed",
+      cause: { message: expect.stringContaining("no-effect is not proven") },
     });
     expect(fake.commands.filter((args) => args[0] === "run")).toHaveLength(1);
     expect(fake.exists()).toBe(false);
@@ -503,11 +510,12 @@ test("lowercase not-found for a different reference does not prove absence", asy
 
 test("pool close failure still attempts exact container cleanup and preserves the error", async () => {
   const events: string[] = [];
+  const poolFailure = new Error("pool close failed");
   const result = await cleanupNativePostgresResources(
     [
       async () => {
         events.push("pool-failed");
-        throw new Error("pool close failed");
+        throw poolFailure;
       },
       async () => {
         events.push("pool-closed");
@@ -519,7 +527,11 @@ test("pool close failure still attempts exact container cleanup and preserves th
   ).then(() => undefined, (error: unknown) => error);
   expect(result).toBeInstanceOf(AggregateError);
   expect((result as AggregateError).errors).toContainEqual(
-    expect.objectContaining({ message: "pool close failed" }),
+    expect.objectContaining({
+      phase: "cleanup.pool-close",
+      message: "native PostgreSQL phase failed",
+      cause: poolFailure,
+    }),
   );
   expect(events).toEqual([
     "pool-failed",

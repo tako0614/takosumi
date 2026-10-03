@@ -104,12 +104,91 @@ export interface NativePostgresSqlClient {
   close(): Promise<void>;
 }
 
+export const NATIVE_POSTGRES_PHASES = [
+  "cleanup.all",
+  "cleanup.container-close",
+  "cleanup.container.readback-after-stop",
+  "cleanup.container.readback-before-remove",
+  "cleanup.container.readback-before-stop",
+  "cleanup.container.remove",
+  "cleanup.container.stop",
+  "cleanup.pool-close",
+  "cleanup.readback.container-id",
+  "cleanup.readback.container-name",
+  "cleanup.run-root.remove",
+  "container.cleanup",
+  "container.create",
+  "container.create.readback",
+  "container.preflight.engine",
+  "container.preflight.image",
+  "container.setup.cleanup",
+  "container.setup.resolve-cleanup",
+  "container.setup.root-cleanup",
+  "container.startup.health",
+  "core.apply",
+  "core.bootstrap.first",
+  "core.bootstrap.restarted",
+  "core.lineage.after-restart",
+  "core.lineage.before-restart",
+  "core.plan",
+  "core.replay",
+  "daemon.before.readback",
+  "daemon.postmaster.after.host-pid",
+  "daemon.postmaster.before.host-pid",
+  "daemon.postmaster.before.start-time",
+  "daemon.postmaster.start-time.pool-close",
+  "daemon.postmaster.start-time.query",
+  "daemon.restart",
+  "daemon.restart-lifecycle",
+  "daemon.start.command",
+  "daemon.start.health",
+  "daemon.start.port-readback",
+  "daemon.stop.command",
+  "daemon.stop.readback",
+  "daemon.unavailable.pool-close",
+  "daemon.unavailable.probe",
+  "daemon.unavailable.query",
+  "fixture.create",
+  "migration.apply-pending",
+  "migration.verify-after-restart",
+  "migration.verify-current",
+  "pool.first.close",
+  "pool.first.open",
+  "pool.fresh.open",
+  "pool.restarted.open",
+  "postgres.fixture.create",
+  "seed.fixture",
+] as const;
+
+const nativePostgresPhaseSet: ReadonlySet<string> = new Set(NATIVE_POSTGRES_PHASES);
+
+export function isNativePostgresPhase(value: string): value is typeof NATIVE_POSTGRES_PHASES[number] {
+  return nativePostgresPhaseSet.has(value);
+}
+
+export class NativePostgresPhaseFailure extends Error {
+  constructor(
+    readonly phase: string,
+    cause: unknown,
+  ) {
+    super("native PostgreSQL phase failed", { cause });
+    this.name = "NativePostgresPhaseFailure";
+  }
+}
+
 /** Keeps test lifecycle phase boundaries explicit without logging fixture details. */
 export async function runNativePostgresPhase<T>(
-  _phase: string,
+  phase: string,
   operation: () => T | Promise<T>,
 ): Promise<T> {
-  return await operation();
+  try {
+    return await operation();
+  } catch (cause) {
+    if (cause instanceof NativePostgresPhaseFailure || !isNativePostgresPhase(phase)) {
+      throw cause;
+    }
+    throw new NativePostgresPhaseFailure(phase, cause);
+  }
 }
 
 class DockerCommandError extends Error {

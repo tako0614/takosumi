@@ -16,6 +16,8 @@ import { FIXTURE_EXECUTION_EVIDENCE_AUTHORITY } from "../helpers/deploy-control/
 import {
   cleanupNativePostgresResources,
   createNativePostgresRestartContainer,
+  isNativePostgresPhase,
+  NativePostgresPhaseFailure,
   openNativePostgresSqlClient,
   runNativePostgresPhase,
   type NativePostgresRestartEvidence,
@@ -157,25 +159,62 @@ function safeSourceLocation(error: unknown): string {
   return "source-location-unavailable";
 }
 
+function nativePhaseFailures(error: unknown): readonly NativePostgresPhaseFailure[] {
+  const candidates = error instanceof AggregateError
+    ? error.errors.slice(0, 4)
+    : [error];
+  return candidates.filter((candidate): candidate is NativePostgresPhaseFailure =>
+    candidate instanceof NativePostgresPhaseFailure && isNativePostgresPhase(candidate.phase)
+  );
+}
+
+function safeFailureClassAndLocation(error: unknown): string {
+  if (error instanceof NativePostgresPhaseFailure && isNativePostgresPhase(error.phase)) {
+    return `${safeErrorClass(error.cause)}@${safeSourceLocation(error.cause)}`;
+  }
+  return `${safeErrorClass(error)}@${safeSourceLocation(error)}`;
+}
+
+function safePhaseFields(label: string, error: unknown): readonly string[] {
+  const phases = nativePhaseFailures(error).map(({ phase }) => phase);
+  if (phases.length === 1) return [`${label}-phase=${phases[0]}`];
+  if (phases.length > 1) return [`${label}-phases=${phases.join(",")}`];
+  return [];
+}
+
 /** Safe diagnostic: fixed phase, error classes, and allowlisted source locations only. */
 export function formatNativePostgresProofFailure(
-  phase: NativePostgresProofPhase,
+  phase: string,
   error: unknown,
 ): string {
+  const safePhase = isNativePostgresPhase(phase) ? phase : "postgres.lifecycle";
+  const setupFailure = error instanceof NativePostgresPhaseFailure && error.phase === "fixture.create"
+    ? error.cause
+    : error;
   if (
-    error instanceof AggregateError &&
-    error.errors.length === 2 &&
-    error.message.startsWith("native PostgreSQL setup failed; custody is retained;")
+    setupFailure instanceof AggregateError &&
+    setupFailure.errors.length === 2 &&
+    setupFailure.errors.some((candidate) =>
+      nativePhaseFailures(candidate).some(({ phase: candidatePhase }) =>
+        candidatePhase.startsWith("container.setup.")
+      )
+    )
   ) {
-    const [setupError, cleanupError] = error.errors;
+    const [setupError, cleanupError] = setupFailure.errors;
     return [
-      `phase=${phase}`,
+      `phase=${safePhase}`,
       "failure=setup-and-cleanup",
-      `setup=${safeErrorClass(setupError)}@${safeSourceLocation(setupError)}`,
-      `cleanup=${safeErrorClass(cleanupError)}@${safeSourceLocation(cleanupError)}`,
+      ...safePhaseFields("setup", setupError),
+      `setup=${safeFailureClassAndLocation(setupError)}`,
+      ...safePhaseFields("cleanup", cleanupError),
+      `cleanup=${safeFailureClassAndLocation(cleanupError)}`,
     ].join(" ");
   }
-  return `phase=${phase} failure=${safeErrorClass(error)}@${safeSourceLocation(error)}`;
+  return [
+    `phase=${safePhase}`,
+    ...safePhaseFields("failure", error),
+    `failure=${safeFailureClassAndLocation(error)}`,
+  ].join(" ");
 }
 
 /** Reports the lifecycle failure and cleanup failure independently, without messages. */
@@ -185,15 +224,28 @@ export function formatNativePostgresLifecycleFailure(error: unknown): string {
       `phase=${error.cleanupPhase}`,
       "failure=primary-and-outer-cleanup",
       `primary-diagnostic=[${formatNativePostgresPrimaryFailure(error.errors[0])}]`,
-      `cleanup-phase=${error.cleanupPhase} cleanup=${safeErrorClass(error.errors[1])}@${safeSourceLocation(error.errors[1])}`,
+      ...safePhaseFields("cleanup-operation", error.errors[1]),
+      `cleanup-phase=${error.cleanupPhase} cleanup=${safeFailureClassAndLocation(error.errors[1])}`,
     ].join(" ");
   }
   if (!(error instanceof NativePostgresLifecycleCleanupFailure)) {
-    return `phase=postgres.lifecycle failure=${safeErrorClass(error)}@${safeSourceLocation(error)}`;
+    const phase = error instanceof NativePostgresPhaseFailure && isNativePostgresPhase(error.phase)
+      ? error.phase
+      : "postgres.lifecycle";
+    return [
+      `phase=${phase}`,
+      ...safePhaseFields("failure", error),
+      `failure=${safeFailureClassAndLocation(error)}`,
+    ].join(" ");
   }
 
   if (!error.primaryFailurePresent) {
-    return `phase=postgres.cleanup failure=cleanup-only cleanup=${safeErrorClass(error.cleanupFailure)}@${safeSourceLocation(error.cleanupFailure)}`;
+    return [
+      "phase=postgres.cleanup",
+      "failure=cleanup-only",
+      ...safePhaseFields("cleanup-operation", error.cleanupFailure),
+      `cleanup=${safeFailureClassAndLocation(error.cleanupFailure)}`,
+    ].join(" ");
   }
 
   const primary = error.primaryFailure;
@@ -204,24 +256,39 @@ export function formatNativePostgresLifecycleFailure(error: unknown): string {
     return [
       "phase=core.http-lifecycle",
       "failure=primary-and-cleanup",
-      `primary=${safeErrorClass(primary.cause)}@${safeSourceLocation(primary.cause)}`,
+      ...safePhaseFields("primary", primary.cause),
+      `primary=${safeFailureClassAndLocation(primary.cause)}`,
       context,
-      `cleanup-phase=postgres.cleanup cleanup=${safeErrorClass(error.cleanupFailure)}@${safeSourceLocation(error.cleanupFailure)}`,
+      ...safePhaseFields("cleanup-operation", error.cleanupFailure),
+      `cleanup-phase=postgres.cleanup cleanup=${safeFailureClassAndLocation(error.cleanupFailure)}`,
     ].join(" ");
   }
   if (primary instanceof NativePostgresProofPhaseFailure) {
     return [
       `phase=${primary.phase}`,
       "failure=primary-and-cleanup",
-      `primary=${safeErrorClass(primary.cause)}@${safeSourceLocation(primary.cause)}`,
-      `cleanup-phase=postgres.cleanup cleanup=${safeErrorClass(error.cleanupFailure)}@${safeSourceLocation(error.cleanupFailure)}`,
+      ...safePhaseFields("primary", primary.cause),
+      `primary=${safeFailureClassAndLocation(primary.cause)}`,
+      ...safePhaseFields("cleanup-operation", error.cleanupFailure),
+      `cleanup-phase=postgres.cleanup cleanup=${safeFailureClassAndLocation(error.cleanupFailure)}`,
+    ].join(" ");
+  }
+  if (primary instanceof NativePostgresPhaseFailure) {
+    return [
+      `phase=${isNativePostgresPhase(primary.phase) ? primary.phase : "postgres.lifecycle"}`,
+      "failure=primary-and-cleanup",
+      `primary=${safeFailureClassAndLocation(primary)}`,
+      ...safePhaseFields("cleanup-operation", error.cleanupFailure),
+      `cleanup-phase=postgres.cleanup cleanup=${safeFailureClassAndLocation(error.cleanupFailure)}`,
     ].join(" ");
   }
   return [
     "phase=postgres.lifecycle",
     "failure=primary-and-cleanup",
-    `primary=${safeErrorClass(primary)}@${safeSourceLocation(primary)}`,
-    `cleanup-phase=postgres.cleanup cleanup=${safeErrorClass(error.cleanupFailure)}@${safeSourceLocation(error.cleanupFailure)}`,
+    ...safePhaseFields("primary", primary),
+    `primary=${safeFailureClassAndLocation(primary)}`,
+    ...safePhaseFields("cleanup-operation", error.cleanupFailure),
+    `cleanup-phase=postgres.cleanup cleanup=${safeFailureClassAndLocation(error.cleanupFailure)}`,
   ].join(" ");
 }
 
@@ -232,13 +299,16 @@ function formatNativePostgresPrimaryFailure(error: unknown): string {
   if (error instanceof NativePostgresProofPhaseFailure) {
     return formatNativePostgresProofFailure(error.phase, error.cause);
   }
+  if (error instanceof NativePostgresPhaseFailure) {
+    return formatNativePostgresProofFailure(error.phase, error.cause);
+  }
   if (
     error instanceof NativePostgresLifecycleCleanupFailure ||
     error instanceof LocalCoreHttpCleanupFailure
   ) {
     return formatNativePostgresLifecycleFailure(error);
   }
-  return `phase=postgres.lifecycle failure=${safeErrorClass(error)}@${safeSourceLocation(error)}`;
+  return `phase=postgres.lifecycle failure=${safeFailureClassAndLocation(error)}`;
 }
 
 /** Emits the Core proof failure and separately labels runner HTTP history as context. */
@@ -253,7 +323,8 @@ export function formatCoreHttpLifecycleFailure(
     `runner-http-last-attempted=${label(trace.attempted)}`,
     `runner-http-last-completed=${label(trace.completed)}`,
     `runner-http-last-observed-failure=${label(trace.failed)}`,
-    `failure=${safeErrorClass(error)}@${safeSourceLocation(error)}`,
+    ...safePhaseFields("failure", error),
+    `failure=${safeFailureClassAndLocation(error)}`,
   ].join(" ");
 }
 
@@ -440,6 +511,13 @@ async function main(): Promise<void> {
     );
   } catch (error) {
     if (error instanceof NativePostgresProofPhaseFailure) {
+      console.error(
+        `local Core PostgreSQL HTTP proof failed: ${formatNativePostgresProofFailure(error.phase, error.cause)}`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+    if (error instanceof NativePostgresPhaseFailure) {
       console.error(
         `local Core PostgreSQL HTTP proof failed: ${formatNativePostgresProofFailure(error.phase, error.cause)}`,
       );
