@@ -1,8 +1,12 @@
-import { chmod, mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
-import { acquireRunRootOwnership, RunRootOwnershipBusyError } from "../../runner/lib/run_root_ownership.ts";
+import {
+  adoptRunRootOwnershipFromStdin,
+  acquireRunRootOwnership,
+  RunRootOwnershipBusyError,
+} from "../../runner/lib/run_root_ownership.ts";
 import {
   PreparationV2ChildSupervisor,
   PreparationV2ChildSupervisorBusyError,
@@ -25,6 +29,8 @@ if (process.argv[2] === "supervisor-fixture") {
   await runSupervisorFixture(process.argv[3] ?? "", process.argv[4] ?? "normal");
 } else if (process.argv[2] === "existing-child-fixture") {
   await runExistingChildFixture(process.argv[3] ?? "");
+} else if (process.argv[2] === "runner-script-child") {
+  await runRunnerScriptChild(process.argv[3] ?? "", process.argv[4] ?? "");
 }
 
 if (process.argv[2] === undefined) {
@@ -118,14 +124,8 @@ async function runSupervisorFixture(
     let firstResult: PreparationV2ChildSupervisorDrainTimeoutError | undefined;
     try {
       await supervisor.runRunner(
-        "/bin/sh",
-        [
-          "-c",
-          'printf "%s" "$$" > "$2/runner-a.pid"; /usr/bin/setsid /bin/sh -c "$1" sh "$2" >/dev/null 2>&1 & kill -KILL $$',
-          "runner",
-          'printf "%s" "$$" > "$1/writer.pid"; i=0; while [ "$i" -lt 25 ]; do printf "%s" "$i" > "$1/writer-count"; i=$((i+1)); sleep 0.04; done',
-          root,
-        ],
+        process.execPath,
+        ["--no-env-file", CHILD_SCRIPT, "runner-script-child", root, "runner-a"],
         { env: { HOME: root, PATH: "/usr/bin:/bin" }, drainTimeoutMs: 30 },
       );
       throw new Error("Runner unexpectedly completed with a live writer");
@@ -143,8 +143,8 @@ async function runSupervisorFixture(
     process.stdout.write("drain-pending\n");
     try {
       await supervisor.runRunner(
-        "/bin/sh",
-        ["-c", 'printf yes > "$1/second-started"', "runner", root],
+        process.execPath,
+        ["--no-env-file", CHILD_SCRIPT, "runner-script-child", root, "runner-b"],
         { env: { HOME: root, PATH: "/usr/bin:/bin" }, drainTimeoutMs: 100 },
       );
       throw new Error("second Runner unexpectedly started");
@@ -163,8 +163,8 @@ async function runSupervisorFixture(
       const ownerClose = owner.close();
       try {
         await supervisor.runRunner(
-          "/bin/sh",
-          ["-c", 'printf yes > "$1/second-started"', "runner", root],
+          process.execPath,
+          ["--no-env-file", CHILD_SCRIPT, "runner-script-child", root, "runner-b"],
           { env: { HOME: root, PATH: "/usr/bin:/bin" }, drainTimeoutMs: 100 },
         );
         throw new Error("Runner started after owner close request");
@@ -191,8 +191,8 @@ async function runSupervisorFixture(
     process.stdout.write("drain-complete\n");
     stage = "runner-b";
     const second = await supervisor.runRunner(
-      "/bin/sh",
-      ["-c", 'printf "%s" "$$" > "$1/runner-b.pid"; printf yes > "$1/second-started"', "runner", root],
+      process.execPath,
+      ["--no-env-file", CHILD_SCRIPT, "runner-script-child", root, "runner-b"],
       { env: { HOME: root, PATH: "/usr/bin:/bin" }, drainTimeoutMs: 1_000 },
     );
     if (second.exitCode !== 0 || !second.drained) throw new Error("second Runner failed");
@@ -225,6 +225,52 @@ async function runExistingChildFixture(root: string): Promise<void> {
     await child.exited;
     await owner.close();
   }
+}
+
+async function runRunnerScriptChild(root: string, role: string): Promise<void> {
+  const owner = await adoptRunRootOwnershipFromStdin(root);
+  try {
+    if (role === "runner-a") {
+      await writeFile(join(root, "runner-a.pid"), String(process.pid), { mode: 0o600 });
+      const script = 'printf "%s" "$$" > "$1/writer.pid"; printf yes > "$1/writer-started"; i=0; while [ "$i" -lt 25 ]; do printf "%s" "$i" > "$1/writer-count"; i=$((i+1)); sleep 0.04; done';
+      Bun.spawn(["/usr/bin/setsid", "/bin/sh", "-c", script, "writer", root], {
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+        env: { HOME: root, PATH: "/usr/bin:/bin" },
+      });
+      await waitForFixtureFile(root, "writer-started");
+      await owner.close();
+      process.kill(process.pid, "SIGKILL");
+      return;
+    }
+    if (role === "runner-b") {
+      await writeFile(join(root, "runner-b.pid"), String(process.pid), { mode: 0o600 });
+      await writeFile(join(root, "second-started"), "yes", { mode: 0o600 });
+      await owner.close();
+      return;
+    }
+    throw new Error("unknown private fake Runner mode");
+  } catch (error) {
+    await owner.close().catch(() => {});
+    throw error;
+  }
+}
+
+async function waitForFixtureFile(root: string, name: string): Promise<void> {
+  const deadline = performance.now() + 2_000;
+  while (performance.now() < deadline) {
+    try {
+      await lstat(join(root, name));
+      return;
+    } catch (error) {
+      if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) {
+        throw error;
+      }
+    }
+    await Bun.sleep(10);
+  }
+  throw new Error("private fake Runner did not publish its marker");
 }
 
 async function createPrivateRoot(): Promise<string> {

@@ -3,6 +3,7 @@ import { dlopen, FFIType, ptr, toArrayBuffer, type Pointer } from "bun:ffi";
 import {
   assertRunRootOwnershipFor,
   type RunRootOwnership,
+  withRunRootOwnershipChild,
   withRunRootWriter,
 } from "./run_root_ownership.ts";
 
@@ -72,6 +73,8 @@ export class PreparationV2ChildSupervisor {
   readonly #ownerHold: Promise<void>;
   readonly #releaseOwnerHold: () => void;
   #drainPromise?: Promise<boolean>;
+  #activeRunner?: Bun.Subprocess<number, "ignore", "ignore">;
+  #timedOutRunner?: PreparationV2ChildSupervisorDrainTimeoutError;
   #phase: "ready" | "running" | "draining" | "unavailable" | "closed" =
     "ready";
 
@@ -112,39 +115,112 @@ export class PreparationV2ChildSupervisor {
     assertRunRootOwnershipFor(this.#ownership, this.#runRoot);
     assertDrainTimeout(options.drainTimeoutMs);
     this.#phase = "running";
-    let child: Bun.Subprocess<"ignore", "ignore", "ignore">;
+    let drainStarted = false;
     try {
-      child = Bun.spawn([executable, ...args], {
-        stdin: "ignore",
-        stdout: "ignore",
-        stderr: "ignore",
-        env: options.env,
-      });
-    } catch {
-      this.#phase = "ready";
+      return await withRunRootOwnershipChild(
+        this.#ownership,
+        this.#runRoot,
+        [executable, ...args],
+        { env: options.env },
+        async (child) => {
+          this.#activeRunner = child;
+          try {
+            const exitCode = await child.exited;
+            const signalCode = child.signalCode;
+            this.#phase = "draining";
+            drainStarted = true;
+            const drained = await this.drainAdoptedChildren({
+              timeoutMs: options.drainTimeoutMs,
+            });
+            if (!drained) {
+              const timeoutError = new PreparationV2ChildSupervisorDrainTimeoutError(
+                exitCode,
+                signalCode,
+              );
+              this.#timedOutRunner = timeoutError;
+              throw timeoutError;
+            }
+            return { exitCode, signalCode, drained };
+          } finally {
+            this.#activeRunner = undefined;
+          }
+        },
+      );
+    } catch (error) {
+      // Only a proven ECHILD transition restores readiness. The lifetime owner
+      // hold remains enrolled for every uncertain exit/handshake/drain failure.
+      if (!drainStarted) this.#phase = "unavailable";
+      if (error instanceof PreparationV2ChildSupervisorDrainTimeoutError) {
+        throw error;
+      }
       throw new PreparationV2ChildSupervisorUnavailableError();
     }
+  }
 
-    let exitCode: number | null;
-    let signalCode: string | null;
+  /** Run one Runner attempt and keep draining after its first bounded timeout. */
+  async runRunnerUntilDrained(
+    executable: string,
+    args: string[],
+    options: {
+      readonly env: Record<string, string>;
+      readonly drainTimeoutMs: number;
+      readonly retryIntervalMs: number;
+    },
+  ): Promise<PreparationV2RunnerResult> {
     try {
-      exitCode = await child.exited;
-      signalCode = child.signalCode;
+      return await this.runRunner(executable, args, options);
+    } catch (error) {
+      if (!(error instanceof PreparationV2ChildSupervisorDrainTimeoutError)) {
+        throw error;
+      }
+      return this.#finishTimedOutRunner(error, {
+        timeoutMs: options.drainTimeoutMs,
+        retryIntervalMs: options.retryIntervalMs,
+      });
+    }
+  }
+
+  /**
+   * Recheck a timed-out Runner's adopted tree until ECHILD proves it drained.
+   * This performs no Runner operation retry and keeps the owner hold enrolled.
+   */
+  async #finishTimedOutRunner(
+    timeoutError: PreparationV2ChildSupervisorDrainTimeoutError,
+    options: { readonly timeoutMs: number; readonly retryIntervalMs: number },
+  ): Promise<PreparationV2RunnerResult> {
+    if (
+      this.#phase !== "draining" ||
+      this.#timedOutRunner !== timeoutError ||
+      !Number.isInteger(options.retryIntervalMs) ||
+      options.retryIntervalMs < 1 ||
+      options.retryIntervalMs > 10_000
+    ) {
+      throw new PreparationV2ChildSupervisorUnavailableError();
+    }
+    while (true) {
+      if (await this.drainAdoptedChildren({ timeoutMs: options.timeoutMs })) {
+        this.#timedOutRunner = undefined;
+        return {
+          exitCode: timeoutError.exitCode,
+          signalCode: timeoutError.signalCode,
+          drained: true,
+        };
+      }
+      await Bun.sleep(options.retryIntervalMs);
+    }
+  }
+
+  /** Signal only the currently owned direct Runner subprocess. */
+  signalRunner(signal: "SIGTERM" | "SIGKILL"): boolean {
+    const child = this.#activeRunner;
+    if (!child || child.exitCode !== null) return false;
+    try {
+      child.kill(signal);
+      return true;
     } catch {
       this.#phase = "unavailable";
-      throw new PreparationV2ChildSupervisorUnavailableError();
+      return false;
     }
-    this.#phase = "draining";
-    const drained = await this.drainAdoptedChildren({
-      timeoutMs: options.drainTimeoutMs,
-    });
-    if (!drained) {
-      throw new PreparationV2ChildSupervisorDrainTimeoutError(
-        exitCode,
-        signalCode,
-      );
-    }
-    return { exitCode, signalCode, drained };
   }
 
   /** Returns false on bounded live-child timeout, retaining ownership and state. */

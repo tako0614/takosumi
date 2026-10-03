@@ -14,7 +14,13 @@ import {
 } from "./lib/http_server.ts";
 import { port, RUN_ROOT, RUNNER_START_SERVER_ENV } from "./lib/constants.ts";
 import { ensureCustodyDirectory } from "./lib/run_completion.ts";
-import { acquireRunRootOwnership, type RunRootOwnership } from "./lib/run_root_ownership.ts";
+import {
+  acquireRunRootOwnership,
+  adoptRunRootOwnershipFromStdin,
+  assertRunRootOwnershipFor,
+  type RunRootOwnership,
+} from "./lib/run_root_ownership.ts";
+import type { PreparationV2ChildSupervisor } from "./lib/preparation_v2_child_supervisor.ts";
 
 // --- Public surface re-exports (unchanged from the pre-split entrypoint) ---
 export { handleRunnerRequest } from "./lib/http_server.ts";
@@ -56,10 +62,15 @@ export async function startRunnerHttpServer(options: {
   readonly hostname?: string;
   readonly port?: number;
   readonly localPreparationV2?: boolean;
+  /** Private composition hook for the supervised inherited-OFD child only. */
+  readonly runRootOwnership?: RunRootOwnership;
 } = {}): Promise<{ server: ReturnType<typeof Bun.serve>; close(): Promise<void> }> {
   const custodyMode = runnerMutationCustodyMode();
   if (options.localPreparationV2 && custodyMode !== "local-http") {
     throw new Error("local preparation requires local HTTP custody");
+  }
+  if (options.runRootOwnership && options.localPreparationV2 !== true) {
+    throw new Error("inherited ownership requires private local preparation");
   }
   let owner: RunRootOwnership | undefined;
   if (custodyMode === "local-http" && options.localPreparationV2 === true) {
@@ -67,8 +78,13 @@ export async function startRunnerHttpServer(options: {
     // local HTTP v1 boot retains its existing lazy run-root behavior.
     // Initialize only the root and custody directory before listen; no run
     // workspace writer starts here.
-    await ensureCustodyDirectory(true);
-    owner = await acquireRunRootOwnership(RUN_ROOT);
+    if (options.runRootOwnership) {
+      assertRunRootOwnershipFor(options.runRootOwnership, RUN_ROOT);
+      owner = options.runRootOwnership;
+    } else {
+      await ensureCustodyDirectory(true);
+      owner = await acquireRunRootOwnership(RUN_ROOT);
+    }
   }
   let server: ReturnType<typeof Bun.serve>;
   try {
@@ -95,7 +111,17 @@ export async function startRunnerHttpServer(options: {
   };
 }
 
-if (Bun.env[RUNNER_START_SERVER_ENV] === "1" || import.meta.main) {
+const privateEntrypointMode = import.meta.main ? Bun.argv[2] : undefined;
+if (import.meta.main && privateEntrypointMode === "--local-preparation-v2-child") {
+  await runInheritedPreparationV2Child();
+} else if (
+  import.meta.main && privateEntrypointMode === "--local-preparation-v2-supervisor"
+) {
+  await runPreparationV2Supervisor();
+} else if (import.meta.main && privateEntrypointMode !== undefined) {
+  process.stderr.write("runner startup refused\n");
+  process.exitCode = 1;
+} else if (Bun.env[RUNNER_START_SERVER_ENV] === "1" || import.meta.main) {
   try {
     const running = await startRunnerHttpServer();
     console.log("Takosumi OpenTofu runner listening", {
@@ -114,5 +140,116 @@ if (Bun.env[RUNNER_START_SERVER_ENV] === "1" || import.meta.main) {
   } catch {
     process.stderr.write("runner startup refused\n");
     process.exitCode = 1;
+  }
+}
+
+async function runInheritedPreparationV2Child(): Promise<void> {
+  let owner: RunRootOwnership | undefined;
+  try {
+    if (runnerMutationCustodyMode() !== "local-http") throw new Error();
+    owner = await adoptRunRootOwnershipFromStdin(RUN_ROOT);
+    const running = await startRunnerHttpServer({
+      localPreparationV2: true,
+      runRootOwnership: owner,
+    });
+    owner = undefined;
+    const onSignal = () => {
+      void running.close().then(
+        () => process.exit(0),
+        () => {
+          process.stderr.write("runner graceful shutdown failed\n");
+          process.exit(1);
+        },
+      );
+    };
+    process.on("SIGTERM", onSignal);
+    process.on("SIGINT", onSignal);
+  } catch {
+    await owner?.close().catch(() => {});
+    process.stderr.write("runner private startup refused\n");
+    process.exitCode = 1;
+  }
+}
+
+async function runPreparationV2Supervisor(): Promise<void> {
+  if (runnerMutationCustodyMode() !== "local-http") {
+    process.stderr.write("runner private startup refused\n");
+    process.exitCode = 1;
+    return;
+  }
+  let owner: RunRootOwnership | undefined;
+  let supervisor: PreparationV2ChildSupervisor | undefined;
+  let stopRequested = false;
+  let runnerLaunchAttempted = false;
+  let removeSignalHandlers = () => {};
+  try {
+    const { PreparationV2ChildSupervisor } = await import(
+      "./lib/preparation_v2_child_supervisor.ts"
+    );
+    await ensureCustodyDirectory(true);
+    owner = await acquireRunRootOwnership(RUN_ROOT);
+    supervisor = new PreparationV2ChildSupervisor(RUN_ROOT, owner);
+    const onSignal = () => {
+      stopRequested = true;
+      void signalOwnedRunner(supervisor);
+    };
+    process.on("SIGTERM", onSignal);
+    process.on("SIGINT", onSignal);
+    removeSignalHandlers = () => {
+      process.off("SIGTERM", onSignal);
+      process.off("SIGINT", onSignal);
+    };
+    if (!stopRequested) {
+      const env = Object.fromEntries(
+        Object.entries(Bun.env).filter(
+          (entry): entry is [string, string] => typeof entry[1] === "string",
+        ),
+      );
+      runnerLaunchAttempted = true;
+      const result = await supervisor.runRunnerUntilDrained(
+        process.execPath,
+        ["--no-env-file", import.meta.path, "--local-preparation-v2-child"],
+        { env, drainTimeoutMs: 30_000, retryIntervalMs: 250 },
+      );
+      if (result.exitCode !== 0 || result.signalCode !== null) process.exitCode = 1;
+    }
+    await supervisor.close();
+    supervisor = undefined;
+    await owner.close();
+    owner = undefined;
+    removeSignalHandlers();
+  } catch {
+    process.exitCode = 1;
+    if (!runnerLaunchAttempted) {
+      // No Runner child was launched, so an initial Busy/setup refusal has no
+      // descendant custody to retain and must not strand a future successor.
+      try {
+        if (supervisor) await supervisor.close();
+        supervisor = undefined;
+        await owner?.close();
+        owner = undefined;
+        removeSignalHandlers();
+        process.stderr.write("runner private startup unavailable\n");
+        return;
+      } catch {
+        // If even pre-child cleanup is uncertain, preserve the owner below.
+      }
+    }
+    process.stderr.write("runner child supervision failed; root remains owned\n");
+    // An uncertain child tree must not be released by this process. Keep the
+    // lease and subreaper alive; no successor starts from this private mode.
+    await new Promise<void>(() => {
+      setInterval(() => {}, 60_000);
+    });
+  }
+}
+
+async function signalOwnedRunner(
+  supervisor: PreparationV2ChildSupervisor | undefined,
+): Promise<void> {
+  const deadline = performance.now() + 5_000;
+  while (supervisor && performance.now() < deadline) {
+    if (supervisor.signalRunner("SIGTERM")) return;
+    await Bun.sleep(10);
   }
 }
