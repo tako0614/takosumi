@@ -16,6 +16,10 @@ const fixtures: Array<{
   root: { path: string; fixtureExitedSuccessfully: boolean };
 }> = [];
 const CHILD_SCRIPT = import.meta.path;
+const linuxSubreaperTest = test.skipIf(
+  process.platform !== "linux" ||
+    (process.arch !== "x64" && process.arch !== "arm64"),
+);
 
 if (process.argv[2] === "supervisor-fixture") {
   await runSupervisorFixture(process.argv[3] ?? "", process.argv[4] ?? "normal");
@@ -39,7 +43,7 @@ if (process.argv[2] === undefined) {
     }
   });
 
-test("a subreaper drains only its child tree before another Runner may start", async () => {
+linuxSubreaperTest("a subreaper drains only its child tree before another Runner may start", async () => {
   const root = await createPrivateRoot();
   const child = spawnFixture("supervisor-fixture", root);
   const lines = lineReader(child.stdout);
@@ -68,7 +72,7 @@ test("a subreaper drains only its child tree before another Runner may start", a
   await owner.close();
 });
 
-test("an unavailable or timed-out drain never releases root ownership", async () => {
+linuxSubreaperTest("an unavailable or timed-out drain never releases root ownership", async () => {
   const root = await createPrivateRoot();
   const child = spawnFixture("supervisor-fixture", root, "hold-after-timeout");
   const lines = lineReader(child.stdout);
@@ -91,7 +95,7 @@ test("an unavailable or timed-out drain never releases root ownership", async ()
   await owner.close();
 });
 
-test("the supervisor refuses initialization when its dedicated process has another child", async () => {
+linuxSubreaperTest("the supervisor refuses initialization when its dedicated process has another child", async () => {
   const root = await createPrivateRoot();
   const child = spawnFixture("existing-child-fixture", root);
   const lines = lineReader(child.stdout);
