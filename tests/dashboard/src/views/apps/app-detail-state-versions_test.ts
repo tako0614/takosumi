@@ -310,7 +310,10 @@ describe("Capsule detail StateVersion surface", () => {
 
   test("gates public open actions on release activation evidence", () => {
     expect(source).toContain("releaseActivationStatusForStateVersion");
-    expect(source).toContain("isStateVersionRuntimeReady");
+    expect(source).toContain("isCapsuleRuntimeOpenable");
+    expect(source).toMatch(
+      /isCapsuleRuntimeOpenable\(\s*capsuleData\(\),\s*capsuleId\(\),\s*currentStateVersion\(\),\s*activityEvents\(\),\s*\)/,
+    );
     expect(source).toContain('t("app.surfaces.activationPending")');
     expect(source).toContain('t("app.surfaces.activationFailed")');
     expect(source).toContain("activityBelongsToCapsule");
@@ -406,10 +409,10 @@ describe("Capsule detail StateVersion surface", () => {
     );
     const link = section("function RuntimeSurfaceLink", "function DeploysTab");
     expect(source).toContain("serviceOpenable");
-    // capsuleData() is the crash-safe last-good accessor (never throws on a
-    // failed refetch); the destroyed-status gate on openability is unchanged.
-    expect(source).toContain('capsuleData()?.status !== "destroyed"');
-    expect(source).toContain("isStateVersionRuntimeReady");
+    // capsuleData() preserves same-route last-good data on failed refetches;
+    // the shared gate also checks route/Capsule/StateVersion identity and
+    // rejects every non-ready Capsule status.
+    expect(source).toContain("isCapsuleRuntimeOpenable");
     expect(source).toContain('t("app.surfaces.deletedSubtitle")');
     expect(headerActions).toContain("serviceOpenable() && uiSurfaceList()[0]");
     expect(link).toContain("props.openable !== false");

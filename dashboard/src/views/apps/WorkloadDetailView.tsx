@@ -96,7 +96,7 @@ import {
   type ConfigVariableRow,
   configRowsFromInstallConfig,
   effectiveCapsuleStatus,
-  isStateVersionRuntimeReady,
+  isCapsuleRuntimeOpenable,
   releaseActivationStatusForStateVersion,
 } from "../../lib/capsules-ui.ts";
 import {
@@ -393,11 +393,11 @@ function Inner() {
   );
   const serviceOpenable = createMemo(
     () =>
-      capsuleData()?.status !== "destroyed" &&
-      isStateVersionRuntimeReady(
+      isCapsuleRuntimeOpenable(
+        capsuleData(),
+        capsuleId(),
         currentStateVersion(),
         activityEvents(),
-        capsuleId(),
       ),
   );
   /** Recent run/release events for THIS app (activity carries metadata.capsuleId). */

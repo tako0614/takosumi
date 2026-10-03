@@ -3,7 +3,7 @@
  */
 import { t } from "../i18n/index.ts";
 import { type JsonValue } from "takosumi-contract";
-import type { ActivityEvent, InstallConfig } from "./control-api.ts";
+import type { ActivityEvent, Capsule, InstallConfig } from "./control-api.ts";
 
 export const PENDING_NEEDS_ATTENTION_AFTER_MS = 30 * 60 * 1000;
 
@@ -208,6 +208,27 @@ export function isStateVersionRuntimeReady(
     capsuleId,
   );
   return activation === "not_required" || activation === "succeeded";
+}
+
+/**
+ * A runtime Interface is openable only after the Capsule lifecycle itself is
+ * active (or legacy-stale) and its current StateVersion has settled any
+ * required activation. In particular, an error Capsule may have a
+ * state-recovery StateVersion without a successful Apply or verified runtime.
+ */
+export function isCapsuleRuntimeOpenable(
+  capsule: Pick<Capsule, "id" | "status" | "currentStateVersionId"> | undefined,
+  expectedCapsuleId: string,
+  stateVersion: LaunchableStateVersion | undefined,
+  events: readonly ActivityEvent[] = [],
+): boolean {
+  if (
+    !capsule || capsule.id !== expectedCapsuleId ||
+    capsule.currentStateVersionId !== stateVersion?.id ||
+    stateVersion?.capsuleId !== expectedCapsuleId ||
+    (capsule.status !== "active" && capsule.status !== "stale")
+  ) return false;
+  return isStateVersionRuntimeReady(stateVersion, events, expectedCapsuleId);
 }
 
 /**

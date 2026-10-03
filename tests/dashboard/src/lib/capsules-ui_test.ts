@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   effectiveCapsuleStatus,
+  isCapsuleRuntimeOpenable,
   isStateVersionRuntimeReady,
   needsAttention,
   outputLabel,
@@ -179,5 +180,118 @@ describe("StateVersion release-activation readiness", () => {
     expect(isStateVersionRuntimeReady(stateVersion, events, "cap_1")).toBe(
       false,
     );
+  });
+
+  test("does not expose Open for a state-only recovered Capsule that remains in error", () => {
+    const recoveredStateVersion = {
+      ...stateVersion,
+      createdByRunId: "run_state_recovery_1",
+    };
+    const recoveredEvent: ActivityEvent = {
+      id: "act_state_recovered_1",
+      workspaceId: "ws_1",
+      action: "capsule.state_recovered",
+      targetType: "capsule",
+      targetId: "cap_1",
+      runId: "run_state_recovery_1",
+      metadata: {
+        failedApplyRunId: "run_failed_apply_1",
+        stateVersionId: "sv_1",
+        sourceSnapshotId: "snapshot_1",
+        artifactEvidenceDigest: "sha256:fixture",
+      },
+      createdAt: "2026-06-30T19:00:00.000Z",
+    };
+
+    expect(
+      isCapsuleRuntimeOpenable(
+        { id: "cap_1", status: "error", currentStateVersionId: "sv_1" },
+        "cap_1",
+        recoveredStateVersion,
+        [recoveredEvent],
+      ),
+    ).toBe(false);
+  });
+
+  test("offers Open only for active or legacy-stale Capsules with ready StateVersions", () => {
+    expect(
+      isCapsuleRuntimeOpenable(
+        { id: "cap_1", status: "active", currentStateVersionId: "sv_1" },
+        "cap_1",
+        stateVersion,
+      ),
+    ).toBe(true);
+    expect(
+      isCapsuleRuntimeOpenable(
+        { id: "cap_1", status: "stale", currentStateVersionId: "sv_1" },
+        "cap_1",
+        stateVersion,
+      ),
+    ).toBe(true);
+
+    for (const status of ["pending", "error", "disabled", "destroyed"] as const) {
+      expect(
+        isCapsuleRuntimeOpenable(
+          { id: "cap_1", status, currentStateVersionId: "sv_1" },
+          "cap_1",
+          stateVersion,
+        ),
+      ).toBe(false);
+    }
+    expect(isCapsuleRuntimeOpenable(undefined, "cap_1", stateVersion)).toBe(
+      false,
+    );
+    expect(
+      isCapsuleRuntimeOpenable(
+        { id: "cap_1", status: "active", currentStateVersionId: "sv_1" },
+        "cap_1",
+      ),
+    ).toBe(false);
+    expect(
+      isCapsuleRuntimeOpenable(
+        { id: "cap_1", status: "active" },
+        "cap_1",
+        stateVersion,
+      ),
+    ).toBe(false);
+  });
+
+  test("does not open retained Capsule A data while route B loads or returns not-found", () => {
+    const retainedA = {
+      id: "cap_a",
+      status: "active" as const,
+      currentStateVersionId: "sv_1",
+    };
+    const stateVersionA = { ...stateVersion, capsuleId: "cap_a" };
+
+    // The resource may retain A as its last-good value while B loads or after
+    // B returns not-found. Both cases have the same last-good A input; route
+    // identity must fence the old runtime action.
+    expect(
+      isCapsuleRuntimeOpenable(retainedA, "cap_b", stateVersionA),
+    ).toBe(false);
+    // Last-good behavior remains valid when the route still names A.
+    expect(
+      isCapsuleRuntimeOpenable(retainedA, "cap_a", stateVersionA),
+    ).toBe(true);
+  });
+
+  test("keeps Open unavailable until current StateVersion activation succeeds", () => {
+    expect(
+      isCapsuleRuntimeOpenable(
+        { id: "cap_1", status: "active", currentStateVersionId: "sv_1" },
+        "cap_1",
+        stateVersion,
+        [activity("release_activation.pending")],
+      ),
+    ).toBe(false);
+    expect(
+      isCapsuleRuntimeOpenable(
+        { id: "cap_1", status: "active", currentStateVersionId: "sv_1" },
+        "cap_1",
+        stateVersion,
+        [activity("release_activation.failed")],
+      ),
+    ).toBe(false);
   });
 });
