@@ -8,6 +8,12 @@ import {
   applyExpectedGuardFromPlanRun,
   type OpenTofuApplyJob,
 } from "../../../../core/domains/deploy-control/mod.ts";
+import {
+  recoverFailedInitialCreateState,
+  stateVersionIdForRecoveryRun,
+  VERIFIED_RECOVERY_ARTIFACT_FORMAT,
+  type VerifiedRecoveryArtifact,
+} from "../../../../core/domains/deploy-control/operator_state_recovery.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { StorageMigrationRunner } from "../../../../core/adapters/storage/migration-runner/mod.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
@@ -605,7 +611,11 @@ test("pool close failure still attempts exact container cleanup and preserves th
 
 function createDeterministicRunner() {
   let applyCalls = 0;
+  let failNextApply = false;
   return {
+    failNextApply() {
+      failNextApply = true;
+    },
     runner: {
       plan: () =>
         Promise.resolve({
@@ -624,6 +634,22 @@ function createDeterministicRunner() {
         }),
       apply: (job: OpenTofuApplyJob) => {
         applyCalls += 1;
+        if (failNextApply) {
+          failNextApply = false;
+          return Promise.resolve({
+            providerExecutionFailure: {
+              kind: "provider_execution_failed" as const,
+              statePersistence: "unavailable" as const,
+              errorCode: "apply_failed",
+            },
+            diagnostics: [
+              {
+                severity: "warning" as const,
+                message: "synthetic provider failure for native recovery persistence test",
+              },
+            ],
+          });
+        }
         return Promise.resolve(
           fixtureStateCommit({
             rawOutputRef: job.rawOutputRef,
@@ -644,7 +670,7 @@ function createDeterministicRunner() {
 }
 
 test.skipIf(!NATIVE_POSTGRES_OPT_IN)(
-  "Core Apply lineage and exact replay survive a real PostgreSQL daemon restart",
+  "Core Apply and state-recovery lineage plus exact replay survive a real PostgreSQL daemon restart",
   async () => {
     const database = await runNativePostgresPhase(
       "fixture.create",
@@ -826,6 +852,243 @@ test.skipIf(!NATIVE_POSTGRES_OPT_IN)(
         ),
       ).toHaveLength(1);
 
+      // This recovery path is deliberately dormant/operator-only. The test
+      // supplies a synthetic verifier result and a deterministic fake runner;
+      // it exercises Core's real PostgreSQL recovery commit, not artifact
+      // encryption, an operator authorization entrypoint, or provider work.
+      const recoverySeed = await runNativePostgresPhase(
+        "seed.fixture",
+        async () => {
+          const result = await seedCapsuleModel(store, {
+            workspaceId: "workspace_native_pg_recovery_restart",
+            capsuleId: "cap_native_pg_recovery_restart",
+            sourceId: "src_native_pg_recovery_restart",
+            snapshotId: "snap_native_pg_recovery_restart",
+            installConfigId: "cfg_native_pg_recovery_restart",
+            requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
+          });
+          await seedProviderConnections(store, result.capsule);
+          await store.putCapsuleCompatibilityReport({
+            id: "caprep_native_pg_recovery_restart",
+            sourceId: result.source.id,
+            capsuleId: result.capsule.id,
+            sourceSnapshotId: result.snapshot.id,
+            modulePath: ".",
+            level: "ready",
+            findings: [],
+            providerPackages: [
+              { source: FIXTURE_CLOUDFLARE_PROVIDER, allowed: true },
+            ],
+            rootProviderRequirements: [
+              {
+                source: FIXTURE_CLOUDFLARE_PROVIDER,
+                moduleLocalName: "cloudflare",
+              },
+            ],
+            resources: [],
+            dataSources: [],
+            provisioners: [],
+            rootModuleOutputs: [
+              { name: "launch_url", sensitive: false, ephemeral: false },
+            ],
+            createdAt: "2026-06-06T00:00:00.000Z",
+          });
+          await store.putCapsule({
+            ...result.capsule,
+            compatibilityReportId: "caprep_native_pg_recovery_restart",
+            compatibilityStatus: "ready",
+          });
+          return result;
+        },
+      );
+      runner.failNextApply();
+      const failedService = await runNativePostgresPhase(
+        "core.bootstrap.first",
+        () => createTakosumiService({
+          role: "takosumi-api",
+          runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+          sqlClient: firstClient!.client,
+          opentofuRunner: runner.runner,
+          opentofuConnectionVault: fakeProviderVault() as never,
+          executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+          artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+        }),
+      );
+      const { planRun: failedPlan } = await runNativePostgresPhase(
+        "core.plan",
+        () => failedService.operations.controller.createCapsulePlan(
+          recoverySeed.capsule.id,
+        ),
+      );
+      expect(failedPlan.status).toBe("succeeded");
+      const { applyRun: failedApply } = await runNativePostgresPhase(
+        "core.apply",
+        () => failedService.operations.controller.createApplyRun({
+          planRunId: failedPlan.id,
+          expected: applyExpectedGuardFromPlanRun(failedPlan),
+        }),
+      );
+      expect(failedApply.status).toBe("failed");
+      expect(failedApply.stateVersionId).toBeUndefined();
+      expect(failedApply.outputId).toBeUndefined();
+      expect(runner.applyCallCount()).toBe(2);
+
+      const recoveryRunId = "run_native_pg_recovery_restart";
+      const recoveryArtifact: VerifiedRecoveryArtifact = {
+        format: VERIFIED_RECOVERY_ARTIFACT_FORMAT,
+        immutable: true,
+        adapterAllocated: true,
+        readbackVerified: true,
+        workspaceId: recoverySeed.workspace.id,
+        capsuleId: recoverySeed.capsule.id,
+        environment: recoverySeed.capsule.environment,
+        generation: 1,
+        recoveryRunId,
+        stateRef:
+          "workspaces/workspace_native_pg_recovery_restart/capsules/cap_native_pg_recovery_restart/state-versions/00000001.tfstate.enc",
+        encryptedDigest: `sha256:${"b".repeat(64)}`,
+        plaintextSha256: `sha256:${"a".repeat(64)}`,
+        evidenceDigest: `sha256:${"c".repeat(64)}`,
+      };
+      const verifier = {
+        verify: async (input: {
+          readonly workspaceId: string;
+          readonly capsuleId: string;
+          readonly failedApplyRunId: string;
+          readonly recoveryRunId: string;
+          readonly artifactHandle: string;
+        }) => {
+          expect(input).toEqual({
+            workspaceId: recoverySeed.workspace.id,
+            capsuleId: recoverySeed.capsule.id,
+            failedApplyRunId: failedApply.id,
+            recoveryRunId,
+            artifactHandle: "synthetic-native-postgres-artifact-handle",
+          });
+          return recoveryArtifact;
+        },
+      };
+      const recover = (recoveryStore = store) => recoverFailedInitialCreateState({
+        store: recoveryStore,
+        verifier,
+        artifactHandle: "synthetic-native-postgres-artifact-handle",
+        failedApplyRunId: failedApply.id,
+        recoveryRunId,
+        createdBy: "native-postgres-recovery-test",
+        now: "2026-10-03T00:00:00.000Z",
+      });
+      const epochBeforeRecovery = await store.getCapsuleExecutionAuthorityEpoch(
+        recoverySeed.capsule.id,
+      );
+      if (epochBeforeRecovery === undefined) {
+        throw new Error("native PostgreSQL recovery fixture has no execution epoch");
+      }
+
+      const readRecovery = async (
+        service: CoreService,
+        recoveryStore: SqlOpenTofuControlStore,
+      ) => {
+        const [capsule, storedCapsule, failed, stateVersion, run, inventory, logs,
+          activity, runs, stateVersions, safety, epoch] = await Promise.all([
+          service.operations.controller.getCapsule(recoverySeed.capsule.id),
+          recoveryStore.getCapsule(recoverySeed.capsule.id),
+          service.operations.controller.getApplyRun(failedApply.id),
+          service.operations.controller.getStateVersion(
+            await stateVersionIdForRecoveryRun(recoveryRunId),
+          ),
+          service.operations.controller.getRun(recoveryRunId),
+          service.operations.controller.getCurrentResourceInventory(
+            recoverySeed.capsule.id,
+          ),
+          service.operations.controller.getRunLogs(recoveryRunId),
+          service.operations.activity.list(recoverySeed.workspace.id, 100),
+          service.operations.controller.listRuns(recoverySeed.workspace.id),
+          service.operations.controller.listStateVersionsByWorkspace(
+            recoverySeed.workspace.id,
+          ),
+          recoveryStore.getCapsuleRuntimeSafety(recoverySeed.capsule.id),
+          recoveryStore.getCapsuleExecutionAuthorityEpoch(recoverySeed.capsule.id),
+        ]);
+        return {
+          capsule: capsule.capsule,
+          currentOutputId: storedCapsule?.currentOutputId,
+          failedApply: failed.applyRun,
+          stateVersion: stateVersion.stateVersion,
+          run,
+          inventory: inventory.inventory,
+          logs,
+          activity: activity.filter((event) => event.runId === recoveryRunId),
+          runs: runs.filter((candidate) => candidate.id === recoveryRunId),
+          stateVersions: stateVersions.filter(
+            (candidate) => candidate.capsuleId === recoverySeed.capsule.id,
+          ),
+          runtimeSafety: safety,
+          executionAuthorityEpoch: epoch,
+        };
+      };
+
+      const committedRecovery = await recover();
+      expect(committedRecovery.status).toBe("committed");
+      if (committedRecovery.status !== "committed") {
+        throw new Error("native PostgreSQL recovery fixture did not commit");
+      }
+      const recoveryBeforeRestart = await readRecovery(failedService, store);
+      expect(recoveryBeforeRestart.capsule).toMatchObject({
+        status: "error",
+        currentStateGeneration: 1,
+        currentStateVersionId: committedRecovery.stateVersion.id,
+      });
+      expect(recoveryBeforeRestart.currentOutputId).toBeUndefined();
+      expect(recoveryBeforeRestart.failedApply).toMatchObject({ status: "failed" });
+      expect(recoveryBeforeRestart.failedApply.stateVersionId).toBeUndefined();
+      expect(recoveryBeforeRestart.failedApply.outputId).toBeUndefined();
+      expect(recoveryBeforeRestart.stateVersion).toMatchObject({
+        createdByRunId: recoveryRunId,
+        generation: 1,
+        digest: recoveryArtifact.plaintextSha256,
+      });
+      expect(recoveryBeforeRestart.run).toMatchObject({
+        id: recoveryRunId,
+        type: "state_recovery",
+        status: "succeeded",
+        stateRecovery: {
+          failedApplyRunId: failedApply.id,
+          recoveredStateVersionId: committedRecovery.stateVersion.id,
+          sourceSnapshotId: recoverySeed.snapshot.id,
+          artifactEvidenceDigest: recoveryArtifact.evidenceDigest,
+        },
+      });
+      expect(recoveryBeforeRestart.run).not.toHaveProperty("executionEvidence");
+      expect(recoveryBeforeRestart.inventory).toMatchObject({
+        availability: "recovery_unknown",
+        stateVersionId: committedRecovery.stateVersion.id,
+        applyRunId: failedApply.id,
+        planRunId: failedPlan.id,
+        recoveryRunId,
+      });
+      expect(recoveryBeforeRestart.inventory).not.toHaveProperty("resources");
+      expect(recoveryBeforeRestart.runtimeSafety).toMatchObject({
+        phase: "unknown",
+        runId: failedApply.id,
+        runType: "apply",
+      });
+      expect(recoveryBeforeRestart.executionAuthorityEpoch).toBe(
+        epochBeforeRecovery + 1,
+      );
+      expect(recoveryBeforeRestart.runs).toHaveLength(1);
+      expect(recoveryBeforeRestart.stateVersions).toHaveLength(1);
+      expect(recoveryBeforeRestart.activity).toHaveLength(1);
+
+      const replayBeforeRestart = await recover();
+      expect(replayBeforeRestart.status).toBe("replayed");
+      if (replayBeforeRestart.status !== "replayed") {
+        throw new Error("native PostgreSQL recovery fixture did not replay");
+      }
+      expect(await readRecovery(failedService, store)).toEqual(
+        recoveryBeforeRestart,
+      );
+      expect(runner.applyCallCount()).toBe(2);
+
       const oldClient = firstClient!;
       await runNativePostgresPhase(
         "pool.first.close",
@@ -890,9 +1153,46 @@ test.skipIf(!NATIVE_POSTGRES_OPT_IN)(
             "workspace_native_pg_restart",
           ),
         ).toHaveLength(1);
-        expect(runner.applyCallCount()).toBe(1);
+        expect(runner.applyCallCount()).toBe(2);
         expect(await readLineage(freshService)).toEqual(beforeRestart);
       });
+
+      const restartedStore = new SqlOpenTofuControlStore({
+        client: restartedClient!.client,
+      });
+      const recoveryAfterRestart = await runNativePostgresPhase(
+        "core.lineage.after-restart",
+        () => readRecovery(freshService, restartedStore),
+      );
+      expect(recoveryAfterRestart).toEqual(recoveryBeforeRestart);
+      await runNativePostgresPhase("core.replay", async () => {
+        const replay = await recover(restartedStore);
+        expect(replay.status).toBe("replayed");
+        if (replay.status !== "replayed") {
+          throw new Error("native PostgreSQL recovery replay changed after restart");
+        }
+        expect(await readRecovery(freshService, restartedStore)).toEqual(
+          recoveryBeforeRestart,
+        );
+        expect(runner.applyCallCount()).toBe(2);
+      });
+      await expect(recoverFailedInitialCreateState({
+        store: restartedStore,
+        verifier: {
+          verify: async () => ({
+            ...recoveryArtifact,
+            encryptedDigest: `sha256:${"d".repeat(64)}`,
+          }),
+        },
+        artifactHandle: "synthetic-native-postgres-artifact-handle",
+        failedApplyRunId: failedApply.id,
+        recoveryRunId,
+        createdBy: "native-postgres-recovery-test",
+        now: "2026-10-03T00:00:00.000Z",
+      })).rejects.toThrow("state recovery replay no longer matches");
+      expect(await readRecovery(freshService, restartedStore)).toEqual(
+        recoveryBeforeRestart,
+      );
     } catch (error) {
       testFailed = true;
       testError = error;
