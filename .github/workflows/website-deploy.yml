@@ -2,11 +2,11 @@ name: Check takosumi.com website artifact
 
 # The single `takosumi-website` Pages project serves the public property:
 #
-#   https://takosumi.com/                       (landing, Solid Start)
+#   https://takosumi.com/                       (static Solid landing)
 #   https://takosumi.com/docs/                  (VitePress reference docs)
 #
-# `website/build.sh` runs `vinxi build` for the landing and `vitepress
-# build` for the docs overlaid onto `.output/public/docs/`.
+# `website/build.sh` prerenders the landing with Vite + Solid and runs
+# `vitepress build` for the docs overlaid onto `.output/public/docs/`.
 
 on:
   push:
@@ -50,7 +50,7 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install website dependencies (Solid Start)
+      - name: Install website dependencies (Vite + Solid)
         working-directory: website
         run: npm ci --no-audit --no-fund
 
