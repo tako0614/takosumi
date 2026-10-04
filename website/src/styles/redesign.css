@@ -38,7 +38,6 @@ main { display: block; }
 .hero-product { margin: clamp(36px, 4vw, 60px) 0 0; }
 .dashboard-shot { overflow: hidden; border: 1px solid var(--tg-color-rule-strong); border-radius: var(--tg-radius-panel); background: var(--tg-color-surface); }
 .dashboard-shot img { width: 100%; height: auto; }
-.launcher-shot { max-height: 650px; }
 .hero-product figcaption, .install-product figcaption { margin-top: 14px; color: var(--tg-color-subtle); font-family: var(--tg-font-mono); font-size: .76rem; }
 .hero-product figcaption { display: flex; align-items: center; gap: 10px; }
 .caption-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--tg-color-accent); }

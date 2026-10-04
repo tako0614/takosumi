@@ -55,6 +55,9 @@ repository's portable browser fixture server. They were captured on
 2026-09-28. The original dark images came from checkout
 `d4b1c52f8434cb163ac76f1a4682baf564612acc`; the matching light images
 came from checkout `3820a6359e7e044d5283b662540f80212b3929d9`.
+The dark and light desktop Home images were refreshed on 2026-10-04 from
+checkout `0f9f6ac2e` with a full 1200 × 750 viewport. The other six images
+retain their previous capture bytes.
 `capture-dashboard-ui.mjs` intercepts the public example session, Workspace,
 Capsule, and authorized `interface.ui.surface` list reads for the Home launcher,
 plus the TCS v2 Store discovery reads. The three products are illustrative:
@@ -69,8 +72,8 @@ are fulfilled locally at an illustrative icon origin.
 Browser runtime errors, failed HTTP requests or images, unexpected external
 requests, and missing product cards fail the capture.
 
-The desktop Home capture is a direct 1200 × 440 viewport clip; desktop Store
-uses a 1200 × 750 viewport. Mobile Home uses 390 × 700, and
+Desktop Home and Store both use the complete 1200 × 750 viewport, with no
+screenshot clip. Mobile Home uses 390 × 700, and
 mobile Store uses 390 × 950 so the first service card is readable.
 All use device scale 2, Japanese locale, loaded UI fonts, and Noto Sans JP as the system
 Japanese fallback. The script seeds the dashboard's own `tg_theme` preference
@@ -91,6 +94,8 @@ available as a Japanese sans fallback works. The script requires system Chrome,
 Takosumi's installed `@playwright/test`, and free port 5199. The fixture server
 does not write to a live Takosumi API. These are UI illustrations, not deploy,
 Run, or end-to-end proof.
-Pass `light` or `dark` instead of `all` to refresh one appearance only. Dark
+Pass `light` or `dark` instead of `all` to refresh one appearance only. Pass
+`desktop-home` as the second argument to refresh only the desktop Home images
+without rewriting the Store or mobile assets. Dark
 images keep their original filenames; light images use a `-light` suffix. The
 site's `<picture>` sources follow the operating system appearance and viewport.
