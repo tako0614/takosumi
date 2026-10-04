@@ -1,0 +1,3 @@
+services:
+  opentofu-runner:
+    command: ["--local-preparation-v2-supervisor"]
