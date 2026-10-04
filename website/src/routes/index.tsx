@@ -1,5 +1,6 @@
 import { For } from "solid-js";
 import AdringWidget from "~/components/AdringWidget";
+import InstallDemo from "~/components/InstallDemo";
 import { FEATURED_APPS, type FeaturedApp } from "~/content/apps";
 import { CAPTURES, DASHBOARD_CAPTURES } from "~/content/captures";
 
@@ -95,18 +96,15 @@ export default function Home() {
       <main id="main">
         <section class="hero site-width" aria-labelledby="site-title">
           <div class="hero-copy">
-            <h1 id="site-title">Takosumi</h1>
-            <p class="hero-lead">公開されたアプリを、<br />自分の環境へ。</p>
-            <p class="hero-description">Git の OpenTofu 定義を読み込み、接続先と設定を確認してインストール。入れたアプリも、変更も、ひとつのワークスペースから見渡せます。</p>
+            <div class="hero-identity"><img class="hero-mark" src="/tako.png" alt="" width="64" height="64" /><h1 id="site-title">Takosumi</h1></div>
+            <p class="hero-lead">使いたいアプリを、自分の場所へ。</p>
+            <p class="hero-description">公開された OSS を選び、必要な設定を確認。<br class="desktop-break" />インストールからその先まで、ひとつのワークスペースで。</p>
             <div class="hero-actions">
-              <a class="button button-primary" href="#apps">アプリを見つける <Arrow /></a>
-              <a class="text-link" href="https://app.takosumi.com/new">Git URL から追加 <Arrow /></a>
+              <a class="button button-primary" href="#apps">アプリを探す <Arrow /></a>
+              <a class="button button-secondary" href="https://app.takosumi.com/new">Git URL から追加 <Arrow /></a>
             </div>
           </div>
-          <figure class="hero-product">
-            <DashboardShot capture={DASHBOARD_CAPTURES.home} alt="Takosumi のダッシュボード。ワークスペース内のインストール済みアプリと追加操作が並ぶ" class="launcher-shot" priority />
-            <figcaption><span class="caption-dot" aria-hidden="true" /> Takosumi のダッシュボード（デモ画面）</figcaption>
-          </figure>
+          <InstallDemo />
         </section>
 
         <section id="apps" class="apps-section site-width" aria-labelledby="apps-title">
@@ -126,14 +124,14 @@ export default function Home() {
         <section class="install-section" aria-labelledby="install-title">
           <div class="site-width install-layout">
             <div class="install-copy">
-              <p class="section-index">追加する</p>
-              <h2 id="install-title">選んで、<br />自分の環境へ。</h2>
-              <p>ストアでサービスを探すか、公開 Git リポジトリを指定して追加します。アプリごとに必要な接続先や設定は、追加後の画面で確認します。</p>
+              <p class="section-index">FROM SOURCE TO YOUR SPACE</p>
+              <h2 id="install-title">選ぶところから、<br />使うところまで。</h2>
+              <p>公開ソースを読み込み、必要な接続と設定、実行前の変更を順に確認します。アプリが入ったら、ワークスペースから開いて使えます。</p>
               <a class="text-link" href="/docs/concepts/sources.html">ソースとインストールの仕組み <Arrow /></a>
             </div>
             <figure class="install-product">
               <DashboardShot capture={DASHBOARD_CAPTURES.install} alt="Takosumi のストアでサービスを探し、公開 Git ソースを選ぶ画面" class="install-shot" />
-              <figcaption>Takosumi のストアでソースを選ぶ画面</figcaption>
+              <figcaption>実際の Takosumi ダッシュボードを公開用デモデータで撮影した画面</figcaption>
             </figure>
           </div>
         </section>
