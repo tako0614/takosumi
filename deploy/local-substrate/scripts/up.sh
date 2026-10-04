@@ -37,6 +37,22 @@ case "$PROFILE" in
 		;;
 esac
 
+RUNNER_PREPARATION="$(local_substrate_runner_preparation)" || exit 1
+if [[ "$RUNNER_PREPARATION" == "v2" ]]; then
+	if [[ "$PROFILE" != "postgres" ]]; then
+		echo "runner preparation v2 requires --profile postgres" >&2
+		exit 1
+	fi
+	if [[ -n "${TAKOSUMI_LOCAL_SUBSTRATE_PROFILE:-}" &&
+		"$TAKOSUMI_LOCAL_SUBSTRATE_PROFILE" != "$PROFILE" ]]; then
+		echo "--profile $PROFILE conflicts with TAKOSUMI_LOCAL_SUBSTRATE_PROFILE=$TAKOSUMI_LOCAL_SUBSTRATE_PROFILE" >&2
+		exit 1
+	fi
+	# Subsequent compose calls in this invocation must select the same runner
+	# preparation as the explicit startup profile.
+	export TAKOSUMI_LOCAL_SUBSTRATE_PROFILE="$PROFILE"
+fi
+
 case "$PROFILE" in
 	workers)
 		TAKOSUMI_LOCAL_APP_UPSTREAM="takosumi-service-worker:8788"

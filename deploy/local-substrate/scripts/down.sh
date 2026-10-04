@@ -6,5 +6,7 @@ SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SUBSTRATE_DIR"
 source "$SCRIPT_DIR/compose-helpers.sh"
 
+local_substrate_runner_preparation >/dev/null || exit 1
+
 compose_substrate --profile postgres --profile workers down "$@" 2>/dev/null || true
 compose_ingress down "$@"
