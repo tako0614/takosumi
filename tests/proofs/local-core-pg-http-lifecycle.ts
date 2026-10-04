@@ -488,17 +488,19 @@ const CORE_HOST_STOP_TIMEOUT_MS = 15_000;
 const CORE_HOST_PROTOCOL_LINE_MAX_BYTES = 16 * 1024;
 
 interface CoreHostChildStartup {
-  readonly type: "start-core-host/v1";
+  readonly type: "start-core-host/v2";
   readonly databaseUrl: string;
   readonly runnerBaseUrl: string;
   readonly artifactRoot: string;
   readonly artifactEncryptionPassphrase: string;
   readonly syntheticSessionIds: LocalCoreHttpProofRuntimeInput["syntheticSessionIds"];
+  readonly dropSuccessfulApplyAckOnce: boolean;
 }
 
 interface CoreHostEventSnapshot {
   readonly runnerDispatches: readonly string[];
   readonly metadataReceipts: readonly SavedPlanStateMetadataReceipt[];
+  readonly successfulApplyAckDropped: boolean;
   readonly runnerEvents: readonly {
     readonly label: RunnerHttpProofLabel;
     readonly phase: RunnerHttpProofEventPhase;
@@ -600,6 +602,7 @@ function parseCoreHostEvents(headers: Headers): CoreHostEventSnapshot {
       !Array.isArray(candidate.runnerDispatches) || candidate.runnerDispatches.length > 256 ||
       !candidate.runnerDispatches.every((id) => typeof id === "string" && id.length <= 128) ||
       !Array.isArray(candidate.metadataReceipts) || candidate.metadataReceipts.length > 256 ||
+      typeof candidate.successfulApplyAckDropped !== "boolean" ||
       !Array.isArray(candidate.runnerEvents) || candidate.runnerEvents.length > 512
     ) {
       throw new Error();
@@ -623,6 +626,7 @@ function parseCoreHostEvents(headers: Headers): CoreHostEventSnapshot {
     return {
       runnerDispatches: candidate.runnerDispatches as string[],
       metadataReceipts,
+      successfulApplyAckDropped: candidate.successfulApplyAckDropped as boolean,
       runnerEvents,
     };
   } catch {
@@ -652,6 +656,8 @@ async function startCoreHostProcess(
   input: LocalCoreHttpProofRuntimeInput,
   databaseUrl: string,
   onChildSpawn: (child: ReturnType<typeof Bun.spawn>) => void,
+  dropSuccessfulApplyAckOnce: boolean,
+  onSuccessfulApplyAckDropped: () => void,
 ): Promise<CoreHostProcess> {
   if (!process.argv[1]) throw new Error("Core child entrypoint is unavailable");
   const child = Bun.spawn([
@@ -675,12 +681,13 @@ async function startCoreHostProcess(
   let exitConfirmed = false;
   try {
     const startup: CoreHostChildStartup = {
-      type: "start-core-host/v1",
+      type: "start-core-host/v2",
       databaseUrl,
       runnerBaseUrl: input.baseUrl,
       artifactRoot: input.artifactRoot,
       artifactEncryptionPassphrase: input.artifactEncryptionPassphrase,
       syntheticSessionIds: input.syntheticSessionIds,
+      dropSuccessfulApplyAckOnce,
     };
     child.stdin.write(JSON.stringify(startup) + "\n");
     await child.stdin.flush();
@@ -709,6 +716,7 @@ async function startCoreHostProcess(
     let dispatchCount = 0;
     let receiptCount = 0;
     let eventCount = 0;
+    let successfulApplyAckDropObserved = false;
     let closed = false;
     return {
       pid: child.pid,
@@ -729,6 +737,12 @@ async function startCoreHostProcess(
         }
         for (const event of events.runnerEvents.slice(eventCount)) {
           input.observeRunnerHttp(event.label, event.phase);
+        }
+        if (events.successfulApplyAckDropped && !successfulApplyAckDropObserved) {
+          successfulApplyAckDropObserved = true;
+          onSuccessfulApplyAckDropped();
+        } else if (successfulApplyAckDropObserved && !events.successfulApplyAckDropped) {
+          throw new Error("Core child successful-Apply fault evidence regressed");
         }
         dispatchCount = events.runnerDispatches.length;
         receiptCount = events.metadataReceipts.length;
@@ -791,11 +805,12 @@ function validateCoreHostChildStartup(value: unknown): CoreHostChildStartup {
   if (!value || typeof value !== "object") throw new Error("invalid Core child startup input");
   const candidate = value as Record<string, unknown>;
   if (
-    candidate.type !== "start-core-host/v1" ||
+    candidate.type !== "start-core-host/v2" ||
     typeof candidate.databaseUrl !== "string" ||
     typeof candidate.runnerBaseUrl !== "string" ||
     typeof candidate.artifactRoot !== "string" ||
     typeof candidate.artifactEncryptionPassphrase !== "string" ||
+    typeof candidate.dropSuccessfulApplyAckOnce !== "boolean" ||
     !candidate.syntheticSessionIds || typeof candidate.syntheticSessionIds !== "object"
   ) {
     throw new Error("invalid Core child startup input");
@@ -827,6 +842,48 @@ function validateCoreHostChildStartup(value: unknown): CoreHostChildStartup {
     throw new Error("invalid local Core child startup input");
   }
   return value as CoreHostChildStartup;
+}
+
+/** Drops one successful Apply response at the real HTTP client boundary. */
+function createSuccessfulApplyAckDropper(
+  fetchImpl: typeof fetch,
+  onDrop: () => void,
+): typeof fetch {
+  let dropped = false;
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+    const runDispatch = method === "POST" && /^\/runs\/[^/]+$/u.test(url.pathname);
+    let isApplyDispatch = false;
+    if (runDispatch && !dropped) {
+      const body = typeof init?.body === "string"
+        ? init.body
+        : input instanceof Request
+        ? await input.clone().text()
+        : undefined;
+      if (body !== undefined) {
+        try {
+          const envelope: unknown = JSON.parse(body);
+          isApplyDispatch = Boolean(
+            envelope && typeof envelope === "object" &&
+            (envelope as Record<string, unknown>).kind === "takosumi.opentofu-run@v1" &&
+            (envelope as Record<string, unknown>).action === "apply",
+          );
+        } catch {
+          isApplyDispatch = false;
+        }
+      }
+    }
+
+    const response = await fetchImpl(input, init);
+    if (isApplyDispatch && response.ok) {
+      dropped = true;
+      await response.body?.cancel().catch(() => {});
+      onDrop();
+      throw new TypeError("local proof dropped a successful Apply response");
+    }
+    return response;
+  }) as typeof fetch;
 }
 
 async function runCoreHostChild(): Promise<void> {
@@ -868,9 +925,15 @@ async function runCoreHostChild(): Promise<void> {
     const runnerDispatches: string[] = [];
     const metadataReceipts: SavedPlanStateMetadataReceipt[] = [];
     const runnerEvents: CoreHostEventSnapshot["runnerEvents"][number][] = [];
+    let successfulApplyAckDropped = false;
+    const runnerFetch = startup.dropSuccessfulApplyAckOnce
+      ? createSuccessfulApplyAckDropper(originalFetch, () => {
+          successfulApplyAckDropped = true;
+        })
+      : originalFetch;
     globalThis.fetch = boundedRunnerFetch(
       startup.runnerBaseUrl,
-      originalFetch,
+      runnerFetch,
       undefined,
       (receipt) => { metadataReceipts.push(receipt); },
       (runId) => { runnerDispatches.push(runId); },
@@ -913,6 +976,7 @@ async function runCoreHostChild(): Promise<void> {
         const eventData = Buffer.from(JSON.stringify({
           runnerDispatches,
           metadataReceipts,
+          successfulApplyAckDropped,
           runnerEvents,
         })).toString("base64url");
         if (eventData.length > CORE_HOST_PROTOCOL_LINE_MAX_BYTES) {
@@ -986,9 +1050,29 @@ async function proveWithDatabase(input: {
     readonly distinctProcessIds: true;
   };
   readonly stateGenerations: readonly number[];
+  readonly lostSuccessfulApplyAckRecovery: {
+    readonly successfulResponseDropped: true;
+    readonly sameCoreInvocationSucceeded: true;
+    readonly applyPostCount: 1;
+    readonly completionReadAfterDroppedPost: true;
+  };
   readonly lifecycle: readonly ["plan", "apply-gen1", "restart-replay-gen1", "update-apply-gen2", "approved-destroy-gen3"];
   readonly limits: readonly string[];
 }> {
+  const healthResponse = await fetch(`${input.baseUrl}/healthz`, {
+    signal: AbortSignal.timeout(2_000),
+  });
+  assert(healthResponse.ok, "private-v2 Runner health check failed");
+  const health = await healthResponse.json() as {
+    mutationCustodyMode?: unknown;
+    capabilities?: unknown;
+  };
+  assert.equal(health.mutationCustodyMode, "local-http");
+  assert(
+    Array.isArray(health.capabilities) &&
+      health.capabilities.includes("takosumi.local-mutation-preparation@v2"),
+    "the native PostgreSQL proof did not start a private-v2 Runner",
+  );
   let database: Awaited<ReturnType<typeof createNativePostgresRestartContainer>>;
   try {
     database = await runNativePostgresPhase(
@@ -1002,6 +1086,11 @@ async function proveWithDatabase(input: {
   const closed = new Set<NativeClient>();
   let currentClient: NativeClient | undefined;
   let restart: NativePostgresRestartEvidence | undefined;
+  let successfulApplyAckDrops = 0;
+  const runnerHttpEvents: {
+    readonly label: RunnerHttpProofLabel;
+    readonly phase: RunnerHttpProofEventPhase;
+  }[] = [];
   let activeCoreHost: CoreHostProcess | undefined;
   let startingCoreHostChild: ReturnType<typeof Bun.spawn> | undefined;
   const coreHostProcessIds: number[] = [];
@@ -1052,6 +1141,8 @@ async function proveWithDatabase(input: {
             runtimeInput,
             database.databaseUrl,
             (spawned) => { startingCoreHostChild = spawned; },
+            coreHostProcessIds.length === 0,
+            () => { successfulApplyAckDrops += 1; },
           );
           startingCoreHostChild = undefined;
           activeCoreHost = child;
@@ -1090,7 +1181,10 @@ async function proveWithDatabase(input: {
             "fresh Core database connection observed a changed migration ledger",
           );
         },
-        observeRunnerHttp: (label, phase) => recordRunnerHttpProofEvent(runnerHttpTrace, label, phase),
+        observeRunnerHttp: (label, phase) => {
+          recordRunnerHttpProofEvent(runnerHttpTrace, label, phase);
+          runnerHttpEvents.push({ label, phase });
+        },
       },
     ).catch((cause: unknown) => {
       throw new NativePostgresCoreHttpFailure(runnerHttpTrace, cause);
@@ -1098,6 +1192,22 @@ async function proveWithDatabase(input: {
 
     assert.equal(proof.status, "passed");
     assert.deepEqual(proof.stateGenerations, [1, 2, 3]);
+    assert.equal(successfulApplyAckDrops, 1, "the proof did not drop exactly one successful Apply response");
+    assert.equal(
+      runnerHttpEvents.filter((event) => event.label === "runner.dispatch" && event.phase === "failed").length,
+      1,
+      "the proof observed an unexpected failed Runner dispatch",
+    );
+    const droppedDispatchIndex = runnerHttpEvents.findIndex(
+      (event) => event.label === "runner.dispatch" && event.phase === "failed",
+    );
+    assert(droppedDispatchIndex >= 0, "the dropped successful Apply response was not observed as a lost acknowledgement");
+    assert(
+      runnerHttpEvents.slice(droppedDispatchIndex + 1).some(
+        (event) => event.label === "runner.completion-read" && event.phase === "completed",
+      ),
+      "the same Apply call did not complete its v2 readback after the dropped response",
+    );
     assert(restart, "proof returned without crossing the PostgreSQL restart boundary");
     assert(activeCoreHost, "fresh Core Host process is missing after the restart lifecycle");
     await runNativePostgresPhase("core-host.fresh.close", async () => {
@@ -1113,6 +1223,12 @@ async function proveWithDatabase(input: {
       restart,
       coreHostRestart: { processCount: 2, distinctProcessIds: true },
       stateGenerations: proof.stateGenerations,
+      lostSuccessfulApplyAckRecovery: {
+        successfulResponseDropped: true,
+        sameCoreInvocationSucceeded: true,
+        applyPostCount: 1,
+        completionReadAfterDroppedPost: true,
+      },
       lifecycle: ["plan", "apply-gen1", "restart-replay-gen1", "update-apply-gen2", "approved-destroy-gen3"],
       limits: [
         "synthetic in-memory Accounts/session fixture; real login and authentication persistence are not exercised",
@@ -1120,6 +1236,7 @@ async function proveWithDatabase(input: {
         "the existing real local HTTP/OpenTofu runner executes the provider-free configuration; no cloud provider mutation is exercised",
         "native PostgreSQL daemon restart is local and run-owned; two separate Core Host processes are started by the same proof orchestrator",
         "Core process restart is a clean operator-controlled shutdown, not OS reboot or crash-in-flight recovery",
+        "lost-ack adoption occurs only inside the originating nonterminal Core Apply call and same v2 Runner process; restarted-Runner or terminal-Core adoption is not exercised",
         "not production or Takosumi Hosted qualification",
       ],
     };
@@ -1159,6 +1276,7 @@ async function main(): Promise<void> {
         return await withLocalCoreHttpRunner({
           image,
           signal: runAbort.signal,
+          localPreparationV2: true,
           run: async ({ baseUrl, runDocker }) =>
             await proveWithDatabase({ baseUrl, image, root, signal: runAbort.signal, runDocker }),
         });

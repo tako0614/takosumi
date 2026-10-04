@@ -511,6 +511,7 @@ async function startRunner(
   ownerNonce: string,
   onStarting: () => void,
   signal: AbortSignal,
+  localPreparationV2 = false,
 ): Promise<string> {
   // Inspect the user's selected context without connecting to a daemon. All
   // subsequent Docker calls use only the verified local Unix endpoint.
@@ -545,6 +546,7 @@ async function startRunner(
     "--cpus", "1",
     "--env", "TAKOSUMI_RUNNER_MUTATION_CUSTODY_MODE=local-http",
     image,
+    ...(localPreparationV2 ? ["--local-preparation-v2-supervisor"] : []),
   );
   assert.match(launchedId, /^[a-f0-9]{64}$/u, "Docker run did not return an immutable ID");
   assert.equal(
@@ -587,6 +589,8 @@ export interface LocalCoreHttpRunnerHandle {
 export async function withLocalCoreHttpRunner<T>(input: {
   readonly image: string;
   readonly signal: AbortSignal;
+  /** Selects only the existing private-v2 supervisor entrypoint for this proof. */
+  readonly localPreparationV2?: boolean;
   readonly run: (runner: LocalCoreHttpRunnerHandle) => Promise<T>;
 }): Promise<T> {
   const containerName = `takosumi-core-http-${process.pid}-${randomUUID().slice(0, 8)}`;
@@ -600,6 +604,7 @@ export async function withLocalCoreHttpRunner<T>(input: {
         ownerNonce,
         () => { containerAttempted = true; },
         input.signal,
+        input.localPreparationV2 ?? false,
       );
       return await input.run({
         baseUrl,
