@@ -13,6 +13,72 @@ local_substrate_profile() {
 	esac
 }
 
+local_substrate_runner_preparation() {
+	local preparation="${TAKOSUMI_LOCAL_SUBSTRATE_RUNNER_PREPARATION:-v1}"
+	case "$preparation" in
+		v1|v2)
+			printf '%s\n' "$preparation"
+			;;
+		*)
+			echo "TAKOSUMI_LOCAL_SUBSTRATE_RUNNER_PREPARATION must be v1 or v2 (got: $preparation)" >&2
+			return 1
+			;;
+	esac
+}
+
+local_substrate_validate_runner_preparation_profiles() {
+	local preparation="$1"
+	shift
+	[[ "$preparation" == "v2" ]] || return 0
+
+	local action=""
+	local profile=""
+	local expect_profile=0
+	local profiles=()
+	for argument in "$@"; do
+		if ((expect_profile)); then
+			profiles+=("$argument")
+			expect_profile=0
+			continue
+		fi
+		case "$argument" in
+			--profile)
+			expect_profile=1
+			;;
+			--profile=*)
+			profiles+=("${argument#--profile=}")
+			;;
+			up|down|ps|run|start|stop|restart|logs|exec|config|images|pull|build|create|rm|kill|top|events|port|stats|version|wait|cp|attach|export|convert|watch)
+			[[ -n "$action" ]] || action="$argument"
+			;;
+		esac
+	done
+
+	if [[ "$action" == "down" ]]; then
+		# down.sh deliberately supplies both profiles so it can remove either
+		# service set with the same Compose model used to start it.
+		for profile in "${profiles[@]}"; do
+			case "$profile" in
+				postgres|workers) ;;
+				*)
+					echo "runner preparation v2 down supports only postgres/workers profiles (got: $profile)" >&2
+					return 1
+					;;
+			esac
+		done
+		return 0
+	fi
+
+	if [[ "${TAKOSUMI_LOCAL_SUBSTRATE_PROFILE:-}" != "postgres" ]]; then
+		echo "runner preparation v2 requires TAKOSUMI_LOCAL_SUBSTRATE_PROFILE=postgres" >&2
+		return 1
+	fi
+	if ((expect_profile)) || ((${#profiles[@]} != 1)) || [[ "${profiles[0]:-}" != "postgres" ]]; then
+		echo "runner preparation v2 requires exactly --profile postgres" >&2
+		return 1
+	fi
+}
+
 # Dev fixture account session bearer for the running stack. scripts/up.sh
 # generates it per bring-up and writes it to caddy/runtime/dev-session-id; there
 # is deliberately no built-in literal, because a fixed bearer checked into the
@@ -49,6 +115,12 @@ compose_ingress() {
 
 compose_substrate() {
 	local args=(-f compose.substrate.yml)
+	local preparation
+	preparation="$(local_substrate_runner_preparation)" || return 1
+	local_substrate_validate_runner_preparation_profiles "$preparation" "$@" || return 1
+	if [[ "$preparation" == "v2" ]]; then
+		args+=(-f compose.runner-preparation-v2.yml)
+	fi
 	if local_substrate_disable_apparmor; then
 		args+=(-f compose.substrate.apparmor-unconfined.yml)
 	fi

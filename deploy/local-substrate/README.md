@@ -34,6 +34,37 @@ runner-local state を失わせる。既存 Run が provider に届いた可能�
 mount せず、untrusted workload に公開しない。backup / restore が必要なら operator-private な
 場所で source・state・credential material を含み得るデータとして保護し、repo に保存しない。
 
+### Private runner preparation-v2 preview
+
+`TAKOSUMI_LOCAL_SUBSTRATE_RUNNER_PREPARATION` は unset / `v1` が既定です。private
+preparation-v2 supervisor を明示的に試す場合だけ、同じ shell で次を設定して起動します。
+
+```bash
+export TAKOSUMI_LOCAL_SUBSTRATE_RUNNER_PREPARATION=v2
+export TAKOSUMI_LOCAL_SUBSTRATE_PROFILE=postgres
+bash scripts/up.sh --profile postgres
+```
+
+この選択は Compose helper が起動・read/smoke・down の構成に同じ overlay を加えます。
+`postgres` profile だけが対象で、`workers` または矛盾する profile 指定は Docker 呼び出しや
+起動前の runtime file 書き込みより先に拒否されます。通常の unset / `v1` では overlay を
+読み込まず、runner は従来どおり v1 supervisor を選びます。`v2` はローカルの private preview
+であり、デフォルト、公開 protocol、GA/readiness の主張ではありません。
+
+`postgres` profile は Bun/Postgres の cloud control plane と同時に、composed platform
+Worker の Miniflare mirror も起動し、両方が同じ upgraded local `opentofu-runner` service を
+使います。Worker mirror の dispatch は既存の v1 envelope であり、v2 の attempt/epoch を使う
+recovery ではありません。この v2 runner と Worker mirror の runtime compatibility は未適格で、
+確認済みとは主張しません。この private preview から別の Cloudflare Durable Object execution
+が影響を受けないとも主張しません。
+
+この preview が許すのは、同じ serving runner process 内での限定された client recovery
+だけです。runner の再起動や別/重複 process への移行後に未完了 claim が残る場合は
+indeterminate のままで、v1 custody への自動 takeover、TTL による解放、再 dispatch は
+ありません。private HTTP runner は trusted な single-operator の隔離された local network
+を前提とし、application authentication を提供するものではありません。これは hostile
+client / multi-tenant 安全性の根拠にはなりません。
+
 ## Scope — Takosumi-only
 
 この test bed は **Takosumi (service + Accounts + cloud worker + dashboard)** の integration test 専用。 Takos product (`takos-app`) や installable app (yurucommu) の動作確認は各 repo 内の test に任せる:
