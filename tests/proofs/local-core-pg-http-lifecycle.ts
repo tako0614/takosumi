@@ -6,6 +6,7 @@
  */
 import { strict as assert } from "node:assert";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryAccountsStore } from "../../accounts/service/src/store.ts";
 import { handleControlRoute } from "../../accounts/service/src/control-routes.ts";
@@ -992,7 +993,7 @@ async function proveWithDatabase(input: {
   try {
     database = await runNativePostgresPhase(
       "fixture.create",
-      () => createNativePostgresRestartContainer({ runDocker: input.runDocker }),
+      () => createNativePostgresRestartContainer({ runDocker: input.runDocker, dataRoot: tmpdir() }),
     );
   } catch (cause) {
     throw new NativePostgresProofPhaseFailure("postgres.fixture.create", cause);
