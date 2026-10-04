@@ -1,6 +1,5 @@
 import { For } from "solid-js";
 import AdringWidget from "~/components/AdringWidget";
-import InstallDemo from "~/components/InstallDemo";
 import { FEATURED_APPS, type FeaturedApp } from "~/content/apps";
 import { CAPTURES, DASHBOARD_CAPTURES } from "~/content/captures";
 
@@ -104,7 +103,10 @@ export default function Home() {
               <a class="button button-secondary" href="https://app.takosumi.com/new">Git URL から追加 <Arrow /></a>
             </div>
           </div>
-          <InstallDemo />
+          <figure class="hero-product">
+            <DashboardShot capture={DASHBOARD_CAPTURES.home} alt="Takosumi のホーム画面。ワークスペースに Takos、Takos Office、Yurucommu のアプリと追加操作が並ぶ" class="launcher-shot" priority />
+            <figcaption><span class="caption-dot" aria-hidden="true" /> Takosumi ダッシュボードの公開用サンプル画面</figcaption>
+          </figure>
         </section>
 
         <section id="apps" class="apps-section site-width" aria-labelledby="apps-title">
