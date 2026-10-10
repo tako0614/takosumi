@@ -95,8 +95,8 @@ echo "image size: ${IMAGE_SIZE_HUMAN} (${IMAGE_SIZE} bytes)"
 echo "==================================================================="
 echo "STEP 2: run container detached"
 echo "==================================================================="
-# Let docker pick a free host port for container 8080.
-DOCKER_RUN_ARGS=(-d --name "${CONTAINER_NAME}" -p 0:8080)
+# Let Docker pick a free host port, bound to loopback, for container 8080.
+DOCKER_RUN_ARGS=(-d --name "${CONTAINER_NAME}" -p 127.0.0.1:0:8080)
 if [ "${TAKOSUMI_RUNNER_PROOF_APPARMOR_UNCONFINED:-0}" = "1" ]; then
   DOCKER_RUN_ARGS+=(--security-opt apparmor=unconfined)
 fi
