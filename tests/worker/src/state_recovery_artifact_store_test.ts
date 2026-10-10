@@ -5,6 +5,7 @@ import type { R2Bucket, R2ListOptions, R2Object, R2ObjectBody, R2Objects, R2PutO
 import {
   RECOVERY_STATE_MAX_BYTES,
   R2RecoveryStateArtifactStore,
+  assertRecoveryArtifactMatchesAuthorizedScope,
   type StageRecoveryStateInput,
 } from "../../../worker/src/state_recovery_artifact_store.ts";
 import { digestBytes, StateArtifactCrypto } from "../../../worker/src/state_crypto.ts";
@@ -69,6 +70,31 @@ test("stages encrypted generation-one state and verifies exact bounded readback"
     recoveryRunId: input.recoveryRunId,
     artifactHandle: staged.handle,
   }), staged.artifact);
+});
+
+test("pure scope assertion binds verified R2 artifact to independently authorized custody", async () => {
+  const { bucket, store, input } = await fixture();
+  const staged = await store.stage(input);
+  const scope = {
+    workspaceId: input.workspaceId, capsuleId: input.capsuleId,
+    environment: input.environment, generation: 1 as const,
+    failedApplyRunId: input.failedApplyRunId, recoveryRunId: input.recoveryRunId,
+    plaintextSha256: input.plaintextSha256,
+    custodyEvidenceDigest: input.custodyEvidenceDigest,
+  };
+  await assertRecoveryArtifactMatchesAuthorizedScope({
+    scope, artifactHandle: staged.handle, artifact: staged.artifact,
+  });
+  await assert.rejects(() => assertRecoveryArtifactMatchesAuthorizedScope({
+    scope: { ...scope, custodyEvidenceDigest: `sha256:${"e".repeat(64)}` },
+    artifactHandle: staged.handle, artifact: staged.artifact,
+  }), /scope/);
+  await assert.rejects(() => assertRecoveryArtifactMatchesAuthorizedScope({
+    scope, artifactHandle: staged.handle,
+    artifact: { ...staged.artifact, evidenceDigest: `sha256:${"f".repeat(64)}` },
+  }), /custody/);
+  assert.equal(bucket.putCount, 1);
+  assert.equal(bucket.deleteCount, 0);
 });
 
 test("conditional no-overwrite reconciles an exact retry without a second PUT", async () => {
