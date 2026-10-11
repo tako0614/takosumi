@@ -48,8 +48,12 @@ import {
 } from "takosumi-contract/sources";
 import { recordWorkerMetric, type WorkerMetricSink } from "./metrics.ts";
 import {
+  RUN_DEADLINE_AT_HEADER,
+  RUN_DEADLINE_EXCEEDED_REASON,
   RUNNER_MUTATION_INDETERMINATE_CODE,
   RUNNER_MUTATION_NOT_DISPATCHED_CODE,
+  RUNNER_RUN_DEADLINE_EXCEEDED_CODE,
+  runDeadlineAtHeaderValue,
 } from "./runner_protocol.ts";
 
 /**
@@ -234,6 +238,7 @@ export class CloudflareContainerOpenTofuRunner
   ): Promise<OpenTofuPlanResult> {
     const result = await this.#runContainer("plan", job.planRun.id, job, {
       signal: control?.signal,
+      deadlineAt: control?.deadlineAt,
     });
     const planDigest =
       stringFromRecord(result, "planDigest") ??
@@ -304,6 +309,7 @@ export class CloudflareContainerOpenTofuRunner
       job,
       {
         signal: control?.signal,
+        deadlineAt: control?.deadlineAt,
         runnerObjectName: job.applyRun.id,
         adoption: {
           applyRunId: job.applyRun.id,
@@ -388,6 +394,7 @@ export class CloudflareContainerOpenTofuRunner
       job,
       {
         signal: control?.signal,
+        deadlineAt: control?.deadlineAt,
         runnerObjectName: job.applyRun.id,
         adoption: {
           applyRunId: job.applyRun.id,
@@ -574,7 +581,7 @@ export class CloudflareContainerOpenTofuRunner
           sourceCommit: job.sourceSnapshot.resolvedCommit,
         },
       },
-      { signal: control?.signal },
+      { signal: control?.signal, deadlineAt: control?.deadlineAt },
     );
     const status = stringFromRecord(result, "status");
     if (status !== "succeeded") {
@@ -770,6 +777,12 @@ export class CloudflareContainerOpenTofuRunner
       readonly timeoutMs?: number;
       readonly signal?: AbortSignal;
       /**
+       * Absolute epoch-ms instant by which the invocation carrying this run
+       * needs the reply (see {@link RUN_DEADLINE_AT_HEADER}). Absent means
+       * unbounded, exactly as before.
+       */
+      readonly deadlineAt?: number;
+      /**
        * Durable Object instance authority. Apply/destroy restore the reviewed
        * Plan artifact under its original Run id, but must not reuse that
        * Plan's Container: its activity shutdown can race the mutation.
@@ -798,6 +811,7 @@ export class CloudflareContainerOpenTofuRunner
     );
     const workerAdapterRpcStartedAt = monotonicNow();
     const timeoutMs = positiveTimeoutMs(options.timeoutMs);
+    const deadlineAtHeader = runDeadlineAtHeaderValue(options.deadlineAt);
     const controller =
       timeoutMs || options.signal ? new AbortController() : undefined;
     const abortFromCaller = (): void => {
@@ -818,7 +832,12 @@ export class CloudflareContainerOpenTofuRunner
               `https://opentofu-runner.internal/runs/${encodeURIComponent(runId)}`,
               {
                 method: "POST",
-                headers: { "content-type": "application/json" },
+                headers: {
+                  "content-type": "application/json",
+                  ...(deadlineAtHeader
+                    ? { [RUN_DEADLINE_AT_HEADER]: deadlineAtHeader }
+                    : {}),
+                },
                 body: JSON.stringify({
                   kind: "takosumi.opentofu-run@v1",
                   action,
@@ -1021,6 +1040,9 @@ function failedProviderExecutionResult(
       statePersistence: failure?.statePersistence ?? "unavailable",
     },
     ...(detail ? { detail } : {}),
+    ...(result.runDeadlineExceeded === true
+      ? { runDeadlineExceeded: true }
+      : {}),
     ...(stateDigest ? { state: { digest: stateDigest } } : {}),
     ...(phaseTimings ? { phaseTimings } : {}),
     // Preserve the immutable mutation receipt + attested provider installation.
@@ -1207,6 +1229,18 @@ function runnerInfrastructureErrorFromPayload(
       },
     );
   }
+  // The runner object refused to dispatch because the caller's invocation
+  // deadline left too little time. Nothing reached the container, so this is
+  // a safe redelivery under a fresh deadline, never a Run failure.
+  if (
+    payload.retryable === true &&
+    errorCode === RUNNER_RUN_DEADLINE_EXCEEDED_CODE
+  ) {
+    return new OpenTofuRunnerInfrastructureError(
+      runnerFailureMessage(RUN_DEADLINE_EXCEEDED_REASON),
+      { reason: RUN_DEADLINE_EXCEEDED_REASON },
+    );
+  }
   return undefined;
 }
 
@@ -1241,9 +1275,21 @@ function runnerExecutionErrorFromPayload(
   }
   if (errorCode && RUNNER_PLAN_EXECUTION_FAILURE_CODES.has(errorCode)) {
     const detail = runnerExecutionDetailFromPayload(payload);
-    return new OpenTofuRunnerExecutionError(runnerFailureMessage(errorCode), {
-      reason: errorCode,
+    const runDeadlineExceeded = payload.runDeadlineExceeded === true;
+    // A Plan stopped by the run deadline reports one fixed reason. An Apply or
+    // Destroy keeps the runner's own class, because Core decides from it
+    // whether provider execution could have begun (an init or build stopped
+    // by the deadline is still pre-provider); the deadline rides alongside.
+    const reason =
+      runDeadlineExceeded && action === "plan"
+        ? RUN_DEADLINE_EXCEEDED_REASON
+        : errorCode;
+    return new OpenTofuRunnerExecutionError(runnerFailureMessage(reason), {
+      reason,
       ...(detail ? { detail } : {}),
+      ...(runDeadlineExceeded && action !== "plan"
+        ? { runDeadlineExceeded: true }
+        : {}),
     });
   }
   if (
@@ -1551,6 +1597,14 @@ function diagnosticsFromContainerResult(
       message: "runner provider diagnostics omitted",
     });
   }
+  if (result.runDeadlineExceeded === true) {
+    // Supplemental: the provider failure itself stays the error of record.
+    diagnostics.push({
+      severity: "warning",
+      code: RUN_DEADLINE_EXCEEDED_REASON,
+      message: "runner stopped at the dispatching host's run deadline",
+    });
+  }
   const providerFailure = providerExecutionFailureFromContainerResult(result);
   const providerFailureDetail = providerFailure
     ? providerExecutionDetailFromPayload(result)
@@ -1707,7 +1761,11 @@ function planResourceChangesFromContainerResult(
       },
     ];
   });
-  return rows.length > 0 ? rows : undefined;
+  // An explicit list is kept as reported, including an empty one: a Plan with
+  // no resource changes (an output-only module, its destroy, a refresh-only
+  // Plan) is known-empty, not unknown. Only a list with rows that could not be
+  // read is unknown, so the policy layers fail closed on it.
+  return rows.length === value.length ? rows : undefined;
 }
 
 function plannedOutputsFromContainerResult(

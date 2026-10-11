@@ -337,6 +337,8 @@ import type {
   ReleaseActivator,
   RunClaimResult,
   RunCredentials,
+  RunDispatchControl,
+  RunExecutionControl,
   RunExecutionDispatch,
   RunModuleDispatch,
   TerminalRunPersistResult,
@@ -452,9 +454,11 @@ function isRetryableRunnerInfrastructureError(error: unknown): boolean {
 
 /**
  * A mutating Run is safe to redeliver only when the runner proved either that
- * capacity was refused before provider execution, or that an exact immutable
- * artifact target can adopt a lost acknowledgement. A substrate reset is
- * ambiguous: the provider may already have changed external state without
+ * capacity was refused before provider execution, that an exact immutable
+ * artifact target can adopt a lost acknowledgement, or that it refused to
+ * dispatch because the dispatching host's deadline left too little time
+ * (`run_deadline_exceeded`; nothing reached the container). A substrate reset
+ * is ambiguous: the provider may already have changed external state without
  * returning a durable state artifact, so replaying the immutable Plan can
  * duplicate creates or destroys.
  */
@@ -464,7 +468,8 @@ function isSafeMutatingRunnerInfrastructureRetryError(
   return (
     error instanceof OpenTofuRunnerInfrastructureError &&
     (error.reason === "capacity_exhausted" ||
-      error.reason === "runner_artifact_relay_ambiguous")
+      error.reason === "runner_artifact_relay_ambiguous" ||
+      error.reason === "run_deadline_exceeded")
   );
 }
 
@@ -733,13 +738,41 @@ class CapsuleLifecycleActionError extends OpenTofuControllerError {
 
 function runFailureDiagnostics(error: unknown) {
   const primary = lifecycleActionDiagnostic(error);
-  if (!(error instanceof RunExecutionRenewalError)) return [primary];
+  if (!(error instanceof RunExecutionRenewalError)) {
+    return [primary, ...runDeadlineDiagnostics(error)];
+  }
   return [
     { ...primary, code: error.diagnosticCode },
     ...(error.secondaryError === undefined
       ? []
       : [lifecycleActionDiagnostic(error.secondaryError)]),
   ];
+}
+
+/**
+ * A separate, non-authoritative note that the host's run deadline stopped the
+ * failing command. It never replaces the primary diagnostic, whose code still
+ * says whether the failure happened before provider execution.
+ */
+function runDeadlineDiagnostics(error: unknown) {
+  return error instanceof OpenTofuRunnerExecutionError &&
+      error.runDeadlineExceeded === true
+    ? [
+        {
+          severity: "warning" as const,
+          code: "run_deadline_exceeded",
+          message: "runner stopped at the dispatching host's run deadline",
+        },
+      ]
+    : [];
+}
+
+/** The runner object refused to dispatch for lack of deadline headroom. */
+function isRunDeadlineDispatchRefusal(error: unknown): boolean {
+  return (
+    error instanceof OpenTofuRunnerInfrastructureError &&
+    error.reason === "run_deadline_exceeded"
+  );
 }
 
 const MAX_LIFECYCLE_ACTION_DIAGNOSTIC_DETAIL_CHARS = 4_096;
@@ -4766,9 +4799,12 @@ export class RunEngine {
    * consumers themselves convert runner failures into recorded `failed` runs and
    * only rethrow infrastructure/transport errors).
    */
-  async dispatchQueuedRun(dispatch: OpenTofuRunDispatch): Promise<void> {
+  async dispatchQueuedRun(
+    dispatch: OpenTofuRunDispatch,
+    control: RunDispatchControl = {},
+  ): Promise<void> {
     if (dispatch.action === "plan") {
-      await this.runQueuedPlan(dispatch.runId);
+      await this.runQueuedPlan(dispatch.runId, control);
       return;
     }
     if (dispatch.action === "source_sync") {
@@ -4779,7 +4815,7 @@ export class RunEngine {
       await this.runQueuedRestore(dispatch.runId);
       return;
     }
-    await this.runQueuedApply(dispatch.runId);
+    await this.runQueuedApply(dispatch.runId, control);
   }
 
   async runQueuedRestore(runId: string): Promise<Run | undefined> {
@@ -5353,7 +5389,10 @@ export class RunEngine {
    * dispatcher); the Workers consumer ignores the return value and polls the
    * store.
    */
-  async runQueuedPlan(runId: string): Promise<PlanRun | undefined> {
+  async runQueuedPlan(
+    runId: string,
+    control: RunDispatchControl = {},
+  ): Promise<PlanRun | undefined> {
     const preClaimStartedAt = performance.now();
     let planRun = await this.#store.getPlanRun(runId);
     if (!planRun) {
@@ -5450,6 +5489,7 @@ export class RunEngine {
           postMintPolicyAuditMs:
             runEnvironment.planTimings?.postMintPolicyAuditMs ?? 0,
         },
+        control.deadlineAt,
       );
     } catch (error) {
       if (isRunnerInfrastructureRequeueError(error)) throw error;
@@ -5463,7 +5503,10 @@ export class RunEngine {
    * pre-flight, credential mint, and serialized execution on the capsule
    * key. Returns the ApplyRunResponse for the inline dispatcher.
    */
-  async runQueuedApply(runId: string): Promise<ApplyRunResponse> {
+  async runQueuedApply(
+    runId: string,
+    control: RunDispatchControl = {},
+  ): Promise<ApplyRunResponse> {
     const applyRun = await this.#store.getApplyRun(runId);
     if (!applyRun) {
       throw new OpenTofuControllerError(
@@ -5534,6 +5577,7 @@ export class RunEngine {
           dispatch,
           inputs,
           handle,
+          control.deadlineAt,
         ),
       );
     let response: ApplyRunExecutionResponse;
@@ -6136,13 +6180,15 @@ export class RunEngine {
     if (planRun.operation === "destroy") return;
     if (planRun.requiresApproval === true) return;
     if (planRun.appliedApplyRunId) return;
-    // A no-op plan already proves desired and observed state converge. Creating
-    // an apply would only spend runner time and cannot publish a new StateVersion or Output.
-    if (
-      planRun.planResourceChanges !== undefined &&
-      planRun.planResourceChanges.length === 0
-    )
-      return;
+    // Unknown resource changes (as opposed to an empty list) mean the
+    // delete/replace approval gate could not be evaluated. Never continue such
+    // a Plan unattended; it stays available for an explicit Apply.
+    if (planRun.planResourceChanges === undefined) return;
+    // A known-empty change list still continues: it is not proof that nothing
+    // changed, because an output-only change needs an Apply to publish the new
+    // Output, and the Plan carries no output-change evidence to tell the two
+    // apart. (Runner adapters used to collapse an empty list to "absent", so
+    // production never skipped these Plans either.)
     try {
       // Finishing a held Plan is allowed after draining. Starting its automatic
       // Apply is a separate admission bound to the Plan's original epoch, not
@@ -8143,6 +8189,7 @@ export class RunEngine {
       readonly credentialValidationMs: number;
       readonly postMintPolicyAuditMs: number;
     },
+    deadlineAt?: number,
   ): Promise<PlanRun> {
     try {
       const dispatchPreparationStartedAt = performance.now();
@@ -8218,7 +8265,7 @@ export class RunEngine {
         };
         const runnerPlanStartedAt = performance.now();
         try {
-          return await runner.plan(job, { signal });
+          return await runner.plan(job, runnerExecutionControl(signal, deadlineAt));
         } finally {
           runnerPlanMs = finiteElapsedMs(runnerPlanStartedAt, performance.now());
         }
@@ -8594,8 +8641,10 @@ export class RunEngine {
             : {}),
           ...(layered.resource
             ? {
-                resourceTypesAllowed:
-                  layered.resource.disallowedResourceTypes.length === 0,
+                resourceTypesAllowed: layered.resource.reasons.length === 0,
+                ...(result.planResourceChanges === undefined
+                  ? { planResourceChangesKnown: false }
+                  : {}),
               }
             : {}),
           ...(compatibilityPolicy.audit
@@ -8675,11 +8724,32 @@ export class RunEngine {
       observedProviders,
     );
     if (changes === undefined) {
-      return compactLayeredPolicy({
+      const layers = compactLayeredPolicy({
         provider,
         providerLockfile,
         providerInstallation,
       });
+      // A runner that reports no resource changes at all (not an empty list)
+      // leaves the resource-level layers unevaluable. Where a Capsule's policy
+      // configures any of them, fail closed instead of passing the Plan as if
+      // it were unconstrained.
+      const capsuleRun = Boolean(
+        planRun.capsuleContext?.capsuleId ?? planRun.capsuleId,
+      );
+      const resourcePolicyConfigured =
+        policy?.allowedResourceTypes !== undefined ||
+        policy?.scopeBoundary !== undefined ||
+        policy?.quota !== undefined;
+      if (!capsuleRun || !resourcePolicyConfigured) return layers;
+      return {
+        ...layers,
+        resource: {
+          disallowedResourceTypes: [],
+          reasons: [
+            "plan resource changes are unavailable, so the resource policy cannot be evaluated",
+          ],
+        },
+      };
     }
     const action = evaluateActionPolicy(changes);
     // Enforce the composed Workspace/InstallConfig policy. An undefined
@@ -8857,6 +8927,7 @@ export class RunEngine {
     dispatch: RunModuleDispatch,
     inputs: PlanRunInputs | undefined,
     lease?: LeaseHandle,
+    deadlineAt?: number,
   ): Promise<ApplyRunExecutionResponse> {
     const startedAt = this.#now();
     const claim = await this.#markApplyRunning(applyRun, profile, startedAt);
@@ -8922,6 +8993,7 @@ export class RunEngine {
           inputs,
           leaseToken,
           lease,
+          deadlineAt,
         );
       }
       // Renewal harness: #dispatchApply's runner.apply() is ONE awaited blocking
@@ -8963,6 +9035,7 @@ export class RunEngine {
                   runnerDispatched = true;
                 },
                 signal: credentialSignal,
+                deadlineAt,
               }),
             (outcome) => Boolean(outcome.result.providerExecutionFailure),
           ),
@@ -9060,6 +9133,7 @@ export class RunEngine {
             lifecycleActions: dispatch.lifecycleActions,
             sourceBuild: dispatch.sourceBuild,
             signal,
+            deadlineAt,
           }),
       );
       const completed = this.#applyPostApplyLifecycleOutcome({
@@ -9496,6 +9570,8 @@ export class RunEngine {
     readonly dispatch: RunModuleDispatch;
     readonly credentials: RunCredentials | undefined;
     readonly signal: AbortSignal;
+    /** Host invocation deadline forwarded to the runner adapter, if any. */
+    readonly deadlineAt?: number;
     /** Fired immediately before the runner is invoked (runner-dispatched flag). */
     readonly onDispatch: () => void;
   }): Promise<{
@@ -9582,7 +9658,7 @@ export class RunEngine {
         ...(envDispatch.depStates ? { depStates: envDispatch.depStates } : {}),
         ...(credentials ? { credentials } : {}),
       },
-      { signal: input.signal },
+      runnerExecutionControl(input.signal, input.deadlineAt),
     );
     if (result.providerExecutionFailure) {
       const stateWasPersisted =
@@ -10015,6 +10091,8 @@ export class RunEngine {
     readonly lifecycleActions: InstallConfig["lifecycleActions"];
     readonly sourceBuild: InstallConfig["sourceBuild"];
     readonly signal: AbortSignal;
+    /** Host invocation deadline forwarded to the release adapter, if any. */
+    readonly deadlineAt?: number;
   }): Promise<LifecycleActionOutcome | undefined> {
     const commands = releaseActivationCommands(
       input.lifecycleActions,
@@ -10081,7 +10159,7 @@ export class RunEngine {
           ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
           ...(sourceSnapshot ? { sourceSnapshot } : {}),
         },
-        { signal: input.signal },
+        runnerExecutionControl(input.signal, input.deadlineAt),
       );
       if (result.status === "skipped" && commands.length > 0) {
         return {
@@ -10114,7 +10192,9 @@ export class RunEngine {
         ...base,
         reportedStatus: "error",
         activityStatus: "failed",
-        actionDispatched,
+        // A runner object that refused for lack of deadline headroom ran
+        // nothing.
+        actionDispatched: actionDispatched && !isRunDeadlineDispatchRefusal(error),
         message: errorMessage(error),
         ...(error instanceof OpenTofuRunnerExecutionError && error.detail
           ? { detail: error.detail }
@@ -10393,6 +10473,8 @@ export class RunEngine {
     readonly lifecycleActions: InstallConfig["lifecycleActions"];
     readonly sourceBuild: InstallConfig["sourceBuild"];
     readonly signal: AbortSignal;
+    /** Host invocation deadline forwarded to the release adapter, if any. */
+    readonly deadlineAt?: number;
   }): Promise<LifecycleActionOutcome | undefined> {
     const commands = releaseActivationCommands(
       input.lifecycleActions,
@@ -10550,9 +10632,12 @@ export class RunEngine {
           ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
           ...(sourceSnapshot ? { sourceSnapshot } : {}),
         },
-        { signal: input.signal },
+        runnerExecutionControl(input.signal, input.deadlineAt),
       );
     } catch (error) {
+      // Refused before anything ran: no lifecycle action happened, so the
+      // destroy is a safe redelivery rather than a decisive failure.
+      if (isRunDeadlineDispatchRefusal(error)) throw error;
       const outcome: LifecycleActionOutcome = {
         phase: "pre_destroy",
         reportedStatus: "error",
@@ -11014,6 +11099,7 @@ export class RunEngine {
     inputs: PlanRunInputs | undefined,
     leaseToken: string,
     lease?: LeaseHandle,
+    deadlineAt?: number,
   ): Promise<ApplyRunResponse> {
     if (!planRun.planArtifact) {
       throw new OpenTofuControllerError(
@@ -11081,6 +11167,7 @@ export class RunEngine {
             lifecycleActions: dispatch.lifecycleActions,
             sourceBuild: dispatch.sourceBuild,
             signal,
+            deadlineAt,
           }),
       );
       if (lifecycleOutcome) {
@@ -11219,7 +11306,7 @@ export class RunEngine {
                 : {}),
               ...(credentials ? { credentials } : {}),
             },
-            { signal: credentialSignal },
+            runnerExecutionControl(credentialSignal, deadlineAt),
               );
             },
             (outcome) => Boolean(outcome.providerExecutionFailure),
@@ -11468,7 +11555,7 @@ export class RunEngine {
         throw new OpenTofuControllerError("failed_precondition", error.message);
       }
       if (
-        runnerDispatched &&
+        (runnerDispatched || isRunDeadlineDispatchRefusal(error)) &&
         isSafeMutatingRunnerInfrastructureRetryError(error)
       ) {
         const runningWithEnvironmentFailure = runEnvironmentFailedRun(
@@ -12310,4 +12397,15 @@ function providerLockfileObjectRefMatchesRun(ref: string, runId: string): boolea
       ref.endsWith(`/runs/${sanitizedRunId}/provider-lockfile.hcl`) ||
       ref.endsWith(`/opentofu-plan-runs/${sanitizedRunId}/provider-lockfile.hcl`))
   );
+}
+
+/**
+ * The control handed to a runner adapter: the renewal-owned cancellation
+ * signal plus, when the dispatching host has a wall-time limit, its deadline.
+ */
+function runnerExecutionControl(
+  signal: AbortSignal,
+  deadlineAt: number | undefined,
+): RunExecutionControl {
+  return deadlineAt === undefined ? { signal } : { signal, deadlineAt };
 }

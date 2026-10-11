@@ -17,6 +17,7 @@ import {
   runReviewedPlanApply,
 } from "../../runner/lib/plan_apply.ts";
 import { safeRunId } from "../../runner/lib/util.ts";
+import { registerRunBudget } from "../../runner/lib/run_deadline.ts";
 
 const PROVIDER_SECRET = "tofu-descendant-provider-secret-0123456789abcdef";
 
@@ -99,6 +100,67 @@ test("credential-bearing OpenTofu cancellation kills descendants before cleanup"
     expect(visible).not.toContain(PROVIDER_SECRET);
     expect(visible).not.toContain(fixture.evidenceRoot);
     expect(visible).not.toContain(fixture.workspace.root);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("a run deadline stops a hanging OpenTofu apply on the provider-failure path", async () => {
+  // No profile timeout at all: only the forwarded run budget bounds the apply,
+  // exactly as on a host whose invocation wall is the tighter limit.
+  const fixture = await createTofuDescendantFixture("deadline", {
+    hangPhase: "apply",
+    descendantDelaySeconds: 1.5,
+  });
+  try {
+    const plan = await runPlan(fixture.runId, fixture.request);
+    expect(plan.status).toBe("succeeded");
+    const controller = new AbortController();
+    registerRunBudget(controller.signal, "1200");
+    const apply = await runReviewedPlanApply(
+      fixture.runId,
+      "apply",
+      { ...fixture.request, planArtifact: plan.planArtifact },
+      controller.signal,
+    );
+
+    // The definite timeout, not a cancellation: `tofu apply` was dispatched,
+    // so the reply carries the marker the host uses to persist partial state.
+    expect(apply.status).toBe("failed");
+    expect(apply.exitCode).toBe(124);
+    expect(apply.providerExecutionFailure).toEqual({
+      kind: "provider_execution_failed",
+    });
+    expect(String(apply.stderr)).toContain("(run deadline)");
+    await Bun.sleep(1_600);
+    expect(await evidenceFiles(fixture.evidenceRoot, ".marker")).toEqual([]);
+    expect(await providerCredentialDirectories(fixture.runId)).toEqual([]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("a Plan whose plan JSON the run deadline cuts off is a failed Plan", async () => {
+  // `tofu plan` succeeds, then the deadline stops `tofu show -json`. Without
+  // the plan JSON the resource changes are unknown, so the Plan must fail
+  // instead of succeeding with nothing for approval and resource policy.
+  const fixture = await createTofuDescendantFixture("show_deadline", {
+    hangPhase: "show",
+    descendantDelaySeconds: 0.05,
+  });
+  try {
+    const controller = new AbortController();
+    registerRunBudget(controller.signal, "1500");
+    const plan = await runPlan(fixture.runId, fixture.request, controller.signal);
+
+    expect(plan.status).toBe("failed");
+    expect(plan.exitCode).toBe(124);
+    expect(plan.errorCode).toBe("opentofu_plan_failed");
+    expect("planResourceChanges" in plan).toBe(false);
+    expect("summary" in plan).toBe(false);
+    expect(String(plan.stderr)).toContain("(run deadline)");
+    await Bun.sleep(300);
+    expect(await providerCredentialDirectories(fixture.runId)).toEqual([]);
   } finally {
     await fixture.cleanup();
   }

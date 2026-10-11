@@ -9,8 +9,10 @@ import {
   type OpenTofuRunner,
   OpenTofuRunnerExecutionError,
   OpenTofuRunnerInfrastructureError,
+  type RunExecutionControl,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
+  applyRunMutationDispatched,
   type BeginApplyRunResult,
   type CapsuleApplyRunAdmissionFence,
   capsuleApplyRunAdmissionFence,
@@ -896,6 +898,311 @@ test("queued destroy cancellation emits one terminal callback after its early li
   expect(cancelled.startedAt).toBeUndefined();
   expect(queuedEvents).toEqual(["destroy:queued"]);
   expect(terminalEvents).toEqual(["destroy:cancelled:cancelled"]);
+});
+
+// --- host deadline: the dispatcher's invocation bound reaches the runner ---
+
+test("a dispatch deadline reaches plan and apply, and a deadline-stopped apply commits its partial state as failed", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const deadlineAt = Date.parse("2026-10-11T08:30:59.920Z");
+  const planControls: (RunExecutionControl | undefined)[] = [];
+  const applyControls: (RunExecutionControl | undefined)[] = [];
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(6100),
+    newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner: {
+      plan: (_job, control) => {
+        planControls.push(control);
+        return Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: planArtifact(),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: [CLOUDFLARE],
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        });
+      },
+      // What the Cloudflare adapter returns once the runner stopped `tofu
+      // apply` on the forwarded deadline and its object persisted the
+      // partial state: a determined provider failure, not an indeterminate.
+      apply: (job, control) => {
+        applyControls.push(control);
+        return Promise.resolve(
+          fixtureStateCommit({
+            providerExecutionFailure: {
+              kind: "provider_execution_failed" as const,
+              statePersistence: "persisted" as const,
+              errorCode: "apply_failed",
+            },
+            providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+            executionEvidence: fixtureExecutionEvidence(job, "apply", {
+              outcome: "provider_failed_state_persisted",
+            }),
+          }),
+        );
+      },
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+  });
+  const request = await seedUpdatable(store, { capsuleId: "cap_deadline" });
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  await controller.dispatchQueuedRun(
+    {
+      action: "plan",
+      runId: queuedPlan.id,
+      workspaceId: queuedPlan.workspaceId,
+    },
+    { deadlineAt },
+  );
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  await controller.dispatchQueuedRun(
+    {
+      action: "apply",
+      runId: applyRun.id,
+      workspaceId: applyRun.workspaceId,
+    },
+    { deadlineAt },
+  );
+
+  expect(planControls.map((control) => control?.deadlineAt)).toEqual([
+    deadlineAt,
+  ]);
+  expect(applyControls.map((control) => control?.deadlineAt)).toEqual([
+    deadlineAt,
+  ]);
+  // The deadline travels beside, never instead of, the renewal-owned signal.
+  expect(planControls[0]?.signal).toBeInstanceOf(AbortSignal);
+  expect(applyControls[0]?.signal).toBeInstanceOf(AbortSignal);
+  const failed = (await store.getApplyRun(applyRun.id))!;
+  expect(failed.status).toBe("failed");
+  expect(failed.diagnostics?.map((item) => item.code)).toContain(
+    "apply_failed",
+  );
+  expect(failed.stateVersionId).toBeDefined();
+  const capsule = await store.getCapsule(failed.capsuleId!);
+  expect(capsule?.currentStateGeneration).toBe(1);
+  expect(capsule?.currentStateVersionId).toBe(failed.stateVersionId);
+});
+
+test("a dispatch deadline reaches destroy, and a dispatch without one stays unbounded", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const deadlineAt = Date.parse("2026-10-11T08:30:59.920Z");
+  const planControls: (RunExecutionControl | undefined)[] = [];
+  const destroyControls: (RunExecutionControl | undefined)[] = [];
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(6200),
+    newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner: {
+      plan: (_job, control) => {
+        planControls.push(control);
+        return Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: planArtifact(),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: [CLOUDFLARE],
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        });
+      },
+      apply: () => Promise.reject(new Error("not used")),
+      destroy: (job, control) => {
+        destroyControls.push(control);
+        return Promise.resolve(
+          fixtureStateCommit({
+            providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+            executionEvidence: fixtureExecutionEvidence(job, "destroy"),
+          }),
+        );
+      },
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+  });
+  const request = await seedUpdatable(store, { capsuleId: "cap_deadline_destroy" });
+  const { planRun: queuedPlan } = await controller.createPlanRun({
+    ...request,
+    operation: "destroy",
+  });
+  // An HTTP-driven or self-host dispatch passes no control at all.
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    workspaceId: queuedPlan.workspaceId,
+  });
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  expect(planRun.status).toEqual("waiting_approval");
+  await controller.approveRun(planRun.id, { approvedBy: "ops" });
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  await controller.dispatchQueuedRun(
+    {
+      action: "apply",
+      runId: applyRun.id,
+      workspaceId: applyRun.workspaceId,
+    },
+    { deadlineAt },
+  );
+
+  expect(planControls).toHaveLength(1);
+  expect(planControls[0]?.deadlineAt).toBeUndefined();
+  expect("deadlineAt" in (planControls[0] ?? {})).toBe(false);
+  expect(destroyControls.map((control) => control?.deadlineAt)).toEqual([
+    deadlineAt,
+  ]);
+  expect((await store.getApplyRun(applyRun.id))?.status).toBe("succeeded");
+});
+
+test("a dispatch the runner refused for lack of deadline headroom is requeued, not failed", async () => {
+  // The runner object refused before anything reached the container, so the
+  // shortage belongs to the dispatching invocation: the exact ApplyRun is
+  // redelivered and a later invocation with a fresh deadline applies it.
+  const store = new InMemoryOpenTofuControlStore();
+  let applyCalls = 0;
+  const retryDispatches: Parameters<EnqueueRun>[0][] = [];
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(6300),
+    newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner: {
+      plan: () =>
+        Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: planArtifact(),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: [CLOUDFLARE],
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        }),
+      apply: (job) => {
+        applyCalls++;
+        if (applyCalls === 1) {
+          return Promise.reject(
+            new OpenTofuRunnerInfrastructureError(
+              "runner failure (run_deadline_exceeded)",
+              { reason: "run_deadline_exceeded" },
+            ),
+          );
+        }
+        return Promise.resolve(
+          fixtureStateCommit({
+            rawOutputRef: job.rawOutputRef,
+            providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+            executionEvidence: fixtureExecutionEvidence(job, "apply"),
+          }),
+        );
+      },
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: (dispatch) => {
+      retryDispatches.push(dispatch);
+      return Promise.resolve();
+    },
+  });
+  const request = await seedUpdatable(store, { capsuleId: "cap_deadline_requeue" });
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    workspaceId: queuedPlan.workspaceId,
+  });
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  retryDispatches.length = 0;
+  const dispatch = {
+    action: "apply" as const,
+    runId: applyRun.id,
+    workspaceId: applyRun.workspaceId,
+  };
+
+  await expect(
+    controller.dispatchQueuedRun(dispatch, { deadlineAt: 1_000 }),
+  ).rejects.toThrow(/retryable_runner_infrastructure_error/);
+  expect((await store.getApplyRun(applyRun.id))?.status).toBe("queued");
+  expect(retryDispatches).toEqual([{ ...dispatch, cause: "controller_retry" }]);
+
+  await controller.dispatchQueuedRun(dispatch, { deadlineAt: 2_000 });
+  expect((await store.getApplyRun(applyRun.id))?.status).toBe("succeeded");
+  expect(applyCalls).toBe(2);
+});
+
+test("an Apply whose init the run deadline stopped stays non-decisive", async () => {
+  // `tofu init` (or a source build) stopped by the deadline never reached a
+  // provider. The deadline is a supplemental note; the pre-provider failure
+  // class stays the error of record, so the Capsule keeps its runtime revision.
+  const store = new InMemoryOpenTofuControlStore();
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(6400),
+    newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner: {
+      plan: () =>
+        Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: planArtifact(),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: [CLOUDFLARE],
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        }),
+      apply: () =>
+        Promise.reject(
+          new OpenTofuRunnerExecutionError(
+            "runner failure (opentofu_init_failed)",
+            { reason: "opentofu_init_failed", runDeadlineExceeded: true },
+          ),
+        ),
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+  });
+  const request = await seedUpdatable(store, { capsuleId: "cap_init_deadline" });
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    workspaceId: queuedPlan.workspaceId,
+  });
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  await controller
+    .dispatchQueuedRun(
+      {
+        action: "apply",
+        runId: applyRun.id,
+        workspaceId: applyRun.workspaceId,
+      },
+      { deadlineAt: Date.parse("2026-10-11T08:30:59.920Z") },
+    )
+    .catch(() => undefined);
+
+  const failed = (await store.getApplyRun(applyRun.id))!;
+  expect(failed.status).toBe("failed");
+  expect(
+    failed.diagnostics?.map((item) => [item.severity, item.code]),
+  ).toEqual([
+    ["error", "opentofu_init_failed"],
+    ["warning", "run_deadline_exceeded"],
+  ]);
+  expect(applyRunMutationDispatched(failed)).toBe(false);
 });
 
 test("a minted CredentialBundle never serializes its values", () => {

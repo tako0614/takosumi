@@ -1400,6 +1400,240 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
   );
 });
 
+// The install-serving E2E of 2026-10-11 lost a whole Apply this way: the run
+// owner's Durable Object alarm hit its 15-minute wall, the runner reply had no
+// receiver, and takeover could only answer `runner_mutation_indeterminate`
+// because no completion receipt existed. These pin the deadline hierarchy that
+// makes the runner stop first and record a determined outcome instead.
+async function deadlineApplyFixture(applyRunId: string) {
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const sealedPlan = await crypto.seal(PLAN_BYTES);
+  await artifacts.put(
+    "opentofu-plan-runs/plan_1/tfplan.enc",
+    sealedPlan.ciphertext,
+  );
+  const stateScope = {
+    ...SCOPE,
+    generation: 1,
+    stateRef: `${STATE_PREFIX}/00000001.tfstate.enc`,
+  };
+  const rawOutputRef = RAW_OUTPUT_REF.replace(
+    "/runs/plan_1/",
+    `/runs/${applyRunId}/`,
+  );
+  const body = JSON.stringify({
+    kind: "takosumi.opentofu-run@v1",
+    action: "apply",
+    runId: "plan_1",
+    request: {
+      applyRun: { id: applyRunId },
+      planRun: {
+        id: "plan_1",
+        requiredProviders: ["registry.terraform.io/tako0614/takoform"],
+      },
+      stateScope,
+      rawOutputRef,
+      planArtifact: {
+        kind: "object-storage",
+        ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
+        digest: PLAN_DIGEST,
+      },
+    },
+  });
+  const request = (deadlineAt?: number) =>
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(deadlineAt === undefined
+          ? {}
+          : { "x-takosumi-run-deadline-at": String(deadlineAt) }),
+      },
+      body,
+    });
+  return { artifacts, state, stateScope, rawOutputRef, request };
+}
+
+test("a budget-timed-out apply persists partial state and a completion receipt that a takeover adopts", async () => {
+  const applyRunId = "apply_deadline_timeout";
+  const fixture = await deadlineApplyFixture(applyRunId);
+  const budgets: (string | null)[] = [];
+  const forwardedDeadlines: (string | null)[] = [];
+  let providerPosts = 0;
+  const runner = runnerWithContainer(fixture.artifacts, fixture.state, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT") return Response.json({ ok: true });
+      if (request.method === "POST" && path === "/runs/plan_1") {
+        providerPosts += 1;
+        budgets.push(request.headers.get("x-takosumi-runner-budget-ms"));
+        forwardedDeadlines.push(
+          request.headers.get("x-takosumi-run-deadline-at"),
+        );
+        // What runner/lib/plan_apply.ts answers once the forwarded budget
+        // stops `tofu apply` (exec.ts exit 124): a provider failure with the
+        // partial state left in the run workspace.
+        return Response.json(
+          {
+            runId: "plan_1",
+            action: "apply",
+            status: "failed",
+            exitCode: 124,
+            providerExecutionFailure: { kind: "provider_execution_failed" },
+            errorCode: "apply_failed",
+            stderr: "command timed out after 659000ms (run deadline)",
+            runDeadlineExceeded: true,
+          },
+          { status: 500 },
+        );
+      }
+      if (request.method === "GET" && path.endsWith("/artifacts/tfstate")) {
+        return new Response(NEW_STATE_BYTES);
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+
+  const deadlineAt = Date.now() + 11 * 60_000;
+  const first = await runner.fetch(fixture.request(deadlineAt));
+
+  assert.equal(first.status, 500);
+  const firstPayload = (await first.json()) as Record<string, unknown>;
+  assert.equal(firstPayload.errorCode, "apply_failed");
+  assert.deepEqual(firstPayload.providerExecutionFailure, {
+    kind: "provider_execution_failed",
+    statePersistence: "persisted",
+  });
+  // The fixed, value-free cause survives normalization.
+  assert.equal(firstPayload.runDeadlineExceeded, true);
+  // The container received what was left as a relative budget, never the
+  // absolute instant measured on the Worker's clock.
+  assert.equal(budgets.length, 1);
+  const budget = Number(budgets[0]);
+  assert.ok(Number.isSafeInteger(budget), String(budgets[0]));
+  assert.ok(budget > 10 * 60_000 && budget <= 11 * 60_000, String(budget));
+  assert.deepEqual(forwardedDeadlines, [null]);
+  // The partial state is durable, and the dispatch authority now holds a
+  // determined completion instead of a bare `dispatched` claim.
+  const stateDigest = await digestOf(NEW_STATE_BYTES);
+  assert.equal(
+    fixture.state.metadata(fixture.stateScope.stateRef)?.[
+      "takosumi-provider-execution"
+    ],
+    "failed",
+  );
+  const inspection = await runner.inspectMutationAuthority(applyRunId, "apply");
+  assert.equal(inspection.authority.status, "valid");
+  const authority = inspection.authority as Extract<
+    typeof inspection.authority,
+    { readonly status: "valid" }
+  >;
+  assert.equal(authority.phase, "completed");
+  assert.equal(authority.completion?.providerExecutionFailed, true);
+  assert.equal(authority.completion?.stateRef, fixture.stateScope.stateRef);
+  assert.equal(authority.completion?.contentDigest, stateDigest);
+
+  // A takeover is a later alarm with its own deadline redelivering the same
+  // ApplyRun. The header is transport metadata, so the exact semantics still
+  // match and the receipt is adopted without a second provider dispatch.
+  const takeover = await runner.fetch(
+    fixture.request(Date.now() + 13 * 60_000),
+  );
+  assert.equal(takeover.status, 500);
+  assert.equal(providerPosts, 1);
+  const takeoverPayload = (await takeover.json()) as Record<string, unknown>;
+  assert.deepEqual(takeoverPayload.providerExecutionFailure, {
+    kind: "provider_execution_failed",
+    statePersistence: "persisted",
+  });
+  assert.equal(
+    (takeoverPayload.state as Record<string, unknown>).digest,
+    stateDigest,
+  );
+  // Core's own convergence RPC answers the same determined outcome.
+  const adopted = await runner.adoptDeterminedMutation(applyRunId, "apply", {
+    stateScope: fixture.stateScope,
+    rawOutputRef: fixture.rawOutputRef,
+  });
+  const adoptedPayload = (await adopted.json()) as Record<string, unknown>;
+  assert.deepEqual(adoptedPayload.providerExecutionFailure, {
+    kind: "provider_execution_failed",
+    statePersistence: "persisted",
+  });
+  assert.equal(
+    (adoptedPayload.state as Record<string, unknown>).digest,
+    stateDigest,
+  );
+  assert.equal(providerPosts, 1);
+});
+
+test("a run deadline too close for provider dispatch is refused as a retryable redelivery without reaching the container", async () => {
+  // The shortage belongs to the caller's invocation, not to the Run: the
+  // preparation is released, nothing is fenced, and a redelivery under a fresh
+  // deadline dispatches normally.
+  const applyRunId = "apply_deadline_exhausted";
+  const fixture = await deadlineApplyFixture(applyRunId);
+  let providerPosts = 0;
+  const runner = runnerWithContainer(fixture.artifacts, fixture.state, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT") return Response.json({ ok: true });
+      if (request.method === "POST" && path === "/runs/plan_1") {
+        providerPosts += 1;
+        return Response.json({ status: "succeeded", exitCode: 0 });
+      }
+      if (request.method === "GET" && path.endsWith("/artifacts/tfstate")) {
+        return new Response(NEW_STATE_BYTES);
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+
+  const first = await runner.fetch(fixture.request(Date.now() + 4 * 60_000));
+
+  assert.equal(first.status, 503);
+  const payload = (await first.json()) as Record<string, unknown>;
+  assert.equal(payload.errorCode, "runner_run_deadline_exceeded");
+  assert.equal(payload.retryable, true);
+  assert.equal(providerPosts, 0);
+  const inspection = await runner.inspectMutationAuthority(applyRunId, "apply");
+  assert.equal(inspection.authority.status, "absent");
+
+  const redelivered = await runner.fetch(
+    fixture.request(Date.now() + 13 * 60_000),
+  );
+  assert.equal(redelivered.status, 200);
+  assert.equal(providerPosts, 1);
+});
+
+test("an apply without a run deadline is forwarded without a budget, as before", async () => {
+  const fixture = await deadlineApplyFixture("apply_deadline_absent");
+  const budgets: (string | null)[] = [];
+  const runner = runnerWithContainer(fixture.artifacts, fixture.state, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT") return Response.json({ ok: true });
+      if (request.method === "POST" && path === "/runs/plan_1") {
+        budgets.push(request.headers.get("x-takosumi-runner-budget-ms"));
+        return Response.json({ status: "succeeded", exitCode: 0 });
+      }
+      if (request.method === "GET" && path.endsWith("/artifacts/tfstate")) {
+        return new Response(NEW_STATE_BYTES);
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+
+  const response = await runner.fetch(fixture.request());
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(budgets, [null]);
+});
+
 test("failed provider apply with no readable state returns an unavailable result without inventing state", async () => {
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();

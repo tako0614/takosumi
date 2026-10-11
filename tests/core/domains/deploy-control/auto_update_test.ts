@@ -56,7 +56,8 @@ const LOCK_DIGEST =
 
 /** plan + apply + sourceSync stub; plan changes are configurable per test. */
 class FullStubRunner implements OpenTofuRunner {
-  planResourceChanges: readonly PlanResourceChange[] = [];
+  /** `undefined` models a runner that reported no change list (unknown). */
+  planResourceChanges: readonly PlanResourceChange[] | undefined = [];
   sourceSyncResult: OpenTofuSourceSyncResult = {
     resolvedCommit: "def456abc7890123def456abc7890123def456ab",
     archiveDigest: "sha256:" + "c".repeat(64),
@@ -100,7 +101,7 @@ class FullStubRunner implements OpenTofuRunner {
       providerLockDigest: LOCK_DIGEST,
       requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
       providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
-      ...(this.planResourceChanges.length > 0
+      ...(this.planResourceChanges !== undefined
         ? { planResourceChanges: this.planResourceChanges }
         : {}),
     };
@@ -362,6 +363,25 @@ test("a running Plan can finish after drain and resume without minting a new-epo
   expect(runner.applyCalls).toBe(initialApplyCalls);
   expect((await store.listRunsByWorkspace("ws_test001"))
     .filter((run) => "planRunId" in run && run.planRunId === planRun.id)).toHaveLength(0);
+});
+
+test("a Plan whose resource changes are unknown is never auto-applied", async () => {
+  // The runner reported no resource change list at all (not an empty one), so
+  // the delete/replace approval gate could not be evaluated.
+  const { store, controller, runner, initialApplyCalls } =
+    await buildActiveCapsule({ autoUpdate: true });
+  runner.planResourceChanges = undefined;
+
+  await syncNewCommit(controller);
+
+  const autoPlan = (await planRunsOf(controller, store)).find(
+    (record) => record.autoApplyRequested === true,
+  );
+  expect(autoPlan?.status).toBe("succeeded");
+  expect(autoPlan?.planResourceChanges).toBeUndefined();
+  expect(autoPlan?.appliedApplyRunId).toBeUndefined();
+  expect(runner.applyCalls).toBe(initialApplyCalls);
+  expect((await store.getCapsule("cap_auto0001"))?.currentStateGeneration).toBe(1);
 });
 
 test("a destructive update stops at waiting_approval and is never auto-applied", async () => {

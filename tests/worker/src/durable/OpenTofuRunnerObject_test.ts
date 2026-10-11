@@ -1037,6 +1037,197 @@ test("OpenTofu runner Durable Object strips caller credentials before container 
   assert.equal(capturedHeaders[0]!.get("x-takosumi-provider-credential"), null);
 });
 
+test("OpenTofu runner Durable Object forwards a run deadline to the container only as a relative budget", async () => {
+  const capturedHeaders: Headers[] = [];
+  const runner = runnerWithContainer(new FakeR2Bucket(), {
+    async containerFetch(request) {
+      capturedHeaders.push(new Headers(request.headers));
+      return Response.json({ status: "succeeded" });
+    },
+  });
+  const plan = (headers: Record<string, string>) =>
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId: "plan_1",
+        request: {},
+      }),
+    });
+
+  const bounded = await runner.fetch(
+    plan({ "x-takosumi-run-deadline-at": String(Date.now() + 10 * 60_000) }),
+  );
+  const unbounded = await runner.fetch(plan({}));
+  const malformed = await runner.fetch(
+    plan({ "x-takosumi-run-deadline-at": "soon" }),
+  );
+
+  assert.equal(bounded.status, 200);
+  assert.equal(unbounded.status, 200);
+  assert.equal(malformed.status, 200);
+  assert.equal(capturedHeaders.length, 3);
+  const budget = Number(capturedHeaders[0]!.get("x-takosumi-runner-budget-ms"));
+  assert.ok(budget > 9 * 60_000 && budget <= 10 * 60_000, String(budget));
+  assert.equal(capturedHeaders[0]!.get("x-takosumi-run-deadline-at"), null);
+  // Without a (valid) deadline the container sees exactly what it saw before.
+  assert.equal(capturedHeaders[1]!.get("x-takosumi-runner-budget-ms"), null);
+  assert.equal(capturedHeaders[2]!.get("x-takosumi-runner-budget-ms"), null);
+});
+
+test("OpenTofu runner Durable Object refuses a Plan its caller's deadline leaves no time for, as a retryable redelivery", async () => {
+  let posts = 0;
+  const runner = runnerWithContainer(new FakeR2Bucket(), {
+    async containerFetch(request) {
+      if (request.method === "POST") posts += 1;
+      return Response.json({ status: "succeeded" });
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_short", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-takosumi-run-deadline-at": String(Date.now() + 2 * 60_000),
+      },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId: "plan_short",
+        request: {},
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 503);
+  const payload = (await response.json()) as Record<string, unknown>;
+  assert.equal(payload.errorCode, "runner_run_deadline_exceeded");
+  assert.equal(payload.retryable, true);
+  assert.equal(posts, 0);
+});
+
+test("OpenTofu runner Durable Object rechecks the dispatch budget after a container restart", async () => {
+  const realNow = Date.now;
+  let offsetMs = 0;
+  Date.now = () => realNow() + offsetMs;
+  try {
+    let posts = 0;
+    const runner = runnerWithContainer(new FakeR2Bucket(), {
+      async containerFetch(request) {
+        if (request.method !== "POST") return Response.json({ ok: true });
+        posts += 1;
+        // The first dispatch finds the container stopped; by the time it is
+        // restarted, the deadline no longer leaves the minimum.
+        offsetMs = 2_000;
+        throw new Error("container is not running, consider calling start()");
+      },
+    });
+
+    const response = await runner.fetch(
+      new Request("https://runner/runs/plan_restart", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-takosumi-run-deadline-at": String(realNow() + 5 * 60_000 + 1_000),
+        },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "plan",
+          runId: "plan_restart",
+          request: {},
+        }),
+      }),
+    );
+
+    assert.equal(response.status, 503);
+    assert.equal(
+      ((await response.json()) as Record<string, unknown>).errorCode,
+      "runner_run_deadline_exceeded",
+    );
+    assert.equal(posts, 1);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("OpenTofu runner Durable Object forwards a release command's budget and refuses one with no time left", async () => {
+  const applyRunId = "apply_release_deadline";
+  const releaseRunId = `release_${applyRunId}`;
+  const budgets: (string | null)[] = [];
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "POST" && path === `/runs/${releaseRunId}`) {
+        budgets.push(request.headers.get("x-takosumi-runner-budget-ms"));
+        return Response.json({
+          runId: releaseRunId,
+          action: "release",
+          status: "succeeded",
+          exitCode: 0,
+          commandCount: 1,
+        });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+  const storage = new FakeDoStorage();
+  const release = (deadlineAt: number) =>
+    new Request(`https://runner/runs/${releaseRunId}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-takosumi-run-deadline-at": String(deadlineAt),
+      },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "release",
+        runId: releaseRunId,
+        request: {
+          release: {
+            commands: [
+              { id: "migrate", command: ["bun", "run", "migrate"] },
+            ],
+          },
+          activation: {
+            applyRunId,
+            workspaceId: "workspace_release",
+            capsuleId: "capsule_release",
+            stateVersionId: "state_release_1",
+            sourceSnapshotId: "snapshot_release_1",
+            sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+          },
+          providerConfigurations: {
+            format: "takosumi.provider-configurations@v1",
+            providers: [],
+          },
+        },
+      }),
+    });
+
+  // Too little time: nothing reaches the container and the preparation is
+  // released, so the same release may be claimed again.
+  const refused = await runnerWithContainer(new FakeR2Bucket(), container, {
+    storage,
+  }).fetch(release(Date.now() + 30_000));
+  assert.equal(refused.status, 503);
+  assert.equal(
+    ((await refused.json()) as Record<string, unknown>).errorCode,
+    "runner_run_deadline_exceeded",
+  );
+  assert.deepEqual(budgets, []);
+
+  const dispatched = await runnerWithContainer(new FakeR2Bucket(), container, {
+    storage,
+  }).fetch(release(Date.now() + 4 * 60_000));
+  assert.equal(dispatched.status, 200);
+  assert.equal(budgets.length, 1);
+  const budget = Number(budgets[0]);
+  assert.ok(budget > 3 * 60_000 && budget <= 4 * 60_000, String(budget));
+});
+
 test("OpenTofu runner Durable Object starts the container before dispatch", async () => {
   const calls: string[] = [];
   const runner = runnerWithContainer(
@@ -1626,6 +1817,44 @@ test("OpenTofu runner Durable Object normalizes arbitrary non-2xx runner payload
     errorCode: "runner_rejected",
     phase: "plan",
   });
+});
+
+test("OpenTofu runner Durable Object keeps the fixed run-deadline marker on a normalized plan failure", async () => {
+  const runner = runnerWithContainer(new FakeR2Bucket(), {
+    async containerFetch(request) {
+      if (request.method === "GET") return Response.json({ status: "ok" });
+      return Response.json(
+        {
+          status: "failed",
+          exitCode: 124,
+          errorCode: "opentofu_plan_failed",
+          stderr: "command timed out after 600000ms (run deadline)",
+          runDeadlineExceeded: true,
+          unrelatedField: "must-not-be-relayed",
+        },
+        { status: 500 },
+      );
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_deadline_cut", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId: "plan_deadline_cut",
+        request: {},
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 500);
+  const body = (await response.json()) as Record<string, unknown>;
+  assert.equal(body.errorCode, "opentofu_plan_failed");
+  assert.equal(body.runDeadlineExceeded, true);
+  assert.equal(body.unrelatedField, undefined);
 });
 
 test("OpenTofu runner Durable Object preserves finite plan execution failures", async () => {

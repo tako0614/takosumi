@@ -55,3 +55,55 @@ export interface RunnerMutationIndeterminatePayload {
   };
   readonly detail: string;
 }
+
+/**
+ * Adapter-to-runner-object header: the absolute epoch-millisecond instant by
+ * which the host invocation carrying this run must have the runner's reply.
+ *
+ * The Cloudflare run owner dispatches inside a Durable Object alarm, whose
+ * wall time is capped. Without this bound the alarm is cut off first, the
+ * reply has no receiver, and an Apply ends indeterminate with its partial
+ * state lost. Transport metadata only: it is not part of the run body, so it
+ * never enters mutation identity.
+ */
+export const RUN_DEADLINE_AT_HEADER = "x-takosumi-run-deadline-at";
+
+/**
+ * Runner-object-to-container header: milliseconds left for the whole run,
+ * computed at the moment of forwarding so the container never compares its
+ * clock with the Worker's. Mirrors `runner/lib/run_deadline.ts`.
+ */
+export const RUNNER_RUN_BUDGET_MS_HEADER = "x-takosumi-runner-budget-ms";
+
+/**
+ * Retryable answer of the runner object when the caller's deadline leaves too
+ * little time to dispatch. Nothing reached the container, so the exact Run may
+ * be redelivered under a fresh invocation deadline.
+ */
+export const RUNNER_RUN_DEADLINE_EXCEEDED_CODE = "runner_run_deadline_exceeded";
+
+/**
+ * Fixed machine reason for "stopped by the dispatching host's run deadline",
+ * both for a refused dispatch and for a runner command the deadline cut off.
+ */
+export const RUN_DEADLINE_EXCEEDED_REASON = "run_deadline_exceeded";
+
+/** Strict epoch-ms parse; anything else means "no deadline", as before. */
+export function parseRunDeadlineAt(value: string | null): number | undefined {
+  if (value === null || !/^\d{1,16}$/u.test(value)) return undefined;
+  const deadlineAt = Number(value);
+  return Number.isSafeInteger(deadlineAt) && deadlineAt > 0
+    ? deadlineAt
+    : undefined;
+}
+
+/** Header value for a deadline the caller supplied, or `undefined`. */
+export function runDeadlineAtHeaderValue(
+  deadlineAt: number | undefined,
+): string | undefined {
+  return deadlineAt !== undefined &&
+      Number.isFinite(deadlineAt) &&
+      deadlineAt > 0
+    ? String(Math.floor(deadlineAt))
+    : undefined;
+}

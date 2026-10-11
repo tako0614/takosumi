@@ -394,6 +394,61 @@ test("local OpenTofu runner fails closed before a target commit without exact so
   expect(commits).toBe(0);
 });
 
+test("HTTP OpenTofu runner keeps a known-empty resource change list", async () => {
+  // Empty means "no resource changes" (an output-only module, its destroy, a
+  // refresh-only Plan); only an absent or partly unreadable list is unknown.
+  const digest = `sha256:${"a".repeat(64)}`;
+  let planResourceChanges: unknown = [];
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url);
+      if (request.method === "POST" && url.pathname === "/runs/plan_np") {
+        return Response.json({
+          status: "succeeded",
+          planDigest: digest,
+          planArtifact: {
+            kind: "runner-local",
+            ref: "runner-local://plan_np/tfplan",
+            digest,
+          },
+          ...(planResourceChanges === undefined ? {} : { planResourceChanges }),
+        });
+      }
+      return new Response("not found", { status: 404 });
+    },
+  });
+  try {
+    const runner = createHttpOpenTofuRunner({
+      stateStore: unusedStateStore,
+      archiveStore: {
+        write: async () => {},
+        read: async () => new Uint8Array(),
+      },
+      baseUrl: server.url.href,
+    });
+    const plan = () =>
+      runner.plan({ planRun: { id: "plan_np" } } as Parameters<
+        typeof runner.plan
+      >[0]);
+
+    expect((await plan()).planResourceChanges).toEqual([]);
+    planResourceChanges = undefined;
+    expect((await plan()).planResourceChanges).toBeUndefined();
+    planResourceChanges = [
+      {
+        address: "cloudflare_workers_script.app",
+        type: "cloudflare_workers_script",
+        actions: ["create"],
+      },
+      { address: "malformed" },
+    ];
+    expect((await plan()).planResourceChanges).toBeUndefined();
+  } finally {
+    server.stop(true);
+  }
+});
+
 test("local OpenTofu runner passes modulePath to compatibility_check", async () => {
   const archiveBytes = new TextEncoder().encode("archive");
   const archiveDigest = await sha256(archiveBytes);

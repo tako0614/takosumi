@@ -663,6 +663,23 @@ caller that aborted its own request, releases the preparation so that a
 redelivery or a takeover of the same ApplyRun may claim it again. Core records
 the typed code as a pre-provider failure, so the Run does not make Capsule runtime
 safety `unknown` unless a lifecycle action such as `pre_destroy` already ran.
+A dispatcher whose host invocation has a hard wall-time limit passes its
+deadline through `RunExecutionControl.deadlineAt`; Core forwards it without
+interpreting it to Plan, Apply, Destroy, and their release activations. The
+Cloudflare runner Durable Object treats it as transport metadata outside
+mutation identity. A dispatch left with less than its minimum budget reaches no
+container: the object releases any `preparing` authority and answers a
+retryable `runner_run_deadline_exceeded`, which Core redelivers as the safe
+infrastructure retry `run_deadline_exceeded`. Otherwise every runner command
+of the Run stops before the deadline, so a timed-out Apply takes the ordinary
+provider-failure path that persists partial state and its completion receipt.
+Independently of any deadline, a Plan whose plan JSON cannot be read fails, a
+Plan with unknown resource changes (no change list, or one with unreadable
+rows; an empty list is known) is never applied automatically, and a Capsule
+Plan with unknown resource changes fails when a resource-type, scope, or quota
+policy is configured. A deadline stop keeps an Apply's or Destroy's own
+failure class as the error of record and adds `run_deadline_exceeded` only as a
+warning, so a pre-provider failure stays pre-provider.
 A durable `dispatched` record, a failure after dispatch, or container output
 never yields this outcome. Mutation-authority,
 relay, and container-lifecycle failure logs use only finite classifications and

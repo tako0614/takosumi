@@ -52,6 +52,11 @@ import {
 import { RUN_ROOT } from "./constants.ts";
 import { PROVIDER_LOCK_RESTORE_DIGEST_HEADER } from "./transport.ts";
 import {
+  RUNNER_RUN_BUDGET_MS_HEADER,
+  registerRunBudget,
+  withRunDeadlineMarker,
+} from "./run_deadline.ts";
+import {
   completeLocalMutation,
   authorizeLocalMutationPreparation,
   consumeLocalMutationReservation,
@@ -465,6 +470,8 @@ async function handleRunnerRequestBody(
       );
     }
 
+    // Bound every command of this run by the host's forwarded budget, if any.
+    registerRunBudget(request.signal, request.headers.get(RUNNER_RUN_BUDGET_MS_HEADER));
     const body = (await readJsonObject(request)) as RunRequest;
     const runId = decodeURIComponent(match[1]);
 
@@ -673,9 +680,12 @@ async function handleRunnerRequestBody(
       }
     }
     };
-    return action === "apply" || action === "destroy"
-      ? await executeRun()
-      : await guardedNonMutationPost(runId, executeRun);
+    return await withRunDeadlineMarker(
+      action === "apply" || action === "destroy"
+        ? await executeRun()
+        : await guardedNonMutationPost(runId, executeRun),
+      request.signal,
+    );
   }
 }
 

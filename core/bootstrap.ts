@@ -914,11 +914,15 @@ export interface TakosumiOperations {
    * each dispatched run message (plan/apply); it loads the run, applies the
    * idempotency guard, mints credentials, and drives the container dispatch.
    */
-  dispatchQueuedRun(dispatch: {
-    action: "plan" | "apply" | "source_sync" | "restore";
-    runId: string;
-    workspaceId: string;
-  }): Promise<void>;
+  dispatchQueuedRun(
+    dispatch: {
+      action: "plan" | "apply" | "source_sync" | "restore";
+      runId: string;
+      workspaceId: string;
+    },
+    /** Host invocation bounds, e.g. a Durable Object alarm's wall deadline. */
+    control?: { readonly deadlineAt?: number },
+  ): Promise<void>;
   // --- Sources (Core Specification §6) ---
   createSource(
     request: CreateSourceRequest,
@@ -1968,8 +1972,8 @@ export async function createTakosumiService(
           ),
         }
       : {}),
-    dispatchQueuedRun: (dispatch) =>
-      opentofuController.dispatchQueuedRun(dispatch),
+    dispatchQueuedRun: (dispatch, control) =>
+      opentofuController.dispatchQueuedRun(dispatch, control),
     createSource: (request, expectedWorkspaceManagementAuthority) =>
       opentofuController.createSource(
         request,
