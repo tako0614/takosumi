@@ -30,6 +30,7 @@ import type {
   Interface,
   InterfaceBinding,
 } from "../contract/interfaces.ts";
+import type { OpenTofuOperation } from "../contract/internal-deploy-control-api.ts";
 import type { JsonObject, JsonValue } from "../contract/types.ts";
 import {
   canonicalProviderSource,
@@ -43,6 +44,16 @@ import {
 
 export const PLATFORM_CONTROL_PLANE_SMOKE_KIND =
   "takosumi.platform-control-plane-smoke@v3" as const;
+
+/**
+ * `run.plan_created` records the Plan Run's OpenTofu operation
+ * (`create` | `update` | `destroy`), not the Run type. The smoke always
+ * installs a fresh scratch Capsule, which has no StateVersion when it is
+ * planned, so the server must label its first Plan `create`; `update` would
+ * mean the scratch Capsule was not fresh.
+ */
+const SCRATCH_INSTALL_PLAN_OPERATION: OpenTofuOperation = "create";
+
 export const CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS = 180_000;
 export const PUBLIC_URL_REQUEST_TIMEOUT_MS = 30_000;
 export const MAX_PUBLIC_URL_RESPONSE_BYTES = 512 * 1024;
@@ -1627,7 +1638,7 @@ function dryRunCanonicalRunEventSequence(): CanonicalRunEventSequenceVerificatio
       outcome: "planned",
       runId: "plan_dry_run",
       targetId: "plan_dry_run",
-      operation: "plan",
+      operation: SCRATCH_INSTALL_PLAN_OPERATION,
       metadataKeys,
     },
     apply: {
@@ -6597,7 +6608,7 @@ export function canonicalRunEventSequenceFromActivity(
   const plan = findCanonicalRunEvent(events, {
     action: "run.plan_created",
     runId: input.planRunId,
-    operation: "plan",
+    operation: SCRATCH_INSTALL_PLAN_OPERATION,
     capsuleId: input.capsuleId,
   });
   const apply = findCanonicalRunEvent(events, {
@@ -6626,7 +6637,7 @@ function findCanonicalRunEvent(
     readonly action: string;
     readonly runId: string;
     readonly capsuleId: string;
-    readonly operation?: string;
+    readonly operation?: OpenTofuOperation;
   },
 ): CanonicalRunEventEvidence | undefined {
   const event = events.find(
@@ -9056,7 +9067,7 @@ async function runSelfTest(): Promise<void> {
       { id: "evt_destroyed", action: "run.destroyed", targetType: "run", targetId: "run_destroy_apply", runId: "run_destroy_apply", metadata: { capsuleId: "cap_selftest" } },
       { id: "evt_destroy_plan", action: "run.plan_created", targetType: "run", targetId: "run_destroy_plan", runId: "run_destroy_plan", metadata: { capsuleId: "cap_selftest", operation: "destroy" } },
       { id: "evt_applied", action: "run.applied", targetType: "run", targetId: "run_apply", runId: "run_apply", metadata: { capsuleId: "cap_selftest", stateGeneration: 1 } },
-      { id: "evt_plan", action: "run.plan_created", targetType: "run", targetId: "run_plan", runId: "run_plan", metadata: { capsuleId: "cap_selftest", operation: "plan" } },
+      { id: "evt_plan", action: "run.plan_created", targetType: "run", targetId: "run_plan", runId: "run_plan", metadata: { capsuleId: "cap_selftest", operation: "create" } },
     ],
     {
       capsuleId: "cap_selftest",
