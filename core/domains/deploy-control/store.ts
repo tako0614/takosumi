@@ -7450,6 +7450,12 @@ export const PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES = [
   "opentofu_init_failed",
   "source_build_failed",
   "opentofu_plan_failed",
+  // The runner Durable Object durably fenced its `preparing` mutation
+  // authority as `not_dispatched` before the container received the
+  // Apply/Destroy request. It is never relayed from container output and never
+  // emitted after dispatch. A lifecycle action that already ran still makes
+  // the Run decisive (see applyRunMutationDispatched).
+  "runner_mutation_not_dispatched",
 ] as const;
 
 const PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODE_SET = new Set<string>(
@@ -7474,8 +7480,14 @@ function applyRunStoppedBeforeProviderMutation(row: ApplyRun): boolean {
  * changed the Capsule and therefore keep the last pinned runtime revision.
  */
 export function applyRunMutationDispatched(row: ApplyRun): boolean {
+  // A lifecycle action that ran is a Capsule mutation even when the later
+  // provider step failed before dispatch: the per-action audit event carries
+  // that proof (`actionDispatched`) without the terminal-event flag.
   const lifecycleActionDispatched = row.auditEvents.some(
-    (event) => event.data?.lifecycleActionDispatched === true,
+    (event) =>
+      event.data?.lifecycleActionDispatched === true ||
+      (event.type.startsWith("lifecycle_action.") &&
+        event.data?.actionDispatched === true),
   );
   if (lifecycleActionDispatched) return true;
 

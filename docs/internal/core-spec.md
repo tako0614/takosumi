@@ -652,8 +652,19 @@ R2 target cannot mint its own adoption authority. A transport failure after
 dispatch returns the typed `runner_mutation_indeterminate` outcome. Redelivery
 may complete only by adopting the exact immutable state/output target already
 written for that Run; without that authoritative readback, it remains
-indeterminate. Plan, read-only work, and a provable pre-dispatch preparation
-failure may retry without granting mutation authority. Mutation-authority,
+indeterminate. Plan and read-only work may retry without granting mutation
+authority. When an Apply or Destroy fails while the Durable Object still holds
+only `preparing` authority, the object durably records those semantics as
+`not_dispatched` and returns the typed `runner_mutation_not_dispatched`
+outcome. They are never dispatched afterwards: every later delivery of the
+same mutation, including one from a caller that lost its lease, receives the
+same outcome. Only a retryable ambiguous artifact acknowledgement, or a
+caller that aborted its own request, releases the preparation so that a
+redelivery or a takeover of the same ApplyRun may claim it again. Core records
+the typed code as a pre-provider failure, so the Run does not make Capsule runtime
+safety `unknown` unless a lifecycle action such as `pre_destroy` already ran.
+A durable `dispatched` record, a failure after dispatch, or container output
+never yields this outcome. Mutation-authority,
 relay, and container-lifecycle failure logs use only finite classifications and
 never include raw messages, stacks, request bodies, or credential material.
 

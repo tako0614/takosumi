@@ -10616,6 +10616,9 @@ test("capsule apply: a D1 ledger-tail retry reaches durable release authority wi
     delete(key: string): Promise<boolean> {
       return Promise.resolve(releaseAuthority.delete(key));
     },
+    sync(): Promise<void> {
+      return Promise.resolve();
+    },
   };
   const sourceBucket = {
     get(key: string) {

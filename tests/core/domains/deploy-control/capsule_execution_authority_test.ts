@@ -61,6 +61,8 @@ const BATCH_CAPSULE_DESTROYED = "capsule_authority_batch_destroyed";
 const BATCH_CAPSULE_UNSAFE = "capsule_authority_batch_unsafe";
 const BATCH_CAPSULE_PRE_PROVIDER_FAILURE =
   "capsule_authority_batch_pre_provider_failure";
+const BATCH_CAPSULE_NOT_DISPATCHED = "capsule_authority_batch_not_dispatched";
+const BATCH_CAPSULE_PRE_DESTROY_RAN = "capsule_authority_batch_pre_destroy_ran";
 const clients: PGliteSqlClient[] = [];
 
 interface RecordedQuery {
@@ -226,6 +228,54 @@ function batchPreProviderFailureRun(capsuleId: string): ApplyRun {
   };
 }
 
+function batchNotDispatchedRun(
+  capsuleId: string,
+  preDestroyRan: boolean,
+): ApplyRun {
+  const run = terminatingRun("failed");
+  return {
+    ...run,
+    id: `run_not_dispatched_${capsuleId}`,
+    planRunId: `plan_not_dispatched_${capsuleId}`,
+    capsuleId,
+    expected: {
+      ...run.expected,
+      planRunId: `plan_not_dispatched_${capsuleId}`,
+      capsuleId,
+    },
+    auditEvents: [
+      ...(preDestroyRan
+        ? [
+            {
+              id: `audit_pre_destroy_${capsuleId}`,
+              type: "lifecycle_action.pre_destroy.succeeded",
+              at: 1,
+              data: {
+                phase: "pre_destroy",
+                status: "succeeded",
+                commandCount: 1,
+                actionDispatched: true,
+              },
+            },
+          ]
+        : []),
+      {
+        id: `audit_not_dispatched_${capsuleId}`,
+        type: "destroy.failed",
+        at: 2,
+        data: { providerDispatched: true },
+      },
+    ],
+    diagnostics: [
+      {
+        severity: "error",
+        code: "runner_mutation_not_dispatched",
+        message: "runner failure (runner_mutation_not_dispatched)",
+      },
+    ],
+  };
+}
+
 const batchAuthorityInputs = [
   { workspaceId: WORKSPACE_ID, capsuleId: BATCH_CAPSULE_B },
   { workspaceId: WORKSPACE_ID, capsuleId: BATCH_CAPSULE_A },
@@ -238,6 +288,8 @@ const batchAuthorityInputs = [
     workspaceId: WORKSPACE_ID,
     capsuleId: BATCH_CAPSULE_PRE_PROVIDER_FAILURE,
   },
+  { workspaceId: WORKSPACE_ID, capsuleId: BATCH_CAPSULE_NOT_DISPATCHED },
+  { workspaceId: WORKSPACE_ID, capsuleId: BATCH_CAPSULE_PRE_DESTROY_RAN },
 ] as const;
 
 const batchAuthorityExpected = [
@@ -265,6 +317,14 @@ const batchAuthorityExpected = [
     capsuleId: BATCH_CAPSULE_PRE_PROVIDER_FAILURE,
     executionAuthorityEpoch: 1,
   },
+  // A destroy whose provider step never dispatched leaves the Capsule safe...
+  {
+    workspaceId: WORKSPACE_ID,
+    capsuleId: BATCH_CAPSULE_NOT_DISPATCHED,
+    executionAuthorityEpoch: 1,
+  },
+  // ...unless its pre_destroy lifecycle action already ran.
+  undefined,
 ] as const;
 
 async function seedBatchAuthorities(
@@ -278,6 +338,14 @@ async function seedBatchAuthorities(
   await store.putCapsule(batchCapsule(BATCH_CAPSULE_PRE_PROVIDER_FAILURE));
   await store.putApplyRun(
     batchPreProviderFailureRun(BATCH_CAPSULE_PRE_PROVIDER_FAILURE),
+  );
+  await store.putCapsule(batchCapsule(BATCH_CAPSULE_NOT_DISPATCHED));
+  await store.putApplyRun(
+    batchNotDispatchedRun(BATCH_CAPSULE_NOT_DISPATCHED, false),
+  );
+  await store.putCapsule(batchCapsule(BATCH_CAPSULE_PRE_DESTROY_RAN));
+  await store.putApplyRun(
+    batchNotDispatchedRun(BATCH_CAPSULE_PRE_DESTROY_RAN, true),
   );
 }
 

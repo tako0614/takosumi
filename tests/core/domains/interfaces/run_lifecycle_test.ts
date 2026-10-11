@@ -10,6 +10,7 @@ import type { StateVersion } from "takosumi-contract/state-versions";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
 import {
   applyExpectedGuardFromPlanRun,
+  OpenTofuRunnerExecutionError,
   type OpenTofuRestoreJob,
   type OpenTofuRestoreResult,
   type OpenTofuRunner,
@@ -924,6 +925,7 @@ test("restore and queued-destroy lifecycles keep Interface delivery fail-closed"
   ]);
 
   let restoreAttempt = 0;
+  let destroyFailure: Error | undefined;
   let nextPlanSummary:
     | {
         readonly add?: number;
@@ -980,7 +982,8 @@ output "endpoint" {
         ...(nextPlanSummary ? { summary: nextPlanSummary } : {}),
       }),
     apply: () => Promise.resolve({}),
-    destroy: () => Promise.resolve({}),
+    destroy: () =>
+      destroyFailure ? Promise.reject(destroyFailure) : Promise.resolve({}),
     restore: async (job) => {
       restoreAttempt += 1;
       if (restoreAttempt === 1) {
@@ -1230,6 +1233,71 @@ output "endpoint" {
   ).toBe("NotReady");
 
   await operations.controller.cancelRun(queuedDestroy.id);
+  expect(
+    (await operations.interfaces.get(iface.metadata.id)).status.phase,
+  ).toBe("Resolved");
+  expect(
+    (
+      await operations.interfaces.getBinding(
+        iface.metadata.id,
+        binding.metadata.id,
+      )
+    ).status.phase,
+  ).toBe("Ready");
+
+  // A destroy the runner proved it never dispatched did not touch the
+  // Capsule: the terminal observer uses the runtime-safety predicate and
+  // restores the still-valid pinned revision instead of marking it Unknown.
+  const { planRun: notDispatchedDestroyPlan } =
+    await operations.controller.createPlanRun({
+      workspaceId: capsule.workspaceId,
+      capsuleId: capsule.id,
+      source: {
+        kind: "git",
+        url: "https://git.example.com/example/app.git",
+        ref: "main",
+      },
+      operation: "destroy",
+      requiredProviderRequirements:
+        providerRequirementsForFixture([CLOUDFLARE]),
+      requiredProviders: [CLOUDFLARE],
+    });
+  await operations.controller.dispatchQueuedRun({
+    action: "plan",
+    runId: notDispatchedDestroyPlan.id,
+    workspaceId: notDispatchedDestroyPlan.workspaceId,
+  });
+  await operations.controller.approveRun(notDispatchedDestroyPlan.id, {
+    approvedBy: "ops",
+  });
+  const approvedNotDispatchedPlan = (await store.getPlanRun(
+    notDispatchedDestroyPlan.id,
+  ))!;
+  const { applyRun: notDispatchedDestroy } =
+    await operations.controller.createApplyRun({
+      planRunId: approvedNotDispatchedPlan.id,
+      expected: applyExpectedGuardFromPlanRun(approvedNotDispatchedPlan),
+    });
+  expect(
+    (await operations.interfaces.get(iface.metadata.id)).status.phase,
+  ).toBe("Terminating");
+  destroyFailure = new OpenTofuRunnerExecutionError(
+    "runner request failed (runner_mutation_not_dispatched)",
+    { reason: "runner_mutation_not_dispatched" },
+  );
+  await operations.controller.dispatchQueuedRun({
+    action: "apply",
+    runId: notDispatchedDestroy.id,
+    workspaceId: notDispatchedDestroy.workspaceId,
+  }).catch(() => undefined);
+  destroyFailure = undefined;
+  const failedDestroy = (await store.getApplyRun(notDispatchedDestroy.id))!;
+  expect(failedDestroy.status).toBe("failed");
+  expect(
+    failedDestroy.auditEvents.some(
+      (event) => event.data?.providerDispatched === true,
+    ),
+  ).toBe(true);
   expect(
     (await operations.interfaces.get(iface.metadata.id)).status.phase,
   ).toBe("Resolved");

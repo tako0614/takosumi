@@ -580,6 +580,10 @@ class FakeDoStorage {
     return Promise.resolve();
   }
 
+  sync(): Promise<void> {
+    return Promise.resolve();
+  }
+
   delete(key: string): Promise<boolean> {
     return Promise.resolve(this.#values.delete(key));
   }
