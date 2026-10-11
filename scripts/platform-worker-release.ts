@@ -5966,12 +5966,13 @@ export async function readPlatformWorkerCodeTopology(
 
 /**
  * The script list's Container attachment: one `{ class_name }` per Durable
- * Object class with a Container. Absent means no attachment. The routine lane
+ * Object class with a Container. Absent or `null` means no attachment, which is
+ * still compared with the configured `[[containers]]`. The routine lane
  * neither writes nor adopts it; the config must already declare the same set,
  * and the Container application itself is read separately.
  */
 function platformWorkerCodeScriptContainers(value: unknown): readonly string[] {
-  if (value === undefined) return [];
+  if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) {
     throw new Error("platform_worker_code_topology_shape_unsupported");
   }

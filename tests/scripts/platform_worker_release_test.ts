@@ -430,7 +430,9 @@ function codeNativeRead(
           ? {}
           : {
             containers: structuredClone(
-              options.scriptContainers ?? CODE_SCRIPT_CONTAINERS,
+              options.scriptContainers === undefined
+                ? CODE_SCRIPT_CONTAINERS
+                : options.scriptContainers,
             ),
           }),
       }],
@@ -829,6 +831,11 @@ test("routine code accepts the listed Container attachment only as the configure
   await expect(read({ omitScriptContainers: true })).rejects.toThrow(
     "platform_worker_code_topology_mismatch",
   );
+  // `null` lists no attachment, exactly like an absent key: it is a mismatch
+  // against a configured Container, not an unknown shape.
+  await expect(read({ scriptContainers: null })).rejects.toThrow(
+    "platform_worker_code_topology_mismatch",
+  );
   // A Worker whose config declares no Container must list none.
   const withoutContainer = source.replace(
     /\[\[containers\]\]\nclass_name = "OpenTofuRunnerObject"\nimage = [^\n]+\n/u,
@@ -840,6 +847,13 @@ test("routine code accepts the listed Container attachment only as the configure
       withoutContainer,
       "takosumi-staging",
       codeNativeRead(withoutContainer, { omitScriptContainers: true }),
+    ),
+  ).resolves.toMatchObject({ containers: [] });
+  await expect(
+    readPlatformWorkerCodeTopology(
+      withoutContainer,
+      "takosumi-staging",
+      codeNativeRead(withoutContainer, { scriptContainers: null }),
     ),
   ).resolves.toMatchObject({ containers: [] });
   await expect(
