@@ -658,9 +658,10 @@ only `preparing` authority, the object durably records those semantics as
 `not_dispatched` and returns the typed `runner_mutation_not_dispatched`
 outcome. They are never dispatched afterwards: every later delivery of the
 same mutation, including one from a caller that lost its lease, receives the
-same outcome. Only a retryable ambiguous artifact acknowledgement releases the
-preparation so that Core's redelivery may claim it again. Core records the
-typed code as a pre-provider failure, so the Run does not make Capsule runtime
+same outcome. Only a retryable ambiguous artifact acknowledgement, or a
+caller that aborted its own request, releases the preparation so that a
+redelivery or a takeover of the same ApplyRun may claim it again. Core records
+the typed code as a pre-provider failure, so the Run does not make Capsule runtime
 safety `unknown` unless a lifecycle action such as `pre_destroy` already ran.
 A durable `dispatched` record, a failure after dispatch, or container output
 never yields this outcome. Mutation-authority,

@@ -804,6 +804,48 @@ test("HTTP OpenTofu runner preserves structured error codes without echoing resp
   }
 });
 
+test("HTTP OpenTofu runner never adopts the Durable Object-only not-dispatched reason", async () => {
+  const runId = `plan_http_not_dispatched_${crypto.randomUUID()}`;
+  const server = Bun.serve({
+    port: 0,
+    fetch: () =>
+      Response.json(
+        {
+          errorCode: "runner_mutation_not_dispatched",
+          outcome: "not_dispatched",
+          retryable: false,
+        },
+        { status: 500 },
+      ),
+  });
+  try {
+    const runner = createHttpOpenTofuRunner({
+      archiveStore: {
+        write: async () => {},
+        read: async () => new Uint8Array(),
+      },
+      stateStore: emptyLocalStateStore(),
+      baseUrl: server.url.href,
+    });
+    let failure: unknown;
+    try {
+      await runner.plan({
+        planRun: localPlanRun(runId, "create"),
+        runnerProfile: createLocalOpenTofuRunnerProfile(),
+        variables: {},
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(OpenTofuRunnerExecutionError);
+    expect((failure as OpenTofuRunnerExecutionError).reason).toBe(
+      "runner_http_error",
+    );
+  } finally {
+    server.stop(true);
+  }
+});
+
 async function assertAmbiguousMutationResponse(
   completionStatus: "absent" | "unavailable",
 ): Promise<void> {

@@ -1611,9 +1611,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
 
   /**
    * Removes a still-`preparing` mutation authority so the exact request may
-   * claim it again. Only a retryable pre-dispatch failure (an ambiguous
-   * artifact acknowledgement that Core redelivers) may use this; every other
-   * pre-dispatch failure concludes `not_dispatched` instead.
+   * claim it again. Only an ambiguous artifact acknowledgement (which Core
+   * redelivers) or a caller that aborted its own request may use this; every
+   * other pre-dispatch failure concludes `not_dispatched` instead.
    */
   async #releaseMutationPreparation(
     preparation: RunnerMutationDispatchRecord,
@@ -1894,6 +1894,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       phase: "dispatched",
     };
     await this.#writeReleaseDispatchRecord(dispatched);
+    // Release commands may run only after this redispatch fence is durable.
+    await this.ctx.storage.sync();
     this.#activeReleasePreparations.delete(preparation.semanticDigest);
     return dispatched;
   }
@@ -2340,9 +2342,17 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     } catch (error) {
       let notDispatched: RunnerMutationDispatchRecord | undefined;
       if (mutationPreparation && !mutationDispatch) {
-        if (error instanceof RunnerArtifactRelayInfrastructureError) {
-          // Retryable 503: Core redelivers this exact ApplyRun, which must be
-          // able to claim the same semantics again.
+        if (
+          error instanceof RunnerArtifactRelayInfrastructureError ||
+          request.signal.aborted
+        ) {
+          // A retryable 503 makes Core redeliver this exact ApplyRun, and a
+          // caller that aborted its own request (for example on lease loss)
+          // records nothing from this answer while a takeover owner of the
+          // same ApplyRun continues it. Both must be able to claim the same
+          // semantics again. The decision follows the caller's signal, not
+          // the error type: an internal AbortError while the caller is still
+          // connected is an ordinary pre-dispatch failure.
           await this.#releaseMutationPreparation(mutationPreparation);
         } else {
           // The container never received the mutating request. Fence these

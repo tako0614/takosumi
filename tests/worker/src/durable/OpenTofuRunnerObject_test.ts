@@ -3258,6 +3258,76 @@ test("OpenTofu runner Durable Object replays a completed release without invokin
   });
 });
 
+test("OpenTofu runner Durable Object makes the release dispatched fence durable before commands run", async () => {
+  const applyRunId = "apply_release_sync_order";
+  const releaseRunId = `release_${applyRunId}`;
+  const log: string[] = [];
+  class SyncLoggingStorage extends FakeDoStorage {
+    override sync(): Promise<void> {
+      const authority = this.entries().find(
+        ([key]) => key === "runner-release-authority",
+      )?.[1] as { readonly phase?: unknown } | undefined;
+      log.push(`sync:${String(authority?.phase)}`);
+      return Promise.resolve();
+    }
+  }
+  const storage = new SyncLoggingStorage();
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "POST" && path === `/runs/${releaseRunId}`) {
+        log.push("dispatch");
+        return Response.json({
+          runId: releaseRunId,
+          action: "release",
+          status: "succeeded",
+          exitCode: 0,
+          commandCount: 1,
+        });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+  const response = await runnerWithContainer(
+    new FakeR2Bucket(),
+    container,
+    { storage },
+  ).fetch(
+    new Request(`https://runner/runs/${releaseRunId}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "release",
+        runId: releaseRunId,
+        request: {
+          release: {
+            commands: [
+              { id: "activate", command: ["bun", "run", "activate"] },
+            ],
+          },
+          activation: {
+            applyRunId,
+            workspaceId: "workspace_release",
+            capsuleId: "capsule_release",
+            stateVersionId: "state_release_1",
+            sourceSnapshotId: "snapshot_release_1",
+            sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+          },
+          providerConfigurations: {
+            format: "takosumi.provider-configurations@v1",
+            providers: [],
+          },
+        },
+      }),
+    }),
+  );
+  assert.equal(response.status, 200);
+  const dispatchIndex = log.indexOf("dispatch");
+  assert.ok(dispatchIndex > 0);
+  assert.ok(log.slice(0, dispatchIndex).includes("sync:dispatched"));
+});
+
 test("OpenTofu runner Durable Object resumes preparing release authority with rematerialized runtime values and identical opaque credentials", async () => {
   const applyRunId = "apply_release_preparing_resume";
   const releaseRunId = `release_${applyRunId}`;
@@ -3860,6 +3930,99 @@ test("OpenTofu runner Durable Object may redispatch read-only plan after a stopp
 
   assert.equal(response.status, 200);
   assert.equal(planCalls, 2);
+});
+
+test("OpenTofu runner Durable Object lets a takeover complete after the first caller aborted before dispatch", async () => {
+  const runId = "apply_caller_aborted_takeover";
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, runId);
+  const storage = new FakeDoStorage();
+  const firstCaller = new AbortController();
+  let providerCalls = 0;
+  let abortOnPlanRestore = true;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT") {
+        // The first caller loses its lease while inputs are being restored.
+        if (abortOnPlanRestore && path === `/runs/${runId}/artifacts/tfplan`) {
+          abortOnPlanRestore = false;
+          firstCaller.abort(new DOMException("lease lost", "AbortError"));
+        }
+        return Response.json({ ok: true });
+      }
+      if (request.method === "POST" && path === `/runs/${runId}`) {
+        providerCalls += 1;
+        return Response.json({ status: "succeeded", exitCode: 0 });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+  const body = JSON.stringify({
+    kind: "takosumi.opentofu-run@v1",
+    action: "apply",
+    runId,
+    request: {
+      planArtifact: {
+        kind: "object-storage",
+        ref: `r2://takos-artifacts/opentofu-plan-runs/${runId}/tfplan`,
+        digest: PLAN_DIGEST,
+        sizeBytes: PLAN_BYTES.byteLength,
+      },
+    },
+  });
+  const aborted = await runnerWithContainer(r2, container, { storage }).fetch(
+    new Request(`https://runner/runs/${runId}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+      signal: firstCaller.signal,
+    }),
+  );
+  assert.equal(aborted.ok, false);
+  assert.equal(providerCalls, 0);
+  // Nobody can record the aborted answer, so nothing is fenced.
+  assert.deepEqual(storage.entries(), []);
+
+  // The takeover owner of the same ApplyRun delivers the same mutation.
+  const takeover = await runnerWithContainer(r2, container, { storage }).fetch(
+    new Request(`https://runner/runs/${runId}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    }),
+  );
+  assert.equal(takeover.status, 200);
+  assert.equal(providerCalls, 1);
+});
+
+test("OpenTofu runner Durable Object still fences an internal AbortError while the caller is connected", async () => {
+  const runId = "apply_internal_abort_error";
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, runId);
+  const storage = new FakeDoStorage();
+  let providerCalls = 0;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT") {
+        throw new DOMException("internal restore timeout", "AbortError");
+      }
+      if (request.method === "POST" && path === `/runs/${runId}`) {
+        providerCalls += 1;
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+  const runner = runnerWithContainer(r2, container, { storage });
+  const first = await runner.fetch(mutationRequest(runId, "apply"));
+  assert.equal(first.status, 500);
+  const text = await first.text();
+  assertMutationNotDispatchedResponse(text, "apply");
+  assert.equal(mutationAuthorityPhase(storage), "not_dispatched");
+  const replay = await runner.fetch(mutationRequest(runId, "apply"));
+  assert.equal(await replay.text(), text);
+  assert.equal(providerCalls, 0);
 });
 
 test("OpenTofu runner Durable Object fences a pre-dispatch failure so a later delivery never dispatches", async () => {

@@ -1983,7 +1983,9 @@ async function runRunner(
       `OpenTofu runner rejected ${action} run ${runId}: HTTP ${response.status}`,
       {
         reason:
-          reason && /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(reason)
+          reason &&
+          reason !== RUNNER_MUTATION_NOT_DISPATCHED_REASON &&
+          /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(reason)
             ? reason
             : "runner_http_error",
         detail: "runner returned a non-success HTTP status",
@@ -1992,6 +1994,14 @@ async function runRunner(
   }
   return body;
 }
+
+/**
+ * Core treats this reason as proof that no provider mutation started. Only the
+ * Cloudflare runner Durable Object may mint it, after fencing its own dispatch
+ * authority; an HTTP runner's output never carries that authority, so it is
+ * never adopted from a response body here.
+ */
+const RUNNER_MUTATION_NOT_DISPATCHED_REASON = "runner_mutation_not_dispatched";
 
 /** Fail before workspace preparation if an HTTP runner is not operator-selected
  * for local filesystem custody. Request headers cannot change the mode. */
