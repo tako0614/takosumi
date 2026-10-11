@@ -7822,6 +7822,92 @@ test("pre-destroy failure remains secondary evidence when the final Capsule leas
   expect(runner.destroyJobs).toHaveLength(0);
 });
 
+test("a successful pre-destroy action survives a renewal failure raised right after it", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: lifecycleInstallConfig([
+      {
+        id: "retire-runtime",
+        phase: "pre_destroy",
+        executor: "operator",
+        command: ["bun", "run", "release", "--destroy"],
+      },
+    ]),
+  });
+  const inner = new InMemoryCapsuleCoordination({ now: sequenceNow(60_000) });
+  let failDestroyFinalProbe = false;
+  const initiallyRenewedDestroyScopes = new Set<string>();
+  const coordination: CapsuleCoordination = {
+    acquireLease: (input) => inner.acquireLease(input),
+    releaseLease: (input) => inner.releaseLease(input),
+    renewLease: (input) => {
+      if (!failDestroyFinalProbe) return inner.renewLease(input);
+      if (!initiallyRenewedDestroyScopes.has(input.scope)) {
+        initiallyRenewedDestroyScopes.add(input.scope);
+        return inner.renewLease(input);
+      }
+      return Promise.reject(
+        Object.assign(new Error("coordination transport reset"), {
+          retryable: true,
+        }),
+      );
+    },
+  };
+  let activations = 0;
+  const controller = controllerWith(store, runner, {
+    capsuleCoordination: coordination,
+    runRenewalIntervalMs: 0,
+    releaseActivator: {
+      activate: () => {
+        activations += 1;
+        return Promise.resolve({ status: "succeeded" });
+      },
+    },
+  });
+
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  const created = await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  await controller.approveRun(destroy.planRun.id);
+  failDestroyFinalProbe = true;
+
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  // The external action ran; only the fence check after it failed.
+  expect(activations).toBe(1);
+  expect(applyRun.status).toBe("failed");
+  expect(applyRun.diagnostics?.[0]?.code).toBe("capsule_lease_unavailable");
+  expect(
+    applyRun.auditEvents.find(
+      (event) => event.type === "lifecycle_action.pre_destroy.succeeded",
+    )?.data,
+  ).toMatchObject({ phase: "pre_destroy", actionDispatched: true });
+  expect(
+    applyRun.auditEvents.find((event) => event.type === "destroy.failed")?.data,
+  ).toMatchObject({
+    providerDispatched: false,
+    lifecycleActionDispatched: true,
+    lifecycleActionPhase: "pre_destroy",
+    lifecycleActionStatus: "succeeded",
+  });
+  expect(runner.destroyJobs).toHaveLength(0);
+  // The ledger keeps the Capsule unsafe instead of trusting the earlier Apply.
+  expect(await store.getCapsuleRuntimeSafety("cap_fixture1")).toEqual({
+    phase: "unknown",
+    runId: applyRun.id,
+    runType: "destroy_apply",
+  });
+  expect(created.applyRun.status).toBe("succeeded");
+});
+
 test("pre-destroy lifecycle execution renews before provider destroy dispatch", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();

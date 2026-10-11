@@ -591,6 +591,13 @@ class RunExecutionRenewalError extends OpenTofuControllerError {
   readonly diagnosticCode: `${RunRenewalTarget}_${RunRenewalFailure}`;
   readonly originalError?: unknown;
   secondaryError?: unknown;
+  /**
+   * Present when the guarded work itself finished before the fence failed.
+   * Its result may be the only proof of an external effect that already
+   * happened (for example a `pre_destroy` lifecycle action), so callers can
+   * still record it instead of losing it to the renewal failure.
+   */
+  completedWork?: { readonly result: unknown };
 
   constructor(input: {
     readonly kind: "plan" | "apply" | "restore";
@@ -638,6 +645,30 @@ class RunExecutionRenewalError extends OpenTofuControllerError {
     }
     this.secondaryError = error;
   }
+
+  preserveCompletedWork(result: unknown): void {
+    if (this.completedWork !== undefined || this.secondaryError !== undefined) {
+      return;
+    }
+    this.completedWork = { result };
+  }
+}
+
+/**
+ * A `pre_destroy` action that succeeded can end up behind a renewal failure
+ * raised after the action returned. The action ran, so its outcome must reach
+ * the failed Run exactly like a lifecycle failure would.
+ */
+function completedPreDestroyOutcome(
+  error: unknown,
+): LifecycleActionOutcome | undefined {
+  if (!(error instanceof RunExecutionRenewalError)) return undefined;
+  const outcome = error.completedWork?.result as
+    | LifecycleActionOutcome
+    | undefined;
+  return outcome?.phase === "pre_destroy" && outcome.actionDispatched === true
+    ? outcome
+    : undefined;
 }
 
 type LifecycleActionActivityStatus = Exclude<
@@ -7126,8 +7157,9 @@ export class RunEngine {
     if (kind !== "restore" && !abortController.signal.aborted) await runTick();
     if (abortController.signal.aborted) {
       const renewalError = abortController.signal.reason;
-      if (renewalError instanceof RunExecutionRenewalError && workFailed) {
-        renewalError.preserveSecondaryError(workError);
+      if (renewalError instanceof RunExecutionRenewalError) {
+        if (workFailed) renewalError.preserveSecondaryError(workError);
+        else renewalError.preserveCompletedWork(result);
       }
       throw renewalError;
     }
@@ -11501,8 +11533,15 @@ export class RunEngine {
       }
       await this.#billing.releaseApplyBilling(planRun);
       const lifecycleError = lifecycleActionErrorEvidence(error);
-      const lifecycleActionDispatched = lifecycleError?.actionDispatched === true;
-      const lifecycleOutcome = lifecycleError?.outcome;
+      // A pre_destroy action that succeeded right before a renewal failure
+      // is still a Capsule mutation; never drop it with the renewal error.
+      const completedLifecycle = lifecycleError
+        ? undefined
+        : completedPreDestroyOutcome(error);
+      const lifecycleActionDispatched =
+        lifecycleError?.actionDispatched === true ||
+        completedLifecycle !== undefined;
+      const lifecycleOutcome = lifecycleError?.outcome ?? completedLifecycle;
       const failed = await this.#failApplyRun(
         effectiveRunning,
         leaseToken,
