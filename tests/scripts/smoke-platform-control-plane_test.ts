@@ -1809,18 +1809,46 @@ test("platform smoke materializes and retires the Plan-pinned Interface through 
 test("platform smoke canonical Run events are redacted to ids and outcomes", () => {
   const sequence = canonicalRunEventSequenceFromActivity(
     [
-      { id: "evt_plan", action: "run.plan_created", targetType: "run", targetId: "plan", runId: "plan", metadata: { capsuleId: "cap", operation: "plan", authorization: "Bearer secret" } },
+      { id: "evt_plan", action: "run.plan_created", targetType: "run", targetId: "plan", runId: "plan", metadata: { capsuleId: "cap", operation: "create", policyStatus: "passed", authorization: "Bearer secret" } },
       { id: "evt_apply", action: "run.applied", targetType: "run", targetId: "apply", runId: "apply", metadata: { capsuleId: "cap", stateVersionId: "state" } },
-      { id: "evt_destroy_plan", action: "run.plan_created", targetType: "run", targetId: "destroy-plan", runId: "destroy-plan", metadata: { capsuleId: "cap", operation: "destroy" } },
+      { id: "evt_destroy_plan", action: "run.plan_created", targetType: "run", targetId: "destroy-plan", runId: "destroy-plan", metadata: { capsuleId: "cap", operation: "destroy", policyStatus: "passed" } },
       { id: "evt_destroy", action: "run.destroyed", targetType: "run", targetId: "destroy", runId: "destroy", metadata: { capsuleId: "cap" } },
     ],
     { capsuleId: "cap", planRunId: "plan", applyRunId: "apply", destroyPlanRunId: "destroy-plan", destroyApplyRunId: "destroy" },
   );
   expect(sequence?.plan.outcome).toBe("planned");
+  expect(sequence?.plan.operation).toBe("create");
+  expect(sequence?.destroyPlan.operation).toBe("destroy");
   expect(sequence?.apply.outcome).toBe("applied");
   expect(sequence?.destroyApply.outcome).toBe("destroyed");
   expect(JSON.stringify(sequence)).not.toContain("authorization");
   expect(() => assertSmokeSerializationSafe({ authorization: "Bearer secret-fixture" })).toThrow();
+});
+
+test("platform smoke ties the scratch install Plan event to the server's create operation", () => {
+  // Mirrors the 2026-10-11 staging Workspace activity: `run.plan_created`
+  // carries the Run's OpenTofu operation (`create` | `update` | `destroy`),
+  // and a scratch install plans a Capsule that has no StateVersion yet.
+  const events = (operation: string) => [
+    { id: "evt_destroyed", action: "run.destroyed", targetType: "run", targetId: "destroy", runId: "destroy", metadata: { capsuleId: "cap", stateGeneration: 1 } },
+    { id: "evt_destroy_approved", action: "run.approved", targetType: "run", targetId: "destroy-plan", runId: "destroy-plan", metadata: { capsuleId: "cap", operation: "destroy" } },
+    { id: "evt_destroy_plan", action: "run.plan_created", targetType: "run", targetId: "destroy-plan", runId: "destroy-plan", metadata: { capsuleId: "cap", operation: "destroy", policyStatus: "passed" } },
+    { id: "evt_applied", action: "run.applied", targetType: "run", targetId: "apply", runId: "apply", metadata: { capsuleId: "cap", outputCount: 2, outputId: "out", stateGeneration: 1, stateVersionId: "state" } },
+    { id: "evt_plan", action: "run.plan_created", targetType: "run", targetId: "plan", runId: "plan", metadata: { capsuleId: "cap", operation, policyStatus: "passed" } },
+    { id: "evt_capsule", action: "capsule.created", targetType: "capsule", targetId: "cap", metadata: { name: "scratch" } },
+  ];
+  const ids = { capsuleId: "cap", planRunId: "plan", applyRunId: "apply", destroyPlanRunId: "destroy-plan", destroyApplyRunId: "destroy" };
+  const observed = canonicalRunEventSequenceFromActivity(events("create"), ids);
+  expect(observed?.plan).toMatchObject({
+    id: "evt_plan",
+    operation: "create",
+    metadataKeys: ["capsuleId", "operation", "policyStatus"],
+  });
+  // `plan` is not an operation the server emits; `update` would mean the
+  // scratch Capsule already had applied state.
+  for (const operation of ["plan", "update", "destroy"]) {
+    expect(canonicalRunEventSequenceFromActivity(events(operation), ids)).toBeUndefined();
+  }
 });
 
 test("platform smoke optionally proves an OAuth Interface grant and post-destroy denial", async () => {
@@ -4181,7 +4209,7 @@ async function runConfiguredPublicUrlLifecycleFixture(
       }
       if (method === "GET" && path === `/api/v1/workspaces/${workspaceId}/activity`) {
         const events = [
-          { action: "run.plan_created", runId: runs.planSucceeded.id, operation: "plan" },
+          { action: "run.plan_created", runId: runs.planSucceeded.id, operation: "create" },
           { action: "run.applied", runId: runs.applySucceeded.id },
           { action: "run.plan_created", runId: runs.destroyPlan.id, operation: "destroy" },
           { action: "run.destroyed", runId: runs.destroyApply.id },
