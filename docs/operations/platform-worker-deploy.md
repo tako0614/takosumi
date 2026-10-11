@@ -344,9 +344,11 @@ read-only: it requires a clean attached checkout at the freshly read tip of its
 pushed branch (not necessarily `main`), binds its exact repository/commit
 authority into the confirmed plan, and consumes the operator-private runner
 build evidence for the configured immutable image. Every matching published v3
-record is fully validated. Valid historical records without proof are ignored,
-and identical proved records are deduplicated by exact proof kind and image; one
-unique closed runtime-input Plan proof for that image must remain. Missing
+record is fully validated. Valid historical v1 or unproved records are ignored
+before uniqueness is counted; v2 proofs with the same kind and image are
+deduplicated even when their valid build records differ. One unique closed v2
+runtime-input Plan proof with
+`savedPlanStateMetadata: "passed"` for that image must remain. Missing
 proof, malformed matching provenance, or evidence only for another image fails
 before dashboard build, dry-run, or provider access. Runner build provenance
 must name the same owning Git remote as the Worker pin, but their commits are
@@ -403,9 +405,12 @@ bun run deploy -- takosumi-platform-staging execute \
   --evidence /absolute/non-worktree-release-state/release-evidence.json
 ```
 
-Execute rechecks the confirmed source, runner-image proof, config, secret names,
+Execute requires the v2 proof before activation, then rechecks the confirmed
+source, runner-image proof, config, secret names,
 complete dashboard tree, and dry-run tree. It requires the configured image to
-remain the proof-bound immutable image before upload. Execute, recover, and restore re-read the config's sibling
+remain the proof-bound immutable image before upload. Recover and restore still
+accept the exact historical v1 proof sealed in an older plan for their existing
+predecessor identity and health checks. Execute, recover, and restore re-read the config's sibling
 source pin and require its exact repository, commit, and authority digest to
 match the plan. The checkout's origin must identify the same repository; a
 matching commit alone is insufficient. These checks also run immediately before

@@ -45,7 +45,9 @@ import {
 import {
   isPublishedRunnerImageBuildRecord,
   isRunnerImageRuntimeInputPlanProof,
+  isRunnerImageMetadataQualifiedProof,
   runnerImageRuntimeInputPlanProofFromBuildRecord,
+  type RunnerImageAnyRuntimeInputPlanProof,
   type RunnerImageRuntimeInputPlanProof,
 } from "./runner-image-release-contract.ts";
 
@@ -713,7 +715,7 @@ function platformRunnerImageRange(source: string): Readonly<{
 export function assertPlatformRunnerImageProof(
   configSource: string,
   proof: unknown,
-): asserts proof is RunnerImageRuntimeInputPlanProof {
+): asserts proof is RunnerImageAnyRuntimeInputPlanProof {
   const image = platformRunnerImageRange(configSource).image;
   if (!isRunnerImageRuntimeInputPlanProof(proof, image)) {
     throw new Error("platform_worker_release_runner_image_proof_invalid");
@@ -1760,7 +1762,7 @@ export interface PlatformReleasePlan {
   readonly sourceRepository: string;
   readonly sourceCommit: string;
   readonly sourceAuthoritySha256: string;
-  readonly runnerImageProof: RunnerImageRuntimeInputPlanProof;
+  readonly runnerImageProof: RunnerImageAnyRuntimeInputPlanProof;
   readonly releaseNonce: string;
   readonly configPath: string;
   readonly configSha256: string;
@@ -1799,7 +1801,7 @@ export function createPlatformReleasePlan(
   identity: PlatformReleasePlanIdentity,
 ): PlatformReleasePlan {
   if (
-    !isRunnerImageRuntimeInputPlanProof(
+    !isRunnerImageMetadataQualifiedProof(
       identity.runnerImageProof,
       identity.runnerImageProof.image,
     ) ||
@@ -2736,6 +2738,9 @@ function readRunnerImagePlanProof(
       if (proof === null) {
         continue;
       }
+      if (!isRunnerImageMetadataQualifiedProof(proof, image)) {
+        continue;
+      }
       matches.set(JSON.stringify([proof.kind, proof.image]), proof);
     }
     if (matches.size !== 1) {
@@ -3013,6 +3018,12 @@ async function execute(
       options.confirmation,
       environment,
     );
+    if (!isRunnerImageMetadataQualifiedProof(
+      releasePlan.runnerImageProof,
+      releasePlan.runnerImageProof.image,
+    )) {
+      throw new Error("platform_worker_release_runner_image_proof_invalid");
+    }
     assertPlatformActionSource(releasePlan, "execute");
     await assertPlanClosure(releasePlan);
     await completeRelease(options, releasePlan, true);
@@ -4519,6 +4530,12 @@ export async function completeRelease(
       dirname(plan.checkpointPath),
     );
   try {
+    if (options.action === "execute" &&
+        !isRunnerImageMetadataQualifiedProof(
+          plan.runnerImageProof, plan.runnerImageProof.image,
+        )) {
+      throw new Error("platform_worker_release_runner_image_proof_invalid");
+    }
     const source = assertPlatformActionSource(plan, options.action, sourceRuntime);
     if (recoverySourceCommit && recoverySourceCommit !== source.commit) {
       throw new Error("platform_worker_release_source_drift");
@@ -4777,18 +4794,21 @@ function canonicalFuturePath(path: string): string {
   }
 }
 
-async function completeRestore(
+export async function completeRestore(
   options: Extract<Options, { action: "restore" }>,
   plan: PlatformReleasePlan,
   restoreSourceCommit: string,
+  command: PlatformReleaseCommand = requiredCommand,
+  publicReadback: typeof verifyPublicReadback = verifyPublicReadback,
+  sourceRuntime: PlatformActionSourceRuntime = platformActionSourceRuntime,
 ): Promise<void> {
-  const source = assertPlatformActionSource(plan, "restore");
+  const source = assertPlatformActionSource(plan, "restore", sourceRuntime);
   if (restoreSourceCommit !== source.commit) {
     throw new Error("platform_worker_release_source_drift");
   }
   const sourceBoundCommand: PlatformReleaseCommand = async (argv) => {
-    assertPlatformActionSource(plan, "restore", platformActionSourceRuntime, source);
-    return requiredCommand(argv);
+    assertPlatformActionSource(plan, "restore", sourceRuntime, source);
+    return command(argv);
   };
   const forward = readPlatformMutationFence(options.plan, plan.confirmation);
   if (forward?.outcome !== "accepted" || !forward.versionId) {
@@ -4809,13 +4829,14 @@ async function completeRestore(
     let fence = readPlatformRestoreFence(options.plan, plan.confirmation);
     let restoreVersionId: string;
     if (fence.container === undefined) {
-      const serving = await readServingVersion(custody.configPath);
+      const serving = await readServingVersion(custody.configPath, command);
       if (serving !== forward.versionId) {
         throw new Error("platform_worker_restore_concurrent_version");
       }
       const currentContainer = await readPlatformContainer(
         custody.configPath,
         plan.environment,
+        command,
       );
       assertPlatformRestoreCandidate(
         currentContainer,
@@ -4856,7 +4877,7 @@ async function completeRestore(
       );
       fence = readPlatformRestoreFence(options.plan, plan.confirmation);
     } else if (fence.container.outcome === "unknown") {
-      const versions = await requiredCommand([
+      const versions = await command([
         WRANGLER,
         "versions",
         "list",
@@ -4884,17 +4905,20 @@ async function completeRestore(
       custody.configPath,
       restoreVersionId,
       [forward.versionId, plan.predecessorVersionId],
+      command,
     );
     await verifyPublishedVersion(
       custody.configPath,
       restoreVersionId,
       restoreTag,
       restoreMessage,
+      command,
     );
     const restoredContainer = await waitForPlatformContainer(
       custody.configPath,
       plan.environment,
       plan.predecessorContainer.image,
+      command,
     );
     assertPlatformRestoreCandidate(
       restoredContainer,
@@ -4929,7 +4953,7 @@ async function completeRestore(
         { outcome: "accepted", versionId: plan.predecessorVersionId },
       );
     } else if (fence.worker.outcome === "unknown") {
-      const serving = await readServingVersion(custody.configPath);
+      const serving = await readServingVersion(custody.configPath, command);
       if (serving !== plan.predecessorVersionId) {
         if (serving !== restoreVersionId) {
           throw new Error("platform_worker_restore_concurrent_version");
@@ -4961,12 +4985,14 @@ async function completeRestore(
       custody.configPath,
       plan.predecessorVersionId,
       [restoreVersionId],
+      command,
     );
-    await verifyPublicReadback(plan.environment, plan.predecessorVersionId);
+    await publicReadback(plan.environment, plan.predecessorVersionId);
     const finalContainer = await waitForPlatformContainer(
       custody.configPath,
       plan.environment,
       plan.predecessorContainer.image,
+      command,
     );
     assertPlatformRestoreCandidate(
       finalContainer,
@@ -4978,7 +5004,7 @@ async function completeRestore(
       plan.predecessorContainer.image,
     );
     custody.assertUnchanged();
-    assertPlatformActionSource(plan, "restore", platformActionSourceRuntime, source);
+    assertPlatformActionSource(plan, "restore", sourceRuntime, source);
     const evidence = {
       kind: "takosumi.platform-worker-restore-evidence@v1",
       status: "restored",
@@ -5015,9 +5041,10 @@ async function waitForServingTransition(
   configPath: string,
   expectedVersionId: string,
   allowedPriorVersionIds: readonly string[],
+  command: PlatformReleaseCommand = requiredCommand,
 ): Promise<void> {
   for (let attempt = 1; attempt <= 8; attempt += 1) {
-    const serving = await readServingVersion(configPath);
+    const serving = await readServingVersion(configPath, command);
     if (serving === expectedVersionId) return;
     if (!allowedPriorVersionIds.includes(serving)) {
       throw new Error("platform_worker_restore_concurrent_version");
@@ -5050,7 +5077,7 @@ function platformReleaseTag(identity: Readonly<Record<string, unknown>>): string
   return `tks-${environment === "staging" ? "stg" : "prod"}-${identityDigest.slice(0, 48)}`;
 }
 
-function parsePlan(
+export function parsePlan(
   bytes: Uint8Array,
   confirmation: string,
   environment: PlatformEnvironment,
