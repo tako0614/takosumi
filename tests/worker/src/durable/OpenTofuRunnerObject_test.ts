@@ -1905,6 +1905,147 @@ test("OpenTofu runner Durable Object restores a legacy missing-size reviewed Pla
   ]);
 });
 
+async function applyReviewedPlanWithSize(
+  r2: FakeR2Bucket,
+  sizeBytes: number | undefined,
+): Promise<{ readonly response: Response; readonly calls: readonly string[] }> {
+  const calls: string[] = [];
+  const runner = runnerWithContainer(r2, {
+    async containerFetch(request) {
+      calls.push(`${request.method} ${new URL(request.url).pathname}`);
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT" && path === "/runs/plan_1/artifacts/tfplan") {
+        assert.deepEqual(new Uint8Array(await request.arrayBuffer()), PLAN_BYTES);
+        return Response.json({ ok: true });
+      }
+      if (request.method === "POST" && path === "/runs/plan_1") {
+        return Response.json({ status: "succeeded", exitCode: 0 });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "apply",
+        runId: "plan_1",
+        request: {
+          planArtifact: {
+            kind: "object-storage",
+            ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
+            digest: PLAN_DIGEST,
+            ...(sizeBytes === undefined ? {} : { sizeBytes }),
+          },
+        },
+      }),
+    }),
+  );
+  return { response, calls };
+}
+
+test("OpenTofu runner Durable Object applies the exact planArtifact its own Plan persisted", async () => {
+  const r2 = new FakeR2Bucket();
+  const planRunner = runnerWithContainer(r2, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "POST" && path === "/runs/plan_1") {
+        return Response.json({
+          status: "succeeded",
+          exitCode: 0,
+          planDigest: PLAN_DIGEST,
+          planArtifact: {
+            kind: "runner-local",
+            ref: "runner-local://plan_1/tfplan",
+            digest: PLAN_DIGEST,
+            contentType: "application/vnd.opentofu.plan",
+          },
+        });
+      }
+      if (request.method === "GET" && path === "/runs/plan_1/artifacts/tfplan") {
+        return new Response(PLAN_BYTES, {
+          headers: { "content-type": "application/vnd.opentofu.plan" },
+        });
+      }
+      if (request.method === "GET" && path === "/runs/plan_1/artifacts/tfplan-json") {
+        return Response.json({ error: "not found" }, { status: 404 });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+  const planned = await planRunner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId: "plan_1",
+        request: {},
+      }),
+    }),
+  );
+  assert.equal(planned.status, 200);
+  const artifact = ((await planned.json()) as Record<string, unknown>)
+    .planArtifact as Record<string, unknown>;
+  // The persisted size is the plaintext the digest names, not the sealed object.
+  assert.equal(artifact.sizeBytes, PLAN_BYTES.byteLength);
+  const sealed = r2.body("opentofu-plan-runs/plan_1/tfplan.enc");
+  assert.ok(sealed && sealed.byteLength > PLAN_BYTES.byteLength);
+
+  const { response, calls } = await applyReviewedPlanWithSize(
+    r2,
+    artifact.sizeBytes as number,
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, [
+    "PUT /runs/plan_1/artifacts/tfplan",
+    "POST /runs/plan_1",
+  ]);
+});
+
+test("OpenTofu runner Durable Object accepts a reviewed Plan recorded with its sealed object size", async () => {
+  const r2 = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const sealedPlan = await crypto.seal(PLAN_BYTES);
+  await r2.put("opentofu-plan-runs/plan_1/tfplan.enc", sealedPlan.ciphertext, {
+    httpMetadata: { contentType: "application/vnd.opentofu.plan" },
+    customMetadata: { "takosumi-content-digest": sealedPlan.contentDigest },
+  });
+  // PlanRuns persisted before the plaintext-size correction carry this value.
+  const { response, calls } = await applyReviewedPlanWithSize(
+    r2,
+    sealedPlan.ciphertextLength,
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, [
+    "PUT /runs/plan_1/artifacts/tfplan",
+    "POST /runs/plan_1",
+  ]);
+});
+
+test("OpenTofu runner Durable Object rejects a reviewed Plan whose size names neither its plaintext nor its sealed object", async () => {
+  const r2 = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const sealedPlan = await crypto.seal(PLAN_BYTES);
+  await r2.put("opentofu-plan-runs/plan_1/tfplan.enc", sealedPlan.ciphertext, {
+    httpMetadata: { contentType: "application/vnd.opentofu.plan" },
+    customMetadata: { "takosumi-content-digest": sealedPlan.contentDigest },
+  });
+  const { response, calls } = await applyReviewedPlanWithSize(
+    r2,
+    PLAN_BYTES.byteLength + 1,
+  );
+  assert.equal(response.status, 500);
+  assert.deepEqual(calls, []);
+});
+
 test("compatibility DO dispatches artifact Plan without a lock restore marker", async () => {
   const runId = "plan_reviewed_lock_compat";
   const calls: string[] = [];
