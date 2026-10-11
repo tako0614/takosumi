@@ -238,6 +238,12 @@ test("real flows emit Activity events; listing is workspace-scoped and newest-fi
   for (const event of body.events) {
     expect(event.workspaceId).toBe(workspaceId);
   }
+  // A first Plan for a Capsule with no StateVersion records the Run's OpenTofu
+  // operation `create`; `plan` is a Run type, never an operation. The platform
+  // control-plane smoke ties its scratch install to this value.
+  const planned = body.events.find((e) => e.action === "run.plan_created")!;
+  expect(planned.metadata.operation).toBe("create");
+  expect(planned.metadata.capsuleId).toBe(capsuleId);
   // The capsule.created event carries non-secret context only.
   const created = body.events.find((e) => e.action === "capsule.created")!;
   expect(created.targetType).toBe("capsule");
