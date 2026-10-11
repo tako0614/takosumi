@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
 
-import { CapsulesService } from "../../../../core/domains/capsules/mod.ts";
+import {
+  CAPSULE_RUNTIME_STATE_PRESENT_REASON,
+  CapsulesService,
+} from "../../../../core/domains/capsules/mod.ts";
 import type { CreateCapsuleInitialAuthorityRequest } from "../../../../core/domains/capsules/mod.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import {
@@ -20,6 +23,7 @@ import {
   type InstallConfig,
 } from "takosumi-contract/install-configs";
 import type { Workspace } from "takosumi-contract/workspaces";
+import type { ApplyRun } from "@takosumi/internal/deploy-control-api";
 import { withHistoricalPublicHostReservations } from "../../../helpers/deploy-control/historical_public_host_store.ts";
 import { transitionProviderBindingSetForFixture } from "../../../helpers/deploy-control/model_fixture.ts";
 
@@ -646,6 +650,93 @@ test("abandonUnappliedCapsule refuses a Capsule with applied state", async () =>
   await expect(
     service.abandonUnappliedCapsule(capsule.id, "test abandon"),
   ).rejects.toMatchObject({ code: "failed_precondition" });
+});
+
+function failedFirstApply(
+  capsuleId: string,
+  diagnosticCode: string,
+): ApplyRun {
+  const id = `apply_first_${diagnosticCode}`;
+  const planRunId = `plan_first_${diagnosticCode}`;
+  const at = Date.parse(NOW);
+  return {
+    id,
+    planRunId,
+    workspaceId: "ws_1",
+    capsuleId,
+    operation: "create",
+    runnerProfileId: "opentofu-default",
+    status: "failed",
+    expected: {
+      planRunId,
+      capsuleId,
+      runnerProfileId: "opentofu-default",
+      sourceDigest: "sha256:source",
+      variablesDigest: "sha256:variables",
+      policyDecisionDigest: "sha256:policy",
+      planDigest: "sha256:plan",
+      planArtifactDigest: "sha256:plan",
+    },
+    stateBackend: { kind: "managed", ref: "state" } as never,
+    stateLock: { status: "recorded", backendRef: "state" },
+    // The Core apply path records any runner invocation as dispatched; only
+    // the structured diagnostic can prove the provider was never reached.
+    auditEvents: [
+      {
+        id: `audit_${id}`,
+        type: "apply.failed",
+        at,
+        data: { providerDispatched: true },
+      },
+    ],
+    diagnostics: [
+      {
+        severity: "error",
+        code: diagnosticCode,
+        message: `runner failure (${diagnosticCode})`,
+      },
+    ],
+    createdAt: at - 10,
+    updatedAt: at,
+    startedAt: at - 5,
+    finishedAt: at,
+  };
+}
+
+test("abandonUnappliedCapsule accepts a first Apply the runner proved was never dispatched", async () => {
+  const { store, service } = build();
+  await seedWorkspaceAndSource(store);
+  const capsule = await createInitialCapsule(service, {
+    capsuleId: "cap_not_dispatched",
+    providerBindingSetId: "pbind_not_dispatched",
+    installConfig: initialInstallConfig("cfg_not_dispatched"),
+  });
+  await store.putApplyRun(
+    failedFirstApply(capsule.id, "runner_mutation_not_dispatched"),
+  );
+  expect(await store.getCapsuleRuntimeSafety(capsule.id)).toBeUndefined();
+
+  const abandoned = await service.abandonUnappliedCapsule(capsule.id, "cancel");
+  expect(abandoned.status).toBe("destroyed");
+});
+
+test("abandonUnappliedCapsule refuses a first Apply that failed on the untyped runner fallback", async () => {
+  const { store, service } = build();
+  await seedWorkspaceAndSource(store);
+  const capsule = await createInitialCapsule(service, {
+    capsuleId: "cap_runner_rejected",
+    providerBindingSetId: "pbind_runner_rejected",
+    installConfig: initialInstallConfig("cfg_runner_rejected"),
+  });
+  await store.putApplyRun(failedFirstApply(capsule.id, "runner_rejected"));
+
+  await expect(
+    service.abandonUnappliedCapsule(capsule.id, "cancel"),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: CAPSULE_RUNTIME_STATE_PRESENT_REASON },
+  });
+  expect((await store.getCapsule(capsule.id))?.status).not.toBe("destroyed");
 });
 
 test("the same Capsule name can be used in another environment", async () => {

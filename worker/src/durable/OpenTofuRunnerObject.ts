@@ -13,8 +13,10 @@ import {
 } from "../state_crypto.ts";
 import {
   RUNNER_MUTATION_INDETERMINATE_CODE,
+  RUNNER_MUTATION_NOT_DISPATCHED_CODE,
   type RunnerMutationAction,
   type RunnerMutationIndeterminatePayload,
+  type RunnerMutationNotDispatchedPayload,
 } from "../runner_protocol.ts";
 import {
   isRunCredentialToken,
@@ -1569,9 +1571,16 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     return dispatched;
   }
 
+  /**
+   * Removes a still-`preparing` mutation authority. Resolves `true` only when
+   * this call observed that exact `preparing` record and durably deleted it:
+   * the one proof that no provider dispatch was ever authorized for these
+   * semantics. Any other durable phase (for example a `dispatched` write whose
+   * acknowledgement was lost) resolves `false` and is left untouched.
+   */
   async #releaseMutationPreparation(
     preparation: RunnerMutationDispatchRecord,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       const current = parseRunnerMutationDispatchRecord(
         await this.ctx.storage.get<unknown>(
@@ -1584,7 +1593,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         current.action !== preparation.action ||
         current.semanticDigest !== preparation.semanticDigest
       ) {
-        return;
+        return false;
       }
       // No provider dispatch was authorized, so both preparation records can
       // be removed and the exact request may safely retry. Issue both deletes
@@ -1596,6 +1605,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         `${RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX}${preparation.semanticDigest}`,
       );
       await Promise.all([authorityDelete, evidenceDelete]);
+      return true;
     } finally {
       this.#activeMutationPreparations.delete(preparation.semanticDigest);
     }
@@ -2227,11 +2237,32 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         }
       }
     } catch (error) {
-      if (mutationPreparation && !mutationDispatch) {
-        await this.#releaseMutationPreparation(mutationPreparation);
-      }
+      const releasedMutationPreparation =
+        mutationPreparation !== undefined && mutationDispatch === undefined
+          ? await this.#releaseMutationPreparation(mutationPreparation)
+          : false;
       if (releasePreparation && !releaseDispatch) {
         await this.#releaseReleasePreparation(releasePreparation);
+      }
+      // The container has not received the mutating request and the durable
+      // `preparing` authority is gone, so no provider mutation can have
+      // started. Say so with a typed outcome instead of the generic relay
+      // failure, which Core must conservatively treat as possibly dispatched.
+      // An ambiguous artifact acknowledgement keeps its retryable envelope.
+      if (
+        releasedMutationPreparation &&
+        mutationPreparation !== undefined &&
+        !(error instanceof RunnerArtifactRelayInfrastructureError)
+      ) {
+        console.error("OpenTofu runner mutation failed before dispatch", {
+          action: mutationPreparation.action,
+          reason: safeRunnerFailureReason(error),
+          errorName: safeRunnerErrorName(error),
+        });
+        return runnerMutationNotDispatchedResponse(
+          mutationPreparation.action,
+          error,
+        );
       }
       throw error;
     }
@@ -7837,6 +7868,41 @@ function canonicalRunnerMutationJson(value: unknown): string {
       .join(",")}}`;
   }
   throw new Error("runner mutation identity must be canonical JSON");
+}
+
+function runnerMutationNotDispatchedResponse(
+  action: RunnerMutationAction,
+  error: unknown,
+): Response {
+  const sizeLimit =
+    error instanceof RunnerArtifactSizeLimitError ? error : undefined;
+  const payload: RunnerMutationNotDispatchedPayload = {
+    error: "OpenTofu runner mutation failed before provider dispatch",
+    errorCode: RUNNER_MUTATION_NOT_DISPATCHED_CODE,
+    status: "failed",
+    phase: action,
+    retryable: false,
+    outcome: "not_dispatched",
+    evidence: {
+      kind: RUNNER_MUTATION_NOT_DISPATCHED_CODE,
+      action,
+      preparationReleased: true,
+    },
+    reason: safeRunnerFailureReason(error),
+    detail:
+      "the runner failed before provider dispatch was authorized; the container never received the mutation request",
+  };
+  return Response.json(
+    sizeLimit
+      ? {
+          ...payload,
+          artifact: sizeLimit.artifact,
+          maxBytes: sizeLimit.maxBytes,
+          observedBytes: sizeLimit.observedBytes,
+        }
+      : payload,
+    { status: sizeLimit ? 413 : 500 },
+  );
 }
 
 function runnerMutationIndeterminateResponse(

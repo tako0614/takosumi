@@ -47,7 +47,10 @@ import {
   parseRepositoryModulesSnapshot,
 } from "takosumi-contract/sources";
 import { recordWorkerMetric, type WorkerMetricSink } from "./metrics.ts";
-import { RUNNER_MUTATION_INDETERMINATE_CODE } from "./runner_protocol.ts";
+import {
+  RUNNER_MUTATION_INDETERMINATE_CODE,
+  RUNNER_MUTATION_NOT_DISPATCHED_CODE,
+} from "./runner_protocol.ts";
 
 /**
  * Implements {@link OpenTofuRunner} over the RUNNER Durable Object: each
@@ -1252,6 +1255,21 @@ function runnerExecutionErrorFromPayload(
       {
         reason: RUNNER_MUTATION_INDETERMINATE_CODE,
       },
+    );
+  }
+  // The runner Durable Object emits this only after durably releasing a
+  // `preparing` mutation authority, before the container saw the request.
+  // Preserve it as the fixed reason so Core can prove no provider mutation
+  // started; anything weaker stays on the possibly-dispatched fallback.
+  if (
+    (action === "apply" || action === "destroy") &&
+    payload.retryable === false &&
+    payload.outcome === "not_dispatched" &&
+    errorCode === RUNNER_MUTATION_NOT_DISPATCHED_CODE
+  ) {
+    return new OpenTofuRunnerExecutionError(
+      runnerFailureMessage(RUNNER_MUTATION_NOT_DISPATCHED_CODE),
+      { reason: RUNNER_MUTATION_NOT_DISPATCHED_CODE },
     );
   }
   return undefined;

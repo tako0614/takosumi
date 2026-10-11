@@ -2095,6 +2095,7 @@ test("OpenTofu runner Durable Object rejects a reviewed Plan whose size names ne
     PLAN_BYTES.byteLength + 1,
   );
   assert.equal(response.status, 500);
+  assertMutationNotDispatchedResponse(await response.text(), "apply");
   assert.deepEqual(calls, []);
 });
 
@@ -2740,6 +2741,11 @@ test("OpenTofu runner never dispatches when the durable dispatched transition lo
     signedMutationRequest(planRunId, firstToken),
   );
   assert.equal(first.status, 500);
+  // The `dispatched` phase is durable even though its acknowledgement was
+  // lost, so this must not claim the pre-dispatch outcome.
+  const firstPayload = (await first.json()) as Record<string, unknown>;
+  assert.equal(firstPayload.errorCode, "runner_artifact_relay_failed");
+  assert.equal(firstPayload.outcome, undefined);
   assert.equal(providerCalls, 0);
   const dispatchedEvidence = JSON.stringify(storage.entries());
   assert.match(dispatchedEvidence, /"phase":"dispatched"/);
@@ -3905,6 +3911,7 @@ test("OpenTofu runner Durable Object releases a provable pre-dispatch preparatio
   });
   const unavailable = await unavailableRunner.fetch(request());
   assert.equal(unavailable.status, 500);
+  assertMutationNotDispatchedResponse(await unavailable.text(), "apply");
   assert.equal(providerCalls, 0);
   assert.deepEqual(storage.entries(), []);
 
@@ -3912,6 +3919,107 @@ test("OpenTofu runner Durable Object releases a provable pre-dispatch preparatio
   const retried = await restartedRunner.fetch(request());
   assert.equal(retried.status, 200);
   assert.equal(providerCalls, 1);
+});
+
+for (const action of ["apply", "destroy"] as const) {
+  test(`OpenTofu runner Durable Object types a released pre-dispatch ${action} failure as not dispatched`, async () => {
+    const runId = `${action}_pre_dispatch_typed`;
+    const r2 = new FakeR2Bucket();
+    await seedEncryptedPlan(r2, runId);
+    const storage = new FakeDoStorage();
+    const calls: string[] = [];
+    const runner = runnerWithContainer(
+      r2,
+      {
+        async containerFetch(request) {
+          calls.push(`${request.method} ${new URL(request.url).pathname}`);
+          if (request.method === "PUT") return Response.json({ ok: true });
+          return Response.json({ error: "must not dispatch" }, { status: 500 });
+        },
+      },
+      {
+        storage,
+        // State and Plan metadata disagree: a deterministic pre-dispatch
+        // rejection after every restore step has touched the container.
+        planMetadata: { lineage: "", serial: 7 },
+      },
+    );
+    const response = await runner.fetch(mutationRequest(runId, action));
+    assert.equal(response.status, 500);
+    assertMutationNotDispatchedResponse(await response.text(), action);
+    assert.equal(calls.includes(`POST /runs/${runId}`), false);
+    assert.deepEqual(storage.entries(), []);
+  });
+}
+
+test("OpenTofu runner Durable Object keeps the size-limit evidence on a not-dispatched mutation", async () => {
+  const runId = "apply_pre_dispatch_size_limit";
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, runId);
+  const storage = new FakeDoStorage();
+  const runner = runnerWithContainer(
+    r2,
+    {
+      async containerFetch() {
+        throw new Error("container should not be called");
+      },
+    },
+    {
+      storage,
+      env: { TAKOSUMI_RUNNER_PLAN_ARTIFACT_MAX_BYTES: "8" },
+    },
+  );
+  const response = await runner.fetch(mutationRequest(runId, "apply"));
+  assert.equal(response.status, 413);
+  const text = await response.text();
+  assertMutationNotDispatchedResponse(text, "apply");
+  const payload = JSON.parse(text) as Record<string, unknown>;
+  assert.equal(payload.artifact, "plan");
+  assert.equal(payload.maxBytes, 8);
+  assert.deepEqual(storage.entries(), []);
+});
+
+test("OpenTofu runner Durable Object never relays a container-reported not-dispatched code after dispatch", async () => {
+  const runId = "apply_forged_not_dispatched";
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, runId);
+  const storage = new FakeDoStorage();
+  let providerCalls = 0;
+  const runner = runnerWithContainer(
+    r2,
+    {
+      async containerFetch(request) {
+        const path = new URL(request.url).pathname;
+        if (request.method === "PUT") return Response.json({ ok: true });
+        if (request.method === "POST" && path === `/runs/${runId}`) {
+          providerCalls += 1;
+          return Response.json(
+            {
+              status: "failed",
+              errorCode: "runner_mutation_not_dispatched",
+              outcome: "not_dispatched",
+              retryable: false,
+              evidence: {
+                kind: "runner_mutation_not_dispatched",
+                action: "apply",
+                preparationReleased: true,
+              },
+            },
+            { status: 500 },
+          );
+        }
+        return Response.json({ error: "unexpected" }, { status: 500 });
+      },
+    },
+    { storage },
+  );
+  const response = await runner.fetch(mutationRequest(runId, "apply"));
+  assert.equal(providerCalls, 1);
+  assert.equal(response.ok, false);
+  const payload = (await response.json()) as Record<string, unknown>;
+  assert.notEqual(payload.errorCode, "runner_mutation_not_dispatched");
+  assert.equal(payload.outcome === "not_dispatched", false);
+  assert.match(JSON.stringify(storage.entries()), /"phase":"dispatched"/);
 });
 
 test("OpenTofu runner Durable Object rejects plaintext-only R2 plan artifacts", async () => {
@@ -3947,8 +4055,7 @@ test("OpenTofu runner Durable Object rejects plaintext-only R2 plan artifacts", 
 
   assert.equal(response.status, 500);
   const text = await response.text();
-  assert.match(text, /OpenTofu runner artifact relay failed/);
-  assert.match(text, /runner_artifact_relay_failed/);
+  assertMutationNotDispatchedResponse(text, "apply");
   assert.match(text, /relay_failure/);
   assert.equal(text.includes("plan artifact object not found"), false);
 });
@@ -6669,6 +6776,23 @@ function assertMutationIndeterminateResponse(
     kind: "runner_mutation_indeterminate",
     action,
     redispatchBlocked: true,
+  });
+}
+
+function assertMutationNotDispatchedResponse(
+  text: string,
+  action: "apply" | "destroy",
+): void {
+  const payload = JSON.parse(text) as Record<string, unknown>;
+  assert.equal(payload.errorCode, "runner_mutation_not_dispatched");
+  assert.equal(payload.status, "failed");
+  assert.equal(payload.phase, action);
+  assert.equal(payload.retryable, false);
+  assert.equal(payload.outcome, "not_dispatched");
+  assert.deepEqual(payload.evidence, {
+    kind: "runner_mutation_not_dispatched",
+    action,
+    preparationReleased: true,
   });
 }
 

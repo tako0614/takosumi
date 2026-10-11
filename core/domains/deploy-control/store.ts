@@ -7450,6 +7450,10 @@ export const PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES = [
   "opentofu_init_failed",
   "source_build_failed",
   "opentofu_plan_failed",
+  // The runner Durable Object durably released its `preparing` mutation
+  // authority before the container received the Apply/Destroy request. It is
+  // never relayed from container output and never emitted after dispatch.
+  "runner_mutation_not_dispatched",
 ] as const;
 
 const PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODE_SET = new Set<string>(

@@ -6,7 +6,11 @@ import {
   OpenTofuRunnerExecutionError,
   OpenTofuRunnerInfrastructureError,
 } from "../../../core/domains/deploy-control/mod.ts";
-import { RUNNER_MUTATION_INDETERMINATE_CODE } from "../../../worker/src/runner_protocol.ts";
+import {
+  RUNNER_MUTATION_INDETERMINATE_CODE,
+  RUNNER_MUTATION_NOT_DISPATCHED_CODE,
+} from "../../../worker/src/runner_protocol.ts";
+import { PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES } from "../../../core/domains/deploy-control/store.ts";
 import {
   evaluateActionPolicy,
   evaluateQuotaPolicy,
@@ -1360,6 +1364,95 @@ test("container runner maps mutation ambiguity to a non-retryable typed executio
   expect((error as Error).message).toBe(
     `runner request failed (${RUNNER_MUTATION_INDETERMINATE_CODE})`,
   );
+});
+
+function notDispatchedPayload(
+  action: "apply" | "destroy",
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    error: "OpenTofu runner mutation failed before provider dispatch",
+    errorCode: RUNNER_MUTATION_NOT_DISPATCHED_CODE,
+    status: "failed",
+    phase: action,
+    retryable: false,
+    outcome: "not_dispatched",
+    evidence: {
+      kind: RUNNER_MUTATION_NOT_DISPATCHED_CODE,
+      action,
+      preparationReleased: true,
+    },
+    reason: "relay_failure",
+    detail: "the runner failed before provider dispatch was authorized",
+    ...overrides,
+  };
+}
+
+async function mutationFailure(
+  action: "apply" | "destroy",
+  payload: Record<string, unknown>,
+): Promise<unknown> {
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning(payload, undefined, 500),
+  );
+  const input = {
+    applyRun: { id: `${action}_not_dispatched` },
+    planRun: { id: `plan_${action}_not_dispatched` },
+    planArtifact: {
+      kind: "runner-local",
+      ref: `runner-local://plan_${action}_not_dispatched/tfplan`,
+      digest: PLAN_DIGEST,
+    },
+  };
+  try {
+    if (action === "apply") {
+      await runner.apply(
+        input as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0],
+      );
+    } else {
+      await runner.destroy(
+        input as Parameters<CloudflareContainerOpenTofuRunner["destroy"]>[0],
+      );
+    }
+  } catch (caught) {
+    return caught;
+  }
+  throw new Error("mutation unexpectedly succeeded");
+}
+
+for (const action of ["apply", "destroy"] as const) {
+  test(`container runner preserves the typed not-dispatched ${action} outcome as a pre-provider reason`, async () => {
+    const error = await mutationFailure(action, notDispatchedPayload(action));
+    expect(error).toBeInstanceOf(OpenTofuRunnerExecutionError);
+    expect(error).not.toBeInstanceOf(OpenTofuRunnerInfrastructureError);
+    expect((error as OpenTofuRunnerExecutionError).reason).toBe(
+      RUNNER_MUTATION_NOT_DISPATCHED_CODE,
+    );
+    expect((error as Error).message).toBe(
+      `runner request failed (${RUNNER_MUTATION_NOT_DISPATCHED_CODE})`,
+    );
+    expect(PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES).toContain(
+      RUNNER_MUTATION_NOT_DISPATCHED_CODE,
+    );
+  });
+}
+
+test("container runner keeps an incomplete not-dispatched envelope on the possibly-dispatched fallback", async () => {
+  for (const overrides of [
+    { outcome: undefined },
+    { outcome: "indeterminate" },
+    { retryable: true },
+    { retryable: undefined },
+  ]) {
+    const error = await mutationFailure(
+      "apply",
+      notDispatchedPayload("apply", overrides),
+    );
+    expect(error).toBeInstanceOf(OpenTofuRunnerInfrastructureError);
+    expect((error as OpenTofuRunnerInfrastructureError).reason).toBe(
+      "runner_rejected",
+    );
+  }
 });
 
 test("container runner maps finite plan failures to non-retryable execution errors", async () => {

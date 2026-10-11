@@ -653,7 +653,13 @@ dispatch returns the typed `runner_mutation_indeterminate` outcome. Redelivery
 may complete only by adopting the exact immutable state/output target already
 written for that Run; without that authoritative readback, it remains
 indeterminate. Plan, read-only work, and a provable pre-dispatch preparation
-failure may retry without granting mutation authority. Mutation-authority,
+failure may retry without granting mutation authority. When an Apply or
+Destroy fails while the Durable Object still holds only `preparing` authority
+and durably removes it, the runner returns the typed
+`runner_mutation_not_dispatched` outcome. Core records that code as a
+pre-provider failure, so it does not make Capsule runtime safety `unknown`. A
+durable `dispatched` record, a failure after dispatch, or container output
+never yields this outcome. Mutation-authority,
 relay, and container-lifecycle failure logs use only finite classifications and
 never include raw messages, stacks, request bodies, or credential material.
 
