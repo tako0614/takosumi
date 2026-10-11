@@ -173,6 +173,7 @@ import type {
   TakosumiResourceCapabilities,
 } from "takosumi-contract/capabilities";
 import {
+  applyRunMutationDispatched,
   createCapsuleExecutionAuthorityResolver,
   InMemoryOpenTofuControlStore,
   type CapsuleExecutionAuthorityResolver,
@@ -1564,11 +1565,10 @@ export async function createTakosumiService(
       }
       return;
     }
-    const runtimeMutationDispatched = run.auditEvents.some(
-      (event) =>
-        event.data?.providerDispatched === true ||
-        event.data?.lifecycleActionDispatched === true,
-    );
+    // The same predicate as Capsule runtime safety: a structured
+    // pre-provider runner failure is not a mutation, while any lifecycle
+    // action that actually ran is.
+    const runtimeMutationDispatched = applyRunMutationDispatched(run);
     if (
       (run.status === "failed" && runtimeMutationDispatched) ||
       (run.status === "expired" && run.startedAt !== undefined)

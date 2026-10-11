@@ -1401,6 +1401,10 @@ latest_capsule_runtime_safety as (
                 ) as audit_event
                 where audit_event -> 'data' ->> 'lifecycleActionDispatched' = 'true'
                    or (
+                     left(audit_event ->> 'type', length('lifecycle_action.')) = 'lifecycle_action.'
+                     and audit_event -> 'data' ->> 'actionDispatched' = 'true'
+                   )
+                   or (
                      audit_event -> 'data' ->> 'providerDispatched' = 'true'
                      and not exists (
                        select 1
@@ -1431,6 +1435,10 @@ latest_capsule_runtime_safety as (
                   coalesce(candidate.run_json -> 'auditEvents', '[]'::jsonb)
                 ) as audit_event
                 where audit_event -> 'data' ->> 'lifecycleActionDispatched' = 'true'
+                   or (
+                     left(audit_event ->> 'type', length('lifecycle_action.')) = 'lifecycle_action.'
+                     and audit_event -> 'data' ->> 'actionDispatched' = 'true'
+                   )
                    or (
                      audit_event -> 'data' ->> 'providerDispatched' = 'true'
                      and not exists (
@@ -1544,6 +1552,10 @@ function pgRunMutationDispatched(): SQL {
         COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
       ) AS audit_event
       WHERE audit_event -> 'data' ->> 'lifecycleActionDispatched' = 'true'
+         OR (
+           LEFT(audit_event ->> 'type', LENGTH('lifecycle_action.')) = 'lifecycle_action.'
+           AND audit_event -> 'data' ->> 'actionDispatched' = 'true'
+         )
     )
     OR (
       EXISTS (

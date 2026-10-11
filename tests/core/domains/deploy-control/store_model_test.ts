@@ -1912,6 +1912,73 @@ test("runtime safety ignores a runner pre-dispatch failure of a never-applied Ca
   }
 });
 
+test("runtime safety keeps a completed pre_destroy action decisive when the provider step was never dispatched", async () => {
+  for (const [label, store] of await stores()) {
+    for (const actionDispatched of [true, false]) {
+      const capsuleId = `capsule_pre_destroy_${actionDispatched}_${label}`;
+      const safeId = `apply_safe_pre_destroy_${actionDispatched}_${label}`;
+      const destroyId = `destroy_pre_destroy_${actionDispatched}_${label}`;
+      await store.putApplyRun(
+        applyRunForSafety({
+          id: safeId,
+          capsuleId,
+          operation: "update",
+          status: "succeeded",
+          effectAt: 100,
+        }),
+      );
+      await store.putApplyRun(
+        applyRunForSafety({
+          id: destroyId,
+          capsuleId,
+          operation: "destroy",
+          status: "failed",
+          effectAt: 200,
+          auditEvents: [
+            {
+              id: `audit_pre_destroy_${actionDispatched}_${label}`,
+              type: actionDispatched
+                ? "lifecycle_action.pre_destroy.succeeded"
+                : "lifecycle_action.pre_destroy.not_applicable",
+              at: 150,
+              data: {
+                phase: "pre_destroy",
+                status: actionDispatched ? "succeeded" : "skipped",
+                commandCount: 1,
+                actionDispatched,
+              },
+            },
+            {
+              id: `audit_destroy_failed_${actionDispatched}_${label}`,
+              type: "destroy.failed",
+              at: 200,
+              data: {
+                message: "runner failure (runner_mutation_not_dispatched)",
+                providerDispatched: true,
+              },
+            },
+          ],
+          diagnostics: [
+            {
+              severity: "error",
+              code: "runner_mutation_not_dispatched",
+              message: "runner failure (runner_mutation_not_dispatched)",
+            },
+          ],
+        }),
+      );
+      expect(
+        await store.getCapsuleRuntimeSafety(capsuleId),
+        `${label} actionDispatched=${actionDispatched}`,
+      ).toEqual(
+        actionDispatched
+          ? { phase: "unknown", runId: destroyId, runType: "destroy_apply" }
+          : { phase: "safe", runId: safeId, runType: "apply" },
+      );
+    }
+  }
+});
+
 test("ApplyRun begin is insert-or-adopt and never resets an existing running or terminal row", async () => {
   for (const [label, store] of await stores()) {
     await store.putWorkspace(

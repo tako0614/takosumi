@@ -1872,6 +1872,17 @@ latest_capsule_runtime_safety as (
                        '$.data.lifecycleActionDispatched'
                      ) = 1
                      or (
+                       substr(
+                         json_extract(audit_event.value, '$.type'),
+                         1,
+                         length('lifecycle_action.')
+                       ) = 'lifecycle_action.'
+                       and json_extract(
+                         audit_event.value,
+                         '$.data.actionDispatched'
+                       ) = 1
+                     )
+                     or (
                        json_extract(
                          audit_event.value,
                          '$.data.providerDispatched'
@@ -1913,6 +1924,17 @@ latest_capsule_runtime_safety as (
                        audit_event.value,
                        '$.data.lifecycleActionDispatched'
                      ) = 1
+                     or (
+                       substr(
+                         json_extract(audit_event.value, '$.type'),
+                         1,
+                         length('lifecycle_action.')
+                       ) = 'lifecycle_action.'
+                       and json_extract(
+                         audit_event.value,
+                         '$.data.actionDispatched'
+                       ) = 1
+                     )
                      or (
                        json_extract(
                          audit_event.value,
@@ -2068,6 +2090,14 @@ function d1RunMutationDispatched(): SQL {
         audit_event.value,
         '$.data.lifecycleActionDispatched'
       ) = 1
+        OR (
+          substr(
+            json_extract(audit_event.value, '$.type'),
+            1,
+            length('lifecycle_action.')
+          ) = 'lifecycle_action.'
+          AND json_extract(audit_event.value, '$.data.actionDispatched') = 1
+        )
     )
     OR (
       EXISTS (
