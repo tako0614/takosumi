@@ -42,15 +42,27 @@ bun run e2e:install-serving -- --workspace <ws_...|@handle> --token-file <path>
 
 それ以外は既定値で固定されています: origin は `https://app-staging.takosumi.com`、
 profile は Yurucommu、environment label は `integration`、Source path は
-`deploy/takoform`、module path はその subtree からの相対で `.`、
+repository 全体の `.`、module path はその root からの相対で `deploy/takoform`、
 ProviderConnection は Workspace 内の
 `registry.terraform.io/tako0614/takoform` 接続です。前身の broker 接続と現行の
 renewable 接続が併存する Workspace では renewable 側 (`broker-renewable`) を選び、
 それでも候補が割れるときだけ `--connection-id` を明示します。
 
 module path は repository root からではなく、Source path が固定した
-SourceSnapshot の subtree から数えます。両方に同じ `deploy/takoform` を渡すと
-compatibility check が `repository_install_ux_module_missing` (400) で止まります。
+SourceSnapshot の root から数えます。Source path と module path の両方に同じ
+`deploy/takoform` を渡すと、compatibility check が
+`repository_install_ux_module_missing` (400) で止まります。
+
+Source を `deploy/takoform` に絞って module path を `.` にする組み合わせも
+使えません。Yurucommu の `.well-known/takosumi.json` は `deploy/takoform` module に
+`sourceBuild` を宣言しています。この build は `workingDirectory` を持たないため、
+SourceSnapshot root で動きます。中身は repository root の `package.json` に対する
+`bun install` と root の build script で、`deploy/takoform/...` の成果物を作ります。
+subtree だけの snapshot にはそのどちらも無く、Plan は `source_build_failed`
+(`Bun could not find a package.json`) で失敗します。repository 全体を Source にし、
+module path を `deploy/takoform` にする組み合わせが、Yurucommu 自身が宣言する
+install 先と一致します。`.well-known/tcs.json` の `modulePath` と、サイトの
+install link の `path` がその宣言です。
 
 CI で一時的な token を使う場合は、短命で workspace に限定した PAT を作り、その path を
 `--token-file` に渡します。token の値は harness からも smoke からも出力しません。
@@ -87,7 +99,10 @@ mode 0700 で残ります: `smoke-invocation.json` (token は伏字)、`smoke-re
 - `phase=source`: `--source-ref` と module path、Source に対する Git 到達性を確認します。
   module path が snapshot subtree からの相対かどうかもここで分かります。
 - `phase=plan` / `phase=apply`: Run の `errorCode` と diagnostic を読みます。credential の
-  交換や renewal、provider 側の一時的な衝突がここに出ます。
+  交換や renewal、provider 側の一時的な衝突がここに出ます。diagnostic は公開 API の
+  `/api/v1/runs/<id>/logs` から読みます。`/internal/v1` は edge が routing しないので
+  使いません。server が redaction した `detail` (失敗した source build command の出力
+  など) は、長さを制限した 1 行にして括弧内に付けます。
 - `phase=serving`: Run は終わっているのに HTTP 検査が通っていません。公開 URL の
   伝播と応答本文、Workers for Platforms 側の routing を確認します。
 - `phase=destroy`: 片付けが終わっていません。Capsule と、失敗した apply run の id が

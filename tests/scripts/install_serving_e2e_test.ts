@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import { runSourceBuild } from "../../runner/lib/source_build.ts";
 
 import {
   DEFAULT_ORIGIN,
@@ -44,8 +47,8 @@ test("defaults pin the integration origin and the yurucommu profile", () => {
   expect(resolved.profile.sourceGitUrl).toBe(
     "https://github.com/tako0614/yurucommu.git",
   );
-  expect(resolved.profile.sourcePath).toBe("deploy/takoform");
-  expect(resolved.profile.modulePath).toBe(".");
+  expect(resolved.profile.sourcePath).toBe(".");
+  expect(resolved.profile.modulePath).toBe("deploy/takoform");
   expect(resolved.appName.startsWith("yuru-install-e2e-")).toBe(true);
   expect(resolved.evidenceDir.includes("takosumi-install-serving-e2e"))
     .toBe(true);
@@ -95,8 +98,8 @@ test("the smoke invocation pins the install-to-serving contract", () => {
   expect(joined).toContain("--provider-connection-id conn_takoform");
   expect(joined).toContain("--cloudflare-connection-mode none");
   expect(joined).toContain("--verification-mode opentofu");
-  expect(joined).toContain("--source-path deploy/takoform");
-  expect(joined).toContain("--module-path .");
+  expect(joined).toContain("--source-path . ");
+  expect(joined).toContain("--module-path deploy/takoform");
   expect(joined).toContain("--runtime-public-url-output launch_url");
   expect(joined).toContain(`--pat-token-file ${TOKEN_FILE}`);
   expect(joined).not.toContain("--source-ref");
@@ -105,15 +108,76 @@ test("the smoke invocation pins the install-to-serving contract", () => {
 
 // The compatibility check proves an explicit module path against the
 // SourceSnapshot module index, and that index is relative to the snapshot
-// subtree pinned by the Source path. Repeating the repository path here made
-// staging answer 400 repository_install_ux_module_missing.
-test("the pinned module path is subtree-relative, not repository-relative", () => {
+// subtree pinned by the Source path. Repeating a scoped Source path in the
+// module path made staging answer 400 repository_install_ux_module_missing.
+test("the pinned module path is relative to the Source root", () => {
   const { profile } = options();
-  expect(profile.sourcePath).toBe("deploy/takoform");
-  expect(profile.modulePath).toBe(".");
-  expect(profile.modulePath).not.toBe(profile.sourcePath);
+  expect(profile.sourcePath).toBe(".");
+  expect(profile.modulePath).toBe("deploy/takoform");
   expect(profile.modulePath.startsWith("/")).toBe(false);
-  expect(dryRunPlan(options()).modulePath).toBe(".");
+  expect(dryRunPlan(options()).modulePath).toBe("deploy/takoform");
+  expect(dryRunPlan(options()).sourcePath).toBe(".");
+});
+
+// Mirrors Yurucommu's `.well-known/takosumi.json` `deploy/takoform` module
+// (declared since 2026-09-04, unchanged through main 28c5e20): its
+// `sourceBuild` has no `workingDirectory`, so every command runs at the
+// SourceSnapshot root, needs the repository-root `package.json` and
+// `scripts/`, and must produce repository-root `deploy/takoform/...` outputs.
+const YURUCOMMU_SHAPED_SOURCE_BUILD_OUTPUTS = [
+  "deploy/takoform/.generated/yurucommu-worker.js",
+  "deploy/takoform/migrations/sql",
+] as const;
+
+async function yurucommuShapedRepository(): Promise<string> {
+  const repository = await mkdtemp(join(tmpdir(), "install-serving-repo-"));
+  await mkdir(join(repository, "scripts"), { recursive: true });
+  await mkdir(join(repository, "deploy/takoform/migrations/sql"), {
+    recursive: true,
+  });
+  await writeFile(join(repository, "package.json"), "{}\n");
+  await writeFile(join(repository, "deploy/takoform/main.tf"), "");
+  await writeFile(
+    join(repository, "scripts/prepare-takoform-v1-source.ts"),
+    [
+      'import { mkdirSync, readFileSync, writeFileSync } from "node:fs";',
+      'readFileSync("package.json");',
+      'mkdirSync("deploy/takoform/.generated", { recursive: true });',
+      'writeFileSync("deploy/takoform/.generated/yurucommu-worker.js", "export default {};\\n");',
+      "",
+    ].join("\n"),
+  );
+  return repository;
+}
+
+test("the Source root is where the module's repository-owned sourceBuild runs", async () => {
+  const repository = await yurucommuShapedRepository();
+  const sourceBuild = {
+    commands: [
+      { argv: [process.execPath, "scripts/prepare-takoform-v1-source.ts"] },
+    ],
+    outputs: [...YURUCOMMU_SHAPED_SOURCE_BUILD_OUTPUTS],
+  };
+  try {
+    const { profile } = options();
+    // The runner restores the archive of `sourcePath` as its snapshot root and
+    // runs the build there before resolving `modulePath` inside it.
+    const snapshotRoot = join(repository, profile.sourcePath);
+    await expect(runSourceBuild(sourceBuild, snapshotRoot)).resolves.toContain(
+      "source build 1/1",
+    );
+    expect(existsSync(join(snapshotRoot, profile.modulePath, "main.tf"))).toBe(
+      true,
+    );
+    // A Source scoped to the module subtree has neither the repository-root
+    // inputs nor room for the repository-root outputs, which is the staging
+    // `source_build_failed` this profile used to hit.
+    await expect(
+      runSourceBuild(sourceBuild, join(repository, "deploy/takoform")),
+    ).rejects.toThrow(/source build 1\/1 .* failed/);
+  } finally {
+    await rm(repository, { recursive: true, force: true });
+  }
 });
 
 test("public URL checks demand real content and a post-destroy 404", () => {
@@ -298,6 +362,25 @@ test("the first error diagnostic is surfaced without the raw payload", () => {
   expect(firstRunDiagnosticMessage({})).toBeUndefined();
 });
 
+test("a diagnostic's redacted detail is kept as one bounded line", () => {
+  const message = firstRunDiagnosticMessage({
+    diagnostics: [{
+      severity: "error",
+      code: "source_build_failed",
+      message: "runner failure (source_build_failed)",
+      detail: "source build 1/3 (bun) failed with exit code 1\noutput: error: Bun could not find a package.json file to install from\nnote: Run \"bun init\" to initialize a project",
+    }],
+  });
+  expect(message).toBe(
+    "source_build_failed: runner failure (source_build_failed) (source build 1/3 (bun) failed with exit code 1 output: error: Bun could not find a package.json file to install from note: Run \"bun init\" to initialize a project)",
+  );
+  const long = firstRunDiagnosticMessage({
+    diagnostics: [{ severity: "error", message: "failed", detail: "x".repeat(2_000) }],
+  });
+  expect(long?.length).toBeLessThan(400);
+  expect(long?.endsWith("...)")).toBe(true);
+});
+
 test("evidence redaction never keeps the credential path in the plan", () => {
   const redacted = redactInvocation(["--pat-token-file", TOKEN_FILE, "--json"]);
   expect(redacted).toEqual(["--pat-token-file", "<redacted>", "--json"]);
@@ -433,6 +516,14 @@ async function runWithStubbedControlPlane(input: {
         ? request.href
         : request.url,
     );
+    // The edge routes only the public `/api/v1` surface; `/internal/v1` is an
+    // in-process seam that a deployed environment always answers with 404.
+    if (url.pathname.startsWith("/internal/")) {
+      return new Response(JSON.stringify({ error: { code: "not_found" } }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      });
+    }
     for (const route of input.routes) {
       const body = route(url);
       if (body !== undefined) {
@@ -519,7 +610,7 @@ test("a coordinator failure is attributed to the Run that failed, not the step g
           }
           : undefined,
       (url) =>
-        url.pathname === "/internal/v1/runs/plan_test/logs"
+        url.pathname === "/api/v1/runs/plan_test/logs"
           ? {
             diagnostics: [{
               severity: "error",
@@ -562,7 +653,7 @@ test("an apply failure keeps the apply phase and reports that nothing is left", 
           ? { run: { id: "apply_test", status: "failed", errorCode: "apply_failed" } }
           : undefined,
       (url) =>
-        url.pathname === "/internal/v1/runs/apply_test/logs"
+        url.pathname === "/api/v1/runs/apply_test/logs"
           ? {
             diagnostics: [{
               severity: "error",
