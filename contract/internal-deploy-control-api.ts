@@ -451,6 +451,11 @@ export interface OpenTofuPlanArtifact {
   readonly ref: string;
   readonly digest: string;
   readonly contentType?: string;
+  /**
+   * Plaintext byte length of the saved Plan, the domain of `digest`. Rows
+   * recorded before this was corrected hold the sealed object length; restore
+   * accepts that only as the exact length of the authenticated object.
+   */
   readonly sizeBytes?: number;
   readonly createdAt?: number;
 }

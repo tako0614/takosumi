@@ -4176,6 +4176,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const expectedSize = artifact.sizeBytes === undefined
       ? undefined
       : positiveIntegerField(artifact, "sizeBytes");
+    // Reject an absurd recorded size before any read. The bound is the
+    // plaintext limit, so a legacy row that recorded the sealed length of a
+    // Plan whose envelope pushes it past that limit (within 33 bytes for the
+    // v2 magic + IV + tag; wider for the older base64 format) fails closed
+    // here. Re-plan it rather than widening this pre-read bound.
     if (expectedSize !== undefined) {
       assertArtifactSize("plan", this.#artifactLimits.plan, expectedSize);
     }

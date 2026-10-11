@@ -2028,6 +2028,58 @@ test("OpenTofu runner Durable Object accepts a reviewed Plan recorded with its s
   ]);
 });
 
+test("OpenTofu runner Durable Object fails closed for a legacy sealed size beyond the plaintext limit", async () => {
+  const r2 = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const sealedPlan = await crypto.seal(PLAN_BYTES);
+  await r2.put("opentofu-plan-runs/plan_1/tfplan.enc", sealedPlan.ciphertext, {
+    httpMetadata: { contentType: "application/vnd.opentofu.plan" },
+    customMetadata: { "takosumi-content-digest": sealedPlan.contentDigest },
+  });
+  const calls: string[] = [];
+  // The plaintext fits the configured limit; its legacy sealed length does not.
+  const runner = runnerWithContainer(
+    r2,
+    {
+      async containerFetch(request) {
+        calls.push(`${request.method} ${new URL(request.url).pathname}`);
+        return Response.json({ error: "must not dispatch" }, { status: 500 });
+      },
+    },
+    {
+      env: {
+        TAKOSUMI_RUNNER_PLAN_ARTIFACT_MAX_BYTES: String(PLAN_BYTES.byteLength),
+      },
+    },
+  );
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "apply",
+        runId: "plan_1",
+        request: {
+          planArtifact: {
+            kind: "object-storage",
+            ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
+            digest: PLAN_DIGEST,
+            sizeBytes: sealedPlan.ciphertextLength,
+          },
+        },
+      }),
+    }),
+  );
+  assert.equal(response.status, 413);
+  const payload = (await response.json()) as Record<string, unknown>;
+  assert.equal(payload.artifact, "plan");
+  assert.equal(payload.maxBytes, PLAN_BYTES.byteLength);
+  assert.deepEqual(calls, []);
+});
+
 test("OpenTofu runner Durable Object rejects a reviewed Plan whose size names neither its plaintext nor its sealed object", async () => {
   const r2 = new FakeR2Bucket();
   const crypto = StateArtifactCrypto.fromEnv({
