@@ -24,6 +24,7 @@ export const RUNNER_RUN_BUDGET_MS_HEADER = "x-takosumi-runner-budget-ms";
 const MAX_RUN_BUDGET_MS = 24 * 60 * 60 * 1000;
 
 const runDeadlines = new WeakMap<AbortSignal, number>();
+const reachedRunDeadlines = new WeakSet<AbortSignal>();
 
 /**
  * Parses the forwarded budget. Only a plain non-negative decimal integer is a
@@ -63,4 +64,43 @@ export function remainingRunBudgetMs(
   if (!signal) return undefined;
   const deadline = runDeadlines.get(signal);
   return deadline === undefined ? undefined : Math.floor(deadline - now);
+}
+
+/** Records that the run deadline, not a command's own limit, stopped a command. */
+export function noteRunDeadlineReached(signal: AbortSignal | undefined): void {
+  if (signal && runDeadlines.has(signal)) reachedRunDeadlines.add(signal);
+}
+
+/** Whether any command of this run was stopped by the run deadline. */
+export function runDeadlineReached(signal: AbortSignal | undefined): boolean {
+  return signal !== undefined && reachedRunDeadlines.has(signal);
+}
+
+/**
+ * Adds the fixed, value-free `runDeadlineExceeded` marker to a run reply when
+ * the run deadline stopped one of its commands, so the host can report the
+ * cause with a stable code instead of relying on a diagnostic line that a
+ * bounded detail may omit. Any other reply is returned untouched.
+ */
+export async function withRunDeadlineMarker(
+  response: Response,
+  signal: AbortSignal | undefined,
+): Promise<Response> {
+  if (!runDeadlineReached(signal)) return response;
+  let body: unknown;
+  try {
+    body = await response.clone().json();
+  } catch {
+    return response;
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return response;
+  }
+  const headers = new Headers(response.headers);
+  // The body grows by the marker; never carry the old length across.
+  headers.delete("content-length");
+  return Response.json(
+    { ...(body as Record<string, unknown>), runDeadlineExceeded: true },
+    { status: response.status, headers },
+  );
 }

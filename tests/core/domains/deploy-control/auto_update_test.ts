@@ -309,6 +309,15 @@ async function planRunsOf(
 test("an opted-in stale capsule auto-updates: plan + clean auto-apply, no client", async () => {
   const { store, controller, runner, initialPlanCalls } =
     await buildActiveCapsule({ autoUpdate: true });
+  // Auto-apply continues only a Plan whose resource changes are known and
+  // approval-free; an unknown change set never applies unattended.
+  runner.planResourceChanges = [
+    {
+      address: "cloudflare_workers_script.app",
+      type: "cloudflare_workers_script",
+      actions: ["update"],
+    },
+  ];
 
   await syncNewCommit(controller);
 
@@ -362,6 +371,25 @@ test("a running Plan can finish after drain and resume without minting a new-epo
   expect(runner.applyCalls).toBe(initialApplyCalls);
   expect((await store.listRunsByWorkspace("ws_test001"))
     .filter((run) => "planRunId" in run && run.planRunId === planRun.id)).toHaveLength(0);
+});
+
+test("a Plan whose resource changes are unknown is never auto-applied", async () => {
+  // The runner reported no resource change list at all (not an empty one), so
+  // the delete/replace approval gate could not be evaluated.
+  const { store, controller, runner, initialApplyCalls } =
+    await buildActiveCapsule({ autoUpdate: true });
+  runner.planResourceChanges = [];
+
+  await syncNewCommit(controller);
+
+  const autoPlan = (await planRunsOf(controller, store)).find(
+    (record) => record.autoApplyRequested === true,
+  );
+  expect(autoPlan?.status).toBe("succeeded");
+  expect(autoPlan?.planResourceChanges).toBeUndefined();
+  expect(autoPlan?.appliedApplyRunId).toBeUndefined();
+  expect(runner.applyCalls).toBe(initialApplyCalls);
+  expect((await store.getCapsule("cap_auto0001"))?.currentStateGeneration).toBe(1);
 });
 
 test("a destructive update stops at waiting_approval and is never auto-applied", async () => {

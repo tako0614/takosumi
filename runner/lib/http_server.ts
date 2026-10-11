@@ -51,7 +51,11 @@ import {
 } from "./run_root_ownership.ts";
 import { RUN_ROOT } from "./constants.ts";
 import { PROVIDER_LOCK_RESTORE_DIGEST_HEADER } from "./transport.ts";
-import { RUNNER_RUN_BUDGET_MS_HEADER, registerRunBudget } from "./run_deadline.ts";
+import {
+  RUNNER_RUN_BUDGET_MS_HEADER,
+  registerRunBudget,
+  withRunDeadlineMarker,
+} from "./run_deadline.ts";
 import {
   completeLocalMutation,
   authorizeLocalMutationPreparation,
@@ -676,9 +680,12 @@ async function handleRunnerRequestBody(
       }
     }
     };
-    return action === "apply" || action === "destroy"
-      ? await executeRun()
-      : await guardedNonMutationPost(runId, executeRun);
+    return await withRunDeadlineMarker(
+      action === "apply" || action === "destroy"
+        ? await executeRun()
+        : await guardedNonMutationPost(runId, executeRun),
+      request.signal,
+    );
   }
 }
 

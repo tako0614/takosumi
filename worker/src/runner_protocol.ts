@@ -75,6 +75,19 @@ export const RUN_DEADLINE_AT_HEADER = "x-takosumi-run-deadline-at";
  */
 export const RUNNER_RUN_BUDGET_MS_HEADER = "x-takosumi-runner-budget-ms";
 
+/**
+ * Retryable answer of the runner object when the caller's deadline leaves too
+ * little time to dispatch. Nothing reached the container, so the exact Run may
+ * be redelivered under a fresh invocation deadline.
+ */
+export const RUNNER_RUN_DEADLINE_EXCEEDED_CODE = "runner_run_deadline_exceeded";
+
+/**
+ * Fixed machine reason for "stopped by the dispatching host's run deadline",
+ * both for a refused dispatch and for a runner command the deadline cut off.
+ */
+export const RUN_DEADLINE_EXCEEDED_REASON = "run_deadline_exceeded";
+
 /** Strict epoch-ms parse; anything else means "no deadline", as before. */
 export function parseRunDeadlineAt(value: string | null): number | undefined {
   if (value === null || !/^\d{1,16}$/u.test(value)) return undefined;

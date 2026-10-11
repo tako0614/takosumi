@@ -21,15 +21,16 @@ import {
 import {
   baseCommandEnv,
 } from "./credentials.ts";
-import { remainingRunBudgetMs } from "./run_deadline.ts";
+import { noteRunDeadlineReached, remainingRunBudgetMs } from "./run_deadline.ts";
 
 /**
- * Upper bound of the window between asking a timed-out command to stop
- * (SIGINT) and killing it (SIGKILL). OpenTofu answers its first interrupt by
- * stopping its providers and persisting state, so a timed-out Apply leaves a
- * consistent state file instead of one cut mid-write. The window is taken from
- * inside the timeout, never added to it: the hard bound stays exactly where the
- * profile or the run deadline put it.
+ * Upper bound of the window between asking a command the run deadline is
+ * about to cut off to stop (SIGINT) and killing it (SIGKILL). OpenTofu answers
+ * its first interrupt by stopping its providers and persisting state, so a
+ * deadline-stopped Apply leaves a consistent state file instead of one cut
+ * mid-write. The window is taken from inside the run budget, never added to
+ * it, and applies only when that budget is the binding bound: a command bound
+ * by its own profile timeout keeps exactly its previous behaviour.
  */
 const COMMAND_INTERRUPT_GRACE_MAX_MS = 30_000;
 
@@ -84,18 +85,45 @@ export async function runRequiredCommand(
   }
 }
 
+/**
+ * Reads the saved plan as JSON. Without it a Plan's resource changes are
+ * unknown, and the controller's delete/replace approval, resource allowlist,
+ * scope, and quota layers would silently have nothing to evaluate, so a failed
+ * or empty read is returned as the command failure it is.
+ */
 export async function readOpenTofuPlanJson(
   moduleDir: string,
   workspace: RunWorkspace,
   context: CommandContext,
-): Promise<string | undefined> {
+): Promise<
+  | { readonly json: string }
+  | {
+      readonly failure: {
+        readonly exitCode: number;
+        readonly stdout: string;
+        readonly stderr: string;
+      };
+    }
+> {
   const result = await runCommand(
     ["tofu", "show", "-json", workspace.planPath],
     { cwd: moduleDir, context, isolateProcessGroup: true },
   );
-  return result.exitCode === 0 && result.stdout.trim().length > 0
-    ? result.stdout
-    : undefined;
+  if (result.exitCode === 0 && result.stdout.trim().length > 0) {
+    return { json: result.stdout };
+  }
+  return {
+    failure:
+      result.exitCode === 0
+        ? {
+            exitCode: 1,
+            stdout: "",
+            stderr: [result.stderr, "tofu show -json returned no plan JSON"]
+              .filter(Boolean)
+              .join("\n"),
+          }
+        : result,
+  };
 }
 
 export async function readOpenTofuOutputsIn(
@@ -176,7 +204,10 @@ export async function runCommand(
   }
   const runBudgetMs = remainingRunBudgetMs(signal);
   const timeoutMs = commandTimeoutMs(options.context?.timeoutMs, runBudgetMs);
+  const runDeadlineBinds =
+    runBudgetMs !== undefined && timeoutMs === runBudgetMs;
   if (timeoutMs !== undefined && timeoutMs <= 0) {
+    noteRunDeadlineReached(signal);
     return {
       exitCode: 124,
       stdout: "",
@@ -208,10 +239,9 @@ export async function runCommand(
   let interrupt: ReturnType<typeof setTimeout> | undefined;
   let interrupted = false;
   if (timeoutMs !== undefined) {
-    const graceMs = Math.min(
-      COMMAND_INTERRUPT_GRACE_MAX_MS,
-      Math.floor(timeoutMs / 4),
-    );
+    const graceMs = runDeadlineBinds
+      ? Math.min(COMMAND_INTERRUPT_GRACE_MAX_MS, Math.floor(timeoutMs / 4))
+      : 0;
     if (graceMs > 0) {
       interrupt = setTimeout(() => {
         if (subprocess.exitCode !== null || subprocess.signalCode !== null) {
@@ -267,12 +297,13 @@ export async function runCommand(
       stdoutPromise,
       stderrPromise,
     ]);
+    if (termination.kind === "timeout" && runDeadlineBinds) {
+      noteRunDeadlineReached(signal);
+    }
     const terminationDiagnostic =
       termination.kind === "timeout"
         ? `command timed out after ${timeoutMs}ms${
-            runBudgetMs !== undefined && timeoutMs === runBudgetMs
-              ? " (run deadline)"
-              : ""
+            runDeadlineBinds ? " (run deadline)" : ""
           }`
         : termination.kind === "abort"
           ? "command aborted"

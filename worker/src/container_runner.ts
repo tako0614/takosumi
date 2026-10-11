@@ -49,8 +49,10 @@ import {
 import { recordWorkerMetric, type WorkerMetricSink } from "./metrics.ts";
 import {
   RUN_DEADLINE_AT_HEADER,
+  RUN_DEADLINE_EXCEEDED_REASON,
   RUNNER_MUTATION_INDETERMINATE_CODE,
   RUNNER_MUTATION_NOT_DISPATCHED_CODE,
+  RUNNER_RUN_DEADLINE_EXCEEDED_CODE,
   runDeadlineAtHeaderValue,
 } from "./runner_protocol.ts";
 
@@ -579,7 +581,7 @@ export class CloudflareContainerOpenTofuRunner
           sourceCommit: job.sourceSnapshot.resolvedCommit,
         },
       },
-      { signal: control?.signal },
+      { signal: control?.signal, deadlineAt: control?.deadlineAt },
     );
     const status = stringFromRecord(result, "status");
     if (status !== "succeeded") {
@@ -1038,6 +1040,9 @@ function failedProviderExecutionResult(
       statePersistence: failure?.statePersistence ?? "unavailable",
     },
     ...(detail ? { detail } : {}),
+    ...(result.runDeadlineExceeded === true
+      ? { runDeadlineExceeded: true }
+      : {}),
     ...(stateDigest ? { state: { digest: stateDigest } } : {}),
     ...(phaseTimings ? { phaseTimings } : {}),
     // Preserve the immutable mutation receipt + attested provider installation.
@@ -1224,6 +1229,18 @@ function runnerInfrastructureErrorFromPayload(
       },
     );
   }
+  // The runner object refused to dispatch because the caller's invocation
+  // deadline left too little time. Nothing reached the container, so this is
+  // a safe redelivery under a fresh deadline, never a Run failure.
+  if (
+    payload.retryable === true &&
+    errorCode === RUNNER_RUN_DEADLINE_EXCEEDED_CODE
+  ) {
+    return new OpenTofuRunnerInfrastructureError(
+      runnerFailureMessage(RUN_DEADLINE_EXCEEDED_REASON),
+      { reason: RUN_DEADLINE_EXCEEDED_REASON },
+    );
+  }
   return undefined;
 }
 
@@ -1258,8 +1275,14 @@ function runnerExecutionErrorFromPayload(
   }
   if (errorCode && RUNNER_PLAN_EXECUTION_FAILURE_CODES.has(errorCode)) {
     const detail = runnerExecutionDetailFromPayload(payload);
-    return new OpenTofuRunnerExecutionError(runnerFailureMessage(errorCode), {
-      reason: errorCode,
+    // A command the run deadline stopped reports one fixed reason, so the
+    // cause survives even when the bounded detail omits the marker line.
+    const reason =
+      payload.runDeadlineExceeded === true
+        ? RUN_DEADLINE_EXCEEDED_REASON
+        : errorCode;
+    return new OpenTofuRunnerExecutionError(runnerFailureMessage(reason), {
+      reason,
       ...(detail ? { detail } : {}),
     });
   }
@@ -1566,6 +1589,13 @@ function diagnosticsFromContainerResult(
       severity: "warning",
       code: "runner_diagnostics_redacted",
       message: "runner provider diagnostics omitted",
+    });
+  }
+  if (result.runDeadlineExceeded === true) {
+    diagnostics.push({
+      severity: "error",
+      code: RUN_DEADLINE_EXCEEDED_REASON,
+      message: "runner stopped at the dispatching host's run deadline",
     });
   }
   const providerFailure = providerExecutionFailureFromContainerResult(result);

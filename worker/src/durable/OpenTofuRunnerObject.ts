@@ -17,6 +17,7 @@ import {
   RUNNER_MUTATION_INDETERMINATE_CODE,
   RUNNER_MUTATION_NOT_DISPATCHED_CODE,
   RUNNER_RUN_BUDGET_MS_HEADER,
+  RUNNER_RUN_DEADLINE_EXCEEDED_CODE,
   type RunnerMutationAction,
   type RunnerMutationIndeterminatePayload,
   type RunnerMutationNotDispatchedPayload,
@@ -451,12 +452,19 @@ const RUNNER_RESTORE_STAGE_COLLECT_LIMIT = 16;
 const RUNNER_RESTORE_STAGE_COLLECT_RETRY_MS = 5 * 60 * 1_000;
 const RUNNER_RESTORE_STAGE_COLLECT_CONTINUE_MS = 1_000;
 /**
- * Least time an Apply/Destroy must still have before its caller's deadline for
- * this object to hand it to the container. Below it, init plus a provider
- * mutation cannot finish and persist state in time, so the semantics are
- * concluded `not_dispatched` (a definite pre-provider failure) instead.
+ * Least time a Plan/Apply/Destroy must still have before its caller's deadline
+ * for this object to hand it to the container. It is measured before the
+ * container's source build and init, so it leaves room for those and for a
+ * meaningful plan/apply. Below it, nothing is dispatched: the request answers
+ * a retryable 503 so the Run is redelivered under a fresh invocation deadline.
  */
-const RUNNER_MIN_MUTATION_DISPATCH_BUDGET_MS = 60_000;
+const RUNNER_MIN_EXECUTION_DISPATCH_BUDGET_MS = 5 * 60_000;
+/**
+ * The same bound for `post_apply` / `pre_destroy` release commands. The
+ * container stops them at the deadline (a terminal, definite command
+ * failure), so this only refuses a dispatch with no realistic time left.
+ */
+const RUNNER_MIN_RELEASE_DISPATCH_BUDGET_MS = 60_000;
 
 /**
  * Value-free durable completion receipt for one dispatched mutation.
@@ -1003,6 +1011,23 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
             observedBytes: error.observedBytes,
           },
           { status: 413 },
+        );
+      }
+      if (error instanceof RunnerRunDeadlineExceededError) {
+        // Nothing reached the container. The shortage belongs to the caller's
+        // invocation, not to the Run, so the exact Run may be redelivered.
+        return Response.json(
+          {
+            error:
+              "OpenTofu runner run deadline leaves too little time to dispatch",
+            errorCode: RUNNER_RUN_DEADLINE_EXCEEDED_CODE,
+            status: "failed",
+            phase: runnerRelayOperation(request),
+            retryable: true,
+            detail:
+              "redeliver the same Run under a fresh invocation deadline; nothing was dispatched",
+          },
+          { status: 503 },
         );
       }
       if (error instanceof RunnerArtifactRelayInfrastructureError) {
@@ -2069,6 +2094,14 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const runDeadlineAt = parseRunDeadlineAt(
       request.headers.get(RUN_DEADLINE_AT_HEADER),
     );
+    const assertDispatchBudget = (minimumMs: number): void => {
+      if (
+        runDeadlineAt !== undefined &&
+        runDeadlineAt - Date.now() < minimumMs
+      ) {
+        throw new RunnerRunDeadlineExceededError();
+      }
+    };
     const inputRestoreReadinessStartedAt = monotonicNow();
     const bodyText = await request.text();
     const envelope = parseRunEnvelope(bodyText);
@@ -2340,14 +2373,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
               );
         }
         // A mutation that cannot finish before its caller's deadline is
-        // concluded here, while it provably never reached a provider, instead
+        // refused here, while it provably never reached a provider, instead
         // of being dispatched and cut off with its caller.
-        if (
-          runDeadlineAt !== undefined &&
-          runDeadlineAt - Date.now() < RUNNER_MIN_MUTATION_DISPATCH_BUDGET_MS
-        ) {
-          throw new RunnerRunDeadlineExceededError();
-        }
+        assertDispatchBudget(RUNNER_MIN_EXECUTION_DISPATCH_BUDGET_MS);
         mutationDispatch =
           await this.#markMutationDispatched(mutationPreparation);
         if (!mutationDispatch) {
@@ -2367,6 +2395,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
                 "AbortError",
               );
         }
+        assertDispatchBudget(RUNNER_MIN_RELEASE_DISPATCH_BUDGET_MS);
         releaseDispatch =
           await this.#markReleaseDispatched(releasePreparation);
         if (!releaseDispatch) {
@@ -2378,6 +2407,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       if (mutationPreparation && !mutationDispatch) {
         if (
           error instanceof RunnerArtifactRelayInfrastructureError ||
+          error instanceof RunnerRunDeadlineExceededError ||
           request.signal.aborted
         ) {
           // A retryable 503 makes Core redeliver this exact ApplyRun, and a
@@ -2429,6 +2459,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         releaseDispatch,
       );
     } else {
+      assertDispatchBudget(RUNNER_MIN_EXECUTION_DISPATCH_BUDGET_MS);
       unboundedRunnerResponse = await this.#containerFetchAfterReady(
         dispatchRequest,
         url,
@@ -8192,6 +8223,9 @@ function failedProviderExecutionPayload(
       kind: "provider_execution_failed",
       statePersistence,
     },
+    ...(payload.runDeadlineExceeded === true
+      ? { runDeadlineExceeded: true }
+      : {}),
     ...(detail ? { detail } : {}),
     ...(state ? { state } : {}),
     ...(phaseTimings ? { phaseTimings } : {}),
@@ -8294,6 +8328,9 @@ async function normalizeRunnerFailureResponse(
         ? { failedCommandId: stringField(payload, "failedCommandId")! }
         : {}),
       ...(detail ? { detail } : {}),
+      ...(payload.runDeadlineExceeded === true
+        ? { runDeadlineExceeded: true }
+        : {}),
       ...(errorCode === "runner_artifact_relay_ambiguous"
         ? { retryable: true }
         : {}),

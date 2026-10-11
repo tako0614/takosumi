@@ -454,9 +454,11 @@ function isRetryableRunnerInfrastructureError(error: unknown): boolean {
 
 /**
  * A mutating Run is safe to redeliver only when the runner proved either that
- * capacity was refused before provider execution, or that an exact immutable
- * artifact target can adopt a lost acknowledgement. A substrate reset is
- * ambiguous: the provider may already have changed external state without
+ * capacity was refused before provider execution, that an exact immutable
+ * artifact target can adopt a lost acknowledgement, or that it refused to
+ * dispatch because the dispatching host's deadline left too little time
+ * (`run_deadline_exceeded`; nothing reached the container). A substrate reset
+ * is ambiguous: the provider may already have changed external state without
  * returning a durable state artifact, so replaying the immutable Plan can
  * duplicate creates or destroys.
  */
@@ -466,7 +468,8 @@ function isSafeMutatingRunnerInfrastructureRetryError(
   return (
     error instanceof OpenTofuRunnerInfrastructureError &&
     (error.reason === "capacity_exhausted" ||
-      error.reason === "runner_artifact_relay_ambiguous")
+      error.reason === "runner_artifact_relay_ambiguous" ||
+      error.reason === "run_deadline_exceeded")
   );
 }
 
@@ -6149,6 +6152,10 @@ export class RunEngine {
     if (planRun.operation === "destroy") return;
     if (planRun.requiresApproval === true) return;
     if (planRun.appliedApplyRunId) return;
+    // Unknown resource changes (as opposed to an empty list) mean the
+    // delete/replace approval gate could not be evaluated. Never continue such
+    // a Plan unattended; it stays available for an explicit Apply.
+    if (planRun.planResourceChanges === undefined) return;
     // A no-op plan already proves desired and observed state converge. Creating
     // an apply would only spend runner time and cannot publish a new StateVersion or Output.
     if (
@@ -8689,11 +8696,32 @@ export class RunEngine {
       observedProviders,
     );
     if (changes === undefined) {
-      return compactLayeredPolicy({
+      const layers = compactLayeredPolicy({
         provider,
         providerLockfile,
         providerInstallation,
       });
+      // A runner that reports no resource changes at all (not an empty list)
+      // leaves the resource-level layers unevaluable. Where a Capsule's policy
+      // configures any of them, fail closed instead of passing the Plan as if
+      // it were unconstrained.
+      const capsuleRun = Boolean(
+        planRun.capsuleContext?.capsuleId ?? planRun.capsuleId,
+      );
+      const resourcePolicyConfigured =
+        policy?.allowedResourceTypes !== undefined ||
+        policy?.scopeBoundary !== undefined ||
+        policy?.quota !== undefined;
+      if (!capsuleRun || !resourcePolicyConfigured) return layers;
+      return {
+        ...layers,
+        resource: {
+          disallowedResourceTypes: [],
+          reasons: [
+            "plan resource changes are unavailable, so the resource policy cannot be evaluated",
+          ],
+        },
+      };
     }
     const action = evaluateActionPolicy(changes);
     // Enforce the composed Workspace/InstallConfig policy. An undefined
@@ -9077,6 +9105,7 @@ export class RunEngine {
             lifecycleActions: dispatch.lifecycleActions,
             sourceBuild: dispatch.sourceBuild,
             signal,
+            deadlineAt,
           }),
       );
       const completed = this.#applyPostApplyLifecycleOutcome({
@@ -10034,6 +10063,8 @@ export class RunEngine {
     readonly lifecycleActions: InstallConfig["lifecycleActions"];
     readonly sourceBuild: InstallConfig["sourceBuild"];
     readonly signal: AbortSignal;
+    /** Host invocation deadline forwarded to the release adapter, if any. */
+    readonly deadlineAt?: number;
   }): Promise<LifecycleActionOutcome | undefined> {
     const commands = releaseActivationCommands(
       input.lifecycleActions,
@@ -10100,7 +10131,7 @@ export class RunEngine {
           ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
           ...(sourceSnapshot ? { sourceSnapshot } : {}),
         },
-        { signal: input.signal },
+        runnerExecutionControl(input.signal, input.deadlineAt),
       );
       if (result.status === "skipped" && commands.length > 0) {
         return {
@@ -10412,6 +10443,8 @@ export class RunEngine {
     readonly lifecycleActions: InstallConfig["lifecycleActions"];
     readonly sourceBuild: InstallConfig["sourceBuild"];
     readonly signal: AbortSignal;
+    /** Host invocation deadline forwarded to the release adapter, if any. */
+    readonly deadlineAt?: number;
   }): Promise<LifecycleActionOutcome | undefined> {
     const commands = releaseActivationCommands(
       input.lifecycleActions,
@@ -10569,7 +10602,7 @@ export class RunEngine {
           ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
           ...(sourceSnapshot ? { sourceSnapshot } : {}),
         },
-        { signal: input.signal },
+        runnerExecutionControl(input.signal, input.deadlineAt),
       );
     } catch (error) {
       const outcome: LifecycleActionOutcome = {
@@ -11101,6 +11134,7 @@ export class RunEngine {
             lifecycleActions: dispatch.lifecycleActions,
             sourceBuild: dispatch.sourceBuild,
             signal,
+            deadlineAt,
           }),
       );
       if (lifecycleOutcome) {

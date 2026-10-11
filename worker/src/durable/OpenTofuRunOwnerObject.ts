@@ -118,6 +118,14 @@ const RUN_OWNER_EXECUTION_RESERVE_MS = 2 * 60 * 1000;
 export const RUN_OWNER_DISPATCH_BUDGET_MS =
   DURABLE_OBJECT_ALARM_WALL_MS - RUN_OWNER_EXECUTION_RESERVE_MS;
 
+/**
+ * Least deadline headroom for an inline controller retry inside the same
+ * alarm. The runner object refuses dispatch below its own minimum (5 minutes),
+ * and the retry still has to re-run its pre-dispatch work first; with less
+ * than this left, end the alarm and let the next one bring a fresh deadline.
+ */
+const RUN_OWNER_MIN_INLINE_RETRY_BUDGET_MS = 6 * 60 * 1000;
+
 type DispatchableRunAction = "plan" | "apply" | "source_sync" | "restore";
 
 interface RunOwnerStartRequest {
@@ -499,6 +507,14 @@ export class OpenTofuRunOwnerObject {
         options.drainControllerRetry === true,
       );
       if (retryReady && options.drainControllerRetry === true) {
+        if (
+          options.deadlineAt !== undefined &&
+          options.deadlineAt - this.#now() < RUN_OWNER_MIN_INLINE_RETRY_BUDGET_MS
+        ) {
+          // #recordDispatchFailure already re-armed the alarm for now; that
+          // next invocation gets its own full deadline.
+          return;
+        }
         await this.#dispatchDueRun({
           drainControllerRetry: false,
           ...(options.deadlineAt === undefined

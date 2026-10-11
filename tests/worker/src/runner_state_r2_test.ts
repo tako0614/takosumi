@@ -1486,6 +1486,7 @@ test("a budget-timed-out apply persists partial state and a completion receipt t
             providerExecutionFailure: { kind: "provider_execution_failed" },
             errorCode: "apply_failed",
             stderr: "command timed out after 659000ms (run deadline)",
+            runDeadlineExceeded: true,
           },
           { status: 500 },
         );
@@ -1507,6 +1508,8 @@ test("a budget-timed-out apply persists partial state and a completion receipt t
     kind: "provider_execution_failed",
     statePersistence: "persisted",
   });
+  // The fixed, value-free cause survives normalization.
+  assert.equal(firstPayload.runDeadlineExceeded, true);
   // The container received what was left as a relative budget, never the
   // absolute instant measured on the Worker's clock.
   assert.equal(budgets.length, 1);
@@ -1568,7 +1571,10 @@ test("a budget-timed-out apply persists partial state and a completion receipt t
   assert.equal(providerPosts, 1);
 });
 
-test("a run deadline too close for provider dispatch concludes not_dispatched without reaching the container", async () => {
+test("a run deadline too close for provider dispatch is refused as a retryable redelivery without reaching the container", async () => {
+  // The shortage belongs to the caller's invocation, not to the Run: the
+  // preparation is released, nothing is fenced, and a redelivery under a fresh
+  // deadline dispatches normally.
   const applyRunId = "apply_deadline_exhausted";
   const fixture = await deadlineApplyFixture(applyRunId);
   let providerPosts = 0;
@@ -1587,29 +1593,21 @@ test("a run deadline too close for provider dispatch concludes not_dispatched wi
     },
   });
 
-  const first = await runner.fetch(fixture.request(Date.now() + 30_000));
+  const first = await runner.fetch(fixture.request(Date.now() + 4 * 60_000));
 
-  assert.equal(first.status, 500);
+  assert.equal(first.status, 503);
   const payload = (await first.json()) as Record<string, unknown>;
-  assert.equal(payload.errorCode, "runner_mutation_not_dispatched");
-  assert.equal(payload.outcome, "not_dispatched");
-  assert.equal(payload.reason, "run_deadline_exceeded");
+  assert.equal(payload.errorCode, "runner_run_deadline_exceeded");
+  assert.equal(payload.retryable, true);
   assert.equal(providerPosts, 0);
   const inspection = await runner.inspectMutationAuthority(applyRunId, "apply");
-  assert.equal(
-    inspection.authority.status === "valid" && inspection.authority.phase,
-    "not_dispatched",
-  );
+  assert.equal(inspection.authority.status, "absent");
 
-  // The semantics are fenced: a later delivery with ample time still never
-  // dispatches them.
-  const replay = await runner.fetch(fixture.request(Date.now() + 13 * 60_000));
-  assert.equal(replay.status, 500);
-  assert.equal(
-    ((await replay.json()) as Record<string, unknown>).errorCode,
-    "runner_mutation_not_dispatched",
+  const redelivered = await runner.fetch(
+    fixture.request(Date.now() + 13 * 60_000),
   );
-  assert.equal(providerPosts, 0);
+  assert.equal(redelivered.status, 200);
+  assert.equal(providerPosts, 1);
 });
 
 test("an apply without a run deadline is forwarded without a budget, as before", async () => {

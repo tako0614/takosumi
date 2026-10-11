@@ -140,6 +140,32 @@ test("a run deadline stops a hanging OpenTofu apply on the provider-failure path
   }
 });
 
+test("a Plan whose plan JSON the run deadline cuts off is a failed Plan", async () => {
+  // `tofu plan` succeeds, then the deadline stops `tofu show -json`. Without
+  // the plan JSON the resource changes are unknown, so the Plan must fail
+  // instead of succeeding with nothing for approval and resource policy.
+  const fixture = await createTofuDescendantFixture("show_deadline", {
+    hangPhase: "show",
+    descendantDelaySeconds: 0.05,
+  });
+  try {
+    const controller = new AbortController();
+    registerRunBudget(controller.signal, "1500");
+    const plan = await runPlan(fixture.runId, fixture.request, controller.signal);
+
+    expect(plan.status).toBe("failed");
+    expect(plan.exitCode).toBe(124);
+    expect(plan.errorCode).toBe("opentofu_plan_failed");
+    expect("planResourceChanges" in plan).toBe(false);
+    expect("summary" in plan).toBe(false);
+    expect(String(plan.stderr)).toContain("(run deadline)");
+    await Bun.sleep(300);
+    expect(await providerCredentialDirectories(fixture.runId)).toEqual([]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 async function createTofuDescendantFixture(
   label: string,
   options: {

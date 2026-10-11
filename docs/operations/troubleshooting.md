@@ -25,7 +25,7 @@
 | producer 更新後に downstream が古い     | Capsule `stale` マーク                                                                                     | dependency graph を確認し、 Workspace update として DAG 順に plan/apply                                                                                                     |
 | runner が起動しない                     | dispatch timeout / runner infrastructure error                                                             | selected RunnerProfile / executor adapter / pool capacity を確認し、queue 使用時は DLQ を確認                                                                               |
 | install / deploy が遅い                 | phase timings で `source_clone` / `tofu_init` / `tofu_apply` のどれかが長い                                | SourceSnapshot reuse、provider mirror/cache、app repo 側の image/build 最適化を分けて確認。Run-scoped Cloudflare container は完了後に破棄されるため、keepalive を cold-start 対策にしない |
-| Cloudflare で Plan / Apply が約 13 分で止まる | Run `failed`、diagnostics の detail に `command timed out after ...ms (run deadline)`、Apply は `providerExecutionFailure` 付きで部分 StateVersion が残る。dispatch 前なら `runner_mutation_not_dispatched` (reason `run_deadline_exceeded`) | 下記「Cloudflare composition の Run 実行時間の上限」を参照。上限は延ばせないので、遅い provider 側を直してから re-plan / apply、または destroy する |
+| Cloudflare で Plan / Apply が約 13 分で止まる | Run `failed` に diagnostic code `run_deadline_exceeded`。Apply は `providerExecutionFailure` 付きで部分 StateVersion が残る。Plan は failure code が `run_deadline_exceeded` | 下記「Cloudflare composition の Run 実行時間の上限」を参照。上限は延ばせないので、遅い provider 側を直してから re-plan / apply、または destroy する |
 
 ## 切り分けの基本
 
@@ -63,27 +63,35 @@ Cloudflare reference composition (`deploy/platform`) では、1 つの Plan / Ap
 Destroy は `OpenTofuRunOwnerObject` の Durable Object alarm 1 回の中で実行されます。
 alarm の wall time は Cloudflare 側で 15 分に制限されており、lease 取得、
 credential mint、container 起動、source / plan / state の復元、source build、
-`tofu init`、`tofu plan` / `tofu apply`、state の永続化、ledger の commit が
-すべてこの 15 分に入ります。
+`tofu init`、`tofu plan` / `tofu apply`、state の永続化、`post_apply` /
+`pre_destroy` の release command、ledger の commit がすべてこの 15 分に入ります。
 
 このため run owner は alarm 開始時刻から **13 分後** を期限として dispatch に渡し、
 残り 2 分を runner の応答、部分 state と completion receipt の書き込み、ledger の
 commit のために残します。期限は次のように伝わります。
 
-1. run owner が `deadlineAt` (alarm 開始 + 13 分) を Core に渡す。
+1. run owner が `deadlineAt` (alarm 開始 + 13 分) を Core に渡す。同じ alarm の中で
+   controller の再試行をするとき、残りが 6 分未満なら再試行せずに alarm を終え、
+   次の alarm に新しい期限を持たせる。
 2. Core は値を解釈せず、runner adapter の `RunExecutionControl.deadlineAt` に
-   そのまま渡す。
+   渡す。Plan、Apply、Destroy と、その中の `post_apply` / `pre_destroy` の release
+   activation が対象。
 3. adapter は `x-takosumi-run-deadline-at` header で runner Durable Object に渡す。
 4. runner Durable Object は転送の瞬間の残り時間を `x-takosumi-runner-budget-ms`
-   として container に渡す。残りが 60 秒未満の Apply / Destroy は container に
-   渡さず、`runner_mutation_not_dispatched` (reason `run_deadline_exceeded`) で
-   確定的に失敗させる。provider には一度も届いていないので Capsule の
-   runtime safety は変わらない。
-5. container はその Run のすべての command (source build、init、plan、apply、
-   output) を、command 自身の `maxRunSeconds` と Run 全体の残り時間の短い方で
-   打ち切る。打ち切りの直前に SIGINT を送り、猶予 (上限 30 秒、timeout の 1/4
-   以内) の後に SIGKILL する。OpenTofu は SIGINT で provider を止めて state を
-   書いてから終了するので、state ファイルが書きかけで残りにくい。
+   として container に渡す。残りが足りないとき (Plan / Apply / Destroy は 5 分未満、
+   release command は 60 秒未満) は container に渡さず、retryable な 503
+   (`runner_run_deadline_exceeded`) で答える。provider には届いていないので、
+   Core は同じ Run を requeue し (`run_deadline_exceeded`、通常の runner
+   infrastructure と同じ回数上限)、次の alarm が新しい期限で実行する。
+   release command の場合は、provider の Apply が終わった後なので requeue されず、
+   lifecycle action の失敗として記録される。
+5. container はその Run のすべての command (source build、init、plan、
+   `show -json`、apply、output、release command) を、command 自身の timeout と
+   Run 全体の残り時間の短い方で打ち切る。Run の期限で打ち切るときだけ、直前に
+   SIGINT を送り、猶予 (上限 30 秒、残り時間の 1/4 以内) の後に SIGKILL する。
+   OpenTofu は SIGINT で provider を止めて state を書いてから終了するので、
+   state ファイルが書きかけで残りにくい。command 自身の timeout で打ち切る場合は
+   従来どおり SIGKILL だけで、前倒しの中断はしない。
 
 期限で止まった Apply は、通常の provider 実行失敗として扱われます。runner
 Durable Object は部分 state を R2 に書き、completion receipt を記録し、Core は
@@ -91,6 +99,18 @@ Durable Object は部分 state を R2 に書き、completion receipt を記録�
 は `unknown` になりますが、state が残っているので Destroy や、新しい Plan からの
 Apply で回復できます。takeover が同じ ApplyRun を再送しても completion
 receipt を採用するだけで、provider を再実行しません。
+
+期限で止まったことは diagnostic code `run_deadline_exceeded` で確認できます
+(Apply / Destroy は error diagnostic、Plan は failure code)。detail の
+`(run deadline)` の行は長い出力では省略されることがあるので、code の方を見て
+ください。takeover が R2 から採用した結果には、この code が付かないことがあります。
+
+Plan の `tofu show -json` が失敗した場合 (期限によるものを含む) は、Plan そのものを
+失敗にします。plan JSON が無いと resource の変更が分からず、delete / replace の
+承認や resource type allowlist、scope、quota を判定できないためです。これは期限
+の有無に関係なく常に効きます。Core の側でも、resource の変更が分からない Plan は
+自動で Apply せず、resource 系の policy が設定された Capsule では Plan を失敗に
+します。
 
 **約 13 分を超える Plan / Apply は、Cloudflare composition では実行できません。**
 これは alarm の wall time から来る上限で、設定で延ばす手段はありません。長い実行を
@@ -105,12 +125,27 @@ command ごとの上限で、しかも alarm より後に数え始めるので�
 alarm の wall より後に発火します。期限の伝達が入った後は Run 全体の期限が先に
 効くので、`maxRunSeconds` を下げる必要はありません。
 
-期限で止まった Apply の残骸は、普段の失敗と同じ手順で片付けます。Run の
-diagnostics の detail に `(run deadline)` があれば期限による停止です。provider 側でどの resource
-が作られたかは部分 StateVersion に残っています。期限の伝達より前の runner image
-で起きた `runner_mutation_indeterminate` (alarm が `exceededWallTime` で切れた
-もの) は state が残っていないので、provider 側の resource を operator が個別に
-確認して片付ける必要があります。
+### 既知の挙動
+
+- 猶予中に command が終わっても、その command は timeout (exit 124) として扱います。
+  そのため、本当に最後まで完了した Apply でも `failed` になることがあります。この
+  とき Output は新しくならず、Capsule の Output は手動で Apply し直すまで戻りません。
+  変更が無い Plan は自動で Apply されないので、手動の Apply が必要です。
+- 期限切れで `tofu apply` を起動する前に止まった場合も、Apply は
+  `providerExecutionFailure` として記録されます。実際には provider に触れて
+  いませんが、安全側に倒した記録です。runner Durable Object が 5 分未満の
+  dispatch を断るので、build と init だけで 5 分以上かかったときにしか起きません。
+- 猶予を過ぎても終わらない command は SIGKILL するので、provider が中断に応じない
+  と、作成途中の resource が state に載らないことや、state ファイルが書きかけで
+  残ることがあります。
+- container に渡すのは相対値の残り時間です。container の時計と Worker の時計は
+  比べないので、時計のずれは期限に影響しません。
+
+期限で止まった Apply の残骸は、普段の失敗と同じ手順で片付けます。provider 側で
+どの resource が作られたかは部分 StateVersion に残っています。期限の伝達より前の
+runner image で起きた `runner_mutation_indeterminate` (alarm が
+`exceededWallTime` で切れたもの) は state が残っていないので、provider 側の
+resource を operator が個別に確認して片付ける必要があります。
 
 ## エスカレーション
 

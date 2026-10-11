@@ -85,20 +85,28 @@ takeover は `runner_mutation_indeterminate` としか答えられず、provider
 
 - run owner は alarm 開始 + 13 分を `deadlineAt` として dispatch に渡す。残り
   2 分は応答、部分 state と completion receipt、ledger commit のための予備。
-- Core は `RunExecutionControl.deadlineAt` を解釈せず runner adapter に渡すだけ。
+  同じ alarm 内の controller 再試行は、残りが 6 分未満なら次の alarm に回す。
+- Core は `RunExecutionControl.deadlineAt` を解釈せず、Plan / Apply / Destroy と
+  `post_apply` / `pre_destroy` の release activation の adapter に渡すだけ。
   substrate の制限を Core が知らないままにするため。
 - runner Durable Object は転送の瞬間の残り時間を相対値で container に渡す。値は
   run body の外 (header) にあるので mutation identity に入らず、takeover が別の
-  期限で再送しても同じ dispatch 権限として扱われる。残りが 60 秒未満なら
-  dispatch せず `not_dispatched` で確定させる。
+  期限で再送しても同じ dispatch 権限として扱われる。残りが最小値 (Plan / Apply /
+  Destroy は 5 分、release は 60 秒) を切っていれば dispatch せず、preparation を
+  解放して retryable な 503 で答える。原因は呼び出し側の invocation で、Plan の
+  中身ではないので、Run を終わらせずに新しい期限で再送させる。
 - container は Run のすべての command を `min(command の timeout, Run の残り)` で
-  打ち切り、その手前で SIGINT、猶予の後に SIGKILL する。期限で止まった apply は
-  既存の `providerExecutionFailure` 経路に乗り、部分 state が保存される。
+  打ち切り、Run の期限で打ち切るときだけ手前で SIGINT、猶予の後に SIGKILL
+  する。期限で止まった apply は既存の `providerExecutionFailure` 経路に乗り、
+  部分 state が保存される。止めた原因は固定の `runDeadlineExceeded` 印で返し、
+  adapter が diagnostic code `run_deadline_exceeded` にする。
 
-header が無ければどの層も従来どおり動く。古い Durable Object と新しい image、
-新しい Durable Object と古い image のどちらの組み合わせでも、期限が効かないだけで
-挙動は以前と同じになる。期限そのものを延ばす手段は無く、約 13 分を超える実行は
-alarm の外へ出す設計 (architecture audit A-01、
+期限に関わる挙動は、header が無ければどの層も従来どおりになる。古い Durable Object
+と新しい image、新しい Durable Object と古い image のどちらの組み合わせでも、
+期限が効かないだけで以前と同じに動く。これとは別に、plan JSON (`tofu show -json`)
+を読めない Plan は期限の有無にかかわらず失敗にし、Core も resource の変更が
+分からない Plan を自動で Apply しない。期限そのものを延ばす手段は無く、約 13 分を
+超える実行は alarm の外へ出す設計 (architecture audit A-01、
 [mutation の切り離しの設計メモ](./runner-mutation-detachment-design.md)) が必要。
 
 ## テスト側の機構

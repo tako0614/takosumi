@@ -509,9 +509,15 @@ export async function initPlanAndBuildResponse(
     return planFailure(plan);
   }
 
-  const planJson = await timer.measure("tofu_plan_json", () =>
+  const planJsonRead = await timer.measure("tofu_plan_json", () =>
     readOpenTofuPlanJson(moduleDir, workspace, commandContext),
   );
+  // A Plan whose resource changes cannot be read is a failed Plan, never a
+  // succeeded one with nothing for the approval and resource policies to see.
+  if ("failure" in planJsonRead) {
+    return planFailure(planJsonRead.failure);
+  }
+  const planJson: string | undefined = planJsonRead.json;
 
   const finishSuccessfulPlanFinalization =
     options.successfulPlanTiming?.start("runner_plan_finalize");

@@ -1062,6 +1062,83 @@ test("a dispatch deadline reaches destroy, and a dispatch without one stays unbo
   expect((await store.getApplyRun(applyRun.id))?.status).toBe("succeeded");
 });
 
+test("a dispatch the runner refused for lack of deadline headroom is requeued, not failed", async () => {
+  // The runner object refused before anything reached the container, so the
+  // shortage belongs to the dispatching invocation: the exact ApplyRun is
+  // redelivered and a later invocation with a fresh deadline applies it.
+  const store = new InMemoryOpenTofuControlStore();
+  let applyCalls = 0;
+  const retryDispatches: Parameters<EnqueueRun>[0][] = [];
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(6300),
+    newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner: {
+      plan: () =>
+        Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: planArtifact(),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: [CLOUDFLARE],
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        }),
+      apply: (job) => {
+        applyCalls++;
+        if (applyCalls === 1) {
+          return Promise.reject(
+            new OpenTofuRunnerInfrastructureError(
+              "runner failure (run_deadline_exceeded)",
+              { reason: "run_deadline_exceeded" },
+            ),
+          );
+        }
+        return Promise.resolve(
+          fixtureStateCommit({
+            rawOutputRef: job.rawOutputRef,
+            providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+            executionEvidence: fixtureExecutionEvidence(job, "apply"),
+          }),
+        );
+      },
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: (dispatch) => {
+      retryDispatches.push(dispatch);
+      return Promise.resolve();
+    },
+  });
+  const request = await seedUpdatable(store, { capsuleId: "cap_deadline_requeue" });
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    workspaceId: queuedPlan.workspaceId,
+  });
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  retryDispatches.length = 0;
+  const dispatch = {
+    action: "apply" as const,
+    runId: applyRun.id,
+    workspaceId: applyRun.workspaceId,
+  };
+
+  await expect(
+    controller.dispatchQueuedRun(dispatch, { deadlineAt: 1_000 }),
+  ).rejects.toThrow(/retryable_runner_infrastructure_error/);
+  expect((await store.getApplyRun(applyRun.id))?.status).toBe("queued");
+  expect(retryDispatches).toEqual([{ ...dispatch, cause: "controller_retry" }]);
+
+  await controller.dispatchQueuedRun(dispatch, { deadlineAt: 2_000 });
+  expect((await store.getApplyRun(applyRun.id))?.status).toBe("succeeded");
+  expect(applyCalls).toBe(2);
+});
+
 test("a minted CredentialBundle never serializes its values", () => {
   const bundle = new CredentialBundle({ CLOUDFLARE_API_TOKEN: SECRET_TOKEN });
   expect(JSON.stringify({ bundle })).not.toContain(SECRET_TOKEN);
