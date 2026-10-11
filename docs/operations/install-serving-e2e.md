@@ -64,6 +64,12 @@ module path を `deploy/takoform` にする組み合わせが、Yurucommu 自身
 install 先と一致します。`.well-known/tcs.json` の `modulePath` と、サイトの
 install link の `path` がその宣言です。
 
+この profile (Source path `.`、module path `deploy/takoform`) で staging を最後まで
+通した記録は、まだありません。Plan の前に repository 全体の `bun install` と
+Worker build が走ります。初回の実行で、Plan が `--deploy-timeout-seconds` の
+既定 600 秒に収まるかを確認してください。手元で同じ `sourceBuild` を runner の
+実装で再現したときは約 23 秒でした。
+
 CI で一時的な token を使う場合は、短命で workspace に限定した PAT を作り、その path を
 `--token-file` に渡します。token の値は harness からも smoke からも出力しません。
 
@@ -90,7 +96,9 @@ install/serving の失敗 1、引数エラー 2 です。
 
 証拠は `--evidence-dir` (既定は `$TMPDIR/takosumi-install-serving-e2e/<stamp>`) に
 mode 0700 で残ります: `smoke-invocation.json` (token は伏字)、`smoke-result.json`、
-`smoke-stdout.log`、`smoke-stderr.log`、`summary.json`。
+`smoke-stdout.log`、`smoke-stderr.log`、`summary.json`。Run が失敗したときは、その Run
+の logs 本文全体 (diagnostic の `detail` 全文を含む) を `run-logs-<run id>.json` に
+mode 0600 で加えます。
 
 ## 失敗したときの読み方
 
@@ -101,8 +109,14 @@ mode 0700 で残ります: `smoke-invocation.json` (token は伏字)、`smoke-re
 - `phase=plan` / `phase=apply`: Run の `errorCode` と diagnostic を読みます。credential の
   交換や renewal、provider 側の一時的な衝突がここに出ます。diagnostic は公開 API の
   `/api/v1/runs/<id>/logs` から読みます。`/internal/v1` は edge が routing しないので
-  使いません。server が redaction した `detail` (失敗した source build command の出力
-  など) は、長さを制限した 1 行にして括弧内に付けます。
+  使いません。失敗理由にするのは severity が `error` の diagnostic だけです。無ければ
+  `diagnostic: no error diagnostic recorded` と出します。
+- stdout と `summary.json` に出すのは、`error` diagnostic の code と message、および
+  短縮した `detail` (失敗した source build command の出力など) だけです。出力の前に
+  ANSI escape を除き、credential に見える値を `[REDACTED]` に置き換え、残りの制御文字は
+  空白にします。`detail` は先頭と末尾を残して 1 行に縮めます。原因は末尾に出ることが
+  多いためです。logs 本文全体は `run-logs-<run id>.json` として evidence directory に
+  残ります。
 - `phase=serving`: Run は終わっているのに HTTP 検査が通っていません。公開 URL の
   伝播と応答本文、Workers for Platforms 側の routing を確認します。
 - `phase=destroy`: 片付けが終わっていません。Capsule と、失敗した apply run の id が

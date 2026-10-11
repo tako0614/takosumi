@@ -31,6 +31,8 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { redactString } from "../contract/redaction.ts";
+
 export const INSTALL_SERVING_E2E_KIND =
   "takosumi.install-serving-e2e@v1" as const;
 
@@ -777,8 +779,42 @@ async function readWorkspaceRuns(input: {
   return (body as { readonly runs?: readonly RunSummary[] }).runs ?? [];
 }
 
-const DIAGNOSTIC_DETAIL_MAX_CHARS = 320;
+// Bounds for the one-line excerpt printed to stdout and summary.json. The
+// head names the failing command; the tail usually carries the cause.
+const DIAGNOSTIC_DETAIL_HEAD_CHARS = 120;
+const DIAGNOSTIC_DETAIL_TAIL_CHARS = 200;
+const DIAGNOSTIC_DETAIL_ELISION = " ... ";
+// CSI (`ESC [ ... final`), OSC (`ESC ] ... BEL|ST`), and other two-byte escapes.
+const ANSI_ESCAPE_PATTERN =
+  /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\)|[\u0040-\u005a\u005c-\u005f])/gu;
 
+/**
+ * Render server-provided diagnostic text as one printable line. The harness is
+ * meant for CI logs, so it does not trust the server's redaction alone: ANSI
+ * sequences go first, then credential-shaped material is masked, then every
+ * remaining control byte (newlines included) becomes a space.
+ */
+export function printableDiagnosticText(value: string): string {
+  const masked = redactString(value.replace(ANSI_ESCAPE_PATTERN, ""));
+  return redactString(masked.replace(/\p{Cc}+/gu, " "))
+    .replace(/ {2,}/gu, " ")
+    .trim();
+}
+
+function boundedDiagnosticDetail(detail: string): string {
+  const limit = DIAGNOSTIC_DETAIL_HEAD_CHARS + DIAGNOSTIC_DETAIL_TAIL_CHARS;
+  if (detail.length <= limit + DIAGNOSTIC_DETAIL_ELISION.length) return detail;
+  return `${detail.slice(0, DIAGNOSTIC_DETAIL_HEAD_CHARS).trimEnd()}${
+    DIAGNOSTIC_DETAIL_ELISION
+  }${detail.slice(-DIAGNOSTIC_DETAIL_TAIL_CHARS).trimStart()}`;
+}
+
+/**
+ * The first `error` diagnostic as `code: message (detail)`, printable and
+ * bounded. Info and warning entries are never a failure reason; `undefined`
+ * means the Run recorded no error diagnostic. The full body belongs in the
+ * private evidence directory, not here.
+ */
 export function firstRunDiagnosticMessage(body: unknown): string | undefined {
   const diagnostics = (body as {
     readonly diagnostics?: readonly {
@@ -789,21 +825,35 @@ export function firstRunDiagnosticMessage(body: unknown): string | undefined {
     }[];
   }).diagnostics;
   if (!Array.isArray(diagnostics)) return undefined;
-  const entry = diagnostics.find((value) => value?.severity === "error") ??
-    diagnostics[0];
-  if (!entry?.message) return undefined;
-  const summary = entry.code ? `${entry.code}: ${entry.message}` : entry.message;
-  // `detail` is the server-redacted, bounded runner excerpt (for example the
-  // failing source-build command's output); keep it as one bounded line.
-  const detail = typeof entry.detail === "string"
-    ? entry.detail.replace(/\s+/gu, " ").trim()
+  const entry = diagnostics.find((value) => value?.severity === "error");
+  if (typeof entry?.message !== "string") return undefined;
+  const message = printableDiagnosticText(entry.message);
+  if (!message) return undefined;
+  const code = typeof entry.code === "string"
+    ? printableDiagnosticText(entry.code)
     : "";
-  if (!detail) return summary;
-  return `${summary} (${
-    detail.length > DIAGNOSTIC_DETAIL_MAX_CHARS
-      ? `${detail.slice(0, DIAGNOSTIC_DETAIL_MAX_CHARS)}...`
-      : detail
-  })`;
+  const summary = code ? `${code}: ${message}` : message;
+  const detail = typeof entry.detail === "string"
+    ? printableDiagnosticText(entry.detail)
+    : "";
+  return detail ? `${summary} (${boundedDiagnosticDetail(detail)})` : summary;
+}
+
+const EVIDENCE_RUN_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/u;
+
+/** Keep the complete Run logs body (all diagnostics, full detail) private. */
+async function writeRunLogsEvidence(
+  evidenceDir: string,
+  runId: string,
+  logs: unknown,
+): Promise<string> {
+  const name = EVIDENCE_RUN_ID_PATTERN.test(runId)
+    ? `run-logs-${runId}.json`
+    : "run-logs.json";
+  const path = join(evidenceDir, name);
+  await writeFile(path, `${JSON.stringify(logs, null, 2)}\n`, { mode: 0o600 });
+  await chmod(path, 0o600);
+  return name;
 }
 
 export type FailureAttribution = {
@@ -896,17 +946,34 @@ async function attributeFailure(input: {
       lines.push(`run ${runId} readback unavailable (${describeApiError(error)})`);
     }
 
+    let logs: unknown;
     try {
       // The edge-public Run logs route; `/internal/v1` is never edge-routed.
-      const logs = await requestJson({
+      logs = await requestJson({
         origin: input.options.origin,
         token: input.token,
         path: `${API_PREFIX}/runs/${encodeURIComponent(runId)}/logs`,
       });
-      const message = firstRunDiagnosticMessage(logs);
-      if (message) lines.push(`diagnostic: ${message}`);
     } catch (error) {
       lines.push(`diagnostic readback unavailable (${describeApiError(error)})`);
+    }
+    if (logs !== undefined) {
+      const message = firstRunDiagnosticMessage(logs);
+      lines.push(
+        message
+          ? `diagnostic: ${message}`
+          : "diagnostic: no error diagnostic recorded",
+      );
+      try {
+        const name = await writeRunLogsEvidence(
+          input.options.evidenceDir,
+          runId,
+          logs,
+        );
+        lines.push(`full Run logs: ${name} in the evidence directory`);
+      } catch {
+        lines.push("full Run logs could not be written to the evidence directory");
+      }
     }
   }
 
