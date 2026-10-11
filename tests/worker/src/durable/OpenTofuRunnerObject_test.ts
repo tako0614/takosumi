@@ -3862,7 +3862,7 @@ test("OpenTofu runner Durable Object may redispatch read-only plan after a stopp
   assert.equal(planCalls, 2);
 });
 
-test("OpenTofu runner Durable Object releases a provable pre-dispatch preparation for safe retry", async () => {
+test("OpenTofu runner Durable Object fences a pre-dispatch failure so a later delivery never dispatches", async () => {
   const runId = "apply_health_retry";
   const r2 = new FakeR2Bucket();
   await seedEncryptedPlan(r2, runId);
@@ -3911,18 +3911,25 @@ test("OpenTofu runner Durable Object releases a provable pre-dispatch preparatio
   });
   const unavailable = await unavailableRunner.fetch(request());
   assert.equal(unavailable.status, 500);
-  assertMutationNotDispatchedResponse(await unavailable.text(), "apply");
+  const firstText = await unavailable.text();
+  assertMutationNotDispatchedResponse(firstText, "apply");
   assert.equal(providerCalls, 0);
-  assert.deepEqual(storage.entries(), []);
+  // Core records this Run as never dispatched. The authority is therefore
+  // fenced terminally rather than deleted: a later delivery of the same
+  // mutation (for example from a consumer that lost its lease) must not
+  // execute it behind that ledger record.
+  assert.equal(mutationAuthorityPhase(storage), "not_dispatched");
 
   const restartedRunner = runnerWithContainer(r2, container, { storage });
-  const retried = await restartedRunner.fetch(request());
-  assert.equal(retried.status, 200);
-  assert.equal(providerCalls, 1);
+  const replayed = await restartedRunner.fetch(request());
+  assert.equal(replayed.status, 500);
+  assert.equal(await replayed.text(), firstText);
+  assert.equal(providerCalls, 0);
+  assert.equal(mutationAuthorityPhase(storage), "not_dispatched");
 });
 
 for (const action of ["apply", "destroy"] as const) {
-  test(`OpenTofu runner Durable Object types a released pre-dispatch ${action} failure as not dispatched`, async () => {
+  test(`OpenTofu runner Durable Object fences a pre-dispatch ${action} failure as not dispatched`, async () => {
     const runId = `${action}_pre_dispatch_typed`;
     const r2 = new FakeR2Bucket();
     await seedEncryptedPlan(r2, runId);
@@ -3946,9 +3953,17 @@ for (const action of ["apply", "destroy"] as const) {
     );
     const response = await runner.fetch(mutationRequest(runId, action));
     assert.equal(response.status, 500);
-    assertMutationNotDispatchedResponse(await response.text(), action);
+    const text = await response.text();
+    assertMutationNotDispatchedResponse(text, action);
     assert.equal(calls.includes(`POST /runs/${runId}`), false);
-    assert.deepEqual(storage.entries(), []);
+    assert.equal(mutationAuthorityPhase(storage), "not_dispatched");
+
+    const callsBeforeReplay = calls.length;
+    const replay = await runner.fetch(mutationRequest(runId, action));
+    assert.equal(replay.status, 500);
+    assert.equal(await replay.text(), text);
+    // The replay answers from durable authority without touching the container.
+    assert.deepEqual(calls.slice(callsBeforeReplay), []);
   });
 }
 
@@ -3974,9 +3989,96 @@ test("OpenTofu runner Durable Object keeps the size-limit evidence on a not-disp
   const text = await response.text();
   assertMutationNotDispatchedResponse(text, "apply");
   const payload = JSON.parse(text) as Record<string, unknown>;
+  assert.equal(payload.reason, "artifact_size_limit");
   assert.equal(payload.artifact, "plan");
   assert.equal(payload.maxBytes, 8);
-  assert.deepEqual(storage.entries(), []);
+  assert.equal(mutationAuthorityPhase(storage), "not_dispatched");
+
+  const replay = await runner.fetch(mutationRequest(runId, "apply"));
+  assert.equal(replay.status, 413);
+  assert.equal(await replay.text(), text);
+});
+
+test("OpenTofu runner Durable Object keeps an ambiguous pre-dispatch artifact read retryable and reclaimable", async () => {
+  const runId = "apply_pre_dispatch_lock_ambiguous";
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, runId);
+  const storage = new FakeDoStorage();
+  let providerCalls = 0;
+  const runner = runnerWithContainer(
+    r2,
+    {
+      async containerFetch(request) {
+        const path = new URL(request.url).pathname;
+        if (request.method === "PUT") return Response.json({ ok: true });
+        if (request.method === "POST" && path === `/runs/${runId}`) {
+          providerCalls += 1;
+        }
+        return Response.json({ error: "must not dispatch" }, { status: 500 });
+      },
+    },
+    { storage },
+  );
+  const lockDigest = `sha256:${"a".repeat(64)}`;
+  // The reviewed lock names the Plan's own sibling object, which is absent:
+  // the read-after-write outcome is ambiguous, not a pre-dispatch rejection.
+  const request = () =>
+    mutationRequest(runId, "apply", {
+      planRun: {
+        id: runId,
+        providerLockDigest: lockDigest,
+        providerLockArtifact: {
+          kind: "object-storage",
+          ref: `r2://takos-artifacts/opentofu-plan-runs/${runId}/provider-lockfile.hcl`,
+          digest: lockDigest,
+          sizeBytes: 12,
+        },
+      },
+    });
+  for (let delivery = 0; delivery < 2; delivery += 1) {
+    const response = await runner.fetch(request());
+    assert.equal(response.status, 503);
+    const payload = (await response.json()) as Record<string, unknown>;
+    assert.equal(payload.errorCode, "runner_artifact_relay_ambiguous");
+    assert.equal(payload.retryable, true);
+    // Released, so Core's redelivery of this ApplyRun can claim it again.
+    assert.deepEqual(storage.entries(), []);
+  }
+  assert.equal(providerCalls, 0);
+});
+
+test("OpenTofu runner Durable Object makes the dispatched fence durable before the container sees the mutation", async () => {
+  const runId = "apply_dispatch_sync_order";
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, runId);
+  const log: string[] = [];
+  class SyncLoggingStorage extends FakeDoStorage {
+    override sync(): Promise<void> {
+      log.push(`sync:${String(mutationAuthorityPhase(this))}`);
+      return Promise.resolve();
+    }
+  }
+  const storage = new SyncLoggingStorage();
+  const runner = runnerWithContainer(
+    r2,
+    {
+      async containerFetch(request) {
+        const path = new URL(request.url).pathname;
+        if (request.method === "PUT") return Response.json({ ok: true });
+        if (request.method === "POST" && path === `/runs/${runId}`) {
+          log.push("dispatch");
+          return Response.json({ status: "succeeded", exitCode: 0 });
+        }
+        return Response.json({ error: "unexpected" }, { status: 500 });
+      },
+    },
+    { storage },
+  );
+  const response = await runner.fetch(mutationRequest(runId, "apply"));
+  assert.equal(response.status, 200);
+  const dispatchIndex = log.indexOf("dispatch");
+  assert.ok(dispatchIndex > 0);
+  assert.ok(log.slice(0, dispatchIndex).includes("sync:dispatched"));
 });
 
 test("OpenTofu runner Durable Object never relays a container-reported not-dispatched code after dispatch", async () => {
@@ -6792,8 +6894,15 @@ function assertMutationNotDispatchedResponse(
   assert.deepEqual(payload.evidence, {
     kind: "runner_mutation_not_dispatched",
     action,
-    preparationReleased: true,
+    redispatchBlocked: true,
   });
+}
+
+function mutationAuthorityPhase(storage: FakeDoStorage): unknown {
+  const authority = storage
+    .entries()
+    .find(([key]) => key === "runner-mutation-authority");
+  return (authority?.[1] as { readonly phase?: unknown } | undefined)?.phase;
 }
 
 function assertReleaseIndeterminateResponse(text: string): void {
@@ -6927,6 +7036,10 @@ class FakeDoStorage {
     } finally {
       release();
     }
+  }
+
+  sync(): Promise<void> {
+    return Promise.resolve();
   }
 
   getAlarm(): Promise<number | null> {

@@ -1380,7 +1380,7 @@ function notDispatchedPayload(
     evidence: {
       kind: RUNNER_MUTATION_NOT_DISPATCHED_CODE,
       action,
-      preparationReleased: true,
+      redispatchBlocked: true,
     },
     reason: "relay_failure",
     detail: "the runner failed before provider dispatch was authorized",
@@ -1391,9 +1391,10 @@ function notDispatchedPayload(
 async function mutationFailure(
   action: "apply" | "destroy",
   payload: Record<string, unknown>,
+  status = 500,
 ): Promise<unknown> {
   const runner = new CloudflareContainerOpenTofuRunner(
-    envReturning(payload, undefined, 500),
+    envReturning(payload, undefined, status),
   );
   const input = {
     applyRun: { id: `${action}_not_dispatched` },
@@ -1436,6 +1437,39 @@ for (const action of ["apply", "destroy"] as const) {
     );
   });
 }
+
+test("container runner keeps the value-free size-limit evidence of a not-dispatched mutation", async () => {
+  const error = await mutationFailure(
+    "apply",
+    notDispatchedPayload("apply", {
+      reason: "artifact_size_limit",
+      artifact: "plan",
+      maxBytes: 25_165_824,
+      observedBytes: 25_165_857,
+    }),
+    413,
+  );
+  expect(error).toBeInstanceOf(OpenTofuRunnerExecutionError);
+  expect((error as OpenTofuRunnerExecutionError).reason).toBe(
+    RUNNER_MUTATION_NOT_DISPATCHED_CODE,
+  );
+  expect((error as OpenTofuRunnerExecutionError).detail).toBe(
+    "pre-dispatch failure: artifact_size_limit; plan artifact exceeds 25165824 byte limit (observed at least 25165857 bytes)",
+  );
+
+  // Free text never crosses: only the fixed fields are rebuilt.
+  const prose = await mutationFailure(
+    "apply",
+    notDispatchedPayload("apply", {
+      reason: "token=must-not-escape",
+      artifact: "plan artifact token=x",
+      maxBytes: 1,
+      observedBytes: 2,
+    }),
+    413,
+  );
+  expect((prose as OpenTofuRunnerExecutionError).detail).toBeUndefined();
+});
 
 test("container runner keeps an incomplete not-dispatched envelope on the possibly-dispatched fallback", async () => {
   for (const overrides of [

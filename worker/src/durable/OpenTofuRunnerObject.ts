@@ -161,16 +161,32 @@ const RUNNER_ARTIFACT_LIMIT_ENV = Object.freeze({
   runnerResponse: "TAKOSUMI_RUNNER_RESPONSE_MAX_BYTES",
 });
 
-type RunnerArtifactKind =
-  | "source_archive"
-  | "state"
-  | "plan"
-  | "provider_lockfile"
-  | "plan_json"
-  | "output"
-  | "runner_response"
-  | "state_pointer"
-  | "failure_detail";
+const RUNNER_ARTIFACT_KINDS = [
+  "source_archive",
+  "state",
+  "plan",
+  "provider_lockfile",
+  "plan_json",
+  "output",
+  "runner_response",
+  "state_pointer",
+  "failure_detail",
+] as const;
+
+type RunnerArtifactKind = (typeof RUNNER_ARTIFACT_KINDS)[number];
+
+/** Finite, value-free failure classes safe for logs and durable evidence. */
+const RUNNER_FAILURE_REASONS = [
+  "artifact_size_limit",
+  "artifact_durability_ambiguous",
+  "artifact_authority_conflict",
+  "restore_fence_lost",
+  "request_aborted",
+  "container_unavailable",
+  "relay_failure",
+] as const;
+
+type RunnerFailureReason = (typeof RUNNER_FAILURE_REASONS)[number];
 
 interface RunnerArtifactLimits {
   readonly sourceArchive: number;
@@ -350,6 +366,8 @@ interface ContainerHostStorage
     ): Promise<T>;
     getAlarm(): Promise<number | null>;
     setAlarm(scheduledTime: number | Date): Promise<void>;
+    /** Resolves once every write issued so far is durable. */
+    sync(): Promise<void>;
 }
 
 class LocalContainerRuntime<Env = unknown> {
@@ -497,6 +515,8 @@ interface RunnerMutationDispatchRecord {
   /**
    * `preparing` is provably before provider dispatch; `orphaned` means a
    * target existed before this request had durable dispatch authority;
+   * `not_dispatched` means preparation failed before the container ever
+   * received the request and these semantics may never be dispatched;
    * `completed` means the provider mutation finished and its state/output
    * artifacts are durable, so the exact dispatch identity has a determined
    * outcome even if the response never reached the caller.
@@ -506,14 +526,29 @@ interface RunnerMutationDispatchRecord {
     | "dispatched"
     | "completed"
     | "indeterminate"
-    | "orphaned";
+    | "orphaned"
+    | "not_dispatched";
   /**
    * Present exactly when `phase` is `completed`. This is the durable proof
    * that lets a lost completion converge instead of ending indeterminate.
    */
   readonly completion?: RunnerMutationCompletionReceipt;
+  /**
+   * Present exactly when `phase` is `not_dispatched`: the value-free failure
+   * class every replay of these semantics answers with.
+   */
+  readonly notDispatched?: RunnerMutationNotDispatchedEvidence;
   /** Once dispatched, this durable claim permanently forbids redispatch. */
   readonly redispatchBlocked: true;
+}
+
+interface RunnerMutationNotDispatchedEvidence {
+  readonly reason: RunnerFailureReason;
+  readonly sizeLimit?: {
+    readonly artifact: RunnerArtifactKind;
+    readonly maxBytes: number;
+    readonly observedBytes: number;
+  };
 }
 
 interface ActiveCredentialRefreshClaim {
@@ -1567,20 +1602,22 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       phase: "dispatched",
     };
     await this.#writeMutationDispatchRecord(dispatched);
+    // The container may receive the mutation only after this redispatch
+    // fence is durable, not merely buffered in the isolate.
+    await this.ctx.storage.sync();
     this.#activeMutationPreparations.delete(preparation.semanticDigest);
     return dispatched;
   }
 
   /**
-   * Removes a still-`preparing` mutation authority. Resolves `true` only when
-   * this call observed that exact `preparing` record and durably deleted it:
-   * the one proof that no provider dispatch was ever authorized for these
-   * semantics. Any other durable phase (for example a `dispatched` write whose
-   * acknowledgement was lost) resolves `false` and is left untouched.
+   * Removes a still-`preparing` mutation authority so the exact request may
+   * claim it again. Only a retryable pre-dispatch failure (an ambiguous
+   * artifact acknowledgement that Core redelivers) may use this; every other
+   * pre-dispatch failure concludes `not_dispatched` instead.
    */
   async #releaseMutationPreparation(
     preparation: RunnerMutationDispatchRecord,
-  ): Promise<boolean> {
+  ): Promise<void> {
     try {
       const current = parseRunnerMutationDispatchRecord(
         await this.ctx.storage.get<unknown>(
@@ -1593,7 +1630,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         current.action !== preparation.action ||
         current.semanticDigest !== preparation.semanticDigest
       ) {
-        return false;
+        return;
       }
       // No provider dispatch was authorized, so both preparation records can
       // be removed and the exact request may safely retry. Issue both deletes
@@ -1605,7 +1642,66 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         `${RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX}${preparation.semanticDigest}`,
       );
       await Promise.all([authorityDelete, evidenceDelete]);
-      return true;
+    } finally {
+      this.#activeMutationPreparations.delete(preparation.semanticDigest);
+    }
+  }
+
+  /**
+   * Durably concludes a still-`preparing` mutation whose request never
+   * reached the container. The fixed authority moves to the terminal
+   * `not_dispatched` phase instead of being deleted: Core records the Run as
+   * never dispatched, so no later caller (for example a consumer that lost
+   * its lease) may dispatch these semantics afterwards. Every replay answers
+   * the same typed outcome. Resolves the concluded record only when this
+   * call observed that exact `preparing` record and the terminal write is
+   * durable; otherwise `undefined`, and the caller keeps the generic
+   * possibly-dispatched failure (for example after a `dispatched` write whose
+   * acknowledgement was lost).
+   */
+  async #concludeMutationNotDispatched(
+    preparation: RunnerMutationDispatchRecord,
+    error: unknown,
+  ): Promise<RunnerMutationDispatchRecord | undefined> {
+    try {
+      const current = parseRunnerMutationDispatchRecord(
+        await this.ctx.storage.get<unknown>(
+          RUNNER_MUTATION_AUTHORITY_STORAGE_KEY,
+        ),
+      );
+      if (
+        !current ||
+        current.phase !== "preparing" ||
+        current.action !== preparation.action ||
+        current.semanticDigest !== preparation.semanticDigest
+      ) {
+        return undefined;
+      }
+      const sizeLimit =
+        error instanceof RunnerArtifactSizeLimitError ? error : undefined;
+      const concluded: RunnerMutationDispatchRecord = {
+        ...current,
+        phase: "not_dispatched",
+        notDispatched: {
+          reason: safeRunnerFailureReason(error),
+          ...(sizeLimit
+            ? {
+                sizeLimit: {
+                  artifact: sizeLimit.artifact,
+                  maxBytes: sizeLimit.maxBytes,
+                  observedBytes: sizeLimit.observedBytes,
+                },
+              }
+            : {}),
+        },
+      };
+      await this.#writeMutationDispatchRecord(concluded);
+      await this.ctx.storage.sync();
+      return concluded;
+    } catch {
+      // The terminal phase may or may not be durable. Claim nothing; the
+      // original failure keeps its possibly-dispatched envelope.
+      return undefined;
     } finally {
       this.#activeMutationPreparations.delete(preparation.semanticDigest);
     }
@@ -2065,6 +2161,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         return runnerMutationIndeterminateResponse(envelope.action);
       }
       if (claim.kind === "replay") {
+        // Preparation already failed before dispatch for these exact
+        // semantics. Answer the same typed outcome; never dispatch them.
+        if (claim.record.phase === "not_dispatched") {
+          return runnerMutationNotDispatchedResponse(claim.record);
+        }
         // A completed state/output target is only adoptable after the current
         // credential has been freshly verified and the exact stable semantic
         // digest matches the durable dispatch authority.
@@ -2237,32 +2338,33 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         }
       }
     } catch (error) {
-      const releasedMutationPreparation =
-        mutationPreparation !== undefined && mutationDispatch === undefined
-          ? await this.#releaseMutationPreparation(mutationPreparation)
-          : false;
+      let notDispatched: RunnerMutationDispatchRecord | undefined;
+      if (mutationPreparation && !mutationDispatch) {
+        if (error instanceof RunnerArtifactRelayInfrastructureError) {
+          // Retryable 503: Core redelivers this exact ApplyRun, which must be
+          // able to claim the same semantics again.
+          await this.#releaseMutationPreparation(mutationPreparation);
+        } else {
+          // The container never received the mutating request. Fence these
+          // semantics terminally and answer a typed outcome instead of the
+          // generic relay failure, which Core must treat as possibly
+          // dispatched.
+          notDispatched = await this.#concludeMutationNotDispatched(
+            mutationPreparation,
+            error,
+          );
+        }
+      }
       if (releasePreparation && !releaseDispatch) {
         await this.#releaseReleasePreparation(releasePreparation);
       }
-      // The container has not received the mutating request and the durable
-      // `preparing` authority is gone, so no provider mutation can have
-      // started. Say so with a typed outcome instead of the generic relay
-      // failure, which Core must conservatively treat as possibly dispatched.
-      // An ambiguous artifact acknowledgement keeps its retryable envelope.
-      if (
-        releasedMutationPreparation &&
-        mutationPreparation !== undefined &&
-        !(error instanceof RunnerArtifactRelayInfrastructureError)
-      ) {
+      if (notDispatched) {
         console.error("OpenTofu runner mutation failed before dispatch", {
-          action: mutationPreparation.action,
-          reason: safeRunnerFailureReason(error),
+          action: notDispatched.action,
+          reason: notDispatched.notDispatched?.reason,
           errorName: safeRunnerErrorName(error),
         });
-        return runnerMutationNotDispatchedResponse(
-          mutationPreparation.action,
-          error,
-        );
+        return runnerMutationNotDispatchedResponse(notDispatched);
       }
       throw error;
     }
@@ -4951,7 +5053,7 @@ function safeRunnerErrorName(error: unknown): string {
   return "NonError";
 }
 
-function safeRunnerFailureReason(error: unknown): string {
+function safeRunnerFailureReason(error: unknown): RunnerFailureReason {
   if (error instanceof RunnerArtifactSizeLimitError) {
     return "artifact_size_limit";
   }
@@ -6686,8 +6788,20 @@ function parseRunnerMutationDispatchRecord(
       phase !== "dispatched" &&
       phase !== "completed" &&
       phase !== "indeterminate" &&
-      phase !== "orphaned") ||
+      phase !== "orphaned" &&
+      phase !== "not_dispatched") ||
     value.redispatchBlocked !== true
+  ) {
+    return undefined;
+  }
+  const notDispatched =
+    value.notDispatched === undefined
+      ? undefined
+      : parseRunnerMutationNotDispatchedEvidence(value.notDispatched);
+  if (
+    phase === "not_dispatched"
+      ? !notDispatched
+      : value.notDispatched !== undefined
   ) {
     return undefined;
   }
@@ -6715,7 +6829,49 @@ function parseRunnerMutationDispatchRecord(
     fence: fence as number,
     phase,
     ...(completion ? { completion } : {}),
+    ...(notDispatched ? { notDispatched } : {}),
     redispatchBlocked: true,
+  };
+}
+
+function parseRunnerMutationNotDispatchedEvidence(
+  value: unknown,
+): RunnerMutationNotDispatchedEvidence | undefined {
+  if (!isRecord(value)) return undefined;
+  const keys = Object.keys(value).sort().join(",");
+  const reason = stringField(value, "reason");
+  if (
+    (keys !== "reason" && keys !== "reason,sizeLimit") ||
+    !reason ||
+    !(RUNNER_FAILURE_REASONS as readonly string[]).includes(reason)
+  ) {
+    return undefined;
+  }
+  if (value.sizeLimit === undefined) {
+    return { reason: reason as RunnerFailureReason };
+  }
+  const sizeLimit = value.sizeLimit;
+  if (
+    !isRecord(sizeLimit) ||
+    Object.keys(sizeLimit).sort().join(",") !==
+      "artifact,maxBytes,observedBytes" ||
+    !(RUNNER_ARTIFACT_KINDS as readonly unknown[]).includes(
+      sizeLimit.artifact,
+    ) ||
+    !Number.isSafeInteger(sizeLimit.maxBytes) ||
+    (sizeLimit.maxBytes as number) < 0 ||
+    !Number.isSafeInteger(sizeLimit.observedBytes) ||
+    (sizeLimit.observedBytes as number) < 0
+  ) {
+    return undefined;
+  }
+  return {
+    reason: reason as RunnerFailureReason,
+    sizeLimit: {
+      artifact: sizeLimit.artifact as RunnerArtifactKind,
+      maxBytes: sizeLimit.maxBytes as number,
+      observedBytes: sizeLimit.observedBytes as number,
+    },
   };
 }
 
@@ -7871,36 +8027,31 @@ function canonicalRunnerMutationJson(value: unknown): string {
 }
 
 function runnerMutationNotDispatchedResponse(
-  action: RunnerMutationAction,
-  error: unknown,
+  record: RunnerMutationDispatchRecord,
 ): Response {
-  const sizeLimit =
-    error instanceof RunnerArtifactSizeLimitError ? error : undefined;
+  const evidence = record.notDispatched;
+  if (record.phase !== "not_dispatched" || !evidence) {
+    return runnerMutationIndeterminateResponse(record.action);
+  }
+  const sizeLimit = evidence.sizeLimit;
   const payload: RunnerMutationNotDispatchedPayload = {
     error: "OpenTofu runner mutation failed before provider dispatch",
     errorCode: RUNNER_MUTATION_NOT_DISPATCHED_CODE,
     status: "failed",
-    phase: action,
+    phase: record.action,
     retryable: false,
     outcome: "not_dispatched",
     evidence: {
       kind: RUNNER_MUTATION_NOT_DISPATCHED_CODE,
-      action,
-      preparationReleased: true,
+      action: record.action,
+      redispatchBlocked: true,
     },
-    reason: safeRunnerFailureReason(error),
+    reason: evidence.reason,
     detail:
-      "the runner failed before provider dispatch was authorized; the container never received the mutation request",
+      "the runner failed before provider dispatch; the container never received the mutation request and these semantics will not be dispatched",
   };
   return Response.json(
-    sizeLimit
-      ? {
-          ...payload,
-          artifact: sizeLimit.artifact,
-          maxBytes: sizeLimit.maxBytes,
-          observedBytes: sizeLimit.observedBytes,
-        }
-      : payload,
+    sizeLimit ? { ...payload, ...sizeLimit } : payload,
     { status: sizeLimit ? 413 : 500 },
   );
 }
