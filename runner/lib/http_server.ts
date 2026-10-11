@@ -51,6 +51,7 @@ import {
 } from "./run_root_ownership.ts";
 import { RUN_ROOT } from "./constants.ts";
 import { PROVIDER_LOCK_RESTORE_DIGEST_HEADER } from "./transport.ts";
+import { RUNNER_RUN_BUDGET_MS_HEADER, registerRunBudget } from "./run_deadline.ts";
 import {
   completeLocalMutation,
   authorizeLocalMutationPreparation,
@@ -465,6 +466,8 @@ async function handleRunnerRequestBody(
       );
     }
 
+    // Bound every command of this run by the host's forwarded budget, if any.
+    registerRunBudget(request.signal, request.headers.get(RUNNER_RUN_BUDGET_MS_HEADER));
     const body = (await readJsonObject(request)) as RunRequest;
     const runId = decodeURIComponent(match[1]);
 

@@ -32,6 +32,11 @@ Internal navigation:
   and boundary checks.
 - [AI Gateway boundary](./ai-gateway.md) — generic OSS extension seam; hosted
   behavior belongs to Takosumi hosted service.
+- [Runtime lifecycle invariants](./runtime-lifecycle.md) — alarm re-arm budgets,
+  repair sweeps, edge path gates, and the run deadline hierarchy.
+- [Runner mutation detachment](./runner-mutation-detachment-design.md) — design
+  memo only (not implemented) for keeping a mutation's state when its caller is
+  lost.
 
 The public build excludes `internal/**/*.md` and `operations/**/*.md`. When a
 contract becomes user-facing, copy only the stable external behavior into

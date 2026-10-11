@@ -9,6 +9,7 @@ import {
   type OpenTofuRunner,
   OpenTofuRunnerExecutionError,
   OpenTofuRunnerInfrastructureError,
+  type RunExecutionControl,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
   type BeginApplyRunResult,
@@ -896,6 +897,169 @@ test("queued destroy cancellation emits one terminal callback after its early li
   expect(cancelled.startedAt).toBeUndefined();
   expect(queuedEvents).toEqual(["destroy:queued"]);
   expect(terminalEvents).toEqual(["destroy:cancelled:cancelled"]);
+});
+
+// --- host deadline: the dispatcher's invocation bound reaches the runner ---
+
+test("a dispatch deadline reaches plan and apply, and a deadline-stopped apply commits its partial state as failed", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const deadlineAt = Date.parse("2026-10-11T08:30:59.920Z");
+  const planControls: (RunExecutionControl | undefined)[] = [];
+  const applyControls: (RunExecutionControl | undefined)[] = [];
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(6100),
+    newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner: {
+      plan: (_job, control) => {
+        planControls.push(control);
+        return Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: planArtifact(),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: [CLOUDFLARE],
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        });
+      },
+      // What the Cloudflare adapter returns once the runner stopped `tofu
+      // apply` on the forwarded deadline and its object persisted the
+      // partial state: a determined provider failure, not an indeterminate.
+      apply: (job, control) => {
+        applyControls.push(control);
+        return Promise.resolve(
+          fixtureStateCommit({
+            providerExecutionFailure: {
+              kind: "provider_execution_failed" as const,
+              statePersistence: "persisted" as const,
+              errorCode: "apply_failed",
+            },
+            providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+            executionEvidence: fixtureExecutionEvidence(job, "apply", {
+              outcome: "provider_failed_state_persisted",
+            }),
+          }),
+        );
+      },
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+  });
+  const request = await seedUpdatable(store, { capsuleId: "cap_deadline" });
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  await controller.dispatchQueuedRun(
+    {
+      action: "plan",
+      runId: queuedPlan.id,
+      workspaceId: queuedPlan.workspaceId,
+    },
+    { deadlineAt },
+  );
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  await controller.dispatchQueuedRun(
+    {
+      action: "apply",
+      runId: applyRun.id,
+      workspaceId: applyRun.workspaceId,
+    },
+    { deadlineAt },
+  );
+
+  expect(planControls.map((control) => control?.deadlineAt)).toEqual([
+    deadlineAt,
+  ]);
+  expect(applyControls.map((control) => control?.deadlineAt)).toEqual([
+    deadlineAt,
+  ]);
+  // The deadline travels beside, never instead of, the renewal-owned signal.
+  expect(planControls[0]?.signal).toBeInstanceOf(AbortSignal);
+  expect(applyControls[0]?.signal).toBeInstanceOf(AbortSignal);
+  const failed = (await store.getApplyRun(applyRun.id))!;
+  expect(failed.status).toBe("failed");
+  expect(failed.diagnostics?.map((item) => item.code)).toContain(
+    "apply_failed",
+  );
+  expect(failed.stateVersionId).toBeDefined();
+  const capsule = await store.getCapsule(failed.capsuleId!);
+  expect(capsule?.currentStateGeneration).toBe(1);
+  expect(capsule?.currentStateVersionId).toBe(failed.stateVersionId);
+});
+
+test("a dispatch deadline reaches destroy, and a dispatch without one stays unbounded", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const deadlineAt = Date.parse("2026-10-11T08:30:59.920Z");
+  const planControls: (RunExecutionControl | undefined)[] = [];
+  const destroyControls: (RunExecutionControl | undefined)[] = [];
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(6200),
+    newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner: {
+      plan: (_job, control) => {
+        planControls.push(control);
+        return Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: planArtifact(),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: [CLOUDFLARE],
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        });
+      },
+      apply: () => Promise.reject(new Error("not used")),
+      destroy: (job, control) => {
+        destroyControls.push(control);
+        return Promise.resolve(
+          fixtureStateCommit({
+            providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+            executionEvidence: fixtureExecutionEvidence(job, "destroy"),
+          }),
+        );
+      },
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+  });
+  const request = await seedUpdatable(store, { capsuleId: "cap_deadline_destroy" });
+  const { planRun: queuedPlan } = await controller.createPlanRun({
+    ...request,
+    operation: "destroy",
+  });
+  // An HTTP-driven or self-host dispatch passes no control at all.
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    workspaceId: queuedPlan.workspaceId,
+  });
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  expect(planRun.status).toEqual("waiting_approval");
+  await controller.approveRun(planRun.id, { approvedBy: "ops" });
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  await controller.dispatchQueuedRun(
+    {
+      action: "apply",
+      runId: applyRun.id,
+      workspaceId: applyRun.workspaceId,
+    },
+    { deadlineAt },
+  );
+
+  expect(planControls).toHaveLength(1);
+  expect(planControls[0]?.deadlineAt).toBeUndefined();
+  expect("deadlineAt" in (planControls[0] ?? {})).toBe(false);
+  expect(destroyControls.map((control) => control?.deadlineAt)).toEqual([
+    deadlineAt,
+  ]);
+  expect((await store.getApplyRun(applyRun.id))?.status).toBe("succeeded");
 });
 
 test("a minted CredentialBundle never serializes its values", () => {

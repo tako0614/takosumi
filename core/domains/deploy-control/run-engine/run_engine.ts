@@ -337,6 +337,8 @@ import type {
   ReleaseActivator,
   RunClaimResult,
   RunCredentials,
+  RunDispatchControl,
+  RunExecutionControl,
   RunExecutionDispatch,
   RunModuleDispatch,
   TerminalRunPersistResult,
@@ -4766,9 +4768,12 @@ export class RunEngine {
    * consumers themselves convert runner failures into recorded `failed` runs and
    * only rethrow infrastructure/transport errors).
    */
-  async dispatchQueuedRun(dispatch: OpenTofuRunDispatch): Promise<void> {
+  async dispatchQueuedRun(
+    dispatch: OpenTofuRunDispatch,
+    control: RunDispatchControl = {},
+  ): Promise<void> {
     if (dispatch.action === "plan") {
-      await this.runQueuedPlan(dispatch.runId);
+      await this.runQueuedPlan(dispatch.runId, control);
       return;
     }
     if (dispatch.action === "source_sync") {
@@ -4779,7 +4784,7 @@ export class RunEngine {
       await this.runQueuedRestore(dispatch.runId);
       return;
     }
-    await this.runQueuedApply(dispatch.runId);
+    await this.runQueuedApply(dispatch.runId, control);
   }
 
   async runQueuedRestore(runId: string): Promise<Run | undefined> {
@@ -5353,7 +5358,10 @@ export class RunEngine {
    * dispatcher); the Workers consumer ignores the return value and polls the
    * store.
    */
-  async runQueuedPlan(runId: string): Promise<PlanRun | undefined> {
+  async runQueuedPlan(
+    runId: string,
+    control: RunDispatchControl = {},
+  ): Promise<PlanRun | undefined> {
     const preClaimStartedAt = performance.now();
     let planRun = await this.#store.getPlanRun(runId);
     if (!planRun) {
@@ -5450,6 +5458,7 @@ export class RunEngine {
           postMintPolicyAuditMs:
             runEnvironment.planTimings?.postMintPolicyAuditMs ?? 0,
         },
+        control.deadlineAt,
       );
     } catch (error) {
       if (isRunnerInfrastructureRequeueError(error)) throw error;
@@ -5463,7 +5472,10 @@ export class RunEngine {
    * pre-flight, credential mint, and serialized execution on the capsule
    * key. Returns the ApplyRunResponse for the inline dispatcher.
    */
-  async runQueuedApply(runId: string): Promise<ApplyRunResponse> {
+  async runQueuedApply(
+    runId: string,
+    control: RunDispatchControl = {},
+  ): Promise<ApplyRunResponse> {
     const applyRun = await this.#store.getApplyRun(runId);
     if (!applyRun) {
       throw new OpenTofuControllerError(
@@ -5534,6 +5546,7 @@ export class RunEngine {
           dispatch,
           inputs,
           handle,
+          control.deadlineAt,
         ),
       );
     let response: ApplyRunExecutionResponse;
@@ -8143,6 +8156,7 @@ export class RunEngine {
       readonly credentialValidationMs: number;
       readonly postMintPolicyAuditMs: number;
     },
+    deadlineAt?: number,
   ): Promise<PlanRun> {
     try {
       const dispatchPreparationStartedAt = performance.now();
@@ -8218,7 +8232,7 @@ export class RunEngine {
         };
         const runnerPlanStartedAt = performance.now();
         try {
-          return await runner.plan(job, { signal });
+          return await runner.plan(job, runnerExecutionControl(signal, deadlineAt));
         } finally {
           runnerPlanMs = finiteElapsedMs(runnerPlanStartedAt, performance.now());
         }
@@ -8857,6 +8871,7 @@ export class RunEngine {
     dispatch: RunModuleDispatch,
     inputs: PlanRunInputs | undefined,
     lease?: LeaseHandle,
+    deadlineAt?: number,
   ): Promise<ApplyRunExecutionResponse> {
     const startedAt = this.#now();
     const claim = await this.#markApplyRunning(applyRun, profile, startedAt);
@@ -8922,6 +8937,7 @@ export class RunEngine {
           inputs,
           leaseToken,
           lease,
+          deadlineAt,
         );
       }
       // Renewal harness: #dispatchApply's runner.apply() is ONE awaited blocking
@@ -8963,6 +8979,7 @@ export class RunEngine {
                   runnerDispatched = true;
                 },
                 signal: credentialSignal,
+                deadlineAt,
               }),
             (outcome) => Boolean(outcome.result.providerExecutionFailure),
           ),
@@ -9496,6 +9513,8 @@ export class RunEngine {
     readonly dispatch: RunModuleDispatch;
     readonly credentials: RunCredentials | undefined;
     readonly signal: AbortSignal;
+    /** Host invocation deadline forwarded to the runner adapter, if any. */
+    readonly deadlineAt?: number;
     /** Fired immediately before the runner is invoked (runner-dispatched flag). */
     readonly onDispatch: () => void;
   }): Promise<{
@@ -9582,7 +9601,7 @@ export class RunEngine {
         ...(envDispatch.depStates ? { depStates: envDispatch.depStates } : {}),
         ...(credentials ? { credentials } : {}),
       },
-      { signal: input.signal },
+      runnerExecutionControl(input.signal, input.deadlineAt),
     );
     if (result.providerExecutionFailure) {
       const stateWasPersisted =
@@ -11014,6 +11033,7 @@ export class RunEngine {
     inputs: PlanRunInputs | undefined,
     leaseToken: string,
     lease?: LeaseHandle,
+    deadlineAt?: number,
   ): Promise<ApplyRunResponse> {
     if (!planRun.planArtifact) {
       throw new OpenTofuControllerError(
@@ -11219,7 +11239,7 @@ export class RunEngine {
                 : {}),
               ...(credentials ? { credentials } : {}),
             },
-            { signal: credentialSignal },
+            runnerExecutionControl(credentialSignal, deadlineAt),
               );
             },
             (outcome) => Boolean(outcome.providerExecutionFailure),
@@ -12310,4 +12330,15 @@ function providerLockfileObjectRefMatchesRun(ref: string, runId: string): boolea
       ref.endsWith(`/runs/${sanitizedRunId}/provider-lockfile.hcl`) ||
       ref.endsWith(`/opentofu-plan-runs/${sanitizedRunId}/provider-lockfile.hcl`))
   );
+}
+
+/**
+ * The control handed to a runner adapter: the renewal-owned cancellation
+ * signal plus, when the dispatching host has a wall-time limit, its deadline.
+ */
+function runnerExecutionControl(
+  signal: AbortSignal,
+  deadlineAt: number | undefined,
+): RunExecutionControl {
+  return deadlineAt === undefined ? { signal } : { signal, deadlineAt };
 }

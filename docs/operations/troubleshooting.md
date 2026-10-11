@@ -25,6 +25,7 @@
 | producer 更新後に downstream が古い     | Capsule `stale` マーク                                                                                     | dependency graph を確認し、 Workspace update として DAG 順に plan/apply                                                                                                     |
 | runner が起動しない                     | dispatch timeout / runner infrastructure error                                                             | selected RunnerProfile / executor adapter / pool capacity を確認し、queue 使用時は DLQ を確認                                                                               |
 | install / deploy が遅い                 | phase timings で `source_clone` / `tofu_init` / `tofu_apply` のどれかが長い                                | SourceSnapshot reuse、provider mirror/cache、app repo 側の image/build 最適化を分けて確認。Run-scoped Cloudflare container は完了後に破棄されるため、keepalive を cold-start 対策にしない |
+| Cloudflare で Plan / Apply が約 13 分で止まる | Run `failed`、diagnostics の detail に `command timed out after ...ms (run deadline)`、Apply は `providerExecutionFailure` 付きで部分 StateVersion が残る。dispatch 前なら `runner_mutation_not_dispatched` (reason `run_deadline_exceeded`) | 下記「Cloudflare composition の Run 実行時間の上限」を参照。上限は延ばせないので、遅い provider 側を直してから re-plan / apply、または destroy する |
 
 ## 切り分けの基本
 
@@ -55,6 +56,61 @@
    他の adapter は自身の typed infrastructure error と pool policy を使う。
    app bundle / container image /
    DB migration の最適化は app repo / CI / OpenTofu module 側で行う。
+
+## Cloudflare composition の Run 実行時間の上限
+
+Cloudflare reference composition (`deploy/platform`) では、1 つの Plan / Apply /
+Destroy は `OpenTofuRunOwnerObject` の Durable Object alarm 1 回の中で実行されます。
+alarm の wall time は Cloudflare 側で 15 分に制限されており、lease 取得、
+credential mint、container 起動、source / plan / state の復元、source build、
+`tofu init`、`tofu plan` / `tofu apply`、state の永続化、ledger の commit が
+すべてこの 15 分に入ります。
+
+このため run owner は alarm 開始時刻から **13 分後** を期限として dispatch に渡し、
+残り 2 分を runner の応答、部分 state と completion receipt の書き込み、ledger の
+commit のために残します。期限は次のように伝わります。
+
+1. run owner が `deadlineAt` (alarm 開始 + 13 分) を Core に渡す。
+2. Core は値を解釈せず、runner adapter の `RunExecutionControl.deadlineAt` に
+   そのまま渡す。
+3. adapter は `x-takosumi-run-deadline-at` header で runner Durable Object に渡す。
+4. runner Durable Object は転送の瞬間の残り時間を `x-takosumi-runner-budget-ms`
+   として container に渡す。残りが 60 秒未満の Apply / Destroy は container に
+   渡さず、`runner_mutation_not_dispatched` (reason `run_deadline_exceeded`) で
+   確定的に失敗させる。provider には一度も届いていないので Capsule の
+   runtime safety は変わらない。
+5. container はその Run のすべての command (source build、init、plan、apply、
+   output) を、command 自身の `maxRunSeconds` と Run 全体の残り時間の短い方で
+   打ち切る。打ち切りの直前に SIGINT を送り、猶予 (上限 30 秒、timeout の 1/4
+   以内) の後に SIGKILL する。OpenTofu は SIGINT で provider を止めて state を
+   書いてから終了するので、state ファイルが書きかけで残りにくい。
+
+期限で止まった Apply は、通常の provider 実行失敗として扱われます。runner
+Durable Object は部分 state を R2 に書き、completion receipt を記録し、Core は
+部分 StateVersion 付きの `failed` として commit します。Capsule の runtime safety
+は `unknown` になりますが、state が残っているので Destroy や、新しい Plan からの
+Apply で回復できます。takeover が同じ ApplyRun を再送しても completion
+receipt を採用するだけで、provider を再実行しません。
+
+**約 13 分を超える Plan / Apply は、Cloudflare composition では実行できません。**
+これは alarm の wall time から来る上限で、設定で延ばす手段はありません。長い実行を
+alarm の外へ出す設計 (architecture audit A-01、
+[mutation の切り離しの設計メモ](../internal/runner-mutation-detachment-design.md))
+が入るまでこの上限が続きます。Bun + Postgres composition (`deploy/node-postgres`)
+には alarm が無く、この期限も渡らないので、従来どおり command ごとの
+`maxRunSeconds` だけが上限です。
+
+runner profile の `maxRunSeconds` (既定 900 秒) は、この上限の代わりになりません。
+command ごとの上限で、しかも alarm より後に数え始めるので、Cloudflare では必ず
+alarm の wall より後に発火します。期限の伝達が入った後は Run 全体の期限が先に
+効くので、`maxRunSeconds` を下げる必要はありません。
+
+期限で止まった Apply の残骸は、普段の失敗と同じ手順で片付けます。Run の
+diagnostics の detail に `(run deadline)` があれば期限による停止です。provider 側でどの resource
+が作られたかは部分 StateVersion に残っています。期限の伝達より前の runner image
+で起きた `runner_mutation_indeterminate` (alarm が `exceededWallTime` で切れた
+もの) は state が残っていないので、provider 側の resource を operator が個別に
+確認して片付ける必要があります。
 
 ## エスカレーション
 

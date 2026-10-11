@@ -12,8 +12,11 @@ import {
   type SealedArtifact,
 } from "../state_crypto.ts";
 import {
+  parseRunDeadlineAt,
+  RUN_DEADLINE_AT_HEADER,
   RUNNER_MUTATION_INDETERMINATE_CODE,
   RUNNER_MUTATION_NOT_DISPATCHED_CODE,
+  RUNNER_RUN_BUDGET_MS_HEADER,
   type RunnerMutationAction,
   type RunnerMutationIndeterminatePayload,
   type RunnerMutationNotDispatchedPayload,
@@ -184,6 +187,7 @@ const RUNNER_FAILURE_REASONS = [
   "request_aborted",
   "container_unavailable",
   "relay_failure",
+  "run_deadline_exceeded",
 ] as const;
 
 type RunnerFailureReason = (typeof RUNNER_FAILURE_REASONS)[number];
@@ -446,6 +450,13 @@ const RUNNER_RESTORE_STAGE_COLLECT_AFTER_MS = 60 * 60 * 1_000;
 const RUNNER_RESTORE_STAGE_COLLECT_LIMIT = 16;
 const RUNNER_RESTORE_STAGE_COLLECT_RETRY_MS = 5 * 60 * 1_000;
 const RUNNER_RESTORE_STAGE_COLLECT_CONTINUE_MS = 1_000;
+/**
+ * Least time an Apply/Destroy must still have before its caller's deadline for
+ * this object to hand it to the container. Below it, init plus a provider
+ * mutation cannot finish and persist state in time, so the semantics are
+ * concluded `not_dispatched` (a definite pre-provider failure) instead.
+ */
+const RUNNER_MIN_MUTATION_DISPATCH_BUDGET_MS = 60_000;
 
 /**
  * Value-free durable completion receipt for one dispatched mutation.
@@ -2053,6 +2064,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       return await this.#containerFetch(request);
     }
     const runId = decodeURIComponent(match[1]!);
+    // The caller's invocation deadline, if its host has a wall-time limit.
+    // Transport metadata only: never part of the run body or its identity.
+    const runDeadlineAt = parseRunDeadlineAt(
+      request.headers.get(RUN_DEADLINE_AT_HEADER),
+    );
     const inputRestoreReadinessStartedAt = monotonicNow();
     const bodyText = await request.text();
     const envelope = parseRunEnvelope(bodyText);
@@ -2140,9 +2156,18 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           dispatchBody = bodyText;
         }
       }
+      const headers = runnerRequestHeaders(request);
+      if (runDeadlineAt !== undefined) {
+        // Relative, computed at the moment of forwarding: the container never
+        // compares its clock with this one.
+        headers.set(
+          RUNNER_RUN_BUDGET_MS_HEADER,
+          String(Math.max(0, Math.floor(runDeadlineAt - Date.now()))),
+        );
+      }
       return new Request(request.url, {
         method: request.method,
-        headers: runnerRequestHeaders(request),
+        headers,
         body: dispatchBody,
         signal: request.signal,
       });
@@ -2313,6 +2338,15 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
                 "OpenTofu runner mutation was aborted before dispatch",
                 "AbortError",
               );
+        }
+        // A mutation that cannot finish before its caller's deadline is
+        // concluded here, while it provably never reached a provider, instead
+        // of being dispatched and cut off with its caller.
+        if (
+          runDeadlineAt !== undefined &&
+          runDeadlineAt - Date.now() < RUNNER_MIN_MUTATION_DISPATCH_BUDGET_MS
+        ) {
+          throw new RunnerRunDeadlineExceededError();
         }
         mutationDispatch =
           await this.#markMutationDispatched(mutationPreparation);
@@ -4735,6 +4769,14 @@ class RunnerRestoreFenceLostError extends Error {
   }
 }
 
+/** The caller's deadline left too little time to dispatch a mutation. */
+class RunnerRunDeadlineExceededError extends Error {
+  constructor() {
+    super("runner run deadline leaves no time for provider dispatch");
+    this.name = "RunnerRunDeadlineExceededError";
+  }
+}
+
 class AsyncSerialLock {
   #tail: Promise<void> = Promise.resolve();
 
@@ -5075,6 +5117,9 @@ function safeRunnerFailureReason(error: unknown): RunnerFailureReason {
   }
   if (error instanceof RunnerRestoreFenceLostError) {
     return "restore_fence_lost";
+  }
+  if (error instanceof RunnerRunDeadlineExceededError) {
+    return "run_deadline_exceeded";
   }
   if (error instanceof DOMException && error.name === "AbortError") {
     return "request_aborted";

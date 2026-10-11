@@ -1037,6 +1037,46 @@ test("OpenTofu runner Durable Object strips caller credentials before container 
   assert.equal(capturedHeaders[0]!.get("x-takosumi-provider-credential"), null);
 });
 
+test("OpenTofu runner Durable Object forwards a run deadline to the container only as a relative budget", async () => {
+  const capturedHeaders: Headers[] = [];
+  const runner = runnerWithContainer(new FakeR2Bucket(), {
+    async containerFetch(request) {
+      capturedHeaders.push(new Headers(request.headers));
+      return Response.json({ status: "succeeded" });
+    },
+  });
+  const plan = (headers: Record<string, string>) =>
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId: "plan_1",
+        request: {},
+      }),
+    });
+
+  const bounded = await runner.fetch(
+    plan({ "x-takosumi-run-deadline-at": String(Date.now() + 5 * 60_000) }),
+  );
+  const unbounded = await runner.fetch(plan({}));
+  const malformed = await runner.fetch(
+    plan({ "x-takosumi-run-deadline-at": "soon" }),
+  );
+
+  assert.equal(bounded.status, 200);
+  assert.equal(unbounded.status, 200);
+  assert.equal(malformed.status, 200);
+  assert.equal(capturedHeaders.length, 3);
+  const budget = Number(capturedHeaders[0]!.get("x-takosumi-runner-budget-ms"));
+  assert.ok(budget > 4 * 60_000 && budget <= 5 * 60_000, String(budget));
+  assert.equal(capturedHeaders[0]!.get("x-takosumi-run-deadline-at"), null);
+  // Without a (valid) deadline the container sees exactly what it saw before.
+  assert.equal(capturedHeaders[1]!.get("x-takosumi-runner-budget-ms"), null);
+  assert.equal(capturedHeaders[2]!.get("x-takosumi-runner-budget-ms"), null);
+});
+
 test("OpenTofu runner Durable Object starts the container before dispatch", async () => {
   const calls: string[] = [];
   const runner = runnerWithContainer(

@@ -5,7 +5,11 @@ import {
   OpenTofuControllerError,
   RUNNER_INFRASTRUCTURE_REQUEUED_REASON,
 } from "../../../../core/domains/deploy-control/errors.ts";
-import { OpenTofuRunOwnerObject } from "../../../../worker/src/durable/OpenTofuRunOwnerObject.ts";
+import {
+  OpenTofuRunOwnerObject,
+  RUN_OWNER_DISPATCH_BUDGET_MS,
+  type RunOwnerDispatchControl,
+} from "../../../../worker/src/durable/OpenTofuRunOwnerObject.ts";
 import { createVirtualAlarmClock } from "../../../helpers/lifecycle/virtual_alarm_clock.ts";
 import type { CloudflareWorkerEnv } from "../../../../worker/src/bindings.ts";
 
@@ -102,6 +106,113 @@ for (const terminalStatus of [
     assert.equal(storage.alarmAt, undefined);
   });
 }
+
+test("OpenTofu run owner hands each alarm dispatch a deadline inside the alarm wall", async () => {
+  // A Durable Object alarm invocation is cut off at 15 minutes of wall time.
+  // The dispatch it awaits must finish, including the runner's partial-state
+  // persistence and the ledger commit, before that, so the deadline it hands
+  // down keeps a reserve for exactly that work.
+  assert.equal(RUN_OWNER_DISPATCH_BUDGET_MS, 13 * 60 * 1000);
+  const storage = new FakeDoStorage();
+  const alarmStartedAt = Date.parse("2026-10-11T08:17:59.920Z");
+  let now = alarmStartedAt;
+  const controls: (RunOwnerDispatchControl | undefined)[] = [];
+  const owner = new OpenTofuRunOwnerObject(
+    { storage },
+    {} as CloudflareWorkerEnv,
+    {
+      now: () => now,
+      dispatch: (_dispatch, _env, control) => {
+        controls.push(control);
+        // The dispatch itself takes wall time; the deadline stays anchored to
+        // the alarm start, not to whenever the owner reads its clock next.
+        now += 60_000;
+        return Promise.resolve();
+      },
+      readRunStatus: () => Promise.resolve("failed"),
+    },
+  );
+
+  await start(owner, "apply");
+  await owner.alarm();
+
+  assert.deepEqual(controls, [
+    { deadlineAt: alarmStartedAt + RUN_OWNER_DISPATCH_BUDGET_MS },
+  ]);
+  assert.ok(
+    controls[0]!.deadlineAt! < alarmStartedAt + 15 * 60 * 1000,
+    "the runner deadline must precede the alarm wall",
+  );
+});
+
+test("OpenTofu run owner shares one alarm's deadline with its inline controller retry", async () => {
+  const storage = new FakeDoStorage();
+  const alarmStartedAt = Date.parse("2026-10-11T08:17:59.920Z");
+  let now = alarmStartedAt;
+  const controls: (RunOwnerDispatchControl | undefined)[] = [];
+  let owner!: OpenTofuRunOwnerObject;
+  owner = new OpenTofuRunOwnerObject({ storage }, {} as CloudflareWorkerEnv, {
+    now: () => now,
+    dispatch: async (_dispatch, _env, control) => {
+      controls.push(control);
+      now += 5_000;
+      if (controls.length === 1) {
+        const response = await owner.fetch(
+          new Request("https://run-owner/start", {
+            method: "POST",
+            body: JSON.stringify({
+              kind: "takosumi.opentofu-run-owner.start@v1",
+              action: "apply",
+              runId: "run_1",
+              workspaceId: "space_1",
+              cause: "controller_retry",
+            }),
+          }),
+        );
+        assert.equal(response.status, 202);
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "retryable runner infrastructure error: apply run run_1 requeued",
+          { reason: RUNNER_INFRASTRUCTURE_REQUEUED_REASON },
+        );
+      }
+    },
+    readRunStatus: () => Promise.resolve("succeeded"),
+  });
+
+  await start(owner, "apply");
+  await owner.alarm();
+
+  const deadlineAt = alarmStartedAt + RUN_OWNER_DISPATCH_BUDGET_MS;
+  assert.deepEqual(controls, [{ deadlineAt }, { deadlineAt }]);
+});
+
+test("OpenTofu run owner drain dispatches without an alarm deadline", async () => {
+  // `/drain` is an HTTP request with a connected caller, not an alarm: no
+  // invocation wall applies, so nothing may shorten the run.
+  const storage = new FakeDoStorage();
+  const controls: (RunOwnerDispatchControl | undefined)[] = [];
+  const owner = new OpenTofuRunOwnerObject(
+    { storage },
+    {} as CloudflareWorkerEnv,
+    {
+      now: () => Date.parse("2026-10-11T08:17:59.920Z"),
+      dispatch: (_dispatch, _env, control) => {
+        controls.push(control);
+        return Promise.resolve();
+      },
+      readRunStatus: () => Promise.resolve("succeeded"),
+    },
+  );
+
+  await start(owner, "apply");
+  const drain = await owner.fetch(
+    new Request("https://run-owner/drain", { method: "POST" }),
+  );
+
+  assert.equal(drain.status, 200);
+  assert.deepEqual(controls, [{}]);
+});
 
 test("OpenTofu run owner debug and drain expose operator-safe state", async () => {
   const storage = new FakeDoStorage();

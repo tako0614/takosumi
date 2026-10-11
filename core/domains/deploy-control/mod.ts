@@ -478,6 +478,24 @@ export interface RunExecutionDispatch {
  */
 export interface RunExecutionControl {
   readonly signal?: AbortSignal;
+  /**
+   * Absolute epoch-millisecond instant by which the host invocation that is
+   * waiting for this operation needs the adapter's reply, when that host has a
+   * hard wall-time limit. Core never interprets it; it only forwards what the
+   * dispatcher supplied. An adapter that honours it must make its executor
+   * stop on its own definite timeout path (persisting what it can) before this
+   * instant, instead of being cut off together with the host. Absent means
+   * the host invocation is unbounded.
+   */
+  readonly deadlineAt?: number;
+}
+
+/**
+ * Host-side bounds for one {@link OpenTofuController.dispatchQueuedRun} call.
+ * Only the host that runs the dispatch knows its own invocation limit.
+ */
+export interface RunDispatchControl {
+  readonly deadlineAt?: number;
 }
 
 export interface OpenTofuPlanJob
@@ -1907,8 +1925,11 @@ export class OpenTofuController {
     return this.#runEngine.createApplyRun(request, context, internal);
   }
 
-  dispatchQueuedRun(dispatch: OpenTofuRunDispatch): Promise<void> {
-    return this.#runEngine.dispatchQueuedRun(dispatch);
+  dispatchQueuedRun(
+    dispatch: OpenTofuRunDispatch,
+    control: RunDispatchControl = {},
+  ): Promise<void> {
+    return this.#runEngine.dispatchQueuedRun(dispatch, control);
   }
 
   runQueuedRestore(runId: string): Promise<Run | undefined> {

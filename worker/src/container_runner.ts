@@ -48,8 +48,10 @@ import {
 } from "takosumi-contract/sources";
 import { recordWorkerMetric, type WorkerMetricSink } from "./metrics.ts";
 import {
+  RUN_DEADLINE_AT_HEADER,
   RUNNER_MUTATION_INDETERMINATE_CODE,
   RUNNER_MUTATION_NOT_DISPATCHED_CODE,
+  runDeadlineAtHeaderValue,
 } from "./runner_protocol.ts";
 
 /**
@@ -234,6 +236,7 @@ export class CloudflareContainerOpenTofuRunner
   ): Promise<OpenTofuPlanResult> {
     const result = await this.#runContainer("plan", job.planRun.id, job, {
       signal: control?.signal,
+      deadlineAt: control?.deadlineAt,
     });
     const planDigest =
       stringFromRecord(result, "planDigest") ??
@@ -304,6 +307,7 @@ export class CloudflareContainerOpenTofuRunner
       job,
       {
         signal: control?.signal,
+        deadlineAt: control?.deadlineAt,
         runnerObjectName: job.applyRun.id,
         adoption: {
           applyRunId: job.applyRun.id,
@@ -388,6 +392,7 @@ export class CloudflareContainerOpenTofuRunner
       job,
       {
         signal: control?.signal,
+        deadlineAt: control?.deadlineAt,
         runnerObjectName: job.applyRun.id,
         adoption: {
           applyRunId: job.applyRun.id,
@@ -770,6 +775,12 @@ export class CloudflareContainerOpenTofuRunner
       readonly timeoutMs?: number;
       readonly signal?: AbortSignal;
       /**
+       * Absolute epoch-ms instant by which the invocation carrying this run
+       * needs the reply (see {@link RUN_DEADLINE_AT_HEADER}). Absent means
+       * unbounded, exactly as before.
+       */
+      readonly deadlineAt?: number;
+      /**
        * Durable Object instance authority. Apply/destroy restore the reviewed
        * Plan artifact under its original Run id, but must not reuse that
        * Plan's Container: its activity shutdown can race the mutation.
@@ -798,6 +809,7 @@ export class CloudflareContainerOpenTofuRunner
     );
     const workerAdapterRpcStartedAt = monotonicNow();
     const timeoutMs = positiveTimeoutMs(options.timeoutMs);
+    const deadlineAtHeader = runDeadlineAtHeaderValue(options.deadlineAt);
     const controller =
       timeoutMs || options.signal ? new AbortController() : undefined;
     const abortFromCaller = (): void => {
@@ -818,7 +830,12 @@ export class CloudflareContainerOpenTofuRunner
               `https://opentofu-runner.internal/runs/${encodeURIComponent(runId)}`,
               {
                 method: "POST",
-                headers: { "content-type": "application/json" },
+                headers: {
+                  "content-type": "application/json",
+                  ...(deadlineAtHeader
+                    ? { [RUN_DEADLINE_AT_HEADER]: deadlineAtHeader }
+                    : {}),
+                },
                 body: JSON.stringify({
                   kind: "takosumi.opentofu-run@v1",
                   action,

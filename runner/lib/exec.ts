@@ -21,6 +21,17 @@ import {
 import {
   baseCommandEnv,
 } from "./credentials.ts";
+import { remainingRunBudgetMs } from "./run_deadline.ts";
+
+/**
+ * Upper bound of the window between asking a timed-out command to stop
+ * (SIGINT) and killing it (SIGKILL). OpenTofu answers its first interrupt by
+ * stopping its providers and persisting state, so a timed-out Apply leaves a
+ * consistent state file instead of one cut mid-write. The window is taken from
+ * inside the timeout, never added to it: the hard bound stays exactly where the
+ * profile or the run deadline put it.
+ */
+const COMMAND_INTERRUPT_GRACE_MAX_MS = 30_000;
 
 export async function readResponseBytesWithCap(
   response: Pick<Request, "headers" | "body">,
@@ -163,6 +174,15 @@ export async function runCommand(
   if (signal?.aborted) {
     return { exitCode: 130, stdout: "", stderr: "command aborted" };
   }
+  const runBudgetMs = remainingRunBudgetMs(signal);
+  const timeoutMs = commandTimeoutMs(options.context?.timeoutMs, runBudgetMs);
+  if (timeoutMs !== undefined && timeoutMs <= 0) {
+    return {
+      exitCode: 124,
+      stdout: "",
+      stderr: "command timed out: run deadline reached before start",
+    };
+  }
   const isolate = options.isolateProcessGroup === true;
   const subprocess = Bun.spawn([...command], {
     cwd: options.cwd,
@@ -185,8 +205,22 @@ export async function runCommand(
     subprocess.exited.then((exitCode) => ({ kind: "exit", exitCode })),
   ];
   let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutMs = options.context?.timeoutMs;
-  if (timeoutMs && timeoutMs > 0) {
+  let interrupt: ReturnType<typeof setTimeout> | undefined;
+  let interrupted = false;
+  if (timeoutMs !== undefined) {
+    const graceMs = Math.min(
+      COMMAND_INTERRUPT_GRACE_MAX_MS,
+      Math.floor(timeoutMs / 4),
+    );
+    if (graceMs > 0) {
+      interrupt = setTimeout(() => {
+        if (subprocess.exitCode !== null || subprocess.signalCode !== null) {
+          return;
+        }
+        interrupted = true;
+        interruptProcess(subprocess.pid);
+      }, timeoutMs - graceMs);
+    }
     terminations.push(
       new Promise<Termination>((resolve) => {
         timeout = setTimeout(
@@ -209,13 +243,19 @@ export async function runCommand(
   }
 
   try {
-    const termination = await Promise.race(terminations);
+    const raced = await Promise.race(terminations);
+    // A command that exited only because its timeout interrupted it is a
+    // timed-out command, whatever status it chose to exit with.
+    const termination: Termination =
+      raced.kind === "exit" && interrupted
+        ? { kind: "timeout", exitCode: 124 }
+        : raced;
     if (isolate) {
       // On direct exit this kills any descendant still holding inherited
       // output pipes. On timeout/abort it also kills the direct child.
       killProcessGroup(subprocess.pid);
     }
-    if (termination.kind !== "exit") {
+    if (raced.kind !== "exit") {
       // Keep direct-child timeout/cancel semantics even on a platform where
       // negative-pid process-group signalling is unavailable.
       killProcess(subprocess.pid);
@@ -229,7 +269,11 @@ export async function runCommand(
     ]);
     const terminationDiagnostic =
       termination.kind === "timeout"
-        ? `command timed out after ${timeoutMs}ms`
+        ? `command timed out after ${timeoutMs}ms${
+            runBudgetMs !== undefined && timeoutMs === runBudgetMs
+              ? " (run deadline)"
+              : ""
+          }`
         : termination.kind === "abort"
           ? "command aborted"
           : undefined;
@@ -242,9 +286,32 @@ export async function runCommand(
     };
   } finally {
     if (timeout) clearTimeout(timeout);
+    if (interrupt) clearTimeout(interrupt);
     if (signal && abortListener) {
       signal.removeEventListener("abort", abortListener);
     }
+  }
+}
+
+/**
+ * The effective bound of one command: the tighter of its own profile timeout
+ * and what is left of the run's deadline. `undefined` means unbounded.
+ */
+function commandTimeoutMs(
+  commandMs: number | undefined,
+  runBudgetMs: number | undefined,
+): number | undefined {
+  const own = commandMs && commandMs > 0 ? commandMs : undefined;
+  if (runBudgetMs === undefined) return own;
+  return own === undefined ? runBudgetMs : Math.min(own, runBudgetMs);
+}
+
+/** Asks one direct child to stop; an already-exited process is not an error. */
+function interruptProcess(pid: number): void {
+  try {
+    process.kill(pid, "SIGINT");
+  } catch {
+    // The process is already gone.
   }
 }
 

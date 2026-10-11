@@ -90,6 +90,34 @@ const RUN_OWNER_CONTROLLER_POLL = new PollSchedule({
 // user-visible stall after runner infrastructure resets.
 const RUN_OWNER_RUNNING_STALE_MS = 90 * 1000;
 
+/**
+ * Cloudflare's documented wall-time limit for one Durable Object alarm
+ * invocation. The alarm below awaits the whole controller dispatch, so this is
+ * the hard ceiling of every Run this owner drives: lease, credential mint,
+ * container start, restore, build, init, plan/apply, state persistence, and
+ * the Core ledger commit all happen inside it. When the platform cuts the
+ * alarm off, the runner reply has no receiver and an Apply ends
+ * `runner_mutation_indeterminate` with its partial state lost.
+ */
+const DURABLE_OBJECT_ALARM_WALL_MS = 15 * 60 * 1000;
+
+/**
+ * Time kept back from the alarm wall for everything that must happen after
+ * the runner stops on its own deadline: the runner's reply, the Durable
+ * Object's partial-state and completion-receipt writes, the Core ledger
+ * commit, and this owner's record update.
+ */
+const RUN_OWNER_EXECUTION_RESERVE_MS = 2 * 60 * 1000;
+
+/**
+ * What one alarm invocation gives a dispatch. The runner executes against
+ * this deadline (see `RunExecutionControl.deadlineAt`), so its own definite
+ * timeout path, which persists state, always fires before the platform kills
+ * the alarm.
+ */
+export const RUN_OWNER_DISPATCH_BUDGET_MS =
+  DURABLE_OBJECT_ALARM_WALL_MS - RUN_OWNER_EXECUTION_RESERVE_MS;
+
 type DispatchableRunAction = "plan" | "apply" | "source_sync" | "restore";
 
 interface RunOwnerStartRequest {
@@ -161,6 +189,12 @@ interface DurableObjectState {
   readonly storage: DurableObjectStorage;
 }
 
+/** Bounds of the invocation a dispatch runs in. */
+export interface RunOwnerDispatchControl {
+  /** Absolute epoch-ms instant the runner must finish by; absent = unbounded. */
+  readonly deadlineAt?: number;
+}
+
 interface DurableObjectStorage {
   get<T = unknown>(key: string): Promise<T | undefined>;
   put<T>(key: string, value: T): Promise<void>;
@@ -179,6 +213,7 @@ export interface OpenTofuRunOwnerObjectDeps {
       readonly workspaceId: string;
     },
     env: CloudflareWorkerEnv,
+    control?: RunOwnerDispatchControl,
   ) => Promise<void>;
   readonly readRunStatus?: (
     dispatch: {
@@ -203,7 +238,11 @@ export interface OpenTofuRunOwnerObjectDeps {
  *
  * The create path persists only the run identity here. The owner alarm performs
  * the long controller dispatch and owns retry/final-failure bookkeeping, so an
- * HTTP request lifetime never bounds a plan/apply/restore/source-sync run.
+ * HTTP request lifetime never bounds a plan/apply/restore/source-sync run. The
+ * alarm's own wall time does: a plan/apply gets {@link RUN_OWNER_DISPATCH_BUDGET_MS}
+ * from the alarm start and is handed that deadline, so it ends on the runner's
+ * definite timeout path instead of being cut off with the alarm. Supporting
+ * longer runs needs execution outside the alarm (architecture audit A-01).
  */
 export class OpenTofuRunOwnerObject {
   readonly #now: () => number;
@@ -266,8 +305,11 @@ export class OpenTofuRunOwnerObject {
   }
 
   async alarm(): Promise<void> {
+    // Measured once per invocation: an inline controller retry below runs in
+    // the same alarm and therefore shares the same wall.
+    const deadlineAt = this.#now() + RUN_OWNER_DISPATCH_BUDGET_MS;
     try {
-      await this.#dispatchDueRun({ drainControllerRetry: true });
+      await this.#dispatchDueRun({ drainControllerRetry: true, deadlineAt });
     } catch {
       const retryAt = this.#now() + RUN_OWNER_RETRY_BASE_DELAY_MS;
       await this.#scheduleAlarm(retryAt);
@@ -369,7 +411,11 @@ export class OpenTofuRunOwnerObject {
   }
 
   async #dispatchDueRun(
-    options: { readonly drainControllerRetry?: boolean } = {},
+    options: {
+      readonly drainControllerRetry?: boolean;
+      /** Set only by {@link alarm}; an HTTP `/drain` has a connected caller. */
+      readonly deadlineAt?: number;
+    } = {},
   ): Promise<void> {
     const record = await this.#readRecord();
     if (!record) return;
@@ -405,7 +451,13 @@ export class OpenTofuRunOwnerObject {
         runId: record.runId,
         workspaceId: record.workspaceId,
       };
-      await this.#dispatch(dispatch, this.env);
+      await this.#dispatch(
+        dispatch,
+        this.env,
+        options.deadlineAt === undefined
+          ? {}
+          : { deadlineAt: options.deadlineAt },
+      );
       const runStatus = await this.#readRunStatus(dispatch, this.env).catch(
         () => "unknown" as const,
       );
@@ -447,7 +499,12 @@ export class OpenTofuRunOwnerObject {
         options.drainControllerRetry === true,
       );
       if (retryReady && options.drainControllerRetry === true) {
-        await this.#dispatchDueRun({ drainControllerRetry: false });
+        await this.#dispatchDueRun({
+          drainControllerRetry: false,
+          ...(options.deadlineAt === undefined
+            ? {}
+            : { deadlineAt: options.deadlineAt }),
+        });
       }
     }
   }
@@ -772,9 +829,10 @@ async function dispatchToController(
     readonly workspaceId: string;
   },
   env: CloudflareWorkerEnv,
+  control: RunOwnerDispatchControl = {},
 ): Promise<void> {
   const service = await cachedRunOwnerDeployControlService(env);
-  await service.operations.dispatchQueuedRun(dispatch);
+  await service.operations.dispatchQueuedRun(dispatch, control);
 }
 
 async function readRunStatusFromController(

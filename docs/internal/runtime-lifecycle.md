@@ -1,6 +1,6 @@
 # Runtime lifecycle invariants (alarms, polls, edge routing)
 
-このドキュメントは、runtime 側の 3 つの不変条件と、それを「守る」のではなく
+このドキュメントは、runtime 側の 4 つの不変条件と、それを「守る」のではなく
 「破れない形にする」ための機構をまとめる。
 
 ## 1. alarm を再武装するコードは、必ず上限と ledger を持つ
@@ -64,6 +64,42 @@ Host migration surface も提供しない。
 しない。廃止済み table に row があれば forward migration は fail-closed で停止する。
 operator は immediate predecessor または out-of-band database tooling で inventory / export
 を取り、explicit disposition を記録してから empty-state migration を再実行する。
+
+## 4. 外部実行は、host invocation より先に自分の期限で止まる
+
+正本: [`worker/src/durable/OpenTofuRunOwnerObject.ts`](../../worker/src/durable/OpenTofuRunOwnerObject.ts)
+(`RUN_OWNER_DISPATCH_BUDGET_MS`)、[`runner/lib/run_deadline.ts`](../../runner/lib/run_deadline.ts)
+
+Cloudflare composition の run owner は、dispatch 全体を Durable Object alarm の中で
+await する。alarm の wall time は 15 分で、Core の lease / heartbeat 更新にも、
+runner の command ごとの `maxRunSeconds` にも、それより短い上限は無かった。
+内側の期限がすべて外側の wall 以上だと、いちばん粗い打ち切り (platform による
+alarm の kill) が必ず勝つ。2026-10-11 の install-serving E2E では、この打ち切りで
+runner の応答に受け手がいなくなり、tofu は caller の abort で SIGKILL され、部分
+state は container の一時ディスクと一緒に消えた。completion receipt が無いので
+takeover は `runner_mutation_indeterminate` としか答えられず、provider 側に作られた
+8 resource が state の外に残った。
+
+不変条件: **期限は、wall を知っている部品から、tofu を確定的に止められる部品まで
+明示的に渡し、内側ほど早く切れるようにする。**
+
+- run owner は alarm 開始 + 13 分を `deadlineAt` として dispatch に渡す。残り
+  2 分は応答、部分 state と completion receipt、ledger commit のための予備。
+- Core は `RunExecutionControl.deadlineAt` を解釈せず runner adapter に渡すだけ。
+  substrate の制限を Core が知らないままにするため。
+- runner Durable Object は転送の瞬間の残り時間を相対値で container に渡す。値は
+  run body の外 (header) にあるので mutation identity に入らず、takeover が別の
+  期限で再送しても同じ dispatch 権限として扱われる。残りが 60 秒未満なら
+  dispatch せず `not_dispatched` で確定させる。
+- container は Run のすべての command を `min(command の timeout, Run の残り)` で
+  打ち切り、その手前で SIGINT、猶予の後に SIGKILL する。期限で止まった apply は
+  既存の `providerExecutionFailure` 経路に乗り、部分 state が保存される。
+
+header が無ければどの層も従来どおり動く。古い Durable Object と新しい image、
+新しい Durable Object と古い image のどちらの組み合わせでも、期限が効かないだけで
+挙動は以前と同じになる。期限そのものを延ばす手段は無く、約 13 分を超える実行は
+alarm の外へ出す設計 (architecture audit A-01、
+[mutation の切り離しの設計メモ](./runner-mutation-detachment-design.md)) が必要。
 
 ## テスト側の機構
 
