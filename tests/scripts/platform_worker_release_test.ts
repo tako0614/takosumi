@@ -370,6 +370,13 @@ function codeRoutes(drift?: CodeRouteDrift): readonly Record<string, unknown>[] 
   return [current];
 }
 
+// A Container-bearing Worker's `/workers/scripts` entry carries the Durable
+// Object classes its Container is attached to. The 2026-10-11 staging readback
+// of `takosumi-staging` listed exactly the keys below, `containers` included as
+// a one-element array; the element is the same `{ class_name }` attachment the
+// Version's `script_runtime.containers` carries.
+const CODE_SCRIPT_CONTAINERS = [{ class_name: "OpenTofuRunnerObject" }] as const;
+
 function codeNativeRead(
   configSource: string,
   options: {
@@ -377,6 +384,8 @@ function codeNativeRead(
     readonly unknownSetting?: boolean;
     readonly cronDrift?: boolean;
     readonly domainDrift?: boolean;
+    readonly scriptContainers?: unknown;
+    readonly omitScriptContainers?: boolean;
   } = {},
 ) {
   const config = Bun.TOML.parse(configSource) as Record<string, any>;
@@ -417,6 +426,13 @@ function codeNativeRead(
         tags: [],
         tail_consumers: null,
         observability,
+        ...(options.omitScriptContainers
+          ? {}
+          : {
+            containers: structuredClone(
+              options.scriptContainers ?? CODE_SCRIPT_CONTAINERS,
+            ),
+          }),
       }],
       resultInfo: null,
     }],
@@ -463,6 +479,7 @@ function codeNativeRead(
 async function exerciseCodeLane(options: {
   readonly topologyDriftAt?: number;
   readonly routeDrift?: CodeRouteDrift;
+  readonly containerDrift?: boolean;
   readonly uploadFails?: boolean;
 } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "takosumi-code-lane-test-"));
@@ -573,9 +590,12 @@ async function exerciseCodeLane(options: {
         nativeRead: async (path) => {
           if (path === "/workers/scripts") topologySnapshot += 1;
           if (options.topologyDriftAt === topologySnapshot) {
-            return codeNativeRead(source, {
-              routes: codeRoutes(options.routeDrift ?? "add"),
-            })(path);
+            return codeNativeRead(
+              source,
+              options.containerDrift
+                ? { scriptContainers: [{ class_name: "CoordinationObject" }] }
+                : { routes: codeRoutes(options.routeDrift ?? "add") },
+            )(path);
           }
           return cleanNativeRead(path);
         },
@@ -724,6 +744,7 @@ test("routine code preserves the known route and rejects malformed provider stat
   ).resolves.toMatchObject({
     routes: [CODE_LEGACY_ROUTE],
     crons: ["* * * * *", "*/5 * * * *"],
+    containers: ["OpenTofuRunnerObject"],
   });
   for (const route of [
     { ...CODE_LEGACY_ROUTE, id: "not-an-id" },
@@ -765,6 +786,71 @@ test("routine code preserves the known route and rejects malformed provider stat
   }
 });
 
+test("routine code accepts the listed Container attachment only as the configured class", async () => {
+  const source = codeConfigSource();
+  const read = (options: Parameters<typeof codeNativeRead>[1]) =>
+    readPlatformWorkerCodeTopology(
+      source,
+      "takosumi-staging",
+      codeNativeRead(source, options),
+    );
+  await expect(read({})).resolves.toMatchObject({
+    containers: ["OpenTofuRunnerObject"],
+  });
+  // The attachment is a passive readback: a future field on it is not
+  // silently tolerated.
+  await expect(
+    read({
+      scriptContainers: [{ class_name: "OpenTofuRunnerObject", future: true }],
+    }),
+  ).rejects.toThrow("platform_worker_code_native_field_unsupported");
+  for (const scriptContainers of [
+    {},
+    "OpenTofuRunnerObject",
+    ["OpenTofuRunnerObject"],
+    [{ class_name: 1 }],
+    [{ class_name: "" }],
+  ]) {
+    await expect(read({ scriptContainers })).rejects.toThrow(
+      "platform_worker_code_topology_shape_unsupported",
+    );
+  }
+  // Attachment drift from the configured `[[containers]]` refuses.
+  for (const scriptContainers of [
+    [],
+    [{ class_name: "CoordinationObject" }],
+    [{ class_name: "OpenTofuRunnerObject" }, { class_name: "CoordinationObject" }],
+    [{ class_name: "OpenTofuRunnerObject" }, { class_name: "OpenTofuRunnerObject" }],
+  ]) {
+    await expect(read({ scriptContainers })).rejects.toThrow(
+      "platform_worker_code_topology_mismatch",
+    );
+  }
+  await expect(read({ omitScriptContainers: true })).rejects.toThrow(
+    "platform_worker_code_topology_mismatch",
+  );
+  // A Worker whose config declares no Container must list none.
+  const withoutContainer = source.replace(
+    /\[\[containers\]\]\nclass_name = "OpenTofuRunnerObject"\nimage = [^\n]+\n/u,
+    "",
+  );
+  expect(withoutContainer).not.toContain("[[containers]]");
+  await expect(
+    readPlatformWorkerCodeTopology(
+      withoutContainer,
+      "takosumi-staging",
+      codeNativeRead(withoutContainer, { omitScriptContainers: true }),
+    ),
+  ).resolves.toMatchObject({ containers: [] });
+  await expect(
+    readPlatformWorkerCodeTopology(
+      withoutContainer,
+      "takosumi-staging",
+      codeNativeRead(withoutContainer),
+    ),
+  ).rejects.toThrow("platform_worker_code_topology_mismatch");
+});
+
 test("routine code publishes once and refuses production", async () => {
   const result = await exerciseCodeLane();
   expect(result).toMatchObject({
@@ -782,6 +868,13 @@ test("routine code publishes once and refuses production", async () => {
     expect.arrayContaining(["versions", "deploy", `${CODE_DEPLOYED_ID}@100%`, "--yes"]),
   );
   expect(result.uploadConfigSource).not.toContain("[[migrations]]");
+  // The upload keeps the realized Container declaration byte-for-value, so the
+  // new Version carries the same class attachment; the lane never rolls out or
+  // rewrites the Container application itself.
+  expect(Bun.TOML.parse(result.uploadConfigSource).containers).toEqual(
+    Bun.TOML.parse(codeConfigSource()).containers,
+  );
+  expect(result.uploadArgs).not.toContain("--containers-rollout");
   expect(Object.keys(Bun.TOML.parse(result.activationConfigSource)).sort()).toEqual([
     "account_id",
     "name",
@@ -809,6 +902,23 @@ test("routine code refuses every route drift before upload and after activation"
     );
     expect(after).toMatchObject({ uploadCount: 1, activationCount: 1 });
   }
+});
+
+test("routine code refuses Container attachment drift before upload and after activation", async () => {
+  const before = await exerciseCodeLane({ topologyDriftAt: 2, containerDrift: true });
+  expect((before.error as Error).message).toBe(
+    "platform_worker_code_topology_mismatch",
+  );
+  expect(before).toMatchObject({ uploadCount: 0, activationCount: 0 });
+
+  const after = await exerciseCodeLane({ topologyDriftAt: 3, containerDrift: true });
+  expect((after.error as Error).message).toBe(
+    "platform_worker_code_release_incomplete",
+  );
+  expect(((after.error as Error).cause as Error).message).toBe(
+    "platform_worker_code_topology_mismatch",
+  );
+  expect(after).toMatchObject({ uploadCount: 1, activationCount: 1 });
 });
 
 test("routine code never retries a lost acknowledgement", async () => {
