@@ -31,11 +31,12 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { redactString } from "../contract/redaction.ts";
+
 export const INSTALL_SERVING_E2E_KIND =
   "takosumi.install-serving-e2e@v1" as const;
 
 const API_PREFIX = "/api/v1";
-const INTERNAL_API_PREFIX = "/internal/v1";
 export const DEFAULT_ORIGIN = "https://app-staging.takosumi.com";
 const TAKOSUMI_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SMOKE_ENTRY = "smoke:platform-control-plane";
@@ -88,13 +89,19 @@ const YURUCOMMU_PROFILE_OUTPUT_LAUNCH_URL = "launch_url" as const;
 export const YURUCOMMU_PROFILE: InstallServingProfile = Object.freeze({
   id: "yurucommu",
   sourceGitUrl: "https://github.com/tako0614/yurucommu.git",
-  sourcePath: "deploy/takoform",
-  // `modulePath` is relative to the SourceSnapshot subtree that `sourcePath`
-  // pins, not to the repository root. The snapshot here is rooted at
-  // `deploy/takoform`, so its OpenTofu root module *is* the snapshot root.
-  // Repeating the repository path makes the compatibility check reject the
-  // tree with `repository_install_ux_module_missing`.
-  modulePath: ".",
+  // Yurucommu's install destination is the whole repository with module
+  // `deploy/takoform`: `.well-known/tcs.json` names that `modulePath`, and the
+  // site install link passes it as `path` with the default Source path. The
+  // module's repository-owned `sourceBuild` runs at the SourceSnapshot root
+  // (`bun install` against the root `package.json`, then the root build
+  // scripts) and must produce `deploy/takoform/...` outputs, so the snapshot
+  // has to be the repository root. A Source scoped to `deploy/takoform` holds
+  // neither, and its Plan fails `source_build_failed`.
+  sourcePath: ".",
+  // `modulePath` is relative to the SourceSnapshot root that `sourcePath`
+  // pins. Repeating a scoped Source path here makes the compatibility check
+  // reject the tree with `repository_install_ux_module_missing`.
+  modulePath: "deploy/takoform",
   runtimePublicUrlOutput: "launch_url",
   appPrefix: "yuru-install-e2e",
   outputAllowlist: Object.freeze({
@@ -772,19 +779,81 @@ async function readWorkspaceRuns(input: {
   return (body as { readonly runs?: readonly RunSummary[] }).runs ?? [];
 }
 
+// Bounds for the one-line excerpt printed to stdout and summary.json. The
+// head names the failing command; the tail usually carries the cause.
+const DIAGNOSTIC_DETAIL_HEAD_CHARS = 120;
+const DIAGNOSTIC_DETAIL_TAIL_CHARS = 200;
+const DIAGNOSTIC_DETAIL_ELISION = " ... ";
+// CSI (`ESC [ ... final`), OSC (`ESC ] ... BEL|ST`), and other two-byte escapes.
+const ANSI_ESCAPE_PATTERN =
+  /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\)|[\u0040-\u005a\u005c-\u005f])/gu;
+
+/**
+ * Render server-provided diagnostic text as one printable line. The harness is
+ * meant for CI logs, so it does not trust the server's redaction alone: ANSI
+ * sequences go first, then credential-shaped material is masked, then every
+ * remaining control byte (newlines included) becomes a space.
+ */
+export function printableDiagnosticText(value: string): string {
+  const masked = redactString(value.replace(ANSI_ESCAPE_PATTERN, ""));
+  return redactString(masked.replace(/\p{Cc}+/gu, " "))
+    .replace(/ {2,}/gu, " ")
+    .trim();
+}
+
+function boundedDiagnosticDetail(detail: string): string {
+  const limit = DIAGNOSTIC_DETAIL_HEAD_CHARS + DIAGNOSTIC_DETAIL_TAIL_CHARS;
+  if (detail.length <= limit + DIAGNOSTIC_DETAIL_ELISION.length) return detail;
+  return `${detail.slice(0, DIAGNOSTIC_DETAIL_HEAD_CHARS).trimEnd()}${
+    DIAGNOSTIC_DETAIL_ELISION
+  }${detail.slice(-DIAGNOSTIC_DETAIL_TAIL_CHARS).trimStart()}`;
+}
+
+/**
+ * The first `error` diagnostic as `code: message (detail)`, printable and
+ * bounded. Info and warning entries are never a failure reason; `undefined`
+ * means the Run recorded no error diagnostic. The full body belongs in the
+ * private evidence directory, not here.
+ */
 export function firstRunDiagnosticMessage(body: unknown): string | undefined {
   const diagnostics = (body as {
     readonly diagnostics?: readonly {
       readonly severity?: string;
       readonly code?: string;
       readonly message?: string;
+      readonly detail?: string;
     }[];
   }).diagnostics;
   if (!Array.isArray(diagnostics)) return undefined;
-  const entry = diagnostics.find((value) => value?.severity === "error") ??
-    diagnostics[0];
-  if (!entry?.message) return undefined;
-  return entry.code ? `${entry.code}: ${entry.message}` : entry.message;
+  const entry = diagnostics.find((value) => value?.severity === "error");
+  if (typeof entry?.message !== "string") return undefined;
+  const message = printableDiagnosticText(entry.message);
+  if (!message) return undefined;
+  const code = typeof entry.code === "string"
+    ? printableDiagnosticText(entry.code)
+    : "";
+  const summary = code ? `${code}: ${message}` : message;
+  const detail = typeof entry.detail === "string"
+    ? printableDiagnosticText(entry.detail)
+    : "";
+  return detail ? `${summary} (${boundedDiagnosticDetail(detail)})` : summary;
+}
+
+const EVIDENCE_RUN_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/u;
+
+/** Keep the complete Run logs body (all diagnostics, full detail) private. */
+async function writeRunLogsEvidence(
+  evidenceDir: string,
+  runId: string,
+  logs: unknown,
+): Promise<string> {
+  const name = EVIDENCE_RUN_ID_PATTERN.test(runId)
+    ? `run-logs-${runId}.json`
+    : "run-logs.json";
+  const path = join(evidenceDir, name);
+  await writeFile(path, `${JSON.stringify(logs, null, 2)}\n`, { mode: 0o600 });
+  await chmod(path, 0o600);
+  return name;
 }
 
 export type FailureAttribution = {
@@ -877,16 +946,34 @@ async function attributeFailure(input: {
       lines.push(`run ${runId} readback unavailable (${describeApiError(error)})`);
     }
 
+    let logs: unknown;
     try {
-      const logs = await requestJson({
+      // The edge-public Run logs route; `/internal/v1` is never edge-routed.
+      logs = await requestJson({
         origin: input.options.origin,
         token: input.token,
-        path: `${INTERNAL_API_PREFIX}/runs/${encodeURIComponent(runId)}/logs`,
+        path: `${API_PREFIX}/runs/${encodeURIComponent(runId)}/logs`,
       });
-      const message = firstRunDiagnosticMessage(logs);
-      if (message) lines.push(`diagnostic: ${message}`);
     } catch (error) {
       lines.push(`diagnostic readback unavailable (${describeApiError(error)})`);
+    }
+    if (logs !== undefined) {
+      const message = firstRunDiagnosticMessage(logs);
+      lines.push(
+        message
+          ? `diagnostic: ${message}`
+          : "diagnostic: no error diagnostic recorded",
+      );
+      try {
+        const name = await writeRunLogsEvidence(
+          input.options.evidenceDir,
+          runId,
+          logs,
+        );
+        lines.push(`full Run logs: ${name} in the evidence directory`);
+      } catch {
+        lines.push("full Run logs could not be written to the evidence directory");
+      }
     }
   }
 
