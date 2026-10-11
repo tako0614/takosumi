@@ -4312,6 +4312,37 @@ test("a Capsule Plan with unknown resource changes fails closed under a configur
   expect(planRun.policy.reasons.join("\n")).toContain(
     "plan resource changes are unavailable",
   );
+  // The audit must not claim the resource policy passed.
+  const evaluated = planRun.auditEvents.findLast(
+    (event) => event.type === "plan.policy_evaluated",
+  );
+  expect(evaluated?.data).toMatchObject({
+    resourceTypesAllowed: false,
+    planResourceChangesKnown: false,
+  });
+});
+
+test("a known-empty Capsule Plan passes a configured resource policy", async () => {
+  // An output-only module, its destroy, and a refresh-only Plan report an
+  // empty change list. Empty is known, not unknown: nothing violates the
+  // resource-type allowlist, so the Plan must not be blocked.
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner({ planResourceChanges: [] });
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: {
+      policy: {
+        allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+        allowedResourceTypes: ["cloudflare_workers_script"],
+      },
+    },
+  });
+  const controller = controllerWith(store, runner);
+
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+
+  expect(planRun.status).toEqual("succeeded");
+  expect(planRun.planResourceChanges).toEqual([]);
 });
 
 test("capsule plan creates and pins a CompatibilityReport when SourcesService is wired", async () => {
@@ -6454,6 +6485,142 @@ test("a dispatch deadline reaches the post_apply and pre_destroy release activat
     { phase: "post_apply", deadlineAt, signal: true },
     { phase: "pre_destroy", deadlineAt, signal: true },
   ]);
+});
+
+test("a pre_destroy release the runner refused for lack of deadline headroom requeues the destroy", async () => {
+  // Nothing ran: the release was refused before dispatch. The destroy must be
+  // redelivered under a fresh deadline, not fail as a decisive lifecycle run.
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner({
+    planResourceChanges: [
+      {
+        address: "cloudflare_workers_script.app",
+        type: "cloudflare_workers_script",
+        actions: ["create"],
+      },
+    ],
+  });
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: lifecycleInstallConfig([
+      {
+        id: "retire",
+        phase: "pre_destroy",
+        executor: "operator",
+        command: ["bun", "run", "retire"],
+      },
+    ]),
+  });
+  let activations = 0;
+  const controller = controllerWith(store, runner, {
+    enqueueRun: () => Promise.resolve(),
+    releaseActivator: {
+      activate: () => {
+        activations += 1;
+        if (activations === 1) {
+          return Promise.reject(
+            new OpenTofuRunnerInfrastructureError(
+              "runner failure (run_deadline_exceeded)",
+              { reason: "run_deadline_exceeded" },
+            ),
+          );
+        }
+        return Promise.resolve({ status: "succeeded" });
+      },
+    },
+  });
+  const deadlineAt = Date.parse("2026-10-11T08:30:59.920Z");
+  const dispatch = (
+    run: { readonly id: string; readonly workspaceId: string },
+    action: "plan" | "apply",
+  ) =>
+    controller.dispatchQueuedRun(
+      { action, runId: run.id, workspaceId: run.workspaceId },
+      { deadlineAt },
+    );
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  await dispatch(create.planRun, "plan");
+  const createPlan = (await store.getPlanRun(create.planRun.id))!;
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: createPlan.id,
+    expected: applyExpectedGuardFromPlanRun(createPlan),
+  });
+  await dispatch(applyRun, "apply");
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  await dispatch(destroy.planRun, "plan");
+  await controller.approveRun(destroy.planRun.id);
+  const destroyPlan = (await store.getPlanRun(destroy.planRun.id))!;
+  const { applyRun: destroyRun } = await controller.createApplyRun({
+    planRunId: destroyPlan.id,
+    expected: applyExpectedGuardFromPlanRun(destroyPlan),
+  });
+
+  await dispatch(destroyRun, "apply");
+  const requeued = (await store.getApplyRun(destroyRun.id))!;
+  expect(requeued.status).toBe("queued");
+  expect(
+    requeued.auditEvents.some(
+      (event) => event.type === "destroy.retry_scheduled",
+    ),
+  ).toBe(true);
+  expect(
+    requeued.auditEvents.some((event) =>
+      event.type.startsWith("lifecycle_action.pre_destroy."),
+    ),
+  ).toBe(false);
+  expect(runner.destroyJobs).toHaveLength(0);
+
+  await dispatch(destroyRun, "apply");
+  expect((await store.getApplyRun(destroyRun.id))?.status).toBe("succeeded");
+  expect(activations).toBe(2);
+  expect(runner.destroyJobs).toHaveLength(1);
+});
+
+test("a post_apply release the runner refused is recorded as not dispatched", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner({
+    planResourceChanges: [
+      {
+        address: "cloudflare_workers_script.app",
+        type: "cloudflare_workers_script",
+        actions: ["create"],
+      },
+    ],
+  });
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: lifecycleInstallConfig([
+      {
+        id: "migrate",
+        phase: "post_apply",
+        executor: "operator",
+        command: ["bun", "run", "migrate"],
+      },
+    ]),
+  });
+  const controller = controllerWith(store, runner, {
+    releaseActivator: {
+      activate: () =>
+        Promise.reject(
+          new OpenTofuRunnerInfrastructureError(
+            "runner failure (run_deadline_exceeded)",
+            { reason: "run_deadline_exceeded" },
+          ),
+        ),
+    },
+  });
+
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(applyRun.status).toBe("failed");
+  const lifecycleEvent = applyRun.auditEvents.find((event) =>
+    event.type.startsWith("lifecycle_action.post_apply."),
+  );
+  expect(lifecycleEvent?.data?.actionDispatched).toBe(false);
 });
 
 test("service-side lifecycle action receives only non-sensitive OpenTofu outputs", async () => {

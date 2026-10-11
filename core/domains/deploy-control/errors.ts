@@ -114,6 +114,13 @@ export class OpenTofuRunnerExecutionError extends Error {
   readonly reason?: string;
   readonly detail?: string;
   readonly originalError?: unknown;
+  /**
+   * The dispatching host's run deadline stopped the runner command that
+   * failed. Supplemental only: `reason` keeps the runner's own failure class
+   * (for example a pre-provider `opentofu_init_failed`), because a deadline
+   * can stop a command before or after provider execution.
+   */
+  readonly runDeadlineExceeded?: boolean;
 
   constructor(
     message: string,
@@ -121,6 +128,7 @@ export class OpenTofuRunnerExecutionError extends Error {
       readonly reason?: string;
       readonly detail?: string;
       readonly originalError?: unknown;
+      readonly runDeadlineExceeded?: boolean;
     } = {},
   ) {
     super(message);
@@ -128,6 +136,7 @@ export class OpenTofuRunnerExecutionError extends Error {
     this.reason = options.reason;
     this.detail = options.detail;
     this.originalError = options.originalError;
+    if (options.runDeadlineExceeded === true) this.runDeadlineExceeded = true;
   }
 }
 

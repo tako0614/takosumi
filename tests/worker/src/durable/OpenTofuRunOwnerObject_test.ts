@@ -145,51 +145,10 @@ test("OpenTofu run owner hands each alarm dispatch a deadline inside the alarm w
   );
 });
 
-test("OpenTofu run owner shares one alarm's deadline with its inline controller retry", async () => {
-  const storage = new FakeDoStorage();
-  const alarmStartedAt = Date.parse("2026-10-11T08:17:59.920Z");
-  let now = alarmStartedAt;
-  const controls: (RunOwnerDispatchControl | undefined)[] = [];
-  let owner!: OpenTofuRunOwnerObject;
-  owner = new OpenTofuRunOwnerObject({ storage }, {} as CloudflareWorkerEnv, {
-    now: () => now,
-    dispatch: async (_dispatch, _env, control) => {
-      controls.push(control);
-      now += 5_000;
-      if (controls.length === 1) {
-        const response = await owner.fetch(
-          new Request("https://run-owner/start", {
-            method: "POST",
-            body: JSON.stringify({
-              kind: "takosumi.opentofu-run-owner.start@v1",
-              action: "apply",
-              runId: "run_1",
-              workspaceId: "space_1",
-              cause: "controller_retry",
-            }),
-          }),
-        );
-        assert.equal(response.status, 202);
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          "retryable runner infrastructure error: apply run run_1 requeued",
-          { reason: RUNNER_INFRASTRUCTURE_REQUEUED_REASON },
-        );
-      }
-    },
-    readRunStatus: () => Promise.resolve("succeeded"),
-  });
-
-  await start(owner, "apply");
-  await owner.alarm();
-
-  const deadlineAt = alarmStartedAt + RUN_OWNER_DISPATCH_BUDGET_MS;
-  assert.deepEqual(controls, [{ deadlineAt }, { deadlineAt }]);
-});
-
-test("OpenTofu run owner leaves a late controller retry to the next alarm and its fresh deadline", async () => {
-  // Retrying inline with only minutes left would hand the runner a deadline
-  // too short to use; the next alarm starts a full one instead.
+test("OpenTofu run owner leaves a controller retry to the next alarm and its fresh deadline", async () => {
+  // Retrying inside the alarm would hand the runner only what this alarm has
+  // left, which its own minimum would likely refuse; the next alarm starts a
+  // full deadline instead.
   const storage = new FakeDoStorage();
   const alarmStartedAt = Date.parse("2026-10-11T08:17:59.920Z");
   let now = alarmStartedAt;
@@ -378,12 +337,71 @@ test("OpenTofu run owner immediately reschedules controller-managed retries", as
   await start(owner, "apply");
   await owner.alarm();
 
+  // The retry is re-armed for now and runs in the next alarm, under its own
+  // fresh deadline, rather than inside the invocation that just spent part of
+  // its wall.
+  assert.equal(calls, 1);
+  assert.equal(storage.alarmAt, now);
+  assert.equal(
+    (await storage.get<Record<string, unknown>>("run"))?.status,
+    "scheduled",
+  );
+
+  await owner.alarm();
+
   assert.equal(calls, 2);
   const record = await storage.get<Record<string, unknown>>("run");
   assert.equal(record?.status, "succeeded");
   assert.equal(record?.attempts, 1);
   assert.equal(record?.lastScheduleCause, undefined);
   assert.equal(storage.alarmAt, undefined);
+});
+
+test("OpenTofu run owner drain still retries a controller-managed requeue inline", async () => {
+  // `/drain` is an HTTP request with a connected caller: no alarm wall
+  // applies, so the immediate inline retry stays.
+  const storage = new FakeDoStorage();
+  const now = Date.parse("2026-06-22T08:00:00.000Z");
+  let calls = 0;
+  let owner!: OpenTofuRunOwnerObject;
+  owner = new OpenTofuRunOwnerObject({ storage }, {} as CloudflareWorkerEnv, {
+    now: () => now,
+    dispatch: async () => {
+      calls += 1;
+      if (calls === 1) {
+        await owner.fetch(
+          new Request("https://run-owner/start", {
+            method: "POST",
+            body: JSON.stringify({
+              kind: "takosumi.opentofu-run-owner.start@v1",
+              action: "apply",
+              runId: "run_1",
+              workspaceId: "space_1",
+              cause: "controller_retry",
+            }),
+          }),
+        );
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "retryable runner infrastructure error: apply run run_1 requeued",
+          { reason: RUNNER_INFRASTRUCTURE_REQUEUED_REASON },
+        );
+      }
+    },
+    readRunStatus: () => Promise.resolve("succeeded"),
+  });
+
+  await start(owner, "apply");
+  const drain = await owner.fetch(
+    new Request("https://run-owner/drain", { method: "POST" }),
+  );
+
+  assert.equal(drain.status, 200);
+  assert.equal(calls, 2);
+  assert.equal(
+    (await storage.get<Record<string, unknown>>("run"))?.status,
+    "succeeded",
+  );
 });
 
 test("OpenTofu run owner reschedules when controller requeues without throwing", async () => {

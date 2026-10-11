@@ -1109,6 +1109,50 @@ test("OpenTofu runner Durable Object refuses a Plan its caller's deadline leaves
   assert.equal(posts, 0);
 });
 
+test("OpenTofu runner Durable Object rechecks the dispatch budget after a container restart", async () => {
+  const realNow = Date.now;
+  let offsetMs = 0;
+  Date.now = () => realNow() + offsetMs;
+  try {
+    let posts = 0;
+    const runner = runnerWithContainer(new FakeR2Bucket(), {
+      async containerFetch(request) {
+        if (request.method !== "POST") return Response.json({ ok: true });
+        posts += 1;
+        // The first dispatch finds the container stopped; by the time it is
+        // restarted, the deadline no longer leaves the minimum.
+        offsetMs = 2_000;
+        throw new Error("container is not running, consider calling start()");
+      },
+    });
+
+    const response = await runner.fetch(
+      new Request("https://runner/runs/plan_restart", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-takosumi-run-deadline-at": String(realNow() + 5 * 60_000 + 1_000),
+        },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "plan",
+          runId: "plan_restart",
+          request: {},
+        }),
+      }),
+    );
+
+    assert.equal(response.status, 503);
+    assert.equal(
+      ((await response.json()) as Record<string, unknown>).errorCode,
+      "runner_run_deadline_exceeded",
+    );
+    assert.equal(posts, 1);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
 test("OpenTofu runner Durable Object forwards a release command's budget and refuses one with no time left", async () => {
   const applyRunId = "apply_release_deadline";
   const releaseRunId = `release_${applyRunId}`;

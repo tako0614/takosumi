@@ -12,6 +12,7 @@ import {
   type RunExecutionControl,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
+  applyRunMutationDispatched,
   type BeginApplyRunResult,
   type CapsuleApplyRunAdmissionFence,
   capsuleApplyRunAdmissionFence,
@@ -1137,6 +1138,71 @@ test("a dispatch the runner refused for lack of deadline headroom is requeued, n
   await controller.dispatchQueuedRun(dispatch, { deadlineAt: 2_000 });
   expect((await store.getApplyRun(applyRun.id))?.status).toBe("succeeded");
   expect(applyCalls).toBe(2);
+});
+
+test("an Apply whose init the run deadline stopped stays non-decisive", async () => {
+  // `tofu init` (or a source build) stopped by the deadline never reached a
+  // provider. The deadline is a supplemental note; the pre-provider failure
+  // class stays the error of record, so the Capsule keeps its runtime revision.
+  const store = new InMemoryOpenTofuControlStore();
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(6400),
+    newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner: {
+      plan: () =>
+        Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: planArtifact(),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: [CLOUDFLARE],
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        }),
+      apply: () =>
+        Promise.reject(
+          new OpenTofuRunnerExecutionError(
+            "runner failure (opentofu_init_failed)",
+            { reason: "opentofu_init_failed", runDeadlineExceeded: true },
+          ),
+        ),
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+  });
+  const request = await seedUpdatable(store, { capsuleId: "cap_init_deadline" });
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    workspaceId: queuedPlan.workspaceId,
+  });
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  await controller
+    .dispatchQueuedRun(
+      {
+        action: "apply",
+        runId: applyRun.id,
+        workspaceId: applyRun.workspaceId,
+      },
+      { deadlineAt: Date.parse("2026-10-11T08:30:59.920Z") },
+    )
+    .catch(() => undefined);
+
+  const failed = (await store.getApplyRun(applyRun.id))!;
+  expect(failed.status).toBe("failed");
+  expect(
+    failed.diagnostics?.map((item) => [item.severity, item.code]),
+  ).toEqual([
+    ["error", "opentofu_init_failed"],
+    ["warning", "run_deadline_exceeded"],
+  ]);
+  expect(applyRunMutationDispatched(failed)).toBe(false);
 });
 
 test("a minted CredentialBundle never serializes its values", () => {

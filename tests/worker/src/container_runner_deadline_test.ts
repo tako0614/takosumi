@@ -186,7 +186,7 @@ test("a provider failure the run deadline caused carries a fixed diagnostic code
     applied.diagnostics?.some(
       (diagnostic) =>
         diagnostic.code === "run_deadline_exceeded" &&
-        diagnostic.severity === "error",
+        diagnostic.severity === "warning",
     ),
   ).toBe(true);
   expect(applied.providerExecutionFailure?.statePersistence).toBe("persisted");
@@ -267,4 +267,77 @@ test("a release command dispatch carries the run deadline", async () => {
   );
 
   expect(headers).toEqual([String(deadlineAt)]);
+});
+
+function planEnv(planResourceChanges: unknown): CloudflareWorkerEnv {
+  return envAnswering(() =>
+    Response.json({
+      status: "succeeded",
+      planDigest: PLAN_DIGEST,
+      planArtifact: {
+        kind: "runner-local",
+        ref: "runner-local://plan_changes/tfplan",
+        digest: PLAN_DIGEST,
+      },
+      ...(planResourceChanges === undefined ? {} : { planResourceChanges }),
+    }),
+  );
+}
+
+test("a known-empty resource change list reaches Core as empty, not unknown", async () => {
+  const plan = (env: CloudflareWorkerEnv) =>
+    new CloudflareContainerOpenTofuRunner(env).plan({
+      planRun: { id: "plan_changes" },
+    } as Parameters<CloudflareContainerOpenTofuRunner["plan"]>[0]);
+
+  expect((await plan(planEnv([]))).planResourceChanges).toEqual([]);
+  // Absent stays unknown, and so does a list with a row that cannot be read.
+  expect((await plan(planEnv(undefined))).planResourceChanges).toBeUndefined();
+  expect(
+    (
+      await plan(
+        planEnv([
+          {
+            address: "cloudflare_workers_script.app",
+            type: "cloudflare_workers_script",
+            actions: ["create"],
+          },
+          { address: "malformed" },
+        ]),
+      )
+    ).planResourceChanges,
+  ).toBeUndefined();
+});
+
+test("an Apply whose init the run deadline stopped keeps its pre-provider reason", async () => {
+  // Core decides from the reason whether provider execution could have begun;
+  // the deadline must ride alongside it, never replace it.
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envAnswering(() =>
+      Response.json(
+        {
+          status: "failed",
+          errorCode: "opentofu_init_failed",
+          phase: "apply",
+          runDeadlineExceeded: true,
+        },
+        { status: 500 },
+      ),
+    ),
+  );
+
+  const failure = await runner
+    .apply(mutationJob(), { deadlineAt: Date.now() + 60_000 })
+    .then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+  expect(failure).toBeInstanceOf(OpenTofuRunnerExecutionError);
+  expect((failure as OpenTofuRunnerExecutionError).reason).toBe(
+    "opentofu_init_failed",
+  );
+  expect((failure as OpenTofuRunnerExecutionError).runDeadlineExceeded).toBe(
+    true,
+  );
 });

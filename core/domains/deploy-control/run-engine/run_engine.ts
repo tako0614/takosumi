@@ -738,13 +738,41 @@ class CapsuleLifecycleActionError extends OpenTofuControllerError {
 
 function runFailureDiagnostics(error: unknown) {
   const primary = lifecycleActionDiagnostic(error);
-  if (!(error instanceof RunExecutionRenewalError)) return [primary];
+  if (!(error instanceof RunExecutionRenewalError)) {
+    return [primary, ...runDeadlineDiagnostics(error)];
+  }
   return [
     { ...primary, code: error.diagnosticCode },
     ...(error.secondaryError === undefined
       ? []
       : [lifecycleActionDiagnostic(error.secondaryError)]),
   ];
+}
+
+/**
+ * A separate, non-authoritative note that the host's run deadline stopped the
+ * failing command. It never replaces the primary diagnostic, whose code still
+ * says whether the failure happened before provider execution.
+ */
+function runDeadlineDiagnostics(error: unknown) {
+  return error instanceof OpenTofuRunnerExecutionError &&
+      error.runDeadlineExceeded === true
+    ? [
+        {
+          severity: "warning" as const,
+          code: "run_deadline_exceeded",
+          message: "runner stopped at the dispatching host's run deadline",
+        },
+      ]
+    : [];
+}
+
+/** The runner object refused to dispatch for lack of deadline headroom. */
+function isRunDeadlineDispatchRefusal(error: unknown): boolean {
+  return (
+    error instanceof OpenTofuRunnerInfrastructureError &&
+    error.reason === "run_deadline_exceeded"
+  );
 }
 
 const MAX_LIFECYCLE_ACTION_DIAGNOSTIC_DETAIL_CHARS = 4_096;
@@ -6156,13 +6184,11 @@ export class RunEngine {
     // delete/replace approval gate could not be evaluated. Never continue such
     // a Plan unattended; it stays available for an explicit Apply.
     if (planRun.planResourceChanges === undefined) return;
-    // A no-op plan already proves desired and observed state converge. Creating
-    // an apply would only spend runner time and cannot publish a new StateVersion or Output.
-    if (
-      planRun.planResourceChanges !== undefined &&
-      planRun.planResourceChanges.length === 0
-    )
-      return;
+    // A known-empty change list still continues: it is not proof that nothing
+    // changed, because an output-only change needs an Apply to publish the new
+    // Output, and the Plan carries no output-change evidence to tell the two
+    // apart. (Runner adapters used to collapse an empty list to "absent", so
+    // production never skipped these Plans either.)
     try {
       // Finishing a held Plan is allowed after draining. Starting its automatic
       // Apply is a separate admission bound to the Plan's original epoch, not
@@ -8615,8 +8641,10 @@ export class RunEngine {
             : {}),
           ...(layered.resource
             ? {
-                resourceTypesAllowed:
-                  layered.resource.disallowedResourceTypes.length === 0,
+                resourceTypesAllowed: layered.resource.reasons.length === 0,
+                ...(result.planResourceChanges === undefined
+                  ? { planResourceChangesKnown: false }
+                  : {}),
               }
             : {}),
           ...(compatibilityPolicy.audit
@@ -10164,7 +10192,9 @@ export class RunEngine {
         ...base,
         reportedStatus: "error",
         activityStatus: "failed",
-        actionDispatched,
+        // A runner object that refused for lack of deadline headroom ran
+        // nothing.
+        actionDispatched: actionDispatched && !isRunDeadlineDispatchRefusal(error),
         message: errorMessage(error),
         ...(error instanceof OpenTofuRunnerExecutionError && error.detail
           ? { detail: error.detail }
@@ -10605,6 +10635,9 @@ export class RunEngine {
         runnerExecutionControl(input.signal, input.deadlineAt),
       );
     } catch (error) {
+      // Refused before anything ran: no lifecycle action happened, so the
+      // destroy is a safe redelivery rather than a decisive failure.
+      if (isRunDeadlineDispatchRefusal(error)) throw error;
       const outcome: LifecycleActionOutcome = {
         phase: "pre_destroy",
         reportedStatus: "error",
@@ -11522,7 +11555,7 @@ export class RunEngine {
         throw new OpenTofuControllerError("failed_precondition", error.message);
       }
       if (
-        runnerDispatched &&
+        (runnerDispatched || isRunDeadlineDispatchRefusal(error)) &&
         isSafeMutatingRunnerInfrastructureRetryError(error)
       ) {
         const runningWithEnvironmentFailure = runEnvironmentFailedRun(

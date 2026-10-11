@@ -2642,7 +2642,9 @@ function planResourceChanges(
       },
     ];
   });
-  return rows.length > 0 ? rows : undefined;
+  // Keep an explicit empty list (known-empty); only unreadable rows make the
+  // change set unknown.
+  return rows.length === value.length ? rows : undefined;
 }
 
 function diagnostics(

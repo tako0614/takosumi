@@ -1275,15 +1275,21 @@ function runnerExecutionErrorFromPayload(
   }
   if (errorCode && RUNNER_PLAN_EXECUTION_FAILURE_CODES.has(errorCode)) {
     const detail = runnerExecutionDetailFromPayload(payload);
-    // A command the run deadline stopped reports one fixed reason, so the
-    // cause survives even when the bounded detail omits the marker line.
+    const runDeadlineExceeded = payload.runDeadlineExceeded === true;
+    // A Plan stopped by the run deadline reports one fixed reason. An Apply or
+    // Destroy keeps the runner's own class, because Core decides from it
+    // whether provider execution could have begun (an init or build stopped
+    // by the deadline is still pre-provider); the deadline rides alongside.
     const reason =
-      payload.runDeadlineExceeded === true
+      runDeadlineExceeded && action === "plan"
         ? RUN_DEADLINE_EXCEEDED_REASON
         : errorCode;
     return new OpenTofuRunnerExecutionError(runnerFailureMessage(reason), {
       reason,
       ...(detail ? { detail } : {}),
+      ...(runDeadlineExceeded && action !== "plan"
+        ? { runDeadlineExceeded: true }
+        : {}),
     });
   }
   if (
@@ -1592,8 +1598,9 @@ function diagnosticsFromContainerResult(
     });
   }
   if (result.runDeadlineExceeded === true) {
+    // Supplemental: the provider failure itself stays the error of record.
     diagnostics.push({
-      severity: "error",
+      severity: "warning",
       code: RUN_DEADLINE_EXCEEDED_REASON,
       message: "runner stopped at the dispatching host's run deadline",
     });
@@ -1754,7 +1761,11 @@ function planResourceChangesFromContainerResult(
       },
     ];
   });
-  return rows.length > 0 ? rows : undefined;
+  // An explicit list is kept as reported, including an empty one: a Plan with
+  // no resource changes (an output-only module, its destroy, a refresh-only
+  // Plan) is known-empty, not unknown. Only a list with rows that could not be
+  // read is unknown, so the policy layers fail closed on it.
+  return rows.length === value.length ? rows : undefined;
 }
 
 function plannedOutputsFromContainerResult(

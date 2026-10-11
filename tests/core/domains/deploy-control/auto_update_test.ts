@@ -56,7 +56,8 @@ const LOCK_DIGEST =
 
 /** plan + apply + sourceSync stub; plan changes are configurable per test. */
 class FullStubRunner implements OpenTofuRunner {
-  planResourceChanges: readonly PlanResourceChange[] = [];
+  /** `undefined` models a runner that reported no change list (unknown). */
+  planResourceChanges: readonly PlanResourceChange[] | undefined = [];
   sourceSyncResult: OpenTofuSourceSyncResult = {
     resolvedCommit: "def456abc7890123def456abc7890123def456ab",
     archiveDigest: "sha256:" + "c".repeat(64),
@@ -100,7 +101,7 @@ class FullStubRunner implements OpenTofuRunner {
       providerLockDigest: LOCK_DIGEST,
       requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
       providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
-      ...(this.planResourceChanges.length > 0
+      ...(this.planResourceChanges !== undefined
         ? { planResourceChanges: this.planResourceChanges }
         : {}),
     };
@@ -309,15 +310,6 @@ async function planRunsOf(
 test("an opted-in stale capsule auto-updates: plan + clean auto-apply, no client", async () => {
   const { store, controller, runner, initialPlanCalls } =
     await buildActiveCapsule({ autoUpdate: true });
-  // Auto-apply continues only a Plan whose resource changes are known and
-  // approval-free; an unknown change set never applies unattended.
-  runner.planResourceChanges = [
-    {
-      address: "cloudflare_workers_script.app",
-      type: "cloudflare_workers_script",
-      actions: ["update"],
-    },
-  ];
 
   await syncNewCommit(controller);
 
@@ -378,7 +370,7 @@ test("a Plan whose resource changes are unknown is never auto-applied", async ()
   // the delete/replace approval gate could not be evaluated.
   const { store, controller, runner, initialApplyCalls } =
     await buildActiveCapsule({ autoUpdate: true });
-  runner.planResourceChanges = [];
+  runner.planResourceChanges = undefined;
 
   await syncNewCommit(controller);
 

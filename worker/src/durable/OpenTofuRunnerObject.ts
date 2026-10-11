@@ -1025,7 +1025,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
             phase: runnerRelayOperation(request),
             retryable: true,
             detail:
-              "redeliver the same Run under a fresh invocation deadline; nothing was dispatched",
+              "nothing was dispatched: the caller's invocation deadline left too little time to start it",
           },
           { status: 503 },
         );
@@ -2459,9 +2459,13 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         releaseDispatch,
       );
     } else {
-      assertDispatchBudget(RUNNER_MIN_EXECUTION_DISPATCH_BUDGET_MS);
+      // Checked for every attempt, including the one after a container
+      // restart, so a late re-dispatch is refused like a late first one.
       unboundedRunnerResponse = await this.#containerFetchAfterReady(
-        dispatchRequest,
+        () => {
+          assertDispatchBudget(RUNNER_MIN_EXECUTION_DISPATCH_BUDGET_MS);
+          return dispatchRequest();
+        },
         url,
       );
     }
