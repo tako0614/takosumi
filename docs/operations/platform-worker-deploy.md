@@ -234,6 +234,16 @@ not write those routes or silently adopt them into config. A malformed route,
 a route for another script, an unknown shape, or drift refuses; config-owned
 custom domains, schedules, and settings must still match the realized config.
 
+Cloudflare's script listing carries `containers` only for a Container-bearing
+Worker: one `{ class_name }` entry per Durable Object class with a Container
+attached. The lane accepts that key as a passive readback, never as new
+authority. The listed classes must equal the configured `[[containers]]`
+classes in every snapshot, and an extra entry field, a missing or extra class,
+or drift refuses. The upload projection keeps the `[[containers]]` declaration
+unchanged, so the new Version carries the same attachment; the Container
+application itself (image, instances, rollout) is read separately and must stay
+identical from baseline to final readback.
+
 The lane builds the dashboard once, runs
 `check:cloudflare-worker-build` once, and performs two `versions upload`
 dry-runs. The first derives the sealed entry digest; the second injects the

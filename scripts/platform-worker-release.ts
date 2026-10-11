@@ -5755,6 +5755,8 @@ export type PlatformWorkerCodeTopology = Readonly<{
   subdomain: unknown;
   crons: readonly string[];
   domains: readonly unknown[];
+  /** Durable Object classes the live script lists a Container attached to. */
+  containers: readonly string[];
 }>;
 
 export async function readPlatformWorkerCodeTopology(
@@ -5781,7 +5783,11 @@ export async function readPlatformWorkerCodeTopology(
   if (matches.length !== 1 || !record(script) || !Array.isArray(script.routes)) {
     throw new Error("platform_worker_code_topology_shape_unsupported");
   }
+  // Cloudflare lists `containers` only for a Container-bearing Worker. It is a
+  // passive readback of the class attachment, checked against config below;
+  // every other unknown key still refuses.
   platformWorkerCodeExactKeys(script, [
+    ...(Object.hasOwn(script, "containers") ? ["containers"] : []),
     "compatibility_date",
     "compatibility_flags",
     "created_on",
@@ -5833,6 +5839,18 @@ export async function readPlatformWorkerCodeTopology(
     codePointCompare(String(left.pattern), String(right.pattern)) ||
     codePointCompare(String(left.id), String(right.id))
   );
+  const containers = platformWorkerCodeScriptContainers(script.containers);
+  const expectedContainers = config.containers === undefined
+    ? []
+    : platformWorkerCodeRecords(config.containers).map((value) => {
+      if (!boundedString(value.class_name, 256)) {
+        throw new Error("platform_worker_code_config_shape_unsupported");
+      }
+      return value.class_name;
+    }).sort(codePointCompare);
+  if (!platformWorkerCodeEqual(containers, expectedContainers)) {
+    throw new Error("platform_worker_code_topology_mismatch");
+  }
   if (!record(settings.result) || !record(subdomain.result)) {
     throw new Error("platform_worker_code_topology_shape_unsupported");
   }
@@ -5942,7 +5960,31 @@ export async function readPlatformWorkerCodeTopology(
     subdomain: subdomain.result,
     crons,
     domains: normalizedDomains,
+    containers,
   };
+}
+
+/**
+ * The script list's Container attachment: one `{ class_name }` per Durable
+ * Object class with a Container. Absent means no attachment. The routine lane
+ * neither writes nor adopts it; the config must already declare the same set,
+ * and the Container application itself is read separately.
+ */
+function platformWorkerCodeScriptContainers(value: unknown): readonly string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error("platform_worker_code_topology_shape_unsupported");
+  }
+  return value.map((entry) => {
+    if (!record(entry)) {
+      throw new Error("platform_worker_code_topology_shape_unsupported");
+    }
+    platformWorkerCodeExactKeys(entry, ["class_name"]);
+    if (!boundedString(entry.class_name, 256)) {
+      throw new Error("platform_worker_code_topology_shape_unsupported");
+    }
+    return entry.class_name;
+  }).sort(codePointCompare);
 }
 
 async function readSecretNames(
