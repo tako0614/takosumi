@@ -3864,7 +3864,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     // object-storage ref the consumer restores from still names the plaintext
     // key so #restorePlanArtifact maps it back to `<key>.enc` transparently.
     const sealed = await this.#stateCrypto().seal(bytes);
-    const stored = await putR2ObjectWithRetry(
+    await putR2ObjectWithRetry(
       this.env.R2_ARTIFACTS,
       encryptedKey(key),
       sealed.ciphertext,
@@ -3907,7 +3907,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           ref: planArtifactRef(bucket, key),
           digest,
           contentType: PLAN_ARTIFACT_CONTENT_TYPE,
-          sizeBytes: stored.size,
+          // Plaintext length: the domain of `digest` and of the restore check.
+          // The sealed R2 object is larger by the encryption envelope.
+          sizeBytes: bytes.byteLength,
           createdAt: Date.now(),
         },
         ...(providerLockArtifact !== undefined
@@ -4174,13 +4176,28 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const expectedSize = artifact.sizeBytes === undefined
       ? undefined
       : positiveIntegerField(artifact, "sizeBytes");
+    // Reject an absurd recorded size before any read. The bound is the
+    // plaintext limit, so a legacy row that recorded the sealed length of a
+    // Plan whose envelope pushes it past that limit (within 33 bytes for the
+    // v2 magic + IV + tag; wider for the older base64 format) fails closed
+    // here. Re-plan it rather than widening this pre-read bound.
     if (expectedSize !== undefined) {
       assertArtifactSize("plan", this.#artifactLimits.plan, expectedSize);
     }
     // The plan binary is stored encrypted at `<key>.enc`; plaintext plan
     // objects are not a valid restore source.
-    const bytes = await this.#readPlanArtifactPlaintext(key, expectedDigest);
-    if (expectedSize !== undefined && bytes.byteLength !== expectedSize) {
+    const { plaintext: bytes, ciphertextByteLength } =
+      await this.#readPlanArtifact(key, expectedDigest);
+    // `sizeBytes` is the plaintext length, the same domain as `digest`.
+    // PlanRuns persisted before that was corrected recorded the sealed R2
+    // object length instead. That value still names this exact authenticated
+    // object (AES-GCM open + plaintext digest above), so accept it rather than
+    // stranding every already-reviewed Plan.
+    if (
+      expectedSize !== undefined &&
+      bytes.byteLength !== expectedSize &&
+      ciphertextByteLength !== expectedSize
+    ) {
       throw new Error("OpenTofu saved Plan artifact size mismatch");
     }
     const response = await this.#containerFetch(
@@ -4292,10 +4309,13 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     );
   }
 
-  async #readPlanArtifactPlaintext(
+  async #readPlanArtifact(
     key: string,
     expectedDigest: string,
-  ): Promise<Uint8Array> {
+  ): Promise<{
+    readonly plaintext: Uint8Array;
+    readonly ciphertextByteLength: number;
+  }> {
     const encrypted = await this.env.R2_ARTIFACTS.get(encryptedKey(key));
     if (!encrypted) {
       throw new Error(`plan artifact object not found: ${key}`);
@@ -4310,7 +4330,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       expectedDigest,
     );
     assertArtifactSize("plan", this.#artifactLimits.plan, plaintext.byteLength);
-    return plaintext;
+    return { plaintext, ciphertextByteLength: ciphertext.byteLength };
   }
 
   async #restoreStateArtifact(

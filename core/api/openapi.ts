@@ -1705,7 +1705,11 @@ function runnerSchemas(): Record<string, Record<string, unknown>> {
         ref: { type: "string" },
         digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
         contentType: { type: "string" },
-        sizeBytes: { type: "number" },
+        sizeBytes: {
+          type: "number",
+          description:
+            "Plaintext byte length of the saved Plan, the same bytes `digest` names. The encrypted object at rest is larger by its envelope. PlanRuns recorded before this was corrected carry the sealed object length instead; restore accepts that value only when it equals the exact length of the authenticated object whose plaintext matches `digest`.",
+        },
         createdAt: { type: "number" },
       },
       additionalProperties: false,
