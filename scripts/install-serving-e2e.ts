@@ -35,7 +35,6 @@ export const INSTALL_SERVING_E2E_KIND =
   "takosumi.install-serving-e2e@v1" as const;
 
 const API_PREFIX = "/api/v1";
-const INTERNAL_API_PREFIX = "/internal/v1";
 export const DEFAULT_ORIGIN = "https://app-staging.takosumi.com";
 const TAKOSUMI_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SMOKE_ENTRY = "smoke:platform-control-plane";
@@ -88,13 +87,19 @@ const YURUCOMMU_PROFILE_OUTPUT_LAUNCH_URL = "launch_url" as const;
 export const YURUCOMMU_PROFILE: InstallServingProfile = Object.freeze({
   id: "yurucommu",
   sourceGitUrl: "https://github.com/tako0614/yurucommu.git",
-  sourcePath: "deploy/takoform",
-  // `modulePath` is relative to the SourceSnapshot subtree that `sourcePath`
-  // pins, not to the repository root. The snapshot here is rooted at
-  // `deploy/takoform`, so its OpenTofu root module *is* the snapshot root.
-  // Repeating the repository path makes the compatibility check reject the
-  // tree with `repository_install_ux_module_missing`.
-  modulePath: ".",
+  // Yurucommu's install destination is the whole repository with module
+  // `deploy/takoform`: `.well-known/tcs.json` names that `modulePath`, and the
+  // site install link passes it as `path` with the default Source path. The
+  // module's repository-owned `sourceBuild` runs at the SourceSnapshot root
+  // (`bun install` against the root `package.json`, then the root build
+  // scripts) and must produce `deploy/takoform/...` outputs, so the snapshot
+  // has to be the repository root. A Source scoped to `deploy/takoform` holds
+  // neither, and its Plan fails `source_build_failed`.
+  sourcePath: ".",
+  // `modulePath` is relative to the SourceSnapshot root that `sourcePath`
+  // pins. Repeating a scoped Source path here makes the compatibility check
+  // reject the tree with `repository_install_ux_module_missing`.
+  modulePath: "deploy/takoform",
   runtimePublicUrlOutput: "launch_url",
   appPrefix: "yuru-install-e2e",
   outputAllowlist: Object.freeze({
@@ -772,19 +777,33 @@ async function readWorkspaceRuns(input: {
   return (body as { readonly runs?: readonly RunSummary[] }).runs ?? [];
 }
 
+const DIAGNOSTIC_DETAIL_MAX_CHARS = 320;
+
 export function firstRunDiagnosticMessage(body: unknown): string | undefined {
   const diagnostics = (body as {
     readonly diagnostics?: readonly {
       readonly severity?: string;
       readonly code?: string;
       readonly message?: string;
+      readonly detail?: string;
     }[];
   }).diagnostics;
   if (!Array.isArray(diagnostics)) return undefined;
   const entry = diagnostics.find((value) => value?.severity === "error") ??
     diagnostics[0];
   if (!entry?.message) return undefined;
-  return entry.code ? `${entry.code}: ${entry.message}` : entry.message;
+  const summary = entry.code ? `${entry.code}: ${entry.message}` : entry.message;
+  // `detail` is the server-redacted, bounded runner excerpt (for example the
+  // failing source-build command's output); keep it as one bounded line.
+  const detail = typeof entry.detail === "string"
+    ? entry.detail.replace(/\s+/gu, " ").trim()
+    : "";
+  if (!detail) return summary;
+  return `${summary} (${
+    detail.length > DIAGNOSTIC_DETAIL_MAX_CHARS
+      ? `${detail.slice(0, DIAGNOSTIC_DETAIL_MAX_CHARS)}...`
+      : detail
+  })`;
 }
 
 export type FailureAttribution = {
@@ -878,10 +897,11 @@ async function attributeFailure(input: {
     }
 
     try {
+      // The edge-public Run logs route; `/internal/v1` is never edge-routed.
       const logs = await requestJson({
         origin: input.options.origin,
         token: input.token,
-        path: `${INTERNAL_API_PREFIX}/runs/${encodeURIComponent(runId)}/logs`,
+        path: `${API_PREFIX}/runs/${encodeURIComponent(runId)}/logs`,
       });
       const message = firstRunDiagnosticMessage(logs);
       if (message) lines.push(`diagnostic: ${message}`);
