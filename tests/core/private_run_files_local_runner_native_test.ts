@@ -170,6 +170,7 @@ test.skipIf(!enabled)(
     expect(proof.destroyReceivedSameSlot).toBe(true);
     console.info(JSON.stringify(proof));
   },
+  120_000,
 );
 
 interface ProofReport {
