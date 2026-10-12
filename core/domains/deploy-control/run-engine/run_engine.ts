@@ -43,6 +43,16 @@ import type {
 } from "@takosumi/internal/deploy-control-api";
 import type { CreateRestoreRequest } from "takosumi-contract/backups";
 import type {
+  PrivateRunFileDispatch,
+  PrivateRunFileGrantMinter,
+} from "../mod.ts";
+import type {
+  PrivateRunFileAuthority,
+  PrivateRunFileOperation,
+  PrivateRunFileScope,
+} from "../../private-run-files/mod.ts";
+import { PRIVATE_RUN_FILE_GRANT_MAX_TTL_MS } from "../../private-run-files/grant.ts";
+import type {
   CapsuleCompatibilityReport,
   CapsuleProviderRequirement,
   CapsuleRootProviderRequirement,
@@ -63,6 +73,7 @@ import type {
 } from "takosumi-contract/dependencies";
 import {
   CAPSULE_LIFECYCLE_ACTION_FAILED_ERROR_CODE,
+  normalizeInstallConfigPrivateRunFiles,
   type InstallConfigLifecycleAction,
   type InstallConfigLifecycleCommandAction,
   type InstallConfigLifecyclePhase,
@@ -484,6 +495,7 @@ const RUN_EXECUTION_RENEWAL_UNAVAILABLE_REASON =
   "run_execution_renewal_unavailable";
 const RUN_RENEWAL_TRANSPORT_RETRY_LIMIT = 1;
 const RUN_RENEWAL_TRANSPORT_RETRY_MAX_DELAY_MS = 250;
+const PRIVATE_RUN_FILE_GRANT_DISPATCH_MARGIN_MS = 60_000;
 const WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_REASON =
   "workspace_management_admission_conflict";
 const WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_MESSAGE =
@@ -1534,6 +1546,7 @@ export interface RunEngineDependencies {
   readonly dependencies: DependencyResolutionService;
   readonly verification: RunVerificationService;
   readonly planResolution: PlanResolutionService;
+  readonly privateRunFileGrantMinter?: PrivateRunFileGrantMinter;
   readonly moduleVariableMaterializer?: CapsuleModuleVariableMaterializer;
   readonly runtimeSecretFileMaterializer?: RuntimeSecretFileMaterializer;
   readonly runtimeInputMaterializer?: RuntimeInputMaterializer;
@@ -1574,6 +1587,7 @@ export class RunEngine {
   readonly #dependencies: DependencyResolutionService;
   readonly #verification: RunVerificationService;
   readonly #planResolution: PlanResolutionService;
+  readonly #privateRunFileGrantMinter?: PrivateRunFileGrantMinter;
   readonly #moduleVariableMaterializer?: CapsuleModuleVariableMaterializer;
   readonly #runtimeSecretFileMaterializer?: RuntimeSecretFileMaterializer;
   readonly #runtimeInputMaterializer?: RuntimeInputMaterializer;
@@ -1626,6 +1640,7 @@ export class RunEngine {
     this.#dependencies = deps.dependencies;
     this.#verification = deps.verification;
     this.#planResolution = deps.planResolution;
+    this.#privateRunFileGrantMinter = deps.privateRunFileGrantMinter;
     this.#moduleVariableMaterializer = deps.moduleVariableMaterializer;
     this.#runtimeSecretFileMaterializer = deps.runtimeSecretFileMaterializer;
     this.#runtimeInputMaterializer = deps.runtimeInputMaterializer;
@@ -1811,6 +1826,109 @@ export class RunEngine {
   ): Promise<readonly DispatchRuntimeInputs[] | undefined> {
     const inputs = await this.#requirePreparedPlanRunInputs(planRun);
     return inputs.runtimeInputs;
+  }
+
+  async #mintPrivateRunFileDispatch(
+    planRun: PlanRun,
+    slots: InstallConfig["privateRunFiles"],
+    runId: string,
+    leaseToken: string,
+    profile: RunnerProfile,
+  ): Promise<readonly PrivateRunFileDispatch[] | undefined> {
+    if (!slots?.length) return undefined;
+    const capsuleId = planRun.capsuleId;
+    const epoch = planRun.capsuleExecutionAuthorityEpoch;
+    const minter = this.#privateRunFileGrantMinter;
+    if (
+      !capsuleId || !epoch || !Number.isSafeInteger(epoch) ||
+      !leaseToken || !minter
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "private Run file grant service is unavailable for this Capsule Run",
+        { reason: "private_run_file_grant_unavailable" },
+      );
+    }
+    const capsule = await this.#store.getCapsule(capsuleId);
+    const currentEpoch = await this.#store.getCapsuleExecutionAuthorityEpoch(
+      capsuleId,
+    );
+    if (
+      !capsule || capsule.workspaceId !== planRun.workspaceId ||
+      currentEpoch !== epoch
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Capsule execution authority changed before private Run file grant minting",
+        { reason: "private_run_file_authority_changed" },
+      );
+    }
+    const scopeBase = {
+      workspaceId: capsule.workspaceId,
+      capsuleId,
+      environment: capsule.environment,
+    };
+    const authority: PrivateRunFileAuthority = {
+      runId,
+      executionAuthorityEpoch: epoch,
+      leaseToken,
+    };
+    const operations: readonly PrivateRunFileOperation[] = [
+      "read",
+      "commit",
+      "resolve",
+    ];
+    const maxRunSeconds = profile.resourceLimits?.maxRunSeconds ?? 900;
+    // The grant codec's default clock is Date.now(); use that same wall clock
+    // instead of the injected Run lifecycle clock to avoid expiry skew.
+    const expiresAt = Date.now() + maxRunSeconds * 1_000 +
+      PRIVATE_RUN_FILE_GRANT_DISPATCH_MARGIN_MS;
+    const dispatch: PrivateRunFileDispatch[] = [];
+    try {
+      for (const { slot } of slots) {
+        const scope: PrivateRunFileScope = { ...scopeBase, slot };
+        const minted = await minter.mint({
+          scope,
+          authority,
+          operations,
+          expiresAt,
+        });
+        if (
+          typeof minted.endpoint !== "string" || !minted.endpoint.trim() ||
+          typeof minted.grant !== "string" || !minted.grant.trim()
+        ) {
+          throw new Error("invalid private run file grant result");
+        }
+        dispatch.push({ slot, endpoint: minted.endpoint, grant: minted.grant });
+      }
+    } catch {
+      // A mint failure may contain an opaque bearer token or host-private detail.
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "private Run file grant could not be issued",
+        { reason: "private_run_file_grant_unavailable" },
+      );
+    }
+    return dispatch;
+  }
+
+  #assertPrivateRunFileGrantLifetime(
+    profile: RunnerProfile,
+    slots: InstallConfig["privateRunFiles"],
+  ): void {
+    if (!slots?.length) return;
+    const maxRunSeconds = profile.resourceLimits?.maxRunSeconds ?? 900;
+    if (
+      !Number.isSafeInteger(maxRunSeconds) || maxRunSeconds <= 0 ||
+      maxRunSeconds * 1_000 + PRIVATE_RUN_FILE_GRANT_DISPATCH_MARGIN_MS >
+        PRIVATE_RUN_FILE_GRANT_MAX_TTL_MS
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Runner profile exceeds the private Run file grant lifetime",
+        { reason: "private_run_file_grant_lifetime_unsupported" },
+      );
+    }
   }
 
   /** Secret exposure policy of the profile a run dispatches to (credential gate). */
@@ -2173,6 +2291,7 @@ export class RunEngine {
     const interfaceMaterialization =
       genericRootDispatch?.interfaceMaterialization;
     const runtimeInputs = genericRootDispatch?.runtimeInputs;
+    const privateRunFileSlots = genericRootDispatch?.privateRunFileSlots;
     const lifecycleActions =
       internal.lifecycleActions ?? genericRootDispatch?.lifecycleActions;
     const planRunInputs: PlanRunInputs = {
@@ -2190,6 +2309,7 @@ export class RunEngine {
         : {}),
       ...(interfaceMaterialization ? { interfaceMaterialization } : {}),
       ...(runtimeInputs ? { runtimeInputs } : {}),
+      ...(privateRunFileSlots ? { privateRunFileSlots } : {}),
       ...(lifecycleActions ? { lifecycleActions } : {}),
     };
     const dependencySnapshot = internal.resolvedDependencies?.entries.length
@@ -3602,6 +3722,18 @@ export class RunEngine {
     readonly genericRootPlan: RunEngineGenericRootPlanContext;
     readonly capsulePlanExecutionAuthority: CapsulePlanExecutionAuthority;
   }> {
+    let privateRunFileSlots: InstallConfig["privateRunFiles"];
+    try {
+      privateRunFileSlots = normalizeInstallConfigPrivateRunFiles(
+        input.installConfig.privateRunFiles,
+      );
+    } catch {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Capsule private Run file declaration is invalid",
+        { reason: "private_run_file_declaration_invalid" },
+      );
+    }
     const profile = await this.#requireRunnerProfile(
       input.runnerProfileId ?? this.#defaultRunnerProfileId,
     );
@@ -3757,6 +3889,7 @@ export class RunEngine {
         ...(input.installConfig.sourceBuild
           ? { sourceBuild: input.installConfig.sourceBuild }
           : {}),
+        ...(privateRunFileSlots ? { privateRunFileSlots } : {}),
         ...(moduleVariableMaterialization
           ? { moduleVariableMaterialization }
           : {}),
@@ -4098,6 +4231,9 @@ export class RunEngine {
       workspaceOutputAllowlist,
       outputAllowlist,
       ...(context.sourceBuild ? { sourceBuild: context.sourceBuild } : {}),
+      ...(context.privateRunFileSlots
+        ? { privateRunFileSlots: context.privateRunFileSlots }
+        : {}),
       ...(context.lifecycleActions
         ? { lifecycleActions: context.lifecycleActions }
         : {}),
@@ -4142,6 +4278,18 @@ export class RunEngine {
       request.runnerProfileId ?? this.#defaultRunnerProfileId,
     );
     const lifecycleActions = lifecycleActionsForPlan(installConfig, profile);
+    let privateRunFileSlots: InstallConfig["privateRunFiles"];
+    try {
+      privateRunFileSlots = normalizeInstallConfigPrivateRunFiles(
+        installConfig.privateRunFiles,
+      );
+    } catch {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Capsule private Run file declaration is invalid",
+        { reason: "private_run_file_declaration_invalid" },
+      );
+    }
     const interfaceMaterialization = request.operation === "destroy"
       ? undefined
       : await pinCapsuleInterfaceBlueprints({
@@ -4184,6 +4332,7 @@ export class RunEngine {
         ...(installConfig.sourceBuild
           ? { sourceBuild: installConfig.sourceBuild }
           : {}),
+        ...(privateRunFileSlots ? { privateRunFileSlots } : {}),
         ...(lifecycleActions ? { lifecycleActions } : {}),
         ...(interfaceMaterialization ? { interfaceMaterialization } : {}),
       },
@@ -5426,6 +5575,11 @@ export class RunEngine {
     const variables = inputs.variables;
     const dispatch = moduleDispatchFromInputs(inputs);
     try {
+      this.#assertPrivateRunFileGrantLifetime(profile, dispatch.privateRunFileSlots);
+    } catch (error) {
+      return (await this.#failUnclaimedPlanRun(planRun, error)).run;
+    }
+    try {
       await this.#verification.assertCapsuleCompatibilityAllowsRun(planRun);
     } catch (error) {
       return (await this.#failUnclaimedPlanRun(planRun, error)).run;
@@ -5559,6 +5713,17 @@ export class RunEngine {
       }
     }
     const dispatch = moduleDispatchFromInputs(inputs);
+    try {
+      this.#assertPrivateRunFileGrantLifetime(profile, dispatch.privateRunFileSlots);
+    } catch (error) {
+      const result = await this.#failUnclaimedApplyRun(applyRun, error);
+      if (!result.run) return await this.getApplyRun(runId);
+      const failed = result.run;
+      const capsule = failed.capsuleId
+        ? await this.#store.getCapsule(failed.capsuleId)
+        : undefined;
+      return { applyRun: failed, ...(capsule ? { capsule } : {}) };
+    }
     const key = planRun.capsuleId ?? planRun.id;
     // Capsule lease (spec §22 / §23): when a durable coordination seam is
     // wired, acquire the cross-isolate
@@ -5774,6 +5939,9 @@ export class RunEngine {
       ...(inputs.runtimeInputs
         ? { runtimeInputs: inputs.runtimeInputs as unknown as JsonValue }
         : {}),
+      ...(inputs.privateRunFileSlots
+        ? { privateRunFileSlots: inputs.privateRunFileSlots as unknown as JsonValue }
+        : {}),
     };
     const sealed = await this.#dependencyValueSealer.seal(payload);
     // Cleartext sealable fields are dropped; only `planRunId` + `sealed` persist.
@@ -5840,6 +6008,8 @@ export class RunEngine {
       PlanRunInputs["interfaceMaterialization"] | undefined;
     const runtimeInputs = payload.runtimeInputs as unknown as
       PlanRunInputs["runtimeInputs"] | undefined;
+    const privateRunFileSlots = payload.privateRunFileSlots as unknown as
+      PlanRunInputs["privateRunFileSlots"] | undefined;
     return {
       planRunId,
       variables,
@@ -5856,6 +6026,7 @@ export class RunEngine {
         : {}),
       ...(interfaceMaterialization ? { interfaceMaterialization } : {}),
       ...(runtimeInputs ? { runtimeInputs } : {}),
+      ...(privateRunFileSlots ? { privateRunFileSlots } : {}),
     };
   }
 
@@ -8215,6 +8386,13 @@ export class RunEngine {
         environment: ResolvedRunEnvironment,
         signal: AbortSignal,
       ) => {
+        const privateRunFiles = await this.#mintPrivateRunFileDispatch(
+          effectiveRunning,
+          dispatch.privateRunFileSlots,
+          effectiveRunning.id,
+          leaseToken,
+          profile,
+        );
         const job = {
           planRun: effectiveRunning,
           runnerProfile: profile,
@@ -8262,6 +8440,7 @@ export class RunEngine {
           ...(environment.credentials
             ? { credentials: environment.credentials }
             : {}),
+          ...(privateRunFiles ? { privateRunFiles } : {}),
         };
         const runnerPlanStartedAt = performance.now();
         try {
@@ -9031,6 +9210,7 @@ export class RunEngine {
                 profile,
                 dispatch,
                 credentials: runEnvironment.credentials,
+                leaseToken,
                 onDispatch: () => {
                   runnerDispatched = true;
                 },
@@ -9569,6 +9749,7 @@ export class RunEngine {
     readonly profile: RunnerProfile;
     readonly dispatch: RunModuleDispatch;
     readonly credentials: RunCredentials | undefined;
+    readonly leaseToken: string;
     readonly signal: AbortSignal;
     /** Host invocation deadline forwarded to the runner adapter, if any. */
     readonly deadlineAt?: number;
@@ -9581,7 +9762,7 @@ export class RunEngine {
     providerInstallationPolicy: { requireMirror: boolean } | undefined;
     executionEvidenceCommit: RunExecutionCommit;
   }> {
-    const { running, planRun, profile, dispatch, credentials } = input;
+    const { running, planRun, profile, dispatch, credentials, leaseToken } = input;
     // Narrowed by #assertApplyPreconditions; re-checked here for the type guard.
     const planArtifact = planRun.planArtifact;
     if (!planArtifact) {
@@ -9621,6 +9802,13 @@ export class RunEngine {
       planPolicy?.providerInstallation?.requireMirror === true
         ? { requireMirror: true }
         : undefined;
+    const privateRunFiles = await this.#mintPrivateRunFileDispatch(
+      planRun,
+      dispatch.privateRunFileSlots,
+      running.id,
+      leaseToken,
+      profile,
+    );
     input.onDispatch();
     const runner = this.#runnerForProfile(profile);
     const result = await runner.apply(
@@ -9657,6 +9845,7 @@ export class RunEngine {
         // remote_state dependency states materialized into /work/deps (spec §15).
         ...(envDispatch.depStates ? { depStates: envDispatch.depStates } : {}),
         ...(credentials ? { credentials } : {}),
+        ...(privateRunFiles ? { privateRunFiles } : {}),
       },
       runnerExecutionControl(input.signal, input.deadlineAt),
     );
@@ -11115,6 +11304,13 @@ export class RunEngine {
     }
     const capsule =
       plannedCapsule ?? (await this.#requireCurrentPlannedCapsule(planRun));
+    const privateRunFiles = await this.#mintPrivateRunFileDispatch(
+      planRun,
+      dispatch.privateRunFileSlots,
+      running.id,
+      leaseToken,
+      profile,
+    );
     // Resolve the value-free retirement fence before any external teardown.
     // A missing/corrupt pinned InstallConfig must fail while provider state is
     // still untouched; only the marker append waits for successful destroy.
@@ -11305,6 +11501,7 @@ export class RunEngine {
                 ? { depStates: envDispatch.depStates }
                 : {}),
               ...(credentials ? { credentials } : {}),
+              ...(privateRunFiles ? { privateRunFiles } : {}),
             },
             runnerExecutionControl(credentialSignal, deadlineAt),
               );

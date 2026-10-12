@@ -130,6 +130,13 @@ export interface RuntimeInputsDispatch {
   readonly values: Readonly<Record<string, string>>;
 }
 
+/** Signed per-Run grant for one explicitly declared opaque Capsule file slot. */
+export interface PrivateRunFileDispatch {
+  readonly slot: string;
+  readonly endpoint: string;
+  readonly grant: string;
+}
+
 export interface CommandContext {
   readonly env: Record<string, string>;
   /** Cooperative cancellation propagated from the control-plane run fence. */
@@ -149,6 +156,8 @@ export interface CommandContext {
    * plan/apply ephemeral-variable symmetry is satisfied.
    */
   readonly runtimeInputs?: readonly RuntimeInputsDispatch[];
+  /** Run-scoped opaque grants; materialized only into the OpenTofu process env. */
+  readonly privateRunFiles?: readonly PrivateRunFileDispatch[];
   readonly redactionValues?: readonly string[];
   readonly timeoutMs?: number;
   readonly sourceArchiveMaxBytes?: number;

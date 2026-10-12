@@ -1,5 +1,6 @@
 import { INTERNAL_V1_PREFIX } from "takosumi-contract/api-surface";
 import type { ExecutionContext } from "hono";
+import { PRIVATE_RUN_FILE_HTTP_PATH } from "../../core/api/private_run_file_routes.ts";
 import type { CloudflareWorkerEnv } from "./bindings.ts";
 import {
   createServiceWorkerRequest,
@@ -7,7 +8,10 @@ import {
   isInternalControlPlanePath,
   isServiceControlPlanePath,
 } from "./routes.ts";
-import { createWorkerServiceApp } from "./worker_service.ts";
+import {
+  createWorkerServiceApp,
+  type WorkerPrivateRunFilesComposition,
+} from "./worker_service.ts";
 
 export type { CloudflareWorkerEnv } from "./bindings.ts";
 
@@ -51,11 +55,18 @@ export interface CreateCloudflareWorkerOptions {
   readonly createServiceApp?: (
     env: CloudflareWorkerEnv,
   ) => Promise<CreatedCloudflareWorkerApp>;
+  /** Explicit host-code opt-in to compose the internal private-file route. */
+  readonly privateRunFiles?: WorkerPrivateRunFilesComposition;
 }
 
 export function createCloudflareWorker(
   options: CreateCloudflareWorkerOptions = {},
 ): CloudflareWorkerHandler {
+  if (options.privateRunFiles && options.createServiceApp) {
+    throw new TypeError(
+      "privateRunFiles requires the default worker service composition",
+    );
+  }
   let serviceApp: Promise<CreatedCloudflareWorkerApp> | undefined;
 
   return {
@@ -71,7 +82,8 @@ export function createCloudflareWorker(
       if (isCoordinationEdgePath(url.pathname)) {
         return Response.json({ error: "not found" }, { status: 404 });
       }
-      const internalPath = isInternalControlPlanePath(url.pathname);
+      const privateRunFilePath = isPrivateRunFilePath(url.pathname);
+      const internalPath = isInternalControlPlanePath(url.pathname) || privateRunFilePath;
       if (internalPath && !internalEdgeIngressEnabled(env)) {
         return Response.json({ error: "not found" }, { status: 404 });
       }
@@ -82,7 +94,13 @@ export function createCloudflareWorker(
       ) {
         serviceApp ??= options.createServiceApp
           ? options.createServiceApp(env)
-          : createWorkerServiceApp(env, "takosumi-api");
+          : createWorkerServiceApp(
+              env,
+              "takosumi-api",
+              options.privateRunFiles
+                ? { privateRunFiles: options.privateRunFiles }
+                : {},
+            );
         const created = await serviceApp;
         return created.app.fetch(
           createServiceWorkerRequest(request),
@@ -101,6 +119,12 @@ function isCoordinationEdgePath(pathname: string): boolean {
   const rest = pathname.slice(prefix.length).replace(/^\/+/, "");
   const [segment] = rest.split("/");
   return segment === "coordination";
+}
+
+function isPrivateRunFilePath(pathname: string): boolean {
+  return ["read", "commit", "resolve"].some((operation) =>
+    pathname === `${PRIVATE_RUN_FILE_HTTP_PATH}/${operation}`
+  );
 }
 
 function internalEdgeIngressEnabled(env: CloudflareWorkerEnv): boolean {

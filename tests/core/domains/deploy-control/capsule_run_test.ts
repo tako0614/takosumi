@@ -1379,6 +1379,120 @@ test("capsule plan dispatch carries sourceArchive + stateScope at the current ge
   expect(run.baseStateGeneration).toEqual(0);
 });
 
+test("private Run file grants are minted only for winning capsule Plan, Apply, and Destroy leases", async () => {
+  const mints: Array<{
+    scope: { workspaceId: string; capsuleId: string; environment: string; slot: string };
+    authority: { runId: string; executionAuthorityEpoch: number; leaseToken: string };
+    operations: readonly string[];
+    expiresAt: number;
+  }> = [];
+  const { store, runner, controller } = await seededController(
+    {
+      installConfig: { privateRunFiles: [{ slot: "worker-state" }] },
+    },
+    {
+      privateRunFileGrantMinter: {
+        mint: async (input) => {
+          mints.push(input);
+          return {
+            endpoint: "http://core.internal/internal/private-run-files/v1",
+            grant: `opaque-grant-for-${input.authority.runId}`,
+          };
+        },
+      },
+    },
+  );
+
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+  expect(runner.planJobs[0]?.privateRunFiles).toEqual([{
+    slot: "worker-state",
+    endpoint: "http://core.internal/internal/private-run-files/v1",
+    grant: `opaque-grant-for-${planRun.id}`,
+  }]);
+  const planInputs = await store.getPlanRunInputs(planRun.id);
+  expect(planInputs?.privateRunFileSlots).toEqual([{ slot: "worker-state" }]);
+  expect(JSON.stringify(planInputs)).not.toContain("opaque-grant");
+
+  const apply = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  await controller.runQueuedApply(apply.applyRun.id);
+  expect(runner.applyJobs[0]?.privateRunFiles).toEqual([{
+    slot: "worker-state",
+    endpoint: "http://core.internal/internal/private-run-files/v1",
+    grant: `opaque-grant-for-${apply.applyRun.id}`,
+  }]);
+
+  const destroyPlan = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  expect(runner.planJobs[1]?.privateRunFiles).toEqual([{
+    slot: "worker-state",
+    endpoint: "http://core.internal/internal/private-run-files/v1",
+    grant: `opaque-grant-for-${destroyPlan.planRun.id}`,
+  }]);
+  await controller.approveRun(destroyPlan.planRun.id);
+  const destroyApply = await controller.createApplyRun({
+    planRunId: destroyPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroyPlan.planRun),
+  });
+  await controller.runQueuedApply(destroyApply.applyRun.id);
+  expect(runner.destroyJobs[0]?.privateRunFiles).toEqual([{
+    slot: "worker-state",
+    endpoint: "http://core.internal/internal/private-run-files/v1",
+    grant: `opaque-grant-for-${destroyApply.applyRun.id}`,
+  }]);
+
+  expect(mints).toHaveLength(4);
+  expect(mints.map(({ authority }) => authority.runId)).toEqual([
+    planRun.id,
+    apply.applyRun.id,
+    destroyPlan.planRun.id,
+    destroyApply.applyRun.id,
+  ]);
+  expect(mints.every(({ authority }) =>
+    authority.executionAuthorityEpoch === planRun.capsuleExecutionAuthorityEpoch &&
+    authority.leaseToken.length > 0
+  )).toBe(true);
+  expect(mints.every(({ scope, operations }) =>
+    scope.workspaceId === "ws_test001" && scope.capsuleId === "cap_fixture1" &&
+    scope.environment === "preview" && scope.slot === "worker-state" &&
+    operations.join(",") === "read,commit,resolve"
+  )).toBe(true);
+});
+
+test("private Run file plans fail before claim when profile exceeds grant lifetime", async () => {
+  let mintCount = 0;
+  const profile = {
+    ...multiProviderRunnerProfile(),
+    resourceLimits: { maxRunSeconds: 1_141 },
+  };
+  const { runner, controller } = await seededController(
+    { installConfig: { privateRunFiles: [{ slot: "worker-state" }] } },
+    {
+      runnerProfiles: [profile],
+      defaultRunnerProfileId: profile.id,
+      privateRunFileGrantMinter: {
+        mint: async () => {
+          mintCount += 1;
+          return {
+            endpoint: "https://core.example/internal/private-run-files/v1",
+            grant: "must-not-mint",
+          };
+        },
+      },
+    },
+  );
+
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+  expect(planRun.status).toBe("failed");
+  expect(planRun.startedAt).toBeUndefined();
+  expect(planRun.diagnostics?.[0]?.message).toContain(
+    "private Run file grant lifetime",
+  );
+  expect(mintCount).toBe(0);
+  expect(runner.planJobs).toHaveLength(0);
+});
+
 test("Capsule Plan creation deadline ends before awaited inline runner execution", async () => {
   const store = new InMemoryOpenTofuControlStore();
   await seedRunnableCapsuleModel(store, { environment: "preview" });

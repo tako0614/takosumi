@@ -29,6 +29,7 @@ import type {
   SourceCredentials,
   PreparedProviderCredentialFiles,
   RenewableCredentialProjection,
+  PrivateRunFileDispatch,
   RunCredentialRefreshUpdate,
   CredentialRefreshSessionMetadata,
 } from "./types.ts";
@@ -376,6 +377,7 @@ export function commandContextFromRequest(
       ? { kind: "plan" as const, id: runId }
       : undefined;
   const runtimeInputs = runtimeInputsFromRequest(request);
+  const privateRunFiles = privateRunFilesFromRequest(request);
   const redactionValues = redactionValuesForRun(
     runId,
     redactionValuesFromRequestCredentials(request),
@@ -420,6 +422,7 @@ export function commandContextFromRequest(
     ...(credentialRefreshOwner ? { credentialRefreshOwner } : {}),
     ...(credentialRefreshSequence !== undefined ? { credentialRefreshSequence } : {}),
     ...(runtimeInputs.length > 0 ? { runtimeInputs } : {}),
+    ...(privateRunFiles.length > 0 ? { privateRunFiles } : {}),
     ...(redactionValues.length > 0 ? { redactionValues } : {}),
     ...(maxRunSeconds ? { timeoutMs: maxRunSeconds * 1000 } : {}),
     ...(maxSourceArchiveBytes
@@ -428,6 +431,20 @@ export function commandContextFromRequest(
     ...(maxSourceDecompressedBytes
       ? { sourceArchiveMaxDecompressedBytes: maxSourceDecompressedBytes }
       : {}),
+  };
+}
+
+/** Materialize private-file authority only for the trusted OpenTofu process. */
+export function openTofuCommandContext(
+  context: CommandContext,
+): CommandContext {
+  if (!context.privateRunFiles?.length) return context;
+  return {
+    ...context,
+    env: {
+      ...context.env,
+      TAKOSUMI_PRIVATE_RUN_FILES: JSON.stringify(context.privateRunFiles),
+    },
   };
 }
 
@@ -759,7 +776,55 @@ export function redactionValuesFromRequestCredentials(
     // A provider that echoes a run-scoped sensitive input back in a diagnostic
     // must not leak it through runner stdout/stderr.
     ...runtimeInputRedactionValues(runtimeInputsFromRequest(request)),
+    ...privateRunFilesFromRequest(request).map((grant) => grant.grant),
   ];
+}
+
+export function privateRunFilesFromRequest(
+  request: unknown,
+): readonly PrivateRunFileDispatch[] {
+  const raw = recordField(request, "privateRunFiles");
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new Error("private Run file grants are malformed");
+  }
+  const seen = new Set<string>();
+  return raw.map((entry) => {
+    if (
+      !isRecord(entry) ||
+      Object.keys(entry).length !== 3 ||
+      !Object.prototype.hasOwnProperty.call(entry, "slot") ||
+      !Object.prototype.hasOwnProperty.call(entry, "endpoint") ||
+      !Object.prototype.hasOwnProperty.call(entry, "grant")
+    ) {
+      throw new Error("private Run file grant is malformed");
+    }
+    const { slot, endpoint, grant } = entry;
+    if (
+      typeof slot !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(slot) ||
+      seen.has(slot) ||
+      typeof endpoint !== "string" || endpoint.length > 2_048 ||
+      typeof grant !== "string" || grant.length === 0 || grant.length > 16_384
+    ) {
+      throw new Error("private Run file grant is invalid");
+    }
+    let parsedEndpoint: URL;
+    try {
+      parsedEndpoint = new URL(endpoint);
+    } catch {
+      throw new Error("private Run file grant is invalid");
+    }
+    if (
+      (parsedEndpoint.protocol !== "https:" && parsedEndpoint.protocol !== "http:") ||
+      parsedEndpoint.username !== "" || parsedEndpoint.password !== "" ||
+      parsedEndpoint.search !== "" || parsedEndpoint.hash !== ""
+    ) {
+      throw new Error("private Run file grant is invalid");
+    }
+    seen.add(slot);
+    return { slot, endpoint: parsedEndpoint.toString().replace(/\/$/u, ""), grant };
+  });
 }
 
 export function sourceCredentialRedactionValues(

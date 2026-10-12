@@ -166,13 +166,41 @@ export async function mutationRequestDigest(
   restoredProviderLockDigest?: string,
 ): Promise<string> {
   // The raw request, including credentials, is never persisted. A digest of
-  // the exact dispatched JSON is deliberately conservative: changed material
-  // may lose convergence, but can never adopt another provider invocation.
+  // exact semantic dispatch authority is deliberately conservative. Private
+  // Run file grants are authenticated, short-lived bearer values that may be
+  // reminted before dispatch; slot and endpoint remain pinned in the digest.
+  const semanticRequest = requestWithStablePrivateRunFileAuthority(request);
   return await digestBytes(
     new TextEncoder().encode(
-      JSON.stringify({ runId, action, request, restoredProviderLockDigest }),
+      JSON.stringify({ runId, action, request: semanticRequest, restoredProviderLockDigest }),
     ),
   );
+}
+
+function requestWithStablePrivateRunFileAuthority(request: unknown): unknown {
+  if (!isRecord(request) || request.privateRunFiles === undefined) return request;
+  if (!Array.isArray(request.privateRunFiles)) {
+    throw new Error("private Run file authority is malformed");
+  }
+  const seen = new Set<string>();
+  const privateRunFiles = request.privateRunFiles.map((entry) => {
+    if (!isRecord(entry) || Object.keys(entry).length !== 3 ||
+      !Object.prototype.hasOwnProperty.call(entry, "slot") ||
+      !Object.prototype.hasOwnProperty.call(entry, "endpoint") ||
+      !Object.prototype.hasOwnProperty.call(entry, "grant")) {
+      throw new Error("private Run file authority is malformed");
+    }
+    const { slot, endpoint, grant } = entry;
+    if (typeof slot !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(slot) || seen.has(slot) ||
+      typeof endpoint !== "string" || endpoint.length === 0 || endpoint.length > 2_048 ||
+      typeof grant !== "string" || grant.length === 0 || grant.length > 16_384) {
+      throw new Error("private Run file authority is invalid");
+    }
+    seen.add(slot);
+    return { slot, endpoint };
+  });
+  return { ...request, privateRunFiles };
 }
 
 export async function ensureCustodyDirectory(

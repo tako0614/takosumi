@@ -456,6 +456,7 @@ test("local OpenTofu plan promotes exact post-init provider lockfile bytes", asy
     .update(planBytes)
     .digest("hex")}`;
   const requests: string[] = [];
+  let postedRunRequest: Record<string, unknown> | undefined;
   const server = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -465,6 +466,10 @@ test("local OpenTofu plan promotes exact post-init provider lockfile bytes", asy
         request.method === "POST" &&
         url.pathname === `/runs/${runId}`
       ) {
+        const postedBody = await request.clone().json() as {
+          readonly request?: Record<string, unknown>;
+        };
+        postedRunRequest = postedBody.request;
         return Response.json({
           status: "succeeded",
           exitCode: 0,
@@ -530,7 +535,18 @@ test("local OpenTofu plan promotes exact post-init provider lockfile bytes", asy
       },
       runnerProfile: createLocalOpenTofuRunnerProfile(),
       variables: {},
+      privateRunFiles: [{
+        slot: "state-slot",
+        endpoint: "http://core.internal/internal/private-run-files/v1",
+        grant: "opaque-run-grant-test-value",
+      }],
     });
+    expect(postedRunRequest?.privateRunFiles).toEqual([{
+      slot: "state-slot",
+      endpoint: "http://core.internal/internal/private-run-files/v1",
+      grant: "opaque-run-grant-test-value",
+    }]);
+    expect(JSON.stringify(result)).not.toContain("opaque-run-grant-test-value");
     expect(result.providerLockDigest).toBe(lockDigest);
     expect(result.providerLockArtifact).toEqual({
       kind: "local",

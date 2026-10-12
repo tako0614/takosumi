@@ -4,7 +4,13 @@ import {
   createTakosumiService,
 } from "../../core/bootstrap.ts";
 import type { AppAdapters } from "../../core/app_context.ts";
-import { selectSecretBoundaryCrypto } from "../../core/adapters/secret-store/memory.ts";
+import {
+  PartitionedSecretBoundaryCrypto,
+  selectSecretBoundaryCrypto,
+  type SecretBoundaryCrypto,
+} from "../../core/adapters/secret-store/memory.ts";
+import { createPrivateRunFileGrantCodec } from "../../core/domains/private-run-files/grant.ts";
+import { PRIVATE_RUN_FILE_MAX_BYTES } from "../../core/api/private_run_file_routes.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
 import type {
   EnqueueRun,
@@ -26,6 +32,8 @@ import {
   createCloudflareD1OpenTofuControlStore,
   initializeD1OpenTofuLedgerSchemaBinding,
 } from "./d1_opentofu_store.ts";
+import { D1PrivateRunFileRepository } from "./d1_private_run_file_repository.ts";
+import { R2PrivateRunFileBlobStore } from "./private_run_file_r2_blob_store.ts";
 import {
   backupArtifactStoreFromEnv,
   backupObjectReaderFromR2,
@@ -81,6 +89,15 @@ import {
   type RuntimeInputCapsulePublicOrigin,
 } from "../../deploy/platform/runtime_input_oidc_client_source.ts";
 
+export interface WorkerPrivateRunFilesComposition {
+  /** Exact HTTPS or loopback Core endpoint delivered to the Runner. */
+  readonly endpoint: string;
+  /** Operator-isolated prefix within the existing R2_ARTIFACTS binding. */
+  readonly prefix: string;
+  /** Must be the Core private-file contract's exact 16 MiB cap. */
+  readonly maxBytes: number;
+}
+
 export async function createWorkerServiceApp(
   env: CloudflareWorkerEnv,
   role: "takosumi-api",
@@ -121,6 +138,8 @@ export async function createWorkerServiceApp(
      * registering a redirect URI for an origin nobody serves.
      */
     readonly capsulePublicOrigin?: RuntimeInputCapsulePublicOrigin;
+    /** Explicit host opt-in; absent keeps Cloud private-file routes/grants unmounted. */
+    readonly privateRunFiles?: WorkerPrivateRunFilesComposition;
   } = {},
 ): Promise<CreatedTakosumiService> {
   const runtimeEnv = cloudflareRuntimeEnv(env, role);
@@ -163,6 +182,11 @@ export async function createWorkerServiceApp(
   // run — the previously-missing wiring that broke provider plan/apply in the
   // deployed worker.
   const secretCrypto = selectSecretBoundaryCrypto({ env: runtimeEnv });
+  const privateRunFiles = workerPrivateRunFilesFromOptions(
+    env,
+    secretCrypto,
+    options.privateRunFiles,
+  );
   const allowOperatorScopedProviderConnections = envFlag(
     env.TAKOSUMI_ALLOW_OPERATOR_BACKED_PROVIDER_ENVS,
   );
@@ -396,6 +420,7 @@ export async function createWorkerServiceApp(
       : {}),
     allowOperatorScopedProviderConnections,
     secretCrypto,
+    ...(privateRunFiles ? { privateRunFiles } : {}),
     ...(billingExtensionFactory ? { billingExtensionFactory } : {}),
     // GA async run lifecycle: every create path persists the Run `queued` and
     // schedules its per-run RUN_OWNER directly. The Worker never falls back to
@@ -422,6 +447,38 @@ export async function createWorkerServiceApp(
     ...(dependencyValueSealer ? { dependencyValueSealer } : {}),
     ...(releaseActivator ? { releaseActivator } : {}),
   });
+}
+
+function workerPrivateRunFilesFromOptions(
+  env: CloudflareWorkerEnv,
+  cryptoBoundary: SecretBoundaryCrypto,
+  configuration: WorkerPrivateRunFilesComposition | undefined,
+): CreateTakosumiServiceOptions["privateRunFiles"] | undefined {
+  if (configuration === undefined) return undefined;
+  if (configuration.maxBytes !== PRIVATE_RUN_FILE_MAX_BYTES) {
+    throw new TypeError("Cloud private run files require the exact 16 MiB cap");
+  }
+  if (!(cryptoBoundary instanceof PartitionedSecretBoundaryCrypto)) {
+    throw new TypeError("Cloud private run files require configured partitioned encryption");
+  }
+  if (!env.R2_ARTIFACTS) {
+    throw new TypeError("Cloud private run files require the R2_ARTIFACTS binding");
+  }
+  const grants = createPrivateRunFileGrantCodec({ cryptoBoundary });
+  const repository = new D1PrivateRunFileRepository(env.TAKOSUMI_CONTROL_DB);
+  const blobs = new R2PrivateRunFileBlobStore({
+    bucket: env.R2_ARTIFACTS,
+    prefix: configuration.prefix,
+    cryptoBoundary,
+    maxBytes: configuration.maxBytes,
+  });
+  return {
+    endpoint: configuration.endpoint,
+    grants,
+    repository,
+    blobs,
+    maxBytes: configuration.maxBytes,
+  };
 }
 
 function mergeCredentialRecipeHostContributions(

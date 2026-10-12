@@ -418,6 +418,8 @@ export interface PlanRunInputs {
    * values themselves are minted at Apply and never persist here.
    */
   readonly runtimeInputs?: readonly DispatchRuntimeInputs[];
+  /** Exact value-free service declaration; grants are minted per winning Run. */
+  readonly privateRunFileSlots?: readonly { readonly slot: string }[];
   /**
    * At-rest seal of the SENSITIVE-bearing sidecar payload (spec §11 / §18). A
    * sensitive `published_output` value injected into a plan flows into

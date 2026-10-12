@@ -27,7 +27,17 @@ import {
   createTakosumiService,
   type CreatedTakosumiService,
 } from "../../../core/bootstrap.ts";
-import { selectSecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
+import {
+  PartitionedSecretBoundaryCrypto,
+  selectSecretBoundaryCrypto,
+} from "../../../core/adapters/secret-store/memory.ts";
+import { isAbsolute, normalize } from "node:path";
+import {
+  PRIVATE_RUN_FILE_MAX_BYTES,
+} from "../../../core/api/private_run_file_routes.ts";
+import { createPrivateRunFileGrantCodec } from "../../../core/domains/private-run-files/grant.ts";
+import { PostgresPrivateRunFileRepository } from "../../../core/domains/private-run-files/repository_sql.ts";
+import { createLocalPrivateRunFileBlobStore } from "./local-private-run-file-blob-store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
 import {
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
@@ -104,6 +114,12 @@ export interface ComposedAppInput {
    * service falls back to its in-memory ledger (fine for dev / local-substrate).
    */
   readonly sqlClient?: CreateTakosumiServiceArg["sqlClient"];
+  /** Explicit durable local mount. No root or external URL is inferred. */
+  readonly privateRunFiles?: {
+    readonly root: string;
+    readonly endpoint: string;
+    readonly maxBytes: number;
+  };
   /**
    * Optional pre-built OpenTofu Capsule / Run ledger. When supplied, Core uses
    * this exact store rather than deriving another one from `sqlClient`.
@@ -185,6 +201,27 @@ export async function buildComposedApp(
 ): Promise<CreatedTakosumiService> {
   const { runtimeEnv } = embeddedServiceRuntimeEnv(input.runtimeEnv);
   const secretCrypto = selectSecretBoundaryCrypto({ env: runtimeEnv });
+  let privateRunFiles: CreateTakosumiServiceArg["privateRunFiles"];
+  if (input.privateRunFiles) {
+    if (!input.sqlClient ||
+      !(secretCrypto instanceof PartitionedSecretBoundaryCrypto) ||
+      input.privateRunFiles.maxBytes !== PRIVATE_RUN_FILE_MAX_BYTES ||
+      !isAbsolute(input.privateRunFiles.root) ||
+      normalize(input.privateRunFiles.root) !== input.privateRunFiles.root) {
+      throw new TypeError("private run file mount requires durable SQL, partitioned encryption, exact cap and explicit absolute root");
+    }
+    privateRunFiles = {
+      endpoint: input.privateRunFiles.endpoint,
+      maxBytes: input.privateRunFiles.maxBytes,
+      grants: createPrivateRunFileGrantCodec({ cryptoBoundary: secretCrypto }),
+      repository: new PostgresPrivateRunFileRepository(input.sqlClient),
+      blobs: createLocalPrivateRunFileBlobStore({
+        root: input.privateRunFiles.root,
+        maxBytes: input.privateRunFiles.maxBytes,
+        cryptoBoundary: secretCrypto,
+      }),
+    };
+  }
   const connectionOAuthHelpers =
     input.connectionOAuthHelpers ??
     createConnectionOAuthHelpers({
@@ -200,6 +237,7 @@ export async function buildComposedApp(
   let controlPlaneOperations: CreatedTakosumiService["operations"] | undefined;
   const created = await createTakosumiService({
     runtimeEnv,
+    ...(privateRunFiles ? { privateRunFiles } : {}),
     mountInternalLedgerRoutes: true,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     // The Bun/Postgres reference server explicitly installs the reference

@@ -575,6 +575,42 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       indexes: [["run_id"]],
     },
     {
+      name: "takosumi_private_run_file_pointers",
+      domain: "deploy",
+      columns: [
+        "workspace_id",
+        "capsule_id",
+        "environment",
+        "slot",
+        "version",
+        "digest",
+        "blob_id",
+      ],
+      primaryKey: ["workspace_id", "capsule_id", "environment", "slot"],
+    },
+    {
+      name: "takosumi_private_run_file_receipts",
+      domain: "deploy",
+      columns: [
+        "workspace_id",
+        "capsule_id",
+        "environment",
+        "slot",
+        "commit_id",
+        "expected_version",
+        "version",
+        "digest",
+        "blob_id",
+      ],
+      primaryKey: [
+        "workspace_id",
+        "capsule_id",
+        "environment",
+        "slot",
+        "commit_id",
+      ],
+    },
+    {
       name: "takosumi_capsule_interface_materialization_intents",
       domain: "deploy",
       columns: [
@@ -4935,5 +4971,34 @@ alter table takosumi_workspaces
 alter table takosumi_runs
   add constraint takosumi_runs_kind_check
   check (kind in ('source_sync','compatibility_check','plan','apply','destroy_plan','destroy_apply','drift_check','backup','restore','resource_operation','state_recovery'));`,
+    },
+    {
+      id: "deploy.private_run_files.add",
+      version: 116,
+      domain: "deploy",
+      description:
+        "Add opaque private Run file pointers and immutable commit receipts without tying retention to active Run rows.",
+      sql: `create table if not exists takosumi_private_run_file_pointers (
+  workspace_id text not null,
+  capsule_id text not null,
+  environment text not null,
+  slot text not null check (length(trim(slot)) > 0),
+  version bigint not null check (version > 0),
+  digest text not null check (digest ~ '^sha256:[0-9a-f]{64}$'),
+  blob_id text not null check (length(trim(blob_id)) > 0),
+  primary key (workspace_id, capsule_id, environment, slot)
+);
+create table if not exists takosumi_private_run_file_receipts (
+  workspace_id text not null,
+  capsule_id text not null,
+  environment text not null,
+  slot text not null check (length(trim(slot)) > 0),
+  commit_id text not null check (length(trim(commit_id)) > 0),
+  expected_version bigint not null check (expected_version >= 0),
+  version bigint not null check (version = expected_version + 1),
+  digest text not null check (digest ~ '^sha256:[0-9a-f]{64}$'),
+  blob_id text not null check (length(trim(blob_id)) > 0),
+  primary key (workspace_id, capsule_id, environment, slot, commit_id)
+);`,
     },
   ]);
