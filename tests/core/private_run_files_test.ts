@@ -284,7 +284,7 @@ test("finalization cannot acknowledge a different blob for a new or replayed rec
     commitId: "misbound-new",
     expectedVersion: 0,
     version: 1,
-    digest: "sha256:" + "0".repeat(64) as PrivateRunFileDigest,
+    digest: "sha256:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
     blobId: "another-nonempty-blob",
   };
   await expect(newCommit.service.commit({
