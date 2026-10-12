@@ -17,6 +17,7 @@ import type {
 } from "../../runner/lib/types.ts";
 import { redactRunnerOutput } from "../../runner/lib/redaction.ts";
 import { handleRunnerRequest } from "../../runner/lib/http_server.ts";
+import { PRIVATE_RUN_FILE_REFRESH_CAPABILITY } from "../../core/shared/private_run_file_refresh.ts";
 
 const APPLY_RUN_ID = "apply_renewable_test";
 const RUNNER_RUN_ID = "plan_renewable_test";
@@ -30,7 +31,10 @@ test("runner health advertises the exact renewable credential transport capabili
   expect(await response.json()).toEqual({
     ok: true,
     runner: "opentofu",
-    capabilities: ["takosumi.runner-credential-refresh@v1"],
+    capabilities: [
+      "takosumi.runner-credential-refresh@v1",
+      PRIVATE_RUN_FILE_REFRESH_CAPABILITY,
+    ],
     mutationCustodyMode: "cloudflare-do",
   });
 });

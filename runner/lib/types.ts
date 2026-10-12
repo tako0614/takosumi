@@ -137,6 +137,11 @@ export interface PrivateRunFileDispatch {
   readonly grant: string;
 }
 
+export interface PrivateRunFileRefreshOwner {
+  readonly kind: "plan" | "apply";
+  readonly id: string;
+}
+
 export interface CommandContext {
   readonly env: Record<string, string>;
   /** Cooperative cancellation propagated from the control-plane run fence. */
@@ -158,6 +163,9 @@ export interface CommandContext {
   readonly runtimeInputs?: readonly RuntimeInputsDispatch[];
   /** Run-scoped opaque grants; materialized only into the OpenTofu process env. */
   readonly privateRunFiles?: readonly PrivateRunFileDispatch[];
+  /** Private descriptor-file path; projected only at the trusted OpenTofu spawn seam. */
+  readonly privateRunFilesFile?: string;
+  readonly privateRunFileRefreshOwner?: PrivateRunFileRefreshOwner;
   readonly redactionValues?: readonly string[];
   readonly timeoutMs?: number;
   readonly sourceArchiveMaxBytes?: number;

@@ -9,6 +9,12 @@ import { savedPlanStateMetadata, SAVED_PLAN_PREFLIGHT_MAX_BYTES } from "./saved_
 import { readJsonObject, parseAction } from "./util.ts";
 import { redactRunnerOutput } from "./redaction.ts";
 import {
+  MAX_PRIVATE_RUN_FILE_DESCRIPTOR_BYTES,
+  MAX_PRIVATE_RUN_FILE_ROTATIONS,
+  PRIVATE_RUN_FILE_REFRESH_CAPABILITY,
+  PRIVATE_RUN_FILE_REFRESH_SEQUENCE_HEADER,
+} from "../../core/shared/private_run_file_refresh.ts";
+import {
   redactionValuesFromRequest,
   sourceCredentialRedactionValuesFromRequest,
   refreshRunCredentials,
@@ -17,6 +23,10 @@ import {
   beginRunCredentialRefreshSession,
   endRunCredentialRefreshSession,
   runCredentialRefreshSessionMetadata,
+  beginRunPrivateRunFileRefreshSession,
+  endRunPrivateRunFileRefreshSession,
+  refreshRunPrivateFiles,
+  runPrivateRunFileRefreshSessionMetadata,
 } from "./credentials.ts";
 import {
   isSourceSyncRequest,
@@ -184,6 +194,7 @@ async function handleRunnerRequestBody(
         runner: "opentofu",
         capabilities: [
           "takosumi.runner-credential-refresh@v1",
+          PRIVATE_RUN_FILE_REFRESH_CAPABILITY,
           ...(custodyMode === "local-http" && dependencies.localPreparationV2 === true
             ? ["takosumi.local-mutation-preparation@v2"] : []),
         ],
@@ -236,6 +247,59 @@ async function handleRunnerRequestBody(
           !runCredentialRefreshSessionMetadata(runId)) return indeterminate();
         return await refresh();
       });
+    }
+    const privateRunFileRefreshMatch = /^\/runs\/([^/]+)\/private-run-files$/.exec(
+      url.pathname,
+    );
+    if (privateRunFileRefreshMatch) {
+      const runId = decodeURIComponent(privateRunFileRefreshMatch[1]!);
+      if (request.method === "GET") {
+        const metadata = runPrivateRunFileRefreshSessionMetadata(runId);
+        return metadata
+          ? Response.json(metadata)
+          : Response.json(
+              { error: "private Run file refresh is not active" },
+              { status: 409 },
+            );
+      }
+      if (request.method !== "PUT") {
+        return Response.json(
+          { error: "method not allowed" },
+          { status: 405, headers: { allow: "PUT" } },
+        );
+      }
+      const refresh = async (): Promise<Response> => {
+        try {
+          const body = await readBoundedJsonObject(
+            request,
+            MAX_PRIVATE_RUN_FILE_DESCRIPTOR_BYTES,
+          );
+          // Local-http mutation holds the per-Run command gate for the whole
+          // Plan. Renewal may proceed only against an already-live session;
+          // that session's serialized update path fences identity, sequence,
+          // cancellation, and close. Never create or resume authority here.
+          if (
+            custodyMode === "local-http" &&
+            !runPrivateRunFileRefreshSessionMetadata(runId)
+          ) {
+            return Response.json(
+              { error: "private Run file refresh rejected" },
+              { status: 409 },
+            );
+          }
+          const sequence = await refreshRunPrivateFiles(runId, body);
+          return Response.json({ ok: true, status: "updated", sequence });
+        } catch {
+          // The body may contain bearer material and filesystem failures may
+          // include the private descriptor path. Keep the response value-free.
+          return Response.json(
+            { error: "private Run file refresh rejected" },
+            { status: 409 },
+          );
+        }
+      };
+      if (custodyMode !== "local-http") return await refresh();
+      return await refresh();
     }
     const match = /^\/runs\/([^/]+)$/.exec(url.pathname);
     const completionMatch = /^\/runs\/([^/]+)\/completion$/.exec(url.pathname);
@@ -600,6 +664,7 @@ async function handleRunnerRequestBody(
     const mutationRedactionScope =
       action === "plan" || action === "apply" || action === "destroy";
     let credentialRefreshSessionHandle: object | undefined;
+    let privateRunFileRefreshSessionHandle: object | undefined;
     try {
       if (mutationRedactionScope) {
         credentialRefreshSessionHandle = await beginRunCredentialRefreshSession(
@@ -608,6 +673,16 @@ async function handleRunnerRequestBody(
           body.request,
           request.signal,
           requestRedactionValues,
+        );
+        privateRunFileRefreshSessionHandle = await beginRunPrivateRunFileRefreshSession(
+          runId,
+          action as "plan" | "apply" | "destroy",
+          body.request,
+          request.signal,
+          requestRedactionValues,
+          privateRunFileRefreshSequence(
+            request.headers.get(PRIVATE_RUN_FILE_REFRESH_SEQUENCE_HEADER),
+          ),
         );
         setRunRedactionValues(runId, requestRedactionValues);
       }
@@ -676,6 +751,10 @@ async function handleRunnerRequestBody(
           runId,
           credentialRefreshSessionHandle,
         );
+        await endRunPrivateRunFileRefreshSession(
+          runId,
+          privateRunFileRefreshSessionHandle,
+        );
         clearRunRedactionValues(runId, requestRedactionValues);
       }
     }
@@ -687,6 +766,18 @@ async function handleRunnerRequestBody(
       request.signal,
     );
   }
+}
+
+function privateRunFileRefreshSequence(header: string | null): number {
+  if (header === null) return 0;
+  if (!/^(0|[1-9][0-9]*)$/u.test(header)) {
+    throw new Error("private Run file refresh sequence header is malformed");
+  }
+  const sequence = Number(header);
+  if (!Number.isSafeInteger(sequence) || sequence > MAX_PRIVATE_RUN_FILE_ROTATIONS) {
+    throw new Error("private Run file refresh sequence header is malformed");
+  }
+  return sequence;
 }
 
 async function readBoundedJsonObject(
