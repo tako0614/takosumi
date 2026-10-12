@@ -286,12 +286,26 @@ export class PrivateRunFilesService {
       return result("unknown", stable, digest);
     }
     if (finalized.kind === "committed" || finalized.kind === "replayed") {
-      if (!sameReceipt(finalized.receipt, stable, digest) || finalized.receipt.blobId !== blobId) {
+      if (!sameReceipt(finalized.receipt, stable, digest)) {
+        return result("conflict", stable, digest);
+      }
+      if (finalized.kind === "committed" && finalized.receipt.blobId !== blobId) {
         throw new PrivateRunFilesError("integrity_failure");
       }
-      if (prior && finalized.kind !== "replayed") {
-        throw new PrivateRunFilesError("integrity_failure");
+      if (finalized.kind === "replayed") {
+        if (prior && finalized.receipt.blobId !== prior.blobId) {
+          throw new PrivateRunFilesError("integrity_failure");
+        }
+        if (!prior) {
+          await this.#readVerifiedBlob(
+            stable.scope,
+            finalized.receipt.blobId,
+            digest,
+            stable.bytes.byteLength,
+          );
+        }
       }
+      if (prior && finalized.kind !== "replayed") throw new PrivateRunFilesError("integrity_failure");
       return { kind: finalized.kind, receipt: copyReceipt(finalized.receipt) };
     }
     return result(finalized.kind, stable, digest);

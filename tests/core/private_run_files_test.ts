@@ -51,6 +51,7 @@ class MemoryRepository implements PrivateRunFileRepositoryPort {
   finalizeCalls = 0;
   finalizedReceiptOverride: PrivateRunFileReceipt | undefined;
   lookupReceiptOverride: Awaited<ReturnType<PrivateRunFileRepositoryPort["lookupReceipt"]>> | undefined;
+  lookupBarrier: (() => Promise<void>) | undefined;
 
   async readPointer(request: { scope: PrivateRunFileScope }) {
     return this.pointers.get(scopeKey(request.scope));
@@ -62,7 +63,9 @@ class MemoryRepository implements PrivateRunFileRepositoryPort {
       return { kind: "authority_rejected" as const };
     }
     const receipt = this.receipts.get(`${scopeKey(request.scope)}:${request.commitId}`);
-    return receipt ? { kind: "found" as const, receipt } : { kind: "absent" as const };
+    const result = receipt ? { kind: "found" as const, receipt } : { kind: "absent" as const };
+    await this.lookupBarrier?.();
+    return result;
   }
 
   async commitPointer(request: Parameters<PrivateRunFileRepositoryPort["commitPointer"]>[0]) {
@@ -124,6 +127,17 @@ class MemoryBlobs implements PrivateRunFileBlobPort {
 
 function scopeKey(value: PrivateRunFileScope) {
   return `${value.workspaceId}/${value.capsuleId}/${value.environment}/${value.slot}`;
+}
+
+function twoPartyBarrier(): () => Promise<void> {
+  let arrivals = 0;
+  let open!: () => void;
+  const gate = new Promise<void>((resolve) => { open = resolve; });
+  return async () => {
+    arrivals += 1;
+    if (arrivals === 2) open();
+    await gate;
+  };
 }
 
 test("distinguishes an absent slot from a committed zero-byte file", async () => {
@@ -300,6 +314,27 @@ test("finalization cannot acknowledge a different blob for a new or replayed rec
   await expect(replayCommit.service.commit({
     scope, authority, expectedVersion: 0, commitId: "misbound-replay", bytes: new Uint8Array([2]),
   })).rejects.toMatchObject({ code: "integrity_failure" });
+});
+
+test("same-content concurrent receipt races replay the verified winner, changed content conflicts", async () => {
+  const same = build();
+  same.repository.lookupBarrier = twoPartyBarrier();
+  const sameResults = await Promise.all([
+    same.service.commit({ scope, authority, expectedVersion: 0, commitId: "same-race", bytes: new Uint8Array([9]) }),
+    same.service.commit({ scope, authority, expectedVersion: 0, commitId: "same-race", bytes: new Uint8Array([9]) }),
+  ]);
+  expect(sameResults.map((result) => result.kind).sort()).toEqual(["committed", "replayed"]);
+  const receipts = sameResults.map((result) => result.kind === "committed" || result.kind === "replayed" ? result.receipt : undefined);
+  expect(receipts[0]).toEqual(receipts[1]);
+  expect(same.blobs.nextId).toBe(2);
+
+  const changed = build();
+  changed.repository.lookupBarrier = twoPartyBarrier();
+  const changedResults = await Promise.all([
+    changed.service.commit({ scope, authority, expectedVersion: 0, commitId: "changed-race", bytes: new Uint8Array([10]) }),
+    changed.service.commit({ scope, authority, expectedVersion: 0, commitId: "changed-race", bytes: new Uint8Array([11]) }),
+  ]);
+  expect(changedResults.map((result) => result.kind).sort()).toEqual(["committed", "conflict"]);
 });
 
 test("receipt resolution is fenced against the current Capsule epoch and Run lease", async () => {
