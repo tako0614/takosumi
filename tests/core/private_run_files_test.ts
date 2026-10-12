@@ -301,9 +301,10 @@ test("finalization cannot acknowledge a different blob for a new or replayed rec
     digest: "sha256:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
     blobId: "another-nonempty-blob",
   };
-  await expect(newCommit.service.commit({
+  const misboundCommit = await newCommit.service.commit({
     scope, authority, expectedVersion: 0, commitId: "misbound-new", bytes: new Uint8Array([1]),
-  })).rejects.toMatchObject({ code: "integrity_failure" });
+  });
+  expect(misboundCommit.kind).toBe("unknown");
 
   const replayCommit = build();
   const initial = await replayCommit.service.commit({
@@ -311,9 +312,10 @@ test("finalization cannot acknowledge a different blob for a new or replayed rec
   });
   if (initial.kind !== "committed") throw new Error("expected committed receipt");
   replayCommit.repository.finalizedReceiptOverride = { ...initial.receipt, blobId: "another-nonempty-blob" };
-  await expect(replayCommit.service.commit({
+  const misboundReplay = await replayCommit.service.commit({
     scope, authority, expectedVersion: 0, commitId: "misbound-replay", bytes: new Uint8Array([2]),
-  })).rejects.toMatchObject({ code: "integrity_failure" });
+  });
+  expect(misboundReplay.kind).toBe("unknown");
 });
 
 test("same-content concurrent receipt races replay the verified winner, changed content conflicts", async () => {
