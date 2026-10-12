@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { Miniflare } from "miniflare";
 import { PartitionedSecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
@@ -46,7 +46,8 @@ test("opt-in private Run-file HTTP uses persistent workerd D1 and R2 across OS w
       expiresAt: Date.now() + 5 * 60_000,
     });
 
-    runtime = await startWorker(bundle, root);
+    const childrenBeforeFirstWorker = await directWorkerdChildren();
+    runtime = startWorker(bundle, root);
     const db = await runtime.getD1Database("TAKOSUMI_CONTROL_DB") as unknown as D1Database;
     await ensureD1OpenTofuLedgerSchema(db);
     await seedAuthority(db);
@@ -54,6 +55,7 @@ test("opt-in private Run-file HTTP uses persistent workerd D1 and R2 across OS w
     const noGrant = await request(runtime, "read", undefined, {});
     expect(noGrant.status).toBe(401);
     expect(await noGrant.json()).toEqual({ kind: "authorization_rejected" });
+    const firstWorkerd = await newlyStartedWorkerd(childrenBeforeFirstWorker);
 
     const plaintext = new TextEncoder().encode(PAYLOAD);
     const digest = await digestBytes(plaintext);
@@ -128,11 +130,14 @@ test("opt-in private Run-file HTTP uses persistent workerd D1 and R2 across OS w
     expect(expiredResponse.status).toBe(401);
     expect(await expiredResponse.json()).toEqual({ kind: "authorization_rejected" });
 
-    // Miniflare's dispose sends SIGKILL to its actual workerd child. The second
-    // instance starts a new OS process against the same explicit D1/R2 roots.
+    // Miniflare's dispose sends SIGKILL to its actual workerd child. Verify its
+    // exact PID/start-time identity is gone before starting the replacement.
     await runtime.dispose();
     runtime = undefined;
-    runtime = await startWorker(bundle, root);
+    expect(await processHasIdentity(firstWorkerd)).toBe(false);
+
+    const childrenBeforeRestart = await directWorkerdChildren();
+    runtime = startWorker(bundle, root);
 
     const afterRestart = await request(runtime, "read", grant, {});
     expect(afterRestart.status).toBe(200);
@@ -142,6 +147,11 @@ test("opt-in private Run-file HTTP uses persistent workerd D1 and R2 across OS w
       digest,
       bytesBase64: toBase64(plaintext),
     });
+    const restartedWorkerd = await newlyStartedWorkerd(childrenBeforeRestart);
+    expect(
+      restartedWorkerd.pid === firstWorkerd.pid &&
+        restartedWorkerd.startTime === firstWorkerd.startTime,
+    ).toBe(false);
     const resolvedAfterRestart = await request(runtime, "resolve", grant, {
       expectedVersion: 0,
       commitId: commit.commitId,
@@ -166,7 +176,7 @@ test("opt-in private Run-file HTTP uses persistent workerd D1 and R2 across OS w
     await runtime?.dispose();
     await rm(root, { recursive: true, force: true });
   }
-});
+}, 20_000);
 
 async function buildWorkerBundle(root: string): Promise<string> {
   const entry = join(root, "worker-entry.ts");
@@ -221,6 +231,80 @@ function startWorker(bundle: string, root: string): Miniflare {
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: "synthetic-native-private-file-test-token",
     },
   });
+}
+
+interface WorkerdProcessIdentity {
+  readonly pid: number;
+  readonly startTime: string;
+}
+
+async function directWorkerdChildren(): Promise<WorkerdProcessIdentity[]> {
+  const childrenPath = `/proc/${process.pid}/task/${process.pid}/children`;
+  const children = (await readFile(childrenPath, "utf8")).trim();
+  if (!children) return [];
+  const identities: WorkerdProcessIdentity[] = [];
+  for (const rawPid of children.split(/\s+/u)) {
+    const pid = Number(rawPid);
+    if (!Number.isSafeInteger(pid) || pid <= 0) continue;
+    const commandLine = await readProcFile(`/proc/${pid}/cmdline`);
+    if (commandLine === null) continue;
+    const normalizedCommandLine = commandLine.replaceAll("\u0000", " ");
+    if (!/(?:^|\/)workerd(?:\s|$)/u.test(normalizedCommandLine)) continue;
+    const startTime = await processStartTime(pid);
+    if (startTime !== null) identities.push({ pid, startTime });
+  }
+  return identities;
+}
+
+async function newlyStartedWorkerd(
+  previous: readonly WorkerdProcessIdentity[],
+): Promise<WorkerdProcessIdentity> {
+  const previousIds = new Set(previous.map(processIdentityKey));
+  const candidates = (await directWorkerdChildren()).filter((identity) =>
+    !previousIds.has(processIdentityKey(identity))
+  );
+  if (candidates.length !== 1) {
+    throw new Error("expected exactly one newly started direct workerd child");
+  }
+  return candidates[0]!;
+}
+
+async function processHasIdentity(
+  identity: WorkerdProcessIdentity,
+): Promise<boolean> {
+  return await processStartTime(identity.pid) === identity.startTime;
+}
+
+async function processStartTime(pid: number): Promise<string | null> {
+  const stat = await readProcFile(`/proc/${pid}/stat`);
+  if (stat === null) return null;
+  const closeCommand = stat.lastIndexOf(")");
+  if (closeCommand < 0) throw new Error("process stat record malformed");
+  // Field 22 (starttime) follows pid/comm; after comm it is field index 19.
+  const fieldsAfterCommand = stat.slice(closeCommand + 1).trim().split(/\s+/u);
+  const startTime = fieldsAfterCommand[19];
+  if (!startTime || !/^\d+$/u.test(startTime)) {
+    throw new Error("process start time unavailable");
+  }
+  return startTime;
+}
+
+async function readProcFile(path: string): Promise<string | null> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error) {
+    if (
+      typeof error === "object" && error !== null && "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function processIdentityKey(identity: WorkerdProcessIdentity): string {
+  return `${identity.pid}:${identity.startTime}`;
 }
 
 function request(
