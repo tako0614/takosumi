@@ -51,6 +51,7 @@ import type {
   PrivateRunFileOperation,
   PrivateRunFileScope,
 } from "../../private-run-files/mod.ts";
+import { PRIVATE_RUN_FILE_GRANT_MAX_TTL_MS } from "../../private-run-files/grant.ts";
 import type {
   CapsuleCompatibilityReport,
   CapsuleProviderRequirement,
@@ -494,6 +495,7 @@ const RUN_EXECUTION_RENEWAL_UNAVAILABLE_REASON =
   "run_execution_renewal_unavailable";
 const RUN_RENEWAL_TRANSPORT_RETRY_LIMIT = 1;
 const RUN_RENEWAL_TRANSPORT_RETRY_MAX_DELAY_MS = 250;
+const PRIVATE_RUN_FILE_GRANT_DISPATCH_MARGIN_MS = 60_000;
 const WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_REASON =
   "workspace_management_admission_conflict";
 const WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_MESSAGE =
@@ -1833,7 +1835,7 @@ export class RunEngine {
     leaseToken: string,
     profile: RunnerProfile,
   ): Promise<readonly PrivateRunFileDispatch[] | undefined> {
-    if (!slots?.length || planRun.operation === "destroy") return undefined;
+    if (!slots?.length) return undefined;
     const capsuleId = planRun.capsuleId;
     const epoch = planRun.capsuleExecutionAuthorityEpoch;
     const minter = this.#privateRunFileGrantMinter;
@@ -1877,7 +1879,10 @@ export class RunEngine {
       "resolve",
     ];
     const maxRunSeconds = profile.resourceLimits?.maxRunSeconds ?? 900;
-    const expiresAt = this.#now() + maxRunSeconds * 1_000 + 60_000;
+    // The grant codec's default clock is Date.now(); use that same wall clock
+    // instead of the injected Run lifecycle clock to avoid expiry skew.
+    const expiresAt = Date.now() + maxRunSeconds * 1_000 +
+      PRIVATE_RUN_FILE_GRANT_DISPATCH_MARGIN_MS;
     const dispatch: PrivateRunFileDispatch[] = [];
     try {
       for (const { slot } of slots) {
@@ -1905,6 +1910,25 @@ export class RunEngine {
       );
     }
     return dispatch;
+  }
+
+  #assertPrivateRunFileGrantLifetime(
+    profile: RunnerProfile,
+    slots: InstallConfig["privateRunFiles"],
+  ): void {
+    if (!slots?.length) return;
+    const maxRunSeconds = profile.resourceLimits?.maxRunSeconds ?? 900;
+    if (
+      !Number.isSafeInteger(maxRunSeconds) || maxRunSeconds <= 0 ||
+      maxRunSeconds * 1_000 + PRIVATE_RUN_FILE_GRANT_DISPATCH_MARGIN_MS >
+        PRIVATE_RUN_FILE_GRANT_MAX_TTL_MS
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Runner profile exceeds the private Run file grant lifetime",
+        { reason: "private_run_file_grant_lifetime_unsupported" },
+      );
+    }
   }
 
   /** Secret exposure policy of the profile a run dispatches to (credential gate). */
@@ -5551,6 +5575,11 @@ export class RunEngine {
     const variables = inputs.variables;
     const dispatch = moduleDispatchFromInputs(inputs);
     try {
+      this.#assertPrivateRunFileGrantLifetime(profile, dispatch.privateRunFileSlots);
+    } catch (error) {
+      return (await this.#failUnclaimedPlanRun(planRun, error)).run;
+    }
+    try {
       await this.#verification.assertCapsuleCompatibilityAllowsRun(planRun);
     } catch (error) {
       return (await this.#failUnclaimedPlanRun(planRun, error)).run;
@@ -5684,6 +5713,17 @@ export class RunEngine {
       }
     }
     const dispatch = moduleDispatchFromInputs(inputs);
+    try {
+      this.#assertPrivateRunFileGrantLifetime(profile, dispatch.privateRunFileSlots);
+    } catch (error) {
+      const result = await this.#failUnclaimedApplyRun(applyRun, error);
+      if (!result.run) return await this.getApplyRun(runId);
+      const failed = result.run;
+      const capsule = failed.capsuleId
+        ? await this.#store.getCapsule(failed.capsuleId)
+        : undefined;
+      return { applyRun: failed, ...(capsule ? { capsule } : {}) };
+    }
     const key = planRun.capsuleId ?? planRun.id;
     // Capsule lease (spec §22 / §23): when a durable coordination seam is
     // wired, acquire the cross-isolate
@@ -11264,6 +11304,13 @@ export class RunEngine {
     }
     const capsule =
       plannedCapsule ?? (await this.#requireCurrentPlannedCapsule(planRun));
+    const privateRunFiles = await this.#mintPrivateRunFileDispatch(
+      planRun,
+      dispatch.privateRunFileSlots,
+      running.id,
+      leaseToken,
+      profile,
+    );
     // Resolve the value-free retirement fence before any external teardown.
     // A missing/corrupt pinned InstallConfig must fail while provider state is
     // still untouched; only the marker append waits for successful destroy.
@@ -11454,6 +11501,7 @@ export class RunEngine {
                 ? { depStates: envDispatch.depStates }
                 : {}),
               ...(credentials ? { credentials } : {}),
+              ...(privateRunFiles ? { privateRunFiles } : {}),
             },
             runnerExecutionControl(credentialSignal, deadlineAt),
               );

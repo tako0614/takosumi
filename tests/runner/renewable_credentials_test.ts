@@ -54,7 +54,7 @@ test("credential refresh endpoint refuses an update after its run session is ter
   expect(await response.text()).not.toContain("must-not-echo-token");
 });
 
-test("private Run file grants become provider-only env descriptors and are redacted", () => {
+test("private Run file grants remain typed capabilities until the trusted OpenTofu seam", () => {
   const grant = "opaque-private-grant-secret";
   const context = commandContextFromRequest({
     privateRunFiles: [{
@@ -64,11 +64,12 @@ test("private Run file grants become provider-only env descriptors and are redac
     }],
   });
 
-  expect(context.env.TAKOSUMI_PRIVATE_RUN_FILES).toBe(JSON.stringify([{
+  expect(context.privateRunFiles).toEqual([{
     slot: "worker-state",
     endpoint: "http://core.internal/internal/private-run-files/v1",
     grant,
-  }]));
+  }]);
+  expect(context.env.TAKOSUMI_PRIVATE_RUN_FILES).toBeUndefined();
   expect(context.redactionValues).toContain(grant);
   expect(redactRunnerOutput(`request failed: ${grant}`, context.redactionValues))
     .not.toContain(grant);
@@ -82,6 +83,7 @@ test("provider credential payload cannot set the private Run file env descriptor
     },
   });
   expect(context.env.TAKOSUMI_PRIVATE_RUN_FILES).toBeUndefined();
+  expect(context.privateRunFiles).toBeUndefined();
 });
 
 function workspace(): RunWorkspace {

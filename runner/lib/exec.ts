@@ -20,6 +20,7 @@ import {
 } from "./redaction.ts";
 import {
   baseCommandEnv,
+  openTofuCommandContext,
 } from "./credentials.ts";
 import { noteRunDeadlineReached, remainingRunBudgetMs } from "./run_deadline.ts";
 
@@ -322,6 +323,27 @@ export async function runCommand(
       signal.removeEventListener("abort", abortListener);
     }
   }
+}
+
+/** Trusted OpenTofu invocation seam; only this path receives private-file grants. */
+export async function runOpenTofuCommand(
+  command: readonly string[],
+  options: {
+    readonly cwd: string;
+    readonly context?: CommandContext;
+    readonly isolateProcessGroup?: boolean;
+    readonly onSpawn?: (child: SpawnedCommand) => void;
+  },
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  if (command[0] !== "tofu") {
+    throw new Error("OpenTofu invocation must use the trusted tofu executable");
+  }
+  return await runCommand(command, {
+    ...options,
+    ...(options.context
+      ? { context: openTofuCommandContext(options.context) }
+      : {}),
+  });
 }
 
 /**

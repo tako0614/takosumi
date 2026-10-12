@@ -400,11 +400,6 @@ export function commandContextFromRequest(
       env[name] = value;
     }
   }
-  if (privateRunFiles.length > 0) {
-    // This reserved value is a dispatch-only capability descriptor. It is not
-    // read from ambient process env and is intentionally absent from sourceBuild.
-    env.TAKOSUMI_PRIVATE_RUN_FILES = JSON.stringify(privateRunFiles);
-  }
   if (renewableCredentials.length > 0) {
     if (!runId || !credentialRefreshOwner || !credentialManifestDigest || renewableCredentials.length > MAX_RENEWABLE_CREDENTIALS) {
       throw new Error("renewable provider credentials require run identity and manifest digest");
@@ -427,6 +422,7 @@ export function commandContextFromRequest(
     ...(credentialRefreshOwner ? { credentialRefreshOwner } : {}),
     ...(credentialRefreshSequence !== undefined ? { credentialRefreshSequence } : {}),
     ...(runtimeInputs.length > 0 ? { runtimeInputs } : {}),
+    ...(privateRunFiles.length > 0 ? { privateRunFiles } : {}),
     ...(redactionValues.length > 0 ? { redactionValues } : {}),
     ...(maxRunSeconds ? { timeoutMs: maxRunSeconds * 1000 } : {}),
     ...(maxSourceArchiveBytes
@@ -435,6 +431,20 @@ export function commandContextFromRequest(
     ...(maxSourceDecompressedBytes
       ? { sourceArchiveMaxDecompressedBytes: maxSourceDecompressedBytes }
       : {}),
+  };
+}
+
+/** Materialize private-file authority only for the trusted OpenTofu process. */
+export function openTofuCommandContext(
+  context: CommandContext,
+): CommandContext {
+  if (!context.privateRunFiles?.length) return context;
+  return {
+    ...context,
+    env: {
+      ...context.env,
+      TAKOSUMI_PRIVATE_RUN_FILES: JSON.stringify(context.privateRunFiles),
+    },
   };
 }
 

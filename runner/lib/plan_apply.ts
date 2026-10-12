@@ -50,7 +50,7 @@ import { RunnerPhaseTimer, withPhaseTimings } from "./timing.ts";
 import {
   readOpenTofuPlanJson,
   readOpenTofuOutputsIn,
-  runCommand,
+  runOpenTofuCommand,
   commandFailurePayload,
   classifyOpenTofuFailure,
 } from "./exec.ts";
@@ -420,7 +420,7 @@ export async function initPlanAndBuildResponse(
   ]);
   const init = await timer.measure("tofu_init", () =>
     withProviderPluginCacheInitLock(strictMirrorInit, () =>
-      runCommand(["tofu", "init", "-input=false", "-no-color"], {
+      runOpenTofuCommand(["tofu", "init", "-input=false", "-no-color"], {
         cwd: moduleDir,
         context: commandContext,
         isolateProcessGroup: true,
@@ -458,7 +458,7 @@ export async function initPlanAndBuildResponse(
   // inherits). Each plan phase prepares its own FIFO because the pipe is
   // delivered exactly once per spawn.
   const runPlanPhase = async (): Promise<
-    Awaited<ReturnType<typeof runCommand>>
+    Awaited<ReturnType<typeof runOpenTofuCommand>>
   > => {
     const variableFile = await prepareRuntimeInputVariableFile(
       commandContext.runtimeInputs ?? [],
@@ -466,7 +466,7 @@ export async function initPlanAndBuildResponse(
     );
     try {
       const result = await timer.measure("tofu_plan", () =>
-        runCommand(
+        runOpenTofuCommand(
           [
             "tofu",
             "plan",
@@ -495,7 +495,7 @@ export async function initPlanAndBuildResponse(
       await variableFile.dispose();
     }
   };
-  const planFailure = (result: Awaited<ReturnType<typeof runCommand>>) =>
+  const planFailure = (result: Awaited<ReturnType<typeof runOpenTofuCommand>>) =>
     withPhaseTimings(
       mergeBuildLog(
         commandFailurePayload(runId, "plan", result, commandContext, "plan"),
@@ -737,7 +737,7 @@ export async function runReviewedPlanApply(
     ]);
     const init = await timer.measure("tofu_init", () =>
       withProviderPluginCacheInitLock(strictMirrorInit, () =>
-        runCommand(
+        runOpenTofuCommand(
           [
             "tofu",
             "init",
@@ -793,10 +793,10 @@ export async function runReviewedPlanApply(
       applyContext.runtimeInputs ?? [],
       workspace.root,
     );
-    let result: Awaited<ReturnType<typeof runCommand>>;
+    let result: Awaited<ReturnType<typeof runOpenTofuCommand>>;
     try {
       result = await timer.measure("tofu_apply", () =>
-        runCommand(
+        runOpenTofuCommand(
           [
             "tofu",
             "apply",
@@ -1070,7 +1070,7 @@ export async function runCompatibilityCheck(
   ]);
   const init = await timer.measure("tofu_init", () =>
     withProviderPluginCacheInitLock(providerInit, () =>
-      runCommand(["tofu", "init", "-input=false", "-no-color"], {
+      runOpenTofuCommand(["tofu", "init", "-input=false", "-no-color"], {
         cwd: moduleRoot,
         context: commandContext,
       }),
