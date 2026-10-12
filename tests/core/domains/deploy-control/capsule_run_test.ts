@@ -238,6 +238,7 @@ interface RecordingRunner extends OpenTofuRunner {
   readonly planJobs: OpenTofuPlanJob[];
   readonly applyJobs: OpenTofuApplyJob[];
   readonly destroyJobs: OpenTofuDestroyJob[];
+  readonly privateRunFileRefreshes: NonNullable<Parameters<NonNullable<OpenTofuRunner["refreshPrivateRunFiles"]>>[0]>[];
 }
 
 function recordingRunner(
@@ -247,10 +248,16 @@ function recordingRunner(
   const planJobs: OpenTofuPlanJob[] = [];
   const applyJobs: OpenTofuApplyJob[] = [];
   const destroyJobs: OpenTofuDestroyJob[] = [];
+  const privateRunFileRefreshes: RecordingRunner["privateRunFileRefreshes"] = [];
   return {
     planJobs,
     applyJobs,
     destroyJobs,
+    privateRunFileRefreshes,
+    assertPrivateRunFileRefreshCapability: async () => {},
+    refreshPrivateRunFiles: async (update) => {
+      privateRunFileRefreshes.push(update);
+    },
     plan: (job) => {
       planJobs.push(job);
       return Promise.resolve({
@@ -1458,6 +1465,222 @@ test("private Run file grants are minted only for winning capsule Plan, Apply, a
     scope.environment === "preview" && scope.slot === "worker-state" &&
     operations.join(",") === "read,commit,resolve"
   )).toBe(true);
+});
+
+test("private Run file Plan refuses a Runner without live descriptor refresh before claim", async () => {
+  let mints = 0;
+  const unsupportedRunner = recordingRunner();
+  delete unsupportedRunner.assertPrivateRunFileRefreshCapability;
+  delete unsupportedRunner.refreshPrivateRunFiles;
+  const { controller } = await seededController(
+    { installConfig: { privateRunFiles: [{ slot: "worker-state" }] } },
+    {
+      runner: unsupportedRunner,
+      privateRunFileGrantMinter: {
+        mint: async () => {
+          mints += 1;
+          return {
+            endpoint: "https://core.example/internal/private-run-files/v1",
+            grant: "should-not-be-minted",
+          };
+        },
+      },
+    },
+  );
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+  expect(planRun.status).toBe("failed");
+  expect(planRun.startedAt).toBeUndefined();
+  expect(unsupportedRunner.planJobs).toHaveLength(0);
+  expect(mints).toBe(0);
+});
+
+test("a held Plan rotates its private Run file grant before the initial grant expires", async () => {
+  let grantNow = Date.now();
+  let mintCount = 0;
+  const runner = recordingRunner();
+  const originalPlan = runner.plan.bind(runner);
+  let entered!: () => void;
+  let release!: () => void;
+  const atRunner = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  runner.plan = async (job, control) => {
+    entered();
+    await held;
+    return await originalPlan(job, control);
+  };
+  const expiries: number[] = [];
+  const { controller } = await seededController(
+    { installConfig: { privateRunFiles: [{ slot: "worker-state" }] } },
+    {
+      runner,
+      privateRunFileGrantNow: () => grantNow,
+      privateRunFileRefreshIntervalMs: 1,
+      privateRunFileGrantMinter: {
+        mint: async ({ expiresAt }) => {
+          expiries.push(expiresAt);
+          return {
+            endpoint: "https://core.example/internal/private-run-files/v1",
+            grant: `opaque-rotation-${++mintCount}`,
+          };
+        },
+      },
+    },
+  );
+  const pending = controller.createCapsulePlan("cap_fixture1");
+  try {
+    await atRunner;
+    expect(expiries).toHaveLength(1);
+    grantNow = expiries[0]! - 80_000;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(runner.privateRunFileRefreshes).toHaveLength(1);
+    expect(runner.privateRunFileRefreshes[0]).toMatchObject({
+      sequence: 1,
+      files: [{ slot: "worker-state", grant: "opaque-rotation-2" }],
+    });
+    grantNow = expiries[0]! + 1;
+    expect(expiries[1]).toBeGreaterThan(grantNow);
+  } finally {
+    release();
+    await pending;
+  }
+});
+
+test("a changed Capsule epoch refuses private Run file rotation without redispatch", async () => {
+  let grantNow = Date.now();
+  let epochChanged = false;
+  let mintCount = 0;
+  const innerStore = new InMemoryOpenTofuControlStore();
+  await seedRunnableCapsuleModel(innerStore, {
+    environment: "preview",
+    installConfig: { privateRunFiles: [{ slot: "worker-state" }] },
+  });
+  const store = new Proxy(innerStore, {
+    get(target, property, receiver) {
+      if (property === "getCapsuleExecutionAuthorityEpoch") {
+        return async (capsuleId: string) => {
+          const epoch = await target.getCapsuleExecutionAuthorityEpoch(capsuleId);
+          return epochChanged && epoch !== undefined ? epoch + 1 : epoch;
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as OpenTofuControlStore;
+  const runner = recordingRunner();
+  const originalPlan = runner.plan.bind(runner);
+  let entered!: () => void;
+  let release!: () => void;
+  const atRunner = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  runner.plan = async (job, control) => {
+    entered();
+    await held;
+    return await originalPlan(job, control);
+  };
+  const expiries: number[] = [];
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+    runRenewalIntervalMs: 0,
+    privateRunFileGrantNow: () => grantNow,
+    privateRunFileRefreshIntervalMs: 1,
+    privateRunFileGrantMinter: {
+      mint: async ({ expiresAt }) => {
+        expiries.push(expiresAt);
+        return {
+          endpoint: "https://core.example/internal/private-run-files/v1",
+          grant: `opaque-epoch-test-${++mintCount}`,
+        };
+      },
+    },
+  });
+  const pending = controller.createCapsulePlan("cap_fixture1");
+  try {
+    await atRunner;
+    expect(expiries).toHaveLength(1);
+    epochChanged = true;
+    grantNow = expiries[0]! - 80_000;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(runner.privateRunFileRefreshes).toHaveLength(0);
+    expect(mintCount).toBe(1);
+  } finally {
+    release();
+  }
+  const result = await pending;
+  expect(result.planRun.status).toBe("failed");
+  expect(runner.planJobs).toHaveLength(1);
+});
+
+test("a replaced Run lease refuses private Run file rotation without redispatch", async () => {
+  let grantNow = Date.now();
+  let leaseReplaced = false;
+  let mintCount = 0;
+  const innerStore = new InMemoryOpenTofuControlStore();
+  await seedRunnableCapsuleModel(innerStore, {
+    environment: "preview",
+    installConfig: { privateRunFiles: [{ slot: "worker-state" }] },
+  });
+  const store = new Proxy(innerStore, {
+    get(target, property, receiver) {
+      if (property === "transitionRun") {
+        return async (input: Parameters<OpenTofuControlStore["transitionRun"]>[0]) => {
+          if (leaseReplaced && input.kind === "plan" &&
+            input.expectFrom.includes("running") &&
+            input.expectLeaseToken && input.heartbeatAt !== undefined) {
+            return { won: false, run: await target.getPlanRun(input.id) };
+          }
+          return await target.transitionRun(input);
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as OpenTofuControlStore;
+  const runner = recordingRunner();
+  const originalPlan = runner.plan.bind(runner);
+  let entered!: () => void;
+  let release!: () => void;
+  const atRunner = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  runner.plan = async (job, control) => {
+    entered();
+    await held;
+    return await originalPlan(job, control);
+  };
+  const expiries: number[] = [];
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+    runRenewalIntervalMs: 0,
+    privateRunFileGrantNow: () => grantNow,
+    privateRunFileRefreshIntervalMs: 1,
+    privateRunFileGrantMinter: {
+      mint: async ({ expiresAt }) => {
+        expiries.push(expiresAt);
+        return {
+          endpoint: "https://core.example/internal/private-run-files/v1",
+          grant: `opaque-lease-test-${++mintCount}`,
+        };
+      },
+    },
+  });
+  const pending = controller.createCapsulePlan("cap_fixture1");
+  try {
+    await atRunner;
+    expect(expiries).toHaveLength(1);
+    leaseReplaced = true;
+    grantNow = expiries[0]! - 80_000;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(runner.privateRunFileRefreshes).toHaveLength(0);
+    expect(mintCount).toBe(1);
+  } finally {
+    release();
+  }
+  const result = await pending;
+  expect(result.planRun.status).toBe("failed");
+  expect(runner.planJobs).toHaveLength(1);
 });
 
 test("private Run file plans fail before claim when profile exceeds grant lifetime", async () => {

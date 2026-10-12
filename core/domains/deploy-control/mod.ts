@@ -82,6 +82,7 @@ import type {
   PrivateRunFileOperation,
   PrivateRunFileScope,
 } from "../private-run-files/mod.ts";
+import type { PrivateRunFileRefreshUpdate } from "../../shared/private_run_file_refresh.ts";
 import type {
   InstallConfigLifecycleAction,
   OutputAllowlistEntry,
@@ -576,6 +577,7 @@ export interface OpenTofuDestroyJob
     readonly requireMirror: boolean;
   };
   readonly credentials?: RunCredentials;
+  readonly privateRunFiles?: readonly PrivateRunFileDispatch[];
 }
 
 export interface OpenTofuPlanResult {
@@ -862,6 +864,16 @@ export interface OpenTofuRestoreResult {
 }
 
 export interface OpenTofuRunner {
+  /** A slot-bearing Run must prove file-backed rotation before it is claimed. */
+  assertPrivateRunFileRefreshCapability?(input: {
+    readonly owner: { readonly kind: "plan" | "apply"; readonly id: string };
+    readonly runnerRunId: string;
+  }): Promise<void>;
+  /** Ordered, value-free-ACK delivery of a replacement descriptor set. */
+  refreshPrivateRunFiles?(
+    update: PrivateRunFileRefreshUpdate,
+    control?: RunExecutionControl,
+  ): Promise<void>;
   /** Confirms the pinned image supports rotation before a mutation is sent. */
   assertCredentialRefreshCapability?(input: {
     readonly owner: { readonly kind: "plan" | "apply"; readonly id: string };
@@ -1136,6 +1148,9 @@ export interface OpenTofuControllerDependencies {
   readonly vault?: ConnectionVault;
   /** Host-owned private Run file grant minting; absent declarations need no hook. */
   readonly privateRunFileGrantMinter?: PrivateRunFileGrantMinter;
+  /** Grant codec wall clock; injection is only for deterministic renewal tests. */
+  readonly privateRunFileGrantNow?: () => number;
+  readonly privateRunFileRefreshIntervalMs?: number;
   /**
    * Complete service-installed Credential Recipe catalog exposed through
    * discovery and used for connection validation. Omitted means that no
@@ -1755,6 +1770,12 @@ export class OpenTofuController {
       planResolution: this.#planResolution,
       ...(dependencies.privateRunFileGrantMinter
         ? { privateRunFileGrantMinter: dependencies.privateRunFileGrantMinter }
+        : {}),
+      ...(dependencies.privateRunFileGrantNow
+        ? { privateRunFileGrantNow: dependencies.privateRunFileGrantNow }
+        : {}),
+      ...(dependencies.privateRunFileRefreshIntervalMs !== undefined
+        ? { privateRunFileRefreshIntervalMs: dependencies.privateRunFileRefreshIntervalMs }
         : {}),
       ...(dependencies.moduleVariableMaterializer
         ? {

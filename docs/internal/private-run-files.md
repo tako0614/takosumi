@@ -71,12 +71,20 @@ IDs, leases, grants, and private bytes (except the explicitly authorized read
 response). The route bounds the JSON envelope before decode and the decoded
 bytes at 16 MiB.
 
-The grant lifetime is at most 20 minutes. That covers the current 900-second
-fallback Runner deadline plus its 60-second dispatch margin; a declared slot
-on a profile above 1140 seconds (which would exceed 20 minutes after the
-60-second margin) must fail before Run claim until a renewal protocol exists.
-No shorter grant may be silently substituted and allowed to expire during an
-external mutation. The final DB check, not the grant expiry alone, fences a
+Each sealed grant remains finite and lives at most 20 minutes. Core mints its
+initial grant for the declared per-command Runner budget (900 seconds by
+default) plus a 60-second dispatch margin; a slot-bearing profile above 1140
+seconds still fails before Run claim. `maxRunSeconds` is a per-command limit,
+not a whole-Run deadline: a Plan or Apply can outlive one grant across source
+build, init, and provider execution. While the exact Run lease is held, Core
+rechecks authority and rotates the opaque grant through the Runner's private
+descriptor file before expiry. The Runner pins the slot/endpoint manifest and
+accepts ordered, bounded, value-free-ACK updates; the Provider rereads the
+descriptor before each private-file operation. A failed or indeterminate
+refresh aborts the current dispatch attempt without resending an OpenTofu
+mutation. A still-running process cannot use an expired grant. Rotation does
+not extend the lease or bypass the repository's epoch/lease fence; the final
+DB check, not the grant expiry alone, fences a
 revoked or replaced lease. An already-running Plan/Apply-family Run may read,
 resolve its exact receipt, or commit under its current lease while the Workspace
 is draining only when its persisted original active management authority names
@@ -84,8 +92,8 @@ the same Workspace and its positive safe epoch precedes the current draining
 epoch. This follows the existing Run settlement cutoff; it does not admit a new
 Run or lease. Frozen, released, missing/malformed authority, changed Capsule
 epoch, terminal Run, and replaced lease are rejected at the repository. An
-expired grant still cannot use this settlement path; grant renewal and recovery
-after expiry are separate work.
+expired grant still cannot use this settlement path. A Run that has lost its
+lease cannot rotate a grant or recover by replaying an old one.
 
 ## Retention boundary
 
