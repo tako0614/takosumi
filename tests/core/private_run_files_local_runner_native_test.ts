@@ -77,6 +77,7 @@ interface PrivateFileRefreshEvidence {
 type CustodyEvent =
   | { readonly kind: "lost_commit_ack"; readonly commitId: string; readonly receipt: Receipt }
   | { readonly kind: "resolve_response"; readonly commitId: string; readonly receipt: Receipt }
+  | { readonly kind: "renewed_commit" }
   | { readonly kind: "host_post" };
 
 function deferred<T = void>() {
@@ -196,6 +197,7 @@ interface ProofReport {
     readonly readUsedRenewedGrant: true;
     readonly lostAckCommitUsedPreRotationGrant: true;
     readonly resolveUsedRenewedGrant: true;
+    readonly postHostCommitUsedRenewedGrant: boolean;
   };
   readonly droppedAck: {
     readonly exactReceiptResolved: true;
@@ -321,14 +323,19 @@ async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<Proof
         const forwardedBody = await forwarded.json() as Record<string, unknown>;
         const commitId = typeof body.commitId === "string" ? body.commitId : undefined;
         const receipt = parseReceipt(forwardedBody.receipt);
+        const grantDigest = createHash("sha256")
+          .update(request.headers.get("authorization")?.slice("Bearer ".length) ?? "")
+          .digest("hex");
         wireEvidence.push({
           operation: operation as "commit" | "resolve",
-          grantDigest: createHash("sha256")
-            .update(request.headers.get("authorization")?.slice("Bearer ".length) ?? "")
-            .digest("hex"),
+          grantDigest,
           ...(commitId ? { commitId } : {}),
           ...(receipt ? { receipt } : {}),
         });
+        if (operation === "commit" && applyRenewedGrant &&
+          grantDigest === createHash("sha256").update(applyRenewedGrant).digest("hex")) {
+          custodyEvents.push({ kind: "renewed_commit" });
+        }
         if (operation === "commit" && dropNextCommitAck) {
           if (!commitId || !receipt) return new Response("missing committed receipt identity", { status: 502 });
           droppedCommitReceipt = receipt;
@@ -737,6 +744,10 @@ resource "takoform_module_worker" "app" {
     if (!providerWire.some((entry) => entry.operation === "resolve" && entry.grantDigest === renewedDigest)) {
       throw new Error("compiled Provider did not resolve the lost ACK through the renewed descriptor");
     }
+    const firstHostPostIndex = custodyEvents.findIndex((event) => event.kind === "host_post");
+    const postHostCommitUsedRenewedGrant = firstHostPostIndex >= 0 && custodyEvents.some(
+      (event, index) => index > firstHostPostIndex && event.kind === "renewed_commit",
+    );
     if (apply.applyRun.status !== "succeeded") {
       const persistedApply = await store.getApplyRun(apply.applyRun.id);
       throw new Error(
@@ -827,6 +838,7 @@ resource "takoform_module_worker" "app" {
         readUsedRenewedGrant: true,
         lostAckCommitUsedPreRotationGrant: true,
         resolveUsedRenewedGrant: true,
+        postHostCommitUsedRenewedGrant,
       },
       droppedAck: {
         exactReceiptResolved: true,
@@ -846,6 +858,9 @@ resource "takoform_module_worker" "app" {
         "deterministic local HTTPS Host fixture; no production Host or authentication authority",
         "Core Run controller and current-grant minter are real; provider-private commit ACK loss is injected at a loopback HTTP proxy",
         "the original commit uses its pre-rotation grant; refresh completes while its ACK is held, then the exact resolve uses the new descriptor; only the private-file grant clock advances, not Run lease or heartbeat time",
+        postHostCommitUsedRenewedGrant
+          ? "Provider persisted post-Host intent completion through a renewed-grant commit"
+          : "no post-Host renewed-grant commit was observed in this native Apply; commit-refresh coverage remains limited to the pinned Provider's focused Go evidence",
         "no immutable Runner image, Cloud service, or production qualification",
       ],
     };
