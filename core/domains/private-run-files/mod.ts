@@ -315,7 +315,7 @@ export class PrivateRunFilesService {
       return result("unknown", stable, digest);
     }
     if (finalized.kind === "committed" || finalized.kind === "replayed") {
-      if (!sameReceipt(finalized.receipt, stable, digest)) {
+      if (!sameReceipt(finalized.receipt, stable, digest) || finalized.receipt.blobId !== blobId) {
         throw new PrivateRunFilesError("integrity_failure");
       }
       if (prior && finalized.kind !== "replayed") {

@@ -48,6 +48,7 @@ class MemoryRepository implements PrivateRunFileRepositoryPort {
   acceptedLease = "lease_1";
   nextFinalize: "normal" | "unknown_after_commit" = "normal";
   finalizeCalls = 0;
+  finalizedReceiptOverride: PrivateRunFileReceipt | undefined;
   lookupReceiptOverride: Awaited<ReturnType<PrivateRunFileRepositoryPort["lookupReceipt"]>> | undefined;
 
   async readPointer(request: { scope: PrivateRunFileScope }) {
@@ -73,7 +74,7 @@ class MemoryRepository implements PrivateRunFileRepositoryPort {
       return { kind: "authority_rejected" as const };
     }
     const oldReceipt = this.receipts.get(receiptKey);
-    if (oldReceipt) return { kind: "replayed" as const, receipt: oldReceipt };
+    if (oldReceipt) return { kind: "replayed" as const, receipt: this.finalizedReceiptOverride ?? oldReceipt };
     if (version !== request.expectedVersion) return { kind: "conflict" as const };
     const receipt = {
       scope: request.scope,
@@ -93,7 +94,7 @@ class MemoryRepository implements PrivateRunFileRepositoryPort {
       this.nextFinalize = "normal";
       return { kind: "unknown" as const };
     }
-    return { kind: "committed" as const, receipt };
+    return { kind: "committed" as const, receipt: this.finalizedReceiptOverride ?? receipt };
   }
 }
 
@@ -273,6 +274,31 @@ test("malformed or mismatched receipt lookup cannot be acknowledged", async () =
     digest: committed.receipt.digest,
   });
   expect(resolve.kind).toBe("conflict");
+});
+
+test("finalization cannot acknowledge a different blob for a new or replayed receipt", async () => {
+  const newCommit = build();
+  newCommit.repository.finalizedReceiptOverride = {
+    scope: { ...scope },
+    commitId: "misbound-new",
+    expectedVersion: 0,
+    version: 1,
+    digest: "sha256:" + "0".repeat(64) as PrivateRunFileDigest,
+    blobId: "another-nonempty-blob",
+  };
+  await expect(newCommit.service.commit({
+    scope, authority, expectedVersion: 0, commitId: "misbound-new", bytes: new Uint8Array([1]),
+  })).rejects.toMatchObject({ code: "integrity_failure" });
+
+  const replayCommit = build();
+  const initial = await replayCommit.service.commit({
+    scope, authority, expectedVersion: 0, commitId: "misbound-replay", bytes: new Uint8Array([2]),
+  });
+  if (initial.kind !== "committed") throw new Error("expected committed receipt");
+  replayCommit.repository.finalizedReceiptOverride = { ...initial.receipt, blobId: "another-nonempty-blob" };
+  await expect(replayCommit.service.commit({
+    scope, authority, expectedVersion: 0, commitId: "misbound-replay", bytes: new Uint8Array([2]),
+  })).rejects.toMatchObject({ code: "integrity_failure" });
 });
 
 test("receipt resolution is fenced against the current Capsule epoch and Run lease", async () => {
