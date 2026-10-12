@@ -5,6 +5,7 @@ import {
 } from "../../core/adapters/secret-store/memory.ts";
 import {
   createPrivateRunFileGrantCodec,
+  PRIVATE_RUN_FILE_GRANT_MAX_TTL_MS,
   PrivateRunFileGrantError,
 } from "../../core/domains/private-run-files/grant.ts";
 
@@ -62,7 +63,7 @@ test("grant mint rejects unbounded or malformed authority and placeholder crypto
     scope,
     authority,
     operations: ["read"],
-    expiresAt: current + 20 * 60_000 + 1,
+    expiresAt: current + PRIVATE_RUN_FILE_GRANT_MAX_TTL_MS + 1,
   })).rejects.toBeInstanceOf(PrivateRunFileGrantError);
   await expect(codec.mint({
     scope,

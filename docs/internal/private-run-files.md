@@ -73,7 +73,8 @@ bytes at 16 MiB.
 
 The grant lifetime is at most 20 minutes. That covers the current 900-second
 fallback Runner deadline plus its 60-second dispatch margin; a declared slot
-on a longer profile must fail before Run claim until a renewal protocol exists.
+on a profile above 1140 seconds (which would exceed 20 minutes after the
+60-second margin) must fail before Run claim until a renewal protocol exists.
 No shorter grant may be silently substituted and allowed to expire during an
 external mutation. The final DB check, not the grant expiry alone, fences a
 revoked or replaced lease. The current repository requires an active Workspace;

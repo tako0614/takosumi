@@ -7,6 +7,7 @@ import {
   PRIVATE_RUN_FILE_MAX_BYTES,
 } from "../../../core/api/private_run_file_routes.ts";
 import { createPrivateRunFileGrantCodec } from "../../../core/domains/private-run-files/grant.ts";
+import type { PrivateRunFileGrantCodec } from "../../../core/domains/private-run-files/grant.ts";
 import type {
   PrivateRunFileBlobPort,
   PrivateRunFileDigest,
@@ -61,6 +62,7 @@ class Repository implements PrivateRunFileRepositoryPort {
   pointer: PrivateRunFilePointer | undefined;
   receipts = new Map<string, PrivateRunFileReceipt>();
   active = true;
+  readCalls = 0;
   unknownAfterCommit = false;
 
   private permitted(input: { scope: PrivateRunFileScope; runId: string; executionAuthorityEpoch: number; leaseToken: string }) {
@@ -72,6 +74,7 @@ class Repository implements PrivateRunFileRepositoryPort {
   }
 
   async readPointer(input: Parameters<PrivateRunFileRepositoryPort["readPointer"]>[0]) {
+    this.readCalls += 1;
     if (!this.permitted(input)) return { kind: "authority_rejected" as const };
     return this.pointer
       ? { kind: "present" as const, pointer: this.pointer }
@@ -148,6 +151,54 @@ test("Core HTTP commits, reads and resolves with public receipts only", async ()
   })).json()).toEqual({ kind: "committed", receipt: committed.receipt });
 });
 
+test("grant expiring during a slow request body cannot reach the repository", async () => {
+  const bearer = await token(["read"]);
+  let opened!: () => void;
+  const openedPromise = new Promise<void>((resolve) => { opened = resolve; });
+  let releaseBody!: () => void;
+  const bodyGate = new Promise<void>((resolve) => { releaseBody = resolve; });
+  const observedGrants: PrivateRunFileGrantCodec = {
+    mint: (input) => grants.mint(input),
+    open: async (opaque) => {
+      const claims = await grants.open(opaque);
+      opened();
+      return claims;
+    },
+  };
+  const repository = new Repository();
+  const blobs = new Blobs();
+  const app = new Hono();
+  mountPrivateRunFileRoutes(app, {
+    grants: observedGrants,
+    repository,
+    blobs,
+    maxBytes: PRIVATE_RUN_FILE_MAX_BYTES,
+  });
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new TextEncoder().encode("{")); },
+    async pull(controller) {
+      await bodyGate;
+      controller.enqueue(new TextEncoder().encode("}"));
+      controller.close();
+    },
+  });
+  const request = new Request(`https://core.test${PRIVATE_RUN_FILE_HTTP_PATH}/read`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
+    body,
+    duplex: "half",
+  } as RequestInit);
+  const responsePromise = app.fetch(request);
+  await openedPromise;
+  now += 60_000;
+  releaseBody();
+  const response = await responsePromise;
+  expect(response.status).toBe(403);
+  expect(await response.json()).toEqual({ kind: "authorization_rejected" });
+  expect(repository.readCalls).toBe(0);
+  expect(blobs.entries.size).toBe(0);
+});
+
 test("unknown commit ACK resolves to the original durable receipt", async () => {
   const { app, repository } = fixture();
   repository.unknownAfterCommit = true;
@@ -192,4 +243,27 @@ test("body cap refuses oversized bytes before storage and browser Origin is reje
     body: "{}",
   });
   expect(browser.status).toBe(403);
+});
+
+test("oversized streamed body is cancelled before storage", async () => {
+  const { app, repository, blobs } = fixture();
+  const bearer = await token();
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      controller.enqueue(new Uint8Array(22_400_001));
+    },
+    cancel() { cancelled = true; },
+  });
+  const request = new Request(`https://core.test${PRIVATE_RUN_FILE_HTTP_PATH}/commit`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
+    body,
+    duplex: "half",
+  } as RequestInit);
+  const response = await app.fetch(request);
+  expect(response.status).toBe(413);
+  expect(cancelled).toBe(true);
+  expect(repository.pointer).toBeUndefined();
+  expect(blobs.entries.size).toBe(0);
 });

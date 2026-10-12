@@ -52,7 +52,7 @@ export function mountPrivateRunFileRoutes(
       if (!claims.operations.includes(operation)) {
         return c.json({ kind: "authorization_rejected" }, 403);
       }
-      const service = serviceForClaims(dependencies, claims);
+      const service = serviceForClaims(dependencies, claims, header.slice(7));
       try {
         const body = await boundedJson(c.req.raw);
         if (operation === "read") {
@@ -119,6 +119,7 @@ export function mountPrivateRunFileRoutes(
 function serviceForClaims(
   dependencies: PrivateRunFileRouteDependencies,
   claims: PrivateRunFileGrantClaims,
+  opaqueGrant: string,
 ): PrivateRunFilesService {
   return new PrivateRunFilesService({
     repository: dependencies.repository,
@@ -126,16 +127,35 @@ function serviceForClaims(
     maxBytes: dependencies.maxBytes,
     authorization: {
       authorize: async ({ scope, authority, operation }) => {
-        if (!sameScope(scope, claims.scope) ||
+        let current: PrivateRunFileGrantClaims;
+        try {
+          // A slow body or base64 decode can cross exp after the initial bearer
+          // check. Reopen immediately before the service touches storage.
+          current = await dependencies.grants.open(opaqueGrant);
+        } catch {
+          throw new PrivateRunFilesError("authorization_rejected");
+        }
+        if (!sameGrantClaims(current, claims) ||
+          !sameScope(scope, current.scope) ||
           authority.runId !== claims.authority.runId ||
           authority.executionAuthorityEpoch !== claims.authority.executionAuthorityEpoch ||
-          !constantTimeEqualsString(authority.leaseToken, claims.authority.leaseToken) ||
-          !claims.operations.includes(operation as PrivateRunFileOperation)) {
+          !constantTimeEqualsString(authority.leaseToken, current.authority.leaseToken) ||
+          !current.operations.includes(operation as PrivateRunFileOperation)) {
           throw new PrivateRunFilesError("authorization_rejected");
         }
       },
     },
   });
+}
+
+function sameGrantClaims(left: PrivateRunFileGrantClaims, right: PrivateRunFileGrantClaims): boolean {
+  return sameScope(left.scope, right.scope) &&
+    left.authority.runId === right.authority.runId &&
+    left.authority.executionAuthorityEpoch === right.authority.executionAuthorityEpoch &&
+    constantTimeEqualsString(left.authority.leaseToken, right.authority.leaseToken) &&
+    left.issuedAt === right.issuedAt && left.expiresAt === right.expiresAt &&
+    left.operations.length === right.operations.length &&
+    left.operations.every((operation, index) => operation === right.operations[index]);
 }
 
 function sameScope(left: PrivateRunFileGrantClaims["scope"], right: PrivateRunFileGrantClaims["scope"]): boolean {
@@ -154,9 +174,15 @@ function publicReceipt(receipt: { version: number; digest: string; commitId: str
 }
 
 async function boundedJson(request: Request): Promise<Record<string, unknown>> {
-  if (request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") invalid();
+  if (request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+    await request.body?.cancel().catch(() => {});
+    invalid();
+  }
   const declared = request.headers.get("content-length");
-  if (declared !== null && Number(declared) > MAX_JSON_BYTES) throw new PrivateRunFilesError("too_large");
+  if (declared !== null && Number(declared) > MAX_JSON_BYTES) {
+    await request.body?.cancel().catch(() => {});
+    throw new PrivateRunFilesError("too_large");
+  }
   const chunks: Uint8Array[] = [];
   let length = 0;
   const reader = request.body?.getReader();
@@ -169,6 +195,9 @@ async function boundedJson(request: Request): Promise<Record<string, unknown>> {
       if (length > MAX_JSON_BYTES) throw new PrivateRunFilesError("too_large");
       chunks.push(value);
     }
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
   } finally {
     reader.releaseLock();
   }

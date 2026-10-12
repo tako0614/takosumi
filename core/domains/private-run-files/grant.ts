@@ -10,7 +10,7 @@ const AUDIENCE = "takosumi.private-run-files.http@v1";
 const PREFIX = "prfg1.";
 // Covers the Core runner's 900-second fallback deadline plus its 60-second
 // dispatch margin; longer profiles require an explicit renewal design.
-const MAX_TTL_MS = 20 * 60 * 1000;
+export const PRIVATE_RUN_FILE_GRANT_MAX_TTL_MS = 20 * 60 * 1000;
 const MAX_TOKEN_LENGTH = 8192;
 const aad = new TextEncoder().encode(`${PURPOSE}\0${AUDIENCE}`);
 const validOperations = new Set<PrivateRunFileOperation>([
@@ -108,7 +108,7 @@ function validateClaims(value: unknown, current: number, mint: boolean): Private
     (mint && value.issuedAt !== current) ||
     value.expiresAt <= current ||
     value.expiresAt <= value.issuedAt ||
-    value.expiresAt - value.issuedAt > MAX_TTL_MS ||
+    value.expiresAt - value.issuedAt > PRIVATE_RUN_FILE_GRANT_MAX_TTL_MS ||
     !validText(value.scope.workspaceId) ||
     !validText(value.scope.capsuleId) ||
     !validText(value.scope.environment) ||
