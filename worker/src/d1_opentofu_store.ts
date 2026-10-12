@@ -15333,6 +15333,32 @@ type D1OpenTofuSchemaMigration = {
   readonly permanentlyDroppedTables?: readonly string[];
 };
 
+const D1_PRIVATE_RUN_FILE_STATEMENTS = [
+  `create table private_run_file_pointers (
+    workspace_id text not null,
+    capsule_id text not null,
+    environment text not null,
+    slot text not null check (length(trim(slot)) > 0),
+    version integer not null check (typeof(version) = 'integer' and version > 0),
+    digest text not null check (length(digest) = 71 and substr(digest, 1, 7) = 'sha256:' and substr(digest, 8) not glob '*[^0-9a-f]*'),
+    blob_id text not null check (length(trim(blob_id)) > 0),
+    latest_commit_id text not null check (length(trim(latest_commit_id)) > 0),
+    primary key (workspace_id, capsule_id, environment, slot)
+  )`,
+  `create table private_run_file_receipts (
+    workspace_id text not null,
+    capsule_id text not null,
+    environment text not null,
+    slot text not null check (length(trim(slot)) > 0),
+    commit_id text not null check (length(trim(commit_id)) > 0),
+    expected_version integer not null check (typeof(expected_version) = 'integer' and expected_version >= 0),
+    version integer not null check (typeof(version) = 'integer' and version = expected_version + 1),
+    digest text not null check (length(digest) = 71 and substr(digest, 1, 7) = 'sha256:' and substr(digest, 8) not glob '*[^0-9a-f]*'),
+    blob_id text not null check (length(trim(blob_id)) > 0),
+    primary key (workspace_id, capsule_id, environment, slot, commit_id)
+  )`,
+] as const;
+
 const D1_OPEN_TOFU_SCHEMA_MIGRATIONS = [
   {
     version: 1,
@@ -17476,6 +17502,21 @@ putWorkspace and personal bootstrap writes preserve these private columns
           )),
         ],
       );
+    },
+  },
+  {
+    version: 70,
+    name: "d1_private_run_files",
+    checksumSource: `
+Private Run files have scoped CAS pointers and immutable commit receipts.
+The latest_commit_id distinguishes the winning CAS from equal-content competitors.
+No foreign key to a Run or Capsule: receipts and pointers outlive attempts.
+`,
+    async atomicStatements() {
+      return D1_PRIVATE_RUN_FILE_STATEMENTS;
+    },
+    async apply(db) {
+      await runD1AtomicSql(db, D1_PRIVATE_RUN_FILE_STATEMENTS);
     },
   },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
