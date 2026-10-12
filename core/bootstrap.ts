@@ -1,5 +1,9 @@
 import type { Hono as HonoApp } from "hono";
 import { createApiApp } from "./api/mod.ts";
+import {
+  PRIVATE_RUN_FILE_HTTP_PATH,
+  type PrivateRunFileRouteDependencies,
+} from "./api/private_run_file_routes.ts";
 import type {
   ConnectionOAuthHelpers,
   DeployControlBearerAuthorizationInput,
@@ -358,6 +362,10 @@ function assertDurableGitInstallPlanStoreOrWarn(input: {
 }
 
 export interface CreateTakosumiServiceOptions extends AppContextOptions {
+  /** Explicit private Runner-to-Core file mount; absent means no endpoint/grants. */
+  readonly privateRunFiles?: PrivateRunFileRouteDependencies & {
+    readonly endpoint: string;
+  };
   readonly role?: TakosumiProcessRole;
   readonly runtimeEnv?: Record<string, string | undefined>;
   readonly context?: AppContext;
@@ -984,6 +992,9 @@ export interface CreatedTakosumiService {
 export async function createTakosumiService(
   options: CreateTakosumiServiceOptions = {},
 ): Promise<CreatedTakosumiService> {
+  if (options.privateRunFiles) {
+    validatePrivateRunFileEndpoint(options.privateRunFiles.endpoint);
+  }
   const runtimeEnv = options.runtimeEnv ?? currentRuntime().env.toObject();
   const runtimeConfig =
     options.runtimeConfig ??
@@ -1268,6 +1279,16 @@ export async function createTakosumiService(
   });
   opentofuController = new OpenTofuController({
     store: sharedOpenTofuStore,
+    ...(options.privateRunFiles
+      ? {
+          privateRunFileGrantMinter: {
+            mint: async (input) => ({
+              endpoint: options.privateRunFiles!.endpoint,
+              grant: await options.privateRunFiles!.grants.mint(input),
+            }),
+          },
+        }
+      : {}),
     activity: activityService,
     ...(options.opentofuRunner ? { runner: options.opentofuRunner } : {}),
     ...(options.opentofuRunnerExecutors
@@ -1641,6 +1662,9 @@ export async function createTakosumiService(
   const connectionOAuthHelpers = options.connectionOAuthHelpers;
   const app = await createApiApp({
     role,
+    ...(options.privateRunFiles
+      ? { privateRunFileRoutes: options.privateRunFiles }
+      : {}),
     registerReadinessRoutes: true,
     registerOpenApiRoute: role === "takosumi-api",
     ...(deployControlToken
@@ -2048,6 +2072,22 @@ function processRoleFromRuntimeConfig(
 ): TakosumiProcessRole {
   const role = runtimeConfig.processRole;
   return role && isTakosumiProcessRole(role) ? role : "takosumi-api";
+}
+
+function validatePrivateRunFileEndpoint(endpoint: string): void {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    throw new TypeError("private run file endpoint is invalid");
+  }
+  if ((url.protocol !== "https:" && url.protocol !== "http:") ||
+    !url.host || url.username || url.password || url.search || url.hash ||
+    url.pathname !== PRIVATE_RUN_FILE_HTTP_PATH ||
+    (url.protocol === "http:" && !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) ||
+    url.toString() !== endpoint) {
+    throw new TypeError("private run file endpoint is invalid");
+  }
 }
 
 

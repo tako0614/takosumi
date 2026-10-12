@@ -124,6 +124,7 @@ function structuredLog(
  */
 export interface ComposedServerOverrides {
   readonly sqlClient?: Parameters<typeof buildComposedApp>[0]["sqlClient"];
+  readonly privateRunFiles?: Parameters<typeof buildComposedApp>[0]["privateRunFiles"];
   readonly opentofuControlStore?: Parameters<
     typeof buildComposedApp
   >[0]["opentofuControlStore"];
@@ -252,6 +253,9 @@ export async function buildComposedServer(
       ? { runtimeBindingDerivationKey: overrides.runtimeBindingDerivationKey }
       : {}),
     sqlClient: overrides.sqlClient ?? wrapServiceSqlClient(pool),
+    ...(overrides.privateRunFiles
+      ? { privateRunFiles: overrides.privateRunFiles }
+      : {}),
     ...(overrides.opentofuControlStore !== undefined
       ? { opentofuControlStore: overrides.opentofuControlStore }
       : {}),

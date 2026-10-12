@@ -29,6 +29,10 @@ import {
   mountDeployControlInternalRoutes,
 } from "./deploy_control_internal_routes.ts";
 import {
+  mountPrivateRunFileRoutes,
+  type PrivateRunFileRouteDependencies,
+} from "./private_run_file_routes.ts";
+import {
   registerMetricsRoutes,
   type RegisterMetricsRoutesOptions,
 } from "./metrics_routes.ts";
@@ -57,6 +61,8 @@ export interface CreateApiAppOptions {
   /** When set, mounts the v1 OpenTofu plan/apply/destroy internal seam. */
   readonly registerDeployControlInternalRoutes?: boolean;
   readonly deployControlInternalRouteOptions?: DeployControlInternalRouteDependencies;
+  /** Private Runner-to-Core file capability; never part of public discovery. */
+  readonly privateRunFileRoutes?: PrivateRunFileRouteDependencies;
   readonly registerMetricsRoutes?: boolean;
   readonly metricsRouteOptions?: RegisterMetricsRoutesOptions;
   /** Takosumi-managed runtime declaration API shared by both authoring flows. */
@@ -131,6 +137,10 @@ export async function createApiApp(
       app,
       options.deployControlInternalRouteOptions ?? {},
     );
+  }
+
+  if (options.privateRunFileRoutes) {
+    mountPrivateRunFileRoutes(app, options.privateRunFileRoutes);
   }
 
   if (metricsRoutesMounted) {
