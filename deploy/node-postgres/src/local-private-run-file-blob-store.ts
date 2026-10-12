@@ -22,9 +22,14 @@ export interface LocalPrivateRunFileBlobStoreOptions {
   readonly maxBytes: number;
   /** Existing authenticated secret boundary; this adapter does not manage keys. */
   readonly cryptoBoundary: PartitionedSecretBoundaryCrypto;
-  /** @internal Test-only phase injection: pauses immediately after final link publication. */
-  readonly testOnlyAfterPublishLink?: () => Promise<void>;
+  /** @internal Test-only phase injection around immutable publication durability. */
+  readonly testOnlyAfterPublishPhase?: (phase: LocalPrivateRunFileBlobTestPhase) => Promise<void>;
 }
+
+type LocalPrivateRunFileBlobTestPhase =
+  | "after-final-link"
+  | "after-temporary-unlink-before-sync"
+  | "after-existing-directory-sync";
 
 /**
  * Encrypted immutable local backing for the internal private-run-file port.
@@ -90,7 +95,7 @@ export function createLocalPrivateRunFileBlobStore(
         }
         try {
           await link(temporaryPath, path);
-          await options.testOnlyAfterPublishLink?.();
+          await options.testOnlyAfterPublishPhase?.("after-final-link");
           // Drop the staging name before readback: an immutable object must
           // have exactly one directory entry, not merely a private inode.
           await unlink(temporaryPath).catch((error) => {
@@ -98,6 +103,7 @@ export function createLocalPrivateRunFileBlobStore(
             // name after authenticating the final object.
             if (!isErrno(error, "ENOENT")) throw error;
           });
+          await options.testOnlyAfterPublishPhase?.("after-temporary-unlink-before-sync");
           await syncDirectory(directory);
           const stored = await readVerified(path, scope, blobId, expectedDigest);
           if (!stored || stored.byteLength !== bytes.byteLength || !equalBytes(stored.bytes, bytes)) {
@@ -110,6 +116,11 @@ export function createLocalPrivateRunFileBlobStore(
           if (!existing || existing.byteLength !== bytes.byteLength || !equalBytes(existing.bytes, bytes)) {
             fail("local private-run blob immutable identity is occupied");
           }
+          // The object may have been linked by a process killed before its
+          // directory fsync. The file itself was fsynced before link(2); make
+          // the final directory entry durable before returning this exact hit.
+          await syncDirectory(directory);
+          await options.testOnlyAfterPublishPhase?.("after-existing-directory-sync");
           return { blobId, digest: existing.digest, byteLength: existing.byteLength };
         }
       } catch (error) {

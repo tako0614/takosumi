@@ -51,17 +51,21 @@ function spawnBlobWriter(input: {
   readonly bytes: Uint8Array;
   readonly markerPath?: string;
   readonly releasePath?: string;
+  readonly phase?: "after-final-link" | "after-temporary-unlink-before-sync" | "after-existing-directory-sync";
+  readonly blockAtPhase?: boolean;
 }): ChildProcess {
   const cryptoModule = new URL("../../../../core/adapters/secret-store/memory.ts", import.meta.url).href;
   const blobModule = new URL("../../../../deploy/node-postgres/src/local-private-run-file-blob-store.ts", import.meta.url).href;
   const marker = input.markerPath ? JSON.stringify(input.markerPath) : undefined;
   const release = input.releasePath ? JSON.stringify(input.releasePath) : undefined;
+  const targetPhase = JSON.stringify(input.phase ?? "after-final-link");
   const hook = marker
-    ? `testOnlyAfterPublishLink: async () => {
+    ? `testOnlyAfterPublishPhase: async (phase) => {
+        if (phase !== ${targetPhase}) return;
         const { writeFile, access } = await import("node:fs/promises");
         const marker = ${marker};
         await writeFile(marker, "linked");
-        ${release ? `const release = ${release}; while (true) { try { await access(release); return; } catch {} await new Promise((resolve) => setTimeout(resolve, 5)); }` : "await new Promise(() => {});"}
+        ${release ? `const release = ${release}; while (true) { try { await access(release); return; } catch {} await new Promise((resolve) => setTimeout(resolve, 5)); }` : input.blockAtPhase ? "await new Promise(() => {});" : ""}
       },`
     : "";
   const script = `
@@ -175,7 +179,7 @@ test("SIGKILL after final link is recovered by exact read and retry after proces
   const marker = join(dirname(f.root), "linked");
   let child: ChildProcess | undefined;
   try {
-    child = spawnBlobWriter({ root: f.root, bytes, markerPath: marker });
+    child = spawnBlobWriter({ root: f.root, bytes, markerPath: marker, blockAtPhase: true });
     await waitForPath(marker, child);
     const childExit = waitForChild(child);
     child.kill("SIGKILL");
@@ -202,6 +206,55 @@ test("SIGKILL after final link is recovered by exact read and retry after proces
   }
 });
 
+test("SIGKILL after temp unlink is followed by directory sync before exact retry succeeds", async () => {
+  const f = await fixture();
+  const bytes = new TextEncoder().encode("directory-sync-after-crash");
+  const publicationMarker = join(dirname(f.root), "unlinked-before-sync");
+  const retryMarker = join(dirname(f.root), "existing-directory-synced");
+  let publisher: ChildProcess | undefined;
+  let retry: ChildProcess | undefined;
+  try {
+    publisher = spawnBlobWriter({
+      root: f.root,
+      bytes,
+      markerPath: publicationMarker,
+      phase: "after-temporary-unlink-before-sync",
+      blockAtPhase: true,
+    });
+    await waitForPath(publicationMarker, publisher);
+    const blobId = blobIdFor(SCOPE, digest(bytes));
+    const path = blobPath(f.root, blobId);
+    expect((await lstat(path)).nlink).toBe(1);
+    const namesBeforeKill = await readdir(dirname(path));
+    expect(namesBeforeKill.some((name) => name.startsWith(`${blobId}.`) && name.endsWith(".tmp"))).toBe(false);
+    const publisherExit = waitForChild(publisher);
+    publisher.kill("SIGKILL");
+    expect(await publisherExit).toEqual({ code: null, signal: "SIGKILL" });
+
+    retry = spawnBlobWriter({
+      root: f.root,
+      bytes,
+      markerPath: retryMarker,
+      phase: "after-existing-directory-sync",
+    });
+    await waitForPath(retryMarker, retry);
+    expect(await waitForChild(retry)).toEqual({ code: 0, signal: null });
+    expect((await lstat(path)).nlink).toBe(1);
+    const reopened = createLocalPrivateRunFileBlobStore({ root: f.root, maxBytes: 64, cryptoBoundary: TEST_CRYPTO });
+    expect(await reopened.readEncryptedVerified({ scope: SCOPE, blobId, expectedDigest: digest(bytes) }))
+      .toEqual({ bytes, digest: digest(bytes), byteLength: bytes.byteLength });
+  } finally {
+    for (const child of [retry, publisher]) {
+      if (child && child.exitCode === null && child.signalCode === null) {
+        const childExit = waitForChild(child);
+        child.kill("SIGKILL");
+        await childExit.catch(() => undefined);
+      }
+    }
+    await f.cleanup();
+  }
+});
+
 test("concurrent exact process retry reaps only the winner's temporary link and both puts succeed", async () => {
   const f = await fixture();
   const bytes = new TextEncoder().encode("two-process-same-immutable-put");
@@ -210,7 +263,7 @@ test("concurrent exact process retry reaps only the winner's temporary link and 
   let winner: ChildProcess | undefined;
   let retry: ChildProcess | undefined;
   try {
-    winner = spawnBlobWriter({ root: f.root, bytes, markerPath: marker, releasePath: release });
+    winner = spawnBlobWriter({ root: f.root, bytes, markerPath: marker, releasePath: release, blockAtPhase: true });
     await waitForPath(marker, winner);
     retry = spawnBlobWriter({ root: f.root, bytes });
     const retryExit = await waitForChild(retry);
