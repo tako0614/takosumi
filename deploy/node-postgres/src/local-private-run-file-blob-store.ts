@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
-import { link, lstat, mkdir, open, unlink } from "node:fs/promises";
+import { constants as fsConstants, type Stats } from "node:fs";
+import { link, lstat, mkdir, open, readdir, unlink } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import { dirname, join, resolve } from "node:path";
-import type { SecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
+import { PartitionedSecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
 import type {
   PrivateRunFileBlobPort,
   PrivateRunFileDigest,
@@ -21,7 +21,9 @@ export interface LocalPrivateRunFileBlobStoreOptions {
   /** Maximum plaintext bytes, enforced on input, envelope, and readback. */
   readonly maxBytes: number;
   /** Existing authenticated secret boundary; this adapter does not manage keys. */
-  readonly cryptoBoundary: SecretBoundaryCrypto;
+  readonly cryptoBoundary: PartitionedSecretBoundaryCrypto;
+  /** @internal Test-only phase injection: pauses immediately after final link publication. */
+  readonly testOnlyAfterPublishLink?: () => Promise<void>;
 }
 
 /**
@@ -33,6 +35,9 @@ export function createLocalPrivateRunFileBlobStore(
 ): PrivateRunFileBlobPort {
   if (!options.root || !Number.isSafeInteger(options.maxBytes) || options.maxBytes <= 0) {
     throw new PrivateRunFileBlobStoreError("invalid local private-run blob configuration");
+  }
+  if (!(options.cryptoBoundary instanceof PartitionedSecretBoundaryCrypto)) {
+    throw new PrivateRunFileBlobStoreError("local private-run blob storage requires partitioned encryption");
   }
   const maxEnvelopeBytes = envelopeBound(options.maxBytes);
   const root = resolve(options.root);
@@ -85,9 +90,14 @@ export function createLocalPrivateRunFileBlobStore(
         }
         try {
           await link(temporaryPath, path);
+          await options.testOnlyAfterPublishLink?.();
           // Drop the staging name before readback: an immutable object must
           // have exactly one directory entry, not merely a private inode.
-          await unlink(temporaryPath);
+          await unlink(temporaryPath).catch((error) => {
+            // A concurrent exact read/retry may safely reap the same staging
+            // name after authenticating the final object.
+            if (!isErrno(error, "ENOENT")) throw error;
+          });
           await syncDirectory(directory);
           const stored = await readVerified(path, scope, blobId, expectedDigest);
           if (!stored || stored.byteLength !== bytes.byteLength || !equalBytes(stored.bytes, bytes)) {
@@ -152,7 +162,7 @@ export function createLocalPrivateRunFileBlobStore(
     }
     try {
       const before = await file.stat();
-      await assertPrivateRegularFile(file, true);
+      assertReadablePrivateRegularFile(before);
       if (!Number.isSafeInteger(before.size) || before.size < 1 || before.size > maxEnvelopeBytes) {
         fail("local private-run blob envelope exceeds configured size limit");
       }
@@ -164,10 +174,10 @@ export function createLocalPrivateRunFileBlobStore(
       }
       const after = await file.stat();
       if (after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size ||
-        after.mtimeMs !== before.mtimeMs || !after.isFile() || after.nlink !== 1 ||
-        after.uid !== process.getuid?.() || (after.mode & 0o077) !== 0) {
+        after.mtimeMs !== before.mtimeMs) {
         fail("local private-run blob changed during read");
       }
+      assertReadablePrivateRegularFile(after);
       let envelope: unknown;
       try {
         envelope = JSON.parse(envelopeBytes.toString("utf8"));
@@ -189,6 +199,14 @@ export function createLocalPrivateRunFileBlobStore(
       if (plaintext.byteLength !== envelope.byteLength || plaintext.byteLength > options.maxBytes ||
         await digestBytes(plaintext) !== expectedDigest) {
         fail("local private-run blob content verification failed");
+      }
+      await reconcilePublishedLinks(path, blobId, file, before.nlink);
+      // Recovery is not complete until a fresh path read observes the
+      // directory-synchronized, single-link final object.
+      if (before.nlink === 2) {
+        const finalRead = await readVerified(path, scope, blobId, expectedDigest);
+        if (!finalRead) fail("local private-run blob final object disappeared after recovery");
+        return finalRead;
       }
       return { bytes: plaintext, digest: expectedDigest, byteLength: plaintext.byteLength };
     } finally {
@@ -343,6 +361,125 @@ async function assertPrivateRegularFile(
     (stat.mode & 0o077) !== 0 || (requireNonempty && stat.size < 1)) {
     fail("local private-run blob file is not private");
   }
+}
+
+function assertReadablePrivateRegularFile(stat: Stats): void {
+  if (!stat.isFile() || stat.uid !== process.getuid?.() || (stat.nlink !== 1 && stat.nlink !== 2) ||
+    (stat.mode & 0o077) !== 0 || stat.size < 1) {
+    fail("local private-run blob file is not private");
+  }
+}
+
+async function reconcilePublishedLinks(
+  finalPath: string,
+  blobId: string,
+  file: Awaited<ReturnType<typeof open>>,
+  initialLinkCount: number,
+): Promise<void> {
+  const directory = dirname(finalPath);
+  const current = await file.stat();
+  assertReadablePrivateRegularFile(current);
+  if (current.nlink === 1) {
+    if (initialLinkCount === 2) {
+      await assertFinalPathIsSameInode(finalPath, current, 1);
+      await syncDirectory(directory);
+    } else if (initialLinkCount !== 1) {
+      fail("local private-run blob link state is ambiguous");
+    }
+    return;
+  }
+  if (initialLinkCount !== 2 || current.nlink !== 2) {
+    fail("local private-run blob has foreign hard links");
+  }
+  await assertFinalPathIsSameInode(finalPath, current, 2);
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch {
+    fail("local private-run blob staging link cannot be reconciled");
+  }
+  const tempNamePattern = new RegExp(
+    `^${blobId}\\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.tmp$`,
+    "u",
+  );
+  const sameInodeCandidates: string[] = [];
+  for (const name of names.filter((candidate) => tempNamePattern.test(candidate))) {
+    try {
+      const candidateStat = await lstat(join(directory, name));
+      if (candidateStat.dev !== current.dev || candidateStat.ino !== current.ino) continue;
+      if (!samePrivateLink(candidateStat, current, 2)) {
+        fail("local private-run blob staging link is not owned by this store");
+      }
+      sameInodeCandidates.push(name);
+    } catch (error) {
+      if (isErrno(error, "ENOENT")) continue;
+      if (error instanceof PrivateRunFileBlobStoreError) throw error;
+      fail("local private-run blob staging link cannot be inspected");
+    }
+  }
+  if (sameInodeCandidates.length === 0) {
+    await acceptPeerReap(finalPath, directory, file, current);
+    return;
+  }
+  if (sameInodeCandidates.length !== 1) fail("local private-run blob staging link is ambiguous");
+  const temporaryPath = join(directory, sameInodeCandidates[0]);
+  await assertFinalPathIsSameInode(finalPath, current, 2);
+  let latestTemporary: Stats;
+  try {
+    latestTemporary = await lstat(temporaryPath);
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) {
+      await acceptPeerReap(finalPath, directory, file, current);
+      return;
+    }
+    fail("local private-run blob staging link cannot be inspected");
+  }
+  if (!samePrivateLink(latestTemporary, current, 2)) {
+    fail("local private-run blob staging link changed during recovery");
+  }
+  try {
+    await unlink(temporaryPath);
+  } catch (error) {
+    if (!isErrno(error, "ENOENT")) fail("local private-run blob staging link could not be removed");
+  }
+  const after = await assertFinalPathIsSameInode(finalPath, current, 1);
+  if (after.nlink !== 1) fail("local private-run blob link state remains ambiguous");
+  await syncDirectory(directory);
+  await assertFinalPathIsSameInode(finalPath, current, 1);
+}
+
+async function acceptPeerReap(
+  finalPath: string,
+  directory: string,
+  file: Awaited<ReturnType<typeof open>>,
+  expected: Stats,
+): Promise<void> {
+  const current = await file.stat();
+  if (!samePrivateLink(current, expected, 1)) {
+    fail("local private-run blob concurrent recovery is incomplete");
+  }
+  await assertFinalPathIsSameInode(finalPath, current, 1);
+  await syncDirectory(directory);
+  await assertFinalPathIsSameInode(finalPath, current, 1);
+}
+
+async function assertFinalPathIsSameInode(path: string, expected: Stats, linkCount: number): Promise<Stats> {
+  let current: Stats;
+  try {
+    current = await lstat(path);
+  } catch {
+    fail("local private-run blob final object disappeared during recovery");
+  }
+  if (!samePrivateLink(current, expected, linkCount)) {
+    fail("local private-run blob final object changed during recovery");
+  }
+  return current;
+}
+
+function samePrivateLink(current: Stats, expected: Stats, linkCount: number): boolean {
+  return current.isFile() && !current.isSymbolicLink() && current.dev === expected.dev &&
+    current.ino === expected.ino && current.uid === process.getuid?.() && current.nlink === linkCount &&
+    (current.mode & 0o077) === 0;
 }
 
 function blobPath(directory: string, blobId: string): string {
