@@ -8,7 +8,9 @@ import type {
 const PURPOSE = "takosumi.private-run-files.grant@v1";
 const AUDIENCE = "takosumi.private-run-files.http@v1";
 const PREFIX = "prfg1.";
-const MAX_TTL_MS = 10 * 60 * 1000;
+// Covers the Core runner's 900-second fallback deadline plus its 60-second
+// dispatch margin; longer profiles require an explicit renewal design.
+const MAX_TTL_MS = 20 * 60 * 1000;
 const MAX_TOKEN_LENGTH = 8192;
 const aad = new TextEncoder().encode(`${PURPOSE}\0${AUDIENCE}`);
 const validOperations = new Set<PrivateRunFileOperation>([
@@ -21,7 +23,7 @@ export interface PrivateRunFileGrantInput {
   readonly scope: PrivateRunFileScope;
   readonly authority: PrivateRunFileAuthority;
   readonly operations: readonly PrivateRunFileOperation[];
-  /** Unix epoch milliseconds. A grant cannot outlive ten minutes. */
+  /** Unix epoch milliseconds. A grant cannot outlive twenty minutes. */
   readonly expiresAt: number;
 }
 

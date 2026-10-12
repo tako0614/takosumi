@@ -51,11 +51,18 @@ test("sealed grant keeps lease opaque and binds exact scope, operations and expi
 
 test("grant mint rejects unbounded or malformed authority and placeholder crypto", async () => {
   current = 2_000_000;
+  const fallbackRun = await codec.mint({
+    scope,
+    authority,
+    operations: ["read"],
+    expiresAt: current + 960_000,
+  });
+  expect((await codec.open(fallbackRun)).expiresAt).toBe(current + 960_000);
   await expect(codec.mint({
     scope,
     authority,
     operations: ["read"],
-    expiresAt: current + 10 * 60_000 + 1,
+    expiresAt: current + 20 * 60_000 + 1,
   })).rejects.toBeInstanceOf(PrivateRunFileGrantError);
   await expect(codec.mint({
     scope,
