@@ -209,24 +209,8 @@ export class PrivateRunFilesService {
     }
     if (!pointer) return { kind: "absent" };
     validatePointer(pointer);
-    let stored: Awaited<ReturnType<PrivateRunFileBlobPort["readEncryptedVerified"]>>;
-    try {
-      stored = await this.#blobs.readEncryptedVerified({
-        scope: stable.scope,
-        blobId: pointer.blobId,
-        expectedDigest: pointer.digest,
-      });
-    } catch {
-      throw new PrivateRunFilesError("unavailable");
-    }
-    if (!stored) throw new PrivateRunFilesError("integrity_failure");
-    const bytes = Uint8Array.from(stored.bytes);
-    const digest = await digestOf(bytes);
-    if (stored.digest !== pointer.digest || digest !== pointer.digest ||
-      stored.byteLength !== bytes.byteLength || bytes.byteLength > this.#maxBytes) {
-      throw new PrivateRunFilesError("integrity_failure");
-    }
-    return { kind: "present", version: pointer.version, digest, bytes };
+    const bytes = await this.#readVerifiedBlob(stable.scope, pointer.blobId, pointer.digest);
+    return { kind: "present", version: pointer.version, digest: pointer.digest, bytes };
   }
 
   async commit(request: PrivateRunFileCommitRequest): Promise<PrivateRunFileCommitResult> {
@@ -270,6 +254,7 @@ export class PrivateRunFilesService {
       // A known immutable receipt is reused without another blob write, but it
       // still goes through commitPointer's current epoch/lease fence below.
       blobId = prior.blobId;
+      await this.#readVerifiedBlob(stable.scope, blobId, digest, stable.bytes.byteLength);
     } else {
       let blob: Awaited<ReturnType<PrivateRunFileBlobPort["putEncryptedImmutable"]>>;
       try {
@@ -281,21 +266,7 @@ export class PrivateRunFilesService {
         throw new PrivateRunFilesError("integrity_failure");
       }
 
-      let verification: Awaited<ReturnType<PrivateRunFileBlobPort["readEncryptedVerified"]>>;
-      try {
-        verification = await this.#blobs.readEncryptedVerified({
-          scope: stable.scope,
-          blobId: blob.blobId,
-          expectedDigest: digest,
-        });
-      } catch {
-        throw new PrivateRunFilesError("unavailable");
-      }
-      if (!verification || verification.digest !== digest ||
-        verification.byteLength !== bytes.byteLength || verification.bytes.byteLength !== bytes.byteLength ||
-        await digestOf(Uint8Array.from(verification.bytes)) !== digest) {
-        throw new PrivateRunFilesError("integrity_failure");
-      }
+      await this.#readVerifiedBlob(stable.scope, blob.blobId, digest, bytes.byteLength);
       blobId = blob.blobId;
     }
 
@@ -353,9 +324,32 @@ export class PrivateRunFilesService {
       return { kind: "unknown" };
     }
     if (lookup.kind !== "found") return { kind: lookup.kind === "absent" ? "not_found" : lookup.kind };
-    return sameReceipt(lookup.receipt, stable, stable.digest)
-      ? { kind: "committed", receipt: copyReceipt(lookup.receipt) }
-      : { kind: "conflict" };
+    if (!sameReceipt(lookup.receipt, stable, stable.digest)) return { kind: "conflict" };
+    await this.#readVerifiedBlob(stable.scope, lookup.receipt.blobId, stable.digest);
+    return { kind: "committed", receipt: copyReceipt(lookup.receipt) };
+  }
+
+  async #readVerifiedBlob(
+    scope: PrivateRunFileScope,
+    blobId: string,
+    expectedDigest: PrivateRunFileDigest,
+    expectedByteLength?: number,
+  ): Promise<Uint8Array> {
+    let stored: Awaited<ReturnType<PrivateRunFileBlobPort["readEncryptedVerified"]>>;
+    try {
+      stored = await this.#blobs.readEncryptedVerified({ scope, blobId, expectedDigest });
+    } catch {
+      throw new PrivateRunFilesError("unavailable");
+    }
+    if (!stored) throw new PrivateRunFilesError("integrity_failure");
+    const bytes = Uint8Array.from(stored.bytes);
+    if (
+      stored.digest !== expectedDigest || stored.byteLength !== bytes.byteLength ||
+      bytes.byteLength > this.#maxBytes ||
+      (expectedByteLength !== undefined && bytes.byteLength !== expectedByteLength) ||
+      await digestOf(bytes) !== expectedDigest
+    ) throw new PrivateRunFilesError("integrity_failure");
+    return bytes;
   }
 
   async #authorize(request: PrivateRunFileReadRequest, operation: PrivateRunFileOperation): Promise<void> {

@@ -44,6 +44,7 @@ function build(maxBytes = 64) {
 class MemoryRepository implements PrivateRunFileRepositoryPort {
   readonly pointers = new Map<string, { version: number; digest: PrivateRunFileDigest; blobId: string }>();
   readonly receipts = new Map<string, PrivateRunFileReceipt>();
+  acceptedRunId = "run_1";
   acceptedEpoch = 1;
   acceptedLease = "lease_1";
   nextFinalize: "normal" | "unknown_after_commit" = "normal";
@@ -57,7 +58,7 @@ class MemoryRepository implements PrivateRunFileRepositoryPort {
 
   async lookupReceipt(request: Parameters<PrivateRunFileRepositoryPort["lookupReceipt"]>[0]) {
     if (this.lookupReceiptOverride) return this.lookupReceiptOverride;
-    if (request.executionAuthorityEpoch !== this.acceptedEpoch || request.leaseToken !== this.acceptedLease) {
+    if (request.runId !== this.acceptedRunId || request.executionAuthorityEpoch !== this.acceptedEpoch || request.leaseToken !== this.acceptedLease) {
       return { kind: "authority_rejected" as const };
     }
     const receipt = this.receipts.get(`${scopeKey(request.scope)}:${request.commitId}`);
@@ -70,7 +71,7 @@ class MemoryRepository implements PrivateRunFileRepositoryPort {
     const receiptKey = `${key}:${request.commitId}`;
     const current = this.pointers.get(key);
     const version = current?.version ?? 0;
-    if (request.executionAuthorityEpoch !== this.acceptedEpoch || request.leaseToken !== this.acceptedLease) {
+    if (request.runId !== this.acceptedRunId || request.executionAuthorityEpoch !== this.acceptedEpoch || request.leaseToken !== this.acceptedLease) {
       return { kind: "authority_rejected" as const };
     }
     const oldReceipt = this.receipts.get(receiptKey);
@@ -318,6 +319,52 @@ test("receipt resolution is fenced against the current Capsule epoch and Run lea
   expect(resolved.kind).toBe("authority_rejected");
 });
 
+test("known replay and resolve verify the original immutable blob without writing", async () => {
+  const replay = build();
+  const initial = await replay.service.commit({
+    scope, authority, expectedVersion: 0, commitId: "verified-replay", bytes: new Uint8Array([4, 5]),
+  });
+  if (initial.kind !== "committed") throw new Error("expected committed receipt");
+  replay.blobs.objects.delete(initial.receipt.blobId);
+  await expect(replay.service.commit({
+    scope, authority, expectedVersion: 0, commitId: "verified-replay", bytes: new Uint8Array([4, 5]),
+  })).rejects.toMatchObject({ code: "integrity_failure" });
+  expect(replay.blobs.nextId).toBe(1);
+
+  const corruptReplay = build();
+  const corruptInitial = await corruptReplay.service.commit({
+    scope, authority, expectedVersion: 0, commitId: "corrupt-replay", bytes: new Uint8Array([7]),
+  });
+  if (corruptInitial.kind !== "committed") throw new Error("expected committed receipt");
+  corruptReplay.blobs.corruptReadback = true;
+  await expect(corruptReplay.service.commit({
+    scope, authority, expectedVersion: 0, commitId: "corrupt-replay", bytes: new Uint8Array([7]),
+  })).rejects.toMatchObject({ code: "integrity_failure" });
+  expect(corruptReplay.blobs.nextId).toBe(1);
+
+  const missingResolution = build();
+  const missingInitial = await missingResolution.service.commit({
+    scope, authority, expectedVersion: 0, commitId: "missing-resolve", bytes: new Uint8Array([8]),
+  });
+  if (missingInitial.kind !== "committed") throw new Error("expected committed receipt");
+  missingResolution.blobs.objects.delete(missingInitial.receipt.blobId);
+  await expect(missingResolution.service.resolve({
+    scope, authority, commitId: "missing-resolve", expectedVersion: 0, digest: missingInitial.receipt.digest,
+  })).rejects.toMatchObject({ code: "integrity_failure" });
+  expect(missingResolution.blobs.nextId).toBe(1);
+
+  const resolution = build();
+  const uncertain = await resolution.service.commit({
+    scope, authority, expectedVersion: 0, commitId: "verified-resolve", bytes: new Uint8Array([6]),
+  });
+  if (uncertain.kind !== "committed") throw new Error("expected committed fixture receipt");
+  resolution.blobs.corruptReadback = true;
+  await expect(resolution.service.resolve({
+    scope, authority, commitId: "verified-resolve", expectedVersion: 0, digest: uncertain.receipt.digest,
+  })).rejects.toMatchObject({ code: "integrity_failure" });
+  expect(resolution.blobs.nextId).toBe(1);
+});
+
 test("rejects stale epoch or lease at the atomic repository boundary", async () => {
   const { service, repository, blobs } = build();
   const stale = await service.commit({
@@ -326,6 +373,14 @@ test("rejects stale epoch or lease at the atomic repository boundary", async () 
   });
   expect(stale.kind).toBe("authority_rejected");
   expect(repository.pointers.size).toBe(0);
+  expect(repository.finalizeCalls).toBe(0);
+  expect(blobs.nextId).toBe(0);
+
+  const otherRun = await service.commit({
+    scope, authority: { ...authority, runId: "other-run" },
+    expectedVersion: 0, commitId: "other-run", bytes: new Uint8Array([2]),
+  });
+  expect(otherRun.kind).toBe("authority_rejected");
   expect(repository.finalizeCalls).toBe(0);
   expect(blobs.nextId).toBe(0);
 
