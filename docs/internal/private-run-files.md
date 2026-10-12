@@ -125,3 +125,13 @@ behavior. Adapter tests cover selected transaction, encryption and restart
 properties but do not prove complete host wiring, physical power-loss survival,
 or Cloud Runner delivery. A mounted integration must test those properties
 separately before this is described as an available runtime capability.
+
+The opt-in native Worker test runs the composed HTTP route in Miniflare/workerd
+with real isolated D1 and R2 bindings and explicit on-disk persistence roots. It
+commits through the encrypted adapter and atomic D1 pointer/receipt path, drops
+the HTTP commit response before the client observes it, resolves that exact
+receipt, then kills and restarts the workerd child against the same roots before
+reading and resolving again. It also checks foreign scope, expiry and frozen
+authority refusal. This qualifies only the cached local Miniflare/workerd
+runtime and its persistence implementation; it is not Cloud R2, Hosted Worker,
+Cloud Runner, physical power-loss, or production durability evidence.
