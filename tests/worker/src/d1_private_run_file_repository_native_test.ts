@@ -54,6 +54,11 @@ async function seed(db: D1Database): Promise<void> {
         capsuleId: scope.capsuleId,
         status: "running",
         capsuleExecutionAuthorityEpoch: authority.executionAuthorityEpoch,
+        workspaceManagementAuthority: {
+          workspaceId: scope.workspaceId,
+          managementState: "active",
+          managementEpoch: 1,
+        },
       }),
     )
     .run();
@@ -186,6 +191,56 @@ test(
       expect(await repo.commitPointer(request)).toEqual({
         kind: "authority_rejected",
       });
+
+      await db.prepare(`update runs set lease_token = ? where id = ?`)
+        .bind(authority.leaseToken, authority.runId).run();
+      await db.prepare(`update workspaces set management_state = 'draining',
+        management_epoch = 2 where id = ?`).bind(scope.workspaceId).run();
+      const settling = new D1PrivateRunFileRepository(db);
+      expect((await settling.readPointer(authority)).kind).toBe("present");
+      expect(
+        (await settling.lookupReceipt({
+          ...authority,
+          commitId: request.commitId,
+        })).kind,
+      ).toBe("found");
+      expect((await settling.commitPointer(request)).kind).toBe("replayed");
+      expect(
+        (await settling.commitPointer({
+          ...request,
+          scope: { ...scope, slot: "native-drain" },
+          commitId: "native_drain",
+        })).kind,
+      ).toBe("committed");
+
+      const frozenSlot = { ...scope, slot: "native-freeze-race" };
+      const freezeRace: D1Database = {
+        prepare: (query) => db.prepare(query),
+        batch: async (statements) => {
+          await db.prepare(`update workspaces set management_state = 'frozen'
+            where id = ?`).bind(scope.workspaceId).run();
+          return await db.batch(statements);
+        },
+      };
+      expect(
+        await new D1PrivateRunFileRepository(freezeRace).commitPointer({
+          ...request,
+          scope: frozenSlot,
+          commitId: "native_frozen_race",
+        }),
+      ).toEqual({ kind: "authority_rejected" });
+      expect(
+        await db.prepare(`select count(*) as count
+        from private_run_file_receipts where slot = ?`)
+          .bind(frozenSlot.slot).first<{ count: number }>(),
+      )
+        .toEqual({ count: 0 });
+      expect(
+        await db.prepare(`select count(*) as count
+        from private_run_file_pointers where slot = ?`)
+          .bind(frozenSlot.slot).first<{ count: number }>(),
+      )
+        .toEqual({ count: 0 });
     } finally {
       await runtime.dispose();
     }

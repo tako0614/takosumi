@@ -29,10 +29,10 @@ current scoped grant, writes an immutable encrypted blob, and separately asks
 the blob port to authenticate/decrypt and read it back under the same scope.
 The service verifies the returned byte length and digest. Only then does it
 ask the repository to atomically validate the exact scope, current Capsule
-`executionAuthorityEpoch`, active Run lease, expected pointer version and
-commit receipt, and to advance the pointer while recording that receipt in the
-same durable transaction. The `committed` result is the ACK. An immutable blob
-without that repository transaction is not an ACK and may be orphaned; this
+`executionAuthorityEpoch`, current running Run lease, expected pointer version
+and commit receipt, and to advance the pointer while recording that receipt in
+the same durable transaction. The `committed` result is the ACK. An immutable
+blob without that repository transaction is not an ACK and may be orphaned; this
 contract provides no automatic cleanup.
 
 The authorization port validates a scoped grant but cannot substitute for
@@ -77,8 +77,29 @@ on a profile above 1140 seconds (which would exceed 20 minutes after the
 60-second margin) must fail before Run claim until a renewal protocol exists.
 No shorter grant may be silently substituted and allowed to expire during an
 external mutation. The final DB check, not the grant expiry alone, fences a
-revoked or replaced lease. The current repository requires an active Workspace;
-draining settlement policy is not yet implemented for this private-file seam.
+revoked or replaced lease. An already-running Plan/Apply-family Run may read,
+resolve its exact receipt, or commit under its current lease while the Workspace
+is draining only when its persisted original active management authority names
+the same Workspace and its positive safe epoch precedes the current draining
+epoch. This follows the existing Run settlement cutoff; it does not admit a new
+Run or lease. Frozen, released, missing/malformed authority, changed Capsule
+epoch, terminal Run, and replaced lease are rejected at the repository. An
+expired grant still cannot use this settlement path; grant renewal and recovery
+after expiry are separate work.
+
+## Retention boundary
+
+Private-file pointers, immutable receipts, and encrypted blobs are deliberately
+retained across Run completion, Capsule `destroyed`, Workspace archive, and
+management drain. Capsule delete is a terminal lifecycle transition, not a
+physical purge, and Workspace archive is metadata only. Neither schema has a
+private-file foreign-key cascade or a final-blob deletion path. This preserves
+unresolved intent and exact ACK evidence but means terminal and orphaned bytes
+may remain indefinitely. Operators enabling this opt-in mount must accept that
+storage/custody burden explicitly; there is no claimed TTL, erasure, or garbage
+collection. A finite retention period and safe reclamation of unreferenced
+blobs require a separate owner policy and implementation, never a Run-end or
+destroy-time best-effort delete.
 
 ## Adapter and capability boundary
 

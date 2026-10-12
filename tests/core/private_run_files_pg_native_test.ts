@@ -151,21 +151,72 @@ test.skipIf(!enabled)(
       ).resolves.toMatchObject({ kind: "authority_rejected" });
 
       await sql.client.query(
-        "update takosumi_workspaces set management_state = 'draining' where id = $1",
+        "update takosumi_workspaces set management_state = 'draining', management_epoch = 2 where id = $1",
         [scope.workspaceId],
       );
+      await expect(service.read({ scope, authority })).resolves.toMatchObject({
+        kind: "present",
+        version: 2,
+      });
       await expect(
-        service.commit({
+        service.resolve({
           scope,
           authority,
-          expectedVersion: 2,
-          commitId: "native-frozen-workspace",
-          bytes: new TextEncoder().encode("frozen"),
+          commitId: first.receipt.commitId,
+          expectedVersion: 0,
+          digest: first.receipt.digest,
         }),
-      ).resolves.toMatchObject({ kind: "authority_rejected" });
+      ).resolves.toMatchObject({
+        kind: "committed",
+        receipt: first.receipt,
+      });
+      const drainScope = { ...scope, slot: "native-drain-settlement" };
+      const drainBytes = new TextEncoder().encode("settled during drain");
+      const drainCommit = await service.commit({
+        scope: drainScope,
+        authority,
+        expectedVersion: 0,
+        commitId: "native-drain-commit",
+        bytes: drainBytes,
+      });
+      expect(drainCommit.kind).toBe("committed");
+      await expect(service.read({ scope: drainScope, authority }))
+        .resolves.toMatchObject({
+          kind: "present",
+          version: 1,
+          bytes: drainBytes,
+        });
+      await sql.client.query(
+        "update takosumi_runs set run_json = jsonb_set(run_json, '{workspaceManagementAuthority,managementEpoch}', '2'::jsonb) where id = $1",
+        [runId],
+      );
       await expect(service.read({ scope, authority })).rejects.toMatchObject({
         code: "authorization_rejected",
       });
+      await expect(service.commit({ scope: drainScope, authority,
+        expectedVersion: 0, commitId: "native-drain-commit", bytes: drainBytes }))
+        .resolves.toMatchObject({ kind: "authority_rejected" });
+      await sql.client.query(
+        "update takosumi_runs set run_json = jsonb_set(run_json, '{workspaceManagementAuthority,managementEpoch}', '1'::jsonb) where id = $1",
+        [runId],
+      );
+      await sql.client.query(
+        "update takosumi_workspaces set management_state = 'frozen' where id = $1",
+        [scope.workspaceId],
+      );
+      await expect(service.read({ scope, authority })).rejects.toMatchObject({
+        code: "authorization_rejected",
+      });
+      await expect(
+        service.commit({
+          scope: drainScope,
+          authority,
+          expectedVersion: 0,
+          commitId: "native-drain-commit",
+          bytes: drainBytes,
+        }),
+      )
+        .resolves.toMatchObject({ kind: "authority_rejected" });
       await sql.client.query(
         "update takosumi_workspaces set management_state = 'active' where id = $1",
         [scope.workspaceId],
@@ -333,9 +384,27 @@ async function seedAuthority(
     `insert into takosumi_runs
       (id, kind, space_id, installation_id, created_at, run_json, status, lease_token)
      values ($1, 'plan', $2, $3, $4,
-       '{"status":"running","capsuleExecutionAuthorityEpoch":1}'::jsonb,
+       $6::jsonb,
        'running', $5)`,
-    [runId, scope.workspaceId, scope.capsuleId, now, leaseToken],
+    [
+      runId,
+      scope.workspaceId,
+      scope.capsuleId,
+      now,
+      leaseToken,
+      JSON.stringify({
+        id: runId,
+        workspaceId: scope.workspaceId,
+        capsuleId: scope.capsuleId,
+        status: "running",
+        capsuleExecutionAuthorityEpoch: 1,
+        workspaceManagementAuthority: {
+          workspaceId: scope.workspaceId,
+          managementState: "active",
+          managementEpoch: 1,
+        },
+      }),
+    ],
   );
 }
 

@@ -34,13 +34,33 @@ interface ReceiptRow {
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/u;
 
+// Existing leased Runs may settle during the current drain. The original
+// active admission tuple is persisted on the Run; neither the grant nor a
+// caller-supplied epoch may replace it. Match the deploy-control store's
+// original-epoch < draining-epoch settlement cutoff.
+const DRAIN_SETTLEMENT_AUTHORITY = `case when json_valid(r.run_json) = 1
+  and json_type(r.run_json, '$.workspaceManagementAuthority') = 'object'
+  and json_type(r.run_json, '$.workspaceManagementAuthority.workspaceId') = 'text'
+  and json_extract(r.run_json, '$.workspaceManagementAuthority.workspaceId') = w.id
+  and json_type(r.run_json, '$.workspaceManagementAuthority.managementState') = 'text'
+  and json_extract(r.run_json, '$.workspaceManagementAuthority.managementState') = 'active'
+  and json_type(r.run_json, '$.workspaceManagementAuthority.managementEpoch') = 'integer'
+  and json_extract(r.run_json, '$.workspaceManagementAuthority.managementEpoch') > 0
+  and json_extract(r.run_json, '$.workspaceManagementAuthority.managementEpoch') <= 9007199254740991
+  and json_extract(r.run_json, '$.workspaceManagementAuthority.managementEpoch') < w.management_epoch
+  then 1 else 0 end`;
+
 // A single SQLite statement sees one authority and pointer/receipt snapshot.
 // Only Plan/Apply variants have a canonical captured Capsule epoch.
 const CURRENT_AUTHORITY = `
   select 1 from workspaces w
   join capsules c on c.space_id = w.id
   join runs r on r.space_id = w.id and r.installation_id = c.id
-  where w.id = ? and w.management_state = 'active'
+  where w.id = ? and (w.management_state = 'active'
+    or (w.management_state = 'draining'
+      and typeof(w.management_epoch) = 'integer'
+      and w.management_epoch > 0 and w.management_epoch <= 9007199254740991
+      and ${DRAIN_SETTLEMENT_AUTHORITY} = 1))
     and c.id = ? and c.environment = ? and c.execution_authority_epoch = ?
     and r.id = ? and r.environment = c.environment
     and r.status = 'running' and r.lease_token = ?

@@ -24,6 +24,7 @@ interface ReceiptRow extends PointerRow {
 
 interface LockedWorkspace extends Record<string, unknown> {
   readonly managementState: string;
+  readonly managementEpoch: number | string;
 }
 
 interface LockedCapsule extends Record<string, unknown> {
@@ -272,13 +273,18 @@ async function lockCurrentAuthority(
   },
 ): Promise<FenceResult> {
   const workspace = await transaction.query<LockedWorkspace>(
-    `select management_state as "managementState"
+    `select management_state as "managementState",
+            management_epoch as "managementEpoch"
        from takosumi_workspaces
       where id = $1
       for update`,
     [input.scope.workspaceId],
   );
-  if (workspace.rows[0]?.managementState !== "active") return "rejected";
+  const management = workspace.rows[0];
+  if (
+    management?.managementState !== "active" &&
+    management?.managementState !== "draining"
+  ) return "rejected";
 
   const capsule = await transaction.query<LockedCapsule>(
     `select space_id as "workspaceId",
@@ -296,8 +302,9 @@ async function lockCurrentAuthority(
     capsuleRow.environment !== input.scope.environment ||
     parseEpoch(capsuleRow.executionAuthorityEpoch) !==
       input.executionAuthorityEpoch
-  )
+  ) {
     return "rejected";
+  }
 
   const run = await transaction.query<LockedRun>(
     `select space_id as "workspaceId",
@@ -319,11 +326,63 @@ async function lockCurrentAuthority(
     !knownRunKinds.has(runRow.kind) ||
     runRow.status !== "running" ||
     runRow.leaseToken !== input.leaseToken
-  )
+  ) {
     return "rejected";
+  }
   const capturedEpoch = capturedRunEpoch(runRow);
   if (capturedEpoch !== input.executionAuthorityEpoch) return "rejected";
+  if (management.managementState === "draining") {
+    const drainingEpoch = parseManagementEpoch(management.managementEpoch);
+    const original = capturedRunManagementAuthority(
+      runRow.runJson,
+      input.scope,
+      input.runId,
+    );
+    if (
+      drainingEpoch === undefined || original === undefined ||
+      original >= drainingEpoch
+    ) return "rejected";
+  }
   return "accepted";
+}
+
+function parseManagementEpoch(value: number | string): number | undefined {
+  if (typeof value === "string" && !/^[1-9][0-9]*$/.test(value)) {
+    return undefined;
+  }
+  const epoch = typeof value === "number" ? value : Number(value);
+  return Number.isSafeInteger(epoch) && epoch >= 1 ? epoch : undefined;
+}
+
+function capturedRunManagementAuthority(
+  runJson: unknown,
+  scope: PrivateRunFileScope,
+  runId: string,
+): number | undefined {
+  if (
+    typeof runJson !== "object" || runJson === null || Array.isArray(runJson)
+  ) {
+    return undefined;
+  }
+  const record = runJson as Record<string, unknown>;
+  if (
+    record.id !== runId || record.workspaceId !== scope.workspaceId ||
+    record.capsuleId !== scope.capsuleId || record.status !== "running"
+  ) return undefined;
+  const original = record.workspaceManagementAuthority;
+  if (
+    typeof original !== "object" || original === null || Array.isArray(original)
+  ) {
+    return undefined;
+  }
+  const authority = original as Record<string, unknown>;
+  return authority.workspaceId === scope.workspaceId &&
+      authority.managementState === "active" &&
+      typeof authority.managementEpoch === "number" &&
+      Number.isSafeInteger(authority.managementEpoch) &&
+      authority.managementEpoch >= 1
+    ? authority.managementEpoch
+    : undefined;
 }
 
 function capturedRunEpoch(run: LockedRun): number | undefined {

@@ -83,8 +83,17 @@ function makeClient(run: Partial<SqlState["run"]> = {}): MemorySqlClient {
       status: "running",
       leaseToken: runAuthority.leaseToken,
       runJson: {
+        id: runAuthority.runId,
+        workspaceId: scope.workspaceId,
+        capsuleId: scope.capsuleId,
+        status: "running",
         expected: {
           capsuleExecutionAuthorityEpoch: runAuthority.executionAuthorityEpoch,
+        },
+        workspaceManagementAuthority: {
+          workspaceId: scope.workspaceId,
+          managementState: "active",
+          managementEpoch: 1,
         },
       },
       ...run,
@@ -372,6 +381,150 @@ test("pointer reads are typed and fenced by current Workspace, Capsule, and capt
       runId: "foreign-run",
     }),
   ).toEqual({ kind: "authority_rejected" });
+});
+
+test("PostgreSQL existing leased Apply settles its private slot during Workspace drain", async () => {
+  const client = makeClient();
+  const store = repository(client);
+  const first = {
+    scope,
+    ...runAuthority,
+    expectedVersion: 0,
+    commitId: "before-drain",
+    digest: digest1,
+    blobId: "blob-1",
+  };
+  const committed = await store.commitPointer(first);
+  expect(committed.kind).toBe("committed");
+  client.state.workspace = { managementState: "draining", managementEpoch: 2 };
+
+  expect(await store.readPointer({ scope, ...runAuthority })).toEqual({
+    kind: "present",
+    pointer: { version: 1, digest: digest1, blobId: "blob-1" },
+  });
+  expect(
+    await store.lookupReceipt({
+      scope,
+      ...runAuthority,
+      commitId: first.commitId,
+    }),
+  ).toEqual({
+    kind: "found",
+    receipt: (committed as { readonly receipt: unknown }).receipt,
+  });
+  expect((await store.commitPointer(first)).kind).toBe("replayed");
+  expect(
+    (await store.commitPointer({
+      ...first,
+      expectedVersion: 1,
+      commitId: "during-drain",
+      digest: digest2,
+      blobId: "blob-2",
+    })).kind,
+  )
+    .toBe("committed");
+
+  client.state.run.leaseToken = "replacement";
+  expect(
+    await store.lookupReceipt({
+      scope,
+      ...runAuthority,
+      commitId: first.commitId,
+    }),
+  ).toEqual({ kind: "authority_rejected" });
+  client.state.run.leaseToken = runAuthority.leaseToken;
+  client.state.run.status = "succeeded";
+  expect(await store.readPointer({ scope, ...runAuthority }))
+    .toEqual({ kind: "authority_rejected" });
+  client.state.run.status = "running";
+  client.state.capsule.executionAuthorityEpoch += 1;
+  expect(await store.readPointer({ scope, ...runAuthority }))
+    .toEqual({ kind: "authority_rejected" });
+  client.state.capsule.executionAuthorityEpoch =
+    runAuthority.executionAuthorityEpoch;
+  client.state.workspace.managementState = "frozen";
+  expect(await store.commitPointer(first)).toEqual({
+    kind: "authority_rejected",
+  });
+  client.state.workspace.managementState = "released";
+  expect(await store.readPointer({ scope, ...runAuthority }))
+    .toEqual({ kind: "authority_rejected" });
+});
+
+test("PostgreSQL drain rejects missing, misbound or non-original Run authority", async () => {
+  for (
+    const original of [
+      undefined,
+      { workspaceId: "foreign", managementState: "active", managementEpoch: 1 },
+      {
+        workspaceId: scope.workspaceId,
+        managementState: "draining",
+        managementEpoch: 1,
+      },
+      {
+        workspaceId: scope.workspaceId,
+        managementState: "active",
+        managementEpoch: "1",
+      },
+      {
+        workspaceId: scope.workspaceId,
+        managementState: "active",
+        managementEpoch: 2,
+      },
+    ]
+  ) {
+    const client = makeClient({
+      runJson: {
+        id: runAuthority.runId,
+        workspaceId: scope.workspaceId,
+        capsuleId: scope.capsuleId,
+        status: "running",
+        expected: {
+          capsuleExecutionAuthorityEpoch: runAuthority.executionAuthorityEpoch,
+        },
+        ...(original === undefined
+          ? {}
+          : { workspaceManagementAuthority: original }),
+      },
+    });
+    client.state.workspace = {
+      managementState: "draining",
+      managementEpoch: 2,
+    };
+    const store = repository(client);
+    expect(await store.readPointer({ scope, ...runAuthority }))
+      .toEqual({ kind: "authority_rejected" });
+    expect(
+      await store.commitPointer({
+        scope,
+        ...runAuthority,
+        expectedVersion: 0,
+        commitId: "denied",
+        digest: digest1,
+        blobId: "blob-denied",
+      }),
+    ).toEqual({ kind: "authority_rejected" });
+    expect(client.state.receipts.size).toBe(0);
+  }
+});
+
+test("PostgreSQL drain refuses a Run JSON identity that disagrees with its leased row", async () => {
+  const client = makeClient();
+  client.state.workspace = { managementState: "draining", managementEpoch: 2 };
+  client.state.run.runJson = {
+    id: "foreign-run",
+    workspaceId: scope.workspaceId,
+    capsuleId: scope.capsuleId,
+    status: "running",
+    expected: { capsuleExecutionAuthorityEpoch: runAuthority.executionAuthorityEpoch },
+    workspaceManagementAuthority: {
+      workspaceId: scope.workspaceId,
+      managementState: "active",
+      managementEpoch: 1,
+    },
+  };
+  expect(await repository(client).readPointer({ scope, ...runAuthority }))
+    .toEqual({ kind: "authority_rejected" });
 });
 
 test("pointer read failure is unknown rather than absent", async () => {

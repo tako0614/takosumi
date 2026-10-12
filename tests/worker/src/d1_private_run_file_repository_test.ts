@@ -59,6 +59,11 @@ async function seedPrivateFileAuthority(db: D1Database): Promise<void> {
         capsuleId: scope.capsuleId,
         status: "running",
         capsuleExecutionAuthorityEpoch: authority.executionAuthorityEpoch,
+        workspaceManagementAuthority: {
+          workspaceId: scope.workspaceId,
+          managementState: "active",
+          managementEpoch: 1,
+        },
       }),
     )
     .run();
@@ -134,6 +139,141 @@ test("D1 scoped read, commit, advanced-pointer replay and current lease fence", 
   expect(await repo.commitPointer(first)).toEqual({
     kind: "authority_rejected",
   });
+});
+
+test("D1 existing leased Plan settles its private slot during Workspace drain", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  await seedPrivateFileAuthority(db);
+  const repo = new D1PrivateRunFileRepository(db);
+  const first = {
+    ...authority,
+    expectedVersion: 0,
+    commitId: "before_drain",
+    digest: digestA,
+    blobId: "blob_a",
+  };
+  const committed = await repo.commitPointer(first);
+  expect(committed.kind).toBe("committed");
+  await db.prepare(`update workspaces set management_state = 'draining',
+    management_epoch = 2 where id = ?`).bind(scope.workspaceId).run();
+
+  expect(await repo.readPointer(authority)).toEqual({
+    kind: "present",
+    pointer: { version: 1, digest: digestA, blobId: "blob_a" },
+  });
+  expect(await repo.lookupReceipt({ ...authority, commitId: first.commitId }))
+    .toEqual({
+      kind: "found",
+      receipt: (committed as { readonly receipt: unknown }).receipt,
+    });
+  expect((await repo.commitPointer(first)).kind).toBe("replayed");
+  expect(
+    (await repo.commitPointer({
+      ...authority,
+      expectedVersion: 1,
+      commitId: "during_drain",
+      digest: digestB,
+      blobId: "blob_b",
+    })).kind,
+  )
+    .toBe("committed");
+
+  await db.prepare(`update runs set lease_token = 'replacement' where id = ?`)
+    .bind(authority.runId).run();
+  expect(await repo.lookupReceipt({ ...authority, commitId: first.commitId }))
+    .toEqual({ kind: "authority_rejected" });
+  await db.prepare(`update runs set lease_token = ? where id = ?`)
+    .bind(authority.leaseToken, authority.runId).run();
+  await db.prepare(`update runs set status = 'succeeded' where id = ?`)
+    .bind(authority.runId).run();
+  expect(await repo.readPointer(authority)).toEqual({
+    kind: "authority_rejected",
+  });
+  await db.prepare(`update runs set status = 'running' where id = ?`)
+    .bind(authority.runId).run();
+  await db.prepare(
+    `update capsules set execution_authority_epoch = 4 where id = ?`,
+  )
+    .bind(scope.capsuleId).run();
+  expect(await repo.readPointer(authority)).toEqual({
+    kind: "authority_rejected",
+  });
+  await db.prepare(
+    `update capsules set execution_authority_epoch = 3 where id = ?`,
+  )
+    .bind(scope.capsuleId).run();
+  await db.prepare(
+    `update workspaces set management_state = 'frozen' where id = ?`,
+  )
+    .bind(scope.workspaceId).run();
+  expect(await repo.commitPointer(first)).toEqual({
+    kind: "authority_rejected",
+  });
+  await db.prepare(
+    `update workspaces set management_state = 'released' where id = ?`,
+  )
+    .bind(scope.workspaceId).run();
+  expect(await repo.readPointer(authority)).toEqual({
+    kind: "authority_rejected",
+  });
+});
+
+test("D1 drain rejects missing, misbound or non-original Run authority", async () => {
+  for (
+    const original of [
+      undefined,
+      { workspaceId: "foreign", managementState: "active", managementEpoch: 1 },
+      {
+        workspaceId: scope.workspaceId,
+        managementState: "draining",
+        managementEpoch: 1,
+      },
+      {
+        workspaceId: scope.workspaceId,
+        managementState: "active",
+        managementEpoch: "1",
+      },
+      {
+        workspaceId: scope.workspaceId,
+        managementState: "active",
+        managementEpoch: 2,
+      },
+    ]
+  ) {
+    const db = new SqliteFakeD1();
+    await ensureD1OpenTofuLedgerSchema(db);
+    await seedPrivateFileAuthority(db);
+    await db.prepare(`update runs set run_json = ? where id = ?`).bind(
+      JSON.stringify({
+        id: authority.runId,
+        workspaceId: scope.workspaceId,
+        capsuleId: scope.capsuleId,
+        status: "running",
+        capsuleExecutionAuthorityEpoch: authority.executionAuthorityEpoch,
+        ...(original === undefined
+          ? {}
+          : { workspaceManagementAuthority: original }),
+      }),
+      authority.runId,
+    ).run();
+    await db.prepare(`update workspaces set management_state = 'draining',
+      management_epoch = 2 where id = ?`).bind(scope.workspaceId).run();
+    const repo = new D1PrivateRunFileRepository(db);
+    expect(await repo.readPointer(authority)).toEqual({
+      kind: "authority_rejected",
+    });
+    expect(
+      await repo.commitPointer({
+        ...authority,
+        expectedVersion: 0,
+        commitId: "denied",
+        digest: digestA,
+        blobId: "blob_denied",
+      }),
+    )
+      .toEqual({ kind: "authority_rejected" });
+  }
 });
 
 test("D1 absent-slot races do not mint a same-content losing receipt", async () => {
