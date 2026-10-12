@@ -1355,6 +1355,7 @@ export async function prepareProviderCredentialFiles(
       throw new Error("run credential directory creation failed");
     }
     if (!credentialDir) throw new Error("credential directory was not created");
+    const ownedCredentialDir = credentialDir;
     await chmod(credentialDir, 0o700);
     const env: Record<string, string> = { ...context.env };
     const renewableFiles = new Map<string, string>();
@@ -1469,7 +1470,7 @@ export async function prepareProviderCredentialFiles(
             }
           }
         } finally {
-          await shredCredentialDir(credentialDir);
+          await shredCredentialDir(ownedCredentialDir);
         }
       },
     };
