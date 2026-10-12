@@ -157,7 +157,7 @@ test.skipIf(!enabled)(
     expect(proof.applyGrantRenewal.oldGrantRejectedStatus).toBe(401);
     expect(proof.applyGrantRenewal.currentGrantReadStatus).toBe(200);
     expect(proof.applyGrantRenewal.readUsedRenewedGrant).toBe(true);
-    expect(proof.applyGrantRenewal.lostAckCommitUsedRenewedGrant).toBe(true);
+    expect(proof.applyGrantRenewal.lostAckCommitUsedPreRotationGrant).toBe(true);
     expect(proof.applyGrantRenewal.resolveUsedRenewedGrant).toBe(true);
     expect(proof.slot).toBe(PRIVATE_SLOT);
     expect(proof.droppedAck.exactReceiptResolved).toBe(true);
@@ -194,7 +194,7 @@ interface ProofReport {
     readonly oldGrantRejectedStatus: 401;
     readonly currentGrantReadStatus: 200;
     readonly readUsedRenewedGrant: true;
-    readonly lostAckCommitUsedRenewedGrant: true;
+    readonly lostAckCommitUsedPreRotationGrant: true;
     readonly resolveUsedRenewedGrant: true;
   };
   readonly droppedAck: {
@@ -273,19 +273,14 @@ async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<Proof
     const wireEvidence: PrivateFileWireEvidence[] = [];
     const refreshEvidence: PrivateFileRefreshEvidence[] = [];
     const applyRefreshArrived = deferred<PrivateFileRefreshEvidence>();
+    const applyLostAckCommitArrived = deferred();
+    const applyLostAckCommitRelease = deferred();
     let applyInitialGrant: string | undefined;
     let applyRenewedGrant: string | undefined;
     let applyRunId: string | undefined;
-    let armApplyGrantClockJump = false;
-    let jumpGrantClockOnNextRead = false;
+    let holdApplyLostAckCommit = false;
     let grantClock = Date.now();
-    const grantNow = () => {
-      if (jumpGrantClockOnNextRead) {
-        grantClock += 950_000;
-        jumpGrantClockOnNextRead = false;
-      }
-      return grantClock;
-    };
+    const grantNow = () => grantClock;
     let dropNextCommitAck = false;
     let droppedCommitReceipt: Receipt | undefined;
     const corePortRef: { port?: number } = {};
@@ -335,9 +330,14 @@ async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<Proof
           ...(receipt ? { receipt } : {}),
         });
         if (operation === "commit" && dropNextCommitAck) {
-          dropNextCommitAck = false;
           if (!commitId || !receipt) return new Response("missing committed receipt identity", { status: 502 });
           droppedCommitReceipt = receipt;
+          if (holdApplyLostAckCommit) {
+            holdApplyLostAckCommit = false;
+            applyLostAckCommitArrived.resolve();
+            await applyLostAckCommitRelease.promise;
+          }
+          dropNextCommitAck = false;
           custodyEvents.push({ kind: "lost_commit_ack", commitId, receipt });
           return Response.json({ kind: "unavailable" }, { status: 503 });
         }
@@ -369,14 +369,7 @@ async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<Proof
         maxBytes: PRIVATE_RUN_FILE_MAX_BYTES,
         grants: {
           open: codec.open,
-          mint: async (input: Parameters<typeof codec.mint>[0]) => {
-            const grant = await codec.mint(input);
-            if (armApplyGrantClockJump) {
-              armApplyGrantClockJump = false;
-              jumpGrantClockOnNextRead = true;
-            }
-            return grant;
-          },
+          mint: codec.mint,
         },
         repository: new PostgresPrivateRunFileRepository(client),
         blobs: createLocalPrivateRunFileBlobStore({
@@ -690,9 +683,8 @@ resource "takoform_module_worker" "app" {
     runnerPids.push(applyRunner.pid);
     activeRunnerUrl = applyRunner.baseUrl;
     dropNextCommitAck = true;
+    holdApplyLostAckCommit = true;
     const applyWireStart = wireEvidence.length;
-    const applyHostPost = host.holdNextPost();
-    armApplyGrantClockJump = true;
     const applyPromise = controller.createApplyRun({
       planRunId: plan.planRun.id,
       expected: applyExpectedGuardFromPlanRun(plan.planRun),
@@ -702,16 +694,23 @@ resource "takoform_module_worker" "app" {
     let oldGrantRejectedStatus: number;
     let currentGrantReadStatus: number;
     try {
-      await waitWithin(applyHostPost.reached, 30_000, "Apply did not reach its held Host mutation");
+      await waitWithin(applyLostAckCommitArrived.promise, 30_000, "Apply did not reach the held lost-ACK commit");
+      if (!applyInitialGrant || !applyRunId) {
+        throw new Error("Apply dispatch did not capture its initial private-file descriptor");
+      }
+      // The real Provider's commit is durable at Core, but its exact ACK is
+      // held before the proxy returns the injected 503. Advance only the grant
+      // clock into the 90-second lead for the actual 360-second TTL.
+      grantClock += 280_000;
       renewal = await waitWithin(applyRefreshArrived.promise, 10_000, "Core did not rotate the live Apply grant");
-      if (!applyInitialGrant || !applyRenewedGrant || !applyRunId || renewal.runId !== applyRunId ||
+      if (!applyRenewedGrant || renewal.runId !== applyRunId ||
         renewal.sequence !== 1 || renewal.grantDigest === createHash("sha256").update(applyInitialGrant).digest("hex")) {
         throw new Error("Core did not publish a distinct sequence-one Apply grant");
       }
-
-      // Advance only the injected grant clock after the real provider's first
-      // Host mutation is held. Run heartbeat/lease time remains wall-clock.
-      grantClock += 11_000;
+      // The commit was issued with the initial grant; after renewal, expire
+      // that token while its ACK remains unknown to Provider. The Core Run is
+      // still executing and the exact provider resolve must use the new file.
+      grantClock += 81_000;
       const coreEndpoint = `http://127.0.0.1:${corePortRef.port}/internal/private-run-files/v1`;
       oldGrantRejectedStatus = await directPrivateRead(coreEndpoint, applyInitialGrant);
       currentGrantReadStatus = await directPrivateRead(coreEndpoint, applyRenewedGrant);
@@ -719,7 +718,7 @@ resource "takoform_module_worker" "app" {
         throw new Error("rotated Core grant did not enforce expiry while retaining the live Run authority");
       }
     } finally {
-      applyHostPost.release();
+      applyLostAckCommitRelease.resolve();
     }
     apply = await applyPromise;
     const providerWire = wireEvidence.slice(applyWireStart);
@@ -731,9 +730,12 @@ resource "takoform_module_worker" "app" {
     if (!providerWire.some((entry) => entry.operation === "read" && entry.grantDigest === renewedDigest)) {
       throw new Error("compiled Provider did not read through the renewed descriptor");
     }
-    if (!providerWire.some((entry) => entry.operation === "commit" && entry.grantDigest === renewedDigest) ||
-      !providerWire.some((entry) => entry.operation === "resolve" && entry.grantDigest === renewedDigest)) {
-      throw new Error("compiled Provider did not use the renewed descriptor for commit and resolve");
+    if (!providerWire.some((entry) => entry.operation === "commit" &&
+      entry.grantDigest === createHash("sha256").update(applyInitialGrant!).digest("hex"))) {
+      throw new Error("lost-ACK commit did not use its original grant before renewal");
+    }
+    if (!providerWire.some((entry) => entry.operation === "resolve" && entry.grantDigest === renewedDigest)) {
+      throw new Error("compiled Provider did not resolve the lost ACK through the renewed descriptor");
     }
     if (apply.applyRun.status !== "succeeded") {
       const persistedApply = await store.getApplyRun(apply.applyRun.id);
@@ -823,7 +825,7 @@ resource "takoform_module_worker" "app" {
         oldGrantRejectedStatus: oldGrantRejectedStatus! as 401,
         currentGrantReadStatus: currentGrantReadStatus! as 200,
         readUsedRenewedGrant: true,
-        lostAckCommitUsedRenewedGrant: true,
+        lostAckCommitUsedPreRotationGrant: true,
         resolveUsedRenewedGrant: true,
       },
       droppedAck: {
@@ -843,7 +845,7 @@ resource "takoform_module_worker" "app" {
         "real local Runner entrypoint OS processes, OpenTofu CLI, and compiled Provider binary from the pinned source commit",
         "deterministic local HTTPS Host fixture; no production Host or authentication authority",
         "Core Run controller and current-grant minter are real; provider-private commit ACK loss is injected at a loopback HTTP proxy",
-        "private-grant expiry is accelerated only through the explicit private-file grant clock; Run lease and heartbeat clocks remain wall-clock",
+        "the original commit uses its pre-rotation grant; refresh completes while its ACK is held, then the exact resolve uses the new descriptor; only the private-file grant clock advances, not Run lease or heartbeat time",
         "no immutable Runner image, Cloud service, or production qualification",
       ],
     };
@@ -1007,14 +1009,6 @@ function createFakeV2Host(cert: Buffer, key: Buffer, custodyEvents: CustodyEvent
   let mutations = 0;
   const resourceUid = "uid-local-proof-1";
   const operations = new Map<string, Record<string, unknown>>();
-  let nextPostGate: { reached: ReturnType<typeof deferred>; released: Promise<void> } | undefined;
-  const holdNextPost = () => {
-    if (nextPostGate) throw new Error("Host mutation barrier is already armed");
-    const reached = deferred();
-    const released = deferred();
-    nextPostGate = { reached, released: released.promise };
-    return { reached: reached.promise, release: () => released.resolve() };
-  };
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -1023,12 +1017,6 @@ function createFakeV2Host(cert: Buffer, key: Buffer, custodyEvents: CustodyEvent
       const url = new URL(request.url);
       if (request.method === "POST" && url.pathname === `${HOST_API_PATH}/resources`) {
         custodyEvents.push({ kind: "host_post" });
-        const gate = nextPostGate;
-        if (gate) {
-          nextPostGate = undefined;
-          gate.reached.resolve();
-          await gate.released;
-        }
       }
       if (url.pathname !== "/.well-known/takoform/v2" &&
         request.headers.get("authorization") !== "Bearer fixture-token") {
@@ -1111,7 +1099,6 @@ function createFakeV2Host(cert: Buffer, key: Buffer, custodyEvents: CustodyEvent
   return {
     url: `https://127.0.0.1:${server.port}`,
     get mutations() { return mutations; },
-    holdNextPost,
     stop: (force?: boolean) => server.stop(force),
   };
 }
