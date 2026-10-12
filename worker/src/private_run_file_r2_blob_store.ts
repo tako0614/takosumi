@@ -1,7 +1,8 @@
 /**
- * Library-only encrypted R2 blob adapter for private Run files. This adapter is
- * intentionally not mounted by Worker composition: R2 retention and restart
- * qualification are separate capability decisions.
+ * Encrypted R2 blob adapter for private Run files. Cloud Worker composition
+ * mounts it only through an explicit host option; the default composition
+ * remains disabled. This opt-in does not qualify R2 retention, restart
+ * durability, or the Cloud Runner path.
  */
 import { PartitionedSecretBoundaryCrypto } from "../../core/adapters/secret-store/memory.ts";
 import type { PrivateRunFileBlobPort, PrivateRunFileDigest, PrivateRunFileScope } from "../../core/domains/private-run-files/mod.ts";

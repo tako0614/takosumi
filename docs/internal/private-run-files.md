@@ -90,10 +90,14 @@ that an encryption key lifecycle has been chosen.
 The local source has a PostgreSQL repository and encrypted immutable filesystem
 blob implementation, but the explicit host root, endpoint, Provider remote
 backend selection, and actual Runner/Provider integration must all be composed
-and qualified before calling it available. The Cloud capability requires the
-same semantics with its owning repository and encrypted object storage, plus
-restart/kill qualification for the actual Runner deployment. Local and Cloud
-success must be reported independently; one does not imply the other.
+and qualified before calling it available. Cloud Worker source composition can
+opt in explicitly with the existing D1 and `R2_ARTIFACTS` bindings, an endpoint,
+an isolated R2 prefix, the exact 16 MiB cap, and configured partitioned
+encryption; the default Worker remains unmounted. This source wiring does not
+qualify bucket retention/lifecycle, Cloud restart/kill durability, or the
+actual Cloud Runner/Provider path, so it is not evidence that the Cloud
+capability is available. Local and Cloud success must be reported
+independently; one does not imply the other.
 
 In-memory service and HTTP tests prove only their state-machine and envelope
 behavior. Adapter tests cover selected transaction, encryption and restart
