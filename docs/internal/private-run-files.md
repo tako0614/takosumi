@@ -2,10 +2,10 @@
 
 This document describes a product-neutral Core seam for private opaque bytes
 whose lifetime is longer than one Run attempt. It is an internal source
-contract only: no public API, grant format, storage adapter, Runner mount, or
-Provider backend is wired by this slice. The current Runner does not provide
-this capability, and a passing in-memory test is not evidence of durable
-storage, process-restart recovery, or Run-to-Run delivery.
+contract, not a public API. The source includes an opt-in local Postgres plus
+encrypted-blob mount, sealed Runner grant, and internal HTTP route. No host
+has enabled or qualified the complete Runner-to-Provider path by this source
+change; Cloud storage and Runner qualification remain separate.
 
 ## Scope and ownership
 
@@ -55,6 +55,30 @@ receipt is absent, malformed, or cannot be read, the result is not permission
 to send an external mutation or mint a replacement commit ID. A stale epoch or
 lease cannot turn a previous receipt into a new Run's acknowledgement.
 
+## Local HTTP and grant boundary
+
+The local mount is opt-in through the Node/Postgres composition with an explicit
+durable blob root, exact endpoint URL, and 16 MiB plaintext cap. The endpoint
+is `/internal/private-run-files/v1` on HTTPS or loopback HTTP; it is absent
+from public discovery and has no browser CORS surface. It accepts only a
+short-lived sealed bearer grant carrying exact Workspace, Capsule,
+environment, slot, Run ID, captured execution-authority epoch, lease, and
+operation set. Only Core opens the grant; the Runner and Provider receive an
+opaque token, not the raw lease. Read, commit, and resolve require their own
+operation permission and the repository's current authority fence. Scope and
+authority never come from request bodies. HTTP errors and receipts omit blob
+IDs, leases, grants, and private bytes (except the explicitly authorized read
+response). The route bounds the JSON envelope before decode and the decoded
+bytes at 16 MiB.
+
+The grant lifetime is at most 20 minutes. That covers the current 900-second
+fallback Runner deadline plus its 60-second dispatch margin; a declared slot
+on a longer profile must fail before Run claim until a renewal protocol exists.
+No shorter grant may be silently substituted and allowed to expire during an
+external mutation. The final DB check, not the grant expiry alone, fences a
+revoked or replaced lease. The current repository requires an active Workspace;
+draining settlement policy is not yet implemented for this private-file seam.
+
 ## Adapter and capability boundary
 
 The ports define obligations, not a storage implementation. In particular,
@@ -62,16 +86,16 @@ they do not claim that a local mounted volume survives an OS/container restart,
 that a cloud object store and repository transaction are already composed, or
 that an encryption key lifecycle has been chosen.
 
-The next local capability requires a real durable repository and encrypted
-blob implementation, then evidence across separate processes and an actual
-restart. The Cloud capability requires the same service semantics implemented
-with its owning repository and encrypted object storage, plus a restart/kill
-qualification for the actual Runner deployment. Neither backend is mounted by
-this change. Cloud and local success must be reported independently; one does
-not imply the other.
+The local source has a PostgreSQL repository and encrypted immutable filesystem
+blob implementation, but the explicit host root, endpoint, Provider remote
+backend selection, and actual Runner/Provider integration must all be composed
+and qualified before calling it available. The Cloud capability requires the
+same semantics with its owning repository and encrypted object storage, plus
+restart/kill qualification for the actual Runner deployment. Local and Cloud
+success must be reported independently; one does not imply the other.
 
-The tests use isolated in-memory ports to check the service's state-machine
-boundary only. They do not prove atomic database transactions, encryption,
-durability, OS/container restart, grant delivery, or Runner integration. A
-future adapter integration must separately test those properties before this
-contract can be described as an available runtime capability.
+In-memory service and HTTP tests prove only their state-machine and envelope
+behavior. Adapter tests cover selected transaction, encryption and restart
+properties but do not prove complete host wiring, physical power-loss survival,
+or Cloud Runner delivery. A mounted integration must test those properties
+separately before this is described as an available runtime capability.
