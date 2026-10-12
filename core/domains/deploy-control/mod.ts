@@ -78,6 +78,11 @@ import type {
 } from "takosumi-contract/credential-recipes";
 import type { ConnectionVault } from "../../adapters/vault/mod.ts";
 import type {
+  PrivateRunFileAuthority,
+  PrivateRunFileOperation,
+  PrivateRunFileScope,
+} from "../private-run-files/mod.ts";
+import type {
   InstallConfigLifecycleAction,
   OutputAllowlistEntry,
 } from "takosumi-contract/install-configs";
@@ -440,6 +445,26 @@ export interface RunModuleDispatch {
    * applying a reviewed root against a different value set.
    */
   readonly runtimeInputs?: readonly DispatchRuntimeInputs[];
+  /** Value-free declared slots pinned by the reviewed Plan. */
+  readonly privateRunFileSlots?: InstallConfig["privateRunFiles"];
+}
+
+/** Host-owned signer/endpoint adapter; called only after a Run lease is won. */
+export interface PrivateRunFileGrantMinter {
+  mint(input: {
+    readonly scope: PrivateRunFileScope;
+    readonly authority: PrivateRunFileAuthority;
+    readonly operations: readonly PrivateRunFileOperation[];
+    /** Unix epoch milliseconds; bounded by the Run profile timeout. */
+    readonly expiresAt: number;
+  }): Promise<{ readonly endpoint: string; readonly grant: string }>;
+}
+
+/** Runner-only delivery; the signed grant never enters persisted Run inputs. */
+export interface PrivateRunFileDispatch {
+  readonly slot: string;
+  readonly endpoint: string;
+  readonly grant: string;
 }
 
 /**
@@ -509,6 +534,7 @@ export interface OpenTofuPlanJob
   /** Policy-derived, selector-only non-secret scope projection request. */
   readonly scopeSelectors?: readonly PlanScopeSelector[];
   readonly credentials?: RunCredentials;
+  readonly privateRunFiles?: readonly PrivateRunFileDispatch[];
 }
 
 export interface OpenTofuApplyJob
@@ -528,6 +554,7 @@ export interface OpenTofuApplyJob
     readonly requireMirror: boolean;
   };
   readonly credentials?: RunCredentials;
+  readonly privateRunFiles?: readonly PrivateRunFileDispatch[];
 }
 
 export interface OpenTofuDestroyJob
@@ -1107,6 +1134,8 @@ export interface OpenTofuControllerDependencies {
    * attaches it to the dispatch payload only (never stored, never logged).
    */
   readonly vault?: ConnectionVault;
+  /** Host-owned private Run file grant minting; absent declarations need no hook. */
+  readonly privateRunFileGrantMinter?: PrivateRunFileGrantMinter;
   /**
    * Complete service-installed Credential Recipe catalog exposed through
    * discovery and used for connection validation. Omitted means that no
@@ -1221,6 +1250,7 @@ export interface GenericRootPlanContext {
   readonly providerBindings: readonly RootProviderBinding[];
   readonly outputAllowlist: InstallConfig["outputAllowlist"];
   readonly sourceBuild?: InstallConfig["sourceBuild"];
+  readonly privateRunFileSlots?: InstallConfig["privateRunFiles"];
   readonly lifecycleActions?: InstallConfig["lifecycleActions"];
   readonly moduleVariableMaterialization?: CapsuleModuleVariableMaterialization;
   readonly interfaceMaterialization?: PlanPinnedCapsuleInterfaceMaterialization;
@@ -1247,6 +1277,7 @@ export interface GenericRootDispatchContext {
   readonly moduleVariableMaterializationDigest?: string;
   readonly interfaceMaterialization?: PlanPinnedCapsuleInterfaceMaterialization;
   readonly runtimeInputs?: readonly DispatchRuntimeInputs[];
+  readonly privateRunFileSlots?: InstallConfig["privateRunFiles"];
   /**
    * Value-free notices raised while compiling the generated root. They are
    * appended to the created PlanRun so an inert capability (a provider version
@@ -1722,6 +1753,9 @@ export class OpenTofuController {
       dependencies: this.#dependencies,
       verification: this.#verification,
       planResolution: this.#planResolution,
+      ...(dependencies.privateRunFileGrantMinter
+        ? { privateRunFileGrantMinter: dependencies.privateRunFileGrantMinter }
+        : {}),
       ...(dependencies.moduleVariableMaterializer
         ? {
             moduleVariableMaterializer:
@@ -2847,6 +2881,7 @@ export function moduleDispatchFromInputs(
         readonly stateAdoption?: DispatchStateAdoption;
         readonly priorState?: DispatchPriorState;
         readonly runtimeInputs?: readonly DispatchRuntimeInputs[];
+        readonly privateRunFileSlots?: InstallConfig["privateRunFiles"];
       }
     | undefined,
 ): RunModuleDispatch {
@@ -2873,6 +2908,9 @@ export function moduleDispatchFromInputs(
     ...(inputs.priorState ? { priorState: inputs.priorState } : {}),
     ...(inputs.runtimeInputs && inputs.runtimeInputs.length > 0
       ? { runtimeInputs: inputs.runtimeInputs }
+      : {}),
+    ...(inputs.privateRunFileSlots && inputs.privateRunFileSlots.length > 0
+      ? { privateRunFileSlots: inputs.privateRunFileSlots }
       : {}),
   };
 }

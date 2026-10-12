@@ -1379,6 +1379,67 @@ test("capsule plan dispatch carries sourceArchive + stateScope at the current ge
   expect(run.baseStateGeneration).toEqual(0);
 });
 
+test("private Run file grants are minted only for winning capsule Plan and Apply leases", async () => {
+  const mints: Array<{
+    scope: { workspaceId: string; capsuleId: string; environment: string; slot: string };
+    authority: { runId: string; executionAuthorityEpoch: number; leaseToken: string };
+    operations: readonly string[];
+    expiresAt: number;
+  }> = [];
+  const { store, runner, controller } = await seededController(
+    {
+      installConfig: { privateRunFiles: [{ slot: "worker-state" }] },
+    },
+    {
+      privateRunFileGrantMinter: {
+        mint: async (input) => {
+          mints.push(input);
+          return {
+            endpoint: "http://core.internal/internal/private-run-files/v1",
+            grant: `opaque-grant-for-${input.authority.runId}`,
+          };
+        },
+      },
+    },
+  );
+
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+  expect(runner.planJobs[0]?.privateRunFiles).toEqual([{
+    slot: "worker-state",
+    endpoint: "http://core.internal/internal/private-run-files/v1",
+    grant: `opaque-grant-for-${planRun.id}`,
+  }]);
+  const planInputs = await store.getPlanRunInputs(planRun.id);
+  expect(planInputs?.privateRunFileSlots).toEqual([{ slot: "worker-state" }]);
+  expect(JSON.stringify(planInputs)).not.toContain("opaque-grant");
+
+  const apply = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  await controller.runQueuedApply(apply.applyRun.id);
+  expect(runner.applyJobs[0]?.privateRunFiles).toEqual([{
+    slot: "worker-state",
+    endpoint: "http://core.internal/internal/private-run-files/v1",
+    grant: `opaque-grant-for-${apply.applyRun.id}`,
+  }]);
+
+  expect(mints).toHaveLength(2);
+  expect(mints.map(({ authority }) => authority.runId)).toEqual([
+    planRun.id,
+    apply.applyRun.id,
+  ]);
+  expect(mints.every(({ authority }) =>
+    authority.executionAuthorityEpoch === planRun.capsuleExecutionAuthorityEpoch &&
+    authority.leaseToken.length > 0
+  )).toBe(true);
+  expect(mints.every(({ scope, operations }) =>
+    scope.workspaceId === "ws_test001" && scope.capsuleId === "cap_fixture1" &&
+    scope.environment === "preview" && scope.slot === "worker-state" &&
+    operations.join(",") === "read,commit,resolve"
+  )).toBe(true);
+});
+
 test("Capsule Plan creation deadline ends before awaited inline runner execution", async () => {
   const store = new InMemoryOpenTofuControlStore();
   await seedRunnableCapsuleModel(store, { environment: "preview" });

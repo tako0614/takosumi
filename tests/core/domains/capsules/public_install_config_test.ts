@@ -100,6 +100,16 @@ test("public InstallConfig projection never returns secret install variables", (
   expect(serialized).not.toContain("FILE_SECRET");
 });
 
+test("public InstallConfig projection omits private Run file slot declarations", () => {
+  const projected = publicInstallConfigRecord({
+    ...installConfig(),
+    privateRunFiles: [{ slot: "worker-state" }],
+  });
+
+  expect(projected).not.toHaveProperty("privateRunFiles");
+  expect(JSON.stringify(projected)).not.toContain("worker-state");
+});
+
 test("generic OpenTofu provenance makes every variable value write-only", () => {
   const projected = publicInstallConfigRecord({
     ...installConfig(),

@@ -29,6 +29,7 @@ import type {
   SourceCredentials,
   PreparedProviderCredentialFiles,
   RenewableCredentialProjection,
+  PrivateRunFileDispatch,
   RunCredentialRefreshUpdate,
   CredentialRefreshSessionMetadata,
 } from "./types.ts";
@@ -376,6 +377,7 @@ export function commandContextFromRequest(
       ? { kind: "plan" as const, id: runId }
       : undefined;
   const runtimeInputs = runtimeInputsFromRequest(request);
+  const privateRunFiles = privateRunFilesFromRequest(request);
   const redactionValues = redactionValuesForRun(
     runId,
     redactionValuesFromRequestCredentials(request),
@@ -397,6 +399,11 @@ export function commandContextFromRequest(
     if (isAdmittedDeclaredProviderEnvName(name)) {
       env[name] = value;
     }
+  }
+  if (privateRunFiles.length > 0) {
+    // This reserved value is a dispatch-only capability descriptor. It is not
+    // read from ambient process env and is intentionally absent from sourceBuild.
+    env.TAKOSUMI_PRIVATE_RUN_FILES = JSON.stringify(privateRunFiles);
   }
   if (renewableCredentials.length > 0) {
     if (!runId || !credentialRefreshOwner || !credentialManifestDigest || renewableCredentials.length > MAX_RENEWABLE_CREDENTIALS) {
@@ -759,7 +766,55 @@ export function redactionValuesFromRequestCredentials(
     // A provider that echoes a run-scoped sensitive input back in a diagnostic
     // must not leak it through runner stdout/stderr.
     ...runtimeInputRedactionValues(runtimeInputsFromRequest(request)),
+    ...privateRunFilesFromRequest(request).map((grant) => grant.grant),
   ];
+}
+
+export function privateRunFilesFromRequest(
+  request: unknown,
+): readonly PrivateRunFileDispatch[] {
+  const raw = recordField(request, "privateRunFiles");
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new Error("private Run file grants are malformed");
+  }
+  const seen = new Set<string>();
+  return raw.map((entry) => {
+    if (
+      !isRecord(entry) ||
+      Object.keys(entry).length !== 3 ||
+      !Object.prototype.hasOwnProperty.call(entry, "slot") ||
+      !Object.prototype.hasOwnProperty.call(entry, "endpoint") ||
+      !Object.prototype.hasOwnProperty.call(entry, "grant")
+    ) {
+      throw new Error("private Run file grant is malformed");
+    }
+    const { slot, endpoint, grant } = entry;
+    if (
+      typeof slot !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(slot) ||
+      seen.has(slot) ||
+      typeof endpoint !== "string" || endpoint.length > 2_048 ||
+      typeof grant !== "string" || grant.length === 0 || grant.length > 16_384
+    ) {
+      throw new Error("private Run file grant is invalid");
+    }
+    let parsedEndpoint: URL;
+    try {
+      parsedEndpoint = new URL(endpoint);
+    } catch {
+      throw new Error("private Run file grant is invalid");
+    }
+    if (
+      (parsedEndpoint.protocol !== "https:" && parsedEndpoint.protocol !== "http:") ||
+      parsedEndpoint.username !== "" || parsedEndpoint.password !== "" ||
+      parsedEndpoint.search !== "" || parsedEndpoint.hash !== ""
+    ) {
+      throw new Error("private Run file grant is invalid");
+    }
+    seen.add(slot);
+    return { slot, endpoint: parsedEndpoint.toString().replace(/\/$/u, ""), grant };
+  });
 }
 
 export function sourceCredentialRedactionValues(

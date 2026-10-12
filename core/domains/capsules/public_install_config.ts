@@ -32,6 +32,7 @@ export function publicInstallConfigRecord(
     internal: _internal,
     requiredInterfaces: _requiredInterfaces,
     runtimeBindingMaterialization: _runtimeBindingMaterialization,
+    privateRunFiles: _privateRunFiles,
     ...publicRecord
   } = config;
   const store = config.store;

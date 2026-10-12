@@ -786,6 +786,12 @@ export interface InstallConfig {
   readonly modulePath?: string;
   readonly sourceBuild?: SourceBuildConfig;
   /**
+   * Explicit product-neutral private Run file slots. This is service-side
+   * configuration only; grants and bytes are minted/delivered per Run and are
+   * never part of this declaration.
+   */
+  readonly privateRunFiles?: readonly InstallConfigPrivateRunFile[];
+  /**
    * Versioned lifecycle actions owned by Takosumi service configuration.
    * OpenTofu Outputs remain ordinary return values and are never interpreted
    * as lifecycle declarations.
@@ -912,6 +918,41 @@ export interface InstallConfig {
   readonly updatedAt: string;
 }
 
+/** One stable opaque slot declared by service-owned Capsule configuration. */
+export interface InstallConfigPrivateRunFile {
+  readonly slot: string;
+}
+
+const PRIVATE_RUN_FILE_SLOT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+
+/** Validate and snapshot a private service-side slot declaration. */
+export function normalizeInstallConfigPrivateRunFiles(
+  value: unknown,
+): readonly InstallConfigPrivateRunFile[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new TypeError("privateRunFiles must be an array");
+  }
+  const seen = new Set<string>();
+  return value.map((entry) => {
+    if (
+      typeof entry !== "object" || entry === null || Array.isArray(entry) ||
+      Object.keys(entry).length !== 1 || !("slot" in entry)
+    ) {
+      throw new TypeError("privateRunFiles entry is invalid");
+    }
+    const slot = (entry as { readonly slot?: unknown }).slot;
+    if (typeof slot !== "string" || !PRIVATE_RUN_FILE_SLOT.test(slot)) {
+      throw new TypeError("privateRunFiles slot is invalid");
+    }
+    if (seen.has(slot)) {
+      throw new TypeError("privateRunFiles slots must be unique");
+    }
+    seen.add(slot);
+    return { slot };
+  });
+}
+
 /**
  * Closed request for one reviewed Capsule configuration Plan.
  *
@@ -954,6 +995,7 @@ export type PublicInstallConfig = Omit<
   | "internal"
   | "requiredInterfaces"
   | "runtimeBindingMaterialization"
+  | "privateRunFiles"
 >;
 
 /**

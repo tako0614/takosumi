@@ -54,6 +54,36 @@ test("credential refresh endpoint refuses an update after its run session is ter
   expect(await response.text()).not.toContain("must-not-echo-token");
 });
 
+test("private Run file grants become provider-only env descriptors and are redacted", () => {
+  const grant = "opaque-private-grant-secret";
+  const context = commandContextFromRequest({
+    privateRunFiles: [{
+      slot: "worker-state",
+      endpoint: "http://core.internal/internal/private-run-files/v1",
+      grant,
+    }],
+  });
+
+  expect(context.env.TAKOSUMI_PRIVATE_RUN_FILES).toBe(JSON.stringify([{
+    slot: "worker-state",
+    endpoint: "http://core.internal/internal/private-run-files/v1",
+    grant,
+  }]));
+  expect(context.redactionValues).toContain(grant);
+  expect(redactRunnerOutput(`request failed: ${grant}`, context.redactionValues))
+    .not.toContain(grant);
+});
+
+test("provider credential payload cannot set the private Run file env descriptor", () => {
+  const context = commandContextFromRequest({
+    credentials: {
+      env: { TAKOSUMI_PRIVATE_RUN_FILES: "forged-provider-value" },
+      manifest: { bindings: [] },
+    },
+  });
+  expect(context.env.TAKOSUMI_PRIVATE_RUN_FILES).toBeUndefined();
+});
+
 function workspace(): RunWorkspace {
   return {
     root: "/tmp/renewable-test-workspace",
