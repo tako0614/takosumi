@@ -91,6 +91,12 @@ test.skipIf(!enabled)(
         version: 1,
         bytes: initialBytes,
       });
+      await expect(
+        service.read({
+          scope: { ...scope, workspaceId: `${scope.workspaceId}_foreign` },
+          authority,
+        }),
+      ).rejects.toMatchObject({ code: "authorization_rejected" });
 
       await expect(
         service.commit({
@@ -157,6 +163,9 @@ test.skipIf(!enabled)(
           bytes: new TextEncoder().encode("frozen"),
         }),
       ).resolves.toMatchObject({ kind: "authority_rejected" });
+      await expect(service.read({ scope, authority })).rejects.toMatchObject({
+        code: "authorization_rejected",
+      });
       await sql.client.query(
         "update takosumi_workspaces set management_state = 'active' where id = $1",
         [scope.workspaceId],
@@ -175,6 +184,9 @@ test.skipIf(!enabled)(
           bytes: new TextEncoder().encode("stale epoch"),
         }),
       ).resolves.toMatchObject({ kind: "authority_rejected" });
+      await expect(service.read({ scope, authority })).rejects.toMatchObject({
+        code: "authorization_rejected",
+      });
       await sql.client.query(
         "update takosumi_capsules set execution_authority_epoch = 1 where id = $1",
         [scope.capsuleId],
@@ -193,6 +205,9 @@ test.skipIf(!enabled)(
           bytes: new TextEncoder().encode("captured stale epoch"),
         }),
       ).resolves.toMatchObject({ kind: "authority_rejected" });
+      await expect(service.read({ scope, authority })).rejects.toMatchObject({
+        code: "authorization_rejected",
+      });
       await sql.client.query(
         "update takosumi_runs set run_json = jsonb_set(run_json, '{capsuleExecutionAuthorityEpoch}', '1'::jsonb) where id = $1",
         [runId],
@@ -211,6 +226,9 @@ test.skipIf(!enabled)(
           bytes: new TextEncoder().encode("lost lease"),
         }),
       ).resolves.toMatchObject({ kind: "authority_rejected" });
+      await expect(service.read({ scope, authority })).rejects.toMatchObject({
+        code: "authorization_rejected",
+      });
       await sql.client.query(
         "update takosumi_runs set lease_token = $2 where id = $1",
         [runId, leaseToken],

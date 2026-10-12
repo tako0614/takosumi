@@ -34,6 +34,12 @@ export interface PrivateRunFileReceipt extends PrivateRunFilePointer {
   readonly expectedVersion: number;
 }
 
+export type PrivateRunFilePointerLookup =
+  | { readonly kind: "present"; readonly pointer: PrivateRunFilePointer }
+  | { readonly kind: "absent" }
+  | { readonly kind: "authority_rejected" }
+  | { readonly kind: "unknown" };
+
 /**
  * The authorization adapter validates a current, scoped grant. Its result is
  * intentionally void: only the repository's atomic commit can validate the
@@ -50,7 +56,10 @@ export interface PrivateRunFilesAuthorizationPort {
 export interface PrivateRunFileRepositoryPort {
   readPointer(input: {
     readonly scope: PrivateRunFileScope;
-  }): Promise<PrivateRunFilePointer | undefined>;
+    readonly runId: string;
+    readonly executionAuthorityEpoch: number;
+    readonly leaseToken: string;
+  }): Promise<PrivateRunFilePointerLookup>;
   /**
    * Read-only, current-authority-fenced receipt lookup. Implementations lock
    * Workspace → Capsule → Run in one transaction and return `unknown` rather
@@ -82,7 +91,10 @@ export interface PrivateRunFileRepositoryPort {
     readonly digest: PrivateRunFileDigest;
     readonly blobId: string;
   }): Promise<
-    | { readonly kind: "committed" | "replayed"; readonly receipt: PrivateRunFileReceipt }
+    | {
+        readonly kind: "committed" | "replayed";
+        readonly receipt: PrivateRunFileReceipt;
+      }
     | { readonly kind: "conflict" | "authority_rejected" | "unknown" }
   >;
 }
@@ -107,11 +119,14 @@ export interface PrivateRunFileBlobPort {
     readonly scope: PrivateRunFileScope;
     readonly blobId: string;
     readonly expectedDigest: PrivateRunFileDigest;
-  }): Promise<{
-    readonly bytes: Uint8Array;
-    readonly digest: PrivateRunFileDigest;
-    readonly byteLength: number;
-  } | undefined>;
+  }): Promise<
+    | {
+        readonly bytes: Uint8Array;
+        readonly digest: PrivateRunFileDigest;
+        readonly byteLength: number;
+      }
+    | undefined
+  >;
 }
 
 export interface PrivateRunFilesServiceDependencies {
@@ -130,11 +145,11 @@ export interface PrivateRunFileReadRequest {
 export type PrivateRunFileReadResult =
   | { readonly kind: "absent" }
   | {
-    readonly kind: "present";
-    readonly version: number;
-    readonly digest: PrivateRunFileDigest;
-    readonly bytes: Uint8Array;
-  };
+      readonly kind: "present";
+      readonly version: number;
+      readonly digest: PrivateRunFileDigest;
+      readonly bytes: Uint8Array;
+    };
 
 export interface PrivateRunFileCommitRequest extends PrivateRunFileReadRequest {
   /** Version 0 denotes an absent slot. */
@@ -145,15 +160,15 @@ export interface PrivateRunFileCommitRequest extends PrivateRunFileReadRequest {
 
 export type PrivateRunFileCommitResult =
   | {
-    readonly kind: "committed" | "replayed";
-    readonly receipt: PrivateRunFileReceipt;
-  }
+      readonly kind: "committed" | "replayed";
+      readonly receipt: PrivateRunFileReceipt;
+    }
   | {
-    readonly kind: "conflict" | "authority_rejected" | "unknown";
-    readonly commitId: string;
-    readonly expectedVersion: number;
-    readonly digest: PrivateRunFileDigest;
-  };
+      readonly kind: "conflict" | "authority_rejected" | "unknown";
+      readonly commitId: string;
+      readonly expectedVersion: number;
+      readonly digest: PrivateRunFileDigest;
+    };
 
 export interface PrivateRunFileResolveRequest extends PrivateRunFileReadRequest {
   readonly commitId: string;
@@ -163,7 +178,10 @@ export interface PrivateRunFileResolveRequest extends PrivateRunFileReadRequest 
 
 export type PrivateRunFileResolveResult =
   | { readonly kind: "committed"; readonly receipt: PrivateRunFileReceipt }
-  | { readonly kind: "not_found" | "authority_rejected" | "conflict" | "unknown" };
+  | {
+      readonly kind:
+        "not_found" | "authority_rejected" | "conflict" | "unknown";
+    };
 
 export class PrivateRunFilesError extends Error {
   constructor(
@@ -197,29 +215,56 @@ export class PrivateRunFilesService {
     this.#maxBytes = deps.maxBytes;
   }
 
-  async read(request: PrivateRunFileReadRequest): Promise<PrivateRunFileReadResult> {
+  async read(
+    request: PrivateRunFileReadRequest,
+  ): Promise<PrivateRunFileReadResult> {
     validateReadRequest(request);
     const stable = snapshotReadRequest(request);
     await this.#authorize(stable, "read");
-    let pointer: PrivateRunFilePointer | undefined;
+    let lookup: PrivateRunFilePointerLookup;
     try {
-      pointer = await this.#repository.readPointer({ scope: stable.scope });
+      lookup = await this.#repository.readPointer({
+        scope: stable.scope,
+        runId: stable.authority.runId,
+        executionAuthorityEpoch: stable.authority.executionAuthorityEpoch,
+        leaseToken: stable.authority.leaseToken,
+      });
     } catch {
       throw new PrivateRunFilesError("unavailable");
     }
-    if (!pointer) return { kind: "absent" };
+    if (lookup.kind === "absent") return { kind: "absent" };
+    if (lookup.kind === "authority_rejected") {
+      throw new PrivateRunFilesError("authorization_rejected");
+    }
+    if (lookup.kind === "unknown")
+      throw new PrivateRunFilesError("unavailable");
+    const pointer = lookup.pointer;
     validatePointer(pointer);
-    const bytes = await this.#readVerifiedBlob(stable.scope, pointer.blobId, pointer.digest);
-    return { kind: "present", version: pointer.version, digest: pointer.digest, bytes };
+    const bytes = await this.#readVerifiedBlob(
+      stable.scope,
+      pointer.blobId,
+      pointer.digest,
+    );
+    return {
+      kind: "present",
+      version: pointer.version,
+      digest: pointer.digest,
+      bytes,
+    };
   }
 
-  async commit(request: PrivateRunFileCommitRequest): Promise<PrivateRunFileCommitResult> {
+  async commit(
+    request: PrivateRunFileCommitRequest,
+  ): Promise<PrivateRunFileCommitResult> {
     validateReadRequest(request);
     validateVersion(request.expectedVersion, true);
-    if (request.expectedVersion === Number.MAX_SAFE_INTEGER) throw new PrivateRunFilesError("invalid_argument");
+    if (request.expectedVersion === Number.MAX_SAFE_INTEGER)
+      throw new PrivateRunFilesError("invalid_argument");
     requireText(request.commitId);
-    if (!(request.bytes instanceof Uint8Array)) throw new PrivateRunFilesError("invalid_argument");
-    if (request.bytes.byteLength > this.#maxBytes) throw new PrivateRunFilesError("too_large");
+    if (!(request.bytes instanceof Uint8Array))
+      throw new PrivateRunFilesError("invalid_argument");
+    if (request.bytes.byteLength > this.#maxBytes)
+      throw new PrivateRunFilesError("too_large");
     const bytes = Uint8Array.from(request.bytes);
     const stable = {
       ...snapshotReadRequest(request),
@@ -232,7 +277,9 @@ export class PrivateRunFilesService {
 
     // Resolve a known write before touching blob storage. In particular, an
     // old receipt remains the answer even when a later write advanced the slot.
-    let lookup: Awaited<ReturnType<PrivateRunFileRepositoryPort["lookupReceipt"]>>;
+    let lookup: Awaited<
+      ReturnType<PrivateRunFileRepositoryPort["lookupReceipt"]>
+    >;
     try {
       lookup = await this.#repository.lookupReceipt({
         scope: stable.scope,
@@ -245,32 +292,56 @@ export class PrivateRunFilesService {
       return result("unknown", stable, digest);
     }
     if (lookup.kind === "unknown") return result("unknown", stable, digest);
-    if (lookup.kind === "authority_rejected") return result("authority_rejected", stable, digest);
+    if (lookup.kind === "authority_rejected")
+      return result("authority_rejected", stable, digest);
     const prior = lookup.kind === "found" ? lookup.receipt : undefined;
-    if (prior && !sameReceipt(prior, stable, digest)) return result("conflict", stable, digest);
+    if (prior && !sameReceipt(prior, stable, digest))
+      return result("conflict", stable, digest);
 
     let blobId: string;
     if (prior) {
       // A known immutable receipt is reused without another blob write, but it
       // still goes through commitPointer's current epoch/lease fence below.
       blobId = prior.blobId;
-      await this.#readVerifiedBlob(stable.scope, blobId, digest, stable.bytes.byteLength);
+      await this.#readVerifiedBlob(
+        stable.scope,
+        blobId,
+        digest,
+        stable.bytes.byteLength,
+      );
     } else {
-      let blob: Awaited<ReturnType<PrivateRunFileBlobPort["putEncryptedImmutable"]>>;
+      let blob: Awaited<
+        ReturnType<PrivateRunFileBlobPort["putEncryptedImmutable"]>
+      >;
       try {
-        blob = await this.#blobs.putEncryptedImmutable({ scope: stable.scope, bytes, digest });
+        blob = await this.#blobs.putEncryptedImmutable({
+          scope: stable.scope,
+          bytes,
+          digest,
+        });
       } catch {
         throw new PrivateRunFilesError("unavailable");
       }
-      if (!blob.blobId || blob.digest !== digest || blob.byteLength !== bytes.byteLength) {
+      if (
+        !blob.blobId ||
+        blob.digest !== digest ||
+        blob.byteLength !== bytes.byteLength
+      ) {
         throw new PrivateRunFilesError("integrity_failure");
       }
 
-      await this.#readVerifiedBlob(stable.scope, blob.blobId, digest, bytes.byteLength);
+      await this.#readVerifiedBlob(
+        stable.scope,
+        blob.blobId,
+        digest,
+        bytes.byteLength,
+      );
       blobId = blob.blobId;
     }
 
-    let finalized: Awaited<ReturnType<PrivateRunFileRepositoryPort["commitPointer"]>>;
+    let finalized: Awaited<
+      ReturnType<PrivateRunFileRepositoryPort["commitPointer"]>
+    >;
     try {
       finalized = await this.#repository.commitPointer({
         scope: stable.scope,
@@ -287,9 +358,16 @@ export class PrivateRunFilesService {
     }
     if (finalized.kind === "committed" || finalized.kind === "replayed") {
       if (!sameReceipt(finalized.receipt, stable, digest)) {
-        return result(finalized.kind === "committed" ? "unknown" : "conflict", stable, digest);
+        return result(
+          finalized.kind === "committed" ? "unknown" : "conflict",
+          stable,
+          digest,
+        );
       }
-      if (finalized.kind === "committed" && finalized.receipt.blobId !== blobId) {
+      if (
+        finalized.kind === "committed" &&
+        finalized.receipt.blobId !== blobId
+      ) {
         return result("unknown", stable, digest);
       }
       if (finalized.kind === "replayed") {
@@ -305,19 +383,24 @@ export class PrivateRunFilesService {
           );
         }
       }
-      if (prior && finalized.kind !== "replayed") throw new PrivateRunFilesError("integrity_failure");
+      if (prior && finalized.kind !== "replayed")
+        throw new PrivateRunFilesError("integrity_failure");
       return { kind: finalized.kind, receipt: copyReceipt(finalized.receipt) };
     }
     return result(finalized.kind, stable, digest);
   }
 
   /** Explicit receipt lookup after an uncertain result; this never writes/retries. */
-  async resolve(request: PrivateRunFileResolveRequest): Promise<PrivateRunFileResolveResult> {
+  async resolve(
+    request: PrivateRunFileResolveRequest,
+  ): Promise<PrivateRunFileResolveResult> {
     validateReadRequest(request);
     requireText(request.commitId);
     validateVersion(request.expectedVersion, true);
-    if (request.expectedVersion === Number.MAX_SAFE_INTEGER) throw new PrivateRunFilesError("invalid_argument");
-    if (!/^sha256:[0-9a-f]{64}$/.test(request.digest)) throw new PrivateRunFilesError("invalid_argument");
+    if (request.expectedVersion === Number.MAX_SAFE_INTEGER)
+      throw new PrivateRunFilesError("invalid_argument");
+    if (!/^sha256:[0-9a-f]{64}$/.test(request.digest))
+      throw new PrivateRunFilesError("invalid_argument");
     const stable = {
       ...snapshotReadRequest(request),
       commitId: request.commitId,
@@ -325,7 +408,9 @@ export class PrivateRunFilesService {
       digest: request.digest,
     };
     await this.#authorize(stable, "resolve");
-    let lookup: Awaited<ReturnType<PrivateRunFileRepositoryPort["lookupReceipt"]>>;
+    let lookup: Awaited<
+      ReturnType<PrivateRunFileRepositoryPort["lookupReceipt"]>
+    >;
     try {
       lookup = await this.#repository.lookupReceipt({
         scope: stable.scope,
@@ -337,9 +422,15 @@ export class PrivateRunFilesService {
     } catch {
       return { kind: "unknown" };
     }
-    if (lookup.kind !== "found") return { kind: lookup.kind === "absent" ? "not_found" : lookup.kind };
-    if (!sameReceipt(lookup.receipt, stable, stable.digest)) return { kind: "conflict" };
-    await this.#readVerifiedBlob(stable.scope, lookup.receipt.blobId, stable.digest);
+    if (lookup.kind !== "found")
+      return { kind: lookup.kind === "absent" ? "not_found" : lookup.kind };
+    if (!sameReceipt(lookup.receipt, stable, stable.digest))
+      return { kind: "conflict" };
+    await this.#readVerifiedBlob(
+      stable.scope,
+      lookup.receipt.blobId,
+      stable.digest,
+    );
     return { kind: "committed", receipt: copyReceipt(lookup.receipt) };
   }
 
@@ -349,26 +440,42 @@ export class PrivateRunFilesService {
     expectedDigest: PrivateRunFileDigest,
     expectedByteLength?: number,
   ): Promise<Uint8Array> {
-    let stored: Awaited<ReturnType<PrivateRunFileBlobPort["readEncryptedVerified"]>>;
+    let stored: Awaited<
+      ReturnType<PrivateRunFileBlobPort["readEncryptedVerified"]>
+    >;
     try {
-      stored = await this.#blobs.readEncryptedVerified({ scope, blobId, expectedDigest });
+      stored = await this.#blobs.readEncryptedVerified({
+        scope,
+        blobId,
+        expectedDigest,
+      });
     } catch {
       throw new PrivateRunFilesError("unavailable");
     }
     if (!stored) throw new PrivateRunFilesError("integrity_failure");
     const bytes = Uint8Array.from(stored.bytes);
     if (
-      stored.digest !== expectedDigest || stored.byteLength !== bytes.byteLength ||
+      stored.digest !== expectedDigest ||
+      stored.byteLength !== bytes.byteLength ||
       bytes.byteLength > this.#maxBytes ||
-      (expectedByteLength !== undefined && bytes.byteLength !== expectedByteLength) ||
-      await digestOf(bytes) !== expectedDigest
-    ) throw new PrivateRunFilesError("integrity_failure");
+      (expectedByteLength !== undefined &&
+        bytes.byteLength !== expectedByteLength) ||
+      (await digestOf(bytes)) !== expectedDigest
+    )
+      throw new PrivateRunFilesError("integrity_failure");
     return bytes;
   }
 
-  async #authorize(request: PrivateRunFileReadRequest, operation: PrivateRunFileOperation): Promise<void> {
+  async #authorize(
+    request: PrivateRunFileReadRequest,
+    operation: PrivateRunFileOperation,
+  ): Promise<void> {
     try {
-      await this.#authorization.authorize({ scope: request.scope, authority: request.authority, operation });
+      await this.#authorization.authorize({
+        scope: request.scope,
+        authority: request.authority,
+        operation,
+      });
     } catch {
       throw new PrivateRunFilesError("authorization_rejected");
     }
@@ -380,39 +487,64 @@ function result(
   request: PrivateRunFileCommitRequest,
   digest: PrivateRunFileDigest,
 ): PrivateRunFileCommitResult {
-  return { kind, commitId: request.commitId, expectedVersion: request.expectedVersion, digest };
+  return {
+    kind,
+    commitId: request.commitId,
+    expectedVersion: request.expectedVersion,
+    digest,
+  };
 }
 
 function sameReceipt(
   receipt: PrivateRunFileReceipt,
-  request: Pick<PrivateRunFileCommitRequest, "scope" | "commitId" | "expectedVersion">,
+  request: Pick<
+    PrivateRunFileCommitRequest,
+    "scope" | "commitId" | "expectedVersion"
+  >,
   digest: PrivateRunFileDigest,
 ): boolean {
-  return receipt.commitId === request.commitId && receipt.expectedVersion === request.expectedVersion &&
-    receipt.digest === digest && sameScope(receipt.scope, request.scope) &&
+  return (
+    receipt.commitId === request.commitId &&
+    receipt.expectedVersion === request.expectedVersion &&
+    receipt.digest === digest &&
+    sameScope(receipt.scope, request.scope) &&
     receipt.version === request.expectedVersion + 1 &&
-    typeof receipt.blobId === "string" && receipt.blobId.trim().length > 0;
+    typeof receipt.blobId === "string" &&
+    receipt.blobId.trim().length > 0
+  );
 }
 
 function copyReceipt(receipt: PrivateRunFileReceipt): PrivateRunFileReceipt {
   return { ...receipt, scope: { ...receipt.scope } };
 }
 
-function sameScope(left: PrivateRunFileScope, right: PrivateRunFileScope): boolean {
-  return left.workspaceId === right.workspaceId && left.capsuleId === right.capsuleId &&
-    left.environment === right.environment && left.slot === right.slot;
+function sameScope(
+  left: PrivateRunFileScope,
+  right: PrivateRunFileScope,
+): boolean {
+  return (
+    left.workspaceId === right.workspaceId &&
+    left.capsuleId === right.capsuleId &&
+    left.environment === right.environment &&
+    left.slot === right.slot
+  );
 }
 
 function validateReadRequest(request: PrivateRunFileReadRequest): void {
   validateScope(request.scope);
   requireText(request.authority.runId);
   requireText(request.authority.leaseToken);
-  if (!Number.isSafeInteger(request.authority.executionAuthorityEpoch) || request.authority.executionAuthorityEpoch < 1) {
+  if (
+    !Number.isSafeInteger(request.authority.executionAuthorityEpoch) ||
+    request.authority.executionAuthorityEpoch < 1
+  ) {
     throw new PrivateRunFilesError("invalid_argument");
   }
 }
 
-function snapshotReadRequest(request: PrivateRunFileReadRequest): PrivateRunFileReadRequest {
+function snapshotReadRequest(
+  request: PrivateRunFileReadRequest,
+): PrivateRunFileReadRequest {
   return {
     scope: { ...request.scope },
     authority: { ...request.authority },
@@ -427,23 +559,28 @@ function validateScope(scope: PrivateRunFileScope): void {
 }
 
 function requireText(value: string): void {
-  if (typeof value !== "string" || value.trim().length === 0) throw new PrivateRunFilesError("invalid_argument");
+  if (typeof value !== "string" || value.trim().length === 0)
+    throw new PrivateRunFilesError("invalid_argument");
 }
 
 function validateVersion(version: number, allowZero: boolean): void {
-  if (!Number.isSafeInteger(version) || version < (allowZero ? 0 : 1)) throw new PrivateRunFilesError("invalid_argument");
+  if (!Number.isSafeInteger(version) || version < (allowZero ? 0 : 1))
+    throw new PrivateRunFilesError("invalid_argument");
 }
 
 function validatePointer(pointer: PrivateRunFilePointer): void {
   validateVersion(pointer.version, false);
   requireText(pointer.blobId);
-  if (!/^sha256:[0-9a-f]{64}$/.test(pointer.digest)) throw new PrivateRunFilesError("integrity_failure");
+  if (!/^sha256:[0-9a-f]{64}$/.test(pointer.digest))
+    throw new PrivateRunFilesError("integrity_failure");
 }
 
 async function digestOf(bytes: Uint8Array): Promise<PrivateRunFileDigest> {
   const snapshot = new Uint8Array(bytes.byteLength);
   snapshot.set(bytes);
   const hash = await crypto.subtle.digest("SHA-256", snapshot.buffer);
-  const hex = Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const hex = Array.from(new Uint8Array(hash), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
   return `sha256:${hex}`;
 }

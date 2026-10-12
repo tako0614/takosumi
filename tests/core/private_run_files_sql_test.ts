@@ -300,6 +300,93 @@ test("initial absent slot uses the Capsule lock before pointer insert and receip
   expect(locks[2]).toContain("for update");
 });
 
+test("pointer reads are typed and fenced by current Workspace, Capsule, and captured Run authority", async () => {
+  const client = makeClient();
+  const store = repository(client);
+  const readRequest = { scope, ...runAuthority };
+  const beforeRead = client.statements.length;
+  expect(await store.readPointer(readRequest)).toEqual({ kind: "absent" });
+  const readQueries = client.statements.slice(beforeRead);
+  expect(readQueries).toHaveLength(4);
+  expect(readQueries[0]).toContain("from takosumi_workspaces");
+  expect(readQueries[0]).toContain("for update");
+  expect(readQueries[1]).toContain("from takosumi_capsules");
+  expect(readQueries[1]).toContain("for update");
+  expect(readQueries[2]).toContain("from takosumi_runs");
+  expect(readQueries[2]).toContain("for update");
+  expect(readQueries[3]).toContain("from takosumi_private_run_file_pointers");
+
+  await store.commitPointer({
+    scope,
+    ...runAuthority,
+    expectedVersion: 0,
+    commitId: "read-pointer",
+    digest: digest1,
+    blobId: "read-blob",
+  });
+  expect(await store.readPointer(readRequest)).toEqual({
+    kind: "present",
+    pointer: { version: 1, digest: digest1, blobId: "read-blob" },
+  });
+
+  client.state.workspace.managementState = "draining";
+  expect(await store.readPointer(readRequest)).toEqual({
+    kind: "authority_rejected",
+  });
+  client.state.workspace.managementState = "active";
+
+  client.state.capsule.executionAuthorityEpoch += 1;
+  expect(await store.readPointer(readRequest)).toEqual({
+    kind: "authority_rejected",
+  });
+  client.state.capsule.executionAuthorityEpoch =
+    runAuthority.executionAuthorityEpoch;
+
+  client.state.run.leaseToken = "replacement-lease";
+  expect(await store.readPointer(readRequest)).toEqual({
+    kind: "authority_rejected",
+  });
+  client.state.run.leaseToken = runAuthority.leaseToken;
+
+  client.state.run.runJson = {
+    expected: { capsuleExecutionAuthorityEpoch: 3 },
+  };
+  expect(await store.readPointer(readRequest)).toEqual({
+    kind: "authority_rejected",
+  });
+  client.state.run.runJson = {
+    expected: {
+      capsuleExecutionAuthorityEpoch: runAuthority.executionAuthorityEpoch,
+    },
+  };
+
+  expect(
+    await store.readPointer({
+      ...readRequest,
+      scope: { ...scope, workspaceId: "foreign-workspace" },
+    }),
+  ).toEqual({ kind: "authority_rejected" });
+  expect(
+    await store.readPointer({
+      ...readRequest,
+      runId: "foreign-run",
+    }),
+  ).toEqual({ kind: "authority_rejected" });
+});
+
+test("pointer read failure is unknown rather than absent", async () => {
+  const client = makeClient();
+  const repository = new PostgresPrivateRunFileRepository({
+    query: client.query.bind(client),
+    transaction: async () => {
+      throw new Error("synthetic read transaction failure");
+    },
+  });
+  expect(await repository.readPointer({ scope, ...runAuthority })).toEqual({
+    kind: "unknown",
+  });
+});
+
 test("authority fencing accepts only the canonical captured epoch for Plan and Apply Run kinds", async () => {
   const cases = [
     { kind: "plan", runJson: { capsuleExecutionAuthorityEpoch: 4 } },

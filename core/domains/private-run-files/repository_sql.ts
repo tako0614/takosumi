@@ -1,5 +1,6 @@
 import type {
   PrivateRunFilePointer,
+  PrivateRunFilePointerLookup,
   PrivateRunFileReceipt,
   PrivateRunFileRepositoryPort,
   PrivateRunFileScope,
@@ -63,15 +64,30 @@ export class PostgresPrivateRunFileRepository implements PrivateRunFileRepositor
 
   async readPointer(input: {
     readonly scope: PrivateRunFileScope;
-  }): Promise<PrivateRunFilePointer | undefined> {
-    const result = await this.#client.query<PointerRow>(
-      `select version, digest, blob_id as "blobId"
-         from takosumi_private_run_file_pointers
-        where workspace_id = $1 and capsule_id = $2 and environment = $3 and slot = $4`,
-      scopeParameters(input.scope),
-    );
-    const row = result.rows[0];
-    return row === undefined ? undefined : parsePointer(row);
+    readonly runId: string;
+    readonly executionAuthorityEpoch: number;
+    readonly leaseToken: string;
+  }): Promise<PrivateRunFilePointerLookup> {
+    try {
+      return await this.#client.transaction(async (transaction) => {
+        const fence = await lockCurrentAuthority(transaction, input);
+        if (fence !== "accepted") {
+          return { kind: "authority_rejected" } as const;
+        }
+        const result = await transaction.query<PointerRow>(
+          `select version, digest, blob_id as "blobId"
+             from takosumi_private_run_file_pointers
+            where workspace_id = $1 and capsule_id = $2 and environment = $3 and slot = $4`,
+          scopeParameters(input.scope),
+        );
+        const row = result.rows[0];
+        return row === undefined
+          ? ({ kind: "absent" } as const)
+          : ({ kind: "present", pointer: parsePointer(row) } as const);
+      });
+    } catch {
+      return { kind: "unknown" };
+    }
   }
 
   async lookupReceipt(input: {
