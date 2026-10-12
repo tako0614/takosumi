@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { Miniflare } from "miniflare";
 import { PartitionedSecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
 import { createPrivateRunFileGrantCodec } from "../../../core/domains/private-run-files/grant.ts";
@@ -17,6 +18,8 @@ const PRIVATE_FILE_PATH = "/internal/private-run-files/v1";
 const ENDPOINT = `http://127.0.0.1:8787${PRIVATE_FILE_PATH}`;
 const PREFIX = "native-proof/private-run-files/v1";
 const MAX_BYTES = 16 * 1024 * 1024;
+const NATIVE_OPT_IN =
+  process.env.TAKOSUMI_TEST_NATIVE_PRIVATE_RUN_FILE_WORKER_RESTART === "1";
 const SCOPE = {
   workspaceId: "native_private_file_workspace",
   capsuleId: "native_private_file_capsule",
@@ -30,8 +33,19 @@ const AUTHORITY = {
 } as const;
 const PAYLOAD = "private-native-worker-payload-7a3f";
 
-test("opt-in private Run-file HTTP uses persistent workerd D1 and R2 across OS worker restart", async () => {
-  const root = await mkdtemp("/dev/shm/t/private-run-file-native-");
+test.skipIf(!NATIVE_OPT_IN)(
+  "opt-in private Run-file HTTP uses persistent workerd D1 and R2 across OS worker restart",
+  async () => {
+    await proveNativePrivateRunFileWorkerRestart();
+  },
+  20_000,
+);
+
+async function proveNativePrivateRunFileWorkerRestart(): Promise<void> {
+  if (process.platform !== "linux") {
+    throw new Error("native workerd process witness requires Linux procfs");
+  }
+  const root = await mkdtemp(join(tmpdir(), "takosumi-private-run-file-worker-native-"));
   let runtime: Miniflare | undefined;
   try {
     const bundle = await buildWorkerBundle(root);
@@ -176,7 +190,7 @@ test("opt-in private Run-file HTTP uses persistent workerd D1 and R2 across OS w
     await runtime?.dispose();
     await rm(root, { recursive: true, force: true });
   }
-}, 20_000);
+}
 
 async function buildWorkerBundle(root: string): Promise<string> {
   const entry = join(root, "worker-entry.ts");

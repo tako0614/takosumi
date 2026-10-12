@@ -126,14 +126,26 @@ properties but do not prove complete host wiring, physical power-loss survival,
 or Cloud Runner delivery. A mounted integration must test those properties
 separately before this is described as an available runtime capability.
 
-The opt-in native Worker test runs the composed HTTP route in Miniflare/workerd
+One native Worker test exercises the composed HTTP route in Miniflare/workerd
 with real isolated D1 and R2 bindings and test-owned persistence roots under
-`/dev/shm/t` (tmpfs). It
-commits through the encrypted adapter and atomic D1 pointer/receipt path, drops
-the HTTP commit response before the client observes it, resolves that exact
-receipt, then kills and restarts the workerd child against the same roots before
-reading and resolving again. It also checks foreign scope, expiry and frozen
-authority refusal. It verifies cross-process visibility within that local tmpfs
-persistence implementation, not physical-disk durability. This qualifies only
-the cached local Miniflare/workerd runtime; it is not Cloud R2, Hosted Worker,
-Cloud Runner, power-loss, or production durability evidence.
+`tmpdir()`. The package test suite discovers it but skips it by default. Opt in
+on Linux with procfs using the cached Miniflare/workerd runtime:
+
+```sh
+mkdir -p /dev/shm/t
+TMPDIR=/dev/shm/t TAKOSUMI_TEST_NATIVE_PRIVATE_RUN_FILE_WORKER_RESTART=1 \
+  bun test tests/worker/src/private_run_file_worker_native_restart_test.ts
+```
+
+The test creates and removes its own persistence root under `tmpdir()` (so
+`TMPDIR` selects `/dev/shm/t` above). It runs the composed HTTP route with real
+isolated D1 and R2 bindings, commits through the encrypted adapter and atomic D1
+pointer/receipt path, drops the HTTP commit response before the client observes
+it, resolves that exact receipt, then kills and restarts the workerd child
+against the same roots before reading and resolving again. It checks foreign
+scope, expiry and frozen-authority refusal. The opt-in test fails if Linux
+procfs or its configured temporary directory is unavailable; default portable
+tests do not require either. This verifies cross-process visibility within the
+local tmpfs persistence implementation, not physical-disk durability. It
+qualifies only the cached local Miniflare/workerd runtime; it is not Cloud R2,
+Hosted Worker, Cloud Runner, power-loss, or production durability evidence.
