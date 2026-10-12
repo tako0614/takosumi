@@ -68,6 +68,14 @@ test("refuses occupied conflicts, scope/digest substitution, and corrupt ciphert
   const { bucket, store } = fixture();
   const bytes = new TextEncoder().encode("original");
   const digestValue = await digest(bytes);
+  const occupied = fixture();
+  const occupiedKey = `private-run-files/v1/${(await blobId(scope, digestValue)).slice("sha256:".length)}`;
+  occupied.bucket.seed(occupiedKey, new Uint8Array([1, 2, 3]), { format: "foreign-object" });
+  await assert.rejects(() => occupied.store.putEncryptedImmutable({ scope, bytes, digest: digestValue }),
+    /private run file blob is unavailable/u);
+  assert.equal(occupied.bucket.putCount, 0);
+  assert.equal(occupied.bucket.deleteCount, 0);
+
   const pointer = await store.putEncryptedImmutable({ scope, bytes, digest: digestValue });
   await assert.rejects(() => store.putEncryptedImmutable({ scope, bytes: new TextEncoder().encode("different"), digest: digestValue }),
     /private run file blob is unavailable/u);
@@ -196,6 +204,9 @@ class FakeR2Bucket implements R2Bucket {
   async list(_options?: R2ListOptions): Promise<R2Objects> { return { objects: [], truncated: false }; }
   async delete(key: string): Promise<void> { this.deleteCount += 1; this.#objects.delete(key); }
   bytesFor(key: string): Uint8Array | undefined { return this.#objects.get(key)?.bytes.slice(); }
+  seed(key: string, bytes: Uint8Array, customMetadata: Record<string, string>): void {
+    this.#objects.set(key, { key, bytes: bytes.slice(), customMetadata: { ...customMetadata }, etag: "seeded" });
+  }
   corrupt(blobId: string): void {
     const suffix = blobId.slice("sha256:".length);
     const item = [...this.#objects.values()].find((candidate) => candidate.key.endsWith(`/${suffix}`));
