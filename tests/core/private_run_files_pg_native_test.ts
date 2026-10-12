@@ -283,6 +283,7 @@ async function seedAuthority(
   leaseToken: string,
 ): Promise<void> {
   const now = new Date().toISOString();
+  const projectId = `project_${crypto.randomUUID()}`;
   await client.query(
     `insert into takosumi_workspaces
       (id, handle, space_json, created_at, updated_at, management_state, management_epoch)
@@ -290,13 +291,20 @@ async function seedAuthority(
     [scope.workspaceId, scope.workspaceId, now],
   );
   await client.query(
+    `insert into takosumi_projects
+      (id, workspace_id, name, slug, project_json, created_at, updated_at)
+     values ($1, $2, $3, $4, '{}'::jsonb, $5, $5)`,
+    [projectId, scope.workspaceId, projectId, projectId, now],
+  );
+  await client.query(
     `insert into takosumi_capsules
-      (id, space_id, name, environment, install_config_id, status,
+      (id, space_id, project_id, name, environment, install_config_id, status,
        installation_json, created_at, updated_at, execution_authority_epoch)
-     values ($1, $2, $3, $4, $5, 'active', '{}'::jsonb, $6, $6, 1)`,
+     values ($1, $2, $3, $4, $5, $6, 'active', '{}'::jsonb, $7, $7, 1)`,
     [
       scope.capsuleId,
       scope.workspaceId,
+      projectId,
       scope.capsuleId,
       scope.environment,
       "native-config",
