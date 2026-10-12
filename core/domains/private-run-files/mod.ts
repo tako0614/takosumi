@@ -441,7 +441,9 @@ function validatePointer(pointer: PrivateRunFilePointer): void {
 }
 
 async function digestOf(bytes: Uint8Array): Promise<PrivateRunFileDigest> {
-  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  const snapshot = new Uint8Array(bytes.byteLength);
+  snapshot.set(bytes);
+  const hash = await crypto.subtle.digest("SHA-256", snapshot.buffer);
   const hex = Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
   return `sha256:${hex}`;
 }
