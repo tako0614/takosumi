@@ -37,6 +37,7 @@ interface LockedRun extends Record<string, unknown> {
   readonly kind: string;
   readonly status: string;
   readonly leaseToken: string | null;
+  readonly runJson: unknown;
 }
 
 type FenceResult = "accepted" | "rejected";
@@ -53,17 +54,16 @@ const knownRunKinds = new Set([
 ]);
 
 /** PostgreSQL repository for opaque private Run files. */
-export class PostgresPrivateRunFileRepository
-  implements PrivateRunFileRepositoryPort {
+export class PostgresPrivateRunFileRepository implements PrivateRunFileRepositoryPort {
   readonly #client: SqlClient;
 
   constructor(client: SqlClient) {
     this.#client = client;
   }
 
-  async readPointer(
-    input: { readonly scope: PrivateRunFileScope },
-  ): Promise<PrivateRunFilePointer | undefined> {
+  async readPointer(input: {
+    readonly scope: PrivateRunFileScope;
+  }): Promise<PrivateRunFilePointer | undefined> {
     const result = await this.#client.query<PointerRow>(
       `select version, digest, blob_id as "blobId"
          from takosumi_private_run_file_pointers
@@ -107,8 +107,8 @@ export class PostgresPrivateRunFileRepository
         );
         const row = result.rows[0];
         return row === undefined
-          ? { kind: "absent" } as const
-          : { kind: "found", receipt: parseReceipt(row) } as const;
+          ? ({ kind: "absent" } as const)
+          : ({ kind: "found", receipt: parseReceipt(row) } as const);
       });
     } catch {
       return { kind: "unknown" };
@@ -126,9 +126,9 @@ export class PostgresPrivateRunFileRepository
     readonly blobId: string;
   }): Promise<
     | {
-      readonly kind: "committed" | "replayed";
-      readonly receipt: PrivateRunFileReceipt;
-    }
+        readonly kind: "committed" | "replayed";
+        readonly receipt: PrivateRunFileReceipt;
+      }
     | { readonly kind: "conflict" | "authority_rejected" | "unknown" }
   > {
     try {
@@ -280,14 +280,16 @@ async function lockCurrentAuthority(
     capsuleRow.environment !== input.scope.environment ||
     parseEpoch(capsuleRow.executionAuthorityEpoch) !==
       input.executionAuthorityEpoch
-  ) return "rejected";
+  )
+    return "rejected";
 
   const run = await transaction.query<LockedRun>(
     `select space_id as "workspaceId",
             installation_id as "capsuleId",
             kind,
             status,
-            lease_token as "leaseToken"
+            lease_token as "leaseToken",
+            run_json as "runJson"
        from takosumi_runs
       where id = $1
       for update`,
@@ -295,12 +297,51 @@ async function lockCurrentAuthority(
   );
   const runRow = run.rows[0];
   if (
-    runRow === undefined || runRow.workspaceId !== input.scope.workspaceId ||
+    runRow === undefined ||
+    runRow.workspaceId !== input.scope.workspaceId ||
     runRow.capsuleId !== input.scope.capsuleId ||
     !knownRunKinds.has(runRow.kind) ||
-    runRow.status !== "running" || runRow.leaseToken !== input.leaseToken
-  ) return "rejected";
+    runRow.status !== "running" ||
+    runRow.leaseToken !== input.leaseToken
+  )
+    return "rejected";
+  const capturedEpoch = capturedRunEpoch(runRow);
+  if (capturedEpoch !== input.executionAuthorityEpoch) return "rejected";
   return "accepted";
+}
+
+function capturedRunEpoch(run: LockedRun): number | undefined {
+  const record = run.runJson;
+  if (typeof record !== "object" || record === null || Array.isArray(record)) {
+    return undefined;
+  }
+  const value = record as Record<string, unknown>;
+  let epoch: unknown;
+  if (
+    run.kind === "plan" ||
+    run.kind === "destroy_plan" ||
+    run.kind === "drift_check"
+  ) {
+    epoch = value.capsuleExecutionAuthorityEpoch;
+  } else if (run.kind === "apply" || run.kind === "destroy_apply") {
+    const expected = value.expected;
+    if (
+      typeof expected !== "object" ||
+      expected === null ||
+      Array.isArray(expected)
+    ) {
+      return undefined;
+    }
+    epoch = (expected as Record<string, unknown>)
+      .capsuleExecutionAuthorityEpoch;
+  } else {
+    // Generic Run rows have no canonical Capsule epoch field. Never infer one
+    // from the Capsule's current epoch or add a new payload property here.
+    return undefined;
+  }
+  return typeof epoch === "number" && Number.isSafeInteger(epoch) && epoch >= 1
+    ? epoch
+    : undefined;
 }
 
 function scopeParameters(scope: PrivateRunFileScope) {
@@ -347,14 +388,16 @@ function sameReceipt(
     readonly digest: string;
   },
 ) {
-  return receipt.commitId === input.commitId &&
+  return (
+    receipt.commitId === input.commitId &&
     receipt.expectedVersion === input.expectedVersion &&
     receipt.version === input.expectedVersion + 1 &&
     receipt.digest === input.digest &&
     receipt.scope.workspaceId === input.scope.workspaceId &&
     receipt.scope.capsuleId === input.scope.capsuleId &&
     receipt.scope.environment === input.scope.environment &&
-    receipt.scope.slot === input.scope.slot;
+    receipt.scope.slot === input.scope.slot
+  );
 }
 
 function parseVersion(value: number | string, allowZero = false) {

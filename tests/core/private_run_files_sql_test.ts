@@ -61,12 +61,13 @@ interface SqlState {
     kind: string;
     status: string;
     leaseToken: string | null;
+    runJson: unknown;
   };
   pointers: Map<string, PointerRow>;
   receipts: Map<string, ReceiptRow>;
 }
 
-function makeClient(): MemorySqlClient {
+function makeClient(run: Partial<SqlState["run"]> = {}): MemorySqlClient {
   return new MemorySqlClient({
     workspace: { managementState: "active", managementEpoch: 1 },
     capsule: {
@@ -81,6 +82,12 @@ function makeClient(): MemorySqlClient {
       kind: "apply",
       status: "running",
       leaseToken: runAuthority.leaseToken,
+      runJson: {
+        expected: {
+          capsuleExecutionAuthorityEpoch: runAuthority.executionAuthorityEpoch,
+        },
+      },
+      ...run,
     },
     pointers: new Map(),
     receipts: new Map(),
@@ -252,8 +259,8 @@ test("migration 116 is additive and its declared tables are materialized", () =>
     postgresStorageMigrationStatements.find((entry) => entry.version === 115)
       ?.id,
   ).toBe("deploy.state_recovery_run_kind.add");
-  const migration = postgresStorageMigrationStatements.find((entry) =>
-    entry.version === 116
+  const migration = postgresStorageMigrationStatements.find(
+    (entry) => entry.version === 116,
   );
   expect(migration?.id).toBe("deploy.private_run_files.add");
   expect(migration?.sql).toContain(
@@ -291,6 +298,60 @@ test("initial absent slot uses the Capsule lock before pointer insert and receip
   expect(locks[1]).toContain("for update");
   expect(locks[2]).toContain("from takosumi_runs");
   expect(locks[2]).toContain("for update");
+});
+
+test("authority fencing accepts only the canonical captured epoch for Plan and Apply Run kinds", async () => {
+  const cases = [
+    { kind: "plan", runJson: { capsuleExecutionAuthorityEpoch: 4 } },
+    { kind: "destroy_plan", runJson: { capsuleExecutionAuthorityEpoch: 4 } },
+    { kind: "drift_check", runJson: { capsuleExecutionAuthorityEpoch: 4 } },
+    {
+      kind: "apply",
+      runJson: { expected: { capsuleExecutionAuthorityEpoch: 4 } },
+    },
+    {
+      kind: "destroy_apply",
+      runJson: { expected: { capsuleExecutionAuthorityEpoch: 4 } },
+    },
+  ] as const;
+
+  for (const run of cases) {
+    const client = makeClient(run);
+    await expect(
+      repository(client).lookupReceipt({
+        scope,
+        ...runAuthority,
+        commitId: `canonical-${run.kind}`,
+      }),
+    ).resolves.toEqual({ kind: "absent" });
+  }
+});
+
+test("authority fencing rejects missing, malformed, mismatched, and generic Run epochs", async () => {
+  const cases: readonly Partial<SqlState["run"]>[] = [
+    { kind: "plan", runJson: {} },
+    { kind: "plan", runJson: { capsuleExecutionAuthorityEpoch: "4" } },
+    { kind: "plan", runJson: { capsuleExecutionAuthorityEpoch: 4.5 } },
+    { kind: "plan", runJson: { capsuleExecutionAuthorityEpoch: 3 } },
+    { kind: "apply", runJson: { expected: {} } },
+    {
+      kind: "apply",
+      runJson: { expected: { capsuleExecutionAuthorityEpoch: 3 } },
+    },
+    { kind: "backup", runJson: { status: "running" } },
+    { kind: "restore", runJson: { status: "running" } },
+  ];
+
+  for (const run of cases) {
+    const client = makeClient(run);
+    await expect(
+      repository(client).lookupReceipt({
+        scope,
+        ...runAuthority,
+        commitId: "not-authorized",
+      }),
+    ).resolves.toEqual({ kind: "authority_rejected" });
+  }
 });
 
 test("concurrent first-slot commits have one version-zero winner", async () => {
@@ -461,7 +522,7 @@ test("receipt lookup locks and fences Workspace, Capsule, and exact Run before r
     expect(result.kind).toBe("authority_rejected");
     expect(
       client.statements.some((statement) =>
-        statement.includes("from takosumi_private_run_file_receipts")
+        statement.includes("from takosumi_private_run_file_receipts"),
       ),
     ).toBe(false);
   }
