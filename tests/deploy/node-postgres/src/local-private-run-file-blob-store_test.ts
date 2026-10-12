@@ -95,6 +95,9 @@ async function waitForPath(path: string, child: ChildProcess): Promise<void> {
 }
 
 async function waitForChild(child: ChildProcess): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return { code: child.exitCode, signal: child.signalCode };
+  }
   return await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       child.removeListener("exit", onExit);
