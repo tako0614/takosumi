@@ -47,26 +47,32 @@ class MemoryRepository implements PrivateRunFileRepositoryPort {
   acceptedLease = "lease_1";
   nextFinalize: "normal" | "unknown_after_commit" = "normal";
   finalizeCalls = 0;
+  lookupReceiptOverride: Awaited<ReturnType<PrivateRunFileRepositoryPort["lookupReceipt"]>> | undefined;
 
   async readPointer(request: { scope: PrivateRunFileScope }) {
     return this.pointers.get(scopeKey(request.scope));
   }
 
-  async findReceipt(request: { scope: PrivateRunFileScope; commitId: string }) {
-    return this.receipts.get(`${scopeKey(request.scope)}:${request.commitId}`);
+  async lookupReceipt(request: Parameters<PrivateRunFileRepositoryPort["lookupReceipt"]>[0]) {
+    if (this.lookupReceiptOverride) return this.lookupReceiptOverride;
+    if (request.executionAuthorityEpoch !== this.acceptedEpoch || request.leaseToken !== this.acceptedLease) {
+      return { kind: "authority_rejected" as const };
+    }
+    const receipt = this.receipts.get(`${scopeKey(request.scope)}:${request.commitId}`);
+    return receipt ? { kind: "found" as const, receipt } : { kind: "absent" as const };
   }
 
   async commitPointer(request: Parameters<PrivateRunFileRepositoryPort["commitPointer"]>[0]) {
     this.finalizeCalls += 1;
     const key = scopeKey(request.scope);
     const receiptKey = `${key}:${request.commitId}`;
-    const oldReceipt = this.receipts.get(receiptKey);
-    if (oldReceipt) return { kind: "replayed" as const, receipt: oldReceipt };
     const current = this.pointers.get(key);
     const version = current?.version ?? 0;
     if (request.executionAuthorityEpoch !== this.acceptedEpoch || request.leaseToken !== this.acceptedLease) {
       return { kind: "authority_rejected" as const };
     }
+    const oldReceipt = this.receipts.get(receiptKey);
+    if (oldReceipt) return { kind: "replayed" as const, receipt: oldReceipt };
     if (version !== request.expectedVersion) return { kind: "conflict" as const };
     const receipt = {
       scope: request.scope,
@@ -94,6 +100,7 @@ class MemoryBlobs implements PrivateRunFileBlobPort {
   readonly objects = new Map<string, Uint8Array>();
   nextId = 0;
   corruptReadback = false;
+  returnSharedRead = false;
 
   async putEncryptedImmutable(request: Parameters<PrivateRunFileBlobPort["putEncryptedImmutable"]>[0]) {
     const blobId = `blob_${++this.nextId}`;
@@ -104,7 +111,9 @@ class MemoryBlobs implements PrivateRunFileBlobPort {
   async readEncryptedVerified(request: Parameters<PrivateRunFileBlobPort["readEncryptedVerified"]>[0]) {
     const bytes = this.objects.get(request.blobId);
     if (!bytes) return undefined;
-    const returnedBytes = bytes.slice();
+    const returnedBytes = this.returnSharedRead
+      ? Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+      : bytes.slice();
     if (this.corruptReadback) returnedBytes[0] = (returnedBytes[0] ?? 0) ^ 0xff;
     return { bytes: returnedBytes, digest: request.expectedDigest, byteLength: returnedBytes.byteLength };
   }
@@ -164,10 +173,122 @@ test("replays the exact original receipt after a later pointer advance", async (
   expect(replay).toEqual({ kind: "replayed", receipt: first.kind === "committed" ? first.receipt : undefined });
   expect(repository.pointers.get(scopeKey(scope))?.version).toBe(2);
   expect(blobs.nextId).toBe(2);
+  expect(repository.finalizeCalls).toBe(3);
+
+  repository.acceptedLease = "lease-takeover";
+  const staleReplay = await service.commit({
+    scope, authority, expectedVersion: 0, commitId: "intent-A", bytes: new Uint8Array([1]),
+  });
+  expect(staleReplay.kind).toBe("authority_rejected");
+  repository.acceptedLease = authority.leaseToken;
+  repository.acceptedEpoch = 5;
+  const staleEpochReplay = await service.commit({
+    scope, authority, expectedVersion: 0, commitId: "intent-A", bytes: new Uint8Array([1]),
+  });
+  expect(staleEpochReplay.kind).toBe("authority_rejected");
+  expect(blobs.nextId).toBe(2);
+  repository.acceptedEpoch = authority.executionAuthorityEpoch;
 
   const mismatch = await service.commit({ scope, authority, expectedVersion: 0, commitId: "intent-A", bytes: new Uint8Array([9]) });
   expect(mismatch.kind).toBe("conflict");
   expect(blobs.nextId).toBe(2);
+});
+
+test("copies Buffer bytes before asynchronous hashing or adapter calls", async () => {
+  const { service } = build();
+  const input = Buffer.from([1, 2, 3]);
+  const pending = service.commit({
+    scope, authority, expectedVersion: 0, commitId: "buffer-copy", bytes: input,
+  });
+  input[0] = 9;
+  const committed = await pending;
+  expect(committed.kind).toBe("committed");
+  const read = await service.read({ scope, authority });
+  expect(read.kind).toBe("present");
+  if (read.kind === "present") expect(read.bytes).toEqual(new Uint8Array([1, 2, 3]));
+});
+
+test("copies blob Buffer views before returning private bytes", async () => {
+  const { service, blobs } = build();
+  await service.commit({
+    scope, authority, expectedVersion: 0, commitId: "blob-buffer-view", bytes: new Uint8Array([4, 5]),
+  });
+  blobs.returnSharedRead = true;
+  const firstRead = await service.read({ scope, authority });
+  expect(firstRead.kind).toBe("present");
+  if (firstRead.kind !== "present") throw new Error("expected private file");
+  firstRead.bytes[0] = 99;
+  const secondRead = await service.read({ scope, authority });
+  expect(secondRead.kind).toBe("present");
+  if (secondRead.kind === "present") expect(secondRead.bytes).toEqual(new Uint8Array([4, 5]));
+});
+
+test("returned receipt mutation cannot rewrite stored replay history", async () => {
+  const { service } = build();
+  const first = await service.commit({
+    scope, authority, expectedVersion: 0, commitId: "receipt-copy", bytes: new Uint8Array([1]),
+  });
+  if (first.kind !== "committed") throw new Error("expected committed receipt");
+  const originalBlobId = first.receipt.blobId;
+  (first.receipt as { blobId: string }).blobId = "caller-mutated";
+  (first.receipt.scope as { slot: string }).slot = "caller-mutated-slot";
+  const replay = await service.commit({
+    scope, authority, expectedVersion: 0, commitId: "receipt-copy", bytes: new Uint8Array([1]),
+  });
+  expect(replay.kind).toBe("replayed");
+  if (replay.kind === "replayed") {
+    expect(replay.receipt.blobId).toBe(originalBlobId);
+    expect(replay.receipt.scope.slot).toBe(scope.slot);
+  }
+});
+
+test("malformed or mismatched receipt lookup cannot be acknowledged", async () => {
+  const { service, repository, blobs } = build();
+  const committed = await service.commit({
+    scope, authority, expectedVersion: 0, commitId: "receipt-validation", bytes: new Uint8Array([1]),
+  });
+  if (committed.kind !== "committed") throw new Error("expected committed receipt");
+  const malformed = [
+    { ...committed.receipt, commitId: "different-id" },
+    { ...committed.receipt, version: 3 },
+    { ...committed.receipt, blobId: "" },
+  ];
+  for (const receipt of malformed) {
+    repository.lookupReceiptOverride = { kind: "found", receipt };
+    const replay = await service.commit({
+      scope, authority, expectedVersion: 0,
+      commitId: "receipt-validation", bytes: new Uint8Array([1]),
+    });
+    expect(replay.kind).toBe("conflict");
+  }
+  expect(blobs.nextId).toBe(1);
+
+  repository.lookupReceiptOverride = {
+    kind: "found",
+    receipt: { ...committed.receipt, commitId: "different-id" },
+  };
+  const resolve = await service.resolve({
+    scope, authority, commitId: "receipt-validation", expectedVersion: 0,
+    digest: committed.receipt.digest,
+  });
+  expect(resolve.kind).toBe("conflict");
+});
+
+test("receipt resolution is fenced against the current Capsule epoch and Run lease", async () => {
+  const { service, repository } = build();
+  const committed = await service.commit({
+    scope, authority, expectedVersion: 0, commitId: "resolve-fence", bytes: new Uint8Array([1]),
+  });
+  expect(committed.kind).toBe("committed");
+  repository.acceptedEpoch = 2;
+  const resolved = await service.resolve({
+    scope,
+    authority,
+    commitId: "resolve-fence",
+    expectedVersion: 0,
+    digest: committed.kind === "committed" ? committed.receipt.digest : `sha256:${"0".repeat(64)}`,
+  });
+  expect(resolved.kind).toBe("authority_rejected");
 });
 
 test("rejects stale epoch or lease at the atomic repository boundary", async () => {
@@ -178,8 +299,8 @@ test("rejects stale epoch or lease at the atomic repository boundary", async () 
   });
   expect(stale.kind).toBe("authority_rejected");
   expect(repository.pointers.size).toBe(0);
-  expect(repository.finalizeCalls).toBe(1);
-  expect(blobs.nextId).toBe(1); // an unreferenced immutable blob is not an ACK
+  expect(repository.finalizeCalls).toBe(0);
+  expect(blobs.nextId).toBe(0);
 
   repository.acceptedEpoch = 2;
   const staleEpoch = await service.commit({

@@ -47,9 +47,13 @@ has since advanced the slot—and must not create another blob. Reusing the ID
 with different content or a different expected version conflicts. A competing
 write to an occupied expected version also conflicts. A repository result of
 `unknown` is not retried by the service: the caller can explicitly query the
-receipt with `resolve`. If the exact receipt is not visible, or the lookup
-itself is unavailable, the result remains unresolved; it is not permission to
-send an external mutation or mint a replacement commit ID.
+receipt with `resolve`. Both the commit preflight receipt lookup and explicit
+resolution are read-only repository operations fenced against the current
+Capsule epoch and Run lease. The final commit rechecks that same authority
+atomically before returning a replay or advancing the pointer. If an exact
+receipt is absent, malformed, or cannot be read, the result is not permission
+to send an external mutation or mint a replacement commit ID. A stale epoch or
+lease cannot turn a previous receipt into a new Run's acknowledgement.
 
 ## Adapter and capability boundary
 
