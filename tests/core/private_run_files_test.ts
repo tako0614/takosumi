@@ -7,6 +7,7 @@ import {
   type PrivateRunFilesAuthorizationPort,
   type PrivateRunFileScope,
   type PrivateRunFileDigest,
+  type PrivateRunFileReceipt,
 } from "../../core/domains/private-run-files/mod.ts";
 
 const scope: PrivateRunFileScope = {
@@ -42,7 +43,7 @@ function build(maxBytes = 64) {
 
 class MemoryRepository implements PrivateRunFileRepositoryPort {
   readonly pointers = new Map<string, { version: number; digest: PrivateRunFileDigest; blobId: string }>();
-  readonly receipts = new Map<string, Awaited<ReturnType<PrivateRunFileRepositoryPort["findReceipt"]>>>();
+  readonly receipts = new Map<string, PrivateRunFileReceipt>();
   acceptedEpoch = 1;
   acceptedLease = "lease_1";
   nextFinalize: "normal" | "unknown_after_commit" = "normal";
