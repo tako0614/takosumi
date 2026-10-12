@@ -65,6 +65,49 @@ interface PrivateFileWireEvidence {
   readonly receipt?: Receipt;
 }
 
+type CustodyEvent =
+  | { readonly kind: "lost_commit_ack"; readonly commitId: string; readonly receipt: Receipt }
+  | { readonly kind: "resolve_response"; readonly commitId: string; readonly receipt: Receipt }
+  | { readonly kind: "host_post" };
+
+test("lost-ACK custody rejects a Host POST before the matching resolve response", () => {
+  const receipt: Receipt = {
+    version: 2,
+    digest: "sha256:fixture-digest",
+    commitId: "fixture-commit-id-0001",
+    expectedVersion: 1,
+  };
+  const reordered: readonly CustodyEvent[] = [
+    { kind: "lost_commit_ack", commitId: receipt.commitId, receipt },
+    { kind: "host_post" },
+    { kind: "resolve_response", commitId: receipt.commitId, receipt },
+  ];
+  expect(() => assertLostAckResolvedBeforeHostPost(reordered, receipt))
+    .toThrow("matching resolve response must precede the first Host POST");
+});
+
+function assertLostAckResolvedBeforeHostPost(
+  events: readonly CustodyEvent[],
+  expectedReceipt: Receipt,
+): void {
+  const exactReceipt = (left: Receipt, right: Receipt) =>
+    left.version === right.version && left.digest === right.digest &&
+    left.commitId === right.commitId && left.expectedVersion === right.expectedVersion;
+  const dropped = events
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => event.kind === "lost_commit_ack" &&
+      event.commitId === expectedReceipt.commitId && exactReceipt(event.receipt, expectedReceipt));
+  const resolved = events
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => event.kind === "resolve_response" &&
+      event.commitId === expectedReceipt.commitId && exactReceipt(event.receipt, expectedReceipt));
+  const firstHostPost = events.findIndex((event) => event.kind === "host_post");
+  if (dropped.length !== 1 || resolved.length !== 1 || firstHostPost < 0 ||
+    !(dropped[0]!.index < resolved[0]!.index && resolved[0]!.index < firstHostPost)) {
+    throw new Error("matching resolve response must precede the first Host POST");
+  }
+}
+
 test.skipIf(!enabled)(
   "real local Runner processes recover the Provider intent snapshot through Core PostgreSQL and encrypted blobs",
   async () => {
@@ -76,6 +119,7 @@ test.skipIf(!enabled)(
     expect(proof.planAndApplyUseCurrentGrant).toBe(true);
     expect(proof.slot).toBe(PRIVATE_SLOT);
     expect(proof.droppedAck.exactReceiptResolved).toBe(true);
+    expect(proof.droppedAck.resolvedBeforeFirstHostPost).toBe(true);
     expect(proof.droppedAck.applyCommitRequests).toBeGreaterThan(0);
     expect(proof.droppedAck.lostAckCommitAttempts).toBe(1);
     expect(proof.droppedAck.resolveRequests).toBe(1);
@@ -103,10 +147,19 @@ interface ProofReport {
   readonly planAndApplyUseCurrentGrant: true;
   readonly droppedAck: {
     readonly exactReceiptResolved: true;
+    readonly resolvedBeforeFirstHostPost: true;
     readonly commitId: string;
     readonly receipt: Receipt;
-    readonly applyCommitRequests: 1;
+    readonly applyCommitRequests: number;
+    readonly lostAckCommitAttempts: number;
     readonly resolveRequests: 1;
+  };
+  readonly postgresRestart: {
+    readonly stoppedAndUnavailable: true;
+    readonly previousPostmasterHostPid: number;
+    readonly newPostmasterHostPid: number;
+    readonly previousPostmasterStartTime: string;
+    readonly newPostmasterStartTime: string;
   };
   readonly hostMutationsAfterApply: 1;
   readonly hostMutationsAfterDestroy: 2;
@@ -160,7 +213,8 @@ async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<Proof
     await chmod(certificatePath, 0o600);
     const certificate = await readFile(certificatePath);
     const key = await readFile(keyPath);
-    const host = createFakeV2Host(certificate, key);
+    const custodyEvents: CustodyEvent[] = [];
+    const host = createFakeV2Host(certificate, key, custodyEvents);
     servers.push(host);
     const hostApiRoot = `${host.url}${HOST_API_PATH}`;
 
@@ -208,9 +262,13 @@ async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<Proof
         });
         if (operation === "commit" && dropNextCommitAck) {
           dropNextCommitAck = false;
-          if (!receipt) return new Response("missing committed receipt", { status: 502 });
+          if (!commitId || !receipt) return new Response("missing committed receipt identity", { status: 502 });
           droppedCommitReceipt = receipt;
+          custodyEvents.push({ kind: "lost_commit_ack", commitId, receipt });
           return Response.json({ kind: "unavailable" }, { status: 503 });
+        }
+        if (operation === "resolve" && commitId && receipt) {
+          custodyEvents.push({ kind: "resolve_response", commitId, receipt });
         }
         return Response.json(forwardedBody, { status: forwarded.status });
       },
@@ -535,6 +593,7 @@ resource "takoform_module_worker" "app" {
       JSON.stringify(resolved.receipt) !== JSON.stringify(droppedCommitReceipt)) {
       throw new Error("lost Core ACK was not recovered with the exact original commit receipt");
     }
+    assertLostAckResolvedBeforeHostPost(custodyEvents, droppedCommitReceipt);
     if (host.mutations !== 1) throw new Error("lost private-file ACK caused a duplicate Host mutation");
     await stopRunnerProcess(applyRunner);
 
@@ -595,6 +654,7 @@ resource "takoform_module_worker" "app" {
       planAndApplyUseCurrentGrant: true,
       droppedAck: {
         exactReceiptResolved: true,
+        resolvedBeforeFirstHostPost: true,
         commitId: droppedCommitReceipt.commitId,
         receipt: droppedCommitReceipt,
         applyCommitRequests: applyCommits.length,
@@ -763,7 +823,7 @@ function createNativeProviderRunnerProfile(base: RunnerProfile): RunnerProfile {
   };
 }
 
-function createFakeV2Host(cert: Buffer, key: Buffer) {
+function createFakeV2Host(cert: Buffer, key: Buffer, custodyEvents: CustodyEvent[]) {
   let resourceExists = false;
   let generation = 0;
   let operationId = "";
@@ -777,6 +837,9 @@ function createFakeV2Host(cert: Buffer, key: Buffer) {
     tls: { cert, key },
     async fetch(request) {
       const url = new URL(request.url);
+      if (request.method === "POST" && url.pathname === `${HOST_API_PATH}/resources`) {
+        custodyEvents.push({ kind: "host_post" });
+      }
       if (url.pathname !== "/.well-known/takoform/v2" &&
         request.headers.get("authorization") !== "Bearer fixture-token") {
         return problem(401, "unauthorized");
