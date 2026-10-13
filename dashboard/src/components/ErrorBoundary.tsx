@@ -12,6 +12,7 @@
  * animates.
  */
 import { ErrorBoundary as SolidErrorBoundary, type JSX } from "solid-js";
+import { reloadForStaleAsset } from "../lib/chunk-reload.ts";
 import { t } from "../i18n/index.ts";
 
 export default function ErrorBoundary(props: {
@@ -22,6 +23,9 @@ export default function ErrorBoundary(props: {
       fallback={(err) => {
         // Log for diagnostics; the visible copy stays generic and reassuring.
         console.error("[dashboard] Unhandled UI error", err);
+        // Signed-out routes have no RouteErrorBoundary; a stale lazy chunk
+        // after a deploy reaches here instead of the window listeners.
+        reloadForStaleAsset(err);
         return (
           <main class="auth-page">
             <div class="sign-in-panel notfound-panel">

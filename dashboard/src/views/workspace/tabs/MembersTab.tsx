@@ -31,6 +31,10 @@ import type { SessionRecord } from "../../account/lib/session.ts";
 import { createAction } from "../../account/lib/action.tsx";
 import { useConfirmDialog } from "../../../lib/confirm-dialog.ts";
 import { friendlyError } from "../../../lib/error-copy.ts";
+import {
+  sessionDisplayName,
+  shortSubject,
+} from "../../../lib/account-labels.ts";
 import { locale, type MessageKey, t } from "../../../i18n/index.ts";
 import {
   Badge,
@@ -85,11 +89,6 @@ function statusTone(
   return "muted";
 }
 
-/** First ~10 chars of an opaque account subject, with an ellipsis marker. */
-function shortSubject(accountId: string): string {
-  return accountId.length > 11 ? `${accountId.slice(0, 10)}…` : accountId;
-}
-
 function rolesLabel(roles: readonly ControlWorkspaceRole[]): string {
   if (roles.length === 0) return "—";
   // "・" is the JA list interpunct; EN reads better with a comma.
@@ -107,6 +106,12 @@ export default function MembersTab(props: {
     listMembers,
   );
   const callerSubject = () => props.session.subject;
+  // The roster carries only account subjects. Your own row can use the name
+  // the session already knows; everyone else keeps the short subject prefix.
+  const memberLabel = (member: PublicWorkspaceMember) =>
+    (member.accountId === callerSubject()
+      ? sessionDisplayName(props.session)
+      : undefined) ?? shortSubject(member.accountId);
 
   // An errored resource THROWS on read; route every data read through this
   // guarded accessor so a failed list falls through to the error EmptyState
@@ -179,7 +184,7 @@ export default function MembersTab(props: {
         title: t("members.roleChangeConfirmTitle"),
         message: t("members.roleChangeConfirmMessage", {
           // Never interpolate the full opaque tsub_ subject into copy.
-          name: shortSubject(member.accountId),
+          name: memberLabel(member),
           role: t(ROLE_KEY[role]),
         }),
         confirmText: t("members.changeRole"),
@@ -214,7 +219,7 @@ export default function MembersTab(props: {
       message: isSelf
         ? t("members.removeSelfConfirm")
         : t("members.removeConfirm", {
-            account: shortSubject(member.accountId),
+            account: memberLabel(member),
           }),
       confirmText: isSelf ? t("members.removeSelf") : t("members.remove"),
       danger: true,
@@ -243,9 +248,20 @@ export default function MembersTab(props: {
             {/* `tsub_…` subjects are opaque machine ids — show a short prefix
                 so the roster stays scannable; the full id lives in the title
                 attribute for hover/copy inspection. */}
-            <code class="wb-mono" title={member.accountId}>
-              {shortSubject(member.accountId)}
-            </code>
+            <Show
+              when={
+                member.accountId === callerSubject()
+                  ? sessionDisplayName(props.session)
+                  : undefined
+              }
+              fallback={
+                <code class="wb-mono" title={member.accountId}>
+                  {shortSubject(member.accountId)}
+                </code>
+              }
+            >
+              {(name) => <span title={member.accountId}>{name()}</span>}
+            </Show>
             <Show when={member.accountId === callerSubject()}>
               <Badge tone="info" class="wb-you-tag">
                 {t("members.you")}
@@ -285,7 +301,7 @@ export default function MembersTab(props: {
                   <ShieldCheck size={14} aria-hidden="true" />
                   <Select
                     aria-label={t("members.roleSelectLabel", {
-                      name: shortSubject(member.accountId),
+                      name: memberLabel(member),
                     })}
                     disabled={changeRole.busy() || isLastOwner(member)}
                     value={member.roles[0] ?? "member"}

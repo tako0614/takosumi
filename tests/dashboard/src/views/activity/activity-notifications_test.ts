@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { en } from "../../../../../dashboard/src/i18n/en.ts";
 import { ja } from "../../../../../dashboard/src/i18n/ja.ts";
+import type { ActivityEvent } from "../../../../../dashboard/src/lib/control-api.ts";
+import { describeActivityEvent } from "../../../../../dashboard/src/lib/activity-copy.ts";
+import { locale, setLocale } from "../../../../../dashboard/src/i18n/index.ts";
 
 const activitySource = readFileSync(
   resolve(
@@ -25,6 +28,14 @@ const topBarSource = readFileSync(
   ),
   "utf8",
 );
+const activityCopySource = readFileSync(
+  resolve(import.meta.dir, "../../../../../dashboard/src/lib/activity-copy.ts"),
+  "utf8",
+);
+const serviceNamesSource = readFileSync(
+  resolve(import.meta.dir, "../../../../../dashboard/src/lib/service-names.ts"),
+  "utf8",
+);
 const notificationsLibSource = readFileSync(
   resolve(import.meta.dir, "../../../../../dashboard/src/lib/notifications.ts"),
   "utf8",
@@ -32,12 +43,36 @@ const notificationsLibSource = readFileSync(
 
 describe("History and notifications", () => {
   test("does not credit a dependency when the service's own source changed", () => {
-    expect(notificationsSource).toContain(
+    expect(activityCopySource).toContain(
       'metaString(m, "reason") === "source_ref_changed"',
     );
-    expect(notificationsSource).toContain('t("notif.event.staleSourceNamed"');
     expect(ja["notif.event.staleSourceNamed"]).toContain("{name}");
     expect(en["notif.event.staleSourceNamed"]).toContain("{name}");
+    const previousLocale = locale();
+    const event: ActivityEvent = {
+      id: "stale-source-event",
+      workspaceId: "ws_alpha",
+      action: "capsule.stale",
+      targetType: "capsule",
+      targetId: "cap_app",
+      metadata: {
+        reason: "source_ref_changed",
+        producerCapsuleName: "Upstream service",
+      },
+      createdAt: "2026-10-13T00:00:00.000Z",
+    };
+    try {
+      setLocale("en");
+      expect(describeActivityEvent(event, "App service").title).toBe(
+        "A new version of “App service” is available",
+      );
+      setLocale("ja");
+      expect(describeActivityEvent(event, "アプリ").title).toBe(
+        "「アプリ」の新しいバージョンがあります",
+      );
+    } finally {
+      setLocale(previousLocale);
+    }
   });
 
   test("keeps raw audit identifiers inside nested debug details", () => {
@@ -58,13 +93,16 @@ describe("History and notifications", () => {
     expect(actorChipIndex).toBeGreaterThan(debugIndex);
     expect(activitySource).toContain('<span class="muted">action</span>');
     expect(activitySource).toContain('<span class="muted">target</span>');
-    expect(activitySource).toContain('t("activity.recorded")');
+    // History and Notifications share one sentence per event.
+    expect(activitySource).toContain(
+      "describeActivityEvent(props.event, props.serviceName)",
+    );
+    expect(activitySource).not.toContain("function activityTitle");
+    expect(activityCopySource).toContain('t("notif.event.recorded")');
     expect(en["activity.details"]).toBe("Reference info");
     expect(ja["activity.details"]).toBe("参照情報");
     expect(en["activity.debug"]).toBe("Reference ID");
     expect(ja["activity.debug"]).toBe("参照 ID");
-    expect(en["activity.recorded"]).toBe("Recorded activity");
-    expect(ja["activity.recorded"]).toBe("記録された操作");
   });
 
   test("activity rows surface WHO acted, honoring the page's だれが claim", () => {
@@ -84,7 +122,8 @@ describe("History and notifications", () => {
   test("notifications link to history without advertising raw audit logs", () => {
     expect(notificationsSource).toContain('href="/activity"');
     expect(notificationsSource).toContain('t("notif.supportSummary")');
-    expect(notificationsSource).toContain('t("notif.event.recorded")');
+    expect(notificationsSource).toContain("describeActivityEvent(");
+    expect(activityCopySource).toContain('t("notif.event.recorded")');
     expect(notificationsSource).not.toContain("title: event.action");
     expect(notificationsSource).toMatch(
       /<details class="wb-disclosure wc-notif-support">[\s\S]*href="\/activity"/,
@@ -166,8 +205,10 @@ describe("History and notifications", () => {
       "(!workspaceId || entry.event.workspaceId === workspaceId)",
     );
     expect(notificationsSource).toContain('t("notif.otherWorkspace"');
-    expect(ja["notif.otherWorkspace"]).toContain("{handle}");
-    expect(en["notif.otherWorkspace"]).toContain("{handle}");
+    // Named by the Workspace's display name, not its @handle / id.
+    expect(ja["notif.otherWorkspace"]).toContain("{name}");
+    expect(en["notif.otherWorkspace"]).toContain("{name}");
+    expect(notificationsSource).toContain("workspace?.displayName?.trim()");
   });
 
   test("the bell opens onto the existing snapshot, not a full skeleton", () => {
@@ -192,12 +233,19 @@ describe("History and notifications", () => {
     expect(notificationsSource).not.toContain(
       "loadNotificationCapsuleNameIndex",
     );
-    expect(notificationsSource).toContain(
+    expect(activityCopySource).toContain(
       'metaString(metadata, "capsuleName")',
     );
     expect(notificationsSource).toContain("serviceNameFor(entry.event)");
-    expect(notificationsSource).toContain('t("notif.event.planReadyNamed"');
-    expect(notificationsSource).toContain('t("notif.event.failedNamed"');
+    expect(notificationsSource).toContain("activityServiceName(event)");
+    expect(activityCopySource).toContain('t("notif.event.planReadyNamed"');
+    expect(activityCopySource).toContain('t("notif.event.failedNamed"');
+    // History names the service too, resolving ids over deleted services.
+    expect(activitySource).toContain("activityServiceName(");
+    expect(activitySource).toContain("createServiceNames(workspaceId)");
+    expect(serviceNamesSource).toContain(
+      "listCapsulesCached(id, { includeDestroyed: true })",
+    );
     for (const key of [
       "notif.event.planReadyNamed",
       "notif.event.approvedNamed",

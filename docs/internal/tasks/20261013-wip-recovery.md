@@ -24,7 +24,7 @@
 | B-W4/E read efficiency | Keyset Run pages, batch Plan lookup for Run projection and aggregate Capsule usage in all three store implementations; preserve legacy list limits/order and add an optional next cursor |
 | C-W1 self-host operations | Restore Japanese/English operations pages using the actual #418 procedures and storage/runner boundaries |
 | C-W1 runtime store | Advertise an optional public store URL through discovery and select it in the dashboard without rebuilding; reject credential/query/fragment URLs |
-| D / 9 / 11 | Recover repository-owned Git-install setup/presentation and compatible dashboard wiring fixes; do not duplicate draft PR #420 |
+| D / 9 / 11 | Recover repository-owned Git-install setup/presentation and compatible dashboard wiring fixes; preserve merged PR #420 and add only its remaining defects |
 | 10 / 11 | Repair app-handoff documentation references and recover the focused unused-export ratchet intent |
 
 ## Disposition of the remaining audit items
@@ -68,6 +68,12 @@ future behavior requires a new design or belongs to an existing owner PR.
   `pg_result` extraction is not a compatible common adapter.
 
 ## Verification and staging evidence
+
+PR #419/#421 were integrated at `c56268c21`; PR #420 was subsequently integrated
+from `eccdcd133`. Source creation tests and browser fixtures now assert deferred
+auto-sync plus exactly one post-Plan PATCH, with no PATCH on timed-out attempts;
+unexpected traffic still fails the browser harness. The unused-export baseline
+after integrating #420 is 19 (down from the pre-integration 24).
 
 Focused commands/results, full local gate, independent review, PR/merge identity
 and staging outcome are recorded with the PR. The staging config is held outside

@@ -7,6 +7,7 @@ import {
   type Route,
 } from "@playwright/test";
 import {
+  PORTABLE_CAPSULES,
   PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
   PORTABLE_EXPECTATIONS,
   PORTABLE_SOURCE_COMMIT,
@@ -343,11 +344,31 @@ function expectSingleSourceCreate(state: SourceCreateFixtureState): void {
   expect(state.sourcePosts).toEqual(["/api/v1/sources"]);
 }
 
+async function expectSourceAutoSyncOptInAfterPlan(
+  state: ProviderDestinationFixtureState,
+): Promise<void> {
+  expect(state.sourceCreateBodies).toEqual([
+    expect.objectContaining({ autoSync: false }),
+  ]);
+  await expect.poll(() => state.sourceAutoSyncPatches).toEqual([
+    { autoSync: true },
+  ]);
+  const planIndex = state.mutations.indexOf(
+    "POST /api/v1/workspaces/ws_alpha/install-plans",
+  );
+  const patchIndex = state.mutations.indexOf(
+    "PATCH /api/v1/sources/src_provider_destination_e2e",
+  );
+  expect(planIndex).toBeGreaterThanOrEqual(0);
+  expect(patchIndex).toBeGreaterThan(planIndex);
+}
+
 interface ProviderDestinationFixtureState extends SourceCreateFixtureState {
   readonly mutations: string[];
   readonly compatibilityBodies: unknown[];
   readonly installModuleRequests: string[];
   readonly sourceCreateBodies: Record<string, unknown>[];
+  readonly sourceAutoSyncPatches: Record<string, unknown>[];
   installPlanBody?: {
     readonly options?: {
       readonly providerBindings?: readonly Record<string, unknown>[];
@@ -386,6 +407,7 @@ async function stubProviderDestinationFixture(
     compatibilityBodies: [],
     installModuleRequests: [],
     sourceCreateBodies: [],
+    sourceAutoSyncPatches: [],
     sourceListReads: [],
     sourcePosts: [],
   };
@@ -446,6 +468,29 @@ async function stubProviderDestinationFixture(
             updatedAt: "2026-08-01T00:00:00.000Z",
           },
           hookSecret: "fixture-only",
+        },
+      });
+    }
+    if (
+      path === `/api/v1/sources/${sourceId}` &&
+      request.method() === "PATCH"
+    ) {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      state.sourceAutoSyncPatches.push(body);
+      return route.fulfill({
+        json: {
+          source: {
+            id: sourceId,
+            workspaceId: "ws_alpha",
+            name: sourceName,
+            url: sourceUrl,
+            defaultRef: PORTABLE_SOURCE_COMMIT,
+            defaultPath: sourcePath,
+            status: "active",
+            autoSync: body.autoSync === true,
+            createdAt: "2026-08-01T00:00:00.000Z",
+            updatedAt: "2026-08-01T00:00:01.000Z",
+          },
         },
       });
     }
@@ -797,7 +842,16 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
     await fixture.startApply();
 
-    await expect(page.getByRole("heading", { name: "Something went wrong" })).toBeVisible();
+    // Fails closed at the page boundary: no Open, no readiness Retry — and
+    // the rest of the dashboard (nav) stays usable instead of the whole app
+    // being replaced by the root card.
+    await expect(
+      page.getByRole("heading", { name: "This page couldn't be shown" }),
+    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Something went wrong" })).toHaveCount(0);
+    await expect(
+      page.locator(".sidebar-nav").getByRole("link", { name: "Home", exact: true }),
+    ).toBeVisible();
     await expect(page.getByRole("link", { name: "Open service" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
     expect(fixture.applyPosts).toHaveLength(1);
@@ -1071,9 +1125,13 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(popup.getByText("Synthetic app fixture")).toBeVisible();
     await popup.close();
     await assertNoPageErrors(errors);
+    expect(requests.filter((entry) => entry.startsWith("PATCH "))).toEqual([
+      `PATCH ${mutationOrigin}/api/v1/sources/src_provider_destination_e2e`,
+    ]);
     expect(requests.every((entry) =>
       entry.startsWith(`GET ${mutationOrigin}/`) ||
       entry.startsWith(`POST ${mutationOrigin}/`) ||
+      entry === `PATCH ${mutationOrigin}/api/v1/sources/src_provider_destination_e2e` ||
       entry.startsWith("GET https://store.example.test/") ||
       entry.startsWith("GET https://service.example.test/"),
     )).toBe(true);
@@ -1504,7 +1562,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(page.getByLabel(/Ref \(optional\)|ref（省略可）/u)).toHaveValue(
       "0123456789abcdef0123456789abcdef01234567",
     );
-    await expect(page.getByLabel(/Module path|module path/u)).toHaveValue(
+    await expect(page.getByLabel(/Module folder|モジュールのフォルダ/u)).toHaveValue(
       "deploy/opentofu",
     );
 
@@ -1726,19 +1784,19 @@ test.describe("Takosumi dashboard browser surface", () => {
     });
 
     await gotoDashboardDocument(page, recoveryUrl);
-    await expect(page.getByTestId("install-plan-recovery-phase")).toHaveText("reviewable");
-    await expect(page.getByRole("heading", { name: /初回導入の確認|Initial review is ready/u })).toBeVisible();
+    await expect(page.getByTestId("install-plan-recovery")).toHaveAttribute("data-phase", "reviewable");
+    await expect(page.getByRole("heading", { name: /最初の変更を確認できます|The first review is ready/u })).toBeVisible();
     await expect(page.locator(`[data-testid="install-plan-recovery"] a[href="/runs/${runId}"]`)).toBeVisible();
     expect(coordinatorReads).toHaveLength(1);
 
     await page.reload({ waitUntil: "domcontentloaded" });
-    await expect(page.getByTestId("install-plan-recovery-phase")).toHaveText("reviewable");
+    await expect(page.getByTestId("install-plan-recovery")).toHaveAttribute("data-phase", "reviewable");
     expect(coordinatorReads).toHaveLength(2);
 
     phase = "failed";
     await page.reload({ waitUntil: "domcontentloaded" });
-    await expect(page.getByTestId("install-plan-recovery-phase")).toHaveText("failed");
-    await expect(page.getByRole("heading", { name: /導入の準備は停止|Install preparation stopped/u })).toBeVisible();
+    await expect(page.getByTestId("install-plan-recovery")).toHaveAttribute("data-phase", "failed");
+    await expect(page.getByRole("heading", { name: /追加の準備は停止|Adding stopped/u })).toBeVisible();
     await expect(page.locator(`[data-testid="install-plan-recovery"] a[href="/runs/${runId}"]`)).toBeVisible();
     expect(coordinatorReads).toHaveLength(3);
     expect(mutations).toEqual([]);
@@ -1828,6 +1886,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       compatibilityReportId: "caprep_provider_destination_e2e",
       installConfigId: "cfg-default-opentofu-capsule",
     });
+    await expectSourceAutoSyncOptInAfterPlan(state);
     expect(state.mutations).not.toContain(
       "POST /api/v1/workspaces/ws_alpha/capsules",
     );
@@ -1874,6 +1933,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       await expect(add).toBeEnabled();
       // No automatic mutation retry after an unknown outcome.
       expect(posts).toHaveLength(1);
+      expect(state.sourceAutoSyncPatches).toEqual([]);
       if (edited) await page.locator(".iv-form input").first().fill("edited-service");
       await add.click();
       await expect.poll(() => posts.length).toBe(2);
@@ -1929,6 +1989,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     expect(state.mutations).not.toContain(
       "POST /api/v1/workspaces/ws_alpha/install-plans",
     );
+    expect(state.sourceAutoSyncPatches).toEqual([]);
     expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
@@ -2058,6 +2119,7 @@ test.describe("Takosumi dashboard browser surface", () => {
           connectionId: "pc_aws_primary_mixed",
         },
       ]);
+    await expectSourceAutoSyncOptInAfterPlan(state);
     expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
@@ -2185,6 +2247,7 @@ test.describe("Takosumi dashboard browser surface", () => {
           connectionId: "pc_aws_primary_tuple",
         },
       ]);
+    await expectSourceAutoSyncOptInAfterPlan(state);
     expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
@@ -2376,6 +2439,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     const compatibilityBodies: unknown[] = [];
     const stableRefResolutionBodies: unknown[] = [];
     const sourcePostBodies: unknown[] = [];
+    const sourceAutoSyncPatchBodies: unknown[] = [];
     const syncBodies: unknown[] = [];
     const installPlanBodies: unknown[] = [];
     const installPlanKeys: (string | undefined)[] = [];
@@ -2474,6 +2538,28 @@ test.describe("Takosumi dashboard browser surface", () => {
               updatedAt: now,
             },
             hookSecret: "fixture-only",
+          },
+        });
+      }
+      if (
+        path === "/api/v1/sources/src_install_e2e" &&
+        request.method() === "PATCH"
+      ) {
+        sourceAutoSyncPatchBodies.push(request.postDataJSON());
+        return route.fulfill({
+          json: {
+            source: {
+              id: "src_install_e2e",
+              workspaceId: "ws_alpha",
+              name: "example-service",
+              url: "https://github.com/example/service",
+              defaultRef: resolvedCommit,
+              defaultPath: ".",
+              status: "active",
+              autoSync: true,
+              createdAt: now,
+              updatedAt: now,
+            },
           },
         });
       }
@@ -2688,6 +2774,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     // reviewed one of them makes that module the preselected choice; it never
     // replaces the repository's other roots with a single entry path.
     await expect(moduleChooser).toBeVisible();
+    expect(sourceAutoSyncPatchBodies).toEqual([]);
     // No compatibility check may run before the user confirms a module.
     expect(seenMutations).not.toContain(
       "POST /api/v1/sources/src_install_e2e/compatibility-check",
@@ -2783,9 +2870,20 @@ test.describe("Takosumi dashboard browser surface", () => {
       expect.objectContaining({
         defaultRef: resolvedCommit,
         defaultPath: ".",
-        autoSync: true,
+        autoSync: false,
       }),
     ]);
+    await expect.poll(() => sourceAutoSyncPatchBodies).toEqual([
+      { autoSync: true },
+    ]);
+    const installPlanMutationIndex = seenMutations.lastIndexOf(
+      "POST /api/v1/workspaces/ws_alpha/install-plans",
+    );
+    const sourcePatchMutationIndex = seenMutations.lastIndexOf(
+      "PATCH /api/v1/sources/src_install_e2e",
+    );
+    expect(installPlanMutationIndex).toBeGreaterThanOrEqual(0);
+    expect(sourcePatchMutationIndex).toBeGreaterThan(installPlanMutationIndex);
     expect(syncBodies).toEqual([{ expectedRef: resolvedCommit }]);
   });
   };
@@ -3265,6 +3363,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       expect.objectContaining({ defaultPath: "infra" }),
     ]);
     expect(state.sourcePosts).toEqual(["/api/v1/sources"]);
+    await expectSourceAutoSyncOptInAfterPlan(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
   });
@@ -3284,6 +3383,268 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(app).toHaveAttribute("target", "_blank");
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
+  });
+
+  // A failed read on one page must stay on that page: before the per-page
+  // boundary and the throw-free resource reads, each of these replaced the
+  // whole app — sidebar included — with the root "Something went wrong" card.
+  const rootReloadCard = /Something went wrong|問題が発生しました/u;
+  const homeLink = (page: Page) =>
+    page
+      .locator(".sidebar-nav")
+      .getByRole("link", { name: /^(Home|ホーム)$/u });
+
+  test("an unreadable run keeps the shell and shows its own recovery", async ({
+    page,
+  }) => {
+    test.skip(mode !== "portable", "synthetic run failures are portable-only");
+    const errors = pageErrors(page);
+    await page.route("**/api/v1/runs/run_broken_e2e", (route) =>
+      route.fulfill({ status: 500, json: { error: "synthetic_failure" } }),
+    );
+
+    // The fixture answers unknown run ids with 404.
+    await gotoDashboardDocument(page, "/runs/run_missing_e2e");
+    await expect(
+      page.getByRole("heading", {
+        name: /This run was not found|この実行は見つかりませんでした/u,
+      }),
+    ).toBeVisible();
+    await expect(homeLink(page)).toBeVisible();
+    await expect(page.getByText(rootReloadCard)).toHaveCount(0);
+
+    await gotoDashboardDocument(page, "/runs/run_broken_e2e");
+    await expect(
+      page.getByRole("heading", {
+        name: /Couldn't load this run|実行を読み込めませんでした/u,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /^(Retry|再試行)$/u }),
+    ).toBeVisible();
+    await expect(homeLink(page)).toBeVisible();
+    await expect(page.getByText(rootReloadCard)).toHaveCount(0);
+    await assertNoPageErrors(errors);
+  });
+
+  test("a failed run poll keeps the last good run and keeps polling", async ({
+    page,
+  }) => {
+    test.skip(mode !== "portable", "synthetic poll failures are portable-only");
+    const errors = pageErrors(page);
+    const runPath = "/api/v1/runs/run_poll_e2e";
+    let runReads = 0;
+    // A non-200 stream fails EventSource for good (no auto-reconnect), so the
+    // 3s fallback poll alone drives updates — the path under test.
+    await page.route(`**${runPath}/stream`, (route) =>
+      route.fulfill({ status: 503, json: { error: "stream_unavailable" } }),
+    );
+    await page.route(`**${runPath}`, (route) => {
+      runReads += 1;
+      if (runReads === 2) {
+        return route.fulfill({ status: 503, json: { error: "synthetic_blip" } });
+      }
+      return route.fulfill({
+        json: {
+          run: {
+            id: "run_poll_e2e",
+            workspaceId: "ws_alpha",
+            capsuleId: "cap_poll_e2e",
+            type: "plan",
+            status: "running",
+            createdBy: "portable-e2e",
+            createdAt: "2026-08-01T00:00:00.000Z",
+          },
+        },
+      });
+    });
+    const refreshFailed =
+      /Couldn't fetch the latest status|最新の状態を取得できませんでした/u;
+
+    await gotoDashboardDocument(page, "/runs/run_poll_e2e");
+    // The 3s fallback poll hits the synthetic failure: the run stays on
+    // screen with a quiet notice instead of the whole app going away.
+    await expect(page.getByText(refreshFailed)).toBeVisible({ timeout: 10_000 });
+    expect(runReads).toBe(2);
+    await expect(
+      page.getByRole("heading", {
+        name: /Couldn't load this run|実行を読み込めませんでした/u,
+      }),
+    ).toHaveCount(0);
+    await expect(page.getByText(rootReloadCard)).toHaveCount(0);
+    await expect(homeLink(page)).toBeVisible();
+
+    // Polling continues after the failure and the next good read clears it.
+    await expect(page.getByText(refreshFailed)).toHaveCount(0, {
+      timeout: 10_000,
+    });
+    expect(runReads).toBeGreaterThanOrEqual(3);
+    await assertNoPageErrors(errors);
+  });
+
+  test("an unreadable service keeps the shell and shows not found", async ({
+    page,
+  }) => {
+    test.skip(mode !== "portable", "synthetic service failures are portable-only");
+    const errors = pageErrors(page);
+    await gotoDashboardDocument(page, "/workloads/cap_missing_e2e");
+    await expect(
+      page.getByRole("heading", {
+        name: /Service not found|サービスが見つかりません/u,
+      }),
+    ).toBeVisible();
+    await expect(homeLink(page)).toBeVisible();
+    await expect(page.getByText(rootReloadCard)).toHaveCount(0);
+    await assertNoPageErrors(errors);
+  });
+
+  test("a page that fails to load keeps the nav and recovers on navigation", async ({
+    page,
+  }) => {
+    test.skip(mode !== "portable", "blocking a route chunk is portable-only");
+    const errors = pageErrors(page);
+    let blockedChunkRequests = 0;
+    await page.route("**/assets/GraphView-*.js", (route) => {
+      blockedChunkRequests += 1;
+      return route.abort();
+    });
+
+    // A stale chunk reloads once onto the new build; when the chunk is still
+    // missing after that, the page-level card appears instead of a blank app.
+    await gotoDashboardDocument(page, "/graph");
+    await expect(
+      page.getByRole("heading", {
+        name: /This page couldn't be shown|この画面を表示できませんでした/u,
+      }),
+    ).toBeVisible();
+    expect(blockedChunkRequests).toBeGreaterThanOrEqual(2);
+    await expect(page.getByText(rootReloadCard)).toHaveCount(0);
+
+    // The chrome stays usable: leaving the broken page clears the error.
+    await homeLink(page).click();
+    await expect(page).toHaveURL(/\/$/u);
+    await expect(
+      page.getByRole("heading", {
+        name: /This page couldn't be shown|この画面を表示できませんでした/u,
+      }),
+    ).toHaveCount(0);
+    await expect(
+      page.locator("a.av-tile").filter({ hasText: expectations.appName }).first(),
+    ).toBeVisible();
+    await assertNoPageErrors(errors);
+  });
+
+  test("a failed Workspace list read keeps the current Workspace selected", async ({
+    page,
+  }) => {
+    test.skip(mode !== "portable", "synthetic list failures are portable-only");
+    const errors = pageErrors(page);
+    const appTile = page
+      .locator("a.av-tile")
+      .filter({ hasText: expectations.appName })
+      .first();
+    await gotoDashboardDocument(page, "/");
+    await expect(appTile).toBeVisible();
+    const readSelection = () =>
+      page.evaluate(() => localStorage.getItem("takosumi.currentWorkspaceId"));
+    const selected = await readSelection();
+    expect(selected).toBeTruthy();
+
+    let failedListReads = 0;
+    await page.route(
+      (url) =>
+        url.pathname === "/api/v1/workspaces" ||
+        url.pathname === "/api/v1/dashboard/bootstrap",
+      (route) => {
+        failedListReads += 1;
+        return route.fulfill({ status: 503, json: { error: "synthetic_list" } });
+      },
+    );
+    // Rename/archive/create broadcast this; the switcher re-reads the list.
+    await page.evaluate(() =>
+      window.dispatchEvent(new Event("takosumi:workspaces-changed")),
+    );
+    await expect.poll(() => failedListReads).toBeGreaterThanOrEqual(2);
+    await expect(page.locator(".topbar-workspace-error:visible").first()).toBeVisible();
+
+    // The failure is not evidence of "no Workspaces": the selection and the
+    // launcher survive instead of resetting to first-Workspace onboarding.
+    expect(await readSelection()).toBe(selected);
+    await expect(appTile).toBeVisible();
+    await assertNoPageErrors(errors);
+  });
+
+  test("history and the launcher name people, services and state in words", async ({
+    page,
+  }) => {
+    test.skip(mode !== "portable", "synthetic history rows are portable-only");
+    const errors = pageErrors(page);
+    await page.route(
+      (url) => url.pathname === "/api/v1/workspaces/ws_alpha/activity",
+      (route) =>
+      route.fulfill({
+        json: {
+          events: [
+            {
+              id: "act_e2e_applied",
+              workspaceId: "ws_alpha",
+              actorId: "sub_portable_e2e",
+              action: "run.applied",
+              targetType: "run",
+              targetId: "run_e2e_applied",
+              metadata: { capsuleId: "cap_repository_office" },
+              createdAt: "2026-08-01T00:00:03.000Z",
+            },
+          ],
+        },
+      }),
+    );
+    // A fresh session has no stored Workspace yet: the history must still
+    // show the events that arrive once the Workspace is selected (it used to
+    // clear them and say "No activity yet").
+    await gotoDashboardDocument(page, "/activity");
+    await expect(page.locator(".wa-activity-row")).toHaveCount(1);
+    // The event records only ids: the row names the service and reads your
+    // own subject as you instead of `sub_…`.
+    await expect(
+      page.getByText(
+        /Deployed changes to “Repository Office”|「Repository Office」の変更をデプロイしました/u,
+      ),
+    ).toBeVisible();
+    await expect(page.getByText(/^(By You|実行者: あなた)$/u)).toBeVisible();
+    await expect(page.locator(".wa-activity-rowmeta")).not.toContainText(
+      "sub_portable_e2e",
+    );
+
+    // An empty notification feed offers the next step, not just a sentence.
+    await gotoDashboardDocument(page, "/notifications");
+    await expect(
+      page.getByRole("main").getByRole("link", { name: /^(Add service|サービスを追加)$/u }),
+    ).toBeVisible();
+
+    // An available update is said in words on the tile, not only as a dot.
+    await page.route(
+      (url) => url.pathname === "/api/v1/workspaces/ws_alpha/capsules",
+      (route) =>
+      route.fulfill({
+        json: {
+          capsules: [
+            {
+              ...PORTABLE_CAPSULES.ws_alpha[0],
+              freshness: "stale",
+            },
+          ],
+        },
+      }),
+    );
+    await gotoDashboardDocument(page, "/");
+    const tile = page
+      .locator("a.av-tile")
+      .filter({ hasText: expectations.appName })
+      .first();
+    await expect(tile).toContainText(/Update available|更新があります/u);
+    await expect(tile.locator(".av-tile-dot")).toBeVisible();
+    await assertNoPageErrors(errors);
   });
 
   test("fails closed on an unexpected same-origin API 404", async ({

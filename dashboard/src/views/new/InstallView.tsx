@@ -114,6 +114,11 @@ import {
   defaultWorkspaceHandle,
   localizedStoreText,
   providerDisplayName,
+  compatibilityCheckLooksTransient,
+  compatibilityDiagnosticDisplay,
+  compatibilityLabel,
+  compatibilitySummaryDisplay,
+  compatibilityTone,
   parseInitialTcsHandoff,
   setStoreJsonVariable,
   slugInputValue,
@@ -1333,7 +1338,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       // executable merely because the endpoint returned 200; stop before any
       // InstallConfig/Capsule creation and show its diagnostics to the user.
       if (result.level !== "ready") {
-        setError(result.summary || t("installStore.compatibilityFailed"));
+        setError(compatibilitySummaryDisplay(result));
         setPhase("configure");
         return;
       }
@@ -1530,7 +1535,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   ) => {
     if (!workspace || !checked || !config) return;
     if (checked.level !== "ready") {
-      setError(checked.summary || t("installStore.compatibilityFailed"));
+      setError(compatibilitySummaryDisplay(checked));
       setPhase("configure");
       return;
     }
@@ -1890,7 +1895,18 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     <>
       <Show when={hasInstallRecoveryLocator(location.search)}>
         <main class="iv-page">
-          <section class="iv-workbench iv-centered" data-testid="install-plan-recovery">
+          <section
+            class="iv-workbench iv-centered"
+            data-testid="install-plan-recovery"
+            // The internal coordinator phase stays machine-readable for
+            // diagnostics and tests; the heading below is what a person reads.
+            data-phase={(() => {
+              const current = recovery();
+              return current.status === "ready"
+                ? current.response.installPlan.phase
+                : undefined;
+            })()}
+          >
             <Show when={recovery().status === "loading"}>
               <Spinner size={24} />
               <h2>{t("common.loading")}</h2>
@@ -1928,7 +1944,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                       presentation === "continue" ? t("installStore.recoveryContinueHint") :
                       t("installStore.recoveryUnverifiedHint")
                     }</p>
-                    <p data-testid="install-plan-recovery-phase">{response.installPlan.phase}</p>
                     <Show when={response.installPlan.diagnostic?.message}>
                       {(message) => <p role="status">{message()}</p>}
                     </Show>
@@ -2151,20 +2166,50 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           <Show when={compatibilityBlocker()}>
             {(result) => (
               <aside class="iv-compat-warning" role="alert">
-                <Badge
-                  tone={result().level === "unsupported" ? "danger" : "warn"}
-                >
-                  {result().level === "unsupported"
-                    ? "Cannot be added"
-                    : "Needs manual changes"}
+                <Badge tone={compatibilityTone(result().level)}>
+                  {compatibilityLabel(result().level)}
                 </Badge>
-                <p>
-                  {result().summary || t("installStore.compatibilityFailed")}
-                </p>
+                {/* The analyzer speaks English prose and may echo repository or
+                    compiler text; the display helpers map typed codes to the
+                    product's own localized explanation. Only diagnostics the
+                    helpers cannot classify keep their raw text, folded. */}
+                <p>{compatibilitySummaryDisplay(result())}</p>
+                <Show when={compatibilityCheckLooksTransient(result())}>
+                  <div class="iv-action-row">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      busy={busy()}
+                      onClick={() => void prepareInstall()}
+                    >
+                      {t("common.retry")}
+                    </Button>
+                  </div>
+                </Show>
                 <For each={result().diagnostics}>
-                  {(diagnostic) => (
-                    <p>{diagnostic.detail || diagnostic.message}</p>
-                  )}
+                  {(diagnostic) => {
+                    const display = compatibilityDiagnosticDisplay(diagnostic);
+                    return (
+                      <Show
+                        when={display.technical && display.detail}
+                        fallback={
+                          <p>
+                            {display.message}
+                            <Show when={display.detail}>
+                              {(detail) => <span> {detail()}</span>}
+                            </Show>
+                          </p>
+                        }
+                      >
+                        {(detail) => (
+                          <details class="iv-advanced">
+                            <summary>{display.message}</summary>
+                            <p>{detail()}</p>
+                          </details>
+                        )}
+                      </Show>
+                    );
+                  }}
                 </For>
               </aside>
             )}
@@ -2401,7 +2446,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                             index: String(index() + 1),
                           })}
                         </strong>
-                        <div class="iv-source-build-argv" aria-label="argv">
+                        <div
+                          class="iv-source-build-argv"
+                          aria-label={t("installStore.sourceBuildArguments")}
+                        >
                           <For each={command.argv}>
                             {(argument) => <code>{argument}</code>}
                           </For>
@@ -2437,7 +2485,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
               <>
                 <Show when={entry().setupProjectionInvalid}>
                   <aside class="iv-setup-note" role="alert">
-                    <strong>Service setup is unavailable</strong>
+                    <strong>{t("installStore.setupUnavailableTitle")}</strong>
                     <p>{t("installStore.setupInvalid")}</p>
                   </aside>
                 </Show>
@@ -2445,13 +2493,13 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                   when={storeRequiresUnavailableSecretMaterialization(entry())}
                 >
                   <aside class="iv-setup-note" role="alert">
-                    <strong>Secret setup is unavailable</strong>
+                    <strong>{t("installStore.secretSetupUnavailableTitle")}</strong>
                     <p>{t("installStore.secretUnavailable")}</p>
                   </aside>
                 </Show>
                 <Show when={visibleStoreInstallFeatures(entry()).length > 0}>
                   <section class="iv-feature-list">
-                    <h3>Optional features</h3>
+                    <h3>{t("installStore.optionalFeatures")}</h3>
                     <For each={visibleStoreInstallFeatures(entry())}>
                       {(feature) => (
                         <div class="iv-feature">
@@ -2578,7 +2626,9 @@ function Inner(props: { readonly installingPrincipalId: string }) {
               {(href) => (
                 <Button href={href()} variant="secondary">
                   {appHandoff
-                    ? `Open in ${appHandoffProductLabel(appHandoff.product)}`
+                    ? t("run.appHandoff.open", {
+                        app: appHandoffProductLabel(appHandoff.product),
+                      })
                     : t("installStore.open")}
                 </Button>
               )}

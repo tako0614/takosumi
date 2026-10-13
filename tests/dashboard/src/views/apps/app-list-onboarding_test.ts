@@ -168,10 +168,15 @@ describe("AppListView app launcher", () => {
     // Tapping the icon goes straight to the explicitly projected launch URL.
     expect(appListSource).toContain("href={url()}");
     expect(appListSource).not.toContain("window.open");
-    // Needs-attention is a corner dot + screen-reader label, not a status pill.
+    // Needs-attention is a corner dot + a short visible caption, not a status
+    // pill — and it says which kind: 更新があります is not a failure.
     expect(appListSource).toContain("av-tile-dot");
-    expect(appListSource).toContain('t("apps.needsAttention")');
-    expect(appListSource).toContain('class="sr-only"');
+    expect(appListSource).toContain("capsuleStatusLabel(status())");
+    expect(appListSource).toContain(
+      'attentionStatus() === "stale" ? "update" : "alert"',
+    );
+    expect(appViewsCssSource).toContain(".av-tile-state-update");
+    expect(appViewsCssSource).toContain(".av-tile-dot-alert");
   });
 
   test("never derives launch readiness or URLs from StateVersion or Store data", () => {

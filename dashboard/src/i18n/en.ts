@@ -20,9 +20,9 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.moduleChoose": "Module directory",
   "installStore.moduleConfirm": "Continue with this module",
   "installStore.moduleUnavailable":
-    "Takosumi could not safely determine this SourceSnapshot's modules.",
+    "Takosumi couldn't safely identify the modules in this repository version.",
   "installStore.moduleMissing":
-    "No installable root module was found in this repository revision.",
+    "No module that can be added was found in this repository version.",
   "installStore.moduleRequirements": "Provider details",
   "installStore.sourceSummary": "Configuration and connections",
   "installStore.selectedModule": "Configuration",
@@ -43,7 +43,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.sourceUrl": "Git URL",
   "installStore.sourceRef": "Ref (optional)",
   "installStore.sourcePath": "Repository subtree (optional)",
-  "installStore.modulePath": "Module path hint",
+  "installStore.modulePath": "Module folder (optional)",
   "installStore.sourceAuth": "Git connection",
   "installStore.publicSource": "Public repository",
   "installStore.add": "Add",
@@ -52,19 +52,17 @@ export const en: Record<keyof typeof ja, string> = {
     "Fetching the repository. The first time can take about a minute.",
   "installStore.preparingWorkspace": "Confirming the selected workspace.",
   "installStore.preparingConnections": "Reading available connections.",
-  "installStore.preparingSource": "Fetching the repository snapshot.",
+  "installStore.preparingSource": "Fetching the repository contents.",
   "installStore.preparingCompatibility":
     "Checking the repository against this environment.",
   "installStore.preparingConfig": "Preparing the service setup fields.",
-  "installStore.preparingPlan": "Preparing the reviewable change plan.",
+  "installStore.preparingPlan": "Preparing the changes for review.",
   "installStore.preparingTimeout":
-    "Preparation took too long. Service deploy did not start, and Source registration could not be confirmed. Verify the Source before trying again.",
+    "Preparation took too long. Nothing was deployed, but we couldn't confirm whether the repository was registered. Check it before trying again.",
   "installStore.sourceRegistrationUnconfirmed":
-    "Service deploy did not start. Source registration could not be confirmed. Retry Add only to reconcile this exact attempt; do not start a new Source.",
+    "Nothing was deployed. We couldn't confirm the repository was registered. Choose Add again to check this same attempt; it won't register the repository twice.",
   "installStore.sourceBaselineUnavailable":
-    "Service deploy did not start. The Source list was temporarily unavailable, so registration did not begin. Wait briefly, then try Add again.",
-  "installStore.compatibilityFailed":
-    "This service cannot be added to the current environment.",
+    "Nothing was deployed. The repository list was temporarily unavailable, so registration didn't start. Wait a moment, then choose Add again.",
   "installStore.providerTitle": "A compatible Host / account is needed",
   "installStore.destinationTitle": "Choose a Host / account",
   "installStore.destinationHint":
@@ -81,36 +79,40 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.setupHint": "Enter only the values this service asks for.",
   "installStore.sourceBuildTitle": "Repository build steps",
   "installStore.sourceBuildHint":
-    "Review these credential-free commands and produced paths before starting the Plan.",
+    "Check these credential-free commands and produced paths before reviewing changes.",
   "installStore.sourceBuildCommand": "Command {index}",
   "installStore.sourceBuildWorkingDirectory": "Working directory",
-  "installStore.sourceBuildSourceRoot": "Source root",
+  "installStore.sourceBuildSourceRoot": "Repository root",
   "installStore.sourceBuildOutputs": "Produced paths",
+  "installStore.setupUnavailableTitle": "Service setup is unavailable",
+  "installStore.secretSetupUnavailableTitle": "Secret setup is unavailable",
+  "installStore.optionalFeatures": "Optional features",
+  "installStore.sourceBuildArguments": "Command arguments",
   "installStore.setupInvalid": "The service setup definition is invalid.",
   "installStore.setupRequired": "Enter {label}.",
   "installStore.secretUnavailable": "Configure this secret as a connection.",
   "installStore.secretHint":
     "Secrets are never sent as variables from this form.",
   "installStore.reviewing": "Reviewing changes",
-  "installStore.reviewingHint": "Checking the Plan before anything is applied.",
+  "installStore.reviewingHint": "Checking the changes before anything is deployed.",
   "installStore.reviewTitle": "Review before adding",
   "installStore.reviewHint": "These are the changes Takosumi will make.",
   "installStore.changes": "Changes",
   "installStore.createCount": "Create",
   "installStore.updateCount": "Change",
   "installStore.deleteCount": "Delete",
-  "installStore.approve": "Approve Plan",
+  "installStore.approve": "Approve this change",
   "installStore.confirmTitle": "These changes need confirmation",
   "installStore.confirmHint":
-    "The Plan includes deletion or another explicitly reviewed change.",
+    "These changes include a deletion or another change that needs your confirmation.",
   "installStore.confirm": "I reviewed these changes",
   "installStore.install": "Add",
   "installStore.runDetails": "Technical details",
   "installStore.installing": "Adding",
   "installStore.installingHint":
     "Keep this page open while installation finishes.",
-  "installStore.planBlocked": "This Plan cannot be applied",
-  "installStore.planBlockedHint": "Review the policy or Plan details.",
+  "installStore.planBlocked": "These changes can't be deployed",
+  "installStore.planBlockedHint": "Check the policy or the change details.",
   "installStore.readinessFailed":
     "The service readiness state could not be checked. Open the technical details for more information.",
   "installStore.activationFailed":
@@ -124,7 +126,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.restartWithLatestSource": "Start again from the latest source",
   "installStore.restartConfirmTitle": "Start again from the latest source?",
   "installStore.restartConfirmMessage":
-    "Takosumi will abandon the unapplied service and fetch the repository again with the same name. The failed Plan remains in history.",
+    "Takosumi will abandon the undeployed service and fetch the repository again with the same name. The failed review stays in Deploy history.",
   "installStore.restartUnavailable":
     "Takosumi could not safely abandon the unapplied service, so it did not start again. Open the technical details for more information.",
   "installStore.doneTitle": "Service added",
@@ -134,7 +136,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.invalidSource": "Enter a valid HTTPS Git URL.",
   "installStore.invalidName":
     "Use lowercase letters, numbers, and hyphens for the service name.",
-  "installStore.planMissing": "The Plan response could not be identified.",
+  "installStore.planMissing": "We couldn't confirm that the review started.",
   "installStore.listingUnavailable":
     "This service is no longer available from the Store.",
   // --- common -------------------------------------------------------------
@@ -219,14 +221,14 @@ export const en: Record<keyof typeof ja, string> = {
   "settings.manage.backups": "Export selected management records",
   "settings.manage.shares": "Manage values shared between services",
   "settings.manage.interfaceRecovery":
-    "Review and queue durable Interface materialization retries",
+    "Review Interfaces that failed to publish and retry them",
   "settings.manage.hostedResources":
     "Review resources managed by the hosted environment",
 
   // --- hosted resources ----------------------------------------------------
   "hostedResources.title": "Hosted resources",
   "hostedResources.subtitle":
-    "Review resources managed for the selected workspace. Changes go through a workload plan.",
+    "Review resources managed for the selected workspace. Changes go through a workload update.",
   "hostedResources.unavailableTitle": "Hosted resources are unavailable",
   "hostedResources.unavailableMessage":
     "This Takosumi environment does not provide the hosted-resource inventory.",
@@ -311,6 +313,10 @@ export const en: Record<keyof typeof ja, string> = {
   "auth.and": " and ",
   "auth.privacyPolicy": "Privacy Policy",
   "auth.termsSuffix": ".",
+  "auth.startFailed":
+    "Couldn't start sign-in. Try again.",
+  "auth.startInsecureContext":
+    "Sign-in can't start over this connection. Open the dashboard over HTTPS (or on localhost).",
   "auth.processing": "Signing you in…",
   "auth.failed": "Sign-in failed",
   "auth.backToSignIn": "Back to sign-in",
@@ -327,10 +333,15 @@ export const en: Record<keyof typeof ja, string> = {
   // --- errors / error boundary ------------------------------------------
   "error.generic": "Something went wrong. Please try again in a moment.",
   "error.planReconcileTimeout":
-    "We stopped waiting for the plan. It may still be running on the server; check its execution status before starting again.",
+    "We stopped waiting for the changes to be ready for review. It may still be running; check Deploy history before starting again.",
   "errorBoundary.title": "Something went wrong",
   "errorBoundary.body":
     "An unexpected error stopped this page from loading. Please reload the page.",
+  "errorBoundary.routeTitle":
+    "This page couldn't be shown",
+  "errorBoundary.routeBody":
+    "An unexpected error stopped this page. The rest of the dashboard still works; try again or reload the page.",
+  "errorBoundary.tryAgain": "Try again",
   "errorBoundary.reload": "Reload",
 
   // --- status labels ----------------------------------------------------
@@ -350,7 +361,7 @@ export const en: Record<keyof typeof ja, string> = {
   "status.run.failed": "Failed",
   "status.run.cancelled": "Cancelled",
   "status.run.expired": "Expired",
-  "status.run.ready_to_deploy": "Ready to run",
+  "status.run.ready_to_deploy": "Ready to deploy",
   "status.policy.pass": "Pass",
   "status.policy.warn": "Warnings",
   "status.policy.deny": "Denied",
@@ -390,7 +401,6 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.sectionYours": "Your apps",
   "apps.manage": "Manage",
   "apps.manageAria": "Manage {name}",
-  "apps.needsAttention": "Needs attention",
   "apps.openApp": "Open app",
   "apps.reviewChanges": "Review changes",
   "apps.start.aria": "First app",
@@ -467,11 +477,12 @@ export const en: Record<keyof typeof ja, string> = {
   "app.deploys.sourceVersionChange": "Change version",
   "app.deploys.sourceVersionInput": "Git ref",
   "app.deploys.sourceVersionHint":
-    "Enter a branch, tag, or commit for this Workload, then review before applying.",
+    "Enter a branch, tag, or commit for this workload, then review before deploying.",
   "app.deploys.sourceVersionApply": "Review this version",
   "app.deploys.sourceVersionUnavailable":
     "The applied source version is unavailable.",
   "app.deploys.empty": "No deploys yet.",
+  "app.deploys.generationBadge": "Version {n}",
   "app.deploys.restore": "Restore this state",
   "app.deploys.restoreDisclosure": "Restore a previous version",
   "app.deploys.advancedActions": "Extra actions",
@@ -494,8 +505,8 @@ export const en: Record<keyof typeof ja, string> = {
   "app.deploys.inventoryGeneration": "Version number",
   "app.deploys.inventoryRecordedAt": "Recorded",
   "app.deploys.inventoryStateVersion": "State version",
-  "app.deploys.inventoryApplyRun": "Apply run",
-  "app.deploys.inventoryPlanRun": "Plan run",
+  "app.deploys.inventoryApplyRun": "Deploy",
+  "app.deploys.inventoryPlanRun": "Review",
   "app.deploys.inventoryEmpty": "No deployed resources were recorded.",
   "app.recentActivity.title": "Recent updates",
   "app.recentActivity.open": "Details",
@@ -589,20 +600,20 @@ export const en: Record<keyof typeof ja, string> = {
   "app.setupIncomplete.body":
     "Setup didn't finish. Retry from the update review, or delete this service in Settings and start over.",
   "app.setupIncomplete.review": "Open updates",
-  "app.setupIncomplete.initialReviewBody": "This install has an accepted initial review. Open that Plan to finish setup; creating a revision would not resume it.",
+  "app.setupIncomplete.initialReviewBody": "This service's first review is waiting. Open it to finish setup; starting an update review won't resume it.",
   "app.setupIncomplete.openInitialReview": "Open initial review",
   "app.setupIncomplete.loadingInitialReview": "Finding the initial review…",
-  "app.setupIncomplete.initialReviewUnavailable": "The initial Plan cannot be identified from the available records. Reopen the original install link if you have it; otherwise ask the operator to inspect the durable coordinator. Do not substitute an update Plan.",
-  "installStore.recoveryUnverified": "Install status could not be verified",
-  "installStore.recoveryUnverifiedHint": "The original install may still be running. Retry this status read or check Workloads and Run history before starting another install.",
-  "installStore.recoveryContinue": "Install preparation can continue",
-  "installStore.recoveryContinueHint": "This coordinator needs another explicit step. Continuing only prepares a reviewable Plan; it does not apply it.",
-  "installStore.recoveryReview": "Initial review is ready",
-  "installStore.recoveryReviewHint": "Open the original Plan to review it. Applying still requires a separate explicit action.",
-  "installStore.recoveryFailed": "Install preparation stopped",
-  "installStore.recoveryFailedHint": "No Plan Run is available from this record. Do not assume partial setup was undone; inspect the Workload or ask the operator before starting another install.",
-  "installStore.recoveryFailedRun": "Install preparation stopped; a Plan Run is available",
-  "installStore.recoveryFailedRunHint": "Open the recorded Plan Run to inspect what happened and choose any available retry explicitly. Nothing will retry or apply automatically.",
+  "app.setupIncomplete.initialReviewUnavailable": "We couldn't find this service's first review. Reopen the original add link if you have it; otherwise contact your operator. Don't use an update review instead.",
+  "installStore.recoveryUnverified": "Couldn't check how adding is going",
+  "installStore.recoveryUnverifiedHint": "The original add may still be running. Check again or look at Deploy history before adding the service again.",
+  "installStore.recoveryContinue": "You can continue adding this service",
+  "installStore.recoveryContinueHint": "One more step is needed. Continuing only prepares the changes for review; nothing is deployed.",
+  "installStore.recoveryReview": "The first review is ready",
+  "installStore.recoveryReviewHint": "Open the first review to check it. Deploying is a separate step.",
+  "installStore.recoveryFailed": "Adding stopped",
+  "installStore.recoveryFailedHint": "No review is available from this record. Partial setup may not have been undone; check the workload or ask your operator before adding it again.",
+  "installStore.recoveryFailedRun": "Adding stopped; the review is available",
+  "installStore.recoveryFailedRunHint": "Open the recorded review to see what happened, and choose a retry yourself if one is offered. Nothing retries or deploys automatically.",
 
   // --- run view --------------------------------------------------------------
   "run.title.plan": "Review changes",
@@ -643,8 +654,8 @@ export const en: Record<keyof typeof ja, string> = {
   "run.summary.readinessUnavailableHint":
     "Takosumi will retry the readiness read. The apply is not reported as ready until the check succeeds.",
   "run.summary.applySucceeded": "Deploy complete.",
-  "run.summary.removing": "Removing…",
-  "run.summary.removed": "Removal complete.",
+  "run.summary.removing": "Deleting…",
+  "run.summary.removed": "Deletion complete.",
   "run.summary.failed": "{operation} failed.",
   "controlError.stateGenerationMismatch":
     "Another change ran first. Review the changes again before deploying.",
@@ -662,8 +673,12 @@ export const en: Record<keyof typeof ja, string> = {
     "The check result is out of date. Check again.",
   "controlError.runnerUnavailable":
     "The run environment isn't available right now. Try again in a moment.",
+  "controlError.sourceSyncPending":
+    "The repository contents are still being fetched. Wait a moment and try again.",
+  "controlError.planFailed":
+    "The changes couldn't be prepared for review. Check Deploy history, then try again.",
   "controlError.slotLimitReached":
-    "You've reached your limit. Remove a service you no longer need, or contact your operator.",
+    "You've reached your limit. Delete a service you no longer need, or contact your operator.",
   "controlError.capsuleNotFound":
     "That service could not be found. It may have been deleted.",
   "controlError.configNotFound":
@@ -853,6 +868,8 @@ export const en: Record<keyof typeof ja, string> = {
   "new.compat.ready": "Can be added as is",
   "new.compat.patch": "Needs manual changes",
   "new.compat.unsupported": "Cannot be added right now",
+  "new.compat.summary.checkFailed":
+    "The pre-add check couldn't finish. This isn't necessarily a problem with the service — try again.",
   "new.compat.summary.providerCredentials":
     "Remove {provider} private values from the source before adding this.",
   "new.compat.summary.installUxInvalid":
@@ -866,11 +883,11 @@ export const en: Record<keyof typeof ja, string> = {
   "new.compat.issue.installUxInvalid.message":
     "The app's setup declaration does not match the selected version.",
   "new.compat.issue.installUxInvalid.detail":
-    "Choose another version or ask the app publisher to update .well-known/takosumi.json. Takosumi will not replace it with raw module variables.",
+    "Choose another version or ask the app publisher to update .well-known/takosumi.json. Takosumi won't guess the setup fields for you.",
   "new.compat.issue.providerPreserved.message":
     "The repository's non-secret {provider} configuration will be preserved.",
   "new.compat.issue.backendIsolated.message":
-    "The repository backend configuration is preserved while Takosumi isolates the Run state boundary.",
+    "The repository's own storage settings are kept; Takosumi keeps this service's deployment records separately.",
   "new.compat.issue.lockfile.message":
     "Pinned connection target information is included. After private values are removed, the pinned targets will be reviewed during add.",
   "new.compat.issue.reviewRequired.message":
@@ -964,7 +981,7 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
-    "Connect an external provider with your own credentials. Availability follows the operator provider policy, runner capability, and Run approval rules.",
+    "Connect an external provider with your own credentials. Whether it can be used depends on your operator's policy and on approval at deploy time.",
   "conn.providerConnections.title": "Connected accounts",
   "conn.expiresAt": "Expires: {date}",
   "conn.oauth.connected": "Provider connection saved.",
@@ -997,10 +1014,10 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.guided.instructions": "Show steps",
   "conn.byok.title": "Connect an external provider with your own key",
   "conn.byok.body":
-    "Enter the provider source and the environment variables it requires. The connection remains subject to provider policy, runner capability, and Run approval.",
+    "Enter the provider source and the environment variables it needs. This connection also follows your operator's policy and deploy-time approval.",
   "conn.byok.noBillingNote":
-    "Any Takosumi charge is shown during preview. Charges from the external provider are billed separately by that provider.",
-  "conn.byok.usePreset": "Use an installed recipe instead",
+    "Any Takosumi charge is shown when you review changes. Charges from the external provider are billed separately by that provider.",
+  "conn.byok.usePreset": "Use a ready-made connection instead",
   "conn.register": "Save connection",
   "conn.registering": "Saving…",
   "conn.genericEnv.providerName": "Provider source",
@@ -1015,14 +1032,14 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.genericEnv.invalidName":
     "“{name}” isn’t a valid env name. Use an uppercase env name like EXAMPLE_API_TOKEN.",
   "conn.genericEnv.reservedName":
-    "“{name}” is reserved for the runner. Use a provider-specific env name.",
+    "“{name}” is reserved by Takosumi. Use a provider-specific env name.",
   "conn.genericEnv.duplicateName": "“{name}” is already added.",
   "conn.genericEnv.oneRequired": "Enter at least one value.",
   "conn.error.invalidProvider": "Invalid connection target.",
   "conn.error.fieldRequired": "{field} is required.",
   "conn.empty.title": "Connect an external provider with your own key",
   "conn.empty.message":
-    "Connect your own credentials to use an external provider within the installed policy, runner, approval, and billing rules.",
+    "Connect your own credentials to use an external provider within your operator's policy, approval, and billing rules.",
   "conn.test": "Check access",
   "conn.testing": "Checking…",
   "conn.test.notReady": "The account is not ready yet (status: {status}).",
@@ -1166,7 +1183,7 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.event.autoUpdateFailedDetail":
     "Review the update from the service screen",
   "notif.event.recorded": "Recorded activity",
-  "notif.otherWorkspace": "Other workspace @{handle}",
+  "notif.otherWorkspace": "Other workspace: {name}",
 
   // --- activity -------------------------------------------------------------------
   "activity.title": "Activity history",
@@ -1174,8 +1191,9 @@ export const en: Record<keyof typeof ja, string> = {
   "activity.details": "Reference info",
   "activity.detailsBody": "Use these details when you need an event reference.",
   "activity.debug": "Reference ID",
-  "activity.recorded": "Recorded activity",
   "activity.actorLine": "By {actor}",
+  "activity.actorYou": "You",
+  "activity.actorSystem": "Takosumi (automatic)",
   "activity.empty.title": "No activity yet",
   "activity.empty.message": "Operations in this workspace are recorded here.",
 
@@ -1304,7 +1322,7 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.usage.empty": "No usage yet.",
   "billing.usage.kind": "Kind",
   "billing.usage.time": "Time",
-  "billing.usage.kind.runner_minute": "Runner time",
+  "billing.usage.kind.runner_minute": "Run time",
   "billing.usage.kind.operation": "Service operation",
   "billing.usage.kind.compute": "Compute",
   "billing.usage.kind.storage": "Storage",

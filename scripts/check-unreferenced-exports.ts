@@ -18,7 +18,7 @@ export interface UnreferencedExportReport {
  * tracks that module and only counts actual TypeScript symbol references.
  */
 export const UNREFERENCED_EXPORT_BUDGETS: readonly UnreferencedExportBudget[] = [
-  { file: "dashboard/src/views/new/install-helpers.ts", maximum: 24 },
+  { file: "dashboard/src/views/new/install-helpers.ts", maximum: 19 },
 ];
 
 const EXCLUDED_DIRECTORIES = [

@@ -109,9 +109,12 @@ describe("Workspace settings user-facing noise", () => {
     expect(en["conn.empty.message"]).toContain("policy");
     expect(en["conn.empty.message"]).toContain("approval");
     expect(en["conn.empty.message"]).toContain("billing");
-    expect(ja["conn.empty.message"]).toContain("policy");
-    expect(ja["conn.empty.message"]).toContain("approval");
-    expect(ja["conn.empty.message"]).toContain("billing");
+    // The Japanese copy says the same three limits in Japanese; the English
+    // words it used to carry read as untranslated jargon.
+    expect(ja["conn.empty.message"]).toContain("ポリシー");
+    expect(ja["conn.empty.message"]).toContain("承認");
+    expect(ja["conn.empty.message"]).toContain("料金");
+    expect(ja["conn.empty.message"]).not.toMatch(/policy|approval|billing/u);
     expect(en["conn.empty.message"]).not.toContain("any provider runs");
     expect(ja["conn.empty.message"]).not.toContain("どのプロバイダーでも");
   });

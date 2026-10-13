@@ -54,21 +54,57 @@ describe("i18n dictionaries", () => {
       "OpenTofu",
       "Terraform",
     ];
-    // "any OpenTofu / Terraform provider runs" is the product's actual promise
-    // on the bring-your-own-key screen — naming the ecosystem there is the
-    // point, not a leak.
-    const allowed = new Set(["conn.byok.body"]);
-
     for (const [locale, messages] of [
       ["ja", ja],
       ["en", en],
     ] as const) {
       for (const [key, value] of Object.entries(messages)) {
-        if (allowed.has(key)) continue;
         for (const term of blockedTerms) {
           expect({ locale, key, term, value }).not.toEqual(
             expect.objectContaining({ value: expect.stringContaining(term) }),
           );
+        }
+      }
+    }
+  });
+
+  test("run stages read as review and deploy, never the engine's nouns", () => {
+    // The add flow, workload detail and connections screens had drifted back
+    // to "Approve Plan", "Plan Run", "SourceSnapshot" and "runner capability".
+    // The product names the stages 変更の確認 / review and デプロイ / deploy
+    // (see `op.*`). Lower-case "plan" and プラン stay allowed: a pricing plan
+    // is ordinary product language.
+    const blocked: readonly (string | RegExp)[] = [
+      /\bPlan\b/,
+      "Plan run",
+      "Apply run",
+      "Apply 実行",
+      "SourceSnapshot",
+      "coordinator",
+      "永続記録",
+      "provider policy",
+      "runner capability",
+      "Run approval",
+      "Recipe",
+      "state 境界",
+      "state boundary",
+      "root module",
+      "module path",
+    ];
+    for (const [locale, messages] of [
+      ["ja", ja],
+      ["en", en],
+    ] as const) {
+      for (const [key, value] of Object.entries(messages)) {
+        for (const term of blocked) {
+          const leaked =
+            typeof term === "string" ? value.includes(term) : term.test(value);
+          expect({ locale, key, term: String(term), leaked }).toEqual({
+            locale,
+            key,
+            term: String(term),
+            leaked: false,
+          });
         }
       }
     }

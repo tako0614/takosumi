@@ -110,7 +110,7 @@ describe("RunView", () => {
     // run.loading — the skeleton is for the INITIAL load only (mirrors
     // RunGroupView), and `.latest` keeps rendering during refetches.
     expect(source).toContain(
-      "<Match when={run.loading && !run.error && !run.latest}>",
+      "<Match when={run.loading && !run.error && !runLatest()}>",
     );
     expect(source).not.toContain("<Match when={run.loading}>");
   });
@@ -151,7 +151,7 @@ describe("RunView", () => {
       restart.indexOf("navigate("),
     );
     expect(source).toContain("ordinaryRetryAllowed()");
-    expect(source).toContain("capsule.latest?.id !== r.capsuleId");
+    expect(source).toContain("capsuleLatest()?.id !== r.capsuleId");
     expect(source).toContain('t("run.restartLatestSource")');
     expect(ja["run.restartLatestSource"]).toContain("最新のソース");
     expect(en["run.restartLatestSource"]).toContain("latest source");
