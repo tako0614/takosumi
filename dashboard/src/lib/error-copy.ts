@@ -159,6 +159,11 @@ const REASON_MESSAGES: Readonly<Record<string, MessageKey>> = {
 const CODE_MESSAGES: Readonly<Record<string, MessageKey>> = {
   install_plan_reconcile_timeout: "error.planReconcileTimeout",
   revision_plan_reconcile_timeout: "error.planReconcileTimeout",
+  // Raised by the dashboard itself with an English sentence and a 4xx
+  // status, which friendlyError would otherwise pass straight to the screen.
+  source_sync_required: "controlError.sourceSyncPending",
+  install_plan_failed: "controlError.planFailed",
+  revision_plan_failed: "controlError.planFailed",
 };
 
 function mappedControlApiMessage(
@@ -168,7 +173,11 @@ function mappedControlApiMessage(
   if (!(err instanceof ControlApiError)) return undefined;
   const codeKey = err.code ? CODE_MESSAGES[err.code] : undefined;
   if (codeKey) return t(codeKey);
-  const key = err.reason ? REASON_MESSAGES[err.reason] : undefined;
+  // A plan diagnostic arrives as the error CODE (no `reason`), and it uses
+  // the same snake_case vocabulary — look it up there too.
+  const key =
+    (err.reason ? REASON_MESSAGES[err.reason] : undefined) ??
+    (err.code ? REASON_MESSAGES[err.code] : undefined);
   return key ? t(key) : undefined;
 }
 

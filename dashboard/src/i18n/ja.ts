@@ -400,7 +400,6 @@ export const ja = {
   "apps.sectionYours": "あなたのアプリ",
   "apps.manage": "管理",
   "apps.manageAria": "管理: {name}",
-  "apps.needsAttention": "要対応",
   "apps.openApp": "アプリを開く",
   "apps.reviewChanges": "変更を確認",
   "apps.start.aria": "最初のアプリ",
@@ -479,6 +478,7 @@ export const ja = {
   "app.deploys.sourceVersionUnavailable":
     "現在の適用済みバージョンを取得できません。",
   "app.deploys.empty": "まだデプロイ履歴はありません。",
+  "app.deploys.generationBadge": "第{n}版",
   "app.deploys.restore": "この状態に戻す",
   "app.deploys.restoreDisclosure": "以前の状態に戻す",
   "app.deploys.advancedActions": "必要なときだけ使う操作",
@@ -672,6 +672,10 @@ export const ja = {
     "確認結果が古くなりました。もう一度確認してください。",
   "controlError.runnerUnavailable":
     "実行環境をいま利用できません。時間をおいてもう一度お試しください。",
+  "controlError.sourceSyncPending":
+    "リポジトリの内容をまだ取得しています。少し待ってからもう一度お試しください。",
+  "controlError.planFailed":
+    "変更内容を準備できませんでした。デプロイ履歴で状況を確認してから、もう一度お試しください。",
   "controlError.slotLimitReached":
     "利用できる枠の上限に達しました。不要なサービスを削除するか、運営者にお問い合わせください。",
   "controlError.capsuleNotFound":
@@ -1176,7 +1180,7 @@ export const ja = {
   "notif.event.autoUpdateFailedDetail":
     "サービス画面から更新内容を確認してください",
   "notif.event.recorded": "記録された操作",
-  "notif.otherWorkspace": "別のワークスペース @{handle}",
+  "notif.otherWorkspace": "別のワークスペース「{name}」",
 
   // --- activity -------------------------------------------------------------------
   "activity.title": "操作履歴",
@@ -1184,8 +1188,9 @@ export const ja = {
   "activity.details": "参照情報",
   "activity.detailsBody": "イベントを確認するときに使う参照情報です。",
   "activity.debug": "参照 ID",
-  "activity.recorded": "記録された操作",
   "activity.actorLine": "実行者: {actor}",
+  "activity.actorYou": "あなた",
+  "activity.actorSystem": "Takosumi（自動）",
   "activity.empty.title": "まだ記録はありません",
   "activity.empty.message":
     "このワークスペースで操作が行われると、ここに記録されます。",

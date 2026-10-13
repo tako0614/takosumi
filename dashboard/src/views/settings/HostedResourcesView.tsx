@@ -31,6 +31,7 @@ import {
   type HostedResourceInventoryItem,
 } from "../../lib/hosted-resources.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
+import { createServiceNames } from "../../lib/service-names.ts";
 import { type MessageKey, t } from "../../i18n/index.ts";
 
 interface HostedResourceStatus {
@@ -43,6 +44,7 @@ export default function HostedResourcesView(): JSX.Element {
 }
 
 function Inner(): JSX.Element {
+  const serviceNames = createServiceNames(currentWorkspaceId);
   const [contribution, { refetch: refetchContribution }] = createResource(
     () => loadHostedResourceContribution(),
   );
@@ -107,7 +109,7 @@ function Inner(): JSX.Element {
       },
       {
         header: t("hostedResources.column.workload"),
-        cell: (item) => workloadLink(item),
+        cell: (item) => workloadLink(item, serviceNames()),
       },
     ],
   );
@@ -256,7 +258,12 @@ function Inner(): JSX.Element {
             </div>
             <div class="hosted-resources-cards" aria-label={t("hostedResources.title")}>
               <For each={items()}>
-                {(item) => <HostedResourceCard item={item} />}
+                {(item) => (
+                  <HostedResourceCard
+                    item={item}
+                    serviceNames={serviceNames()}
+                  />
+                )}
               </For>
             </div>
           </Card>
@@ -295,6 +302,7 @@ function Inner(): JSX.Element {
 
 function HostedResourceCard(props: {
   readonly item: HostedResourceInventoryItem;
+  readonly serviceNames: ReadonlyMap<string, string>;
 }): JSX.Element {
   const status = () => hostedResourceStatus(props.item.conditions);
   return (
@@ -313,24 +321,31 @@ function HostedResourceCard(props: {
         </div>
         <div>
           <dt>{t("hostedResources.column.workload")}</dt>
-          <dd>{workloadLink(props.item)}</dd>
+          <dd>{workloadLink(props.item, props.serviceNames)}</dd>
         </div>
       </dl>
     </article>
   );
 }
 
-function workloadLink(item: HostedResourceInventoryItem): JSX.Element {
+function workloadLink(
+  item: HostedResourceInventoryItem,
+  serviceNames: ReadonlyMap<string, string>,
+): JSX.Element {
   if (!item.workloadId) {
     return <span aria-label={t("hostedResources.noWorkload")}>—</span>;
   }
+  // The inventory records only the workload id; show its name when this
+  // Workspace knows it, keeping the id on hover.
+  const label = serviceNames.get(item.workloadId) ?? item.workloadId;
   return (
     <A
       class="hosted-resources-workload"
       href={`/workloads/${encodeURIComponent(item.workloadId)}`}
-      aria-label={`${t("hostedResources.openWorkload")}: ${item.workloadId}`}
+      title={item.workloadId}
+      aria-label={`${t("hostedResources.openWorkload")}: ${label}`}
     >
-      {item.workloadId}
+      {label}
     </A>
   );
 }

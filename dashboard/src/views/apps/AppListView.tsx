@@ -41,9 +41,11 @@ import {
 } from "../../lib/control-api.ts";
 import {
   type AppSurface,
+  effectiveCapsuleStatus,
   isVisibleServiceCapsule,
   needsAttention,
 } from "../../lib/capsules-ui.ts";
+import { capsuleStatusLabel } from "../../lib/labels.ts";
 import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { Button, Toast } from "../../components/ui/index.ts";
@@ -376,6 +378,12 @@ function AppLauncher(props: { readonly tiles: readonly AppTile[] }) {
 function AppTileView(props: { readonly tile: AppTile }) {
   const surface = () => props.tile.surface;
   const attention = () => needsAttention(props.tile.inst);
+  // Say WHICH kind of attention: an available update read the same as a
+  // failure (one dot + a screen-reader-only "要対応").
+  const attentionStatus = () =>
+    attention() ? effectiveCapsuleStatus(props.tile.inst) : undefined;
+  const attentionKind = () =>
+    attentionStatus() === "stale" ? "update" : "alert";
   const name = () => surface().name ?? props.tile.inst.name;
   const openUrl = () => surface().url;
   // Product-specific marks come only from the Interface document. A Capsule
@@ -396,12 +404,16 @@ function AppTileView(props: { readonly tile: AppTile }) {
         emoji={icon().emoji}
       >
         <Show when={attention()}>
-          <span class="av-tile-dot" />
+          <span class={`av-tile-dot av-tile-dot-${attentionKind()}`} />
         </Show>
       </AppFace>
       <span class="av-tile-name">{name()}</span>
-      <Show when={attention()}>
-        <span class="sr-only">{t("apps.needsAttention")}</span>
+      <Show when={attentionStatus()}>
+        {(status) => (
+          <span class={`av-tile-state av-tile-state-${attentionKind()}`}>
+            {capsuleStatusLabel(status())}
+          </span>
+        )}
       </Show>
     </>
   );

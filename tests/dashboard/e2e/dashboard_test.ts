@@ -7,6 +7,7 @@ import {
   type Route,
 } from "@playwright/test";
 import {
+  PORTABLE_CAPSULES,
   PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
   PORTABLE_EXPECTATIONS,
   PORTABLE_SOURCE_COMMIT,
@@ -3471,6 +3472,75 @@ test.describe("Takosumi dashboard browser surface", () => {
     // launcher survive instead of resetting to first-Workspace onboarding.
     expect(await readSelection()).toBe(selected);
     await expect(appTile).toBeVisible();
+    await assertNoPageErrors(errors);
+  });
+
+  test("history and the launcher name people, services and state in words", async ({
+    page,
+  }) => {
+    test.skip(mode !== "portable", "synthetic history rows are portable-only");
+    const errors = pageErrors(page);
+    await page.route(
+      (url) => url.pathname === "/api/v1/workspaces/ws_alpha/activity",
+      (route) =>
+      route.fulfill({
+        json: {
+          events: [
+            {
+              id: "act_e2e_applied",
+              workspaceId: "ws_alpha",
+              actorId: "sub_portable_e2e",
+              action: "run.applied",
+              targetType: "run",
+              targetId: "run_e2e_applied",
+              metadata: { capsuleId: "cap_repository_office" },
+              createdAt: "2026-08-01T00:00:03.000Z",
+            },
+          ],
+        },
+      }),
+    );
+    await gotoDashboardDocument(page, "/activity");
+    // The event records only ids: the row names the service and reads your
+    // own subject as you instead of `sub_…`.
+    await expect(
+      page.getByText(
+        /Deployed changes to “Repository Office”|「Repository Office」の変更をデプロイしました/u,
+      ),
+    ).toBeVisible();
+    await expect(page.getByText(/^(By You|実行者: あなた)$/u)).toBeVisible();
+    await expect(page.locator(".wa-activity-rowmeta")).not.toContainText(
+      "sub_portable_e2e",
+    );
+
+    // An empty notification feed offers the next step, not just a sentence.
+    await gotoDashboardDocument(page, "/notifications");
+    await expect(
+      page.getByRole("main").getByRole("link", { name: /^(Add service|サービスを追加)$/u }),
+    ).toBeVisible();
+
+    // An available update is said in words on the tile, not only as a dot.
+    await page.route(
+      (url) => url.pathname === "/api/v1/workspaces/ws_alpha/capsules",
+      (route) =>
+      route.fulfill({
+        json: {
+          capsules: [
+            {
+              ...PORTABLE_CAPSULES.ws_alpha[0],
+              freshness: "stale",
+            },
+          ],
+        },
+      }),
+    );
+    await gotoDashboardDocument(page, "/");
+    const tile = page
+      .locator("a.av-tile")
+      .filter({ hasText: expectations.appName })
+      .first();
+    await expect(tile).toContainText(/Update available|更新があります/u);
+    await expect(tile.locator(".av-tile-dot")).toBeVisible();
     await assertNoPageErrors(errors);
   });
 

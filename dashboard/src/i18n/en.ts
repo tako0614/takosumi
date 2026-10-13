@@ -394,7 +394,6 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.sectionYours": "Your apps",
   "apps.manage": "Manage",
   "apps.manageAria": "Manage {name}",
-  "apps.needsAttention": "Needs attention",
   "apps.openApp": "Open app",
   "apps.reviewChanges": "Review changes",
   "apps.start.aria": "First app",
@@ -476,6 +475,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.deploys.sourceVersionUnavailable":
     "The applied source version is unavailable.",
   "app.deploys.empty": "No deploys yet.",
+  "app.deploys.generationBadge": "Version {n}",
   "app.deploys.restore": "Restore this state",
   "app.deploys.restoreDisclosure": "Restore a previous version",
   "app.deploys.advancedActions": "Extra actions",
@@ -647,8 +647,8 @@ export const en: Record<keyof typeof ja, string> = {
   "run.summary.readinessUnavailableHint":
     "Takosumi will retry the readiness read. The apply is not reported as ready until the check succeeds.",
   "run.summary.applySucceeded": "Deploy complete.",
-  "run.summary.removing": "Removing…",
-  "run.summary.removed": "Removal complete.",
+  "run.summary.removing": "Deleting…",
+  "run.summary.removed": "Deletion complete.",
   "run.summary.failed": "{operation} failed.",
   "controlError.stateGenerationMismatch":
     "Another change ran first. Review the changes again before deploying.",
@@ -666,8 +666,12 @@ export const en: Record<keyof typeof ja, string> = {
     "The check result is out of date. Check again.",
   "controlError.runnerUnavailable":
     "The run environment isn't available right now. Try again in a moment.",
+  "controlError.sourceSyncPending":
+    "The repository contents are still being fetched. Wait a moment and try again.",
+  "controlError.planFailed":
+    "The changes couldn't be prepared for review. Check Deploy history, then try again.",
   "controlError.slotLimitReached":
-    "You've reached your limit. Remove a service you no longer need, or contact your operator.",
+    "You've reached your limit. Delete a service you no longer need, or contact your operator.",
   "controlError.capsuleNotFound":
     "That service could not be found. It may have been deleted.",
   "controlError.configNotFound":
@@ -1168,7 +1172,7 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.event.autoUpdateFailedDetail":
     "Review the update from the service screen",
   "notif.event.recorded": "Recorded activity",
-  "notif.otherWorkspace": "Other workspace @{handle}",
+  "notif.otherWorkspace": "Other workspace: {name}",
 
   // --- activity -------------------------------------------------------------------
   "activity.title": "Activity history",
@@ -1176,8 +1180,9 @@ export const en: Record<keyof typeof ja, string> = {
   "activity.details": "Reference info",
   "activity.detailsBody": "Use these details when you need an event reference.",
   "activity.debug": "Reference ID",
-  "activity.recorded": "Recorded activity",
   "activity.actorLine": "By {actor}",
+  "activity.actorYou": "You",
+  "activity.actorSystem": "Takosumi (automatic)",
   "activity.empty.title": "No activity yet",
   "activity.empty.message": "Operations in this workspace are recorded here.",
 

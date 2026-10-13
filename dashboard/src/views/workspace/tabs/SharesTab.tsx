@@ -47,6 +47,7 @@ import {
 import { fetchFailedMessage } from "../../../lib/error-copy.ts";
 import { latestOrUndefined } from "../../../lib/resource-read.ts";
 import { randomUuid } from "../../../lib/random-uuid.ts";
+import { createServiceNames } from "../../../lib/service-names.ts";
 
 type OutputDraft = {
   readonly id: string;
@@ -130,7 +131,7 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
     for (const s of workspacePage.error
       ? []
       : (workspacePage.latest?.workspaces ?? []))
-      map.set(s.id, `@${s.handle}`);
+      map.set(s.id, workspaceDisplayLabel(s));
     for (const [id, label] of shareWorkspaceLabels.error
       ? []
       : (shareWorkspaceLabels.latest ?? [])) {
@@ -139,11 +140,9 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
     return map;
   });
 
-  const capsuleName = createMemo(() => {
-    const map = new Map<string, string>();
-    for (const inst of producerCapsules()) map.set(inst.id, inst.name);
-    return map;
-  });
+  // Includes deleted services: a share outlives its producer, and the row
+  // should still say which service it came from.
+  const capsuleName = createServiceNames(workspaceId);
 
   const create = createAction(async () => {
     setFormError(null);
@@ -285,10 +284,10 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
         const from = share.fromWorkspaceId;
         const to = share.toWorkspaceId;
         return (
-          <span class="wb-mono">
-            <code>{workspaceName().get(from) ?? from}</code>
+          <span>
+            <WorkspaceLabel id={from} names={workspaceName()} />
             <span class="muted"> → </span>
-            <code>{workspaceName().get(to) ?? to}</code>
+            <WorkspaceLabel id={to} names={workspaceName()} />
           </span>
         );
       },
@@ -667,6 +666,23 @@ function normalizeOutputDrafts(rows: readonly OutputDraft[]): readonly {
     }));
 }
 
+/** Display name first (the handle is an identifier, not the name). */
+function workspaceDisplayLabel(workspace: Workspace): string {
+  return workspace.displayName?.trim() || `@${workspace.handle}`;
+}
+
+/** A Workspace by name, or its opaque id (monospace) when not visible. */
+function WorkspaceLabel(props: {
+  readonly id: string;
+  readonly names: ReadonlyMap<string, string>;
+}) {
+  return (
+    <Show when={props.names.get(props.id)} fallback={<code>{props.id}</code>}>
+      {(name) => <span title={props.id}>{name()}</span>}
+    </Show>
+  );
+}
+
 async function loadWorkspaceLabels(
   ids: readonly string[],
 ): Promise<readonly (readonly [string, string])[]> {
@@ -682,7 +698,7 @@ async function loadWorkspaceLabels(
       if (!id) continue;
       try {
         const workspace: Workspace = await getWorkspace(id);
-        results[index] = [id, `@${workspace.handle}`];
+        results[index] = [id, workspaceDisplayLabel(workspace)];
       } catch {
         // A share may reference a Workspace no longer visible to this account;
         // the row safely falls back to its opaque id.

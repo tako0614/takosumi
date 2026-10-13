@@ -1343,7 +1343,9 @@ function DeploysTab(props: {
                         </Show>
                         <Show when={!isCurrent()}>
                           <Badge tone="neutral">
-                            {`Generation ${stateVersion.generation}`}
+                            {t("app.deploys.generationBadge", {
+                              n: String(stateVersion.generation),
+                            })}
                           </Badge>
                         </Show>
                         <Show when={!isCurrent()}>
