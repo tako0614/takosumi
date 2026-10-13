@@ -13,27 +13,9 @@ APP_DOCS_DIST="${APP_DOCS_DIR}/.vitepress/dist"
 DASHBOARD_DOCS_DIST="${REPO_ROOT}/dashboard/dist/docs"
 VITEPRESS_BIN="${DOCS_DIR}/node_modules/.bin/vitepress"
 
-install_docs_node_modules() {
-  cd "${DOCS_DIR}"
-  if command -v npm >/dev/null 2>&1; then
-    npm --loglevel=error ci --no-fund --no-audit
-    return
-  fi
-  if command -v bun >/dev/null 2>&1; then
-    if [ -f bun.lock ] || [ -f bun.lockb ]; then
-      bun install --frozen-lockfile
-    else
-      bun install
-    fi
-    return
-  fi
-  echo "[takosumi/app-docs] FATAL: npm or bun is required to install vitepress" >&2
-  exit 1
-}
-
 if [ ! -x "${VITEPRESS_BIN}" ]; then
-  echo "[takosumi/app-docs] install docs dependencies for vitepress"
-  install_docs_node_modules
+  echo "[takosumi/app-docs] FATAL: VitePress is missing or not executable; run npm ci --prefix docs --include=dev --no-audit --no-fund from the repository root before building or releasing" >&2
+  exit 1
 fi
 
 echo "[takosumi/app-docs] build Takosumi hosted service docs"

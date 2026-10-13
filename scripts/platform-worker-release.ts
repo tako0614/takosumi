@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
+  accessSync,
   closeSync,
   chmodSync,
   constants,
@@ -2536,6 +2537,15 @@ export async function buildPlatformDashboardOnce(
   command: PlatformReleaseCommand,
   root: string,
 ): Promise<DashboardAssetSeal> {
+  // Both the official deterministic plan and routine code lane enter here.
+  // Refuse before building anything; dependency installation is preparation.
+  try {
+    accessSync(resolve(root, "docs/node_modules/.bin/vitepress"), constants.X_OK);
+  } catch {
+    throw new Error(
+      "platform_worker_release_docs_dependencies_missing: run npm ci --prefix docs --include=dev --no-audit --no-fund before release",
+    );
+  }
   await command(
     ["bun", "run", "build"],
     undefined,
