@@ -42,6 +42,7 @@ import {
   splitSqlStatements,
 } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
+import { workerdD1Database, workerdD1Module } from "../../../helpers/deploy-control/workerd_d1.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
 import { StaticSecretConnectionVault } from "../../../../core/adapters/vault/mod.ts";
@@ -437,11 +438,11 @@ describe("Capsule execution authority", () => {
   test("workerd D1 runtime-safety read excludes only the queued Destroy", async () => {
     const runtime = new Miniflare({
       compatibilityDate: "2026-07-17",
-      modules: [{ type: "ESModule", path: "runtime-safety-read.mjs", contents: "export default {fetch(){return new Response('ok')}}" }],
+      modules: [workerdD1Module("runtime-safety-read.mjs")],
       d1Databases: { CONTROL: "runtime-safety-read" },
     });
     try {
-      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const database = workerdD1Database(runtime);
       const store = new CloudflareD1OpenTofuControlStore(database);
       await store.putCapsule(capsule());
       const prior: ApplyRun = {
@@ -559,11 +560,11 @@ describe("Capsule execution authority", () => {
   test("Workspace metadata and member guards execute on isolated workerd D1", async () => {
     const runtime = new Miniflare({
       compatibilityDate: "2026-07-17",
-      modules: [{ type: "ESModule", path: "workspace-writes.mjs", contents: "export default {fetch(){return new Response('ok')}}" }],
+      modules: [workerdD1Module("workspace-writes.mjs")],
       d1Databases: { CONTROL: "workspace-writes" },
     });
     try {
-      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const database = workerdD1Database(runtime);
       const store = new CloudflareD1OpenTofuControlStore(database);
       const service = new WorkspacesService({ store });
       const workspace = await service.createWorkspace({
@@ -613,11 +614,11 @@ describe("Capsule execution authority", () => {
   test("Connection registration rolls back a failed blob insert on isolated workerd D1", async () => {
     const runtime = new Miniflare({
       compatibilityDate: "2026-07-17",
-      modules: [{ type: "ESModule", path: "connection-registration.mjs", contents: "export default {fetch(){return new Response('ok')}}" }],
+      modules: [workerdD1Module("connection-registration.mjs")],
       d1Databases: { CONTROL: "connection-registration" },
     });
     try {
-      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const database = workerdD1Database(runtime);
       const store = new CloudflareD1OpenTofuControlStore(database);
       const service = new WorkspacesService({ store });
       const workspace = await service.createWorkspace({ handle: "connection-registration",
@@ -667,11 +668,11 @@ describe("Capsule execution authority", () => {
   test("Connection revocation rolls back a failed second delete on isolated workerd D1", async () => {
     const runtime = new Miniflare({
       compatibilityDate: "2026-07-17",
-      modules: [{ type: "ESModule", path: "connection-revoke.mjs", contents: "export default {fetch(){return new Response('ok')}}" }],
+      modules: [workerdD1Module("connection-revoke.mjs")],
       d1Databases: { CONTROL: "connection-revoke" },
     });
     try {
-      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const database = workerdD1Database(runtime);
       const store = new CloudflareD1OpenTofuControlStore(database);
       const service = new WorkspacesService({ store });
       const workspace = await service.createWorkspace({ handle: "connection-revoke", displayName: "Revoke",
@@ -711,11 +712,11 @@ describe("Capsule execution authority", () => {
   test("Connection actor revocation fences final writes on isolated workerd D1", async () => {
     const runtime = new Miniflare({
       compatibilityDate: "2026-07-17",
-      modules: [{ type: "ESModule", path: "connection-actor.mjs", contents: "export default {fetch(){return new Response('ok')}}" }],
+      modules: [workerdD1Module("connection-actor.mjs")],
       d1Databases: { CONTROL: "connection-actor" },
     });
     try {
-      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const database = workerdD1Database(runtime);
       let beforeBatch: (() => Promise<void>) | undefined;
       const store = new CloudflareD1OpenTofuControlStore({
         prepare: (query) => database.prepare(query),
@@ -769,11 +770,11 @@ describe("Capsule execution authority", () => {
   test("Connection test results fence in-batch races on isolated workerd D1", async () => {
     const runtime = new Miniflare({
       compatibilityDate: "2026-07-17",
-      modules: [{ type: "ESModule", path: "connection-test.mjs", contents: "export default {fetch(){return new Response('ok')}}" }],
+      modules: [workerdD1Module("connection-test.mjs")],
       d1Databases: { CONTROL: "connection-test" },
     });
     try {
-      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const database = workerdD1Database(runtime);
       let beforeBatch: (() => Promise<void>) | undefined;
       const interleaved: D1Database = {
         prepare: (query) => database.prepare(query),
@@ -843,11 +844,11 @@ describe("Capsule execution authority", () => {
   test("Run claims, approvals and continuation markers require their original epoch in the final workerd D1 update", async () => {
     const runtime = new Miniflare({
       compatibilityDate: "2026-07-17",
-      modules: [{ type: "ESModule", path: "run-management.mjs", contents: "export default {fetch(){return new Response('ok')}}" }],
+      modules: [workerdD1Module("run-management.mjs")],
       d1Databases: { CONTROL: "run-management" },
     });
     try {
-      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const database = workerdD1Database(runtime);
       let beforeClaim: (() => Promise<void>) | undefined;
       const store = new CloudflareD1OpenTofuControlStore({
         prepare(query) {
@@ -1020,15 +1021,11 @@ describe("Capsule execution authority", () => {
   test("runtime-secret retirement ordered markers on isolated workerd D1", async () => {
     const runtime = new Miniflare({
       compatibilityDate: "2026-07-17",
-      modules: [{
-        type: "ESModule",
-        path: "runtime-secret-retirement-workerd.mjs",
-        contents: "export default {fetch(){return new Response('ok')}}",
-      }],
+      modules: [workerdD1Module("runtime-secret-retirement-workerd.mjs")],
       d1Databases: { CONTROL: "runtime-secret-retirement-workerd" },
     });
     try {
-      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const database = workerdD1Database(runtime);
       const store = new CloudflareD1OpenTofuControlStore(database);
       const run: ApplyRun = {
         ...terminatingRun("failed"),
@@ -1132,15 +1129,11 @@ describe("Capsule execution authority", () => {
   test("terminal Apply finalizers preserve ordered billing and retirement markers on isolated workerd D1", async () => {
     const runtime = new Miniflare({
       compatibilityDate: "2026-07-17",
-      modules: [{
-        type: "ESModule",
-        path: "terminal-apply-finalizers-workerd.mjs",
-        contents: "export default {fetch(){return new Response('ok')}}",
-      }],
+      modules: [workerdD1Module("terminal-apply-finalizers-workerd.mjs")],
       d1Databases: { CONTROL: "terminal-apply-finalizers-workerd" },
     });
     try {
-      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const database = workerdD1Database(runtime);
       const store = new CloudflareD1OpenTofuControlStore(database);
       const r0: ApplyRun = {
         ...terminatingRun("failed"),
@@ -1285,20 +1278,12 @@ describe("Capsule execution authority", () => {
   test("ordered authority batches execute on an isolated workerd D1", async () => {
     const runtime = new Miniflare({
       compatibilityDate: "2026-07-17",
-      modules: [
-        {
-          type: "ESModule",
-          path: "capsule-execution-authority-workerd.mjs",
-          contents: "export default {fetch(){return new Response('ok')}}",
-        },
-      ],
+      modules: [workerdD1Module("capsule-execution-authority-workerd.mjs")],
       d1Databases: { CONTROL: "capsule-execution-authority-workerd" },
     });
     try {
-      const database = await runtime.getD1Database("CONTROL");
-      const store = new CloudflareD1OpenTofuControlStore(
-        database as unknown as D1Database,
-      );
+      const database = workerdD1Database(runtime);
+      const store = new CloudflareD1OpenTofuControlStore(database);
       await expectBatchAuthorityParity(store);
     } finally {
       await runtime.dispose();
@@ -1308,15 +1293,11 @@ describe("Capsule execution authority", () => {
   test("Source management fences execute on isolated workerd D1 without blocking the current lease", async () => {
     const runtime = new Miniflare({
       compatibilityDate: "2026-07-17",
-      modules: [{
-        type: "ESModule",
-        path: "source-management-workerd.mjs",
-        contents: "export default {fetch(){return new Response('ok')}}",
-      }],
+      modules: [workerdD1Module("source-management-workerd.mjs")],
       d1Databases: { CONTROL: "source-management-workerd" },
     });
     try {
-      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const database = workerdD1Database(runtime);
       const store = new CloudflareD1OpenTofuControlStore(database);
       await store.putWorkspace({
         id: WORKSPACE_ID,
@@ -1492,15 +1473,11 @@ describe("Capsule execution authority", () => {
   test("Compatibility settlement rolls back the report when its terminal Run update fails on isolated workerd D1", async () => {
     const runtime = new Miniflare({
       compatibilityDate: "2026-07-17",
-      modules: [{
-        type: "ESModule",
-        path: "compatibility-settlement-workerd.mjs",
-        contents: "export default {fetch(){return new Response('ok')}}",
-      }],
+      modules: [workerdD1Module("compatibility-settlement-workerd.mjs")],
       d1Databases: { CONTROL: "compatibility-settlement-workerd" },
     });
     try {
-      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const database = workerdD1Database(runtime);
       const store = new CloudflareD1OpenTofuControlStore(database);
       const workspaceId = "compatibility-settlement-workerd";
       await store.putWorkspace({
@@ -1609,15 +1586,11 @@ describe("Capsule execution authority", () => {
   test("workerd D1 freeze validates Plan environment projection and approval settlement", async () => {
     const runtime = new Miniflare({
       compatibilityDate: "2026-07-17",
-      modules: [{
-        type: "ESModule",
-        path: "workspace-freeze-plan-workerd.mjs",
-        contents: "export default {fetch(){return new Response('ok')}}",
-      }],
+      modules: [workerdD1Module("workspace-freeze-plan-workerd.mjs")],
       d1Databases: { CONTROL: "workspace-freeze-plan-workerd" },
     });
     try {
-      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const database = workerdD1Database(runtime);
       const store = new CloudflareD1OpenTofuControlStore(database);
       const workspace = (id: string) => ({
         id, handle: id, displayName: "Freeze Plan", type: "personal" as const,
@@ -1968,15 +1941,11 @@ describe("Capsule execution authority", () => {
   test("Git, InstallConfig and Interface admission share the Workspace fence on isolated workerd D1", async () => {
     const runtime = new Miniflare({
       compatibilityDate: "2026-07-17",
-      modules: [{
-        type: "ESModule",
-        path: "git-interface-management-workerd.mjs",
-        contents: "export default {fetch(){return new Response('ok')}}",
-      }],
+      modules: [workerdD1Module("git-interface-management-workerd.mjs")],
       d1Databases: { CONTROL: "git-interface-management-workerd" },
     });
     try {
-      const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+      const database = workerdD1Database(runtime);
       const management = new CloudflareD1OpenTofuControlStore(database);
       await management.putWorkspace({
         id: WORKSPACE_ID,
