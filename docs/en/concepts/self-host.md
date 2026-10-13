@@ -147,7 +147,7 @@ control plane, and the dashboard on the same origin. Start from the repository r
 
 ```bash
 cd deploy/node-postgres
-test ! -e .env && cp .env.example .env
+[ -e .env ] || cp .env.example .env
 ```
 
 Edit `.env`. Compose uses this file for interpolation and passes only the service

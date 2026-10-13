@@ -144,7 +144,7 @@ Caddy を順に起動します。サービス本体は accounts と control plan
 
 ```bash
 cd deploy/node-postgres
-test ! -e .env && cp .env.example .env
+[ -e .env ] || cp .env.example .env
 ```
 
 `.env` を編集します。Compose はこのファイルを変数展開に使い、`docker-compose.yml` に
