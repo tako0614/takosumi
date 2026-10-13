@@ -165,7 +165,7 @@ export async function readInstallReadiness(
 export default function InstallExecution(props: Props) {
   const [runId, setRunId] = createSignal(props.planRunId);
   const [run, { mutate, refetch }] = createResource(runId, getRun);
-  // Never `run()` / `runLatest()`: both THROW once a load has failed, and the
+  // Never `run()` / `run.latest`: both THROW once a load has failed, and the
   // 3s fallback read below means one 5xx mid-install replaced the whole app
   // with the root reload card. A failed refetch keeps the last good run.
   const runLatest = createLastGoodValue(run, (r) => r.id === runId());
@@ -180,6 +180,9 @@ export default function InstallExecution(props: Props) {
     const close = openRunStream(id, {
       onRun: (next) => {
         mutate(next);
+        // A failed read's error outlives `mutate`; re-read so the pushed
+        // status shows now rather than at the next fallback read.
+        if (run.error) void refetch();
       },
     });
     const timer = globalThis.setInterval(() => {

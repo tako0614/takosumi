@@ -316,6 +316,10 @@ export const ja = {
   "auth.and": "と",
   "auth.privacyPolicy": "プライバシーポリシー",
   "auth.termsSuffix": "に同意したものとみなします。",
+  "auth.startFailed":
+    "サインインを開始できませんでした。もう一度お試しください。",
+  "auth.startInsecureContext":
+    "この接続ではサインインを開始できません。HTTPS（または localhost）でダッシュボードを開いてください。",
   "auth.processing": "サインイン処理中…",
   "auth.failed": "サインインに失敗しました",
   "auth.backToSignIn": "サインインへ戻る",
@@ -865,6 +869,8 @@ export const ja = {
   "new.compat.ready": "このまま追加できます",
   "new.compat.patch": "手直しが必要です",
   "new.compat.unsupported": "今は追加できません",
+  "new.compat.summary.checkFailed":
+    "追加できるかの確認を完了できませんでした。サービスの問題とは限りません。もう一度お試しください。",
   "new.compat.summary.providerCredentials":
     "{provider} の非公開値を取得元から外す必要があります。",
   "new.compat.summary.installUxInvalid":

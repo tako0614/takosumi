@@ -961,6 +961,10 @@ function Inner() {
       onRun: (r) => {
         if (disposed) return;
         mutateRun(r);
+        // `mutate` does not clear a failed read's error, and the last-good
+        // accessor ignores the value while it stands: re-read once so the
+        // pushed status shows instead of freezing until the run ends.
+        if (run.error) void refetchRun();
         void refetchLogs();
         if (isTerminalRunStatus(r.status)) {
           disposed = true;

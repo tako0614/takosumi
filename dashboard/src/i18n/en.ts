@@ -311,6 +311,10 @@ export const en: Record<keyof typeof ja, string> = {
   "auth.and": " and ",
   "auth.privacyPolicy": "Privacy Policy",
   "auth.termsSuffix": ".",
+  "auth.startFailed":
+    "Couldn't start sign-in. Try again.",
+  "auth.startInsecureContext":
+    "Sign-in can't start over this connection. Open the dashboard over HTTPS (or on localhost).",
   "auth.processing": "Signing you in…",
   "auth.failed": "Sign-in failed",
   "auth.backToSignIn": "Back to sign-in",
@@ -862,6 +866,8 @@ export const en: Record<keyof typeof ja, string> = {
   "new.compat.ready": "Can be added as is",
   "new.compat.patch": "Needs manual changes",
   "new.compat.unsupported": "Cannot be added right now",
+  "new.compat.summary.checkFailed":
+    "The pre-add check couldn't finish. This isn't necessarily a problem with the service — try again.",
   "new.compat.summary.providerCredentials":
     "Remove {provider} private values from the source before adding this.",
   "new.compat.summary.installUxInvalid":

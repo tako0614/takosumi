@@ -24,7 +24,7 @@ import {
 } from "../../lib/notifications.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { listWorkspacesCached } from "../../lib/workspace-list.ts";
-import { latestOrUndefined } from "../../lib/resource-read.ts";
+import { readyOrUndefined } from "../../lib/resource-read.ts";
 import { relativeTime, t } from "../../i18n/index.ts";
 import {
   Badge,
@@ -120,7 +120,7 @@ export default function NotificationsView() {
         // Workspaces by display name. The list is the shell's cached copy.
         const [workspaces] = createResource(() => listWorkspacesCached());
         const workspaceNameFor = (entry: FeedEntry): string => {
-          const workspace = (latestOrUndefined(workspaces) ?? []).find(
+          const workspace = (readyOrUndefined(workspaces) ?? []).find(
             (item) => item.id === entry.event.workspaceId,
           );
           return (

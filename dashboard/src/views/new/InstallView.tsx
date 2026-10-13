@@ -114,6 +114,7 @@ import {
   defaultWorkspaceHandle,
   localizedStoreText,
   providerDisplayName,
+  compatibilityCheckLooksTransient,
   compatibilityDiagnosticDisplay,
   compatibilityLabel,
   compatibilitySummaryDisplay,
@@ -2116,6 +2117,18 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                     product's own localized explanation. Only diagnostics the
                     helpers cannot classify keep their raw text, folded. */}
                 <p>{compatibilitySummaryDisplay(result())}</p>
+                <Show when={compatibilityCheckLooksTransient(result())}>
+                  <div class="iv-action-row">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      busy={busy()}
+                      onClick={() => void prepareInstall()}
+                    >
+                      {t("common.retry")}
+                    </Button>
+                  </div>
+                </Show>
                 <For each={result().diagnostics}>
                   {(diagnostic) => {
                     const display = compatibilityDiagnosticDisplay(diagnostic);

@@ -7,7 +7,7 @@
  */
 import { type Accessor, createMemo, createResource } from "solid-js";
 import { listCapsulesCached } from "./capsule-list.ts";
-import { latestOrUndefined } from "./resource-read.ts";
+import { readyOrUndefined } from "./resource-read.ts";
 
 export function createServiceNames(
   workspaceId: () => string | null | undefined,
@@ -19,7 +19,7 @@ export function createServiceNames(
   return createMemo(
     () =>
       new Map(
-        (latestOrUndefined(services) ?? []).map(
+        (readyOrUndefined(services) ?? []).map(
           (service) => [service.id, service.name] as const,
         ),
       ),
