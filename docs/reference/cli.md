@@ -23,6 +23,23 @@ Git commit / ref と両方の path を固定し、実行は runner sandbox で�
 CredentialRecipe から、Run の実行中だけ env/file として注入されます。
 `takosumi deploy` / `takosumi plan` のローカルアップロード経路は廃止済みです。
 
+## CLI を用意する
+
+CLI はこのリポジトリの `cli/` にあり、Bun で直接動かします。package manager からの
+配布はまだないので、チェックアウトで依存を入れてから `takosumi` を呼べるようにします。
+
+```bash
+git clone https://github.com/tako0614/takosumi.git
+cd takosumi
+bun install
+alias takosumi="bun $PWD/cli/src/main.ts"
+takosumi --help
+```
+
+このページと他のページの `takosumi ...` は、この alias を前提にしています。
+`bun run cli -- <command>` でも動きますが、bun が実行するコマンド行を表示するため、
+`--token` に渡した bearer が端末に残ります。
+
 ## トークンを発行する
 
 ほかのページが使えと書いている `TAKOSUMI_DEPLOY_CONTROL_TOKEN` は、ここで作ります。

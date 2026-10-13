@@ -30,6 +30,7 @@
     "check:generalization-boundaries": "bun scripts/check-generalization-boundaries.ts",
     "check:import-boundaries": "bun scripts/check-import-boundaries.ts",
     "check:test-source-boundary": "bun scripts/check-test-source-boundary.ts",
+    "build:dashboard": "cd dashboard && bun install --frozen-lockfile && bun run build",
     "check:dashboard": "(cd dashboard && bunx tsc --noEmit --pretty false -p tsconfig.json && bun run build) && bash scripts/build-app-docs.sh && bun scripts/check-dashboard-data-free-assets.ts",
     "check:dashboard-browser": "bun run test:dashboard-browser-harness && bun scripts/run-dashboard-browser-e2e.ts portable",
     "check:worker-types": "tsc --noEmit -p tsconfig.worker.json",

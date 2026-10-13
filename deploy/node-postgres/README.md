@@ -22,12 +22,21 @@ runtime contracts are canonical Interface / InterfaceBinding records.
 
 ```bash
 cd deploy/node-postgres
-cp .env.example .env  # then edit
+cp .env.example .env  # then edit; it is gitignored
 docker compose up -d
-curl -k https://localhost/.well-known/openid-configuration
+curl https://app.example.com/healthz   # your TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME
 ```
 
-Required `.env`:
+`docker-compose.yml` passes the whole `.env` to the `accounts` service
+(`env_file`), so every value set there reaches the process, including any secret
+an upstream sign-in descriptor names through `clientSecretEnv`. The
+`migrations` container applies the control-plane schema
+(`core/scripts/db-migrate.ts`) and then the accounts schema before the service
+starts. Caddy obtains the certificate for `TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME`
+over ACME, so that name must resolve to this host; it serves no other site
+label.
+
+Required `.env` (`.env.example` shows the command that generates each secret):
 
 ```
 POSTGRES_PASSWORD=replace-me-with-a-strong-passphrase
@@ -42,9 +51,21 @@ TAKOSUMI_ACCOUNTS_REDIRECT_URIS=https://app.example.com/oauth/callback
 # restart / under horizontal scale). Generate a P-256 ES256 JWK with a private
 # "d" coordinate; the pairwise secret is an independent 64-char random string.
 TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK={"kty":"EC","crv":"P-256","d":"...","x":"...","y":"..."}
-TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS={"keys":[{"kty":"EC","crv":"P-256","kid":"previous-key","x":"...","y":"..."}]}
 TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET=replace-me-with-a-64-char-random-string
+# Server secrets. Without the passphrase the service refuses to start; without
+# the salt it hashes sessions with a public dev-only salt.
+TAKOSUMI_SECRET_STORE_PASSPHRASE=
+TAKOSUMI_ACCOUNT_SESSION_HASH_SALT=
+TAKOSUMI_DEPLOY_CONTROL_TOKEN=
 ```
+
+The first account signs in through an upstream identity provider
+(`TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS`); passkeys are added to an account after
+it has signed in.
+
+This reference composition has no OpenTofu runner. Git sync, plan, and apply
+fail with `runner_capability_missing` until an operator composition supplies
+one (see `deploy/local-substrate/`).
 
 For a Takos native shell, register a separate host-specific public client in
 `TAKOSUMI_ACCOUNTS_CLIENTS`. Its `redirectUris` entry must be exactly
@@ -100,8 +121,9 @@ a commercial host extension and are not part of this public distribution.
   scope, and preserve stable retry identity and custody outside Git. See the
   [Core state contract](../../docs/internal/core-spec.md). A recovered partial
   state does not prove a complete resource inventory or provider success.
-- Run `bun run cli -- accounts migrate` against Postgres before first start, or use the docker-compose `migrations`
-  init container which does it for you. See `cli-accounts-db.ts` for the migration entry point.
+- Apply both schemas before first start: `bun run db:migrate --env=production` (control plane, reads `DATABASE_URL`)
+  and `bun run cli -- accounts migrate` (accounts). The docker-compose `migrations` init container runs both for you.
+  See `core/scripts/db-migrate.ts` and `cli-accounts-db.ts` for the entry points.
 - A custom Node composition that supplies a durable `opentofuControlStore` to
   `buildComposedApp` or `buildComposedServer` must pass that same store to
   `createPlatformExtensionCapsulePublicOriginLedger` when it composes a

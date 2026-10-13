@@ -44,7 +44,9 @@ dashboard.
 
 ### 1. Start the environment
 
-From the repository root:
+From the repository root. This setup mounts the checkout into its containers by the
+directory name `takosumi` (the `git clone` default). If you cloned under another name,
+rename the directory to `takosumi` first.
 
 ```bash
 cd deploy/local-substrate

@@ -24,7 +24,8 @@ Worker.
 **Bun and PostgreSQL** suits you when it should live on your own infrastructure. You need
 a host running Docker, PostgreSQL, and Caddy to terminate TLS. The bundled
 `docker-compose.yml` brings up PostgreSQL, the migrations, the service itself, and Caddy
-together.
+together. It does not include an OpenTofu runner, so running Stacks needs a runner composed
+in separately.
 
 **Local only** is for exercising the whole thing without exposing anything. It assumes
 Linux and Docker. Pebble for ACME, CoreDNS, and Caddy come up on the same Docker network,
@@ -75,11 +76,13 @@ so it does not contain them. If you deploy your copy directly with `wrangler dep
 for your Worker entrypoint and `directory` under `[assets]` for the dashboard build output
 before deploying. If you use your own Worker script, point `main` at that script.
 
-Build the dashboard. `ASSETS` serves this output.
+Build the dashboard. `ASSETS` serves this output. The dashboard is not part of the root
+workspace, so `build:dashboard` installs its dependencies from the dashboard's own lockfile
+before building.
 
 ```bash
 bun install
-(cd dashboard && bun run build)
+bun run build:dashboard
 ```
 
 Load the secrets. Keep them out of `wrangler.toml` and push them in with
@@ -97,7 +100,8 @@ Four more go in the same way. `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK` and
 
 Apply the Accounts D1 schema through the owner CLI. First retain private backup or
 Time Travel evidence and bind its opaque digest to plan/apply. Plan makes no remote
-call, apply sends one atomic REST batch per migration, and verify is read-only.
+call, apply sends one atomic REST batch per migration, and verify is read-only. The
+`takosumi` command runs from a checkout; [CLI](../reference/cli.md) shows how to set it up.
 
 ```bash
 takosumi accounts migrate-d1 plan \
@@ -146,18 +150,14 @@ cd deploy/node-postgres
 cp .env.example .env
 ```
 
-Edit `.env`. What you change here is `POSTGRES_PASSWORD`, `TAKOSUMI_ACCOUNTS_ISSUER`,
-`TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME`, and the OIDC client registration.
-
-Values in `.env` are only used for variable expansion in the compose file; they are not
-passed into the container as they are. The bundled `docker-compose.yml` gives the
-`accounts` service only the issuer, the connection settings, and the client registration
-listed above. Add the remaining secrets to the `accounts` service's `environment:`
-yourself. With compose, `docker-compose.override.yml` in the same directory is the place
-for that.
+Edit `.env`. `docker-compose.yml` hands this file to the `accounts` service as it is, so
+every value you put here reaches the service. Fill in at least the following. The command
+that generates each value is written next to it in `.env.example`.
 
 | Variable | Why it is needed |
 | --- | --- |
+| `POSTGRES_PASSWORD` | The PostgreSQL password |
+| `TAKOSUMI_ACCOUNTS_ISSUER` / `TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME` | The public origin, and the hostname Caddy obtains a certificate for |
 | `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK` | The signing key for id_token |
 | `TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET` | The subject derivation key that pairs with the signing key |
 | `TAKOSUMI_ACCOUNT_SESSION_HASH_SALT` | The salt that hashes session IDs at rest |
@@ -166,7 +166,16 @@ for that.
 
 When the issuer is https and the signing key has not arrived, the service refuses to
 start. Otherwise each process would sign id_tokens with a different key, and verification
-would break across restarts and replicas.
+would break across restarts and replicas. Without the sealing key it also refuses to start
+rather than store secrets in plaintext.
+
+`.env` also decides how people sign in. The first account is created by signing in through
+an upstream identity provider (`TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS`, plus the secret
+named by its `clientSecretEnv`). Passkeys (`TAKOSUMI_ACCOUNTS_PASSKEY_*`) are added to an
+account after it has signed in. `.env.example` has an example of each.
+
+`.env` holds secrets, so do not commit it. This repository ignores
+`deploy/node-postgres/.env` in `.gitignore`.
 
 Bring it up.
 
@@ -174,18 +183,18 @@ Bring it up.
 docker compose up -d
 ```
 
-The `migrations` container runs `takosumi accounts migrate` once, and then the service
-starts. That covers the accounts tables only. The control plane tables are created
-separately, against the same database.
+The first run spends a few minutes building the image. The `migrations` container applies
+both schemas, the control plane's and the accounts', to the same database, and the service
+and Caddy start once it succeeds.
 
-Run the control plane migrations from a checkout of the repository; they are not in the
-bundled image. The bundled compose exposes PostgreSQL only on the internal network, so
-either publish 5432 first or run from a host that can reach it on that network.
+To apply the migrations from outside compose, run them from the repository root. The
+bundled compose exposes PostgreSQL only on the internal network, so either publish 5432
+first or run from a host that can reach it on that network.
 
 ```bash
-cd ../..
 DATABASE_URL="postgres://takosumi:<password>@<postgres-host>:5432/takosumi_accounts" \
   bun run db:migrate --env=production
+takosumi accounts migrate --database-url "$DATABASE_URL"
 ```
 
 Running `bun run db:migrate:dry-run` first prints the SQL without applying it. `--env=local`
@@ -202,6 +211,11 @@ To run it by hand instead of through compose, pass the same environment variable
 `takosumi accounts serve` is for checking things locally. It creates a throwaway signing
 key per process, so run a public accounts plane from the Cloudflare template or the Bun and
 PostgreSQL one.
+
+This template has no OpenTofu runner. Accounts, the control plane, and the dashboard work,
+but Git sync, plan, and apply fail with `runner_capability_missing`. To run Stacks, use a
+composition that includes a runner: the Cloudflare one, or an operator composition that
+attaches a runner container the way `deploy/local-substrate/` does.
 
 ## Running it entirely locally
 
@@ -248,16 +262,18 @@ curl -s https://takosumi.example.com/.well-known/takosumi
 curl -s https://takosumi.example.com/api/v1/capabilities
 ```
 
-With that much working, read real data once. Sign in to the dashboard, create a token by
-following the [CLI](../reference/cli.md) steps, and list the Workspaces. A `200` rather
-than a `401` means authentication and reading the records both work.
+With that much working, read real data once. Sign in to the dashboard, create a token
+with `--scope read` by following the [CLI](../reference/cli.md) steps, and list the
+Workspaces. Scopes do not include one another, so a `write`-only token gets `403` here. Use
+the token you created, not the operator-only `TAKOSUMI_DEPLOY_CONTROL_TOKEN`. A `200` means
+authentication and reading the records both work.
 
 ```bash
-curl -s -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN" \
+curl -s -H "authorization: Bearer $TAKOSUMI_READ_TOKEN" \
   https://takosumi.example.com/api/v1/workspaces
 ```
 
-Finally, deploy something once. Put a Git URL into `/new` in the dashboard, create a plan,
+Finally, deploy something once on a composition that includes a runner. Put a Git URL into `/new` in the dashboard, create a plan,
 read it, and apply. A successful Run that leaves a StateVersion and Outputs behind means
 the runner and the state backend work too. `examples/opentofu-basic` needs no provider
 credentials and is a good fit for this check.

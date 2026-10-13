@@ -9,9 +9,18 @@
 FROM oven/bun:1.3.14 AS deps
 WORKDIR /work
 COPY package.json bun.lock tsconfig.json bunfig.toml /work/
+# Every root workspace must be present for `bun install --frozen-lockfile`.
+# The server (src/server.ts -> composed-app.ts) and the `migrations` CLI also
+# import the embedded control plane from core/, lib/, providers/, and the
+# contract tsconfig paths at runtime, so those trees ship in the image too.
+COPY contract /work/contract
+COPY core /work/core
+COPY lib /work/lib
+COPY providers /work/providers
 COPY accounts/contract /work/accounts/contract
 COPY accounts/service /work/accounts/service
 COPY cli /work/cli
+COPY deploy/cloudflare /work/deploy/cloudflare
 COPY deploy/node-postgres/package.json /work/deploy/node-postgres/package.json
 COPY deploy/node-postgres/src /work/deploy/node-postgres/src
 RUN bun install --frozen-lockfile
@@ -21,11 +30,13 @@ RUN bun install --frozen-lockfile
 # Built in an isolated stage; only the static `dist` directory is copied into
 # the runtime image. If this build is removed/fails, the server auto-detects the
 # missing build and disables static serving (it does not crash).
+# The dashboard is not a root workspace: it installs from its own lockfile and
+# only reads the two contract trees its vite aliases point at.
 FROM oven/bun:1.3.14 AS dashboard
 WORKDIR /work
-COPY package.json bun.lock tsconfig.json bunfig.toml /work/
+COPY contract /work/contract
+COPY accounts/contract /work/accounts/contract
 COPY dashboard /work/dashboard
-RUN bun install --frozen-lockfile
 RUN cd dashboard && bun install --frozen-lockfile
 RUN cd dashboard && bun run build
 
@@ -34,6 +45,11 @@ RUN cd dashboard && bun run build
 # becoming an undeclared build input.
 FROM node:26.1.0-bookworm-slim AS app-docs
 WORKDIR /work
+# app-docs enables vitepress `lastUpdated`, which spawns `git` per page. The
+# slim image has no git binary; `.git` stays excluded, so timestamps are empty.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends git \
+  && rm -rf /var/lib/apt/lists/*
 COPY docs/package.json docs/package-lock.json /work/docs/
 RUN cd docs && npm ci --no-fund --no-audit
 COPY app-docs /work/app-docs
