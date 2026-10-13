@@ -25,6 +25,7 @@ import { stateVersionIdForRecoveryRun } from "../../../../core/domains/deploy-co
 import { generateOpenTofuChildModuleRoot } from "../../../../lib/rootgen/src/mod.ts";
 import { workspaceForRun } from "../../../../runner/lib/artifacts.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
+import { PRIVATE_RUN_FILE_REFRESH_CAPABILITY } from "../../../../core/shared/private_run_file_refresh.ts";
 import {
   OpenTofuRunnerExecutionError,
   OpenTofuRunnerInfrastructureError,
@@ -462,6 +463,13 @@ test("local OpenTofu plan promotes exact post-init provider lockfile bytes", asy
     async fetch(request) {
       const url = new URL(request.url);
       requests.push(`${request.method} ${url.pathname}`);
+      if (request.method === "GET" && url.pathname === "/healthz") {
+        return Response.json({
+          ok: true,
+          mutationCustodyMode: "local-http",
+          capabilities: [PRIVATE_RUN_FILE_REFRESH_CAPABILITY],
+        });
+      }
       if (
         request.method === "POST" &&
         url.pathname === `/runs/${runId}`
@@ -562,6 +570,7 @@ test("local OpenTofu plan promotes exact post-init provider lockfile bytes", asy
       createHash("sha256").update(committed[0]!.bytes).digest("hex"),
     ).toBe(lockDigest.slice("sha256:".length));
     expect(requests).toEqual([
+      "GET /healthz",
       `POST /runs/${runId}`,
       `GET /runs/${runId}/artifacts/tf-lockfile`,
     ]);

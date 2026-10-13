@@ -34,6 +34,16 @@ import type {
   ReleaseCommandRunResult,
   RunExecutionControl,
 } from "../../../core/domains/deploy-control/mod.ts";
+import {
+  MAX_PRIVATE_RUN_FILE_DISPATCHES,
+  MAX_PRIVATE_RUN_FILE_ROTATIONS,
+  PRIVATE_RUN_FILE_REFRESH_CAPABILITY,
+  PRIVATE_RUN_FILE_REFRESH_SEQUENCE_HEADER,
+  privateRunFileManifestDigest,
+  type PrivateRunFileRefreshFile,
+  type PrivateRunFileRefreshOwner,
+  type PrivateRunFileRefreshUpdate,
+} from "../../../core/shared/private_run_file_refresh.ts";
 import { DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID } from "../../../core/domains/deploy-control/mod.ts";
 import {
   OpenTofuRunnerExecutionError,
@@ -82,6 +92,17 @@ const PROVIDER_LOCKFILE_CONTENT_TYPE = "application/vnd.opentofu.lock.hcl";
 interface RunnerTransport {
   fetch(path: string, init?: RequestInit): Promise<Response>;
   readonly requiresCustodyModeHandshake?: boolean;
+}
+
+interface LocalPrivateRunFileSession {
+  readonly owner: PrivateRunFileRefreshOwner;
+  readonly runnerRunId: string;
+  readonly manifestDigest: Promise<string>;
+  files: readonly PrivateRunFileRefreshFile[];
+  sequence: number;
+  dispatchStarted: boolean;
+  dispatchCompleted: boolean;
+  closed: boolean;
 }
 
 type LocalMutationReservation =
@@ -593,30 +614,224 @@ export function createLocalOpenTofuRunnerProfile(
   };
 }
 
+function privateRunFileRefreshUnavailable(): OpenTofuRunnerExecutionError {
+  return new OpenTofuRunnerExecutionError(
+    "local Runner private Run file refresh is unavailable",
+    { reason: "private_run_file_refresh_unavailable" },
+  );
+}
+
 class LocalOpenTofuRunner implements OpenTofuRunner {
+  readonly #privateRunFileSessions = new Map<string, LocalPrivateRunFileSession>();
+
   constructor(
     private readonly archiveStore: SourceArchiveStore,
     private readonly stateStore: LocalOpenTofuStateArtifactStore,
     private readonly transport: RunnerTransport,
   ) {}
 
+  async assertPrivateRunFileRefreshCapability(): Promise<void> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5_000);
+    try {
+      const response = await this.transport.fetch("/healthz", {
+        method: "GET",
+        signal: controller.signal,
+      });
+      if (!response.ok || !isJsonResponse(response)) throw new Error();
+      const body = parseObject(new TextDecoder().decode(
+        await readResponseBytesWithCap(response, 4_096, "runner health"),
+      ));
+      if (body.mutationCustodyMode !== "local-http" ||
+        !Array.isArray(body.capabilities) ||
+        !body.capabilities.includes(PRIVATE_RUN_FILE_REFRESH_CAPABILITY)) throw new Error();
+    } catch {
+      throw new OpenTofuRunnerExecutionError(
+        "local Runner cannot refresh private Run file grants",
+        { reason: "private_run_file_refresh_unavailable" },
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async refreshPrivateRunFiles(
+    update: PrivateRunFileRefreshUpdate,
+    control?: RunExecutionControl,
+  ): Promise<void> {
+    const session = this.#privateRunFileSessions.get(update.runnerRunId);
+    if (!session || session.closed ||
+      update.owner.kind !== session.owner.kind ||
+      update.owner.id !== session.owner.id ||
+      update.runnerRunId !== session.runnerRunId ||
+      update.manifestDigest !== await session.manifestDigest ||
+      await privateRunFileManifestDigest(update) !== update.manifestDigest ||
+      update.sequence !== session.sequence + 1 ||
+      update.sequence > MAX_PRIVATE_RUN_FILE_ROTATIONS ||
+      update.files.length !== session.files.length) {
+      throw privateRunFileRefreshUnavailable();
+    }
+    control?.signal?.throwIfAborted();
+    if (!session.dispatchStarted || session.dispatchCompleted) {
+      session.files = update.files.map((file) => ({ ...file }));
+      session.sequence = update.sequence;
+      return;
+    }
+    await this.#awaitPrivateRunFileSession(session, control?.signal);
+    if (session.dispatchCompleted) {
+      session.files = update.files.map((file) => ({ ...file }));
+      session.sequence = update.sequence;
+      return;
+    }
+    const response = await this.transport.fetch(
+      `/runs/${encodeURIComponent(update.runnerRunId)}/private-run-files`,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(update),
+        ...(control?.signal ? { signal: control.signal } : {}),
+      },
+    ).catch(() => { throw privateRunFileRefreshUnavailable(); });
+    if ((response.status !== 200 || !isJsonResponse(response)) && session.dispatchCompleted) {
+      await response.body?.cancel().catch(() => {});
+      session.files = update.files.map((file) => ({ ...file }));
+      session.sequence = update.sequence;
+      return;
+    }
+    if (response.status !== 200 || !isJsonResponse(response)) {
+      await response.body?.cancel().catch(() => {});
+      throw privateRunFileRefreshUnavailable();
+    }
+    let ack: Record<string, unknown>;
+    try {
+      ack = parseObject(new TextDecoder().decode(
+        await readResponseBytesWithCap(response, 4_096, "private Run file refresh ACK"),
+      ));
+    } catch {
+      throw privateRunFileRefreshUnavailable();
+    }
+    if (ack.ok !== true || ack.status !== "updated" || ack.sequence !== update.sequence) {
+      throw privateRunFileRefreshUnavailable();
+    }
+    session.files = update.files.map((file) => ({ ...file }));
+    session.sequence = update.sequence;
+  }
+
+  #beginPrivateRunFiles(
+    runnerRunId: string,
+    owner: PrivateRunFileRefreshOwner,
+    files: readonly PrivateRunFileRefreshFile[] | undefined,
+  ): LocalPrivateRunFileSession | undefined {
+    if (!files?.length) return undefined;
+    if (files.length > MAX_PRIVATE_RUN_FILE_DISPATCHES) throw privateRunFileRefreshUnavailable();
+    if (this.#privateRunFileSessions.has(runnerRunId)) throw privateRunFileRefreshUnavailable();
+    const session: LocalPrivateRunFileSession = {
+      owner,
+      runnerRunId,
+      manifestDigest: privateRunFileManifestDigest({ owner, runnerRunId, files }),
+      files: files.map((file) => ({ ...file })),
+      sequence: 0,
+      dispatchStarted: false,
+      dispatchCompleted: false,
+      closed: false,
+    };
+    this.#privateRunFileSessions.set(runnerRunId, session);
+    return session;
+  }
+
+  #endPrivateRunFiles(session: LocalPrivateRunFileSession | undefined): void {
+    if (!session) return;
+    session.closed = true;
+    if (this.#privateRunFileSessions.get(session.runnerRunId) === session) {
+      this.#privateRunFileSessions.delete(session.runnerRunId);
+    }
+  }
+
+  #completePrivateRunFileDispatch(session: LocalPrivateRunFileSession | undefined): void {
+    // Once the Runner command has returned or exact completion has been
+    // adopted, no Provider process can consume a further descriptor. Core may
+    // still be persisting artifacts while its held-Run refresh timer runs.
+    if (session) session.dispatchCompleted = true;
+  }
+
+  #privateRunFileDispatch<T extends { readonly privateRunFiles?: readonly PrivateRunFileRefreshFile[] }>(
+    job: T,
+    session: LocalPrivateRunFileSession | undefined,
+  ): { request: T; sequence: number | undefined } {
+    if (!session) return { request: job, sequence: undefined };
+    if (session.closed || session.dispatchStarted) throw privateRunFileRefreshUnavailable();
+    session.dispatchStarted = true;
+    return {
+      request: { ...job, privateRunFiles: session.files },
+      sequence: session.sequence,
+    };
+  }
+
+  async #awaitPrivateRunFileSession(
+    session: LocalPrivateRunFileSession,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline && !session.closed) {
+      if (session.dispatchCompleted) return;
+      signal?.throwIfAborted();
+      const response = await this.transport.fetch(
+        `/runs/${encodeURIComponent(session.runnerRunId)}/private-run-files`,
+        { method: "GET", ...(signal ? { signal } : {}) },
+      ).catch(() => { throw privateRunFileRefreshUnavailable(); });
+      if (response.status === 200 && isJsonResponse(response)) {
+        let metadata: Record<string, unknown>;
+        try {
+          metadata = parseObject(new TextDecoder().decode(
+            await readResponseBytesWithCap(response, 4_096, "private Run file session metadata"),
+          ));
+        } catch {
+          throw privateRunFileRefreshUnavailable();
+        }
+        const owner = recordValue(metadata, "owner");
+        if (owner?.kind !== session.owner.kind || owner.id !== session.owner.id ||
+          metadata.runnerRunId !== session.runnerRunId ||
+          metadata.manifestDigest !== await session.manifestDigest ||
+          metadata.sequence !== session.sequence) throw privateRunFileRefreshUnavailable();
+        return;
+      }
+      await response.body?.cancel().catch(() => {});
+      if (response.status !== 409) throw privateRunFileRefreshUnavailable();
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (session.dispatchCompleted) return;
+    throw privateRunFileRefreshUnavailable();
+  }
+
   async plan(
     job: OpenTofuPlanJob,
     control?: RunExecutionControl,
   ): Promise<OpenTofuPlanResult> {
+    const privateSession = this.#beginPrivateRunFiles(
+      job.planRun.id,
+      { kind: "plan", id: job.planRun.id },
+      job.privateRunFiles,
+    );
+    try {
+    if (privateSession) await this.assertPrivateRunFileRefreshCapability();
     await this.restoreSourceArchive(
       job.planRun.id,
       job.sourceArchive,
       control?.signal,
     );
     await this.restorePriorState(job.planRun.id, "plan", job, undefined, control?.signal);
+    const privateDispatch = this.#privateRunFileDispatch(job, privateSession);
     const result = await runRunner(
       this.transport,
       "plan",
       job.planRun.id,
-      job,
+      privateDispatch.request,
       control?.signal,
+      undefined,
+      undefined,
+      privateDispatch.sequence,
     );
+    this.#completePrivateRunFileDispatch(privateSession);
     const planDigest = requiredString(result, "planDigest");
     const providerLockDigest = stringValue(result, "providerLockDigest");
     const providerLockArtifact = parseProviderLockArtifact(
@@ -658,6 +873,9 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         : {}),
       diagnostics: diagnostics(result),
     };
+    } finally {
+      this.#endPrivateRunFiles(privateSession);
+    }
   }
 
   private async persistProviderLockArtifact(
@@ -825,6 +1043,13 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       if (replayResult.providerExecutionFailure) return replayResult;
       return await this.confirmRawOutput(job, replay);
     }
+    const privateSession = this.#beginPrivateRunFiles(
+      job.applyRun.id,
+      { kind: "apply", id: job.applyRun.id },
+      job.privateRunFiles,
+    );
+    try {
+    if (privateSession) await this.assertPrivateRunFileRefreshCapability();
     const preparationV2 = await assertLocalMutationCustodyMode(this.transport);
     let successfulReadback: LocalMutationSuccessReadback | undefined;
     let result = await readLocalMutationCompletionBeforePreparation(
@@ -879,18 +1104,21 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         control?.signal,
         reservation,
       );
+      const privateDispatch = this.#privateRunFileDispatch(job, privateSession);
       const dispatched = await runLocalMutationWithCustody(
         this.transport,
         "apply",
         job.applyRun.id,
-        job,
+        privateDispatch.request,
         control?.signal,
         restoredProviderLockDigest,
         reservation,
+        privateDispatch.sequence,
       );
       result = dispatched.result;
       successfulReadback = dispatched.successfulReadback;
     }
+    this.#completePrivateRunFileDispatch(privateSession);
     if (runnerProviderExecutionFailed(result)) {
       const stateBytes = await fetchRunnerArtifactIfPresent(
         this.transport,
@@ -979,6 +1207,9 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       normalizedResult,
     );
     return await this.confirmRawOutput(job, committed);
+    } finally {
+      this.#endPrivateRunFiles(privateSession);
+    }
   }
 
   async destroy(
@@ -991,6 +1222,13 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       job.stateScope,
     );
     if (replay) return replay.result as OpenTofuDestroyResult;
+    const privateSession = this.#beginPrivateRunFiles(
+      job.applyRun.id,
+      { kind: "apply", id: job.applyRun.id },
+      job.privateRunFiles,
+    );
+    try {
+    if (privateSession) await this.assertPrivateRunFileRefreshCapability();
     const preparationV2 = await assertLocalMutationCustodyMode(this.transport);
     let successfulReadback: LocalMutationSuccessReadback | undefined;
     let result = await readLocalMutationCompletionBeforePreparation(
@@ -1045,18 +1283,21 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         control?.signal,
         reservation,
       );
+      const privateDispatch = this.#privateRunFileDispatch(job, privateSession);
       const dispatched = await runLocalMutationWithCustody(
         this.transport,
         "destroy",
         job.applyRun.id,
-        job,
+        privateDispatch.request,
         control?.signal,
         restoredProviderLockDigest,
         reservation,
+        privateDispatch.sequence,
       );
       result = dispatched.result;
       successfulReadback = dispatched.successfulReadback;
     }
+    this.#completePrivateRunFileDispatch(privateSession);
     if (runnerProviderExecutionFailed(result)) {
       const stateBytes = await fetchRunnerArtifactIfPresent(
         this.transport,
@@ -1137,6 +1378,9 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       normalizedResult,
     );
     return committed.result as OpenTofuDestroyResult;
+    } finally {
+      this.#endPrivateRunFiles(privateSession);
+    }
   }
 
   async restore(
@@ -1928,8 +2172,12 @@ async function runRunner(
   signal?: AbortSignal,
   restoredProviderLockDigest?: string,
   reservation?: LocalMutationReservation,
+  privateRunFileSequence?: number,
 ): Promise<Record<string, unknown>> {
   const headers = new Headers({ "content-type": "application/json" });
+  if (privateRunFileSequence !== undefined) {
+    headers.set(PRIVATE_RUN_FILE_REFRESH_SEQUENCE_HEADER, String(privateRunFileSequence));
+  }
   if (reservation?.kind === "v1") headers.set("x-takosumi-mutation-reservation", reservation.token);
   for (const [name, value] of Object.entries(preparationHeaders(reservation))) headers.set(name, value);
   if (restoredProviderLockDigest !== undefined) {
@@ -2291,6 +2539,7 @@ async function runLocalMutationWithCustody(
   signal?: AbortSignal,
   restoredProviderLockDigest?: string,
   reservation?: LocalMutationReservation,
+  privateRunFileSequence?: number,
 ): Promise<{
   readonly result: Record<string, unknown>;
   readonly successfulReadback?: LocalMutationSuccessReadback;
@@ -2307,6 +2556,7 @@ async function runLocalMutationWithCustody(
       signal,
       restoredProviderLockDigest,
       reservation,
+      privateRunFileSequence,
     );
   } catch (originalError) {
     if (reservation?.kind === "v2") {

@@ -11,6 +11,7 @@ import type { SqlClient } from "../../core/adapters/storage/sql.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
 import { PRIVATE_RUN_FILE_MAX_BYTES } from "../../core/api/private_run_file_routes.ts";
 import { createPrivateRunFileGrantCodec } from "../../core/domains/private-run-files/grant.ts";
+import { PRIVATE_RUN_FILE_REFRESH_CAPABILITY } from "../../core/shared/private_run_file_refresh.ts";
 import { PostgresPrivateRunFileRepository } from "../../core/domains/private-run-files/repository_sql.ts";
 import {
   applyExpectedGuardFromPlanRun,
@@ -36,7 +37,7 @@ import {
 const OPT_IN = "TAKOSUMI_TEST_PRIVATE_RUN_FILE_PROVIDER_RUNNER";
 const PROVIDER_SOURCE = "registry.terraform.io/tako0614/takoform";
 const PROVIDER_VERSION = "5.0.0";
-const PROVIDER_COMMIT = "4da5b244";
+const PROVIDER_COMMIT = "cb5569b76a80bcea0deb79b51b5bb19d186b4888";
 const PRIVATE_SLOT = "host-v2-intent";
 const STORE_ID = "local-runner-native-proof";
 const FORM = "https://edge.forms.takoform.com/forms/ModuleWorker/0.3.0/";
@@ -61,14 +62,29 @@ interface PrivateFileDispatchEvidence {
 
 interface PrivateFileWireEvidence {
   readonly operation: "read" | "commit" | "resolve";
+  readonly grantDigest: string;
   readonly commitId?: string;
   readonly receipt?: Receipt;
+}
+
+interface PrivateFileRefreshEvidence {
+  readonly runId: string;
+  readonly sequence: number;
+  readonly grantDigest: string;
+  readonly status: number;
 }
 
 type CustodyEvent =
   | { readonly kind: "lost_commit_ack"; readonly commitId: string; readonly receipt: Receipt }
   | { readonly kind: "resolve_response"; readonly commitId: string; readonly receipt: Receipt }
+  | { readonly kind: "renewed_commit" }
   | { readonly kind: "host_post" };
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 test("lost-ACK custody rejects a Host POST before the matching resolve response", () => {
   const receipt: Receipt = {
@@ -108,6 +124,26 @@ function assertLostAckResolvedBeforeHostPost(
   }
 }
 
+async function waitWithin<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
+  return await Promise.race([
+    promise,
+    Bun.sleep(milliseconds).then(() => { throw new Error(message); }),
+  ]);
+}
+
+async function directPrivateRead(endpoint: string, grant: string): Promise<number> {
+  const response = await fetch(`${endpoint}/read`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${grant}`,
+      "content-type": "application/json",
+    },
+    body: "{}",
+  });
+  await response.body?.cancel();
+  return response.status;
+}
+
 test.skipIf(!enabled)(
   "real local Runner processes recover the Provider intent snapshot through Core PostgreSQL and encrypted blobs",
   async () => {
@@ -117,6 +153,13 @@ test.skipIf(!enabled)(
     expect(proof.runnerPids).toHaveLength(3);
     expect(new Set(proof.runnerPids).size).toBe(3);
     expect(proof.planAndApplyUseCurrentGrant).toBe(true);
+    expect(proof.applyGrantRenewal.refreshed).toBe(true);
+    expect(proof.applyGrantRenewal.sequence).toBe(1);
+    expect(proof.applyGrantRenewal.oldGrantRejectedStatus).toBe(401);
+    expect(proof.applyGrantRenewal.currentGrantReadStatus).toBe(200);
+    expect(proof.applyGrantRenewal.readUsedRenewedGrant).toBe(true);
+    expect(proof.applyGrantRenewal.lostAckCommitUsedPreRotationGrant).toBe(true);
+    expect(proof.applyGrantRenewal.resolveUsedRenewedGrant).toBe(true);
     expect(proof.slot).toBe(PRIVATE_SLOT);
     expect(proof.droppedAck.exactReceiptResolved).toBe(true);
     expect(proof.droppedAck.resolvedBeforeFirstHostPost).toBe(true);
@@ -128,6 +171,7 @@ test.skipIf(!enabled)(
     expect(proof.destroyReceivedSameSlot).toBe(true);
     console.info(JSON.stringify(proof));
   },
+  120_000,
 );
 
 interface ProofReport {
@@ -145,6 +189,16 @@ interface ProofReport {
   readonly runnerPids: readonly number[];
   readonly slot: string;
   readonly planAndApplyUseCurrentGrant: true;
+  readonly applyGrantRenewal: {
+    readonly refreshed: true;
+    readonly sequence: 1;
+    readonly oldGrantRejectedStatus: 401;
+    readonly currentGrantReadStatus: 200;
+    readonly readUsedRenewedGrant: true;
+    readonly lostAckCommitUsedPreRotationGrant: true;
+    readonly resolveUsedRenewedGrant: true;
+    readonly postHostCommitUsedRenewedGrant: boolean;
+  };
   readonly droppedAck: {
     readonly exactReceiptResolved: true;
     readonly resolvedBeforeFirstHostPost: true;
@@ -219,6 +273,16 @@ async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<Proof
     const hostApiRoot = `${host.url}${HOST_API_PATH}`;
 
     const wireEvidence: PrivateFileWireEvidence[] = [];
+    const refreshEvidence: PrivateFileRefreshEvidence[] = [];
+    const applyRefreshArrived = deferred<PrivateFileRefreshEvidence>();
+    const applyLostAckCommitArrived = deferred();
+    const applyLostAckCommitRelease = deferred();
+    let applyInitialGrant: string | undefined;
+    let applyRenewedGrant: string | undefined;
+    let applyRunId: string | undefined;
+    let holdApplyLostAckCommit = false;
+    let grantClock = Date.now();
+    const grantNow = () => grantClock;
     let dropNextCommitAck = false;
     let droppedCommitReceipt: Receipt | undefined;
     const corePortRef: { port?: number } = {};
@@ -249,21 +313,38 @@ async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<Proof
         });
         if (!forwarded.ok) return forwarded;
         if (operation === "read") {
-          wireEvidence.push({ operation: "read" });
+          const bearer = request.headers.get("authorization")?.slice("Bearer ".length) ?? "";
+          wireEvidence.push({
+            operation: "read",
+            grantDigest: createHash("sha256").update(bearer).digest("hex"),
+          });
           return forwarded;
         }
         const forwardedBody = await forwarded.json() as Record<string, unknown>;
         const commitId = typeof body.commitId === "string" ? body.commitId : undefined;
         const receipt = parseReceipt(forwardedBody.receipt);
+        const grantDigest = createHash("sha256")
+          .update(request.headers.get("authorization")?.slice("Bearer ".length) ?? "")
+          .digest("hex");
         wireEvidence.push({
           operation: operation as "commit" | "resolve",
+          grantDigest,
           ...(commitId ? { commitId } : {}),
           ...(receipt ? { receipt } : {}),
         });
+        if (operation === "commit" && applyRenewedGrant &&
+          grantDigest === createHash("sha256").update(applyRenewedGrant).digest("hex")) {
+          custodyEvents.push({ kind: "renewed_commit" });
+        }
         if (operation === "commit" && dropNextCommitAck) {
-          dropNextCommitAck = false;
           if (!commitId || !receipt) return new Response("missing committed receipt identity", { status: 502 });
           droppedCommitReceipt = receipt;
+          if (holdApplyLostAckCommit) {
+            holdApplyLostAckCommit = false;
+            applyLostAckCommitArrived.resolve();
+            await applyLostAckCommitRelease.promise;
+          }
+          dropNextCommitAck = false;
           custodyEvents.push({ kind: "lost_commit_ack", commitId, receipt });
           return Response.json({ kind: "unavailable" }, { status: 503 });
         }
@@ -288,17 +369,25 @@ async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<Proof
     const artifactCrypto = new PartitionedSecretBoundaryCrypto({
       globalPassphrase: randomUUID() + randomUUID(),
     });
-    const privateRunFilesFor = (client: SqlClient) => ({
-      endpoint: privateEndpoint,
-      maxBytes: PRIVATE_RUN_FILE_MAX_BYTES,
-      grants: createPrivateRunFileGrantCodec({ cryptoBoundary }),
-      repository: new PostgresPrivateRunFileRepository(client),
-      blobs: createLocalPrivateRunFileBlobStore({
-        root: privateBlobRoot,
+    const privateRunFilesFor = (client: SqlClient) => {
+      const codec = createPrivateRunFileGrantCodec({ cryptoBoundary, now: grantNow });
+      return {
+        endpoint: privateEndpoint,
         maxBytes: PRIVATE_RUN_FILE_MAX_BYTES,
-        cryptoBoundary,
-      }),
-    });
+        grants: {
+          open: codec.open,
+          mint: codec.mint,
+        },
+        repository: new PostgresPrivateRunFileRepository(client),
+        blobs: createLocalPrivateRunFileBlobStore({
+          root: privateBlobRoot,
+          maxBytes: PRIVATE_RUN_FILE_MAX_BYTES,
+          cryptoBoundary,
+        }),
+        grantNow,
+        refreshIntervalMs: 2,
+      };
+    };
 
     const runnerDispatches: PrivateFileDispatchEvidence[] = [];
     const runnerHttpEvidence: Array<{ method: string; path: string; status: number; safeError?: string }> = [];
@@ -311,8 +400,10 @@ async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<Proof
         if (!destination) return new Response("Runner unavailable", { status: 503 });
         const incoming = new URL(request.url);
         const isRunDispatch = request.method === "POST" && /^\/runs\/[^/]+$/u.test(incoming.pathname);
-        const bodyText = isRunDispatch ? await request.text() : undefined;
-        const bodyBytes = request.method === "GET" || request.method === "HEAD" || isRunDispatch
+        const isPrivateFileRefresh = request.method === "PUT" &&
+          /^\/runs\/[^/]+\/private-run-files$/u.test(incoming.pathname);
+        const bodyText = isRunDispatch || isPrivateFileRefresh ? await request.text() : undefined;
+        const bodyBytes = request.method === "GET" || request.method === "HEAD" || isRunDispatch || isPrivateFileRefresh
           ? undefined
           : new Uint8Array(await request.arrayBuffer());
         if (isRunDispatch && bodyText) {
@@ -333,7 +424,28 @@ async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<Proof
               grantLength: file.grant.length,
               grantDigest: createHash("sha256").update(file.grant).digest("hex"),
             });
+            if (payload.action === "apply") {
+              applyRunId = payload.runId;
+              applyInitialGrant = file.grant;
+            }
           }
+        }
+        let refresh: { runId: string; sequence: number; grantDigest: string; grant: string } | undefined;
+        if (isPrivateFileRefresh && bodyText) {
+          const body = JSON.parse(bodyText) as Record<string, unknown>;
+          const files = Array.isArray(body.files) ? body.files : [];
+          const file = files[0] as Record<string, unknown> | undefined;
+          if (typeof body.runnerRunId !== "string" || !Number.isSafeInteger(body.sequence) ||
+            typeof file?.grant !== "string" || typeof file.slot !== "string" ||
+            typeof file.endpoint !== "string") {
+            throw new Error("Runner private-file refresh carried malformed test evidence");
+          }
+          refresh = {
+            runId: body.runnerRunId,
+            sequence: body.sequence as number,
+            grant: file.grant,
+            grantDigest: createHash("sha256").update(file.grant).digest("hex"),
+          };
         }
         const target = new URL(incoming.pathname + incoming.search, destination);
         const headers = new Headers(request.headers);
@@ -343,6 +455,19 @@ async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<Proof
           headers,
           ...(bodyText !== undefined ? { body: bodyText } : bodyBytes !== undefined ? { body: bodyBytes } : {}),
         });
+        if (refresh) {
+          const evidence: PrivateFileRefreshEvidence = {
+            runId: refresh.runId,
+            sequence: refresh.sequence,
+            grantDigest: refresh.grantDigest,
+            status: response.status,
+          };
+          refreshEvidence.push(evidence);
+          if (refresh.runId === applyRunId && refresh.sequence === 1 && response.ok) {
+            applyRenewedGrant = refresh.grant;
+            applyRefreshArrived.resolve(evidence);
+          }
+        }
         const httpEvidence: { method: string; path: string; status: number; safeError?: string } = {
           method: request.method,
           path: incoming.pathname.replace(/\/runs\/[^/]+/u, "/runs/:runId"),
@@ -565,11 +690,64 @@ resource "takoform_module_worker" "app" {
     runnerPids.push(applyRunner.pid);
     activeRunnerUrl = applyRunner.baseUrl;
     dropNextCommitAck = true;
+    holdApplyLostAckCommit = true;
     const applyWireStart = wireEvidence.length;
-    const apply = await controller.createApplyRun({
+    const applyPromise = controller.createApplyRun({
       planRunId: plan.planRun.id,
       expected: applyExpectedGuardFromPlanRun(plan.planRun),
     });
+    let apply: Awaited<typeof applyPromise>;
+    let renewal: PrivateFileRefreshEvidence;
+    let oldGrantRejectedStatus: number;
+    let currentGrantReadStatus: number;
+    try {
+      await waitWithin(applyLostAckCommitArrived.promise, 30_000, "Apply did not reach the held lost-ACK commit");
+      if (!applyInitialGrant || !applyRunId) {
+        throw new Error("Apply dispatch did not capture its initial private-file descriptor");
+      }
+      // The real Provider's commit is durable at Core, but its exact ACK is
+      // held before the proxy returns the injected 503. Advance only the grant
+      // clock into the 90-second lead for the actual 360-second TTL.
+      grantClock += 280_000;
+      renewal = await waitWithin(applyRefreshArrived.promise, 10_000, "Core did not rotate the live Apply grant");
+      if (!applyRenewedGrant || renewal.runId !== applyRunId ||
+        renewal.sequence !== 1 || renewal.grantDigest === createHash("sha256").update(applyInitialGrant).digest("hex")) {
+        throw new Error("Core did not publish a distinct sequence-one Apply grant");
+      }
+      // The commit was issued with the initial grant; after renewal, expire
+      // that token while its ACK remains unknown to Provider. The Core Run is
+      // still executing and the exact provider resolve must use the new file.
+      grantClock += 81_000;
+      const coreEndpoint = `http://127.0.0.1:${corePortRef.port}/internal/private-run-files/v1`;
+      oldGrantRejectedStatus = await directPrivateRead(coreEndpoint, applyInitialGrant);
+      currentGrantReadStatus = await directPrivateRead(coreEndpoint, applyRenewedGrant);
+      if (oldGrantRejectedStatus !== 401 || currentGrantReadStatus !== 200) {
+        throw new Error("rotated Core grant did not enforce expiry while retaining the live Run authority");
+      }
+    } finally {
+      applyLostAckCommitRelease.resolve();
+    }
+    apply = await applyPromise;
+    const providerWire = wireEvidence.slice(applyWireStart);
+    const renewedDigest = renewal!.grantDigest;
+    const applyRefreshes = refreshEvidence.filter((entry) => entry.runId === applyRunId);
+    if (applyRefreshes.length !== 1 || applyRefreshes[0]?.sequence !== 1 || !applyRefreshes[0].status) {
+      throw new Error("live Apply did not complete exactly one sequence-one Runner descriptor refresh");
+    }
+    if (!providerWire.some((entry) => entry.operation === "read" && entry.grantDigest === renewedDigest)) {
+      throw new Error("compiled Provider did not read through the renewed descriptor");
+    }
+    if (!providerWire.some((entry) => entry.operation === "commit" &&
+      entry.grantDigest === createHash("sha256").update(applyInitialGrant!).digest("hex"))) {
+      throw new Error("lost-ACK commit did not use its original grant before renewal");
+    }
+    if (!providerWire.some((entry) => entry.operation === "resolve" && entry.grantDigest === renewedDigest)) {
+      throw new Error("compiled Provider did not resolve the lost ACK through the renewed descriptor");
+    }
+    const firstHostPostIndex = custodyEvents.findIndex((event) => event.kind === "host_post");
+    const postHostCommitUsedRenewedGrant = firstHostPostIndex >= 0 && custodyEvents.some(
+      (event, index) => index > firstHostPostIndex && event.kind === "renewed_commit",
+    );
     if (apply.applyRun.status !== "succeeded") {
       const persistedApply = await store.getApplyRun(apply.applyRun.id);
       throw new Error(
@@ -652,6 +830,16 @@ resource "takoform_module_worker" "app" {
       postgresRestart,
       slot: PRIVATE_SLOT,
       planAndApplyUseCurrentGrant: true,
+      applyGrantRenewal: {
+        refreshed: true,
+        sequence: renewal!.sequence as 1,
+        oldGrantRejectedStatus: oldGrantRejectedStatus! as 401,
+        currentGrantReadStatus: currentGrantReadStatus! as 200,
+        readUsedRenewedGrant: true,
+        lostAckCommitUsedPreRotationGrant: true,
+        resolveUsedRenewedGrant: true,
+        postHostCommitUsedRenewedGrant,
+      },
       droppedAck: {
         exactReceiptResolved: true,
         resolvedBeforeFirstHostPost: true,
@@ -669,6 +857,10 @@ resource "takoform_module_worker" "app" {
         "real local Runner entrypoint OS processes, OpenTofu CLI, and compiled Provider binary from the pinned source commit",
         "deterministic local HTTPS Host fixture; no production Host or authentication authority",
         "Core Run controller and current-grant minter are real; provider-private commit ACK loss is injected at a loopback HTTP proxy",
+        "the original commit uses its pre-rotation grant; refresh completes while its ACK is held, then the exact resolve uses the new descriptor; only the private-file grant clock advances, not Run lease or heartbeat time",
+        postHostCommitUsedRenewedGrant
+          ? "Provider persisted post-Host intent completion through a renewed-grant commit"
+          : "no post-Host renewed-grant commit was observed in this native Apply; commit-refresh coverage remains limited to the pinned Provider's focused Go evidence",
         "no immutable Runner image, Cloud service, or production qualification",
       ],
     };
@@ -687,7 +879,7 @@ resource "takoform_module_worker" "app" {
 
 async function inspectProviderSource(root: string): Promise<{ commit: string }> {
   const commit = (await commandText("git", ["rev-parse", "HEAD"], root)).trim();
-  if (!commit.startsWith(PROVIDER_COMMIT)) throw new Error("Provider source commit differs from the approved candidate");
+  if (commit !== PROVIDER_COMMIT) throw new Error("Provider source commit differs from the approved candidate");
   const dirty = (await commandText("git", ["status", "--porcelain"], root)).trim();
   if (dirty) throw new Error("Provider source worktree must be clean for native integration proof");
   return { commit };
@@ -774,7 +966,8 @@ async function startRunnerProcess(input: {
         const health = await response.json() as { capabilities?: unknown; mutationCustodyMode?: unknown };
         if (health.mutationCustodyMode !== "local-http" ||
           !Array.isArray(health.capabilities) ||
-          !health.capabilities.includes("takosumi.local-mutation-preparation@v2")) {
+          !health.capabilities.includes("takosumi.local-mutation-preparation@v2") ||
+          !health.capabilities.includes(PRIVATE_RUN_FILE_REFRESH_CAPABILITY)) {
           throw new Error("local Runner entrypoint did not expose the expected private preparation capability");
         }
         return {

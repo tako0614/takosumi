@@ -365,6 +365,10 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   /** Explicit private Runner-to-Core file mount; absent means no endpoint/grants. */
   readonly privateRunFiles?: PrivateRunFileRouteDependencies & {
     readonly endpoint: string;
+    /** Test/composition clock shared with the sealed grant codec, not Run leases. */
+    readonly grantNow?: () => number;
+    /** Bounded internal scheduling cadence; no public runtime setting. */
+    readonly refreshIntervalMs?: number;
   };
   readonly role?: TakosumiProcessRole;
   readonly runtimeEnv?: Record<string, string | undefined>;
@@ -994,6 +998,11 @@ export async function createTakosumiService(
 ): Promise<CreatedTakosumiService> {
   if (options.privateRunFiles) {
     validatePrivateRunFileEndpoint(options.privateRunFiles.endpoint);
+    const interval = options.privateRunFiles.refreshIntervalMs;
+    if (interval !== undefined &&
+      (!Number.isSafeInteger(interval) || interval < 1 || interval > 60_000)) {
+      throw new TypeError("private Run file refresh interval is invalid");
+    }
   }
   const runtimeEnv = options.runtimeEnv ?? currentRuntime().env.toObject();
   const runtimeConfig =
@@ -1287,6 +1296,12 @@ export async function createTakosumiService(
               grant: await options.privateRunFiles!.grants.mint(input),
             }),
           },
+          ...(options.privateRunFiles.grantNow
+            ? { privateRunFileGrantNow: options.privateRunFiles.grantNow }
+            : {}),
+          ...(options.privateRunFiles.refreshIntervalMs !== undefined
+            ? { privateRunFileRefreshIntervalMs: options.privateRunFiles.refreshIntervalMs }
+            : {}),
         }
       : {}),
     activity: activityService,

@@ -54,6 +54,17 @@ import {
   maxRunSecondsFromProfile,
   positiveIntegerLimitFromProfile,
 } from "./parsing.ts";
+import {
+  MAX_PRIVATE_RUN_FILE_DESCRIPTOR_BYTES,
+  MAX_PRIVATE_RUN_FILE_DISPATCHES,
+  MAX_PRIVATE_RUN_FILE_ROTATIONS,
+  PRIVATE_RUN_FILE_DESCRIPTOR_ENV,
+  privateRunFileManifestDigest,
+  type PrivateRunFileDescriptorFile,
+  type PrivateRunFileRefreshFile,
+  type PrivateRunFileRefreshOwner,
+  type PrivateRunFileRefreshUpdate,
+} from "../../core/shared/private_run_file_refresh.ts";
 
 // A 120-second credential renewed 90 seconds before expiry can rotate every
 // 30 seconds. Keep a large finite history for supported long-running plans.
@@ -64,6 +75,7 @@ const MAX_REDACTION_VALUE_BYTES_PER_RUN = 16 * 1024 * 1024;
 type RenewableCredentialIdentity = Omit<RenewableCredentialProjection, "initialValue">;
 const activeCredentialRefreshSessions = new Map<string, CredentialRefreshSession>();
 const activeRunRedactionValues = new Map<string, string[]>();
+const activePrivateRunFileRefreshSessions = new Map<string, PrivateRunFileRefreshSession>();
 
 async function stableCredentialManifestDigest(value: unknown): Promise<string> {
   return await digestBytes(new TextEncoder().encode(stableCredentialJson(value)));
@@ -269,6 +281,377 @@ function validCredentialValue(value: string): boolean {
     !value.includes("\0");
 }
 
+class PrivateRunFileRefreshSession {
+  #sequence: number;
+  #closed = false;
+  #rotations: number;
+  #tail: Promise<void> = Promise.resolve();
+  #descriptorPath: string | undefined;
+  #files: readonly PrivateRunFileRefreshFile[];
+
+  constructor(
+    readonly runId: string,
+    readonly owner: PrivateRunFileRefreshOwner,
+    readonly manifestDigest: string,
+    files: readonly PrivateRunFileRefreshFile[],
+    readonly redactionValues: string[],
+    readonly signal: AbortSignal | undefined,
+    initialSequence: number,
+  ) {
+    this.#sequence = initialSequence;
+    this.#rotations = initialSequence;
+    this.#files = [...files];
+  }
+
+  get metadata() {
+    return {
+      owner: this.owner,
+      runnerRunId: this.runId,
+      manifestDigest: this.manifestDigest,
+      sequence: this.#sequence,
+    } as const;
+  }
+
+  matches(context: CommandContext): boolean {
+    return context.privateRunFiles !== undefined &&
+      samePrivateRunFileIdentity(context.privateRunFiles, this.#files) &&
+      context.privateRunFileRefreshOwner?.kind === this.owner.kind &&
+      context.privateRunFileRefreshOwner.id === this.owner.id;
+  }
+
+  async promote(path: string): Promise<void> {
+    await this.#serialize(async () => {
+      if (this.#closed || this.signal?.aborted) {
+        throw new Error("private Run file refresh is no longer active");
+      }
+      if (this.#descriptorPath) throw new Error("private Run file descriptor is already promoted");
+      if (!this.redactionValues.includes(path)) {
+        if (this.redactionValues.length >= MAX_REDACTION_VALUES_PER_RUN) {
+          throw new Error("private Run file redaction history limit exceeded");
+        }
+        this.redactionValues.push(path);
+      }
+      try {
+        await publishPrivateRunFileDescriptor(path, this.#envelope(), undefined);
+      } catch {
+        throw new Error("private Run file descriptor publication failed");
+      }
+      this.#descriptorPath = path;
+    });
+  }
+
+  async update(update: PrivateRunFileRefreshUpdate): Promise<void> {
+    await this.#serialize(async () => {
+      if (this.#closed || this.signal?.aborted) {
+        throw new Error("private Run file refresh is no longer active");
+      }
+      if (
+        update.kind !== "takosumi.private-run-files.refresh@v1" ||
+        update.owner.kind !== this.owner.kind || update.owner.id !== this.owner.id ||
+        update.runnerRunId !== this.runId || update.manifestDigest !== this.manifestDigest ||
+        !samePrivateRunFileIdentity(update.files, this.#files)
+      ) throw new Error("private Run file refresh identity mismatch");
+
+      if (update.sequence === this.#sequence) {
+        if (!samePrivateRunFilesExactly(update.files, this.#files)) {
+          throw new Error("private Run file refresh replay mismatch");
+        }
+        if (this.#descriptorPath) {
+          try {
+            await assertPrivateRunFileDescriptorMatches(
+              this.#descriptorPath,
+              this.#envelope(),
+            );
+          } catch {
+            throw new Error("private Run file descriptor replay reconciliation failed");
+          }
+        }
+        return;
+      }
+      if (update.sequence !== this.#sequence + 1) {
+        throw new Error("private Run file refresh sequence mismatch");
+      }
+      if (this.#rotations >= MAX_PRIVATE_RUN_FILE_ROTATIONS) {
+        throw new Error("private Run file refresh rotation limit exceeded");
+      }
+      for (const descriptor of update.files) {
+        if (!isPrintableOpaqueGrant(descriptor.grant)) {
+          throw new Error("private Run file refresh descriptor is invalid");
+        }
+      }
+      const newValues = update.files.map(({ grant }) => grant)
+        .filter((grant) => !this.redactionValues.includes(grant));
+      const currentBytes = this.redactionValues.reduce(
+        (total, value) => total + new TextEncoder().encode(value).byteLength,
+        0,
+      );
+      const addedBytes = newValues.reduce(
+        (total, value) => total + new TextEncoder().encode(value).byteLength,
+        0,
+      );
+      if (
+        this.redactionValues.length + newValues.length > MAX_REDACTION_VALUES_PER_RUN ||
+        currentBytes + addedBytes > MAX_REDACTION_VALUE_BYTES_PER_RUN
+      ) throw new Error("private Run file refresh redaction history limit exceeded");
+      // Keep every newly minted grant redacted even if a filesystem publication
+      // becomes indeterminate after the atomic rename.
+      this.redactionValues.push(...newValues);
+
+      if (this.#descriptorPath) {
+        const nextEnvelope = this.#envelope(update.sequence, update.files);
+        try {
+          await publishPrivateRunFileDescriptor(
+            this.#descriptorPath,
+            nextEnvelope,
+            this.#envelope(),
+          );
+        } catch {
+          throw new Error("private Run file descriptor publication failed");
+        }
+      }
+      this.#files = [...update.files];
+      this.#sequence = update.sequence;
+      this.#rotations += 1;
+    });
+  }
+
+  async #serialize(work: () => Promise<void>): Promise<void> {
+    const previous = this.#tail;
+    let release!: () => void;
+    this.#tail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      await work();
+    } finally {
+      release();
+    }
+  }
+
+  #envelope(
+    sequence = this.#sequence,
+    files = this.#files,
+  ): PrivateRunFileDescriptorFile {
+    return { version: 1, sequence, files };
+  }
+
+  async close(): Promise<void> {
+    this.#closed = true;
+    await this.#tail;
+    this.#files = [];
+    this.#descriptorPath = undefined;
+  }
+}
+
+function isPrintableOpaqueGrant(value: string): boolean {
+  return value.length > 0 && value.length <= 16_384 && /^[\x21-\x7e]+$/u.test(value);
+}
+
+function samePrivateRunFileIdentity(
+  left: readonly PrivateRunFileRefreshFile[],
+  right: readonly PrivateRunFileRefreshFile[],
+): boolean {
+  const identities = (files: readonly PrivateRunFileRefreshFile[]) =>
+    files.map(({ slot, endpoint }) => `${slot}\0${endpoint}`).sort();
+  const leftIdentities = identities(left);
+  const rightIdentities = identities(right);
+  return leftIdentities.length === rightIdentities.length &&
+    leftIdentities.every((identity, index) => identity === rightIdentities[index]);
+}
+
+function samePrivateRunFilesExactly(
+  left: readonly PrivateRunFileRefreshFile[],
+  right: readonly PrivateRunFileRefreshFile[],
+): boolean {
+  return left.length === right.length && left.every((item, index) => {
+    const other = right[index];
+    return other !== undefined && item.slot === other.slot &&
+      item.endpoint === other.endpoint && item.grant === other.grant;
+  });
+}
+
+function privateRunFileDescriptorBytes(
+  envelope: PrivateRunFileDescriptorFile,
+): Uint8Array {
+  const bytes = new TextEncoder().encode(JSON.stringify(envelope));
+  if (bytes.byteLength > MAX_PRIVATE_RUN_FILE_DESCRIPTOR_BYTES) {
+    throw new Error("private Run file descriptor exceeds its size limit");
+  }
+  return bytes;
+}
+
+async function assertPrivateRunFileDirectory(path: string): Promise<void> {
+  const directory = await lstat(dirname(path));
+  if (
+    !directory.isDirectory() || directory.isSymbolicLink() ||
+    (directory.mode & 0o777) !== 0o700 ||
+    (typeof process.getuid === "function" && directory.uid !== process.getuid())
+  ) throw new Error("private Run file descriptor directory is unsafe");
+}
+
+async function readPrivateRunFileDescriptor(
+  path: string,
+): Promise<{ readonly envelope: PrivateRunFileDescriptorFile; readonly bytes: Uint8Array }> {
+  await assertPrivateRunFileDirectory(path);
+  const handle = await open(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  try {
+    const info = await handle.stat();
+    if (
+      !info.isFile() || (info.mode & 0o777) !== 0o600 || info.nlink !== 1 ||
+      (typeof process.getuid === "function" && info.uid !== process.getuid()) ||
+      info.size > MAX_PRIVATE_RUN_FILE_DESCRIPTOR_BYTES
+    ) throw new Error("private Run file descriptor is unsafe");
+    const text = await handle.readFile({ encoding: "utf8" });
+    const bytes = new TextEncoder().encode(text);
+    if (bytes.byteLength > MAX_PRIVATE_RUN_FILE_DESCRIPTOR_BYTES) {
+      throw new Error("private Run file descriptor exceeds its size limit");
+    }
+    const parsed = JSON.parse(text) as unknown;
+    if (
+      !isRecord(parsed) || parsed.version !== 1 ||
+      !Number.isSafeInteger(parsed.sequence) || (parsed.sequence as number) < 0 ||
+      (parsed.sequence as number) > MAX_PRIVATE_RUN_FILE_ROTATIONS ||
+      !Array.isArray(parsed.files)
+    ) throw new Error("private Run file descriptor is malformed");
+    const files = validatePrivateRunFiles(parsed.files);
+    const envelope: PrivateRunFileDescriptorFile = {
+      version: 1,
+      sequence: parsed.sequence as number,
+      files,
+    };
+    if (JSON.stringify(envelope) !== text) {
+      throw new Error("private Run file descriptor is not canonical");
+    }
+    return { envelope, bytes };
+  } finally {
+    await handle.close();
+  }
+}
+
+async function assertPrivateRunFileDescriptorMatches(
+  path: string,
+  expected: PrivateRunFileDescriptorFile,
+): Promise<void> {
+  const current = await readPrivateRunFileDescriptor(path);
+  if (JSON.stringify(current.envelope) !== JSON.stringify(expected)) {
+    throw new Error("private Run file descriptor content mismatch");
+  }
+}
+
+async function syncPrivateRunFileDirectory(path: string): Promise<void> {
+  const directory = await open(dirname(path), fsConstants.O_RDONLY | (fsConstants.O_DIRECTORY ?? 0));
+  try {
+    await directory.sync();
+  } finally {
+    await directory.close();
+  }
+}
+
+async function publishPrivateRunFileDescriptor(
+  path: string,
+  next: PrivateRunFileDescriptorFile,
+  expectedCurrent: PrivateRunFileDescriptorFile | undefined,
+): Promise<void> {
+  await assertPrivateRunFileDirectory(path);
+  const bytes = privateRunFileDescriptorBytes(next);
+  let current: PrivateRunFileDescriptorFile | undefined;
+  try {
+    current = (await readPrivateRunFileDescriptor(path)).envelope;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  if (expectedCurrent === undefined) {
+    if (current !== undefined) throw new Error("private Run file descriptor already exists");
+  } else if (current !== undefined) {
+    if (JSON.stringify(current) === JSON.stringify(next)) {
+      // Recover a prior publication whose caller did not observe the directory
+      // fsync/ACK. Re-fence both file contents and the containing directory.
+      const existing = await open(path, fsConstants.O_WRONLY | (fsConstants.O_NOFOLLOW ?? 0));
+      try {
+        await existing.sync();
+      } finally {
+        await existing.close();
+      }
+      await syncPrivateRunFileDirectory(path);
+      return;
+    }
+    if (JSON.stringify(current) !== JSON.stringify(expectedCurrent)) {
+      throw new Error("private Run file descriptor changed unexpectedly");
+    }
+  } else {
+    throw new Error("private Run file descriptor is missing");
+  }
+
+  const temporary = join(dirname(path), `.private-run-files-${randomUUID()}.tmp`);
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(
+      temporary,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL |
+        (fsConstants.O_NOFOLLOW ?? 0),
+      0o600,
+    );
+    await handle.writeFile(bytes);
+    await handle.sync();
+    const temporaryInfo = await handle.stat();
+    if (
+      !temporaryInfo.isFile() || (temporaryInfo.mode & 0o777) !== 0o600 ||
+      temporaryInfo.nlink !== 1 ||
+      (typeof process.getuid === "function" && temporaryInfo.uid !== process.getuid())
+    ) throw new Error("private Run file descriptor temporary is unsafe");
+    await handle.close();
+    handle = undefined;
+    await rename(temporary, path);
+    await chmod(path, 0o600);
+    const published = await readPrivateRunFileDescriptor(path);
+    if (JSON.stringify(published.envelope) !== JSON.stringify(next)) {
+      throw new Error("private Run file descriptor publication mismatch");
+    }
+    const finalHandle = await open(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+    try {
+      await finalHandle.sync();
+    } finally {
+      await finalHandle.close();
+    }
+    await syncPrivateRunFileDirectory(path);
+  } finally {
+    await handle?.close().catch(() => {});
+    await unlink(temporary).catch(() => {});
+  }
+}
+
+function validatePrivateRunFiles(value: unknown): readonly PrivateRunFileRefreshFile[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_PRIVATE_RUN_FILE_DISPATCHES) {
+    throw new Error("private Run file refresh descriptor set is invalid");
+  }
+  const files = privateRunFilesFromRequest({ privateRunFiles: value });
+  if (files.some(({ grant }) => !isPrintableOpaqueGrant(grant))) {
+    throw new Error("private Run file refresh descriptor set is invalid");
+  }
+  return files;
+}
+
+function parsePrivateRunFileRefreshUpdate(value: unknown): PrivateRunFileRefreshUpdate {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 6 ||
+    value.kind !== "takosumi.private-run-files.refresh@v1" ||
+    !isRecord(value.owner) || Object.keys(value.owner).length !== 2 ||
+    (value.owner.kind !== "plan" && value.owner.kind !== "apply") ||
+    typeof value.owner.id !== "string" || value.owner.id.length === 0 ||
+    typeof value.runnerRunId !== "string" ||
+    typeof value.manifestDigest !== "string" || !/^sha256:[0-9a-f]{64}$/u.test(value.manifestDigest) ||
+    !Number.isSafeInteger(value.sequence) || (value.sequence as number) < 0
+  ) throw new Error("private Run file refresh update is malformed");
+  return {
+    kind: "takosumi.private-run-files.refresh@v1",
+    owner: { kind: value.owner.kind, id: value.owner.id },
+    runnerRunId: value.runnerRunId,
+    manifestDigest: value.manifestDigest,
+    sequence: value.sequence as number,
+    files: validatePrivateRunFiles(value.files),
+  };
+}
+
 export function setRunRedactionValues(runId: string, values: string[]): void {
   activeRunRedactionValues.set(runId, values);
 }
@@ -354,6 +737,88 @@ export async function refreshRunCredentials(
   await session.update(update);
 }
 
+export async function beginRunPrivateRunFileRefreshSession(
+  runId: string,
+  action: "plan" | "apply" | "destroy",
+  request: unknown,
+  signal: AbortSignal | undefined,
+  redactionValues: string[],
+  initialSequence = 0,
+): Promise<object | undefined> {
+  const files = privateRunFilesFromRequest(request);
+  if (files.length === 0) {
+    if (initialSequence !== 0) {
+      throw new Error("private Run file refresh sequence has no descriptors");
+    }
+    return undefined;
+  }
+  if (
+    files.length > MAX_PRIVATE_RUN_FILE_DISPATCHES ||
+    !Number.isSafeInteger(initialSequence) || initialSequence < 0 ||
+    initialSequence > MAX_PRIVATE_RUN_FILE_ROTATIONS
+  ) throw new Error("private Run file refresh initial state is malformed");
+  const profile = recordField(request, "runnerProfile");
+  const context = commandContextFromRequest(
+    request,
+    isRecord(profile) ? profile : undefined,
+    signal,
+    runId,
+  );
+  const owner = context.privateRunFileRefreshOwner;
+  const expectedKind = action === "plan" ? "plan" : "apply";
+  if (!owner || owner.kind !== expectedKind) {
+    throw new Error("private Run file refresh has no exact Run owner");
+  }
+  if (signal?.aborted) throw new Error("private Run file refresh is no longer active");
+  if (activePrivateRunFileRefreshSessions.has(runId)) {
+    throw new Error("private Run file refresh session already exists for Run");
+  }
+  const manifestDigest = await privateRunFileManifestDigest({
+    owner,
+    runnerRunId: runId,
+    files,
+  });
+  const session = new PrivateRunFileRefreshSession(
+    runId,
+    owner,
+    manifestDigest,
+    files,
+    redactionValues,
+    signal,
+    initialSequence,
+  );
+  activePrivateRunFileRefreshSessions.set(runId, session);
+  return session;
+}
+
+export function runPrivateRunFileRefreshSessionMetadata(
+  runId: string,
+): PrivateRunFileRefreshSession["metadata"] | undefined {
+  return activePrivateRunFileRefreshSessions.get(runId)?.metadata;
+}
+
+export async function refreshRunPrivateFiles(
+  runId: string,
+  value: unknown,
+): Promise<number> {
+  const session = activePrivateRunFileRefreshSessions.get(runId);
+  if (!session) throw new Error("no active private Run file refresh session");
+  const update = parsePrivateRunFileRefreshUpdate(value);
+  await session.update(update);
+  return session.metadata.sequence;
+}
+
+export async function endRunPrivateRunFileRefreshSession(
+  runId: string,
+  handle: object | undefined,
+): Promise<void> {
+  if (!handle) return;
+  const session = activePrivateRunFileRefreshSessions.get(runId);
+  if (!session || session !== handle) return;
+  activePrivateRunFileRefreshSessions.delete(runId);
+  await session.close();
+}
+
 export function commandContextFromRequest(
   request: unknown,
   runnerProfile: JsonRecord | undefined,
@@ -371,6 +836,11 @@ export function commandContextFromRequest(
   const applyRunId = isRecord(applyRun)
     ? stringField(applyRun, "id")
     : undefined;
+  const privateRunFileRefreshOwner = applyRunId
+    ? { kind: "apply" as const, id: applyRunId }
+    : runId
+      ? { kind: "plan" as const, id: runId }
+      : undefined;
   const credentialRefreshOwner = applyRunId
     ? { kind: "apply" as const, id: applyRunId }
     : runId
@@ -423,6 +893,7 @@ export function commandContextFromRequest(
     ...(credentialRefreshSequence !== undefined ? { credentialRefreshSequence } : {}),
     ...(runtimeInputs.length > 0 ? { runtimeInputs } : {}),
     ...(privateRunFiles.length > 0 ? { privateRunFiles } : {}),
+    ...(privateRunFileRefreshOwner ? { privateRunFileRefreshOwner } : {}),
     ...(redactionValues.length > 0 ? { redactionValues } : {}),
     ...(maxRunSeconds ? { timeoutMs: maxRunSeconds * 1000 } : {}),
     ...(maxSourceArchiveBytes
@@ -439,11 +910,14 @@ export function openTofuCommandContext(
   context: CommandContext,
 ): CommandContext {
   if (!context.privateRunFiles?.length) return context;
+  if (!context.privateRunFilesFile) {
+    throw new Error("private Run file descriptor is not promoted");
+  }
   return {
     ...context,
     env: {
       ...context.env,
-      TAKOSUMI_PRIVATE_RUN_FILES: JSON.stringify(context.privateRunFiles),
+      [PRIVATE_RUN_FILE_DESCRIPTOR_ENV]: context.privateRunFilesFile,
     },
   };
 }
@@ -788,6 +1262,9 @@ export function privateRunFilesFromRequest(
   if (!Array.isArray(raw)) {
     throw new Error("private Run file grants are malformed");
   }
+  if (raw.length > MAX_PRIVATE_RUN_FILE_DISPATCHES) {
+    throw new Error("private Run file grants exceed their count limit");
+  }
   const seen = new Set<string>();
   return raw.map((entry) => {
     if (
@@ -805,7 +1282,7 @@ export function privateRunFilesFromRequest(
       !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(slot) ||
       seen.has(slot) ||
       typeof endpoint !== "string" || endpoint.length > 2_048 ||
-      typeof grant !== "string" || grant.length === 0 || grant.length > 16_384
+      typeof grant !== "string" || !isPrintableOpaqueGrant(grant)
     ) {
       throw new Error("private Run file grant is invalid");
     }
@@ -853,7 +1330,8 @@ export async function prepareProviderCredentialFiles(
 ): Promise<PreparedProviderCredentialFiles> {
   const files = context.credentialFiles ?? [];
   const renewable = context.renewableCredentials ?? [];
-  if (files.length === 0 && renewable.length === 0) {
+  const privateRunFiles = context.privateRunFiles ?? [];
+  if (files.length === 0 && renewable.length === 0 && privateRunFiles.length === 0) {
     return { context, cleanup: async () => {} };
   }
   // A SIBLING of the run workspace with a random suffix, never a child of it:
@@ -863,11 +1341,21 @@ export async function prepareProviderCredentialFiles(
   if (!tmpInfo.isDirectory() || tmpInfo.isSymbolicLink()) {
     throw new Error("run credential parent directory is unsafe");
   }
-  const credentialDir = await mkdtemp(`/tmp/${await credentialDirPrefixForWorkspace(workspace)}`);
+  let credentialDir: string | undefined;
   let session: CredentialRefreshSession | undefined;
+  let privateRunFileSession: PrivateRunFileRefreshSession | undefined;
   let sessionRegistered = false;
   let createdSession = false;
+  let privateRunFileSessionRegistered = false;
   try {
+    try {
+      credentialDir = await mkdtemp(`/tmp/${await credentialDirPrefixForWorkspace(workspace)}`);
+    } catch {
+      if (privateRunFiles.length > 0) throw new Error("private Run file preparation failed");
+      throw new Error("run credential directory creation failed");
+    }
+    if (!credentialDir) throw new Error("credential directory was not created");
+    const ownedCredentialDir = credentialDir;
     await chmod(credentialDir, 0o700);
     const env: Record<string, string> = { ...context.env };
     const renewableFiles = new Map<string, string>();
@@ -900,6 +1388,36 @@ export async function prepareProviderCredentialFiles(
         createdSession = true;
       }
     }
+    if (privateRunFiles.length > 0) {
+      const owner = context.privateRunFileRefreshOwner;
+      if (!runId || !owner) {
+        throw new Error("private Run files lost Run identity or owner");
+      }
+      const manifestDigest = await privateRunFileManifestDigest({
+        owner,
+        runnerRunId: runId,
+        files: privateRunFiles,
+      });
+      const pendingSession = activePrivateRunFileRefreshSessions.get(runId);
+      if (pendingSession) {
+        if (!pendingSession.matches(context)) {
+          throw new Error("pending private Run file refresh session does not match dispatch");
+        }
+        privateRunFileSession = pendingSession;
+      } else {
+        privateRunFileSession = new PrivateRunFileRefreshSession(
+          runId,
+          owner,
+          manifestDigest,
+          privateRunFiles,
+          (context.redactionValues ?? []) as string[],
+          context.signal,
+          0,
+        );
+        activePrivateRunFileRefreshSessions.set(runId, privateRunFileSession);
+        privateRunFileSessionRegistered = true;
+      }
+    }
     for (const file of files) {
       assertSafeCredentialFileName(file.path);
       assertSafeCredentialFileMode(file.mode);
@@ -922,11 +1440,20 @@ export async function prepareProviderCredentialFiles(
       renewableFiles.set(credential.fileEnvName, target);
     }
     if (session) await session.promote(renewableFiles);
+    let privateRunFilesFile: string | undefined;
+    if (privateRunFileSession) {
+      privateRunFilesFile = join(credentialDir, "private-run-files.json");
+      await privateRunFileSession.promote(privateRunFilesFile);
+    }
     return {
       context: {
         ...context,
         env,
+        ...(privateRunFilesFile ? { privateRunFilesFile } : {}),
         ...(session ? { redactionValues: session.redactionValues } : {}),
+        ...(privateRunFileSession
+          ? { redactionValues: privateRunFileSession.redactionValues }
+          : {}),
       },
       cleanup: async () => {
         try {
@@ -936,8 +1463,14 @@ export async function prepareProviderCredentialFiles(
               activeCredentialRefreshSessions.delete(runId!);
             }
           }
+          if (privateRunFileSession) {
+            await privateRunFileSession.close();
+            if (activePrivateRunFileRefreshSessions.get(runId!) === privateRunFileSession) {
+              activePrivateRunFileRefreshSessions.delete(runId!);
+            }
+          }
         } finally {
-          await shredCredentialDir(credentialDir);
+          await shredCredentialDir(ownedCredentialDir);
         }
       },
     };
@@ -945,10 +1478,20 @@ export async function prepareProviderCredentialFiles(
     if (session && runId) {
       await session.close().catch(() => {});
     }
+    if (privateRunFileSession && runId) {
+      await privateRunFileSession.close().catch(() => {});
+    }
     if ((sessionRegistered || createdSession) && runId && activeCredentialRefreshSessions.get(runId) === session) {
       activeCredentialRefreshSessions.delete(runId);
     }
-    await shredCredentialDir(credentialDir);
+    if (privateRunFileSessionRegistered && runId &&
+      activePrivateRunFileRefreshSessions.get(runId) === privateRunFileSession) {
+      activePrivateRunFileRefreshSessions.delete(runId);
+    }
+    if (credentialDir) await shredCredentialDir(credentialDir).catch(() => {});
+    if (privateRunFiles.length > 0) {
+      throw new Error("private Run file preparation failed");
+    }
     throw error;
   }
 }

@@ -52,6 +52,12 @@ import type {
   PrivateRunFileScope,
 } from "../../private-run-files/mod.ts";
 import { PRIVATE_RUN_FILE_GRANT_MAX_TTL_MS } from "../../private-run-files/grant.ts";
+import {
+  MAX_PRIVATE_RUN_FILE_DISPATCHES,
+  MAX_PRIVATE_RUN_FILE_ROTATIONS,
+  privateRunFileManifestDigest,
+  type PrivateRunFileRefreshOwner,
+} from "../../../shared/private_run_file_refresh.ts";
 import type {
   CapsuleCompatibilityReport,
   CapsuleProviderRequirement,
@@ -496,6 +502,10 @@ const RUN_EXECUTION_RENEWAL_UNAVAILABLE_REASON =
 const RUN_RENEWAL_TRANSPORT_RETRY_LIMIT = 1;
 const RUN_RENEWAL_TRANSPORT_RETRY_MAX_DELAY_MS = 250;
 const PRIVATE_RUN_FILE_GRANT_DISPATCH_MARGIN_MS = 60_000;
+type MintedPrivateRunFiles = {
+  readonly files: readonly PrivateRunFileDispatch[];
+  readonly expiresAt: number;
+};
 const WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_REASON =
   "workspace_management_admission_conflict";
 const WORKSPACE_MANAGEMENT_ADMISSION_CONFLICT_MESSAGE =
@@ -1547,6 +1557,8 @@ export interface RunEngineDependencies {
   readonly verification: RunVerificationService;
   readonly planResolution: PlanResolutionService;
   readonly privateRunFileGrantMinter?: PrivateRunFileGrantMinter;
+  readonly privateRunFileGrantNow?: () => number;
+  readonly privateRunFileRefreshIntervalMs?: number;
   readonly moduleVariableMaterializer?: CapsuleModuleVariableMaterializer;
   readonly runtimeSecretFileMaterializer?: RuntimeSecretFileMaterializer;
   readonly runtimeInputMaterializer?: RuntimeInputMaterializer;
@@ -1588,6 +1600,8 @@ export class RunEngine {
   readonly #verification: RunVerificationService;
   readonly #planResolution: PlanResolutionService;
   readonly #privateRunFileGrantMinter?: PrivateRunFileGrantMinter;
+  readonly #privateRunFileGrantNow: () => number;
+  readonly #privateRunFileRefreshIntervalMs: number;
   readonly #moduleVariableMaterializer?: CapsuleModuleVariableMaterializer;
   readonly #runtimeSecretFileMaterializer?: RuntimeSecretFileMaterializer;
   readonly #runtimeInputMaterializer?: RuntimeInputMaterializer;
@@ -1641,6 +1655,13 @@ export class RunEngine {
     this.#verification = deps.verification;
     this.#planResolution = deps.planResolution;
     this.#privateRunFileGrantMinter = deps.privateRunFileGrantMinter;
+    this.#privateRunFileGrantNow = deps.privateRunFileGrantNow ?? Date.now;
+    const privateRefreshIntervalMs = deps.privateRunFileRefreshIntervalMs ?? 10_000;
+    if (!Number.isSafeInteger(privateRefreshIntervalMs) ||
+      privateRefreshIntervalMs < 1 || privateRefreshIntervalMs > 60_000) {
+      throw new TypeError("private Run file refresh interval is invalid");
+    }
+    this.#privateRunFileRefreshIntervalMs = privateRefreshIntervalMs;
     this.#moduleVariableMaterializer = deps.moduleVariableMaterializer;
     this.#runtimeSecretFileMaterializer = deps.runtimeSecretFileMaterializer;
     this.#runtimeInputMaterializer = deps.runtimeInputMaterializer;
@@ -1834,7 +1855,7 @@ export class RunEngine {
     runId: string,
     leaseToken: string,
     profile: RunnerProfile,
-  ): Promise<readonly PrivateRunFileDispatch[] | undefined> {
+  ): Promise<MintedPrivateRunFiles | undefined> {
     if (!slots?.length) return undefined;
     const capsuleId = planRun.capsuleId;
     const epoch = planRun.capsuleExecutionAuthorityEpoch;
@@ -1879,10 +1900,25 @@ export class RunEngine {
       "resolve",
     ];
     const maxRunSeconds = profile.resourceLimits?.maxRunSeconds ?? 900;
-    // The grant codec's default clock is Date.now(); use that same wall clock
-    // instead of the injected Run lifecycle clock to avoid expiry skew.
-    const expiresAt = Date.now() + maxRunSeconds * 1_000 +
+    // The grant codec's default clock is Date.now(); use a separate wall clock
+    // instead of the Run lifecycle clock. Tests inject both codec and Core clocks.
+    const grantNow = this.#privateRunFileGrantNow();
+    if (!Number.isSafeInteger(grantNow) || grantNow < 0) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "private Run file grant clock is unavailable",
+        { reason: "private_run_file_grant_unavailable" },
+      );
+    }
+    const expiresAt = grantNow + maxRunSeconds * 1_000 +
       PRIVATE_RUN_FILE_GRANT_DISPATCH_MARGIN_MS;
+    if (!Number.isSafeInteger(expiresAt)) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "private Run file grant clock is unavailable",
+        { reason: "private_run_file_grant_unavailable" },
+      );
+    }
     const dispatch: PrivateRunFileDispatch[] = [];
     try {
       for (const { slot } of slots) {
@@ -1899,7 +1935,17 @@ export class RunEngine {
         ) {
           throw new Error("invalid private run file grant result");
         }
-        dispatch.push({ slot, endpoint: minted.endpoint, grant: minted.grant });
+        const parsedEndpoint = new URL(minted.endpoint);
+        if (
+          (parsedEndpoint.protocol !== "http:" && parsedEndpoint.protocol !== "https:") ||
+          parsedEndpoint.username || parsedEndpoint.password || parsedEndpoint.search ||
+          parsedEndpoint.hash || parsedEndpoint.pathname !== "/internal/private-run-files/v1"
+        ) throw new Error("invalid private run file endpoint");
+        dispatch.push({
+          slot,
+          endpoint: parsedEndpoint.toString().replace(/\/$/u, ""),
+          grant: minted.grant,
+        });
       }
     } catch {
       // A mint failure may contain an opaque bearer token or host-private detail.
@@ -1909,7 +1955,7 @@ export class RunEngine {
         { reason: "private_run_file_grant_unavailable" },
       );
     }
-    return dispatch;
+    return { files: dispatch, expiresAt };
   }
 
   #assertPrivateRunFileGrantLifetime(
@@ -1929,6 +1975,34 @@ export class RunEngine {
         { reason: "private_run_file_grant_lifetime_unsupported" },
       );
     }
+  }
+
+  async #assertPrivateRunFileRefreshCapability(
+    profile: RunnerProfile,
+    slots: InstallConfig["privateRunFiles"],
+    owner: PrivateRunFileRefreshOwner,
+  ): Promise<void> {
+    if (!slots?.length) return;
+    if (slots.length > MAX_PRIVATE_RUN_FILE_DISPATCHES) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "private Run file slot count exceeds the Runner descriptor bound",
+        { reason: "private_run_file_refresh_unavailable" },
+      );
+    }
+    const runner = this.#runnerForProfile(profile);
+    if (!runner.assertPrivateRunFileRefreshCapability ||
+      !runner.refreshPrivateRunFiles) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Runner cannot refresh private Run file grants",
+        { reason: "private_run_file_refresh_unavailable" },
+      );
+    }
+    await runner.assertPrivateRunFileRefreshCapability({
+      owner,
+      runnerRunId: owner.id,
+    });
   }
 
   /** Secret exposure policy of the profile a run dispatches to (credential gate). */
@@ -5576,6 +5650,11 @@ export class RunEngine {
     const dispatch = moduleDispatchFromInputs(inputs);
     try {
       this.#assertPrivateRunFileGrantLifetime(profile, dispatch.privateRunFileSlots);
+      await this.#assertPrivateRunFileRefreshCapability(
+        profile,
+        dispatch.privateRunFileSlots,
+        { kind: "plan", id: planRun.id },
+      );
     } catch (error) {
       return (await this.#failUnclaimedPlanRun(planRun, error)).run;
     }
@@ -5715,6 +5794,11 @@ export class RunEngine {
     const dispatch = moduleDispatchFromInputs(inputs);
     try {
       this.#assertPrivateRunFileGrantLifetime(profile, dispatch.privateRunFileSlots);
+      await this.#assertPrivateRunFileRefreshCapability(
+        profile,
+        dispatch.privateRunFileSlots,
+        { kind: "apply", id: applyRun.id },
+      );
     } catch (error) {
       const result = await this.#failUnclaimedApplyRun(applyRun, error);
       if (!result.run) return await this.getApplyRun(runId);
@@ -7385,6 +7469,170 @@ export class RunEngine {
   }
 
   /**
+   * Replaces only transient Runner grant delivery while the exact Run remains
+   * claimed. The Runner ACKs after it has staged or atomically published the
+   * descriptor file; an uncertain ACK aborts this attempt, never resends an
+   * OpenTofu mutation. The repository still fences every private-file access.
+   */
+  async #withPrivateRunFileRenewal<T>(
+    input: {
+      readonly planRun: PlanRun;
+      readonly runId: string;
+      readonly ownerKind: "plan" | "apply";
+      readonly leaseToken: string;
+      readonly profile: RunnerProfile;
+      readonly slots: InstallConfig["privateRunFiles"];
+    },
+    signal: AbortSignal,
+    assertHeldLease: () => Promise<void>,
+    work: (
+      signal: AbortSignal,
+      files: readonly PrivateRunFileDispatch[] | undefined,
+    ) => Promise<T>,
+    retainsTypedFailureReceipt?: (result: T) => boolean,
+  ): Promise<T> {
+    if (!input.slots?.length) return await work(signal, undefined);
+    const runner = this.#runnerForProfile(input.profile);
+    if (!runner.refreshPrivateRunFiles) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Runner cannot refresh private Run file grants",
+        { reason: "private_run_file_refresh_unavailable" },
+      );
+    }
+    const refreshFailure = () => new OpenTofuControllerError(
+      "failed_precondition",
+      "private Run file grant refresh is unavailable",
+      { reason: "private_run_file_refresh_unavailable" },
+    );
+    await assertHeldLease();
+    const initial = await this.#mintPrivateRunFileDispatch(
+      input.planRun,
+      input.slots,
+      input.runId,
+      input.leaseToken,
+      input.profile,
+    );
+    if (!initial) throw refreshFailure();
+    await assertHeldLease();
+    const owner = { kind: input.ownerKind, id: input.runId } as const;
+    const manifestDigest = await privateRunFileManifestDigest({
+      owner,
+      runnerRunId: input.runId,
+      files: initial.files,
+    });
+    let expiresAt = initial.expiresAt;
+    let sequence = 0;
+    let stopped = false;
+    let deliveryPending = false;
+    let activeTick: Promise<void> | undefined;
+    let refreshError: OpenTofuControllerError | undefined;
+    const child = new AbortController();
+    const abortChild = () => child.abort(signal.reason);
+    signal.addEventListener("abort", abortChild, { once: true });
+    if (signal.aborted) abortChild();
+    const tick = async (): Promise<void> => {
+      if (stopped || child.signal.aborted) return;
+      try {
+        const now = this.#privateRunFileGrantNow();
+        if (!Number.isSafeInteger(now) || now < 0) throw refreshFailure();
+        if (now >= expiresAt) throw refreshFailure();
+        const lifetime = input.profile.resourceLimits?.maxRunSeconds ?? 900;
+        const leadMs = Math.min(
+          90_000,
+          Math.floor((lifetime * 1_000 + PRIVATE_RUN_FILE_GRANT_DISPATCH_MARGIN_MS) / 2),
+        );
+        if (now < expiresAt - leadMs) return;
+        if (sequence >= MAX_PRIVATE_RUN_FILE_ROTATIONS) throw refreshFailure();
+        await assertHeldLease();
+        if (stopped || child.signal.aborted) return;
+        const minted = await this.#mintPrivateRunFileDispatch(
+          input.planRun,
+          input.slots,
+          input.runId,
+          input.leaseToken,
+          input.profile,
+        );
+        if (!minted || minted.expiresAt <= expiresAt ||
+          await privateRunFileManifestDigest({
+            owner,
+            runnerRunId: input.runId,
+            files: minted.files,
+          }) !== manifestDigest) throw refreshFailure();
+        await assertHeldLease();
+        if (stopped || child.signal.aborted) return;
+        deliveryPending = true;
+        try {
+          await runner.refreshPrivateRunFiles!({
+            kind: "takosumi.private-run-files.refresh@v1",
+            owner,
+            runnerRunId: input.runId,
+            manifestDigest,
+            sequence: sequence + 1,
+            files: minted.files,
+          }, { signal: child.signal });
+        } finally {
+          deliveryPending = false;
+        }
+        await assertHeldLease();
+        if (stopped || child.signal.aborted) return;
+        sequence += 1;
+        expiresAt = minted.expiresAt;
+      } catch {
+        if (!stopped && !child.signal.aborted) {
+          refreshError = refreshFailure();
+          child.abort(refreshError);
+        }
+      }
+    };
+    const runTick = () => {
+      if (activeTick) return;
+      const pending = tick().finally(() => {
+        if (activeTick === pending) activeTick = undefined;
+      });
+      activeTick = pending;
+    };
+    const interval = setInterval(runTick, this.#privateRunFileRefreshIntervalMs);
+    (interval as { unref?: () => void }).unref?.();
+    let result: T | undefined;
+    let workError: unknown;
+    try {
+      result = await work(child.signal, initial.files);
+    } catch (error) {
+      workError = error;
+    } finally {
+      stopped = true;
+      clearInterval(interval);
+      if (activeTick) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            activeTick,
+            new Promise<void>((resolve) => { timer = setTimeout(resolve, 100); }),
+          ]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      }
+      if (deliveryPending || this.#privateRunFileGrantNow() >= expiresAt) {
+        refreshError ??= refreshFailure();
+      }
+      if (!child.signal.aborted) child.abort(refreshFailure());
+      signal.removeEventListener("abort", abortChild);
+    }
+    if (workError !== undefined) {
+      if (refreshError && workError instanceof DOMException && workError.name === "AbortError") {
+        throw refreshError;
+      }
+      throw workError;
+    }
+    if (refreshError && (result === undefined || !retainsTypedFailureReceipt?.(result))) {
+      throw refreshError;
+    }
+    return result as T;
+  }
+
+  /**
    * A provider process cannot inherit a renewed environment variable. Keep the
    * short-lived credential alive only while this exact PlanRun or ApplyRun is executing;
    * the runner projects each value to a private file that the provider rereads.
@@ -8385,14 +8633,8 @@ export class RunEngine {
       const dispatchPlan = async (
         environment: ResolvedRunEnvironment,
         signal: AbortSignal,
+        privateRunFiles: readonly PrivateRunFileDispatch[] | undefined,
       ) => {
-        const privateRunFiles = await this.#mintPrivateRunFileDispatch(
-          effectiveRunning,
-          dispatch.privateRunFileSlots,
-          effectiveRunning.id,
-          leaseToken,
-          profile,
-        );
         const job = {
           planRun: effectiveRunning,
           runnerProfile: profile,
@@ -8460,19 +8702,32 @@ export class RunEngine {
         leaseToken,
         undefined,
         (signal, assertHeldLease) =>
-          this.#withCredentialRenewal(
+          this.#withPrivateRunFileRenewal(
             {
-              running: effectiveRunning,
               planRun: effectiveRunning,
-              profile,
-              credentials: effectiveRunEnvironment.credentials,
-              phase: "plan",
+              runId: effectiveRunning.id,
+              ownerKind: "plan",
               leaseToken,
+              profile,
+              slots: dispatch.privateRunFileSlots,
             },
             signal,
             assertHeldLease,
-            (credentialSignal) =>
-              dispatchPlan(effectiveRunEnvironment, credentialSignal),
+            (privateFileSignal, privateRunFiles) =>
+              this.#withCredentialRenewal(
+                {
+                  running: effectiveRunning,
+                  planRun: effectiveRunning,
+                  profile,
+                  credentials: effectiveRunEnvironment.credentials,
+                  phase: "plan",
+                  leaseToken,
+                },
+                privateFileSignal,
+                assertHeldLease,
+                (credentialSignal) =>
+                  dispatchPlan(effectiveRunEnvironment, credentialSignal, privateRunFiles),
+              ),
           ),
       );
       const withRunRenewalMs = finiteElapsedMs(
@@ -9192,31 +9447,46 @@ export class RunEngine {
         leaseToken,
         lease,
         (signal, assertHeldLease) =>
-          this.#withCredentialRenewal(
+          this.#withPrivateRunFileRenewal(
             {
-              running: runningWithEnv,
               planRun,
-              profile,
-              credentials: runEnvironment.credentials,
-              phase: "apply",
+              runId: runningWithEnv.id,
+              ownerKind: "apply",
               leaseToken,
+              profile,
+              slots: dispatch.privateRunFileSlots,
             },
             signal,
             assertHeldLease,
-            (credentialSignal) =>
-              this.#dispatchApply({
-                running: runningWithEnv,
-                planRun,
-                profile,
-                dispatch,
-                credentials: runEnvironment.credentials,
-                leaseToken,
-                onDispatch: () => {
-                  runnerDispatched = true;
+            (privateFileSignal, privateRunFiles) =>
+              this.#withCredentialRenewal(
+                {
+                  running: runningWithEnv,
+                  planRun,
+                  profile,
+                  credentials: runEnvironment.credentials,
+                  phase: "apply",
+                  leaseToken,
                 },
-                signal: credentialSignal,
-                deadlineAt,
-              }),
+                privateFileSignal,
+                assertHeldLease,
+                (credentialSignal) =>
+                  this.#dispatchApply({
+                    running: runningWithEnv,
+                    planRun,
+                    profile,
+                    dispatch,
+                    credentials: runEnvironment.credentials,
+                    privateRunFiles,
+                    leaseToken,
+                    onDispatch: () => {
+                      runnerDispatched = true;
+                    },
+                    signal: credentialSignal,
+                    deadlineAt,
+                  }),
+                (outcome) => Boolean(outcome.result.providerExecutionFailure),
+              ),
             (outcome) => Boolean(outcome.result.providerExecutionFailure),
           ),
       );
@@ -9749,6 +10019,7 @@ export class RunEngine {
     readonly profile: RunnerProfile;
     readonly dispatch: RunModuleDispatch;
     readonly credentials: RunCredentials | undefined;
+    readonly privateRunFiles: readonly PrivateRunFileDispatch[] | undefined;
     readonly leaseToken: string;
     readonly signal: AbortSignal;
     /** Host invocation deadline forwarded to the runner adapter, if any. */
@@ -9802,13 +10073,7 @@ export class RunEngine {
       planPolicy?.providerInstallation?.requireMirror === true
         ? { requireMirror: true }
         : undefined;
-    const privateRunFiles = await this.#mintPrivateRunFileDispatch(
-      planRun,
-      dispatch.privateRunFileSlots,
-      running.id,
-      leaseToken,
-      profile,
-    );
+    const privateRunFiles = input.privateRunFiles;
     input.onDispatch();
     const runner = this.#runnerForProfile(profile);
     const result = await runner.apply(
@@ -11304,13 +11569,6 @@ export class RunEngine {
     }
     const capsule =
       plannedCapsule ?? (await this.#requireCurrentPlannedCapsule(planRun));
-    const privateRunFiles = await this.#mintPrivateRunFileDispatch(
-      planRun,
-      dispatch.privateRunFileSlots,
-      running.id,
-      leaseToken,
-      profile,
-    );
     // Resolve the value-free retirement fence before any external teardown.
     // A missing/corrupt pinned InstallConfig must fail while provider state is
     // still untouched; only the marker append waits for successful destroy.
@@ -11445,7 +11703,18 @@ export class RunEngine {
         leaseToken,
         lease,
         (signal, assertHeldLease) =>
-          this.#withCredentialRenewal(
+          this.#withPrivateRunFileRenewal(
+            {
+              planRun,
+              runId: effectiveRunning.id,
+              ownerKind: "apply",
+              leaseToken,
+              profile,
+              slots: dispatch.privateRunFileSlots,
+            },
+            signal,
+            assertHeldLease,
+            (privateFileSignal, privateRunFiles) => this.#withCredentialRenewal(
             {
               running: effectiveRunning,
               planRun,
@@ -11454,7 +11723,7 @@ export class RunEngine {
               phase: "destroy",
               leaseToken,
             },
-            signal,
+            privateFileSignal,
             assertHeldLease,
             (credentialSignal) => {
               runnerDispatched = true;
@@ -11506,6 +11775,8 @@ export class RunEngine {
             runnerExecutionControl(credentialSignal, deadlineAt),
               );
             },
+            (outcome) => Boolean(outcome.providerExecutionFailure),
+            ),
             (outcome) => Boolean(outcome.providerExecutionFailure),
           ),
       );
