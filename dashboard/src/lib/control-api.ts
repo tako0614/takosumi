@@ -450,7 +450,16 @@ export interface InterfaceMaterializationFailureListOptions {
 }
 
 export type CapsuleStatus =
-  "pending" | "active" | "stale" | "error" | "disabled" | "destroyed";
+  | "pending"
+  | "active"
+  | "stale"
+  | "error"
+  | "disabled"
+  | "uninstalled"
+  | "destroyed";
+
+/** Two-stage uninstall progress (see `uninstall` on the public Capsule). */
+export type CapsuleUninstall = NonNullable<ContractCapsule["uninstall"]>;
 
 export interface Capsule {
   readonly id: string;
@@ -486,6 +495,11 @@ export interface Capsule {
    * always stop and wait for the user.
    */
   readonly autoUpdate?: boolean;
+  /**
+   * Latest two-stage uninstall request. While `status` is `uninstalled` the
+   * service and its data stay until `scheduledDestroyAt`.
+   */
+  readonly uninstall?: CapsuleUninstall;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -1780,6 +1794,7 @@ const CAPSULE_STATUSES: ReadonlySet<CapsuleStatus> = new Set([
   "stale",
   "error",
   "disabled",
+  "uninstalled",
   "destroyed",
 ]);
 
@@ -1831,6 +1846,38 @@ export async function setCapsuleAutoUpdate(
   const body = await controlFetch<{ capsule: Capsule }>(
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}`,
     { method: "PATCH", body: { autoUpdate: enabled } },
+  );
+  return body.capsule;
+}
+
+export interface ScheduleCapsuleUninstallResult {
+  readonly capsule: Capsule;
+  /** Operator grace period in whole days, when the host reports it. */
+  readonly graceDays?: number;
+  readonly alreadyDeleted?: boolean;
+}
+
+/**
+ * Stage one of the two-stage uninstall: the service and its data stay until
+ * the grace period ends, and the owner can cancel until then. Teardown then
+ * runs server-side after a data export attempt.
+ */
+export async function scheduleCapsuleUninstall(
+  capsuleId: string,
+): Promise<ScheduleCapsuleUninstallResult> {
+  return await controlFetch<ScheduleCapsuleUninstallResult>(
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/uninstall`,
+    { method: "POST" },
+  );
+}
+
+/** Cancels a scheduled uninstall during its grace period. */
+export async function cancelCapsuleUninstall(
+  capsuleId: string,
+): Promise<Capsule> {
+  const body = await controlFetch<{ capsule: Capsule }>(
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/cancel-uninstall`,
+    { method: "POST" },
   );
   return body.capsule;
 }

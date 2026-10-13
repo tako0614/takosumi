@@ -34,7 +34,7 @@ future behavior requires a new design or belongs to an existing owner PR.
 
 | Item | Why the snapshot is not recovered |
 | --- | --- |
-| A0-A2 uninstall, scheduler, scoped export, destroy UI and file backup store | Existing PR #422 implements a different revision/authority-fenced design. The WIP changes plain DELETE semantics, lacks atomic intent creation, and mixes other Capsule records into export |
+| A0-A2 uninstall, scheduler, scoped export, destroy UI and file backup store | Merged PR #422 implements a different revision/authority-fenced design. The WIP changes plain DELETE semantics, lacks atomic intent creation, and mixes other Capsule records into export |
 | A3 automatic failed-install destroy / A4 automatic re-plan | Introduces unattended mutation/system approval and new persistent state; no current compatible authority contract or migration |
 | Recovery keyset/cursor tables and billing-pending physical column | WIP migration numbers collide; SQL trusts stale heartbeat columns; billing backfill differs from the current latest-marker rule. Current retirement/materialization paths cannot be replaced |
 | Generic work-item queue | Only WIP deferred-destroy handler uses it; PR #422 uses a different scheduler, so this queue has no current consumer |
@@ -73,7 +73,18 @@ PR #419/#421 were integrated at `c56268c21`; PR #420 was subsequently integrated
 from `eccdcd133`. Source creation tests and browser fixtures now assert deferred
 auto-sync plus exactly one post-Plan PATCH, with no PATCH on timed-out attempts;
 unexpected traffic still fails the browser harness. The unused-export baseline
-after integrating #420 is 19 (down from the pre-integration 24).
+after integrating #420 is 19 (down from the pre-integration 24). PR #422 then
+landed at `62095f11a`; its uninstall finalizer, revision/authorization fences and
+Postgres v117 are preserved unchanged. D1 has no new migration in that PR. Our
+recovery adds no migration and does not transplant the old A design.
+
+The initial ready-PR head passed all 20 local gate phases, but Actions exposed
+a pre-existing randomized private grant tamper test which could change no
+decoded byte, plus a reactive-module cache test already fixed by #422. The
+grant test now flips an actual AES-GCM ciphertext byte and retains rejection
+assertions; 100 repetitions pass. The #422 browser-module isolation fix passes
+10 focused runs. Integration, test repair, and staging-only publication were
+independently reviewed; the final integrated head must pass the full gate again.
 
 Focused commands/results, full local gate, independent review, PR/merge identity
 and staging outcome are recorded with the PR. The staging config is held outside

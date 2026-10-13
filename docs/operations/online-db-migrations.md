@@ -202,6 +202,31 @@ process を起動せず、障害時は schema と migration ledger を照合し�
 この migration は state-only recovery の artifact 検証や operator authorization
 を実装・許可しません。
 
+## Capsule uninstalled status expansion (Postgres v117)
+
+v117 は `takosumi_capsules` の status CHECK に二段階アンインストールの猶予状態
+`uninstalled` を追加する `expand` です。v35 で inline に作った制約は表の rename
+後も `takosumi_opentofu_installations_status_check` という名前のまま残っているため、
+一つの ALTER TABLE でこの旧名と正準名 `takosumi_capsules_status_check` の両方を
+`if exists` で外し、正準名で 7 状態を受理する制約を付け直します。行と JSON record
+は書き換えません。D1 の capsules 表には status の CHECK が無く、猶予情報は既存の
+`record_json` に入るので、この変更に対応する D1 schema migration はありません。
+
+明示的な廃棄許可のない対象 DB は protected として扱います。適用は通常の明示
+predeploy migration job に限定し、事前に対象 DB の
+`select conname from pg_constraint where conrelid = 'takosumi_capsules'::regclass and contype = 'c'`
+で制約名を確認します。どちらの名前でもない status 制約が残っている環境では、適用後も
+`uninstalled` が拒否され、削除予約は DB エラーで失敗します (データは変わりません)。
+ローカル検証は v116 の実 schema に全状態の代表行を作り、transaction rollback、
+適用後の全行保持、`uninstalled` の受理、未知 status の拒否、再実行の無害さを確認します
+(`tests/core/adapters/storage/capsule_uninstalled_status_migration_test.ts`)。
+これは本番適用や本番サイズでの無停止性の証拠ではありません。
+
+v117 を知らない旧 catalog の process は strict migration-ledger 検証で起動を拒むため、
+適用後の rollback は v117 を保持した修正 artifact で行います。制約を旧 6 状態へ戻す
+down migration は行いません。`uninstalled` の行が存在する状態で制約を狭めると、
+猶予中のサービスを表せなくなるためです。
+
 ## Failure and reversal procedure
 
 `expand` / `backfill`:

@@ -132,6 +132,15 @@ export interface CreateBackupRequest {
   /** Optional Capsule context for Capsule-scoped backup Runs. */
   readonly capsuleId?: string;
   readonly environment?: string;
+  /**
+   * `workspace` (default) exports the whole Workspace ledger even when a
+   * Capsule labels the Run. `capsule` narrows the Capsule-owned collections
+   * (Capsule, its InstallConfig, Source and snapshots, bindings, dependencies,
+   * StateVersions with their sealed state, Outputs, and service data) to
+   * `capsuleId`; Workspace-level metadata is kept. The pre-destroy export of a
+   * scheduled uninstall uses this.
+   */
+  readonly scope?: "workspace" | "capsule";
 }
 
 export interface BackupsServiceDependencies {
@@ -261,6 +270,15 @@ export class BackupsService {
         "workspaceId is required",
       );
     }
+    const scopedCapsuleId = request.scope === "capsule"
+      ? request.capsuleId?.trim()
+      : undefined;
+    if (request.scope === "capsule" && !scopedCapsuleId) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "a Capsule-scoped export requires capsuleId",
+      );
+    }
     if (!this.#artifactStore || !this.#artifactReferenceAllocator) {
       throw new OpenTofuControllerError(
         "not_implemented",
@@ -303,7 +321,11 @@ export class BackupsService {
 
     let record: BackupRecord;
     try {
-      const bundle = await this.#collectControlBundle(workspaceId, createdAt);
+      const bundle = await this.#collectControlBundle(
+        workspaceId,
+        createdAt,
+        scopedCapsuleId,
+      );
       const payload = zstdCompressRaw(jsonBytes(bundle));
       const ref = await this.#allocateBackupRef(
         "backup_control",
@@ -324,6 +346,7 @@ export class BackupsService {
         backupId,
         workspaceId,
         capturedAt: createdAt,
+        ...(scopedCapsuleId ? { capsuleId: scopedCapsuleId } : {}),
       });
       const artifactsManifest = await this.#writeArtifactsManifest({
         backupId,
@@ -424,13 +447,42 @@ export class BackupsService {
   async #collectControlBundle(
     workspaceId: string,
     capturedAt: string,
+    capsuleId?: string,
   ): Promise<ControlBackupBundle> {
     const workspace = await this.#store.getWorkspace(workspaceId);
-    const sources = await this.#store.listSources(workspaceId);
-    const installConfigs = await this.#store.listInstallConfigs(workspaceId);
-    const capsules = await this.#store.listCapsules(workspaceId);
-    const dependencies =
-      await this.#store.listDependenciesByWorkspace(workspaceId);
+    const allCapsules = await this.#store.listCapsules(workspaceId);
+    const capsules = capsuleId === undefined
+      ? allCapsules
+      : allCapsules.filter((capsule) => capsule.id === capsuleId);
+    if (capsuleId !== undefined && capsules.length === 0) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `capsule ${capsuleId} not found in workspace ${workspaceId}`,
+      );
+    }
+    const scopedSourceIds = new Set(
+      capsules.map((capsule) => capsule.sourceId).filter(Boolean),
+    );
+    const scopedInstallConfigIds = new Set(
+      capsules.map((capsule) => capsule.installConfigId),
+    );
+    const sources = (await this.#store.listSources(workspaceId)).filter(
+      (source) => capsuleId === undefined || scopedSourceIds.has(source.id),
+    );
+    const installConfigs = (
+      await this.#store.listInstallConfigs(workspaceId)
+    ).filter(
+      (config) =>
+        capsuleId === undefined || scopedInstallConfigIds.has(config.id),
+    );
+    const dependencies = (
+      await this.#store.listDependenciesByWorkspace(workspaceId)
+    ).filter(
+      (dependency) =>
+        capsuleId === undefined ||
+        dependency.producerCapsuleId === capsuleId ||
+        dependency.consumerCapsuleId === capsuleId,
+    );
     const connections = await this.#store.listConnections(workspaceId);
     const outputSharesGranted =
       await this.#store.listOutputSharesFromWorkspace(workspaceId);
@@ -561,6 +613,9 @@ export class BackupsService {
       bundleVersion: 2,
       kind: "control",
       workspaceId,
+      ...(capsuleId !== undefined
+        ? { scope: { kind: "capsule" as const, capsuleId } }
+        : {}),
       capturedAt,
       workspace: workspace ?? null,
       sources: sources.map(stripSource),
@@ -680,11 +735,13 @@ export class BackupsService {
     readonly backupId: string;
     readonly workspaceId: string;
     readonly capturedAt: string;
+    readonly capsuleId?: string;
   }): Promise<BackupRecord["serviceData"] | undefined> {
     if (!this.#artifactStore) return undefined;
     const manifest = await this.#collectServiceDataManifest(
       input.workspaceId,
       input.capturedAt,
+      input.capsuleId,
     );
     if (manifest.entries.length === 0) return undefined;
 
@@ -723,6 +780,7 @@ export class BackupsService {
   async #collectServiceDataManifest(
     workspaceId: string,
     capturedAt: string,
+    capsuleId?: string,
   ): Promise<ServiceDataBackupManifest> {
     const installConfigs = new Map(
       (await this.#store.listInstallConfigs(workspaceId)).map((config) => [
@@ -738,6 +796,7 @@ export class BackupsService {
 
     const entries: ServiceDataBackupEntry[] = [];
     for (const capsule of await this.#store.listCapsules(workspaceId)) {
+      if (capsuleId !== undefined && capsule.id !== capsuleId) continue;
       const config = installConfigs.get(capsule.installConfigId);
       if (!config) continue;
       const backup = config.backup;
@@ -900,6 +959,8 @@ export interface ControlBackupBundle {
   readonly bundleVersion: 2;
   readonly kind: "control";
   readonly workspaceId: string;
+  /** Present only on a Capsule-scoped export; absent means the whole Workspace. */
+  readonly scope?: { readonly kind: "capsule"; readonly capsuleId: string };
   readonly capturedAt: string;
   readonly workspace: unknown;
   readonly sources: readonly PublicSource[];

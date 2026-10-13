@@ -8,7 +8,10 @@ const solid = await import(
 );
 mock.module("solid-js", () => solid);
 const { createLastGoodValue } = await import(
-  "../../../../dashboard/src/lib/resource-read.ts"
+  // Other tests can cache this module on the inert server build before the
+  // mock is installed. A distinct URL loads its reactive imports under this
+  // test's browser runtime regardless of suite order.
+  `${resolve(import.meta.dir, "../../../../dashboard/src/lib/resource-read.ts")}?reactive-browser-test`
 );
 
 type Run = { readonly id: string; readonly status: string };

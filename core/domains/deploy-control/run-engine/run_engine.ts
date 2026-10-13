@@ -202,6 +202,7 @@ import {
   APPLY_RUNTIME_SECRET_RETIREMENT_DEFERRED_EVENT,
   APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT,
   applyRunBillingCapturePending,
+  applyRunMutationDispatched,
   applyRunRuntimeSecretRetirementPending,
   capsuleApplyRunAdmissionFence,
   capsuleLifecycleExpected,
@@ -221,6 +222,7 @@ import {
   type PlanRunInputs,
 } from "../store.ts";
 import {
+  assertCapsuleAcceptsOperation,
   mergeInstallContextVariables,
   normalizeProviders,
   normalizeVariables,
@@ -2664,7 +2666,10 @@ export class RunEngine {
     context: DeployControlActorContext = {},
     internal: Pick<
       CreateCapsulePlanInternal,
-      "runnerProfileId" | "sourceSnapshotId"
+      | "runnerProfileId"
+      | "sourceSnapshotId"
+      | "planRunId"
+      | "expectedWorkspaceManagementAuthority"
     > = {},
   ): Promise<PlanRunResponse> {
     return await this.#createCapsulePlanRun(capsuleId, true, context, internal);
@@ -2722,6 +2727,7 @@ export class RunEngine {
       "capsule_load",
       this.#requireCapsule(capsuleId),
     );
+    assertCapsuleAcceptsOperation(capsule, destroy ? "destroy" : "update");
     // Capture the Workspace fence before any InstallConfig/Source/compatibility
     // preparation. The same immutable authority is passed to the inner Plan
     // preparation and its atomic store admission; it must not be refreshed late.
@@ -4864,6 +4870,12 @@ export class RunEngine {
     const plannedCapsule = planRun.capsuleId
       ? await this.#requireCurrentPlannedCapsule(planRun)
       : undefined;
+    if (plannedCapsule) {
+      assertCapsuleAcceptsOperation(plannedCapsule, planRun.operation);
+    }
+    const scheduledUninstall = plannedCapsule
+      ? scheduledUninstallPlanIdentity(planRun, plannedCapsule)
+      : undefined;
     assertStateGenerationMatches(planRun, plannedCapsule);
     // Preserve the authority validated against this Plan through all later
     // asynchronous preparation. Recapturing the Capsule at insertion would
@@ -4872,6 +4884,7 @@ export class RunEngine {
       ? capsuleApplyRunAdmissionFence(
         plannedCapsule,
         planRun.capsuleExecutionAuthorityEpoch ?? 1,
+        scheduledUninstall,
       )
       : undefined;
     // Source snapshot revalidation (spec invariant 10): an env-driven plan is
@@ -5207,6 +5220,9 @@ export class RunEngine {
         `Capsule ${capsuleId} not found`,
       );
     }
+    // A restore approved before the Capsule was uninstalled must not rewrite
+    // its state during the grace period; this runs before restore dispatch.
+    assertCapsuleAcceptsOperation(capsule, "restore");
     const environment =
       run.environment ?? backup.environment ?? capsule.environment;
     // Restore provenance is an exact StateVersion identity, never a
@@ -6677,6 +6693,7 @@ export class RunEngine {
         "capsule not found in this workspace",
       );
     }
+    assertCapsuleAcceptsOperation(capsule, "restore");
     const environment =
       request.environment ?? backup.environment ?? capsule.environment;
     const source = (
@@ -7067,6 +7084,8 @@ export class RunEngine {
       metadata: {
         operation: approved.operation,
         capsuleId: approved.capsuleId,
+        approvedAt: new Date(now).toISOString(),
+        ...(approval?.reason ? { reason: approval.reason } : {}),
       },
     });
     return projectPlanRun(approved, {
@@ -9886,6 +9905,13 @@ export class RunEngine {
     const plannedCapsule = planRun.capsuleId
       ? await this.#requireCurrentPlannedCapsule(planRun)
       : undefined;
+    // An Apply queued before the Capsule was uninstalled must not provision
+    // into the grace state. A takeover of an attempt that already reached the
+    // provider is exempt: its outcome must still be recorded.
+    if (plannedCapsule && !applyRunMutationDispatched(applyRun)) {
+      assertCapsuleAcceptsOperation(plannedCapsule, planRun.operation);
+      scheduledUninstallPlanIdentity(planRun, plannedCapsule);
+    }
     // State generation guard: reject when the target's state advanced past the
     // generation this plan was created against (a stale plan over newer state).
     assertStateGenerationMatches(planRun, plannedCapsule);
@@ -12422,6 +12448,27 @@ export class RunEngine {
     }
     return capsule;
   }
+}
+
+/** A finalizer Plan is authorized only by the request that named this Plan. */
+function scheduledUninstallPlanIdentity(
+  planRun: PlanRun,
+  capsule: Capsule,
+): { readonly id: string; readonly destroyPlanRunId: string } | undefined {
+  if (planRun.createdBy !== "system:scheduled-uninstall") return undefined;
+  const uninstall = capsule.uninstall;
+  if (
+    planRun.operation !== "destroy" || capsule.status !== "uninstalled" ||
+    uninstall === undefined || uninstall.phase === "cancelled" ||
+    uninstall.destroyPlanRunId !== planRun.id
+  ) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `scheduled uninstall changed before PlanRun ${planRun.id} could apply`,
+      { reason: "capsule_uninstall_changed" },
+    );
+  }
+  return { id: uninstall.id, destroyPlanRunId: planRun.id };
 }
 
 const MODULE_VARIABLE_MATERIALIZATION_DIGEST = /^sha256:[0-9a-f]{64}$/u;

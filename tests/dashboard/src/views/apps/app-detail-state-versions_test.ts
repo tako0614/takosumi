@@ -175,16 +175,64 @@ describe("Capsule detail StateVersion surface", () => {
     expect(ja["app.danger.destroyConfirmMessage"]).toContain("{name}");
     expect(en["app.danger.destroyConfirmMessage"]).toContain("{name}");
     // The shared Source revision gate is gone: revision selection is local to
-    // this Capsule's coordinator. Only immediate delete and the settings-tab
-    // unsaved-edits guard still use confirmation.
+    // this Capsule's coordinator. Only immediate delete, the scheduled
+    // uninstall (which has no later review screen), and the settings-tab
+    // unsaved-edits guard use confirmation.
     expect(source).toContain('title: t("app.settings.leaveConfirm.title")');
-    expect(source.match(/await confirm\(/g)?.length).toBe(2);
+    expect(source.match(/await confirm\(/g)?.length).toBe(3);
     // The guarded settings disclosure still names the service in its warning.
     expect(source).toMatch(
       /t\("app\.danger\.destroyBody",\s*\{\s*name:\s*serviceLabel\(\),\s*\}\)/,
     );
     expect(ja["app.danger.destroyBody"]).toContain("{name}");
     expect(en["app.danger.destroyBody"]).toContain("{name}");
+  });
+
+  test("an applied service is deleted in two stages, confirmed once up front", () => {
+    const deleteFlowIndex = source.search(/<details\s+id="delete"/);
+    const deleteFlow = source.slice(
+      deleteFlowIndex,
+      source.indexOf("</details>", deleteFlowIndex),
+    );
+    // The scheduled uninstall is offered only for an applied service that is
+    // not already uninstalled, and ahead of the immediate path.
+    expect(deleteFlow).toMatch(
+      /!destroyIsImmediate\(\) &&\s*inst\(\)\.status !== "uninstalled"/,
+    );
+    expect(deleteFlow.indexOf("scheduleUninstall.run()")).toBeGreaterThan(-1);
+    expect(deleteFlow.indexOf("scheduleUninstall.run()")).toBeLessThan(
+      deleteFlow.indexOf("confirmDestroy()"),
+    );
+    expect(occurrences(source, "scheduleCapsuleUninstall(capsuleId())")).toBe(1);
+    // The server tears it down unattended later, so this is the one place the
+    // deletion is confirmed; cancelling is never confirmed.
+    expect(source).toMatch(
+      /const scheduleUninstall = createAction\(async \(\) => \{\s*const ok = await confirm\(\{\s*title: t\("app\.uninstall\.confirmTitle"\)/,
+    );
+    expect(source).toMatch(
+      /const cancelUninstall = createAction\(async \(\) => \{\s*await cancelCapsuleUninstall\(capsuleId\(\)\);/,
+    );
+    // The grace banner offers cancel only while it is still possible, and
+    // sends "delete now" to the same single immediate-delete flow.
+    expect(source).toContain('inst().status === "uninstalled"');
+    expect(source).toContain("<Show when={uninstallCancellable(inst())}>");
+    // Cancel mirrors the server: before teardown, or blocked before dispatch.
+    expect(source).toMatch(
+      /const uninstallCancellable = \(inst: Capsule\): boolean =>\s*inst\.status === "uninstalled" &&\s*\(inst\.uninstall\?\.phase === "scheduled" \|\|\s*\(inst\.uninstall\?\.phase === "destroying" &&\s*inst\.uninstall\.blockedReason !== undefined\)\);/,
+    );
+    expect(source).toContain(
+      "href={`/workloads/${encodeURIComponent(capsuleId())}/settings#delete`}",
+    );
+    for (const key of [
+      "app.uninstall.confirmMessage",
+      "app.uninstall.banner",
+      "app.uninstall.bannerBlocked",
+    ] as const) {
+      expect(ja[key], key).toContain("{name}");
+      expect(en[key], key).toContain("{name}");
+    }
+    expect(ja["app.uninstall.banner"]).toContain("{date}");
+    expect(en["app.uninstall.banner"]).toContain("{date}");
   });
 
   test("keeps provider binding editing behind advanced service settings", () => {

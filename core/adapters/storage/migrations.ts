@@ -5001,4 +5001,16 @@ create table if not exists takosumi_private_run_file_receipts (
   primary key (workspace_id, capsule_id, environment, slot, commit_id)
 );`,
     },
+    {
+      id: "deploy.capsule_uninstalled_status.expand",
+      version: 117,
+      domain: "deploy",
+      description:
+        "Expand the Capsule status constraint with the two-stage uninstall grace state 'uninstalled'. The inline v35 constraint kept its takosumi_opentofu_installations name across the table rename; one ALTER drops it under either name and adds the canonical constraint. Rows and JSON records are untouched; repair forward without narrowing the constraint again.",
+      sql: `alter table takosumi_capsules
+  drop constraint if exists takosumi_opentofu_installations_status_check,
+  drop constraint if exists takosumi_capsules_status_check,
+  add constraint takosumi_capsules_status_check
+    check (status in ('pending', 'active', 'stale', 'error', 'disabled', 'uninstalled', 'destroyed'));`,
+    },
   ]);

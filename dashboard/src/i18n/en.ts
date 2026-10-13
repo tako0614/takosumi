@@ -353,6 +353,7 @@ export const en: Record<keyof typeof ja, string> = {
   "status.capsule.stale": "Update available",
   "status.capsule.error": "Error",
   "status.capsule.disabled": "Disabled",
+  "status.capsule.uninstalled": "Scheduled for deletion",
   "status.capsule.destroyed": "Deleted",
   "status.run.queued": "Queued",
   "status.run.running": "Running",
@@ -597,6 +598,32 @@ export const en: Record<keyof typeof ja, string> = {
   "app.danger.destroyConfirmMessage":
     "This deletes {name}. If it has never been deployed it is removed immediately and cannot be recovered.",
   "app.danger.destroyCta": "Review deletion",
+  "app.uninstall.title": "Schedule deletion",
+  "app.uninstall.body":
+    "{name} and its data stay for a grace period, and you can cancel until then. When it ends, a copy of the data is exported where this server supports it, and then the service is deleted.",
+  "app.uninstall.cta": "Schedule deletion",
+  "app.uninstall.confirmTitle": "Schedule deletion of this service?",
+  "app.uninstall.confirmMessage":
+    "{name} keeps running and keeps its data until the grace period ends. Then a data export is attempted and the service is deleted for good. You can cancel until then.",
+  "app.uninstall.immediateTitle": "Delete now",
+  "app.uninstall.banner":
+    "{name} will be deleted on {date}. Its data stays until then, and you can cancel.",
+  "app.uninstall.bannerDue":
+    "The grace period for {name} has ended. Deletion will run shortly.",
+  "app.uninstall.bannerDestroying": "{name} is being deleted.",
+  "app.uninstall.bannerBlocked":
+    "Automatic deletion of {name} stopped because the deletion could not be confirmed as safe. Cancel it, or delete the service now from Settings.",
+  "app.uninstall.exportExported": "The data was exported before deletion.",
+  "app.uninstall.exportExportedLedgerOnly":
+    "The service settings and state were exported before deletion. This app does not declare an export of its own data.",
+  "app.uninstall.bannerFailed":
+    "Deleting {name} did not finish. Delete it now from Settings to try again.",
+  "app.uninstall.exportFailed":
+    "Exporting the data before deletion failed. Deletion continues.",
+  "app.uninstall.exportSkipped":
+    "This server cannot export the data, so no export was made.",
+  "app.uninstall.cancel": "Cancel deletion",
+  "app.uninstall.deleteNow": "Delete now",
   "app.setupIncomplete.body":
     "Setup didn't finish. Retry from the update review, or delete this service in Settings and start over.",
   "app.setupIncomplete.review": "Open updates",
@@ -1182,6 +1209,16 @@ export const en: Record<keyof typeof ja, string> = {
     "An automatic update for “{name}” could not finish",
   "notif.event.autoUpdateFailedDetail":
     "Review the update from the service screen",
+  "notif.event.uninstallScheduled": "Scheduled a service for deletion",
+  "notif.event.uninstallScheduledNamed": "Scheduled “{name}” for deletion",
+  "notif.event.uninstallCancelled": "Cancelled a scheduled deletion",
+  "notif.event.uninstallCancelledNamed":
+    "Cancelled the scheduled deletion of “{name}”",
+  "notif.event.uninstallBlocked": "A scheduled deletion stopped",
+  "notif.event.uninstallBlockedNamed":
+    "The scheduled deletion of “{name}” stopped",
+  "notif.event.uninstallBlockedDetail":
+    "Cancel it, or delete the service now from its settings",
   "notif.event.recorded": "Recorded activity",
   "notif.otherWorkspace": "Other workspace: {name}",
 

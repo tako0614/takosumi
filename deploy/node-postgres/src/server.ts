@@ -28,6 +28,7 @@ import {
   parseEnv,
 } from "./handler.ts";
 import { buildComposedApp } from "./composed-app.ts";
+import { startCapsuleUninstallFinalizer } from "./capsule-uninstall-finalizer.ts";
 import { resolveStaticAssetsDir } from "./static-assets.ts";
 import { isSecretKey, redactString } from "takosumi-contract/redaction";
 
@@ -195,7 +196,7 @@ export async function buildComposedServer(
     );
   }
 
-  const { app } = await buildComposedApp({
+  const { app, operations } = await buildComposedApp({
     config,
     store,
     productDiscovery: {
@@ -260,6 +261,8 @@ export async function buildComposedServer(
       ? { opentofuControlStore: overrides.opentofuControlStore }
       : {}),
   });
+
+  startCapsuleUninstallFinalizer({ operations, log: structuredLog });
 
   const port = config.port;
   const hostname = config.bindHost;

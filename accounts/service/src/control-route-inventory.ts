@@ -246,6 +246,19 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     },
     {
       method: "POST",
+      path: "/api/v1/capsules/{capsuleId}/uninstall",
+      summary:
+        "Schedule a two-stage uninstall: keep resources and data through the grace period, then export and destroy",
+      auth: "account-session",
+    },
+    {
+      method: "POST",
+      path: "/api/v1/capsules/{capsuleId}/cancel-uninstall",
+      summary: "Cancel a scheduled uninstall during its grace period",
+      auth: "account-session",
+    },
+    {
+      method: "POST",
       path: "/api/v1/capsules/{capsuleId}/plan",
       summary: "Create a Capsule plan Run",
       auth: "account-session",

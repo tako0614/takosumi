@@ -1729,7 +1729,7 @@ test("Postgres v112 adds nullable compatibility declarations without upgrading l
     expect(result.rows).toEqual([
       { root_module_variable_declarations_json: null },
     ]);
-    expect(postgresStorageMigrationStatements.slice(-3).map((entry) => entry.version)).toEqual([114, 115, 116]);
+    expect(postgresStorageMigrationStatements.slice(-3).map((entry) => entry.version)).toEqual([115, 116, 117]);
   } finally {
     await client.close();
   }

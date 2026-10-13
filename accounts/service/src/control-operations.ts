@@ -384,6 +384,23 @@ export interface ControlPlaneOperations {
       reason: string,
       expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
     ): Promise<Capsule>;
+    /** Stage one of a two-stage uninstall; absent on hosts without it. */
+    scheduleCapsuleUninstall?(
+      id: string,
+      options?: {
+        readonly actor?: string;
+        readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
+      },
+    ): Promise<Capsule>;
+    cancelCapsuleUninstall?(
+      id: string,
+      options?: {
+        readonly actor?: string;
+        readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
+      },
+    ): Promise<Capsule>;
+    /** Whole days the scheduled uninstall waits before it destroys. */
+    readonly uninstallGraceDays?: number;
     getCapsuleExecutionAuthorityEpoch(capsuleId: string): Promise<number>;
     getInstallConfigReAdoptionRecoveryProof?(
       capsuleId: string,

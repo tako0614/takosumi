@@ -1950,7 +1950,10 @@ export class OpenTofuController {
     context: DeployControlActorContext = {},
     internal: Pick<
       CreateCapsulePlanInternal,
-      "runnerProfileId" | "sourceSnapshotId"
+      | "runnerProfileId"
+      | "sourceSnapshotId"
+      | "planRunId"
+      | "expectedWorkspaceManagementAuthority"
     > = {},
   ): Promise<PlanRunResponse> {
     return this.#runEngine.createCapsuleDestroyPlan(

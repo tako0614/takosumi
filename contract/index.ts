@@ -79,6 +79,9 @@ export {
 export type {
   PublicCapsule as Capsule,
   CapsuleStatus,
+  CapsuleUninstall,
+  CapsuleUninstallRestorableStatus,
+  CapsulePreDestroyExport,
   PublicCapsule,
   CapsuleCompatibility,
   CapsuleCompatibilityLevel,
