@@ -56,3 +56,26 @@
 - Docs build finding: operational runbooks physically exist but are excluded
   from the public VitePress site. Backup pages now link to their repository
   source instead of an unpublished site route, preserving the exclusion.
+
+## QA documentation follow-up
+
+- Continue existing open PR #433 on `docs/takosumi-selfhost-launch-20261014`.
+  The initial local/remote head was `c6e1081c496a0ca51dc793d6634409320169318d`.
+- Merge main `63eb47c24ead54e2acd18e7f1f1f051103bcf116` normally, preserving
+  history, to include the approved #432 sealed backup store. Resolve the Store
+  URL/backup-directory forwarding conflicts by retaining both settings and
+  preserve the detailed PostgreSQL backup/restore procedures alongside #432's
+  runtime-volume and custom state-reader guidance.
+- Address the two non-blocking QA recommendations on #432: the backup
+  directory is effectively required because an unavailable export is skipped
+  without stopping destroy; old exports need the passphrase used to create
+  them, even after a passphrase change. Update both languages and the
+  distribution README; correct the adjacent runner/artifact-store wording.
+- Validation: `env -u NODE_ENV bun run check:authoritative-docs`; focused
+  existing self-host procedure/file-store/export tests; complete
+  `env -u NODE_ENV TAKOSUMI_E2E_PORT=26411 TAKOSUMI_DOCS_BROWSER_PORT=26412 bun run check`
+  including docs build/browser checks. Record the exact tested head and results
+  in PR #433, then request quality/release QA again.
+- Scope remains Takosumi only. No deployment, takos1 operations, force push,
+  runtime behavior change beyond the already merged main changes, or merge
+  of the PR is part of this follow-up.

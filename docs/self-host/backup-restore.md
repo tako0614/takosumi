@@ -10,6 +10,11 @@ file は 0600 で、bundle は既存の secret-store 鍵で sealed 保存しま�
 manifest だけは平文です。保存名は opaque ref の SHA-256 hex に `.artifact` を付けたものです。
 runner は同梱されません。独自の runner/state/artifact store の保存先も backup 対象に加えます。
 
+`TAKOSUMI_BACKUP_ARTIFACTS_DIR` は destroy 前の export を保存するために事実上必須です。
+参照 Compose は既定値を渡しますが、Compose を使わずに起動する場合も永続化した保存先を
+明示してください。未設定だと export は `skipped` (`backups_unavailable`) と記録され、
+export が無いまま destroy に進みます。
+
 ## PostgreSQL Compose
 
 Accounts と control plane の schema は同じ PostgreSQL database
@@ -58,6 +63,8 @@ local_compose up -d --wait accounts
 `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK`、`TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET`、
 `TAKOSUMI_DEPLOY_CONTROL_TOKEN` と、設定していれば upstream provider secrets を保管します。
 封印鍵や署名鍵を失うと、保管したデータを読めないか、既存 token を検証できなくなります。
+`TAKOSUMI_SECRET_STORE_PASSPHRASE` の変更後は新しい値で過去の export を復号できず、
+export 作成時の値を紛失すると復号できなくなります。
 設定、Git commit、image digest、migration head も記録します。Caddy volume の証明書状態は
 再発行できますが、バックアップすれば ACME 再取得を避けられます。
 

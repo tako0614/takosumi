@@ -21,8 +21,9 @@ CLI、dashboard、Takoform client とその他の API client は、その origin
 
 **Bun と PostgreSQL** は、自分のインフラに置きたい場合に向きます。Docker が動くホストが
 あれば、同梱の `docker-compose.yml` が PostgreSQL、2 系統の schema migration、サービス本体、
-TLS 用 Caddy を起動します。この stock 構成に OpenTofu runner や runner/artifact store 用の
-volume はありません。Accounts、control plane、dashboard の確認には使えますが、Git sync、plan、
+TLS 用 Caddy を起動します。この stock 構成に OpenTofu runner や runner artifact store は
+ありません。control / pre-destroy export は `takosumi-runtime` volume に保存します。
+Accounts、control plane、dashboard の確認には使えますが、Git sync、plan、
 apply は `runner_capability_missing` になります。Stack 実行には runner とその保存先を含む別の
 operator composition が必要です。
 

@@ -18,5 +18,6 @@ Workspace/Capsule ID は scrape ラベルに含めません。個別の記録は
 広告します。dashboard の `runtimeStoreUrl()` が extension を読むため、SPA の再ビルドは不要です。URL の
 username、password、query、fragment は受け付けません。runtime 設定がなければ build 時の
 `VITE_TAKOSUMI_TCS_STORE_URL` を使い、どちらもなければ既定の store はありません。
-Bun/PostgreSQL stock には runner と artifact store が含まれないため、TCS store の URL を
-設定してもそれらの capability は追加されません。
+Bun/PostgreSQL stock には runner と runner artifact store が含まれないため、TCS store の URL を
+設定してもそれらの capability は追加されません。control / pre-destroy export の保存先は
+[バックアップと復旧](./backup-restore.md)を参照してください。

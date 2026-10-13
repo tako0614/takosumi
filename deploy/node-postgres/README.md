@@ -106,7 +106,7 @@ service, which advertises it at `/.well-known/takosumi` under
 `runtimeStoreUrl()` reads that extension. Use a public HTTP(S) URL without credentials,
 query, or fragment. When unset, the dashboard uses
 build-time `VITE_TAKOSUMI_TCS_STORE_URL`; if neither is set, there is no default store.
-This setting does not add a runner or artifact store to the stock composition.
+This setting does not add a runner or runner artifact store to the stock composition.
 
 On an existing installation, the next `docker compose up -d` runs pending
 control-plane migrations from the image before Accounts migrations and before
@@ -174,6 +174,13 @@ Objects are mode 0600, immutable, and named `sha256(ref).artifact` (hex digest
 without the `sha256:` prefix). Control/state/service-data bundles are sealed
 with `TAKOSUMI_SECRET_STORE_PASSPHRASE`; public artifact manifests stay plain.
 Keep the volume and its decryption keys in separately protected backups.
+Changing `TAKOSUMI_SECRET_STORE_PASSPHRASE` prevents the new value from decrypting past
+exports; losing the value used to create them makes decryption impossible.
+
+Treat `TAKOSUMI_BACKUP_ARTIFACTS_DIR` as required to preserve exports before destroy.
+Compose supplies the default above. When starting without Compose, explicitly configure
+a durable directory; if unset, export is recorded as `skipped` (`backups_unavailable`)
+and destroy proceeds without an export.
 
 During the seven-day uninstall grace period, the ordinary Capsule backup API
 can export the Capsule. After the deadline, the #422 finalizer attempts its

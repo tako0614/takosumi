@@ -11,6 +11,11 @@ stay plain. Filenames are the SHA-256 hex of the opaque ref followed by `.artifa
 No runner is bundled. Include the actual durable paths of any custom runner/state/artifact
 store in the backup as well.
 
+Treat `TAKOSUMI_BACKUP_ARTIFACTS_DIR` as required to preserve exports before destroy.
+The reference Compose supplies a default; when starting without Compose, explicitly
+configure a durable directory too. If unset, export is recorded as `skipped`
+(`backups_unavailable`) and destroy proceeds without an export.
+
 ## PostgreSQL Compose
 
 Accounts and control-plane schemas share the `takosumi_accounts` PostgreSQL database. The
@@ -58,7 +63,9 @@ In a separate operator secret store, preserve `POSTGRES_PASSWORD`,
 `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK`, `TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET`,
 `TAKOSUMI_DEPLOY_CONTROL_TOKEN`, and any configured upstream-provider secrets. Losing the
 sealing or signing keys can make stored data unreadable or prevent existing tokens from
-being verified. Record the configuration, Git commit, image digest, and migration head.
+being verified. After changing `TAKOSUMI_SECRET_STORE_PASSPHRASE`, the new value cannot
+decrypt past exports; losing the value used to create them makes decryption impossible.
+Record the configuration, Git commit, image digest, and migration head.
 Caddy certificate state can be reissued, though backing up its volumes avoids another ACME
 issuance.
 

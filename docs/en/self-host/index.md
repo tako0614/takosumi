@@ -19,5 +19,6 @@ select an external TCS store. The service advertises it through
 the URL string read by the dashboard's `runtimeStoreUrl()`, so changing the store needs no SPA rebuild. Usernames,
 passwords, query strings, and fragments are rejected. Without runtime configuration, the
 dashboard uses build-time `VITE_TAKOSUMI_TCS_STORE_URL`; when both are absent there is no
-default store. The stock Bun/PostgreSQL composition has no runner or artifact store, and a
-TCS URL does not add those capabilities.
+default store. The stock Bun/PostgreSQL composition has no runner or runner artifact store,
+and a TCS URL does not add those capabilities. See [Backup and recovery](./backup-restore.md)
+for control and pre-destroy export storage.
