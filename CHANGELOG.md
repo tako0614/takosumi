@@ -6,6 +6,24 @@ self-hosted Takos distribution worker consumes Takosumi contracts and the
 external self-hoster/operator control plane; there is no npm-published service
 package for the v1 GA line.
 
+## Unreleased
+
+- Bun + PostgreSQL self-host: the next `docker compose up -d` starts the
+  `migrations` service, which now applies pending **existing control-plane
+  migrations** before Accounts migrations and before Compose starts `accounts`.
+  Already-applied migrations are skipped; no new migration is introduced.
+  Review pending migrations and back up the database before upgrading. These
+  migrations are forward-only: reverting the image does not undo schema/data
+  changes; recovery requires a verified backup restore or forward repair.
+  Dependency ordering does not stop an already-running `accounts` container;
+  stop it before upgrading when pending migrations require service quiescence.
+  After updating source, rebuild with `docker compose up --build -d` so the
+  migration service uses the updated image.
+- The Accounts container receives only declared service settings from Compose.
+  Upstream `clientSecretEnv` names must be explicitly mapped in an operator
+  Compose override (see `deploy/node-postgres/README.md`). Runtime image copies
+  exclude Cloudflare deployment files except the CLI's required D1 transport.
+
 ## 1.0.0 — Canonical control-plane model
 
 Breaking: the public control-plane vocabulary is aligned across the contract,
@@ -56,6 +74,7 @@ control plane, account plane, dashboard, CLI, runner env, and HTTP routes.
 - Physical DB table renames are non-destructive and reversible (rename-aside DDL
   in both the Postgres and D1 catalogs, with a forward-only retired-Deployment
   value translation of the current state-version pointer).
+- Removed the root `Dockerfile`; self-host builds use `deploy/node-postgres/Dockerfile`.
 
 ## Pre-v1 Notes
 

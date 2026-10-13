@@ -534,12 +534,15 @@ not an E2E probe. AI E2E continues against Takoserver's owning endpoint.
 
 ## Self-host build and deployment
 
-Build and verify the OSS target from the product root:
+Build and verify the OSS target from the product root. The dashboard and the
+docs site are not root workspaces, so their dependencies install separately
+before the gate and the docs build read them:
 
 ```bash
 bun install
+bun run build:dashboard
+(cd docs && npm ci --no-fund --no-audit)
 bun run check
-(cd dashboard && bun run build)
 bun run docs:build
 ```
 

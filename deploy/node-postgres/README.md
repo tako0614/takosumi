@@ -22,12 +22,33 @@ runtime contracts are canonical Interface / InterfaceBinding records.
 
 ```bash
 cd deploy/node-postgres
-cp .env.example .env  # then edit
+cp .env.example .env  # then edit; it is gitignored
 docker compose up -d
-curl -k https://localhost/.well-known/openid-configuration
+curl https://app.example.com/healthz   # your TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME
 ```
 
-Required `.env`:
+Compose reads `.env` for interpolation. `docker-compose.yml` passes only the
+declared service settings to `accounts`; the separate `POSTGRES_PASSWORD`
+variable and Caddy's hostname are not passed to that container. The database
+connection URL still contains the password the service needs. The
+`migrations` container applies the control-plane schema
+(`core/scripts/db-migrate.ts`) and then the accounts schema before the service
+starts. Caddy obtains the certificate for `TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME`
+over ACME, so that name must resolve to this host; it serves no other site
+label.
+
+On an existing installation, the next `docker compose up -d` runs pending
+control-plane migrations from the image before Accounts migrations and before
+Compose starts `accounts`. Already-applied migrations are skipped. Back up the database
+and review pending migrations before upgrading: both catalogs are forward-only,
+so reverting the image does not undo schema/data changes. Restore a verified
+backup or use forward repair if recovery is needed. After a source update, use
+`docker compose up --build -d` to rebuild the image first.
+Dependency ordering does not stop an already-running `accounts` container. If
+pending migrations require service quiescence, stop it before upgrading with
+`docker compose stop accounts`.
+
+Required `.env` (`.env.example` shows the command that generates each secret):
 
 ```
 POSTGRES_PASSWORD=replace-me-with-a-strong-passphrase
@@ -42,9 +63,36 @@ TAKOSUMI_ACCOUNTS_REDIRECT_URIS=https://app.example.com/oauth/callback
 # restart / under horizontal scale). Generate a P-256 ES256 JWK with a private
 # "d" coordinate; the pairwise secret is an independent 64-char random string.
 TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK={"kty":"EC","crv":"P-256","d":"...","x":"...","y":"..."}
-TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS={"keys":[{"kty":"EC","crv":"P-256","kid":"previous-key","x":"...","y":"..."}]}
 TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET=replace-me-with-a-64-char-random-string
+# Server secrets. Without the passphrase the service refuses to start; without
+# the salt it hashes sessions with a public dev-only salt.
+TAKOSUMI_SECRET_STORE_PASSPHRASE=
+TAKOSUMI_ACCOUNT_SESSION_HASH_SALT=
+TAKOSUMI_DEPLOY_CONTROL_TOKEN=
 ```
+
+The first account signs in through an upstream identity provider
+(`TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS`); passkeys are added to an account after
+it has signed in.
+
+For each upstream descriptor's arbitrary `clientSecretEnv` name, explicitly
+forward that one secret in `docker-compose.override.yml`. For the example in
+`.env.example`, keep the value in `.env` or your operator environment and add:
+
+```yaml
+services:
+  accounts:
+    environment:
+      COMPANY_SSO_CLIENT_SECRET: ${COMPANY_SSO_CLIENT_SECRET:?set the upstream client secret}
+```
+
+Compose loads this override automatically with `docker compose up -d`. Add one
+mapping per configured secret name; avoid passing a whole secret file through
+`env_file`. A missing upstream binding prevents the service from starting.
+
+This reference composition has no OpenTofu runner. Git sync, plan, and apply
+fail with `runner_capability_missing` until an operator composition supplies
+one (see `deploy/local-substrate/`).
 
 For a Takos native shell, register a separate host-specific public client in
 `TAKOSUMI_ACCOUNTS_CLIENTS`. Its `redirectUris` entry must be exactly
@@ -100,8 +148,9 @@ a commercial host extension and are not part of this public distribution.
   scope, and preserve stable retry identity and custody outside Git. See the
   [Core state contract](../../docs/internal/core-spec.md). A recovered partial
   state does not prove a complete resource inventory or provider success.
-- Run `bun run cli -- accounts migrate` against Postgres before first start, or use the docker-compose `migrations`
-  init container which does it for you. See `cli-accounts-db.ts` for the migration entry point.
+- Apply both schemas before first start: `bun run db:migrate --env=production` (control plane, reads `DATABASE_URL`)
+  and `bun run cli -- accounts migrate` (accounts). The docker-compose `migrations` init container runs both for you.
+  See `core/scripts/db-migrate.ts` and `cli-accounts-db.ts` for the entry points.
 - A custom Node composition that supplies a durable `opentofuControlStore` to
   `buildComposedApp` or `buildComposedServer` must pass that same store to
   `createPlatformExtensionCapsulePublicOriginLedger` when it composes a

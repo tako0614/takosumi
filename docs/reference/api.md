@@ -64,6 +64,9 @@ capability を参照します。
 
 field 名は snake_case です。`product` は常に `takosumi` で、client は最初にこれを
 確認します。`endpoints.api` は origin そのものではなく `<origin>/api/v1` です。
+`features.opentofu_runner` は、その endpoint に OpenTofu runner が構成されている
+ときだけ `true` です。runner の無い構成 (Bun + PostgreSQL の reference など) は
+`false` を返します。
 
 mobile client 用の OIDC client id を設定した endpoint は `oidcClientId` も返します。
 追加の endpoint family を公開する
