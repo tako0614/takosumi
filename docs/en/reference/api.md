@@ -225,7 +225,8 @@ POST /api/v1/workspaces/{workspaceId}/interface-materialization-failures/{intent
 `uninstalled` and destroys nothing before `uninstall.scheduledDestroyAt`. The
 grace period is the operator setting `TAKOSUMI_UNINSTALL_GRACE_DAYS` (OSS
 default 7 days). During the grace period the provider resources and their data
-remain, billing continues, and every plan or apply other than teardown is
+remain, billing continues, sign-in through a Takosumi OIDC client pauses (the
+client is kept, so a cancel resumes it), and every plan or apply other than teardown is
 refused with `capsule_uninstalled`. `cancel-uninstall` returns the Capsule to
 its previous status. Once due, the control plane attempts one Capsule-scoped
 export, records the outcome (`exported`, `failed`, or `skipped`) in

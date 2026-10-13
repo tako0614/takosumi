@@ -198,7 +198,9 @@ A two-stage uninstall moves an applied `active`, `stale`, or `error` Capsule to
 `uninstalled` and records one `uninstall` request on the Capsule row with
 `scheduledDestroyAt = requestedAt + TAKOSUMI_UNINSTALL_GRACE_DAYS` (OSS default
 7). Nothing is torn down during the grace period; provider resources, data, and
-metering continue. While `uninstalled`, Plan creation, drift checks, and Apply
+metering continue. Accounts live-grant validation treats `uninstalled` as not
+runtime-ready, so sign-in through a Takosumi OIDC client pauses without
+revoking the client and resumes after a cancel. While `uninstalled`, Plan creation, drift checks, and Apply
 admission or pre-dispatch refuse every operation except `destroy`
 (`capsule_uninstalled`); commit paths after provider execution are unchanged so
 whatever the provider did is still recorded. The owner may cancel back to the

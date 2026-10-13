@@ -223,7 +223,8 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 `POST /api/v1/capsules/{capsuleId}/uninstall` は適用済みの Capsule を `uninstalled`
 にし、`uninstall.scheduledDestroyAt` まで何も壊しません。猶予日数は operator 設定
 `TAKOSUMI_UNINSTALL_GRACE_DAYS` (OSS 既定 7 日) です。猶予中も provider の資源と
-データは残り、課金も続きます。破棄以外の計画・適用は拒否されます
+データは残り、課金も続きます。Takosumi の OIDC によるサインインは止まります
+(client は失効させないので、取り消せば再開します)。破棄以外の計画・適用は拒否されます
 (`capsule_uninstalled`)。猶予中は `cancel-uninstall` で元の状態に戻せます。
 期日を過ぎると control plane が一度だけ Capsule 単位の書き出しを試み、結果
 (`exported` / `failed` / `skipped`) を `uninstall.preDestroyExport` に記録してから、
