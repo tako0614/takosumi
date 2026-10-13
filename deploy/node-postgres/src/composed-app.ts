@@ -25,6 +25,7 @@ import {
 } from "@takosjp/takosumi-accounts-service";
 import {
   createTakosumiService,
+  hasConfiguredOpenTofuRunner,
   type CreatedTakosumiService,
 } from "../../../core/bootstrap.ts";
 import {
@@ -429,17 +430,26 @@ export async function buildComposedApp(
   // Product discovery is used by the takosumi OpenTofu provider, CLIs, and
   // mobile clients. Keep it on the outer composed app so the account-plane OIDC
   // `/.well-known/*` fallback and `/v1/*` identity surface cannot shadow it.
+  const opentofuRunnerConfigured = hasConfiguredOpenTofuRunner(input);
   app.get(TAKOSUMI_WELL_KNOWN_PATH, (c) =>
     c.json(
       createTakosumiWellKnownDocument(
-        productDiscoveryOptions(c.req.raw, input.productDiscovery),
+        productDiscoveryOptions(
+          c.req.raw,
+          input.productDiscovery,
+          opentofuRunnerConfigured,
+        ),
       ),
     ),
   );
   app.get(TAKOSUMI_PRODUCT_CAPABILITIES_PATH, (c) =>
     c.json(
       createTakosumiProductCapabilities(
-        productDiscoveryOptions(c.req.raw, input.productDiscovery),
+        productDiscoveryOptions(
+          c.req.raw,
+          input.productDiscovery,
+          opentofuRunnerConfigured,
+        ),
       ),
     ),
   );
@@ -583,9 +593,14 @@ function interfaceRequestAccess(request: Request): "read" | "write" {
 function productDiscoveryOptions(
   req: Request,
   overrides: Partial<CreateTakosumiDiscoveryOptions> | undefined,
+  opentofuRunnerConfigured: boolean,
 ): CreateTakosumiDiscoveryOptions {
   return {
     ...(overrides ?? {}),
+    adapters: {
+      opentofu: opentofuRunnerConfigured,
+      ...(overrides?.adapters ?? {}),
+    },
     interfacesEnabled: overrides?.interfacesEnabled ?? true,
     origin: publicOriginFromRequest(req),
   };
