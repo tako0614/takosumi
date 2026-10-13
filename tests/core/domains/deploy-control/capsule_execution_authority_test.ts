@@ -1943,15 +1943,11 @@ describe("Capsule execution authority", () => {
       test(`D1 ${operation} coordinator ${retainedReal ? "reclaims retained real generation" : "writes integer generation"} after lease expiry`, async () => {
         const runtime = new Miniflare({
           compatibilityDate: "2026-07-17",
-          modules: [{
-            type: "ESModule",
-            path: "git-generation-workerd.mjs",
-            contents: "export default {fetch(){return new Response('ok')}}",
-          }],
+          modules: [workerdD1Module("git-generation-workerd.mjs")],
           d1Databases: { CONTROL: "git-generation-workerd" },
         });
         try {
-          const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+          const database = workerdD1Database(runtime);
           const management = new CloudflareD1OpenTofuControlStore(database);
           await management.putWorkspace({
             id: WORKSPACE_ID,

@@ -27,7 +27,7 @@ start Caddy or request an ACME certificate. Run from the repository root:
 
 ```bash
 cd deploy/node-postgres
-test ! -e .env && cp .env.example .env
+[ -e .env ] || cp .env.example .env
 ```
 
 Replace the example secrets in `.env`. Generate independent values with
