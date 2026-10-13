@@ -178,8 +178,11 @@ bunx wrangler secret put TAKOSUMI_RELEASE_ACTIVATOR_TOKEN \
 | `TAKOSUMI_ACCOUNTS_PG_SSL_MODE`             | Optional                           | `disable`                       | `disable` / `require` / `verify-ca` / `verify-full`                  |
 | `TAKOSUMI_ACCOUNTS_PG_SSL_ROOT_CERT`        | Required for `verify-ca` / `verify-full` | none                            | PEM CA bundle                                                            |
 | `POSTGRES_PASSWORD`                         | Required when using Docker Compose, **secret** | none                            | Password the bundled Docker Compose definition sets on PostgreSQL        |
+| `TAKOSUMI_TCS_STORE_URL`                    | Optional                           | none                            | Public TCS store URL advertised as a string at `endpoints.extensions["takosumi.tcs-store.v1"]` in `/.well-known/takosumi`; the dashboard's `runtimeStoreUrl()` reads this extension. Use a public HTTP(S) URL without credentials, query, or fragment |
 
-The bundled Docker Compose definition reads these from `deploy/node-postgres/.env`.
+The bundled Docker Compose definition reads these from `deploy/node-postgres/.env`. If
+`TAKOSUMI_TCS_STORE_URL` is unset, the dashboard uses build-time
+`VITE_TAKOSUMI_TCS_STORE_URL`; with neither value set there is no default store.
 
 ```bash
 cat >> deploy/node-postgres/.env <<'ENV'

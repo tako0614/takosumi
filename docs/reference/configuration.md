@@ -171,8 +171,11 @@ bunx wrangler secret put TAKOSUMI_RELEASE_ACTIVATOR_TOKEN \
 | `TAKOSUMI_ACCOUNTS_PG_SSL_MODE`             | 任意                               | `disable`                       | `disable` / `require` / `verify-ca` / `verify-full`                  |
 | `TAKOSUMI_ACCOUNTS_PG_SSL_ROOT_CERT`        | `verify-ca` / `verify-full` で必須 | なし                            | PEM の CA バンドル                                                   |
 | `POSTGRES_PASSWORD`                         | Docker Compose を使う場合は必須・**秘密** | なし                            | 同梱の Docker Compose 定義が PostgreSQL に設定するパスワード                    |
+| `TAKOSUMI_TCS_STORE_URL`                    | 任意                               | なし                            | composed app が公開する TCS store URL。`/.well-known/takosumi` の `endpoints.extensions["takosumi.tcs-store.v1"]` が URL string を持ち、dashboard の `runtimeStoreUrl()` が読み取ります。認証情報、query、fragment を含まない公開 HTTP(S) URL を設定します |
 
 同梱の Docker Compose 定義は `deploy/node-postgres/.env` からこれらを読みます。
+`TAKOSUMI_TCS_STORE_URL` が未設定なら dashboard は build-time の
+`VITE_TAKOSUMI_TCS_STORE_URL` を使い、どちらも無ければ既定の store はありません。
 
 ```bash
 cat >> deploy/node-postgres/.env <<'ENV'
