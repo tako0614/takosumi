@@ -144,8 +144,8 @@ cd deploy/node-postgres
 cp .env.example .env
 ```
 
-`.env` を編集します。`docker-compose.yml` はこのファイルをそのまま `accounts` サービスに
-渡すので、ここに書いた値はすべてサービスに届きます。最低限、次を埋めます。各値の生成
+`.env` を編集します。Compose はこのファイルを変数展開に使い、`docker-compose.yml` に
+明示したサービス設定だけを `accounts` に渡します。最低限、次を埋めます。各値の生成
 コマンドは `.env.example` の該当箇所に書いてあります。
 
 | 変数 | なぜ要るか |
@@ -166,6 +166,9 @@ issuer が https のとき、署名鍵が届いていないとサービスは起
 (`TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS` と、そこで `clientSecretEnv` に指定した名前の
 secret) でサインインして作ります。passkey (`TAKOSUMI_ACCOUNTS_PASSKEY_*`) は、サインイン
 済みのアカウントに後から追加する手段です。どちらも `.env.example` に例があります。
+任意名の `clientSecretEnv` は `docker-compose.override.yml` の `accounts.environment` に
+1つずつ明示して渡します。`deploy/node-postgres/README.md`
+に override の例があります。`.env` に名前と値を書くだけではコンテナへ届きません。
 
 `.env` は秘密を含むので commit しません。このリポジトリは `deploy/node-postgres/.env` を
 `.gitignore` で除外しています。

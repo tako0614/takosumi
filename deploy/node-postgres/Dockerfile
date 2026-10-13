@@ -20,10 +20,12 @@ COPY providers /work/providers
 COPY accounts/contract /work/accounts/contract
 COPY accounts/service /work/accounts/service
 COPY cli /work/cli
-COPY deploy/cloudflare /work/deploy/cloudflare
+# The CLI statically imports this REST transport for its optional migrate-d1
+# command. It does not need the Cloudflare Worker distribution or build tools.
+COPY deploy/cloudflare/d1-rest-transport.ts /work/deploy/cloudflare/d1-rest-transport.ts
 COPY deploy/node-postgres/package.json /work/deploy/node-postgres/package.json
 COPY deploy/node-postgres/src /work/deploy/node-postgres/src
-RUN bun install --frozen-lockfile
+RUN bun install --frozen-lockfile --production
 
 # Build the dashboard SPA so the runtime image can serve it from the same
 # origin as the API (parity with the Cloudflare Workers Static Assets profile).
@@ -58,7 +60,19 @@ RUN bash scripts/build-app-docs.sh
 
 FROM oven/bun:1.3.14
 WORKDIR /app
-COPY --from=deps --chown=bun:bun /work /app
+# Runtime sources, workspace links and migration SQL only; build inputs such
+# as lockfiles and the Cloudflare deployment tree stay out of the final image.
+COPY --from=deps --chown=bun:bun /work/package.json /work/tsconfig.json /work/bunfig.toml /app/
+COPY --from=deps --chown=bun:bun /work/node_modules /app/node_modules
+COPY --from=deps --chown=bun:bun /work/contract /app/contract
+COPY --from=deps --chown=bun:bun /work/core /app/core
+COPY --from=deps --chown=bun:bun /work/lib /app/lib
+COPY --from=deps --chown=bun:bun /work/providers /app/providers
+COPY --from=deps --chown=bun:bun /work/accounts/contract /app/accounts/contract
+COPY --from=deps --chown=bun:bun /work/accounts/service /app/accounts/service
+COPY --from=deps --chown=bun:bun /work/cli /app/cli
+COPY --from=deps --chown=bun:bun /work/deploy/node-postgres /app/deploy/node-postgres
+COPY --from=deps --chown=bun:bun /work/deploy/cloudflare/d1-rest-transport.ts /app/deploy/cloudflare/d1-rest-transport.ts
 COPY --from=dashboard --chown=bun:bun \
   /work/dashboard/dist \
   /app/dashboard/dist

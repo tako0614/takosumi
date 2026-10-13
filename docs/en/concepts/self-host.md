@@ -150,8 +150,8 @@ cd deploy/node-postgres
 cp .env.example .env
 ```
 
-Edit `.env`. `docker-compose.yml` hands this file to the `accounts` service as it is, so
-every value you put here reaches the service. Fill in at least the following. The command
+Edit `.env`. Compose uses this file for interpolation and passes only the service
+settings declared in `docker-compose.yml` to `accounts`. Fill in at least the following. The command
 that generates each value is written next to it in `.env.example`.
 
 | Variable | Why it is needed |
@@ -173,6 +173,10 @@ rather than store secrets in plaintext.
 an upstream identity provider (`TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS`, plus the secret
 named by its `clientSecretEnv`). Passkeys (`TAKOSUMI_ACCOUNTS_PASSKEY_*`) are added to an
 account after it has signed in. `.env.example` has an example of each.
+Explicitly map each arbitrary `clientSecretEnv` name in
+`docker-compose.override.yml` under `accounts.environment`; setting it in `.env`
+alone does not pass it to the container. See the override example in the
+`deploy/node-postgres/README.md`.
 
 `.env` holds secrets, so do not commit it. This repository ignores
 `deploy/node-postgres/.env` in `.gitignore`.

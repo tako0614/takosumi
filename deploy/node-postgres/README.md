@@ -27,14 +27,26 @@ docker compose up -d
 curl https://app.example.com/healthz   # your TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME
 ```
 
-`docker-compose.yml` passes the whole `.env` to the `accounts` service
-(`env_file`), so every value set there reaches the process, including any secret
-an upstream sign-in descriptor names through `clientSecretEnv`. The
+Compose reads `.env` for interpolation. `docker-compose.yml` passes only the
+declared service settings to `accounts`; the separate `POSTGRES_PASSWORD`
+variable and Caddy's hostname are not passed to that container. The database
+connection URL still contains the password the service needs. The
 `migrations` container applies the control-plane schema
 (`core/scripts/db-migrate.ts`) and then the accounts schema before the service
 starts. Caddy obtains the certificate for `TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME`
 over ACME, so that name must resolve to this host; it serves no other site
 label.
+
+On an existing installation, the next `docker compose up -d` runs pending
+control-plane migrations from the image before Accounts migrations and before
+Compose starts `accounts`. Already-applied migrations are skipped. Back up the database
+and review pending migrations before upgrading: both catalogs are forward-only,
+so reverting the image does not undo schema/data changes. Restore a verified
+backup or use forward repair if recovery is needed. After a source update, use
+`docker compose up --build -d` to rebuild the image first.
+Dependency ordering does not stop an already-running `accounts` container. If
+pending migrations require service quiescence, stop it before upgrading with
+`docker compose stop accounts`.
 
 Required `.env` (`.env.example` shows the command that generates each secret):
 
@@ -62,6 +74,21 @@ TAKOSUMI_DEPLOY_CONTROL_TOKEN=
 The first account signs in through an upstream identity provider
 (`TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS`); passkeys are added to an account after
 it has signed in.
+
+For each upstream descriptor's arbitrary `clientSecretEnv` name, explicitly
+forward that one secret in `docker-compose.override.yml`. For the example in
+`.env.example`, keep the value in `.env` or your operator environment and add:
+
+```yaml
+services:
+  accounts:
+    environment:
+      COMPANY_SSO_CLIENT_SECRET: ${COMPANY_SSO_CLIENT_SECRET:?set the upstream client secret}
+```
+
+Compose loads this override automatically with `docker compose up -d`. Add one
+mapping per configured secret name; avoid passing a whole secret file through
+`env_file`. A missing upstream binding prevents the service from starting.
 
 This reference composition has no OpenTofu runner. Git sync, plan, and apply
 fail with `runner_capability_missing` until an operator composition supplies

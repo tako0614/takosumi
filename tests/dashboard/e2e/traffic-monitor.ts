@@ -1,4 +1,5 @@
 import type { Page } from "@playwright/test";
+import { resolvePortableOrigin } from "./portable-origin.ts";
 import {
   isExpectedPublicBootstrapDenial,
   isPublicLiveTelemetryRequest,
@@ -37,7 +38,7 @@ export interface DashboardTrafficMonitor {
 
 function expectedOrigin(mode: DashboardE2EMode): string {
   return mode === "portable"
-    ? "http://127.0.0.1:4179"
+    ? resolvePortableOrigin()
     : (process.env.TAKOSUMI_E2E_BASE_URL?.trim() ?? "");
 }
 

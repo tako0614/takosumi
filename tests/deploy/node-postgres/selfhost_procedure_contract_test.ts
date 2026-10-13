@@ -45,6 +45,17 @@ function copiedPaths(stageBody: string): string[] {
   return paths;
 }
 
+/** Repository paths the runtime stage copies from the deps stage. */
+function runtimeCopiedPaths(stageBody: string): string[] {
+  return [...stageBody.replace(/\\\n/gu, " ").matchAll(
+    /^COPY\s+--from=deps\s+(?:--chown=\S+\s+)?(.+)$/gmu,
+  )].flatMap((match) =>
+    match[1]!.trim().split(/\s+/u).slice(0, -1).map((path) =>
+      path.replace(/^\/work\/?/u, "")
+    )
+  );
+}
+
 function covered(path: string, copied: readonly string[]): boolean {
   return copied.some((entry) => path === entry || path.startsWith(`${entry}/`));
 }
@@ -117,6 +128,23 @@ test("node-postgres dashboard stage builds from the dashboard lockfile alone", a
   expect(aliasTargets.filter((target) => !covered(target, copied))).toEqual([]);
 });
 
+test("node-postgres runtime copies its import graph and migration SQL without the Cloudflare distribution", async () => {
+  const dockerfile = await read("deploy/node-postgres/Dockerfile");
+  const copied = runtimeCopiedPaths(stage(dockerfile, "final"));
+  expect(copied).not.toContain("");
+  expect(copied).not.toContain("deploy/cloudflare");
+  expect(copied).toContain("node_modules");
+  expect(copied).toContain("tsconfig.json");
+  expect(covered("accounts/service/migrations/001_app_installation_ledger.sql", copied)).toBe(true);
+  const inputs = (await Promise.all([
+    "deploy/node-postgres/src/server.ts",
+    "cli/src/main.ts",
+    "core/scripts/db-migrate.ts",
+  ].map(repoLocalRuntimeInputs))).flat();
+  expect([...new Set(inputs)].filter((input) => !covered(input, copied))).toEqual([]);
+  expect(covered("deploy/cloudflare/worker.ts", copied)).toBe(false);
+});
+
 test("node-postgres app-docs stage has git when vitepress lastUpdated is on", async () => {
   const [dockerfile, appDocsConfig] = await Promise.all([
     read("deploy/node-postgres/Dockerfile"),
@@ -128,7 +156,7 @@ test("node-postgres app-docs stage has git when vitepress lastUpdated is on", as
   );
 });
 
-test("node-postgres compose applies both schemas and hands .env to the service", async () => {
+test("node-postgres compose applies both schemas and passes only declared service settings", async () => {
   const compose = parseYaml(await read("deploy/node-postgres/docker-compose.yml")) as {
     services: Record<
       string,
@@ -149,7 +177,22 @@ test("node-postgres compose applies both schemas and hands .env to the service",
   );
 
   const accounts = compose.services.accounts!;
-  expect(accounts.env_file).toEqual([".env"]);
+  expect(accounts.env_file).toBeUndefined();
+  expect(accounts.environment).not.toHaveProperty("POSTGRES_PASSWORD");
+  expect(accounts.environment).not.toHaveProperty("TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME");
+  expect(accounts.environment).not.toHaveProperty("COMPANY_SSO_CLIENT_SECRET");
+  // Every documented service option must still reach the process. Arbitrary
+  // upstream secret binding names require an explicit operator override.
+  const example = await read("deploy/node-postgres/.env.example");
+  const serviceSettings = [...example.matchAll(/^#?\s*(TAKOSUMI_[A-Z0-9_]+)=/gmu)]
+    .map((match) => match[1]!)
+    .filter((key) => key !== "TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME");
+  for (const key of serviceSettings) {
+    expect(accounts.environment?.[key]).toBeDefined();
+    if (key !== "TAKOSUMI_ACCOUNTS_DATABASE_URL") {
+      expect(accounts.environment?.[key]).toStartWith(`\u0024{${key}:-`);
+    }
+  }
   expect(accounts.depends_on?.migrations?.condition).toBe(
     "service_completed_successfully",
   );
