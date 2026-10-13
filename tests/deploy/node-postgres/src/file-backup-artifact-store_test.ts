@@ -94,6 +94,9 @@ test("symlink, hardlink and public-permission artifacts are refused without touc
     await expect(store.get(REF)).rejects.toThrow();
     await rm(path);
     await writeFile(path, PAYLOAD, { mode: 0o644 });
+    // Creation permissions are filtered by umask; require the intended unsafe mode.
+    await chmod(path, 0o644);
+    expect((await stat(path)).mode & 0o777).toBe(0o644);
     await expect(store.get(REF)).rejects.toThrow();
   });
 });
