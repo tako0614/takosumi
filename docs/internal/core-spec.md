@@ -220,12 +220,13 @@ through revision-fenced steps on the Capsule row: one Capsule-scoped export thro
 export attempt is claimed before artifacts are created. A claim without a
 recorded result for 15 minutes blocks automatic teardown with
 `pre_destroy_export_incomplete`; it never causes a second export attempt. An
-export may finish after cancellation or that timeout: its Backup record and
-Activity event remain discoverable, and late evidence never clears a block or
-starts teardown. Waiting requests persist a strictly advancing
+export may finish after cancellation or that timeout: its Backup record remains
+discoverable by Capsule and time, and the finalizer attempts an Activity event
+with the original uninstall ID. Activity writes are best effort. Late evidence
+never clears a block or starts teardown. Waiting requests persist a strictly advancing
 `lastFinalizeAttemptAt` and rotate behind untouched due work, including when
 ticks share a clock value. The finalizer then creates a
-destroy Plan created with an exact id derived from the request and attempt,
+destroy Plan with an exact id derived from the request and attempt,
 recorded before creation and waited for before another attempt; and
 verification that the completed Plan is this Capsule's policy-passed destroy at
 the current execution epoch with known, delete-only changes. Only then does it move the request to

@@ -826,6 +826,31 @@ test("an export with lost acknowledgement is never retried and blocks unattended
   expect(h.destroyJobs).toHaveLength(0);
 });
 
+test("an export result survives a waiting-marker race without repeating the export", async () => {
+  const h = await appliedCapsule();
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await jumpToDue(h);
+  let raced = false;
+  const result = await h.finalize({
+    capsules: {
+      getCapsule: (id) => h.capsules.getCapsule(id),
+      advanceCapsuleUninstall: async (id, expected, changes) => {
+        if (changes.preDestroyExport !== undefined && !raced) {
+          raced = true;
+          await h.capsules.advanceCapsuleUninstall(id, expected, {
+            lastFinalizeAttemptAt: new Date(h.clock.ms).toISOString(),
+          });
+        }
+        return h.capsules.advanceCapsuleUninstall(id, expected, changes);
+      },
+    },
+  });
+  expect(raced).toBe(true);
+  expect(result).toMatchObject({ exportsRecorded: 1, destroysStarted: 1, failures: 0 });
+  expect(await h.store.listBackupRecords("ws_uninstall001")).toHaveLength(1);
+  expect(h.destroyJobs).toHaveLength(1);
+});
+
 for (const cancel of [true, false]) {
   test(`a late export after ${cancel ? "cancellation" : "claim timeout"} cannot start teardown`, async () => {
     const h = await appliedCapsule();

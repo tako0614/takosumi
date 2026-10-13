@@ -363,14 +363,15 @@ async function recordPreDestroyExport(
   // the current revision, but never attach an old result to a cancelled or
   // replacement request. A late result may add evidence to a blocked request;
   // it never clears the block or authorizes teardown.
-  const current = await deps.capsules.getCapsule(capsule.id);
-  const record = current.uninstall;
   let recorded = false;
-  if (
-    current.status === "uninstalled" && record?.id === uninstall.id &&
-    record.phase !== "cancelled" && record.preDestroyExport === undefined &&
-    record.preDestroyExportStartedAt === claimStartedAt
-  ) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const current = await deps.capsules.getCapsule(capsule.id);
+    const record = current.uninstall;
+    if (
+      current.status !== "uninstalled" || record?.id !== uninstall.id ||
+      record.phase === "cancelled" || record.preDestroyExport !== undefined ||
+      record.preDestroyExportStartedAt !== claimStartedAt
+    ) break;
     try {
       await deps.capsules.advanceCapsuleUninstall(
         capsule.id,
@@ -378,7 +379,10 @@ async function recordPreDestroyExport(
         { preDestroyExport: evidence },
       );
       recorded = true;
+      break;
     } catch (error) {
+      // Retry only the evidence write when a waiting-marker update won; the
+      // claimed export itself is never repeated. Every retry checks identity.
       if (!isTransientRefusal(error)) throw error;
     }
   }
