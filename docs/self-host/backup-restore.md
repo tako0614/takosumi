@@ -67,7 +67,7 @@ volume を作るため、元の database に触れません。`--clean` は使�
 ```bash
 set -euo pipefail
 # In a new shell, point this at the exact custom-format archive created above.
-# backup_file=/var/backups/takosumi/takosumi-<timestamp>.dump
+# backup_file=/path/to/verified-backup.dump
 restore_project="takosumi-restore-check-$(date +%s)-$$"
 restore_dir="$(mktemp -d)"
 cat > "$restore_dir/compose.restore-check.yml" <<'YAML'

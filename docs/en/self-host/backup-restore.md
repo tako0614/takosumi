@@ -68,7 +68,7 @@ archive. In a new shell, set `backup_file` to the actual archive path first.
 ```bash
 set -euo pipefail
 # In a new shell, set this to the exact custom-format archive created above.
-# backup_file=/var/backups/takosumi/takosumi-<timestamp>.dump
+# backup_file=/path/to/verified-backup.dump
 restore_project="takosumi-restore-check-$(date +%s)-$$"
 restore_dir="$(mktemp -d)"
 cat > "$restore_dir/compose.restore-check.yml" <<'YAML'
