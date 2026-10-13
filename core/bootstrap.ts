@@ -1008,6 +1008,21 @@ export interface CreatedTakosumiService {
   readonly operations: TakosumiOperations;
 }
 
+/**
+ * Whether the composition can execute OpenTofu Runs. Without a default runner
+ * or an executor-registry entry every Run fails with
+ * `runner_capability_missing`, so product discovery must not advertise one.
+ */
+export function hasConfiguredOpenTofuRunner(
+  options: Pick<
+    CreateTakosumiServiceOptions,
+    "opentofuRunner" | "opentofuRunnerExecutors"
+  >,
+): boolean {
+  return options.opentofuRunner !== undefined ||
+    (options.opentofuRunnerExecutors?.size ?? 0) > 0;
+}
+
 export async function createTakosumiService(
   options: CreateTakosumiServiceOptions = {},
 ): Promise<CreatedTakosumiService> {
@@ -1720,9 +1735,10 @@ export async function createTakosumiService(
     registerMetricsRoutes:
       role === "takosumi-api" && Boolean(metricsScrapeToken),
     registerInterfaceRoutes: role === "takosumi-api",
-    ...(options.adapterCapabilities
-      ? { adapterCapabilities: options.adapterCapabilities }
-      : {}),
+    adapterCapabilities: {
+      ...(hasConfiguredOpenTofuRunner(options) ? {} : { opentofu: false }),
+      ...(options.adapterCapabilities ?? {}),
+    },
     ...(options.operatorCapabilities
       ? { operatorCapabilities: options.operatorCapabilities }
       : {}),

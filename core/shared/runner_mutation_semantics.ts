@@ -46,7 +46,9 @@ export async function runnerMutationIdentity(
     if (key === "credentials") continue;
     request[key] = key === "applyRun" || key === "planRun"
       ? stableMutationRunEvidence(value, key)
-      : value;
+      : key === "privateRunFiles"
+        ? stablePrivateRunFileManifest(value)
+        : value;
   }
   request.credentials = await credentialSemantics(requestPayload.credentials, requestPayload, action, ports);
   const semanticDigest = await digestText(canonicalRunnerMutationJson({
@@ -59,6 +61,31 @@ export async function runnerMutationIdentity(
     kind: "takosumi.runner-mutation-material@v1", runId, action, request: requestPayload,
   }));
   return { semanticDigest, privateMaterialDigest };
+}
+
+function stablePrivateRunFileManifest(value: unknown): readonly {
+  readonly slot: string;
+  readonly endpoint: string;
+}[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 256) {
+    throw new Error("runner mutation private Run file manifest is invalid");
+  }
+  const seen = new Set<string>();
+  return value.map((entry) => {
+    if (!isRecord(entry) || Object.keys(entry).sort().join(",") !== "endpoint,grant,slot") {
+      throw new Error("runner mutation private Run file descriptor is invalid");
+    }
+    const slot = stringField(entry, "slot");
+    const endpoint = stringField(entry, "endpoint");
+    const grant = stringField(entry, "grant");
+    if (!slot || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(slot) ||
+      seen.has(slot) || !endpoint || endpoint.length > 2048 ||
+      !grant || grant.length > 16_384) {
+      throw new Error("runner mutation private Run file descriptor is invalid");
+    }
+    seen.add(slot);
+    return { slot, endpoint };
+  }).sort((left, right) => left.slot < right.slot ? -1 : left.slot > right.slot ? 1 : 0);
 }
 
 function stableMutationRunEvidence(value: unknown, label: string): unknown {

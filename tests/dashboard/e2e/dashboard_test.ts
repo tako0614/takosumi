@@ -13,6 +13,7 @@ import {
   PORTABLE_UI_SURFACES,
 } from "./fixture-data.ts";
 import { monitorDashboardTraffic } from "./traffic-monitor.ts";
+import { resolvePortableOrigin } from "./portable-origin.ts";
 import {
   shouldRecordControlPlaneMutation,
   type DashboardE2EMode,
@@ -50,7 +51,7 @@ function requiredLive(name: string): string {
 
 const mutationOrigin =
   mode === "portable"
-    ? "http://127.0.0.1:4179"
+    ? resolvePortableOrigin()
     : (process.env.TAKOSUMI_E2E_BASE_URL?.trim() ?? "");
 
 const expectations: Expectations =
@@ -1059,9 +1060,9 @@ test.describe("Takosumi dashboard browser surface", () => {
     const openService = page.getByRole("link", { name: "Open service" });
     await expect(openService).toBeVisible({ timeout: 15_000 });
     await expect(openService).toHaveAttribute("href", "https://service.example.test/fixture");
-    expect(requests).toContain("GET http://127.0.0.1:4179/api/v1/capsules/cap_provider_destination_e2e/state-versions");
-    expect(requests).toContain("GET http://127.0.0.1:4179/api/v1/workspaces/ws_alpha/activity?limit=100");
-    expect(requests.filter((entry) => entry === "POST http://127.0.0.1:4179/api/v1/runs/run_provider_plan_e2e/apply")).toHaveLength(1);
+    expect(requests).toContain(`GET ${mutationOrigin}/api/v1/capsules/cap_provider_destination_e2e/state-versions`);
+    expect(requests).toContain(`GET ${mutationOrigin}/api/v1/workspaces/ws_alpha/activity?limit=100`);
+    expect(requests.filter((entry) => entry === `POST ${mutationOrigin}/api/v1/runs/run_provider_plan_e2e/apply`)).toHaveLength(1);
 
     const popupPromise = page.waitForEvent("popup");
     await openService.click();
@@ -1071,8 +1072,8 @@ test.describe("Takosumi dashboard browser surface", () => {
     await popup.close();
     await assertNoPageErrors(errors);
     expect(requests.every((entry) =>
-      entry.startsWith("GET http://127.0.0.1:4179/") ||
-      entry.startsWith("POST http://127.0.0.1:4179/") ||
+      entry.startsWith(`GET ${mutationOrigin}/`) ||
+      entry.startsWith(`POST ${mutationOrigin}/`) ||
       entry.startsWith("GET https://store.example.test/") ||
       entry.startsWith("GET https://service.example.test/"),
     )).toBe(true);

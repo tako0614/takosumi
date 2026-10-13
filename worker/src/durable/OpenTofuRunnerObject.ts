@@ -28,6 +28,15 @@ import {
   verifyRunCredentialTokenAuthority,
 } from "../../../core/shared/run_credential_tokens.ts";
 import { runnerMutationIdentity } from "../../../core/shared/runner_mutation_semantics.ts";
+import {
+  MAX_PRIVATE_RUN_FILE_DESCRIPTOR_BYTES,
+  MAX_PRIVATE_RUN_FILE_DISPATCHES,
+  MAX_PRIVATE_RUN_FILE_ROTATIONS,
+  PRIVATE_RUN_FILE_REFRESH_SEQUENCE_HEADER,
+  privateRunFileManifestDigest,
+  type PrivateRunFileRefreshFile,
+  type PrivateRunFileRefreshOwner,
+} from "../../../core/shared/private_run_file_refresh.ts";
 import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
 import {
   recoveryPlanForStateVersion,
@@ -573,6 +582,8 @@ interface RunnerMutationNotDispatchedEvidence {
 interface ActiveCredentialRefreshClaim {
   readonly owner: { readonly kind: "plan" | "apply"; readonly id: string };
   readonly runnerRunId: string;
+  /** Slot-bearing Apply keeps Core's Plan-origin credential route externally. */
+  readonly containerRunId?: string;
   readonly action: "plan" | "apply" | "destroy";
   readonly semanticDigest?: string;
   readonly signal?: AbortSignal;
@@ -588,6 +599,21 @@ interface ActiveCredentialRefreshClaim {
   poisoned: boolean;
   containerStarted?: boolean;
   readonly staged?: Map<string, { readonly value: string; readonly expiresAt: string }>;
+}
+
+interface ActivePrivateRunFileRefreshClaim {
+  readonly owner: PrivateRunFileRefreshOwner;
+  readonly runnerRunId: string;
+  readonly action: "plan" | "apply" | "destroy";
+  readonly manifestDigest: string;
+  readonly manifest: readonly { readonly slot: string; readonly endpoint: string }[];
+  readonly semanticDigest?: string;
+  readonly signal?: AbortSignal;
+  sequence: number;
+  busy: boolean;
+  poisoned: boolean;
+  containerStarted?: boolean;
+  staged?: readonly PrivateRunFileRefreshFile[];
 }
 
 type RunnerMutationAuthorityClaim =
@@ -699,6 +725,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   #lastStartupSeconds: number | undefined;
   readonly #activeMutationPreparations = new Set<string>();
   readonly #activeCredentialRefreshClaims = new Map<string, ActiveCredentialRefreshClaim>();
+  readonly #activePrivateRunFileRefreshClaims = new Map<string, ActivePrivateRunFileRefreshClaim>();
   readonly #activeReleasePreparations = new Set<string>();
   readonly #restoreAuthorityLock = new AsyncSerialLock();
   readonly #localRunnerProxyUrl: URL | undefined;
@@ -1061,10 +1088,15 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         const dispatchRunId = new URL(request.url).pathname.match(/^\/runs\/([^/]+)$/)?.[1];
         if (dispatchRunId) {
           const id = decodeURIComponent(dispatchRunId);
-          const active = this.#activeCredentialRefreshClaims.get(id);
-          if (active?.signal === request.signal) {
-            active.staged?.clear();
-            this.#activeCredentialRefreshClaims.delete(id);
+          for (const [key, active] of this.#activeCredentialRefreshClaims) {
+            if (active.signal === request.signal) {
+              active.staged?.clear();
+              this.#activeCredentialRefreshClaims.delete(key);
+            }
+          }
+          const privateFiles = this.#activePrivateRunFileRefreshClaims.get(id);
+          if (privateFiles?.signal === request.signal) {
+            this.#activePrivateRunFileRefreshClaims.delete(id);
           }
         }
       }
@@ -1285,11 +1317,17 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         this.#activeCredentialRefreshClaims.get(runnerRunId) !== active) {
         return Response.json({ error: "credential refresh is not active" }, { status: 409 });
       }
+      const containerUrl = active.containerRunId
+        ? new URL(`/runs/${encodeURIComponent(active.containerRunId)}/credentials`, request.url).toString()
+        : request.url;
+      const containerUpdate = active.containerRunId
+        ? { ...update, runnerRunId: active.containerRunId }
+        : update;
       const response = await this.#containerFetch(
-        new Request(request.url, {
+        new Request(containerUrl, {
           method: "PUT",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(update),
+          body: JSON.stringify(containerUpdate),
           signal: AbortSignal.any([
             request.signal,
             ...(active.signal ? [active.signal] : []),
@@ -1314,6 +1352,115 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     }
   }
 
+  async #forwardPrivateRunFileRefresh(
+    runnerRunId: string,
+    request: Request,
+  ): Promise<Response> {
+    const active = this.#activePrivateRunFileRefreshClaims.get(runnerRunId);
+    if (!active || active.busy || active.poisoned || request.signal.aborted ||
+      active.signal?.aborted) {
+      return Response.json({ error: "private Run file refresh is not active" }, { status: 409 });
+    }
+    let update: Record<string, unknown>;
+    try {
+      update = await readBoundedRequestJsonObject(request, MAX_PRIVATE_RUN_FILE_DESCRIPTOR_BYTES);
+    } catch {
+      return Response.json({ error: "private Run file refresh is invalid" }, { status: 400 });
+    }
+    const matches = await privateRunFileRefreshUpdateMatches(update, active);
+    if (active.busy || active.poisoned || !matches || active.signal?.aborted ||
+      this.#activePrivateRunFileRefreshClaims.get(runnerRunId) !== active) {
+      return Response.json({ error: "private Run file refresh is not active" }, { status: 409 });
+    }
+    active.busy = true;
+    try {
+      const durable = parseRunnerMutationDispatchRecord(
+        await this.ctx.storage.get<unknown>(RUNNER_MUTATION_AUTHORITY_STORAGE_KEY),
+      );
+      if (active.owner.kind === "apply") {
+        if (!durable ||
+          (active.containerStarted
+            ? durable.phase !== "dispatched"
+            : durable.phase !== "preparing" && durable.phase !== "dispatched") ||
+          durable.semanticDigest !== active.semanticDigest ||
+          durable.action !== active.action) {
+          return Response.json({ error: "private Run file refresh is not active" }, { status: 409 });
+        }
+      } else if (active.owner.id !== runnerRunId || active.action !== "plan") {
+        return Response.json({ error: "private Run file refresh is not active" }, { status: 409 });
+      }
+      if (active.signal?.aborted || request.signal.aborted ||
+        this.#activePrivateRunFileRefreshClaims.get(runnerRunId) !== active) {
+        return Response.json({ error: "private Run file refresh is not active" }, { status: 409 });
+      }
+      if (!active.containerStarted) {
+        active.staged = update.files as PrivateRunFileRefreshFile[];
+        active.sequence = update.sequence as number;
+        return Response.json({ ok: true, status: "updated", sequence: active.sequence });
+      }
+      await this.#awaitPrivateRunFileSessionReady(runnerRunId, active, request);
+      if (active.signal?.aborted || request.signal.aborted ||
+        this.#activePrivateRunFileRefreshClaims.get(runnerRunId) !== active) {
+        return Response.json({ error: "private Run file refresh is not active" }, { status: 409 });
+      }
+      const response = await this.#containerFetch(new Request(request.url, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(update),
+        signal: AbortSignal.any([
+          request.signal,
+          ...(active.signal ? [active.signal] : []),
+        ]),
+      }));
+      const ack = response.ok ? await readJsonObject(response, 4_096).catch(() => undefined) : undefined;
+      if (!isRecord(ack) || ack.ok !== true || ack.status !== "updated" ||
+        ack.sequence !== update.sequence) {
+        // A malformed success response is a lost/indeterminate ACK too.
+        active.poisoned = true;
+        return Response.json({ error: "private Run file refresh was rejected" }, { status: 502 });
+      }
+      active.sequence = update.sequence as number;
+      return Response.json({ ok: true, status: "updated", sequence: active.sequence });
+    } catch {
+      active.poisoned = true;
+      return Response.json({ error: "private Run file refresh delivery is ambiguous" }, { status: 502 });
+    } finally {
+      active.busy = false;
+    }
+  }
+
+  async #awaitPrivateRunFileSessionReady(
+    runnerRunId: string,
+    active: ActivePrivateRunFileRefreshClaim,
+    request: Request,
+  ): Promise<void> {
+    const deadline = Date.now() + 10_000;
+    const signal = AbortSignal.any([
+      request.signal,
+      ...(active.signal ? [active.signal] : []),
+      AbortSignal.timeout(10_000),
+    ]);
+    while (Date.now() < deadline) {
+      signal.throwIfAborted();
+      if (this.#activePrivateRunFileRefreshClaims.get(runnerRunId) !== active) {
+        throw new Error("private Run file refresh is no longer active");
+      }
+      const response = await this.#containerFetch(new Request(request.url, { method: "GET", signal }));
+      if (response.ok) {
+        const ready = await readJsonObject(response, 4_096);
+        const owner = recordField(ready, "owner");
+        if (isRecord(owner) && owner.kind === active.owner.kind &&
+          owner.id === active.owner.id && ready.runnerRunId === runnerRunId &&
+          ready.manifestDigest === active.manifestDigest &&
+          ready.sequence === active.sequence) return;
+        throw new Error("private Run file readiness does not match active owner");
+      }
+      if (response.status !== 409) throw new Error("private Run file readiness failed");
+      await sleep(10);
+    }
+    throw new Error("private Run file readiness timed out");
+  }
+
   async #awaitCredentialSessionReady(
     runnerRunId: string,
     active: ActiveCredentialRefreshClaim,
@@ -1331,14 +1478,18 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         this.#activeCredentialRefreshClaims.get(runnerRunId) !== active) {
         throw new Error("credential refresh is no longer active");
       }
-      const response = await this.#containerFetch(new Request(request.url, {
+      const containerUrl = active.containerRunId
+        ? new URL(`/runs/${encodeURIComponent(active.containerRunId)}/credentials`, request.url).toString()
+        : request.url;
+      const response = await this.#containerFetch(new Request(containerUrl, {
         method: "GET", signal,
       }));
       if (response.ok) {
         const ready = await readJsonObject(response, 4_096);
         const owner = recordField(ready, "owner");
         if (isRecord(owner) && owner.kind === active.owner.kind &&
-          owner.id === active.owner.id && ready.runnerRunId === runnerRunId &&
+          owner.id === active.owner.id &&
+          ready.runnerRunId === (active.containerRunId ?? runnerRunId) &&
           ready.manifestDigest === active.manifestDigest &&
           ready.sequence === active.sequence) return;
         throw new Error("credential refresh readiness does not match active owner");
@@ -2078,10 +2229,66 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       return Response.json({ owner: { kind: ownerKind, id: ownerId }, runnerRunId, capabilities });
     }
     const refreshMatch = /^\/runs\/([^/]+)\/credentials$/.exec(url.pathname);
+    if (refreshMatch && request.method === "GET") {
+      const runnerRunId = decodeURIComponent(refreshMatch[1]!);
+      const active = this.#activeCredentialRefreshClaims.get(runnerRunId);
+      if (active?.containerRunId) {
+        if (active.poisoned || active.signal?.aborted) {
+          return Response.json({ error: "credential refresh is not active" }, { status: 409 });
+        }
+        const containerUrl = new URL(
+          `/runs/${encodeURIComponent(active.containerRunId)}/credentials`, request.url,
+        ).toString();
+        const response = await this.#containerFetch(new Request(containerUrl, { method: "GET" }));
+        if (!response.ok) return Response.json({ error: "credential refresh is not active" }, { status: 409 });
+        const ready = await readJsonObject(response, 4_096).catch(() => undefined);
+        const owner = isRecord(ready) ? recordField(ready, "owner") : undefined;
+        if (!isRecord(ready) || !isRecord(owner) ||
+          owner.kind !== active.owner.kind || owner.id !== active.owner.id ||
+          ready.runnerRunId !== active.containerRunId ||
+          ready.manifestDigest !== active.manifestDigest ||
+          ready.sequence !== active.sequence) {
+          return Response.json({ error: "credential refresh is not active" }, { status: 409 });
+        }
+        return Response.json({ owner: active.owner, runnerRunId,
+          manifestDigest: active.manifestDigest, sequence: active.sequence });
+      }
+    }
     if (refreshMatch && request.method === "PUT") {
       return await this.#forwardCredentialRefresh(
         decodeURIComponent(refreshMatch[1]!),
         request,
+      );
+    }
+    const privateFileRefreshMatch = /^\/runs\/([^/]+)\/private-run-files$/.exec(url.pathname);
+    if (privateFileRefreshMatch && request.method === "GET") {
+      const runnerRunId = decodeURIComponent(privateFileRefreshMatch[1]!);
+      const active = this.#activePrivateRunFileRefreshClaims.get(runnerRunId);
+      if (!active) {
+        return Response.json({ error: "private Run file refresh is not active" }, { status: 409 });
+      }
+      if (active) {
+        if (!active.containerStarted || active.poisoned || active.signal?.aborted) {
+          return Response.json({ error: "private Run file refresh is not active" }, { status: 409 });
+        }
+        const response = await this.#containerFetch(request);
+        if (!response.ok) return Response.json({ error: "private Run file refresh is not active" }, { status: 409 });
+        const ready = await readJsonObject(response, 4_096).catch(() => undefined);
+        const owner = isRecord(ready) ? recordField(ready, "owner") : undefined;
+        if (!isRecord(ready) || !isRecord(owner) ||
+          owner.kind !== active.owner.kind || owner.id !== active.owner.id ||
+          ready.runnerRunId !== runnerRunId ||
+          ready.manifestDigest !== active.manifestDigest ||
+          ready.sequence !== active.sequence) {
+          return Response.json({ error: "private Run file refresh is not active" }, { status: 409 });
+        }
+        return Response.json({ owner: active.owner, runnerRunId,
+          manifestDigest: active.manifestDigest, sequence: active.sequence });
+      }
+    }
+    if (privateFileRefreshMatch && request.method === "PUT") {
+      return await this.#forwardPrivateRunFileRefresh(
+        decodeURIComponent(privateFileRefreshMatch[1]!), request,
       );
     }
     const match = /^\/runs\/([^/]+)$/.exec(url.pathname);
@@ -2141,9 +2348,20 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       : applyRunId
         ? { kind: "apply" as const, id: applyRunId }
         : undefined;
+    const privateFileRefreshClaim = await privateRunFileRefreshClaim(
+      envelope.action === "plan"
+        ? { kind: "plan", id: runId }
+        : applyRunId ? { kind: "apply", id: applyRunId } : undefined,
+      runId,
+      envelope.action,
+      envelope.request,
+    );
+    const credentialRunnerRunId = privateFileRefreshClaim && isRunnerMutationAction(envelope.action)
+      ? stringField(recordField(envelope.request, "planRun") ?? {}, "id") ?? runId
+      : runId;
     const credentialRefreshClaim = await renewableCredentialRefreshClaim(
       credentialRefreshOwner,
-      runId,
+      credentialRunnerRunId,
       envelope.action,
       envelope.request,
     );
@@ -2166,7 +2384,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     let dispatchBody: string | undefined;
     const dispatchRequest = () => {
       if (dispatchBody === undefined) {
-        const active = this.#activeCredentialRefreshClaims.get(runId);
+        const active = this.#activeCredentialRefreshClaims.get(credentialRunnerRunId);
+        const privateFiles = this.#activePrivateRunFileRefreshClaims.get(runId);
+        let updated = false;
         if (active && active.signal === request.signal) {
           const credentials = recordField(envelope.request, "credentials");
           if (!isRecord(credentials) || !isRecord(credentials.env) ||
@@ -2184,10 +2404,18 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           credentials.refreshSequence = active.sequence;
           active.containerStarted = true;
           active.staged?.clear();
-          dispatchBody = JSON.stringify(envelope);
-        } else {
-          dispatchBody = bodyText;
+          updated = true;
         }
+        if (privateFiles && privateFiles.signal === request.signal) {
+          if (!isRecord(envelope.request) || !Array.isArray(envelope.request.privateRunFiles)) {
+            throw new Error("private Run file dispatch projection is unavailable");
+          }
+          if (privateFiles.staged) envelope.request.privateRunFiles = privateFiles.staged;
+          privateFiles.containerStarted = true;
+          privateFiles.staged = undefined;
+          updated = true;
+        }
+        dispatchBody = updated ? JSON.stringify(envelope) : bodyText;
       }
       const headers = runnerRequestHeaders(request);
       if (runDeadlineAt !== undefined) {
@@ -2197,6 +2425,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           RUNNER_RUN_BUDGET_MS_HEADER,
           String(Math.max(0, Math.floor(runDeadlineAt - Date.now()))),
         );
+      }
+      const privateFiles = this.#activePrivateRunFileRefreshClaims.get(runId);
+      if (privateFiles?.signal === request.signal) {
+        headers.set(PRIVATE_RUN_FILE_REFRESH_SEQUENCE_HEADER, String(privateFiles.sequence));
       }
       return new Request(request.url, {
         method: request.method,
@@ -2269,11 +2501,19 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       }
       mutationPreparation = claim.record;
       if (credentialRefreshClaim) {
-        this.#activeCredentialRefreshClaims.set(runId, {
+        this.#activeCredentialRefreshClaims.set(credentialRunnerRunId, {
           ...credentialRefreshClaim,
+          ...(credentialRunnerRunId !== runId ? { containerRunId: runId } : {}),
           semanticDigest: mutationPreparation.semanticDigest,
           signal: request.signal,
           staged: new Map(),
+        });
+      }
+      if (privateFileRefreshClaim) {
+        this.#activePrivateRunFileRefreshClaims.set(runId, {
+          ...privateFileRefreshClaim,
+          semanticDigest: mutationPreparation.semanticDigest,
+          signal: request.signal,
         });
       }
       if (stateScope) {
@@ -2312,6 +2552,15 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         staged: new Map(),
       });
     }
+    if (privateFileRefreshClaim && envelope.action === "plan") {
+      if (this.#activePrivateRunFileRefreshClaims.has(runId)) {
+        throw new Error("private Run file Plan owner is already active");
+      }
+      this.#activePrivateRunFileRefreshClaims.set(runId, {
+        ...privateFileRefreshClaim,
+        signal: request.signal,
+      });
+    }
     try {
       let restoredPlan: { readonly bytes: Uint8Array; readonly digest: string } | undefined;
       let canonicalStateMetadata = ABSENT_OPENTOFU_STATE_METADATA;
@@ -2331,11 +2580,16 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         await this.#restoreDepStates(runId, depStates, url);
       }
       if (envelope.action === "apply" || envelope.action === "destroy") {
+        const savedPlanRunId = privateFileRefreshClaim
+          ? stringField(recordField(envelope.request, "planRun") ?? {}, "id")
+          : runId;
+        if (!savedPlanRunId) throw new Error("saved Plan origin is missing");
         restoredPlan = await this.#restorePlanArtifact(
           runId, envelope.request, url,
+          privateFileRefreshClaim ? savedPlanRunId : undefined,
         );
         await this.#verifyReviewedProviderLockfileWithoutRestore(
-          runId,
+          savedPlanRunId,
           envelope.request,
         );
       }
@@ -4375,6 +4629,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runId: string,
     requestPayload: unknown,
     baseUrl: URL,
+    planOriginRunId?: string,
   ): Promise<{ readonly bytes: Uint8Array; readonly digest: string }> {
     const artifact = recordField(requestPayload, "planArtifact");
     if (!artifact || stringField(artifact, "kind") !== "object-storage") {
@@ -4384,6 +4639,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       requiredStringField(artifact, "ref"),
       this.#planArtifactBucket(),
     );
+    if (planOriginRunId && key !== planArtifactKey(planOriginRunId) &&
+      key !== planArtifactKey(planOriginRunId, parseStateScope(requestPayload))) {
+      throw new Error("saved Plan artifact does not belong to the declared Plan origin");
+    }
     const expectedDigest = requiredSha256DigestField(artifact, "digest");
     const expectedSize = artifact.sizeBytes === undefined
       ? undefined
@@ -6660,6 +6919,90 @@ function isRunnerMutationAction(
   action: string | undefined,
 ): action is RunnerMutationAction {
   return action === "apply" || action === "destroy";
+}
+
+async function privateRunFileRefreshClaim(
+  owner: PrivateRunFileRefreshOwner | undefined,
+  runnerRunId: string,
+  action: string | undefined,
+  requestPayload: unknown,
+): Promise<Omit<ActivePrivateRunFileRefreshClaim, "semanticDigest"> | undefined> {
+  const request = isRecord(requestPayload) ? requestPayload.privateRunFiles : undefined;
+  if (request === undefined) return undefined;
+  if (!Array.isArray(request)) throw new Error("private Run file dispatch is malformed");
+  if (request.length === 0) return undefined;
+  if (!owner || owner.id !== runnerRunId ||
+    (action === "plan"
+      ? owner.kind !== "plan" || stringField(recordField(requestPayload, "planRun") ?? {}, "id") !== runnerRunId
+      : !isRunnerMutationAction(action) || owner.kind !== "apply" ||
+        !stringField(recordField(requestPayload, "planRun") ?? {}, "id"))) {
+    throw new Error("private Run files require an exact active Run owner");
+  }
+  const files = validPrivateRunFileDescriptors(request);
+  const manifestDigest = await privateRunFileManifestDigest({ owner, runnerRunId, files });
+  return {
+    owner, runnerRunId,
+    action: action as "plan" | "apply" | "destroy",
+    manifestDigest,
+    manifest: files.map(({ slot, endpoint }) => ({ slot, endpoint })),
+    sequence: 0,
+    busy: false,
+    poisoned: false,
+  };
+}
+
+function validPrivateRunFileDescriptors(value: unknown): readonly PrivateRunFileRefreshFile[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_PRIVATE_RUN_FILE_DISPATCHES ||
+    new TextEncoder().encode(JSON.stringify(value)).byteLength > MAX_PRIVATE_RUN_FILE_DESCRIPTOR_BYTES) {
+    throw new Error("private Run file descriptor set is invalid");
+  }
+  const seen = new Set<string>();
+  return value.map((entry) => {
+    if (!isRecord(entry) || Object.keys(entry).sort().join(",") !== "endpoint,grant,slot") {
+      throw new Error("private Run file descriptor is invalid");
+    }
+    const slot = stringField(entry, "slot");
+    const endpoint = stringField(entry, "endpoint");
+    const grant = stringField(entry, "grant");
+    if (!slot || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(slot) || seen.has(slot) ||
+      !endpoint || endpoint.length > 2_048 || !grant ||
+      grant.length > 16_384 ||
+      [...grant].some((character) => character.charCodeAt(0) < 33 || character.charCodeAt(0) > 126)) {
+      throw new Error("private Run file descriptor is invalid");
+    }
+    let url: URL;
+    try { url = new URL(endpoint); } catch { throw new Error("private Run file descriptor is invalid"); }
+    if ((url.protocol !== "https:" && url.protocol !== "http:") ||
+      url.username || url.password || url.search || url.hash) {
+      throw new Error("private Run file descriptor is invalid");
+    }
+    seen.add(slot);
+    return { slot, endpoint, grant };
+  });
+}
+
+async function privateRunFileRefreshUpdateMatches(
+  update: Record<string, unknown>,
+  active: ActivePrivateRunFileRefreshClaim,
+): Promise<boolean> {
+  if (Object.keys(update).sort().join(",") !== "files,kind,manifestDigest,owner,runnerRunId,sequence" ||
+    update.kind !== "takosumi.private-run-files.refresh@v1" ||
+    !isRecord(update.owner) || Object.keys(update.owner).sort().join(",") !== "id,kind" ||
+    update.owner.kind !== active.owner.kind || update.owner.id !== active.owner.id ||
+    update.runnerRunId !== active.runnerRunId ||
+    update.manifestDigest !== active.manifestDigest ||
+    !Number.isSafeInteger(update.sequence) || update.sequence !== active.sequence + 1 ||
+    (update.sequence as number) > MAX_PRIVATE_RUN_FILE_ROTATIONS) return false;
+  let files: readonly PrivateRunFileRefreshFile[];
+  try { files = validPrivateRunFileDescriptors(update.files); } catch { return false; }
+  if (files.length !== active.manifest.length ||
+    files.some((file, index) => file.slot !== active.manifest[index]?.slot ||
+      file.endpoint !== active.manifest[index]?.endpoint)) return false;
+  return await privateRunFileManifestDigest({
+    owner: active.owner,
+    runnerRunId: active.runnerRunId,
+    files,
+  }) === active.manifestDigest;
 }
 
 async function renewableCredentialRefreshClaim(
