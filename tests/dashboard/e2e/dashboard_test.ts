@@ -797,7 +797,16 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
     await fixture.startApply();
 
-    await expect(page.getByRole("heading", { name: "Something went wrong" })).toBeVisible();
+    // Fails closed at the page boundary: no Open, no readiness Retry — and
+    // the rest of the dashboard (nav) stays usable instead of the whole app
+    // being replaced by the root card.
+    await expect(
+      page.getByRole("heading", { name: "This page couldn't be shown" }),
+    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Something went wrong" })).toHaveCount(0);
+    await expect(
+      page.locator(".sidebar-nav").getByRole("link", { name: "Home", exact: true }),
+    ).toBeVisible();
     await expect(page.getByRole("link", { name: "Open service" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
     expect(fixture.applyPosts).toHaveLength(1);
@@ -3500,7 +3509,11 @@ test.describe("Takosumi dashboard browser surface", () => {
         },
       }),
     );
+    // A fresh session has no stored Workspace yet: the history must still
+    // show the events that arrive once the Workspace is selected (it used to
+    // clear them and say "No activity yet").
     await gotoDashboardDocument(page, "/activity");
+    await expect(page.locator(".wa-activity-row")).toHaveCount(1);
     // The event records only ids: the row names the service and reads your
     // own subject as you instead of `sub_…`.
     await expect(

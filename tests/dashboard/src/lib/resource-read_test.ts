@@ -61,6 +61,15 @@ describe("page errors stay inside the page", () => {
     );
   });
 
+  test("unexpected install readiness errors still fail closed by throwing", () => {
+    // The readiness fetcher maps ordinary read failures to `read-failed` and
+    // rethrows anything else ON PURPOSE, so the page boundary — not an Open
+    // link — handles an install whose readiness is unknown.
+    const source = read("views/new/InstallExecution.tsx");
+    expect(source).toContain("const result = readiness.latest;");
+    expect(source).not.toContain("latestOrUndefined(readiness)");
+  });
+
   test("the route boundary resets on navigation and recovers stale chunks", () => {
     const boundary = read("components/RouteErrorBoundary.tsx");
     expect(boundary).toContain("() => location.pathname");
@@ -79,7 +88,6 @@ describe("page errors stay inside the page", () => {
       ["views/runs/RunView.tsx", "run"],
       ["views/runs/RunView.tsx", "capsule"],
       ["views/new/InstallExecution.tsx", "run"],
-      ["views/new/InstallExecution.tsx", "readiness"],
       ["views/apps/WorkloadDetailView.tsx", "capsule"],
       ["views/graph/GraphView.tsx", "graph"],
     ];

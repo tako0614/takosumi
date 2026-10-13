@@ -20,10 +20,7 @@ import {
 import { t } from "../../i18n/index.ts";
 import { Badge, Button, Checkbox, Spinner } from "../../components/ui/index.ts";
 import { fetchFailedMessage, friendlyError } from "../../lib/error-copy.ts";
-import {
-  createLastGoodValue,
-  latestOrUndefined,
-} from "../../lib/resource-read.ts";
+import { createLastGoodValue } from "../../lib/resource-read.ts";
 import { runFailureHint } from "../../lib/run-errors.ts";
 import { runStatusLabel } from "../../lib/labels.ts";
 import {
@@ -245,14 +242,18 @@ export default function InstallExecution(props: Props) {
   });
   onCleanup(() => activeReadinessController?.abort());
 
+  // Raw `.latest` on purpose: ordinary read failures come back as
+  // `read-failed` (inline retry), but an UNEXPECTED error is rethrown by the
+  // fetcher so it escapes to the page error boundary — fail closed, never an
+  // Open link for an install whose readiness is unknown.
   const readinessState = () => {
-    const result = latestOrUndefined(readiness);
+    const result = readiness.latest;
     return result?.kind === "state" ? result.value : undefined;
   };
 
   const readinessFailure = createMemo(() => {
     if (readiness.loading) return undefined;
-    const result = latestOrUndefined(readiness);
+    const result = readiness.latest;
     return result?.kind === "read-failed"
       ? friendlyError(result.cause, t)
       : undefined;

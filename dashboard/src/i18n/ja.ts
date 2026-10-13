@@ -341,6 +341,7 @@ export const ja = {
     "この画面を表示できませんでした",
   "errorBoundary.routeBody":
     "予期しないエラーが起きました。ほかの画面は引き続き使えます。もう一度試すか、ページを再読み込みしてください。",
+  "errorBoundary.tryAgain": "もう一度表示",
   "errorBoundary.reload": "再読み込み",
 
   // --- status labels ----------------------------------------------------

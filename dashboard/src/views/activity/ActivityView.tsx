@@ -162,21 +162,22 @@ function Inner(props: { session: SessionRecord }) {
     const id = workspaceId();
     return id ? ([id, limit()] as const) : null;
   };
-  const [events, { refetch: refetchEvents, mutate: mutateEvents }] =
-    createResource(eventsKey, ([id, max]) => listActivity(id, max));
-  // Load-more keeps the current rows on screen (reads `.latest`), but a
-  // Workspace switch must not flash the previous Workspace's trail.
-  createEffect(
-    on(
-      workspaceId,
-      () => {
-        setLimit(ACTIVITY_PAGE_SIZE);
-        mutateEvents(undefined);
-      },
-      { defer: true },
-    ),
+  const [events, { refetch: refetchEvents }] = createResource(
+    eventsKey,
+    ([id, max]) => listActivity(id, max),
   );
-  const rows = () => (events.error ? [] : (events.latest ?? []));
+  createEffect(
+    on(workspaceId, () => setLimit(ACTIVITY_PAGE_SIZE), { defer: true }),
+  );
+  // Load-more keeps the current rows on screen (reads `.latest`), but a
+  // Workspace switch must not flash the previous Workspace's trail — so keep
+  // only this Workspace's events. (Clearing the resource with `mutate` on the
+  // switch raced the first load: the route transition delayed that effect
+  // until the events had arrived, and a fresh session showed "No activity".)
+  const rows = () =>
+    (events.error ? [] : (events.latest ?? [])).filter(
+      (event) => event.workspaceId === workspaceId(),
+    );
   const canLoadMore = () =>
     rows().length >= limit() && limit() < ACTIVITY_MAX_LIMIT;
   const atListCap = () =>

@@ -335,6 +335,7 @@ export const en: Record<keyof typeof ja, string> = {
     "This page couldn't be shown",
   "errorBoundary.routeBody":
     "An unexpected error stopped this page. The rest of the dashboard still works; try again or reload the page.",
+  "errorBoundary.tryAgain": "Try again",
   "errorBoundary.reload": "Reload",
 
   // --- status labels ----------------------------------------------------

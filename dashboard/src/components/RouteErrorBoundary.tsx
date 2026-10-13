@@ -50,7 +50,7 @@ function RouteErrorFallback(props: {
               variant="primary"
               onClick={() => props.reset()}
             >
-              {t("common.retry")}
+              {t("errorBoundary.tryAgain")}
             </Button>
             <Button
               type="button"
