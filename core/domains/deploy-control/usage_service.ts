@@ -100,15 +100,15 @@ export class UsageReportingService {
         `capsule ${capsuleId} not found`,
       );
     }
-    const events = await this.#store.listUsageEvents(capsule.workspaceId);
-    const attributed = events.filter((event) => event.capsuleId === capsuleId);
-    const rated = attributed.filter((event) => event.ratingStatus === "rated");
+    // Keep the per-Capsule projection bounded as the Workspace usage ledger
+    // grows; the store applies the same rating and count rules in the DB.
+    const totals = await this.#store.getCapsuleUsageTotals(capsuleId);
     return {
       capsuleId,
-      usdMicros: rated.reduce((sum, event) => sum + event.usdMicros, 0),
-      eventCount: attributed.length,
-      ratedEventCount: rated.length,
-      unratedEventCount: attributed.length - rated.length,
+      usdMicros: totals.usdMicros,
+      eventCount: totals.eventCount,
+      ratedEventCount: totals.ratedEventCount,
+      unratedEventCount: totals.eventCount - totals.ratedEventCount,
     };
   }
 

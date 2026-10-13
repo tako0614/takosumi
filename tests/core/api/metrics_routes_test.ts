@@ -42,10 +42,8 @@ test("metrics route returns Prometheus text exposition", async () => {
   assert.equal(response.headers.get("content-type"), PROMETHEUS_CONTENT_TYPE);
   const body = await response.text();
   assert.match(body, /# TYPE takosumi_revoke_debt_count gauge/);
-  assert.match(
-    body,
-    /takosumi_revoke_debt_count\{status="open",workspace_id="space:one"\} 2/,
-  );
+  assert.match(body, /takosumi_revoke_debt_count\{status="open"\} 2/);
+  assert.doesNotMatch(body, /workspace_id|space:one/);
 });
 
 test("renderPrometheusMetrics aggregates counters and histograms", () => {
@@ -72,7 +70,14 @@ test("renderPrometheusMetrics aggregates counters and histograms", () => {
       kind: "histogram",
       value: 0.2,
       workspaceId: "space:one",
-      tags: { operation_kind: "create" },
+      runGroupId: "group-secret",
+      tags: {
+        operation_kind: "create",
+        workspace_id: "tagged-workspace",
+        capsule_id: "tagged-capsule",
+        run_group_id: "tagged-group",
+        run_id: "tagged-run",
+      },
       observedAt: "2026-05-04T00:00:02.000Z",
     },
   ]);
@@ -83,12 +88,13 @@ test("renderPrometheusMetrics aggregates counters and histograms", () => {
   );
   assert.match(
     rendered,
-    /takosumi_apply_duration_seconds_bucket\{operation_kind="create",workspace_id="space:one",le="\+Inf"\} 1/,
+    /takosumi_apply_duration_seconds_bucket\{operation_kind="create",le="\+Inf"\} 1/,
   );
   assert.match(
     rendered,
-    /takosumi_apply_duration_seconds_sum\{operation_kind="create",workspace_id="space:one"\} 0.2/,
+    /takosumi_apply_duration_seconds_sum\{operation_kind="create"\} 0.2/,
   );
+  assert.doesNotMatch(rendered, /workspace_id|capsule_id|run_group_id|run_id|group-secret|tagged-group|tagged-run|space:one|tagged-workspace|tagged-capsule/);
 });
 
 test("renderPrometheusMetrics exposes zero dashboard series for missing families", () => {
@@ -111,6 +117,7 @@ test("renderPrometheusMetrics exposes zero dashboard series for missing families
     rendered,
     /takosumi_oidc_request_count\{environment="production",runner_profile_id="runner_a",method="GET",route="\/\.well-known\/openid-configuration",status="200"\} 0/,
   );
+  assert.doesNotMatch(rendered, /workspace_id|capsule_id/);
 });
 
 function createApp(

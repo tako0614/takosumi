@@ -1,9 +1,12 @@
 /**
  * TCS store servers the dashboard queries. An operator may configure one
- * canonical discovery server with VITE_TAKOSUMI_TCS_STORE_URL. OSS selects no
+ * canonical discovery server at runtime through product discovery, with
+ * VITE_TAKOSUMI_TCS_STORE_URL as a build-time fallback. OSS selects no
  * hosted store implicitly; users can add additional servers through
  * localStorage.
  */
+import { runtimeStoreUrl } from "./runtime-capabilities.ts";
+
 const LS_KEY = "tcs.stores";
 
 /**
@@ -20,6 +23,10 @@ export function resolveDefaultStoreUrl(configured: string | undefined): string {
 export const DEFAULT_STORE_URL = resolveDefaultStoreUrl(
   import.meta.env.VITE_TAKOSUMI_TCS_STORE_URL,
 );
+
+export function defaultStoreUrl(): string {
+  return resolveDefaultStoreUrl(runtimeStoreUrl()) || DEFAULT_STORE_URL;
+}
 
 export interface TcsServer {
   readonly base: string;
@@ -56,7 +63,7 @@ function writeUserServers(servers: string[]): void {
 }
 
 export function getTcsServers(): TcsServer[] {
-  const def = normalizeBase(DEFAULT_STORE_URL);
+  const def = normalizeBase(defaultStoreUrl());
   const users = readUserServers()
     .map(normalizeBase)
     .filter((b) => b && (!def || b !== def));
@@ -81,7 +88,7 @@ export function addTcsServer(raw: string): string | null {
     return null;
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-  const def = normalizeBase(DEFAULT_STORE_URL);
+  const def = normalizeBase(defaultStoreUrl());
   if (def && base === def) return base;
   const users = readUserServers().map(normalizeBase);
   if (!users.includes(base)) writeUserServers([...users, base]);

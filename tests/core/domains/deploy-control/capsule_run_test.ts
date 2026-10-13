@@ -11133,19 +11133,15 @@ test("capsule plan and apply record deploy operation metrics", async () => {
     name: "takosumi_deploy_operation_count",
   });
   expect(operationMetrics.map((metric) => metric.tags)).toContainEqual({
-    capsule_id: "cap_fixture1",
     environment: "test",
     operation_kind: "plan",
     runner_profile_id: "runner_test",
-    workspace_id: "ws_test001",
     status: "succeeded",
   });
   expect(operationMetrics.map((metric) => metric.tags)).toContainEqual({
-    capsule_id: "cap_fixture1",
     environment: "test",
     operation_kind: "apply",
     runner_profile_id: "runner_test",
-    workspace_id: "ws_test001",
     status: "succeeded",
   });
 
@@ -11155,11 +11151,22 @@ test("capsule plan and apply record deploy operation metrics", async () => {
   expect(applyDurations).toHaveLength(1);
   expect(applyDurations[0]?.kind).toBe("histogram");
   expect(applyDurations[0]?.tags).toMatchObject({
-    capsule_id: "cap_fixture1",
     operation_kind: "apply",
-    workspace_id: "ws_test001",
     status: "succeeded",
   });
+
+  const queueLatency = await observability.listMetrics({
+    name: "takosumi_run_queue_latency_seconds",
+  });
+  expect(queueLatency).toHaveLength(2);
+  expect(queueLatency.every((metric) => metric.kind === "histogram")).toBe(true);
+  expect(queueLatency.map((metric) => metric.tags.operation_kind)).toEqual([
+    "plan",
+    "apply",
+  ]);
+  expect(queueLatency.every((metric) =>
+    !("workspace_id" in metric.tags) && !("capsule_id" in metric.tags)
+  )).toBe(true);
 });
 
 test("capsule apply records an Output and links it from the Run + Capsule", async () => {

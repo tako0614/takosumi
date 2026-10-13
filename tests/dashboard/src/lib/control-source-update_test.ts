@@ -186,7 +186,7 @@ describe("SourceSnapshot update pinning", () => {
             defaultRef: "main",
             defaultPath: "infra",
             status: "active",
-            autoSync: true,
+            autoSync: false,
             createdAt: "2026-07-10T00:00:00.000Z",
             updatedAt: "2026-07-10T00:00:00.000Z",
           },
@@ -255,7 +255,7 @@ describe("SourceSnapshot update pinning", () => {
       url: "https://example.test/app.git",
       defaultRef: "main",
       defaultPath: "infra",
-      autoSync: true,
+      autoSync: false,
     });
     expect(compatibilityBody).toEqual({
       sourceSnapshotId: "snap_nested",

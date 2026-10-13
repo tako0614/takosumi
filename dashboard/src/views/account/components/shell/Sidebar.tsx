@@ -49,6 +49,9 @@ export default function Sidebar() {
               href={item.href}
               class="sidebar-link"
               classList={{ active: isNavActive(loc.pathname, item) }}
+              aria-current={
+                isNavActive(loc.pathname, item) ? "page" : undefined
+              }
             >
               <item.icon size={18} />
               <span class="sidebar-link-label">{t(item.labelKey)}</span>

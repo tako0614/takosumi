@@ -140,6 +140,7 @@ import type {
   UpdateCapsuleLifecycleCommand,
   UpdateCapsuleLifecycleResult,
   CapsuleRuntimeSafety,
+  CapsuleUsageTotals,
   CapsulePatch,
   CapsuleStateVersionGuard,
   OpenTofuControlStore,
@@ -148,6 +149,8 @@ import type {
   PlanRunInputs,
   PublicHostReservation,
   RecoverableOpenTofuRunListOptions,
+  RunListPosition,
+  StoredRunListPage,
   RunManagementAuthorityInput,
   RenewCapsuleInterfaceMaterializationIntentLeaseInput,
   RenewCapsuleInterfaceMaterializationIntentLeaseResult,
@@ -196,6 +199,8 @@ import {
   capsuleApplyRunAdmissionFenceMatchesRun,
   capsuleAbandonmentTerminalMatches,
   capsuleRuntimeSafetyFromRun,
+  capsuleUsageTotalsFromGroups,
+  PLAN_RUN_LOOKUP_BATCH_SIZE,
   CapsuleStateVersionGuardConflict,
   CapsuleStateGenerationGuardConflict,
   isApplyRunRecord,
@@ -2628,6 +2633,40 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return coerceRunRowStatus(run && isPlanRunRecord(run) ? run : undefined);
   }
 
+  async getPlanRunsByIds(ids: readonly string[]): Promise<readonly PlanRun[]> {
+    const uniqueIds = [...new Set(ids)];
+    if (uniqueIds.length === 0) return [];
+    await this.#ensureSchema();
+    const rows: StoredRunRecord[] = [];
+    for (
+      let offset = 0;
+      offset < uniqueIds.length;
+      offset += PLAN_RUN_LOOKUP_BATCH_SIZE
+    ) {
+      rows.push(
+        ...await this.#drizzleManyJson<StoredRunRecord>(
+          schema.runs,
+          schema.runs.runJson,
+          {
+            where: and(
+              inArray(
+                schema.runs.id,
+                uniqueIds.slice(offset, offset + PLAN_RUN_LOOKUP_BATCH_SIZE),
+              ),
+              inArray(schema.runs.type, [RUN_KIND_PLAN, "destroy_plan", "drift_check"]),
+            ),
+          },
+        ),
+      );
+    }
+    return rows
+      .map((row) => d1StoredRunFromD1Value(row))
+      .filter((run): run is StoredRunRecord => run !== undefined)
+      .map(publicStoredRun)
+      .filter(isPlanRunRecord)
+      .map((run) => coerceRunRowStatus(run)!);
+  }
+
   async getRunManagementAuthority(
     input: RunManagementAuthorityInput,
   ): Promise<WorkspaceManagementAuthority | undefined> {
@@ -4149,6 +4188,43 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         (row): row is StoredRunRecord => row !== undefined,
       )
       .map(publicStoredRun);
+  }
+
+  async listRunsByWorkspacePage(
+    workspaceId: string,
+    options: { readonly limit?: number; readonly after?: RunListPosition } = {},
+  ): Promise<StoredRunListPage> {
+    const limit = clampRunListLimit(options.limit);
+    const createdAtMillis = d1RunCreatedAtMillisOrder();
+    const idOrder = sql`${schema.runs.id} COLLATE BINARY`;
+    const after = options.after;
+    const rows = await this.#drizzleManyJson<StoredRunRecord>(
+      schema.runs,
+      schema.runs.runJson,
+      {
+        where: and(
+          eq(schema.runs.workspaceId, workspaceId),
+          after
+            ? or(
+                lt(createdAtMillis, after.createdAtMillis),
+                and(
+                  eq(createdAtMillis, after.createdAtMillis),
+                  lt(idOrder, after.id),
+                ),
+              )
+            : undefined,
+        ),
+        orderBy: [desc(createdAtMillis), desc(idOrder)],
+        limit: limit + 1,
+      },
+    );
+    const decoded = rows
+      .map((row) => d1StoredRunFromD1Value(row))
+      .filter((row): row is StoredRunRecord => row !== undefined);
+    return {
+      rows: decoded.slice(0, limit).map(publicStoredRun),
+      hasMore: decoded.length > limit,
+    };
   }
 
   async getCapsuleRuntimeSafety(
@@ -9724,6 +9800,23 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .where(eq(schema.usageEvents.workspaceId, workspaceId))
       .orderBy(asc(schema.usageEvents.createdAt), asc(schema.usageEvents.id));
     return rows.map(usageEventFromRow);
+  }
+
+  async getCapsuleUsageTotals(
+    capsuleId: string,
+  ): Promise<CapsuleUsageTotals> {
+    await this.#ensureSchema();
+    const rows = await this.#orm
+      .select({
+        ratingStatus: schema.usageEvents.ratingStatus,
+        count: sql<number | string>`count(*)`.as("count"),
+        usdMicros: sql<number | string>`coalesce(sum(${schema.usageEvents.usdMicros}), 0)`
+          .as("usd_micros"),
+      })
+      .from(schema.usageEvents)
+      .where(eq(schema.usageEvents.capsuleId, capsuleId))
+      .groupBy(schema.usageEvents.ratingStatus);
+    return capsuleUsageTotalsFromGroups(rows);
   }
 
   async listUsageEventsPage(

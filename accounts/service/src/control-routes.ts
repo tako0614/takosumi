@@ -35,6 +35,7 @@ import type { ControlPlaneOperations } from "./control-operations.ts";
 import {
   type ControlDispatchContext,
   type ControlSession,
+  type RunStreamTiming,
   controllerErrorResponse,
   controlPlaneUnavailable,
 } from "./control/shared.ts";
@@ -173,6 +174,7 @@ interface ControlRouteContext {
     ControlPlaneOperations | undefined
   >;
   readonly issuer?: string;
+  readonly runStreamTiming?: RunStreamTiming;
 }
 
 type ControlOperationsResolution = ControlPlaneOperations | undefined;
@@ -435,6 +437,7 @@ async function dispatchAuthenticatedControlRoute(
           operations,
           store: context.store,
           ...(context.issuer ? { issuer: context.issuer } : {}),
+          ...(context.runStreamTiming ? { runStreamTiming: context.runStreamTiming } : {}),
           session: context.session,
         }),
     );
@@ -497,14 +500,33 @@ export async function handleControlRoute(
   // `takosumi_session` cookie; automation callers present an opaque PAT bearer.
   // Workspace authorization is enforced per route below after the target Workspace is
   // known.
+  const requiredAccess = controlRouteRequiredScope(request);
   const bearer = await measureServerTiming(timings, "tk_control_auth", () =>
     requireAccountsBearer({
       request,
       store,
-      scope: controlRouteRequiredScope(request),
+      scope: requiredAccess,
     }),
   );
   if (!bearer.ok) return appendServerTiming(bearer.response, timings);
+
+  const initialAuth = bearer.auth;
+  const reauthorizeBearer = async (): Promise<boolean> => {
+    // The canonical gate observes revocation, expiry, scope changes and account
+    // deletion, and requires the same subject, principal, Workspace restriction
+    // and credential kind throughout this request.
+    const current = await requireAccountsBearer({
+      request,
+      store,
+      scope: requiredAccess,
+    });
+    return current.ok &&
+      current.auth.subject === initialAuth.subject &&
+      current.auth.principalSubject === initialAuth.principalSubject &&
+      current.auth.workspaceId === initialAuth.workspaceId &&
+      current.auth.credential === initialAuth.credential &&
+      controlRouteRequiredScope(request) === requiredAccess;
+  };
 
   return await dispatchAuthenticatedControlRoute(
     {
@@ -514,7 +536,8 @@ export async function handleControlRoute(
         ...(bearer.auth.workspaceId
           ? { workspaceId: bearer.auth.workspaceId }
           : {}),
-        requiredAccess: controlRouteRequiredScope(request),
+        requiredAccess,
+        reauthorizeBearer,
       },
     },
     timings,
@@ -568,6 +591,7 @@ interface DispatchInput {
   readonly store: AccountsStore;
   readonly issuer?: string;
   readonly session: ControlSession;
+  readonly runStreamTiming?: RunStreamTiming;
 }
 
 async function dispatch(input: DispatchInput): Promise<Response> {
@@ -586,6 +610,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       operations: input.operations,
       store: input.store,
       ...(input.issuer ? { issuer: input.issuer } : {}),
+      ...(input.runStreamTiming ? { runStreamTiming: input.runStreamTiming } : {}),
       session: input.session,
     };
     const response = await handler(ctx, segments, method);

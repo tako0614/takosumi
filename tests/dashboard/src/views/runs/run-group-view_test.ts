@@ -93,6 +93,10 @@ describe("RunGroupView", () => {
     expect(en["runGroup.openRunAria"]).toContain("{name}");
   });
 
+  test("encodes opaque run identifiers in member links", () => {
+    expect(source).toContain('href={`/runs/${encodeURIComponent(run().id)}`}');
+  });
+
   test('announces member progress politely ("3/5 完了") for assistive tech', () => {
     expect(source).toContain('aria-live="polite"');
     expect(source).toContain('role="status"');

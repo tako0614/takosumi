@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { en } from "../../../../../dashboard/src/i18n/en.ts";
 import { ja } from "../../../../../dashboard/src/i18n/ja.ts";
+import type { ActivityEvent } from "../../../../../dashboard/src/lib/control-api.ts";
+import { describeActivityEvent } from "../../../../../dashboard/src/lib/activity-copy.ts";
+import { locale, setLocale } from "../../../../../dashboard/src/i18n/index.ts";
 
 const activitySource = readFileSync(
   resolve(
@@ -39,6 +42,39 @@ const notificationsLibSource = readFileSync(
 );
 
 describe("History and notifications", () => {
+  test("does not credit a dependency when the service's own source changed", () => {
+    expect(activityCopySource).toContain(
+      'metaString(m, "reason") === "source_ref_changed"',
+    );
+    expect(ja["notif.event.staleSourceNamed"]).toContain("{name}");
+    expect(en["notif.event.staleSourceNamed"]).toContain("{name}");
+    const previousLocale = locale();
+    const event: ActivityEvent = {
+      id: "stale-source-event",
+      workspaceId: "ws_alpha",
+      action: "capsule.stale",
+      targetType: "capsule",
+      targetId: "cap_app",
+      metadata: {
+        reason: "source_ref_changed",
+        producerCapsuleName: "Upstream service",
+      },
+      createdAt: "2026-10-13T00:00:00.000Z",
+    };
+    try {
+      setLocale("en");
+      expect(describeActivityEvent(event, "App service").title).toBe(
+        "A new version of “App service” is available",
+      );
+      setLocale("ja");
+      expect(describeActivityEvent(event, "アプリ").title).toBe(
+        "「アプリ」の新しいバージョンがあります",
+      );
+    } finally {
+      setLocale(previousLocale);
+    }
+  });
+
   test("keeps raw audit identifiers inside nested debug details", () => {
     const detailsIndex = activitySource.indexOf(
       '<summary>{t("activity.details")}</summary>',

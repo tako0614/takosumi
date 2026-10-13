@@ -10,7 +10,9 @@
  *
  * Pure approval semantics live in projection_run alongside the Run projection;
  * this service delegates to that same predicate used by fenced cancellation.
- * Capsule context is also derived from the stored PlanRun alone.
+ * Capsule context is also derived from the stored PlanRun alone. List reads
+ * bulk-fetch those PlanRuns so ApplyRun projection does not issue one store
+ * read per row.
  */
 
 import type {
@@ -30,7 +32,9 @@ import type {
 import {
   type OpenTofuControlStore,
   type RecoverableOpenTofuRunListOptions,
+  type RunListPosition,
   type StoredRunRecord,
+  storedRunRecordTimestamp,
 } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import {
@@ -111,14 +115,39 @@ export class RunQueryService {
   ): Promise<readonly Run[]> {
     requireNonEmptyString(workspaceId, "workspaceId");
     const rows = await this.#store.listRunsByWorkspace(workspaceId, options);
-    return await Promise.all(rows.map((row) => this.#projectStoredRun(row)));
+    return await this.#projectStoredRuns(rows);
+  }
+
+  async listRunsPage(
+    workspaceId: string,
+    options: { readonly limit?: number; readonly cursor?: string } = {},
+  ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }> {
+    requireNonEmptyString(workspaceId, "workspaceId");
+    const after = options.cursor === undefined
+      ? undefined
+      : decodeRunListCursor(options.cursor);
+    const page = await this.#store.listRunsByWorkspacePage(workspaceId, {
+      ...(options.limit !== undefined ? { limit: options.limit } : {}),
+      ...(after ? { after } : {}),
+    });
+    const runs = await this.#projectStoredRuns(page.rows);
+    const last = page.rows.at(-1);
+    return {
+      runs,
+      ...(page.hasMore && last
+        ? { nextCursor: encodeRunListCursor({
+            createdAtMillis: storedRunRecordTimestamp(last),
+            id: last.id,
+          }) }
+        : {}),
+    };
   }
 
   async listRecoverableOpenTofuRuns(
     options: RecoverableOpenTofuRunListOptions,
   ): Promise<readonly Run[]> {
     const rows = await this.#store.listRecoverableOpenTofuRuns(options);
-    return await Promise.all(rows.map((row) => this.#projectStoredRun(row)));
+    return await this.#projectStoredRuns(rows);
   }
 
   async listPendingRuntimeSecretRetirementRuns(options: {
@@ -128,10 +157,32 @@ export class RunQueryService {
     const rows = await this.#store.listPendingRuntimeSecretRetirementRuns(
       options,
     );
-    return await Promise.all(rows.map((row) => this.#projectStoredRun(row)));
+    return await this.#projectStoredRuns(rows);
   }
 
-  async #projectStoredRun(row: StoredRunRecord): Promise<Run> {
+  async #projectStoredRuns(rows: readonly StoredRunRecord[]): Promise<readonly Run[]> {
+    const planRunIds = [
+      ...new Set(
+        rows
+          .filter(isStoredApplyRun)
+          .map((row) => row.planRunId),
+      ),
+    ];
+    const plansById = new Map(
+      (await this.#store.getPlanRunsByIds(planRunIds)).map((plan) => [
+        plan.id,
+        plan,
+      ]),
+    );
+    return await Promise.all(
+      rows.map((row) => this.#projectStoredRun(row, plansById)),
+    );
+  }
+
+  async #projectStoredRun(
+    row: StoredRunRecord,
+    plansById?: ReadonlyMap<string, PlanRun>,
+  ): Promise<Run> {
     if (isStoredPlanRun(row)) {
       return projectPlanRun(row, {
         awaitingApproval: await this.planAwaitsApproval(row),
@@ -139,7 +190,9 @@ export class RunQueryService {
       });
     }
     if (isStoredApplyRun(row)) {
-      const plan = await this.#store.getPlanRun(row.planRunId);
+      const plan = plansById
+        ? plansById.get(row.planRunId)
+        : await this.#store.getPlanRun(row.planRunId);
       return projectApplyRun(row, plan ? this.capsuleProjection(plan) : {});
     }
     if (isStoredSourceSyncRun(row)) return projectSourceSyncRun(row);
@@ -336,6 +389,46 @@ export class RunQueryService {
    */
   planAwaitsApproval(planRun: PlanRun): Promise<boolean> {
     return Promise.resolve(planRunAwaitsApproval(planRun));
+  }
+}
+
+function encodeRunListCursor(position: RunListPosition): string {
+  const bytes = new TextEncoder().encode(JSON.stringify({
+    v: 1,
+    createdAtMillis: position.createdAtMillis,
+    id: position.id,
+  }));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+}
+
+function decodeRunListCursor(cursor: string): RunListPosition {
+  const invalid = (): never => {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "run list cursor is invalid",
+    );
+  };
+  if (cursor.length > 2048 || !/^[A-Za-z0-9_-]+$/u.test(cursor)) return invalid();
+  try {
+    const base64 = cursor.replaceAll("-", "+").replaceAll("_", "/");
+    const binary = atob(base64 + "=".repeat((4 - (base64.length % 4)) % 4));
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const value = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+    if (!value || typeof value !== "object") return invalid();
+    const record = value as Record<string, unknown>;
+    if (
+      record.v !== 1 ||
+      typeof record.createdAtMillis !== "number" ||
+      !Number.isSafeInteger(record.createdAtMillis) ||
+      typeof record.id !== "string" ||
+      record.id.length === 0 ||
+      record.id.length > 256
+    ) return invalid();
+    return { createdAtMillis: record.createdAtMillis, id: record.id };
+  } catch {
+    return invalid();
   }
 }
 

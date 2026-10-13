@@ -4,13 +4,16 @@ import {
   compatibilityCheckLooksTransient,
   compatibilityDiagnosticDisplay,
   compatibilitySummaryDisplay,
+  installFlowErrorMessage,
   providerNameFromDiagnostic,
   isSafePlainEnvName,
   storeDefaultInputValue,
   storeEntryFromStoreListing,
+  storeEntryFromRepositoryConfig,
   storeMetadataFromStoreListing,
   storeInstallConfigsForSource,
   storeInstallFeatures,
+  uniqueServiceIdCandidate,
   storeInitialSecretField,
   storeSourceMatchesListing,
   storeUsesRepositoryInstallUx,
@@ -20,6 +23,8 @@ import {
 } from "../../../../../dashboard/src/views/new/install-helpers.ts";
 import type { TcsListing } from "../../../../../dashboard/src/lib/tcs-client.ts";
 import type { InstallConfig } from "../../../../../dashboard/src/lib/control-api.ts";
+import { ControlApiError } from "../../../../../dashboard/src/lib/control-api.ts";
+import { t } from "../../../../../dashboard/src/i18n/index.ts";
 
 describe("compatibility diagnostics", () => {
   test("uses code and structured context instead of parsing display text", () => {
@@ -116,6 +121,75 @@ describe("plain environment variable names", () => {
     expect(isSafePlainEnvName("API_KEY")).toBe(true);
     expect(isSafePlainEnvName("lowercase")).toBe(false);
     expect(isSafePlainEnvName("BAD-NAME")).toBe(false);
+  });
+});
+
+describe("install flow errors", () => {
+  test("routes source sync failures through the Git fetch explanation", () => {
+    expect(
+      installFlowErrorMessage(
+        new ControlApiError(409, "source_sync_failed", "repository is private"),
+      ),
+    ).toContain("repository is private");
+  });
+
+  test("uses localized safe copy for opaque server and transport failures", () => {
+    const generic = t("error.generic");
+    expect(
+      installFlowErrorMessage(
+        new ControlApiError(500, "internal_error", "500 Internal Server Error"),
+      ),
+    ).toBe(generic);
+    expect(installFlowErrorMessage(new Error("Failed to fetch"))).toBe(generic);
+    expect(installFlowErrorMessage(new Error("Internal error"))).toBe(generic);
+  });
+
+  test("retains actionable validation copy", () => {
+    expect(
+      installFlowErrorMessage(
+        new ControlApiError(400, "invalid_request", "Repository URL is invalid"),
+      ),
+    ).toBe("Repository URL is invalid");
+  });
+
+  test("proposes a slug-safe alternative after a duplicate service id", () => {
+    expect(uniqueServiceIdCandidate("My service!")).toMatch(
+      /^my-service-[a-z0-9]{1,4}$/u,
+    );
+  });
+});
+
+describe("repository config install presentation", () => {
+  test("builds setup fields for a pasted Git URL without catalog identity", () => {
+    const config = installConfig({
+      variablePresentation: [
+        {
+          name: "region",
+          label: { ja: "リージョン", en: "Region" },
+          required: true,
+        },
+      ],
+    });
+
+    const entry = storeEntryFromRepositoryConfig(config, {
+      gitUrl: "https://example.test/team/service.git",
+      name: "service",
+    });
+
+    expect(entry?.source.url).toBe("https://example.test/team/service.git");
+    expect(entry?.inputs.map((input) => input.name)).toEqual(["region"]);
+    expect(entry?.provider).toBe("Repository");
+    expect(entry?.badge).toBeUndefined();
+    expect(entry?.id.startsWith("repo:")).toBe(true);
+  });
+
+  test("keeps an empty config on the ordinary direct install path", () => {
+    expect(
+      storeEntryFromRepositoryConfig(installConfig({}), {
+        gitUrl: "https://example.test/team/service.git",
+        name: "service",
+      }),
+    ).toBeUndefined();
   });
 });
 

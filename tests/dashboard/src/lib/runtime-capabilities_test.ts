@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { loadTakosumiRuntimeCapabilities } from "../../../../dashboard/src/lib/runtime-capabilities.ts";
+import { loadTakosumiRuntimeCapabilities, runtimeStoreUrl } from "../../../../dashboard/src/lib/runtime-capabilities.ts";
+import { getTcsServers } from "../../../../dashboard/src/lib/tcs-servers.ts";
 
 const capabilities = {
   apiVersion: "takosumi.dev/v1alpha1",
@@ -74,6 +75,26 @@ test("dashboard rejects cross-origin capability endpoints", async () => {
   await expect(
     loadTakosumiRuntimeCapabilities(fetchImpl, "https://operator.example"),
   ).rejects.toThrow("same-origin");
+});
+
+test("runtime discovery selects a store without rebuilding and clears stale endpoints", async () => {
+  let endpoint: string | undefined = "https://store.operator.example/public/";
+  const fetchImpl: typeof fetch = async (input) =>
+    String(input).endsWith("/.well-known/takosumi")
+      ? Response.json({ endpoints: { extensions: { "takosumi.tcs-store.v1": endpoint } } })
+      : Response.json(capabilities);
+  try {
+    await loadTakosumiRuntimeCapabilities(fetchImpl, "https://operator.example");
+    expect(runtimeStoreUrl()).toBe("https://store.operator.example/public/");
+    expect(getTcsServers()[0]).toEqual({ base: "https://store.operator.example/public", isDefault: true });
+    for (endpoint of ["https://user:secret@store.operator.example", undefined]) {
+      await loadTakosumiRuntimeCapabilities(fetchImpl, "https://operator.example");
+      expect(runtimeStoreUrl()).toBeUndefined();
+    }
+  } finally {
+    endpoint = undefined;
+    await loadTakosumiRuntimeCapabilities(fetchImpl, "https://operator.example");
+  }
 });
 
 test("dashboard rejects capability documents without provider-neutral resources", async () => {

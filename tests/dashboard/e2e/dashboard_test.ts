@@ -344,11 +344,31 @@ function expectSingleSourceCreate(state: SourceCreateFixtureState): void {
   expect(state.sourcePosts).toEqual(["/api/v1/sources"]);
 }
 
+async function expectSourceAutoSyncOptInAfterPlan(
+  state: ProviderDestinationFixtureState,
+): Promise<void> {
+  expect(state.sourceCreateBodies).toEqual([
+    expect.objectContaining({ autoSync: false }),
+  ]);
+  await expect.poll(() => state.sourceAutoSyncPatches).toEqual([
+    { autoSync: true },
+  ]);
+  const planIndex = state.mutations.indexOf(
+    "POST /api/v1/workspaces/ws_alpha/install-plans",
+  );
+  const patchIndex = state.mutations.indexOf(
+    "PATCH /api/v1/sources/src_provider_destination_e2e",
+  );
+  expect(planIndex).toBeGreaterThanOrEqual(0);
+  expect(patchIndex).toBeGreaterThan(planIndex);
+}
+
 interface ProviderDestinationFixtureState extends SourceCreateFixtureState {
   readonly mutations: string[];
   readonly compatibilityBodies: unknown[];
   readonly installModuleRequests: string[];
   readonly sourceCreateBodies: Record<string, unknown>[];
+  readonly sourceAutoSyncPatches: Record<string, unknown>[];
   installPlanBody?: {
     readonly options?: {
       readonly providerBindings?: readonly Record<string, unknown>[];
@@ -387,6 +407,7 @@ async function stubProviderDestinationFixture(
     compatibilityBodies: [],
     installModuleRequests: [],
     sourceCreateBodies: [],
+    sourceAutoSyncPatches: [],
     sourceListReads: [],
     sourcePosts: [],
   };
@@ -447,6 +468,29 @@ async function stubProviderDestinationFixture(
             updatedAt: "2026-08-01T00:00:00.000Z",
           },
           hookSecret: "fixture-only",
+        },
+      });
+    }
+    if (
+      path === `/api/v1/sources/${sourceId}` &&
+      request.method() === "PATCH"
+    ) {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      state.sourceAutoSyncPatches.push(body);
+      return route.fulfill({
+        json: {
+          source: {
+            id: sourceId,
+            workspaceId: "ws_alpha",
+            name: sourceName,
+            url: sourceUrl,
+            defaultRef: PORTABLE_SOURCE_COMMIT,
+            defaultPath: sourcePath,
+            status: "active",
+            autoSync: body.autoSync === true,
+            createdAt: "2026-08-01T00:00:00.000Z",
+            updatedAt: "2026-08-01T00:00:01.000Z",
+          },
         },
       });
     }
@@ -1081,9 +1125,13 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(popup.getByText("Synthetic app fixture")).toBeVisible();
     await popup.close();
     await assertNoPageErrors(errors);
+    expect(requests.filter((entry) => entry.startsWith("PATCH "))).toEqual([
+      `PATCH ${mutationOrigin}/api/v1/sources/src_provider_destination_e2e`,
+    ]);
     expect(requests.every((entry) =>
       entry.startsWith(`GET ${mutationOrigin}/`) ||
       entry.startsWith(`POST ${mutationOrigin}/`) ||
+      entry === `PATCH ${mutationOrigin}/api/v1/sources/src_provider_destination_e2e` ||
       entry.startsWith("GET https://store.example.test/") ||
       entry.startsWith("GET https://service.example.test/"),
     )).toBe(true);
@@ -1838,6 +1886,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       compatibilityReportId: "caprep_provider_destination_e2e",
       installConfigId: "cfg-default-opentofu-capsule",
     });
+    await expectSourceAutoSyncOptInAfterPlan(state);
     expect(state.mutations).not.toContain(
       "POST /api/v1/workspaces/ws_alpha/capsules",
     );
@@ -1884,6 +1933,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       await expect(add).toBeEnabled();
       // No automatic mutation retry after an unknown outcome.
       expect(posts).toHaveLength(1);
+      expect(state.sourceAutoSyncPatches).toEqual([]);
       if (edited) await page.locator(".iv-form input").first().fill("edited-service");
       await add.click();
       await expect.poll(() => posts.length).toBe(2);
@@ -1939,6 +1989,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     expect(state.mutations).not.toContain(
       "POST /api/v1/workspaces/ws_alpha/install-plans",
     );
+    expect(state.sourceAutoSyncPatches).toEqual([]);
     expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
@@ -2068,6 +2119,7 @@ test.describe("Takosumi dashboard browser surface", () => {
           connectionId: "pc_aws_primary_mixed",
         },
       ]);
+    await expectSourceAutoSyncOptInAfterPlan(state);
     expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
@@ -2195,6 +2247,7 @@ test.describe("Takosumi dashboard browser surface", () => {
           connectionId: "pc_aws_primary_tuple",
         },
       ]);
+    await expectSourceAutoSyncOptInAfterPlan(state);
     expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
@@ -2386,6 +2439,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     const compatibilityBodies: unknown[] = [];
     const stableRefResolutionBodies: unknown[] = [];
     const sourcePostBodies: unknown[] = [];
+    const sourceAutoSyncPatchBodies: unknown[] = [];
     const syncBodies: unknown[] = [];
     const installPlanBodies: unknown[] = [];
     const installPlanKeys: (string | undefined)[] = [];
@@ -2484,6 +2538,28 @@ test.describe("Takosumi dashboard browser surface", () => {
               updatedAt: now,
             },
             hookSecret: "fixture-only",
+          },
+        });
+      }
+      if (
+        path === "/api/v1/sources/src_install_e2e" &&
+        request.method() === "PATCH"
+      ) {
+        sourceAutoSyncPatchBodies.push(request.postDataJSON());
+        return route.fulfill({
+          json: {
+            source: {
+              id: "src_install_e2e",
+              workspaceId: "ws_alpha",
+              name: "example-service",
+              url: "https://github.com/example/service",
+              defaultRef: resolvedCommit,
+              defaultPath: ".",
+              status: "active",
+              autoSync: true,
+              createdAt: now,
+              updatedAt: now,
+            },
           },
         });
       }
@@ -2698,6 +2774,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     // reviewed one of them makes that module the preselected choice; it never
     // replaces the repository's other roots with a single entry path.
     await expect(moduleChooser).toBeVisible();
+    expect(sourceAutoSyncPatchBodies).toEqual([]);
     // No compatibility check may run before the user confirms a module.
     expect(seenMutations).not.toContain(
       "POST /api/v1/sources/src_install_e2e/compatibility-check",
@@ -2793,9 +2870,20 @@ test.describe("Takosumi dashboard browser surface", () => {
       expect.objectContaining({
         defaultRef: resolvedCommit,
         defaultPath: ".",
-        autoSync: true,
+        autoSync: false,
       }),
     ]);
+    await expect.poll(() => sourceAutoSyncPatchBodies).toEqual([
+      { autoSync: true },
+    ]);
+    const installPlanMutationIndex = seenMutations.lastIndexOf(
+      "POST /api/v1/workspaces/ws_alpha/install-plans",
+    );
+    const sourcePatchMutationIndex = seenMutations.lastIndexOf(
+      "PATCH /api/v1/sources/src_install_e2e",
+    );
+    expect(installPlanMutationIndex).toBeGreaterThanOrEqual(0);
+    expect(sourcePatchMutationIndex).toBeGreaterThan(installPlanMutationIndex);
     expect(syncBodies).toEqual([{ expectedRef: resolvedCommit }]);
   });
   };
@@ -3275,6 +3363,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       expect.objectContaining({ defaultPath: "infra" }),
     ]);
     expect(state.sourcePosts).toEqual(["/api/v1/sources"]);
+    await expectSourceAutoSyncOptInAfterPlan(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
   });

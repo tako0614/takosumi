@@ -196,11 +196,16 @@ export async function handleRuns(
     }
     if (leaf === "stream" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
+      // A long-lived stream needs a way to renew the authentication decision.
+      // In-process authenticated callers currently have request-local identity
+      // only; they may use the ordinary one-shot Run read instead.
+      if (!ctx.session.reauthorizeBearer)
+        return errorJson("forbidden", "Run stream requires revalidation.", 403);
       // Real-time run status over SSE: one server-held connection per viewer
       // that pushes the run on every status/heartbeat/summary change and closes
       // at a terminal status — so the dashboard subscribes instead of polling.
-      // Workspace access was already enforced above.
-      return runStatusStream(ctx, runId, run);
+      // The stream repeats Workspace access checks while the request is open.
+      return runStatusStream(ctx, runId, run, ctx.runStreamTiming);
     }
   }
   return undefined;
@@ -231,17 +236,40 @@ function runSummaryKey(
     : "";
 }
 
-/** SSE stream of a run's status. Reads the in-process controller projection and
- * emits the run only when it changes; keeps the connection warm with comments;
- * closes on a terminal status or after a safety cap (the client reconnects). */
-function runStatusStream(
+const RUN_STREAM_REAUTH_MS = 60 * 1000;
+
+function waitForRunPoll(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** SSE stream of a run's status. Reads the controller projection for this
+ * viewer, periodically rechecks Workspace access, and closes on revocation,
+ * error, cancellation, a terminal status, or the lifetime cap. The optional
+ * clock/poll seam allows deterministic tests without process-wide fake timers. */
+export function runStatusStream(
   ctx: ControlDispatchContext,
   runId: string,
   initialRun: Awaited<
     ReturnType<ControlDispatchContext["operations"]["getRun"]>
   >,
+  timing: {
+    readonly now: () => number;
+    readonly wait: (ms: number, signal: AbortSignal) => Promise<void>;
+  } = { now: Date.now, wait: waitForRunPoll },
 ): Response {
-  const { operations, request } = ctx;
+  const { operations, request, store, session } = ctx;
+  const workspaceId = initialRun.workspaceId;
   const encoder = new TextEncoder();
   // Cost guard: this is a per-viewer server-side read loop, so keep the D1
   // reads bounded — start modest, back off while nothing changes (deploys take
@@ -251,55 +279,105 @@ function runStatusStream(
   const MAX_INTERVAL_MS = 8000;
   const MAX_MS = 8 * 60 * 1000;
   let cancelled = false;
+  const pollAbort = new AbortController();
+  let removeRequestAbortListener: (() => void) | undefined;
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const onAbort = () => {
+      const stop = () => {
         cancelled = true;
+        pollAbort.abort();
+        try {
+          controller.close();
+        } catch {
+          /* already closed or cancelled */
+        }
       };
-      request.signal.addEventListener("abort", onAbort);
-      const send = (payload: unknown) => {
+      request.signal.addEventListener("abort", stop, { once: true });
+      removeRequestAbortListener = () =>
+        request.signal.removeEventListener("abort", stop);
+      const send = (payload: unknown): boolean => {
+        if (cancelled || controller.desiredSize === null || controller.desiredSize <= 0)
+          return false;
         controller.enqueue(
           encoder.encode(`data: ${JSON.stringify(payload)}\n\n`),
         );
+        return true;
       };
       const isTerminal = (status: string) => TERMINAL_RUN_STATUSES.has(status);
+      const startedAt = timing.now();
+      let nextReauthAt = startedAt;
+      const stillAuthorized = async (force = false): Promise<boolean> => {
+        if (cancelled) return false;
+        if (!force && timing.now() < nextReauthAt) return true;
+        try {
+          if (!session.reauthorizeBearer || !(await session.reauthorizeBearer()))
+            return false;
+          const auth = await requireWorkspaceAccess({
+            operations,
+            store,
+            workspaceId,
+            session,
+          });
+          if (!auth.ok || cancelled) return false;
+          nextReauthAt = timing.now() + RUN_STREAM_REAUTH_MS;
+          return true;
+        } catch {
+          return false;
+        }
+      };
       try {
+        if (request.signal.aborted || !(await stillAuthorized())) return;
         let last = await publicRun(operations, initialRun);
-        send({ run: last });
-        const startedAt = Date.now();
+        if (!(await stillAuthorized(true)) || !send({ run: last })) return;
         let interval = MIN_MS;
         while (
           !cancelled &&
           !isTerminal(last.status) &&
-          Date.now() - startedAt < MAX_MS
+          timing.now() - startedAt < MAX_MS
         ) {
-          await new Promise((resolve) => setTimeout(resolve, interval));
-          if (cancelled) break;
-          let current;
+          await timing.wait(interval, pollAbort.signal);
+          if (cancelled || timing.now() - startedAt >= MAX_MS) break;
+          if (!(await stillAuthorized())) break;
+          let run;
           try {
-            current = await publicRun(
-              operations,
-              await operations.getRun(runId),
-            );
+            run = await operations.getRun(runId);
           } catch {
             break;
           }
-          if (
+          // A run must never change ownership under an already authorized
+          // stream, even if a broken store returns a different projection.
+          if (cancelled || run.workspaceId !== workspaceId) break;
+          let current;
+          try {
+            current = await publicRun(operations, run);
+          } catch {
+            break;
+          }
+          if (cancelled || timing.now() - startedAt >= MAX_MS) break;
+          const changed =
             current.status !== last.status ||
             current.heartbeatAt !== last.heartbeatAt ||
-            runSummaryKey(current.summary) !== runSummaryKey(last.summary)
-          ) {
-            send({ run: current });
+            runSummaryKey(current.summary) !== runSummaryKey(last.summary);
+          if (!(await stillAuthorized(changed))) break;
+          if (changed) {
+            if (!send({ run: current })) break;
             last = current;
             interval = MIN_MS; // responsive again right after a change
           } else {
+            if (controller.desiredSize === null || controller.desiredSize <= 0) break;
             controller.enqueue(encoder.encode(`: ping\n\n`));
             interval = Math.min(MAX_INTERVAL_MS, Math.round(interval * 1.4));
           }
         }
+      } catch {
+        // SSE has already returned HTTP 200; fail closed without exposing
+        // internal projection/authentication details in a frame.
       } finally {
-        request.signal.removeEventListener("abort", onAbort);
+        cancelled = true;
+        pollAbort.abort();
+        removeRequestAbortListener?.();
+        removeRequestAbortListener = undefined;
         try {
           controller.close();
         } catch {
@@ -309,6 +387,9 @@ function runStatusStream(
     },
     cancel() {
       cancelled = true;
+      pollAbort.abort();
+      removeRequestAbortListener?.();
+      removeRequestAbortListener = undefined;
     },
   });
 

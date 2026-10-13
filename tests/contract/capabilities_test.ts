@@ -3,9 +3,18 @@ import assert from "node:assert/strict";
 import {
   createTakosumiProductCapabilities,
   createTakosumiWellKnownDocument,
+  normalizePublicStoreEndpoint,
   TAKOSUMI_API_VERSION,
   TAKOSUMI_INTERFACES_CAPABILITY,
 } from "../../contract/capabilities.ts";
+
+test("public store endpoints reject credentials and token-bearing URLs", () => {
+  assert.equal(normalizePublicStoreEndpoint(" https://store.example/public/ "), "https://store.example/public/");
+  assert.equal(normalizePublicStoreEndpoint("http://localhost:8788"), "http://localhost:8788/");
+  for (const value of [undefined, "", "/store", "javascript:alert(1)", "https://user:secret@store.example", "https://store.example?token=secret", "https://store.example/#secret"]) {
+    assert.equal(normalizePublicStoreEndpoint(value), undefined);
+  }
+});
 
 test("Takosumi discovery document exposes v1alpha1 endpoint metadata", () => {
   const document = createTakosumiWellKnownDocument({

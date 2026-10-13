@@ -337,7 +337,7 @@ async function recordRequestMetric(
   const sink = options.metricSink;
   if (!sink) return;
   const status = c.res.status || 404;
-  const route = routeForLog(c);
+  const route = routeForMetric(c);
   const durationSeconds = Math.max(
     0,
     ((options.monotonicNow ?? defaultMonotonicNow)() - startedAtMs) / 1000,
@@ -378,6 +378,16 @@ function routeForLog(c: Context): string {
     // Fall back to the concrete path when Hono cannot expose the route template.
   }
   return c.req.path;
+}
+
+function routeForMetric(c: Context): string {
+  try {
+    const route = c.req.routePath;
+    if (route && route !== "*" && route !== "/*") return route;
+  } catch {
+    // A concrete fallback can contain tenant identifiers or arbitrary input.
+  }
+  return "unmatched";
 }
 
 function logLevelForStatus(status: number): ApiLogLevel {

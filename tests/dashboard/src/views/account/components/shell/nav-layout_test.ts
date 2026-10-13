@@ -46,6 +46,14 @@ describe("dashboard shell navigation layout", () => {
     );
   });
 
+  test("keeps focus within workload detail tabs and announces prefix-active navigation", () => {
+    expect(appShellSource).toContain('segments[0] === "workloads"');
+    expect(appShellSource).toContain('segments[0] === "services"');
+    expect(sidebarSource).toMatch(
+      /aria-current=\{\s*isNavActive\(loc\.pathname, item\) \? "page" : undefined/,
+    );
+  });
+
   test("the chrome is a route-level layout, not a per-view wrapper", () => {
     // ShellLayout = AuthGuard + AppShell, mounted once in the route table.
     expect(shellLayoutSource).toContain("AuthGuard");

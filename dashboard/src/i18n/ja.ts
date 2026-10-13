@@ -53,6 +53,8 @@ export const ja = {
   "installStore.publicSource": "公開リポジトリ",
   "installStore.add": "追加",
   "installStore.preparing": "追加の準備をしています",
+  "installStore.preparingFetching":
+    "リポジトリを取得しています。初回は1分ほどかかることがあります。",
   "installStore.preparingWorkspace": "選択中のワークスペースを確認しています。",
   "installStore.preparingConnections": "利用できる接続を確認しています。",
   "installStore.preparingSource": "リポジトリの内容を取得しています。",
@@ -504,7 +506,7 @@ export const ja = {
     "記録済みリソース一覧を読み込めませんでした。",
   "app.deploys.inventoryLegacyUnavailable":
     "この古い適用状態にはリソース一覧の記録がありません。",
-  "app.deploys.inventoryGeneration": "状態世代",
+  "app.deploys.inventoryGeneration": "バージョン番号",
   "app.deploys.inventoryRecordedAt": "記録日時",
   "app.deploys.inventoryStateVersion": "状態バージョン",
   "app.deploys.inventoryApplyRun": "デプロイ",
@@ -1194,6 +1196,8 @@ export const ja = {
   "notif.event.staleNamed":
     "依存先が更新されたため、「{name}」に更新があります",
   "notif.event.staleDetail": "更新元: {producer}",
+  "notif.event.staleSource": "このサービスの新しいバージョンがあります",
+  "notif.event.staleSourceNamed": "「{name}」の新しいバージョンがあります",
   "notif.event.connCreated": "接続済みアカウント「{provider}」を追加しました",
   "notif.event.connCreatedGeneric": "接続済みアカウントを追加しました",
   "notif.event.connRevoked":
