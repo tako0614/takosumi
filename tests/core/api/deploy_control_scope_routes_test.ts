@@ -337,3 +337,34 @@ test("dependency delete requires write authority, not just Workspace membership"
   expect(response.status).toEqual(403);
   expect(await store.getDependency("dep_scoped0001")).toBeDefined();
 });
+
+for (const immediate of [false, true] as const) {
+  test(`internal DELETE ${immediate ? "immediate Plan enforces destroy scope" : "default refuses requester before destroy scope"}`, async () => {
+    const { app, store } = await scopedApp({
+      workspaceIds: [WORKSPACE_ID], operations: ["create"], runnerProfileIds: "*",
+    }, { currentStateVersionId: "state_delete_scope424" });
+    const before = await store.getCapsule(CAPSULE_ID);
+    const response = await app.request(`/internal/v1/capsules/${CAPSULE_ID}${immediate ? "?immediate=true" : ""}`, {
+      method: "DELETE", headers: headers(),
+    });
+    expect(response.status).toBe(immediate ? 403 : 409);
+    if (!immediate) {
+      expect((await response.json()).error.details.reason).toBe("capsule_uninstall_requester_unavailable");
+    }
+    expect(await store.getCapsule(CAPSULE_ID)).toEqual(before);
+    expect(await store.listRunsByWorkspace(WORKSPACE_ID)).toHaveLength(0);
+    const rejected = (await store.listActivityEvents(WORKSPACE_ID)).filter(event => event.action === "capsule.deletion_rejected");
+    expect(rejected).toHaveLength(immediate ? 1 : 0);
+    if (immediate) expect(rejected[0]).toMatchObject({ actorId: "acct_scoped", metadata: { reason: "scope_denied" } });
+  });
+}
+
+test("internal no-state DELETE preserves abandonment for a principal without destroy scope", async () => {
+  const { app, store } = await scopedApp({
+    workspaceIds: [WORKSPACE_ID], operations: ["create"], runnerProfileIds: "*",
+  });
+  const response = await app.request(`/internal/v1/capsules/${CAPSULE_ID}`, { method: "DELETE", headers: headers() });
+  expect(response.status).toBe(202);
+  expect(await response.json()).toMatchObject({ abandoned: true, capsule: { status: "destroyed" } });
+  expect(await store.listRunsByWorkspace(WORKSPACE_ID)).toHaveLength(0);
+});

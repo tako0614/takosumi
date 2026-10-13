@@ -552,22 +552,24 @@ export function mountDeployControlCapsuleRoutes(
         if (!prepared) throw new Error("Capsule lifecycle admission was not captured");
         if (!prepared.ok) throw prepared.error;
         const principal = auth.principal;
-        try {
-          ensureWorkspacePermission(principal, prepared.existing.capsule.workspaceId);
-          if (capsuleHasAppliedState(prepared.existing.capsule) && prepared.existing.capsule.status !== "destroyed") {
-            ensureOperationPermission(principal, "destroy");
+        const checkPermission = async (check: () => void): Promise<void> => {
+          try {
+            check();
+          } catch (error) {
+            await dependencies.activityService?.record({
+              workspaceId: prepared.existing.capsule.workspaceId,
+              actorId: principal.actor,
+              action: "capsule.deletion_rejected",
+              targetType: "capsule",
+              targetId: idCheck.value,
+              metadata: { method: "DELETE", action: "delete", reason: "scope_denied" },
+            });
+            throw error;
           }
-        } catch (error) {
-          await dependencies.activityService?.record({
-            workspaceId: prepared.existing.capsule.workspaceId,
-            actorId: principal.actor,
-            action: "capsule.deletion_rejected",
-            targetType: "capsule",
-            targetId: idCheck.value,
-            metadata: { method: "DELETE", action: "delete", reason: "scope_denied" },
-          });
-          throw error;
-        }
+        };
+        await checkPermission(() =>
+          ensureWorkspacePermission(principal, prepared.existing.capsule.workspaceId)
+        );
         const immediate = capsuleDeleteIsImmediate(new URL(c.req.url));
         if (prepared.existing.capsule.status === "destroyed") {
           return c.json({ ...capsuleResponse(prepared.existing.capsule), alreadyDeleted: true }, 200);
@@ -588,7 +590,10 @@ export function mountDeployControlCapsuleRoutes(
             { reason: "capsule_uninstall_requester_unavailable" },
           );
         }
-        ensureRunnerProfileSelectionPermission(principal, undefined);
+        await checkPermission(() => {
+          ensureOperationPermission(principal, "destroy");
+          ensureRunnerProfileSelectionPermission(principal, undefined);
+        });
         const response = await controller.createCapsuleDestroyPlan(idCheck.value, {
           actor: principal.actor,
         });
