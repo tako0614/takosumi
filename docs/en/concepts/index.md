@@ -49,6 +49,9 @@ revision exists; the next plan and apply remain explicit actions.
 Read [Sources and Capsules](./sources.md) and the
 [Run model](./run-model.md) for details.
 
+See [Scheduled Capsule uninstall](./scheduled-uninstall.md) for grace periods,
+reauthorization, and recovery.
+
 ## Using providers
 
 Services are managed by the OpenTofu/Terraform providers declared by the Git

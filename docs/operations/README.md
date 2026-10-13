@@ -75,4 +75,7 @@ Cloud 側のリポジトリで管理します。
 [API reference](../reference/api.md)に書きます。runbook にしかない手順や内部名を、
 利用者向け仕様として扱わないでください。
 
+Capsule の予約アンインストールと再認可後の復旧については、公開仕様の
+[予約アンインストール](../concepts/scheduled-uninstall.md)を参照してください。
+
 逆に、利用者に見える動作を変えた場合は runbook だけで終わらせず、公開 docs も更新します。

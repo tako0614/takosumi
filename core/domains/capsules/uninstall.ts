@@ -29,6 +29,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Stable reasons returned by uninstall admission. */
 export const CAPSULE_UNINSTALL_REASONS = {
+  /** A short-lived OAuth access token cannot authorize a durable reservation. */
+  oauthUnsupported: "capsule_uninstall_oauth_unsupported",
   /** The Capsule is not in a status a scheduled uninstall can start from. */
   unavailable: "capsule_uninstall_unavailable",
   /** Nothing was ever applied; the abandonment path closes it instead. */
