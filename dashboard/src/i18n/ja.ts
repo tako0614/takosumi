@@ -611,6 +611,11 @@ export const ja = {
   "app.uninstall.confirmTitle": "このサービスの削除を予約しますか？",
   "app.uninstall.confirmMessage":
     "{name} は猶予期間が終わるまで動き続け、データも残ります。期限が来るとデータの書き出しを試みてから完全に削除します。それまでは取り消せます。",
+  "app.uninstall.dependencyWarning":
+    "{name} は次のサービスから使われています（{services}）。削除すると、これらのサービスに影響する可能性があります。",
+  "app.uninstall.dependencyCheckLoading": "削除前に連携サービスを確認しています…",
+  "app.uninstall.dependencyCheckFailed":
+    "連携サービスを確認できませんでした。削除前に依存関係を確認してください。",
   "app.uninstall.immediateTitle": "今すぐ完全に削除",
   "app.uninstall.banner":
     "{name} は {date} に削除されます。それまではデータが残り、取り消せます。",

@@ -76,6 +76,13 @@ export function isVisibleServiceCapsule(inst: {
   return inst.status !== "destroyed";
 }
 
+/** Uninstalled services remain manageable but must not appear as launch tiles. */
+export function isLauncherServiceCapsule(inst: {
+  readonly status: string;
+}): boolean {
+  return inst.status !== "destroyed" && inst.status !== "uninstalled";
+}
+
 /** True for a string value that looks like an http(s) address worth linking. */
 export function isUrlString(value: unknown): value is string {
   return typeof value === "string" && /^https?:\/\//i.test(value.trim());

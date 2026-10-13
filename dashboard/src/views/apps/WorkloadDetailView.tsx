@@ -210,8 +210,10 @@ function Inner() {
   const settingsWorkspaceId = () =>
     tab() === "settings" ? (workspaceId() ?? null) : null;
   const deploysCapsuleId = () => (tab() === "deploys" ? capsuleId() : null);
+  // The delete review needs the Workspace Graph so it can warn when other
+  // services consume this Capsule.
   const graphWorkspaceId = () =>
-    tab() === "overview" ? (workspaceId() ?? null) : null;
+    tab() === "deploys" ? null : (workspaceId() ?? null);
   const currentStateVersionId = () =>
     capsuleData()?.currentStateVersionId ?? null;
   const [providerBindingSet] = createResource(
@@ -536,7 +538,11 @@ function Inner() {
   const scheduleUninstall = createAction(async () => {
     const ok = await confirm({
       title: t("app.uninstall.confirmTitle"),
-      message: t("app.uninstall.confirmMessage", { name: serviceLabel() }),
+      message: [
+        t("app.uninstall.confirmMessage", { name: serviceLabel() }),
+        uninstallDependencyWarning(),
+        uninstallDependencyCheckStatus(),
+      ].filter(Boolean).join("\n\n"),
       confirmText: t("app.uninstall.cta"),
       cancelText: t("common.cancel"),
       danger: true,
@@ -596,6 +602,21 @@ function Inner() {
       default:
         return undefined;
     }
+  };
+  const uninstallDependencyWarning = (): string | undefined => {
+    const dependentNames = consumers().map((consumer) => consumer.name);
+    if (dependentNames.length === 0) return undefined;
+    return t("app.uninstall.dependencyWarning", {
+      name: serviceLabel(),
+      services: dependentNames.join(", "),
+    });
+  };
+  const uninstallDependencyCheckStatus = (): string | undefined => {
+    if (graph.error) return t("app.uninstall.dependencyCheckFailed");
+    if (graph.loading || graphData() === undefined) {
+      return t("app.uninstall.dependencyCheckLoading");
+    }
+    return undefined;
   };
   const confirmDestroy = async (): Promise<void> => {
     if (!destroyIsImmediate()) {
@@ -980,6 +1001,20 @@ function Inner() {
                       >
                         <summary>{t("app.danger.destroyTitle")}</summary>
                         <Card>
+                          <Show when={uninstallDependencyWarning()}>
+                            {(warning) => (
+                              <p class="wa-notice" role="status">
+                                {warning()}
+                              </p>
+                            )}
+                          </Show>
+                          <Show when={uninstallDependencyCheckStatus()}>
+                            {(status) => (
+                              <p class="muted" role="status">
+                                {status()}
+                              </p>
+                            )}
+                          </Show>
                           <Show
                             when={
                               !destroyIsImmediate() &&
