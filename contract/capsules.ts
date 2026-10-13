@@ -96,9 +96,13 @@ export interface CapsuleUninstall {
   readonly phase: "scheduled" | "destroying" | "cancelled";
   readonly requestedAt: string;
   readonly scheduledDestroyAt: string;
+  /** Last due finalizer attempt, used to rotate waiting requests fairly. */
+  readonly lastFinalizeAttemptAt?: string;
   readonly previousStatus: CapsuleUninstallRestorableStatus;
   readonly cancelledAt?: string;
   readonly preDestroyExport?: CapsulePreDestroyExport;
+  /** Export claim recorded before attempting the one pre-destroy export. */
+  readonly preDestroyExportStartedAt?: string;
   /** Teardown Plan created by the finalizer for the current attempt. */
   readonly destroyPlanRunId?: string;
   readonly destroyAttempts?: number;

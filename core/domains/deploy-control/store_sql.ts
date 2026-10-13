@@ -6629,6 +6629,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   }): Promise<readonly Capsule[]> {
     const scheduledDestroyAt =
       sql`${pgSchema.capsules.capsuleJson} -> 'uninstall' ->> 'scheduledDestroyAt'`;
+    const nextAttemptAt = sql`coalesce(${pgSchema.capsules.capsuleJson} -> 'uninstall' ->> 'lastFinalizeAttemptAt', ${scheduledDestroyAt})`;
     const rows = await this.#pgManyJson<Capsule>(
       pgSchema.capsules,
       pgSchema.capsules.capsuleJson,
@@ -6649,7 +6650,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
               ),
           ),
         ),
-        orderBy: [scheduledDestroyAt, asc(pgSchema.capsules.id)],
+        orderBy: [nextAttemptAt, asc(pgSchema.capsules.id)],
         limit: Math.max(0, input.limit),
       },
     );

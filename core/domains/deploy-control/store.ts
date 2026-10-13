@@ -736,6 +736,11 @@ export interface CapsuleApplyRunAdmissionFence {
   readonly executionAuthorityEpoch: number;
   readonly currentStateVersionId: string | null;
   readonly currentStateGeneration: number;
+  /** Exact live request authorizing a finalizer-created destroy Plan. */
+  readonly uninstall?: {
+    readonly id: string;
+    readonly destroyPlanRunId: string;
+  };
 }
 
 /** Raised when a new Capsule-bound ApplyRun lost its captured Capsule fence. */
@@ -765,6 +770,7 @@ function isCapsuleApplyRunAdmissionFenceShape(
     return false;
   }
   const fence = value as Record<string, unknown>;
+  const uninstall = fence.uninstall as Record<string, unknown> | undefined;
   return typeof fence.capsuleId === "string" && fence.capsuleId.trim() !== "" &&
     typeof fence.workspaceId === "string" && fence.workspaceId.trim() !== "" &&
     typeof fence.environment === "string" && fence.environment.trim() !== "" &&
@@ -777,7 +783,14 @@ function isCapsuleApplyRunAdmissionFenceShape(
       (typeof fence.currentStateVersionId === "string" &&
         fence.currentStateVersionId.trim() !== "")) &&
     Number.isSafeInteger(fence.currentStateGeneration) &&
-    (fence.currentStateGeneration as number) >= 0;
+    (fence.currentStateGeneration as number) >= 0 &&
+    (uninstall === undefined ||
+      (fence.status === "uninstalled" &&
+        typeof uninstall === "object" && uninstall !== null &&
+        typeof uninstall.id === "string" &&
+        uninstall.id.trim() !== "" &&
+        typeof uninstall.destroyPlanRunId === "string" &&
+        uninstall.destroyPlanRunId.trim() !== ""));
 }
 
 /** Validate a present ApplyRun Capsule fence before mutable admission work. */
@@ -793,6 +806,7 @@ export function assertCapsuleApplyRunAdmissionFenceInput(
 export function capsuleApplyRunAdmissionFence(
   capsule: Capsule,
   executionAuthorityEpoch: number,
+  uninstall?: CapsuleApplyRunAdmissionFence["uninstall"],
 ): CapsuleApplyRunAdmissionFence {
   const expectedCapsule = {
     capsuleId: capsule.id,
@@ -803,6 +817,7 @@ export function capsuleApplyRunAdmissionFence(
     executionAuthorityEpoch,
     currentStateVersionId: capsule.currentStateVersionId ?? null,
     currentStateGeneration: capsule.currentStateGeneration,
+    ...(uninstall ? { uninstall } : {}),
   } satisfies CapsuleApplyRunAdmissionFence;
   assertCapsuleApplyRunAdmissionFenceInput(expectedCapsule);
   return expectedCapsule;
@@ -825,6 +840,9 @@ export function capsuleApplyRunAdmissionFenceMatchesRun(
   };
   return run.capsuleId === expectedCapsule.capsuleId &&
     run.workspaceId === expectedCapsule.workspaceId &&
+    (expectedCapsule.uninstall === undefined ||
+      (run.operation === "destroy" &&
+        run.planRunId === expectedCapsule.uninstall.destroyPlanRunId)) &&
     guard.capsuleId === expectedCapsule.capsuleId &&
     guard.currentStateVersionId === expectedCapsule.currentStateVersionId &&
     (guard.capsuleExecutionAuthorityEpoch === undefined
@@ -854,7 +872,13 @@ export function capsuleApplyRunAdmissionFenceMatchesCurrent(
     executionAuthorityEpoch === expectedCapsule.executionAuthorityEpoch &&
     (capsule.currentStateVersionId ?? null) ===
       expectedCapsule.currentStateVersionId &&
-    capsule.currentStateGeneration === expectedCapsule.currentStateGeneration;
+    capsule.currentStateGeneration === expectedCapsule.currentStateGeneration &&
+    (expectedCapsule.uninstall === undefined ||
+      (capsule.uninstall !== undefined &&
+        capsule.uninstall.phase !== "cancelled" &&
+        capsule.uninstall.id === expectedCapsule.uninstall.id &&
+        capsule.uninstall.destroyPlanRunId ===
+          expectedCapsule.uninstall.destroyPlanRunId));
 }
 
 /** Raised when a fenced configuration Plan lost its Capsule authority race. */
@@ -1752,7 +1776,11 @@ export function assertCapsuleUninstallMutation(
   if (
     typeof uninstall.id !== "string" || uninstall.id.trim().length === 0 ||
     !Number.isFinite(Date.parse(uninstall.requestedAt)) ||
-    !Number.isFinite(Date.parse(uninstall.scheduledDestroyAt))
+    !Number.isFinite(Date.parse(uninstall.scheduledDestroyAt)) ||
+    (uninstall.lastFinalizeAttemptAt !== undefined &&
+      !Number.isFinite(Date.parse(uninstall.lastFinalizeAttemptAt))) ||
+    (uninstall.preDestroyExportStartedAt !== undefined &&
+      !Number.isFinite(Date.parse(uninstall.preDestroyExportStartedAt)))
   ) {
     throw new TypeError("uninstall record is invalid");
   }
@@ -3528,7 +3556,8 @@ export interface OpenTofuControlStore {
    * Internal scheduler read for the two-stage uninstall finalizer: Capsules in
    * `uninstalled` whose `uninstall.scheduledDestroyAt` is at or before `now`,
    * whose request is not blocked, and whose Workspace accepts management work,
-   * oldest due first, at most `limit` rows. Neither a blocked request nor a
+   * least recently attempted first (or schedule time before any attempt),
+   * then Capsule id, at most `limit` rows. Neither a blocked request nor a
    * draining Workspace may hold the head of the queue.
    */
   listDueCapsuleUninstalls(input: {
@@ -5643,8 +5672,8 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       )
       .sort(
         (a, b) =>
-          a.uninstall!.scheduledDestroyAt.localeCompare(
-            b.uninstall!.scheduledDestroyAt,
+          (a.uninstall!.lastFinalizeAttemptAt ?? a.uninstall!.scheduledDestroyAt).localeCompare(
+            b.uninstall!.lastFinalizeAttemptAt ?? b.uninstall!.scheduledDestroyAt,
           ) || a.id.localeCompare(b.id),
       );
     return Promise.resolve(due.slice(0, Math.max(0, input.limit)));

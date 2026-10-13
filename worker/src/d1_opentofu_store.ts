@@ -6775,6 +6775,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   }): Promise<readonly Capsule[]> {
     const scheduledDestroyAt =
       sql`json_extract(${schema.capsules.recordJson}, '$.uninstall.scheduledDestroyAt')`;
+    const nextAttemptAt = sql`coalesce(json_extract(${schema.capsules.recordJson}, '$.uninstall.lastFinalizeAttemptAt'), ${scheduledDestroyAt})`;
     return (
       await this.#drizzleManyJson<Capsule>(
         schema.capsules,
@@ -6796,7 +6797,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
                 ),
             ),
           ),
-          orderBy: [scheduledDestroyAt, asc(schema.capsules.id)],
+          orderBy: [nextAttemptAt, asc(schema.capsules.id)],
           limit: Math.max(0, input.limit),
         },
       )
@@ -11429,6 +11430,11 @@ function d1CapsuleApplyRunAdmissionFenceGuardStmt(
         fence.currentStateVersionId === null
           ? sql`json_extract(${capsule.recordJson}, '$.currentStateVersionId') IS NULL`
           : sql`json_extract(${capsule.recordJson}, '$.currentStateVersionId') = ${fence.currentStateVersionId}`,
+        fence.uninstall === undefined ? undefined : and(
+          sql`json_extract(${capsule.recordJson}, '$.uninstall.phase') <> 'cancelled'`,
+          sql`json_extract(${capsule.recordJson}, '$.uninstall.id') = ${fence.uninstall.id}`,
+          sql`json_extract(${capsule.recordJson}, '$.uninstall.destroyPlanRunId') = ${fence.uninstall.destroyPlanRunId}`,
+        ),
       )
       : sql`0`,
   );

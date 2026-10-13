@@ -1014,8 +1014,8 @@ export class CapsulesService {
         try {
           await this.#uninstallCancellationCleanup(record.destroyPlanRunId);
         } catch {
-          // The cancel already committed; an approved or finished Plan is not
-          // cancellable and stays an ordinary owner-approved destroy Plan.
+          // The cancel already committed. An approved Plan may remain in the
+          // ledger, but Apply admission rejects its stale uninstall identity.
         }
       }
       return updated;

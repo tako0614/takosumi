@@ -4873,6 +4873,9 @@ export class RunEngine {
     if (plannedCapsule) {
       assertCapsuleAcceptsOperation(plannedCapsule, planRun.operation);
     }
+    const scheduledUninstall = plannedCapsule
+      ? scheduledUninstallPlanIdentity(planRun, plannedCapsule)
+      : undefined;
     assertStateGenerationMatches(planRun, plannedCapsule);
     // Preserve the authority validated against this Plan through all later
     // asynchronous preparation. Recapturing the Capsule at insertion would
@@ -4881,6 +4884,7 @@ export class RunEngine {
       ? capsuleApplyRunAdmissionFence(
         plannedCapsule,
         planRun.capsuleExecutionAuthorityEpoch ?? 1,
+        scheduledUninstall,
       )
       : undefined;
     // Source snapshot revalidation (spec invariant 10): an env-driven plan is
@@ -7080,6 +7084,8 @@ export class RunEngine {
       metadata: {
         operation: approved.operation,
         capsuleId: approved.capsuleId,
+        approvedAt: new Date(now).toISOString(),
+        ...(approval?.reason ? { reason: approval.reason } : {}),
       },
     });
     return projectPlanRun(approved, {
@@ -9881,6 +9887,7 @@ export class RunEngine {
     // provider is exempt: its outcome must still be recorded.
     if (plannedCapsule && !applyRunMutationDispatched(applyRun)) {
       assertCapsuleAcceptsOperation(plannedCapsule, planRun.operation);
+      scheduledUninstallPlanIdentity(planRun, plannedCapsule);
     }
     // State generation guard: reject when the target's state advanced past the
     // generation this plan was created against (a stale plan over newer state).
@@ -12418,6 +12425,27 @@ export class RunEngine {
     }
     return capsule;
   }
+}
+
+/** A finalizer Plan is authorized only by the request that named this Plan. */
+function scheduledUninstallPlanIdentity(
+  planRun: PlanRun,
+  capsule: Capsule,
+): { readonly id: string; readonly destroyPlanRunId: string } | undefined {
+  if (planRun.createdBy !== "system:scheduled-uninstall") return undefined;
+  const uninstall = capsule.uninstall;
+  if (
+    planRun.operation !== "destroy" || capsule.status !== "uninstalled" ||
+    uninstall === undefined || uninstall.phase === "cancelled" ||
+    uninstall.destroyPlanRunId !== planRun.id
+  ) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `scheduled uninstall changed before PlanRun ${planRun.id} could apply`,
+      { reason: "capsule_uninstall_changed" },
+    );
+  }
+  return { id: uninstall.id, destroyPlanRunId: planRun.id };
 }
 
 const MODULE_VARIABLE_MATERIALIZATION_DIGEST = /^sha256:[0-9a-f]{64}$/u;

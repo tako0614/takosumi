@@ -9,7 +9,9 @@
  *
  * 1. Export once. The backups lane writes a Capsule-scoped export and the
  *    outcome (`exported` / `failed` / `skipped`) is recorded on the request. A
- *    failed or unavailable export does not stop the teardown.
+ *    failed or unavailable export does not stop the teardown. The attempt is
+ *    claimed before creating artifacts; an uncertain interrupted attempt
+ *    blocks automatic teardown instead of exporting again.
  * 2. Plan. The Plan id and request time are recorded first, then the destroy
  *    Plan is created with that exact id. A Plan that is still missing after
  *    {@link DESTROY_PLAN_CREATION_WINDOW_MS} counts as a failed attempt, so a
@@ -67,6 +69,9 @@ export const MAX_UNINSTALL_FINALIZE_FAILURES = 6;
  */
 export const DESTROY_PLAN_CREATION_WINDOW_MS = 15 * 60 * 1000;
 
+/** An export claim without a result beyond this window requires reconciliation. */
+export const PRE_DESTROY_EXPORT_WINDOW_MS = 15 * 60 * 1000;
+
 /** Capsules read per tick. Each one may take several bounded steps. */
 export const DEFAULT_UNINSTALL_FINALIZE_LIMIT = 10;
 
@@ -83,6 +88,7 @@ export const SCHEDULED_DESTROY_BLOCKED_REASONS = {
   applyRefused: "destroy_apply_refused",
   applyFailed: "destroy_apply_failed",
   finalizeFailed: "finalize_failed",
+  exportIncomplete: "pre_destroy_export_incomplete",
 } as const;
 
 /**
@@ -193,7 +199,10 @@ export async function finalizeDueCapsuleUninstalls(
         if (outcome === "plan_created") totals.destroyPlansCreated += 1;
         if (outcome === "destroy_started") totals.destroysStarted += 1;
         if (outcome === "blocked") totals.blocked += 1;
-        if (outcome === "waiting") totals.waiting += 1;
+        if (outcome === "waiting") {
+          totals.waiting += 1;
+          await rotateWaitingRequest(deps, listed.id, listed.uninstall!.id, now);
+        }
         if (
           outcome === "blocked" ||
           outcome === "waiting" ||
@@ -234,8 +243,20 @@ async function advanceOnce(
     return await startTeardown(deps, capsule, uninstall);
   }
   if (uninstall.preDestroyExport === undefined) {
-    await recordPreDestroyExport(deps, capsule, uninstall, now);
-    return "export_recorded";
+    if (uninstall.preDestroyExportStartedAt !== undefined) {
+      if (
+        now().getTime() - Date.parse(uninstall.preDestroyExportStartedAt) <
+          PRE_DESTROY_EXPORT_WINDOW_MS
+      ) return "waiting";
+      await block(
+        deps,
+        capsule,
+        uninstall,
+        SCHEDULED_DESTROY_BLOCKED_REASONS.exportIncomplete,
+      );
+      return "blocked";
+    }
+    return await recordPreDestroyExport(deps, capsule, uninstall, now);
   }
   const plan = uninstall.destroyPlanRunId === undefined
     ? undefined
@@ -289,9 +310,10 @@ async function recordPreDestroyExport(
   capsule: Capsule,
   uninstall: CapsuleUninstall,
   now: () => Date,
-): Promise<void> {
+): Promise<StepOutcome> {
   const backups = deps.backups;
   let evidence: CapsulePreDestroyExport;
+  let claimStartedAt: string | undefined;
   if (backups === undefined || !backups.enabled) {
     evidence = {
       status: "skipped",
@@ -304,6 +326,17 @@ async function recordPreDestroyExport(
     const authority = await backups.captureManagementAuthority(
       capsule.workspaceId,
     );
+    claimStartedAt = now().toISOString();
+    try {
+      await deps.capsules.advanceCapsuleUninstall(
+        capsule.id,
+        { uninstallId: uninstall.id, revision: uninstall.revision },
+        { preDestroyExportStartedAt: claimStartedAt },
+      );
+    } catch (error) {
+      if (isTransientRefusal(error)) return "waiting";
+      throw error;
+    }
     try {
       const backup = await backups.createBackup({
         workspaceId: capsule.workspaceId,
@@ -326,11 +359,29 @@ async function recordPreDestroyExport(
       };
     }
   }
-  await deps.capsules.advanceCapsuleUninstall(
-    capsule.id,
-    { uninstallId: uninstall.id, revision: uninstall.revision },
-    { preDestroyExport: evidence },
-  );
+  // A waiting tick may rotate this request while the export is running. Use
+  // the current revision, but never attach an old result to a cancelled or
+  // replacement request. A late result may add evidence to a blocked request;
+  // it never clears the block or authorizes teardown.
+  const current = await deps.capsules.getCapsule(capsule.id);
+  const record = current.uninstall;
+  let recorded = false;
+  if (
+    current.status === "uninstalled" && record?.id === uninstall.id &&
+    record.phase !== "cancelled" && record.preDestroyExport === undefined &&
+    record.preDestroyExportStartedAt === claimStartedAt
+  ) {
+    try {
+      await deps.capsules.advanceCapsuleUninstall(
+        capsule.id,
+        { uninstallId: record.id, revision: record.revision },
+        { preDestroyExport: evidence },
+      );
+      recorded = true;
+    } catch (error) {
+      if (!isTransientRefusal(error)) throw error;
+    }
+  }
   await recordActivity(deps, {
     workspaceId: capsule.workspaceId,
     actorId: SCHEDULED_UNINSTALL_ACTOR,
@@ -348,6 +399,36 @@ async function recordPreDestroyExport(
       ...(evidence.reason ? { reason: evidence.reason } : {}),
     },
   });
+  return recorded ? "export_recorded" : "done";
+}
+
+/** Waiting requests rotate behind untouched due work, including across restarts. */
+async function rotateWaitingRequest(
+  deps: CapsuleUninstallFinalizerDependencies,
+  capsuleId: string,
+  uninstallId: string,
+  now: () => Date,
+): Promise<void> {
+  const capsule = await deps.capsules.getCapsule(capsuleId);
+  const uninstall = capsule.uninstall;
+  if (
+    capsule.status !== "uninstalled" || uninstall?.id !== uninstallId ||
+    uninstall.phase === "cancelled" || uninstall.blockedReason !== undefined
+  ) return;
+  const previous = Date.parse(uninstall.lastFinalizeAttemptAt ?? uninstall.scheduledDestroyAt);
+  const lastFinalizeAttemptAt = new Date(Math.max(now().getTime(), previous + 1))
+    .toISOString();
+  try {
+    await deps.capsules.advanceCapsuleUninstall(
+      capsule.id,
+      { uninstallId: uninstall.id, revision: uninstall.revision },
+      { lastFinalizeAttemptAt },
+    );
+  } catch (error) {
+    // Another tick or cancellation won. This race must not exhaust the
+    // request's unexpected-error budget.
+    if (!isTransientRefusal(error)) throw error;
+  }
 }
 
 async function createTeardownPlan(
@@ -578,6 +659,11 @@ function isPermanentRefusal(error: unknown): boolean {
   }
   const reason = errorReason(error);
   return reason === undefined || !TRANSIENT_REFUSAL_REASONS.has(reason);
+}
+
+function isTransientRefusal(error: unknown): boolean {
+  return error instanceof OpenTofuControllerError &&
+    TRANSIENT_REFUSAL_REASONS.has(errorReason(error) ?? "");
 }
 
 /**

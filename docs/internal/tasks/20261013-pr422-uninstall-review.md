@@ -23,15 +23,25 @@
 - Publication order: ordinary feature push, ready-for-review, then the explicit
   quality/release review request. Squash merge is authorized only after passing
   checks, a quality/release approval comment, and no CTO/owner hold on the PR.
-- Conditional staging: only after an authorized merge, use a clean merged-main
-  checkout and the user-specified staging config through the repository deploy
-  entrypoint. Read status first, use the documented lane, and verify status and
-  the affected functionality on `app-staging.takosumi.com`. Schema operations
-  follow only the staging predeploy procedure. Serialize publication with the
-  Takosumi stagingsync session and preserve incomplete-deploy evidence without
-  blind retries. Record outcome and Version in the PR.
+- Staging ownership (CTO, 2026-10-14 00:46 JST): staging publication belongs
+  exclusively to the Takosumi stagingsync session. This session must not run
+  `takosumi-platform-staging` or staging `-code` apply/plan/execute, and must not
+  modify any sibling source pin. After merge, record
+  `staging公開はstagingsync担当` in the PR and hand off without deploying.
 - Excluded: production targets/configs/domains/databases, destructive storage or
   credential operations, registry/image publication, release tags, force push,
   and modifications to sibling repositories or other sessions' worktrees.
-- Current approval state at handoff preparation: no PR comments or reviews;
-  merge and staging remain conditional on QA/CTO judgment.
+- Stage 2 authority (CTO, 2026-10-14 00:48 JST): quality/release QA has approved
+  #422; v117 is collision-free and safe to rerun. In the absence of a CTO hold,
+  integrate latest main without force push, record actor/time audit tests and
+  local CI in the PR body, then squash merge. Latest fetched main at stage 2
+  is `eccdcd13329debb4c8548487f7df92544e013b05`, already an ancestor of this
+  branch; ordinary `git merge --no-ff origin/main` reports up to date.
+- Follow-ups: #424 tracks DELETE API two-stage migration; #425 tracks deadline
+  reauthorization of the original uninstall requester. DELETE remains immediate
+  in #422. takos1 overlap assessment belongs to CTO and is outside this session.
+- Stage 2 fixes also address the new code-review findings: cancelled or replaced
+  uninstall requests cannot reuse a system-approved Plan (including the atomic
+  storage admission fence); waiting requests rotate durably; one export attempt
+  is claimed before side effects, and an uncertain claim blocks without retry.
+  Independent source review and the full local gate are recorded in the PR.

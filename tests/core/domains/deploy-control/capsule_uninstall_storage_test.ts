@@ -1,7 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
 
 import type { Capsule, CapsuleUninstall } from "takosumi-contract/capsules";
+import type { ApplyRun } from "@takosumi/internal/deploy-control-api";
 import {
+  CapsuleApplyRunAdmissionConflictError,
+  capsuleApplyRunAdmissionFence,
   capsuleLifecycleExpected,
   type CapsuleLifecycleMutation,
   InMemoryOpenTofuControlStore,
@@ -254,6 +257,34 @@ test("the due read returns only unblocked uninstalled Capsules past their schedu
       untouched.id,
     );
 
+    // A waiting oldest request yields the next limited scheduler read without
+    // changing the original due deadline. Both rows remain due and rotate.
+    const waitingEarly = updated(await mutate(store, (await store.getCapsule(early.id))!, {
+      kind: "uninstall",
+      status: "uninstalled",
+      uninstall: {
+        ...(await store.getCapsule(early.id))!.uninstall!,
+        revision: 2,
+        lastFinalizeAttemptAt: "2026-10-22T00:00:01.000Z",
+      },
+      expectedUninstallRevision: 1,
+      expectedWorkspaceManagementAuthority: await authority(store, early.workspaceId),
+    }, "2026-10-22T00:00:01.000Z"), `${label} early waits`);
+    expect(waitingEarly.uninstall?.scheduledDestroyAt, label).toBe("2026-10-20T00:00:00.000Z");
+    expect(await ids("2026-10-22T00:00:02.000Z", 1), label).toEqual([late.id]);
+    updated(await mutate(store, (await store.getCapsule(late.id))!, {
+      kind: "uninstall",
+      status: "uninstalled",
+      uninstall: {
+        ...(await store.getCapsule(late.id))!.uninstall!,
+        revision: 2,
+        lastFinalizeAttemptAt: "2026-10-22T00:00:02.000Z",
+      },
+      expectedUninstallRevision: 1,
+      expectedWorkspaceManagementAuthority: await authority(store, late.workspaceId),
+    }, "2026-10-22T00:00:02.000Z"), `${label} late waits`);
+    expect(await ids("2026-10-22T00:00:03.000Z", 1), label).toEqual([early.id]);
+
     // A Workspace that is not accepting management work cannot hold the head
     // of the queue; its request waits until the Workspace is active again.
     await store.beginWorkspaceDraining(
@@ -261,5 +292,91 @@ test("the due read returns only unblocked uninstalled Capsules past their schedu
       await authority(store, early.workspaceId),
     );
     expect(await ids("2026-10-22T00:00:00.000Z", 1), label).toEqual([late.id]);
+  }
+});
+
+test("a cancelled or replaced uninstall cannot admit its approved system destroy Apply", async () => {
+  for (const { label, store } of await adapters()) {
+    const active = await activeCapsule(store, label, "admission");
+    const auth = await authority(store, active.workspaceId);
+    const first = {
+      ...scheduled("uninstall_first", 1, "2026-10-20T00:00:00.000Z"),
+      destroyPlanRunId: "plan_system_destroy_first",
+    };
+    const parked = updated(await mutate(store, active, {
+      kind: "uninstall", status: "uninstalled", uninstall: first,
+      expectedUninstallRevision: undefined,
+      expectedWorkspaceManagementAuthority: auth,
+    }, "2026-10-13T00:00:01.000Z"), `${label} first schedule`);
+    const fence = capsuleApplyRunAdmissionFence(parked, 1, {
+      id: first.id, destroyPlanRunId: first.destroyPlanRunId,
+    });
+    const run: ApplyRun = {
+      id: "apply_old_system_destroy",
+      planRunId: first.destroyPlanRunId,
+      workspaceId: parked.workspaceId,
+      capsuleId: parked.id,
+      operation: "destroy",
+      runnerProfileId: "runner",
+      status: "queued",
+      expected: {
+        planRunId: first.destroyPlanRunId,
+        capsuleId: parked.id,
+        currentStateVersionId: fence.currentStateVersionId,
+        capsuleExecutionAuthorityEpoch: fence.executionAuthorityEpoch,
+        runnerProfileId: "runner",
+        sourceDigest: "sha256:source",
+        variablesDigest: "sha256:variables",
+        policyDecisionDigest: "sha256:policy",
+        planDigest: "sha256:plan",
+        planArtifactDigest: "sha256:artifact",
+      },
+      stateBackend: { kind: "operator-managed", ref: "state" },
+      stateLock: { status: "pending", backendRef: "state" },
+      auditEvents: [],
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const cancelled = updated(await mutate(store, parked, {
+      kind: "uninstall", status: "active",
+      uninstall: { ...first, revision: 2, phase: "cancelled", cancelledAt: "2026-10-13T00:00:02.000Z" },
+      expectedUninstallRevision: 1,
+      expectedWorkspaceManagementAuthority: auth,
+    }, "2026-10-13T00:00:02.000Z"), `${label} cancel`);
+    await expect(store.beginApplyRun(run, auth, fence), `${label} restored`)
+      .rejects.toBeInstanceOf(CapsuleApplyRunAdmissionConflictError);
+    expect(await store.getApplyRun(run.id), label).toBeUndefined();
+
+    const second = {
+      ...scheduled("uninstall_second", 3, "2026-10-21T00:00:00.000Z"),
+      destroyPlanRunId: "plan_system_destroy_second",
+    };
+    updated(await mutate(store, cancelled, {
+      kind: "uninstall", status: "uninstalled", uninstall: second,
+      expectedUninstallRevision: 2,
+      expectedWorkspaceManagementAuthority: auth,
+    }, "2026-10-13T00:00:03.000Z"), `${label} replacement schedule`);
+    await expect(store.beginApplyRun(run, auth, fence), `${label} replacement`)
+      .rejects.toBeInstanceOf(CapsuleApplyRunAdmissionConflictError);
+    expect(await store.getApplyRun(run.id), label).toBeUndefined();
+
+    // Same status, state cursor and epoch: only uninstall identity changes.
+    const replacement = (await store.getCapsule(parked.id))!;
+    const oldOnNewCapsuleFence = capsuleApplyRunAdmissionFence(replacement, 1, {
+      id: first.id, destroyPlanRunId: first.destroyPlanRunId,
+    });
+    await expect(store.beginApplyRun(run, auth, oldOnNewCapsuleFence), `${label} identity only`)
+      .rejects.toBeInstanceOf(CapsuleApplyRunAdmissionConflictError);
+    expect(await store.getApplyRun(run.id), label).toBeUndefined();
+    const newFence = capsuleApplyRunAdmissionFence(replacement, 1, {
+      id: second.id, destroyPlanRunId: second.destroyPlanRunId,
+    });
+    const newRun: ApplyRun = {
+      ...run, id: "apply_new_system_destroy", planRunId: second.destroyPlanRunId,
+      expected: { ...run.expected, planRunId: second.destroyPlanRunId },
+    };
+    await expect(store.beginApplyRun(run, auth, newFence), `${label} wrong Plan id`)
+      .rejects.toBeInstanceOf(CapsuleApplyRunAdmissionConflictError);
+    expect((await store.beginApplyRun(newRun, auth, newFence)).status, label).toBe("created");
   }
 });

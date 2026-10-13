@@ -216,7 +216,15 @@ also cancels the finalizer's still-unapproved teardown Plan.
 The scheduled finalizer is the only automatic destroy approval. It reads due,
 unblocked requests in Workspaces that accept management work and advances each
 through revision-fenced steps on the Capsule row: one Capsule-scoped export through the backups lane whose outcome
-(`exported`, `failed`, or `skipped`) is recorded and never blocks teardown; a
+(`exported`, `failed`, or `skipped`) is recorded and never blocks teardown. The
+export attempt is claimed before artifacts are created. A claim without a
+recorded result for 15 minutes blocks automatic teardown with
+`pre_destroy_export_incomplete`; it never causes a second export attempt. An
+export may finish after cancellation or that timeout: its Backup record and
+Activity event remain discoverable, and late evidence never clears a block or
+starts teardown. Waiting requests persist a strictly advancing
+`lastFinalizeAttemptAt` and rotate behind untouched due work, including when
+ticks share a clock value. The finalizer then creates a
 destroy Plan created with an exact id derived from the request and attempt,
 recorded before creation and waited for before another attempt; and
 verification that the completed Plan is this Capsule's policy-passed destroy at
@@ -224,7 +232,12 @@ the current execution epoch with known, delete-only changes. Only then does it m
 `destroying` (after which cancel is refused), record an approval naming the
 request, and create the Apply with an exact id. Apply admission revalidates the
 state cursor, execution epoch, Workspace management, and policy as for any
-Apply. An unverifiable or non-delete Plan, a Plan the owner cancelled, repeated
+Apply. A finalizer-created Plan additionally requires its matching live
+uninstall request at preparation, atomic admission, and pre-dispatch; a cancel
+or replacement request permanently invalidates the old system approval.
+Approval writes `approvedBy` and `approvedAt` together with the `plan.approved`
+audit event in the Plan transition; Activity exposes the same actor and approval
+time. An unverifiable or non-delete Plan, a Plan the owner cancelled, repeated
 Plan failure, a permanent refusal of Plan creation, approval, or Apply
 admission, an Apply that ended before the provider, or a spent budget of
 unexpected errors records `blockedReason` and leaves the Capsule `uninstalled`
