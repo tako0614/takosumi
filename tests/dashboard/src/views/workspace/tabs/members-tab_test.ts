@@ -114,8 +114,11 @@ describe("MembersTab access-control surface", () => {
   });
 
   test("member cell truncates raw subjects, keeping the full id on title", () => {
-    expect(source).toContain("function shortSubject(accountId: string)");
+    expect(source).toContain('from "../../../lib/account-labels.ts"');
     expect(source).toContain("{shortSubject(member.accountId)}");
+    // Your own row reads as your name (the session knows it); others keep
+    // the short subject until the roster carries names.
+    expect(source).toContain("sessionDisplayName(props.session)");
     expect(source).toContain("title={member.accountId}");
     expect(source).not.toContain(
       '<code class="wb-mono">{member.accountId}</code>',

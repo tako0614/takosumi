@@ -19,7 +19,13 @@ import { ScrollText } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { type ActivityEvent, listActivity } from "../../lib/control-api.ts";
-import { operationLabel } from "../../lib/labels.ts";
+import { createServiceNames } from "../../lib/service-names.ts";
+import {
+  activityServiceName,
+  describeActivityEvent,
+} from "../../lib/activity-copy.ts";
+import { activityActorLabel } from "../../lib/account-labels.ts";
+import type { SessionRecord } from "../account/lib/session.ts";
 import { formatDateTime, relativeTime, t } from "../../i18n/index.ts";
 import PageHeader from "../../components/ui/PageHeader.tsx";
 import { Card } from "../../components/ui/Card.tsx";
@@ -35,12 +41,16 @@ const ACTIVITY_PAGE_SIZE = 100;
 const ACTIVITY_MAX_LIMIT = 500;
 
 export default function ActivityView() {
-  return <Page title={t("activity.title")}>{() => <Inner />}</Page>;
+  return (
+    <Page title={t("activity.title")}>
+      {(session) => <Inner session={session} />}
+    </Page>
+  );
 }
 
 function MetadataChips(props: { metadata: Record<string, unknown> }) {
   const entries = () =>
-    Object.entries(props.metadata).filter(
+    Object.entries(props.metadata ?? {}).filter(
       ([, v]) => v !== null && v !== undefined && typeof v !== "object",
     );
   return (
@@ -58,69 +68,15 @@ function MetadataChips(props: { metadata: Record<string, unknown> }) {
   );
 }
 
-function metaString(
-  metadata: Record<string, unknown>,
-  key: string,
-): string | undefined {
-  const value = metadata[key];
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function activityTitle(event: ActivityEvent): string {
-  const metadata = event.metadata ?? {};
-  switch (event.action) {
-    case "capsule.created":
-      return t("notif.event.installCreated", {
-        name: metaString(metadata, "name") ?? "—",
-      });
-    case "run.plan_created":
-      return t("notif.event.planReady", {
-        operation: operationLabel(metaString(metadata, "operation")),
-      });
-    case "run.approved":
-      return t("notif.event.approved", {
-        operation: operationLabel(metaString(metadata, "operation")),
-      });
-    case "run.applied":
-      return t("notif.event.applied");
-    case "run.destroyed":
-      return t("notif.event.destroyed");
-    case "run.failed":
-      return t("notif.event.failed", {
-        operation: operationLabel(metaString(metadata, "phase")),
-      });
-    case "connection.created":
-      return metaString(metadata, "provider")
-        ? t("notif.event.connCreated", {
-            provider: metaString(metadata, "provider")!,
-          })
-        : t("notif.event.connCreatedGeneric");
-    case "connection.revoked":
-      return metaString(metadata, "provider")
-        ? t("notif.event.connRevoked", {
-            provider: metaString(metadata, "provider")!,
-          })
-        : t("notif.event.connRevokedGeneric");
-    case "backup.created":
-      return t("notif.event.backupCreated");
-    case "dependency.created":
-      return t("notif.event.depCreated");
-    case "dependency.deleted":
-      return t("notif.event.depDeleted");
-    case "output_share.created":
-      return t("notif.event.shareRequested");
-    case "output_share.approved":
-      return t("notif.event.shareApproved");
-    case "output_share.revoked":
-      return t("notif.event.shareRevoked");
-    case "run_group.created":
-      return t("notif.event.groupCreated");
-    default:
-      return t("activity.recorded");
-  }
-}
-
-function ActivityRow(props: { event: ActivityEvent }) {
+function ActivityRow(props: {
+  event: ActivityEvent;
+  serviceName?: string | undefined;
+  session: SessionRecord;
+}) {
+  // Same sentence as the Notifications feed, named after the service when
+  // the history knows which one the event is about.
+  const description = () =>
+    describeActivityEvent(props.event, props.serviceName);
   return (
     <li class="wa-activity-row">
       <div class="wa-activity-head">
@@ -130,24 +86,30 @@ function ActivityRow(props: { event: ActivityEvent }) {
         <Show
           when={activityEventHref(props.event)}
           fallback={
-            <span class="wa-activity-action">{activityTitle(props.event)}</span>
+            <span class="wa-activity-action">{description().title}</span>
           }
         >
           {(href) => (
             <A class="wa-activity-action wa-activity-link" href={href()}>
-              {activityTitle(props.event)}
+              {description().title}
             </A>
           )}
         </Show>
       </div>
+      <Show when={description().detail}>
+        {(detail) => <p class="muted">{detail()}</p>}
+      </Show>
       <div class="wa-activity-rowmeta">
         {/* The page promises だれが何を変更したか — surface the recorded
-            actor on the row itself (the account subject the backend logged;
-            never invented), not only inside the debug disclosure. */}
+            actor on the row itself, not only inside the debug disclosure.
+            Your own events read as you; the raw subject stays in the debug
+            layer and on hover. */}
         <Show when={props.event.actorId}>
           {(actor) => (
-            <span class="muted">
-              {t("activity.actorLine", { actor: actor() })}
+            <span class="muted" title={actor()}>
+              {t("activity.actorLine", {
+                actor: activityActorLabel(actor(), props.session),
+              })}
             </span>
           )}
         </Show>
@@ -191,29 +153,31 @@ function ActivityRow(props: { event: ActivityEvent }) {
   );
 }
 
-function Inner() {
+function Inner(props: { session: SessionRecord }) {
   const workspaceId = () =>
     currentWorkspaceId() ? currentWorkspaceId() : null;
+  const serviceNames = createServiceNames(workspaceId);
   const [limit, setLimit] = createSignal(ACTIVITY_PAGE_SIZE);
   const eventsKey = () => {
     const id = workspaceId();
     return id ? ([id, limit()] as const) : null;
   };
-  const [events, { refetch: refetchEvents, mutate: mutateEvents }] =
-    createResource(eventsKey, ([id, max]) => listActivity(id, max));
-  // Load-more keeps the current rows on screen (reads `.latest`), but a
-  // Workspace switch must not flash the previous Workspace's trail.
-  createEffect(
-    on(
-      workspaceId,
-      () => {
-        setLimit(ACTIVITY_PAGE_SIZE);
-        mutateEvents(undefined);
-      },
-      { defer: true },
-    ),
+  const [events, { refetch: refetchEvents }] = createResource(
+    eventsKey,
+    ([id, max]) => listActivity(id, max),
   );
-  const rows = () => (events.error ? [] : (events.latest ?? []));
+  createEffect(
+    on(workspaceId, () => setLimit(ACTIVITY_PAGE_SIZE), { defer: true }),
+  );
+  // Load-more keeps the current rows on screen (reads `.latest`), but a
+  // Workspace switch must not flash the previous Workspace's trail — so keep
+  // only this Workspace's events. (Clearing the resource with `mutate` on the
+  // switch raced the first load: the route transition delayed that effect
+  // until the events had arrived, and a fresh session showed "No activity".)
+  const rows = () =>
+    (events.error ? [] : (events.latest ?? [])).filter(
+      (event) => event.workspaceId === workspaceId(),
+    );
   const canLoadMore = () =>
     rows().length >= limit() && limit() < ACTIVITY_MAX_LIMIT;
   const atListCap = () =>
@@ -268,13 +232,27 @@ function Inner() {
                     icon={<ScrollText size={28} />}
                     title={t("activity.empty.title")}
                     message={t("activity.empty.message")}
+                    action={
+                      <Button variant="primary" href="/new">
+                        {t("apps.add")}
+                      </Button>
+                    }
                   />
                 }
               >
                 <Card>
                   <ul class="wa-activity">
                     <For each={list()}>
-                      {(event) => <ActivityRow event={event} />}
+                      {(event) => (
+                        <ActivityRow
+                          event={event}
+                          serviceName={activityServiceName(
+                            event,
+                            serviceNames(),
+                          )}
+                          session={props.session}
+                        />
+                      )}
                     </For>
                   </ul>
                   <Show when={canLoadMore()}>

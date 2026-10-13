@@ -205,4 +205,14 @@ describe("SignInView disabled OAuth guidance", () => {
       /\.auth-theme-switcher\s*\{[\s\S]*?display:\s*none;/,
     );
   });
+
+  test("a sign-in that cannot start says why instead of doing nothing", () => {
+    // Plain-HTTP LAN self-host has no crypto.subtle for PKCE; the click used
+    // to be a silent no-op.
+    expect(signInViewSource).toContain("rpc.auth.startUpstreamOAuth(p).catch(");
+    expect(signInViewSource).toContain('t("auth.startInsecureContext")');
+    expect(signInViewSource).toMatch(
+      /<p class="sign-in-error" role="alert">\s*\{message\(\)\}/,
+    );
+  });
 });

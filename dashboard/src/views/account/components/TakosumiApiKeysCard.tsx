@@ -32,7 +32,8 @@ import {
   Select,
   Toast,
 } from "../../../components/ui/index.ts";
-import { friendlyError } from "../../../lib/error-copy.ts";
+import { fetchFailedMessage, friendlyError } from "../../../lib/error-copy.ts";
+import { latestOrUndefined } from "../../../lib/resource-read.ts";
 import { formatDateTime, locale, t } from "../../../i18n/index.ts";
 import {
   createTakosumiApiKey,
@@ -417,10 +418,29 @@ export default function TakosumiApiKeysCard(props: {
         </div>
       </div>
 
+      {/* `keys()` throws once the list read has failed; a deployment without
+          this endpoint (or one 5xx after create/revoke) took the whole app
+          down. Show the failure in the table with a retry instead. */}
       <DataTable
         columns={columns()}
-        rows={keys()}
+        rows={latestOrUndefined(keys)}
         loading={keys.loading}
+        error={
+          keys.error ? (
+            <span class="wc-form-actions">
+              <span>{fetchFailedMessage(keys.error, t)}</span>
+              <Button
+                variant="secondary"
+                size="sm"
+                type="button"
+                busy={keys.loading}
+                onClick={() => void refetch()}
+              >
+                {t("common.retry")}
+              </Button>
+            </span>
+          ) : undefined
+        }
         rowKey={(key) => key.id}
         empty={t("account.apiKeys.empty")}
         skeletonRows={2}

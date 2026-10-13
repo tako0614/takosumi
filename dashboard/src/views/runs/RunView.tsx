@@ -121,6 +121,7 @@ import { installReturnPathFromPrefill } from "../../lib/install-return-context.t
 import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
 import {
   formatDateTime,
+  formatEpochDateTime,
   locale,
   setDocumentTitle,
   t,
@@ -139,6 +140,10 @@ import {
   type Tone,
 } from "../../components/ui/index.ts";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
+import {
+  createLastGoodValue,
+  latestOrUndefined,
+} from "../../lib/resource-read.ts";
 
 const APPLY_REQUEST_TIMEOUT_MS = 45_000;
 const RELEASE_ACTIVATION_POLL_MS = 3_000;
@@ -390,8 +395,7 @@ function AuditEventRow(props: { event: RunAuditEvent }) {
     );
   const at = () => {
     const raw = props.event.at ?? props.event.createdAt;
-    if (typeof raw === "number")
-      return formatDateTime(new Date(raw).toISOString());
+    if (typeof raw === "number") return formatEpochDateTime(raw);
     if (typeof raw === "string") return formatDateTime(raw);
     return "";
   };
@@ -711,6 +715,11 @@ function Inner() {
     runId,
     getRun,
   );
+  // Read the run through this, never `run()` / `run.latest`: both THROW once
+  // a load has failed, which took the whole app (nav included) down to the
+  // root reload card instead of the not-found / retry branches below. A failed
+  // refetch keeps the last good run of THIS id on screen with a quiet notice.
+  const runLatest = createLastGoodValue(run, (r) => r.id === runId());
   const [logs, { refetch: refetchLogs }] = createResource(runId, getRunLogs);
   // Last-good logs snapshot. The resource accessor `logs()` THROWS when the
   // resource is errored, and the SSE stream refetches logs on every run event
@@ -734,7 +743,7 @@ function Inner() {
     }
   });
   const providerConnectionRequest = createMemo(() => {
-    const current = run.latest;
+    const current = runLatest();
     const referencedConnectionIds = providerConnectionIdsFromResolutions(
       current?.providerResolutions,
     );
@@ -776,7 +785,7 @@ function Inner() {
   // unsettled. Runtime launch URLs are read separately from Interface.
   const [activity, { refetch: refetchActivity }] = createResource(
     () => {
-      const r = run.latest;
+      const r = runLatest();
       if (!r?.workspaceId) return null;
       const isCompletedApply =
         (r.type === "apply" || r.type === "destroy_apply") &&
@@ -786,12 +795,13 @@ function Inner() {
     (id) => listActivity(id, 100),
   );
   // The owning app, for the plain-language summary sentence + back link.
-  const capsuleId = () => run.latest?.capsuleId ?? null;
+  const capsuleId = () => runLatest()?.capsuleId ?? null;
   const [capsule] = createResource(capsuleId, getCapsule);
-  const appName = () => capsule.latest?.name;
+  const capsuleLatest = () => latestOrUndefined(capsule);
+  const appName = () => capsuleLatest()?.name;
   const canRestartFailedInitialPlan = createMemo(() => {
-    const r = run.latest;
-    const currentCapsule = capsule.latest;
+    const r = runLatest();
+    const currentCapsule = capsuleLatest();
     return Boolean(
       r &&
         currentCapsule &&
@@ -805,7 +815,7 @@ function Inner() {
     );
   });
   const ordinaryRetryAllowed = createMemo(() => {
-    const r = run.latest;
+    const r = runLatest();
     if (
       !r ||
       r.type !== "plan" ||
@@ -818,15 +828,15 @@ function Inner() {
     // source are separate choices. A runner/credential repair does not require
     // abandoning the retained first install. Wait for its authoritative read.
     if (capsule.error) return false;
-    if (capsule.latest?.id !== r.capsuleId) return false;
+    if (capsuleLatest()?.id !== r.capsuleId) return false;
     return Boolean(
-      initialPlanRetryReport(r, capsule.latest) ||
+      initialPlanRetryReport(r, capsuleLatest()) ||
         ((r.baseStateGeneration ?? 0) > 0 &&
-          (capsule.latest?.currentStateGeneration ?? 0) > 0),
+          (capsuleLatest()?.currentStateGeneration ?? 0) > 0),
     );
   });
   const appliedRunStateVersionKey = createMemo(() => {
-    const r = run.latest;
+    const r = runLatest();
     const id = capsuleId();
     if (!id || !r || r.type !== "apply" || r.status !== "succeeded") {
       return undefined;
@@ -841,7 +851,7 @@ function Inner() {
     },
   );
   const completedRunStateVersion = createMemo(() => {
-    const r = run.latest;
+    const r = runLatest();
     if (!r || r.type !== "apply" || r.status !== "succeeded") {
       return undefined;
     }
@@ -854,7 +864,7 @@ function Inner() {
     return (stateVersions.latest ?? []).find((row) => row.createdByRunId === r.id);
   });
   const completedRunReadiness = createMemo((): StateVersionReadiness => {
-    const r = run.latest;
+    const r = runLatest();
     if (!r || r.type !== "apply" || r.status !== "succeeded") {
       return "settling";
     }
@@ -871,7 +881,7 @@ function Inner() {
     );
   });
   const completedRunUiSurfaceKey = createMemo(() => {
-    const r = run.latest;
+    const r = runLatest();
     const id = capsuleId();
     if (
       !r ||
@@ -911,7 +921,7 @@ function Inner() {
   };
 
   createEffect(() => {
-    const r = run.latest;
+    const r = runLatest();
     const titleKey =
       r?.type === "apply" || r?.type === "destroy_apply"
         ? "run.title.apply"
@@ -926,7 +936,7 @@ function Inner() {
   const [lastLauncherCacheClearKey, setLastLauncherCacheClearKey] =
     createSignal<string | undefined>();
   createEffect(() => {
-    const r = run.latest;
+    const r = runLatest();
     if (!r || !isTerminalRunStatus(r.status)) return;
     if (r.type !== "apply" && r.type !== "destroy_apply") {
       return;
@@ -951,6 +961,10 @@ function Inner() {
       onRun: (r) => {
         if (disposed) return;
         mutateRun(r);
+        // `mutate` does not clear a failed read's error, and the last-good
+        // accessor ignores the value while it stands: re-read once so the
+        // pushed status shows instead of freezing until the run ends.
+        if (run.error) void refetchRun();
         void refetchLogs();
         if (isTerminalRunStatus(r.status)) {
           disposed = true;
@@ -977,7 +991,8 @@ function Inner() {
     const onVisibility = () => {
       const visible = document.visibilityState !== "hidden";
       setPageVisible(visible);
-      if (visible && run.latest && !isTerminalRunStatus(run.latest.status)) {
+      const current = runLatest();
+      if (visible && current && !isTerminalRunStatus(current.status)) {
         void refetchRun();
         void refetchLogs();
       }
@@ -988,9 +1003,13 @@ function Inner() {
     );
   }
   createEffect(() => {
-    const current = run.latest;
+    const current = runLatest();
     if (!current || isTerminalRunStatus(current.status)) return;
     if (!pageVisible() || sseActive()) return;
+    // Tracks the load state, so every settled read re-arms the next poll. A
+    // failed read leaves `runLatest()` on the same last-good object, which
+    // alone would never re-run this effect and polling would silently stop.
+    if (run.loading) return;
     const timer = setTimeout(() => {
       void refetchRun();
       void refetchLogs();
@@ -999,7 +1018,7 @@ function Inner() {
   });
 
   createEffect(() => {
-    const current = run.latest;
+    const current = runLatest();
     if (
       !current ||
       current.type !== "apply" ||
@@ -1022,9 +1041,9 @@ function Inner() {
   const changes = createMemo(() =>
     changesFromLogs(logData()?.auditEvents ?? []),
   );
-  const planResources = createMemo(() => run.latest?.planResources ?? []);
+  const planResources = createMemo(() => runLatest()?.planResources ?? []);
   const changeCounts = createMemo(() =>
-    changeCountsForRun(run.latest, logData()?.auditEvents ?? []),
+    changeCountsForRun(runLatest(), logData()?.auditEvents ?? []),
   );
   // `run.summary` is optional on the wire — when the backend recorded neither
   // a summary nor log-parsable change items, changeCounts() is an all-zero
@@ -1032,7 +1051,7 @@ function Inner() {
   // card must both distinguish "0 changes" from "unknown".
   const changeCountsKnown = createMemo(() => {
     if (run.error) return false;
-    return changeCountsKnownForRun(run.latest, logData()?.auditEvents ?? []);
+    return changeCountsKnownForRun(runLatest(), logData()?.auditEvents ?? []);
   });
   // A destroy plan that reports 削除0 is not a recorded fact — a removal
   // deletes resources by definition, so the backend simply did not record the
@@ -1040,7 +1059,7 @@ function Inner() {
   // shows instead of contradicting the destructive warning with 作成0/変更0/削除0.
   const changeCountsTrustworthy = createMemo(() => {
     if (!changeCountsKnown()) return false;
-    const r = run.latest;
+    const r = runLatest();
     if (
       (r?.type === "destroy_plan" || r?.type === "destroy_apply") &&
       changeCounts().delete === 0
@@ -1066,18 +1085,18 @@ function Inner() {
       ),
   );
   const providerRows = createMemo(() =>
-    providerResolutionRows(run.latest, providerConnectionsById()),
+    providerResolutionRows(runLatest(), providerConnectionsById()),
   );
   const providerRowsNeedingAttention = createMemo(() =>
     providerRows().filter(providerResolutionNeedsAttention),
   );
   const diagnosticRows = createMemo(() => logData()?.diagnostics ?? []);
   const connectionVerificationRequired = createMemo(() => {
-    const r = run.latest;
+    const r = runLatest();
     return r ? accessIssueForRun(r, diagnosticRows()) !== undefined : false;
   });
   const runAccessIssue = createMemo(() => {
-    const r = run.latest;
+    const r = runLatest();
     return r ? accessIssueForRun(r, diagnosticRows()) : undefined;
   });
   const showDiagnosticsPanel = createMemo(
@@ -1085,7 +1104,7 @@ function Inner() {
       connectionVerificationRequired() ||
       diagnosticRows().length > 0 ||
       Boolean(logs.error) ||
-      (logs.loading && run.latest?.status === "failed"),
+      (logs.loading && runLatest()?.status === "failed"),
   );
 
   const approve = createAction(async () => {
@@ -1105,7 +1124,7 @@ function Inner() {
   const [siblingRuns] = createResource(
     () => {
       if (run.error) return null;
-      const r = run.latest;
+      const r = runLatest();
       if (!r || !isDeployApprovalCandidate(r)) return null;
       // Key by run id so navigating plan → apply → back re-reads the ledger.
       return [r.workspaceId, r.id] as const;
@@ -1176,7 +1195,7 @@ function Inner() {
 
   const deploy = createAction(async (confirmedReview?: boolean) => {
     let envelope: unknown;
-    const currentRun = run.latest;
+    const currentRun = runLatest();
     if (
       currentRun &&
       requiresDestructiveConfirmation(currentRun) &&
@@ -1253,7 +1272,7 @@ function Inner() {
     }
   };
   createEffect(() => {
-    const r = run.latest;
+    const r = runLatest();
     if (
       !autoContinueEnabled() ||
       autoContinued() ||
@@ -1305,7 +1324,7 @@ function Inner() {
   const { confirm } = useConfirmDialog();
 
   const restartFailedInitialPlan = createAction(async () => {
-    const currentRun = run.latest;
+    const currentRun = runLatest();
     const instId = currentRun?.capsuleId;
     if (
       !currentRun ||
@@ -1370,7 +1389,7 @@ function Inner() {
   });
 
   const retryPlan = createAction(async () => {
-    const currentRun = run.latest;
+    const currentRun = runLatest();
     const instId = currentRun?.capsuleId;
     if (!currentRun || !instId) return;
     const capsule = await getCapsule(instId);
@@ -1439,7 +1458,7 @@ function Inner() {
   const overwritesLiveState = (type: string | undefined): boolean =>
     type === "restore" || type === "destroy_plan" || type === "destroy_apply";
   const confirmApprove = async (): Promise<void> => {
-    const r = run.latest;
+    const r = runLatest();
     if (!overwritesLiveState(r?.type)) {
       await approve.run();
       return;
@@ -1466,7 +1485,7 @@ function Inner() {
     await approve.run();
   };
   const confirmCancel = async (): Promise<void> => {
-    const r = run.latest;
+    const r = runLatest();
     const operation = operationLabel(r?.type);
     const name = appName();
     const ok = await confirm({
@@ -1486,7 +1505,7 @@ function Inner() {
   // 409 on every click. The rule lives in lib/run-cancel.ts so it stays
   // mirrored with `#cancelRun`.
   const cancellable = () => {
-    const r = run.latest;
+    const r = runLatest();
     return r !== undefined && canCancelRun(r);
   };
 
@@ -1505,7 +1524,7 @@ function Inner() {
   }
 
   const summary = createMemo((): Summary | null => {
-    const r = run.latest;
+    const r = runLatest();
     if (!r) return null;
     // Terminal, non-failure statuses: render a settled line (no spinner). A
     // cancelled/expired run has stopped polling, so a "progress" fallback would
@@ -1785,7 +1804,7 @@ function Inner() {
   };
 
   const pageTitle = () => {
-    const r = run.latest;
+    const r = runLatest();
     if (!r) return t("run.title.other");
     if (r.type === "apply") return t("run.title.apply");
     if (r.type === "destroy_apply" || r.type === "destroy_plan")
@@ -1803,7 +1822,7 @@ function Inner() {
           title={
             <span class="wa-title-row">
               {pageTitle()}
-              <Show when={run.latest}>
+              <Show when={runLatest()}>
                 {(r) => (
                   <StatusBadge
                     status={displayStatus(r())}
@@ -1842,7 +1861,7 @@ function Inner() {
               console for a skeleton on each of those would flicker and evict
               focus. Keep rendering `.latest` during refetches (mirrors
               RunGroupView). */}
-          <Match when={run.loading && !run.error && !run.latest}>
+          <Match when={run.loading && !run.error && !runLatest()}>
             <Card>
               <Skeleton variant="block" />
             </Card>
@@ -1851,7 +1870,7 @@ function Inner() {
               5xx from the SSE-driven log refetch / 3s poll while a run is
               already on screen must NOT replace the console — it falls through
               to the content Match below (which shows a quiet refresh notice). */}
-          <Match when={run.error && !run.latest}>
+          <Match when={run.error && !runLatest()}>
             <Show
               when={isRunNotFound(run.error)}
               fallback={
@@ -1883,9 +1902,9 @@ function Inner() {
               />
             </Show>
           </Match>
-          {/* `run.latest`, never `run()`: the accessor throws on error, and a
-              transient error must keep the last-good run rendered here. */}
-          <Match when={run.latest}>
+          {/* `runLatest()`, never `run()` / `run.latest`: both throw on error,
+              and a transient error must keep the last-good run rendered here. */}
+          <Match when={runLatest()}>
             {(r) => (
               <div class="wa-stack">
                 {/* Quiet inline notice when a refetch failed but we still have
@@ -2177,8 +2196,8 @@ function Inner() {
                     plan/apply-family runs. ===== */}
                 <Show
                   when={
-                    run.latest?.type !== "compatibility_check" &&
-                    run.latest?.type !== "source_sync"
+                    runLatest()?.type !== "compatibility_check" &&
+                    runLatest()?.type !== "source_sync"
                   }
                 >
                   <Card>

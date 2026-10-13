@@ -18,20 +18,36 @@ export function isLikelyStaleAssetError(value: unknown): boolean {
   return /\/assets\/[^ \n?]+\.js(?:\?|$)/u.test(text);
 }
 
+/**
+ * Reload once (per URL, per cooldown) when `value` looks like a stale route
+ * chunk after a deploy. Returns whether a reload was started.
+ *
+ * Solid's `lazy()` turns a failed chunk import into an errored resource, so
+ * route-chunk failures surface in an ErrorBoundary — never as the window
+ * "error" / "unhandledrejection" events below. Boundaries call this directly.
+ */
+export function reloadForStaleAsset(value: unknown): boolean {
+  if (typeof window === "undefined") return false;
+  if (!isLikelyStaleAssetError(value)) return false;
+  try {
+    if (!claimReloadSlot(window.location.href, Date.now())) return false;
+  } catch {
+    // Blocked site storage: without the cooldown slot a reload could loop, so
+    // leave recovery to the visible Reload button.
+    return false;
+  }
+  window.location.reload();
+  return true;
+}
+
 export function installStaleAssetReload(): void {
   if (typeof window === "undefined") return;
 
-  const reload = (value: unknown) => {
-    if (!isLikelyStaleAssetError(value)) return;
-    if (!claimReloadSlot(window.location.href, Date.now())) return;
-    window.location.reload();
-  };
-
   window.addEventListener("error", (event) => {
-    reload(event.error ?? event.message ?? event);
+    reloadForStaleAsset(event.error ?? event.message ?? event);
   });
   window.addEventListener("unhandledrejection", (event) => {
-    reload(event.reason);
+    reloadForStaleAsset(event.reason);
   });
 }
 

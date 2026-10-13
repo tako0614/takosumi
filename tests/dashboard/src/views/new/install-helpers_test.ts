@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { t } from "../../../../../dashboard/src/i18n/index.ts";
 import {
   compatibilityCheckLooksTransient,
   compatibilityDiagnosticDisplay,
@@ -64,6 +65,20 @@ describe("compatibility diagnostics", () => {
         diagnostics: [{ severity: "error", message: "operation was aborted" }],
       }),
     ).toBe(false);
+    // A check that did not run is not a verdict: the summary offers a retry
+    // instead of asking the user to "review" the service.
+    expect(
+      compatibilitySummaryDisplay({
+        ...base,
+        diagnostics: [
+          {
+            code: "capsule_compatibility_check_failed",
+            severity: "error",
+            message: "localized text",
+          },
+        ],
+      }),
+    ).toBe(t("new.compat.summary.checkFailed"));
   });
 
   test("renders invalid repository setup as fixed actionable copy", () => {
