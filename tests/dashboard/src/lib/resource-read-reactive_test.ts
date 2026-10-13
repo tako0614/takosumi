@@ -1,78 +1,49 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
 
-// Bun resolves "solid-js" to its inert server build; the last-good accessor is
-// about reactive resource state, so run it on the browser build.
-const solid = await import(
-  resolve(import.meta.dir, "../../../../dashboard/node_modules/solid-js/dist/solid.js")
+// Deliberately warm the parent's default (server) module cache, as the sibling
+// resource-read tests do. A late solid-js mock cannot repair that cached import.
+import "../../../../dashboard/src/lib/resource-read.ts";
+
+const fixture = resolve(
+  import.meta.dir,
+  "../../fixtures/resource-read-reactive.ts",
 );
-mock.module("solid-js", () => solid);
-const { createLastGoodValue } = await import(
-  "../../../../dashboard/src/lib/resource-read.ts"
-);
-
-type Run = { readonly id: string; readonly status: string };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((ok, fail) => {
-    resolve = ok;
-    reject = fail;
-  });
-  return { promise, resolve, reject };
-}
-
-const settle = () => new Promise((done) => setTimeout(done, 0));
 
 describe("createLastGoodValue", () => {
-  test("keeps the last good run of this id when a refetch fails", async () => {
-    const pending: ReturnType<typeof deferred<Run>>[] = [];
-    await solid.createRoot(async (dispose: () => void) => {
-      const [id] = solid.createSignal("run_a");
-      const [run, { refetch }] = solid.createResource(id, () => {
-        const next = deferred<Run>();
-        pending.push(next);
-        return next.promise;
-      });
-      const latest = createLastGoodValue(run, (r: Run) => r.id === id());
-      pending[0]!.resolve({ id: "run_a", status: "running" });
-      await settle();
-      expect(latest()).toEqual({ id: "run_a", status: "running" });
-
-      refetch();
-      pending[1]!.reject(new Error("503"));
-      await settle();
-      expect(run.error).toBeDefined();
-      expect(() => run.latest).toThrow("503");
-      expect(latest()).toEqual({ id: "run_a", status: "running" });
-      dispose();
+  for (const name of [
+    "keeps the last good run of this id when a refetch fails",
+    "never shows another id's value, loading or failed",
+  ]) {
+    test(name, async () => {
+      // Select Solid's reactive browser build before any modules are loaded.
+      // The child has its own module cache and never mocks the parent's runtime.
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          "test",
+          "--conditions=browser",
+          "--test-name-pattern",
+          name,
+          fixture,
+        ],
+        {
+          stdout: "pipe",
+          stderr: "pipe",
+          // Stop a hung child before the parent's default five-second timeout.
+          timeout: 4_000,
+          killSignal: "SIGKILL",
+        },
+      );
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      expect({ exitCode, stdout, stderr }).toMatchObject({ exitCode: 0 });
+      // A successful exit with no selected test must not masquerade as coverage.
+      expect(stderr).toContain("1 pass");
+      expect(stderr).toContain("0 fail");
     });
-  });
-
-  test("never shows another id's value, loading or failed", async () => {
-    const pending: ReturnType<typeof deferred<Run>>[] = [];
-    await solid.createRoot(async (dispose: () => void) => {
-      const [id, setId] = solid.createSignal("run_a");
-      const [run] = solid.createResource(id, () => {
-        const next = deferred<Run>();
-        pending.push(next);
-        return next.promise;
-      });
-      const latest = createLastGoodValue(run, (r: Run) => r.id === id());
-      pending[0]!.resolve({ id: "run_a", status: "succeeded" });
-      await settle();
-      expect(latest()?.id).toBe("run_a");
-
-      setId("run_b");
-      // `run.latest` still holds run_a while run_b loads.
-      expect(run.latest?.id).toBe("run_a");
-      expect(latest()).toBeUndefined();
-
-      pending[1]!.reject(new Error("404"));
-      await settle();
-      expect(latest()).toBeUndefined();
-      dispose();
-    });
-  });
+  }
 });

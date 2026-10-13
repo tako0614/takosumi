@@ -2161,13 +2161,16 @@ test("renewable ApplyRun loses its Run fence before mint and delivers nothing", 
 
 test("renewable ApplyRun discards an issued value when Capsule lease is lost during mint", async () => {
   const store = new HeartbeatCountingStore();
-  let secondMintStarted = false;
+  let resolveSecondMintStarted!: () => void;
+  const secondMintStarted = new Promise<void>((resolve) => {
+    resolveSecondMintStarted = resolve;
+  });
   let releaseSecondMint!: () => void;
   const secondMintHold = new Promise<void>((resolve) => { releaseSecondMint = resolve; });
   const { applyRunId, vault, issueCount } =
     await seedRenewableApplyFixture(store, "refresh_lost_capsule_during_mint", async (count) => {
       if (count === 2) {
-        secondMintStarted = true;
+        resolveSecondMintStarted();
         await secondMintHold;
       }
     });
@@ -2204,7 +2207,7 @@ test("renewable ApplyRun discards an issued value when Capsule lease is lost dur
     const pending = controller.runQueuedApply(applyRunId);
     await started;
     jest.advanceTimersByTime(31_000);
-    await settleAsyncUntil(() => secondMintStarted);
+    await secondMintStarted;
     loseCapsuleLease = true;
     releaseSecondMint();
     const response = await pending;
