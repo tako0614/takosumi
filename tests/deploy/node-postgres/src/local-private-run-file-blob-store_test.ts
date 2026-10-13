@@ -11,6 +11,34 @@ import type { PrivateRunFileScope } from "../../../../core/domains/private-run-f
 const TEST_CRYPTO = new PartitionedSecretBoundaryCrypto({
   globalPassphrase: "private-run-file-blob-test-passphrase-at-least-32-bytes",
 });
+const CHILD_DIAGNOSTIC_NAMES = [
+  "Error",
+  "TypeError",
+  "RangeError",
+  "SyntaxError",
+  "PrivateRunFileBlobStoreError",
+  "NonErrorThrow",
+] as const;
+const CHILD_DIAGNOSTIC_CODES = [
+  "none",
+  "EACCES",
+  "EEXIST",
+  "EINVAL",
+  "EIO",
+  "EISDIR",
+  "ELOOP",
+  "EMFILE",
+  "ENFILE",
+  "ENOENT",
+  "ENOSPC",
+  "ENOTDIR",
+  "EPERM",
+  "ERR_INVALID_ARG_TYPE",
+  "ERR_MODULE_NOT_FOUND",
+  "ERR_UNKNOWN_FILE_EXTENSION",
+] as const;
+const CHILD_DIAGNOSTIC_NAME_SET: ReadonlySet<string> = new Set(CHILD_DIAGNOSTIC_NAMES);
+const CHILD_DIAGNOSTIC_CODE_SET: ReadonlySet<string> = new Set(CHILD_DIAGNOSTIC_CODES);
 const SCOPE: PrivateRunFileScope = {
   workspaceId: "workspace.local",
   capsuleId: "capsule.local",
@@ -51,6 +79,7 @@ function spawnBlobWriter(input: {
   readonly bytes: Uint8Array;
   readonly markerPath?: string;
   readonly releasePath?: string;
+  readonly failurePath?: string;
   readonly phase?: "after-final-link" | "after-temporary-unlink-before-sync" | "after-existing-directory-sync";
   readonly blockAtPhase?: boolean;
 }): ChildProcess {
@@ -58,6 +87,9 @@ function spawnBlobWriter(input: {
   const blobModule = new URL("../../../../deploy/node-postgres/src/local-private-run-file-blob-store.ts", import.meta.url).href;
   const marker = input.markerPath ? JSON.stringify(input.markerPath) : undefined;
   const release = input.releasePath ? JSON.stringify(input.releasePath) : undefined;
+  const failure = input.failurePath ? JSON.stringify(input.failurePath) : undefined;
+  const diagnosticNames = JSON.stringify(CHILD_DIAGNOSTIC_NAMES);
+  const diagnosticCodes = JSON.stringify(CHILD_DIAGNOSTIC_CODES);
   const targetPhase = JSON.stringify(input.phase ?? "after-final-link");
   const hook = marker
     ? `testOnlyAfterPublishPhase: async (phase) => {
@@ -69,29 +101,70 @@ function spawnBlobWriter(input: {
       },`
     : "";
   const script = `
-    import { createHash } from "node:crypto";
-    import { PartitionedSecretBoundaryCrypto } from ${JSON.stringify(cryptoModule)};
-    import { createLocalPrivateRunFileBlobStore } from ${JSON.stringify(blobModule)};
-    const bytes = Uint8Array.from(Buffer.from(${JSON.stringify(Buffer.from(input.bytes).toString("base64"))}, "base64"));
-    const scope = ${JSON.stringify(SCOPE)};
-    const digest = "sha256:" + createHash("sha256").update(bytes).digest("hex");
-    const store = createLocalPrivateRunFileBlobStore({
-      root: ${JSON.stringify(input.root)}, maxBytes: 64,
-      cryptoBoundary: new PartitionedSecretBoundaryCrypto({ globalPassphrase: "private-run-file-blob-test-passphrase-at-least-32-bytes" }),
-      ${hook}
-    });
-    await store.putEncryptedImmutable({ scope, bytes, digest });
+    const { writeFile } = await import("node:fs/promises");
+    try {
+      const { createHash } = await import("node:crypto");
+      const { PartitionedSecretBoundaryCrypto } = await import(${JSON.stringify(cryptoModule)});
+      const { createLocalPrivateRunFileBlobStore } = await import(${JSON.stringify(blobModule)});
+      const bytes = Uint8Array.from(Buffer.from(${JSON.stringify(Buffer.from(input.bytes).toString("base64"))}, "base64"));
+      const scope = ${JSON.stringify(SCOPE)};
+      const digest = "sha256:" + createHash("sha256").update(bytes).digest("hex");
+      const store = createLocalPrivateRunFileBlobStore({
+        root: ${JSON.stringify(input.root)}, maxBytes: 64,
+        cryptoBoundary: new PartitionedSecretBoundaryCrypto({ globalPassphrase: "private-run-file-blob-test-passphrase-at-least-32-bytes" }),
+        ${hook}
+      });
+      await store.putEncryptedImmutable({ scope, bytes, digest });
+    } catch (error) {
+      const rawName = error instanceof Error ? error.name : "NonErrorThrow";
+      const name = ${diagnosticNames}.includes(rawName) ? rawName : "Error";
+      const rawCode = error && typeof error === "object" && "code" in error ? error.code : undefined;
+      const code = ${diagnosticCodes}.includes(rawCode) ? rawCode : "none";
+      ${failure ? `await writeFile(${failure}, JSON.stringify({ name, code }), { mode: 0o600 });` : ""}
+      process.exitCode = 1;
+    }
   `;
   return spawn(process.execPath, ["--eval", script], { stdio: "ignore" });
 }
 
-async function waitForPath(path: string, child: ChildProcess): Promise<void> {
+async function waitForPath(
+  path: string,
+  child: ChildProcess,
+  failurePath?: string,
+  expectedPhase: "publish" | "marker" | "after-final-link" | "after-temporary-unlink-before-sync" |
+    "after-existing-directory-sync" = "publish",
+  probe: (path: string) => Promise<unknown> = access,
+): Promise<void> {
   for (let attempt = 0; attempt < 1_000; attempt++) {
     try {
-      await access(path);
+      await probe(path);
       return;
     } catch {
-      if (child.exitCode !== null || child.signalCode !== null) throw new Error("blob writer exited before link phase");
+      if (child.exitCode !== null || child.signalCode !== null) {
+        try {
+          await access(path);
+          return;
+        } catch {
+          // A completed child can race the failed probe; only an absent marker remains a failure.
+        }
+        let cause = "unavailable";
+        if (failurePath) {
+          try {
+            const parsed: unknown = JSON.parse(await readFile(failurePath, "utf8"));
+            if (parsed && typeof parsed === "object" && "name" in parsed && "code" in parsed &&
+              typeof parsed.name === "string" && CHILD_DIAGNOSTIC_NAME_SET.has(parsed.name) &&
+              typeof parsed.code === "string" && CHILD_DIAGNOSTIC_CODE_SET.has(parsed.code)) {
+              cause = `${parsed.name}/${parsed.code}`;
+            }
+          } catch {
+            // Keep child diagnostics value-free; exit status is still useful.
+          }
+        }
+        throw new Error(
+          `blob writer exited before ${expectedPhase} phase ` +
+            `(code=${child.exitCode ?? "none"}, signal=${child.signalCode ?? "none"}, cause=${cause})`,
+        );
+      }
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
   }
@@ -120,6 +193,41 @@ async function waitForChild(child: ChildProcess): Promise<{ code: number | null;
     child.once("error", onError);
   });
 }
+
+test("waitForPath rechecks a marker on child exit and still rejects a missing marker", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "prf-race-"));
+  const marker = join(directory, "ready");
+  const script = `const { writeFile } = await import("node:fs/promises"); await writeFile(${JSON.stringify(marker)}, "ready");`;
+  const child = spawn(process.execPath, ["--eval", script], { stdio: "ignore" });
+  let probeCount = 0;
+  try {
+    await waitForPath(marker, child, undefined, "marker", async (path) => {
+      probeCount++;
+      if (probeCount === 1) {
+        expect(await waitForChild(child)).toEqual({ code: 0, signal: null });
+        throw Object.assign(new Error("injected failed probe"), { code: "ENOENT" });
+      }
+      return await access(path);
+    });
+    expect(probeCount).toBe(1);
+    await access(marker);
+    expect(await waitForChild(child)).toEqual({ code: 0, signal: null });
+
+    const failedChild = spawn(process.execPath, ["--eval", "process.exitCode = 17"], { stdio: "ignore" });
+    await expect(waitForPath(join(directory, "missing"), failedChild, undefined, "marker", async () => {
+      await waitForChild(failedChild);
+      throw Object.assign(new Error("injected missing marker"), { code: "ENOENT" });
+    })).rejects.toThrow("code=17");
+    expect(await waitForChild(failedChild)).toEqual({ code: 17, signal: null });
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      const childExit = waitForChild(child);
+      child.kill("SIGKILL");
+      await childExit.catch(() => undefined);
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("local private-run blob store encrypts at rest and reopens immutable bytes", async () => {
   const f = await fixture();
@@ -180,7 +288,7 @@ test("SIGKILL after final link is recovered by exact read and retry after proces
   let child: ChildProcess | undefined;
   try {
     child = spawnBlobWriter({ root: f.root, bytes, markerPath: marker, blockAtPhase: true });
-    await waitForPath(marker, child);
+    await waitForPath(marker, child, undefined, "after-final-link");
     const childExit = waitForChild(child);
     child.kill("SIGKILL");
     expect(await childExit).toEqual({ code: null, signal: "SIGKILL" });
@@ -211,6 +319,8 @@ test("SIGKILL after temp unlink is followed by directory sync before exact retry
   const bytes = new TextEncoder().encode("directory-sync-after-crash");
   const publicationMarker = join(dirname(f.root), "unlinked-before-sync");
   const retryMarker = join(dirname(f.root), "existing-directory-synced");
+  const publicationFailure = join(dirname(f.root), "publication-child-failure");
+  const retryFailure = join(dirname(f.root), "retry-child-failure");
   let publisher: ChildProcess | undefined;
   let retry: ChildProcess | undefined;
   try {
@@ -220,8 +330,9 @@ test("SIGKILL after temp unlink is followed by directory sync before exact retry
       markerPath: publicationMarker,
       phase: "after-temporary-unlink-before-sync",
       blockAtPhase: true,
+      failurePath: publicationFailure,
     });
-    await waitForPath(publicationMarker, publisher);
+    await waitForPath(publicationMarker, publisher, publicationFailure, "after-temporary-unlink-before-sync");
     const blobId = blobIdFor(SCOPE, digest(bytes));
     const path = blobPath(f.root, blobId);
     expect((await lstat(path)).nlink).toBe(1);
@@ -236,8 +347,9 @@ test("SIGKILL after temp unlink is followed by directory sync before exact retry
       bytes,
       markerPath: retryMarker,
       phase: "after-existing-directory-sync",
+      failurePath: retryFailure,
     });
-    await waitForPath(retryMarker, retry);
+    await waitForPath(retryMarker, retry, retryFailure, "after-existing-directory-sync");
     expect(await waitForChild(retry)).toEqual({ code: 0, signal: null });
     expect((await lstat(path)).nlink).toBe(1);
     const reopened = createLocalPrivateRunFileBlobStore({ root: f.root, maxBytes: 64, cryptoBoundary: TEST_CRYPTO });
@@ -264,7 +376,7 @@ test("concurrent exact process retry reaps only the winner's temporary link and 
   let retry: ChildProcess | undefined;
   try {
     winner = spawnBlobWriter({ root: f.root, bytes, markerPath: marker, releasePath: release, blockAtPhase: true });
-    await waitForPath(marker, winner);
+    await waitForPath(marker, winner, undefined, "after-final-link");
     retry = spawnBlobWriter({ root: f.root, bytes });
     const retryExit = await waitForChild(retry);
     expect(retryExit).toEqual({ code: 0, signal: null });
