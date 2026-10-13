@@ -107,6 +107,7 @@ COPY contract/reference/host-blocklist.ts ./contract/reference/host-blocklist.ts
 COPY lib/opentofu-configuration/src/mod.ts ./lib/opentofu-configuration/src/mod.ts
 COPY lib/rootgen/src/mod.ts ./lib/rootgen/src/mod.ts
 COPY core/shared/open-tofu-state-metadata.ts ./core/shared/open-tofu-state-metadata.ts
+COPY core/shared/private_run_file_refresh.ts ./core/shared/private_run_file_refresh.ts
 COPY runner/entrypoint.ts ./runner/entrypoint.ts
 # entrypoint.ts is a thin re-export/server shell; the runner implementation
 # lives in runner/lib/*.ts (P3 god-file split). These MUST be copied or the

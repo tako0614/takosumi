@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { chmod, link, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   PRIVATE_RUN_FILE_REFRESH_CAPABILITY,
   privateRunFileManifestDigest,
@@ -426,8 +426,8 @@ test("private Run file refresh refuses symlink and hardlink descriptor replaceme
     expect(await readFile(outside).catch(() => undefined)).toBeUndefined();
 
     await rm(path);
-    const foreign = join(root, "foreign.json");
-    await Bun.write(foreign, "foreign");
+    const foreign = join(dirname(path), "foreign.json");
+    await writeFile(foreign, "foreign", { mode: 0o600 });
     await link(foreign, path);
     const hardlinkUpdate = await putRefresh({
       kind: "takosumi.private-run-files.refresh@v1",
