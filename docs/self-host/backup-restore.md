@@ -109,7 +109,7 @@ volume は対象にしません。`restore_dir` の一時設定も最後に削�
 stock 配布は runner と artifact store を持たないため、Git source、plan artifact、provider 側の実リソースは
 この PostgreSQL backup から復元されません。custom composition は実際の durable store も個別に復旧します。
 
-Cloudflare 構成は [災害復旧](../operations/disaster-recovery.md) と
-[backup/restore 演習](../operations/backup-restore-drills.md)を参照してください。
+Cloudflare 構成は [災害復旧](https://github.com/tako0614/takosumi/blob/main/docs/operations/disaster-recovery.md) と
+[backup/restore 演習](https://github.com/tako0614/takosumi/blob/main/docs/operations/backup-restore-drills.md)を参照してください。
 Workspace export は DB 全体、store、鍵の backup の代わりになりません。秘密値と raw backup は
 public repository、PR、運用ログに保存しません。

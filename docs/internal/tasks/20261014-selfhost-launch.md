@@ -53,3 +53,6 @@
   assertion. The test now waits for that request, keeping the same `>=2`
   requirement, before checking the final card and navigation recovery.
   Product reload behavior is unchanged; the complete gate is rerun.
+- Docs build finding: operational runbooks physically exist but are excluded
+  from the public VitePress site. Backup pages now link to their repository
+  source instead of an unpublished site route, preserving the exclusion.

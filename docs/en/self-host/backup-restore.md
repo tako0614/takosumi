@@ -112,7 +112,7 @@ decryption. The stock distribution has no runner or artifact store, so this Post
 backup does not restore Git sources, plan artifacts, or provider-owned infrastructure.
 Custom compositions must also restore their actual durable stores.
 
-For Cloudflare, use the [disaster recovery](../../operations/disaster-recovery.md) and
-[backup/restore drills](../../operations/backup-restore-drills.md) runbooks. Workspace export
+For Cloudflare, use the [disaster recovery](https://github.com/tako0614/takosumi/blob/main/docs/operations/disaster-recovery.md) and
+[backup/restore drills](https://github.com/tako0614/takosumi/blob/main/docs/operations/backup-restore-drills.md) runbooks. Workspace export
 does not replace a full database, store, and key backup. Keep secret values and raw backups
 out of public repositories, PRs, and logs.
