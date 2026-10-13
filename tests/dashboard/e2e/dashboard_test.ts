@@ -3512,12 +3512,14 @@ test.describe("Takosumi dashboard browser surface", () => {
     // A stale chunk reloads once onto the new build; when the chunk is still
     // missing after that, the page-level card appears instead of a blank app.
     await gotoDashboardDocument(page, "/graph");
+    // The first fallback can render while location.reload() is still pending.
+    // Observe the second chunk request before checking the final error card.
+    await expect.poll(() => blockedChunkRequests).toBeGreaterThanOrEqual(2);
     await expect(
       page.getByRole("heading", {
         name: /This page couldn't be shown|この画面を表示できませんでした/u,
       }),
     ).toBeVisible();
-    expect(blockedChunkRequests).toBeGreaterThanOrEqual(2);
     await expect(page.getByText(rootReloadCard)).toHaveCount(0);
 
     // The chrome stays usable: leaving the broken page clears the error.

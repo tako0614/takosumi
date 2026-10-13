@@ -5,7 +5,8 @@
 - Scope: recovery-plan row 5; rewrite bilingual self-host procedures against
   current node-postgres source and complete runtime Store URL forwarding.
 - WIP `5e401695a` is a read-only specification memo; no file copies or cherry-picks.
-- PR #430 is open: leave its Store capability changes to that owner. This work
+- PR #430 was open at the start and merged during verification: leave its Store
+  capability changes to that owner. This work
   uses the existing discovery endpoint and dashboard runtime URL loader.
 - Verification: focused regression tests; disposable local Compose project on
   loopback port 26401; migrations, health, dashboard, runtime discovery,
@@ -46,3 +47,9 @@
   final review has no blockers. This is not the quality/release owner's approval.
 - Publication evidence records the final head, the full owner-gate command and
   result, and cleanup in the PR body; approval/CI status remains external.
+- Full-gate finding: the existing stale-chunk browser test read its request
+  count on the transient first fallback before automatic reload finished.
+  The failure trace shows the second chunk request after the synchronous
+  assertion. The test now waits for that request, keeping the same `>=2`
+  requirement, before checking the final card and navigation recovery.
+  Product reload behavior is unchanged; the complete gate is rerun.
