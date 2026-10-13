@@ -94,6 +94,27 @@ This reference composition has no OpenTofu runner. Git sync, plan, and apply
 fail with `runner_capability_missing` until an operator composition supplies
 one (see `deploy/local-substrate/`).
 
+The `takosumi-runtime` volume preserves control and pre-destroy exports at
+`TAKOSUMI_BACKUP_ARTIFACTS_DIR` (default `/var/lib/takosumi/backups`). The image
+initializes this path for uid/gid 1000:1000 with mode 0700. Custom bind mounts
+must provide existing parent directories and the same ownership/permissions;
+the server refuses unsafe paths rather than changing an existing mount.
+Objects are mode 0600, immutable, and named `sha256(ref).artifact` (hex digest
+without the `sha256:` prefix). Control/state/service-data bundles are sealed
+with `TAKOSUMI_SECRET_STORE_PASSPHRASE`; public artifact manifests stay plain.
+Keep the volume and its decryption keys in separately protected backups.
+
+During the seven-day uninstall grace period, the ordinary Capsule backup API
+can export the Capsule. After the deadline, the #422 finalizer attempts its
+own Capsule-scoped export before teardown. A custom runner composition must
+also supply `backupStateObjectReader` to `buildComposedApp`/`buildComposedServer`
+for its exact sealed state objects; a configured backup volume alone cannot
+read runner state. Missing readers/objects are reported as export failures,
+and #422's existing failed-export teardown policy remains in effect. These
+partial control exports have no complete restore importer and do not replace
+database, artifact, provider-data or key backups. No runner is added by this
+backup adapter.
+
 For a Takos native shell, register a separate host-specific public client in
 `TAKOSUMI_ACCOUNTS_CLIENTS`. Its `redirectUris` entry must be exactly
 `takos://oauth/callback`, `tokenEndpointAuthMethod` must be `none`, and

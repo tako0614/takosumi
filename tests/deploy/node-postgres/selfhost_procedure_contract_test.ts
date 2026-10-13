@@ -223,6 +223,23 @@ test(".env.example declares every secret the composed server reads at boot", asy
   expect(entries.get("TAKOSUMI_SECRET_STORE_PASSPHRASE")).toBe("");
 });
 
+test("self-host backup exports use a persistent private mount under the read-only runtime", async () => {
+  const compose = parseYaml(await read("deploy/node-postgres/docker-compose.yml")) as {
+    services: Record<string, { user?: string; read_only?: boolean; volumes?: string[]; environment?: Record<string, string> }>;
+    volumes: Record<string, unknown>;
+  };
+  const accounts = compose.services.accounts!;
+  expect(accounts.user).toBe("1000:1000");
+  expect(accounts.read_only).toBe(true);
+  expect(accounts.volumes).toContain("takosumi-runtime:/var/lib/takosumi");
+  expect(compose.volumes).toHaveProperty("takosumi-runtime");
+  expect(accounts.environment?.TAKOSUMI_BACKUP_ARTIFACTS_DIR).toBe("${TAKOSUMI_BACKUP_ARTIFACTS_DIR:-/var/lib/takosumi/backups}");
+  const runtime = stage(await read("deploy/node-postgres/Dockerfile"), "final");
+  expect(runtime).toContain("mkdir -p /var/lib/takosumi/backups");
+  expect(runtime).toContain("chown -R bun:bun /var/lib/takosumi");
+  expect(runtime).toContain("chmod 0700 /var/lib/takosumi /var/lib/takosumi/backups");
+});
+
 test("self-host docs only run package scripts that exist", async () => {
   const rootPackage = JSON.parse(await read("package.json")) as {
     scripts: Record<string, string>;

@@ -235,6 +235,25 @@ describe("Capsule detail StateVersion surface", () => {
     expect(en["app.uninstall.banner"]).toContain("{date}");
   });
 
+  test("the delete review warns about dependent services and graph state", () => {
+    const deleteFlowIndex = source.search(/<details\s+id="delete"/);
+    const deleteFlow = source.slice(
+      deleteFlowIndex,
+      source.indexOf("</details>", deleteFlowIndex),
+    );
+    expect(source).toContain(
+      'tab() === "deploys" ? null : (workspaceId() ?? null)',
+    );
+    expect(source).toContain("edge.producerCapsuleId === inst.id");
+    expect(deleteFlow).toContain("uninstallDependencyWarning()");
+    expect(deleteFlow).toContain("uninstallDependencyCheckStatus()");
+    expect(source).toContain('"app.uninstall.dependencyWarning"');
+    expect(source).toContain('"app.uninstall.dependencyCheckFailed"');
+    expect(en["app.uninstall.dependencyWarning"]).toContain("{services}");
+    expect(ja["app.uninstall.dependencyWarning"]).toContain("{services}");
+    expect(source).toContain("uninstallDependencyWarning(),");
+  });
+
   test("keeps provider binding editing behind advanced service settings", () => {
     expect(source).toContain("providerConnectionDisplayName");
     expect(source).toContain("isProviderConnectionCandidate");

@@ -124,6 +124,7 @@ function structuredLog(
  * pool / store / accounts-handler / serve plumbing.
  */
 export interface ComposedServerOverrides {
+  readonly backupStateObjectReader?: Parameters<typeof buildComposedApp>[0]["backupStateObjectReader"];
   readonly sqlClient?: Parameters<typeof buildComposedApp>[0]["sqlClient"];
   readonly privateRunFiles?: Parameters<typeof buildComposedApp>[0]["privateRunFiles"];
   readonly opentofuControlStore?: Parameters<
@@ -254,6 +255,9 @@ export async function buildComposedServer(
       ? { runtimeBindingDerivationKey: overrides.runtimeBindingDerivationKey }
       : {}),
     sqlClient: overrides.sqlClient ?? wrapServiceSqlClient(pool),
+    ...(overrides.backupStateObjectReader
+      ? { backupStateObjectReader: overrides.backupStateObjectReader }
+      : {}),
     ...(overrides.privateRunFiles
       ? { privateRunFiles: overrides.privateRunFiles }
       : {}),

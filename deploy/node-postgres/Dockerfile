@@ -25,6 +25,7 @@ COPY cli /work/cli
 COPY deploy/cloudflare/d1-rest-transport.ts /work/deploy/cloudflare/d1-rest-transport.ts
 COPY deploy/node-postgres/package.json /work/deploy/node-postgres/package.json
 COPY deploy/node-postgres/src /work/deploy/node-postgres/src
+COPY worker/src/state_crypto.ts /work/worker/src/state_crypto.ts
 RUN bun install --frozen-lockfile --production
 
 # Build the dashboard SPA so the runtime image can serve it from the same
@@ -72,6 +73,7 @@ COPY --from=deps --chown=bun:bun /work/accounts/contract /app/accounts/contract
 COPY --from=deps --chown=bun:bun /work/accounts/service /app/accounts/service
 COPY --from=deps --chown=bun:bun /work/cli /app/cli
 COPY --from=deps --chown=bun:bun /work/deploy/node-postgres /app/deploy/node-postgres
+COPY --from=deps --chown=bun:bun /work/worker/src/state_crypto.ts /app/worker/src/state_crypto.ts
 COPY --from=deps --chown=bun:bun /work/deploy/cloudflare/d1-rest-transport.ts /app/deploy/cloudflare/d1-rest-transport.ts
 COPY --from=dashboard --chown=bun:bun \
   /work/dashboard/dist \
@@ -90,6 +92,11 @@ ENV TAKOSUMI_ACCOUNTS_ALLOW_NET=${TAKOSUMI_ACCOUNTS_ALLOW_NET}
 ENV TAKOSUMI_ACCOUNTS_BIND_HOST=0.0.0.0
 ENV TAKOSUMI_ACCOUNTS_PORT=8787
 EXPOSE 8787
+
+# Docker initializes the named runtime volume from this private, bun-owned path.
+RUN mkdir -p /var/lib/takosumi/backups \
+  && chown -R bun:bun /var/lib/takosumi \
+  && chmod 0700 /var/lib/takosumi /var/lib/takosumi/backups
 
 # `oven/bun` ships a non-root `bun` user (uid/gid 1000:1000).
 USER bun
