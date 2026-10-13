@@ -216,6 +216,16 @@ export async function handleCapsuleInstallConfigReAdoption(
   const current = authority.capsule;
   const currentConfig = authority.installConfig;
   const currentDigest = authority.installConfigDigest;
+  if (current.status === "uninstalled") {
+    return errorJson(
+      "failed_precondition",
+      "The Capsule is scheduled for deletion; cancel the uninstall first.",
+      409,
+      ctx.request,
+      {},
+      { reason: "capsule_uninstalled" },
+    );
+  }
   if (
     current.status === "destroyed" ||
     current.status === "disabled" ||

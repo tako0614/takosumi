@@ -64,6 +64,28 @@ export function describeActivityEvent(
     case "capsule.auto_update_enabled": {
       return { title: t("notif.event.autoUpdateOn") };
     }
+    case "capsule.uninstall_scheduled": {
+      return {
+        title: name
+          ? t("notif.event.uninstallScheduledNamed", { name })
+          : t("notif.event.uninstallScheduled"),
+      };
+    }
+    case "capsule.uninstall_cancelled": {
+      return {
+        title: name
+          ? t("notif.event.uninstallCancelledNamed", { name })
+          : t("notif.event.uninstallCancelled"),
+      };
+    }
+    case "capsule.uninstall_blocked": {
+      return {
+        title: name
+          ? t("notif.event.uninstallBlockedNamed", { name })
+          : t("notif.event.uninstallBlocked"),
+        detail: t("notif.event.uninstallBlockedDetail"),
+      };
+    }
     case "capsule.auto_update_disabled": {
       return { title: t("notif.event.autoUpdateOff") };
     }

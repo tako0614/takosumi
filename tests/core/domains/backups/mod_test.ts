@@ -1332,3 +1332,65 @@ test("listBackups returns the Workspace's pointers newest-first", async () => {
     });
   }
 });
+
+test("a Capsule-scoped export narrows Capsule-owned rows to that Capsule", async () => {
+  const { service, store, artifactStore } = makeService();
+  const kept = await seedCapsuleModel(store, {
+    workspaceId: "ws_scope",
+    capsuleId: "cap_scope_kept",
+    sourceId: "src_scope_kept",
+    installConfigId: "cfg_scope_kept",
+    snapshotId: "snap_scope_kept",
+    name: "kept",
+  });
+  await seedCapsuleModel(store, {
+    workspaceId: "ws_scope",
+    capsuleId: "cap_scope_other",
+    sourceId: "src_scope_other",
+    installConfigId: "cfg_scope_other",
+    snapshotId: "snap_scope_other",
+    name: "other",
+  });
+
+  const scoped = await service.createBackup({
+    workspaceId: "ws_scope",
+    capsuleId: kept.capsule.id,
+    environment: kept.capsule.environment,
+    scope: "capsule",
+  });
+  expect(scoped.capsuleId).toBe(kept.capsule.id);
+  const bundle = await readBundle(artifactStore!, scoped.ref);
+  expect(bundle.scope).toEqual({ kind: "capsule", capsuleId: kept.capsule.id });
+  expect(bundle.capsules.map((capsule) => (capsule as { id: string }).id))
+    .toEqual([kept.capsule.id]);
+  expect(bundle.sources.map((source) => source.id)).toEqual(["src_scope_kept"]);
+  expect(bundle.sourceSnapshots.map((snapshot) => snapshot.id)).toEqual([
+    "snap_scope_kept",
+  ]);
+  expect(
+    bundle.installConfigs.map((config) => (config as { id: string }).id),
+  ).toEqual(["cfg_scope_kept"]);
+
+  // The default scope is unchanged: the whole Workspace, even when a Capsule
+  // labels the Run.
+  const whole = await service.createBackup({
+    workspaceId: "ws_scope",
+    capsuleId: kept.capsule.id,
+  });
+  const wholeBundle = await readBundle(artifactStore!, whole.ref);
+  expect(wholeBundle.scope).toBeUndefined();
+  expect(
+    wholeBundle.capsules.map((capsule) => (capsule as { id: string }).id).sort(),
+  ).toEqual(["cap_scope_kept", "cap_scope_other"]);
+
+  await expect(
+    service.createBackup({ workspaceId: "ws_scope", scope: "capsule" }),
+  ).rejects.toMatchObject({ code: "invalid_argument" });
+  await expect(
+    service.createBackup({
+      workspaceId: "ws_scope",
+      capsuleId: "cap_scope_missing",
+      scope: "capsule",
+    }),
+  ).rejects.toMatchObject({ code: "not_found" });
+});

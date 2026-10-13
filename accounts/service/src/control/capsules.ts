@@ -176,7 +176,11 @@ export async function handleCapsules(
     const lifecycleMutation = (method === "PATCH" && segments.length === 2) ||
       (capsule.status !== "destroyed" && (
         (method === "DELETE" && segments.length === 2 && !capsuleHasAppliedState(capsule)) ||
-        (method === "POST" && segments.length === 3 && segments[2] === "abandon")
+        (method === "POST" && segments.length === 3 && (
+          segments[2] === "abandon" ||
+          segments[2] === "uninstall" ||
+          segments[2] === "cancel-uninstall"
+        ))
       ));
     const capturedManagement = lifecycleMutation ||
         (method === "POST" && segments.length === 3 && segments[2] === "backups")
@@ -248,6 +252,51 @@ export async function handleCapsules(
         reason: "restart requested before first successful apply",
         expectedWorkspaceManagementAuthority: requireCapturedManagement(),
       });
+    }
+    if (leaf === "uninstall" && segments.length === 3) {
+      if (method !== "POST") return methodNotAllowed("POST");
+      if (capsule.status === "destroyed") {
+        return json({ capsule: publicCapsule(capsule), alreadyDeleted: true });
+      }
+      const schedule = operations.capsules.scheduleCapsuleUninstall;
+      if (typeof schedule !== "function") {
+        return capsuleUninstallUnavailable();
+      }
+      const updated = await schedule.call(operations.capsules, capsule.id, {
+        actor: ctx.session.subject,
+        expectedWorkspaceManagementAuthority: requireCapturedManagement(),
+      });
+      return jsonStatus(
+        {
+          capsule: publicCapsule(updated),
+          ...(typeof operations.capsules.uninstallGraceDays === "number"
+            ? { graceDays: operations.capsules.uninstallGraceDays }
+            : {}),
+        },
+        202,
+      );
+    }
+    if (leaf === "cancel-uninstall" && segments.length === 3) {
+      if (method !== "POST") return methodNotAllowed("POST");
+      const cancel = operations.capsules.cancelCapsuleUninstall;
+      if (typeof cancel !== "function") {
+        return capsuleUninstallUnavailable();
+      }
+      if (capsule.status === "destroyed") {
+        return errorJson(
+          "failed_precondition",
+          "The Capsule was already deleted.",
+          409,
+          undefined,
+          {},
+          { reason: "capsule_not_uninstalled" },
+        );
+      }
+      const updated = await cancel.call(operations.capsules, capsule.id, {
+        actor: ctx.session.subject,
+        expectedWorkspaceManagementAuthority: requireCapturedManagement(),
+      });
+      return json({ capsule: publicCapsule(updated) });
     }
     if (leaf === "plan" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
@@ -549,6 +598,17 @@ async function deleteCapsule(
     actor,
   });
   return jsonStatus(await publicPlanActionResponse(operations, response), 202);
+}
+
+function capsuleUninstallUnavailable(): Response {
+  return errorJson(
+    "failed_precondition",
+    "Scheduled uninstall is not available on this host.",
+    409,
+    undefined,
+    {},
+    { reason: "capsule_uninstall_unavailable" },
+  );
 }
 
 function capsuleHasAppliedState(capsule: Capsule): boolean {

@@ -20,6 +20,7 @@ import {
   OpenTofuController,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { CapsulesService } from "../../../../core/domains/capsules/mod.ts";
 import type { OpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { DependenciesService } from "../../../../core/domains/dependencies/mod.ts";
 import {
@@ -579,4 +580,61 @@ test("workspace_drift_check groups active Capsules into read-only drift_check ru
     runs: Record<string, string>;
   };
   expect(Object.keys(graph.runs).sort()).toEqual(["inst_core", "inst_files"]);
+});
+
+test("workspace_update leaves an uninstalled downstream consumer out of the group", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  await seedChain(store, "production");
+  const controller = controllerWith(
+    store,
+    recordingRunner(
+      new Map([
+        ["inst_core", "v1.example.com"],
+        ["inst_files", "files.example.com"],
+        ["inst_talk", "talk.example.com"],
+      ]),
+    ),
+  );
+  for (const id of ["inst_core", "inst_files", "inst_talk"]) {
+    await applyPlan(controller, id);
+  }
+  // talk is in its uninstall grace period: only its teardown may run.
+  await new CapsulesService({ store }).scheduleCapsuleUninstall("inst_talk");
+  const changed = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    store,
+    runner: recordingRunner(
+      new Map([
+        ["inst_core", "v2.example.com"],
+        ["inst_files", "files.example.com"],
+        ["inst_talk", "talk.example.com"],
+      ]),
+    ),
+    vault: fakeProviderVault() as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    now: sequenceNow(20_000),
+    newId: (() => {
+      let n = 1;
+      return (prefix: string) => `${prefix}_unin${String(n++).padStart(6, "0")}`;
+    })(),
+  });
+  await applyPlan(changed, "inst_core");
+  expect((await changed.getCapsule("inst_files")).capsule.status).toEqual(
+    "stale",
+  );
+
+  const created = await new RunGroupsService({
+    store,
+    controller: changed,
+    now: () => "2026-06-06T01:00:00.000Z",
+  }).createWorkspaceUpdate("workspace_test");
+  const graph = JSON.parse(created.runGroup.graphJson) as {
+    order: string[][];
+    runs: Record<string, string>;
+  };
+  expect(graph.order).toEqual([["inst_files"]]);
+  expect(Object.keys(graph.runs)).toEqual(["inst_files"]);
+  expect((await changed.getCapsule("inst_talk")).capsule.status).toEqual(
+    "uninstalled",
+  );
 });

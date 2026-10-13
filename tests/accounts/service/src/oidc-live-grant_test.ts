@@ -196,6 +196,32 @@ test("authorize resolves a current Capsule grant and terminal status revokes its
   expect(store.findOidcClientForCapsule(capsuleId)).toBeUndefined();
 });
 
+test("an uninstalled Capsule pauses sign-in without revoking its client", async () => {
+  const { store, state, operations } = await liveGrantFixture();
+  state.capsuleStatus = "uninstalled";
+  const paused = await handleAuthorize({
+    ...authorizeRequest(),
+    flow,
+    clients: new Map(),
+    store,
+    operations,
+  });
+  expect(paused.status).toBe(400);
+  expect(await paused.json()).toMatchObject({ error: "unauthorized_client" });
+  // Cancelling the uninstall must be able to resume the same client.
+  expect(store.findOidcClient(clientId)).toBeDefined();
+
+  state.capsuleStatus = "active";
+  const resumed = await handleAuthorize({
+    ...authorizeRequest(),
+    flow,
+    clients: new Map(),
+    store,
+    operations,
+  });
+  expect(resumed.status).toBe(302);
+});
+
 test("repository-materialized OIDC keeps its live grant without a static client id mapping", async () => {
   const { store, operations, installConfig } = await liveGrantFixture();
   const generic = installConfig as unknown as InstallConfig & {
