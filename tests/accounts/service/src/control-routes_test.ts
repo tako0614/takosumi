@@ -3786,7 +3786,8 @@ test("retired projection and upload operations have no Accounts handler", async 
   ).toBeUndefined();
 });
 
-test("Capsule uninstall schedules the grace state with the session actor and captured authority", async () => {
+for (const deletion of ["uninstall", "delete", "delete-false"] as const) {
+test(`Capsule ${deletion} schedules grace with the session actor and captured authority`, async () => {
   const fixture = operationsFixture();
   const base = await fixture.operations.capsules.getCapsule("cap_1");
   const calls: unknown[] = [];
@@ -3824,12 +3825,12 @@ test("Capsule uninstall schedules the grace state with the session actor and cap
   const response = await handleCapsules(
     context(
       operations,
-      new Request("https://app.example.test/api/v1/capsules/cap_1/uninstall", {
-        method: "POST",
+      new Request(`https://app.example.test/api/v1/capsules/cap_1${deletion === "uninstall" ? "/uninstall" : deletion === "delete-false" ? "?immediate=false" : ""}`, {
+        method: deletion === "uninstall" ? "POST" : "DELETE",
       }),
     ),
-    ["capsules", "cap_1", "uninstall"],
-    "POST",
+    deletion === "uninstall" ? ["capsules", "cap_1", "uninstall"] : ["capsules", "cap_1"],
+    deletion === "uninstall" ? "POST" : "DELETE",
   );
   expect(response?.status).toBe(202);
   expect(await response?.json()).toMatchObject({
@@ -3868,6 +3869,8 @@ test("Capsule uninstall schedules the grace state with the session actor and cap
   );
   expect(wrongMethod?.status).toBe(405);
 });
+
+}
 
 test("Capsule uninstall and cancel fail closed on a host without scheduled uninstall", async () => {
   const fixture = operationsFixture();

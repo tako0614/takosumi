@@ -1883,10 +1883,17 @@ export async function cancelCapsuleUninstall(
 }
 
 export interface DeleteCapsuleResult {
-  readonly capsule: Capsule;
+  readonly capsule?: Capsule;
+  readonly run?: unknown;
+  readonly graceDays?: number;
   readonly abandoned?: boolean;
   readonly alreadyDeleted?: boolean;
   readonly projectionStatus?: string;
+}
+
+export interface DeleteCapsuleOptions {
+  /** Create the legacy reviewable destroy Plan instead of scheduling deletion. */
+  readonly immediate?: boolean;
 }
 
 export interface CapsuleAbandonmentExpectation {
@@ -1932,17 +1939,20 @@ export async function abandonUnappliedCapsule(
 }
 
 /**
- * Deletes an Capsule from the dashboard flow.
- *
- * Applied Capsules still return a destroy-plan Run envelope; unapplied failed
- * Capsules may be abandoned immediately by the backend so broken first installs
- * do not get stuck behind provider/state prerequisites.
+ * Schedules deletion by default. Applied Capsules retain their data through the
+ * operator-configured grace period and can be restored with cancel-uninstall.
+ * Passing `immediate: true` creates the legacy reviewable destroy Plan.
+ * Never-applied Capsules keep the existing abandonment behavior.
  */
 export async function deleteCapsule(
   capsuleId: string,
-): Promise<DeleteCapsuleResult | unknown> {
-  return await controlFetch<DeleteCapsuleResult | unknown>(
-    `${BASE}/capsules/${encodeURIComponent(capsuleId)}`,
+  options: DeleteCapsuleOptions = {},
+): Promise<DeleteCapsuleResult> {
+  const immediate = options.immediate === undefined
+    ? ""
+    : `?immediate=${options.immediate}`;
+  return await controlFetch<DeleteCapsuleResult>(
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}${immediate}`,
     { method: "DELETE" },
   );
 }

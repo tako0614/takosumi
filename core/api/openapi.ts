@@ -3817,6 +3817,22 @@ export function workspaceProjectAndCapsuleRequestSchemas(): Record<
       },
       additionalProperties: false,
     },
+    DeleteCapsuleResponse: {
+      oneOf: [
+        {
+          type: "object",
+          required: ["capsule"],
+          properties: {
+            capsule: ref("Capsule"),
+            graceDays: { type: "integer", minimum: 0, maximum: 365 },
+            abandoned: { const: true },
+            alreadyDeleted: { const: true },
+          },
+          additionalProperties: false,
+        },
+        ref("RunResponse"),
+      ],
+    },
     ListCapsulesResponse: {
       type: "object",
       required: ["capsules"],

@@ -79,7 +79,6 @@ import {
   getCapsuleUsageSummary,
   getCurrentResourceInventory,
   type CapsuleCurrentResourceInventory,
-  scheduleCapsuleUninstall,
   setCapsuleAutoUpdate,
 } from "../../lib/control-api.ts";
 import { formatUsdMicros } from "../../lib/billing-format.ts";
@@ -496,7 +495,7 @@ function Inner() {
   );
   const destroyPlan = createAction(async () => {
     const workspace = capsuleData()?.workspaceId;
-    const envelope = await deleteCapsule(capsuleId());
+    const envelope = await deleteCapsule(capsuleId(), { immediate: true });
     const runId = extractRunId(envelope);
     if (workspace) {
       clearCapsuleListCache(workspace);
@@ -517,7 +516,7 @@ function Inner() {
    *
    * The exception: a service that has never applied has no state to plan
    * against, and the backend abandons it immediately (see
-   * `deleteCapsule` in lib/control-api.ts). That path produces no run and
+   * the default `deleteCapsule` path in lib/control-api.ts). That path produces no run and
    * therefore never reached the destroy-apply confirmation at all — so it, and
    * only it, confirms here.
    */
@@ -548,7 +547,7 @@ function Inner() {
       danger: true,
     });
     if (!ok) return;
-    await scheduleCapsuleUninstall(capsuleId());
+    await deleteCapsule(capsuleId());
     clearCapsuleCaches();
     await refetchCapsule();
   });

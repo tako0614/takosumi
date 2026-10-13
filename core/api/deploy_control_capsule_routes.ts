@@ -33,6 +33,7 @@ import {
   WORKSPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
 import { OpenTofuControllerError } from "../domains/deploy-control/errors.ts";
+import { capsuleDeleteIsImmediate } from "../domains/capsules/delete_request.ts";
 import { publicInstallConfigRecord } from "../domains/capsules/public_install_config.ts";
 import {
   TAKOSUMI_API_CAPSULE_STATE_VERSIONS_ROUTE,
@@ -245,13 +246,15 @@ export const DEPLOY_CONTROL_CAPSULE_ENDPOINTS: readonly DeployControlEndpoint[] 
       method: "DELETE",
       path: TAKOSUMI_API_CAPSULE_ROUTE,
       summary:
-        "Starts the canonical destroy flow by creating a destroy-plan Run; approval + destroy_apply perform teardown.",
+        "Immediate destroy Plan requires immediate=true; applied default DELETE requires the Accounts public API with an authenticated uninstall requester. Never-applied Capsules are abandoned.",
       auth: "deploy-control-token",
       operationId: "deleteCapsule",
       openapi: {
         pathParams: ["capsuleId"],
+        query: ["immediate"],
         okStatus: "202",
-        okSchema: "RunResponse",
+        alternateOkStatuses: ["200"],
+        okSchema: "DeleteCapsuleResponse",
       },
       notImplementedMessage: "capsules not wired",
     },
@@ -549,7 +552,26 @@ export function mountDeployControlCapsuleRoutes(
         if (!prepared) throw new Error("Capsule lifecycle admission was not captured");
         if (!prepared.ok) throw prepared.error;
         const principal = auth.principal;
-        ensureWorkspacePermission(principal, prepared.existing.capsule.workspaceId);
+        try {
+          ensureWorkspacePermission(principal, prepared.existing.capsule.workspaceId);
+          if (capsuleHasAppliedState(prepared.existing.capsule) && prepared.existing.capsule.status !== "destroyed") {
+            ensureOperationPermission(principal, "destroy");
+          }
+        } catch (error) {
+          await dependencies.activityService?.record({
+            workspaceId: prepared.existing.capsule.workspaceId,
+            actorId: principal.actor,
+            action: "capsule.deletion_rejected",
+            targetType: "capsule",
+            targetId: idCheck.value,
+            metadata: { method: "DELETE", action: "delete", reason: "scope_denied" },
+          });
+          throw error;
+        }
+        const immediate = capsuleDeleteIsImmediate(new URL(c.req.url));
+        if (prepared.existing.capsule.status === "destroyed") {
+          return c.json({ ...capsuleResponse(prepared.existing.capsule), alreadyDeleted: true }, 200);
+        }
         if (!capsuleHasAppliedState(prepared.existing.capsule)) {
           if (!prepared.authority.ok) throw prepared.authority.error;
           const capsule = await capsules.abandonUnappliedCapsule(
@@ -559,7 +581,13 @@ export function mountDeployControlCapsuleRoutes(
           );
           return c.json({ ...capsuleResponse(capsule), abandoned: true }, 202);
         }
-        ensureOperationPermission(principal, "destroy");
+        if (!immediate) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            "Scheduled deletion requires an authenticated requester; use DELETE on the Accounts /api/v1/capsules API.",
+            { reason: "capsule_uninstall_requester_unavailable" },
+          );
+        }
         ensureRunnerProfileSelectionPermission(principal, undefined);
         const response = await controller.createCapsuleDestroyPlan(idCheck.value, {
           actor: principal.actor,

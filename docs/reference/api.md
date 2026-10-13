@@ -209,7 +209,7 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 | GET      | `/api/v1/capsules/{capsuleId}`                             | Capsule を読む                               |
 | POST     | `/api/v1/capsules/{capsuleId}/install-config-re-adoptions` | SourceSnapshot の InstallConfig を再採用する |
 | PATCH    | `/api/v1/capsules/{capsuleId}`                             | Capsule を更新する                           |
-| DELETE   | `/api/v1/capsules/{capsuleId}`                             | 破棄計画を作る                               |
+| DELETE   | `/api/v1/capsules/{capsuleId}`                             | 削除を予約する（即時破棄計画は `?immediate=true`） |
 | POST     | `/api/v1/capsules/{capsuleId}/uninstall`                   | 猶予付きの削除 (二段階アンインストール) を予約する |
 | POST     | `/api/v1/capsules/{capsuleId}/cancel-uninstall`            | 猶予期間中の削除予約を取り消す               |
 | GET      | `/api/v1/capsules/{capsuleId}/outputs`                     | 公開 Output を読む                           |
@@ -222,6 +222,25 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 | GET      | `/api/v1/workspaces/{workspaceId}/current-state-versions`  | 現在の StateVersion をまとめて読む           |
 | GET      | `/api/v1/capsule-configs`                                  | Capsule 作成設定を一覧する                   |
 | GET      | `/api/v1/capsule-configs/{capsuleConfigId}`                | Capsule 作成設定を読む                       |
+
+Capsule の削除 API は Workspace owner/admin と `capsules:write` scope を要求します。
+`DELETE /api/v1/capsules/{capsuleId}` は既定で適用済み Capsule の削除を予約し、`202`
+`{capsule,graceDays}` を返します。猶予期間は operator 設定
+`TAKOSUMI_UNINSTALL_GRACE_DAYS`（OSS 既定 7 日）で、予約中は
+`POST /api/v1/capsules/{capsuleId}/cancel-uninstall` で取り消せます。破棄済み Capsule
+への再試行は `200 {capsule,alreadyDeleted:true}` です。未適用 Capsule は従来どおり即時
+abandon します。
+
+旧来の即時 Plan 作成は `DELETE /api/v1/capsules/{capsuleId}?immediate=true` で明示します。
+これは `202 {run}` を返して破棄 Plan を作るだけです。リソースを破棄するには owner による
+Plan の確認・承認と、その Run の Apply が別途必要です。`immediate=false` は既定の予約と
+同じ意味で、その他の値は `400` です。`POST .../uninstall` と `POST .../destroy-plan` は
+引き続き利用できます。
+
+この変更は DELETE の応答契約を破壊的に変更します。release cutover で旧 DELETE の暗黙の
+即時 Plan 意味論は終了し、legacy fallback はありません。移行中は既存の POST uninstall と
+destroy-plan が bridge になります。猶予なしで破棄したい client は cutover より前に
+`immediate=true` を送るよう更新してください。互換運用は旧 artifact を運用する期間だけです。
 
 `POST /api/v1/capsules/{capsuleId}/uninstall` は適用済みの Capsule を `uninstalled`
 にし、`uninstall.scheduledDestroyAt` まで何も壊しません。猶予日数は operator 設定
@@ -236,7 +255,7 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 所有者が計画を取り消した、または破棄が provider に届く前に拒否・失敗した場合は
 `uninstall.blockedReason` を残して止まり、所有者が取り消すか即時削除を選びます。
 provider に届いた破棄が失敗した場合は、通常の破棄失敗と同じく `error` になります。
-`DELETE` と `destroy-plan` は従来どおり猶予なしの破棄計画を作ります。
+`destroy-plan` は猶予なしの破棄計画を作ります。
 
 新しい Capsule は `POST /api/v1/workspaces/{workspaceId}/install-plans` から
 exact SourceSnapshot と成功済み compatibility declaration を固定して作成し、返された

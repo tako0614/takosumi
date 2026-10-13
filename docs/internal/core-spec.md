@@ -245,8 +245,19 @@ unexpected errors records `blockedReason` and leaves the Capsule `uninstalled`
 for the owner. A teardown Apply that fails after provider dispatch follows the
 ordinary failed-destroy semantics (status `error`); the request keeps
 `destroying` as evidence. The ordinary automatic Apply continuation still never
-applies a destroy Plan, and `DELETE` / `destroy-plan` remain the immediate,
-owner-approved path.
+applies a destroy Plan. Public Accounts `DELETE /api/v1/capsules/{id}` shares
+the authenticated `uninstall` admission and returns `202 {capsule, graceDays}`;
+only `DELETE ?immediate=true` or `POST destroy-plan` selects the immediate,
+owner-approved Plan/Apply path. Never-applied Capsules use abandonment and
+destroyed replays return the terminal Capsule. Invalid or duplicate `immediate`
+parameters are rejected. The internal Core token seam has no authenticated
+account/grant requester, so default applied DELETE fails before scheduling with
+`capsule_uninstall_requester_unavailable`; callers use the Accounts public API.
+Membership/scope refusals at the resolved Capsule boundary emit
+`capsule.deletion_rejected` with the trusted actor, action and reason (no secret
+values); successful reservation/cancel and Plan approval/Apply keep their
+existing Activity/Run audit events. Authentication/scope rejection before
+Capsule dispatch does not resolve a target or emit a Workspace Activity event.
 
 A stateful Capsule Destroy Plan pins the current StateVersion's exact applied
 PlanRun provenance: its SourceSnapshot, module source coordinate (including

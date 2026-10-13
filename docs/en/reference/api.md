@@ -194,6 +194,7 @@ GET   /api/v1/capsule-configs
 GET   /api/v1/capsule-configs/{capsuleConfigId}
 POST  /api/v1/capsules/{capsuleId}/plan
 POST  /api/v1/capsules/{capsuleId}/configuration-plans
+DELETE /api/v1/capsules/{capsuleId} (or ?immediate=true)
 POST  /api/v1/capsules/{capsuleId}/uninstall
 POST  /api/v1/capsules/{capsuleId}/cancel-uninstall
 
@@ -223,6 +224,28 @@ GET /api/v1/workspaces/{workspaceId}/interface-materialization-failures
 POST /api/v1/workspaces/{workspaceId}/interface-materialization-failures/{intentId}/retries
 ```
 
+Capsule deletion requires Workspace owner/admin authority and the
+`capsules:write` scope. By default, `DELETE /api/v1/capsules/{capsuleId}` schedules
+deletion of an applied Capsule and returns `202 {capsule,graceDays}`. The operator
+setting `TAKOSUMI_UNINSTALL_GRACE_DAYS` controls the grace period (7 days by
+default in OSS); while it is pending, cancel it with
+`POST /api/v1/capsules/{capsuleId}/cancel-uninstall`. Retrying after destruction
+returns `200 {capsule,alreadyDeleted:true}`. A Capsule that has never been applied
+keeps the existing immediate abandonment behavior.
+
+To create the legacy immediate destroy Plan, explicitly call
+`DELETE /api/v1/capsules/{capsuleId}?immediate=true`. It returns `202 {run}` and
+creates a Plan only. Destruction still requires an owner to review and approve the
+Plan, then apply that Run. `immediate=false` has the same meaning as the default;
+other values return `400`. `POST .../uninstall` and `POST .../destroy-plan` remain
+available.
+
+This changes the DELETE response contract. At release cutover, the old implicit
+immediate-Plan meaning of DELETE ends; there is no implicit legacy fallback. The
+existing POST uninstall and destroy-plan routes are the migration bridge. Clients
+that need deletion without a grace period can add `immediate=true` before cutover.
+Compatibility operation lasts only while the old artifact is in service.
+
 `POST /api/v1/capsules/{capsuleId}/uninstall` moves an applied Capsule to
 `uninstalled` and destroys nothing before `uninstall.scheduledDestroyAt`. The
 grace period is the operator setting `TAKOSUMI_UNINSTALL_GRACE_DAYS` (OSS
@@ -240,7 +263,7 @@ refused or failed before reaching the provider stops with
 `uninstall.blockedReason` for the owner to cancel or delete immediately. A
 teardown that fails after reaching the provider ends in `error`, like any
 failed destroy.
-`DELETE` and `destroy-plan` still create an immediate destroy plan.
+`destroy-plan` creates an immediate destroy plan.
 
 Create a Capsule through the Git install-plan coordinator. It pins the exact
 SourceSnapshot and successful compatibility declaration, creates the complete
