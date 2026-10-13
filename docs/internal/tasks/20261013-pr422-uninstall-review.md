@@ -45,3 +45,9 @@
   storage admission fence); waiting requests rotate durably; one export attempt
   is claimed before side effects, and an uncertain claim blocks without retry.
   Independent source review and the full local gate are recorded in the PR.
+- Gate repair: the preceding Actions run on `4d586b6da` failed two dashboard
+  reactive resource-read tests. Preloading the server-bound resource-read
+  module reproduces both failures on CI Bun 1.4.0. The reactive test uses a
+  distinct module URL after its browser mock so cached imports from earlier
+  tests cannot make it use the inert server memo. The same preload probe passes
+  on Bun 1.4.0 and 1.4.2; product source and test assertions are unchanged.
