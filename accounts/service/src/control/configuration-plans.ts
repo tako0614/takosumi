@@ -163,6 +163,16 @@ export async function handleCapsuleConfigurationPlans(
   ) {
     return authorityConflict(ctx.request);
   }
+  if (authority.capsule.status === "uninstalled") {
+    return errorJson(
+      "failed_precondition",
+      "The Capsule is scheduled for deletion; cancel the uninstall first.",
+      409,
+      ctx.request,
+      {},
+      { reason: "capsule_uninstalled" },
+    );
+  }
   if (
     authority.capsule.status === "destroyed" ||
     authority.capsule.status === "disabled" ||
@@ -566,6 +576,13 @@ async function finishConfigurationPlan(input: {
         "The Capsule predecessor authority changed before configuration planning resumed.",
       );
     }
+    if (authority.capsule.status === "uninstalled") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "The Capsule is scheduled for deletion; cancel the uninstall first.",
+        { reason: "capsule_uninstalled" },
+      );
+    }
     if (
       authority.capsule.status === "destroyed" ||
       authority.capsule.status === "disabled" ||
@@ -648,6 +665,13 @@ async function finishConfigurationPlan(input: {
     ) {
       throw configurationIdentityConflict(
         "The sealed configuration target is current but its execution authority has advanced; refusing a stale Plan.",
+      );
+    }
+    if (authority.capsule.status === "uninstalled") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "The Capsule is scheduled for deletion; cancel the uninstall first.",
+        { reason: "capsule_uninstalled" },
       );
     }
     if (

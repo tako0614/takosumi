@@ -39,6 +39,9 @@ export { PUBLIC_PROVIDER_RESOLUTION_STATUSES as PROVIDER_RESOLUTION_STATUSES } f
 export type {
   PublicCapsule as Capsule,
   CapsuleStatus,
+  CapsuleUninstall,
+  CapsuleUninstallRestorableStatus,
+  CapsulePreDestroyExport,
   CapsuleCompatibility,
   CapsuleCompatibilityLevel,
   CapsuleDataSourceSummary,

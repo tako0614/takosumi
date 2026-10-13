@@ -122,6 +122,11 @@ export class RunGroupsService {
         .map((capsule) => capsule.id),
     );
     const members = closeDownstream(stale, edges);
+    // An uninstalled consumer only accepts its teardown during the grace
+    // period; re-planning it would fail the whole group.
+    for (const id of [...members]) {
+      if (capsuleById.get(id)?.status === "uninstalled") members.delete(id);
+    }
     if (members.size === 0) {
       throw new OpenTofuControllerError(
         "failed_precondition",
