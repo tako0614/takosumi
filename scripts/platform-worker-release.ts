@@ -2531,7 +2531,7 @@ async function runPlatformWorkerCodeGate(
   );
 }
 
-async function buildPlatformDashboardOnce(
+export async function buildPlatformDashboardOnce(
   environment: PlatformEnvironment,
   command: PlatformReleaseCommand,
   root: string,
@@ -2542,6 +2542,7 @@ async function buildPlatformDashboardOnce(
     resolve(root, "dashboard"),
     platformDashboardBuildEnvironment(environment),
   );
+  await command(["bun", "run", "app-docs:build"], undefined, root);
   return dashboardAssetTreeSeal(resolve(root, "dashboard/dist"));
 }
 
@@ -3185,20 +3186,13 @@ function writePlatformFailureIfAbsent(
   );
 }
 
-async function buildDeterministicDashboard(
+export async function buildDeterministicDashboard(
   environment: PlatformEnvironment,
+  command: PlatformReleaseCommand = requiredCommand,
+  root: string = ROOT,
 ): Promise<DashboardAssetSeal> {
-  const build = async (): Promise<DashboardAssetSeal> => {
-    await requiredCommand(
-      ["bun", "run", "build"],
-      undefined,
-      resolve(ROOT, "dashboard"),
-      platformDashboardBuildEnvironment(environment),
-    );
-    return dashboardAssetTreeSeal(resolve(ROOT, "dashboard/dist"));
-  };
-  const first = await build();
-  const second = await build();
+  const first = await buildPlatformDashboardOnce(environment, command, root);
+  const second = await buildPlatformDashboardOnce(environment, command, root);
   if (JSON.stringify(first) !== JSON.stringify(second)) {
     throw new Error("platform_worker_release_dashboard_nondeterministic");
   }

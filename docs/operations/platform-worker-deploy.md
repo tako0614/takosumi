@@ -244,7 +244,7 @@ unchanged, so the new Version carries the same attachment; the Container
 application itself (image, instances, rollout) is read separately and must stay
 identical from baseline to final readback.
 
-The lane builds the dashboard once, runs
+The lane builds the dashboard and its hosted-docs overlay once, runs
 `check:cloudflare-worker-build` once, and performs two `versions upload`
 dry-runs. The first derives the sealed entry digest; the second injects the
 three execution-evidence digest variables and must produce the same entry.
@@ -362,7 +362,8 @@ before dashboard build, dry-run, or provider access. Runner build provenance
 must name the same owning Git remote as the Worker pin, but their commits are
 independent authorities; image identity, not commit lockstep, joins the
 releases. Plan then reproduces the environment-specific
-dashboard build twice, seals every physical output path/size/digest, validates
+dashboard and hosted-docs build twice, seals every physical output
+path/size/digest (including `docs/index.html`), validates
 that the external config points at that same worktree, seals the metadata-only
 secret-name inventory and exact serving predecessor, and seals Wrangler's
 strict immediate-rollout dry-run output tree in an external, non-worktree
