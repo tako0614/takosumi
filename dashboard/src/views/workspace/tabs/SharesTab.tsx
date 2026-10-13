@@ -45,6 +45,7 @@ import {
   Toast,
 } from "../../../components/ui/index.ts";
 import { fetchFailedMessage } from "../../../lib/error-copy.ts";
+import { latestOrUndefined } from "../../../lib/resource-read.ts";
 
 type OutputDraft = {
   readonly id: string;
@@ -247,7 +248,7 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
   );
 
   const loadMoreWorkspaces = async () => {
-    const current = workspacePage.latest;
+    const current = latestOrUndefined(workspacePage);
     if (!current?.nextCursor || loadingWorkspaceMore()) return;
     setLoadingWorkspaceMore(true);
     setWorkspaceLoadError(null);
@@ -418,7 +419,7 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
                   >
                     <p class="muted">{t("shares.create.workspacesEmpty")}</p>
                   </Show>
-                  <Show when={workspacePage.latest?.nextCursor}>
+                  <Show when={latestOrUndefined(workspacePage)?.nextCursor}>
                     <Button
                       variant="secondary"
                       size="sm"

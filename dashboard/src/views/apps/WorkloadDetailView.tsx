@@ -137,6 +137,7 @@ import {
   type RevisionPlanAttempt,
 } from "../../lib/revision-plan-attempt.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
+import { createLastGoodValue } from "../../lib/resource-read.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import {
   listAuthorizedUiSurfaces,
@@ -171,14 +172,19 @@ function Inner() {
     getCapsuleConfigurationContext,
   );
   // Last-good capsule value that NEVER throws. Reading an errored resource
-  // (`capsuleData()`) throws, so a transient refetch failure — e.g. the GET that a
-  // config save or auto-update toggle triggers — would otherwise tear the whole
-  // view (and any unsaved settings edits) down. Every render-path read uses
-  // this; the Switch below shows the error EmptyState only on a FIRST-load
-  // failure (`!capsule.latest`) and otherwise keeps the last-good content with
-  // an inline refetch-failed notice.
-  const capsuleData = () => capsule.latest?.capsule;
-  const configurationAuthorityGuard = () => capsule.latest?.authorityGuard;
+  // throws — `capsule()` AND `capsule.latest` alike — so a failed first load
+  // or a transient refetch failure (e.g. the GET that a config save or
+  // auto-update toggle triggers) would otherwise tear the whole app (and any
+  // unsaved settings edits) down. Every render-path read uses this; the Switch
+  // below shows the error EmptyState only on a FIRST-load failure
+  // (`!capsuleLatest()`) and otherwise keeps the last-good content with an
+  // inline refetch-failed notice.
+  const capsuleLatest = createLastGoodValue(
+    capsule,
+    (value) => value.capsule.id === capsuleId(),
+  );
+  const capsuleData = () => capsuleLatest()?.capsule;
+  const configurationAuthorityGuard = () => capsuleLatest()?.authorityGuard;
   const tab = (): TabId => {
     const raw = params.tab;
     if (raw === "danger") {
@@ -556,12 +562,12 @@ function Inner() {
             each would evict focus and re-seed the settings editors, silently
             discarding the sibling form's unsaved edits. Keep rendering
             `.latest` during refetches (mirrors RunView). */}
-        <Match when={capsule.loading && !capsule.latest}>
+        <Match when={capsule.loading && !capsuleLatest()}>
           <Card>
             <Skeleton variant="block" />
           </Card>
         </Match>
-        <Match when={capsule.error && !capsule.latest}>
+        <Match when={capsule.error && !capsuleLatest()}>
           {/* FIRST-load failure only. A failed REFETCH of an already-loaded
               capsule keeps the last-good content (below) + an inline notice so
               unsaved settings edits are never torn down. Split a genuine 404

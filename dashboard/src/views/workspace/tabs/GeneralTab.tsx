@@ -20,6 +20,7 @@ import {
 } from "../../../lib/control-api.ts";
 import { useConfirmDialog } from "../../../lib/confirm-dialog.ts";
 import { friendlyError } from "../../../lib/error-copy.ts";
+import { latestOrUndefined } from "../../../lib/resource-read.ts";
 import { formatDateTime, t } from "../../../i18n/index.ts";
 import {
   Button,
@@ -338,7 +339,7 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
       <Show
         when={
           archivedWorkspaces().length > 0 ||
-          archivedPage.latest?.nextCursor !== undefined
+          latestOrUndefined(archivedPage)?.nextCursor !== undefined
         }
       >
         <CardSection>
@@ -364,7 +365,7 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
               )}
             </For>
           </ul>
-          <Show when={archivedPage.latest?.nextCursor}>
+          <Show when={latestOrUndefined(archivedPage)?.nextCursor}>
             <div class="wc-form-actions">
               <Button
                 variant="secondary"

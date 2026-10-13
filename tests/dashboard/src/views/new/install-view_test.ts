@@ -510,7 +510,8 @@ describe("single-screen install surface", () => {
     expect(view).toContain("appendAppHandoff");
     expect(view).toContain("listAuthorizedUiSurfaces");
     expect(view).toContain("interfaceUrl()");
-    expect(view).toContain("Open in");
+    expect(view).toContain('t("run.appHandoff.open", {');
+    expect(view).not.toContain("`Open in ");
   });
 
   test("does not declare a UI service complete before its launcher is readable", () => {

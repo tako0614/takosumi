@@ -1503,7 +1503,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(page.getByLabel(/Ref \(optional\)|ref（省略可）/u)).toHaveValue(
       "0123456789abcdef0123456789abcdef01234567",
     );
-    await expect(page.getByLabel(/Module path|module path/u)).toHaveValue(
+    await expect(page.getByLabel(/Module folder|モジュールのフォルダ/u)).toHaveValue(
       "deploy/opentofu",
     );
 
@@ -1725,19 +1725,19 @@ test.describe("Takosumi dashboard browser surface", () => {
     });
 
     await gotoDashboardDocument(page, recoveryUrl);
-    await expect(page.getByTestId("install-plan-recovery-phase")).toHaveText("reviewable");
-    await expect(page.getByRole("heading", { name: /初回導入の確認|Initial review is ready/u })).toBeVisible();
+    await expect(page.getByTestId("install-plan-recovery")).toHaveAttribute("data-phase", "reviewable");
+    await expect(page.getByRole("heading", { name: /最初の変更を確認できます|The first review is ready/u })).toBeVisible();
     await expect(page.locator(`[data-testid="install-plan-recovery"] a[href="/runs/${runId}"]`)).toBeVisible();
     expect(coordinatorReads).toHaveLength(1);
 
     await page.reload({ waitUntil: "domcontentloaded" });
-    await expect(page.getByTestId("install-plan-recovery-phase")).toHaveText("reviewable");
+    await expect(page.getByTestId("install-plan-recovery")).toHaveAttribute("data-phase", "reviewable");
     expect(coordinatorReads).toHaveLength(2);
 
     phase = "failed";
     await page.reload({ waitUntil: "domcontentloaded" });
-    await expect(page.getByTestId("install-plan-recovery-phase")).toHaveText("failed");
-    await expect(page.getByRole("heading", { name: /導入の準備は停止|Install preparation stopped/u })).toBeVisible();
+    await expect(page.getByTestId("install-plan-recovery")).toHaveAttribute("data-phase", "failed");
+    await expect(page.getByRole("heading", { name: /追加の準備は停止|Adding stopped/u })).toBeVisible();
     await expect(page.locator(`[data-testid="install-plan-recovery"] a[href="/runs/${runId}"]`)).toBeVisible();
     expect(coordinatorReads).toHaveLength(3);
     expect(mutations).toEqual([]);
@@ -3283,6 +3283,155 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(app).toHaveAttribute("target", "_blank");
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
+  });
+
+  // A failed read on one page must stay on that page: before the per-page
+  // boundary and the throw-free resource reads, each of these replaced the
+  // whole app — sidebar included — with the root "Something went wrong" card.
+  const rootReloadCard = /Something went wrong|問題が発生しました/u;
+  const homeLink = (page: Page) =>
+    page
+      .locator(".sidebar-nav")
+      .getByRole("link", { name: /^(Home|ホーム)$/u });
+
+  test("an unreadable run keeps the shell and shows its own recovery", async ({
+    page,
+  }) => {
+    test.skip(mode !== "portable", "synthetic run failures are portable-only");
+    const errors = pageErrors(page);
+    await page.route("**/api/v1/runs/run_broken_e2e", (route) =>
+      route.fulfill({ status: 500, json: { error: "synthetic_failure" } }),
+    );
+
+    // The fixture answers unknown run ids with 404.
+    await gotoDashboardDocument(page, "/runs/run_missing_e2e");
+    await expect(
+      page.getByRole("heading", {
+        name: /This run was not found|この実行は見つかりませんでした/u,
+      }),
+    ).toBeVisible();
+    await expect(homeLink(page)).toBeVisible();
+    await expect(page.getByText(rootReloadCard)).toHaveCount(0);
+
+    await gotoDashboardDocument(page, "/runs/run_broken_e2e");
+    await expect(
+      page.getByRole("heading", {
+        name: /Couldn't load this run|実行を読み込めませんでした/u,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /^(Retry|再試行)$/u }),
+    ).toBeVisible();
+    await expect(homeLink(page)).toBeVisible();
+    await expect(page.getByText(rootReloadCard)).toHaveCount(0);
+    await assertNoPageErrors(errors);
+  });
+
+  test("a failed run poll keeps the last good run and keeps polling", async ({
+    page,
+  }) => {
+    test.skip(mode !== "portable", "synthetic poll failures are portable-only");
+    const errors = pageErrors(page);
+    const runPath = "/api/v1/runs/run_poll_e2e";
+    let runReads = 0;
+    // A non-200 stream fails EventSource for good (no auto-reconnect), so the
+    // 3s fallback poll alone drives updates — the path under test.
+    await page.route(`**${runPath}/stream`, (route) =>
+      route.fulfill({ status: 503, json: { error: "stream_unavailable" } }),
+    );
+    await page.route(`**${runPath}`, (route) => {
+      runReads += 1;
+      if (runReads === 2) {
+        return route.fulfill({ status: 503, json: { error: "synthetic_blip" } });
+      }
+      return route.fulfill({
+        json: {
+          run: {
+            id: "run_poll_e2e",
+            workspaceId: "ws_alpha",
+            capsuleId: "cap_poll_e2e",
+            type: "plan",
+            status: "running",
+            createdBy: "portable-e2e",
+            createdAt: "2026-08-01T00:00:00.000Z",
+          },
+        },
+      });
+    });
+    const refreshFailed =
+      /Couldn't fetch the latest status|最新の状態を取得できませんでした/u;
+
+    await gotoDashboardDocument(page, "/runs/run_poll_e2e");
+    // The 3s fallback poll hits the synthetic failure: the run stays on
+    // screen with a quiet notice instead of the whole app going away.
+    await expect(page.getByText(refreshFailed)).toBeVisible({ timeout: 10_000 });
+    expect(runReads).toBe(2);
+    await expect(
+      page.getByRole("heading", {
+        name: /Couldn't load this run|実行を読み込めませんでした/u,
+      }),
+    ).toHaveCount(0);
+    await expect(page.getByText(rootReloadCard)).toHaveCount(0);
+    await expect(homeLink(page)).toBeVisible();
+
+    // Polling continues after the failure and the next good read clears it.
+    await expect(page.getByText(refreshFailed)).toHaveCount(0, {
+      timeout: 10_000,
+    });
+    expect(runReads).toBeGreaterThanOrEqual(3);
+    await assertNoPageErrors(errors);
+  });
+
+  test("an unreadable service keeps the shell and shows not found", async ({
+    page,
+  }) => {
+    test.skip(mode !== "portable", "synthetic service failures are portable-only");
+    const errors = pageErrors(page);
+    await gotoDashboardDocument(page, "/workloads/cap_missing_e2e");
+    await expect(
+      page.getByRole("heading", {
+        name: /Service not found|サービスが見つかりません/u,
+      }),
+    ).toBeVisible();
+    await expect(homeLink(page)).toBeVisible();
+    await expect(page.getByText(rootReloadCard)).toHaveCount(0);
+    await assertNoPageErrors(errors);
+  });
+
+  test("a page that fails to load keeps the nav and recovers on navigation", async ({
+    page,
+  }) => {
+    test.skip(mode !== "portable", "blocking a route chunk is portable-only");
+    const errors = pageErrors(page);
+    let blockedChunkRequests = 0;
+    await page.route("**/assets/GraphView-*.js", (route) => {
+      blockedChunkRequests += 1;
+      return route.abort();
+    });
+
+    // A stale chunk reloads once onto the new build; when the chunk is still
+    // missing after that, the page-level card appears instead of a blank app.
+    await gotoDashboardDocument(page, "/graph");
+    await expect(
+      page.getByRole("heading", {
+        name: /This page couldn't be shown|この画面を表示できませんでした/u,
+      }),
+    ).toBeVisible();
+    expect(blockedChunkRequests).toBeGreaterThanOrEqual(2);
+    await expect(page.getByText(rootReloadCard)).toHaveCount(0);
+
+    // The chrome stays usable: leaving the broken page clears the error.
+    await homeLink(page).click();
+    await expect(page).toHaveURL(/\/$/u);
+    await expect(
+      page.getByRole("heading", {
+        name: /This page couldn't be shown|この画面を表示できませんでした/u,
+      }),
+    ).toHaveCount(0);
+    await expect(
+      page.locator("a.av-tile").filter({ hasText: expectations.appName }).first(),
+    ).toBeVisible();
+    await assertNoPageErrors(errors);
   });
 
   test("fails closed on an unexpected same-origin API 404", async ({

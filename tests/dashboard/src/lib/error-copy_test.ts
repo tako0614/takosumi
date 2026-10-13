@@ -19,9 +19,11 @@ describe("friendlyError plan deadline copy", () => {
       );
 
       const friendly = friendlyError(error, (key) => ja[key]);
-      expect(friendly.message).toBe(
-        "プランの完了を待つのを停止しました。サーバー側では処理が続いている可能性があります。もう一度始める前に実行状況を確認してください。",
-      );
+      expect(friendly.message).toBe(ja["error.planReconcileTimeout"]);
+      // The review step is 変更の確認 everywhere else; the internal "plan"
+      // noun must not resurface in the timeout copy.
+      expect(friendly.message).not.toMatch(/プラン|Plan/u);
+      expect(friendly.message).toContain("デプロイ履歴");
       expect(friendly.detail).toBeUndefined();
     });
 
@@ -33,9 +35,9 @@ describe("friendlyError plan deadline copy", () => {
       );
 
       const friendly = friendlyError(error, (key) => en[key]);
-      expect(friendly.message).toBe(
-        "We stopped waiting for the plan. It may still be running on the server; check its execution status before starting again.",
-      );
+      expect(friendly.message).toBe(en["error.planReconcileTimeout"]);
+      expect(friendly.message).not.toMatch(/\bplan\b/iu);
+      expect(friendly.message).toContain("Deploy history");
       expect(friendly.detail).toBeUndefined();
     });
   }
