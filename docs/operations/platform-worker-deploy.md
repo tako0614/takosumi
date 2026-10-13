@@ -162,9 +162,9 @@ bun run deploy -- takosumi-platform-staging materialize-source \
 That is a fresh, disposable, depth-1 tracking checkout of the remote default
 branch. Materialization refuses unless that branch's current remote tip is the
 pinned commit; it does not detach HEAD or create a synthetic release branch.
-Install the toolchain there and run `plan` from it. For an official staging
-feature-branch release, use a clean attached checkout of the already-pushed
-branch at its exact remote tip instead. Plan, execute, recover, and restore
+Install the toolchain and the locked dependencies below there, then run `plan`
+from it. For an official staging feature-branch release, use a clean attached
+checkout of the already-pushed branch at its exact remote tip instead. Plan, execute, recover, and restore
 recheck that the local tracking ref and a fresh remote branch read still equal
 the checkout commit. Production additionally requires the attached branch to
 remain the freshly advertised remote default. The recovery path is the same
@@ -178,6 +178,35 @@ and port seams; the OSS config must not name a closed handler as a dependency.
 The worker does not install or host a Form Registry, FormActivation, or hosted
 Form. Any such closed Cloud Host is deployed and operated by its owning
 repository; the old package procedure is a superseded migration note.
+
+### Prepare locked release dependencies
+
+Before starting an official staging/production `plan` or the routine staging
+code `apply`, prepare dependencies in the selected source checkout:
+
+```bash
+bun install --frozen-lockfile
+(cd dashboard && bun install --frozen-lockfile)
+npm ci --prefix docs --include=dev --no-audit --no-fund
+test -x docs/node_modules/.bin/vitepress
+```
+
+`docs/package-lock.json` is the canonical docs lockfile; use `npm ci` rather
+than generating a Bun lockfile or resolving unpinned docs dependencies.
+`--include=dev` installs VitePress even when the release environment sets
+`NODE_ENV=production`. Repeat preparation for a newly materialized checkout.
+
+Both release lanes refuse missing or non-executable VitePress with
+`platform_worker_release_docs_dependencies_missing` before the first dashboard
+build or provider mutation. `scripts/build-app-docs.sh` likewise refuses and
+prints the preparation command; it never installs dependencies during a build.
+Read-only `status` and execution of an already sealed plan do not rebuild docs.
+
+The official plan still rebuilds and seals the dashboard plus `/docs/` overlay
+twice for both staging and production. Docs output remains independent of Git
+history depth, so full-history and depth-1 source checkouts retain the same
+deterministic asset contract. The routine staging lane still builds and seals
+the same overlay once before uploading assets.
 
 The official staging composition binds the independently deployed private
 `takosumi-hosted-staging` Worker under `HOSTED`. It exposes the route-less
@@ -542,7 +571,7 @@ before the gate and the docs build read them:
 ```bash
 bun install
 bun run build:dashboard
-(cd docs && npm ci --no-fund --no-audit)
+npm ci --prefix docs --include=dev --no-audit --no-fund
 bun run check
 bun run docs:build
 ```
