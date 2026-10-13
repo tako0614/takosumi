@@ -55,6 +55,11 @@ import {
   RUNNER_RUN_DEADLINE_EXCEEDED_CODE,
   runDeadlineAtHeaderValue,
 } from "./runner_protocol.ts";
+import {
+  MAX_PRIVATE_RUN_FILE_DESCRIPTOR_BYTES,
+  PRIVATE_RUN_FILE_REFRESH_CAPABILITY,
+  type PrivateRunFileRefreshUpdate,
+} from "../../core/shared/private_run_file_refresh.ts";
 
 /**
  * Implements {@link OpenTofuRunner} over the RUNNER Durable Object: each
@@ -185,6 +190,72 @@ export class CloudflareContainerOpenTofuRunner
     }
   }
 
+  async assertPrivateRunFileRefreshCapability(input: {
+    readonly owner: { readonly kind: "plan" | "apply"; readonly id: string };
+    readonly runnerRunId: string;
+  }): Promise<void> {
+    if (!this.env.RUNNER || !input.owner.id.trim() ||
+      input.runnerRunId !== input.owner.id) {
+      throw new Error("runner private Run file refresh capability is unavailable");
+    }
+    let response: Response;
+    try {
+      response = await this.env.RUNNER.get(this.env.RUNNER.idFromName(input.owner.id)).fetch(
+        new Request(
+          `https://opentofu-runner.internal/capabilities?ownerKind=${input.owner.kind}&ownerId=${encodeURIComponent(input.owner.id)}&runnerRunId=${encodeURIComponent(input.runnerRunId)}`,
+          { method: "GET" },
+        ),
+      );
+    } catch {
+      throw new Error("runner private Run file refresh capability is unavailable");
+    }
+    const payload = response.ok ? await response.json().catch(() => undefined) as unknown : undefined;
+    if (!isRecordValue(payload) || !isRecordValue(payload.owner) ||
+      stringFromRecord(payload.owner, "kind") !== input.owner.kind ||
+      stringFromRecord(payload.owner, "id") !== input.owner.id ||
+      stringFromRecord(payload, "runnerRunId") !== input.runnerRunId ||
+      !stringArrayFromRecord(payload, "capabilities")?.includes(PRIVATE_RUN_FILE_REFRESH_CAPABILITY)) {
+      throw new Error("runner private Run file refresh capability is unavailable");
+    }
+  }
+
+  async refreshPrivateRunFiles(
+    update: PrivateRunFileRefreshUpdate,
+    control?: RunExecutionControl,
+  ): Promise<void> {
+    if (!this.env.RUNNER || update.runnerRunId !== update.owner.id) {
+      throw new Error("runner private Run file refresh is unavailable");
+    }
+    if (control?.signal?.aborted) throw abortReason(control.signal);
+    const body = JSON.stringify(update);
+    if (new TextEncoder().encode(body).byteLength > MAX_PRIVATE_RUN_FILE_DESCRIPTOR_BYTES) {
+      throw new Error("private Run file refresh payload exceeds the runner limit");
+    }
+    let response: Response;
+    try {
+      response = await this.env.RUNNER.get(this.env.RUNNER.idFromName(update.owner.id)).fetch(
+        new Request(
+          `https://opentofu-runner.internal/runs/${encodeURIComponent(update.runnerRunId)}/private-run-files`,
+          {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body,
+            ...(control?.signal ? { signal: control.signal } : {}),
+          },
+        ),
+      );
+    } catch {
+      // A lost ACK may follow a committed descriptor write. Core must abort,
+      // never retry this sequence or redispatch a provider mutation.
+      throw new Error("private Run file refresh delivery is ambiguous");
+    }
+    const ack = response.ok ? await response.json().catch(() => undefined) as unknown : undefined;
+    if (!isRecordValue(ack) || ack.ok !== true || ack.status !== "updated" ||
+      ack.sequence !== update.sequence) {
+      throw new Error("private Run file refresh was rejected by the active runner");
+    }
+  }
+
   async refreshCredentials(
     update: {
       readonly owner: { readonly kind: "plan" | "apply"; readonly id: string };
@@ -305,7 +376,9 @@ export class CloudflareContainerOpenTofuRunner
   ): Promise<OpenTofuApplyResult> {
     const result = await this.#runContainer(
       "apply",
-      runnerRunIdFromPlanArtifact(job.planArtifact) ?? job.planRun.id,
+      job.privateRunFiles?.length
+        ? job.applyRun.id
+        : runnerRunIdFromPlanArtifact(job.planArtifact) ?? job.planRun.id,
       job,
       {
         signal: control?.signal,
@@ -390,7 +463,9 @@ export class CloudflareContainerOpenTofuRunner
   ): Promise<OpenTofuDestroyResult> {
     const result = await this.#runContainer(
       "destroy",
-      runnerRunIdFromPlanArtifact(job.planArtifact) ?? job.planRun.id,
+      job.privateRunFiles?.length
+        ? job.applyRun.id
+        : runnerRunIdFromPlanArtifact(job.planArtifact) ?? job.planRun.id,
       job,
       {
         signal: control?.signal,

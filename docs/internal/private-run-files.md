@@ -122,10 +122,24 @@ backend selection, and actual Runner/Provider integration must all be composed
 and qualified before calling it available. Cloud Worker source composition can
 opt in explicitly with the existing D1 and `R2_ARTIFACTS` bindings, an endpoint,
 an isolated R2 prefix, the exact 16 MiB cap, and configured partitioned
-encryption; the default Worker remains unmounted. This source wiring does not
-qualify bucket retention/lifecycle, Cloud restart/kill durability, or the
-actual Cloud Runner/Provider path, so it is not evidence that the Cloud
-capability is available. Local and Cloud success must be reported
+encryption; the default Worker remains unmounted. The Cloud Container adapter
+probes the Runner image's private-file refresh capability before a slot-bearing
+Run is claimed. Plan keeps its Plan Run ID; slot-bearing Apply/Destroy use the
+execution Run ID for the live Runner session while restoring the immutable
+Plan artifact and verifying the reviewed lockfile against the Plan Run ID. The
+Durable Object pins
+the active owner, slot/endpoint manifest and ordered sequence, stages the
+latest grant during artifact restore, and forwards live GET/PUT to the Runner
+without persisting bearer material. A lost refresh acknowledgement is a
+refusal, not permission to resend an OpenTofu mutation. Existing no-slot
+dispatch identity remains unchanged.
+
+The source bridge and local tests do not qualify bucket retention/lifecycle,
+Cloud restart/kill durability, or a hosted Cloud Runner-to-Provider operation.
+The in-process DO-to-real-Runner HTTP test proves descriptor rotation reaches
+the OpenTofu command boundary; the opt-in workerd D1/R2 restart test proves
+the storage route in a local native runtime. Neither is a Cloud deployment or
+end-to-end hosted Provider proof. Local and Cloud success must be reported
 independently; one does not imply the other.
 
 In-memory service and HTTP tests prove only their state-machine and envelope

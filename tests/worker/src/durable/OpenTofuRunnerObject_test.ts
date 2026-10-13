@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   CloudflareWorkerEnv,
   D1Database,
@@ -29,6 +32,8 @@ import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/s
 import { stateVersionIdForRecoveryRun } from "../../../../core/domains/deploy-control/operator_state_recovery.ts";
 import { R2RecoveryStateArtifactStore } from "../../../../worker/src/state_recovery_artifact_store.ts";
 import { PROVIDER_LOCK_RESTORE_DIGEST_HEADER } from "../../../../runner/lib/transport.ts";
+import { privateRunFileManifestDigest } from "../../../../core/shared/private_run_file_refresh.ts";
+import { handleRunnerRequestWithDependencies } from "../../../../runner/lib/http_server.ts";
 
 const PLAN_BYTES = new TextEncoder().encode("reviewed tfplan bytes");
 const PLAN_DIGEST =
@@ -43,6 +48,409 @@ const RESTORE_STATE_PREFIX =
   "workspaces/space_1/capsules/inst_1/environments/production/state-versions";
 const RESTORE_TARGET_KEY = `${RESTORE_STATE_PREFIX}/00000002.tfstate.enc`;
 const RESTORE_CURRENT_KEY = `${RESTORE_STATE_PREFIX}/current.json`;
+
+test("private file metadata GET requires an active DO refresh claim", async () => {
+  let forwarded = 0;
+  const runner = runnerWithContainer(new FakeR2Bucket(), {
+    async containerFetch() {
+      forwarded += 1;
+      return Response.json({ owner: { kind: "plan", id: "stale_private" },
+        runnerRunId: "stale_private", manifestDigest: "artificial-stale-digest", sequence: 1 });
+    },
+  });
+  const path = "https://runner/runs/stale_private/private-run-files";
+  assert.equal((await runner.fetch(new Request(path))).status, 409);
+  assert.equal((await runner.fetch(new Request(path, { method: "PUT", body: "{}" }))).status, 409);
+  assert.equal(forwarded, 0);
+});
+
+test("private file refresh during Cloud Plan preparation reaches the Runner as the latest descriptor", async () => {
+  let enteredHealth!: () => void;
+  let releaseHealth!: () => void;
+  const healthEntered = new Promise<void>((resolve) => { enteredHealth = resolve; });
+  const healthGate = new Promise<void>((resolve) => { releaseHealth = resolve; });
+  const owner = { kind: "plan" as const, id: "plan_private" };
+  const files = [{ slot: "checkpoint", endpoint: "https://private.example.test/internal/private-run-files/v1", grant: "artificial-initial-grant" }];
+  const manifestDigest = await privateRunFileManifestDigest({ owner, runnerRunId: owner.id, files });
+  let delivered: { grant: string; sequence: string | null } | undefined;
+  const runner = runnerWithContainer(new FakeR2Bucket(), {
+    async containerFetch(request) {
+      if (request.method === "POST" && new URL(request.url).pathname === "/runs/plan_private") {
+        const body = await request.json() as { request: { privateRunFiles: typeof files } };
+        delivered = {
+          grant: body.request.privateRunFiles[0]!.grant,
+          sequence: request.headers.get("x-takosumi-private-run-files-sequence"),
+        };
+        return Response.json({ status: "succeeded", exitCode: 0, planDigest: PLAN_DIGEST });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  }, { healthFetch: async () => {
+    enteredHealth();
+    await healthGate;
+    return Response.json({ ok: true, capabilities: ["takosumi.runner-private-run-files-refresh@v1"] });
+  } });
+  const pending = runner.fetch(new Request("https://runner/runs/plan_private", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "plan", request: {
+      planRun: { id: owner.id }, privateRunFiles: files,
+    } }),
+  }));
+  await healthEntered;
+  const update = {
+    kind: "takosumi.private-run-files.refresh@v1",
+    owner,
+    runnerRunId: owner.id,
+    manifestDigest,
+    sequence: 1,
+    files: [{ ...files[0]!, grant: "artificial-rotated-grant" }],
+  };
+  const refreshed = await runner.fetch(new Request("https://runner/runs/plan_private/private-run-files", {
+    method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(update),
+  }));
+  releaseHealth();
+  assert.equal(refreshed.status, 200);
+  assert.equal((await pending).status, 200);
+  assert.deepEqual(delivered, { grant: "artificial-rotated-grant", sequence: "1" });
+});
+
+test("Cloud DO forwards live rotation to the real Runner HTTP descriptor used by OpenTofu", async () => {
+  const runId = `plan_cloud_private_${crypto.randomUUID().replaceAll("-", "")}`;
+  const root = await mkdtemp(join(tmpdir(), "takosumi-cloud-private-"));
+  const marker = join(root, "plan-entered");
+  const release = join(root, "release-plan");
+  const capture = join(root, "provider-descriptor.json");
+  const tofuPath = join(root, "tofu");
+  const runRoot = join("/tmp/takosumi-runs", runId);
+  const previousPath = Bun.env.PATH;
+  const owner = { kind: "plan" as const, id: runId };
+  const files = [{ slot: "checkpoint", endpoint: "http://core.internal/internal/private-run-files/v1", grant: "artificial-initial-grant" }];
+  let pending: Promise<Response> | undefined;
+  try {
+    await writeFile(tofuPath, `#!/bin/sh
+case "$1" in
+  init) exit 0 ;;
+  plan)
+    : > '${marker}'
+    while [ ! -e '${release}' ]; do sleep 0.02; done
+    cp "$TAKOSUMI_PRIVATE_RUN_FILES_FILE" '${capture}'
+    for arg in "$@"; do
+      if [ "$previous" = "-out" ]; then printf 'fake-plan' > "$arg"; fi
+      previous="$arg"
+    done
+    exit 0 ;;
+  show) printf '{"format_version":"1.2","resource_changes":[]}' ;;
+  output) printf '{}' ;;
+  *) exit 2 ;;
+esac
+`);
+    await chmod(tofuPath, 0o700);
+    Bun.env.PATH = `${root}:${previousPath ?? ""}`;
+    const moduleDir = join(runRoot, "source", "module");
+    await mkdir(moduleDir, { recursive: true });
+    await writeFile(join(moduleDir, "main.tf"), "terraform {}\n");
+    const runner = runnerWithContainer(new FakeR2Bucket(), {
+      async containerFetch(request) {
+        return await handleRunnerRequestWithDependencies(request, { mutationCustodyMode: "local-http" });
+      },
+    });
+    pending = runner.fetch(new Request(`https://runner/runs/${runId}`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1", action: "plan", runId,
+        request: {
+          planRun: { id: runId, operation: "create", source: {
+            kind: "git", url: "https://example.test/cloud-private.git",
+            commit: "0123456789abcdef0123456789abcdef01234567", modulePath: "module",
+          } },
+          privateRunFiles: files,
+        },
+      }),
+    }));
+    const deadline = Date.now() + 10_000;
+    while (!(await Bun.file(marker).exists()) && Date.now() < deadline) await Bun.sleep(10);
+    assert.equal(await Bun.file(marker).exists(), true);
+    const livePath = `https://runner/runs/${runId}/private-run-files`;
+    const before = await runner.fetch(new Request(livePath));
+    assert.equal(before.status, 200);
+    assert.equal((await before.json() as { sequence: number }).sequence, 0);
+    const update = {
+      kind: "takosumi.private-run-files.refresh@v1", owner, runnerRunId: runId,
+      manifestDigest: await privateRunFileManifestDigest({ owner, runnerRunId: runId, files }),
+      sequence: 1, files: [{ ...files[0]!, grant: "artificial-renewed-grant" }],
+    };
+    const response = await runner.fetch(new Request(livePath, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(update),
+    }));
+    assert.equal(response.status, 200);
+    assert.equal((await response.json() as { sequence: number }).sequence, 1);
+    const after = await runner.fetch(new Request(livePath));
+    assert.equal(after.status, 200);
+    assert.equal((await after.json() as { sequence: number }).sequence, 1);
+    await writeFile(release, "release");
+    assert.equal((await pending).status, 200);
+    const providerView = JSON.parse(await readFile(capture, "utf8")) as Record<string, unknown>;
+    assert.equal(providerView.sequence, 1);
+    assert.deepEqual(providerView.files, update.files);
+  } finally {
+    await writeFile(release, "release").catch(() => {});
+    if (pending) await pending.catch(() => {});
+    if (previousPath === undefined) delete Bun.env.PATH;
+    else Bun.env.PATH = previousPath;
+    await rm(runRoot, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+for (const action of ["apply", "destroy"] as const) {
+  test(`slot-bearing Cloud ${action} uses execution identity while restoring its reviewed Plan`, async () => {
+    const planRunId = `plan_private_${action}`;
+    const applyRunId = `apply_${planRunId}`;
+    const r2 = new FakeR2Bucket();
+    await seedEncryptedPlan(r2, planRunId);
+    const token = await signedMutationToken(planRunId, { action, jti: `private-${action}` });
+    const original = await signedMutationRequest(planRunId, token, { action }).json() as Record<string, unknown>;
+    const files = [{ slot: "checkpoint", endpoint: "https://private.example.test/internal/private-run-files/v1", grant: "artificial-initial-grant" }];
+    const requestPayload = original.request as Record<string, unknown>;
+    requestPayload.privateRunFiles = files;
+    original.runId = applyRunId;
+    const request = () => new Request(`https://runner/runs/${applyRunId}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(original),
+    });
+    const providerPaths: string[] = [];
+    const container = mutationSuccessContainer(applyRunId, () => { providerPaths.push(applyRunId); });
+    const storage = new FakeDoStorage();
+    const options = {
+      storage,
+      env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET },
+    };
+    const first = await runnerWithContainer(r2, container, options).fetch(request());
+    assert.equal(first.status, 200);
+    assert.deepEqual(providerPaths, [applyRunId]);
+    assert.equal(storage.valueByPrefix("runner-mutation-authority") !== undefined, true);
+    assert.equal(JSON.stringify(storage.entries()).includes(files[0]!.grant), false);
+
+    const changed = structuredClone(original);
+    (changed.request as Record<string, unknown>).privateRunFiles = [
+      { ...files[0]!, endpoint: "https://other.example.test/internal/private-run-files/v1" },
+    ];
+    const refusal = await runnerWithContainer(r2, container, options).fetch(new Request(`https://runner/runs/${applyRunId}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(changed),
+    }));
+    assert.equal(refusal.status, 409);
+    assert.deepEqual(providerPaths, [applyRunId]);
+  });
+}
+
+test("slot-bearing Apply translates only its pinned Plan-origin credential refresh to the live execution session", async () => {
+  const planRunId = "plan_private_combined";
+  const applyRunId = `apply_${planRunId}`;
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, planRunId);
+  const token = await signedMutationToken(planRunId, { jti: "combined" });
+  const envelope = await signedMutationRequest(planRunId, token).json() as Record<string, unknown>;
+  envelope.runId = applyRunId;
+  const payload = envelope.request as Record<string, unknown>;
+  const files = [{ slot: "checkpoint", endpoint: "https://private.example.test/internal/private-run-files/v1", grant: "artificial-initial-grant" }];
+  payload.privateRunFiles = files;
+  const privateOwner = { kind: "apply" as const, id: applyRunId };
+  const privateDigest = await privateRunFileManifestDigest({ owner: privateOwner, runnerRunId: applyRunId, files });
+  const credentials = payload.credentials as Record<string, unknown>;
+  const manifest = credentials.manifest as { bindings: Record<string, unknown>[] };
+  manifest.bindings[0] = {
+    ...manifest.bindings[0],
+    envNames: ["PROVIDER_RUN_TOKEN", "ROTATING_TOKEN"],
+    fileEnvNames: ["ROTATING_TOKEN_FILE"],
+    requiredEnvGroups: [["PROVIDER_RUN_TOKEN", "ROTATING_TOKEN"]],
+    renewableEnv: { sourceEnvName: "ROTATING_TOKEN", fileEnvName: "ROTATING_TOKEN_FILE" },
+  };
+  credentials.env = { ...(credentials.env as Record<string, string>), ROTATING_TOKEN: "artificial-old-token" };
+  credentials.manifestDigest = await stableJsonDigest(manifest);
+  credentials.renewable = [{
+    providerSource: RUN_CREDENTIAL_PROVIDER,
+    connectionId: "connection_semantic",
+    sourceEnvName: "ROTATING_TOKEN",
+    fileEnvName: "ROTATING_TOKEN_FILE",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  }];
+  let enteredProvider!: () => void;
+  let releaseProvider!: () => void;
+  const providerEntered = new Promise<void>((resolve) => { enteredProvider = resolve; });
+  const providerGate = new Promise<void>((resolve) => { releaseProvider = resolve; });
+  let providerCalls = 0;
+  let privateSequence = 0;
+  const forwarded: string[] = [];
+  const base = mutationSuccessContainer(applyRunId, () => { providerCalls += 1; });
+  const runner = runnerWithContainer(r2, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === `/runs/${applyRunId}/credentials` && request.method === "GET") {
+        return Response.json({ owner: privateOwner, runnerRunId: applyRunId,
+          manifestDigest: credentials.manifestDigest, sequence: 0 });
+      }
+      if (path === `/runs/${applyRunId}/credentials` && request.method === "PUT") {
+        const body = await request.json() as Record<string, unknown>;
+        forwarded.push(`${path} ${body.runnerRunId}`);
+        return Response.json({ ok: true, status: "updated" });
+      }
+      if (path === `/runs/${applyRunId}/private-run-files` && request.method === "GET") {
+        return Response.json({ owner: privateOwner, runnerRunId: applyRunId,
+          manifestDigest: privateDigest, sequence: privateSequence });
+      }
+      if (path === `/runs/${applyRunId}/private-run-files` && request.method === "PUT") {
+        const body = await request.json() as Record<string, unknown>;
+        privateSequence = body.sequence as number;
+        if (privateSequence === 2) throw new Error("artificial lost private-file PUT acknowledgement");
+        forwarded.push(`${path} ${body.runnerRunId}`);
+        return Response.json({ ok: true, status: "updated", sequence: privateSequence });
+      }
+      if (path === `/runs/${applyRunId}` && request.method === "POST") {
+        enteredProvider();
+        await providerGate;
+      }
+      return await base.containerFetch(request);
+    },
+  }, { env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET } });
+  const pending = runner.fetch(new Request(`https://runner/runs/${applyRunId}`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(envelope),
+  }));
+  try {
+    await Promise.race([providerEntered, Bun.sleep(2_000).then(() => { throw new Error("provider was not dispatched"); })]);
+    const credentialPath = `https://runner/runs/${planRunId}/credentials`;
+    const metadata = await runner.fetch(new Request(credentialPath));
+    assert.equal(metadata.status, 200);
+    assert.equal((await metadata.json() as { runnerRunId: string }).runnerRunId, planRunId);
+    const credentialUpdate = {
+      owner: privateOwner, runnerRunId: planRunId,
+      manifestDigest: credentials.manifestDigest, sequence: 1,
+      credentials: [{ ...(credentials.renewable as Record<string, unknown>[])[0]!, value: "artificial-new-token" }],
+    };
+    const credentialAck = await runner.fetch(new Request(credentialPath, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(credentialUpdate),
+    }));
+    assert.equal(credentialAck.status, 200);
+    const privatePath = `https://runner/runs/${applyRunId}/private-run-files`;
+    const privateMetadata = await runner.fetch(new Request(privatePath));
+    assert.equal(privateMetadata.status, 200);
+    assert.deepEqual(await privateMetadata.json(), { owner: privateOwner,
+      runnerRunId: applyRunId, manifestDigest: privateDigest, sequence: 0 });
+    const privateUpdate = {
+      kind: "takosumi.private-run-files.refresh@v1", owner: privateOwner,
+      runnerRunId: applyRunId, manifestDigest: privateDigest, sequence: 1,
+      files: [{ ...files[0]!, grant: "artificial-renewed-grant" }],
+    };
+    assert.equal((await runner.fetch(new Request(privatePath, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(privateUpdate),
+    }))).status, 200);
+    assert.equal((await runner.fetch(new Request(credentialPath, {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...credentialUpdate, runnerRunId: "plan_foreign", sequence: 2 }),
+    }))).status, 409);
+    assert.equal((await runner.fetch(new Request(privatePath, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(privateUpdate),
+    }))).status, 409);
+    const lostAckUpdate = { ...privateUpdate, sequence: 2,
+      files: [{ ...files[0]!, grant: "artificial-lost-ack-grant" }] };
+    assert.equal((await runner.fetch(new Request(privatePath, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(lostAckUpdate),
+    }))).status, 502);
+    assert.equal((await runner.fetch(new Request(privatePath, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(lostAckUpdate),
+    }))).status, 409);
+    assert.deepEqual(forwarded, [
+      `/runs/${applyRunId}/credentials ${applyRunId}`,
+      `/runs/${applyRunId}/private-run-files ${applyRunId}`,
+    ]);
+  } finally {
+    releaseProvider();
+  }
+  assert.equal((await pending).status, 200);
+  assert.equal(providerCalls, 1);
+  const replay = await runner.fetch(new Request(`https://runner/runs/${applyRunId}`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(envelope),
+  }));
+  assert.equal(replay.status, 409);
+  assert.equal(providerCalls, 1);
+});
+
+test("slot-bearing Apply refuses a saved Plan artifact from a different Plan origin before provider work", async () => {
+  const planRunId = "plan_private_origin";
+  const foreignPlanRunId = "plan_private_foreign";
+  const applyRunId = `apply_${planRunId}`;
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, planRunId);
+  await seedEncryptedPlan(r2, foreignPlanRunId);
+  const token = await signedMutationToken(planRunId, { jti: "foreign-origin" });
+  const envelope = await signedMutationRequest(planRunId, token).json() as Record<string, unknown>;
+  envelope.runId = applyRunId;
+  const payload = envelope.request as Record<string, unknown>;
+  payload.privateRunFiles = [{ slot: "checkpoint", endpoint: "https://private.example.test/internal/private-run-files/v1", grant: "artificial-grant" }];
+  payload.planArtifact = {
+    ...(payload.planArtifact as Record<string, unknown>),
+    ref: `r2://takos-artifacts/opentofu-plan-runs/${foreignPlanRunId}/tfplan`,
+  };
+  let providerCalls = 0;
+  const runner = runnerWithContainer(r2, mutationSuccessContainer(applyRunId, () => { providerCalls += 1; }), {
+    env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET },
+  });
+  const response = await runner.fetch(new Request(`https://runner/runs/${applyRunId}`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(envelope),
+  }));
+  assert.notEqual(response.status, 200);
+  assert.equal(providerCalls, 0);
+});
+
+test("private file refresh while Cloud Apply restores its Plan is delivered at execution dispatch", async () => {
+  const planRunId = "plan_private_slow_restore";
+  const applyRunId = `apply_${planRunId}`;
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, planRunId);
+  const token = await signedMutationToken(planRunId, { jti: "private-slow-restore" });
+  const envelope = await signedMutationRequest(planRunId, token).json() as Record<string, unknown>;
+  envelope.runId = applyRunId;
+  const owner = { kind: "apply" as const, id: applyRunId };
+  const files = [{ slot: "checkpoint", endpoint: "https://private.example.test/internal/private-run-files/v1", grant: "artificial-before-restore" }];
+  (envelope.request as Record<string, unknown>).privateRunFiles = files;
+  let enteredRestore!: () => void;
+  let releaseRestore!: () => void;
+  const restoreEntered = new Promise<void>((resolve) => { enteredRestore = resolve; });
+  const restoreGate = new Promise<void>((resolve) => { releaseRestore = resolve; });
+  let providerView: { grant: string; sequence: string | null } | undefined;
+  const base = mutationSuccessContainer(applyRunId, () => {});
+  const runner = runnerWithContainer(r2, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === `/runs/${applyRunId}/artifacts/tfplan` && request.method === "PUT") {
+        enteredRestore();
+        await restoreGate;
+      }
+      if (path === `/runs/${applyRunId}` && request.method === "POST") {
+        const delivered = await request.clone().json() as { request: { privateRunFiles: typeof files } };
+        providerView = { grant: delivered.request.privateRunFiles[0]!.grant,
+          sequence: request.headers.get("x-takosumi-private-run-files-sequence") };
+      }
+      return await base.containerFetch(request);
+    },
+  }, { env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET } });
+  const pending = runner.fetch(new Request(`https://runner/runs/${applyRunId}`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(envelope),
+  }));
+  try {
+    await Promise.race([restoreEntered, Bun.sleep(2_000).then(() => { throw new Error("Plan restore did not start"); })]);
+    const update = {
+      kind: "takosumi.private-run-files.refresh@v1", owner, runnerRunId: applyRunId,
+      manifestDigest: await privateRunFileManifestDigest({ owner, runnerRunId: applyRunId, files }),
+      sequence: 1, files: [{ ...files[0]!, grant: "artificial-after-restore" }],
+    };
+    assert.equal((await runner.fetch(new Request(`https://runner/runs/${applyRunId}/private-run-files`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(update),
+    }))).status, 200);
+  } finally {
+    releaseRestore();
+  }
+  assert.equal((await pending).status, 200);
+  assert.deepEqual(providerView, { grant: "artificial-after-restore", sequence: "1" });
+});
 
 interface RestoreSourceDescriptor {
   readonly stateVersionId: string;
