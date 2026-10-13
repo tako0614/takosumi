@@ -296,6 +296,11 @@ function compatibilityDiagnosticDisplay(
 function compatibilitySummaryDisplay(
   result: CapsuleCompatibilityResult,
 ): string {
+  // The check itself did not run: that is no verdict on the service, so do
+  // not ask the user to "review" anything — say it can be tried again.
+  if (compatibilityCheckLooksTransient(result)) {
+    return t("new.compat.summary.checkFailed");
+  }
   if (result.diagnostics.some(isRepositoryInstallUxDiagnostic)) {
     return t("new.compat.summary.installUxInvalid");
   }

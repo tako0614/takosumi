@@ -19,8 +19,10 @@ import {
 } from "../../lib/control-api.ts";
 import { t } from "../../i18n/index.ts";
 import { Badge, Button, Checkbox, Spinner } from "../../components/ui/index.ts";
-import { friendlyError } from "../../lib/error-copy.ts";
+import { fetchFailedMessage, friendlyError } from "../../lib/error-copy.ts";
+import { createLastGoodValue } from "../../lib/resource-read.ts";
 import { runFailureHint } from "../../lib/run-errors.ts";
+import { runStatusLabel } from "../../lib/labels.ts";
 import {
   stateVersionReadinessAfterApply,
   type StateVersionReadiness,
@@ -163,6 +165,10 @@ export async function readInstallReadiness(
 export default function InstallExecution(props: Props) {
   const [runId, setRunId] = createSignal(props.planRunId);
   const [run, { mutate, refetch }] = createResource(runId, getRun);
+  // Never `run()` / `run.latest`: both THROW once a load has failed, and the
+  // 3s fallback read below means one 5xx mid-install replaced the whole app
+  // with the root reload card. A failed refetch keeps the last good run.
+  const runLatest = createLastGoodValue(run, (r) => r.id === runId());
   const [applying, setApplying] = createSignal(false);
   const [approving, setApproving] = createSignal(false);
   const [confirmed, setConfirmed] = createSignal(false);
@@ -174,10 +180,13 @@ export default function InstallExecution(props: Props) {
     const close = openRunStream(id, {
       onRun: (next) => {
         mutate(next);
+        // A failed read's error outlives `mutate`; re-read so the pushed
+        // status shows now rather than at the next fallback read.
+        if (run.error) void refetch();
       },
     });
     const timer = globalThis.setInterval(() => {
-      const latest = run.latest;
+      const latest = runLatest();
       if (installRunNeedsFallbackRead(latest)) {
         void refetch();
       }
@@ -189,7 +198,7 @@ export default function InstallExecution(props: Props) {
   });
 
   const readinessKey = () => {
-    const latest = run.latest;
+    const latest = runLatest();
     return latest?.type === "apply" && latest.status === "succeeded"
       ? JSON.stringify([latest.workspaceId, props.capsuleId, latest.id])
       : null;
@@ -236,6 +245,10 @@ export default function InstallExecution(props: Props) {
   });
   onCleanup(() => activeReadinessController?.abort());
 
+  // Raw `.latest` on purpose: ordinary read failures come back as
+  // `read-failed` (inline retry), but an UNEXPECTED error is rethrown by the
+  // fetcher so it escapes to the page error boundary — fail closed, never an
+  // Open link for an install whose readiness is unknown.
   const readinessState = () => {
     const result = readiness.latest;
     return result?.kind === "state" ? result.value : undefined;
@@ -266,10 +279,10 @@ export default function InstallExecution(props: Props) {
     onCleanup(() => globalThis.clearTimeout(timer));
   });
 
-  const summary = () => run.latest?.summary;
+  const summary = () => runLatest()?.summary;
   const countsKnown = () => Boolean(summary());
   const destructive = () => {
-    const latest = run.latest;
+    const latest = runLatest();
     return (
       !countsKnown() ||
       (summary()?.destroy ?? 0) > 0 ||
@@ -277,7 +290,7 @@ export default function InstallExecution(props: Props) {
     );
   };
   const planReady = () => {
-    const latest = run.latest;
+    const latest = runLatest();
     return (
       latest?.type === "plan" &&
       latest.status === "succeeded" &&
@@ -332,13 +345,13 @@ export default function InstallExecution(props: Props) {
   };
 
   const failed = () => {
-    const status = run.latest?.status;
+    const status = runLatest()?.status;
     return status === "failed" || status === "cancelled" || status === "expired";
   };
 
   return (
     <section class="iv-execution" aria-labelledby="iv-review-title">
-      <Show when={run.loading && !run.latest}>
+      <Show when={run.loading && !run.error && !runLatest()}>
         <div class="iv-status" role="status">
           <Spinner size={18} />
           <div>
@@ -348,7 +361,27 @@ export default function InstallExecution(props: Props) {
         </div>
       </Show>
 
-      <Show when={run.latest}>
+      {/* First read failed: say so and offer a retry. The fallback read keeps
+          trying every 3s, so the review appears on its own once it loads. */}
+      <Show when={run.error && !runLatest()}>
+        <div class="iv-status" role="alert">
+          <AlertCircle size={18} />
+          <div>
+            <strong>{t("run.loadFailedTitle")}</strong>
+            <span>{fetchFailedMessage(run.error, t)}</span>
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            busy={run.loading}
+            onClick={() => void refetch()}
+          >
+            {t("common.retry")}
+          </Button>
+        </div>
+      </Show>
+
+      <Show when={runLatest()}>
         {(current) => (
           <>
             <div class="iv-review-head">
@@ -371,7 +404,7 @@ export default function InstallExecution(props: Props) {
                   readinessState(),
                 )}
               >
-                {current().status}
+                {runStatusLabel(current().status)}
               </Badge>
             </div>
 

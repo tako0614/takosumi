@@ -1,3 +1,4 @@
+import { randomUuid } from "./random-uuid.ts";
 import type { CreateGitInstallPlanRequest } from "takosumi-contract";
 
 /** In-memory only: the exact request may contain user-supplied variables. */
@@ -21,7 +22,7 @@ export function getOrCreateInstallPlanAttempt(
   return Object.freeze({
     workspaceId,
     requestJson,
-    idempotencyKey: crypto.randomUUID(),
+    idempotencyKey: randomUuid(),
   });
 }
 
