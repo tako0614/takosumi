@@ -4,6 +4,13 @@
   `fix/takosumi-tanto-mainfix-lastgood-20261013`.
 - Base: `eccdcd13329debb4c8548487f7df92544e013b05` (#420);
   failing Actions run: `38425957584`.
+- Main integration: #422 merged while this fix was being verified, at
+  `62095f11a111d83b2b99258ed759f0c516b5575a`. Its cache-busted import already
+  avoids the original cached importer. This branch normally merges that main,
+  replacing the overlapping test setup with process isolation to remove the
+  shared Solid mock and adding failure-safe root/child cleanup. Uninstall code
+  remains the main implementation. All final verification is restarted after
+  integration; no force push or other-worktree edits are used.
 - Scope: test runtime isolation, lease-test event synchronization and evidence.
   No product implementation,
   dependency, schema, deployment or release-entrypoint changes.
@@ -70,8 +77,9 @@ runs on each Bun 1.4.2 and Bun 1.4.0 all passed (ten runs total, each 1 pass /
 0 fail, four outcome assertions). No production lease or credential code changed.
 
 The initial gate reported **5623 pass / 5 existing skips / 1 fail**. A retry was
-stopped to apply the synchronization fix, then the complete gate was restarted
-on the final test code. Failed and interrupted attempts are recorded in the PR.
+stopped to apply the synchronization fix. The next gate was stopped to integrate
+the newly merged #422 before publishing. Failed and interrupted attempts are
+recorded in the PR; the final full gate is on the integrated main.
 
 ## Verification
 

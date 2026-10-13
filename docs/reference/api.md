@@ -157,7 +157,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本 (正とする情報) は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 86 件です。
+次の 88 件です。
 
 **Account views**
 
@@ -210,6 +210,8 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 | POST     | `/api/v1/capsules/{capsuleId}/install-config-re-adoptions` | SourceSnapshot の InstallConfig を再採用する |
 | PATCH    | `/api/v1/capsules/{capsuleId}`                             | Capsule を更新する                           |
 | DELETE   | `/api/v1/capsules/{capsuleId}`                             | 破棄計画を作る                               |
+| POST     | `/api/v1/capsules/{capsuleId}/uninstall`                   | 猶予付きの削除 (二段階アンインストール) を予約する |
+| POST     | `/api/v1/capsules/{capsuleId}/cancel-uninstall`            | 猶予期間中の削除予約を取り消す               |
 | GET      | `/api/v1/capsules/{capsuleId}/outputs`                     | 公開 Output を読む                           |
 | GET      | `/api/v1/capsules/{capsuleId}/usage-summary`               | 利用量の集計を読む                           |
 | GET      | `/api/v1/capsules/{capsuleId}/state-versions`              | StateVersion を一覧する                      |
@@ -220,6 +222,21 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 | GET      | `/api/v1/workspaces/{workspaceId}/current-state-versions`  | 現在の StateVersion をまとめて読む           |
 | GET      | `/api/v1/capsule-configs`                                  | Capsule 作成設定を一覧する                   |
 | GET      | `/api/v1/capsule-configs/{capsuleConfigId}`                | Capsule 作成設定を読む                       |
+
+`POST /api/v1/capsules/{capsuleId}/uninstall` は適用済みの Capsule を `uninstalled`
+にし、`uninstall.scheduledDestroyAt` まで何も壊しません。猶予日数は operator 設定
+`TAKOSUMI_UNINSTALL_GRACE_DAYS` (OSS 既定 7 日) です。猶予中も provider の資源と
+データは残り、課金も続きます。Takosumi の OIDC によるサインインは止まります
+(client は失効させないので、取り消せば再開します)。破棄以外の計画・適用は拒否されます
+(`capsule_uninstalled`)。猶予中は `cancel-uninstall` で元の状態に戻せます。
+期日を過ぎると control plane が一度だけ Capsule 単位の書き出しを試み、結果
+(`exported` / `failed` / `skipped`) を `uninstall.preDestroyExport` に記録してから、
+通常の破棄計画を作ります。計画が削除だけである場合に限り system が承認して適用し、
+そこから先は原則として取り消せません。削除だけでない、変更内容が分からない、
+所有者が計画を取り消した、または破棄が provider に届く前に拒否・失敗した場合は
+`uninstall.blockedReason` を残して止まり、所有者が取り消すか即時削除を選びます。
+provider に届いた破棄が失敗した場合は、通常の破棄失敗と同じく `error` になります。
+`DELETE` と `destroy-plan` は従来どおり猶予なしの破棄計画を作ります。
 
 新しい Capsule は `POST /api/v1/workspaces/{workspaceId}/install-plans` から
 exact SourceSnapshot と成功済み compatibility declaration を固定して作成し、返された

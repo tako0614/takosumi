@@ -240,6 +240,7 @@ function isCapsuleStatus(
     value === "stale" ||
     value === "error" ||
     value === "disabled" ||
+    value === "uninstalled" ||
     value === "destroyed"
   );
 }

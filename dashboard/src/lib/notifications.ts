@@ -43,7 +43,9 @@ export function isFailureAction(action: string): boolean {
     // Auto-update failures carry failure-toned copy in describeEvent; keep the
     // icon/styling in step so they don't render with the neutral Bell.
     action === "capsule.auto_update_failed" ||
-    action === "capsule.auto_update_apply_failed"
+    action === "capsule.auto_update_apply_failed" ||
+    // A scheduled deletion that stopped waits for the owner to decide.
+    action === "capsule.uninstall_blocked"
   );
 }
 

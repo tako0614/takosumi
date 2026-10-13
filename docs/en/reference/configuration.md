@@ -121,10 +121,17 @@ ProviderBinding.
 | `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL`      | Optional | `3`                                                | zstd compression level for SourceSnapshot archives, `1` to `19`. Lower means larger archives and faster first ingestion                                                                                      |
 | `TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH`    | Optional | `5`                                                | Upper bound of auto-sync Sources picked up per scheduled poll                                                                                                                                                |
 | `TAKOSUMI_COMPATIBILITY_CHECK_TIMEOUT_MS` | Optional | `45000`                                            | Upper bound in milliseconds the request path waits for compatibility-check source expansion                                                                                                                  |
+| `TAKOSUMI_UNINSTALL_GRACE_DAYS`           | Optional | `7`                                                | Grace period in whole days between scheduling an uninstall and the actual teardown, `0` to `365`. `0` removes the grace period: the next finalizer tick performs an unattended, system-approved destroy. An invalid value logs a warning and uses the default. A change applies to new requests; existing schedules keep their date |
 
 Leaving `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR` empty makes the runner unpack
 providers into per-Run work areas. Nothing is shared, and in exchange no
 mix-up between Runs can happen.
+
+Due uninstall requests are advanced by the hourly cron on Cloudflare and by an
+in-process 15-minute cadence on PostgreSQL. Right before teardown the control
+plane attempts one Capsule-scoped export and records its outcome on the
+Capsule. A configuration without backup artifact storage records `skipped` and
+proceeds with the teardown.
 
 ```bash
 export TAKOSUMI_ENABLED_RUNNER_PROFILES="opentofu-default"
