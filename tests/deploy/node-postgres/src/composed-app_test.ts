@@ -103,7 +103,7 @@ function accountsHandlerSpy(): AccountsHandlerSpy {
   };
 }
 
-async function buildTestApp() {
+async function buildTestApp(overrides: Partial<ComposedAppInput> = {}) {
   const spy = accountsHandlerSpy();
   const { buildComposedApp } =
     await import("../../../../deploy/node-postgres/src/composed-app.ts");
@@ -117,6 +117,7 @@ async function buildTestApp() {
     // This test exercises the account/token composition rather than hostname
     // reservation; the host authority seam is covered in Interface tests.
     interfaceOAuth2ResourceAuthorizer: () => true,
+    ...overrides,
   });
   return { app: created.app, spy };
 }
@@ -892,6 +893,9 @@ test("composed app owns Takosumi product discovery before account fallback", asy
     wellKnownBody.endpoints.capabilities,
     "https://app.takosumi.test/api/v1/capabilities",
   );
+  // The reference Bun+PostgreSQL composition wires no OpenTofu runner, so
+  // every Run would fail with `runner_capability_missing`.
+  assert.equal(wellKnownBody.features.opentofu_runner, false);
 
   const capabilities = await app.fetch(
     new Request("https://app.takosumi.test/api/v1/capabilities"),
@@ -900,9 +904,26 @@ test("composed app owns Takosumi product discovery before account fallback", asy
   assert.equal(capabilities.headers.get("x-handled-by"), null);
   const capabilitiesBody = await capabilities.json();
   assert.equal(capabilitiesBody.resources.Stack, true);
-  assert.equal(capabilitiesBody.adapters.opentofu, true);
+  assert.equal(capabilitiesBody.adapters.opentofu, false);
 
   assert.equal(spy.calls.length, 0);
+});
+
+test("composed app product discovery advertises a wired OpenTofu runner", async () => {
+  const { app } = await buildTestApp({
+    opentofuRunner: runtimeInputRunner({ planJobs: [], sourceJobs: [] }),
+  });
+  const wellKnown = await app.fetch(
+    new Request("https://app.takosumi.test/.well-known/takosumi"),
+  );
+  assert.equal(wellKnown.status, 200);
+  assert.equal((await wellKnown.json()).features.opentofu_runner, true);
+
+  const capabilities = await app.fetch(
+    new Request("https://app.takosumi.test/api/v1/capabilities"),
+  );
+  assert.equal(capabilities.status, 200);
+  assert.equal((await capabilities.json()).adapters.opentofu, true);
 });
 
 test("composed app product discovery uses forwarded public origin", async () => {

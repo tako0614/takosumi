@@ -74,6 +74,7 @@ control plane, account plane, dashboard, CLI, runner env, and HTTP routes.
 - Physical DB table renames are non-destructive and reversible (rename-aside DDL
   in both the Postgres and D1 catalogs, with a forward-only retired-Deployment
   value translation of the current state-version pointer).
+- Removed the root `Dockerfile`; self-host builds use `deploy/node-postgres/Dockerfile`.
 
 ## Pre-v1 Notes
 
