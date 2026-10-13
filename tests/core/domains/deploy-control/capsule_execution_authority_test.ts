@@ -1965,6 +1965,149 @@ describe("Capsule execution authority", () => {
     }
   }, 30_000);
 
+  for (const operation of ["install", "revision"] as const) {
+    for (const retainedReal of [false, true]) {
+      test(`D1 ${operation} coordinator ${retainedReal ? "reclaims retained real generation" : "writes integer generation"} after lease expiry`, async () => {
+        const runtime = new Miniflare({
+          compatibilityDate: "2026-07-17",
+          modules: [{
+            type: "ESModule",
+            path: "git-generation-workerd.mjs",
+            contents: "export default {fetch(){return new Response('ok')}}",
+          }],
+          d1Databases: { CONTROL: "git-generation-workerd" },
+        });
+        try {
+          const database = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+          const management = new CloudflareD1OpenTofuControlStore(database);
+          await management.putWorkspace({
+            id: WORKSPACE_ID,
+            handle: "git-generation",
+            displayName: "Git generation recovery",
+            type: "personal",
+            ownerUserId: "generation-owner",
+            createdAt: NOW,
+            updatedAt: NOW,
+          });
+          const authority: WorkspaceManagementAuthority = {
+            workspaceId: WORKSPACE_ID,
+            managementState: "active",
+            managementEpoch: 1,
+          };
+          const plan: StoredGitInstallPlan = {
+            id: "git-generation-plan",
+            workspaceId: WORKSPACE_ID,
+            workspaceManagementAuthority: authority,
+            createdBy: "generation-owner",
+            actorSubject: "generation-owner",
+            idempotencyKeyHash: "generation-request-hash",
+            requestDigest: "generation-request-digest",
+            source: {
+              name: "repo",
+              url: "https://example.com/source.git",
+              ref: "main",
+              path: ".",
+            },
+            capsule: { name: "generation", environment: "staging" },
+            options: {},
+            ...(operation === "revision" ? {
+              operation,
+              sourceId: "generation-source",
+              capsuleId: CAPSULE_ID,
+              installConfigId: "generation-config",
+              installConfigBaseId: "generation-config",
+              installConfigBaseDigest: "sha256:config",
+              installModulePath: ".",
+              revision: {
+                targetRef: "release/v2",
+                base: {
+                  capsuleStateGeneration: 2,
+                  installConfigId: "generation-config",
+                  installConfigDigest: "sha256:config",
+                  sourceDefaultRef: "main",
+                  sourceDefaultPath: ".",
+                },
+              },
+            } : {}),
+            phase: "syncing_source",
+            generation: 0,
+            createdAt: NOW,
+            updatedAt: NOW,
+          };
+          const git = new D1GitInstallPlanStore(database);
+          expect((await git.create(plan, authority)).status).toBe("created");
+          const first = await git.claimReconcile({
+            id: plan.id,
+            expectedGeneration: 0,
+            leaseToken: "interrupted-lease",
+            claimedAt: NOW,
+            leaseExpiresAt: "2026-08-10T00:00:30.000Z",
+            expectedWorkspaceManagementAuthority: authority,
+          });
+          expect(first.status).toBe("claimed");
+          if (first.status !== "claimed") throw new Error("first lease was not acquired");
+          if (retainedReal) {
+            // Reproduce rows written by the pre-fix D1 claim, without changing
+            // the physical integer generation or the live management epoch.
+            await database.prepare(
+              "update git_install_plans set record_json = json_set(record_json, '$.generation', json('1.0')) where id = ?",
+            ).bind(plan.id).run();
+          }
+          const generationRow = () => database.prepare(
+            `select generation, typeof(generation) as physical_type,
+                    json_type(record_json, '$.generation') as json_type
+               from git_install_plans where id = ?`,
+          ).bind(plan.id).first();
+          expect(await generationRow()).toEqual({
+            generation: 1,
+            physical_type: "integer",
+            json_type: retainedReal ? "real" : "integer",
+          });
+          const retry = {
+            id: plan.id,
+            expectedGeneration: 1,
+            leaseToken: "resumed-lease",
+            claimedAt: "2026-08-10T00:00:30.000Z",
+            leaseExpiresAt: "2026-08-10T00:01:00.000Z",
+            expectedWorkspaceManagementAuthority: authority,
+          };
+          expect(await git.claimReconcile({
+            ...retry,
+            claimedAt: "2026-08-10T00:00:29.999Z",
+          })).toMatchObject({ status: "busy", plan: { generation: 1 } });
+          expect(await git.claimReconcile({ ...retry, expectedGeneration: 0 }))
+            .toMatchObject({ status: "conflict", plan: { generation: 1 } });
+          await expect(git.claimReconcile({
+            ...retry,
+            expectedWorkspaceManagementAuthority: { ...authority, managementEpoch: 2 },
+          })).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+          const resumed = await git.claimReconcile(retry);
+          expect(resumed).toMatchObject({ status: "claimed", claim: { plan: { generation: 2 } } });
+          if (resumed.status !== "claimed") throw new Error("expired lease was not reclaimed");
+          expect(await generationRow()).toEqual({
+            generation: 2,
+            physical_type: "integer",
+            json_type: "integer",
+          });
+          expect(await git.completeReconcile({
+            id: plan.id,
+            expectedGeneration: 1,
+            leaseToken: "interrupted-lease",
+            plan: first.claim.plan,
+          })).toMatchObject({ status: "conflict", plan: { generation: 2 } });
+          expect(await git.completeReconcile({
+            id: plan.id,
+            expectedGeneration: 2,
+            leaseToken: retry.leaseToken,
+            plan: { ...resumed.claim.plan, phase: "compiling_install" },
+          })).toMatchObject({ status: "completed", plan: { generation: 2, phase: "compiling_install" } });
+        } finally {
+          await runtime.dispose();
+        }
+      }, 30_000);
+    }
+  }
+
   test("Git, InstallConfig and Interface admission share the Workspace fence on isolated workerd D1", async () => {
     const runtime = new Miniflare({
       compatibilityDate: "2026-07-17",

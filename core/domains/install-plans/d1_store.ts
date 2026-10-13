@@ -272,11 +272,13 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
     }
     const claimedGeneration = observed.generation + 1;
     const authority = gitInstallPlanManagementAuthority(observed, input.expectedWorkspaceManagementAuthority);
+    // D1 binds JS numbers as SQL reals. Normalize new JSON writes, while
+    // admitting legacy 1.0 only when it equals the physical integer exactly.
     const claimedRow = await this.#db
       .prepare(
         `update git_install_plans
-            set generation = ?,
-                record_json = json_set(record_json, '$.generation', ?, '$.updatedAt', ?),
+            set generation = cast(? as integer),
+                record_json = json_set(record_json, '$.generation', cast(? as integer), '$.updatedAt', ?),
                 reconcile_lease_token = ?,
                 reconcile_lease_expires_at = ?, updated_at = ?
           where id = ? and workspace_id = ? and generation = ?
@@ -290,7 +292,8 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
             and json_extract(record_json, '$.phase') = phase
             and json_type(record_json, '$.workspaceId') = 'text'
             and json_extract(record_json, '$.workspaceId') = workspace_id
-            and json_type(record_json, '$.generation') = 'integer'
+            and typeof(generation) = 'integer'
+            and json_type(record_json, '$.generation') in ('integer', 'real')
             and json_extract(record_json, '$.generation') = generation
             and exists (
               select 1 from workspaces as workspace
