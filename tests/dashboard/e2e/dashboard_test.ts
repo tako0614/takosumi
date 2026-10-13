@@ -1950,6 +1950,108 @@ test.describe("Takosumi dashboard browser surface", () => {
     });
   }
 
+  test("source auto-sync retries after PATCH failure without recreating the install Plan", async ({ page }) => {
+    test.skip(mode !== "portable", "auto-sync failures are a portable-only fixture");
+    const errors = pageErrors(page);
+    const state = await stubProviderDestinationFixture(page, [], []);
+    const patchBodies: unknown[] = [];
+    const patchPath = "/api/v1/sources/src_provider_destination_e2e";
+    await page.route(`**${patchPath}`, async (route) => {
+      if (route.request().method() !== "PATCH") return route.fallback();
+      patchBodies.push(route.request().postDataJSON());
+      if (patchBodies.length <= 2) {
+        return route.fulfill({ status: 503, json: {
+          error: { code: "unavailable", message: "Source polling temporarily unavailable" },
+        } });
+      }
+      return route.fallback();
+    });
+    const query = new URLSearchParams({
+      git: "https://github.com/example/cloudflare-service.git",
+      ref: PORTABLE_SOURCE_COMMIT,
+      name: "cloudflare-service",
+    });
+    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: /追加|Add/u }).click();
+    await expect(page.locator(".iv-execution")).toBeVisible();
+    await expect.poll(() => patchBodies.length).toBe(1);
+    const warning = page.getByTestId("install-source-auto-sync-retry");
+    await expect(warning).toContainText(/自動更新を有効にできませんでした|Automatic source updates could not be enabled/u);
+    const retry = warning.getByRole("button", { name: /再試行|Retry/u });
+    await retry.click();
+    await expect.poll(() => patchBodies.length).toBe(2);
+    await expect(retry).toBeEnabled();
+    await expect(warning).toContainText(/自動更新を有効にできませんでした|Automatic source updates could not be enabled/u);
+    await retry.click();
+    await expect.poll(() => patchBodies.length).toBe(3);
+    await expect(warning).toHaveCount(0);
+    expect(patchBodies).toEqual([
+      { autoSync: true }, { autoSync: true }, { autoSync: true },
+    ]);
+    expect(state.sourceAutoSyncPatches).toEqual([{ autoSync: true }]);
+    expectSingleSourceCreate(state);
+    expect(state.compatibilityBodies).toHaveLength(1);
+    expect(state.mutations.filter((mutation) =>
+      mutation === "POST /api/v1/workspaces/ws_alpha/install-plans"
+    )).toHaveLength(1);
+    expect(state.mutations.some((mutation) => mutation.includes("/apply"))).toBe(false);
+    await assertNoPageErrors(errors);
+  });
+
+  for (const succeeds of [false, true]) {
+    test(`source auto-sync ignores a late PATCH ${succeeds ? "success" : "failure"} after Workspace change`, async ({ page }) => {
+      test.skip(mode !== "portable", "auto-sync races are a portable-only fixture");
+      const errors = pageErrors(page);
+      const state = await stubProviderDestinationFixture(page, [], []);
+      let heldPatch: Route | undefined;
+      await page.route("**/api/v1/sources/src_provider_destination_e2e", (route) => {
+        if (route.request().method() !== "PATCH") return route.fallback();
+        heldPatch = route;
+      });
+      const query = new URLSearchParams({
+        git: "https://github.com/example/cloudflare-service.git",
+        ref: PORTABLE_SOURCE_COMMIT,
+        name: "cloudflare-service",
+      });
+      await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
+      await page.getByRole("button", { name: /追加|Add/u }).click();
+      await expect.poll(() => Boolean(heldPatch)).toBe(true);
+      const trigger = workspaceTrigger(page);
+      await trigger.click();
+      await page.locator('[role="menu"]:visible').first()
+        .getByRole("menuitemradio").filter({ hasText: expectations.switchWorkspaceName })
+        .first().click();
+      await expect(trigger).toHaveAttribute("aria-label", /Beta Workspace/u);
+      const response = page.waitForResponse((current) =>
+        current.request().method() === "PATCH" &&
+        new URL(current.url()).pathname === "/api/v1/sources/src_provider_destination_e2e"
+      );
+      await heldPatch!.fulfill(succeeds
+        ? { json: { source: {
+            id: "src_provider_destination_e2e",
+            workspaceId: "ws_alpha",
+            name: "cloudflare-service",
+            url: "https://github.com/example/cloudflare-service.git",
+            defaultRef: PORTABLE_SOURCE_COMMIT,
+            defaultPath: ".",
+            status: "active",
+            autoSync: true,
+            createdAt: "2026-08-01T00:00:00.000Z",
+            updatedAt: "2026-08-01T00:00:01.000Z",
+          } } }
+        : { status: 503, json: { error: { code: "unavailable", message: "Stale polling failure" } } });
+      await response;
+      await expect(page.getByRole("button", { name: /追加|Add/u })).toBeEnabled();
+      await expect(page.getByTestId("install-source-auto-sync-retry")).toHaveCount(0);
+      await expect(page.locator(".iv-execution")).toHaveCount(0);
+      await expect(page.locator("body")).not.toContainText("Stale polling failure");
+      expectSingleSourceCreate(state);
+      expect(state.mutations.filter((mutation) => mutation.includes("/install-plans")))
+        .toHaveLength(1);
+      await assertNoPageErrors(errors);
+    });
+  }
+
   test("unsupported resources offer connection setup before Plan", async ({
     page,
   }) => {

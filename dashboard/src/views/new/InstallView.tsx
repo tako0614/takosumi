@@ -317,6 +317,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   let autoSyncSourceForInstall:
     | { readonly workspaceId: string; readonly sourceId: string }
     | undefined;
+  const [sourceAutoSyncError, setSourceAutoSyncError] = createSignal<string>();
+  const [sourceAutoSyncBusy, setSourceAutoSyncBusy] = createSignal(false);
   let activePreparationController: AbortController | undefined;
   let sourceFetchSlowHintTimeout: ReturnType<typeof setTimeout> | undefined;
   createEffect(() => {
@@ -955,6 +957,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       ? modulePathHint()
       : false;
     autoSyncSourceForInstall = undefined;
+    setSourceAutoSyncError(undefined);
+    setSourceAutoSyncBusy(false);
     setSourceId(undefined);
     setSourceSnapshotId(undefined);
     setSourceCreateReconciliationToken(undefined);
@@ -1623,6 +1627,36 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     }
   };
 
+  const enableInstallSourceAutoSync = async (workspace: string) => {
+    const pendingAutoSyncSource = autoSyncSourceForInstall;
+    if (
+      disposed || sourceAutoSyncBusy() || !pendingAutoSyncSource ||
+      pendingAutoSyncSource.workspaceId !== workspace ||
+      pendingAutoSyncSource.sourceId !== sourceId() ||
+      !workspaceIsCurrent(workspace)
+    ) return;
+    const stillOwnsPendingSource = () =>
+      !disposed && autoSyncSourceForInstall === pendingAutoSyncSource &&
+      workspaceIsCurrent(workspace) && pendingAutoSyncSource.sourceId === sourceId();
+    setSourceAutoSyncBusy(true);
+    try {
+      await patchSource(pendingAutoSyncSource.sourceId, { autoSync: true });
+      if (!stillOwnsPendingSource()) return;
+      // Keep this marker through failures so retry only repeats this PATCH,
+      // without creating another Source, compatibility check, or install Plan.
+      autoSyncSourceForInstall = undefined;
+      setSourceAutoSyncError(undefined);
+    } catch (cause) {
+      if (stillOwnsPendingSource()) {
+        setSourceAutoSyncError(installFlowErrorMessage(cause));
+      }
+    } finally {
+      if (!disposed && workspaceIsCurrent(workspace) && pendingAutoSyncSource.sourceId === sourceId()) {
+        setSourceAutoSyncBusy(false);
+      }
+    }
+  };
+
   const submitInstallPlan = async (attempt: InstallPlanAttempt) => {
     const workspace = attempt.workspaceId;
     if (!workspaceIsCurrent(workspace)) return;
@@ -1676,23 +1710,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       clearCurrentStateVersionCache(workspace);
       clearDashboardOverviewCache(workspace);
       setPlanRunId(runId);
-      const pendingAutoSyncSource = autoSyncSourceForInstall;
-      autoSyncSourceForInstall = undefined;
+      await enableInstallSourceAutoSync(workspace);
       if (
-        pendingAutoSyncSource &&
-        pendingAutoSyncSource.workspaceId === workspace &&
-        pendingAutoSyncSource.sourceId === sourceId() &&
-        workspaceIsCurrent(workspace)
-      ) {
-        try {
-          await patchSource(pendingAutoSyncSource.sourceId, { autoSync: true });
-        } catch (cause) {
-          // The reviewable Plan already exists. Keep the install moving and
-          // leave the failure visible so the operator knows polling was not
-          // enabled for this newly installed Source.
-          setError(installFlowErrorMessage(cause));
-        }
-      }
+        disposed || installPlanAttempt !== attempt ||
+        !workspaceIsCurrent(workspace) || !routeStillOwnsPlan(response.installPlan.id)
+      ) return;
       if (hasInstallRecoveryLocator(location.search)) {
         navigate(location.pathname, { replace: true });
       }
@@ -1761,6 +1783,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setModulePathHint(false);
     setName("");
     autoSyncSourceForInstall = undefined;
+    setSourceAutoSyncError(undefined);
+    setSourceAutoSyncBusy(false);
     setSourceId(undefined);
     setSourceSnapshotId(undefined);
     setSourceCreateReconciliationToken(undefined);
@@ -2016,6 +2040,19 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           <div class="iv-error" role="alert">
             {message()}
           </div>
+        )}
+      </Show>
+
+      <Show when={sourceAutoSyncError()}>
+        {(message) => (
+          <aside class="iv-compat-warning" role="alert" data-testid="install-source-auto-sync-retry">
+            <strong>{t("installStore.sourceAutoSyncFailed")}</strong>
+            <p>{message()}</p>
+            <Button type="button" variant="secondary" busy={sourceAutoSyncBusy()}
+              onClick={() => void enableInstallSourceAutoSync(workspaceId())}>
+              {t("common.retry")}
+            </Button>
+          </aside>
         )}
       </Show>
 

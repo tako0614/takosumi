@@ -606,6 +606,10 @@ function productDiscoveryOptions(
       ...overrides?.endpoints,
       ...(storeEndpoint ? { "takosumi.tcs-store.v1": storeEndpoint } : {}),
     },
+    extensions: [
+      ...(overrides?.extensions ?? []),
+      ...(storeEndpoint ? ["takosumi.tcs-store.v1"] : []),
+    ],
     adapters: {
       // TODO: Also check Core's stacks-mounted condition for this discovery route.
       opentofu: opentofuRunnerConfigured,
