@@ -142,6 +142,18 @@ test("request correlation records API request duration metrics", async () => {
   });
 });
 
+test("unmatched paths cannot leak tenant identities into metric route labels", async () => {
+  const observability = new InMemoryObservabilitySink();
+  const app = new Hono();
+  registerRequestCorrelation(app, { metricSink: observability });
+  app.get("/items/:id", (c) => c.text("ok"));
+  const response = await app.request("/api/v1/runs/private-run-id/unexpected");
+  assert.equal(response.status, 404);
+  const metrics = await observability.listMetrics({ name: "takosumi_api_request_duration_seconds" });
+  assert.equal(metrics[0]?.tags?.route, "unmatched");
+  assert.doesNotMatch(JSON.stringify(metrics[0]?.tags), /private-run-id/);
+});
+
 test("request correlation defers Worker observability writes with waitUntil", async () => {
   let release!: () => void;
   const blocked = new Promise<void>((resolve) => {

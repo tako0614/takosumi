@@ -10,6 +10,8 @@ import type {
 } from "takosumi-contract/sources";
 import {
   adoptRepoOwnedInstallConfig,
+  hydrateRepoOwnedStoreConfig,
+  neutralInstallPresentation,
   previewRepoOwnedInstallConfig,
   resolveRepoOwnedInstallModulePath,
   type RepoOwnedInstallConfigAdoptionInput,
@@ -307,6 +309,52 @@ test("repository adoption carries an explicitly allowed generic OIDC capability"
   ]);
 });
 
+describe("repo-owned repository presentation", () => {
+  test("uses neutral repository defaults when no catalog listing exists", async () => {
+    const snapshotWithPresentation: SourceSnapshot = {
+      ...sourceSnapshot,
+      repositoryInstallMetadata: {
+        status: "present",
+        text: JSON.stringify({
+          schemaVersion: "tcs.repo/v1",
+          name: { ja: "Repository name", en: "Repository name" },
+          description: {
+            ja: "Repository description",
+            en: "Repository description",
+          },
+        }),
+      },
+    };
+    const result = await hydrateRepoOwnedStoreConfig({
+      operations: {} as ControlPlaneOperations,
+      source,
+      sourceSnapshot: snapshotWithPresentation,
+      storeMetadata: undefined,
+      modulePath: ".",
+      presentationFallback: neutralInstallPresentation({
+        gitUrl: source.url,
+        capsuleName: "repo-interface",
+      }),
+    });
+
+    expect(result.storeMetadata).toMatchObject({
+      provider: "Repository",
+      suggestedName: "repo-interface",
+      name: { ja: "Repository name", en: "Repository name" },
+      description: {
+        ja: "Repository description",
+        en: "Repository description",
+      },
+      source: { url: source.url },
+    });
+    expect(result.storeMetadata?.provider).not.toBe("catalog");
+    expect(result.storeMetadata?.badge).toEqual({
+      ja: "リポジトリ",
+      en: "Repository",
+    });
+  });
+});
+
 test("repository OIDC rejects a base public endpoint collision instead of splitting manifest provenance", async () => {
   const variableNames = [
     "public_url",
@@ -542,6 +590,76 @@ test("repository install preview recovers only its full deterministic config ide
     diagnostic: {
       code: "repository_install_ux_compatibility_report_mismatch",
     },
+  });
+});
+
+test("preview reads uncaptured repository presentation from the adopted module", async () => {
+  let observedModulePath: string | undefined;
+  const snapshotForNestedModule: SourceSnapshot = {
+    ...sourceSnapshot,
+    repositoryModules: {
+      status: "ready",
+      scopePath: ".",
+      modules: [
+        { path: "deploy/takoform", providerPackages: [], rootProviderRequirements: [] },
+      ],
+    },
+    repositoryManifest: {
+      status: "present",
+      digest: MANIFEST_DIGEST,
+      document: {
+        ...repositoryDocument,
+        install: {
+          modules: {
+            ".": { inputs: [] },
+            "deploy/takoform": { inputs: [] },
+          },
+        },
+      },
+    },
+  };
+  const operations = {
+    readSourceSnapshotFiles: async (
+      _snapshotId: string,
+      options?: { readonly modulePath?: string },
+    ) => {
+      observedModulePath = options?.modulePath;
+      return [
+        {
+          path: ".well-known/tcs.json",
+          text: JSON.stringify({
+            schemaVersion: "tcs.repo/v1",
+            name: { ja: "Nested repository", en: "Nested repository" },
+          }),
+        },
+      ];
+    },
+    capsules: {
+      getInstallConfig: async () => {
+        throw new OpenTofuControllerError("not_found", "missing");
+      },
+      createInstallConfigIfAbsent: async () => true,
+    },
+  } as unknown as ControlPlaneOperations;
+  const result = await previewRepoOwnedInstallConfig({
+    operations,
+    source,
+    sourceSnapshot: snapshotForNestedModule,
+    baseConfig: baseConfig(),
+    modulePath: undefined,
+    capsuleName: "repo-interface",
+    workspaceId: source.workspaceId,
+    installingPrincipalId: "tsub_installer",
+    compatibilityReport: reportForModule("deploy/takoform"),
+  });
+
+  expect(result.status).toBe("accepted");
+  if (result.status !== "accepted") return;
+  expect(result.installConfig.modulePath).toBe("deploy/takoform");
+  expect(observedModulePath).toBe("deploy/takoform");
+  expect(result.installConfig.store?.name).toEqual({
+    ja: "Nested repository",
+    en: "Nested repository",
   });
 });
 

@@ -281,3 +281,5 @@ state backend まで通っています。provider の認証を必要としない
 
 その endpoint を使う人から見て、あなたがどこまでを引き受けることになるのかは
 [製品の境界](./boundaries.md)にまとめてあります。
+
+[運用ガイド](../self-host/index.md)

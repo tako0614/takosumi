@@ -47,6 +47,7 @@ import {
   createTakosumiProductCapabilities,
   createTakosumiWellKnownDocument,
   type CreateTakosumiDiscoveryOptions,
+  normalizePublicStoreEndpoint,
 } from "takosumi-contract/capabilities";
 import { Hono } from "hono";
 import type { PostgresAccountsStore } from "@takosjp/takosumi-accounts-service";
@@ -432,14 +433,14 @@ export async function buildComposedApp(
   app.get(TAKOSUMI_WELL_KNOWN_PATH, (c) =>
     c.json(
       createTakosumiWellKnownDocument(
-        productDiscoveryOptions(c.req.raw, input.productDiscovery),
+        productDiscoveryOptions(c.req.raw, input.productDiscovery, runtimeEnv),
       ),
     ),
   );
   app.get(TAKOSUMI_PRODUCT_CAPABILITIES_PATH, (c) =>
     c.json(
       createTakosumiProductCapabilities(
-        productDiscoveryOptions(c.req.raw, input.productDiscovery),
+        productDiscoveryOptions(c.req.raw, input.productDiscovery, runtimeEnv),
       ),
     ),
   );
@@ -583,9 +584,15 @@ function interfaceRequestAccess(request: Request): "read" | "write" {
 function productDiscoveryOptions(
   req: Request,
   overrides: Partial<CreateTakosumiDiscoveryOptions> | undefined,
+  runtimeEnv: Readonly<Record<string, string | undefined>>,
 ): CreateTakosumiDiscoveryOptions {
+  const storeEndpoint = normalizePublicStoreEndpoint(runtimeEnv.TAKOSUMI_TCS_STORE_URL);
   return {
     ...(overrides ?? {}),
+    endpoints: {
+      ...overrides?.endpoints,
+      ...(storeEndpoint ? { "takosumi.tcs-store.v1": storeEndpoint } : {}),
+    },
     interfacesEnabled: overrides?.interfacesEnabled ?? true,
     origin: publicOriginFromRequest(req),
   };

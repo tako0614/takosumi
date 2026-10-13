@@ -85,6 +85,11 @@ export const PORTABLE_GATE_PHASES: readonly PortableGatePhase[] = [
     "run",
     "check:test-source-boundary",
   ]),
+  phase("unreferenced-exports", [
+    "bun",
+    "run",
+    "check:unreferenced-exports",
+  ]),
   phase("generalization-boundaries", [
     "bun",
     "run",

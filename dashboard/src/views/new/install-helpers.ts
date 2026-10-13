@@ -26,6 +26,7 @@ import {
   isSafeInstallVariableValue,
 } from "../../lib/install-link.ts";
 import { t } from "../../i18n/index.ts";
+import { friendlyError } from "../../lib/error-copy.ts";
 import type { TcsListing } from "../../lib/tcs-client.ts";
 import type { Tone } from "../../components/ui/index.ts";
 import { readableProviderSourceLabel } from "../../lib/provider-labels.ts";
@@ -385,6 +386,23 @@ function addFlowErrorMessage(apiError: ControlApiError | undefined): string {
   return message
     ? t("new.error.genericWithDetails", { message })
     : t("new.error.generic");
+}
+
+function installFlowErrorMessage(cause: unknown): string {
+  const apiError = cause instanceof ControlApiError ? cause : undefined;
+  if (
+    apiError?.code === "source_sync_failed" ||
+    apiError?.isSourceSyncRequired
+  ) {
+    if (friendlyError(apiError, t).message === t("error.generic")) {
+      return t("error.generic");
+    }
+    return sourceFetchErrorMessage(apiError);
+  }
+  if (apiError?.isDuplicateService || apiError?.reason === "provider_connection_setup_required") {
+    return addFlowErrorMessage(apiError);
+  }
+  return friendlyError(cause, t).message;
 }
 
 function shouldShowCompatibilityPanel(
@@ -1152,6 +1170,44 @@ function storeEntryFromStoreListing(
   };
 }
 
+function storeEntryFromRepositoryConfig(
+  installConfig: InstallConfig,
+  fallback: { readonly gitUrl: string; readonly name: string },
+): StoreEntry | undefined {
+  const normalizedInputs = normalizedStoreInputs(
+    installConfig.variablePresentation,
+  );
+  const declared = installConfig.store;
+  if (!declared && normalizedInputs.inputs.length === 0) return undefined;
+  const suggestedName =
+    safeText(declared?.suggestedName) || safeText(fallback.name) || "service";
+  const fallbackText = { ja: suggestedName, en: suggestedName };
+  const sourceUrl =
+    (typeof declared?.source?.url === "string" && declared.source.url.trim()) ||
+    fallback.gitUrl;
+  return {
+    id: `repo:${sourceUrl}`,
+    installConfigId: installConfig.id,
+    createdAt: installConfig.createdAt,
+    updatedAt: installConfig.updatedAt,
+    source: { url: sourceUrl } as StoreEntry["source"],
+    order: declared?.order ?? 1_000,
+    surface: declared?.surface ?? "service",
+    kind: declared?.kind ?? "worker",
+    provider: safeText(declared?.provider) || "Repository",
+    suggestedName,
+    ...(declared?.badge ? { badge: declared.badge } : {}),
+    name: nonEmptyStoreText(declared?.name) ?? fallbackText,
+    description: nonEmptyStoreText(declared?.description) ?? fallbackText,
+    ...(declared?.iconUrl ? { iconUrl: declared.iconUrl } : {}),
+    inputs: normalizedInputs.inputs,
+    ...(installConfig.installExperience
+      ? { installExperience: installConfig.installExperience }
+      : {}),
+    ...(normalizedInputs.invalid ? { setupProjectionInvalid: true } : {}),
+  } as StoreEntry;
+}
+
 function sourceIdFromControlError(error: ControlApiError | undefined): string {
   const body = error?.body;
   if (body && typeof body === "object" && "sourceId" in body) {
@@ -1251,6 +1307,7 @@ export {
   isRepositoryInstallUxDiagnostic,
   abortableDelay,
   sourceFetchErrorMessage,
+  installFlowErrorMessage,
   safeControlApiErrorMessage,
   addFlowErrorMessage,
   shouldShowCompatibilityPanel,
@@ -1304,6 +1361,7 @@ export {
   storeMetadataFromStoreListing,
   storeEntryIdFromStoreListing,
   storeEntryFromStoreListing,
+  storeEntryFromRepositoryConfig,
   sourceIdFromControlError,
   isDuplicateServiceError,
   runStatusLabel,

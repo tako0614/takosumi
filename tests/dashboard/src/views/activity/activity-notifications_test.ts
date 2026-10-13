@@ -31,6 +31,15 @@ const notificationsLibSource = readFileSync(
 );
 
 describe("History and notifications", () => {
+  test("does not credit a dependency when the service's own source changed", () => {
+    expect(notificationsSource).toContain(
+      'metaString(m, "reason") === "source_ref_changed"',
+    );
+    expect(notificationsSource).toContain('t("notif.event.staleSourceNamed"');
+    expect(ja["notif.event.staleSourceNamed"]).toContain("{name}");
+    expect(en["notif.event.staleSourceNamed"]).toContain("{name}");
+  });
+
   test("keeps raw audit identifiers inside nested debug details", () => {
     const detailsIndex = activitySource.indexOf(
       '<summary>{t("activity.details")}</summary>',

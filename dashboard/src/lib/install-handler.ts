@@ -2,7 +2,7 @@
  * Opt-in registration of this browser as the handler for the
  * `web+takosumi:` install scheme, so a store's "Get" button (which navigates to
  * `web+takosumi:install?…`) is routed to THIS Takosumi and lands on the
- * prefill-only `/new` flow. Canonical scheme spec: docs/integration/remote-install.md.
+ * prefill-only `/new` flow. Canonical scheme spec: docs/reference/app-handoff.md.
  *
  * The browser owns the real registration/permission state and there is no API
  * to read it back, so `installHandlerRegistered()` is only a best-effort

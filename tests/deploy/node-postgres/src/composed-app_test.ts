@@ -103,7 +103,7 @@ function accountsHandlerSpy(): AccountsHandlerSpy {
   };
 }
 
-async function buildTestApp() {
+async function buildTestApp(runtimeEnv: Record<string, string | undefined> = {}) {
   const spy = accountsHandlerSpy();
   const { buildComposedApp } =
     await import("../../../../deploy/node-postgres/src/composed-app.ts");
@@ -113,6 +113,7 @@ async function buildTestApp() {
     accountsHandler: spy.handler,
     runtimeEnv: {
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TEST_DEPLOY_CONTROL_TOKEN,
+      ...runtimeEnv,
     },
     // This test exercises the account/token composition rather than hostname
     // reservation; the host authority seam is covered in Interface tests.
@@ -903,6 +904,19 @@ test("composed app owns Takosumi product discovery before account fallback", asy
   assert.equal(capabilitiesBody.adapters.opentofu, true);
 
   assert.equal(spy.calls.length, 0);
+});
+
+test("composed app publishes the runtime store endpoint without URL secrets", async () => {
+  for (const [configured, expected] of [
+    ["http://localhost:8788/store", "http://localhost:8788/store"],
+    ["https://user:secret@store.example", undefined],
+    [undefined, undefined],
+  ]) {
+    const { app } = await buildTestApp({ TAKOSUMI_TCS_STORE_URL: configured });
+    const response = await app.fetch(new Request("http://localhost/.well-known/takosumi"));
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).endpoints.extensions?.["takosumi.tcs-store.v1"], expected);
+  }
 });
 
 test("composed app product discovery uses forwarded public origin", async () => {

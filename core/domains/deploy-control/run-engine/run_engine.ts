@@ -7226,6 +7226,31 @@ export class RunEngine {
         : {}),
       heartbeatAt,
     });
+    // First-admission latency is one sample per Run. Requeues retain createdAt;
+    // measuring them again would include previous execution/retry time.
+    if (
+      result.won && fromStatus !== "running" &&
+      running.auditEvents.filter((event) => event.type === `${kind}.started`).length === 1
+    ) {
+      const createdAt = running.createdAt;
+      if (Number.isFinite(createdAt) && createdAt > 0) {
+        await this.#recordMetric({
+          name: "takosumi_run_queue_latency_seconds",
+          kind: "histogram",
+          value: Math.max(0, heartbeatAt - createdAt) / 1000,
+          tags: {
+            ...this.#metricTags,
+            operation_kind:
+              kind === "apply"
+                ? running.operation === "destroy"
+                  ? "destroy_apply"
+                  : "apply"
+                : "plan",
+          },
+          observedAtMs: heartbeatAt,
+        });
+      }
+    }
     const run = (result.run ?? running) as R;
     return result.won ? { won: true, run, leaseToken } : { won: false, run };
   }
@@ -9313,8 +9338,6 @@ export class RunEngine {
   }): Record<string, string> {
     return {
       ...this.#metricTags,
-      workspace_id: input.run.workspaceId,
-      capsule_id: input.run.capsuleId ?? "unbound",
       operation_kind: input.operationKind,
       status: input.status,
     };

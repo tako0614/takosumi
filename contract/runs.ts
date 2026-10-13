@@ -568,6 +568,8 @@ export type PublicRun = Omit<Run, "providerResolutions"> & {
 /** Body of `GET /api/v1/workspaces/:workspaceId/runs`. */
 export interface ListRunsResponse {
   readonly runs: readonly PublicRun[];
+  /** Opaque keyset cursor for the next newest-first page, when more rows exist. */
+  readonly nextCursor?: string;
 }
 
 export interface RunDiagnostic {

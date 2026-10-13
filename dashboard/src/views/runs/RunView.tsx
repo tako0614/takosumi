@@ -617,9 +617,15 @@ function PlanResourceReview(props: {
   readonly resources: readonly RunPlanResource[];
 }) {
   const actionable = () => props.resources.filter(isActionablePlanResource);
-  const visible = () => actionable().slice(0, PLAN_RESOURCE_REVIEW_LIMIT);
+  const [expanded, setExpanded] = createSignal(false);
+  const visible = () =>
+    expanded()
+      ? actionable()
+      : actionable().slice(0, PLAN_RESOURCE_REVIEW_LIMIT);
   const hiddenCount = () =>
-    Math.max(0, actionable().length - PLAN_RESOURCE_REVIEW_LIMIT);
+    expanded()
+      ? 0
+      : Math.max(0, actionable().length - PLAN_RESOURCE_REVIEW_LIMIT);
   return (
     <Show when={actionable().length > 0}>
       <div class="wa-plan-resources">
@@ -667,7 +673,14 @@ function PlanResourceReview(props: {
           </For>
         </div>
         <Show when={hiddenCount() > 0}>
-          <p class="muted">{t("run.resources.more", { n: hiddenCount() })}</p>
+          <Button
+            variant="ghost"
+            size="sm"
+            type="button"
+            onClick={() => setExpanded(true)}
+          >
+            {t("run.resources.more", { n: hiddenCount() })}
+          </Button>
         </Show>
       </div>
     </Show>

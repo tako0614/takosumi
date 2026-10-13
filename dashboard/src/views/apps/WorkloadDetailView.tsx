@@ -136,7 +136,7 @@ import {
   getOrCreateRevisionPlanAttempt,
   type RevisionPlanAttempt,
 } from "../../lib/revision-plan-attempt.ts";
-import { friendlyError } from "../../lib/error-copy.ts";
+import { fetchFailedMessage, friendlyError } from "../../lib/error-copy.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import {
   listAuthorizedUiSurfaces,
@@ -1313,7 +1313,7 @@ function DeploysTab(props: {
             </Match>
             <Match when={props.error}>
               <p class="wa-error">
-                {t("common.fetchFailed", { message: props.error! })}
+                {fetchFailedMessage(props.error, t)}
               </p>
             </Match>
             <Match when={props.history.length === 0}>

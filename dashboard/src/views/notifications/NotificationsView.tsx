@@ -163,6 +163,17 @@ function describeEvent(
     }
     case "capsule.stale": {
       const producer = metaString(m, "producerCapsuleName");
+      // This event can be caused by the service's own Git source moving. Only
+      // producer-driven updates should credit another service as the cause.
+      const sourceUpdate =
+        metaString(m, "reason") === "source_ref_changed" || !producer;
+      if (sourceUpdate) {
+        return {
+          title: name
+            ? t("notif.event.staleSourceNamed", { name })
+            : t("notif.event.staleSource"),
+        };
+      }
       return {
         title: name
           ? t("notif.event.staleNamed", { name })

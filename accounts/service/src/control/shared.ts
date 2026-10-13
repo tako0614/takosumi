@@ -132,6 +132,14 @@ export interface ControlSession {
    * may mutate.
    */
   readonly requiredAccess?: Exclude<AccountsBearerRequiredScope, "admin">;
+  /** Revalidate the exact request bearer at stream checkpoints. Installed by
+   * the ordinary account credential dispatcher. */
+  readonly reauthorizeBearer?: () => Promise<boolean>;
+}
+
+export interface RunStreamTiming {
+  readonly now: () => number;
+  readonly wait: (ms: number, signal: AbortSignal) => Promise<void>;
 }
 
 export interface ControlDispatchContext {
@@ -141,6 +149,8 @@ export interface ControlDispatchContext {
   readonly store: AccountsStore;
   readonly issuer?: string;
   readonly session: ControlSession;
+  /** Injectable request-local clock for deterministic stream tests. */
+  readonly runStreamTiming?: RunStreamTiming;
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {

@@ -613,6 +613,11 @@ export interface ControlPlaneOperations {
     workspaceId: string,
     options?: { readonly limit?: number },
   ): Promise<readonly Run[]>;
+  /** Optional additive keyset seam for deployments that expose Run paging. */
+  listRunsPage?(
+    workspaceId: string,
+    options?: { readonly limit?: number; readonly cursor?: string },
+  ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }>;
   createCapsulePlan(
     capsuleId: string,
     options?: {

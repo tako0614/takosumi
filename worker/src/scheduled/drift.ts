@@ -80,6 +80,7 @@ export async function driftSweep(
       checked += workspaceLimit;
     } catch {
       // Best-effort: one bad Workspace must not abort the whole sweep.
+      console.warn("scheduled.drift_check_workspace_failed");
     }
   }
   return { scanned: capsules.length, checked };

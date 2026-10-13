@@ -2086,6 +2086,94 @@ test("configuration Plan replay never rebinds an immutable target after later co
   ).toHaveLength(2);
 });
 
+test("Workspace Run route serves opaque keyset pages and rejects malformed cursors", async () => {
+  const fixture = await reAdoptionRouteFixture("runs-keyset-route");
+  const workspaceId = fixture.seeded.workspace.id;
+  for (const [id, createdAt] of [
+    ["run_route_new", "2030-01-02T00:00:00.000Z"],
+    ["run_route_tie_b", "1893456000000"],
+    ["run_route_tie_a", "1893456000000"],
+  ] as const) {
+    await fixture.deployStore.putCompatibilityCheckRun({
+      id,
+      workspaceId,
+      type: "compatibility_check",
+      status: "succeeded",
+      createdBy: "test",
+      createdAt,
+    });
+  }
+
+  const first = await controlJson<{
+    readonly runs: readonly { readonly id: string }[];
+    readonly nextCursor?: string;
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "GET",
+      path: `/api/v1/workspaces/${workspaceId}/runs?limit=2`,
+    },
+    200,
+  );
+  expect(first.runs.map(({ id }) => id)).toEqual([
+    "run_route_new",
+    "run_route_tie_b",
+  ]);
+  expect(first.nextCursor).toBeString();
+
+  await fixture.deployStore.putCompatibilityCheckRun({
+    id: "run_route_inserted",
+    workspaceId,
+    type: "compatibility_check",
+    status: "succeeded",
+    createdBy: "test",
+    createdAt: "2031-01-01T00:00:00.000Z",
+  });
+  const second = await controlJson<{
+    readonly runs: readonly { readonly id: string }[];
+    readonly nextCursor?: string;
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "GET",
+      path: `/api/v1/workspaces/${workspaceId}/runs?limit=2&cursor=${encodeURIComponent(first.nextCursor!)}`,
+    },
+    200,
+  );
+  expect(second.runs.map(({ id }) => id)).toEqual(["run_route_tie_a"]);
+  expect(second.nextCursor).toBeUndefined();
+
+  const malformed = await controlJson<{ readonly error: { readonly code: string } }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "GET",
+      path: `/api/v1/workspaces/${workspaceId}/runs?cursor=not-a-cursor`,
+    },
+    400,
+  );
+  expect(malformed.error.code).toBe("invalid_argument");
+
+  const oversized = await controlJson<{
+    readonly error: { readonly code: string };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "GET",
+      path: `/api/v1/workspaces/${workspaceId}/runs?cursor=${"a".repeat(2049)}`,
+    },
+    400,
+  );
+  expect(oversized.error.code).toBe("invalid_argument");
+});
+
 test("concurrent identical configuration Plan requests share one durable PlanRun", async () => {
   const { fixture, path, body } = await configurationPlanRouteFixture(
     "configuration-plan-concurrent",
@@ -3687,6 +3775,17 @@ test("repository preflight resolves the sole indexed module before exact compati
   const digest = `sha256:${"c".repeat(64)}`;
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    repositoryInstallMetadata: {
+      status: "present",
+      text: JSON.stringify({
+        schemaVersion: "tcs.repo/v1",
+        name: { ja: "リポジトリ名", en: "Repository name" },
+        description: {
+          ja: "リポジトリの説明",
+          en: "Repository description",
+        },
+      }),
+    },
     repositoryModules: repositoryModules(["deploy/takoform"]),
     repositoryManifest: {
       status: "present",
@@ -3735,7 +3834,14 @@ test("repository preflight resolves the sole indexed module before exact compati
     url: seeded.source.url,
     path: seeded.source.defaultPath,
   });
-  expect(derivedInstallConfig.store).toBeUndefined();
+  expect(derivedInstallConfig.store).toMatchObject({
+    provider: "Repository",
+    suggestedName: "repo-default",
+    name: { ja: "リポジトリ名", en: "Repository name" },
+    description: { ja: "リポジトリの説明", en: "Repository description" },
+    source: { url: seeded.source.url },
+  });
+  expect(derivedInstallConfig.store?.provider).not.toBe("catalog");
   // Source-URL-matched InstallConfig rows are not policy/provider selectors;
   // repository compilation uses only the generic host config.
   expect(derivedInstallConfig.sourceBuild).toBeUndefined();

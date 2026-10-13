@@ -118,6 +118,21 @@ export interface CreateTakosumiDiscoveryOptions {
   readonly extensions?: readonly string[];
 }
 
+/** Public store discovery must never advertise URL credentials or tokens. */
+export function normalizePublicStoreEndpoint(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  try {
+    const url = new URL(value.trim());
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      url.username || url.password || url.search || url.hash
+    ) return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
 export function createTakosumiWellKnownDocument(
   options: CreateTakosumiDiscoveryOptions,
 ): TakosumiWellKnownDocument {

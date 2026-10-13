@@ -45,6 +45,7 @@ import {
   listReleaseOwnedProviderConnectionsWithSignal,
   listSourceSnapshotInstallModules,
   prepareCapsuleSourceSnapshot,
+  patchSource,
   reconcileGitInstallPlan,
   type CapsuleCompatibilityResult,
   type InstallConfig,
@@ -99,7 +100,6 @@ import {
   preferredProviderConnection,
   providerConnectionDisplayName,
 } from "../../lib/provider-connections.ts";
-import { friendlyError } from "../../lib/error-copy.ts";
 import {
   getOrCreateInstallPlanAttempt,
   installPlanAttemptRequest,
@@ -121,6 +121,10 @@ import {
   installModuleCatalogFromSnapshot,
   scannedModuleChoice,
   storeEntryFromStoreListing,
+  storeEntryFromRepositoryConfig,
+  installFlowErrorMessage,
+  isDuplicateServiceError,
+  uniqueServiceIdCandidate,
   storeInputIsDerived,
   storeInputJsonValue,
   storeInputKey,
@@ -163,6 +167,7 @@ type Phase =
 const UI_SURFACE_READBACK_ATTEMPTS = 10;
 const UI_SURFACE_READBACK_DELAY_MS = 3_000;
 const INSTALL_PREPARATION_TIMEOUT_MS = 60_000;
+const SOURCE_FETCH_SLOW_HINT_MS = 5_000;
 
 type PreparationStage =
   | "workspace"
@@ -299,14 +304,30 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const [busy, setBusy] = createSignal(false);
   const [preparationStage, setPreparationStage] =
     createSignal<PreparationStage>("workspace");
+  const [sourceFetchSlow, setSourceFetchSlow] = createSignal(false);
   const [preparationController, setPreparationController] =
     createSignal<AbortController>();
   const [interfaceUrl, setInterfaceUrl] = createSignal<string>();
   let completionAttempt = 0;
+  let autoSyncSourceForInstall:
+    | { readonly workspaceId: string; readonly sourceId: string }
+    | undefined;
   let activePreparationController: AbortController | undefined;
+  let sourceFetchSlowHintTimeout: ReturnType<typeof setTimeout> | undefined;
+  createEffect(() => {
+    if (sourceFetchSlowHintTimeout) clearTimeout(sourceFetchSlowHintTimeout);
+    sourceFetchSlowHintTimeout = undefined;
+    setSourceFetchSlow(false);
+    if (phase() !== "preparing" || preparationStage() !== "source") return;
+    sourceFetchSlowHintTimeout = setTimeout(
+      () => setSourceFetchSlow(true),
+      SOURCE_FETCH_SLOW_HINT_MS,
+    );
+  });
   onCleanup(() => {
     disposed = true;
     activePreparationController?.abort();
+    if (sourceFetchSlowHintTimeout) clearTimeout(sourceFetchSlowHintTimeout);
   });
 
   const preparationStageHint = (): string => {
@@ -928,6 +949,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     const preservedModulePathHint = options?.preserveModuleSelection
       ? modulePathHint()
       : false;
+    autoSyncSourceForInstall = undefined;
     setSourceId(undefined);
     setSourceSnapshotId(undefined);
     setSourceCreateReconciliationToken(undefined);
@@ -1077,6 +1099,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       let preparedSourceId = sourceId();
       let preparedSourceSnapshotId = sourceSnapshotId();
       if (!preparedSourceId || !preparedSourceSnapshotId) {
+        const creatingSource = !preparedSourceId;
         const prepared = await prepareCapsuleSourceSnapshot({
           workspaceId: workspace,
           sourceId: preparedSourceId,
@@ -1100,6 +1123,12 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           onSourceCreated: (createdSourceId) => {
             if (workspaceIsCurrent(workspace)) {
               setSourceId(createdSourceId);
+              if (creatingSource) {
+                autoSyncSourceForInstall = {
+                  workspaceId: workspace,
+                  sourceId: createdSourceId,
+                };
+              }
               setSourceCreateReconciliationToken(undefined);
             }
           },
@@ -1335,7 +1364,12 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       const selectedListing = listing();
       const entry = selectedListing
         ? storeEntryFromStoreListing(selectedListing, config)
-        : undefined;
+        : result.repositoryInstallUx?.status === "accepted"
+          ? storeEntryFromRepositoryConfig(config, {
+              gitUrl: gitUrl().trim(),
+              name: name().trim(),
+            })
+          : undefined;
       setStoreEntry(entry);
       setStoreFeatureSelections(
         entry
@@ -1409,7 +1443,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       ) {
         setError(t("installStore.preparingTimeout"));
       } else {
-        setError(friendlyError(cause, t).message);
+        setError(installFlowErrorMessage(cause));
       }
       setPhase("configure");
     } finally {
@@ -1577,7 +1611,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       );
       await submitInstallPlan(installPlanAttempt);
     } catch (cause) {
-      setError(friendlyError(cause, t).message);
+      setError(installFlowErrorMessage(cause));
       setPhase(storeEntry() ? "setup" : "configure");
     } finally {
       setBusy(false);
@@ -1637,6 +1671,23 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       clearCurrentStateVersionCache(workspace);
       clearDashboardOverviewCache(workspace);
       setPlanRunId(runId);
+      const pendingAutoSyncSource = autoSyncSourceForInstall;
+      autoSyncSourceForInstall = undefined;
+      if (
+        pendingAutoSyncSource &&
+        pendingAutoSyncSource.workspaceId === workspace &&
+        pendingAutoSyncSource.sourceId === sourceId() &&
+        workspaceIsCurrent(workspace)
+      ) {
+        try {
+          await patchSource(pendingAutoSyncSource.sourceId, { autoSync: true });
+        } catch (cause) {
+          // The reviewable Plan already exists. Keep the install moving and
+          // leave the failure visible so the operator knows polling was not
+          // enabled for this newly installed Source.
+          setError(installFlowErrorMessage(cause));
+        }
+      }
       if (hasInstallRecoveryLocator(location.search)) {
         navigate(location.pathname, { replace: true });
       }
@@ -1651,7 +1702,12 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       ) {
         if (installPlanAttempt === attempt) installPlanAttempt = undefined;
       }
-      setError(friendlyError(cause, t).message);
+      if (isDuplicateServiceError(cause instanceof ControlApiError ? cause : undefined)) {
+        setName(uniqueServiceIdCandidate(name().trim()));
+        setError(t("new.error.alreadyExistsGeneric"));
+      } else {
+        setError(installFlowErrorMessage(cause));
+      }
       setPhase(storeEntry() ? "setup" : "configure");
     } finally {
       setBusy(false);
@@ -1681,7 +1737,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       if (!selected) throw new Error(t("installStore.listingUnavailable"));
       chooseListing(selected);
     } catch (cause) {
-      setError(friendlyError(cause, t).message);
+      setError(installFlowErrorMessage(cause));
       setPhase("browse");
     } finally {
       setBusy(false);
@@ -1699,6 +1755,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setModulePathExplicit(false);
     setModulePathHint(false);
     setName("");
+    autoSyncSourceForInstall = undefined;
     setSourceId(undefined);
     setSourceSnapshotId(undefined);
     setSourceCreateReconciliationToken(undefined);
@@ -2217,7 +2274,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         >
           <Spinner size={24} />
           <h2>{t("installStore.preparing")}</h2>
-          <p>{preparationStageHint()}</p>
+          <p>
+            {sourceFetchSlow()
+              ? t("installStore.preparingFetching")
+              : preparationStageHint()}
+          </p>
           <Show when={preparationController()}>
             <Button
               type="button"

@@ -888,6 +888,38 @@ export interface PreparePlanRunResult {
   readonly run: PlanRun;
 }
 
+/** Small aggregate read used by the per-Capsule usage projection. */
+export interface CapsuleUsageTotals {
+  readonly usdMicros: number;
+  readonly eventCount: number;
+  readonly ratedEventCount: number;
+}
+
+/** Leave room for kind filters under D1's per-statement bind-parameter ceiling. */
+export const PLAN_RUN_LOOKUP_BATCH_SIZE = 96;
+
+/** Fold SQL GROUP BY rows with the same rated-cost/count rules as the memory store. */
+export function capsuleUsageTotalsFromGroups(
+  rows: readonly {
+    readonly ratingStatus: string;
+    readonly count: number | string;
+    readonly usdMicros: number | string;
+  }[],
+): CapsuleUsageTotals {
+  let usdMicros = 0;
+  let eventCount = 0;
+  let ratedEventCount = 0;
+  for (const row of rows) {
+    const count = Number(row.count) || 0;
+    eventCount += count;
+    if (row.ratingStatus === "rated") {
+      ratedEventCount += count;
+      usdMicros += Number(row.usdMicros) || 0;
+    }
+  }
+  return { usdMicros, eventCount, ratedEventCount };
+}
+
 /**
  * Failed Plans are terminal and are never dispatched. Their private
  * preparation bundle has no recovery consumer, so retaining it would only
@@ -3132,6 +3164,17 @@ export interface RecoverableOpenTofuRunListOptions {
   readonly limit?: number;
 }
 
+/** Stable keyset position for the public newest-first Workspace Run list. */
+export interface RunListPosition {
+  readonly createdAtMillis: number;
+  readonly id: string;
+}
+
+export interface StoredRunListPage {
+  readonly rows: readonly StoredRunRecord[];
+  readonly hasMore: boolean;
+}
+
 export interface RuntimeSecretRetirementDispatchClaimInput {
   readonly runId: string;
   /** The row must still be pending and no newer than this retry fence. */
@@ -3180,6 +3223,7 @@ export interface OpenTofuControlStore {
   // the typed accessors stay so the controller keeps its internal shapes.
   putPlanRun(run: PlanRun): Promise<PlanRun>;
   getPlanRun(id: string): Promise<PlanRun | undefined>;
+  getPlanRunsByIds(ids: readonly string[]): Promise<readonly PlanRun[]>;
   /** Internal-only observation of a Run's saved original Workspace authority. */
   getRunManagementAuthority(
     input: RunManagementAuthorityInput,
@@ -3249,6 +3293,10 @@ export interface OpenTofuControlStore {
     workspaceId: string,
     options?: { readonly limit?: number },
   ): Promise<readonly StoredRunRecord[]>;
+  listRunsByWorkspacePage(
+    workspaceId: string,
+    options?: { readonly limit?: number; readonly after?: RunListPosition },
+  ): Promise<StoredRunListPage>;
   /** Latest decisive mutation for runtime Interface safety, if one exists. */
   getCapsuleRuntimeSafety(
     capsuleId: string,
@@ -3781,6 +3829,7 @@ export interface OpenTofuControlStore {
   // the host extension and never enter this store.
   putUsageEvent(event: UsageEvent): Promise<UsageEvent>;
   listUsageEvents(workspaceId: string): Promise<readonly UsageEvent[]>;
+  getCapsuleUsageTotals(capsuleId: string): Promise<CapsuleUsageTotals>;
   /** Keyset-paged usage-event listing for a Workspace (spec §30 pagination). */
   listUsageEventsPage(
     workspaceId: string,
@@ -4070,6 +4119,18 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(
       run && isPlanRunRecord(run) ? publicStoredRun(coerceRunRowStatus(run)!) : undefined,
     );
+  }
+
+  getPlanRunsByIds(ids: readonly string[]): Promise<readonly PlanRun[]> {
+    if (ids.length === 0) return Promise.resolve([]);
+    const runs: PlanRun[] = [];
+    for (const id of new Set(ids)) {
+      const run = this.#runs.get(id);
+      if (run && isPlanRunRecord(run)) {
+        runs.push(publicStoredRun(coerceRunRowStatus(run)!) as PlanRun);
+      }
+    }
+    return Promise.resolve(runs);
   }
 
   getRunManagementAuthority(
@@ -4666,6 +4727,31 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(
       rows.sort(compareStoredRunRecordsDesc).slice(0, limit).map(publicStoredRun),
     );
+  }
+
+  listRunsByWorkspacePage(
+    workspaceId: string,
+    options: { readonly limit?: number; readonly after?: RunListPosition } = {},
+  ): Promise<StoredRunListPage> {
+    const limit = clampRunListLimit(options.limit);
+    const rows = Array.from(this.#runs.values())
+      .filter((row) => row.workspaceId === workspaceId)
+      .filter((row) => {
+        const after = options.after;
+        if (!after) return true;
+        const timestamp = storedRunRecordTimestamp(row);
+        return timestamp < after.createdAtMillis ||
+          (timestamp === after.createdAtMillis && compareRunIdsBinary(row.id, after.id) < 0);
+      })
+      .sort((a, b) =>
+        storedRunRecordTimestamp(b) - storedRunRecordTimestamp(a) ||
+        compareRunIdsBinary(b.id, a.id)
+      )
+      .slice(0, limit + 1);
+    return Promise.resolve({
+      rows: rows.slice(0, limit).map(publicStoredRun),
+      hasMore: rows.length > limit,
+    });
   }
 
   #capsuleRuntimeSafetyCandidate(
@@ -7305,6 +7391,18 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
+  async getCapsuleUsageTotals(capsuleId: string): Promise<CapsuleUsageTotals> {
+    const events = Array.from(this.#usageEvents.values()).filter(
+      (event) => event.capsuleId === capsuleId,
+    );
+    const rated = events.filter((event) => event.ratingStatus === "rated");
+    return {
+      usdMicros: rated.reduce((sum, event) => sum + event.usdMicros, 0),
+      eventCount: events.length,
+      ratedEventCount: rated.length,
+    };
+  }
+
   async listUsageEventsPage(
     workspaceId: string,
     params: PageParams,
@@ -7609,6 +7707,18 @@ export function compareStoredRunRecordsDesc(
     storedRunRecordTimestamp(b) - storedRunRecordTimestamp(a) ||
     b.id.localeCompare(a.id)
   );
+}
+
+/** Binary/code-point ordering used by keyset queries to match SQL C/BINARY. */
+function compareRunIdsBinary(a: string, b: string): number {
+  const left = Array.from(a, (character) => character.codePointAt(0)!);
+  const right = Array.from(b, (character) => character.codePointAt(0)!);
+  const length = Math.min(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = left[index]! - right[index]!;
+    if (difference !== 0) return difference;
+  }
+  return left.length - right.length;
 }
 
 /** Oldest-first sort across internal numeric timestamps and ISO public rows. */

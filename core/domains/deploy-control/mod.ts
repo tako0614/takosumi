@@ -2499,6 +2499,13 @@ export class OpenTofuController {
     return await this.#runQuery.listRuns(workspaceId, options);
   }
 
+  async listRunsPage(
+    workspaceId: string,
+    options: { readonly limit?: number; readonly cursor?: string } = {},
+  ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }> {
+    return await this.#runQuery.listRunsPage(workspaceId, options);
+  }
+
   async listRecoverableOpenTofuRuns(options: {
     readonly staleQueuedBeforeMs: number;
     readonly staleRunningBeforeMs: number;

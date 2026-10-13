@@ -4,6 +4,23 @@ import {
   platformExtensionRoutes,
 } from "../../../deploy/platform/platform_extensions.ts";
 
+test("platform discovery advertises only an explicitly configured public store URL", async () => {
+  const worker = (await import("../../../deploy/platform/worker.ts")).default;
+  for (const [configured, expected] of [
+    ["https://store.example/public", "https://store.example/public"],
+    ["https://user:secret@store.example", undefined],
+    ["https://store.example?key=secret", undefined],
+    [undefined, undefined],
+  ]) {
+    const response = await worker.fetch(
+      new Request("https://operator.example/.well-known/takosumi"),
+      { TAKOSUMI_TCS_STORE_URL: configured } as never,
+    );
+    expect(response.status).toBe(200);
+    expect((await response.json()).endpoints.extensions?.["takosumi.tcs-store.v1"]).toBe(expected);
+  }
+});
+
 test("retired Takoform well-known leaves cannot be configured", () => {
   for (const basePath of [
     "/.well-known/takoform/v1alpha1",

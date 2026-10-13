@@ -18,6 +18,10 @@ const connectionsTabSource = readFileSync(
   resolve(viewRoot, "workspace/tabs/ConnectionsTab.tsx"),
   "utf8",
 );
+const backupsTabSource = readFileSync(
+  resolve(viewRoot, "workspace/tabs/BackupsTab.tsx"),
+  "utf8",
+);
 const userMenuSource = readFileSync(
   resolve(viewRoot, "account/components/auth/UserMenu.tsx"),
   "utf8",
@@ -37,6 +41,20 @@ describe("Workspace settings user-facing noise", () => {
     expect(en["workspaceSettings.subtitle"]).not.toContain("sharing");
     expect(ja["workspaceSettings.subtitle"]).not.toContain("復元");
     expect(ja["workspaceSettings.subtitle"]).not.toContain("共有");
+  });
+
+  test("keeps navigation tabs available on standalone connection and billing routes", () => {
+    expect(spaceSettingsSource).toContain('tab() !== "backups"');
+    expect(spaceSettingsSource).toContain('tab() !== "shares"');
+    expect(spaceSettingsSource).not.toContain("!props.standaloneTab &&");
+  });
+
+  test("offers list retry and classified fetch copy on settings surfaces", () => {
+    expect(connectionsTabSource).toContain(
+      "onClick={() => void refetchProviderConnections()}",
+    );
+    expect(backupsTabSource).toContain("fetchFailedMessage(backups.error, t)");
+    expect(backupsTabSource).not.toContain("(backups.error as ControlApiError).message");
   });
 
   test("settings copy says ワークスペース, not チーム (the product noun)", () => {
