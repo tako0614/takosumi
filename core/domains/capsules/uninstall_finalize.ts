@@ -53,6 +53,11 @@ import { NOOP_ACTIVITY_RECORDER } from "../activity/mod.ts";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
 import { applyExpectedGuardFromPlanRun } from "../deploy-control/mod.ts";
 import type { CapsulesService } from "./mod.ts";
+import {
+  scheduledUninstallAuthorizationFailure,
+  UNINSTALL_AUTHORIZATION_REASONS,
+  type UninstallRequesterValidator,
+} from "./uninstall_authorization.ts";
 
 /** Actor recorded on every Run and approval the finalizer creates. */
 export const SCHEDULED_UNINSTALL_ACTOR = "system:scheduled-uninstall";
@@ -107,6 +112,8 @@ export interface CapsuleUninstallFinalizerDependencies {
     | "getPlanRun"
     | "getApplyRun"
     | "getCapsuleExecutionAuthorityEpoch"
+    | "getWorkspace"
+    | "getWorkspaceMember"
   >;
   readonly capsules: Pick<
     CapsulesService,
@@ -143,6 +150,7 @@ export interface CapsuleUninstallFinalizerDependencies {
     }): Promise<BackupRecord>;
   };
   readonly activity?: ActivityRecorder;
+  readonly validateUninstallRequester?: UninstallRequesterValidator;
   readonly now?: () => Date;
   readonly onError?: (error: unknown, capsuleId: string) => void;
 }
@@ -242,6 +250,7 @@ async function advanceOnce(
   if (uninstall.phase === "destroying") {
     return await startTeardown(deps, capsule, uninstall);
   }
+  if (await blockUnauthorizedRequester(deps, capsule, uninstall)) return "blocked";
   if (uninstall.preDestroyExport === undefined) {
     if (uninstall.preDestroyExportStartedAt !== undefined) {
       if (
@@ -520,17 +529,22 @@ async function startTeardown(
   const existing = await deps.store.getApplyRun(applyRunId);
   if (existing !== undefined) {
     if (applyIsTerminalFailure(existing)) {
+      const refusal = existing.auditEvents.find((event) =>
+        event.type === "uninstall.authorization_refused" &&
+        typeof event.data?.reason === "string" && isAuthorizationReason(event.data.reason));
       await block(
         deps,
         capsule,
         uninstall,
-        SCHEDULED_DESTROY_BLOCKED_REASONS.applyFailed,
+        typeof refusal?.data?.reason === "string" ? refusal.data.reason : SCHEDULED_DESTROY_BLOCKED_REASONS.applyFailed,
+        refusal ? new Date(refusal.at).toISOString() : undefined,
       );
       return "blocked";
     }
     return "waiting";
   }
   if (plan.appliedApplyRunId !== undefined) return "waiting";
+  if (await blockUnauthorizedRequester(deps, capsule, uninstall)) return "blocked";
   try {
     if (plan.approval === undefined) {
       await deps.controller.approveRun(plan.id, {
@@ -545,6 +559,15 @@ async function startTeardown(
         `scheduled teardown plan ${plan.id} disappeared after approval`,
       );
     }
+    // Approval may have awaited an external store. Observe revocation again
+    // before Apply admission; the Run engine checks it at dispatch as well.
+    const current = await deps.capsules.getCapsule(capsule.id);
+    if (current.uninstall?.id !== uninstall.id ||
+      current.uninstall.revision !== uninstall.revision ||
+      current.uninstall.phase !== "destroying" || current.uninstall.blockedReason) {
+      return "done";
+    }
+    if (await blockUnauthorizedRequester(deps, current, current.uninstall)) return "blocked";
     await deps.controller.createApplyRun(
       {
         planRunId: approved.id,
@@ -561,7 +584,7 @@ async function startTeardown(
       deps,
       capsule,
       uninstall,
-      SCHEDULED_DESTROY_BLOCKED_REASONS.applyRefused,
+      authorizationReason(error) ?? SCHEDULED_DESTROY_BLOCKED_REASONS.applyRefused,
     );
     return "blocked";
   }
@@ -727,13 +750,19 @@ async function block(
   capsule: Capsule,
   uninstall: CapsuleUninstall,
   reason: string,
+  rejectedAt?: string,
 ): Promise<void> {
-  await deps.capsules.advanceCapsuleUninstall(
+  const updated = await deps.capsules.advanceCapsuleUninstall(
     capsule.id,
     { uninstallId: uninstall.id, revision: uninstall.revision },
-    { blockedReason: reason },
+    {
+      blockedReason: reason,
+      ...(isAuthorizationReason(reason)
+        ? { authorizationRejectedAt: rejectedAt ?? (deps.now ?? (() => new Date()))().toISOString() }
+        : {}),
+    },
   );
-  await recordActivity(deps, blockedActivity(capsule, uninstall, reason));
+  await recordActivity(deps, blockedActivity(updated, updated.uninstall ?? uninstall, reason));
 }
 
 function blockedActivity(
@@ -752,11 +781,37 @@ function blockedActivity(
       environment: capsule.environment,
       uninstallId: uninstall.id,
       reason,
+      ...(uninstall.requester ? { requesterSubject: uninstall.requester.subject } : {}),
+      ...(isAuthorizationReason(reason)
+        ? { rejectedAt: capsule.uninstall?.authorizationRejectedAt }
+        : {}),
       ...(uninstall.destroyPlanRunId
         ? { planRunId: uninstall.destroyPlanRunId }
         : {}),
     },
   };
+}
+
+async function blockUnauthorizedRequester(
+  deps: CapsuleUninstallFinalizerDependencies,
+  capsule: Capsule,
+  uninstall: CapsuleUninstall,
+): Promise<boolean> {
+  const reason = await scheduledUninstallAuthorizationFailure(
+    deps.store, capsule, deps.validateUninstallRequester,
+  );
+  if (reason === undefined) return false;
+  await block(deps, capsule, uninstall, reason);
+  return true;
+}
+
+function isAuthorizationReason(reason: string): boolean {
+  return Object.values(UNINSTALL_AUTHORIZATION_REASONS).some((value) => value === reason);
+}
+
+function authorizationReason(error: unknown): string | undefined {
+  const reason = error instanceof OpenTofuControllerError ? errorReason(error) : undefined;
+  return reason && isAuthorizationReason(reason) ? reason : undefined;
 }
 
 function errorReason(error: OpenTofuControllerError): string | undefined {

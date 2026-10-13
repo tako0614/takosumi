@@ -39,6 +39,46 @@ test("PostgresAccountsStore hashes OAuth credentials before writing", async () =
   expect(client.calls[0].args[0]).not.toEqual("plain-code");
 });
 
+test("PostgresAccountsStore looks up uninstall grants by indexed nonsecret keys", async () => {
+  const client = new RecordingPostgresClient();
+  const store = new PostgresAccountsStore(client);
+  const tokenHash = `sha256:${"A".repeat(43)}`;
+  client.queuedRows.push([{
+    client_id: "client_grant",
+    audience: null,
+    scope: "capsules:write",
+    subject: "pairwise_grant",
+    takosumi_subject: "tsub_grant",
+    capsule_id: null,
+    workspace_id: null,
+    role: null,
+    interface_id: null,
+    interface_binding_id: null,
+    interface_resolved_revision: null,
+    expires_at: new Date(Date.now() + 60_000),
+  }]);
+  expect((await store.findAccessTokenByHash(tokenHash))?.scope).toBe("capsules:write");
+  expect(client.calls[0].sql).toContain('"oauth_access_tokens"');
+  expect(client.calls[0].args).toContain(tokenHash);
+  client.queuedRows.push([{
+    token_id: "pat_grant",
+    token_prefix: "takpat_gr",
+    subject: "tsub_grant",
+    name: "grant",
+    scopes: ["write"],
+    workspace_id: null,
+    created_at: new Date(1_000),
+    expires_at: null,
+    revoked_at: null,
+    last_used_at: null,
+  }]);
+  expect((await store.findPersonalAccessTokenById("tsub_grant", "pat_grant"))?.tokenId)
+    .toBe("pat_grant");
+  expect(client.calls[1].sql).toContain('"personal_access_tokens"');
+  expect(client.calls[1].args).toContain("tsub_grant");
+  expect(client.calls[1].args).toContain("pat_grant");
+});
+
 test("PostgresAccountsStore revokes a dynamic OIDC client by registration id", async () => {
   const client = new RecordingPostgresClient();
   const store = new PostgresAccountsStore(client);
@@ -492,7 +532,11 @@ test("PostgresAccountsStore resolves all bearer candidates in one exact statemen
 
   expect(result).toEqual({
     ok: true,
-    auth: { subject: "tsub_pg_bearer", credential: "session" },
+    auth: {
+      subject: "tsub_pg_bearer",
+      uninstallRequester: { subject: "tsub_pg_bearer" },
+      credential: "session",
+    },
   });
   expect(client.calls).toHaveLength(1);
   expect(client.calls[0].sql).toContain("presented_session");

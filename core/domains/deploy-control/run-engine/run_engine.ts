@@ -10,6 +10,7 @@
  * public run methods to this engine and keeps the query / billing / connection /
  * source surfaces. Method bodies are moved byte-for-byte.
  */
+import { scheduledUninstallAuthorizationFailure, UNINSTALL_AUTHORIZATION_REASONS } from "../../capsules/uninstall_authorization.ts";
 import {
   planScopeSelectors,
   type JsonValue,
@@ -203,6 +204,7 @@ import {
   APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT,
   applyRunBillingCapturePending,
   applyRunMutationDispatched,
+  applyRunProviderMutationDispatched,
   applyRunRuntimeSecretRetirementPending,
   capsuleApplyRunAdmissionFence,
   capsuleLifecycleExpected,
@@ -1524,6 +1526,7 @@ function corePlanElapsedDiagnostic(timings: CorePlanElapsedTimings): RunDiagnost
 
 /** Shared dependencies the controller injects into its single RunEngine. */
 export interface RunEngineDependencies {
+  readonly validateUninstallRequester?: import("../../capsules/uninstall_authorization.ts").UninstallRequesterValidator;
   readonly store: OpenTofuControlStore;
   /** Exact executor-id to runner adapter bindings supplied by the host. */
   readonly runnerExecutors: OpenTofuRunnerExecutorRegistry;
@@ -1570,6 +1573,7 @@ export interface RunEngineDependencies {
 }
 
 export class RunEngine {
+  readonly #validateUninstallRequester?: import("../../capsules/uninstall_authorization.ts").UninstallRequesterValidator;
   readonly #store: OpenTofuControlStore;
   readonly #runnerExecutors: OpenTofuRunnerExecutorRegistry;
   readonly #sourcesService?: SourcesService;
@@ -1625,6 +1629,7 @@ export class RunEngine {
   }) => Promise<readonly string[]>;
 
   constructor(deps: RunEngineDependencies) {
+    this.#validateUninstallRequester = deps.validateUninstallRequester;
     this.#store = deps.store;
     this.#runnerExecutors = deps.runnerExecutors;
     this.#sourcesService = deps.sourcesService;
@@ -4876,6 +4881,9 @@ export class RunEngine {
     const scheduledUninstall = plannedCapsule
       ? scheduledUninstallPlanIdentity(planRun, plannedCapsule)
       : undefined;
+    if (scheduledUninstall && plannedCapsule) {
+      await this.#requireScheduledUninstallAuthorization(plannedCapsule);
+    }
     assertStateGenerationMatches(planRun, plannedCapsule);
     // Preserve the authority validated against this Plan through all later
     // asynchronous preparation. Recapturing the Capsule at insertion would
@@ -7003,6 +7011,11 @@ export class RunEngine {
       }
       throw new OpenTofuControllerError("not_found", `run ${id} not found`);
     }
+    if (planRun.createdBy === "system:scheduled-uninstall") {
+      const capsule = await this.#requireCapsule(planRun.capsuleId ?? "");
+      scheduledUninstallPlanIdentity(planRun, capsule);
+      await this.#requireScheduledUninstallAuthorization(capsule);
+    }
     if (planRun.approval) {
       return projectPlanRun(planRun, {
         awaitingApproval: false,
@@ -8250,6 +8263,7 @@ export class RunEngine {
     lifecycleOutcome?: LifecycleActionOutcome,
   ): ApplyRun {
     const now = this.#now();
+    const refusal = scheduledUninstallRefusal(error);
     return {
       ...running,
       status: "failed",
@@ -8262,6 +8276,11 @@ export class RunEngine {
       diagnostics: runFailureDiagnostics(error),
       auditEvents: [
         ...running.auditEvents,
+        ...(refusal ? [auditEvent(running.id, "uninstall.authorization_refused", refusal.rejectedAt, {
+          reason: refusal.reason,
+          actor: "system:scheduled-uninstall",
+          ...(refusal.requesterSubject ? { requesterSubject: refusal.requesterSubject } : {}),
+        }, "system:scheduled-uninstall")] : []),
         ...(lifecycleOutcome
           ? [
               auditEvent(
@@ -9911,6 +9930,9 @@ export class RunEngine {
     if (plannedCapsule && !applyRunMutationDispatched(applyRun)) {
       assertCapsuleAcceptsOperation(plannedCapsule, planRun.operation);
       scheduledUninstallPlanIdentity(planRun, plannedCapsule);
+      if (planRun.createdBy === "system:scheduled-uninstall") {
+        await this.#requireScheduledUninstallAuthorization(plannedCapsule);
+      }
     }
     // State generation guard: reject when the target's state advanced past the
     // generation this plan was created against (a stale plan over newer state).
@@ -11118,6 +11140,7 @@ export class RunEngine {
         commands,
         phase: "destroy",
       });
+      await this.#requireLiveScheduledUninstallAuthorization(input.planRun, input.applyRun);
       actionDispatched = true;
       result = await this.#releaseActivator.activate(
         {
@@ -11141,6 +11164,7 @@ export class RunEngine {
       // Refused before anything ran: no lifecycle action happened, so the
       // destroy is a safe redelivery rather than a decisive failure.
       if (isRunDeadlineDispatchRefusal(error)) throw error;
+      if (!actionDispatched && scheduledUninstallRefusal(error)) throw error;
       const outcome: LifecycleActionOutcome = {
         phase: "pre_destroy",
         reportedStatus: "error",
@@ -11662,8 +11686,9 @@ export class RunEngine {
         running,
         leaseToken,
         lease,
-        (signal) =>
-          this.#activateReleaseBeforeDestroy({
+        async (signal) => {
+          await this.#requireLiveScheduledUninstallAuthorization(planRun, running);
+          return await this.#activateReleaseBeforeDestroy({
             planRun,
             applyRun: running,
             capsule: capsule,
@@ -11671,7 +11696,8 @@ export class RunEngine {
             sourceBuild: dispatch.sourceBuild,
             signal,
             deadlineAt,
-          }),
+          });
+        },
       );
       if (lifecycleOutcome) {
         if (lifecycleOutcome.alreadyPersisted) {
@@ -11774,7 +11800,8 @@ export class RunEngine {
             },
             privateFileSignal,
             assertHeldLease,
-            (credentialSignal) => {
+            async (credentialSignal) => {
+              await this.#requireLiveScheduledUninstallAuthorization(planRun, effectiveRunning);
               runnerDispatched = true;
               return destroyFn.call(
             runner,
@@ -12448,6 +12475,41 @@ export class RunEngine {
     }
     return capsule;
   }
+
+  async #requireScheduledUninstallAuthorization(capsule: Capsule): Promise<void> {
+    const reason = await scheduledUninstallAuthorizationFailure(
+      this.#store, capsule, this.#validateUninstallRequester,
+    );
+    if (reason !== undefined) {
+      throw new OpenTofuControllerError(
+        "failed_precondition", "Scheduled uninstall requester is no longer authorized.", {
+          reason, requesterSubject: capsule.uninstall?.requester?.subject,
+          rejectedAt: this.#now(),
+        },
+      );
+    }
+  }
+
+  async #requireLiveScheduledUninstallAuthorization(plan: PlanRun, apply: ApplyRun): Promise<void> {
+    if (plan.createdBy !== "system:scheduled-uninstall" || applyRunProviderMutationDispatched(apply)) return;
+    const current = await this.#requireCapsule(plan.capsuleId ?? "");
+    scheduledUninstallPlanIdentity(plan, current);
+    await this.#requireScheduledUninstallAuthorization(current);
+  }
+}
+
+/** Keep the exact refusal in the Run ledger even before the next finalizer tick. */
+function scheduledUninstallRefusal(error: unknown): {
+  readonly reason: string; readonly rejectedAt: number; readonly requesterSubject?: string;
+} | undefined {
+  if (!(error instanceof OpenTofuControllerError) || !error.details || typeof error.details !== "object") return undefined;
+  const details = error.details as { reason?: unknown; rejectedAt?: unknown; requesterSubject?: unknown };
+  if (typeof details.reason !== "string" ||
+    !Object.values(UNINSTALL_AUTHORIZATION_REASONS).some((reason) => reason === details.reason) ||
+    typeof details.rejectedAt !== "number" || !Number.isFinite(details.rejectedAt)) return undefined;
+  return { reason: details.reason, rejectedAt: details.rejectedAt,
+    ...(typeof details.requesterSubject === "string" ? { requesterSubject: details.requesterSubject } : {}),
+  };
 }
 
 /** A finalizer Plan is authorized only by the request that named this Plan. */
@@ -12459,7 +12521,7 @@ function scheduledUninstallPlanIdentity(
   const uninstall = capsule.uninstall;
   if (
     planRun.operation !== "destroy" || capsule.status !== "uninstalled" ||
-    uninstall === undefined || uninstall.phase === "cancelled" ||
+    uninstall === undefined || uninstall.phase === "cancelled" || uninstall.blockedReason !== undefined ||
     uninstall.destroyPlanRunId !== planRun.id
   ) {
     throw new OpenTofuControllerError(

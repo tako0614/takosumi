@@ -46,6 +46,7 @@ import type {
   CapsuleAdoptedSourceRevision,
   CapsuleCompatibilityReport,
   CapsuleCompatibilityReportResponse,
+  CapsuleUninstallRequester,
   CreateSourceCompatibilityCheckRequest,
   PublicCapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
@@ -389,6 +390,7 @@ export interface ControlPlaneOperations {
       id: string,
       options?: {
         readonly actor?: string;
+        readonly requester?: CapsuleUninstallRequester;
         readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
       },
     ): Promise<Capsule>;

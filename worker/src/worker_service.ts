@@ -56,6 +56,7 @@ import {
   D1AccountsStore,
   issueInterfaceOAuthAccessToken,
   resolveD1AccountsSchemaMode,
+  validateUninstallRequester,
 } from "@takosjp/takosumi-accounts-service";
 import {
   connectionOAuthDescriptorsFromEnv,
@@ -375,6 +376,10 @@ export async function createWorkerServiceApp(
       : undefined;
   return await createTakosumiService({
     role,
+    ...(accountsStore ? {
+      validateUninstallRequester: (requester, workspaceId) =>
+        validateUninstallRequester(accountsStore, requester, workspaceId),
+    } : {}),
     runtimeEnv,
     adapters,
     // The shipped Worker explicitly selects the reference provider package.

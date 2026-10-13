@@ -13,10 +13,39 @@ import {
   registerSessionHashSaltConfig,
 } from "../../../../accounts/service/src/session-hash-salt.ts";
 import { requireAccountsBearer } from "../../../../accounts/service/src/account-session.ts";
+import { sha256Text } from "../../../../accounts/service/src/encoding.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 afterEach(() => {
   __resetSessionHashSaltConfigForTesting();
+});
+
+test("D1AccountsStore resolves uninstall grants by nonsecret exact keys", async () => {
+  const store = new D1AccountsStore(new MemoryD1Database());
+  await store.saveAccessToken("oauth_secret", {
+    clientId: "client_grant",
+    subject: "pairwise_grant",
+    takosumiSubject: "tsub_grant",
+    scope: "capsules:write",
+    expiresAt: Date.now() + 60_000,
+  });
+  await store.savePersonalAccessToken("pat_secret", {
+    tokenId: "pat_grant",
+    tokenPrefix: "pat_gran",
+    subject: "tsub_grant",
+    name: "grant",
+    scopes: ["write"],
+    createdAt: Date.now(),
+  });
+  expect((await store.findAccessTokenByHash(await sha256Text("oauth_secret")))?.subject)
+    .toBe("pairwise_grant");
+  expect((await store.findPersonalAccessTokenById("tsub_grant", "pat_grant"))?.tokenId)
+    .toBe("pat_grant");
+  expect(await store.findPersonalAccessTokenById("tsub_other", "pat_grant"))
+    .toBeUndefined();
+  await store.deleteToken("oauth_secret");
+  expect(await store.findAccessTokenByHash(await sha256Text("oauth_secret")))
+    .toBeUndefined();
 });
 
 test("D1AccountsStore persists identity/session data without a Capsule mirror", async () => {
@@ -180,7 +209,11 @@ test("D1AccountsStore resolves a session and its account in one exact bearer que
 
   expect(result).toEqual({
     ok: true,
-    auth: { subject: "tsub_d1_bearer", credential: "session" },
+    auth: {
+      subject: "tsub_d1_bearer",
+      uninstallRequester: { subject: "tsub_d1_bearer" },
+      credential: "session",
+    },
   });
   expect(db.prepareCount).toBe(1);
 });

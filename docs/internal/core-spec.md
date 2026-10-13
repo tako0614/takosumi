@@ -214,7 +214,23 @@ is `destroying` but blocked with no destroy reaching the provider; a cancel
 also cancels the finalizer's still-unapproved teardown Plan.
 
 The scheduled finalizer is the only automatic destroy approval. It reads due,
-unblocked requests in Workspaces that accept management work and advances each
+unblocked requests in Workspaces that accept management work. Each request pins
+the authenticated Accounts subject and, for PAT/OAuth callers, a nonsecret
+reference to the scheduling grant. Browser session lifetime is not the lifetime
+of the user's scheduling intent. Before export/Plan, approval, Apply admission
+and provider dispatch, current Workspace namespace-owner or active owner/admin
+authority and the Accounts account/grant are re-read. Delegated grants must
+still have the exact subject, Workspace restriction, write scope and valid
+lifetime, and must not be revoked. Legacy requests without a requester, missing
+authorization ports and unavailable authority fail closed. A refusal records
+`blockedReason`, durable `authorizationRejectedAt`, and an Activity attempt with
+the system actor, requester, time and reason. Restored authority does not revive
+the reservation; the owner must cancel/reschedule before external mutation.
+If a pre-destroy lifecycle action already ran, retain its evidence and require
+authorized forward repair; that action does not authorize a new provider destroy
+after requester revocation. Requester/grant references
+are excluded from public Capsule reads. No DDL/backfill is needed for the
+additive JSON fields or existing indexed credential keys. The finalizer advances each
 through revision-fenced steps on the Capsule row: one Capsule-scoped export through the backups lane whose outcome
 (`exported`, `failed`, or `skipped`) is recorded and never blocks teardown. The
 export attempt is claimed before artifacts are created. A claim without a

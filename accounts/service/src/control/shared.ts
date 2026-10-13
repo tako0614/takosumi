@@ -34,6 +34,7 @@ import type {
 } from "takosumi-contract/sources";
 import type {
   CapsuleCompatibilityReportResponse,
+  CapsuleUninstallRequester,
   CreateSourceCompatibilityCheckRequest,
   PublicCapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
@@ -125,6 +126,8 @@ import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/dep
  */
 export interface ControlSession {
   readonly subject: string;
+  /** Set only by the authenticated Accounts bearer dispatcher. */
+  readonly uninstallRequester?: CapsuleUninstallRequester;
   readonly workspaceId?: string;
   /**
    * Authorization intent derived from the HTTP method at the authenticated
@@ -174,10 +177,19 @@ export function publicCapsule(capsule: PublicCapsuleInput): PublicCapsule {
     installingPrincipalId: _installingPrincipalId,
     ...publicRecord
   } = capsule;
-  const currentStateVersionId = publicRecord.currentStateVersionId;
+  const uninstall = publicRecord.uninstall === undefined
+    ? undefined
+    : (({ requester: _requester, ...rest }) => rest)(
+      publicRecord.uninstall as Capsule["uninstall"] & Record<string, unknown>,
+    );
+  const safeRecord = {
+    ...publicRecord,
+    ...(uninstall === undefined ? {} : { uninstall }),
+  };
+  const currentStateVersionId = safeRecord.currentStateVersionId;
   return currentStateVersionId
-    ? { ...publicRecord, currentStateVersionId }
-    : publicRecord;
+    ? { ...safeRecord, currentStateVersionId }
+    : safeRecord;
 }
 
 /**
