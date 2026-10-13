@@ -16,6 +16,7 @@
  * types remain assignable to the dashboard view models.
  */
 
+import { randomUuid } from "./random-uuid.ts";
 import type {
   ActivityEvent as ContractActivityEvent,
   BackupRecord as ContractBackupRecord,
@@ -1404,7 +1405,7 @@ export async function getCapsuleConfigurationContext(id: string): Promise<{
 export async function createCapsuleConfigurationPlan(
   capsuleId: string,
   request: CapsuleConfigurationPlanRequest,
-  idempotencyKey: string = crypto.randomUUID(),
+  idempotencyKey: string = randomUuid(),
 ): Promise<CapsuleConfigurationPlanResponse> {
   return await controlFetch<CapsuleConfigurationPlanResponse>(
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}/configuration-plans`,
@@ -1420,7 +1421,7 @@ export async function createCapsuleConfigurationPlan(
 export async function createGitInstallPlan(
   workspaceId: string,
   request: CreateGitInstallPlanRequest,
-  idempotencyKey: string = crypto.randomUUID(),
+  idempotencyKey: string = randomUuid(),
   options: { readonly signal?: AbortSignal } = {},
 ): Promise<GitInstallPlanResponse> {
   throwIfAborted(options.signal);
@@ -1463,7 +1464,7 @@ export async function getGitInstallPlan(
 export async function createGitRevisionPlan(
   capsuleId: string,
   request: CreateGitRevisionPlanRequest,
-  idempotencyKey: string = crypto.randomUUID(),
+  idempotencyKey: string = randomUuid(),
   options: { readonly signal?: AbortSignal } = {},
 ): Promise<GitRevisionPlanResponse> {
   throwIfAborted(options.signal);

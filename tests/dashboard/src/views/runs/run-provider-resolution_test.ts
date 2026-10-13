@@ -31,7 +31,7 @@ describe("Run review ProviderConnection evidence", () => {
 
   test("keeps ProviderConnection evidence available but folded behind review details", () => {
     expect(runViewSource).toContain("ProviderResolutionTable");
-    expect(runViewSource).toContain("providerResolutionRows(run.latest");
+    expect(runViewSource).toContain("providerResolutionRows(runLatest()");
     expect(runViewSource).toContain("providerRowsNeedingAttention");
     expect(runViewSource).toContain("providerResolutionNeedsAttention");
     expect(runViewSource).toContain('t("run.connections.reviewTitle")');
@@ -66,7 +66,7 @@ describe("Run review ProviderConnection evidence", () => {
     );
     expect(runViewSource).toContain("PlanResourceReview");
     expect(runViewSource).toContain("PLAN_RESOURCE_REVIEW_LIMIT");
-    expect(runViewSource).toContain("run.latest?.planResources ?? []");
+    expect(runViewSource).toContain("runLatest()?.planResources ?? []");
     expect(runViewSource).toContain("planResourceDisplayLabel");
     expect(runViewSource).toContain("planResourceActionLabel");
     expect(runViewSource).toContain('t("run.resources.title")');

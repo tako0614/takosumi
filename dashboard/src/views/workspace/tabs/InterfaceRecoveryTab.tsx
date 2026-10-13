@@ -19,6 +19,7 @@ import {
   retryInterfaceMaterializationFailure,
 } from "../../../lib/control-api.ts";
 import { currentWorkspaceId } from "../../../lib/workspace-state.ts";
+import { createServiceNames } from "../../../lib/service-names.ts";
 import { fetchFailedMessage } from "../../../lib/error-copy.ts";
 import { formatDateTime, t } from "../../../i18n/index.ts";
 import { ActionError, createAction } from "../../account/lib/action.tsx";
@@ -119,6 +120,12 @@ export default function InterfaceRecoveryTab(props: {
     void refetchFailures();
   };
 
+  // Failures record only the Capsule id; name the service when this
+  // Workspace knows it (the id stays on hover and as the fallback).
+  const serviceNames = createServiceNames(() => props.workspaceId);
+  const serviceLabel = (capsuleId: string) =>
+    serviceNames().get(capsuleId) ?? capsuleId;
+
   const columns: readonly Column<CapsuleInterfaceMaterializationFailure>[] = [
     {
       header: t("interfaceRecovery.col.capsule"),
@@ -127,7 +134,12 @@ export default function InterfaceRecoveryTab(props: {
           href={`/workloads/${encodeURIComponent(failure.capsuleId)}`}
           title={failure.capsuleId}
         >
-          <code>{failure.capsuleId}</code>
+          <Show
+            when={serviceNames().get(failure.capsuleId)}
+            fallback={<code>{failure.capsuleId}</code>}
+          >
+            {(name) => name()}
+          </Show>
         </A>
       ),
     },
@@ -173,7 +185,7 @@ export default function InterfaceRecoveryTab(props: {
           busy={retryAction.busy() && retryingId() === failure.id}
           disabled={retryAction.busy()}
           aria-label={t("interfaceRecovery.retryFor", {
-            capsule: failure.capsuleId,
+            capsule: serviceLabel(failure.capsuleId),
           })}
           onClick={() => startRetry(failure)}
         >
@@ -208,7 +220,7 @@ export default function InterfaceRecoveryTab(props: {
           {(receipt) => (
             <p class="wb-progress" role="status" aria-live="polite">
               {t("interfaceRecovery.retryQueued", {
-                capsule: receipt().capsuleId,
+                capsule: serviceLabel(receipt().capsuleId),
               })}
             </p>
           )}

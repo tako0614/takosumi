@@ -95,6 +95,18 @@ export function formatDateTime(iso: string | undefined): string {
   }).format(time);
 }
 
+/**
+ * `formatDateTime` for epoch milliseconds. `new Date(ms).toISOString()` throws
+ * a RangeError for an out-of-range value, so an unexpected server number reads
+ * as "—" instead of crashing the screen.
+ */
+export function formatEpochDateTime(ms: number | undefined): string {
+  if (ms === undefined || !Number.isFinite(ms)) return "—";
+  const date = new Date(ms);
+  if (Number.isNaN(date.getTime())) return "—";
+  return formatDateTime(date.toISOString());
+}
+
 /** Date only (for feeds / history rows older than a week). */
 export function formatDate(iso: string): string {
   const time = Date.parse(iso);

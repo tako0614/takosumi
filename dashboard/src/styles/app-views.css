@@ -486,6 +486,9 @@
   background: var(--tg-warn);
   border: 3px solid var(--tg-bg-elev);
 }
+.av-tile-dot-alert {
+  background: var(--tg-danger);
+}
 .av-tile-name {
   max-width: 100%;
   font-size: var(--tg-fs-sm);
@@ -1081,8 +1084,8 @@
   gap: var(--tg-s-3);
 }
 
-/* Launcher tile status caption for a service that never deployed (準備中 /
- * エラー) — the tile is a button to the service screen, not a live app link. */
+/* Launcher tile status caption under the name: 更新があります for an available
+ * update, 確認が必要 / エラー when something failed. */
 .av-tile-state {
   max-width: 100%;
   font-size: var(--tg-fs-xs);
@@ -1091,6 +1094,12 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.av-tile-state-update {
+  color: var(--tg-warn);
+}
+.av-tile-state-alert {
+  color: var(--tg-danger-text);
 }
 
 /* Detail header: instance name as a muted secondary next to the store display

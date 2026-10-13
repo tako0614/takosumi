@@ -22,10 +22,9 @@ import {
   notificationFeed,
   refreshNotificationFeed,
 } from "../../lib/notifications.ts";
-import { readableProviderSourceLabel } from "../../lib/provider-labels.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
-import { runFailureHint } from "../../lib/run-errors.ts";
-import { operationLabel } from "../../lib/labels.ts";
+import { listWorkspacesCached } from "../../lib/workspace-list.ts";
+import { readyOrUndefined } from "../../lib/resource-read.ts";
 import { relativeTime, t } from "../../i18n/index.ts";
 import {
   Badge,
@@ -37,213 +36,19 @@ import {
 } from "../../components/ui/index.ts";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
 import { activityEventHref } from "../../lib/activity-links.ts";
-
-function metaString(
-  metadata: Record<string, unknown>,
-  key: string,
-): string | undefined {
-  const v = metadata[key];
-  return typeof v === "string" && v.length > 0 ? v : undefined;
-}
-
-function metaNumber(
-  metadata: Record<string, unknown>,
-  key: string,
-): number | undefined {
-  const v = metadata[key];
-  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
-}
-
-/** Generic human-readable label for a recorded provider source. */
-function connectionProviderLabel(
-  provider: string | undefined,
-): string | undefined {
-  if (!provider) return undefined;
-  return readableProviderSourceLabel(provider);
-}
-
-/**
- * One plain-language sentence per event, from recorded metadata only. Unknown
- * actions use neutral copy; raw backend verbs stay in the activity debug layer.
- * `serviceName` (resolved from the recorded Capsule id — still backend data,
- * never invented) upgrades run/service lines to their named variants so the
- * reader knows WHICH service each line is about.
- */
-function describeEvent(
-  event: ActivityEvent,
-  serviceName?: string,
-): {
-  readonly title: string;
-  readonly detail?: string;
-} {
-  const m = event.metadata ?? {};
-  const name = serviceName;
-  switch (event.action) {
-    case "capsule.created": {
-      const name = metaString(m, "name") ?? "—";
-      const env = metaString(m, "environment");
-      return {
-        title: t("notif.event.installCreated", { name }),
-        detail: env ? t("notif.event.installCreatedEnv", { env }) : undefined,
-      };
-    }
-    case "capsule.auto_update_enabled": {
-      return { title: t("notif.event.autoUpdateOn") };
-    }
-    case "capsule.uninstall_scheduled": {
-      return {
-        title: name
-          ? t("notif.event.uninstallScheduledNamed", { name })
-          : t("notif.event.uninstallScheduled"),
-      };
-    }
-    case "capsule.uninstall_cancelled": {
-      return {
-        title: name
-          ? t("notif.event.uninstallCancelledNamed", { name })
-          : t("notif.event.uninstallCancelled"),
-      };
-    }
-    case "capsule.uninstall_blocked": {
-      return {
-        title: name
-          ? t("notif.event.uninstallBlockedNamed", { name })
-          : t("notif.event.uninstallBlocked"),
-        detail: t("notif.event.uninstallBlockedDetail"),
-      };
-    }
-    case "capsule.auto_update_disabled": {
-      return { title: t("notif.event.autoUpdateOff") };
-    }
-    case "capsule.auto_update_failed":
-    case "capsule.auto_update_apply_failed": {
-      return {
-        title: name
-          ? t("notif.event.autoUpdateFailedNamed", { name })
-          : t("notif.event.autoUpdateFailed"),
-        detail: t("notif.event.autoUpdateFailedDetail"),
-      };
-    }
-    case "run.plan_created": {
-      const operation = operationLabel(metaString(m, "operation"));
-      return {
-        title: name
-          ? t("notif.event.planReadyNamed", { name, operation })
-          : t("notif.event.planReady", { operation }),
-        detail:
-          metaString(m, "policyStatus") === "blocked"
-            ? t("notif.event.planBlockedDetail")
-            : t("notif.event.planReadyDetail"),
-      };
-    }
-    case "run.approved": {
-      const operation = operationLabel(metaString(m, "operation"));
-      return {
-        title: name
-          ? t("notif.event.approvedNamed", { name, operation })
-          : t("notif.event.approved", { operation }),
-      };
-    }
-    case "run.applied": {
-      const outputs = metaNumber(m, "outputCount");
-      return {
-        title: name
-          ? t("notif.event.appliedNamed", { name })
-          : t("notif.event.applied"),
-        detail:
-          outputs !== undefined
-            ? t("notif.event.appliedDetail", { n: outputs })
-            : undefined,
-      };
-    }
-    case "run.destroyed": {
-      return {
-        title: name
-          ? t("notif.event.destroyedNamed", { name })
-          : t("notif.event.destroyed"),
-      };
-    }
-    case "run.failed": {
-      const operation = operationLabel(metaString(m, "phase"));
-      return {
-        title: name
-          ? t("notif.event.failedNamed", { name, operation })
-          : t("notif.event.failed", { operation }),
-        // Friendly sentence, never the raw snake_case token (that stays in
-        // the run screen's folded expert details).
-        detail: runFailureHint(metaString(m, "errorCode")),
-      };
-    }
-    case "capsule.drift_detected":
-    case "resource.drift_detected": {
-      return {
-        title: name
-          ? t("notif.event.driftNamed", { name })
-          : t("notif.event.drift"),
-        detail: t("notif.event.driftDetail"),
-      };
-    }
-    case "capsule.stale": {
-      const producer = metaString(m, "producerCapsuleName");
-      return {
-        title: name
-          ? t("notif.event.staleNamed", { name })
-          : t("notif.event.stale"),
-        detail: producer
-          ? t("notif.event.staleDetail", { producer })
-          : undefined,
-      };
-    }
-    case "connection.created": {
-      const provider = connectionProviderLabel(metaString(m, "provider"));
-      return {
-        title: provider
-          ? t("notif.event.connCreated", { provider })
-          : t("notif.event.connCreatedGeneric"),
-      };
-    }
-    case "connection.revoked": {
-      const provider = connectionProviderLabel(metaString(m, "provider"));
-      return {
-        title: provider
-          ? t("notif.event.connRevoked", { provider })
-          : t("notif.event.connRevokedGeneric"),
-      };
-    }
-    case "backup.created": {
-      return { title: t("notif.event.backupCreated") };
-    }
-    case "dependency.created": {
-      return { title: t("notif.event.depCreated") };
-    }
-    case "dependency.deleted": {
-      return { title: t("notif.event.depDeleted") };
-    }
-    case "output_share.created": {
-      return { title: t("notif.event.shareRequested") };
-    }
-    case "output_share.approved": {
-      return { title: t("notif.event.shareApproved") };
-    }
-    case "output_share.revoked": {
-      return { title: t("notif.event.shareRevoked") };
-    }
-    case "run_group.created": {
-      return { title: t("notif.event.groupCreated") };
-    }
-    default: {
-      return { title: t("notif.event.recorded") };
-    }
-  }
-}
+import {
+  activityServiceName,
+  describeActivityEvent,
+} from "../../lib/activity-copy.ts";
 
 const eventHref = activityEventHref;
 function NotificationRow(props: {
   entry: FeedEntry;
   serviceName?: string | undefined;
+  workspaceName: string;
 }) {
   const failure = () => isFailureAction(props.entry.event.action);
-  const description = () => describeEvent(props.entry.event, props.serviceName);
+  const description = () => describeActivityEvent(props.entry.event, props.serviceName);
   const href = () => eventHref(props.entry.event);
   // The feed stays cross-Workspace, but the bell badge / 要対応 banner count
   // only the CURRENT Workspace — call out entries that belong to another
@@ -274,12 +79,10 @@ function NotificationRow(props: {
         <p class="wc-notif-foot">
           <Show
             when={otherWorkspace()}
-            fallback={<span>@{props.entry.workspaceHandle}</span>}
+            fallback={<span>{props.workspaceName}</span>}
           >
             <span>
-              {t("notif.otherWorkspace", {
-                handle: props.entry.workspaceHandle,
-              })}
+              {t("notif.otherWorkspace", { name: props.workspaceName })}
             </span>
           </Show>
           <Show when={props.entry.event.createdAt}>
@@ -311,10 +114,18 @@ export default function NotificationsView() {
           }),
         );
         const feed = () => notificationFeed();
-        const serviceNameFor = (event: ActivityEvent): string | undefined => {
-          const metadata = event.metadata ?? {};
+        const serviceNameFor = (event: ActivityEvent): string | undefined =>
+          activityServiceName(event);
+        // Entries carry the Workspace handle (or id); people know their
+        // Workspaces by display name. The list is the shell's cached copy.
+        const [workspaces] = createResource(() => listWorkspacesCached());
+        const workspaceNameFor = (entry: FeedEntry): string => {
+          const workspace = (readyOrUndefined(workspaces) ?? []).find(
+            (item) => item.id === entry.event.workspaceId,
+          );
           return (
-            metaString(metadata, "capsuleName") ?? metaString(metadata, "name")
+            workspace?.displayName?.trim() ||
+            `@${workspace?.handle ?? entry.workspaceHandle}`
           );
         };
         // Skeleton / error only before the FIRST snapshot exists; afterwards a
@@ -375,6 +186,11 @@ export default function NotificationsView() {
                         icon={<Bell />}
                         title={t("notif.empty.title")}
                         message={t("notif.empty.message")}
+                        action={
+                          <Button variant="primary" href="/new">
+                            {t("apps.add")}
+                          </Button>
+                        }
                       />
                     }
                   >
@@ -391,6 +207,7 @@ export default function NotificationsView() {
                             <NotificationRow
                               entry={entry}
                               serviceName={serviceNameFor(entry.event)}
+                              workspaceName={workspaceNameFor(entry)}
                             />
                           )}
                         </For>

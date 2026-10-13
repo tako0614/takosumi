@@ -4,6 +4,7 @@ import Sidebar from "./Sidebar.tsx";
 import TopBar from "./TopBar.tsx";
 import MobileTabs from "./MobileTabs.tsx";
 import { ConfirmDialogRenderer } from "../../../../components/ConfirmDialogRenderer.tsx";
+import RouteErrorBoundary from "../../../../components/RouteErrorBoundary.tsx";
 import { Spinner } from "../../../../components/ui/index.ts";
 import { t } from "../../../../i18n/index.ts";
 // Dashboard design system (tokens → base → components → shell → views). Imported once
@@ -102,15 +103,19 @@ export default function AppShell(props: Props) {
               stays intact until the next one is ready, then swaps atomically —
               and `useIsRouting()` above drives the progress bar meanwhile. The
               fallback only shows on a direct/first load with no page to keep. */}
-          <Suspense
-            fallback={
-              <div class="route-loading" role="status">
-                <Spinner size={22} />
-              </div>
-            }
-          >
-            {props.children}
-          </Suspense>
+          {/* Errors stop at the page: the chrome around it stays usable and
+              navigating away clears the error (see RouteErrorBoundary). */}
+          <RouteErrorBoundary>
+            <Suspense
+              fallback={
+                <div class="route-loading" role="status">
+                  <Spinner size={22} />
+                </div>
+              }
+            >
+              {props.children}
+            </Suspense>
+          </RouteErrorBoundary>
         </main>
       </div>
       <MobileTabs />

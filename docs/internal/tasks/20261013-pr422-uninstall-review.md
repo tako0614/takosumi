@@ -13,6 +13,11 @@
 - Integration: merge commit `a3eb61e78` includes `origin/main` at `c56268c21`;
   no conflicts. Main's Postgres catalog ends at v116, so v117 remains available
   and this PR retains it. D1 has no new schema migration for this feature.
+- Main advanced during verification to `eccdcd133` (dashboard PR #420). The
+  second ordinary merge resolves the notification-renderer extraction by moving
+  the scheduled/cancelled/blocked uninstall copy into shared
+  `describeActivityEvent`, preserving both main's shared rendering and this PR's
+  uninstall messages. The Postgres catalog still ends at v116.
 - Verification: `env -u NODE_ENV bun run check` and the focused suite documented
   in PR #422; current commands and results will be recorded in the PR body.
 - Publication order: ordinary feature push, ready-for-review, then the explicit

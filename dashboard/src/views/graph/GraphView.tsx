@@ -22,6 +22,7 @@ import {
   Skeleton,
 } from "../../components/ui/index.ts";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
+import { latestOrUndefined } from "../../lib/resource-read.ts";
 
 export default function GraphView() {
   return <Page title={t("graph.title")}>{() => <Inner />}</Page>;
@@ -63,11 +64,15 @@ function Inner() {
   );
   // Destroyed services are excluded unless they still sit on a dependency
   // edge — a flat card wall of 削除済み rows is noise in a dependencies view.
+  // `graph()` throws once the read has failed, which skipped the retry branch
+  // below and replaced the whole app with the root reload card.
   const layered = createMemo(() => {
-    const g = graph();
+    const g = latestOrUndefined(graph);
     return g ? layerGraph(filterGraphForDependencyView(g)) : undefined;
   });
-  const hasEdges = createMemo(() => (graph()?.edges.length ?? 0) > 0);
+  const hasEdges = createMemo(
+    () => (latestOrUndefined(graph)?.edges.length ?? 0) > 0,
+  );
 
   return (
     <>

@@ -106,9 +106,20 @@ export function SignInPanel() {
     return isEnabled(p) ? undefined : t("auth.providerUnavailable");
   };
 
+  // Starting sign-in can fail before any navigation (most often: the page is
+  // served over plain HTTP from a non-localhost address, where the browser
+  // offers no crypto.subtle for PKCE). Say so instead of a dead button.
+  const [startError, setStartError] = createSignal<string | null>(null);
   const select = (p: Provider) => {
     if (!isEnabled(p)) return;
-    void rpc.auth.startUpstreamOAuth(p);
+    setStartError(null);
+    rpc.auth.startUpstreamOAuth(p).catch(() => {
+      setStartError(
+        globalThis.isSecureContext === false
+          ? t("auth.startInsecureContext")
+          : t("auth.startFailed"),
+      );
+    });
   };
 
   const returnParam = () => params.return || params.return_to;
@@ -192,6 +203,13 @@ export function SignInPanel() {
           </button>
         ))}
       </div>
+      <Show when={startError()}>
+        {(message) => (
+          <p class="sign-in-error" role="alert">
+            {message()}
+          </p>
+        )}
+      </Show>
       {/* Persistent polite region: both notices below are conditionally
           mounted, and a role=status inserted together with its text can go
           unannounced. Announce whichever notice is active here, and leave the
