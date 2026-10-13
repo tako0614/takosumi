@@ -3823,12 +3823,18 @@ test(`Capsule ${deletion} schedules grace with the session actor and captured au
   } as ControlPlaneOperations;
 
   const response = await handleCapsules(
-    context(
-      operations,
-      new Request(`https://app.example.test/api/v1/capsules/cap_1${deletion === "uninstall" ? "/uninstall" : deletion === "delete-false" ? "?immediate=false" : ""}`, {
-        method: deletion === "uninstall" ? "POST" : "DELETE",
-      }),
-    ),
+    {
+      ...context(
+        operations,
+        new Request(`https://app.example.test/api/v1/capsules/cap_1${deletion === "uninstall" ? "/uninstall" : deletion === "delete-false" ? "?immediate=false" : ""}`, {
+          method: deletion === "uninstall" ? "POST" : "DELETE",
+        }),
+      ),
+      session: {
+        subject: "tsub_owner",
+        uninstallRequester: { subject: "tsub_owner" },
+      },
+    },
     deletion === "uninstall" ? ["capsules", "cap_1", "uninstall"] : ["capsules", "cap_1"],
     deletion === "uninstall" ? "POST" : "DELETE",
   );
@@ -3849,6 +3855,7 @@ test(`Capsule ${deletion} schedules grace with the session actor and captured au
       id: "cap_1",
       options: {
         actor: "tsub_owner",
+        requester: { subject: "tsub_owner" },
         expectedWorkspaceManagementAuthority: {
           workspaceId: workspace.id,
           managementState: "active",
@@ -3876,12 +3883,18 @@ test("Capsule uninstall and cancel fail closed on a host without scheduled unins
   const fixture = operationsFixture();
   for (const leaf of ["uninstall", "cancel-uninstall"]) {
     const response = await handleCapsules(
-      context(
+      {
+        ...context(
         fixture.operations,
         new Request(`https://app.example.test/api/v1/capsules/cap_1/${leaf}`, {
           method: "POST",
         }),
-      ),
+        ),
+        session: {
+          subject: "tsub_owner",
+          uninstallRequester: { subject: "tsub_owner" },
+        },
+      },
       ["capsules", "cap_1", leaf],
       "POST",
     ).catch(controllerErrorResponse);
@@ -3894,6 +3907,40 @@ test("Capsule uninstall and cancel fail closed on a host without scheduled unins
     });
   }
 });
+
+for (const deletion of ["uninstall", "delete", "delete-false"] as const) {
+test(`Capsule ${deletion} refuses a control context without authenticated requester evidence`, async () => {
+  const fixture = operationsFixture();
+  const base = await fixture.operations.capsules.getCapsule("cap_1");
+  let scheduleCalls = 0;
+  const operations = {
+    ...fixture.operations,
+    capsules: {
+      ...fixture.operations.capsules,
+      getCapsule: async () => ({ ...base, currentStateGeneration: 1 }),
+      scheduleCapsuleUninstall: async () => {
+        scheduleCalls += 1;
+        throw new Error("requester-less deletion must never schedule uninstall");
+      },
+    },
+  } as ControlPlaneOperations;
+  const response = await handleCapsules(
+    context(
+      operations,
+      new Request(`https://app.example.test/api/v1/capsules/cap_1${deletion === "uninstall" ? "/uninstall" : deletion === "delete-false" ? "?immediate=false" : ""}`, {
+        method: deletion === "uninstall" ? "POST" : "DELETE",
+      }),
+    ),
+    deletion === "uninstall" ? ["capsules", "cap_1", "uninstall"] : ["capsules", "cap_1"],
+    deletion === "uninstall" ? "POST" : "DELETE",
+  );
+  expect(response?.status).toBe(403);
+  expect(await response?.json()).toMatchObject({
+    error: { details: { reason: "capsule_uninstall_requester_unavailable" } },
+  });
+  expect(scheduleCalls).toBe(0);
+});
+}
 
 test("Capsule cancel-uninstall restores the Capsule through the domain operation", async () => {
   const fixture = operationsFixture();

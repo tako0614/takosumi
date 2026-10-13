@@ -329,9 +329,12 @@ export function publicCapsule(capsule: Capsule): PublicCapsule {
     currentOutputId: _currentOutputId,
     autoUpdateAttemptSourceSnapshotId: _autoUpdateAttemptSourceSnapshotId,
     installingPrincipalId: _installingPrincipalId,
+    uninstall,
     ...publicRecord
   } = capsule;
-  return publicRecord;
+  if (!uninstall) return publicRecord;
+  const { requester: _requester, ...publicUninstall } = uninstall;
+  return { ...publicRecord, uninstall: publicUninstall };
 }
 
 export function publicPlanRun(planRun: PlanRun): PublicPlanRun {
@@ -1108,6 +1111,7 @@ export interface DependencyValueSealer {
 }
 
 export interface OpenTofuControllerDependencies {
+  readonly validateUninstallRequester?: import("../capsules/uninstall_authorization.ts").UninstallRequesterValidator;
   readonly store?: OpenTofuControlStore;
   /**
    * Explicit binding for the reference `opentofu.default` executor. It also
@@ -1737,6 +1741,7 @@ export class OpenTofuController {
     this.#seededProfiles = this.#seedRunnerProfiles(runnerProfiles);
     this.#runEngine = new RunEngine({
       store: this.#store,
+      validateUninstallRequester: dependencies.validateUninstallRequester,
       runnerExecutors: this.#runnerExecutors,
       sourcesService: this.#sourcesService,
       artifactReferenceAllocator: this.#artifactReferenceAllocator,

@@ -286,6 +286,16 @@ export async function handleCapsules(
     }
     if (leaf === "uninstall" && (segments.length === 3 || method === "DELETE")) {
       if (segments.length === 3 && method !== "POST") return methodNotAllowed("POST");
+      if (!ctx.session.uninstallRequester) {
+        return errorJson(
+          "forbidden",
+          "Uninstall requires an authenticated Accounts requester.",
+          403,
+          undefined,
+          {},
+          { reason: "capsule_uninstall_requester_unavailable" },
+        );
+      }
       if (capsule.status === "destroyed") {
         return json({ capsule: publicCapsule(capsule), alreadyDeleted: true });
       }
@@ -295,6 +305,7 @@ export async function handleCapsules(
       }
       const updated = await schedule.call(operations.capsules, capsule.id, {
         actor: ctx.session.subject,
+        requester: ctx.session.uninstallRequester,
         expectedWorkspaceManagementAuthority: requireCapturedManagement(),
       });
       return jsonStatus(

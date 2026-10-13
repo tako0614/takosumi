@@ -90,11 +90,21 @@ export interface CapsulePreDestroyExport {
  *   blocked before any teardown was dispatched.
  * - `cancelled`: retained as evidence until the next uninstall replaces it.
  */
+/** Internal scheduling provenance. Never expose grant references in public reads. */
+export interface CapsuleUninstallRequester {
+  readonly subject: string;
+  readonly grant?:
+    | { readonly kind: "personal-access-token"; readonly tokenId: string }
+    | { readonly kind: "oauth-access-token"; readonly tokenHash: string };
+}
+
 export interface CapsuleUninstall {
   readonly id: string;
   readonly revision: number;
   readonly phase: "scheduled" | "destroying" | "cancelled";
   readonly requestedAt: string;
+  /** Authenticated account subject and optional delegated grant; absent on legacy requests. */
+  readonly requester?: CapsuleUninstallRequester;
   readonly scheduledDestroyAt: string;
   /** Last due finalizer attempt, used to rotate waiting requests fairly. */
   readonly lastFinalizeAttemptAt?: string;
@@ -117,6 +127,8 @@ export interface CapsuleUninstall {
    * owner can cancel or delete it now.
    */
   readonly blockedReason?: string;
+  /** Deadline authorization refusal time, retained even if Activity recording fails. */
+  readonly authorizationRejectedAt?: string;
 }
 
 /**
@@ -238,7 +250,9 @@ export type PublicCapsule = Omit<
   | "autoUpdateAttemptSourceSnapshotId"
   | "installingPrincipalId"
   | "publicOriginReservation"
+  | "uninstall"
 > & {
+  readonly uninstall?: Omit<CapsuleUninstall, "requester">;
   /** Absent before the first successful Apply. Derived; never stored on Capsule. */
   readonly adoptedSourceRevision?: CapsuleAdoptedSourceRevision;
 };

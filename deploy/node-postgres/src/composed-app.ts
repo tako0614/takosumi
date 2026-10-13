@@ -28,6 +28,7 @@ import {
   hasConfiguredOpenTofuRunner,
   type CreatedTakosumiService,
 } from "../../../core/bootstrap.ts";
+import { validateUninstallRequester } from "@takosjp/takosumi-accounts-service";
 import {
   PartitionedSecretBoundaryCrypto,
   selectSecretBoundaryCrypto,
@@ -250,6 +251,8 @@ export async function buildComposedApp(
   let controlPlaneOperations: CreatedTakosumiService["operations"] | undefined;
   const created = await createTakosumiService({
     runtimeEnv,
+    validateUninstallRequester: (requester, workspaceId) =>
+      validateUninstallRequester(input.store, requester, workspaceId),
     ...(backupArtifactStore ? { backupArtifactStore } : {}),
     ...(input.backupStateObjectReader
       ? { backupStateObjectReader: input.backupStateObjectReader }

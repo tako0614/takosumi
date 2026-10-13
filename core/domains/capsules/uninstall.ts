@@ -12,6 +12,7 @@
 import type {
   Capsule,
   CapsuleUninstall,
+  CapsuleUninstallRequester,
   CapsuleUninstallRestorableStatus,
 } from "takosumi-contract/capsules";
 
@@ -93,12 +94,14 @@ export function scheduledUninstallRecord(input: {
   readonly previousStatus: CapsuleUninstallRestorableStatus;
   readonly now: Date;
   readonly graceMs: number;
+  readonly requester?: CapsuleUninstallRequester;
 }): CapsuleUninstall {
   return {
     id: input.id,
     revision: (input.previous?.revision ?? 0) + 1,
     phase: "scheduled",
     requestedAt: input.now.toISOString(),
+    ...(input.requester ? { requester: structuredClone(input.requester) } : {}),
     scheduledDestroyAt: new Date(
       input.now.getTime() + input.graceMs,
     ).toISOString(),
@@ -115,12 +118,13 @@ export function advancedUninstallRecord(
   changes: Partial<
     Omit<
       CapsuleUninstall,
-      "id" | "revision" | "requestedAt" | "scheduledDestroyAt" | "previousStatus"
+      "id" | "revision" | "requestedAt" | "scheduledDestroyAt" | "previousStatus" | "requester"
     >
   >,
 ): CapsuleUninstall {
   const next: Record<string, unknown> = { ...current };
   for (const [key, value] of Object.entries(changes)) {
+    if (key === "requester") throw new TypeError("uninstall requester is immutable");
     if (value !== undefined) next[key] = value;
   }
   next.revision = current.revision + 1;

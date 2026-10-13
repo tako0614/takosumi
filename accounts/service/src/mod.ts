@@ -37,6 +37,8 @@ export {
   TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH,
 } from "@takosjp/takosumi-accounts-contract";
 
+export { validateUninstallRequester } from "./uninstall-requester.ts";
+
 import {
   type AccountSessionRecord,
   type AccountsStore,

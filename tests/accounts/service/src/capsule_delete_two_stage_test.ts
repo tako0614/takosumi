@@ -51,6 +51,8 @@ test("public DELETE reserves seven days, replay preserves reservation, cancel re
   expect(body.run).toBeUndefined();
   expect(body.graceDays).toBe(7);
   expect(body.capsule.status).toBe("uninstalled");
+  expect(body.capsule.uninstall.requester).toBeUndefined();
+  expect((await h.ledger.getCapsule(h.seeded.capsule.id))?.uninstall?.requester).toEqual({ subject: "user_test" });
   expect(Date.parse(body.capsule.uninstall.scheduledDestroyAt) - Date.parse(body.capsule.uninstall.requestedAt)).toBe(604800000);
   const retries = await Promise.all([h.request("DELETE"), h.request("DELETE", "?immediate=false")]);
   for (const response of retries) {
@@ -71,6 +73,17 @@ test("public DELETE reserves seven days, replay preserves reservation, cancel re
   expect(events.filter(event => event.action === "capsule.uninstall_scheduled")).toHaveLength(1);
   expect(events.filter(event => event.action === "capsule.uninstall_cancelled")).toHaveLength(1);
   expect(events.filter(event => event.action.startsWith("capsule.uninstall_")).every(event => event.actorId === "user_test" && Boolean(event.createdAt))).toBe(true);
+  expect(h.effects.immediatePlans).toBe(0);
+  expect(await h.ledger.listRunsByWorkspace(h.seeded.workspace.id)).toHaveLength(0);
+});
+
+test("public DELETE explicit grace persists requester privately", async () => {
+  const h = await fixture();
+  const response = await h.request("DELETE", "?immediate=false");
+  expect(response.status).toBe(202);
+  const body = await response.json();
+  expect(body.capsule.uninstall.requester).toBeUndefined();
+  expect((await h.ledger.getCapsule(h.seeded.capsule.id))?.uninstall?.requester).toEqual({ subject: "user_test" });
   expect(h.effects.immediatePlans).toBe(0);
   expect(await h.ledger.listRunsByWorkspace(h.seeded.workspace.id)).toHaveLength(0);
 });

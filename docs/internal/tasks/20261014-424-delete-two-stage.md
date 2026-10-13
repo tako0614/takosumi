@@ -9,6 +9,14 @@
   capture and deadline/pre-dispatch reauthorization. #437 must merge before this
   PR, then this branch integrates its main commit with an ordinary merge and
   repeats focused and full validation. Do not alter #437's source branch.
+- QA integration follow-up: #437 merged as `c9dba2d2ce3f5c180300e4dce211c27f9f5a050d`;
+  integrate main including #439 / #440 with an ordinary merge. Preserve DELETE's
+  shared uninstall branch and the authenticated requester guard together. Verify
+  actual requester persistence and public-response omission for default DELETE
+  and `immediate=false`, plus 403 with no scheduling for requester-less contexts.
+  Repeat focused/full validation and request quality/release approval on the new
+  exact head. Staging publication belongs to stagingsync; the merge437441 task
+  performs no staging or production publication.
 
 ## Final contract and migration
 

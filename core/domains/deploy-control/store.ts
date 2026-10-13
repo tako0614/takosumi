@@ -876,6 +876,7 @@ export function capsuleApplyRunAdmissionFenceMatchesCurrent(
     (expectedCapsule.uninstall === undefined ||
       (capsule.uninstall !== undefined &&
         capsule.uninstall.phase !== "cancelled" &&
+        capsule.uninstall.blockedReason === undefined &&
         capsule.uninstall.id === expectedCapsule.uninstall.id &&
         capsule.uninstall.destroyPlanRunId ===
           expectedCapsule.uninstall.destroyPlanRunId));
@@ -1812,7 +1813,11 @@ export function assertCapsuleUninstallMutation(
     (uninstall.lastFinalizeAttemptAt !== undefined &&
       !Number.isFinite(Date.parse(uninstall.lastFinalizeAttemptAt))) ||
     (uninstall.preDestroyExportStartedAt !== undefined &&
-      !Number.isFinite(Date.parse(uninstall.preDestroyExportStartedAt)))
+      !Number.isFinite(Date.parse(uninstall.preDestroyExportStartedAt))) ||
+    (uninstall.authorizationRejectedAt !== undefined &&
+      !Number.isFinite(Date.parse(uninstall.authorizationRejectedAt))) ||
+    (uninstall.requester !== undefined &&
+      (typeof uninstall.requester.subject !== "string" || !uninstall.requester.subject.trim()))
   ) {
     throw new TypeError("uninstall record is invalid");
   }
@@ -7733,7 +7738,11 @@ export function applyRunMutationDispatched(row: ApplyRun): boolean {
         event.data?.actionDispatched === true),
   );
   if (lifecycleActionDispatched) return true;
+  return applyRunProviderMutationDispatched(row);
+}
 
+/** Provider execution evidence only; a cleanup action cannot authorize a new destroy. */
+export function applyRunProviderMutationDispatched(row: ApplyRun): boolean {
   const providerRunnerInvoked = row.auditEvents.some(
     (event) => event.data?.providerDispatched === true,
   );

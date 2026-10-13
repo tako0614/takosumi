@@ -176,6 +176,10 @@ export class PostgresAccountsStore implements AccountsStore {
     return tokens.findOAuthToken(this.#client, "oauth_access_tokens", token);
   }
 
+  findAccessTokenByHash(tokenHash: string): Promise<TokenRecord | undefined> {
+    return tokens.findAccessTokenByHash(this.#client, tokenHash);
+  }
+
   saveRefreshToken(token: string, record: TokenRecord): Promise<void> {
     return tokens.saveOAuthToken(
       this.#client,
@@ -204,6 +208,13 @@ export class PostgresAccountsStore implements AccountsStore {
     token: string,
   ): Promise<PersonalAccessTokenRecord | undefined> {
     return tokens.findPersonalAccessToken(this.#client, token);
+  }
+
+  findPersonalAccessTokenById(
+    subject: TakosumiSubject,
+    tokenId: string,
+  ): Promise<PersonalAccessTokenRecord | undefined> {
+    return tokens.findPersonalAccessTokenById(this.#client, subject, tokenId);
   }
 
   listPersonalAccessTokensForSubject(

@@ -7,6 +7,7 @@ import type {
   RefreshChainRetentionPageResult,
   RefreshChainRetentionPhase,
 } from "./refresh-chain-retention.ts";
+import { sha256Text } from "./encoding.ts";
 
 export interface AuthorizationCodeRecord {
   clientId: string;
@@ -325,6 +326,10 @@ export interface AccountsStore {
   findAccessToken(
     token: string,
   ): TokenRecord | undefined | Promise<TokenRecord | undefined>;
+  /** Exact read by the persisted, nonsecret token hash for deferred authority. */
+  findAccessTokenByHash?(
+    tokenHash: string,
+  ): TokenRecord | undefined | Promise<TokenRecord | undefined>;
   saveRefreshToken(token: string, record: TokenRecord): void | Promise<void>;
   findRefreshToken(
     token: string,
@@ -336,6 +341,14 @@ export interface AccountsStore {
   ): void | Promise<void>;
   findPersonalAccessToken(
     token: string,
+  ):
+    | PersonalAccessTokenRecord
+    | undefined
+    | Promise<PersonalAccessTokenRecord | undefined>;
+  /** Exact read by public token identity, without presenting the bearer secret. */
+  findPersonalAccessTokenById?(
+    subject: TakosumiSubject,
+    tokenId: string,
   ):
     | PersonalAccessTokenRecord
     | undefined
@@ -713,6 +726,15 @@ export class InMemoryAccountsStore implements AccountsStore {
     return this.#accessTokens.get(token);
   }
 
+  async findAccessTokenByHash(
+    tokenHash: string,
+  ): Promise<TokenRecord | undefined> {
+    for (const [token, record] of this.#accessTokens) {
+      if (await sha256Text(token) === tokenHash) return record;
+    }
+    return undefined;
+  }
+
   saveRefreshToken(token: string, record: TokenRecord): void {
     this.#refreshTokens.set(token, record);
   }
@@ -742,6 +764,14 @@ export class InMemoryAccountsStore implements AccountsStore {
       ? this.#personalAccessTokens.get(tokenId)
       : undefined;
     return record ? { ...record } : undefined;
+  }
+
+  findPersonalAccessTokenById(
+    subject: TakosumiSubject,
+    tokenId: string,
+  ): PersonalAccessTokenRecord | undefined {
+    const record = this.#personalAccessTokens.get(tokenId);
+    return record?.subject === subject ? { ...record } : undefined;
   }
 
   listPersonalAccessTokensForSubject(

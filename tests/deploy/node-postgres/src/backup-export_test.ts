@@ -25,6 +25,7 @@ const STATE_PLAINTEXT = new TextEncoder().encode(
   }),
 );
 const PASSPHRASE = "backup-export-integration-passphrase-is-long-enough-32-bytes";
+const REQUESTER_SUBJECT = "tsub_backup_export_owner";
 
 function tarEntry(tar: Uint8Array, name: string): Uint8Array {
   for (let offset = 0; offset + 512 <= tar.byteLength;) {
@@ -81,9 +82,14 @@ test("self-host composed backup exports during uninstall grace and the due final
     const store = new SqlOpenTofuControlStore({ client });
     const crypto = StateArtifactCrypto.fromEnv(runtimeEnv);
     const sealedState = await crypto.seal(STATE_PLAINTEXT);
+    const accountsStore = new PostgresAccountsStore(accountsQueryClient());
+    accountsStore.findAccount = async (subject) =>
+      subject === REQUESTER_SUBJECT
+        ? { subject, createdAt: Date.now(), updatedAt: Date.now() }
+        : undefined;
     const created = await buildComposedApp({
       config: testConfig(),
-      store: new PostgresAccountsStore(accountsQueryClient()),
+      store: accountsStore,
       // This scenario exercises the embedded control operations, while the
       // composer requires an Accounts handler to finish mounting its routes.
       accountsHandler: async () => new Response("unused"),
@@ -105,6 +111,10 @@ test("self-host composed backup exports during uninstall grace and the due final
       installConfigId: "config_backup_export_regression",
       environment: "test",
       name: "backup-export-regression",
+    });
+    await store.putWorkspace({
+      ...seeded.workspace,
+      ownerUserId: REQUESTER_SUBJECT,
     });
     const stateVersion = {
       id: "state_backup_export_regression",
@@ -130,7 +140,10 @@ test("self-host composed backup exports during uninstall grace and the due final
 
     const scheduled = await created.operations.capsules.scheduleCapsuleUninstall(
       seeded.capsule.id,
-      { actor: "test-owner" },
+      {
+        actor: REQUESTER_SUBJECT,
+        requester: { subject: REQUESTER_SUBJECT },
+      },
     );
     expect(scheduled.status).toBe("uninstalled");
     expect(scheduled.uninstall?.phase).toBe("scheduled");

@@ -370,6 +370,7 @@ function assertDurableGitInstallPlanStoreOrWarn(input: {
 }
 
 export interface CreateTakosumiServiceOptions extends AppContextOptions {
+  readonly validateUninstallRequester?: import("./domains/capsules/uninstall_authorization.ts").UninstallRequesterValidator;
   /** Explicit private Runner-to-Core file mount; absent means no endpoint/grants. */
   readonly privateRunFiles?: PrivateRunFileRouteDependencies & {
     readonly endpoint: string;
@@ -1332,6 +1333,7 @@ export async function createTakosumiService(
   });
   opentofuController = new OpenTofuController({
     store: sharedOpenTofuStore,
+    validateUninstallRequester: options.validateUninstallRequester,
     ...(options.privateRunFiles
       ? {
           privateRunFileGrantMinter: {
@@ -1847,7 +1849,7 @@ export async function createTakosumiService(
     outputShares: outputSharesService,
     runGroups: runGroupsService,
     interfaces: interfaceService,
-    finalizeDueCapsuleUninstalls: (options) =>
+    finalizeDueCapsuleUninstalls: (finalizeOptions) =>
       finalizeDueCapsuleUninstalls(
         {
           store: sharedOpenTofuStore,
@@ -1855,13 +1857,14 @@ export async function createTakosumiService(
           controller: opentofuController,
           backups: backupsService,
           activity: activityService,
+          validateUninstallRequester: options.validateUninstallRequester,
           onError: (error, capsuleId) =>
             log.warn("service.capsule_uninstall.finalize_failed", {
               capsuleId,
               error,
             }),
         },
-        options,
+        finalizeOptions,
       ),
     drainInterfaceMaterializationIntents: (options) =>
       interfaceMaterializationIntentDrainer.drain(options),

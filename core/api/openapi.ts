@@ -1867,6 +1867,7 @@ export function capsuleAndInstallConfigSchemas(): Record<
             finalizeFailures: { type: "integer", minimum: 1 },
             destroyStartedAt: { type: "string" },
             blockedReason: { type: "string" },
+            authorizationRejectedAt: { type: "string" },
           },
           additionalProperties: false,
         },
