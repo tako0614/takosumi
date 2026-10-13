@@ -11,6 +11,10 @@
   shared Solid mock and adding failure-safe root/child cleanup. Uninstall code
   remains the main implementation. All final verification is restarted after
   integration; no force push or other-worktree edits are used.
+- Final main integration: #423 and #426 are also normally merged; final base
+  `f0d06cc1585b475e572016ef9d23988f460a08da`. The new replay-test delivery
+  event, successful terminal assertion and cleanup from #426 are preserved
+  exactly. The current owner gate has 20 phases, including its new export check.
 - Scope: test runtime isolation, lease-test event synchronization and evidence.
   No product implementation,
   dependency, schema, deployment or release-entrypoint changes.
@@ -70,17 +74,27 @@ during mint`. That test alone reproduced **pass / fail / pass**. Its bounded
 500-microtask/25-event-loop-turn poll sometimes ended before the renewal tick's
 heartbeat and Capsule lease renewal reached the second-mint callback.
 
-The test now waits on a Promise resolved directly by that callback. The existing
+The held-mint test now waits on a Promise resolved directly by that callback. The existing
 four lease-loss outcome assertions remain; reaching the callback is guaranteed
 by awaiting its event instead of asserting a boolean after arbitrary polling.
 The normal five-second test timeout still bounds the operation. Five focused
 runs on each Bun 1.4.2 and Bun 1.4.0 all passed (ten runs total, each 1 pass /
 0 fail, four outcome assertions). No production lease or credential code changed.
 
+After #422 integration, another full gate failed in the same helper at
+`renewable ApplyRun reissues before expiry and stops after terminal result`
+(**5665 pass / 5 existing skips / 1 fail**). Every remaining poll in this file
+is now replaced by direct refresh-delivery, mint-start, child-abort or mint-return
+callback events. The refresh and expiry predicates remain explicit assertions
+after their events, with the same fake-clock steps. #426 separately adds its
+own typed replay outcome and terminal cleanup, which this branch preserves.
+The final 44-test file passes on both Bun 1.4.2 and Bun 1.4.0, with **236
+assertions / 0 fail** on each. Independent final review found no blockers.
+
 The initial gate reported **5623 pass / 5 existing skips / 1 fail**. A retry was
 stopped to apply the synchronization fix. The next gate was stopped to integrate
 the newly merged #422 before publishing. Failed and interrupted attempts are
-recorded in the PR; the final full gate is on the integrated main.
+recorded in the PR; the final full gate is on the integrated #423/#426 main.
 
 ## Verification
 
@@ -89,15 +103,16 @@ and docs npm lock. Runtime: Bun 1.4.2, Node 26.1.0; compatibility runs: Bun 1.4.
 
 | Command | Run | Result |
 | --- | --- | --- |
-| `bun test ./tests/dashboard/src` | 1 | 743 pass / 0 fail, 1.900s |
-| `bun test ./tests/dashboard/src` | 2 | 743 pass / 0 fail, 1.730s |
-| `bun test ./tests/dashboard/src` | 3 | 743 pass / 0 fail, 1.760s |
-| `env -u NODE_ENV "$BUN140" test --randomize --seed=420 ./tests/dashboard/src` | 1 | 743 pass / 0 fail, 1.520s |
-| `env -u NODE_ENV "$BUN140" test --randomize --seed=61013 ./tests/dashboard/src` | 2 | 743 pass / 0 fail, 1.438s |
-| `env -u NODE_ENV "$BUN140" test --randomize --seed=38425957 ./tests/dashboard/src` | 3 | 743 pass / 0 fail, 1.434s |
+| `bun test ./tests/dashboard/src` | 1 | 760 pass / 0 fail, 1.270s |
+| `bun test ./tests/dashboard/src` | 2 | 760 pass / 0 fail, 1.242s |
+| `bun test ./tests/dashboard/src` | 3 | 760 pass / 0 fail, 1.238s |
+| `env -u NODE_ENV "$BUN140" test --randomize --seed=420 ./tests/dashboard/src` | 1 | 760 pass / 0 fail, 1.289s |
+| `env -u NODE_ENV "$BUN140" test --randomize --seed=61013 ./tests/dashboard/src` | 2 | 760 pass / 0 fail, 1.257s |
+| `env -u NODE_ENV "$BUN140" test --randomize --seed=38425957 ./tests/dashboard/src` | 3 | 760 pass / 0 fail, 1.246s |
 
-These six dashboard runs are on the integrated test code at `d99be38e9`; all
-exited 0. The pre-integration repeats were also green (742 pass per run). An earlier attempt to use the Actions run ID
+These six dashboard runs are on the integrated test code at `d5b7f51a6`; all
+exited 0. Earlier repeats were also green (742 before #422 and 743 after #422).
+An earlier attempt to use the Actions run ID
 `38425957584` as a seed was rejected before test execution because it exceeds
 Bun's seed range; the valid seed `38425957` above was used instead.
 
