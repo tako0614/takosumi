@@ -140,3 +140,27 @@ test("missing verifier, tampered token, and malformed token fail closed", async 
   rotated.credentials.env.RUN_TOKEN = "artificial-opaque-two";
   assert.notEqual((await identity(opaque)).semanticDigest, (await identity(rotated)).semanticDigest);
 });
+
+test("private file grant rotation preserves mutation identity but slot or endpoint change does not", async () => {
+  const base = {
+    ...request(await token("artificial-private-file")),
+    privateRunFiles: [{
+      slot: "checkpoint",
+      endpoint: "https://private.example.test/internal/private-run-files/v1",
+      grant: "artificial-grant-one",
+    }],
+  };
+  const first = await identity(base);
+  const rotated = structuredClone(base);
+  rotated.privateRunFiles[0]!.grant = "artificial-grant-two";
+  const second = await identity(rotated);
+  assert.equal(second.semanticDigest, first.semanticDigest);
+  assert.notEqual(second.privateMaterialDigest, first.privateMaterialDigest);
+  const changedSlot = structuredClone(rotated);
+  changedSlot.privateRunFiles[0]!.slot = "another";
+  assert.notEqual((await identity(changedSlot)).semanticDigest, first.semanticDigest);
+  const changedEndpoint = structuredClone(rotated);
+  changedEndpoint.privateRunFiles[0]!.endpoint = "https://other.example.test/internal/private-run-files/v1";
+  assert.notEqual((await identity(changedEndpoint)).semanticDigest, first.semanticDigest);
+  assert.equal(JSON.stringify(first).includes("artificial-grant-one"), false);
+});
