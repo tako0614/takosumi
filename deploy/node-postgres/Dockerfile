@@ -47,11 +47,6 @@ RUN cd dashboard && bun run build
 # becoming an undeclared build input.
 FROM node:26.1.0-bookworm-slim AS app-docs
 WORKDIR /work
-# app-docs enables vitepress `lastUpdated`, which spawns `git` per page. The
-# slim image has no git binary; `.git` stays excluded, so timestamps are empty.
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends git \
-  && rm -rf /var/lib/apt/lists/*
 COPY docs/package.json docs/package-lock.json /work/docs/
 RUN cd docs && npm ci --no-fund --no-audit
 COPY app-docs /work/app-docs
