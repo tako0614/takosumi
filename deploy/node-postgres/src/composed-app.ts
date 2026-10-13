@@ -598,6 +598,7 @@ function productDiscoveryOptions(
   return {
     ...(overrides ?? {}),
     adapters: {
+      // TODO: Also check Core's stacks-mounted condition for this discovery route.
       opentofu: opentofuRunnerConfigured,
       ...(overrides?.adapters ?? {}),
     },
