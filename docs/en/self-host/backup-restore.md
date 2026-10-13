@@ -1,10 +1,15 @@
 # Backup and recovery
 
 Preserve the database, encryption and signing keys, the artifact/source/state stores you
-actually use, and deployment records together. The reference PostgreSQL Compose persists
-only PostgreSQL and Caddy volumes. It has no runner, artifact-store, source-archive, or
-OpenTofu state-backend volume. The stock Bun/PostgreSQL composition wires neither a runner
-nor a backup artifact store.
+actually use, and deployment records together.
+
+The reference Bun/PostgreSQL Compose persists PostgreSQL, Caddy and `takosumi-runtime`
+volumes. Control and pre-destroy exports use `TAKOSUMI_BACKUP_ARTIFACTS_DIR`
+(default `/var/lib/takosumi/backups`), with owner-only 0700 directories and 0600 files.
+Bundles use the existing secret-store encryption key; only public artifact manifests
+stay plain. Filenames are the SHA-256 hex of the opaque ref followed by `.artifact`.
+No runner is bundled. Include the actual durable paths of any custom runner/state/artifact
+store in the backup as well.
 
 ## PostgreSQL Compose
 
@@ -108,11 +113,18 @@ After the check, inspect the dedicated project containers and volume before remo
 Do not target the original deployment project or its volume. Remove the temporary
 `restore_dir` configuration when finished. With restore-specific authentication configured,
 also verify sign-in, existing Accounts / Workspace / Run records, and ProviderConnection
-decryption. The stock distribution has no runner or artifact store, so this PostgreSQL
-backup does not restore Git sources, plan artifacts, or provider-owned infrastructure.
-Custom compositions must also restore their actual durable stores.
+decryption. The stock distribution has no runner, and this PostgreSQL backup does not
+restore Git sources, plan artifacts, or provider-owned infrastructure. Restore the
+`takosumi-runtime` volume and any custom composition's actual durable stores separately.
+
+Workspace export does not replace whole-database, artifact-store, and key backups.
+The reference Compose wires a file backup store. Owners can use the Capsule backup API
+during the seven-day uninstall grace period; the finalizer also attempts an export before
+destroy after the deadline. Custom runner compositions must explicitly supply a
+`backupStateObjectReader` for their exact sealed state store. Missing readers or state
+objects are recorded as export failures; #422's existing policy still proceeds with
+teardown after failure. Preserve the volume and keys separately.
 
 For Cloudflare, use the [disaster recovery](https://github.com/tako0614/takosumi/blob/main/docs/operations/disaster-recovery.md) and
-[backup/restore drills](https://github.com/tako0614/takosumi/blob/main/docs/operations/backup-restore-drills.md) runbooks. Workspace export
-does not replace a full database, store, and key backup. Keep secret values and raw backups
+[backup/restore drills](https://github.com/tako0614/takosumi/blob/main/docs/operations/backup-restore-drills.md) runbooks. Keep secret values and raw backups
 out of public repositories, PRs, and logs.

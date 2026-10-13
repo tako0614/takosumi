@@ -68,6 +68,8 @@ export const ja = {
     "デプロイは開始されていません。リポジトリの登録結果を確認できませんでした。「追加」をもう一度押すと同じ試行を確認します（リポジトリが重複して登録されることはありません）。",
   "installStore.sourceBaselineUnavailable":
     "デプロイは開始されていません。一時的にリポジトリの一覧を確認できなかったため、登録を開始しませんでした。少し待ってから「追加」を再実行してください。",
+  "installStore.sourceAutoSyncFailed":
+    "ソースの自動更新を有効にできませんでした。再試行すると、このサービスの自動更新を有効にします。",
   "installStore.providerTitle": "互換性のあるホスト / アカウントが必要です",
   "installStore.destinationTitle": "ホスト / アカウントを選択",
   "installStore.destinationHint":
@@ -609,6 +611,11 @@ export const ja = {
   "app.uninstall.confirmTitle": "このサービスの削除を予約しますか？",
   "app.uninstall.confirmMessage":
     "{name} は猶予期間が終わるまで動き続け、データも残ります。期限が来るとデータの書き出しを試みてから完全に削除します。それまでは取り消せます。",
+  "app.uninstall.dependencyWarning":
+    "{name} は次のサービスから使われています（{services}）。削除すると、これらのサービスに影響する可能性があります。",
+  "app.uninstall.dependencyCheckLoading": "削除前に連携サービスを確認しています…",
+  "app.uninstall.dependencyCheckFailed":
+    "連携サービスを確認できませんでした。削除前に依存関係を確認してください。",
   "app.uninstall.immediateTitle": "今すぐ完全に削除",
   "app.uninstall.banner":
     "{name} は {date} に削除されます。それまではデータが残り、取り消せます。",

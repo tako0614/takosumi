@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   effectiveCapsuleStatus,
+  isLauncherServiceCapsule,
+  isVisibleServiceCapsule,
   isCapsuleRuntimeOpenable,
   isStateVersionRuntimeReady,
   needsAttention,
@@ -43,6 +45,14 @@ describe("Capsule presentation status", () => {
         updatedAt: "2026-06-25T01:00:00.000Z",
       }),
     ).toBe("stale");
+  });
+
+  test("hides grace-period Capsules only from the launcher", () => {
+    expect(isLauncherServiceCapsule({ status: "active" })).toBe(true);
+    expect(isLauncherServiceCapsule({ status: "uninstalled" })).toBe(false);
+    expect(isLauncherServiceCapsule({ status: "destroyed" })).toBe(false);
+    expect(isVisibleServiceCapsule({ status: "uninstalled" })).toBe(true);
+    expect(isVisibleServiceCapsule({ status: "destroyed" })).toBe(false);
   });
 });
 

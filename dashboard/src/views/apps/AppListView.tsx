@@ -42,7 +42,7 @@ import {
 import {
   type AppSurface,
   effectiveCapsuleStatus,
-  isVisibleServiceCapsule,
+  isLauncherServiceCapsule,
   needsAttention,
 } from "../../lib/capsules-ui.ts";
 import { capsuleStatusLabel } from "../../lib/labels.ts";
@@ -156,7 +156,7 @@ function Inner() {
   };
   const visibleCapsules = createMemo(() =>
     (capsules.error ? [] : (capsules.latest ?? [])).filter(
-      isVisibleServiceCapsule,
+      isLauncherServiceCapsule,
     ),
   );
   // Capsule is the installed-app ledger. Interface is the only launcher/runtime

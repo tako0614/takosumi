@@ -1851,6 +1851,35 @@ test("platform worker exposes product discovery before accounts handler", async 
   expect(capabilitiesBody).not.toHaveProperty("commercial");
 });
 
+test("platform store capability matches the configured well-known endpoint", async () => {
+  const worker = (await import("../../../deploy/platform/worker.ts")).default;
+  for (const [storeUrl, expectedEndpoint] of [
+    ["https://store.example/catalog", "https://store.example/catalog"],
+    [undefined, undefined],
+  ] as const) {
+    const env = storeUrl
+      ? { TAKOSUMI_TCS_STORE_URL: storeUrl }
+      : {};
+    const discovery = await worker.fetch(
+      new Request(`https://app.takosumi.com${TAKOSUMI_WELL_KNOWN_PATH}`),
+      env as never,
+    );
+    const capabilities = await worker.fetch(
+      new Request(
+        `https://app.takosumi.com${TAKOSUMI_PRODUCT_CAPABILITIES_PATH}`,
+      ),
+      env as never,
+    );
+    const discoveryBody = await discovery.json();
+    const capabilitiesBody = await capabilities.json();
+    expect(
+      discoveryBody.endpoints.extensions?.["takosumi.tcs-store.v1"],
+    ).toBe(expectedEndpoint);
+    expect(capabilitiesBody.extensions.includes("takosumi.tcs-store.v1"))
+      .toBe(Boolean(expectedEndpoint));
+  }
+});
+
 test("platform discovery advertises the registered Takosumi native public client", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const discovery = await worker.fetch(

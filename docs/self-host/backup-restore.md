@@ -1,10 +1,14 @@
 # バックアップと復旧
 
 復旧できるよう、データベース、暗号・署名鍵、実際に使う artifact/source/state store、
-配置情報を一組として保全します。PostgreSQL 参照 Compose が永続化するのは PostgreSQL と
-Caddy の volume だけです。runner、artifact store、source archive、OpenTofu state backend の
-volume はありません。stock Bun/PostgreSQL 構成では runner と backup artifact store は
-配線されていません。
+配置情報を一組として保全します。
+
+Bun/PostgreSQL の参照 Compose は PostgreSQL、Caddy と `takosumi-runtime` volume を
+永続化します。control / pre-destroy export は `TAKOSUMI_BACKUP_ARTIFACTS_DIR`
+(既定 `/var/lib/takosumi/backups`) に保存します。directory は実行ユーザー所有の 0700、
+file は 0600 で、bundle は既存の secret-store 鍵で sealed 保存します。public artifact
+manifest だけは平文です。保存名は opaque ref の SHA-256 hex に `.artifact` を付けたものです。
+runner は同梱されません。独自の runner/state/artifact store の保存先も backup 対象に加えます。
 
 ## PostgreSQL Compose
 
@@ -106,10 +110,17 @@ JSON、secret mapping を追加し、`restore_compose up -d --wait accounts` で
 確認後は専用 project の container と volume を確認してから片付けます。元の deployment project や
 volume は対象にしません。`restore_dir` の一時設定も最後に削除します。restore-specific
 認証設定を用意した場合はサインイン、既存 Accounts / Workspace / Run 記録、ProviderConnection の復号も確認します。
-stock 配布は runner と artifact store を持たないため、Git source、plan artifact、provider 側の実リソースは
-この PostgreSQL backup から復元されません。custom composition は実際の durable store も個別に復旧します。
+stock 配布に runner は含まれず、Git source、plan artifact、provider 側の実リソースは
+この PostgreSQL backup から復元されません。`takosumi-runtime` volume と custom composition の
+実際の durable store も個別に復旧します。
+
+Workspace export は DB 全体、artifact store、鍵の backup の代わりにはなりません。
+参照 Compose は file backup store を配線します。uninstall の 7 日 grace 中は Capsule backup
+API で export でき、期限後の finalizer も destroy 前に export を試みます。適用済み state を含める
+独自 runner 構成では、その sealed state store の `backupStateObjectReader` を host から明示的に
+接続します。読み取り口や state object が無い場合は export 失敗として記録され、#422 の既存方針では
+失敗後も teardown が進みます。volume と鍵は別に保全します。
 
 Cloudflare 構成は [災害復旧](https://github.com/tako0614/takosumi/blob/main/docs/operations/disaster-recovery.md) と
 [backup/restore 演習](https://github.com/tako0614/takosumi/blob/main/docs/operations/backup-restore-drills.md)を参照してください。
-Workspace export は DB 全体、store、鍵の backup の代わりになりません。秘密値と raw backup は
-public repository、PR、運用ログに保存しません。
+秘密値と raw backup は public repository、PR、運用ログに保存しません。

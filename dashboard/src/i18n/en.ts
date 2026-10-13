@@ -63,6 +63,8 @@ export const en: Record<keyof typeof ja, string> = {
     "Nothing was deployed. We couldn't confirm the repository was registered. Choose Add again to check this same attempt; it won't register the repository twice.",
   "installStore.sourceBaselineUnavailable":
     "Nothing was deployed. The repository list was temporarily unavailable, so registration didn't start. Wait a moment, then choose Add again.",
+  "installStore.sourceAutoSyncFailed":
+    "Automatic source updates could not be enabled. Retry to enable them for this service.",
   "installStore.providerTitle": "A compatible Host / account is needed",
   "installStore.destinationTitle": "Choose a Host / account",
   "installStore.destinationHint":
@@ -605,6 +607,11 @@ export const en: Record<keyof typeof ja, string> = {
   "app.uninstall.confirmTitle": "Schedule deletion of this service?",
   "app.uninstall.confirmMessage":
     "{name} keeps running and keeps its data until the grace period ends. Then a data export is attempted and the service is deleted for good. You can cancel until then.",
+  "app.uninstall.dependencyWarning":
+    "Other services ({services}) depend on {name}. Deleting it may disrupt them.",
+  "app.uninstall.dependencyCheckLoading": "Checking connected services before deletion…",
+  "app.uninstall.dependencyCheckFailed":
+    "Connected services could not be checked. Review dependencies before deletion.",
   "app.uninstall.immediateTitle": "Delete now",
   "app.uninstall.banner":
     "{name} will be deleted on {date}. Its data stays until then, and you can cancel.",

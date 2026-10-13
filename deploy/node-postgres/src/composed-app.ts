@@ -39,6 +39,8 @@ import {
 import { createPrivateRunFileGrantCodec } from "../../../core/domains/private-run-files/grant.ts";
 import { PostgresPrivateRunFileRepository } from "../../../core/domains/private-run-files/repository_sql.ts";
 import { createLocalPrivateRunFileBlobStore } from "./local-private-run-file-blob-store.ts";
+import { FileBackupArtifactStore } from "./file-backup-artifact-store.ts";
+import { StateArtifactCrypto } from "../../../worker/src/state_crypto.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
 import {
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
@@ -100,6 +102,8 @@ export interface ComposedAppInput {
    * own protected runner/callback routes.
    */
   readonly runtimeEnv?: CreateTakosumiServiceArg["runtimeEnv"];
+  /** Host reader of the exact sealed state objects used by its runner. */
+  readonly backupStateObjectReader?: CreateTakosumiServiceArg["backupStateObjectReader"];
   /**
    * Optional Accounts authority for manifest-gated runtime `identity.oidc`
    * bindings. Core owns the runtime-input protocol but not Accounts client
@@ -203,6 +207,13 @@ export async function buildComposedApp(
 ): Promise<CreatedTakosumiService> {
   const { runtimeEnv } = embeddedServiceRuntimeEnv(input.runtimeEnv);
   const secretCrypto = selectSecretBoundaryCrypto({ env: runtimeEnv });
+  const backupRoot = runtimeEnv.TAKOSUMI_BACKUP_ARTIFACTS_DIR;
+  const backupArtifactStore = backupRoot
+    ? await FileBackupArtifactStore.create({
+        root: backupRoot,
+        crypto: StateArtifactCrypto.fromEnv(runtimeEnv),
+      })
+    : undefined;
   let privateRunFiles: CreateTakosumiServiceArg["privateRunFiles"];
   if (input.privateRunFiles) {
     if (!input.sqlClient ||
@@ -239,6 +250,10 @@ export async function buildComposedApp(
   let controlPlaneOperations: CreatedTakosumiService["operations"] | undefined;
   const created = await createTakosumiService({
     runtimeEnv,
+    ...(backupArtifactStore ? { backupArtifactStore } : {}),
+    ...(input.backupStateObjectReader
+      ? { backupStateObjectReader: input.backupStateObjectReader }
+      : {}),
     ...(privateRunFiles ? { privateRunFiles } : {}),
     mountInternalLedgerRoutes: true,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
@@ -606,6 +621,10 @@ function productDiscoveryOptions(
       ...overrides?.endpoints,
       ...(storeEndpoint ? { "takosumi.tcs-store.v1": storeEndpoint } : {}),
     },
+    extensions: [
+      ...(overrides?.extensions ?? []),
+      ...(storeEndpoint ? ["takosumi.tcs-store.v1"] : []),
+    ],
     adapters: {
       // TODO: Also check Core's stacks-mounted condition for this discovery route.
       opentofu: opentofuRunnerConfigured,
