@@ -391,6 +391,20 @@ export async function findOAuthToken(
   return row ? tokenFromRow(row) : undefined;
 }
 
+export async function findAccessTokenByHash(
+  client: PostgresQueryClient,
+  tokenHash: string,
+): Promise<TokenRecord | undefined> {
+  const row = await runDrizzleFirst<TokenRow>(
+    client,
+    db
+      .select(tokenSelection(oauthAccessTokens))
+      .from(oauthAccessTokens)
+      .where(eq(oauthAccessTokens.tokenHash, tokenHash)),
+  );
+  return row ? tokenFromRow(row) : undefined;
+}
+
 export async function deleteOAuthToken(
   client: PostgresQueryClient,
   token: string,
@@ -461,6 +475,24 @@ export async function findPersonalAccessToken(
       .select(personalAccessTokenSelection())
       .from(personalAccessTokens)
       .where(eq(personalAccessTokens.tokenHash, await hashSecret(token))),
+  );
+  return row ? personalAccessTokenFromRow(row) : undefined;
+}
+
+export async function findPersonalAccessTokenById(
+  client: PostgresQueryClient,
+  subject: TakosumiSubject,
+  tokenId: string,
+): Promise<PersonalAccessTokenRecord | undefined> {
+  const row = await runDrizzleFirst<PersonalAccessTokenRow>(
+    client,
+    db
+      .select(personalAccessTokenSelection())
+      .from(personalAccessTokens)
+      .where(and(
+        eq(personalAccessTokens.subject, subject),
+        eq(personalAccessTokens.tokenId, tokenId),
+      )),
   );
   return row ? personalAccessTokenFromRow(row) : undefined;
 }

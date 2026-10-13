@@ -441,7 +441,7 @@ test("requireAccountsBearer resolves an arbitrary-prefix session by exact record
 
   expect(result.ok).toEqual(true);
   if (result.ok) {
-    expect(result.auth).toEqual({
+    expect(result.auth).toMatchObject({
       subject: "tsub_arbitrary_session",
       credential: "session",
     });
@@ -468,7 +468,7 @@ test("requireAccountsBearer resolves an arbitrary-prefix OAuth token by exact re
 
   expect(result.ok).toEqual(true);
   if (result.ok) {
-    expect(result.auth).toEqual({
+    expect(result.auth).toMatchObject({
       subject: "tsub_arbitrary_oauth",
       principalSubject: "client-local-principal",
       credential: "oauth-access-token",
@@ -498,7 +498,7 @@ test("requireAccountsBearer resolves an arbitrary-prefix PAT and records use", a
 
   expect(result.ok).toEqual(true);
   if (result.ok) {
-    expect(result.auth).toEqual({
+    expect(result.auth).toMatchObject({
       subject: "tsub_arbitrary_pat",
       credential: "personal-access-token",
       workspaceId: "workspace_pat",

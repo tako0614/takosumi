@@ -2,6 +2,7 @@ import type {
   TakosumiAccountsPatScope,
   TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
+import type { CapsuleUninstallRequester } from "takosumi-contract/capsules";
 import type { AccountsStore } from "./store.ts";
 import {
   errorJson,
@@ -12,6 +13,7 @@ import {
 // Shared PAT-activity predicate. Imported (not re-declared) so the activity
 // rule has a single owner and cannot drift between the two call sites.
 import { personalAccessTokenIsActive } from "./pat-routes.ts";
+import { sha256Text } from "./encoding.ts";
 import {
   findActiveAccessToken,
   validateActiveAccessTokenRecord,
@@ -23,6 +25,8 @@ export type AccountsBearerRequiredScope = TakosumiAccountsPatScope;
 
 export type AccountsBearerSubject = {
   readonly subject: TakosumiSubject;
+  /** Server-derived, value-free evidence for deadline reauthorization. */
+  readonly uninstallRequester: CapsuleUninstallRequester;
   /**
    * OIDC client-local subject (`sub`) carried by an OAuth access token.
    * This is the subject an InterfaceBinding targets. It is intentionally
@@ -387,7 +391,11 @@ export async function requireAccountsBearer(input: {
   if (sessionSubject) {
     return {
       ok: true,
-      auth: { subject: sessionSubject, credential: "session" },
+      auth: {
+        subject: sessionSubject,
+        uninstallRequester: { subject: sessionSubject },
+        credential: "session",
+      },
     };
   }
 
@@ -411,6 +419,13 @@ export async function requireAccountsBearer(input: {
       ok: true,
       auth: {
         subject: takosumiSubject,
+        uninstallRequester: {
+          subject: takosumiSubject,
+          grant: {
+            kind: "oauth-access-token",
+            tokenHash: await sha256Text(token),
+          },
+        },
         principalSubject: record.subject,
         credential: "oauth-access-token",
         ...(record.workspaceId ? { workspaceId: record.workspaceId } : {}),
@@ -450,6 +465,13 @@ export async function requireAccountsBearer(input: {
     ok: true,
     auth: {
       subject: activePersonalAccessTokenRecord.subject,
+      uninstallRequester: {
+        subject: activePersonalAccessTokenRecord.subject,
+        grant: {
+          kind: "personal-access-token",
+          tokenId: activePersonalAccessTokenRecord.tokenId,
+        },
+      },
       credential: "personal-access-token",
       ...(activePersonalAccessTokenRecord.workspaceId
         ? { workspaceId: activePersonalAccessTokenRecord.workspaceId }
@@ -472,7 +494,7 @@ function oauthScopeForRequiredAccess(
   return required === "read" ? "capsules:read" : "capsules:write";
 }
 
-function oauthAccessTokenHasScope(
+export function oauthAccessTokenHasScope(
   scope: string,
   required: AccountsBearerRequiredScope,
 ): boolean {
@@ -503,7 +525,7 @@ export function bearerWorkspaceAllows(
   return !auth.workspaceId || auth.workspaceId === workspaceId;
 }
 
-function personalAccessTokenHasScope(
+export function personalAccessTokenHasScope(
   scopes: readonly TakosumiAccountsPatScope[],
   required: AccountsBearerRequiredScope,
 ): boolean {

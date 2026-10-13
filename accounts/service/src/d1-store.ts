@@ -836,6 +836,12 @@ export class D1AccountsStore implements AccountsStore {
     return await this.#get("access_tokens", await hashSecret(token));
   }
 
+  async findAccessTokenByHash(
+    tokenHash: string,
+  ): Promise<TokenRecord | undefined> {
+    return await this.#get("access_tokens", tokenHash);
+  }
+
   async saveRefreshToken(token: string, record: TokenRecord): Promise<void> {
     await this.#put("refresh_tokens", await hashSecret(token), record);
   }
@@ -876,6 +882,17 @@ export class D1AccountsStore implements AccountsStore {
     return secret
       ? await this.#get("personal_access_tokens", secret.tokenId)
       : undefined;
+  }
+
+  async findPersonalAccessTokenById(
+    subject: TakosumiSubject,
+    tokenId: string,
+  ): Promise<PersonalAccessTokenRecord | undefined> {
+    const record = await this.#get<PersonalAccessTokenRecord>(
+      "personal_access_tokens",
+      tokenId,
+    );
+    return record?.subject === subject ? record : undefined;
   }
 
   listPersonalAccessTokensForSubject(

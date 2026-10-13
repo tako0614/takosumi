@@ -533,6 +533,7 @@ export async function handleControlRoute(
       ...context,
       session: {
         subject: bearer.auth.subject,
+        uninstallRequester: bearer.auth.uninstallRequester,
         ...(bearer.auth.workspaceId
           ? { workspaceId: bearer.auth.workspaceId }
           : {}),

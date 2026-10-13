@@ -847,9 +847,15 @@ export class CapsulesService {
     id: string,
     options: {
       readonly actor?: string;
+      readonly requester?: import("takosumi-contract/capsules").CapsuleUninstallRequester;
       readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
     } = {},
   ): Promise<Capsule> {
+    const requester = options.requester === undefined ? undefined : structuredClone(options.requester);
+    if (requester && (!requester.subject.trim() ||
+      (options.actor !== undefined && options.actor !== requester.subject))) {
+      throw new OpenTofuControllerError("invalid_argument", "Uninstall requester must match the authenticated actor.");
+    }
     const suppliedAuthority =
       options.expectedWorkspaceManagementAuthority === undefined
         ? undefined
@@ -896,6 +902,7 @@ export class CapsulesService {
         previousStatus: current.status,
         now: this.#now(),
         graceMs: uninstallGraceMs(this.#uninstallGraceDays),
+        requester,
       });
       const updated = await this.#updateCapsuleLifecycle(prepared, {
         kind: "uninstall",

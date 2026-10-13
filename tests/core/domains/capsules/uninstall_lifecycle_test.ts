@@ -47,6 +47,9 @@ import {
   scheduledDestroyRunId,
 } from "../../../../core/domains/capsules/uninstall_finalize.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
+import { UNINSTALL_AUTHORIZATION_REASONS } from "../../../../core/domains/capsules/uninstall_authorization.ts";
+import { InMemoryAccountsStore, validateUninstallRequester } from "@takosjp/takosumi-accounts-service";
+import { CAPSULE_LIFECYCLE_COMMAND_CAPABILITY } from "takosumi-contract";
 import {
   FIXTURE_CLOUDFLARE_PROVIDER,
   FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
@@ -80,6 +83,9 @@ interface Harness {
   readonly capsules: CapsulesService;
   readonly backups: BackupsService;
   readonly activity: ActivityService;
+  readonly authorization: { validate: (requester: import("takosumi-contract/capsules").CapsuleUninstallRequester, workspaceId: string) => Promise<boolean> };
+  readonly queuedDestroys: import("../../../../core/domains/deploy-control/mod.ts").OpenTofuRunDispatch[];
+  readonly credentialMint: { beforeReturn?: () => Promise<void> };
   readonly clock: { ms: number };
   readonly destroyJobs: OpenTofuDestroyJob[];
   readonly capsuleId: string;
@@ -93,6 +99,8 @@ async function appliedCapsule(
   options: {
     readonly artifactStore?: BackupArtifactStore;
     readonly store?: OpenTofuControlStore;
+    readonly queueDestroy?: boolean;
+    readonly preDestroy?: () => Promise<void>;
   } = {},
 ): Promise<Harness> {
   const clock = { ms: START };
@@ -106,7 +114,18 @@ async function appliedCapsule(
   await seedProviderConnections(store, seeded.capsule, {
     requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
   });
+  if (options.preDestroy) await store.putInstallConfig({
+    ...seeded.installConfig,
+    lifecycleActions: [{ apiVersion: "takosumi.dev/v1alpha1", kind: "command", id: "cleanup_425",
+      phase: "pre_destroy", executor: "operator", command: ["fixture-cleanup"],
+      runnerCapability: CAPSULE_LIFECYCLE_COMMAND_CAPABILITY }],
+    policy: { lifecycleActions: { allowedExecutors: ["operator"], allowedRunnerCapabilities: [CAPSULE_LIFECYCLE_COMMAND_CAPABILITY] } },
+  });
   const destroyJobs: OpenTofuDestroyJob[] = [];
+  const authorization = { validate: async (_requester: import("takosumi-contract/capsules").CapsuleUninstallRequester, _workspaceId: string) => true };
+  const queuedDestroys: import("../../../../core/domains/deploy-control/mod.ts").OpenTofuRunDispatch[] = [];
+  const credentialMint: { beforeReturn?: () => Promise<void> } = {};
+  const vault = fakeProviderVault();
   const harness = {
     destroyPlanChanges: [
       {
@@ -196,12 +215,28 @@ async function appliedCapsule(
     newId,
     now: () => new Date(clock.ms),
   });
-  const controller = new OpenTofuController({
+  const controller: OpenTofuController = new OpenTofuController({
     store,
     activity,
+    ...(options.preDestroy ? { releaseActivator: { activate: async () => {
+      await options.preDestroy!();
+      return { status: "succeeded" as const };
+    } } } : {}),
+    validateUninstallRequester: (requester, workspaceId) => authorization.validate(requester, workspaceId),
+    ...(options.queueDestroy ? { enqueueRun: async (dispatch: import("../../../../core/domains/deploy-control/mod.ts").OpenTofuRunDispatch) => {
+      if (dispatch.action === "apply" && (await store.getApplyRun(dispatch.runId))?.operation === "destroy") queuedDestroys.push(dispatch);
+      else await controller.dispatchQueuedRun(dispatch);
+    } } : {}),
     runner,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
-    vault: fakeProviderVault() as never,
+    vault: {
+      ...vault,
+      mintForCapsuleProviderBindings: async (...args: Parameters<typeof vault.mintForCapsuleProviderBindings>) => {
+        const result = await vault.mintForCapsuleProviderBindings(...args);
+        await credentialMint.beforeReturn?.();
+        return result;
+      },
+    } as never,
     executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runnerProfiles: [profile],
     defaultRunnerProfileId: profile.id,
@@ -242,6 +277,9 @@ async function appliedCapsule(
     backups,
     activity,
     clock,
+    authorization,
+    queuedDestroys,
+    credentialMint,
     destroyJobs,
     capsuleId: seeded.capsule.id,
     finalize: (
@@ -255,6 +293,7 @@ async function appliedCapsule(
         backups,
         activity,
         now: () => new Date(clock.ms),
+        validateUninstallRequester: (requester, workspaceId) => authorization.validate(requester, workspaceId),
         onError: (error) => {
           throw error;
         },
@@ -318,7 +357,7 @@ for (const [label, open] of durableStores) {
     const { store, close } = await open();
     try {
       const h = await appliedCapsule({ store });
-      await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+      await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
       await jumpToDue(h);
       const current = (await store.getCapsule(h.capsuleId))!;
       for (const suffix of ["001", "002", "003"]) {
@@ -343,6 +382,7 @@ for (const [label, open] of durableStores) {
         }))[0]!.id);
         expect(await finalizeDueCapsuleUninstalls({
           store, capsules: h.capsules, controller: h.controller,
+          validateUninstallRequester: async () => true,
           now: () => frozen,
         }, { limit: 1 })).toMatchObject({ scanned: 1, waiting: 1, failures: 0 });
       }
@@ -360,6 +400,7 @@ for (const [label, open] of durableStores) {
 async function scheduledUninstallRunsToCompletion(h: Harness): Promise<void> {
   const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, {
     actor: "user_test",
+    requester: { subject: "user_test" },
   });
   expect(scheduled.status).toBe("uninstalled");
   expect(scheduled.uninstall).toMatchObject({
@@ -374,7 +415,7 @@ async function scheduledUninstallRunsToCompletion(h: Harness): Promise<void> {
   // Replaying the request keeps the original schedule.
   h.clock.ms += DAY_MS;
   expect(
-    (await h.capsules.scheduleCapsuleUninstall(h.capsuleId)).uninstall,
+    (await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } })).uninstall,
   ).toEqual(scheduled.uninstall);
 
   // In grace: nothing is due and nothing was torn down.
@@ -461,7 +502,7 @@ test("a failed export is recorded and the teardown still proceeds", async () => 
     put: () => Promise.reject(new Error("bucket unavailable")),
   };
   const h = await appliedCapsule({ artifactStore: failing });
-  await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
   await jumpToDue(h, 1);
   expect(await h.finalize()).toMatchObject({ destroysStarted: 1, failures: 0 });
   const capsule = (await h.store.getCapsule(h.capsuleId))!;
@@ -478,7 +519,7 @@ test("a failed export is recorded and the teardown still proceeds", async () => 
 
 test("a host without backup storage records a skipped export and proceeds", async () => {
   const h = await appliedCapsule();
-  await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
   await jumpToDue(h);
   expect(await h.finalize({ backups: undefined })).toMatchObject({
     destroysStarted: 1,
@@ -493,9 +534,10 @@ test("a host without backup storage records a skipped export and proceeds", asyn
 
 test("cancelling during the grace period restores the Capsule and nothing is destroyed", async () => {
   const h = await appliedCapsule();
-  await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
   const cancelled = await h.capsules.cancelCapsuleUninstall(h.capsuleId, {
     actor: "user_test",
+    requester: { subject: "user_test" },
   });
   expect(cancelled.status).toBe("active");
   expect(cancelled.uninstall).toMatchObject({ phase: "cancelled", revision: 2 });
@@ -512,7 +554,7 @@ test("cancelling during the grace period restores the Capsule and nothing is des
   expect(plan.planRun.operation).toBe("update");
 
   // A new request starts a fresh record without the old evidence.
-  const again = await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  const again = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
   expect(again.uninstall).toMatchObject({ phase: "scheduled", revision: 3 });
   expect(again.uninstall?.id).not.toBe(cancelled.uninstall?.id);
   expect(again.uninstall?.cancelledAt).toBeUndefined();
@@ -522,7 +564,7 @@ test("an uninstalled Capsule refuses every operation except its teardown", async
   const h = await appliedCapsule();
   // A Plan reviewed before the uninstall must not provision afterwards.
   const pending = await h.controller.createCapsulePlan(h.capsuleId);
-  await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
 
   const uninstalledReason = {
     details: { reason: CAPSULE_UNINSTALL_REASONS.uninstalled },
@@ -559,7 +601,7 @@ test("a teardown Plan that is not delete-only is left for the owner", async () =
       actions: ["delete", "create"],
     },
   ];
-  await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
   await jumpToDue(h);
   expect(await h.finalize()).toMatchObject({ blocked: 1, destroysStarted: 0 });
   const capsule = (await h.store.getCapsule(h.capsuleId))!;
@@ -581,7 +623,7 @@ test("a teardown Plan that is not delete-only is left for the owner", async () =
 test("unknown teardown changes are never approved unattended", async () => {
   const h = await appliedCapsule();
   h.destroyPlanChanges = undefined;
-  await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
   await jumpToDue(h);
   expect(await h.finalize()).toMatchObject({ blocked: 1 });
   expect((await h.store.getCapsule(h.capsuleId))?.uninstall?.blockedReason)
@@ -591,7 +633,7 @@ test("unknown teardown changes are never approved unattended", async () => {
 
 test("once teardown is approved the uninstall can no longer be cancelled", async () => {
   const h = await appliedCapsule();
-  const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
   const advanced = await h.capsules.advanceCapsuleUninstall(
     h.capsuleId,
     { uninstallId: scheduled.uninstall!.id, revision: 1 },
@@ -615,7 +657,7 @@ test("once teardown is approved the uninstall can no longer be cancelled", async
 test("only an applied, settled Capsule can enter the grace state", async () => {
   const h = await appliedCapsule();
   await h.capsules.patchCapsuleStatus(h.capsuleId, "disabled");
-  await expect(h.capsules.scheduleCapsuleUninstall(h.capsuleId)).rejects
+  await expect(h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } })).rejects
     .toMatchObject({
       details: { reason: CAPSULE_UNINSTALL_REASONS.unavailable },
     });
@@ -664,7 +706,7 @@ test("restore and InstallConfig rebinding cannot leave the grace state", async (
     capsuleId: h.capsuleId,
     scope: "capsule",
   });
-  await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
   const uninstalledReason = {
     details: { reason: CAPSULE_UNINSTALL_REASONS.uninstalled },
   };
@@ -692,7 +734,7 @@ test("an owner-cancelled teardown Plan stops the request instead of re-planning"
   // A non-delete Plan parks the request first, so the owner has a Plan to
   // cancel; then the block is lifted to see what the finalizer does with it.
   h.destroyPlanChanges = undefined;
-  const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
   await jumpToDue(h);
   expect(await h.finalize()).toMatchObject({ destroyPlansCreated: 1, blocked: 1 });
   const planRunId = scheduledDestroyRunId("plan", scheduled.uninstall!.id, 1);
@@ -714,7 +756,7 @@ test("an owner-cancelled teardown Plan stops the request instead of re-planning"
 
 test("cancelling after Apply refusal makes its system-approved teardown permanently inapplicable", async () => {
   const h = await appliedCapsule();
-  const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
   await jumpToDue(h);
   let applyCalls = 0;
   const refused = await h.finalize({
@@ -758,7 +800,7 @@ test("cancelling after Apply refusal makes its system-approved teardown permanen
     code: "failed_precondition",
   });
   // A fresh uninstall does not revive the approval for the cancelled request.
-  const replacement = await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  const replacement = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
   expect(replacement.uninstall!.id).not.toBe(scheduled.uninstall!.id);
   await expect(applyOldPlan()).rejects.toMatchObject({
     code: "failed_precondition",
@@ -768,7 +810,7 @@ test("cancelling after Apply refusal makes its system-approved teardown permanen
 
 test("overlapping finalizers claim a single export attempt before creating artifacts", async () => {
   const h = await appliedCapsule();
-  await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
   await jumpToDue(h);
   let release!: () => void;
   const paused = new Promise<void>((resolve) => { release = resolve; });
@@ -802,7 +844,7 @@ test("overlapping finalizers claim a single export attempt before creating artif
 
 test("an export with lost acknowledgement is never retried and blocks unattended destroy", async () => {
   const h = await appliedCapsule();
-  await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
   await jumpToDue(h);
   expect(await h.finalize({
     capsules: {
@@ -828,7 +870,7 @@ test("an export with lost acknowledgement is never retried and blocks unattended
 
 test("an export result survives a waiting-marker race without repeating the export", async () => {
   const h = await appliedCapsule();
-  await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
   await jumpToDue(h);
   let raced = false;
   const result = await h.finalize({
@@ -854,7 +896,7 @@ test("an export result survives a waiting-marker race without repeating the expo
 for (const cancel of [true, false]) {
   test(`a late export after ${cancel ? "cancellation" : "claim timeout"} cannot start teardown`, async () => {
     const h = await appliedCapsule();
-    const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+    const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
     await jumpToDue(h);
     let release!: () => void;
     const paused = new Promise<void>((resolve) => { release = resolve; });
@@ -902,13 +944,15 @@ for (const cancel of [true, false]) {
 
 test("a Plan made at an older execution epoch is blocked as unverifiable", async () => {
   const h = await appliedCapsule();
-  await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
   await jumpToDue(h);
   const result = await h.finalize({
     store: {
       listDueCapsuleUninstalls: (input) => h.store.listDueCapsuleUninstalls(input),
       getPlanRun: (id) => h.store.getPlanRun(id),
       getApplyRun: (id) => h.store.getApplyRun(id),
+      getWorkspace: (id) => h.store.getWorkspace(id),
+      getWorkspaceMember: (workspaceId, subject) => h.store.getWorkspaceMember(workspaceId, subject),
       // As if the InstallConfig was rebound after the Plan was made.
       getCapsuleExecutionAuthorityEpoch: async () => 2,
     },
@@ -921,7 +965,7 @@ test("a Plan made at an older execution epoch is blocked as unverifiable", async
 
 test("repeated unexpected errors block one request instead of holding the queue", async () => {
   const h = await appliedCapsule();
-  await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
   await jumpToDue(h);
   const failingBackups = {
     enabled: true,
@@ -965,7 +1009,7 @@ test("repeated unexpected errors block one request instead of holding the queue"
 
 test("a recorded Plan id is waited for before another attempt is made", async () => {
   const h = await appliedCapsule();
-  const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
   await jumpToDue(h);
   let creations = 0;
   const slow = {
@@ -1007,7 +1051,7 @@ test("cancelling the uninstall cancels the finalizer's unapproved teardown Plan"
       await h.controller.cancelRun(planRunId);
     }
   });
-  await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
   await jumpToDue(h);
   expect(await h.finalize()).toMatchObject({ blocked: 1 });
   const planRunId = (await h.store.getCapsule(h.capsuleId))!.uninstall!
@@ -1019,9 +1063,171 @@ test("cancelling the uninstall cancels the finalizer's unapproved teardown Plan"
 
 test("an exported request says whether app data was part of the export", async () => {
   const h = await appliedCapsule();
-  await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
   await jumpToDue(h);
   await h.finalize();
   expect((await h.store.getCapsule(h.capsuleId))?.uninstall?.preDestroyExport)
     .toMatchObject({ status: "exported", includesServiceData: false });
+});
+
+for (const [label, open] of durableStores) {
+  for (const loss of ["removed", "demoted", "grant_expired", "grant_revoked", "account_deleted", "retained"] as const) {
+    test(`${label}: deadline reauthorization refuses ${loss} requester`, async () => {
+      const { store, close } = await open();
+      try {
+        const h = await appliedCapsule({ store });
+        const subject = "tsub_uninstall_admin" as const;
+        const member = {
+          id: "wm_425_admin",
+          workspaceId: "ws_uninstall001", accountId: subject,
+          roles: ["admin" as const], status: "active" as const,
+          createdAt: new Date(START).toISOString(), updatedAt: new Date(START).toISOString(),
+        };
+        await store.putWorkspaceMember(member);
+        const accounts = new InMemoryAccountsStore();
+        accounts.saveAccount({ subject, createdAt: START, updatedAt: START });
+        const token = {
+          tokenId: "pat_425", tokenPrefix: "fixture", subject, name: "scheduled",
+          scopes: ["write" as const], workspaceId: member.workspaceId,
+          createdAt: START, expiresAt: START + 8 * DAY_MS,
+        };
+        accounts.savePersonalAccessToken("fixture-bearer-never-persisted", token);
+        h.authorization.validate = (requester, workspaceId) =>
+          validateUninstallRequester(accounts, requester, workspaceId, h.clock.ms);
+        const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, {
+          actor: subject, requester: { subject, grant: { kind: "personal-access-token", tokenId: token.tokenId } },
+        });
+        expect(scheduled.uninstall?.requester?.subject).toBe(subject);
+        const publicRead = await h.controller.getCapsule(h.capsuleId);
+        expect(publicRead.capsule.uninstall).not.toHaveProperty("requester");
+        expect(JSON.stringify(publicRead)).not.toContain(token.tokenId);
+        if (loss === "removed") await store.putWorkspaceMember({ ...member, status: "suspended" });
+        if (loss === "demoted") await store.putWorkspaceMember({ ...member, roles: ["viewer"] });
+        if (loss === "grant_expired") accounts.savePersonalAccessToken("fixture-bearer-never-persisted", { ...token, expiresAt: START + DAY_MS });
+        if (loss === "grant_revoked") await accounts.revokePersonalAccessToken({ subject, tokenId: token.tokenId, revokedAt: START + DAY_MS });
+        if (loss === "account_deleted") {
+          const missing = Object.create(accounts) as InMemoryAccountsStore;
+          missing.findAccount = () => undefined;
+          h.authorization.validate = (requester, workspaceId) => validateUninstallRequester(missing, requester, workspaceId, h.clock.ms);
+        }
+        await jumpToDue(h);
+        if (loss === "retained") {
+          expect(await h.finalize()).toMatchObject({ destroysStarted: 1, blocked: 0 });
+          expect(h.destroyJobs).toHaveLength(1);
+          expect((await store.getCapsule(h.capsuleId))?.status).toBe("destroyed");
+          return;
+        }
+        const rejectedAt = new Date(h.clock.ms).toISOString();
+        expect(await h.finalize()).toMatchObject({ blocked: 1, exportsRecorded: 0, destroyPlansCreated: 0, destroysStarted: 0, failures: 0 });
+        expect(h.destroyJobs).toHaveLength(0);
+        expect((await store.getCapsule(h.capsuleId))?.uninstall).toMatchObject({
+          phase: "scheduled", blockedReason: UNINSTALL_AUTHORIZATION_REASONS.denied,
+          authorizationRejectedAt: rejectedAt,
+        });
+        const event = (await store.listActivityEvents(member.workspaceId, { limit: 500 })).find((event) => event.action === "capsule.uninstall_blocked");
+        expect(event).toMatchObject({ actorId: SCHEDULED_UNINSTALL_ACTOR, metadata: {
+          requesterSubject: subject, reason: UNINSTALL_AUTHORIZATION_REASONS.denied,
+          rejectedAt,
+        } });
+        // Restoring authority does not silently revive a refused reservation.
+        await store.putWorkspaceMember(member);
+        accounts.savePersonalAccessToken("fixture-bearer-never-persisted", token);
+        expect(await h.finalize()).toMatchObject({ scanned: 0 });
+        expect((await h.capsules.cancelCapsuleUninstall(h.capsuleId)).status).toBe("active");
+      } finally { await close(); }
+    });
+  }
+}
+
+test("legacy requester and unavailable authorization fail closed with durable audit time", async () => {
+  for (const unavailable of ["legacy", "missing_port", "lookup_error"] as const) {
+    const h = await appliedCapsule();
+    await h.capsules.scheduleCapsuleUninstall(h.capsuleId, unavailable === "legacy" ? {} : { requester: { subject: "user_test" } });
+    await jumpToDue(h);
+    const overrides = unavailable === "missing_port" ? { validateUninstallRequester: undefined }
+      : unavailable === "lookup_error" ? { validateUninstallRequester: async () => { throw new Error("secret-backend-detail"); } } : {};
+    expect(await h.finalize(overrides)).toMatchObject({ blocked: 1, destroysStarted: 0 });
+    const capsule = await h.store.getCapsule(h.capsuleId);
+    expect(capsule?.uninstall?.blockedReason).toBe(unavailable === "legacy" ? UNINSTALL_AUTHORIZATION_REASONS.missing : UNINSTALL_AUTHORIZATION_REASONS.unavailable);
+    expect(capsule?.uninstall?.authorizationRejectedAt).toBeDefined();
+    expect(JSON.stringify(capsule)).not.toContain("secret-backend-detail");
+    expect(h.destroyJobs).toHaveLength(0);
+  }
+});
+
+test("revocation while approval awaits prevents Apply and leaves cancellation available", async () => {
+  const h = await appliedCapsule();
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
+  await jumpToDue(h);
+  expect(await h.finalize({ controller: {
+    createCapsuleDestroyPlan: (...args) => h.controller.createCapsuleDestroyPlan(...args),
+    approveRun: async (...args) => {
+      const result = await h.controller.approveRun(...args);
+      h.authorization.validate = async () => false;
+      return result;
+    },
+    createApplyRun: (...args) => h.controller.createApplyRun(...args),
+  } })).toMatchObject({ blocked: 1, destroysStarted: 0 });
+  expect(h.destroyJobs).toHaveLength(0);
+  expect((await h.capsules.cancelCapsuleUninstall(h.capsuleId)).status).toBe("active");
+});
+
+test("grant revocation after queue admission refuses provider dispatch and replay", async () => {
+  const h = await appliedCapsule({ queueDestroy: true });
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
+  await jumpToDue(h);
+  expect(await h.finalize()).toMatchObject({ destroysStarted: 1 });
+  expect(h.queuedDestroys).toHaveLength(1);
+  h.authorization.validate = async () => false;
+  await h.controller.dispatchQueuedRun(h.queuedDestroys[0]!);
+  await h.controller.dispatchQueuedRun(h.queuedDestroys[0]!);
+  expect(h.destroyJobs).toHaveLength(0);
+  const apply = await h.store.getApplyRun(h.queuedDestroys[0]!.runId);
+  expect(apply?.status).toBe("failed");
+  const refusal = apply?.auditEvents.find((event) => event.type === "uninstall.authorization_refused");
+  expect(refusal?.actor).toBe(SCHEDULED_UNINSTALL_ACTOR);
+  expect(refusal?.data).toMatchObject({ actor: SCHEDULED_UNINSTALL_ACTOR, requesterSubject: "user_test", reason: UNINSTALL_AUTHORIZATION_REASONS.denied });
+  expect(await h.finalize()).toMatchObject({ blocked: 1 });
+  expect((await h.store.getCapsule(h.capsuleId))?.uninstall).toMatchObject({ blockedReason: UNINSTALL_AUTHORIZATION_REASONS.denied, authorizationRejectedAt: new Date(refusal!.at).toISOString() });
+  expect((await h.capsules.cancelCapsuleUninstall(h.capsuleId)).status).toBe("active");
+});
+
+test("revocation during awaited provider credential preparation refuses the final destroy dispatch", async () => {
+  const h = await appliedCapsule({ queueDestroy: true });
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
+  await jumpToDue(h);
+  expect(await h.finalize()).toMatchObject({ destroysStarted: 1 });
+  let revoked = false;
+  h.credentialMint.beforeReturn = async () => {
+    revoked = true;
+    h.authorization.validate = async () => false;
+  };
+  await h.controller.dispatchQueuedRun(h.queuedDestroys[0]!);
+  expect(revoked).toBe(true);
+  expect(h.destroyJobs).toHaveLength(0);
+  const apply = await h.store.getApplyRun(h.queuedDestroys[0]!.runId);
+  expect(apply?.auditEvents).toContainEqual(expect.objectContaining({ type: "uninstall.authorization_refused" }));
+  expect(await h.finalize()).toMatchObject({ blocked: 1 });
+  expect((await h.store.getCapsule(h.capsuleId))?.uninstall?.blockedReason).toBe(UNINSTALL_AUTHORIZATION_REASONS.denied);
+});
+
+test("successful pre-destroy cleanup cannot authorize a new provider destroy after revocation", async () => {
+  let cleanupRan = false;
+  let revoke: () => void = () => undefined;
+  const h = await appliedCapsule({ queueDestroy: true, preDestroy: async () => {
+    cleanupRan = true;
+    revoke();
+  } });
+  revoke = () => { h.authorization.validate = async () => false; };
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
+  await jumpToDue(h);
+  expect(await h.finalize()).toMatchObject({ destroysStarted: 1 });
+  await h.controller.dispatchQueuedRun(h.queuedDestroys[0]!);
+  expect(cleanupRan).toBe(true);
+  expect(h.destroyJobs).toHaveLength(0);
+  const apply = await h.store.getApplyRun(h.queuedDestroys[0]!.runId);
+  expect(apply?.auditEvents).toContainEqual(expect.objectContaining({ type: "lifecycle_action.pre_destroy.succeeded", data: expect.objectContaining({ actionDispatched: true }) }));
+  expect(apply?.auditEvents).toContainEqual(expect.objectContaining({ type: "uninstall.authorization_refused", actor: SCHEDULED_UNINSTALL_ACTOR }));
+  expect(await h.finalize()).toMatchObject({ blocked: 1 });
+  await expect(h.capsules.cancelCapsuleUninstall(h.capsuleId)).rejects.toThrow();
 });

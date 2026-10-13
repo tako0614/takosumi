@@ -84,9 +84,12 @@ function publicCapsule(capsule: Capsule): PublicCapsule {
     autoUpdateAttemptSourceSnapshotId: _autoUpdateAttemptSourceSnapshotId,
     installingPrincipalId: _installingPrincipalId,
     publicOriginReservation: _publicOriginReservation,
+    uninstall,
     ...publicRecord
   } = capsule;
-  return publicRecord;
+  if (!uninstall) return publicRecord;
+  const { requester: _requester, ...publicUninstall } = uninstall;
+  return { ...publicRecord, uninstall: publicUninstall };
 }
 
 function capsuleResponse(capsule: Capsule): {

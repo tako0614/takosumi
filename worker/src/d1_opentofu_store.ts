@@ -11525,6 +11525,7 @@ function d1CapsuleApplyRunAdmissionFenceGuardStmt(
           : sql`json_extract(${capsule.recordJson}, '$.currentStateVersionId') = ${fence.currentStateVersionId}`,
         fence.uninstall === undefined ? undefined : and(
           sql`json_extract(${capsule.recordJson}, '$.uninstall.phase') <> 'cancelled'`,
+          sql`json_extract(${capsule.recordJson}, '$.uninstall.blockedReason') IS NULL`,
           sql`json_extract(${capsule.recordJson}, '$.uninstall.id') = ${fence.uninstall.id}`,
           sql`json_extract(${capsule.recordJson}, '$.uninstall.destroyPlanRunId') = ${fence.uninstall.destroyPlanRunId}`,
         ),
