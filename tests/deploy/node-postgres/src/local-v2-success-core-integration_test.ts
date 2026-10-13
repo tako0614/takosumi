@@ -10,6 +10,9 @@ import type { OpenTofuRunner } from "../../../../core/domains/deploy-control/mod
 import type { RunRootOwnership } from "../../../../runner/lib/run_root_ownership.ts";
 
 if (Bun.env.TAKOSUMI_TEST_PRIVATE_RUN_ROOT_CHILD !== "1") {
+  // Child startup, PGlite initialization and Core readback can exceed Bun's
+  // default 5s budget. Keep the parent alive through the 30s process watchdog
+  // and the subsequent exit/custody cleanup.
   test("local v2 success Core integration in a private root", async () => {
     const root = await mkdtemp(join(tmpdir(), "takosumi-local-v2-root-"));
     await chmod(root, 0o700);
@@ -45,7 +48,7 @@ if (Bun.env.TAKOSUMI_TEST_PRIVATE_RUN_ROOT_CHILD !== "1") {
       if (safeToRemove) await rm(root, { recursive: true, force: true });
       else console.error(`private local v2 Core fixture retained after uncertain child result: ${root}`);
     }
-  });
+  }, 35_000);
 } else {
 const { sha256Digest } = await import("../../../../core/adapters/source/digest.ts");
 const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
@@ -380,7 +383,7 @@ esac
     await client.close();
     await rm(tempDir, { recursive: true, force: true });
   }
-});
+}, 30_000);
 }
 
 async function boundedChildOutput(stream: ReadableStream<Uint8Array>): Promise<string> {

@@ -9,7 +9,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, test } from "bun:test";
+import { expect, jest, test } from "bun:test";
 import {
   CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS,
   MAX_PUBLIC_URL_RESPONSE_BYTES,
@@ -724,33 +724,41 @@ test("Worker URL cleanup accepts only explicit 404 and fails closed on transport
   expect(timeoutAborted).toBe(true);
 
   let oversizedCancelled = false;
-  await expect(verifyPublicWorkerUrlGone(options, outputs, {
-    ...retry,
-    resolver: resolvePublicDns,
-    connector: async () => new Response(new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array(MAX_PUBLIC_URL_RESPONSE_BYTES));
-        controller.enqueue(new Uint8Array(1));
-      },
-      cancel() {
-        oversizedCancelled = true;
-      },
-    }), { status: 500 }),
-  })).rejects.toThrow("retirement is inconclusive");
-  expect(oversizedCancelled).toBe(true);
-
-  for (const status of [200, 401, 410, 500]) {
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-10-13T00:00:00.000Z"));
+  try {
+    // The stalled-connector assertion above uses the real 10ms deadline. Freeze
+    // the clock here so response classification is independent of scheduler load.
     await expect(verifyPublicWorkerUrlGone(options, outputs, {
       ...retry,
       resolver: resolvePublicDns,
-      connector: async () => new Response("not a contract absence", { status }),
-    })).rejects.toThrow("did not return contract 404");
+      connector: async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(MAX_PUBLIC_URL_RESPONSE_BYTES));
+          controller.enqueue(new Uint8Array(1));
+        },
+        cancel() {
+          oversizedCancelled = true;
+        },
+      }), { status: 500 }),
+    })).rejects.toThrow("retirement is inconclusive");
+    expect(oversizedCancelled).toBe(true);
+
+    for (const status of [200, 401, 410, 500]) {
+      await expect(verifyPublicWorkerUrlGone(options, outputs, {
+        ...retry,
+        resolver: resolvePublicDns,
+        connector: async () => new Response("not a contract absence", { status }),
+      })).rejects.toThrow("did not return contract 404");
+    }
+    await expect(verifyPublicWorkerUrlGone(options, outputs, {
+      ...retry,
+      resolver: resolvePublicDns,
+      connector: async () => new Response("gone", { status: 404 }),
+    })).resolves.toBeUndefined();
+  } finally {
+    jest.useRealTimers();
   }
-  await expect(verifyPublicWorkerUrlGone(options, outputs, {
-    ...retry,
-    resolver: resolvePublicDns,
-    connector: async () => new Response("gone", { status: 404 }),
-  })).resolves.toBeUndefined();
 });
 
 test("Worker URL cleanup retries only the original validated address", async () => {
