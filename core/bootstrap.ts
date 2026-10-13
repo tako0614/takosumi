@@ -197,6 +197,14 @@ import {
   type RuntimeInputOidcClientSource,
 } from "./domains/deploy-control/runtime_input_materializer.ts";
 import { log } from "./shared/log.ts";
+import {
+  UNINSTALL_GRACE_DAYS_ENV,
+  uninstallGraceSettingFromEnv,
+} from "./domains/capsules/uninstall.ts";
+import {
+  type CapsuleUninstallFinalizeResult,
+  finalizeDueCapsuleUninstalls,
+} from "./domains/capsules/uninstall_finalize.ts";
 import type { Run } from "takosumi-contract/runs";
 import type { Dependency } from "takosumi-contract/dependencies";
 import type {
@@ -715,6 +723,13 @@ export interface TakosumiOperations {
   readonly runGroups: RunGroupsService;
   /** Runtime declarations shared by Capsule and OpenTofu authoring flows. */
   readonly interfaces: InterfaceService;
+  /**
+   * Internal scheduled finalizer for two-stage uninstalls whose grace period
+   * has ended; never mounted on the public API.
+   */
+  finalizeDueCapsuleUninstalls(options?: {
+    readonly limit?: number;
+  }): Promise<CapsuleUninstallFinalizeResult>;
   /** Internal scheduled recovery; never mounted on the public API. */
   drainInterfaceMaterializationIntents(options?: {
     readonly limit?: number;
@@ -1263,11 +1278,20 @@ export async function createTakosumiService(
         throw error;
       }
     };
+  const uninstallGrace = uninstallGraceSettingFromEnv(runtimeEnv);
+  if (!uninstallGrace.ok) {
+    log.warn("service.capsule_uninstall.invalid_grace_days", {
+      env: UNINSTALL_GRACE_DAYS_ENV,
+      value: uninstallGrace.value,
+      fallbackDays: uninstallGrace.days,
+    });
+  }
   const capsulesService = new CapsulesService({
     store: sharedOpenTofuStore,
     activity: activityService,
     projects: projectsService,
     capsuleLifecycleAdmission,
+    uninstallGraceDays: uninstallGrace.days,
   });
   const dependenciesService = new DependenciesService({
     store: sharedOpenTofuStore,
@@ -1794,6 +1818,22 @@ export async function createTakosumiService(
     outputShares: outputSharesService,
     runGroups: runGroupsService,
     interfaces: interfaceService,
+    finalizeDueCapsuleUninstalls: (options) =>
+      finalizeDueCapsuleUninstalls(
+        {
+          store: sharedOpenTofuStore,
+          capsules: capsulesService,
+          controller: opentofuController,
+          backups: backupsService,
+          activity: activityService,
+          onError: (error, capsuleId) =>
+            log.warn("service.capsule_uninstall.finalize_failed", {
+              capsuleId,
+              error,
+            }),
+        },
+        options,
+      ),
     drainInterfaceMaterializationIntents: (options) =>
       interfaceMaterializationIntentDrainer.drain(options),
     listInterfaceMaterializationFailures: (workspaceId, options) =>

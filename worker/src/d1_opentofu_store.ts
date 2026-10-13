@@ -6769,6 +6769,29 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
+  async listDueCapsuleUninstalls(input: {
+    readonly now: string;
+    readonly limit: number;
+  }): Promise<readonly Capsule[]> {
+    const scheduledDestroyAt =
+      sql`json_extract(${schema.capsules.recordJson}, '$.uninstall.scheduledDestroyAt')`;
+    return (
+      await this.#drizzleManyJson<Capsule>(
+        schema.capsules,
+        schema.capsules.recordJson,
+        {
+          where: and(
+            eq(schema.capsules.status, "uninstalled"),
+            sql`${scheduledDestroyAt} <= ${input.now}`,
+            sql`json_extract(${schema.capsules.recordJson}, '$.uninstall.blockedReason') IS NULL`,
+          ),
+          orderBy: [scheduledDestroyAt, asc(schema.capsules.id)],
+          limit: Math.max(0, input.limit),
+        },
+      )
+    ).map(normalizeCapsuleRecord);
+  }
+
   async listCapsules(workspaceId?: string): Promise<readonly Capsule[]> {
     return (
       await this.#drizzleManyJson<Capsule>(
@@ -6982,7 +7005,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     await this.#ensureSchema();
     if (
       input.mutation.kind === "status" &&
-      (input.mutation.status as Capsule["status"]) === "destroyed"
+      ((input.mutation.status as Capsule["status"]) === "destroyed" ||
+        (input.mutation.status as Capsule["status"]) === "uninstalled")
     ) {
       const current = await this.getCapsule(input.capsuleId);
       return current
@@ -6993,6 +7017,17 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       input.mutation,
       input.updatedAt,
     );
+    // json_patch merges objects recursively, which would carry fields of a
+    // previous uninstall record into its replacement. The record is set whole.
+    const { uninstall: uninstallRecord, ...mergePatch } = patch;
+    const recordJson = uninstallRecord === undefined
+      ? sql`json_patch(${schema.capsules.recordJson}, ${JSON.stringify(patch)})`
+      : sql`json_set(json_patch(${schema.capsules.recordJson}, ${JSON.stringify(mergePatch)}), '$.uninstall', json(${JSON.stringify(uninstallRecord)}))`;
+    const expectedUninstall = input.mutation.kind !== "uninstall"
+      ? sql`true`
+      : input.mutation.expectedUninstallRevision === undefined
+        ? sql`json_extract(${schema.capsules.recordJson}, '$.uninstall') IS NULL`
+        : sql`json_extract(${schema.capsules.recordJson}, '$.uninstall.revision') = ${input.mutation.expectedUninstallRevision}`;
     const workspaceManagementAuthority =
       input.mutation.kind === "public-origin-reservation"
         ? sql`true`
@@ -7021,8 +7056,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .update(schema.capsules)
       .set({
         ...(patch.status ? { status: patch.status } : {}),
-        recordJson:
-          sql`json_patch(${schema.capsules.recordJson}, ${JSON.stringify(patch)})`,
+        recordJson,
         updatedAt: input.updatedAt,
       })
       .where(
@@ -7032,6 +7066,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
             schema.capsules.executionAuthorityEpoch,
             input.expected.executionAuthorityEpoch,
           ),
+          expectedUninstall,
           input.expected.currentStateVersionId === undefined
             ? isNull(schema.capsules.currentStateVersionId)
             : eq(
@@ -7050,8 +7085,13 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
               ),
           eq(schema.capsules.status, input.expected.status),
           input.mutation.kind === "status"
-            ? ne(schema.capsules.status, "destroyed")
-            : sql`true`,
+            ? and(
+              ne(schema.capsules.status, "destroyed"),
+              ne(schema.capsules.status, "uninstalled"),
+            )
+            : input.mutation.kind === "uninstall"
+              ? ne(schema.capsules.status, "destroyed")
+              : sql`true`,
           input.expected.autoUpdate === undefined
             ? sql`json_extract(${schema.capsules.recordJson}, '$.autoUpdate') IS NULL`
             : sql`json_extract(${schema.capsules.recordJson}, '$.autoUpdate') = ${input.expected.autoUpdate ? 1 : 0}`,

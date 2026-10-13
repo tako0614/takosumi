@@ -69,6 +69,8 @@ import type {
   CapsuleCompatibilityLevel,
   CapsuleCompatibilityReport,
   CapsulePublicOriginReservation,
+  CapsuleUninstall,
+  CapsuleUninstallRestorableStatus,
 } from "takosumi-contract/capsules";
 import type {
   Source,
@@ -753,7 +755,7 @@ function isCapsuleApplyRunAdmissionStatus(
   value: unknown,
 ): value is CapsuleApplyRunAdmissionFence["status"] {
   return value === "pending" || value === "active" || value === "stale" ||
-    value === "error" || value === "disabled";
+    value === "error" || value === "disabled" || value === "uninstalled";
 }
 
 function isCapsuleApplyRunAdmissionFenceShape(
@@ -1518,7 +1520,11 @@ export type CommitCapsuleAbandonmentResult =
 export type CapsuleLifecycleMutation =
   | {
       readonly kind: "status";
-      readonly status: Exclude<Capsule["status"], "destroyed">;
+      /**
+       * `destroyed` is entered only by a committed destroy or abandonment, and
+       * `uninstalled` only through the `uninstall` mutation below.
+       */
+      readonly status: Exclude<Capsule["status"], "destroyed" | "uninstalled">;
       /** Original active Workspace-management authority for this mutation. */
       readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
     }
@@ -1554,6 +1560,22 @@ export type CapsuleLifecycleMutation =
        */
       readonly kind: "public-origin-reservation";
       readonly reservation: CapsulePublicOriginReservation;
+    }
+  | {
+      /**
+       * Two-stage uninstall bookkeeping: entering the grace state, recording
+       * finalizer progress, or cancelling. `uninstall` replaces the whole
+       * record (adapters must not merge it into the previous one) and the
+       * write is fenced on the exact revision of the record it replaces, in
+       * addition to the ordinary lifecycle expectation.
+       */
+      readonly kind: "uninstall";
+      readonly status: "uninstalled" | CapsuleUninstallRestorableStatus;
+      readonly uninstall: CapsuleUninstall;
+      /** Revision of the record being replaced; `undefined` when none exists. */
+      readonly expectedUninstallRevision: number | undefined;
+      /** Original active Workspace-management authority for this mutation. */
+      readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
     };
 
 /** One typed mutation boundary for Capsule lifecycle-owned metadata. */
@@ -1670,12 +1692,20 @@ export function capsuleLifecycleMutationPatch(
     | "compatibilityReportId"
     | "compatibilityStatus"
     | "publicOriginReservation"
+    | "uninstall"
     | "updatedAt"
   >
 > {
   switch (mutation.kind) {
     case "status":
       return { status: mutation.status, updatedAt };
+    case "uninstall":
+      assertCapsuleUninstallMutation(mutation);
+      return {
+        status: mutation.status,
+        uninstall: mutation.uninstall,
+        updatedAt,
+      };
     case "auto-update":
       return { autoUpdate: mutation.enabled, updatedAt };
     case "auto-update-claim":
@@ -1698,6 +1728,50 @@ export function capsuleLifecycleMutationPatch(
     case "public-origin-reservation":
       return { publicOriginReservation: mutation.reservation, updatedAt };
   }
+}
+
+/**
+ * Shape check for an uninstall mutation before any adapter writes it. The
+ * replacement record must advance the revision by exactly one and agree with
+ * the status it is written together with.
+ */
+export function assertCapsuleUninstallMutation(
+  mutation: Extract<CapsuleLifecycleMutation, { readonly kind: "uninstall" }>,
+): void {
+  const { uninstall, status, expectedUninstallRevision } = mutation;
+  if (
+    expectedUninstallRevision !== undefined &&
+    (!Number.isSafeInteger(expectedUninstallRevision) ||
+      expectedUninstallRevision < 1)
+  ) {
+    throw new TypeError("expectedUninstallRevision must be a positive integer");
+  }
+  if (uninstall.revision !== (expectedUninstallRevision ?? 0) + 1) {
+    throw new TypeError("uninstall.revision must advance by exactly one");
+  }
+  if (
+    typeof uninstall.id !== "string" || uninstall.id.trim().length === 0 ||
+    !Number.isFinite(Date.parse(uninstall.requestedAt)) ||
+    !Number.isFinite(Date.parse(uninstall.scheduledDestroyAt))
+  ) {
+    throw new TypeError("uninstall record is invalid");
+  }
+  const cancelled = uninstall.phase === "cancelled";
+  if (cancelled !== (status !== "uninstalled")) {
+    throw new TypeError("uninstall phase does not match the Capsule status");
+  }
+  if (cancelled && status !== uninstall.previousStatus) {
+    throw new TypeError("a cancelled uninstall restores its previous status");
+  }
+}
+
+/** Exact revision fence for the `uninstall` mutation; other kinds pass. */
+export function capsuleUninstallRevisionMatches(
+  capsule: Capsule,
+  mutation: CapsuleLifecycleMutation,
+): boolean {
+  return mutation.kind !== "uninstall" ||
+    capsule.uninstall?.revision === mutation.expectedUninstallRevision;
 }
 
 function capsuleLifecycleRevisionMatches(
@@ -3450,6 +3524,16 @@ export interface OpenTofuControlStore {
     environment: string,
   ): Promise<Capsule | undefined>;
   listCapsules(workspaceId?: string): Promise<readonly Capsule[]>;
+  /**
+   * Internal scheduler read for the two-stage uninstall finalizer: Capsules in
+   * `uninstalled` whose `uninstall.scheduledDestroyAt` is at or before `now`
+   * and whose request is not blocked, oldest due first, at most `limit` rows.
+   * A blocked request waits for its owner and must not starve later ones.
+   */
+  listDueCapsuleUninstalls(input: {
+    readonly now: string;
+    readonly limit: number;
+  }): Promise<readonly Capsule[]>;
   /**
    * Keyset-paged Capsule listing (spec §30 list route). Pages by the
    * existing `(createdAt, id)` sort; returns at most `params.limit` (default /
@@ -5542,6 +5626,27 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
+  listDueCapsuleUninstalls(input: {
+    readonly now: string;
+    readonly limit: number;
+  }): Promise<readonly Capsule[]> {
+    const due = Array.from(this.#capsules.values())
+      .filter(
+        (row) =>
+          row.status === "uninstalled" &&
+          row.uninstall !== undefined &&
+          row.uninstall.blockedReason === undefined &&
+          row.uninstall.scheduledDestroyAt <= input.now,
+      )
+      .sort(
+        (a, b) =>
+          a.uninstall!.scheduledDestroyAt.localeCompare(
+            b.uninstall!.scheduledDestroyAt,
+          ) || a.id.localeCompare(b.id),
+      );
+    return Promise.resolve(due.slice(0, Math.max(0, input.limit)));
+  }
+
   listCapsules(workspaceId?: string): Promise<readonly Capsule[]> {
     const rows = Array.from(this.#capsules.values());
     const filtered =
@@ -5658,6 +5763,9 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       }
       return Promise.resolve({ kind: "conflict", current });
     }
+    if (!capsuleUninstallRevisionMatches(current, input.mutation)) {
+      return Promise.resolve({ kind: "conflict", current });
+    }
     if (capsuleLifecycleMutationAlreadyApplied(current, epoch, input)) {
       return Promise.resolve({ kind: "unchanged", capsule: current });
     }
@@ -5685,9 +5793,12 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       }
     }
     if (
-      input.mutation.kind === "status" &&
-      ((input.mutation.status as Capsule["status"]) === "destroyed" ||
-        current.status === "destroyed")
+      (input.mutation.kind === "status" &&
+        ((input.mutation.status as Capsule["status"]) === "destroyed" ||
+          (input.mutation.status as Capsule["status"]) === "uninstalled" ||
+          current.status === "destroyed" ||
+          current.status === "uninstalled")) ||
+      (input.mutation.kind === "uninstall" && current.status === "destroyed")
     ) {
       // A destroyed Capsule is terminal. The dedicated abandonment command is
       // the only local path that may enter this state; malformed runtime

@@ -84,6 +84,14 @@ import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import { deriveCommittedPostApplyRecoveryProof } from "../deploy-control/committed_post_apply_recovery.ts";
 import { isOpenTofuBuiltinProviderSource } from "takosumi-contract/provider-env-rules";
 import { validateCapsuleProviderBindings } from "../connections/mod.ts";
+import {
+  advancedUninstallRecord,
+  CAPSULE_UNINSTALL_REASONS,
+  DEFAULT_UNINSTALL_GRACE_DAYS,
+  isUninstallRestorableStatus,
+  scheduledUninstallRecord,
+  uninstallGraceMs,
+} from "./uninstall.ts";
 
 /**
  * Capsule name grammar (spec §5): a DNS-style slug. The name doubles as the
@@ -249,6 +257,11 @@ export interface CapsulesServiceDependencies {
   readonly projects?: ProjectsService;
   /** Optional host-owned lease shared by every Capsule lifecycle transition. */
   readonly capsuleLifecycleAdmission?: CapsuleLifecycleAdmission;
+  /**
+   * Two-stage uninstall grace period in whole days (operator setting
+   * `TAKOSUMI_UNINSTALL_GRACE_DAYS`). Defaults to the OSS 7 days.
+   */
+  readonly uninstallGraceDays?: number;
 }
 
 interface PreparedCapsuleLifecycle {
@@ -266,6 +279,7 @@ export class CapsulesService {
   readonly #now: () => Date;
   readonly #activity: ActivityRecorder & Partial<IdempotentActivityRecorder>;
   readonly #projects: ProjectsService;
+  readonly #uninstallGraceDays: number;
   #capsuleLifecycleAdmission?: CapsuleLifecycleAdmission;
 
   constructor(deps: CapsulesServiceDependencies) {
@@ -276,6 +290,15 @@ export class CapsulesService {
     this.#projects =
       deps.projects ?? new ProjectsService({ store: deps.store });
     this.#capsuleLifecycleAdmission = deps.capsuleLifecycleAdmission;
+    this.#uninstallGraceDays =
+      deps.uninstallGraceDays ?? DEFAULT_UNINSTALL_GRACE_DAYS;
+    // Fail at composition, not at the first uninstall request.
+    uninstallGraceMs(this.#uninstallGraceDays);
+  }
+
+  /** Grace period, in whole days, applied to new uninstall requests. */
+  get uninstallGraceDays(): number {
+    return this.#uninstallGraceDays;
   }
 
   /** Late-binds the host-owned ordered lifecycle admission after composition. */
@@ -759,10 +782,25 @@ export class CapsulesService {
         "destroyed status requires provider destroy or unapplied Capsule abandonment",
       );
     }
+    if (status === "uninstalled") {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "uninstalled status is entered only through a scheduled uninstall",
+      );
+    }
     const suppliedAuthority = expectedWorkspaceManagementAuthority === undefined
       ? undefined
       : { ...expectedWorkspaceManagementAuthority };
     const prepared = await this.#prepareCapsuleLifecycle(id, suppliedAuthority);
+    if (prepared.capsule.status === "uninstalled") {
+      // The grace state carries a schedule and finalizer progress that a bare
+      // status write would orphan. Cancelling is the only way back.
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${id} is uninstalled; cancel the uninstall instead`,
+        { reason: CAPSULE_UNINSTALL_REASONS.uninstalled },
+      );
+    }
     return await this.#updateCapsuleLifecycle(
       prepared,
       {
@@ -772,6 +810,213 @@ export class CapsulesService {
           prepared.expectedWorkspaceManagementAuthority,
       },
     );
+  }
+
+  /**
+   * Stage one of a two-stage uninstall: parks an applied Capsule in
+   * `uninstalled` until the grace period ends. Nothing is torn down here; the
+   * scheduled finalizer does that later and the owner may cancel until then.
+   * Replaying the request for an already uninstalled Capsule returns it
+   * unchanged with its original schedule.
+   */
+  async scheduleCapsuleUninstall(
+    id: string,
+    options: {
+      readonly actor?: string;
+      readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
+    } = {},
+  ): Promise<Capsule> {
+    const suppliedAuthority =
+      options.expectedWorkspaceManagementAuthority === undefined
+        ? undefined
+        : { ...options.expectedWorkspaceManagementAuthority };
+    const prepared = await this.#prepareCapsuleLifecycle(id, suppliedAuthority);
+    const schedule = async (): Promise<Capsule> => {
+      const current = prepared.capsule;
+      if (current.status === "uninstalled") return current;
+      if (current.status === "destroyed") {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `capsule ${id} is already destroyed`,
+          { reason: CAPSULE_UNINSTALL_REASONS.unavailable },
+        );
+      }
+      if (!isUninstallRestorableStatus(current.status)) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `capsule ${id} is ${current.status}; only an active, stale, or error Capsule can be uninstalled`,
+          { reason: CAPSULE_UNINSTALL_REASONS.unavailable },
+        );
+      }
+      if (!current.currentStateVersionId && current.currentStateGeneration === 0) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `capsule ${id} was never applied; abandon it instead`,
+          { reason: CAPSULE_UNINSTALL_REASONS.notApplied },
+        );
+      }
+      const uninstall = scheduledUninstallRecord({
+        id: this.#newId("uninstall"),
+        previous: current.uninstall,
+        previousStatus: current.status,
+        now: this.#now(),
+        graceMs: uninstallGraceMs(this.#uninstallGraceDays),
+      });
+      const updated = await this.#updateCapsuleLifecycle(prepared, {
+        kind: "uninstall",
+        status: "uninstalled",
+        uninstall,
+        expectedUninstallRevision: current.uninstall?.revision,
+        expectedWorkspaceManagementAuthority:
+          prepared.expectedWorkspaceManagementAuthority,
+      });
+      await this.#activity.record({
+        workspaceId: updated.workspaceId,
+        ...(options.actor ? { actorId: options.actor } : {}),
+        action: "capsule.uninstall_scheduled",
+        targetType: "capsule",
+        targetId: updated.id,
+        metadata: {
+          name: updated.name,
+          environment: updated.environment,
+          uninstallId: uninstall.id,
+          scheduledDestroyAt: uninstall.scheduledDestroyAt,
+          graceDays: this.#uninstallGraceDays,
+        },
+      });
+      return updated;
+    };
+    const admission = this.#capsuleLifecycleAdmission;
+    return admission
+      ? await admission(
+          {
+            capsule: structuredClone(prepared.capsule),
+            holderId: this.#newId("capsule-uninstall"),
+          },
+          () => schedule(),
+        )
+      : await schedule();
+  }
+
+  /**
+   * Cancels a scheduled uninstall during its grace period and returns the
+   * Capsule to the status it had. Refused once the finalizer has approved the
+   * teardown. Replaying a cancel that already took effect returns the Capsule.
+   */
+  async cancelCapsuleUninstall(
+    id: string,
+    options: {
+      readonly actor?: string;
+      readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
+    } = {},
+  ): Promise<Capsule> {
+    const suppliedAuthority =
+      options.expectedWorkspaceManagementAuthority === undefined
+        ? undefined
+        : { ...options.expectedWorkspaceManagementAuthority };
+    const prepared = await this.#prepareCapsuleLifecycle(id, suppliedAuthority);
+    const cancel = async (): Promise<Capsule> => {
+      const current = prepared.capsule;
+      const record = current.uninstall;
+      if (current.status !== "uninstalled" || record === undefined) {
+        if (
+          record?.phase === "cancelled" &&
+          current.status === record.previousStatus
+        ) {
+          return current;
+        }
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `capsule ${id} is not uninstalled`,
+          { reason: CAPSULE_UNINSTALL_REASONS.notUninstalled },
+        );
+      }
+      if (record.phase !== "scheduled") {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `capsule ${id} teardown has already started and cannot be cancelled`,
+          { reason: CAPSULE_UNINSTALL_REASONS.destroyStarted },
+        );
+      }
+      const uninstall = advancedUninstallRecord(record, {
+        phase: "cancelled",
+        cancelledAt: this.#now().toISOString(),
+      });
+      const updated = await this.#updateCapsuleLifecycle(prepared, {
+        kind: "uninstall",
+        status: record.previousStatus,
+        uninstall,
+        expectedUninstallRevision: record.revision,
+        expectedWorkspaceManagementAuthority:
+          prepared.expectedWorkspaceManagementAuthority,
+      });
+      await this.#activity.record({
+        workspaceId: updated.workspaceId,
+        ...(options.actor ? { actorId: options.actor } : {}),
+        action: "capsule.uninstall_cancelled",
+        targetType: "capsule",
+        targetId: updated.id,
+        metadata: {
+          name: updated.name,
+          environment: updated.environment,
+          uninstallId: record.id,
+        },
+      });
+      return updated;
+    };
+    const admission = this.#capsuleLifecycleAdmission;
+    return admission
+      ? await admission(
+          {
+            capsule: structuredClone(prepared.capsule),
+            holderId: this.#newId("capsule-uninstall-cancel"),
+          },
+          () => cancel(),
+        )
+      : await cancel();
+  }
+
+  /**
+   * Internal finalizer step: records evidence or progress on the exact
+   * uninstall revision the caller observed. A cancel, a newer request, or a
+   * concurrent finalizer step makes this fail with the lifecycle-busy reason
+   * and changes nothing. Never reachable from a public route.
+   */
+  async advanceCapsuleUninstall(
+    id: string,
+    expected: { readonly uninstallId: string; readonly revision: number },
+    changes: Parameters<typeof advancedUninstallRecord>[1],
+  ): Promise<Capsule> {
+    if (changes.phase === "cancelled") {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "an uninstall is cancelled only through the cancel operation",
+      );
+    }
+    const prepared = await this.#prepareCapsuleLifecycle(id);
+    const current = prepared.capsule;
+    const record = current.uninstall;
+    if (
+      current.status !== "uninstalled" ||
+      record === undefined ||
+      record.id !== expected.uninstallId ||
+      record.revision !== expected.revision ||
+      record.phase === "cancelled"
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${id} uninstall changed before the update`,
+        { reason: CAPSULE_LIFECYCLE_BUSY_REASON },
+      );
+    }
+    return await this.#updateCapsuleLifecycle(prepared, {
+      kind: "uninstall",
+      status: "uninstalled",
+      uninstall: advancedUninstallRecord(record, changes),
+      expectedUninstallRevision: record.revision,
+      expectedWorkspaceManagementAuthority:
+        prepared.expectedWorkspaceManagementAuthority,
+    });
   }
 
   /** Toggles the auto-update opt-in (see {@link Capsule.autoUpdate}). */

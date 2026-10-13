@@ -346,6 +346,7 @@ export const ja = {
   "status.capsule.stale": "更新があります",
   "status.capsule.error": "エラー",
   "status.capsule.disabled": "無効",
+  "status.capsule.uninstalled": "削除予定",
   "status.capsule.destroyed": "削除済み",
   "status.run.queued": "待機中",
   "status.run.running": "実行中",
@@ -588,6 +589,28 @@ export const ja = {
   "app.danger.destroyConfirmMessage":
     "{name} を削除します。まだデプロイされていない場合はこの場で完全に削除され、元に戻せません。",
   "app.danger.destroyCta": "削除の確認を開く",
+  "app.uninstall.title": "削除を予約",
+  "app.uninstall.body":
+    "{name} とそのデータは猶予期間のあいだ残り、それまではいつでも取り消せます。期限が来ると、このサーバーが対応していればデータを書き出してから削除します。",
+  "app.uninstall.cta": "削除を予約する",
+  "app.uninstall.confirmTitle": "このサービスの削除を予約しますか？",
+  "app.uninstall.confirmMessage":
+    "{name} は猶予期間が終わるまで動き続け、データも残ります。期限が来るとデータの書き出しを試みてから完全に削除します。それまでは取り消せます。",
+  "app.uninstall.immediateTitle": "今すぐ完全に削除",
+  "app.uninstall.banner":
+    "{name} は {date} に削除されます。それまではデータが残り、取り消せます。",
+  "app.uninstall.bannerDue":
+    "{name} の猶予期間が終わりました。まもなく削除します。",
+  "app.uninstall.bannerDestroying": "{name} を削除しています。",
+  "app.uninstall.bannerBlocked":
+    "{name} の自動削除を止めました。安全に削除できることを確かめられなかったためです。取り消すか、設定から今すぐ削除してください。",
+  "app.uninstall.exportExported": "削除の前にデータを書き出しました。",
+  "app.uninstall.exportFailed":
+    "削除前のデータの書き出しに失敗しました。削除はそのまま進みます。",
+  "app.uninstall.exportSkipped":
+    "このサーバーではデータを書き出せないため、書き出しは行っていません。",
+  "app.uninstall.cancel": "削除を取り消す",
+  "app.uninstall.deleteNow": "今すぐ削除",
   "app.setupIncomplete.body":
     "追加が完了していません。変更の確認からやり直すか、設定から削除してやり直せます。",
   "app.setupIncomplete.review": "更新タブへ",
@@ -1169,6 +1192,14 @@ export const ja = {
     "「{name}」の自動更新を完了できませんでした",
   "notif.event.autoUpdateFailedDetail":
     "サービス画面から更新内容を確認してください",
+  "notif.event.uninstallScheduled": "サービスの削除を予約しました",
+  "notif.event.uninstallScheduledNamed": "「{name}」の削除を予約しました",
+  "notif.event.uninstallCancelled": "削除の予約を取り消しました",
+  "notif.event.uninstallCancelledNamed": "「{name}」の削除の予約を取り消しました",
+  "notif.event.uninstallBlocked": "予約した削除が止まりました",
+  "notif.event.uninstallBlockedNamed": "「{name}」の予約した削除が止まりました",
+  "notif.event.uninstallBlockedDetail":
+    "取り消すか、サービスの設定から今すぐ削除してください",
   "notif.event.recorded": "記録された操作",
   "notif.otherWorkspace": "別のワークスペース @{handle}",
 

@@ -3785,3 +3785,150 @@ test("retired projection and upload operations have no Accounts handler", async 
     ),
   ).toBeUndefined();
 });
+
+test("Capsule uninstall schedules the grace state with the session actor and captured authority", async () => {
+  const fixture = operationsFixture();
+  const base = await fixture.operations.capsules.getCapsule("cap_1");
+  const calls: unknown[] = [];
+  let destroyPlanCalls = 0;
+  let capsule = { ...base, currentStateGeneration: 1 };
+  const operations = {
+    ...fixture.operations,
+    capsules: {
+      ...fixture.operations.capsules,
+      uninstallGraceDays: 7,
+      getCapsule: async () => capsule,
+      scheduleCapsuleUninstall: async (id: string, options: unknown) => {
+        calls.push({ id, options });
+        capsule = {
+          ...capsule,
+          status: "uninstalled" as const,
+          uninstall: {
+            id: "uninstall_1",
+            revision: 1,
+            phase: "scheduled" as const,
+            requestedAt: "2026-10-13T00:00:00.000Z",
+            scheduledDestroyAt: "2026-10-20T00:00:00.000Z",
+            previousStatus: "active" as const,
+          },
+        };
+        return capsule;
+      },
+    },
+    createCapsuleDestroyPlan: async () => {
+      destroyPlanCalls += 1;
+      throw new Error("a scheduled uninstall must not create a destroy Plan");
+    },
+  } as ControlPlaneOperations;
+
+  const response = await handleCapsules(
+    context(
+      operations,
+      new Request("https://app.example.test/api/v1/capsules/cap_1/uninstall", {
+        method: "POST",
+      }),
+    ),
+    ["capsules", "cap_1", "uninstall"],
+    "POST",
+  );
+  expect(response?.status).toBe(202);
+  expect(await response?.json()).toMatchObject({
+    graceDays: 7,
+    capsule: {
+      id: "cap_1",
+      status: "uninstalled",
+      uninstall: {
+        phase: "scheduled",
+        scheduledDestroyAt: "2026-10-20T00:00:00.000Z",
+      },
+    },
+  });
+  expect(calls).toEqual([
+    {
+      id: "cap_1",
+      options: {
+        actor: "tsub_owner",
+        expectedWorkspaceManagementAuthority: {
+          workspaceId: workspace.id,
+          managementState: "active",
+          managementEpoch: 1,
+        },
+      },
+    },
+  ]);
+  expect(destroyPlanCalls).toBe(0);
+
+  const wrongMethod = await handleCapsules(
+    context(
+      operations,
+      new Request("https://app.example.test/api/v1/capsules/cap_1/uninstall"),
+    ),
+    ["capsules", "cap_1", "uninstall"],
+    "GET",
+  );
+  expect(wrongMethod?.status).toBe(405);
+});
+
+test("Capsule uninstall and cancel fail closed on a host without scheduled uninstall", async () => {
+  const fixture = operationsFixture();
+  for (const leaf of ["uninstall", "cancel-uninstall"]) {
+    const response = await handleCapsules(
+      context(
+        fixture.operations,
+        new Request(`https://app.example.test/api/v1/capsules/cap_1/${leaf}`, {
+          method: "POST",
+        }),
+      ),
+      ["capsules", "cap_1", leaf],
+      "POST",
+    ).catch(controllerErrorResponse);
+    expect(response?.status, leaf).toBe(409);
+    expect(await response?.json(), leaf).toMatchObject({
+      error: {
+        code: "failed_precondition",
+        details: { reason: "capsule_uninstall_unavailable" },
+      },
+    });
+  }
+});
+
+test("Capsule cancel-uninstall restores the Capsule through the domain operation", async () => {
+  const fixture = operationsFixture();
+  const base = await fixture.operations.capsules.getCapsule("cap_1");
+  const calls: unknown[] = [];
+  let capsule = {
+    ...base,
+    currentStateGeneration: 1,
+    status: "uninstalled" as const,
+  };
+  const operations = {
+    ...fixture.operations,
+    capsules: {
+      ...fixture.operations.capsules,
+      getCapsule: async () => capsule,
+      cancelCapsuleUninstall: async (id: string, options: unknown) => {
+        calls.push({ id, options });
+        capsule = { ...capsule, status: "active" as never };
+        return capsule;
+      },
+    },
+  } as ControlPlaneOperations;
+
+  const response = await handleCapsules(
+    context(
+      operations,
+      new Request(
+        "https://app.example.test/api/v1/capsules/cap_1/cancel-uninstall",
+        { method: "POST" },
+      ),
+    ),
+    ["capsules", "cap_1", "cancel-uninstall"],
+    "POST",
+  );
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toMatchObject({
+    capsule: { id: "cap_1", status: "active" },
+  });
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).toMatchObject({ id: "cap_1", options: { actor: "tsub_owner" } });
+});

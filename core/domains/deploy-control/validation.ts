@@ -67,6 +67,24 @@ export function validatePlannedCapsuleCurrent(input: {
   }
 }
 
+/**
+ * Admission/pre-dispatch guard for the two-stage uninstall grace state: an
+ * `uninstalled` Capsule accepts only its teardown. Never call this after
+ * provider execution; a commit must still record whatever the provider did.
+ */
+export function assertCapsuleAcceptsOperation(
+  capsule: Capsule,
+  operation: PlanRun["operation"],
+): void {
+  if (capsule.status === "uninstalled" && operation !== "destroy") {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `capsule ${capsule.id} is uninstalled; only its teardown can run until the uninstall is cancelled`,
+      { reason: "capsule_uninstalled" },
+    );
+  }
+}
+
 export function normalizeProviders(
   providers: readonly string[],
 ): readonly string[] {

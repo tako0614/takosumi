@@ -6623,6 +6623,28 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
+  async listDueCapsuleUninstalls(input: {
+    readonly now: string;
+    readonly limit: number;
+  }): Promise<readonly Capsule[]> {
+    const scheduledDestroyAt =
+      sql`${pgSchema.capsules.capsuleJson} -> 'uninstall' ->> 'scheduledDestroyAt'`;
+    const rows = await this.#pgManyJson<Capsule>(
+      pgSchema.capsules,
+      pgSchema.capsules.capsuleJson,
+      {
+        where: and(
+          eq(pgSchema.capsules.status, "uninstalled"),
+          sql`${scheduledDestroyAt} <= ${input.now}`,
+          sql`${pgSchema.capsules.capsuleJson} -> 'uninstall' -> 'blockedReason' IS NULL`,
+        ),
+        orderBy: [scheduledDestroyAt, asc(pgSchema.capsules.id)],
+        limit: Math.max(0, input.limit),
+      },
+    );
+    return rows.map(normalizeCapsuleRecord);
+  }
+
   async listCapsules(workspaceId?: string): Promise<readonly Capsule[]> {
     const query = this.#db
       .select({ json: pgSchema.capsules.capsuleJson })
@@ -6838,7 +6860,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     }
     if (
       input.mutation.kind === "status" &&
-      (input.mutation.status as Capsule["status"]) === "destroyed"
+      ((input.mutation.status as Capsule["status"]) === "destroyed" ||
+        (input.mutation.status as Capsule["status"]) === "uninstalled")
     ) {
       const current = await this.getCapsule(input.capsuleId);
       return current
@@ -6849,6 +6872,13 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       input.mutation,
       input.updatedAt,
     );
+    // The uninstall record is replaced as a whole; `||` replaces top-level
+    // keys, so the previous record never leaks into the new one.
+    const expectedUninstall = input.mutation.kind !== "uninstall"
+      ? sql`true`
+      : input.mutation.expectedUninstallRevision === undefined
+        ? sql`${pgSchema.capsules.capsuleJson} -> 'uninstall' IS NULL`
+        : sql`${pgSchema.capsules.capsuleJson} -> 'uninstall' ->> 'revision' = ${String(input.mutation.expectedUninstallRevision)}`;
     const expectedStateVersion = input.expected.currentStateVersionId ===
         undefined
       ? isNull(pgSchema.capsules.currentStateVersionId)
@@ -6904,8 +6934,14 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
             expectedOutput,
             eq(pgSchema.capsules.status, input.expected.status),
             input.mutation.kind === "status"
-              ? ne(pgSchema.capsules.status, "destroyed")
-              : sql`true`,
+              ? and(
+                ne(pgSchema.capsules.status, "destroyed"),
+                ne(pgSchema.capsules.status, "uninstalled"),
+              )
+              : input.mutation.kind === "uninstall"
+                ? ne(pgSchema.capsules.status, "destroyed")
+                : sql`true`,
+            expectedUninstall,
             expectedAutoUpdate,
             expectedAutoUpdateAttempt,
             expectedCompatibilityReport,

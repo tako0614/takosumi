@@ -53,6 +53,7 @@ import {
   type BackupRecord,
   type ActivityEvent,
   type Capsule,
+  cancelCapsuleUninstall,
   ControlApiError,
   type InstallConfig,
   type Run,
@@ -78,6 +79,7 @@ import {
   getCapsuleUsageSummary,
   getCurrentResourceInventory,
   type CapsuleCurrentResourceInventory,
+  scheduleCapsuleUninstall,
   setCapsuleAutoUpdate,
 } from "../../lib/control-api.ts";
 import { formatUsdMicros } from "../../lib/billing-format.ts";
@@ -511,6 +513,66 @@ function Inner() {
    * only it, confirms here.
    */
   const destroyIsImmediate = () => !currentStateVersionId();
+  const clearCapsuleCaches = () => {
+    const workspace = capsuleData()?.workspaceId;
+    if (!workspace) return;
+    clearCapsuleListCache(workspace);
+    clearCurrentStateVersionCache(workspace);
+    clearDashboardOverviewCache(workspace);
+  };
+  /**
+   * The default deletion of an APPLIED service is two-stage: nothing is
+   * removed now, and the server deletes it unattended after the grace period
+   * (exporting the data first where it can). Because no later review screen
+   * exists for that teardown, this is the one place it is confirmed.
+   */
+  const scheduleUninstall = createAction(async () => {
+    const ok = await confirm({
+      title: t("app.uninstall.confirmTitle"),
+      message: t("app.uninstall.confirmMessage", { name: serviceLabel() }),
+      confirmText: t("app.uninstall.cta"),
+      cancelText: t("common.cancel"),
+      danger: true,
+    });
+    if (!ok) return;
+    await scheduleCapsuleUninstall(capsuleId());
+    clearCapsuleCaches();
+    await refetchCapsule();
+  });
+  const cancelUninstall = createAction(async () => {
+    await cancelCapsuleUninstall(capsuleId());
+    clearCapsuleCaches();
+    await refetchCapsule();
+  });
+  const uninstallBanner = (inst: Capsule): string => {
+    const uninstall = inst.uninstall;
+    const name = serviceLabel();
+    if (!uninstall) return t("app.uninstall.bannerDue", { name });
+    if (uninstall.blockedReason) {
+      return t("app.uninstall.bannerBlocked", { name });
+    }
+    if (uninstall.phase === "destroying") {
+      return t("app.uninstall.bannerDestroying", { name });
+    }
+    return Date.parse(uninstall.scheduledDestroyAt) > Date.now()
+      ? t("app.uninstall.banner", {
+          name,
+          date: formatDateTime(uninstall.scheduledDestroyAt),
+        })
+      : t("app.uninstall.bannerDue", { name });
+  };
+  const uninstallExportNote = (inst: Capsule): string | undefined => {
+    switch (inst.uninstall?.preDestroyExport?.status) {
+      case "exported":
+        return t("app.uninstall.exportExported");
+      case "failed":
+        return t("app.uninstall.exportFailed");
+      case "skipped":
+        return t("app.uninstall.exportSkipped");
+      default:
+        return undefined;
+    }
+  };
   const confirmDestroy = async (): Promise<void> => {
     if (!destroyIsImmediate()) {
       await destroyPlan.run();
@@ -674,6 +736,47 @@ function Inner() {
 
               <Show when={update.error() ?? destroyPlan.error()}>
                 {(message) => <Toast tone="error">{message()}</Toast>}
+              </Show>
+
+              {/* Two-stage uninstall grace period: the service and its data
+                  are still here; say when they go and offer the way back. */}
+              <Show when={inst().id === capsuleId() && inst().status === "uninstalled"}>
+                <div class="av-setup-incomplete" role="status">
+                  <p class="av-setup-incomplete-text">{uninstallBanner(inst())}</p>
+                  <Show when={uninstallExportNote(inst())}>
+                    {(note) => <p class="muted">{note()}</p>}
+                  </Show>
+                  <div class="av-actions">
+                    <Show when={inst().uninstall?.phase === "scheduled"}>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        type="button"
+                        busy={cancelUninstall.busy()}
+                        disabled={cancelUninstall.busy()}
+                        onClick={() => void cancelUninstall.run()}
+                      >
+                        {t("app.uninstall.cancel")}
+                      </Button>
+                    </Show>
+                    <Show when={inst().uninstall?.phase !== "destroying"}>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        href={`/workloads/${encodeURIComponent(capsuleId())}/settings#delete`}
+                      >
+                        {t("app.uninstall.deleteNow")}
+                      </Button>
+                    </Show>
+                  </div>
+                  <Show when={cancelUninstall.error()}>
+                    {(m) => (
+                      <p class="wa-error" role="alert">
+                        {m()}
+                      </p>
+                    )}
+                  </Show>
+                </div>
               </Show>
 
               {/* A service that never successfully applied (no StateVersion)
@@ -847,8 +950,43 @@ function Inner() {
                       >
                         <summary>{t("app.danger.destroyTitle")}</summary>
                         <Card>
+                          <Show
+                            when={
+                              !destroyIsImmediate() &&
+                              inst().status !== "uninstalled"
+                            }
+                          >
+                            <CardHeader
+                              title={t("app.uninstall.title")}
+                              subtitle={t("app.uninstall.body", {
+                                name: serviceLabel(),
+                              })}
+                            />
+                            <div class="wa-form-actions">
+                              <Button
+                                variant="danger"
+                                type="button"
+                                disabled={scheduleUninstall.busy()}
+                                busy={scheduleUninstall.busy()}
+                                onClick={() => void scheduleUninstall.run()}
+                              >
+                                {t("app.uninstall.cta")}
+                              </Button>
+                            </div>
+                            <Show when={scheduleUninstall.error()}>
+                              {(m) => (
+                                <p class="wa-error" role="alert">
+                                  {m()}
+                                </p>
+                              )}
+                            </Show>
+                          </Show>
                           <CardHeader
-                            title={t("app.danger.destroyTitle")}
+                            title={
+                              destroyIsImmediate()
+                                ? t("app.danger.destroyTitle")
+                                : t("app.uninstall.immediateTitle")
+                            }
                             subtitle={t("app.danger.destroyBody", {
                               name: serviceLabel(),
                             })}

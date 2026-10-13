@@ -827,6 +827,10 @@ export default {
       runScheduledInterfaceMaterializationIntentDrain(env),
       context,
     );
+    await schedulePlatformSideEffect(
+      runScheduledCapsuleUninstallFinalize(env),
+      context,
+    );
     const cron =
       typeof event === "object" && event !== null
         ? Reflect.get(event, "cron")
@@ -900,6 +904,46 @@ async function runScheduledInterfaceMaterializationIntentDrain(
     console.warn(
       JSON.stringify({
         event: "interface_materialization_recovery_failed",
+        errorName: error instanceof Error ? error.name : "unknown",
+      }),
+    );
+  }
+}
+
+const SCHEDULED_CAPSULE_UNINSTALL_FINALIZE_LIMIT = 10;
+
+export type ScheduledCapsuleUninstallOperations = Pick<
+  TakosumiOperations,
+  "finalizeDueCapsuleUninstalls"
+>;
+
+/** One bounded slice of due two-stage uninstalls per owning Worker tick. */
+export async function finalizeScheduledCapsuleUninstalls(
+  operations: ScheduledCapsuleUninstallOperations,
+): ReturnType<
+  ScheduledCapsuleUninstallOperations["finalizeDueCapsuleUninstalls"]
+> {
+  return await operations.finalizeDueCapsuleUninstalls({
+    limit: SCHEDULED_CAPSULE_UNINSTALL_FINALIZE_LIMIT,
+  });
+}
+
+async function runScheduledCapsuleUninstallFinalize(
+  env: DeployControlEnv,
+): Promise<void> {
+  try {
+    const result = await finalizeScheduledCapsuleUninstalls(
+      await deployControlSeam(env).operations(),
+    );
+    console.log(
+      JSON.stringify({ event: "capsule_uninstall_finalize", ...result }),
+    );
+  } catch (error) {
+    // Failure-isolated: each Capsule's uninstall request is the durable retry
+    // authority, and the next tick resumes from it.
+    console.warn(
+      JSON.stringify({
+        event: "capsule_uninstall_finalize_failed",
         errorName: error instanceof Error ? error.name : "unknown",
       }),
     );

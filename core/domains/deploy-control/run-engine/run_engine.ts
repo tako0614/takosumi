@@ -221,6 +221,7 @@ import {
   type PlanRunInputs,
 } from "../store.ts";
 import {
+  assertCapsuleAcceptsOperation,
   mergeInstallContextVariables,
   normalizeProviders,
   normalizeVariables,
@@ -2664,7 +2665,10 @@ export class RunEngine {
     context: DeployControlActorContext = {},
     internal: Pick<
       CreateCapsulePlanInternal,
-      "runnerProfileId" | "sourceSnapshotId"
+      | "runnerProfileId"
+      | "sourceSnapshotId"
+      | "planRunId"
+      | "expectedWorkspaceManagementAuthority"
     > = {},
   ): Promise<PlanRunResponse> {
     return await this.#createCapsulePlanRun(capsuleId, true, context, internal);
@@ -2722,6 +2726,7 @@ export class RunEngine {
       "capsule_load",
       this.#requireCapsule(capsuleId),
     );
+    assertCapsuleAcceptsOperation(capsule, destroy ? "destroy" : "update");
     // Capture the Workspace fence before any InstallConfig/Source/compatibility
     // preparation. The same immutable authority is passed to the inner Plan
     // preparation and its atomic store admission; it must not be refreshed late.
@@ -4864,6 +4869,9 @@ export class RunEngine {
     const plannedCapsule = planRun.capsuleId
       ? await this.#requireCurrentPlannedCapsule(planRun)
       : undefined;
+    if (plannedCapsule) {
+      assertCapsuleAcceptsOperation(plannedCapsule, planRun.operation);
+    }
     assertStateGenerationMatches(planRun, plannedCapsule);
     // Preserve the authority validated against this Plan through all later
     // asynchronous preparation. Recapturing the Capsule at insertion would
@@ -9863,6 +9871,11 @@ export class RunEngine {
     const plannedCapsule = planRun.capsuleId
       ? await this.#requireCurrentPlannedCapsule(planRun)
       : undefined;
+    // An Apply queued before the Capsule was uninstalled must not provision
+    // into the grace state. This runs before dispatch only.
+    if (plannedCapsule) {
+      assertCapsuleAcceptsOperation(plannedCapsule, planRun.operation);
+    }
     // State generation guard: reject when the target's state advanced past the
     // generation this plan was created against (a stale plan over newer state).
     assertStateGenerationMatches(planRun, plannedCapsule);

@@ -116,9 +116,15 @@ CredentialRecipe / ProviderBinding の経路で通常の provider を設定し�
 | `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL`      | 任意 | `3`                                                | SourceSnapshot を固める zstd の圧縮レベル。`1` から `19` まで。低いほど書庫は大きく、初回の取り込みは速くなります                                                                                            |
 | `TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH`    | 任意 | `5`                                                | 定期ポーリング 1 回で拾う自動同期 Source の上限                                                                                                                                                              |
 | `TAKOSUMI_COMPATIBILITY_CHECK_TIMEOUT_MS` | 任意 | `45000`                                            | 互換チェックのソース展開をリクエスト経路で待つ上限 (ミリ秒)                                                                                                                                                  |
+| `TAKOSUMI_UNINSTALL_GRACE_DAYS`           | 任意 | `7`                                                | 削除を予約してから実際に破棄するまでの猶予日数。`0` から `365` の整数。不正な値は警告を出して既定値を使います。変更は新しい予約から効き、予約済みの期日は変わりません                                      |
 
 `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR` を空にすると、runner は Run ごとの作業領域に
 provider を展開します。共有しない代わりに、Run のあいだの取り違えが起きません。
+
+期日を過ぎた削除予約は、Cloudflare 構成では毎時の cron が、PostgreSQL 構成では
+プロセス内の 15 分ごとの定期処理が進めます。破棄の直前に一度だけ Capsule 単位の
+書き出しを試み、その結果を Capsule に記録します。書き出し先 (backup artifact
+storage) が無い構成では `skipped` と記録して破棄に進みます。
 
 ```bash
 export TAKOSUMI_ENABLED_RUNNER_PROFILES="opentofu-default"

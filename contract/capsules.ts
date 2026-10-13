@@ -38,9 +38,71 @@ export type {
  * required post-apply lifecycle action has failed or stayed non-terminal. It
  * is never runtime Ready; a later successful reviewed plan/apply is the generic
  * recovery path back to `active`.
+ *
+ * `uninstalled` is the grace state of a two-stage uninstall. The provider
+ * resources and their data still exist (and still meter) until
+ * {@link CapsuleUninstall.scheduledDestroyAt}; nothing new is planned or applied
+ * for the Capsule except its teardown. The only exits are cancelling the
+ * uninstall (back to {@link CapsuleUninstall.previousStatus}) or a committed
+ * destroy (`destroyed`). The Capsule keeps its name while uninstalled.
  */
 export type CapsuleStatus =
-  "pending" | "active" | "stale" | "error" | "disabled" | "destroyed";
+  | "pending"
+  | "active"
+  | "stale"
+  | "error"
+  | "disabled"
+  | "uninstalled"
+  | "destroyed";
+
+/** Statuses a scheduled uninstall can start from and return to on cancel. */
+export type CapsuleUninstallRestorableStatus = "active" | "stale" | "error";
+
+/**
+ * Evidence of the one data export attempted before a scheduled destroy. A
+ * failed or skipped export is recorded and the destroy still proceeds; the
+ * record is what tells the owner afterwards whether a copy exists.
+ */
+export interface CapsulePreDestroyExport {
+  readonly status: "exported" | "failed" | "skipped";
+  /** Backup record id when `exported`. */
+  readonly backupId?: string;
+  /** Public-safe reason token when `failed` or `skipped`. */
+  readonly reason?: string;
+  readonly at: string;
+}
+
+/**
+ * One two-stage uninstall request and its progress. The Capsule row is the
+ * authority: every step is a compare-and-set on `revision`, so a cancel and the
+ * scheduled finalizer cannot both win.
+ *
+ * - `scheduled`: in grace, or due and not yet past the point of no return.
+ *   Cancelling is allowed.
+ * - `destroying`: the finalizer approved the teardown Plan it created for this
+ *   request. Cancelling is refused from here on.
+ * - `cancelled`: retained as evidence until the next uninstall replaces it.
+ */
+export interface CapsuleUninstall {
+  readonly id: string;
+  readonly revision: number;
+  readonly phase: "scheduled" | "destroying" | "cancelled";
+  readonly requestedAt: string;
+  readonly scheduledDestroyAt: string;
+  readonly previousStatus: CapsuleUninstallRestorableStatus;
+  readonly cancelledAt?: string;
+  readonly preDestroyExport?: CapsulePreDestroyExport;
+  /** Teardown Plan created by the finalizer for the current attempt. */
+  readonly destroyPlanRunId?: string;
+  readonly destroyAttempts?: number;
+  readonly destroyStartedAt?: string;
+  /**
+   * Set when the finalizer stopped continuing unattended (for example the
+   * teardown Plan was not delete-only). The Capsule stays `uninstalled`; the
+   * owner can cancel or delete it now.
+   */
+  readonly blockedReason?: string;
+}
 
 /**
  * Capsule ledger record.
@@ -112,6 +174,8 @@ export interface Capsule {
    * tenant, space, or provider-native name.
    */
   readonly publicOriginReservation?: CapsulePublicOriginReservation;
+  /** Latest two-stage uninstall request, if one was ever made. */
+  readonly uninstall?: CapsuleUninstall;
   readonly createdAt: string;
   readonly updatedAt: string;
 }

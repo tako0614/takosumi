@@ -34,6 +34,7 @@ const CAPSULE: Record<string, MessageKey> = {
   stale: "status.capsule.stale",
   error: "status.capsule.error",
   disabled: "status.capsule.disabled",
+  uninstalled: "status.capsule.uninstalled",
   destroyed: "status.capsule.destroyed",
 };
 export const capsuleStatusLabel = (status?: string) => label(CAPSULE, status);
@@ -132,6 +133,7 @@ export function capsuleTone(status: string | undefined): Tone {
       return "ok";
     case "pending":
     case "stale":
+    case "uninstalled":
       return "warn";
     case "needs_attention":
     case "error":

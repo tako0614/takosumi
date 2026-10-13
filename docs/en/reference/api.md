@@ -166,7 +166,7 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 86
+`accounts/service/src/control-route-inventory.ts`; it currently contains 88
 public route descriptors. Representative operations from that inventory are:
 
 ```http
@@ -192,6 +192,8 @@ GET   /api/v1/capsule-configs
 GET   /api/v1/capsule-configs/{capsuleConfigId}
 POST  /api/v1/capsules/{capsuleId}/plan
 POST  /api/v1/capsules/{capsuleId}/configuration-plans
+POST  /api/v1/capsules/{capsuleId}/uninstall
+POST  /api/v1/capsules/{capsuleId}/cancel-uninstall
 
 POST /api/v1/workspaces/{workspaceId}/install-plans
 GET  /api/v1/install-plans/{installPlanId}
@@ -218,6 +220,20 @@ GET /api/v1/workspaces/{workspaceId}/activity
 GET /api/v1/workspaces/{workspaceId}/interface-materialization-failures
 POST /api/v1/workspaces/{workspaceId}/interface-materialization-failures/{intentId}/retries
 ```
+
+`POST /api/v1/capsules/{capsuleId}/uninstall` moves an applied Capsule to
+`uninstalled` and destroys nothing before `uninstall.scheduledDestroyAt`. The
+grace period is the operator setting `TAKOSUMI_UNINSTALL_GRACE_DAYS` (OSS
+default 7 days). During the grace period the provider resources and their data
+remain, billing continues, and every plan or apply other than teardown is
+refused with `capsule_uninstalled`. `cancel-uninstall` returns the Capsule to
+its previous status. Once due, the control plane attempts one Capsule-scoped
+export, records the outcome (`exported`, `failed`, or `skipped`) in
+`uninstall.preDestroyExport`, and then creates an ordinary destroy plan. Only a
+plan whose known changes are all deletions is approved by the system and
+applied; from then on the uninstall cannot be cancelled. Any other plan stops
+with `uninstall.blockedReason` for the owner to cancel or delete immediately.
+`DELETE` and `destroy-plan` still create an immediate destroy plan.
 
 Create a Capsule through the Git install-plan coordinator. It pins the exact
 SourceSnapshot and successful compatibility declaration, creates the complete

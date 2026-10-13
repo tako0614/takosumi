@@ -194,6 +194,32 @@ never carries provider credentials, passwords, generated encryption keys, or
 the runtime-binding entrypoint. There is no private hosted-profile descriptor or
 provider-specific fallback for this capability.
 
+A two-stage uninstall moves an applied `active`, `stale`, or `error` Capsule to
+`uninstalled` and records one `uninstall` request on the Capsule row with
+`scheduledDestroyAt = requestedAt + TAKOSUMI_UNINSTALL_GRACE_DAYS` (OSS default
+7). Nothing is torn down during the grace period; provider resources, data, and
+metering continue. While `uninstalled`, Plan creation, drift checks, and Apply
+admission or pre-dispatch refuse every operation except `destroy`
+(`capsule_uninstalled`); commit paths after provider execution are unchanged so
+whatever the provider did is still recorded. The owner may cancel back to the
+recorded previous status until the request reaches `destroying`. A bare status
+write can neither enter nor leave `uninstalled`.
+
+The scheduled finalizer is the only automatic destroy approval. It reads due,
+unblocked requests and advances each through revision-fenced steps on the
+Capsule row: one Capsule-scoped export through the backups lane whose outcome
+(`exported`, `failed`, or `skipped`) is recorded and never blocks teardown; a
+destroy Plan created with an exact id derived from the request and attempt; and
+verification that the completed Plan is this Capsule's policy-passed destroy
+with known, delete-only changes. Only then does it move the request to
+`destroying` (after which cancel is refused), record an approval naming the
+request, and create the Apply with an exact id. Apply admission revalidates the
+state cursor, execution epoch, Workspace management, and policy as for any
+Apply. An unverifiable or non-delete Plan, repeated Plan failure, or a failed
+Apply records `blockedReason` and leaves the Capsule `uninstalled` for the
+owner. The ordinary automatic Apply continuation still never applies a destroy
+Plan, and `DELETE` / `destroy-plan` remain the immediate, owner-approved path.
+
 A stateful Capsule Destroy Plan pins the current StateVersion's exact applied
 PlanRun provenance: its SourceSnapshot, module source coordinate (including
 `modulePath`), and required provider identities are copied into the destroy
