@@ -26,6 +26,24 @@ CredentialRecipes. Source authoring is Git-only; immutable source archives are
 internal runner transport and are not accepted as a CLI creation input. The
 local-upload path for `takosumi deploy` / `takosumi plan` is retired.
 
+## Setting up the CLI
+
+The CLI lives in this repository's `cli/` and runs directly on Bun. It is not yet
+distributed through a package manager, so install the dependencies in a checkout and
+make `takosumi` callable from there.
+
+```bash
+git clone https://github.com/tako0614/takosumi.git
+cd takosumi
+bun install
+alias takosumi="bun $PWD/cli/src/main.ts"
+takosumi --help
+```
+
+The `takosumi ...` commands on this page and the others assume that alias.
+`bun run cli -- <command>` also works, but bun prints the command line it runs, which
+leaves any bearer passed to `--token` in your terminal.
+
 ## Creating a token
 
 The `TAKOSUMI_DEPLOY_CONTROL_TOKEN` used by the other pages is created here.

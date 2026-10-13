@@ -21,7 +21,8 @@ OpenTofu runner が同じ origin に同居します。CLI、dashboard、Takoform
 
 **Bun と PostgreSQL** は、自分のインフラに置きたい場合に向きます。Docker が動くホストと
 PostgreSQL、それに TLS を終端する Caddy があれば動きます。同梱の `docker-compose.yml` が
-PostgreSQL、マイグレーション、サービス本体、Caddy をまとめて起動します。
+PostgreSQL、マイグレーション、サービス本体、Caddy をまとめて起動します。OpenTofu runner は
+含まないため、Stack の実行には runner を別に組み込みます。
 
 **手元だけ**の構成は、公開せずに全体を通したい場合に使います。Linux と
 Docker が前提です。ACME 用の Pebble、CoreDNS、Caddy を同じ Docker ネットワークに立て、
@@ -70,11 +71,12 @@ origin そのものです。公開されている雛形は placeholder ID を含
 `main` と dashboard build output の `directory` を `[assets]` に追加してから deploy します。
 自分の Worker script を使う場合も、その script を `main` に指定します。
 
-dashboard をビルドします。`ASSETS` はこの出力を配ります。
+dashboard をビルドします。`ASSETS` はこの出力を配ります。dashboard はルートの workspace に
+含まれないため、`build:dashboard` が dashboard 自身の lockfile で依存を入れてからビルドします。
 
 ```bash
 bun install
-(cd dashboard && bun run build)
+bun run build:dashboard
 ```
 
 secret を入れます。`wrangler.toml` には書かず、`wrangler secret put` で押し込みます。
@@ -92,7 +94,8 @@ bunx wrangler secret put TAKOSUMI_ACCOUNT_SESSION_HASH_SALT \
 accounts 側の D1 スキーマは Accounts owner CLI で適用します。先に owner-private な
 backup / Time Travel evidence を保全し、その opaque digest を plan/apply に結びます。
 `plan` は remote call を行わず、`apply` は migration ごとに 1 つの atomic REST batch、
-`verify` は read-only です。
+`verify` は read-only です。`takosumi` コマンドはチェックアウトから使います。用意の仕方は
+[CLI](../reference/cli.md) にあります。
 
 ```bash
 takosumi accounts migrate-d1 plan \
@@ -141,18 +144,14 @@ cd deploy/node-postgres
 cp .env.example .env
 ```
 
-`.env` を編集します。ここで書き換えるのは `POSTGRES_PASSWORD`、
-`TAKOSUMI_ACCOUNTS_ISSUER`、`TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME`、OIDC client の
-登録です。
-
-`.env` の値は `docker-compose.yml` の変数展開に使われるだけで、そのままコンテナへ渡るわけでは
-ありません。同梱の `docker-compose.yml` が `accounts` サービスに渡すのは、上に挙げた
-issuer と接続先と client 登録だけです。残りの秘密は、`accounts` サービスの
-`environment:` に自分で足してください。Docker Compose なら同じディレクトリの
-`docker-compose.override.yml` に書けます。
+`.env` を編集します。Compose はこのファイルを変数展開に使い、`docker-compose.yml` に
+明示したサービス設定だけを `accounts` に渡します。最低限、次を埋めます。各値の生成
+コマンドは `.env.example` の該当箇所に書いてあります。
 
 | 変数 | なぜ要るか |
 | --- | --- |
+| `POSTGRES_PASSWORD` | PostgreSQL のパスワード |
+| `TAKOSUMI_ACCOUNTS_ISSUER` / `TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME` | 公開する origin と、Caddy が証明書を取る hostname |
 | `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK` | id_token の署名鍵 |
 | `TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET` | 署名鍵と対で使う subject の導出鍵 |
 | `TAKOSUMI_ACCOUNT_SESSION_HASH_SALT` | セッション ID を保存時にハッシュする salt |
@@ -160,7 +159,19 @@ issuer と接続先と client 登録だけです。残りの秘密は、`account
 | `TAKOSUMI_DEPLOY_CONTROL_TOKEN` | operator 専用 API の bearer |
 
 issuer が https のとき、署名鍵が届いていないとサービスは起動を拒否します。プロセスごとに
-違う鍵で id_token に署名してしまい、再起動や複数レプリカで検証が壊れるためです。
+違う鍵で id_token に署名してしまい、再起動や複数レプリカで検証が壊れるためです。封印鍵が
+無い場合も、平文で保存する代わりに起動を拒否します。
+
+サインインの手段も `.env` で決めます。最初のアカウントは、上流の ID プロバイダ
+(`TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS` と、そこで `clientSecretEnv` に指定した名前の
+secret) でサインインして作ります。passkey (`TAKOSUMI_ACCOUNTS_PASSKEY_*`) は、サインイン
+済みのアカウントに後から追加する手段です。どちらも `.env.example` に例があります。
+任意名の `clientSecretEnv` は `docker-compose.override.yml` の `accounts.environment` に
+1つずつ明示して渡します。`deploy/node-postgres/README.md`
+に override の例があります。`.env` に名前と値を書くだけではコンテナへ届きません。
+
+`.env` は秘密を含むので commit しません。このリポジトリは `deploy/node-postgres/.env` を
+`.gitignore` で除外しています。
 
 起動します。
 
@@ -168,18 +179,17 @@ issuer が https のとき、署名鍵が届いていないとサービスは起
 docker compose up -d
 ```
 
-Docker Compose の `migrations` コンテナが `takosumi accounts migrate` を 1 回実行してから、
-サービス本体が起動します。これで揃うのは accounts 側のテーブルだけです。control plane
-側のテーブルは、同じデータベースに対して別に作ります。
+初回はイメージのビルドに数分かかります。`migrations` コンテナが control plane と accounts の
+2 つのスキーマを同じデータベースに適用し、成功してからサービス本体と Caddy が起動します。
 
-control plane 側のマイグレーションは、リポジトリのチェックアウトから走らせます。同梱の
-イメージには入っていません。同梱の Docker Compose 定義は PostgreSQL を内部ネットワークにしか
-出さないので、先に 5432 を公開するか、同じネットワークから届くホストで実行します。
+マイグレーションを compose の外から適用する場合は、リポジトリのルートで実行します。同梱の
+Docker Compose 定義は PostgreSQL を内部ネットワークにしか出さないので、先に 5432 を公開するか、
+同じネットワークから届くホストで実行します。
 
 ```bash
-cd ../..
 DATABASE_URL="postgres://takosumi:<password>@<postgres-host>:5432/takosumi_accounts" \
   bun run db:migrate --env=production
+takosumi accounts migrate --database-url "$DATABASE_URL"
 ```
 
 `bun run db:migrate:dry-run` を先に実行すると、適用せずに SQL だけ表示します。
@@ -195,6 +205,11 @@ Docker Compose を使わず手で動かす場合は、同じ環境変数を渡�
 
 `takosumi accounts serve` は手元の確認用です。プロセスごとに使い捨ての署名鍵を作るので、
 公開して使う accounts は Cloudflare か Bun と PostgreSQL の雛形で動かしてください。
+
+この雛形には OpenTofu runner が入っていません。accounts、control plane、dashboard は
+動きますが、Git の同期、plan、apply は `runner_capability_missing` で失敗します。Stack を
+実行するには、runner を組み込んだ構成を使います。Cloudflare 構成か、
+`deploy/local-substrate/` のように runner コンテナを接続した operator composition です。
 
 ## 手元だけで通す
 
@@ -242,15 +257,17 @@ curl -s https://takosumi.example.com/api/v1/capabilities
 ```
 
 ここまでが通ったら、実データを 1 回読みます。dashboard でサインインして
-[CLI](../reference/cli.md) の手順で token を作り、Workspace の一覧を取ります。`401` では
-なく `200` が返れば、認証と記録の読み取りが通っています。
+[CLI](../reference/cli.md) の手順で `--scope read` の token を作り、Workspace の一覧を
+取ります。scope は互いを含まないので、`write` だけの token ではこの読み取りが `403` に
+なります。使うのは発行した token で、operator 専用の `TAKOSUMI_DEPLOY_CONTROL_TOKEN` では
+ありません。`200` が返れば、認証と記録の読み取りが通っています。
 
 ```bash
-curl -s -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN" \
+curl -s -H "authorization: Bearer $TAKOSUMI_READ_TOKEN" \
   https://takosumi.example.com/api/v1/workspaces
 ```
 
-最後に、実際に 1 回デプロイします。dashboard の `/new` に Git URL を入れて計画を作り、
+最後に、runner を含む構成で実際に 1 回デプロイします。dashboard の `/new` に Git URL を入れて計画を作り、
 内容を確認してから適用します。Run が成功し、StateVersion と Output が残れば、runner と
 state backend まで通っています。provider の認証を必要としない
 `examples/opentofu-basic` が、この確認にちょうど使えます。
