@@ -6,14 +6,51 @@ an additive change alone does not establish that compatibility.
 
 ## Bun and PostgreSQL
 
-Follow the [distribution README](https://github.com/tako0614/takosumi/blob/main/deploy/node-postgres/README.md).
-Keep backup evidence, build the new checkout, stop the old accounts service, run the
-`migrations` service once, and start the new service after success. Compose migrates both
-Accounts and control-plane schemas. Do not migrate while old and new services serve together.
+Follow the [distribution README](https://github.com/tako0614/takosumi/blob/main/deploy/node-postgres/README.md). Review the pending
+migrations and compatibility, then take a backup immediately before the update. For the
+default Compose project, run from `deploy/node-postgres` and keep its default project and
+automatically loaded override. If the deployment started with custom `-p` or `-f` arguments,
+pass those same arguments on every operation. Switch to the new commit and update in this
+order. The migration service applies the control-plane schema followed by the Accounts schema.
 
-The stock distribution has no OpenTofu runner. Custom compositions must verify their
-runner protocol against the new service. Check sign-in, existing Capsule/Run reads, and
-credential-dependent operations in your own test Workspace after updating.
+```bash
+set -euo pipefail
+cd deploy/node-postgres
+compose() { docker compose "$@"; }
+compose stop accounts
+compose build accounts migrations
+compose run --rm migrations
+# After migrations succeed, start Caddy too in production.
+compose up -d --wait accounts caddy
+compose ps
+curl -fsS https://app.example.com/healthz # replace with the configured public hostname
+```
+
+Stop `accounts` before migrating, and do not serve the new image before migrations succeed.
+For a local test project, keep the same dedicated project and Compose files for every
+operation. The example below uses only the base file and its temporary loopback override;
+add only reviewed secret mappings there if needed. It does not load
+`docker-compose.override.yml`.
+
+```bash
+set -euo pipefail
+local_files=(-f docker-compose.yml -f "$local_dir/compose.local-test.yml")
+local_compose() { docker compose -p "$local_project" "${local_files[@]}" "$@"; }
+local_compose stop accounts
+local_compose build accounts migrations
+local_compose run --rm migrations
+local_compose up -d --wait accounts
+local_compose ps
+curl -fsS http://localhost:26401/healthz
+```
+
+`--wait` requires Docker Compose v2. The stock composition has no runner to
+check. A custom composition that adds one must separately verify its protocol, artifact
+storage, and state storage.
+
+After updating, check sign-in, existing Capsule/Run reads, and credential-dependent
+operations in your own test Workspace. Keep the previous image reference and backup until
+these checks pass.
 
 ## Cloudflare
 

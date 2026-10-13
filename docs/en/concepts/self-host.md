@@ -1,9 +1,9 @@
 # Running it yourself
 
 Takosumi can sit in your own environment and serve as your own endpoint. The software is
-published under AGPL-3.0. There is one thing to stand up: the control plane, accounts, the
-dashboard, and the OpenTofu runner all live on the same origin. The CLI, dashboard,
-Takoform clients, and other API clients talk to that origin.
+published under AGPL-3.0. The control plane, accounts, and dashboard share the origin users
+connect to. OpenTofu runner and source/artifact/state persistence vary by composition. The
+CLI, dashboard, Takoform clients, and other API clients talk to that origin.
 
 The repository's `deploy/` directory holds three templates that differ in where they put
 things.
@@ -147,7 +147,7 @@ control plane, and the dashboard on the same origin. Start from the repository r
 
 ```bash
 cd deploy/node-postgres
-cp .env.example .env
+test ! -e .env && cp .env.example .env
 ```
 
 Edit `.env`. Compose uses this file for interpolation and passes only the service
@@ -178,13 +178,68 @@ Explicitly map each arbitrary `clientSecretEnv` name in
 alone does not pass it to the container. See the override example in the
 `deploy/node-postgres/README.md`.
 
+Generate the five random values above with independent `openssl rand -hex 32` invocations.
+Replace the placeholder ES256 key with a real P-256 private JWK using the Bun command in
+`.env.example`. For a local HTTP smoke test, set issuer and passkey origin to
+`http://localhost:26401`, client redirect URI to `http://localhost:26401/oauth/callback`,
+and passkey RP ID to `localhost`. Production uses the
+public HTTPS origin and hostname instead.
+
 `.env` holds secrets, so do not commit it. This repository ignores
 `deploy/node-postgres/.env` in `.gitignore`.
 
-Bring it up.
+### Local loopback check
+
+From the repository root, the earlier commands left the shell in `deploy/node-postgres`.
+Keep the temporary override outside the checkout and use a unique Compose project. Accounts
+starts its PostgreSQL and migration dependencies; Caddy is not started, so the local check
+does not request ACME or expose ports 80/443.
 
 ```bash
-docker compose up -d
+set -euo pipefail
+local_project="takosumi-local-test-$(date +%s)-$$"
+local_dir="$(mktemp -d)"
+cat > "$local_dir/compose.local-test.yml" <<'YAML'
+services:
+  accounts:
+    environment:
+      TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS: ""
+    ports:
+      - "127.0.0.1:26401:8787"
+YAML
+local_files=(-f docker-compose.yml -f "$local_dir/compose.local-test.yml")
+local_compose() { docker compose -p "$local_project" "${local_files[@]}" "$@"; }
+local_compose up --build -d --wait accounts
+local_compose ps
+curl -fsS http://localhost:26401/healthz
+```
+
+`--wait` requires Docker Compose v2. This temporary composition does not load the checkout's
+general `docker-compose.override.yml`; its only host port is bound to loopback.
+
+Wait for `migrations` to exit successfully and `accounts` to become healthy. Open
+`http://localhost:26401/` to check the dashboard. By default this health/dashboard smoke test
+disables upstream providers and does not create an account. To check sign-in, replace the
+empty `TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS` value in the temporary override before startup
+and add that descriptor's `clientSecretEnv` mapping there. Do not load
+`docker-compose.override.yml` wholesale, as it may publish additional host ports. Align the
+provider and client callbacks to `localhost:26401`. To stop this test and remove its temporary
+override, run the following in the same shell. The dedicated PostgreSQL volume remains.
+
+```bash
+local_compose down
+rm -rf "$local_dir"
+```
+
+### Public HTTPS deployment
+
+For production, configure a real HTTPS issuer and public hostname, then start the default
+composition. This starts Caddy on ports 80/443 and requires the hostname to resolve to this
+host and be reachable for ACME.
+
+```bash
+docker compose up --build -d
+curl -fsS https://app.example.com/healthz # replace with the configured public hostname
 ```
 
 The first run spends a few minutes building the image. The `migrations` container applies

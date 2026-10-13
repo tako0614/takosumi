@@ -6,15 +6,49 @@
 
 ## Bun と PostgreSQL
 
-[配布構成の README](https://github.com/tako0614/takosumi/blob/main/deploy/node-postgres/README.md)
-に従って、backup を保全し、新しい checkout からイメージを build します。
-旧 accounts サービスを停止してから `migrations` を一度実行し、成功後に新しいサービスを起動します。
-Compose の `migrations` は Accounts と control plane の両 schema を扱います。
-既存 DB に対して新旧サービスを同時に動かしたまま schema を変更しません。
+[配布構成の README](https://github.com/tako0614/takosumi/blob/main/deploy/node-postgres/README.md)に従って、変更対象の migration と
+互換性を確認し、直前に backup を取得します。default Compose project で運用している場合は、
+`deploy/node-postgres` で実行し、起動時と同じ default project と自動読込 override を維持します。
+独自の `-p` / `-f` を使って起動した環境では、同じ引数をすべての operation に渡してください。
+新しい commit に切り替えてから、次の順で更新します。migration は control-plane schema の後に
+Accounts schema を適用します。
 
-この配布構成に OpenTofu runner は同梱されません。独自に組み込む場合は、Worker/サービスと
-runner の protocol が一致することを確認します。更新後はサインイン、既存 Capsule/Run の読み取り、
-認証情報を使う操作を自分の検証 Workspace で確認してください。
+```bash
+set -euo pipefail
+cd deploy/node-postgres
+compose() { docker compose "$@"; }
+compose stop accounts
+compose build accounts migrations
+compose run --rm migrations
+# migrations が成功した後、production では Caddy も起動する
+compose up -d --wait accounts caddy
+compose ps
+curl -fsS https://app.example.com/healthz # replace with the configured public hostname
+```
+
+`accounts` を止めてから migration を実行し、成功前に新しい service を公開しません。
+ローカル test project で試す場合は起動時と同じ専用 project と composition file を使い続け、
+次のように helper に固定します。`docker-compose.override.yml` は読み込まず、必要な secret mapping
+だけを一時 override に追加します。
+
+```bash
+set -euo pipefail
+local_files=(-f docker-compose.yml -f "$local_dir/compose.local-test.yml")
+local_compose() { docker compose -p "$local_project" "${local_files[@]}" "$@"; }
+local_compose stop accounts
+local_compose build accounts migrations
+local_compose run --rm migrations
+local_compose up -d --wait accounts
+local_compose ps
+curl -fsS http://localhost:26401/healthz
+```
+
+`--wait` は Docker Compose v2 が必要です。stock 構成に runner が
+ないため runner の互換性確認対象もありません。runner を組み込んだ custom composition は
+その実 protocol、artifact 保存先、state 保存先も個別に確認します。
+
+更新後はサインイン、既存 Capsule/Run の読み取り、認証情報を使う操作を自分の検証 Workspace
+で確認してください。確認できるまでは旧 image reference と backup を保持します。
 
 ## Cloudflare
 

@@ -1,22 +1,115 @@
 # バックアップと復旧
 
-| 守るもの | 保存先・確認先 |
-| --- | --- |
-| Accounts と control plane の記録 | PostgreSQL の両 schema、またはそれぞれの D1 |
-| source、state、成果物 | 実際に組み込んだ artifact store のディレクトリ、または各 R2 bucket |
-| 復号・署名に必要な鍵 | operator の secret store。データと別に保全 |
-| 配置と互換性の記録 | 使用 commit、イメージ digest、config、migration head、restore 手順 |
+復旧できるよう、データベース、暗号・署名鍵、実際に使う artifact/source/state store、
+配置情報を一組として保全します。PostgreSQL 参照 Compose が永続化するのは PostgreSQL と
+Caddy の volume だけです。runner、artifact store、source archive、OpenTofu state backend の
+volume はありません。stock Bun/PostgreSQL 構成では runner と backup artifact store は
+配線されていません。
 
-Bun/PostgreSQL の参照 Compose が永続化するのは PostgreSQL と Caddy の volume です。
-runner や artifact store の専用 volume は含まれません。独自に runner/artifact store を
-組み込んだ環境では、その実際の保存先も backup 対象に加えます。
+## PostgreSQL Compose
 
-PostgreSQL の backup/restore は[配布構成の README](https://github.com/tako0614/takosumi/blob/main/deploy/node-postgres/README.md)
-を、Cloudflare の復旧は[災害復旧](https://github.com/tako0614/takosumi/blob/main/docs/operations/disaster-recovery.md)と
-[backup/restore 演習](https://github.com/tako0614/takosumi/blob/main/docs/operations/backup-restore-drills.md)を参照してください。
-秘密値や raw backup は公開 repo、PR、運用ログに保存しません。
+Accounts と control plane の schema は同じ PostgreSQL database
+`takosumi_accounts` にあります。以下の例は `deploy/node-postgres` から追加の `-p` / `-f`
+なしで起動した既存の default Compose project を対象にします。別 project や Compose file で
+起動した場合は、その起動時と同じ project/file 引数を全操作に使ってください。backup は checkout
+の外に保存します。
 
-製品の Workspace export は DB 全体、artifact store、鍵の backup の代わりにはなりません。
-stock Bun/PostgreSQL 配布には backup artifact store が配線されていないため、export が使えると
-仮定しません。restore は隔離した空の環境で演習し、サインイン、既存記録、復号、state 読み取りまで
-確認します。provider 側の実リソースは、この backup だけでは復元されません。
+```bash
+cd deploy/node-postgres
+set -euo pipefail
+umask 077
+backup_dir=/var/backups/takosumi
+mkdir -p "$backup_dir"
+chmod 700 "$backup_dir"
+backup_file="$backup_dir/takosumi-$(date -u +%Y%m%dT%H%M%SZ).dump"
+compose() { docker compose "$@"; }
+compose stop accounts
+compose exec -T postgres pg_dump -U takosumi -d takosumi_accounts -Fc > "$backup_file"
+chmod 600 "$backup_file"
+compose exec -T postgres pg_restore --list < "$backup_file" >/dev/null
+compose up -d --wait accounts
+```
+
+ローカル smoke-test project を backup する場合、default Compose の上記コマンドは使いません。
+初回起動と同じ shell / project / override 変数を使い、次を実行します。
+
+```bash
+set -euo pipefail
+umask 077
+backup_dir=/var/backups/takosumi
+mkdir -p "$backup_dir"
+chmod 700 "$backup_dir"
+backup_file="$backup_dir/takosumi-local-$(date -u +%Y%m%dT%H%M%SZ).dump"
+local_files=(-f docker-compose.yml -f "$local_dir/compose.local-test.yml")
+local_compose() { docker compose -p "$local_project" "${local_files[@]}" "$@"; }
+local_compose stop accounts
+local_compose exec -T postgres pg_dump -U takosumi -d takosumi_accounts -Fc > "$backup_file"
+chmod 600 "$backup_file"
+local_compose exec -T postgres pg_restore --list < "$backup_file" >/dev/null
+local_compose up -d --wait accounts
+```
+
+バックアップと別の operator secret store に、`POSTGRES_PASSWORD`、
+`TAKOSUMI_SECRET_STORE_PASSPHRASE`、`TAKOSUMI_ACCOUNT_SESSION_HASH_SALT`、
+`TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK`、`TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET`、
+`TAKOSUMI_DEPLOY_CONTROL_TOKEN` と、設定していれば upstream provider secrets を保管します。
+封印鍵や署名鍵を失うと、保管したデータを読めないか、既存 token を検証できなくなります。
+設定、Git commit、image digest、migration head も記録します。Caddy volume の証明書状態は
+再発行できますが、バックアップすれば ACME 再取得を避けられます。
+
+復旧演習は別の Compose project にある空の database で行います。project 名が専用の新しい
+volume を作るため、元の database に触れません。`--clean` は使わず、既存 checkout の `.env` を
+読み込んで同じ image / migration を使います。復旧中は Caddy を起動しません。確認対象は health と
+匿名 dashboard shell です。認証済みの記録を読む場合は restore-specific provider/client 設定が要ります。
+復旧 block は先の backup と同じ shell で実行し、`backup_file` 変数にその archive path が入っている
+状態にします。別 shell なら block の前に `backup_file` を実際の archive path に設定します。
+
+```bash
+set -euo pipefail
+# In a new shell, point this at the exact custom-format archive created above.
+# backup_file=/var/backups/takosumi/takosumi-<timestamp>.dump
+restore_project="takosumi-restore-check-$(date +%s)-$$"
+restore_dir="$(mktemp -d)"
+cat > "$restore_dir/compose.restore-check.yml" <<'YAML'
+services:
+  accounts:
+    environment:
+      TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS: ""
+      TAKOSUMI_ACCOUNTS_ISSUER: http://localhost:26402
+      TAKOSUMI_ACCOUNTS_REDIRECT_URIS: http://localhost:26402/oauth/callback
+      TAKOSUMI_ACCOUNTS_PASSKEY_RP_ID: localhost
+      TAKOSUMI_ACCOUNTS_PASSKEY_RP_ORIGIN: http://localhost:26402
+    ports:
+      - "127.0.0.1:26402:8787"
+YAML
+restore_files=(-f docker-compose.yml -f "$restore_dir/compose.restore-check.yml")
+restore_compose() { docker compose -p "$restore_project" "${restore_files[@]}" "$@"; }
+restore_compose up -d --wait postgres
+restore_compose exec -T postgres \
+  pg_restore -U takosumi -d takosumi_accounts --exit-on-error --no-owner < "$backup_file"
+restore_compose run --rm migrations
+restore_compose up -d --wait accounts
+curl -fsS http://localhost:26402/healthz
+```
+
+Docker Compose v2 の `up --wait` が必要です。明示した `-f` は `docker-compose.override.yml` を自動で
+読み込みません。必要な upstream secret mapping は restore 用の一時 override に個別に追加し、
+operator override 全体は読み込まないでください。通常 override は追加の host port を公開する場合があります。
+restore project の issuer、upstream provider descriptor の `redirectUri`、client JSON の
+`redirectUris`、passkey origin を必要に応じ `localhost:26402` にそろえ、IdP callback と secret mapping
+も用意します。`TAKOSUMI_ACCOUNTS_CLIENTS` がある場合、singular `TAKOSUMI_ACCOUNTS_REDIRECT_URIS` は
+無視されます。restore-specific 認証設定がなければ health と未認証 dashboard 表示までを確認し、
+sign-in 成功を前提にしません。migration と health check の成功後、未認証 dashboard が表示されることを
+確認します。sign-in を追加検証する場合は temporary override に restore 用の provider descriptor/client
+JSON、secret mapping を追加し、`restore_compose up -d --wait accounts` で反映してから試します。
+認証済み記録を読む場合もこの追加設定を用意してから行います。
+確認後は専用 project の container と volume を確認してから片付けます。元の deployment project や
+volume は対象にしません。`restore_dir` の一時設定も最後に削除します。restore-specific
+認証設定を用意した場合はサインイン、既存 Accounts / Workspace / Run 記録、ProviderConnection の復号も確認します。
+stock 配布は runner と artifact store を持たないため、Git source、plan artifact、provider 側の実リソースは
+この PostgreSQL backup から復元されません。custom composition は実際の durable store も個別に復旧します。
+
+Cloudflare 構成は [災害復旧](../operations/disaster-recovery.md) と
+[backup/restore 演習](../operations/backup-restore-drills.md)を参照してください。
+Workspace export は DB 全体、store、鍵の backup の代わりになりません。秘密値と raw backup は
+public repository、PR、運用ログに保存しません。

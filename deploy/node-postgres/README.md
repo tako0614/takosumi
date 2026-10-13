@@ -20,12 +20,75 @@ runtime contracts are canonical Interface / InterfaceBinding records.
 
 ## Quick start
 
+The reference Compose file includes Caddy for a public HTTPS deployment. For a local
+smoke check, start only PostgreSQL, migrations, and accounts in a dedicated Compose project,
+and bind the service to loopback. This avoids exposing a development listener and does not
+start Caddy or request an ACME certificate. Run from the repository root:
+
 ```bash
 cd deploy/node-postgres
-cp .env.example .env  # then edit; it is gitignored
-docker compose up -d
-curl https://app.example.com/healthz   # your TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME
+test ! -e .env && cp .env.example .env
 ```
+
+Replace the example secrets in `.env`. Generate independent values with
+`openssl rand -hex 32` for `POSTGRES_PASSWORD`,
+`TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET`,
+`TAKOSUMI_SECRET_STORE_PASSPHRASE`, `TAKOSUMI_ACCOUNT_SESSION_HASH_SALT`, and
+`TAKOSUMI_DEPLOY_CONTROL_TOKEN`. Generate a real P-256 private JWK with the Bun command
+shown in `.env.example`; replace its placeholder JWK. For local HTTP testing set issuer and
+passkey origin to `http://localhost:26401`, the client redirect URI to
+`http://localhost:26401/oauth/callback`, and the passkey RP ID to `localhost`. An HTTPS
+issuer requires a stable signing JWK.
+
+Create a temporary override outside the checkout to publish only the loopback port. Use a
+unique project name for this disposable test, then start Accounts (Compose starts its
+PostgreSQL and migration dependencies). Caddy is not started.
+
+```bash
+set -euo pipefail
+local_dir="$(mktemp -d)"
+local_project="takosumi-local-test-$(date +%s)-$$"
+cat > "$local_dir/compose.local-test.yml" <<'YAML'
+services:
+  accounts:
+    environment:
+      TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS: ""
+    ports:
+      - "127.0.0.1:26401:8787"
+YAML
+local_files=(-f docker-compose.yml -f "$local_dir/compose.local-test.yml")
+local_compose() { docker compose -p "$local_project" "${local_files[@]}" "$@"; }
+local_compose up --build -d --wait accounts
+local_compose ps
+curl -fsS http://localhost:26401/healthz
+```
+
+`--wait` requires Docker Compose v2. The host publication stays loopback-only. Do not load
+the checkout's general-purpose `docker-compose.override.yml`, since it may publish extra
+ports; add only the reviewed upstream secret mapping to this temporary override if needed.
+
+Wait for `migrations` to exit successfully and `accounts` to become healthy. Open
+`http://localhost:26401/` to check the dashboard. By default this health/dashboard smoke test
+has no upstream provider and does not create an account. To enable sign-in, replace the empty
+provider value in the temporary override with a provider descriptor before startup and add its
+`clientSecretEnv` mapping there as shown below. Do not add the existing
+`docker-compose.override.yml` wholesale: it may publish other host ports. Copy only the
+required secret environment mapping into the temporary override and align the provider/client
+callback with `localhost:26401`. To stop the local test without deleting
+the named database volume, run:
+
+```bash
+local_compose down
+rm -rf "$local_dir"
+```
+
+The dedicated PostgreSQL volume persists after `down`; that command does not remove it.
+
+For public production service, configure a real HTTPS issuer and public hostname in `.env`,
+review the secret and upstream-provider settings below, then start the default composition
+with `docker compose up --build -d`. This starts Caddy on ports 80/443; its hostname must
+resolve to the host and be reachable for ACME. Do not use that public Caddy composition as
+the local smoke-test procedure.
 
 Compose reads `.env` for interpolation. `docker-compose.yml` passes only the
 declared service settings to `accounts`; the separate `POSTGRES_PASSWORD`
@@ -36,6 +99,14 @@ connection URL still contains the password the service needs. The
 starts. Caddy obtains the certificate for `TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME`
 over ACME, so that name must resolve to this host; it serves no other site
 label.
+
+To select a TCS store, set `TAKOSUMI_TCS_STORE_URL` in `.env`. Compose passes it to the
+service, which advertises it at `/.well-known/takosumi` under
+`endpoints.extensions["takosumi.tcs-store.v1"]` as a URL string. The dashboard's
+`runtimeStoreUrl()` reads that extension. Use a public HTTP(S) URL without credentials,
+query, or fragment. When unset, the dashboard uses
+build-time `VITE_TAKOSUMI_TCS_STORE_URL`; if neither is set, there is no default store.
+This setting does not add a runner or artifact store to the stock composition.
 
 On an existing installation, the next `docker compose up -d` runs pending
 control-plane migrations from the image before Accounts migrations and before
@@ -48,7 +119,7 @@ Dependency ordering does not stop an already-running `accounts` container. If
 pending migrations require service quiescence, stop it before upgrading with
 `docker compose stop accounts`.
 
-Required `.env` (`.env.example` shows the command that generates each secret):
+Production `.env` values (`.env.example` documents secret generation):
 
 ```
 POSTGRES_PASSWORD=replace-me-with-a-strong-passphrase
@@ -193,7 +264,7 @@ If you bind-mount additional directories into the `accounts` container, make sur
 
 ## Backup and restore
 
-- **Postgres**: snapshot the `postgres-data` volume with `docker compose exec postgres pg_dump -U takosumi takosumi_accounts | gzip > backup-$(date +%Y%m%d).sql.gz`, and store the archive in your operator backup target. Restore with `gunzip -c backup-...sql.gz | docker compose exec -T postgres psql -U takosumi takosumi_accounts`. The migration init container is idempotent and safe to re-run after restore.
+- **Postgres**: stop Accounts and take a custom-format dump of the shared Accounts/control-plane database. Restore it only into a separate empty Compose project/database with `pg_restore`; do not pipe a dump into an already populated database. See the canonical [backup and recovery procedure](../../docs/self-host/backup-restore.md) for the commands, isolation checks, and verification steps. If you started Compose with a named project or extra `-f` files, use those same arguments for every backup command.
 - **Caddy data** (issued certificates, OCSP staples): the `caddy-data` and `caddy-config` volumes hold ACME account state. Backing them up avoids Let's Encrypt rate-limit hits during disaster recovery, but losing them is non-fatal — Caddy will re-provision certificates on next start.
 
 ## Why two substrate references

@@ -1,9 +1,9 @@
 # 自分で動かす
 
 Takosumi は自分の環境に置いて、自分の endpoint として動かせます。ソフトウェアは
-AGPL-3.0 で公開しています。立てるものは 1 つです。control plane、accounts、dashboard、
-OpenTofu runner が同じ origin に同居します。CLI、dashboard、Takoform client と
-その他の API client は、その origin に向かって話します。
+AGPL-3.0 で公開しています。利用者が接続する origin に control plane、accounts、dashboard
+をまとめます。OpenTofu runner と source/artifact/state の永続化は構成ごとに異なります。
+CLI、dashboard、Takoform client とその他の API client は、その origin に向かって話します。
 
 リポジトリの `deploy/` に、置き場所の違う 3 つの雛形が入っています。
 
@@ -19,10 +19,12 @@ OpenTofu runner が同じ origin に同居します。CLI、dashboard、Takoform
 アカウントと wrangler があれば動き、OpenTofu の実行も Cloudflare Container の runner が
 引き受けます。1 つの Worker に accounts、control plane、dashboard、runner がまとまります。
 
-**Bun と PostgreSQL** は、自分のインフラに置きたい場合に向きます。Docker が動くホストと
-PostgreSQL、それに TLS を終端する Caddy があれば動きます。同梱の `docker-compose.yml` が
-PostgreSQL、マイグレーション、サービス本体、Caddy をまとめて起動します。OpenTofu runner は
-含まないため、Stack の実行には runner を別に組み込みます。
+**Bun と PostgreSQL** は、自分のインフラに置きたい場合に向きます。Docker が動くホストが
+あれば、同梱の `docker-compose.yml` が PostgreSQL、2 系統の schema migration、サービス本体、
+TLS 用 Caddy を起動します。この stock 構成に OpenTofu runner や runner/artifact store 用の
+volume はありません。Accounts、control plane、dashboard の確認には使えますが、Git sync、plan、
+apply は `runner_capability_missing` になります。Stack 実行には runner とその保存先を含む別の
+operator composition が必要です。
 
 **手元だけ**の構成は、公開せずに全体を通したい場合に使います。Linux と
 Docker が前提です。ACME 用の Pebble、CoreDNS、Caddy を同じ Docker ネットワークに立て、
@@ -141,12 +143,14 @@ Caddy を順に起動します。サービス本体は accounts と control plan
 
 ```bash
 cd deploy/node-postgres
-cp .env.example .env
+test ! -e .env && cp .env.example .env
 ```
 
 `.env` を編集します。Compose はこのファイルを変数展開に使い、`docker-compose.yml` に
 明示したサービス設定だけを `accounts` に渡します。最低限、次を埋めます。各値の生成
-コマンドは `.env.example` の該当箇所に書いてあります。
+コマンドは `.env.example` の該当箇所に書いてあります。`https` issuer を使う場合は安定した
+ES256 private JWK が必要です。ローカル smoke test は `http://localhost:26401` issuer を使えます。
+`.env` は秘密を含むため commit しません。
 
 | 変数 | なぜ要るか |
 | --- | --- |
@@ -157,6 +161,23 @@ cp .env.example .env
 | `TAKOSUMI_ACCOUNT_SESSION_HASH_SALT` | セッション ID を保存時にハッシュする salt |
 | `TAKOSUMI_SECRET_STORE_PASSPHRASE` | 認証情報と state の封印鍵 |
 | `TAKOSUMI_DEPLOY_CONTROL_TOKEN` | operator 専用 API の bearer |
+
+まずホストで秘密値を生成します。次のコマンドは個別の値を表示するので、値を `.env` にだけ
+記録し、terminal recording や共有ログに残さないでください。
+
+```bash
+openssl rand -hex 32 # POSTGRES_PASSWORD
+openssl rand -hex 32 # TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET
+openssl rand -hex 32 # TAKOSUMI_SECRET_STORE_PASSPHRASE
+openssl rand -hex 32 # TAKOSUMI_ACCOUNT_SESSION_HASH_SALT
+openssl rand -hex 32 # TAKOSUMI_DEPLOY_CONTROL_TOKEN
+```
+
+OIDC の ES256 JWK は `.env.example` にある Bun の生成コマンドで作ります。生成した JSON は
+`TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK` に設定します。ローカル確認用には issuer と passkey origin
+を `http://localhost:26401`、RP ID を `localhost`、redirect URI を
+`http://localhost:26401/oauth/callback` に合わせます。公開運用では利用者が開く HTTPS origin と
+hostname に合わせます。
 
 issuer が https のとき、署名鍵が届いていないとサービスは起動を拒否します。プロセスごとに
 違う鍵で id_token に署名してしまい、再起動や複数レプリカで検証が壊れるためです。封印鍵が
@@ -173,11 +194,48 @@ secret) でサインインして作ります。passkey (`TAKOSUMI_ACCOUNTS_PASSK
 `.env` は秘密を含むので commit しません。このリポジトリは `deploy/node-postgres/.env` を
 `.gitignore` で除外しています。
 
-起動します。
+公開運用で既定 Compose を使うと Caddy が port 80/443 に bind して ACME 証明書を取得します。
+これは公開 HTTPS deployment 用です。Caddy を含めず loopback だけで確認する手順は次の
+「ローカルで安全に起動して確認する」を使います。
+
+### ローカルで安全に起動して確認する
+
+次の一時 override は checkout 外に作成し、host port を loopback の `26401` にだけ bind します。
+専用の一意な Compose project を使います。Compose の既定 `caddy` service は明示して起動せず、
+ローカル確認で ACME/TLS 用 Caddy を使いません。前の `.env` 設定後、同じ shell で実行します。
 
 ```bash
-docker compose up -d
+set -euo pipefail
+local_project="takosumi-local-test-$(date +%s)-$$"
+local_dir="$(mktemp -d)"
+cat > "$local_dir/compose.local-test.yml" <<'YAML'
+services:
+  accounts:
+    environment:
+      TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS: ""
+    ports:
+      - "127.0.0.1:26401:8787"
+YAML
+local_files=(-f docker-compose.yml -f "$local_dir/compose.local-test.yml")
+local_compose() { docker compose -p "$local_project" "${local_files[@]}" "$@"; }
+local_compose up --build -d --wait accounts
+local_compose ps
+curl -fsS http://localhost:26401/healthz
 ```
+
+`--wait` は Docker Compose v2 が必要です。この一時構成は checkout の通常
+`docker-compose.override.yml` を読み込まず、host port は loopback だけに bind します。
+
+`migrations` が終了コード 0 で完了し、`accounts` が healthy なら dashboard を
+`http://localhost:26401/` で開きます。この既定の health/dashboard smoke test は upstream provider を
+無効にし、account は作りません。sign-in も確認する場合は起動前に一時 override の空の
+`TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS` を provider descriptor に置き換え、その `clientSecretEnv` 名を
+同じ override に追加してください。通常の `docker-compose.override.yml` は host port の公開設定も
+持つ可能性があるため、丸ごと読み込まず必要な secret mapping だけを一時 override に写します。
+provider/client callback も `localhost:26401` に合わせます。passkey は既存 account への追加手段です。確認後は
+`local_compose down`
+で停止し、`rm -rf "$local_dir"` で一時 override を削除します。専用の PostgreSQL volume は
+残るため、`down` はデータを消しません。
 
 初回はイメージのビルドに数分かかります。`migrations` コンテナが control plane と accounts の
 2 つのスキーマを同じデータベースに適用し、成功してからサービス本体と Caddy が起動します。
