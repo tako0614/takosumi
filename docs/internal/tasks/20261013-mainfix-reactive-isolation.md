@@ -59,7 +59,8 @@ not automatically discovered, so the default test sweep executes each scenario
 once through its parent. Roots now dispose in `finally`, including assertion
 failures. Independent Sol review found no blockers.
 Each child also has a four-second SIGKILL timeout, shorter than the parent's
-default five-second timeout, so a hung child cannot survive a failed wrapper.
+default five-second timeout, so a stalled child is stopped before the wrapper
+times out during normal test execution.
 
 ## Additional full-gate finding
 
@@ -88,14 +89,15 @@ and docs npm lock. Runtime: Bun 1.4.2, Node 26.1.0; compatibility runs: Bun 1.4.
 
 | Command | Run | Result |
 | --- | --- | --- |
-| `bun test ./tests/dashboard/src` | 1 | 742 pass / 0 fail, 1.280s |
-| `bun test ./tests/dashboard/src` | 2 | 742 pass / 0 fail, 1.264s |
-| `bun test ./tests/dashboard/src` | 3 | 742 pass / 0 fail, 1.284s |
-| `env -u NODE_ENV "$BUN140" test --randomize --seed=420 ./tests/dashboard/src` | 1 | 742 pass / 0 fail, 1.431s |
-| `env -u NODE_ENV "$BUN140" test --randomize --seed=61013 ./tests/dashboard/src` | 2 | 742 pass / 0 fail, 1.306s |
-| `env -u NODE_ENV "$BUN140" test --randomize --seed=38425957 ./tests/dashboard/src` | 3 | 742 pass / 0 fail, 1.301s |
+| `bun test ./tests/dashboard/src` | 1 | 743 pass / 0 fail, 1.900s |
+| `bun test ./tests/dashboard/src` | 2 | 743 pass / 0 fail, 1.730s |
+| `bun test ./tests/dashboard/src` | 3 | 743 pass / 0 fail, 1.760s |
+| `env -u NODE_ENV "$BUN140" test --randomize --seed=420 ./tests/dashboard/src` | 1 | 743 pass / 0 fail, 1.520s |
+| `env -u NODE_ENV "$BUN140" test --randomize --seed=61013 ./tests/dashboard/src` | 2 | 743 pass / 0 fail, 1.438s |
+| `env -u NODE_ENV "$BUN140" test --randomize --seed=38425957 ./tests/dashboard/src` | 3 | 743 pass / 0 fail, 1.434s |
 
-All six dashboard runs exited 0. An earlier attempt to use the Actions run ID
+These six dashboard runs are on the integrated test code at `d99be38e9`; all
+exited 0. The pre-integration repeats were also green (742 pass per run). An earlier attempt to use the Actions run ID
 `38425957584` as a seed was rejected before test execution because it exceeds
 Bun's seed range; the valid seed `38425957` above was used instead.
 

@@ -1402,14 +1402,11 @@ test("two concurrent queued claims for the same apply: exactly one dispatches", 
 
 // --- heartbeat + lease renewal during a long apply ---
 
-async function settleAsyncUntil(predicate: () => boolean): Promise<void> {
-  for (let index = 0; index < 500 && !predicate(); index++) {
-    await Promise.resolve();
-    if (index % 20 === 19) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
-  }
-  expect(predicate()).toBe(true);
+// Advancing fake timers starts async renewal work; await its fixture callbacks.
+function deferredEvent(): { readonly promise: Promise<void>; readonly resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
 }
 
 function awaitExecutionAbort(control: RunExecutionControl | undefined): Promise<OpenTofuApplyResult> {
@@ -1507,13 +1504,17 @@ test("renewable ApplyRun reissues before expiry and stops after terminal result"
   let completeApply!: (value: OpenTofuApplyResult) => void;
   let applySignal: AbortSignal | undefined;
   const refreshes: unknown[] = [];
+  const refreshDelivered = deferredEvent();
   jest.useFakeTimers();
   jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
   try {
     const controller = controllerWith(store, {
       vault, now: () => Date.now(), runRenewalIntervalMs: 0,
       assertCredentialRefreshCapability: async () => {},
-      refreshCredentials: async (update) => { refreshes.push(update); },
+      refreshCredentials: async (update) => {
+        refreshes.push(update);
+        refreshDelivered.resolve();
+      },
       apply: async (_job, control) => {
         applySignal = control?.signal;
         resolveStarted();
@@ -1527,8 +1528,9 @@ test("renewable ApplyRun reissues before expiry and stops after terminal result"
     expect(issueCount()).toBe(1);
     jest.advanceTimersByTime(31_000);
     // Renewal includes a fresh Run/lease CAS and the full broker policy path;
-    // drain those asynchronous continuations without advancing the expiry clock.
-    await settleAsyncUntil(() => refreshes.length === 1);
+    // await delivery without advancing the expiry clock.
+    await refreshDelivered.promise;
+    expect(refreshes).toHaveLength(1);
     expect(issueCount()).toBe(2);
     expect(issuanceGenerationRefs()).toHaveLength(2);
     expect(issuanceGenerationRefs()[0]).toMatch(/^sha256:[0-9a-f]{64}$/u);
@@ -1598,15 +1600,25 @@ test("a renewal never replays the retained issuance identity of the initial mint
   const refreshes: unknown[] = [];
   let applySignal: AbortSignal | undefined;
   let abortedWith: unknown;
+  const refreshDelivered = deferredEvent();
+  const applyAborted = deferredEvent();
   jest.useFakeTimers();
   jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
   try {
     const controller = controllerWith(store, {
       vault, now: () => Date.now(), runRenewalIntervalMs: 0,
       assertCredentialRefreshCapability: async () => {},
-      refreshCredentials: async (update) => { refreshes.push(update); },
+      refreshCredentials: async (update) => {
+        refreshes.push(update);
+        refreshDelivered.resolve();
+      },
       apply: async (_job, control) => {
         applySignal = control?.signal;
+        if (applySignal?.aborted) {
+          applyAborted.resolve();
+        } else {
+          applySignal?.addEventListener("abort", applyAborted.resolve, { once: true });
+        }
         resolveStarted();
         try {
           return await awaitExecutionAbort(control);
@@ -1621,9 +1633,7 @@ test("a renewal never replays the retained issuance identity of the initial mint
     await started;
     expect(issueCount()).toBe(1);
     jest.advanceTimersByTime(31_000);
-    await settleAsyncUntil(
-      () => refreshes.length === 1 || (applySignal?.aborted ?? false),
-    );
+    await Promise.race([refreshDelivered.promise, applyAborted.promise]);
     // Delivery is the contract: a replayed issuance leaves the pinned
     // binding with too little lifetime, and the observed production failure
     // aborts the child with `renewed credential does not match the pinned
@@ -1634,6 +1644,7 @@ test("a renewal never replays the retained issuance identity of the initial mint
     expect(issuanceGenerationRefs()).toHaveLength(2);
     expect(issuanceGenerationRefs()[1]).not.toBe(issuanceGenerationRefs()[0]);
   } finally {
+    applySignal?.removeEventListener("abort", applyAborted.resolve);
     jest.useRealTimers();
   }
 });
@@ -2556,20 +2567,25 @@ test("expired credential aborts the child and never adopts a late mint", async (
   const store = new InMemoryOpenTofuControlStore();
   let secondMintStarted = false;
   let secondMintReturned = false;
+  const secondMintStartedEvent = deferredEvent();
+  const secondMintReturnedEvent = deferredEvent();
   let releaseSecondMint!: () => void;
   const secondMintHold = new Promise<void>((resolve) => { releaseSecondMint = resolve; });
   const { applyRunId, vault, issueCount } =
     await seedRenewableApplyFixture(store, "refresh_expiry_watchdog", async (count) => {
       if (count === 2) {
         secondMintStarted = true;
+        secondMintStartedEvent.resolve();
         await secondMintHold;
         secondMintReturned = true;
+        secondMintReturnedEvent.resolve();
       }
     });
   let resolveStarted!: () => void;
   const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
   const refreshes: unknown[] = [];
   let childAborted = false;
+  const childAbortedEvent = deferredEvent();
   jest.useFakeTimers();
   jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
   try {
@@ -2583,15 +2599,18 @@ test("expired credential aborts the child and never adopts a late mint", async (
           return await awaitExecutionAbort(control);
         } finally {
           childAborted = true;
+          childAbortedEvent.resolve();
         }
       },
     });
     const pending = controller.runQueuedApply(applyRunId);
     await started;
     jest.advanceTimersByTime(31_000);
-    await settleAsyncUntil(() => secondMintStarted);
+    await secondMintStartedEvent.promise;
+    expect(secondMintStarted).toBe(true);
     jest.advanceTimersByTime(90_000);
-    await settleAsyncUntil(() => childAborted);
+    await childAbortedEvent.promise;
+    expect(childAborted).toBe(true);
     // The teardown waits at most 100ms for an issuer that ignores cancellation.
     await new Promise<void>((resolve) => setImmediate(resolve));
     jest.advanceTimersByTime(100);
@@ -2601,7 +2620,8 @@ test("expired credential aborts the child and never adopts a late mint", async (
       "credential_service_unavailable",
     );
     releaseSecondMint();
-    await settleAsyncUntil(() => secondMintReturned);
+    await secondMintReturnedEvent.promise;
+    expect(secondMintReturned).toBe(true);
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(issueCount()).toBe(2);
     expect(refreshes).toEqual([]);
