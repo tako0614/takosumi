@@ -19,8 +19,8 @@ credential-dependent operations in your own test Workspace after updating.
 
 Accounts D1 and control D1 have separate schema owners. Review their plans, backup evidence,
 and application sequence before publishing. Use the
-[Control D1 schema predeploy](../../operations/control-d1-schema-predeploy.md) and
-[platform worker deploy](../../operations/platform-worker-deploy.md) runbooks.
+[Control D1 schema predeploy](https://github.com/tako0614/takosumi/blob/main/docs/operations/control-d1-schema-predeploy.md) and
+[platform worker deploy](https://github.com/tako0614/takosumi/blob/main/docs/operations/platform-worker-deploy.md) runbooks.
 Request-time schema bootstrap is not an upgrade procedure for an existing deployment.
 
 ## Failure handling

@@ -20,8 +20,8 @@ runner の protocol が一致することを確認します。更新後はサイ
 
 Accounts D1 と control D1 の schema は別の owner surface です。デプロイ前にそれぞれの
 plan、backup evidence、適用手順を確認します。control D1 は
-[Control D1 schema predeploy](../operations/control-d1-schema-predeploy.md)、Worker は
-[platform worker deploy](../operations/platform-worker-deploy.md)を参照してください。
+[Control D1 schema predeploy](https://github.com/tako0614/takosumi/blob/main/docs/operations/control-d1-schema-predeploy.md)、Worker は
+[platform worker deploy](https://github.com/tako0614/takosumi/blob/main/docs/operations/platform-worker-deploy.md)を参照してください。
 リクエストによる schema bootstrap を既存環境の更新手順として扱いません。
 
 ## 失敗した場合

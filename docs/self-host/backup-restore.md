@@ -12,8 +12,8 @@ runner や artifact store の専用 volume は含まれません。独自に run
 組み込んだ環境では、その実際の保存先も backup 対象に加えます。
 
 PostgreSQL の backup/restore は[配布構成の README](https://github.com/tako0614/takosumi/blob/main/deploy/node-postgres/README.md)
-を、Cloudflare の復旧は[災害復旧](../operations/disaster-recovery.md)と
-[backup/restore 演習](../operations/backup-restore-drills.md)を参照してください。
+を、Cloudflare の復旧は[災害復旧](https://github.com/tako0614/takosumi/blob/main/docs/operations/disaster-recovery.md)と
+[backup/restore 演習](https://github.com/tako0614/takosumi/blob/main/docs/operations/backup-restore-drills.md)を参照してください。
 秘密値や raw backup は公開 repo、PR、運用ログに保存しません。
 
 製品の Workspace export は DB 全体、artifact store、鍵の backup の代わりにはなりません。

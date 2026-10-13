@@ -12,8 +12,8 @@ neither an artifact-store volume nor a runner. If you compose a runner or artifa
 store yourself, include its actual durable paths in the backup.
 
 Use the [distribution README](https://github.com/tako0614/takosumi/blob/main/deploy/node-postgres/README.md)
-for PostgreSQL and the [disaster recovery](../../operations/disaster-recovery.md) and
-[backup drills](../../operations/backup-restore-drills.md) runbooks for Cloudflare.
+for PostgreSQL and the [disaster recovery](https://github.com/tako0614/takosumi/blob/main/docs/operations/disaster-recovery.md) and
+[backup drills](https://github.com/tako0614/takosumi/blob/main/docs/operations/backup-restore-drills.md) runbooks for Cloudflare.
 Keep secret values and raw backups outside public repositories, PRs, and logs.
 
 Workspace export does not replace whole-database, artifact-store, and key backups.
