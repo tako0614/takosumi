@@ -1384,6 +1384,14 @@ export async function createTakosumiService(
     controller: opentofuController,
     activity: activityService,
   });
+  // A cancelled uninstall must not leave the finalizer's unapproved teardown
+  // Plan behind as an approvable destroy for the Capsule that was kept.
+  capsulesService.setUninstallCancellationCleanup(async (planRunId) => {
+    const plan = await sharedOpenTofuStore.getPlanRun(planRunId);
+    if (plan?.status === "queued" || plan?.status === "waiting_approval") {
+      await opentofuController.cancelRun(planRunId);
+    }
+  });
   // Control-backups domain: exports a Workspace's Git/OpenTofu control ledger
   // as a sealed bundle. Form/Resource pin sidecars are retired.
   const backupsService = new BackupsService({

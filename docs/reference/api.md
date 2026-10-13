@@ -229,8 +229,10 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 期日を過ぎると control plane が一度だけ Capsule 単位の書き出しを試み、結果
 (`exported` / `failed` / `skipped`) を `uninstall.preDestroyExport` に記録してから、
 通常の破棄計画を作ります。計画が削除だけである場合に限り system が承認して適用し、
-そこから先は取り消せません。削除だけでない、または変更内容が分からない計画は
+そこから先は原則として取り消せません。削除だけでない、変更内容が分からない、
+所有者が計画を取り消した、または破棄が provider に届く前に拒否・失敗した場合は
 `uninstall.blockedReason` を残して止まり、所有者が取り消すか即時削除を選びます。
+provider に届いた破棄が失敗した場合は、通常の破棄失敗と同じく `error` になります。
 `DELETE` と `destroy-plan` は従来どおり猶予なしの破棄計画を作ります。
 
 新しい Capsule は `POST /api/v1/workspaces/{workspaceId}/install-plans` から

@@ -67,6 +67,12 @@ export interface CapsulePreDestroyExport {
   readonly status: "exported" | "failed" | "skipped";
   /** Backup record id when `exported`. */
   readonly backupId?: string;
+  /**
+   * Whether the export carried service data (app data pointers) in addition
+   * to the control ledger and state. `false` means the install declared no
+   * service-data backup, so only ledger and state were saved.
+   */
+  readonly includesServiceData?: boolean;
   /** Public-safe reason token when `failed` or `skipped`. */
   readonly reason?: string;
   readonly at: string;
@@ -79,8 +85,9 @@ export interface CapsulePreDestroyExport {
  *
  * - `scheduled`: in grace, or due and not yet past the point of no return.
  *   Cancelling is allowed.
- * - `destroying`: the finalizer approved the teardown Plan it created for this
- *   request. Cancelling is refused from here on.
+ * - `destroying`: the finalizer verified the teardown Plan it created and is
+ *   approving and applying it. Cancelling is refused unless the finalizer
+ *   blocked before any teardown was dispatched.
  * - `cancelled`: retained as evidence until the next uninstall replaces it.
  */
 export interface CapsuleUninstall {
@@ -95,6 +102,10 @@ export interface CapsuleUninstall {
   /** Teardown Plan created by the finalizer for the current attempt. */
   readonly destroyPlanRunId?: string;
   readonly destroyAttempts?: number;
+  /** When the current attempt's Plan id was recorded, before it was created. */
+  readonly destroyPlanRequestedAt?: string;
+  /** Unexpected finalizer errors so far; enough of them block the request. */
+  readonly finalizeFailures?: number;
   readonly destroyStartedAt?: string;
   /**
    * Set when the finalizer stopped continuing unattended (for example the

@@ -3526,9 +3526,10 @@ export interface OpenTofuControlStore {
   listCapsules(workspaceId?: string): Promise<readonly Capsule[]>;
   /**
    * Internal scheduler read for the two-stage uninstall finalizer: Capsules in
-   * `uninstalled` whose `uninstall.scheduledDestroyAt` is at or before `now`
-   * and whose request is not blocked, oldest due first, at most `limit` rows.
-   * A blocked request waits for its owner and must not starve later ones.
+   * `uninstalled` whose `uninstall.scheduledDestroyAt` is at or before `now`,
+   * whose request is not blocked, and whose Workspace accepts management work,
+   * oldest due first, at most `limit` rows. Neither a blocked request nor a
+   * draining Workspace may hold the head of the queue.
    */
   listDueCapsuleUninstalls(input: {
     readonly now: string;
@@ -5636,7 +5637,9 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
           row.status === "uninstalled" &&
           row.uninstall !== undefined &&
           row.uninstall.blockedReason === undefined &&
-          row.uninstall.scheduledDestroyAt <= input.now,
+          row.uninstall.scheduledDestroyAt <= input.now &&
+          this.#workspaceManagement.get(row.workspaceId)?.managementState ===
+            "active",
       )
       .sort(
         (a, b) =>

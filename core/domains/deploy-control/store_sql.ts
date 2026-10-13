@@ -6637,6 +6637,17 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           eq(pgSchema.capsules.status, "uninstalled"),
           sql`${scheduledDestroyAt} <= ${input.now}`,
           sql`${pgSchema.capsules.capsuleJson} -> 'uninstall' -> 'blockedReason' IS NULL`,
+          exists(
+            this.#db
+              .select({ one: sql`1` })
+              .from(pgSchema.workspaces)
+              .where(
+                and(
+                  eq(pgSchema.workspaces.id, pgSchema.capsules.workspaceId),
+                  eq(pgSchema.workspaces.managementState, "active"),
+                ),
+              ),
+          ),
         ),
         orderBy: [scheduledDestroyAt, asc(pgSchema.capsules.id)],
         limit: Math.max(0, input.limit),

@@ -253,5 +253,13 @@ test("the due read returns only unblocked uninstalled Capsules past their schedu
     expect(await ids("2026-10-22T00:00:00.000Z"), label).not.toContain(
       untouched.id,
     );
+
+    // A Workspace that is not accepting management work cannot hold the head
+    // of the queue; its request waits until the Workspace is active again.
+    await store.beginWorkspaceDraining(
+      early.workspaceId,
+      await authority(store, early.workspaceId),
+    );
+    expect(await ids("2026-10-22T00:00:00.000Z", 1), label).toEqual([late.id]);
   }
 });

@@ -39,10 +39,13 @@ import {
   uninstallGraceSettingFromEnv,
 } from "../../../../core/domains/capsules/uninstall.ts";
 import {
+  DESTROY_PLAN_CREATION_WINDOW_MS,
   finalizeDueCapsuleUninstalls,
+  MAX_UNINSTALL_FINALIZE_FAILURES,
   SCHEDULED_UNINSTALL_ACTOR,
   scheduledDestroyRunId,
 } from "../../../../core/domains/capsules/uninstall_finalize.ts";
+import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import {
   FIXTURE_CLOUDFLARE_PROVIDER,
   FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
@@ -587,4 +590,223 @@ test("the grace period comes from TAKOSUMI_UNINSTALL_GRACE_DAYS with a 7 day OSS
     store: new InMemoryOpenTofuControlStore(),
     uninstallGraceDays: 400,
   })).toThrow(RangeError);
+});
+
+test("restore and InstallConfig rebinding cannot leave the grace state", async () => {
+  const h = await appliedCapsule();
+  const backup = await h.backups.createBackup({
+    workspaceId: "ws_uninstall001",
+    capsuleId: h.capsuleId,
+    scope: "capsule",
+  });
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  const uninstalledReason = {
+    details: { reason: CAPSULE_UNINSTALL_REASONS.uninstalled },
+  };
+  await expect(
+    h.controller.createRestoreRun("ws_uninstall001", backup.id, {
+      capsuleId: h.capsuleId,
+      stateGeneration: 1,
+    }),
+  ).rejects.toMatchObject(uninstalledReason);
+  await expect(
+    h.capsules.rebindInstallConfig({
+      capsuleId: h.capsuleId,
+      targetInstallConfigId: "cfg_other",
+      actorSubject: "user_test",
+      reason: "change configuration",
+      requestDigest: `sha256:${"4".repeat(64)}`,
+      expected: {} as never,
+    }),
+  ).rejects.toMatchObject(uninstalledReason);
+  expect((await h.store.getCapsule(h.capsuleId))?.status).toBe("uninstalled");
+});
+
+test("an owner-cancelled teardown Plan stops the request instead of re-planning", async () => {
+  const h = await appliedCapsule();
+  // A non-delete Plan parks the request first, so the owner has a Plan to
+  // cancel; then the block is lifted to see what the finalizer does with it.
+  h.destroyPlanChanges = undefined;
+  const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await jumpToDue(h);
+  expect(await h.finalize()).toMatchObject({ destroyPlansCreated: 1, blocked: 1 });
+  const planRunId = scheduledDestroyRunId("plan", scheduled.uninstall!.id, 1);
+  await h.controller.cancelRun(planRunId);
+  expect((await h.store.getPlanRun(planRunId))?.status).toBe("cancelled");
+  // Simulate the same request without the earlier block (fresh tick state).
+  const parked = (await h.store.getCapsule(h.capsuleId))!;
+  await h.store.putCapsule({
+    ...parked,
+    uninstall: { ...parked.uninstall!, blockedReason: undefined },
+  });
+  expect(await h.finalize()).toMatchObject({ blocked: 1, destroyPlansCreated: 0 });
+  expect((await h.store.getCapsule(h.capsuleId))?.uninstall).toMatchObject({
+    destroyAttempts: 1,
+    blockedReason: "destroy_plan_cancelled",
+  });
+  expect(h.destroyJobs).toHaveLength(0);
+});
+
+test("a teardown whose epoch moved is never approved, and a refused Apply can still be cancelled", async () => {
+  const h = await appliedCapsule();
+  const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await jumpToDue(h);
+  let applyCalls = 0;
+  const refused = await h.finalize({
+    controller: {
+      createCapsuleDestroyPlan: (capsuleId, context, internal) =>
+        h.controller.createCapsuleDestroyPlan(capsuleId, context, internal),
+      approveRun: (id, input) => h.controller.approveRun(id, input),
+      createApplyRun: () => {
+        applyCalls += 1;
+        return Promise.reject(
+          new OpenTofuControllerError(
+            "failed_precondition",
+            "execution authority changed",
+            { reason: "capsule_execution_authority_changed" },
+          ),
+        );
+      },
+    },
+  });
+  expect(refused).toMatchObject({ blocked: 1, destroysStarted: 0, failures: 0 });
+  expect(applyCalls).toBe(1);
+  const blocked = (await h.store.getCapsule(h.capsuleId))!;
+  expect(blocked.status).toBe("uninstalled");
+  expect(blocked.uninstall).toMatchObject({
+    id: scheduled.uninstall!.id,
+    phase: "destroying",
+    blockedReason: "destroy_apply_refused",
+  });
+  expect(h.destroyJobs).toHaveLength(0);
+  // Nothing reached the provider, so the owner can still keep the service.
+  const kept = await h.capsules.cancelCapsuleUninstall(h.capsuleId);
+  expect(kept.status).toBe("active");
+  expect(kept.uninstall?.phase).toBe("cancelled");
+});
+
+test("a Plan made at an older execution epoch is blocked as unverifiable", async () => {
+  const h = await appliedCapsule();
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await jumpToDue(h);
+  const result = await h.finalize({
+    store: {
+      listDueCapsuleUninstalls: (input) => h.store.listDueCapsuleUninstalls(input),
+      getPlanRun: (id) => h.store.getPlanRun(id),
+      getApplyRun: (id) => h.store.getApplyRun(id),
+      // As if the InstallConfig was rebound after the Plan was made.
+      getCapsuleExecutionAuthorityEpoch: async () => 2,
+    },
+  });
+  expect(result).toMatchObject({ blocked: 1, destroysStarted: 0 });
+  expect((await h.store.getCapsule(h.capsuleId))?.uninstall?.blockedReason)
+    .toBe("destroy_plan_unverifiable");
+  expect(h.destroyJobs).toHaveLength(0);
+});
+
+test("repeated unexpected errors block one request instead of holding the queue", async () => {
+  const h = await appliedCapsule();
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await jumpToDue(h);
+  const failingBackups = {
+    enabled: true,
+    captureManagementAuthority: () =>
+      Promise.reject(new Error("backup index unavailable")),
+    createBackup: () => Promise.reject(new Error("unused")),
+  };
+  const errors: unknown[] = [];
+  for (let tick = 1; tick < MAX_UNINSTALL_FINALIZE_FAILURES; tick += 1) {
+    expect(
+      await h.finalize({
+        backups: failingBackups,
+        onError: (error) => errors.push(error),
+      }),
+    ).toMatchObject({ failures: 1, blocked: 0 });
+  }
+  expect((await h.store.getCapsule(h.capsuleId))?.uninstall).toMatchObject({
+    finalizeFailures: MAX_UNINSTALL_FINALIZE_FAILURES - 1,
+  });
+  expect(
+    await h.finalize({
+      backups: failingBackups,
+      onError: (error) => errors.push(error),
+    }),
+  ).toMatchObject({ failures: 1, blocked: 1 });
+  const capsule = (await h.store.getCapsule(h.capsuleId))!;
+  expect(capsule.status).toBe("uninstalled");
+  expect(capsule.uninstall).toMatchObject({
+    phase: "scheduled",
+    finalizeFailures: MAX_UNINSTALL_FINALIZE_FAILURES,
+    blockedReason: "finalize_failed",
+  });
+  expect(errors).toHaveLength(MAX_UNINSTALL_FINALIZE_FAILURES);
+  // Blocked requests leave the due queue; the owner can still cancel.
+  expect(await h.finalize()).toMatchObject({ scanned: 0 });
+  expect((await h.capsules.cancelCapsuleUninstall(h.capsuleId)).status).toBe(
+    "active",
+  );
+  expect(h.destroyJobs).toHaveLength(0);
+});
+
+test("a recorded Plan id is waited for before another attempt is made", async () => {
+  const h = await appliedCapsule();
+  const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await jumpToDue(h);
+  let creations = 0;
+  const slow = {
+    createCapsuleDestroyPlan: () => {
+      creations += 1;
+      return Promise.reject(new Error("lost acknowledgement"));
+    },
+    approveRun: (id: string, input: { approvedBy?: string; reason?: string }) =>
+      h.controller.approveRun(id, input),
+    createApplyRun: () => Promise.reject(new Error("unused")),
+  };
+  await h.finalize({ controller: slow, onError: () => undefined });
+  expect(creations).toBe(1);
+  // A concurrent or repeated tick inside the window does not mint attempt 2.
+  expect(await h.finalize({ controller: slow })).toMatchObject({ waiting: 1 });
+  expect(creations).toBe(1);
+  expect((await h.store.getCapsule(h.capsuleId))?.uninstall).toMatchObject({
+    destroyAttempts: 1,
+    destroyPlanRunId: scheduledDestroyRunId("plan", scheduled.uninstall!.id, 1),
+  });
+  h.clock.ms += DESTROY_PLAN_CREATION_WINDOW_MS + 1;
+  expect(await h.finalize()).toMatchObject({ destroysStarted: 1 });
+  expect((await h.store.getCapsule(h.capsuleId))?.uninstall?.destroyAttempts)
+    .toBe(2);
+});
+
+test("cancelling the uninstall cancels the finalizer's unapproved teardown Plan", async () => {
+  const h = await appliedCapsule();
+  h.destroyPlanChanges = [
+    {
+      address: "cloudflare_workers_script.app",
+      type: "cloudflare_workers_script",
+      actions: ["delete", "create"],
+    },
+  ];
+  h.capsules.setUninstallCancellationCleanup(async (planRunId) => {
+    const plan = await h.store.getPlanRun(planRunId);
+    if (plan?.status === "waiting_approval") {
+      await h.controller.cancelRun(planRunId);
+    }
+  });
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await jumpToDue(h);
+  expect(await h.finalize()).toMatchObject({ blocked: 1 });
+  const planRunId = (await h.store.getCapsule(h.capsuleId))!.uninstall!
+    .destroyPlanRunId!;
+  expect((await h.store.getPlanRun(planRunId))?.status).toBe("waiting_approval");
+  await h.capsules.cancelCapsuleUninstall(h.capsuleId);
+  expect((await h.store.getPlanRun(planRunId))?.status).toBe("cancelled");
+});
+
+test("an exported request says whether app data was part of the export", async () => {
+  const h = await appliedCapsule();
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId);
+  await jumpToDue(h);
+  await h.finalize();
+  expect((await h.store.getCapsule(h.capsuleId))?.uninstall?.preDestroyExport)
+    .toMatchObject({ status: "exported", includesServiceData: false });
 });

@@ -281,6 +281,7 @@ export class CapsulesService {
   readonly #projects: ProjectsService;
   readonly #uninstallGraceDays: number;
   #capsuleLifecycleAdmission?: CapsuleLifecycleAdmission;
+  #uninstallCancellationCleanup?: (planRunId: string) => Promise<void>;
 
   constructor(deps: CapsulesServiceDependencies) {
     this.#store = deps.store;
@@ -299,6 +300,17 @@ export class CapsulesService {
   /** Grace period, in whole days, applied to new uninstall requests. */
   get uninstallGraceDays(): number {
     return this.#uninstallGraceDays;
+  }
+
+  /**
+   * Late-binds the best-effort cleanup that cancels the finalizer's teardown
+   * Plan after an uninstall is cancelled, so it cannot linger as an approvable
+   * destroy Plan for a Capsule that was kept.
+   */
+  setUninstallCancellationCleanup(
+    cleanup: ((planRunId: string) => Promise<void>) | undefined,
+  ): void {
+    this.#uninstallCancellationCleanup = cleanup;
   }
 
   /** Late-binds the host-owned ordered lifecycle admission after composition. */
@@ -573,6 +585,18 @@ export class CapsulesService {
       );
     }
     const before = await this.#requireCapsule(request.capsuleId);
+    if (
+      before.status === "uninstalled" &&
+      before.installConfigId !== request.targetInstallConfigId
+    ) {
+      // A new execution authority during the grace period would leave the
+      // finalizer's teardown Plan pinned to a superseded epoch.
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${request.capsuleId} is uninstalled; cancel the uninstall first`,
+        { reason: CAPSULE_UNINSTALL_REASONS.uninstalled },
+      );
+    }
     const management = await this.#store.getWorkspaceManagement(before.workspaceId);
     if (request.expectedWorkspaceManagementAuthority !== undefined) {
       assertWorkspaceManagementAuthorityInput(
@@ -855,6 +879,17 @@ export class CapsulesService {
           { reason: CAPSULE_UNINSTALL_REASONS.notApplied },
         );
       }
+      const runtimeSafety = await this.#store.getCapsuleRuntimeSafety(id);
+      if (
+        runtimeSafety?.phase === "terminating" ||
+        runtimeSafety?.phase === "retired"
+      ) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `capsule ${id} is already being deleted`,
+          { reason: CAPSULE_UNINSTALL_REASONS.destroyStarted },
+        );
+      }
       const uninstall = scheduledUninstallRecord({
         id: this.#newId("uninstall"),
         previous: current.uninstall,
@@ -931,7 +966,20 @@ export class CapsulesService {
           { reason: CAPSULE_UNINSTALL_REASONS.notUninstalled },
         );
       }
-      if (record.phase !== "scheduled") {
+      // A teardown that is queued or running (including one the owner started
+      // with "delete now") cannot be undone by restoring the status. Once the
+      // finalizer is `destroying`, cancel is possible only if it blocked and
+      // nothing of the teardown reached the provider.
+      const runtimeSafety = await this.#store.getCapsuleRuntimeSafety(id);
+      const teardownInFlight = runtimeSafety?.phase === "terminating" ||
+        runtimeSafety?.phase === "retired";
+      const blockedBeforeDispatch = record.phase === "destroying" &&
+        record.blockedReason !== undefined &&
+        (runtimeSafety === undefined || runtimeSafety.phase === "safe");
+      if (
+        teardownInFlight ||
+        (record.phase !== "scheduled" && !blockedBeforeDispatch)
+      ) {
         throw new OpenTofuControllerError(
           "failed_precondition",
           `capsule ${id} teardown has already started and cannot be cancelled`,
@@ -962,6 +1010,14 @@ export class CapsulesService {
           uninstallId: record.id,
         },
       });
+      if (record.destroyPlanRunId && this.#uninstallCancellationCleanup) {
+        try {
+          await this.#uninstallCancellationCleanup(record.destroyPlanRunId);
+        } catch {
+          // The cancel already committed; an approved or finished Plan is not
+          // cancellable and stays an ordinary owner-approved destroy Plan.
+        }
+      }
       return updated;
     };
     const admission = this.#capsuleLifecycleAdmission;

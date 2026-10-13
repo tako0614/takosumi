@@ -1855,6 +1855,7 @@ export function capsuleAndInstallConfigSchemas(): Record<
               properties: {
                 status: { enum: ["exported", "failed", "skipped"] },
                 backupId: { type: "string" },
+                includesServiceData: { type: "boolean" },
                 reason: { type: "string" },
                 at: { type: "string" },
               },
@@ -1862,6 +1863,8 @@ export function capsuleAndInstallConfigSchemas(): Record<
             },
             destroyPlanRunId: { type: "string" },
             destroyAttempts: { type: "integer", minimum: 1 },
+            destroyPlanRequestedAt: { type: "string" },
+            finalizeFailures: { type: "integer", minimum: 1 },
             destroyStartedAt: { type: "string" },
             blockedReason: { type: "string" },
           },

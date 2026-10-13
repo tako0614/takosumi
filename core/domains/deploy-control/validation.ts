@@ -74,7 +74,7 @@ export function validatePlannedCapsuleCurrent(input: {
  */
 export function assertCapsuleAcceptsOperation(
   capsule: Capsule,
-  operation: PlanRun["operation"],
+  operation: PlanRun["operation"] | "restore",
 ): void {
   if (capsule.status === "uninstalled" && operation !== "destroy") {
     throw new OpenTofuControllerError(

@@ -605,6 +605,10 @@ export const ja = {
   "app.uninstall.bannerBlocked":
     "{name} の自動削除を止めました。安全に削除できることを確かめられなかったためです。取り消すか、設定から今すぐ削除してください。",
   "app.uninstall.exportExported": "削除の前にデータを書き出しました。",
+  "app.uninstall.exportExportedLedgerOnly":
+    "削除の前にサービスの設定と state を書き出しました。このアプリは自身のデータの書き出しを宣言していません。",
+  "app.uninstall.bannerFailed":
+    "{name} の削除が完了しませんでした。設定から今すぐ削除してやり直してください。",
   "app.uninstall.exportFailed":
     "削除前のデータの書き出しに失敗しました。削除はそのまま進みます。",
   "app.uninstall.exportSkipped":

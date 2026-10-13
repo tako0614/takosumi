@@ -202,6 +202,7 @@ import {
   APPLY_RUNTIME_SECRET_RETIREMENT_DEFERRED_EVENT,
   APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT,
   applyRunBillingCapturePending,
+  applyRunMutationDispatched,
   applyRunRuntimeSecretRetirementPending,
   capsuleApplyRunAdmissionFence,
   capsuleLifecycleExpected,
@@ -5215,6 +5216,9 @@ export class RunEngine {
         `Capsule ${capsuleId} not found`,
       );
     }
+    // A restore approved before the Capsule was uninstalled must not rewrite
+    // its state during the grace period; this runs before restore dispatch.
+    assertCapsuleAcceptsOperation(capsule, "restore");
     const environment =
       run.environment ?? backup.environment ?? capsule.environment;
     // Restore provenance is an exact StateVersion identity, never a
@@ -6685,6 +6689,7 @@ export class RunEngine {
         "capsule not found in this workspace",
       );
     }
+    assertCapsuleAcceptsOperation(capsule, "restore");
     const environment =
       request.environment ?? backup.environment ?? capsule.environment;
     const source = (
@@ -9872,8 +9877,9 @@ export class RunEngine {
       ? await this.#requireCurrentPlannedCapsule(planRun)
       : undefined;
     // An Apply queued before the Capsule was uninstalled must not provision
-    // into the grace state. This runs before dispatch only.
-    if (plannedCapsule) {
+    // into the grace state. A takeover of an attempt that already reached the
+    // provider is exempt: its outcome must still be recorded.
+    if (plannedCapsule && !applyRunMutationDispatched(applyRun)) {
       assertCapsuleAcceptsOperation(plannedCapsule, planRun.operation);
     }
     // State generation guard: reject when the target's state advanced past the

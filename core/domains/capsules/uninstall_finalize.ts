@@ -10,20 +10,22 @@
  * 1. Export once. The backups lane writes a Capsule-scoped export and the
  *    outcome (`exported` / `failed` / `skipped`) is recorded on the request. A
  *    failed or unavailable export does not stop the teardown.
- * 2. Plan. The request id is recorded first, then the destroy Plan is created
- *    with that exact id, so a crash between the two cannot start a second
- *    teardown for the same attempt. Failed Plans are retried a bounded number
- *    of times.
- * 3. Verify and commit. A completed Plan must be the Capsule's teardown and
- *    delete-only. The request then moves to `destroying`, after which the owner
- *    can no longer cancel.
+ * 2. Plan. The Plan id and request time are recorded first, then the destroy
+ *    Plan is created with that exact id. A Plan that is still missing after
+ *    {@link DESTROY_PLAN_CREATION_WINDOW_MS} counts as a failed attempt, so a
+ *    concurrent tick never mints a second teardown for one attempt.
+ * 3. Verify and commit. A completed Plan must be this Capsule's destroy at the
+ *    current execution epoch, policy-passed, with known delete-only changes.
+ *    The request then moves to `destroying`; from there the owner can cancel
+ *    only if the finalizer blocks before anything was dispatched.
  * 4. Approve and apply. The finalizer records an approval naming the request
  *    and creates the Apply with an exact id. Apply admission re-checks every
  *    ordinary precondition (state cursor, execution authority, policy).
  *
  * Anything the finalizer cannot continue unattended is recorded as
  * `blockedReason`; the Capsule stays `uninstalled` for the owner to cancel or
- * delete immediately.
+ * delete immediately. Repeated unexpected errors also end in `blockedReason`,
+ * so one request can never hold the head of the due queue forever.
  */
 
 import type {
@@ -56,6 +58,15 @@ export const SCHEDULED_UNINSTALL_ACTOR = "system:scheduled-uninstall";
 /** Destroy Plan attempts per uninstall request before it is left to the owner. */
 export const MAX_SCHEDULED_DESTROY_ATTEMPTS = 3;
 
+/** Unexpected finalizer errors per request before it is left to the owner. */
+export const MAX_UNINSTALL_FINALIZE_FAILURES = 6;
+
+/**
+ * How long a recorded teardown Plan id may stay without a Plan row before the
+ * attempt counts as failed. Covers a concurrent tick that is still creating it.
+ */
+export const DESTROY_PLAN_CREATION_WINDOW_MS = 15 * 60 * 1000;
+
 /** Capsules read per tick. Each one may take several bounded steps. */
 export const DEFAULT_UNINSTALL_FINALIZE_LIMIT = 10;
 
@@ -64,16 +75,32 @@ const MAX_STEPS_PER_CAPSULE = 6;
 /** Stable `blockedReason` tokens. */
 export const SCHEDULED_DESTROY_BLOCKED_REASONS = {
   planFailed: "destroy_plan_failed",
+  planCancelled: "destroy_plan_cancelled",
+  planRefused: "destroy_plan_refused",
   planNotDeleteOnly: "destroy_plan_not_delete_only",
   planUnverifiable: "destroy_plan_unverifiable",
   planMissing: "destroy_plan_missing",
+  applyRefused: "destroy_apply_refused",
   applyFailed: "destroy_apply_failed",
+  finalizeFailed: "finalize_failed",
 } as const;
+
+/**
+ * Refusals that clear on their own (a draining Workspace, a busy lifecycle
+ * lease) are retried on a later tick instead of blocking the request.
+ */
+const TRANSIENT_REFUSAL_REASONS: ReadonlySet<string> = new Set([
+  "workspace_management_admission_conflict",
+  "capsule_lifecycle_busy",
+]);
 
 export interface CapsuleUninstallFinalizerDependencies {
   readonly store: Pick<
     OpenTofuControlStore,
-    "listDueCapsuleUninstalls" | "getPlanRun" | "getApplyRun"
+    | "listDueCapsuleUninstalls"
+    | "getPlanRun"
+    | "getApplyRun"
+    | "getCapsuleExecutionAuthorityEpoch"
   >;
   readonly capsules: Pick<
     CapsulesService,
@@ -179,6 +206,9 @@ export async function finalizeDueCapsuleUninstalls(
     } catch (error) {
       totals.failures += 1;
       deps.onError?.(error, listed.id);
+      if (await recordFinalizeFailure(deps, listed.id, error)) {
+        totals.blocked += 1;
+      }
     }
   }
   return totals;
@@ -210,15 +240,38 @@ async function advanceOnce(
   const plan = uninstall.destroyPlanRunId === undefined
     ? undefined
     : await deps.store.getPlanRun(uninstall.destroyPlanRunId);
-  if (plan === undefined || planIsTerminalFailure(plan)) {
-    return await createTeardownPlan(deps, capsule, uninstall);
+  if (plan === undefined) {
+    if (
+      uninstall.destroyPlanRunId !== undefined &&
+      planCreationMayStillBeInFlight(uninstall, now)
+    ) {
+      return "waiting";
+    }
+    return await createTeardownPlan(deps, capsule, uninstall, now);
+  }
+  if (plan.status === "cancelled") {
+    // Someone stopped the teardown Plan on purpose; do not plan around them.
+    await block(
+      deps,
+      capsule,
+      uninstall,
+      SCHEDULED_DESTROY_BLOCKED_REASONS.planCancelled,
+    );
+    return "blocked";
+  }
+  if (plan.status === "failed" || plan.status === "expired") {
+    return await createTeardownPlan(deps, capsule, uninstall, now);
   }
   if (plan.status === "queued" || plan.status === "running") return "waiting";
   if (plan.appliedApplyRunId !== undefined) {
     // Someone applied the finalizer's Plan by hand; its commit decides.
     return "waiting";
   }
-  const verification = verifyTeardownPlan(plan, capsule);
+  const verification = verifyTeardownPlan(
+    plan,
+    capsule,
+    await deps.store.getCapsuleExecutionAuthorityEpoch(capsule.id),
+  );
   if (verification !== undefined) {
     await block(deps, capsule, uninstall, verification);
     return "blocked";
@@ -262,6 +315,7 @@ async function recordPreDestroyExport(
       evidence = {
         status: "exported",
         backupId: backup.id,
+        includesServiceData: (backup.serviceData?.exportedCount ?? 0) > 0,
         at: now().toISOString(),
       };
     } catch (error) {
@@ -288,6 +342,9 @@ async function recordPreDestroyExport(
       environment: capsule.environment,
       uninstallId: uninstall.id,
       ...(evidence.backupId ? { backupId: evidence.backupId } : {}),
+      ...(evidence.includesServiceData !== undefined
+        ? { includesServiceData: evidence.includesServiceData }
+        : {}),
       ...(evidence.reason ? { reason: evidence.reason } : {}),
     },
   });
@@ -297,6 +354,7 @@ async function createTeardownPlan(
   deps: CapsuleUninstallFinalizerDependencies,
   capsule: Capsule,
   uninstall: CapsuleUninstall,
+  now: () => Date,
 ): Promise<StepOutcome> {
   const attempt = (uninstall.destroyAttempts ?? 0) + 1;
   if (attempt > MAX_SCHEDULED_DESTROY_ATTEMPTS) {
@@ -304,23 +362,42 @@ async function createTeardownPlan(
       deps,
       capsule,
       uninstall,
-      SCHEDULED_DESTROY_BLOCKED_REASONS.planFailed,
+      uninstall.destroyPlanRunId !== undefined &&
+        (await deps.store.getPlanRun(uninstall.destroyPlanRunId)) === undefined
+        ? SCHEDULED_DESTROY_BLOCKED_REASONS.planMissing
+        : SCHEDULED_DESTROY_BLOCKED_REASONS.planFailed,
     );
     return "blocked";
   }
   const planRunId = scheduledDestroyRunId("plan", uninstall.id, attempt);
-  // Marker first: once this commits, a crashed or repeated tick can only
-  // re-use this exact Plan id for this attempt.
+  // Marker first: once this commits, other ticks wait for this exact Plan id
+  // instead of minting another teardown for the same request.
   const marked = await deps.capsules.advanceCapsuleUninstall(
     capsule.id,
     { uninstallId: uninstall.id, revision: uninstall.revision },
-    { destroyPlanRunId: planRunId, destroyAttempts: attempt },
+    {
+      destroyPlanRunId: planRunId,
+      destroyAttempts: attempt,
+      destroyPlanRequestedAt: now().toISOString(),
+    },
   );
-  const response = await deps.controller.createCapsuleDestroyPlan(
-    capsule.id,
-    { actor: SCHEDULED_UNINSTALL_ACTOR },
-    { planRunId },
-  );
+  let response: PlanRunResponse;
+  try {
+    response = await deps.controller.createCapsuleDestroyPlan(
+      capsule.id,
+      { actor: SCHEDULED_UNINSTALL_ACTOR },
+      { planRunId },
+    );
+  } catch (error) {
+    if (!isPermanentRefusal(error) || !marked.uninstall) throw error;
+    await block(
+      deps,
+      marked,
+      marked.uninstall,
+      SCHEDULED_DESTROY_BLOCKED_REASONS.planRefused,
+    );
+    return "blocked";
+  }
   if (response.planRun.id !== planRunId && marked.uninstall) {
     // Pre-v1 source-less teardown allocates its own id.
     await deps.capsules.advanceCapsuleUninstall(
@@ -369,27 +446,40 @@ async function startTeardown(
     return "waiting";
   }
   if (plan.appliedApplyRunId !== undefined) return "waiting";
-  if (plan.approval === undefined) {
-    await deps.controller.approveRun(plan.id, {
-      approvedBy: SCHEDULED_UNINSTALL_ACTOR,
-      reason: `scheduled uninstall ${uninstall.id}`,
-    });
-  }
-  const approved = await deps.store.getPlanRun(plan.id);
-  if (approved === undefined) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      `scheduled teardown plan ${plan.id} disappeared after approval`,
+  try {
+    if (plan.approval === undefined) {
+      await deps.controller.approveRun(plan.id, {
+        approvedBy: SCHEDULED_UNINSTALL_ACTOR,
+        reason: `scheduled uninstall ${uninstall.id}`,
+      });
+    }
+    const approved = await deps.store.getPlanRun(plan.id);
+    if (approved === undefined) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `scheduled teardown plan ${plan.id} disappeared after approval`,
+      );
+    }
+    await deps.controller.createApplyRun(
+      {
+        planRunId: approved.id,
+        expected: applyExpectedGuardFromPlanRun(approved),
+      },
+      { actor: SCHEDULED_UNINSTALL_ACTOR },
+      { applyRunId },
     );
+  } catch (error) {
+    // A refusal that will not clear by itself (for example the execution
+    // authority moved) must not be retried forever with cancel unavailable.
+    if (!isPermanentRefusal(error)) throw error;
+    await block(
+      deps,
+      capsule,
+      uninstall,
+      SCHEDULED_DESTROY_BLOCKED_REASONS.applyRefused,
+    );
+    return "blocked";
   }
-  await deps.controller.createApplyRun(
-    {
-      planRunId: approved.id,
-      expected: applyExpectedGuardFromPlanRun(approved),
-    },
-    { actor: SCHEDULED_UNINSTALL_ACTOR },
-    { applyRunId },
-  );
   await recordActivity(deps, {
     workspaceId: capsule.workspaceId,
     actorId: SCHEDULED_UNINSTALL_ACTOR,
@@ -401,7 +491,7 @@ async function startTeardown(
       name: capsule.name,
       environment: capsule.environment,
       uninstallId: uninstall.id,
-      planRunId: approved.id,
+      planRunId: plan.id,
       applyRunId,
       preDestroyExport: uninstall.preDestroyExport?.status ?? "skipped",
     },
@@ -411,12 +501,14 @@ async function startTeardown(
 
 /**
  * The finalizer approves only the teardown it would have asked the owner to
- * review: this Capsule's destroy Plan, policy-passed, with known changes that
- * are all deletions. Returns a blocked reason, or `undefined` when it passes.
+ * review: this Capsule's destroy Plan at its current execution epoch,
+ * policy-passed, with known changes that are all deletions. Returns a blocked
+ * reason, or `undefined` when it passes.
  */
 export function verifyTeardownPlan(
   plan: PlanRun,
   capsule: Capsule,
+  currentExecutionAuthorityEpoch: number | undefined,
 ): string | undefined {
   if (
     plan.operation !== "destroy" ||
@@ -425,7 +517,9 @@ export function verifyTeardownPlan(
     plan.driftCheck === true ||
     plan.policy.status !== "passed" ||
     (plan.capsuleCurrentStateVersionId ?? null) !==
-      (capsule.currentStateVersionId ?? null)
+      (capsule.currentStateVersionId ?? null) ||
+    (plan.capsuleExecutionAuthorityEpoch ?? 1) !==
+      currentExecutionAuthorityEpoch
   ) {
     return SCHEDULED_DESTROY_BLOCKED_REASONS.planUnverifiable;
   }
@@ -455,12 +549,13 @@ export function scheduledDestroyRunId(
   return `${kind}_${uninstallId.replace(/[^0-9a-zA-Z]/gu, "")}a${attempt}`;
 }
 
-function planIsTerminalFailure(plan: PlanRun): boolean {
-  return (
-    plan.status === "failed" ||
-    plan.status === "cancelled" ||
-    plan.status === "expired"
-  );
+function planCreationMayStillBeInFlight(
+  uninstall: CapsuleUninstall,
+  now: () => Date,
+): boolean {
+  const requestedAt = Date.parse(uninstall.destroyPlanRequestedAt ?? "");
+  return Number.isFinite(requestedAt) &&
+    now().getTime() - requestedAt < DESTROY_PLAN_CREATION_WINDOW_MS;
 }
 
 function applyIsTerminalFailure(apply: ApplyRun): boolean {
@@ -469,6 +564,72 @@ function applyIsTerminalFailure(apply: ApplyRun): boolean {
     apply.status === "cancelled" ||
     apply.status === "expired"
   );
+}
+
+/** A typed refusal of this exact request that a later tick cannot change. */
+function isPermanentRefusal(error: unknown): boolean {
+  if (!(error instanceof OpenTofuControllerError)) return false;
+  if (
+    error.code !== "failed_precondition" &&
+    error.code !== "invalid_argument" &&
+    error.code !== "not_found"
+  ) {
+    return false;
+  }
+  const reason = errorReason(error);
+  return reason === undefined || !TRANSIENT_REFUSAL_REASONS.has(reason);
+}
+
+/**
+ * Counts an unexpected error against the request and blocks it once the
+ * budget is spent. Returns whether this call blocked it. Never throws: the
+ * request may have moved on, or its Workspace may not accept writes now.
+ */
+async function recordFinalizeFailure(
+  deps: CapsuleUninstallFinalizerDependencies,
+  capsuleId: string,
+  error: unknown,
+): Promise<boolean> {
+  if (
+    error instanceof OpenTofuControllerError &&
+    TRANSIENT_REFUSAL_REASONS.has(errorReason(error) ?? "")
+  ) {
+    return false;
+  }
+  try {
+    const capsule = await deps.capsules.getCapsule(capsuleId);
+    const uninstall = capsule.uninstall;
+    if (
+      capsule.status !== "uninstalled" ||
+      uninstall === undefined ||
+      uninstall.phase === "cancelled" ||
+      uninstall.blockedReason !== undefined
+    ) {
+      return false;
+    }
+    const failures = (uninstall.finalizeFailures ?? 0) + 1;
+    const exhausted = failures >= MAX_UNINSTALL_FINALIZE_FAILURES;
+    await deps.capsules.advanceCapsuleUninstall(
+      capsule.id,
+      { uninstallId: uninstall.id, revision: uninstall.revision },
+      {
+        finalizeFailures: failures,
+        ...(exhausted
+          ? { blockedReason: SCHEDULED_DESTROY_BLOCKED_REASONS.finalizeFailed }
+          : {}),
+      },
+    );
+    if (exhausted) {
+      await recordActivity(deps, blockedActivity(
+        capsule,
+        uninstall,
+        SCHEDULED_DESTROY_BLOCKED_REASONS.finalizeFailed,
+      ));
+    }
+    return exhausted;
+  } catch {
+    return false;
+  }
 }
 
 async function block(
@@ -482,7 +643,15 @@ async function block(
     { uninstallId: uninstall.id, revision: uninstall.revision },
     { blockedReason: reason },
   );
-  await recordActivity(deps, {
+  await recordActivity(deps, blockedActivity(capsule, uninstall, reason));
+}
+
+function blockedActivity(
+  capsule: Capsule,
+  uninstall: CapsuleUninstall,
+  reason: string,
+): Parameters<ActivityRecorder["record"]>[0] {
+  return {
     workspaceId: capsule.workspaceId,
     actorId: SCHEDULED_UNINSTALL_ACTOR,
     action: "capsule.uninstall_blocked",
@@ -497,16 +666,21 @@ async function block(
         ? { planRunId: uninstall.destroyPlanRunId }
         : {}),
     },
-  });
+  };
+}
+
+function errorReason(error: OpenTofuControllerError): string | undefined {
+  const details = error.details;
+  const reason = typeof details === "object" && details !== null
+    ? (details as { readonly reason?: unknown }).reason
+    : undefined;
+  return typeof reason === "string" ? reason : undefined;
 }
 
 function exportFailureReason(error: unknown): string {
   if (error instanceof OpenTofuControllerError) {
-    const details = error.details;
-    const reason = typeof details === "object" && details !== null
-      ? (details as { readonly reason?: unknown }).reason
-      : undefined;
-    if (typeof reason === "string" && /^[a-z0-9_]{1,64}$/u.test(reason)) {
+    const reason = errorReason(error);
+    if (reason !== undefined && /^[a-z0-9_]{1,64}$/u.test(reason)) {
       return reason;
     }
     return `backup_${error.code}`;

@@ -544,9 +544,24 @@ function Inner() {
     clearCapsuleCaches();
     await refetchCapsule();
   });
+  /** Mirrors the server rule: before teardown, or blocked before dispatch. */
+  const uninstallCancellable = (inst: Capsule): boolean =>
+    inst.status === "uninstalled" &&
+    (inst.uninstall?.phase === "scheduled" ||
+      (inst.uninstall?.phase === "destroying" &&
+        inst.uninstall.blockedReason !== undefined));
+  const uninstallTeardownRunning = (inst: Capsule): boolean =>
+    inst.uninstall?.phase === "destroying" &&
+    inst.uninstall.blockedReason === undefined;
+  /** A scheduled teardown whose provider destroy failed ends in `error`. */
+  const uninstallTeardownFailed = (inst: Capsule): boolean =>
+    inst.status === "error" && inst.uninstall?.phase === "destroying";
   const uninstallBanner = (inst: Capsule): string => {
     const uninstall = inst.uninstall;
     const name = serviceLabel();
+    if (uninstallTeardownFailed(inst)) {
+      return t("app.uninstall.bannerFailed", { name });
+    }
     if (!uninstall) return t("app.uninstall.bannerDue", { name });
     if (uninstall.blockedReason) {
       return t("app.uninstall.bannerBlocked", { name });
@@ -564,7 +579,9 @@ function Inner() {
   const uninstallExportNote = (inst: Capsule): string | undefined => {
     switch (inst.uninstall?.preDestroyExport?.status) {
       case "exported":
-        return t("app.uninstall.exportExported");
+        return inst.uninstall.preDestroyExport.includesServiceData === false
+          ? t("app.uninstall.exportExportedLedgerOnly")
+          : t("app.uninstall.exportExported");
       case "failed":
         return t("app.uninstall.exportFailed");
       case "skipped":
@@ -740,14 +757,20 @@ function Inner() {
 
               {/* Two-stage uninstall grace period: the service and its data
                   are still here; say when they go and offer the way back. */}
-              <Show when={inst().id === capsuleId() && inst().status === "uninstalled"}>
+              <Show
+                when={
+                  inst().id === capsuleId() &&
+                  (inst().status === "uninstalled" ||
+                    uninstallTeardownFailed(inst()))
+                }
+              >
                 <div class="av-setup-incomplete" role="status">
                   <p class="av-setup-incomplete-text">{uninstallBanner(inst())}</p>
                   <Show when={uninstallExportNote(inst())}>
                     {(note) => <p class="muted">{note()}</p>}
                   </Show>
                   <div class="av-actions">
-                    <Show when={inst().uninstall?.phase === "scheduled"}>
+                    <Show when={uninstallCancellable(inst())}>
                       <Button
                         variant="primary"
                         size="sm"
@@ -759,7 +782,7 @@ function Inner() {
                         {t("app.uninstall.cancel")}
                       </Button>
                     </Show>
-                    <Show when={inst().uninstall?.phase !== "destroying"}>
+                    <Show when={!uninstallTeardownRunning(inst()) || uninstallTeardownFailed(inst())}>
                       <Button
                         variant="secondary"
                         size="sm"

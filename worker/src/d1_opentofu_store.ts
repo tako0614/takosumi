@@ -6784,6 +6784,17 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
             eq(schema.capsules.status, "uninstalled"),
             sql`${scheduledDestroyAt} <= ${input.now}`,
             sql`json_extract(${schema.capsules.recordJson}, '$.uninstall.blockedReason') IS NULL`,
+            exists(
+              this.#orm
+                .select({ one: sql`1` })
+                .from(schema.workspaces)
+                .where(
+                  and(
+                    eq(schema.workspaces.id, schema.capsules.workspaceId),
+                    eq(schema.workspaces.managementState, "active"),
+                  ),
+                ),
+            ),
           ),
           orderBy: [scheduledDestroyAt, asc(schema.capsules.id)],
           limit: Math.max(0, input.limit),

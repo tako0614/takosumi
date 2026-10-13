@@ -200,27 +200,39 @@ A two-stage uninstall moves an applied `active`, `stale`, or `error` Capsule to
 7). Nothing is torn down during the grace period; provider resources, data, and
 metering continue. Accounts live-grant validation treats `uninstalled` as not
 runtime-ready, so sign-in through a Takosumi OIDC client pauses without
-revoking the client and resumes after a cancel. While `uninstalled`, Plan creation, drift checks, and Apply
-admission or pre-dispatch refuse every operation except `destroy`
-(`capsule_uninstalled`); commit paths after provider execution are unchanged so
-whatever the provider did is still recorded. The owner may cancel back to the
-recorded previous status until the request reaches `destroying`. A bare status
-write can neither enter nor leave `uninstalled`.
+revoking the client and resumes after a cancel. While `uninstalled`, Plan
+creation, drift checks, Apply admission and pre-dispatch, Restore admission and
+pre-dispatch, configuration planning, and InstallConfig rebinding refuse every
+operation except `destroy` (`capsule_uninstalled`), and a Workspace update
+leaves uninstalled consumers out of its group. A takeover of an Apply attempt
+that already reached the provider is exempt, and commit paths after provider
+execution are unchanged, so whatever the provider did is still recorded. A
+bare status write can neither enter nor leave `uninstalled`. Scheduling is
+refused while a destroy Apply is queued or running. The owner may cancel back
+to the recorded previous status while the request is `scheduled`, or while it
+is `destroying` but blocked with no destroy reaching the provider; a cancel
+also cancels the finalizer's still-unapproved teardown Plan.
 
 The scheduled finalizer is the only automatic destroy approval. It reads due,
-unblocked requests and advances each through revision-fenced steps on the
-Capsule row: one Capsule-scoped export through the backups lane whose outcome
+unblocked requests in Workspaces that accept management work and advances each
+through revision-fenced steps on the Capsule row: one Capsule-scoped export through the backups lane whose outcome
 (`exported`, `failed`, or `skipped`) is recorded and never blocks teardown; a
-destroy Plan created with an exact id derived from the request and attempt; and
-verification that the completed Plan is this Capsule's policy-passed destroy
-with known, delete-only changes. Only then does it move the request to
+destroy Plan created with an exact id derived from the request and attempt,
+recorded before creation and waited for before another attempt; and
+verification that the completed Plan is this Capsule's policy-passed destroy at
+the current execution epoch with known, delete-only changes. Only then does it move the request to
 `destroying` (after which cancel is refused), record an approval naming the
 request, and create the Apply with an exact id. Apply admission revalidates the
 state cursor, execution epoch, Workspace management, and policy as for any
-Apply. An unverifiable or non-delete Plan, repeated Plan failure, or a failed
-Apply records `blockedReason` and leaves the Capsule `uninstalled` for the
-owner. The ordinary automatic Apply continuation still never applies a destroy
-Plan, and `DELETE` / `destroy-plan` remain the immediate, owner-approved path.
+Apply. An unverifiable or non-delete Plan, a Plan the owner cancelled, repeated
+Plan failure, a permanent refusal of Plan creation, approval, or Apply
+admission, an Apply that ended before the provider, or a spent budget of
+unexpected errors records `blockedReason` and leaves the Capsule `uninstalled`
+for the owner. A teardown Apply that fails after provider dispatch follows the
+ordinary failed-destroy semantics (status `error`); the request keeps
+`destroying` as evidence. The ordinary automatic Apply continuation still never
+applies a destroy Plan, and `DELETE` / `destroy-plan` remain the immediate,
+owner-approved path.
 
 A stateful Capsule Destroy Plan pins the current StateVersion's exact applied
 PlanRun provenance: its SourceSnapshot, module source coordinate (including

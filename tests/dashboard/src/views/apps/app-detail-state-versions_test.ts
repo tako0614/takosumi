@@ -205,7 +205,11 @@ describe("Capsule detail StateVersion surface", () => {
     // The grace banner offers cancel only while it is still possible, and
     // sends "delete now" to the same single immediate-delete flow.
     expect(source).toContain('inst().status === "uninstalled"');
-    expect(source).toContain('<Show when={inst().uninstall?.phase === "scheduled"}>');
+    expect(source).toContain("<Show when={uninstallCancellable(inst())}>");
+    // Cancel mirrors the server: before teardown, or blocked before dispatch.
+    expect(source).toMatch(
+      /const uninstallCancellable = \(inst: Capsule\): boolean =>\s*inst\.status === "uninstalled" &&\s*\(inst\.uninstall\?\.phase === "scheduled" \|\|\s*\(inst\.uninstall\?\.phase === "destroying" &&\s*inst\.uninstall\.blockedReason !== undefined\)\);/,
+    );
     expect(source).toContain(
       "href={`/workloads/${encodeURIComponent(capsuleId())}/settings#delete`}",
     );

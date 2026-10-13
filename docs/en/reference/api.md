@@ -232,8 +232,12 @@ its previous status. Once due, the control plane attempts one Capsule-scoped
 export, records the outcome (`exported`, `failed`, or `skipped`) in
 `uninstall.preDestroyExport`, and then creates an ordinary destroy plan. Only a
 plan whose known changes are all deletions is approved by the system and
-applied; from then on the uninstall cannot be cancelled. Any other plan stops
-with `uninstall.blockedReason` for the owner to cancel or delete immediately.
+applied; from then on the uninstall normally cannot be cancelled. A plan that
+is not delete-only or not verifiable, a plan the owner cancelled, or a teardown
+refused or failed before reaching the provider stops with
+`uninstall.blockedReason` for the owner to cancel or delete immediately. A
+teardown that fails after reaching the provider ends in `error`, like any
+failed destroy.
 `DELETE` and `destroy-plan` still create an immediate destroy plan.
 
 Create a Capsule through the Git install-plan coordinator. It pins the exact

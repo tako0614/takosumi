@@ -601,6 +601,10 @@ export const en: Record<keyof typeof ja, string> = {
   "app.uninstall.bannerBlocked":
     "Automatic deletion of {name} stopped because the deletion could not be confirmed as safe. Cancel it, or delete the service now from Settings.",
   "app.uninstall.exportExported": "The data was exported before deletion.",
+  "app.uninstall.exportExportedLedgerOnly":
+    "The service settings and state were exported before deletion. This app does not declare an export of its own data.",
+  "app.uninstall.bannerFailed":
+    "Deleting {name} did not finish. Delete it now from Settings to try again.",
   "app.uninstall.exportFailed":
     "Exporting the data before deletion failed. Deletion continues.",
   "app.uninstall.exportSkipped":
