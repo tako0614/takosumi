@@ -1044,6 +1044,7 @@ function platformDiscoveryOptions(
       ...new Set([
         ...extensionDiscovery.extensions,
         ...(operatorControlMcp ? ["mcp.operator-control.v1"] : []),
+        ...(storeEndpoint ? ["takosumi.tcs-store.v1"] : []),
       ]),
     ],
     endpoints: Object.fromEntries(

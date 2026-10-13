@@ -63,6 +63,8 @@ export const en: Record<keyof typeof ja, string> = {
     "Nothing was deployed. We couldn't confirm the repository was registered. Choose Add again to check this same attempt; it won't register the repository twice.",
   "installStore.sourceBaselineUnavailable":
     "Nothing was deployed. The repository list was temporarily unavailable, so registration didn't start. Wait a moment, then choose Add again.",
+  "installStore.sourceAutoSyncFailed":
+    "Automatic source updates could not be enabled. Retry to enable them for this service.",
   "installStore.providerTitle": "A compatible Host / account is needed",
   "installStore.destinationTitle": "Choose a Host / account",
   "installStore.destinationHint":

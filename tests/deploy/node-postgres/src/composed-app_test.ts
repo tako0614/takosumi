@@ -920,7 +920,17 @@ test("composed app publishes the runtime store endpoint without URL secrets", as
     const { app } = await buildTestApp({ runtimeEnv: { TAKOSUMI_TCS_STORE_URL: configured } });
     const response = await app.fetch(new Request("http://localhost/.well-known/takosumi"));
     assert.equal(response.status, 200);
-    assert.equal((await response.json()).endpoints.extensions?.["takosumi.tcs-store.v1"], expected);
+    const discovery = await response.json();
+    assert.equal(discovery.endpoints.extensions?.["takosumi.tcs-store.v1"], expected);
+    const capabilitiesResponse = await app.fetch(
+      new Request("http://localhost/api/v1/capabilities"),
+    );
+    assert.equal(capabilitiesResponse.status, 200);
+    const capabilities = await capabilitiesResponse.json();
+    assert.equal(
+      capabilities.extensions.includes("takosumi.tcs-store.v1"),
+      Boolean(expected),
+    );
   }
 });
 

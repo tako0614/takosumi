@@ -14,12 +14,12 @@ describe("single-screen install surface", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     const planResponse = view.indexOf("const response = await createReviewableGitInstallPlan(");
     const enableSourcePolling = view.indexOf(
-      "await patchSource(pendingAutoSyncSource.sourceId, { autoSync: true });",
+      "await enableInstallSourceAutoSync(workspace);",
     );
     expect(planResponse).toBeGreaterThanOrEqual(0);
     expect(enableSourcePolling).toBeGreaterThan(planResponse);
     expect(view).toContain("autoSyncSourceForInstall = undefined");
-    expect(view).toContain("pendingAutoSyncSource.workspaceId === workspace");
+    expect(view).toContain("pendingAutoSyncSource.workspaceId !== workspace");
     expect(view).toContain("pendingAutoSyncSource.sourceId === sourceId()");
     expect(view).toContain("resetPreparedSource = (options?: {");
   });

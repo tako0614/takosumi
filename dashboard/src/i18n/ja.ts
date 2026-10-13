@@ -68,6 +68,8 @@ export const ja = {
     "デプロイは開始されていません。リポジトリの登録結果を確認できませんでした。「追加」をもう一度押すと同じ試行を確認します（リポジトリが重複して登録されることはありません）。",
   "installStore.sourceBaselineUnavailable":
     "デプロイは開始されていません。一時的にリポジトリの一覧を確認できなかったため、登録を開始しませんでした。少し待ってから「追加」を再実行してください。",
+  "installStore.sourceAutoSyncFailed":
+    "ソースの自動更新を有効にできませんでした。再試行すると、このサービスの自動更新を有効にします。",
   "installStore.providerTitle": "互換性のあるホスト / アカウントが必要です",
   "installStore.destinationTitle": "ホスト / アカウントを選択",
   "installStore.destinationHint":
