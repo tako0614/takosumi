@@ -7,8 +7,14 @@ const solid = await import(
   resolve(import.meta.dir, "../../../../dashboard/node_modules/solid-js/dist/solid.js")
 );
 mock.module("solid-js", () => solid);
+// A previous test may have imported this module with Solid's inert server
+// build already cached. Keep this evaluation on the browser mock in Bun 1.4.0.
+const resourceReadPath = resolve(
+  import.meta.dir,
+  "../../../../dashboard/src/lib/resource-read.ts",
+);
 const { createLastGoodValue } = await import(
-  "../../../../dashboard/src/lib/resource-read.ts"
+  `${resourceReadPath}?reactive-test`
 );
 
 type Run = { readonly id: string; readonly status: string };
