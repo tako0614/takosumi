@@ -110,6 +110,95 @@ test("a dispatch without a host deadline sends no deadline header", async () => 
   expect(headers).toEqual([null, null, null]);
 });
 
+test("slot-bearing Cloud runs probe and rotate the exact owner through the Runner object", async () => {
+  const calls: string[] = [];
+  const env = {
+    RUNNER: {
+      idFromName: (name: string) => name,
+      get: (name: string) => ({
+        fetch: async (request: Request) => {
+          calls.push(`${name} ${request.method} ${new URL(request.url).pathname}${new URL(request.url).search}`);
+          if (request.method === "GET") return Response.json({
+            owner: { kind: "apply", id: "apply_deadline" },
+            runnerRunId: "apply_deadline",
+            capabilities: ["takosumi.runner-private-run-files-refresh@v1"],
+          });
+          return Response.json({ ok: true, status: "updated", sequence: 1 });
+        },
+      }),
+    },
+  } as unknown as CloudflareWorkerEnv;
+  const runner = new CloudflareContainerOpenTofuRunner(env);
+  await runner.assertPrivateRunFileRefreshCapability!({
+    owner: { kind: "apply", id: "apply_deadline" },
+    runnerRunId: "apply_deadline",
+  });
+  await runner.refreshPrivateRunFiles!({
+    kind: "takosumi.private-run-files.refresh@v1",
+    owner: { kind: "apply", id: "apply_deadline" },
+    runnerRunId: "apply_deadline",
+    manifestDigest: `sha256:${"a".repeat(64)}`,
+    sequence: 1,
+    files: [{ slot: "state", endpoint: "https://private.example.test", grant: "artificial-grant" }],
+  });
+  expect(calls).toEqual([
+    "apply_deadline GET /capabilities?ownerKind=apply&ownerId=apply_deadline&runnerRunId=apply_deadline",
+    "apply_deadline PUT /runs/apply_deadline/private-run-files",
+  ]);
+});
+
+test("only slot-bearing Apply and Destroy dispatch under the execution ID", async () => {
+  const calls: string[] = [];
+  const env = {
+    RUNNER: {
+      idFromName: (name: string) => name,
+      get: (name: string) => ({
+        fetch: async (request: Request) => {
+          calls.push(`${name} ${new URL(request.url).pathname}`);
+          return Response.json(PERSISTED_PROVIDER_FAILURE, { status: 500 });
+        },
+      }),
+    },
+  } as unknown as CloudflareWorkerEnv;
+  const runner = new CloudflareContainerOpenTofuRunner(env);
+  const legacy = mutationJob();
+  const privateFiles = {
+    ...legacy,
+    privateRunFiles: [{
+      slot: "checkpoint",
+      endpoint: "https://private.example.test/internal/private-run-files/v1",
+      grant: "artificial-grant",
+    }],
+  };
+  await runner.apply(legacy);
+  await runner.destroy(legacy);
+  await runner.apply(privateFiles);
+  await runner.destroy(privateFiles);
+  expect(calls).toEqual([
+    "apply_deadline /runs/plan_deadline",
+    "apply_deadline /runs/plan_deadline",
+    "apply_deadline /runs/apply_deadline",
+    "apply_deadline /runs/apply_deadline",
+  ]);
+});
+
+test("Cloud adapter refuses a private file refresh ACK for the wrong sequence", async () => {
+  const runner = new CloudflareContainerOpenTofuRunner({
+    RUNNER: {
+      idFromName: (name: string) => name,
+      get: () => ({ fetch: async () => Response.json({ ok: true, status: "updated", sequence: 0 }) }),
+    },
+  } as unknown as CloudflareWorkerEnv);
+  await expect(runner.refreshPrivateRunFiles({
+    kind: "takosumi.private-run-files.refresh@v1",
+    owner: { kind: "plan", id: "plan_ack" },
+    runnerRunId: "plan_ack",
+    manifestDigest: `sha256:${"a".repeat(64)}`,
+    sequence: 1,
+    files: [{ slot: "checkpoint", endpoint: "https://private.example.test", grant: "artificial-grant" }],
+  })).rejects.toThrow("rejected");
+});
+
 test("the runner object accepts only a strict epoch-millisecond deadline", () => {
   expect(parseRunDeadlineAt("1791707459920")).toBe(1_791_707_459_920);
   for (const invalid of [null, "", "0", "-1", "1.5", "1e12", "soon"]) {

@@ -25,6 +25,7 @@ import {
 } from "@takosjp/takosumi-accounts-service";
 import {
   createTakosumiService,
+  hasConfiguredOpenTofuRunner,
   type CreatedTakosumiService,
 } from "../../../core/bootstrap.ts";
 import {
@@ -430,17 +431,28 @@ export async function buildComposedApp(
   // Product discovery is used by the takosumi OpenTofu provider, CLIs, and
   // mobile clients. Keep it on the outer composed app so the account-plane OIDC
   // `/.well-known/*` fallback and `/v1/*` identity surface cannot shadow it.
+  const opentofuRunnerConfigured = hasConfiguredOpenTofuRunner(input);
   app.get(TAKOSUMI_WELL_KNOWN_PATH, (c) =>
     c.json(
       createTakosumiWellKnownDocument(
-        productDiscoveryOptions(c.req.raw, input.productDiscovery, runtimeEnv),
+        productDiscoveryOptions(
+          c.req.raw,
+          input.productDiscovery,
+          opentofuRunnerConfigured,
+          runtimeEnv,
+        ),
       ),
     ),
   );
   app.get(TAKOSUMI_PRODUCT_CAPABILITIES_PATH, (c) =>
     c.json(
       createTakosumiProductCapabilities(
-        productDiscoveryOptions(c.req.raw, input.productDiscovery, runtimeEnv),
+        productDiscoveryOptions(
+          c.req.raw,
+          input.productDiscovery,
+          opentofuRunnerConfigured,
+          runtimeEnv,
+        ),
       ),
     ),
   );
@@ -584,6 +596,7 @@ function interfaceRequestAccess(request: Request): "read" | "write" {
 function productDiscoveryOptions(
   req: Request,
   overrides: Partial<CreateTakosumiDiscoveryOptions> | undefined,
+  opentofuRunnerConfigured: boolean,
   runtimeEnv: Readonly<Record<string, string | undefined>>,
 ): CreateTakosumiDiscoveryOptions {
   const storeEndpoint = normalizePublicStoreEndpoint(runtimeEnv.TAKOSUMI_TCS_STORE_URL);
@@ -592,6 +605,11 @@ function productDiscoveryOptions(
     endpoints: {
       ...overrides?.endpoints,
       ...(storeEndpoint ? { "takosumi.tcs-store.v1": storeEndpoint } : {}),
+    },
+    adapters: {
+      // TODO: Also check Core's stacks-mounted condition for this discovery route.
+      opentofu: opentofuRunnerConfigured,
+      ...(overrides?.adapters ?? {}),
     },
     interfacesEnabled: overrides?.interfacesEnabled ?? true,
     origin: publicOriginFromRequest(req),
