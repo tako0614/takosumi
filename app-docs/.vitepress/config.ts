@@ -184,7 +184,8 @@ const config: UserConfig = {
     ];
   },
   cleanUrls: true,
-  lastUpdated: true,
+  // Published hosted docs depend on pinned source bytes, not available Git history.
+  lastUpdated: false,
   vite: {
     build: {
       target: "esnext",

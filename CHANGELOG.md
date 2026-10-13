@@ -8,6 +8,9 @@ package for the v1 GA line.
 
 ## Unreleased
 
+- Platform releases include the hosted docs under `/docs/` after rebuilding the
+  dashboard, so the docs route serves the documentation instead of the SPA's
+  page-not-found screen.
 - Bun + PostgreSQL self-host: the next `docker compose up -d` starts the
   `migrations` service, which now applies pending **existing control-plane
   migrations** before Accounts migrations and before Compose starts `accounts`.

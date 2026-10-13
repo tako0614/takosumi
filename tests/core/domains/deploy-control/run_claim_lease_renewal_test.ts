@@ -1020,8 +1020,13 @@ test("a consumer claim that wins forces a concurrent cancel to be rejected (neve
   const applyHolds = new Promise<void>((resolve) => {
     releaseApply = resolve;
   });
+  let resolveApplyStarted!: () => void;
+  const applyStarted = new Promise<void>((resolve) => {
+    resolveApplyStarted = resolve;
+  });
   const controller = controllerWith(store, {
     apply: async () => {
+      resolveApplyStarted();
       await applyHolds;
       return fixtureStateCommit();
     },
@@ -1029,8 +1034,7 @@ test("a consumer claim that wins forces a concurrent cancel to be rejected (neve
 
   // Start the claim; it moves the row to 'running' and blocks in the runner.
   const claimPromise = controller.runQueuedApply("apply_clf");
-  // Let the claim mark running (flush microtasks + a macrotask) before the cancel.
-  await new Promise((r) => setTimeout(r, 5));
+  await applyStarted;
   expect((await store.getApplyRun("apply_clf"))?.status).toBe("running");
 
   // The cancel CAS (expectFrom 'queued') now loses: a running apply is not
@@ -1595,35 +1599,61 @@ test("a renewal never replays the retained issuance identity of the initial mint
     });
   let resolveStarted!: () => void;
   const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+  let resolveRenewalOutcome!: (outcome: "refresh-delivered" | "child-aborted") => void;
+  const renewalOutcome = new Promise<"refresh-delivered" | "child-aborted">(
+    (resolve) => { resolveRenewalOutcome = resolve; },
+  );
   const refreshes: unknown[] = [];
   let applySignal: AbortSignal | undefined;
   let abortedWith: unknown;
+  let completeApply: ((value: OpenTofuApplyResult) => void) | undefined;
+  let pending: ReturnType<OpenTofuController["runQueuedApply"]> | undefined;
+  let applyCompleted = false;
+  const finishApply = () => {
+    if (!completeApply || applyCompleted) return;
+    applyCompleted = true;
+    completeApply(fixtureStateCommit({
+      providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+    }));
+  };
   jest.useFakeTimers();
   jest.setSystemTime(new Date("2026-09-27T07:00:00.000Z"));
   try {
     const controller = controllerWith(store, {
       vault, now: () => Date.now(), runRenewalIntervalMs: 0,
       assertCredentialRefreshCapability: async () => {},
-      refreshCredentials: async (update) => { refreshes.push(update); },
+      refreshCredentials: async (update) => {
+        refreshes.push(update);
+        resolveRenewalOutcome("refresh-delivered");
+      },
       apply: async (_job, control) => {
         applySignal = control?.signal;
+        if (!applySignal) throw new Error("fixture runner requires an execution signal");
+        applySignal.addEventListener(
+          "abort",
+          () => resolveRenewalOutcome("child-aborted"),
+          { once: true },
+        );
         resolveStarted();
         try {
-          return await awaitExecutionAbort(control);
+          return await Promise.race([
+            new Promise<OpenTofuApplyResult>((resolve) => {
+              completeApply = resolve;
+            }),
+            awaitExecutionAbort(control),
+          ]);
         } catch (error) {
           abortedWith ??= error;
           throw error;
         }
       },
     });
-    const pending = controller.runQueuedApply(applyRunId);
+    pending = controller.runQueuedApply(applyRunId);
     void pending.catch(() => {});
     await started;
     expect(issueCount()).toBe(1);
     jest.advanceTimersByTime(31_000);
-    await settleAsyncUntil(
-      () => refreshes.length === 1 || (applySignal?.aborted ?? false),
-    );
+    expect(await renewalOutcome).toBe("refresh-delivered");
     // Delivery is the contract: a replayed issuance leaves the pinned
     // binding with too little lifetime, and the observed production failure
     // aborts the child with `renewed credential does not match the pinned
@@ -1633,7 +1663,11 @@ test("a renewal never replays the retained issuance identity of the initial mint
     expect(applySignal?.aborted).toBe(false);
     expect(issuanceGenerationRefs()).toHaveLength(2);
     expect(issuanceGenerationRefs()[1]).not.toBe(issuanceGenerationRefs()[0]);
+    finishApply();
+    expect((await pending).applyRun.status).toBe("succeeded");
   } finally {
+    finishApply();
+    if (completeApply && pending) await pending.catch(() => {});
     jest.useRealTimers();
   }
 });
