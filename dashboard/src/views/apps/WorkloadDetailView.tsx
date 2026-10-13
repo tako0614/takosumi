@@ -138,6 +138,7 @@ import {
 } from "../../lib/revision-plan-attempt.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
 import { createLastGoodValue } from "../../lib/resource-read.ts";
+import { randomUuid } from "../../lib/random-uuid.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import {
   listAuthorizedUiSurfaces,
@@ -449,14 +450,14 @@ function Inner() {
       );
     }
     setRevisionActionBusy(true);
-    const request = { ref: revision } as const;
-    const requestJson = JSON.stringify(request);
-    const attempt = getOrCreateRevisionPlanAttempt(
-      revisionAttempts,
-      capsuleId(),
-      requestJson,
-    );
     try {
+      const request = { ref: revision } as const;
+      const requestJson = JSON.stringify(request);
+      const attempt = getOrCreateRevisionPlanAttempt(
+        revisionAttempts,
+        capsuleId(),
+        requestJson,
+      );
       const response = await createReviewableGitRevisionPlan(
         capsuleId(),
         request,
@@ -2019,7 +2020,7 @@ function SettingsTab(props: {
     const idempotencyKey =
       configurationAttempt?.requestJson === requestJson
         ? configurationAttempt.idempotencyKey
-        : crypto.randomUUID();
+        : randomUuid();
     configurationAttempt = { requestJson, idempotencyKey };
     const result = await createCapsuleConfigurationPlan(
       props.capsuleId,

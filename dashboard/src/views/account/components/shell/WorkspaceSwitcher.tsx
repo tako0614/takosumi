@@ -158,6 +158,11 @@ export default function WorkspaceSwitcher(props: Props = {}) {
 
   createEffect(() => {
     if (workspaces.loading) return;
+    // A failed list read is not evidence that the user has no Workspaces.
+    // Reconciling against the empty fallback cleared the persisted selection,
+    // so `/` offered to create a "first" Workspace and an in-progress add flow
+    // reset. Keep the selection until a list actually loads.
+    if (workspaces.error) return;
     onLoaded(loadedWorkspaces());
   });
 

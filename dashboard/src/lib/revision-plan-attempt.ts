@@ -4,6 +4,8 @@
  * coordinator committed, so failed attempts must remain replayable even when
  * the failure is a definite HTTP response.
  */
+import { randomUuid } from "./random-uuid.ts";
+
 export interface RevisionPlanAttempt {
   readonly requestJson: string;
   readonly idempotencyKey: string;
@@ -26,7 +28,7 @@ export function getOrCreateRevisionPlanAttempt(
   if (retained) return retained;
   const created = {
     requestJson,
-    idempotencyKey: crypto.randomUUID(),
+    idempotencyKey: randomUuid(),
   };
   attempts.set(key, created);
   return created;

@@ -3434,6 +3434,46 @@ test.describe("Takosumi dashboard browser surface", () => {
     await assertNoPageErrors(errors);
   });
 
+  test("a failed Workspace list read keeps the current Workspace selected", async ({
+    page,
+  }) => {
+    test.skip(mode !== "portable", "synthetic list failures are portable-only");
+    const errors = pageErrors(page);
+    const appTile = page
+      .locator("a.av-tile")
+      .filter({ hasText: expectations.appName })
+      .first();
+    await gotoDashboardDocument(page, "/");
+    await expect(appTile).toBeVisible();
+    const readSelection = () =>
+      page.evaluate(() => localStorage.getItem("takosumi.currentWorkspaceId"));
+    const selected = await readSelection();
+    expect(selected).toBeTruthy();
+
+    let failedListReads = 0;
+    await page.route(
+      (url) =>
+        url.pathname === "/api/v1/workspaces" ||
+        url.pathname === "/api/v1/dashboard/bootstrap",
+      (route) => {
+        failedListReads += 1;
+        return route.fulfill({ status: 503, json: { error: "synthetic_list" } });
+      },
+    );
+    // Rename/archive/create broadcast this; the switcher re-reads the list.
+    await page.evaluate(() =>
+      window.dispatchEvent(new Event("takosumi:workspaces-changed")),
+    );
+    await expect.poll(() => failedListReads).toBeGreaterThanOrEqual(2);
+    await expect(page.locator(".topbar-workspace-error:visible").first()).toBeVisible();
+
+    // The failure is not evidence of "no Workspaces": the selection and the
+    // launcher survive instead of resetting to first-Workspace onboarding.
+    expect(await readSelection()).toBe(selected);
+    await expect(appTile).toBeVisible();
+    await assertNoPageErrors(errors);
+  });
+
   test("fails closed on an unexpected same-origin API 404", async ({
     page,
   }) => {

@@ -116,7 +116,7 @@ function Inner(): JSX.Element {
     contribution.loading || (query() !== undefined && inventory.loading);
   const unavailable = () =>
     !contribution.loading &&
-    (currentWorkspaceId() === undefined ||
+    (!currentWorkspaceId() ||
       contribution.error !== undefined ||
       contribution.latest === undefined);
   const requestFailed = () =>
@@ -176,7 +176,7 @@ function Inner(): JSX.Element {
         </Card>
       </Show>
 
-      <Show when={currentWorkspaceId() === undefined && !contribution.loading}>
+      <Show when={!currentWorkspaceId() && !contribution.loading}>
         <Card>
           <EmptyState
             icon={<CloudCog size={24} />}
@@ -186,7 +186,7 @@ function Inner(): JSX.Element {
         </Card>
       </Show>
 
-      <Show when={unavailable() && currentWorkspaceId() !== undefined}>
+      <Show when={unavailable() && Boolean(currentWorkspaceId())}>
         <Card>
           <EmptyState
             icon={<CloudCog size={24} />}

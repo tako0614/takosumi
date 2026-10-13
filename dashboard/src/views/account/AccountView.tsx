@@ -11,7 +11,7 @@ import { useNavigate } from "@solidjs/router";
 import { LogOut, User } from "lucide-solid";
 import Page from "./components/auth/Page.tsx";
 import { clearSession, type SessionRecord } from "./lib/session.ts";
-import { formatDateTime, locale, setLocale, t } from "../../i18n/index.ts";
+import { formatEpochDateTime, locale, setLocale, t } from "../../i18n/index.ts";
 import type { MessageKey } from "../../i18n/index.ts";
 import {
   setThemePreference,
@@ -165,9 +165,10 @@ function Inner(props: { readonly session: SessionRecord }) {
                     },
                     {
                       label: t("account.profile.expires"),
-                      value: formatDateTime(
-                        new Date(props.session.expiresAt).toISOString(),
-                      ),
+                      // 0 means the server sent no expiry; never "1970".
+                      value: props.session.expiresAt
+                        ? formatEpochDateTime(props.session.expiresAt)
+                        : "—",
                     },
                     {
                       label: t("account.session.userAgent"),

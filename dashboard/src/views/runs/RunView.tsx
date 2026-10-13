@@ -121,6 +121,7 @@ import { installReturnPathFromPrefill } from "../../lib/install-return-context.t
 import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
 import {
   formatDateTime,
+  formatEpochDateTime,
   locale,
   setDocumentTitle,
   t,
@@ -394,8 +395,7 @@ function AuditEventRow(props: { event: RunAuditEvent }) {
     );
   const at = () => {
     const raw = props.event.at ?? props.event.createdAt;
-    if (typeof raw === "number")
-      return formatDateTime(new Date(raw).toISOString());
+    if (typeof raw === "number") return formatEpochDateTime(raw);
     if (typeof raw === "string") return formatDateTime(raw);
     return "";
   };

@@ -46,6 +46,7 @@ import {
 } from "../../../components/ui/index.ts";
 import { fetchFailedMessage } from "../../../lib/error-copy.ts";
 import { latestOrUndefined } from "../../../lib/resource-read.ts";
+import { randomUuid } from "../../../lib/random-uuid.ts";
 
 type OutputDraft = {
   readonly id: string;
@@ -640,10 +641,7 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
 
 function emptyOutputDraft(): OutputDraft {
   return {
-    id:
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `out_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+    id: randomUuid(),
     name: "",
     alias: "",
     sensitive: false,

@@ -40,7 +40,7 @@ export default function ActivityView() {
 
 function MetadataChips(props: { metadata: Record<string, unknown> }) {
   const entries = () =>
-    Object.entries(props.metadata).filter(
+    Object.entries(props.metadata ?? {}).filter(
       ([, v]) => v !== null && v !== undefined && typeof v !== "object",
     );
   return (
