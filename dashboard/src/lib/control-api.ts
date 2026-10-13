@@ -3392,7 +3392,10 @@ export async function prepareCapsuleSourceSnapshot(input: {
         url: input.gitUrl,
         defaultRef: exactRef,
         defaultPath: sourcePath,
-        autoSync: true,
+        // A pasted Git URL is a pending install attempt. Do not schedule
+        // ongoing source polling until compatibility and Capsule creation
+        // have completed successfully.
+        autoSync: false,
         signal: input.signal,
         ...(input.deadlineAt !== undefined
           ? { deadlineAt: input.deadlineAt }

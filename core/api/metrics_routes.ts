@@ -196,8 +196,6 @@ function defaultDashboardMetricSeries(
   };
   const deployTags = {
     ...baseTags,
-    workspace_id: "none",
-    capsule_id: "none",
     operation_kind: "none",
     status: "idle",
   };
@@ -310,10 +308,10 @@ function groupByLabels(
 function labelsForEvent(event: MetricEvent): Record<string, string> {
   return Object.fromEntries(
     Object.entries({
-      ...(event.workspaceId ? { workspace_id: event.workspaceId } : {}),
-      ...(event.runGroupId ? { run_group_id: event.runGroupId } : {}),
       ...(event.tags ?? {}),
-    }).sort(([left], [right]) => left.localeCompare(right)),
+    })
+      .filter(([key]) => !["workspace_id", "capsule_id", "run_group_id", "run_id"].includes(key))
+      .sort(([left], [right]) => left.localeCompare(right)),
   );
 }
 

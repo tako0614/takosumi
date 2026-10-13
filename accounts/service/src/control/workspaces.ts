@@ -1400,6 +1400,27 @@ async function workspaceRuns(
       400,
     );
   }
+  const cursor = url.searchParams.get("cursor");
+  if (operations.listRunsPage) {
+    const page = await operations.listRunsPage(
+      workspaceId,
+      {
+        ...(limit ? { limit } : {}),
+        ...(cursor !== null ? { cursor } : {}),
+      },
+    );
+    return json({
+      runs: await Promise.all(page.runs.map((run) => publicRun(operations, run))),
+      ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+    } satisfies ListRunsResponse);
+  }
+  if (cursor !== null) {
+    return errorJson(
+      "invalid_request",
+      "run list cursor is not supported",
+      400,
+    );
+  }
   const runs = await operations.listRuns(workspaceId, limit ? { limit } : {});
   return json({
     runs: await Promise.all(runs.map((run) => publicRun(operations, run))),

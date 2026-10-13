@@ -121,6 +121,7 @@ import type {
   UpdateCapsuleLifecycleCommand,
   UpdateCapsuleLifecycleResult,
   CapsuleRuntimeSafety,
+  CapsuleUsageTotals,
   CapsulePatch,
   CapsuleStateVersionGuard,
   OpenTofuControlStore,
@@ -129,6 +130,8 @@ import type {
   PlanRunInputs,
   PublicHostReservation,
   RecoverableOpenTofuRunListOptions,
+  RunListPosition,
+  StoredRunListPage,
   RenewCapsuleInterfaceMaterializationIntentLeaseInput,
   RenewCapsuleInterfaceMaterializationIntentLeaseResult,
   RetryCapsuleInterfaceMaterializationIntentInput,
@@ -200,6 +203,8 @@ import {
   capsuleApplyRunAdmissionFenceMatchesRun,
   capsuleApplyRunAdmissionFenceMatchesCurrent,
   capsuleRuntimeSafetyFromRun,
+  capsuleUsageTotalsFromGroups,
+  PLAN_RUN_LOOKUP_BATCH_SIZE,
   CapsuleStateVersionGuardConflict,
   CapsuleStateGenerationGuardConflict,
   WorkspaceManagementAdmissionConflictError,
@@ -1966,6 +1971,37 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return coerceRunRowStatus(
       run && isPlanRunRecord(run) ? publicStoredRun(run) : undefined,
     );
+  }
+
+  async getPlanRunsByIds(ids: readonly string[]): Promise<readonly PlanRun[]> {
+    const uniqueIds = [...new Set(ids)];
+    if (uniqueIds.length === 0) return [];
+    const rows: StoredRunRecord[] = [];
+    for (
+      let offset = 0;
+      offset < uniqueIds.length;
+      offset += PLAN_RUN_LOOKUP_BATCH_SIZE
+    ) {
+      rows.push(
+        ...await this.#pgManyJson<StoredRunRecord>(
+          pgSchema.runs,
+          pgSchema.runs.runJson,
+          {
+            where: and(
+              inArray(
+                pgSchema.runs.id,
+                uniqueIds.slice(offset, offset + PLAN_RUN_LOOKUP_BATCH_SIZE),
+              ),
+              inArray(pgSchema.runs.kind, [...RUN_KINDS_PLAN, "drift_check"]),
+            ),
+          },
+        ),
+      );
+    }
+    return rows
+      .map(publicStoredRun)
+      .filter(isPlanRunRecord)
+      .map((run) => coerceRunRowStatus(run)!);
   }
 
   async getRunManagementAuthority(
@@ -3927,6 +3963,40 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       },
     );
     return rows.map(publicStoredRun);
+  }
+
+  async listRunsByWorkspacePage(
+    workspaceId: string,
+    options: { readonly limit?: number; readonly after?: RunListPosition } = {},
+  ): Promise<StoredRunListPage> {
+    const limit = clampRunListLimit(options.limit);
+    const createdAtMillis = pgRunCreatedAtMillisOrder();
+    const idOrder = sql`${pgSchema.runs.id} COLLATE "C"`;
+    const after = options.after;
+    const rows = await this.#pgManyJson<StoredRunRecord>(
+      pgSchema.runs,
+      pgSchema.runs.runJson,
+      {
+        where: and(
+          eq(pgSchema.runs.workspaceId, workspaceId),
+          after
+            ? or(
+                lt(createdAtMillis, after.createdAtMillis),
+                and(
+                  eq(createdAtMillis, after.createdAtMillis),
+                  lt(idOrder, after.id),
+                ),
+              )
+            : undefined,
+        ),
+        orderBy: [desc(createdAtMillis), desc(idOrder)],
+        limit: limit + 1,
+      },
+    );
+    return {
+      rows: rows.slice(0, limit).map(publicStoredRun),
+      hasMore: rows.length > limit,
+    };
   }
 
   async getCapsuleRuntimeSafety(
@@ -9788,6 +9858,22 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         asc(pgSchema.usageEvents.id),
       );
     return rows.map(usageEventFromRow);
+  }
+
+  async getCapsuleUsageTotals(
+    capsuleId: string,
+  ): Promise<CapsuleUsageTotals> {
+    const rows = await this.#db
+      .select({
+        ratingStatus: pgSchema.usageEvents.ratingStatus,
+        count: sql<number | string>`count(*)`.as("count"),
+        usdMicros: sql<number | string>`coalesce(sum(${pgSchema.usageEvents.usdMicros}), 0)`
+          .as("usd_micros"),
+      })
+      .from(pgSchema.usageEvents)
+      .where(eq(pgSchema.usageEvents.capsuleId, capsuleId))
+      .groupBy(pgSchema.usageEvents.ratingStatus);
+    return capsuleUsageTotalsFromGroups(rows);
   }
 
   async listUsageEventsPage(

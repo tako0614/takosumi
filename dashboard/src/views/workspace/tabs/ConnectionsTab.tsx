@@ -734,6 +734,15 @@ export default function ConnectionsTab(props: {
                     </details>
                   )}
                 </Show>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  busy={providerConnections.loading}
+                  onClick={() => void refetchProviderConnections()}
+                >
+                  {t("common.retry")}
+                </Button>
               </span>
             </Toast>
           );

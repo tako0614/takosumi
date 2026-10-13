@@ -400,7 +400,7 @@ function RunGroupMemberRow(props: {
       />
       <a
         class="wa-run-group-review"
-        href={`/runs/${run().id}`}
+        href={`/runs/${encodeURIComponent(run().id)}`}
         aria-label={
           name() ? t("runGroup.openRunAria", { name: name()! }) : undefined
         }

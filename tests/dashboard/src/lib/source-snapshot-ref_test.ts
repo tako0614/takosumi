@@ -20,7 +20,7 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-function source(defaultRef: string): Source {
+function source(defaultRef: string, autoSync = false): Source {
   return {
     id: "source_1",
     workspaceId: "workspace_1",
@@ -29,7 +29,7 @@ function source(defaultRef: string): Source {
     defaultRef,
     defaultPath: ".",
     status: "active",
-    autoSync: true,
+    autoSync,
     createdAt: "2026-08-25T00:00:00.000Z",
     updatedAt: "2026-08-25T00:00:00.000Z",
   };
@@ -78,7 +78,10 @@ function installFetch(snapshotCommit: string, snapshotRef: string) {
     if (url === "/api/v1/sources" && method === "POST") {
       const defaultRef =
         typeof body?.defaultRef === "string" ? body.defaultRef : "HEAD";
-      return json({ source: source(defaultRef), hookSecret: "hook_secret" }, 201);
+      return json(
+        { source: source(defaultRef, body?.autoSync === true), hookSecret: "hook_secret" },
+        201,
+      );
     }
     if (url === "/api/v1/sources/source_1/sync" && method === "POST") {
       return json({ run: { id: "sync_run_1" } }, 201);
@@ -130,6 +133,7 @@ describe("Capsule SourceSnapshot ref selection", () => {
       url: "https://example.test/service.git",
     });
     expect(calls[2]?.body).toMatchObject({ defaultRef: commit });
+    expect(calls[2]?.body).toMatchObject({ autoSync: false });
     expect(calls[3]?.body).toEqual({ expectedRef: commit });
   });
 

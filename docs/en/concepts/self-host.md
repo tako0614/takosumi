@@ -291,3 +291,5 @@ choose them is in the [configuration reference](/en/reference/configuration).
 
 What you end up taking on from the point of view of the people using that endpoint is set
 out in [Product boundaries](./boundaries.md).
+
+[operations guide](../self-host/index.md)

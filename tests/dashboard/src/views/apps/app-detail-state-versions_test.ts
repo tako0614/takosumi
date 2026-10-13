@@ -36,10 +36,20 @@ function occurrences(text: string, needle: string): number {
 }
 
 describe("Capsule detail StateVersion surface", () => {
+  test("classifies opaque deploy-history fetch failures", () => {
+    expect(source).toContain("fetchFailedMessage(props.error, t)");
+    expect(source).not.toContain('t("common.fetchFailed", { message: props.error! })');
+  });
+
   test("renders public-surface and update-history sections via the dictionary", () => {
     expect(source).toContain('t("app.surfaces.title")');
     expect(source).toContain('t("app.surfaces.open")');
     expect(source).toContain('t("app.deploys.title")');
+  });
+
+  test("uses plain version language for the applied resource inventory", () => {
+    expect(en["app.deploys.inventoryGeneration"]).toBe("Version number");
+    expect(ja["app.deploys.inventoryGeneration"]).toBe("バージョン番号");
   });
 
   test("keeps update review in the update-history surface", () => {

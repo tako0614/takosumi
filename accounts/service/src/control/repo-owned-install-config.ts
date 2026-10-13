@@ -37,11 +37,33 @@ export interface RepoOwnedStoreHydrationInput {
   readonly sourceSnapshot: SourceSnapshot | undefined;
   readonly storeMetadata: InstallConfig["store"] | undefined;
   readonly modulePath: string | undefined;
+  /** Optional presentation base for a repository installed from a Git URL. */
+  readonly presentationFallback?: InstallConfig["store"];
 }
 
 export interface RepoOwnedStoreHydrationResult {
   readonly storeMetadata: InstallConfig["store"] | undefined;
   readonly modulePath: string | undefined;
+}
+
+/** Presentation base for a bare-Git install with no Store listing selected. */
+export function neutralInstallPresentation(input: {
+  readonly gitUrl: string;
+  readonly capsuleName: string;
+}): NonNullable<InstallConfig["store"]> {
+  const suggestedName = input.capsuleName.trim().slice(0, 96) || "service";
+  const text = { ja: suggestedName, en: suggestedName };
+  return {
+    source: { url: input.gitUrl, path: "." },
+    order: 1_000,
+    surface: "service",
+    kind: "worker",
+    provider: "Repository",
+    suggestedName,
+    badge: { ja: "リポジトリ", en: "Repository" },
+    name: text,
+    description: text,
+  };
 }
 
 export interface RepoOwnedInstallConfigAdoptionInput {
@@ -151,6 +173,9 @@ export async function hydrateRepoOwnedStoreConfig(
   const mergedStore = repoPresentationStoreMetadata({
     metadata,
     listing: input.storeMetadata,
+    ...(input.presentationFallback
+      ? { fallbackBase: input.presentationFallback }
+      : {}),
   });
   return {
     storeMetadata: mergedStore ?? input.storeMetadata,
@@ -483,8 +508,19 @@ export async function previewRepoOwnedInstallConfig(
     url: input.source.url,
     path: input.source.defaultPath,
   };
-
   const selectedPath = adoption.modulePath;
+  const presentation = await hydrateRepoOwnedStoreConfig({
+    operations: input.operations,
+    source: input.source,
+    sourceSnapshot: input.sourceSnapshot,
+    storeMetadata: undefined,
+    modulePath: selectedPath,
+    presentationFallback: neutralInstallPresentation({
+      gitUrl: input.source.url,
+      capsuleName: input.capsuleName,
+    }),
+  });
+
   const {
     id: _baseId,
     name: _baseName,
@@ -522,6 +558,9 @@ export async function previewRepoOwnedInstallConfig(
       : {}),
     ...(adoption.runtimeBindingMaterialization !== undefined
       ? { runtimeBindingMaterialization: adoption.runtimeBindingMaterialization }
+      : {}),
+    ...(presentation.storeMetadata
+      ? { store: presentation.storeMetadata }
       : {}),
     sourceSelector,
     modulePath: selectedPath,
@@ -1059,10 +1098,12 @@ function mergeRuntimeBindingMaterialization(
 function repoPresentationStoreMetadata(input: {
   readonly metadata: Record<string, unknown>;
   readonly listing: InstallConfig["store"] | undefined;
+  readonly fallbackBase?: InstallConfig["store"];
 }): InstallConfig["store"] | undefined {
-  if (!input.listing) return undefined;
+  const base = input.listing ?? input.fallbackBase;
+  if (!base) return undefined;
   return installConfigStoreValue({
-    ...input.listing,
+    ...base,
     ...(input.metadata.name !== undefined ? { name: input.metadata.name } : {}),
     ...(input.metadata.description !== undefined
       ? { description: input.metadata.description }

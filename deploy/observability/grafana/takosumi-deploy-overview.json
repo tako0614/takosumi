@@ -26,7 +26,7 @@
       "id": 1,
       "targets": [
         {
-          "expr": "sum(rate(takosumi_deploy_operation_count{environment=~\"$environment\",runner_profile_id=~\"$runner_profile_id\",workspace_id=~\"$workspace_id\",capsule_id=~\"$capsule_id\",operation_kind=\"apply\",status=\"succeeded\"}[5m])) / clamp_min(sum(rate(takosumi_deploy_operation_count{environment=~\"$environment\",runner_profile_id=~\"$runner_profile_id\",workspace_id=~\"$workspace_id\",capsule_id=~\"$capsule_id\",operation_kind=\"apply\"}[5m])), 1)",
+          "expr": "sum(rate(takosumi_deploy_operation_count{environment=~\"$environment\",runner_profile_id=~\"$runner_profile_id\",operation_kind=\"apply\",status=\"succeeded\"}[5m])) / clamp_min(sum(rate(takosumi_deploy_operation_count{environment=~\"$environment\",runner_profile_id=~\"$runner_profile_id\",operation_kind=\"apply\"}[5m])), 1)",
           "legendFormat": "apply success rate",
           "refId": "A"
         }
@@ -54,7 +54,7 @@
       "id": 2,
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(takosumi_apply_duration_seconds_bucket{environment=~\"$environment\",runner_profile_id=~\"$runner_profile_id\",workspace_id=~\"$workspace_id\",capsule_id=~\"$capsule_id\",operation_kind=\"apply\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(takosumi_apply_duration_seconds_bucket{environment=~\"$environment\",runner_profile_id=~\"$runner_profile_id\",operation_kind=\"apply\"}[5m])) by (le))",
           "legendFormat": "p95 apply latency",
           "refId": "A"
         }
@@ -194,12 +194,12 @@
       "id": 8,
       "targets": [
         {
-          "expr": "sum by (workspace_id, capsule_id, operation_kind, status) (increase(takosumi_deploy_operation_count{environment=~\"$environment\",workspace_id=~\"$workspace_id\",capsule_id=~\"$capsule_id\"}[1h]))",
-          "legendFormat": "{{workspace_id}} / {{capsule_id}} / {{operation_kind}} / {{status}}",
+          "expr": "sum by (operation_kind, status) (increase(takosumi_deploy_operation_count{environment=~\"$environment\"}[1h]))",
+          "legendFormat": "{{operation_kind}} / {{status}}",
           "refId": "A"
         }
       ],
-      "title": "Per Capsule Run Outcomes",
+      "title": "Run Outcomes (1h)",
       "type": "table"
     },
     {
@@ -276,38 +276,6 @@
         "label": "Runner Profile",
         "name": "runner_profile_id",
         "query": "label_values(takosumi_deploy_operation_count{environment=~\"$environment\"}, runner_profile_id)",
-        "refresh": 1,
-        "regex": "",
-        "type": "query"
-      },
-      {
-        "allValue": ".*",
-        "current": {},
-        "datasource": {
-          "type": "prometheus",
-          "uid": "${DS_PROMETHEUS}"
-        },
-        "hide": 0,
-        "includeAll": true,
-        "label": "Workspace",
-        "name": "workspace_id",
-        "query": "label_values(takosumi_deploy_operation_count{environment=~\"$environment\"}, workspace_id)",
-        "refresh": 1,
-        "regex": "",
-        "type": "query"
-      },
-      {
-        "allValue": ".*",
-        "current": {},
-        "datasource": {
-          "type": "prometheus",
-          "uid": "${DS_PROMETHEUS}"
-        },
-        "hide": 0,
-        "includeAll": true,
-        "label": "Capsule",
-        "name": "capsule_id",
-        "query": "label_values(takosumi_deploy_operation_count{environment=~\"$environment\",workspace_id=~\"$workspace_id\"}, capsule_id)",
         "refresh": 1,
         "regex": "",
         "type": "query"

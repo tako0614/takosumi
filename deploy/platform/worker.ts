@@ -129,6 +129,7 @@ import {
 } from "./platform_extensions.ts";
 import {
   TAKOSUMI_OPERATOR_CAPABILITY_KEYS,
+  normalizePublicStoreEndpoint,
   type CreateTakosumiDiscoveryOptions,
   type TakosumiOperatorCapabilities,
 } from "takosumi-contract/capabilities";
@@ -1031,6 +1032,7 @@ function platformDiscoveryOptions(
   const operatorControlMcp = operatorControlMcpEnabled(env);
   const operator = platformOperatorCapabilities(env);
   const mobileOidcClientId = configuredTakosumiMobileOidcClientId(env);
+  const storeEndpoint = normalizePublicStoreEndpoint(env.TAKOSUMI_TCS_STORE_URL);
   return {
     origin,
     ...(mobileOidcClientId ? { mobileOidcClientId } : {}),
@@ -1049,6 +1051,9 @@ function platformDiscoveryOptions(
         ...Object.entries(extensionDiscovery.endpoints),
         ...(operatorControlMcp
           ? ([["mcp.operator-control.v1", OPERATOR_CONTROL_MCP_PATH]] as const)
+          : []),
+        ...(storeEndpoint
+          ? ([["takosumi.tcs-store.v1", storeEndpoint]] as const)
           : []),
       ].map(([token, path]) => [token, new URL(path, origin).toString()]),
     ),
@@ -4000,6 +4005,9 @@ export async function pollAutoSyncSources(
       await operations.createSourceReconciliationSyncs(source.id);
     } catch {
       // Best-effort: one bad source must not abort the whole poll.
+      console.warn("scheduled.source_poll_reconciliation_failed", {
+        sourceCount: sources.length,
+      });
     }
   }
 }
@@ -4065,6 +4073,7 @@ export async function planStaleCapsuleUpdates(
         await operations.capsules.listCapsules(workspace.id)
       ).filter((capsule) => capsule.status === "stale");
     } catch {
+      console.warn("scheduled.stale_auto_plan_capsule_list_failed");
       continue;
     }
     if (staleCapsules.length === 0) continue;
@@ -4075,6 +4084,7 @@ export async function planStaleCapsuleUpdates(
         limit: runLookback,
       });
     } catch {
+      console.warn("scheduled.stale_auto_plan_run_list_failed");
       continue;
     }
     const pendingPlanCapsuleIds = new Set(
@@ -4091,6 +4101,7 @@ export async function planStaleCapsuleUpdates(
         plansCreated += 1;
       } catch {
         // Best-effort: one bad Capsule must not abort other update plans.
+        console.warn("scheduled.stale_auto_plan_create_failed");
       }
     }
   }
@@ -4136,7 +4147,7 @@ async function runScheduledOpenTofuRunRepair(
 ): Promise<void> {
   if (!env.RUN_OWNER) return;
   const operations = await deployControlSeam(env).operations();
-  await repairStaleOpenTofuRuns(
+  const result = await repairStaleOpenTofuRuns(
     operations,
     {
       schedule: (dispatch) => scheduleRunOwnerRepair(env, dispatch),
@@ -4147,6 +4158,32 @@ async function runScheduledOpenTofuRunRepair(
       runsPerWorkspace: SCHEDULED_RUN_REPAIR_RUNS_PER_WORKSPACE,
     },
   );
+  const failures = result.ordinaryFailures + result.retirementFailures;
+  if (failures > 0) {
+    console.warn("scheduled.run_repair_failures", {
+      ordinaryFailures: result.ordinaryFailures,
+      retirementFailures: result.retirementFailures,
+    });
+  }
+  const service = await cachedDeployControlService(env);
+  for (const [outcome, value] of [
+    ["rescheduled", result.rescheduled],
+    ["ordinary_failure", result.ordinaryFailures],
+    ["retirement_failure", result.retirementFailures],
+  ] as const) {
+    try {
+      await recordWorkerMetric({
+        observability: service.context.adapters.observability,
+        env,
+        name: "takosumi_run_repair_total",
+        kind: "counter",
+        value,
+        tags: { outcome },
+      });
+    } catch {
+      // Repair visibility must never change the sweep result or cron behavior.
+    }
+  }
 }
 
 /**

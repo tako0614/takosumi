@@ -2,12 +2,37 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { installModuleCatalogFromSnapshot } from "../../../../../dashboard/src/views/new/install-helpers.ts";
+import { en } from "../../../../../dashboard/src/i18n/en.ts";
+import { ja } from "../../../../../dashboard/src/i18n/ja.ts";
 
 const root = resolve(import.meta.dir, "../../../../../");
 const read = (path: string): string =>
   readFileSync(resolve(root, path), "utf8");
 
 describe("single-screen install surface", () => {
+  test("enables polling only after the compatible install Plan is created", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const planResponse = view.indexOf("const response = await createReviewableGitInstallPlan(");
+    const enableSourcePolling = view.indexOf(
+      "await patchSource(pendingAutoSyncSource.sourceId, { autoSync: true });",
+    );
+    expect(planResponse).toBeGreaterThanOrEqual(0);
+    expect(enableSourcePolling).toBeGreaterThan(planResponse);
+    expect(view).toContain("autoSyncSourceForInstall = undefined");
+    expect(view).toContain("pendingAutoSyncSource.workspaceId === workspace");
+    expect(view).toContain("pendingAutoSyncSource.sourceId === sourceId()");
+    expect(view).toContain("resetPreparedSource = (options?: {");
+  });
+
+  test("explains a slow initial repository fetch after five seconds", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain("const SOURCE_FETCH_SLOW_HINT_MS = 5_000");
+    expect(view).toContain('preparationStage() !== "source"');
+    expect(view).toContain('t("installStore.preparingFetching")');
+    expect(en["installStore.preparingFetching"]).toContain("minute");
+    expect(ja["installStore.preparingFetching"]).toContain("1分");
+  });
+
   test("normalizes the bounded module projection without exposing files", () => {
     expect(
       installModuleCatalogFromSnapshot({

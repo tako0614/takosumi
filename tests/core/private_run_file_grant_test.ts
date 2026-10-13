@@ -44,7 +44,21 @@ test("sealed grant keeps lease opaque and binds exact scope, operations and expi
     issuedAt: current,
     expiresAt: current + 60_000,
   });
-  const altered = `${token.slice(0, -2)}${token.endsWith("A") ? "B" : "A"}${token.slice(-1)}`;
+  // Flip the first encrypted byte after the 12-byte AES-GCM IV. Editing a
+  // base64url character near the end can change only unused padding bits (or
+  // accidentally replace a character with itself), leaving the decoded grant
+  // unchanged and making this rejection assertion flaky.
+  const prefix = "prfg1.";
+  const encoded = token.slice(prefix.length).replaceAll("-", "+").replaceAll("_", "/");
+  const sealed = Uint8Array.from(
+    atob(encoded.padEnd(Math.ceil(encoded.length / 4) * 4, "=")),
+    (character) => character.charCodeAt(0),
+  );
+  expect(sealed.length).toBeGreaterThan(12 + 16);
+  sealed[12] ^= 1;
+  const altered = `${prefix}${btoa(String.fromCharCode(...sealed))
+    .replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "")}`;
+  expect(altered).not.toBe(token);
   await expect(codec.open(altered)).rejects.toBeInstanceOf(PrivateRunFileGrantError);
   current += 60_000;
   await expect(codec.open(token)).rejects.toBeInstanceOf(PrivateRunFileGrantError);

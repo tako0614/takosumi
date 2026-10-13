@@ -860,6 +860,11 @@ export interface TakosumiOperations {
     workspaceId: string,
     options?: { readonly limit?: number },
   ): Promise<readonly Run[]>;
+  /** Additive keyset page for the Workspace Run list. */
+  listRunsPage(
+    workspaceId: string,
+    options?: { readonly limit?: number; readonly cursor?: string },
+  ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }>;
   /** Reads a Run's structured diagnostics + redacted audit trail (spec §30). */
   getRunLogs(id: string): Promise<RunLogsResponse>;
   /** Reads a Run's run-level audit event trail (spec §30). */
@@ -1958,6 +1963,8 @@ export async function createTakosumiService(
     getRun: (id) => opentofuController.getRun(id),
     listRuns: (workspaceId, options) =>
       opentofuController.listRuns(workspaceId, options),
+    listRunsPage: (workspaceId, options) =>
+      opentofuController.listRunsPage(workspaceId, options),
     getRunLogs: (id) => opentofuController.getRunLogs(id),
     getRunEvents: (id) => opentofuController.getRunEvents(id),
     getRunCost: (id) => opentofuController.getRunCost(id),

@@ -103,7 +103,6 @@ function Inner(props: {
           render with no active tab highlighted. */}
       <Show
         when={
-          !props.standaloneTab &&
           tab() !== "backups" &&
           tab() !== "shares" &&
           tab() !== "interface-recovery"

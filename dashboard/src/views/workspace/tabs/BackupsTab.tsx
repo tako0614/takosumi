@@ -7,12 +7,12 @@ import { createResource, Match, Show, Switch } from "solid-js";
 import { Archive } from "lucide-solid";
 import {
   type BackupRecord,
-  type ControlApiError,
   createWorkspaceBackup,
   listWorkspaceBackups,
 } from "../../../lib/control-api.ts";
 import { createAction } from "../../account/lib/action.tsx";
 import { formatDateTime, t } from "../../../i18n/index.ts";
+import { fetchFailedMessage } from "../../../lib/error-copy.ts";
 import {
   Button,
   Card,
@@ -85,9 +85,7 @@ export default function BackupsTab(props: { readonly workspaceId: string }) {
             <EmptyState
               icon={<Archive size={28} />}
               title={t("workspaceSettings.tab.backups")}
-              message={t("common.fetchFailed", {
-                message: (backups.error as ControlApiError).message,
-              })}
+              message={fetchFailedMessage(backups.error, t)}
               action={
                 <Button
                   variant="secondary"

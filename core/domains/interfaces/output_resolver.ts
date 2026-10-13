@@ -9,6 +9,11 @@ import type {
   InterfaceResolutionResult,
 } from "./service.ts";
 
+export type InterfaceOutputStore = Pick<
+  OpenTofuControlStore,
+  "getCapsule" | "getOutput" | "getLatestStateVersion"
+>;
+
 type CapsuleOutputResolution =
   | {
       readonly ok: true;
@@ -34,7 +39,7 @@ export class OutputBackedInterfaceInputResolver
 {
   constructor(
     readonly options: {
-      readonly opentofu: OpenTofuControlStore;
+      readonly opentofu: InterfaceOutputStore;
     },
   ) {}
 

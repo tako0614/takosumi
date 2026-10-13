@@ -217,4 +217,13 @@ describe("RunView", () => {
     expect(ja["run.loadFailedTitle"]).toBe("実行を読み込めませんでした");
     expect(en["run.loadFailedTitle"]).toBe("Couldn't load this run");
   });
+
+  test("allows the full Plan change list to be reviewed above the initial limit", () => {
+    expect(source).toContain("const [expanded, setExpanded] = createSignal(false)");
+    expect(source).toMatch(
+      /expanded\(\)\s*\? actionable\(\)\s*:\s*actionable\(\)\.slice\(0, PLAN_RESOURCE_REVIEW_LIMIT\)/,
+    );
+    expect(source).toContain("onClick={() => setExpanded(true)}");
+    expect(source).toContain('t("run.resources.more", { n: hiddenCount() })');
+  });
 });

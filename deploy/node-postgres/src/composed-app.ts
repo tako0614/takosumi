@@ -48,6 +48,7 @@ import {
   createTakosumiProductCapabilities,
   createTakosumiWellKnownDocument,
   type CreateTakosumiDiscoveryOptions,
+  normalizePublicStoreEndpoint,
 } from "takosumi-contract/capabilities";
 import { Hono } from "hono";
 import type { PostgresAccountsStore } from "@takosjp/takosumi-accounts-service";
@@ -438,6 +439,7 @@ export async function buildComposedApp(
           c.req.raw,
           input.productDiscovery,
           opentofuRunnerConfigured,
+          runtimeEnv,
         ),
       ),
     ),
@@ -449,6 +451,7 @@ export async function buildComposedApp(
           c.req.raw,
           input.productDiscovery,
           opentofuRunnerConfigured,
+          runtimeEnv,
         ),
       ),
     ),
@@ -594,9 +597,15 @@ function productDiscoveryOptions(
   req: Request,
   overrides: Partial<CreateTakosumiDiscoveryOptions> | undefined,
   opentofuRunnerConfigured: boolean,
+  runtimeEnv: Readonly<Record<string, string | undefined>>,
 ): CreateTakosumiDiscoveryOptions {
+  const storeEndpoint = normalizePublicStoreEndpoint(runtimeEnv.TAKOSUMI_TCS_STORE_URL);
   return {
     ...(overrides ?? {}),
+    endpoints: {
+      ...overrides?.endpoints,
+      ...(storeEndpoint ? { "takosumi.tcs-store.v1": storeEndpoint } : {}),
+    },
     adapters: {
       // TODO: Also check Core's stacks-mounted condition for this discovery route.
       opentofu: opentofuRunnerConfigured,

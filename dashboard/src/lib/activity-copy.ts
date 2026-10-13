@@ -159,6 +159,16 @@ export function describeActivityEvent(
     }
     case "capsule.stale": {
       const producer = metaString(m, "producerCapsuleName");
+      // A source ref change belongs to this service's own Git source, not a
+      // producer service. Keep this notice explicit even when producer data
+      // is absent on older events.
+      if (metaString(m, "reason") === "source_ref_changed" || !producer) {
+        return {
+          title: name
+            ? t("notif.event.staleSourceNamed", { name })
+            : t("notif.event.staleSource"),
+        };
+      }
       return {
         title: name
           ? t("notif.event.staleNamed", { name })

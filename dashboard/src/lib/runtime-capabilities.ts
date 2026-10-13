@@ -1,4 +1,5 @@
 import { createSignal } from "solid-js";
+import { normalizePublicStoreEndpoint } from "takosumi-contract";
 import type {
   TakosumiProductCapabilities,
   TakosumiWellKnownDocument,
@@ -6,6 +7,11 @@ import type {
 
 const [runtimeCapabilities, setRuntimeCapabilities] =
   createSignal<TakosumiProductCapabilities>();
+const [runtimeStoreUrlSignal, setRuntimeStoreUrl] = createSignal<string>();
+
+export function runtimeStoreUrl(): string | undefined {
+  return runtimeStoreUrlSignal();
+}
 let capabilityLoad:
   Promise<TakosumiProductCapabilities | undefined> | undefined;
 
@@ -68,6 +74,9 @@ export async function loadTakosumiRuntimeCapabilities(
   if (!isTakosumiProductCapabilities(capabilities)) {
     throw new Error("Takosumi capabilities response is invalid");
   }
+  setRuntimeStoreUrl(normalizePublicStoreEndpoint(
+    wellKnown.endpoints?.extensions?.["takosumi.tcs-store.v1"],
+  ));
   return capabilities;
 }
 

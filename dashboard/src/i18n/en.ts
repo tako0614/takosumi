@@ -48,6 +48,8 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.publicSource": "Public repository",
   "installStore.add": "Add",
   "installStore.preparing": "Preparing your service",
+  "installStore.preparingFetching":
+    "Fetching the repository. The first time can take about a minute.",
   "installStore.preparingWorkspace": "Confirming the selected workspace.",
   "installStore.preparingConnections": "Reading available connections.",
   "installStore.preparingSource": "Fetching the repository contents.",
@@ -501,7 +503,7 @@ export const en: Record<keyof typeof ja, string> = {
     "The recorded resource inventory could not be loaded.",
   "app.deploys.inventoryLegacyUnavailable":
     "This older applied state has no resource inventory record.",
-  "app.deploys.inventoryGeneration": "State generation",
+  "app.deploys.inventoryGeneration": "Version number",
   "app.deploys.inventoryRecordedAt": "Recorded",
   "app.deploys.inventoryStateVersion": "State version",
   "app.deploys.inventoryApplyRun": "Deploy",
@@ -1187,6 +1189,8 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.event.staleNamed":
     "A dependency changed — an update is available for “{name}”",
   "notif.event.staleDetail": "Updated by: {producer}",
+  "notif.event.staleSource": "A new version of this service is available",
+  "notif.event.staleSourceNamed": "A new version of “{name}” is available",
   "notif.event.connCreated": "Added connected account “{provider}”",
   "notif.event.connCreatedGeneric": "Added connected account",
   "notif.event.connRevoked": "Connected account “{provider}” was revoked",

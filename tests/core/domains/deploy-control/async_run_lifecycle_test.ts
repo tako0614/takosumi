@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { InMemoryObservabilitySink } from "../../../../core/domains/observability/mod.ts";
 import {
   applyExpectedGuardFromPlanRun,
   type EnqueueRun,
@@ -1376,6 +1377,7 @@ test("a runner failure records the run failed and never persists the minted cred
 
 test("a retryable runner infrastructure reset requeues plan without dropping inputs", async () => {
   const store = new InMemoryOpenTofuControlStore();
+  const observability = new InMemoryObservabilitySink();
   let planCalls = 0;
   const retryDispatches: Parameters<EnqueueRun>[0][] = [];
   const enqueueRun: EnqueueRun = (dispatch) => {
@@ -1384,6 +1386,7 @@ test("a retryable runner infrastructure reset requeues plan without dropping inp
   };
   const controller = new OpenTofuController({
     store,
+    observability,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(5250),
     newId: deterministicIds(),
@@ -1453,6 +1456,9 @@ test("a retryable runner infrastructure reset requeues plan without dropping inp
   const completed = (await store.getPlanRun(queuedPlan.id))!;
   expect(completed.status).toEqual("succeeded");
   expect(planCalls).toEqual(2);
+  const queueSamples = await observability.listMetrics({ name: "takosumi_run_queue_latency_seconds" });
+  expect(queueSamples).toHaveLength(1);
+  expect(queueSamples[0]?.tags.operation_kind).toBe("plan");
 });
 
 test("runner container capacity exhaustion requeues destroy plan without failing terminally", async () => {
