@@ -1,3 +1,5 @@
+import { digest as ownerDigest } from "../../../accounts/service/src/owner-operation-evidence.ts";
+
 /** Fixed official rehearsal target. Self-host Accounts keeps its own entry. */
 export const AUTH_STAGING_WORKER = "takosumi-auth-staging";
 export const AUTH_STAGING_ISSUER = "https://auth-staging.takos.jp";
@@ -21,6 +23,13 @@ export const AUTH_STAGING_CLIENTS = [
 ] as const;
 
 export function assertAuthStagingVariables(env: Readonly<Record<string, unknown>>): void {
+  const ownerTarget = env.TAKOSUMI_ACCOUNTS_OWNER_TARGET_BINDING_DIGEST;
+  const ownerClientId = env.TAKOSUMI_ACCOUNTS_OWNER_CLIENT_ID;
+  if ((ownerTarget !== undefined || ownerClientId !== undefined) &&
+    (!ownerDigest(ownerTarget) || typeof ownerClientId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(ownerClientId) ||
+     AUTH_STAGING_CLIENTS.some((client) => client.clientId === ownerClientId))) {
+    throw new Error("auth_staging_owner_target_invalid");
+  }
   if (
     env.TAKOSUMI_ENVIRONMENT !== "staging" ||
     env.TAKOSUMI_AUTH_WORKER_NAME !== AUTH_STAGING_WORKER ||

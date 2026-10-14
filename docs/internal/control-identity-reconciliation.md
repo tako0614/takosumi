@@ -115,10 +115,15 @@ resource-specific grants and each RP's session revocation remain separately
 authenticated owner contracts. Missing transports or receipts fail closed before
 reservation; local test fixtures do not qualify them. The dedicated source
 composition does not configure real owner targets, credentials or live authority.
-It also does not inject a reviewed recovery-approval reader into its Accounts
-authority; providing a custom reconciler alone cannot enable real recovery.
-That reader and the authenticated external owner transports need a separately
-reviewed composition before activation.
+Its pinned owner bundle shares one Accounts authority across the reconciler and
+route-less private operation reader. It retains original Core/context and actual
+owner-readback evidence in existing Accounts document storage. The bounded
+recovery reader has no configured real review issuer, so providing a custom
+reconciler or source descriptor cannot enable real recovery. See
+[private owner-operation admission](./owner-operation-admission.md) for fresh
+versus historical projections and required actual private graph qualification.
+Authenticated external owner transports and the real review issuer still need
+a separately reviewed composition before activation.
 Publishing source, green CI or this contract does not establish a staged merge
 or authorize production publication.
 

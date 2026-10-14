@@ -8,6 +8,7 @@ import type {
   ControlUnlinkAdmission,
 } from "../../../contract/identity-reconciliation.ts";
 import { CONTROL_IDENTITY_AUTHORITY_VERSION } from "../../../contract/identity-reconciliation.ts";
+import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
 import type { AccountsStore } from "./store.ts";
 import type {
   IdentityMergeOperation,
@@ -32,6 +33,26 @@ import {
 import type { CredentialUnlinkReconciler } from "./identity-unlink-state.ts";
 import { identityRecordsEqual } from "./hosted-identity-records.ts";
 import { sha256Text } from "./encoding.ts";
+import type { IdentityMergeContextPlanRecord } from "./identity-context-state.ts";
+import type {
+  OwnerOperationContextEvidence,
+  OwnerOperationRecoveryEvidence,
+  OwnerOperationRecoveryEvidenceReader,
+  OwnerOperationTarget,
+} from "./owner-operation-contract.ts";
+import {
+  digest,
+  validOwnerTarget,
+  validOwnerContextEvidence,
+  validOwnerReceiptEvidence,
+  ownerOperationContextEvidenceId,
+} from "./owner-operation-evidence.ts";
+import {
+  isReviewedRecoveryIssuerAvailabilityReader,
+  type ReviewedRecoveryIssuerAvailabilityReader,
+  type ReviewedRecoveryIssuerAvailabilityRequest,
+  type ReviewedRecoveryIssuerAvailabilityCheckpoint,
+} from "./reviewed-recovery-issuer-availability.ts";
 
 export interface IdentityReviewedRecoveryApproval {
   operationId: string;
@@ -345,6 +366,8 @@ export interface IdentityExternalOwnerPort {
   readonly kind: IdentityExternalOwnerKind;
   readonly ownerId: string;
   readonly ownerVersion: string;
+  /** Read-only availability/freshness check. It must not write, issue an ACK,
+   * reserve authority or reconcile an owner operation before Core custody. */
   assertReady(context?: IdentityExternalOwnerContext): Promise<boolean>;
   reconcile(
     context: IdentityExternalOwnerContext,
@@ -356,6 +379,62 @@ export interface IdentityExternalOwnerPort {
 export type IdentityExternalOwnerPorts = Partial<
   Record<IdentityExternalOwnerKind, IdentityExternalOwnerPort>
 >;
+
+/** One immutable projection shared by the actual adapter and read-only owner reader. */
+export async function identityMergeOwnerContext(
+  op: IdentityMergeOperation,
+  admission: ControlMergeAdmission,
+  saved: IdentityMergeContextPlanRecord,
+): Promise<IdentityExternalOwnerContext> {
+  if (!op.contextPlan || saved.operationId !== op.operationId ||
+    saved.planDigest !== op.contextPlan.planDigest || saved.sourceSubject !== op.sourceSubject ||
+    saved.targetSubject !== op.targetSubject || admission.operationId !== op.operationId ||
+    admission.sourceAccountId !== op.sourceSubject || admission.targetAccountId !== op.targetSubject)
+    throw new IdentityMergeConflict("context_plan_conflict");
+  const { operationRevision: _revision, phase: _phase, consentAt: _consent, ...immutable } = admission;
+  return {
+    contextPins: structuredClone(saved.controlPlan.contexts),
+    personalWorkspaceId: saved.controlPlan.personalWorkspaceId,
+    proofBindingDigest: saved.controlPlan.proofBindingDigest,
+    operationId: op.operationId, kind: "merge",
+    sourceAccountId: op.sourceSubject, targetAccountId: op.targetSubject,
+    planDigest: op.contextPlan.planDigest, authorityVersion: CONTROL_IDENTITY_AUTHORITY_VERSION,
+    admissionDigest: await sha256Text(`control-owner-admission:${canonicalJson(immutable)}`),
+  };
+}
+
+export async function identityUnlinkOwnerContext(
+  admission: ControlUnlinkAdmission,
+  receipt: ControlIdentityReceipt,
+): Promise<IdentityExternalOwnerContext> {
+  if (receipt.kind !== "unlink-preserved" || receipt.operationId !== admission.intentId)
+    throw new IdentityMergeConflict("merge_authority_unavailable");
+  return {
+    operationId: admission.intentId, kind: "unlink", sourceAccountId: admission.accountId,
+    targetAccountId: admission.accountId, planDigest: receipt.planDigest,
+    authorityVersion: CONTROL_IDENTITY_AUTHORITY_VERSION,
+    admissionDigest: await sha256Text(`control-unlink-owner:${canonicalJson(admission)}`),
+    controlReceiptId: receipt.receiptId,
+  };
+}
+
+export async function identityRecoveryOwnerContext(
+  admission: ControlRecoveryAdmission,
+  receipt: ControlIdentityReceipt,
+  plan?: ControlIdentityContextPlan,
+): Promise<IdentityExternalOwnerContext> {
+  if (receipt.operationId !== admission.operationId || receipt.planDigest !== admission.planDigest ||
+    receipt.kind !== (admission.mode === "abort-before-active" ? "merge-aborted" : "merge-restored"))
+    throw new IdentityMergeConflict("merge_authority_unavailable");
+  return {
+    operationId: admission.operationId, kind: admission.mode,
+    ...(plan ? { contextPins: structuredClone(plan.contexts), personalWorkspaceId: plan.personalWorkspaceId, proofBindingDigest: plan.proofBindingDigest } : {}),
+    sourceAccountId: admission.sourceAccountId, targetAccountId: admission.targetAccountId,
+    planDigest: admission.planDigest, authorityVersion: CONTROL_IDENTITY_AUTHORITY_VERSION,
+    admissionDigest: await sha256Text(`control-recovery-owner:${canonicalJson({ operationId: admission.operationId, recoveryId: admission.recoveryId, sourceAccountId: admission.sourceAccountId, targetAccountId: admission.targetAccountId, planDigest: admission.planDigest, mode: admission.mode })}`),
+    controlReceiptId: receipt.receiptId,
+  };
+}
 export interface ControlIdentityReconciler
   extends IdentityMergeReconciler,
     CredentialUnlinkReconciler {
@@ -373,10 +452,16 @@ export function createControlIdentityReconciler(input: {
   control: ControlIdentityReconciliationPort;
   externalOwners?: IdentityExternalOwnerPorts;
   recoveryApprovals?: IdentityRecoveryApprovalAuthority;
+  authority?: ControlIdentityAuthorityReader;
+  ownerOperationTarget?: OwnerOperationTarget;
+  recoveryEvidence?: OwnerOperationRecoveryEvidenceReader;
+  reviewIssuerAvailability?: ReviewedRecoveryIssuerAvailabilityReader;
   now?: () => number;
 }): ControlIdentityReconciler {
   const clock = input.now ?? Date.now;
-  const authority = createAccountsIdentityReconciliationAuthority(input);
+  const authority = input.authority ?? createAccountsIdentityReconciliationAuthority(input);
+  const target = validOwnerTarget(input.ownerOperationTarget) ? structuredClone(input.ownerOperationTarget) : undefined;
+  const reviewIssuerAvailability = input.reviewIssuerAvailability;
   const ports = () => ownerKinds.map((kind) => input.externalOwners?.[kind]);
   async function assertSameOperation(
     op: IdentityMergeOperation,
@@ -409,47 +494,31 @@ export function createControlIdentityReconciler(input: {
     const admission = await assertSameOperation(op, phase);
     if (!op.contextPlan)
       throw new IdentityMergeConflict("context_acceptance_required");
-    // Current operationRevision intentionally changes at reservation/retry. Owner
-    // custody binds the immutable original proof+plan, not a mutable request rev.
-    const {
-      operationRevision: _revision,
-      phase: _phase,
-      consentAt: _consent,
-      ...immutable
-    } = admission;
     const saved = await input.store.findIdentityMergeContextPlan?.(
       op.contextPlan.planId,
     );
     if (!saved || saved.planDigest !== op.contextPlan.planDigest)
       throw new IdentityMergeConflict("context_plan_conflict");
-    return {
-      contextPins: structuredClone(saved.controlPlan.contexts),
-      personalWorkspaceId: saved.controlPlan.personalWorkspaceId,
-      proofBindingDigest: saved.controlPlan.proofBindingDigest,
-      operationId: op.operationId,
-      kind: "merge",
-      sourceAccountId: op.sourceSubject,
-      targetAccountId: op.targetSubject,
-      planDigest: op.contextPlan.planDigest,
-      authorityVersion: CONTROL_IDENTITY_AUTHORITY_VERSION,
-      admissionDigest: await sha256Text(
-        `control-owner-admission:${canonicalJson(immutable)}`,
-      ),
-    };
+    return identityMergeOwnerContext(op, admission, saved);
   }
   async function ownersReady(
     context?: IdentityExternalOwnerContext,
-  ): Promise<boolean> {
+    operation?: ReviewedRecoveryIssuerAvailabilityRequest,
+    preStatusCheck?: () => Promise<void>,
+  ): Promise<ReviewedRecoveryIssuerAvailabilityCheckpoint | undefined> {
+    const availabilityRequest = context ? { operationId: context.operationId, kind: context.kind, planDigest: context.planDigest } : operation;
     const configured = ports();
     if (
+      !target || !availabilityRequest || !isReviewedRecoveryIssuerAvailabilityReader(reviewIssuerAvailability, target) ||
       configured.some(
         (p, i) =>
           !p || p.kind !== ownerKinds[i] || !p.ownerId || !p.ownerVersion,
       )
     )
-      return false;
+      return undefined;
+    let ready: boolean;
     try {
-      return (
+      ready = (
         await Promise.all(
           configured.map((p) =>
             p!.assertReady(context && structuredClone(context)),
@@ -457,16 +526,49 @@ export function createControlIdentityReconciler(input: {
         )
       ).every((v) => v === true);
     } catch {
-      return false;
+      return undefined;
     }
+    if (!ready) return undefined;
+    // This current-census/admission check is after owner awaits and before the
+    // single signed status exchange. Preserve its exact conflict for consent.
+    await preStatusCheck?.();
+    return await reviewIssuerAvailability.getAvailabilityCheckpoint(availabilityRequest);
+  }
+  async function captureContext(
+    context: IdentityExternalOwnerContext,
+    coreReceipt: ControlIdentityReceipt,
+    capturedOperationRevision: number,
+    recovery?: OwnerOperationRecoveryEvidence,
+  ): Promise<OwnerOperationContextEvidence | undefined> {
+    if (!target || !input.store.findOwnerOperationContextEvidence || !input.store.createOwnerOperationContextEvidence) return undefined;
+    try {
+      const lookup = { operationId: context.operationId, kind: context.kind, planDigest: context.planDigest, target };
+      const prior = await input.store.findOwnerOperationContextEvidence(lookup);
+      if (prior) {
+        if (!await validOwnerContextEvidence(prior) || !identityRecordsEqual(prior.context, context) ||
+          !identityRecordsEqual(prior.coreReceipt, coreReceipt) || !identityRecordsEqual(prior.target, target) ||
+          (!!prior.recovery !== !!recovery) || (recovery && (!prior.recovery ||
+            prior.recovery.recoveryId !== recovery.recoveryId || prior.recovery.decisionDigest !== recovery.decisionDigest ||
+            prior.recovery.ownerEvidenceDigest !== recovery.ownerEvidenceDigest))) return undefined;
+        return prior;
+      }
+      const body = { version: "takosumi.accounts.owner-context@v1" as const, context: structuredClone(context),
+        coreReceipt: structuredClone(coreReceipt), target, capturedOperationRevision, capturedAt: clock(), ...(recovery ? { recovery: structuredClone(recovery) } : {}) };
+      const record = { ...body, evidenceId: await ownerOperationContextEvidenceId(body) };
+      if (!await validOwnerContextEvidence(record) || !await input.store.createOwnerOperationContextEvidence(record)) return undefined;
+      const durable = await input.store.findOwnerOperationContextEvidence(lookup);
+      return identityRecordsEqual(durable, record) ? durable : undefined;
+    } catch { return undefined; }
   }
   async function collect(
     context: IdentityExternalOwnerContext,
     notBefore: number,
+    evidence: OwnerOperationContextEvidence,
   ): Promise<
     Record<IdentityExternalOwnerKind, IdentityExternalOwnerReceipt> | undefined
   > {
-    if (!context.controlReceiptId || !(await ownersReady(context)))
+    if (!context.controlReceiptId || !identityRecordsEqual(evidence.context, context) ||
+      !input.store.findOwnerOperationReceiptEvidence || !input.store.createOwnerOperationReceiptEvidence || !(await ownersReady(context)))
       return undefined;
     const result = {} as Record<
       IdentityExternalOwnerKind,
@@ -488,6 +590,14 @@ export function createControlIdentityReconciler(input: {
           !identityRecordsEqual(response, durable)
         )
           return undefined;
+        const lookup = { contextEvidenceId: evidence.evidenceId, ownerKind: kind };
+        const saved = await input.store.findOwnerOperationReceiptEvidence(lookup);
+        if (saved && (saved.ownerKind !== kind || !validOwnerReceiptEvidence(saved, evidence) || !identityRecordsEqual(saved.receipt, durable))) return undefined;
+        if (!saved) {
+          const record = { ...lookup, receipt: structuredClone(durable), observedAt: clock() };
+          if (!validOwnerReceiptEvidence(record, evidence) || !await input.store.createOwnerOperationReceiptEvidence(record) ||
+            !identityRecordsEqual(record, await input.store.findOwnerOperationReceiptEvidence(lookup))) return undefined;
+        }
         result[kind] = durable;
       } catch {
         return undefined;
@@ -556,14 +666,16 @@ export function createControlIdentityReconciler(input: {
     },
     async assertReady(op) {
       const context = await mergeContext(op, "planning");
-      if (!(await ownersReady(context)))
+      const availabilityCheckpoint = await ownersReady(context, undefined, async () => { await adapter.assertContextPlanCurrent!(op); });
+      if (!availabilityCheckpoint || !target)
         throw new IdentityMergeConflict("merge_reconciliation_unavailable");
+      return { availabilityCheckpoint, target: structuredClone(target) };
     },
     async assertOwnerReadiness(op) {
       try {
-        if (!op) return ownersReady();
+        if (!op) return !!await ownersReady();
         const phase = op.consentAt ? "reserved" : "planning";
-        return ownersReady(await mergeContext(op, phase));
+        return !!await ownersReady(await mergeContext(op, phase));
       } catch {
         return false;
       }
@@ -578,12 +690,13 @@ export function createControlIdentityReconciler(input: {
       });
       const plan = await readCoreMerge(op, receipt);
       await assertSameOperation(op, "reserved");
+      const durableContext = { ...context, controlReceiptId: receipt.receiptId };
+      const evidence = await captureContext(durableContext, receipt, op.revision);
+      if (!evidence) return undefined;
       const external = await collect(
-        {
-          ...context,
-          controlReceiptId: receipt.receiptId,
-        },
+        durableContext,
         Date.parse(receipt.recordedAt),
+        evidence,
       );
       if (!external) return undefined;
       // External waits cannot refresh the approved roster. Replaying the exact
@@ -628,13 +741,18 @@ export function createControlIdentityReconciler(input: {
           ))
       )
         return undefined;
-      if (!(await ownersReady())) return undefined;
+      // This is the exact immutable key used by Core's unlink preservation.
+      // Derive it from persisted admission; no caller-supplied plan is trusted.
+      const { intentRevision: _intentRevision, ...unlinkBinding } = admission;
+      const unlinkPlanDigest = await stableJsonDigest(unlinkBinding);
+      if (!(await ownersReady(undefined, { operationId: admission.intentId, kind: "unlink", planDigest: unlinkPlanDigest }))) return undefined;
       const receipt = await input.control.acknowledgeUnlink({
         intentId: request.operationId,
       });
       const state = await input.control.read(request.operationId);
       if (
         receipt.kind !== "unlink-preserved" ||
+        receipt.planDigest !== unlinkPlanDigest ||
         receipt.operationId !== request.operationId ||
         receipt.authorityVersion !== CONTROL_IDENTITY_AUTHORITY_VERSION ||
         !state?.receipt ||
@@ -642,19 +760,10 @@ export function createControlIdentityReconciler(input: {
         !validTime(receipt.recordedAt, admission.createdAt, clock())
       )
         return undefined;
-      const context: IdentityExternalOwnerContext = {
-        operationId: request.operationId,
-        kind: "unlink",
-        sourceAccountId: request.subject,
-        targetAccountId: request.subject,
-        planDigest: receipt.planDigest,
-        authorityVersion: CONTROL_IDENTITY_AUTHORITY_VERSION,
-        admissionDigest: await sha256Text(
-          `control-unlink-owner:${canonicalJson(admission)}`,
-        ),
-        controlReceiptId: receipt.receiptId,
-      };
-      const external = await collect(context, Date.parse(receipt.recordedAt));
+      const context = await identityUnlinkOwnerContext(admission, receipt);
+      const evidence = await captureContext(context, receipt, admission.intentRevision);
+      if (!evidence) return undefined;
+      const external = await collect(context, Date.parse(receipt.recordedAt), evidence);
       if (
         !external ||
         !identityRecordsEqual(
@@ -698,7 +807,17 @@ export function createControlIdentityReconciler(input: {
         operationId: op.operationId,
         recoveryId: approval.recoveryId,
       });
-      if (!admission || !(await ownersReady())) return undefined;
+      if (!admission) return undefined;
+      const recovery = await input.recoveryEvidence?.readRecoveryEvidence({ operationId: op.operationId, recoveryId: admission.recoveryId });
+      if (!recovery || recovery.recoveryId !== admission.recoveryId || recovery.reviewedApprovalRef !== admission.reviewedApprovalRef ||
+        ![recovery.approvalDigest, recovery.decisionDigest, recovery.ownerEvidenceDigest].every(digest)) return undefined;
+      if (!identityRecordsEqual(op, await input.store.findIdentityMergeOperation?.(op.operationId)) || !identityRecordsEqual(admission,
+        await authority.readRecoveryAdmission({ operationId: op.operationId, recoveryId: approval.recoveryId }))) return undefined;
+      const checkedAt = clock();
+      if (!(await ownersReady(undefined, { operationId: admission.operationId, kind: admission.mode, planDigest: admission.planDigest }))) return undefined;
+      const readyAt = clock();
+      if (!Number.isSafeInteger(checkedAt) || !Number.isSafeInteger(readyAt) || readyAt < checkedAt ||
+        approval.createdAt > readyAt || approval.expiresAt <= readyAt || admission.expiresAt <= readyAt) return undefined;
       const receipt = await input.control.recover({
         operationId: op.operationId,
         recoveryId: approval.recoveryId,
@@ -717,24 +836,10 @@ export function createControlIdentityReconciler(input: {
         !validTime(receipt.recordedAt, op.createdAt, clock())
       )
         return undefined;
-      const external = await collect(
-        {
-          operationId: op.operationId,
-          kind: admission.mode,
-          contextPins: state.plan?.contexts,
-          personalWorkspaceId: state.plan?.personalWorkspaceId,
-          proofBindingDigest: state.plan?.proofBindingDigest,
-          sourceAccountId: op.sourceSubject,
-          targetAccountId: op.targetSubject,
-          planDigest: admission.planDigest,
-          authorityVersion: CONTROL_IDENTITY_AUTHORITY_VERSION,
-          admissionDigest: await sha256Text(
-            `control-recovery-owner:${canonicalJson({ operationId: admission.operationId, recoveryId: admission.recoveryId, sourceAccountId: admission.sourceAccountId, targetAccountId: admission.targetAccountId, planDigest: admission.planDigest, mode: admission.mode })}`,
-          ),
-          controlReceiptId: receipt.receiptId,
-        },
-        Date.parse(receipt.recordedAt),
-      );
+      const context = await identityRecoveryOwnerContext(admission, receipt, state.plan);
+      const evidence = await captureContext(context, receipt, op.revision, recovery);
+      if (!evidence) return undefined;
+      const external = await collect(context, Date.parse(receipt.recordedAt), evidence);
       if (
         !external ||
         !identityRecordsEqual(

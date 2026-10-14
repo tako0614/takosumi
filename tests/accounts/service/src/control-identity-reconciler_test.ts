@@ -3,6 +3,12 @@ import {
   InMemoryInterfaceStore,
 } from "../../../../core/domains/interfaces/stores.ts";
 import { expect, test } from "bun:test";
+import { sha256Text } from "../../../../accounts/service/src/encoding.ts";
+import { canonicalOwnerJson } from "../../../../accounts/service/src/owner-operation-evidence.ts";
+import type { OwnerOperationRecoveryEvidence } from "../../../../accounts/service/src/owner-operation-contract.ts";
+import { createAccountsOwnerOperationReader } from "../../../../accounts/service/src/owner-operation-admission.ts";
+import { reviewIssuerAvailabilityFixture } from "../fixtures/review-issuer-availability-fixture.ts";
+import type { ReviewedRecoveryIssuerAvailabilityReader } from "../../../../accounts/service/src/reviewed-recovery-issuer-availability.ts";
 import {
   identityContextFixture,
   contextA,
@@ -109,6 +115,27 @@ async function composition(
     now: () => new Date(f.now),
   });
   const owners: IdentityExternalOwnerPorts = {};
+  const target = { ownerKind: "hosted-intents" as const, ownerClientId: "isolated-owner-fixture", targetBindingDigest: await sha256Text("isolated-actual-core-fixture-graph") };
+  const issuerAvailability = await reviewIssuerAvailabilityFixture({ target, now: () => f.now });
+  const proofHistory = new Map<string, OwnerOperationRecoveryEvidence>();
+  const proofRefs = new Map<string, OwnerOperationRecoveryEvidence>();
+  async function fixtureRecoveryProof() {
+    if (!reviewedApproval || reviewedApproval.expiresAt <= f.now) return undefined;
+    const a = reviewedApproval;
+    const proof = { recoveryId: a.recoveryId, reviewedApprovalRef: a.reviewedApprovalRef,
+      approvalDigest: await sha256Text(canonicalOwnerJson(a)),
+      decisionDigest: await sha256Text(canonicalOwnerJson({ operationId: a.operationId, recoveryId: a.recoveryId, sourceAccountId: a.sourceAccountId, targetAccountId: a.targetAccountId, planDigest: a.planDigest, mode: a.mode })),
+      ownerEvidenceDigest: await sha256Text(`isolated-pre-review-owner-evidence:${a.operationId}:${a.recoveryId}`) };
+    proofHistory.set(proof.approvalDigest, proof);
+    proofRefs.set(`${a.operationId}:${a.recoveryId}:${a.reviewedApprovalRef}`, proof);
+    return proof;
+  }
+  // Synthetic review evidence only; this fixture never qualifies a real issuer.
+  const recoveryEvidence = {
+    async readRecoveryEvidence() { return fixtureRecoveryProof(); },
+    async readHistoricalRecoveryEvidence(input: { approvalDigest: string }) { return proofHistory.get(input.approvalDigest); },
+    async readHistoricalRecoveryEvidenceByReviewRef(input: { operationId: string; recoveryId: string; reviewedApprovalRef: string }) { return proofRefs.get(`${input.operationId}:${input.recoveryId}:${input.reviewedApprovalRef}`); },
+  };
   const durable = new Map<string, IdentityExternalOwnerReceipt>();
   let partial = false;
   let beforeOwner: undefined | (() => Promise<void>);
@@ -155,6 +182,10 @@ async function composition(
     now: () => f.now,
     ...(configureOwners ? { externalOwners: owners } : {}),
     recoveryApprovals,
+    recoveryEvidence,
+    authority,
+    ownerOperationTarget: target,
+    reviewIssuerAvailability: issuerAvailability.reader,
   });
   return {
     controlStore,
@@ -163,6 +194,11 @@ async function composition(
     reconciler,
     anchors,
     owners,
+    target,
+    reviewIssuerAvailability: issuerAvailability.reader,
+    availabilityChallenges: issuerAvailability.challenges,
+    recoveryApprovals,
+    recoveryEvidence,
     durable,
     ownerCalls: () => calls,
     review(approval: IdentityReviewedRecoveryApproval | undefined) {
@@ -177,6 +213,296 @@ async function composition(
   };
 }
 const retryFixture = { pendingCapacity: 100, assertAvailable: async () => {} };
+
+for (const unavailableAfterDelay of [false, true]) {
+  test(`final consent status is issued after delayed Core validation${unavailableAfterDelay ? " and refuses an expired round trip before CAS" : " without reusing an earlier status"}`, async () => {
+    const f = await identityContextFixture();
+    try {
+      const c = await composition(f), op = await accepted(f, c), beganAt = f.now;
+      let delayed = false, reserveCalls = 0;
+      const control = new Proxy(c.core, { get(target, property) {
+        if (property === "assertMergePlanCurrent") return async (request: Parameters<typeof target.assertMergePlanCurrent>[0]) => {
+          const plan = await target.assertMergePlanCurrent(request);
+          if (!delayed) { delayed = true; f.now += 1500; }
+          return plan;
+        };
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      } });
+      const store = new Proxy(f.store, { get(target, property) {
+        if (property === "compareAndSetIdentityMerge") return async (mutation: Parameters<NonNullable<typeof target.compareAndSetIdentityMerge>>[0]) => { if (mutation.reserve) reserveCalls++; return await target.compareAndSetIdentityMerge!(mutation); };
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      } });
+      const availability = await reviewIssuerAvailabilityFixture({ target: c.target, now: () => f.now, beforeResponse(challenge) {
+        if (unavailableAfterDelay && f.now >= beganAt + 1500) f.now = challenge.issuedAt + 1000;
+      } });
+      const adapter = createControlIdentityReconciler({ store, control, authority: c.authority, ownerOperationTarget: c.target, externalOwners: c.owners, reviewIssuerAvailability: availability.reader, now: () => f.now });
+      const action = consentIdentityMerge({ store, operation: op, session: f.session(), consent: true, reconciler: adapter, retryCapability: retryFixture, now: beganAt, clock: () => f.now });
+      if (unavailableAfterDelay) {
+        await expect(action).rejects.toThrow("merge_reconciliation_unavailable");
+        expect(reserveCalls).toBe(0);
+        expect(await f.store.getAccountAuthenticationGeneration!(contextA)).toBe(0);
+        expect(await f.store.isAccountAuthenticationFenced!(contextB)).toBe(false);
+      } else {
+        expect((await action).consentAt).toBe(beganAt + 1500);
+        expect(reserveCalls).toBe(1);
+      }
+      expect(availability.challenges).toHaveLength(1);
+      expect(availability.challenges[0]!.issuedAt).toBe(beganAt + 1500);
+      expect((await c.core.read(op.operationId))?.status).toBe("prepared");
+      expect(c.ownerCalls()).toBe(0);
+    } finally { await f.close(); }
+  });
+}
+
+test("a genuine final signed status cannot reserve an actor session that expires during the round trip", async () => {
+  const f = await identityContextFixture();
+  try {
+    const c = await composition(f), op = await accepted(f, c);
+    const session = { ...f.session(), expiresAt: f.now + 1 };
+    await f.store.saveAccountSession(session);
+    let reserveCalls = 0;
+    const store = new Proxy(f.store, { get(target, property) {
+      if (property === "compareAndSetIdentityMerge") return async (mutation: Parameters<NonNullable<typeof target.compareAndSetIdentityMerge>>[0]) => { if (mutation.reserve) reserveCalls++; return await target.compareAndSetIdentityMerge!(mutation); };
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    } });
+    const availability = await reviewIssuerAvailabilityFixture({ target: c.target, now: () => f.now, beforeResponse() { f.now++; } });
+    const adapter = createControlIdentityReconciler({ store, control: c.core, authority: c.authority, ownerOperationTarget: c.target, externalOwners: c.owners, reviewIssuerAvailability: availability.reader, now: () => f.now });
+    await expect(consentIdentityMerge({ store, operation: op, session, consent: true, reconciler: adapter, retryCapability: retryFixture, now: f.now, clock: () => f.now })).rejects.toThrow("merge_conflict");
+    expect(availability.challenges).toHaveLength(1);
+    expect(reserveCalls).toBe(0);
+    expect(await f.store.getAccountAuthenticationGeneration!(contextA)).toBe(0);
+    expect(await f.store.isAccountAuthenticationFenced!(contextB)).toBe(false);
+  } finally { await f.close(); }
+});
+
+for (const forged of [false, true]) {
+  test(`actual consent refuses ${forged ? "a forged" : "an omitted"} final availability checkpoint before entering reservation`, async () => {
+    const f = await identityContextFixture();
+    try {
+      const c = await composition(f), op = await accepted(f, c);
+      let reserveCalls = 0;
+      const store = new Proxy(f.store, { get(target, property) {
+        if (property === "compareAndSetIdentityMerge") return async (mutation: Parameters<NonNullable<typeof target.compareAndSetIdentityMerge>>[0]) => { if (mutation.reserve) reserveCalls++; return await target.compareAndSetIdentityMerge!(mutation); };
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      } });
+      const adapter = { ...c.reconciler, async assertReady() {
+        return (forged ? { target: c.target, availabilityCheckpoint: Object.freeze({}) } : undefined) as unknown as Awaited<ReturnType<NonNullable<typeof c.reconciler.assertReady>>>;
+      } };
+      await expect(consentIdentityMerge({ store, operation: op, session: f.session(), consent: true,
+        reconciler: adapter, retryCapability: retryFixture, now: f.now })).rejects.toThrow("merge_reconciliation_unavailable");
+      expect(reserveCalls).toBe(0);
+      expect(await f.store.getAccountAuthenticationGeneration!(contextA)).toBe(0);
+      expect(await f.store.isAccountAuthenticationFenced!(contextB)).toBe(false);
+      expect((await c.core.read(op.operationId))?.status).toBe("prepared");
+      expect(c.ownerCalls()).toBe(0);
+    } finally { await f.close(); }
+  });
+}
+
+for (const [label, offset] of [["backward", -1], ["noninteger", 0.5], ["expired evidence", 300001]] as const) {
+  test(`final consent refuses ${label} trusted time after the genuine status without reserving`, async () => {
+    const f = await identityContextFixture();
+    try {
+      const c = await composition(f), op = await accepted(f, c), initialNow = f.now;
+      let reserveCalls = 0;
+      const store = new Proxy(f.store, { get(target, property) {
+        if (property === "compareAndSetIdentityMerge") return async (mutation: Parameters<NonNullable<typeof target.compareAndSetIdentityMerge>>[0]) => { if (mutation.reserve) reserveCalls++; return await target.compareAndSetIdentityMerge!(mutation); };
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      } });
+      const adapter = { ...c.reconciler, async assertReady(operation: IdentityMergeOperation) {
+        const readiness = await c.reconciler.assertReady!(operation);
+        f.now = initialNow + offset;
+        return readiness;
+      } };
+      await expect(consentIdentityMerge({ store, operation: op, session: f.session(), consent: true,
+        reconciler: adapter, retryCapability: retryFixture, now: initialNow, clock: () => f.now })).rejects.toThrow("merge_conflict");
+      expect(c.availabilityChallenges).toHaveLength(1);
+      expect(reserveCalls).toBe(0);
+      expect(await f.store.getAccountAuthenticationGeneration!(contextA)).toBe(0);
+      expect(await f.store.isAccountAuthenticationFenced!(contextB)).toBe(false);
+      expect(c.ownerCalls()).toBe(0);
+    } finally { await f.close(); }
+  });
+}
+
+for (const expireApproval of [false, true]) {
+  test(`recovery checks current evidence before final status${expireApproval ? " and refuses approval expiry before Core" : " without carrying status across an evidence wait"}`, async () => {
+    const f = await identityContextFixture();
+    try {
+      const c = await composition(f), op = await accepted(f, c);
+      const reserved = await consentIdentityMerge({ store: f.store, operation: op, session: f.session(), consent: true, reconciler: c.reconciler, retryCapability: retryFixture, now: f.now });
+      c.partial(true); expect(await c.reconciler.reconcile(reserved)).toBeUndefined(); c.partial(false);
+      const beganAt = f.now;
+      const approval = { operationId: op.operationId, recoveryId: "isolated-recovery-timing", operationRevision: reserved.revision, sourceAccountId: contextB, targetAccountId: contextA, planDigest: op.contextPlan!.planDigest,
+        sourceIdentityGeneration: 1, targetIdentityGeneration: 1, mode: "abort-before-active" as const, reviewedApprovalRef: "isolated-review-timing", createdAt: beganAt, expiresAt: beganAt + (expireApproval ? 1 : 300000) };
+      c.review(approval);
+      let recoverCalls = 0;
+      const control = new Proxy(c.core, { get(target, property) {
+        if (property === "recover") return async (request: Parameters<typeof target.recover>[0]) => { recoverCalls++; return await target.recover(request); };
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      } });
+      const recoveryEvidence = { ...c.recoveryEvidence, async readRecoveryEvidence() {
+        const proof = await c.recoveryEvidence.readRecoveryEvidence();
+        if (!expireApproval) f.now += 1500;
+        return proof;
+      } };
+      const availability = await reviewIssuerAvailabilityFixture({ target: c.target, now: () => f.now, beforeResponse(challenge) {
+        if (expireApproval) f.now = approval.expiresAt;
+        else if (f.now >= beganAt + 1500) f.now = challenge.issuedAt + 1000;
+      } });
+      const adapter = createControlIdentityReconciler({ store: f.store, control, authority: c.authority, ownerOperationTarget: c.target, externalOwners: c.owners, recoveryApprovals: c.recoveryApprovals,
+        recoveryEvidence, reviewIssuerAvailability: availability.reader, now: () => f.now });
+      expect(await adapter.reconcileRecovery!(reserved)).toBeUndefined();
+      expect(recoverCalls).toBe(0);
+      expect(availability.challenges).toHaveLength(1);
+      expect(availability.challenges[0]!.issuedAt).toBe(beganAt + (expireApproval ? 0 : 1500));
+      expect((await c.core.read(op.operationId))?.receipt?.kind).toBe("merge-applied");
+      expect(await f.store.isAccountAuthenticationFenced!(contextA)).toBe(true);
+    } finally { await f.close(); }
+  });
+}
+
+test("all four owner ports cannot reserve without a genuine target-bound signed review issuer availability capability", async () => {
+  const f = await identityContextFixture();
+  try {
+    const c = await composition(f);
+    const op = await accepted(f, c);
+    let forgedCalls = 0;
+    const wrongTarget = await reviewIssuerAvailabilityFixture({ target: { ...c.target, targetBindingDigest: await sha256Text("isolated-other-target") }, now: () => f.now });
+    const unavailable = await reviewIssuerAvailabilityFixture({ target: c.target, now: () => f.now, status: "unavailable" });
+    const candidates = [undefined, true, { isAvailable: async () => { forgedCalls++; return true; } }, { ...c.reviewIssuerAvailability }, wrongTarget.reader, unavailable.reader];
+    for (const candidate of candidates) {
+      const adapter = createControlIdentityReconciler({ store: f.store, control: c.core, authority: c.authority, ownerOperationTarget: c.target, externalOwners: c.owners,
+        reviewIssuerAvailability: candidate as ReviewedRecoveryIssuerAvailabilityReader | undefined, now: () => f.now });
+      await expect(consentIdentityMerge({ store: f.store, operation: op, session: f.session(), consent: true, reconciler: adapter, retryCapability: retryFixture, now: f.now })).rejects.toThrow("merge_reconciliation_unavailable");
+      expect((await c.core.read(op.operationId))?.status).toBe("prepared");
+      expect(await f.store.getAccountAuthenticationGeneration!(contextA)).toBe(0);
+      expect(await f.store.getAccountAuthenticationGeneration!(contextB)).toBe(0);
+      expect(await f.store.isAccountAuthenticationFenced!(contextA)).toBe(false);
+      expect(await f.store.isAccountAuthenticationFenced!(contextB)).toBe(false);
+      expect((await f.store.findIdentityMergeOperation!(op.operationId))?.consentAt).toBeUndefined();
+    }
+    expect(forgedCalls).toBe(0);
+    expect(wrongTarget.challenges).toHaveLength(0);
+    expect(unavailable.challenges).toHaveLength(1);
+    expect(c.ownerCalls()).toBe(0);
+    expect(await c.reconciler.assertOwnerReadiness()).toBe(false);
+    expect(c.availabilityChallenges).toHaveLength(0);
+  } finally { await f.close(); }
+});
+
+test("owner waits precede the final issuer challenge and expiry during that signed round trip refuses before reservation", async () => {
+  const f = await identityContextFixture();
+  try {
+    const c = await composition(f);
+    const op = await accepted(f, c);
+    const beganAt = f.now;
+    let ownerChecks = 0;
+    const owners = Object.fromEntries(Object.entries(c.owners).map(([kind, port]) => [kind, { ...port!, assertReady: async () => { await Promise.resolve(); ownerChecks++; f.now += 6000; return true; } }])) as IdentityExternalOwnerPorts;
+    const availability = await reviewIssuerAvailabilityFixture({ target: c.target, now: () => f.now, beforeResponse(challenge) {
+      expect(ownerChecks).toBe(4);
+      expect(challenge.issuedAt).toBe(beganAt + 24000);
+      f.now = challenge.expiresAt;
+    } });
+    const adapter = createControlIdentityReconciler({ store: f.store, control: c.core, authority: c.authority, ownerOperationTarget: c.target, externalOwners: owners,
+      reviewIssuerAvailability: availability.reader, now: () => f.now });
+    await expect(consentIdentityMerge({ store: f.store, operation: op, session: f.session(), consent: true, reconciler: adapter, retryCapability: retryFixture, now: beganAt, clock: () => f.now })).rejects.toThrow("merge_reconciliation_unavailable");
+    expect(ownerChecks).toBe(4);
+    expect(availability.challenges).toHaveLength(1);
+    expect((await c.core.read(op.operationId))?.status).toBe("prepared");
+    expect(c.ownerCalls()).toBe(0);
+    expect(await f.store.getAccountAuthenticationGeneration!(contextA)).toBe(0);
+    expect(await f.store.isAccountAuthenticationFenced!(contextB)).toBe(false);
+  } finally { await f.close(); }
+});
+
+
+for (const failure of ["context", "owner-receipt"] as const) {
+  test(`actual Core ${failure} journal failure stops external progress and replica retry reuses the same original receipts`, async () => {
+    const f = await identityContextFixture();
+    try {
+      const c = await composition(f);
+      const op = await accepted(f, c);
+      expect(op.contextPlan!.planDigest).toMatch(/^sha256:[a-f0-9]{64}$/u);
+      const reserved = await consentIdentityMerge({ store: f.store, operation: op, session: f.session(), consent: true, reconciler: c.reconciler, retryCapability: retryFixture, now: f.now });
+      let ownerReads = 0;
+      const owners = Object.fromEntries(Object.entries(c.owners).map(([kind, port]) => [kind, { ...port!, read: async (context: Parameters<NonNullable<typeof port>["read"]>[0]) => { ownerReads++; return await port!.read(context); } }])) as IdentityExternalOwnerPorts;
+      const store = new Proxy(f.store, { get(target, property) {
+        if (property === (failure === "context" ? "createOwnerOperationContextEvidence" : "createOwnerOperationReceiptEvidence")) return async () => false;
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      } });
+      const interrupted = createControlIdentityReconciler({ store, control: c.core, authority: c.authority, ownerOperationTarget: c.target, externalOwners: owners, reviewIssuerAvailability: c.reviewIssuerAvailability, now: () => f.now });
+      expect(await interrupted.reconcile(reserved)).toBeUndefined();
+      const originalCore = (await c.core.read(op.operationId))!.receipt!;
+      expect(originalCore.kind).toBe("merge-applied");
+      if (failure === "context") { expect(ownerReads).toBe(0); expect(c.ownerCalls()).toBe(0); }
+      else { expect(ownerReads).toBe(2); expect(c.ownerCalls()).toBe(1); }
+      expect(await f.store.isAccountAuthenticationFenced!(contextA)).toBe(true);
+      const active = await activateIdentityMerge({ store: f.store, operation: reserved, reconciler: c.reconciler, now: f.now });
+      expect(active.status).toBe("active");
+      expect(c.ownerCalls()).toBe(4);
+      expect((await c.core.read(op.operationId))!.receipt).toEqual(originalCore);
+      const reader = createAccountsOwnerOperationReader({ store: f.store, authority: c.authority, control: c.core, target: c.target, now: () => f.now });
+      const released = await reader.readOwnerOperation({ operationId: op.operationId, kind: "merge", planDigest: op.contextPlan!.planDigest, purpose: "release" });
+      expect(released?.admission).toBe("terminal-release");
+      expect(released?.context.controlReceiptId).toBe(originalCore.receiptId);
+    } finally { await f.close(); }
+  });
+}
+
+for (const mode of ["abort-before-active", "restore-after-active"] as const) {
+  test(`actual Core ${mode} terminal release retains original merge ancestry and all current owner receipts`, async () => {
+    const { abortPendingIdentityMerge, quarantineIdentityMerge, restoreIdentityMerge } = await import("../../../../accounts/service/src/identity-merge.ts");
+    const f = await identityContextFixture();
+    try {
+      const c = await composition(f);
+      const op = await accepted(f, c);
+      let current = await consentIdentityMerge({ store: f.store, operation: op, session: f.session(), consent: true, reconciler: c.reconciler, retryCapability: retryFixture, now: f.now });
+      if (mode === "abort-before-active") { c.partial(true); expect(await c.reconciler.reconcile(current)).toBeUndefined(); c.partial(false); }
+      else {
+        current = await activateIdentityMerge({ store: f.store, operation: current, reconciler: c.reconciler, now: f.now });
+        current = await quarantineIdentityMerge({ store: f.store, operation: current, reason: "isolated-reviewed-recovery", now: f.now });
+      }
+      const originalCore = (await f.store.findOwnerOperationContextEvidence!({ operationId: op.operationId, kind: "merge", planDigest: op.contextPlan!.planDigest, target: c.target }))!.coreReceipt;
+      c.review({ operationId: op.operationId, recoveryId: `isolated-recovery-${mode}`, operationRevision: current.revision, sourceAccountId: contextB, targetAccountId: contextA,
+        planDigest: op.contextPlan!.planDigest, sourceIdentityGeneration: await f.store.getAccountAuthenticationGeneration!(contextB), targetIdentityGeneration: await f.store.getAccountAuthenticationGeneration!(contextA),
+        mode, reviewedApprovalRef: `isolated-reviewed-${mode}`, createdAt: f.now, expiresAt: f.now + 300000 });
+      const recovered = mode === "abort-before-active" ? await abortPendingIdentityMerge({ store: f.store, operation: current, reconciler: c.reconciler, now: f.now }) : await restoreIdentityMerge({ store: f.store, operation: current, reconciler: c.reconciler, now: f.now });
+      expect(recovered.status).toBe(mode === "abort-before-active" ? "aborted" : "restored");
+      const challenges = c.availabilityChallenges.filter((challenge) => challenge.kind === mode);
+      expect(challenges.length).toBeGreaterThan(0);
+      for (const challenge of challenges) {
+        expect(challenge.operationId).toBe(op.operationId);
+        expect(challenge.planDigest).toBe(op.contextPlan!.planDigest);
+      }
+      const reader = createAccountsOwnerOperationReader({ store: f.store, authority: c.authority, control: c.core, target: c.target, recoveryApprovals: c.recoveryApprovals, recoveryEvidence: c.recoveryEvidence, now: () => f.now });
+      const request = { operationId: op.operationId, kind: "merge", planDigest: op.contextPlan!.planDigest };
+      const historical = await reader.readOwnerOperation({ ...request, purpose: "readback" });
+      expect(historical?.admission).toBe("historical");
+      expect(historical?.context.controlReceiptId).toBe(originalCore.receiptId);
+      const release = await reader.readOwnerOperation({ ...request, purpose: "release" });
+      expect(release?.admission).toBe("terminal-release");
+      if (release?.admission === "terminal-release") {
+        expect(release.contextEvidence.coreReceipt.receiptId).toBe(originalCore.receiptId);
+        expect(release.terminal.contextEvidence.coreReceipt.receiptId).not.toBe(originalCore.receiptId);
+        expect(Object.keys(release.terminal.ownerReceipts)).toHaveLength(4);
+        expect(release.terminal.recovery?.recoveryId).toBe(recovered.undoOperationId);
+      }
+      expect(await reader.readOwnerOperation({ ...request, purpose: "reconcile" })).toBeUndefined();
+      expect(await reader.readOwnerOperation({ ...request, kind: mode === "abort-before-active" ? "restore-after-active" : "abort-before-active", purpose: "release" })).toBeUndefined();
+      expect((await f.store.findCanonicalAccount!(contextB))?.subject).toBe(contextB);
+      expect(await f.store.isAccountAuthenticationFenced!(contextA)).toBe(false);
+    } finally { await f.close(); }
+  });
+}
+
 async function accepted(
   f: Awaited<ReturnType<typeof identityContextFixture>>,
   c: Awaited<ReturnType<typeof composition>>,
@@ -1118,6 +1444,17 @@ test("actual Core unlink preservation consumes the selected retained proof witho
       now: f.now,
     });
     expect(done.status).toBe("completed");
+    const issuerChallenges = c.availabilityChallenges.filter((challenge) => challenge.kind === "unlink");
+    expect(issuerChallenges.length).toBeGreaterThan(0);
+    for (const challenge of issuerChallenges) {
+      expect(challenge.operationId).toBe(intent.operationId);
+      expect(challenge.planDigest).toBe((await c.core.read(intent.operationId))!.receipt!.planDigest);
+    }
+    const ownerReader = createAccountsOwnerOperationReader({ store: f.store, authority: c.authority, control: c.core, target: c.target, recoveryApprovals: c.recoveryApprovals, recoveryEvidence: c.recoveryEvidence, now: () => f.now });
+    const ownerRequest = { operationId: intent.operationId, kind: "unlink", planDigest: (await c.core.read(intent.operationId))!.receipt!.planDigest };
+    expect((await ownerReader.readOwnerOperation({ ...ownerRequest, purpose: "readback" }))?.admission).toBe("historical");
+    expect((await ownerReader.readOwnerOperation({ ...ownerRequest, purpose: "release" }))?.admission).toBe("terminal-release");
+    expect(await ownerReader.readOwnerOperation({ ...ownerRequest, purpose: "reconcile" })).toBeUndefined();
     expect((await c.core.read(intent.operationId))?.receipt?.kind).toBe(
       "unlink-preserved",
     );

@@ -32,6 +32,7 @@ import type {
 import { sha256Text } from "../../../../accounts/service/src/encoding.ts";
 import type { ControlIdentityContextPlan } from "../../../../contract/identity-reconciliation.ts";
 import { CONTROL_IDENTITY_AUTHORITY_VERSION } from "../../../../contract/identity-reconciliation.ts";
+import { reviewIssuerAvailabilityFixture } from "./review-issuer-availability-fixture.ts";
 export const contextA = "tsub_context_A",
   contextB = "tsub_context_B";
 export const contextNow = Date.now();
@@ -210,11 +211,26 @@ export async function identityContextFixture(
 /** Unit test fixture only; integration tests use the real Core service. */
 export function isolatedContextReconciler(
   store: AccountsStore,
-  now: number,
+  now: number | (() => number),
 ): IdentityMergeReconciler {
+  const clock = typeof now === "function" ? now : () => now;
+  async function availabilityFixture() {
+    const target = { ownerKind: "hosted-intents" as const, ownerClientId: "isolated-context-fixture",
+      targetBindingDigest: await sha256Text("isolated-context-fixture-target") };
+    return { target, ...await reviewIssuerAvailabilityFixture({ target, now: clock }) };
+  }
+  let availability: ReturnType<typeof availabilityFixture> | undefined;
   return {
     reconcile: async () => undefined,
-    assertReady: async () => {},
+    async assertReady(op) {
+      // This isolated fixture uses actual ephemeral ES256 verification. It is
+      // never a real owner/review-issuer qualification or affirmative boolean.
+      const { target, reader } = await (availability ??= availabilityFixture());
+      const availabilityCheckpoint = await reader.getAvailabilityCheckpoint({ operationId: op.operationId,
+        kind: "merge", planDigest: op.contextPlan!.planDigest });
+      if (!availabilityCheckpoint) throw new Error("isolated_issuer_unavailable");
+      return { target, availabilityCheckpoint };
+    },
     async prepareContextPlan(op): Promise<ControlIdentityContextPlan> {
       const contexts = [
         {
@@ -257,7 +273,7 @@ export function isolatedContextReconciler(
         supportedInventory: "two-disjoint-personal-contexts/v1",
         personalWorkspaceId: "workspace_A",
         contexts,
-        createdAt: new Date(now).toISOString(),
+        createdAt: new Date(clock()).toISOString(),
         digest: await sha256Text(`fixture-context-plan:${op.operationId}`),
       };
     },

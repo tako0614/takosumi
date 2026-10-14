@@ -30,8 +30,13 @@ import type {
   UpstreamLoginTransactionRecord,
 } from "./identity-state.ts";
 import { upstreamIdentityKey } from "./identity-state.ts";
+import type { OwnerOperationContextEvidence, OwnerOperationReceiptEvidence } from "./owner-operation-contract.ts";
+import type { ReviewedRecoveryApprovalRecord, ReviewedRecoveryApprovalPointer, ReviewedRecoveryApprovalMutation } from "./reviewed-recovery-state.ts";
+import { ownerContextBucket, ownerReceiptBucket, ownerContextKey, ownerReceiptKey, reviewedApprovalBucket, reviewedApprovalCurrentBucket, reviewedApprovalRefBucket, reviewedApprovalRefKey, canonicalOwnerJson, digest, boundedText, validOwnerTarget, validOwnerContextEvidence, validOwnerReceiptEvidence, OwnerOperationEvidenceConflict, type OwnerOperationContextEvidenceLookup, type OwnerOperationReceiptEvidenceLookup } from "./owner-operation-evidence.ts";
+import { validReviewedRecoveryMutation, validReviewedRecoveryRecord } from "./reviewed-recovery-approvals.ts";
 
 export interface IdentityRecordRepository {
+  commitReviewedRecoveryApproval(input: ReviewedRecoveryApprovalMutation): Promise<boolean>;
   listIdentities(
     subject: TakosumiSubject,
   ): Promise<readonly UpstreamIdentityRecord[]>;
@@ -80,6 +85,61 @@ export class HostedIdentityRecords implements HostedIdentityStore {
     readonly repository: IdentityRecordRepository,
     readonly accounts: Pick<AccountsStore, "findAccount">,
   ) {}
+  async createOwnerOperationContextEvidence(value: OwnerOperationContextEvidence): Promise<boolean> {
+    const record = structuredClone(value);
+    if (!await validOwnerContextEvidence(record)) return false;
+    const key = ownerContextKey(record.context);
+    if (await this.repository.create(ownerContextBucket, key, record)) return true;
+    return canonicalOwnerJson(await this.repository.get(ownerContextBucket, key)) === canonicalOwnerJson(record);
+  }
+  async findOwnerOperationContextEvidence(input: OwnerOperationContextEvidenceLookup): Promise<OwnerOperationContextEvidence | undefined> {
+    if (!validOwnerTarget(input.target)) return undefined;
+    const record = await this.repository.get<OwnerOperationContextEvidence>(ownerContextBucket, ownerContextKey(input));
+    if (!record) return undefined;
+    if (!await validOwnerContextEvidence(record) || canonicalOwnerJson(record.target) !== canonicalOwnerJson(input.target) || ownerContextKey(record.context) !== ownerContextKey(input)) throw new OwnerOperationEvidenceConflict();
+    return structuredClone(record);
+  }
+  async createOwnerOperationReceiptEvidence(value: OwnerOperationReceiptEvidence): Promise<boolean> {
+    const record = structuredClone(value);
+    const parent = await this.repository.get<OwnerOperationContextEvidence>(ownerContextBucket, ownerContextKey(record.receipt));
+    if (!parent || !await validOwnerContextEvidence(parent) || !validOwnerReceiptEvidence(record, parent)) return false;
+    const key = ownerReceiptKey(record);
+    if (await this.repository.create(ownerReceiptBucket, key, record)) return true;
+    return canonicalOwnerJson(await this.repository.get(ownerReceiptBucket, key)) === canonicalOwnerJson(record);
+  }
+  async findOwnerOperationReceiptEvidence(input: OwnerOperationReceiptEvidenceLookup): Promise<OwnerOperationReceiptEvidence | undefined> {
+    const record = await this.repository.get<OwnerOperationReceiptEvidence>(ownerReceiptBucket, ownerReceiptKey(input));
+    if (!record) return undefined;
+    if (ownerReceiptKey(record) !== ownerReceiptKey(input)) throw new OwnerOperationEvidenceConflict();
+    const parent = await this.repository.get<OwnerOperationContextEvidence>(ownerContextBucket, ownerContextKey(record.receipt));
+    if (!parent || !await validOwnerContextEvidence(parent) || !validOwnerReceiptEvidence(record, parent)) throw new OwnerOperationEvidenceConflict();
+    return structuredClone(record);
+  }
+  async findReviewedRecoveryApproval(hash: string): Promise<ReviewedRecoveryApprovalRecord | undefined> {
+    if (!digest(hash)) return undefined;
+    const record = await this.repository.get<ReviewedRecoveryApprovalRecord>(reviewedApprovalBucket, hash);
+    return record && record.approvalDigest === hash && await validReviewedRecoveryRecord(record) ? structuredClone(record) : undefined;
+  }
+  async findCurrentReviewedRecoveryApproval(operationId: string): Promise<ReviewedRecoveryApprovalPointer | undefined> {
+    if (!boundedText(operationId)) return undefined;
+    const p = await this.repository.get<ReviewedRecoveryApprovalPointer>(reviewedApprovalCurrentBucket, operationId);
+    return p?.operationId === operationId && digest(p.approvalDigest) && Number.isSafeInteger(p.revision) && p.revision >= 0 && boundedText(p.mutationId) && Number.isSafeInteger(p.updatedAt) && p.updatedAt >= 0 ? structuredClone(p) : undefined;
+  }
+  async findReviewedRecoveryApprovalByRef(input: {operationId:string;recoveryId:string;reviewedApprovalRef:string}): Promise<string | undefined> {
+    const r = await this.repository.get<{operationId:string;recoveryId:string;reviewedApprovalRef:string;approvalDigest:string}>(reviewedApprovalRefBucket, reviewedApprovalRefKey(input));
+    return r && r.operationId === input.operationId && r.recoveryId === input.recoveryId && r.reviewedApprovalRef === input.reviewedApprovalRef && digest(r.approvalDigest) ? r.approvalDigest : undefined;
+  }
+  async compareAndSetReviewedRecoveryApproval(value: ReviewedRecoveryApprovalMutation): Promise<boolean> {
+    const input = structuredClone(value);
+    if (!await validReviewedRecoveryMutation(input)) return false;
+    const old = await this.repository.get<ReviewedRecoveryApprovalPointer>(reviewedApprovalCurrentBucket, input.pointer.operationId);
+    if (old && (!digest(old.approvalDigest) || old.operationId !== input.pointer.operationId || !Number.isSafeInteger(old.revision) || !boundedText(old.mutationId))) return false;
+    const history = await this.repository.get<ReviewedRecoveryApprovalRecord>(reviewedApprovalBucket, input.record.approvalDigest);
+    if (history && (!await validReviewedRecoveryRecord(history) || canonicalOwnerJson(history) !== canonicalOwnerJson(input.record))) return false;
+    const ref = await this.repository.get<{operationId:string;recoveryId:string;reviewedApprovalRef:string;approvalDigest:string}>(reviewedApprovalRefBucket, reviewedApprovalRefKey(input.record.approval));
+    if (ref && (ref.operationId !== input.record.approval.operationId || ref.recoveryId !== input.record.approval.recoveryId || ref.reviewedApprovalRef !== input.record.approval.reviewedApprovalRef || ref.approvalDigest !== input.record.approvalDigest)) return false;
+    return this.repository.commitReviewedRecoveryApproval(input);
+  }
   createCredentialUnlinkAuthorityTicket(
     record: import("./identity-context-state.ts").CredentialUnlinkAuthorityTicket,
   ): Promise<boolean> {

@@ -1,3 +1,6 @@
+import { readReviewedRecoveryIssuerAvailabilityCheckpoint, consumeReviewedRecoveryIssuerAvailabilityCheckpoint } from "./reviewed-recovery-issuer-availability.ts";
+import type { ReviewedRecoveryApprovalMutation } from "./reviewed-recovery-state.ts";
+import { canonicalOwnerJson, ownerContextBucket, ownerReceiptBucket, reviewedApprovalBucket, reviewedApprovalCurrentBucket, reviewedApprovalRefBucket, reviewedApprovalRefKey } from "./owner-operation-evidence.ts";
 import type {
   CredentialUnlinkIntent,
   CredentialUnlinkReceipt,
@@ -38,11 +41,12 @@ export class MemoryIdentityRecordRepository
     readonly identities: Map<string, UpstreamIdentityRecord>,
     readonly revoke: (subjects: readonly string[], now: number) => void,
   ) {}
-  private assertReferences(record: unknown): void {
+  private assertReferences(record: unknown, bucket: string): void {
     const r = record as Record<string, unknown>;
+    const context = (bucket === ownerContextBucket ? r.context : bucket === ownerReceiptBucket ? r.receipt : undefined) as Record<string, unknown> | undefined;
     for (const subject of [
-      r.subject ?? r.targetSubject ?? r.canonicalSubject,
-      r.sourceSubject,
+      context?.targetAccountId ?? r.subject ?? r.targetSubject ?? r.canonicalSubject,
+      context?.sourceAccountId ?? r.sourceSubject,
     ])
       if (typeof subject === "string" && !this.accounts.has(subject))
         throw new Error("identity_record_subject_missing");
@@ -50,16 +54,42 @@ export class MemoryIdentityRecordRepository
   private key(bucket: string, key: string): string {
     return `${bucket}\n${key}`;
   }
+  async commitReviewedRecoveryApproval(input: ReviewedRecoveryApprovalMutation): Promise<boolean> {
+    const {record:r,pointer:p}=input,a=r.approval;
+    const op=this.records.get(this.key("identity_merge_operations",a.operationId)) as import("./identity-state.ts").IdentityMergeOperation|undefined;
+    const old=this.records.get(this.key(reviewedApprovalCurrentBucket,a.operationId)) as import("./reviewed-recovery-state.ts").ReviewedRecoveryApprovalPointer|undefined;
+    const history=this.records.get(this.key(reviewedApprovalBucket,r.approvalDigest));
+    const refKey=reviewedApprovalRefKey(a);
+    const ref=this.records.get(this.key(reviewedApprovalRefBucket,refKey)) as {operationId:string;recoveryId:string;reviewedApprovalRef:string;approvalDigest:string}|undefined;
+    const expectedRef={operationId:a.operationId,recoveryId:a.recoveryId,reviewedApprovalRef:a.reviewedApprovalRef,approvalDigest:r.approvalDigest};
+    if(!op?.consentAt||op.revision!==a.operationRevision||op.sourceSubject!==a.sourceAccountId||op.targetSubject!==a.targetAccountId||op.contextPlan?.planDigest!==a.planDigest||!(a.mode==="abort-before-active"?["proved","reconciled","quarantined"].includes(op.status):op.status==="quarantined"))return false;
+    for(const [subject,generation]of [[a.sourceAccountId,a.sourceIdentityGeneration],[a.targetAccountId,a.targetIdentityGeneration]]as const){
+      if(!this.accounts.has(subject)||(this.records.get(this.key("identity_merge_locks",subject))as {operationId:string}|undefined)?.operationId!==a.operationId||((this.records.get(this.key("authentication_generations",subject))as {generation:number}|undefined)?.generation??0)!==generation)return false;
+    }
+    const source=(this.records.get(this.key("canonical_accounts",a.sourceAccountId))as {targetSubject:string}|undefined)?.targetSubject??a.sourceAccountId;
+    const target=(this.records.get(this.key("canonical_accounts",a.targetAccountId))as {targetSubject:string}|undefined)?.targetSubject??a.targetAccountId;
+    if(source!==(a.mode==="abort-before-active"?a.sourceAccountId:a.targetAccountId)||target!==a.targetAccountId)return false;
+    if(history&&canonicalOwnerJson(history)!==canonicalOwnerJson(r)||ref&&canonicalOwnerJson(ref)!==canonicalOwnerJson(expectedRef))return false;
+    if(old?.approvalDigest===r.approvalDigest)return !!history&&!!ref&&ref.approvalDigest===r.approvalDigest&&old.operationId===a.operationId&&old.revision===p.revision;
+    if(history||ref||old&&old.operationId!==a.operationId||old?.approvalDigest!==input.expectedApprovalDigest||p.revision!==(old?.revision??-1)+1)return false;
+    if(old){const previous=this.records.get(this.key(reviewedApprovalBucket,old.approvalDigest))as typeof r|undefined;if(!previous||previous.decisionDigest!==r.decisionDigest||previous.approval.createdAt>=a.createdAt)return false;}
+    // The complete decision/write section has no await: one current pointer,
+    // immutable history, and exact review-ref index commit together.
+    this.records.set(this.key(reviewedApprovalCurrentBucket,a.operationId),structuredClone(p));
+    if(!history)this.records.set(this.key(reviewedApprovalBucket,r.approvalDigest),structuredClone(r));
+    if(!ref)this.records.set(this.key(reviewedApprovalRefBucket,refKey),{operationId:a.operationId,recoveryId:a.recoveryId,reviewedApprovalRef:a.reviewedApprovalRef,approvalDigest:r.approvalDigest});
+    return true;
+  }
   async get<T>(bucket: string, key: string): Promise<T | undefined> {
     const r = this.records.get(this.key(bucket, key));
     return r === undefined ? undefined : (structuredClone(r) as T);
   }
   async put(bucket: string, key: string, record: unknown): Promise<void> {
-    this.assertReferences(record);
+    this.assertReferences(record, bucket);
     this.records.set(this.key(bucket, key), structuredClone(record));
   }
   async create(bucket: string, key: string, record: unknown): Promise<boolean> {
-    this.assertReferences(record);
+    this.assertReferences(record, bucket);
     const k = this.key(bucket, key);
     if (this.records.has(k)) return false;
     this.records.set(k, structuredClone(record));
@@ -163,6 +193,13 @@ export class MemoryIdentityRecordRepository
     const lookup = new Map<string, string>();
     for (const key of this.sessions.keys())
       lookup.set(await hashSessionId(key), key);
+    if (input.availabilityCheckpoint !== undefined) {
+      const freshNow = readReviewedRecoveryIssuerAvailabilityCheckpoint(input.availabilityCheckpoint, input);
+      if (freshNow === undefined) return false;
+      input = { ...input, now: freshNow };
+      try { assertMergeMutation(input); } catch { return false; }
+      if (input.emailProofs?.some((proof) => proof.validUntil <= freshNow || proof.observedAt > freshNow)) return false;
+    }
     const n = input.next;
     const old = this.records.get(
       this.key("identity_merge_operations", n.operationId),
@@ -357,6 +394,9 @@ export class MemoryIdentityRecordRepository
         .slice(0, input.retryCapacity!).length >= input.retryCapacity!
     )
       return false;
+    // The checkpoint and all captured expiry bounds are checked again after
+    // preparation. This is a local precommit boundary, not server execution/2PC.
+    if (input.availabilityCheckpoint !== undefined && consumeReviewedRecoveryIssuerAvailabilityCheckpoint(input.availabilityCheckpoint, input) === undefined) return false;
     // No awaits in this decision/write section: one winner consumes the proof.
     this.records.set(
       this.key("identity_merge_operations", n.operationId),
