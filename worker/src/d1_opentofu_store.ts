@@ -2401,6 +2401,7 @@ const predeployedD1SchemaReadiness = new WeakMap<object, Promise<void>>();
 const bootstrapD1SchemaReadiness = new WeakMap<object, Promise<void>>();
 const workspaceBillingD1SchemaReadiness = new WeakMap<object, Promise<void>>();
 const identityReconciliationD1SchemaReadiness = new WeakMap<object, Promise<void>>();
+const backupOwnerD1SchemaReadiness = new WeakMap<object, Promise<void>>();
 
 function ensurePredeployedD1SchemaReady(db: D1Database): Promise<void> {
   if (verifiedPredeployedD1Bindings.has(db)) return Promise.resolve();
@@ -2436,12 +2437,46 @@ function ensureWorkspaceBillingD1SchemaReady(db: D1Database): Promise<void> {
 function ensureIdentityReconciliationD1SchemaReady(db: D1Database): Promise<void> {
   const existing = identityReconciliationD1SchemaReadiness.get(db);
   if (existing) return existing;
-  const attempt = verifyD1OpenTofuLedgerSchemaPredeployed(db).catch((error: unknown) => {
+  const attempt = verifyD1PredeployedSchemaEvidence(db, 73).catch((error: unknown) => {
     if (identityReconciliationD1SchemaReadiness.get(db) === attempt) identityReconciliationD1SchemaReadiness.delete(db);
     throw error;
   });
   identityReconciliationD1SchemaReadiness.set(db, attempt);
   return attempt;
+}
+
+/** Read-only indexed Backup capability, separate from ordinary runtime readiness.
+ * Recheck exact index shape on every guard even after immutable catalog proof,
+ * so a warm binding cannot silently adopt a dropped/replaced index. */
+export async function verifyD1BackupOwnerIndexesPredeployed(db: D1Database): Promise<void> {
+  let attempt = backupOwnerD1SchemaReadiness.get(db);
+  try {
+    // Maintenance is mutable and never covered by a cached catalog decision.
+    await assertControlD1MaintenanceInactive(db);
+    if (!attempt) {
+      attempt = verifyD1OpenTofuLedgerSchemaPredeployed(db);
+      backupOwnerD1SchemaReadiness.set(db, attempt);
+    }
+    await attempt;
+    // The catalog can advance across a completed maintenance window while a
+    // binding stays warm. Co-read its entire bounded prefix with index shape;
+    // one extra row suffices to reject any unknown tail without an unbounded read.
+    const row = await db.prepare(`select ${D1_BACKUP_OWNER_INDEX_PROJECTION} as indexes_json,
+      (select json_group_array(json_object('name', name, 'type', type, 'notnull', "notnull", 'pk', pk))
+        from pragma_table_info('schema_migrations')) as columns_json,
+      (select json_group_array(json_object('version', version, 'name', name, 'checksum', checksum, 'applied_at', applied_at))
+        from (select version, name, checksum, applied_at from schema_migrations order by version limit ${D1_OPEN_TOFU_SCHEMA_MIGRATIONS.length + 1})) as migrations_json`)
+      .first<{ readonly indexes_json: string | null; readonly columns_json: string | null; readonly migrations_json: string | null }>();
+    await validateD1OpenTofuLedgerSchemaPredeployed(
+      parseD1JsonArray<D1TableInfoRow>(row?.columns_json, "schema columns"),
+      parseD1JsonArray<D1SchemaMigrationRow>(row?.migrations_json, "migration ledger"), 74,
+    );
+    validateD1BackupOwnerIndexes(parseD1JsonArray<D1RuntimeIndex>(row?.indexes_json, "Backup owner indexes"));
+    await assertControlD1MaintenanceInactive(db);
+  } catch {
+    if (backupOwnerD1SchemaReadiness.get(db) === attempt) backupOwnerD1SchemaReadiness.delete(db);
+    throw new Error("D1 OpenTofu indexed Backup schema verification failed");
+  }
 }
 
 function ensureBootstrapD1SchemaReady(db: D1Database): Promise<void> {
@@ -16298,6 +16333,7 @@ export async function ensureD1OpenTofuLedgerSchema(
       on backups (space_id)`,
     `create index if not exists backups_installation_idx
       on backups (installation_id)`,
+    ...(throughMigrationVersion >= 74 ? D1_BACKUP_OWNER_INDEX_STATEMENTS : []),
     // Runtime declaration layer. Values are non-secret declaration documents
     // and resolved public output inputs; credentials remain references only.
     `create table if not exists interfaces (
@@ -16686,6 +16722,12 @@ const D1_IDENTITY_RECONCILIATION_STATEMENTS = [
     primary key (operation_id, revision)
   )`,
   `create unique index if not exists identity_reconciliation_events_mutation_unique on identity_reconciliation_events (mutation_id)`,
+] as const;
+
+// Separate forward declaration: migration 9's historical index array is immutable.
+const D1_BACKUP_OWNER_INDEX_STATEMENTS = [
+  `create index if not exists backups_created_by_run_id_idx on backups(created_by_run_id)`,
+  `create index if not exists backups_legacy_created_by_run_text_idx on backups((cast((case when json_valid(record_json) = 1 then json_extract(record_json, '$.createdByRunId') else null end) as text)))`,
 ] as const;
 
 const D1_OPEN_TOFU_SCHEMA_MIGRATIONS = [
@@ -18882,6 +18924,15 @@ ${D1_IDENTITY_RECONCILIATION_STATEMENTS.join("\n---\n")}`,
     async atomicStatements() { return D1_IDENTITY_RECONCILIATION_STATEMENTS; },
     async apply(db) { await runD1AtomicSql(db, D1_IDENTITY_RECONCILIATION_STATEMENTS); },
   },
+  {
+    version: 74,
+    name: "d1_backup_owner_lookup_indexes",
+    checksumSource: () => `Nonunique exact physical and legacy TEXT-affinity Backup owner lookup indexes.
+No data rewrite, ownership normalization, unique constraint or authority change.
+${D1_BACKUP_OWNER_INDEX_STATEMENTS.join("\n---\n")}`,
+    async atomicStatements() { return D1_BACKUP_OWNER_INDEX_STATEMENTS; },
+    async apply(db) { await runD1AtomicSql(db, D1_BACKUP_OWNER_INDEX_STATEMENTS); },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
@@ -19817,25 +19868,82 @@ type D1SchemaMigrationRow = {
   readonly applied_at: string;
 };
 
+const D1_RUNTIME_INDEX_PROJECTION = `json_object('name', indexes.name, 'unique', indexes."unique", 'partial', indexes.partial,
+  'columns', (select json_group_array(name) from (select name from pragma_index_info(indexes.name) order by seqno)),
+  'sql', (select sql from sqlite_master where type = 'index' and name = indexes.name),
+  'xinfo', (select json_group_array(json_object('seqno', seqno, 'cid', cid, 'name', name, 'desc', "desc", 'coll', coll, 'key', "key"))
+    from (select * from pragma_index_xinfo(indexes.name) order by seqno)))`;
+const D1_BACKUP_OWNER_INDEX_PROJECTION = `(select json_group_array(${D1_RUNTIME_INDEX_PROJECTION})
+  from pragma_index_list('backups') indexes where indexes.name in ('backups_created_by_run_id_idx', 'backups_legacy_created_by_run_text_idx'))`;
+
 /** Cold readiness co-reads structures; warm Workspace reads stay one statement. */
 const D1_RUNTIME_STRUCTURE_PROJECTION = `(
   select json_group_array(json_object('name', master.name,
     'columns', (select json_group_array(json_object('name', name, 'type', type, 'notnull', "notnull", 'pk', pk)) from pragma_table_xinfo(master.name)),
-    'indexes', (select json_group_array(json_object('name', indexes.name, 'unique', indexes."unique", 'partial', indexes.partial,
-      'columns', (select json_group_array(name) from (select name from pragma_index_info(indexes.name) order by seqno)))) from pragma_index_list(master.name) indexes),
+    'indexes', (select json_group_array(${D1_RUNTIME_INDEX_PROJECTION}) from pragma_index_list(master.name) indexes),
     'foreignKeys', (select count(*) from pragma_foreign_key_list(master.name))))
   from sqlite_master master where master.type = 'table' and master.name in (
     'workspaces', 'workspace_members', 'interface_bindings', 'scheduled_sweep_cursors',
     'workspace_billing_intents', 'workspace_billing_bindings',
-    'identity_reconciliation_operations', 'identity_reconciliation_events')
+    'identity_reconciliation_operations', 'identity_reconciliation_events', 'backups')
 )`;
 
+type D1RuntimeIndex = {
+  readonly name: string;
+  readonly unique: number;
+  readonly partial: number;
+  readonly columns: readonly (string | null)[];
+  readonly sql: string | null;
+  readonly xinfo: readonly { readonly seqno: number; readonly cid: number; readonly name: string | null; readonly desc: number; readonly coll: string; readonly key: number }[];
+};
 type D1RuntimeStructure = {
   readonly name: string;
   readonly columns: readonly { readonly name: string; readonly type: string; readonly notnull: number; readonly pk: number }[];
-  readonly indexes: readonly { readonly name: string; readonly unique: number; readonly partial: number; readonly columns: readonly string[] }[];
+  readonly indexes: readonly D1RuntimeIndex[];
   readonly foreignKeys: number;
 };
+
+/** Normalize SQL syntax only. Quoted JSON paths/string literals retain every
+ * byte and case: lowercasing them could qualify a different owner expression. */
+function normalizedD1IndexSql(value: string | null): string | null {
+  if (typeof value !== "string") return null;
+  let result = "", quote = "";
+  for (let i = 0; i < value.length; i++) {
+    const character = value[i]!;
+    if (quote) {
+      result += character;
+      if (character === quote) {
+        if (value[i + 1] === quote) result += value[++i];
+        else quote = "";
+      }
+    } else if (character === "'" || character === '"') {
+      quote = character;
+      result += character;
+    } else if (/\s/u.test(character)) {
+      if (result && !result.endsWith(" ")) result += " ";
+    } else result += character.toLowerCase();
+  }
+  return result.trim().replace(/^create index if not exists /u, "create index ");
+}
+
+function validateD1BackupOwnerIndexes(indexes: readonly D1RuntimeIndex[]): void {
+  const expected = [
+    { name: "backups_created_by_run_id_idx", cid: 4, column: "created_by_run_id" },
+    { name: "backups_legacy_created_by_run_text_idx", cid: -2, column: null },
+  ] as const;
+  for (const [position, identity] of expected.entries()) {
+    const found = indexes.filter(index => index.name === identity.name);
+    const index = found[0];
+    const xinfo = [
+      { seqno: 0, cid: identity.cid, name: identity.column, desc: 0, coll: "BINARY", key: 1 },
+      { seqno: 1, cid: -1, name: null, desc: 0, coll: "BINARY", key: 0 },
+    ];
+    if (found.length !== 1 || !index || index.unique !== 0 || index.partial !== 0 ||
+      stableStringify(index.columns) !== stableStringify([identity.column]) ||
+      normalizedD1IndexSql(index.sql) !== normalizedD1IndexSql(D1_BACKUP_OWNER_INDEX_STATEMENTS[position]!) ||
+      stableStringify(index.xinfo) !== stableStringify(xinfo)) throw new Error("D1 OpenTofu predeployed schema verification failed");
+  }
+}
 
 function validateD1RuntimeStructures(value: unknown, head: number): void {
   const tables = new Map(parseD1JsonArray<D1RuntimeStructure>(value, "runtime structures").map((table) => [table.name, table]));
@@ -19869,6 +19977,11 @@ function validateD1RuntimeStructures(value: unknown, head: number): void {
     check("identity_reconciliation_events", [["operation_id", "text", 1, 1], ["revision", "integer", 1, 2], ["mutation_id", "text", 1], ["record_json", "text", 1], ["recorded_at", "text", 1]],
       [["identity_reconciliation_events_mutation_unique", ["mutation_id"]]]);
   }
+  if (head >= 74) {
+    check("backups", [["id", "text", 0, 1], ["space_id", "text", 1], ["installation_id", "text", 0], ["environment", "text", 0],
+      ["created_by_run_id", "text", 0], ["record_json", "text", 1], ["created_at", "text", 1]]);
+    validateD1BackupOwnerIndexes(tables.get("backups")!.indexes);
+  }
 }
 
 /**
@@ -19880,11 +19993,11 @@ function validateD1RuntimeStructures(value: unknown, head: number): void {
 export async function verifyD1OpenTofuLedgerSchemaPredeployed(
   db: D1Database,
 ): Promise<void> {
-  await verifyD1PredeployedSchemaEvidence(db, 73);
+  await verifyD1PredeployedSchemaEvidence(db, 74);
 }
 
-/** Runtime floors never weaken qualification, which requires exact current v73. */
-async function verifyD1PredeployedSchemaEvidence(db: D1Database, minimumVersion: 71 | 72 | 73): Promise<void> {
+/** Runtime floors never weaken qualification, which requires exact current v74. */
+async function verifyD1PredeployedSchemaEvidence(db: D1Database, minimumVersion: 71 | 72 | 73 | 74): Promise<void> {
   let columns: readonly D1TableInfoRow[];
   let rows: readonly D1SchemaMigrationRow[];
   let structures: string | null;
@@ -19914,11 +20027,11 @@ async function verifyD1PredeployedSchemaEvidence(db: D1Database, minimumVersion:
 async function validateD1OpenTofuLedgerSchemaPredeployed(
   columns: readonly D1TableInfoRow[],
   rows: readonly D1SchemaMigrationRow[],
-  minimumVersion: 71 | 72 | 73 = 73,
+  minimumVersion: 71 | 72 | 73 | 74 = 74,
 ): Promise<void> {
   assertD1SchemaMigrationLedgerShape(columns);
   const head = rows.at(-1)?.version;
-  if ((head !== 71 && head !== 72 && head !== 73) || head < minimumVersion) throw new Error("D1 OpenTofu predeployed schema verification failed");
+  if ((head !== 71 && head !== 72 && head !== 73 && head !== 74) || head < minimumVersion) throw new Error("D1 OpenTofu predeployed schema verification failed");
   const catalog = D1_OPEN_TOFU_SCHEMA_MIGRATIONS.filter((migration) => migration.version <= head);
   if (rows.length !== catalog.length) {
     throw new Error("D1 OpenTofu predeployed schema verification failed");

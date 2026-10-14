@@ -788,7 +788,7 @@ test("predeployed verification is strictly read-only", async () => {
   );
 });
 
-test("predeployed qualification verification accepts only the exact current v73 ledger", async () => {
+test("predeployed qualification verification accepts only the exact current v74 ledger", async () => {
   const predecessor = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(predecessor, {
     throughMigrationVersion: 62,
@@ -829,7 +829,7 @@ test("predeployed qualification verification accepts only the exact current v73 
   await extra
     .prepare(
       `insert into schema_migrations (version, name, checksum, applied_at)
-       values (74, 'unexpected', ?, '2026-08-05T00:00:00.000Z')`,
+       values (75, 'unexpected', ?, '2026-08-05T00:00:00.000Z')`,
     )
     .bind(`sha256:${"f".repeat(64)}`)
     .run();
@@ -838,8 +838,8 @@ test("predeployed qualification verification accepts only the exact current v73 
   );
 });
 
-test("predeployed v71/v72/v73 bridge keeps billing at v72 and identity at v73 without request DDL", async () => {
-  for (const head of [71, 72, 73]) {
+test("predeployed v71/v72/v73/v74 bridge keeps billing at v72 and identity at v73 without request DDL", async () => {
+  for (const head of [71, 72, 73, 74]) {
     const db = new SqliteFakeD1();
     await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: head });
     await prepareInactiveBridgeMaintenance(db);
@@ -849,6 +849,9 @@ test("predeployed v71/v72/v73 bridge keeps billing at v72 and identity at v73 wi
     };
     await db.prepare("insert into workspaces (id, handle, record_json, created_at, updated_at) values (?, ?, ?, ?, ?)")
       .bind(workspace.id, workspace.handle, JSON.stringify(workspace), workspace.createdAt, workspace.updatedAt).run();
+    const member = { id: `member_bridge_${head}`, workspaceId: workspace.id, accountId: workspace.ownerUserId, roles: ["owner"], status: "active", createdAt: workspace.createdAt, updatedAt: workspace.updatedAt };
+    await db.prepare("insert into workspace_members (id,workspace_id,account_id,status,record_json,created_at,updated_at) values (?,?,?,'active',?,?,?)")
+      .bind(member.id, member.workspaceId, member.accountId, JSON.stringify(member), member.createdAt, member.updatedAt).run();
     const queries: string[] = [];
     const observed: D1Database = {
       prepare(query) { queries.push(query); return db.prepare(query); },
@@ -857,6 +860,10 @@ test("predeployed v71/v72/v73 bridge keeps billing at v72 and identity at v73 wi
     const store = createCloudflareD1OpenTofuControlStore(observed, { schemaMode: "predeployed" });
     expect(queries, `constructor at v${head}`).toHaveLength(0);
     expect(await store.getWorkspace(workspace.id), `ordinary read at v${head}`).toEqual(workspace);
+    const page = await createCloudflareD1OpenTofuControlStore({
+      prepare: query => observed.prepare(query),
+    }, { schemaMode: "predeployed" }).listWorkspacesForAccountPage(workspace.ownerUserId, { limit: 1 });
+    expect(page.items.map(item => item.id), `cold Workspace page at v${head}`).toEqual([workspace.id]);
     expect(queries.some((query) => /\bfrom\s+identity_reconciliation_/iu.test(query)), `feature off at v${head}`).toBe(false);
 
     if (head >= 72) expect(await store.getWorkspaceBillingBinding(workspace.id), `billing floor at v${head}`).toBeUndefined();
@@ -865,9 +872,10 @@ test("predeployed v71/v72/v73 bridge keeps billing at v72 and identity at v73 wi
       await expect(store.getWorkspaceBillingBinding(workspace.id)).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
       expect(queries.slice(before).some((query) => /\bfrom\s+workspace_billing_bindings\b/iu.test(query))).toBe(false);
     }
-    if (head === 73) {
-      expect(await store.captureIdentityReconciliationInventory([workspace.ownerUserId])).toMatchObject({ accountIds: [workspace.ownerUserId], workspaces: [{ workspace }], members: [], bindings: [], principalReferences: [], overflow: false });
-      await verifyD1OpenTofuLedgerSchemaPredeployed(observed);
+    if (head >= 73) {
+      expect(await store.captureIdentityReconciliationInventory([workspace.ownerUserId])).toMatchObject({ accountIds: [workspace.ownerUserId], workspaces: [{ workspace }], members: [member], bindings: [], principalReferences: [], overflow: false });
+      if (head === 74) await verifyD1OpenTofuLedgerSchemaPredeployed(observed);
+      else await expect(verifyD1OpenTofuLedgerSchemaPredeployed(observed)).rejects.toThrow();
     } else {
       const before = queries.length;
       await expect(store.captureIdentityReconciliationInventory([workspace.ownerUserId])).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
@@ -875,7 +883,10 @@ test("predeployed v71/v72/v73 bridge keeps billing at v72 and identity at v73 wi
       await expect(verifyD1OpenTofuLedgerSchemaPredeployed(observed)).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
     }
     expect(queries.every((query) => /^(?:select|pragma|with)\b/iu.test(query.trim())), `read-only runtime bridge at v${head}`).toBe(true);
-    expect((await tableNames(db)).has("identity_reconciliation_operations"), `additive head v${head}`).toBe(head === 73);
+    expect((await tableNames(db)).has("identity_reconciliation_operations"), `additive head v${head}`).toBe(head >= 73);
+    const backupIndexes = await indexNames(db, "backups");
+    expect(backupIndexes.has("backups_created_by_run_id_idx"), `no unledgered physical owner index at v${head}`).toBe(head >= 74);
+    expect(backupIndexes.has("backups_legacy_created_by_run_text_idx"), `no unledgered JSON owner index at v${head}`).toBe(head >= 74);
   }
 });
 
@@ -884,6 +895,8 @@ test("runtime bridge and qualification reject version-specific structural drift 
     { head: 71, index: "workspaces_personal_bootstrap_owner_unique" },
     { head: 72, index: "workspace_billing_bindings_authority_org_unique" },
     { head: 73, index: "identity_reconciliation_events_mutation_unique" },
+    { head: 74, index: "backups_created_by_run_id_idx" },
+    { head: 74, index: "backups_legacy_created_by_run_text_idx" },
   ]) {
     const db = new SqliteFakeD1();
     await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: fixture.head });
@@ -891,8 +904,9 @@ test("runtime bridge and qualification reject version-specific structural drift 
     await db.prepare(`drop index ${fixture.index}`).run();
     const store = createCloudflareD1OpenTofuControlStore(db, { schemaMode: "predeployed" });
     await expect(store.getWorkspace("absent")).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
-    if (fixture.head === 73) await expect(verifyD1OpenTofuLedgerSchemaPredeployed(db)).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
-    expect((await indexNames(db, fixture.index.startsWith("workspace_billing") ? "workspace_billing_bindings" : fixture.index.startsWith("identity_") ? "identity_reconciliation_events" : "workspaces")).has(fixture.index)).toBe(false);
+    await expect(store.listWorkspacesForAccountPage("absent", { limit: 1 })).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
+    if (fixture.head >= 73) await expect(verifyD1OpenTofuLedgerSchemaPredeployed(db)).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
+    expect((await indexNames(db, fixture.index.startsWith("workspace_billing") ? "workspace_billing_bindings" : fixture.index.startsWith("identity_") ? "identity_reconciliation_events" : fixture.index.startsWith("backups_") ? "backups" : "workspaces")).has(fixture.index)).toBe(false);
   }
 });
 

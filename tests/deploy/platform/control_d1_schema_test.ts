@@ -668,10 +668,10 @@ test("control D1 plan captures the full OSS schema and migration ledger", async 
   expect(plan.manifestDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.schemaDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.ledgerDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
-  expect(plan.migrations.at(-1)?.version).toBe(73);
-  expect(plan.migrations).toHaveLength(70);
+  expect(plan.migrations.at(-1)?.version).toBe(74);
+  expect(plan.migrations).toHaveLength(71);
   expect(plan.migrations.at(-1)?.name).toBe(
-    "d1_identity_reconciliation",
+    "d1_backup_owner_lookup_indexes",
   );
   expect(plan.tables.some((table) => table.name === "target_pools")).toBe(false);
   expect(
@@ -799,7 +799,7 @@ test("control D1 verify is read-only and accepts host extension tables", async (
     const verification = await verifyControlD1Schema(database, plan);
     expect(verification.status).toBe("ready");
     expect(verification.issues).toEqual([]);
-    expect(verification.latestMigrationVersion).toBe(73);
+    expect(verification.latestMigrationVersion).toBe(74);
   } finally {
     database.close();
   }
@@ -1570,7 +1570,7 @@ test("control D1 fenced apply converges a populated v24 destructive schema", asy
   try {
     await ensureD1OpenTofuLedgerSchema(database);
     // This fixture rewinds the ledger to v24 from a fresh current schema. Drop
-    // v70/v71/v72/v73-only objects as part of constructing that historical
+    // v70/v71/v72/v73/v74-only objects as part of constructing that historical
     // schema so those immutable migrations can be replayed normally
     // during convergence.
     await database.prepare(`drop table private_run_file_receipts`).run();
@@ -1580,6 +1580,8 @@ test("control D1 fenced apply converges a populated v24 destructive schema", asy
     await database.prepare(`drop table workspace_billing_intents`).run();
     await database.prepare(`drop table identity_reconciliation_events`).run();
     await database.prepare(`drop table identity_reconciliation_operations`).run();
+    await database.prepare(`drop index backups_created_by_run_id_idx`).run();
+    await database.prepare(`drop index backups_legacy_created_by_run_text_idx`).run();
     await database
       .prepare(`delete from schema_migrations where version >= 25`)
       .run();
@@ -2267,7 +2269,7 @@ test("control D1 CLI verify reports a ready remote ledger", async () => {
       mode: "verify",
       environment: "staging",
       status: "ready",
-      verification: { latestMigrationVersion: 73 },
+      verification: { latestMigrationVersion: 74 },
     });
   } finally {
     database.close();
@@ -3875,7 +3877,7 @@ test("control D1 CLI reports the exact predecessor fence transition on recovery"
   const database = new SqliteControlD1Database();
   try {
     await ensureD1OpenTofuLedgerSchema(database, {
-      throughMigrationVersion: 72,
+      throughMigrationVersion: 73,
     });
     const predecessorFence = await acquireControlD1MaintenanceFence(
       database,
@@ -3928,7 +3930,7 @@ test("control D1 CLI reports the exact predecessor fence transition on recovery"
     expect(code).toBe(0);
     expect(transcript).toMatchObject({
       status: "ready",
-      appliedMigrationVersions: [73],
+      appliedMigrationVersions: [74],
       maintenanceFenceTransition: {
         predecessorSourceCommit: PREDECESSOR_SOURCE_COMMIT,
         predecessorManifestDigest: PREDECESSOR_MANIFEST_DIGEST,
@@ -3959,7 +3961,7 @@ test("control D1 CLI preserves the fence transition on post-apply schema mismatc
   const database = new SqliteControlD1Database();
   try {
     await ensureD1OpenTofuLedgerSchema(database, {
-      throughMigrationVersion: 72,
+      throughMigrationVersion: 73,
     });
     await database
       .prepare(
@@ -4045,7 +4047,7 @@ test("control D1 CLI preserves the fence transition on post-apply schema mismatc
       await database
         .prepare(`select max(version) as version from schema_migrations`)
         .first(),
-    ).toEqual({ version: 73 });
+    ).toEqual({ version: 74 });
     await expect(
       database
         .prepare(

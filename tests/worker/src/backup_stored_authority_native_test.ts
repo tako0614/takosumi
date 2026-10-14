@@ -36,6 +36,13 @@ async function mutate(env, action, runId) {
   else if(action==='type') await env.DB.prepare("update runs set type='apply',run_json=json_set(run_json,'$.type','apply') where id=?").bind(runId).run();
   else if(action==='management') await env.DB.prepare("update runs set run_json=json_set(run_json,'$.workspaceManagementAuthority.managementEpoch',2) where id=?").bind(runId).run();
   else if(action==='lease') await env.DB.prepare("update runs set lease_token='synthetic-not-admitted' where id=?").bind(runId).run();
+  else if(action==='maintenance') await env.DB.prepare("update _takosumi_control_schema_maintenance set active=1,released_at=null where singleton=1").run();
+  else if(action==='missing_index') await env.DB.prepare("drop index backups_created_by_run_id_idx").run();
+  else if(action==='future_head') await env.DB.prepare("insert into schema_migrations values(75,'unknown_future',?,?)").bind('sha256:'+'f'.repeat(64),now).run();
+  else if(action==='wrong_expression') {
+    await env.DB.prepare("drop index backups_legacy_created_by_run_text_idx").run();
+    await env.DB.prepare("create index backups_legacy_created_by_run_text_idx on backups((cast((case when json_valid(record_json) = 1 then json_extract(record_json, '$.createdbyrunid') else null end) as text)))").run();
+  }
   else if(action==='drain') await env.DB.prepare("update workspaces set management_state='draining',management_epoch=management_epoch+1 where id='workspace_backup'").run();
   else if(action) throw new Error('unknown fixture mutation');
 }
@@ -262,4 +269,24 @@ test("a partial native Backup with lost ACK retains original preledger owner for
     expect(JSON.parse(retained!).revision).toBe(0);
     expect(objects.objects[0]!.size).toBeGreaterThan(0);
   } finally { await f.close(); }
+}, 60_000);
+
+
+test("native Backup warm readiness refuses maintenance, index drift or a future head before PREPARE and after its ACK", async () => {
+  for (const action of ["maintenance", "missing_index", "wrong_expression", "future_head"]) for (const timing of ["before", "duringPrepare"] as const) {
+    const f = await fixture();
+    try {
+      // Warm the actual indexed helper through a genuine admitted Backup PUT.
+      expect((await f.call({ operation: "put", runId: "backup_warm" })).status).toBe(200);
+      const prior = await (await f.runtime.getR2Bucket("BACKUPS")).list();
+      const response = await f.call({ operation: "put", runId: "backup_readiness", [timing]: action });
+      expect(response.status, `${action}/${timing}`).toBe(503);
+      expect((await (await f.runtime.getR2Bucket("BACKUPS")).list()).objects.map(object => object.version)).toEqual(prior.objects.map(object => object.version));
+      expect(await f.db.prepare("select count(*) as n from fixture_usage").first("n")).toBe(timing === "before" ? 1 : 2);
+      if (timing === "duringPrepare") {
+        const rows = await f.db.prepare("select snapshot from fixture_usage").all<{ snapshot: string }>();
+        expect(rows.results.filter(row => JSON.parse(row.snapshot).pending?.state === "pending")).toHaveLength(1);
+      }
+    } finally { await f.close(); }
+  }
 }, 60_000);

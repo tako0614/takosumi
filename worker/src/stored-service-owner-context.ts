@@ -5,6 +5,7 @@ import type { BackupArtifactWriteControl } from "../../core/domains/backups/mod.
 import type { Run } from "takosumi-contract/runs";
 import { publicStoredRun, runManagementAuthority } from "../../core/domains/deploy-control/store.ts";
 import { stableStringify } from "../../core/adapters/source/digest.ts";
+import { verifyD1BackupOwnerIndexesPredeployed } from "./d1_opentofu_store.ts";
 import type { D1Database, R2Bucket } from "./bindings.ts";
 import { storedOwnerDatabase, storedOwnerRecord, storedOwnerRows } from "./stored-object-owner-resolver.ts";
 import { storedServiceUsageBucket, StoredServiceUsageError, type StoredBucketRole, type StoredServiceComposition } from "./stored-service-usage.ts";
@@ -135,12 +136,19 @@ async function assertAcceptedBackupWrite(database: D1Database, original: BackupA
     authority.managementState !== "active" ||
     !Number.isSafeInteger(authority.managementEpoch) || authority.managementEpoch <= 0 ||
     Object.hasOwn(expected, "workspaceManagementAuthority")) throw new StoredServiceUsageError();
-  // Match Core settlement's legacy record-owner conflict detection. The exact
-  // Run result is bounded; the compatibility JSON predicate can scan Backups.
+  // Readiness uses the raw binding. Only after those awaits start a NEW
+  // first-primary session with the Run query below as its very first query;
+  // metadata must not consume that session's primary-read guarantee.
+  await verifyD1BackupOwnerIndexesPredeployed(database);
+  // Preserve all three conflict selectors in one primary snapshot. TEXT
+  // normalization preserves the original comparison to r.id's TEXT affinity;
+  // mandatory indexes refuse missing readiness without a scan fallback.
   const records = await storedOwnerRows(storedOwnerDatabase(database), `select r.id, r.space_id, r.source_id, r.installation_id, r.environment,
     r.type, r.status, r.lease_token, r.created_at, r.run_json,
-    exists(select 1 from backups b where b.id = ? or b.created_by_run_id = r.id
-      or case when json_valid(b.record_json) then json_extract(b.record_json, '$.createdByRunId') = r.id else 0 end) as has_record
+    (exists(select 1 from backups where id = ?)
+      or exists(select 1 from backups indexed by backups_created_by_run_id_idx where created_by_run_id = r.id)
+      or exists(select 1 from backups indexed by backups_legacy_created_by_run_text_idx
+        where cast((case when json_valid(record_json) = 1 then json_extract(record_json, '$.createdByRunId') else null end) as text) = r.id)) as has_record
     from runs r where r.id = ? limit 2`, [original.allocation.backupId, expected.id]);
   if (records.length !== 1) throw new StoredServiceUsageError();
   const row = records[0]!, run = storedOwnerRecord(row.run_json) as unknown as Run;

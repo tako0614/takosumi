@@ -23,7 +23,7 @@ type ColumnMirror = {
 
 type UniqueIndexMirror = {
   name: string;
-  columns: readonly string[];
+  columns: readonly (string | null)[];
   unique: boolean;
 };
 
@@ -54,7 +54,7 @@ type SqlitePragmaIndexListRow = {
 type SqlitePragmaIndexInfoRow = {
   seqno: number;
   cid: number;
-  name: string;
+  name: string | null;
 };
 
 type D1SchemaMigrationRow = {
@@ -92,12 +92,13 @@ function sqliteUniqueIndexesOf(
     getSqliteTableConfig(table).indexes.map((index) => {
       const config = index.config as {
         name: string;
-        columns: Array<{ name: string }>;
+        columns: Array<{ name?: string }>;
         unique?: boolean;
       };
       return {
         name: config.name,
-        columns: config.columns.map((column) => column.name),
+        // SQLite reports an expression key as cid=-2/name=null.
+        columns: config.columns.map((column) => column.name ?? null),
         unique: config.unique === true,
       };
     }),
@@ -177,7 +178,10 @@ async function liveD1InlineUniqueConstraintsOf(
       .all<SqlitePragmaIndexInfoRow>();
     constraints.push({
       name: row.name,
-      columns: (infoRows.results ?? []).map((info) => info.name),
+      columns: (infoRows.results ?? []).map((info) => {
+        if (info.name === null) throw new Error("inline unique constraint has an expression key");
+        return info.name;
+      }),
     });
   }
   return constraints.sort((left, right) =>
@@ -592,7 +596,7 @@ test("D1 v73 preserves protected v72 rows and ledger while adding retained ident
   const retainedTables = ["workspaces", "workspace_members", "workspace_billing_intents", "workspace_billing_bindings"];
   const before = await Promise.all(retainedTables.map((table) => db.prepare(`select * from ${table}`).all()));
 
-  await ensureD1OpenTofuLedgerSchema(db);
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 73 });
 
   for (const [index, table] of retainedTables.entries()) {
     expect(await db.prepare(`select * from ${table}`).all(), table).toEqual(before[index]);
@@ -616,7 +620,7 @@ test("D1 v73 preserves protected v72 rows and ledger while adding retained ident
   await expect(Promise.resolve().then(() => db.prepare(`insert into identity_reconciliation_events values
     ('operation', 1, 'mutation_3', '{}', 'birth')`).run())).rejects.toThrow();
   await db.prepare("delete from workspaces where id = 'protected_workspace'").run();
-  await ensureD1OpenTofuLedgerSchema(db);
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 73 });
   expect((await db.prepare("select operation_id, revision from identity_reconciliation_events order by revision").all()).results)
     .toEqual([{ operation_id: "operation", revision: 1 }, { operation_id: "operation", revision: 2 }]);
   expect(await db.prepare("select count(*) as count from identity_reconciliation_operations").first())
@@ -681,7 +685,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24,
     25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43,
     44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
-    61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73,
+    61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74,
   ]);
   expect(rows.map((row) => row.name)).toEqual([
     "d1_opentofu_connections_and_secret_blobs_shape",
@@ -754,6 +758,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_scheduled_sweep_cursors",
     "d1_workspace_billing_bindings",
     "d1_identity_reconciliation",
+    "d1_backup_owner_lookup_indexes",
   ]);
   for (const row of rows) {
     expect(row.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);

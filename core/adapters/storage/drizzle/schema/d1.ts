@@ -718,6 +718,8 @@ export const backups = sqliteTable(
   (table) => [
     index("backups_space_idx").on(table.workspaceId),
     index("backups_installation_idx").on(table.capsuleId),
+    index("backups_created_by_run_id_idx").on(table.createdByRunId),
+    index("backups_legacy_created_by_run_text_idx").on(sql`cast((case when json_valid(${table.recordJson}) = 1 then json_extract(${table.recordJson}, '$.createdByRunId') else null end) as text)`),
   ],
 );
 

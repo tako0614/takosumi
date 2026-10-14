@@ -56,13 +56,28 @@ original claimed Run lease and canonical Capsule allocation. Private-file writes
 already-captured authority described in [private Run files](./private-run-files.md).
 The custody prepare pins the original owner before the native effect.
 
-The Backup guard co-reads one exact Run and its settlement-record absence in a
-single primary D1 snapshot. Returned rows are bounded. The existing settlement
-compatibility check for `record_json.createdByRunId` can scan legacy Backup
-records when their physical Run pointer is absent; it grants no new authority
-and does not drop corrupt physical-owner or legacy-owner conflicts. This does
-not add a schema or index. A final authority read and R2 remain separate effects,
-so the already-documented final-read-to-dispatch boundary applies to Backups.
+The Backup guard co-reads one exact Run and all three settlement conflicts in a
+single primary D1 snapshot: its exact Backup id, any physical Run pointer, and
+any legacy `record_json.createdByRunId` pointer, including another Backup id or
+Workspace. D1 migration 74 adds two nonunique lookup indexes without rewriting
+rows or the historical migration 9 index list. The guarded legacy expression
+casts valid JSON owner values to TEXT, preserving the original comparison to
+the Run id's TEXT affinity. Malformed JSON cannot erase a physical-owner
+conflict. Mandatory `INDEXED BY` queries have no scan fallback.
+
+Before prepare and immediately before R2, the adapter requires the exact
+current 74 ledger and exact index SQL, key order, collation and flags. The
+index shape, exact bounded ledger prefix and maintenance fence are read again
+on warm bindings; a completed maintenance window cannot reuse an old 74 proof
+for a future head or a changed prefix/checksum. The fence
+is checked both before and after readiness's metadata awaits. Request checks
+are read-only and never install or repair indexes. Ordinary reads support the
+exact 71 through 74 catalog prefixes; billing starts at 72 and identity at 73.
+Only the indexed Backup capability and strict qualification require 74. Follow
+the [schema predeploy bridge](../operations/control-d1-schema-predeploy.md)
+before applying this forward migration. A final authority read and R2 remain
+separate effects, so the final-read-to-dispatch boundary applies to Backups,
+including a maintenance or index change after the last check.
 External service-data snapshots and commands produce opaque provider pointers;
 their payload storage is outside this four-bucket lane. The service-data JSON
 manifest saved in `R2_BACKUPS` uses the accepted Backup Run above, never the
