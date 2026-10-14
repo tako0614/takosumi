@@ -65,11 +65,11 @@ for (const adapter of adapters) {
     try {
       const { sources, created, authority } = await seed(store);
       const before = await store.getSource(created.source.id);
-      const original = store.deleteSource.bind(store);
-      store.deleteSource = async (...args) => {
-        expect(args[1]).toEqual(authority);
+      const original = store.deleteSourceWithActivity.bind(store);
+      store.deleteSourceWithActivity = async (input) => {
+        expect(input.expectedWorkspaceManagementAuthority).toEqual(authority);
         expect((await store.beginWorkspaceDraining(authority.workspaceId, authority)).status).toBe("started");
-        return await original(...args);
+        return await original(input);
       };
       await expect(sources.deleteSource(created.source.id, "owner_delete_fence")).rejects.toMatchObject({
         code: "failed_precondition", details: { reason: "workspace_management_admission_conflict" },
@@ -86,11 +86,11 @@ for (const adapter of adapters) {
       const { workspace, created, authority } = await seed(store);
       await store.deleteSource(created.source.id);
       const workspaces = new WorkspacesService({ store });
-      const original = store.deleteWorkspace.bind(store);
-      store.deleteWorkspace = async (...args) => {
-        expect(args[1]).toEqual(authority);
+      const original = store.deleteWorkspaceExclusive.bind(store);
+      store.deleteWorkspaceExclusive = async (input) => {
+        expect(input.expectedWorkspaceManagementAuthority).toEqual(authority);
         expect((await store.beginWorkspaceDraining(workspace.id, authority)).status).toBe("started");
-        return await original(...args);
+        return await original(input);
       };
       await expect(workspaces.deleteWorkspaceForAccount(workspace.id, workspace.ownerUserId, authority)).rejects.toMatchObject({
         code: "failed_precondition", details: { reason: "workspace_management_admission_conflict" },

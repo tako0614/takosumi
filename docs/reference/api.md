@@ -200,8 +200,10 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 操作履歴は `/api/v1/workspaces/{workspaceId}/activity` から読みます。
 
 空の Workspace だけが owner によって削除できます。非破棄 Capsule、Source、
-進行中 Run、利用量の証拠が一つでも残ると `409 workspace_not_empty` で拒否します。
-クラウド資源の destroy は行いません。削除後の読み取りは 404 です。
+進行中 Run、利用量の証拠、保持された backup が一つでも残ると `409 workspace_not_empty` で拒否します。
+保持された backup は削除後に到達できなくなるため、削除前に明示的に扱ってください。
+クラウド資源の destroy は行いません。削除は空チェックと一体の原子操作で行い、
+member 行は同時に削除します。削除後の読み取りは 404 です。
 
 **Project と Capsule**
 

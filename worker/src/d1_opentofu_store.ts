@@ -172,6 +172,10 @@ import type {
   WorkspaceManagement,
   WorkspaceManagementAuthority,
   ConnectionActorAuthority,
+  DeleteWorkspaceExclusiveInput,
+  DeleteWorkspaceExclusiveResult,
+  DeleteSourceWithActivityInput,
+  DeleteSourceWithActivityResult,
 } from "../../core/domains/deploy-control/store.ts";
 import {
   assertExactRunTransitionInput,
@@ -4558,6 +4562,83 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return false;
   }
 
+  async deleteWorkspaceExclusive(input: DeleteWorkspaceExclusiveInput): Promise<DeleteWorkspaceExclusiveResult> {
+    const { expectedWorkspace, expectedWorkspaceManagementAuthority } = structuredClone(input);
+    assertWorkspaceManagementAuthorityInput(expectedWorkspaceManagementAuthority, expectedWorkspace.id);
+    await this.#ensureSchema();
+    const current = await this.getWorkspace(expectedWorkspace.id);
+    if (current === undefined) return { status: "not_found" };
+    try {
+      await this.#assertWorkspaceManagementAdmission(expectedWorkspace.id, expectedWorkspaceManagementAuthority);
+    } catch {
+      return { status: "conflict" };
+    }
+    const blockers = await this.#workspaceDeleteBlockers(expectedWorkspace.id);
+    if (blockers.length > 0) return { status: "blocked", blockers };
+    await this.db.batch([
+      this.db.prepare(`delete from workspace_members where workspace_id = ?
+        and exists (select 1 from workspaces where id = ? and management_state = 'active' and management_epoch = ?
+          and not exists (select 1 from capsules where space_id = ? and status <> 'destroyed')
+          and not exists (select 1 from sources where space_id = ?)
+          and not exists (select 1 from runs where space_id = ? and status in ('queued', 'running'))
+          and not exists (select 1 from usage_events where workspace_id = ?)
+          and not exists (select 1 from backups where space_id = ?))`)
+        .bind(expectedWorkspace.id, expectedWorkspace.id, expectedWorkspaceManagementAuthority.managementEpoch,
+          expectedWorkspace.id, expectedWorkspace.id, expectedWorkspace.id, expectedWorkspace.id, expectedWorkspace.id),
+      this.db.prepare(`delete from workspaces where id = ? and management_state = 'active' and management_epoch = ?
+        and not exists (select 1 from capsules where space_id = ? and status <> 'destroyed')
+        and not exists (select 1 from sources where space_id = ?)
+        and not exists (select 1 from runs where space_id = ? and status in ('queued', 'running'))
+        and not exists (select 1 from usage_events where workspace_id = ?)
+        and not exists (select 1 from backups where space_id = ?)`)
+        .bind(expectedWorkspace.id, expectedWorkspaceManagementAuthority.managementEpoch,
+          expectedWorkspace.id, expectedWorkspace.id, expectedWorkspace.id, expectedWorkspace.id, expectedWorkspace.id),
+    ]);
+    const after = await this.getWorkspace(expectedWorkspace.id);
+    if (after === undefined) return { status: "deleted" };
+    const afterBlockers = await this.#workspaceDeleteBlockers(expectedWorkspace.id);
+    if (afterBlockers.length > 0) return { status: "blocked", blockers: afterBlockers };
+    try {
+      await this.#assertWorkspaceManagementAdmission(expectedWorkspace.id, expectedWorkspaceManagementAuthority);
+    } catch {
+      return { status: "conflict" };
+    }
+    return { status: "conflict" };
+  }
+
+  async #workspaceDeleteBlockers(workspaceId: string): Promise<string[]> {
+    const blockers: string[] = [];
+    const capsules = await this.#orm.select({ id: schema.capsules.id })
+      .from(schema.capsules)
+      .where(and(eq(schema.capsules.workspaceId, workspaceId), ne(schema.capsules.status, "destroyed")))
+      .limit(1);
+    if (capsules.length > 0) blockers.push("capsule_exists");
+    const sources = await this.#orm.select({ id: schema.sources.id })
+      .from(schema.sources)
+      .where(eq(schema.sources.workspaceId, workspaceId))
+      .limit(1);
+    if (sources.length > 0) blockers.push("source_exists");
+    const runs = await this.#orm.select({ id: schema.runs.id })
+      .from(schema.runs)
+      .where(and(
+        eq(schema.runs.workspaceId, workspaceId),
+        or(eq(schema.runs.status, "queued"), eq(schema.runs.status, "running")),
+      ))
+      .limit(1);
+    if (runs.length > 0) blockers.push("run_in_flight");
+    const usage = await this.#orm.select({ id: schema.usageEvents.id })
+      .from(schema.usageEvents)
+      .where(eq(schema.usageEvents.workspaceId, workspaceId))
+      .limit(1);
+    if (usage.length > 0) blockers.push("usage_exists");
+    const backups = await this.#orm.select({ id: schema.backups.id })
+      .from(schema.backups)
+      .where(eq(schema.backups.workspaceId, workspaceId))
+      .limit(1);
+    if (backups.length > 0) blockers.push("backup_exists");
+    return blockers;
+  }
+
   async replaceWorkspace(input: WorkspaceReplacementInput): Promise<boolean> {
     validateWorkspaceReplacement(input);
     return await this.#replaceWorkspace(input);
@@ -8760,6 +8841,97 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     if (changes(result as D1Result) > 0) return true;
     await this.#assertWorkspaceManagementAdmission(authority.workspaceId, authority);
     return false;
+  }
+
+  async deleteSourceWithActivity(input: DeleteSourceWithActivityInput): Promise<DeleteSourceWithActivityResult> {
+    const { expectedSource, expectedWorkspaceManagementAuthority, activity } = structuredClone(input);
+    assertWorkspaceManagementAuthorityInput(expectedWorkspaceManagementAuthority, expectedSource.workspaceId);
+    await this.#ensureSchema();
+    const currentRow = await this.#readD1StoredSourceRow(expectedSource.id);
+    const current = currentRow ? sourceFromD1Row(currentRow) : undefined;
+    if (!current) return { status: "not_found" };
+    if (current.workspaceId !== expectedSource.workspaceId) return { status: "not_found" };
+    try {
+      await this.#assertWorkspaceManagementAdmission(expectedSource.workspaceId, expectedWorkspaceManagementAuthority);
+    } catch {
+      return { status: "conflict" };
+    }
+    const preBlockers = await this.#sourceDeleteBlockers(expectedSource.id, expectedSource.workspaceId);
+    if (preBlockers.length > 0) return { status: "blocked", blockers: preBlockers };
+    const predicate = `id = ? and space_id = ?
+      and exists (select 1 from workspaces where workspaces.id = sources.space_id
+        and workspaces.management_state = 'active' and workspaces.management_epoch = ?)
+      and not exists (select 1 from capsules where capsules.source_id = sources.id and capsules.status <> 'destroyed')
+      and not exists (select 1 from runs where runs.source_id = sources.id and runs.status in ('queued', 'running'))
+      and not exists (select 1 from runs where runs.installation_id in
+        (select id from capsules where capsules.source_id = sources.id) and runs.status in ('queued', 'running'))`;
+    const guard = [expectedSource.id, expectedSource.workspaceId,
+      expectedWorkspaceManagementAuthority.managementEpoch];
+    const results = await this.db.batch([
+      this.db.prepare(`insert into audit_events
+        (id, space_id, actor_id, action, target_type, target_id, run_id, record_json, created_at)
+        select ?, ?, ?, ?, ?, ?, ?, ?, ?
+        where exists (select 1 from sources where ${predicate})`)
+        .bind(activity.id, activity.workspaceId, activity.actorId ?? null, activity.action,
+          activity.targetType, activity.targetId, activity.runId ?? null,
+          JSON.stringify(activity), activity.createdAt, ...guard),
+      this.db.prepare(`delete from sources where ${predicate}`).bind(...guard),
+    ]);
+    const deleted = changes(results[1] as D1Result) > 0;
+    if (deleted) return { status: "deleted", source: current };
+    const afterRow = await this.#readD1StoredSourceRow(expectedSource.id);
+    const after = afterRow ? sourceFromD1Row(afterRow) : undefined;
+    if (!after) {
+      const wasActivity = await this.getActivityEvent(activity.id);
+      if (wasActivity) return { status: "deleted", source: current };
+      return { status: "not_found" };
+    }
+    const afterBlockers = await this.#sourceDeleteBlockers(expectedSource.id, expectedSource.workspaceId);
+    if (afterBlockers.length > 0) return { status: "blocked", blockers: afterBlockers };
+    try {
+      await this.#assertWorkspaceManagementAdmission(expectedSource.workspaceId, expectedWorkspaceManagementAuthority);
+    } catch {
+      return { status: "conflict" };
+    }
+    return { status: "conflict" };
+  }
+
+  async #sourceDeleteBlockers(sourceId: string, workspaceId: string): Promise<string[]> {
+    const ref = await this.#orm.select({ id: schema.capsules.id })
+      .from(schema.capsules)
+      .where(and(eq(schema.capsules.sourceId, sourceId), ne(schema.capsules.status, "destroyed")))
+      .limit(1);
+    if (ref.length > 0) return ["source_referenced_by_capsule"];
+    const direct = await this.#orm.select({ id: schema.runs.id })
+      .from(schema.runs)
+      .where(and(eq(schema.runs.sourceId, sourceId),
+        or(eq(schema.runs.status, "queued"), eq(schema.runs.status, "running"))))
+      .limit(1);
+    if (direct.length > 0) return ["source_has_in_flight_run"];
+    const capsuleIds = await this.#orm.select({ id: schema.capsules.id })
+      .from(schema.capsules)
+      .where(eq(schema.capsules.sourceId, sourceId));
+    for (const chunk of chunkD1InQueryValues(capsuleIds.map((row) => row.id))) {
+      if (chunk.length === 0) continue;
+      const bound = await this.#orm.select({ id: schema.runs.id })
+        .from(schema.runs)
+        .where(and(
+          inArray(schema.runs.capsuleId, [...chunk]),
+          or(eq(schema.runs.status, "queued"), eq(schema.runs.status, "running")),
+        ))
+        .limit(1);
+      if (bound.length > 0) return ["source_has_in_flight_run"];
+    }
+    const workspaceSource = await this.#orm.select({ id: schema.runs.id })
+      .from(schema.runs)
+      .where(and(
+        eq(schema.runs.workspaceId, workspaceId),
+        eq(schema.runs.sourceId, sourceId),
+        or(eq(schema.runs.status, "queued"), eq(schema.runs.status, "running")),
+      ))
+      .limit(1);
+    if (workspaceSource.length > 0) return ["source_has_in_flight_run"];
+    return [];
   }
 
   async putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot> {

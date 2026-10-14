@@ -174,7 +174,7 @@ public route descriptors. Representative operations from that inventory are:
 ```http
 POST  /api/v1/workspaces
 GET   /api/v1/workspaces/{workspaceId}
-DELETE /api/v1/workspaces/{workspaceId} (empty Workspace, owner only; never destroys cloud resources)
+DELETE /api/v1/workspaces/{workspaceId} (empty Workspace, owner only; 409 while Capsules, Sources, in-flight Runs, usage evidence, or retained backups remain; never destroys cloud resources)
 
 POST  /api/v1/workspaces/{workspaceId}/projects
 GET   /api/v1/projects/{projectId}

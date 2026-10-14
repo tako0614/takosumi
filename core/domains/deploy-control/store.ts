@@ -127,6 +127,7 @@ import {
   type RunAuditEvent,
   type RunGroup,
 } from "takosumi-contract/runs";
+import { runIsInFlight } from "takosumi-contract/runs";
 import type { BackupRecord } from "takosumi-contract/backups";
 import type { UsageEvent } from "takosumi-contract/billing";
 import { usageEventUsdMicros } from "takosumi-contract/billing";
@@ -694,6 +695,31 @@ export function assertWorkspaceManagementAdmission(
   }
   return actual;
 }
+
+/** Atomic empty-Workspace delete input: the observed Workspace plus its captured authority. */
+export interface DeleteWorkspaceExclusiveInput {
+  readonly expectedWorkspace: Workspace;
+  readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
+}
+
+export type DeleteWorkspaceExclusiveResult =
+  | { readonly status: "deleted" }
+  | { readonly status: "not_found" }
+  | { readonly status: "conflict" }
+  | { readonly status: "blocked"; readonly blockers: readonly string[] };
+
+/** Atomic Source delete + `source.deleted` Activity input. */
+export interface DeleteSourceWithActivityInput {
+  readonly expectedSource: StoredSource;
+  readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
+  readonly activity: ActivityEvent;
+}
+
+export type DeleteSourceWithActivityResult =
+  | { readonly status: "deleted"; readonly source: StoredSource }
+  | { readonly status: "not_found" }
+  | { readonly status: "conflict" }
+  | { readonly status: "blocked"; readonly blockers: readonly string[] };
 
 /**
  * One immutable Plan preparation unit. The Run must not become queue-visible
@@ -3497,6 +3523,15 @@ export interface OpenTofuControlStore {
    * first). No cloud-resource destroy is performed here or by any caller.
    */
   deleteWorkspace(id: string, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<boolean>;
+  /**
+   * Atomic empty-Workspace deletion. The emptiness check (no non-destroyed
+   * Capsule, no Source, no in-flight Run, no usage evidence, no retained
+   * backup record) and the row deletes share one storage boundary, so a
+   * concurrent creation cannot slip between the check and the delete. Member
+   * rows are removed in the same boundary (PII hygiene); Run-history and
+   * Activity rows remain and become unreachable via Workspace-scoped routes.
+   */
+  deleteWorkspaceExclusive(input: DeleteWorkspaceExclusiveInput): Promise<DeleteWorkspaceExclusiveResult>;
   /** Atomic management admission and full observed-row CAS; false means stale metadata. */
   replaceWorkspace(input: WorkspaceReplacementInput): Promise<boolean>;
   replaceWorkspaceForAccount(input: WorkspaceAccountReplacementInput): Promise<boolean>;
@@ -3803,6 +3838,14 @@ export interface OpenTofuControlStore {
   /** Bounded keyset page across every Workspace for scheduled polling. */
   listAllSourcesPage(params: PageParams): Promise<Page<StoredSource>>;
   deleteSource(id: string, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<boolean>;
+  /**
+   * Atomic Source deletion with its value-free `source.deleted` Activity.
+   * The reference/in-flight checks, the row delete, and the Activity insert
+   * share one storage boundary (transaction / D1 batch), so a concurrent
+   * Capsule/Run creation cannot slip between the check and the delete and a
+   * lost Activity cannot follow a committed delete.
+   */
+  deleteSourceWithActivity(input: DeleteSourceWithActivityInput): Promise<DeleteSourceWithActivityResult>;
 
   // SourceSnapshot records (immutable archive snapshots).
   putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot>;
@@ -5031,6 +5074,63 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     const existed = this.#workspaces.delete(id);
     this.#workspaceManagement.delete(id);
     return Promise.resolve(existed);
+  }
+
+  async deleteWorkspaceExclusive(input: DeleteWorkspaceExclusiveInput): Promise<DeleteWorkspaceExclusiveResult> {
+    const { expectedWorkspace, expectedWorkspaceManagementAuthority } = structuredClone(input);
+    assertWorkspaceManagementAuthorityInput(expectedWorkspaceManagementAuthority, expectedWorkspace.id);
+    // Single synchronous boundary: no await between the emptiness reads and
+    // the row deletes, so a concurrent in-process creation cannot interleave.
+    const current = this.#workspaces.get(expectedWorkspace.id);
+    if (current === undefined) return { status: "not_found" };
+    try {
+      assertWorkspaceManagementAdmission(
+        this.#workspaceManagement.get(expectedWorkspace.id),
+        expectedWorkspace.id,
+        expectedWorkspaceManagementAuthority,
+      );
+    } catch (error) {
+      if (error instanceof WorkspaceManagementAdmissionConflictError) return { status: "conflict" };
+      throw error;
+    }
+    const blockers: string[] = [];
+    for (const capsule of this.#capsules.values()) {
+      if (capsule.workspaceId === expectedWorkspace.id && capsule.status !== "destroyed") {
+        blockers.push("capsule_exists");
+        break;
+      }
+    }
+    for (const source of this.#sources.values()) {
+      if (source.workspaceId === expectedWorkspace.id) {
+        blockers.push("source_exists");
+        break;
+      }
+    }
+    for (const run of this.#runs.values()) {
+      if (run.workspaceId === expectedWorkspace.id && runIsInFlight(run.status)) {
+        blockers.push("run_in_flight");
+        break;
+      }
+    }
+    for (const event of this.#usageEvents.values()) {
+      if (event.workspaceId === expectedWorkspace.id) {
+        blockers.push("usage_exists");
+        break;
+      }
+    }
+    for (const record of this.#backupRecords.values()) {
+      if (record.workspaceId === expectedWorkspace.id) {
+        blockers.push("backup_exists");
+        break;
+      }
+    }
+    if (blockers.length > 0) return { status: "blocked", blockers };
+    for (const [key, member] of [...this.#workspaceMembers]) {
+      if (member.workspaceId === expectedWorkspace.id) this.#workspaceMembers.delete(key);
+    }
+    this.#workspaces.delete(expectedWorkspace.id);
+    this.#workspaceManagement.delete(expectedWorkspace.id);
+    return { status: "deleted" };
   }
 
   async replaceWorkspace(input: WorkspaceReplacementInput): Promise<boolean> {
@@ -7174,6 +7274,54 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       );
     }
     return Promise.resolve(this.#sources.delete(id));
+  }
+
+  async deleteSourceWithActivity(input: DeleteSourceWithActivityInput): Promise<DeleteSourceWithActivityResult> {
+    const { expectedSource, expectedWorkspaceManagementAuthority, activity } = structuredClone(input);
+    assertWorkspaceManagementAuthorityInput(expectedWorkspaceManagementAuthority, expectedSource.workspaceId);
+    // Single synchronous boundary: no await between reference checks, the row
+    // delete, and the Activity insert.
+    const current = this.#sources.get(expectedSource.id);
+    if (current === undefined) return { status: "not_found" };
+    if (current.workspaceId !== expectedSource.workspaceId) return { status: "not_found" };
+    try {
+      assertWorkspaceManagementAdmission(
+        this.#workspaces.has(current.workspaceId) ? this.#workspaceManagement.get(current.workspaceId) : undefined,
+        current.workspaceId,
+        expectedWorkspaceManagementAuthority,
+      );
+    } catch (error) {
+      if (error instanceof WorkspaceManagementAdmissionConflictError) return { status: "conflict" };
+      throw error;
+    }
+    for (const capsule of this.#capsules.values()) {
+      if (capsule.sourceId === current.id && capsule.status !== "destroyed") {
+        return { status: "blocked", blockers: ["source_referenced_by_capsule"] };
+      }
+    }
+    if (this.#hasInFlightSourceRunSync(current)) {
+      return { status: "blocked", blockers: ["source_has_in_flight_run"] };
+    }
+    if (this.#activityEvents.has(activity.id)) {
+      throw new Error(`Activity ${activity.id} already exists`);
+    }
+    this.#sources.delete(current.id);
+    this.#activityEvents.set(activity.id, activity);
+    return { status: "deleted", source: current };
+  }
+
+  #hasInFlightSourceRunSync(stored: StoredSource): boolean {
+    for (const run of this.#runs.values()) {
+      if (!runIsInFlight(run.status)) continue;
+      if (run.workspaceId !== stored.workspaceId) continue;
+      const record = run as unknown as Record<string, unknown>;
+      if (record["sourceId"] === stored.id) return true;
+      const capsuleId = record["capsuleId"];
+      if (typeof capsuleId === "string" && capsuleId.length > 0) {
+        if (this.#capsules.get(capsuleId)?.sourceId === stored.id) return true;
+      }
+    }
+    return false;
   }
 
   putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot> {

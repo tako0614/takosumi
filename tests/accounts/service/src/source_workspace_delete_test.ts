@@ -363,6 +363,63 @@ test("Workspace DELETE refuses while a Run is in flight or usage evidence exists
   );
 });
 
+test("Workspace DELETE refuses a retained backup with backup_exists", async () => {
+  const { ledger, operations } = await service();
+  await ledger.putWorkspace({
+    id: "ws_del455_backup",
+    handle: "ws-del455-backup",
+    displayName: "Del455 Backup",
+    type: "personal",
+    ownerUserId: "user_test",
+    createdAt: new Date(NOW).toISOString(),
+    updatedAt: new Date(NOW).toISOString(),
+  });
+  await ledger.putBackupRecord({
+    id: "bkp_del455",
+    workspaceId: "ws_del455_backup",
+    ref: "workspaces/ws_del455_backup/backups/bkp_del455/control.json.zst.enc",
+    digest: "sha256:abc",
+    sizeBytes: 10,
+    createdAt: new Date(NOW).toISOString(),
+  });
+  const accounts = accountsWithSession("user_test", "owner455-backup");
+  const response = await request(operations, accounts, "DELETE", "/api/v1/workspaces/ws_del455_backup", "owner455-backup");
+  expect(response.status).toBe(409);
+  const body = await response.json();
+  expect(body.error.details.reason).toBe("workspace_not_empty");
+  expect(body.error.details.blockers).toEqual(expect.arrayContaining(["backup_exists"]));
+  const get = await request(operations, accounts, "GET", "/api/v1/workspaces/ws_del455_backup", "owner455-backup");
+  expect(get.status).toBe(200);
+});
+
+test("Workspace DELETE removes member rows", async () => {
+  const { ledger, operations } = await service();
+  await ledger.putWorkspace({
+    id: "ws_del455_members",
+    handle: "ws-del455-members",
+    displayName: "Del455 Members",
+    type: "personal",
+    ownerUserId: "user_test",
+    createdAt: new Date(NOW).toISOString(),
+    updatedAt: new Date(NOW).toISOString(),
+  });
+  const nowIso = new Date(NOW).toISOString();
+  await ledger.putWorkspaceMember({
+    id: "wsm_del455_member",
+    workspaceId: "ws_del455_members",
+    accountId: "member_pii",
+    roles: ["member"],
+    status: "active",
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  });
+  const accounts = accountsWithSession("user_test", "owner455-members");
+  const response = await request(operations, accounts, "DELETE", "/api/v1/workspaces/ws_del455_members", "owner455-members");
+  expect(response.status).toBe(200);
+  expect(await ledger.listWorkspaceMembers("ws_del455_members")).toHaveLength(0);
+  expect(await ledger.getWorkspaceMember("ws_del455_members", "member_pii")).toBeUndefined();
+});
+
 test("Source and Workspace item routes advertise DELETE and the inventory publishes both", async () => {
   const { ledger, operations } = await service();
   const accounts = accountsWithSession("user_test", "owner455-allow");

@@ -390,8 +390,9 @@ export class SourcesService {
    *
    * Deletion removes the stored row, so the webhook bearer can no longer
    * verify and reads observe `not_found`. Exactly one value-free
-   * `source.deleted` Activity event is recorded. A second delete observes
-   * `not_found` (already-deleted is 404, never an idempotent success).
+   * `source.deleted` Activity event is recorded in the SAME storage boundary
+   * as the row delete. A second delete observes `not_found`
+   * (already-deleted is 404, never an idempotent success).
    */
   async deleteSource(
     id: string,
@@ -424,27 +425,46 @@ export class SourcesService {
         { reason: "source_has_in_flight_run" },
       );
     }
-    const deleted = await this.#store.deleteSource(stored.id, authority).catch((error: unknown) => {
+    const nowIso = this.#now().toISOString();
+    const outcome = await this.#store.deleteSourceWithActivity({
+      expectedSource: stored,
+      expectedWorkspaceManagementAuthority: authority,
+      activity: {
+        id: this.#newId("act"),
+        workspaceId: stored.workspaceId,
+        ...(actorId === undefined ? {} : { actorId }),
+        action: "source.deleted",
+        targetType: "source",
+        targetId: stored.id,
+        metadata: {},
+        createdAt: nowIso,
+      },
+    }).catch((error: unknown) => {
       if (error instanceof WorkspaceManagementAdmissionConflictError) {
         throw workspaceManagementAdmissionErrorFor();
       }
       throw error;
     });
-    if (!deleted) {
+    if (outcome.status === "deleted") return { source: toPublicSource(outcome.source) };
+    if (outcome.status === "not_found") {
       throw new OpenTofuControllerError("not_found", `source ${id} not found`);
     }
-    const nowIso = this.#now().toISOString();
-    await this.#store.putActivityEvent({
-      id: this.#newId("act"),
-      workspaceId: stored.workspaceId,
-      ...(actorId === undefined ? {} : { actorId }),
-      action: "source.deleted",
-      targetType: "source",
-      targetId: stored.id,
-      metadata: {},
-      createdAt: nowIso,
-    });
-    return { source: toPublicSource(stored) };
+    if (outcome.status === "blocked") {
+      const reason = outcome.blockers[0] ?? "source_has_in_flight_run";
+      if (reason === "source_referenced_by_capsule") {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `Source ${stored.id} is still tracked by Capsule(s); delete the Capsule(s) first.`,
+          { reason },
+        );
+      }
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `Source ${stored.id} still has an in-flight Run; wait for it to settle first.`,
+        { reason: "source_has_in_flight_run" },
+      );
+    }
+    throw workspaceManagementAdmissionErrorFor();
   }
 
   /**

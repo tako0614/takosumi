@@ -286,23 +286,27 @@ export class WorkspacesService {
    * admins and lesser roles observe `permission_denied`.
    *
    * Only an empty Workspace is deletable: a non-destroyed Capsule, any
-   * Source, any queued/running Run, or any recorded usage evidence blocks
+   * Source, any queued/running Run, any recorded usage evidence, or any
+   * retained backup record (control export or pre-destroy export) blocks
    * with `failed_precondition` carrying a machine-readable reason. (OSS
    * showback records usage as UsageEvents and a `disabled` Workspace that
    * never applied has none; there is no money-hold ledger in OSS, so any
    * usage evidence conservatively counts as an unsettled hold/settlement.)
+   * Backups block because Workspace-scoped routes resolve the Workspace
+   * first: deleting with retained exports would make them unreachable.
    *
-   * Deletion removes the Workspace row and its private management state; no
+   * Deletion removes the Workspace row, its private management state, and
+   * its member rows (personal data hygiene) in one storage boundary; no
    * cloud-resource destroy is performed (destroy flows stay out of scope).
-   * Member, Run-history, and Activity rows that reference the Workspace are
-   * left in place and become unreachable through the Workspace-scoped
-   * routes, which all resolve the Workspace first. An already-deleted
-   * Workspace observes `not_found`.
+   * Run-history and Activity rows that reference the Workspace are left in
+   * place and become unreachable through the Workspace-scoped routes, which
+   * all resolve the Workspace first. An already-deleted Workspace observes
+   * `not_found`.
    *
-   * The emptiness reads and the row delete are not one atomic boundary: a
-   * concurrent creation racing a delete can leave rows referencing a deleted
-   * Workspace (unreachable, never resurrected). Serializing creation against
-   * deletion is future work for an atomic store command.
+   * The emptiness reads and the row deletes share one atomic boundary
+   * (`deleteWorkspaceExclusive`): the Workspace row lock (Postgres),
+   * conditional predicates (D1 batch), or a synchronous section (memory)
+   * serializes concurrent creation against deletion.
    */
   async deleteWorkspaceForAccount(
     id: string,
@@ -349,6 +353,10 @@ export class WorkspacesService {
     if (usageEvents.length > 0) {
       blockers.push("usage_exists");
     }
+    const backups = await this.#store.listBackupRecords(id);
+    if (backups.length > 0) {
+      blockers.push("backup_exists");
+    }
     if (blockers.length > 0) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -356,13 +364,26 @@ export class WorkspacesService {
         { reason: "workspace_not_empty", blockers },
       );
     }
-    const deleted = await this.#store.deleteWorkspace(id, authority).catch((error: unknown) => {
+    const outcome = await this.#store.deleteWorkspaceExclusive({
+      expectedWorkspace: workspace,
+      expectedWorkspaceManagementAuthority: authority,
+    }).catch((error: unknown) => {
       throw workspaceMutationError(error);
     });
-    if (!deleted) {
+    if (outcome.status === "deleted") return workspace;
+    if (outcome.status === "not_found") {
       throw new OpenTofuControllerError("not_found", "workspace not found");
     }
-    return workspace;
+    if (outcome.status === "blocked") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `Workspace ${id} is not empty (${outcome.blockers.join(", ")}); remove them first.`,
+        { reason: "workspace_not_empty", blockers: [...outcome.blockers] },
+      );
+    }
+    throw workspaceMutationError(
+      new WorkspaceManagementAdmissionConflictError(id),
+    );
   }
 
   async listWorkspaces(): Promise<readonly Workspace[]> {
