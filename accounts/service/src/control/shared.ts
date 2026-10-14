@@ -620,9 +620,9 @@ export async function canAccessWorkspace(input: {
     workspace.ownerUserId === input.session.subject) return true;
 
   const mayUseMember = (member: PublicWorkspaceMember | undefined): boolean =>
-    member?.workspaceId === input.workspaceId &&
-    member.accountId === input.session.subject &&
     member?.status === "active" &&
+    (!input.session.requireCurrentMembership ||
+      (member.workspaceId === input.workspaceId && member.accountId === input.session.subject)) &&
     (!input.session.requireCurrentMembership ||
       member.roles.some((role) => ["owner", "admin", "member", "viewer"].includes(role))) &&
     (input.session.requiredAccess !== "write" ||
