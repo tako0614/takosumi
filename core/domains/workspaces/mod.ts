@@ -283,6 +283,11 @@ export class WorkspacesService {
     return await this.#store.listWorkspaces();
   }
 
+  /** Internal scheduler traversal; durable page allocation belongs to the store. */
+  async listWorkspacesForSweep(limit: number): Promise<readonly Workspace[]> {
+    return await this.#store.listWorkspacesForSweep(limit);
+  }
+
   /** Bounded operator scan over the complete durable Workspace ledger. */
   async listWorkspacesPage(params: PageParams): Promise<Page<Workspace>> {
     return await this.#store.listWorkspacesPage(params);

@@ -2518,6 +2518,7 @@ export class OpenTofuController {
     readonly staleQueuedBeforeMs: number;
     readonly staleRunningBeforeMs: number;
     readonly limit?: number;
+    readonly sweep?: true;
   }): Promise<readonly Run[]> {
     return await this.#runQuery.listRecoverableOpenTofuRuns(options);
   }

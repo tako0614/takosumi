@@ -23,7 +23,7 @@ import type {
   RunnerProfile,
   StateVersion,
 } from "@takosumi/internal/deploy-control-api";
-import type { SqlClient } from "../../adapters/storage/sql.ts";
+import type { SqlClient, SqlParameters } from "../../adapters/storage/sql.ts";
 import {
   and,
   asc,
@@ -1673,16 +1673,43 @@ function pgRunStarted(): SQL {
  */
 function pgKeysetWhere(
   filter: SQL | undefined,
-  createdAtCol: PgColumn,
-  idCol: PgColumn,
+  createdAtCol: PgColumn | SQL,
+  idCol: PgColumn | SQL,
   cursor: { readonly createdAt: string; readonly id: string } | undefined,
 ): SQL | undefined {
   if (cursor === undefined) return filter;
+  const createdAt = sql`${createdAtCol}`;
+  const id = sql`${idCol}`;
   const keyset = or(
-    gt(createdAtCol, cursor.createdAt),
-    and(eq(createdAtCol, cursor.createdAt), gt(idCol, cursor.id)),
+    gt(createdAt, cursor.createdAt),
+    and(eq(createdAt, cursor.createdAt), gt(id, cursor.id)),
   );
   return filter === undefined ? keyset : and(filter, keyset);
+}
+
+/** Scheduled sweep IDs use PostgreSQL's bytewise C collation to match SQLite BINARY. */
+function pgSweepIdOrder(id: PgColumn): SQL {
+  return sql`${id} collate "C"`;
+}
+
+function pgSweepKeysetWhere(
+  filter: SQL | undefined,
+  createdAtCol: PgColumn | SQL,
+  idCol: PgColumn,
+  cursor: { readonly createdAt: string; readonly id: string } | undefined,
+  upper?: { readonly createdAt: string; readonly id: string },
+): SQL | undefined {
+  const createdAt = sql`${createdAtCol}`;
+  const id = pgSweepIdOrder(idCol);
+  const after = cursor === undefined ? undefined : or(
+    gt(createdAt, cursor.createdAt),
+    and(eq(createdAt, cursor.createdAt), gt(id, cursor.id)),
+  );
+  const beforeUpper = upper === undefined ? undefined : or(
+    lt(createdAt, upper.createdAt),
+    and(eq(createdAt, upper.createdAt), or(lt(id, upper.id), eq(id, upper.id))),
+  );
+  return and(filter, after, beforeUpper);
 }
 
 /**
@@ -4082,6 +4109,94 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       ),
     );
     const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
+    if (options.sweep === true) {
+      return await this.#client.transaction(async (transaction) => {
+        const cursorRows = await transaction.query<{
+          generation: number | string;
+          cursor_created_at: string | null;
+          cursor_id: string | null;
+          upper_created_at: string | null;
+          upper_id: string | null;
+        }>(
+          `select generation, cursor_created_at, cursor_id, upper_created_at, upper_id
+           from takosumi_scheduled_sweep_cursors
+           where lane = 'recoverable_runs'
+           for update`,
+        );
+        const cursorRow = cursorRows.rows[0];
+        if (!cursorRow) throw new Error("scheduled sweep cursor row is missing");
+        const db = this.#drizzleForClient(transaction);
+        const selectPage = async (
+          cursor?: { readonly createdAt: string; readonly id: string },
+          upper?: { readonly createdAt: string; readonly id: string },
+          descending = false,
+        ) => {
+          const query = db.select({
+            json: sql`${pgSchema.runs.runJson}`.as("json"),
+            sweepCreatedAt: sql`${createdAt}`.as("sweep_created_at"),
+            sweepId: sql`${pgSchema.runs.id}`.as("sweep_id"),
+          })
+          .from(pgSchema.runs)
+          .where(
+            pgSweepKeysetWhere(
+              where,
+              createdAt,
+              pgSchema.runs.id,
+              cursor,
+              upper,
+            ),
+          )
+          .orderBy(
+            descending ? desc(createdAt) : asc(createdAt),
+            descending ? desc(pgSweepIdOrder(pgSchema.runs.id)) : asc(pgSweepIdOrder(pgSchema.runs.id)),
+          )
+          .limit(descending ? 1 : limit).toSQL();
+          const result = await transaction.query<{
+            json: unknown;
+            sweep_created_at: number | string;
+            sweep_id: string;
+          }>(query.sql, query.params as SqlParameters);
+          return result.rows;
+        };
+        let upper = cursorRow.upper_created_at && cursorRow.upper_id
+          ? { createdAt: cursorRow.upper_created_at, id: cursorRow.upper_id }
+          : undefined;
+        let rows = cursorRow.cursor_created_at && cursorRow.cursor_id && upper
+          ? await selectPage({
+              createdAt: cursorRow.cursor_created_at,
+              id: cursorRow.cursor_id,
+            }, upper)
+          : [];
+        if (rows.length === 0) {
+          const upperRow = (await selectPage(undefined, undefined, true))[0];
+          upper = upperRow
+            ? { createdAt: String(upperRow.sweep_created_at), id: upperRow.sweep_id }
+            : undefined;
+          rows = upper ? await selectPage(undefined, upper) : [];
+        }
+        const records = rows
+          .map((row) => parseRow(row) as StoredRunRecord)
+          .filter((row): row is StoredRunRecord => Boolean(row))
+          .filter((row) => isRecoverableOpenTofuRunRecord(row, options))
+          .map(publicStoredRun);
+        const tail = rows.at(-1);
+        const tailCreatedAt = tail?.sweep_created_at === undefined
+          ? null
+          : String(tail.sweep_created_at);
+        const tailId = typeof tail?.sweep_id === "string" ? tail.sweep_id : null;
+        await transaction.query(
+          `update takosumi_scheduled_sweep_cursors
+           set generation = generation + 1,
+               cursor_created_at = $1,
+               cursor_id = $2,
+               upper_created_at = $3,
+               upper_id = $4
+           where lane = 'recoverable_runs'`,
+          [tailCreatedAt, tailId, upper?.createdAt ?? null, upper?.id ?? null],
+        );
+        return records;
+      });
+    }
     const rows = await this.#db
       .select({ json: pgSchema.runs.runJson })
       .from(pgSchema.runs)
@@ -4095,6 +4210,174 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       // a future dialect drift; SQL performs the actual bound and ordering.
       .filter((row) => isRecoverableOpenTofuRunRecord(row, options))
       .map(publicStoredRun);
+  }
+
+  async listWorkspacesForSweep(limit: number): Promise<readonly Workspace[]> {
+    const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
+    if (boundedLimit === 0) return [];
+    return await this.#client.transaction(async (transaction) => {
+      const cursorRows = await transaction.query<{
+        generation: number | string;
+        cursor_created_at: string | null;
+        cursor_id: string | null;
+        upper_created_at: string | null;
+        upper_id: string | null;
+      }>(
+        `select generation, cursor_created_at, cursor_id, upper_created_at, upper_id
+         from takosumi_scheduled_sweep_cursors
+         where lane = 'workspaces'
+         for update`,
+      );
+      const cursorRow = cursorRows.rows[0];
+      if (!cursorRow) throw new Error("scheduled sweep cursor row is missing");
+      const db = this.#drizzleForClient(transaction);
+      const selectPage = async (
+        cursor?: { readonly createdAt: string; readonly id: string },
+        upper?: { readonly createdAt: string; readonly id: string },
+        descending = false,
+      ) => {
+        const query = db.select({
+          json: sql`${pgSchema.workspaces.spaceJson}`.as("json"),
+          sweepCreatedAt: sql`${pgSchema.workspaces.createdAt}`.as("sweep_created_at"),
+          sweepId: sql`${pgSchema.workspaces.id}`.as("sweep_id"),
+        })
+        .from(pgSchema.workspaces)
+        .where(
+          pgSweepKeysetWhere(
+            sql`COALESCE(${pgSchema.workspaces.spaceJson} ->> 'archivedAt', '') = ''`,
+            pgSchema.workspaces.createdAt,
+            pgSchema.workspaces.id,
+            cursor,
+            upper,
+          ),
+        )
+        .orderBy(
+          descending ? desc(pgSchema.workspaces.createdAt) : asc(pgSchema.workspaces.createdAt),
+          descending ? desc(pgSweepIdOrder(pgSchema.workspaces.id)) : asc(pgSweepIdOrder(pgSchema.workspaces.id)),
+        )
+        .limit(descending ? 1 : boundedLimit).toSQL();
+        const result = await transaction.query<{
+          json: unknown;
+          sweep_created_at: string;
+          sweep_id: string;
+        }>(query.sql, query.params as SqlParameters);
+        return result.rows;
+      };
+      let upper = cursorRow.upper_created_at && cursorRow.upper_id
+        ? { createdAt: cursorRow.upper_created_at, id: cursorRow.upper_id }
+        : undefined;
+      let rows = cursorRow.cursor_created_at && cursorRow.cursor_id && upper
+        ? await selectPage({
+            createdAt: cursorRow.cursor_created_at,
+            id: cursorRow.cursor_id,
+          }, upper)
+        : [];
+      if (rows.length === 0) {
+        const upperRow = (await selectPage(undefined, undefined, true))[0];
+        upper = upperRow
+          ? { createdAt: upperRow.sweep_created_at, id: upperRow.sweep_id }
+          : undefined;
+        rows = upper ? await selectPage(undefined, upper) : [];
+      }
+      const workspaces = rows.map((row) => parseRow(row) as Workspace);
+      const tail = rows.at(-1);
+      await transaction.query(
+        `update takosumi_scheduled_sweep_cursors
+         set generation = generation + 1,
+             cursor_created_at = $1,
+             cursor_id = $2,
+             upper_created_at = $3,
+             upper_id = $4
+         where lane = 'workspaces'`,
+        [tail?.sweep_created_at ?? null, tail?.sweep_id ?? null, upper?.createdAt ?? null, upper?.id ?? null],
+      );
+      return workspaces;
+    });
+  }
+
+  async listActiveCapsulesForSweep(limit: number): Promise<readonly Capsule[]> {
+    const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
+    if (boundedLimit === 0) return [];
+    return await this.#client.transaction(async (transaction) => {
+      const cursorRows = await transaction.query<{
+        generation: number | string;
+        cursor_created_at: string | null;
+        cursor_id: string | null;
+        upper_created_at: string | null;
+        upper_id: string | null;
+      }>(
+        `select generation, cursor_created_at, cursor_id, upper_created_at, upper_id
+         from takosumi_scheduled_sweep_cursors
+         where lane = 'active_capsules'
+         for update`,
+      );
+      const cursorRow = cursorRows.rows[0];
+      if (!cursorRow) throw new Error("scheduled sweep cursor row is missing");
+      const db = this.#drizzleForClient(transaction);
+      const selectPage = async (
+        cursor?: { readonly createdAt: string; readonly id: string },
+        upper?: { readonly createdAt: string; readonly id: string },
+        descending = false,
+      ) => {
+        const query = db.select({
+          json: sql`${pgSchema.capsules.capsuleJson}`.as("json"),
+          sweepCreatedAt: sql`${pgSchema.capsules.createdAt}`.as("sweep_created_at"),
+          sweepId: sql`${pgSchema.capsules.id}`.as("sweep_id"),
+        })
+        .from(pgSchema.capsules)
+        .where(
+          pgSweepKeysetWhere(
+            eq(pgSchema.capsules.status, "active"),
+            pgSchema.capsules.createdAt,
+            pgSchema.capsules.id,
+            cursor,
+            upper,
+          ),
+        )
+        .orderBy(
+          descending ? desc(pgSchema.capsules.createdAt) : asc(pgSchema.capsules.createdAt),
+          descending ? desc(pgSweepIdOrder(pgSchema.capsules.id)) : asc(pgSweepIdOrder(pgSchema.capsules.id)),
+        )
+        .limit(descending ? 1 : boundedLimit).toSQL();
+        const result = await transaction.query<{
+          json: unknown;
+          sweep_created_at: string;
+          sweep_id: string;
+        }>(query.sql, query.params as SqlParameters);
+        return result.rows;
+      };
+      let upper = cursorRow.upper_created_at && cursorRow.upper_id
+        ? { createdAt: cursorRow.upper_created_at, id: cursorRow.upper_id }
+        : undefined;
+      let rows = cursorRow.cursor_created_at && cursorRow.cursor_id && upper
+        ? await selectPage({
+            createdAt: cursorRow.cursor_created_at,
+            id: cursorRow.cursor_id,
+          }, upper)
+        : [];
+      if (rows.length === 0) {
+        const upperRow = (await selectPage(undefined, undefined, true))[0];
+        upper = upperRow
+          ? { createdAt: upperRow.sweep_created_at, id: upperRow.sweep_id }
+          : undefined;
+        rows = upper ? await selectPage(undefined, upper) : [];
+      }
+      const capsules = rows.map((row) =>
+        normalizeCapsuleRecord(parseRow(row) as Capsule),
+      );
+      const tail = rows.at(-1);
+      await transaction.query(
+        `update takosumi_scheduled_sweep_cursors
+         set generation = generation + 1,
+             cursor_created_at = $1,
+             cursor_id = $2,
+             upper_created_at = $3,
+             upper_id = $4
+         where lane = 'active_capsules'`,
+        [tail?.sweep_created_at ?? null, tail?.sweep_id ?? null, upper?.createdAt ?? null, upper?.id ?? null],
+      );
+      return capsules;
+    });
   }
 
   async listPendingRuntimeSecretRetirementRuns(options: {

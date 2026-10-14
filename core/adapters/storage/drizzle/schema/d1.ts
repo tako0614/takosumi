@@ -420,6 +420,19 @@ export const runs = sqliteTable(
   ],
 );
 
+/** Persistent keyset positions reserved by scheduled sweep store methods. */
+export const scheduledSweepCursors = sqliteTable(
+  names.scheduledSweepCursors,
+  {
+    lane: text("lane").primaryKey(),
+    generation: integer("generation").notNull().default(0),
+    cursorCreatedAt: text("cursor_created_at"),
+    cursorId: text("cursor_id"),
+    upperCreatedAt: text("upper_created_at"),
+    upperId: text("upper_id"),
+  },
+);
+
 export const planRunInputs = sqliteTable(names.planRunInputs, {
   planRunId: text("plan_run_id").primaryKey(),
   inputsJson: jsonText("inputs_json").notNull(),

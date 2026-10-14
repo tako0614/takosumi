@@ -3894,6 +3894,7 @@ export interface OpenTofuRunRepairOperations {
       readonly staleQueuedBeforeMs: number;
       readonly staleRunningBeforeMs: number;
       readonly limit?: number;
+      readonly sweep?: true;
     }): Promise<readonly Run[]>;
     listPendingRuntimeSecretRetirementRuns(options: {
       readonly staleBeforeMs: number;
@@ -3911,7 +3912,7 @@ type RepairRunAction = "plan" | "apply" | "source_sync" | "restore";
 
 export interface StaleCapsuleAutoPlanOperations {
   readonly workspaces: {
-    listWorkspaces(): Promise<
+    listWorkspacesForSweep(limit: number): Promise<
       readonly { readonly id: string; readonly archivedAt?: string }[]
     >;
   };
@@ -4095,9 +4096,7 @@ export async function planStaleCapsuleUpdates(
     options.runLookback,
     SCHEDULED_STALE_AUTO_PLAN_RUN_LOOKBACK,
   );
-  const workspaces = (await operations.workspaces.listWorkspaces())
-    .filter((workspace) => !workspace.archivedAt)
-    .slice(0, workspaceLimit);
+  const workspaces = await operations.workspaces.listWorkspacesForSweep(workspaceLimit);
   let staleCapsulesScanned = 0;
   let plansCreated = 0;
   for (const workspace of workspaces) {
@@ -4262,6 +4261,7 @@ export async function repairStaleOpenTofuRuns(
       staleQueuedBeforeMs: now - queuedStaleMs,
       staleRunningBeforeMs: now - runningStaleMs,
       limit: runLimit,
+      sweep: true,
     });
     runsScanned = runs.length;
     const requiredWorkspaceIds = [

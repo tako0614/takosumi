@@ -463,10 +463,9 @@ test("stale Capsule auto-plan creates one pending update plan per stale Capsule"
   const result = await planStaleCapsuleUpdates(
     {
       workspaces: {
-        listWorkspaces: () =>
+        listWorkspacesForSweep: () =>
           Promise.resolve([
             { id: "space_a" },
-            { id: "space_archived", archivedAt: "2026-07-01T00:00:00.000Z" },
           ]),
       },
       capsules: {
@@ -686,6 +685,7 @@ test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", a
       staleQueuedBeforeMs: now - 1_000,
       staleRunningBeforeMs: now - 1_000,
       limit: 50,
+      sweep: true,
     },
   ]);
   expect(retirementQueries).toEqual([
