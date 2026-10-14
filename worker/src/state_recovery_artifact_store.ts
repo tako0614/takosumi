@@ -17,6 +17,12 @@ import {
   maxStateArtifactCiphertextBytes,
   StateArtifactCrypto,
 } from "./state_crypto.ts";
+import {
+  prepareArtifactRetention,
+  confirmArtifactRetention,
+  type ArtifactStorageUsagePort,
+  type PreparedArtifactRetention,
+} from "./artifact-storage-usage.ts";
 
 export const RECOVERY_STATE_MAX_BYTES = 16 * 1024 * 1024;
 const RECOVERY_STATE_CIPHERTEXT_MAX_BYTES =
@@ -59,15 +65,19 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
   readonly #bucket: R2Bucket;
   readonly #crypto: StateArtifactCrypto;
   readonly #allocator: ArtifactReferenceAllocator;
+  readonly #storageUsage: ArtifactStorageUsagePort | undefined;
 
   constructor(input: {
     readonly bucket: R2Bucket;
     readonly crypto: StateArtifactCrypto;
     readonly allocator: ArtifactReferenceAllocator;
+    /** Trusted optional host capability; an HTTP caller cannot select it. */
+    readonly storageUsage?: ArtifactStorageUsagePort;
   }) {
     this.#bucket = input.bucket;
     this.#crypto = input.crypto;
     this.#allocator = input.allocator;
+    this.#storageUsage = input.storageUsage;
   }
 
   async stage(input: StageRecoveryStateInput): Promise<StagedRecoveryStateArtifact> {
@@ -96,9 +106,15 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
         throw recoveryArtifactError("recovery state artifact readback failed");
       }
       if (!existing) throw recoveryArtifactError("recovery state artifact readback is missing");
+      const prepared = await prepareArtifactRetention(this.#storageUsage, {
+        workspaceId: scope.workspaceId,
+        allocatedKey: stateRef,
+        ciphertextBytes: existing.size,
+        replayOnly: true,
+      });
       return {
         handle,
-        artifact: await this.#verifyObject(existing, scope, stateRef, handle, input.plaintext),
+        artifact: await this.#verifyAndConfirmStorage(existing, scope, stateRef, handle, prepared, input.plaintext),
       };
     }
     let sealed: Awaited<ReturnType<StateArtifactCrypto["seal"]>>;
@@ -109,36 +125,33 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
     }
     const encryptedDigest = await digestBytes(sealed.ciphertext);
     const metadata = recoveryMetadata(scope, stateRef, sealed, encryptedDigest, handle);
+    const prepared = await prepareArtifactRetention(this.#storageUsage, {
+      workspaceId: scope.workspaceId,
+      allocatedKey: stateRef,
+      ciphertextBytes: sealed.ciphertextLength,
+    });
+    let writeAcknowledged = false;
     try {
       const put = await this.#bucket.put(stateRef, sealed.ciphertext, {
         httpMetadata: { contentType: RECOVERY_METADATA.encryptedContentType },
         customMetadata: metadata,
         onlyIf: { etagDoesNotMatch: "*" },
       });
-      if (!put) {
-        const winner = await this.#readback(stateRef);
-        if (!winner) throw recoveryArtifactError("recovery state artifact write was not acknowledged");
-        return {
-          handle,
-          artifact: await this.#verifyObject(winner, scope, stateRef, handle, input.plaintext),
-        };
-      }
+      writeAcknowledged = put !== null;
     } catch {
       // A conditional write or its acknowledgement can be lost after R2 has
       // committed. Reconcile only the exact allocated identity; never retry a
       // blind PUT or mint a second ciphertext for that identity.
-      const winner = await this.#readback(stateRef);
-      if (!winner) throw recoveryArtifactError("recovery state artifact write failed");
-      return {
-        handle,
-        artifact: await this.#verifyObject(winner, scope, stateRef, handle, input.plaintext),
-      };
+      // Reconciliation below reads once; custody confirmation is outside this
+      // catch so its unknown acknowledgement is never automatically retried.
     }
     const readback = await this.#readback(stateRef);
-    if (!readback) throw recoveryArtifactError("recovery state artifact readback is missing");
+    if (!readback) throw recoveryArtifactError(writeAcknowledged
+      ? "recovery state artifact readback is missing"
+      : "recovery state artifact write was not acknowledged");
     return {
       handle,
-      artifact: await this.#verifyObject(readback, scope, stateRef, handle, input.plaintext),
+      artifact: await this.#verifyAndConfirmStorage(readback, scope, stateRef, handle, prepared, input.plaintext),
     };
   }
 
@@ -188,7 +201,13 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
     if (allocated !== object.key || await handleFor(scope, allocated) !== input.artifactHandle) {
       throw recoveryArtifactError("staged recovery artifact scope is invalid");
     }
-    return await this.#verifyObject(object, scope, allocated, input.artifactHandle);
+    const prepared = await prepareArtifactRetention(this.#storageUsage, {
+      workspaceId: scope.workspaceId,
+      allocatedKey: allocated,
+      ciphertextBytes: object.size,
+      replayOnly: true,
+    });
+    return await this.#verifyAndConfirmStorage(object, scope, allocated, input.artifactHandle, prepared);
   }
 
   async #readback(stateRef: string): Promise<R2ObjectBody | null> {
@@ -284,6 +303,21 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
       plaintextSha256: scope.plaintextSha256,
       evidenceDigest,
     };
+  }
+
+  async #verifyAndConfirmStorage(
+    object: R2ObjectBody,
+    scope: RecoveryStateArtifactScope,
+    stateRef: string,
+    handle: string,
+    prepared: PreparedArtifactRetention | undefined,
+    expectedPlaintext?: Uint8Array,
+  ): Promise<VerifiedRecoveryArtifact> {
+    const artifact = await this.#verifyObject(object, scope, stateRef, handle, expectedPlaintext);
+    // Persist the authenticated encrypted-object acknowledgement before an
+    // artifact is published. Failure retains the original pending intent.
+    await confirmArtifactRetention(this.#storageUsage, prepared, artifact.encryptedDigest);
+    return artifact;
   }
 }
 
