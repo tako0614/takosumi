@@ -1,7 +1,7 @@
 /**
- * Pricing / ownership facts. The Takosumi hosted service has no subscription tier or fixed
- * monthly fee. Customers add prepaid credits and pay the published usage
- * prices; automatic recharge is an explicit, default-off owner setting.
+ * Adopted launch pricing. Shared login and billing are awaiting activation;
+ * the authenticated service determines current availability. Takoserver owns
+ * the shared price revision and one Organization wallet for both products.
  * Internal allowance, payment-provider IDs, cost estimates, and readiness
  * evidence stay in operator-private state.
  */
@@ -41,25 +41,26 @@ export const PRICING_PLANS: readonly PricingPlan[] = [
   },
   {
     id: "platform",
-    name: "Takosumi",
-    price: "月額固定費なし",
+    name: "Takosumi Hosted（ローンチ予定）",
+    price: "Free / 月額 $10・$50",
     priceNote:
-      "$5 からプリペイドクレジットを追加。自動チャージは初期状態で無効です。",
+      "Free は $1.50/月分。有料プランは $10 で $20、$50 で $100 の利用枠。税別 USD。",
     features: [
-      { label: "公式ホスティング。ブラウザからサービスを追加・更新できます" },
+      { label: "Free はカード不要。有料プランに Free の利用枠は加算しません" },
       {
         label:
-          "最初の $0.25 クレジットを使った後は、公開された従量単価で利用分だけ支払います",
+          "Takoserver と共通の Organization 残高を利用し、Workspace 別に利用量を確認します",
       },
       {
         label:
-          "自動チャージは任意。残高しきい値、1回の金額、月間上限を自分で設定できます",
+          "従量料金は供給側の Cloudflare 単価の3倍。top-up は支払額と同額です",
       },
       {
         label:
-          "残高不足や設定上限を超える操作は、バックエンド実行前に停止します",
+          "80%・95%で警告し、上限到達時は停止が初期値。有料継続は明示的に選びます",
       },
+      { label: "共通ログインと課金の切り替え・staging 検証は進行中です" },
     ],
-    cta: { label: "Takosumi を開く", href: "https://app.takosumi.com/" },
+    cta: { label: "ローンチ料金を見る", href: "https://app.takosumi.com/docs/pricing" },
   },
 ];

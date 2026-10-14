@@ -748,16 +748,20 @@ test("hosted Takosumi publishes the reviewed SLA and support boundary", async ()
   }
 });
 
-test("public pricing and OSS readiness use prepaid-credit and quota-policy vocabulary", async () => {
+test("public launch pricing stays pending activation and separate from OSS quota policy", async () => {
   const pricing = [
     await readText(new URL("website/src/content/pricing.ts", ROOT)),
     await readText(new URL("website/src/components/Pricing.tsx", ROOT)),
     await readText(new URL("website/src/styles/global.css", ROOT)),
   ].join("\n");
-  assert.match(pricing, /月額固定費なし/);
-  assert.match(pricing, /プリペイドクレジット/);
-  assert.match(pricing, /自動チャージは初期状態で無効/);
-  assert.doesNotMatch(pricing, /月額 \$1/);
+  assert.match(pricing, /ローンチ予定/);
+  assert.match(pricing, /Free はカード不要/);
+  assert.match(pricing, /\$1\.50\/月分/);
+  assert.match(pricing, /\$10 で \$20/);
+  assert.match(pricing, /\$50 で \$100/);
+  assert.match(pricing, /共通ログインと課金の切り替え[\s\S]{0,60}検証/);
+  assert.match(pricing, /上限到達時は停止が初期値/);
+  assert.doesNotMatch(pricing, /月額固定費なし|\$0\.25/);
   assert.doesNotMatch(pricing, /Lite\s*\/\s*Plus\s*\/\s*Pro/);
   assert.doesNotMatch(pricing, /subscription \+ usage/);
 
