@@ -184,7 +184,7 @@ export async function handleSharedAuthRouteRequest(
       });
     }
     const response = await boundedRpc(
-      () => selected.rpc.fetchSharedAuth(requestForRpc(request, true)), 20_000,
+      () => selected.rpc.fetchSharedAuth(requestForRpc(request, true)), 40_000,
     );
     if (!(response instanceof Response)) return sharedAuthUnavailableResponse();
     const headers = new Headers(response.headers);
