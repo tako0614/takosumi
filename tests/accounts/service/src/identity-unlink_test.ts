@@ -34,7 +34,7 @@ CREATE TABLE accounts_v1.oauth_access_tokens(token_hash text PRIMARY KEY,client_
 CREATE TABLE accounts_v1.oauth_refresh_tokens(LIKE accounts_v1.oauth_access_tokens INCLUDING ALL);
 CREATE TABLE accounts_v1.protected_unlink_refs(id text PRIMARY KEY,subject text REFERENCES accounts_v1.accounts(subject),workspace_id text,org_id text,micro_usd bigint,pending_operation_key text);`;
 
-async function fixture(kind: "memory" | "d1" | "postgres" | "native-d1", retainedAccountSubject = subject) {
+async function fixture(kind: "memory" | "d1" | "postgres" | "native-d1", retainedAccountSubject = subject, now = Date.now()) {
   let store: AccountsStore;
   let pg: PGlite | undefined;
   let close = async () => {};
@@ -55,7 +55,6 @@ async function fixture(kind: "memory" | "d1" | "postgres" | "native-d1", retaine
     await pg.exec(await Bun.file(new URL("../../../../accounts/service/migrations/045_hosted_canonical_identity.sql", import.meta.url)).text());
     store = new PostgresAccountsStore({ queryObject: async <T>(sql: string, args: readonly unknown[] = []) => ({ rows: (await pg!.query(sql, [...args])).rows as T[] }) });
   }
-  const now = Date.now();
   await store.saveAccount({ subject, email: "private@example.test", emailVerified: true, createdAt: 1, updatedAt: 1 });
   if (retainedAccountSubject !== subject) await store.saveAccount({ subject: retainedAccountSubject, email: "private@example.test", emailVerified: true, createdAt: 1, updatedAt: 1 });
   for (const [identity, identitySubject] of [[removedIdentity, subject], [retainedIdentity, retainedAccountSubject]] as const) await store.linkUpstreamIdentity({ ...identity, subject: identitySubject, createdAt: 1, updatedAt: 1 });
@@ -88,6 +87,243 @@ const reconciler: CredentialUnlinkReconciler = {
   acknowledgeCredentialUnlinkIntent: async (context) => ({ ...context, ownerRef: "isolated-owner-ack", acknowledgedAt: Date.now() }),
 };
 
+async function expectUnlinkUnchanged(f: Awaited<ReturnType<typeof fixture>>, intent: CredentialUnlinkIntent, receipt: CredentialUnlinkReceipt) {
+  expect((await f.store.findCredentialUnlinkIntent!(intent.operationId))?.status).toBe("pending");
+  expect((await f.store.findCredentialUnlinkReceipt!(receipt.receiptId))?.consumedByOperation).toBeUndefined();
+  expect(await f.store.getAccountAuthenticationGeneration!(subject)).toBe(0);
+  expect((await f.store.findUpstreamIdentityStatus!(removedIdentity))?.disabledAt).toBeUndefined();
+  expect((await f.store.findUpstreamIdentityStatus!(retainedIdentity))?.disabledAt).toBeUndefined();
+}
+
+test("HTTP completion carries the same trusted clock across caller-to-entry I/O before a genuine owner ACK", async () => {
+  const f = await fixture("memory");
+  try {
+    const intent = await pending(f);
+    const receipt = await receiptFor(f, intent);
+    let current = f.now;
+    let ownerCalls = 0;
+    const store = new Proxy(f.store, { get(target, property) {
+      if (property === "findAccountSession") return async (id: string) => {
+        const session = await target.findAccountSession(id);
+        current += 1;
+        return session;
+      };
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    } });
+    const response = await handleCredentialUnlinkIntentRequest({
+      request: request(`${base}/${intent.operationId}/complete`, { receiptId: receipt.receiptId, consent: true }, f.session),
+      store, issuerOrigin: issuer, now: f.now, clock: () => current,
+      reconciler: { acknowledgeCredentialUnlinkIntent: async (context) => {
+        ownerCalls++;
+        current += 3;
+        return { ...context, ownerRef: "isolated-trusted-clock-ack", acknowledgedAt: current };
+      } },
+    });
+    expect(response?.status).toBe(200);
+    expect(ownerCalls).toBe(1);
+    const committed = await f.store.findCredentialUnlinkIntent!(intent.operationId);
+    expect(committed?.updatedAt).toBe(f.now + 4);
+    expect(committed?.acknowledgement?.acknowledgedAt).toBe(committed?.updatedAt);
+    expect(await f.store.getAccountAuthenticationGeneration!(subject)).toBe(1);
+  } finally { await f.close(); }
+});
+
+test("the actual HTTP default clock includes pre-helper session I/O before its wall-clock owner ACK", async () => {
+  const f = await fixture("memory");
+  try {
+    const intent = await pending(f);
+    const receipt = await receiptFor(f, intent);
+    let sessionReads = 0;
+    const store = new Proxy(f.store, { get(target, property) {
+      if (property === "findAccountSession") return async (id: string) => {
+        sessionReads++;
+        await Bun.sleep(10);
+        return await target.findAccountSession(id);
+      };
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    } });
+    const response = await handleCredentialUnlinkIntentRequest({
+      request: request(`${base}/${intent.operationId}/complete`, { receiptId: receipt.receiptId, consent: true }, f.session),
+      store, issuerOrigin: issuer, reconciler,
+    });
+    expect(response?.status).toBe(200);
+    expect(sessionReads).toBe(1);
+    const committed = await f.store.findCredentialUnlinkIntent!(intent.operationId);
+    expect(committed?.updatedAt).toBeGreaterThanOrEqual(committed!.acknowledgement!.acknowledgedAt);
+    expect(committed?.updatedAt).toBeGreaterThan(f.now);
+    expect(await f.store.getAccountAuthenticationGeneration!(subject)).toBe(1);
+  } finally { await f.close(); }
+});
+
+test("an advancing injected clock keeps an old synthetic epoch without mixing in wall-clock time", async () => {
+  const f = await fixture("memory", subject, 1_000);
+  try {
+    const intent = await pending(f);
+    const receipt = await receiptFor(f, intent);
+    let current = f.now + 1;
+    let clockReads = 0;
+    const completed = await completeCredentialUnlink({
+      store: f.store, intent, receiptId: receipt.receiptId, now: f.now, clock: () => { clockReads++; return current; },
+      reconciler: { acknowledgeCredentialUnlinkIntent: async (context) => {
+        current += 7;
+        return { ...context, ownerRef: "isolated-synthetic-clock-ack", acknowledgedAt: current };
+      } },
+    });
+    expect(completed.updatedAt).toBe(1_008);
+    expect(completed.acknowledgement?.acknowledgedAt).toBe(1_008);
+    expect(clockReads).toBe(2);
+    expect(await f.store.getAccountAuthenticationGeneration!(subject)).toBe(1);
+  } finally { await f.close(); }
+});
+
+test("scalar-only clock compatibility still expires retained proof during a real owner wait", async () => {
+  const f = await fixture("memory", subject, 1_000);
+  try {
+    const intent = await pending(f);
+    const receipt = await receiptFor(f, intent, { expiresAt: f.now + 100 });
+    let ownerCalls = 0;
+    await expect(completeCredentialUnlink({
+      store: f.store, intent, receiptId: receipt.receiptId, now: f.now,
+      reconciler: { acknowledgeCredentialUnlinkIntent: async (context) => {
+        ownerCalls++;
+        await Bun.sleep(125);
+        return { ...context, ownerRef: "isolated-scalar-elapsed-ack", acknowledgedAt: f.now };
+      } },
+    })).rejects.toThrow("unlink_conflict");
+    expect(ownerCalls).toBe(1);
+    await expectUnlinkUnchanged(f, intent, receipt);
+  } finally { await f.close(); }
+});
+
+for (const expiry of ["intent", "receipt"] as const) {
+  test(`${expiry} expiry during owner await refuses unlink without consuming the retained proof`, async () => {
+    const f = await fixture("memory", subject, 1_000);
+    try {
+      const intent = await pending(f);
+      const receipt = await receiptFor(f, intent, expiry === "receipt" ? { expiresAt: intent.expiresAt - 1 } : {});
+      let current = f.now;
+      let ownerCalls = 0;
+      await expect(completeCredentialUnlink({
+        store: f.store, intent, receiptId: receipt.receiptId, now: f.now, clock: () => current,
+        reconciler: { acknowledgeCredentialUnlinkIntent: async (context) => {
+          ownerCalls++;
+          current = expiry === "intent" ? intent.expiresAt : receipt.expiresAt;
+          return { ...context, ownerRef: "isolated-expiring-owner-ack", acknowledgedAt: current };
+        } },
+      })).rejects.toThrow("unlink_conflict");
+      expect(ownerCalls).toBe(1);
+      await expectUnlinkUnchanged(f, intent, receipt);
+    } finally { await f.close(); }
+  });
+}
+
+test("an owner ACK one millisecond beyond the trusted completion clock remains future and cannot unlink", async () => {
+  const f = await fixture("memory", subject, 1_000);
+  try {
+    const intent = await pending(f);
+    const receipt = await receiptFor(f, intent);
+    const clock = () => f.now;
+    await expect(completeCredentialUnlink({
+      store: f.store, intent, receiptId: receipt.receiptId, now: clock(), clock,
+      reconciler: { acknowledgeCredentialUnlinkIntent: async (context) => ({ ...context, ownerRef: "isolated-future-owner-ack", acknowledgedAt: clock() + 1 }) },
+    })).rejects.toThrow("unlink_reconciliation_pending");
+    await expectUnlinkUnchanged(f, intent, receipt);
+  } finally { await f.close(); }
+});
+
+test("fresh entry time rejects an already expired intent before any owner call", async () => {
+  const f = await fixture("memory", subject, 1_000);
+  try {
+    const intent = await pending(f);
+    const receipt = await receiptFor(f, intent);
+    let ownerCalls = 0;
+    await expect(completeCredentialUnlink({
+      store: f.store, intent, receiptId: receipt.receiptId, now: f.now, clock: () => intent.expiresAt,
+      reconciler: { acknowledgeCredentialUnlinkIntent: async (context) => {
+        ownerCalls++;
+        return { ...context, ownerRef: "isolated-too-late-ack", acknowledgedAt: intent.expiresAt };
+      } },
+    })).rejects.toThrow("unlink_conflict");
+    expect(ownerCalls).toBe(0);
+    await expectUnlinkUnchanged(f, intent, receipt);
+  } finally { await f.close(); }
+});
+
+test("a non-integer, invalid or backwards trusted clock fails closed before mutation", async () => {
+  const f = await fixture("memory", subject, 1_000);
+  try {
+    const intent = await pending(f);
+    const receipt = await receiptFor(f, intent);
+    let ownerCalls = 0;
+    const owner: CredentialUnlinkReconciler = { acknowledgeCredentialUnlinkIntent: async (context) => {
+      ownerCalls++;
+      return { ...context, ownerRef: "isolated-invalid-clock-ack", acknowledgedAt: f.now };
+    } };
+    for (const invalid of [NaN, Infinity, -1, f.now + 0.5, f.now - 1]) {
+      await expect(completeCredentialUnlink({ store: f.store, intent, receiptId: receipt.receiptId, reconciler: owner, now: f.now, clock: () => invalid })).rejects.toThrow("unlink_invalid_clock");
+    }
+    expect(ownerCalls).toBe(0);
+    let current = f.now;
+    await expect(completeCredentialUnlink({
+      store: f.store, intent, receiptId: receipt.receiptId, now: f.now, clock: () => current,
+      reconciler: { acknowledgeCredentialUnlinkIntent: async (context) => {
+        current--;
+        return { ...context, ownerRef: "isolated-backwards-clock-ack", acknowledgedAt: f.now };
+      } },
+    })).rejects.toThrow("unlink_invalid_clock");
+    for (const invalid of [NaN, Infinity, f.now + 0.5]) {
+      current = f.now;
+      await expect(completeCredentialUnlink({
+        store: f.store, intent, receiptId: receipt.receiptId, now: f.now, clock: () => current,
+        reconciler: { acknowledgeCredentialUnlinkIntent: async (context) => {
+          current = invalid;
+          return { ...context, ownerRef: "isolated-post-ack-invalid-clock", acknowledgedAt: f.now };
+        } },
+      })).rejects.toThrow("unlink_invalid_clock");
+    }
+    await expectUnlinkUnchanged(f, intent, receipt);
+  } finally { await f.close(); }
+});
+
+test("logout while awaiting owner ACK still invalidates the retained proof under the same trusted clock", async () => {
+  const f = await fixture("memory", subject, 1_000);
+  try {
+    const intent = await pending(f);
+    const receipt = await receiptFor(f, intent);
+    let current = f.now;
+    await expect(completeCredentialUnlink({
+      store: f.store, intent, receiptId: receipt.receiptId, now: f.now, clock: () => current,
+      reconciler: { acknowledgeCredentialUnlinkIntent: async (context) => {
+        current++;
+        await f.store.revokeHostedOidcSessionGrants!(intent.issuerSessionHash, current);
+        return { ...context, ownerRef: "isolated-revoked-owner-ack", acknowledgedAt: current };
+      } },
+    })).rejects.toThrow("unlink_conflict");
+    await expectUnlinkUnchanged(f, intent, receipt);
+  } finally { await f.close(); }
+});
+
+test("credential inventory rechecks session expiry with the same advancing injected clock", async () => {
+  const f = await fixture("memory", subject, 1_000);
+  try {
+    let current = f.now;
+    const store = new Proxy(f.store, { get(target, property) {
+      if (property === "listCanonicalUpstreamIdentities") return async (owner: string) => {
+        const identities = await target.listCanonicalUpstreamIdentities!(owner);
+        current = f.session.expiresAt;
+        return identities;
+      };
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    } });
+    const response = await handleCredentialUnlinkIntentRequest({ request: inventoryRequest(f.session), store, issuerOrigin: issuer, now: f.now, clock: () => current });
+    expect(response?.status).toBe(401);
+    expect(await response!.json()).toEqual({ error: "authentication_required" });
+  } finally { await f.close(); }
+});
+
 for (const kind of ["memory", "d1", "postgres", "native-d1"] as const) {
   test(`${kind}: fresh retained identity receipt atomically disables one credential, preserves account refs and exact idempotence`, async () => {
     const f = await fixture(kind);
@@ -95,7 +331,7 @@ for (const kind of ["memory", "d1", "postgres", "native-d1"] as const) {
       const intent = await pending(f);
       const receipt = await receiptFor(f, intent);
       await f.store.saveHostedOidcGrant!({ sid: "unlink-old-grant", issuerSessionId: f.session.issuerSessionId!, clientId: "rp", subject, scope: "openid", authTime: Math.floor(f.now / 1000), createdAt: f.now, absoluteExpiresAt: f.now + 300_000 });
-      const completed = await completeCredentialUnlink({ store: f.store, intent, receiptId: receipt.receiptId, reconciler, now: Date.now() });
+      const completed = await completeCredentialUnlink({ store: f.store, intent, receiptId: receipt.receiptId, reconciler, now: Date.now(), clock: Date.now });
       expect(completed.status).toBe("completed");
       expect(await f.store.getAccountAuthenticationGeneration!(subject)).toBe(1);
       expect((await f.store.findUpstreamIdentityStatus!(removedIdentity))?.disabledAt).toBeDefined();
@@ -137,7 +373,7 @@ for (const kind of ["memory", "d1", "postgres"] as const) {
     try {
       const intents = [await pending(f), await pending(f, true)];
       const receipts = await Promise.all(intents.map((intent) => receiptFor(f, intent)));
-      const results = await Promise.allSettled(intents.map((intent, index) => completeCredentialUnlink({ store: f.store, intent, receiptId: receipts[index]!.receiptId, reconciler, now: Date.now() })));
+      const results = await Promise.allSettled(intents.map((intent, index) => completeCredentialUnlink({ store: f.store, intent, receiptId: receipts[index]!.receiptId, reconciler, now: Date.now(), clock: Date.now })));
       expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
       const statuses = await Promise.all([removedIdentity, retainedIdentity].map((identity) => f.store.findUpstreamIdentityStatus!(identity)));
       expect(statuses.filter((status) => status?.disabledAt === undefined)).toHaveLength(1);
@@ -155,7 +391,7 @@ for (const kind of ["memory", "d1", "postgres"] as const) {
       expect(await f.store.findAccountSession(f.session.sessionId)).toBeUndefined();
       const logout = await handleHostedGlobalLogout({ request: request("/api/v1/account/session/logout", {}, f.session), store: f.store, issuer });
       expect(logout.status).toBe(204);
-      await expect(completeCredentialUnlink({ store: f.store, intent, receiptId: receipt.receiptId, reconciler, now: Date.now() })).rejects.toThrow("unlink_conflict");
+      await expect(completeCredentialUnlink({ store: f.store, intent, receiptId: receipt.receiptId, reconciler, now: Date.now(), clock: Date.now })).rejects.toThrow("unlink_conflict");
       expect((await f.store.findUpstreamIdentityStatus!(removedIdentity))?.disabledAt).toBeUndefined();
     } finally { await f.close(); }
   }, 20_000);
@@ -301,7 +537,7 @@ test("actual GitHub retained OAuth callback yields an opaque unlink receipt and 
     expect(exchangeBody.get("code")).toBe("isolated-new-code");
     expect(exchangeBody.get("code_verifier")).toMatch(/^[A-Za-z0-9_-]{43}$/u);
     expect(upstreamRequests[0]!.authorization).toBeNull();
-    expect((await completeCredentialUnlink({ store: f.store, intent, receiptId: result.proof_receipt!, reconciler, now: Date.now() })).status).toBe("completed");
+    expect((await completeCredentialUnlink({ store: f.store, intent, receiptId: result.proof_receipt!, reconciler, now: Date.now(), clock: Date.now })).status).toBe("completed");
     expect((await handleUpstreamCallbackRequest({ request: callbackRequest, url: callbackUrl, store: f.store, upstreamOAuth: options, secureCookie: true })).status).not.toBe(200);
   } finally { upstream.stop(true); await f.close(); }
 });
@@ -411,7 +647,7 @@ for (const kind of ["memory", "d1", "postgres"] as const) {
       expect(await inventoryBefore!.json()).toEqual({ credentials: [{ ...retainedIdentity, enabled: true }, { ...removedIdentity, enabled: true }] });
       const intent = await pending(f);
       const receipt = await receiptFor(f, intent);
-      const completed = await completeCredentialUnlink({ store: f.store, intent, receiptId: receipt.receiptId, reconciler, now: Date.now() });
+      const completed = await completeCredentialUnlink({ store: f.store, intent, receiptId: receipt.receiptId, reconciler, now: Date.now(), clock: Date.now });
       expect(completed.status).toBe("completed");
       expect((await f.store.findUpstreamIdentity(retainedIdentity))?.subject).toBe(originalB);
       expect((await f.store.findAccount(originalB))?.createdAt).toBe(1);
@@ -460,7 +696,7 @@ test("retained Google signed callback without auth_time proves current identity 
     expect(newSession?.reauthenticatedAt).toBeUndefined();
     expect(newSession?.authTime).toBeDefined();
     expect(newSession?.issuerSessionId).toBe(intent.issuerSessionHash);
-    expect((await completeCredentialUnlink({ store: f.store, intent, receiptId: result.proof_receipt, reconciler, now: Date.now() })).status).toBe("completed");
+    expect((await completeCredentialUnlink({ store: f.store, intent, receiptId: result.proof_receipt, reconciler, now: Date.now(), clock: Date.now })).status).toBe("completed");
     expect((await f.store.findUpstreamIdentityStatus!(retainedIdentity))?.disabledAt).toBeDefined();
     expect((await f.store.findUpstreamIdentityStatus!(removedIdentity))?.disabledAt).toBeUndefined();
   } finally { await f.close(); }

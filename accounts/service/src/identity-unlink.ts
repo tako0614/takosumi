@@ -23,6 +23,35 @@ export class CredentialUnlinkConflict extends Error {
   }
 }
 
+/** Private clock capability; scalar callers retain elapsed time in their original domain. */
+function credentialUnlinkClock(input: { now?: number; clock?: () => number }): () => number {
+  const scalarNow = input.now;
+  let previous = scalarNow;
+  if (previous !== undefined && (!Number.isSafeInteger(previous) || previous < 0)) {
+    throw new CredentialUnlinkConflict("unlink_invalid_clock");
+  }
+  let read = input.clock ?? Date.now;
+  if (!input.clock && scalarNow !== undefined) {
+    const anchor = performance.now();
+    if (!Number.isFinite(anchor) || anchor < 0) throw new CredentialUnlinkConflict("unlink_invalid_clock");
+    let previousElapsed = 0;
+    read = () => {
+      const elapsed = performance.now() - anchor;
+      if (!Number.isFinite(elapsed) || elapsed < previousElapsed) throw new CredentialUnlinkConflict("unlink_invalid_clock");
+      previousElapsed = elapsed;
+      return scalarNow + Math.floor(elapsed);
+    };
+  }
+  return () => {
+    const now = read();
+    if (!Number.isSafeInteger(now) || now < 0 || (previous !== undefined && now < previous)) {
+      throw new CredentialUnlinkConflict("unlink_invalid_clock");
+    }
+    previous = now;
+    return now;
+  };
+}
+
 export function isCredentialUnlinkIntentPath(path: string): boolean {
   if (path === inventoryPath || path === basePath) return true;
   const parts = path.slice(basePath.length + 1).split("/");
@@ -104,9 +133,11 @@ export async function completeCredentialUnlink(input: {
   receiptId: string;
   reconciler?: CredentialUnlinkReconciler;
   now: number;
+  clock?: () => number;
 }): Promise<CredentialUnlinkIntent> {
-  const { store, intent, now } = input;
-  const beganAt = Date.now();
+  const { store, intent } = input;
+  const clock = credentialUnlinkClock(input);
+  const now = clock();
   if (intent.status === "completed" && intent.receiptId === input.receiptId) {
     const committed = await store.findCredentialUnlinkIntent?.(intent.operationId);
     if (committed?.status === "completed" && canonicalJson(committed) === canonicalJson(intent)) return committed;
@@ -129,7 +160,7 @@ export async function completeCredentialUnlink(input: {
     receiptId: receipt.receiptId,
     identityGeneration: intent.identityGeneration,
   });
-  const completedAt = now + Math.max(0, Date.now() - beganAt);
+  const completedAt = clock();
   if (!acknowledgement || acknowledgement.operationId !== intent.operationId || acknowledgement.subject !== intent.subject ||
     upstreamIdentityKey(acknowledgement.removedIdentity) !== upstreamIdentityKey(intent.removedIdentity) ||
     upstreamIdentityKey(acknowledgement.retainedIdentity) !== upstreamIdentityKey(intent.retainedIdentity) ||
@@ -225,6 +256,7 @@ export async function handleCredentialUnlinkIntentRequest(input: {
   issuerOrigin: string;
   reconciler?: CredentialUnlinkReconciler;
   now?: number;
+  clock?: () => number;
 }): Promise<Response | undefined> {
   const url = new URL(input.request.url);
   if (!isCredentialUnlinkIntentPath(url.pathname)) return undefined;
@@ -234,7 +266,8 @@ export async function handleCredentialUnlinkIntentRequest(input: {
   const issuer = new URL(input.issuerOrigin);
   if (issuer.protocol !== "https:" || issuer.origin !== url.origin || input.request.headers.get("origin") !== issuer.origin) return fail("invalid_origin", 403);
   if (url.search) return fail("invalid_request", 400);
-  const now = input.now ?? Date.now();
+  const clock = credentialUnlinkClock(input);
+  const now = clock();
   const session = await readCredentialUnlinkBrowserSession(input.store, input.request, now);
   if (!session) return fail("authentication_required", 401);
   const body = await readCredentialUnlinkJson(input.request);
@@ -260,7 +293,7 @@ export async function handleCredentialUnlinkIntentRequest(input: {
     const intent = await input.store.findCredentialUnlinkIntent?.(operationId);
     const anchor = session.issuerSessionId ?? await hostedIssuerSessionId(session.sessionId);
     if (!intent || !bindingHash || intent.browserBindingHash !== bindingHash || intent.subject !== session.subject || intent.issuerSessionHash !== anchor) return fail("unlink_unavailable", 403);
-    const next = await completeCredentialUnlink({ store: input.store, intent, receiptId: body.receiptId, reconciler: input.reconciler, now });
+    const next = await completeCredentialUnlink({ store: input.store, intent, receiptId: body.receiptId, reconciler: input.reconciler, now, clock });
     return withOAuthNoStoreHeaders(json(publicIntent(next), 200));
   } catch (error) {
     if (error instanceof CredentialUnlinkConflict) return fail(error.code, error.code.endsWith("unavailable") ? 503 : 409);
@@ -273,6 +306,7 @@ async function handleCredentialInventoryRequest(input: {
   store: AccountsStore;
   issuerOrigin: string;
   now?: number;
+  clock?: () => number;
 }): Promise<Response> {
   const url = new URL(input.request.url);
   const fail = (error: string, status: number) => withOAuthNoStoreHeaders(json({ error }, status));
@@ -281,8 +315,8 @@ async function handleCredentialInventoryRequest(input: {
   const origin = input.request.headers.get("origin");
   if (issuer.protocol !== "https:" || url.origin !== issuer.origin || (origin !== null && origin !== issuer.origin)) return fail("invalid_origin", 403);
   if (url.search) return fail("invalid_request", 400);
-  const beganAt = Date.now();
-  const now = input.now ?? beganAt;
+  const clock = credentialUnlinkClock(input);
+  const now = clock();
   const { store } = input;
   const session = await readCredentialUnlinkBrowserSession(store, input.request, now);
   if (!session) return fail("authentication_required", 401);
@@ -304,7 +338,7 @@ async function handleCredentialInventoryRequest(input: {
         (status !== undefined && status.canonicalSubject !== session.subject)) return fail("credential_inventory_unavailable", 503);
       credentials.push({ ...tuple, enabled: status?.disabledAt === undefined });
     }
-    const current = await readCredentialUnlinkBrowserSession(store, input.request, now + Math.max(0, Date.now() - beganAt));
+    const current = await readCredentialUnlinkBrowserSession(store, input.request, clock());
     if (!current || current.subject !== session.subject || current.identityGeneration !== session.identityGeneration) return fail("authentication_required", 401);
     credentials.sort((left, right) => upstreamIdentityKey(left).localeCompare(upstreamIdentityKey(right)));
     return withOAuthNoStoreHeaders(json({ credentials }, 200));
