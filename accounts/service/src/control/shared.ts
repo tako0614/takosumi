@@ -126,6 +126,10 @@ import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/dep
  */
 export interface ControlSession {
   readonly subject: string;
+  /** Trusted shared-account composition requires a current active membership,
+   * including for the Workspace's recorded owner. Ordinary OSS sessions retain
+   * their existing owner authority. Never read this option from an HTTP field. */
+  readonly requireCurrentMembership?: true;
   /** Set only by the authenticated Accounts bearer dispatcher. */
   readonly uninstallRequester?: CapsuleUninstallRequester;
   readonly workspaceId?: string;
@@ -612,10 +616,15 @@ export async function canAccessWorkspace(input: {
     input.workspace ??
     (await input.operations.workspaces.getWorkspace(input.workspaceId));
   if (workspace.id !== input.workspaceId) return false;
-  if (workspace.ownerUserId === input.session.subject) return true;
+  if (!input.session.requireCurrentMembership &&
+    workspace.ownerUserId === input.session.subject) return true;
 
   const mayUseMember = (member: PublicWorkspaceMember | undefined): boolean =>
+    member?.workspaceId === input.workspaceId &&
+    member.accountId === input.session.subject &&
     member?.status === "active" &&
+    (!input.session.requireCurrentMembership ||
+      member.roles.some((role) => ["owner", "admin", "member", "viewer"].includes(role))) &&
     (input.session.requiredAccess !== "write" ||
       member.roles.includes("owner") ||
       member.roles.includes("admin"));
