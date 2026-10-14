@@ -45,7 +45,7 @@ as `subject` and `primaryAccountId`; `expiresAt: 0` means the RP does not expose
 its expiry through that mirror. It creates no issuer session. Its DELETE
 operation invokes the private RP logout under the same Origin check.
 Identity/membership RPC waits are bounded at five seconds, and browser auth
-route waits at twenty seconds; failures return a generic unavailable result
+route waits at forty seconds; failures return a generic unavailable result
 without retrying. A wait deadline does not roll back the private RP operation.
 If a callback fails, start a fresh login attempt rather than replaying its
 single-use authorization code.
