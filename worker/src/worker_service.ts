@@ -28,6 +28,7 @@ import type {
   OpenTofuRunAction,
   RunnerHostComposition,
 } from "./bindings.ts";
+import { workerBillingComposition } from "./billing_rpc.ts";
 import {
   createCloudflareD1OpenTofuControlStore,
   initializeD1OpenTofuLedgerSchemaBinding,
@@ -143,6 +144,7 @@ export async function createWorkerServiceApp(
     readonly privateRunFiles?: WorkerPrivateRunFilesComposition;
   } = {},
 ): Promise<CreatedTakosumiService> {
+  const billingComposition = workerBillingComposition(env);
   const runtimeEnv = cloudflareRuntimeEnv(env, role);
   const accountsD1SchemaMode = resolveD1AccountsSchemaMode(
     env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE,
@@ -218,7 +220,6 @@ export async function createWorkerServiceApp(
       runner: runnerReleaseActivator,
     });
   const operatorCapabilities = operatorCapabilitiesFromEnv(env);
-  const billingExtensionFactory = billingExtensionFactoryFromEnv(env);
   const accountsStore = env.TAKOSUMI_ACCOUNTS_DB
     ? new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
         schemaMode: accountsD1SchemaMode,
@@ -428,7 +429,7 @@ export async function createWorkerServiceApp(
     allowOperatorScopedProviderConnections,
     secretCrypto,
     ...(privateRunFiles ? { privateRunFiles } : {}),
-    ...(billingExtensionFactory ? { billingExtensionFactory } : {}),
+    ...billingComposition,
     // GA async run lifecycle: every create path persists the Run `queued` and
     // schedules its per-run RUN_OWNER directly. The Worker never falls back to
     // inline execution or an unowned Queue handoff when RUN_OWNER is absent;
@@ -562,23 +563,6 @@ function runCredentialIssuerFromEnv(
         : {}),
     });
   };
-}
-
-function billingExtensionFactoryFromEnv(
-  env: CloudflareWorkerEnv,
-): import("takosumi-contract/billing").BillingExtensionFactory | undefined {
-  const factory = env.TAKOSUMI_BILLING_EXTENSION_FACTORY;
-  if (factory === undefined) return undefined;
-  if (
-    typeof factory !== "object" ||
-    factory === null ||
-    typeof (factory as { readonly create?: unknown }).create !== "function"
-  ) {
-    throw new TypeError(
-      "TAKOSUMI_BILLING_EXTENSION_FACTORY must implement create()",
-    );
-  }
-  return factory;
 }
 
 function interfaceCredentialIssuerFromAccountsStore(
