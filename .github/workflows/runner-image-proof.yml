@@ -14,6 +14,15 @@ on:
     # Weekly (Monday 06:00 UTC) to catch base-image / OpenTofu / provider drift.
     - cron: "0 6 * * 1"
   workflow_dispatch:
+    inputs:
+      profile:
+        description: Exact owning runner image profile
+        required: true
+        default: standard
+        type: choice
+        options:
+          - standard
+          - hosted-metered-v1
 
 permissions:
   contents: read
@@ -71,9 +80,12 @@ jobs:
 
       - name: Build once and prove the exact native image
         id: candidate
+        env:
+          RUNNER_IMAGE_PROFILE: ${{ inputs.profile || 'standard' }}
         run: >-
           bun scripts/runner-image-native-candidate.ts
           --output-dir "$RUNNER_TEMP/runner-native-candidate"
+          --profile "$RUNNER_IMAGE_PROFILE"
 
       - name: Attest the image archive and proof record together
         id: attest
@@ -96,7 +108,7 @@ jobs:
         id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: runner-native-candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs.profile == 'hosted-metered-v1' && 'runner-hosted-metered-native-candidate' || 'runner-native-candidate' }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/runner-native-candidate/runner-image.tar
             ${{ runner.temp }}/runner-native-candidate/candidate.json

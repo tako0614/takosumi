@@ -36,6 +36,16 @@ import {
   RUNNER_IMAGE_NATIVE_PROOF_KIND,
 } from "../../scripts/lib/runner-image-native-proof.ts";
 
+import {
+  isPublishedRunnerImageBuildRecord,
+  isRunnerImageRuntimeInputPlanProof,
+  runnerImageRuntimeInputPlanProofFromBuildRecord,
+  runnerImageBuildRuntimeInputPlanProofFromBuildRecord,
+} from "../../scripts/runner-image-release-contract.ts";
+import {
+  RUNNER_IMAGE_METERED_NATIVE_REPORT_KIND,
+} from "../../scripts/lib/runner-image-profile.ts";
+
 const roots: string[] = [];
 const COMMIT = "a".repeat(40);
 const RECONCILER_COMMIT = "9".repeat(40);
@@ -927,8 +937,10 @@ async function successfulPublicationCommand(
   throw new Error(`unexpected command: ${args.join(" ")}`);
 }
 
-function candidateLocalImageStore() {
-  const fixedTag = `takosumi-runner-native-candidate:${COMMIT}`;
+function candidateLocalImageStore(metered = false) {
+  const fixedTag = metered
+    ? `takosumi-runner-hosted-metered-native-candidate:${COMMIT}`
+    : `takosumi-runner-native-candidate:${COMMIT}`;
   const exactIdentity = {
     Id: `sha256:${"d".repeat(64)}`,
     Descriptor: {
@@ -5881,4 +5893,196 @@ test("unsettled Container readback is bounded and records incomplete evidence", 
     status: "incomplete",
     failure: "container-readback-incomplete",
   });
+});
+
+
+function meteredFixture(): Fixture {
+  const input = fixture();
+  writeFileSync(join(input.repository, "runner", "Dockerfile.hosted-metered"), `${DOCKERFILE}# hosted metered
+`);
+  return input;
+}
+
+function meteredReport() {
+  return {
+    kind: RUNNER_IMAGE_METERED_NATIVE_REPORT_KIND,
+    profile: "hosted-metered-v1",
+    descriptorDigest: `sha256:${"d".repeat(64)}`,
+    nativeEntrypoint: "passed",
+    childBoundary: "passed",
+    kernelCpuAndDrain: "passed",
+    authenticatedRunLifecycle: "passed",
+  } as const;
+}
+
+async function meteredPublicationCommand(executable: string, args: readonly string[]) {
+  if (args[0] === "--eval" && args[1]?.includes('Bun.which("docker")')) {
+    return { exitCode: 0, stdout: process.execPath, stderr: "" };
+  }
+  if (executable === "docker" && args[0] === "context") {
+    return { exitCode: 0, stdout: args[1] === "show" ? "default\n" : JSON.stringify({ Host: "unix:///run/takosumi-native-test.sock", SkipTLSVerify: false }), stderr: "" };
+  }
+  const harnessIndex = args.findIndex((arg) => arg.endsWith("/scripts/prove-runner-hosted-metered.ts"));
+  if ((executable === "/usr/bin/env" || executable === "/usr/bin/sudo") && harnessIndex >= 0) {
+    expect(args).toContain("--ignore-environment");
+    expect(args.slice(harnessIndex + 1)).toEqual(["--image", `sha256:${"d".repeat(64)}`, "--descriptor", `sha256:${"d".repeat(64)}`]);
+    return { exitCode: 0, stdout: JSON.stringify(meteredReport()), stderr: "" };
+  }
+  return successfulPublicationCommand(executable, args);
+}
+
+function meteredOptions(input: Fixture) {
+  return { ...buildOptions(input, "staging", true), profile: "hosted-metered-v1" as const };
+}
+
+test("metered profile selects its fixed Dockerfile and records mandatory descriptor-bound native gates", async () => {
+  const input = meteredFixture();
+  const observed: string[][] = [];
+  const record = await runRunnerImageRelease(meteredOptions(input), buildRuntime(input, meteredPublicationCommand, observed));
+  expect(record).toMatchObject({
+    kind: "takosumi.runner-image-release@v4", profile: "hosted-metered-v1", status: "published",
+    meteredNativeProof: { image: NEXT, childBoundary: "passed", kernelCpuAndDrain: "passed", authenticatedRunLifecycle: "passed" },
+    runtimeInputPlanProof: { kind: "takosumi.runner-image-runtime-input-plan-proof@v2", profile: "hosted-metered-v1", qualification: "local-native-only", image: NEXT },
+  });
+  expect(runnerImageRuntimeInputPlanProofFromBuildRecord(record, NEXT)).toBeNull();
+  expect(runnerImageBuildRuntimeInputPlanProofFromBuildRecord(record, NEXT)).toMatchObject({ kind: "takosumi.runner-image-runtime-input-plan-proof@v2", qualification: "local-native-only" });
+  expect(isRunnerImageRuntimeInputPlanProof((record as { runtimeInputPlanProof: unknown }).runtimeInputPlanProof, NEXT)).toBeFalse();
+  expect(isPublishedRunnerImageBuildRecord(record)).toBeTrue();
+  expect(observed.some((call) => call.includes(join(input.repository, "runner", "Dockerfile")))).toBeFalse();
+  expect(observed.find((call) => call[1] === "buildx")?.some((part) => part.endsWith("/runner/Dockerfile.hosted-metered"))).toBeTrue();
+  expect(observed.filter((call) => call.some((part) => part.endsWith("/scripts/prove-runner-hosted-metered.ts")))).toHaveLength(1);
+  expect(observed.some((call) => call[0] === "docker" && ["run", "exec"].includes(call[1]!))).toBeFalse();
+  const journal = readFileSync(input.state, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  expect(journal).toHaveLength(2);
+  for (const entry of journal) expect(entry).toMatchObject({ kind: "takosumi.runner-image-publication-state@v3", profile: "hosted-metered-v1" });
+  expect(journal[0].meteredNativeProof).toEqual((record as { meteredNativeProof: unknown }).meteredNativeProof);
+});
+
+test("metered native gate failures never append a publication attempt or call the provider", async () => {
+  const cases: Array<Record<string, unknown> | string> = [
+    {},
+    { ...meteredReport(), childBoundary: "unavailable" },
+    { ...meteredReport(), descriptorDigest: `sha256:${"e".repeat(64)}` },
+    { ...meteredReport(), profile: "standard" },
+    { ...meteredReport(), sourceBind: true },
+    { ...meteredReport(), kernelCpuAndDrain: undefined },
+    "RESULT: PASS",
+  ];
+  for (const invalid of cases) {
+    const input = meteredFixture();
+    let touched = false;
+    await expect(runRunnerImageRelease(meteredOptions(input), buildRuntime(input, async (executable, args) => {
+      if (executable === "/usr/bin/env" || executable === "/usr/bin/sudo") return { exitCode: 0, stdout: typeof invalid === "string" ? invalid : JSON.stringify(invalid), stderr: "" };
+      if (executable === "bunx") touched = true;
+      return meteredPublicationCommand(executable, args);
+    }))).rejects.toThrow("runner image build failed before publication");
+    expect(touched).toBeFalse();
+    expect(readFileSync(input.state, "utf8")).toBe("");
+    expect(readFileSync(input.evidence, "utf8")).not.toContain('"status":"published"');
+  }
+});
+
+test("standard v3 record cannot carry metered authority and v4 requires all closed proof fields", async () => {
+  const input = meteredFixture();
+  const record = await runRunnerImageRelease(meteredOptions(input), buildRuntime(input, meteredPublicationCommand)) as Record<string, unknown>;
+  const proof = record.meteredNativeProof as Record<string, unknown>;
+  for (const invalid of [
+    { ...record, kind: "takosumi.runner-image-release@v3" },
+    { ...record, profile: undefined },
+    { ...record, meteredNativeProof: undefined },
+    { ...record, runtimeInputPlanProof: undefined },
+    { ...record, runtimeInputPlanProof: { kind: "takosumi.runner-image-runtime-input-plan-proof@v1", image: NEXT } },
+    { ...record, runtimeInputPlanProof: { kind: "takosumi.runner-image-runtime-input-plan-proof@v2", profile: "hosted-metered-v1", qualification: "production", image: NEXT } },
+    { ...record, meteredNativeProof: { ...proof, image: PREVIOUS } },
+    { ...record, meteredNativeProof: { ...proof, childBoundary: "failed" } },
+    { ...record, meteredNativeProof: { ...proof, skipped: true } },
+  ]) expect(isPublishedRunnerImageBuildRecord(invalid)).toBeFalse();
+});
+
+test("a metered unresolved attempt blocks standard builds and reconciles only its own profile and proof", async () => {
+  const input = meteredFixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  const runtime = buildRuntime(input, async (executable, args) => {
+    if (executable === "bunx") throw new Error("lost publication acknowledgement");
+    return meteredPublicationCommand(executable, args);
+  });
+  await expect(runRunnerImageRelease(meteredOptions(input), { ...runtime, publicationJournalRoot: journalRoot })).rejects.toThrow("publication outcome is incomplete");
+  const [attempt] = readFileSync(input.state, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  await expect(runRunnerImageRelease(buildOptions(input, "staging", true), { ...runtime, publicationJournalRoot: journalRoot })).rejects.toThrow("runner_image_publication_reconciliation_required");
+  await expect(runRunnerImageRelease({ ...buildOptions(input), command: "reconcile" }, { ...runtime, publicationJournalRoot: journalRoot })).rejects.toThrow("runner_image_publication_reconciliation_identity_mismatch");
+  const reconciled = await runRunnerImageRelease({ ...meteredOptions(input), command: "reconcile", execute: false }, {
+    ...buildRuntime(input, meteredPublicationCommand), publicationJournalRoot: journalRoot,
+  });
+  expect(reconciled).toMatchObject({ kind: "takosumi.runner-image-release@v4", profile: "hosted-metered-v1", meteredNativeProof: attempt.meteredNativeProof });
+  expect(isPublishedRunnerImageBuildRecord(reconciled)).toBeTrue();
+});
+
+test("metered journal rejects missing proof, unknown fields, and cross-profile resolutions before external commands", async () => {
+  const input = meteredFixture();
+  const runtime = buildRuntime(input, meteredPublicationCommand);
+  await runRunnerImageRelease(meteredOptions(input), runtime);
+  const original = readFileSync(input.state, "utf8");
+  const [attempt, resolution] = original.trim().split("\n").map((line) => JSON.parse(line));
+  for (const entries of [
+    [{ ...attempt, meteredNativeProof: undefined }, resolution],
+    [{ ...attempt, runtimeInputPlanProof: { kind: "takosumi.runner-image-runtime-input-plan-proof@v1", image: NEXT } }, resolution],
+    [{ ...attempt, unknown: true }, resolution],
+    [{ ...attempt, source: { ...attempt.source, unknown: true } }, resolution],
+    [attempt, { ...resolution, kind: "takosumi.runner-image-publication-state@v2", profile: undefined }],
+    [attempt, { ...resolution, status: "reconciled-absent", kind: "takosumi.runner-image-publication-state@v2", profile: undefined }],
+  ]) {
+    writePrivate(input.state, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+    let commands = 0;
+    await expect(runRunnerImageRelease(meteredOptions(input), {
+      ...runtime, command: async () => { commands += 1; throw new Error("not reached"); },
+    })).rejects.toThrow("runner_image_publication_state_invalid");
+    expect(commands).toBe(0);
+  }
+});
+
+test("metered candidate profile substitution fails before Docker load and authenticated bytes preserve the exact report", async () => {
+  for (const valid of [false, true]) {
+    const input = meteredFixture();
+    writeCandidateArtifacts(input);
+    if (valid) {
+      const candidate = JSON.parse(readFileSync(input.candidateRecord, "utf8"));
+      candidate.kind = "takosumi.runner-image-native-candidate@v2";
+      candidate.profile = "hosted-metered-v1";
+      candidate.source.dockerfileSha256 = sha256(readFileSync(join(input.repository, "runner", "Dockerfile.hosted-metered")));
+      candidate.image.tag = `takosumi-runner-hosted-metered-native-candidate:${COMMIT}`;
+      candidate.nativeProof = meteredReport();
+      writePrivate(input.candidateRecord, JSON.stringify(candidate));
+    }
+    const imageStore = candidateLocalImageStore(true);
+    const calls: string[][] = [];
+    const result = runRunnerImageRelease({ ...candidateBuildOptions(input), profile: "hosted-metered-v1" }, buildRuntime(input, successfulCandidatePublicationCommand, calls, imageStore.command));
+    if (valid) {
+      await expect(result).resolves.toMatchObject({ kind: "takosumi.runner-image-release@v4", profile: "hosted-metered-v1", meteredNativeProof: { image: NEXT, childBoundary: "passed" } });
+      expect(calls.some((call) => call[0] === "docker" && call[1] === "image" && call[2] === "load")).toBeTrue();
+      expect(calls.some((call) => call.some((part) => part.endsWith("/scripts/prove-runner-hosted-metered.ts")))).toBeFalse();
+    } else {
+      await expect(result).rejects.toThrow("runner_image_native_candidate_source_mismatch");
+      expect(calls.some((call) => call[0] === "docker" || call[0] === "bunx")).toBeFalse();
+    }
+  }
+});
+
+
+test("metered native subprocess receives no provider credentials while standard tool defaults stay intact", async () => {
+  const input = fixture();
+  const tokenBefore = process.env.CLOUDFLARE_API_TOKEN;
+  const accountBefore = process.env.CLOUDFLARE_ACCOUNT_ID;
+  try {
+    process.env.CLOUDFLARE_API_TOKEN = "synthetic-local-test-only";
+    process.env.CLOUDFLARE_ACCOUNT_ID = "b".repeat(32);
+    const result = await runCommand(process.execPath, ["-e", 'process.stdout.write(JSON.stringify({token:!!process.env.CLOUDFLARE_API_TOKEN,account:!!process.env.CLOUDFLARE_ACCOUNT_ID}))'], input.repository, 5_000, { omitProviderCredentials: true });
+    expect(JSON.parse(result.stdout)).toEqual({ token: false, account: false });
+    const ordinary = await runCommand(process.execPath, ["-e", 'process.stdout.write(JSON.stringify({token:!!process.env.CLOUDFLARE_API_TOKEN,account:!!process.env.CLOUDFLARE_ACCOUNT_ID}))'], input.repository, 5_000);
+    expect(JSON.parse(ordinary.stdout)).toEqual({ token: true, account: true });
+  } finally {
+    if (tokenBefore === undefined) delete process.env.CLOUDFLARE_API_TOKEN;
+    else process.env.CLOUDFLARE_API_TOKEN = tokenBefore;
+    if (accountBefore === undefined) delete process.env.CLOUDFLARE_ACCOUNT_ID;
+    else process.env.CLOUDFLARE_ACCOUNT_ID = accountBefore;
+  }
 });

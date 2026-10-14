@@ -87,3 +87,15 @@ test("native Runner CI hands off one attested image without publication authorit
   expect(commands).not.toMatch(/\bwrangler\b|\bdocker\s+push\b|bun run deploy/u);
   expect(JSON.stringify(job)).not.toMatch(/secrets\.|CLOUDFLARE_API_TOKEN|APPARMOR_UNCONFINED/u);
 });
+
+
+test("owning native candidate workflow explicitly selects a closed profile and preserves standard scheduling", () => {
+  const workflow = Bun.YAML.parse(readFileSync(join(import.meta.dir, "../../.github/workflows/runner-image-proof.yml"), "utf8")) as {
+    on: { workflow_dispatch: { inputs: { profile: { default: string; type: string; options: string[] } } } };
+    jobs: Record<string, { steps: Step[] }>;
+  };
+  expect(workflow.on.workflow_dispatch.inputs.profile).toMatchObject({ default: "standard", type: "choice", options: ["standard", "hosted-metered-v1"] });
+  const candidate = workflow.jobs["prove-runner-docker"]!.steps.find((step) => step.id === "candidate")!;
+  expect(candidate.env?.RUNNER_IMAGE_PROFILE).toBe("${{ inputs.profile || 'standard' }}");
+  expect(candidate.run).toContain('--profile "$RUNNER_IMAGE_PROFILE"');
+});

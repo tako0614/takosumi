@@ -21,10 +21,17 @@ import {
 } from "../../scripts/runner-image-native-candidate.ts";
 import {
   parseLocalRunnerImageIdentity,
+  runnerImageMeteredDockerHost,
+  runnerImageMeteredHarnessInvocation,
   parseRunnerImageNativeCandidateRecord,
   RUNNER_IMAGE_NATIVE_CANDIDATE_KIND,
   RUNNER_IMAGE_NATIVE_PROOF_KIND,
+  RUNNER_IMAGE_METERED_NATIVE_CANDIDATE_KIND,
 } from "../../scripts/lib/runner-image-native-proof.ts";
+import {
+  RUNNER_IMAGE_METERED_NATIVE_REPORT_KIND,
+  runnerImageProfile,
+} from "../../scripts/lib/runner-image-profile.ts";
 import { platformReleaseSourceAuthorityDigest } from "../../scripts/lib/platform-release-source.ts";
 
 const COMMIT = "a".repeat(40);
@@ -306,7 +313,7 @@ test("native candidate producer rejects dirty or mismatched Actions source befor
   }
 });
 
-function nativeCandidateFixture(): Readonly<{
+function nativeCandidateFixture(metered = false): Readonly<{
   repository: string;
   outputDir: string;
   commit: string;
@@ -330,6 +337,10 @@ function nativeCandidateFixture(): Readonly<{
     "#!/usr/bin/env bash\nexit 1\n",
   );
   chmodSync(join(repository, "scripts", "prove-runner-docker.sh"), 0o755);
+  if (metered) {
+    writeFileSync(join(repository, "runner", "Dockerfile.hosted-metered"), readFileSync(join(repository, "runner", "Dockerfile")));
+    writeFileSync(join(repository, "scripts", "prove-runner-hosted-metered.ts"), "throw new Error('test invokes injected command');\n");
+  }
   execFileSync("git", ["init", "--initial-branch=main"], { cwd: repository });
   execFileSync("git", ["config", "user.name", "Candidate Test"], {
     cwd: repository,
@@ -462,4 +473,134 @@ test("native candidate record is closed and binds both native proofs to one linu
       parseRunnerImageNativeCandidateRecord(JSON.stringify(invalid)),
     ).toThrow("runner_image_native_candidate_record_invalid");
   }
+});
+
+
+test("metered profile and closed candidate v2 reject arbitrary profile paths and incomplete gates", () => {
+  expect(parseRunnerImageNativeCandidateArgs(["--output-dir", "/tmp/proof", "--profile", "hosted-metered-v1"]))
+    .toEqual({ outputDir: "/tmp/proof", profile: "hosted-metered-v1" });
+  for (const profile of ["../../runner/Dockerfile", "hosted", "", "HOSTED-METERED-V1", null]) {
+    expect(() => runnerImageProfile(profile)).toThrow("runner_image_profile_invalid");
+  }
+  const original = candidateRecord();
+  const report = {
+    kind: RUNNER_IMAGE_METERED_NATIVE_REPORT_KIND, profile: "hosted-metered-v1",
+    descriptorDigest: DESCRIPTOR_DIGEST, nativeEntrypoint: "passed", childBoundary: "passed",
+    kernelCpuAndDrain: "passed", authenticatedRunLifecycle: "passed",
+  };
+  const metered = { ...original, kind: RUNNER_IMAGE_METERED_NATIVE_CANDIDATE_KIND, profile: "hosted-metered-v1",
+    image: { ...original.image, tag: `takosumi-runner-hosted-metered-native-candidate:${COMMIT}` }, nativeProof: report,
+  };
+  expect(parseRunnerImageNativeCandidateRecord(JSON.stringify(metered))).toEqual(metered);
+  for (const invalid of [
+    { ...original, profile: "hosted-metered-v1" },
+    { ...metered, profile: undefined },
+    { ...metered, image: original.image },
+    { ...metered, nativeProof: original.nativeProof },
+    { ...metered, nativeProof: { ...report, descriptorDigest: `sha256:${"0".repeat(64)}` } },
+    { ...metered, nativeProof: { ...report, childBoundary: "unknown" } },
+    { ...metered, nativeProof: { ...report, authenticatedRunLifecycle: undefined } },
+    { ...metered, nativeProof: { ...report, sourceBind: true } },
+  ]) expect(() => parseRunnerImageNativeCandidateRecord(JSON.stringify(invalid))).toThrow("runner_image_native_candidate_record_invalid");
+});
+
+test("metered candidate builds and attests only after the exact sealed actual-image harness succeeds", async () => {
+  const fixture = nativeCandidateFixture(true);
+  const previousActions = process.env.GITHUB_ACTIONS;
+  delete process.env.GITHUB_ACTIONS;
+  const calls: Array<readonly string[]> = [];
+  try {
+    const record = await runRunnerImageNativeCandidate({ outputDir: fixture.outputDir, profile: "hosted-metered-v1" }, {
+      repositoryRoot: fixture.repository,
+      command: async (executable, args, cwd, environment) => {
+        calls.push([executable, ...args]);
+        if (executable === "git" || executable === "tar") return realCommand(executable, args, cwd, environment);
+        if (executable === "curl") {
+          writeFileSync(args[args.indexOf("--output") + 1]!, args.at(-1)!.endsWith("_SHA256SUMS") ? `${OPENTOFU_SHA256}  tofu_1.12.5_linux_amd64.zip\n` : "sigstore material\n");
+          return success();
+        }
+        if (executable === "cosign") return success("Verified OK\n");
+        if (executable === "docker" && args[0] === "buildx") return success();
+        if (executable === "docker" && args[0] === "image" && args[1] === "inspect") return success(localImageInspect());
+        if (executable === "docker" && args[0] === "image" && args[1] === "save") {
+          writeFileSync(args[args.indexOf("--output") + 1]!, "metered image archive\n");
+          return success();
+        }
+        if (args[0] === "--eval" && args[1]?.includes('Bun.which("docker")')) return success(process.execPath);
+        if (executable === "docker" && args[0] === "context") return success(args[1] === "show" ? "default\n" : JSON.stringify({ Host: "unix:///run/takosumi-native-test.sock", SkipTLSVerify: false }));
+        const harnessIndex = args.findIndex((arg) => arg.endsWith("/scripts/prove-runner-hosted-metered.ts"));
+        if ((executable === "/usr/bin/env" || executable === "/usr/bin/sudo") && harnessIndex >= 0) {
+          expect(cwd).not.toBe(fixture.repository);
+          expect(args).toContain("--ignore-environment");
+          expect(args.slice(harnessIndex + 1)).toEqual(["--image", LOCAL_IMAGE_ID, "--descriptor", DESCRIPTOR_DIGEST]);
+          return success(JSON.stringify({
+            kind: RUNNER_IMAGE_METERED_NATIVE_REPORT_KIND, profile: "hosted-metered-v1", descriptorDigest: DESCRIPTOR_DIGEST,
+            nativeEntrypoint: "passed", childBoundary: "passed", kernelCpuAndDrain: "passed", authenticatedRunLifecycle: "passed",
+          }));
+        }
+        throw new Error(`unexpected metered candidate command: ${executable} ${args.join(" ")}`);
+      },
+    });
+    expect(record).toMatchObject({ kind: RUNNER_IMAGE_METERED_NATIVE_CANDIDATE_KIND, profile: "hosted-metered-v1", nativeProof: { descriptorDigest: DESCRIPTOR_DIGEST, childBoundary: "passed" } });
+    expect(calls.filter((call) => call.some((part) => part.endsWith("/scripts/prove-runner-hosted-metered.ts")))).toHaveLength(1);
+    expect(calls.filter((call) => call[0] === "bash")).toHaveLength(0);
+    expect(calls.find((call) => call[1] === "buildx")?.some((part) => part.endsWith("/runner/Dockerfile.hosted-metered"))).toBeTrue();
+  } finally { restoreEnvironment("GITHUB_ACTIONS", previousActions); }
+});
+
+
+test("metered root seam elevates only the exact harness and clears provider, Actions, and registry configuration", () => {
+  const input = {
+    uid: 1_001, bunExecutable: "/opt/trusted/bun", dockerExecutable: "/opt/tool-cache/docker-29/docker", sourceRoot: "/sealed/source",
+    identity: parseLocalRunnerImageIdentity(localImageInspect()), dockerHost: "unix:///run/selected-docker.sock",
+  };
+  const unprivileged = runnerImageMeteredHarnessInvocation(input);
+  expect(unprivileged.executable).toBe("/usr/bin/sudo");
+  expect(unprivileged.args.slice(0, 4)).toEqual(["--non-interactive", "--", "/usr/bin/env", "--ignore-environment"]);
+  expect(unprivileged.args).toContain("/opt/trusted/bun");
+  expect(unprivileged.args).toContain("/sealed/source/scripts/prove-runner-hosted-metered.ts");
+  expect(unprivileged.args).toContain("DOCKER_HOST=unix:///run/selected-docker.sock");
+  expect(unprivileged.args).toContain("TAKOSUMI_RUNNER_NATIVE_DOCKER=/opt/tool-cache/docker-29/docker");
+  expect(unprivileged.args).toContain("BUN_RUNTIME_TRANSPILER_CACHE_PATH=0");
+  expect(unprivileged.args.join(" ")).not.toMatch(/CLOUDFLARE|ACTIONS_|GITHUB_|DOCKER_CONFIG|DOCKER_CONTEXT|DOCKER_CERT|DOCKER_TLS/u);
+  expect(unprivileged.args.slice(-4)).toEqual(["--image", LOCAL_IMAGE_ID, "--descriptor", DESCRIPTOR_DIGEST]);
+  const root = runnerImageMeteredHarnessInvocation({ ...input, uid: 0 });
+  expect(root.executable).toBe("/usr/bin/env");
+  expect(root.args).toEqual(unprivileged.args.slice(3));
+  expect(() => runnerImageMeteredHarnessInvocation({ ...input, bunExecutable: "bun" })).toThrow("runner_image_metered_native_invocation_invalid");
+});
+
+test("metered daemon projection follows selected context or host without silently changing a daemon", async () => {
+  const names = ["DOCKER_CONTEXT", "DOCKER_HOST", "DOCKER_TLS", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH"];
+  const before = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  for (const name of names) delete process.env[name];
+  const calls: Array<readonly string[]> = [];
+  const command = async (executable: string, args: readonly string[]) => {
+    expect(executable).toBe("docker");
+    calls.push(args);
+    return success(args[1] === "show" ? "configured-local\n" : JSON.stringify({ Host: "unix:///run/context-selected.sock", SkipTLSVerify: false }));
+  };
+  try {
+    process.env.DOCKER_CONTEXT = "ci-local";
+    process.env.DOCKER_HOST = "tcp://ignored-by-context:2376";
+    expect(await runnerImageMeteredDockerHost(command, "/sealed/source")).toBe("unix:///run/context-selected.sock");
+    expect(calls).toEqual([["context", "inspect", "--format", "{{json .Endpoints.docker}}", "ci-local"]]);
+    calls.length = 0;
+    delete process.env.DOCKER_CONTEXT;
+    process.env.DOCKER_HOST = "unix:///run/explicit-builder.sock";
+    expect(await runnerImageMeteredDockerHost(command, "/sealed/source")).toBe("unix:///run/explicit-builder.sock");
+    expect(calls).toHaveLength(0);
+    process.env.DOCKER_HOST = "ssh://remote-host";
+    await expect(runnerImageMeteredDockerHost(command, "/sealed/source")).rejects.toThrow("runner_image_metered_daemon_local_unix_required");
+    delete process.env.DOCKER_HOST;
+    expect(await runnerImageMeteredDockerHost(command, "/sealed/source")).toBe("unix:///run/context-selected.sock");
+    expect(calls[0]).toEqual(["context", "show"]);
+    expect(calls[1]?.at(-1)).toBe("configured-local");
+    calls.length = 0;
+    process.env.DOCKER_TLS_VERIFY = "1";
+    await expect(runnerImageMeteredDockerHost(command, "/sealed/source")).rejects.toThrow("runner_image_metered_daemon_tls_unsupported");
+    expect(calls).toHaveLength(0);
+    delete process.env.DOCKER_TLS_VERIFY;
+    await expect(runnerImageMeteredDockerHost(async () => success(JSON.stringify({ Host: "tcp://remote:2376", SkipTLSVerify: false })), "/sealed/source")).rejects.toThrow();
+  } finally { for (const name of names) restoreEnvironment(name, before[name]); }
 });

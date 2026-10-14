@@ -2729,7 +2729,7 @@ function readRunnerImagePlanProof(
       const value = JSON.parse(line) as unknown;
       if (
         !record(value) ||
-        value.kind !== "takosumi.runner-image-release@v3" ||
+        (value.kind !== "takosumi.runner-image-release@v3" && value.kind !== "takosumi.runner-image-release@v4") ||
         value.operation !== "build" ||
         value.status !== "published" ||
         !record(value.image) ||
@@ -2742,6 +2742,9 @@ function readRunnerImagePlanProof(
       }
       if (!sameGitRemote(value.source.repository, repository)) {
         throw new Error("platform_worker_release_runner_image_proof_invalid");
+      }
+      if (value.kind === "takosumi.runner-image-release@v4") {
+        throw new Error("platform_worker_release_metered_activation_unavailable");
       }
       const proof = runnerImageRuntimeInputPlanProofFromBuildRecord(value, image);
       if (proof === null) {
@@ -2756,7 +2759,8 @@ function readRunnerImagePlanProof(
   } catch (error) {
     if (
       error instanceof Error &&
-      error.message === "platform_worker_release_runner_image_proof_invalid"
+      (error.message === "platform_worker_release_runner_image_proof_invalid" ||
+        error.message === "platform_worker_release_metered_activation_unavailable")
     ) {
       throw error;
     }
@@ -4510,6 +4514,12 @@ export async function completeRelease(
   publicReadback: typeof verifyPublicReadback = verifyPublicReadback,
   sourceRuntime: PlatformActionSourceRuntime = platformActionSourceRuntime,
 ): Promise<void> {
+  // Exported composition callers receive the same activation boundary as CLI execute.
+  // Local-only v2 metering qualification can never become a generic v1 plan proof.
+  const proof: unknown = plan.runnerImageProof;
+  if (!record(proof) || typeof proof.image !== "string" || !isRunnerImageRuntimeInputPlanProof(proof, proof.image)) {
+    throw new Error("platform_worker_release_runner_image_proof_invalid");
+  }
   let fence = readPlatformMutationFence(options.plan, plan.confirmation);
   let mutationOutcome: "not-started" | "unknown" | "accepted" =
     fence?.outcome ?? "not-started";

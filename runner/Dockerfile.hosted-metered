@@ -1,0 +1,167 @@
+ARG BUN_BASE_IMAGE=oven/bun:1@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4
+
+FROM ${BUN_BASE_IMAGE} AS hosted-metered-native-build
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY runner/native/ /native/
+RUN cc -std=c11 -O2 -Wall -Wextra -Werror -Wconversion -Wshadow \
+      -static -Wl,-z,relro,-z,now \
+      /native/hosted-metered-launcher.c -o /native/hosted-metered-launcher \
+    && cc -std=c11 -O2 -Wall -Wextra -Werror -Wconversion -Wshadow \
+      -fPIC -shared -Wl,-z,relro,-z,now \
+      /native/hosted-metered-supervisor.c -o /native/hosted-metered-supervisor.so
+
+FROM ${BUN_BASE_IMAGE}
+
+# GA runner runtimes. Versions and official release archive checksums are
+# immutable build inputs. The release workflow additionally verifies the
+# OpenTofu SHA256SUMS Sigstore signature before this Dockerfile is built.
+ARG OPENTOFU_VERSION=1.12.5
+ARG OPENTOFU_SHA256=dade9650e6b74fc7a8b986bd8717497d32f9e09cf82e479afef4977fa3085536
+ARG NODE_VERSION=24.19.0
+ARG NODE_SHA256=14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647
+
+# Source-sync (LANE M1) needs git + openssh-client to clone over https/ssh and
+# zstd to compress the deterministic source archive. tar is in the debian base.
+# ca-certificates + git + curl + unzip were already required by OpenTofu install.
+# xz-utils extracts the pinned Node runtime used by app-owned provider CLIs.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl git unzip openssh-client xz-utils zstd \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    archive="node-v${NODE_VERSION}-linux-x64.tar.xz"; \
+    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/${archive}" \
+      -o "/tmp/${archive}"; \
+    printf '%s  %s\n' "${NODE_SHA256}" "${archive}" \
+      > /tmp/node_SHA256SUM; \
+    (cd /tmp && sha256sum -c /tmp/node_SHA256SUM); \
+    tar -xJf "/tmp/${archive}" \
+      --strip-components=2 \
+      -C /usr/local/bin \
+      "node-v${NODE_VERSION}-linux-x64/bin/node"; \
+    install -d -m 0755 /usr/local/share/licenses/node; \
+    tar -xJf "/tmp/${archive}" \
+      --strip-components=1 \
+      -C /usr/local/share/licenses/node \
+      "node-v${NODE_VERSION}-linux-x64/LICENSE"; \
+    rm "/tmp/${archive}" /tmp/node_SHA256SUM; \
+    test "$(node --version)" = "v${NODE_VERSION}"
+
+RUN set -eux; \
+    asset="tofu_${OPENTOFU_VERSION}_linux_amd64.zip"; \
+    base="https://github.com/opentofu/opentofu/releases/download/v${OPENTOFU_VERSION}"; \
+    curl -fsSL "${base}/${asset}" -o "/tmp/${asset}"; \
+    curl -fsSL "${base}/tofu_${OPENTOFU_VERSION}_SHA256SUMS" \
+      -o /tmp/tofu_SHA256SUMS; \
+    printf '%s  %s\n' "${OPENTOFU_SHA256}" "${asset}" \
+      > /tmp/tofu_SHA256SUM; \
+    grep -F "${OPENTOFU_SHA256}  ${asset}" /tmp/tofu_SHA256SUMS; \
+    (cd /tmp && sha256sum -c /tmp/tofu_SHA256SUM); \
+    unzip "/tmp/${asset}" -d /usr/local/bin; \
+    rm "/tmp/${asset}" /tmp/tofu_SHA256SUM /tmp/tofu_SHA256SUMS; \
+    tofu version
+
+# ---------------------------------------------------------------------------
+# Provider mirror (baked, offline plan/apply).
+#
+# Pre-mirror a curated cache into the reference image. The cache is an image
+# optimization, not a provider catalog: the baked tofu.rc lets every provider
+# use either the filesystem mirror or its ordinary registry. Mirror-only runs
+# receive a generated CLI config with their explicit provider set. Runtime
+# configs may use a run-local cache or the operator-configured
+# TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR for provider binaries only.
+#
+# The concrete list is owned only by runner/mirror-providers.tf and can change
+# with reference-image workload evidence without changing core semantics.
+# ---------------------------------------------------------------------------
+ENV OPENTOFU_PROVIDER_MIRROR=/opt/opentofu/provider-mirror
+ENV TF_CLI_CONFIG_FILE=/opt/opentofu/tofu.rc
+
+# The baked provider-neutral CLI config. Per-run generated configs may add a
+# run-local or operator-configured provider plugin cache and strict policy.
+COPY runner/tofu.rc ${TF_CLI_CONFIG_FILE}
+
+# Minimal build-time config that pins the provider set to mirror. Lives in its
+# own dir so `tofu providers mirror` resolves only this config.
+COPY runner/mirror-providers.tf /opt/opentofu/mirror-build/providers.tf
+
+RUN set -eux; \
+    mkdir -p "${OPENTOFU_PROVIDER_MIRROR}"; \
+    # `tofu providers mirror` must NOT use the baked filesystem-mirror config
+    # (it is what populates that mirror); run it with an empty CLI config so it
+    # talks to the registry directly.
+    env -u TF_CLI_CONFIG_FILE tofu -chdir=/opt/opentofu/mirror-build \
+        providers mirror "${OPENTOFU_PROVIDER_MIRROR}"; \
+    rm -rf /opt/opentofu/mirror-build; \
+    ls -R "${OPENTOFU_PROVIDER_MIRROR}" | head -40
+
+# Capsule execution authority comes from the immutable Git/SourceSnapshot
+# selected by the PlanRun. The image deliberately contains no app/module
+# catalog. Explicit Resource Shape modules arrive through the operator-only
+# dispatch seam after registry resolution.
+WORKDIR /app
+
+# The runner server imports a small shared contract dependency closure via
+# relative paths. The build context is the repo root
+# (image_build_context = "../.."), so preserve that layout explicitly. No other
+# repo source (or the Worker browser bundle) is copied into the image.
+COPY contract/provider-env-rules.ts ./contract/provider-env-rules.ts
+COPY contract/provider-configurations.ts ./contract/provider-configurations.ts
+COPY contract/api-surface.ts ./contract/api-surface.ts
+COPY contract/sources.ts ./contract/sources.ts
+COPY contract/repository-manifest.ts ./contract/repository-manifest.ts
+COPY contract/plan-scope.ts ./contract/plan-scope.ts
+COPY contract/redaction.ts ./contract/redaction.ts
+COPY contract/types.ts ./contract/types.ts
+COPY contract/reference/ip-classification.ts ./contract/reference/ip-classification.ts
+COPY contract/reference/host-blocklist.ts ./contract/reference/host-blocklist.ts
+COPY lib/opentofu-configuration/src/mod.ts ./lib/opentofu-configuration/src/mod.ts
+COPY lib/rootgen/src/mod.ts ./lib/rootgen/src/mod.ts
+COPY core/shared/open-tofu-state-metadata.ts ./core/shared/open-tofu-state-metadata.ts
+COPY core/shared/private_run_file_refresh.ts ./core/shared/private_run_file_refresh.ts
+COPY runner/entrypoint.ts ./runner/entrypoint.ts
+# entrypoint.ts is a thin re-export/server shell; the runner implementation
+# lives in runner/lib/*.ts (P3 god-file split). These MUST be copied or the
+# container fails at runtime when entrypoint.ts imports ./lib/*.
+COPY runner/lib/ ./runner/lib/
+COPY runner/start.sh ./runner/start.sh
+COPY runner/start-hosted-metered.sh ./runner/start-hosted-metered.sh
+COPY runner/hosted-metered-entrypoint.ts ./runner/hosted-metered-entrypoint.ts
+COPY runner/hosted-metered-child.ts ./runner/hosted-metered-child.ts
+COPY --from=hosted-metered-native-build /native/hosted-metered-launcher ./runner/native/hosted-metered-launcher
+COPY --from=hosted-metered-native-build /native/hosted-metered-supervisor.so ./runner/native/hosted-metered-supervisor.so
+# Sealed/private source checkouts may have owner-only source modes. COPY keeps
+# those modes, so normalize only the immutable runtime closure before USER bun.
+RUN chmod -R a+rX ./contract ./core ./lib ./runner \
+    && chmod 0755 ./runner/start.sh
+
+# Provider/module code is untrusted workload input. The reference runner must
+# not execute it as container root. Keep only the bounded run/cache directories
+# writable by the image's unprivileged Bun account; application and mirror
+# content remain root-owned and read-only to that account.
+RUN install -d -o bun -g bun -m 0700 \
+    /tmp/takosumi-runs \
+    /tmp/takosumi-provider-cache \
+    /tmp/takosumi-source-build-cache \
+    /workspace
+
+ENV PORT=8080
+ENV TOFU_WORK_DIR=/workspace
+ENV TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR=/tmp/takosumi-provider-cache
+ENV TAKOSUMI_SOURCE_BUILD_CACHE_DIR=/tmp/takosumi-source-build-cache
+ENV TAKOSUMI_RUNNER_START_SERVER=1
+
+# Explicit optional local-qualification composition. The ordinary Dockerfile
+# continues USER bun unchanged. No Cloudflare admission exists in this phase.
+RUN install -d -o 0 -g 0 -m 0700 /run/takosumi-metered \
+    && rm -f /app/runner/start.sh \
+    && install -d -o 65534 -g 65534 -m 0700 /tmp/takosumi-metered-runs \
+    && chown 65534:65534 /tmp/takosumi-provider-cache /tmp/takosumi-source-build-cache /workspace \
+    && chmod 0555 /app/runner/start-hosted-metered.sh /app/runner/native/hosted-metered-launcher /app/runner/native/hosted-metered-supervisor.so
+ENV TAKOSUMI_RUNNER_START_SERVER=0
+ENV BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
+EXPOSE 8080
+USER 0:0
+ENTRYPOINT ["/app/runner/start-hosted-metered.sh"]
+CMD []
