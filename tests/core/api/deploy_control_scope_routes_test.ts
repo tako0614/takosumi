@@ -338,6 +338,25 @@ test("dependency delete requires write authority, not just Workspace membership"
   expect(await store.getDependency("dep_scoped0001")).toBeDefined();
 });
 
+test("internal DELETE outside the principal's Workspace scope cannot add Activity", async () => {
+  const { app, store } = await scopedApp({
+    workspaceIds: ["ws_other424"], operations: "*", runnerProfileIds: "*",
+  }, { currentStateVersionId: "state_delete_outside424" });
+  const before = await store.getCapsule(CAPSULE_ID);
+  const activityBefore = await store.listActivityEvents(WORKSPACE_ID);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (const suffix of ["", "?immediate=false", "?immediate=true"]) {
+      const response = await app.request(`/internal/v1/capsules/${CAPSULE_ID}${suffix}`, {
+        method: "DELETE", headers: headers(),
+      });
+      expect(response.status).toBe(403);
+    }
+  }
+  expect(await store.getCapsule(CAPSULE_ID)).toEqual(before);
+  expect(await store.listRunsByWorkspace(WORKSPACE_ID)).toHaveLength(0);
+  expect(await store.listActivityEvents(WORKSPACE_ID)).toEqual(activityBefore);
+});
+
 for (const immediate of [false, true] as const) {
   test(`internal DELETE ${immediate ? "immediate Plan enforces destroy scope" : "default refuses requester before destroy scope"}`, async () => {
     const { app, store } = await scopedApp({

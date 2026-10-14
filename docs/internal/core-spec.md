@@ -269,10 +269,13 @@ destroyed replays return the terminal Capsule. Invalid or duplicate `immediate`
 parameters are rejected. The internal Core token seam has no authenticated
 account/grant requester, so default applied DELETE fails before scheduling with
 `capsule_uninstall_requester_unavailable`; callers use the Accounts public API.
-Membership/scope refusals at the resolved Capsule boundary emit
+Public Workspace access refusals and internal Workspace-scope refusals do not
+write target Workspace Activity, so an unauthorized caller cannot fill another
+Workspace's Activity by repeatedly addressing its Capsule ID. Internal
+operation/runner-scope refusals after successful Workspace authorization emit
 `capsule.deletion_rejected` with the trusted actor, action and reason (no secret
-values); successful reservation/cancel and Plan approval/Apply keep their
-existing Activity/Run audit events. Authentication/scope rejection before
+values). Successful reservation/cancel and Plan approval/Apply keep their
+existing Activity/Run audit events. Authentication/write-scope rejection before
 Capsule dispatch does not resolve a target or emit a Workspace Activity event.
 
 A stateful Capsule Destroy Plan pins the current StateVersion's exact applied

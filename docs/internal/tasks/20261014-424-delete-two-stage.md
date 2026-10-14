@@ -43,10 +43,12 @@
   `capsule_uninstall_requester_unavailable`; use the public Accounts API.
   Explicit internal immediate Plans retain destroy/runner scopes and approval.
 - Reservations/cancellations retain actor/time Activity events; immediate Plans,
-  approval and Apply retain Run audit. Capsule-bound membership/scope refusal
-  records `capsule.deletion_rejected` with trusted actor/action/reason. The
-  earlier authentication/write-scope gate does not resolve a Capsule or write
-  target Activity. Audit uses the existing best-effort Activity durability.
+  approval and Apply retain Run audit. Public Workspace access refusals and
+  internal Workspace-scope refusals write no target Activity. Internal
+  operation/runner-scope refusals record `capsule.deletion_rejected` only after
+  Workspace authorization. The earlier authentication/write-scope gate does not
+  resolve a Capsule or write target Activity. Audit uses the existing best-effort
+  Activity durability.
 - The DELETE response/default is a breaking API contract. Compatibility period
   is the old artifact's deployment period before this reviewed release cutover;
   no date-based fallback or mixed implicit immediate behavior is introduced.
@@ -58,6 +60,15 @@
 
 ## Verification and publication
 
+- Follow-up scope from the 08:25 JST QA findings: preserve merged #437 requester
+  capture and all authorization fences; remove unauthorized Workspace Activity
+  writes; add the seven-day automatic destroy breaking change to CHANGELOG and
+  PR text. New refusal regressions against `c8984775` fail in all five cases
+  (public member, outsider, suspended admin, cross-Workspace PAT, and internal
+  cross-Workspace principal). Repeat the full gate on the committed follow-up
+  head, push normally, and request quality/release QA. This follow-up must leave
+  #441 open and unmerged, with no deploy, production or takos1 operations;
+  these current user instructions supersede the earlier publication plan below.
 - Focused route/client tests and #422/#425 lifecycle/store regressions, then
   `env -u NODE_ENV TAKOSUMI_E2E_PORT=26571 TAKOSUMI_DOCS_BROWSER_PORT=26572 bun run check`.
   Record commands, results, red baseline proof and exact tested head in the PR.

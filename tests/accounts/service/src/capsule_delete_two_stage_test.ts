@@ -106,7 +106,7 @@ test("public immediate DELETE requires exact explicit opt-in; invalid/duplicate 
   expect(h.effects.immediatePlans).toBe(1);
 });
 
-test("member cannot reserve/cancel/immediately delete and refusal records trusted actor and reason", async () => {
+test("member cannot reserve/cancel/immediately delete or write Workspace Activity", async () => {
   const h = await fixture();
   const now = Date.now();
   h.accounts.saveAccount({ subject: "member424", createdAt: now, updatedAt: now });
@@ -117,10 +117,40 @@ test("member cannot reserve/cancel/immediately delete and refusal records truste
   }
   expect(h.effects.immediatePlans).toBe(0);
   expect((await h.ledger.getCapsule(h.seeded.capsule.id))?.status).toBe("active");
-  const rejected = (await h.ledger.listActivityEvents(h.seeded.workspace.id)).filter(event => event.action === "capsule.deletion_rejected");
-  expect(rejected).toHaveLength(5);
-  expect(rejected.every(event => event.actorId === "member424" && Boolean(event.createdAt) && event.metadata?.reason === "workspace_access_denied")).toBe(true);
+  expect(await h.ledger.listActivityEvents(h.seeded.workspace.id)).toHaveLength(0);
 });
+
+for (const credential of ["outsider", "suspended-admin", "other-workspace-pat"] as const) {
+  test(`public deletion by ${credential} cannot add Activity through repeated refusals`, async () => {
+    const h = await fixture();
+    const now = Date.now();
+    let token = "denied424-session";
+    if (credential === "other-workspace-pat") {
+      token = "denied424-pat";
+      h.accounts.savePersonalAccessToken(token, {
+        tokenId: "pat_denied424", tokenPrefix: "display", subject: "user_test",
+        name: "other Workspace", scopes: ["write"], workspaceId: "ws_other424", createdAt: now,
+      });
+    } else {
+      h.accounts.saveAccount({ subject: "denied424", createdAt: now, updatedAt: now });
+      h.accounts.saveAccountSession({ sessionId: token, subject: "denied424", createdAt: now, expiresAt: now + 60000 });
+      if (credential === "suspended-admin") {
+        await h.ledger.putWorkspaceMember({ id: "wsm_denied424", workspaceId: h.seeded.workspace.id, accountId: "denied424", roles: ["admin"], status: "suspended", createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString() });
+      }
+    }
+    const before = await h.ledger.getCapsule(h.seeded.capsule.id);
+    const activityBefore = await h.ledger.listActivityEvents(h.seeded.workspace.id);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      for (const [method, suffix] of [["DELETE", ""], ["DELETE", "?immediate=false"], ["DELETE", "?immediate=true"], ["POST", "/cancel-uninstall"], ["POST", "/uninstall"], ["POST", "/destroy-plan"]]) {
+        expect((await h.request(method!, suffix!, token)).status).toBe(403);
+      }
+    }
+    expect(h.effects.immediatePlans).toBe(0);
+    expect(await h.ledger.getCapsule(h.seeded.capsule.id)).toEqual(before);
+    expect(await h.ledger.listRunsByWorkspace(h.seeded.workspace.id)).toHaveLength(0);
+    expect(await h.ledger.listActivityEvents(h.seeded.workspace.id)).toEqual(activityBefore);
+  });
+}
 
 test("read-only PAT cannot delete, and scope rejection resolves no Capsule", async () => {
   const h = await fixture();

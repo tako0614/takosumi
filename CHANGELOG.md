@@ -8,6 +8,22 @@ package for the v1 GA line.
 
 ## Unreleased
 
+- **Breaking API change — automatic destruction:** for an applied Capsule,
+  `DELETE /api/v1/capsules/{id}` now schedules uninstall with an OSS default
+  **seven-day grace period**, followed by automatic destroy if the reservation
+  is not cancelled and deadline authorization and safety checks succeed. It
+  previously created a destroy Plan requiring manual owner approval. Old clients
+  therefore now reserve automatic destruction and must migrate their calls and
+  response parsing: the response changes from `202 {run,...}` to
+  `202 {capsule, graceDays}`. Resource, state and data remain during the grace
+  period, and billing continues. Operators may configure the grace period.
+  Use `POST /api/v1/capsules/{id}/cancel-uninstall` during grace to cancel, or
+  `DELETE /api/v1/capsules/{id}?immediate=true` / `POST destroy-plan` to request
+  the manual destroy Plan path, which still requires explicit owner approval
+  and guarded Apply. Existing `POST uninstall` and `POST destroy-plan` support
+  migration before upgrading. There is no legacy-default fallback after release
+  cutover. Never-applied Capsules retain abandonment; destroyed replay remains
+  idempotent. No schema migration or existing reservation rewrite is introduced.
 - Platform releases include the hosted docs under `/docs/` after rebuilding the
   dashboard, so the docs route serves the documentation instead of the SPA's
   page-not-found screen.

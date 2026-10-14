@@ -555,6 +555,8 @@ export function mountDeployControlCapsuleRoutes(
         if (!prepared) throw new Error("Capsule lifecycle admission was not captured");
         if (!prepared.ok) throw prepared.error;
         const principal = auth.principal;
+        // Workspace rejection cannot grant an Activity write to that target.
+        ensureWorkspacePermission(principal, prepared.existing.capsule.workspaceId);
         const checkPermission = async (check: () => void): Promise<void> => {
           try {
             check();
@@ -570,9 +572,6 @@ export function mountDeployControlCapsuleRoutes(
             throw error;
           }
         };
-        await checkPermission(() =>
-          ensureWorkspacePermission(principal, prepared.existing.capsule.workspaceId)
-        );
         const immediate = capsuleDeleteIsImmediate(new URL(c.req.url));
         if (prepared.existing.capsule.status === "destroyed") {
           return c.json({ ...capsuleResponse(prepared.existing.capsule), alreadyDeleted: true }, 200);

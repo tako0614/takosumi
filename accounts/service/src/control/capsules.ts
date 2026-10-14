@@ -202,27 +202,9 @@ export async function handleCapsules(
       workspaceId: capsule.workspaceId,
       session: ctx.session,
     });
-    if (!auth.ok) {
-      if (
-        (method === "DELETE" && segments.length === 2) ||
-        (method === "POST" && segments.length === 3 &&
-          ["uninstall", "cancel-uninstall", "destroy-plan"].includes(segments[2] ?? ""))
-      ) {
-        await operations.activity?.record?.({
-          workspaceId: capsule.workspaceId,
-          actorId: ctx.session.subject,
-          action: "capsule.deletion_rejected",
-          targetType: "capsule",
-          targetId: capsule.id,
-          metadata: {
-            method,
-            action: segments[2] ?? "delete",
-            reason: "workspace_access_denied",
-          },
-        });
-      }
-      return auth.response;
-    }
+    // A refused caller must not append Activity to another Workspace by
+    // repeatedly guessing a Capsule ID.
+    if (!auth.ok) return auth.response;
     const requireCapturedManagement = (): WorkspaceManagementAuthority => {
       if (!capturedManagement) throw new Error("Capsule management authority was not captured");
       if (!capturedManagement.ok) throw capturedManagement.error;
