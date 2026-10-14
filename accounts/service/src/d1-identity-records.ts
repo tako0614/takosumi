@@ -20,16 +20,21 @@ import type {
   IdentityMergeMutation,
   UnlinkUpstreamIdentityInput,
 } from "./identity-state.ts";
-import { upstreamIdentityKey } from "./identity-state.ts";
+import {
+  MERGE_EMAIL_TRIM_CODE_POINTS,
+  upstreamIdentityKey,
+} from "./identity-state.ts";
 import type { TakosumiAccountRecord, UpstreamIdentityRecord } from "./store.ts";
 
 const table = "takosumi_accounts_documents";
 function candidatePredicate(alias = ""): string {
   const column = alias ? `${alias}.document` : "document";
-  const email = `trim(json_extract(${column},'$.email'))`;
+  const email = `trim(json_extract(${column},'$.email'),char(${MERGE_EMAIL_TRIM_CODE_POINTS.join(",")}))`;
   const domain = `substr(${email},instr(${email},'@')+1)`;
-  return `(lower(${email})=lower(?) OR (lower(substr(${email},1,instr(${email},'@')-1))=lower(?) AND length(CAST(${domain} AS BLOB))<>length(${domain})))`;
+  // Unknown historical domain syntax cannot silently evade a third candidate.
+  return `(lower(${email})=lower(?) OR (lower(substr(${email},1,instr(${email},'@')-1))=lower(?) AND (length(CAST(${domain} AS BLOB))<>length(${domain}) OR instr(${domain},'%')>0 OR instr(${domain},char(92))>0)))`;
 }
+
 const fields = new Set([
   "issuerSessionId",
   "clientId",

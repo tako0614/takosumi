@@ -384,6 +384,15 @@ export function upstreamIdentityKey(
   ]);
 }
 
+/** ECMAScript String.trim WhiteSpace + LineTerminator code points. SQL candidate
+ * predicates use this exact set rather than database-default ASCII-space trim.
+ * U+0085 and U+180E are deliberately excluded. Historical contacts stay intact. */
+export const MERGE_EMAIL_TRIM_CODE_POINTS = [
+  0x0009, 0x000a, 0x000b, 0x000c, 0x000d, 0x0020, 0x00a0, 0x1680, 0x2000,
+  0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009,
+  0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff,
+] as const;
+
 /** Conservative matching: preserve ASCII local case and aliases, IDNA domain only. */
 export function normalizeMergeEmail(value: string): string | undefined {
   const address = value.trim();
@@ -397,7 +406,7 @@ export function normalizeMergeEmail(value: string): string | undefined {
     !/^[\x21-\x7e]+$/.test(local) ||
     /[<>(),:;\\[\]\"]/.test(local) ||
     !domain ||
-    /[\s/:?#@]/.test(domain)
+    /[\s/:?#@%\\]/.test(domain)
   )
     return undefined;
   try {
@@ -406,7 +415,11 @@ export function normalizeMergeEmail(value: string): string | undefined {
       !host ||
       host.startsWith("[") ||
       host.endsWith(".") ||
-      !host.includes(".")
+      !host.includes(".") ||
+      // ASCII domains may change case only. URL IPv4 shortcuts and other
+      // host canonicalization are not part of conservative email matching.
+      (/^[\x00-\x7f]+$/.test(domain) &&
+        host.toLowerCase() !== domain.toLowerCase())
     )
       return undefined;
     return `${local}@${host.toLowerCase()}`;

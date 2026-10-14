@@ -676,6 +676,6 @@ function candidateMatches(email: string | undefined, address: string): boolean {
     at > 0 &&
     raw.slice(0, at).toLowerCase() ===
       address.slice(0, address.lastIndexOf("@")).toLowerCase() &&
-    /[^\x00-\x7f]/.test(raw.slice(at + 1))
+    (/[^\x00-\x7f]/.test(raw.slice(at + 1)) || /[%\\]/.test(raw.slice(at + 1)))
   );
 }

@@ -18,7 +18,10 @@ import type {
   IdentityMergeMutation,
   UnlinkUpstreamIdentityInput,
 } from "../identity-state.ts";
-import { upstreamIdentityKey } from "../identity-state.ts";
+import {
+  MERGE_EMAIL_TRIM_CODE_POINTS,
+  upstreamIdentityKey,
+} from "../identity-state.ts";
 import type {
   TakosumiAccountRecord,
   UpstreamIdentityRecord,
@@ -36,7 +39,8 @@ import { hashSessionId } from "../session-hash-salt.ts";
 
 const table = "accounts_v1.hosted_identity_records";
 function candidatePredicate(address: string, local: string): string {
-  return `(lower(trim(email))=lower(${address}) OR (lower(split_part(trim(email),'@',1))=lower(${local}) AND octet_length(split_part(trim(email),'@',2))<>length(split_part(trim(email),'@',2))))`;
+  const email = `btrim(email,${MERGE_EMAIL_TRIM_CODE_POINTS.map((c) => `chr(${c})`).join("||")})`;
+  return `(lower(${email})=lower(${address}) OR (lower(split_part(${email},'@',1))=lower(${local}) AND (octet_length(split_part(${email},'@',2))<>length(split_part(${email},'@',2)) OR strpos(split_part(${email},'@',2),'%')>0 OR strpos(split_part(${email},'@',2),chr(92))>0)))`;
 }
 const fields = new Set([
   "issuerSessionId",

@@ -23,6 +23,7 @@ import {
 } from "../../../../accounts/service/src/identity-merge.ts";
 import {
   normalizeMergeEmail,
+  MERGE_EMAIL_TRIM_CODE_POINTS,
   type AccountEmailProofRecord,
   type IdentityMergeAcknowledgements,
   type IdentityMergeOperation,
@@ -741,6 +742,16 @@ test("email normalization preserves local-part case/dots/plus tags, IDNA-normali
     "User@xn--bcher-kva.example",
   );
   expect(normalizeMergeEmail("üser@example.test")).toBeUndefined();
+  for (const invalid of [
+    "Owner@%65xample.test",
+    "Owner@example%2etest",
+    "Owner@example.test\\path",
+    "Owner@127.1",
+    "Owner@0x7f.1",
+    "Owner@127.0.0.01",
+  ])
+    expect(normalizeMergeEmail(invalid)).toBeUndefined();
+
   expect(normalizeMergeEmail("a@gmail.com")).not.toBe(
     normalizeMergeEmail("a@googlemail.com"),
   );
@@ -1649,6 +1660,217 @@ for (const kind of ["memory", "d1", "postgres", "native-d1"] as const) {
         expect((await f.store.findCanonicalAccount!(accountB))?.subject).toBe(
           accountB,
         );
+    } finally {
+      await f.close();
+    }
+  }, 30000);
+}
+
+for (const kind of ["memory", "d1", "postgres", "native-d1"] as const) {
+  for (const historicalEmail of [
+    "Owner@%65xample.test",
+    "Owner@example.test\\path",
+    "\tOwner@example.test",
+    "\u00a0Owner@example.test\u00a0",
+  ]) {
+    test(`${kind}: ambiguous historical email ${JSON.stringify(historicalEmail)} remains an unknown candidate without rewriting contact`, async () => {
+      const f = await fixture(kind);
+      try {
+        await f.store.saveAccount({
+          subject: "tsub_identity_C",
+          email: historicalEmail,
+          emailVerified: true,
+          createdAt: 1,
+          updatedAt: 1,
+        });
+        expect(
+          (await f.store.findAccountsByEmailCandidate!(address))
+            .map((a) => a.subject)
+            .sort(),
+        ).toEqual([accountA, accountB, "tsub_identity_C"].sort());
+        expect((await f.store.findAccount("tsub_identity_C"))?.email).toBe(
+          historicalEmail,
+        );
+        await expect(
+          createIdentityMerge({
+            store: f.store,
+            actor: accountA,
+            sourceSubject: accountB,
+            targetSubject: accountA,
+            browserBindingHash: "browser",
+            now,
+          }),
+        ).rejects.toThrow("merge_conflict");
+        expect(await f.store.isAccountAuthenticationFenced!(accountA)).toBe(
+          false,
+        );
+      } finally {
+        await f.close();
+      }
+    }, 30000);
+    test(`${kind}: ambiguous historical email ${JSON.stringify(historicalEmail)} inserted before reserve CAS rejects without fences`, async () => {
+      const f = await fixture(kind);
+      try {
+        const operation = await proved(f.store);
+        const original = f.store.compareAndSetIdentityMerge!.bind(f.store);
+        f.store.compareAndSetIdentityMerge = async (input) => {
+          if (input.reserve)
+            await f.store.saveAccount({
+              subject: "tsub_identity_C",
+              email: historicalEmail,
+              emailVerified: true,
+              createdAt: 1,
+              updatedAt: 1,
+            });
+          return original(input);
+        };
+        await expect(
+          consentIdentityMerge({
+            store: f.store,
+            operation,
+            session: sessionA,
+            consent: true,
+            reconciler: pendingReconciler,
+            retryCapability: {
+              pendingCapacity: 100,
+              assertAvailable: async () => {},
+            },
+            now,
+          }),
+        ).rejects.toThrow("merge_conflict");
+        expect(await f.store.isAccountAuthenticationFenced!(accountA)).toBe(
+          false,
+        );
+        expect(await f.store.isAccountAuthenticationFenced!(accountB)).toBe(
+          false,
+        );
+        expect(
+          await f.store.getAccountAuthenticationGeneration!(accountA),
+        ).toBe(0);
+        expect(
+          await f.store.findAccountSession(sessionA.sessionId),
+        ).toBeDefined();
+        expect((await f.store.findAccount("tsub_identity_C"))?.email).toBe(
+          historicalEmail,
+        );
+      } finally {
+        await f.close();
+      }
+    }, 30000);
+    test(`${kind}: ambiguous historical email ${JSON.stringify(historicalEmail)} inserted before activation CAS rejects canonical alias`, async () => {
+      const f = await fixture(kind);
+      try {
+        const operation = await consented(f.store);
+        const original = f.store.compareAndSetIdentityMerge!.bind(f.store);
+        f.store.compareAndSetIdentityMerge = async (input) => {
+          if (input.activate)
+            await f.store.saveAccount({
+              subject: "tsub_identity_C",
+              email: historicalEmail,
+              emailVerified: true,
+              createdAt: 1,
+              updatedAt: 1,
+            });
+          return original(input);
+        };
+        await expect(
+          activateIdentityMerge({
+            store: f.store,
+            operation,
+            reconciler: { reconcile: async () => ack(operation) },
+            now,
+          }),
+        ).rejects.toThrow("merge_conflict");
+        expect((await f.store.findCanonicalAccount!(accountB))?.subject).toBe(
+          accountB,
+        );
+        expect(await f.store.isAccountAuthenticationFenced!(accountA)).toBe(
+          true,
+        );
+        expect(
+          await f.store.getAccountAuthenticationGeneration!(accountA),
+        ).toBe(1);
+        expect((await f.store.findAccount("tsub_identity_C"))?.email).toBe(
+          historicalEmail,
+        );
+      } finally {
+        await f.close();
+      }
+    }, 30000);
+  }
+}
+
+for (const kind of ["memory", "d1", "postgres", "native-d1"] as const) {
+  test(`${kind}: candidate inventory trims every ECMAScript whitespace code point and preserves the historical raw contact`, async () => {
+    const f = await fixture(kind);
+    try {
+      expect(MERGE_EMAIL_TRIM_CODE_POINTS).toHaveLength(25);
+      for (const codePoint of MERGE_EMAIL_TRIM_CODE_POINTS) {
+        const outer = String.fromCodePoint(codePoint);
+        expect(outer.trim()).toBe("");
+        const email = outer + address + outer;
+        expect(normalizeMergeEmail(email)).toBe(address);
+        await f.store.saveAccount({
+          subject: "tsub_identity_C",
+          email,
+          emailVerified: true,
+          createdAt: 1,
+          updatedAt: 1,
+        });
+        expect(
+          (await f.store.findAccountsByEmailCandidate!(address))
+            .map((a) => a.subject)
+            .sort(),
+        ).toEqual([accountA, accountB, "tsub_identity_C"].sort());
+        if (f.pg) {
+          // PGlite's text decoder consumes a leading BOM. Inspect database
+          // UTF-8 bytes to prove the protected contact itself was not changed.
+          const stored = await f.pg.query<{ bytes: string }>(
+            "SELECT encode(convert_to(email,'UTF8'),'hex') AS bytes FROM accounts_v1.accounts WHERE subject=$1",
+            ["tsub_identity_C"],
+          );
+          expect(stored.rows[0]?.bytes).toBe(
+            Array.from(new TextEncoder().encode(email), (b) =>
+              b.toString(16).padStart(2, "0"),
+            ).join(""),
+          );
+        } else
+          expect((await f.store.findAccount("tsub_identity_C"))?.email).toBe(
+            email,
+          );
+      }
+      for (const excluded of ["\u0085", "\u180e"]) {
+        expect(excluded.trim()).toBe(excluded);
+        const email = excluded + address + excluded;
+        await f.store.saveAccount({
+          subject: "tsub_identity_C",
+          email,
+          emailVerified: true,
+          createdAt: 1,
+          updatedAt: 1,
+        });
+        expect(
+          (await f.store.findAccountsByEmailCandidate!(address))
+            .map((a) => a.subject)
+            .sort(),
+        ).toEqual([accountA, accountB].sort());
+        if (f.pg) {
+          // PGlite's text decoder consumes a leading BOM. Inspect database
+          // UTF-8 bytes to prove the protected contact itself was not changed.
+          const stored = await f.pg.query<{ bytes: string }>(
+            "SELECT encode(convert_to(email,'UTF8'),'hex') AS bytes FROM accounts_v1.accounts WHERE subject=$1",
+            ["tsub_identity_C"],
+          );
+          expect(stored.rows[0]?.bytes).toBe(
+            Array.from(new TextEncoder().encode(email), (b) =>
+              b.toString(16).padStart(2, "0"),
+            ).join(""),
+          );
+        } else
+          expect((await f.store.findAccount("tsub_identity_C"))?.email).toBe(
+            email,
+          );
+      }
     } finally {
       await f.close();
     }
