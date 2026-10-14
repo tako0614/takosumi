@@ -25,6 +25,8 @@ import {
   parseLocalRunnerImageIdentity,
   parseRunnerImageNativeCandidateRecord,
   proveRunnerImageHardenedNative,
+  proveRunnerImageMeteredNative,
+  RUNNER_IMAGE_METERED_NATIVE_CANDIDATE_KIND,
   RUNNER_IMAGE_NATIVE_CANDIDATE_ARCHIVE_MAX_BYTES,
   RUNNER_IMAGE_NATIVE_CANDIDATE_KIND,
   RUNNER_IMAGE_NATIVE_PROOF_KIND,
@@ -34,11 +36,18 @@ import {
   type RunnerImageNativeCommand,
   type RunnerImageNativeCommandResult,
 } from "./lib/runner-image-native-proof.ts";
+import {
+  HOSTED_METERED_RUNNER_PROFILE,
+  runnerImageNativeCandidateTag,
+  runnerImageProfile,
+  type RunnerImageProfile,
+} from "./lib/runner-image-profile.ts";
 import { platformReleaseSourceAuthorityDigest } from "./lib/platform-release-source.ts";
 import { dashboardAssetTreeSeal } from "./platform-worker-release.ts";
 
 export type RunnerImageNativeCandidateOptions = Readonly<{
   outputDir: string;
+  profile?: RunnerImageProfile;
 }>;
 
 export type RunnerImageNativeCandidateRuntime = Readonly<{
@@ -50,26 +59,34 @@ export type RunnerImageNativeCandidateRuntime = Readonly<{
 export const RUNNER_IMAGE_NATIVE_CANDIDATE_USAGE = `Takosumi runner native candidate producer
 
 Usage:
-  bun scripts/runner-image-native-candidate.ts --output-dir <absolute-external-fresh-directory>`;
+  bun scripts/runner-image-native-candidate.ts --output-dir <absolute-external-fresh-directory> [--profile hosted-metered-v1]`;
 
 export function parseRunnerImageNativeCandidateArgs(
   argv: readonly string[],
 ): RunnerImageNativeCandidateOptions {
-  if (
-    argv.length !== 2 ||
-    argv[0] !== "--output-dir" ||
-    argv[1] === undefined ||
-    !isAbsolute(argv[1])
-  ) {
+  const values = new Map<string, string>();
+  for (let index = 0; index < argv.length; index += 2) {
+    const name = argv[index];
+    const value = argv[index + 1];
+    if (
+      (name !== "--output-dir" && name !== "--profile") || !value ||
+      value.startsWith("--") || values.has(name)
+    ) throw new Error(RUNNER_IMAGE_NATIVE_CANDIDATE_USAGE);
+    values.set(name, value);
+  }
+  const outputDir = values.get("--output-dir");
+  if (!outputDir || !isAbsolute(outputDir)) {
     throw new Error(RUNNER_IMAGE_NATIVE_CANDIDATE_USAGE);
   }
-  return { outputDir: argv[1] };
+  const profile = runnerImageProfile(values.get("--profile"));
+  return { outputDir, ...(profile !== "standard" ? { profile } : {}) };
 }
 
 export async function runRunnerImageNativeCandidate(
   options: RunnerImageNativeCandidateOptions,
   runtime: RunnerImageNativeCandidateRuntime = {},
 ): Promise<RunnerImageNativeCandidateRecord> {
+  const profile = runnerImageProfile(options.profile);
   const repositoryRoot = await canonicalDirectory(
     runtime.repositoryRoot ?? resolve(import.meta.dir, ".."),
     "repository root",
@@ -89,6 +106,8 @@ export async function runRunnerImageNativeCandidate(
       source.commit,
       workspace,
       command,
+      undefined,
+      profile,
     );
     await verifyRunnerOpenTofuSigstore(
       new TextDecoder("utf-8", { fatal: true }).decode(
@@ -98,7 +117,7 @@ export async function runRunnerImageNativeCandidate(
       command,
       repositoryRoot,
     );
-    const imageTag = `takosumi-runner-native-candidate:${source.commit}`;
+    const imageTag = runnerImageNativeCandidateTag(source.commit, profile);
     await checkedCommand(
       command,
       "docker",
@@ -123,29 +142,9 @@ export async function runRunnerImageNativeCandidate(
       command,
       workspace,
     );
-    const hardenedProof = await proveRunnerImageHardenedNative(
-      identity,
-      `candidate-${source.commit.slice(0, 24)}`,
-      command,
-      workspace,
-    );
-    const harness = await checkedCommand(
-      command,
-      "bash",
-      [join(materialized.sourceRoot, "scripts", "prove-runner-docker.sh")],
-      materialized.sourceRoot,
-      candidateChildEnvironment({
-        TAKOSUMI_RUNNER_PROOF_IMAGE: identity.localImageId,
-        TAKOSUMI_RUNNER_PROOF_SKIP_BUILD: "1",
-      }),
-    );
-    if (
-      harness.stdout
-        .split(/\r?\n/u)
-        .filter((line) => line === "RESULT: PASS").length !== 1
-    ) {
-      throw new Error("runner_image_native_candidate_http_proof_invalid");
-    }
+    const nativeProof = profile === HOSTED_METERED_RUNNER_PROFILE
+      ? await proveRunnerImageMeteredNative(identity, materialized.sourceRoot, command)
+      : await proveStandardCandidate(identity, source.commit, materialized.sourceRoot, command, workspace);
     assertMaterializedSourceUnchanged(materialized);
     assertSameLocalIdentity(
       identity,
@@ -177,8 +176,10 @@ export async function runRunnerImageNativeCandidate(
       "candidate archive",
       RUNNER_IMAGE_NATIVE_CANDIDATE_ARCHIVE_MAX_BYTES,
     );
-    const record: RunnerImageNativeCandidateRecord = {
-      kind: RUNNER_IMAGE_NATIVE_CANDIDATE_KIND,
+    const record = parseRunnerImageNativeCandidateRecord(JSON.stringify({
+      ...(profile === HOSTED_METERED_RUNNER_PROFILE
+        ? { kind: RUNNER_IMAGE_METERED_NATIVE_CANDIDATE_KIND, profile }
+        : { kind: RUNNER_IMAGE_NATIVE_CANDIDATE_KIND }),
       observedAt: (runtime.now ?? (() => new Date()))().toISOString(),
       source: {
         repository: source.repository,
@@ -203,14 +204,8 @@ export async function runRunnerImageNativeCandidate(
         size: archive.size,
         sha256: archive.sha256,
       },
-      nativeProof: {
-        kind: RUNNER_IMAGE_NATIVE_PROOF_KIND,
-        descriptorDigest: hardenedProof.descriptorDigest,
-        hardenedRuntimeInputPlan: hardenedProof.hardenedRuntimeInputPlan,
-        fullHttpPlanApply: "passed",
-      },
-    };
-    parseRunnerImageNativeCandidateRecord(JSON.stringify(record));
+      nativeProof,
+    }));
     const recordPath = join(outputDir, "candidate.json");
     const descriptor = await open(
       recordPath,
@@ -241,6 +236,34 @@ type NativeCandidateSourceIdentity = Readonly<{
   repository: string;
   commit: string;
 }>;
+
+async function proveStandardCandidate(
+  identity: LocalRunnerImageIdentity,
+  commit: string,
+  sourceRoot: string,
+  command: RunnerImageNativeCommand,
+  workspace: string,
+): Promise<Extract<RunnerImageNativeCandidateRecord, { kind: typeof RUNNER_IMAGE_NATIVE_CANDIDATE_KIND }>["nativeProof"]> {
+  const hardenedProof = await proveRunnerImageHardenedNative(
+    identity, `candidate-${commit.slice(0, 24)}`, command, workspace,
+  );
+  const harness = await checkedCommand(
+    command, "bash", [join(sourceRoot, "scripts", "prove-runner-docker.sh")], sourceRoot,
+    candidateChildEnvironment({
+      TAKOSUMI_RUNNER_PROOF_IMAGE: identity.localImageId,
+      TAKOSUMI_RUNNER_PROOF_SKIP_BUILD: "1",
+    }),
+  );
+  if (harness.stdout.split(/\r?\n/u).filter((line) => line === "RESULT: PASS").length !== 1) {
+    throw new Error("runner_image_native_candidate_http_proof_invalid");
+  }
+  return {
+    kind: RUNNER_IMAGE_NATIVE_PROOF_KIND,
+    descriptorDigest: hardenedProof.descriptorDigest,
+    hardenedRuntimeInputPlan: hardenedProof.hardenedRuntimeInputPlan,
+    fullHttpPlanApply: "passed",
+  };
+}
 
 async function nativeCandidateSourceIdentity(
   repositoryRoot: string,

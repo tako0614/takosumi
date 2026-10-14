@@ -70,13 +70,14 @@ single-link files in operator-private directories outside every Git worktree,
 and use exact mode `0600`. `takosumi-private` owns their policy and realized
 pin, but these runtime files are not written inside that checkout. Records
 contain bounded, redacted diagnostics and digest fields, never secrets. The
-closed artifact revisions carrying source authority are runner release v3,
-runner publication state v2, journal recovery locator v4, platform plan v6,
-and platform ready evidence v3.
+closed artifact revisions carrying source authority are standard runner release
+v3 or explicit metered release v4, standard publication state v2 or metered
+publication state v3, journal recovery locator v4, platform plan v6, and platform
+ready evidence v3.
 Older artifacts fail closed; rebuild and re-plan instead of translating them.
 The reader has one narrow archival exception: a closed prefix of validated v1
 publication pairs may remain in an existing journal for history inspection.
-Those rows are not current evidence and are never translated into a v2
+Those rows are not current evidence and are never translated into a current
 resolution.
 Before any evidence or coordination file is opened, the runner CLI canonicalizes
 existing and future paths and requires the realized config, its sibling source
@@ -231,7 +232,7 @@ bun run deploy -- takosumi-runner-image recover-journal \
 
 Recovery rejects another `--state` path before writing coordination metadata,
 then takes the same canonical scope lock used by v3 build and reconcile. It
-validates every observed v1/v2 record and attempt/resolution relationship in the
+validates every observed v1/v2/v3 record and attempt/resolution relationship in the
 current file. A malformed or torn record refuses recovery. A known unresolved
 attempt remains unresolved and continues to block build; only ordinary
 exact-transport-ref reconcile can close it.
@@ -264,7 +265,7 @@ A bound journal may begin with adjacent, closed v1 `publication-started` and
 source, config, transport, immutable-digest, descriptor-fallback, and time
 relations against the selected environment and repository, then excludes those
 rows from unresolved and unique current-publication evidence. A new build
-appends v2 records after that prefix only. The old v1 release/evidence path is
+appends current v2 (standard) or v3 (metered) records after that prefix only. The old v1 release/evidence path is
 not supported for general recovery or reconciliation.
 
 Reconcile an exact recorded tag without mutation:
@@ -290,7 +291,7 @@ refused. While
 holding the publication lock, it requires the attempt commit to be an ancestor
 of the current tool and remote tip, archives that exact historical commit with
 replace objects disabled, and recomputes both the complete source-tree seal and
-`runner/Dockerfile` digest from that archive. The realized config path, bytes,
+the recorded profile's fixed Dockerfile digest from that archive. The realized config path, bytes,
 previous image, release, transport repository/tag, and reviewer must still
 match the journal. A legacy attempt without an explicit descriptor digest must
 also retain its exact local transport tag: Docker must report both its image ID
@@ -312,6 +313,99 @@ The successful build record retains the previous digest and computes the exact
 expected activation config SHA by replacing only the unique runner image
 literal. Route, binding, migration, compatibility, Container field, comment,
 whitespace, or any other byte change produces a different SHA and is refused.
+
+### Explicit Hosted metered image profile
+
+The default `standard` profile continues to use `runner/Dockerfile`, `USER bun`,
+and `runner/start.sh`. Its candidate v1, release v3, publication-state v2,
+runtime-input proof, and native non-root checks retain their existing meaning.
+No request, localhost route, or environment switch selects a different image
+profile.
+
+`--profile hosted-metered-v1` explicitly selects only
+`runner/Dockerfile.hosted-metered` and its own `runner/start-hosted-metered.sh`
+entrypoint. The CLI accepts no arbitrary Dockerfile or entrypoint override.
+Use the same option for build, reconcile, and verify. The optional workflow
+`profile` input selects the same fixed mapping; the scheduled proof continues
+to build the standard image.
+
+The metered profile uses closed candidate v2, release v4, and publication-state
+v3 records. Each requires `profile: "hosted-metered-v1"`. A candidate's
+`nativeProof` is the descriptor-bound
+`takosumi.runner-image-hosted-metered-native-report@v1`; the publication attempt
+and build retain `meteredNativeProof` of kind
+`takosumi.runner-image-hosted-metered-native-proof@v1` bound to the immutable
+registry image. Both carry exactly these mandatory `"passed"` results:
+
+- `nativeEntrypoint`: the actual newly built image boots through its own
+  entrypoint, without source mounts or an entrypoint override.
+- `childBoundary`: the fixed non-root workload boundary passes the native
+  adversarial key, capability, no-new-privileges, and process/stdio probes,
+  including same-UID Bun execution.
+- `kernelCpuAndDrain`: an actual pinned cgroup counter and exclusive Run/boot
+  epoch close only after descendant drain; busy CPU is observed and missing,
+  substituted, or unclosed authority never becomes a zero measurement.
+- `authenticatedRunLifecycle`: method, path, body, and context authentication
+  rejects unauthorized or replayed effects and real provider-free Plan/Apply
+  plus the defaultless runtime-input Plan complete through the authenticated
+  lifecycle.
+
+The [Hosted metered runner composition](./hosted-metered-runner.md) documents
+its local admission, process boundary, and incomplete activation ports.
+
+Only the actual-image harness requires host root for its owned PID/cgroup and
+root-private custody checks. The candidate producer and publisher retain their
+original UID. On a non-root Linux amd64 host the helper uses non-interactive
+`sudo` for that single harness, the canonical current Bun interpreter, and the
+exact sealed script and image identities. The root child receives a fresh
+environment containing only fixed PATH, disabled Bun transpiler cache, the
+resolved local Unix Docker endpoint, and the exact canonical Docker CLI selected
+by the owning builder. The harness executes that CLI directly rather than
+selecting a different system Docker from root's PATH. Cloudflare credentials, Actions variables,
+registry-auth config, and unresolved context metadata are not forwarded.
+
+Before elevation, the owning Docker client resolves the selected context or
+host into one explicit local Unix endpoint; the harness uses that endpoint
+with its own empty Docker configuration. Docker's
+[documented context precedence](https://docs.docker.com/reference/cli/docker/#environment-variables)
+is preserved. Remote/TLS endpoints or unavailable resolution fail closed;
+there is no switch to a different daemon or a root default context. The same
+minimal environment is used when the caller is already root.
+
+The owning build invokes only the sealed commit's
+`scripts/prove-runner-hosted-metered.ts --image <exact-local-image-id>
+--descriptor <exact-descriptor-digest>`. It accepts one bounded, closed JSON
+report whose descriptor matches Docker inspection. A failed gate, unknown
+result, missing field, substituted descriptor, or source-bind-only experiment
+refuses publication before a journal attempt or provider call. A cached image
+with newly mounted source can supply local Linux evidence, but is **not** a
+built-image native proof.
+
+Archive and candidate record remain jointly attested by the exact owning
+workflow and source commit. The profile-specific tag, selected Dockerfile
+hash, full source-tree seal, descriptor, and report are checked before Docker
+load. The immutable image identity, registry repository, private journal,
+locator, and scope lock are unchanged. Standard and metered journal entries
+share unresolved-history exclusion; selecting another profile cannot bypass
+an unknown publication. Reconciliation re-materializes the profile recorded
+in the historical attempt and retains its original proof, rather than
+re-running work or inferring a profile from the current checkout.
+
+The metered build's runtime-input proof is the separate closed
+`takosumi.runner-image-runtime-input-plan-proof@v2`, requiring the exact image,
+`profile: "hosted-metered-v1"`, and `qualification: "local-native-only"`.
+The existing platform v6 plan and execute authority accepts only the unchanged
+standard v1 proof. Planning a valid metered v4 artifact therefore fails with
+`platform_worker_release_metered_activation_unavailable` before dashboard
+build or provider access; direct release composition also rejects v2 before
+custody or provider work. Inspection never translates v2 into v1. B2 must add
+real configured admission and owning-application policy evidence before a
+separate metered activation authority can be implemented.
+
+These native gates establish the image's CPU collector boundary. They do not
+supply a provisioned-memory, network-egress, or infrastructure-overhead price
+measurement, or authorize a Hosted billing adapter or live activation. Those
+owner ports and complete Run accounting remain separate integration work.
 
 ### Consume an exact native CI candidate
 
@@ -391,7 +485,7 @@ load/verification failure; pre-existing or changed tags are never adopted or
 removed. This lets one candidate be reused without trusting an old local tag.
 It runs neither a local build nor a local container boot in candidate mode.
 Registry descriptor equality, unknown-outcome
-reconciliation, release v3 records, platform activation, and runner verification
+reconciliation, standard release v3 or metered release v4 records, platform activation, and runner verification
 remain unchanged. A downloaded candidate is not a published or active Runner.
 
 ## 2. Change only the realized pin and release the platform
@@ -414,7 +508,10 @@ bun run deploy -- takosumi-platform-staging execute \
 ```
 
 For production, use `takosumi-platform`. The platform plan fully validates every
-matching published v3 runner build record. It ignores valid historical records
+matching published standard v3 or metered v4 runner build record. A valid
+metered v4 is available for inspection but is refused for activation before
+build or provider work; its local-only v2 proof cannot authorize a v6 platform
+plan. For standard v3, the reader ignores valid historical records
 without proof, deduplicates identical proof-bearing records by exact kind and
 image, and requires one unique runtime-input Plan proof naming the same
 immutable image as the realized config. Missing proof, malformed matching

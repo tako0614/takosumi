@@ -1,5 +1,11 @@
 import { isAbsolute } from "node:path";
 
+import {
+  HOSTED_METERED_RUNNER_PROFILE,
+  isRunnerImageMeteredNativeProof,
+  type RunnerImageMeteredNativeProof,
+} from "./lib/runner-image-profile.ts";
+
 import { platformReleaseSourceAuthorityDigest } from "./lib/platform-release-source.ts";
 
 /**
@@ -20,9 +26,12 @@ export const RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE = {
   target: "cloudflare-container:takosumi-runner",
   covers: [
     "runner/Dockerfile",
+    "runner/Dockerfile.hosted-metered",
     "runner",
     "scripts/lib/platform-release-source.ts",
     "scripts/lib/runner-image-native-proof.ts",
+    "scripts/lib/runner-image-profile.ts",
+    "scripts/prove-runner-hosted-metered.ts",
     "scripts/runner-image-native-candidate.ts",
     "scripts/runner-image-release.ts",
   ],
@@ -37,13 +46,14 @@ export const RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE = {
     "curl",
     "cosign",
     "gh",
+    "sudo",
   ],
   requiresEnv: ["CLOUDFLARE_ACCOUNT_ID", "TAKOSUMI_OPENTOFU_RUN_ROOT"],
   obligations: {
     provenance:
       "build, reconciliation, and verification require an identity-only realized config with no main or assets directory plus its stable single-link sibling source pin, and require that exact Git repository and commit to be the clean attached pushed checkout; one canonical domain-separated digest of the exact pin kind, repository, and commit is carried through the publication journal, build evidence, confirmed platform plan, and ready evidence; staging requires HEAD to equal both local and freshly read remote origin/current-branch while production additionally requires main; runner paths are derived only in an ephemeral projection from that pinned checkout while the pathless config bytes remain the evidence identity; ordinary build materializes the immutable Git commit in an external sealed context, verifies the Dockerfile-pinned OpenTofu artifact through its upstream Sigstore identity, and binds the exact image-only activation transform plus publication journal to the remotely read content digest; candidate build instead requires one exact GitHub-hosted workflow attestation covering both the archive and its closed record, verified offline against this repository, `.github/workflows/runner-image-proof.yml`, and the full selected source commit before private custody or Docker load; reconciliation accepts only a no-replace-object historical attempt commit from the same repository that is an ancestor of the trusted current tool and fresh remote tip, then re-materializes and seals that exact commit; platform planning and verification require runner build provenance from the same owning Git remote as the Worker sibling pin, validate the runner build commit independently, require platform ready authority to equal the freshly resolved Worker sibling-pin authority before live readback, and do not require the runner and Worker source commits to match",
     "post-conditions":
-      "before publication, ordinary build boots the exact local image through its native non-root ENTRYPOINT under the sealed Docker restrictions and requires a real provider-free Plan to accept an explicit empty runtime-input map for a matching defaultless ephemeral variable, with each OpenTofu execution rooted under the directory selected by TAKOSUMI_OPENTOFU_RUN_ROOT (default /tmp/takosumi-runs); candidate build instead authenticates one record and archive produced only after that same hardened native Plan proof plus the full HTTP Plan/Apply proof passed against the same exact descriptor, then requires Docker save/load to preserve its local Docker image ID, Descriptor, media type, and linux/amd64 platform without an operator-side build or boot; build records the semantic proof against the immutable image together with the local Docker image ID and an explicit Descriptor digest with exact supported manifest media type and linux/amd64 platform, accepts only Docker's unambiguous remote Descriptor.platform linux/amd64 shape, and requires exact local/remote descriptor-digest equality before recording that immutable descriptor digest as the sole consumer identity and the actual config digest as evidence; a legacy attempt without the explicit descriptor field additionally requires the exact recorded local tag to remain present with both Docker Id and Descriptor equal to the legacy value; platform planning and runner verification refuse an image without that exact proof, while verification requires the platform evidence Worker Version to be exactly serving at 100 percent and the exact environment Container application to be healthy on that digest",
+      "the explicit hosted-metered-v1 profile instead selects its owning Dockerfile.hosted-metered and native ENTRYPOINT, and requires a closed actual-image report proving its child boundary, pinned kernel CPU and exclusive epoch drain, and authenticated real Run lifecycle against the same descriptor before any publication; only the metered native harness is elevated through a canonical Bun interpreter and minimal environment when the caller is non-root, preserving one explicitly resolved local Unix Docker daemon while omitting provider/Actions credentials and registry auth; candidate v2 and release v4 retain that exact profile and proof, and metered runtime-input proof v2 is local-native-only inspection evidence rejected by the unchanged v1-only platform activation authority, while standard v1 candidates and v3 releases retain their existing non-root proof; before publication, ordinary build boots the exact local image through its native non-root ENTRYPOINT under the sealed Docker restrictions and requires a real provider-free Plan to accept an explicit empty runtime-input map for a matching defaultless ephemeral variable, with each OpenTofu execution rooted under the directory selected by TAKOSUMI_OPENTOFU_RUN_ROOT (default /tmp/takosumi-runs); candidate build instead authenticates one record and archive produced only after that same hardened native Plan proof plus the full HTTP Plan/Apply proof passed against the same exact descriptor, then requires Docker save/load to preserve its local Docker image ID, Descriptor, media type, and linux/amd64 platform without an operator-side build or boot; build records the semantic proof against the immutable image together with the local Docker image ID and an explicit Descriptor digest with exact supported manifest media type and linux/amd64 platform, accepts only Docker's unambiguous remote Descriptor.platform linux/amd64 shape, and requires exact local/remote descriptor-digest equality before recording that immutable descriptor digest as the sole consumer identity and the actual config digest as evidence; a legacy attempt without the explicit descriptor field additionally requires the exact recorded local tag to remain present with both Docker Id and Descriptor equal to the legacy value; platform planning and runner verification refuse an image without that exact proof, while verification requires the platform evidence Worker Version to be exactly serving at 100 percent and the exact environment Container application to be healthy on that digest",
     reversal:
       "build evidence retains the exact previous immutable digest as recovery identity, not as proof of its runtime-input behavior; rollback changes only the realized image literal back to that retained digest and may pass through a new reviewed platform plan and execute only with separate valid proof for that exact predecessor image; a restore from an existing plan proves exact predecessor identity and health only, so the forward image's build evidence cannot verify predecessor compatibility",
     "failure-handling":
@@ -63,10 +73,24 @@ export type RunnerImageRuntimeInputPlanProof = Readonly<{
   image: string;
 }>;
 
+/** Local native qualification is inspection evidence, never v1 activation authority. */
+export const RUNNER_IMAGE_METERED_RUNTIME_INPUT_PLAN_PROOF_KIND =
+  "takosumi.runner-image-runtime-input-plan-proof@v2" as const;
+
+export type RunnerImageMeteredRuntimeInputPlanProof = Readonly<{
+  kind: typeof RUNNER_IMAGE_METERED_RUNTIME_INPUT_PLAN_PROOF_KIND;
+  profile: typeof HOSTED_METERED_RUNNER_PROFILE;
+  qualification: "local-native-only";
+  image: string;
+}>;
+
+export type RunnerImageBuildRuntimeInputPlanProof =
+  | RunnerImageRuntimeInputPlanProof
+  | RunnerImageMeteredRuntimeInputPlanProof;
+
 export type RunnerImageReleaseEnvironment = "staging" | "production";
 
-export type RunnerImageBuildRecord = Readonly<{
-  kind: "takosumi.runner-image-release@v3";
+type RunnerImageBuildFields = Readonly<{
   operation: "build";
   status: "planned" | "published";
   environment: RunnerImageReleaseEnvironment;
@@ -92,7 +116,7 @@ export type RunnerImageBuildRecord = Readonly<{
     immutableRef: string | null;
     imageConfigDigest?: string | null;
   };
-  runtimeInputPlanProof?: RunnerImageRuntimeInputPlanProof;
+  runtimeInputPlanProof?: RunnerImageBuildRuntimeInputPlanProof;
   reconciledBy?: {
     branch: string;
     repository: string;
@@ -102,6 +126,19 @@ export type RunnerImageBuildRecord = Readonly<{
   review: string | null;
 }>;
 
+export type RunnerImageBuildRecord = RunnerImageBuildFields & (
+  | Readonly<{
+      kind: "takosumi.runner-image-release@v3";
+      profile?: never;
+      meteredNativeProof?: never;
+    }>
+  | Readonly<{
+      kind: "takosumi.runner-image-release@v4";
+      profile: typeof HOSTED_METERED_RUNNER_PROFILE;
+      meteredNativeProof?: RunnerImageMeteredNativeProof;
+    }>
+);
+
 export type PublishedRunnerImageBuildRecord = RunnerImageBuildRecord & {
   readonly status: "published";
   readonly image: RunnerImageBuildRecord["image"] & {
@@ -109,7 +146,14 @@ export type PublishedRunnerImageBuildRecord = RunnerImageBuildRecord & {
     readonly immutableRef: string;
   };
   readonly review: string;
-};
+} & (
+  | Readonly<{ kind: "takosumi.runner-image-release@v3" }>
+  | Readonly<{
+      kind: "takosumi.runner-image-release@v4";
+      meteredNativeProof: RunnerImageMeteredNativeProof;
+      runtimeInputPlanProof: RunnerImageMeteredRuntimeInputPlanProof;
+    }>
+);
 
 const RUNNER_IMAGE =
   /^registry\.cloudflare\.com\/[0-9a-f]{32}\/takosumi-runner@sha256:[0-9a-f]{64}$/u;
@@ -132,9 +176,20 @@ export function isRunnerImageRuntimeInputPlanProof(
   );
 }
 
+export function isRunnerImageMeteredRuntimeInputPlanProof(
+  value: unknown,
+  image: string,
+): value is RunnerImageMeteredRuntimeInputPlanProof {
+  return record(value) && exactKeys(value, ["kind", "profile", "qualification", "image"]) &&
+    value.kind === RUNNER_IMAGE_METERED_RUNTIME_INPUT_PLAN_PROOF_KIND &&
+    value.profile === HOSTED_METERED_RUNNER_PROFILE &&
+    value.qualification === "local-native-only" && value.image === image && RUNNER_IMAGE.test(image);
+}
+
 export function isPublishedRunnerImageBuildRecord(
   value: unknown,
 ): value is PublishedRunnerImageBuildRecord {
+  const metered = record(value) && value.kind === "takosumi.runner-image-release@v4";
   if (
     !record(value) ||
     !exactKeys(
@@ -151,9 +206,17 @@ export function isPublishedRunnerImageBuildRecord(
         "source",
         "status",
       ],
-      ["reconciledBy", "runtimeInputPlanProof"],
+      metered
+        ? ["reconciledBy", "runtimeInputPlanProof", "profile", "meteredNativeProof"]
+        : ["reconciledBy", "runtimeInputPlanProof"],
     ) ||
-    value.kind !== "takosumi.runner-image-release@v3" ||
+    (value.kind !== "takosumi.runner-image-release@v3" && !metered) ||
+    (metered && (
+      value.profile !== HOSTED_METERED_RUNNER_PROFILE ||
+      !record(value.image) || typeof value.image.immutableRef !== "string" ||
+      !isRunnerImageMeteredNativeProof(value.meteredNativeProof, value.image.immutableRef) ||
+      !isRunnerImageMeteredRuntimeInputPlanProof(value.runtimeInputPlanProof, value.image.immutableRef)
+    )) ||
     value.operation !== "build" ||
     value.status !== "published" ||
     (value.environment !== "staging" && value.environment !== "production") ||
@@ -218,7 +281,7 @@ export function isPublishedRunnerImageBuildRecord(
     (value.runtimeInputPlanProof !== undefined &&
       (typeof value.source.buildContextSha256 !== "string" ||
         typeof value.image.imageConfigDigest !== "string" ||
-        !isRunnerImageRuntimeInputPlanProof(
+        !(metered ? isRunnerImageMeteredRuntimeInputPlanProof : isRunnerImageRuntimeInputPlanProof)(
           value.runtimeInputPlanProof,
           value.image.immutableRef,
         ))) ||
@@ -246,9 +309,20 @@ export function runnerImageRuntimeInputPlanProofFromBuildRecord(
 ): RunnerImageRuntimeInputPlanProof | null {
   if (
     !isPublishedRunnerImageBuildRecord(value) ||
+    value.kind !== "takosumi.runner-image-release@v3" ||
     value.image.immutableRef !== image ||
-    value.runtimeInputPlanProof === undefined
+    !isRunnerImageRuntimeInputPlanProof(value.runtimeInputPlanProof, image)
   ) {
+    return null;
+  }
+  return value.runtimeInputPlanProof;
+}
+
+export function runnerImageBuildRuntimeInputPlanProofFromBuildRecord(
+  value: unknown,
+  image: string,
+): RunnerImageBuildRuntimeInputPlanProof | null {
+  if (!isPublishedRunnerImageBuildRecord(value) || value.image.immutableRef !== image || value.runtimeInputPlanProof === undefined) {
     return null;
   }
   return value.runtimeInputPlanProof;

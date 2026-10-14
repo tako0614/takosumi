@@ -135,6 +135,21 @@ test("real release flow accepts a proved runner image across Worker commits and 
   const publishedBuild = JSON.parse(
     readFileSync(buildEvidence, "utf8"),
   ) as RunnerImageBuildRecord;
+  const meteredBuild = {
+    ...publishedBuild,
+    kind: "takosumi.runner-image-release@v4",
+    profile: "hosted-metered-v1",
+    runtimeInputPlanProof: {
+      kind: "takosumi.runner-image-runtime-input-plan-proof@v2",
+      profile: "hosted-metered-v1", qualification: "local-native-only", image: NEXT_IMAGE,
+    },
+    meteredNativeProof: {
+      kind: "takosumi.runner-image-hosted-metered-native-proof@v1",
+      profile: "hosted-metered-v1", image: NEXT_IMAGE,
+      nativeEntrypoint: "passed", childBoundary: "passed",
+      kernelCpuAndDrain: "passed", authenticatedRunLifecycle: "passed",
+    },
+  };
   const unprovenBuild: Record<string, unknown> = { ...publishedBuild };
   delete unprovenBuild.runtimeInputPlanProof;
   const legacyBuild: Record<string, unknown> = {
@@ -146,6 +161,11 @@ test("real release flow accepts a proved runner image across Worker commits and 
   for (const [name, incompatibleBuild] of [
     ["unproven", unprovenBuild],
     ["legacy", legacyBuild],
+    ["metered-missing-proof", { ...meteredBuild, meteredNativeProof: undefined }],
+    ["metered-missing-profile", { ...meteredBuild, profile: undefined }],
+    ["metered-unknown-boundary", { ...meteredBuild, meteredNativeProof: { ...meteredBuild.meteredNativeProof, childBoundary: "unavailable" } }],
+    ["metered-forged-image", { ...meteredBuild, meteredNativeProof: { ...meteredBuild.meteredNativeProof, image: otherImage } }],
+    ["standard-injected-metered", { ...meteredBuild, kind: "takosumi.runner-image-release@v3" }],
     [
       "legacy-proof",
       {
@@ -243,6 +263,19 @@ test("real release flow accepts a proved runner image across Worker commits and 
     expect(dashboardBuilds, name).toBe(0);
     expect(closureBuilds, name).toBe(0);
   }
+  const localOnlyEvidence = join(operatorRoot, "runner-build-metered-local-only.jsonl");
+  writeFileSync(localOnlyEvidence, JSON.stringify(meteredBuild) + "\n", { mode: 0o600 });
+  let localOnlySideEffects = 0;
+  await expect(runPlatformWorkerRelease([
+    "plan", "--config", config, "--runner-build-evidence", localOnlyEvidence,
+    "--plan-out", join(operatorRoot, "refused-metered-plan.json"),
+  ], "staging", {
+    ...platformPlanRuntime(repositoryRoot),
+    buildDashboard: async () => { localOnlySideEffects += 1; throw new Error("not reached"); },
+    readPredecessor: async () => { localOnlySideEffects += 1; throw new Error("not reached"); },
+    createClosure: async () => { localOnlySideEffects += 1; throw new Error("not reached"); },
+  })).rejects.toThrow("platform_worker_release_metered_activation_unavailable");
+  expect(localOnlySideEffects).toBe(0);
   const independentRunnerCommit = "e".repeat(40);
   const independentBuild = {
     ...publishedBuild,
@@ -385,6 +418,15 @@ test("real release flow accepts a proved runner image across Worker commits and 
   });
   expect(independentBuild.source.commit).not.toBe(platformPlan.sourceCommit);
 
+  let localOnlyExecuteSideEffects = 0;
+  await expect(completeRelease({
+    action: "execute", plan: planPath, confirmation: platformPlan.confirmation,
+    reviewer: "operator:platform-reviewer", evidence: join(operatorRoot, "refused-metered-execute.json"),
+  }, { ...platformPlan, runnerImageProof: meteredBuild.runtimeInputPlanProof } as unknown as PlatformReleasePlan, true, undefined,
+  async () => { localOnlyExecuteSideEffects += 1; throw new Error("provider not reached"); },
+  () => { localOnlyExecuteSideEffects += 1; throw new Error("custody not reached"); },
+  )).rejects.toThrow("platform_worker_release_runner_image_proof_invalid");
+  expect(localOnlyExecuteSideEffects).toBe(0);
   const platformEvidence = join(operatorRoot, "platform-evidence.json");
   const releaseCommand = successfulPlatformReleaseCommand(platformPlan);
   await completeRelease(
