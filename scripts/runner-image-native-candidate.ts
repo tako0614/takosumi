@@ -207,6 +207,7 @@ export async function runRunnerImageNativeCandidate(
         kind: RUNNER_IMAGE_NATIVE_PROOF_KIND,
         descriptorDigest: hardenedProof.descriptorDigest,
         hardenedRuntimeInputPlan: hardenedProof.hardenedRuntimeInputPlan,
+        savedPlanStateMetadata: hardenedProof.savedPlanStateMetadata,
         fullHttpPlanApply: "passed",
       },
     };

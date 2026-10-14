@@ -8,8 +8,10 @@ import { platformReleaseSourceAuthorityDigest } from "./platform-release-source.
 
 export const RUNNER_IMAGE_NATIVE_CANDIDATE_KIND =
   "takosumi.runner-image-native-candidate@v1" as const;
-export const RUNNER_IMAGE_NATIVE_PROOF_KIND =
+export const RUNNER_IMAGE_NATIVE_PROOF_KIND_V1 =
   "takosumi.runner-image-native-proof@v1" as const;
+export const RUNNER_IMAGE_NATIVE_PROOF_KIND =
+  "takosumi.runner-image-native-proof@v2" as const;
 
 export const DOCKER_SCHEMA2_MANIFEST_MEDIA_TYPE =
   "application/vnd.docker.distribution.manifest.v2+json" as const;
@@ -25,6 +27,7 @@ const GITHUB_REPOSITORY_SLUG =
 export const RUNNER_IMAGE_NATIVE_CANDIDATE_ARCHIVE_MAX_BYTES =
   8 * 1024 * 1024 * 1024;
 export const RUNNER_BOOT_SMOKE_OUTPUT_MAX_BYTES = 4_096;
+export const RUNNER_BOOT_SMOKE_PLAN_MAX_BYTES = 64 * 1024 * 1024;
 export const RUNNER_BOOT_SMOKE_MARKER = "takosumi-runner-boot-ok" as const;
 const RUNNER_RUNTIME_INPUT_PLAN_VARIABLE = "takosumi_runtime_inputs__probe";
 const RUNNER_RUNTIME_INPUT_PLAN_NAME = "PROBE_TOKEN";
@@ -62,9 +65,10 @@ export type LocalRunnerImageIdentity = Readonly<{
 export type RunnerImageHardenedNativeProof = Readonly<{
   descriptorDigest: string;
   hardenedRuntimeInputPlan: "passed";
+  savedPlanStateMetadata: "passed";
 }>;
 
-export type RunnerImageNativeCandidateRecord = Readonly<{
+type RunnerImageNativeCandidateBase = Readonly<{
   kind: typeof RUNNER_IMAGE_NATIVE_CANDIDATE_KIND;
   observedAt: string;
   source: {
@@ -88,8 +92,21 @@ export type RunnerImageNativeCandidateRecord = Readonly<{
     size: number;
     sha256: string;
   };
+}>;
+
+export type RunnerImageNativeCandidateRecord = RunnerImageNativeCandidateBase & Readonly<{
   nativeProof: {
     kind: typeof RUNNER_IMAGE_NATIVE_PROOF_KIND;
+    descriptorDigest: string;
+    hardenedRuntimeInputPlan: "passed";
+    savedPlanStateMetadata: "passed";
+    fullHttpPlanApply: "passed";
+  };
+}>;
+
+export type HistoricalRunnerImageNativeCandidateRecord = RunnerImageNativeCandidateBase & Readonly<{
+  nativeProof: {
+    kind: typeof RUNNER_IMAGE_NATIVE_PROOF_KIND_V1;
     descriptorDigest: string;
     hardenedRuntimeInputPlan: "passed";
     fullHttpPlanApply: "passed";
@@ -98,7 +115,7 @@ export type RunnerImageNativeCandidateRecord = Readonly<{
 
 export function parseRunnerImageNativeCandidateRecord(
   source: string,
-): RunnerImageNativeCandidateRecord {
+): RunnerImageNativeCandidateRecord | HistoricalRunnerImageNativeCandidateRecord {
   let value: unknown;
   try {
     value = JSON.parse(source) as unknown;
@@ -113,7 +130,7 @@ export function parseRunnerImageNativeCandidateRecord(
 
 export function isRunnerImageNativeCandidateRecord(
   value: unknown,
-): value is RunnerImageNativeCandidateRecord {
+): value is RunnerImageNativeCandidateRecord | HistoricalRunnerImageNativeCandidateRecord {
   if (
     !record(value) ||
     !exactKeys(value, [
@@ -182,13 +199,16 @@ export function isRunnerImageNativeCandidateRecord(
     typeof value.archive.sha256 !== "string" ||
     !SHA256.test(value.archive.sha256) ||
     !record(value.nativeProof) ||
-    !exactKeys(value.nativeProof, [
-      "descriptorDigest",
-      "fullHttpPlanApply",
-      "hardenedRuntimeInputPlan",
-      "kind",
-    ]) ||
-    value.nativeProof.kind !== RUNNER_IMAGE_NATIVE_PROOF_KIND ||
+    !(
+      (value.nativeProof.kind === RUNNER_IMAGE_NATIVE_PROOF_KIND_V1 &&
+        exactKeys(value.nativeProof, [
+          "descriptorDigest", "fullHttpPlanApply", "hardenedRuntimeInputPlan", "kind",
+        ])) ||
+      (value.nativeProof.kind === RUNNER_IMAGE_NATIVE_PROOF_KIND &&
+        exactKeys(value.nativeProof, [
+          "descriptorDigest", "fullHttpPlanApply", "hardenedRuntimeInputPlan", "kind", "savedPlanStateMetadata",
+        ]) && value.nativeProof.savedPlanStateMetadata === "passed")
+    ) ||
     value.nativeProof.descriptorDigest !== value.image.descriptorDigest ||
     value.nativeProof.hardenedRuntimeInputPlan !== "passed" ||
     value.nativeProof.fullHttpPlanApply !== "passed"
@@ -196,6 +216,13 @@ export function isRunnerImageNativeCandidateRecord(
     return false;
   }
   return true;
+}
+
+export function isMetadataQualifiedRunnerImageNativeCandidateRecord(
+  value: RunnerImageNativeCandidateRecord | HistoricalRunnerImageNativeCandidateRecord,
+): value is RunnerImageNativeCandidateRecord {
+  return value.nativeProof.kind === RUNNER_IMAGE_NATIVE_PROOF_KIND &&
+    value.nativeProof.savedPlanStateMetadata === "passed";
 }
 
 export function githubRepositoryFromRemote(remote: string): string {
@@ -440,7 +467,24 @@ export async function proveRunnerImageHardenedNative(
     'const plan=await fetch("http://127.0.0.1:8080/runs/"+encodeURIComponent(runId),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(request),signal:controller.signal});',
     'if(plan.status!==200)throw new Error("plan status");',
     "const result=await plan.json();",
-    'if(!result||result.status!=="succeeded"||result.exitCode!==0||typeof result.planDigest!=="string"||result.planDigest.length===0)throw new Error("plan payload");',
+    'const digestPattern=/^sha256:[0-9a-f]{64}$/;',
+    'const artifact=result?.planArtifact;',
+    'if(!result||result.runId!==runId||result.status!=="succeeded"||result.exitCode!==0||!digestPattern.test(result.planDigest)||!artifact||artifact.kind!=="runner-local"||artifact.ref!=="runner-local://"+runId+"/tfplan"||artifact.digest!==result.planDigest||artifact.contentType!=="application/vnd.opentofu.plan"||!Number.isSafeInteger(artifact.sizeBytes)||artifact.sizeBytes<=0||artifact.sizeBytes>'+RUNNER_BOOT_SMOKE_PLAN_MAX_BYTES+')throw new Error("plan payload");',
+    'const artifactResponse=await fetch("http://127.0.0.1:8080/runs/"+encodeURIComponent(runId)+"/artifacts/tfplan",{signal:controller.signal});',
+    'if(artifactResponse.status!==200)throw new Error("artifact status");',
+    'const lengthHeader=artifactResponse.headers.get("content-length");',
+    'if(!lengthHeader||!/^[1-9][0-9]*$/.test(lengthHeader)||Number(lengthHeader)!==artifact.sizeBytes)throw new Error("artifact length");',
+    'if(!artifactResponse.body)throw new Error("artifact body");',
+    'const chunks=[];let received=0;const hasher=new Bun.CryptoHasher("sha256");',
+    'for await(const chunk of artifactResponse.body){received+=chunk.byteLength;if(received>'+RUNNER_BOOT_SMOKE_PLAN_MAX_BYTES+'||received>artifact.sizeBytes)throw new Error("artifact size");hasher.update(chunk);chunks.push(chunk);}',
+    'if(received===0||received!==artifact.sizeBytes||"sha256:"+hasher.digest("hex")!==result.planDigest)throw new Error("artifact digest");',
+    'const planBytes=new Uint8Array(received);let offset=0;for(const chunk of chunks){planBytes.set(chunk,offset);offset+=chunk.byteLength;}',
+    'const metadataUrl="http://127.0.0.1:8080/runs/"+encodeURIComponent(runId)+"/plan-state-metadata";',
+    'const metadata=await fetch(metadataUrl,{method:"POST",headers:{"x-takosumi-plan-digest":result.planDigest,"content-type":"application/octet-stream"},body:planBytes,signal:controller.signal});',
+    'if(metadata.status!==200||JSON.stringify(await metadata.json())!==JSON.stringify({lineage:"",serial:0}))throw new Error("saved Plan metadata");',
+    'const wrongDigest="sha256:"+(result.planDigest[7]==="0"?"1":"0")+result.planDigest.slice(8);',
+    'const rejected=await fetch(metadataUrl,{method:"POST",headers:{"x-takosumi-plan-digest":wrongDigest,"content-type":"application/octet-stream"},body:planBytes,signal:controller.signal});',
+    'if(rejected.status!==409||JSON.stringify(await rejected.json())!==JSON.stringify({error:"saved Plan metadata rejected"}))throw new Error("saved Plan rejection");',
     "process.stdout.write(marker+'\\n');",
     "exitCode=0;",
     "}catch{}finally{clearTimeout(timer);}",
@@ -501,6 +545,7 @@ export async function proveRunnerImageHardenedNative(
   return {
     descriptorDigest: identity.descriptorDigest,
     hardenedRuntimeInputPlan: "passed",
+    savedPlanStateMetadata: "passed",
   };
 }
 

@@ -80,6 +80,7 @@ function candidateRecord() {
       kind: RUNNER_IMAGE_NATIVE_PROOF_KIND,
       descriptorDigest: DESCRIPTOR_DIGEST,
       hardenedRuntimeInputPlan: "passed",
+      savedPlanStateMetadata: "passed",
       fullHttpPlanApply: "passed",
     },
   } as const;

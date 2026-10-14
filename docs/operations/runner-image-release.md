@@ -73,11 +73,16 @@ contain bounded, redacted diagnostics and digest fields, never secrets. The
 closed artifact revisions carrying source authority are runner release v3,
 runner publication state v2, journal recovery locator v4, platform plan v6,
 and platform ready evidence v3.
-Older artifacts fail closed; rebuild and re-plan instead of translating them.
+Older release-envelope revisions fail closed; rebuild and re-plan instead of
+translating them.
 The reader has one narrow archival exception: a closed prefix of validated v1
 publication pairs may remain in an existing journal for history inspection.
 Those rows are not current evidence and are never translated into a v2
 resolution.
+Historical native candidate and runtime-input Plan proof v1 records also remain
+parseable for exact identity and recovery inspection. They do not satisfy a new
+candidate ingestion or forward platform release, and reconciliation never
+upgrades them to v2.
 Before any evidence or coordination file is opened, the runner CLI canonicalizes
 existing and future paths and requires the realized config, its sibling source
 pin, publication state, terminal evidence, build/platform input evidence,
@@ -128,8 +133,14 @@ provider-free Plan to the native `/runs` endpoint. The generated root declares
 one defaultless sensitive ephemeral `takosumi_runtime_inputs__probe` variable,
 and the matching credential manifest dispatches an explicit empty runtime-input
 map. Success therefore proves that the image implements the runtime-input Plan
-delivery path without placing credential values in the test. Only then does the
-probe emit its known marker. Probe output is limited to 4 KiB while being
+delivery path without placing credential values in the test. The same probe
+requires the Plan response's local artifact reference, size, and digest; GETs
+that run's `tfplan` with a declared length and a 64 MiB cumulative stream cap;
+and checks nonempty exact bytes and SHA-256. It POSTs those bytes to the same
+run's `/plan-state-metadata` route, requiring HTTP 200 and exactly
+`{"lineage":"","serial":0}`. A one-digit-wrong digest must return HTTP 409
+and exactly the generic `{"error":"saved Plan metadata rejected"}` response.
+Only then does the probe emit its known marker. Probe output is limited to 4 KiB while being
 collected, and a timed-out Docker client is terminated and reaped before cleanup
 starts. The temporary container must be force-removed before publication;
 cleanup failure is an explicit refusal. A missing marker, failed startup,
@@ -141,6 +152,11 @@ candidate path below. That path authenticates and loads the tested image; it
 does not rebuild it or repeat native startup on the operator's machine. Both
 paths use the same hardened runtime-input Plan proof implementation and the
 same descriptor-bound publication journal and readback.
+This v2 native proof is source-level behavior evidence for the exact locally
+inspected image. The runner's artifact GET handler currently reads the file
+before returning it; this probe does not establish a server-side file-read
+bound or public run-ID authorization. Publication and platform convergence
+remain separate evidence.
 
 For an executing build, `CLOUDFLARE_ACCOUNT_ID` must be exactly the account in
 the realized previous-image repository. That checked publication repository,
@@ -390,9 +406,14 @@ confirms removal before publication. The same cleanup runs on pre-publication
 load/verification failure; pre-existing or changed tags are never adopted or
 removed. This lets one candidate be reused without trusting an old local tag.
 It runs neither a local build nor a local container boot in candidate mode.
-Registry descriptor equality, unknown-outcome
-reconciliation, release v3 records, platform activation, and runner verification
-remain unchanged. A downloaded candidate is not a published or active Runner.
+The consumer requires native proof v2 in the authenticated record before
+`docker image load`; a well-formed historical v1 record is retained for parsing
+only. The new published runtime-input Plan proof v2 carries the closed
+`savedPlanStateMetadata: "passed"` marker and is bound to the exact descriptor
+and immutable image.
+Registry descriptor equality, unknown-outcome reconciliation, and the release
+v3 envelope remain in force. A downloaded candidate is not a published or
+active Runner.
 
 ## 2. Change only the realized pin and release the platform
 
@@ -415,8 +436,8 @@ bun run deploy -- takosumi-platform-staging execute \
 
 For production, use `takosumi-platform`. The platform plan fully validates every
 matching published v3 runner build record. It ignores valid historical records
-without proof, deduplicates identical proof-bearing records by exact kind and
-image, and requires one unique runtime-input Plan proof naming the same
+without v2 proof, deduplicates identical v2 proof-bearing records by exact kind
+and image, and requires one unique v2 runtime-input Plan proof naming the same
 immutable image as the realized config. Missing proof, malformed matching
 provenance, or evidence only for another image fails before dashboard build,
 dry-run, or provider access. Historical rows are not rewritten or promoted by
@@ -452,7 +473,11 @@ bun run deploy -- takosumi-runner-image verify \
 ```
 
 Verify requires a proved build record and the current config SHA to equal that
-record's exact image-only transform. Before any live provider readback, it
+record's exact image-only transform. It reports the proof kind it actually read.
+Historical v1 proof permits its
+existing identity and health verification but does not claim saved Plan metadata
+qualification. A new forward release requires v2.
+Before any live provider readback, it
 validates the runner build provenance independently, then requires the platform
 ready source authority to equal the freshly resolved Worker sibling source-pin
 authority. A Worker release does not have to use the runner image's source

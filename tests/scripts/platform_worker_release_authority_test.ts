@@ -29,12 +29,15 @@ import {
   buildDryRunSeal,
   assertPlatformActionSource,
   completeRelease,
+  completeRestore,
+  createPlatformReleasePlan,
   createPlatformDeployClosure,
   createPlatformDryRunConfig,
   createPlatformUploadCustody,
   dashboardAssetTreeSeal,
   materializePinnedSource,
   parseDeployedVersion,
+  parsePlan,
   platformMutationFailureState,
   platformMutationAction,
   platformMutationCheckpointPath,
@@ -250,7 +253,7 @@ function testDigest(value: string | Uint8Array): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
-function forwardExecuteFixture(prefix: string): Readonly<{
+function forwardExecuteFixture(prefix: string, options: { predecessorImage?: string } = {}): Readonly<{
   root: string;
   planPath: string;
   evidencePath: string;
@@ -270,10 +273,10 @@ function forwardExecuteFixture(prefix: string): Readonly<{
     "max_instances = 1",
     "",
   ].join("\n");
-  const createClosure = (name: string) => {
+  const createClosure = (name: string, source = configSource) => {
     const path = join(root, name);
     mkdirSync(join(path, "dry-run"), { recursive: true });
-    writeFileSync(join(path, "wrangler.toml"), configSource);
+    writeFileSync(join(path, "wrangler.toml"), source);
     writeFileSync(join(path, "dry-run/index.js"), "export default {};\n");
     return {
       path,
@@ -284,14 +287,15 @@ function forwardExecuteFixture(prefix: string): Readonly<{
     };
   };
   const forward = createClosure("forward-closure");
-  const restore = createClosure("restore-closure");
+  const restore = createClosure("restore-closure",
+    configSource.replace(FORWARD_RUNNER_IMAGE, options.predecessorImage ?? FORWARD_RUNNER_IMAGE));
   const operatorConfigPath = join(root, "wrangler.staging.toml");
   writeFileSync(operatorConfigPath, configSource, { mode: 0o600 });
   const predecessorContainer: PlatformContainerState = {
     id: "planned-application-id",
     name: "takosumi-staging-opentofurunnerobject",
     state: "ready",
-    image: FORWARD_RUNNER_IMAGE,
+    image: options.predecessorImage ?? FORWARD_RUNNER_IMAGE,
     version: 85,
     hasActiveRollout: false,
     health: { failed: 0, starting: 0, scheduling: 0, errorCount: 0 },
@@ -321,8 +325,9 @@ function forwardExecuteFixture(prefix: string): Readonly<{
       commit: sourceCommit,
     }),
     runnerImageProof: {
-      kind: "takosumi.runner-image-runtime-input-plan-proof@v1" as const,
+      kind: "takosumi.runner-image-runtime-input-plan-proof@v2" as const,
       image: FORWARD_RUNNER_IMAGE,
+      savedPlanStateMetadata: "passed" as const,
     },
     releaseNonce: "a".repeat(32),
     configPath: operatorConfigPath,
@@ -2049,6 +2054,158 @@ test("real completeRelease refuses a changed repository pin before provider read
   expect(JSON.parse(readFileSync(fixture.evidencePath, "utf8"))).toMatchObject({
     mutationOutcome: "not-started",
     diagnostic: { message: "platform_worker_release_source_drift" },
+  });
+});
+
+test("forward execution rejects a historical v1 sealed proof before provider calls", async () => {
+  const fixture = forwardExecuteFixture("takosumi-platform-historical-proof-");
+  const historicalPlan = {
+    ...fixture.plan,
+    runnerImageProof: {
+      kind: "takosumi.runner-image-runtime-input-plan-proof@v1" as const,
+      image: FORWARD_RUNNER_IMAGE,
+    },
+  };
+  const { confirmation: _confirmation, releaseTag: _releaseTag, ...historicalIdentity } = historicalPlan;
+  expect(() => createPlatformReleasePlan(historicalIdentity)).toThrow(
+    "platform_worker_release_plan_invalid",
+  );
+  let providerCalls = 0;
+  await expect(completeRelease({
+    action: "execute", plan: fixture.planPath,
+    confirmation: fixture.plan.confirmation,
+    reviewer: "operator:test-reviewer", evidence: fixture.evidencePath,
+  }, historicalPlan, true, undefined, async () => {
+    providerCalls += 1;
+    throw new Error("provider must not be reached");
+  })).rejects.toThrow("platform_worker_release_incomplete");
+  expect(providerCalls).toBe(0);
+  expect(JSON.parse(readFileSync(fixture.evidencePath, "utf8"))).toMatchObject({
+    mutationOutcome: "not-started",
+    diagnostic: { message: "platform_worker_release_runner_image_proof_invalid" },
+  });
+});
+
+test("a sealed v1 plan keeps its original confirmation through recovery and predecessor restore", async () => {
+  const fixture = forwardExecuteFixture("takosumi-platform-v1-recovery-", {
+    predecessorImage: RESTORE_RUNNER_IMAGE,
+  });
+  const { confirmation: _newConfirmation, releaseTag: _newTag, ...newIdentity } = fixture.plan;
+  const oldIdentity = {
+    ...newIdentity,
+    runnerImageProof: {
+      kind: "takosumi.runner-image-runtime-input-plan-proof@v1" as const,
+      image: FORWARD_RUNNER_IMAGE,
+    },
+  };
+  const releaseTag = `tks-stg-${testDigest(JSON.stringify(oldIdentity)).slice(7, 55)}`;
+  const subject = { ...oldIdentity, releaseTag };
+  const historical = { ...subject, confirmation: testDigest(JSON.stringify(subject)) };
+  writeFileSync(fixture.planPath, `${JSON.stringify(historical, null, 2)}\n`, { mode: 0o600 });
+  const parsed = parsePlan(new TextEncoder().encode(readFileSync(fixture.planPath, "utf8")),
+    historical.confirmation, "staging");
+  expect(parsed).toEqual(historical);
+  expect(parsed.confirmation).not.toBe(fixture.plan.confirmation);
+  let forbiddenForwardCalls = 0;
+  const forwardEvidence = join(fixture.root, "v1-forward-rejected.json");
+  await expect(completeRelease({
+    action: "execute", plan: fixture.planPath, confirmation: parsed.confirmation,
+    reviewer: "operator:test-reviewer", evidence: forwardEvidence,
+  }, parsed, true, undefined, async () => {
+    forbiddenForwardCalls += 1;
+    throw new Error("provider must not be reached");
+  })).rejects.toThrow("platform_worker_release_incomplete");
+  expect(forbiddenForwardCalls).toBe(0);
+  expect(readPlatformMutationFence(fixture.planPath, parsed.confirmation)).toBeNull();
+  expect(JSON.parse(readFileSync(forwardEvidence, "utf8"))).toMatchObject({
+    mutationOutcome: "not-started",
+    diagnostic: { message: "platform_worker_release_runner_image_proof_invalid" },
+  });
+  appendPlatformMutationFence(fixture.planPath, parsed.confirmation,
+    { outcome: "unknown", versionId: null });
+  appendPlatformMutationFence(fixture.planPath, parsed.confirmation,
+    { outcome: "accepted", versionId: DEPLOYED });
+
+  let serving = DEPLOYED;
+  let image = FORWARD_RUNNER_IMAGE;
+  const mutations: string[] = [];
+  const restoreVersion = CONCURRENT;
+  const restoreTag = `tks-rst-${parsed.confirmation.slice(7, 55)}`;
+  const sourceRuntime = {
+    checkoutIdentity: () => ({ repository: parsed.sourceRepository, commit: parsed.sourceCommit }),
+    isAncestor: () => true,
+  };
+  const command: PlatformReleaseCommand = async (argv) => {
+    if (argv[1] === "deployments" && argv[2] === "status") return successfulCommand(
+      JSON.stringify({ id: "deployment", versions: [{ version_id: serving, percentage: 100 }] }));
+    if (argv[1] === "containers" && (argv[2] === "list" || argv[2] === "info")) {
+      const state = { ...parsed.predecessorContainer, image,
+        version: image === FORWARD_RUNNER_IMAGE ? 86 : 87 };
+      if (argv[2] === "list") return successfulCommand(JSON.stringify([{
+        id: state.id, name: state.name, state: state.state, image: state.image,
+        version: state.version,
+      }]));
+      return successfulCommand(JSON.stringify({
+        id: state.id, name: state.name, state: state.state, version: state.version,
+        configuration: { image: state.image }, active_rollout_id: null,
+        health: { instances: { failed: 0, starting: 0, scheduling: 0 }, errors: [] },
+      }));
+    }
+    if (argv[1] === "versions" && argv[2] === "view") {
+      const version = argv[3]!;
+      return successfulCommand(JSON.stringify({
+        id: version,
+        annotations: {
+          "workers/tag": version === DEPLOYED ? parsed.releaseTag : restoreTag,
+          "workers/message": version === DEPLOYED
+            ? `takosumi-platform-release ${parsed.confirmation}`
+            : `takosumi-platform-restore ${parsed.confirmation}`,
+        },
+        resources: { script: { handlers: ["fetch"] }, bindings: [
+          { name: "ASSETS", type: "assets" },
+          { name: "HOSTED", type: "service", service: "takosumi-hosted-staging" },
+          { name: "TAKOSUMI_ACCOUNTS_DB", type: "d1" },
+          { name: "TAKOSUMI_CONTROL_DB", type: "d1" },
+          { name: "TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY", type: "secret_text" },
+          { name: "TAKOSUMI_VERSION_METADATA", type: "version_metadata" },
+        ] },
+      }));
+    }
+    if (argv[1] === "deploy") {
+      mutations.push("restore-container-image");
+      image = RESTORE_RUNNER_IMAGE;
+      serving = restoreVersion;
+      return successfulCommand(`Current Version ID: ${restoreVersion}\n`);
+    }
+    if (argv[1] === "versions" && argv[2] === "deploy") {
+      mutations.push("restore-predecessor-version");
+      serving = PREVIOUS;
+      return successfulCommand("");
+    }
+    throw new Error(`unexpected local recovery command: ${argv.join(" ")}`);
+  };
+  const publicReadback = async () => {};
+  const recoveryEvidence = join(fixture.root, "v1-recovery-evidence.json");
+  await completeRelease({
+    action: "recover", plan: fixture.planPath, confirmation: parsed.confirmation,
+    reviewer: "operator:test-reviewer", evidence: recoveryEvidence,
+  }, parsed, false, parsed.sourceCommit, command, undefined, publicReadback,
+  sourceRuntime);
+  expect(JSON.parse(readFileSync(recoveryEvidence, "utf8"))).toMatchObject({
+    status: "ready", planConfirmation: parsed.confirmation,
+    predecessorContainer: { image: RESTORE_RUNNER_IMAGE },
+  });
+  expect(mutations).toEqual([]);
+
+  const restoreEvidence = join(fixture.root, "v1-restore-evidence.json");
+  await completeRestore({
+    action: "restore", plan: fixture.planPath, confirmation: parsed.confirmation,
+    reviewer: "operator:test-reviewer", evidence: restoreEvidence,
+  }, parsed, parsed.sourceCommit, command, publicReadback, sourceRuntime);
+  expect(mutations).toEqual(["restore-container-image", "restore-predecessor-version"]);
+  expect(JSON.parse(readFileSync(restoreEvidence, "utf8"))).toMatchObject({
+    status: "restored", planConfirmation: parsed.confirmation,
+    predecessorContainer: { image: RESTORE_RUNNER_IMAGE },
   });
 });
 

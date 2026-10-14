@@ -137,6 +137,13 @@ test("real release flow accepts a proved runner image across Worker commits and 
   ) as RunnerImageBuildRecord;
   const unprovenBuild: Record<string, unknown> = { ...publishedBuild };
   delete unprovenBuild.runtimeInputPlanProof;
+  const historicalV1ProofBuild = {
+    ...publishedBuild,
+    runtimeInputPlanProof: {
+      kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+      image: NEXT_IMAGE,
+    },
+  };
   const legacyBuild: Record<string, unknown> = {
     ...unprovenBuild,
     kind: "takosumi.runner-image-release@v2",
@@ -145,6 +152,7 @@ test("real release flow accepts a proved runner image across Worker commits and 
     `registry.cloudflare.com/${"b".repeat(32)}/takosumi-runner@sha256:${"e".repeat(64)}`;
   for (const [name, incompatibleBuild] of [
     ["unproven", unprovenBuild],
+    ["historical-v1-only", historicalV1ProofBuild],
     ["legacy", legacyBuild],
     [
       "legacy-proof",
@@ -258,7 +266,9 @@ test("real release flow accepts a proved runner image across Worker commits and 
   };
   for (const [name, records] of [
     ["historical-unproven-then-proved", [unprovenBuild, independentBuild]],
+    ["historical-v1-then-v2", [historicalV1ProofBuild, independentBuild]],
     ["duplicate-proved", [independentBuild, independentBuild]],
+    ["distinct-v2-builds-same-semantic-proof", [publishedBuild, independentBuild]],
   ] as const) {
     const historyEvidence = join(operatorRoot, `runner-build-${name}.jsonl`);
     const historyPlan = join(operatorRoot, `platform-plan-${name}.json`);
@@ -282,8 +292,9 @@ test("real release flow accepts a proved runner image across Worker commits and 
     );
     expect(JSON.parse(readFileSync(historyPlan, "utf8"))).toMatchObject({
       runnerImageProof: {
-        kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+        kind: "takosumi.runner-image-runtime-input-plan-proof@v2",
         image: NEXT_IMAGE,
+        savedPlanStateMetadata: "passed",
       },
     });
   }
@@ -380,8 +391,9 @@ test("real release flow accepts a proved runner image across Worker commits and 
     configSha256: activationSha256,
   });
   expect(platformPlan.runnerImageProof).toEqual({
-    kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+    kind: "takosumi.runner-image-runtime-input-plan-proof@v2",
     image: NEXT_IMAGE,
+    savedPlanStateMetadata: "passed",
   });
   expect(independentBuild.source.commit).not.toBe(platformPlan.sourceCommit);
 
