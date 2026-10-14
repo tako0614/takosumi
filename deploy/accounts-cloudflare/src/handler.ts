@@ -169,6 +169,8 @@ const ACCOUNTS_HANDLER_INIT_MAX_AGE_MS = 30_000;
 const ACCOUNTS_HANDLER_INIT_FAILURE_BACKOFF_MS = 1_000;
 // Per env and identity/control cache: three displaced flights plus one current.
 const ACCOUNTS_HANDLER_INIT_MAX_ABANDONED = 3;
+// Saturated callers may join the current flight, with bounded timer retention.
+const ACCOUNTS_HANDLER_INIT_MAX_CAPACITY_WAITERS = 32;
 
 class AccountsHandlerInitializationTimeoutError extends Error {
   constructor(readonly initializationWaitMs: number) {
@@ -489,6 +491,7 @@ async function cachedAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   const cache = identityOnly ? identityHandlers : handlers;
   let cached = cache.get(env);
   const waitStartedAt = nowMs();
+  let atAbandonmentCapacity = false;
   if (cached?.outcome?.status === "rejected" &&
     waitStartedAt >= cached.outcome.retryAtMs) {
     // This decision and installation of the replacement run without an await.
@@ -502,35 +505,50 @@ async function cachedAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   ) {
     const abandonedInits = getAbandonedAccountsHandlerCount(env, identityOnly);
     if (abandonedInits >= ACCOUNTS_HANDLER_INIT_MAX_ABANDONED) {
-      context?.waitUntil(cached.initialization);
+      atAbandonmentCapacity = true;
+      const waiterCapacityReached =
+        cached.waiters.size >= ACCOUNTS_HANDLER_INIT_MAX_CAPACITY_WAITERS;
       console.warn(
         JSON.stringify({
-          event: "accounts_handler_initialization_unavailable",
+          event: waiterCapacityReached
+            ? "accounts_handler_initialization_unavailable"
+            : "accounts_handler_initialization_capacity_wait",
           mode: identityOnly ? "identity" : "control",
           stage: "abandonment_capacity",
+          outcome: waiterCapacityReached ? "waiter_capacity" : "waiting",
+          count: 1,
+          activeWaiters: cached.waiters.size,
+          maxWaiters: ACCOUNTS_HANDLER_INIT_MAX_CAPACITY_WAITERS,
+          timeoutMs: ACCOUNTS_HANDLER_INIT_DEADLINE_MS,
           abandonedInits,
           abandonedInitsTotal: getAbandonedAccountsHandlerTotal(env, identityOnly),
           maxAbandonedInits: ACCOUNTS_HANDLER_INIT_MAX_ABANDONED,
         }),
       );
-      throw new AccountsHandlerInitializationTimeoutError(0);
+      if (waiterCapacityReached) {
+        context?.waitUntil(cached.initialization);
+        throw new AccountsHandlerInitializationTimeoutError(0);
+      }
+      // Join only the current attempt. An obsolete settlement never wakes a
+      // caller or starts more I/O; a later request may use the released slot.
+    } else {
+      cached.abandoned = true;
+      const counts = updateAbandonedAccountsHandlerCount(
+        env,
+        identityOnly,
+        1,
+      );
+      console.warn(
+        JSON.stringify({
+          event: "accounts_handler_initialization_abandoned",
+          mode: identityOnly ? "identity" : "control",
+          ...counts,
+          maxAbandonedInits: ACCOUNTS_HANDLER_INIT_MAX_ABANDONED,
+        }),
+      );
+      cache.delete(env);
+      cached = undefined;
     }
-    cached.abandoned = true;
-    const counts = updateAbandonedAccountsHandlerCount(
-      env,
-      identityOnly,
-      1,
-    );
-    console.warn(
-      JSON.stringify({
-        event: "accounts_handler_initialization_abandoned",
-        mode: identityOnly ? "identity" : "control",
-        ...counts,
-        maxAbandonedInits: ACCOUNTS_HANDLER_INIT_MAX_ABANDONED,
-      }),
-    );
-    cache.delete(env);
-    cached = undefined;
   }
   if (!cached) {
     cached = {
@@ -605,7 +623,13 @@ async function cachedAccountsHandler<TEnv extends CloudflareWorkerEnv>(
           JSON.stringify({
             event: "accounts_handler_initialization_unavailable",
             mode: identityOnly ? "identity" : "control",
-            stage: "await_handler",
+            stage: atAbandonmentCapacity ? "abandonment_capacity" : "await_handler",
+            ...(atAbandonmentCapacity ? {
+              outcome: "timeout",
+              count: 1,
+              abandonedInits: getAbandonedAccountsHandlerCount(env, identityOnly),
+              maxWaiters: ACCOUNTS_HANDLER_INIT_MAX_CAPACITY_WAITERS,
+            } : {}),
             timeoutMs: ACCOUNTS_HANDLER_INIT_DEADLINE_MS,
             elapsedMs: initializationWaitMs,
             errorName: "TimeoutError",
@@ -619,6 +643,16 @@ async function cachedAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     };
     cached!.waiters.add(waiter);
   });
+  if (atAbandonmentCapacity) {
+    console.warn(JSON.stringify({
+      event: "accounts_handler_initialization_capacity_wait",
+      mode: identityOnly ? "identity" : "control",
+      stage: "abandonment_capacity",
+      outcome: "fulfilled",
+      count: 1,
+      elapsedMs: nowMs() - waitStartedAt,
+    }));
+  }
   return { handler, initializationWaitMs: nowMs() - waitStartedAt };
 }
 
