@@ -1,3 +1,5 @@
+import type { ReviewedRecoveryApprovalMutation } from "../reviewed-recovery-state.ts";
+import { canonicalOwnerJson, ownerContextBucket, ownerReceiptBucket, reviewedApprovalBucket, reviewedApprovalCurrentBucket, reviewedApprovalRefBucket, reviewedApprovalRefKey } from "../owner-operation-evidence.ts";
 import type {
   CredentialUnlinkIntent,
   CredentialUnlinkReceipt,
@@ -56,6 +58,31 @@ export class PostgresIdentityRecordRepository
   implements IdentityRecordRepository
 {
   constructor(readonly client: PostgresQueryClient) {}
+  async commitReviewedRecoveryApproval(input: ReviewedRecoveryApprovalMutation): Promise<boolean> {
+    const {record:r,pointer:p}=input,a=r.approval,args:unknown[]=[];const bind=(v:unknown)=>{args.push(v);return `$${args.length}`;};
+    const opId=bind(a.operationId),source=bind(a.sourceAccountId),target=bind(a.targetAccountId);
+    const ref={operationId:a.operationId,recoveryId:a.recoveryId,reviewedApprovalRef:a.reviewedApprovalRef,approvalDigest:r.approvalDigest};
+    const opGuard=`bucket='identity_merge_operations' AND key=${opId} AND (document->>'revision')::bigint=${bind(a.operationRevision)} AND document->>'sourceSubject'=${source} AND document->>'targetSubject'=${target} AND document->'contextPlan'->>'planDigest'=${bind(a.planDigest)} AND document ? 'consentAt' AND document->>'status' ${a.mode==="abort-before-active"?"IN ('proved','reconciled','quarantined')":"='quarantined'"}`;
+    const generations=`((key=${source} AND (document->>'generation')::bigint=${bind(a.sourceIdentityGeneration)}) OR (key=${target} AND (document->>'generation')::bigint=${bind(a.targetIdentityGeneration)}))`;
+    let guard=`(SELECT count(*) FROM operation_claim)=1 AND (SELECT count(*) FROM generation_claim)=2 AND (SELECT count(*) FROM lock_claim)=2`;
+    for(const [subject,canonical]of [[a.sourceAccountId,a.mode==="abort-before-active"?a.sourceAccountId:a.targetAccountId],[a.targetAccountId,a.targetAccountId]]as const)guard+=` AND COALESCE((SELECT c.document->>'targetSubject' FROM ${table} c WHERE c.bucket='canonical_accounts' AND c.key=${bind(subject)}),${bind(subject)})=${bind(canonical)}`;
+    const hash=bind(r.approvalDigest),record=bind(canonicalOwnerJson(r)),refBody=bind(canonicalOwnerJson(ref));
+    guard+=` AND NOT EXISTS(SELECT 1 FROM ${table} h WHERE h.bucket='${reviewedApprovalBucket}' AND h.key=${hash} AND h.document<>${record}::jsonb)`;
+    const refKey=bind(reviewedApprovalRefKey(a));
+    guard+=` AND NOT EXISTS(SELECT 1 FROM ${table} f WHERE f.bucket='${reviewedApprovalRefBucket}' AND f.key=${refKey} AND f.document<>${refBody}::jsonb)`;
+    if(input.expectedApprovalDigest!==undefined)guard+=` AND EXISTS(SELECT 1 FROM ${table} h WHERE h.bucket='${reviewedApprovalBucket}' AND h.key=${bind(input.expectedApprovalDigest)} AND h.document->>'decisionDigest'=${bind(r.decisionDigest)} AND (h.document->'approval'->>'createdAt')::bigint<${bind(a.createdAt)})`;
+    const pointer=bind(canonicalOwnerJson(p));
+    const newRecordGuard=`${guard} AND NOT EXISTS(SELECT 1 FROM ${table} h WHERE h.bucket='${reviewedApprovalBucket}' AND h.key=${hash}) AND NOT EXISTS(SELECT 1 FROM ${table} f WHERE f.bucket='${reviewedApprovalRefBucket}' AND f.key=${refKey})`;
+    const changed=input.expectedApprovalDigest===undefined
+      ?`INSERT INTO ${table}(bucket,key,document,subject,other_subject) SELECT '${reviewedApprovalCurrentBucket}',${opId},${pointer}::jsonb,${target},${source} WHERE ${newRecordGuard} ON CONFLICT DO NOTHING RETURNING key`
+      :`UPDATE ${table} SET document=${pointer}::jsonb WHERE bucket='${reviewedApprovalCurrentBucket}' AND key=${opId} AND document->>'approvalDigest'=${bind(input.expectedApprovalDigest)} AND (document->>'revision')::bigint=${bind(p.revision-1)} AND document->>'operationId'=${opId} AND ${newRecordGuard} RETURNING key`;
+    const replay=`SELECT p.key FROM ${table} p WHERE p.bucket='${reviewedApprovalCurrentBucket}' AND p.key=${opId} AND p.document->>'approvalDigest'=${hash} AND (p.document->>'revision')::bigint=${bind(p.revision)} AND p.document->>'operationId'=${opId} AND EXISTS(SELECT 1 FROM ${table} h WHERE h.bucket='${reviewedApprovalBucket}' AND h.key=${hash} AND h.document=${record}::jsonb) AND EXISTS(SELECT 1 FROM ${table} f WHERE f.bucket='${reviewedApprovalRefBucket}' AND f.key=${refKey} AND f.document=${refBody}::jsonb) AND ${guard} AND NOT EXISTS(SELECT 1 FROM changed)`;
+    // One statement on any pooled client; explicit row claims serialize the
+    // pending operation, epochs and owned fences before changing approval.
+    const sql=`WITH operation_claim AS(SELECT key FROM ${table} WHERE ${opGuard} FOR UPDATE), generation_claim AS(SELECT key FROM ${table} WHERE bucket='authentication_generations' AND ${generations} AND EXISTS(SELECT 1 FROM operation_claim) FOR UPDATE), lock_claim AS(SELECT key FROM ${table} WHERE bucket='identity_merge_locks' AND key IN(${source},${target}) AND document->>'operationId'=${opId} AND EXISTS(SELECT 1 FROM generation_claim) FOR UPDATE), changed AS(${changed}), history AS(INSERT INTO ${table}(bucket,key,document,subject,other_subject) SELECT '${reviewedApprovalBucket}',${hash},${bind(canonicalOwnerJson(r))}::jsonb,${target},${source} FROM changed ON CONFLICT DO NOTHING RETURNING key), refs AS(INSERT INTO ${table}(bucket,key,document,subject,other_subject) SELECT '${reviewedApprovalRefBucket}',${refKey},${bind(canonicalOwnerJson(ref))}::jsonb,${target},${source} FROM changed ON CONFLICT DO NOTHING RETURNING key) SELECT key FROM changed UNION ALL ${replay}`;
+    const result=await runQuery(this.client,sql,args);
+    return result.rows.length===1;
+  }
   async get<T>(bucket: string, key: string): Promise<T | undefined> {
     const r = await runQuery<{ document: T }>(
       this.client,
@@ -65,7 +92,7 @@ export class PostgresIdentityRecordRepository
     return r.rows[0]?.document;
   }
   async put(bucket: string, key: string, record: unknown): Promise<void> {
-    const [subject, other] = references(record);
+    const [subject, other] = references(record, bucket);
     await runQuery(
       this.client,
       `INSERT INTO ${table}(bucket,key,document,subject,other_subject) VALUES($1,$2,$3::jsonb,$4,$5) ON CONFLICT(bucket,key) DO UPDATE SET document=excluded.document,subject=excluded.subject,other_subject=excluded.other_subject`,
@@ -73,7 +100,7 @@ export class PostgresIdentityRecordRepository
     );
   }
   async create(bucket: string, key: string, record: unknown): Promise<boolean> {
-    const [subject, other] = references(record);
+    const [subject, other] = references(record, bucket);
     const r = await runQuery(
       this.client,
       `INSERT INTO ${table}(bucket,key,document,subject,other_subject) VALUES($1,$2,$3::jsonb,$4,$5) ON CONFLICT DO NOTHING RETURNING key`,
@@ -630,11 +657,12 @@ export class PostgresIdentityRecordRepository
   }
 }
 
-function references(value: unknown): readonly [string | null, string | null] {
+function references(value: unknown, bucket: string): readonly [string | null, string | null] {
   const r = value as Record<string, unknown>;
+  const context = (bucket === ownerContextBucket ? r.context : bucket === ownerReceiptBucket ? r.receipt : undefined) as Record<string, unknown> | undefined;
   return [
-    ((r.subject ?? r.targetSubject ?? r.canonicalSubject) as string) ?? null,
-    (r.sourceSubject as string) ?? null,
+    ((context?.targetAccountId ?? r.subject ?? r.targetSubject ?? r.canonicalSubject) as string) ?? null,
+    ((context?.sourceAccountId ?? r.sourceSubject) as string) ?? null,
   ];
 }
 function isConflict(error: unknown): boolean {

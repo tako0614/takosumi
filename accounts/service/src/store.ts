@@ -629,6 +629,15 @@ export class InMemoryAccountsStore implements AccountsStore {
     for (const map of [this.#accessTokens, this.#refreshTokens]) for (const [key, value] of map) if (subjects.includes(value.subject) || value.takosumiSubject && subjects.includes(value.takosumiSubject)) map.delete(key);
   }), this);
 
+  createOwnerOperationContextEvidence(record: import("./owner-operation-contract.ts").OwnerOperationContextEvidence): Promise<boolean> { return this.#hosted.createOwnerOperationContextEvidence(record); }
+  findOwnerOperationContextEvidence(input: import("./owner-operation-evidence.ts").OwnerOperationContextEvidenceLookup): Promise<import("./owner-operation-contract.ts").OwnerOperationContextEvidence | undefined> { return this.#hosted.findOwnerOperationContextEvidence(input); }
+  createOwnerOperationReceiptEvidence(record: import("./owner-operation-contract.ts").OwnerOperationReceiptEvidence): Promise<boolean> { return this.#hosted.createOwnerOperationReceiptEvidence(record); }
+  findOwnerOperationReceiptEvidence(input: import("./owner-operation-evidence.ts").OwnerOperationReceiptEvidenceLookup): Promise<import("./owner-operation-contract.ts").OwnerOperationReceiptEvidence | undefined> { return this.#hosted.findOwnerOperationReceiptEvidence(input); }
+  findReviewedRecoveryApproval(digest: string): Promise<import("./reviewed-recovery-state.ts").ReviewedRecoveryApprovalRecord | undefined> { return this.#hosted.findReviewedRecoveryApproval(digest); }
+  findCurrentReviewedRecoveryApproval(operationId: string): Promise<import("./reviewed-recovery-state.ts").ReviewedRecoveryApprovalPointer | undefined> { return this.#hosted.findCurrentReviewedRecoveryApproval(operationId); }
+  findReviewedRecoveryApprovalByRef(input: {operationId:string;recoveryId:string;reviewedApprovalRef:string}): Promise<string | undefined> { return this.#hosted.findReviewedRecoveryApprovalByRef(input); }
+  compareAndSetReviewedRecoveryApproval(input: import("./reviewed-recovery-state.ts").ReviewedRecoveryApprovalMutation): Promise<boolean> { return this.#hosted.compareAndSetReviewedRecoveryApproval(input); }
+
   async findHostedAccountSessionAnchor(sessionId: string): Promise<string|undefined> { return this.#hosted.findHostedAccountSessionAnchor(await hashSessionId(sessionId)); }
   createCredentialUnlinkIntent(record: import("./identity-unlink-state.ts").CredentialUnlinkIntent): Promise<boolean> { return this.#hosted.createCredentialUnlinkIntent(record); }
   findCredentialUnlinkIntent(id: string): Promise<import("./identity-unlink-state.ts").CredentialUnlinkIntent | undefined> { return this.#hosted.findCredentialUnlinkIntent(id); }

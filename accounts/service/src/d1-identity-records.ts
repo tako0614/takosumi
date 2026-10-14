@@ -1,3 +1,5 @@
+import type { ReviewedRecoveryApprovalMutation } from "./reviewed-recovery-state.ts";
+import { canonicalOwnerJson, ownerContextBucket, ownerReceiptBucket, reviewedApprovalBucket, reviewedApprovalCurrentBucket, reviewedApprovalRefBucket, reviewedApprovalRefKey } from "./owner-operation-evidence.ts";
 import type {
   CredentialUnlinkIntent,
   CredentialUnlinkReceipt,
@@ -45,13 +47,40 @@ const fields = new Set([
   "sid",
 ]);
 
-/** All mutations use one bounded D1 batch, with <= 20 parameters per statement. */
+/** All mutations use one bounded D1 batch, with <= 100 parameters per statement. */
 export class D1IdentityRecordRepository implements IdentityRecordRepository {
   constructor(
     readonly db: D1Database,
     readonly initialize: () => Promise<void>,
     readonly hashSession: (value: string) => Promise<string>,
   ) {}
+  async commitReviewedRecoveryApproval(input: ReviewedRecoveryApprovalMutation): Promise<boolean> {
+    await this.initialize();
+    const {record:r,pointer:p}=input,a=r.approval;
+    const ref={operationId:a.operationId,recoveryId:a.recoveryId,reviewedApprovalRef:a.reviewedApprovalRef,approvalDigest:r.approvalDigest};
+    const params:Array<string|number>=[];const bind=(v:string|number)=>{params.push(v);return "?";};
+    let guard=`EXISTS(SELECT 1 FROM ${table} o WHERE o.bucket='identity_merge_operations' AND o.key=${bind(a.operationId)} AND json_extract(o.document,'$.revision')=${bind(a.operationRevision)} AND json_extract(o.document,'$.sourceSubject')=${bind(a.sourceAccountId)} AND json_extract(o.document,'$.targetSubject')=${bind(a.targetAccountId)} AND json_extract(o.document,'$.contextPlan.planDigest')=${bind(a.planDigest)} AND json_extract(o.document,'$.consentAt') IS NOT NULL AND json_extract(o.document,'$.status') ${a.mode==="abort-before-active"?"IN ('proved','reconciled','quarantined')":"='quarantined'"})`;
+    for(const [subject,generation]of [[a.sourceAccountId,a.sourceIdentityGeneration],[a.targetAccountId,a.targetIdentityGeneration]]as const){guard+=` AND EXISTS(SELECT 1 FROM ${table} l WHERE l.bucket='identity_merge_locks' AND l.key=${bind(subject)} AND json_extract(l.document,'$.operationId')=${bind(a.operationId)}) AND COALESCE((SELECT json_extract(g.document,'$.generation') FROM ${table} g WHERE g.bucket='authentication_generations' AND g.key=${bind(subject)}),0)=${bind(generation)}`;}
+    for(const [subject,canonical]of [[a.sourceAccountId,a.mode==="abort-before-active"?a.sourceAccountId:a.targetAccountId],[a.targetAccountId,a.targetAccountId]]as const)guard+=` AND COALESCE((SELECT json_extract(c.document,'$.targetSubject') FROM ${table} c WHERE c.bucket='canonical_accounts' AND c.key=${bind(subject)}),${bind(subject)})=${bind(canonical)}`;
+    guard+=` AND NOT EXISTS(SELECT 1 FROM ${table} h WHERE h.bucket='${reviewedApprovalBucket}' AND h.key=${bind(r.approvalDigest)} AND json(h.document)<>${bind(canonicalOwnerJson(r))})`;
+    const refKey=reviewedApprovalRefKey(a);
+    guard+=` AND NOT EXISTS(SELECT 1 FROM ${table} f WHERE f.bucket='${reviewedApprovalRefBucket}' AND f.key=${bind(refKey)} AND json(f.document)<>${bind(canonicalOwnerJson(ref))})`;
+    if(input.expectedApprovalDigest!==undefined)guard+=` AND EXISTS(SELECT 1 FROM ${table} h WHERE h.bucket='${reviewedApprovalBucket}' AND h.key=${bind(input.expectedApprovalDigest)} AND json_extract(h.document,'$.decisionDigest')=${bind(r.decisionDigest)} AND json_extract(h.document,'$.approval.createdAt')<${bind(a.createdAt)})`;
+    const newRecordGuard=`${guard} AND NOT EXISTS(SELECT 1 FROM ${table} h WHERE h.bucket='${reviewedApprovalBucket}' AND h.key=?) AND NOT EXISTS(SELECT 1 FROM ${table} f WHERE f.bucket='${reviewedApprovalRefBucket}' AND f.key=?)`;
+    const newParams=[...params,r.approvalDigest,refKey];
+    const first=input.expectedApprovalDigest===undefined
+      ?this.db.prepare(`INSERT OR IGNORE INTO ${table}(bucket,key,document,updated_at) SELECT '${reviewedApprovalCurrentBucket}',?,?,? WHERE ${newRecordGuard}`).bind(a.operationId,canonicalOwnerJson(p),p.updatedAt,...newParams)
+      :this.db.prepare(`UPDATE ${table} SET document=?,updated_at=? WHERE bucket='${reviewedApprovalCurrentBucket}' AND key=? AND json_extract(document,'$.approvalDigest')=? AND json_extract(document,'$.revision')=? AND json_extract(document,'$.operationId')=? AND ${newRecordGuard}`).bind(canonicalOwnerJson(p),p.updatedAt,a.operationId,input.expectedApprovalDigest,p.revision-1,a.operationId,...newParams);
+    const claim=`EXISTS(SELECT 1 FROM ${table} c WHERE c.bucket='${reviewedApprovalCurrentBucket}' AND c.key=? AND json_extract(c.document,'$.mutationId')=?) AND changes()=1`;
+    const statements=[first,
+      this.db.prepare(`INSERT OR IGNORE INTO ${table}(bucket,key,document,updated_at) SELECT '${reviewedApprovalBucket}',?,?,? WHERE ${claim}`).bind(r.approvalDigest,canonicalOwnerJson(r),p.updatedAt,a.operationId,p.mutationId),
+      this.db.prepare(`INSERT OR IGNORE INTO ${table}(bucket,key,document,updated_at) SELECT '${reviewedApprovalRefBucket}',?,?,? WHERE ${claim}`).bind(refKey,canonicalOwnerJson(ref),p.updatedAt,a.operationId,p.mutationId),
+    ];
+    const result=await this.db.batch(statements);
+    if(Number(result[0]?.meta?.changes??0)===1)return true;
+    const replay=await this.db.prepare(`SELECT c.key FROM ${table} c WHERE c.bucket='${reviewedApprovalCurrentBucket}' AND c.key=? AND json_extract(c.document,'$.approvalDigest')=? AND json_extract(c.document,'$.revision')=? AND json_extract(c.document,'$.operationId')=? AND EXISTS(SELECT 1 FROM ${table} h WHERE h.bucket='${reviewedApprovalBucket}' AND h.key=? AND json(h.document)=?) AND EXISTS(SELECT 1 FROM ${table} f WHERE f.bucket='${reviewedApprovalRefBucket}' AND f.key=? AND json(f.document)=?) AND ${guard}`).bind(a.operationId,r.approvalDigest,p.revision,a.operationId,r.approvalDigest,canonicalOwnerJson(r),refKey,canonicalOwnerJson(ref),...params).first<{key:string}>();
+    return !!replay;
+  }
   async get<T>(bucket: string, key: string): Promise<T | undefined> {
     await this.initialize();
     const row = await this.db
@@ -62,7 +91,7 @@ export class D1IdentityRecordRepository implements IdentityRecordRepository {
   }
   async put(bucket: string, key: string, record: unknown): Promise<void> {
     await this.initialize();
-    const refs = references(record);
+    const refs = references(record, bucket);
     const result = await this.db
       .prepare(
         `INSERT INTO ${table} (bucket,key,document,updated_at) SELECT ?,?,?,? WHERE ${refs.map(() => `EXISTS(SELECT 1 FROM ${table} WHERE bucket='accounts' AND key=?)`).join(" AND ") || "1"} ON CONFLICT(bucket,key) DO UPDATE SET document=excluded.document,updated_at=excluded.updated_at`,
@@ -74,7 +103,7 @@ export class D1IdentityRecordRepository implements IdentityRecordRepository {
   }
   async create(bucket: string, key: string, record: unknown): Promise<boolean> {
     await this.initialize();
-    const refs = references(record);
+    const refs = references(record, bucket);
     const result = await this.db
       .prepare(
         `INSERT OR IGNORE INTO ${table} (bucket,key,document,updated_at) SELECT ?,?,?,? WHERE ${refs.map(() => `EXISTS(SELECT 1 FROM ${table} WHERE bucket='accounts' AND key=?)`).join(" AND ") || "1"}`,
@@ -786,13 +815,14 @@ function auditRecord(input: IdentityMergeMutation): unknown {
   };
 }
 
-function references(value: unknown): readonly string[] {
+function references(value: unknown, bucket: string): readonly string[] {
   const r = value as Record<string, unknown>;
+  const context = (bucket === ownerContextBucket ? r.context : bucket === ownerReceiptBucket ? r.receipt : undefined) as Record<string, unknown> | undefined;
   return [
     ...new Set(
       [
-        r.subject ?? r.targetSubject ?? r.canonicalSubject,
-        r.sourceSubject,
+        context?.targetAccountId ?? r.subject ?? r.targetSubject ?? r.canonicalSubject,
+        context?.sourceAccountId ?? r.sourceSubject,
       ].filter((v): v is string => typeof v === "string"),
     ),
   ];

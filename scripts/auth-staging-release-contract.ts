@@ -1,6 +1,6 @@
 const common = {
   provenance: "binds one clean merged source commit, protected pathless stage target, exact canonical platform config and existing Accounts/Control/R2/remote DO resources, artifact digest and separately pinned private secret custody; refuses production Worker, issuer, callbacks and caller target overrides",
-  "post-conditions": "requires exact immutable Version bindings and canonical DO namespace IDs, one 100-percent serving Version and unchanged topology; after domain activation checks issuer discovery, public ES256 JWKS and exact-v5/predeployed readiness on that Version; authenticated browser/RP E2E remains a separate launch requirement",
+  "post-conditions": "requires exact immutable Version bindings and canonical DO namespace IDs, one 100-percent serving Version and unchanged topology; after domain activation checks issuer discovery, public ES256 JWKS and exact-v5/predeployed readiness on that Version; optional route-less owner admission separately requires actual owner release source/build/upload custody, complete provider graph and schema qualification plus independent owner ports; topology/source metadata alone cannot establish owner readiness; authenticated browser/RP E2E remains a separate launch requirement",
   reversal: "preserves the serving predecessor Version; explicit owner restore is valid only with separately verified schema and authority compatibility; an applied schema is forward-only, and domain failure retains the closed stage target for explicit repair without production reassignment",
   "failure-handling": "fails closed before mutation on target/source/custody/schema/authority/topology mismatch; after any attempted mutation reports incomplete with known Version/predecessor identities, requires provider history reconciliation, and never automatically retries, deletes a Worker or restores durable data",
 };
@@ -25,7 +25,7 @@ export const AUTH_STAGING_RELEASE_SURFACES = [
   {
     surface: "takosumi-auth-staging-topology", target: "cloudflare-worker-domain:auth-staging.takos.jp", lineage: "integration", triggers: ["irreversible", "authority"],
     obligations: { ...common,
-      "pre-mutation-proof": "requires exact Accounts-v5 and canonical Control-v72 schema/fence proofs, qualified immutable fetch/scheduled Version and authority closure, disabled workers.dev/previews and zero routes/domains; configures and reads back only the approved one-minute retry cron before one explicit custom-domain attach, or adopts that exact previously applied cron read-only after an explicit recovery invocation",
+      "pre-mutation-proof": "requires exact Accounts-v5 and canonical Control-v73 schema/fence proofs, qualified immutable fetch/scheduled Version and authority closure, disabled workers.dev/previews and zero routes/domains; configures and reads back only the approved one-minute retry cron before one explicit custom-domain attach, or adopts that exact previously applied cron read-only after an explicit recovery invocation",
       "independent-review": "requires a named independent reviewer and exact source/config/artifact/target/cron confirmation for this stage-only schedule and domain attachment; production auth.takos.jp is outside every selector",
     },
   },

@@ -237,6 +237,14 @@ export interface IdentityMergeRetryCheckpointMutation {
 
 /** Optional ports keep ordinary self-host Accounts independent of hosted mode. */
 export interface HostedIdentityStore {
+  createOwnerOperationContextEvidence?(record: import("./owner-operation-contract.ts").OwnerOperationContextEvidence): Promise<boolean>;
+  findOwnerOperationContextEvidence?(input: import("./owner-operation-evidence.ts").OwnerOperationContextEvidenceLookup): Promise<import("./owner-operation-contract.ts").OwnerOperationContextEvidence | undefined>;
+  createOwnerOperationReceiptEvidence?(record: import("./owner-operation-contract.ts").OwnerOperationReceiptEvidence): Promise<boolean>;
+  findOwnerOperationReceiptEvidence?(input: import("./owner-operation-evidence.ts").OwnerOperationReceiptEvidenceLookup): Promise<import("./owner-operation-contract.ts").OwnerOperationReceiptEvidence | undefined>;
+  findReviewedRecoveryApproval?(digest: string): Promise<import("./reviewed-recovery-state.ts").ReviewedRecoveryApprovalRecord | undefined>;
+  findCurrentReviewedRecoveryApproval?(operationId: string): Promise<import("./reviewed-recovery-state.ts").ReviewedRecoveryApprovalPointer | undefined>;
+  findReviewedRecoveryApprovalByRef?(input: {operationId:string;recoveryId:string;reviewedApprovalRef:string}): Promise<string | undefined>;
+  compareAndSetReviewedRecoveryApproval?(input: import("./reviewed-recovery-state.ts").ReviewedRecoveryApprovalMutation): Promise<boolean>;
   createCredentialUnlinkAuthorityTicket?(
     record: import("./identity-context-state.ts").CredentialUnlinkAuthorityTicket,
   ): boolean | Promise<boolean>;

@@ -10,6 +10,8 @@ import { ensureAccountsD1WorkerSchema } from "../deploy/accounts-cloudflare/src/
 import { verifyD1OpenTofuLedgerSchemaPredeployed } from "../worker/src/d1_opentofu_store.ts";
 import { assertControlD1MaintenanceInactive } from "../worker/src/d1_schema_maintenance.ts";
 import { upstreamOAuthOptionsFromEnvironment } from "../accounts/service/src/upstream-config.ts";
+import { OWNER_OPERATION_ENTRYPOINT } from "../accounts/service/src/owner-operation-contract.ts";
+import { authStagingOwnerTargetBindingDigest, createAuthStagingOwnerGraphReader, parseAuthStagingOwnerGraphExpectation } from "./auth-staging-owner-graph.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
 const SHA = /^sha256:[a-f0-9]{64}$/u;
@@ -136,6 +138,32 @@ export type AuthStagingReleaseRuntime = Readonly<{
   bootstrap(target: AuthStagingTarget): Promise<void>;
 }>;
 
+/** Read-only topology/metadata and actual schema checks after versions exist.
+ * Owning release source/build/upload custody remains a separate, unavailable
+ * prerequisite. This does not activate a binding or supply owner readiness. */
+export async function inspectAuthStagingOwnerReleaseTopology(input: {
+  readonly target: AuthStagingTarget;
+  readonly plan: AuthStagingPlan;
+  readonly expectation: unknown;
+}, runtime: AuthStagingReleaseRuntime) {
+  const target = parseAuthStagingTarget(input.target), expected = parseAuthStagingOwnerGraphExpectation(input.expectation);
+  assertPlanClosure(input.plan, target);
+  const targetBindingDigest = authStagingOwnerTargetBindingDigest(expected);
+  if (expected.issuer.worker !== target.worker || expected.issuer.sourceCommit !== target.sourceCommit ||
+    expected.issuer.sourceCommitBinding !== "TAKOSUMI_AUTH_SOURCE_COMMIT" ||
+    target.vars.TAKOSUMI_ACCOUNTS_OWNER_CLIENT_ID !== expected.ownerClientId ||
+    target.vars.TAKOSUMI_ACCOUNTS_OWNER_TARGET_BINDING_DIGEST !== targetBindingDigest ||
+    !input.plan.bindings.some((binding) => binding.type === "d1" && binding.name === "TAKOSUMI_ACCOUNTS_DB" && binding.id === expected.issuer.accountsDatabaseId) ||
+    !input.plan.bindings.some((binding) => binding.type === "d1" && binding.name === "TAKOSUMI_CONTROL_DB" && binding.id === expected.issuer.controlDatabaseId)) {
+    throw new Error("auth_staging_owner_release_target_mismatch");
+  }
+  assertAuthStagingVersion(await runtime.provider.request("GET", `/workers/scripts/${target.worker}/versions/${expected.issuer.versionId}`), input.plan, target);
+  await assertTopology(runtime.provider, target, true);
+  const qualification = await createAuthStagingOwnerGraphReader(runtime.provider).qualify(expected);
+  await runtime.verifySchema(target, input.plan.bindings);
+  return qualification;
+}
+
 /** Metadata-only readback. Never accept extra authority or a second physical store. */
 export function assertAuthStagingVersion(value: unknown, plan: AuthStagingPlan, target: AuthStagingTarget): void {
   if (!record(value) || !record(value.resources) || !record(value.resources.bindings) ||
@@ -143,6 +171,12 @@ export function assertAuthStagingVersion(value: unknown, plan: AuthStagingPlan, 
       JSON.stringify(value.resources.script.handlers) !== JSON.stringify(["fetch", "scheduled"]) ||
       !record(value.resources.script_runtime) || value.resources.script_runtime.compatibility_date !== AUTH_STAGING_COMPATIBILITY_DATE ||
       JSON.stringify(value.resources.script_runtime.compatibility_flags) !== JSON.stringify(["nodejs_compat"])) throw new Error("auth_staging_version_invalid");
+  if (target.vars.TAKOSUMI_ACCOUNTS_OWNER_TARGET_BINDING_DIGEST !== undefined &&
+      (!Array.isArray(value.resources.script.named_handlers) || value.resources.script.named_handlers.length !== 1 ||
+       !record(value.resources.script.named_handlers[0]) || value.resources.script.named_handlers[0].name !== OWNER_OPERATION_ENTRYPOINT ||
+       JSON.stringify(value.resources.script.named_handlers[0].handlers) !== "[]" || !record(value.resources.script_runtime.exports) ||
+       !record(value.resources.script_runtime.exports[OWNER_OPERATION_ENTRYPOINT]) ||
+       value.resources.script_runtime.exports[OWNER_OPERATION_ENTRYPOINT].type !== "worker")) throw new Error("auth_staging_owner_entrypoint_invalid");
   const actual = value.resources.bindings.bindings;
   const expected = [...plan.bindings, ...Object.entries(target.vars).map(([name, text]) => ({ name, type: "plain_text", text })),
     { name: "TAKOSUMI_AUTH_ARTIFACT_DIGEST", type: "plain_text", text: plan.artifactDigest },

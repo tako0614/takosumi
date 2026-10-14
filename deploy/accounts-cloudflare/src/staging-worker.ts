@@ -1,17 +1,5 @@
-import { createCloudflareWorker, type CloudflareWorkerEnv } from "./handler.ts";
-import { ensureAccountsD1WorkerSchema } from "./d1-schema-gate.ts";
-import { createInProcessDeployControlSeam } from "../../../worker/src/deploy_control_seam.ts";
-import type { CloudflareWorkerEnv as ControlEnv } from "../../../worker/src/bindings.ts";
-import { verifyD1OpenTofuLedgerSchemaPredeployed } from "../../../worker/src/d1_opentofu_store.ts";
-import { assertControlD1MaintenanceInactive } from "../../../worker/src/d1_schema_maintenance.ts";
-import { D1AccountsStore } from "../../../accounts/service/src/d1-store.ts";
-import { createAccountsIdentityReconciliationAuthority, createControlIdentityReconciler } from "../../../accounts/service/src/control-identity-reconciler.ts";
-import type { ControlIdentityReconciliationPort } from "../../../contract/identity-reconciliation.ts";
+import { createCloudflareWorker } from "./handler.ts";
 import { createIdentityMergeRetryService, type IdentityMergeRetryService, type IdentityMergeRetryRuntimeContext } from "../../../accounts/service/src/identity-merge-retry.ts";
-import type { IdentityMergeReconciler } from "../../../accounts/service/src/identity-merge.ts";
-import type { IdentityMergeOperation } from "../../../accounts/service/src/identity-state.ts";
-import type { CredentialUnlinkReconciler } from "../../../accounts/service/src/identity-unlink-state.ts";
-import type { WorkspaceBillingEnrollmentPort } from "../../../accounts/service/src/workspace-billing-bootstrap.ts";
 import { handleStagingLoginPortal } from "./staging-login-portal.ts";
 import { createStagingIdentityPortal } from "./staging-identity-portal.ts";
 import {
@@ -22,68 +10,10 @@ import {
   assertAuthStagingUpstreams,
 } from "./staging-target.ts";
 
-type AuthEnv = CloudflareWorkerEnv & ControlEnv;
+import { authStagingOwnerBundle, authStagingControlOperations, type AuthStagingOwnerPorts, type AuthStagingEnv as AuthEnv } from "./staging-owner-bundle.ts";
+import { verifyAuthStagingOwnerSchema } from "./staging-owner-bundle.ts";
+export type { AuthStagingOwnerPorts } from "./staging-owner-bundle.ts";
 type AccountsWorker = ReturnType<typeof createCloudflareWorker<AuthEnv>>;
-export interface AuthStagingOwnerPorts {
-  readonly identityMergeReconciler?: IdentityMergeReconciler;
-  readonly assertOwnerReadiness?: (operation?: IdentityMergeOperation) => Promise<boolean>;
-  readonly credentialUnlinkReconciler?: CredentialUnlinkReconciler;
-  readonly workspaceBillingEnrollment?: WorkspaceBillingEnrollmentPort;
-  /** Nonsecret fingerprint of the actually qualified owner authority/config.
-   * Absence keeps login/recovery available but refuses new merge admission. */
-  readonly retryAuthorityContextDigest?: string;
-}
-const seams = new WeakMap<AuthEnv, ReturnType<typeof createInProcessDeployControlSeam>>();
-const identityStores = new WeakMap<AuthEnv, D1AccountsStore>();
-const identityAuthorities = new WeakMap<AuthEnv, ReturnType<typeof createAccountsIdentityReconciliationAuthority>>();
-
-function identityStore(env: AuthEnv): D1AccountsStore {
-  let store = identityStores.get(env);
-  if (!store) {
-    store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
-      schemaMode: "predeployed", sessionHashSalt: env.TAKOSUMI_ACCOUNT_SESSION_HASH_SALT!,
-    });
-    identityStores.set(env, store);
-  }
-  return store;
-}
-
-function identityAuthority(env: AuthEnv) {
-  let authority = identityAuthorities.get(env);
-  if (!authority) {
-    authority = createAccountsIdentityReconciliationAuthority({ store: identityStore(env) });
-    identityAuthorities.set(env, authority);
-  }
-  return authority;
-}
-
-function controlOperations(env: AuthEnv) {
-  let seam = seams.get(env);
-  if (!seam) {
-    seam = createInProcessDeployControlSeam(env, { identityReconciliationAuthority: identityAuthority(env) });
-    seams.set(env, seam);
-  }
-  return seam.operations();
-}
-
-/** Lazy private calls share the same Control service and persisted Accounts
- * authority. A browser never supplies this port or an admission object. */
-function identityControl(env: AuthEnv): ControlIdentityReconciliationPort {
-  const current = async () => {
-    const port = (await controlOperations(env)).identityReconciliation;
-    if (!port) throw new Error("auth_staging_control_identity_unavailable");
-    return port;
-  };
-  return {
-    prepareMerge: async (input) => (await current()).prepareMerge(input),
-    assertMergePlanCurrent: async (input) => (await current()).assertMergePlanCurrent(input),
-    applyMerge: async (input) => (await current()).applyMerge(input),
-    read: async (operationId) => (await current()).read(operationId),
-    acknowledgeUnlink: async (input) => (await current()).acknowledgeUnlink(input),
-    recover: async (input) => (await current()).recover(input),
-  };
-}
-
 const REQUIRED_BINDINGS = [
   "TAKOSUMI_ACCOUNTS_DB", "TAKOSUMI_CONTROL_DB", "R2_ARTIFACTS", "R2_SOURCE",
   "R2_STATE", "R2_BACKUPS", "COORDINATION", "RUN_OWNER", "RUNNER",
@@ -116,7 +46,7 @@ export function createAuthStagingWorker(dependencies: {
   const schemaFor = (env: AuthEnv): Promise<void> => {
     const existing = schemaAttempts.get(env);
     if (existing) return existing;
-    const verification = Promise.resolve().then(() => (dependencies.verifySchema ?? verifySchema)(env));
+    const verification = Promise.resolve().then(() => (dependencies.verifySchema ?? verifyAuthStagingOwnerSchema)(env));
     const attempt = withReadinessDeadline(verification);
     schemaAttempts.set(env, attempt);
     // After the shared deadline expires, reuse that rejection until the real
@@ -130,24 +60,19 @@ export function createAuthStagingWorker(dependencies: {
     });
     return attempt;
   };
-  const owners = new WeakMap<AuthEnv, AuthStagingOwnerPorts>();
-  const ownerPorts = (env: AuthEnv) => {
-    let ports = owners.get(env);
-    if (!ports) {
-      const supplied = dependencies.ownerPorts?.(env) ?? {};
-      // Control-only planning is real. Without the separately configured
-      // financial/consumer/RP owners the composite refuses reservation; it
-      // cannot turn this local receipt into those external acknowledgements.
-      const control = createControlIdentityReconciler({ store: identityStore(env), control: identityControl(env) });
-      ports = {
-        ...supplied,
-        identityMergeReconciler: supplied.identityMergeReconciler ?? control,
-        credentialUnlinkReconciler: supplied.credentialUnlinkReconciler ?? control,
-        assertOwnerReadiness: supplied.assertOwnerReadiness ?? control.assertOwnerReadiness,
-      };
-      owners.set(env, ports);
+  const sources = new WeakMap<AuthEnv, AuthStagingOwnerPorts>();
+  const ownerBundle = (env: AuthEnv) => {
+    let source = sources.get(env);
+    if (!source) {
+      source = dependencies.ownerPorts?.(env);
+      if (source) sources.set(env, source);
     }
-    return ports;
+    return authStagingOwnerBundle(env, source);
+  };
+  const ownerPorts = (env: AuthEnv) => ownerBundle(env).ports;
+  const controlOperations = (env: AuthEnv) => {
+    ownerBundle(env);
+    return authStagingControlOperations(env);
   };
   const runtimeContext = (env: AuthEnv): IdentityMergeRetryRuntimeContext | undefined => {
     const metadata = env.TAKOSUMI_VERSION_METADATA;
@@ -164,7 +89,7 @@ export function createAuthStagingWorker(dependencies: {
       const ports = ownerPorts(env);
       service = dependencies.retryService?.(env) ?? createIdentityMergeRetryService({
         runtimeContext:runtimeContext(env),
-        store:identityStore(env),
+        store:ownerBundle(env).store,
         reconciler:ports.identityMergeReconciler,assertOwnerReadiness:ports.assertOwnerReadiness,
         stage:{environment:String(env.TAKOSUMI_ENVIRONMENT),issuerOrigin:String(env.TAKOSUMI_ACCOUNTS_ISSUER),hostedSessionPolicy:env.TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY==="true",accountsSchemaHead:5,accountsSchemaMode:String(env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE)},
       });
@@ -256,14 +181,6 @@ export function createAuthStagingWorker(dependencies: {
       }
     },
   };
-}
-
-async function verifySchema(env: AuthEnv): Promise<void> {
-  const evidence = await ensureAccountsD1WorkerSchema(env.TAKOSUMI_ACCOUNTS_DB);
-  // The reviewed migration owner supplies v5. A v4-only build fails closed.
-  if (Number(evidence.headVersion) !== 5) throw new Error("auth_staging_schema_invalid");
-  await verifyD1OpenTofuLedgerSchemaPredeployed(env.TAKOSUMI_CONTROL_DB);
-  await assertControlD1MaintenanceInactive(env.TAKOSUMI_CONTROL_DB);
 }
 
 async function withReadinessDeadline(operation: Promise<void>): Promise<void> {
