@@ -17,6 +17,11 @@ import type { HostedIdentityStore } from "./identity-state.ts";
 export type { AccountEmailProofRecord, UpstreamLoginTransactionRecord, HostedOidcGrantRecord, IdentityMergeOperation, IdentityMergeMutation, UnlinkUpstreamIdentityInput, UpstreamIdentityStatusRecord } from "./identity-state.ts";
 
 export interface AuthorizationCodeRecord {
+  /** Complete normalized authorize policy and the exact browser session checked by GET. */
+  authorizationPolicyHash?: string;
+  authorizationSessionHash?: string;
+  /** Server checkpoint requiring fresh interactive proof; never supplied by the browser. */
+  reauthenticationStartedAt?: number;
   identityGeneration?: number;
   oidcProfile?: "shared-account";
   issuer?: string;

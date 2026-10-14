@@ -640,7 +640,7 @@ async function handleAuthorizeUncached(input: {
     if (!includesScope(scope,"openid") || !scopeIsAllowed(scope,HOSTED_OIDC_SCOPES)) return json({error:"invalid_scope"},400);
     if (!parameters.get("nonce") || parameters.get("nonce")!.length > 512 || !parameters.get("state") || parameters.get("state")!.length > 512 || requestedScope.length > 2048 || !/^[A-Za-z0-9_-]{43}$/u.test(codeChallenge) || !parameters.has("code_challenge_method") ||
       ["response_mode","request","request_uri","claims","workspace_id","resource","audience"].some((name) => parameters.has(name) && !(name === "response_mode" && parameters.get(name) === "query")) ||
-      ["response_type","client_id","redirect_uri","scope","nonce","state","code_challenge","code_challenge_method","prompt","max_age"].some((name) => parameters.getAll(name).length > 1)) return json({error:"invalid_request"},400);
+      ["response_type","client_id","redirect_uri","scope","nonce","state","code_challenge","code_challenge_method","prompt","max_age","reauth"].some((name) => parameters.getAll(name).length > 1)) return json({error:"invalid_request"},400);
     const prompts = (parameters.get("prompt") ?? "").split(/\s+/u).filter(Boolean);
     if (prompts.some((prompt) => !["none","login","consent"].includes(prompt)) || (prompts.includes("none") && prompts.length > 1)) return json({error:"invalid_request"},400);
     const maxAge = parameters.get("max_age");
@@ -653,23 +653,39 @@ async function handleAuthorizeUncached(input: {
   if (!session.ok) return client.profile === "shared-account" && input.url.searchParams.get("prompt") === "none"
     ? hostedAuthorizeError(redirectUri,input.url.searchParams.get("state"),"login_required") : authorizeSignInRedirect(input.url);
   const sessionRecord = await input.store.findAccountSession(session.sessionId);
+  let reauthenticationStartedAt: number | undefined;
   if (client.profile === "shared-account") {
     if (sessionRecord?.policy !== "hosted" || !Number.isSafeInteger(sessionRecord.authTime)) return authorizeSignInRedirect(input.url);
-    const prompt = input.url.searchParams.get("prompt") ?? "";
+    const prompt = (input.url.searchParams.get("prompt") ?? "").split(/\s+/u).filter(Boolean).join(" ");
     const maxAge = input.url.searchParams.get("max_age");
     const authAge = Math.floor(Date.now()/1000) - sessionRecord.authTime!;
     // A prompt=login request must observe a newly rotated issuer session. Bind
     // that checkpoint in a short server transaction, never trust a URL flag.
-    if (input.request.method === "GET" && (prompt.split(/\s+/u).includes("login") || maxAge === "0")) {
+    if (input.request.method === "GET" && (prompt.split(/\s+/u).includes("login") || (maxAge !== null && Number(maxAge) === 0))) {
       const proof = input.url.searchParams.get("reauth");
       const proved = proof?.startsWith("hreauth_") ? await input.store.consumeAuthorizationCode(proof) : undefined;
       if (prompt === "none" && !proved) return hostedAuthorizeError(redirectUri,input.url.searchParams.get("state"),"login_required");
-      if (!proved || proved.expiresAt <= Date.now() || proved.clientId !== client.clientId || proved.redirectUri !== redirectUri || proved.nonce !== input.url.searchParams.get("nonce") || proved.codeChallenge !== codeChallenge || proved.scope !== scope || proved.issuerSessionId === await hostedIssuerSessionId(session.sessionId) || sessionRecord.createdAt < proved.familyStartedAt! || (!sessionRecord.reauthenticatedAt || sessionRecord.reauthenticatedAt < Math.floor(proved.familyStartedAt!/1000))) {
+      const authorizationPolicyHash = await hostedAuthorizationPolicyHash(input.url,scope,false);
+      const currentSessionHash = await hostedIssuerSessionId(session.sessionId);
+      if (!proved || proved.expiresAt <= Date.now() || proved.authorizationPolicyHash !== authorizationPolicyHash ||
+        proved.clientId !== client.clientId || proved.redirectUri !== redirectUri || proved.subject !== session.subject ||
+        proved.nonce !== input.url.searchParams.get("nonce") || proved.codeChallenge !== codeChallenge || proved.scope !== scope ||
+        (proved.identityGeneration ?? 0) !== (sessionRecord.identityGeneration ?? 0) ||
+        proved.issuerSessionId !== (sessionRecord.issuerSessionId ?? currentSessionHash) ||
+        proved.authorizationSessionHash === currentSessionHash || !Number.isSafeInteger(proved.reauthenticationStartedAt) ||
+        sessionRecord.createdAt < proved.reauthenticationStartedAt! || !sessionRecord.reauthenticatedAt ||
+        sessionRecord.reauthenticatedAt < Math.floor(proved.reauthenticationStartedAt!/1000)) {
         const challenge = hostedOpaqueId("hreauth_");
-        await input.store.saveAuthorizationCode(challenge,{clientId,redirectUri,scope,subject:session.subject,nonce:input.url.searchParams.get("nonce")!,codeChallenge,issuerSessionId:await hostedIssuerSessionId(session.sessionId),familyStartedAt:Date.now(),expiresAt:Date.now()+300_000});
+        await input.store.saveAuthorizationCode(challenge,{
+          clientId,redirectUri,scope,subject:session.subject,nonce:input.url.searchParams.get("nonce")!,codeChallenge,
+          authorizationPolicyHash,authorizationSessionHash:currentSessionHash,
+          issuerSessionId:sessionRecord.issuerSessionId ?? currentSessionHash,identityGeneration:sessionRecord.identityGeneration ?? 0,
+          reauthenticationStartedAt:Date.now(),expiresAt:Date.now()+300_000,
+        });
         const next = new URL(input.url); next.searchParams.set("reauth",challenge);
         return authorizeSignInRedirect(next, true);
       }
+      reauthenticationStartedAt = proved.reauthenticationStartedAt;
     }
     if (input.request.method === "GET" && maxAge !== null && Number(maxAge) > 0 && authAge > Number(maxAge)) {
       if (prompt === "none") return hostedAuthorizeError(redirectUri,input.url.searchParams.get("state"),"login_required");
@@ -732,7 +748,13 @@ async function handleAuthorizeUncached(input: {
     if (consentRequired && input.request.method !== "POST") {
       if (input.url.searchParams.get("prompt") === "none") return hostedAuthorizeError(redirectUri,input.url.searchParams.get("state"),"consent_required");
       const transaction = hostedOpaqueId("hcons_");
-      await input.store.saveAuthorizationCode(transaction,{clientId,redirectUri,scope,subject:session.subject,nonce:input.url.searchParams.get("nonce")!,codeChallenge,codeChallengeMethod,issuerSessionId,expiresAt:now+300_000});
+      await input.store.saveAuthorizationCode(transaction,{
+        clientId,redirectUri,scope,subject:session.subject,nonce:input.url.searchParams.get("nonce")!,codeChallenge,codeChallengeMethod,
+        issuerSessionId,identityGeneration:sessionRecord!.identityGeneration ?? 0,authTime:sessionRecord!.authTime,
+        authorizationPolicyHash:await hostedAuthorizationPolicyHash(input.url,scope,true),
+        authorizationSessionHash:await hostedIssuerSessionId(session.sessionId),reauthenticationStartedAt,
+        expiresAt:now+300_000,
+      });
       return hostedConsentPage(input.url,transaction,clientId,scope);
     }
     if (input.request.method === "POST") {
@@ -740,7 +762,28 @@ async function handleAuthorizeUncached(input: {
       const form = await readFormUrlEncoded(input.request);
       const transaction = form.get("consent_transaction");
       const consent = transaction?.startsWith("hcons_") ? await input.store.consumeAuthorizationCode(transaction) : undefined;
-      if (form.get("approve") !== "yes" || !consent || consent.expiresAt <= now || consent.clientId !== clientId || consent.redirectUri !== redirectUri || consent.scope !== scope || consent.subject !== session.subject || consent.nonce !== input.url.searchParams.get("nonce") || consent.codeChallenge !== codeChallenge || consent.issuerSessionId !== issuerSessionId) return json({error:"invalid_request"},400);
+      // The durable touch inside the guard rechecks row liveness even when the
+      // request store cached its earlier read. Rotation/revocation during the
+      // consent await cannot turn the retired cookie into a code.
+      const currentSession = await requireAccountSession({request:input.request,store:input.store});
+      if (!currentSession.ok || currentSession.subject !== session.subject || currentSession.sessionId !== session.sessionId) return json({error:"invalid_request"},400);
+      const currentGeneration = await input.store.getAccountAuthenticationGeneration?.(session.subject);
+      const prompts = (input.url.searchParams.get("prompt") ?? "").split(/\s+/u).filter(Boolean);
+      const maxAge = input.url.searchParams.get("max_age");
+      const strictFreshness = prompts.includes("login") || (maxAge !== null && Number(maxAge) === 0);
+      if ([...form.keys()].some((key)=>!["approve","consent_transaction"].includes(key)) || form.getAll("approve").length !== 1 || form.getAll("consent_transaction").length !== 1 || form.get("approve") !== "yes" ||
+        !consent || consent.expiresAt <= Date.now() || consent.clientId !== clientId || consent.redirectUri !== redirectUri ||
+        consent.scope !== scope || consent.subject !== session.subject || consent.nonce !== input.url.searchParams.get("nonce") ||
+        consent.codeChallenge !== codeChallenge || consent.codeChallengeMethod !== codeChallengeMethod || consent.issuerSessionId !== issuerSessionId ||
+        consent.authorizationPolicyHash !== await hostedAuthorizationPolicyHash(input.url,scope,true) ||
+        consent.authorizationSessionHash !== await hostedIssuerSessionId(session.sessionId) || consent.authTime !== sessionRecord!.authTime ||
+        (consent.identityGeneration ?? 0) !== (sessionRecord!.identityGeneration ?? 0) || (consent.identityGeneration ?? 0) !== currentGeneration ||
+        (maxAge !== null && Number(maxAge) > 0 && Math.floor(Date.now()/1000)-sessionRecord!.authTime! > Number(maxAge)) ||
+        (strictFreshness && (!Number.isSafeInteger(consent.reauthenticationStartedAt) || consent.reauthenticationStartedAt! > Date.now() ||
+          Date.now()-consent.reauthenticationStartedAt! > 300_000 || sessionRecord!.createdAt < consent.reauthenticationStartedAt! ||
+          !sessionRecord!.reauthenticatedAt || sessionRecord!.reauthenticatedAt < Math.floor(consent.reauthenticationStartedAt!/1000)))) {
+        return json({error:"invalid_request"},400);
+      }
     }
     if (!input.store.saveHostedOidcGrant) return json({error:"temporarily_unavailable"},503);
     const sid = hostedOpaqueId("hsid_");
@@ -1798,4 +1841,15 @@ export async function resolveSharedAccountGrantSession(input: {
     const current = await load();
     return current?.subject === record.subject && current.sid === record.sid;
   }}};
+}
+
+/** Bind all query extensions too, so a future authorize option cannot bypass consent custody. */
+async function hostedAuthorizationPolicyHash(url: URL, scope: string, includeReauth: boolean): Promise<string> {
+  const parameters = new URLSearchParams(url.search);
+  parameters.set("scope",scope);
+  if (parameters.has("prompt")) parameters.set("prompt",[...new Set((parameters.get("prompt") ?? "").split(/\s+/u).filter(Boolean))].sort().join(" "));
+  if (parameters.has("max_age")) parameters.set("max_age",String(Number(parameters.get("max_age"))));
+  if (!includeReauth) parameters.delete("reauth");
+  const policy = [...parameters].sort(([leftKey,leftValue],[rightKey,rightValue])=>(leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0));
+  return sha256Text(JSON.stringify(["hosted-authorization-policy@v1",url.origin,url.pathname,policy]));
 }

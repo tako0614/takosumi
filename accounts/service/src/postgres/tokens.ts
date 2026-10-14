@@ -290,7 +290,7 @@ export async function saveAuthorizationCode(
     createdAt: toDate(Date.now()),
     expiresAt: toDate(record.expiresAt),
   };
-  if(record.oidcProfile === "shared-account"){
+  if(record.oidcProfile === "shared-account" || record.authorizationPolicyHash){
     await runQuery(client,`INSERT INTO accounts_v1.authorization_codes(code_hash,client_id,redirect_uri,scope,subject,takosumi_subject,capsule_id,workspace_id,role,nonce,code_challenge,code_challenge_method,created_at,expires_at,hosted_metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb) ON CONFLICT(code_hash) DO UPDATE SET client_id=excluded.client_id,redirect_uri=excluded.redirect_uri,scope=excluded.scope,subject=excluded.subject,takosumi_subject=excluded.takosumi_subject,capsule_id=excluded.capsule_id,workspace_id=excluded.workspace_id,role=excluded.role,nonce=excluded.nonce,code_challenge=excluded.code_challenge,code_challenge_method=excluded.code_challenge_method,expires_at=excluded.expires_at,hosted_metadata=excluded.hosted_metadata`,[values.codeHash,values.clientId,values.redirectUri,values.scope,values.subject,values.takosumiSubject,values.capsuleId,values.workspaceId,values.role,values.nonce,values.codeChallenge,values.codeChallengeMethod,values.createdAt,values.expiresAt,JSON.stringify(hostedTokenMetadata(record))]);
     return;
   }
@@ -629,6 +629,11 @@ export async function recordPersonalAccessTokenUsed(
 }
 
 function hostedTokenMetadata(record: AuthorizationCodeRecord | TokenRecord): unknown {
-  if (!record.oidcProfile) return null;
-  return {identityGeneration:record.identityGeneration, issuer: record.issuer, oidcProfile: record.oidcProfile, authTime: record.authTime, sid: record.sid, issuerSessionId: record.issuerSessionId, nonce: record.nonce, familyStartedAt: record.familyStartedAt, familyExpiresAt: record.familyExpiresAt};
+  const authorization = "authorizationPolicyHash" in record && record.authorizationPolicyHash ? {
+    authorizationPolicyHash:record.authorizationPolicyHash,
+    authorizationSessionHash:record.authorizationSessionHash,
+    reauthenticationStartedAt:record.reauthenticationStartedAt,
+  } : undefined;
+  if (!record.oidcProfile && !authorization) return null;
+  return {...authorization,identityGeneration:record.identityGeneration, issuer: record.issuer, oidcProfile: record.oidcProfile, authTime: record.authTime, sid: record.sid, issuerSessionId: record.issuerSessionId, nonce: record.nonce, familyStartedAt: record.familyStartedAt, familyExpiresAt: record.familyExpiresAt};
 }

@@ -12,6 +12,8 @@ import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
 import { resolve } from "node:path";
 import { Miniflare } from "miniflare";
+import { PGlite } from "@electric-sql/pglite";
+import { PostgresAccountsStore } from "../../../../accounts/service/src/postgres-store.ts";
 
 const issuer = "https://issuer.example.test";
 const subject = "tsub_shared_customer" as const;
@@ -261,7 +263,7 @@ async function directoryFixture() {
   const control=new InMemoryOpenTofuControlStore();let id=0;
   const service=new WorkspacesService({store:control,newId:(prefix)=>`${prefix}_directory_${++id}`});
   const operations:Pick<ControlPlaneOperations,"workspaces"|"members">={
-    workspaces:{ensurePersonalWorkspace:service.ensurePersonalWorkspace.bind(service),ensurePersonalWorkspaceForSharedAccount:service.ensurePersonalWorkspaceForSharedAccount.bind(service),listWorkspaces:service.listWorkspaces.bind(service),listWorkspacesByOwner:service.listWorkspacesByOwner.bind(service),listWorkspacesForAccount:service.listWorkspacesForAccount.bind(service),listWorkspacesForAccountPage:service.listWorkspacesForAccountPage.bind(service),getWorkspaceForAccount:service.getWorkspaceForAccount.bind(service),getWorkspace:service.getWorkspace.bind(service),captureManagementAuthority:service.captureManagementAuthority.bind(service),createWorkspace:service.createWorkspace.bind(service),updateWorkspace:service.updateWorkspace.bind(service),updateWorkspaceForAccount:service.updateWorkspaceForAccount.bind(service),deleteWorkspaceForAccount:service.deleteWorkspaceForAccount.bind(service)},
+    workspaces:{ensurePersonalWorkspace:service.ensurePersonalWorkspace.bind(service),ensurePersonalWorkspaceForSharedAccount:service.ensurePersonalWorkspaceForSharedAccount.bind(service),listWorkspaces:service.listWorkspaces.bind(service),listWorkspacesByOwner:service.listWorkspacesByOwner.bind(service),listWorkspacesForAccount:service.listWorkspacesForAccount.bind(service),listWorkspacesForAccountPage:service.listWorkspacesForAccountPage.bind(service),getWorkspaceForAccount:service.getWorkspaceForAccount.bind(service),getWorkspace:service.getWorkspace.bind(service),captureManagementAuthority:service.captureManagementAuthority.bind(service),createWorkspace:service.createWorkspace.bind(service),createWorkspaceForSharedAccount:service.createWorkspaceForSharedAccount.bind(service),updateWorkspace:service.updateWorkspace.bind(service),updateWorkspaceForAccount:service.updateWorkspaceForAccount.bind(service),deleteWorkspaceForAccount:service.deleteWorkspaceForAccount.bind(service)},
     members:{getMember:control.getWorkspaceMember.bind(control),listMembers:control.listWorkspaceMembers.bind(control),upsertMember:async()=>{throw new Error("Directory cannot reconcile membership");}},
   };
   let billingEntered!:()=>void, billingRelease!:()=>void;
@@ -316,6 +318,18 @@ test("directory revalidates grant after owner billing wait and genuine issuer se
   await f.store.revokeHostedOidcGrant!(claims(grant.id_token).sid as string,Date.now());f.billingRelease();expect((await pending).status).toBe(401);
   const ambient=await f.handler(new Request(`${issuer}/api/v1/account/shared-workspaces/bootstrap`,{method:"POST",headers:{cookie:f.cookie,"content-type":"application/json",origin:"https://attacker.example.test"},body:"{}"}));expect(ambient.status).toBe(403);
   const genuine=await f.handler(new Request(`${issuer}/api/v1/account/shared-workspaces/bootstrap`,{method:"POST",headers:{cookie:f.cookie,"content-type":"application/json",origin:issuer},body:"{}"}));expect(genuine.status).toBe(200);
+});
+
+test("actual shared-profile Bearer cannot recreate an organization by repairing a suspended or demoted owner",async()=>{
+  for(const patch of [{status:"suspended" as const},{roles:["viewer"]}]) {
+    const f=await directoryFixture();const grant=await f.grant();await f.request("/bootstrap",grant.access_token,"POST",{});
+    const body={handle:"forbidden-team",displayName:"Forbidden team",type:"organization"};
+    const initial=await f.request("",grant.access_token,"POST",body);expect(initial.status).toBe(201);
+    const {workspace}=await initial.json() as {workspace:{id:string}};const member=(await f.control.getWorkspaceMember(workspace.id,subject))!;
+    await f.control.putWorkspaceMember({...member,...patch});const before=(await f.control.listWorkspaces()).map((w)=>w.id);
+    const repeated=await f.request("",grant.access_token,"POST",body);expect(repeated.status).toBe(403);
+    expect(await f.control.getWorkspaceMember(workspace.id,subject)).toEqual({...member,...patch});expect((await f.control.listWorkspaces()).map((w)=>w.id)).toEqual(before);
+  }
 });
 
 test("shared grants reject wrong issuer, audience and authentication metadata at all hosted read paths",async()=>{
@@ -481,3 +495,115 @@ test("D1 rotation retains hash-only anchor custody after expired session removal
   const rows=await db.prepare("SELECT key,document FROM takosumi_accounts_documents").all<{key:string;document:string}>();const persisted=JSON.stringify(rows.results);
   expect(persisted).not.toContain(f.session.sessionId);expect(persisted).not.toContain(next.sessionId);
 });
+
+async function pendingConsent(f: Awaited<ReturnType<typeof fixture>>,url:URL,cookie=f.cookie) {
+  const response=await f.handler(new Request(url,{headers:{cookie}}));expect(response.status).toBe(200);
+  const transaction=(await response.text()).match(/name="consent_transaction" value="([^"]+)"/)![1]!;
+  return transaction;
+}
+
+function submitConsent(f:Awaited<ReturnType<typeof fixture>>,url:URL,transaction:string,cookie=f.cookie,extra:Record<string,string>={}) {
+  return f.handler(new Request(url,{method:"POST",headers:{cookie,origin:issuer,"content-type":"application/x-www-form-urlencoded"},body:new URLSearchParams({approve:"yes",consent_transaction:transaction,...extra})}));
+}
+
+async function freshConsent(f:Awaited<ReturnType<typeof fixture>>) {
+  const url=f.authorizeUrl();url.searchParams.set("prompt","login consent");url.searchParams.set("max_age","0");
+  const initial=await f.handler(new Request(url,{headers:{cookie:f.cookie}}));expect(initial.status).toBe(302);
+  const returned=new URL(new URL(initial.headers.get("location")!).searchParams.get("return")!,issuer);
+  const now=Date.now()+1000;
+  const session=await rotateAccountSession({store:f.store,subject,oldSessionId:f.session.sessionId,now,ttlMs:60_000,hostedPolicy:true,freshlyAuthenticatedAt:Math.floor(now/1000)});
+  const cookie=`${HOSTED_ACCOUNT_SESSION_COOKIE_NAME}=${session.sessionId}`;
+  return {url:returned,cookie,session,transaction:await pendingConsent(f,returned,cookie)};
+}
+
+test("ordinary consent cannot be upgraded to prompt=login or max_age=0 by POST policy changes",async()=>{
+  for(const field of ["prompt","max_age","both"] as const) {
+    const f=await fixture();const url=f.authorizeUrl();const transaction=await pendingConsent(f,url);
+    if(field!=="max_age")url.searchParams.set("prompt","login");if(field!=="prompt")url.searchParams.set("max_age","0");
+    const post=await submitConsent(f,url,transaction);expect(post.status).toBe(400);expect(post.headers.get("location")).toBeNull();
+    const strictGet=await f.handler(new Request(url,{headers:{cookie:f.cookie}}));expect(new URL(strictGet.headers.get("location")!).pathname).toBe("/sign-in");
+  }
+});
+
+for(const [name,change] of [
+  ["state",(u:URL)=>u.searchParams.set("state","replaced-state")],
+  ["nonce",(u:URL)=>u.searchParams.set("nonce","replaced-nonce")],
+  ["PKCE",(u:URL)=>u.searchParams.set("code_challenge","z".repeat(43))],
+  ["scope",(u:URL)=>u.searchParams.set("scope","openid")],
+  ["extension policy",(u:URL)=>u.searchParams.set("login_hint","another-account")],
+] as const)test(`hosted consent binds ${name} to its exact GET policy`,async()=>{
+  const f=await fixture();const url=f.authorizeUrl();const transaction=await pendingConsent(f,url);change(url);expect((await submitConsent(f,url,transaction)).status).toBe(400);
+});
+
+test("fresh consent cannot downgrade prompt/max_age, replace checkpoint or replay a consumed GET proof",async()=>{
+  for(const change of ["downgrade","checkpoint"] as const) {
+    const f=await fixture();const pending=await freshConsent(f);const url=new URL(pending.url);
+    if(change==="downgrade"){url.searchParams.delete("prompt");url.searchParams.delete("max_age");}else url.searchParams.set("reauth","hreauth_forged");
+    expect((await submitConsent(f,url,pending.transaction,pending.cookie)).status).toBe(400);
+  }
+  const f=await fixture();const pending=await freshConsent(f);
+  const reused=await f.handler(new Request(pending.url,{headers:{cookie:pending.cookie}}));expect(new URL(reused.headers.get("location")!).pathname).toBe("/sign-in");
+  const approved=await submitConsent(f,pending.url,pending.transaction,pending.cookie);expect(approved.status).toBe(302);expect(new URL(approved.headers.get("location")!).searchParams.get("code")).toStartWith("hcode_");
+  expect((await submitConsent(f,pending.url,pending.transaction,pending.cookie)).status).toBe(400);
+});
+
+test("a fresh credential session from another browser cannot redeem the first browser's reauthentication checkpoint",async()=>{
+  const f=await fixture();const url=f.authorizeUrl();url.searchParams.set("prompt","login");
+  const initial=await f.handler(new Request(url,{headers:{cookie:f.cookie}}));const returned=new URL(new URL(initial.headers.get("location")!).searchParams.get("return")!,issuer);
+  const now=Date.now()+1000;const independent=await rotateAccountSession({store:f.store,subject,now,ttlMs:60_000,hostedPolicy:true,freshlyAuthenticatedAt:Math.floor(now/1000)});
+  const response=await f.handler(new Request(returned,{headers:{cookie:`${HOSTED_ACCOUNT_SESSION_COOKIE_NAME}=${independent.sessionId}`}}));expect(response.status).toBe(302);expect(new URL(response.headers.get("location")!).pathname).toBe("/sign-in");
+});
+
+test("consent POST rejects an expired transaction, rotated session, changed auth_time or security generation",async()=>{
+  for(const failure of ["expiry","rotation","auth_time","generation"] as const) {
+    const f=await fixture();const url=f.authorizeUrl();const transaction=await pendingConsent(f,url);let cookie=f.cookie;
+    if(failure==="expiry"){const stored=(await f.store.consumeAuthorizationCode(transaction))!;await f.store.saveAuthorizationCode(transaction,{...stored,expiresAt:Date.now()-1});}
+    if(failure==="rotation"){const next=await rotateAccountSession({store:f.store,subject,oldSessionId:f.session.sessionId,now:Date.now(),ttlMs:60_000,hostedPolicy:true});cookie=`${HOSTED_ACCOUNT_SESSION_COOKIE_NAME}=${next.sessionId}`;}
+    if(failure==="auth_time"){const session=(await f.store.findAccountSession(f.session.sessionId))!;await f.store.saveAccountSession({...session,authTime:session.authTime!-10});}
+    if(failure==="generation")f.store.getAccountAuthenticationGeneration=()=>1;
+    const response=await submitConsent(f,url,transaction,cookie);expect(response.status).not.toBe(200);expect(response.headers.get("location")?.includes("code=hcode_")??false).toBe(false);
+  }
+});
+
+test("consent POST rechecks max_age and server fresh evidence instead of trusting URL or form fields",async()=>{
+  const f=await fixture();const url=f.authorizeUrl();url.searchParams.set("max_age","1");const transaction=await pendingConsent(f,url);
+  const session=(await f.store.findAccountSession(f.session.sessionId))!;await f.store.saveAccountSession({...session,authTime:Math.floor(Date.now()/1000)-10});expect((await submitConsent(f,url,transaction)).status).toBe(400);
+  const g=await fixture();const pending=await freshConsent(g);const fresh=(await g.store.findAccountSession(pending.session.sessionId))!;await g.store.saveAccountSession({...fresh,reauthenticatedAt:undefined});
+  expect((await submitConsent(g,pending.url,pending.transaction,pending.cookie,{reauthenticationStartedAt:String(Date.now())})).status).toBe(400);
+  const h=await fixture();const evidence=await freshConsent(h);const actual=(await h.store.findAccountSession(evidence.session.sessionId))!;await h.store.saveAccountSession({...actual,reauthenticatedAt:undefined});expect((await submitConsent(h,evidence.url,evidence.transaction,evidence.cookie)).status).toBe(400);
+});
+
+test("unchanged consent session expires its max_age while waiting, and a completed checkpoint cannot extend its five-minute proof window",async()=>{
+  const realNow=Date.now;let clock=realNow();Date.now=()=>clock;
+  try {
+    const f=await fixture();const url=f.authorizeUrl();url.searchParams.set("max_age","1");const transaction=await pendingConsent(f,url);
+    clock+=2000;expect((await submitConsent(f,url,transaction)).status).toBe(400);
+    const g=await fixture();const strict=g.authorizeUrl();strict.searchParams.set("prompt","login consent");strict.searchParams.set("max_age","0");
+    const initial=await g.handler(new Request(strict,{headers:{cookie:g.cookie}}));const returned=new URL(new URL(initial.headers.get("location")!).searchParams.get("return")!,issuer);
+    clock+=240_000;
+    const session=await rotateAccountSession({store:g.store,subject,oldSessionId:g.session.sessionId,now:clock,ttlMs:60_000,hostedPolicy:true,freshlyAuthenticatedAt:Math.floor(clock/1000)});
+    const cookie=`${HOSTED_ACCOUNT_SESSION_COOKIE_NAME}=${session.sessionId}`;const consent=await pendingConsent(g,returned,cookie);
+    clock+=61_000;expect((await submitConsent(g,returned,consent,cookie)).status).toBe(400);
+  } finally {Date.now=realNow;}
+});
+
+test("Postgres stores hosted consent/checkpoint metadata and completes ordinary plus strict fresh HTTP authorization",async()=>{
+  const db=new PGlite();
+  try {
+    await db.exec(`CREATE SCHEMA accounts_v1;
+CREATE TABLE accounts_v1.accounts(subject text PRIMARY KEY,email text,email_verified boolean,display_name text,picture text,terms_version text,terms_accepted_at timestamptz,terms_accepted_source text,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL);
+CREATE TABLE accounts_v1.account_sessions(session_id text PRIMARY KEY,subject text REFERENCES accounts_v1.accounts(subject),created_at timestamptz,expires_at timestamptz);
+CREATE TABLE accounts_v1.authorization_codes(code_hash text PRIMARY KEY,client_id text,redirect_uri text,scope text,subject text,takosumi_subject text REFERENCES accounts_v1.accounts(subject),capsule_id text,workspace_id text,role text,nonce text,code_challenge text,code_challenge_method text,created_at timestamptz,expires_at timestamptz);
+CREATE TABLE accounts_v1.oauth_access_tokens(token_hash text PRIMARY KEY,client_id text,audience text,scope text,subject text,takosumi_subject text REFERENCES accounts_v1.accounts(subject),capsule_id text,workspace_id text,role text,interface_id text,interface_binding_id text,interface_resolved_revision bigint,created_at timestamptz,expires_at timestamptz);
+CREATE TABLE accounts_v1.oauth_refresh_tokens(LIKE accounts_v1.oauth_access_tokens INCLUDING ALL);`);
+    for(const name of ["019_refresh_chain.sql","045_hosted_canonical_identity.sql"])await db.exec(await Bun.file(new URL(`../../../../accounts/service/migrations/${name}`,import.meta.url)).text());
+    const store=new PostgresAccountsStore({queryObject:async<T>(sql:string,args:readonly unknown[]=[])=>({rows:(await db.query(sql,[...args])).rows as T[]})});
+    const f=await fixture(store);const ordinary=await f.grant();expect(claims(ordinary.id_token).sub).toBe(subject);
+    const pending=await freshConsent(f);
+    const rows=await db.query<{hosted_metadata:Record<string,unknown>}>("SELECT hosted_metadata FROM accounts_v1.authorization_codes WHERE code_hash=$1",[await sha256Text(pending.transaction)]);
+    expect(rows.rows[0]!.hosted_metadata.authorizationPolicyHash).toStartWith("sha256:");expect(rows.rows[0]!.hosted_metadata.authorizationSessionHash).toStartWith("sha256:");expect(rows.rows[0]!.hosted_metadata.reauthenticationStartedAt).toBeNumber();
+    const approved=await submitConsent(f,pending.url,pending.transaction,pending.cookie);expect(approved.status).toBe(302);
+    const code=new URL(approved.headers.get("location")!).searchParams.get("code")!;const exchanged=await f.token({grant_type:"authorization_code",code,redirect_uri:"https://hosted.example.test/auth/callback",code_verifier:verifier});expect(exchanged.status).toBe(200);
+    expect(claims((await exchanged.json() as {id_token:string}).id_token).auth_time).toBe((await store.findAccountSession(pending.session.sessionId))!.authTime);
+  } finally {await db.close();}
+},20_000);
