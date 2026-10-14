@@ -101,6 +101,10 @@ The Server callback belongs to the API Worker that owns the host-only RP session
 the static Console origin is a post-login navigation target, not the callback.
 The upstream Google/GitHub descriptors explicitly pin their protocol and
 verification profile and `https://auth-staging.takos.jp/oauth/upstream/callback`.
+Each upstream secret is an explicit, distinct `clientSecretEnv` reference in the
+operator descriptor, with a bounded upstream secret-binding name. The release
+secret set is derived exactly from those descriptors and the issuer/client
+secrets; there are no fixed global provider credential slots or implicit fallbacks.
 They require actual stage provider registration and secret custody; no production
 descriptor or guessed console origin is a fallback. Optional passkeys pin the
 same stage RP ID/origin. The issuer and product cookies remain separate and

@@ -16,7 +16,6 @@ const SHA = /^sha256:[a-f0-9]{64}$/u;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u;
 const ID = /^[a-f0-9]{32}$/u;
 const BASE_SECRETS = ["TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK", "TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET", "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT", ...AUTH_STAGING_CLIENTS.map((client) => client.clientSecretEnv)];
-const UPSTREAM_SECRETS = ["TAKOSUMI_ACCOUNTS_SUBJECT_SECRET", "TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_SECRET", "TAKOSUMI_ACCOUNTS_UPSTREAM_GITHUB_CLIENT_SECRET"];
 
 export type AuthStagingTarget = Readonly<{
   kind: "takosumi.auth-staging-target@v1";
@@ -74,9 +73,10 @@ export function parseAuthStagingTarget(value: unknown): AuthStagingTarget {
   }
   assertAuthStagingVariables(vars);
   const requiredSecrets = value.requiredSecrets;
-  if (requiredSecrets.some((name) => typeof name !== "string" || ![...BASE_SECRETS, ...UPSTREAM_SECRETS].includes(name)) ||
+  const descriptorSecrets = [...BASE_SECRETS, ...assertAuthStagingUpstreams(vars.TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS)];
+  if (requiredSecrets.some((name) => typeof name !== "string" || !descriptorSecrets.includes(name)) ||
       new Set(requiredSecrets).size !== requiredSecrets.length ||
-      [...BASE_SECRETS, ...assertAuthStagingUpstreams(vars.TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS)].some((name) => !requiredSecrets.includes(name))) throw new Error("auth_staging_secrets_invalid");
+      descriptorSecrets.some((name) => !requiredSecrets.includes(name))) throw new Error("auth_staging_secrets_invalid");
   return {
     kind: "takosumi.auth-staging-target@v1", environment: "staging", worker: AUTH_STAGING_WORKER, issuer: AUTH_STAGING_ISSUER,
     accountId: value.accountId, zoneId: value.zoneId, repository: value.repository, sourceCommit: value.sourceCommit,

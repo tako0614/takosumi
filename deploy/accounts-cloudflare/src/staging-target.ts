@@ -53,17 +53,22 @@ export function assertAuthStagingUpstreams(value: unknown): readonly string[] {
   catch { throw new Error("auth_staging_upstreams_invalid"); }
   if (!Array.isArray(providers) || providers.length !== 2) throw new Error("auth_staging_upstreams_invalid");
   const secrets = ["TAKOSUMI_ACCOUNTS_SUBJECT_SECRET"];
-  for (const [providerId, protocol, verificationProfile, clientSecretEnv] of [
-    ["google", "oidc", "google-oidc", "TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_SECRET"],
-    ["github", "oauth2", "github-oauth", "TAKOSUMI_ACCOUNTS_UPSTREAM_GITHUB_CLIENT_SECRET"],
+  // Provider selection is this dedicated target's contract; secret lookup is
+  // still an explicit operator descriptor, never a fixed global provider slot.
+  for (const [providerId, protocol, verificationProfile] of [
+    ["google", "oidc", "google-oidc"],
+    ["github", "oauth2", "github-oauth"],
   ]) {
     const matches = providers.filter((provider) => record(provider) && provider.providerId === providerId);
     const provider = matches[0];
     if (matches.length !== 1 || !record(provider) || provider.protocol !== protocol ||
-        provider.verificationProfile !== verificationProfile || provider.clientSecretEnv !== clientSecretEnv ||
+        provider.verificationProfile !== verificationProfile ||
+        typeof provider.clientSecretEnv !== "string" || provider.clientSecretEnv.length > 128 ||
+        !/^TAKOSUMI_ACCOUNTS_UPSTREAM_[A-Z][A-Z0-9_]*_SECRET$/u.test(provider.clientSecretEnv) ||
+        secrets.includes(provider.clientSecretEnv) ||
         provider.redirectUri !== `${AUTH_STAGING_ISSUER}/oauth/upstream/callback` ||
         Object.hasOwn(provider, "clientSecret") || Object.hasOwn(provider, "clientSecretValue")) throw new Error("auth_staging_upstreams_invalid");
-    secrets.push(clientSecretEnv!);
+    secrets.push(provider.clientSecretEnv);
   }
   return secrets;
 }

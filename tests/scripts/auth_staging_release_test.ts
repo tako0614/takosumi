@@ -271,3 +271,19 @@ test("ambient Git checkout/config overrides cannot attest dirty build source", a
     expect(error).toContain("auth_staging_source_mismatch");
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
+
+
+test("upstream secret custody follows explicit descriptors, without fixed provider slots or aliases",()=>{
+  const target=fixtureTarget();
+  const custom=upstreamMetadata.map((provider,index)=>({...provider,clientSecretEnv:`TAKOSUMI_ACCOUNTS_UPSTREAM_LOGIN_${index+1}_SECRET`}));
+  const originalRefs=upstreamMetadata.map(provider=>provider.clientSecretEnv);
+  const requiredSecrets=target.requiredSecrets.filter(name=>!originalRefs.includes(name)).concat(custom.map(provider=>provider.clientSecretEnv));
+  const vars={...target.vars,TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS:JSON.stringify(custom)};
+  const parsed=parseAuthStagingTarget({...target,vars,requiredSecrets});
+  expect(parsed.requiredSecrets).toEqual(requiredSecrets);
+  expect(()=>parseAuthStagingTarget({...target,vars})).toThrow("secrets_invalid");
+  expect(()=>parseAuthStagingTarget({...target,vars,requiredSecrets:[...requiredSecrets,originalRefs[0]]})).toThrow("secrets_invalid");
+  for(const ref of [custom[1]!.clientSecretEnv,"TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK","TAKOSUMI_ACCOUNTS_DB","TAKOSUMI_ACCOUNTS_UPSTREAM_FOO_SECRET;INJECT","TAKOSUMI_ACCOUNTS_UPSTREAM_"+"A".repeat(130)+"_SECRET"]){
+    expect(()=>parseAuthStagingTarget({...target,vars:{...vars,TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS:JSON.stringify([{...custom[0],clientSecretEnv:ref},custom[1]])},requiredSecrets})).toThrow();
+  }
+});
