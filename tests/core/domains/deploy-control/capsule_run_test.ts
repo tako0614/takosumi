@@ -8699,6 +8699,154 @@ test("pre-destroy release commands run before OpenTofu destroy", async () => {
   });
 });
 
+test.each([
+  ["success", "runner", "intact"],
+  ["success", "runner", "sealed"],
+  ["exhausted", "runner", "intact"],
+  ["dlq", "runner", "intact"],
+  ["dlq", "operator", "intact"],
+  ["dlq", "operator", "tampered"],
+] as const)("pre_destroy %s after capacity refusal settles %s release usage once with %s inputs", async (settlement, executor, integrity) => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner(
+    {},
+    { launch_url: { sensitive: false, value: "https://x.example" } },
+  );
+  const originalDestroy = runner.destroy!.bind(runner);
+  let destroyCalls = 0;
+  runner.destroy = (job) => {
+    destroyCalls++;
+    if (destroyCalls === 1 || settlement === "exhausted") {
+      return Promise.reject(
+        new OpenTofuRunnerInfrastructureError("runner capacity refused", {
+          reason: "capacity_exhausted",
+        }),
+      );
+    }
+    return originalDestroy(job);
+  };
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: lifecycleInstallConfig([
+      {
+        id: "retire-runtime",
+        phase: "pre_destroy",
+        executor,
+        command: ["bun", "run", "release", "--destroy"],
+      },
+    ]),
+  });
+  const rated: Array<{ runId: string; quantity: number }> = [];
+  const testSealer: NonNullable<OpenTofuControllerDependencies["dependencyValueSealer"]> = {
+    seal: (values) => Promise.resolve({
+      ciphertext: btoa(JSON.stringify(values)),
+      contentDigest: "test-sidecar",
+      names: Object.keys(values),
+    }),
+    open: (sealed) => Promise.resolve(JSON.parse(atob(sealed.ciphertext))),
+  };
+  const controller = controllerWith(store, runner, {
+    defaultBillingSettings: { mode: "showback" },
+    dependencyValueSealer: testSealer,
+    showbackRater: {
+      ratePlan: () => Promise.resolve({ ratingStatus: "rated", usdMicros: 0 }),
+      rateUsage: (context) => {
+        rated.push({ runId: context.runId, quantity: context.quantity });
+        return Promise.resolve({ ratingStatus: "rated", usdMicros: 7_500 });
+      },
+    },
+    enqueueRun: () => Promise.resolve(),
+    releaseActivator: {
+      activate: () => Promise.resolve({ status: "succeeded" }),
+    },
+  });
+  const dispatch = async (run: { readonly id: string; readonly workspaceId: string }, action: "plan" | "apply") => {
+    await controller.dispatchQueuedRun({ action, runId: run.id, workspaceId: run.workspaceId });
+  };
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  await dispatch(create.planRun, "plan");
+  const createPlan = (await store.getPlanRun(create.planRun.id))!;
+  const createApply = await controller.createApplyRun({
+    planRunId: createPlan.id,
+    expected: applyExpectedGuardFromPlanRun(createPlan),
+  });
+  await dispatch(createApply.applyRun, "apply");
+
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  await dispatch(destroy.planRun, "plan");
+  const destroyPlan = (await store.getPlanRun(destroy.planRun.id))!;
+  await controller.approveRun(destroyPlan.id);
+  const destroyApply = await controller.createApplyRun({
+    planRunId: destroyPlan.id,
+    expected: applyExpectedGuardFromPlanRun(destroyPlan),
+  });
+  if (integrity === "sealed") {
+    const inputs = (await store.getPlanRunInputs(destroyPlan.id))!;
+    await store.putPlanRunInputs({
+      planRunId: destroyPlan.id,
+      variables: {},
+      sealed: await testSealer.seal(JSON.parse(JSON.stringify(inputs))),
+    });
+    expect((await store.getPlanRunInputs(destroyPlan.id))?.lifecycleActions).toBeUndefined();
+  }
+  const usage = async () =>
+    (await store.listUsageEvents(destroyApply.applyRun.workspaceId)).filter(
+      (event) => event.runId === destroyApply.applyRun.id && event.kind === "runner_minute",
+    );
+  await dispatch(destroyApply.applyRun, "apply");
+  const queued = (await store.getApplyRun(destroyApply.applyRun.id))!;
+  expect(queued.status).toBe("queued");
+  expect(await usage()).toHaveLength(0);
+  expect(rated.filter((event) => event.runId === queued.id)).toHaveLength(0);
+
+  if (integrity === "tampered") {
+    const inputs = (await store.getPlanRunInputs(destroyPlan.id))!;
+    await store.putPlanRunInputs({
+      ...inputs,
+      lifecycleActions: inputs.lifecycleActions?.map((action) => ({
+        ...action,
+        executor: "runner" as const,
+      })),
+    });
+  }
+
+  if (settlement === "dlq") {
+    expect(await controller.markRunFailed("apply", queued.id, "retries-exhausted")).toBe(true);
+  } else {
+    await dispatch(queued, "apply");
+  }
+  const terminal = (await store.getApplyRun(queued.id))!;
+  expect(terminal.status).toBe(settlement === "success" ? "succeeded" : "failed");
+  const starts = terminal.auditEvents.filter((event) => event.type === "apply.started");
+  const releases = terminal.auditEvents.filter(
+    (event) => event.type === "lifecycle_action.pre_destroy.succeeded" && event.data?.actionDispatched === true,
+  );
+  expect(starts).toHaveLength(settlement === "dlq" ? 1 : 2);
+  expect(releases).toHaveLength(settlement === "dlq" ? 1 : 2);
+  const expectedMs = executor === "operator"
+    ? 0
+    : (releases[0]!.at - starts[0]!.at) +
+      (settlement === "success"
+        ? terminal.finishedAt! - starts[1]!.at
+        : settlement === "exhausted"
+          ? releases[1]!.at - starts[1]!.at
+          : 0);
+  if (executor === "runner") expect(expectedMs).toBeGreaterThan(0);
+  const events = await usage();
+  expect(events).toHaveLength(expectedMs > 0 ? 1 : 0);
+  if (expectedMs > 0) {
+    expect(events[0]).toMatchObject({
+      idempotencyKey: `${terminal.id}:runner_minute`,
+      quantity: expectedMs / 60_000,
+      ratingStatus: "rated",
+      usdMicros: 7_500,
+    });
+  }
+  expect(rated.filter((event) => event.runId === terminal.id)).toEqual(
+    expectedMs > 0 ? [{ runId: terminal.id, quantity: expectedMs / 60_000 }] : [],
+  );
+});
+
 test("destroy recovery executes pre-destroy commands from the reviewed recovery snapshot", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner(

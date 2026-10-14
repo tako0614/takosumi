@@ -503,6 +503,67 @@ function isPreProviderRunnerRefusal(error: unknown): boolean {
   );
 }
 
+/**
+ * Count only a prior attempt whose runner release finished before a proven
+ * pre-provider destroy refusal requeued it. Audit order, not event ID, pairs
+ * the claim, release and retry; two events can share a millisecond/event ID.
+ */
+function runnerPreDestroyReleaseIntervals(run: ApplyRun): {
+  readonly priorMs: number;
+  readonly currentStart?: number;
+  readonly currentReleaseMs: number;
+} {
+  let priorMs = 0;
+  let start: number | undefined;
+  let releaseAt: number | undefined;
+  let duplicateRelease = false;
+  const validAt = (at: number) => Number.isFinite(at) && at >= 0;
+  const releasedMs = () =>
+    start !== undefined && releaseAt !== undefined && !duplicateRelease &&
+      releaseAt >= start
+      ? releaseAt - start
+      : 0;
+  for (const event of run.auditEvents) {
+    if (event.type === "apply.started") {
+      start = validAt(event.at) ? event.at : undefined;
+      releaseAt = undefined;
+      duplicateRelease = false;
+    } else if (event.type === "lifecycle_action.pre_destroy.succeeded") {
+      if (
+        event.data?.actionDispatched !== true ||
+        event.data?.status !== "succeeded" ||
+        !validAt(event.at) ||
+        start === undefined ||
+        event.at < start
+      ) continue;
+      if (releaseAt === undefined) releaseAt = event.at;
+      else duplicateRelease = true;
+    } else if (event.type === "destroy.retry_scheduled") {
+      if (
+        event.data?.errorCode === "capacity_exhausted" ||
+        event.data?.errorCode === "run_deadline_exceeded"
+      ) {
+        if (
+          releaseAt !== undefined &&
+          validAt(event.at) &&
+          event.at >= releaseAt
+        ) {
+          const elapsed = releasedMs();
+          if (Number.isSafeInteger(priorMs + elapsed)) priorMs += elapsed;
+        }
+      }
+      start = undefined;
+      releaseAt = undefined;
+      duplicateRelease = false;
+    }
+  }
+  return {
+    priorMs,
+    ...(start !== undefined ? { currentStart: start } : {}),
+    currentReleaseMs: releasedMs(),
+  };
+}
+
 const RUNNER_INFRASTRUCTURE_RETRY_LIMIT = 1;
 const PLAN_CREATION_STAGE_TIMEOUT_MS = 25_000;
 const RUN_EXECUTION_LEASE_LOST_REASON = "run_execution_lease_lost";
@@ -8338,6 +8399,13 @@ export class RunEngine {
     if (!result.won) return result;
     await this.#afterTerminalRunWon("apply", failed);
     await this.#recordApplyFailure(failed, startedAt, eventType, error);
+    if (failed.operation === "destroy" && failed.finishedAt !== undefined) {
+      await this.#recordDestroyRunnerMinuteUsage({
+        run: failed,
+        finishedAt: failed.finishedAt,
+        current: "none",
+      });
+    }
     return { won: true, run: failed };
   }
 
@@ -9316,9 +9384,15 @@ export class RunEngine {
     readonly capsuleId?: string;
     readonly startedAt?: number;
     readonly finishedAt: number;
+    readonly durationMs?: number;
   }): Promise<void> {
-    if (input.startedAt === undefined) return;
-    const durationMs = Math.max(0, input.finishedAt - input.startedAt);
+    if (input.startedAt === undefined && input.durationMs === undefined) return;
+    const durationMs = input.durationMs ??
+      Math.max(0, input.finishedAt - input.startedAt!);
+    if (
+      !Number.isFinite(durationMs) ||
+      (input.durationMs !== undefined && durationMs <= 0)
+    ) return;
     const quantity = durationMs / 60_000;
     const createdAt = new Date(input.finishedAt).toISOString();
     const rating = await this.#billing.rateUsageMeasurement({
@@ -9344,6 +9418,60 @@ export class RunEngine {
       source: "runner",
       idempotencyKey: `${input.runId}:runner_minute`,
       createdAt,
+    });
+  }
+
+  /** Settle one Run-level row from disjoint attempts, without queue wait. */
+  async #recordDestroyRunnerMinuteUsage(input: {
+    readonly run: ApplyRun;
+    readonly startedAt?: number;
+    readonly finishedAt: number;
+    readonly current: "execution" | "refusal" | "none";
+  }): Promise<void> {
+    let inputs: PlanRunInputs | undefined;
+    try {
+      const planRun = await this.#store.getPlanRun(input.run.planRunId);
+      if (
+        planRun?.id === input.run.planRunId &&
+        planRun.workspaceId === input.run.workspaceId
+      ) inputs = await this.#requirePreparedPlanRunInputs(planRun);
+    } catch {
+      // This read is only needed to trust older release audit. A post-commit
+      // read failure must not prevent settlement of this attempt's execution.
+      log.warn("deploy_control.destroy_usage_inputs_read_failed", {
+        planRunId: input.run.planRunId,
+        applyRunId: input.run.id,
+      });
+    }
+    const hasRunnerRelease = releaseActivationCommands(
+      inputs?.lifecycleActions,
+      "pre_destroy",
+    ).some((action) => action.kind === "command" && action.executor === "runner");
+    const intervals = hasRunnerRelease
+      ? runnerPreDestroyReleaseIntervals(input.run)
+      : { priorMs: 0, currentStart: undefined, currentReleaseMs: 0 };
+    const currentMatches = input.startedAt !== undefined &&
+      intervals.currentStart === input.startedAt;
+    const validExecution = input.current === "execution" &&
+      input.startedAt !== undefined &&
+      Number.isFinite(input.startedAt) &&
+      Number.isFinite(input.finishedAt) &&
+      input.finishedAt >= input.startedAt;
+    const currentMs = validExecution
+      ? input.finishedAt - input.startedAt
+      : input.current === "refusal" && currentMatches
+        ? intervals.currentReleaseMs
+        : 0;
+    const durationMs = intervals.priorMs + currentMs;
+    if (!Number.isSafeInteger(durationMs) || durationMs < 0) return;
+    if (durationMs === 0 && !validExecution) return;
+    await this.#recordRunnerMinuteUsage({
+      workspaceId: input.run.workspaceId,
+      runId: input.run.id,
+      capsuleId: input.run.capsuleId,
+      ...(durationMs === 0 ? { startedAt: input.startedAt } : {}),
+      finishedAt: input.finishedAt,
+      ...(durationMs > 0 ? { durationMs } : {}),
     });
   }
 
@@ -10570,13 +10698,22 @@ export class RunEngine {
   }): Promise<ApplyRunResponse> {
     try {
       await this.#billing.releaseApplyBilling(input.planRun);
-      await this.#recordRunnerMinuteUsage({
-        workspaceId: input.failed.workspaceId,
-        runId: input.failed.id,
-        capsuleId: input.failed.capsuleId,
-        startedAt: input.startedAt,
-        finishedAt: input.now,
-      });
+      if (input.action === "destroy") {
+        await this.#recordDestroyRunnerMinuteUsage({
+          run: input.failed,
+          startedAt: input.startedAt,
+          finishedAt: input.now,
+          current: "execution",
+        });
+      } else {
+        await this.#recordRunnerMinuteUsage({
+          workspaceId: input.failed.workspaceId,
+          runId: input.failed.id,
+          capsuleId: input.failed.capsuleId,
+          startedAt: input.startedAt,
+          finishedAt: input.now,
+        });
+      }
       await this.#recordDeployOperationMetric({
         run: input.failed,
         operationKind: input.action === "destroy" ? "destroy_apply" : "apply",
@@ -12035,12 +12172,11 @@ export class RunEngine {
         finalized,
       );
       try {
-        await this.#recordRunnerMinuteUsage({
-          workspaceId: completed.workspaceId,
-          runId: completed.id,
-          capsuleId: completed.capsuleId,
+        await this.#recordDestroyRunnerMinuteUsage({
+          run: completed,
           startedAt,
           finishedAt: now,
+          current: "execution",
         });
         await this.#recordDeployOperationMetric({
           run: completed,
@@ -12140,16 +12276,14 @@ export class RunEngine {
             runnerInfrastructureRetryExhaustedError("destroy_apply"),
             true,
           );
-          if (
-            !isPreProviderRunnerRefusal(error) &&
-            failed.finishedAt !== undefined
-          ) {
-            await this.#recordRunnerMinuteUsage({
-              workspaceId: failed.workspaceId,
-              runId: failed.id,
-              capsuleId: failed.capsuleId,
+          if (failed.finishedAt !== undefined) {
+            await this.#recordDestroyRunnerMinuteUsage({
+              run: failed,
               startedAt,
               finishedAt: failed.finishedAt,
+              current: isPreProviderRunnerRefusal(error)
+                ? "refusal"
+                : "execution",
             });
           }
           return {
@@ -12209,17 +12343,14 @@ export class RunEngine {
         lifecycleActionDispatched,
         lifecycleOutcome,
       );
-      if (
-        runnerDispatched &&
-        !isPreProviderRunnerRefusal(error) &&
-        failed.finishedAt !== undefined
-      ) {
-        await this.#recordRunnerMinuteUsage({
-          workspaceId: failed.workspaceId,
-          runId: failed.id,
-          capsuleId: failed.capsuleId,
+      if (failed.finishedAt !== undefined) {
+        await this.#recordDestroyRunnerMinuteUsage({
+          run: failed,
           startedAt,
           finishedAt: failed.finishedAt,
+          current: runnerDispatched && !isPreProviderRunnerRefusal(error)
+            ? "execution"
+            : "refusal",
         });
       }
       return {

@@ -19,8 +19,13 @@ on `${runId}:runner_minute`, so a refused attempt can occupy the row later
 needed by the successful execution.
 
 Suppress runner usage for these explicit pre-provider refusals in apply and
-destroy. Preserve recording for executed/indeterminate attempts and artifact
-relay recovery. Preserve the existing Run-level idempotency key: recovering an
+destroy when no runner work preceded the refusal. A destroy can first execute
+runner-owned pre-destroy commands. Pair its durable started/succeeded/refusal
+audit sequence by attempt and settle those confirmed intervals at terminal
+success, exhaustion or queued dead-letter failure, together with any current
+execution interval. Exclude queue wait, operator-only actions, duplicate or
+malformed evidence and not-applicable actions. Preserve recording for
+executed/indeterminate attempts and artifact relay recovery. Preserve the existing Run-level idempotency key: recovering an
 immutable mutation result is not proof of a second provider execution, and a
 new key could charge an already-recorded Run again across the code update.
 Provider custody, deadlines, retry budget, mutation receipts, reservation
@@ -32,7 +37,10 @@ is introduced. WIP cancellation and Idempotency code are not transplanted.
 Use the actual controller and first-write-wins usage store with a billing port
 that returns a rating. Demonstrate the refusal/retry defect before the fix;
 then verify successful retry quantities, retry exhaustion and artifact replay
-deduplication. Run focused lifecycle tests and the entire owner gate:
+deduplication. Add regression proof for pre-destroy runner work followed by a
+refusal, success/exhaustion/dead-letter settlement, and operator-only exclusion;
+verify nonzero host rating uses the same quantity. The existing coarse Run
+wall-time meter is retained, rather than claiming exact container CPU time. Run focused lifecycle tests and the entire owner gate:
 
 ```sh
 env -u NODE_ENV -u TAKOSUMI_ENVIRONMENT bun run check
