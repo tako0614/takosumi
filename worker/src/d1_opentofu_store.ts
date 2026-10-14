@@ -2493,9 +2493,14 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     readonly mapRow: (row: Record<string, unknown>) => T;
   }): Promise<readonly T[]> {
     if (input.limit <= 0) return [];
-    // D1 has no interactive transaction. The page and lap-ceiling reads and a generation-
-    // fenced UPDATE run in one batch transaction. Competing ticks can observe
-    // the same old generation, but only one can advance it; losers retry.
+    // D1 has no interactive transaction and allows at most 100 bound
+    // parameters per statement. Page reads run in one batch, then a
+    // generation-fenced UPDATE reserves the page by binding only the scalar
+    // keyset values computed from those reads (11 parameters, independent of
+    // eligibility predicate size). Competing ticks can observe the same old
+    // generation, but only one can advance it; losers retry and re-read.
+    // Eligibility predicates grow independently (e.g. billing/runner-usage
+    // branches), so the reservation must never re-embed the page queries.
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const snapshot = await this.db
         .prepare(
@@ -2523,65 +2528,73 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           ? { createdAt: snapshot.upper_created_at, id: snapshot.upper_id }
           : undefined,
       );
-      const advanceSql = `with after_page as (${after.sql}),
-        start_page as (${input.start.sql}),
-        upper_page as (${input.upper.sql}),
-        selected_page as (
-          select sweep_created_at, sweep_id from after_page
-          union all
-          select sweep_created_at, sweep_id from start_page
-          where not exists (select 1 from after_page)
-        ), chosen_upper as (
-          select ? as upper_created_at, ? as upper_id
-          where exists (select 1 from after_page)
-          union all
-          select sweep_created_at, sweep_id from upper_page
-          where not exists (select 1 from after_page)
-        )
-        update scheduled_sweep_cursors
-        set generation = generation + 1,
-            cursor_created_at = cast((
-              select sweep_created_at from selected_page
-              order by sweep_created_at desc, sweep_id desc limit 1
-            ) as text),
-            cursor_id = (
-              select sweep_id from selected_page
-              order by sweep_created_at desc, sweep_id desc limit 1
-            ),
-            upper_created_at = cast((select upper_created_at from chosen_upper) as text),
-            upper_id = (select upper_id from chosen_upper)
-        where lane = ?
-          and generation = ?
-          and cursor_created_at is ?
-          and cursor_id is ?
-          and upper_created_at is ?
-          and upper_id is ?`;
-      const results = await this.db.batch([
+      const reads = await this.db.batch([
         this.db.prepare(after.sql).bind(...after.params),
         this.db.prepare(input.start.sql).bind(...input.start.params),
         this.db.prepare(input.upper.sql).bind(...input.upper.params),
-        this.db
-          .prepare(advanceSql)
-          .bind(
-            ...after.params,
-            ...input.start.params,
-            ...input.upper.params,
-            snapshot.upper_created_at,
-            snapshot.upper_id,
-            input.lane,
-            snapshot.generation,
-            snapshot.cursor_created_at,
-            snapshot.cursor_id,
-            snapshot.upper_created_at,
-            snapshot.upper_id,
-          ),
       ]);
-      if (changes(results[3] as D1Result) === 0) continue;
-      const afterRows = (results[0] as D1Result<Record<string, unknown>>)
+      const afterRows = (reads[0] as D1Result<Record<string, unknown>>)
         .results ?? [];
-      const pageRows = afterRows.length > 0
-        ? afterRows
-        : (results[1] as D1Result<Record<string, unknown>>).results ?? [];
+      const startRows = (reads[1] as D1Result<Record<string, unknown>>)
+        .results ?? [];
+      const upperRows = (reads[2] as D1Result<Record<string, unknown>>)
+        .results ?? [];
+      // Mid-lap pages continue after the cursor; an empty after-page wraps to
+      // the lap-start page, mirroring the previous single-statement CTE.
+      const pageRows = afterRows.length > 0 ? afterRows : startRows;
+      const keyOf = (
+        row: Record<string, unknown> | undefined,
+      ): { readonly createdAt: string; readonly id: string } | undefined => {
+        if (row === undefined) return undefined;
+        const createdAt = row.sweep_created_at;
+        const id = row.sweep_id;
+        if (
+          (typeof createdAt !== "string" && typeof createdAt !== "number") ||
+          typeof id !== "string"
+        ) {
+          throw new Error("scheduled sweep page row has no keyset");
+        }
+        return { createdAt: String(createdAt), id };
+      };
+      const nextCursor = keyOf(pageRows[pageRows.length - 1]);
+      // A non-empty after-page keeps the frozen lap ceiling; a wrap captures
+      // the newest eligible row as the next ceiling (null when nothing is
+      // eligible), so continuous arrivals cannot postpone the lap end.
+      const nextUpper = afterRows.length > 0
+        ? {
+          createdAt: snapshot.upper_created_at,
+          id: snapshot.upper_id,
+        }
+        : keyOf(upperRows[0]);
+      const advanced = await this.db
+        .prepare(
+          `update scheduled_sweep_cursors
+           set generation = generation + 1,
+               cursor_created_at = cast(? as text),
+               cursor_id = ?,
+               upper_created_at = cast(? as text),
+               upper_id = ?
+           where lane = ?
+             and generation = ?
+             and cursor_created_at is ?
+             and cursor_id is ?
+             and upper_created_at is ?
+             and upper_id is ?`,
+        )
+        .bind(
+          nextCursor?.createdAt ?? null,
+          nextCursor?.id ?? null,
+          nextUpper?.createdAt ?? null,
+          nextUpper?.id ?? null,
+          input.lane,
+          snapshot.generation,
+          snapshot.cursor_created_at,
+          snapshot.cursor_id,
+          snapshot.upper_created_at,
+          snapshot.upper_id,
+        )
+        .run();
+      if (changes(advanced as D1Result) === 0) continue;
       return pageRows.map(input.mapRow);
     }
     throw new Error("scheduled sweep cursor changed too often");
