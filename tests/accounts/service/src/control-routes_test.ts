@@ -2083,6 +2083,56 @@ test("Control initialization rejection returns the same generic 503 without disp
   expect(warnings[0]).toContain('"stage":"resolve_operations"');
 });
 
+test("Control initialization rejection backs off before re-running the resolver", async () => {
+  const marker = "backoff-resolver-marker";
+  let resolverCalls = 0;
+  const resolveOperations = async (): Promise<ControlPlaneOperations> => {
+    resolverCalls += 1;
+    throw new Error(marker);
+  };
+  const store = new Proxy({} as AccountsStore, {
+    get() {
+      throw new Error("backed-off rejection must not read the store");
+    },
+  });
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (line?: unknown) => warnings.push(String(line));
+  const postSources = () =>
+    handleAuthenticatedControlRoute({
+      request: new Request("https://app.example.test/api/v1/sources", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ marker }),
+      }),
+      url: new URL("https://app.example.test/api/v1/sources"),
+      store,
+      subject: "tsub_owner",
+      resolveOperations,
+    });
+  try {
+    const first = await postSources();
+    expect(first?.status).toBe(503);
+    // A persistently failing substrate must not see one initialization per
+    // request: the rejection cools down before the resolver may run again.
+    const second = await postSources();
+    expect(second?.status).toBe(503);
+    expect(resolverCalls).toBe(1);
+    const secondBody = await second?.text();
+    expect(secondBody).toMatch(/feature_unavailable/u);
+    expect(secondBody).not.toContain(marker);
+    expect(warnings).toHaveLength(1);
+    // After the cooldown the next request retries exactly once.
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    const third = await postSources();
+    expect(third?.status).toBe(503);
+    expect(resolverCalls).toBe(2);
+    expect(warnings).toHaveLength(2);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
 test("credential OAuth callback initialization rejection is also generic and bounded", async () => {
   const marker = "oauth-query-secret";
   const request = new Request(
@@ -2330,7 +2380,7 @@ test("a timed-out caller can use the same initializer after it resolves", async 
   expect(resolverCalls).toBe(1);
 });
 
-test("a rejected Control initializer is evicted before the next request retries", async () => {
+test("a rejected Control initializer cools down before the next request retries", async () => {
   const request = new Request(
     "https://app.example.test/api/v1/views/workspaces.v1",
   );
@@ -2345,24 +2395,24 @@ test("a rejected Control initializer is evicted before the next request retries"
     if (attempts === 1) throw new Error("first bootstrap failed");
     return operations;
   };
+  const context = () => ({
+    request,
+    url: new URL(request.url),
+    store: {} as AccountsStore,
+    subject: "tsub_owner",
+    resolveOperations,
+  });
 
-  const first = await handleAuthenticatedControlRoute({
-    request,
-    url: new URL(request.url),
-    store: {} as AccountsStore,
-    subject: "tsub_owner",
-    resolveOperations,
-  });
-  const second = await handleAuthenticatedControlRoute({
-    request,
-    url: new URL(request.url),
-    store: {} as AccountsStore,
-    subject: "tsub_owner",
-    resolveOperations,
-  });
+  const first = await handleAuthenticatedControlRoute(context());
+  // A request inside the rejection cooldown shares the settled rejection
+  // instead of re-running the resolver against the failing substrate.
+  const second = await handleAuthenticatedControlRoute(context());
+  await new Promise((resolve) => setTimeout(resolve, 1_100));
+  const third = await handleAuthenticatedControlRoute(context());
 
   expect(first?.status).toBe(503);
-  expect(second?.status).toBe(200);
+  expect(second?.status).toBe(503);
+  expect(third?.status).toBe(200);
   expect(attempts).toBe(2);
 });
 

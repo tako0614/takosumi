@@ -76,6 +76,15 @@ import {
 
 const CONTROL_OPERATIONS_INIT_DEADLINE_MS = 5_000;
 
+/**
+ * Cooldown after a rejected Control operations initialization before the
+ * resolver may run again. Matches the Accounts handler initialization failure
+ * backoff: a persistently failing substrate sees one initialization attempt
+ * per window instead of one per request. Waiting requests still fail fast
+ * with the generic 503 through the existing unavailable path.
+ */
+const CONTROL_OPERATIONS_INIT_FAILURE_BACKOFF_MS = 1_000;
+
 class ControlOperationsInitializationTimeoutError extends Error {
   constructor() {
     super("control operations initialization timed out");
@@ -291,25 +300,48 @@ type ControlOperationsResolver = NonNullable<
 
 const controlOperationsAttempts = new WeakMap<
   ControlOperationsResolver,
-  ControlOperationsSharedAttempt<ControlOperationsResolution>
->();
+  ControlOperationsAttemptEntry
+>;
 
+interface ControlOperationsAttemptEntry {
+  readonly attempt: ControlOperationsSharedAttempt<ControlOperationsResolution>;
+  rejectedAtMs: number | undefined;
+}
+
+/**
+ * Returns the shared initialization attempt for a resolver, cooling down
+ * after a rejection: a rejected attempt is retained (not evicted) until
+ * {@link CONTROL_OPERATIONS_INIT_FAILURE_BACKOFF_MS} elapses, so concurrent
+ * requests share the same settled rejection instead of each re-running the
+ * resolver against a failing substrate. The entry is evicted lazily, so the
+ * next request after the window retries exactly once.
+ */
 function controlOperationsAttempt(
   resolveOperations: ControlOperationsResolver,
 ): ControlOperationsSharedAttempt<ControlOperationsResolution> {
   const cached = controlOperationsAttempts.get(resolveOperations);
-  if (cached) return cached;
+  if (cached) {
+    if (
+      cached.rejectedAtMs === undefined ||
+      Date.now() - cached.rejectedAtMs <
+        CONTROL_OPERATIONS_INIT_FAILURE_BACKOFF_MS
+    ) {
+      return cached.attempt;
+    }
+    controlOperationsAttempts.delete(resolveOperations);
+  }
 
-  let attempt!: ControlOperationsSharedAttempt<ControlOperationsResolution>;
-  attempt = createControlOperationsSharedAttempt(resolveOperations, {
+  // The rejection observer runs no earlier than a microtask, so `entry` is
+  // always stored before `onRejected` can fire.
+  let entry: ControlOperationsAttemptEntry;
+  const attempt = createControlOperationsSharedAttempt(resolveOperations, {
     onFailure: (error) => logControlOperationsInitializationFailure(error),
     onRejected: () => {
-      if (controlOperationsAttempts.get(resolveOperations) === attempt) {
-        controlOperationsAttempts.delete(resolveOperations);
-      }
+      entry.rejectedAtMs = Date.now();
     },
   });
-  controlOperationsAttempts.set(resolveOperations, attempt);
+  entry = { attempt, rejectedAtMs: undefined };
+  controlOperationsAttempts.set(resolveOperations, entry);
   return attempt;
 }
 
