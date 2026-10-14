@@ -7,6 +7,8 @@ import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts
 import { handleUpstreamAuthorizeRequest, handleUpstreamCallbackRequest } from "../../../../accounts/service/src/upstream-oauth-routes.ts";
 import { upstreamOAuthOptionsFromEnvironment, UPSTREAM_PROVIDER_DESCRIPTORS_ENV, UPSTREAM_SUBJECT_SECRET_ENV } from "../../../../accounts/service/src/upstream-config.ts";
 import { handleUpstreamOperationProofBeginRequest } from "../../../../accounts/service/src/upstream-operation-proof.ts";
+import { handleCredentialUnlinkIntentRequest } from "../../../../accounts/service/src/identity-unlink.ts";
+import { handleUpstreamUnlinkProofBeginRequest } from "../../../../accounts/service/src/upstream-unlink-proof.ts";
 import { handleIdentityMergeRequest } from "../../../../accounts/service/src/identity-merge.ts";
 import { rotateAccountSession, handleHostedGlobalLogout } from "../../../../accounts/service/src/account-session.ts";
 import { createEphemeralAccountsHandler, type AccountsHandler, type UpstreamOAuthOptions } from "../../../../accounts/service/src/mod.ts";
@@ -150,7 +152,7 @@ test("upstream responses and redirect attempts are bounded", async () => {
 });
 
 function hostedOptions(fetch: typeof fetch, provider = github): UpstreamOAuthOptions {
-  return { subjectSecret: "fixture-subject-secret", hostedSessionPolicy: true, fetch, providers: [{ providerId: provider.id, clientId: "social-client", redirectUri: `https://auth.example.test/oauth/upstream/callback?provider=${provider.id}`, provider }] };
+  return { subjectSecret: "fixture-subject-secret", hostedSessionPolicy: true, fetch, providers: [{ providerId: provider.id, clientId: "social-client", redirectUri: "https://auth.example.test/oauth/upstream/callback", provider }] };
 }
 
 async function startHostedFlow(store: InMemoryAccountsStore, options: UpstreamOAuthOptions, extra = "") {
@@ -410,10 +412,9 @@ async function operationFixture(withOldLogin = false, fullHandler = false, withR
     const authorization = new URL(location);
     const state = authorization.searchParams.get("state")!;
     const isGoogle = authorization.hostname === "accounts.google.com";
-    const providerId = isGoogle ? google.id : github.id;
     const fetch = isGoogle ? await googleFetch(await signedGoogleToken(overrides.googleClaims ?? {}, authorization.searchParams.get("nonce")!), overrides.googleUser)
       : githubFetch({ user: overrides.githubUser, pages: overrides.githubEmails ?? [[{ email: "person@gmail.com", primary: true, verified: true, visibility: null }]] });
-    const url = new URL(`https://auth.example.test/oauth/upstream/callback?provider=${providerId}&state=${state}&code=operation-code`);
+    const url = new URL(`https://auth.example.test/oauth/upstream/callback?state=${state}&code=operation-code`);
     currentFetch = fetch;
     const callbackRequest = new Request(url, { headers: { cookie: overrides.cookie ?? cookieHeader() } });
     const response = handler ? await handler(callbackRequest)
@@ -421,7 +422,7 @@ async function operationFixture(withOldLogin = false, fullHandler = false, withR
     updateCookies(response);
     return response;
   };
-  return {store,a,b,cookies,cookieHeader,request,session,merge,operationId,begin,complete,options,oldLoginResponse};
+  return {store,a,b,cookies,cookieHeader,request,session,merge,operationId,begin,complete,options,oldLoginResponse,updateCookies};
 }
 
 test("owning Accounts HTTP social-only merge completes GitHub private + Gmail proofs without auth_time or passkey", async () => {
@@ -617,4 +618,81 @@ test("ambiguous merge and unlink transaction contexts are refused before provide
   const response = await handleUpstreamCallbackRequest({ request: new Request(url, { headers: { cookie: flow.cookie! } }), url, store, upstreamOAuth: options, secureCookie: true });
   expect(response.status).toBe(400);
   expect(requests).toHaveLength(0);
+});
+
+
+test("exact registered callback without provider selector resolves Google and GitHub from browser transaction", async () => {
+  for (const provider of [google, github]) {
+    const store = new InMemoryAccountsStore();
+    const requests: Request[] = [];
+    const options = {...hostedOptions(githubFetch({pages:[[]]}),provider),providers:[...hostedOptions(githubFetch({pages:[[]]}),provider).providers,...hostedOptions(githubFetch({pages:[[]]}),provider===google?github:google).providers]};
+    const flow = await startHostedFlow(store, options);
+    expect(flow.response.status).toBe(302);
+    expect(flow.authorization!.searchParams.get("redirect_uri")).toBe("https://auth.example.test/oauth/upstream/callback");
+    const baseFetch = provider === google ? await googleFetch(await signedGoogleToken({},flow.authorization!.searchParams.get("nonce")!))
+      : githubFetch({pages:[[{email:"person@gmail.com",primary:true,verified:true}]]});
+    const transport=(async(input,init)=>{requests.push(new Request(input,init));return await baseFetch(input,init);}) as typeof fetch;
+    const url=new URL(`https://auth.example.test/oauth/upstream/callback?code=selectorless-code&state=${flow.authorization!.searchParams.get("state")}`);
+    expect(url.searchParams.has("provider")).toBe(false);
+    const request=new Request(url,{headers:{cookie:flow.cookie!}});
+    const response=await handleUpstreamCallbackRequest({request,url,store,upstreamOAuth:{...options,fetch:transport},secureCookie:true});
+    expect(response.status).toBe(200);
+    expect((await response.json() as {provider_id:string}).provider_id).toBe(provider.id);
+    expect(new URLSearchParams(await requests[0]!.text()).get("redirect_uri")).toBe("https://auth.example.test/oauth/upstream/callback");
+    const count=requests.length;
+    const replay=await handleUpstreamCallbackRequest({request,url,store,upstreamOAuth:{...options,fetch:transport},secureCookie:true});
+    expect(replay.status).toBe(400);
+    expect(requests).toHaveLength(count);
+  }
+});
+
+test("selectorless verified callback rejects cookie/state/provider/redirect conflicts before token exchange", async () => {
+  for(const mode of ["cookie-provider","state","cross-provider","duplicate-provider","conflicting-provider","duplicate-code","duplicate-state","duplicate-cookie","redirect"] as const){
+    const store=new InMemoryAccountsStore();
+    if(mode==="redirect"){
+      const save=store.saveUpstreamLoginTransaction.bind(store);
+      store.saveUpstreamLoginTransaction=record=>save({...record,redirectUri:"https://auth.example.test/different-callback"});
+    }
+    const requests:Request[]=[];
+    const options={...hostedOptions(githubFetch({pages:[[]],requests}),google),providers:[...hostedOptions(githubFetch({pages:[[]]}),google).providers,...hostedOptions(githubFetch({pages:[[]]}),github).providers]};
+    const flow=await startHostedFlow(store,options);
+    let cookie=flow.cookie!;
+    const url=new URL(`https://auth.example.test/oauth/upstream/callback?code=selectorless-code&state=${flow.authorization!.searchParams.get("state")}`);
+    if(mode==="cookie-provider")cookie=cookie.replace(/social-google/u,"social-github");
+    if(mode==="state")url.searchParams.set("state","a".repeat(64));
+    if(mode==="cross-provider")url.searchParams.set("provider",github.id);
+    if(mode==="duplicate-provider")url.searchParams.append("provider",google.id),url.searchParams.append("provider",google.id);
+    if(mode==="conflicting-provider")url.searchParams.append("provider",google.id),url.searchParams.append("provider",github.id);
+    if(mode==="duplicate-code")url.searchParams.append("code","other-code");
+    if(mode==="duplicate-state")url.searchParams.append("state",url.searchParams.get("state")!);
+    if(mode==="duplicate-cookie")cookie+="; "+cookie;
+    const response=await handleUpstreamCallbackRequest({request:new Request(url,{headers:{cookie}}),url,store,upstreamOAuth:options,secureCookie:true});
+    expect(response.status).toBe(400);
+    expect(requests).toHaveLength(0);
+  }
+});
+
+test("unlink operation proof callback uses exact registered URI without provider selector", async () => {
+  const f=await operationFixture();
+  // Fixture is one canonical customer with two known immutable login methods.
+  // A prior merge is not needed to exercise this callback's provider selection.
+  const removedIdentity={providerId:google.id,upstreamIssuer:google.issuer,upstreamSubject:"google-stable-subject"};
+  const retainedIdentity={providerId:github.id,upstreamIssuer:github.issuer,upstreamSubject:"4711"};
+  await f.store.linkUpstreamIdentity({...retainedIdentity,subject:f.a.subject,createdAt:now,updatedAt:now});
+  const base="/api/v1/account/identity-credentials/unlink-intents";
+  const created=await handleCredentialUnlinkIntentRequest({request:f.request(base,{removedIdentity,retainedIdentity,consent:true}),store:f.store,issuerOrigin:"https://auth.example.test"});
+  expect(created?.status).toBe(201);
+  f.updateCookies(created!);
+  const {operationId}=await created!.json() as {operationId:string};
+  const begin=await handleUpstreamUnlinkProofBeginRequest({request:f.request(`${base}/${operationId}/upstream-proof/begin`,{consent:true}),store:f.store,upstreamOAuth:f.options,issuerOrigin:"https://auth.example.test",secureCookie:true});
+  expect(begin?.status).toBe(200);
+  f.updateCookies(begin!);
+  const authorization=new URL((await begin!.clone().json() as {authorization_url:string}).authorization_url);
+  expect(authorization.searchParams.get("redirect_uri")).toBe("https://auth.example.test/oauth/upstream/callback");
+  const callback=await f.complete(begin!);
+  expect(callback.status).toBe(200);
+  const result=await callback.json() as {proof_receipt:string;unlink_intent_id:string;operation_id?:string};
+  expect(result.unlink_intent_id).toBe(operationId);
+  expect(result.operation_id).toBeUndefined();
+  expect((await f.store.findCredentialUnlinkReceipt(result.proof_receipt))?.retainedIdentity).toEqual(retainedIdentity);
 });

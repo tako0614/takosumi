@@ -210,7 +210,7 @@ test("real Accounts navigation reaches durable GitHub callback, issuer session a
     subjectSecret: "fixture-upstream-subject-secret",
     hostedSessionPolicy: true,
     providers: [{ providerId: "github", label: "GitHub", protocol: "oauth2", provider: github, clientId: "fixture-upstream-client",
-      clientSecret: "fixture-upstream-secret", redirectUri: `${issuer}/oauth/upstream/callback?provider=github` }],
+      clientSecret: "fixture-upstream-secret", redirectUri: `${issuer}/oauth/upstream/callback` }],
     fetch: (async (input, init) => {
       const request = new Request(input, init);
       upstreamRequests.push(request);
@@ -240,10 +240,12 @@ test("real Accounts navigation reaches durable GitHub callback, issuer session a
   const providerAuthorization = new URL(upstream.headers.get("location")!);
   expect(providerAuthorization.origin).toBe("https://github.com");
   expect(providerAuthorization.searchParams.get("code_challenge_method")).toBe("S256");
+  expect(providerAuthorization.searchParams.get("redirect_uri")).toBe(`${issuer}/oauth/upstream/callback`);
   const bindingCookie = upstream.headers.get("set-cookie")!.split(";")[0]!;
   expect(bindingCookie).toStartWith("__Host-takosumi_upstream=");
   const callbackUrl = new URL("/oauth/upstream/callback", issuer);
-  callbackUrl.search = new URLSearchParams({ provider: "github", state: providerAuthorization.searchParams.get("state")!, code: "fixture-provider-code" }).toString();
+  callbackUrl.search = new URLSearchParams({ state: providerAuthorization.searchParams.get("state")!, code: "fixture-provider-code" }).toString();
+  expect(callbackUrl.searchParams.get("provider")).toBeNull();
   const callbackRequest = new Request(callbackUrl, { headers: { cookie: bindingCookie } });
   const callback = await accountsHandler(callbackRequest);
   expect(callback.status).toBe(302);
@@ -253,7 +255,9 @@ test("real Accounts navigation reaches durable GitHub callback, issuer session a
   expect(callback.headers.getSetCookie().join("\n")).toContain("HttpOnly; Secure; SameSite=Lax");
   expect(await callback.clone().text()).toBe("");
   const tokenExchange = upstreamRequests.find((request) => request.url === github.tokenEndpoint)!;
-  const verifier = new URLSearchParams(await tokenExchange.text()).get("code_verifier");
+  const tokenParameters = new URLSearchParams(await tokenExchange.text());
+  expect(tokenParameters.get("redirect_uri")).toBe(`${issuer}/oauth/upstream/callback`);
+  const verifier = tokenParameters.get("code_verifier");
   expect(verifier).toMatch(/^[A-Za-z0-9_-]{43}$/u);
   expect((await sha256Text(verifier!)).slice(7)).toBe(providerAuthorization.searchParams.get("code_challenge"));
   const consent = await accountsHandler(new Request(new URL(callback.headers.get("location")!, issuer), { headers: { cookie: sessionCookie! } }));

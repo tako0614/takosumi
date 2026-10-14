@@ -328,11 +328,20 @@ async function handleUpstreamCallbackRequestUncached(input: {
   secureCookie: boolean;
   loginEmailAllowlist?: LoginEmailAllowlist;
 }): Promise<Response> {
-  const resolved = resolveUpstreamClient(
-    input.upstreamOAuth,
-    input.url.searchParams.get("provider"),
-  );
-  if (!resolved) return json({ error: "unknown_provider" }, 400);
+  const selectedProviderId = input.url.searchParams.get("provider");
+  const selectedClient = resolveUpstreamClient(input.upstreamOAuth, selectedProviderId);
+  const hostedState = readHostedUpstreamOAuthStateCookie(input.request.headers.get("cookie"));
+  const cookieClient = hostedState
+    ? resolveUpstreamClient(input.upstreamOAuth, hostedState.providerId)
+    : null;
+  // The registered callback URI does not need a provider selector. Only the
+  // host-only cookie plus its server transaction select a verified provider.
+  // Explicit legacy providers retain their existing callback contract.
+  const verifiedUpstreamFlow = input.upstreamOAuth.hostedSessionPolicy ||
+    selectedClient?.provider.verificationProfile !== undefined ||
+    (selectedProviderId === null && cookieClient?.provider.verificationProfile !== undefined);
+  const resolved = verifiedUpstreamFlow ? cookieClient : selectedClient;
+  if (!resolved) return json({ error: verifiedUpstreamFlow ? "invalid_state" : "unknown_provider" }, 400);
   const code = input.url.searchParams.get("code");
   if (!code) {
     return json(
@@ -355,20 +364,16 @@ async function handleUpstreamCallbackRequestUncached(input: {
   }
   let codeVerifier: string | undefined;
   let transaction: UpstreamLoginTransactionRecord | undefined;
-  const verifiedUpstreamFlow = input.upstreamOAuth.hostedSessionPolicy || resolved.provider.verificationProfile !== undefined;
   if (verifiedUpstreamFlow) {
+    const providerSelectors = input.url.searchParams.getAll("provider");
     if (!input.secureCookie || !input.store.consumeUpstreamLoginTransaction ||
-      ["code", "state", "provider"].some((key) => input.url.searchParams.getAll(key).length !== 1)) {
-      return json({ error: "invalid_state" }, 400);
-    }
-    const rawCookie = parseCookie(input.request.headers.get("cookie"))[hostedUpstreamOAuthStateCookie];
-    const binding = rawCookie?.split(":");
-    if (!binding || binding.length !== 3 || binding[0] !== resolved.client.providerId || binding[1] !== state ||
-      !/^[a-f0-9]{64}$/u.test(binding[2]!)) {
+      ["code", "state"].some((key) => input.url.searchParams.getAll(key).length !== 1) ||
+      !hostedState || hostedState.providerId !== resolved.client.providerId || hostedState.state !== state ||
+      providerSelectors.length > 1 || (providerSelectors.length === 1 && providerSelectors[0] !== hostedState.providerId)) {
       return json({ error: "invalid_state" }, 400);
     }
     try {
-      transaction = await input.store.consumeUpstreamLoginTransaction(state, await sha256Text(binding[2]!), Date.now());
+      transaction = await input.store.consumeUpstreamLoginTransaction(state, await sha256Text(hostedState.browserBinding), Date.now());
       if (!transaction || transaction.id !== state || transaction.providerId !== resolved.client.providerId ||
         transaction.redirectUri !== resolved.client.redirectUri || transaction.expiresAt <= Date.now() ||
         transaction.createdAt > Date.now() || transaction.expiresAt - transaction.createdAt > hostedUpstreamTransactionTtlMs) {
@@ -532,6 +537,24 @@ async function handleUpstreamCallbackRequestUncached(input: {
       },
       502,
     );
+  }
+}
+
+function readHostedUpstreamOAuthStateCookie(header: string | null): {
+  providerId: string;
+  state: string;
+  browserBinding: string;
+} | undefined {
+  const values = (header ?? "").split(";").map((value) => value.trim())
+    .filter((value) => value.startsWith(`${hostedUpstreamOAuthStateCookie}=`));
+  if (values.length !== 1) return undefined;
+  try {
+    const parts = decodeURIComponent(values[0]!.slice(hostedUpstreamOAuthStateCookie.length + 1)).split(":");
+    if (parts.length !== 3 || !publicAuthProviderTokenPattern.test(parts[0]!) ||
+      !/^[a-f0-9]{64}$/u.test(parts[1]!) || !/^[a-f0-9]{64}$/u.test(parts[2]!)) return undefined;
+    return { providerId: parts[0]!, state: parts[1]!, browserBinding: parts[2]! };
+  } catch {
+    return undefined;
   }
 }
 
