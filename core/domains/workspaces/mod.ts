@@ -34,6 +34,7 @@ import {
   type WorkspaceManagementAuthority,
 } from "../deploy-control/store.ts";
 import type { Page, PageParams } from "takosumi-contract/pagination";
+import { runIsInFlight } from "takosumi-contract/runs";
 
 // The contract owns the stable technical API-identifier grammar (lowercase
 // alnum start, then 1-38 of `[a-z0-9-]`). This service enforces it while the
@@ -277,6 +278,91 @@ export class WorkspacesService {
   async getWorkspaceByHandle(handle: string): Promise<Workspace | undefined> {
     requireNonEmptyString(handle, "handle");
     return await this.#store.getWorkspaceByHandle(handle);
+  }
+
+  /**
+   * Deletes an empty Workspace as the Workspace owner. The actor must be
+   * the namespace owner (`ownerUserId`) or an active `owner` member;
+   * admins and lesser roles observe `permission_denied`.
+   *
+   * Only an empty Workspace is deletable: a non-destroyed Capsule, any
+   * Source, any queued/running Run, or any recorded usage evidence blocks
+   * with `failed_precondition` carrying a machine-readable reason. (OSS
+   * showback records usage as UsageEvents and a `disabled` Workspace that
+   * never applied has none; there is no money-hold ledger in OSS, so any
+   * usage evidence conservatively counts as an unsettled hold/settlement.)
+   *
+   * Deletion removes the Workspace row and its private management state; no
+   * cloud-resource destroy is performed (destroy flows stay out of scope).
+   * Member, Run-history, and Activity rows that reference the Workspace are
+   * left in place and become unreachable through the Workspace-scoped
+   * routes, which all resolve the Workspace first. An already-deleted
+   * Workspace observes `not_found`.
+   *
+   * The emptiness reads and the row delete are not one atomic boundary: a
+   * concurrent creation racing a delete can leave rows referencing a deleted
+   * Workspace (unreachable, never resurrected). Serializing creation against
+   * deletion is future work for an atomic store command.
+   */
+  async deleteWorkspaceForAccount(
+    id: string,
+    actorAccountId: string,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<Workspace> {
+    requireNonEmptyString(id, "id");
+    requireNonEmptyString(actorAccountId, "actorAccountId");
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        id,
+      );
+    }
+    const workspace = await this.getWorkspace(id);
+    if (workspace.ownerUserId !== actorAccountId) {
+      const member = await this.#store.getWorkspaceMember(id, actorAccountId);
+      if (member?.status !== "active" || !member.roles.includes("owner")) {
+        throw new OpenTofuControllerError(
+          "permission_denied",
+          "only the Workspace owner can delete the Workspace",
+        );
+      }
+    }
+    // Admission fence: a draining Workspace refuses, like every mutation.
+    // The tuple itself is not consumed by the unconditional row delete below.
+    const authority = expectedWorkspaceManagementAuthority ??
+      await this.captureManagementAuthority(id).catch((error: unknown) => {
+        throw workspaceMutationError(error);
+      });
+    void authority;
+    const blockers: string[] = [];
+    const capsules = await this.#store.listCapsules(id);
+    if (capsules.some((capsule) => capsule.status !== "destroyed")) {
+      blockers.push("capsule_exists");
+    }
+    const sources = await this.#store.listSources(id);
+    if (sources.length > 0) {
+      blockers.push("source_exists");
+    }
+    const runs = await this.#store.listRunsByWorkspace(id);
+    if (runs.some((run) => runIsInFlight(run.status))) {
+      blockers.push("run_in_flight");
+    }
+    const usageEvents = await this.#store.listUsageEvents(id);
+    if (usageEvents.length > 0) {
+      blockers.push("usage_exists");
+    }
+    if (blockers.length > 0) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `Workspace ${id} is not empty (${blockers.join(", ")}); remove them first.`,
+        { reason: "workspace_not_empty", blockers },
+      );
+    }
+    const deleted = await this.#store.deleteWorkspace(id);
+    if (!deleted) {
+      throw new OpenTofuControllerError("not_found", "workspace not found");
+    }
+    return workspace;
   }
 
   async listWorkspaces(): Promise<readonly Workspace[]> {

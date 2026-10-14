@@ -4541,6 +4541,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return workspace;
   }
 
+  async deleteWorkspace(id: string): Promise<boolean> {
+    return await this.#drizzleDelete(schema.workspaces, eq(schema.workspaces.id, id));
+  }
+
   async replaceWorkspace(input: WorkspaceReplacementInput): Promise<boolean> {
     validateWorkspaceReplacement(input);
     return await this.#replaceWorkspace(input);

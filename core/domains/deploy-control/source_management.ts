@@ -78,6 +78,10 @@ export class SourceManagement {
     return await this.#require().rotateSourceHookSecret(id, actorId);
   }
 
+  async deleteSource(id: string, actorId?: string): Promise<SourceResponse> {
+    return await this.#require().deleteSource(id, actorId);
+  }
+
   async createSourceSync(
     sourceId: string,
     options: CreateSourceSyncRequest & { readonly dedupe?: boolean } = {},

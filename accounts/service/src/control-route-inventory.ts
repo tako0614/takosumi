@@ -59,6 +59,12 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       auth: "account-session",
     },
     {
+      method: "DELETE",
+      path: "/api/v1/workspaces/{workspaceId}",
+      summary: "Delete an empty Workspace as its owner; never destroys cloud resources",
+      auth: "account-session",
+    },
+    {
       method: "POST",
       path: "/api/v1/workspaces/{workspaceId}/install-plans",
       summary: "Create or replay an idempotent Git install plan",
@@ -376,6 +382,12 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       method: "PATCH",
       path: "/api/v1/sources/{sourceId}",
       summary: "Update Source metadata",
+      auth: "account-session",
+    },
+    {
+      method: "DELETE",
+      path: "/api/v1/sources/{sourceId}",
+      summary: "Delete an unreferenced Source and invalidate its webhook bearer",
       auth: "account-session",
     },
     {

@@ -157,7 +157,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本 (正とする情報) は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 89 件です。
+次の 91 件です。
 
 **Account views**
 
@@ -180,6 +180,7 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 | POST     | `/api/v1/workspaces`                                 | Workspace を作る                        |
 | GET      | `/api/v1/workspaces/{workspaceId}`                   | Workspace を読む                        |
 | PATCH    | `/api/v1/workspaces/{workspaceId}`                   | Workspace を更新する                    |
+| DELETE   | `/api/v1/workspaces/{workspaceId}`                   | 空の Workspace を owner として削除する  |
 | GET      | `/api/v1/workspaces/{workspaceId}/members`           | メンバーを一覧する                      |
 | POST     | `/api/v1/workspaces/{workspaceId}/members`           | メンバーを追加する                      |
 | PATCH    | `/api/v1/workspaces/{workspaceId}/members/{subject}` | メンバーの役割を変える                  |
@@ -197,6 +198,10 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 | POST     | `/api/v1/workspaces/{workspaceId}/drift-check`       | Workspace 全体の差分確認 Run を作る     |
 
 操作履歴は `/api/v1/workspaces/{workspaceId}/activity` から読みます。
+
+空の Workspace だけが owner によって削除できます。非破棄 Capsule、Source、
+進行中 Run、利用量の証拠が一つでも残ると `409 workspace_not_empty` で拒否します。
+クラウド資源の destroy は行いません。削除後の読み取りは 404 です。
 
 **Project と Capsule**
 
@@ -278,6 +283,7 @@ Run は必ず計画の作成から始まります。
 | POST     | `/api/v1/sources`                                                        | Source を作る                                                     |
 | GET      | `/api/v1/sources/{sourceId}`                                             | Source を読む                                                     |
 | PATCH    | `/api/v1/sources/{sourceId}`                                             | Source のメタ情報を更新する                                       |
+| DELETE   | `/api/v1/sources/{sourceId}`                                             | 未参照の Source を削除する (参照・進行中 Run があると 409)        |
 | POST     | `/api/v1/sources/{sourceId}/hook-secret/rotate`                          | webhook secret をローテーションする (本文なし、平文応答は 1 回のみ) |
 | POST     | `/api/v1/sources/{sourceId}/sync`                                        | 同期 Run を作る                                                   |
 | GET      | `/api/v1/sources/{sourceId}/snapshots`                                   | SourceSnapshot を一覧する                                         |
@@ -288,6 +294,12 @@ Run は必ず計画の作成から始まります。
 webhook secret の復旧手順、旧 secret の失効タイミング、応答を失った場合の扱いは
 [Source と Capsule](../concepts/sources.md) を参照してください。service 内部向けの同等経路は
 `POST /internal/v1/sources/{sourceId}/hook-secret/rotate` です。
+
+`DELETE /api/v1/sources/{sourceId}` は Workspace の owner/admin が未参照の
+Source を削除します。非破棄 Capsule に追跡されていると `409
+source_referenced_by_capsule`、進行中 Run があると `409
+source_has_in_flight_run` で拒否します。削除後は webhook bearer が無効になり、
+読み取りは 404、value-free の `source.deleted` が Activity に 1 件記録されます。
 
 **Git install plan**
 

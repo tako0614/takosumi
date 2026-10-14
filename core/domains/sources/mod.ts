@@ -57,6 +57,7 @@ import {
   WorkspaceManagementAdmissionConflictError,
 } from "../deploy-control/store.ts";
 import type { Run } from "takosumi-contract/runs";
+import { runIsInFlight } from "takosumi-contract/runs";
 import {
   StaticHclCapsuleCompatibilityAnalyzer,
   type CapsuleCompatibilityAnalysis,
@@ -377,6 +378,89 @@ export class SourcesService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Deletes a Source that nothing still references. The owning Workspace must
+   * hold management admission (a draining Workspace refuses). A Source still
+   * tracked by a non-destroyed Capsule, or with a queued/running Run (a
+   * source_sync Run or a Capsule Run bound to a referencing Capsule), is
+   * refused with `failed_precondition` carrying a machine-readable reason —
+   * the caller deletes the referencing Capsule or waits for the Run first.
+   *
+   * Deletion removes the stored row, so the webhook bearer can no longer
+   * verify and reads observe `not_found`. Exactly one value-free
+   * `source.deleted` Activity event is recorded. A second delete observes
+   * `not_found` (already-deleted is 404, never an idempotent success).
+   */
+  async deleteSource(id: string, actorId?: string): Promise<SourceResponse> {
+    const stored = await this.#requireSource(id);
+    const authority = await this.#captureWorkspaceManagementAuthority(
+      stored.workspaceId,
+    );
+    void authority;
+    const capsules = await this.#store.listCapsules(stored.workspaceId);
+    const referencingCapsules = capsules.filter(
+      (capsule) =>
+        capsule.sourceId === stored.id && capsule.status !== "destroyed",
+    );
+    if (referencingCapsules.length > 0) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `Source ${stored.id} is still tracked by ${referencingCapsules.length} Capsule(s); delete the Capsule(s) first.`,
+        {
+          reason: "source_referenced_by_capsule",
+          capsuleCount: referencingCapsules.length,
+        },
+      );
+    }
+    if (await this.#hasInFlightSourceRun(stored)) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `Source ${stored.id} still has an in-flight Run; wait for it to settle first.`,
+        { reason: "source_has_in_flight_run" },
+      );
+    }
+    const deleted = await this.#store.deleteSource(stored.id);
+    if (!deleted) {
+      throw new OpenTofuControllerError("not_found", `source ${id} not found`);
+    }
+    const nowIso = this.#now().toISOString();
+    await this.#store.putActivityEvent({
+      id: this.#newId("act"),
+      workspaceId: stored.workspaceId,
+      ...(actorId === undefined ? {} : { actorId }),
+      action: "source.deleted",
+      targetType: "source",
+      targetId: stored.id,
+      metadata: {},
+      createdAt: nowIso,
+    });
+    return { source: toPublicSource(stored) };
+  }
+
+  /**
+   * Whether any queued/running Run still touches this Source: a source_sync
+   * Run for it, a Workspace Run carrying its id, or a Run bound to a Capsule
+   * that tracks it (a destroyed Capsule's history alone does not block).
+   */
+  async #hasInFlightSourceRun(stored: StoredSource): Promise<boolean> {
+    const syncRuns = await this.#store.listSourceSyncRuns(stored.id);
+    if (syncRuns.some((run) => runIsInFlight(run.status))) return true;
+    const runs = await this.#store.listRunsByWorkspace(stored.workspaceId);
+    for (const run of runs) {
+      if (!runIsInFlight(run.status)) continue;
+      if ("sourceId" in run && run.sourceId === stored.id) return true;
+      if (
+        "capsuleId" in run &&
+        typeof run.capsuleId === "string" &&
+        run.capsuleId.length > 0
+      ) {
+        const capsule = await this.#store.getCapsule(run.capsuleId);
+        if (capsule?.sourceId === stored.id) return true;
+      }
+    }
+    return false;
   }
 
   async listSnapshots(

@@ -4392,6 +4392,10 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return workspace;
   }
 
+  async deleteWorkspace(id: string): Promise<boolean> {
+    return await this.#pgDelete(pgSchema.workspaces, eq(pgSchema.workspaces.id, id));
+  }
+
   async replaceWorkspace(input: WorkspaceReplacementInput): Promise<boolean> {
     validateWorkspaceReplacement(input);
     const {

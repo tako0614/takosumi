@@ -2390,6 +2390,10 @@ export class OpenTofuController {
     return await this.#sources.rotateSourceHookSecret(id, actorId);
   }
 
+  async deleteSource(id: string, actorId?: string): Promise<SourceResponse> {
+    return await this.#sources.deleteSource(id, actorId);
+  }
+
   async createSourceSync(
     sourceId: string,
     options: CreateSourceSyncRequest & { readonly dedupe?: boolean } = {},

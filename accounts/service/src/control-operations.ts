@@ -259,6 +259,18 @@ export interface ControlPlaneOperations {
       actorAccountId: string,
       expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority,
     ): Promise<Workspace>;
+    /**
+     * Deletes an empty Workspace as its owner. Refuses with
+     * `permission_denied` for non-owners and `failed_precondition`
+     * (`reason: "workspace_not_empty"`) while Capsules, Sources,
+     * in-flight Runs, or usage evidence remain; observes `not_found`
+     * once deleted. Never destroys cloud resources.
+     */
+    deleteWorkspaceForAccount(
+      id: string,
+      actorAccountId: string,
+      expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+    ): Promise<Workspace>;
   };
   // --- Projects (canonical Workspace-owned grouping) ---
   readonly projects: {
@@ -758,6 +770,12 @@ export interface ControlPlaneOperations {
   getSource(id: string): Promise<SourceResponse>;
   patchSource(id: string, patch: PatchSourceRequest): Promise<SourceResponse>;
   rotateSourceHookSecret(id: string, actorId?: string): Promise<RotateSourceHookSecretResponse>;
+  /**
+   * Deletes an unreferenced Source. Refuses with `failed_precondition`
+   * (machine-readable `reason`) while a non-destroyed Capsule tracks it or
+   * a Run is in flight; observes `not_found` once deleted.
+   */
+  deleteSource(id: string, actorId?: string): Promise<SourceResponse>;
   createSourceSync(
     sourceId: string,
     options?: CreateSourceSyncRequest & { readonly dedupe?: boolean },

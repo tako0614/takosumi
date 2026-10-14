@@ -970,6 +970,7 @@ export interface TakosumiOperations {
   getSource(id: string): Promise<SourceResponse>;
   patchSource(id: string, patch: PatchSourceRequest): Promise<SourceResponse>;
   rotateSourceHookSecret(id: string, actorId?: string): Promise<RotateSourceHookSecretResponse>;
+  deleteSource(id: string, actorId?: string): Promise<SourceResponse>;
   createSourceSync(
     sourceId: string,
     options?: CreateSourceSyncRequest & { readonly dedupe?: boolean },
@@ -2101,6 +2102,7 @@ export async function createTakosumiService(
     getSource: (id) => opentofuController.getSource(id),
     patchSource: (id, patch) => opentofuController.patchSource(id, patch),
     rotateSourceHookSecret: (id, actorId) => opentofuController.rotateSourceHookSecret(id, actorId),
+    deleteSource: (id, actorId) => opentofuController.deleteSource(id, actorId),
     createSourceSync: (sourceId, opts, expectedWorkspaceManagementAuthority) =>
       opentofuController.createSourceSync(
         sourceId,

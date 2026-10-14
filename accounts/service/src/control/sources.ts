@@ -589,7 +589,21 @@ export async function handleSources(
         );
         return json({ ...response, source: publicSource(response.source) });
       }
-      return methodNotAllowed("GET, PATCH");
+      if (method === "DELETE") {
+        // Write scope already gated above: only an owner/admin member with a
+        // Workspace-wide credential reaches here (member sessions and
+        // read-only bearers observe 403 from `requireWorkspaceAccess`).
+        const response = await operations.deleteSource(
+          sourceId,
+          ctx.session.subject,
+        );
+        return json({
+          ...response,
+          source: publicSource(response.source),
+          deleted: true,
+        });
+      }
+      return methodNotAllowed("GET, PATCH, DELETE");
     }
   }
   return undefined;

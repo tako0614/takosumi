@@ -3486,6 +3486,16 @@ export interface OpenTofuControlStore {
   // Workspace records (spec §4). The owner namespace Capsules live under.
   /** Low-level creation/fixture writer; ordinary metadata changes use replaceWorkspace. */
   putWorkspace(workspace: Workspace): Promise<Workspace>;
+  /**
+   * Low-level Workspace row deletion. Callers must enforce ownership and
+   * emptiness (no Capsules, Sources, in-flight Runs, or usage evidence)
+   * before calling; the store performs no checks. Returns false when the
+   * Workspace row is already absent. Member, Run-history, and Activity rows
+   * that reference the Workspace are left in place and become unreachable
+   * through the Workspace-scoped routes (every route resolves the Workspace
+   * first). No cloud-resource destroy is performed here or by any caller.
+   */
+  deleteWorkspace(id: string): Promise<boolean>;
   /** Atomic management admission and full observed-row CAS; false means stale metadata. */
   replaceWorkspace(input: WorkspaceReplacementInput): Promise<boolean>;
   replaceWorkspaceForAccount(input: WorkspaceAccountReplacementInput): Promise<boolean>;
@@ -5007,6 +5017,12 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       });
     }
     return Promise.resolve(workspace);
+  }
+
+  deleteWorkspace(id: string): Promise<boolean> {
+    const existed = this.#workspaces.delete(id);
+    this.#workspaceManagement.delete(id);
+    return Promise.resolve(existed);
   }
 
   async replaceWorkspace(input: WorkspaceReplacementInput): Promise<boolean> {
