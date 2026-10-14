@@ -1893,3 +1893,132 @@ class PendingAccountsSchemaReadD1 implements D1Database {
     return this.delegate.exec(query);
   }
 }
+
+
+test("staging request phase diagnostics locate pending Accounts initialization without changing its deadline", async () => {
+  const delayedDb = new PendingAccountsSchemaReadD1(
+    await versionedAccountsDb(),
+  );
+  const worker = createCloudflareWorker();
+  const workerEnv = env({
+    TAKOSUMI_ACCOUNTS_DB: delayedDb,
+    TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+    TAKOSUMI_ACCOUNTS_ISSUER: "http://app.example.test",
+    TAKOSUMI_ACCOUNT_SESSION_HASH_SALT: "request-phase-diagnostic-test-salt",
+    TAKOSUMI_ENVIRONMENT: "staging",
+    TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS: "true",
+  });
+  const logs: string[] = [];
+  const infoSpy = spyOn(console, "info").mockImplementation((value) => {
+    if (typeof value === "string") logs.push(value);
+  });
+  const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+  jest.useFakeTimers();
+  try {
+    const pending = worker.fetch(
+      new Request(
+        "http://app.example.test/api/v1/workspaces?private-query-marker=1",
+        {
+          headers: {
+            authorization: "Bearer secret-credential-marker",
+            cookie: "private-cookie-marker",
+            "cf-ray": "0123456789abcdef-NRT",
+            "x-takosumi-request-probe-id": "0123456789abcdef",
+          },
+        },
+      ),
+      workerEnv,
+    );
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await flushMicrotasks();
+    jest.advanceTimersByTime(2000);
+    await flushMicrotasks();
+    const rows = logs.map((line) => JSON.parse(line));
+    expect(rows).toContainEqual(
+      expect.objectContaining({
+        event: "request_phase",
+        phase: "accounts_init",
+        outcome: "pending",
+        route: "/api/v1/workspaces",
+        cfRay: "0123456789abcdef-NRT",
+        probeId: "0123456789abcdef",
+      }),
+    );
+    expect(settled).toBe(false);
+    jest.advanceTimersByTime(3000);
+    await flushMicrotasks();
+    expect((await pending).status).toBe(503);
+    expect(logs.map((line) => JSON.parse(line))).toContainEqual(
+      expect.objectContaining({ phase: "accounts_init", outcome: "rejected" }),
+    );
+    const count = logs.length;
+    jest.advanceTimersByTime(10000);
+    await flushMicrotasks();
+    expect(logs).toHaveLength(count);
+    const serialized = logs.join("\n");
+    for (const marker of [
+      "secret-credential-marker",
+      "private-cookie-marker",
+      "private-query-marker",
+      "app.example.test",
+    ]) {
+      expect(serialized).not.toContain(marker);
+    }
+  } finally {
+    delayedDb.releaseSchemaRead();
+    await flushMicrotasks();
+    jest.useRealTimers();
+    infoSpy.mockRestore();
+    warnSpy.mockRestore();
+  }
+});
+
+for (const config of [
+  { environment: "production", enabled: "true" },
+  { environment: "staging", enabled: undefined },
+  { environment: "staging", enabled: "false" },
+]) {
+  test(`request phase diagnostics emit nothing for ${config.environment}/${config.enabled ?? "unset"}`, async () => {
+    const delayedDb = new PendingAccountsSchemaReadD1(
+      await versionedAccountsDb(),
+    );
+    const worker = createCloudflareWorker();
+    const workerEnv = env({
+      TAKOSUMI_ACCOUNTS_DB: delayedDb,
+      TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+      TAKOSUMI_ACCOUNTS_ISSUER: "http://app.example.test",
+      TAKOSUMI_ACCOUNT_SESSION_HASH_SALT:
+        "request-phase-diagnostic-disabled-test-salt",
+      TAKOSUMI_ENVIRONMENT: config.environment,
+      TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS: config.enabled,
+    });
+    const logs: string[] = [];
+    const infoSpy = spyOn(console, "info").mockImplementation((value) => {
+      if (typeof value === "string") logs.push(value);
+    });
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    jest.useFakeTimers();
+    try {
+      const pending = worker.fetch(
+        new Request("http://app.example.test/api/v1/workspaces"),
+        workerEnv,
+      );
+      await flushMicrotasks();
+      jest.advanceTimersByTime(5000);
+      await flushMicrotasks();
+      expect((await pending).status).toBe(503);
+      expect(
+        logs.filter((line) => line.includes('"event":"request_phase"')),
+      ).toHaveLength(0);
+    } finally {
+      delayedDb.releaseSchemaRead();
+      await flushMicrotasks();
+      jest.useRealTimers();
+      infoSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+}

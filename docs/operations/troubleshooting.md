@@ -80,8 +80,10 @@ bun run probe:request-latency -- \
 
 `<finished-run-id>` は実際の ID に置き換えてから実行します。許可する route は
 `/.well-known/takosumi`、`/.well-known/openid-configuration`、
-`/api/v1/workspaces`、`/api/v1/views/workspaces.v1`、`/api/v1/runs/:runId`
+`/api/v1/views/workspaces.v1`、`/api/v1/runs/:runId`
 だけです。query / fragment、OAuth / logout、内部 API、redirect は拒否します。
+通常の `/api/v1/workspaces` GET は personal Workspace / owner membership /
+default Project の bootstrap・repair を含み得るため、読み取り専用 probe には使いません。
 public discovery だけを見る場合は `--token-file` を省略できます。
 local fixture は `--environment local --url http://127.0.0.1:<port>` を使います。
 staging 以外の公開 origin や production はこの probe の対象にできません。
@@ -91,6 +93,7 @@ staging 以外の公開 origin や production はこの probe の対象にでき
 | 記録 | 読み方 |
 | --- | --- |
 | `startedAt` / `finishedAt` / `sample` / `client` / `route` | UTC の観測窓、順序、Node HTTP client、route の形。Run ID や origin 自体は出力しない |
+| `probeId` | sample ごとに生成する16桁 hex。同じ値を `x-takosumi-request-probe-id` header に送り、headers 未到達のときも Worker phase log と対応付けられる |
 | `cfRay` | 応答に正しい形式の CF Ray がある場合の相関 ID。headers 未到達の timeout では通常得られない |
 | `milestones.dnsMs` / `tcpMs` / `tlsMs` / `headersMs` / `bodyMs` | request 開始から各 event までの累積 ms。数値を足さない。IP literal では DNS、HTTP local fixture では TLS がない |
 | `serverTiming` | allowlist の数値だけ。`tk_accounts_init`、`tk_control_auth`、`tk_control_init`、`tk_control_dispatch`。未到達 / 未計測の stage は欠ける |
@@ -114,6 +117,43 @@ tail や client HAR を保存する際も auth headers / body / query / private 
 必要な event timestamp、HTTP outcome、stage timing だけを残します。
 長い Durable Object **alarm** の canceled event を、HTTP GET の停止と同一視しません。
 保存ログ API の 403 は取得権限の不足として記録し、別 credential や権限変更で迂回しません。
+
+### staging で未完了の request phase を観測する
+
+operator が staging config で `TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS = "true"` を
+明示すると、`TAKOSUMI_ENVIRONMENT = "staging"` の場合だけ公開 Accounts/control
+request の `request_phase` log を有効にできます。production、未設定、`"false"`
+では出力しません。config は operator が管理し、通常の owning-repository staging
+code surface と同じ source/config provenance、target guard、exclusive publish lock
+で反映します。観測後は flag を外せます。これは保存ログの権限を付与する設定ではありません。
+
+log は、inventory に一致する公開 route template、method、検証済み CF Ray /
+16桁 hex probe ID、phase enum、elapsed ms、outcome だけです。request body、
+cookie/bearer、query、private ID、任意 error text、user/account 情報は出しません。
+Worker は inventory の `{runId}` のような template を使い、client probe の `:runId`
+表記とは違うので、直接照合には `probeId` / CF Ray を使います。
+
+| phase | 待機している処理 |
+| --- | --- |
+| `accounts_init` | 各 request の shared Accounts handler 初期化待ち。既存の5秒期限は維持 |
+| `allowlist` | handler 内の presented-session allowlist gate。認可の判定内容は維持 |
+| `control_auth` | 通常の Accounts bearer認証。D1 candidate lookup / active-token検証を含む |
+| `control_init` | Control operations facade 待ち。既存の5秒期限は維持 |
+| `control_dispatch` | 実際の resource dispatch。Run / Workspace / member 等の読み取りを含む |
+
+outcome `started` は await 前、`fulfilled` / `rejected` はその await の settlement
+です。`fulfilled` は HTTP 2xx や認可成功を意味しません。2秒経っても未解決の場合は
+`pending` を一度だけ出します。この通知は診断だけで、request を timeout / cancel
+せず、D1 I/O や shared initializer を replace せず、認可・response を変更しません。
+通知 timer は factory ごとに最大64件で、発火時または await settlement 時に slot を
+解放します。budget 超過時も開始／完了は記録しますが、`pending` 通知は省略します。
+body stream を Response として返した後の時間は dispatch span に含みません。
+
+headers が返らなかった sample の probe ID を tail の `request_phase` と対応付け、
+最後に `started` / `pending` が出た phase と、実 Worker HTTP event の終了結果を
+確認します。phase が分かっても、D1 のどの内部操作かまで示すとは限りません。
+必要ならその phase の実 port へ次の観測を絞ります。新しい分類器や意図的に止めた
+local fixture は、過去の staging incident の根因証拠には使いません。
 
 [issue #444](https://github.com/tako0614/takosumi/issues/444) の最大 120 秒停止は、
 既存の読み取り probe では再現せず、原因が未確定です。
