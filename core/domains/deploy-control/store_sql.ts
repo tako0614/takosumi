@@ -51,6 +51,7 @@ import type {
   Workspace,
   WorkspaceMember,
 } from "takosumi-contract/workspaces";
+import { type WorkspaceBillingBinding, workspaceBillingBindingMatches } from "takosumi-contract";
 import type { Project } from "takosumi-contract/projects";
 import type { ProviderBindingSet } from "takosumi-contract/connections";
 import type { InstallConfigCommittedPostApplyRecoveryProof } from "takosumi-contract/install-configs";
@@ -189,6 +190,14 @@ import {
   prepareConnectionTestResult,
   validateWorkspaceMemberReplacement,
   validateWorkspaceOwnerMemberRepair,
+  validatePersonalWorkspaceBootstrapOwnerMember,
+  validateWorkspaceInitialOwner,
+  sharedWorkspaceCreationAllowed,
+  isCanonicalActiveWorkspaceOwner,
+  assertWorkspaceBillingIntent,
+  assertWorkspaceBillingClaim,
+  assertWorkspaceBillingBindingRecord,
+  workspaceBillingPreparationMatches,
   validateWorkspaceReplacement,
   assertCapsulePlanCreationFence,
   assertPlanRunPreparation,
@@ -4679,6 +4688,33 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return workspace;
   }
 
+  async createWorkspaceWithInitialOwner(workspace: Workspace, member: WorkspaceMember): Promise<Workspace | undefined> {
+    validateWorkspaceInitialOwner(workspace, member);
+    return await this.#client.transaction(async (transaction) => {
+      const db = this.#drizzleForClient(transaction);
+      const inserted = await db.insert(pgSchema.workspaces).values({
+        id: workspace.id, handle: workspace.handle, spaceJson: workspace,
+        createdAt: workspace.createdAt, updatedAt: workspace.updatedAt,
+      }).onConflictDoNothing().returning({ id: pgSchema.workspaces.id });
+      if (inserted.length === 1) {
+        await db.insert(pgSchema.workspaceMembers).values({
+          id: member.id, workspaceId: workspace.id, accountId: member.accountId, status: member.status,
+          memberJson: member, createdAt: member.createdAt, updatedAt: member.updatedAt,
+        });
+        return workspace;
+      }
+      const rows = await db.select({ json: pgSchema.workspaces.spaceJson }).from(pgSchema.workspaces)
+        .where(eq(pgSchema.workspaces.handle, workspace.handle)).limit(1);
+      const existing = parseRow(rows[0]) as Workspace | undefined;
+      if (!existing) return undefined;
+      const management = await pgWorkspaceManagementForTransaction(transaction, existing.id);
+      if (management?.managementState !== "active") return undefined;
+      const snapshot = await this.#workspaceMemberMutationSnapshot(transaction, existing, [workspace.ownerUserId]);
+      const owner = snapshot?.members.find((row) => row.accountId === workspace.ownerUserId);
+      return snapshot && sharedWorkspaceCreationAllowed(existing, workspace, owner) ? existing : undefined;
+    });
+  }
+
   async deleteWorkspace(id: string, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<boolean> {
     if (expectedWorkspaceManagementAuthority === undefined) {
       return await this.#pgDelete(pgSchema.workspaces, eq(pgSchema.workspaces.id, id));
@@ -4715,6 +4751,14 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       );
       const currentRow = wsRows.rows[0];
       if (!currentRow) return { status: "not_found" as const };
+      if (stableStringify(currentRow.spaceJson) !== stableStringify(expectedWorkspace)) return { status: "conflict" as const };
+      if (input.requireCurrentMembership) {
+        const expectedActor = input.expectedActor;
+        if (!expectedActor || expectedActor.workspaceId !== expectedWorkspace.id || !isCanonicalActiveWorkspaceOwner(expectedActor)) return { status: "conflict" as const };
+        const snapshot = await this.#workspaceMemberMutationSnapshot(transaction, expectedWorkspace, [expectedActor.accountId]);
+        const actor = snapshot?.members.find((row) => row.accountId === expectedActor.accountId);
+        if (!actor || !workspaceMemberLogicalEquals(actor, expectedActor) || !isCanonicalActiveWorkspaceOwner(actor)) return { status: "conflict" as const };
+      }
       const blockers: string[] = [];
       const hasCapsule = await transaction.query(
         `select 1 from takosumi_capsules where space_id = $1 and status <> 'destroyed' limit 1`,
@@ -4824,7 +4868,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       // roster has no derived owner member. Other actors must be re-read under
       // the Workspace lock, with physical identity and the exact observed
       // logical member snapshot checked before the metadata CAS.
-      if (expectedWorkspace.ownerUserId !== actorAccountId) {
+      if (input.requireCurrentMembership || expectedWorkspace.ownerUserId !== actorAccountId) {
         if (expectedActor === undefined) return false;
         const snapshot = await this.#workspaceMemberMutationSnapshot(
           transaction,
@@ -5031,7 +5075,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   async claimPersonalWorkspaceBootstrap(
     ownerUserId: string,
     candidate: Workspace,
+    initialOwnerMember?: WorkspaceMember,
   ): Promise<Workspace | undefined> {
+    if (initialOwnerMember) validatePersonalWorkspaceBootstrapOwnerMember(ownerUserId, candidate, initialOwnerMember);
     const exactClaim = async (): Promise<Workspace | undefined> => {
       const rows = await this.#db
         .select({ json: pgSchema.workspaces.spaceJson })
@@ -5079,17 +5125,30 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       throw new Error("personal Workspace bootstrap adoption did not persist");
     }
 
-    await this.#db
-      .insert(pgSchema.workspaces)
-      .values({
+    const insertCandidate = (db: PgRemoteDatabase<typeof pgSchema>) => db.insert(pgSchema.workspaces).values({
         id: candidate.id,
         handle: candidate.handle,
         spaceJson: candidate,
         createdAt: candidate.createdAt,
         updatedAt: candidate.updatedAt,
         personalBootstrapOwnerId: ownerUserId,
-      })
-      .onConflictDoNothing();
+      }).onConflictDoNothing().returning({ id: pgSchema.workspaces.id });
+    if (initialOwnerMember) {
+      await this.#client.transaction(async (transaction) => {
+        const db = this.#drizzleForClient(transaction);
+        const inserted = await insertCandidate(db);
+        if (inserted.length === 0) return;
+        // One transaction publishes the new namespace and its first owner.
+        // Existing/adopted namespaces never reach this insert or an upsert.
+        await db.insert(pgSchema.workspaceMembers).values({
+          id: initialOwnerMember.id, workspaceId: candidate.id, accountId: ownerUserId,
+          status: "active", memberJson: initialOwnerMember,
+          createdAt: initialOwnerMember.createdAt, updatedAt: initialOwnerMember.updatedAt,
+        });
+      });
+    } else {
+      await insertCandidate(this.#db);
+    }
     return await exactClaim();
   }
 
@@ -5460,7 +5519,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       snapshot = await this.#workspaceMemberMutationSnapshot(
         transaction,
         authority.expectedWorkspace,
-        authority.expectedWorkspace.ownerUserId === authority.actorAccountId
+        !authority.requireCurrentMembership && authority.expectedWorkspace.ownerUserId === authority.actorAccountId
           ? []
           : [authority.actorAccountId],
       );
@@ -5474,8 +5533,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
 
     // Namespace owners are authoritative even when the roster has no member
     // row. The exact Workspace snapshot above still fences an owner change.
-    if (snapshot.workspace.ownerUserId === authority.actorAccountId) {
+    if (!authority.requireCurrentMembership && snapshot.workspace.ownerUserId === authority.actorAccountId) {
       return workspaceAccountAuthorityAllowed({
+        requireCurrentMembership: authority.requireCurrentMembership,
         actorAccountId: authority.actorAccountId,
         expectedWorkspace: snapshot.workspace,
       });
@@ -5493,6 +5553,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       return false;
     }
     return workspaceAccountAuthorityAllowed({
+      requireCurrentMembership: authority.requireCurrentMembership,
       actorAccountId: authority.actorAccountId,
       expectedWorkspace: snapshot.workspace,
       expectedActor: currentActor,
@@ -5589,6 +5650,85 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return record === undefined
       ? undefined
       : parseWorkspaceMemberRecord(record);
+  }
+
+  async getWorkspaceBillingBindingIntent(workspaceId: string): Promise<import("./store.ts").StoredWorkspaceBillingBindingIntent | undefined> {
+    const rows = await this.#db.select().from(pgSchema.workspaceBillingIntents).where(eq(pgSchema.workspaceBillingIntents.workspaceId, workspaceId)).limit(1);
+    return rows[0] ? this.#decodeWorkspaceBillingIntent(rows[0]) : undefined;
+  }
+
+  async getWorkspaceBillingBinding(workspaceId: string): Promise<WorkspaceBillingBinding | undefined> {
+    const rows = await this.#db.select().from(pgSchema.workspaceBillingBindings).where(eq(pgSchema.workspaceBillingBindings.workspaceId, workspaceId)).limit(1);
+    return rows[0] ? this.#decodeWorkspaceBillingBinding(rows[0]) : undefined;
+  }
+
+  #decodeWorkspaceBillingIntent(row: typeof pgSchema.workspaceBillingIntents.$inferSelect): import("./store.ts").StoredWorkspaceBillingBindingIntent {
+    const record = row.recordJson as import("./store.ts").StoredWorkspaceBillingBindingIntent;
+    assertWorkspaceBillingIntent(record);
+    if (record.workspaceId !== row.workspaceId || record.intentId !== row.intentId || record.billingAuthority !== row.billingAuthority ||
+      record.workspaceRef !== row.workspaceRef || record.createdAt !== row.createdAt) throw new TypeError("Workspace billing intent columns disagree");
+    return structuredClone(record);
+  }
+
+  #decodeWorkspaceBillingBinding(row: typeof pgSchema.workspaceBillingBindings.$inferSelect): WorkspaceBillingBinding {
+    const record = row.recordJson as WorkspaceBillingBinding;
+    assertWorkspaceBillingBindingRecord(record);
+    if (record.workspaceId !== row.workspaceId || record.intentId !== row.intentId || record.billingAuthority !== row.billingAuthority ||
+      record.workspaceRef !== row.workspaceRef || record.organizationRef !== row.organizationRef || record.boundAt !== row.boundAt) throw new TypeError("Workspace billing binding columns disagree");
+    return structuredClone(record);
+  }
+
+  async #workspaceBillingAuthorityMatches(transaction: SqlTransaction, intent: import("./store.ts").StoredWorkspaceBillingBindingIntent): Promise<boolean> {
+    const management = await pgWorkspaceManagementForTransaction(transaction, intent.workspaceId);
+    if (management?.managementState !== "active" || management.managementEpoch !== intent.originalAuthority.managementEpoch) return false;
+    const snapshot = await this.#workspaceMemberMutationSnapshot(transaction, intent.originalWorkspace, [intent.actorAccountId]);
+    const actor = snapshot?.members.find((row) => row.accountId === intent.actorAccountId);
+    return actor?.status === "active" && (actor.roles.includes("owner") || actor.roles.includes("admin")) && workspaceMemberExpectedMatches(actor, intent.originalActor);
+  }
+
+  async prepareWorkspaceBillingBinding(intent: import("./store.ts").StoredWorkspaceBillingBindingIntent): Promise<import("./store.ts").WorkspaceBillingBindingMutationResult<import("./store.ts").StoredWorkspaceBillingBindingIntent>> {
+    intent = structuredClone(intent);
+    assertWorkspaceBillingIntent(intent);
+    return await this.#client.transaction(async (transaction) => {
+      // The shared Workspace row is the same lock used by management/member
+      // mutations. New binding admission cannot outrun draining or revocation.
+      if (!(await this.#workspaceBillingAuthorityMatches(transaction, intent))) return { status: "refused" };
+      const db = this.#drizzleForClient(transaction);
+      const existingRows = await db.select().from(pgSchema.workspaceBillingIntents).where(eq(pgSchema.workspaceBillingIntents.workspaceId, intent.workspaceId)).limit(1);
+      if (existingRows[0]) {
+        const existing = this.#decodeWorkspaceBillingIntent(existingRows[0]);
+        if (!workspaceBillingPreparationMatches(existing, intent)) return { status: "conflict" };
+        if (!(await this.#workspaceBillingAuthorityMatches(transaction, existing))) return { status: "refused" };
+        return { status: "existing", record: existing };
+      }
+      const inserted = await db.insert(pgSchema.workspaceBillingIntents).values({
+        workspaceId: intent.workspaceId, intentId: intent.intentId, billingAuthority: intent.billingAuthority,
+        workspaceRef: intent.workspaceRef, recordJson: intent, createdAt: intent.createdAt,
+      }).onConflictDoNothing().returning({ workspaceId: pgSchema.workspaceBillingIntents.workspaceId });
+      return inserted.length ? { status: "created", record: intent } : { status: "conflict" };
+    });
+  }
+
+  async claimWorkspaceBillingBinding(input: import("./store.ts").WorkspaceBillingBindingClaimInput): Promise<import("./store.ts").WorkspaceBillingBindingMutationResult<WorkspaceBillingBinding>> {
+    input = structuredClone(input);
+    assertWorkspaceBillingClaim(input);
+    return await this.#client.transaction(async (transaction) => {
+      if (!(await this.#workspaceBillingAuthorityMatches(transaction, input.expectedIntent))) return { status: "refused" };
+      const db = this.#drizzleForClient(transaction);
+      const intents = await db.select().from(pgSchema.workspaceBillingIntents).where(eq(pgSchema.workspaceBillingIntents.workspaceId, input.binding.workspaceId)).limit(1);
+      if (!intents[0] || stableStringify(this.#decodeWorkspaceBillingIntent(intents[0])) !== stableStringify(input.expectedIntent)) return { status: "conflict" };
+      const rows = await db.select().from(pgSchema.workspaceBillingBindings).where(eq(pgSchema.workspaceBillingBindings.workspaceId, input.binding.workspaceId)).limit(1);
+      if (rows[0]) {
+        const binding = this.#decodeWorkspaceBillingBinding(rows[0]);
+        return workspaceBillingBindingMatches(binding, input.binding) ? { status: "existing", record: binding } : { status: "conflict" };
+      }
+      const binding = input.binding;
+      const inserted = await db.insert(pgSchema.workspaceBillingBindings).values({
+        workspaceId: binding.workspaceId, intentId: binding.intentId, billingAuthority: binding.billingAuthority,
+        workspaceRef: binding.workspaceRef, organizationRef: binding.organizationRef, recordJson: binding, boundAt: binding.boundAt,
+      }).onConflictDoNothing().returning({ workspaceId: pgSchema.workspaceBillingBindings.workspaceId });
+      return inserted.length ? { status: "created", record: binding } : { status: "conflict" };
+    });
   }
 
   async listWorkspaceMembers(

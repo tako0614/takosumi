@@ -587,7 +587,10 @@ async function listActiveWorkspaceProjectionForSession(
       session.subject,
       options.ensureWorkspaceId,
     );
-    if (selected && !isArchivedWorkspace(selected)) {
+    if (selected && !isArchivedWorkspace(selected) &&
+      (!session.requireCurrentMembership || await canAccessWorkspace({
+        operations, store, session, workspaceId: selected.id, workspace: selected,
+      }))) {
       limited = [
         selected,
         ...limited.filter((workspace) => workspace.id !== selected.id),

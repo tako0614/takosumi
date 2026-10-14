@@ -84,6 +84,10 @@ export async function saveAccountSession(
   record: AccountSessionRecord,
 ): Promise<void> {
   const sessionHash = await hashSessionId(record.sessionId);
+  if(record.policy === "hosted"){
+    await runQuery(client,`INSERT INTO accounts_v1.account_sessions(session_id,subject,created_at,expires_at,hosted_metadata) VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(session_id) DO UPDATE SET subject=excluded.subject,expires_at=excluded.expires_at,hosted_metadata=excluded.hosted_metadata`,[sessionHash,record.subject,toDate(record.createdAt),toDate(record.expiresAt),JSON.stringify(hostedSessionMetadata(record))]);
+    return;
+  }
   await runDrizzle(
     client,
     db
@@ -117,6 +121,7 @@ export async function findAccountSession(
         subject: accountSessions.subject,
         created_at: accountSessions.createdAt,
         expires_at: accountSessions.expiresAt,
+        hosted_metadata: sql`to_jsonb(account_sessions)->'hosted_metadata'`.as("hosted_metadata"),
       })
       .from(accountSessions)
       .where(eq(accountSessions.sessionId, sessionHash)),
@@ -164,8 +169,8 @@ export async function replaceAccountSession(
       returning session_id
     )
     insert into accounts_v1.account_sessions
-      (session_id, subject, created_at, expires_at)
-    select $2, $3, $4, $5
+      (session_id, subject, created_at, expires_at${next.policy === "hosted" ? ", hosted_metadata" : ""})
+    select $2, $3, $4, $5${next.policy === "hosted" ? ", $6::jsonb" : ""}
     from removed
     returning session_id`,
     [
@@ -174,7 +179,13 @@ export async function replaceAccountSession(
       next.subject,
       toDate(next.createdAt),
       toDate(next.expiresAt),
+      ...(next.policy === "hosted" ? [JSON.stringify(hostedSessionMetadata(next))] : []),
     ],
   );
   return result.rows.length === 1;
+}
+
+function hostedSessionMetadata(record: AccountSessionRecord): unknown {
+  if (!record.policy) return null;
+  return {issuerSessionId:record.issuerSessionId,identityGeneration:record.identityGeneration,policy:record.policy,authTime:record.authTime,reauthenticatedAt:record.reauthenticatedAt,absoluteExpiresAt:record.absoluteExpiresAt};
 }

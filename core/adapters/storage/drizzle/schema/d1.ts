@@ -79,6 +79,33 @@ export const workspaceMembers = sqliteTable(
   ],
 );
 
+// Retained independently of Workspace/Account deletion; no cascade FK.
+export const workspaceBillingIntents = sqliteTable(names.workspaceBillingIntents, {
+  workspaceId: text("workspace_id").primaryKey(),
+  intentId: text("intent_id").notNull(),
+  billingAuthority: text("billing_authority").notNull(),
+  workspaceRef: text("workspace_ref").notNull(),
+  recordJson: jsonText("record_json").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("workspace_billing_intents_intent_unique").on(table.intentId),
+  uniqueIndex("workspace_billing_intents_authority_ref_unique").on(table.billingAuthority, table.workspaceRef),
+]);
+
+export const workspaceBillingBindings = sqliteTable(names.workspaceBillingBindings, {
+  workspaceId: text("workspace_id").primaryKey(),
+  intentId: text("intent_id").notNull(),
+  billingAuthority: text("billing_authority").notNull(),
+  workspaceRef: text("workspace_ref").notNull(),
+  organizationRef: text("organization_ref").notNull(),
+  recordJson: jsonText("record_json").notNull(),
+  boundAt: text("bound_at").notNull(),
+}, (table) => [
+  uniqueIndex("workspace_billing_bindings_intent_unique").on(table.intentId),
+  uniqueIndex("workspace_billing_bindings_authority_ref_unique").on(table.billingAuthority, table.workspaceRef),
+  uniqueIndex("workspace_billing_bindings_authority_org_unique").on(table.billingAuthority, table.organizationRef),
+]);
+
 // P4 17-noun rename: NEW Workspace-owned Project grouping. Capsules live under a
 // Project (`capsules.project_id`); a default Project is backfilled per Workspace
 // so pre-Project Capsules keep a stable owner.

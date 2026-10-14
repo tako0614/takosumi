@@ -13,11 +13,11 @@ import {
 } from "../../../../accounts/service/src/d1-migrations.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 
-test("Accounts owns one checksummed D1 v0-v4 catalog without a v4 self-reference", async () => {
+test("Accounts v5 catalog preserves the immutable checksummed v0-v4 prefix", async () => {
   const catalog = await loadD1AccountsMigrationCatalog();
 
   expect(
-    catalog.migrations.map(({ version, name }) => ({ version, name })),
+    catalog.migrations.slice(0,5).map(({ version, name }) => ({ version, name })),
   ).toEqual([
     { version: 0, name: "bootstrap_accounts_store" },
     { version: 1, name: "generalize_billing_provider_storage" },
@@ -25,9 +25,11 @@ test("Accounts owns one checksummed D1 v0-v4 catalog without a v4 self-reference
     { version: 3, name: "refresh_chain_retention_indexes" },
     { version: 4, name: "oidc_client_activation_digest" },
   ]);
-  expect(catalog.headVersion).toBe(4);
-  expect(catalog.migrations).toHaveLength(5);
-  expect(catalog.migrations.map((migration) => migration.checksum)).toEqual([
+  expect(catalog.headVersion).toBe(5);
+  expect(catalog.migrations).toHaveLength(6);
+  expect(catalog.migrations[5]?.name).toBe("hosted_canonical_identity_indexes");
+  expect(catalog.migrations[5]?.checksum).toBe("sha256:73ee50a70d9811ce86286372ccf74a56dd000691a4ec5b0a32e3e4dd15a7712d");
+  expect(catalog.migrations.slice(0,5).map((migration) => migration.checksum)).toEqual([
     "sha256:d53076a57ce2216b532702ac5d3ca4b5cd12f33a277dd5ca3387bd58b0f54fc2",
     "sha256:a0bb01ce9957ed8b4adb82096faafe0973b7e6f38c65704da5304f72bd0b2367",
     "sha256:9cfe9a5c5c0b3cf895882e4a66b3bcfbb49884f239508404c156fad8b19d82eb",
@@ -35,10 +37,10 @@ test("Accounts owns one checksummed D1 v0-v4 catalog without a v4 self-reference
     "sha256:ee715130a39f84397649c39fb6f059abb13547817fd4d52a13b339882639fc97",
   ]);
   expect(catalog.digest).toBe(
-    "sha256:3e13ba1a72d568787e3375072b30da875e4cffa819b8ec8d4fde6c36a4c366ee",
+    "sha256:695c1089a383d2813891a37586ccf6e714f6f3310f0a86da5f4b02ef2f333bea",
   );
   expect(catalog.policyDigest).toBe(
-    "sha256:7b643d6239d89e62063897ea111f94f1c072d08f9c11cd058e8e37a61bd807cd",
+    "sha256:8c983a15bebb850f15b3e505d44531751f0c7d5f365093c876f7847cd5a1bb92",
   );
   expect(catalog.preLedgerPolicy).toMatchObject({
     kind: "takosumi.accounts.d1-pre-ledger-policy@v1",
@@ -46,7 +48,7 @@ test("Accounts owns one checksummed D1 v0-v4 catalog without a v4 self-reference
     cursorColumn: "key",
     chunkSize: 100,
   });
-  expect(catalog.schemaClosures.map(({ headVersion, digest }) => ({
+  expect(catalog.schemaClosures.slice(0,5).map(({ headVersion, digest }) => ({
     headVersion,
     digest,
   }))).toEqual([
@@ -85,7 +87,7 @@ test("Accounts owns one checksummed D1 v0-v4 catalog without a v4 self-reference
   expect(receipt?.params).toEqual([4, v4.name, v4.checksum, 1_000]);
 });
 
-test("the exact-v4 Worker rejects legacy v3 and accepts only exact v4 Accounts D1 closure", async () => {
+test("the additive v5 Worker rejects legacy v3 and accepts exact v4/v5 Accounts D1 closures", async () => {
   const catalog = await loadD1AccountsMigrationCatalog();
 
   const exactV3 = await databaseAtHead(3);
@@ -125,6 +127,8 @@ test("the exact-v4 Worker rejects legacy v3 and accepts only exact v4 Accounts D
       await readD1AccountsMigrationState(exactV4, catalog),
     ),
   ).toMatchObject({ compatible: true, headVersion: 4 });
+
+  expect(assessD1AccountsWorkerState(await readD1AccountsMigrationState(await databaseAtHead(5),catalog))).toMatchObject({compatible:true,headVersion:5});
 
   const mutations: readonly ((database: SqliteFakeD1) => Promise<void>)[] = [
     async () => {}, // exact v2 is older than the bridge window
@@ -329,7 +333,7 @@ test("Accounts D1 v4 atomically upgrades exact v3 and preserves current activati
       readonly applied_at: number;
     }>();
   expect(rows.results).toEqual(
-    catalog.migrations.map((migration) => ({
+    catalog.migrations.slice(0,5).map((migration) => ({
       version: migration.version,
       name: migration.name,
       checksum: migration.checksum,

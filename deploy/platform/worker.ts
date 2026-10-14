@@ -31,6 +31,12 @@ import {
   type RefreshChainRetentionRunResult,
 } from "@takosjp/takosumi-accounts-service";
 import {
+  CONTROL_DISPATCH_RESOURCE_KEYS,
+  controlInventoryResourceKey,
+} from "../../accounts/service/src/control-routes.ts";
+import type { AccountsStore } from "../../accounts/service/src/store.ts";
+import type { RunStreamTiming } from "../../accounts/service/src/control/shared.ts";
+import {
   TAKOSUMI_ACCOUNTS_EXTENSION_SELF_SERVICE_PAT_SCOPES,
   type TakosumiAccountsPatScope,
 } from "@takosjp/takosumi-accounts-contract";
@@ -47,6 +53,15 @@ import {
   OpenTofuRunnerObject,
 } from "../../worker/src/handler.ts";
 import { cachedDeployControlService } from "../../worker/src/deploy_control_seam.ts";
+import {
+  authenticateSharedAuthRequest,
+  handleSharedAuthRouteRequest,
+  handleSharedAuthAccountBoundaryRequest,
+  resolveSharedAuthWorkspace,
+  sharedAuthUnavailableResponse,
+  sharedAuthConfigured,
+  type SharedAuthEnvironment,
+} from "../../worker/src/shared_auth_rpc.ts";
 import { createCloudflareD1OpenTofuControlStore } from "../../worker/src/d1_opentofu_store.ts";
 import { fenceControlDatabase } from "./fenced-control-database.ts";
 import { createCloudflareD1PatWorkspaceMembershipReader } from "./pat-workspace-membership-reader.ts";
@@ -212,7 +227,7 @@ export async function platformCapsuleExecutionAuthority(
  * `TAKOSUMI_ACCOUNTS_DB`) cannot be erased by an unchecked DeployControl cast.
  */
 export type CloudflareWorkerEnv = AccountsCloudflareWorkerEnv &
-  DeployControlEnv;
+  DeployControlEnv & SharedAuthEnvironment;
 type PlatformEnv = CloudflareWorkerEnv;
 
 export interface PlatformExecutionContext {
@@ -648,6 +663,12 @@ export default {
       env,
     );
     if (internalEdgeResponse) return internalEdgeResponse;
+    const sharedAuthResponse = await handleSharedAuthRouteRequest(request, env);
+    if (sharedAuthResponse) return sharedAuthResponse;
+    const sharedAccountBoundaryResponse = await handleSharedAuthAccountBoundaryRequest(request, env);
+    if (sharedAccountBoundaryResponse) return sharedAccountBoundaryResponse;
+    const sharedSessionResponse = await handlePlatformSharedAuthSessionRequest(request, env);
+    if (sharedSessionResponse) return sharedSessionResponse;
     const url = new URL(request.url);
     const destroyRecoveryResponse =
       await handlePlatformDestroyRecoveryRequest(request, url, env);
@@ -821,6 +842,10 @@ export default {
     if (isPlatformUnknownApiPath(url.pathname)) {
       return Response.json({ error: "not found" }, { status: 404 });
     }
+    const sharedControlResponse = await handlePlatformSharedAuthControlRequest(
+      request, env,
+    );
+    if (sharedControlResponse) return sharedControlResponse;
     if (isPlatformReservedMachinePath(url.pathname)) {
       return Response.json({ error: "not found" }, { status: 404 });
     }
@@ -1355,6 +1380,9 @@ async function platformInterfaceExternalRequest(
     "session",
     () => sessionVerifier(request, env),
   );
+  if (session.unavailable) {
+    return { ok: false, response: sharedAuthUnavailableResponse() };
+  }
   if (!session.authenticated) {
     return {
       ok: false,
@@ -1499,13 +1527,109 @@ function platformExtensionSessionCsrfFailure(
   }
   let issuerOrigin: string;
   try {
-    issuerOrigin = new URL(env.TAKOSUMI_ACCOUNTS_ISSUER ?? request.url).origin;
+    issuerOrigin = new URL(
+      session.sharedAccount
+        ? env.TAKOSUMI_SHARED_AUTH_ORIGIN ?? ""
+        : env.TAKOSUMI_ACCOUNTS_ISSUER ?? request.url,
+    ).origin;
   } catch {
     return Response.json({ error: "csrf_check_unavailable" }, { status: 503 });
   }
   return request.headers.get("origin") === issuerOrigin
     ? undefined
     : Response.json({ error: "csrf_failed" }, { status: 403 });
+}
+
+/** Browser mirror of the RP identity. No synthetic issuer session is minted. */
+export async function handlePlatformSharedAuthSessionRequest(
+  request: Request,
+  env: SharedAuthEnvironment,
+): Promise<Response | undefined> {
+  if (new URL(request.url).pathname !== "/api/v1/account/session/me" ||
+    !sharedAuthConfigured(env) ||
+    new URL(request.url).origin !== env.TAKOSUMI_SHARED_AUTH_ORIGIN) return undefined;
+  if (request.method === "DELETE") {
+    const target = new URL(request.url);
+    target.pathname = "/auth/oidc/logout";
+    target.search = "";
+    return await handleSharedAuthRouteRequest(new Request(target, {
+      method: "POST", headers: request.headers,
+    }), env);
+  }
+  if (request.method !== "GET") {
+    return Response.json({ error: "method_not_allowed" }, {
+      status: 405, headers: { allow: "GET, DELETE", "cache-control": "no-store" },
+    });
+  }
+  const identity = await authenticateSharedAuthRequest(request, env);
+  if (identity?.kind === "unavailable") return sharedAuthUnavailableResponse();
+  return Response.json(identity?.kind === "authenticated"
+    ? { subject: identity.accountId, primaryAccountId: identity.accountId, expiresAt: 0 }
+    : { session: null }, { headers: { "cache-control": "no-store" } });
+}
+
+/**
+ * Shared-profile browser authentication is verified by the private RP, then
+ * existing Control handlers read the canonical Workspace/member authority and
+ * retain their mutation admission/CAS fences. The profile's access/ID tokens
+ * are never forwarded to the product API as credentials.
+ */
+export async function handlePlatformSharedAuthControlRequest(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  dependencies: {
+    readonly store?: AccountsStore;
+    readonly resolveOperations?: () => Promise<ControlPlaneOperations>;
+    readonly runStreamTiming?: RunStreamTiming;
+  } = {},
+): Promise<Response | undefined> {
+  if (!sharedAuthConfigured(env) ||
+    new URL(request.url).origin !== env.TAKOSUMI_SHARED_AUTH_ORIGIN) return undefined;
+  const url = new URL(request.url);
+  const resource = controlInventoryResourceKey(url.pathname);
+  if (!resource || !CONTROL_DISPATCH_RESOURCE_KEYS.includes(resource)) return undefined;
+  if (request.headers.has("authorization")) {
+    return Response.json({ error: "unauthenticated" }, {
+      status: 401, headers: { "cache-control": "no-store" },
+    });
+  }
+  const identity = await authenticateSharedAuthRequest(request, env);
+  if (identity?.kind === "unavailable") return sharedAuthUnavailableResponse();
+  if (identity?.kind !== "authenticated") {
+    return Response.json({ error: "unauthenticated" }, {
+      status: 401, headers: { "cache-control": "no-store" },
+    });
+  }
+  const csrfFailure = platformExtensionSessionCsrfFailure(request, env, {
+    authenticated: true, authKind: "session", sharedAccount: true,
+  });
+  if (csrfFailure) return csrfFailure;
+  const headers = new Headers(request.headers);
+  for (const header of [...headers.keys()]) {
+    if (header === "cookie" || header === "authorization" ||
+      header === "proxy-authorization" || header.startsWith("x-takosumi-") ||
+      header.startsWith("x-auth-")) headers.delete(header);
+  }
+  const authenticatedRequest = clonePlatformExtensionRequest(request, headers);
+  const response = await handleAuthenticatedControlRoute({
+    request: authenticatedRequest,
+    url,
+    store: dependencies.store ?? new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
+      schemaMode: resolveD1AccountsSchemaMode(env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE),
+    }),
+    resolveOperations: dependencies.resolveOperations ?? (() => controlPlaneOperationsFor(env)),
+    subject: identity.accountId,
+    requireCurrentMembership: true,
+    ...(dependencies.runStreamTiming ? { runStreamTiming: dependencies.runStreamTiming } : {}),
+    reauthorizeBearer: async () => {
+      const current = await authenticateSharedAuthRequest(request, env);
+      return current?.kind === "authenticated" && current.accountId === identity.accountId;
+    },
+  });
+  if (!response) return Response.json({ error: "not found" }, { status: 404 });
+  const responseHeaders = new Headers(response.headers);
+  responseHeaders.set("cache-control", "no-store");
+  return new Response(response.body, { status: response.status, headers: responseHeaders });
 }
 
 function platformInterfaceAccessFailure(
@@ -2383,6 +2507,7 @@ async function authorizePlatformExtensionCatalogRequest(
   if (bearer) return requireDeployControlBearer(request, env);
 
   const session = await sessionVerifier(request, env);
+  if (session.unavailable) return sharedAuthUnavailableResponse();
   if (session.authenticated) return undefined;
   return Response.json({ error: "unauthenticated" }, { status: 401 });
 }
@@ -2578,6 +2703,9 @@ function platformExtensionPreflightRequest(request: Request): Request {
 
 export interface PlatformExtensionSessionContext {
   readonly authenticated: boolean;
+  /** Private composition markers, never accepted from headers or forwarded. */
+  readonly sharedAccount?: true;
+  readonly unavailable?: true;
   readonly authKind?:
     | "service-token"
     | "protocol-credential"
@@ -2628,6 +2756,9 @@ async function platformExtensionAuthContext(
   | { readonly ok: false; readonly response: Response }
 > {
   let session = await sessionVerifier(request, env, route);
+  if (session.unavailable) {
+    return { ok: false, response: sharedAuthUnavailableResponse() };
+  }
   if (!session.authenticated) {
     return {
       ok: false,
@@ -2930,7 +3061,7 @@ type PlatformExtensionWorkspaceAccess = (
   env: CloudflareWorkerEnv,
   workspaceId: string,
   session?: PlatformExtensionSessionContext,
-) => Promise<boolean | WorkspaceRole>;
+) => Promise<boolean | WorkspaceRole | { readonly kind: "unavailable" }>;
 
 export async function platformExtensionVerifiedWorkspaceSession(
   request: Request,
@@ -2953,7 +3084,7 @@ export async function platformExtensionVerifiedWorkspaceSession(
   if (verifiedWorkspaceId && requestedWorkspaceId !== verifiedWorkspaceId) {
     return platformExtensionWorkspaceAccessFailure();
   }
-  let liveAccess: boolean | WorkspaceRole | undefined;
+  let liveAccess: boolean | WorkspaceRole | { readonly kind: "unavailable" } | undefined;
   let workspaceAccessInvoked = false;
   if (!verifiedWorkspaceId || session.authKind === "session") {
     const canRequestWorkspace =
@@ -2969,6 +3100,9 @@ export async function platformExtensionVerifiedWorkspaceSession(
       requestedWorkspaceId,
       session,
     );
+    if (typeof liveAccess === "object" && liveAccess.kind === "unavailable") {
+      return { ok: false, response: sharedAuthUnavailableResponse() };
+    }
     if (!liveAccess) return platformExtensionWorkspaceAccessFailure();
     verifiedWorkspaceId = requestedWorkspaceId;
   }
@@ -3030,7 +3164,14 @@ async function platformExtensionSessionCanAccessWorkspace(
   workspaceId: string,
   session?: PlatformExtensionSessionContext,
   context?: PlatformExecutionContext,
-): Promise<boolean | WorkspaceRole> {
+): Promise<boolean | WorkspaceRole | { readonly kind: "unavailable" }> {
+  if (session?.sharedAccount) {
+    const result = await resolveSharedAuthWorkspace(
+      request, env, session.subject ?? "", workspaceId,
+    );
+    return result.kind === "authorized" ? result.role :
+      result.kind === "unavailable" ? { kind: "unavailable" } : false;
+  }
   const headers = sessionMirrorHeaders(request);
   if (!headers) return false;
   try {
@@ -3225,6 +3366,20 @@ export async function verifyPlatformExtensionSession(
       (request, env) => accountsWorker.fetch(request, env, context),
     );
     if (tokenSession.authenticated) return tokenSession;
+  }
+
+  const sharedIdentity = await authenticateSharedAuthRequest(request, env);
+  if (sharedIdentity !== undefined) {
+    return sharedIdentity.kind === "authenticated"
+      ? {
+          authenticated: true,
+          authKind: "session",
+          subject: sharedIdentity.accountId,
+          sharedAccount: true,
+        }
+      : sharedIdentity.kind === "unavailable"
+        ? { authenticated: false, unavailable: true }
+        : { authenticated: false };
   }
 
   const headers = sessionMirrorHeaders(request);
@@ -3425,6 +3580,15 @@ async function introspectPlatformExtensionToken(
     }
     const scope = typeof record.scope === "string" ? record.scope : "";
     const scopes = platformExtensionScopes(scope);
+    // The explicit shared product profile accepts identity grants only through
+    // its private RP session. Keep the issuer's existing standard wire: an
+    // identity-only access token never authorizes even a scope-free extension.
+    if (sharedAuthConfigured(env) &&
+      new URL(request.url).origin === env.TAKOSUMI_SHARED_AUTH_ORIGIN &&
+      tokenUse === "oauth_access" && scopes.includes("openid") &&
+      scopes.every((value) => ["openid", "profile", "email", "offline_access"].includes(value))) {
+      return { authenticated: false };
+    }
     if (!platformExtensionScopesAllowAccess(scopes, route)) {
       return { authenticated: false };
     }

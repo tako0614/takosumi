@@ -3,10 +3,12 @@ import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import { verifyPasskeyAssertion } from "./passkey.ts";
 import type {
   AccountsStore,
+  AccountEmailProofRecord,
   PasskeyCredentialRecord,
   TakosumiAccountRecord,
 } from "./store.ts";
 import { deriveTakosumiSubject } from "./subject.ts";
+import { normalizeMergeEmail } from "./identity-state.ts";
 
 export interface AccountProfileInput {
   email?: string;
@@ -18,6 +20,8 @@ export interface AccountProfileInput {
    * verification (genuinely unknown); we never coerce unknown to `true`.
    */
   emailVerified?: boolean;
+  /** Exact fresh provider observation, distinct from the legacy scalar. */
+  emailProof?: Omit<AccountEmailProofRecord, "subject" | "normalizedAddress">;
 }
 
 export interface ResolveUpstreamAccountInput {
@@ -27,6 +31,7 @@ export interface ResolveUpstreamAccountInput {
   upstreamIssuer: string;
   upstreamSubject: string;
   profile?: AccountProfileInput;
+  hostedPolicy?: boolean;
   now?: number;
 }
 
@@ -61,42 +66,88 @@ export async function resolveUpstreamAccount(
   input: ResolveUpstreamAccountInput,
 ): Promise<TakosumiAccountRecord> {
   const now = input.now ?? Date.now();
+  const identity = {
+    providerId: input.providerId,
+    upstreamIssuer: input.upstreamIssuer,
+    upstreamSubject: input.upstreamSubject,
+  };
+  if (input.hostedPolicy) {
+    if (!input.store.findCanonicalAccount || !input.store.isAccountAuthenticationFenced || !input.store.findUpstreamIdentityStatus || !input.store.linkUpstreamIdentityIfAbsent) {
+      throw new TypeError("shared account identity store is unavailable");
+    }
+    const status = await input.store.findUpstreamIdentityStatus(identity);
+    if (status?.disabledAt !== undefined) throw new TypeError("upstream identity is disabled");
+  }
   const linked = await input.store.findUpstreamIdentity({
     providerId: input.providerId,
     upstreamIssuer: input.upstreamIssuer,
     upstreamSubject: input.upstreamSubject,
   });
-  const subject =
+  const boundSubject =
     linked?.subject ??
     (await deriveTakosumiSubject({
       secret: input.subjectSecret,
       upstreamIssuer: input.upstreamIssuer,
       upstreamSubject: input.upstreamSubject,
     }));
-  const existing = await input.store.findAccount(subject);
-  // `emailVerified` is now a first-class field on `TakosumiAccountRecord` and
-  // is persisted end to end (Postgres column, D1/in-memory document). We
-  // persist the upstream assertion when present and otherwise preserve the
-  // previously stored value rather than coercing unknown to a fixed boolean.
+  const boundAccount = await input.store.findAccount(boundSubject);
+  const canonical = input.hostedPolicy && boundAccount
+    ? await input.store.findCanonicalAccount!(boundSubject)
+    : undefined;
+  if (input.hostedPolicy && boundAccount && !canonical) {
+    throw new TypeError("canonical account mapping is unavailable");
+  }
+  const subject = canonical?.subject ?? boundSubject;
+  if (input.hostedPolicy && (await input.store.isAccountAuthenticationFenced!(boundSubject) ||
+    await input.store.isAccountAuthenticationFenced!(subject))) {
+    throw new TypeError("account authentication is fenced");
+  }
+  const existing = canonical ?? boundAccount;
+  // Verification belongs to this exact address observation. Keeping a contact
+  // address when omitted never preserves a previous provider's verification.
+  const email = input.profile?.email ?? existing?.email;
+  const emailVerified = input.profile?.email !== undefined
+    ? input.profile.emailVerified
+    : undefined;
   const account: TakosumiAccountRecord = {
+    ...existing,
     subject,
-    email: input.profile?.email ?? existing?.email,
+    email,
     displayName: input.profile?.displayName ?? existing?.displayName,
     picture: input.profile?.picture ?? existing?.picture,
-    emailVerified: input.profile?.emailVerified ?? existing?.emailVerified,
+    emailVerified,
     createdAt: existing?.createdAt ?? linked?.createdAt ?? now,
     updatedAt: now,
   };
 
   await input.store.saveAccount(account);
-  await input.store.linkUpstreamIdentity({
-    providerId: input.providerId,
-    upstreamIssuer: input.upstreamIssuer,
-    upstreamSubject: input.upstreamSubject,
-    subject,
+  const binding = {
+    ...identity,
+    subject: linked?.subject ?? subject,
     createdAt: linked?.createdAt ?? now,
     updatedAt: now,
-  });
+  };
+  if (input.hostedPolicy) {
+    const created = await input.store.linkUpstreamIdentityIfAbsent!(binding);
+    if (!created && (await input.store.findUpstreamIdentity(identity))?.subject !== binding.subject) {
+      throw new TypeError("immutable upstream identity binding conflict");
+    }
+  } else {
+    await input.store.linkUpstreamIdentity(binding);
+  }
+
+  const proof = input.profile?.emailProof;
+  const normalizedAddress = proof ? normalizeMergeEmail(proof.address) : undefined;
+  if (proof && normalizedAddress && proof.address === email && emailVerified === true &&
+    proof.providerId === input.providerId && proof.upstreamIssuer === input.upstreamIssuer &&
+    proof.upstreamSubject === input.upstreamSubject && proof.observedAt <= now &&
+    proof.observedAt >= now - 5 * 60_000 && proof.validUntil > now &&
+    proof.validUntil <= proof.observedAt + 5 * 60_000) {
+    if (input.hostedPolicy && !input.store.saveAccountEmailProof) {
+      throw new TypeError("email proof store is unavailable");
+    }
+    await input.store.saveAccountEmailProof?.({ ...proof, subject, normalizedAddress });
+  }
 
   // Keep the OAuth identity resolver side-effect free. The canonical first page
   // of GET /api/v1/workspaces owns the awaited, idempotent personal-Workspace

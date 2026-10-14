@@ -1456,7 +1456,7 @@ async function readControlD1TransferLogicalDatabaseDigest(
     readonly reason: "cloudflare_internal";
   }> = [];
   for (const table of names) {
-    if (table === "_cf_KV") {
+    if (table === "_cf_KV" || table === "_cf_METADATA") {
       excludedTables.push({ table, reason: "cloudflare_internal" });
       continue;
     }

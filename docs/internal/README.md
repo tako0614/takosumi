@@ -37,10 +37,13 @@ Internal navigation:
 - [Runner mutation detachment](./runner-mutation-detachment-design.md) — design
   memo only (not implemented) for keeping a mutation's state when its caller is
   lost.
-- [auth.takos.jp shared hosted sign-in](./auth-takos-jp-design.md) — proposed,
-  unimplemented Accounts/OIDC design, including client registration,
-  email-assisted identity linking and protected migration; current contracts
-  remain in force pending the named owner changes.
+- [auth.takos.jp shared hosted sign-in](./auth-takos-jp-design.md) — reviewed
+  Accounts/OIDC design baseline, including client registration, email-assisted
+  identity linking and protected migration. The optional implementation contract
+  below and operator runbooks distinguish source behavior from deployment.
+- [Optional shared-account OIDC](./shared-account-oidc.md) — implementation
+  contract for registered shared clients, current canonical Control membership,
+  operation-bound merge proof and protected migration; deployment is separate.
 
 The public build excludes `internal/**/*.md` and `operations/**/*.md`. When a
 contract becomes user-facing, copy only the stable external behavior into

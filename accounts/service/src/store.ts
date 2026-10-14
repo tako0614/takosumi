@@ -1,3 +1,7 @@
+import { hashSessionId } from "./session-hash-salt.ts";
+import { HostedIdentityRecords } from "./hosted-identity-records.ts";
+import type { IdentityOperationReceiptRecord, AccountEmailProofRecord, HostedOidcGrantRecord, IdentityMergeMutation, IdentityMergeOperation, UnlinkUpstreamIdentityInput, UpstreamIdentityStatusRecord, UpstreamLoginTransactionRecord } from "./identity-state.ts";
+import { MemoryIdentityRecordRepository } from "./memory-identity-records.ts";
 import type {
   TakosumiAccountsPatScope,
   TakosumiSubject,
@@ -9,7 +13,23 @@ import type {
 } from "./refresh-chain-retention.ts";
 import { sha256Text } from "./encoding.ts";
 
+import type { HostedIdentityStore } from "./identity-state.ts";
+export type { AccountEmailProofRecord, UpstreamLoginTransactionRecord, HostedOidcGrantRecord, IdentityMergeOperation, IdentityMergeMutation, UnlinkUpstreamIdentityInput, UpstreamIdentityStatusRecord } from "./identity-state.ts";
+
 export interface AuthorizationCodeRecord {
+  /** Complete normalized authorize policy and the exact browser session checked by GET. */
+  authorizationPolicyHash?: string;
+  authorizationSessionHash?: string;
+  /** Server checkpoint requiring fresh interactive proof; never supplied by the browser. */
+  reauthenticationStartedAt?: number;
+  identityGeneration?: number;
+  oidcProfile?: "shared-account";
+  issuer?: string;
+  authTime?: number;
+  sid?: string;
+  issuerSessionId?: string;
+  familyStartedAt?: number;
+  familyExpiresAt?: number;
   clientId: string;
   redirectUri: string;
   scope: string;
@@ -25,6 +45,15 @@ export interface AuthorizationCodeRecord {
 }
 
 export interface TokenRecord {
+  identityGeneration?: number;
+  oidcProfile?: "shared-account";
+  issuer?: string;
+  authTime?: number;
+  sid?: string;
+  issuerSessionId?: string;
+  nonce?: string;
+  familyStartedAt?: number;
+  familyExpiresAt?: number;
   clientId: string;
   /** Invocation-time OAuth audience. Absent on ordinary client tokens. */
   audience?: string;
@@ -157,6 +186,13 @@ export interface PasskeyCredentialRecord {
 }
 
 export interface AccountSessionRecord {
+  /** Stable non-replayable issuer session anchor across routine rotations. */
+  issuerSessionId?: string;
+  identityGeneration?: number;
+  reauthenticatedAt?: number;
+  policy?: "hosted";
+  authTime?: number;
+  absoluteExpiresAt?: number;
   sessionId: string;
   subject: TakosumiSubject;
   createdAt: number;
@@ -241,7 +277,7 @@ export interface PrivacyRequestRecord {
   updatedAt: number;
 }
 
-export interface AccountsStore {
+export interface AccountsStore extends HostedIdentityStore {
   /**
    * Optional bounded lookup for all credential kinds sharing one opaque token.
    * Implementations must use exact indexed keys and must not select a winner.
@@ -265,6 +301,7 @@ export interface AccountsStore {
     | undefined
     | Promise<TakosumiAccountRecord | undefined>;
   linkUpstreamIdentity(record: UpstreamIdentityRecord): void | Promise<void>;
+  linkUpstreamIdentityIfAbsent?(record: UpstreamIdentityRecord): boolean | Promise<boolean>;
   findUpstreamIdentity(input: {
     providerId: string;
     upstreamIssuer: string;
@@ -586,6 +623,50 @@ export class InMemoryAccountsStore implements AccountsStore {
     { challenge: string; expiresAt: number }
   >();
 
+  readonly #hosted = new HostedIdentityRecords(new MemoryIdentityRecordRepository(this.#accounts, this.#accountSessions, this.#upstreamIdentities, (subjects, now) => {
+    for (const [key, value] of this.#accountSessions) if (subjects.includes(value.subject)) this.#accountSessions.delete(key);
+    for (const [key, value] of this.#authorizationCodes) if (subjects.includes(value.subject) || value.takosumiSubject && subjects.includes(value.takosumiSubject)) this.#authorizationCodes.delete(key);
+    for (const map of [this.#accessTokens, this.#refreshTokens]) for (const [key, value] of map) if (subjects.includes(value.subject) || value.takosumiSubject && subjects.includes(value.takosumiSubject)) map.delete(key);
+  }), this);
+
+  async findHostedAccountSessionAnchor(sessionId: string): Promise<string|undefined> { return this.#hosted.findHostedAccountSessionAnchor(await hashSessionId(sessionId)); }
+  createCredentialUnlinkIntent(record: import("./identity-unlink-state.ts").CredentialUnlinkIntent): Promise<boolean> { return this.#hosted.createCredentialUnlinkIntent(record); }
+  findCredentialUnlinkIntent(id: string): Promise<import("./identity-unlink-state.ts").CredentialUnlinkIntent | undefined> { return this.#hosted.findCredentialUnlinkIntent(id); }
+  createCredentialUnlinkReceipt(record: import("./identity-unlink-state.ts").CredentialUnlinkReceipt): Promise<boolean> { return this.#hosted.createCredentialUnlinkReceipt(record); }
+  findCredentialUnlinkReceipt(id: string): Promise<import("./identity-unlink-state.ts").CredentialUnlinkReceipt | undefined> { return this.#hosted.findCredentialUnlinkReceipt(id); }
+  completeCredentialUnlink(input: import("./identity-unlink-state.ts").CredentialUnlinkMutation): Promise<boolean> { return this.#hosted.completeCredentialUnlink(input); }
+  listIdentityMergeOperations(input: {after?:string;limit:number}): Promise<import("./identity-state.ts").IdentityMergeRetryPage> { return this.#hosted.listIdentityMergeOperations(input); }
+  findIdentityMergeRetryCheckpoint(key:string):Promise<import("./identity-state.ts").IdentityMergeRetryCheckpoint|undefined>{return this.#hosted.findIdentityMergeRetryCheckpoint(key);}
+  compareAndSetIdentityMergeRetryCheckpoint(input:import("./identity-state.ts").IdentityMergeRetryCheckpointMutation):Promise<boolean>{return this.#hosted.compareAndSetIdentityMergeRetryCheckpoint(input);}
+  createIdentityOperationReceipt(record: IdentityOperationReceiptRecord): Promise<boolean> { return this.#hosted.createIdentityOperationReceipt(record); }
+  findIdentityOperationReceipt(receiptId: string): Promise<IdentityOperationReceiptRecord | undefined> { return this.#hosted.findIdentityOperationReceipt(receiptId); }
+  isHostedOidcSessionHashRevoked(issuerSessionHash: string): Promise<boolean> { return this.#hosted.isHostedOidcSessionHashRevoked(issuerSessionHash); }
+  listCanonicalUpstreamIdentities(subject: TakosumiSubject): Promise<readonly UpstreamIdentityRecord[]> { return this.#hosted.listCanonicalUpstreamIdentities(subject); }
+  getAccountAuthenticationGeneration(subject: TakosumiSubject): Promise<number> { return this.#hosted.getAccountAuthenticationGeneration(subject); }
+  hashAccountSessionId(sessionId: string): Promise<string> { return hashSessionId(sessionId); }
+  isHostedOidcClientRevoked(clientId: string): Promise<boolean> { return this.#hosted.isHostedOidcClientRevoked(clientId); }
+  isHostedOidcSessionRevoked(issuerSessionId: string): Promise<boolean> { return this.#hosted.isHostedOidcSessionRevoked(issuerSessionId); }
+  saveAccountEmailProof(record: AccountEmailProofRecord): Promise<void> { return this.#hosted.saveAccountEmailProof(record); }
+  findAccountEmailProof(subject: TakosumiSubject): Promise<AccountEmailProofRecord | undefined> { return this.#hosted.findAccountEmailProof(subject); }
+  findAccountsByEmailCandidate(address: string): Promise<readonly TakosumiAccountRecord[]> { return this.#hosted.findAccountsByEmailCandidate(address); }
+  findCanonicalAccount(subject: TakosumiSubject): Promise<TakosumiAccountRecord | undefined> { return this.#hosted.findCanonicalAccount(subject); }
+  isAccountAuthenticationFenced(subject: TakosumiSubject): Promise<boolean> { return this.#hosted.isAccountAuthenticationFenced(subject); }
+  findUpstreamIdentityStatus(identity: Pick<UpstreamIdentityRecord, "providerId" | "upstreamIssuer" | "upstreamSubject">): Promise<UpstreamIdentityStatusRecord | undefined> { return this.#hosted.findUpstreamIdentityStatus(identity); }
+  saveUpstreamLoginTransaction(record: UpstreamLoginTransactionRecord): Promise<void> { return this.#hosted.saveUpstreamLoginTransaction(record); }
+  consumeUpstreamLoginTransaction(id: string, browserBindingHash: string, now: number): Promise<UpstreamLoginTransactionRecord | undefined> { return this.#hosted.consumeUpstreamLoginTransaction(id, browserBindingHash, now); }
+  saveHostedOidcGrant(record: HostedOidcGrantRecord): Promise<void> { return this.#hosted.saveHostedOidcGrant(record); }
+  findHostedOidcGrant(sid: string): Promise<HostedOidcGrantRecord | undefined> { return this.#hosted.findHostedOidcGrant(sid); }
+  findHostedOidcGrantForSession(input: {issuerSessionId: string; clientId: string; subject: TakosumiSubject}): Promise<HostedOidcGrantRecord | undefined> { return this.#hosted.findHostedOidcGrantForSession(input); }
+  findHostedOidcGrantForCode(authorizationCodeHash: string): Promise<HostedOidcGrantRecord | undefined> { return this.#hosted.findHostedOidcGrantForCode(authorizationCodeHash); }
+  revokeHostedOidcGrant(sid: string, now: number): Promise<void> { return this.#hosted.revokeHostedOidcGrant(sid, now); }
+  revokeHostedOidcSessionGrants(issuerSessionId: string, now: number): Promise<void> { return this.#hosted.revokeHostedOidcSessionGrants(issuerSessionId, now); }
+  revokeHostedOidcClientGrants(clientId: string, now: number): Promise<void> { return this.#hosted.revokeHostedOidcClientGrants(clientId, now); }
+  touchHostedAccountSession(sessionId: string, now: number, idleExpiresAt: number): Promise<boolean> { return this.#hosted.touchHostedAccountSession(sessionId, now, idleExpiresAt); }
+  createIdentityMergeOperation(record: IdentityMergeOperation): Promise<boolean> { return this.#hosted.createIdentityMergeOperation(record); }
+  findIdentityMergeOperation(operationId: string): Promise<IdentityMergeOperation | undefined> { return this.#hosted.findIdentityMergeOperation(operationId); }
+  compareAndSetIdentityMerge(input: IdentityMergeMutation): Promise<boolean> { return this.#hosted.compareAndSetIdentityMerge(input); }
+  unlinkCanonicalUpstreamIdentity(input: UnlinkUpstreamIdentityInput): Promise<boolean> { return this.#hosted.unlinkCanonicalUpstreamIdentity(input); }
+
   saveAccount(record: TakosumiAccountRecord): void {
     const existing = this.#accounts.get(record.subject);
     this.#accounts.set(record.subject, {
@@ -617,6 +698,8 @@ export class InMemoryAccountsStore implements AccountsStore {
     return undefined;
   }
 
+  linkUpstreamIdentityIfAbsent(record: UpstreamIdentityRecord): boolean { const key=upstreamIdentityKey(record); if(this.#upstreamIdentities.has(key))return false; this.#upstreamIdentities.set(key,{...record}); return true; }
+
   linkUpstreamIdentity(record: UpstreamIdentityRecord): void {
     this.#upstreamIdentities.set(upstreamIdentityKey(record), record);
   }
@@ -647,7 +730,8 @@ export class InMemoryAccountsStore implements AccountsStore {
     );
   }
 
-  saveAccountSession(record: AccountSessionRecord): void {
+  saveAccountSession(record: AccountSessionRecord): void | Promise<void> {
+    if(record.policy==="hosted")return (async()=>{await this.#hosted.rememberHostedAccountSessionAnchor(await hashSessionId(record.sessionId),record);this.#accountSessions.set(record.sessionId,record);})();
     this.#accountSessions.set(record.sessionId, record);
   }
 
@@ -659,19 +743,13 @@ export class InMemoryAccountsStore implements AccountsStore {
     this.#accountSessions.delete(sessionId);
   }
 
-  replaceAccountSession(
-    previousSessionId: string,
-    next: AccountSessionRecord,
-  ): boolean {
-    if (
-      !this.#accountSessions.has(previousSessionId) ||
-      this.#accountSessions.has(next.sessionId)
-    ) {
-      return false;
-    }
-    this.#accountSessions.set(next.sessionId, structuredClone(next));
-    this.#accountSessions.delete(previousSessionId);
-    return true;
+  replaceAccountSession(previousSessionId: string, next: AccountSessionRecord): boolean | Promise<boolean> {
+    const replace=()=>{
+      if(!this.#accountSessions.has(previousSessionId)||this.#accountSessions.has(next.sessionId))return false;
+      this.#accountSessions.set(next.sessionId,structuredClone(next));this.#accountSessions.delete(previousSessionId);return true;
+    };
+    if(next.policy==="hosted")return (async()=>{await this.#hosted.rememberHostedAccountSessionAnchor(await hashSessionId(next.sessionId),next);return replace();})();
+    return replace();
   }
 
   savePrivacyRequest(record: PrivacyRequestRecord): void {

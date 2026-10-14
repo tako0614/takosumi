@@ -90,6 +90,10 @@ const mirroredMigrationFiles: readonly {
     fileName: "20261014000071_scheduled_sweep_cursors.sql",
     migrationId: "deploy.scheduled_sweep_cursors.create",
   },
+  {
+    fileName: "20261015000072_workspace_billing_bindings.sql",
+    migrationId: "deploy.workspace_billing_bindings.create",
+  },
 ];
 
 test("migration catalog creates every declared storage table", () => {

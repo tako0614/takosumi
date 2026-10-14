@@ -62,6 +62,7 @@ import type {
   WorkspaceType,
 } from "takosumi-contract/workspaces";
 import type { Project } from "takosumi-contract/projects";
+import type { WorkspaceBillingBindingsService } from "../../../core/domains/workspace-billing-bindings/mod.ts";
 import type {
   InstallConfig,
   InstallConfigCommittedPostApplyRecoveryProof,
@@ -204,12 +205,19 @@ export interface ControlPlaneOperations {
   };
   // --- Workspaces (§4) ---
   readonly workspaces: {
+    /** Generic retained binding owner facade over the same Control store. */
+    readonly billingBindings?: Pick<WorkspaceBillingBindingsService, "get" | "prepare" | "claim">;
     /**
      * Idempotently creates or returns the subject's personal Workspace. Hosts
      * expose the Workspace domain's canonical ensure operation here so the
      * account plane never emulates it with repeated create attempts.
      */
     ensurePersonalWorkspace?(
+      ownerUserId: string,
+      handle: string,
+    ): Promise<Workspace>;
+    /** Shared hosted sign-in never repairs existing owner membership. */
+    ensurePersonalWorkspaceForSharedAccount?(
       ownerUserId: string,
       handle: string,
     ): Promise<Workspace>;
@@ -241,6 +249,14 @@ export interface ControlPlaneOperations {
       readonly type: WorkspaceType;
       readonly ownerUserId: string;
     }): Promise<Workspace>;
+    /** Organization-only creation; personal uses the shared singleton ensure.
+     * Existing Workspace authority is never repaired by this operation. */
+    createWorkspaceForSharedAccount?(request: {
+      readonly handle: string;
+      readonly displayName: string;
+      readonly type: WorkspaceType;
+      readonly ownerUserId: string;
+    }): Promise<Workspace>;
     updateWorkspace(
       id: string,
       patch: {
@@ -258,6 +274,7 @@ export interface ControlPlaneOperations {
       },
       actorAccountId: string,
       expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority,
+      options?: { readonly requireCurrentMembership?: boolean },
     ): Promise<Workspace>;
     /**
      * Deletes an empty Workspace as its owner. Refuses with
@@ -270,6 +287,7 @@ export interface ControlPlaneOperations {
       id: string,
       actorAccountId: string,
       expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+      options?: { readonly requireCurrentMembership?: boolean },
     ): Promise<Workspace>;
   };
   // --- Projects (canonical Workspace-owned grouping) ---
@@ -313,6 +331,7 @@ export interface ControlPlaneOperations {
       readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
       /** Internal owner-only command policy, never current role authority. */
       readonly requiredActorRole?: "owner";
+      readonly requireCurrentMembership?: boolean;
       readonly workspaceId: string;
       readonly accountId: string;
       readonly roles?: readonly ControlWorkspaceRole[];

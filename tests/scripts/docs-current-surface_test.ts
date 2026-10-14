@@ -696,8 +696,23 @@ test("activation-digest docs keep PostgreSQL and D1 promotion order separate", a
   ).replace(/\s+/g, " ");
   assert.match(
     accountsReadme,
-    /current Worker gate.*?only.*?exact checksummed v4/i,
-    "the current Accounts artifact must identify itself as exact-v4-only",
+    /ordinary Worker bridge accepts exact checksummed v4 or v5/i,
+    "the current ordinary Accounts bridge must preserve exact v4/v5 compatibility",
+  );
+  assert.match(
+    accountsReadme,
+    /shared-account profile requires exact v5.*?predeployed/i,
+    "the shared profile must require protected v5 before writes",
+  );
+  assert.match(
+    accountsReadme,
+    /compatible bridge.*?shared profile off.*?before.*?protected v5 migration/i,
+    "the v4/v5 bridge must precede the separately reviewed v5 migration",
+  );
+  assert.doesNotMatch(
+    accountsReadme,
+    /this current exact-v4-only/i,
+    "the old v4-only artifact must not be described as the current bridge",
   );
   assert.doesNotMatch(
     accountsReadme,
