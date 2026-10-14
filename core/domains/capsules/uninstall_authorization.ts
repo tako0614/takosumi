@@ -8,6 +8,17 @@ export type UninstallRequesterValidator = (
   workspaceId: string,
 ) => Promise<boolean>;
 
+/**
+ * Reservation admission checks the exact grant at Core's candidate deadline.
+ * Hosts must re-read Accounts authority and evaluate expiry at validAtMs; the
+ * current-time finalizer validator cannot substitute for this capability.
+ */
+export type UninstallRequesterAtValidator = (
+  requester: CapsuleUninstallRequester,
+  workspaceId: string,
+  validAtMs: number,
+) => Promise<boolean>;
+
 export const UNINSTALL_AUTHORIZATION_REASONS = {
   missing: "uninstall_requester_missing",
   denied: "uninstall_requester_denied",

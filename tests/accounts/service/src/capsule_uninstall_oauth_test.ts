@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { handleControlRoute } from "../../../../accounts/service/src/control-routes.ts";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
+import { validateUninstallRequester } from "../../../../accounts/service/src/uninstall-requester.ts";
 import { CapsulesService } from "../../../../core/domains/capsules/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
@@ -12,7 +13,8 @@ for (const credential of ["oauth", "session", "pat"] as const) {
     const store = new InMemoryOpenTofuControlStore();
     const seeded = await seedCapsuleModel(store);
     await store.putCapsule({ ...seeded.capsule, status: "active", currentStateGeneration: 1 });
-    const subject = seeded.workspace.ownerUserId!;
+    const subject = `tsub_uninstall_${credential}` as const;
+    await store.putWorkspace({ ...seeded.workspace, ownerUserId: subject });
     const now = Date.now();
     const accounts = new InMemoryAccountsStore();
     accounts.saveAccount({ subject, createdAt: now, updatedAt: now });
@@ -28,7 +30,11 @@ for (const credential of ["oauth", "session", "pat"] as const) {
       tokenId: "fixture-pat", tokenPrefix: "fixture", subject, name: "uninstall",
       scopes: ["write"], workspaceId: seeded.workspace.id, createdAt: now, expiresAt: now + 8 * 86_400_000,
     });
-    const capsules = new CapsulesService({ store });
+    const capsules = new CapsulesService({
+      store,
+      validateUninstallRequesterAt: (requester, workspaceId, validAtMs) =>
+        validateUninstallRequester(accounts, requester, workspaceId, validAtMs),
+    });
     const operations = {
       capsules, workspaces: new WorkspacesService({ store }), members: { listMembers: async () => [] },
     } as unknown as ControlPlaneOperations;

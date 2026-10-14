@@ -379,6 +379,8 @@ export async function createWorkerServiceApp(
     ...(accountsStore ? {
       validateUninstallRequester: (requester, workspaceId) =>
         validateUninstallRequester(accountsStore, requester, workspaceId),
+      validateUninstallRequesterAt: (requester, workspaceId, validAtMs) =>
+        validateUninstallRequester(accountsStore, requester, workspaceId, validAtMs),
     } : {}),
     runtimeEnv,
     adapters,

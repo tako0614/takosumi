@@ -6,6 +6,7 @@ import {
   PostgresAccountsStore,
   type PostgresQueryClient,
 } from "@takosjp/takosumi-accounts-service";
+import { handleControlRoute } from "../../../../accounts/service/src/control-routes.ts";
 import type { InstallConfig } from "takosumi-contract/install-configs";
 import type { Run } from "takosumi-contract/runs";
 import type { CredentialRecipe } from "takosumi-contract/credential-recipes";
@@ -33,6 +34,7 @@ import {
   InMemoryCapsuleCoordination,
   type CapsuleCoordination,
 } from "../../../../core/domains/deploy-control/capsule_lease.ts";
+import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 
 const globalWithRequire = globalThis as {
   require?: (specifier: string) => unknown;
@@ -979,6 +981,95 @@ test("composed app delegates dashboard paths to the Accounts fallback", async ()
   const res = await app.fetch(new Request("http://localhost/dashboard"));
   assert.equal(res.headers.get("x-handled-by"), "accounts");
   assert.deepEqual(spy.calls, [{ method: "GET", pathname: "/dashboard" }]);
+});
+
+test("Node composition requires a PAT to outlive the scheduled uninstall deadline", async () => {
+  const dayMs = 86_400_000;
+  const shortSecret = "fixture-node-short-uninstall-pat";
+  const longSecret = "fixture-node-long-uninstall-pat";
+  const neverSecret = "fixture-node-never-uninstall-pat";
+
+  async function scheduleWithPat(
+    secret: string,
+    expiresAt?: number,
+  ) {
+    const accounts = new InMemoryAccountsStore();
+    const opentofuControlStore = new InMemoryOpenTofuControlStore();
+    const seeded = await seedCapsuleModel(opentofuControlStore);
+    await opentofuControlStore.putCapsule({
+      ...seeded.capsule,
+      status: "active",
+      currentStateGeneration: 1,
+    });
+    const subject = "tsub_node_uninstall_owner";
+    await opentofuControlStore.putWorkspace({
+      ...seeded.workspace,
+      ownerUserId: subject,
+    });
+    const now = Date.now();
+    accounts.saveAccount({ subject, createdAt: now, updatedAt: now });
+    accounts.savePersonalAccessToken(secret, {
+      tokenId: `pat_${secret}`,
+      tokenPrefix: "fixture",
+      subject,
+      name: "uninstall",
+      scopes: ["write"],
+      workspaceId: seeded.workspace.id,
+      createdAt: now,
+      ...(expiresAt === undefined ? {} : { expiresAt }),
+    });
+
+    const { buildComposedApp } =
+      await import("../../../../deploy/node-postgres/src/composed-app.ts");
+    const created = await buildComposedApp({
+      config: testConfig(),
+      store: accounts,
+      accountsHandler: accountsHandlerSpy().handler,
+      opentofuControlStore,
+      runtimeEnv: { TAKOSUMI_DEPLOY_CONTROL_TOKEN: TEST_DEPLOY_CONTROL_TOKEN },
+    });
+    const url = new URL(
+      `https://app.takosumi.test/api/v1/capsules/${seeded.capsule.id}/uninstall`,
+    );
+    const response = await handleControlRoute({
+      request: new Request(url, {
+        method: "POST",
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+      url,
+      store: accounts,
+      operations: created.operations,
+    });
+    assert.ok(response);
+    return {
+      response,
+      capsule: await opentofuControlStore.getCapsule(seeded.capsule.id),
+      workspaceId: seeded.workspace.id,
+      store: opentofuControlStore,
+    };
+  }
+
+  const short = await scheduleWithPat(shortSecret, Date.now() + dayMs);
+  assert.equal(short.response.status, 409);
+  const shortBody = await short.response.json() as {
+    error: { details: { reason: string } };
+  };
+  assert.deepEqual(shortBody.error.details, {
+    reason: "capsule_uninstall_pat_deadline_unverified",
+  });
+  assert.equal(short.capsule?.status, "active");
+  assert.equal(
+    (await short.store.listActivityEvents(short.workspaceId, { limit: 100 })).length,
+    0,
+  );
+
+  const long = await scheduleWithPat(longSecret, Date.now() + 14 * dayMs);
+  assert.equal(long.response.status, 202, await long.response.clone().text());
+  assert.equal(long.capsule?.uninstall?.phase, "scheduled");
+
+  const never = await scheduleWithPat(neverSecret);
+  assert.equal(never.response.status, 202);
+  assert.equal(never.capsule?.uninstall?.phase, "scheduled");
 });
 
 test("composed app runs preHandle ahead of composed routing", async () => {
