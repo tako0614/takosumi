@@ -1,5 +1,17 @@
 # Scheduled Capsule uninstall
 
+A PAT that expires at or before a new request's `scheduledDestroyAt` is refused
+at admission with `409 failed_precondition` and
+`details.reason: capsule_uninstall_pat_deadline_unverified`. Equal timestamps
+are also refused. If Accounts cannot confirm that the pinned PAT will be valid
+at the deadline, Capsule state, the reservation, and Activity stay unchanged.
+A warning alone would persist a predictably blocked request, so this follows
+the OAuth refusal policy. Use a browser session, a non-expiring PAT, or one
+valid beyond the deadline. The same expiry condition applies with zero grace.
+Replaying an existing reservation returns the original request without
+replacing its deadline or requester. Admission does not guarantee later
+execution: the same PAT must remain valid through actual provider dispatch.
+
 `POST /api/v1/capsules/{capsuleId}/uninstall` marks an applied Capsule as
 `uninstalled` and schedules its later destruction. Provider resources and data
 remain during the grace period, and charges continue. The OSS default grace

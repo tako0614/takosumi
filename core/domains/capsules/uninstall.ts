@@ -31,6 +31,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export const CAPSULE_UNINSTALL_REASONS = {
   /** A short-lived OAuth access token cannot authorize a durable reservation. */
   oauthUnsupported: "capsule_uninstall_oauth_unsupported",
+  /** Accounts cannot confirm the exact PAT remains valid at the deadline. */
+  patDeadlineUnverified: "capsule_uninstall_pat_deadline_unverified",
   /** The Capsule is not in a status a scheduled uninstall can start from. */
   unavailable: "capsule_uninstall_unavailable",
   /** Nothing was ever applied; the abandonment path closes it instead. */

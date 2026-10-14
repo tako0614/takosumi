@@ -83,7 +83,7 @@ interface Harness {
   readonly capsules: CapsulesService;
   readonly backups: BackupsService;
   readonly activity: ActivityService;
-  readonly authorization: { validate: (requester: import("takosumi-contract/capsules").CapsuleUninstallRequester, workspaceId: string) => Promise<boolean> };
+  readonly authorization: { validate: (requester: import("takosumi-contract/capsules").CapsuleUninstallRequester, workspaceId: string, validAtMs?: number) => Promise<boolean> };
   readonly queuedDestroys: import("../../../../core/domains/deploy-control/mod.ts").OpenTofuRunDispatch[];
   readonly credentialMint: { beforeReturn?: () => Promise<void> };
   readonly clock: { ms: number };
@@ -123,7 +123,7 @@ async function appliedCapsule(
     policy: { lifecycleActions: { allowedExecutors: ["operator"], allowedRunnerCapabilities: [CAPSULE_LIFECYCLE_COMMAND_CAPABILITY] } },
   });
   const destroyJobs: OpenTofuDestroyJob[] = [];
-  const authorization = { validate: async (_requester: import("takosumi-contract/capsules").CapsuleUninstallRequester, _workspaceId: string) => true };
+  const authorization = { validate: async (_requester: import("takosumi-contract/capsules").CapsuleUninstallRequester, _workspaceId: string, _validAtMs = clock.ms) => true };
   const queuedDestroys: import("../../../../core/domains/deploy-control/mod.ts").OpenTofuRunDispatch[] = [];
   const credentialMint: { beforeReturn?: () => Promise<void> } = {};
   const vault = fakeProviderVault();
@@ -250,6 +250,8 @@ async function appliedCapsule(
     newId,
     now: () => new Date(clock.ms),
     uninstallGraceDays: options.uninstallGraceDays ?? 7,
+    validateUninstallRequesterAt: (requester, workspaceId, validAtMs) =>
+      authorization.validate(requester, workspaceId, validAtMs),
   });
   const backups = new BackupsService({
     store,
@@ -1093,8 +1095,8 @@ for (const [label, open] of durableStores) {
           createdAt: START, expiresAt: START + 8 * DAY_MS,
         };
         accounts.savePersonalAccessToken("fixture-bearer-never-persisted", token);
-        h.authorization.validate = (requester, workspaceId) =>
-          validateUninstallRequester(accounts, requester, workspaceId, h.clock.ms);
+        h.authorization.validate = (requester, workspaceId, validAtMs = h.clock.ms) =>
+          validateUninstallRequester(accounts, requester, workspaceId, validAtMs);
         const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, {
           actor: subject, requester: { subject, grant: { kind: "personal-access-token", tokenId: token.tokenId } },
         });
@@ -1138,6 +1140,64 @@ for (const [label, open] of durableStores) {
       } finally { await close(); }
     });
   }
+}
+
+for (const [label, open] of durableStores) {
+  test(`${label}: a PAT admitted just beyond the deadline blocks on delayed finalization and needs cancel/reschedule`, async () => {
+    const { store, close } = await open();
+    try {
+      const h = await appliedCapsule({ store });
+      const subject = "tsub_delayed_uninstall" as const;
+      const workspaceId = "ws_uninstall001";
+      await store.putWorkspaceMember({
+        id: "wm_delayed_uninstall", workspaceId, accountId: subject,
+        roles: ["admin"], status: "active",
+        createdAt: new Date(START).toISOString(), updatedAt: new Date(START).toISOString(),
+      });
+      const accounts = new InMemoryAccountsStore();
+      accounts.saveAccount({ subject, createdAt: START, updatedAt: START });
+      const token = {
+        tokenId: "pat_delayed_uninstall", tokenPrefix: "fixture", subject,
+        name: "scheduled", scopes: ["write" as const], workspaceId,
+        createdAt: h.clock.ms, expiresAt: h.clock.ms + 7 * DAY_MS + 1,
+      };
+      accounts.savePersonalAccessToken("fixture-original-pat", token);
+      h.authorization.validate = (requester, workspace, validAtMs = h.clock.ms) =>
+        validateUninstallRequester(accounts, requester, workspace, validAtMs);
+      const requester = { subject, grant: { kind: "personal-access-token" as const, tokenId: token.tokenId } };
+      const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { actor: subject, requester });
+      expect(Date.parse(scheduled.uninstall!.scheduledDestroyAt)).toBe(token.expiresAt - 1);
+
+      // No record mutation: actual time reaches expiry before this delayed tick.
+      h.clock.ms = token.expiresAt;
+      expect(await h.finalize()).toMatchObject({
+        blocked: 1, exportsRecorded: 0, destroyPlansCreated: 0, destroysStarted: 0, failures: 0,
+      });
+      expect((await store.getCapsule(h.capsuleId))?.uninstall).toMatchObject({
+        id: scheduled.uninstall!.id, requester,
+        blockedReason: UNINSTALL_AUTHORIZATION_REASONS.denied,
+        authorizationRejectedAt: new Date(h.clock.ms).toISOString(),
+      });
+      expect(h.destroyJobs).toHaveLength(0);
+
+      const replacement = { ...token, tokenId: "pat_replacement_uninstall", expiresAt: h.clock.ms + 8 * DAY_MS };
+      accounts.savePersonalAccessToken("fixture-replacement-pat", replacement);
+      expect(await h.authorization.validate(requester, workspaceId)).toBe(false);
+      expect(await h.finalize()).toMatchObject({ scanned: 0 });
+      expect((await h.capsules.cancelCapsuleUninstall(h.capsuleId, { actor: subject })).status).toBe("active");
+      const rescheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, {
+        actor: subject,
+        requester: { subject, grant: { kind: "personal-access-token", tokenId: replacement.tokenId } },
+      });
+      expect(rescheduled.uninstall!.id).not.toBe(scheduled.uninstall!.id);
+      expect(rescheduled.uninstall!.requester?.grant).toEqual({ kind: "personal-access-token", tokenId: replacement.tokenId });
+      expect(Date.parse(rescheduled.uninstall!.scheduledDestroyAt) - h.clock.ms).toBe(7 * DAY_MS);
+      expect(rescheduled.uninstall).not.toHaveProperty("blockedReason");
+      await jumpToDue(h);
+      expect(await h.finalize()).toMatchObject({ destroysStarted: 1, blocked: 0 });
+      expect(h.destroyJobs).toHaveLength(1);
+    } finally { await close(); }
+  });
 }
 
 for (const graceDays of [0, 7]) {

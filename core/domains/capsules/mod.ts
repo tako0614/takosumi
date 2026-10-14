@@ -92,6 +92,7 @@ import {
   scheduledUninstallRecord,
   uninstallGraceMs,
 } from "./uninstall.ts";
+import type { UninstallRequesterAtValidator } from "./uninstall_authorization.ts";
 
 /**
  * Capsule name grammar (spec §5): a DNS-style slug. The name doubles as the
@@ -262,6 +263,8 @@ export interface CapsulesServiceDependencies {
    * `TAKOSUMI_UNINSTALL_GRACE_DAYS`). Defaults to the OSS 7 days.
    */
   readonly uninstallGraceDays?: number;
+  /** Accounts-owned exact-grant check at a new reservation's deadline. */
+  readonly validateUninstallRequesterAt?: UninstallRequesterAtValidator;
 }
 
 interface PreparedCapsuleLifecycle {
@@ -280,6 +283,7 @@ export class CapsulesService {
   readonly #activity: ActivityRecorder & Partial<IdempotentActivityRecorder>;
   readonly #projects: ProjectsService;
   readonly #uninstallGraceDays: number;
+  readonly #validateUninstallRequesterAt?: UninstallRequesterAtValidator;
   #capsuleLifecycleAdmission?: CapsuleLifecycleAdmission;
   #uninstallCancellationCleanup?: (planRunId: string) => Promise<void>;
 
@@ -293,6 +297,7 @@ export class CapsulesService {
     this.#capsuleLifecycleAdmission = deps.capsuleLifecycleAdmission;
     this.#uninstallGraceDays =
       deps.uninstallGraceDays ?? DEFAULT_UNINSTALL_GRACE_DAYS;
+    this.#validateUninstallRequesterAt = deps.validateUninstallRequesterAt;
     // Fail at composition, not at the first uninstall request.
     uninstallGraceMs(this.#uninstallGraceDays);
   }
@@ -915,6 +920,29 @@ export class CapsulesService {
         graceMs: uninstallGraceMs(this.#uninstallGraceDays),
         requester,
       });
+      if (requester?.grant?.kind === "personal-access-token") {
+        let validAtDeadline = false;
+        try {
+          // Check the same candidate that the CAS will persist, after lifecycle
+          // admission. No caller-supplied expiry or current-time check proves
+          // the pinned PAT can authorize this future reservation.
+          validAtDeadline = await this.#validateUninstallRequesterAt?.(
+            requester,
+            current.workspaceId,
+            Date.parse(uninstall.scheduledDestroyAt),
+          ) === true;
+        } catch {
+          // Accounts backend errors may include credentials; expose only the
+          // stable refusal, and leave Capsule state and Activity untouched.
+        }
+        if (!validAtDeadline) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            "PAT authorization could not be confirmed through the uninstall deadline. Use an Accounts session or a PAT that remains valid through finalization.",
+            { reason: CAPSULE_UNINSTALL_REASONS.patDeadlineUnverified },
+          );
+        }
+      }
       const updated = await this.#updateCapsuleLifecycle(prepared, {
         kind: "uninstall",
         status: "uninstalled",

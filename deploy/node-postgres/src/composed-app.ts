@@ -253,6 +253,8 @@ export async function buildComposedApp(
     runtimeEnv,
     validateUninstallRequester: (requester, workspaceId) =>
       validateUninstallRequester(input.store, requester, workspaceId),
+    validateUninstallRequesterAt: (requester, workspaceId, validAtMs) =>
+      validateUninstallRequester(input.store, requester, workspaceId, validAtMs),
     ...(backupArtifactStore ? { backupArtifactStore } : {}),
     ...(input.backupStateObjectReader
       ? { backupStateObjectReader: input.backupStateObjectReader }

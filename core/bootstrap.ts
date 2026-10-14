@@ -371,6 +371,7 @@ function assertDurableGitInstallPlanStoreOrWarn(input: {
 
 export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly validateUninstallRequester?: import("./domains/capsules/uninstall_authorization.ts").UninstallRequesterValidator;
+  readonly validateUninstallRequesterAt?: import("./domains/capsules/uninstall_authorization.ts").UninstallRequesterAtValidator;
   /** Explicit private Runner-to-Core file mount; absent means no endpoint/grants. */
   readonly privateRunFiles?: PrivateRunFileRouteDependencies & {
     readonly endpoint: string;
@@ -1313,6 +1314,7 @@ export async function createTakosumiService(
     projects: projectsService,
     capsuleLifecycleAdmission,
     uninstallGraceDays: uninstallGrace.days,
+    validateUninstallRequesterAt: options.validateUninstallRequesterAt,
   });
   const dependenciesService = new DependenciesService({
     store: sharedOpenTofuStore,
