@@ -262,6 +262,9 @@ import {
   validateWorkspaceMemberReplacement,
   validateWorkspaceOwnerMemberRepair,
   validatePersonalWorkspaceBootstrapOwnerMember,
+  validateWorkspaceInitialOwner,
+  sharedWorkspaceCreationAllowed,
+  isCanonicalActiveWorkspaceOwner,
   assertWorkspaceBillingIntent,
   assertWorkspaceBillingClaim,
   assertWorkspaceBillingBindingRecord,
@@ -4768,6 +4771,36 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return workspace;
   }
 
+  async createWorkspaceWithInitialOwner(workspace: Workspace, member: WorkspaceMember): Promise<Workspace | undefined> {
+    validateWorkspaceInitialOwner(workspace, member);
+    await this.#ensureSchema();
+    const result = await this.#orm.batch([
+      this.#orm.insert(schema.workspaces).values({ id: workspace.id, handle: workspace.handle, recordJson: workspace, createdAt: workspace.createdAt, updatedAt: workspace.updatedAt }).onConflictDoNothing(),
+      this.#orm.insert(schema.workspaceMembers).select(this.#orm.select({
+        id: sql<string>`${member.id}`.as("id"), workspaceId: sql<string>`${workspace.id}`.as("workspaceId"),
+        accountId: sql<string>`${member.accountId}`.as("accountId"), status: sql<string>`'active'`.as("status"),
+        recordJson: sql<WorkspaceMember>`${JSON.stringify(member)}`.as("recordJson"),
+        createdAt: sql<string>`${member.createdAt}`.as("createdAt"), updatedAt: sql<string>`${member.updatedAt}`.as("updatedAt"),
+      }).from(sql`(select 1) as initial_workspace_member_source`).where(sql`changes() = 1`)),
+      this.#orm.select({ workspace: sql`${schema.workspaces.recordJson}`.as("workspace"), member: sql`${schema.workspaceMembers.recordJson}`.as("member") })
+        .from(schema.workspaces).innerJoin(schema.workspaceMembers, and(
+          eq(schema.workspaceMembers.workspaceId, schema.workspaces.id), eq(schema.workspaceMembers.accountId, workspace.ownerUserId),
+          eq(schema.workspaceMembers.status, "active"),
+          sql`json_extract(${schema.workspaceMembers.recordJson}, '$.id') = ${schema.workspaceMembers.id}`,
+          sql`json_extract(${schema.workspaceMembers.recordJson}, '$.workspaceId') = ${schema.workspaceMembers.workspaceId}`,
+          sql`json_extract(${schema.workspaceMembers.recordJson}, '$.accountId') = ${schema.workspaceMembers.accountId}`,
+          sql`json_extract(${schema.workspaceMembers.recordJson}, '$.status') = ${schema.workspaceMembers.status}`,
+          sql`json_extract(${schema.workspaceMembers.recordJson}, '$.createdAt') = ${schema.workspaceMembers.createdAt}`,
+          sql`json_extract(${schema.workspaceMembers.recordJson}, '$.updatedAt') = ${schema.workspaceMembers.updatedAt}`,
+        )).where(and(eq(schema.workspaces.handle, workspace.handle), eq(schema.workspaces.managementState, "active"))).limit(1),
+    ]);
+    const row = result[2][0];
+    if (!row) return undefined;
+    const current = parseD1WorkspaceRecord(row.workspace);
+    const owner = jsonRecordFromD1Value(row.member) as unknown as WorkspaceMember;
+    return sharedWorkspaceCreationAllowed(current, workspace, owner) ? current : undefined;
+  }
+
   async deleteWorkspace(id: string, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<boolean> {
     if (expectedWorkspaceManagementAuthority === undefined) {
       return await this.#drizzleDelete(schema.workspaces, eq(schema.workspaces.id, id));
@@ -4798,25 +4831,27 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     }
     const blockers = await this.#workspaceDeleteBlockers(expectedWorkspace.id);
     if (blockers.length > 0) return { status: "blocked", blockers };
-    await this.db.batch([
-      this.db.prepare(`delete from workspace_members where workspace_id = ?
-        and exists (select 1 from workspaces where id = ? and management_state = 'active' and management_epoch = ?
-          and not exists (select 1 from capsules where space_id = ? and status <> 'destroyed')
-          and not exists (select 1 from sources where space_id = ?)
-          and not exists (select 1 from runs where space_id = ? and status in ('queued', 'running'))
-          and not exists (select 1 from usage_events where workspace_id = ?)
-          and not exists (select 1 from backups where space_id = ?))`)
-        .bind(expectedWorkspace.id, expectedWorkspace.id, expectedWorkspaceManagementAuthority.managementEpoch,
-          expectedWorkspace.id, expectedWorkspace.id, expectedWorkspace.id, expectedWorkspace.id, expectedWorkspace.id),
-      this.db.prepare(`delete from workspaces where id = ? and management_state = 'active' and management_epoch = ?
-        and not exists (select 1 from capsules where space_id = ? and status <> 'destroyed')
-        and not exists (select 1 from sources where space_id = ?)
-        and not exists (select 1 from runs where space_id = ? and status in ('queued', 'running'))
-        and not exists (select 1 from usage_events where workspace_id = ?)
-        and not exists (select 1 from backups where space_id = ?)`)
-        .bind(expectedWorkspace.id, expectedWorkspaceManagementAuthority.managementEpoch,
-          expectedWorkspace.id, expectedWorkspace.id, expectedWorkspace.id, expectedWorkspace.id, expectedWorkspace.id),
+    const actor = input.expectedActor;
+    if (input.requireCurrentMembership && (!actor || actor.workspaceId !== expectedWorkspace.id || !isCanonicalActiveWorkspaceOwner(actor))) return { status: "conflict" };
+    // Delete the Workspace while the actor still exists, then remove its roster
+    // only when that exact guarded delete succeeded in this atomic batch.
+    const result = await this.#orm.batch([
+      this.#orm.delete(schema.workspaces).where(and(
+        eq(schema.workspaces.id, expectedWorkspace.id), eq(schema.workspaces.recordJson, expectedWorkspace),
+        eq(schema.workspaces.managementState, "active"), eq(schema.workspaces.managementEpoch, expectedWorkspaceManagementAuthority.managementEpoch),
+        input.requireCurrentMembership ? d1WorkspaceMemberSnapshotExists(this.#orm, actor!) : undefined,
+        sql`not exists (select 1 from capsules where space_id = ${expectedWorkspace.id} and status <> 'destroyed')`,
+        sql`not exists (select 1 from sources where space_id = ${expectedWorkspace.id})`,
+        sql`not exists (select 1 from runs where space_id = ${expectedWorkspace.id} and status in ('queued', 'running'))`,
+        sql`not exists (select 1 from usage_events where workspace_id = ${expectedWorkspace.id})`,
+        sql`not exists (select 1 from backups where space_id = ${expectedWorkspace.id})`,
+      )),
+      this.#orm.delete(schema.workspaceMembers).where(and(
+        eq(schema.workspaceMembers.workspaceId, expectedWorkspace.id), sql`changes() = 1`,
+        sql`not exists (select 1 from workspaces where id = ${expectedWorkspace.id})`,
+      )),
     ]);
+    if (changes(result[0] as D1Result) > 0) return { status: "deleted" };
     const after = await this.getWorkspace(expectedWorkspace.id);
     if (after === undefined) return { status: "deleted" };
     const afterBlockers = await this.#workspaceDeleteBlockers(expectedWorkspace.id);
@@ -4871,7 +4906,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     validateWorkspaceReplacement(input);
     if (!workspaceAccountReplacementAllowed(input)) return false;
     return await this.#replaceWorkspace(input,
-      input.expectedWorkspace.ownerUserId === input.actorAccountId
+      !input.requireCurrentMembership && input.expectedWorkspace.ownerUserId === input.actorAccountId
         ? undefined : d1WorkspaceMemberSnapshotExists(this.#orm, input.expectedActor!),
     );
   }
@@ -12518,7 +12553,7 @@ function d1ConnectionActorAuthorityGuardStmt(
     authority.expectedWorkspace,
     expectedManagement,
   );
-  const actor = authority.expectedWorkspace.ownerUserId === authority.actorAccountId
+  const actor = !authority.requireCurrentMembership && authority.expectedWorkspace.ownerUserId === authority.actorAccountId
     ? sql`1`
     : authority.expectedActor === undefined
       ? sql`0`

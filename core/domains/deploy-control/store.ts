@@ -481,15 +481,17 @@ export interface WorkspaceReplacementInput {
 export interface WorkspaceAccountReplacementInput extends WorkspaceReplacementInput {
   readonly actorAccountId: string;
   readonly expectedActor?: WorkspaceMember;
+  /** Trusted shared-account policy; namespace ownership alone grants nothing. */
+  readonly requireCurrentMembership?: boolean;
 }
 
 export type WorkspaceAccountAuthority = Pick<WorkspaceAccountReplacementInput,
-  "actorAccountId" | "expectedWorkspace" | "expectedActor">;
+  "actorAccountId" | "expectedWorkspace" | "expectedActor" | "requireCurrentMembership">;
 
 /** Existing namespace-owner / active owner-admin policy, without a target mutation. */
 export function workspaceAccountAuthorityAllowed(input: WorkspaceAccountAuthority): boolean {
   if (!input.actorAccountId) return false;
-  if (input.expectedWorkspace.ownerUserId === input.actorAccountId) return true;
+  if (!input.requireCurrentMembership && input.expectedWorkspace.ownerUserId === input.actorAccountId) return true;
   const actor = input.expectedActor;
   if (actor) parseWorkspaceMemberRecord(actor);
   return actor?.accountId === input.actorAccountId && actor.workspaceId === input.expectedWorkspace.id &&
@@ -519,6 +521,7 @@ export interface WorkspaceOwnerMemberRepairInput {
 
 export interface WorkspaceMemberMutationInput extends WorkspaceOwnerMemberRepairInput {
   readonly expectedActor: WorkspaceMember;
+  readonly requiredActorRole?: "owner";
 }
 
 /** Immutable identities and the reviewed member delta, before any I/O. */
@@ -547,6 +550,7 @@ export function workspaceMemberMutationAllowed(input: WorkspaceMemberMutationInp
   parseWorkspaceMemberRecord(actor);
   return actor.workspaceId === member.workspaceId && actor.status === "active" &&
     (actor.roles.includes("owner") || actor.roles.includes("admin")) &&
+    (input.requiredActorRole !== "owner" || actor.roles.includes("owner")) &&
     (!(member.roles.includes("owner") || current?.roles.includes("owner")) || actor.roles.includes("owner")) &&
     (member.accountId !== expectedWorkspace.ownerUserId ||
       (member.status === "active" && member.roles.includes("owner")));
@@ -565,6 +569,23 @@ export function validateWorkspaceOwnerMemberRepair(input: WorkspaceOwnerMemberRe
   ) throw new TypeError("Workspace owner repair must derive the stored namespace owner");
 }
 
+/** Initial roster authority belongs only to this exact fresh candidate. */
+export function validateWorkspaceInitialOwner(candidate: Workspace, member: WorkspaceMember): void {
+  if (member.createdAt !== candidate.createdAt || member.updatedAt !== candidate.updatedAt) {
+    throw new TypeError("Initial member must match the new Workspace candidate");
+  }
+  validateWorkspaceOwnerMemberRepair({
+    member, expectedWorkspace: candidate,
+    expectedWorkspaceManagementAuthority: { workspaceId: candidate.id, managementState: "active", managementEpoch: 1 },
+  });
+}
+
+/** Existing shared creation is a read, never a membership repair. */
+export function sharedWorkspaceCreationAllowed(current: Workspace, candidate: Workspace, member: WorkspaceMember | undefined): boolean {
+  return (["handle", "displayName", "type", "ownerUserId"] as const).every((key) => current[key] === candidate[key]) &&
+    member?.workspaceId === current.id && member.accountId === current.ownerUserId && isCanonicalActiveWorkspaceOwner(member);
+}
+
 /** Initial roster authority belongs only to this exact fresh personal candidate. */
 export function validatePersonalWorkspaceBootstrapOwnerMember(
   ownerUserId: string, candidate: Workspace, member: WorkspaceMember,
@@ -573,10 +594,7 @@ export function validatePersonalWorkspaceBootstrapOwnerMember(
     member.createdAt !== candidate.createdAt || member.updatedAt !== candidate.updatedAt) {
     throw new TypeError("Personal bootstrap member must match the new owner candidate");
   }
-  validateWorkspaceOwnerMemberRepair({
-    member, expectedWorkspace: candidate,
-    expectedWorkspaceManagementAuthority: { workspaceId: candidate.id, managementState: "active", managementEpoch: 1 },
-  });
+  validateWorkspaceInitialOwner(candidate, member);
 }
 
 /** Private source snapshots are never forwarded to a billing owner. */
@@ -784,6 +802,8 @@ export function assertWorkspaceManagementAdmission(
 export interface DeleteWorkspaceExclusiveInput {
   readonly expectedWorkspace: Workspace;
   readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
+  readonly expectedActor?: WorkspaceMember;
+  readonly requireCurrentMembership?: boolean;
 }
 
 export type DeleteWorkspaceExclusiveResult =
@@ -3607,6 +3627,8 @@ export interface OpenTofuControlStore {
   // Workspace records (spec §4). The owner namespace Capsules live under.
   /** Low-level creation/fixture writer; ordinary metadata changes use replaceWorkspace. */
   putWorkspace(workspace: Workspace): Promise<Workspace>;
+  /** Fresh Workspace + first owner in one boundary; existing rows never repaired. */
+  createWorkspaceWithInitialOwner(workspace: Workspace, member: WorkspaceMember): Promise<Workspace | undefined>;
   /**
    * Low-level Workspace row deletion. Callers must enforce ownership and
    * emptiness (no Capsules, Sources, in-flight Runs, or usage evidence)
@@ -5179,6 +5201,24 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(workspace);
   }
 
+  async createWorkspaceWithInitialOwner(workspace: Workspace, member: WorkspaceMember): Promise<Workspace | undefined> {
+    validateWorkspaceInitialOwner(workspace, member);
+    const existing = Array.from(this.#workspaces.values()).find((row) => row.handle === workspace.handle || row.id === workspace.id);
+    if (existing) {
+      return existing.handle === workspace.handle && this.isWorkspaceManagementAdmissionAllowed(existing.id) &&
+        sharedWorkspaceCreationAllowed(existing, workspace, this.#workspaceMembers.get(workspaceMemberKey(existing.id, workspace.ownerUserId)))
+        ? structuredClone(existing) : undefined;
+    }
+    // Validate before publishing either row; a colliding member identity must
+    // never leave a newly created Workspace without its initial authority.
+    if (this.#workspaceMembers.has(workspaceMemberKey(workspace.id, member.accountId)) ||
+      Array.from(this.#workspaceMembers.values()).some((row) => row.id === member.id)) throw new Error("Workspace member identity already exists");
+    this.#workspaces.set(workspace.id, structuredClone(workspace));
+    this.#workspaceManagement.set(workspace.id, { workspaceId: workspace.id, managementState: "active", managementEpoch: 1 });
+    this.#workspaceMembers.set(workspaceMemberKey(workspace.id, member.accountId), structuredClone(member));
+    return structuredClone(workspace);
+  }
+
   async deleteWorkspace(id: string, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<boolean> {
     if (expectedWorkspaceManagementAuthority !== undefined) {
       assertWorkspaceManagementAdmission(
@@ -5199,6 +5239,12 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     // the row deletes, so a concurrent in-process creation cannot interleave.
     const current = this.#workspaces.get(expectedWorkspace.id);
     if (current === undefined) return { status: "not_found" };
+    if (stableStringify(current) !== stableStringify(expectedWorkspace)) return { status: "conflict" };
+    if (input.requireCurrentMembership && (!input.expectedActor ||
+      input.expectedActor.workspaceId !== expectedWorkspace.id || !isCanonicalActiveWorkspaceOwner(input.expectedActor) ||
+      stableStringify(this.#workspaceMembers.get(workspaceMemberKey(expectedWorkspace.id, input.expectedActor.accountId))) !== stableStringify(input.expectedActor))) {
+      return { status: "conflict" };
+    }
     try {
       assertWorkspaceManagementAdmission(
         this.#workspaceManagement.get(expectedWorkspace.id),
@@ -5276,7 +5322,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       input.expectedWorkspaceManagementAuthority,
     );
     if (!workspaceAccountReplacementAllowed(input)) return false;
-    if (input.expectedWorkspace.ownerUserId !== input.actorAccountId &&
+    if ((input.requireCurrentMembership || input.expectedWorkspace.ownerUserId !== input.actorAccountId) &&
       stableStringify(this.#workspaceMembers.get(workspaceMemberKey(input.workspace.id, input.actorAccountId))) !==
         stableStringify(input.expectedActor)
     ) return false;
@@ -7324,7 +7370,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     if (!workspaceAccountAuthorityAllowed(authority)) return false;
     const workspace = this.#workspaces.get(authority.expectedWorkspace.id);
     if (workspace === undefined || stableStringify(workspace) !== stableStringify(authority.expectedWorkspace)) return false;
-    return workspace.ownerUserId === authority.actorAccountId ||
+    return (!authority.requireCurrentMembership && workspace.ownerUserId === authority.actorAccountId) ||
       stableStringify(this.#workspaceMembers.get(workspaceMemberKey(workspace.id, authority.actorAccountId))) ===
         stableStringify(authority.expectedActor);
   }

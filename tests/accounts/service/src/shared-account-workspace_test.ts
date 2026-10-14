@@ -36,6 +36,7 @@ function fixture(resolveWorkspaceBilling?: SharedWorkspaceBillingResolver) {
       getWorkspace: service.getWorkspace.bind(service),
       captureManagementAuthority: service.captureManagementAuthority.bind(service),
       createWorkspace: service.createWorkspace.bind(service),
+      createWorkspaceForSharedAccount: service.createWorkspaceForSharedAccount.bind(service),
       updateWorkspace: service.updateWorkspace.bind(service),
       updateWorkspaceForAccount: service.updateWorkspaceForAccount.bind(service),
       deleteWorkspaceForAccount: service.deleteWorkspaceForAccount.bind(service),
@@ -75,9 +76,9 @@ test("first Google/GitHub/Takoserver/Hosted logins share one durable personal Wo
 test("bootstrap fails closed for unknown, alias and fenced canonical accounts", async () => {
   const f = fixture();
   await expect(f.directory.bootstrap({ subject: "tsub_unknown" })).rejects.toMatchObject({ status: 401 });
-  f.store.findCanonicalAccount = (id) => id === other ? f.store.findAccount(subject) : f.store.findAccount(id);
+  f.store.findCanonicalAccount = async (id) => id === other ? f.store.findAccount(subject) : f.store.findAccount(id);
   await expect(f.directory.bootstrap({ subject: other })).rejects.toMatchObject({ status: 401 });
-  f.store.isAccountAuthenticationFenced = () => true;
+  f.store.isAccountAuthenticationFenced = async () => true;
   await expect(f.directory.bootstrap(session)).rejects.toMatchObject({ status: 401 });
   expect(await f.control.listWorkspaces()).toHaveLength(0);
 });

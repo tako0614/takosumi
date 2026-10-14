@@ -191,6 +191,9 @@ import {
   validateWorkspaceMemberReplacement,
   validateWorkspaceOwnerMemberRepair,
   validatePersonalWorkspaceBootstrapOwnerMember,
+  validateWorkspaceInitialOwner,
+  sharedWorkspaceCreationAllowed,
+  isCanonicalActiveWorkspaceOwner,
   assertWorkspaceBillingIntent,
   assertWorkspaceBillingClaim,
   assertWorkspaceBillingBindingRecord,
@@ -4685,6 +4688,33 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return workspace;
   }
 
+  async createWorkspaceWithInitialOwner(workspace: Workspace, member: WorkspaceMember): Promise<Workspace | undefined> {
+    validateWorkspaceInitialOwner(workspace, member);
+    return await this.#client.transaction(async (transaction) => {
+      const db = this.#drizzleForClient(transaction);
+      const inserted = await db.insert(pgSchema.workspaces).values({
+        id: workspace.id, handle: workspace.handle, spaceJson: workspace,
+        createdAt: workspace.createdAt, updatedAt: workspace.updatedAt,
+      }).onConflictDoNothing().returning({ id: pgSchema.workspaces.id });
+      if (inserted.length === 1) {
+        await db.insert(pgSchema.workspaceMembers).values({
+          id: member.id, workspaceId: workspace.id, accountId: member.accountId, status: member.status,
+          memberJson: member, createdAt: member.createdAt, updatedAt: member.updatedAt,
+        });
+        return workspace;
+      }
+      const rows = await db.select({ json: pgSchema.workspaces.spaceJson }).from(pgSchema.workspaces)
+        .where(eq(pgSchema.workspaces.handle, workspace.handle)).limit(1);
+      const existing = parseRow(rows[0]) as Workspace | undefined;
+      if (!existing) return undefined;
+      const management = await pgWorkspaceManagementForTransaction(transaction, existing.id);
+      if (management?.managementState !== "active") return undefined;
+      const snapshot = await this.#workspaceMemberMutationSnapshot(transaction, existing, [workspace.ownerUserId]);
+      const owner = snapshot?.members.find((row) => row.accountId === workspace.ownerUserId);
+      return snapshot && sharedWorkspaceCreationAllowed(existing, workspace, owner) ? existing : undefined;
+    });
+  }
+
   async deleteWorkspace(id: string, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<boolean> {
     if (expectedWorkspaceManagementAuthority === undefined) {
       return await this.#pgDelete(pgSchema.workspaces, eq(pgSchema.workspaces.id, id));
@@ -4721,6 +4751,14 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       );
       const currentRow = wsRows.rows[0];
       if (!currentRow) return { status: "not_found" as const };
+      if (stableStringify(currentRow.spaceJson) !== stableStringify(expectedWorkspace)) return { status: "conflict" as const };
+      if (input.requireCurrentMembership) {
+        const expectedActor = input.expectedActor;
+        if (!expectedActor || expectedActor.workspaceId !== expectedWorkspace.id || !isCanonicalActiveWorkspaceOwner(expectedActor)) return { status: "conflict" as const };
+        const snapshot = await this.#workspaceMemberMutationSnapshot(transaction, expectedWorkspace, [expectedActor.accountId]);
+        const actor = snapshot?.members.find((row) => row.accountId === expectedActor.accountId);
+        if (!actor || !workspaceMemberLogicalEquals(actor, expectedActor) || !isCanonicalActiveWorkspaceOwner(actor)) return { status: "conflict" as const };
+      }
       const blockers: string[] = [];
       const hasCapsule = await transaction.query(
         `select 1 from takosumi_capsules where space_id = $1 and status <> 'destroyed' limit 1`,
@@ -4830,7 +4868,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       // roster has no derived owner member. Other actors must be re-read under
       // the Workspace lock, with physical identity and the exact observed
       // logical member snapshot checked before the metadata CAS.
-      if (expectedWorkspace.ownerUserId !== actorAccountId) {
+      if (input.requireCurrentMembership || expectedWorkspace.ownerUserId !== actorAccountId) {
         if (expectedActor === undefined) return false;
         const snapshot = await this.#workspaceMemberMutationSnapshot(
           transaction,
@@ -5481,7 +5519,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       snapshot = await this.#workspaceMemberMutationSnapshot(
         transaction,
         authority.expectedWorkspace,
-        authority.expectedWorkspace.ownerUserId === authority.actorAccountId
+        !authority.requireCurrentMembership && authority.expectedWorkspace.ownerUserId === authority.actorAccountId
           ? []
           : [authority.actorAccountId],
       );
@@ -5495,8 +5533,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
 
     // Namespace owners are authoritative even when the roster has no member
     // row. The exact Workspace snapshot above still fences an owner change.
-    if (snapshot.workspace.ownerUserId === authority.actorAccountId) {
+    if (!authority.requireCurrentMembership && snapshot.workspace.ownerUserId === authority.actorAccountId) {
       return workspaceAccountAuthorityAllowed({
+        requireCurrentMembership: authority.requireCurrentMembership,
         actorAccountId: authority.actorAccountId,
         expectedWorkspace: snapshot.workspace,
       });
@@ -5514,6 +5553,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       return false;
     }
     return workspaceAccountAuthorityAllowed({
+      requireCurrentMembership: authority.requireCurrentMembership,
       actorAccountId: authority.actorAccountId,
       expectedWorkspace: snapshot.workspace,
       expectedActor: currentActor,

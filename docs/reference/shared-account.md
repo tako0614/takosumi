@@ -27,6 +27,9 @@ base path は `/api/v1/account/shared-workspaces` です。
 一覧は account や membership を変更しません。各 choice は `id`, `handle`,
 `displayName`, `type`, 現在の `roles`, `owner` を返します。無効な membership を owner
 field で迂回できません。binding 未設定や機能未構成は 503、権限不足は 403 です。
+追加 Workspace の初期 owner は新規作成時に原子的に設定します。同じ作成の再試行で
+suspended・demoted・missing membership を修復しません。共有 login の Workspace／member
+変更も現在の role と保存時の authority を検証します。
 課金は Workspace に対応する Organization の単一 ledger へ接続します。
 
 ## Provider login の統合

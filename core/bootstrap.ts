@@ -691,6 +691,7 @@ export interface TakosumiOperations {
     upsertMember(input: {
       readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
       readonly requiredActorRole?: "owner";
+      readonly requireCurrentMembership?: boolean;
       readonly workspaceId: string;
       readonly accountId: string;
       readonly roles?: readonly WorkspaceRole[];
@@ -1836,6 +1837,7 @@ export async function createTakosumiService(
       workspacesService.upsertWorkspaceMember({
         expectedWorkspaceManagementAuthority: input.expectedWorkspaceManagementAuthority,
         requiredActorRole: input.requiredActorRole,
+        requireCurrentMembership: input.requireCurrentMembership,
         workspaceId: input.workspaceId,
         accountId: input.accountId,
         ...(input.roles ? { roles: input.roles } : {}),

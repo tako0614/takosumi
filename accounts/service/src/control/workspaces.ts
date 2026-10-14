@@ -173,7 +173,7 @@ export async function handleWorkspaces(
           403,
         );
       }
-      return await createWorkspace(request, operations, ctx.session.subject);
+      return await createWorkspace(request, operations, ctx.session.subject, ctx.session.requireCurrentMembership);
     }
     return methodNotAllowed("GET, POST");
   }
@@ -227,6 +227,7 @@ export async function handleWorkspaces(
           ctx.session.subject,
           workspaceId,
           managementAuthority,
+          ctx.session.requireCurrentMembership,
         );
       if (method === "DELETE")
         return await deleteWorkspace(
@@ -234,6 +235,7 @@ export async function handleWorkspaces(
           ctx.session.subject,
           workspaceId,
           managementAuthority,
+          ctx.session.requireCurrentMembership,
         );
       return methodNotAllowed("GET, PATCH, DELETE");
     }
@@ -258,6 +260,7 @@ export async function handleWorkspaces(
             workspaceId,
             ctx.session.subject,
             managementAuthority,
+            ctx.session.requireCurrentMembership,
           );
         }
         return methodNotAllowed("GET, POST");
@@ -272,6 +275,7 @@ export async function handleWorkspaces(
             ctx.session.subject,
             targetSubject,
             managementAuthority,
+            ctx.session.requireCurrentMembership,
           );
         }
         if (method === "DELETE") {
@@ -281,6 +285,7 @@ export async function handleWorkspaces(
             ctx.session.subject,
             targetSubject,
             managementAuthority,
+            ctx.session.requireCurrentMembership,
           );
         }
         return methodNotAllowed("PATCH, DELETE");
@@ -718,6 +723,7 @@ async function createWorkspace(
   request: Request,
   operations: ControlPlaneOperations,
   sessionSubject: string,
+  requireCurrentMembership = false,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
@@ -738,7 +744,11 @@ async function createWorkspace(
   }
   // ownerUserId is the authenticated account id; canonical Workspace creation
   // persists the corresponding owner membership in the same authority.
-  const workspace = await operations.workspaces.createWorkspace({
+  const create = requireCurrentMembership
+    ? operations.workspaces.createWorkspaceForSharedAccount
+    : operations.workspaces.createWorkspace;
+  if (!create) return errorJson("capability_unavailable", "Strict Workspace creation is unavailable.", 503);
+  const workspace = await create.call(operations.workspaces, {
     handle,
     displayName: displayName ?? handle,
     type,
@@ -754,6 +764,7 @@ async function updateWorkspace(
   sessionSubject: string,
   workspaceId: string,
   managementAuthority: () => WorkspaceManagementAuthority,
+  requireCurrentMembership = false,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
@@ -826,6 +837,7 @@ async function updateWorkspace(
     patch,
     sessionSubject,
     managementAuthority(),
+    { requireCurrentMembership },
   );
   await operations.activity.record?.({
     workspaceId,
@@ -850,9 +862,9 @@ async function updateWorkspace(
 // `requireWorkspaceAccess` in dispatch BEFORE this runs (write scope, so only
 // an owner/admin member with a Workspace-wide credential reaches here). On
 // top of that gate, deletion is owner-only using the same private role view
-// as the member mutations: the namespace owner counts as an active owner
-// even when their durable member row still needs guarded repair. Admins,
-// members, and viewers observe 403.
+// as the member mutations. Shared sessions require the real active owner row;
+// ordinary sessions retain namespace-owner authority and guarded repair.
+// Admins, members, and viewers observe 403.
 //
 // Only an empty Workspace is deletable; the service rechecks ownership and
 // emptiness under the captured management authority and refuses otherwise.
@@ -862,12 +874,13 @@ async function deleteWorkspace(
   sessionSubject: string,
   workspaceId: string,
   managementAuthority: () => WorkspaceManagementAuthority,
+  requireCurrentMembership = false,
 ): Promise<Response> {
   const [workspace, members] = await Promise.all([
     operations.workspaces.getWorkspace(workspaceId),
     operations.members.listMembers(workspaceId),
   ]);
-  const effective: readonly MemberAuthorization[] = [
+  const effective: readonly MemberAuthorization[] = requireCurrentMembership ? members : [
     ...members.filter((member) => member.accountId !== workspace.ownerUserId),
     { accountId: workspace.ownerUserId, roles: ["owner"], status: "active" },
   ];
@@ -879,6 +892,7 @@ async function deleteWorkspace(
     workspaceId,
     sessionSubject,
     managementAuthority(),
+    { requireCurrentMembership },
   );
   return json({ workspace: deleted, deleted: true });
 }
@@ -899,9 +913,9 @@ async function deleteWorkspace(
 //                  unmanaged.
 //
 // A creation/repair race can leave the namespace owner's durable row missing.
-// Mutation gates use a private role view aligned with Workspace.ownerUserId;
-// it is not a public membership row or a new identity. Core alone repairs the
-// real owner row under the captured management authority before a mutation.
+// Ordinary mutation gates use a private role view aligned with ownerUserId;
+// Core alone repairs that real owner under captured management authority.
+// Shared sessions use only the durable roster and never perform this repair.
 // Reads return the durable roster without repairing or inventing rows.
 //
 // `targetSubject` / the session subject are matched against the membership
@@ -940,15 +954,17 @@ function findCaller(
   return members.find((member) => member.accountId === subject);
 }
 
-/** Private mutation policy view; never returned as a membership roster. */
+/** Shared callers use the real roster; ordinary callers retain owner repair. */
 async function effectiveMembers(
   operations: ControlPlaneOperations,
   workspaceId: string,
+  requireCurrentMembership = false,
 ): Promise<readonly MemberAuthorization[]> {
   const [workspace, members] = await Promise.all([
     operations.workspaces.getWorkspace(workspaceId),
     operations.members.listMembers(workspaceId),
   ]);
+  if (requireCurrentMembership) return members;
   return [
     ...members.filter((member) => member.accountId !== workspace.ownerUserId),
     { accountId: workspace.ownerUserId, roles: ["owner"], status: "active" },
@@ -980,6 +996,7 @@ async function addWorkspaceMember(
   workspaceId: string,
   subject: string,
   managementAuthority: () => WorkspaceManagementAuthority,
+  requireCurrentMembership = false,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
@@ -1005,9 +1022,9 @@ async function addWorkspaceMember(
       400,
     );
   }
-  // Mutation gate: only an active owner/admin may add members. The private
-  // role view includes namespace ownership even if its member row needs repair.
-  const members = await effectiveMembers(operations, workspaceId);
+  // Only an active owner/admin may add members. Shared sessions use actual
+  // membership; the ordinary policy retains its namespace-owner repair view.
+  const members = await effectiveMembers(operations, workspaceId, requireCurrentMembership);
   const caller = findCaller(members, subject);
   if (!caller || caller.status !== "active") {
     return memberForbidden("Only an active member can manage members.");
@@ -1045,6 +1062,7 @@ async function addWorkspaceMember(
   }
   const member = await operations.members.upsertMember({
     expectedWorkspaceManagementAuthority: managementAuthority(),
+    requireCurrentMembership,
     ...(role === "owner" || (target && isActiveOwner(target))
       ? { requiredActorRole: "owner" as const }
       : {}),
@@ -1071,6 +1089,7 @@ async function changeWorkspaceMemberRole(
   subject: string,
   targetSubject: string,
   managementAuthority: () => WorkspaceManagementAuthority,
+  requireCurrentMembership = false,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
@@ -1082,7 +1101,7 @@ async function changeWorkspaceMemberRole(
       400,
     );
   }
-  const members = await effectiveMembers(operations, workspaceId);
+  const members = await effectiveMembers(operations, workspaceId, requireCurrentMembership);
   const caller = findCaller(members, subject);
   // Role change is owner-only.
   if (!caller || !isActiveOwner(caller)) {
@@ -1106,6 +1125,7 @@ async function changeWorkspaceMemberRole(
   }
   const member = await operations.members.upsertMember({
     expectedWorkspaceManagementAuthority: managementAuthority(),
+    requireCurrentMembership,
     requiredActorRole: "owner",
     workspaceId,
     accountId: targetSubject,
@@ -1122,8 +1142,9 @@ async function removeWorkspaceMember(
   subject: string,
   targetSubject: string,
   managementAuthority: () => WorkspaceManagementAuthority,
+  requireCurrentMembership = false,
 ): Promise<Response> {
-  const members = await effectiveMembers(operations, workspaceId);
+  const members = await effectiveMembers(operations, workspaceId, requireCurrentMembership);
   const caller = findCaller(members, subject);
   // Remove is owner-only.
   if (!caller || !isActiveOwner(caller)) {
@@ -1144,6 +1165,7 @@ async function removeWorkspaceMember(
   // grants access).
   const member = await operations.members.upsertMember({
     expectedWorkspaceManagementAuthority: managementAuthority(),
+    requireCurrentMembership,
     requiredActorRole: "owner",
     workspaceId,
     accountId: targetSubject,

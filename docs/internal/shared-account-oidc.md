@@ -54,7 +54,13 @@ and read it back before relying on cross-replica revocation.
 Authorization code flow requires state, nonce, exact redirect and S256 PKCE.
 Consent is browser-bound, single-use and origin checked. `prompt`/`max_age`
 requirements fail closed when the issuer session cannot establish the requested
-freshness. Code TTL is 60 seconds. ID/access token TTL is 300 seconds. Shared ID
+freshness. The consent transaction binds the complete authorization policy,
+current rotating issuer session and validated freshness checkpoint. Its POST
+rechecks that policy and the current session; an ordinary consent page cannot
+be upgraded to a fresh-authentication request, nor can a strict policy be removed
+from its submission. PostgreSQL persists these temporary transaction fields in
+the protected metadata column, as do the memory and D1 stores.
+Code TTL is 60 seconds. ID/access token TTL is 300 seconds. Shared ID
 tokens include `iss`, client `aud`, canonical `sub`, `iat`, `exp`, `nonce`, `sid`
 and issuer `auth_time`; requested profile/email claims are scope limited and
 address verification comes from current provenance, not a historical boolean.
@@ -98,6 +104,14 @@ owner field cannot override suspended/deleted membership. Menu reads do not
 create Workspaces or repair memberships. Billing lookup checks membership and
 the same current grant again after awaiting the owner port. Missing directory
 or billing capability returns 503; pending/ambiguous bindings fail closed.
+
+Shared creation installs the initial owner atomically only for a newly created
+Workspace. An existing or concurrently recovered request requires its current
+active owner membership and never restores suspended, demoted or missing rows.
+The trusted shared-profile marker also reaches public Control Workspace and
+member mutations: current roles are read without an owner-field substitute,
+then checked again by the atomic store mutation against the captured member
+and Workspace authority. Existing self-host owner-repair behavior is separate.
 
 ## Verified-address merge
 

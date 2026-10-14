@@ -28,7 +28,10 @@ The base path is `/api/v1/account/shared-workspaces`.
 Menu reads do not change accounts or memberships. Choices contain `id`,
 `handle`, `displayName`, `type`, current `roles` and `owner`. An owner field
 cannot bypass inactive membership. Missing capability/binding returns 503;
-denied membership returns 403. Billing uses the single ledger of the
+denied membership returns 403. Initial owner membership is installed atomically
+only for a new Workspace. Repeating creation never repairs suspended, demoted
+or missing memberships. Shared Workspace/member mutations also recheck current
+roles and authority when committing. Billing uses the single ledger of the
 Organization bound to that Workspace.
 
 ## Combining provider logins

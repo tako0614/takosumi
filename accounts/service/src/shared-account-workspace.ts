@@ -229,8 +229,15 @@ export function createSharedAccountWorkspaceDirectory(deps: SharedAccountWorkspa
         !input.displayName?.trim() || input.displayName.length > 256) {
         throw new SharedAccountWorkspaceError("invalid_request", "A valid organization Workspace is required.", 400);
       }
-      const workspace = await deps.operations.workspaces.createWorkspace({
+      const create = deps.operations.workspaces.createWorkspaceForSharedAccount;
+      if (!create) throw new SharedAccountWorkspaceError("capability_unavailable", "Strict Workspace creation is unavailable.", 503);
+      const workspace = await create.call(deps.operations.workspaces, {
         handle: input.handle, displayName: input.displayName, type: "organization", ownerUserId: account.subject,
+      }).catch((error: unknown) => {
+        if (error instanceof OpenTofuControllerError && error.code === "permission_denied") {
+          throw new SharedAccountWorkspaceError("forbidden", "Current owner membership is required.", 403);
+        }
+        throw error;
       });
       await canonicalAccount(session);
       return await authorized(account.subject, workspace.id);

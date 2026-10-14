@@ -249,6 +249,14 @@ export interface ControlPlaneOperations {
       readonly type: WorkspaceType;
       readonly ownerUserId: string;
     }): Promise<Workspace>;
+    /** Organization-only creation; personal uses the shared singleton ensure.
+     * Existing Workspace authority is never repaired by this operation. */
+    createWorkspaceForSharedAccount?(request: {
+      readonly handle: string;
+      readonly displayName: string;
+      readonly type: WorkspaceType;
+      readonly ownerUserId: string;
+    }): Promise<Workspace>;
     updateWorkspace(
       id: string,
       patch: {
@@ -266,6 +274,7 @@ export interface ControlPlaneOperations {
       },
       actorAccountId: string,
       expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority,
+      options?: { readonly requireCurrentMembership?: boolean },
     ): Promise<Workspace>;
     /**
      * Deletes an empty Workspace as its owner. Refuses with
@@ -278,6 +287,7 @@ export interface ControlPlaneOperations {
       id: string,
       actorAccountId: string,
       expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+      options?: { readonly requireCurrentMembership?: boolean },
     ): Promise<Workspace>;
   };
   // --- Projects (canonical Workspace-owned grouping) ---
@@ -321,6 +331,7 @@ export interface ControlPlaneOperations {
       readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
       /** Internal owner-only command policy, never current role authority. */
       readonly requiredActorRole?: "owner";
+      readonly requireCurrentMembership?: boolean;
       readonly workspaceId: string;
       readonly accountId: string;
       readonly roles?: readonly ControlWorkspaceRole[];
