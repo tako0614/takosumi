@@ -59,3 +59,12 @@ consent を確認し、provider の最近の password/MFA 入力を保証しま�
 operation key は保持します。wallet や role を自動で和算しません。証明の衝突や
 owner ACK 不足は統合を止めます。credential の unlink は credential を無効にし、
 account や wallet を分割しません。誤った統合の取り消しは owner-reviewed recovery です。
+
+credential の選択は cookie 認証された readonly
+`GET /api/v1/account/identity-credentials` の最大100件の自分の provider identity を使います。
+`POST /api/v1/account/identity-credentials/unlink-intents` に
+`{removedIdentity,retainedIdentity,consent:true}` を送り、intent の
+`/upstream-proof/begin` に `{consent:true}` を送って残す provider で新しく認証します。
+callback の `proof_receipt` を intent の `/complete` に
+`{receiptId,consent:true}` として渡します。現在の対応は retained social credential で、
+passkey を残す証明はこの flow にありません。旧 `/unlink` route は利用できません。

@@ -1,5 +1,12 @@
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import { deriveTakosumiSubject } from "./subject.ts";
+import type { AccountProfileInput } from "./identity.ts";
+import { fetchUpstreamJson, isUpstreamJsonRecord } from "./upstream-http.ts";
+import {
+  assertVerifiedSocialProvider,
+  fetchGithubIdentity,
+  verifyGoogleIdToken,
+} from "./upstream-verification.ts";
 
 export interface UpstreamOAuthProvider {
   id: string;
@@ -9,6 +16,7 @@ export interface UpstreamOAuthProvider {
   userInfoEndpoint: string;
   defaultScopes: readonly string[];
   subjectClaim: string;
+  verificationProfile?: "google-oidc" | "github-oauth";
 }
 
 export interface OidcOAuthProviderInput {
@@ -29,6 +37,8 @@ export interface UpstreamAuthorizationUrlInput {
   scopes?: readonly string[];
   codeChallenge?: string;
   codeChallengeMethod?: "plain" | "S256";
+  nonce?: string;
+  freshAuthentication?: boolean;
 }
 
 export interface UpstreamAuthorizationCodeExchangeInput {
@@ -38,6 +48,9 @@ export interface UpstreamAuthorizationCodeExchangeInput {
   redirectUri: string;
   code: string;
   codeVerifier?: string;
+  nonce?: string;
+  freshSince?: number;
+  now?: number;
   subjectSecret: string | Uint8Array | CryptoKey;
   fetch?: typeof fetch;
 }
@@ -49,6 +62,9 @@ export interface UpstreamAuthorizationCodeExchangeResult {
   takosumiSubject: TakosumiSubject;
   tokenResponse: Record<string, unknown>;
   userInfo: Record<string, unknown>;
+  profile?: AccountProfileInput;
+  authenticationTime?: number;
+  freshlyAuthenticatedAt?: number;
 }
 
 export function oidcOAuthProvider(
@@ -84,6 +100,14 @@ export function buildUpstreamAuthorizationUrl(
       input.codeChallengeMethod ?? "S256",
     );
   }
+  if (input.nonce) url.searchParams.set("nonce", input.nonce);
+  if (input.provider.verificationProfile) {
+    url.searchParams.set("prompt", "select_account");
+  }
+  if (input.freshAuthentication && input.provider.verificationProfile === "google-oidc") {
+    url.searchParams.set("max_age", "0");
+    url.searchParams.set("claims", JSON.stringify({ id_token: { auth_time: { essential: true } } }));
+  }
   return url;
 }
 
@@ -91,15 +115,48 @@ export async function exchangeUpstreamAuthorizationCode(
   input: UpstreamAuthorizationCodeExchangeInput,
 ): Promise<UpstreamAuthorizationCodeExchangeResult> {
   const fetchImpl = input.fetch ?? fetch;
+  if (input.provider.verificationProfile) {
+    assertVerifiedSocialProvider(input.provider);
+    if (!input.codeVerifier || !/^[A-Za-z0-9._~-]{43,128}$/u.test(input.codeVerifier)) {
+      throw new TypeError("verified upstream requires server PKCE");
+    }
+  }
   const tokenResponse = await postTokenRequest(input, fetchImpl);
   const accessToken = tokenResponse.access_token;
-  if (typeof accessToken !== "string" || accessToken.length === 0) {
+  if (typeof accessToken !== "string" || accessToken.length === 0 || accessToken.length > 16 * 1024 ||
+    (input.provider.verificationProfile && (typeof tokenResponse.token_type !== "string" || tokenResponse.token_type.toLowerCase() !== "bearer"))) {
     throw new TypeError(
       "upstream OAuth token response did not include access_token",
     );
   }
 
-  const userInfo = await fetchUserInfo(input.provider, accessToken, fetchImpl);
+  const now = input.now ?? Date.now();
+  let userInfo: Record<string, unknown>;
+  let verifiedClaims: Record<string, unknown> | undefined;
+  if (input.provider.verificationProfile === "google-oidc") {
+    verifiedClaims = await verifyGoogleIdToken({
+      token: tokenResponse.id_token,
+      clientId: input.clientId,
+      nonce: input.nonce,
+      fetch: fetchImpl,
+      now,
+      freshSince: input.freshSince,
+    });
+    const fetched = await fetchUserInfo(input.provider, accessToken, fetchImpl);
+    if (fetched.sub !== verifiedClaims.sub) throw new TypeError("Google UserInfo subject does not match ID token");
+    // Only signed identity/address assertions supply proof. UserInfo may add
+    // display fields, never replace subject, address or verification claims.
+    userInfo = {
+      name: fetched.name,
+      picture: fetched.picture,
+      ...verifiedClaims,
+    };
+  } else if (input.provider.verificationProfile === "github-oauth") {
+    if (input.freshSince !== undefined) throw new TypeError("GitHub OAuth cannot prove fresh credential authentication");
+    userInfo = await fetchGithubIdentity({ provider: input.provider, accessToken, fetch: fetchImpl });
+  } else {
+    userInfo = await fetchUserInfo(input.provider, accessToken, fetchImpl);
+  }
   const upstreamSubject = userInfo[input.provider.subjectClaim];
   if (
     typeof upstreamSubject !== "string" &&
@@ -110,6 +167,7 @@ export async function exchangeUpstreamAuthorizationCode(
     );
   }
   const normalizedSubject = String(upstreamSubject);
+  if (!normalizedSubject || normalizedSubject.length > 255) throw new TypeError("upstream subject is invalid");
   const takosumiSubject = await deriveTakosumiSubject({
     secret: input.subjectSecret,
     upstreamIssuer: input.provider.issuer,
@@ -123,6 +181,13 @@ export async function exchangeUpstreamAuthorizationCode(
     takosumiSubject,
     tokenResponse,
     userInfo,
+    ...(verifiedClaims && Number.isSafeInteger(verifiedClaims.auth_time) && (verifiedClaims.auth_time as number) <= Math.floor(now / 1000) + 60
+      ? { authenticationTime: verifiedClaims.auth_time as number,
+        ...(input.freshSince !== undefined ? { freshlyAuthenticatedAt: verifiedClaims.auth_time as number } : {}) }
+      : {}),
+    ...(input.provider.verificationProfile ? {
+      profile: socialProfile(input.provider, normalizedSubject, userInfo, now),
+    } : {}),
   };
 }
 
@@ -139,7 +204,7 @@ async function postTokenRequest(
   if (input.codeVerifier) body.set("code_verifier", input.codeVerifier);
   if (input.clientSecret) body.set("client_secret", input.clientSecret);
 
-  const response = await fetchImpl(input.provider.tokenEndpoint, {
+  const { value: responseBody } = await fetchUpstreamJson(fetchImpl, input.provider.tokenEndpoint, {
     method: "POST",
     headers: {
       accept: "application/json",
@@ -147,13 +212,7 @@ async function postTokenRequest(
     },
     body,
   });
-  if (!response.ok) {
-    throw new Error(
-      `upstream OAuth token exchange failed with status ${response.status}`,
-    );
-  }
-  const responseBody = await response.json();
-  if (!isJsonRecord(responseBody)) {
+  if (!isUpstreamJsonRecord(responseBody)) {
     throw new TypeError("upstream OAuth token response was not a JSON object");
   }
   return responseBody;
@@ -164,27 +223,48 @@ async function fetchUserInfo(
   accessToken: string,
   fetchImpl: typeof fetch,
 ): Promise<Record<string, unknown>> {
-  const response = await fetchImpl(provider.userInfoEndpoint, {
+  const { value: body } = await fetchUpstreamJson(fetchImpl, provider.userInfoEndpoint, {
     method: "GET",
     headers: {
       accept: "application/json",
       authorization: `Bearer ${accessToken}`,
     },
   });
-  if (!response.ok) {
-    throw new Error(
-      `upstream OAuth userinfo failed with status ${response.status}`,
-    );
-  }
-  const body = await response.json();
-  if (!isJsonRecord(body)) {
-    throw new TypeError(
-      "upstream OAuth userinfo response was not a JSON object",
-    );
+  if (!isUpstreamJsonRecord(body)) {
+    throw new TypeError("upstream OAuth userinfo response was not a JSON object");
   }
   return body;
 }
 
-function isJsonRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function socialProfile(
+  provider: UpstreamOAuthProvider,
+  upstreamSubject: string,
+  userInfo: Record<string, unknown>,
+  now: number,
+): AccountProfileInput {
+  const email = typeof userInfo.email === "string" ? userInfo.email : undefined;
+  const verified = typeof userInfo.email_verified === "boolean" ? userInfo.email_verified : undefined;
+  const authoritative = provider.verificationProfile === "github-oauth" ||
+    (verified === true && (!!email?.toLowerCase().endsWith("@gmail.com") ||
+      (typeof userInfo.hd === "string" && userInfo.hd.length > 0)));
+  return {
+    email,
+    emailVerified: verified,
+    displayName: typeof userInfo.name === "string" ? userInfo.name :
+      typeof userInfo.login === "string" ? userInfo.login : undefined,
+    picture: typeof userInfo.picture === "string" ? userInfo.picture :
+      typeof userInfo.avatar_url === "string" ? userInfo.avatar_url : undefined,
+    ...(email && verified === true ? {
+      emailProof: {
+        address: email,
+        providerId: provider.id,
+        upstreamIssuer: provider.issuer,
+        upstreamSubject,
+        verification: "provider" as const,
+        authoritative,
+        observedAt: now,
+        validUntil: now + 5 * 60_000,
+      },
+    } : {}),
+  };
 }

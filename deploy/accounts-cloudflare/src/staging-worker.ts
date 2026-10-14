@@ -4,15 +4,29 @@ import { createInProcessDeployControlSeam } from "../../../worker/src/deploy_con
 import type { CloudflareWorkerEnv as ControlEnv } from "../../../worker/src/bindings.ts";
 import { verifyD1OpenTofuLedgerSchemaPredeployed } from "../../../worker/src/d1_opentofu_store.ts";
 import { assertControlD1MaintenanceInactive } from "../../../worker/src/d1_schema_maintenance.ts";
+import { D1AccountsStore } from "../../../accounts/service/src/d1-store.ts";
+import { createIdentityMergeRetryService, type IdentityMergeRetryService } from "../../../accounts/service/src/identity-merge-retry.ts";
+import type { IdentityMergeReconciler } from "../../../accounts/service/src/identity-merge.ts";
+import type { IdentityMergeOperation } from "../../../accounts/service/src/identity-state.ts";
+import type { CredentialUnlinkReconciler } from "../../../accounts/service/src/identity-unlink-state.ts";
+import type { WorkspaceBillingEnrollmentPort } from "../../../accounts/service/src/workspace-billing-bootstrap.ts";
+import { handleStagingLoginPortal } from "./staging-login-portal.ts";
 import {
   AUTH_STAGING_CLIENTS,
   AUTH_STAGING_ISSUER,
+  AUTH_STAGING_RETRY_CRON,
   assertAuthStagingVariables,
   assertAuthStagingUpstreams,
 } from "./staging-target.ts";
 
 type AuthEnv = CloudflareWorkerEnv & ControlEnv;
 type AccountsWorker = ReturnType<typeof createCloudflareWorker<AuthEnv>>;
+export interface AuthStagingOwnerPorts {
+  readonly identityMergeReconciler?: IdentityMergeReconciler;
+  readonly assertOwnerReadiness?: (operation?: IdentityMergeOperation) => Promise<boolean>;
+  readonly credentialUnlinkReconciler?: CredentialUnlinkReconciler;
+  readonly workspaceBillingEnrollment?: WorkspaceBillingEnrollmentPort;
+}
 const seams = new WeakMap<AuthEnv, ReturnType<typeof createInProcessDeployControlSeam>>();
 
 function controlOperations(env: AuthEnv) {
@@ -45,6 +59,10 @@ function issuerPath(path: string): boolean {
 export function createAuthStagingWorker(dependencies: {
   readonly accounts?: AccountsWorker;
   readonly verifySchema?: (env: AuthEnv) => Promise<void>;
+  /** Trusted source composition, never configured from browser JSON. Missing
+   * real owner readiness refuses merge consent before reservation. */
+  readonly ownerPorts?: (env: AuthEnv) => AuthStagingOwnerPorts | undefined;
+  readonly retryService?: (env: AuthEnv) => IdentityMergeRetryService;
 } = {}) {
   // D1 work cannot be forcibly cancelled. Keep at most one pending read-only
   // verification per env; a timed-out caller never starts a parallel attempt.
@@ -66,8 +84,32 @@ export function createAuthStagingWorker(dependencies: {
     });
     return attempt;
   };
+  const owners = new WeakMap<AuthEnv, AuthStagingOwnerPorts>();
+  const ownerPorts = (env: AuthEnv) => {
+    let ports = owners.get(env);
+    if (!ports) { ports = dependencies.ownerPorts?.(env) ?? {}; owners.set(env,ports); }
+    return ports;
+  };
+  const retryServices = new WeakMap<AuthEnv, IdentityMergeRetryService>();
+  const retryService = (env: AuthEnv): IdentityMergeRetryService => {
+    let service = retryServices.get(env);
+    if (!service) {
+      const ports = ownerPorts(env);
+      service = dependencies.retryService?.(env) ?? createIdentityMergeRetryService({
+        store:new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB,{schemaMode:"predeployed",sessionHashSalt:env.TAKOSUMI_ACCOUNT_SESSION_HASH_SALT!}),
+        reconciler:ports.identityMergeReconciler,assertOwnerReadiness:ports.assertOwnerReadiness,
+        stage:{environment:String(env.TAKOSUMI_ENVIRONMENT),issuerOrigin:String(env.TAKOSUMI_ACCOUNTS_ISSUER),hostedSessionPolicy:env.TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY==="true",accountsSchemaHead:5,accountsSchemaMode:String(env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE)},
+      });
+      retryServices.set(env,service);
+    }
+    return service;
+  };
   const accounts = dependencies.accounts ?? createCloudflareWorker<AuthEnv>({
     controlPlaneOperations: controlOperations,
+    identityMergeReconciler:(env)=>ownerPorts(env).identityMergeReconciler,
+    identityMergeRetry:retryService,
+    credentialUnlinkReconciler:(env)=>ownerPorts(env).credentialUnlinkReconciler,
+    workspaceBillingEnrollment:(env)=>ownerPorts(env).workspaceBillingEnrollment,
   });
   return {
     async fetch(request: Request, env: AuthEnv, context?: { waitUntil(promise: Promise<unknown>): void }): Promise<Response> {
@@ -97,10 +139,12 @@ export function createAuthStagingWorker(dependencies: {
         } catch {
           response = Response.json({ error: "auth_staging_unavailable" }, { status: 503 });
         }
-      } else if (issuerPath(url.pathname)) {
+      } else if (url.pathname === "/sign-in" || issuerPath(url.pathname)) {
         try {
           await schemaFor(env);
-          response = await accounts.fetch(request, env, context);
+          response = url.pathname === "/sign-in"
+            ? (await handleStagingLoginPortal({request,issuer:AUTH_STAGING_ISSUER,accountsHandler:(providerRequest)=>accounts.fetch(providerRequest,env,context)}))!
+            : await accounts.fetch(request, env, context);
         } catch {
           response = Response.json({ error: "auth_staging_unavailable" }, { status: 503 });
         }
@@ -114,6 +158,21 @@ export function createAuthStagingWorker(dependencies: {
         headers.set("x-takosumi-worker-version", metadata.id);
       }
       return new Response(request.method === "HEAD" ? null : response.body, { status: response.status, headers });
+    },
+    async scheduled(event: {cron:string}, env: AuthEnv): Promise<void> {
+      // A scheduled event has no browser URL; target and environment guards
+      // therefore run independently before any schema/store/owner work.
+      if (event.cron !== AUTH_STAGING_RETRY_CRON) return;
+      try {
+        assertAuthStagingVariables(env);
+        if (REQUIRED_BINDINGS.some((name)=>env[name]===null||env[name]===undefined) ||
+          [...REQUIRED_SECRETS,...assertAuthStagingUpstreams(env.TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS)].some((name)=>typeof env[name]!=="string"||!(env[name] as string).trim())) return;
+        await schemaFor(env);
+        const result = await retryService(env).runBatch();
+        console.info(JSON.stringify({event:"auth_staging_merge_retry",status:result.status,scanned:result.scanned,activated:result.activated,pending:result.pending,recoveryRequired:result.recoveryRequired,conflicts:result.conflicts,failed:result.failed}));
+      } catch {
+        console.info(JSON.stringify({event:"auth_staging_merge_retry",status:"unavailable"}));
+      }
     },
   };
 }

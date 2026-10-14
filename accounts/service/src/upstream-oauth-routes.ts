@@ -1,5 +1,9 @@
 import { resolveUpstreamAccount } from "./identity.ts";
-import type { AccountsStore } from "./store.ts";
+import type { AccountsStore, UpstreamLoginTransactionRecord } from "./store.ts";
+import { base64UrlEncodeBytes, sha256Text } from "./encoding.ts";
+import { assertVerifiedSocialProvider, assertSocialLoginScopes } from "./upstream-verification.ts";
+import { validateUpstreamOperationProof, completeUpstreamOperationProof } from "./upstream-operation-proof.ts";
+import { validateUpstreamUnlinkProof, completeUpstreamUnlinkProof } from "./upstream-unlink-proof.ts";
 import {
   buildUpstreamAuthorizationUrl,
   exchangeUpstreamAuthorizationCode,
@@ -31,6 +35,8 @@ import {
 } from "./login-email-allowlist.ts";
 
 const upstreamOAuthStateCookie = "takosumi_oauth_state";
+const hostedUpstreamOAuthStateCookie = "__Host-takosumi_upstream";
+const hostedUpstreamTransactionTtlMs = 5 * 60_000;
 const upstreamOAuthStateCookieMaxAgeSeconds = 10 * 60;
 const publicAuthProviderTokenPattern = /^[a-z][a-z0-9._-]{0,127}$/u;
 const passkeyAuthProviderId = "passkey";
@@ -149,11 +155,100 @@ function normalizePublicAuthProviderToken(
 }
 
 export function handleUpstreamAuthorizeRequest(input: {
+  request?: Request;
+  store?: AccountsStore;
   url: URL;
   upstreamOAuth: UpstreamOAuthOptions;
   secureCookie: boolean;
-}): Response {
+}): Response | Promise<Response> {
+  if (input.upstreamOAuth.hostedSessionPolicy || resolveUpstreamClient(input.upstreamOAuth, input.url.searchParams.get("provider"))?.provider.verificationProfile) {
+    return handleHostedUpstreamAuthorizeRequest(input).then(withOAuthNoStoreHeaders);
+  }
   return withOAuthNoStoreHeaders(handleUpstreamAuthorizeRequestUncached(input));
+}
+
+async function handleHostedUpstreamAuthorizeRequest(input: {
+  request?: Request;
+  store?: AccountsStore;
+  url: URL;
+  upstreamOAuth: UpstreamOAuthOptions;
+  secureCookie: boolean;
+}): Promise<Response> {
+  const resolved = resolveUpstreamClient(input.upstreamOAuth, input.url.searchParams.get("provider"));
+  if (!resolved) return json({ error: "unknown_provider" }, 400);
+  if (!input.secureCookie || !input.store?.saveUpstreamLoginTransaction || !input.store.consumeUpstreamLoginTransaction) {
+    return authProviderConfigurationInvalidResponse();
+  }
+  if (["provider", "prompt", "max_age", "state", "return_to"].some((key) => input.url.searchParams.getAll(key).length > 1)) {
+    return json({ error: "invalid_request" }, 400);
+  }
+  const prompt = input.url.searchParams.get("prompt");
+  const maxAge = input.url.searchParams.get("max_age");
+  if ((prompt !== null && prompt !== "login") ||
+    (maxAge !== null && (!/^\d{1,8}$/u.test(maxAge) || Number(maxAge) > 7 * 24 * 60 * 60))) {
+    return json({ error: "invalid_request" }, 400);
+  }
+  const freshAuthentication = prompt === "login" || maxAge !== null;
+  if (freshAuthentication && resolved.provider.verificationProfile === "github-oauth") {
+    // The GitHub account picker cannot attest when credentials were entered.
+    return json({ error: "interaction_required", error_description: "Use an issuer credential to prove fresh authentication." }, 400);
+  }
+  try {
+    assertVerifiedSocialProvider(resolved.provider);
+    assertSocialLoginScopes(resolved.provider, resolved.client.scopes ?? resolved.provider.defaultScopes);
+    const redirect = new URL(resolved.client.redirectUri);
+    if (redirect.origin !== input.url.origin || redirect.username || redirect.password || redirect.hash) {
+      throw new TypeError("hosted callback must use the issuer origin");
+    }
+    const requestedReturn = input.url.searchParams.get("return_to");
+    let returnTo: string | undefined;
+    if (requestedReturn !== null) {
+      const target = new URL(requestedReturn, input.url.origin);
+      if (target.origin !== input.url.origin || target.pathname !== "/oauth/authorize" || target.username || target.password || target.hash) {
+        throw new TypeError("hosted continuation must be an issuer authorization request");
+      }
+      returnTo = target.pathname + target.search;
+    }
+    const state = mintUpstreamOAuthServerState();
+    const browserBinding = mintUpstreamOAuthServerState();
+    const codeVerifier = base64UrlEncodeBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const nonce = mintUpstreamOAuthServerState();
+    const now = Date.now();
+    const transaction: UpstreamLoginTransactionRecord = {
+      id: state,
+      providerId: resolved.client.providerId,
+      browserBindingHash: await sha256Text(browserBinding),
+      codeVerifier,
+      nonce,
+      redirectUri: resolved.client.redirectUri,
+      createdAt: now,
+      expiresAt: now + hostedUpstreamTransactionTtlMs,
+      ...(returnTo ? { returnTo } : {}),
+      ...(freshAuthentication ? { prompt: "login" as const, maxAgeSeconds: maxAge === null ? 0 : Number(maxAge) } : {}),
+    };
+    await input.store.saveUpstreamLoginTransaction(transaction);
+    const challenge = (await sha256Text(codeVerifier)).slice("sha256:".length);
+    const authorizationUrl = buildUpstreamAuthorizationUrl({
+      provider: resolved.provider,
+      clientId: resolved.client.clientId,
+      redirectUri: resolved.client.redirectUri,
+      state,
+      scopes: resolved.client.scopes,
+      codeChallenge: challenge,
+      codeChallengeMethod: "S256",
+      nonce: resolved.provider.verificationProfile === "google-oidc" ? nonce : undefined,
+      freshAuthentication,
+    });
+    return new Response(null, {
+      status: 302,
+      headers: {
+        location: authorizationUrl.toString(),
+        "set-cookie": serializeHostedUpstreamStateCookie(`${resolved.client.providerId}:${state}:${browserBinding}`),
+      },
+    });
+  } catch {
+    return authProviderConfigurationInvalidResponse();
+  }
 }
 
 function handleUpstreamAuthorizeRequestUncached(input: {
@@ -258,31 +353,65 @@ async function handleUpstreamCallbackRequestUncached(input: {
       400,
     );
   }
-  const codeVerifier = input.url.searchParams.get("code_verifier");
-  if (!codeVerifier || !/^[A-Za-z0-9._~-]{43,128}$/u.test(codeVerifier)) {
-    return json(
-      {
-        error: "invalid_request",
-        error_description: "code_verifier is required",
-      },
-      400,
+  let codeVerifier: string | undefined;
+  let transaction: UpstreamLoginTransactionRecord | undefined;
+  const verifiedUpstreamFlow = input.upstreamOAuth.hostedSessionPolicy || resolved.provider.verificationProfile !== undefined;
+  if (verifiedUpstreamFlow) {
+    if (!input.secureCookie || !input.store.consumeUpstreamLoginTransaction ||
+      ["code", "state", "provider"].some((key) => input.url.searchParams.getAll(key).length !== 1)) {
+      return json({ error: "invalid_state" }, 400);
+    }
+    const rawCookie = parseCookie(input.request.headers.get("cookie"))[hostedUpstreamOAuthStateCookie];
+    const binding = rawCookie?.split(":");
+    if (!binding || binding.length !== 3 || binding[0] !== resolved.client.providerId || binding[1] !== state ||
+      !/^[a-f0-9]{64}$/u.test(binding[2]!)) {
+      return json({ error: "invalid_state" }, 400);
+    }
+    try {
+      transaction = await input.store.consumeUpstreamLoginTransaction(state, await sha256Text(binding[2]!), Date.now());
+      if (!transaction || transaction.id !== state || transaction.providerId !== resolved.client.providerId ||
+        transaction.redirectUri !== resolved.client.redirectUri || transaction.expiresAt <= Date.now() ||
+        transaction.createdAt > Date.now() || transaction.expiresAt - transaction.createdAt > hostedUpstreamTransactionTtlMs) {
+        return json({ error: "invalid_state" }, 400);
+      }
+      if ((transaction.operationProof || transaction.unlinkProof) &&
+        (!input.upstreamOAuth.hostedSessionPolicy || (transaction.operationProof && transaction.unlinkProof))) {
+        throw new TypeError("invalid upstream operation context");
+      }
+      assertVerifiedSocialProvider(resolved.provider);
+      assertSocialLoginScopes(resolved.provider, resolved.client.scopes ?? resolved.provider.defaultScopes);
+      codeVerifier = transaction.codeVerifier;
+    } catch {
+      return json({ error: "invalid_state" }, 400);
+    }
+  } else {
+    codeVerifier = input.url.searchParams.get("code_verifier") ?? undefined;
+    if (!codeVerifier || !/^[A-Za-z0-9._~-]{43,128}$/u.test(codeVerifier)) {
+      return json(
+        {
+          error: "invalid_request",
+          error_description: "code_verifier is required",
+        },
+        400,
+      );
+    }
+    const cookieState = readUpstreamOAuthStateCookie(
+      input.request.headers.get("cookie"),
     );
-  }
-  const cookieState = readUpstreamOAuthStateCookie(
-    input.request.headers.get("cookie"),
-  );
-  if (
-    !cookieState ||
-    cookieState.providerId !== resolved.client.providerId ||
-    cookieState.state !== state
-  ) {
-    return json(
-      {
-        error: "invalid_state",
-        error_description: "OAuth state cookie does not match callback state",
-      },
-      400,
-    );
+    if (
+      !cookieState ||
+      cookieState.providerId !== resolved.client.providerId ||
+      cookieState.state !== state
+    ) {
+      return json(
+        {
+          error: "invalid_state",
+          error_description: "OAuth state cookie does not match callback state",
+        },
+        400,
+      );
+    }
+
   }
 
   try {
@@ -294,10 +423,18 @@ async function handleUpstreamCallbackRequestUncached(input: {
       redirectUri: resolved.client.redirectUri,
       code,
       codeVerifier,
+      nonce: transaction?.nonce,
+      freshSince: transaction?.prompt === "login" ? transaction.createdAt : undefined,
       subjectSecret: input.upstreamOAuth.subjectSecret,
       fetch: input.upstreamOAuth.fetch,
     });
-    const profile = profileFromUpstreamUserInfo(exchange.userInfo);
+    if (transaction?.operationProof) {
+      await validateUpstreamOperationProof({ request: input.request, store: input.store, transaction, exchange, now: Date.now() });
+    }
+    if (transaction?.unlinkProof) {
+      await validateUpstreamUnlinkProof({ request: input.request, store: input.store, transaction, exchange, now: Date.now() });
+    }
+    const profile = exchange.profile ?? profileFromUpstreamUserInfo(exchange.userInfo);
     if (
       !loginEmailIsAllowed(
         { email: profile.email, emailVerified: profile.emailVerified },
@@ -316,8 +453,15 @@ async function handleUpstreamCallbackRequestUncached(input: {
       upstreamIssuer: exchange.upstreamIssuer,
       upstreamSubject: exchange.upstreamSubject,
       profile,
+      hostedPolicy: input.upstreamOAuth.hostedSessionPolicy,
     });
     const now = Date.now();
+    const receipt = transaction?.operationProof
+      ? await completeUpstreamOperationProof({ request: input.request, store: input.store, transaction, exchange, now })
+      : undefined;
+    const unlinkReceipt = transaction?.unlinkProof
+      ? await completeUpstreamUnlinkProof({ request: input.request, store: input.store, transaction, exchange, now })
+      : undefined;
     const ttlMs = input.upstreamOAuth.sessionTtlMs ?? 30 * 24 * 60 * 60 * 1000;
 
     // Agent 6 item 6 + 8: rotate-on-login. If the caller already has a
@@ -331,11 +475,15 @@ async function handleUpstreamCallbackRequestUncached(input: {
       subject: account.subject,
       now,
       ttlMs,
+      hostedPolicy: input.upstreamOAuth.hostedSessionPolicy,
+      authenticationTime: exchange.authenticationTime,
+      freshlyAuthenticatedAt: exchange.freshlyAuthenticatedAt,
     });
 
     const sessionCookie = serializeAccountSessionCookie(rotated.sessionId, {
       secure: input.secureCookie,
-      maxAgeSeconds: Math.max(1, Math.floor(ttlMs / 1000)),
+      maxAgeSeconds: Math.max(1, Math.floor((rotated.expiresAt - now) / 1000)),
+      hostedPolicy: input.upstreamOAuth.hostedSessionPolicy,
     });
     // Build a single set-cookie header value that clears the previous state
     // cookie and sets the new session cookie. `Response` headers can hold
@@ -346,14 +494,27 @@ async function handleUpstreamCallbackRequestUncached(input: {
     });
     headers.append(
       "set-cookie",
-      clearUpstreamOAuthStateCookie(input.secureCookie),
+      verifiedUpstreamFlow
+        ? serializeHostedUpstreamStateCookie("", true)
+        : clearUpstreamOAuthStateCookie(input.secureCookie),
     );
     headers.append("set-cookie", sessionCookie);
+    if (transaction?.returnTo) {
+      const target = new URL(transaction.returnTo, input.url.origin);
+      if (target.origin !== input.url.origin || target.pathname !== "/oauth/authorize" || target.username || target.password || target.hash) {
+        throw new TypeError("invalid hosted continuation");
+      }
+      headers.set("location", target.pathname + target.search);
+      headers.delete("content-type");
+      return new Response(null, { status: 302, headers });
+    }
     return new Response(
       JSON.stringify({
         subject: account.subject,
         expires_at: rotated.expiresAt,
         provider_id: exchange.providerId,
+        ...(receipt ? { proof_receipt: receipt.receiptId, operation_id: receipt.operationId } : {}),
+        ...(unlinkReceipt ? { proof_receipt: unlinkReceipt.receiptId, unlink_intent_id: unlinkReceipt.operationId } : {}),
       }),
       { status: 200, headers },
     );
@@ -372,6 +533,10 @@ async function handleUpstreamCallbackRequestUncached(input: {
       502,
     );
   }
+}
+
+function serializeHostedUpstreamStateCookie(value: string, clear = false): string {
+  return `${hostedUpstreamOAuthStateCookie}=${encodeURIComponent(value)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${clear ? 0 : hostedUpstreamTransactionTtlMs / 1000}`;
 }
 
 function serializeUpstreamOAuthStateCookie(

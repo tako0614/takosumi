@@ -36,7 +36,10 @@ name `clientSecretEnv`; they contain no secret values. Global legacy credentials
 cannot override a shared client's binding. Disabled registrations leave a
 durable client-revocation tombstone, so old replicas cannot issue or refresh
 grants. Reactivation uses a newly reviewed, versioned client ID; toggling the
-old ID back on cannot resurrect it.
+old ID back on cannot resurrect it. Disabling configuration alone does not
+update stale replicas: the owner must materialize the durable revocation marker
+through the owning store port or a request resolved by the disabled registration
+and read it back before relying on cross-replica revocation.
 
 | Operation | Path | Authentication |
 | --- | --- | --- |
@@ -150,10 +153,47 @@ balances and original pending/unknown operation keys remain protected and
 reachable through the reviewed custody adapter. Missing reconciliation refuses
 consent before fencing; partial acknowledgements after reservation leave a
 pending fenced operation for explicit recovery, never a partial active merge.
+The browser cannot resume through a revoked/fenced session. The composition
+must give a trusted owner service custody of the persisted operation ID and
+retry `activateIdentityMerge` with current proof/grant/generation checks before
+expiry. After expiry, owner-reviewed recovery is required. The dedicated staging
+entry mounts the same per-environment retry service for consent readiness and a
+one-minute scheduled handler. Its existing Accounts pending index, bounded
+cursor/CAS lease, queue capacity and proof deadline are checked before fencing.
+Missing real owner readiness refuses consent. Client credentials
+or an arbitrary subject parameter never provide that retry authority.
 
-Ordinary credential unlink disables the chosen provider and revokes its grants;
-it does not split an account or a wallet. Reversing a mistaken merge requires
-reviewed owner recovery acknowledgements, preserved before-images and audit.
+Credential unlink requires a server-minted intent bound to the removed identity
+and a different retained credential. A new operation-bound provider flow must
+prove that retained identity is currently usable. Another non-disabled database
+row or a generic recent session is insufficient. The exact removed/retained
+tuple, proof reference and generation go to the explicit unlink-intent owner
+ACK port. Atomic completion consumes that proof and intent, disables the chosen
+provider, revokes grants and retains a value-free audit. An identical retry
+cannot change the identity pair. The legacy unguarded unlink route refuses with
+`unlink_intent_required`; it is never a compatibility fallback.
+
+The issuer-browser inventory is read-only
+`GET /api/v1/account/identity-credentials`, returning at most 100 current user's
+`{providerId,upstreamIssuer,upstreamSubject,enabled}` records. It returns no email,
+profile, proof, token or session anchor. The browser selects two existing
+different identity tuples, then sends `{removedIdentity,retainedIdentity,consent:true}`
+to `POST /api/v1/account/identity-credentials/unlink-intents`. The named intent's
+`/upstream-proof/begin` accepts `{consent:true}` and returns a provider navigation
+URL. Its verified callback returns `proof_receipt` and `unlink_intent_id`;
+`/{intentId}/complete` accepts only `{receiptId,consent:true}`. These new mutating
+routes require the exact issuer Origin and host-only current issuer/unlink
+browser cookies. A retained social credential is supported; retained passkey
+proof is not implemented in this intent flow.
+
+Unlink does not split an account or a wallet. Reversing an active mistaken merge
+requires reviewed owner recovery acknowledgements and preserved before-images.
+A consented operation that was never activated uses separate reviewed
+pre-activation abort semantics: prove no source alias exists, acknowledge rollback
+of partial external changes and original pending-intent custody, atomically
+remove only its own fences and advance authentication generations. Expired proof
+alone never activates or releases a fence. Receipt assurance, timing and immutable
+references remain identifiable in the append-only decision audit.
 
 ## Protected rollout
 

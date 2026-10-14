@@ -65,3 +65,13 @@ are not automatically combined. Conflicting proof or incomplete owner
 acknowledgements stop activation. Credential unlink disables that credential;
 it does not split an account or wallet. Reversal of an incorrect merge requires
 owner-reviewed recovery.
+
+Select credentials from cookie-authenticated read-only
+`GET /api/v1/account/identity-credentials`, bounded to 100 of your own provider
+identities. POST `{removedIdentity,retainedIdentity,consent:true}` to
+`/api/v1/account/identity-credentials/unlink-intents`, then `{consent:true}` to
+the intent's `/upstream-proof/begin`. Complete a new login with the retained
+provider and POST `{receiptId,consent:true}` to the intent's `/complete` using
+the callback's opaque `proof_receipt`. This flow currently supports a retained
+social credential; retained passkey proof is not implemented. The old `/unlink`
+route is unavailable.

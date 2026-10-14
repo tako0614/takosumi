@@ -3,6 +3,7 @@ import type {
   UpstreamOAuthOptions,
 } from "./mod.ts";
 import { oidcOAuthProvider } from "./upstream.ts";
+import { assertVerifiedSocialProvider, assertSocialLoginScopes } from "./upstream-verification.ts";
 
 export const UPSTREAM_PROVIDER_DESCRIPTORS_ENV =
   "TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS";
@@ -30,6 +31,7 @@ export interface UpstreamProviderDescriptor {
   readonly redirectUri: string;
   readonly scopes?: readonly string[];
   readonly subjectClaim?: string;
+  readonly verificationProfile?: "google-oidc" | "github-oauth";
 }
 
 /**
@@ -151,8 +153,13 @@ function parseDescriptor(
     );
   }
   const scopes = optionalStringArray(value.scopes, `${label}.scopes`);
+  const verificationProfile = optionalString(value.verificationProfile, `${label}.verificationProfile`);
+  if (verificationProfile !== undefined && verificationProfile !== "google-oidc" && verificationProfile !== "github-oauth") {
+    throw new TypeError(`${label}.verificationProfile is unsupported`);
+  }
   return {
     providerId,
+    ...(verificationProfile ? { verificationProfile } : {}),
     ...optionalProperty("label", optionalString(value.label, `${label}.label`)),
     ...optionalProperty("protocol", normalizedProtocol),
     issuer: requiredIssuerIdentity(value.issuer, `${label}.issuer`),
@@ -192,25 +199,33 @@ function registrationFromDescriptor(
       `${UPSTREAM_PROVIDER_DESCRIPTORS_ENV}[${index}].clientSecretEnv references missing runtime secret ${descriptor.clientSecretEnv}`,
     );
   }
-  return {
-    providerId: descriptor.providerId,
-    ...(descriptor.label ? { label: descriptor.label } : {}),
-    protocol: descriptor.protocol ?? "oidc",
-    clientId: descriptor.clientId,
-    ...(clientSecret ? { clientSecret } : {}),
-    redirectUri: descriptor.redirectUri,
-    ...(descriptor.scopes ? { scopes: descriptor.scopes } : {}),
-    provider: oidcOAuthProvider({
+  const provider = {
+    ...oidcOAuthProvider({
       id: descriptor.providerId,
       issuer: descriptor.issuer,
       authorizationEndpoint: descriptor.authorizationEndpoint,
       tokenEndpoint: descriptor.tokenEndpoint,
       userInfoEndpoint: descriptor.userInfoEndpoint,
-      ...(descriptor.scopes ? { defaultScopes: descriptor.scopes } : {}),
-      ...(descriptor.subjectClaim
-        ? { subjectClaim: descriptor.subjectClaim }
-        : {}),
+      defaultScopes: descriptor.scopes ?? (descriptor.verificationProfile === "github-oauth"
+        ? ["read:user", "user:email"]
+        : descriptor.verificationProfile === "google-oidc" ? ["openid", "email"] : undefined),
+      subjectClaim: descriptor.subjectClaim ?? (descriptor.verificationProfile === "github-oauth" ? "id" : undefined),
     }),
+    ...(descriptor.verificationProfile ? { verificationProfile: descriptor.verificationProfile } : {}),
+  };
+  if (provider.verificationProfile) {
+    assertVerifiedSocialProvider(provider);
+    assertSocialLoginScopes(provider, descriptor.scopes ?? provider.defaultScopes);
+  }
+  return {
+    providerId: descriptor.providerId,
+    ...(descriptor.label ? { label: descriptor.label } : {}),
+    protocol: descriptor.protocol ?? (descriptor.verificationProfile === "github-oauth" ? "oauth2" : "oidc"),
+    clientId: descriptor.clientId,
+    ...(clientSecret ? { clientSecret } : {}),
+    redirectUri: descriptor.redirectUri,
+    ...(descriptor.scopes ? { scopes: descriptor.scopes } : {}),
+    provider,
   };
 }
 

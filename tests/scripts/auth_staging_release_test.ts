@@ -61,11 +61,12 @@ function fixtureTarget() {
   });
 }
 
-function harness(options: { exists?: boolean; active?: boolean; schemaError?: boolean; lostUploadAck?: boolean; badBinding?: boolean; badNamespace?: boolean; wrongCanonical?: boolean; wrongCurrent?: boolean; extraPreview?: boolean; publicError?: boolean; domainOwned?: boolean } = {}) {
+function harness(options: { exists?: boolean; active?: boolean; schemaError?: boolean; lostUploadAck?: boolean; badBinding?: boolean; badNamespace?: boolean; wrongCanonical?: boolean; wrongCurrent?: boolean; extraPreview?: boolean; publicError?: boolean; domainOwned?: boolean; schedules?: readonly {cron:string}[]; lostScheduleAck?: boolean } = {}) {
   const target = fixtureTarget();
   const plan = createAuthStagingPlan(target, config, bytes);
   let exists = options.exists ?? true;
   let active = options.active ?? false;
+  let schedules = options.schedules ?? (active ? [{cron:"*/1 * * * *"}] : []);
   let current = previousVersion;
   let version: Record<string, unknown> = {};
   const requests: { method: string; path: string; body?: BodyInit }[] = [];
@@ -80,7 +81,8 @@ function harness(options: { exists?: boolean; active?: boolean; schemaError?: bo
       if (path === `/workers/scripts/takosumi-staging/versions/${canonicalVersion}`) return { resources: { bindings: { bindings: canonicalBindings.map((binding) => options.wrongCanonical && binding.name === "TAKOSUMI_ACCOUNTS_DB" ? { ...binding, id: uuid("f") } : binding) } } };
       if (path === "/workers/scripts/takosumi-staging/deployments") return { deployments: [{ versions: [{ version_id: options.wrongCurrent ? uuid("f") : canonicalVersion, percentage: 100 }] }] };
       if (path.endsWith("/subdomain")) return { enabled: false, previews_enabled: false };
-      if (path.endsWith("/schedules") || path.endsWith("/workers/routes")) return [];
+      if (path.endsWith("/schedules")) { if (method === "PUT") { schedules = JSON.parse(String(body)); if (options.lostScheduleAck) throw new Error("fixture_lost_schedule_ack"); } return { schedules }; }
+      if (path.endsWith("/workers/routes")) return [];
       if (path.startsWith("/workers/domains?service=")) return active ? [{ hostname: AUTH_STAGING_HOST, service: AUTH_STAGING_WORKER, zone_id: target.zoneId, enabled: true, previews_enabled: options.extraPreview ?? false }] : [];
       if (path.startsWith("/workers/domains?hostname=")) return options.domainOwned ? [{ service: "foreign-worker" }] : [];
       if (method === "PUT" && path === "/workers/domains") { active = true; return {}; }
@@ -97,7 +99,7 @@ function harness(options: { exists?: boolean; active?: boolean; schemaError?: bo
           if (binding.type === "secret_text") return { name: binding.name, type: binding.type };
           return binding;
         });
-        version = { resources: { script: { handlers: ["fetch"] }, script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"] }, bindings: { bindings } } };
+        version = { resources: { script: { handlers: ["fetch", "scheduled"] }, script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"] }, bindings: { bindings } } };
         if (options.lostUploadAck) throw new Error("fixture_lost_ack");
         return { id: uploadedVersion };
       }
@@ -106,7 +108,7 @@ function harness(options: { exists?: boolean; active?: boolean; schemaError?: bo
       throw new Error(`unexpected fixture path ${path}`);
     },
   };
-  const existingVersion = () => ({ resources: { script: { handlers: ["fetch"] }, script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"] }, bindings: { bindings: [
+  const existingVersion = () => ({ resources: { script: { handlers: ["fetch", "scheduled"] }, script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"] }, bindings: { bindings: [
     ...plan.bindings.map((binding) => ({ ...binding, ...(binding.type === "durable_object_namespace" ? { namespace_id: `fixture-${binding.name}` } : {}) })),
     ...Object.entries(target.vars).map(([name, text]) => ({ name, type: "plain_text", text })),
     { name: "TAKOSUMI_AUTH_ARTIFACT_DIGEST", type: "plain_text", text: plan.artifactDigest }, { name: "TAKOSUMI_AUTH_AUTHORITY_DIGEST", type: "plain_text", text: plan.authorityDigest },
@@ -196,8 +198,10 @@ test("topology attaches only exact staging domain after strict proofs and reads 
   const h = harness();
   expect(await h.execute("topology")).toMatchObject({ status: "ready", version: previousVersion });
   const writes = h.requests.filter((request) => request.method !== "GET");
-  expect(writes).toHaveLength(1);
-  expect(JSON.parse(String(writes[0]?.body))).toEqual({ hostname: AUTH_STAGING_HOST, service: AUTH_STAGING_WORKER, zone_id: h.target.zoneId, enabled: true, previews_enabled: false });
+  expect(writes).toHaveLength(2);
+  expect(writes[0]?.path).toEndWith("/schedules");
+  expect(JSON.parse(String(writes[0]?.body))).toEqual([{cron:"*/1 * * * *"}]);
+  expect(JSON.parse(String(writes[1]?.body))).toEqual({ hostname: AUTH_STAGING_HOST, service: AUTH_STAGING_WORKER, zone_id: h.target.zoneId, enabled: true, previews_enabled: false });
   expect(h.counts().publicCalls).toBe(1);
 });
 
@@ -207,6 +211,23 @@ test("routine code preserves authority/topology and rejects enabled custom-domai
   const drift = harness({ active: true, extraPreview: true });
   await expect(drift.execute("code")).rejects.toThrow("domain_readback_mismatch");
   expect(drift.requests.filter((request) => request.method !== "GET")).toHaveLength(0);
+});
+
+test("unreviewed or missing active cron is rejected before provider mutation",async()=>{
+  for(const options of [{schedules:[{cron:"*/5 * * * *"}]},{active:true,schedules:[]}]){
+    const h=harness(options);
+    await expect(h.execute(options.active?"code":"topology")).rejects.toThrow("topology_invalid");
+    expect(h.requests.filter(request=>request.method!=="GET")).toHaveLength(0);
+  }
+});
+
+test("lost schedule acknowledgement stops before domain; an explicit later run reads the exact approved cron without repeating PUT",async()=>{
+  const h=harness({lostScheduleAck:true});
+  await expect(h.execute("topology")).rejects.toBeInstanceOf(AuthStagingIncompleteError);
+  expect(h.requests.filter(request=>request.method!=="GET").map(request=>request.path)).toEqual([`/workers/scripts/${AUTH_STAGING_WORKER}/schedules`]);
+  expect(await h.execute("topology")).toMatchObject({status:"ready"});
+  expect(h.requests.filter(request=>request.method==="PUT"&&request.path.endsWith("/schedules"))).toHaveLength(1);
+  expect(h.requests.filter(request=>request.method==="PUT"&&request.path==="/workers/domains")).toHaveLength(1);
 });
 
 test("post-activation public readback failure reports incomplete without retry", async () => {

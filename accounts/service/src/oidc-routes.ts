@@ -32,7 +32,9 @@ import type {
   OidcClientRegistration,
 } from "./mod.ts";
 import { readEnvVar } from "./read-env.ts";
+import type { SharedHostedSessionContext } from "./shared-account-workspace.ts";
 import { requireAccountSession } from "./account-session.ts";
+import { HOSTED_CODE_TTL_MS, HOSTED_TOKEN_TTL_SECONDS, HOSTED_REFRESH_IDLE_MS, HOSTED_REFRESH_ABSOLUTE_MS, HOSTED_OIDC_SCOPES, hostedGrantIsActive, hostedIssuerSessionId, hostedOpaqueId } from "./hosted-oidc-profile.ts";
 import { findActiveAccessToken } from "./access-token-activity.ts";
 import type { InterfaceOAuthActivityValidator } from "./access-token-activity.ts";
 import type {
@@ -143,6 +145,8 @@ function generateRefreshToken(): string {
 // remaining in-process reuse state to keep here.
 
 type ResolvedOidcClient = {
+  profile?: "shared-account";
+  enabled?: boolean;
   clientId: string;
   capsuleId?: string;
   issuerUrl?: string;
@@ -161,8 +165,18 @@ async function resolveOidcClient(input: {
 }): Promise<ResolvedOidcClient | undefined> {
   const staticClient = input.clients.get(input.clientId);
   if (staticClient) {
+    if (staticClient.profile === "shared-account") {
+      if (staticClient.enabled !== true) {
+        await input.store.revokeHostedOidcClientGrants?.(staticClient.clientId,Date.now());
+        return undefined;
+      }
+      if (!input.store.isHostedOidcClientRevoked || await input.store.isHostedOidcClientRevoked(staticClient.clientId)) return undefined;
+    }
     return {
       clientId: staticClient.clientId,
+      profile: staticClient.profile,
+      enabled: staticClient.enabled,
+      clientSecretHash: staticClient.clientSecretHash,
       redirectUris: staticClient.redirectUris,
       allowedScopes: staticClient.allowedScopes,
       tokenEndpointAuthMethod:
@@ -188,10 +202,11 @@ async function resolveOidcClient(input: {
 function oidcTokenClientCredentials(
   request: Request,
   params: URLSearchParams,
-): { clientId?: string; secret?: string } {
+): { clientId?: string; secret?: string; method: "basic" | "post" | "conflicting" } {
   const basic = basicClientCredentials(request.headers.get("authorization"));
-  if (basic) return basic;
+  if (basic) return {...basic, method: params.has("client_secret") ? "conflicting" : "basic"};
   return {
+    method: "post",
     clientId: params.get("client_id") ?? undefined,
     secret: params.get("client_secret") ?? undefined,
   };
@@ -240,7 +255,9 @@ function basicClientCredentials(
 async function validateOidcClientSecret(
   client: ResolvedOidcClient,
   secret: string | undefined,
+  method?: "basic" | "post" | "conflicting",
 ): Promise<boolean> {
+  if (client.profile === "shared-account" && (client.enabled !== true || method !== "basic")) return false;
   if (client.tokenEndpointAuthMethod === "none") return true;
   if (!secret) return false;
   if (client.clientSecret !== undefined) {
@@ -254,6 +271,7 @@ async function validateOidcClientSecret(
 async function authenticateOidcClient(input: {
   clientId: string | undefined;
   secret: string | undefined;
+  method?: "basic" | "post" | "conflicting";
   clients: ReadonlyMap<string, OidcClientRegistration>;
   store: AccountsStore;
   /** Introspection is confidential-client only; revocation also permits public clients. */
@@ -276,7 +294,7 @@ async function authenticateOidcClient(input: {
   if (input.requireConfidential && client.tokenEndpointAuthMethod === "none") {
     return { ok: false, error: "invalid_client", status: 401 };
   }
-  if (!(await validateOidcClientSecret(client, input.secret))) {
+  if (!(await validateOidcClientSecret(client, input.secret, input.method))) {
     return { ok: false, error: "invalid_client", status: 401 };
   }
   return { ok: true, client };
@@ -310,6 +328,16 @@ async function resolveOidcAuthorizationSubject(input: {
       error: "unauthorized_client",
       errorDescription: "OIDC client registration was not found",
     };
+  }
+  if (input.client.profile === "shared-account") {
+    if (input.client.enabled !== true || input.requestedWorkspaceId !== undefined || !scopeIsAllowed(input.scope, HOSTED_OIDC_SCOPES)) {
+      return {ok:false, status:400, error:"unauthorized_client", errorDescription:"shared-account identity-only policy denied"};
+    }
+    const account = input.store.findCanonicalAccount ? await input.store.findCanonicalAccount(input.sessionSubject) : await input.store.findAccount(input.sessionSubject);
+    if (!account || account.subject !== input.sessionSubject || (await input.store.isAccountAuthenticationFenced?.(account.subject))) {
+      return {ok:false, status:403, error:"access_denied", errorDescription:"account login is unavailable"};
+    }
+    return {ok:true, record:{subject: account.subject, takosumiSubject:account.subject}};
   }
   const liveGrant = await validateOidcLiveGrant({
     store: input.store,
@@ -467,6 +495,7 @@ function undeclaredDelegationScopes(
 }
 
 export async function handleAuthorize(input: {
+  issuer?: string;
   request: Request;
   url: URL;
   flow: OidcAuthorizationCodeFlow;
@@ -490,6 +519,7 @@ export async function handleAuthorize(input: {
 }
 
 async function handleAuthorizeUncached(input: {
+  issuer?: string;
   request: Request;
   url: URL;
   flow: OidcAuthorizationCodeFlow;
@@ -537,6 +567,12 @@ async function handleAuthorizeUncached(input: {
     // anonymous code, which is unsafe for OIDC.
     return json({ error: "unauthorized_client" }, 400);
   }
+  if (client.profile === "shared-account" && client.enabled !== true) return json({error:"unauthorized_client"},400);
+  if (client.profile === "shared-account" && input.issuer) {
+    // Reverse proxies/workerd transports may use an internal HTTP URL. Public
+    // Origin and sign-in redirects are anchored to the configured issuer.
+    input.url = new URL(input.url.pathname + input.url.search, input.issuer);
+  }
   if (!client.redirectUris.includes(redirectUri)) {
     return json(
       {
@@ -570,7 +606,8 @@ async function handleAuthorizeUncached(input: {
       400,
     );
   }
-  const scope = input.url.searchParams.get("scope") ?? "openid";
+  const requestedScope = input.url.searchParams.get("scope") ?? "openid";
+  const scope = client.profile === "shared-account" ? [...new Set(requestedScope.trim().split(/\s+/u).filter(Boolean))].join(" ") : requestedScope;
   if (client?.allowedScopes && !scopeIsAllowed(scope, client.allowedScopes)) {
     return json(
       {
@@ -598,11 +635,47 @@ async function handleAuthorizeUncached(input: {
       400,
     );
   }
+  if (client.profile === "shared-account") {
+    const parameters = input.url.searchParams;
+    if (!includesScope(scope,"openid") || !scopeIsAllowed(scope,HOSTED_OIDC_SCOPES)) return json({error:"invalid_scope"},400);
+    if (!parameters.get("nonce") || parameters.get("nonce")!.length > 512 || !parameters.get("state") || parameters.get("state")!.length > 512 || requestedScope.length > 2048 || !/^[A-Za-z0-9_-]{43}$/u.test(codeChallenge) || !parameters.has("code_challenge_method") ||
+      ["response_mode","request","request_uri","claims","workspace_id","resource","audience"].some((name) => parameters.has(name) && !(name === "response_mode" && parameters.get(name) === "query")) ||
+      ["response_type","client_id","redirect_uri","scope","nonce","state","code_challenge","code_challenge_method","prompt","max_age"].some((name) => parameters.getAll(name).length > 1)) return json({error:"invalid_request"},400);
+    const prompts = (parameters.get("prompt") ?? "").split(/\s+/u).filter(Boolean);
+    if (prompts.some((prompt) => !["none","login","consent"].includes(prompt)) || (prompts.includes("none") && prompts.length > 1)) return json({error:"invalid_request"},400);
+    const maxAge = parameters.get("max_age");
+    if (maxAge !== null && (!/^\d+$/u.test(maxAge) || !Number.isSafeInteger(Number(maxAge)))) return json({error:"invalid_request"},400);
+  } else if (input.request.method !== "GET") return json({error:"invalid_request"},400);
   const session = await requireAccountSession({
     request: input.request,
     store: input.store,
   });
-  if (!session.ok) return authorizeSignInRedirect(input.url);
+  if (!session.ok) return client.profile === "shared-account" && input.url.searchParams.get("prompt") === "none"
+    ? hostedAuthorizeError(redirectUri,input.url.searchParams.get("state"),"login_required") : authorizeSignInRedirect(input.url);
+  const sessionRecord = await input.store.findAccountSession(session.sessionId);
+  if (client.profile === "shared-account") {
+    if (sessionRecord?.policy !== "hosted" || !Number.isSafeInteger(sessionRecord.authTime)) return authorizeSignInRedirect(input.url);
+    const prompt = input.url.searchParams.get("prompt") ?? "";
+    const maxAge = input.url.searchParams.get("max_age");
+    const authAge = Math.floor(Date.now()/1000) - sessionRecord.authTime!;
+    // A prompt=login request must observe a newly rotated issuer session. Bind
+    // that checkpoint in a short server transaction, never trust a URL flag.
+    if (input.request.method === "GET" && (prompt.split(/\s+/u).includes("login") || maxAge === "0")) {
+      const proof = input.url.searchParams.get("reauth");
+      const proved = proof?.startsWith("hreauth_") ? await input.store.consumeAuthorizationCode(proof) : undefined;
+      if (prompt === "none" && !proved) return hostedAuthorizeError(redirectUri,input.url.searchParams.get("state"),"login_required");
+      if (!proved || proved.expiresAt <= Date.now() || proved.clientId !== client.clientId || proved.redirectUri !== redirectUri || proved.nonce !== input.url.searchParams.get("nonce") || proved.codeChallenge !== codeChallenge || proved.scope !== scope || proved.issuerSessionId === await hostedIssuerSessionId(session.sessionId) || sessionRecord.createdAt < proved.familyStartedAt! || (!sessionRecord.reauthenticatedAt || sessionRecord.reauthenticatedAt < Math.floor(proved.familyStartedAt!/1000))) {
+        const challenge = hostedOpaqueId("hreauth_");
+        await input.store.saveAuthorizationCode(challenge,{clientId,redirectUri,scope,subject:session.subject,nonce:input.url.searchParams.get("nonce")!,codeChallenge,issuerSessionId:await hostedIssuerSessionId(session.sessionId),familyStartedAt:Date.now(),expiresAt:Date.now()+300_000});
+        const next = new URL(input.url); next.searchParams.set("reauth",challenge);
+        return authorizeSignInRedirect(next, true);
+      }
+    }
+    if (input.request.method === "GET" && maxAge !== null && Number(maxAge) > 0 && authAge > Number(maxAge)) {
+      if (prompt === "none") return hostedAuthorizeError(redirectUri,input.url.searchParams.get("state"),"login_required");
+      return authorizeSignInRedirect(input.url, true);
+    }
+  }
   const requestedWorkspaceValues = input.url.searchParams.getAll("workspace_id");
   const requestedWorkspaceId =
     requestedWorkspaceValues.length === 0
@@ -648,8 +721,35 @@ async function handleAuthorizeUncached(input: {
     );
   }
 
-  const code = crypto.randomUUID();
+  const now = Date.now();
+  let hostedMetadata: Partial<AuthorizationCodeRecord> = {};
+  const code = client.profile === "shared-account" ? hostedOpaqueId("hcode_") : crypto.randomUUID();
+  if (client.profile === "shared-account") {
+    const issuerSessionId = sessionRecord!.issuerSessionId ?? await hostedIssuerSessionId(session.sessionId);
+    const existing = await input.store.findHostedOidcGrantForSession?.({issuerSessionId,clientId,subject:session.subject});
+    const alreadyConsented = existing && existing.revokedAt === undefined && existing.absoluteExpiresAt > now && scopeIsAllowed(scope, existing.scope.split(/\s+/u));
+    const consentRequired = !alreadyConsented || (input.url.searchParams.get("prompt") ?? "").split(/\s+/u).includes("consent");
+    if (consentRequired && input.request.method !== "POST") {
+      if (input.url.searchParams.get("prompt") === "none") return hostedAuthorizeError(redirectUri,input.url.searchParams.get("state"),"consent_required");
+      const transaction = hostedOpaqueId("hcons_");
+      await input.store.saveAuthorizationCode(transaction,{clientId,redirectUri,scope,subject:session.subject,nonce:input.url.searchParams.get("nonce")!,codeChallenge,codeChallengeMethod,issuerSessionId,expiresAt:now+300_000});
+      return hostedConsentPage(input.url,transaction,clientId,scope);
+    }
+    if (input.request.method === "POST") {
+      if (input.request.headers.get("origin") !== input.url.origin) return json({error:"invalid_request"},403);
+      const form = await readFormUrlEncoded(input.request);
+      const transaction = form.get("consent_transaction");
+      const consent = transaction?.startsWith("hcons_") ? await input.store.consumeAuthorizationCode(transaction) : undefined;
+      if (form.get("approve") !== "yes" || !consent || consent.expiresAt <= now || consent.clientId !== clientId || consent.redirectUri !== redirectUri || consent.scope !== scope || consent.subject !== session.subject || consent.nonce !== input.url.searchParams.get("nonce") || consent.codeChallenge !== codeChallenge || consent.issuerSessionId !== issuerSessionId) return json({error:"invalid_request"},400);
+    }
+    if (!input.store.saveHostedOidcGrant) return json({error:"temporarily_unavailable"},503);
+    const sid = hostedOpaqueId("hsid_");
+    const authTime = sessionRecord!.authTime!;
+    await input.store.saveHostedOidcGrant({issuer:input.issuer ?? input.url.origin,identityGeneration:sessionRecord!.identityGeneration ?? 0,sid,issuerSessionId,clientId,subject:session.subject,scope,authTime,createdAt:now,absoluteExpiresAt:now+HOSTED_REFRESH_ABSOLUTE_MS,authorizationCodeHash:await sha256Text(`takosumi-hosted-code:${code}`)});
+    hostedMetadata = {issuer:input.issuer ?? input.url.origin,identityGeneration:sessionRecord!.identityGeneration ?? 0,oidcProfile:"shared-account",sid,issuerSessionId,authTime,familyStartedAt:now,familyExpiresAt:now+HOSTED_REFRESH_ABSOLUTE_MS};
+  }
   await input.store.saveAuthorizationCode(code, {
+    ...hostedMetadata,
     clientId,
     redirectUri,
     scope,
@@ -661,7 +761,7 @@ async function handleAuthorizeUncached(input: {
     nonce: input.url.searchParams.get("nonce") ?? undefined,
     codeChallenge,
     codeChallengeMethod,
-    expiresAt: Date.now() + AUTHORIZATION_CODE_TTL_MS,
+    expiresAt: now + (client.profile === "shared-account" ? HOSTED_CODE_TTL_MS : AUTHORIZATION_CODE_TTL_MS),
   });
 
   const redirect = new URL(redirectUri);
@@ -680,8 +780,9 @@ function boundedAuthorizeWorkspaceId(value: string): string | undefined {
     : undefined;
 }
 
-function authorizeSignInRedirect(authorizeUrl: URL): Response {
+function authorizeSignInRedirect(authorizeUrl: URL, fresh = false): Response {
   const signInUrl = new URL("/sign-in", authorizeUrl.origin);
+  if (fresh) {signInUrl.searchParams.set("prompt", "login"); signInUrl.searchParams.set("max_age", "0");}
   signInUrl.searchParams.set(
     "return",
     `${authorizeUrl.pathname}${authorizeUrl.search}`,
@@ -735,24 +836,38 @@ async function handleTokenUncached(input: {
   if (!code)
     return oidcTokenDenial("authorization_code_missing", "invalid_grant");
 
-  // Detect authorization-code reuse before consuming. consumeAuthorizationCode
-  // is single-shot, but a second attempt may legitimately race or maliciously
-  // replay the code. If the code was already consumed once, cascade-revoke any
-  // tokens that were issued from the original exchange and permanently fail
-  // subsequent retries.
-  if (await input.store.isAuthorizationCodeConsumed(code)) {
+  const credentials = oidcTokenClientCredentials(input.request, params);
+  const hostedCode = code.startsWith("hcode_");
+  let hostedAuthorizationSid: string | undefined;
+  if (hostedCode) {
+    const clientAuth = await authenticateOidcClient({clientId:credentials.clientId,secret:credentials.secret,method:credentials.method,clients:input.clients,store:input.store,requireConfidential:true});
+    if (!clientAuth.ok || clientAuth.client.profile !== "shared-account") return json({error:"invalid_client"},401);
+    const grant = await input.store.findHostedOidcGrantForCode?.(await sha256Text(`takosumi-hosted-code:${code}`));
+    if (!grant || grant.clientId !== clientAuth.client.clientId) return json({error:"invalid_grant"},400);
+    hostedAuthorizationSid = grant.sid;
+    if (await input.store.isAuthorizationCodeConsumed(code)) {
+      await input.store.revokeHostedOidcGrant?.(grant.sid,Date.now());
+      await cascadeRevokeAuthorizationCode(code,input.store);
+      return oidcTokenDenial("authorization_code_reused","invalid_grant");
+    }
+  } else if (await input.store.isAuthorizationCodeConsumed(code)) {
     await cascadeRevokeAuthorizationCode(code, input.store);
     return oidcTokenDenial("authorization_code_reused", "invalid_grant");
   }
   const record = await input.store.consumeAuthorizationCode(code);
-  if (!record || record.expiresAt < Date.now()) {
+  if (!record || record.expiresAt <= Date.now()) {
+    // Grant-owned code evidence outlives the short generic code tombstone.
+    // Replay still revokes the SID after generic retention has pruned its row.
+    if (hostedAuthorizationSid) {
+      await input.store.revokeHostedOidcGrant?.(hostedAuthorizationSid,Date.now());
+      await cascadeRevokeAuthorizationCode(code,input.store);
+    }
     return oidcTokenDenial(
       "authorization_code_unknown_or_expired",
       "invalid_grant",
     );
   }
 
-  const credentials = oidcTokenClientCredentials(input.request, params);
   if (credentials.clientId !== record.clientId) {
     return oidcTokenDenial("client_id_mismatch", "invalid_grant");
   }
@@ -764,7 +879,7 @@ async function handleTokenUncached(input: {
   if (!client) {
     return oidcTokenDenial("client_registration_missing", "invalid_grant");
   }
-  if (!(await validateOidcClientSecret(client, credentials.secret))) {
+  if (!(await validateOidcClientSecret(client, credentials.secret, credentials.method))) {
     return oidcTokenDenial(
       "client_authentication_failed",
       "invalid_client",
@@ -774,6 +889,8 @@ async function handleTokenUncached(input: {
   if (params.get("redirect_uri") !== record.redirectUri) {
     return oidcTokenDenial("redirect_uri_mismatch", "invalid_grant");
   }
+  if (record.oidcProfile === "shared-account" && (!hostedCode || !record.nonce || !/^[A-Za-z0-9._~-]{43,128}$/u.test(params.get("code_verifier") ?? "") || !(await hostedGrantIsActive({store:input.store,client,record,issuer:input.issuer})))) return json({error:"invalid_grant"},400);
+  if (record.oidcProfile !== "shared-account" && client.profile === "shared-account") return json({error:"invalid_grant"},400);
   if (!(await isPkceVerifierValid(record, params.get("code_verifier")))) {
     return oidcTokenDenial("pkce_verification_failed", "invalid_grant");
   }
@@ -801,10 +918,11 @@ async function handleTokenUncached(input: {
   await input.store.markAuthorizationCodeConsumed(code);
 
   const refreshToken = includesScope(record.scope, "offline_access")
-    ? generateRefreshToken()
+    ? (record.oidcProfile === "shared-account" ? hostedOpaqueId("hrt_") : generateRefreshToken())
     : undefined;
   if (refreshToken) {
     await input.store.saveRefreshToken(refreshToken, {
+      ...hostedRecordMetadata(record),
       clientId: record.clientId,
       scope: record.scope,
       subject: record.subject,
@@ -812,7 +930,7 @@ async function handleTokenUncached(input: {
       capsuleId: liveGrant.capsuleId,
       workspaceId: liveGrant.workspaceId,
       role: liveGrant.role,
-      expiresAt: Date.now() + REFRESH_TOKEN_TTL_MS,
+      expiresAt: record.oidcProfile === "shared-account" ? Math.min(Date.now()+HOSTED_REFRESH_IDLE_MS,record.familyExpiresAt!) : Date.now() + REFRESH_TOKEN_TTL_MS,
     });
     // The refresh token at chain creation is by definition its own
     // root; no parent link is recorded yet. `addRefreshChainLink` is
@@ -820,6 +938,7 @@ async function handleTokenUncached(input: {
   }
 
   return await issueTokenResponse({
+    ...hostedRecordMetadata(record),
     issuer: input.issuer,
     store: input.store,
     flow: input.flow,
@@ -856,7 +975,8 @@ async function handleRefreshToken(input: {
   // child token) but the caller is presenting the old token, that indicates
   // either a replay attack or a leaked token. Revoke the entire chain — all
   // refresh tokens and any access tokens minted through it — and reject.
-  const child = await observeSlowOidcRefreshStage("reuse_check", () =>
+  const hostedRefresh = refreshToken.startsWith("hrt_");
+  const child = hostedRefresh ? undefined : await observeSlowOidcRefreshStage("reuse_check", () =>
     input.store.getRefreshChainChild(refreshToken),
   );
   if (child !== undefined) {
@@ -867,7 +987,7 @@ async function handleRefreshToken(input: {
   const record = await observeSlowOidcRefreshStage("token_load", () =>
     input.store.findRefreshToken(refreshToken),
   );
-  if (!record || record.expiresAt < Date.now()) {
+  if (!record || (!hostedRefresh && record.expiresAt <= Date.now())) {
     if (record) await input.store.deleteToken(refreshToken);
     return json({ error: "invalid_grant" }, 400);
   }
@@ -901,11 +1021,26 @@ async function handleRefreshToken(input: {
   }
   if (
     !(await observeSlowOidcRefreshStage("client_auth", () =>
-      validateOidcClientSecret(client, credentials.secret),
+      validateOidcClientSecret(client, credentials.secret, credentials.method),
     ))
   ) {
     return json({ error: "invalid_client" }, 401);
   }
+  if (record.oidcProfile === "shared-account") {
+    if (!hostedRefresh || credentials.clientId !== record.clientId) return json({error:"invalid_grant"},400);
+    if (await input.store.getRefreshChainChild(refreshToken) !== undefined) {
+      await input.store.revokeHostedOidcGrant?.(record.sid!,Date.now());
+      await input.store.revokeRefreshChain(refreshToken);
+      return json({error:"invalid_grant"},400);
+    }
+    if (record.expiresAt <= Date.now() || !record.familyStartedAt || !record.familyExpiresAt || record.familyExpiresAt <= Date.now() || record.familyExpiresAt > record.familyStartedAt+HOSTED_REFRESH_ABSOLUTE_MS || !(await hostedGrantIsActive({store:input.store,client,record,issuer:input.issuer}))) {
+      await input.store.revokeHostedOidcGrant?.(record.sid!,Date.now());
+      await input.store.revokeRefreshChain(refreshToken);
+      return json({error:"invalid_grant"},400);
+    }
+    const requestedScope = input.params.get("scope");
+    if (requestedScope !== null && requestedScope !== record.scope) return json({error:"invalid_scope"},400);
+  } else if (hostedRefresh || client.profile === "shared-account") return json({error:"invalid_grant"},400);
   const operations = await operationsForLiveGrant({
     operations: input.operations,
     resolveOperations: input.resolveOperations,
@@ -949,7 +1084,7 @@ async function handleRefreshToken(input: {
   // Rotate: mint a brand-new refresh token, invalidate the old one, and
   // remember the parent/child link so a future presentation of the old token
   // is treated as reuse.
-  const newRefreshToken = generateRefreshToken();
+  const newRefreshToken = record.oidcProfile === "shared-account" ? hostedOpaqueId("hrt_") : generateRefreshToken();
 
   // G6 fix: claim the rotation ATOMICALLY before minting anything. The
   // chain-link insert is conflict-detecting on the parent (old) token:
@@ -966,12 +1101,14 @@ async function handleRefreshToken(input: {
     input.store.addRefreshChainLink(refreshToken, newRefreshToken),
   );
   if (!linked) {
+    if (record.oidcProfile === "shared-account") await input.store.revokeHostedOidcGrant?.(record.sid!,Date.now());
     await input.store.revokeRefreshChain(refreshToken);
     return json({ error: "invalid_grant" }, 400);
   }
 
   await observeSlowOidcRefreshStage("rotation_write", async () => {
     await input.store.saveRefreshToken(newRefreshToken, {
+      ...hostedRecordMetadata(record),
       clientId: record.clientId,
       scope: record.scope,
       subject: record.subject,
@@ -979,13 +1116,14 @@ async function handleRefreshToken(input: {
       capsuleId: liveGrant.capsuleId,
       workspaceId: liveGrant.workspaceId,
       role: liveGrant.role,
-      expiresAt: Date.now() + REFRESH_TOKEN_TTL_MS,
+      expiresAt: record.oidcProfile === "shared-account" ? Math.min(Date.now()+HOSTED_REFRESH_IDLE_MS,record.familyExpiresAt!) : Date.now() + REFRESH_TOKEN_TTL_MS,
     });
-    await input.store.deleteToken(refreshToken);
+    if (record.oidcProfile !== "shared-account") await input.store.deleteToken(refreshToken);
   });
 
   return await observeSlowOidcRefreshStage("token_issue", () =>
     issueTokenResponse({
+      ...hostedRecordMetadata(record),
       issuer: input.issuer,
       store: input.store,
       flow: input.flow,
@@ -1014,6 +1152,13 @@ async function cascadeRevokeAuthorizationCode(
 }
 
 async function issueTokenResponse(input: {
+  identityGeneration?: number;
+  oidcProfile?: "shared-account";
+  authTime?: number;
+  sid?: string;
+  issuerSessionId?: string;
+  familyStartedAt?: number;
+  familyExpiresAt?: number;
   issuer: string;
   store: AccountsStore;
   flow: OidcAuthorizationCodeFlow;
@@ -1032,7 +1177,7 @@ async function issueTokenResponse(input: {
   authorizationCode?: string;
 }): Promise<Response> {
   const issuedAt = Math.floor(Date.now() / 1000);
-  const expiresIn = ACCESS_TOKEN_TTL_SECONDS;
+  const expiresIn = input.oidcProfile === "shared-account" ? HOSTED_TOKEN_TTL_SECONDS : ACCESS_TOKEN_TTL_SECONDS;
   const account = input.takosumiSubject
     ? await input.store.findAccount(input.takosumiSubject)
     : undefined;
@@ -1053,7 +1198,7 @@ async function issueTokenResponse(input: {
   // value is genuinely unknown (provider omitted it, or the store has not
   // persisted it yet) we default to false rather than silently asserting
   // verification.
-  const emailVerified = readAccountEmailVerified(account);
+  const emailVerified = input.oidcProfile === "shared-account" ? await hostedEmailVerified(input.store,account) : readAccountEmailVerified(account);
   const includesEmailClaims = includesScope(input.scope, "email");
   const includesProfileClaims = includesScope(input.scope, "profile");
   const idToken = await input.flow.issueIdToken({
@@ -1071,11 +1216,13 @@ async function issueTokenResponse(input: {
       : {}),
     ...(takosumiClaims ? { takosumi: takosumiClaims } : {}),
     ...(input.nonce ? { nonce: input.nonce } : {}),
+    ...(input.oidcProfile === "shared-account" ? {auth_time:input.authTime,sid:input.sid} : {}),
     iat: issuedAt,
     exp: issuedAt + expiresIn,
   });
-  const accessToken = generateAccessToken();
+  const accessToken = input.oidcProfile === "shared-account" ? hostedOpaqueId("hat_") : generateAccessToken();
   await input.store.saveAccessToken(accessToken, {
+    ...hostedRecordMetadata(input),
     clientId: input.clientId,
     scope: input.scope,
     subject: input.subject,
@@ -1097,6 +1244,14 @@ async function issueTokenResponse(input: {
       accessToken,
       input.refreshToken,
     );
+  }
+  if (input.oidcProfile === "shared-account") {
+    const grant = await input.store.findHostedOidcGrant?.(input.sid!);
+    if (!grant || grant.revokedAt !== undefined || grant.absoluteExpiresAt <= Date.now() || !input.store.isHostedOidcClientRevoked || await input.store.isHostedOidcClientRevoked(input.clientId) || !input.store.getAccountAuthenticationGeneration || (input.identityGeneration ?? 0) !== await input.store.getAccountAuthenticationGeneration(input.takosumiSubject!) || !input.store.isHostedOidcSessionRevoked || await input.store.isHostedOidcSessionRevoked(input.issuerSessionId!) || (input.chainRefreshToken && await input.store.isRefreshRootRevoked(input.chainRefreshToken))) {
+      await input.store.deleteToken(accessToken);
+      if (input.refreshToken) await input.store.revokeRefreshChain(input.refreshToken);
+      return json({error:"invalid_grant"},400);
+    }
   }
   const body: Record<string, unknown> = {
     access_token: accessToken,
@@ -1125,6 +1280,7 @@ function readAccountEmailVerified(
 }
 
 export async function handleUserInfo(input: {
+  issuer?: string;
   request: Request;
   store: AccountsStore;
   /** Static OIDC clients supplied by the Accounts composition root. */
@@ -1146,6 +1302,7 @@ export async function handleUserInfo(input: {
 }
 
 async function handleUserInfoUncached(input: {
+  issuer?: string;
   request: Request;
   store: AccountsStore;
   clients: ReadonlyMap<string, OidcClientRegistration>;
@@ -1203,6 +1360,7 @@ async function handleUserInfoUncached(input: {
       store: input.store,
     });
     if (!client) return bearerChallenge("invalid_token");
+    if (!(await hostedGrantIsActive({store:input.store,record,client,issuer:input.issuer}))) return bearerChallenge("invalid_token");
     const operations = await operationsForLiveGrant({
       operations: input.operations,
       resolveOperations: input.resolveOperations,
@@ -1246,7 +1404,7 @@ async function handleUserInfoUncached(input: {
       : undefined;
     if (includesScope(record.scope, "email")) {
       if (account?.email) body.email = account.email;
-      if (account) body.email_verified = readAccountEmailVerified(account);
+      if (account) body.email_verified = record.oidcProfile === "shared-account" ? await hostedEmailVerified(input.store,account) : readAccountEmailVerified(account);
     }
     if (includesScope(record.scope, "profile")) {
       if (account?.displayName) body.name = account.displayName;
@@ -1295,6 +1453,7 @@ async function handleRevokeUncached(input: {
   const auth = await authenticateOidcClient({
     clientId: credentials.clientId,
     secret: credentials.secret,
+    method: credentials.method,
     clients: input.clients,
     store: input.store,
     requireConfidential: false,
@@ -1319,6 +1478,7 @@ async function handleRevokeUncached(input: {
       // tokens owned by another client to avoid leaking information.
       return new Response(null, { status: 200 });
     }
+    if (accessRecord.oidcProfile === "shared-account") await input.store.revokeHostedOidcGrant?.(accessRecord.sid!,Date.now());
     await input.store.deleteToken(token);
     return new Response(null, { status: 200 });
   }
@@ -1329,6 +1489,10 @@ async function handleRevokeUncached(input: {
       refreshRecord.clientId !== authenticatedClientId
     ) {
       return new Response(null, { status: 200 });
+    }
+    if (refreshRecord.oidcProfile === "shared-account") {
+      await input.store.revokeHostedOidcGrant?.(refreshRecord.sid!,Date.now());
+      await input.store.revokeRefreshChain(token);
     }
     await input.store.deleteToken(token);
     return new Response(null, { status: 200 });
@@ -1373,6 +1537,7 @@ async function handleIntrospectUncached(input: {
   const auth = await authenticateOidcClient({
     clientId: credentials.clientId,
     secret: credentials.secret,
+    method: credentials.method,
     clients: input.clients,
     store: input.store,
     requireConfidential: true,
@@ -1401,6 +1566,8 @@ async function handleIntrospectUncached(input: {
       : {}),
   });
   if (accessRecord) {
+    if (auth.client.profile === "shared-account" && accessRecord.oidcProfile !== "shared-account") return json({active:false});
+    if (!(await hostedGrantIsActive({store:input.store,record:accessRecord,client:auth.client,issuer:input.issuer}))) return json({active:false});
     const interfaceOAuth = accessRecord.role === "interface-runtime";
     // Ordinary OAuth tokens remain client-owned. Interface invocation tokens
     // are resource-owned: a confidential Accounts client may introspect them
@@ -1444,6 +1611,7 @@ async function handleIntrospectUncached(input: {
     if (refreshRecord.clientId !== authenticatedClientId) {
       return json({ active: false });
     }
+    if (!(await hostedGrantIsActive({store:input.store,record:refreshRecord,client:auth.client,issuer:input.issuer})) || refreshRecord.expiresAt <= Date.now() || (refreshRecord.oidcProfile === "shared-account" && (await input.store.getRefreshChainChild(token) !== undefined || await input.store.isRefreshRootRevoked(token)))) return json({active:false});
     const operations = await operationsForLiveGrant({
       operations: input.operations,
       resolveOperations: input.resolveOperations,
@@ -1465,6 +1633,7 @@ async function handleIntrospectUncached(input: {
       introspectionBody(refreshRecord, "refresh_token", liveGrant.role),
     );
   }
+  if (auth.client.profile === "shared-account") return json({active:false});
   const patRecord = await input.store.findPersonalAccessToken(token);
   if (patRecord) {
     if (!personalAccessTokenIsActive(patRecord, Date.now())) {
@@ -1585,4 +1754,48 @@ async function introspectionWorkspaceRole(
   } catch {
     return undefined;
   }
+}
+
+function hostedAuthorizeError(redirectUri: string,state: string|null,error: string): Response {
+  const url = new URL(redirectUri); url.searchParams.set("error",error);
+  if (state) url.searchParams.set("state",state);
+  return Response.redirect(url,302);
+}
+function hostedConsentPage(url: URL, transaction: string, clientId: string, scope: string): Response {
+  const escape = (value: string) => value.replace(/[&<>"']/gu,(char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]!));
+  return new Response(`<!doctype html><html><head><meta charset="utf-8"><title>Continue sign-in</title></head><body><main><h1>Continue sign-in</h1><p>Allow ${escape(clientId)} to receive your account identity (${escape(scope)})?</p><form method="post" action="${escape(url.pathname+url.search)}"><input type="hidden" name="consent_transaction" value="${escape(transaction)}"><button name="approve" value="yes">Continue</button></form></main></body></html>`,{headers:{"content-type":"text/html; charset=utf-8","cache-control":"no-store","content-security-policy":"default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'","referrer-policy":"no-referrer"}});
+}
+
+function hostedRecordMetadata(record: {
+  identityGeneration?: number; issuer?: string; oidcProfile?: "shared-account"; authTime?: number; sid?: string; issuerSessionId?: string; nonce?: string; familyStartedAt?: number; familyExpiresAt?: number;
+}): Partial<TokenRecord> {
+  return record.oidcProfile === "shared-account" ? {identityGeneration:record.identityGeneration,issuer:record.issuer,oidcProfile:record.oidcProfile,authTime:record.authTime,sid:record.sid,issuerSessionId:record.issuerSessionId,nonce:record.nonce,familyStartedAt:record.familyStartedAt,familyExpiresAt:record.familyExpiresAt} : {};
+}
+async function hostedEmailVerified(store: AccountsStore, account: TakosumiAccountRecord|undefined): Promise<boolean> {
+  if (!account?.email || account.emailVerified !== true) return false;
+  const proof = await store.findAccountEmailProof?.(account.subject);
+  return !!proof && proof.address === account.email && proof.observedAt <= Date.now() && proof.validUntil > Date.now();
+}
+
+/** Dedicated shared directory grant: never an account/control bearer promotion. */
+export async function resolveSharedAccountGrantSession(input: {
+  issuer?: string;
+  request: Request;
+  store: AccountsStore;
+  clients: ReadonlyMap<string, OidcClientRegistration>;
+}): Promise<{ok:true;session:SharedHostedSessionContext}|{ok:false;response:Response}> {
+  const token = bearerToken(input.request.headers.get("authorization"));
+  if (!token) return {ok:false,response:bearerChallenge("invalid_token")};
+  const load = async () => {
+    const record = await findActiveAccessToken({store:input.store,token});
+    if (!record || record.oidcProfile !== "shared-account") return undefined;
+    const client = await resolveOidcClient({clientId:record.clientId,clients:input.clients,store:input.store});
+    return client?.profile === "shared-account" && await hostedGrantIsActive({store:input.store,client,record,issuer:input.issuer}) ? record : undefined;
+  };
+  const record = await load();
+  if (!record?.takosumiSubject) return {ok:false,response:bearerChallenge("invalid_token")};
+  return {ok:true,session:{kind:"shared-hosted-session",canonicalAccountId:record.takosumiSubject,assertCurrentGrant:async()=>{
+    const current = await load();
+    return current?.subject === record.subject && current.sid === record.sid;
+  }}};
 }

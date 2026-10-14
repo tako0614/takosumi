@@ -26,6 +26,11 @@ import {
   upstreamOAuthOptionsFromEnvironment,
   type LoginEmailAllowlist,
   type InterfaceOAuthActivityValidator,
+  type IdentityMergeReconciler,
+  type IdentityMergeRetryCapability,
+  type CredentialUnlinkReconciler,
+  createWorkspaceBillingBootstrapResolver,
+  type WorkspaceBillingEnrollmentPort,
   resolveD1AccountsSchemaMode,
   resolveTakosumiMobileOidcClientId,
 } from "@takosjp/takosumi-accounts-service";
@@ -41,6 +46,11 @@ import {
   runtimeBindingDerivationMode,
 } from "../../../core/domains/deploy-control/runtime_binding_derivation_key.ts";
 import { ensureAccountsD1WorkerSchema } from "./d1-schema-gate.ts";
+import {
+  createSharedAccountWorkspaceDirectory,
+  type SharedAccountWorkspaceDirectory,
+  type SharedWorkspaceBillingResolver,
+} from "../../../accounts/service/src/shared-account-workspace.ts";
 
 export interface CloudflareWorkerEnv {
   readonly [name: string]: unknown;
@@ -58,6 +68,9 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_ISSUER?: string;
   readonly TAKOSUMI_ACCOUNTS_SUBJECT?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENTS?: string;
+  /** Explicit opt-in; protected D1 must be migrated and verified before use. */
+  readonly TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY?: string;
+  readonly TAKOSUMI_ACCOUNTS_WORKSPACE_BILLING_AUTHORITY?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_ID?: string;
   readonly TAKOSUMI_ACCOUNTS_REDIRECT_URIS?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_SECRET?: string;
@@ -136,6 +149,25 @@ export interface CreateCloudflareWorkerOptions<
   readonly personalAccessTokenSelfServiceScopes?: (
     env: TEnv,
   ) => readonly TakosumiAccountsPatScope[];
+  /** Immutable Workspace -> Organization lookup owned by the configured host. */
+  readonly sharedWorkspaceBillingResolver?: (
+    env: TEnv,
+  ) => SharedWorkspaceBillingResolver | undefined;
+  /** Configured authenticated financial owner; source never invents an ACK. */
+  readonly workspaceBillingEnrollment?: (
+    env: TEnv,
+  ) => WorkspaceBillingEnrollmentPort | undefined;
+  /** Owner ACK custody is explicit; credentials cannot synthesize this port. */
+  readonly identityMergeReconciler?: (
+    env: TEnv,
+  ) => IdentityMergeReconciler | undefined;
+  /** The same real service that the owning composition schedules. */
+  readonly identityMergeRetry?: (
+    env: TEnv,
+  ) => IdentityMergeRetryCapability | undefined;
+  readonly credentialUnlinkReconciler?: (
+    env: TEnv,
+  ) => CredentialUnlinkReconciler | undefined;
 }
 
 interface CachedAccountsHandler {
@@ -769,6 +801,10 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     throw new TypeError("TAKOSUMI_ACCOUNTS_DB D1 binding is required");
   }
   const schemaMode = accountsD1SchemaMode(env);
+  const hostedSessionPolicy = parseHostedSessionPolicy(env);
+  if (hostedSessionPolicy && schemaMode !== "predeployed") {
+    throw new TypeError("Shared hosted Accounts requires predeployed schema mode; migrate and verify the protected ledger separately");
+  }
   const sessionHashSalt = resolveCloudflareSessionHashSalt(env);
   const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
     schemaMode,
@@ -777,7 +813,10 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   if (schemaMode === "bootstrap") {
     await store.initialize();
   }
-  await ensureAccountsD1WorkerSchema(env.TAKOSUMI_ACCOUNTS_DB);
+  const schemaEvidence = await ensureAccountsD1WorkerSchema(env.TAKOSUMI_ACCOUNTS_DB);
+  if (hostedSessionPolicy && schemaEvidence.headVersion !== 5) {
+    throw new TypeError("Shared hosted Accounts requires the exact verified v5 schema closure");
+  }
   await seedLocalSubstrateAccount(store, env);
   // TAKOSUMI_ACCOUNTS_ISSUER must be explicitly set. We deliberately do NOT
   // fall back to the first request URL: caching that as the issuer poisons
@@ -811,6 +850,19 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     issuer,
     clients,
     store,
+    ...(hostedSessionPolicy ? { hostedSessionPolicy: true } : {}),
+    ...(hostedSessionPolicy && options.identityMergeReconciler
+      ? { identityMergeReconciler: options.identityMergeReconciler(env) }
+      : {}),
+    ...(hostedSessionPolicy && options.identityMergeRetry
+      ? { identityMergeRetry: options.identityMergeRetry(env) }
+      : {}),
+    ...(hostedSessionPolicy && options.credentialUnlinkReconciler
+      ? { credentialUnlinkReconciler: options.credentialUnlinkReconciler(env) }
+      : {}),
+    ...(hostedSessionPolicy && options.controlPlaneOperations
+      ? { sharedAccountWorkspaceDirectory: lazySharedAccountWorkspaceDirectory(env, store, options) }
+      : {}),
     patWorkspaceMembershipReader:
       options.patWorkspaceMembershipReader?.(env),
     personalAccessTokenSelfServiceScopes:
@@ -846,6 +898,40 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     ...commonOptions,
     subject: optionalString(env.TAKOSUMI_ACCOUNTS_SUBJECT),
   });
+}
+
+/** Resolve common Control only for directory operations, never identity probes. */
+function lazySharedAccountWorkspaceDirectory<TEnv extends CloudflareWorkerEnv>(
+  env: TEnv,
+  store: D1AccountsStore,
+  options: CreateCloudflareWorkerOptions<TEnv>,
+): SharedAccountWorkspaceDirectory {
+  let initialized: Promise<SharedAccountWorkspaceDirectory> | undefined;
+  const resolve = (): Promise<SharedAccountWorkspaceDirectory> => {
+    if (initialized) return initialized;
+    const attempt = cachedControlPlaneOperations(env, options).then((operations) => {
+      if (!operations) throw new TypeError("Shared Workspace authority is unavailable");
+      return createSharedAccountWorkspaceDirectory({
+        store,
+        operations,
+        resolveWorkspaceBilling: optionalString(env.TAKOSUMI_ACCOUNTS_WORKSPACE_BILLING_AUTHORITY)
+          ? createWorkspaceBillingBootstrapResolver({operations,billingAuthority:optionalString(env.TAKOSUMI_ACCOUNTS_WORKSPACE_BILLING_AUTHORITY)!,enrollment:options.workspaceBillingEnrollment?.(env)})
+          : options.sharedWorkspaceBillingResolver?.(env),
+      });
+    }).catch((error: unknown) => {
+      if (initialized === attempt) initialized = undefined;
+      throw error;
+    });
+    initialized = attempt;
+    return attempt;
+  };
+  return {
+    bootstrap: async (session) => (await resolve()).bootstrap(session),
+    menu: async (session, input) => (await resolve()).menu(session, input),
+    choose: async (session, workspaceId) => (await resolve()).choose(session, workspaceId),
+    create: async (session, input) => (await resolve()).create(session, input),
+    billingOrganization: async (session, workspaceId) => (await resolve()).billingOrganization(session, workspaceId),
+  };
 }
 
 function cachedControlPlaneOperations<TEnv extends CloudflareWorkerEnv>(
@@ -1067,7 +1153,10 @@ export function parseConfiguredOidcClients(
     if (!Array.isArray(value)) {
       throw new TypeError("TAKOSUMI_ACCOUNTS_CLIENTS must be a JSON array");
     }
-    const clients = value.map(parseClientRecord);
+    const clients = value.map((record) => parseClientRecord(record, env));
+    if (new Set(clients.map((client) => client.clientId)).size !== clients.length) {
+      throw new TypeError("TAKOSUMI_ACCOUNTS_CLIENTS clientId values must be unique");
+    }
     const confidentialClientId = optionalString(
       env.TAKOSUMI_ACCOUNTS_CLIENT_ID,
     );
@@ -1094,6 +1183,9 @@ export function parseConfiguredOidcClients(
       throw new TypeError(
         "TAKOSUMI_ACCOUNTS_CLIENT_ID must name an exact TAKOSUMI_ACCOUNTS_CLIENTS entry",
       );
+    }
+    if (selected.profile === "shared-account" && (confidentialClientSecret !== undefined || confidentialAuthMethod !== undefined)) {
+      throw new TypeError("Shared hosted OIDC client bindings cannot be overridden by global client credentials");
     }
     return clients.map((client) =>
       client.clientId === confidentialClientId
@@ -1145,7 +1237,7 @@ export function configuredTakosumiMobileOidcClientId(
   });
 }
 
-function parseClientRecord(value: unknown): OidcClientRegistration {
+function parseClientRecord(value: unknown, env: CloudflareWorkerEnv): OidcClientRegistration {
   if (!isRecord(value)) {
     throw new TypeError("TAKOSUMI_ACCOUNTS_CLIENTS entries must be objects");
   }
@@ -1158,7 +1250,27 @@ function parseClientRecord(value: unknown): OidcClientRegistration {
       "TAKOSUMI_ACCOUNTS_CLIENTS entries require clientId and redirectUris",
     );
   }
-  const clientSecret = optionalString(value.clientSecret);
+  const profile = value.profile;
+  if (profile !== undefined && profile !== "shared-account") {
+    throw new TypeError("TAKOSUMI_ACCOUNTS_CLIENTS profile is unsupported");
+  }
+  if (value.enabled !== undefined && typeof value.enabled !== "boolean") {
+    throw new TypeError("TAKOSUMI_ACCOUNTS_CLIENTS enabled must be boolean");
+  }
+  const secretEnv = optionalString(value.clientSecretEnv);
+  if (secretEnv && !/^[A-Z][A-Z0-9_]*$/.test(secretEnv)) {
+    throw new TypeError("TAKOSUMI_ACCOUNTS_CLIENTS clientSecretEnv must name a secret binding");
+  }
+  if (secretEnv && value.clientSecret !== undefined) {
+    throw new TypeError("TAKOSUMI_ACCOUNTS_CLIENTS secret binding and inline secret cannot both be supplied");
+  }
+  if (profile === "shared-account" && (!secretEnv || value.clientSecret !== undefined)) {
+    throw new TypeError("Shared hosted OIDC clients require a separate clientSecretEnv binding");
+  }
+  const clientSecret = secretEnv ? optionalString(env[secretEnv]) : optionalString(value.clientSecret);
+  if (secretEnv && !clientSecret) {
+    throw new TypeError("An OIDC client secret binding is unavailable");
+  }
   const tokenEndpointAuthMethod = parseClientAuthMethod(
     optionalString(value.tokenEndpointAuthMethod),
   );
@@ -1166,10 +1278,18 @@ function parseClientRecord(value: unknown): OidcClientRegistration {
   return {
     clientId,
     redirectUris,
+    ...(profile === "shared-account" ? { profile, enabled: value.enabled === true } : {}),
     ...(allowedScopes ? { allowedScopes } : {}),
     clientSecret,
     tokenEndpointAuthMethod,
   };
+}
+
+export function parseHostedSessionPolicy(env: CloudflareWorkerEnv): boolean {
+  const raw = env.TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY;
+  if (raw === undefined || raw === "false") return false;
+  if (raw === "true") return true;
+  throw new TypeError("TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY must be true or false");
 }
 
 function parseClientAllowedScopes(

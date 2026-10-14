@@ -3,7 +3,7 @@
 // and `PostgresAccountsStore` delegates to them. Behaviour preserved verbatim.
 
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { bigint, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import type {
@@ -154,6 +154,7 @@ function authorizationCodeSelection() {
     code_challenge: authorizationCodes.codeChallenge,
     code_challenge_method: authorizationCodes.codeChallengeMethod,
     expires_at: authorizationCodes.expiresAt,
+    hosted_metadata: sql`to_jsonb(authorization_codes)->'hosted_metadata'`.as("hosted_metadata"),
   };
 }
 
@@ -171,6 +172,7 @@ function tokenSelection(table: ReturnType<typeof oauthTokenTable>) {
     interface_binding_id: table.interfaceBindingId,
     interface_resolved_revision: table.interfaceResolvedRevision,
     expires_at: table.expiresAt,
+    hosted_metadata: sql.raw(`to_jsonb(${table === oauthAccessTokens ? "oauth_access_tokens" : "oauth_refresh_tokens"})->'hosted_metadata'`).as("hosted_metadata"),
   };
 }
 
@@ -288,6 +290,10 @@ export async function saveAuthorizationCode(
     createdAt: toDate(Date.now()),
     expiresAt: toDate(record.expiresAt),
   };
+  if(record.oidcProfile === "shared-account"){
+    await runQuery(client,`INSERT INTO accounts_v1.authorization_codes(code_hash,client_id,redirect_uri,scope,subject,takosumi_subject,capsule_id,workspace_id,role,nonce,code_challenge,code_challenge_method,created_at,expires_at,hosted_metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb) ON CONFLICT(code_hash) DO UPDATE SET client_id=excluded.client_id,redirect_uri=excluded.redirect_uri,scope=excluded.scope,subject=excluded.subject,takosumi_subject=excluded.takosumi_subject,capsule_id=excluded.capsule_id,workspace_id=excluded.workspace_id,role=excluded.role,nonce=excluded.nonce,code_challenge=excluded.code_challenge,code_challenge_method=excluded.code_challenge_method,expires_at=excluded.expires_at,hosted_metadata=excluded.hosted_metadata`,[values.codeHash,values.clientId,values.redirectUri,values.scope,values.subject,values.takosumiSubject,values.capsuleId,values.workspaceId,values.role,values.nonce,values.codeChallenge,values.codeChallengeMethod,values.createdAt,values.expiresAt,JSON.stringify(hostedTokenMetadata(record))]);
+    return;
+  }
   await runDrizzle(
     client,
     db
@@ -350,6 +356,10 @@ export async function saveOAuthToken(
     createdAt: toDate(Date.now()),
     expiresAt: toDate(record.expiresAt),
   };
+  if(record.oidcProfile === "shared-account"){
+    await runQuery(client,`INSERT INTO accounts_v1.${table}(token_hash,client_id,audience,scope,subject,takosumi_subject,capsule_id,workspace_id,role,interface_id,interface_binding_id,interface_resolved_revision,created_at,expires_at,hosted_metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb) ON CONFLICT(token_hash) DO UPDATE SET client_id=excluded.client_id,audience=excluded.audience,scope=excluded.scope,subject=excluded.subject,takosumi_subject=excluded.takosumi_subject,capsule_id=excluded.capsule_id,workspace_id=excluded.workspace_id,role=excluded.role,interface_id=excluded.interface_id,interface_binding_id=excluded.interface_binding_id,interface_resolved_revision=excluded.interface_resolved_revision,expires_at=excluded.expires_at,hosted_metadata=excluded.hosted_metadata`,[values.tokenHash,values.clientId,values.audience,values.scope,values.subject,values.takosumiSubject,values.capsuleId,values.workspaceId,values.role,values.interfaceId,values.interfaceBindingId,values.interfaceResolvedRevision,values.createdAt,values.expiresAt,JSON.stringify(hostedTokenMetadata(record))]);
+    return;
+  }
   await runDrizzle(
     client,
     db
@@ -616,4 +626,9 @@ export async function recordPersonalAccessTokenUsed(
       .set({ lastUsedAt: toDate(lastUsedAt) })
       .where(eq(personalAccessTokens.tokenId, tokenId)),
   );
+}
+
+function hostedTokenMetadata(record: AuthorizationCodeRecord | TokenRecord): unknown {
+  if (!record.oidcProfile) return null;
+  return {identityGeneration:record.identityGeneration, issuer: record.issuer, oidcProfile: record.oidcProfile, authTime: record.authTime, sid: record.sid, issuerSessionId: record.issuerSessionId, nonce: record.nonce, familyStartedAt: record.familyStartedAt, familyExpiresAt: record.familyExpiresAt};
 }

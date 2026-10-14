@@ -10,9 +10,37 @@
  */
 
 import type { ControlPlaneOperations } from "./control-routes.ts";
-import type { AccountsStore } from "./store.ts";
+import type { AccountsStore, TakosumiAccountRecord } from "./store.ts";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type { Workspace } from "takosumi-contract/workspaces";
+
+/**
+ * Strict shared-account login bootstrap. The caller must resolve a current
+ * canonical account before entering this seam. Fresh creation and initial
+ * owner membership share the Workspace domain's durable owner claim. Existing
+ * namespaces require current owner membership and are never repaired here.
+ * Unlike the dashboard's best-effort list hook below, failures propagate.
+ */
+export async function ensurePersonalWorkspaceForAccount(input: {
+  readonly account: TakosumiAccountRecord;
+  readonly operations: Pick<ControlPlaneOperations, "workspaces">;
+}): Promise<Workspace> {
+  const ensure = input.operations.workspaces.ensurePersonalWorkspaceForSharedAccount;
+  if (!ensure) throw new Error("Personal Workspace bootstrap is unavailable.");
+  const workspace = await ensure.call(
+    input.operations.workspaces,
+    input.account.subject,
+    personalWorkspaceHandle({
+      subject: input.account.subject,
+      email: input.account.email,
+      displayName: input.account.displayName,
+    }),
+  );
+  if (workspace.type !== "personal" || workspace.ownerUserId !== input.account.subject) {
+    throw new Error("Personal Workspace bootstrap returned a different owner.");
+  }
+  return workspace;
+}
 
 /**
  * Derives a preferred handle from the authenticated account and awaits the

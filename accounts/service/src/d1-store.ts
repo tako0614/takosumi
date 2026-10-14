@@ -1,3 +1,6 @@
+import { HostedIdentityRecords } from "./hosted-identity-records.ts";
+import type { IdentityOperationReceiptRecord, AccountEmailProofRecord, HostedOidcGrantRecord, IdentityMergeMutation, IdentityMergeOperation, UnlinkUpstreamIdentityInput, UpstreamIdentityStatusRecord, UpstreamLoginTransactionRecord } from "./identity-state.ts";
+import { D1IdentityRecordRepository } from "./d1-identity-records.ts";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import { TAKOSUMI_ACCOUNTS_PAT_SCOPES } from "@takosjp/takosumi-accounts-contract";
 import { and, asc, eq } from "drizzle-orm";
@@ -563,13 +566,53 @@ export class D1AccountsStore implements AccountsStore {
   readonly #schemaMode: D1AccountsSchemaMode;
   readonly #sessionHashSalt: string | undefined;
   #initialized?: Promise<void>;
+  readonly #hosted: HostedIdentityRecords;
 
   constructor(db: D1Database, options: D1AccountsStoreOptions = {}) {
     this.#db = db;
+    this.#hosted = new HostedIdentityRecords(new D1IdentityRecordRepository(db, () => this.initialize(), (value) => this.#hashSessionId(value)), this);
     this.#documents = new D1AccountsDocumentIndexStore(db);
     this.#schemaMode = resolveD1AccountsSchemaMode(options.schemaMode);
     this.#sessionHashSalt = options.sessionHashSalt;
   }
+
+  async findHostedAccountSessionAnchor(sessionId: string): Promise<string|undefined> { return this.#hosted.findHostedAccountSessionAnchor(await this.#hashSessionId(sessionId)); }
+  createCredentialUnlinkIntent(record: import("./identity-unlink-state.ts").CredentialUnlinkIntent): Promise<boolean> { return this.#hosted.createCredentialUnlinkIntent(record); }
+  findCredentialUnlinkIntent(id: string): Promise<import("./identity-unlink-state.ts").CredentialUnlinkIntent | undefined> { return this.#hosted.findCredentialUnlinkIntent(id); }
+  createCredentialUnlinkReceipt(record: import("./identity-unlink-state.ts").CredentialUnlinkReceipt): Promise<boolean> { return this.#hosted.createCredentialUnlinkReceipt(record); }
+  findCredentialUnlinkReceipt(id: string): Promise<import("./identity-unlink-state.ts").CredentialUnlinkReceipt | undefined> { return this.#hosted.findCredentialUnlinkReceipt(id); }
+  completeCredentialUnlink(input: import("./identity-unlink-state.ts").CredentialUnlinkMutation): Promise<boolean> { return this.#hosted.completeCredentialUnlink(input); }
+  listIdentityMergeOperations(input: {after?:string;limit:number}): Promise<import("./identity-state.ts").IdentityMergeRetryPage> { return this.#hosted.listIdentityMergeOperations(input); }
+  findIdentityMergeRetryCheckpoint(key:string):Promise<import("./identity-state.ts").IdentityMergeRetryCheckpoint|undefined>{return this.#hosted.findIdentityMergeRetryCheckpoint(key);}
+  compareAndSetIdentityMergeRetryCheckpoint(input:import("./identity-state.ts").IdentityMergeRetryCheckpointMutation):Promise<boolean>{return this.#hosted.compareAndSetIdentityMergeRetryCheckpoint(input);}
+  createIdentityOperationReceipt(record: IdentityOperationReceiptRecord): Promise<boolean> { return this.#hosted.createIdentityOperationReceipt(record); }
+  findIdentityOperationReceipt(receiptId: string): Promise<IdentityOperationReceiptRecord | undefined> { return this.#hosted.findIdentityOperationReceipt(receiptId); }
+  isHostedOidcSessionHashRevoked(issuerSessionHash: string): Promise<boolean> { return this.#hosted.isHostedOidcSessionHashRevoked(issuerSessionHash); }
+  listCanonicalUpstreamIdentities(subject: TakosumiSubject): Promise<readonly UpstreamIdentityRecord[]> { return this.#hosted.listCanonicalUpstreamIdentities(subject); }
+  getAccountAuthenticationGeneration(subject: TakosumiSubject): Promise<number> { return this.#hosted.getAccountAuthenticationGeneration(subject); }
+  hashAccountSessionId(sessionId: string): Promise<string> { return this.#hashSessionId(sessionId); }
+  isHostedOidcClientRevoked(clientId: string): Promise<boolean> { return this.#hosted.isHostedOidcClientRevoked(clientId); }
+  isHostedOidcSessionRevoked(issuerSessionId: string): Promise<boolean> { return this.#hosted.isHostedOidcSessionRevoked(issuerSessionId); }
+  saveAccountEmailProof(record: AccountEmailProofRecord): Promise<void> { return this.#hosted.saveAccountEmailProof(record); }
+  findAccountEmailProof(subject: TakosumiSubject): Promise<AccountEmailProofRecord | undefined> { return this.#hosted.findAccountEmailProof(subject); }
+  findAccountsByEmailCandidate(address: string): Promise<readonly TakosumiAccountRecord[]> { return this.#hosted.findAccountsByEmailCandidate(address); }
+  findCanonicalAccount(subject: TakosumiSubject): Promise<TakosumiAccountRecord | undefined> { return this.#hosted.findCanonicalAccount(subject); }
+  isAccountAuthenticationFenced(subject: TakosumiSubject): Promise<boolean> { return this.#hosted.isAccountAuthenticationFenced(subject); }
+  findUpstreamIdentityStatus(identity: Pick<UpstreamIdentityRecord, "providerId" | "upstreamIssuer" | "upstreamSubject">): Promise<UpstreamIdentityStatusRecord | undefined> { return this.#hosted.findUpstreamIdentityStatus(identity); }
+  saveUpstreamLoginTransaction(record: UpstreamLoginTransactionRecord): Promise<void> { return this.#hosted.saveUpstreamLoginTransaction(record); }
+  consumeUpstreamLoginTransaction(id: string, browserBindingHash: string, now: number): Promise<UpstreamLoginTransactionRecord | undefined> { return this.#hosted.consumeUpstreamLoginTransaction(id, browserBindingHash, now); }
+  saveHostedOidcGrant(record: HostedOidcGrantRecord): Promise<void> { return this.#hosted.saveHostedOidcGrant(record); }
+  findHostedOidcGrant(sid: string): Promise<HostedOidcGrantRecord | undefined> { return this.#hosted.findHostedOidcGrant(sid); }
+  findHostedOidcGrantForSession(input: {issuerSessionId: string; clientId: string; subject: TakosumiSubject}): Promise<HostedOidcGrantRecord | undefined> { return this.#hosted.findHostedOidcGrantForSession(input); }
+  findHostedOidcGrantForCode(authorizationCodeHash: string): Promise<HostedOidcGrantRecord | undefined> { return this.#hosted.findHostedOidcGrantForCode(authorizationCodeHash); }
+  revokeHostedOidcGrant(sid: string, now: number): Promise<void> { return this.#hosted.revokeHostedOidcGrant(sid, now); }
+  revokeHostedOidcSessionGrants(issuerSessionId: string, now: number): Promise<void> { return this.#hosted.revokeHostedOidcSessionGrants(issuerSessionId, now); }
+  revokeHostedOidcClientGrants(clientId: string, now: number): Promise<void> { return this.#hosted.revokeHostedOidcClientGrants(clientId, now); }
+  touchHostedAccountSession(sessionId: string, now: number, idleExpiresAt: number): Promise<boolean> { return this.#hosted.touchHostedAccountSession(sessionId, now, idleExpiresAt); }
+  createIdentityMergeOperation(record: IdentityMergeOperation): Promise<boolean> { return this.#hosted.createIdentityMergeOperation(record); }
+  findIdentityMergeOperation(operationId: string): Promise<IdentityMergeOperation | undefined> { return this.#hosted.findIdentityMergeOperation(operationId); }
+  compareAndSetIdentityMerge(input: IdentityMergeMutation): Promise<boolean> { return this.#hosted.compareAndSetIdentityMerge(input); }
+  unlinkCanonicalUpstreamIdentity(input: UnlinkUpstreamIdentityInput): Promise<boolean> { return this.#hosted.unlinkCanonicalUpstreamIdentity(input); }
 
   async initialize(): Promise<void> {
     if (!this.#initialized) {
@@ -671,6 +714,8 @@ export class D1AccountsStore implements AccountsStore {
     )[0];
   }
 
+  linkUpstreamIdentityIfAbsent(record: UpstreamIdentityRecord): Promise<boolean> { return this.#putIfAbsent("upstream_identities", upstreamIdentityKey(record), record); }
+
   linkUpstreamIdentity(record: UpstreamIdentityRecord): Promise<void> {
     return this.#put(
       "upstream_identities",
@@ -717,6 +762,7 @@ export class D1AccountsStore implements AccountsStore {
     // in-memory on the returned record so logging/debugging keeps the
     // raw identity.
     const sessionHash = await this.#hashSessionId(record.sessionId);
+    if(record.policy==="hosted")await this.#hosted.rememberHostedAccountSessionAnchor(sessionHash,record);
     await this.#put("account_sessions", sessionHash, {
       ...record,
       sessionId: sessionHash,
@@ -752,6 +798,7 @@ export class D1AccountsStore implements AccountsStore {
       this.#hashSessionId(next.sessionId),
     ]);
     if (previousHash === nextHash) return false;
+    if(next.policy==="hosted")await this.#hosted.rememberHostedAccountSessionAnchor(nextHash,next);
     const nextDocument = JSON.stringify({ ...next, sessionId: nextHash });
     const results = await this.#db.batch([
       this.#db

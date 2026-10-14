@@ -49,14 +49,16 @@ export async function resolveAccountsBearerCandidates(
     client,
     `with
       presented_session as (
-        select session_id, subject, created_at, expires_at
+        select session_id, subject, created_at, expires_at,
+          to_jsonb(account_sessions)->'hosted_metadata' AS hosted_metadata
         from accounts_v1.account_sessions
         where session_id = $1
       ),
       presented_access_token as (
         select client_id, audience, scope, subject, takosumi_subject,
           capsule_id, workspace_id, role, interface_id, interface_binding_id,
-          interface_resolved_revision, expires_at
+          interface_resolved_revision, expires_at,
+          to_jsonb(oauth_access_tokens)->'hosted_metadata' AS hosted_metadata
         from accounts_v1.oauth_access_tokens
         where token_hash = $2
       ),

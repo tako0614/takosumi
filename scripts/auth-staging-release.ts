@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { sameGitRemote } from "./lib/platform-release-source.ts";
-import { AUTH_STAGING_CLIENTS, AUTH_STAGING_COMPATIBILITY_DATE, AUTH_STAGING_HOST, AUTH_STAGING_ISSUER, AUTH_STAGING_WORKER, assertAuthStagingVariables, assertAuthStagingUpstreams } from "../deploy/accounts-cloudflare/src/staging-target.ts";
+import { AUTH_STAGING_CLIENTS, AUTH_STAGING_COMPATIBILITY_DATE, AUTH_STAGING_HOST, AUTH_STAGING_ISSUER, AUTH_STAGING_RETRY_CRON, AUTH_STAGING_WORKER, assertAuthStagingVariables, assertAuthStagingUpstreams } from "../deploy/accounts-cloudflare/src/staging-target.ts";
 import { CloudflareD1RestTransport } from "../deploy/cloudflare/d1-rest-transport.ts";
 import { ensureAccountsD1WorkerSchema } from "../deploy/accounts-cloudflare/src/d1-schema-gate.ts";
 import { verifyD1OpenTofuLedgerSchemaPredeployed } from "../worker/src/d1_opentofu_store.ts";
@@ -120,7 +120,7 @@ export function authStagingResourceBindings(canonicalConfig: string, target: Aut
 
 export function createAuthStagingPlan(target: AuthStagingTarget, canonicalConfig: string, artifact: Uint8Array): AuthStagingPlan {
   const bindings = authStagingResourceBindings(canonicalConfig, target);
-  const configDigest = digest(JSON.stringify({ bindings, vars: target.vars, requiredSecrets: target.requiredSecrets.slice().sort(), jwksSha256: target.jwksSha256, compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"] }));
+  const configDigest = digest(JSON.stringify({ bindings, vars: target.vars, requiredSecrets: target.requiredSecrets.slice().sort(), jwksSha256: target.jwksSha256, compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"], handlers: ["fetch", "scheduled"], retryCron: AUTH_STAGING_RETRY_CRON }));
   const authorityDigest = digest(JSON.stringify({ kind: "takosumi.auth-staging-authority@v1", configDigest, secretsSha256: target.secretsSha256 }));
   const body = { kind: "takosumi.auth-staging-plan@v1" as const, sourceCommit: target.sourceCommit, targetDigest: digest(JSON.stringify(target)), configDigest, artifactDigest: digest(artifact), authorityDigest, bindings, requiredSecrets: target.requiredSecrets };
   return { ...body, confirmation: digest(JSON.stringify(body)) };
@@ -140,7 +140,7 @@ export type AuthStagingReleaseRuntime = Readonly<{
 export function assertAuthStagingVersion(value: unknown, plan: AuthStagingPlan, target: AuthStagingTarget): void {
   if (!record(value) || !record(value.resources) || !record(value.resources.bindings) ||
       !Array.isArray(value.resources.bindings.bindings) || !record(value.resources.script) ||
-      JSON.stringify(value.resources.script.handlers) !== JSON.stringify(["fetch"]) ||
+      JSON.stringify(value.resources.script.handlers) !== JSON.stringify(["fetch", "scheduled"]) ||
       !record(value.resources.script_runtime) || value.resources.script_runtime.compatibility_date !== AUTH_STAGING_COMPATIBILITY_DATE ||
       JSON.stringify(value.resources.script_runtime.compatibility_flags) !== JSON.stringify(["nodejs_compat"])) throw new Error("auth_staging_version_invalid");
   const actual = value.resources.bindings.bindings;
@@ -201,8 +201,12 @@ export async function executeAuthStagingRelease(input: {
       const version = await runtime.provider.request("GET", `${script}/versions/${predecessor}`);
       assertAuthStagingVersion(version, plan, target);
       assertCanonicalNamespaces(version, canonicalNamespaces);
-      await assertTopology(runtime.provider, target, false);
+      const retryPrepared = await assertTopology(runtime.provider, target, false, true);
       touched = true;
+      if (!retryPrepared) {
+        await runtime.provider.request("PUT", `${script}/schedules`, JSON.stringify([{cron:AUTH_STAGING_RETRY_CRON}]));
+        if (!await assertTopology(runtime.provider, target, false, true)) throw new Error("auth_staging_schedule_readback_mismatch");
+      }
       await runtime.provider.request("PUT", "/workers/domains", JSON.stringify({ hostname: AUTH_STAGING_HOST, service: AUTH_STAGING_WORKER, zone_id: target.zoneId, enabled: true, previews_enabled: false }));
       await assertTopology(runtime.provider, target, true);
       await runtime.publicReadback(predecessor, plan);
@@ -263,7 +267,7 @@ function uploadMetadata(target: AuthStagingTarget, plan: AuthStagingPlan, secret
 }
 
 function assertPlanClosure(plan: AuthStagingPlan, target: AuthStagingTarget): void {
-  const configDigest = digest(JSON.stringify({ bindings: plan.bindings, vars: target.vars, requiredSecrets: target.requiredSecrets.slice().sort(), jwksSha256: target.jwksSha256, compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"] }));
+  const configDigest = digest(JSON.stringify({ bindings: plan.bindings, vars: target.vars, requiredSecrets: target.requiredSecrets.slice().sort(), jwksSha256: target.jwksSha256, compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"], handlers: ["fetch", "scheduled"], retryCron: AUTH_STAGING_RETRY_CRON }));
   const authorityDigest = digest(JSON.stringify({ kind: "takosumi.auth-staging-authority@v1", configDigest, secretsSha256: target.secretsSha256 }));
   const body = { kind: "takosumi.auth-staging-plan@v1", sourceCommit: target.sourceCommit, targetDigest: digest(JSON.stringify(target)), configDigest, artifactDigest: plan.artifactDigest, authorityDigest, bindings: plan.bindings, requiredSecrets: target.requiredSecrets };
   if (plan.kind !== body.kind || plan.sourceCommit !== target.sourceCommit ||
@@ -306,14 +310,16 @@ function assertCanonicalNamespaces(value: unknown, namespaces: Readonly<Record<s
   }
 }
 
-async function assertTopology(provider: AuthStagingProvider, target: AuthStagingTarget, active: boolean): Promise<void> {
+async function assertTopology(provider: AuthStagingProvider, target: AuthStagingTarget, active: boolean, allowPreparedRetry = false): Promise<boolean> {
   const script = `/workers/scripts/${AUTH_STAGING_WORKER}`;
   const subdomain = await provider.request("GET", `${script}/subdomain`);
-  const schedules = await provider.request("GET", `${script}/schedules`);
+  const scheduleResponse = await provider.request("GET", `${script}/schedules`);
+  const schedules = record(scheduleResponse) ? scheduleResponse.schedules : undefined;
+  const retryPrepared = Array.isArray(schedules) && schedules.length === 1 && record(schedules[0]) && schedules[0].cron === AUTH_STAGING_RETRY_CRON;
   const domains = await provider.request("GET", `/workers/domains?service=${AUTH_STAGING_WORKER}&environment=production`);
   const routes = await provider.request("GET", `/zones/${target.zoneId}/workers/routes`);
   if (!record(subdomain) || subdomain.enabled !== false || subdomain.previews_enabled !== false ||
-      !Array.isArray(schedules) || schedules.length !== 0 || !Array.isArray(domains) || !Array.isArray(routes) ||
+      !Array.isArray(schedules) || (active ? !retryPrepared : schedules.length !== 0 && !(allowPreparedRetry && retryPrepared)) || !Array.isArray(domains) || !Array.isArray(routes) ||
       routes.some((route) => record(route) && route.script === AUTH_STAGING_WORKER)) throw new Error("auth_staging_topology_invalid");
   if (!active && domains.length !== 0) throw new Error("auth_staging_topology_already_active");
   if (active && (domains.length !== 1 || !record(domains[0]) || domains[0].hostname !== AUTH_STAGING_HOST || domains[0].service !== AUTH_STAGING_WORKER || domains[0].zone_id !== target.zoneId || domains[0].enabled !== true || domains[0].previews_enabled !== false)) throw new Error("auth_staging_domain_readback_mismatch");
@@ -322,6 +328,7 @@ async function assertTopology(provider: AuthStagingProvider, target: AuthStaging
     const owners = await provider.request("GET", `/workers/domains?hostname=${AUTH_STAGING_HOST}`);
     if (!Array.isArray(owners) || owners.length !== 0) throw new Error("auth_staging_domain_already_owned");
   }
+  return retryPrepared;
 }
 
 function servingVersion(value: unknown): string {

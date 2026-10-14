@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createAuthStagingWorker } from "../../../deploy/accounts-cloudflare/src/staging-worker.ts";
-import { AUTH_STAGING_CLIENTS, AUTH_STAGING_COMPATIBILITY_DATE, AUTH_STAGING_ISSUER, AUTH_STAGING_WORKER } from "../../../deploy/accounts-cloudflare/src/staging-target.ts";
+import { AUTH_STAGING_CLIENTS, AUTH_STAGING_COMPATIBILITY_DATE, AUTH_STAGING_ISSUER, AUTH_STAGING_RETRY_CRON, AUTH_STAGING_WORKER } from "../../../deploy/accounts-cloudflare/src/staging-target.ts";
 import { Miniflare } from "miniflare";
 import { resolve } from "node:path";
 
@@ -55,6 +55,29 @@ test("identity and shared Workspace facade use the supplied Accounts handler wit
     expect(response.headers.get("x-takosumi-worker-version")).toBe("fixture-version");
   }
   expect(paths).toHaveLength(5);
+});
+
+test("stage entry mounts the guarded issuer portal with an in-process provider read",async()=>{
+  const paths:string[]=[];
+  const worker=createAuthStagingWorker({verifySchema:async()=>{},accounts:{async fetch(request){paths.push(new URL(request.url).pathname);return Response.json({providers:[{id:"google",label:"Google",enabled:true,protocol:"oidc"},{id:"github",label:"GitHub",enabled:true,protocol:"oauth2"}]});}}});
+  const result=await worker.fetch(request("/sign-in?return="+encodeURIComponent("/oauth/authorize?client_id=hosted&state=csrf")),env);
+  expect(result.status).toBe(200);expect(result.headers.get("content-security-policy")).toContain("default-src 'none'");
+  const html=await result.text();expect(html).toContain("Continue with Google");expect(html).toContain("Continue with GitHub");expect(paths).toEqual(["/api/v1/auth/providers"]);
+});
+
+test("scheduled retry uses one per-env factory and refuses prod, unexpected cron or failed schema",async()=>{
+  let schemaCalls=0,factoryCalls=0,batches=0;
+  const worker=createAuthStagingWorker({verifySchema:async()=>{schemaCalls++;},retryService:()=>{factoryCalls++;return {pendingCapacity:15,assertAvailable:async()=>{},runBatch:async()=>{batches++;return {status:"completed",scanned:0,activated:0,pending:0,recoveryRequired:0,conflicts:0,failed:0,operations:[]};}};}});
+  await worker.scheduled({cron:"*/5 * * * *"},env);
+  await worker.scheduled({cron:AUTH_STAGING_RETRY_CRON},{...env,TAKOSUMI_ENVIRONMENT:"production"});
+  await worker.scheduled({cron:AUTH_STAGING_RETRY_CRON},{...env,TAKOSUMI_ACCOUNTS_DB:undefined} as unknown as Env);
+  expect(schemaCalls).toBe(0);expect(factoryCalls).toBe(0);
+  await worker.scheduled({cron:AUTH_STAGING_RETRY_CRON},env);
+  await worker.scheduled({cron:AUTH_STAGING_RETRY_CRON},env);
+  expect(schemaCalls).toBe(2);expect(factoryCalls).toBe(1);expect(batches).toBe(2);
+  const unavailable=createAuthStagingWorker({verifySchema:async()=>{throw new Error("fixtureprotectedhead");},retryService:()=>{throw new Error("mustnotconstructretry");}});
+  await unavailable.scheduled({cron:AUTH_STAGING_RETRY_CRON},env);
+  expect(batches).toBe(2);
 });
 
 test("simultaneous readiness callers share one pending verification and retry only after settlement", async () => {

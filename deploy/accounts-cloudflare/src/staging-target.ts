@@ -2,6 +2,7 @@
 export const AUTH_STAGING_WORKER = "takosumi-auth-staging";
 export const AUTH_STAGING_ISSUER = "https://auth-staging.takos.jp";
 export const AUTH_STAGING_HOST = "auth-staging.takos.jp";
+export const AUTH_STAGING_RETRY_CRON = "*/1 * * * *";
 /** Preserve this existing project's qualified platform runtime policy. */
 export const AUTH_STAGING_COMPATIBILITY_DATE = "2026-04-01";
 export const AUTH_STAGING_CLIENTS = [

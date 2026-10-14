@@ -27,7 +27,10 @@ database is disposable simply because its environment is staging.
 2. Apply and verify the additive Accounts transition using the sole Accounts
    catalog/CLI. Run Control's own reviewed migration lane separately. The
    dedicated issuer accepts only exact checksummed Accounts v5 and the current
-   canonical predeployed Control catalog. Keep request/cold-start DDL disabled.
+   canonical predeployed Control v72 catalog. The ordinary bridge supports
+   exact v71/v72 while the new billing-binding ports require v72. PostgreSQL's
+   corresponding protected Control expansion is 119; Accounts 045 is a separate
+   lineage. Keep request/cold-start DDL disabled.
 3. Create the inert dedicated Worker slot. It has no stores, secrets, issuer or
    cookies, no routes, and disabled workers.dev/previews. Existing Workers are
    never overwritten by bootstrap.
@@ -35,8 +38,9 @@ database is disposable simply because its environment is staging.
    on that route-less slot, including stable signing material, preserved salt
    and subject secrets, and distinct downstream credentials. This does not
    attach the auth domain.
-5. Independently review the topology closure and attach only the exact stage
-   domain after schema, physical resource and immutable Version readback.
+5. Independently review the topology closure, configure and read back only
+   `*/1 * * * *`, then attach the exact stage domain after schema, physical
+   resource and immutable Version readback. No code release changes schedules.
    Run authenticated browser/RP E2E separately; discovery or DNS/TLS alone is
    not sufficient. Production remains awaiting operator approval.
 
@@ -113,10 +117,17 @@ and exact source/catalog/target/config digests. There is no down/reset command.
 
 An upload and its activation are attempted once. Before activation, immutable
 Version metadata must match the exact resources, remote DO namespace IDs,
-runtime compatibility settings, handlers, plain variables and secret names.
+runtime compatibility settings, exact `fetch`/`scheduled` handlers, plain
+variables and secret names. The same cached per-environment retry service is
+used by consent admission and the scheduled handler; absent actual owner
+readiness denies consent before reservation. The configured financial owner
+remains a separate required adapter, not a fabricated ACK.
 Serving deployment readback requires exactly one Version at 100 percent.
 Topology readback requires the exact stage domain with previews disabled,
-workers.dev/previews disabled, and no unrelated Worker routes. Cloudflare's
+workers.dev/previews disabled, the exact one-minute retry schedule, and no
+unrelated Worker routes. Schedule APIs use the documented `{schedules:[...]}`
+response. See [Cloudflare schedules](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/schedules/methods/update/).
+Cloudflare's
 default service-environment label `production` in its metadata is distinct from
 the selected `takosumi-auth-staging` Worker and staging origin.
 
@@ -130,7 +141,10 @@ durable retry adapters; a missing adapter is never replaced by a no-op ACK.
 Pre-mutation refusal leaves the target untouched. After any attempted provider
 mutation, timeout or lost acknowledgement, the entry reports `incomplete`,
 retains known predecessor/uploaded identities, and does not retry. Inspect
-provider Version/deployment/domain history before explicit repair. A provider
+provider Version/deployment/schedule/domain history before explicit repair. An
+explicit later topology invocation can adopt an already applied exact approved
+cron after readback without repeating its PUT; arbitrary schedules are refused.
+A provider
 rollback is usable only while its schema and authority remain compatible;
 otherwise retain the schema owner's boundary and repair forward. No step
 deletes a Worker, destroys data, rewrites history or switches a production route.

@@ -62,6 +62,7 @@ import type {
   WorkspaceType,
 } from "takosumi-contract/workspaces";
 import type { Project } from "takosumi-contract/projects";
+import type { WorkspaceBillingBindingsService } from "../../../core/domains/workspace-billing-bindings/mod.ts";
 import type {
   InstallConfig,
   InstallConfigCommittedPostApplyRecoveryProof,
@@ -204,12 +205,19 @@ export interface ControlPlaneOperations {
   };
   // --- Workspaces (§4) ---
   readonly workspaces: {
+    /** Generic retained binding owner facade over the same Control store. */
+    readonly billingBindings?: Pick<WorkspaceBillingBindingsService, "get" | "prepare" | "claim">;
     /**
      * Idempotently creates or returns the subject's personal Workspace. Hosts
      * expose the Workspace domain's canonical ensure operation here so the
      * account plane never emulates it with repeated create attempts.
      */
     ensurePersonalWorkspace?(
+      ownerUserId: string,
+      handle: string,
+    ): Promise<Workspace>;
+    /** Shared hosted sign-in never repairs existing owner membership. */
+    ensurePersonalWorkspaceForSharedAccount?(
       ownerUserId: string,
       handle: string,
     ): Promise<Workspace>;

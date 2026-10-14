@@ -3,7 +3,8 @@ import type {
   TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
 import type { CapsuleUninstallRequester } from "takosumi-contract/capsules";
-import type { AccountsStore } from "./store.ts";
+import type { AccountsStore, AccountSessionRecord } from "./store.ts";
+import { hostedIssuerSessionId, hostedOpaqueId, HOSTED_SESSION_IDLE_MS, HOSTED_SESSION_ABSOLUTE_MS } from "./hosted-oidc-profile.ts";
 import {
   errorJson,
   bearerChallenge,
@@ -55,7 +56,7 @@ export async function requireAccountSession(input: {
     return { ok: false, response: bearerChallenge("invalid_session") };
   }
   const session = await input.store.findAccountSession(sessionId);
-  if (!session || session.expiresAt < Date.now()) {
+  if (!session || session.expiresAt <= Date.now() || (session.policy === "hosted" && (!session.absoluteExpiresAt || session.absoluteExpiresAt <= Date.now() || !Number.isSafeInteger(session.authTime)))) {
     if (session) await input.store.deleteAccountSession(sessionId);
     return { ok: false, response: bearerChallenge("invalid_session") };
   }
@@ -63,6 +64,13 @@ export async function requireAccountSession(input: {
   if (!account) {
     await input.store.deleteAccountSession(sessionId);
     return { ok: false, response: bearerChallenge("invalid_session") };
+  }
+  if (session.policy === "hosted") {
+    const now = Date.now();
+    if (!(await hostedSessionIsCurrent(input.store,session,now))) return {ok:false,response:bearerChallenge("invalid_session")};
+    if (!input.store.touchHostedAccountSession || !(await input.store.touchHostedAccountSession(sessionId, now, Math.min(now + HOSTED_SESSION_IDLE_MS, session.absoluteExpiresAt!)))) {
+      return { ok: false, response: bearerChallenge("invalid_session") };
+    }
   }
   return { ok: true, subject: session.subject, sessionId };
 }
@@ -89,19 +97,15 @@ export function extractAccountSessionId(request: Request): string | null {
 }
 
 export const ACCOUNT_SESSION_COOKIE_NAME = "takosumi_session";
+export const HOSTED_ACCOUNT_SESSION_COOKIE_NAME = "__Host-takosumi_session";
 
 function readSessionCookie(header: string | null): string | null {
   if (!header) return null;
-  for (const part of header.split(";")) {
-    const idx = part.indexOf("=");
-    if (idx === -1) continue;
-    const name = part.slice(0, idx).trim();
-    if (name !== ACCOUNT_SESSION_COOKIE_NAME) continue;
-    const rawValue = part.slice(idx + 1).trim();
-    try {
-      return decodeURIComponent(rawValue);
-    } catch {
-      return null;
+  for (const expected of [HOSTED_ACCOUNT_SESSION_COOKIE_NAME, ACCOUNT_SESSION_COOKIE_NAME]) {
+    for (const part of header.split(";")) {
+      const idx = part.indexOf("=");
+      if (idx === -1 || part.slice(0,idx).trim() !== expected) continue;
+      try { return decodeURIComponent(part.slice(idx+1).trim()); } catch { return null; }
     }
   }
   return null;
@@ -133,17 +137,50 @@ export async function rotateAccountSession(input: {
   subject: TakosumiSubject;
   now: number;
   ttlMs: number;
+  hostedPolicy?: boolean;
+  authenticationTime?: number;
+  freshlyAuthenticatedAt?: number;
 }): Promise<{ sessionId: string; expiresAt: number }> {
-  const sessionId = mintAccountSessionId();
-  const expiresAt = input.now + input.ttlMs;
+  if (input.hostedPolicy && [input.authenticationTime,input.freshlyAuthenticatedAt].some((value)=>value !== undefined && (!Number.isSafeInteger(value) || value < 0 || value > Math.floor(input.now/1000)+60))) {
+    throw new TypeError("hosted authentication times must be verified integer timestamps");
+  }
+  if (input.hostedPolicy) {
+    const account = await input.store.findCanonicalAccount?.(input.subject);
+    if (!account || account.subject !== input.subject || await input.store.isAccountAuthenticationFenced?.(input.subject)) throw new Error("hosted account authentication is unavailable");
+  }
+  const identityGeneration = input.hostedPolicy ? await input.store.getAccountAuthenticationGeneration?.(input.subject) : undefined;
+  const sessionId = input.hostedPolicy ? hostedOpaqueId("sess_h_") : mintAccountSessionId();
+  const expiresAt = input.now + (input.hostedPolicy ? HOSTED_SESSION_IDLE_MS : input.ttlMs);
+  const previous = input.oldSessionId ? await input.store.findAccountSession(input.oldSessionId) : undefined;
+  let issuerSessionId: string | undefined;
+  if (input.hostedPolicy) {
+    issuerSessionId = await hostedIssuerSessionId(sessionId);
+    if (previous?.policy === "hosted") {
+      const previousAnchor = previous.issuerSessionId ?? await hostedIssuerSessionId(input.oldSessionId!);
+      const previousGeneration = await input.store.getAccountAuthenticationGeneration?.(previous.subject);
+      if (/^sha256:[A-Za-z0-9_-]{43}$/u.test(previousAnchor) &&
+        (previous.identityGeneration ?? 0) === previousGeneration &&
+        !(await input.store.isAccountAuthenticationFenced?.(previous.subject)) &&
+        input.store.isHostedOidcSessionRevoked && !(await input.store.isHostedOidcSessionRevoked(previousAnchor))) {
+        issuerSessionId = previousAnchor;
+      }
+    }
+  }
   const next = {
     sessionId,
     subject: input.subject,
     createdAt: input.now,
     expiresAt,
+    ...(input.hostedPolicy ? {
+      policy: "hosted" as const,
+      issuerSessionId,
+      identityGeneration,
+      authTime: input.authenticationTime ?? Math.floor(input.now / 1000),
+      ...(input.freshlyAuthenticatedAt !== undefined ? {reauthenticatedAt:input.freshlyAuthenticatedAt} : {}),
+      absoluteExpiresAt: input.now + HOSTED_SESSION_ABSOLUTE_MS,
+    } : {}),
   };
   if (input.oldSessionId && input.oldSessionId !== sessionId) {
-    const previous = await input.store.findAccountSession(input.oldSessionId);
     if (previous) {
       if (!input.store.replaceAccountSession) {
         throw new Error(
@@ -172,27 +209,32 @@ export interface AccountSessionCookieOptions {
   readonly secure: boolean;
   readonly maxAgeSeconds: number;
   readonly path?: string;
+  readonly hostedPolicy?: boolean;
 }
 
 export function serializeAccountSessionCookie(
   sessionId: string,
   options: AccountSessionCookieOptions,
 ): string {
+  const hosted = options.hostedPolicy || sessionId.startsWith("sess_h_");
+  if (hosted && (!options.secure || (options.path !== undefined && options.path !== "/"))) {
+    throw new TypeError("hosted issuer cookies require Secure and Path=/");
+  }
   return [
-    `${ACCOUNT_SESSION_COOKIE_NAME}=${encodeURIComponent(sessionId)}`,
+    `${hosted ? HOSTED_ACCOUNT_SESSION_COOKIE_NAME : ACCOUNT_SESSION_COOKIE_NAME}=${encodeURIComponent(sessionId)}`,
     `Path=${options.path ?? "/"}`,
     "HttpOnly",
     "SameSite=Lax",
-    `Max-Age=${options.maxAgeSeconds}`,
+    `Max-Age=${hosted ? Math.min(options.maxAgeSeconds, HOSTED_SESSION_ABSOLUTE_MS / 1000) : options.maxAgeSeconds}`,
     options.secure ? "Secure" : "",
   ]
     .filter(Boolean)
     .join("; ");
 }
 
-export function clearAccountSessionCookie(secure: boolean): string {
+export function clearAccountSessionCookie(secure: boolean, hostedPolicy = false): string {
   return [
-    `${ACCOUNT_SESSION_COOKIE_NAME}=`,
+    `${hostedPolicy ? HOSTED_ACCOUNT_SESSION_COOKIE_NAME : ACCOUNT_SESSION_COOKIE_NAME}=`,
     "Path=/",
     "HttpOnly",
     "SameSite=Lax",
@@ -275,10 +317,17 @@ export async function handleAccountSessionMeDelete(input: {
   request: Request;
   store: AccountsStore;
   secureCookie: boolean;
+  hostedPolicy?: boolean;
 }): Promise<Response> {
   const sessionId = extractAccountSessionId(input.request);
   if (sessionId && sessionId.startsWith("sess_")) {
     try {
+      const session = await input.store.findAccountSession(sessionId);
+      if (session?.policy === "hosted" || sessionId.startsWith("sess_h_")) {
+        if (!input.store.revokeHostedOidcSessionGrants) throw new Error("hosted session revocation unavailable");
+        const anchor = await resolveHostedSessionAnchor(input.store,sessionId,session);
+        if (anchor) await input.store.revokeHostedOidcSessionGrants(anchor,Date.now());
+      }
       await input.store.deleteAccountSession(sessionId);
     } catch {
       return errorJson(
@@ -290,7 +339,7 @@ export async function handleAccountSessionMeDelete(input: {
       );
     }
   }
-  const cookie = clearAccountSessionCookie(input.secureCookie);
+  const cookie = clearAccountSessionCookie(input.secureCookie, input.hostedPolicy || sessionId?.startsWith("sess_h_"));
   return new Response(null, {
     status: 204,
     headers: {
@@ -349,13 +398,13 @@ export async function requireAccountsBearer(input: {
 
   let sessionSubject: TakosumiSubject | undefined;
   if (sessionRecord) {
-    if (sessionRecord.expiresAt <= now) {
+    if (sessionRecord.expiresAt <= now || (sessionRecord.policy === "hosted" && (!sessionRecord.absoluteExpiresAt || sessionRecord.absoluteExpiresAt <= now || !Number.isSafeInteger(sessionRecord.authTime)))) {
       await input.store.deleteAccountSession(token);
     } else {
       const account = resolved
         ? resolved.sessionAccount
         : await input.store.findAccount(sessionRecord.subject);
-      if (account) {
+      if (account && (sessionRecord.policy !== "hosted" || (await hostedSessionIsCurrent(input.store,sessionRecord,now) && input.store.touchHostedAccountSession && await input.store.touchHostedAccountSession(token,now,Math.min(now+HOSTED_SESSION_IDLE_MS,sessionRecord.absoluteExpiresAt!))))) {
         sessionSubject = sessionRecord.subject;
       } else {
         await input.store.deleteAccountSession(token);
@@ -363,7 +412,7 @@ export async function requireAccountsBearer(input: {
     }
   }
 
-  const interfaceOAuth = accessRecord?.role === "interface-runtime";
+  const interfaceOAuth = accessRecord?.role === "interface-runtime" || accessRecord?.oidcProfile === "shared-account";
   const oauthAccessTokenCandidate =
     accessRecord?.takosumiSubject && !interfaceOAuth
       ? {
@@ -532,4 +581,44 @@ export function personalAccessTokenHasScope(
   if (scopes.includes("admin")) return true;
   if (required === "admin") return false;
   return scopes.includes(required);
+}
+
+export async function handleHostedGlobalLogout(input: {
+  request: Request;
+  store: AccountsStore;
+  issuer: string;
+}): Promise<Response> {
+  if (input.request.headers.get("origin") !== new URL(input.issuer).origin) {
+    return errorJson("csrf_failed", "Origin must exactly match the Accounts issuer.", 403, input.request);
+  }
+  const sessionId = extractAccountSessionId(input.request);
+  if (sessionId && sessionId.startsWith("sess_h_")) {
+    if (!input.store.revokeHostedOidcSessionGrants) return errorJson("session_revocation_unavailable", "Session revocation unavailable.", 503, input.request);
+    const anchor = await resolveHostedSessionAnchor(input.store,sessionId);
+    if (anchor) await input.store.revokeHostedOidcSessionGrants(anchor, Date.now());
+    await input.store.deleteAccountSession(sessionId);
+  }
+  return new Response(null, { status: 204, headers: {
+    "set-cookie": clearAccountSessionCookie(true, true), "cache-control": "no-store",
+  } });
+}
+
+async function hostedSessionIsCurrent(store: AccountsStore, session: AccountSessionRecord, now: number): Promise<boolean> {
+  if (!store.getAccountAuthenticationGeneration || !store.findCanonicalAccount || !store.isAccountAuthenticationFenced ||
+    !Number.isSafeInteger(session.authTime) || session.authTime! < 0 || session.authTime! > Math.floor(now/1000)+60 ||
+    !session.absoluteExpiresAt || session.absoluteExpiresAt > session.createdAt+HOSTED_SESSION_ABSOLUTE_MS || session.expiresAt > session.absoluteExpiresAt ||
+    (session.identityGeneration ?? 0) !== await store.getAccountAuthenticationGeneration(session.subject) || await store.isAccountAuthenticationFenced(session.subject)) return false;
+  const issuerSessionId = session.issuerSessionId ?? await hostedIssuerSessionId(session.sessionId);
+  if (!/^sha256:[A-Za-z0-9_-]{43}$/u.test(issuerSessionId) || !store.isHostedOidcSessionRevoked || await store.isHostedOidcSessionRevoked(issuerSessionId)) return false;
+  const account = await store.findCanonicalAccount(session.subject);
+  return account?.subject === session.subject;
+}
+
+async function resolveHostedSessionAnchor(store: AccountsStore, sessionId: string, session?: AccountSessionRecord): Promise<string | undefined> {
+  const current = session ?? await store.findAccountSession(sessionId);
+  const anchor = current?.issuerSessionId ?? await store.findHostedAccountSessionAnchor?.(sessionId) ??
+    (current?.policy === "hosted" ? await hostedIssuerSessionId(sessionId) : undefined);
+  // Unknown cookies must not mint arbitrary durable revocation records.
+  if (anchor !== undefined && !/^sha256:[A-Za-z0-9_-]{43}$/u.test(anchor)) throw new Error("hosted session anchor is invalid");
+  return anchor;
 }

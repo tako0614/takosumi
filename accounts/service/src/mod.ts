@@ -48,6 +48,14 @@ import {
 } from "./store.ts";
 import type { UpstreamOAuthProvider } from "./upstream.ts";
 import { signEs256Jwt } from "./jwt.ts";
+import { validateHostedClientConfiguration } from "./hosted-oidc-profile.ts";
+import { handleSharedAccountWorkspaceRoute, isSharedAccountWorkspaceRoute, type SharedAccountWorkspaceDirectory } from "./shared-account-workspace.ts";
+import { handleIdentityMergeRequest, type IdentityMergeReconciler } from "./identity-merge.ts";
+import { handleUpstreamOperationProofBeginRequest, isUpstreamOperationProofBeginPath } from "./upstream-operation-proof.ts";
+import { handleCredentialUnlinkIntentRequest, isCredentialUnlinkIntentPath } from "./identity-unlink.ts";
+import { handleUpstreamUnlinkProofBeginRequest, isUpstreamUnlinkProofBeginPath } from "./upstream-unlink-proof.ts";
+import type { CredentialUnlinkReconciler } from "./identity-unlink-state.ts";
+import type { IdentityMergeRetryCapability } from "./identity-merge-retry.ts";
 import {
   handlePasskeyAuthenticateComplete,
   handlePasskeyAuthenticateOptions,
@@ -74,6 +82,7 @@ import {
 } from "./privacy-routes.ts";
 import {
   handleAuthorize,
+  resolveSharedAccountGrantSession,
   handleIntrospect,
   handleRevoke,
   handleToken,
@@ -91,6 +100,7 @@ import { createAccountsHttpApp } from "./http-app.ts";
 import { constantTimeEqual } from "./encoding.ts";
 import {
   extractAccountSessionId,
+  handleHostedGlobalLogout,
   handleAccountSessionMeDelete,
   handleAccountSessionMeGet,
   requireAccountsBearer,
@@ -158,6 +168,12 @@ export * from "./upstream-config.ts";
 export * from "./passkey.ts";
 export * from "./identity.ts";
 export * from "./mobile-oidc-client.ts";
+export * from "./shared-account-workspace.ts";
+export * from "./workspace-billing-bootstrap.ts";
+export type { IdentityMergeReconciler } from "./identity-merge.ts";
+export type { CredentialUnlinkReconciler } from "./identity-unlink-state.ts";
+export type { IdentityMergeRetryCapability } from "./identity-merge-retry.ts";
+export { resolveSharedAccountGrantSession } from "./oidc-routes.ts";
 export * from "./jwt.ts";
 export * from "./postgres-store.ts";
 export * from "./d1-store.ts";
@@ -175,6 +191,13 @@ export const TAKOSUMI_PRIVACY_OPERATIONS_TOKEN_HEADER =
   "x-takosumi-privacy-operations-token";
 
 export interface AccountsHandlerOptions {
+  /** Explicit opt-in: shared first-party identity and hardened issuer sessions. */
+  hostedSessionPolicy?: boolean;
+  sharedAccountWorkspaceDirectory?: SharedAccountWorkspaceDirectory;
+  /** Explicit owner reconciliation; absence never activates account aliases. */
+  identityMergeReconciler?: IdentityMergeReconciler;
+  identityMergeRetry?: IdentityMergeRetryCapability;
+  credentialUnlinkReconciler?: CredentialUnlinkReconciler;
   issuer?: string;
   jwks?: JsonWebKeySet;
   clients?: readonly OidcClientRegistration[];
@@ -219,6 +242,11 @@ export interface AccountsHandlerOptions {
 }
 
 export interface EphemeralAccountsHandlerOptions {
+  hostedSessionPolicy?: boolean;
+  sharedAccountWorkspaceDirectory?: SharedAccountWorkspaceDirectory;
+  identityMergeReconciler?: IdentityMergeReconciler;
+  identityMergeRetry?: IdentityMergeRetryCapability;
+  credentialUnlinkReconciler?: CredentialUnlinkReconciler;
   issuer?: string;
   subject?: string;
   keyId?: string;
@@ -269,6 +297,10 @@ export interface OidcAuthorizationCodeFlow {
 }
 
 export interface OidcClientRegistration {
+  /** Identity-only first-party registration; existing static/Capsule clients are unchanged. */
+  profile?: "shared-account";
+  enabled?: boolean;
+  clientSecretHash?: string;
   clientId: string;
   redirectUris: readonly string[];
   /** If present, authorization requests are limited to this exact set. */
@@ -278,6 +310,7 @@ export interface OidcClientRegistration {
 }
 
 export interface UpstreamOAuthOptions {
+  hostedSessionPolicy?: boolean;
   subjectSecret: string | Uint8Array | CryptoKey;
   providers: readonly UpstreamOAuthClientRegistration[];
   fetch?: typeof fetch;
@@ -299,6 +332,7 @@ export interface UpstreamOAuthClientRegistration {
 }
 
 export interface PasskeyHttpOptions {
+  hostedSessionPolicy?: boolean;
   rpId: string;
   rpName: string;
   origin: string;
@@ -345,6 +379,11 @@ export async function createEphemeralAccountsHandler(
   )) as AccountsJsonWebKey;
   return createAccountsHandler({
     issuer,
+    hostedSessionPolicy: options.hostedSessionPolicy,
+    sharedAccountWorkspaceDirectory: options.sharedAccountWorkspaceDirectory,
+    identityMergeReconciler: options.identityMergeReconciler,
+    identityMergeRetry: options.identityMergeRetry,
+    credentialUnlinkReconciler: options.credentialUnlinkReconciler,
     clients: options.clients,
     store: options.store ?? new InMemoryAccountsStore(),
     upstreamOAuth: options.upstreamOAuth,
@@ -476,12 +515,24 @@ export function createAccountsHandler(
     );
   }
   const issuer = normalizeIssuer(options.issuer);
-  const discovery = buildOidcDiscoveryDocument({ issuer });
+  if (new Set((options.clients ?? []).map((client) => client.clientId)).size !== (options.clients ?? []).length) {
+    throw new TypeError("OIDC client registrations must have unique client IDs");
+  }
+  for (const client of options.clients ?? []) validateHostedClientConfiguration(client);
+  if (options.clients?.some((client) => client.profile === "shared-account") && (!options.hostedSessionPolicy || !isHttpsIssuer(issuer))) {
+    throw new TypeError("shared-account registrations require an explicit hosted session policy and HTTPS issuer");
+  }
+  if (options.hostedSessionPolicy && (!options.store.saveHostedOidcGrant || !options.store.findHostedOidcGrant || !options.store.findHostedOidcGrantForSession || !options.store.revokeHostedOidcSessionGrants || !options.store.isHostedOidcSessionRevoked || !options.store.revokeHostedOidcGrant || !options.store.findHostedOidcGrantForCode || !options.store.touchHostedAccountSession || !options.store.getAccountAuthenticationGeneration)) {
+    throw new TypeError("hosted session policy requires durable grant and atomic session store ports");
+  }
+  const discovery = buildOidcDiscoveryDocument({ issuer, ...(options.hostedSessionPolicy ? {profile: "shared-account" as const} : {}) });
   const jwks = options.jwks ?? emptyJwks;
   const clients = new Map(
     (options.clients ?? []).map((client) => [client.clientId, client]),
   );
   const baseStore = options.store;
+  const upstreamOAuth = options.upstreamOAuth ? {...options.upstreamOAuth, hostedSessionPolicy: options.hostedSessionPolicy ?? options.upstreamOAuth.hostedSessionPolicy} : undefined;
+  const passkeys = options.passkeys ? {...options.passkeys, hostedSessionPolicy: options.hostedSessionPolicy ?? options.passkeys.hostedSessionPolicy} : undefined;
   const isProductionIssuer = isHttpsIssuer(issuer);
   const loginEmailAllowlist = options.loginEmailAllowlist;
   const privacyRetentionPolicyRef = options.privacyRetentionPolicyRef
@@ -547,11 +598,12 @@ export function createAccountsHandler(
     }
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH) {
-      if (request.method !== "GET") return methodNotAllowed("GET");
+      if (request.method !== "GET" && !(request.method === "POST" && options.hostedSessionPolicy)) return methodNotAllowed(options.hostedSessionPolicy ? "GET, POST" : "GET");
       if (!options.oidcFlow) return reservedOidcEndpoint();
       const limited = authorizeLimiter.consume(request);
       if (limited) return limited;
       return await handleAuthorize({
+        issuer,
         request,
         url,
         flow: options.oidcFlow,
@@ -588,6 +640,7 @@ export function createAccountsHandler(
     if (url.pathname === TAKOSUMI_ACCOUNTS_USERINFO_PATH) {
       if (request.method !== "GET") return methodNotAllowed("GET");
       return await handleUserInfo({
+        issuer,
         request,
         store,
         clients,
@@ -627,6 +680,52 @@ export function createAccountsHandler(
       });
     }
 
+    if (options.hostedSessionPolicy && isUpstreamUnlinkProofBeginPath(url.pathname)) {
+      const limited = accountTokensLimiter.consume(request);
+      if (limited) return withPrivateNoStoreHeaders(limited);
+      if (!upstreamOAuth) return upstreamOAuthNotConfigured();
+      return (await handleUpstreamUnlinkProofBeginRequest({request,store,upstreamOAuth,issuerOrigin:issuer,secureCookie:isProductionIssuer})) ?? errorJson("not_found","not found",404,request);
+    }
+
+    if (options.hostedSessionPolicy && isCredentialUnlinkIntentPath(url.pathname)) {
+      const limited = accountTokensLimiter.consume(request);
+      if (limited) return withPrivateNoStoreHeaders(limited);
+      return (await handleCredentialUnlinkIntentRequest({request,store,issuerOrigin:issuer,reconciler:options.credentialUnlinkReconciler})) ?? errorJson("not_found","not found",404,request);
+    }
+
+    if (options.hostedSessionPolicy && isUpstreamOperationProofBeginPath(url.pathname)) {
+      const limited = accountTokensLimiter.consume(request);
+      if (limited) return withPrivateNoStoreHeaders(limited);
+      if (!upstreamOAuth) return upstreamOAuthNotConfigured();
+      return (await handleUpstreamOperationProofBeginRequest({request,store,upstreamOAuth,issuerOrigin:issuer,secureCookie:isProductionIssuer})) ?? errorJson("not_found","not found",404,request);
+    }
+
+    if (options.hostedSessionPolicy && (url.pathname === "/api/v1/account/identity-credentials/unlink" || url.pathname === "/api/v1/account/identity-merges" || url.pathname.startsWith("/api/v1/account/identity-merges/"))) {
+      const limited = accountTokensLimiter.consume(request);
+      if (limited) return withPrivateNoStoreHeaders(limited);
+      const auth = await requireAccountSession({request:request.clone(),store});
+      if (!auth.ok) return withPrivateNoStoreHeaders(auth.response);
+      const session = await store.findAccountSession(auth.sessionId);
+      return (await handleIdentityMergeRequest({request,store,session,issuerOrigin:issuer,reconciler:options.identityMergeReconciler,retryCapability:options.identityMergeRetry})) ?? errorJson("not_found","not found",404,request);
+    }
+
+    if (options.hostedSessionPolicy && isSharedAccountWorkspaceRoute(url.pathname)) {
+      return (await handleSharedAccountWorkspaceRoute({request,url,store,directory:options.sharedAccountWorkspaceDirectory,authenticate: async (directoryRequest) => {
+        const token = directoryRequest.headers.get("authorization");
+        if (token?.startsWith("Bearer ")) {
+          const genuineSession = await store.findAccountSession(token.slice(7));
+          if (!genuineSession) return resolveSharedAccountGrantSession({issuer,request:directoryRequest,store,clients});
+        }
+        const session = await requireAccountSession({request:directoryRequest,store});
+        return session.ok ? {ok:true,session:{subject:session.subject,sessionId:session.sessionId}} : session;
+      }})) ?? errorJson("not_found","not found",404,request);
+    }
+
+    if (url.pathname === "/api/v1/account/session/global-logout" && options.hostedSessionPolicy) {
+      if (request.method !== "POST") return methodNotAllowed("POST");
+      return await handleHostedGlobalLogout({request, store, issuer});
+    }
+
     if (url.pathname === TAKOSUMI_ACCOUNTS_SESSION_ME_PATH) {
       if (request.method === "GET") {
         return await handleAccountSessionMeGet({ request, store });
@@ -636,6 +735,7 @@ export function createAccountsHandler(
           request,
           store,
           secureCookie: isProductionIssuer,
+          hostedPolicy: options.hostedSessionPolicy,
         });
       }
       return methodNotAllowed("DELETE, GET");
@@ -764,33 +864,35 @@ export function createAccountsHandler(
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH) {
       if (request.method !== "GET") return methodNotAllowed("GET");
-      // Deliberately not gated on `options.upstreamOAuth`: this route reports
+      // Deliberately not gated on `upstreamOAuth`: this route reports
       // which sign-in methods are configured (so the sign-in screen can disable
       // the rest) and must answer even when nothing is configured.
       return handleAuthProvidersRequest({
-        upstreamOAuth: options.upstreamOAuth,
-        passkeys: options.passkeys,
+        upstreamOAuth: upstreamOAuth,
+        passkeys: passkeys,
       });
     }
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH) {
       if (request.method !== "GET") return methodNotAllowed("GET");
-      if (!options.upstreamOAuth) return upstreamOAuthNotConfigured();
-      return handleUpstreamAuthorizeRequest({
+      if (!upstreamOAuth) return upstreamOAuthNotConfigured();
+      return await handleUpstreamAuthorizeRequest({
+        request,
+        store,
         url,
-        upstreamOAuth: options.upstreamOAuth,
+        upstreamOAuth: upstreamOAuth,
         secureCookie: isProductionIssuer,
       });
     }
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH) {
       if (request.method !== "GET") return methodNotAllowed("GET");
-      if (!options.upstreamOAuth) return upstreamOAuthNotConfigured();
+      if (!upstreamOAuth) return upstreamOAuthNotConfigured();
       return await handleUpstreamCallbackRequest({
         request,
         url,
         store,
-        upstreamOAuth: options.upstreamOAuth,
+        upstreamOAuth: upstreamOAuth,
         secureCookie: isProductionIssuer,
         loginEmailAllowlist,
       });
@@ -798,41 +900,41 @@ export function createAccountsHandler(
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_OPTIONS_PATH) {
       if (request.method !== "POST") return methodNotAllowed("POST");
-      if (!options.passkeys) return passkeysNotConfigured();
+      if (!passkeys) return passkeysNotConfigured();
       return await handlePasskeyRegisterOptions({
         request,
         store,
-        passkeys: options.passkeys,
+        passkeys: passkeys,
       });
     }
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_COMPLETE_PATH) {
       if (request.method !== "POST") return methodNotAllowed("POST");
-      if (!options.passkeys) return passkeysNotConfigured();
+      if (!passkeys) return passkeysNotConfigured();
       return await handlePasskeyRegisterComplete({
         request,
         store,
-        passkeys: options.passkeys,
+        passkeys: passkeys,
       });
     }
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH) {
       if (request.method !== "POST") return methodNotAllowed("POST");
-      if (!options.passkeys) return passkeysNotConfigured();
+      if (!passkeys) return passkeysNotConfigured();
       return await handlePasskeyAuthenticateOptions({
         request,
         store,
-        passkeys: options.passkeys,
+        passkeys: passkeys,
       });
     }
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH) {
       if (request.method !== "POST") return methodNotAllowed("POST");
-      if (!options.passkeys) return passkeysNotConfigured();
+      if (!passkeys) return passkeysNotConfigured();
       return await handlePasskeyAuthenticateComplete({
         request,
         store,
-        passkeys: options.passkeys,
+        passkeys: passkeys,
         secureCookie: isProductionIssuer,
         loginEmailAllowlist,
       });
@@ -1011,7 +1113,7 @@ function accountsIngressSecurityFailure(
     url.pathname === TAKOSUMI_ACCOUNTS_TOKEN_PATH ||
     url.pathname === TAKOSUMI_ACCOUNTS_REVOKE_PATH ||
     url.pathname === TAKOSUMI_ACCOUNTS_INTROSPECT_PATH;
-  const expected = protocolFormRoute
+  const expected = protocolFormRoute || url.pathname === TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH
     ? "application/x-www-form-urlencoded"
     : "application/json";
   const actual = request.headers

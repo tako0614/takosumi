@@ -111,7 +111,7 @@ export interface D1AccountsActivationDigestBackfillReport {
 
 export interface D1AccountsWorkerStateAssessment {
   readonly compatible: boolean;
-  readonly headVersion: 4 | null;
+  readonly headVersion: 4 | 5 | null;
   readonly issues: readonly string[];
 }
 
@@ -119,11 +119,11 @@ export const D1_ACCOUNTS_MIGRATIONS_TABLE =
   "takosumi_accounts_schema_migrations" as const;
 
 /**
- * Exact-v4 production gate. The preceding feature bridge accepted `[3, 4]`
- * only long enough to backfill and atomically migrate protected D1 data. That
- * bridge remains the rollback floor; this artifact must never serve legacy v3.
+ * Protected additive v5 compatibility window: ordinary clients may serve exact
+ * v4 or v5. Hosted authority additionally requires the owner gate to prove v5.
+ * Neither version accepts the retired unchecksummed v3 bridge.
  */
-export const D1_ACCOUNTS_WORKER_ACCEPTED_HEADS = [4] as const;
+export const D1_ACCOUNTS_WORKER_ACCEPTED_HEADS = [4, 5] as const;
 
 const LEGACY_LEDGER_SQL =
   "CREATE TABLE IF NOT EXISTS takosumi_accounts_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)";
@@ -208,7 +208,7 @@ export function d1AccountsMigrationBatchStatements(
     throw new D1AccountsMigrationError("applied_at_invalid");
   }
   const receipt: D1AccountsMigrationStatement =
-    migration.version === 4
+    migration.version >= 4
       ? {
           sql: "INSERT INTO takosumi_accounts_schema_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
           params: [
@@ -385,7 +385,7 @@ export async function backfillD1AccountsActivationDigests(
         };
       }
       if (
-        state.headVersion === catalog.headVersion ||
+        state.headVersion !== null && state.headVersion >= 4 ||
         state.exactPrefixLength === catalog.migrations.length
       ) {
         throw new D1AccountsMigrationError(
@@ -458,8 +458,8 @@ function isExactCleanV4State(
   catalog: D1AccountsMigrationCatalog,
 ): boolean {
   return (
-    state.headVersion === catalog.headVersion &&
-    state.exactPrefixLength === catalog.migrations.length &&
+    state.headVersion !== null && state.headVersion >= 4 && state.headVersion <= catalog.headVersion &&
+    state.exactPrefixLength === state.headVersion + 1 &&
     state.ledgerShape === "checksummed" &&
     state.missingActivationDigestCount === 0 &&
     state.issues.length === 0
@@ -688,7 +688,7 @@ export async function readD1AccountsMigrationState(
         missingActivationDigestCount = count;
       }
     }
-    if (exactPrefixLength === catalog.migrations.length) {
+    if (ledgerShape === "checksummed" && exactPrefixLength !== null && exactPrefixLength >= 5) {
       if (missingActivationDigestCount !== 0) {
         issues.push("activation_digest_backfill_incomplete");
       }
@@ -725,13 +725,13 @@ export function assessD1AccountsWorkerState(
   );
   const shapeMatches =
     (state.headVersion === 3 && state.ledgerShape === "legacy") ||
-    (state.headVersion === 4 && state.ledgerShape === "checksummed");
+    ((state.headVersion === 4 || state.headVersion === 5) && state.ledgerShape === "checksummed");
   const issues = [...state.issues];
   if (!accepted) issues.push("worker_catalog_head_not_accepted");
   if (!shapeMatches) issues.push("worker_ledger_shape_not_accepted");
   return {
     compatible: issues.length === 0,
-    headVersion: accepted && state.headVersion === 4 ? state.headVersion : null,
+    headVersion: accepted && (state.headVersion === 4 || state.headVersion === 5) ? state.headVersion : null,
     issues,
   };
 }
@@ -794,7 +794,7 @@ function exactCatalogPrefixLength(
     issues.push("ledger_newer_than_catalog");
     return null;
   }
-  if (shape === "checksummed" && rows.length !== catalog.migrations.length) {
+  if (shape === "checksummed" && (rows.length < 5 || rows.length > catalog.migrations.length)) {
     issues.push("checksummed_ledger_partial");
     return null;
   }
@@ -843,6 +843,15 @@ export async function digestD1AccountsValue(value: unknown): Promise<string> {
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("")}`;
 }
+
+export const HOSTED_IDENTITY_INDEX_SQL = [
+  "CREATE INDEX takosumi_accounts_hosted_upstream_subject ON takosumi_accounts_documents(json_extract(document, '$.subject'), key) WHERE bucket = 'upstream_identities'",
+  "CREATE INDEX takosumi_accounts_hosted_canonical_target ON takosumi_accounts_documents(json_extract(document, '$.targetSubject'), key) WHERE bucket = 'canonical_accounts'",
+  "CREATE INDEX takosumi_accounts_merge_email_candidate ON takosumi_accounts_documents(lower(trim(json_extract(document, '$.email'))), key) WHERE bucket = 'accounts'",
+  "CREATE INDEX takosumi_accounts_hosted_grants_session ON takosumi_accounts_documents(json_extract(document, '$.issuerSessionId'), key) WHERE bucket = 'hosted_oidc_grants'",
+  "CREATE INDEX takosumi_accounts_hosted_grants_client ON takosumi_accounts_documents(json_extract(document, '$.clientId'), key) WHERE bucket = 'hosted_oidc_grants'",
+  "CREATE UNIQUE INDEX takosumi_accounts_hosted_grants_code ON takosumi_accounts_documents(json_extract(document, '$.authorizationCodeHash')) WHERE bucket = 'hosted_oidc_grants' AND json_type(document, '$.authorizationCodeHash') IS NOT NULL",
+] as const;
 
 async function buildCatalog(): Promise<D1AccountsMigrationCatalog> {
   const migrations: D1AccountsMigration[] = [];
@@ -895,6 +904,9 @@ async function buildCatalog(): Promise<D1AccountsMigrationCatalog> {
     body: v4Body,
   });
 
+  const v5Body = HOSTED_IDENTITY_INDEX_SQL.map((sql) => ({sql, params: []}));
+  migrations.push({version:5,name:"hosted_canonical_identity_indexes",checksum:await digestBody(v5Body),body:v5Body});
+
   const policyDigest = await digestD1AccountsValue({
     preLedgerPolicy: D1_ACCOUNTS_PRE_LEDGER_POLICY,
     schemaClosures: schemaClosures.map(
@@ -907,7 +919,7 @@ async function buildCatalog(): Promise<D1AccountsMigrationCatalog> {
   });
   return {
     migrations,
-    headVersion: 4,
+    headVersion: 5,
     digest: await digestD1AccountsValue(
       migrations.map(({ version, name, checksum }) => ({
         version,
@@ -939,15 +951,16 @@ async function buildSchemaClosures(): Promise<
       : object
   );
   const closures: D1AccountsSchemaClosure[] = [];
-  for (let headVersion = 0; headVersion <= 4; headVersion += 1) {
+  const v5Objects = sortedSchemaObjects([...v4Objects, ...HOSTED_IDENTITY_INDEX_SQL.map(expectedSchemaObject).filter((v): v is D1AccountsSchemaObject => v !== undefined)]);
+  for (let headVersion = 0; headVersion <= 5; headVersion += 1) {
     const objects = headVersion < 3
       ? sortedSchemaObjects(base)
       : headVersion === 3
         ? v3Objects
-        : v4Objects;
+        : headVersion === 4 ? v4Objects : v5Objects;
     closures.push({
       headVersion,
-      ledgerShape: headVersion === 4 ? "checksummed" : "legacy",
+      ledgerShape: headVersion >= 4 ? "checksummed" : "legacy",
       objects,
       digest: await digestD1AccountsValue({ objects }),
     });
@@ -989,7 +1002,7 @@ function expectedSchemaObject(
       sql: normalized,
     };
   }
-  const index = /^CREATE INDEX ([A-Za-z0-9_]+) ON ([A-Za-z0-9_]+)\b/u.exec(
+  const index = /^CREATE (?:UNIQUE )?INDEX ([A-Za-z0-9_]+) ON ([A-Za-z0-9_]+)\b/u.exec(
     normalized,
   );
   if (index?.[1] && index[2]) {
