@@ -3489,13 +3489,14 @@ export interface OpenTofuControlStore {
   /**
    * Low-level Workspace row deletion. Callers must enforce ownership and
    * emptiness (no Capsules, Sources, in-flight Runs, or usage evidence)
-   * before calling; the store performs no checks. Returns false when the
+   * before calling. When supplied, the original management authority is
+   * checked atomically with deletion. Returns false when the
    * Workspace row is already absent. Member, Run-history, and Activity rows
    * that reference the Workspace are left in place and become unreachable
    * through the Workspace-scoped routes (every route resolves the Workspace
    * first). No cloud-resource destroy is performed here or by any caller.
    */
-  deleteWorkspace(id: string): Promise<boolean>;
+  deleteWorkspace(id: string, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<boolean>;
   /** Atomic management admission and full observed-row CAS; false means stale metadata. */
   replaceWorkspace(input: WorkspaceReplacementInput): Promise<boolean>;
   replaceWorkspaceForAccount(input: WorkspaceAccountReplacementInput): Promise<boolean>;
@@ -3801,7 +3802,7 @@ export interface OpenTofuControlStore {
   ): Promise<Page<StoredSource>>;
   /** Bounded keyset page across every Workspace for scheduled polling. */
   listAllSourcesPage(params: PageParams): Promise<Page<StoredSource>>;
-  deleteSource(id: string): Promise<boolean>;
+  deleteSource(id: string, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<boolean>;
 
   // SourceSnapshot records (immutable archive snapshots).
   putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot>;
@@ -5019,7 +5020,14 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(workspace);
   }
 
-  deleteWorkspace(id: string): Promise<boolean> {
+  async deleteWorkspace(id: string, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<boolean> {
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAdmission(
+        this.#workspaces.has(id) ? this.#workspaceManagement.get(id) : undefined,
+        id,
+        expectedWorkspaceManagementAuthority,
+      );
+    }
     const existed = this.#workspaces.delete(id);
     this.#workspaceManagement.delete(id);
     return Promise.resolve(existed);
@@ -7155,7 +7163,16 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return pageSorted(await this.listSources(), params);
   }
 
-  deleteSource(id: string): Promise<boolean> {
+  async deleteSource(id: string, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<boolean> {
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      const source = this.#sources.get(id);
+      if (!source) return Promise.resolve(false);
+      assertWorkspaceManagementAdmission(
+        this.#workspaces.has(source.workspaceId) ? this.#workspaceManagement.get(source.workspaceId) : undefined,
+        source.workspaceId,
+        expectedWorkspaceManagementAuthority,
+      );
+    }
     return Promise.resolve(this.#sources.delete(id));
   }
 

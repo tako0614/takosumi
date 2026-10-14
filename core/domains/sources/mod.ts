@@ -393,12 +393,15 @@ export class SourcesService {
    * `source.deleted` Activity event is recorded. A second delete observes
    * `not_found` (already-deleted is 404, never an idempotent success).
    */
-  async deleteSource(id: string, actorId?: string): Promise<SourceResponse> {
+  async deleteSource(
+    id: string,
+    actorId?: string,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<SourceResponse> {
     const stored = await this.#requireSource(id);
-    const authority = await this.#captureWorkspaceManagementAuthority(
+    const authority = expectedWorkspaceManagementAuthority ?? await this.#captureWorkspaceManagementAuthority(
       stored.workspaceId,
     );
-    void authority;
     const capsules = await this.#store.listCapsules(stored.workspaceId);
     const referencingCapsules = capsules.filter(
       (capsule) =>
@@ -421,7 +424,12 @@ export class SourcesService {
         { reason: "source_has_in_flight_run" },
       );
     }
-    const deleted = await this.#store.deleteSource(stored.id);
+    const deleted = await this.#store.deleteSource(stored.id, authority).catch((error: unknown) => {
+      if (error instanceof WorkspaceManagementAdmissionConflictError) {
+        throw workspaceManagementAdmissionErrorFor();
+      }
+      throw error;
+    });
     if (!deleted) {
       throw new OpenTofuControllerError("not_found", `source ${id} not found`);
     }

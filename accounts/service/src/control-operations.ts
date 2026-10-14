@@ -775,7 +775,7 @@ export interface ControlPlaneOperations {
    * (machine-readable `reason`) while a non-destroyed Capsule tracks it or
    * a Run is in flight; observes `not_found` once deleted.
    */
-  deleteSource(id: string, actorId?: string): Promise<SourceResponse>;
+  deleteSource(id: string, actorId?: string, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<SourceResponse>;
   createSourceSync(
     sourceId: string,
     options?: CreateSourceSyncRequest & { readonly dedupe?: boolean },

@@ -328,12 +328,10 @@ export class WorkspacesService {
       }
     }
     // Admission fence: a draining Workspace refuses, like every mutation.
-    // The tuple itself is not consumed by the unconditional row delete below.
     const authority = expectedWorkspaceManagementAuthority ??
       await this.captureManagementAuthority(id).catch((error: unknown) => {
         throw workspaceMutationError(error);
       });
-    void authority;
     const blockers: string[] = [];
     const capsules = await this.#store.listCapsules(id);
     if (capsules.some((capsule) => capsule.status !== "destroyed")) {
@@ -358,7 +356,9 @@ export class WorkspacesService {
         { reason: "workspace_not_empty", blockers },
       );
     }
-    const deleted = await this.#store.deleteWorkspace(id);
+    const deleted = await this.#store.deleteWorkspace(id, authority).catch((error: unknown) => {
+      throw workspaceMutationError(error);
+    });
     if (!deleted) {
       throw new OpenTofuControllerError("not_found", "workspace not found");
     }

@@ -4541,8 +4541,21 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return workspace;
   }
 
-  async deleteWorkspace(id: string): Promise<boolean> {
-    return await this.#drizzleDelete(schema.workspaces, eq(schema.workspaces.id, id));
+  async deleteWorkspace(id: string, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<boolean> {
+    if (expectedWorkspaceManagementAuthority === undefined) {
+      return await this.#drizzleDelete(schema.workspaces, eq(schema.workspaces.id, id));
+    }
+    assertWorkspaceManagementAuthorityInput(expectedWorkspaceManagementAuthority, id);
+    await this.#ensureSchema();
+    const result = await this.#orm.delete(schema.workspaces).where(and(
+      eq(schema.workspaces.id, id),
+      eq(schema.workspaces.managementState, "active"),
+      eq(schema.workspaces.managementEpoch, expectedWorkspaceManagementAuthority.managementEpoch),
+    )).run();
+    if (changes(result as D1Result) > 0) return true;
+    // This readback classifies a refused write; it never authorizes a retry.
+    await this.#assertWorkspaceManagementAdmission(id, expectedWorkspaceManagementAuthority);
+    return false;
   }
 
   async replaceWorkspace(input: WorkspaceReplacementInput): Promise<boolean> {
@@ -8731,8 +8744,22 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return pageFromProbe(rows, limit);
   }
 
-  async deleteSource(id: string): Promise<boolean> {
-    return await this.#drizzleDelete(schema.sources, eq(schema.sources.id, id));
+  async deleteSource(id: string, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<boolean> {
+    if (expectedWorkspaceManagementAuthority === undefined) {
+      return await this.#drizzleDelete(schema.sources, eq(schema.sources.id, id));
+    }
+    const authority = expectedWorkspaceManagementAuthority;
+    assertWorkspaceManagementAuthorityInput(authority, authority.workspaceId);
+    await this.#ensureSchema();
+    // Admission belongs to the DELETE predicate, including the original epoch.
+    const result = await this.#orm.delete(schema.sources).where(and(
+      eq(schema.sources.id, id),
+      eq(schema.sources.workspaceId, authority.workspaceId),
+      d1WorkspaceManagementAdmissionExists(this.#orm, authority.workspaceId, authority),
+    )).run();
+    if (changes(result as D1Result) > 0) return true;
+    await this.#assertWorkspaceManagementAdmission(authority.workspaceId, authority);
+    return false;
   }
 
   async putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot> {

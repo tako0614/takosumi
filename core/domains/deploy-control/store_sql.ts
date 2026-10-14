@@ -4392,8 +4392,23 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return workspace;
   }
 
-  async deleteWorkspace(id: string): Promise<boolean> {
-    return await this.#pgDelete(pgSchema.workspaces, eq(pgSchema.workspaces.id, id));
+  async deleteWorkspace(id: string, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<boolean> {
+    if (expectedWorkspaceManagementAuthority === undefined) {
+      return await this.#pgDelete(pgSchema.workspaces, eq(pgSchema.workspaces.id, id));
+    }
+    assertWorkspaceManagementAuthorityInput(expectedWorkspaceManagementAuthority, id);
+    return await this.#client.transaction(async (transaction) => {
+      assertWorkspaceManagementAdmission(
+        await pgWorkspaceManagementForTransaction(transaction, id),
+        id,
+        expectedWorkspaceManagementAuthority,
+      );
+      const rows = await this.#drizzleForClient(transaction)
+        .delete(pgSchema.workspaces)
+        .where(eq(pgSchema.workspaces.id, id))
+        .returning({ id: pgSchema.workspaces.id });
+      return rows.length === 1;
+    });
   }
 
   async replaceWorkspace(input: WorkspaceReplacementInput): Promise<boolean> {
@@ -8819,8 +8834,25 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return pageFromProbe(rows, limit);
   }
 
-  async deleteSource(id: string): Promise<boolean> {
-    return await this.#pgDelete(pgSchema.sources, eq(pgSchema.sources.id, id));
+  async deleteSource(id: string, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<boolean> {
+    if (expectedWorkspaceManagementAuthority === undefined) {
+      return await this.#pgDelete(pgSchema.sources, eq(pgSchema.sources.id, id));
+    }
+    const authority = expectedWorkspaceManagementAuthority;
+    assertWorkspaceManagementAuthorityInput(authority, authority.workspaceId);
+    return await this.#client.transaction(async (transaction) => {
+      // Hold the same outer Workspace lock as drain and Source configuration.
+      assertWorkspaceManagementAdmission(
+        await pgWorkspaceManagementForTransaction(transaction, authority.workspaceId),
+        authority.workspaceId,
+        authority,
+      );
+      const rows = await this.#drizzleForClient(transaction)
+        .delete(pgSchema.sources)
+        .where(and(eq(pgSchema.sources.id, id), eq(pgSchema.sources.workspaceId, authority.workspaceId)))
+        .returning({ id: pgSchema.sources.id });
+      return rows.length === 1;
+    });
   }
 
   async putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot> {
