@@ -85,6 +85,17 @@ An independent reviewer must report blocking 0 before ordinary branch push
 and a new formal QA request to the quality/release owner (`cc1494c7`).
 The previously stated publication restrictions still apply.
 
+The first independent follow-up review rejected the candidate because
+Workspace archive is separate from management freeze and the ordinary repair
+sweep excludes archived Workspaces. A new regression proves that gap before
+the additional fix. Preserve the ordinary archived execution exclusion, but
+let a known archived Workspace's failed destroy be rescheduled only after an
+exact Workspace/Run Core query confirms its durable pending usage intent.
+The public Run projection does not expose that internal audit authority.
+An individual query outage must not suppress later repairs. The rejected
+candidate's partial owner gate was interrupted; only a new complete gate on
+the final reviewed head counts toward handoff.
+
 ## Other audit dispositions
 
 The L4 fixed-64-byte comparison exists only in the WIP snapshot; current main

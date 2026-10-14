@@ -8979,6 +8979,7 @@ test.each([
     await dispatch(destroyApply.applyRun, "apply");
     const queued = (await store.getApplyRun(destroyApply.applyRun.id))!;
     expect(queued.status).toBe("queued");
+    expect(await controller.hasPendingRunnerUsage({ runId: queued.id, workspaceId: queued.workspaceId })).toBe(false);
     const starts = queued.auditEvents.filter((event) => event.type === "apply.started");
     const releases = queued.auditEvents.filter((event) => event.type === "lifecycle_action.pre_destroy.succeeded");
     expect(starts).toHaveLength(1);
@@ -9014,6 +9015,10 @@ test.each([
     const beforeTerminal = failure === "input-read" || failure === "terminal-write";
     const afterFault = (await store.getApplyRun(queued.id))!;
     expect(afterFault.status).toBe(beforeTerminal ? "queued" : "failed");
+    expect(await controller.hasPendingRunnerUsage({ runId: queued.id, workspaceId: queued.workspaceId }))
+      .toBe(!beforeTerminal && failure !== "completion-write-ack");
+    expect(await controller.hasPendingRunnerUsage({ runId: queued.id, workspaceId: "other-workspace" })).toBe(false);
+    expect(await controller.hasPendingRunnerUsage({ runId: "missing-run", workspaceId: queued.workspaceId })).toBe(false);
     expect(afterFault.auditEvents.filter((event) => event.type === "runner_usage.pending")).toHaveLength(beforeTerminal ? 0 : 1);
     if (!beforeTerminal) {
       expect(afterFault.auditEvents.find((event) => event.type === "runner_usage.pending")?.data)
@@ -9071,6 +9076,7 @@ test.each([
       usdMicros: ["usage-write-ack", "completion-write", "completion-write-ack"].includes(failure) ? 7_500 : 9_000,
     });
     const settled = (await store.getApplyRun(queued.id))!;
+    expect(await retry.hasPendingRunnerUsage({ runId: queued.id, workspaceId: queued.workspaceId })).toBe(false);
     expect(settled.auditEvents.filter((event) => event.type === "runner_usage.completed")).toHaveLength(1);
     expect(settled.auditEvents.filter((event) => event.type === "destroy.failed")).toHaveLength(1);
     expect(notifications).toEqual([queued.id]);

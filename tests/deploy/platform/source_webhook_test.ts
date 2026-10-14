@@ -634,6 +634,7 @@ test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", a
             }),
           ]);
         },
+        hasPendingRunnerUsage: () => Promise.resolve(false),
         listPendingRuntimeSecretRetirementRuns: (options) => {
           retirementQueries.push(options);
           return Promise.resolve([
@@ -732,6 +733,55 @@ test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", a
   });
 });
 
+test("scheduled run repair settles only Core-confirmed runner usage in archived Workspaces", async () => {
+  const now = Date.parse("2026-07-02T00:00:00.000Z");
+  const checked: string[] = [];
+  const scheduled: string[] = [];
+  const result = await repairStaleOpenTofuRuns({
+    workspaces: {
+      listWorkspacesByIds: () => Promise.resolve([
+        { id: "space_archived", archivedAt: "2026-07-01T00:00:00.000Z" },
+        { id: "space_a" },
+      ]),
+    },
+    controller: {
+      listRecoverableOpenTofuRuns: () => Promise.resolve([
+        ...[
+          ["archived_pending", "destroy_apply", "failed"],
+          ["archived_settled", "destroy_apply", "failed"],
+          ["archived_queued", "destroy_apply", "queued"],
+          ["archived_apply", "apply", "failed"],
+          ["archived_read_error", "destroy_apply", "failed"],
+          ["archived_pending_after_error", "destroy_apply", "failed"],
+        ].map(([id, type, status]) => runRecord({
+          id, type, status, workspaceId: "space_archived",
+          createdAt: new Date(now - 20_000).toISOString(),
+          finishedAt: new Date(now - 10_000).toISOString(),
+        })),
+        runRecord({ id: "missing_workspace", type: "destroy_apply", status: "failed", workspaceId: "missing" }),
+        runRecord({ id: "active_queued", type: "apply", status: "queued" }),
+      ]),
+      hasPendingRunnerUsage: ({ runId, workspaceId }: { runId: string; workspaceId: string }) => {
+        expect(workspaceId).toBe("space_archived");
+        checked.push(runId);
+        return runId === "archived_read_error"
+          ? Promise.reject(new Error("transient intent lookup failure"))
+          : Promise.resolve(runId.startsWith("archived_pending"));
+      },
+      listPendingRuntimeSecretRetirementRuns: () => Promise.resolve([]),
+      claimPendingRuntimeSecretRetirementDispatch: () => Promise.resolve(true),
+    },
+  }, {
+    schedule: ({ runId }) => { scheduled.push(runId); return Promise.resolve(); },
+  }, { now, queuedStaleMs: 1_000, runningStaleMs: 1_000 });
+  expect(checked).toEqual([
+    "archived_pending", "archived_settled", "archived_read_error", "archived_pending_after_error",
+  ]);
+  expect(scheduled).toEqual(["archived_pending", "archived_pending_after_error", "active_queued"]);
+  expect(result.ordinaryFailures).toBe(1);
+  expect(result.retirementFailures).toBe(0);
+});
+
 test("scheduled run repair resolves only recoverable Run Workspaces beyond the catalog prefix", async () => {
   const now = Date.parse("2026-07-02T00:00:00.000Z");
   const inventory = Array.from({ length: 101 }, (_, index) => ({
@@ -765,6 +815,7 @@ test("scheduled run repair resolves only recoverable Run Workspaces beyond the c
             createdAt: new Date(now - 10_000).toISOString(),
           }),
         ]),
+      hasPendingRunnerUsage: () => Promise.resolve(false),
       listPendingRuntimeSecretRetirementRuns: () => Promise.resolve([]),
       claimPendingRuntimeSecretRetirementDispatch: () =>
         Promise.resolve(true),
@@ -853,6 +904,7 @@ test("scheduled run repair chunks keyed Workspace lookup and skips missing or ar
               }),
             ),
           ),
+        hasPendingRunnerUsage: () => Promise.resolve(false),
         listPendingRuntimeSecretRetirementRuns: () => Promise.resolve([]),
         claimPendingRuntimeSecretRetirementDispatch: () =>
           Promise.resolve(true),
@@ -910,6 +962,7 @@ test("runtime secret retirement repair survives a keyed Workspace lookup failure
               createdAt: new Date(now - 10_000).toISOString(),
             }),
           ]),
+        hasPendingRunnerUsage: () => Promise.resolve(false),
         listPendingRuntimeSecretRetirementRuns: () =>
           Promise.resolve([
             runRecord({
@@ -989,6 +1042,7 @@ test("runtime secret retirement repair survives ordinary query and dispatch fail
                     createdAt: new Date(now - 10_000).toISOString(),
                   }),
                 ]),
+          hasPendingRunnerUsage: () => Promise.resolve(false),
           listPendingRuntimeSecretRetirementRuns: () =>
             Promise.resolve([
               runRecord({
@@ -1091,6 +1145,7 @@ test("runtime secret retirement repair rotates a poisoned real-size prefix befor
     },
     controller: {
       listRecoverableOpenTofuRuns: () => Promise.resolve([]),
+      hasPendingRunnerUsage: () => Promise.resolve(false),
       listPendingRuntimeSecretRetirementRuns: async (options: {
         readonly staleBeforeMs: number;
         readonly limit?: number;
