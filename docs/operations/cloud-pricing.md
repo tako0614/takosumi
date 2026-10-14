@@ -26,6 +26,10 @@ The operator sets `TAKOSUMI_BILLING_REQUIRED` to the exact string `1` to require
 that port; any other supplied value is invalid. Missing required bindings and
 incomplete local compositions fail initialization. Unimplemented remote methods,
 remote errors, and malformed DTOs fail closed without retries or fallback.
+Each remote call has a fixed 15-second deadline. A timeout is an unknown
+acknowledgement rather than cancellation or proof of no mutation; recovery
+retains the original plan/apply references. The port clears its timer and never
+retries a timed-out mutation automatically.
 Remote exception text is not copied into Core diagnostics. The existing
 `TAKOSUMI_BILLING_EXTENSION_FACTORY`
 remains available for in-process composition and cannot be selected alongside

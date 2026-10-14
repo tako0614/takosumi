@@ -20,6 +20,9 @@ const METHODS = [
   "captureRunBilling", "releaseReservation", "evaluatePlanQuota",
 ] as const;
 
+/** Operator-owned per-call bound; neither request data nor env overrides it. */
+export const BILLING_RPC_DEADLINE_MS = 15_000;
+
 /** Resolve one explicit host port; absence retains the OSS self-host defaults. */
 export function workerBillingComposition(env: BillingBindings): {
   readonly billingExtensionFactory?: BillingExtensionFactory;
@@ -89,12 +92,22 @@ function billingRpcPorts(service: BillingRpcService): BillingExtensionFactoryRes
 }
 
 async function invoke<T>(method: string, operation: () => Promise<T>): Promise<T> {
+  const deadlineExpired = Symbol("billing_rpc_deadline");
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await operation();
-  } catch {
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(deadlineExpired), BILLING_RPC_DEADLINE_MS);
+    });
+    // A deadline is an unknown acknowledgement, not cancellation or proof that
+    // a mutation did not commit. Durable reconciliation reuses the same Run /
+    // Apply references; this adapter never retries or substitutes a no-op.
+    return await Promise.race([operation(), deadline]);
+  } catch (error) {
     // Remote exception messages/causes can contain commercial or secret data.
     // Expose only the failed port, never its input or the host's diagnostics.
-    throw new Error(`TAKOSUMI_BILLING ${method} failed`);
+    throw new Error(`TAKOSUMI_BILLING ${method} ${error === deadlineExpired ? "timed out" : "failed"}`);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
