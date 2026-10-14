@@ -29,7 +29,8 @@ import type {
   RunnerHostComposition,
 } from "./bindings.ts";
 import { workerBillingComposition } from "./billing_rpc.ts";
-import { storedServiceCompositionFromEnv, storedServiceUsageBucket } from "./stored-service-usage.ts";
+import { storedServiceCompositionFromEnv } from "./stored-service-usage.ts";
+import { createBackupStoredOwnerContext } from "./stored-service-owner-context.ts";
 import {
   createCloudflareD1OpenTofuControlStore,
   initializeD1OpenTofuLedgerSchemaBinding,
@@ -196,8 +197,13 @@ export async function createWorkerServiceApp(
   );
   // Control backups (spec §33 / §26): seal the bundle with the at-rest crypto
   // and write to R2_BACKUPS. Absent binding -> backups stay disabled (501).
+  const backupStorage = createBackupStoredOwnerContext(
+    new ObjectKeyArtifactReferenceAllocator(),
+    storedServiceCompositionFromEnv(env),
+    env.R2_BACKUPS,
+  );
   const backupArtifactStore = backupArtifactStoreFromEnv(
-    storedServiceUsageBucket(env.R2_BACKUPS, storedServiceCompositionFromEnv(env), { bucketRole: "backups", writerId: "control-backup" }),
+    backupStorage.bucket,
     runtimeEnv,
   );
   const backupStateObjectReader = backupObjectReaderFromR2(env.R2_STATE);
@@ -412,7 +418,7 @@ export async function createWorkerServiceApp(
     gitInstallPlanStore: new D1GitInstallPlanStore(
       env.TAKOSUMI_CONTROL_DB,
     ),
-    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    artifactReferenceAllocator: backupStorage.allocator,
     interfaceStores: createD1InterfaceStores(env.TAKOSUMI_CONTROL_DB),
     ...(env.TAKOSUMI_INTERFACE_PROJECTION_SINK
       ? { interfaceProjectionSink: env.TAKOSUMI_INTERFACE_PROJECTION_SINK }
@@ -478,6 +484,7 @@ function workerPrivateRunFilesFromOptions(
   const blobs = new R2PrivateRunFileBlobStore({
     bucket: env.R2_ARTIFACTS,
     storageUsage: storedServiceCompositionFromEnv(env),
+    writeAuthority: repository,
     prefix: configuration.prefix,
     cryptoBoundary,
     maxBytes: configuration.maxBytes,

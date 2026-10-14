@@ -5,7 +5,7 @@
  * durability, or the Cloud Runner path.
  */
 import { PartitionedSecretBoundaryCrypto } from "../../core/adapters/secret-store/memory.ts";
-import type { PrivateRunFileBlobPort, PrivateRunFileDigest, PrivateRunFileScope } from "../../core/domains/private-run-files/mod.ts";
+import type { PrivateRunFileAuthority, PrivateRunFileBlobPort, PrivateRunFileDigest, PrivateRunFileRepositoryPort, PrivateRunFileScope } from "../../core/domains/private-run-files/mod.ts";
 import type { R2Bucket, R2ObjectBody } from "./bindings.ts";
 import { storedServiceUsageBucket, type StoredServiceComposition } from "./stored-service-usage.ts";
 
@@ -21,6 +21,7 @@ export class R2PrivateRunFileBlobStore implements PrivateRunFileBlobPort {
   readonly #bucket: R2Bucket;
   readonly #prefix: string;
   readonly #storageUsage: StoredServiceComposition | undefined;
+  readonly #writeAuthority: Pick<PrivateRunFileRepositoryPort, "readPointer"> | undefined;
   readonly #crypto: PartitionedSecretBoundaryCrypto;
   readonly #maxBytes: number;
 
@@ -28,6 +29,7 @@ export class R2PrivateRunFileBlobStore implements PrivateRunFileBlobPort {
     readonly bucket: R2Bucket;
     readonly prefix: string;
     readonly storageUsage?: StoredServiceComposition;
+    readonly writeAuthority?: Pick<PrivateRunFileRepositoryPort, "readPointer">;
     readonly cryptoBoundary: PartitionedSecretBoundaryCrypto;
     readonly maxBytes: number;
   }) {
@@ -41,28 +43,43 @@ export class R2PrivateRunFileBlobStore implements PrivateRunFileBlobPort {
     this.#bucket = input.bucket;
     this.#prefix = input.prefix;
     this.#storageUsage = input.storageUsage;
+    this.#writeAuthority = input.writeAuthority;
+    if (this.#storageUsage && !this.#writeAuthority) throw blobError();
     this.#crypto = input.cryptoBoundary;
     this.#maxBytes = input.maxBytes;
   }
 
   async putEncryptedImmutable(input: {
     readonly scope: PrivateRunFileScope;
+    readonly authority?: PrivateRunFileAuthority;
     readonly bytes: Uint8Array;
     readonly digest: PrivateRunFileDigest;
   }): Promise<{ readonly blobId: string; readonly digest: PrivateRunFileDigest; readonly byteLength: number }> {
     const bytes = input.bytes.slice();
-    validateRequest(input.scope, bytes, input.digest, this.#maxBytes);
-    const ownerWorkspaceId = input.scope.workspaceId;
+    const scope = { ...input.scope };
+    const authority = input.authority === undefined ? undefined : { ...input.authority };
+    const requestedDigest = input.digest;
+    validateRequest(scope, bytes, requestedDigest, this.#maxBytes);
+    const ownerWorkspaceId = scope.workspaceId;
+    const assertWriteAuthority = async (): Promise<void> => {
+      if (!this.#storageUsage) return;
+      if (!authority || !this.#writeAuthority) throw blobError();
+      let current;
+      try { current = await this.#writeAuthority.readPointer({ scope, ...authority }); }
+      catch { throw blobError(); }
+      if (current.kind !== "present" && current.kind !== "absent") throw blobError();
+    };
     const actualDigest = await digestBytes(bytes);
-    if (actualDigest !== input.digest) throw blobError();
+    if (actualDigest !== requestedDigest) throw blobError();
 
-    const identity = await identityFor(input.scope, input.digest);
+    const identity = await identityFor(scope, requestedDigest);
     const key = `${this.#prefix}/${identity}`;
-    const aad = await aadFor(input.scope, input.digest, bytes.byteLength);
-    const scopeDigest = await scopeDigestFor(input.scope);
+    const aad = await aadFor(scope, requestedDigest, bytes.byteLength);
+    const scopeDigest = await scopeDigestFor(scope);
 
     const bucket = storedServiceUsageBucket(this.#bucket, this.#storageUsage, {
       bucketRole: "artifacts", writerId: "private-run-files", workspaceId: ownerWorkspaceId,
+      beforePrepare: assertWriteAuthority, beforeDispatch: assertWriteAuthority,
     });
     let existing: R2ObjectBody | null;
     try {
@@ -71,8 +88,8 @@ export class R2PrivateRunFileBlobStore implements PrivateRunFileBlobPort {
       throw blobError();
     }
     if (existing) {
-      await this.#verify(existing, key, input.digest, bytes.byteLength, aad, scopeDigest, bytes);
-      return { blobId: `sha256:${identity}`, digest: input.digest, byteLength: bytes.byteLength };
+      await this.#verify(existing, key, requestedDigest, bytes.byteLength, aad, scopeDigest, bytes);
+      return { blobId: `sha256:${identity}`, digest: requestedDigest, byteLength: bytes.byteLength };
     }
 
     const sealed = await this.#seal(bytes, aad);
@@ -81,7 +98,7 @@ export class R2PrivateRunFileBlobStore implements PrivateRunFileBlobPort {
     const metadata = {
       format: FORMAT,
       scope: scopeDigest,
-      digest: input.digest,
+      digest: requestedDigest,
       byteLength: String(bytes.byteLength),
     };
     try {
@@ -99,8 +116,8 @@ export class R2PrivateRunFileBlobStore implements PrivateRunFileBlobPort {
     }
     const readback = await bucket.get(key);
     if (!readback) throw blobError();
-    await this.#verify(readback, key, input.digest, bytes.byteLength, aad, scopeDigest, bytes);
-    return { blobId: `sha256:${identity}`, digest: input.digest, byteLength: bytes.byteLength };
+    await this.#verify(readback, key, requestedDigest, bytes.byteLength, aad, scopeDigest, bytes);
+    return { blobId: `sha256:${identity}`, digest: requestedDigest, byteLength: bytes.byteLength };
   }
 
   async readEncryptedVerified(input: {

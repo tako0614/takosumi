@@ -197,6 +197,12 @@ export function storedServiceUsageBucket(bucket: R2Bucket, composition: StoredSe
   readonly writerId: string;
   /** Only a caller already holding Core-validated ownership may supply this. */
   readonly workspaceId?: string;
+  /** Strict local mutation authority. Historical owner reads cannot authorize
+   * a custody intent. Failure occurs before any remote PREPARE mutation. */
+  readonly beforePrepare?: (key: string, kind: "put" | "delete") => Promise<void>;
+  /** Local owner fence, rechecked after custody preparation and before R2.
+   * A failed fence leaves the prepared intent pending for owner reconciliation. */
+  readonly beforeDispatch?: (key: string, kind: "put" | "delete") => Promise<void>;
   readonly maxBytes?: number;
 }): R2Bucket {
   if (!composition) return bucket;
@@ -266,6 +272,7 @@ export function storedServiceUsageBucket(bucket: R2Bucket, composition: StoredSe
       if ((prior ? await storedNativeVersion(prior) : null) !== snapshot.versionDigest) throw new StoredServiceUsageError();
       if (!conditionMatches(prior, putOptions.onlyIf)) return null;
       const operationRef = `m_${(await storedDigest(JSON.stringify([ctx, snapshot.revision, "put", desiredDigest]))).slice(7)}`;
+      if (input.beforePrepare) await storedServiceCall(() => input.beforePrepare!(key, "put"));
       const prepared = await storedServiceCall(() => composition.usage.prepareStoredObject({ ...ctx, operationRef, expectedRevision: snapshot.revision, expectedVersionDigest: snapshot.versionDigest, desired: { bytes: String(bytes.byteLength), contentDigest: desiredDigest } }));
       const intent = validIntent(prepared?.intent);
       if (intent.operationRef !== operationRef || intent.expectedRevision !== snapshot.revision || intent.kind !== "put" || intent.bytes !== String(bytes.byteLength) || intent.contentDigest !== desiredDigest || typeof prepared.dispatch !== "boolean") throw new StoredServiceUsageError();
@@ -274,6 +281,7 @@ export function storedServiceUsageBucket(bucket: R2Bucket, composition: StoredSe
       if (typeof dispatchToken !== "string" || !/^[0-9a-f]{64}$/u.test(dispatchToken)) throw new StoredServiceUsageError();
       if (intent.state !== "pending") throw new StoredServiceUsageError();
       let result: R2Object | null;
+      if (input.beforeDispatch) await storedServiceCall(() => input.beforeDispatch!(key, "put"));
       try {
         result = await storedServiceCall(() => bucket.put(key, bytes, { ...putOptions, onlyIf: prior ? { etagMatches: prior.etag } : { etagDoesNotMatch: "*" } }));
       } catch { return await reconcile(ctx, key, intent, dispatchToken, snapshot.versionDigest); }
@@ -298,10 +306,12 @@ export function storedServiceUsageBucket(bucket: R2Bucket, composition: StoredSe
       if ((prior ? await storedNativeVersion(prior) : null) !== snapshot.versionDigest) throw new StoredServiceUsageError();
       if (!prior) return;
       const operationRef = `m_${(await storedDigest(JSON.stringify([ctx, snapshot.revision, "delete"]))).slice(7)}`;
+      if (input.beforePrepare) await storedServiceCall(() => input.beforePrepare!(key, "delete"));
       const prepared = await storedServiceCall(() => composition.usage.prepareStoredObject({ ...ctx, operationRef, expectedRevision: snapshot.revision, expectedVersionDigest: snapshot.versionDigest, desired: null }));
       const intent = validIntent(prepared?.intent);
       if (intent.operationRef !== operationRef || intent.expectedRevision !== snapshot.revision || intent.kind !== "delete" || typeof prepared.dispatch !== "boolean" || intent.state !== "pending") throw new StoredServiceUsageError();
       if (!prepared.dispatch || typeof prepared.dispatchToken !== "string" || !/^[0-9a-f]{64}$/u.test(prepared.dispatchToken)) throw new StoredServiceUsageError();
+      if (input.beforeDispatch) await storedServiceCall(() => input.beforeDispatch!(key, "delete"));
       try { await storedServiceCall(() => bucket.delete(key)); } catch { /* Only this original sender may inspect the exact deletion outcome. */ }
       await reconcile(ctx, key, intent, prepared.dispatchToken, snapshot.versionDigest);
     },
