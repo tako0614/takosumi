@@ -160,7 +160,8 @@ short explicit overlap and test both expiry and revocation.
 | Registration field | Takoserver hosted console | Takosumi Hosted |
 | --- | --- | --- |
 | Logical client name | `takoserver-console` | `takosumi-hosted` |
-| Proposed production callback | `https://console.takoserver.com/auth/oidc/callback` | `<operator-confirmed Hosted browser origin>/auth/oidc/callback` |
+| Proposed production `client_id` | `takoserver-console-production-v1` | `takosumi-hosted-production-v1` |
+| Proposed production callback | `https://console.takoserver.com/auth/oidc/callback` | `https://app.takosumi.com/auth/oidc/callback` |
 | Token exchange/session owner | Takoserver server-side RP | Hosted-owned server-side RP/login adapter |
 | Allowed scopes | `openid email`; `offline_access` only with explicit continuing-session consent | Same |
 | Grants / response type | `authorization_code`, optional `refresh_token` / `code` | Same |
@@ -168,8 +169,10 @@ short explicit overlap and test both expiry and revocation.
 | Sector and local subject binding | Separate persisted pairwise sector; `(iss,sub)` to Takoserver principal | Separate persisted pairwise sector; `(iss,sub)` to Hosted customer/local Accounts authorization adapter |
 | Allowed post-login destination | Relative allowlisted console paths | Relative allowlisted Hosted paths |
 
-The Hosted browser origin and exact callback are launch-blocking configuration
-decisions, not guessed DNS or a deployed client. A private Marketplace
+The control architecture's product naming identifies `app.takosumi.com` as
+the official Hosted browser destination; this is the proposed default, not
+evidence that the callback or any registration exists. The Hosted owner must
+confirm its realized browser origin and adapter before activation. A private Marketplace
 service-binding Worker is not an OIDC browser callback. The exact Hosted
 composition that turns its login into a local platform account session must
 be reviewed by both owners; an auth issuer token cannot directly grant
@@ -184,6 +187,15 @@ are likewise distinct from RP callbacks. Reject unsolicited login/link flows
 and authorization-server mix-up. No implicit/password grant. This profile
 applies the protections in
 [OAuth Security BCP](https://www.rfc-editor.org/rfc/rfc9700.html#section-2).
+
+The proposed staging IDs are `takoserver-console-staging-v1` and
+`takosumi-hosted-staging-v1`, with only each operator-confirmed staging browser
+origin plus `/auth/oidc/callback` registered. Integration uses separate
+`takoserver-console-integration-v1` and `takosumi-hosted-integration-v1` IDs and
+its own exact callback origins. Each registration is pinned to its environment's
+issuer. No production callback, client secret or subject mapping is reused in
+staging/integration. Environment-specific origins are required operator inputs
+before registration; the names above are design candidates, not live IDs.
 
 ## 4. Google and GitHub upstream login
 
@@ -349,6 +361,59 @@ can unlink after fresh proof while retaining at least one working credential;
 unlink revokes related sessions/refresh families. Suspected bad links are
 quarantined, sessions revoked, prior binding restored with an append-only
 correction. Resource ownership and historical ledger attribution never change.
+
+### Successful merge example: Google A and GitHub B
+
+Suppose current Google root A and GitHub root B both have the same verified
+address. A controls the user's existing Hosted account H; B controls the user's
+existing Takoserver principal T. They initially produce Hosted pairwise subject
+`sub_H_A` and Takoserver pairwise subject `sub_T_B`, respectively. These symbols
+are explanatory placeholders, not actual user data or newly defined ID formats.
+
+1. Email discovery produces a merge intent, conferring no rights. The user
+   freshly authenticates Google A and GitHub B, proves H/T using each owner's
+   existing credential/binding, and explicitly chooses **A as the canonical
+   login root**, H as the Hosted context, and T as the Takoserver context.
+   The UI shows these selections before consent; no oldest-row or email-match
+   default silently decides which root survives.
+2. Persist an operation-scoped authentication alias B -> A while retaining B,
+   its upstream binding, creation history, original subject mappings, and
+   H/T account IDs. The alias resolves only inside the login/proof service.
+   Product authorization continues resolving the explicitly selected local
+   context, without interpreting this alias as a role/membership union.
+3. Before activating the alias, fence new grants for A/B, revoke their old
+   issuer sessions/refresh families and affected RP sessions/grants, and obtain
+   idempotent RP acknowledgements for that operation. A partial acknowledgement
+   leaves the merge pending with recovery/old login available; it cannot expose
+   a half-linked canonical login. Reauthentication then mints new sessions at
+   the new binding generation.
+4. On the next Google **or** GitHub login, the immutable provider/subject
+   resolves to canonical login A. Hosted receives `sub_H_A` and resolves H;
+   Takoserver receives `sub_T_B` and resolves T. Persisted client/context
+   subject mappings retain these identifiers even though the login root is
+   canonical A. Tokens carry one selected context's `sub`, never both roots,
+   a bundle/root identifier, a context list, or a union of roles. The user
+   therefore has one login through either provider and retains both products'
+   original accounts and data.
+5. If A and B also control two distinct accounts within the same RP, both
+   stored subjects remain distinct. The product needs an explicit proved
+   context selector; a token represents exactly one selection. Until that
+   selector is implemented, this ambiguous case stays unmerged and each old
+   login works. It is never flattened into combined rights.
+6. Unlink requires fresh proof and a working remaining credential. Revoke the
+   merged sessions/families and acknowledge RP invalidation before removing
+   B -> A. Restore B's original login mapping and original selected T context;
+   A still resolves H. Pairwise subjects and local IDs remain `sub_H_A`,
+   `sub_T_B`, H and T throughout; new sign-ins use those restored mappings.
+   The append-only undo operation restores authentication access, without
+   rolling back legitimate resource/billing operations performed meanwhile.
+
+This is convergence of duplicate login identities, with reversible aliases
+and retained product contexts. The implementation must persist the selected
+canonical root and explicit subject/context mappings; simply rerunning the
+current pairwise HMAC with A in place of B would change `sub_T_B` and is refused.
+The coordinated revoke/acknowledge and context-subject registry are additional
+implementation gaps, not claimed current behavior.
 
 ## 7. Protected migration and rollback window
 
