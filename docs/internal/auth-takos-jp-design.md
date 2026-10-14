@@ -14,24 +14,36 @@ operator approval.
 A user signs in to `auth.takos.jp` with Google or GitHub, then signs in to the
 official hosted Takoserver console or Takosumi Hosted without repeating the
 upstream login while the issuer session remains valid. Each relying party
-(RP) creates its own session and resolves its own local account. A verified
+(RP) creates its own session bound to the shared canonical account. A verified
 email helps find existing accounts; merging login identities preserves their
 existing data and requires proof of ownership, as defined in section 6.
 
+Revision following the design review: official hosted Takoserver and Takosumi
+share **one canonical Accounts account and common Workspace authority**.
+Product-local principal/customer IDs are retained as internal migration
+references, not separate customer identities. The earlier proposal of SSO
+between independent accounts is superseded. RPs keep separate browser sessions.
+
 | Concept | Owner in the proposal | Authority retained locally |
 | --- | --- | --- |
-| Accounts implementation, upstream login, central authentication identity, client registry, issuer session, consent, refresh/revocation | Takosumi OSS Accounts | No retail wallet, Takoserver organization, resource, or provider authority |
+| Accounts implementation, upstream login, canonical account ID, client registry, issuer session, consent, refresh/revocation | Takosumi OSS Accounts | Shared account and identity; no resource execution or billing implementation |
 | Operation of the official `auth.takos.jp` instance, issuer keys, upstream OAuth applications and exact registrations | Official identity operator using the Accounts owner deploy lane | Realized configuration and credentials outside public repositories |
-| Takoserver RP binding and local session | Takoserver | Principals, Organizations, API keys, wallet, billing, resources, supply and execution |
-| Hosted RP binding and local session/composition | Takosumi Hosted | Hosted customer/tenant records, retail billing, Marketplace and support |
+| Common Workspace/personal Workspace creation and membership | Takosumi Workspace authority | One current membership/role source used by both hosted products |
+| Takoserver RP binding and local session | Takoserver | Internal Principal/Organization mappings to canonical account/Workspace, API keys, resources, supply and execution |
+| Hosted RP binding and local session/composition | Takosumi Hosted | Canonical account/Workspace bindings, Marketplace UX and support; no second customer identity or billing ledger |
+| Single customer billing ledger and wallet keyed to shared account/Workspace | Takoserver billing authority, consumed through its published contract | USD micro-USD ledger; Hosted is its client, not a second retail wallet/ledger |
 | Optional external issuer selection and existing self-host Accounts login | Each self-host operator | Independent issuer, authentication choices, local accounts and data |
 | Cross-product permission to add the shared login and consumed wire contracts | takos-control architecture/policy/inventory owners | No runtime or identity database in control |
 
 Implementation must consume published OIDC HTTP contracts. Neither consumer
-imports Takosumi Accounts source or reads its database. The common identity is
-an authentication fact, not a shared product account ID. The Hosted-to-Takoserver
-reseller seam continues carrying only opaque `tenantRef` and scoped execution
-grants, never an OIDC subject, ID token, session, email, or role.
+imports Takosumi Accounts source or reads its database. Accounts is the canonical
+account-ID owner; both RPs explicitly bind their internal references to that
+one account. Customer authorization uses live common Workspace membership;
+resource execution remains Takoserver-owned. Issuer cookies, refresh tokens,
+email and raw ID tokens are not forwarded as resource execution credentials.
+The existing opaque reseller grant seam is kept during compatibility, and its
+Workspace-to-Organization mapping is made explicit by its owner before cutover.
+No unreviewed cross-plane lookup or shared database is introduced.
 
 ### Baseline observed when preparing this proposal
 
@@ -49,7 +61,7 @@ grants, never an OIDC subject, ID token, session, email, or role.
   must classify that legacy evidence as unknown and obtain fresh proof.
 - Static operator OIDC clients and Capsule-bound pairwise clients have different
   subject behavior in [oidc-routes.ts](../../accounts/service/src/oidc-routes.ts).
-  Hosted identity-only RPs need an explicit pairwise registration class, not a
+  Hosted identity-only RPs need an explicit shared-account registration class, not a
   fabricated Capsule grant or an existing control delegation client.
 - Takoserver currently verifies Google assertions and maps provider/subject to a
   local principal and session. Its current schema/API accepts Google/GitHub
@@ -79,10 +91,11 @@ are not published by it.
 
 | Current constraint / gap | Proposed narrow change | Required owner change before use |
 | --- | --- | --- |
-| Invariant 16: Hosted does not link users to Accounts/Takoserver | Permit an explicit hosted OIDC login binding to Accounts; prohibit Hosted-to-Takoserver account bridging | Control architecture; Hosted account/composition docs |
-| Invariant 18: independent identity stores and no user linking/shared OIDC session | Permit one issuer browser login with per-client pairwise subjects and proved local bindings; keep product sessions, IDs, stores and authorization separate | Control architecture/policy-generated guidance; all three product auth contracts |
+| Invariant 16: Hosted does not link users to Accounts/Takoserver | Adopt the canonical shared hosted account/Workspace and explicit Workspace-to-Takoserver Organization binding | Control architecture; both consumers' account/composition docs |
+| Invariant 18: independent identity stores and no user linking/shared OIDC session | Adopt one canonical Accounts ID and Workspace membership authority; keep product sessions, stores and resource execution separate | Control architecture/policy-generated guidance; all three product auth contracts |
 | Invariant 19: fresh accounts/no active import | Permit additive identity bindings for explicitly inventoried current durable accounts; no archived database, wallet, grant, resource or PAT import | Control architecture and owning migration runbooks |
-| Dependency boundary prohibits user linking and Accounts IDs/sessions in consumers | Permit only public OIDC assertions and opaque client-local subjects on login; keep reseller identity firewall and source-import prohibition | Control architecture and consumed-contract inventory, then consumer API docs |
+| Dependency boundary prohibits account linking and Accounts IDs in consumers | Permit declared shared-account OIDC and current Workspace authorization contracts; retain source-import prohibition and scoped execution grants | Control architecture and consumed-contract inventory, then consumer API docs |
+| Hosted retail wallet and direct Takoserver wallet are separate | Adopt one shared-account/Workspace customer ledger and explicit Workspace-to-Organization mapping; preserve old rows during transition | Control architecture; Takoserver billing API/ledger owner and Hosted client specification |
 | Accounts has no complete public registry/consent or hosted-RP subject policy | Add an operator-controlled identity-only RP class, consent, prompt/max_age behavior, lifecycle/revocation and proof workflow | Takosumi Accounts contract/source/tests and self-host docs |
 | Hosted has no independent RP; existing platform Workspace flow is not OIDC | Add a Hosted-owned public login/session adapter without bypassing the platform's local Workspace authorization | Hosted owner specification and composition tests; OSS published session adapter only if required |
 | Official issuer operation/deploy surface is not yet declared | Declare the exact owning Accounts surface, environment and operator obligations before any publication | Takosumi deploy owner/operator; no invented control deploy coordinator |
@@ -130,12 +143,53 @@ uses its validated `sub`; GitHub uses the authenticated immutable numeric user
 may use the existing stable derivation only with persisted mappings and key
 version custody; changing a derivation key must never regenerate existing IDs.
 
-Both hosted clients receive a distinct, persisted pairwise `sub`, scoped to
-their registered sector. Each RP has a separate sector/client. Persist the
-mapping so signing/derivation-key rotation does not change subjects; do not
-union clients into a shared sector for convenience. A product uses exact
-`(iss, sub)` to resolve a local principal binding. Migration never changes an
-already issued `sub` to another person's identifier or reuses a deleted one.
+Both explicitly registered first-party hosted clients receive `sub` equal to
+the canonical Accounts account ID. They intentionally share one customer
+identity; accepting `(iss, sub)` is not permission to create another product
+account. Consumer Principals/customers bind explicitly to that ID. Stable
+canonical IDs are persisted and never change with signing/derivation-key
+rotation, email updates or issuer browser sessions. Existing installed apps'
+pairwise subject profiles remain independent and are not changed by this
+first-party registration class. Privacy-sensitive future RPs may use pairwise
+subjects with a separately approved canonical-account claim; they are not an
+independent account plane. Old pairwise mappings remain readable migration
+references, never authorization aliases to another person.
+
+### Common Workspace and billing contract
+
+After first successful hosted login, the Accounts composition invokes the
+common Workspace authority's idempotent personal-Workspace ensure. It uses an
+atomic per-canonical-account uniqueness constraint/CAS so simultaneous logins
+in both products create exactly one personal Workspace. Both products resolve
+that same ID; failure leaves onboarding incomplete and retryable, not a second
+local organization or Workspace. Additional Workspaces serve team, billing
+and environment contexts through the existing Workspace creation/membership
+contract. A client selects an accessible Workspace explicitly and rechecks its
+current membership for sensitive actions; tokens do not union roles or turn
+authentication into Workspace access.
+
+Takoserver Organizations become internal mappings of these Workspaces. A
+durable unique, immutable Workspace-to-Organization binding keeps existing resources,
+wallet rows and API-key references intact and permits an idempotent lookup or
+personal-organization creation. Membership authority stays common rather than
+being inferred from an old Principal's owner flag. Service/operator credentials
+keep their own scoped authority and cannot create user membership implicitly.
+Launch does not support Organization relinking. Existing Workspace IDs and
+their Organization/ledger pins are retained through account merge; a
+conflicting mapping remains pending for an owner-reviewed transition, not a
+race between a billing lookup and an active Run's measurement reference.
+
+The customer billing destination is **one ledger per shared account/Workspace**,
+owned by Takoserver billing and consumed by Hosted. Its separate launch billing
+design specifies USD micro-USD accounting, free $1.50/month, $10 plans including
+$20 and $50 plans including $100, Cloudflare cost at 3x, 80/95% warnings, default
+stop at the limit, opt-in postpaid/on-demand, and no card requirement in the
+free tier. Login/membership changes do not mint credits or combine balances.
+This auth design provides stable account/Workspace keys and migration seams;
+pricing, subscriptions, top-up, Stripe and settlement belong to the billing
+owner's design. Hosted must not add another retail wallet/ledger. Protected
+historical ledgers are reconciled by the billing owner before cutover, not
+deleted or silently summed by account merge.
 
 ## 3. Claims and client registration
 
@@ -147,14 +201,14 @@ UserInfo/introspection where applicable, never either product's business API.
 
 | Claim | Proposed policy |
 | --- | --- |
-| `iss`, `sub`, `aud`, `iat`, `exp` | Required; `aud` is one exact registered client ID; pairwise `sub` as above |
+| `iss`, `sub`, `aud`, `iat`, `exp` | Required; `aud` is one exact registered client ID; `sub` is the same canonical account ID for both configured first-party hosted clients |
 | `nonce` | Required for initial code callback; matched once to the RP transaction |
 | `auth_time` | Required; actual last proved interactive authentication time, unchanged by refresh |
 | `azp` | Emit only where OIDC requires it; launch profile uses one audience |
 | `sid` | Opaque per-client session reference for session/revocation correlation; no issuer cookie value |
 | `email`, `email_verified` | Only with approved `email` scope; verified=true applies to the exact address and proof record; never an authorization or unconditional merge claim |
 | `name`, `picture` | Optional approved `profile` scope; display input only, absent by default |
-| Roles, Workspace/organization IDs, wallet/billing/resource IDs, upstream subject/token, internal identity root | Never emitted by hosted identity-only clients |
+| Roles, organization IDs, wallet/billing/resource IDs, upstream subject/token | Never emitted by hosted identity-only clients; common Workspace membership is looked up through its owner contract |
 | `acr`, `amr` | Omit until verified semantics exist; an OAuth login does not invent MFA assurance |
 
 Registrations are operator-reviewed, versioned records owned by Accounts. No
@@ -172,7 +226,7 @@ short explicit overlap and test both expiry and revocation.
 | Allowed scopes | `openid email`; `offline_access` only with explicit continuing-session consent | Same |
 | Grants / response type | `authorization_code`, optional `refresh_token` / `code` | Same |
 | Client authentication | `client_secret_basic` initially, plus S256 PKCE | Same; independent secret |
-| Sector and local subject binding | Separate persisted pairwise sector; `(iss,sub)` to Takoserver principal | Separate persisted pairwise sector; `(iss,sub)` to Hosted customer/local Accounts authorization adapter |
+| Account binding | `(iss,sub)` is the canonical Accounts ID; existing internal Principal binds to it | The same canonical Accounts ID; adapter obtains a canonical account session, not an independent customer account |
 | Allowed post-login destination | Relative allowlisted console paths | Relative allowlisted Hosted paths |
 
 The control architecture's product naming identifies `app.takosumi.com` as
@@ -306,120 +360,103 @@ client/scope binding, expiry and replay handling apply
 
 ## 6. Verified-email merge without account takeover
 
-"Merge" at launch means one proved issuer login can reach the user's existing
-local accounts through explicit bindings. It never combines product accounts,
-roles, organizations, wallets, memberships, resources, passkeys, invites or
-PATs. Email is a candidate search key, not the root ID or a login fallback.
+Merge at launch converges duplicate login identities on **one canonical
+Accounts account**, rather than SSO between independent product accounts.
+Each provider login resolves to that same account; both hosted clients bind
+to it. Existing Principal/customer IDs, Workspace/data references and applied
+ledger history remain protected migration records. Roles are derived from
+common live Workspace membership, not a union of old product claims. Account
+merge does not merge wallets, mint credits, move resources or unify invitations,
+PATs, API keys or passkeys without their owner's separate transition.
 
 Persist address evidence as the exact address, source provider/subject,
 verification type, observed time and current validity. Changing an address
-invalidates the old verified state; unknown verification is not carried across
-to the new address. Match with trimmed surrounding input whitespace and
-lowercased IDNA domain; preserve local-part case. Do not remove dots, strip
-`+tags`, normalize aliases, conflate `gmail.com`/`googlemail.com`, Unicode-fold
-local parts or use display names. Historical all-lowercase email indexes are
-candidate-only and cannot resolve ambiguity. Invalid/internationalized local
-parts without explicit supported semantics go to manual recovery, not fuzzy
-matching. A fresh address does not replace an already bound `(iss,sub)`.
+invalidates its old verified state. Legacy `emailVerified` booleans without
+bound address/proof provenance are unknown for merge and require fresh proof.
+Match trimmed surrounding whitespace plus lowercased IDNA domain, preserving
+local-part case. Never remove dots, strip `+tags`, normalize aliases, conflate
+`gmail.com`/`googlemail.com`, Unicode-fold local parts or use display names.
+Historical lowercase indexes are candidate-only. Unsupported internationalized
+local parts go to recovery instead of fuzzy matching. Email is not an account
+ID or a fallback that overrides an already bound provider subject.
 
 | Situation | Result |
 | --- | --- |
-| Known upstream issuer/subject already bound | Sign in to that identity; changed email updates evidence only, never another account binding |
-| New upstream identity; no eligible email candidate | Create a new root/local account through explicit signup; no historical rights |
-| Exactly one current verified-email candidate | Show a masked candidate after login; require explicit link consent and fresh authentication to both the new identity and the existing account |
-| Same validated Google issuer/subject already controls the existing local account | That fresh upstream proof may satisfy the existing account proof after owner validation of its stored binding; persist an explicit migration link |
-| Google non-authoritative email or stale/unknown verification | Fresh mailbox challenge plus existing-account reauthentication; mailbox access alone does not replace the existing credential |
-| GitHub private verified email | Eligible candidate after authenticated email API proof; same dual proof as above, not public disclosure |
-| Multiple candidates, duplicate normalization, one identity already bound elsewhere, concurrent link, reassigned address | Conflict isolation; no auto-link, first-match choice, role union or overriding an existing binding |
-| Existing account cannot authenticate / prior credential lost | Existing product recovery or independently reviewed support proof; ordinary new login cannot claim it by email |
-| Two already active issuer roots / multiple local principals in one product | Require fresh proof of both; retain root/principal IDs and explicit selectable account contexts, without unioning rights; launch cannot silently collapse these |
+| Known immutable upstream issuer/subject | Resolve its current canonical binding; email changes do not redirect it to another account |
+| New upstream identity; no eligible candidate | Explicit signup creates one canonical account and atomically ensures its personal Workspace; RPs do not create another identity |
+| Exactly one verified-email candidate | Show a masked candidate after login; require fresh proof of the new identity and existing account plus explicit merge consent |
+| Same validated Google issuer/subject already controls the old account | That fresh proof can satisfy existing-account ownership after owner validation of the stored binding; persist an explicit canonical migration link |
+| Google non-authoritative address or stale/unknown evidence | Fresh mailbox challenge plus existing-account authentication; mailbox access alone cannot reclaim a historical account |
+| GitHub private verified email | Eligible after authenticated email API proof, with the same dual-proof requirement and no public disclosure |
+| Multiple candidates, conflicting provider binding, normalization collision, reused address or concurrent merge | Quarantine the conflict; no first-match choice, automatic role union or override |
+| Old account's credential lost | Existing recovery/independently reviewed support proof; a new verified-email login cannot take it over |
+| Two active canonical account candidates | Freshly prove both, choose the canonical survivor explicitly, then perform the protected reconciliation below |
 
-The UI explains the product/context being linked. Responses to unauthenticated
-search and conflicts do not reveal whether an account exists. Challenges are
-single-use, rate limited and bound to account, identity and operation; proof
-expires after 5 minutes. Recovery cannot be satisfied with a PAT, invitation,
-newly presented email, or an operator assertion from another product.
+Proof is bound to the operation, provider identity and exact old account,
+expires after 5 minutes and is consumed atomically once. Login/merge mutations
+need browser/CSRF binding, rate limiting and explicit consent. Unauthenticated
+candidate queries and conflict errors do not reveal account existence. PATs,
+invitations or an assertion from another product are not user ownership proof.
 
-Proposed durable state includes upstream identity bindings, persisted RP
-subjects, product-local external-login bindings, operation-bound proof/merge
-intents and an append-only link decision trail. Each upstream identity has one
-active root; each RP `(issuer,sub,local-context)` binding has one local account.
-Atomic compare-and-set/unique constraints serialize creation, proof consumption
-and link activation. Cross-product work uses an idempotent
-`pending -> proved -> active` handshake with a stable operation ID: pending
-records confer no login/rights; retry reads the existing outcome. There is no
-cross-database transaction or direct consumer lookup of Accounts tables.
-
-Keep old accounts/subjects and data references. Joining two issuer roots uses
-a revocable authentication binding, not a global alias dereferenced by every
-authorization check. Old RP subjects are retained with explicit local account
-contexts; a freshly proved secondary context is separately selected, and
-never becomes a union of both principals. Default selection cannot change on
-email login. Reject unsupported multi-context login at launch and retain the
-old route until the owner delivers its selector.
-
-Record operation ID, source/target opaque references, actor, policy version,
-proof type/time, prior state, decision, conflict and undo reference; store
-address details only in access-controlled identity records. Never store raw
-assertions/tokens/credentials in the audit trail or PR. Notify existing account
-contacts of links/unlinks without revealing other-product membership. A user
-can unlink after fresh proof while retaining at least one working credential;
-unlink revokes related sessions/refresh families. Suspected bad links are
-quarantined, sessions revoked, prior binding restored with an append-only
-correction. Resource ownership and historical ledger attribution never change.
+Durable state includes immutable provider bindings, a canonical-account mapping,
+operation-bound proof/merge intents, an append-only decision trail, membership
+reconciliation and unique Workspace-to-Organization bindings. An upstream
+identity has one active canonical account. A merge uses a stable operation ID
+and idempotent `pending -> proved -> reconciled -> active` transitions; pending
+records confer no new authority. CAS/unique constraints serialize proof
+consumption and activation. Cross-owner acknowledgement is resumable; there
+is no cross-database transaction or direct read of another product's tables.
 
 ### Successful merge example: Google A and GitHub B
 
-Suppose current Google root A and GitHub root B both have the same verified
-address. A controls the user's existing Hosted account H; B controls the user's
-existing Takoserver principal T. They initially produce Hosted pairwise subject
-`sub_H_A` and Takoserver pairwise subject `sub_T_B`, respectively. These symbols
-are explanatory placeholders, not actual user data or newly defined ID formats.
+Google account A and GitHub account B have the same current verified address.
+A has personal Workspace W_A and a Hosted legacy customer H; B has personal
+Workspace W_B and Takoserver legacy Principal T. Letters are illustrative,
+not real data or new ID formats.
 
-1. Email discovery produces a merge intent, conferring no rights. The user
-   freshly authenticates Google A and GitHub B, proves H/T using each owner's
-   existing credential/binding, and explicitly chooses **A as the canonical
-   login root**, H as the Hosted context, and T as the Takoserver context.
-   The UI shows these selections before consent; no oldest-row or email-match
-   default silently decides which root survives.
-2. Persist an operation-scoped authentication alias B -> A while retaining B,
-   its upstream binding, creation history, original subject mappings, and
-   H/T account IDs. The alias resolves only inside the login/proof service.
-   Product authorization continues resolving the explicitly selected local
-   context, without interpreting this alias as a role/membership union.
-3. Before activating the alias, fence new grants for A/B, revoke their old
-   issuer sessions/refresh families and affected RP sessions/grants, and obtain
-   idempotent RP acknowledgements for that operation. A partial acknowledgement
-   leaves the merge pending with recovery/old login available; it cannot expose
-   a half-linked canonical login. Reauthentication then mints new sessions at
-   the new binding generation.
-4. On the next Google **or** GitHub login, the immutable provider/subject
-   resolves to canonical login A. Hosted receives `sub_H_A` and resolves H;
-   Takoserver receives `sub_T_B` and resolves T. Persisted client/context
-   subject mappings retain these identifiers even though the login root is
-   canonical A. Tokens carry one selected context's `sub`, never both roots,
-   a bundle/root identifier, a context list, or a union of roles. The user
-   therefore has one login through either provider and retains both products'
-   original accounts and data.
-5. If A and B also control two distinct accounts within the same RP, both
-   stored subjects remain distinct. The product needs an explicit proved
-   context selector; a token represents exactly one selection. Until that
-   selector is implemented, this ambiguous case stays unmerged and each old
-   login works. It is never flattened into combined rights.
-6. Unlink requires fresh proof and a working remaining credential. Revoke the
-   merged sessions/families and acknowledge RP invalidation before removing
-   B -> A. Restore B's original login mapping and original selected T context;
-   A still resolves H. Pairwise subjects and local IDs remain `sub_H_A`,
-   `sub_T_B`, H and T throughout; new sign-ins use those restored mappings.
-   The append-only undo operation restores authentication access, without
-   rolling back legitimate resource/billing operations performed meanwhile.
+1. Email discovery creates a powerless merge intent. The user freshly proves
+   Google A, GitHub B and ownership of their existing account/resource contexts,
+   then explicitly chooses **canonical Accounts account A** and personal
+   Workspace W_A. Existing balances and memberships are inspected privately;
+   ambiguous ownership or ledger conflicts block activation.
+2. Retain B/H/T and their old immutable references, but bind both upstream
+   identities and both consumers' legacy references to canonical A. Additive
+   mappings make H/T internal references to one customer, not independently
+   authenticated accounts. Both hosted RPs now receive `sub=A` under their
+   respective audience. New sessions never carry `sub=B` as another customer.
+3. W_A is the one common personal Workspace. Preserve W_B and its resources
+   as an additional common Workspace after explicit owner confirmation, rather
+   than deleting or merging its data. Reconcile each Workspace's membership
+   independently with proof of prior access; conflicting roles/owners require
+   review and never become the union of two role claims. Both products query
+   this one membership authority.
+4. The billing owner maps each selected common Workspace to exactly one
+   Takoserver Organization/ledger, retaining all historical rows. Existing
+   duplicate wallets must be reconciled by that owner before activation; the
+   auth service cannot sum balances or create a Hosted retail wallet. The
+   resulting account/Workspace has one customer billing ledger.
+5. Fence new grants for A/B, revoke their old issuer/RP sessions and refresh
+   families, and obtain idempotent acknowledgement of binding, Workspace and
+   billing reconciliation before activation. A partial handshake remains
+   pending/recoverable without exposing half-linked authority. After fresh
+   login, either Google or GitHub resolves canonical A and the same W_A;
+   Workspace selection exposes only current common memberships.
+6. Unlink a login method requires fresh proof and another working credential.
+   Removing GitHub from A does not silently resurrect B as a second live
+   customer or fork its shared Workspace/ledger. A mistaken merge can be
+   reversed through the reviewed undo operation: revoke all affected grants,
+   restore the exact prior provider/account mappings and reconcile membership/
+   billing references with their owners before reactivation. B/H/T and old
+   history remain available to make that repair non-destructive. Legitimate
+   resource/financial operations performed meanwhile are never rolled back.
 
-This is convergence of duplicate login identities, with reversible aliases
-and retained product contexts. The implementation must persist the selected
-canonical root and explicit subject/context mappings; simply rerunning the
-current pairwise HMAC with A in place of B would change `sub_T_B` and is refused.
-The coordinated revoke/acknowledge and context-subject registry are additional
-implementation gaps, not claimed current behavior.
+Record operation/undo IDs, opaque source/target references, actor, proof type
+and time, policy version, previous generation, acknowledgements and conflict
+state. Raw tokens/assertions/credentials never enter audit or PR output.
+Notify existing contacts without disclosing other-product membership. Suspected
+links are quarantined and their sessions revoked. An ordinary unlink is a
+credential operation; splitting a canonical customer/Workspace/ledger is a
+separate owner-reviewed recovery transition, not email login behavior.
 
 ## 7. Protected migration and rollback window
 
@@ -436,7 +473,8 @@ lineages, plus owning consumer migrations; no migration is executed by this PR.
    Confirm the Hosted callback/session adapter, policies in section 1, exact
    environments and recovery owners. Historical archives remain read-only.
 2. **Expand:** add nullable local external-login bindings and Accounts proof,
-   RP-subject and grant-family metadata with uniqueness and indexes. Existing
+   canonical-account, Workspace/Organization and grant-family metadata with
+   uniqueness and indexes. Existing
    login readers/writers continue working; implement dual-path compatible
    readers before activation. Do not rewrite current subject derivations,
    membership/PAT foreign keys or old issuer token records.
@@ -454,7 +492,9 @@ lineages, plus owning consumer migrations; no migration is executed by this PR.
    account unmigrated, not inaccessible. A product-local binding can be staged
    until the issuer/client readback confirms the same operation.
 5. **Activate staged RPs:** with isolated credentials and synthetic accounts,
-   prove Google/GitHub login, both local account bindings, consent, refresh,
+   prove Google/GitHub login to the same canonical account, one atomic common
+   personal Workspace, current common membership, idempotent Workspace-to-Org
+   binding and one customer billing ledger, consent, refresh,
    replay/revocation/global logout, conflicts, recovery, and reseller identity
    firewall. Existing clients do not silently change issuer: old issuer tokens
    are accepted only by their original verifier until their own expiry;
@@ -494,7 +534,8 @@ Before the separate implementation/staging phase:
 - Approve the proposed hosted TTLs and strict refresh replay policy; design
   global-grant activity checks and issuer-outage UX in both consumers.
 - Confirm dual-proof recovery ownership, notifications, conflict handling and
-  account-context selection; keep ambiguous migrations blocked with old login.
+  canonical account/Workspace reconciliation; keep ambiguous migrations blocked
+  with old login until the exact owning transitions are proved.
 - Implement focused negative/security tests and a protected migration rehearsal
   before full owner gates and exact-head QA. Prove wrong issuer/audience/nonce,
   key rotation, code/refresh replay across replicas, unregistered redirect,
@@ -505,7 +546,10 @@ Before the separate implementation/staging phase:
   either product's business/reseller API.
 
 Google/GitHub login and the two hosted RPs are the launch scope. Unifying
-invitations, PATs, API keys, resource authorization or billing is deferred until
-after launch and needs a separate design. A design QA approval does not approve
+invitations, PATs and API keys is deferred until after launch and needs a
+separate design. Shared account/Workspace authorization and the single billing
+ledger are launch requirements; the billing owner supplies its separate design
+and implementation rather than this auth PR creating another ledger.
+A design QA approval does not approve
 implementation merge, staging mutation or production publication. Follow the
 normal exact-head QA/review workflow for each subsequent candidate.
