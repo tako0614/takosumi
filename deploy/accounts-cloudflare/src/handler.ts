@@ -100,7 +100,15 @@ export interface CloudflareWorkerEnv {
 export interface CloudflareWorkerHandler<
   TEnv extends CloudflareWorkerEnv = CloudflareWorkerEnv,
 > {
-  fetch(request: Request, env: TEnv): Promise<Response>;
+  fetch(
+    request: Request,
+    env: TEnv,
+    context?: AccountsWorkerExecutionContext,
+  ): Promise<Response>;
+}
+
+interface AccountsWorkerExecutionContext {
+  waitUntil(promise: Promise<unknown>): void;
 }
 
 export interface CreateCloudflareWorkerOptions<
@@ -131,10 +139,16 @@ export interface CreateCloudflareWorkerOptions<
 }
 
 interface CachedAccountsHandler {
+  readonly startedAtMs: number;
   readonly waiters: Set<AccountsHandlerWaiter>;
+  initialization: Promise<void>;
   outcome?:
     | { readonly status: "fulfilled"; readonly handler: AccountsHandler }
-    | { readonly status: "rejected"; readonly error: unknown };
+    | {
+        readonly status: "rejected";
+        readonly error: unknown;
+        readonly retryAtMs: number;
+      };
 }
 
 interface AccountsHandlerWaiter {
@@ -149,6 +163,9 @@ interface CachedAccountsHandlerResult {
 }
 
 const ACCOUNTS_HANDLER_INIT_DEADLINE_MS = 5_000;
+// Rotate only on demand, so an abandoned request cannot cause a retry loop.
+const ACCOUNTS_HANDLER_INIT_MAX_AGE_MS = 30_000;
+const ACCOUNTS_HANDLER_INIT_FAILURE_BACKOFF_MS = 1_000;
 
 class AccountsHandlerInitializationTimeoutError extends Error {
   constructor(readonly initializationWaitMs: number) {
@@ -179,7 +196,11 @@ export function createCloudflareWorker<
   options: CreateCloudflareWorkerOptions<TEnv> = {},
 ): CloudflareWorkerHandler<TEnv> {
   return {
-    async fetch(request: Request, env: TEnv): Promise<Response> {
+    async fetch(
+      request: Request,
+      env: TEnv,
+      context?: AccountsWorkerExecutionContext,
+    ): Promise<Response> {
       const url = new URL(request.url);
       if (isWorkerLocalPath(url.pathname)) {
         return Response.json({
@@ -267,6 +288,7 @@ export function createCloudflareWorker<
           env,
           options,
           usesIdentityOnlyAccountsHandler(url.pathname),
+          context,
         );
         initializationTiming = cached;
         const response = await cached.handler(request);
@@ -449,21 +471,41 @@ async function cachedAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   env: TEnv,
   options: CreateCloudflareWorkerOptions<TEnv>,
   identityOnly = false,
+  context?: AccountsWorkerExecutionContext,
 ): Promise<CachedAccountsHandlerResult> {
   const cache = identityOnly ? identityHandlers : handlers;
   let cached = cache.get(env);
   const waitStartedAt = nowMs();
+  if (
+    cached &&
+    (cached.outcome?.status === "rejected"
+      ? waitStartedAt >= cached.outcome.retryAtMs
+      : !cached.outcome &&
+        waitStartedAt - cached.startedAtMs >= ACCOUNTS_HANDLER_INIT_MAX_AGE_MS)
+  ) {
+    // This decision and installation of the replacement run without an await.
+    // Concurrent callers therefore join exactly one current initialization.
+    cache.delete(env);
+    cached = undefined;
+  }
   if (!cached) {
+    cached = {
+      startedAtMs: waitStartedAt,
+      waiters: new Set(),
+      initialization: Promise.resolve(),
+    };
+    cache.set(env, cached);
+    const attempt = cached;
     const promise = observeAccountsHandlerInitialization(
       buildAccountsHandler(env, options, identityOnly),
       identityOnly ? "identity" : "control",
     );
-    cached = { waiters: new Set() };
-    cache.set(env, cached);
-    const attempt = cached;
     const settle = (
       outcome: NonNullable<CachedAccountsHandler["outcome"]>,
     ): void => {
+      // Obsolete work is still observed, but cannot dispatch old waiters or
+      // publish a handler/error into the replacement. Its waiters time out.
+      if (cache.get(env) !== attempt) return;
       attempt.outcome = outcome;
       for (const waiter of attempt.waiters) {
         clearTimeout(waiter.timer);
@@ -474,15 +516,22 @@ async function cachedAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     };
     // The retained initializer has exactly one settlement observer. Timed-out
     // requests remove their waiters without attaching reactions to this promise.
-    void promise.then(
+    attempt.initialization = promise.then(
       (handler) => settle({ status: "fulfilled", handler }),
-      (error) => settle({ status: "rejected", error }),
+      (error) => settle({
+        status: "rejected",
+        error,
+        retryAtMs: nowMs() + ACCOUNTS_HANDLER_INIT_FAILURE_BACKOFF_MS,
+      }),
     );
   }
   if (cached.outcome?.status === "fulfilled") {
     return { handler: cached.outcome.handler };
   }
   if (cached.outcome?.status === "rejected") throw cached.outcome.error;
+  // Keep D1/schema work alive after a request's independent deadline returns
+  // 503. Expiry also handles work canceled after the runtime's background limit.
+  context?.waitUntil(cached.initialization);
   const handler = await new Promise<AccountsHandler>((resolve, reject) => {
     const waiter: AccountsHandlerWaiter = {
       resolve,

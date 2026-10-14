@@ -718,8 +718,32 @@ export default {
     if (isPlatformTakoformHostPath(url.pathname)) {
       return Response.json({ error: "not found" }, { status: 404 });
     }
+    const sessionVerifier: PlatformExtensionSessionVerifier = (
+      request,
+      env,
+      route,
+    ) =>
+      verifyPlatformExtensionSession(request, env, route, context);
+    const workspaceAccess: PlatformExtensionWorkspaceAccess = (
+      request,
+      env,
+      workspaceId,
+      session,
+    ) =>
+      platformExtensionSessionCanAccessWorkspace(
+        request,
+        env,
+        workspaceId,
+        session,
+        context,
+      );
     if (isPlatformExtensionCatalogPath(url.pathname)) {
-      return await handlePlatformExtensionCatalogRequest(request, url, env);
+      return await handlePlatformExtensionCatalogRequest(
+        request,
+        url,
+        env,
+        sessionVerifier,
+      );
     }
     if (isPlatformExtensionContributionsPath(url.pathname)) {
       return handlePlatformExtensionContributionsRequest(request, url, env);
@@ -747,7 +771,8 @@ export default {
         request,
         env,
         platformExtensionRoute,
-        verifyPlatformExtensionSession,
+        sessionVerifier,
+        workspaceAccess,
       );
     }
     // Generic Interface/InterfaceBinding APIs remain a normal session edge
@@ -759,15 +784,17 @@ export default {
         handlePlatformInterfaceApiRequest(
           request,
           env,
-          verifyPlatformExtensionSession,
-          platformExtensionSessionCanAccessWorkspace,
+          sessionVerifier,
+          workspaceAccess,
           context,
         )
       );
     }
     if (url.pathname === OPERATOR_CONTROL_MCP_PATH) {
       return (
-        (await handlePlatformOperatorControlMcpRequest(request, env)) ??
+        (await handlePlatformOperatorControlMcpRequest(request, env, {
+          verifySession: sessionVerifier,
+        })) ??
         Response.json({ error: "not found" }, { status: 404 })
       );
     }
@@ -800,7 +827,7 @@ export default {
     const accountsResponse = withPlatformAssetCacheHeaders(
       request,
       url,
-      await accountsWorker.fetch(request, env),
+      await accountsWorker.fetch(request, env, context),
     );
     if (isOidcMetricPath(url.pathname)) {
       await schedulePlatformSideEffect(
@@ -3002,6 +3029,7 @@ async function platformExtensionSessionCanAccessWorkspace(
   env: CloudflareWorkerEnv,
   workspaceId: string,
   session?: PlatformExtensionSessionContext,
+  context?: PlatformExecutionContext,
 ): Promise<boolean | WorkspaceRole> {
   const headers = sessionMirrorHeaders(request);
   if (!headers) return false;
@@ -3015,6 +3043,7 @@ async function platformExtensionSessionCanAccessWorkspace(
         { method: "GET", headers },
       ),
       env,
+      context,
     );
     if (!response.ok) return false;
     const workspaceEnvelope = objectRecord(
@@ -3034,6 +3063,7 @@ async function platformExtensionSessionCanAccessWorkspace(
         { method: "GET", headers },
       ),
       env,
+      context,
     );
     if (!membersResponse.ok) return false;
     const membersEnvelope = objectRecord(
@@ -3154,6 +3184,7 @@ export async function verifyPlatformExtensionSession(
   request: Request,
   env: CloudflareWorkerEnv,
   route?: PlatformExtensionRoute,
+  context?: PlatformExecutionContext,
 ): Promise<PlatformExtensionSessionContext> {
   const opaqueBearer = bearerValue(request.headers.get("authorization"));
   const deployControlToken =
@@ -3191,6 +3222,7 @@ export async function verifyPlatformExtensionSession(
       env,
       opaqueBearer,
       route,
+      (request, env) => accountsWorker.fetch(request, env, context),
     );
     if (tokenSession.authenticated) return tokenSession;
   }
@@ -3204,6 +3236,7 @@ export async function verifyPlatformExtensionSession(
         headers,
       }),
       env,
+      context,
     );
     if (!response.ok) return { authenticated: false };
     const body = await response.json().catch(() => undefined);
