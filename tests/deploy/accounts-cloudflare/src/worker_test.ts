@@ -1,4 +1,4 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, jest, spyOn, test } from "bun:test";
 import {
   accountsExternalLoginConfigured,
   createCloudflareWorker,
@@ -24,6 +24,7 @@ import {
   loadD1AccountsMigrationCatalog,
 } from "../../../../accounts/service/src/d1-migrations.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
+import platformWorker from "../../../../deploy/platform/worker.ts";
 
 function env(values: Record<string, unknown> = {}): CloudflareWorkerEnv {
   return values as CloudflareWorkerEnv;
@@ -1001,6 +1002,409 @@ test("predeployed Accounts Worker rejects exact legacy v3 after v4 tightening", 
   expect(predeployedDb.execCount).toBe(0);
 });
 
+test("Accounts handler initialization bounds each request while retaining the shared attempt", async () => {
+  const delegate = await versionedAccountsDb();
+  const delayedDb = new PendingAccountsSchemaReadD1(delegate);
+  const worker = createCloudflareWorker();
+  const workerEnv = env({
+    TAKOSUMI_ACCOUNTS_DB: delayedDb,
+    TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+    TAKOSUMI_ACCOUNTS_ISSUER: "http://app.example.test",
+    TAKOSUMI_ACCOUNT_SESSION_HASH_SALT:
+      "accounts-initialization-deadline-test-salt",
+  });
+  const request = () =>
+    new Request("http://app.example.test/api/v1/account/session/logout", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "must-not-be-dispatched",
+    });
+
+  const warnings: string[] = [];
+  const warnSpy = spyOn(console, "warn").mockImplementation((value) => {
+    if (typeof value === "string") warnings.push(value);
+  });
+  jest.useFakeTimers();
+  try {
+    const firstRequest = request();
+    const firstResponsePromise = worker.fetch(firstRequest, workerEnv);
+    await flushMicrotasks();
+    expect(delayedDb.schemaReadCount).toBe(1);
+
+    jest.advanceTimersByTime(1_000);
+    const secondRequest = request();
+    const secondResponsePromise = worker.fetch(secondRequest, workerEnv);
+    await flushMicrotasks();
+    jest.advanceTimersByTime(4_000);
+    await flushMicrotasks();
+    const firstResponse = await Promise.race([
+      firstResponsePromise,
+      Promise.resolve(undefined),
+    ]);
+    expect(firstResponse?.status).toBe(503);
+    if (!firstResponse) throw new Error("first request did not settle");
+    expect(await firstResponse.json()).toEqual({
+      error: "accounts_handler_initialization_unavailable",
+      error_description: "Accounts is temporarily unavailable.",
+    });
+    expect(firstResponse.headers.get("cache-control")).toBe("no-store");
+    expect(firstResponse.headers.get("retry-after")).toBe("1");
+    expect(firstResponse.headers.get("server-timing")).toMatch(
+      /tk_accounts_init;dur=/u,
+    );
+    expect(firstRequest.bodyUsed).toBe(false);
+    expect(secondRequest.bodyUsed).toBe(false);
+    expect(delayedDb.writeCount).toBe(0);
+    expect(
+      await Promise.race([
+        secondResponsePromise.then(() => "settled"),
+        Promise.resolve("pending"),
+      ]),
+    ).toBe("pending");
+
+    jest.advanceTimersByTime(1_000);
+    await flushMicrotasks();
+    const secondResponse = await Promise.race([
+      secondResponsePromise,
+      Promise.resolve(undefined),
+    ]);
+    expect(secondResponse?.status).toBe(503);
+    if (!secondResponse) throw new Error("second request did not settle");
+    expect(await secondResponse.json()).toEqual({
+      error: "accounts_handler_initialization_unavailable",
+      error_description: "Accounts is temporarily unavailable.",
+    });
+    expect(delayedDb.schemaReadCount).toBe(1);
+
+    const waitingResponse = worker.fetch(
+      new Request("http://app.example.test/api/v1/workspaces"),
+      workerEnv,
+    );
+    await flushMicrotasks();
+    delayedDb.releaseSchemaRead();
+    await flushMicrotasks();
+    expect((await waitingResponse).status).toBe(401);
+    jest.advanceTimersByTime(5_000);
+    await flushMicrotasks();
+    const laterResponse = await worker.fetch(
+      new Request("http://app.example.test/api/v1/workspaces"),
+      workerEnv,
+    );
+    expect(laterResponse.status).toBe(401);
+    expect(delayedDb.schemaReadCount).toBe(1);
+    expect(
+      warnings.some((warning) =>
+        warning.includes('"event":"accounts_handler_initialization_unavailable"') &&
+        warning.includes('"stage":"await_handler"') &&
+        warning.includes('"timeoutMs":5000') &&
+        warning.includes('"elapsedMs":5000') &&
+        warning.includes('"errorName":"TimeoutError"'),
+      ),
+    ).toBe(true);
+    expect(
+      warnings
+        .filter((warning) =>
+          warning.includes('"event":"accounts_handler_initialization_unavailable"'),
+        )
+        .map((warning) => JSON.parse(warning).activeWaiters),
+    ).toEqual([1, 0]);
+  } finally {
+    jest.useRealTimers();
+    warnSpy.mockRestore();
+  }
+});
+
+test("Accounts initialization releases timed-out waiters and observes late rejection", async () => {
+  const delayedDb = new PendingAccountsSchemaReadD1(await versionedAccountsDb());
+  const worker = createCloudflareWorker();
+  const workerEnv = env({
+    TAKOSUMI_ACCOUNTS_DB: delayedDb,
+    TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+    TAKOSUMI_ACCOUNTS_ISSUER: "http://app.example.test",
+    TAKOSUMI_ACCOUNT_SESSION_HASH_SALT:
+      "accounts-initialization-late-rejection-test-salt",
+  });
+  const warnings: string[] = [];
+  const unhandled: unknown[] = [];
+  const onUnhandled = (error: unknown) => unhandled.push(error);
+  const warnSpy = spyOn(console, "warn").mockImplementation((value) => {
+    if (typeof value === "string") warnings.push(value);
+  });
+  process.on("unhandledRejection", onUnhandled);
+  jest.useFakeTimers();
+  try {
+    for (let index = 0; index < 5; index += 1) {
+      const responsePromise = worker.fetch(
+        new Request("http://app.example.test/api/v1/workspaces"),
+        workerEnv,
+      );
+      await flushMicrotasks();
+      jest.advanceTimersByTime(5_000);
+      await flushMicrotasks();
+      const response = await Promise.race([
+        responsePromise,
+        Promise.resolve(undefined),
+      ]);
+      expect(response?.status).toBe(503);
+    }
+    expect(delayedDb.schemaReadCount).toBe(1);
+    expect(
+      warnings
+        .filter((warning) =>
+          warning.includes('"event":"accounts_handler_initialization_unavailable"'),
+        )
+        .map((warning) => JSON.parse(warning).activeWaiters),
+    ).toEqual(Array(5).fill(0));
+
+    const waitingResponse = worker.fetch(
+      new Request("http://app.example.test/api/v1/workspaces"),
+      workerEnv,
+    );
+    await flushMicrotasks();
+    delayedDb.rejectSchemaRead(new Error("delayed schema failure"));
+    await flushMicrotasks();
+    expect((await waitingResponse).status).toBe(500);
+    jest.advanceTimersByTime(999);
+    await flushMicrotasks();
+    const laterResponse = await worker.fetch(
+      new Request("http://app.example.test/api/v1/workspaces"),
+      workerEnv,
+    );
+    expect(laterResponse.status).toBe(500);
+    expect((await laterResponse.json()).error).toBe("worker_configuration_error");
+    expect(delayedDb.schemaReadCount).toBe(1);
+    jest.advanceTimersByTime(4_001);
+    await flushMicrotasks();
+    expect(delayedDb.schemaReadCount).toBe(1);
+    expect(
+      warnings.filter((warning) =>
+        warning.includes('"event":"accounts_handler_initialization_unavailable"'),
+      ),
+    ).toHaveLength(5);
+    await flushMicrotasks();
+    expect(unhandled).toEqual([]);
+  } finally {
+    jest.useRealTimers();
+    warnSpy.mockRestore();
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+for (const mode of ["identity", "control"] as const) {
+  const pathname =
+    mode === "identity"
+      ? "/.well-known/openid-configuration"
+      : "/api/v1/workspaces";
+  const readyStatus = mode === "identity" ? 200 : 401;
+  for (const lateOutcome of ["fulfilled", "rejected"] as const) {
+    test(`Accounts ${mode} initialization replaces an expired attempt once and ignores late ${lateOutcome}`, async () => {
+      const delayedDb = new PendingAccountsSchemaReadD1(
+        await versionedAccountsDb(),
+      );
+      const worker = createCloudflareWorker();
+      const workerEnv = env({
+        TAKOSUMI_ACCOUNTS_DB: delayedDb,
+        TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+        TAKOSUMI_ACCOUNTS_ISSUER: "http://app.example.test",
+        TAKOSUMI_ACCOUNT_SESSION_HASH_SALT: "accounts-expired-attempt-test-salt",
+      });
+      const request = () => new Request(`http://app.example.test${pathname}`);
+      const warnings: string[] = [];
+      const warnSpy = spyOn(console, "warn").mockImplementation((value) => {
+        if (typeof value === "string") warnings.push(value);
+      });
+      const unhandled: unknown[] = [];
+      const onUnhandled = (error: unknown) => unhandled.push(error);
+      process.on("unhandledRejection", onUnhandled);
+      jest.useFakeTimers();
+      try {
+        const first = worker.fetch(request(), workerEnv);
+        await flushMicrotasks();
+        jest.advanceTimersByTime(5_000);
+        await flushMicrotasks();
+        expect((await first).status).toBe(503);
+        jest.advanceTimersByTime(24_999);
+        const oldWaiter = worker.fetch(request(), workerEnv);
+        await flushMicrotasks();
+        expect(delayedDb.schemaReadCount).toBe(1);
+
+        jest.advanceTimersByTime(1);
+        const retries = Array.from({ length: 12 }, () =>
+          worker.fetch(request(), workerEnv),
+        );
+        await flushMicrotasks();
+        expect(delayedDb.schemaReadCount).toBe(2);
+
+        if (lateOutcome === "fulfilled") delayedDb.releaseSchemaRead();
+        else delayedDb.rejectSchemaRead(new Error("obsolete schema failure"));
+        await flushMicrotasks();
+        // An obsolete initializer cannot dispatch its waiter or settle the new flight.
+        for (const response of [oldWaiter, ...retries]) {
+          expect(
+            await Promise.race([
+              response.then(() => "settled"),
+              Promise.resolve("pending"),
+            ]),
+          ).toBe("pending");
+        }
+
+        delayedDb.releaseSchemaRead(1);
+        await flushMicrotasks();
+        expect(
+          (await Promise.all(retries)).map((response) => response.status),
+        ).toEqual(Array(12).fill(readyStatus));
+        jest.advanceTimersByTime(4_999);
+        await flushMicrotasks();
+        expect((await oldWaiter).status).toBe(503);
+        jest.advanceTimersByTime(30_000);
+        await flushMicrotasks();
+        expect((await worker.fetch(request(), workerEnv)).status).toBe(
+          readyStatus,
+        );
+        expect(delayedDb.schemaReadCount).toBe(2);
+        expect(delayedDb.writeCount).toBe(0);
+        expect(
+          warnings.filter((warning) =>
+            warning.includes('"event":"accounts_handler_initialization_unavailable"'),
+          ),
+        ).toHaveLength(2);
+        expect(unhandled).toEqual([]);
+      } finally {
+        jest.useRealTimers();
+        warnSpy.mockRestore();
+        process.off("unhandledRejection", onUnhandled);
+      }
+    });
+  }
+
+  test(`Accounts ${mode} initialization retries a rejection after backoff with one shared attempt`, async () => {
+    const delayedDb = new PendingAccountsSchemaReadD1(
+      await versionedAccountsDb(),
+    );
+    const worker = createCloudflareWorker();
+    const workerEnv = env({
+      TAKOSUMI_ACCOUNTS_DB: delayedDb,
+      TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+      TAKOSUMI_ACCOUNTS_ISSUER: "http://app.example.test",
+      TAKOSUMI_ACCOUNT_SESSION_HASH_SALT: "accounts-rejected-attempt-test-salt",
+    });
+    const request = () => new Request(`http://app.example.test${pathname}`);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    jest.useFakeTimers();
+    try {
+      const first = worker.fetch(request(), workerEnv);
+      await flushMicrotasks();
+      delayedDb.rejectSchemaRead(new Error("temporary schema failure"));
+      await flushMicrotasks();
+      expect((await first).status).toBe(500);
+      jest.advanceTimersByTime(999);
+      const duringBackoff = await Promise.all(
+        Array.from({ length: 12 }, () => worker.fetch(request(), workerEnv)),
+      );
+      expect(duringBackoff.map((response) => response.status)).toEqual(
+        Array(12).fill(500),
+      );
+      expect(delayedDb.schemaReadCount).toBe(1);
+
+      jest.advanceTimersByTime(1);
+      const retries = Array.from({ length: 12 }, () =>
+        worker.fetch(request(), workerEnv),
+      );
+      await flushMicrotasks();
+      expect(delayedDb.schemaReadCount).toBe(2);
+      delayedDb.releaseSchemaRead(1);
+      await flushMicrotasks();
+      expect(
+        (await Promise.all(retries)).map((response) => response.status),
+      ).toEqual(Array(12).fill(readyStatus));
+      jest.advanceTimersByTime(30_000);
+      await flushMicrotasks();
+      expect((await worker.fetch(request(), workerEnv)).status).toBe(readyStatus);
+      expect(delayedDb.schemaReadCount).toBe(2);
+      expect(delayedDb.writeCount).toBe(0);
+    } finally {
+      jest.useRealTimers();
+      warnSpy.mockRestore();
+    }
+  });
+}
+
+for (const route of ["identity", "extension-session"] as const) {
+  test(`platform ${route} keeps the shared Accounts initializer in waitUntil after request deadlines`, async () => {
+    const delayedDb = new PendingAccountsSchemaReadD1(await versionedAccountsDb());
+    const workerEnv = {
+      TAKOSUMI_ACCOUNTS_DB: delayedDb,
+      TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
+      TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+      TAKOSUMI_ACCOUNTS_ISSUER: "http://app.example.test",
+      TAKOSUMI_ACCOUNT_SESSION_HASH_SALT: "accounts-background-init-test-salt",
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([{
+        basePath: "/extensions/init-retry",
+        handlerKey: "INIT_RETRY_EXTENSION",
+      }]),
+      INIT_RETRY_EXTENSION: {
+        fetch(): Response {
+          throw new Error("an unauthenticated request must not dispatch");
+        },
+      },
+    } as Parameters<typeof platformWorker.fetch>[1];
+    const isIdentity = route === "identity";
+    const request = () =>
+      new Request(
+        isIdentity
+          ? "http://app.example.test/.well-known/openid-configuration"
+          : "http://app.example.test/extensions/init-retry",
+        isIdentity ? undefined : {
+          headers: { "x-takosumi-account-session": "missing-test-session" },
+        },
+      );
+    const tasks: Promise<unknown>[] = [];
+    const context = {
+      waitUntil(promise: Promise<unknown>): void {
+        expect(this).toBe(context);
+        tasks.push(promise);
+      },
+    };
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    jest.useFakeTimers();
+    try {
+      const first = platformWorker.fetch(request(), workerEnv, context);
+      const second = platformWorker.fetch(request(), workerEnv, context);
+      await flushMicrotasks();
+      expect(tasks).toHaveLength(2);
+      expect(tasks[0]).toBe(tasks[1]);
+      expect(delayedDb.schemaReadCount).toBe(1);
+      jest.advanceTimersByTime(5_000);
+      await flushMicrotasks();
+      expect((await first).status).toBe(isIdentity ? 503 : 401);
+      expect((await second).status).toBe(isIdentity ? 503 : 401);
+      expect(
+        await Promise.race([
+          tasks[0].then(() => "settled"),
+          Promise.resolve("pending"),
+        ]),
+      ).toBe("pending");
+
+      delayedDb.releaseSchemaRead();
+      await tasks[0];
+      jest.advanceTimersByTime(5_000);
+      expect(
+        (await platformWorker.fetch(request(), workerEnv, context)).status,
+      ).toBe(isIdentity ? 200 : 401);
+      expect(tasks).toHaveLength(2);
+      expect(delayedDb.schemaReadCount).toBe(1);
+      expect(delayedDb.writeCount).toBe(0);
+    } finally {
+      jest.useRealTimers();
+      warnSpy.mockRestore();
+    }
+  });
+}
+
+async function flushMicrotasks(): Promise<void> {
+  for (let index = 0; index < 12; index += 1) await Promise.resolve();
+}
+
 class NoDdlD1Database implements D1Database {
   execCount = 0;
 
@@ -1019,5 +1423,74 @@ class NoDdlD1Database implements D1Database {
   exec(_query: string): Promise<D1ExecResult> {
     this.execCount += 1;
     return Promise.reject(new Error("request-time schema DDL is forbidden"));
+  }
+}
+
+class PendingAccountsSchemaReadD1 implements D1Database {
+  schemaReadCount = 0;
+  writeCount = 0;
+  private readonly schemaReads: Array<{
+    promise: Promise<void>;
+    release: () => void;
+    reject: (error: Error) => void;
+  }> = [];
+
+  constructor(private readonly delegate: D1Database) {}
+
+  releaseSchemaRead(index = 0): void {
+    this.schemaReads[index]?.release();
+  }
+
+  rejectSchemaRead(error: Error, index = 0): void {
+    this.schemaReads[index]?.reject(error);
+  }
+
+  prepare(query: string): D1PreparedStatement {
+    return this.wrapStatement(
+      this.delegate.prepare(query),
+      query.includes("FROM sqlite_master"),
+    );
+  }
+
+  private wrapStatement(
+    bound: D1PreparedStatement,
+    waitForSchema = false,
+  ): D1PreparedStatement {
+    return {
+      bind: (...values) =>
+        this.wrapStatement(bound.bind(...values), waitForSchema),
+      run: () => {
+        this.writeCount += 1;
+        return bound.run();
+      },
+      first: <T>(column?: string) => bound.first<T>(column),
+      all: async <T>() => {
+        if (waitForSchema) {
+          this.schemaReadCount += 1;
+          let release!: () => void;
+          let reject!: (error: Error) => void;
+          const promise = new Promise<void>((resolve, rejectRead) => {
+            release = resolve;
+            reject = rejectRead;
+          });
+          this.schemaReads.push({ promise, release, reject });
+          await promise;
+        }
+        return await bound.all<T>();
+      },
+      raw: () => bound.raw?.() ?? Promise.resolve([]),
+    };
+  }
+
+  batch<T = unknown>(
+    statements: readonly D1PreparedStatement[],
+  ): Promise<readonly D1Result<T>[]> {
+    this.writeCount += 1;
+    return this.delegate.batch<T>(statements);
+  }
+
+  exec(query: string): Promise<D1ExecResult> {
+    this.writeCount += 1;
+    return this.delegate.exec(query);
   }
 }

@@ -100,7 +100,15 @@ export interface CloudflareWorkerEnv {
 export interface CloudflareWorkerHandler<
   TEnv extends CloudflareWorkerEnv = CloudflareWorkerEnv,
 > {
-  fetch(request: Request, env: TEnv): Promise<Response>;
+  fetch(
+    request: Request,
+    env: TEnv,
+    context?: AccountsWorkerExecutionContext,
+  ): Promise<Response>;
+}
+
+interface AccountsWorkerExecutionContext {
+  waitUntil(promise: Promise<unknown>): void;
 }
 
 export interface CreateCloudflareWorkerOptions<
@@ -131,13 +139,39 @@ export interface CreateCloudflareWorkerOptions<
 }
 
 interface CachedAccountsHandler {
-  readonly promise: Promise<AccountsHandler>;
-  settled: boolean;
+  readonly startedAtMs: number;
+  readonly waiters: Set<AccountsHandlerWaiter>;
+  initialization: Promise<void>;
+  outcome?:
+    | { readonly status: "fulfilled"; readonly handler: AccountsHandler }
+    | {
+        readonly status: "rejected";
+        readonly error: unknown;
+        readonly retryAtMs: number;
+      };
+}
+
+interface AccountsHandlerWaiter {
+  readonly resolve: (handler: AccountsHandler) => void;
+  readonly reject: (error: unknown) => void;
+  readonly timer: ReturnType<typeof setTimeout>;
 }
 
 interface CachedAccountsHandlerResult {
   readonly handler: AccountsHandler;
   readonly initializationWaitMs?: number;
+}
+
+const ACCOUNTS_HANDLER_INIT_DEADLINE_MS = 5_000;
+// Rotate only on demand, so an abandoned request cannot cause a retry loop.
+const ACCOUNTS_HANDLER_INIT_MAX_AGE_MS = 30_000;
+const ACCOUNTS_HANDLER_INIT_FAILURE_BACKOFF_MS = 1_000;
+
+class AccountsHandlerInitializationTimeoutError extends Error {
+  constructor(readonly initializationWaitMs: number) {
+    super("accounts handler initialization timed out");
+    this.name = "TimeoutError";
+  }
 }
 
 const handlers = new WeakMap<CloudflareWorkerEnv, CachedAccountsHandler>();
@@ -162,7 +196,11 @@ export function createCloudflareWorker<
   options: CreateCloudflareWorkerOptions<TEnv> = {},
 ): CloudflareWorkerHandler<TEnv> {
   return {
-    async fetch(request: Request, env: TEnv): Promise<Response> {
+    async fetch(
+      request: Request,
+      env: TEnv,
+      context?: AccountsWorkerExecutionContext,
+    ): Promise<Response> {
       const url = new URL(request.url);
       if (isWorkerLocalPath(url.pathname)) {
         return Response.json({
@@ -250,6 +288,7 @@ export function createCloudflareWorker<
           env,
           options,
           usesIdentityOnlyAccountsHandler(url.pathname),
+          context,
         );
         initializationTiming = cached;
         const response = await cached.handler(request);
@@ -258,16 +297,32 @@ export function createCloudflareWorker<
           initializationTiming,
         );
       } catch (error) {
+        const initializationWaitMs =
+          error instanceof AccountsHandlerInitializationTimeoutError
+            ? error.initializationWaitMs
+            : undefined;
         return appendAccountsHandlerInitializationTiming(
           Response.json(
-            {
-              error: "worker_configuration_error",
-              error_description:
-                error instanceof Error ? error.message : String(error),
-            },
-            { status: 500 },
+            error instanceof AccountsHandlerInitializationTimeoutError
+              ? {
+                  error: "accounts_handler_initialization_unavailable",
+                  error_description: "Accounts is temporarily unavailable.",
+                }
+              : {
+                  error: "worker_configuration_error",
+                  error_description:
+                    error instanceof Error ? error.message : String(error),
+                },
+            error instanceof AccountsHandlerInitializationTimeoutError
+              ? {
+                  status: 503,
+                  headers: { "cache-control": "no-store", "retry-after": "1" },
+                }
+              : { status: 500 },
           ),
-          initializationTiming,
+          initializationWaitMs === undefined
+            ? initializationTiming
+            : { initializationWaitMs },
         );
       }
     },
@@ -416,41 +471,98 @@ async function cachedAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   env: TEnv,
   options: CreateCloudflareWorkerOptions<TEnv>,
   identityOnly = false,
+  context?: AccountsWorkerExecutionContext,
 ): Promise<CachedAccountsHandlerResult> {
   const cache = identityOnly ? identityHandlers : handlers;
   let cached = cache.get(env);
-  const waitsForInitialization = cached === undefined || !cached.settled;
-  const waitStartedAt = waitsForInitialization ? nowMs() : undefined;
+  const waitStartedAt = nowMs();
+  if (
+    cached &&
+    (cached.outcome?.status === "rejected"
+      ? waitStartedAt >= cached.outcome.retryAtMs
+      : !cached.outcome &&
+        waitStartedAt - cached.startedAtMs >= ACCOUNTS_HANDLER_INIT_MAX_AGE_MS)
+  ) {
+    // This decision and installation of the replacement run without an await.
+    // Concurrent callers therefore join exactly one current initialization.
+    cache.delete(env);
+    cached = undefined;
+  }
   if (!cached) {
+    cached = {
+      startedAtMs: waitStartedAt,
+      waiters: new Set(),
+      initialization: Promise.resolve(),
+    };
+    cache.set(env, cached);
+    const attempt = cached;
     const promise = observeAccountsHandlerInitialization(
       buildAccountsHandler(env, options, identityOnly),
       identityOnly ? "identity" : "control",
     );
-    cached = {
-      promise,
-      settled: false,
+    const settle = (
+      outcome: NonNullable<CachedAccountsHandler["outcome"]>,
+    ): void => {
+      // Obsolete work is still observed, but cannot dispatch old waiters or
+      // publish a handler/error into the replacement. Its waiters time out.
+      if (cache.get(env) !== attempt) return;
+      attempt.outcome = outcome;
+      for (const waiter of attempt.waiters) {
+        clearTimeout(waiter.timer);
+        if (outcome.status === "fulfilled") waiter.resolve(outcome.handler);
+        else waiter.reject(outcome.error);
+      }
+      attempt.waiters.clear();
     };
-    cache.set(env, cached);
-    void promise.then(
-      () => {
-        cached!.settled = true;
-      },
-      () => {
-        cached!.settled = true;
-      },
+    // The retained initializer has exactly one settlement observer. Timed-out
+    // requests remove their waiters without attaching reactions to this promise.
+    attempt.initialization = promise.then(
+      (handler) => settle({ status: "fulfilled", handler }),
+      (error) => settle({
+        status: "rejected",
+        error,
+        retryAtMs: nowMs() + ACCOUNTS_HANDLER_INIT_FAILURE_BACKOFF_MS,
+      }),
     );
   }
-  const handler = await cached.promise;
-  if (waitStartedAt === undefined) return { handler };
-  return {
-    handler,
-    initializationWaitMs: nowMs() - waitStartedAt,
-  };
+  if (cached.outcome?.status === "fulfilled") {
+    return { handler: cached.outcome.handler };
+  }
+  if (cached.outcome?.status === "rejected") throw cached.outcome.error;
+  // Keep D1/schema work alive after a request's independent deadline returns
+  // 503. Expiry also handles work canceled after the runtime's background limit.
+  context?.waitUntil(cached.initialization);
+  const handler = await new Promise<AccountsHandler>((resolve, reject) => {
+    const waiter: AccountsHandlerWaiter = {
+      resolve,
+      reject,
+      timer: setTimeout(() => {
+        cached!.waiters.delete(waiter);
+        const initializationWaitMs = nowMs() - waitStartedAt;
+        console.warn(
+          JSON.stringify({
+            event: "accounts_handler_initialization_unavailable",
+            mode: identityOnly ? "identity" : "control",
+            stage: "await_handler",
+            timeoutMs: ACCOUNTS_HANDLER_INIT_DEADLINE_MS,
+            elapsedMs: initializationWaitMs,
+            errorName: "TimeoutError",
+            activeWaiters: cached!.waiters.size,
+          }),
+        );
+        reject(
+          new AccountsHandlerInitializationTimeoutError(initializationWaitMs),
+        );
+      }, ACCOUNTS_HANDLER_INIT_DEADLINE_MS),
+    };
+    cached!.waiters.add(waiter);
+  });
+  return { handler, initializationWaitMs: nowMs() - waitStartedAt };
 }
 
 function appendAccountsHandlerInitializationTiming(
   response: Response,
-  timing: CachedAccountsHandlerResult | undefined,
+  timing: Pick<CachedAccountsHandlerResult, "initializationWaitMs"> | undefined,
 ): Response {
   if (timing?.initializationWaitMs === undefined) return response;
   const metrics = [
