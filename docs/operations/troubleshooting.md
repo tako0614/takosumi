@@ -80,8 +80,10 @@ bun run probe:request-latency -- \
 
 `<finished-run-id>` は実際の ID に置き換えてから実行します。許可する route は
 `/.well-known/takosumi`、`/.well-known/openid-configuration`、
-`/api/v1/workspaces`、`/api/v1/views/workspaces.v1`、`/api/v1/runs/:runId`
+`/api/v1/views/workspaces.v1`、`/api/v1/runs/:runId`
 だけです。query / fragment、OAuth / logout、内部 API、redirect は拒否します。
+通常の `/api/v1/workspaces` GET は personal Workspace / owner membership /
+default Project の bootstrap・repair を含み得るため、読み取り専用 probe には使いません。
 public discovery だけを見る場合は `--token-file` を省略できます。
 local fixture は `--environment local --url http://127.0.0.1:<port>` を使います。
 staging 以外の公開 origin や production はこの probe の対象にできません。

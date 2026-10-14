@@ -316,6 +316,7 @@ test("latency probe rejects production, alternate origins, unsafe GET routes and
     { url: "https://app-staging.takosumi.com/api/v1/workspaces" },
     { path: "//app.takosumi.com/api/v1/workspaces" },
     { path: "/logout" },
+    { path: "/api/v1/workspaces" },
     { path: "/oauth/authorize" },
     { path: "/api/v1/runs/id?token=private" },
     { path: "/api/v1/runs/id#private" },

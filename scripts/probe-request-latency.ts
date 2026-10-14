@@ -122,7 +122,6 @@ function validateTarget(options: RequestLatencyProbeOptions): {
     [
       "/.well-known/takosumi",
       "/.well-known/openid-configuration",
-      "/api/v1/workspaces",
       "/api/v1/views/workspaces.v1",
     ].includes(options.path)
   ) {
