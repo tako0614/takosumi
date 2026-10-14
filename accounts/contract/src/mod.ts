@@ -283,6 +283,8 @@ export function takosumiAccountsPrivacyRequestCompletePath(
 export type TakosumiSubject = `tsub_${string}`;
 
 export interface TakosumiAccountsConfig {
+  /** Explicit first-party identity-only discovery profile. */
+  profile?: "shared-account";
   issuer?: string;
   /** Optional operator-selected documentation URL advertised by discovery. */
   serviceDocumentation?: string;
@@ -319,15 +321,11 @@ export interface OidcDiscoveryDocument {
   revocation_endpoint: string;
   introspection_endpoint: string;
   response_types_supported: readonly ["code"];
-  response_modes_supported: readonly ["query", "fragment"];
+  response_modes_supported: readonly ("query" | "fragment")[];
   grant_types_supported: readonly ["authorization_code", "refresh_token"];
-  subject_types_supported: readonly ["pairwise"];
+  subject_types_supported: readonly ("pairwise" | "public")[];
   id_token_signing_alg_values_supported: readonly ["ES256"];
-  token_endpoint_auth_methods_supported: readonly [
-    "client_secret_basic",
-    "client_secret_post",
-    "none",
-  ];
+  token_endpoint_auth_methods_supported: readonly ("client_secret_basic" | "client_secret_post" | "none")[];
   /** PKCE is mandatory; only the S256 transformation is accepted. */
   code_challenge_methods_supported: readonly ["S256"];
   /** Request object parameters are not supported. */
@@ -394,15 +392,11 @@ export function buildOidcDiscoveryDocument(
     revocation_endpoint: `${issuer}${TAKOSUMI_ACCOUNTS_REVOKE_PATH}`,
     introspection_endpoint: `${issuer}${TAKOSUMI_ACCOUNTS_INTROSPECT_PATH}`,
     response_types_supported: ["code"],
-    response_modes_supported: ["query", "fragment"],
+    response_modes_supported: config.profile === "shared-account" ? ["query"] : ["query", "fragment"],
     grant_types_supported: ["authorization_code", "refresh_token"],
-    subject_types_supported: ["pairwise"],
+    subject_types_supported: config.profile === "shared-account" ? ["public", "pairwise"] : ["pairwise"],
     id_token_signing_alg_values_supported: ["ES256"],
-    token_endpoint_auth_methods_supported: [
-      "client_secret_basic",
-      "client_secret_post",
-      "none",
-    ],
+    token_endpoint_auth_methods_supported: config.profile === "shared-account" ? ["client_secret_basic"] : ["client_secret_basic", "client_secret_post", "none"],
     code_challenge_methods_supported: ["S256"],
     request_parameter_supported: false,
     request_uri_parameter_supported: false,
@@ -410,7 +404,7 @@ export function buildOidcDiscoveryDocument(
     ...(config.serviceDocumentation
       ? { service_documentation: config.serviceDocumentation }
       : {}),
-    scopes_supported: [...TAKOSUMI_ACCOUNTS_CAPSULE_DELEGATION_SCOPES],
-    claims_supported: ["sub", "iss", "aud", "exp", "iat", "email", "name"],
+    scopes_supported: config.profile === "shared-account" ? ["openid", "email", "profile", "offline_access"] : [...TAKOSUMI_ACCOUNTS_CAPSULE_DELEGATION_SCOPES],
+    claims_supported: config.profile === "shared-account" ? ["sub", "iss", "aud", "exp", "iat", "nonce", "auth_time", "sid", "email", "email_verified", "name", "picture"] : ["sub", "iss", "aud", "exp", "iat", "email", "name"],
   };
 }

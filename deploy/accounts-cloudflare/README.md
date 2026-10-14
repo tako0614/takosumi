@@ -1,6 +1,11 @@
 # Takosumi Accounts — in-process source module
 
-This directory is **not a standalone deployable Worker anymore**. It is the
+The ordinary Accounts module is an in-process component. The only dedicated
+official entry in this directory is the guarded **staging rehearsal** Worker
+`takosumi-auth-staging` at `auth-staging.takos.jp`; see
+[the owning staging runbook](../../docs/operations/auth-staging.md). It does not
+restore the former generic standalone scaffold or define a production issuer
+deployment. The ordinary module remains the
 Cloudflare reference entry point for the account-plane handler
 (session cookie, upstream sign-in, OIDC issuer/client registration, dashboard
 account-plane facade, Interface OAuth, and any hosted-service-only
@@ -14,7 +19,7 @@ the operator Takosumi platform worker:
 The self-hosted Takos product worker template in `takos/deploy/cloudflare/` is an
 external OIDC/control-plane client. It does not mount this handler.
 
-The former standalone account-plane Worker scaffold (its `wrangler.toml`,
+The former generic standalone account-plane Worker scaffold (its `wrangler.toml`,
 `src/worker.ts` entrypoint, and the `render-config` /
 `validate-rendered-config` / `probe` / `ensure-dns` / `spa-api-split-e2e` deploy
 scripts) has been removed. Real operator deploy configuration and secrets live
@@ -69,13 +74,20 @@ canonical Takosumi control plane rather than Accounts storage.
 ## D1 schema migration
 
 `accounts/service/src/d1-migrations.ts` is the sole Accounts D1 catalog. The
-CLI, Worker gate, and local substrate consume the same ordered v0-v4 names and
-checksums. The current Worker gate accepts only the exact checksummed v4
-closure. Exact legacy v3, missing rows, gaps, name or checksum drift, partial
+CLI, Worker gate, and local substrate consume the same ordered catalog and
+checksums. The ordinary Worker bridge accepts exact checksummed v4 or v5
+closures; the explicitly enabled shared-account profile requires exact v5 and
+`predeployed` mode before any hosted writes. Version 5 adds lookup indexes on
+existing Accounts document storage and preserves the applied v0-v4 lineage.
+Deploy this compatible bridge with the shared profile off before a separately
+reviewed protected v5 migration. The prior v4-only artifact cannot serve after
+v5, so this bridge becomes the rollback floor. Request handlers never apply
+that protected migration. See the [shared-account runbook](../../docs/operations/shared-account-oidc.md).
+Exact legacy v3, missing rows, gaps, name or checksum drift, partial
 `ALTER`, older/newer heads, missing owned tables or indexes, and an incomplete
 v4 activation-digest backfill all fail closed. The preceding reviewed feature
 bridge accepted exact legacy v3 or exact v4 only for the one-time migration
-window and remains the compatible rollback floor.
+window and was the compatible rollback floor for that historical v4 transition.
 
 During that bridge window, the owner CLI inventories Capsule-bound OIDC clients
 in deterministic `key` chunks of at most 100 and performs one guarded,
@@ -91,13 +103,16 @@ the v4 receipt. A concurrent same-catalog runner is reconciled by the exact
 receipt; a conflicting or partial result is indeterminate and is never retried
 blindly.
 
-Hosted operation is a one-time bridge sequence:
+The historical v3-to-v4 transition used this one-time bridge sequence:
 
 1. deploy the reviewed v3/v4-compatible bridge predecessor while the protected database is exact v3;
 2. obtain and privately retain backup/Time Travel evidence outside source
    checkouts, bind its opaque digest to the plan configuration confirmation;
 3. run bounded pre-ledger backfill, apply atomic v4, and read-only verify it;
-4. after the observation window, deploy this current exact-v4-only artifact.
+4. after the observation window, deploy the previous exact-v4-only artifact.
+
+For the current v4-to-v5 window, deploy the v4/v5-compatible bridge with the shared
+profile off before protected migration, then verify v5 before enabling the profile.
 
 Before constructing any plan or reading a token, the owner CLI uses reviewed
 Git configuration to require that the real checkout top-level is the owning
@@ -113,6 +128,6 @@ incident authority and is never invoked by the migration CLI.
 
 `predeployed` performs only the strict catalog/schema reads and zero
 request-time DDL. `bootstrap` may initialize the base store, but it does not
-advance the migration ledger; the current Worker still requires exact v4 before
-serving traffic. Gate diagnostics contain only digests and issue codes, never
-rows, SQL values, tokens, or target IDs.
+advance the migration ledger. The ordinary current bridge requires exact v4 or
+v5 before serving traffic; the shared profile requires exact v5. Gate diagnostics
+contain only digests and issue codes, never rows, SQL values, tokens, or target IDs.

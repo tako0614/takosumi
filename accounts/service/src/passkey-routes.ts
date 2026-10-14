@@ -375,6 +375,8 @@ export async function handlePasskeyAuthenticateComplete(input: {
       subject: result.account.subject,
       now,
       ttlMs,
+      hostedPolicy: input.passkeys.hostedSessionPolicy,
+      freshlyAuthenticatedAt: input.passkeys.hostedSessionPolicy ? Math.floor(now / 1000) : undefined,
     });
 
     // Agent 6 item 6 (parity with OAuth callback): set the session via
@@ -385,6 +387,7 @@ export async function handlePasskeyAuthenticateComplete(input: {
     const cookie = serializeAccountSessionCookie(rotated.sessionId, {
       secure: input.secureCookie,
       maxAgeSeconds: Math.max(1, Math.floor(ttlMs / 1000)),
+      hostedPolicy: input.passkeys.hostedSessionPolicy,
     });
     return json(
       {

@@ -929,7 +929,7 @@ async function readReleaseReadinessDigest(
 }
 
 async function listGuardedTables(db: D1Database): Promise<readonly string[]> {
-  // `_cf_KV` is a Cloudflare-managed D1 table. It is not application state
+  // `_cf_KV` and `_cf_METADATA` are Cloudflare-managed D1 tables, not application state
   // and must never receive Takosumi maintenance triggers.
   const result = await db
     .prepare(
@@ -937,6 +937,7 @@ async function listGuardedTables(db: D1Database): Promise<readonly string[]> {
        where type = 'table' and name not like 'sqlite_%' and name != ?
          and name != 'schema_migrations'
          and name != '_cf_KV'
+         and name != '_cf_METADATA'
        order by name`,
     )
     .bind(CONTROL_D1_MAINTENANCE_TABLE)
@@ -1066,7 +1067,7 @@ function maintenanceFenceReleasePredicate(
   const tableFilter =
     "type = 'table' and name not like 'sqlite_%' and name != " +
     sqlLiteral(CONTROL_D1_MAINTENANCE_TABLE) +
-    " and name != 'schema_migrations' and name != '_cf_KV'";
+    " and name != 'schema_migrations' and name != '_cf_KV' and name != '_cf_METADATA'";
   predicates.push(
     `(select count(*) from sqlite_master where ${tableFilter}) = ${
       guardedTables.length
@@ -1102,6 +1103,7 @@ function maintenanceFenceReleasePredicate(
            and guarded_table.name != ${sqlLiteral(CONTROL_D1_MAINTENANCE_TABLE)}
            and guarded_table.name != 'schema_migrations'
            and guarded_table.name != '_cf_KV'
+           and guarded_table.name != '_cf_METADATA'
            and not exists (
              select 1
              from sqlite_master as actual_trigger

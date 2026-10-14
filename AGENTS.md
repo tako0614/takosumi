@@ -12,15 +12,16 @@
 
 ## Ownership
 
-- Owns: OSS Git and OpenTofu BYOC Stack flow and canonical Run, state, output, and audit lifecycle / Workspace ProviderConnection, CredentialRecipe, ProviderBinding, and run-scoped credential brokerage / OSS platform Worker source, build, and deploy entrypoint / Runner source and immutable runner-image build/release authority / Accounts, dashboard, CLI, and operator composition framework / Optional Takosumi runtime Interface and InterfaceBinding APIs
-- Does not own: Portable Takoform specification, Host API contract, provider, or packages / Takoform hosted Form instances or provider backend lifecycle / Takos product UX or distribution Worker / Takosumi Hosted retail Marketplace, prepaid/Stripe, or Takoserver reseller client / Takoserver Host-owned supply, Offering, Resource, execution, capacity, provider credentials, reseller contracts, or WfP routing / Takoserver or Takosumi Hosted enforced billing, SLA, or support / A generic Offering authority or an active Service Form/Resource Host lifecycle
+- Owns: OSS Git and OpenTofu BYOC Stack flow and canonical Run, state, output, and audit lifecycle / Workspace ProviderConnection, CredentialRecipe, ProviderBinding, and run-scoped credential brokerage / OSS platform Worker source, build, and deploy entrypoint / Runner source and immutable runner-image build/release authority / Accounts OIDC and canonical account contracts, dashboard, CLI, and operator composition framework; official shared Hosted login is an operator composition / Existing Control domain/ledger authority for common Workspaces/membership and immutable Workspace-to-Organization binding; shared Accounts profile/bootstrap composes its public port / Optional Takosumi runtime Interface and InterfaceBinding APIs
+- Does not own: Portable Takoform specification, Host API contract, provider, or packages / Takoform hosted Form instances or provider backend lifecycle / Takos product UX or distribution Worker / Takosumi Hosted Marketplace/payment UX or Takoserver reseller/billing client / Takoserver Host-owned supply, Offering, Resource, execution, capacity, provider credentials, reseller contracts, or WfP routing / Takoserver or Takosumi Hosted enforced billing, SLA, or support / A generic Offering authority or an active Service Form/Resource Host lifecycle
 - Hazards: Do not introduce forge-specific IDs or required Takosumi manifests into core. / Do not branch the runner on Takoserver backends, provider installations, capacity, WfP namespaces, or native resource identities. / Resource Shape, Form Registry/FormActivation, TargetPool/SpacePolicy, and generic Offering code are migration/delete custody, not normal Core composition. / Never persist secret values in Output, Interface, logs, or audit.
 
 ## Required workflow
 
 - repo固有の挙動・契約・architectureは、このrepo自身のsourceとdocsを正本にします。共通工学ルールをこのrepoで再定義しません。
 - 通常変更はこのrepo内に閉じます。横断変更はtask ledgerに対象repoと順序を宣言し、unrelatedなdirty workを変更・stage・commitしません。
-- handoff前に `bun run check` を実行します。これはread-onlyで、`format-check`, `lint-or-static-analysis`, `type-or-compile`, `portable-tests`, `portable-build` を完全に検証し、未実装項目をskipしてはいけません。
+- 最終candidateの統合・完了引継ぎ前に `bun run check` を実行します。これはread-onlyで、`format-check`, `lint-or-static-analysis`, `type-or-compile`, `portable-tests`, `portable-build` を完全に検証し、未実装項目をskipしてはいけません。
+- 作業途中の分担・報告・中断引継ぎには関連するfocused checkと未検証範囲を示します。その都度complete gateを要求せず、未検証の途中成果を完了扱いしません。
 - このrepoにformat writerはありません。`bun run fmt` は存在せず、実行するとcoreutilsのfmt(1)が動いて何もせず成功します。formatを直すときはformatterを直接呼びます。
 - task ledgerが必要な条件: The change modifies more than one repository. / The work changes production or release behavior. / The work changes a persisted schema or migrates data. / The work changes security, identity, credentials, authorization, billing, or authority. / The work destructively changes data or repository history.
 - secret、credential、production記録、private keyをrepoへcommitしません。

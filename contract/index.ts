@@ -22,6 +22,7 @@ export * from "./repository-manifest.ts";
 export * from "./redaction.ts";
 export * from "./provider-configurations.ts";
 export * from "./workspaces.ts";
+export * from "./workspace-billing-bindings.ts";
 export type { CapsuleFullName } from "./workspaces.ts";
 export type { Project, PublicProject } from "./projects.ts";
 export type {

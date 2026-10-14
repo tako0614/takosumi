@@ -87,3 +87,16 @@ For restore / disaster-recovery procedures, see
 This is Takosumi Accounts internal storage maintenance. It is not a Capsule/app
 migration contract and does not require Takosumi to expose DB-specific
 migration APIs for installed apps.
+
+Migration `045` is the protected hosted identity expansion. It adds nullable
+OIDC/session metadata and private proof, canonical binding, operation, grant,
+revocation and audit records. It does not rewrite account subjects, provider
+bindings, memberships, tokens or resource/billing references. Ordinary legacy
+readers retain their current meaning. Accounts D1 separately adds version `5`
+lookup indexes on existing document storage while pinning the applied `0`-`4`
+checksums. Hosted mode requires the owning distribution to verify the exact
+version `5` closure before enabling writes; ordinary clients retain the exact
+version `4` compatibility window. Both migrations require the owning operator's
+protected-target backup, rehearsal, review and explicit mutation approval.
+No request handler applies either protected migration. Failure repairs forward;
+disabling hosted mode retains additive metadata and all original records.

@@ -422,6 +422,8 @@ export async function handleAuthenticatedControlRoute(
   context: ControlRouteContext & {
     readonly subject: string;
     readonly workspaceId?: string;
+    readonly requireCurrentMembership?: true;
+    readonly reauthorizeBearer?: () => Promise<boolean>;
   },
 ): Promise<Response | undefined> {
   const { request, url } = context;
@@ -434,6 +436,10 @@ export async function handleAuthenticatedControlRoute(
         subject: context.subject,
         ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
         requiredAccess: controlRouteRequiredScope(request),
+        ...(context.requireCurrentMembership ? { requireCurrentMembership: true } : {}),
+        ...(context.reauthorizeBearer
+          ? { reauthorizeBearer: context.reauthorizeBearer }
+          : {}),
       },
     },
     timings,

@@ -633,6 +633,10 @@ Content-Type: application/json
 
 ## OIDC と workload identity
 
+明示 opt-in の first-party profile は [共通 account と Workspace](./shared-account.md)
+を参照してください。共有 identity は現在の Workspace membership と billing owner
+の認可を置き換えません。
+
 Takosumi Accounts は登録済み OIDC client のための標準 issuer surface を公開します。
 
 ```http

@@ -27,6 +27,10 @@ import type {
   StateVersion,
 } from "@takosumi/internal/deploy-control-api";
 import { coerceRunStatus } from "@takosumi/internal/deploy-control-api";
+import {
+  type WorkspaceBillingBinding, type WorkspaceBillingBindingIntent,
+  workspaceBillingBindingMatches, workspaceBillingIntentMatches,
+} from "takosumi-contract";
 import { planRunAwaitsApproval } from "./projection_run.ts";
 import {
   assertRecoveryCommitCandidate,
@@ -477,15 +481,17 @@ export interface WorkspaceReplacementInput {
 export interface WorkspaceAccountReplacementInput extends WorkspaceReplacementInput {
   readonly actorAccountId: string;
   readonly expectedActor?: WorkspaceMember;
+  /** Trusted shared-account policy; namespace ownership alone grants nothing. */
+  readonly requireCurrentMembership?: boolean;
 }
 
 export type WorkspaceAccountAuthority = Pick<WorkspaceAccountReplacementInput,
-  "actorAccountId" | "expectedWorkspace" | "expectedActor">;
+  "actorAccountId" | "expectedWorkspace" | "expectedActor" | "requireCurrentMembership">;
 
 /** Existing namespace-owner / active owner-admin policy, without a target mutation. */
 export function workspaceAccountAuthorityAllowed(input: WorkspaceAccountAuthority): boolean {
   if (!input.actorAccountId) return false;
-  if (input.expectedWorkspace.ownerUserId === input.actorAccountId) return true;
+  if (!input.requireCurrentMembership && input.expectedWorkspace.ownerUserId === input.actorAccountId) return true;
   const actor = input.expectedActor;
   if (actor) parseWorkspaceMemberRecord(actor);
   return actor?.accountId === input.actorAccountId && actor.workspaceId === input.expectedWorkspace.id &&
@@ -515,6 +521,7 @@ export interface WorkspaceOwnerMemberRepairInput {
 
 export interface WorkspaceMemberMutationInput extends WorkspaceOwnerMemberRepairInput {
   readonly expectedActor: WorkspaceMember;
+  readonly requiredActorRole?: "owner";
 }
 
 /** Immutable identities and the reviewed member delta, before any I/O. */
@@ -543,6 +550,7 @@ export function workspaceMemberMutationAllowed(input: WorkspaceMemberMutationInp
   parseWorkspaceMemberRecord(actor);
   return actor.workspaceId === member.workspaceId && actor.status === "active" &&
     (actor.roles.includes("owner") || actor.roles.includes("admin")) &&
+    (input.requiredActorRole !== "owner" || actor.roles.includes("owner")) &&
     (!(member.roles.includes("owner") || current?.roles.includes("owner")) || actor.roles.includes("owner")) &&
     (member.accountId !== expectedWorkspace.ownerUserId ||
       (member.status === "active" && member.roles.includes("owner")));
@@ -559,6 +567,100 @@ export function validateWorkspaceOwnerMemberRepair(input: WorkspaceOwnerMemberRe
     input.member.accountId !== input.expectedWorkspace.ownerUserId ||
     input.member.status !== "active" || input.member.roles.length !== 1 || input.member.roles[0] !== "owner"
   ) throw new TypeError("Workspace owner repair must derive the stored namespace owner");
+}
+
+/** Initial roster authority belongs only to this exact fresh candidate. */
+export function validateWorkspaceInitialOwner(candidate: Workspace, member: WorkspaceMember): void {
+  if (member.createdAt !== candidate.createdAt || member.updatedAt !== candidate.updatedAt) {
+    throw new TypeError("Initial member must match the new Workspace candidate");
+  }
+  validateWorkspaceOwnerMemberRepair({
+    member, expectedWorkspace: candidate,
+    expectedWorkspaceManagementAuthority: { workspaceId: candidate.id, managementState: "active", managementEpoch: 1 },
+  });
+}
+
+/** Existing shared creation is a read, never a membership repair. */
+export function sharedWorkspaceCreationAllowed(current: Workspace, candidate: Workspace, member: WorkspaceMember | undefined): boolean {
+  return (["handle", "displayName", "type", "ownerUserId"] as const).every((key) => current[key] === candidate[key]) &&
+    member?.workspaceId === current.id && member.accountId === current.ownerUserId && isCanonicalActiveWorkspaceOwner(member);
+}
+
+/** Initial roster authority belongs only to this exact fresh personal candidate. */
+export function validatePersonalWorkspaceBootstrapOwnerMember(
+  ownerUserId: string, candidate: Workspace, member: WorkspaceMember,
+): void {
+  if (candidate.ownerUserId !== ownerUserId || candidate.type !== "personal" ||
+    member.createdAt !== candidate.createdAt || member.updatedAt !== candidate.updatedAt) {
+    throw new TypeError("Personal bootstrap member must match the new owner candidate");
+  }
+  validateWorkspaceInitialOwner(candidate, member);
+}
+
+/** Private source snapshots are never forwarded to a billing owner. */
+export interface StoredWorkspaceBillingBindingIntent extends WorkspaceBillingBindingIntent {
+  readonly originalWorkspace: Workspace;
+  readonly originalActor: WorkspaceMember;
+  readonly originalAuthority: WorkspaceManagementAuthority;
+}
+
+export type WorkspaceBillingBindingMutationResult<T> =
+  | { readonly status: "created"; readonly record: T }
+  | { readonly status: "existing"; readonly record: T }
+  | { readonly status: "conflict" }
+  | { readonly status: "refused" };
+
+export interface WorkspaceBillingBindingClaimInput {
+  readonly expectedIntent: StoredWorkspaceBillingBindingIntent;
+  readonly binding: WorkspaceBillingBinding;
+}
+
+export function assertWorkspaceBillingBindingRecord(binding: WorkspaceBillingBinding): void {
+  const strings = [binding.workspaceId, binding.intentId, binding.billingAuthority, binding.workspaceRef,
+    binding.actorAccountId, binding.organizationRef, binding.ownerAcknowledgementRef];
+  if (strings.some((value) => typeof value !== "string" || !value || value.length > 256) ||
+    !/^[A-Za-z0-9_-]{8,128}$/.test(binding.workspaceRef) || !Number.isSafeInteger(binding.managementEpoch) || binding.managementEpoch < 1 ||
+    [binding.workspaceCreatedAt, binding.createdAt, binding.boundAt].some((value) => typeof value !== "string" || value !== new Date(value).toISOString())) {
+    throw new TypeError("Invalid retained Workspace billing binding");
+  }
+}
+
+/** New enrollment requires the real current owner/admin membership, without namespace-owner fallback. */
+export function assertWorkspaceBillingIntent(input: StoredWorkspaceBillingBindingIntent): void {
+  const strings = [input.intentId, input.workspaceId, input.billingAuthority, input.workspaceRef, input.actorAccountId];
+  if (strings.some((value) => typeof value !== "string" || !value || value.length > 256) ||
+    !/^[A-Za-z0-9_-]{8,128}$/.test(input.workspaceRef) ||
+    input.createdAt !== new Date(input.createdAt).toISOString() ||
+    input.workspaceCreatedAt !== input.originalWorkspace.createdAt || input.workspaceId !== input.originalWorkspace.id ||
+    input.managementEpoch !== input.originalAuthority.managementEpoch) throw new TypeError("Invalid Workspace billing intent");
+  assertWorkspaceManagementAuthorityInput(input.originalAuthority, input.workspaceId);
+  const member = parseWorkspaceMemberRecord(input.originalActor);
+  if (member.workspaceId !== input.workspaceId || member.accountId !== input.actorAccountId ||
+    member.status !== "active" || (!member.roles.includes("owner") && !member.roles.includes("admin"))) {
+    throw new TypeError("Workspace billing intent requires current owner/admin membership");
+  }
+}
+
+export function assertWorkspaceBillingClaim(input: WorkspaceBillingBindingClaimInput): void {
+  assertWorkspaceBillingIntent(input.expectedIntent);
+  assertWorkspaceBillingBindingRecord(input.binding);
+  if (!workspaceBillingIntentMatches(input.binding, input.expectedIntent) ||
+    !input.binding.organizationRef || input.binding.organizationRef.length > 256 ||
+    !input.binding.ownerAcknowledgementRef || input.binding.ownerAcknowledgementRef.length > 256 ||
+    input.binding.boundAt !== new Date(input.binding.boundAt).toISOString()) throw new TypeError("Invalid Workspace billing owner acknowledgement");
+}
+
+/** Concurrent prepare candidates select one intent; they cannot switch its scope or incarnation. */
+export function workspaceBillingPreparationMatches(left: StoredWorkspaceBillingBindingIntent, right: StoredWorkspaceBillingBindingIntent): boolean {
+  const sameOriginalIntentPayload = left.intentId !== right.intentId ||
+    (left.workspaceRef === right.workspaceRef && left.actorAccountId === right.actorAccountId &&
+      left.createdAt === right.createdAt && left.managementEpoch === right.managementEpoch &&
+      stableStringify(left.originalWorkspace) === stableStringify(right.originalWorkspace) &&
+      stableStringify(left.originalActor) === stableStringify(right.originalActor) &&
+      stableStringify(left.originalAuthority) === stableStringify(right.originalAuthority));
+  return sameOriginalIntentPayload && left.workspaceId === right.workspaceId && left.billingAuthority === right.billingAuthority &&
+    left.workspaceCreatedAt === right.workspaceCreatedAt && left.originalWorkspace.ownerUserId === right.originalWorkspace.ownerUserId &&
+    left.originalWorkspace.type === right.originalWorkspace.type && left.originalWorkspace.handle === right.originalWorkspace.handle;
 }
 
 /** A malformed row cannot count as authority merely because it contains owner. */
@@ -700,6 +802,8 @@ export function assertWorkspaceManagementAdmission(
 export interface DeleteWorkspaceExclusiveInput {
   readonly expectedWorkspace: Workspace;
   readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
+  readonly expectedActor?: WorkspaceMember;
+  readonly requireCurrentMembership?: boolean;
 }
 
 export type DeleteWorkspaceExclusiveResult =
@@ -3523,6 +3627,8 @@ export interface OpenTofuControlStore {
   // Workspace records (spec §4). The owner namespace Capsules live under.
   /** Low-level creation/fixture writer; ordinary metadata changes use replaceWorkspace. */
   putWorkspace(workspace: Workspace): Promise<Workspace>;
+  /** Fresh Workspace + first owner in one boundary; existing rows never repaired. */
+  createWorkspaceWithInitialOwner(workspace: Workspace, member: WorkspaceMember): Promise<Workspace | undefined>;
   /**
    * Low-level Workspace row deletion. Callers must enforce ownership and
    * emptiness (no Capsules, Sources, in-flight Runs, or usage evidence)
@@ -3571,6 +3677,8 @@ export interface OpenTofuControlStore {
   claimPersonalWorkspaceBootstrap(
     ownerUserId: string,
     candidate: Workspace,
+    /** Insert atomically with a newly created candidate only; never repair an existing/adopted roster. */
+    initialOwnerMember?: WorkspaceMember,
   ): Promise<Workspace | undefined>;
   getWorkspace(id: string): Promise<Workspace | undefined>;
   listWorkspacesByIds(ids: readonly string[]): Promise<readonly Workspace[]>;
@@ -3593,6 +3701,11 @@ export interface OpenTofuControlStore {
   mutateWorkspaceMember(input: WorkspaceMemberMutationInput): Promise<boolean>;
   /** Derived namespace-owner repair only; never a stopped-Workspace bypass. */
   repairWorkspaceOwnerMember(input: WorkspaceOwnerMemberRepairInput): Promise<boolean>;
+  /** Immutable retained rows have no delete/relink API or Workspace-cascade ownership. */
+  getWorkspaceBillingBindingIntent(workspaceId: string): Promise<StoredWorkspaceBillingBindingIntent | undefined>;
+  getWorkspaceBillingBinding(workspaceId: string): Promise<WorkspaceBillingBinding | undefined>;
+  prepareWorkspaceBillingBinding(intent: StoredWorkspaceBillingBindingIntent): Promise<WorkspaceBillingBindingMutationResult<StoredWorkspaceBillingBindingIntent>>;
+  claimWorkspaceBillingBinding(input: WorkspaceBillingBindingClaimInput): Promise<WorkspaceBillingBindingMutationResult<WorkspaceBillingBinding>>;
   getWorkspaceMember(
     workspaceId: string,
     accountId: string,
@@ -4162,6 +4275,8 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   #gitInstallPlanStore: InMemoryGitInstallPlanStore | undefined;
   readonly #personalWorkspaceBootstrapIds = new Map<string, string>();
   readonly #workspaceMembers = new Map<string, WorkspaceMember>();
+  readonly #workspaceBillingIntents = new Map<string, StoredWorkspaceBillingBindingIntent>();
+  readonly #workspaceBillingBindings = new Map<string, WorkspaceBillingBinding>();
   readonly #projects = new Map<string, Project>();
   readonly #installConfigs = new Map<string, InstallConfig>();
   readonly #capsules = new Map<string, Capsule>();
@@ -5086,6 +5201,24 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(workspace);
   }
 
+  async createWorkspaceWithInitialOwner(workspace: Workspace, member: WorkspaceMember): Promise<Workspace | undefined> {
+    validateWorkspaceInitialOwner(workspace, member);
+    const existing = Array.from(this.#workspaces.values()).find((row) => row.handle === workspace.handle || row.id === workspace.id);
+    if (existing) {
+      return existing.handle === workspace.handle && this.isWorkspaceManagementAdmissionAllowed(existing.id) &&
+        sharedWorkspaceCreationAllowed(existing, workspace, this.#workspaceMembers.get(workspaceMemberKey(existing.id, workspace.ownerUserId)))
+        ? structuredClone(existing) : undefined;
+    }
+    // Validate before publishing either row; a colliding member identity must
+    // never leave a newly created Workspace without its initial authority.
+    if (this.#workspaceMembers.has(workspaceMemberKey(workspace.id, member.accountId)) ||
+      Array.from(this.#workspaceMembers.values()).some((row) => row.id === member.id)) throw new Error("Workspace member identity already exists");
+    this.#workspaces.set(workspace.id, structuredClone(workspace));
+    this.#workspaceManagement.set(workspace.id, { workspaceId: workspace.id, managementState: "active", managementEpoch: 1 });
+    this.#workspaceMembers.set(workspaceMemberKey(workspace.id, member.accountId), structuredClone(member));
+    return structuredClone(workspace);
+  }
+
   async deleteWorkspace(id: string, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<boolean> {
     if (expectedWorkspaceManagementAuthority !== undefined) {
       assertWorkspaceManagementAdmission(
@@ -5106,6 +5239,12 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     // the row deletes, so a concurrent in-process creation cannot interleave.
     const current = this.#workspaces.get(expectedWorkspace.id);
     if (current === undefined) return { status: "not_found" };
+    if (stableStringify(current) !== stableStringify(expectedWorkspace)) return { status: "conflict" };
+    if (input.requireCurrentMembership && (!input.expectedActor ||
+      input.expectedActor.workspaceId !== expectedWorkspace.id || !isCanonicalActiveWorkspaceOwner(input.expectedActor) ||
+      stableStringify(this.#workspaceMembers.get(workspaceMemberKey(expectedWorkspace.id, input.expectedActor.accountId))) !== stableStringify(input.expectedActor))) {
+      return { status: "conflict" };
+    }
     try {
       assertWorkspaceManagementAdmission(
         this.#workspaceManagement.get(expectedWorkspace.id),
@@ -5183,7 +5322,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       input.expectedWorkspaceManagementAuthority,
     );
     if (!workspaceAccountReplacementAllowed(input)) return false;
-    if (input.expectedWorkspace.ownerUserId !== input.actorAccountId &&
+    if ((input.requireCurrentMembership || input.expectedWorkspace.ownerUserId !== input.actorAccountId) &&
       stableStringify(this.#workspaceMembers.get(workspaceMemberKey(input.workspace.id, input.actorAccountId))) !==
         stableStringify(input.expectedActor)
     ) return false;
@@ -5327,7 +5466,9 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   claimPersonalWorkspaceBootstrap(
     ownerUserId: string,
     candidate: Workspace,
+    initialOwnerMember?: WorkspaceMember,
   ): Promise<Workspace | undefined> {
+    if (initialOwnerMember) validatePersonalWorkspaceBootstrapOwnerMember(ownerUserId, candidate, initialOwnerMember);
     const claimedId = this.#personalWorkspaceBootstrapIds.get(ownerUserId);
     if (claimedId !== undefined) {
       const claimed = this.#workspaces.get(claimedId);
@@ -5370,6 +5511,9 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     ) {
       return Promise.resolve(undefined);
     }
+    if (initialOwnerMember && Array.from(this.#workspaceMembers.values()).some((row) => row.id === initialOwnerMember.id)) {
+      return Promise.reject(new Error("Initial personal Workspace member identity is occupied"));
+    }
     this.#workspaces.set(candidate.id, candidate);
     this.#workspaceManagement.set(candidate.id, {
       workspaceId: candidate.id,
@@ -5377,6 +5521,9 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       managementEpoch: 1,
     });
     this.#personalWorkspaceBootstrapIds.set(ownerUserId, candidate.id);
+    if (initialOwnerMember) this.#workspaceMembers.set(
+      workspaceMemberKey(candidate.id, ownerUserId), structuredClone(initialOwnerMember),
+    );
     return Promise.resolve(candidate);
   }
 
@@ -5501,6 +5648,55 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(
       this.#workspaceMembers.get(workspaceMemberKey(workspaceId, accountId)),
     );
+  }
+
+  getWorkspaceBillingBindingIntent(workspaceId: string): Promise<StoredWorkspaceBillingBindingIntent | undefined> {
+    const record = this.#workspaceBillingIntents.get(workspaceId);
+    return Promise.resolve(record ? structuredClone(record) : undefined);
+  }
+
+  getWorkspaceBillingBinding(workspaceId: string): Promise<WorkspaceBillingBinding | undefined> {
+    const record = this.#workspaceBillingBindings.get(workspaceId);
+    return Promise.resolve(record ? structuredClone(record) : undefined);
+  }
+
+  prepareWorkspaceBillingBinding(intent: StoredWorkspaceBillingBindingIntent): Promise<WorkspaceBillingBindingMutationResult<StoredWorkspaceBillingBindingIntent>> {
+    intent = structuredClone(intent);
+    assertWorkspaceBillingIntent(intent);
+    const current = this.#workspaceBillingIntents.get(intent.workspaceId);
+    if (current && !workspaceBillingPreparationMatches(current, intent)) return Promise.resolve({ status: "conflict" });
+    if (!this.#workspaceBillingAuthorityMatches(intent) || (current && !this.#workspaceBillingAuthorityMatches(current))) return Promise.resolve({ status: "refused" });
+    if (current) return Promise.resolve({ status: "existing", record: structuredClone(current) });
+    if (Array.from(this.#workspaceBillingIntents.values()).some((row) => row.intentId === intent.intentId ||
+      (row.billingAuthority === intent.billingAuthority && row.workspaceRef === intent.workspaceRef))) return Promise.resolve({ status: "conflict" });
+    this.#workspaceBillingIntents.set(intent.workspaceId, intent);
+    return Promise.resolve({ status: "created", record: structuredClone(intent) });
+  }
+
+  claimWorkspaceBillingBinding(input: WorkspaceBillingBindingClaimInput): Promise<WorkspaceBillingBindingMutationResult<WorkspaceBillingBinding>> {
+    input = structuredClone(input);
+    assertWorkspaceBillingClaim(input);
+    const { expectedIntent, binding } = input;
+    const intent = this.#workspaceBillingIntents.get(binding.workspaceId);
+    if (!intent || stableStringify(intent) !== stableStringify(expectedIntent)) return Promise.resolve({ status: "conflict" });
+    const existing = this.#workspaceBillingBindings.get(binding.workspaceId);
+    if (existing && !workspaceBillingBindingMatches(existing, binding)) return Promise.resolve({ status: "conflict" });
+    if (!this.#workspaceBillingAuthorityMatches(intent)) return Promise.resolve({ status: "refused" });
+    if (existing) return Promise.resolve({ status: "existing", record: structuredClone(existing) });
+    if (Array.from(this.#workspaceBillingBindings.values()).some((row) => row.billingAuthority === binding.billingAuthority &&
+      (row.organizationRef === binding.organizationRef || row.workspaceRef === binding.workspaceRef))) return Promise.resolve({ status: "conflict" });
+    this.#workspaceBillingBindings.set(binding.workspaceId, binding);
+    return Promise.resolve({ status: "created", record: structuredClone(binding) });
+  }
+
+  #workspaceBillingAuthorityMatches(intent: StoredWorkspaceBillingBindingIntent): boolean {
+    const workspace = this.#workspaces.get(intent.workspaceId);
+    const management = this.#workspaceManagement.get(intent.workspaceId);
+    const member = this.#workspaceMembers.get(workspaceMemberKey(intent.workspaceId, intent.actorAccountId));
+    return stableStringify(workspace) === stableStringify(intent.originalWorkspace) &&
+      management?.managementState === "active" && management.managementEpoch === intent.originalAuthority.managementEpoch &&
+      stableStringify(member) === stableStringify(intent.originalActor) && member?.status === "active" &&
+      (member.roles.includes("owner") || member.roles.includes("admin"));
   }
 
   listWorkspaceMembers(
@@ -7174,7 +7370,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     if (!workspaceAccountAuthorityAllowed(authority)) return false;
     const workspace = this.#workspaces.get(authority.expectedWorkspace.id);
     if (workspace === undefined || stableStringify(workspace) !== stableStringify(authority.expectedWorkspace)) return false;
-    return workspace.ownerUserId === authority.actorAccountId ||
+    return (!authority.requireCurrentMembership && workspace.ownerUserId === authority.actorAccountId) ||
       stableStringify(this.#workspaceMembers.get(workspaceMemberKey(workspace.id, authority.actorAccountId))) ===
         stableStringify(authority.expectedActor);
   }

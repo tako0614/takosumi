@@ -519,6 +519,10 @@ its `sourceSnapshotId` is present in the Source snapshot list.
 
 ## OIDC / Workload Identity
 
+See [shared account and Workspace](./shared-account.md) for the explicitly
+enabled first-party profile. Shared identity does not replace current Workspace
+membership or the billing owner's authorization.
+
 Takosumi Accounts exposes the standard issuer surface for registered OIDC
 clients.
 

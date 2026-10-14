@@ -64,6 +64,7 @@ import type {
   Workspace,
   WorkspaceMember,
 } from "takosumi-contract/workspaces";
+import { type WorkspaceBillingBinding, workspaceBillingBindingMatches } from "takosumi-contract";
 import type { Project } from "takosumi-contract/projects";
 import type { ProviderBindingSet } from "takosumi-contract/connections";
 import type { InstallConfigCommittedPostApplyRecoveryProof } from "takosumi-contract/install-configs";
@@ -260,6 +261,17 @@ import {
   type WorkspaceOwnerMemberRepairInput,
   validateWorkspaceMemberReplacement,
   validateWorkspaceOwnerMemberRepair,
+  validatePersonalWorkspaceBootstrapOwnerMember,
+  validateWorkspaceInitialOwner,
+  sharedWorkspaceCreationAllowed,
+  isCanonicalActiveWorkspaceOwner,
+  assertWorkspaceBillingIntent,
+  assertWorkspaceBillingClaim,
+  assertWorkspaceBillingBindingRecord,
+  workspaceBillingPreparationMatches,
+  type StoredWorkspaceBillingBindingIntent,
+  type WorkspaceBillingBindingClaimInput,
+  type WorkspaceBillingBindingMutationResult,
   workspaceMemberMutationAllowed,
   workspaceMemberMutationDropsOwner,
   workspaceAccountAuthorityAllowed,
@@ -2376,12 +2388,13 @@ type D1PredeployedWorkspaceRow = Pick<
 const verifiedPredeployedD1Bindings = new WeakSet<object>();
 const predeployedD1SchemaReadiness = new WeakMap<object, Promise<void>>();
 const bootstrapD1SchemaReadiness = new WeakMap<object, Promise<void>>();
+const workspaceBillingD1SchemaReadiness = new WeakMap<object, Promise<void>>();
 
 function ensurePredeployedD1SchemaReady(db: D1Database): Promise<void> {
   if (verifiedPredeployedD1Bindings.has(db)) return Promise.resolve();
   let readiness = predeployedD1SchemaReadiness.get(db);
   if (readiness) return readiness;
-  const attempt = verifyD1OpenTofuLedgerSchemaPredeployed(db)
+  const attempt = verifyD1PredeployedSchemaEvidence(db, true)
     .then(() => {
       verifiedPredeployedD1Bindings.add(db);
     })
@@ -2394,6 +2407,18 @@ function ensurePredeployedD1SchemaReady(db: D1Database): Promise<void> {
   readiness = attempt;
   predeployedD1SchemaReadiness.set(db, readiness);
   return readiness;
+}
+
+/** New retained bindings are never queried/written on the v71 runtime bridge. */
+function ensureWorkspaceBillingD1SchemaReady(db: D1Database): Promise<void> {
+  const existing = workspaceBillingD1SchemaReadiness.get(db);
+  if (existing) return existing;
+  const attempt = verifyD1OpenTofuLedgerSchemaPredeployed(db).catch((error: unknown) => {
+    if (workspaceBillingD1SchemaReadiness.get(db) === attempt) workspaceBillingD1SchemaReadiness.delete(db);
+    throw error;
+  });
+  workspaceBillingD1SchemaReadiness.set(db, attempt);
+  return attempt;
 }
 
 function ensureBootstrapD1SchemaReady(db: D1Database): Promise<void> {
@@ -4746,6 +4771,36 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return workspace;
   }
 
+  async createWorkspaceWithInitialOwner(workspace: Workspace, member: WorkspaceMember): Promise<Workspace | undefined> {
+    validateWorkspaceInitialOwner(workspace, member);
+    await this.#ensureSchema();
+    const result = await this.#orm.batch([
+      this.#orm.insert(schema.workspaces).values({ id: workspace.id, handle: workspace.handle, recordJson: workspace, createdAt: workspace.createdAt, updatedAt: workspace.updatedAt }).onConflictDoNothing(),
+      this.#orm.insert(schema.workspaceMembers).select(this.#orm.select({
+        id: sql<string>`${member.id}`.as("id"), workspaceId: sql<string>`${workspace.id}`.as("workspaceId"),
+        accountId: sql<string>`${member.accountId}`.as("accountId"), status: sql<string>`'active'`.as("status"),
+        recordJson: sql<WorkspaceMember>`${JSON.stringify(member)}`.as("recordJson"),
+        createdAt: sql<string>`${member.createdAt}`.as("createdAt"), updatedAt: sql<string>`${member.updatedAt}`.as("updatedAt"),
+      }).from(sql`(select 1) as initial_workspace_member_source`).where(sql`changes() = 1`)),
+      this.#orm.select({ workspace: sql`${schema.workspaces.recordJson}`.as("workspace"), member: sql`${schema.workspaceMembers.recordJson}`.as("member") })
+        .from(schema.workspaces).innerJoin(schema.workspaceMembers, and(
+          eq(schema.workspaceMembers.workspaceId, schema.workspaces.id), eq(schema.workspaceMembers.accountId, workspace.ownerUserId),
+          eq(schema.workspaceMembers.status, "active"),
+          sql`json_extract(${schema.workspaceMembers.recordJson}, '$.id') = ${schema.workspaceMembers.id}`,
+          sql`json_extract(${schema.workspaceMembers.recordJson}, '$.workspaceId') = ${schema.workspaceMembers.workspaceId}`,
+          sql`json_extract(${schema.workspaceMembers.recordJson}, '$.accountId') = ${schema.workspaceMembers.accountId}`,
+          sql`json_extract(${schema.workspaceMembers.recordJson}, '$.status') = ${schema.workspaceMembers.status}`,
+          sql`json_extract(${schema.workspaceMembers.recordJson}, '$.createdAt') = ${schema.workspaceMembers.createdAt}`,
+          sql`json_extract(${schema.workspaceMembers.recordJson}, '$.updatedAt') = ${schema.workspaceMembers.updatedAt}`,
+        )).where(and(eq(schema.workspaces.handle, workspace.handle), eq(schema.workspaces.managementState, "active"))).limit(1),
+    ]);
+    const row = result[2][0];
+    if (!row) return undefined;
+    const current = parseD1WorkspaceRecord(row.workspace);
+    const owner = jsonRecordFromD1Value(row.member) as unknown as WorkspaceMember;
+    return sharedWorkspaceCreationAllowed(current, workspace, owner) ? current : undefined;
+  }
+
   async deleteWorkspace(id: string, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<boolean> {
     if (expectedWorkspaceManagementAuthority === undefined) {
       return await this.#drizzleDelete(schema.workspaces, eq(schema.workspaces.id, id));
@@ -4776,25 +4831,27 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     }
     const blockers = await this.#workspaceDeleteBlockers(expectedWorkspace.id);
     if (blockers.length > 0) return { status: "blocked", blockers };
-    await this.db.batch([
-      this.db.prepare(`delete from workspace_members where workspace_id = ?
-        and exists (select 1 from workspaces where id = ? and management_state = 'active' and management_epoch = ?
-          and not exists (select 1 from capsules where space_id = ? and status <> 'destroyed')
-          and not exists (select 1 from sources where space_id = ?)
-          and not exists (select 1 from runs where space_id = ? and status in ('queued', 'running'))
-          and not exists (select 1 from usage_events where workspace_id = ?)
-          and not exists (select 1 from backups where space_id = ?))`)
-        .bind(expectedWorkspace.id, expectedWorkspace.id, expectedWorkspaceManagementAuthority.managementEpoch,
-          expectedWorkspace.id, expectedWorkspace.id, expectedWorkspace.id, expectedWorkspace.id, expectedWorkspace.id),
-      this.db.prepare(`delete from workspaces where id = ? and management_state = 'active' and management_epoch = ?
-        and not exists (select 1 from capsules where space_id = ? and status <> 'destroyed')
-        and not exists (select 1 from sources where space_id = ?)
-        and not exists (select 1 from runs where space_id = ? and status in ('queued', 'running'))
-        and not exists (select 1 from usage_events where workspace_id = ?)
-        and not exists (select 1 from backups where space_id = ?)`)
-        .bind(expectedWorkspace.id, expectedWorkspaceManagementAuthority.managementEpoch,
-          expectedWorkspace.id, expectedWorkspace.id, expectedWorkspace.id, expectedWorkspace.id, expectedWorkspace.id),
+    const actor = input.expectedActor;
+    if (input.requireCurrentMembership && (!actor || actor.workspaceId !== expectedWorkspace.id || !isCanonicalActiveWorkspaceOwner(actor))) return { status: "conflict" };
+    // Delete the Workspace while the actor still exists, then remove its roster
+    // only when that exact guarded delete succeeded in this atomic batch.
+    const result = await this.#orm.batch([
+      this.#orm.delete(schema.workspaces).where(and(
+        eq(schema.workspaces.id, expectedWorkspace.id), eq(schema.workspaces.recordJson, expectedWorkspace),
+        eq(schema.workspaces.managementState, "active"), eq(schema.workspaces.managementEpoch, expectedWorkspaceManagementAuthority.managementEpoch),
+        input.requireCurrentMembership ? d1WorkspaceMemberSnapshotExists(this.#orm, actor!) : undefined,
+        sql`not exists (select 1 from capsules where space_id = ${expectedWorkspace.id} and status <> 'destroyed')`,
+        sql`not exists (select 1 from sources where space_id = ${expectedWorkspace.id})`,
+        sql`not exists (select 1 from runs where space_id = ${expectedWorkspace.id} and status in ('queued', 'running'))`,
+        sql`not exists (select 1 from usage_events where workspace_id = ${expectedWorkspace.id})`,
+        sql`not exists (select 1 from backups where space_id = ${expectedWorkspace.id})`,
+      )),
+      this.#orm.delete(schema.workspaceMembers).where(and(
+        eq(schema.workspaceMembers.workspaceId, expectedWorkspace.id), sql`changes() = 1`,
+        sql`not exists (select 1 from workspaces where id = ${expectedWorkspace.id})`,
+      )),
     ]);
+    if (changes(result[0] as D1Result) > 0) return { status: "deleted" };
     const after = await this.getWorkspace(expectedWorkspace.id);
     if (after === undefined) return { status: "deleted" };
     const afterBlockers = await this.#workspaceDeleteBlockers(expectedWorkspace.id);
@@ -4849,7 +4906,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     validateWorkspaceReplacement(input);
     if (!workspaceAccountReplacementAllowed(input)) return false;
     return await this.#replaceWorkspace(input,
-      input.expectedWorkspace.ownerUserId === input.actorAccountId
+      !input.requireCurrentMembership && input.expectedWorkspace.ownerUserId === input.actorAccountId
         ? undefined : d1WorkspaceMemberSnapshotExists(this.#orm, input.expectedActor!),
     );
   }
@@ -5084,7 +5141,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async claimPersonalWorkspaceBootstrap(
     ownerUserId: string,
     candidate: Workspace,
+    initialOwnerMember?: WorkspaceMember,
   ): Promise<Workspace | undefined> {
+    if (initialOwnerMember) validatePersonalWorkspaceBootstrapOwnerMember(ownerUserId, candidate, initialOwnerMember);
     await this.#ensureSchema();
     const exactClaim = async (): Promise<Workspace | undefined> => {
       const row = await this.#orm
@@ -5134,18 +5193,36 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       throw new Error("personal Workspace bootstrap adoption did not persist");
     }
 
-    await this.#orm
-      .insert(schema.workspaces)
-      .values({
+    const insertCandidate = this.#orm.insert(schema.workspaces).values({
         id: candidate.id,
         handle: candidate.handle,
         recordJson: candidate,
         createdAt: candidate.createdAt,
         updatedAt: candidate.updatedAt,
         personalBootstrapOwnerId: ownerUserId,
-      })
-      .onConflictDoNothing()
-      .run();
+      }).onConflictDoNothing();
+    if (initialOwnerMember) {
+      // changes() refers to the immediately preceding statement in this
+      // transaction. A conflicted candidate cannot install/repair an owner on
+      // the winning or an existing Workspace. A member insert failure rolls
+      // back the candidate too; never publish half an initial authority.
+      await this.#orm.batch([
+        insertCandidate,
+        this.#orm.insert(schema.workspaceMembers).select(
+          this.#orm.select({
+            id: sql<string>`${initialOwnerMember.id}`.as("id"),
+            workspaceId: sql<string>`${candidate.id}`.as("workspaceId"),
+            accountId: sql<string>`${ownerUserId}`.as("accountId"),
+            status: sql<string>`'active'`.as("status"),
+            recordJson: sql<WorkspaceMember>`${JSON.stringify(initialOwnerMember)}`.as("recordJson"),
+            createdAt: sql<string>`${initialOwnerMember.createdAt}`.as("createdAt"),
+            updatedAt: sql<string>`${initialOwnerMember.updatedAt}`.as("updatedAt"),
+          }).from(sql`(select 1) as personal_bootstrap_member_source`).where(sql`changes() = 1`),
+        ),
+      ]);
+    } else {
+      await insertCandidate.run();
+    }
     return await exactClaim();
   }
 
@@ -5494,6 +5571,122 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return workspaceMemberFromRow(row, { workspaceId, accountId });
   }
 
+  async getWorkspaceBillingBindingIntent(workspaceId: string): Promise<StoredWorkspaceBillingBindingIntent | undefined> {
+    await this.#ensureSchema();
+    await ensureWorkspaceBillingD1SchemaReady(this.db);
+    const row = await this.#orm.select().from(schema.workspaceBillingIntents).where(eq(schema.workspaceBillingIntents.workspaceId, workspaceId)).get();
+    return row ? this.#decodeWorkspaceBillingIntent(row) : undefined;
+  }
+
+  async getWorkspaceBillingBinding(workspaceId: string): Promise<WorkspaceBillingBinding | undefined> {
+    await this.#ensureSchema();
+    await ensureWorkspaceBillingD1SchemaReady(this.db);
+    const row = await this.#orm.select().from(schema.workspaceBillingBindings).where(eq(schema.workspaceBillingBindings.workspaceId, workspaceId)).get();
+    return row ? this.#decodeWorkspaceBillingBinding(row) : undefined;
+  }
+
+  #decodeWorkspaceBillingIntent(row: typeof schema.workspaceBillingIntents.$inferSelect): StoredWorkspaceBillingBindingIntent {
+    const record = row.recordJson as StoredWorkspaceBillingBindingIntent;
+    assertWorkspaceBillingIntent(record);
+    if (record.workspaceId !== row.workspaceId || record.intentId !== row.intentId || record.billingAuthority !== row.billingAuthority ||
+      record.workspaceRef !== row.workspaceRef || record.createdAt !== row.createdAt) throw new TypeError("Workspace billing intent columns disagree");
+    return structuredClone(record);
+  }
+
+  #decodeWorkspaceBillingBinding(row: typeof schema.workspaceBillingBindings.$inferSelect): WorkspaceBillingBinding {
+    const record = row.recordJson as WorkspaceBillingBinding;
+    assertWorkspaceBillingBindingRecord(record);
+    if (record.workspaceId !== row.workspaceId || record.intentId !== row.intentId || record.billingAuthority !== row.billingAuthority ||
+      record.workspaceRef !== row.workspaceRef || record.organizationRef !== row.organizationRef || record.boundAt !== row.boundAt) throw new TypeError("Workspace billing binding columns disagree");
+    return structuredClone(record);
+  }
+
+  #workspaceBillingAuthorityGuard(intent: StoredWorkspaceBillingBindingIntent): SQL {
+    return and(exists(this.#orm.select({ one: sql`1` }).from(schema.workspaces).where(and(
+      eq(schema.workspaces.id, intent.workspaceId), eq(schema.workspaces.recordJson, intent.originalWorkspace),
+      eq(schema.workspaces.managementState, "active"), eq(schema.workspaces.managementEpoch, intent.originalAuthority.managementEpoch),
+    ))), d1WorkspaceMemberSnapshotExists(this.#orm, intent.originalActor))!;
+  }
+
+  /** Validate the winner's original authority in the same batch, even if another replica just prepared it. */
+  #persistedWorkspaceBillingAuthorityGuard(): SQL {
+    const record = schema.workspaceBillingIntents.recordJson;
+    const workspace = schema.workspaces;
+    const member = schema.workspaceMembers;
+    return sql`exists (select 1 from ${workspace} where ${workspace.id} = ${schema.workspaceBillingIntents.workspaceId}
+      and ${workspace.recordJson} = json_extract(${record}, '$.originalWorkspace')
+      and ${workspace.managementState} = 'active'
+      and ${workspace.managementEpoch} = json_extract(${record}, '$.originalAuthority.managementEpoch'))
+      and exists (select 1 from ${member} where ${member.workspaceId} = ${schema.workspaceBillingIntents.workspaceId}
+        and ${member.accountId} = json_extract(${record}, '$.actorAccountId')
+        and ${member.status} = 'active'
+        and ${member.id} = json_extract(${record}, '$.originalActor.id')
+        and ${member.createdAt} = json_extract(${record}, '$.originalActor.createdAt')
+        and ${member.updatedAt} = json_extract(${record}, '$.originalActor.updatedAt')
+        and json_extract(${member.recordJson}, '$.id') = json_extract(${record}, '$.originalActor.id')
+        and json_extract(${member.recordJson}, '$.workspaceId') = ${schema.workspaceBillingIntents.workspaceId}
+        and json_extract(${member.recordJson}, '$.accountId') = ${member.accountId}
+        and json_extract(${member.recordJson}, '$.status') = 'active'
+        and json_extract(${member.recordJson}, '$.roles') = json_extract(${record}, '$.originalActor.roles')
+        and json_extract(${member.recordJson}, '$.createdAt') = ${member.createdAt}
+        and json_extract(${member.recordJson}, '$.updatedAt') = ${member.updatedAt})`;
+  }
+
+  async prepareWorkspaceBillingBinding(intent: StoredWorkspaceBillingBindingIntent): Promise<WorkspaceBillingBindingMutationResult<StoredWorkspaceBillingBindingIntent>> {
+    intent = structuredClone(intent);
+    assertWorkspaceBillingIntent(intent);
+    await this.#ensureSchema();
+    await ensureWorkspaceBillingD1SchemaReady(this.db);
+    const authority = this.#workspaceBillingAuthorityGuard(intent);
+    const insert = this.#orm.insert(schema.workspaceBillingIntents).select(this.#orm.select({
+      workspaceId: sql<string>`${intent.workspaceId}`.as("workspaceId"), intentId: sql<string>`${intent.intentId}`.as("intentId"),
+      billingAuthority: sql<string>`${intent.billingAuthority}`.as("billingAuthority"), workspaceRef: sql<string>`${intent.workspaceRef}`.as("workspaceRef"),
+      recordJson: sql<StoredWorkspaceBillingBindingIntent>`${JSON.stringify(intent)}`.as("recordJson"), createdAt: sql<string>`${intent.createdAt}`.as("createdAt"),
+    }).from(sql`(select 1) as workspace_billing_prepare_source`).where(authority)).onConflictDoNothing();
+    const read = this.#orm.select().from(schema.workspaceBillingIntents).where(and(
+      eq(schema.workspaceBillingIntents.workspaceId, intent.workspaceId), authority, this.#persistedWorkspaceBillingAuthorityGuard(),
+    ));
+    const [inserted, rows] = await this.#orm.batch([insert, read]);
+    if (rows[0]) {
+      const record = this.#decodeWorkspaceBillingIntent(rows[0]);
+      if (!workspaceBillingPreparationMatches(record, intent)) return { status: "conflict" };
+      return { status: changes(inserted as D1Result) ? "created" : "existing", record };
+    }
+    // Readback is classification only. No refreshed authority is used to
+    // retry the write or manufacture another intent after a refused prepare.
+    const existing = await this.getWorkspaceBillingBindingIntent(intent.workspaceId);
+    return existing && !workspaceBillingPreparationMatches(existing, intent) ? { status: "conflict" } : { status: "refused" };
+  }
+
+  async claimWorkspaceBillingBinding(input: WorkspaceBillingBindingClaimInput): Promise<WorkspaceBillingBindingMutationResult<WorkspaceBillingBinding>> {
+    input = structuredClone(input);
+    assertWorkspaceBillingClaim(input);
+    await this.#ensureSchema();
+    await ensureWorkspaceBillingD1SchemaReady(this.db);
+    const { expectedIntent: intent, binding } = input;
+    const intentGuard = exists(this.#orm.select({ one: sql`1` }).from(schema.workspaceBillingIntents).where(and(
+      eq(schema.workspaceBillingIntents.workspaceId, intent.workspaceId), eq(schema.workspaceBillingIntents.intentId, intent.intentId),
+      eq(schema.workspaceBillingIntents.recordJson, intent), this.#persistedWorkspaceBillingAuthorityGuard(),
+    )));
+    const authority = and(this.#workspaceBillingAuthorityGuard(intent), intentGuard)!;
+    const insert = this.#orm.insert(schema.workspaceBillingBindings).select(this.#orm.select({
+      workspaceId: sql<string>`${binding.workspaceId}`.as("workspaceId"), intentId: sql<string>`${binding.intentId}`.as("intentId"),
+      billingAuthority: sql<string>`${binding.billingAuthority}`.as("billingAuthority"), workspaceRef: sql<string>`${binding.workspaceRef}`.as("workspaceRef"),
+      organizationRef: sql<string>`${binding.organizationRef}`.as("organizationRef"), recordJson: sql<WorkspaceBillingBinding>`${JSON.stringify(binding)}`.as("recordJson"),
+      boundAt: sql<string>`${binding.boundAt}`.as("boundAt"),
+    }).from(sql`(select 1) as workspace_billing_claim_source`).where(authority)).onConflictDoNothing();
+    const read = this.#orm.select().from(schema.workspaceBillingBindings).where(and(eq(schema.workspaceBillingBindings.workspaceId, binding.workspaceId), authority));
+    const [inserted, rows] = await this.#orm.batch([insert, read]);
+    if (rows[0]) {
+      const record = this.#decodeWorkspaceBillingBinding(rows[0]);
+      return workspaceBillingBindingMatches(record, binding)
+        ? { status: changes(inserted as D1Result) ? "created" : "existing", record }
+        : { status: "conflict" };
+    }
+    const existing = await this.getWorkspaceBillingBinding(binding.workspaceId);
+    return existing && !workspaceBillingBindingMatches(existing, binding) ? { status: "conflict" } : { status: "refused" };
+  }
+
   async listWorkspaceMembers(
     workspaceId: string,
   ): Promise<readonly WorkspaceMember[]> {
@@ -5788,7 +5981,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       readiness.migrations_json,
       "migration ledger",
     );
-    await validateD1OpenTofuLedgerSchemaPredeployed(columns, migrations);
+    await validateD1OpenTofuLedgerSchemaPredeployed(columns, migrations, true);
     this.#predeployedSchemaVerified = true;
     verifiedPredeployedD1Bindings.add(this.db);
     this.#initialized = Promise.resolve();
@@ -12360,7 +12553,7 @@ function d1ConnectionActorAuthorityGuardStmt(
     authority.expectedWorkspace,
     expectedManagement,
   );
-  const actor = authority.expectedWorkspace.ownerUserId === authority.actorAccountId
+  const actor = !authority.requireCurrentMembership && authority.expectedWorkspace.ownerUserId === authority.actorAccountId
     ? sql`1`
     : authority.expectedActor === undefined
       ? sql`0`
@@ -16118,6 +16311,31 @@ const D1_SCHEDULED_SWEEP_CURSOR_STATEMENTS = [
    values ('workspaces', 0), ('active_capsules', 0), ('recoverable_runs', 0)`,
 ] as const;
 
+const D1_WORKSPACE_BILLING_BINDING_STATEMENTS = [
+  `create table workspace_billing_intents (
+    workspace_id text primary key,
+    intent_id text not null,
+    billing_authority text not null,
+    workspace_ref text not null,
+    record_json text not null,
+    created_at text not null
+  )`,
+  `create unique index workspace_billing_intents_intent_unique on workspace_billing_intents (intent_id)`,
+  `create unique index workspace_billing_intents_authority_ref_unique on workspace_billing_intents (billing_authority, workspace_ref)`,
+  `create table workspace_billing_bindings (
+    workspace_id text primary key,
+    intent_id text not null,
+    billing_authority text not null,
+    workspace_ref text not null,
+    organization_ref text not null,
+    record_json text not null,
+    bound_at text not null
+  )`,
+  `create unique index workspace_billing_bindings_intent_unique on workspace_billing_bindings (intent_id)`,
+  `create unique index workspace_billing_bindings_authority_ref_unique on workspace_billing_bindings (billing_authority, workspace_ref)`,
+  `create unique index workspace_billing_bindings_authority_org_unique on workspace_billing_bindings (billing_authority, organization_ref)`,
+] as const;
+
 const D1_OPEN_TOFU_SCHEMA_MIGRATIONS = [
   {
     version: 1,
@@ -18294,6 +18512,15 @@ ${D1_SCHEDULED_SWEEP_CURSOR_STATEMENTS.join("\n---\n")}
       await runD1AtomicSql(db, D1_SCHEDULED_SWEEP_CURSOR_STATEMENTS);
     },
   },
+  {
+    version: 72,
+    name: "d1_workspace_billing_bindings",
+    checksumSource: () => `Retained append-only Workspace billing enrollment intents and acknowledgements.
+No wallet, Workspace JSON marker, relink, or Workspace/Account cascade foreign key.
+${D1_WORKSPACE_BILLING_BINDING_STATEMENTS.join("\n---\n")}`,
+    async atomicStatements() { return D1_WORKSPACE_BILLING_BINDING_STATEMENTS; },
+    async apply(db) { await runD1AtomicSql(db, D1_WORKSPACE_BILLING_BINDING_STATEMENTS); },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
@@ -19238,6 +19465,11 @@ type D1SchemaMigrationRow = {
 export async function verifyD1OpenTofuLedgerSchemaPredeployed(
   db: D1Database,
 ): Promise<void> {
+  await verifyD1PredeployedSchemaEvidence(db, false);
+}
+
+/** Runtime bridge only: qualification above still requires exact current v72. */
+async function verifyD1PredeployedSchemaEvidence(db: D1Database, allowWorkspaceBillingBridge: boolean): Promise<void> {
   let columns: readonly D1TableInfoRow[];
   let rows: readonly D1SchemaMigrationRow[];
   try {
@@ -19257,20 +19489,28 @@ export async function verifyD1OpenTofuLedgerSchemaPredeployed(
     throw new Error("D1 OpenTofu predeployed schema verification failed");
   }
 
-  await validateD1OpenTofuLedgerSchemaPredeployed(columns, rows);
+  await validateD1OpenTofuLedgerSchemaPredeployed(columns, rows, allowWorkspaceBillingBridge);
 }
 
 async function validateD1OpenTofuLedgerSchemaPredeployed(
   columns: readonly D1TableInfoRow[],
   rows: readonly D1SchemaMigrationRow[],
+  allowWorkspaceBillingBridge = false,
 ): Promise<void> {
   assertD1SchemaMigrationLedgerShape(columns);
-  if (rows.length !== D1_OPEN_TOFU_SCHEMA_MIGRATIONS.length) {
+  const head = rows.at(-1)?.version;
+  if (allowWorkspaceBillingBridge && head !== 71 && head !== 72) {
+    throw new Error("D1 OpenTofu runtime bridge requires exact v71 or v72 schema");
+  }
+  const catalog = allowWorkspaceBillingBridge && head === 71
+    ? D1_OPEN_TOFU_SCHEMA_MIGRATIONS.filter((migration) => migration.version <= 71)
+    : D1_OPEN_TOFU_SCHEMA_MIGRATIONS;
+  if (rows.length !== catalog.length) {
     throw new Error("D1 OpenTofu predeployed schema verification failed");
   }
   const expectedChecksums = await expectedD1OpenTofuSchemaMigrationChecksums();
   for (let index = 0; index < rows.length; index += 1) {
-    const migration = D1_OPEN_TOFU_SCHEMA_MIGRATIONS[index];
+    const migration = catalog[index];
     const row = rows[index];
     if (
       !migration ||

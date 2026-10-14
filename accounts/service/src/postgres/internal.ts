@@ -106,6 +106,7 @@ export interface PasskeyCredentialRow {
 }
 
 export interface AccountSessionRow {
+  hosted_metadata?: Partial<AccountSessionRecord> | null;
   session_id: string;
   subject: TakosumiSubject;
   created_at: TimeValue;
@@ -127,6 +128,7 @@ export interface PrivacyRequestRow {
 }
 
 export interface AuthorizationCodeRow {
+  hosted_metadata?: Partial<AuthorizationCodeRecord> | null;
   client_id: string;
   redirect_uri: string;
   scope: string;
@@ -142,6 +144,7 @@ export interface AuthorizationCodeRow {
 }
 
 export interface TokenRow {
+  hosted_metadata?: Partial<TokenRecord> | null;
   client_id: string;
   audience: string | null;
   scope: string;
@@ -233,6 +236,7 @@ export function accountSessionFromRow(
   row: AccountSessionRow,
 ): AccountSessionRecord {
   return {
+    ...row.hosted_metadata,
     sessionId: row.session_id,
     subject: row.subject,
     createdAt: millis(row.created_at),
@@ -262,6 +266,7 @@ export function authorizationCodeFromRow(
   row: AuthorizationCodeRow,
 ): AuthorizationCodeRecord {
   return {
+    ...row.hosted_metadata,
     clientId: row.client_id,
     redirectUri: row.redirect_uri,
     scope: row.scope,
@@ -279,6 +284,7 @@ export function authorizationCodeFromRow(
 
 export function tokenFromRow(row: TokenRow): TokenRecord {
   return {
+    ...row.hosted_metadata,
     clientId: row.client_id,
     audience: optional(row.audience),
     scope: row.scope,

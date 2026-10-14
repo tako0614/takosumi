@@ -128,8 +128,8 @@ test("Accounts D1 apply requires all confirmations before remote I/O and uses on
     confirmConfigurationDigest: plan.configurationDigest,
     now: () => 2_000,
   });
-  expect(batchCalls).toBe(1);
-  expect(report.applied).toEqual([4]);
+  expect(batchCalls).toBe(2);
+  expect(report.applied).toEqual([4,5]);
   expect(report.skipped).toEqual([0, 1, 2, 3]);
   expect(report.lostAcknowledgementReconciled).toEqual([]);
   expect(report).not.toHaveProperty("accountId");
@@ -292,7 +292,7 @@ test("Accounts D1 apply requires backup evidence and sends exactly one batch per
   };
   const report = await applyWithConfirmations(observed, catalog, plan);
   expect(batchCalls).toBe(catalog.migrations.length);
-  expect(report.applied).toEqual([0, 1, 2, 3, 4]);
+  expect(report.applied).toEqual([0, 1, 2, 3, 4, 5]);
 });
 
 test("migrate-d1 plan makes zero remote calls and transcripts never expose target IDs or token", async () => {
@@ -334,8 +334,8 @@ test("migrate-d1 plan makes zero remote calls and transcripts never expose targe
   expect(JSON.parse(transcript)).toMatchObject({
     mode: "plan",
     status: "planned",
-    expectedHead: 4,
-    expectedCount: 5,
+    expectedHead: 5,
+    expectedCount: 6,
   });
 });
 
@@ -849,9 +849,9 @@ test("migrate-d1 owner CLI dispatches apply, status, and verify without exposing
   expect(JSON.parse(applyOutput.join("\n"))).toMatchObject({
     mode: "apply",
     status: "applied",
-    applied: [4],
+    applied: [4,5],
   });
-  expect(batchCalls).toBe(1);
+  expect(batchCalls).toBe(2);
 
   for (const mode of ["status", "verify"] as const) {
     const output: string[] = [];
@@ -872,7 +872,7 @@ test("migrate-d1 owner CLI dispatches apply, status, and verify without exposing
     expect(transcript).not.toContain("database_456");
     expect(transcript).not.toContain("token_must_not_appear");
   }
-  expect(batchCalls).toBe(1);
+  expect(batchCalls).toBe(2);
 });
 
 test("Accounts D1 status and verify are strictly read-only", async () => {
@@ -917,7 +917,7 @@ test("Accounts D1 status and verify are strictly read-only", async () => {
     statements.every((sql) => /^(?:SELECT|PRAGMA)\b/iu.test(sql.trim())),
   ).toBe(true);
 
-  const v4Database = await databaseAtHead(4);
+  const v4Database = await databaseAtHead(5);
   const verified = await verifyPlannedD1AccountsMigrations({
     database: v4Database,
     catalog,
@@ -957,7 +957,7 @@ test("Accounts D1 lost acknowledgement reconciles only an exact committed receip
 
   const report = await applyWithConfirmations(lostAck, catalog, plan);
   expect(report.applied).toEqual([]);
-  expect(report.lostAcknowledgementReconciled).toEqual([4]);
+  expect(report.lostAcknowledgementReconciled).toEqual([4,5]);
 
   const absent = await databaseAtHead(3);
   const notCommitted: D1AccountsMigrationDatabase = {
@@ -1030,7 +1030,7 @@ test("same-catalog runner adopts the winner while a conflicting catalog fails cl
     catalog,
     plan,
   );
-  expect(adopted.applied).toEqual([]);
+  expect(adopted.applied).toEqual([5]);
   expect(adopted.lostAcknowledgementReconciled).toEqual([4]);
 
   const conflictingV4 = {
@@ -1040,7 +1040,7 @@ test("same-catalog runner adopts the winner while a conflicting catalog fails cl
   const conflictingCatalog = {
     ...catalog,
     digest: `sha256:${"d".repeat(64)}`,
-    migrations: [...catalog.migrations.slice(0, 4), conflictingV4],
+    migrations: [...catalog.migrations.slice(0, 4), conflictingV4, ...catalog.migrations.slice(5)],
   };
   const conflictingPlanBody = {
     ...plan,

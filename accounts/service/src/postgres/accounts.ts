@@ -244,3 +244,8 @@ function normalizeAccountEmail(email: string | undefined): string | undefined {
   const trimmed = email?.trim().toLowerCase();
   return trimmed ? trimmed : undefined;
 }
+
+export async function linkUpstreamIdentityIfAbsent(client: PostgresQueryClient, record: UpstreamIdentityRecord): Promise<boolean> {
+  const result=await runQuery(client,`INSERT INTO accounts_v1.upstream_identities(provider_id,upstream_issuer,upstream_subject,subject,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING RETURNING subject`,[record.providerId,record.upstreamIssuer,record.upstreamSubject,record.subject,toDate(record.createdAt),toDate(record.updatedAt)]);
+  return result.rows.length===1;
+}

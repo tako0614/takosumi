@@ -565,6 +565,16 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       primaryKey: ["lane"],
     },
     {
+      name: "takosumi_workspace_billing_intents", domain: "deploy",
+      columns: ["workspace_id", "intent_id", "billing_authority", "workspace_ref", "record_json", "created_at"],
+      primaryKey: ["workspace_id"], uniqueConstraints: [["intent_id"], ["billing_authority", "workspace_ref"]],
+    },
+    {
+      name: "takosumi_workspace_billing_bindings", domain: "deploy",
+      columns: ["workspace_id", "intent_id", "billing_authority", "workspace_ref", "organization_ref", "record_json", "bound_at"],
+      primaryKey: ["workspace_id"], uniqueConstraints: [["intent_id"], ["billing_authority", "workspace_ref"], ["billing_authority", "organization_ref"]],
+    },
+    {
       // §30 artifact ledger (R2 pointer metadata for plan / state archives).
       name: "takosumi_artifacts",
       domain: "deploy",
@@ -5039,5 +5049,31 @@ insert into takosumi_scheduled_sweep_cursors (lane, generation)
 values ('workspaces', 0), ('active_capsules', 0), ('recoverable_runs', 0)
 on conflict (lane) do nothing;`,
       down: `drop table if exists takosumi_scheduled_sweep_cursors;`,
+    },
+    {
+      id: "deploy.workspace_billing_bindings.create", version: 119, domain: "deploy",
+      description: "Retain immutable Workspace billing enrollment intents and owner acknowledgements without a Workspace cascade, wallet, or relink.",
+      sql: `create table if not exists takosumi_workspace_billing_intents (
+  workspace_id text primary key,
+  intent_id text not null,
+  billing_authority text not null,
+  workspace_ref text not null,
+  record_json jsonb not null,
+  created_at text not null
+);
+create unique index if not exists takosumi_workspace_billing_intents_intent_unique on takosumi_workspace_billing_intents (intent_id);
+create unique index if not exists takosumi_workspace_billing_intents_authority_ref_unique on takosumi_workspace_billing_intents (billing_authority, workspace_ref);
+create table if not exists takosumi_workspace_billing_bindings (
+  workspace_id text primary key,
+  intent_id text not null,
+  billing_authority text not null,
+  workspace_ref text not null,
+  organization_ref text not null,
+  record_json jsonb not null,
+  bound_at text not null
+);
+create unique index if not exists takosumi_workspace_billing_bindings_intent_unique on takosumi_workspace_billing_bindings (intent_id);
+create unique index if not exists takosumi_workspace_billing_bindings_authority_ref_unique on takosumi_workspace_billing_bindings (billing_authority, workspace_ref);
+create unique index if not exists takosumi_workspace_billing_bindings_authority_org_unique on takosumi_workspace_billing_bindings (billing_authority, organization_ref);`,
     },
   ]);
