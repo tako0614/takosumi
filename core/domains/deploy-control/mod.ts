@@ -1260,6 +1260,8 @@ export interface OpenTofuControllerDependencies {
   readonly billingEnforcement?: BillingEnforcement;
   /** Seam B plan-quota port. Omitted ⇒ OSS no-op (no plan limits). */
   readonly quotaPolicy?: QuotaPolicy;
+  /** Explicit host invariant independent of the Workspace's showback setting. */
+  readonly billingEnforcementRequired?: boolean;
 }
 
 export interface DeployControlActorContext {
@@ -1632,6 +1634,9 @@ export class OpenTofuController {
         ? { enforcement: dependencies.billingEnforcement }
         : {}),
       ...(dependencies.quotaPolicy ? { quota: dependencies.quotaPolicy } : {}),
+      ...(dependencies.billingEnforcementRequired === true
+        ? { enforcementRequired: true }
+        : {}),
     });
     this.#usage = new UsageReportingService({
       store: this.#store,

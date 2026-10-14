@@ -1,136 +1,125 @@
-# Takosumi hosted service pricing
+# Takosumi Hosted pricing
 
-The Takosumi hosted service uses tax-exclusive USD prepaid credits. There is no monthly
-subscription. Every account follows the same hosted-service PriceCatalog;
-Resource counts are common safety ceilings, not tier features.
+The adopted launch prices for Takosumi Hosted and Takoserver are in
+tax-exclusive USD. Both products use the monthly allowance and balance of the
+same Organization.
 
-## Credit billing
+> **Availability:** These are adopted launch prices. Shared login, Workspace
+> and billing activation and staging verification are in progress. This page
+> does not establish availability; check the authenticated price and service
+> display. The Container price revision is also awaiting activation. New rates
+> do not reprice past usage.
 
-| Action             | Behaviour                                                                   |
-| ------------------ | --------------------------------------------------------------------------- |
-| Manual recharge    | Add `$5`, `$10`, `$25`, `$50`, or `$100` of credit                          |
-| Automatic recharge | Off by default; the owner selects a threshold, amount, and hard monthly cap |
-| Hosted resources   | Deduct exact PriceCatalog usage from the credit balance                     |
+## Plans and top-ups
 
-An owner starts without a card or declared country and receives one `$0.25`
-onboarding credit. The credit is not renewed or redeemable for cash.
-Positive-priced operations and
-runtime usage pause when it is exhausted; Resources are not deleted, destroy
-remains available, and there is no automatic inactivity deletion.
+| Plan | Monthly price | Monthly usage allowance | Card |
+| --- | ---: | ---: | --- |
+| Free | `$0` | `$1.50` | Not required |
+| `$10` plan | `$10` | `$20` | Required |
+| `$50` plan | `$50` | `$100` | Required |
 
-The first credit Checkout records the card, customer type, and billing country.
-It saves the payment method for future automatic recharge, but automatic
-recharge stays off until the owner enables it separately. A recharge never
-exceeds the configured per-charge amount. If the monthly cap would be exceeded
-or payment fails, the triggering operation stops before backend execution.
+Allowances reset monthly. The Free `$1.50` does not stack with a paid plan.
+Top-ups add their face value to the balance; the paid plan's doubled allowance
+does not multiply a top-up. A payment method is required for paid plans,
+top-ups and on-demand usage.
 
-External providers connected with your own Provider Connection
-are billed directly by that provider and do not consume the grant.
+## Account, Workspace and balance
 
-## Usage and Limits
+At launch, both products will use one account at `auth.takos.jp`. The first
+login will create a personal Workspace. Additional team, billing and
+environment Workspaces use the same Workspace and membership authority.
+Matching email addresses alone never grant access to another Workspace.
 
-The one-time onboarding credit is applied first to metered Takosumi hosted-service
-resources and services. Usage and billing are aggregated for the owner account
-while preserving Workspace and Resource attribution for the usage breakdown.
+Each Workspace's Organization binding selects the paying Organization.
+Takosumi Hosted and Takoserver use one wallet for that Organization rather
+than separate product balances. Usage records the source Workspace and
+Resource and is shown with a per-Workspace breakdown. Switching between
+Workspaces in the same Organization does not create another balance or
+allowance.
 
-The owner-account safety ceiling is 250 total Resources; 100 each for
-Edge, Object, KV, Queue and Schedule; 50 each for Database, Workflow and
-Stateful Actor; 25 Vector indexes; 10 Containers; and 25 active verified
-domains. These are shared abuse and safety limits, not tier features.
+## Usage prices
 
-## Usage Prices
+Cloudflare-backed usage is charged at **three times** the Cloudflare usage
+rate in the versioned price revision supplied by Takoserver. A change to a
+public supplier price does not make the browser recalculate a charge. Check
+the authenticated price display for the applicable revision, meter, unit and
+rate. A new revision applies to usage after activation.
 
-The Takosumi hosted service's versioned PriceCatalog is the authority for hosted capacity
-prices. Provider public prices remain cost-comparison inputs, but provider
-invoices do not define tenant usage. Provider shared free tiers and fixed
-platform costs are absorbed by the Takosumi hosted service rather than allocated as hidden
-per-tenant discounts. Catalog changes are versioned and effective-dated and never re-rate
-old usage.
+[Takoserver shared hosted pricing](https://github.com/tako0614/takoserver/blob/main/config/shared-hosted-pricing.json)
+owns the supplied price definitions. Takosumi Hosted displays the supplied
+price and plan snapshots instead of creating another price authority or
+commercial ledger. Supplier free tiers are separate from the Free allowance
+above. An unpriced meter or unreleased service is not enabled by this page.
 
-| Service                          | Billable item                         |                                                              Price |
-| -------------------------------- | ------------------------------------- | -----------------------------------------------------------------: |
-| Edge Worker                      | accepted gateway requests             |                                                  `$1.00 / million` |
-| Edge Worker                      | active Ready Resource                 |                                           `$0.09 / Resource-month` |
-| Edge Worker                      | CPU / subrequests                     |                 included (`10 CPU-ms`, `5` subrequests / dispatch) |
-| Custom Domain                    | active verified hostname              |                                           `$0.15 / hostname-month` |
-| Object Storage Standard          | storage                               |                                               `$0.0225 / GB-month` |
-| Object Storage Standard          | Class A / Class B                     |                              `$6.75 / million` / `$0.54 / million` |
-| Object Storage Infrequent Access | storage                               |                                                `$0.015 / GB-month` |
-| Object Storage Infrequent Access | Class A / Class B                     |                             `$13.50 / million` / `$1.35 / million` |
-| Object Storage Infrequent Access | retrieval                             |                                                      `$0.015 / GB` |
-| KV                               | reads                                 |                                             `$0.75 / million keys` |
-| KV                               | writes / deletes / lists              |                                             `$7.50 / million keys` |
-| KV                               | storage                               |                                                 `$0.75 / GB-month` |
-| Database                         | rows read / written                   |                                    `$0.0015` / `$1.50` per million |
-| Database                         | storage                               |                                                `$1.125 / GB-month` |
-| Queue                            | operations                            |                                     `$0.60 / million 64 KB chunks` |
-| Vector Index                     | queried dimensions                    |                                                 `$0.015 / million` |
-| Vector Index                     | stored dimensions                     |                                             `$0.075 / 100 million` |
-| Durable Workflow                 | invocation / CPU                      |                       `$0.45 / million` / `$0.03 / million CPU-ms` |
-| Durable Workflow                 | state / steps                         |                       `$0.30 / GB-month` / `$1.20 / 100,000 steps` |
-| Container                        | memory / CPU / disk                   | `$0.00000375 / GiB-s`, `$0.000030 / vCPU-s`, `$0.000000105 / GB-s` |
-| Container                        | egress: NA+EU / Oceania+KR+TW / other |                             `$0.0375` / `$0.075` / `$0.060` per GB |
-| Stateful Actor                   | requests / duration                   |                       `$0.225 / million` / `$18.75 / million GB-s` |
-| Stateful Actor                   | rows read / written                   |                                    `$0.0015` / `$1.50` per million |
-| Stateful Actor                   | SQL storage                           |                                                 `$0.30 / GB-month` |
-| AI Gateway                       | model/upstream usage                  |        approved upstream price `x 1.5` + Edge Worker gateway usage |
+### Container launch rates
 
-Object Storage delete, abort, and Internet egress, plus preview, binding,
-secret configuration, route, schedule, static-asset control, observe, refresh,
-and delete have explicit `$0` meters. Runtime or storage work they trigger is
-still charged by the target service. Workflow state and step meters use a zero
-catalog before `2026-08-10` and the rates above only on or after that date.
+Containers will use the same rate across execution paths, based on Cloudflare
+Containers costs. These adopted additional meters are awaiting publication
+and activation of the price revision.
 
-An Edge request is accepted after quota and credit reservation and successful
-durable Takosumi usage capture. Tenant errors, CPU/subrequest limit failures,
-and dispatch failures after that point remain one charged accepted request. A
-failure before capture does not invoke tenant code and is not charged. Workers
-Logs, invocation logs, and Logpush are disabled by the GA contract. Legacy `request`,
-`cpu_time_us`, `subrequest`, `active_script_millisecond`, and log meters remain
-explicit `$0` history rows and cannot authorize a new charge.
+| Meter | Billing unit | Launch rate |
+| --- | --- | ---: |
+| CPU | vCPU-second | `$0.000060` |
+| Memory | GiB-second | `$0.0000075` |
+| Egress | GB | `$0.15` |
+| Image storage | GB-month | `$0.045` |
 
-Provider cost references: [Workers for Platforms](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/reference/pricing/),
-[R2](https://developers.cloudflare.com/r2/pricing/),
-[KV](https://developers.cloudflare.com/kv/platform/pricing/),
-[D1](https://developers.cloudflare.com/d1/platform/pricing/),
-[Queues](https://developers.cloudflare.com/queues/platform/pricing/),
-[Vectorize](https://developers.cloudflare.com/vectorize/platform/pricing/),
-[Workflows](https://developers.cloudflare.com/workflows/reference/pricing/),
-[Containers](https://developers.cloudflare.com/containers/pricing/),
-[Durable Objects](https://developers.cloudflare.com/durable-objects/platform/pricing/), and
-[Cloudflare for SaaS](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/plans/).
+CPU and memory use the overage rates in
+[Cloudflare Containers pricing](https://developers.cloudflare.com/containers/platform/pricing/).
+Egress uses one rate across regions, based on that page's highest regional
+cost of `$0.05 / GB`. Image storage uses the
+[R2 Standard storage rate](https://developers.cloudflare.com/r2/pricing/) of
+`$0.015 / GB-month`. Disk is not an added meter in this revision. Usage of
+Workers or other services serving a Container is charged by their applicable
+enabled meters.
+
+## Usage display and spending limits
+
+The usage display shows the percentage of the allowance consumed and warns
+at 80% and 95%. The default `onLimit` is `stop`, which stops consumption beyond
+the allowance or balance. It does not automatically select a paid plan or
+switch to postpaid billing.
+
+| `onLimit` | Policy |
+| --- | --- |
+| `stop` | Default; stop affected consumption at the limit |
+| `prepaid` | Use purchased balance only when explicitly selected |
+| `postpaid` | Explicitly select postpaid billing after support and eligibility checks |
+| `on-demand` | Explicitly select metered usage after checking payment method and terms |
+
+Only choices enabled by the authenticated contract are shown. The current
+supplier price definition marks `postpaid` as unsupported; it is not currently
+an available choice. Reaching a limit does not automatically delete existing
+Resources. Delete them through the provider graph that created them.
 
 ## Preview and invoice contract
 
-Preview returns the offering, SKU and PriceCatalog versions, tax treatment,
-unit prices, estimate, and expiry. Apply accepts only that exact quote. An
-unpriced meter, inactive catalog, missing manager, or expired quote fails
-closed before backend execution.
+Before execution, Preview shows the applicable price revision, meter, rate,
+tax treatment, estimate and expiry. Apply uses the reviewed exact quote. An
+unpriced meter, inactive catalog, missing manager, or expired quote stops
+execution before the backend is called. Usage, reservations, refunds or
+credits and invoice lines are reconciled before closing the billing period.
 
-Usage is aggregated in integer smallest units before billing-unit rounding;
-Takosumi does not round every fractional event upward. A billing period does
-not close until immutable usage, reservations, refunds or credits, and Stripe
-invoice lines reconcile.
+## Amount precision and tax
 
-## Tax
+The shared ledger stores integer micro-USD (`$1 = 1,000,000 micro-USD`). For
+example, Container memory costs `7,500 micro-USD` per `1,000 GiB-second`.
+Fractional usage events are not each rounded up to a cent. The aggregated
+billed amount is rounded up to cents once at payment time. Check Checkout and
+the invoice for tax and the total payable amount.
 
-Displayed prices exclude tax. Checkout and invoices use Stripe automatic tax.
-Personal-use PaaS uses `txcd_10102001`; business-use PaaS uses
-`txcd_10102000`. Customer type, location and tax-ID evidence are pinned to the
-quote and invoice. The actual tax depends on customer location and our tax
-registrations.
+## App addresses
 
-## Spend Guard
+Hosted apps will use `<name>.app.takos.jp` at launch. Names are unique across
+both products, with one dispatch and wildcard TLS owned by Takoserver. This
+is under staging verification; the production route switch has not happened.
+Hosted custom domains are planned after launch. Self-hosted CustomDomain
+choices remain available.
 
-Operator hard caps are `$25 / single authorization`, `$100 / rolling day`, and
-`$500 / billing period`. Customers can set lower account, Workspace or service
-budgets. Raising an operator cap requires support review. Destroy and DELETE
-cleanup normally remain available without another precharge.
+## Bring your own provider
 
-## Bring your own key
-
-The Takosumi hosted service does not meter or spend-gate an external provider connected with
-your own Provider Connection. Billing and provider free tiers follow your
-contract with that provider. Provider credentials, API keys, DSNs, AI upstream
-keys, and payment secrets are never stored in usage events, invoice projections,
-catalogs, or public status.
+An external provider connected through your own Provider Connection bills
+you directly under its own contract. The Hosted allowance and three-times
+rule are not applied again to that provider's charges. Self-hosted Takosumi
+software has no usage fee. Pay the execution environment and external
+provider costs to their respective suppliers.

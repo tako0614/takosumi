@@ -8,7 +8,7 @@ export default function Pricing() {
         </div>
         <div class="pricing-options">
           <div class="pricing-option"><h3>セルフホスト</h3><p>Takosumi 自体を自分の環境で運用します。実行環境と接続を自分で管理します。</p><a href="/docs/concepts/self-host">導入方法を見る <span aria-hidden="true">↗</span></a></div>
-          <div class="pricing-option"><h3>Hosted</h3><p>Takosumi の管理画面を使います。管理・実行の利用料と、アプリの実行先にかかる費用を確認して進めます。</p><a href="https://app.takosumi.com/docs/pricing">公開料金を見る <span aria-hidden="true">↗</span></a></div>
+          <div class="pricing-option"><h3>Hosted（ローンチ予定）</h3><p>Free はカード不要で $1.50/月分。有料プランは月額 $10 で $20、$50 で $100 の利用枠です（税別 USD）。Takoserver と共通の残高を使い、上限到達時は停止が初期値。共通ログインと課金の切り替えは検証中です。</p><a href="https://app.takosumi.com/docs/pricing">ローンチ料金を見る <span aria-hidden="true">↗</span></a></div>
         </div>
       </div>
     </section>

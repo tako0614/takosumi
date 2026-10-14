@@ -73,7 +73,15 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_EXECUTOR_ARTIFACT_DIGEST?: string;
   /** Dedicated HMAC secret for generic, route-scoped run credentials. */
   readonly TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET?: string;
-  /** Optional Operator/Cloud commercial billing extension (Seam B). */
+  /** Private, operator-selected direct-method billing RPC service (Seam B). */
+  readonly TAKOSUMI_BILLING?: import("takosumi-contract/billing").BillingRpcService;
+  /**
+   * Exact `1` requires the complete billing port even when a Workspace disables
+   * OSS showback. Omission retains the self-host no-op default. Operator-only
+   * composition; this is never a persisted Workspace billing mode.
+   */
+  readonly TAKOSUMI_BILLING_REQUIRED?: string;
+  /** In-process host factory; cannot be used alongside TAKOSUMI_BILLING RPC. */
   readonly TAKOSUMI_BILLING_EXTENSION_FACTORY?: import("takosumi-contract/billing").BillingExtensionFactory;
   /**
    * Host-code projector for recoverable runtime routing/activation state.

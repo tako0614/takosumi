@@ -641,6 +641,8 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * ports above remain available for focused tests and custom embeddings.
    */
   readonly billingExtensionFactory?: BillingExtensionFactory;
+  /** Operator-only invariant: Workspace showback settings cannot bypass this port. */
+  readonly billingEnforcementRequired?: boolean;
   /**
    * Internal compatibility seam for accounts-plane / CLI in-process callers.
    * Internet-facing platform hosts must leave this false so legacy `/v1/*`
@@ -1399,6 +1401,9 @@ export async function createTakosumiService(
     ...(showbackRater ? { showbackRater } : {}),
     ...(billingEnforcement ? { billingEnforcement } : {}),
     ...(quotaPolicy ? { quotaPolicy } : {}),
+    ...(options.billingEnforcementRequired === true
+      ? { billingEnforcementRequired: true }
+      : {}),
     observability: context.adapters.observability,
     metricTags,
   });
