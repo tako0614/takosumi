@@ -48,6 +48,8 @@ export interface BillingServiceDependencies {
   readonly rater?: ShowbackRater;
   readonly enforcement?: BillingEnforcement;
   readonly quota?: QuotaPolicy;
+  /** Host composition only; never supplied by a Workspace setting or request. */
+  readonly enforcementRequired?: boolean;
 }
 
 export class BillingService {
@@ -59,8 +61,21 @@ export class BillingService {
   readonly #rater: ShowbackRater;
   readonly #enforcement: BillingEnforcement;
   readonly #quota: QuotaPolicy;
+  readonly #enforcementRequired: boolean;
 
   constructor(dependencies: BillingServiceDependencies) {
+    this.#enforcementRequired = dependencies.enforcementRequired === true;
+    if (this.#enforcementRequired && (
+      typeof dependencies.rater?.ratePlan !== "function" ||
+      typeof dependencies.rater?.rateUsage !== "function" ||
+      typeof dependencies.enforcement?.reservePlanBilling !== "function" ||
+      typeof dependencies.enforcement?.assertReservationSatisfied !== "function" ||
+      typeof dependencies.enforcement?.captureRunBilling !== "function" ||
+      typeof dependencies.enforcement?.releaseReservation !== "function" ||
+      typeof dependencies.quota?.evaluatePlanQuota !== "function"
+    )) {
+      throw new TypeError("Required billing composition must provide all seven billing methods");
+    }
     this.#store = dependencies.store;
     this.#newId = dependencies.newId;
     this.#now = dependencies.now;
@@ -140,7 +155,7 @@ export class BillingService {
     const workspaceId = input.planRun.workspaceId;
     const workspace = await this.#requireWorkspace(workspaceId);
     const settings = this.billingSettingsForWorkspaceRecord(workspace);
-    if (settings.mode === "disabled") {
+    if (settings.mode === "disabled" && !this.#enforcementRequired) {
       return {
         reasons: [],
         audit: {
@@ -235,7 +250,7 @@ export class BillingService {
     const workspaceId = planRun.workspaceId;
     const workspace = await this.#requireWorkspace(workspaceId);
     const settings = this.billingSettingsForWorkspaceRecord(workspace);
-    if (settings.mode === "disabled" || planSkipsBillingReservation(planRun)) {
+    if ((settings.mode === "disabled" && !this.#enforcementRequired) || planSkipsBillingReservation(planRun)) {
       return;
     }
     await this.#enforcement.assertReservationSatisfied({
@@ -254,10 +269,10 @@ export class BillingService {
     const workspaceId = input.planRun.workspaceId;
     const workspace = await this.#requireWorkspace(workspaceId);
     const settings = this.billingSettingsForWorkspaceRecord(workspace);
-    if (settings.mode === "disabled") return;
+    if (settings.mode === "disabled" && !this.#enforcementRequired) return;
     const rating = planShowbackRating(input.planRun);
     const estimatedUsdMicros = rating.usdMicros;
-    await this.#store.putUsageEvent({
+    if (settings.mode === "showback") await this.#store.putUsageEvent({
       id: this.#newId("usage"),
       workspaceId,
       ...(input.planRun.capsuleId
@@ -291,7 +306,7 @@ export class BillingService {
     const workspaceId = planRun.workspaceId;
     const workspace = await this.#requireWorkspace(workspaceId);
     const settings = this.billingSettingsForWorkspaceRecord(workspace);
-    if (settings.mode === "disabled" || planSkipsBillingReservation(planRun)) {
+    if ((settings.mode === "disabled" && !this.#enforcementRequired) || planSkipsBillingReservation(planRun)) {
       return;
     }
     await this.#enforcement.releaseReservation({
@@ -303,23 +318,23 @@ export class BillingService {
   }
 
   /**
-   * Rate one provider-neutral measurement. Disabled Workspaces produce no
-   * usage event; showback Workspaces always receive explicit rated/unrated
-   * evidence from the configured host rater.
+   * Rate one provider-neutral measurement. Disabled Workspaces produce no OSS
+   * usage event; an explicitly required host still receives the measurement.
    */
   async rateUsageMeasurement(
     input: Omit<UsageShowbackRatingContext, "billingSubjectId">,
   ): Promise<ShowbackRating | undefined> {
     const workspace = await this.#requireWorkspace(input.workspaceId);
     const settings = this.billingSettingsForWorkspaceRecord(workspace);
-    if (settings.mode === "disabled") return undefined;
-    return normalizeShowbackRating(
+    if (settings.mode === "disabled" && !this.#enforcementRequired) return undefined;
+    const rating = normalizeShowbackRating(
       await this.#rater.rateUsage({
         ...input,
         billingSubjectId: workspace.ownerUserId,
       }),
       "usage",
     );
+    return settings.mode === "disabled" ? undefined : rating;
   }
 }
 

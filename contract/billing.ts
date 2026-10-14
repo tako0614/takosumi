@@ -358,6 +358,16 @@ export interface QuotaPolicy {
   ): Promise<BillingEnforcementDecision>;
 }
 
+/**
+ * Structural service-binding surface for host billing decisions. Every call
+ * accepts the existing provider-neutral context and returns a plain DTO (or
+ * void); unlike BillingExtensionFactory, no function-bearing object crosses
+ * the RPC boundary. Hosts expose these methods from a private WorkerEntrypoint.
+ * Workspace/subject/Run authority is resolved by Core before invoking this port.
+ */
+export interface BillingRpcService
+  extends ShowbackRater, BillingEnforcement, QuotaPolicy {}
+
 /** OSS default: showback enforcement that never blocks and never charges. */
 export const NOOP_BILLING_ENFORCEMENT: BillingEnforcement = {
   async reservePlanBilling(): Promise<BillingEnforcementDecision> {
