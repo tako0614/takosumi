@@ -7,6 +7,7 @@ import type {
 } from "../bindings.ts";
 import { isLegacySourceArchiveRestoreRef } from "../legacy_source_archive_restore.ts";
 import { artifactStorageUsageBucket } from "../artifact-storage-usage.ts";
+import { storedServiceCompositionFromEnv, storedServiceUsageBucket, type StoredBucketRole } from "../stored-service-usage.ts";
 import {
   maxStateArtifactCiphertextBytes,
   StateArtifactCrypto,
@@ -2856,9 +2857,17 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (!bucket) {
       throw new Error("R2_STATE binding is not configured for state objects");
     }
+    const composition = storedServiceCompositionFromEnv(this.env);
+    if (composition) return storedServiceUsageBucket(bucket, composition, { bucketRole: "state", writerId: "runner" });
     return artifactStorageUsageBucket(bucket, this.env.TAKOSUMI_ARTIFACT_STORAGE_USAGE, {
       maxCiphertextBytes: maxStateArtifactCiphertextBytes(this.#artifactLimits.state),
     });
+  }
+
+  #storedBucket(role: Exclude<StoredBucketRole, "state" | "backups">): R2Bucket {
+    const bucket = role === "artifacts" ? this.env.R2_ARTIFACTS : this.env.R2_SOURCE;
+    if (!bucket) throw new Error("R2 storage binding is not configured");
+    return storedServiceUsageBucket(bucket, storedServiceCompositionFromEnv(this.env), { bucketRole: role, writerId: "runner" });
   }
 
   // Source-sync relay: dispatch the run to the container, then on success pull
@@ -2908,7 +2917,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (archiveRef !== requestedArchiveRef) {
       throw new Error("source archive ref does not match request");
     }
-    const bucket = this.env.R2_SOURCE;
+    const bucket = this.env.R2_SOURCE ? this.#storedBucket("source") : undefined;
     if (!bucket) {
       throw new Error(
         "R2_SOURCE binding is not configured for source archives",
@@ -2993,7 +3002,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     ) {
       throw new Error("source archive reuse does not match reuseSnapshot");
     }
-    const bucket = this.env.R2_SOURCE;
+    const bucket = this.env.R2_SOURCE ? this.#storedBucket("source") : undefined;
     if (!bucket) {
       throw new Error(
         "R2_SOURCE binding is not configured for source archives",
@@ -3028,7 +3037,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     requestSignal: AbortSignal,
   ): Promise<void> {
     assertSafeSourceArchiveRestoreKey(sourceArchive.ref);
-    const bucket = this.env.R2_SOURCE;
+    const bucket = this.env.R2_SOURCE ? this.#storedBucket("source") : undefined;
     if (!bucket) {
       throw new Error(
         "R2_SOURCE binding is not configured for source archives",
@@ -3646,7 +3655,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   ): Promise<string> {
     try {
       await putR2ObjectWithRetry(
-        this.env.R2_ARTIFACTS,
+        this.#storedBucket("artifacts"),
         prepared.key,
         prepared.sealed.ciphertext,
         {
@@ -3671,7 +3680,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       ) {
         throw error;
       }
-      const existing = await this.env.R2_ARTIFACTS.head(prepared.key);
+      const existing = await this.#storedBucket("artifacts").head(prepared.key);
       if (
         existing?.customMetadata?.["takosumi-run-id"] !== runId ||
         existing.customMetadata?.["takosumi-action"] !== prepared.action ||
@@ -3848,7 +3857,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   > {
     assertSafeArtifactObjectKey(rawOutputRef, "raw output");
     const key = rawOutputRef;
-    const object = await this.env.R2_ARTIFACTS.get(key);
+    const object = await this.#storedBucket("artifacts").get(key);
     if (!object) return undefined;
     if (object.customMetadata?.["takosumi-run-id"] !== applyRunId) {
       throw new Error("raw output artifact belongs to a different ApplyRun");
@@ -4334,7 +4343,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     // key so #restorePlanArtifact maps it back to `<key>.enc` transparently.
     const sealed = await this.#stateCrypto().seal(bytes);
     await putR2ObjectWithRetry(
-      this.env.R2_ARTIFACTS,
+      this.#storedBucket("artifacts"),
       encryptedKey(key),
       sealed.ciphertext,
       {
@@ -4488,7 +4497,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     };
     try {
       await putR2ObjectWithRetry(
-        this.env.R2_ARTIFACTS,
+        this.#storedBucket("artifacts"),
         encryptedKey(key),
         sealed.ciphertext,
         options,
@@ -4544,7 +4553,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     expectedDigest: string,
     expectedSize: number,
   ): Promise<Uint8Array> {
-    const object = await this.env.R2_ARTIFACTS.get(encryptedKey(key));
+    const object = await this.#storedBucket("artifacts").get(encryptedKey(key));
     if (!object) {
       throw new RunnerArtifactRelayInfrastructureError();
     }
@@ -4612,7 +4621,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const digest = await digestBytes(bytes);
     const sealed = await this.#stateCrypto().seal(zstdCompressRaw(bytes));
     await putR2ObjectWithRetry(
-      this.env.R2_ARTIFACTS,
+      this.#storedBucket("artifacts"),
       encryptedKey(planJsonArtifactKey(runId, stateScope)),
       sealed.ciphertext,
       {
@@ -4790,7 +4799,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     readonly plaintext: Uint8Array;
     readonly ciphertextByteLength: number;
   }> {
-    const encrypted = await this.env.R2_ARTIFACTS.get(encryptedKey(key));
+    const encrypted = await this.#storedBucket("artifacts").get(encryptedKey(key));
     if (!encrypted) {
       throw new Error(`plan artifact object not found: ${key}`);
     }
@@ -4813,7 +4822,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     baseUrl: URL,
   ): Promise<OpenTofuStateMetadata | undefined> {
     for (const key of keys) {
-      const object = await this.env.R2_ARTIFACTS.get(encryptedKey(key));
+      const object = await this.#storedBucket("artifacts").get(encryptedKey(key));
       if (!object) continue;
       const ciphertext = await readBoundedR2ObjectBytes(
         object,
@@ -4888,14 +4897,14 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     for (const key of keys) {
       const encryptedStateKey = encryptedKey(key);
       const evidenceArtifact = await this.#persistExecutionEvidenceObject(
-        this.env.R2_ARTIFACTS,
+        this.#storedBucket("artifacts"),
         executionEvidenceObjectKey(encryptedStateKey),
         runId,
         action,
         executionEvidence,
       );
       await putR2ObjectWithRetry(
-        this.env.R2_ARTIFACTS,
+        this.#storedBucket("artifacts"),
         encryptedStateKey,
         sealed.ciphertext,
         {
