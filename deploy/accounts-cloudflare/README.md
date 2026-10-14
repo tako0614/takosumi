@@ -1,6 +1,11 @@
 # Takosumi Accounts — in-process source module
 
-This directory is **not a standalone deployable Worker anymore**. It is the
+The ordinary Accounts module is an in-process component. The only dedicated
+official entry in this directory is the guarded **staging rehearsal** Worker
+`takosumi-auth-staging` at `auth-staging.takos.jp`; see
+[the owning staging runbook](../../docs/operations/auth-staging.md). It does not
+restore the former generic standalone scaffold or define a production issuer
+deployment. The ordinary module remains the
 Cloudflare reference entry point for the account-plane handler
 (session cookie, upstream sign-in, OIDC issuer/client registration, dashboard
 account-plane facade, Interface OAuth, and any hosted-service-only
@@ -14,7 +19,7 @@ the operator Takosumi platform worker:
 The self-hosted Takos product worker template in `takos/deploy/cloudflare/` is an
 external OIDC/control-plane client. It does not mount this handler.
 
-The former standalone account-plane Worker scaffold (its `wrangler.toml`,
+The former generic standalone account-plane Worker scaffold (its `wrangler.toml`,
 `src/worker.ts` entrypoint, and the `render-config` /
 `validate-rendered-config` / `probe` / `ensure-dns` / `spa-api-split-e2e` deploy
 scripts) has been removed. Real operator deploy configuration and secrets live
