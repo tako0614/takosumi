@@ -10181,9 +10181,11 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     );
     if (existing) return existing;
     const normalized = normalizeUsageEvent(event);
-    await this.#pgUpsert(
-      pgSchema.usageEvents,
-      {
+    // A missing pre-read is only an optimization, never insertion authority.
+    // Recovery callers can race: the unique key chooses one immutable winner.
+    await this.#db
+      .insert(pgSchema.usageEvents)
+      .values({
         id: normalized.id,
         workspaceId: normalized.workspaceId,
         capsuleId: normalized.capsuleId ?? null,
@@ -10200,27 +10202,15 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         source: normalized.source,
         idempotencyKey: normalized.idempotencyKey,
         createdAt: normalized.createdAt,
-      },
-      {
-        id: normalized.id,
-        workspaceId: normalized.workspaceId,
-        capsuleId: normalized.capsuleId ?? null,
-        runId: normalized.runId ?? null,
-        meterId: normalized.meterId ?? null,
-        resourceFamily: normalized.resourceFamily ?? null,
-        resourceId: normalized.resourceId ?? null,
-        operation: normalized.operation ?? null,
-        resourceMetadataJson: normalized.resourceMetadata ?? null,
-        kind: normalized.kind,
-        quantity: normalized.quantity,
-        usdMicros: normalized.usdMicros,
-        ratingStatus: normalized.ratingStatus,
-        source: normalized.source,
-        createdAt: normalized.createdAt,
-      },
-      pgSchema.usageEvents.idempotencyKey,
+      })
+      .onConflictDoNothing({ target: pgSchema.usageEvents.idempotencyKey });
+    // A separate statement sees the committed winner after a conflicting
+    // insert waited for it. A same-statement CTE can retain an older snapshot.
+    const winner = await this.#usageEventByIdempotencyKey(
+      normalized.idempotencyKey,
     );
-    return normalized;
+    if (!winner) throw new Error("usage event winner missing after insert");
+    return winner;
   }
 
   async #usageEventByIdempotencyKey(
