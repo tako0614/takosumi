@@ -3786,7 +3786,8 @@ test("retired projection and upload operations have no Accounts handler", async 
   ).toBeUndefined();
 });
 
-test("Capsule uninstall schedules the grace state with the session actor and captured authority", async () => {
+for (const deletion of ["uninstall", "delete", "delete-false"] as const) {
+test(`Capsule ${deletion} schedules grace with the session actor and captured authority`, async () => {
   const fixture = operationsFixture();
   const base = await fixture.operations.capsules.getCapsule("cap_1");
   const calls: unknown[] = [];
@@ -3824,18 +3825,18 @@ test("Capsule uninstall schedules the grace state with the session actor and cap
   const response = await handleCapsules(
     {
       ...context(
-      operations,
-      new Request("https://app.example.test/api/v1/capsules/cap_1/uninstall", {
-        method: "POST",
-      }),
+        operations,
+        new Request(`https://app.example.test/api/v1/capsules/cap_1${deletion === "uninstall" ? "/uninstall" : deletion === "delete-false" ? "?immediate=false" : ""}`, {
+          method: deletion === "uninstall" ? "POST" : "DELETE",
+        }),
       ),
       session: {
         subject: "tsub_owner",
         uninstallRequester: { subject: "tsub_owner" },
       },
     },
-    ["capsules", "cap_1", "uninstall"],
-    "POST",
+    deletion === "uninstall" ? ["capsules", "cap_1", "uninstall"] : ["capsules", "cap_1"],
+    deletion === "uninstall" ? "POST" : "DELETE",
   );
   expect(response?.status).toBe(202);
   expect(await response?.json()).toMatchObject({
@@ -3876,6 +3877,8 @@ test("Capsule uninstall schedules the grace state with the session actor and cap
   expect(wrongMethod?.status).toBe(405);
 });
 
+}
+
 test("Capsule uninstall and cancel fail closed on a host without scheduled uninstall", async () => {
   const fixture = operationsFixture();
   for (const leaf of ["uninstall", "cancel-uninstall"]) {
@@ -3905,23 +3908,39 @@ test("Capsule uninstall and cancel fail closed on a host without scheduled unins
   }
 });
 
-test("Capsule uninstall refuses a control context without authenticated requester evidence", async () => {
+for (const deletion of ["uninstall", "delete", "delete-false"] as const) {
+test(`Capsule ${deletion} refuses a control context without authenticated requester evidence`, async () => {
   const fixture = operationsFixture();
+  const base = await fixture.operations.capsules.getCapsule("cap_1");
+  let scheduleCalls = 0;
+  const operations = {
+    ...fixture.operations,
+    capsules: {
+      ...fixture.operations.capsules,
+      getCapsule: async () => ({ ...base, currentStateGeneration: 1 }),
+      scheduleCapsuleUninstall: async () => {
+        scheduleCalls += 1;
+        throw new Error("requester-less deletion must never schedule uninstall");
+      },
+    },
+  } as ControlPlaneOperations;
   const response = await handleCapsules(
     context(
-      fixture.operations,
-      new Request("https://app.example.test/api/v1/capsules/cap_1/uninstall", {
-        method: "POST",
+      operations,
+      new Request(`https://app.example.test/api/v1/capsules/cap_1${deletion === "uninstall" ? "/uninstall" : deletion === "delete-false" ? "?immediate=false" : ""}`, {
+        method: deletion === "uninstall" ? "POST" : "DELETE",
       }),
     ),
-    ["capsules", "cap_1", "uninstall"],
-    "POST",
+    deletion === "uninstall" ? ["capsules", "cap_1", "uninstall"] : ["capsules", "cap_1"],
+    deletion === "uninstall" ? "POST" : "DELETE",
   );
   expect(response?.status).toBe(403);
   expect(await response?.json()).toMatchObject({
     error: { details: { reason: "capsule_uninstall_requester_unavailable" } },
   });
+  expect(scheduleCalls).toBe(0);
 });
+}
 
 test("Capsule cancel-uninstall restores the Capsule through the domain operation", async () => {
   const fixture = operationsFixture();

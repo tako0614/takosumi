@@ -1,5 +1,39 @@
-import { describe, expect, test } from "bun:test";
-import { capsuleAbandonmentCompleted } from "../../../../dashboard/src/lib/control-api.ts";
+import { afterEach, describe, expect, test } from "bun:test";
+import {
+  capsuleAbandonmentCompleted,
+  deleteCapsule,
+} from "../../../../dashboard/src/lib/control-api.ts";
+
+const originalFetch = globalThis.fetch;
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+});
+
+describe("Capsule DELETE", () => {
+  test("defaults to scheduling deletion and can explicitly request a destroy Plan", async () => {
+    const calls: Array<{ url: string; method?: string }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), method: init?.method });
+      return new Response(JSON.stringify({ capsule: { id: "cap_1" }, graceDays: 7 }), {
+        status: 202,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    await expect(deleteCapsule("cap_1")).resolves.toMatchObject({ graceDays: 7 });
+    await expect(deleteCapsule("cap_1", { immediate: false })).resolves.toMatchObject({
+      graceDays: 7,
+    });
+    await expect(deleteCapsule("cap_1", { immediate: true })).resolves.toMatchObject({
+      graceDays: 7,
+    });
+    expect(calls).toEqual([
+      { url: "/api/v1/capsules/cap_1", method: "DELETE" },
+      { url: "/api/v1/capsules/cap_1?immediate=false", method: "DELETE" },
+      { url: "/api/v1/capsules/cap_1?immediate=true", method: "DELETE" },
+    ]);
+  });
+});
 
 describe("Capsule abandonment readback", () => {
   test("accepts the first response and a lost-ack retry only with destroyed readback", () => {

@@ -159,7 +159,7 @@ describe("Capsule detail StateVersion surface", () => {
     expect(occurrences(source, 'onClick={() => void confirmDestroy()}')).toBe(1);
     expect(source).toContain('inst().status !== "destroyed"');
     expect(occurrences(source, 't("app.danger.destroyCta")')).toBe(2);
-    expect(occurrences(source, "deleteCapsule(capsuleId())")).toBe(1);
+    expect(occurrences(source, "deleteCapsule(capsuleId(), { immediate: true })")).toBe(1);
     // Creating a plan removes nothing; for an APPLIED service the single
     // confirmation stays on the run screen at destroy-apply (RunView's
     // destructive-confirm block), where the plan is visible.
@@ -203,7 +203,8 @@ describe("Capsule detail StateVersion surface", () => {
     expect(deleteFlow.indexOf("scheduleUninstall.run()")).toBeLessThan(
       deleteFlow.indexOf("confirmDestroy()"),
     );
-    expect(occurrences(source, "scheduleCapsuleUninstall(capsuleId())")).toBe(1);
+    expect(occurrences(source, "deleteCapsule(capsuleId())")).toBe(1);
+    expect(source).toContain("deleteCapsule(capsuleId(), { immediate: true })");
     // The server tears it down unattended later, so this is the one place the
     // deletion is confirmed; cancelling is never confirmed.
     expect(source).toMatch(

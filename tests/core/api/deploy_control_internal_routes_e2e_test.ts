@@ -1290,8 +1290,8 @@ test("Capsule PATCH safely updates status only (§30)", async () => {
   expect((await rejectedField.json()).error.message).toContain("unknown_field");
 });
 
-test("Capsule DELETE creates a destroy-plan run instead of deleting state (§30 / §23)", async () => {
-  const { app, capsuleId } = await seedCapsuleViaRoutes(fakeRunner());
+test("Internal Capsule DELETE requires an authenticated requester or explicit immediate Plan", async () => {
+  const { app, capsuleId, store, workspaceId } = await seedCapsuleViaRoutes(fakeRunner());
   const planRes = await app.request(`/internal/v1/capsules/${capsuleId}/plan`, {
     method: "POST",
     headers: headers(),
@@ -1314,9 +1314,20 @@ test("Capsule DELETE creates a destroy-plan run instead of deleting state (§30 
   });
   expect(applyRes.status).toEqual(201);
 
-  const del = await app.request(`/internal/v1/capsules/${capsuleId}`, {
-    method: "DELETE",
-    headers: headers(),
+  const before = await store.getCapsule(capsuleId);
+  const runsBefore = await store.listRunsByWorkspace(workspaceId);
+  const eventsBefore = await store.listActivityEvents(workspaceId);
+  const grace = await app.request(`/internal/v1/capsules/${capsuleId}`, {
+    method: "DELETE", headers: headers(),
+  });
+  expect(grace.status).toBe(409);
+  expect((await grace.json()).error.details.reason).toBe("capsule_uninstall_requester_unavailable");
+  expect(await store.getCapsule(capsuleId)).toEqual(before);
+  expect(await store.listRunsByWorkspace(workspaceId)).toEqual(runsBefore);
+  expect(await store.listActivityEvents(workspaceId)).toEqual(eventsBefore);
+
+  const del = await app.request(`/internal/v1/capsules/${capsuleId}?immediate=true`, {
+    method: "DELETE", headers: headers(),
   });
   expect(del.status).toEqual(202);
   const payload = ((await del.json()) as { run: Run }).run;

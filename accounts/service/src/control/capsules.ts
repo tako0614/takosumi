@@ -147,6 +147,7 @@ import {
   defaultCapsuleOutputAllowlist,
 } from "../../../../core/domains/capsules/default_install_config.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
+import { capsuleDeleteIsImmediate } from "../../../../core/domains/capsules/delete_request.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
@@ -175,7 +176,7 @@ export async function handleCapsules(
     // across authorization. A stop/resume must not authorize an older request.
     const lifecycleMutation = (method === "PATCH" && segments.length === 2) ||
       (capsule.status !== "destroyed" && (
-        (method === "DELETE" && segments.length === 2 && !capsuleHasAppliedState(capsule)) ||
+        (method === "DELETE" && segments.length === 2) ||
         (method === "POST" && segments.length === 3 && (
           segments[2] === "abandon" ||
           segments[2] === "uninstall" ||
@@ -201,6 +202,8 @@ export async function handleCapsules(
       workspaceId: capsule.workspaceId,
       session: ctx.session,
     });
+    // A refused caller must not append Activity to another Workspace by
+    // repeatedly guessing a Capsule ID.
     if (!auth.ok) return auth.response;
     const requireCapturedManagement = (): WorkspaceManagementAuthority => {
       if (!capturedManagement) throw new Error("Capsule management authority was not captured");
@@ -226,17 +229,27 @@ export async function handleCapsules(
         return await patchCapsule(request, operations, capsuleId, requireCapturedManagement);
       }
       if (method === "DELETE") {
-        return await deleteCapsule(
-          operations,
-          capsule,
-          capsuleId,
-          ctx.session.subject,
-          lifecycleMutation ? requireCapturedManagement() : undefined,
-        );
+        if (
+          capsuleDeleteIsImmediate(url) ||
+          capsule.status === "destroyed" ||
+          !capsuleHasAppliedState(capsule)
+        ) {
+          return await deleteCapsule(
+            operations,
+            capsule,
+            capsuleId,
+            ctx.session.subject,
+            lifecycleMutation ? requireCapturedManagement() : undefined,
+          );
+        }
+        // Applied DELETE shares the exact uninstall admission below, including
+        // its requester binding, revision CAS and captured management fence.
       }
-      return methodNotAllowed("GET, PATCH, DELETE");
+      if (method !== "DELETE") return methodNotAllowed("GET, PATCH, DELETE");
     }
-    const leaf = segments[2];
+    const leaf = segments.length === 2 && method === "DELETE"
+      ? "uninstall"
+      : segments[2];
     if (leaf === "abandon" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
       if (capsule.status === "destroyed") {
@@ -253,8 +266,8 @@ export async function handleCapsules(
         expectedWorkspaceManagementAuthority: requireCapturedManagement(),
       });
     }
-    if (leaf === "uninstall" && segments.length === 3) {
-      if (method !== "POST") return methodNotAllowed("POST");
+    if (leaf === "uninstall" && (segments.length === 3 || method === "DELETE")) {
+      if (segments.length === 3 && method !== "POST") return methodNotAllowed("POST");
       if (!ctx.session.uninstallRequester) {
         return errorJson(
           "forbidden",

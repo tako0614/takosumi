@@ -241,7 +241,7 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     {
       method: "DELETE",
       path: "/api/v1/capsules/{capsuleId}",
-      summary: "Create a Capsule destroy plan",
+      summary: "Schedule Capsule deletion; immediate=true creates an owner-approved destroy plan",
       auth: "account-session",
     },
     {
