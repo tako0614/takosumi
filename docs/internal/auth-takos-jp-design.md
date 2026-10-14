@@ -63,13 +63,19 @@ grants, never an OIDC subject, ID token, session, email, or role.
 ### Canonical policy changes required before implementation
 
 The current
-[control architecture](https://github.com/tako0614/takos-control/blob/main/ARCHITECTURE.md)
+[control architecture](https://github.com/tako0614/takos-ecosystem/blob/main/ARCHITECTURE.md)
 stable invariants 16, 18, and 19 prohibit account linking/shared OIDC sessions
 and active legacy account import. Its dependency boundaries and the generated
 Takoserver/Hosted guidance reinforce those restrictions. The user's new shared
 login request is the target of this proposal; it does not silently amend those
 canonical sources. Proposal approval alone cannot make conflicting runtime
 implementation conformant.
+
+The policy observations above come from the current control checkout read for
+this design; `takos-control` is its checkout name and `takos-ecosystem` its
+remote repository identity. The remote `main` projection was not verified to
+match that checkout. Unrelated local control changes are outside this PR and
+are not published by it.
 
 | Current constraint / gap | Proposed narrow change | Required owner change before use |
 | --- | --- | --- |
