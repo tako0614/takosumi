@@ -658,6 +658,7 @@ test("raw-output durability ambiguity replays the same ApplyRun before publishin
   };
   const controller = new OpenTofuController({
     store,
+    defaultBillingSettings: { mode: "showback" },
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(1800),
     newId: deterministicIds(),
@@ -723,6 +724,15 @@ test("raw-output durability ambiguity replays the same ApplyRun before publishin
 
   const requeued = (await store.getApplyRun(applyRun.id))!;
   expect(requeued.status).toBe("queued");
+  const usageBeforeAdoption = (
+    await store.listUsageEvents(applyRun.workspaceId)
+  ).filter(
+    (event) => event.runId === applyRun.id && event.kind === "runner_minute",
+  );
+  expect(usageBeforeAdoption).toHaveLength(1);
+  expect(usageBeforeAdoption[0]?.idempotencyKey).toBe(
+    `${applyRun.id}:runner_minute`,
+  );
   expect(requeued.stateVersionId).toBeUndefined();
   expect(requeued.outputId).toBeUndefined();
   expect(
@@ -764,6 +774,11 @@ test("raw-output durability ambiguity replays the same ApplyRun before publishin
   expect(
     await store.listStateVersions(request.capsuleId!, "production"),
   ).toHaveLength(1);
+  expect(
+    (await store.listUsageEvents(applyRun.workspaceId)).filter(
+      (event) => event.runId === applyRun.id && event.kind === "runner_minute",
+    ),
+  ).toEqual(usageBeforeAdoption);
 });
 
 test("apply publishes the exact confirmed raw-output ref even when outputs are empty", async () => {
@@ -1064,7 +1079,7 @@ test("a dispatch deadline reaches destroy, and a dispatch without one stays unbo
   expect((await store.getApplyRun(applyRun.id))?.status).toBe("succeeded");
 });
 
-test("a dispatch the runner refused for lack of deadline headroom is requeued, not failed", async () => {
+test.each(["capacity_exhausted", "run_deadline_exceeded"] as const)("a pre-provider %s refusal leaves only successful apply runner usage", async (refusalReason) => {
   // The runner object refused before anything reached the container, so the
   // shortage belongs to the dispatching invocation: the exact ApplyRun is
   // redelivered and a later invocation with a fresh deadline applies it.
@@ -1073,6 +1088,7 @@ test("a dispatch the runner refused for lack of deadline headroom is requeued, n
   const retryDispatches: Parameters<EnqueueRun>[0][] = [];
   const controller = new OpenTofuController({
     store,
+    defaultBillingSettings: { mode: "showback" },
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(6300),
     newId: deterministicIds(),
@@ -1091,8 +1107,8 @@ test("a dispatch the runner refused for lack of deadline headroom is requeued, n
         if (applyCalls === 1) {
           return Promise.reject(
             new OpenTofuRunnerInfrastructureError(
-              "runner failure (run_deadline_exceeded)",
-              { reason: "run_deadline_exceeded" },
+              `runner failure (${refusalReason})`,
+              { reason: refusalReason },
             ),
           );
         }
@@ -1135,10 +1151,24 @@ test("a dispatch the runner refused for lack of deadline headroom is requeued, n
   ).rejects.toThrow(/retryable_runner_infrastructure_error/);
   expect((await store.getApplyRun(applyRun.id))?.status).toBe("queued");
   expect(retryDispatches).toEqual([{ ...dispatch, cause: "controller_retry" }]);
+  expect(
+    (await store.listUsageEvents(applyRun.workspaceId)).filter(
+      (event) => event.runId === applyRun.id && event.kind === "runner_minute",
+    ),
+  ).toHaveLength(0);
 
   await controller.dispatchQueuedRun(dispatch, { deadlineAt: 2_000 });
-  expect((await store.getApplyRun(applyRun.id))?.status).toBe("succeeded");
+  const completed = (await store.getApplyRun(applyRun.id))!;
+  expect(completed.status).toBe("succeeded");
   expect(applyCalls).toBe(2);
+  const runnerUsage = (await store.listUsageEvents(applyRun.workspaceId)).filter(
+    (event) => event.runId === applyRun.id && event.kind === "runner_minute",
+  );
+  expect(runnerUsage).toHaveLength(1);
+  expect(runnerUsage[0]?.idempotencyKey).toBe(`${applyRun.id}:runner_minute`);
+  expect(runnerUsage[0]?.quantity).toBe(
+    (completed.finishedAt! - completed.startedAt!) / 60_000,
+  );
 });
 
 test("an Apply whose init the run deadline stopped stays non-decisive", async () => {
@@ -1715,7 +1745,7 @@ test("a typed indeterminate runner mutation terminally fails apply without retry
   expect(retryDispatches).toEqual([]);
 });
 
-test("runner infrastructure errors fail apply after the retry budget is exhausted", async () => {
+test.each(["capacity_exhausted", "run_deadline_exceeded"] as const)("two pre-provider %s apply refusals leave no runner usage", async (refusalReason) => {
   const store = new InMemoryOpenTofuControlStore();
   let applyCalls = 0;
   const retryDispatches: Parameters<EnqueueRun>[0][] = [];
@@ -1725,6 +1755,7 @@ test("runner infrastructure errors fail apply after the retry budget is exhauste
   };
   const controller = new OpenTofuController({
     store,
+    defaultBillingSettings: { mode: "showback" },
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(5650),
     newId: deterministicIds(),
@@ -1743,7 +1774,7 @@ test("runner infrastructure errors fail apply after the retry budget is exhauste
         return Promise.reject(
           new OpenTofuRunnerInfrastructureError(
             RUNNER_CONTAINER_CAPACITY_EXCEEDED,
-            { reason: "capacity_exhausted" },
+            { reason: refusalReason },
           ),
         );
       },
@@ -1795,6 +1826,11 @@ test("runner infrastructure errors fail apply after the retry budget is exhauste
       cause: "controller_retry",
     },
   ]);
+  expect(
+    (await store.listUsageEvents(applyRun.workspaceId)).filter(
+      (event) => event.runId === applyRun.id && event.kind === "runner_minute",
+    ),
+  ).toHaveLength(0);
 });
 
 test("an ambiguous runner substrate reset terminally fails destroy without replaying provider mutations", async () => {
@@ -1891,7 +1927,7 @@ test("an ambiguous runner substrate reset terminally fails destroy without repla
   expect(retryDispatches).toEqual([]);
 });
 
-test("runner infrastructure errors fail destroy apply after the retry budget is exhausted", async () => {
+test.each(["capacity_exhausted", "run_deadline_exceeded"] as const)("two pre-provider %s destroy refusals leave no runner usage", async (refusalReason) => {
   const store = new InMemoryOpenTofuControlStore();
   let destroyCalls = 0;
   const retryDispatches: Parameters<EnqueueRun>[0][] = [];
@@ -1901,6 +1937,7 @@ test("runner infrastructure errors fail destroy apply after the retry budget is 
   };
   const controller = new OpenTofuController({
     store,
+    defaultBillingSettings: { mode: "showback" },
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(5900),
     newId: deterministicIds(),
@@ -1928,7 +1965,7 @@ test("runner infrastructure errors fail destroy apply after the retry budget is 
         return Promise.reject(
           new OpenTofuRunnerInfrastructureError(
             RUNNER_CONTAINER_CAPACITY_EXCEEDED,
-            { reason: "capacity_exhausted" },
+            { reason: refusalReason },
           ),
         );
       },
@@ -1989,6 +2026,82 @@ test("runner infrastructure errors fail destroy apply after the retry budget is 
     (event) => event.runId === applyRun.id && event.kind === "runner_minute",
   );
   expect(runnerUsage).toHaveLength(0);
+});
+
+test.each(["capacity_exhausted", "run_deadline_exceeded"] as const)("pre-provider %s destroy refusal charges only the successful retry", async (refusalReason) => {
+  const store = new InMemoryOpenTofuControlStore();
+  let destroyCalls = 0;
+  const controller = new OpenTofuController({
+    store,
+    defaultBillingSettings: { mode: "showback" },
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(5950),
+    newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    runner: {
+      ...stubRunner(),
+      destroy: (job) => {
+        destroyCalls++;
+        if (destroyCalls === 1) {
+          return Promise.reject(
+            new OpenTofuRunnerInfrastructureError(
+              `runner failure (${refusalReason})`,
+              { reason: refusalReason },
+            ),
+          );
+        }
+        return Promise.resolve(
+          fixtureStateCommit({
+            providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+            executionEvidence: fixtureExecutionEvidence(job, "destroy"),
+          }),
+        );
+      },
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+  });
+  const request = await seedUpdatable(store, {
+    capsuleId: "cap_destroy_refusal_retry",
+  });
+  const { planRun: queuedPlan } = await controller.createPlanRun({
+    ...request,
+    operation: "destroy",
+  });
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    workspaceId: queuedPlan.workspaceId,
+  });
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  await controller.approveRun(planRun.id, { approvedBy: "ops" });
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  const dispatch = {
+    action: "apply" as const,
+    runId: applyRun.id,
+    workspaceId: applyRun.workspaceId,
+  };
+  await controller.dispatchQueuedRun(dispatch);
+  const usageForApply = async () =>
+    (await store.listUsageEvents(applyRun.workspaceId)).filter(
+      (event) => event.runId === applyRun.id && event.kind === "runner_minute",
+    );
+  expect((await store.getApplyRun(applyRun.id))?.status).toBe("queued");
+  expect(await usageForApply()).toHaveLength(0);
+
+  await controller.dispatchQueuedRun(dispatch);
+  const completed = (await store.getApplyRun(applyRun.id))!;
+  expect(completed.status).toBe("succeeded");
+  expect(destroyCalls).toBe(2);
+  const usage = await usageForApply();
+  expect(usage).toHaveLength(1);
+  expect(usage[0]?.idempotencyKey).toBe(`${applyRun.id}:runner_minute`);
+  expect(usage[0]?.quantity).toBe(
+    (completed.finishedAt! - completed.startedAt!) / 60_000,
+  );
 });
 
 test("DLQ backstop marks a non-terminal run failed (retries-exhausted)", async () => {

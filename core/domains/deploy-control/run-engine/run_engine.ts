@@ -494,6 +494,15 @@ function isSafeMutatingRunnerInfrastructureRetryError(
   );
 }
 
+/** These refusals prove no provider work reached a runner container. */
+function isPreProviderRunnerRefusal(error: unknown): boolean {
+  return (
+    error instanceof OpenTofuRunnerInfrastructureError &&
+    (error.reason === "capacity_exhausted" ||
+      error.reason === "run_deadline_exceeded")
+  );
+}
+
 const RUNNER_INFRASTRUCTURE_RETRY_LIMIT = 1;
 const PLAN_CREATION_STAGE_TIMEOUT_MS = 25_000;
 const RUN_EXECUTION_LEASE_LOST_REASON = "run_execution_lease_lost";
@@ -9816,7 +9825,10 @@ export class RunEngine {
             runnerInfrastructureRetryExhaustedError("apply"),
             true,
           );
-          if (failed.finishedAt !== undefined) {
+          if (
+            !isPreProviderRunnerRefusal(error) &&
+            failed.finishedAt !== undefined
+          ) {
             await this.#recordRunnerMinuteUsage({
               workspaceId: failed.workspaceId,
               runId: failed.id,
@@ -9841,7 +9853,10 @@ export class RunEngine {
             `retryable_runner_infrastructure_error: apply run ${queued.id} requeued after runner infrastructure failure`,
             { reason: RUNNER_INFRASTRUCTURE_REQUEUED_REASON },
           );
-          if (queued.updatedAt !== undefined) {
+          if (
+            !isPreProviderRunnerRefusal(error) &&
+            queued.updatedAt !== undefined
+          ) {
             await this.#recordRunnerMinuteUsage({
               workspaceId: queued.workspaceId,
               runId: queued.id,
@@ -9863,7 +9878,11 @@ export class RunEngine {
         error,
         runnerDispatched,
       );
-      if (runnerDispatched && failed.finishedAt !== undefined) {
+      if (
+        runnerDispatched &&
+        !isPreProviderRunnerRefusal(error) &&
+        failed.finishedAt !== undefined
+      ) {
         await this.#recordRunnerMinuteUsage({
           workspaceId: failed.workspaceId,
           runId: failed.id,
@@ -12121,7 +12140,10 @@ export class RunEngine {
             runnerInfrastructureRetryExhaustedError("destroy_apply"),
             true,
           );
-          if (failed.finishedAt !== undefined) {
+          if (
+            !isPreProviderRunnerRefusal(error) &&
+            failed.finishedAt !== undefined
+          ) {
             await this.#recordRunnerMinuteUsage({
               workspaceId: failed.workspaceId,
               runId: failed.id,
@@ -12150,7 +12172,10 @@ export class RunEngine {
             `retryable_runner_infrastructure_error: destroy apply run ${queued.id} requeued after runner infrastructure failure`,
             { reason: RUNNER_INFRASTRUCTURE_REQUEUED_REASON },
           );
-          if (queued.updatedAt !== undefined) {
+          if (
+            !isPreProviderRunnerRefusal(error) &&
+            queued.updatedAt !== undefined
+          ) {
             await this.#recordRunnerMinuteUsage({
               workspaceId: queued.workspaceId,
               runId: queued.id,
@@ -12184,7 +12209,11 @@ export class RunEngine {
         lifecycleActionDispatched,
         lifecycleOutcome,
       );
-      if (runnerDispatched && failed.finishedAt !== undefined) {
+      if (
+        runnerDispatched &&
+        !isPreProviderRunnerRefusal(error) &&
+        failed.finishedAt !== undefined
+      ) {
         await this.#recordRunnerMinuteUsage({
           workspaceId: failed.workspaceId,
           runId: failed.id,
