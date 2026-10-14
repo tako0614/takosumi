@@ -7,7 +7,8 @@ import type {
 } from "../bindings.ts";
 import { isLegacySourceArchiveRestoreRef } from "../legacy_source_archive_restore.ts";
 import { artifactStorageUsageBucket } from "../artifact-storage-usage.ts";
-import { storedServiceCompositionFromEnv, storedServiceUsageBucket, type StoredBucketRole } from "../stored-service-usage.ts";
+import { storedServiceCompositionFromEnv, type StoredBucketRole } from "../stored-service-usage.ts";
+import { assertStoredRunLease, readStoredRunLeaseHeader, runnerStoredServiceBucket, STORED_RUN_LEASE_HEADER } from "../stored-service-owner-context.ts";
 import {
   maxStateArtifactCiphertextBytes,
   StateArtifactCrypto,
@@ -950,7 +951,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     stage: RunnerRestoreStageRecord,
     now: number,
   ): Promise<"removed" | "retained"> {
-    const bucket = this.#r2State();
+    const bucket = this.#r2State(undefined, undefined, undefined, {
+      runId: stage.runId, scopeKey: stage.scopeKey, stateRef: stage.stateRef,
+    });
     const object = await bucket.head(stage.stateRef);
     if (object && !isExactTrackedRestoreStageObject(object, stage)) {
       console.error("OpenTofu runner Restore stage deletion refused", {
@@ -1736,8 +1739,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     applyRunId: string,
     rawOutputRef: string | undefined,
     preparation: RunnerMutationDispatchRecord,
+    expectedLeaseToken?: string,
   ): Promise<Response | undefined> {
-    const bucket = this.#r2State();
+    const bucket = this.#r2State(applyRunId, scope, undefined, undefined, expectedLeaseToken);
     assertStateRefForScope(scope);
     const existing = await bucket.head(scope.stateRef);
     if (!existing) return undefined;
@@ -2210,6 +2214,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   }
 
   async #fetchWithDurablePlanArtifacts(request: Request): Promise<Response> {
+    const originalLease = storedServiceCompositionFromEnv(this.env) ? readStoredRunLeaseHeader(request.headers.get(STORED_RUN_LEASE_HEADER)) : undefined;
     const url = new URL(request.url);
     if (url.pathname === "/capabilities" && request.method === "GET") {
       const ownerKind = url.searchParams.get("ownerKind");
@@ -2314,11 +2319,16 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const inputRestoreReadinessStartedAt = monotonicNow();
     const bodyText = await request.text();
     const envelope = parseRunEnvelope(bodyText);
+    if (storedServiceCompositionFromEnv(this.env) && ["plan", "apply", "destroy", "source_sync", "restore"].includes(envelope.action ?? "")) {
+      const canonicalRunId = isRunnerMutationAction(envelope.action) ? parseApplyRunId(envelope.request) : runId;
+      if (!originalLease || originalLease.runId !== canonicalRunId) throw new Error("stored service dispatch lease is unavailable");
+      await assertStoredRunLease(this.env.TAKOSUMI_CONTROL_DB, originalLease);
+    }
     // Source-sync runs (LANE M1) never touch OpenTofu state; they run, leave the
     // archive on the container, and the DO pulls + persists it to R2_SOURCE.
     if (isSourceSyncEnvelope(envelope)) {
       await this.#ensureContainerReady(url);
-      return await this.#fetchWithSourceArchive(runId, request, bodyText);
+      return await this.#fetchWithSourceArchive(runId, request, bodyText, originalLease?.leaseToken);
     }
     if (envelope.action === "restore") {
       const stateScope = parseStateScope(envelope.request);
@@ -2331,6 +2341,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         stateScope,
         restoreState,
         request.signal,
+        originalLease?.leaseToken,
       );
     }
     // M2: when the dispatch carries an environment-scoped state location, route
@@ -2340,6 +2351,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const rawOutputRef = parseRawOutputRef(envelope.request);
     const stateAdoption = parseStateAdoption(envelope.request);
     const applyRunId = parseApplyRunId(envelope.request);
+    if (storedServiceCompositionFromEnv(this.env) && isRunnerMutationAction(envelope.action) && !stateScope) {
+      throw new Error("stored service custody requires a canonical Run state allocation");
+    }
     if (stateAdoption && !stateScope) {
       throw new Error("stateAdoption requires a Resource stateScope");
     }
@@ -2486,6 +2500,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
                 stateScope,
                 envelope.action,
                 rawOutputRef,
+                originalLease?.leaseToken,
               )
             : undefined;
         // A durably terminal mutation has no live container left to serve: the
@@ -2525,6 +2540,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           applyRunId!,
           rawOutputRef,
           mutationPreparation,
+          originalLease?.leaseToken,
         );
         if (gated) return gated;
       }
@@ -2804,6 +2820,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           rawOutputRef,
           providerExecutionFailed,
           mutationDispatch!,
+          originalLease?.leaseToken,
         );
       }
       if (runnerResponse.ok && stateKeys.length > 0) {
@@ -2842,6 +2859,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         doInputRestoreReadinessMs,
         doContainerExecutionResponseBufferMs,
       },
+      originalLease?.leaseToken,
     );
   }
 
@@ -2852,22 +2870,28 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     return this.#stateCryptoInstance;
   }
 
-  #r2State(): NonNullable<CloudflareWorkerEnv["R2_STATE"]> {
+  #r2State(
+    runId?: string,
+    scope?: StateScope,
+    restoreStageRef?: string,
+    restoreCleanup?: { readonly runId: string; readonly scopeKey: string; readonly stateRef: string },
+    expectedLeaseToken?: string,
+  ): NonNullable<CloudflareWorkerEnv["R2_STATE"]> {
     const bucket = this.env.R2_STATE;
     if (!bucket) {
       throw new Error("R2_STATE binding is not configured for state objects");
     }
     const composition = storedServiceCompositionFromEnv(this.env);
-    if (composition) return storedServiceUsageBucket(bucket, composition, { bucketRole: "state", writerId: "runner" });
+    if (composition) return runnerStoredServiceBucket(bucket, composition, this.env.TAKOSUMI_CONTROL_DB, { bucketRole: "state", runId, scope, restoreStageRef, restoreCleanup, expectedLeaseToken });
     return artifactStorageUsageBucket(bucket, this.env.TAKOSUMI_ARTIFACT_STORAGE_USAGE, {
       maxCiphertextBytes: maxStateArtifactCiphertextBytes(this.#artifactLimits.state),
     });
   }
 
-  #storedBucket(role: Exclude<StoredBucketRole, "state" | "backups">): R2Bucket {
+  #storedBucket(role: Exclude<StoredBucketRole, "state" | "backups">, runId?: string, scope?: StateScope, expectedLeaseToken?: string): R2Bucket {
     const bucket = role === "artifacts" ? this.env.R2_ARTIFACTS : this.env.R2_SOURCE;
     if (!bucket) throw new Error("R2 storage binding is not configured");
-    return storedServiceUsageBucket(bucket, storedServiceCompositionFromEnv(this.env), { bucketRole: role, writerId: "runner" });
+    return runnerStoredServiceBucket(bucket, storedServiceCompositionFromEnv(this.env), this.env.TAKOSUMI_CONTROL_DB, { bucketRole: role, runId, scope, expectedLeaseToken });
   }
 
   // Source-sync relay: dispatch the run to the container, then on success pull
@@ -2878,6 +2902,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runId: string,
     request: Request,
     bodyText: string,
+    expectedLeaseToken?: string,
   ): Promise<Response> {
     const url = new URL(request.url);
     const envelope = parseRunEnvelope(bodyText);
@@ -2917,7 +2942,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (archiveRef !== requestedArchiveRef) {
       throw new Error("source archive ref does not match request");
     }
-    const bucket = this.env.R2_SOURCE ? this.#storedBucket("source") : undefined;
+    const bucket = this.env.R2_SOURCE ? this.#storedBucket("source", runId, undefined, expectedLeaseToken) : undefined;
     if (!bucket) {
       throw new Error(
         "R2_SOURCE binding is not configured for source archives",
@@ -3211,7 +3236,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     action: string | undefined,
     adoption: StateAdoption | undefined,
   ): Promise<OpenTofuStateMetadata> {
-    const bucket = this.#r2State();
+    const bucket = this.#r2State(runId, scope);
     assertStateRefForScope(scope);
     const expectedGeneration = priorStateGeneration(scope, action);
     if (scope.priorState && adoption) {
@@ -3422,6 +3447,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     rawOutputRef: string | undefined,
     providerExecutionFailed: boolean,
     mutationDispatch: RunnerMutationDispatchRecord,
+    expectedLeaseToken?: string,
   ): Promise<Response> {
     let stateResponse: Response;
     try {
@@ -3488,7 +3514,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         ? "provider_failed_state_persisted"
         : "committed",
     );
-    const bucket = this.#r2State();
+    const bucket = this.#r2State(applyRunId, scope, undefined, undefined, expectedLeaseToken);
     assertStateRefForScope(scope);
     const objectKey = scope.stateRef;
     const evidenceArtifact = await this.#persistExecutionEvidenceObject(
@@ -3505,7 +3531,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         ? await this.#prepareRawOutputs(rawOutputRef!, payload)
         : undefined;
     const persistedRawOutputRef = preparedRawOutputs
-      ? await this.#persistPreparedRawOutputs(applyRunId, preparedRawOutputs)
+      ? await this.#persistPreparedRawOutputs(applyRunId, preparedRawOutputs, expectedLeaseToken)
       : undefined;
     try {
       await putR2ObjectWithRetry(
@@ -3555,6 +3581,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         scope,
         action,
         rawOutputRef,
+        expectedLeaseToken,
       );
       if (!adopted) throw error;
       return adopted;
@@ -3652,10 +3679,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   async #persistPreparedRawOutputs(
     runId: string,
     prepared: PreparedRawOutputs,
+    expectedLeaseToken?: string,
   ): Promise<string> {
     try {
       await putR2ObjectWithRetry(
-        this.#storedBucket("artifacts"),
+        this.#storedBucket("artifacts", runId, undefined, expectedLeaseToken),
         prepared.key,
         prepared.sealed.ciphertext,
         {
@@ -3680,7 +3708,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       ) {
         throw error;
       }
-      const existing = await this.#storedBucket("artifacts").head(prepared.key);
+      const existing = await this.#storedBucket("artifacts", runId).head(prepared.key);
       if (
         existing?.customMetadata?.["takosumi-run-id"] !== runId ||
         existing.customMetadata?.["takosumi-action"] !== prepared.action ||
@@ -3704,9 +3732,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     scope: StateScope,
     action: "apply" | "destroy",
     rawOutputRef: string | undefined,
+    expectedLeaseToken?: string,
   ): Promise<Response | undefined> {
     assertStateRefForScope(scope);
-    const bucket = this.#r2State();
+    const bucket = this.#r2State(applyRunId, scope, undefined, undefined, expectedLeaseToken);
     const object = await bucket.get(scope.stateRef);
     if (!object) return undefined;
     const persistedRunId = object.customMetadata?.["takosumi-run-id"];
@@ -3857,7 +3886,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   > {
     assertSafeArtifactObjectKey(rawOutputRef, "raw output");
     const key = rawOutputRef;
-    const object = await this.#storedBucket("artifacts").get(key);
+    const object = await this.#storedBucket("artifacts", applyRunId).get(key);
     if (!object) return undefined;
     if (object.customMetadata?.["takosumi-run-id"] !== applyRunId) {
       throw new Error("raw output artifact belongs to a different ApplyRun");
@@ -3894,6 +3923,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     scope: StateScope,
     restoreState: RestoreState,
     signal: AbortSignal,
+    expectedLeaseToken?: string,
   ): Promise<Response> {
     assertRequestNotAborted(signal);
     assertStateRefForScope(scope);
@@ -3917,10 +3947,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       return await this.#acknowledgeCommittedRestore(
         claimed.ack,
         signal,
+        expectedLeaseToken,
       );
     }
     const claim = claimed.claim;
-    const bucket = this.#r2State();
+    const bucket = this.#r2State(runId, scope, claim.stageStateRef, undefined, expectedLeaseToken);
     try {
       const object = await this.#restoreFencedStep(
         claim,
@@ -4007,7 +4038,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         stageObject,
         signal,
       );
-      return await this.#acknowledgeCommittedRestore(ack, signal);
+      return await this.#acknowledgeCommittedRestore(ack, signal, expectedLeaseToken);
     } catch (error) {
       await this.#abandonRestoreClaim(claim);
       throw error;
@@ -4214,9 +4245,18 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   async #acknowledgeCommittedRestore(
     expected: RunnerRestoreCommittedAck,
     signal: AbortSignal,
+    expectedLeaseToken?: string,
   ): Promise<Response> {
     assertRequestNotAborted(signal);
-    const object = await this.#r2State().head(expected.stateRef);
+    const identity = restoreScopeIdentityFromKey(expected.scopeKey);
+    if (!identity) throw new Error("Restore acknowledged scope is invalid");
+    const object = await this.#r2State(expected.runId, {
+      workspaceId: identity.workspaceId,
+      subjectKind: "capsule", subjectId: identity.capsuleId,
+      environment: identity.environment,
+      generation: expected.generation,
+      stateRef: expected.logicalTargetStateRef,
+    }, expected.stateRef, undefined, expectedLeaseToken).head(expected.stateRef);
     assertRequestNotAborted(signal);
     if (!object || !isExactRestoreAckObject(object, expected)) {
       throw new Error("Restore acknowledged state object is missing or changed");
@@ -4296,6 +4336,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       readonly doInputRestoreReadinessMs: number;
       readonly doContainerExecutionResponseBufferMs: number;
     }>,
+    expectedLeaseToken?: string,
   ): Promise<Response> {
     const planArtifactPersistenceStartedAt = monotonicNow();
     const payload = await readJsonObject(
@@ -4343,7 +4384,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     // key so #restorePlanArtifact maps it back to `<key>.enc` transparently.
     const sealed = await this.#stateCrypto().seal(bytes);
     await putR2ObjectWithRetry(
-      this.#storedBucket("artifacts"),
+      this.#storedBucket("artifacts", runId, stateScope, expectedLeaseToken),
       encryptedKey(key),
       sealed.ciphertext,
       {
@@ -4367,10 +4408,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         payload,
         baseUrl,
         stateScope,
+        expectedLeaseToken,
       );
     // Plan JSON sits beside the binary; encrypt it too when the runner produced
     // it (the runner exposes it on the /artifacts/tfplan-json route).
-    await this.#persistPlanJsonArtifact(runId, baseUrl, stateScope);
+    await this.#persistPlanJsonArtifact(runId, baseUrl, stateScope, expectedLeaseToken);
     return jsonResponse(
       {
         ...payload,
@@ -4403,6 +4445,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     payload: Record<string, unknown>,
     baseUrl: URL,
     stateScope: StateScope | undefined,
+    expectedLeaseToken?: string,
   ): Promise<Record<string, unknown> | null | undefined> {
     const raw = payload.providerLockArtifact;
     // Old runner images did not know this field. Preserve that unknown state;
@@ -4497,7 +4540,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     };
     try {
       await putR2ObjectWithRetry(
-        this.#storedBucket("artifacts"),
+        this.#storedBucket("artifacts", runId, stateScope, expectedLeaseToken),
         encryptedKey(key),
         sealed.ciphertext,
         options,
@@ -4594,6 +4637,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runId: string,
     baseUrl: URL,
     stateScope: StateScope | undefined,
+    expectedLeaseToken?: string,
   ): Promise<void> {
     const response = await this.#containerFetch(
       new Request(planJsonArtifactUrl(baseUrl, runId), { method: "GET" }),
@@ -4621,7 +4665,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const digest = await digestBytes(bytes);
     const sealed = await this.#stateCrypto().seal(zstdCompressRaw(bytes));
     await putR2ObjectWithRetry(
-      this.#storedBucket("artifacts"),
+      this.#storedBucket("artifacts", runId, stateScope, expectedLeaseToken),
       encryptedKey(planJsonArtifactKey(runId, stateScope)),
       sealed.ciphertext,
       {

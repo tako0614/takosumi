@@ -32,6 +32,7 @@ import {
   SOURCE_REF_NOT_FOUND_REASON,
 } from "../../core/domains/deploy-control/mod.ts";
 import type { CloudflareWorkerEnv, OpenTofuRunAction } from "./bindings.ts";
+import { STORED_RUN_LEASE_HEADER, storedRunLeaseHeaderValue, type StoredRunLease } from "./stored-service-owner-context.ts";
 import { redactString } from "takosumi-contract/redaction";
 import {
   assertRunExecutionEvidence,
@@ -308,6 +309,7 @@ export class CloudflareContainerOpenTofuRunner
     control?: RunExecutionControl,
   ): Promise<OpenTofuPlanResult> {
     const result = await this.#runContainer("plan", job.planRun.id, job, {
+      runLease: control?.runLease,
       signal: control?.signal,
       deadlineAt: control?.deadlineAt,
     });
@@ -384,6 +386,7 @@ export class CloudflareContainerOpenTofuRunner
         signal: control?.signal,
         deadlineAt: control?.deadlineAt,
         runnerObjectName: job.applyRun.id,
+        runLease: control?.runLease,
         adoption: {
           applyRunId: job.applyRun.id,
           ...(job.stateScope === undefined
@@ -471,6 +474,7 @@ export class CloudflareContainerOpenTofuRunner
         signal: control?.signal,
         deadlineAt: control?.deadlineAt,
         runnerObjectName: job.applyRun.id,
+        runLease: control?.runLease,
         adoption: {
           applyRunId: job.applyRun.id,
           ...(job.stateScope === undefined
@@ -540,6 +544,7 @@ export class CloudflareContainerOpenTofuRunner
       },
       {
         signal: control?.signal,
+        runLease: control?.runLease,
         // Restore attempts for one logical state scope must rendezvous on one
         // DO so its durable monotonic fence can reject a lease-lost predecessor
         // even when the successor has a different Run id.
@@ -679,6 +684,7 @@ export class CloudflareContainerOpenTofuRunner
 
   async sourceSync(
     job: OpenTofuSourceSyncJob,
+    control?: RunExecutionControl,
   ): Promise<OpenTofuSourceSyncResult> {
     // The runner resolves the ref, fetches a shallow checkout, builds the
     // deterministic archive, and PUTs its bytes to the source-archive route on
@@ -692,7 +698,7 @@ export class CloudflareContainerOpenTofuRunner
       archiveRef: job.archiveRef,
       ...(job.reuseSnapshot ? { reuseSnapshot: job.reuseSnapshot } : {}),
       ...(job.credentials ? { credentials: job.credentials } : {}),
-    });
+    }, { runLease: control?.runLease, signal: control?.signal, deadlineAt: control?.deadlineAt });
     // The DO persists the archive to R2_SOURCE and rewrites `sourceArchive` to
     // the object-storage form ({ digest, sizeBytes }); `resolvedCommit` stays at
     // the top level. Read both top-level and `sourceArchive` so either shape is
@@ -857,6 +863,7 @@ export class CloudflareContainerOpenTofuRunner
        * unbounded, exactly as before.
        */
       readonly deadlineAt?: number;
+      readonly runLease?: StoredRunLease;
       /**
        * Durable Object instance authority. Apply/destroy restore the reviewed
        * Plan artifact under its original Run id, but must not reuse that
@@ -875,6 +882,9 @@ export class CloudflareContainerOpenTofuRunner
       };
     } = {},
   ): Promise<Record<string, unknown>> {
+    // Snapshot once before any await or capacity retry. A stale request never
+    // obtains a successor's claim by rereading D1 or a mutable control object.
+    const runLeaseHeader = storedRunLeaseHeaderValue(options.runLease === undefined ? undefined : { ...options.runLease });
     if (!this.env.RUNNER) {
       throw new Error("RUNNER binding is not configured");
     }
@@ -909,6 +919,7 @@ export class CloudflareContainerOpenTofuRunner
                 method: "POST",
                 headers: {
                   "content-type": "application/json",
+                  ...(runLeaseHeader ? { [STORED_RUN_LEASE_HEADER]: runLeaseHeader } : {}),
                   ...(deadlineAtHeader
                     ? { [RUN_DEADLINE_AT_HEADER]: deadlineAtHeader }
                     : {}),

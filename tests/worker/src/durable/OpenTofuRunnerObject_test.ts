@@ -34,6 +34,8 @@ import { R2RecoveryStateArtifactStore } from "../../../../worker/src/state_recov
 import { PROVIDER_LOCK_RESTORE_DIGEST_HEADER } from "../../../../runner/lib/transport.ts";
 import { privateRunFileManifestDigest } from "../../../../core/shared/private_run_file_refresh.ts";
 import { handleRunnerRequestWithDependencies } from "../../../../runner/lib/http_server.ts";
+import { CloudflareContainerOpenTofuRunner } from "../../../../worker/src/container_runner.ts";
+import { readStoredRunLeaseHeader, STORED_RUN_LEASE_HEADER } from "../../../../worker/src/stored-service-owner-context.ts";
 
 const PLAN_BYTES = new TextEncoder().encode("reviewed tfplan bytes");
 const PLAN_DIGEST =
@@ -48,6 +50,60 @@ const RESTORE_STATE_PREFIX =
   "workspaces/space_1/capsules/inst_1/environments/production/state-versions";
 const RESTORE_TARGET_KEY = `${RESTORE_STATE_PREFIX}/00000002.tfstate.enc`;
 const RESTORE_CURRENT_KEY = `${RESTORE_STATE_PREFIX}/current.json`;
+
+test("private transport keeps the original lease through takeover and never forwards it into the Container", async () => {
+  let currentLease = "lease_original";
+  let containerCalls = 0, prepares = 0;
+  const run = { id: "sync_transport", workspaceId: "workspace_transport", status: "running" };
+  const database = {
+    prepare: () => ({ bind() { return this; }, async all() {
+      return { success: true, results: [{ id: run.id, space_id: run.workspaceId, status: "running", lease_token: currentLease, run_json: JSON.stringify(run) }] };
+    } }),
+  } as unknown as D1Database;
+  const coreLease = { runId: run.id, leaseToken: currentLease };
+  const target = runnerWithContainer(new FakeR2Bucket(), {
+    async containerFetch(request) {
+      containerCalls += 1;
+      assert.equal(request.headers.get(STORED_RUN_LEASE_HEADER), null);
+      const body = await request.text();
+      assert.equal(body.includes("lease_original"), false);
+      assert.equal(body.includes("lease_successor"), false);
+      assert.equal(body.includes("runLease"), false);
+      return Response.json({ status: "succeeded" });
+    },
+  }, { env: {
+    TAKOSUMI_CONTROL_DB: database,
+    TAKOSUMI_STORED_SERVICE_USAGE: { async prepareStoredObject() { prepares += 1; throw new Error("unexpected prepare"); } } as unknown as NonNullable<CloudflareWorkerEnv["TAKOSUMI_STORED_SERVICE_USAGE"]>,
+    TAKOSUMI_STORED_OBJECT_OWNERS: { async resolveStoredObjectOwner() { return null; } },
+  } });
+  const privateClaims: unknown[] = [];
+  let takeover = true;
+  const adapter = new CloudflareContainerOpenTofuRunner({ RUNNER: {
+    idFromName: (name: string) => name,
+    get: () => ({ fetch: async (request: Request) => {
+      privateClaims.push(readStoredRunLeaseHeader(request.headers.get(STORED_RUN_LEASE_HEADER)));
+      if (takeover) {
+        currentLease = "lease_successor";
+        // Mutating the caller's object after transport capture cannot replace
+        // the old claim carried by this exact private request.
+        coreLease.leaseToken = currentLease;
+      }
+      return await target.fetch(request);
+    } }),
+  } } as unknown as CloudflareWorkerEnv);
+  const job = { runId: run.id, workspaceId: run.workspaceId, sourceId: "source_transport", source: { url: "https://example.test/source.git", ref: "main", path: "." }, archiveRef: "workspaces/workspace_transport/sources/source_transport/snapshots/snapshot_transport/source.tar.zst" };
+  await adapter.sourceSync(job, { runLease: coreLease }).catch(() => undefined);
+  assert.deepEqual(privateClaims, [{ runId: run.id, leaseToken: "lease_original" }]);
+  assert.equal(containerCalls, 0);
+  assert.equal(prepares, 0);
+  takeover = false;
+  await adapter.sourceSync(job, { runLease: coreLease }).catch(() => undefined);
+  assert.deepEqual(privateClaims[1], { runId: run.id, leaseToken: "lease_successor" });
+  assert.equal(containerCalls, 1);
+  await adapter.sourceSync(job).catch(() => undefined);
+  assert.equal(containerCalls, 1);
+  assert.equal(prepares, 0);
+});
 
 test("private file metadata GET requires an active DO refresh claim", async () => {
   let forwarded = 0;

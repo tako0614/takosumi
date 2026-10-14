@@ -263,7 +263,7 @@ export class SourceLifecycleService {
                 }
               : {}),
             ...(credentials ? { credentials } : {}),
-          }),
+          }, { runLease: { runId: running.id, leaseToken } }),
       );
       return await this.#succeedSourceSyncRun(
         running,

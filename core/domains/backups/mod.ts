@@ -61,6 +61,23 @@ import {
 } from "../activity/mod.ts";
 import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
 
+type BackupArtifactKind =
+  | "backup_control"
+  | "backup_state"
+  | "backup_artifacts_manifest"
+  | "backup_service_data";
+/** Original accepted manual Backup evidence. A Backup has no execution lease;
+ * this is neither a RunLease nor a claim minted by an artifact adapter. */
+export interface BackupArtifactWriteControl {
+  readonly expectedRunningRun: Run;
+  readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
+  readonly allocation: { readonly kind: BackupArtifactKind; readonly backupId: string; readonly ref: string };
+}
+type BackupArtifactWriteAuthority = Omit<BackupArtifactWriteControl, "allocation">;
+function backupArtifactWriteControl(authority: BackupArtifactWriteAuthority, kind: BackupArtifactKind, backupId: string, ref: string): BackupArtifactWriteControl {
+  return structuredClone({ ...authority, allocation: { kind, backupId, ref } });
+}
+
 /**
  * Narrow injected seam for sealing + persisting a control-backup bundle. The
  * host worker supplies an implementation backed by artifact storage + the at-rest
@@ -78,6 +95,7 @@ export interface BackupArtifactStore {
     readonly ref: string;
     readonly payload: Uint8Array;
     readonly contentType: string;
+    readonly writeControl?: BackupArtifactWriteControl;
   }): Promise<{ readonly digest: string; readonly sizeBytes: number }>;
   /**
    * Writes a non-secret public backup sidecar, such as
@@ -88,6 +106,7 @@ export interface BackupArtifactStore {
     readonly ref: string;
     readonly payload: Uint8Array;
     readonly contentType: string;
+    readonly writeControl?: BackupArtifactWriteControl;
   }): Promise<{ readonly digest: string; readonly sizeBytes: number }>;
 }
 
@@ -285,8 +304,8 @@ export class BackupsService {
         "control backups are not wired (backup artifact storage + crypto unavailable)",
       );
     }
-    const expectedWorkspaceManagementAuthority = request.expectedWorkspaceManagementAuthority ??
-      await this.captureManagementAuthority(workspaceId);
+    const expectedWorkspaceManagementAuthority = Object.freeze(structuredClone(request.expectedWorkspaceManagementAuthority ??
+      await this.captureManagementAuthority(workspaceId)));
     const workspace = await this.#store.getWorkspace(workspaceId);
     if (!workspace) {
       throw new OpenTofuControllerError("not_found", "workspace not found");
@@ -306,6 +325,7 @@ export class BackupsService {
       createdAt,
       startedAt: createdAt,
     };
+    let writeAuthority: BackupArtifactWriteAuthority;
     try {
       const admission = await this.#store.beginBackupRun(runningRun, expectedWorkspaceManagementAuthority);
       if (admission.status !== "created") {
@@ -315,6 +335,12 @@ export class BackupsService {
           { reason: "backup_run_already_exists" },
         );
       }
+      // Preserve the accepted return, not a later current Run read, before any
+      // collection, allocator, sealing or provider await can change authority.
+      writeAuthority = structuredClone({
+        expectedRunningRun: admission.run,
+        expectedWorkspaceManagementAuthority,
+      });
     } catch (error) {
       throw backupManagementError(error);
     }
@@ -336,19 +362,23 @@ export class BackupsService {
         ref,
         payload,
         contentType: CONTROL_BACKUP_CONTENT_TYPE,
+        writeControl: backupArtifactWriteControl(writeAuthority, "backup_control", backupId, ref),
       });
       const stateArchive = await this.#writeStateArchive({
+        writeAuthority,
         backupId,
         workspaceId,
         stateVersions: bundle.stateVersions,
       });
       const serviceData = await this.#writeServiceDataArchive({
+        writeAuthority,
         backupId,
         workspaceId,
         capturedAt: createdAt,
         ...(scopedCapsuleId ? { capsuleId: scopedCapsuleId } : {}),
       });
       const artifactsManifest = await this.#writeArtifactsManifest({
+        writeAuthority,
         backupId,
         workspaceId,
         control: { ref, digest, sizeBytes },
@@ -638,6 +668,7 @@ export class BackupsService {
   }
 
   async #writeStateArchive(input: {
+    readonly writeAuthority: BackupArtifactWriteAuthority;
     readonly backupId: string;
     readonly workspaceId: string;
     readonly stateVersions: readonly BundleStateVersion[];
@@ -685,11 +716,13 @@ export class BackupsService {
       ref,
       payload,
       contentType: CONTROL_BACKUP_CONTENT_TYPE,
+      writeControl: backupArtifactWriteControl(input.writeAuthority, "backup_state", input.backupId, ref),
     });
     return { ref, digest, sizeBytes };
   }
 
   async #writeArtifactsManifest(input: {
+    readonly writeAuthority: BackupArtifactWriteAuthority;
     readonly backupId: string;
     readonly workspaceId: string;
     readonly control: BackupArtifactPointer;
@@ -727,11 +760,13 @@ export class BackupsService {
       ref,
       payload,
       contentType: "application/json",
+      writeControl: backupArtifactWriteControl(input.writeAuthority, "backup_artifacts_manifest", input.backupId, ref),
     });
     return { ref, digest, sizeBytes };
   }
 
   async #writeServiceDataArchive(input: {
+    readonly writeAuthority: BackupArtifactWriteAuthority;
     readonly backupId: string;
     readonly workspaceId: string;
     readonly capturedAt: string;
@@ -762,6 +797,7 @@ export class BackupsService {
       ref,
       payload,
       contentType: CONTROL_BACKUP_CONTENT_TYPE,
+      writeControl: backupArtifactWriteControl(input.writeAuthority, "backup_service_data", input.backupId, ref),
     });
     return {
       ref,
