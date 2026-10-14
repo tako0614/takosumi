@@ -22,6 +22,9 @@ export async function scheduledUninstallAuthorizationFailure(
 ): Promise<string | undefined> {
   const requester = capsule.uninstall?.requester;
   if (!requester || typeof requester.subject !== "string" || !requester.subject.trim()) {
+    // Legacy rows cannot prove who authorized the reservation. Neither the
+    // audit actor nor today's owner can replace immutable requester evidence;
+    // cancel and create a new reservation with the currently authorized user.
     return UNINSTALL_AUTHORIZATION_REASONS.missing;
   }
   if (!validateRequester) return UNINSTALL_AUTHORIZATION_REASONS.unavailable;

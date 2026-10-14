@@ -101,6 +101,7 @@ async function appliedCapsule(
     readonly store?: OpenTofuControlStore;
     readonly queueDestroy?: boolean;
     readonly preDestroy?: () => Promise<void>;
+    readonly uninstallGraceDays?: number;
   } = {},
 ): Promise<Harness> {
   const clock = { ms: START };
@@ -248,7 +249,7 @@ async function appliedCapsule(
     activity,
     newId,
     now: () => new Date(clock.ms),
-    uninstallGraceDays: 7,
+    uninstallGraceDays: options.uninstallGraceDays ?? 7,
   });
   const backups = new BackupsService({
     store,
@@ -1138,6 +1139,117 @@ for (const [label, open] of durableStores) {
     });
   }
 }
+
+for (const graceDays of [0, 7]) {
+  test(`OAuth uninstall admission refuses even a valid grant with ${graceDays} grace days without mutation`, async () => {
+    const h = await appliedCapsule({ uninstallGraceDays: graceDays });
+    const before = await h.store.getCapsule(h.capsuleId);
+    const actionsBefore = await activityActions(h);
+    await expect(h.capsules.scheduleCapsuleUninstall(h.capsuleId, {
+      actor: "user_test",
+      requester: { subject: "user_test", grant: { kind: "oauth-access-token", tokenHash: "fixture-token-hash" } },
+    })).rejects.toMatchObject({
+      code: "failed_precondition",
+      details: { reason: "capsule_uninstall_oauth_unsupported" },
+    });
+    expect(await h.store.getCapsule(h.capsuleId)).toEqual(before);
+    expect(await activityActions(h)).toEqual(actionsBefore);
+    expect(await h.finalize()).toMatchObject({ scanned: 0 });
+    expect(h.destroyJobs).toHaveLength(0);
+  });
+}
+
+for (const [label, open] of durableStores) {
+  test(`${label}: a requester-less legacy reservation stays blocked until explicit cancel and reschedule`, async () => {
+    const { store, close } = await open();
+    try {
+      const h = await appliedCapsule({ store });
+      // Model the existing JSON row, including an actor audit that must not be
+      // adopted as requester evidence by the finalizer or a scheduling replay.
+      const legacy = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { actor: "user_test" });
+      expect(legacy.uninstall).not.toHaveProperty("requester");
+      expect(await h.finalize()).toMatchObject({ scanned: 0 });
+      await jumpToDue(h);
+      const rejectedAt = new Date(h.clock.ms).toISOString();
+      expect(await h.finalize()).toMatchObject({
+        blocked: 1, exportsRecorded: 0, destroyPlansCreated: 0, destroysStarted: 0, failures: 0,
+      });
+      const blocked = (await store.getCapsule(h.capsuleId))!;
+      expect(blocked).toMatchObject({ status: "uninstalled", uninstall: {
+        id: legacy.uninstall!.id, phase: "scheduled",
+        blockedReason: UNINSTALL_AUTHORIZATION_REASONS.missing, authorizationRejectedAt: rejectedAt,
+      } });
+      expect(blocked.currentStateVersionId).toBe(legacy.currentStateVersionId);
+      expect(blocked.currentStateGeneration).toBe(legacy.currentStateGeneration);
+      expect(await store.listBackupRecords(blocked.workspaceId)).toHaveLength(0);
+      const event = (await store.listActivityEvents(blocked.workspaceId, { limit: 500 }))
+        .find((event) => event.action === "capsule.uninstall_blocked");
+      expect(event).toMatchObject({ actorId: SCHEDULED_UNINSTALL_ACTOR, metadata: {
+        uninstallId: legacy.uninstall!.id, reason: UNINSTALL_AUTHORIZATION_REASONS.missing, rejectedAt,
+      } });
+      expect(event!.metadata).not.toHaveProperty("requesterSubject");
+      expect(await h.finalize()).toMatchObject({ scanned: 0 });
+      expect(await store.getCapsule(h.capsuleId)).toEqual(blocked);
+      const replay = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, {
+        actor: "user_test", requester: { subject: "user_test" },
+      });
+      expect(replay.uninstall).toEqual(blocked.uninstall);
+      expect((await h.capsules.cancelCapsuleUninstall(h.capsuleId, { actor: "user_test" })).status).toBe("active");
+      const replacement = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, {
+        actor: "user_test", requester: { subject: "user_test" },
+      });
+      expect(replacement.uninstall!.id).not.toBe(legacy.uninstall!.id);
+      expect(replacement.uninstall!.requester).toEqual({ subject: "user_test" });
+      expect(replacement.uninstall).not.toHaveProperty("blockedReason");
+      expect(replacement.uninstall).not.toHaveProperty("authorizationRejectedAt");
+      expect(Date.parse(replacement.uninstall!.scheduledDestroyAt) - h.clock.ms).toBe(7 * DAY_MS);
+      expect(await h.finalize()).toMatchObject({ scanned: 0 });
+      await jumpToDue(h);
+      expect(await h.finalize()).toMatchObject({ destroysStarted: 1, blocked: 0 });
+      expect((await store.getCapsule(h.capsuleId))?.status).toBe("destroyed");
+      expect(h.destroyJobs).toHaveLength(1);
+    } finally { await close(); }
+  });
+}
+
+test("an existing OAuth reservation blocks after expiry even when a fresh token exists for the same account", async () => {
+  const h = await appliedCapsule();
+  const subject = "tsub_legacy_uninstall_oauth";
+  await h.store.putWorkspaceMember({
+    id: "wm_legacy_uninstall_oauth", workspaceId: "ws_uninstall001", accountId: subject,
+    roles: ["admin"], status: "active", createdAt: new Date(START).toISOString(), updatedAt: new Date(START).toISOString(),
+  });
+  const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { actor: subject, requester: { subject } });
+  const secret = "fixture-old-oauth-reservation";
+  const tokenHash = `sha256:${Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret))).toString("base64url")}`;
+  // Seed the historical JSON shape directly: new OAuth reservations cannot be
+  // created after this fix, and refreshing must never rewrite this evidence.
+  const requester = { subject, grant: { kind: "oauth-access-token" as const, tokenHash } };
+  await h.store.putCapsule({ ...scheduled, uninstall: { ...scheduled.uninstall!, requester } });
+  const accounts = new InMemoryAccountsStore();
+  accounts.saveAccount({ subject: requester.subject, createdAt: START, updatedAt: START });
+  const originalGrant = {
+    clientId: "fixture-uninstall-client", subject: "fixture-pairwise",
+    takosumiSubject: requester.subject, scope: "capsules:write", workspaceId: scheduled.workspaceId,
+    expiresAt: START + 5 * 60_000,
+  };
+  accounts.saveAccessToken(secret, originalGrant);
+  h.authorization.validate = (evidence, workspaceId) => validateUninstallRequester(accounts, evidence, workspaceId, h.clock.ms);
+  expect(await h.authorization.validate(requester, scheduled.workspaceId)).toBe(true);
+  await jumpToDue(h);
+  accounts.saveAccessToken("fixture-refreshed-oauth-token", { ...originalGrant, expiresAt: h.clock.ms + 5 * 60_000 });
+  expect(await h.finalize()).toMatchObject({
+    blocked: 1, exportsRecorded: 0, destroyPlansCreated: 0, destroysStarted: 0,
+  });
+  const blocked = (await h.store.getCapsule(h.capsuleId))!;
+  expect(blocked.uninstall).toMatchObject({
+    requester, blockedReason: UNINSTALL_AUTHORIZATION_REASONS.denied,
+    authorizationRejectedAt: new Date(h.clock.ms).toISOString(),
+  });
+  expect(await h.finalize()).toMatchObject({ scanned: 0 });
+  expect(h.destroyJobs).toHaveLength(0);
+  expect((await h.capsules.cancelCapsuleUninstall(h.capsuleId, { actor: requester.subject })).status).toBe("active");
+});
 
 test("legacy requester and unavailable authorization fail closed with durable audit time", async () => {
   for (const unavailable of ["legacy", "missing_port", "lookup_error"] as const) {

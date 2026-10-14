@@ -45,6 +45,9 @@ Git に新しい commit が追加されても、自動では反映しません�
 詳しくは [Source と Capsule](./sources.md) と
 [実行モデル](./run-model.md)を参照してください。
 
+アンインストールの猶予期間、再認可、修復方法は
+[予約アンインストール](./scheduled-uninstall.md)を参照してください。
+
 ## provider を使う
 
 必要なサービスは、Git module が宣言する OpenTofu / Terraform provider で管理します。

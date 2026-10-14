@@ -856,6 +856,17 @@ export class CapsulesService {
       (options.actor !== undefined && options.actor !== requester.subject))) {
       throw new OpenTofuControllerError("invalid_argument", "Uninstall requester must match the authenticated actor.");
     }
+    if (requester?.grant?.kind === "oauth-access-token") {
+      // Finalization pins this exact grant; refreshing cannot renew it. Even
+      // zero grace does not guarantee background dispatch before token expiry.
+      // Keep this at the shared admission boundary so every scheduling route
+      // rejects before parking the Capsule or recording a reservation.
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "OAuth access tokens cannot schedule uninstall. Use an Accounts session or a PAT that remains valid through finalization.",
+        { reason: CAPSULE_UNINSTALL_REASONS.oauthUnsupported },
+      );
+    }
     const suppliedAuthority =
       options.expectedWorkspaceManagementAuthority === undefined
         ? undefined
