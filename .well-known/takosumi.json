@@ -157,6 +157,50 @@
             "advanced": true
           }
         ]
+      },
+      "examples/staging-oauth-fixture": {
+        "inputs": [
+          {
+            "name": "public_url",
+            "source": {
+              "kind": "user"
+            },
+            "type": "string",
+            "format": "url",
+            "required": true,
+            "label": {
+              "ja": "公開URL",
+              "en": "Public URL"
+            }
+          }
+        ],
+        "requires": [
+          {
+            "kind": "http.endpoint",
+            "deliver": {
+              "variables": {
+                "url": "public_url"
+              }
+            }
+          },
+          {
+            "kind": "identity.oidc",
+            "callbackPath": "/oauth/callback",
+            "scopes": [
+              "openid",
+              "offline_access",
+              "capsules:write"
+            ],
+            "deliver": {
+              "variables": {
+                "accountsUrl": "takosumi_accounts_url",
+                "issuerUrl": "takosumi_accounts_issuer_url",
+                "clientId": "takosumi_accounts_client_id",
+                "redirectUri": "takosumi_accounts_redirect_uri"
+              }
+            }
+          }
+        ]
       }
     }
   }
