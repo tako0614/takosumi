@@ -92,6 +92,14 @@ supplier price definition marks `postpaid` as unsupported; it is not currently
 an available choice. Reaching a limit does not automatically delete existing
 Resources. Delete them through the provider graph that created them.
 
+## Preview and invoice contract
+
+Before execution, Preview shows the applicable price revision, meter, rate,
+tax treatment, estimate and expiry. Apply uses the reviewed exact quote. An
+unpriced meter, inactive catalog, missing manager, or expired quote stops
+execution before the backend is called. Usage, reservations, refunds or
+credits and invoice lines are reconciled before closing the billing period.
+
 ## Amount precision and tax
 
 The shared ledger stores integer micro-USD (`$1 = 1,000,000 micro-USD`). For

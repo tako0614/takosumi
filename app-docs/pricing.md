@@ -81,6 +81,13 @@ Container を通る Worker などの利用は、対応する有効な meter が�
 `postpaid` は未対応であり、今すぐ選択できる機能ではありません。上限到達を理由に
 既存 Resource を自動削除せず、削除は作成に使った provider graph から行います。
 
+## Preview and invoice contract
+
+実行前の Preview で、適用する価格 revision、meter、単価、税区分、見積り、有効期限を
+確認します。Apply は確認した exact quote を使います。料金がない meter、未発効の
+catalog、未設定の billing manager、期限切れの quote は backend 実行前に停止します。
+利用量、reservation、返金・credit、請求書の明細は、請求期間の確定前に照合します。
+
 ## Amount precision and tax
 
 共通 ledger は整数の micro-USD（`$1 = 1,000,000 micro-USD`）で金額を保持します。
