@@ -37,7 +37,37 @@ commit の source subtree 配下に
 
 作成の応答には `hookSecret` が含まれます。**これは作成時に 1 度だけ平文で返り、
 以降は取得できません。** Source レコードにはハッシュだけを保存します。Git ホストの
-webhook に設定するならこの時点で控えます。失った場合は再取得ではなく作り直しです。
+webhook には `Authorization: Bearer <hookSecret>` として設定します。値を失った場合も
+Source を削除・再作成せず、同じ Source の secret をローテーションできます。
+
+### webhook secret のローテーション
+
+漏えいが疑われる場合や値を失った場合は、Git ホストの webhook 設定を更新できる状態で
+次の API を呼び出します。対象 Workspace の owner/admin として認証する必要があります。
+この例では、Takosumi の origin を `TAKOSUMI_URL`、その owner/admin の `write` PAT を
+`TAKOSUMI_WRITE_PAT` に設定します。PAT の Workspace 制限も対象と一致する必要があります。
+要求本文はありません。成功すると `200` と `Cache-Control: no-store` を返し、応答の
+`hookSecret` はこのときだけ平文で見えます。
+
+```bash
+curl --silent --show-error --fail-with-body -X POST \
+  "$TAKOSUMI_URL/api/v1/sources/src_example/hook-secret/rotate" \
+  -H "authorization: Bearer $TAKOSUMI_WRITE_PAT"
+```
+
+応答を受け取ったら、管理された端末上で値を一度だけ確認し、Git ホストの該当 webhook の
+Authorization bearer を新しい値に置き換えます。secret を URL や query string に入れず、
+ログ、shell history、Issue/PR/chat、ファイルへ出力・保存しないでください。コマンドの出力を
+`tee`、ファイル、ログ収集へ流さず、端末録画や共有画面にも載せないでください。Git ホストの
+設定変更後、新しい secret で webhook が受理され、古い secret では `401` になることを確認します。
+
+ローテーションの commit 後に検証される webhook request では、旧 secret は直ちに無効です。
+すでに認証済みの webhook や進行中の webhook/Run は取り消されません。並行するローテーションは
+元の Source と Workspace の active authority に対して原子的に競合し、勝者だけが secret を受け取り、
+敗者は `409` で secret の変更も受けません。POST は毎回新しい secret を発行するため、失敗時に
+自動再試行しないでください。成功応答を失った場合、secret の再取得はできません。状態を確認したうえで
+手動でもう一度ローテーションし、新しい応答を Git ホストへ設定します。ローテーション履歴には actor、
+Source、Workspace のみを記録し、secret は記録しません。
 
 ## SourceSnapshot — ref と commit は別物
 

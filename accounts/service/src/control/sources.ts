@@ -183,6 +183,22 @@ export async function handleSources(
       }
       return methodNotAllowed("GET, POST");
     }
+    if (segments.length === 4 && segments[2] === "hook-secret" && segments[3] === "rotate") {
+      if (method !== "POST") return methodNotAllowed("POST");
+      const sourceId = decodeURIComponent(segments[1] ?? "");
+      const { source } = await operations.getSource(sourceId);
+      const workspaceId = sourceWorkspaceId(source);
+      if (!workspaceId) return sourceWorkspaceIdentityMissing();
+      const auth = await requireWorkspaceAccess({ operations, store, workspaceId, session: ctx.session });
+      if (!auth.ok) return auth.response;
+      if ((await request.text()).length !== 0) {
+        return errorJson("invalid_request", "Hook secret rotation accepts no request body.", 400);
+      }
+      const response = await operations.rotateSourceHookSecret(sourceId, ctx.session.subject);
+      const result = jsonStatus({ ...response, source: publicSource(response.source) }, 200);
+      result.headers.set("cache-control", "no-store");
+      return result;
+    }
     if (segments.length === 3 && segments[2] === "sync") {
       const sourceId = decodeURIComponent(segments[1] ?? "");
       if (method !== "POST") return methodNotAllowed("POST");

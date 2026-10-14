@@ -1104,6 +1104,59 @@ test("same-lease Source success advances only its default cursor atomically whil
   }
 });
 
+test("SourceSync settlement preserves a hook secret rotated after its Source observation", async () => {
+  for (const [label, store] of await stores()) {
+    const running = await claimRun(store, `lease_rotation_cursor_${label}`);
+    const staleSource = {
+      id: SOURCE_ID, workspaceId: WORKSPACE_ID, name: "configuration-kept",
+      url: running.url, defaultRef: running.ref, defaultPath: running.path,
+      hookSecretHash: "old-hook-hash", autoSync: false, status: "active" as const,
+      lastSeenCommit: "previous-commit", createdAt: CREATED_AT, updatedAt: STARTED_AT,
+    };
+    await store.putSource(staleSource);
+    const rotatedAt = "2026-08-27T00:00:01.500Z";
+    const activity = {
+      id: `act_rotation_cursor_${label}`, workspaceId: WORKSPACE_ID,
+      action: "source.hook_secret_rotated", targetType: "source", targetId: SOURCE_ID,
+      metadata: {}, createdAt: rotatedAt,
+    };
+    const result = await store.rotateSourceHookSecret({
+      expectedSource: staleSource, hookSecretHash: "rotated-hook-hash",
+      updatedAt: rotatedAt,
+      expectedWorkspaceManagementAuthority: {
+        workspaceId: WORKSPACE_ID, managementState: "active", managementEpoch: 1,
+      },
+      activity,
+    });
+    expect(result.status, label).toBe("rotated");
+    expect(await store.writeSourceConfiguration({
+      expectedSource: staleSource,
+      source: { ...staleSource, name: "stale-patch" },
+    }), `${label}: stale configuration`).toEqual({ status: "conflict" });
+    expect((await store.commitSourceSyncSuccess({
+      terminalRun: succeededRun(running, "next-commit"),
+      leaseToken: `lease_rotation_cursor_${label}`,
+      snapshot: sourceSnapshot("next-commit"),
+    })).won, `${label}: settled`).toBe(true);
+    expect(await store.getSource(SOURCE_ID), label).toEqual({
+      ...staleSource, hookSecretHash: "rotated-hook-hash",
+      lastSeenCommit: "next-commit", updatedAt: FINISHED_AT,
+    });
+    const staleActivity = { ...activity, id: `act_stale_rotation_cursor_${label}` };
+    expect(await store.rotateSourceHookSecret({
+      expectedSource: staleSource, hookSecretHash: "stale-hash-resurrection",
+      updatedAt: rotatedAt,
+      expectedWorkspaceManagementAuthority: {
+        workspaceId: WORKSPACE_ID, managementState: "active", managementEpoch: 1,
+      },
+      activity: staleActivity,
+    }), `${label}: stale rotation`).toEqual({ status: "conflict" });
+    expect(await store.getActivityEvent(staleActivity.id)).toBeUndefined();
+    expect((await store.getSource(SOURCE_ID))?.hookSecretHash).toBe("rotated-hook-hash");
+    expect(await store.getActivityEvent(activity.id), `${label}: rotation activity`).toEqual(activity);
+  }
+});
+
 test("source-sync success exactly adopts an identical immutable snapshot", async () => {
   for (const [label, store] of await stores()) {
     const snapshot = sourceSnapshot(`adopt-${label}`);

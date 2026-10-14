@@ -1392,6 +1392,36 @@ export type SourceConfigurationWriteResult =
   | { readonly status: "created" | "updated" | "replayed"; readonly source: StoredSource }
   | { readonly status: "conflict" };
 
+/** Replace only the private webhook verifier under an exact Source and Workspace CAS. */
+export interface SourceHookSecretRotationInput {
+  readonly expectedSource: StoredSource;
+  readonly hookSecretHash: string;
+  readonly updatedAt: string;
+  readonly expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority;
+  readonly activity: ActivityEvent;
+}
+
+export type SourceHookSecretRotationResult =
+  | { readonly status: "rotated"; readonly source: StoredSource }
+  | { readonly status: "conflict" };
+
+export function assertSourceHookSecretRotationInput(input: SourceHookSecretRotationInput): void {
+  const { expectedSource, hookSecretHash, updatedAt, activity } = input;
+  assertWorkspaceManagementAuthorityInput(input.expectedWorkspaceManagementAuthority, expectedSource.workspaceId);
+  if (
+    typeof hookSecretHash !== "string" || hookSecretHash.length === 0 ||
+    hookSecretHash === expectedSource.hookSecretHash ||
+    typeof updatedAt !== "string" || !Number.isFinite(Date.parse(updatedAt)) ||
+    !activity || typeof activity.id !== "string" || activity.id.length === 0 ||
+    activity.workspaceId !== expectedSource.workspaceId ||
+    activity.action !== "source.hook_secret_rotated" ||
+    activity.targetType !== "source" || activity.targetId !== expectedSource.id ||
+    activity.createdAt !== updatedAt || activity.runId !== undefined ||
+    !activity.metadata || typeof activity.metadata !== "object" ||
+    Array.isArray(activity.metadata) || Object.keys(activity.metadata).length !== 0
+  ) throw new TypeError("Source hook secret rotation input is invalid");
+}
+
 export function assertSourceConfigurationWriteInput(input: SourceConfigurationWriteInput): void {
   if (input.expectedWorkspaceManagementAuthority !== undefined) {
     assertWorkspaceManagementAuthorityInput(input.expectedWorkspaceManagementAuthority, input.source.workspaceId);
@@ -3743,6 +3773,7 @@ export interface OpenTofuControlStore {
   writeSourceConfiguration(
     input: SourceConfigurationWriteInput,
   ): Promise<SourceConfigurationWriteResult>;
+  rotateSourceHookSecret(input: SourceHookSecretRotationInput): Promise<SourceHookSecretRotationResult>;
   getSource(id: string): Promise<StoredSource | undefined>;
   listSources(workspaceId?: string): Promise<readonly StoredSource[]>;
   /** Keyset-paged Source listing for a Workspace (spec §30 source list route). */
@@ -7048,6 +7079,27 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     const source = structuredClone(input.source);
     this.#sources.set(source.id, source);
     return { status: current === undefined ? "created" : "updated", source };
+  }
+
+  async rotateSourceHookSecret(input: SourceHookSecretRotationInput): Promise<SourceHookSecretRotationResult> {
+    assertSourceHookSecretRotationInput(input);
+    const current = this.#sources.get(input.expectedSource.id);
+    if (!current || stableStringify(current) !== stableStringify(input.expectedSource)) {
+      return { status: "conflict" };
+    }
+    assertWorkspaceManagementAdmission(
+      this.#workspaces.has(current.workspaceId) ? this.#workspaceManagement.get(current.workspaceId) : undefined,
+      current.workspaceId,
+      input.expectedWorkspaceManagementAuthority,
+    );
+    if (this.#activityEvents.has(input.activity.id)) {
+      throw new Error(`Activity ${input.activity.id} already exists`);
+    }
+    const source = { ...current, hookSecretHash: input.hookSecretHash, updatedAt: input.updatedAt };
+    // No await between admission, collision check and both in-memory publications.
+    this.#activityEvents.set(input.activity.id, structuredClone(input.activity));
+    this.#sources.set(source.id, source);
+    return { status: "rotated", source };
   }
 
   getSource(id: string): Promise<StoredSource | undefined> {

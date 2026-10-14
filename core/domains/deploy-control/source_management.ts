@@ -20,6 +20,7 @@ import type {
   ListSourcesResponse,
   ListSourceSnapshotsResponse,
   PatchSourceRequest,
+  RotateSourceHookSecretResponse,
   Source,
   SourceResponse,
   SourceSnapshot,
@@ -71,6 +72,10 @@ export class SourceManagement {
     patch: PatchSourceRequest,
   ): Promise<SourceResponse> {
     return await this.#require().patchSource(id, patch);
+  }
+
+  async rotateSourceHookSecret(id: string, actorId?: string): Promise<RotateSourceHookSecretResponse> {
+    return await this.#require().rotateSourceHookSecret(id, actorId);
   }
 
   async createSourceSync(

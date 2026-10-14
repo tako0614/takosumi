@@ -11,6 +11,7 @@ import {
 } from "../../../../core/domains/deploy-control/store.ts";
 import { toPublicSource } from "../../../../core/domains/sources/mod.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
+import type { D1PreparedStatement, D1Result } from "../../../../worker/src/bindings.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
@@ -101,6 +102,38 @@ const STORES: ReadonlyArray<[string, () => D1SourceStoreSlice]> = [
   ["d1", () => new CloudflareD1OpenTofuControlStore(new SqliteFakeD1())],
 ];
 
+/** Pause both rotation batches after their pre-read, then execute them serially. */
+class PausedRotationD1 extends SqliteFakeD1 {
+  #armed = false;
+  #arrivals = 0;
+  #bothArrived!: () => void;
+  #firstRelease!: () => void;
+  #secondRelease!: () => void;
+  readonly #both = new Promise<void>((resolve) => { this.#bothArrived = resolve; });
+  readonly #first = new Promise<void>((resolve) => { this.#firstRelease = resolve; });
+  readonly #second = new Promise<void>((resolve) => { this.#secondRelease = resolve; });
+
+  arm(): void { this.#armed = true; }
+  async waitForBoth(): Promise<void> { await this.#both; }
+  release(): void { this.#firstRelease(); }
+
+  override async batch<T = unknown>(statements: readonly D1PreparedStatement[]): Promise<readonly D1Result<T>[]> {
+    if (!this.#armed) return await super.batch<T>(statements);
+    const position = ++this.#arrivals;
+    if (position === 2) this.#bothArrived();
+    if (position === 1) {
+      await this.#first;
+      try {
+        return await super.batch<T>(statements);
+      } finally {
+        this.#secondRelease();
+      }
+    }
+    await this.#second;
+    return await super.batch<T>(statements);
+  }
+}
+
 test("Source configuration CAS preserves the current row and requires active Workspace authority", async () => {
   const client = await PGliteSqlClient.create();
   try {
@@ -139,6 +172,122 @@ test("Source configuration CAS preserves the current row and requires active Wor
   } finally {
     await client.close();
   }
+}, 30_000);
+
+test("Source hook rotation is an exact, audited CAS across stores", async () => {
+  const client = await PGliteSqlClient.create();
+  try {
+    for (const [label, store] of [
+      ["memory", new InMemoryOpenTofuControlStore()],
+      ["postgres", new SqlOpenTofuControlStore({ client })],
+      ["d1", new CloudflareD1OpenTofuControlStore(new SqliteFakeD1())],
+    ] as const) {
+      const initial = source();
+      const authority = { workspaceId: initial.workspaceId, managementState: "active" as const, managementEpoch: 1 };
+      await store.putWorkspace({
+        id: initial.workspaceId, handle: "hook-rotation", displayName: "Hook rotation", type: "personal",
+        ownerUserId: "owner_hook_rotation", createdAt: initial.createdAt, updatedAt: initial.updatedAt,
+      });
+      await store.putSource(initial);
+      const activity = {
+        id: `act_${label}_rotation`, workspaceId: initial.workspaceId,
+        action: "source.hook_secret_rotated", targetType: "source", targetId: initial.id,
+        metadata: {}, createdAt: "2026-06-06T00:05:00.000Z",
+      };
+      const input = {
+        expectedSource: initial, hookSecretHash: "new-hash-1", updatedAt: activity.createdAt,
+        expectedWorkspaceManagementAuthority: authority, activity,
+      };
+      const rotated = { ...initial, hookSecretHash: input.hookSecretHash, updatedAt: input.updatedAt };
+      await expect(store.rotateSourceHookSecret({ ...input, hookSecretHash: initial.hookSecretHash }))
+        .rejects.toBeInstanceOf(TypeError);
+      await expect(store.rotateSourceHookSecret({
+        ...input, expectedWorkspaceManagementAuthority: { ...authority, managementEpoch: 2 },
+      })).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      expect(await store.getSource(initial.id)).toEqual(initial);
+      expect(await store.getActivityEvent(activity.id)).toBeUndefined();
+      expect(await store.rotateSourceHookSecret(input), label).toEqual({ status: "rotated", source: rotated });
+      expect(await store.getSource(initial.id)).toEqual(rotated);
+      expect(await store.getActivityEvent(activity.id)).toEqual(activity);
+      // A lost acknowledgement must never restore the old hash or duplicate Activity.
+      expect(await store.rotateSourceHookSecret(input)).toEqual({ status: "conflict" });
+      expect(await store.rotateSourceHookSecret({ ...input, activity: { ...activity, id: `act_${label}_retry` } }))
+        .toEqual({ status: "conflict" });
+      expect(await store.getSource(initial.id)).toEqual(rotated);
+      expect((await store.listActivityEvents(initial.workspaceId)).length).toBe(1);
+      await expect(store.writeSourceConfiguration({
+        source: { ...initial, name: "stale" }, expectedSource: initial,
+        expectedWorkspaceManagementAuthority: authority,
+      })).resolves.toEqual({ status: "conflict" });
+      expect(await store.getSource(initial.id)).toEqual(rotated);
+      // A collision in Activity must fail without advancing the Source hash.
+      await expect(store.rotateSourceHookSecret({
+        ...input, expectedSource: rotated, hookSecretHash: "new-hash-2",
+        updatedAt: "2026-06-06T00:06:00.000Z", activity: { ...activity, createdAt: "2026-06-06T00:06:00.000Z" },
+      })).rejects.toThrow();
+      expect(await store.getSource(initial.id)).toEqual(rotated);
+      expect(await store.getActivityEvent(activity.id)).toEqual(activity);
+      const contenders = ["left", "right"].map((side) => ({
+        ...input, expectedSource: rotated, hookSecretHash: `hash-${side}`,
+        updatedAt: `2026-06-06T00:0${side === "left" ? "7" : "8"}:00.000Z`,
+        activity: { ...activity, id: `act_${label}_${side}`,
+          createdAt: `2026-06-06T00:0${side === "left" ? "7" : "8"}:00.000Z` },
+      }));
+      // The SQLite D1 fake owns one connection and cannot open overlapping
+      // transactions; its second request still exercises the stale CAS path.
+      const raced = label === "d1"
+        ? [await store.rotateSourceHookSecret(contenders[0]), await store.rotateSourceHookSecret(contenders[1])]
+        : await Promise.all(contenders.map((candidate) => store.rotateSourceHookSecret(candidate)));
+      expect(raced.map((result) => result.status).sort(), label).toEqual(["conflict", "rotated"]);
+      const winner = raced.find((result) => result.status === "rotated");
+      if (!winner || winner.status !== "rotated") throw new Error("rotation race had no winner");
+      expect(await store.getSource(initial.id)).toEqual(winner.source);
+      expect((await store.listActivityEvents(initial.workspaceId)).length).toBe(2);
+      await store.beginWorkspaceDraining(initial.workspaceId, authority);
+      await expect(store.rotateSourceHookSecret({
+        ...input, expectedSource: winner.source, hookSecretHash: "new-hash-3", activity: { ...activity, id: `act_${label}_drained` },
+      })).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      expect(await store.getSource(initial.id)).toEqual(winner.source);
+    }
+  } finally {
+    await client.close();
+  }
+}, 30_000);
+
+test("D1 rotation batches resolve a race after both callers read the old Source", async () => {
+  const db = new PausedRotationD1();
+  const store = new CloudflareD1OpenTofuControlStore(db);
+  const initial = source();
+  const authority = { workspaceId: initial.workspaceId, managementState: "active" as const, managementEpoch: 1 };
+  await store.putWorkspace({
+    id: initial.workspaceId, handle: "race-rotation", displayName: "Race rotation",
+    type: "personal", ownerUserId: "race_owner", createdAt: initial.createdAt,
+    updatedAt: initial.updatedAt,
+  });
+  await store.putSource(initial);
+  const candidates = ["first", "second"].map((name) => {
+    const updatedAt = name === "first" ? "2026-06-06T00:01:00.000Z" : "2026-06-06T00:02:00.000Z";
+    return {
+      expectedSource: initial, hookSecretHash: `hash-${name}`, updatedAt,
+      expectedWorkspaceManagementAuthority: authority,
+      activity: {
+        id: `act_race_${name}`, workspaceId: initial.workspaceId,
+        action: "source.hook_secret_rotated", targetType: "source", targetId: initial.id,
+        metadata: {}, createdAt: updatedAt,
+      },
+    };
+  });
+  db.arm();
+  const attempts = candidates.map((candidate) => store.rotateSourceHookSecret(candidate));
+  await db.waitForBoth();
+  db.release();
+  const results = await Promise.all(attempts);
+  expect(results.map((result) => result.status)).toEqual(["rotated", "conflict"]);
+  expect(await store.getSource(initial.id)).toEqual({
+    ...initial, hookSecretHash: candidates[0].hookSecretHash, updatedAt: candidates[0].updatedAt,
+  });
+  expect(await store.getActivityEvent(candidates[0].activity.id)).toEqual(candidates[0].activity);
+  expect(await store.getActivityEvent(candidates[1].activity.id)).toBeUndefined();
 }, 30_000);
 
 test("toPublicSource strips service-only Source fields", () => {

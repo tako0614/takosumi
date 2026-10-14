@@ -110,6 +110,7 @@ import type {
   ListSourcesResponse,
   ListSourceSnapshotsResponse,
   PatchSourceRequest,
+  RotateSourceHookSecretResponse,
   RepositoryInstallMetadataSnapshot,
   RepositoryManifestSnapshot,
   RepositoryModulesSnapshot,
@@ -2383,6 +2384,10 @@ export class OpenTofuController {
     patch: PatchSourceRequest,
   ): Promise<SourceResponse> {
     return await this.#sources.patchSource(id, patch);
+  }
+
+  async rotateSourceHookSecret(id: string, actorId?: string): Promise<RotateSourceHookSecretResponse> {
+    return await this.#sources.rotateSourceHookSecret(id, actorId);
   }
 
   async createSourceSync(

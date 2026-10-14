@@ -38,8 +38,38 @@ creates module or provider candidates.
 
 The creation response carries a `hookSecret`. **It is returned in the clear exactly once,
 at creation, and cannot be retrieved afterwards.** The Source record stores only a hash.
-If you are going to configure a webhook on your Git host, copy it now. If you lose it, you
-create a new one rather than fetching it again.
+Configure the Git host webhook with `Authorization: Bearer <hookSecret>`. If you lose the
+value, rotate the secret on the same Source; you do not need to delete and recreate it.
+
+### Rotating a webhook secret
+
+If leakage is suspected or the value is lost, prepare to update the Git host's webhook and
+call this endpoint authenticated as an owner/admin of the Source's Workspace. In this example,
+`TAKOSUMI_URL` is the Takosumi origin and `TAKOSUMI_WRITE_PAT` is that owner/admin's `write` PAT.
+Any Workspace restriction on the PAT must also match the target Workspace. The
+request has no body. On success it returns `200` and `Cache-Control: no-store`; the response's
+`hookSecret` is shown in clear text only for this rotation.
+
+```bash
+curl --silent --show-error --fail-with-body -X POST \
+  "$TAKOSUMI_URL/api/v1/sources/src_example/hook-secret/rotate" \
+  -H "authorization: Bearer $TAKOSUMI_WRITE_PAT"
+```
+
+Read the response once on a controlled terminal, then replace the Authorization bearer on the
+Git host's webhook with the new value. Never put the secret in a URL or query string, or write
+it to logs, shell history, an Issue/PR/chat, or a file. Do not pipe the command through `tee`,
+file capture, or log collection, and keep it out of terminal recording and screen sharing. After
+updating the Git host, confirm that the new secret is accepted and the old one receives `401`.
+
+The old secret is invalid for webhook requests verified after the rotation commits. A webhook
+already authenticated, or a webhook/Run already in progress, is not canceled. Concurrent
+rotations compare and commit atomically against the original Source and the Workspace's active
+authority: only the winner receives a secret, and the loser gets `409` with no secret or mutation.
+Each POST issues a fresh secret, so clients must never retry it automatically. If a success
+response is lost, the secret cannot be retrieved; check the state and manually rotate again, then
+configure the newly returned value at the Git host. The rotation activity records only the actor,
+Source, and Workspace, never the secret.
 
 ## SourceSnapshot: a ref is not a commit
 

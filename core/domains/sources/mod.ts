@@ -16,6 +16,7 @@ import type {
   ListSourcesResponse,
   ListSourceSnapshotsResponse,
   PatchSourceRequest,
+  RotateSourceHookSecretResponse,
   Source,
   SourceResponse,
   SourceSyncIntent,
@@ -333,6 +334,49 @@ export class SourcesService {
       expectedWorkspaceManagementAuthority: workspaceManagementAuthority,
     });
     return { source: toPublicSource(persisted) };
+  }
+
+  /**
+   * A fresh, non-replayable rotation. Return plaintext only after the exact-row
+   * CAS and its value-free Activity commit together. Never retry a lost race:
+   * doing so could revoke a different caller's acknowledged replacement.
+   */
+  async rotateSourceHookSecret(
+    id: string,
+    actorId?: string,
+  ): Promise<RotateSourceHookSecretResponse> {
+    const stored = await this.#requireSource(id);
+    const authority = await this.#captureWorkspaceManagementAuthority(stored.workspaceId);
+    const hookSecret = this.#newHookSecret();
+    const hookSecretHash = await sha256HexOfStringAsync(hookSecret);
+    const updatedAt = this.#now().toISOString();
+    try {
+      const result = await this.#store.rotateSourceHookSecret({
+        expectedSource: stored,
+        hookSecretHash,
+        updatedAt,
+        expectedWorkspaceManagementAuthority: authority,
+        activity: {
+          id: this.#newId("act"), workspaceId: stored.workspaceId,
+          ...(actorId === undefined ? {} : { actorId }),
+          action: "source.hook_secret_rotated", targetType: "source",
+          targetId: stored.id, metadata: {}, createdAt: updatedAt,
+        },
+      });
+      if (result.status === "conflict") {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "Source changed before the hook secret could be rotated. Review before requesting a fresh rotation.",
+          { reason: "source_hook_secret_rotation_conflict" },
+        );
+      }
+      return { source: toPublicSource(result.source), hookSecret };
+    } catch (error) {
+      if (error instanceof WorkspaceManagementAdmissionConflictError) {
+        throw workspaceManagementAdmissionErrorFor();
+      }
+      throw error;
+    }
   }
 
   async listSnapshots(

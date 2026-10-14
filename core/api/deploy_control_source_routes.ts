@@ -37,6 +37,7 @@ import {
   TAKOSUMI_COMPATIBILITY_REPORT_ROUTE,
   TAKOSUMI_SOURCE_COMPATIBILITY_CHECK_ROUTE,
   TAKOSUMI_SOURCE_ROUTE,
+  TAKOSUMI_SOURCE_HOOK_SECRET_ROTATE_ROUTE,
   TAKOSUMI_SOURCE_SNAPSHOTS_ROUTE,
   TAKOSUMI_SOURCE_SNAPSHOT_INSTALL_MODULES_ROUTE,
   TAKOSUMI_WORKSPACE_STABLE_SOURCE_TAG_ROUTE,
@@ -95,6 +96,18 @@ export const DEPLOY_CONTROL_SOURCE_ENDPOINTS: readonly DeployControlEndpoint[] =
         pathParams: ["sourceId"],
         requestSchema: "PatchSourceRequest",
         okSchema: "SourceResponse",
+      },
+      notImplementedMessage: "sources not wired",
+    },
+    {
+      method: "POST",
+      path: TAKOSUMI_SOURCE_HOOK_SECRET_ROTATE_ROUTE,
+      summary: "Rotates the webhook bearer immediately. Fresh, non-replayable POST; returns the replacement once.",
+      auth: "deploy-control-token",
+      operationId: "rotateSourceHookSecret",
+      openapi: {
+        pathParams: ["sourceId"],
+        okSchema: "RotateSourceHookSecretResponse",
       },
       notImplementedMessage: "sources not wired",
     },
@@ -244,6 +257,26 @@ export function mountDeployControlSourceRoutes(
         ensureWorkspacePermission(principal, existing.source.workspaceId);
         const body = await readJsonBody<PatchSourceRequest>(c, "sourcePatch");
         return c.json(await controller.patchSource(id, body), 200);
+      },
+    }),
+  );
+
+  app.post(
+    TAKOSUMI_SOURCE_HOOK_SECRET_ROTATE_ROUTE,
+    deployControlBodyLimit,
+    defineRoute({
+      ctx,
+      param: SOURCE_ID_PARAM,
+      enforceBody: true,
+      handler: async ({ c, principal, id }) => {
+        const existing = await controller.getSource(id);
+        ensureWorkspacePermission(principal, existing.source.workspaceId);
+        if ((await c.req.text()).length !== 0) {
+          throw new OpenTofuControllerError("invalid_argument", "Hook secret rotation accepts no request body.");
+        }
+        const response = await controller.rotateSourceHookSecret(id, principal.actor);
+        c.header("cache-control", "no-store");
+        return c.json(response, 200);
       },
     }),
   );

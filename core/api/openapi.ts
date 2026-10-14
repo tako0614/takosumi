@@ -3264,6 +3264,19 @@ export function sourceSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+    RotateSourceHookSecretResponse: {
+      type: "object",
+      required: ["source", "hookSecret"],
+      properties: {
+        source: ref("Source"),
+        hookSecret: {
+          type: "string",
+          pattern: "^whk_[0-9a-f]{64}$",
+          description: "Server-generated 256-bit webhook bearer, returned once with no-store after rotation. Only its hash is stored; the previous bearer is immediately invalidated. Never automatically retry this fresh POST.",
+        },
+      },
+      additionalProperties: false,
+    },
     SourceResponse: {
       type: "object",
       required: ["source"],
