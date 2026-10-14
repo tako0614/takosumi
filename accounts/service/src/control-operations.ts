@@ -37,6 +37,7 @@ import type {
   ListSourceSnapshotsResponse,
   ListSourcesResponse,
   PatchSourceRequest,
+  RotateSourceHookSecretResponse,
   SourceResponse,
   SourceSnapshot,
   SourceSyncRun,
@@ -756,6 +757,7 @@ export interface ControlPlaneOperations {
   ): Promise<ListSourcesResponse>;
   getSource(id: string): Promise<SourceResponse>;
   patchSource(id: string, patch: PatchSourceRequest): Promise<SourceResponse>;
+  rotateSourceHookSecret(id: string, actorId?: string): Promise<RotateSourceHookSecretResponse>;
   createSourceSync(
     sourceId: string,
     options?: CreateSourceSyncRequest & { readonly dedupe?: boolean },

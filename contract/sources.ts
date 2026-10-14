@@ -872,6 +872,8 @@ export const SOURCE_PATH = (id: string): string =>
   `${INTERNAL_V1_PREFIX}/sources/${encodeURIComponent(id)}`;
 export const SOURCE_SYNC_PATH = (id: string): string =>
   `${INTERNAL_V1_PREFIX}/sources/${encodeURIComponent(id)}/sync`;
+export const SOURCE_HOOK_SECRET_ROTATE_PATH = (id: string): string =>
+  `${INTERNAL_V1_PREFIX}/sources/${encodeURIComponent(id)}/hook-secret/rotate`;
 export const SOURCE_SNAPSHOTS_PATH = (id: string): string =>
   `${INTERNAL_V1_PREFIX}/sources/${encodeURIComponent(id)}/snapshots`;
 export const SOURCE_SNAPSHOT_INSTALL_MODULES_PATH = (
@@ -908,6 +910,16 @@ export interface CreateSourceRequest {
  * returned EXACTLY ONCE here and stored only as a hash on the Source record.
  */
 export interface CreateSourceResponse {
+  readonly source: Source;
+  readonly hookSecret: string;
+}
+
+/**
+ * Fresh server-generated webhook bearer, disclosed only by this successful
+ * rotation response. The previous bearer is immediately invalidated; only the
+ * new hash is stored. This POST is not replayable or automatically retried.
+ */
+export interface RotateSourceHookSecretResponse {
   readonly source: Source;
   readonly hookSecret: string;
 }

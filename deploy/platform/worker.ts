@@ -3896,6 +3896,10 @@ export interface OpenTofuRunRepairOperations {
       readonly limit?: number;
       readonly sweep?: true;
     }): Promise<readonly Run[]>;
+    hasPendingRunnerUsage(input: {
+      readonly runId: string;
+      readonly workspaceId: string;
+    }): Promise<boolean>;
     listPendingRuntimeSecretRetirementRuns(options: {
       readonly staleBeforeMs: number;
       readonly limit?: number;
@@ -4222,8 +4226,9 @@ async function runScheduledOpenTofuRunRepair(
 /**
  * Scheduled run repair safety net. Creation already schedules the per-run owner
  * directly for speed; this bounded sweep re-pokes old non-terminal rows whose
- * owner alarm/record was lost and terminal provider-applied rows with a durable
- * pending billing-finalization marker. The controller consumers stay
+ * owner alarm/record was lost, terminal provider-applied rows with a durable
+ * pending billing-finalization marker, and failed destroys with pending runner
+ * usage even after their Workspace is frozen. The controller consumers stay
  * idempotent and own all state changes.
  */
 export async function repairStaleOpenTofuRuns(
@@ -4271,6 +4276,7 @@ export async function repairStaleOpenTofuRuns(
         ),
       ),
     ];
+    const knownWorkspaceIds = new Set<string>();
     const activeWorkspaceIds = new Set<string>();
     for (
       let offset = 0;
@@ -4285,15 +4291,32 @@ export async function repairStaleOpenTofuRuns(
       const workspaces =
         await operations.workspaces.listWorkspacesByIds(workspaceIds);
       for (const workspace of workspaces) {
-        if (requestedIds.has(workspace.id) && !workspace.archivedAt) {
-          activeWorkspaceIds.add(workspace.id);
-        }
+        if (!requestedIds.has(workspace.id)) continue;
+        knownWorkspaceIds.add(workspace.id);
+        if (!workspace.archivedAt) activeWorkspaceIds.add(workspace.id);
       }
     }
     workspacesScanned = activeWorkspaceIds.size;
     for (const run of runs) {
       const workspaceId = run.workspaceId;
-      if (!workspaceId || !activeWorkspaceIds.has(workspaceId)) continue;
+      if (!workspaceId) continue;
+      const activeWorkspace = activeWorkspaceIds.has(workspaceId);
+      if (!activeWorkspace) {
+        if (
+          !knownWorkspaceIds.has(workspaceId) ||
+          run.type !== "destroy_apply" ||
+          run.status !== "failed"
+        ) continue;
+        try {
+          if (!await operations.controller.hasPendingRunnerUsage({
+            runId: run.id,
+            workspaceId,
+          })) continue;
+        } catch {
+          ordinaryFailures += 1;
+          continue;
+        }
+      }
       const dispatch = recoverableRunDispatch(run, now, {
         queuedStaleMs,
         runningStaleMs,

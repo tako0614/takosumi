@@ -110,6 +110,7 @@ import type {
   ListSourcesResponse,
   ListSourceSnapshotsResponse,
   PatchSourceRequest,
+  RotateSourceHookSecretResponse,
   RepositoryInstallMetadataSnapshot,
   RepositoryManifestSnapshot,
   RepositoryModulesSnapshot,
@@ -2385,6 +2386,10 @@ export class OpenTofuController {
     return await this.#sources.patchSource(id, patch);
   }
 
+  async rotateSourceHookSecret(id: string, actorId?: string): Promise<RotateSourceHookSecretResponse> {
+    return await this.#sources.rotateSourceHookSecret(id, actorId);
+  }
+
   async createSourceSync(
     sourceId: string,
     options: CreateSourceSyncRequest & { readonly dedupe?: boolean } = {},
@@ -2521,6 +2526,13 @@ export class OpenTofuController {
     readonly sweep?: true;
   }): Promise<readonly Run[]> {
     return await this.#runQuery.listRecoverableOpenTofuRuns(options);
+  }
+
+  async hasPendingRunnerUsage(input: {
+    readonly runId: string;
+    readonly workspaceId: string;
+  }): Promise<boolean> {
+    return await this.#runQuery.hasPendingRunnerUsage(input);
   }
 
   async listPendingRuntimeSecretRetirementRuns(options: {

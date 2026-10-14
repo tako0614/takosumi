@@ -157,7 +157,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本 (正とする情報) は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 88 件です。
+次の 89 件です。
 
 **Account views**
 
@@ -278,11 +278,16 @@ Run は必ず計画の作成から始まります。
 | POST     | `/api/v1/sources`                                                        | Source を作る                                                     |
 | GET      | `/api/v1/sources/{sourceId}`                                             | Source を読む                                                     |
 | PATCH    | `/api/v1/sources/{sourceId}`                                             | Source のメタ情報を更新する                                       |
+| POST     | `/api/v1/sources/{sourceId}/hook-secret/rotate`                          | webhook secret をローテーションする (本文なし、平文応答は 1 回のみ) |
 | POST     | `/api/v1/sources/{sourceId}/sync`                                        | 同期 Run を作る                                                   |
 | GET      | `/api/v1/sources/{sourceId}/snapshots`                                   | SourceSnapshot を一覧する                                         |
 | GET      | `/api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules` | 同期時に tree から検出した module と provider 要求を一覧する      |
 | POST     | `/api/v1/sources/{sourceId}/compatibility-check`                         | 互換性レポートを作る                                              |
 | GET      | `/api/v1/compatibility-reports/{reportId}`                               | 互換性レポートを読む                                              |
+
+webhook secret の復旧手順、旧 secret の失効タイミング、応答を失った場合の扱いは
+[Source と Capsule](../concepts/sources.md) を参照してください。service 内部向けの同等経路は
+`POST /internal/v1/sources/{sourceId}/hook-secret/rotate` です。
 
 **Git install plan**
 

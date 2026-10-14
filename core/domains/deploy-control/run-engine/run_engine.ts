@@ -142,6 +142,7 @@ import {
 import {
   isRunnerInfrastructureRequeueError,
   OpenTofuControllerError,
+  isRecord,
   OpenTofuRunnerExecutionError,
   OpenTofuRunnerInfrastructureError,
   CREDENTIAL_SERVICE_UNAVAILABLE_REASON,
@@ -199,10 +200,13 @@ import {
 import {
   APPLY_BILLING_CAPTURE_COMPLETED_EVENT,
   APPLY_BILLING_CAPTURE_PENDING_EVENT,
+  APPLY_RUNNER_USAGE_COMPLETED_EVENT,
+  APPLY_RUNNER_USAGE_PENDING_EVENT,
   APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT,
   APPLY_RUNTIME_SECRET_RETIREMENT_DEFERRED_EVENT,
   APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT,
   applyRunBillingCapturePending,
+  applyRunRunnerUsagePending,
   applyRunMutationDispatched,
   applyRunProviderMutationDispatched,
   applyRunRuntimeSecretRetirementPending,
@@ -492,6 +496,76 @@ function isSafeMutatingRunnerInfrastructureRetryError(
       error.reason === "runner_artifact_relay_ambiguous" ||
       error.reason === "run_deadline_exceeded")
   );
+}
+
+/** These refusals prove no provider work reached a runner container. */
+function isPreProviderRunnerRefusal(error: unknown): boolean {
+  return (
+    error instanceof OpenTofuRunnerInfrastructureError &&
+    (error.reason === "capacity_exhausted" ||
+      error.reason === "run_deadline_exceeded")
+  );
+}
+
+/**
+ * Count only a prior attempt whose runner release finished before a proven
+ * pre-provider destroy refusal requeued it. Audit order, not event ID, pairs
+ * the claim, release and retry; two events can share a millisecond/event ID.
+ */
+function runnerPreDestroyReleaseIntervals(run: ApplyRun): {
+  readonly priorMs: number;
+  readonly currentStart?: number;
+  readonly currentReleaseMs: number;
+} {
+  let priorMs = 0;
+  let start: number | undefined;
+  let releaseAt: number | undefined;
+  let duplicateRelease = false;
+  const validAt = (at: number) => Number.isFinite(at) && at >= 0;
+  const releasedMs = () =>
+    start !== undefined && releaseAt !== undefined && !duplicateRelease &&
+      releaseAt >= start
+      ? releaseAt - start
+      : 0;
+  for (const event of run.auditEvents) {
+    if (event.type === "apply.started") {
+      start = validAt(event.at) ? event.at : undefined;
+      releaseAt = undefined;
+      duplicateRelease = false;
+    } else if (event.type === "lifecycle_action.pre_destroy.succeeded") {
+      if (
+        event.data?.actionDispatched !== true ||
+        event.data?.status !== "succeeded" ||
+        !validAt(event.at) ||
+        start === undefined ||
+        event.at < start
+      ) continue;
+      if (releaseAt === undefined) releaseAt = event.at;
+      else duplicateRelease = true;
+    } else if (event.type === "destroy.retry_scheduled") {
+      if (
+        event.data?.errorCode === "capacity_exhausted" ||
+        event.data?.errorCode === "run_deadline_exceeded"
+      ) {
+        if (
+          releaseAt !== undefined &&
+          validAt(event.at) &&
+          event.at >= releaseAt
+        ) {
+          const elapsed = releasedMs();
+          if (Number.isSafeInteger(priorMs + elapsed)) priorMs += elapsed;
+        }
+      }
+      start = undefined;
+      releaseAt = undefined;
+      duplicateRelease = false;
+    }
+  }
+  return {
+    priorMs,
+    ...(start !== undefined ? { currentStart: start } : {}),
+    currentReleaseMs: releasedMs(),
+  };
 }
 
 const RUNNER_INFRASTRUCTURE_RETRY_LIMIT = 1;
@@ -5580,6 +5654,8 @@ export class RunEngine {
    * lease and cannot terminate a running consumer or settle management drain.
    * Used by the DLQ consumer for runs whose consumer crashed before it could
    * record failure.
+   * A terminal destroy may still replay its durable runner-usage intent;
+   * this repairs accounting without another Run transition or notification.
    * Returns true when it transitioned the run.
    */
   async markRunFailed(
@@ -5622,7 +5698,11 @@ export class RunEngine {
       return result.won;
     }
     const applyRun = await this.#store.getApplyRun(runId);
-    if (!applyRun || isTerminalStatus(applyRun.status)) return false;
+    if (!applyRun) return false;
+    if (isTerminalStatus(applyRun.status)) {
+      await this.#finalizeRunnerUsage(applyRun);
+      return false;
+    }
     if (applyRun.status === "running") return false;
     const result = await this.#failUnclaimedApplyRun(applyRun, new Error(reason));
     return result.won;
@@ -5764,12 +5844,15 @@ export class RunEngine {
     runId: string,
     control: RunDispatchControl = {},
   ): Promise<ApplyRunResponse> {
-    const applyRun = await this.#store.getApplyRun(runId);
+    let applyRun = await this.#store.getApplyRun(runId);
     if (!applyRun) {
       throw new OpenTofuControllerError(
         "not_found",
         `apply run ${runId} not found`,
       );
+    }
+    if (applyRunRunnerUsagePending(applyRun)) {
+      applyRun = await this.#finalizeRunnerUsage(applyRun);
     }
     if (
       (applyRun.status === "succeeded" || applyRun.status === "failed") &&
@@ -8322,14 +8405,34 @@ export class RunEngine {
   ): Promise<{ readonly won: boolean; readonly run: ApplyRun | undefined }> {
     const startedAt = observed.startedAt ?? observed.createdAt;
     const eventType = observed.operation === "destroy" ? "destroy.failed" : "apply.failed";
-    const failed = this.#failedApplyRunCandidate(
+    let failed = this.#failedApplyRunCandidate(
       observed, observed.stateBackend, startedAt, eventType, error,
     );
+    if (failed.operation === "destroy" && failed.finishedAt !== undefined) {
+      // Freeze authenticated, confirmed work before the terminal CAS. The
+      // intent is committed only by its winner; a stale DLQ must never occupy
+      // the usage key while another attempt is still executing.
+      const durationMs = await this.#destroyRunnerMinuteDuration({
+        run: failed,
+        finishedAt: failed.finishedAt,
+        current: "none",
+        requirePriorInputs: true,
+      });
+      if (durationMs !== undefined && durationMs > 0) {
+        failed = {
+          ...failed,
+          auditEvents: [
+            ...failed.auditEvents,
+            auditEvent(failed.id, APPLY_RUNNER_USAGE_PENDING_EVENT, failed.finishedAt, { durationMs }),
+          ],
+        };
+      }
+    }
     const result = await this.#persistUnclaimedFailure("apply", observed, failed);
     if (!result.won) return result;
     await this.#afterTerminalRunWon("apply", failed);
     await this.#recordApplyFailure(failed, startedAt, eventType, error);
-    return { won: true, run: failed };
+    return { won: true, run: await this.#finalizeRunnerUsage(failed) };
   }
 
   async #failApplyRun(
@@ -9307,9 +9410,15 @@ export class RunEngine {
     readonly capsuleId?: string;
     readonly startedAt?: number;
     readonly finishedAt: number;
+    readonly durationMs?: number;
   }): Promise<void> {
-    if (input.startedAt === undefined) return;
-    const durationMs = Math.max(0, input.finishedAt - input.startedAt);
+    if (input.startedAt === undefined && input.durationMs === undefined) return;
+    const durationMs = input.durationMs ??
+      Math.max(0, input.finishedAt - input.startedAt!);
+    if (
+      !Number.isFinite(durationMs) ||
+      (input.durationMs !== undefined && durationMs <= 0)
+    ) return;
     const quantity = durationMs / 60_000;
     const createdAt = new Date(input.finishedAt).toISOString();
     const rating = await this.#billing.rateUsageMeasurement({
@@ -9336,6 +9445,116 @@ export class RunEngine {
       idempotencyKey: `${input.runId}:runner_minute`,
       createdAt,
     });
+  }
+
+  /** Compute disjoint confirmed attempts, without queue wait. */
+  async #destroyRunnerMinuteDuration(input: {
+    readonly run: ApplyRun;
+    readonly startedAt?: number;
+    readonly finishedAt: number;
+    readonly current: "execution" | "refusal" | "none";
+    readonly requirePriorInputs?: boolean;
+  }): Promise<number | undefined> {
+    let inputs: PlanRunInputs | undefined;
+    try {
+      const planRun = await this.#store.getPlanRun(input.run.planRunId);
+      if (
+        planRun?.id === input.run.planRunId &&
+        planRun.workspaceId === input.run.workspaceId
+      ) inputs = await this.#requirePreparedPlanRunInputs(planRun);
+    } catch (error) {
+      const invalidProof = error instanceof OpenTofuControllerError &&
+        isRecord(error.details) &&
+        ["plan_run_inputs_missing", "plan_run_inputs_corrupt", "plan_run_inputs_unprepared"].includes(
+          String(error.details.reason),
+        );
+      if (input.requirePriorInputs && !invalidProof) throw error;
+      // This read is only needed to trust older release audit. A post-commit
+      // read failure must not prevent settlement of this attempt's execution.
+      log.warn("deploy_control.destroy_usage_inputs_read_failed", {
+        planRunId: input.run.planRunId,
+        applyRunId: input.run.id,
+      });
+    }
+    const hasRunnerRelease = releaseActivationCommands(
+      inputs?.lifecycleActions,
+      "pre_destroy",
+    ).some((action) => action.kind === "command" && action.executor === "runner");
+    const intervals = hasRunnerRelease
+      ? runnerPreDestroyReleaseIntervals(input.run)
+      : { priorMs: 0, currentStart: undefined, currentReleaseMs: 0 };
+    const currentMatches = input.startedAt !== undefined &&
+      intervals.currentStart === input.startedAt;
+    const validExecution = input.current === "execution" &&
+      input.startedAt !== undefined &&
+      Number.isFinite(input.startedAt) &&
+      Number.isFinite(input.finishedAt) &&
+      input.finishedAt >= input.startedAt;
+    const currentMs = validExecution
+      ? input.finishedAt - input.startedAt
+      : input.current === "refusal" && currentMatches
+        ? intervals.currentReleaseMs
+        : 0;
+    const durationMs = intervals.priorMs + currentMs;
+    if (!Number.isSafeInteger(durationMs) || durationMs < 0) return undefined;
+    if (durationMs === 0 && !validExecution) return undefined;
+    return durationMs;
+  }
+
+  /** Settle one Run-level row from disjoint attempts, without queue wait. */
+  async #recordDestroyRunnerMinuteUsage(input: {
+    readonly run: ApplyRun;
+    readonly startedAt?: number;
+    readonly finishedAt: number;
+    readonly current: "execution" | "refusal" | "none";
+  }): Promise<void> {
+    const durationMs = await this.#destroyRunnerMinuteDuration(input);
+    if (durationMs === undefined) return;
+    await this.#recordRunnerMinuteUsage({
+      workspaceId: input.run.workspaceId,
+      runId: input.run.id,
+      capsuleId: input.run.capsuleId,
+      ...(durationMs === 0 ? { startedAt: input.startedAt } : {}),
+      finishedAt: input.finishedAt,
+      ...(durationMs > 0 ? { durationMs } : {}),
+    });
+  }
+
+  /** Replay only the measurement atomically committed by the queued failure. */
+  async #finalizeRunnerUsage(run: ApplyRun): Promise<ApplyRun> {
+    if (!applyRunRunnerUsagePending(run)) return run;
+    const intent = run.auditEvents.findLast((event) => event.type === APPLY_RUNNER_USAGE_PENDING_EVENT);
+    const durationMs = intent?.data?.durationMs;
+    if (
+      !intent || typeof durationMs !== "number" || !Number.isSafeInteger(durationMs) || durationMs <= 0 ||
+      !Number.isSafeInteger(intent.at) || intent.at !== run.finishedAt
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "runner usage intent does not match the terminal Run",
+      );
+    }
+    await this.#recordRunnerMinuteUsage({
+      workspaceId: run.workspaceId,
+      runId: run.id,
+      capsuleId: run.capsuleId,
+      finishedAt: intent.at,
+      durationMs,
+    });
+    const result = await this.#store.transitionRun({
+      id: run.id,
+      kind: "apply",
+      expectFrom: [run.status],
+      expectExactRun: run,
+      run: {
+        ...run,
+        auditEvents: [
+          ...run.auditEvents,
+          auditEvent(run.id, APPLY_RUNNER_USAGE_COMPLETED_EVENT, this.#now()),
+        ],
+      },
+    });
+    return (result.run as ApplyRun | undefined) ?? run;
   }
 
   async #recordDeployOperationMetric(input: {
@@ -9816,7 +10035,10 @@ export class RunEngine {
             runnerInfrastructureRetryExhaustedError("apply"),
             true,
           );
-          if (failed.finishedAt !== undefined) {
+          if (
+            !isPreProviderRunnerRefusal(error) &&
+            failed.finishedAt !== undefined
+          ) {
             await this.#recordRunnerMinuteUsage({
               workspaceId: failed.workspaceId,
               runId: failed.id,
@@ -9841,7 +10063,10 @@ export class RunEngine {
             `retryable_runner_infrastructure_error: apply run ${queued.id} requeued after runner infrastructure failure`,
             { reason: RUNNER_INFRASTRUCTURE_REQUEUED_REASON },
           );
-          if (queued.updatedAt !== undefined) {
+          if (
+            !isPreProviderRunnerRefusal(error) &&
+            queued.updatedAt !== undefined
+          ) {
             await this.#recordRunnerMinuteUsage({
               workspaceId: queued.workspaceId,
               runId: queued.id,
@@ -9863,7 +10088,11 @@ export class RunEngine {
         error,
         runnerDispatched,
       );
-      if (runnerDispatched && failed.finishedAt !== undefined) {
+      if (
+        runnerDispatched &&
+        !isPreProviderRunnerRefusal(error) &&
+        failed.finishedAt !== undefined
+      ) {
         await this.#recordRunnerMinuteUsage({
           workspaceId: failed.workspaceId,
           runId: failed.id,
@@ -10551,13 +10780,22 @@ export class RunEngine {
   }): Promise<ApplyRunResponse> {
     try {
       await this.#billing.releaseApplyBilling(input.planRun);
-      await this.#recordRunnerMinuteUsage({
-        workspaceId: input.failed.workspaceId,
-        runId: input.failed.id,
-        capsuleId: input.failed.capsuleId,
-        startedAt: input.startedAt,
-        finishedAt: input.now,
-      });
+      if (input.action === "destroy") {
+        await this.#recordDestroyRunnerMinuteUsage({
+          run: input.failed,
+          startedAt: input.startedAt,
+          finishedAt: input.now,
+          current: "execution",
+        });
+      } else {
+        await this.#recordRunnerMinuteUsage({
+          workspaceId: input.failed.workspaceId,
+          runId: input.failed.id,
+          capsuleId: input.failed.capsuleId,
+          startedAt: input.startedAt,
+          finishedAt: input.now,
+        });
+      }
       await this.#recordDeployOperationMetric({
         run: input.failed,
         operationKind: input.action === "destroy" ? "destroy_apply" : "apply",
@@ -12016,12 +12254,11 @@ export class RunEngine {
         finalized,
       );
       try {
-        await this.#recordRunnerMinuteUsage({
-          workspaceId: completed.workspaceId,
-          runId: completed.id,
-          capsuleId: completed.capsuleId,
+        await this.#recordDestroyRunnerMinuteUsage({
+          run: completed,
           startedAt,
           finishedAt: now,
+          current: "execution",
         });
         await this.#recordDeployOperationMetric({
           run: completed,
@@ -12122,12 +12359,13 @@ export class RunEngine {
             true,
           );
           if (failed.finishedAt !== undefined) {
-            await this.#recordRunnerMinuteUsage({
-              workspaceId: failed.workspaceId,
-              runId: failed.id,
-              capsuleId: failed.capsuleId,
+            await this.#recordDestroyRunnerMinuteUsage({
+              run: failed,
               startedAt,
               finishedAt: failed.finishedAt,
+              current: isPreProviderRunnerRefusal(error)
+                ? "refusal"
+                : "execution",
             });
           }
           return {
@@ -12150,7 +12388,10 @@ export class RunEngine {
             `retryable_runner_infrastructure_error: destroy apply run ${queued.id} requeued after runner infrastructure failure`,
             { reason: RUNNER_INFRASTRUCTURE_REQUEUED_REASON },
           );
-          if (queued.updatedAt !== undefined) {
+          if (
+            !isPreProviderRunnerRefusal(error) &&
+            queued.updatedAt !== undefined
+          ) {
             await this.#recordRunnerMinuteUsage({
               workspaceId: queued.workspaceId,
               runId: queued.id,
@@ -12184,13 +12425,14 @@ export class RunEngine {
         lifecycleActionDispatched,
         lifecycleOutcome,
       );
-      if (runnerDispatched && failed.finishedAt !== undefined) {
-        await this.#recordRunnerMinuteUsage({
-          workspaceId: failed.workspaceId,
-          runId: failed.id,
-          capsuleId: failed.capsuleId,
+      if (failed.finishedAt !== undefined) {
+        await this.#recordDestroyRunnerMinuteUsage({
+          run: failed,
           startedAt,
           finishedAt: failed.finishedAt,
+          current: runnerDispatched && !isPreProviderRunnerRefusal(error)
+            ? "execution"
+            : "refusal",
         });
       }
       return {

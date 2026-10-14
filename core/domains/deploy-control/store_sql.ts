@@ -108,6 +108,8 @@ import type {
   CapsuleInitialAuthorityResult,
   SourceConfigurationWriteInput,
   SourceConfigurationWriteResult,
+  SourceHookSecretRotationInput,
+  SourceHookSecretRotationResult,
   CapsuleInstallConfigRebindInput,
   CapsuleInstallConfigRebindResult,
   ClaimCapsuleInterfaceMaterializationIntentInput,
@@ -166,6 +168,7 @@ import {
   assertDrainRunSettlementInput,
   assertSourceSyncSuccessCommit,
   assertSourceConfigurationWriteInput,
+  assertSourceHookSecretRotationInput,
   assertWorkspaceManagementAdmission,
   assertWorkspaceManagementAuthorityInput,
   assertWorkspaceFreezeExpectation,
@@ -419,6 +422,27 @@ const PG_WORKSPACE_FREEZE_APPLY_FINALIZERS_SETTLED_SQL = `
     select coalesce(
       max(audit_event.ordinality) filter (
         where audit_event.value ->> 'type' = 'runtime_secret.retirement.completed'
+      ),
+      0
+    )
+      from jsonb_array_elements(
+        ${PG_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}
+      ) with ordinality as audit_event(value, ordinality)
+  )
+  and (
+    select coalesce(
+      max(audit_event.ordinality) filter (
+        where audit_event.value ->> 'type' = 'runner_usage.pending'
+      ),
+      0
+    )
+      from jsonb_array_elements(
+        ${PG_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}
+      ) with ordinality as audit_event(value, ordinality)
+  ) <= (
+    select coalesce(
+      max(audit_event.ordinality) filter (
+        where audit_event.value ->> 'type' = 'runner_usage.completed'
       ),
       0
     )
@@ -1629,6 +1653,29 @@ function pgRunRuntimeSecretRetirementPending(): SQL {
         ),
         0
       )
+      FROM jsonb_array_elements(
+        COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
+      ) WITH ORDINALITY AS audit_event(value, ordinality)
+    )
+  `;
+}
+
+/** Mirrors applyRunRunnerUsagePending in the shared store model. */
+function pgRunRunnerUsagePending(): SQL {
+  return sql`
+    ${pgSchema.runs.runJson} ->> 'status' = 'failed'
+    AND ${pgSchema.runs.runJson} ->> 'operation' = 'destroy'
+    AND (
+      SELECT COALESCE(MAX(audit_event.ordinality) FILTER (
+        WHERE audit_event.value ->> 'type' = 'runner_usage.pending'
+      ), 0)
+      FROM jsonb_array_elements(
+        COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
+      ) WITH ORDINALITY AS audit_event(value, ordinality)
+    ) > (
+      SELECT COALESCE(MAX(audit_event.ordinality) FILTER (
+        WHERE audit_event.value ->> 'type' = 'runner_usage.completed'
+      ), 0)
       FROM jsonb_array_elements(
         COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
       ) WITH ORDINALITY AS audit_event(value, ordinality)
@@ -4104,6 +4151,13 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         inArray(pgSchema.runs.kind, [...RUN_KINDS_APPLY]),
         inArray(pgSchema.runs.status, ["succeeded", "failed"]),
         pgRunBillingCapturePending(),
+        sql`${committedAt} > 0`,
+        sql`${committedAt} <= ${options.staleQueuedBeforeMs}`,
+      ),
+      and(
+        inArray(pgSchema.runs.kind, [...RUN_KINDS_APPLY]),
+        inArray(pgSchema.runs.status, ["succeeded", "failed"]),
+        pgRunRunnerUsagePending(),
         sql`${committedAt} > 0`,
         sql`${committedAt} <= ${options.staleQueuedBeforeMs}`,
       ),
@@ -8735,6 +8789,57 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       updatedAt: source.updatedAt,
     });
     return source;
+  }
+
+  async rotateSourceHookSecret(input: SourceHookSecretRotationInput): Promise<SourceHookSecretRotationResult> {
+    assertSourceHookSecretRotationInput(input);
+    const expected = input.expectedSource;
+    return await this.#client.transaction(async (transaction) => {
+      // Serialize with Workspace drain and guarded configuration writes.
+      const management = await pgWorkspaceManagementForTransaction(transaction, expected.workspaceId);
+      const rows = await transaction.query<PgStoredSourceRow>(
+        `select id, space_id as "workspaceId", status, source_json as "sourceJson",
+                created_at as "createdAt", updated_at as "updatedAt"
+           from takosumi_sources where id = $1 for update`,
+        [expected.id],
+      );
+      const current = rows.rows[0] ? sourceFromPgRow(rows.rows[0]) : undefined;
+      if (!current || rows.rows[0]?.workspaceId !== expected.workspaceId ||
+          await stableJsonDigest(current) !== await stableJsonDigest(expected)) {
+        return { status: "conflict" as const };
+      }
+      assertWorkspaceManagementAdmission(management, expected.workspaceId, input.expectedWorkspaceManagementAuthority);
+      const source = { ...current, hookSecretHash: input.hookSecretHash, updatedAt: input.updatedAt };
+      const updated = await transaction.query<PgStoredSourceRow>(
+        `update takosumi_sources as source_row
+            set source_json = $1::jsonb, updated_at = $2
+          where source_row.id = $3 and source_row.space_id = $4
+            and source_row.status = $5 and source_row.created_at = $6
+            and source_row.updated_at = $7 and source_row.source_json = $8::jsonb
+            and exists (select 1 from takosumi_workspaces as workspace
+                         where workspace.id = source_row.space_id
+                           and workspace.management_state = 'active'
+                           and workspace.management_epoch = $9)
+        returning source_row.id, source_row.space_id as "workspaceId", source_row.status,
+                  source_row.source_json as "sourceJson", source_row.created_at as "createdAt",
+                  source_row.updated_at as "updatedAt"`,
+        [JSON.stringify(source), source.updatedAt, expected.id, expected.workspaceId,
+         expected.status, expected.createdAt, expected.updatedAt, JSON.stringify(expected),
+         input.expectedWorkspaceManagementAuthority.managementEpoch],
+      );
+      const persisted = updated.rows[0] ? sourceFromPgRow(updated.rows[0]) : undefined;
+      if (!persisted) return { status: "conflict" as const };
+      const event = input.activity;
+      // A duplicate Activity id throws and rolls the Source UPDATE back.
+      await transaction.query(
+        `insert into takosumi_audit_events
+          (id, space_id, actor_id, action, target_type, target_id, run_id, event_json, created_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)`,
+        [event.id, event.workspaceId, event.actorId ?? null, event.action,
+         event.targetType, event.targetId, event.runId ?? null, JSON.stringify(event), event.createdAt],
+      );
+      return { status: "rotated" as const, source: persisted };
+    });
   }
 
   async writeSourceConfiguration(

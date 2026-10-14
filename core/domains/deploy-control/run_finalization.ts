@@ -6,6 +6,8 @@ export const APPLY_BILLING_CAPTURE_COMPLETED_EVENT = "billing.capture.completed"
 export const APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT = "runtime_secret.retirement.pending" as const;
 export const APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT = "runtime_secret.retirement.completed" as const;
 export const APPLY_RUNTIME_SECRET_RETIREMENT_DEFERRED_EVENT = "runtime_secret.retirement.deferred" as const;
+export const APPLY_RUNNER_USAGE_PENDING_EVENT = "runner_usage.pending" as const;
+export const APPLY_RUNNER_USAGE_COMPLETED_EVENT = "runner_usage.completed" as const;
 
 export function applyRunBillingCapturePending(run: ApplyRun): boolean {
   return pendingAfterCompletion(run, APPLY_BILLING_CAPTURE_PENDING_EVENT, APPLY_BILLING_CAPTURE_COMPLETED_EVENT);
@@ -13,6 +15,11 @@ export function applyRunBillingCapturePending(run: ApplyRun): boolean {
 
 export function applyRunRuntimeSecretRetirementPending(run: ApplyRun): boolean {
   return pendingAfterCompletion(run, APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT, APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT);
+}
+
+export function applyRunRunnerUsagePending(run: ApplyRun): boolean {
+  return run.status === "failed" && run.operation === "destroy" &&
+    pendingAfterCompletion(run, APPLY_RUNNER_USAGE_PENDING_EVENT, APPLY_RUNNER_USAGE_COMPLETED_EVENT);
 }
 
 function pendingAfterCompletion(run: ApplyRun, pending: string, completed: string): boolean {
