@@ -76,6 +76,20 @@ function safeId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9_.:-]{1,128}$/u.test(value);
 }
 
+async function boundedRpc<T>(call: () => Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      call(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("shared authentication unavailable")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 function requestForRpc(request: Request, includeBody = false): Request {
   // An allowlist prevents present and future public context headers from
   // becoming authenticated assertions at the private service boundary.
@@ -169,7 +183,9 @@ export async function handleSharedAuthRouteRequest(
         status: 403, headers: { "cache-control": "no-store" },
       });
     }
-    const response = await selected.rpc.fetchSharedAuth(requestForRpc(request, true));
+    const response = await boundedRpc(
+      () => selected.rpc.fetchSharedAuth(requestForRpc(request, true)), 20_000,
+    );
     if (!(response instanceof Response)) return sharedAuthUnavailableResponse();
     const headers = new Headers(response.headers);
     headers.set("cache-control", "no-store");
@@ -196,7 +212,9 @@ export async function authenticateSharedAuthRequest(
     if (new URL(request.url).origin !== selected.origin) {
       return { kind: "unauthenticated" };
     }
-    const identity = await selected.rpc.authenticateSharedAuth(requestForRpc(request));
+    const identity = await boundedRpc(
+      () => selected.rpc.authenticateSharedAuth(requestForRpc(request)), 5_000,
+    );
     if (identity?.kind === "unauthenticated") return { kind: "unauthenticated" };
     if (identity?.kind === "authenticated" && safeId(identity.accountId)) {
       return { kind: "authenticated", accountId: identity.accountId };
@@ -219,8 +237,9 @@ export async function resolveSharedAuthWorkspace(
     if (!selected || new URL(request.url).origin !== selected.origin) {
       return { kind: "forbidden" };
     }
-    const result = await selected.rpc.resolveSharedAuthWorkspace(
-      requestForRpc(request), workspaceId,
+    const result = await boundedRpc(
+      () => selected.rpc.resolveSharedAuthWorkspace(requestForRpc(request), workspaceId),
+      5_000,
     );
     if (result?.kind === "forbidden") return { kind: "forbidden" };
     if (result?.kind === "authorized" &&

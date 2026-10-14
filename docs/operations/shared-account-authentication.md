@@ -32,8 +32,10 @@ authority. The public gateway passes an allowlist of request headers to the
 private RPC and does not forward unsigned context headers or request bodies to
 the identity resolver. An explicitly presented Authorization or issuer-session
 header cannot fall back to the RP cookie after failed verification.
-Identity-only introspection responses marked `oidc_profile: shared-account`
-cannot authorize a product extension, even one with no required scopes.
+On the opted-in product origin, OAuth access tokens carrying only identity scopes
+(`openid`, `profile`, `email`, `offline_access`) cannot authorize a product
+extension, even one with no required scopes. This uses the issuer's existing
+standard introspection wire and does not introduce another profile claim.
 
 The login/callback/logout/session responses pass through the private binding,
 including host-only RP cookies. The gateway adds `Cache-Control: no-store`.
@@ -42,6 +44,11 @@ Cookie mutations require the exact configured public Origin. The existing
 as `subject` and `primaryAccountId`; `expiresAt: 0` means the RP does not expose
 its expiry through that mirror. It creates no issuer session. Its DELETE
 operation invokes the private RP logout under the same Origin check.
+Identity/membership RPC waits are bounded at five seconds, and browser auth
+route waits at twenty seconds; failures return a generic unavailable result
+without retrying. A wait deadline does not roll back the private RP operation.
+If a callback fails, start a fresh login attempt rather than replaying its
+single-use authorization code.
 
 On that exact product origin, `/sign-in` redirects to the RP login and other
 local `/api/v1/account/*` management routes return the same 404. Local PAT

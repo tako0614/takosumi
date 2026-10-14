@@ -74,6 +74,18 @@ test("shared authentication is an exact HTTPS staging-only operator opt-in", asy
   expect(await authenticateSharedAuthRequest(new Request("https://other.example.test/"), configured(rpc))).toEqual({ kind: "unauthenticated" });
 });
 
+test("a pending private identity RPC reaches a bounded unavailable result without retrying", async () => {
+  let calls = 0;
+  const env = configured({ ...rpc, authenticateSharedAuth: async () => {
+    calls++;
+    return await new Promise<never>(() => {});
+  } });
+  const startedAt = performance.now();
+  expect(await authenticateSharedAuthRequest(request(), env)).toEqual({ kind: "unavailable" });
+  expect(performance.now() - startedAt).toBeLessThan(7_000);
+  expect(calls).toBe(1);
+}, 10_000);
+
 test("explicit bearer and issuer session headers cannot fall back to an RP cookie", async () => {
   for (const headers of [
     { cookie, authorization: "Bearer forged-id-token" },
@@ -85,13 +97,20 @@ test("explicit bearer and issuer session headers cannot fall back to an RP cooki
 });
 
 test("an active identity-only issuer grant cannot authorize an extension with no required scopes", async () => {
-  const result = await verifyPlatformExtensionBearerToken(request(), {
-    TAKOSUMI_ACCOUNTS_CLIENT_ID: "private-rp", TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "test-only-client-secret",
-  } as CloudflareWorkerEnv, "test-only-user-access-token", undefined, async () => Response.json({
-    active: true, token_use: "oauth_access", oidc_profile: "shared-account",
+  const introspection = async () => Response.json({
+    active: true, token_use: "oauth_access",
     sub: "tsub_canonical", aud: "private-rp", scope: "openid profile email",
-  }));
+  });
+  const client = {
+    TAKOSUMI_ACCOUNTS_CLIENT_ID: "private-rp", TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "test-only-client-secret",
+  };
+  const result = await verifyPlatformExtensionBearerToken(request(), {
+    ...configured(rpc), ...client,
+  } as CloudflareWorkerEnv, "test-only-user-access-token", undefined, introspection);
   expect(result).toEqual({ authenticated: false });
+  const stock = await verifyPlatformExtensionBearerToken(request(),
+    client as CloudflareWorkerEnv, "test-only-user-access-token", undefined, introspection);
+  expect(stock).toMatchObject({ authenticated: true, authKind: "oauth-access-token", subject: "tsub_canonical" });
 });
 
 test("the private RPC receives credentials only in the RP cookie, with no forged context", async () => {

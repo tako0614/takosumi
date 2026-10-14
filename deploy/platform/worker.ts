@@ -3570,9 +3570,6 @@ async function introspectPlatformExtensionToken(
     }
     const record = body as Record<string, unknown>;
     if (record.active !== true) return { authenticated: false };
-    // Identity-only shared-account grants are confined to their private RP.
-    // They never authorize product APIs, including an extension with no scopes.
-    if (record.oidc_profile === "shared-account") return { authenticated: false };
     const tokenUse = record.token_use;
     if (
       tokenUse !== "oauth_access" &&
@@ -3583,6 +3580,15 @@ async function introspectPlatformExtensionToken(
     }
     const scope = typeof record.scope === "string" ? record.scope : "";
     const scopes = platformExtensionScopes(scope);
+    // The explicit shared product profile accepts identity grants only through
+    // its private RP session. Keep the issuer's existing standard wire: an
+    // identity-only access token never authorizes even a scope-free extension.
+    if (sharedAuthConfigured(env) &&
+      new URL(request.url).origin === env.TAKOSUMI_SHARED_AUTH_ORIGIN &&
+      tokenUse === "oauth_access" && scopes.includes("openid") &&
+      scopes.every((value) => ["openid", "profile", "email", "offline_access"].includes(value))) {
+      return { authenticated: false };
+    }
     if (!platformExtensionScopesAllowAccess(scopes, route)) {
       return { authenticated: false };
     }
