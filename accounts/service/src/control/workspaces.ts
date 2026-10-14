@@ -189,7 +189,7 @@ export async function handleWorkspaces(
     ) {
       return errorJson("not_found", "not found", 404);
     }
-    const workspaceMutation = (segments.length === 2 && method === "PATCH") ||
+    const workspaceMutation = (segments.length === 2 && (method === "PATCH" || method === "DELETE")) ||
       (leaf === "backups" && segments.length === 3 && method === "POST") ||
       (leaf === "members" && ((segments.length === 3 && method === "POST") ||
         (segments.length === 4 && (method === "PATCH" || method === "DELETE"))));
@@ -228,7 +228,14 @@ export async function handleWorkspaces(
           workspaceId,
           managementAuthority,
         );
-      return methodNotAllowed("GET, PATCH");
+      if (method === "DELETE")
+        return await deleteWorkspace(
+          operations,
+          ctx.session.subject,
+          workspaceId,
+          managementAuthority,
+        );
+      return methodNotAllowed("GET, PATCH, DELETE");
     }
     if (leaf === "members") {
       // /api/v1/workspaces/:workspaceId/members[/:subject]. The Workspace is already
@@ -832,6 +839,45 @@ async function updateWorkspace(
     },
   });
   return json({ workspace });
+}
+
+// --- Workspace deletion ------------------------------------------------------
+//
+// The Workspace is resolved server-side and namespace-gated by
+// `requireWorkspaceAccess` in dispatch BEFORE this runs (write scope, so only
+// an owner/admin member with a Workspace-wide credential reaches here). On
+// top of that gate, deletion is owner-only using the same private role view
+// as the member mutations: the namespace owner counts as an active owner
+// even when their durable member row still needs guarded repair. Admins,
+// members, and viewers observe 403.
+//
+// Only an empty Workspace is deletable; the service rechecks ownership and
+// emptiness under the captured management authority and refuses otherwise.
+// No cloud-resource destroy is performed.
+async function deleteWorkspace(
+  operations: ControlPlaneOperations,
+  sessionSubject: string,
+  workspaceId: string,
+  managementAuthority: () => WorkspaceManagementAuthority,
+): Promise<Response> {
+  const [workspace, members] = await Promise.all([
+    operations.workspaces.getWorkspace(workspaceId),
+    operations.members.listMembers(workspaceId),
+  ]);
+  const effective: readonly MemberAuthorization[] = [
+    ...members.filter((member) => member.accountId !== workspace.ownerUserId),
+    { accountId: workspace.ownerUserId, roles: ["owner"], status: "active" },
+  ];
+  const caller = findCaller(effective, sessionSubject);
+  if (!caller || caller.status !== "active" || !caller.roles.includes("owner")) {
+    return memberForbidden("Only the Workspace owner can delete the Workspace.");
+  }
+  const deleted = await operations.workspaces.deleteWorkspaceForAccount(
+    workspaceId,
+    sessionSubject,
+    managementAuthority(),
+  );
+  return json({ workspace: deleted, deleted: true });
 }
 
 // --- Members (Workspace membership / roles) ------------------------------------

@@ -34,6 +34,7 @@ import {
   type WorkspaceManagementAuthority,
 } from "../deploy-control/store.ts";
 import type { Page, PageParams } from "takosumi-contract/pagination";
+import { runIsInFlight } from "takosumi-contract/runs";
 
 // The contract owns the stable technical API-identifier grammar (lowercase
 // alnum start, then 1-38 of `[a-z0-9-]`). This service enforces it while the
@@ -277,6 +278,112 @@ export class WorkspacesService {
   async getWorkspaceByHandle(handle: string): Promise<Workspace | undefined> {
     requireNonEmptyString(handle, "handle");
     return await this.#store.getWorkspaceByHandle(handle);
+  }
+
+  /**
+   * Deletes an empty Workspace as the Workspace owner. The actor must be
+   * the namespace owner (`ownerUserId`) or an active `owner` member;
+   * admins and lesser roles observe `permission_denied`.
+   *
+   * Only an empty Workspace is deletable: a non-destroyed Capsule, any
+   * Source, any queued/running Run, any recorded usage evidence, or any
+   * retained backup record (control export or pre-destroy export) blocks
+   * with `failed_precondition` carrying a machine-readable reason. (OSS
+   * showback records usage as UsageEvents and a `disabled` Workspace that
+   * never applied has none; there is no money-hold ledger in OSS, so any
+   * usage evidence conservatively counts as an unsettled hold/settlement.)
+   * Backups block because Workspace-scoped routes resolve the Workspace
+   * first: deleting with retained exports would make them unreachable.
+   *
+   * Deletion removes the Workspace row, its private management state, and
+   * its member rows (personal data hygiene) in one storage boundary; no
+   * cloud-resource destroy is performed (destroy flows stay out of scope).
+   * Run-history and Activity rows that reference the Workspace are left in
+   * place and become unreachable through the Workspace-scoped routes, which
+   * all resolve the Workspace first. An already-deleted Workspace observes
+   * `not_found`.
+   *
+   * The emptiness reads and the row deletes share one atomic boundary
+   * (`deleteWorkspaceExclusive`): the Workspace row lock (Postgres),
+   * conditional predicates (D1 batch), or a synchronous section (memory)
+   * serializes concurrent creation against deletion.
+   */
+  async deleteWorkspaceForAccount(
+    id: string,
+    actorAccountId: string,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<Workspace> {
+    requireNonEmptyString(id, "id");
+    requireNonEmptyString(actorAccountId, "actorAccountId");
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(
+        expectedWorkspaceManagementAuthority,
+        id,
+      );
+    }
+    const workspace = await this.getWorkspace(id);
+    if (workspace.ownerUserId !== actorAccountId) {
+      const member = await this.#store.getWorkspaceMember(id, actorAccountId);
+      if (member?.status !== "active" || !member.roles.includes("owner")) {
+        throw new OpenTofuControllerError(
+          "permission_denied",
+          "only the Workspace owner can delete the Workspace",
+        );
+      }
+    }
+    // Admission fence: a draining Workspace refuses, like every mutation.
+    const authority = expectedWorkspaceManagementAuthority ??
+      await this.captureManagementAuthority(id).catch((error: unknown) => {
+        throw workspaceMutationError(error);
+      });
+    const blockers: string[] = [];
+    const capsules = await this.#store.listCapsules(id);
+    if (capsules.some((capsule) => capsule.status !== "destroyed")) {
+      blockers.push("capsule_exists");
+    }
+    const sources = await this.#store.listSources(id);
+    if (sources.length > 0) {
+      blockers.push("source_exists");
+    }
+    const runs = await this.#store.listRunsByWorkspace(id);
+    if (runs.some((run) => runIsInFlight(run.status))) {
+      blockers.push("run_in_flight");
+    }
+    const usageEvents = await this.#store.listUsageEvents(id);
+    if (usageEvents.length > 0) {
+      blockers.push("usage_exists");
+    }
+    const backups = await this.#store.listBackupRecords(id);
+    if (backups.length > 0) {
+      blockers.push("backup_exists");
+    }
+    if (blockers.length > 0) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `Workspace ${id} is not empty (${blockers.join(", ")}); remove them first.`,
+        { reason: "workspace_not_empty", blockers },
+      );
+    }
+    const outcome = await this.#store.deleteWorkspaceExclusive({
+      expectedWorkspace: workspace,
+      expectedWorkspaceManagementAuthority: authority,
+    }).catch((error: unknown) => {
+      throw workspaceMutationError(error);
+    });
+    if (outcome.status === "deleted") return workspace;
+    if (outcome.status === "not_found") {
+      throw new OpenTofuControllerError("not_found", "workspace not found");
+    }
+    if (outcome.status === "blocked") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `Workspace ${id} is not empty (${outcome.blockers.join(", ")}); remove them first.`,
+        { reason: "workspace_not_empty", blockers: [...outcome.blockers] },
+      );
+    }
+    throw workspaceMutationError(
+      new WorkspaceManagementAdmissionConflictError(id),
+    );
   }
 
   async listWorkspaces(): Promise<readonly Workspace[]> {

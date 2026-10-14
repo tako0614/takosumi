@@ -168,12 +168,13 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 89
+`accounts/service/src/control-route-inventory.ts`; it currently contains 91
 public route descriptors. Representative operations from that inventory are:
 
 ```http
 POST  /api/v1/workspaces
 GET   /api/v1/workspaces/{workspaceId}
+DELETE /api/v1/workspaces/{workspaceId} (empty Workspace, owner only; 409 while Capsules, Sources, in-flight Runs, usage evidence, or retained backups remain; never destroys cloud resources)
 
 POST  /api/v1/workspaces/{workspaceId}/projects
 GET   /api/v1/projects/{projectId}
@@ -182,6 +183,7 @@ POST  /api/v1/sources
 GET   /api/v1/sources
 GET   /api/v1/sources/{sourceId}
 PATCH /api/v1/sources/{sourceId}
+DELETE /api/v1/sources/{sourceId} (unreferenced Source only; 409 while tracked or in flight)
 POST  /api/v1/sources/{sourceId}/hook-secret/rotate
 POST  /api/v1/sources/{sourceId}/sync
 GET   /api/v1/sources/{sourceId}/snapshots

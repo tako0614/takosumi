@@ -568,6 +568,15 @@ export async function handleSources(
       const { source } = await operations.getSource(sourceId);
       const workspaceId = sourceWorkspaceId(source);
       if (!workspaceId) return sourceWorkspaceIdentityMissing();
+      // Pin DELETE admission before asynchronous role checks. Keep management
+      // refusal private until the caller has passed Workspace authorization.
+      const captured = method === "DELETE" ? await (async () => {
+        try {
+          return { ok: true as const, authority: await operations.workspaces.captureManagementAuthority(workspaceId) };
+        } catch (error) {
+          return { ok: false as const, error };
+        }
+      })() : undefined;
       const auth = await requireWorkspaceAccess({
         operations,
         store,
@@ -589,7 +598,24 @@ export async function handleSources(
         );
         return json({ ...response, source: publicSource(response.source) });
       }
-      return methodNotAllowed("GET, PATCH");
+      if (method === "DELETE") {
+        // Write scope already gated above: only an owner/admin member with a
+        // Workspace-wide credential reaches here (member sessions and
+        // read-only bearers observe 403 from `requireWorkspaceAccess`).
+        if (!captured) throw new Error("Source deletion authority was not captured");
+        if (!captured.ok) throw captured.error;
+        const response = await operations.deleteSource(
+          sourceId,
+          ctx.session.subject,
+          captured.authority,
+        );
+        return json({
+          ...response,
+          source: publicSource(response.source),
+          deleted: true,
+        });
+      }
+      return methodNotAllowed("GET, PATCH, DELETE");
     }
   }
   return undefined;

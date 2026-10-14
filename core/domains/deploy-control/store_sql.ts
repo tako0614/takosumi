@@ -162,6 +162,10 @@ import type {
   TransitionRunInput,
   TransitionRunResult,
   AppendRunningRunAuditEventInput,
+  DeleteWorkspaceExclusiveInput,
+  DeleteWorkspaceExclusiveResult,
+  DeleteSourceWithActivityInput,
+  DeleteSourceWithActivityResult,
 } from "./store.ts";
 import {
   assertExactRunTransitionInput,
@@ -4675,6 +4679,79 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return workspace;
   }
 
+  async deleteWorkspace(id: string, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<boolean> {
+    if (expectedWorkspaceManagementAuthority === undefined) {
+      return await this.#pgDelete(pgSchema.workspaces, eq(pgSchema.workspaces.id, id));
+    }
+    assertWorkspaceManagementAuthorityInput(expectedWorkspaceManagementAuthority, id);
+    return await this.#client.transaction(async (transaction) => {
+      assertWorkspaceManagementAdmission(
+        await pgWorkspaceManagementForTransaction(transaction, id),
+        id,
+        expectedWorkspaceManagementAuthority,
+      );
+      const rows = await this.#drizzleForClient(transaction)
+        .delete(pgSchema.workspaces)
+        .where(eq(pgSchema.workspaces.id, id))
+        .returning({ id: pgSchema.workspaces.id });
+      return rows.length === 1;
+    });
+  }
+
+  async deleteWorkspaceExclusive(input: DeleteWorkspaceExclusiveInput): Promise<DeleteWorkspaceExclusiveResult> {
+    const { expectedWorkspace, expectedWorkspaceManagementAuthority } = structuredClone(input);
+    assertWorkspaceManagementAuthorityInput(expectedWorkspaceManagementAuthority, expectedWorkspace.id);
+    return await this.#client.transaction(async (transaction) => {
+      const management = await pgWorkspaceManagementForTransaction(transaction, expectedWorkspace.id);
+      if (management === undefined) return { status: "not_found" as const };
+      try {
+        assertWorkspaceManagementAdmission(management, expectedWorkspace.id, expectedWorkspaceManagementAuthority);
+      } catch {
+        return { status: "conflict" as const };
+      }
+      const wsRows = await transaction.query<{ readonly spaceJson: unknown }>(
+        `select space_json as "spaceJson" from takosumi_workspaces where id = $1`,
+        [expectedWorkspace.id],
+      );
+      const currentRow = wsRows.rows[0];
+      if (!currentRow) return { status: "not_found" as const };
+      const blockers: string[] = [];
+      const hasCapsule = await transaction.query(
+        `select 1 from takosumi_capsules where space_id = $1 and status <> 'destroyed' limit 1`,
+        [expectedWorkspace.id],
+      );
+      if (hasCapsule.rows.length > 0) blockers.push("capsule_exists");
+      const hasSource = await transaction.query(
+        `select 1 from takosumi_sources where space_id = $1 limit 1`,
+        [expectedWorkspace.id],
+      );
+      if (hasSource.rows.length > 0) blockers.push("source_exists");
+      const hasRun = await transaction.query(
+        `select 1 from takosumi_runs where space_id = $1 and status in ('queued', 'running') limit 1`,
+        [expectedWorkspace.id],
+      );
+      if (hasRun.rows.length > 0) blockers.push("run_in_flight");
+      const hasUsage = await transaction.query(
+        `select 1 from takosumi_usage_events where workspace_id = $1 limit 1`,
+        [expectedWorkspace.id],
+      );
+      if (hasUsage.rows.length > 0) blockers.push("usage_exists");
+      const hasBackup = await transaction.query(
+        `select 1 from takosumi_backups where space_id = $1 limit 1`,
+        [expectedWorkspace.id],
+      );
+      if (hasBackup.rows.length > 0) blockers.push("backup_exists");
+      if (blockers.length > 0) return { status: "blocked" as const, blockers };
+      await transaction.query(`delete from takosumi_workspace_members where workspace_id = $1`, [expectedWorkspace.id]);
+      const deleted = await this.#drizzleForClient(transaction)
+        .delete(pgSchema.workspaces)
+        .where(eq(pgSchema.workspaces.id, expectedWorkspace.id))
+        .returning({ id: pgSchema.workspaces.id });
+      if (deleted.length !== 1) return { status: "not_found" as const };
+      return { status: "deleted" as const };
+    });
+  }
+
   async replaceWorkspace(input: WorkspaceReplacementInput): Promise<boolean> {
     validateWorkspaceReplacement(input);
     const {
@@ -9098,8 +9175,91 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return pageFromProbe(rows, limit);
   }
 
-  async deleteSource(id: string): Promise<boolean> {
-    return await this.#pgDelete(pgSchema.sources, eq(pgSchema.sources.id, id));
+  async deleteSource(id: string, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<boolean> {
+    if (expectedWorkspaceManagementAuthority === undefined) {
+      return await this.#pgDelete(pgSchema.sources, eq(pgSchema.sources.id, id));
+    }
+    const authority = expectedWorkspaceManagementAuthority;
+    assertWorkspaceManagementAuthorityInput(authority, authority.workspaceId);
+    return await this.#client.transaction(async (transaction) => {
+      // Hold the same outer Workspace lock as drain and Source configuration.
+      assertWorkspaceManagementAdmission(
+        await pgWorkspaceManagementForTransaction(transaction, authority.workspaceId),
+        authority.workspaceId,
+        authority,
+      );
+      const rows = await this.#drizzleForClient(transaction)
+        .delete(pgSchema.sources)
+        .where(and(eq(pgSchema.sources.id, id), eq(pgSchema.sources.workspaceId, authority.workspaceId)))
+        .returning({ id: pgSchema.sources.id });
+      return rows.length === 1;
+    });
+  }
+
+  async deleteSourceWithActivity(input: DeleteSourceWithActivityInput): Promise<DeleteSourceWithActivityResult> {
+    const { expectedSource, expectedWorkspaceManagementAuthority, activity } = structuredClone(input);
+    assertWorkspaceManagementAuthorityInput(expectedWorkspaceManagementAuthority, expectedSource.workspaceId);
+    return await this.#client.transaction(async (transaction) => {
+      const management = await pgWorkspaceManagementForTransaction(transaction, expectedSource.workspaceId);
+      if (management === undefined) return { status: "not_found" as const };
+      try {
+        assertWorkspaceManagementAdmission(management, expectedSource.workspaceId, expectedWorkspaceManagementAuthority);
+      } catch {
+        return { status: "conflict" as const };
+      }
+      const rows = await transaction.query<PgStoredSourceRow>(
+        `select id, space_id as "workspaceId", status, source_json as "sourceJson",
+                created_at as "createdAt", updated_at as "updatedAt"
+           from takosumi_sources where id = $1 for update`,
+        [expectedSource.id],
+      );
+      const currentRow = rows.rows[0];
+      const current = currentRow ? sourceFromPgRow(currentRow) : undefined;
+      if (!current) return { status: "not_found" as const };
+      if (current.workspaceId !== expectedSource.workspaceId) return { status: "not_found" as const };
+      const refCapsule = await transaction.query(
+        `select 1 from takosumi_capsules where source_id = $1 and status <> 'destroyed' limit 1`,
+        [expectedSource.id],
+      );
+      if (refCapsule.rows.length > 0) {
+        return { status: "blocked" as const, blockers: ["source_referenced_by_capsule"] };
+      }
+      const inflightDirect = await transaction.query(
+        `select 1 from takosumi_runs where source_id = $1 and status in ('queued', 'running') limit 1`,
+        [expectedSource.id],
+      );
+      if (inflightDirect.rows.length > 0) {
+        return { status: "blocked" as const, blockers: ["source_has_in_flight_run"] };
+      }
+      const inflightCapsule = await transaction.query(
+        `select 1 from takosumi_runs r where r.status in ('queued', 'running')
+           and r.installation_id in (select id from takosumi_capsules where source_id = $1) limit 1`,
+        [expectedSource.id],
+      );
+      if (inflightCapsule.rows.length > 0) {
+        return { status: "blocked" as const, blockers: ["source_has_in_flight_run"] };
+      }
+      const inflightWorkspaceSource = await transaction.query(
+        `select 1 from takosumi_runs where space_id = $1 and source_id = $2 and status in ('queued', 'running') limit 1`,
+        [expectedSource.workspaceId, expectedSource.id],
+      );
+      if (inflightWorkspaceSource.rows.length > 0) {
+        return { status: "blocked" as const, blockers: ["source_has_in_flight_run"] };
+      }
+      const deleted = await this.#drizzleForClient(transaction)
+        .delete(pgSchema.sources)
+        .where(and(eq(pgSchema.sources.id, expectedSource.id), eq(pgSchema.sources.workspaceId, expectedSource.workspaceId)))
+        .returning({ id: pgSchema.sources.id });
+      if (deleted.length !== 1) return { status: "not_found" as const };
+      await transaction.query(
+        `insert into takosumi_audit_events
+          (id, space_id, actor_id, action, target_type, target_id, run_id, event_json, created_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)`,
+        [activity.id, activity.workspaceId, activity.actorId ?? null, activity.action,
+         activity.targetType, activity.targetId, activity.runId ?? null, JSON.stringify(activity), activity.createdAt],
+      );
+      return { status: "deleted" as const, source: current };
+    });
   }
 
   async putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot> {
