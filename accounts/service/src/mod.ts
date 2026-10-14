@@ -579,6 +579,9 @@ export function createAccountsHandler(
   const authorizeLimiter = createInMemoryRateLimiter(60);
   const tokenLimiter = createInMemoryRateLimiter(120);
   const accountTokensLimiter = createInMemoryRateLimiter(10);
+  // A complete dual-proof/context flow includes reads, two explicit legs and
+  // provider rotations. Keep its bounded budget separate from token issuance.
+  const identityFlowLimiter = createInMemoryRateLimiter(40);
 
   const phaseDiagnostics = createRequestPhaseDiagnostics(
     options.requestPhaseDiagnostics ?? {},
@@ -691,27 +694,27 @@ export function createAccountsHandler(
     }
 
     if (options.hostedSessionPolicy && isUpstreamUnlinkProofBeginPath(url.pathname)) {
-      const limited = accountTokensLimiter.consume(request);
+      const limited = identityFlowLimiter.consume(request);
       if (limited) return withPrivateNoStoreHeaders(limited);
       if (!upstreamOAuth) return upstreamOAuthNotConfigured();
       return (await handleUpstreamUnlinkProofBeginRequest({request,store,upstreamOAuth,issuerOrigin:issuer,secureCookie:isProductionIssuer})) ?? errorJson("not_found","not found",404,request);
     }
 
     if (options.hostedSessionPolicy && isCredentialUnlinkIntentPath(url.pathname)) {
-      const limited = accountTokensLimiter.consume(request);
+      const limited = identityFlowLimiter.consume(request);
       if (limited) return withPrivateNoStoreHeaders(limited);
       return (await handleCredentialUnlinkIntentRequest({request,store,issuerOrigin:issuer,reconciler:options.credentialUnlinkReconciler})) ?? errorJson("not_found","not found",404,request);
     }
 
     if (options.hostedSessionPolicy && isUpstreamOperationProofBeginPath(url.pathname)) {
-      const limited = accountTokensLimiter.consume(request);
+      const limited = identityFlowLimiter.consume(request);
       if (limited) return withPrivateNoStoreHeaders(limited);
       if (!upstreamOAuth) return upstreamOAuthNotConfigured();
       return (await handleUpstreamOperationProofBeginRequest({request,store,upstreamOAuth,issuerOrigin:issuer,secureCookie:isProductionIssuer})) ?? errorJson("not_found","not found",404,request);
     }
 
     if (options.hostedSessionPolicy && (url.pathname === "/api/v1/account/identity-credentials/unlink" || url.pathname === "/api/v1/account/identity-merges" || url.pathname.startsWith("/api/v1/account/identity-merges/"))) {
-      const limited = accountTokensLimiter.consume(request);
+      const limited = identityFlowLimiter.consume(request);
       if (limited) return withPrivateNoStoreHeaders(limited);
       const auth = await requireAccountSession({request:request.clone(),store});
       if (!auth.ok) return withPrivateNoStoreHeaders(auth.response);

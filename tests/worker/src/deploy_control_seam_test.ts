@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   cachedServiceAttempt,
+  cachedDeployControlService,
   createInProcessDeployControlSeam,
   deployControlServiceOptions,
   executionEvidenceAuthorityFromComposition,
@@ -17,6 +18,69 @@ import {
   createDefaultRunnerProfiles,
   type OpenTofuRunner,
 } from "../../../core/domains/deploy-control/mod.ts";
+import type { ControlIdentityAuthorityReader } from "../../../contract/identity-reconciliation.ts";
+import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
+
+function privateIdentityReader(onRead: () => void = () => {}): ControlIdentityAuthorityReader {
+  return {
+    async readMergeAdmission() { onRead(); return undefined; },
+    async readUnlinkAdmission() { return undefined; },
+    async readRecoveryAdmission() { return undefined; },
+  };
+}
+
+test("private Control composition pins configured and unconfigured identities before any schema access", () => {
+  const db = new BlockedControlD1();
+  const off = { TAKOSUMI_CONTROL_DB: db } as unknown as CloudflareWorkerEnv;
+  const on = { TAKOSUMI_CONTROL_DB: db } as unknown as CloudflareWorkerEnv;
+  const reader = privateIdentityReader();
+  createInProcessDeployControlSeam(off);
+  createInProcessDeployControlSeam(off, {});
+  expect(() => createInProcessDeployControlSeam(off, { identityReconciliationAuthority: reader })).toThrow("cannot change");
+  createInProcessDeployControlSeam(on, { identityReconciliationAuthority: reader });
+  createInProcessDeployControlSeam(on, { identityReconciliationAuthority: reader });
+  expect(() => createInProcessDeployControlSeam(on)).toThrow("cannot change");
+  expect(() => createInProcessDeployControlSeam(on, { identityReconciliationAuthority: privateIdentityReader() })).toThrow("cannot change");
+  expect(db.uses).toBe(0);
+});
+
+test("deferred actual service creation uses its frozen reader even if the caller mutates composition", async () => {
+  const env = { TAKOSUMI_CONTROL_DB: new SqliteFakeD1(), TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" } as unknown as CloudflareWorkerEnv;
+  let readsA = 0, readsB = 0;
+  const readerA = privateIdentityReader(() => { readsA++; });
+  const readerB = privateIdentityReader(() => { readsB++; });
+  const composition = { identityReconciliationAuthority: readerA };
+  const first = cachedDeployControlService(env, composition);
+  composition.identityReconciliationAuthority = readerB;
+  expect(() => cachedDeployControlService(env, composition)).toThrow("cannot change");
+  expect(cachedDeployControlService(env, { identityReconciliationAuthority: readerA })).toBe(first);
+  const created = await first;
+  expect(created.operations.identityReconciliation).toBeDefined();
+  await expect(created.operations.identityReconciliation!.prepareMerge({ operationId: "merge_no_public_authority" })).rejects.toThrow("admission is unavailable");
+  expect(readsA).toBe(1);
+  expect(readsB).toBe(0);
+});
+
+test("actual failed Control bootstrap retries retain the original authority pin and share the pending retry", async () => {
+  class FailOnceD1 extends SqliteFakeD1 {
+    failNext = true;
+    override prepare(query: string) {
+      if (this.failNext) { this.failNext = false; throw new Error("synthetic first bootstrap refusal"); }
+      return super.prepare(query);
+    }
+  }
+  const env = { TAKOSUMI_CONTROL_DB: new FailOnceD1(), TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" } as unknown as CloudflareWorkerEnv;
+  const reader = privateIdentityReader();
+  const first = cachedDeployControlService(env, { identityReconciliationAuthority: reader });
+  expect(cachedDeployControlService(env, { identityReconciliationAuthority: reader })).toBe(first);
+  await expect(first).rejects.toThrow("synthetic first bootstrap refusal");
+  expect(() => cachedDeployControlService(env)).toThrow("cannot change");
+  expect(() => cachedDeployControlService(env, { identityReconciliationAuthority: privateIdentityReader() })).toThrow("cannot change");
+  const retry = cachedDeployControlService(env, { identityReconciliationAuthority: reader });
+  expect(retry).not.toBe(first);
+  expect(cachedDeployControlService(env, { identityReconciliationAuthority: reader })).toBe(retry);
+  expect((await retry).operations.identityReconciliation).toBeDefined();
+});
 
 test("deploy and RunOwner service caches evict rejected attempts but share pending ones", async () => {
   for (const cacheKind of ["deploy", "run-owner"] as const) {
@@ -413,7 +477,6 @@ class BlockedControlD1 implements D1Database {
       bind: () => statement,
       first: pending,
       all: pending,
-      raw: pending,
       run: pending,
     };
     return statement;

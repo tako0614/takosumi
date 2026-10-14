@@ -29,6 +29,7 @@ import type {
   RunnerHostComposition,
 } from "./bindings.ts";
 import { workerBillingComposition } from "./billing_rpc.ts";
+import { storedServiceCompositionFromEnv, storedServiceUsageBucket } from "./stored-service-usage.ts";
 import {
   createCloudflareD1OpenTofuControlStore,
   initializeD1OpenTofuLedgerSchemaBinding,
@@ -104,6 +105,7 @@ export async function createWorkerServiceApp(
   env: CloudflareWorkerEnv,
   role: "takosumi-api",
   options: {
+    readonly identityReconciliationAuthority?: CreateTakosumiServiceOptions["identityReconciliationAuthority"];
     readonly runnerProfiles?: readonly RunnerProfile[];
     readonly defaultRunnerProfileId?: string;
     readonly runnerExecutors?: OpenTofuRunnerExecutorRegistry;
@@ -196,7 +198,7 @@ export async function createWorkerServiceApp(
   // Control backups (spec §33 / §26): seal the bundle with the at-rest crypto
   // and write to R2_BACKUPS. Absent binding -> backups stay disabled (501).
   const backupArtifactStore = backupArtifactStoreFromEnv(
-    env.R2_BACKUPS,
+    storedServiceUsageBucket(env.R2_BACKUPS, storedServiceCompositionFromEnv(env), { bucketRole: "backups", writerId: "control-backup" }),
     runtimeEnv,
   );
   const backupStateObjectReader = backupObjectReaderFromR2(env.R2_STATE);
@@ -405,6 +407,7 @@ export async function createWorkerServiceApp(
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.buildConnectionSetupRequest,
     ...(connectionOAuthHelpers ? { connectionOAuthHelpers } : {}),
     opentofuControlStore,
+    ...(options.identityReconciliationAuthority ? { identityReconciliationAuthority: options.identityReconciliationAuthority } : {}),
     ...(moduleVariableMaterializer ? { moduleVariableMaterializer } : {}),
     ...(runtimeBindingDerivationKey ? { runtimeBindingDerivationKey } : {}),
     ...(runtimeInputOidcClientSource ? { runtimeInputOidcClientSource } : {}),
@@ -476,6 +479,7 @@ function workerPrivateRunFilesFromOptions(
   const repository = new D1PrivateRunFileRepository(env.TAKOSUMI_CONTROL_DB);
   const blobs = new R2PrivateRunFileBlobStore({
     bucket: env.R2_ARTIFACTS,
+    storageUsage: storedServiceCompositionFromEnv(env),
     prefix: configuration.prefix,
     cryptoBoundary,
     maxBytes: configuration.maxBytes,

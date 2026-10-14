@@ -206,6 +206,19 @@ export class PostgresIdentityRecordRepository
         input.activate || n.status === "reconciled" ? 1 : 0,
         bind,
       );
+    if (n.contextPlan)
+      where += ` AND (NOT(document ? 'contextPlan') OR document->'contextPlan'=${bind(JSON.stringify(n.contextPlan))}::jsonb)`;
+    else where += ` AND NOT(document ? 'contextPlan')`;
+    if (input.contextPlanRecord)
+      where += ` AND EXISTS(SELECT 1 FROM ${table} p WHERE p.bucket='identity_merge_context_plans' AND p.key=${bind(input.contextPlanRecord.planId)} AND p.document=${bind(JSON.stringify(input.contextPlanRecord))}::jsonb)`;
+    const contexts = input.contextReceipt
+      ? [input.contextReceipt]
+      : (input.contextReceipts ?? []);
+    if (contexts.length) {
+      where += ` AND (SELECT count(*) FROM jsonb_array_elements(${bind(JSON.stringify(contexts))}::jsonb) e(value) JOIN ${table} c ON c.bucket='identity_merge_context_receipts' AND c.key=e.value->>'receiptId' WHERE c.document=e.value AND (c.document->>'identityGeneration')::integer+${bind(input.activate || n.status === "reconciled" ? 1 : 0)}=COALESCE((SELECT (g.document->>'generation')::integer FROM ${table} g WHERE g.bucket='authentication_generations' AND g.key=c.document->>'subject'),0) AND NOT EXISTS(SELECT 1 FROM ${table} x WHERE x.bucket='hosted_oidc_revoked_sessions' AND x.key=c.document->>'issuerSessionHash'))=${bind(contexts.length)}`;
+      if (input.contextReceipt)
+        where += ` AND NOT(document ? '${input.contextReceipt.role === "source" ? "sourceContextAcceptance" : "targetContextAcceptance"}')`;
+    }
     if (input.activate)
       where += ` AND document->>'status'='reconciled' AND (SELECT count(*) FROM ${table} WHERE bucket='identity_merge_locks' AND key IN($4,$5) AND document->>'operationId'=$2)=2`;
     if (input.reserve || input.activate)
@@ -277,6 +290,10 @@ export class PostgresIdentityRecordRepository
       n.sourceSubject,
       true,
     );
+    if (input.contextReceipt)
+      ctes.push(
+        `consume_context AS(UPDATE ${table} SET document=jsonb_set(jsonb_set(document,'{consumedByOperation}',to_jsonb($2::text)),'{consumedAt}',to_jsonb($6::bigint)) WHERE bucket='identity_merge_context_receipts' AND key=${bind(input.contextReceipt.receiptId)} AND EXISTS(SELECT 1 FROM changed) RETURNING key)`,
+      );
     if (input.receipt)
       ctes.push(
         `consume_receipt AS(UPDATE ${table} SET document=jsonb_set(jsonb_set(document,'{consumedByOperation}',to_jsonb($2::text)),'{consumedAt}',to_jsonb($6::bigint)) WHERE bucket='identity_operation_receipts' AND key=${bind(input.receipt.receiptId)} AND EXISTS(SELECT 1 FROM changed) RETURNING key)`,

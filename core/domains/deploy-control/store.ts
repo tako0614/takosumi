@@ -26,6 +26,11 @@ import type {
   RunStatus,
   StateVersion,
 } from "@takosumi/internal/deploy-control-api";
+import {
+  type ControlIdentityReconciliationStore, type ControlIdentityInventory, type StoredIdentityReconciliationOperation,
+  type IdentityReconciliationEvent, type CommitIdentityReconciliationInput,
+  IDENTITY_INVENTORY_LIMIT, identityInventoryMatches, normalizeIdentityInventory, validateIdentityCommit,
+} from "../identity-reconciliation/store.ts";
 import { coerceRunStatus } from "@takosumi/internal/deploy-control-api";
 import {
   type WorkspaceBillingBinding, type WorkspaceBillingBindingIntent,
@@ -3492,7 +3497,7 @@ export type CapsuleRuntimeSafety =
       readonly runType: "destroy_apply";
     };
 
-export interface OpenTofuControlStore {
+export interface OpenTofuControlStore extends ControlIdentityReconciliationStore {
   /** Declares whether ledger writes survive process restart. */
   readonly persistence: "durable" | "ephemeral";
   putRunnerProfile(profile: RunnerProfile): Promise<RunnerProfile>;
@@ -4277,6 +4282,9 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   readonly #workspaceMembers = new Map<string, WorkspaceMember>();
   readonly #workspaceBillingIntents = new Map<string, StoredWorkspaceBillingBindingIntent>();
   readonly #workspaceBillingBindings = new Map<string, WorkspaceBillingBinding>();
+  readonly #identityOperations = new Map<string, StoredIdentityReconciliationOperation>();
+  readonly #identityEvents = new Map<string, IdentityReconciliationEvent>();
+  #identityPrincipalStore?: { retainedPrincipalReferences(accountIds: readonly string[]): ControlIdentityInventory["principalReferences"] };
   readonly #projects = new Map<string, Project>();
   readonly #installConfigs = new Map<string, InstallConfig>();
   readonly #capsules = new Map<string, Capsule>();
@@ -4310,6 +4318,71 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
 
   constructor() {
     maybeWarnInMemoryStore("InMemoryOpenTofuControlStore");
+  }
+
+  /** Pin the actual co-located InterfaceBinding store, never an empty census. */
+  attachIdentityReconciliationPrincipalStore(store: { retainedPrincipalReferences(accountIds: readonly string[]): ControlIdentityInventory["principalReferences"] }): void {
+    if (this.#identityPrincipalStore && this.#identityPrincipalStore !== store) throw new TypeError("Identity reconciliation cannot replace its paired Principal store");
+    this.#identityPrincipalStore = store;
+  }
+
+  #identityInventory(accountIds: readonly string[]): ControlIdentityInventory {
+    if (!this.#identityPrincipalStore) throw new TypeError("Identity reconciliation requires the actual retained Principal inventory");
+    const roots = new Set(accountIds);
+    if (roots.size < 1 || roots.size > 2 || [...roots].some((id) => !id)) throw new TypeError("Identity inventory requires one or two original roots");
+    const rootMembers = [...this.#workspaceMembers.values()].filter((row) => roots.has(row.accountId));
+    const referenced = new Set(rootMembers.map((row) => row.workspaceId));
+    const workspaces = [...this.#workspaces.values()].filter((row) => roots.has(row.ownerUserId) || referenced.has(row.id));
+    const contextIds = new Set([...referenced, ...workspaces.map((row) => row.id)]);
+    const members = [...this.#workspaceMembers.values()].filter((row) => roots.has(row.accountId) || contextIds.has(row.workspaceId));
+    const bindings = [...this.#workspaceBillingBindings.values()].filter((row) => contextIds.has(row.workspaceId));
+    const principalReferences = this.#identityPrincipalStore.retainedPrincipalReferences([...roots]);
+    return normalizeIdentityInventory(structuredClone({
+      accountIds: [...roots],
+      workspaces: workspaces.slice(0, IDENTITY_INVENTORY_LIMIT).map((workspace) => ({ workspace,
+        management: this.#workspaceManagement.get(workspace.id)!,
+        ...([...this.#personalWorkspaceBootstrapIds].find(([, id]) => id === workspace.id)?.[0]
+          ? { bootstrapOwnerId: [...this.#personalWorkspaceBootstrapIds].find(([, id]) => id === workspace.id)![0] } : {}),
+      })),
+      members: members.slice(0, IDENTITY_INVENTORY_LIMIT), bindings: bindings.slice(0, IDENTITY_INVENTORY_LIMIT),
+      principalReferences: principalReferences.slice(0, IDENTITY_INVENTORY_LIMIT),
+      overflow: [members, workspaces, bindings, principalReferences].some((rows) => rows.length > IDENTITY_INVENTORY_LIMIT),
+    }));
+  }
+
+  async captureIdentityReconciliationInventory(accountIds: readonly string[]): Promise<ControlIdentityInventory> {
+    return Promise.resolve(this.#identityInventory(accountIds));
+  }
+
+  getIdentityReconciliationOperation(operationId: string): Promise<StoredIdentityReconciliationOperation | undefined> {
+    const record = this.#identityOperations.get(operationId);
+    return Promise.resolve(record ? structuredClone(record) : undefined);
+  }
+
+  listIdentityReconciliationEvents(operationId: string): Promise<readonly IdentityReconciliationEvent[]> {
+    return Promise.resolve([...this.#identityEvents.values()].filter((row) => row.operationId === operationId).sort((a, b) => a.revision - b.revision).map((row) => structuredClone(row)));
+  }
+
+  async commitIdentityReconciliation(input: CommitIdentityReconciliationInput): Promise<boolean> {
+    const candidate = structuredClone(input);
+    validateIdentityCommit(candidate);
+    const { next, expected, event, expectedInventory, memberChange } = candidate;
+    // No await: actual roster, slots, pins, Principal references and the complete
+    // predicate census are checked in the same section as all three writes.
+    if (!identityInventoryMatches(this.#identityInventory(expectedInventory.accountIds), expectedInventory) ||
+      stableStringify(this.#identityOperations.get(next.operationId)) !== stableStringify(expected)) return Promise.resolve(false);
+    const eventKey = `${event.operationId}:${event.revision}`;
+    if (this.#identityEvents.has(eventKey) || [...this.#identityEvents.values()].some((row) => row.mutationId === event.mutationId) ||
+      [...this.#identityOperations.values()].some((row) => row.mutationId === next.mutationId)) throw new TypeError("Identity reconciliation event or mutation already exists");
+    if (memberChange) {
+      const key = workspaceMemberKey(memberChange.after.workspaceId, memberChange.after.accountId);
+      if (stableStringify(this.#workspaceMembers.get(key)) !== stableStringify(memberChange.before)) return Promise.resolve(false);
+      if ([...this.#workspaceMembers.values()].some((row) => row.id === memberChange.after.id && (row.workspaceId !== memberChange.after.workspaceId || row.accountId !== memberChange.after.accountId))) throw new TypeError("Identity reconciliation member identity collision");
+      this.#workspaceMembers.set(key, structuredClone(memberChange.after));
+    }
+    this.#identityOperations.set(next.operationId, next);
+    this.#identityEvents.set(eventKey, event);
+    return Promise.resolve(true);
   }
 
   /** Named composition pairing; no async observer or generic blocker callback. */

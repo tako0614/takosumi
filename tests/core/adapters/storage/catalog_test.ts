@@ -94,6 +94,10 @@ const mirroredMigrationFiles: readonly {
     fileName: "20261015000072_workspace_billing_bindings.sql",
     migrationId: "deploy.workspace_billing_bindings.create",
   },
+  {
+    fileName: "20261016000073_identity_reconciliation.sql",
+    migrationId: "deploy.identity_reconciliation.create",
+  },
 ];
 
 test("migration catalog creates every declared storage table", () => {

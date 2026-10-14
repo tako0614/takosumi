@@ -310,6 +310,18 @@ import {
   type SourceSyncSettlementRead,
   type SourceSyncSettlementReader,
 } from "./source_sync_settlement.ts";
+import {
+  type CommitIdentityReconciliationInput,
+  type ControlIdentityInventory,
+  type IdentityReconciliationEvent,
+  type IdentityWorkspaceSnapshot,
+  type StoredIdentityReconciliationOperation,
+  IDENTITY_INVENTORY_LIMIT,
+  identityInventoryMatches,
+  normalizeIdentityInventory,
+  validateIdentityCommit,
+} from "../identity-reconciliation/store.ts";
+import { registerIdentityControlStorage } from "../identity-reconciliation/storage-identity.ts";
 
 /** Discriminator stored in the single `runs` table (§27). */
 // §27 runs.type values. Destroy runs persist their own discriminator
@@ -1813,6 +1825,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   readonly #db: PgRemoteDatabase<typeof pgSchema>;
 
   constructor(input: { readonly client: SqlClient }) {
+    registerIdentityControlStorage(this, input.client);
     this.#client = input.client;
     this.#db = drizzle(
       async (query, params, method) => {
@@ -5745,6 +5758,322 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         ],
       },
     );
+  }
+
+  async captureIdentityReconciliationInventory(
+    accountIds: readonly string[],
+  ): Promise<ControlIdentityInventory> {
+    // A plan must not combine different committed snapshots of the four
+    // ledgers. Commit takes stronger locks and repeats this same census.
+    return await this.#client.transaction(async (transaction) => {
+      await transaction.query(
+        "set transaction isolation level repeatable read read only",
+      );
+      return await this.#identityReconciliationInventory(transaction, accountIds);
+    });
+  }
+
+  async #identityReconciliationInventory(
+    client: SqlClient,
+    accountIds: readonly string[],
+  ): Promise<ControlIdentityInventory> {
+    const roots = [...new Set(accountIds)].sort();
+    if (roots.length < 1 || roots.length > 2 || roots.some((id) => !id)) {
+      throw new TypeError("Identity inventory requires one or two original roots");
+    }
+    const parameters = [roots, IDENTITY_INVENTORY_LIMIT + 1];
+    // Original-root context discovery has no status or Workspace join:
+    // inactive rows and orphan membership contexts remain identity evidence.
+    const workspaceRows = await client.query<PgIdentityWorkspaceRow>(
+      `select workspace.id, workspace.handle,
+              workspace.space_json as "spaceJson",
+              workspace.workspace_type as "workspaceType",
+              workspace.owner_user_id as "ownerUserId",
+              workspace.created_at as "createdAt",
+              workspace.updated_at as "updatedAt",
+              workspace.management_state as "managementState",
+              workspace.management_epoch as "managementEpoch",
+              workspace.personal_bootstrap_owner_id as "bootstrapOwnerId"
+         from takosumi_workspaces as workspace
+        where workspace.owner_user_id = any($1::text[])
+           or workspace.space_json ->> 'ownerUserId' = any($1::text[])
+           or exists (
+             select 1 from takosumi_workspace_members as member
+              where member.workspace_id = workspace.id
+                and (member.account_id = any($1::text[])
+                     or member.member_json ->> 'accountId' = any($1::text[]))
+           )
+        order by workspace.id
+        limit $2`,
+      parameters,
+    );
+    const memberRows = await client.query<PgWorkspaceMemberRow>(
+      `with contexts as (
+         select id from takosumi_workspaces
+          where owner_user_id = any($1::text[])
+             or space_json ->> 'ownerUserId' = any($1::text[])
+         union
+         select workspace_id from takosumi_workspace_members
+          where account_id = any($1::text[])
+             or member_json ->> 'accountId' = any($1::text[])
+       )
+       select id, workspace_id as "workspaceId", account_id as "accountId",
+              status, member_json as "recordJson",
+              created_at as "createdAt", updated_at as "updatedAt"
+         from takosumi_workspace_members
+        where account_id = any($1::text[])
+           or member_json ->> 'accountId' = any($1::text[])
+           or workspace_id in (select id from contexts)
+           or member_json ->> 'workspaceId' in (select id from contexts)
+        order by id
+        limit $2`,
+      parameters,
+    );
+    // Do not derive this predicate from the bounded Workspace result: an
+    // overflow or orphan member must not hide its retained immutable binding.
+    const bindingRows = await client.query<
+      typeof pgSchema.workspaceBillingBindings.$inferSelect
+    >(
+      `select workspace_id as "workspaceId", intent_id as "intentId",
+              billing_authority as "billingAuthority", workspace_ref as "workspaceRef",
+              organization_ref as "organizationRef", record_json as "recordJson",
+              bound_at as "boundAt"
+         from takosumi_workspace_billing_bindings
+        where workspace_id in (
+          select id from takosumi_workspaces
+           where owner_user_id = any($1::text[])
+              or space_json ->> 'ownerUserId' = any($1::text[])
+          union
+          select workspace_id from takosumi_workspace_members
+           where account_id = any($1::text[])
+              or member_json ->> 'accountId' = any($1::text[])
+        )
+        order by workspace_id
+        limit $2`,
+      parameters,
+    );
+    const referenceRows = await client.query<PgIdentityPrincipalReferenceRow>(
+      `select id, workspace_id as "workspaceId", interface_id as "interfaceId",
+              subject_kind as "subjectKind", subject_id as "subjectId",
+              phase, generation, record_json as "recordJson",
+              created_at as "createdAt", updated_at as "updatedAt"
+         from takosumi_interface_bindings
+        where (subject_kind = 'Principal' and subject_id = any($1::text[]))
+           or (record_json #>> '{spec,subjectRef,kind}' = 'Principal'
+               and record_json #>> '{spec,subjectRef,id}' = any($1::text[]))
+        order by id
+        limit $2`,
+      parameters,
+    );
+    const workspaces = workspaceRows.rows.map(identityWorkspaceFromPgRow);
+    const members = memberRows.rows.map((row) => workspaceMemberFromRow(row, {
+      workspaceId: row.workspaceId,
+      accountId: row.accountId,
+    }));
+    const bindings = bindingRows.rows.map((row) => {
+      try {
+        return this.#decodeWorkspaceBillingBinding({
+          ...row,
+          recordJson: parseJson(row.recordJson),
+        });
+      } catch {
+        throw new PgIdentityReconciliationRowError(
+          "Identity inventory billing binding is malformed",
+        );
+      }
+    });
+    const principalReferences = referenceRows.rows.map(identityPrincipalReferenceFromPgRow);
+    return normalizeIdentityInventory({
+      accountIds: roots,
+      workspaces: workspaces.slice(0, IDENTITY_INVENTORY_LIMIT),
+      members: members.slice(0, IDENTITY_INVENTORY_LIMIT),
+      bindings: bindings.slice(0, IDENTITY_INVENTORY_LIMIT),
+      principalReferences: principalReferences.slice(0, IDENTITY_INVENTORY_LIMIT),
+      overflow: [workspaces, members, bindings, principalReferences].some(
+        (rows) => rows.length > IDENTITY_INVENTORY_LIMIT,
+      ),
+    });
+  }
+
+  async getIdentityReconciliationOperation(
+    operationId: string,
+  ): Promise<StoredIdentityReconciliationOperation | undefined> {
+    return await this.#identityReconciliationOperation(this.#client, operationId);
+  }
+
+  async #identityReconciliationOperation(
+    client: SqlClient,
+    operationId: string,
+  ): Promise<StoredIdentityReconciliationOperation | undefined> {
+    const result = await client.query<PgIdentityReconciliationOperationRow>(
+      `select operation_id as "operationId", kind, immutable_key as "immutableKey",
+              revision, status, mutation_id as "mutationId", record_json as "recordJson",
+              created_at as "createdAt", updated_at as "updatedAt"
+         from takosumi_identity_reconciliation_operations
+        where operation_id = $1`,
+      [operationId],
+    );
+    return result.rows[0]
+      ? identityOperationFromPgRow(result.rows[0])
+      : undefined;
+  }
+
+  async listIdentityReconciliationEvents(
+    operationId: string,
+  ): Promise<readonly IdentityReconciliationEvent[]> {
+    const result = await this.#client.query<PgIdentityReconciliationEventRow>(
+      `select operation_id as "operationId", revision, mutation_id as "mutationId",
+              record_json as "recordJson", recorded_at as "recordedAt"
+         from takosumi_identity_reconciliation_events
+        where operation_id = $1
+        order by revision`,
+      [operationId],
+    );
+    return result.rows.map(identityEventFromPgRow);
+  }
+
+  async commitIdentityReconciliation(
+    input: CommitIdentityReconciliationInput,
+  ): Promise<boolean> {
+    input = structuredClone(input);
+    validateIdentityCommit(input);
+    return await this.#client.transaction(async (transaction) => {
+      // This bounded owner operation protects predicates, not merely rows.
+      // EXCLUSIVE blocks both phantom INSERT/UPDATE/DELETE and new FOR UPDATE
+      // entrants. Workspace is first, matching existing Core admission order;
+      // all reconciliation commands acquire this one fixed table order.
+      await transaction.query(`lock table
+        takosumi_workspaces,
+        takosumi_workspace_members,
+        takosumi_workspace_billing_bindings,
+        takosumi_interface_bindings,
+        takosumi_identity_reconciliation_operations,
+        takosumi_identity_reconciliation_events
+        in exclusive mode`);
+      let current: StoredIdentityReconciliationOperation | undefined;
+      let inventory: ControlIdentityInventory;
+      try {
+        current = await this.#identityReconciliationOperation(
+          transaction,
+          input.next.operationId,
+        );
+        inventory = await this.#identityReconciliationInventory(
+          transaction,
+          input.expectedInventory.accountIds,
+        );
+      } catch (error) {
+        if (error instanceof PgIdentityReconciliationRowError ||
+          error instanceof WorkspaceMemberRowError) return false;
+        throw error;
+      }
+      if (
+        stableStringify(current) !== stableStringify(input.expected) ||
+        !identityInventoryMatches(inventory, input.expectedInventory)
+      ) return false;
+
+      // Classify expected collisions before changing a member. Unexpected
+      // constraint/storage errors below throw and roll back the entire unit.
+      const conflicts = await transaction.query<{ readonly operationId: string }>(
+        `select operation_id as "operationId"
+           from takosumi_identity_reconciliation_operations
+          where mutation_id = $1
+          union all
+         select operation_id as "operationId"
+           from takosumi_identity_reconciliation_events
+          where mutation_id = $1 or (operation_id = $2 and revision = $3)`,
+        [input.next.mutationId, input.next.operationId, input.next.revision],
+      );
+      if (conflicts.rows.length !== 0) return false;
+
+      if (input.memberChange) {
+        const { before, after } = input.memberChange;
+        const existingRows = await transaction.query<PgWorkspaceMemberRow>(
+          `select id, workspace_id as "workspaceId", account_id as "accountId",
+                  status, member_json as "recordJson",
+                  created_at as "createdAt", updated_at as "updatedAt"
+             from takosumi_workspace_members
+            where (workspace_id = $1 and account_id = $2) or id = $3`,
+          [after.workspaceId, after.accountId, after.id],
+        );
+        let existing: WorkspaceMember | undefined;
+        try {
+          if (existingRows.rows.length > 1) return false;
+          const row = existingRows.rows[0];
+          existing = row ? workspaceMemberFromRow(row, {
+            workspaceId: after.workspaceId,
+            accountId: after.accountId,
+          }) : undefined;
+          parseWorkspaceMemberRecord(after);
+        } catch (error) {
+          if (error instanceof WorkspaceMemberRowError) return false;
+          throw error;
+        }
+        if (stableStringify(existing) !== stableStringify(before)) return false;
+        let written;
+        if (before) {
+          written = await transaction.query(
+            `update takosumi_workspace_members
+                set status = $1, member_json = $2::jsonb, updated_at = $3
+              where id = $4 and workspace_id = $5 and account_id = $6
+              returning id`,
+            [after.status, JSON.stringify(after), after.updatedAt,
+              after.id, after.workspaceId, after.accountId],
+          );
+        } else {
+          written = await transaction.query(
+            `insert into takosumi_workspace_members
+              (id, workspace_id, account_id, status, member_json, created_at, updated_at)
+             values ($1, $2, $3, $4, $5::jsonb, $6, $7)
+             returning id`,
+            [after.id, after.workspaceId, after.accountId, after.status,
+              JSON.stringify(after), after.createdAt, after.updatedAt],
+          );
+        }
+        if (written.rows.length !== 1) {
+          throw new TypeError("Identity reconciliation member write did not persist");
+        }
+      }
+      const next = input.next;
+      let operationWritten;
+      if (current) {
+        operationWritten = await transaction.query(
+          `update takosumi_identity_reconciliation_operations
+              set revision = $1, status = $2, mutation_id = $3,
+                  record_json = $4::jsonb, updated_at = $5
+            where operation_id = $6
+            returning operation_id`,
+          [next.revision, next.status, next.mutationId, JSON.stringify(next),
+            next.updatedAt, next.operationId],
+        );
+      } else {
+        operationWritten = await transaction.query(
+          `insert into takosumi_identity_reconciliation_operations
+            (operation_id, kind, immutable_key, revision, status, mutation_id,
+             record_json, created_at, updated_at)
+           values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+           returning operation_id`,
+          [next.operationId, next.kind, next.immutableKey, next.revision,
+            next.status, next.mutationId, JSON.stringify(next), next.createdAt,
+            next.updatedAt],
+        );
+      }
+      if (operationWritten.rows.length !== 1) {
+        throw new TypeError("Identity reconciliation operation write did not persist");
+      }
+      const event = input.event;
+      const eventWritten = await transaction.query(
+        `insert into takosumi_identity_reconciliation_events
+          (operation_id, revision, mutation_id, record_json, recorded_at)
+         values ($1, $2, $3, $4::jsonb, $5)
+         returning operation_id`,
+        [event.operationId, event.revision, event.mutationId,
+          JSON.stringify(event), event.recordedAt],
+      );
+      if (eventWritten.rows.length !== 1) {
+        throw new TypeError("Identity reconciliation event write did not persist");
+      }
+      return true;
+    });
   }
 
   async listWorkspaceMembersByAccount(
@@ -10726,6 +11055,135 @@ interface PgWorkspaceMemberRow extends Record<string, unknown> {
   readonly recordJson: unknown;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+class PgIdentityReconciliationRowError extends TypeError {}
+
+interface PgIdentityWorkspaceRow extends PgWorkspaceMutationWorkspaceRow {
+  readonly updatedAt: string;
+  readonly managementState: string;
+  readonly managementEpoch: number | string;
+  readonly bootstrapOwnerId: string | null;
+}
+
+interface PgIdentityPrincipalReferenceRow extends Record<string, unknown> {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly interfaceId: string;
+  readonly subjectKind: string;
+  readonly subjectId: string;
+  readonly phase: string;
+  readonly generation: number;
+  readonly recordJson: unknown;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+interface PgIdentityReconciliationOperationRow extends Record<string, unknown> {
+  readonly operationId: string;
+  readonly kind: string;
+  readonly immutableKey: string;
+  readonly revision: number;
+  readonly status: string;
+  readonly mutationId: string;
+  readonly recordJson: unknown;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+interface PgIdentityReconciliationEventRow extends Record<string, unknown> {
+  readonly operationId: string;
+  readonly revision: number;
+  readonly mutationId: string;
+  readonly recordJson: unknown;
+  readonly recordedAt: string;
+}
+
+function identityRecordFromPgJson(value: unknown): Record<string, unknown> {
+  let record: unknown;
+  try {
+    record = parseJson(value);
+  } catch {
+    throw new PgIdentityReconciliationRowError("Identity reconciliation JSON is malformed");
+  }
+  if (record === null || typeof record !== "object" || Array.isArray(record)) {
+    throw new PgIdentityReconciliationRowError("Identity reconciliation record is malformed");
+  }
+  return record as Record<string, unknown>;
+}
+
+function identityWorkspaceFromPgRow(row: PgIdentityWorkspaceRow): IdentityWorkspaceSnapshot {
+  const record = identityRecordFromPgJson(row.spaceJson);
+  const workspace = record as unknown as Workspace;
+  const epoch = Number(row.managementEpoch);
+  if (
+    !workspaceMutationRowMatches(row, workspace, workspace) ||
+    typeof workspace.id !== "string" || workspace.id === "" ||
+    typeof workspace.handle !== "string" || workspace.handle === "" ||
+    typeof workspace.displayName !== "string" ||
+    (workspace.type !== "personal" && workspace.type !== "organization") ||
+    typeof workspace.ownerUserId !== "string" || workspace.ownerUserId === "" ||
+    typeof workspace.createdAt !== "string" ||
+    typeof workspace.updatedAt !== "string" || row.updatedAt !== workspace.updatedAt ||
+    (row.managementState !== "active" && row.managementState !== "draining" && row.managementState !== "frozen" && row.managementState !== "released") ||
+    !Number.isSafeInteger(epoch) || epoch < 1 ||
+    (row.bootstrapOwnerId !== null && (typeof row.bootstrapOwnerId !== "string" || row.bootstrapOwnerId === ""))
+  ) throw new PgIdentityReconciliationRowError("Identity inventory Workspace columns disagree");
+  return {
+    workspace: structuredClone(workspace),
+    management: { workspaceId: row.id, managementState: row.managementState, managementEpoch: epoch },
+    ...(row.bootstrapOwnerId === null ? {} : { bootstrapOwnerId: row.bootstrapOwnerId }),
+  };
+}
+
+function identityPrincipalReferenceFromPgRow(
+  row: PgIdentityPrincipalReferenceRow,
+): ControlIdentityInventory["principalReferences"][number] {
+  const record = identityRecordFromPgJson(row.recordJson);
+  const metadata = identityRecordFromPgJson(record.metadata);
+  const spec = identityRecordFromPgJson(record.spec);
+  const subject = identityRecordFromPgJson(spec.subjectRef);
+  const status = identityRecordFromPgJson(record.status);
+  if (
+    record.kind !== "InterfaceBinding" ||
+    typeof row.id !== "string" || row.id === "" || metadata.id !== row.id ||
+    metadata.workspaceId !== row.workspaceId || metadata.generation !== row.generation ||
+    !Number.isSafeInteger(row.generation) || row.generation < 1 ||
+    metadata.createdAt !== row.createdAt || metadata.updatedAt !== row.updatedAt ||
+    spec.interfaceId !== row.interfaceId || row.subjectKind !== "Principal" ||
+    subject.kind !== row.subjectKind || subject.id !== row.subjectId ||
+    status.phase !== row.phase
+  ) throw new PgIdentityReconciliationRowError("Identity inventory Principal reference columns disagree");
+  return { id: row.id, workspaceId: row.workspaceId, subjectId: row.subjectId, record: structuredClone(record) };
+}
+
+function identityOperationFromPgRow(
+  row: PgIdentityReconciliationOperationRow,
+): StoredIdentityReconciliationOperation {
+  const record = identityRecordFromPgJson(row.recordJson);
+  if (
+    record.operationId !== row.operationId || !row.operationId ||
+    record.kind !== row.kind || (row.kind !== "merge" && row.kind !== "unlink") ||
+    record.immutableKey !== row.immutableKey || !row.immutableKey ||
+    record.revision !== row.revision || !Number.isSafeInteger(row.revision) || row.revision < 1 ||
+    record.status !== row.status || !["prepared", "applied", "preserved", "recovered"].includes(row.status) ||
+    record.mutationId !== row.mutationId || !row.mutationId ||
+    record.createdAt !== row.createdAt || record.updatedAt !== row.updatedAt
+  ) throw new PgIdentityReconciliationRowError("Identity reconciliation operation columns disagree");
+  return structuredClone(record) as unknown as StoredIdentityReconciliationOperation;
+}
+
+function identityEventFromPgRow(row: PgIdentityReconciliationEventRow): IdentityReconciliationEvent {
+  const record = identityRecordFromPgJson(row.recordJson);
+  if (
+    record.operationId !== row.operationId || !row.operationId ||
+    record.revision !== row.revision || !Number.isSafeInteger(row.revision) || row.revision < 1 ||
+    record.mutationId !== row.mutationId || !row.mutationId ||
+    record.recordedAt !== row.recordedAt ||
+    typeof record.decision !== "string" ||
+    !["prepared", "merge-applied", "unlink-preserved", "merge-aborted", "merge-restored"].includes(record.decision)
+  ) throw new PgIdentityReconciliationRowError("Identity reconciliation event columns disagree");
+  return structuredClone(record) as unknown as IdentityReconciliationEvent;
 }
 
 interface WorkspaceMemberMutationSnapshot {

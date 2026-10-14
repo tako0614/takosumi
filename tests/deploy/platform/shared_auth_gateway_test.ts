@@ -47,11 +47,11 @@ test("stock OSS never invokes an available private authentication service", asyn
   expect(calls).toBe(0);
 });
 
-test("local account management is absent only on the opted-in product origin; issuer and self-host keep their account routes", async () => {
+test("local account management is absent on every opted-in product alias; separate issuer and self-host keep their account routes", async () => {
   const env = configured(rpc);
   for (const path of ["/api/v1/account/tokens", "/api/v1/account/shared-workspaces/bootstrap", "/api/v1/account/session/forged"]) {
     expect((await handleSharedAuthAccountBoundaryRequest(request(path), env))?.status).toBe(404);
-    expect(await handleSharedAuthAccountBoundaryRequest(new Request("https://issuer.staging.example.test" + path), env)).toBeUndefined();
+    expect((await handleSharedAuthAccountBoundaryRequest(new Request("https://alias.staging.example.test" + path), env))?.status).toBe(404);
     expect(await handleSharedAuthAccountBoundaryRequest(request(path), { HOSTED: rpc })).toBeUndefined();
   }
   const signIn = await handleSharedAuthAccountBoundaryRequest(request("/sign-in?return=https://evil.example.test"), env);

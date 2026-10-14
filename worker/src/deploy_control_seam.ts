@@ -13,6 +13,11 @@ import type { CloudflareWorkerEnv, RunnerHostComposition } from "./bindings.ts";
 import type { OpenTofuRunnerExecutorRegistry } from "../../core/domains/deploy-control/mod.ts";
 import type { InterfaceOAuth2ResourceAuthorizer } from "../../core/domains/interfaces/mod.ts";
 import { createWorkerServiceApp } from "./worker_service.ts";
+import type { ControlIdentityAuthorityReader } from "../../contract/identity-reconciliation.ts";
+
+export interface DeployControlPrivateComposition {
+  readonly identityReconciliationAuthority?: ControlIdentityAuthorityReader;
+}
 
 /**
  * Builds the deploy-control Takosumi service (the `takosumi-api` role) directly,
@@ -23,11 +28,12 @@ import { createWorkerServiceApp } from "./worker_service.ts";
  */
 export function createDeployControlService(
   env: CloudflareWorkerEnv,
+  composition: DeployControlPrivateComposition = {},
 ): Promise<CreatedTakosumiService> {
   return createWorkerServiceApp(
     env,
     "takosumi-api",
-    deployControlServiceOptions(env),
+    { ...deployControlServiceOptions(env), ...composition },
   );
 }
 
@@ -414,11 +420,12 @@ function assertUniqueRunnerProfileIds(
  * handshake and no JSON round-trip); `fetch` dispatches the same per-env cached
  * service's `app.fetch` and is kept only as a transport fallback.
  */
-export function createInProcessDeployControlSeam(env: CloudflareWorkerEnv): {
+export function createInProcessDeployControlSeam(env: CloudflareWorkerEnv, composition: DeployControlPrivateComposition = {}): {
   readonly fetch: typeof fetch;
   readonly operations: () => Promise<TakosumiOperations>;
 } {
-  const service = () => cachedDeployControlService(env);
+  const pinnedComposition = pinDeployControlComposition(env, composition);
+  const service = () => cachedDeployControlService(env, pinnedComposition);
   const inProcessFetch = async (
     input: RequestInfo | URL,
     init?: RequestInit,
@@ -440,6 +447,17 @@ const inProcessDeployControlServices = new WeakMap<
   CloudflareWorkerEnv,
   Promise<CreatedTakosumiService>
 >();
+
+const inProcessDeployControlCompositions = new WeakMap<CloudflareWorkerEnv, DeployControlPrivateComposition>();
+
+function pinDeployControlComposition(env: CloudflareWorkerEnv, composition: DeployControlPrivateComposition): DeployControlPrivateComposition {
+  const existing = inProcessDeployControlCompositions.get(env);
+  if (existing && existing.identityReconciliationAuthority !== composition.identityReconciliationAuthority) throw new TypeError("Deploy Control identity authority cannot change within one environment");
+  if (existing) return existing;
+  const pinned = Object.freeze({ identityReconciliationAuthority: composition.identityReconciliationAuthority });
+  inProcessDeployControlCompositions.set(env, pinned);
+  return pinned;
+}
 
 /**
  * @internal
@@ -472,9 +490,11 @@ export function cachedServiceAttempt<TEnvironment extends object, TValue>(
 
 export function cachedDeployControlService(
   env: CloudflareWorkerEnv,
+  composition: DeployControlPrivateComposition = {},
 ): Promise<CreatedTakosumiService> {
+  const pinnedComposition = pinDeployControlComposition(env, composition);
   return cachedServiceAttempt(inProcessDeployControlServices, env, () =>
-    createDeployControlService(env),
+    createDeployControlService(env, pinnedComposition),
   );
 }
 

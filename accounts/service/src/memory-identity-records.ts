@@ -13,6 +13,7 @@ import {
   unlinkImmutableContext,
   credentialUnlinkAudit,
   identityRecordsEqual,
+  identityContextReceiptMatches,
 } from "./hosted-identity-records.ts";
 import type {
   AccountSessionRecord,
@@ -274,6 +275,61 @@ export class MemoryIdentityRecordRepository
       )
         return false;
     if (
+      old.contextPlan &&
+      !identityRecordsEqual(old.contextPlan, n.contextPlan)
+    )
+      return false;
+    if (
+      input.contextPlanRecord &&
+      !identityRecordsEqual(
+        this.records.get(
+          this.key(
+            "identity_merge_context_plans",
+            input.contextPlanRecord.planId,
+          ),
+        ),
+        input.contextPlanRecord,
+      )
+    )
+      return false;
+    for (const receipt of [
+      ...(input.contextReceipt ? [input.contextReceipt] : []),
+      ...(input.contextReceipts ?? []),
+    ]) {
+      const offset = input.activate || n.status === "reconciled" ? 1 : 0;
+      if (
+        !identityContextReceiptMatches(
+          receipt,
+          n,
+          input.now,
+          !input.contextReceipt,
+        ) ||
+        !identityRecordsEqual(
+          this.records.get(
+            this.key("identity_merge_context_receipts", receipt.receiptId),
+          ),
+          receipt,
+        ) ||
+        ((
+          this.records.get(
+            this.key("authentication_generations", receipt.subject),
+          ) as { generation: number } | undefined
+        )?.generation ?? 0) !==
+          receipt.identityGeneration + offset ||
+        this.records.has(
+          this.key("hosted_oidc_revoked_sessions", receipt.issuerSessionHash),
+        )
+      )
+        return false;
+      if (
+        input.contextReceipt &&
+        (receipt.role === "source"
+          ? old.sourceContextAcceptance
+          : old.targetContextAcceptance)
+      )
+        return false;
+    }
+    if (
       input.activate &&
       (old.status !== "reconciled" ||
         [n.sourceSubject, n.targetSubject].some(
@@ -323,6 +379,18 @@ export class MemoryIdentityRecordRepository
         at: input.now,
       },
     );
+    if (input.contextReceipt)
+      this.records.set(
+        this.key(
+          "identity_merge_context_receipts",
+          input.contextReceipt.receiptId,
+        ),
+        {
+          ...input.contextReceipt,
+          consumedByOperation: n.operationId,
+          consumedAt: input.now,
+        },
+      );
     if (input.receipt)
       this.records.set(
         this.key("identity_operation_receipts", input.receipt.receiptId),

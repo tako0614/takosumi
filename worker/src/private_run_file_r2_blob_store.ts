@@ -7,6 +7,7 @@
 import { PartitionedSecretBoundaryCrypto } from "../../core/adapters/secret-store/memory.ts";
 import type { PrivateRunFileBlobPort, PrivateRunFileDigest, PrivateRunFileScope } from "../../core/domains/private-run-files/mod.ts";
 import type { R2Bucket, R2ObjectBody } from "./bindings.ts";
+import { storedServiceUsageBucket, type StoredServiceComposition } from "./stored-service-usage.ts";
 
 export const PRIVATE_RUN_FILE_R2_MAX_BYTES = 16 * 1024 * 1024;
 const PURPOSE = "takosumi.private-run-files.r2-blob@v1";
@@ -19,12 +20,14 @@ const encoder = new TextEncoder();
 export class R2PrivateRunFileBlobStore implements PrivateRunFileBlobPort {
   readonly #bucket: R2Bucket;
   readonly #prefix: string;
+  readonly #storageUsage: StoredServiceComposition | undefined;
   readonly #crypto: PartitionedSecretBoundaryCrypto;
   readonly #maxBytes: number;
 
   constructor(input: {
     readonly bucket: R2Bucket;
     readonly prefix: string;
+    readonly storageUsage?: StoredServiceComposition;
     readonly cryptoBoundary: PartitionedSecretBoundaryCrypto;
     readonly maxBytes: number;
   }) {
@@ -37,6 +40,7 @@ export class R2PrivateRunFileBlobStore implements PrivateRunFileBlobPort {
     }
     this.#bucket = input.bucket;
     this.#prefix = input.prefix;
+    this.#storageUsage = input.storageUsage;
     this.#crypto = input.cryptoBoundary;
     this.#maxBytes = input.maxBytes;
   }
@@ -48,6 +52,7 @@ export class R2PrivateRunFileBlobStore implements PrivateRunFileBlobPort {
   }): Promise<{ readonly blobId: string; readonly digest: PrivateRunFileDigest; readonly byteLength: number }> {
     const bytes = input.bytes.slice();
     validateRequest(input.scope, bytes, input.digest, this.#maxBytes);
+    const ownerWorkspaceId = input.scope.workspaceId;
     const actualDigest = await digestBytes(bytes);
     if (actualDigest !== input.digest) throw blobError();
 
@@ -56,9 +61,12 @@ export class R2PrivateRunFileBlobStore implements PrivateRunFileBlobPort {
     const aad = await aadFor(input.scope, input.digest, bytes.byteLength);
     const scopeDigest = await scopeDigestFor(input.scope);
 
+    const bucket = storedServiceUsageBucket(this.#bucket, this.#storageUsage, {
+      bucketRole: "artifacts", writerId: "private-run-files", workspaceId: ownerWorkspaceId,
+    });
     let existing: R2ObjectBody | null;
     try {
-      existing = await this.#bucket.get(key);
+      existing = await bucket.get(key);
     } catch {
       throw blobError();
     }
@@ -77,7 +85,7 @@ export class R2PrivateRunFileBlobStore implements PrivateRunFileBlobPort {
       byteLength: String(bytes.byteLength),
     };
     try {
-      await this.#bucket.put(key, sealed, {
+      await bucket.put(key, sealed, {
         httpMetadata: { contentType: "application/octet-stream" },
         customMetadata: metadata,
         onlyIf: { etagDoesNotMatch: "*" },
@@ -89,7 +97,7 @@ export class R2PrivateRunFileBlobStore implements PrivateRunFileBlobPort {
       // The write may have committed while its acknowledgement was lost.
       // Reconcile the same immutable key; never retry the PUT or delete it.
     }
-    const readback = await this.#read(key);
+    const readback = await bucket.get(key);
     if (!readback) throw blobError();
     await this.#verify(readback, key, input.digest, bytes.byteLength, aad, scopeDigest, bytes);
     return { blobId: `sha256:${identity}`, digest: input.digest, byteLength: bytes.byteLength };
@@ -101,13 +109,16 @@ export class R2PrivateRunFileBlobStore implements PrivateRunFileBlobPort {
     readonly expectedDigest: PrivateRunFileDigest;
   }): Promise<{ readonly bytes: Uint8Array; readonly digest: PrivateRunFileDigest; readonly byteLength: number } | undefined> {
     validateScope(input.scope);
+    const ownerWorkspaceId = input.scope.workspaceId;
     if (!isDigest(input.expectedDigest) || !isBlobId(input.blobId)) throw blobError();
     const identity = await identityFor(input.scope, input.expectedDigest);
     if (input.blobId !== `sha256:${identity}`) throw blobError();
     const key = `${this.#prefix}/${identity}`;
     let object: R2ObjectBody | null;
     try {
-      object = await this.#bucket.get(key);
+      object = await storedServiceUsageBucket(this.#bucket, this.#storageUsage, {
+        bucketRole: "artifacts", writerId: "private-run-files", workspaceId: ownerWorkspaceId,
+      }).get(key);
     } catch {
       throw blobError();
     }
@@ -136,14 +147,6 @@ export class R2PrivateRunFileBlobStore implements PrivateRunFileBlobPort {
     try {
       const encoded = await this.#crypto.open(ciphertext, PURPOSE, aad);
       return decodeBase64Url(encoded, this.#maxBytes);
-    } catch {
-      throw blobError();
-    }
-  }
-
-  async #read(key: string): Promise<R2ObjectBody | null> {
-    try {
-      return await this.#bucket.get(key);
     } catch {
       throw blobError();
     }

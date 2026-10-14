@@ -186,6 +186,10 @@ import {
   type WorkspaceManagementAuthority,
 } from "./domains/deploy-control/store.ts";
 import { SqlOpenTofuControlStore } from "./domains/deploy-control/store_sql.ts";
+import type { ControlIdentityAuthorityReader, ControlIdentityReconciliationPort } from "../contract/identity-reconciliation.ts";
+import { IdentityReconciliationService } from "./domains/identity-reconciliation/mod.ts";
+import { InMemoryInterfaceBindingStore } from "./domains/interfaces/stores.ts";
+import { identityReconciliationSharesPrincipalDatabase } from "./domains/identity-reconciliation/storage-identity.ts";
 import type { CapsuleModuleVariableMaterializer } from "./domains/deploy-control/module_variable_materializer.ts";
 import {
   createRuntimeSecretFileMaterializer,
@@ -371,6 +375,8 @@ function assertDurableGitInstallPlanStoreOrWarn(input: {
 }
 
 export interface CreateTakosumiServiceOptions extends AppContextOptions {
+  /** Private Accounts proof/fence reader, selected only by owner composition. */
+  readonly identityReconciliationAuthority?: ControlIdentityAuthorityReader;
   readonly validateUninstallRequester?: import("./domains/capsules/uninstall_authorization.ts").UninstallRequesterValidator;
   readonly validateUninstallRequesterAt?: import("./domains/capsules/uninstall_authorization.ts").UninstallRequesterAtValidator;
   /** Explicit private Runner-to-Core file mount; absent means no endpoint/grants. */
@@ -659,6 +665,7 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
  * logic.
  */
 export interface TakosumiOperations {
+  readonly identityReconciliation?: ControlIdentityReconciliationPort;
   /** The wired OpenTofu deployment controller. */
   readonly controller: OpenTofuController;
   /** Durable actor/idempotency-scoped Git install coordinator records. */
@@ -1456,6 +1463,16 @@ export async function createTakosumiService(
             : {}),
         }));
   const interfaceProjectionSink = options.interfaceProjectionSink;
+  let identityReconciliation: IdentityReconciliationService | undefined;
+  if (options.identityReconciliationAuthority) {
+    if (durableOpenTofuStore instanceof InMemoryOpenTofuControlStore) {
+      if (!(interfaceStores.bindings instanceof InMemoryInterfaceBindingStore)) throw new TypeError("Identity reconciliation requires the actual complete Principal inventory");
+      durableOpenTofuStore.attachIdentityReconciliationPrincipalStore(interfaceStores.bindings);
+    } else if (!identityReconciliationSharesPrincipalDatabase(durableOpenTofuStore, interfaceStores.bindings)) {
+      throw new TypeError("Identity reconciliation requires the actual same-database Principal inventory");
+    }
+    identityReconciliation = new IdentityReconciliationService({ store: sharedOpenTofuStore, authority: options.identityReconciliationAuthority });
+  }
   let interfaceService: InterfaceService;
   interfaceService = new InterfaceService({
     stores: interfaceStores,
@@ -1846,6 +1863,7 @@ export async function createTakosumiService(
       }),
   };
   const operations: TakosumiOperations = {
+    ...(identityReconciliation ? { identityReconciliation } : {}),
     controller: opentofuController,
     gitInstallPlans: gitInstallPlanStore,
     workspaces: workspacesService,

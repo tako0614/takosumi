@@ -1,6 +1,7 @@
 import {
   index,
   integer,
+  primaryKey,
   real,
   sqliteTable,
   text,
@@ -105,6 +106,40 @@ export const workspaceBillingBindings = sqliteTable(names.workspaceBillingBindin
   uniqueIndex("workspace_billing_bindings_authority_ref_unique").on(table.billingAuthority, table.workspaceRef),
   uniqueIndex("workspace_billing_bindings_authority_org_unique").on(table.billingAuthority, table.organizationRef),
 ]);
+
+// Retain reconciliation custody and append-only evidence after identity changes.
+export const identityReconciliationOperations = sqliteTable(
+  names.identityReconciliationOperations,
+  {
+    operationId: text("operation_id").primaryKey(),
+    kind: text("kind").notNull(),
+    immutableKey: text("immutable_key").notNull(),
+    revision: integer("revision").notNull(),
+    status: text("status").notNull(),
+    mutationId: text("mutation_id").notNull(),
+    recordJson: jsonText("record_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("identity_reconciliation_operations_mutation_unique").on(table.mutationId),
+  ],
+);
+
+export const identityReconciliationEvents = sqliteTable(
+  names.identityReconciliationEvents,
+  {
+    operationId: text("operation_id").notNull(),
+    revision: integer("revision").notNull(),
+    mutationId: text("mutation_id").notNull(),
+    recordJson: jsonText("record_json").notNull(),
+    recordedAt: text("recorded_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.operationId, table.revision] }),
+    uniqueIndex("identity_reconciliation_events_mutation_unique").on(table.mutationId),
+  ],
+);
 
 // P4 17-noun rename: NEW Workspace-owned Project grouping. Capsules live under a
 // Project (`capsules.project_id`); a default Project is backfilled per Workspace

@@ -364,6 +364,14 @@ export class InMemoryInterfaceBindingStore implements InterfaceBindingStore {
     return Promise.resolve(this.#records.get(id));
   }
 
+  /** Synchronous custody census over this actual store, including revoked,
+   * orphan and other-Workspace references; ordinary authorization is unchanged. */
+  retainedPrincipalReferences(accountIds: readonly string[]): readonly { readonly id: string; readonly workspaceId: string; readonly subjectId: string; readonly record: unknown }[] {
+    const roots = new Set(accountIds);
+    return [...this.#records.values()].filter((record) => record.spec.subjectRef.kind === "Principal" && roots.has(record.spec.subjectRef.id))
+      .map((record) => ({ id: record.metadata.id, workspaceId: record.metadata.workspaceId, subjectId: record.spec.subjectRef.id, record: freezeClone(record) }));
+  }
+
   listByInterface(interfaceId: string): Promise<readonly InterfaceBinding[]> {
     return Promise.resolve(
       [...this.#records.values()]
