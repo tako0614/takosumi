@@ -41,7 +41,8 @@ Tick caps and opt-in flags remain unchanged.
 
 ## Migration and validation
 
-The cursor table is additive, contains only a lane and non-secret keyset metadata,
+PostgreSQL v118 / D1 v71 add the cursor table with three seeded lanes.
+The table is additive, contains only a lane and non-secret keyset metadata,
 and does not backfill or rewrite domain rows. Paired migration catalogs and schema
 mirrors are updated using current repository conventions. Old cursor-less code
 can ignore the new table; rollback need not delete it. Production migration and
