@@ -45,6 +45,18 @@ try {
   const snapshot = async () => (await accounts.prepare("SELECT bucket,key,document,updated_at FROM takosumi_accounts_documents ORDER BY bucket,key").all()).results;
   const before = await snapshot();
   equal(await owner.readOwnerOperation(request), undefined);
+  // The complete predecessor is valid for generic identity operations but is
+  // not the dedicated issuer's current schema. These are readiness SQL reads;
+  // they must not mutate account/fence or Control reconciliation records.
+  await ensureD1OpenTofuLedgerSchema(control as unknown as D1Database, { throughMigrationVersion: 73 });
+  equal((await control.prepare("SELECT max(version) as head FROM schema_migrations").first<{ head: number }>())?.head, 73);
+  const identityEffects = async () => (await control.prepare(`SELECT
+    (SELECT count(*) FROM identity_reconciliation_operations) as operations,
+    (SELECT count(*) FROM identity_reconciliation_events) as events`).first());
+  const beforeIdentityEffects = await identityEffects();
+  equal(await owner.readOwnerOperation(request), undefined);
+  equal(await snapshot(), before);
+  equal(await identityEffects(), beforeIdentityEffects);
   await ensureD1OpenTofuLedgerSchema(control as unknown as D1Database);
   const admission = await owner.readOwnerOperation(request);
   equal(admission?.admission, "fresh"); equal(admission?.target, { ownerKind: "hosted-intents", ownerClientId: serviceId, targetBindingDigest: targetDigest });

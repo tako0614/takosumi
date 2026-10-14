@@ -25,7 +25,7 @@ export const AUTH_STAGING_RELEASE_SURFACES = [
   {
     surface: "takosumi-auth-staging-topology", target: "cloudflare-worker-domain:auth-staging.takos.jp", lineage: "integration", triggers: ["irreversible", "authority"],
     obligations: { ...common,
-      "pre-mutation-proof": "requires exact Accounts-v5 and canonical Control-v73 schema/fence proofs, qualified immutable fetch/scheduled Version and authority closure, disabled workers.dev/previews and zero routes/domains; configures and reads back only the approved one-minute retry cron before one explicit custom-domain attach, or adopts that exact previously applied cron read-only after an explicit recovery invocation",
+      "pre-mutation-proof": "requires exact Accounts-v5 and canonical Control-v74 schema/fence proofs, qualified immutable fetch/scheduled Version and authority closure, disabled workers.dev/previews and zero routes/domains; configures and reads back only the approved one-minute retry cron before one explicit custom-domain attach, or adopts that exact previously applied cron read-only after an explicit recovery invocation",
       "independent-review": "requires a named independent reviewer and exact source/config/artifact/target/cron confirmation for this stage-only schedule and domain attachment; production auth.takos.jp is outside every selector",
     },
   },

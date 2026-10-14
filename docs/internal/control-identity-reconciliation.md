@@ -102,12 +102,14 @@ Accounts context records use its existing private document storage; this does
 not alter the applied Accounts v5/045 lineage. Protected data requires a separate
 backup, rehearsal and owner-authorized migration through the owning lane.
 
-The ordinary bridge supports exact Control v71/v72/v73 and Accounts v4/v5 with
-the shared profile disabled. It must serve the existing schema before the new
-expansion is applied. Billing bindings require their v72 expansion; identity
-reconciliation and dedicated staging qualification require v73. Request handlers
-do not apply schema, and the unconfigured private feature does not query new
-tables during stock startup.
+The ordinary bridge supports exact Control v71/v72/v73/v74 and Accounts v4/v5
+with the shared profile disabled. It must serve the existing schema before the
+new expansion is applied. Billing bindings require their v72 expansion; generic
+identity reconciliation accepts v73/v74. Dedicated staging HTTP, private owner
+RPC and release qualification require the exact current v74 catalog, including
+its additive Backup lookup indexes. This does not alter the v73 identity or
+PostgreSQL v120 migration history. Request handlers do not apply schema, and the
+unconfigured private feature does not query new tables during stock startup.
 
 A Control receipt attests only the local Control decision. Financial ledger and
 Organization custody, Hosted pending/unknown-intent access under original keys,

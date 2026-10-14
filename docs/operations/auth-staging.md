@@ -27,13 +27,14 @@ database is disposable simply because its environment is staging.
 2. Apply and verify the additive Accounts transition using the sole Accounts
    catalog/CLI. Run Control's own reviewed migration lane separately. The
    dedicated issuer accepts only exact checksummed Accounts v5 and the current
-   canonical predeployed Control v73 catalog. The ordinary bridge supports
-   exact v71/v72/v73 before and after the additive transition. Billing-binding
+   canonical predeployed Control v74 catalog. The ordinary bridge supports
+   exact v71/v72/v73/v74 before and after the additive transition. Billing-binding
    ports require their v72 expansion; identity reconciliation additionally
-   requires v73. PostgreSQL's corresponding protected Control expansions are
+   requires v73 or v74. The v74 Backup lookup indexes do not change identity
+   authority or add a PostgreSQL migration. PostgreSQL's corresponding protected Control expansions are
    119 and 120; Accounts 045 is a separate lineage. Keep request/cold-start DDL
    disabled. Publish the profile-disabled compatible bridge on the existing
-   catalog before applying any new schema; it must not require v73 to start.
+   catalog before applying any new schema; it must not require v73 or v74 to start.
 3. Create the inert dedicated Worker slot. It has no stores, secrets, issuer or
    cookies, no routes, and disabled workers.dev/previews. Existing Workers are
    never overwritten by bootstrap.

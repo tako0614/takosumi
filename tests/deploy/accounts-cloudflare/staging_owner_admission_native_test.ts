@@ -62,7 +62,7 @@ test("two actual Workers use the private named admission entry; public credentia
       const code = await new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
       expect(code, stderr + stdout).toBe(0);
       const report = JSON.parse(stdout.trim().split("\n").at(-1)!);
-      expect(report).toEqual({ host: "node", assertions: 42, disposed: true });
+      expect(report).toEqual({ host: "node", assertions: 46, disposed: true });
       if (child.pid) {
         let remains = true;
         try { process.kill(-child.pid, 0); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") remains = false; else throw error; }
