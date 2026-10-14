@@ -48,6 +48,7 @@ Cloud 側のリポジトリで管理します。
 - [threat model](./security-threat-model.md)
 - [runner sandbox](./runner-sandbox-security.md)
 - [secret rotation](./secret-rotation.md)
+- [shared-account OIDC の導入](./shared-account-oidc.md)
 - [patch management](./patch-management.md)
 - [vulnerability response](./vulnerability-response.md)
 

@@ -41,6 +41,9 @@ Internal navigation:
   unimplemented Accounts/OIDC design, including client registration,
   email-assisted identity linking and protected migration; current contracts
   remain in force pending the named owner changes.
+- [Optional shared-account OIDC](./shared-account-oidc.md) — implementation
+  contract for registered shared clients, current canonical Control membership,
+  operation-bound merge proof and protected migration; deployment is separate.
 
 The public build excludes `internal/**/*.md` and `operations/**/*.md`. When a
 contract becomes user-facing, copy only the stable external behavior into

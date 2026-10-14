@@ -69,9 +69,16 @@ canonical Takosumi control plane rather than Accounts storage.
 ## D1 schema migration
 
 `accounts/service/src/d1-migrations.ts` is the sole Accounts D1 catalog. The
-CLI, Worker gate, and local substrate consume the same ordered v0-v4 names and
-checksums. The current Worker gate accepts only the exact checksummed v4
-closure. Exact legacy v3, missing rows, gaps, name or checksum drift, partial
+CLI, Worker gate, and local substrate consume the same ordered catalog and
+checksums. The ordinary Worker bridge accepts exact checksummed v4 or v5
+closures; the explicitly enabled shared-account profile requires exact v5 and
+`predeployed` mode before any hosted writes. Version 5 adds lookup indexes on
+existing Accounts document storage and preserves the applied v0-v4 lineage.
+Deploy this compatible bridge with the shared profile off before a separately
+reviewed protected v5 migration. The prior v4-only artifact cannot serve after
+v5, so this bridge becomes the rollback floor. Request handlers never apply
+that protected migration. See the [shared-account runbook](../../docs/operations/shared-account-oidc.md).
+Exact legacy v3, missing rows, gaps, name or checksum drift, partial
 `ALTER`, older/newer heads, missing owned tables or indexes, and an incomplete
 v4 activation-digest backfill all fail closed. The preceding reviewed feature
 bridge accepted exact legacy v3 or exact v4 only for the one-time migration
