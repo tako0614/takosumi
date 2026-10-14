@@ -54,6 +54,8 @@ export const TAKOSUMI_SOURCE_ROUTE =
   `${INTERNAL_V1_PREFIX}/sources/:sourceId` as const;
 export const TAKOSUMI_SOURCE_SYNC_ROUTE =
   `${INTERNAL_V1_PREFIX}/sources/:sourceId/sync` as const;
+export const TAKOSUMI_SOURCE_HOOK_SECRET_ROTATE_ROUTE =
+  `${INTERNAL_V1_PREFIX}/sources/:sourceId/hook-secret/rotate` as const;
 export const TAKOSUMI_SOURCE_COMPATIBILITY_CHECK_ROUTE =
   `${INTERNAL_V1_PREFIX}/sources/:sourceId/compatibility-check` as const;
 export const TAKOSUMI_SOURCE_SNAPSHOTS_ROUTE =

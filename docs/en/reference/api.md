@@ -168,7 +168,7 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 88
+`accounts/service/src/control-route-inventory.ts`; it currently contains 89
 public route descriptors. Representative operations from that inventory are:
 
 ```http
@@ -182,6 +182,7 @@ POST  /api/v1/sources
 GET   /api/v1/sources
 GET   /api/v1/sources/{sourceId}
 PATCH /api/v1/sources/{sourceId}
+POST  /api/v1/sources/{sourceId}/hook-secret/rotate
 POST  /api/v1/sources/{sourceId}/sync
 GET   /api/v1/sources/{sourceId}/snapshots
 GET   /api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules
@@ -223,6 +224,10 @@ GET /api/v1/workspaces/{workspaceId}/activity
 GET /api/v1/workspaces/{workspaceId}/interface-materialization-failures
 POST /api/v1/workspaces/{workspaceId}/interface-materialization-failures/{intentId}/retries
 ```
+
+Webhook secret recovery, old-secret invalidation, and lost-response handling are described in
+[Sources and Capsules](../concepts/sources.md). The equivalent service-internal route is
+`POST /internal/v1/sources/{sourceId}/hook-secret/rotate`.
 
 Capsule deletion requires Workspace owner/admin authority and the
 `capsules:write` scope. By default, `DELETE /api/v1/capsules/{capsuleId}` schedules
