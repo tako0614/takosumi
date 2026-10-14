@@ -4,12 +4,16 @@ import {
   createReviewedRecoveryIssuerAvailabilityReader,
   isReviewedRecoveryIssuerAvailabilityReader,
   reviewedRecoveryIssuerAvailabilitySignatureInput,
+  bindReviewedRecoveryIssuerAvailabilityCheckpoint,
+  readReviewedRecoveryIssuerAvailabilityCheckpoint,
+  consumeReviewedRecoveryIssuerAvailabilityCheckpoint,
   type ReviewedRecoveryIssuerAvailabilityChallenge,
   type ReviewedRecoveryIssuerAvailabilityStatus,
 } from "../../../../accounts/service/src/reviewed-recovery-issuer-availability.ts";
 import { base64UrlEncodeBytes, sha256Text } from "../../../../accounts/service/src/encoding.ts";
 import { reviewedRecoverySignatureInput } from "../../../../accounts/service/src/reviewed-recovery-approvals.ts";
 import type { OwnerOperationTarget } from "../../../../accounts/service/src/owner-operation-contract.ts";
+import type { IdentityMergeMutation } from "../../../../accounts/service/src/identity-state.ts";
 
 const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
 const foreignKeys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
@@ -213,4 +217,182 @@ test("missing exact operation or an invalid configuration never calls the transp
   }
   expect(await createReviewedRecoveryIssuerAvailabilityReader({ ...input, environment: "production" as never }).isAvailable(request)).toBe(false);
   expect(reads).toBe(0);
+});
+
+function mutationFixture(): IdentityMergeMutation {
+  return { expectedRevision: 2, now: 1000000, reserve: true, retryCapacity: 100,
+    next: { operationId: request.operationId, sourceSubject: "isolated-source", targetSubject: "isolated-target", actor: "isolated-target",
+      addressDigest: "isolated-address", browserBindingHash: "isolated-browser", policyVersion: "isolated-policy", status: "proved",
+      revision: 3, mutationId: "isolated-mutation", createdAt: 999000, updatedAt: 1000000, consentAt: 1000000, expiresAt: 1000500,
+      contextPlan: { planId: "isolated-plan", planDigest: request.planDigest, planningRevision: 1, authorityId: "isolated-core", authorityVersion: "isolated-version", canonicalPersonalWorkspaceId: "isolated-workspace" } } };
+}
+
+async function boundCheckpoint(f = fixture(), mutation = mutationFixture(), bounds = { notBefore: 1000000, expiresAtExclusive: 1000500 }) {
+  const checkpoint = await f.reader.getAvailabilityCheckpoint(request);
+  expect(checkpoint).toBeDefined();
+  expect(bindReviewedRecoveryIssuerAvailabilityCheckpoint(checkpoint, { target, mutation, ...bounds })).toBe(true);
+  return { ...f, checkpoint, mutation };
+}
+
+test("one actual signed status mints a synchronous, one-use local precommit checkpoint", async () => {
+  let reads = 0;
+  const f = await boundCheckpoint(fixture(async (challenge) => { reads++; return signed(challenge); }));
+  expect(reads).toBe(1);
+  expect(Object.isFrozen(f.checkpoint)).toBe(true);
+  expect(Object.keys(f.checkpoint!)).toEqual([]);
+  f.time(1000100);
+  expect(readReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, f.mutation)).toBe(1000100);
+  const local = { ...f.mutation, now: 1000100 };
+  expect(consumeReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, local)).toBe(1000100);
+  expect(reads).toBe(1);
+  expect(readReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, local)).toBeUndefined();
+  expect(consumeReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, local)).toBeUndefined();
+});
+
+test("booleans, copied methods, forged objects and cloned checkpoints never pass the synchronous guard", async () => {
+  const f = await boundCheckpoint();
+  const available = await f.reader.isAvailable(request);
+  for (const fake of [undefined, true, available, {}, { ...f.checkpoint }, structuredClone(f.checkpoint), Object.create(f.checkpoint!),
+    { ...f.reader }, { read: () => 1000000, consume: () => true }, f.reader.getAvailabilityCheckpoint]) {
+    expect(readReviewedRecoveryIssuerAvailabilityCheckpoint(fake, f.mutation)).toBeUndefined();
+    expect(consumeReviewedRecoveryIssuerAvailabilityCheckpoint(fake, f.mutation)).toBeUndefined();
+    expect(bindReviewedRecoveryIssuerAvailabilityCheckpoint(fake, { target, mutation: f.mutation, notBefore: 1000000, expiresAtExclusive: 1000500 })).toBe(false);
+  }
+  expect(consumeReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, f.mutation)).toBe(1000000);
+});
+
+test("an unbound checkpoint cannot dispatch and identical initial binding is idempotent", async () => {
+  const f = fixture(), mutation = mutationFixture();
+  const checkpoint = await f.reader.getAvailabilityCheckpoint(request);
+  expect(readReviewedRecoveryIssuerAvailabilityCheckpoint(checkpoint, mutation)).toBeUndefined();
+  const binding = { target, mutation, notBefore: 1000000, expiresAtExclusive: 1000500 };
+  expect(bindReviewedRecoveryIssuerAvailabilityCheckpoint(checkpoint, binding)).toBe(true);
+  expect(bindReviewedRecoveryIssuerAvailabilityCheckpoint(checkpoint, binding)).toBe(true);
+  expect(bindReviewedRecoveryIssuerAvailabilityCheckpoint(checkpoint, { ...binding, expiresAtExclusive: 1000499 })).toBe(false);
+  expect(consumeReviewedRecoveryIssuerAvailabilityCheckpoint(checkpoint, mutation)).toBe(1000000);
+  expect(bindReviewedRecoveryIssuerAvailabilityCheckpoint(checkpoint, binding)).toBe(false);
+});
+
+test("target and operation provenance must match before a checkpoint can bind", async () => {
+  const f = fixture(), mutation = mutationFixture();
+  const checkpoint = await f.reader.getAvailabilityCheckpoint(request);
+  expect(bindReviewedRecoveryIssuerAvailabilityCheckpoint(checkpoint, { target: { ...target, ownerClientId: "foreign-owner" }, mutation, notBefore: 1000000, expiresAtExclusive: 1000500 })).toBe(false);
+  expect(bindReviewedRecoveryIssuerAvailabilityCheckpoint(checkpoint, { target, mutation: { ...mutation, next: { ...mutation.next, operationId: "other-operation" } }, notBefore: 1000000, expiresAtExclusive: 1000500 })).toBe(false);
+  const unlink = await f.reader.getAvailabilityCheckpoint({ ...request, kind: "unlink" });
+  expect(bindReviewedRecoveryIssuerAvailabilityCheckpoint(unlink, { target, mutation, notBefore: 1000000, expiresAtExclusive: 1000500 })).toBe(false);
+  expect(bindReviewedRecoveryIssuerAvailabilityCheckpoint(checkpoint, { target, mutation, notBefore: 1000000, expiresAtExclusive: 1000500 })).toBe(true);
+});
+
+const mutationChanges: [string, (mutation: IdentityMergeMutation) => void][] = [
+  ["operation", (mutation) => { mutation.next.operationId = "other-operation"; }],
+  ["pair", (mutation) => { mutation.next.sourceSubject = "other-source"; }],
+  ["revision", (mutation) => { mutation.expectedRevision++; mutation.next.revision++; }],
+  ["plan", (mutation) => { mutation.next.contextPlan!.planDigest = "other-plan"; }],
+  ["mutation id", (mutation) => { mutation.next.mutationId = "other-mutation"; }],
+  ["action", (mutation) => { mutation.activate = true; }],
+  ["snapshot deadline", (mutation) => { mutation.next.expiresAt++; }],
+  ["session snapshot", (mutation) => { mutation.sessions = [{ subject: "isolated-target", authTime: 1, sessionId: "caller-session" }]; }],
+  ["audit time", (mutation) => { mutation.next.updatedAt++; }],
+];
+for (const [name, mutate] of mutationChanges) {
+  test(`bound checkpoint rejects a different ${name} without promoting a refreshed input.now`, async () => {
+    const f = await boundCheckpoint();
+    const changed = structuredClone(f.mutation);
+    mutate(changed);
+    expect(readReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, changed)).toBeUndefined();
+    expect(consumeReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, changed)).toBeUndefined();
+    expect(consumeReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, f.mutation)).toBeUndefined();
+  });
+}
+
+test("binding captures bounds and mutation synchronously without retaining mutable caller objects", async () => {
+  const f = await boundCheckpoint();
+  f.mutation.next.sourceSubject = "caller-mutated-source";
+  expect(readReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, f.mutation)).toBeUndefined();
+  expect(consumeReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, mutationFixture())).toBe(1000000);
+});
+
+test("snapshot expiry and earlier owning-capture expiry remain binding during backend async preparation", async () => {
+  for (const expiry of [1000001, 1000300, 1000500]) {
+    const f = await boundCheckpoint(fixture(), mutationFixture(), { notBefore: 1000000, expiresAtExclusive: expiry });
+    let writes = 0;
+    await Promise.resolve();
+    f.time(expiry);
+    const now = readReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, f.mutation);
+    if (now !== undefined && consumeReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, { ...f.mutation, now }) !== undefined) writes++;
+    expect(now).toBeUndefined();
+    expect(writes).toBe(0);
+  }
+});
+
+test("status deadline is independently enforced even when all caller snapshot bounds last longer", async () => {
+  const f = await boundCheckpoint(fixture(), mutationFixture(), { notBefore: 1000000, expiresAtExclusive: 1010000 });
+  await Promise.resolve();
+  f.time(1001000);
+  expect(readReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, f.mutation)).toBeUndefined();
+  f.time(1000000);
+  expect(consumeReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, f.mutation)).toBeUndefined();
+});
+
+test("clock rollback, future caller now and an earlier refreshed now cannot satisfy a bound checkpoint", async () => {
+  const f = await boundCheckpoint();
+  f.time(1000100);
+  expect(readReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, f.mutation)).toBe(1000100);
+  expect(readReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, { ...f.mutation, now: 1000101 })).toBeUndefined();
+  expect(readReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, { ...f.mutation, now: 999999 })).toBeUndefined();
+  f.time(1000050);
+  expect(readReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, f.mutation)).toBeUndefined();
+  f.time(1000100);
+  expect(consumeReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, f.mutation)).toBeUndefined();
+});
+
+test("consume rechecks the clock after a valid peek and permits at most one concurrent local write", async () => {
+  const f = await boundCheckpoint();
+  expect(readReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, f.mutation)).toBe(1000000);
+  f.time(1000500);
+  expect(consumeReviewedRecoveryIssuerAvailabilityCheckpoint(f.checkpoint, f.mutation)).toBeUndefined();
+  const other = await boundCheckpoint();
+  let writes = 0;
+  const dispatch = async () => {
+    await Promise.resolve();
+    const now = readReviewedRecoveryIssuerAvailabilityCheckpoint(other.checkpoint, other.mutation);
+    if (now === undefined) return;
+    const local = { ...other.mutation, now };
+    if (consumeReviewedRecoveryIssuerAvailabilityCheckpoint(other.checkpoint, local) !== undefined) writes++;
+  };
+  await Promise.all([dispatch(), dispatch()]);
+  expect(writes).toBe(1);
+});
+
+test("invalid capture bounds and missing issuer cannot mint or bind a usable checkpoint", async () => {
+  const f = fixture(), mutation = mutationFixture();
+  for (const bounds of [{ notBefore: 1000001, expiresAtExclusive: 1000500 }, { notBefore: 999999, expiresAtExclusive: 1000500 },
+    { notBefore: 1000000, expiresAtExclusive: 1000000 }, { notBefore: Number.NaN, expiresAtExclusive: 1000500 }]) {
+    const checkpoint = await f.reader.getAvailabilityCheckpoint(request);
+    expect(bindReviewedRecoveryIssuerAvailabilityCheckpoint(checkpoint, { target, mutation, ...bounds })).toBe(false);
+  }
+  const unconfigured = createReviewedRecoveryIssuerAvailabilityReader({ target, clientId: "isolated-private-client", environment: "staging" });
+  expect(await unconfigured.getAvailabilityCheckpoint(request)).toBeUndefined();
+});
+
+test("a genuine checkpoint from a different module instance cannot cross process-local custody", async () => {
+  // Bun canonicalizes file query suffixes to the same module. Load the exact
+  // source in memory as another module, retaining its real imported verifier.
+  const sourceUrl = new URL("../../../../accounts/service/src/reviewed-recovery-issuer-availability.ts", import.meta.url);
+  const source = await Bun.file(sourceUrl).text();
+  const javascript = new Bun.Transpiler({ loader: "ts", target: "bun" }).transformSync(source)
+    .replaceAll("./owner-operation-evidence.ts", new URL("./owner-operation-evidence.ts", sourceUrl).href)
+    .replaceAll("./encoding.ts", new URL("./encoding.ts", sourceUrl).href);
+  const foreign = await import(`data:text/javascript;base64,${btoa(javascript)}`);
+  const foreignReader = foreign.createReviewedRecoveryIssuerAvailabilityReader({ reviewIssuer, target, clientId: "isolated-private-client", environment: "staging",
+    readSignedStatus: (challenge: ReviewedRecoveryIssuerAvailabilityChallenge) => signed(challenge), now: () => 1000000 });
+  const foreignCheckpoint = await foreignReader.getAvailabilityCheckpoint(request), mutation = mutationFixture();
+  const binding = { target, mutation, notBefore: 1000000, expiresAtExclusive: 1000500 };
+  expect(foreign.bindReviewedRecoveryIssuerAvailabilityCheckpoint(foreignCheckpoint, binding)).toBe(true);
+  expect(readReviewedRecoveryIssuerAvailabilityCheckpoint(foreignCheckpoint, mutation)).toBeUndefined();
+  expect(consumeReviewedRecoveryIssuerAvailabilityCheckpoint(foreignCheckpoint, mutation)).toBeUndefined();
+  const local = await boundCheckpoint();
+  expect(foreign.readReviewedRecoveryIssuerAvailabilityCheckpoint(local.checkpoint, local.mutation)).toBeUndefined();
+  expect(consumeReviewedRecoveryIssuerAvailabilityCheckpoint(local.checkpoint, local.mutation)).toBe(1000000);
+  expect(foreign.consumeReviewedRecoveryIssuerAvailabilityCheckpoint(foreignCheckpoint, mutation)).toBe(1000000);
 });

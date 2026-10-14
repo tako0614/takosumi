@@ -51,6 +51,7 @@ import {
   isReviewedRecoveryIssuerAvailabilityReader,
   type ReviewedRecoveryIssuerAvailabilityReader,
   type ReviewedRecoveryIssuerAvailabilityRequest,
+  type ReviewedRecoveryIssuerAvailabilityCheckpoint,
 } from "./reviewed-recovery-issuer-availability.ts";
 
 export interface IdentityReviewedRecoveryApproval {
@@ -503,7 +504,8 @@ export function createControlIdentityReconciler(input: {
   async function ownersReady(
     context?: IdentityExternalOwnerContext,
     operation?: ReviewedRecoveryIssuerAvailabilityRequest,
-  ): Promise<boolean> {
+    preStatusCheck?: () => Promise<void>,
+  ): Promise<ReviewedRecoveryIssuerAvailabilityCheckpoint | undefined> {
     const availabilityRequest = context ? { operationId: context.operationId, kind: context.kind, planDigest: context.planDigest } : operation;
     const configured = ports();
     if (
@@ -513,21 +515,24 @@ export function createControlIdentityReconciler(input: {
           !p || p.kind !== ownerKinds[i] || !p.ownerId || !p.ownerVersion,
       )
     )
-      return false;
+      return undefined;
+    let ready: boolean;
     try {
-      const ready = (
+      ready = (
         await Promise.all(
           configured.map((p) =>
             p!.assertReady(context && structuredClone(context)),
           ),
         )
       ).every((v) => v === true);
-      // Challenge issuance/verification is the last await: owner preflight
-      // cannot silently carry an earlier short-lived status past expiry.
-      return ready && await reviewIssuerAvailability.isAvailable(availabilityRequest);
     } catch {
-      return false;
+      return undefined;
     }
+    if (!ready) return undefined;
+    // This current-census/admission check is after owner awaits and before the
+    // single signed status exchange. Preserve its exact conflict for consent.
+    await preStatusCheck?.();
+    return await reviewIssuerAvailability.getAvailabilityCheckpoint(availabilityRequest);
   }
   async function captureContext(
     context: IdentityExternalOwnerContext,
@@ -661,14 +666,16 @@ export function createControlIdentityReconciler(input: {
     },
     async assertReady(op) {
       const context = await mergeContext(op, "planning");
-      if (!(await ownersReady(context)))
+      const availabilityCheckpoint = await ownersReady(context, undefined, async () => { await adapter.assertContextPlanCurrent!(op); });
+      if (!availabilityCheckpoint || !target)
         throw new IdentityMergeConflict("merge_reconciliation_unavailable");
+      return { availabilityCheckpoint, target: structuredClone(target) };
     },
     async assertOwnerReadiness(op) {
       try {
-        if (!op) return ownersReady();
+        if (!op) return !!await ownersReady();
         const phase = op.consentAt ? "reserved" : "planning";
-        return ownersReady(await mergeContext(op, phase));
+        return !!await ownersReady(await mergeContext(op, phase));
       } catch {
         return false;
       }
@@ -800,10 +807,17 @@ export function createControlIdentityReconciler(input: {
         operationId: op.operationId,
         recoveryId: approval.recoveryId,
       });
-      if (!admission || !(await ownersReady(undefined, { operationId: admission.operationId, kind: admission.mode, planDigest: admission.planDigest }))) return undefined;
+      if (!admission) return undefined;
       const recovery = await input.recoveryEvidence?.readRecoveryEvidence({ operationId: op.operationId, recoveryId: admission.recoveryId });
       if (!recovery || recovery.recoveryId !== admission.recoveryId || recovery.reviewedApprovalRef !== admission.reviewedApprovalRef ||
         ![recovery.approvalDigest, recovery.decisionDigest, recovery.ownerEvidenceDigest].every(digest)) return undefined;
+      if (!identityRecordsEqual(op, await input.store.findIdentityMergeOperation?.(op.operationId)) || !identityRecordsEqual(admission,
+        await authority.readRecoveryAdmission({ operationId: op.operationId, recoveryId: approval.recoveryId }))) return undefined;
+      const checkedAt = clock();
+      if (!(await ownersReady(undefined, { operationId: admission.operationId, kind: admission.mode, planDigest: admission.planDigest }))) return undefined;
+      const readyAt = clock();
+      if (!Number.isSafeInteger(checkedAt) || !Number.isSafeInteger(readyAt) || readyAt < checkedAt ||
+        approval.createdAt > readyAt || approval.expiresAt <= readyAt || admission.expiresAt <= readyAt) return undefined;
       const receipt = await input.control.recover({
         operationId: op.operationId,
         recoveryId: approval.recoveryId,

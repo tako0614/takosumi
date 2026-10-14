@@ -410,7 +410,7 @@ for (const kind of ["memory", "d1"] as const) {
     const f = await fixture(kind, false);
     let now = initialNow;
     const operation = await proved(f.store, f.session);
-    const reconciler = { ...isolatedContextReconciler(f.store, initialNow), reconcile: async () => undefined };
+    const reconciler = { ...isolatedContextReconciler(f.store, () => now), reconcile: async () => undefined };
     const service = createIdentityMergeRetryService({ store: f.store, stage, reconciler, assertOwnerReadiness: async () => true, now: () => now });
     const consent = () => consentIdentityMerge({ store: f.store, operation, session: f.session, consent: true, reconciler, retryCapability: service, now });
     await expect(consent()).rejects.toThrow("merge_retry_unavailable");

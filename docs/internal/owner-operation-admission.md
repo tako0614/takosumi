@@ -23,6 +23,16 @@ neither this issuer nor its transport. Availability attests only the issuer's
 current status; it does not approve a human decision or mint a per-operation
 recovery approval.
 
+Reservation carries a process-local opaque checkpoint from that same verified
+status through repository preparation. After asynchronous initialization,
+hashing and inventory reads, each backend checks its provenance, exact
+operation/target and fresh trusted time immediately before the local memory
+write, D1 batch dispatch or PostgreSQL query dispatch. Proof, session and context
+expiry remain enforced at that same boundary. The checkpoint is not serialized
+or accepted on a public wire. This is a local precommit check; it does not prove
+the remote database's execution time after a queued dispatch or provide a
+distributed transaction with the review issuer.
+
 ## Request and authority
 
 The only request is `readOwnerOperation({ operationId, kind, planDigest,

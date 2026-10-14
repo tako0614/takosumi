@@ -88,6 +88,8 @@ test("issuer availability preserves the original opaque reader and refuses wrapp
   const current = env(), bundle = authStagingOwnerBundle(current, ports);
   expect(bundle.reviewIssuerAvailability).toBe(reader); expect(bundle.ports.reviewIssuerAvailability).toBe(reader);
   expect(await reader.isAvailable({ operationId: "fixture-operation", kind: "merge", planDigest: "opaque-plan" })).toBe(true);
+  expect(await bundle.reviewIssuerAvailability!.getAvailabilityCheckpoint({ operationId: "fixture-operation", kind: "merge", planDigest: "opaque-plan" })).toBeDefined();
+  expect(await mint().getAvailabilityCheckpoint({ operationId: "fixture-operation", kind: "merge", planDigest: "opaque-plan" })).toBeUndefined();
   expect(await bundle.ports.assertOwnerReadiness()).toBe(false);
   const wrapped = { ...reader };
   expect(() => createAuthStagingOwnerBundle({ store: new InMemoryAccountsStore(), control, ports: { ...ports, reviewIssuerAvailability: wrapped } })).toThrow("issuer_unavailable");

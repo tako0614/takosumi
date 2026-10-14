@@ -170,6 +170,7 @@ function fingerprint(env: AuthStagingEnv, source: AuthStagingOwnerPorts): readon
     source.recoveryEvidence, source.recoveryEvidence?.readRecoveryEvidence,
     source.recoveryEvidence?.readHistoricalRecoveryEvidence, source.recoveryEvidence?.readHistoricalRecoveryEvidenceByReviewRef,
     source.reviewIssuerAvailability, source.reviewIssuerAvailability?.isAvailable,
+    source.reviewIssuerAvailability?.getAvailabilityCheckpoint,
     source.externalOwners, source.externalOwners && Object.keys(source.externalOwners).sort().join(","),
     ...ownerKinds.flatMap((kind) => { const port = source.externalOwners?.[kind];
       return [port, port?.kind, port?.ownerId, port?.ownerVersion, port?.assertReady, port?.reconcile, port?.read]; }),

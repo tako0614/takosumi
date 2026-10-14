@@ -19,12 +19,25 @@ import { identityRecordsEqual } from "./hosted-identity-records.ts";
 import { normalizeMergeEmail } from "./identity-state.ts";
 import { sha256Text } from "./encoding.ts";
 import { errorJson, json, readJsonObject } from "./http-helpers.ts";
+import type { OwnerOperationTarget } from "./owner-operation-contract.ts";
+import {
+  bindReviewedRecoveryIssuerAvailabilityCheckpoint,
+  readReviewedRecoveryIssuerAvailabilityCheckpoint,
+  type ReviewedRecoveryIssuerAvailabilityCheckpoint,
+} from "./reviewed-recovery-issuer-availability.ts";
 
 const freshnessMs = 5 * 60_000;
 const basePath = "/api/v1/account/identity-merges";
 const unlinkPath = "/api/v1/account/identity-credentials/unlink";
 const mergeBrowserCookie = "__Host-takosumi-merge-browser";
 const policyVersion = "takosumi.hosted-identity-merge@v1";
+
+/** Private constructor evidence. Never accepted from an HTTP request or stored
+ * as an operation receipt; the original checkpoint identity must survive CAS. */
+interface IdentityMergeReadiness {
+  readonly availabilityCheckpoint: ReviewedRecoveryIssuerAvailabilityCheckpoint;
+  readonly target: OwnerOperationTarget;
+}
 
 export interface IdentityMergeReconciler {
   prepareContextPlan?(
@@ -33,7 +46,7 @@ export interface IdentityMergeReconciler {
   assertContextPlanCurrent?(
     operation: IdentityMergeOperation,
   ): Promise<ControlIdentityContextPlan>;
-  assertReady?(operation: IdentityMergeOperation): Promise<void>;
+  assertReady?(operation: IdentityMergeOperation): Promise<IdentityMergeReadiness>;
   /** Owner-reviewed references, never a default acknowledgement. Retry uses the
    * same operation ID and immutable Workspace/Organization/intent pins. */
   reconcile(
@@ -190,7 +203,14 @@ export async function consentIdentityMerge(input: {
 }): Promise<IdentityMergeOperation> {
   const { store, operation, session } = input;
   let now = input.now;
+  function currentTime(): number {
+    const value = input.clock?.() ?? input.now;
+    if (!Number.isSafeInteger(value) || value < now || value < 0)
+      throw new IdentityMergeConflict("merge_conflict");
+    return value;
+  }
   if (
+    !Number.isSafeInteger(now) || now < 0 ||
     !input.consent ||
     operation.status !== "proved" ||
     operation.consentAt ||
@@ -204,7 +224,7 @@ export async function consentIdentityMerge(input: {
   if (!input.retryCapability)
     throw new IdentityMergeConflict("merge_retry_unavailable");
   await input.retryCapability.assertAvailable(operation);
-  now = input.clock?.() ?? input.now;
+  now = currentTime();
   const receipts = await consumedProofReceipts(store, operation, now, 0);
   if (
     session.policy !== "hosted" ||
@@ -232,9 +252,8 @@ export async function consentIdentityMerge(input: {
     !input.reconciler.assertContextPlanCurrent
   )
     throw new IdentityMergeConflict("merge_reconciliation_unavailable");
-  await input.reconciler.assertReady(operation);
   const approved = await input.reconciler.assertContextPlanCurrent(operation);
-  now = input.clock?.() ?? input.now;
+  now = currentTime();
   const context = await readIdentityMergeContextEvidence(
     store,
     operation,
@@ -250,6 +269,19 @@ export async function consentIdentityMerge(input: {
     operation.targetSubject,
     now,
   );
+  if ((await identityMergeAddressDigest(finalEvidence[0].normalizedAddress)) !== operation.addressDigest)
+    throw new IdentityMergeConflict("merge_conflict");
+  // The actual reconciler rechecks the Core census after owner preflight, then
+  // verifies a fresh issuer status as its last await. Its original opaque
+  // checkpoint remains live through repository preparation, then is consumed
+  // synchronously immediately before the local reservation write is submitted.
+  const readiness = await input.reconciler.assertReady(operation);
+  now = currentTime();
+  if (operation.expiresAt <= now || session.expiresAt <= now || (session.absoluteExpiresAt ?? 0) <= now ||
+    context.plan.expiresAt <= now || finalReceipts.some((r) => r.expiresAt <= now || r.completedAt > now) ||
+    context.receipts.some((r) => r.expiresAt <= now || r.acceptedAt > now) ||
+    finalEvidence.some((p) => p.validUntil <= now || p.observedAt > now || now - p.observedAt > freshnessMs))
+    throw new IdentityMergeConflict("merge_conflict");
   const next = {
     ...operation,
     consentAt: now,
@@ -265,20 +297,35 @@ export async function consentIdentityMerge(input: {
       reauthentication: false,
     },
   ];
+  const mutation = {
+    expectedRevision: operation.revision,
+    next,
+    now,
+    sessions: requirements,
+    emailProofs: finalEvidence,
+    proofReceipts: finalReceipts,
+    contextPlanRecord: context.plan,
+    contextReceipts: context.receipts,
+    reserve: true,
+    retryCapacity: input.retryCapability.pendingCapacity,
+    availabilityCheckpoint: readiness?.availabilityCheckpoint,
+  };
+  const earliestTimes = [now, operation.createdAt, session.createdAt, context.plan.createdAt,
+    ...finalReceipts.map((r) => r.completedAt), ...context.receipts.map((r) => r.acceptedAt), ...finalEvidence.map((p) => p.observedAt)];
+  const notBefore = Math.max(...earliestTimes);
+  // Email max-age permits equality, while the other deadlines are exclusive.
+  const deadlines = [operation.expiresAt, session.expiresAt, session.absoluteExpiresAt!, context.plan.expiresAt,
+    ...finalReceipts.map((r) => r.expiresAt), ...context.receipts.map((r) => r.expiresAt),
+    ...finalEvidence.flatMap((p) => [p.validUntil, p.observedAt + freshnessMs + 1])];
+  if (!readiness || earliestTimes.some((value) => !Number.isSafeInteger(value) || value < 0) ||
+    deadlines.some((value) => !Number.isSafeInteger(value) || value < 0) ||
+    !bindReviewedRecoveryIssuerAvailabilityCheckpoint(readiness.availabilityCheckpoint, {
+      target: readiness.target, mutation, notBefore, expiresAtExclusive: Math.min(...deadlines),
+    }) || readReviewedRecoveryIssuerAvailabilityCheckpoint(readiness.availabilityCheckpoint, mutation) === undefined)
+    throw new IdentityMergeConflict("merge_reconciliation_unavailable");
   if (
     !store.compareAndSetIdentityMerge ||
-    !(await store.compareAndSetIdentityMerge({
-      expectedRevision: operation.revision,
-      next,
-      now,
-      sessions: requirements,
-      emailProofs: finalEvidence,
-      proofReceipts: finalReceipts,
-      contextPlanRecord: context.plan,
-      contextReceipts: context.receipts,
-      reserve: true,
-      retryCapacity: input.retryCapability.pendingCapacity,
-    }))
+    !(await store.compareAndSetIdentityMerge(mutation))
   )
     throw new IdentityMergeConflict("merge_conflict");
   return next;

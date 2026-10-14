@@ -1,3 +1,4 @@
+import { readReviewedRecoveryIssuerAvailabilityCheckpoint, consumeReviewedRecoveryIssuerAvailabilityCheckpoint } from "./reviewed-recovery-issuer-availability.ts";
 import type { ReviewedRecoveryApprovalMutation } from "./reviewed-recovery-state.ts";
 import { canonicalOwnerJson, ownerContextBucket, ownerReceiptBucket, reviewedApprovalBucket, reviewedApprovalCurrentBucket, reviewedApprovalRefBucket, reviewedApprovalRefKey } from "./owner-operation-evidence.ts";
 import type {
@@ -203,6 +204,16 @@ export class D1IdentityRecordRepository implements IdentityRecordRepository {
   async mutateMerge(input: IdentityMergeMutation): Promise<boolean> {
     assertMergeMutation(input);
     await this.initialize();
+    const sessionLookups = new Map<NonNullable<IdentityMergeMutation["sessions"]>[number], string>();
+    for (const proof of input.sessions ?? [])
+      sessionLookups.set(proof, proof.sessionLookupHash ?? await this.hashSession(proof.sessionId!));
+    if (input.availabilityCheckpoint !== undefined) {
+      const freshNow = readReviewedRecoveryIssuerAvailabilityCheckpoint(input.availabilityCheckpoint, input);
+      if (freshNow === undefined) return false;
+      input = { ...input, now: freshNow };
+      try { assertMergeMutation(input); } catch { return false; }
+      if (input.emailProofs?.some((proof) => proof.validUntil <= freshNow || proof.observedAt > freshNow)) return false;
+    }
     const next = input.next;
     const args: Array<string | number> = [
       JSON.stringify(next),
@@ -250,7 +261,7 @@ export class D1IdentityRecordRepository implements IdentityRecordRepository {
     for (const proof of input.sessions ?? []) {
       conditions += ` AND EXISTS(SELECT 1 FROM ${table} s WHERE s.bucket='account_sessions' AND s.key=? AND json_extract(s.document,'$.subject')=? AND json_extract(s.document,'$.${proof.reauthentication === false ? "authTime" : "reauthenticatedAt"}')=? AND json_extract(s.document,'$.expiresAt')>? AND json_extract(s.document,'$.absoluteExpiresAt')>? AND json_extract(s.document,'$.policy')='hosted' AND COALESCE(json_extract(s.document,'$.identityGeneration'),0)=COALESCE((SELECT json_extract(g.document,'$.generation') FROM ${table} g WHERE g.bucket='authentication_generations' AND g.key=json_extract(s.document,'$.subject')),0))`;
       args.push(
-        proof.sessionLookupHash ?? (await this.hashSession(proof.sessionId!)),
+        sessionLookups.get(proof)!,
         proof.subject,
         proof.authTime,
         input.now,
@@ -499,6 +510,9 @@ export class D1IdentityRecordRepository implements IdentityRecordRepository {
           )
           .bind(next.operationId, claimKey, attemptId),
       );
+    // The checkpoint and all captured expiry bounds are checked again after
+    // preparation. This is a local precommit boundary, not server execution/2PC.
+    if (input.availabilityCheckpoint !== undefined && consumeReviewedRecoveryIssuerAvailabilityCheckpoint(input.availabilityCheckpoint, input) === undefined) return false;
     const results = await this.db.batch(statements);
     if (results.some((r) => !r.success))
       throw new Error("identity_merge_batch_failed");

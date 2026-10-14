@@ -1,3 +1,4 @@
+import { readReviewedRecoveryIssuerAvailabilityCheckpoint, consumeReviewedRecoveryIssuerAvailabilityCheckpoint } from "../reviewed-recovery-issuer-availability.ts";
 import type { ReviewedRecoveryApprovalMutation } from "../reviewed-recovery-state.ts";
 import { canonicalOwnerJson, ownerContextBucket, ownerReceiptBucket, reviewedApprovalBucket, reviewedApprovalCurrentBucket, reviewedApprovalRefBucket, reviewedApprovalRefKey } from "../owner-operation-evidence.ts";
 import type {
@@ -183,6 +184,22 @@ export class PostgresIdentityRecordRepository
   }
   async mutateMerge(input: IdentityMergeMutation): Promise<boolean> {
     assertMergeMutation(input);
+    const sessionLookups = new Map<NonNullable<IdentityMergeMutation["sessions"]>[number], string>();
+    for (const proof of input.sessions ?? [])
+      sessionLookups.set(proof, proof.sessionLookupHash ?? await hashSessionId(proof.sessionId!));
+    let inventoryGeneration: number | null | undefined;
+    if (input.reserve || input.activate) {
+      const inventory = await this.get<{ generation: number }>("email_candidate_inventory", "global");
+      if (inventory && (!Number.isSafeInteger(inventory.generation) || inventory.generation < 0)) return false;
+      inventoryGeneration = inventory?.generation ?? null;
+    }
+    if (input.availabilityCheckpoint !== undefined) {
+      const freshNow = readReviewedRecoveryIssuerAvailabilityCheckpoint(input.availabilityCheckpoint, input);
+      if (freshNow === undefined) return false;
+      input = { ...input, now: freshNow };
+      try { assertMergeMutation(input); } catch { return false; }
+      if (input.emailProofs?.some((proof) => proof.validUntil <= freshNow || proof.observedAt > freshNow)) return false;
+    }
     const n = input.next;
     const args: unknown[] = [
       JSON.stringify(n),
@@ -211,7 +228,7 @@ export class PostgresIdentityRecordRepository
     if (input.requireRecovery)
       where += ` AND document ? 'consentAt' AND document->>'status'=${bind(n.status)} AND document->>'status' IN('proved','reconciled') AND ((document->>'expiresAt')::bigint<=$6 OR EXISTS(SELECT 1 FROM ${table} r WHERE r.bucket='identity_operation_receipts' AND r.key IN(${table}.document->'sourceProof'->>'receiptId',${table}.document->'targetProof'->>'receiptId') AND (r.document->>'expiresAt')::bigint<=$6) OR EXISTS(SELECT 1 FROM ${table} e WHERE e.bucket='account_email_proofs' AND e.key IN($4,$5) AND (e.document->>'validUntil')::bigint<=$6))`;
     for (const p of input.sessions ?? []) {
-      where += ` AND EXISTS(SELECT 1 FROM accounts_v1.account_sessions s WHERE s.session_id=${bind(p.sessionLookupHash ?? (await hashSessionId(p.sessionId!)))} AND s.subject=${bind(p.subject)} AND hosted_metadata->>'policy'='hosted' AND (hosted_metadata->>'${p.reauthentication === false ? "authTime" : "reauthenticatedAt"}')::bigint=${bind(p.authTime)} AND expires_at>to_timestamp($6/1000.0) AND (hosted_metadata->>'absoluteExpiresAt')::bigint>$6 AND coalesce((hosted_metadata->>'identityGeneration')::integer,0)=coalesce((SELECT (g.document->>'generation')::integer FROM ${table} g WHERE g.bucket='authentication_generations' AND g.key=s.subject),0))`;
+      where += ` AND EXISTS(SELECT 1 FROM accounts_v1.account_sessions s WHERE s.session_id=${bind(sessionLookups.get(p)!)} AND s.subject=${bind(p.subject)} AND hosted_metadata->>'policy'='hosted' AND (hosted_metadata->>'${p.reauthentication === false ? "authTime" : "reauthenticatedAt"}')::bigint=${bind(p.authTime)} AND expires_at>to_timestamp($6/1000.0) AND (hosted_metadata->>'absoluteExpiresAt')::bigint>$6 AND coalesce((hosted_metadata->>'identityGeneration')::integer,0)=coalesce((SELECT (g.document->>'generation')::integer FROM ${table} g WHERE g.bucket='authentication_generations' AND g.key=s.subject),0))`;
     }
     for (const proof of input.emailProofs ?? [])
       where += ` AND EXISTS(SELECT 1 FROM ${table} e JOIN accounts_v1.accounts a ON a.subject=e.key WHERE e.bucket='account_email_proofs' AND e.key=${bind(proof.subject)} AND e.document=${bind(JSON.stringify(proof))}::jsonb AND a.email=${bind(proof.address)} AND a.email_verified=true)`;
@@ -252,19 +269,6 @@ export class PostgresIdentityRecordRepository
       where += ` AND NOT EXISTS(SELECT 1 FROM ${table} WHERE bucket='identity_merge_locks' AND key IN($4,$5) AND document->>'operationId'<>$2)`;
     if (input.reserve)
       where += ` AND (SELECT count(*) FROM(SELECT key FROM ${table} WHERE bucket='identity_merge_retry_pending' LIMIT ${bind(input.retryCapacity)} ) q)<${bind(input.retryCapacity)}`;
-    let inventoryGeneration: number | undefined;
-    if (input.reserve || input.activate) {
-      await this.create("email_candidate_inventory", "global", {
-        generation: 0,
-      });
-      inventoryGeneration =
-        (
-          await this.get<{ generation: number }>(
-            "email_candidate_inventory",
-            "global",
-          )
-        )?.generation ?? 0;
-    }
     if (input.emailProofs?.length) {
       const address = input.emailProofs[0]!.normalizedAddress;
       where += ` AND (SELECT count(*) FROM accounts_v1.accounts WHERE ${candidatePredicate(bind(address), bind(address.slice(0, address.lastIndexOf("@"))))})=2`;
@@ -274,7 +278,9 @@ export class PostgresIdentityRecordRepository
     ];
     if (inventoryGeneration !== undefined) {
       ctes.unshift(
-        `inventory_claim AS(UPDATE ${table} SET document=jsonb_set(document,'{generation}',to_jsonb((document->>'generation')::bigint+1)) WHERE bucket='email_candidate_inventory' AND key='global' AND (document->>'generation')::bigint=${bind(inventoryGeneration)} RETURNING key)`,
+        inventoryGeneration === null
+          ? `inventory_claim AS(INSERT INTO ${table}(bucket,key,document,subject,other_subject) VALUES('email_candidate_inventory','global','{"generation":1}'::jsonb,NULL,NULL) ON CONFLICT DO NOTHING RETURNING key)`
+          : `inventory_claim AS(UPDATE ${table} SET document=jsonb_set(document,'{generation}',to_jsonb((document->>'generation')::bigint+1)) WHERE bucket='email_candidate_inventory' AND key='global' AND (document->>'generation')::bigint=${bind(inventoryGeneration)} RETURNING key)`,
       );
       ctes[1] = ctes[1]!.replace(
         " RETURNING document)",
@@ -404,16 +410,12 @@ export class PostgresIdentityRecordRepository
       ctes.push(
         `unschedule_pending AS(DELETE FROM ${table} WHERE bucket='identity_merge_retry_pending' AND key=$2 AND EXISTS(SELECT 1 FROM changed) RETURNING key)`,
       );
+    const query = `WITH ${ctes.join(",")} SELECT document FROM changed`;
+    // The checkpoint and all captured expiry bounds are checked again after
+    // preparation. This is a local precommit boundary, not server execution/2PC.
+    if (input.availabilityCheckpoint !== undefined && consumeReviewedRecoveryIssuerAvailabilityCheckpoint(input.availabilityCheckpoint, input) === undefined) return false;
     try {
-      return (
-        (
-          await runQuery(
-            this.client,
-            `WITH ${ctes.join(",")} SELECT document FROM changed`,
-            args,
-          )
-        ).rows.length === 1
-      );
+      return (await runQuery(this.client, query, args)).rows.length === 1;
     } catch (e) {
       if (isConflict(e)) return false;
       throw e;

@@ -1,3 +1,4 @@
+import { readReviewedRecoveryIssuerAvailabilityCheckpoint, consumeReviewedRecoveryIssuerAvailabilityCheckpoint } from "./reviewed-recovery-issuer-availability.ts";
 import type { ReviewedRecoveryApprovalMutation } from "./reviewed-recovery-state.ts";
 import { canonicalOwnerJson, ownerContextBucket, ownerReceiptBucket, reviewedApprovalBucket, reviewedApprovalCurrentBucket, reviewedApprovalRefBucket, reviewedApprovalRefKey } from "./owner-operation-evidence.ts";
 import type {
@@ -192,6 +193,13 @@ export class MemoryIdentityRecordRepository
     const lookup = new Map<string, string>();
     for (const key of this.sessions.keys())
       lookup.set(await hashSessionId(key), key);
+    if (input.availabilityCheckpoint !== undefined) {
+      const freshNow = readReviewedRecoveryIssuerAvailabilityCheckpoint(input.availabilityCheckpoint, input);
+      if (freshNow === undefined) return false;
+      input = { ...input, now: freshNow };
+      try { assertMergeMutation(input); } catch { return false; }
+      if (input.emailProofs?.some((proof) => proof.validUntil <= freshNow || proof.observedAt > freshNow)) return false;
+    }
     const n = input.next;
     const old = this.records.get(
       this.key("identity_merge_operations", n.operationId),
@@ -386,6 +394,9 @@ export class MemoryIdentityRecordRepository
         .slice(0, input.retryCapacity!).length >= input.retryCapacity!
     )
       return false;
+    // The checkpoint and all captured expiry bounds are checked again after
+    // preparation. This is a local precommit boundary, not server execution/2PC.
+    if (input.availabilityCheckpoint !== undefined && consumeReviewedRecoveryIssuerAvailabilityCheckpoint(input.availabilityCheckpoint, input) === undefined) return false;
     // No awaits in this decision/write section: one winner consumes the proof.
     this.records.set(
       this.key("identity_merge_operations", n.operationId),

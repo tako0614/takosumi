@@ -192,6 +192,9 @@ export interface IdentityMergeMutation {
   contextReceipts?: readonly IdentityMergeContextReceipt[];
   proofReceipts?: readonly IdentityOperationReceiptRecord[];
   reserve?: boolean;
+  /** Transient verified issuer status. Never serialized; real hosted consent
+   * requires this capability. Raw unadopted self-host mutations remain optional. */
+  availabilityCheckpoint?: import("./reviewed-recovery-issuer-availability.ts").ReviewedRecoveryIssuerAvailabilityCheckpoint;
   retryCapacity?: number;
   activate?: boolean;
   quarantine?: boolean;
