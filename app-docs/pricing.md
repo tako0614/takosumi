@@ -1,132 +1,104 @@
-# Takosumi hosted service pricing
+# Takosumi Hosted pricing
 
-Takosumi hosted service は、税別 USD のプリペイドクレジット方式です。月額サブスクリプションは
-ありません。すべてのアカウントが同じ hosted-service PriceCatalog を利用し、Resource 数は
-契約ランクではなく共通の安全上限です。
+Takosumi Hosted と Takoserver のローンチ料金は税別 USD です。Free と月額プランの
+利用枠を、同じ Organization の残高から両製品で利用する方針です。
 
-## Credit billing
+> **提供状態:** 以下は採用済みのローンチ料金です。共通ログイン、Workspace、課金の
+> 切り替えと staging 検証は進行中です。このページだけで利用可能とは判断せず、
+> 認証済みの料金表示と提供状態を確認してください。Container の価格 revision も
+> 有効化前であり、既存の利用に新単価を遡って適用しません。
 
-| 操作             | 仕様                                                                 |
-| ---------------- | -------------------------------------------------------------------- |
-| 手動チャージ     | `$5` / `$10` / `$25` / `$50` / `$100` のクレジットを追加             |
-| 自動チャージ     | 初期状態は無効。残高しきい値、1回の金額、月間上限を owner が明示設定 |
-| Hosted resource | PriceCatalog の実利用額をクレジット残高から差し引く                  |
+## Plans and top-ups
 
-owner はカードや国情報を登録せず開始でき、最初に一度だけ
-`$0.25` の onboarding credit を受け取ります。credit は再付与・現金化されず、
-使い切ると正の料金が発生する操作と runtime 利用を停止し、
-Resource は削除しません。Destroy は残高なしでも実行でき、休眠による自動削除はありません。
+| プラン | 月額料金 | 毎月の利用枠 | カード |
+| --- | ---: | ---: | --- |
+| Free | `$0` | `$1.50` | 不要 |
+| `$10` plan | `$10` | `$20` | 必要 |
+| `$50` plan | `$50` | `$100` | 必要 |
 
-クレジットを追加する Checkout でカード、利用区分、請求先国を登録します。支払い方法は
-将来の自動チャージ用に保存されますが、自動チャージは owner が別途有効にするまで
-行われません。自動チャージは設定した1回の金額を超えて請求せず、月間上限を超える場合や
-決済できない場合は対象操作を backend 実行前に停止します。
+利用枠は毎月リセットします。有料プランに Free の `$1.50` を加算しません。
+top-up は支払額と同額の残高を追加し、プランの利用枠を倍増する倍率は適用しません。
+有料プラン、top-up、on-demand の利用時に支払い方法を登録します。
 
-自分の
-Provider Connection を使う外部 provider は grant の対象外で、その provider から
-直接請求されます。
+## Account, Workspace and balance
 
-## Usage and Limits
+ローンチでは `auth.takos.jp` の共通アカウントで両製品へログインし、最初のログインで
+personal Workspace を用意します。チーム、請求、環境を分ける追加 Workspace も
+共通の Workspace と membership を使います。メールアドレスの一致だけで、他の
+Workspace の権限を得ることはありません。
 
-一度限りの onboarding credit は、Takosumi hosted service が提供する resource と service の従量料金に先に充当されます。
-利用量と請求は所有アカウントに集約し、Workspace / Resource 別の内訳も確認できます。
+各 Workspace に紐づく Organization が支払い先を決めます。同じ Organization の
+Takosumi Hosted と Takoserver は一つの wallet を使い、製品ごとの二重残高を持ちません。
+利用量には発生元の Workspace と Resource を記録し、Workspace 別の内訳を表示します。
+Workspace を切り替えても、同じ Organization に属する残高や利用枠は増えません。
 
-owner-account safety ceiling は total 250 Resources、Edge/Object/KV/Queue/
-Schedule 各100、Database/Workflow/Stateful Actor 各50、Vector 25、Container 10、
-active verified domains 25 です。これは契約ランクの特典ではなく、共通の
-abuse / safety 上限です。
+## Usage prices
 
-## Usage Prices
+Cloudflare-backed の利用料金は、Takoserver が供給する versioned price revision の
+Cloudflare 従量単価の **3 倍**です。公開原価が変わっても、ブラウザがその場で料金を
+再計算することはありません。適用する revision、meter、単位、単価は認証済みの
+料金表示で確認してください。新しい revision は有効化後の利用に適用します。
 
-Hosted capacity の価格は Takosumi hosted service の versioned PriceCatalog が正本 (正とする情報) です。
-provider 公開価格は原価比較に使いますが、provider invoice を tenant 使用量の正本には
-しません。provider の共有 free tier と platform 固定費は Takosumi hosted service が吸収し、tenant ごとの
-隠れた割引にはしません。価格変更は version と effective date を持ち、過去の
-usage を再計算しません。
+供給側の料金定義は
+[Takoserver shared hosted pricing](https://github.com/tako0614/takoserver/blob/main/config/shared-hosted-pricing.json)
+が所有します。Takosumi Hosted はこの料金とプランの snapshot を表示し、別の価格表や
+商用 ledger を作りません。供給側の free tier は、上記の Free 利用枠とは別です。
+価格のない meter や未提供のサービスを、このページから有効とは扱いません。
 
-| Service                          | Billable item                         |                                                              Price |
-| -------------------------------- | ------------------------------------- | -----------------------------------------------------------------: |
-| Edge Worker                      | accepted gateway requests             |                                                  `$1.00 / million` |
-| Edge Worker                      | active Ready Resource                 |                                           `$0.09 / Resource-month` |
-| Edge Worker                      | CPU / subrequests                     |                 included (`10 CPU-ms`, `5` subrequests / dispatch) |
-| Custom Domain                    | active verified hostname              |                                           `$0.15 / hostname-month` |
-| Object Storage Standard          | storage                               |                                               `$0.0225 / GB-month` |
-| Object Storage Standard          | Class A / Class B                     |                              `$6.75 / million` / `$0.54 / million` |
-| Object Storage Infrequent Access | storage                               |                                                `$0.015 / GB-month` |
-| Object Storage Infrequent Access | Class A / Class B                     |                             `$13.50 / million` / `$1.35 / million` |
-| Object Storage Infrequent Access | retrieval                             |                                                      `$0.015 / GB` |
-| KV                               | reads                                 |                                             `$0.75 / million keys` |
-| KV                               | writes / deletes / lists              |                                             `$7.50 / million keys` |
-| KV                               | storage                               |                                                 `$0.75 / GB-month` |
-| Database                         | rows read / written                   |                                    `$0.0015` / `$1.50` per million |
-| Database                         | storage                               |                                                `$1.125 / GB-month` |
-| Queue                            | operations                            |                                     `$0.60 / million 64 KB chunks` |
-| Vector Index                     | queried dimensions                    |                                                 `$0.015 / million` |
-| Vector Index                     | stored dimensions                     |                                             `$0.075 / 100 million` |
-| Durable Workflow                 | invocation / CPU                      |                       `$0.45 / million` / `$0.03 / million CPU-ms` |
-| Durable Workflow                 | state / steps                         |                       `$0.30 / GB-month` / `$1.20 / 100,000 steps` |
-| Container                        | memory / CPU / disk                   | `$0.00000375 / GiB-s`, `$0.000030 / vCPU-s`, `$0.000000105 / GB-s` |
-| Container                        | egress: NA+EU / Oceania+KR+TW / other |                             `$0.0375` / `$0.075` / `$0.060` per GB |
-| Stateful Actor                   | requests / duration                   |                       `$0.225 / million` / `$18.75 / million GB-s` |
-| Stateful Actor                   | rows read / written                   |                                    `$0.0015` / `$1.50` per million |
-| Stateful Actor                   | SQL storage                           |                                                 `$0.30 / GB-month` |
-| AI Gateway                       | model/upstream usage                  |        approved upstream price `x 1.5` + Edge Worker gateway usage |
+### Container launch rates
 
-Object Storage の delete / abort / internet egress、preview、binding、secret設定、
-route、schedule、static asset control、observe、refresh、delete は明示的な `$0`
-meter です。ただし、それらが起動した runtime / storage usage は該当サービスの
-meter で課金されます。Workflow の state / step 価格は `2026-08-10` より前は
-`$0` catalog を使い、それ以降だけ上の価格を使います。
+Container は実行経路が変わっても同じ単価とし、Cloudflare Containers の原価を基準に
+します。以下は採用済みの追加 meter で、価格 revision の公開と有効化を待っています。
 
-Edge request は、quota と credit reservation を通り、Takosumi の永続 usage
-capture が成功した時点で「accepted」です。その後の tenant error、CPU/subrequest
-上限超過、dispatch failure も 1 accepted request として課金されます。capture より前に
-失敗した request は tenant code を実行せず課金しません。Workers Logs / invocation
-logs / Logpush は GA contract では無効です。旧 `request` / `cpu_time_us` / `subrequest` /
-`active_script_millisecond` / log meter は履歴解釈用の明示的な `$0` row で、新規請求には
-使いません。
+| Meter | 課金単位 | ローンチ単価 |
+| --- | --- | ---: |
+| CPU | vCPU-second | `$0.000060` |
+| Memory | GiB-second | `$0.0000075` |
+| Egress | GB | `$0.15` |
+| Image storage | GB-month | `$0.045` |
 
-基準原価は Cloudflare の現行公式価格です:
-[Workers for Platforms](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/reference/pricing/)、
-[R2](https://developers.cloudflare.com/r2/pricing/)、
-[KV](https://developers.cloudflare.com/kv/platform/pricing/)、
-[D1](https://developers.cloudflare.com/d1/platform/pricing/)、
-[Queues](https://developers.cloudflare.com/queues/platform/pricing/)、
-[Vectorize](https://developers.cloudflare.com/vectorize/platform/pricing/)、
-[Workflows](https://developers.cloudflare.com/workflows/reference/pricing/)、
-[Containers](https://developers.cloudflare.com/containers/pricing/)、
-[Durable Objects](https://developers.cloudflare.com/durable-objects/platform/pricing/)、
-[Cloudflare for SaaS](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/plans/)。
+CPU と memory は [Cloudflare Containers pricing](https://developers.cloudflare.com/containers/platform/pricing/)
+の従量単価を基準にします。egress は全地域で共通とし、同ページの最も高い地域単価
+`$0.05 / GB` を基準にします。image storage は
+[R2 Standard storage pricing](https://developers.cloudflare.com/r2/pricing/) の
+`$0.015 / GB-month` を基準にします。disk は今回の追加 meter に含めません。
+Container を通る Worker などの利用は、対応する有効な meter が別途適用されます。
 
-## Preview and invoice contract
+## Usage display and spending limits
 
-作成前の Preview は offering / SKU / PriceCatalog version、税区分、単価、見積、
-有効期限を返します。Apply はその exact quote だけを受け付けます。価格がない
-meter、未発効 catalog、未設定 manager、期限切れ quote は backend 実行前に
-安全側に停止します。
+利用枠の消費率を percent で表示し、80% と 95% で警告します。
+`onLimit` の初期値は `stop` で、利用枠や残高を超える消費を止めます。
+自動的に有料プランへ変更したり、後払いへ切り替えたりしません。
 
-使用量は最小単位の整数で集計してから billing unit に丸めます。小数を event
-ごとに切り上げることはありません。請求期間は変更不可な usage、reservation、
-refund / credit と Stripe invoice line が一致するまで close しません。
+| `onLimit` | 方針 |
+| --- | --- |
+| `stop` | 初期値。上限に達したら対象の消費を停止 |
+| `prepaid` | 明示的に選択した場合だけ、購入済みの残高を利用 |
+| `postpaid` | 対応・適格性を確認してから明示的に選択する後払い |
+| `on-demand` | 支払い方法と条件を確認してから明示的に選択する従量利用 |
 
-## Tax
+選択肢は認証済みの契約で有効なものだけを表示します。供給側の現行料金定義では
+`postpaid` は未対応であり、今すぐ選択できる機能ではありません。上限到達を理由に
+既存 Resource を自動削除せず、削除は作成に使った provider graph から行います。
 
-表示価格は税別です。Checkout と invoice は Stripe automatic tax を使います。
-personal-use PaaS は `txcd_10102001`、business-use PaaS は `txcd_10102000` を
-使い、customer type と所在地・tax ID を quote / invoice evidence に固定します。
-適用税率は customer location と登録状況で変わります。
+## Amount precision and tax
 
-## Spend Guard
+共通 ledger は整数の micro-USD（`$1 = 1,000,000 micro-USD`）で金額を保持します。
+たとえば Container memory は `1,000 GiB-second` あたり `7,500 micro-USD` です。
+小数の利用 event ごとに cent へ切り上げず、集計した請求額を支払い時に一度だけ
+cent へ切り上げます。税額と支払い総額は Checkout と請求書で確認してください。
 
-operator hard cap は `$25 / single authorization`、`$100 / rolling day`、
-`$500 / billing period` です。ユーザーは account / Workspace / service ごとに
-これより低い budget を設定できます。上限の引き上げは support review が必要です。
-Destroy / DELETE cleanup は、残高不足で既存 Resource を消せなくならないよう、
-原則として追加 precharge なしで実行できます。
+## App addresses
 
-## Bring your own key
+ローンチの Hosted アプリは `<name>.app.takos.jp` を使う方針です。名前は両製品で
+共通の一意な名前として予約し、Takoserver が一つの dispatch と wildcard TLS を
+所有します。現在は staging で検証中であり、本番の route 切り替えは未実施です。
+Hosted の custom domain はローンチ後の対象です。セルフホストで使う
+CustomDomain の選択肢は維持します。
 
-自分の Provider Connection で接続した外部 provider は Takosumi hosted service が
-metering / spend-gate しません。請求と provider free tier はその provider との
-契約に従います。Takosumi の usage event、invoice projection、catalog、status に
-provider credential、API key、DSN、AI upstream key、payment secret は保存しません。
+## Bring your own provider
+
+自分の Provider Connection で利用する外部 provider は、その provider の契約で
+直接請求されます。上記の Hosted 利用枠や 3 倍ルールを外部 provider の請求へ
+重ねて適用しません。セルフホストの Takosumi ソフトウェアに利用料はありません。
+実行環境と外部 provider の費用は、それぞれの供給元へ支払います。
