@@ -840,7 +840,7 @@ test("local-substrate upgrades a persisted exact-v3 Accounts D1 through the shar
       artifactPath,
     );
     expect(report).toMatchObject({
-      applied: [4],
+      applied: [4, 5],
       activationDigestBackfill: {
         inventoryCount: 205,
         candidateCount: 205,
@@ -848,11 +848,11 @@ test("local-substrate upgrades a persisted exact-v3 Accounts D1 through the shar
         missingAfter: 0,
       },
     });
-    expect(batchSizes).toEqual([2, 2, 2, 4]);
+    expect(batchSizes).toEqual([2, 2, 2, 4, 7]);
     const state = await readD1AccountsMigrationState(database, catalog);
     expect(state).toMatchObject({
-      headVersion: 4,
-      exactPrefixLength: 5,
+      headVersion: 5,
+      exactPrefixLength: 6,
       missingActivationDigestCount: 0,
       issues: [],
     });
@@ -969,7 +969,7 @@ test("local-substrate reconciles lost acknowledgement, restarts, and rejects pol
       { getD1Database: () => Promise.resolve(database) },
       artifactPath,
     );
-    expect(restarted).toMatchObject({ applied: [], current: 4 });
+    expect(restarted).toMatchObject({ applied: [], current: 5 });
 
     const canonicalArtifact = JSON.parse(await readFile(artifactPath, "utf8"));
     const tamperedArtifacts = [

@@ -1,3 +1,4 @@
+-- Migration: 20261015000072_workspace_billing_bindings
 -- Additive protected-data migration; Postgres catalog v119, Control D1 v72.
 -- Independent retained references: no Workspace/Account FK or cascade.
 create table if not exists takosumi_workspace_billing_intents (
