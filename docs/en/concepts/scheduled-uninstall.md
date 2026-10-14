@@ -1,13 +1,16 @@
 # Scheduled Capsule uninstall
 
-A PAT that expires at or before a new request's `scheduledDestroyAt` is refused
-at admission with `409 failed_precondition` and
-`details.reason: capsule_uninstall_pat_deadline_unverified`. Equal timestamps
-are also refused. If Accounts cannot confirm that the pinned PAT will be valid
-at the deadline, Capsule state, the reservation, and Activity stay unchanged.
-A warning alone would persist a predictably blocked request, so this follows
-the OAuth refusal policy. Use a browser session, a non-expiring PAT, or one
-valid beyond the deadline. The same expiry condition applies with zero grace.
+A new request requires its pinned PAT to expire at least six hours after
+`scheduledDestroyAt`. A PAT expiring exactly at `scheduledDestroyAt + 6h` is
+accepted; one expiring one millisecond earlier is refused with
+`409 failed_precondition` and
+`details.reason: capsule_uninstall_pat_deadline_unverified`. If Accounts cannot
+confirm this margin, Capsule state, the reservation, and Activity stay unchanged.
+The six-hour reserve allows for finalizer and provider-dispatch delay. It does
+not guarantee execution if dispatch takes longer or the PAT is revoked; the
+finalizer rechecks the same PAT at each boundary. Use a browser session, a
+non-expiring PAT, or one valid through at least six hours after the deadline.
+The same six-hour margin applies with zero grace.
 Replaying an existing reservation returns the original request without
 replacing its deadline or requester. Admission does not guarantee later
 execution: the same PAT must remain valid through actual provider dispatch.

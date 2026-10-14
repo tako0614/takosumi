@@ -47,7 +47,10 @@ import {
   scheduledDestroyRunId,
 } from "../../../../core/domains/capsules/uninstall_finalize.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
-import { UNINSTALL_AUTHORIZATION_REASONS } from "../../../../core/domains/capsules/uninstall_authorization.ts";
+import {
+  UNINSTALL_AUTHORIZATION_REASONS,
+  UNINSTALL_PAT_EXPIRY_MARGIN_MS,
+} from "../../../../core/domains/capsules/uninstall_authorization.ts";
 import { InMemoryAccountsStore, validateUninstallRequester } from "@takosjp/takosumi-accounts-service";
 import { CAPSULE_LIFECYCLE_COMMAND_CAPABILITY } from "takosumi-contract";
 import {
@@ -1143,7 +1146,7 @@ for (const [label, open] of durableStores) {
 }
 
 for (const [label, open] of durableStores) {
-  test(`${label}: a PAT admitted just beyond the deadline blocks on delayed finalization and needs cancel/reschedule`, async () => {
+  test(`${label}: a PAT admitted with the six-hour margin blocks on delayed finalization and needs cancel/reschedule`, async () => {
     const { store, close } = await open();
     try {
       const h = await appliedCapsule({ store });
@@ -1159,14 +1162,17 @@ for (const [label, open] of durableStores) {
       const token = {
         tokenId: "pat_delayed_uninstall", tokenPrefix: "fixture", subject,
         name: "scheduled", scopes: ["write" as const], workspaceId,
-        createdAt: h.clock.ms, expiresAt: h.clock.ms + 7 * DAY_MS + 1,
+        createdAt: h.clock.ms,
+        expiresAt: h.clock.ms + 7 * DAY_MS + UNINSTALL_PAT_EXPIRY_MARGIN_MS + 1,
       };
       accounts.savePersonalAccessToken("fixture-original-pat", token);
       h.authorization.validate = (requester, workspace, validAtMs = h.clock.ms) =>
         validateUninstallRequester(accounts, requester, workspace, validAtMs);
       const requester = { subject, grant: { kind: "personal-access-token" as const, tokenId: token.tokenId } };
       const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { actor: subject, requester });
-      expect(Date.parse(scheduled.uninstall!.scheduledDestroyAt)).toBe(token.expiresAt - 1);
+      expect(Date.parse(scheduled.uninstall!.scheduledDestroyAt)).toBe(
+        token.expiresAt - UNINSTALL_PAT_EXPIRY_MARGIN_MS - 1,
+      );
 
       // No record mutation: actual time reaches expiry before this delayed tick.
       h.clock.ms = token.expiresAt;

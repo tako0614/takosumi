@@ -1190,6 +1190,311 @@ test("Accounts initialization releases timed-out waiters and observes late rejec
   }
 });
 
+test("Accounts initialization caps abandoned attempts and recovers after obsolete outcomes", async () => {
+  for (const lateOutcome of ["fulfilled", "rejected"] as const) {
+    const delayedDb = new PendingAccountsSchemaReadD1(
+      await versionedAccountsDb(),
+    );
+    const worker = createCloudflareWorker();
+    const workerEnv = env({
+      TAKOSUMI_ACCOUNTS_DB: delayedDb,
+      TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+      TAKOSUMI_ACCOUNTS_ISSUER: "http://app.example.test",
+      TAKOSUMI_ACCOUNT_SESSION_HASH_SALT: "accounts-abandoned-cap-test-salt",
+    });
+    const request = () =>
+      new Request("http://app.example.test/api/v1/workspaces");
+    const warnings: string[] = [];
+    const flushUntil = async (predicate: () => boolean): Promise<void> => {
+      for (let attempt = 0; attempt < 100 && !predicate(); attempt += 1) {
+        await flushMicrotasks();
+        await Bun.sleep(1);
+      }
+    };
+    const warnSpy = spyOn(console, "warn").mockImplementation((value) => {
+      if (typeof value === "string") warnings.push(value);
+    });
+    jest.useFakeTimers();
+    let virtualNowMs = 0;
+    const performanceNowSpy = spyOn(performance, "now").mockImplementation(
+      () => virtualNowMs,
+    );
+    const advanceTime = (durationMs: number): void => {
+      virtualNowMs += durationMs;
+      jest.advanceTimersByTime(durationMs);
+    };
+    try {
+      const first = worker.fetch(request(), workerEnv);
+      await flushMicrotasks();
+      advanceTime(5_000);
+      await flushMicrotasks();
+      expect((await first).status).toBe(503);
+
+      // Three expired attempts are displaced over successive 30s windows.
+      // The fourth remains the current initializer while the cap is full.
+      for (let replacement = 1; replacement <= 3; replacement += 1) {
+        advanceTime(30_000);
+        const concurrentPromise = Promise.all(
+          Array.from({ length: 12 }, () => worker.fetch(request(), workerEnv)),
+        );
+        advanceTime(5_000);
+        await flushMicrotasks();
+        const concurrent = await concurrentPromise;
+        expect(concurrent.map((response) => response.status)).toEqual(
+          Array(12).fill(503),
+        );
+        expect(delayedDb.schemaReadCount).toBe(replacement + 1);
+      }
+
+      const capacityWaitUntilPromises: Promise<unknown>[] = [];
+      const capacityContext = {
+        waitUntil(promise: Promise<unknown>): void {
+          expect(this).toBe(capacityContext);
+          capacityWaitUntilPromises.push(promise);
+        },
+      };
+      advanceTime(30_000);
+      const saturatedPromise = Promise.all(
+        Array.from({ length: 12 }, () =>
+          worker.fetch(request(), workerEnv, capacityContext),
+        ),
+      );
+      advanceTime(5_000);
+      await flushMicrotasks();
+      const saturated = await saturatedPromise;
+      expect(saturated.map((response) => response.status)).toEqual(
+        Array(12).fill(503),
+      );
+      expect(await saturated[0]?.json()).toEqual({
+        error: "accounts_handler_initialization_unavailable",
+        error_description: "Accounts is temporarily unavailable.",
+      });
+      expect(saturated[0]?.headers.get("cache-control")).toBe("no-store");
+      expect(saturated[0]?.headers.get("retry-after")).toBe("1");
+      expect(saturated[0]?.headers.get("server-timing")).toBe(
+        "tk_accounts_init;dur=0.0",
+      );
+      expect(capacityWaitUntilPromises).toHaveLength(12);
+      expect(capacityWaitUntilPromises.every((promise) =>
+        promise === capacityWaitUntilPromises[0],
+      )).toBe(true);
+      expect(
+        warnings.filter((warning) =>
+          warning.includes('"stage":"abandonment_capacity"'),
+        ),
+      ).toHaveLength(12);
+      expect(delayedDb.schemaReadCount).toBe(4);
+      expect(
+        warnings
+          .filter((warning) =>
+            warning.includes('"event":"accounts_handler_initialization_abandoned"'),
+          )
+          .map((warning) => JSON.parse(warning).abandonedInits),
+      ).toEqual([1, 2, 3]);
+      expect(
+        warnings
+          .filter((warning) =>
+            warning.includes('"event":"accounts_handler_initialization_abandoned"'),
+          )
+          .map((warning) => JSON.parse(warning).abandonedInitsTotal),
+      ).toEqual([1, 2, 3]);
+      expect(
+        warnings.some((warning) =>
+          warning.includes('"event":"accounts_handler_initialization_unavailable"') &&
+          warning.includes('"stage":"abandonment_capacity"') &&
+          warning.includes('"abandonedInits":3'),
+        ),
+      ).toBe(true);
+      jest.useRealTimers();
+      // Settling any obsolete attempt returns a slot, regardless of outcome.
+      if (lateOutcome === "fulfilled") delayedDb.releaseSchemaRead(0);
+      else delayedDb.rejectSchemaRead(new Error("obsolete schema failure"), 0);
+      await flushUntil(() =>
+        warnings.some((warning) =>
+          warning.includes('"event":"accounts_handler_abandoned_initialization_settled"'),
+        ),
+      );
+      expect(
+        warnings
+          .filter((warning) =>
+            warning.includes('"event":"accounts_handler_abandoned_initialization_settled"'),
+          )
+          .map((warning) => JSON.parse(warning).abandonedInits),
+      ).toEqual([2]);
+
+      // The slot freed by the obsolete settlement permits exactly one new
+      // single-flight initializer while other expired work remains pending.
+      const recoveryWaitUntilPromises: Promise<unknown>[] = [];
+      const recoveryContext = {
+        waitUntil(promise: Promise<unknown>): void {
+          recoveryWaitUntilPromises.push(promise);
+        },
+      };
+      const recoveryPromises = Array.from({ length: 12 }, () =>
+        worker.fetch(request(), workerEnv, recoveryContext),
+      );
+      await flushUntil(() => delayedDb.schemaReadCount === 5);
+      expect(delayedDb.schemaReadCount).toBe(5);
+      expect(recoveryWaitUntilPromises).toHaveLength(12);
+      expect(recoveryWaitUntilPromises.every((promise) =>
+        promise === recoveryWaitUntilPromises[0],
+      )).toBe(true);
+
+      // Another obsolete settlement must not resolve callers on the current
+      // flight or publish its handler into the cache.
+      if (lateOutcome === "fulfilled") delayedDb.releaseSchemaRead(1);
+      else delayedDb.rejectSchemaRead(new Error("another obsolete failure"), 1);
+      await flushUntil(() =>
+        warnings.filter((warning) =>
+          warning.includes('"event":"accounts_handler_abandoned_initialization_settled"'),
+        ).length >= 2,
+      );
+      expect(
+        await Promise.race([
+          recoveryPromises[0].then(() => "settled"),
+          Promise.resolve("pending"),
+        ]),
+      ).toBe("pending");
+      delayedDb.releaseSchemaRead(4);
+      expect((await Promise.all(recoveryPromises)).map((response) => response.status)).toEqual(
+        Array(12).fill(401),
+      );
+      expect((await worker.fetch(request(), workerEnv)).status).toBe(401);
+      delayedDb.releaseSchemaRead(2);
+      delayedDb.releaseSchemaRead(3);
+      await flushUntil(() =>
+        warnings.filter((warning) =>
+          warning.includes('"event":"accounts_handler_abandoned_initialization_settled"'),
+        ).length >= 4,
+      );
+      expect(
+        warnings
+          .filter((warning) =>
+            warning.includes('"event":"accounts_handler_abandoned_initialization_settled"'),
+          )
+          .map((warning) => JSON.parse(warning).abandonedInits),
+      ).toEqual([2, 2, 1, 0]);
+      expect(
+        warnings
+          .filter((warning) =>
+            warning.includes('"event":"accounts_handler_abandoned_initialization_settled"'),
+          )
+          .map((warning) => JSON.parse(warning).abandonedInitsTotal),
+      ).toEqual([3, 4, 4, 4]);
+      expect(
+        warnings.every((warning) =>
+          !warning.includes("accounts-abandoned-cap-test-salt") &&
+          !warning.includes("app.example.test") &&
+          !warning.includes("obsolete schema failure"),
+        ),
+      ).toBe(true);
+    } finally {
+      jest.useRealTimers();
+      performanceNowSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  }
+});
+
+test("current Accounts initialization recovers while abandoned-attempt capacity is full", async () => {
+  const delayedDb = new PendingAccountsSchemaReadD1(
+    await versionedAccountsDb(),
+  );
+  const worker = createCloudflareWorker();
+  const workerEnv = env({
+    TAKOSUMI_ACCOUNTS_DB: delayedDb,
+    TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+    TAKOSUMI_ACCOUNTS_ISSUER: "http://app.example.test",
+    TAKOSUMI_ACCOUNT_SESSION_HASH_SALT: "accounts-current-cap-test-salt",
+  });
+  const request = () =>
+    new Request("http://app.example.test/api/v1/workspaces");
+  const warnings: string[] = [];
+  const warnSpy = spyOn(console, "warn").mockImplementation((value) => {
+    if (typeof value === "string") warnings.push(value);
+  });
+  jest.useFakeTimers();
+  let virtualNowMs = 0;
+  const performanceNowSpy = spyOn(performance, "now").mockImplementation(
+    () => virtualNowMs,
+  );
+  const advanceTime = (durationMs: number): void => {
+    virtualNowMs += durationMs;
+    jest.advanceTimersByTime(durationMs);
+  };
+  try {
+    const first = worker.fetch(request(), workerEnv);
+    await flushMicrotasks();
+    advanceTime(5_000);
+    expect((await first).status).toBe(503);
+    for (let replacement = 1; replacement <= 3; replacement += 1) {
+      advanceTime(30_000);
+      const pending = worker.fetch(request(), workerEnv);
+      advanceTime(5_000);
+      expect((await pending).status).toBe(503);
+      expect(delayedDb.schemaReadCount).toBe(replacement + 1);
+    }
+
+    advanceTime(30_000);
+    const saturationTasks: Promise<unknown>[] = [];
+    const context = {
+      waitUntil(promise: Promise<unknown>): void {
+        saturationTasks.push(promise);
+      },
+    };
+    const refused = await worker.fetch(request(), workerEnv, context);
+    expect(refused.status).toBe(503);
+    expect(await refused.json()).toEqual({
+      error: "accounts_handler_initialization_unavailable",
+      error_description: "Accounts is temporarily unavailable.",
+    });
+    expect(refused.headers.get("server-timing")).toBe(
+      "tk_accounts_init;dur=0.0",
+    );
+    expect(saturationTasks).toHaveLength(1);
+    expect(delayedDb.schemaReadCount).toBe(4);
+    expect(
+      warnings.some((warning) =>
+        warning.includes('"stage":"abandonment_capacity"') &&
+        warning.includes('"abandonedInits":3') &&
+        warning.includes('"abandonedInitsTotal":3'),
+      ),
+    ).toBe(true);
+
+    jest.useRealTimers();
+    delayedDb.releaseSchemaRead(3);
+    await saturationTasks[0];
+    expect((await worker.fetch(request(), workerEnv)).status).toBe(401);
+    expect(delayedDb.schemaReadCount).toBe(4);
+
+    delayedDb.releaseSchemaRead(0);
+    delayedDb.releaseSchemaRead(1);
+    delayedDb.releaseSchemaRead(2);
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await flushMicrotasks();
+      if (
+        warnings.filter((warning) =>
+          warning.includes('"event":"accounts_handler_abandoned_initialization_settled"'),
+        ).length === 3
+      ) {
+        break;
+      }
+      await Bun.sleep(1);
+    }
+    expect(
+      warnings
+        .filter((warning) =>
+          warning.includes('"event":"accounts_handler_abandoned_initialization_settled"'),
+        )
+        .map((warning) => JSON.parse(warning).abandonedInits),
+    ).toEqual([2, 1, 0]);
+  } finally {
+    jest.useRealTimers();
+    performanceNowSpy.mockRestore();
+    warnSpy.mockRestore();
+  }
+});
+
 for (const mode of ["identity", "control"] as const) {
   const pathname =
     mode === "identity"

@@ -1,6 +1,6 @@
 # Capsule の予約アンインストール
 
-PAT の有効期限が新しい予約の `scheduledDestroyAt` 以前の場合、予約時に `409 failed_precondition` と `details.reason: capsule_uninstall_pat_deadline_unverified` が返ります。同時刻に失効する場合も拒否します。Accounts が固定 PAT の期限時点での有効性を確認できない場合も、Capsule の状態・予約・Activity を変更しません。警告だけでは必ず停止する予約を保存してしまうため、OAuth と同じく予約前の拒否を選んでいます。ブラウザー session、無期限 PAT、予約期限より後まで有効な PAT を使ってください。猶予 0 日でも同じ期限条件を適用します。既存予約の再送は元の予約を返し、期限や requester を差し替えません。受付済みでも、実際の provider dispatch まで同じ PAT が有効であり続ける必要があります。
+新しい予約では、固定 PAT の有効期限が `scheduledDestroyAt` の 6 時間後以降である必要があります。`scheduledDestroyAt + 6h` と同時に失効する PAT は受け付け、それより 1ms 早く失効する PAT は `409 failed_precondition` と `details.reason: capsule_uninstall_pat_deadline_unverified` で拒否します。Accounts がこの条件を確認できない場合も、Capsule の状態・予約・Activity を変更しません。この 6 時間は finalizer や provider dispatch の遅延に備える予約時の余裕です。実際の dispatch がさらに遅れた場合や、PAT が revoke された場合は実行を保証せず、finalizer は各境界で同じ PAT を再確認します。ブラウザー session、無期限 PAT、予約期限より少なくとも 6 時間後まで有効な PAT を使ってください。猶予 0 日でも同じ 6 時間の余裕を適用します。既存予約の再送は元の予約を返し、期限や requester を差し替えません。
 
 `POST /api/v1/capsules/{capsuleId}/uninstall` は、適用済み Capsule を `uninstalled` にして、後で破棄する予約を作ります。猶予期間中は provider の resource とデータが残り、課金も続きます。OSS の既定猶予期間は 7 日です。現在の Workspace owner または admin は、`uninstall.phase` が `scheduled` で teardown が実行中・完了済みでない場合、`POST /api/v1/capsules/{capsuleId}/cancel-uninstall` で予約を取り消せます。`phase` が `destroying` の場合は、予約が停止済み (`uninstall.blockedReason` が設定済み) で、runtime safety が未登録または `safe` の場合だけ取り消せます。承認済み Plan があるだけ、または provider dispatch 前という理由だけでは取り消せません。外部 lifecycle/provider 操作が始まっていれば取り消さず、結果を確認して認可済みの forward repair を行います。
 
