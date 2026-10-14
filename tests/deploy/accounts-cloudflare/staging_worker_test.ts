@@ -68,6 +68,31 @@ test("stage entry mounts the guarded issuer portal with an in-process provider r
   const html=await result.text();expect(html).toContain("Continue with Google");expect(html).toContain("Continue with GitHub");expect(paths).toEqual(["/api/v1/auth/providers"]);
 });
 
+test("stage context confirmation is schema-gated and requires its issuer browser cookies", async () => {
+  const path = "/identity-merges/imrg_11111111-1111-4111-8111-111111111111/contexts";
+  let schemaCalls = 0;
+  let accountCalls = 0;
+  const worker = createAuthStagingWorker({
+    verifySchema: async () => { schemaCalls++; },
+    accounts: { async fetch() { accountCalls++; return Response.json({}); } },
+  });
+  const result = await worker.fetch(request(path), env);
+  expect(result.status).toBe(401);
+  expect(result.headers.get("content-security-policy")).toContain("form-action 'self'");
+  expect(result.headers.get("cache-control")).toBe("no-store");
+  expect(schemaCalls).toBe(1);
+  expect(accountCalls).toBe(0);
+  const unavailable = createAuthStagingWorker({
+    verifySchema: async () => { throw new Error("fixture_control72"); },
+    accounts: { async fetch() { accountCalls++; return Response.json({}); } },
+  });
+  expect((await unavailable.fetch(request(path), env)).status).toBe(503);
+  expect(accountCalls).toBe(0);
+  expect((await worker.fetch(new Request(`https://auth.takos.jp${path}`), env)).status).toBe(404);
+  expect((await worker.fetch(request("/identity-merges/other/contexts"), env)).status).toBe(404);
+  expect(schemaCalls).toBe(1);
+});
+
 test("scheduled retry uses one per-env factory and refuses prod, unexpected cron or failed schema",async()=>{
   let schemaCalls=0,factoryCalls=0,batches=0;
   const invocations:(IdentityMergeRetryScheduledInvocation|undefined)[]=[];

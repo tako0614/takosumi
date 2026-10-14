@@ -329,7 +329,9 @@ function patternExpression(
   if (first === undefined) return undefined;
   let value = first;
   let index = start + 1;
-  while (tokens[index]?.kind === "symbol" && tokens[index].value === "||") {
+  while (true) {
+    const token = tokens[index];
+    if (token?.kind !== "symbol" || token.value !== "||") break;
     const next = patternAtom(tokens[index + 1], bound);
     if (next === undefined) break;
     value += next;

@@ -1,3 +1,4 @@
+import { acceptIsolatedIdentityContexts, isolatedContextReconciler } from "../fixtures/identity-context-fixture.ts";
 import { expect, test } from "bun:test";
 import {
   InMemoryAccountsStore,
@@ -127,7 +128,8 @@ async function proved(store: AccountsStore, session: AccountSessionRecord, recei
     await store.createIdentityOperationReceipt!(receipt);
     operation = await proveIdentityMerge({ store, operation, session: { ...session, subject }, receiptId: receipt.receiptId, now: initialNow });
   }
-  return operation;
+  // Isolated context owner: real issuer sessions perform both acceptance legs.
+  return await acceptIsolatedIdentityContexts(store, operation, initialNow);
 }
 
 function acknowledgement(operation: IdentityMergeOperation, now = initialNow): IdentityMergeAcknowledgements {
@@ -151,6 +153,7 @@ for (const kind of ["memory", "d1"] as const) {
     let complete = false;
     const ownerCalls: string[] = [];
     const reconciler: IdentityMergeReconciler = {
+      ...isolatedContextReconciler(f.store, initialNow),
       reconcile: async (operation) => {
         ownerCalls.push(operation.operationId);
         return complete ? acknowledgement(operation) : { ...acknowledgement(operation), consumerIntentCustody: "" };
@@ -184,7 +187,7 @@ test("expired consent records reviewed recovery without activating or unfencing"
   const f = await fixture("d1");
   let now = initialNow;
   let calls = 0;
-  const reconciler = { reconcile: async (operation: IdentityMergeOperation) => { calls++; return acknowledgement(operation); } };
+  const reconciler = { ...isolatedContextReconciler(f.store, initialNow), reconcile: async (operation: IdentityMergeOperation) => { calls++; return acknowledgement(operation); } };
   const service = createIdentityMergeRetryService({ store: f.store, reconciler, stage, assertOwnerReadiness: async () => true, now: () => now });
   const operation = await consentIdentityMerge({ store: f.store, operation: await proved(f.store, f.session), session: f.session, consent: true, reconciler, retryCapability: service, now });
   const generation = await f.store.getAccountAuthenticationGeneration!(sourceSubject);
@@ -206,7 +209,7 @@ test("absence or failure of actual owner readiness rejects consent before any lo
   for (const readiness of [undefined, async () => false, async () => { throw new Error("private-owner-detail"); }]) {
     const f = await fixture();
     const operation = await proved(f.store, f.session);
-    const reconciler = { reconcile: async () => undefined };
+    const reconciler = { ...isolatedContextReconciler(f.store, initialNow), reconcile: async () => undefined };
     const service = createIdentityMergeRetryService({ store: f.store, reconciler, stage, assertOwnerReadiness: readiness, now: () => initialNow });
     await expect(consentIdentityMerge({ store: f.store, operation, session: f.session, consent: true, reconciler, retryCapability: service, now: initialNow })).rejects.toThrow("merge_retry_unavailable");
     expect(await f.store.isAccountAuthenticationFenced!(sourceSubject)).toBe(false);
@@ -219,7 +222,7 @@ test("absence or failure of actual owner readiness rejects consent before any lo
 test("an earlier email-evidence deadline requires reviewed recovery while the operation itself is fresh", async () => {
   const f = await fixture("d1");
   let now = initialNow;
-  const reconciler = { reconcile: async (operation: IdentityMergeOperation) => acknowledgement(operation, now) };
+  const reconciler = { ...isolatedContextReconciler(f.store, initialNow), reconcile: async (operation: IdentityMergeOperation) => acknowledgement(operation, now) };
   const service = createIdentityMergeRetryService({ store: f.store, reconciler, stage, assertOwnerReadiness: async () => true, now: () => now });
   const operation = await consentIdentityMerge({ store: f.store, operation: await proved(f.store, f.session), session: f.session, consent: true, reconciler, retryCapability: service, now });
   const prior = await f.store.findAccountEmailProof!(sourceSubject);
@@ -238,7 +241,7 @@ test("concurrent replicas claim one durable poll lease and call the same operati
   const entered = new Promise<void>((resolve) => { started = resolve; });
   const wait = new Promise<void>((resolve) => { release = resolve; });
   let calls = 0;
-  const reconciler = { reconcile: async (operation: IdentityMergeOperation) => { calls++; started(); await wait; return acknowledgement(operation); } };
+  const reconciler = { ...isolatedContextReconciler(f.store, initialNow), reconcile: async (operation: IdentityMergeOperation) => { calls++; started(); await wait; return acknowledgement(operation); } };
   const first = createIdentityMergeRetryService({ store: f.store, reconciler, stage, assertOwnerReadiness: async () => true, now: () => initialNow });
   const operation = await consentIdentityMerge({ store: f.store, operation: await proved(f.store, f.session), session: f.session, consent: true, reconciler, retryCapability: first, now: initialNow });
   const second = createIdentityMergeRetryService({ store: new D1AccountsStore(f.db as unknown as D1Database), reconciler, stage, assertOwnerReadiness: async () => true, now: () => initialNow });
@@ -265,7 +268,7 @@ test("a superseded lease cannot clear the replacement lease or activate the oper
   // The real owner contract is idempotent under the immutable operation ID.
   // Its reviewed result is stable even if a crashed caller outlives its lease.
   const ownerResults = new Map<string, IdentityMergeAcknowledgements>();
-  const reconciler = { reconcile: async (operation: IdentityMergeOperation) => {
+  const reconciler = { ...isolatedContextReconciler(f.store, initialNow), reconcile: async (operation: IdentityMergeOperation) => {
     const index = contexts.length;
     contexts.push(structuredClone(operation));
     if (!ownerResults.has(operation.operationId)) ownerResults.set(operation.operationId, acknowledgement(operation, now));
@@ -300,7 +303,7 @@ test("over 500 terminal history records do not delay a newly consented operation
   const f = await fixture("d1");
   const template = await proved(f.store, f.session);
   for (let index = 0; index < 504; index++) await f.store.createIdentityMergeOperation!({ ...template, operationId: `imrg_history_${String(index).padStart(3, "0")}`, status: "active" });
-  const reconciler = { reconcile: async (operation: IdentityMergeOperation) => acknowledgement(operation) };
+  const reconciler = { ...isolatedContextReconciler(f.store, initialNow), reconcile: async (operation: IdentityMergeOperation) => acknowledgement(operation) };
   const service = createIdentityMergeRetryService({ store: f.store, reconciler, stage, assertOwnerReadiness: async () => true, now: () => initialNow });
   const operation = await consentIdentityMerge({ store: f.store, operation: template, session: f.session, consent: true, reconciler, retryCapability: service, now: initialNow });
   expect(await service.runBatch()).toMatchObject({ scanned: 1, activated: 1 });
@@ -337,7 +340,7 @@ test("an unknown owner ACK times out without activating and cannot retry within 
   let release!: (ack: IdentityMergeAcknowledgements) => void;
   const held = new Promise<IdentityMergeAcknowledgements>((resolve) => { release = resolve; });
   let calls = 0;
-  const reconciler = { reconcile: async (operation: IdentityMergeOperation) => {
+  const reconciler = { ...isolatedContextReconciler(f.store, initialNow), reconcile: async (operation: IdentityMergeOperation) => {
     calls++;
     return calls === 1 ? held : acknowledgement(operation, now);
   } };
@@ -357,7 +360,7 @@ test("an unknown owner ACK times out without activating and cannot retry within 
 test("saturated pending capacity rejects new consent before reserving either account", async () => {
   const f = await fixture("d1");
   const operation = await proved(f.store, f.session);
-  const reconciler = { reconcile: async () => undefined };
+  const reconciler = { ...isolatedContextReconciler(f.store, initialNow), reconcile: async () => undefined };
   const service = createIdentityMergeRetryService({ store: f.store, reconciler, stage, assertOwnerReadiness: async () => true, now: () => initialNow });
   expect(service.pendingCapacity).toBe(15);
   for (let index = 0; index < service.pendingCapacity; index++) {
@@ -394,7 +397,7 @@ test("owner readiness receives a cloned operation and cannot edit its authority 
 test("near-expiry dual proofs refuse consent while both issuer accounts remain usable", async () => {
   const f = await fixture("d1");
   const operation = await proved(f.store, f.session, initialNow + 100_000);
-  const reconciler = { reconcile: async () => undefined };
+  const reconciler = { ...isolatedContextReconciler(f.store, initialNow), reconcile: async () => undefined };
   const service = createIdentityMergeRetryService({ store: f.store, stage, reconciler, assertOwnerReadiness: async () => true, now: () => initialNow });
   await expect(consentIdentityMerge({ store: f.store, operation, session: f.session, consent: true, reconciler, retryCapability: service, now: initialNow })).rejects.toThrow("merge_retry_unavailable");
   expect(await f.store.isAccountAuthenticationFenced!(sourceSubject)).toBe(false);
@@ -407,7 +410,7 @@ for (const kind of ["memory", "d1"] as const) {
     const f = await fixture(kind, false);
     let now = initialNow;
     const operation = await proved(f.store, f.session);
-    const reconciler = { reconcile: async () => undefined };
+    const reconciler = { ...isolatedContextReconciler(f.store, initialNow), reconcile: async () => undefined };
     const service = createIdentityMergeRetryService({ store: f.store, stage, reconciler, assertOwnerReadiness: async () => true, now: () => now });
     const consent = () => consentIdentityMerge({ store: f.store, operation, session: f.session, consent: true, reconciler, retryCapability: service, now });
     await expect(consent()).rejects.toThrow("merge_retry_unavailable");
@@ -429,7 +432,7 @@ for (const kind of ["memory", "d1"] as const) {
 test("stale, future, foreign-version and foreign-authority heartbeat cannot reserve accounts", async () => {
   const f = await fixture("d1");
   const operation = await proved(f.store, f.session);
-  const reconciler = { reconcile: async () => undefined };
+  const reconciler = { ...isolatedContextReconciler(f.store, initialNow), reconcile: async () => undefined };
   for (const context of [
     { runtimeContext, now: () => initialNow + 60_001 },
     { runtimeContext, now: () => initialNow - 60_001 },
@@ -458,7 +461,7 @@ test("legacy pending retries and expiry recovery run without any heartbeat", asy
     const f = await fixture("d1", false);
     let now = initialNow;
     let complete = false;
-    const reconciler = { reconcile: async (operation: IdentityMergeOperation) => complete ? acknowledgement(operation, now) : undefined };
+    const reconciler = { ...isolatedContextReconciler(f.store, initialNow), reconcile: async (operation: IdentityMergeOperation) => complete ? acknowledgement(operation, now) : undefined };
     const operation = await consentIdentityMerge({
       store: f.store, operation: await proved(f.store, f.session), session: f.session, consent: true, reconciler,
       retryCapability: { pendingCapacity: 15, assertAvailable: async () => {} }, now,
@@ -494,7 +497,7 @@ test("failed execution preserves an older heartbeat and never fabricates its ren
 
 test("a failed owner attempt returns only bounded status and cannot mint a successful heartbeat", async () => {
   const f = await fixture("d1", false);
-  const reconciler = { reconcile: async () => { throw new Error("private_owner_failure"); } };
+  const reconciler = { ...isolatedContextReconciler(f.store, initialNow), reconcile: async () => { throw new Error("private_owner_failure"); } };
   await consentIdentityMerge({
     store: f.store, operation: await proved(f.store, f.session), session: f.session, consent: true, reconciler,
     retryCapability: { pendingCapacity: 15, assertAvailable: async () => {} }, now: initialNow,

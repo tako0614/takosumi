@@ -638,6 +638,13 @@ export class InMemoryAccountsStore implements AccountsStore {
   listIdentityMergeOperations(input: {after?:string;limit:number}): Promise<import("./identity-state.ts").IdentityMergeRetryPage> { return this.#hosted.listIdentityMergeOperations(input); }
   findIdentityMergeRetryCheckpoint(key:string):Promise<import("./identity-state.ts").IdentityMergeRetryCheckpoint|undefined>{return this.#hosted.findIdentityMergeRetryCheckpoint(key);}
   compareAndSetIdentityMergeRetryCheckpoint(input:import("./identity-state.ts").IdentityMergeRetryCheckpointMutation):Promise<boolean>{return this.#hosted.compareAndSetIdentityMergeRetryCheckpoint(input);}
+  createCredentialUnlinkAuthorityTicket(record:import("./identity-context-state.ts").CredentialUnlinkAuthorityTicket):Promise<boolean>{return this.#hosted.createCredentialUnlinkAuthorityTicket(record);}
+  findCredentialUnlinkAuthorityTicket(operationId:string):Promise<import("./identity-context-state.ts").CredentialUnlinkAuthorityTicket|undefined>{return this.#hosted.findCredentialUnlinkAuthorityTicket(operationId);}
+  createIdentityMergeContextPlan(record:import("./identity-context-state.ts").IdentityMergeContextPlanRecord):Promise<boolean>{return this.#hosted.createIdentityMergeContextPlan(record);}
+  findIdentityMergeContextPlan(planId:string):Promise<import("./identity-context-state.ts").IdentityMergeContextPlanRecord|undefined>{return this.#hosted.findIdentityMergeContextPlan(planId);}
+  createIdentityMergeContextReceipt(record:import("./identity-context-state.ts").IdentityMergeContextReceipt):Promise<boolean>{return this.#hosted.createIdentityMergeContextReceipt(record);}
+  findIdentityMergeContextReceipt(receiptId:string):Promise<import("./identity-context-state.ts").IdentityMergeContextReceipt|undefined>{return this.#hosted.findIdentityMergeContextReceipt(receiptId);}
+  findIdentityMergeLock(subject:TakosumiSubject):Promise<import("./identity-context-state.ts").IdentityMergeLock|undefined>{return this.#hosted.findIdentityMergeLock(subject);}
   createIdentityOperationReceipt(record: IdentityOperationReceiptRecord): Promise<boolean> { return this.#hosted.createIdentityOperationReceipt(record); }
   findIdentityOperationReceipt(receiptId: string): Promise<IdentityOperationReceiptRecord | undefined> { return this.#hosted.findIdentityOperationReceipt(receiptId); }
   isHostedOidcSessionHashRevoked(issuerSessionHash: string): Promise<boolean> { return this.#hosted.isHostedOidcSessionHashRevoked(issuerSessionHash); }

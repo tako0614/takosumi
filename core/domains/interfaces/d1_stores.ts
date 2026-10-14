@@ -22,6 +22,7 @@ import type {
   InterfaceWriteGuard,
 } from "./stores.ts";
 import { interfaceOAuth2ResourceUri } from "./oauth_resource.ts";
+import { registerIdentityPrincipalStorage } from "../identity-reconciliation/storage-identity.ts";
 
 interface JsonRow {
   readonly record_json: string;
@@ -311,7 +312,7 @@ class D1InterfaceStore implements InterfaceStore {
 class D1InterfaceBindingStore implements InterfaceBindingStore {
   readonly #table = names.interfaceBindings;
 
-  constructor(readonly db: D1Like) {}
+  constructor(readonly db: D1Like) { registerIdentityPrincipalStorage(this, db); }
 
   async create(
     record: InterfaceBinding,

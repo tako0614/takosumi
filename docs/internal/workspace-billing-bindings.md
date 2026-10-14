@@ -69,13 +69,14 @@ the original rows. Existing migration/checksum history is unchanged. The
 addition is forward-only for protected data; no live migration is performed
 by authoring this implementation.
 
-The runtime bridge supports only exact checksum-verified Control D1 v71 and
-v72 catalog prefixes for existing ordinary Control operations. It executes
-no DDL in `predeployed` mode. Billing binding reads/writes require the full
-v72 proof independently, and the exported staging qualification verifier
-still requires the exact current catalog. This permits a profile-disabled
-bridge to run on v71 before a separately authorized additive migration to
-v72. It does not make an old exact-v71 artifact compatible with v72.
+The runtime bridge supports exact checksum-verified Control D1 v71, v72 and
+v73 catalog prefixes for existing ordinary Control operations. It executes
+no DDL in `predeployed` mode. Billing binding reads/writes require their v72
+schema expansion independently; private identity reconciliation also requires
+v73. The exported staging qualification verifier requires the exact current
+catalog. This permits a profile-disabled compatible bridge to run on the
+existing schema before separately authorized additive migrations. It does not
+make an older exact-head artifact compatible with a new schema automatically.
 
 ## Existing financial references
 

@@ -105,6 +105,7 @@ export async function createWorkerServiceApp(
   env: CloudflareWorkerEnv,
   role: "takosumi-api",
   options: {
+    readonly identityReconciliationAuthority?: CreateTakosumiServiceOptions["identityReconciliationAuthority"];
     readonly runnerProfiles?: readonly RunnerProfile[];
     readonly defaultRunnerProfileId?: string;
     readonly runnerExecutors?: OpenTofuRunnerExecutorRegistry;
@@ -406,6 +407,7 @@ export async function createWorkerServiceApp(
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.buildConnectionSetupRequest,
     ...(connectionOAuthHelpers ? { connectionOAuthHelpers } : {}),
     opentofuControlStore,
+    ...(options.identityReconciliationAuthority ? { identityReconciliationAuthority: options.identityReconciliationAuthority } : {}),
     ...(moduleVariableMaterializer ? { moduleVariableMaterializer } : {}),
     ...(runtimeBindingDerivationKey ? { runtimeBindingDerivationKey } : {}),
     ...(runtimeInputOidcClientSource ? { runtimeInputOidcClientSource } : {}),

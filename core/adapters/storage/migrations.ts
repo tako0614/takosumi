@@ -575,6 +575,20 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       primaryKey: ["workspace_id"], uniqueConstraints: [["intent_id"], ["billing_authority", "workspace_ref"], ["billing_authority", "organization_ref"]],
     },
     {
+      name: "takosumi_identity_reconciliation_operations",
+      domain: "deploy",
+      columns: ["operation_id", "kind", "immutable_key", "revision", "status", "mutation_id", "record_json", "created_at", "updated_at"],
+      primaryKey: ["operation_id"],
+      uniqueConstraints: [["mutation_id"]],
+    },
+    {
+      name: "takosumi_identity_reconciliation_events",
+      domain: "deploy",
+      columns: ["operation_id", "revision", "mutation_id", "record_json", "recorded_at"],
+      primaryKey: ["operation_id", "revision"],
+      uniqueConstraints: [["mutation_id"]],
+    },
+    {
       // §30 artifact ledger (R2 pointer metadata for plan / state archives).
       name: "takosumi_artifacts",
       domain: "deploy",
@@ -5075,5 +5089,33 @@ create table if not exists takosumi_workspace_billing_bindings (
 create unique index if not exists takosumi_workspace_billing_bindings_intent_unique on takosumi_workspace_billing_bindings (intent_id);
 create unique index if not exists takosumi_workspace_billing_bindings_authority_ref_unique on takosumi_workspace_billing_bindings (billing_authority, workspace_ref);
 create unique index if not exists takosumi_workspace_billing_bindings_authority_org_unique on takosumi_workspace_billing_bindings (billing_authority, organization_ref);`,
+    },
+    {
+      id: "deploy.identity_reconciliation.create",
+      version: 120,
+      domain: "deploy",
+      description:
+        "Retain identity reconciliation operation custody and append-only revision evidence independently of Workspace and Account deletion.",
+      sql: `create table if not exists takosumi_identity_reconciliation_operations (
+  operation_id text primary key,
+  kind text not null,
+  immutable_key text not null,
+  revision integer not null,
+  status text not null,
+  mutation_id text not null,
+  record_json jsonb not null,
+  created_at text not null,
+  updated_at text not null
+);
+create unique index if not exists takosumi_identity_reconciliation_operations_mutation_unique on takosumi_identity_reconciliation_operations (mutation_id);
+create table if not exists takosumi_identity_reconciliation_events (
+  operation_id text not null,
+  revision integer not null,
+  mutation_id text not null,
+  record_json jsonb not null,
+  recorded_at text not null,
+  primary key (operation_id, revision)
+);
+create unique index if not exists takosumi_identity_reconciliation_events_mutation_unique on takosumi_identity_reconciliation_events (mutation_id);`,
     },
   ]);

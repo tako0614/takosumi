@@ -22,6 +22,9 @@ app-docs/              hosted Takosumi hosted service service documentation
 
 Internal navigation:
 
+- [Private identity reconciliation](./control-identity-reconciliation.md) —
+  Control context custody and Accounts consent; external owner qualification
+  remains separate.
 - [Product Goal](./product-goal.md) — active destination and measurable
   definition of done; not a contract or roadmap/backlog.
 - [Core Spec](./core-spec.md) — current OSS contract and ownership authority.

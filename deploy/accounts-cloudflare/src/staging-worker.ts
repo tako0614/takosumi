@@ -5,12 +5,15 @@ import type { CloudflareWorkerEnv as ControlEnv } from "../../../worker/src/bind
 import { verifyD1OpenTofuLedgerSchemaPredeployed } from "../../../worker/src/d1_opentofu_store.ts";
 import { assertControlD1MaintenanceInactive } from "../../../worker/src/d1_schema_maintenance.ts";
 import { D1AccountsStore } from "../../../accounts/service/src/d1-store.ts";
+import { createAccountsIdentityReconciliationAuthority, createControlIdentityReconciler } from "../../../accounts/service/src/control-identity-reconciler.ts";
+import type { ControlIdentityReconciliationPort } from "../../../contract/identity-reconciliation.ts";
 import { createIdentityMergeRetryService, type IdentityMergeRetryService, type IdentityMergeRetryRuntimeContext } from "../../../accounts/service/src/identity-merge-retry.ts";
 import type { IdentityMergeReconciler } from "../../../accounts/service/src/identity-merge.ts";
 import type { IdentityMergeOperation } from "../../../accounts/service/src/identity-state.ts";
 import type { CredentialUnlinkReconciler } from "../../../accounts/service/src/identity-unlink-state.ts";
 import type { WorkspaceBillingEnrollmentPort } from "../../../accounts/service/src/workspace-billing-bootstrap.ts";
 import { handleStagingLoginPortal } from "./staging-login-portal.ts";
+import { createStagingIdentityPortal } from "./staging-identity-portal.ts";
 import {
   AUTH_STAGING_CLIENTS,
   AUTH_STAGING_ISSUER,
@@ -31,14 +34,54 @@ export interface AuthStagingOwnerPorts {
   readonly retryAuthorityContextDigest?: string;
 }
 const seams = new WeakMap<AuthEnv, ReturnType<typeof createInProcessDeployControlSeam>>();
+const identityStores = new WeakMap<AuthEnv, D1AccountsStore>();
+const identityAuthorities = new WeakMap<AuthEnv, ReturnType<typeof createAccountsIdentityReconciliationAuthority>>();
+
+function identityStore(env: AuthEnv): D1AccountsStore {
+  let store = identityStores.get(env);
+  if (!store) {
+    store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
+      schemaMode: "predeployed", sessionHashSalt: env.TAKOSUMI_ACCOUNT_SESSION_HASH_SALT!,
+    });
+    identityStores.set(env, store);
+  }
+  return store;
+}
+
+function identityAuthority(env: AuthEnv) {
+  let authority = identityAuthorities.get(env);
+  if (!authority) {
+    authority = createAccountsIdentityReconciliationAuthority({ store: identityStore(env) });
+    identityAuthorities.set(env, authority);
+  }
+  return authority;
+}
 
 function controlOperations(env: AuthEnv) {
   let seam = seams.get(env);
   if (!seam) {
-    seam = createInProcessDeployControlSeam(env);
+    seam = createInProcessDeployControlSeam(env, { identityReconciliationAuthority: identityAuthority(env) });
     seams.set(env, seam);
   }
   return seam.operations();
+}
+
+/** Lazy private calls share the same Control service and persisted Accounts
+ * authority. A browser never supplies this port or an admission object. */
+function identityControl(env: AuthEnv): ControlIdentityReconciliationPort {
+  const current = async () => {
+    const port = (await controlOperations(env)).identityReconciliation;
+    if (!port) throw new Error("auth_staging_control_identity_unavailable");
+    return port;
+  };
+  return {
+    prepareMerge: async (input) => (await current()).prepareMerge(input),
+    assertMergePlanCurrent: async (input) => (await current()).assertMergePlanCurrent(input),
+    applyMerge: async (input) => (await current()).applyMerge(input),
+    read: async (operationId) => (await current()).read(operationId),
+    acknowledgeUnlink: async (input) => (await current()).acknowledgeUnlink(input),
+    recover: async (input) => (await current()).recover(input),
+  };
 }
 
 const REQUIRED_BINDINGS = [
@@ -90,7 +133,20 @@ export function createAuthStagingWorker(dependencies: {
   const owners = new WeakMap<AuthEnv, AuthStagingOwnerPorts>();
   const ownerPorts = (env: AuthEnv) => {
     let ports = owners.get(env);
-    if (!ports) { ports = dependencies.ownerPorts?.(env) ?? {}; owners.set(env,ports); }
+    if (!ports) {
+      const supplied = dependencies.ownerPorts?.(env) ?? {};
+      // Control-only planning is real. Without the separately configured
+      // financial/consumer/RP owners the composite refuses reservation; it
+      // cannot turn this local receipt into those external acknowledgements.
+      const control = createControlIdentityReconciler({ store: identityStore(env), control: identityControl(env) });
+      ports = {
+        ...supplied,
+        identityMergeReconciler: supplied.identityMergeReconciler ?? control,
+        credentialUnlinkReconciler: supplied.credentialUnlinkReconciler ?? control,
+        assertOwnerReadiness: supplied.assertOwnerReadiness ?? control.assertOwnerReadiness,
+      };
+      owners.set(env, ports);
+    }
     return ports;
   };
   const runtimeContext = (env: AuthEnv): IdentityMergeRetryRuntimeContext | undefined => {
@@ -108,7 +164,7 @@ export function createAuthStagingWorker(dependencies: {
       const ports = ownerPorts(env);
       service = dependencies.retryService?.(env) ?? createIdentityMergeRetryService({
         runtimeContext:runtimeContext(env),
-        store:new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB,{schemaMode:"predeployed",sessionHashSalt:env.TAKOSUMI_ACCOUNT_SESSION_HASH_SALT!}),
+        store:identityStore(env),
         reconciler:ports.identityMergeReconciler,assertOwnerReadiness:ports.assertOwnerReadiness,
         stage:{environment:String(env.TAKOSUMI_ENVIRONMENT),issuerOrigin:String(env.TAKOSUMI_ACCOUNTS_ISSUER),hostedSessionPolicy:env.TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY==="true",accountsSchemaHead:5,accountsSchemaMode:String(env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE)},
       });
@@ -148,6 +204,16 @@ export function createAuthStagingWorker(dependencies: {
         try {
           await schemaFor(env);
           response = Response.json({ ok: true, accountsSchemaHead: 5, control: "canonical-predeployed" });
+        } catch {
+          response = Response.json({ error: "auth_staging_unavailable" }, { status: 503 });
+        }
+      } else if (/^\/identity-merges\/imrg_[a-f0-9-]{36}\/contexts$/u.test(url.pathname)) {
+        try {
+          await schemaFor(env);
+          response = await createStagingIdentityPortal({
+            issuer: AUTH_STAGING_ISSUER,
+            accountsHandler: (portalRequest) => accounts.fetch(portalRequest, env, context),
+          })(request) ?? Response.json({ error: "not_found" }, { status: 404 });
         } catch {
           response = Response.json({ error: "auth_staging_unavailable" }, { status: 503 });
         }

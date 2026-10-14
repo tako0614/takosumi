@@ -119,6 +119,27 @@ export function sharedAuthUnavailableResponse(): Response {
   });
 }
 
+/** Validate the existing operator opt-in before any alternate credential lane.
+ * Authentication of an independent actor still belongs to its actual verifier. */
+export function sharedAuthRequestFailure(
+  request: Request,
+  env: SharedAuthEnvironment,
+): Response | undefined {
+  if (!sharedAuthConfigured(env)) return undefined;
+  try {
+    composition(env);
+  } catch {
+    return sharedAuthUnavailableResponse();
+  }
+  if (/^Bearer\s/iu.test(request.headers.get("authorization") ?? "") &&
+    (request.headers.has("cookie") || request.headers.has("x-takosumi-account-session"))) {
+    return Response.json({ error: "unauthenticated" }, {
+      status: 401, headers: { "cache-control": "no-store" },
+    });
+  }
+  return undefined;
+}
+
 /** Product RP boundary only; the dedicated issuer's account routes retain
  * their own standard token/grant handler on the issuer origin. */
 export async function handleSharedAuthAccountBoundaryRequest(
@@ -126,13 +147,31 @@ export async function handleSharedAuthAccountBoundaryRequest(
   env: SharedAuthEnvironment,
 ): Promise<Response | undefined> {
   const url = new URL(request.url);
-  if (!sharedAuthConfigured(env) || (url.pathname !== "/sign-in" &&
-    url.pathname !== "/api/v1/account" && !url.pathname.startsWith("/api/v1/account/"))) {
+  const legacyHumanPath = ["/sign-in", "/api/v1/auth", "/api/v1/account",
+    "/api/v1/privacy", "/oauth/authorize", "/oauth/upstream"].some(
+    (path) => url.pathname === path || url.pathname.startsWith(`${path}/`),
+  );
+  if (!sharedAuthConfigured(env) || !legacyHumanPath) {
+    return undefined;
+  }
+  const ingressFailure = sharedAuthRequestFailure(request, env);
+  if (ingressFailure) return ingressFailure;
+  // This exact operation has its own operator-secret verifier in Accounts;
+  // it never authenticates a human session. Keep that existing owner lane.
+  if (request.method === "POST" &&
+    /^\/api\/v1\/privacy\/requests\/prq_[a-z0-9]{20}\/complete$/u.test(url.pathname)) {
     return undefined;
   }
   try {
     const selected = composition(env);
-    if (!selected || url.origin !== selected.origin) return undefined;
+    if (!selected) return sharedAuthUnavailableResponse();
+    // Opt-in applies to the deployed product, including workers.dev, previews
+    // and alternate routes. An unrecognized URL is never a legacy issuer.
+    if (url.origin !== selected.origin) {
+      return Response.json({ error: "not found" }, {
+        status: 404, headers: { "cache-control": "no-store" },
+      });
+    }
     if (url.pathname === "/sign-in") {
       if (request.method !== "GET" && request.method !== "HEAD") {
         return Response.json({ error: "method_not_allowed" }, {

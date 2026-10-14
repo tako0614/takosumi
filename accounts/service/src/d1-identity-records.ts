@@ -255,6 +255,30 @@ export class D1IdentityRecordRepository implements IdentityRecordRepository {
         input.activate || next.status === "reconciled" ? 1 : 0,
         args,
       );
+    if (next.contextPlan) {
+      conditions += ` AND (json_type(document,'$.contextPlan') IS NULL OR json_extract(document,'$.contextPlan')=json_extract(?,'$.contextPlan'))`;
+      args.push(JSON.stringify(next));
+    } else conditions += ` AND json_type(document,'$.contextPlan') IS NULL`;
+    if (input.contextPlanRecord) {
+      conditions += ` AND EXISTS(SELECT 1 FROM ${table} p WHERE p.bucket='identity_merge_context_plans' AND p.key=? AND p.document=?)`;
+      args.push(
+        input.contextPlanRecord.planId,
+        JSON.stringify(input.contextPlanRecord),
+      );
+    }
+    const contexts = input.contextReceipt
+      ? [input.contextReceipt]
+      : (input.contextReceipts ?? []);
+    if (contexts.length) {
+      conditions += ` AND (SELECT count(*) FROM json_each(?) e JOIN ${table} c ON c.bucket='identity_merge_context_receipts' AND c.key=json_extract(e.value,'$.receiptId') WHERE NOT EXISTS(SELECT 1 FROM json_each(e.value) f WHERE json_extract(c.document,'$.'||f.key) IS NOT f.value) AND json_extract(c.document,'$.identityGeneration')+?=COALESCE((SELECT json_extract(g.document,'$.generation') FROM ${table} g WHERE g.bucket='authentication_generations' AND g.key=json_extract(c.document,'$.subject')),0) AND NOT EXISTS(SELECT 1 FROM ${table} x WHERE x.bucket='hosted_oidc_revoked_sessions' AND x.key=json_extract(c.document,'$.issuerSessionHash')))=?`;
+      args.push(
+        JSON.stringify(contexts),
+        input.activate || next.status === "reconciled" ? 1 : 0,
+        contexts.length,
+      );
+      if (input.contextReceipt)
+        conditions += ` AND json_type(document,'$.${input.contextReceipt.role === "source" ? "sourceContextAcceptance" : "targetContextAcceptance"}') IS NULL`;
+    }
     if (input.activate) {
       conditions += ` AND json_extract(document,'$.status')='reconciled' AND (SELECT count(*) FROM ${table} l WHERE l.bucket='identity_merge_locks' AND l.key IN (?,?) AND json_extract(l.document,'$.operationId')=?)=2`;
       args.push(next.sourceSubject, next.targetSubject, next.operationId);
@@ -320,6 +344,21 @@ export class D1IdentityRecordRepository implements IdentityRecordRepository {
         true,
       ),
     );
+    if (input.contextReceipt)
+      statements.push(
+        this.db
+          .prepare(
+            `UPDATE ${table} SET document=json_set(document,'$.consumedByOperation',?,'$.consumedAt',?),updated_at=? WHERE bucket='identity_merge_context_receipts' AND key=? AND ${guard}`,
+          )
+          .bind(
+            next.operationId,
+            input.now,
+            input.now,
+            input.contextReceipt.receiptId,
+            claimKey,
+            attemptId,
+          ),
+      );
     if (input.receipt)
       statements.push(
         this.db

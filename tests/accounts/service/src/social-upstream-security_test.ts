@@ -1,3 +1,4 @@
+import { acceptIsolatedIdentityContexts, isolatedContextReconciler } from "../fixtures/identity-context-fixture.ts";
 import { expect, test } from "bun:test";
 import { exchangeUpstreamAuthorizationCode } from "../../../../accounts/service/src/upstream.ts";
 import { verifiedSocialOAuthProvider } from "../../../../accounts/service/src/upstream-verification.ts";
@@ -370,7 +371,7 @@ async function operationFixture(withOldLogin = false, fullHandler = false, withR
   const cookieHeader = () => [...cookies].map(([name, value]) => `${name}=${value}`).join("; ");
   const request = (path: string, body: unknown) => new Request("https://auth.example.test" + path, { method: "POST", headers: { origin: "https://auth.example.test", "content-type": "application/json", cookie: cookieHeader() }, body: JSON.stringify(body) });
   const session = () => store.findAccountSession(cookies.get("__Host-takosumi_session")!);
-  const reconciler = { reconcile: async (operation: {operationId:string;sourceSubject:string;targetSubject:string}) => ({ operationId: operation.operationId, sourceSubject: operation.sourceSubject, targetSubject: operation.targetSubject, externalBindings: "binding-pin", workspaceMembership: "membership-pin", billingLedger: "ledger-pin", consumerIntentCustody: "custody-pin", rpSessions: "sessions-pin", personalWorkspaceId: "workspace-survivor", reconciledAt: Date.now() }) };
+  const reconciler = { ...isolatedContextReconciler(store, Date.now()), reconcile: async (operation: {operationId:string;sourceSubject:string;targetSubject:string}) => ({ operationId: operation.operationId, sourceSubject: operation.sourceSubject, targetSubject: operation.targetSubject, externalBindings: "binding-pin", workspaceMembership: "membership-pin", billingLedger: "ledger-pin", consumerIntentCustody: "custody-pin", rpSessions: "sessions-pin", personalWorkspaceId: "workspace-survivor", reconciledAt: Date.now() }) };
   // Test-only owner ports. The actual stage composition uses its mounted,
   // bounded scheduled service and independently configured readiness checker.
   const retryCapability = withRetry ? {pendingCapacity:100,assertAvailable:async()=>{}} : undefined;
@@ -448,6 +449,8 @@ test("owning Accounts HTTP social-only merge completes GitHub private + Gmail pr
   expect(targetReceipt?.issuerSessionHash).toBe(sourceReceipt?.issuerSessionHash);
   expect((await f.session())?.reauthenticatedAt).toBeUndefined();
   expect((await f.merge(`/api/v1/account/identity-merges/${f.operationId}/prove`, { receiptId: secondResult.proof_receipt })).status).toBe(200);
+  // Portable unit context owner; production/Core acceptance has separate integration coverage.
+  await acceptIsolatedIdentityContexts(f.store, (await f.store.findIdentityMergeOperation(f.operationId))!, Date.now());
   const consent = await f.merge(`/api/v1/account/identity-merges/${f.operationId}/consent`, { consent: true });
   expect(consent.status).toBe(200);
   expect((await consent.json() as {status:string}).status).toBe("active");

@@ -118,6 +118,9 @@ export async function completeCredentialUnlink(input: {
   await assertCredentialUnlinkIntentCurrent(store, intent, now);
   const receipt = await store.findCredentialUnlinkReceipt(input.receiptId);
   validateCredentialUnlinkReceipt(intent, receipt, now);
+  if(!store.createCredentialUnlinkAuthorityTicket||!store.findCredentialUnlinkAuthorityTicket)throw new CredentialUnlinkConflict("unlink_unavailable");
+  const ticket={operationId:intent.operationId,subject:intent.subject,receiptId:receipt.receiptId,identityGeneration:intent.identityGeneration,createdAt:now};
+  if(!await store.createCredentialUnlinkAuthorityTicket(ticket)){const prior=await store.findCredentialUnlinkAuthorityTicket(intent.operationId);if(!prior||prior.receiptId!==receipt.receiptId||prior.subject!==intent.subject||prior.identityGeneration!==intent.identityGeneration)throw new CredentialUnlinkConflict("unlink_conflict");}
   const acknowledgement = await input.reconciler.acknowledgeCredentialUnlinkIntent({
     operationId: intent.operationId,
     subject: intent.subject,

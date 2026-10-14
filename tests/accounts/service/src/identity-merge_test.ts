@@ -1,3 +1,5 @@
+import { acceptIsolatedIdentityContexts, isolatedContextReconciler } from "../fixtures/identity-context-fixture.ts";
+import { readIdentityMergeContextEvidence } from "../../../../accounts/service/src/identity-context.ts";
 import { expect, test } from "bun:test";
 import { PGlite } from "@electric-sql/pglite";
 import {
@@ -214,7 +216,7 @@ async function receiptFor(
   await store.createIdentityOperationReceipt!(receipt);
   return receipt;
 }
-const pendingReconciler = { reconcile: async () => undefined };
+const pendingReconciler = (store: AccountsStore) => isolatedContextReconciler(store, now);
 async function proved(store: AccountsStore) {
   let op = await createIdentityMerge({
     store,
@@ -238,7 +240,8 @@ async function proved(store: AccountsStore) {
     receiptId: (await receiptFor(store, op, "target")).receiptId,
     now,
   });
-  return op;
+  // Synthetic context owner only; accept each plan using an explicit live leg.
+  return await acceptIsolatedIdentityContexts(store, op, now);
 }
 async function consented(store: AccountsStore) {
   return await consentIdentityMerge({
@@ -246,7 +249,7 @@ async function consented(store: AccountsStore) {
     operation: await proved(store),
     session: sessionA,
     consent: true,
-    reconciler: pendingReconciler,
+    reconciler: pendingReconciler(store),
     retryCapability: { pendingCapacity: 100, assertAvailable: async () => {} },
     now,
   });
@@ -366,7 +369,7 @@ for (const kind of ["memory", "d1", "postgres"] as const) {
         session: sessionA,
         now,
         consent: true,
-        reconciler: pendingReconciler,
+        reconciler: pendingReconciler(f.store),
         retryCapability: {
           pendingCapacity: 100,
           assertAvailable: async () => {},
@@ -508,7 +511,7 @@ for (const kind of ["memory", "d1", "postgres"] as const) {
             operation,
             session: sessionA,
             consent: true,
-            reconciler: pendingReconciler,
+            reconciler: pendingReconciler(f.store),
             retryCapability: {
               pendingCapacity: 100,
               assertAvailable: async () => {},
@@ -1266,6 +1269,7 @@ for (const kind of ["memory", "d1", "postgres"] as const) {
     const f = await fixture(kind);
     try {
       const op = await proved(f.store);
+      const context = await readIdentityMergeContextEvidence(f.store, op, now, 0);
       const next = {
         ...op,
         revision: op.revision + 1,
@@ -1278,6 +1282,8 @@ for (const kind of ["memory", "d1", "postgres"] as const) {
         now,
         reserve: true,
         retryCapacity: 100,
+        contextPlanRecord: context.plan,
+        contextReceipts: context.receipts,
         sessions: [
           { sessionId: sessionA.sessionId, subject: accountA, authTime: 990 },
           { sessionId: sessionB.sessionId, subject: accountB, authTime: 990 },
@@ -1452,7 +1458,7 @@ for (const kind of ["memory", "d1", "postgres", "native-d1"] as const) {
           operation,
           session: sessionA,
           consent: true,
-          reconciler: pendingReconciler,
+          reconciler: pendingReconciler(f.store),
           retryCapability: {
             pendingCapacity: 100,
             assertAvailable: async () => {},
@@ -1730,7 +1736,7 @@ for (const kind of ["memory", "d1", "postgres", "native-d1"] as const) {
             operation,
             session: sessionA,
             consent: true,
-            reconciler: pendingReconciler,
+            reconciler: pendingReconciler(f.store),
             retryCapability: {
               pendingCapacity: 100,
               assertAvailable: async () => {},

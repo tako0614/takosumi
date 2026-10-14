@@ -1,3 +1,4 @@
+import {identityContextContinuationPath,createIdentityContextContinuation,validateIdentityContextContinuation} from "./identity-context-continuation.ts";
 import { resolveUpstreamAccount } from "./identity.ts";
 import type { AccountsStore, UpstreamLoginTransactionRecord } from "./store.ts";
 import { base64UrlEncodeBytes, sha256Text } from "./encoding.ts";
@@ -202,9 +203,13 @@ async function handleHostedUpstreamAuthorizeRequest(input: {
     }
     const requestedReturn = input.url.searchParams.get("return_to");
     let returnTo: string | undefined;
+    let contextContinuation:UpstreamLoginTransactionRecord["contextContinuation"];
     if (requestedReturn !== null) {
       const target = new URL(requestedReturn, input.url.origin);
-      if (target.origin !== input.url.origin || target.pathname !== "/oauth/authorize" || target.username || target.password || target.hash) {
+      if(target.pathname!=="/oauth/authorize"){
+        if(!input.upstreamOAuth.hostedSessionPolicy||!input.request||!identityContextContinuationPath(target))throw new TypeError("invalid hosted context continuation");
+        contextContinuation=await createIdentityContextContinuation({request:input.request,store:input.store,target,providerId:resolved.client.providerId,now:Date.now()});
+      }else if (target.origin !== input.url.origin || target.username || target.password || target.hash) {
         throw new TypeError("hosted continuation must be an issuer authorization request");
       }
       returnTo = target.pathname + target.search;
@@ -224,6 +229,7 @@ async function handleHostedUpstreamAuthorizeRequest(input: {
       createdAt: now,
       expiresAt: now + hostedUpstreamTransactionTtlMs,
       ...(returnTo ? { returnTo } : {}),
+      ...(contextContinuation?{contextContinuation}:{}),
       ...(freshAuthentication ? { prompt: "login" as const, maxAgeSeconds: maxAge === null ? 0 : Number(maxAge) } : {}),
     };
     await input.store.saveUpstreamLoginTransaction(transaction);
@@ -379,6 +385,10 @@ async function handleUpstreamCallbackRequestUncached(input: {
         transaction.createdAt > Date.now() || transaction.expiresAt - transaction.createdAt > hostedUpstreamTransactionTtlMs) {
         return json({ error: "invalid_state" }, 400);
       }
+      if(transaction.contextContinuation){
+        if(!input.upstreamOAuth.hostedSessionPolicy||transaction.operationProof||transaction.unlinkProof||transaction.returnTo!==transaction.contextContinuation.path)throw new TypeError("invalid context continuation");
+        await validateIdentityContextContinuation({request:input.request,store:input.store,continuation:transaction.contextContinuation,now:Date.now()});
+      }
       if ((transaction.operationProof || transaction.unlinkProof) &&
         (!input.upstreamOAuth.hostedSessionPolicy || (transaction.operationProof && transaction.unlinkProof))) {
         throw new TypeError("invalid upstream operation context");
@@ -433,6 +443,7 @@ async function handleUpstreamCallbackRequestUncached(input: {
       subjectSecret: input.upstreamOAuth.subjectSecret,
       fetch: input.upstreamOAuth.fetch,
     });
+    if(transaction?.contextContinuation)await validateIdentityContextContinuation({request:input.request,store:input.store,continuation:transaction.contextContinuation,exchange,now:Date.now()});
     if (transaction?.operationProof) {
       await validateUpstreamOperationProof({ request: input.request, store: input.store, transaction, exchange, now: Date.now() });
     }
@@ -460,6 +471,7 @@ async function handleUpstreamCallbackRequestUncached(input: {
       profile,
       hostedPolicy: input.upstreamOAuth.hostedSessionPolicy,
     });
+    if(transaction?.contextContinuation)await validateIdentityContextContinuation({request:input.request,store:input.store,continuation:transaction.contextContinuation,exchange,accountSubject:account.subject,now:Date.now()});
     const now = Date.now();
     const receipt = transaction?.operationProof
       ? await completeUpstreamOperationProof({ request: input.request, store: input.store, transaction, exchange, now })
@@ -506,7 +518,9 @@ async function handleUpstreamCallbackRequestUncached(input: {
     headers.append("set-cookie", sessionCookie);
     if (transaction?.returnTo) {
       const target = new URL(transaction.returnTo, input.url.origin);
-      if (target.origin !== input.url.origin || target.pathname !== "/oauth/authorize" || target.username || target.password || target.hash) {
+      if(transaction.contextContinuation){
+        if(target.origin!==input.url.origin||identityContextContinuationPath(target)!==transaction.contextContinuation.path||account.subject!==transaction.contextContinuation.expectedSubject)throw new TypeError("invalid context continuation");
+      }else if (target.origin !== input.url.origin || target.pathname !== "/oauth/authorize" || target.username || target.password || target.hash) {
         throw new TypeError("invalid hosted continuation");
       }
       headers.set("location", target.pathname + target.search);

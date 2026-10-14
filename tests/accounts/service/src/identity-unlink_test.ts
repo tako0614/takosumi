@@ -1,3 +1,4 @@
+import { acceptIsolatedIdentityContexts, isolatedContextReconciler } from "../fixtures/identity-context-fixture.ts";
 import { expect, test } from "bun:test";
 import { PGlite } from "@electric-sql/pglite";
 import { InMemoryAccountsStore, type AccountsStore, type AccountSessionRecord, type UpstreamIdentityRecord } from "../../../../accounts/service/src/store.ts";
@@ -395,8 +396,11 @@ for (const kind of ["memory", "d1", "postgres"] as const) {
         expect(await f.store.createIdentityOperationReceipt!(receipt)).toBe(true);
         merge = await proveIdentityMerge({ store: f.store, operation: merge, session: f.session, receiptId: receipt.receiptId, now: f.now });
       }
+      // Synthetic context owner; each current issuer leg accepts before reservation.
+      merge = await acceptIsolatedIdentityContexts(f.store, merge, f.now);
+      const mergeContextReconciler = isolatedContextReconciler(f.store, f.now);
       // Isolated synchronous fixture; it never runs a hosted background retry service.
-      merge = await consentIdentityMerge({ store: f.store, operation: merge, session: f.session, consent: true, reconciler: { reconcile: async () => undefined }, retryCapability: { pendingCapacity: 100, assertAvailable: async () => {} }, now: f.now });
+      merge = await consentIdentityMerge({ store: f.store, operation: merge, session: f.session, consent: true, reconciler: mergeContextReconciler, retryCapability: { pendingCapacity: 100, assertAvailable: async () => {} }, now: f.now });
       await activateIdentityMerge({ store: f.store, operation: merge, now: f.now, reconciler: { reconcile: async (operation) => ({ operationId: operation.operationId, sourceSubject: originalB, targetSubject: subject, externalBindings: "kept-original-bindings", workspaceMembership: "kept-workspaces", billingLedger: "one-ledger-kept", consumerIntentCustody: "kept-pending-op-B-org_B", rpSessions: "revoked", personalWorkspaceId: "workspace-original", reconciledAt: f.now }) } });
       expect((await f.store.findCanonicalAccount!(originalB))?.subject).toBe(subject);
       const login = await rotateAccountSession({ store: f.store, subject, now: Date.now(), ttlMs: 60_000, hostedPolicy: true });
