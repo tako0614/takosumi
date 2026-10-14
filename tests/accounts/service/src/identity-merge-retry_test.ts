@@ -12,7 +12,7 @@ import {
   consentIdentityMerge,
   type IdentityMergeReconciler,
 } from "../../../../accounts/service/src/identity-merge.ts";
-import { createIdentityMergeRetryService } from "../../../../accounts/service/src/identity-merge-retry.ts";
+import { createIdentityMergeRetryService as createRetryService } from "../../../../accounts/service/src/identity-merge-retry.ts";
 import type {
   IdentityMergeAcknowledgements,
   IdentityMergeOperation,
@@ -29,8 +29,17 @@ const stage = {
   accountsSchemaHead: 5,
   accountsSchemaMode: "predeployed",
 };
+const runtimeContext = {
+  workerVersion: "stage-runtime-version-1",
+  authorityContextDigest: `sha256:${"a".repeat(64)}`,
+};
+const scheduledInvocation = { kind: "scheduled" as const, ...runtimeContext };
 
-async function fixture(kind: "memory" | "d1" = "memory") {
+function createIdentityMergeRetryService(input: Parameters<typeof createRetryService>[0]) {
+  return createRetryService({ runtimeContext, ...input });
+}
+
+async function fixture(kind: "memory" | "d1" = "memory", scheduledHeartbeat = true) {
   const db = kind === "d1" ? new SqliteFakeD1() : undefined;
   const store: AccountsStore = db
     ? new D1AccountsStore(db as unknown as D1Database)
@@ -77,6 +86,12 @@ async function fixture(kind: "memory" | "d1" = "memory") {
     await db.prepare("INSERT INTO protected_retry_references VALUES(?,?,?,?,?,?,?,?)")
       .bind("resource_B", "accounts", sourceSubject, "workspace_B", "organization_B", 123456, "billing-intent_B", "unknown")
       .run();
+  }
+  if (scheduledHeartbeat) {
+    // Only a real local scheduled invocation through the runner records its
+    // durable heartbeat. The fixture never writes a fabricated heartbeat row.
+    await createIdentityMergeRetryService({ store, stage, now: () => initialNow - 60_000 })
+      .runBatch(scheduledInvocation);
   }
   return { store, db, session };
 }
@@ -385,6 +400,124 @@ test("near-expiry dual proofs refuse consent while both issuer accounts remain u
   expect(await f.store.isAccountAuthenticationFenced!(sourceSubject)).toBe(false);
   expect(await f.store.getAccountAuthenticationGeneration!(sourceSubject)).toBe(0);
   expect(await f.store.findAccountSession(f.session.sessionId)).toBeDefined();
+});
+
+for (const kind of ["memory", "d1"] as const) {
+  test(`${kind}: only a completed matching scheduled execution admits consent`, async () => {
+    const f = await fixture(kind, false);
+    let now = initialNow;
+    const operation = await proved(f.store, f.session);
+    const reconciler = { reconcile: async () => undefined };
+    const service = createIdentityMergeRetryService({ store: f.store, stage, reconciler, assertOwnerReadiness: async () => true, now: () => now });
+    const consent = () => consentIdentityMerge({ store: f.store, operation, session: f.session, consent: true, reconciler, retryCapability: service, now });
+    await expect(consent()).rejects.toThrow("merge_retry_unavailable");
+    expect(await f.store.isAccountAuthenticationFenced!(sourceSubject)).toBe(false);
+    expect(await service.runBatch()).toMatchObject({ status: "completed" });
+    expect((await f.store.findIdentityMergeRetryCheckpoint!("auth-staging.identity-merge-retry@v1"))?.heartbeat).toBeUndefined();
+    await expect(consent()).rejects.toThrow("merge_retry_unavailable");
+    now += 60_000;
+    const scheduled = await service.runBatch(scheduledInvocation);
+    expect(scheduled.status).toBe("completed");
+    expect((await f.store.findIdentityMergeRetryCheckpoint!("auth-staging.identity-merge-retry@v1"))?.heartbeat).toEqual({ ...runtimeContext, completedAt: now });
+    expect(JSON.stringify(scheduled)).not.toContain(runtimeContext.workerVersion);
+    expect(JSON.stringify(scheduled)).not.toContain(runtimeContext.authorityContextDigest);
+    expect((await consent()).consentAt).toBe(now);
+    expect(await f.store.isAccountAuthenticationFenced!(sourceSubject)).toBe(true);
+  });
+}
+
+test("stale, future, foreign-version and foreign-authority heartbeat cannot reserve accounts", async () => {
+  const f = await fixture("d1");
+  const operation = await proved(f.store, f.session);
+  const reconciler = { reconcile: async () => undefined };
+  for (const context of [
+    { runtimeContext, now: () => initialNow + 60_001 },
+    { runtimeContext, now: () => initialNow - 60_001 },
+    { runtimeContext: { ...runtimeContext, workerVersion: "stage-runtime-version-2" }, now: () => initialNow },
+    { runtimeContext: { ...runtimeContext, authorityContextDigest: `sha256:${"b".repeat(64)}` }, now: () => initialNow },
+    { runtimeContext: undefined, now: () => initialNow },
+    { runtimeContext: { ...runtimeContext, authorityContextDigest: "unqualified-context" }, now: () => initialNow },
+  ]) {
+    const service = createIdentityMergeRetryService({ store: f.store, stage, reconciler, assertOwnerReadiness: async () => true, ...context });
+    await expect(consentIdentityMerge({ store: f.store, operation, session: f.session, consent: true, reconciler, retryCapability: service, now: initialNow })).rejects.toThrow("merge_retry_unavailable");
+  }
+  expect(await f.store.isAccountAuthenticationFenced!(sourceSubject)).toBe(false);
+  expect(await f.store.getAccountAuthenticationGeneration!(sourceSubject)).toBe(0);
+  expect(await f.store.findAccountSession(f.session.sessionId)).toBeDefined();
+});
+
+test("a mismatched scheduled invocation cannot mint a qualified heartbeat", async () => {
+  const f = await fixture("d1", false);
+  const service = createIdentityMergeRetryService({ store: f.store, stage, now: () => initialNow });
+  expect(await service.runBatch({ ...scheduledInvocation, workerVersion: "other-runtime" })).toMatchObject({ status: "completed" });
+  expect((await f.store.findIdentityMergeRetryCheckpoint!("auth-staging.identity-merge-retry@v1"))?.heartbeat).toBeUndefined();
+});
+
+test("legacy pending retries and expiry recovery run without any heartbeat", async () => {
+  for (const expire of [false, true]) {
+    const f = await fixture("d1", false);
+    let now = initialNow;
+    let complete = false;
+    const reconciler = { reconcile: async (operation: IdentityMergeOperation) => complete ? acknowledgement(operation, now) : undefined };
+    const operation = await consentIdentityMerge({
+      store: f.store, operation: await proved(f.store, f.session), session: f.session, consent: true, reconciler,
+      retryCapability: { pendingCapacity: 15, assertAvailable: async () => {} }, now,
+    });
+    const service = createIdentityMergeRetryService({ store: f.store, stage, reconciler, assertOwnerReadiness: async () => true, runtimeContext: undefined, now: () => now });
+    expect(await service.runBatch()).toMatchObject({ pending: 1, activated: 0 });
+    complete = true;
+    now = expire ? operation.expiresAt : now + 60_000;
+    expect(await service.runBatch()).toMatchObject(expire ? { recoveryRequired: 1, activated: 0 } : { activated: 1 });
+    expect((await f.store.findIdentityMergeRetryCheckpoint!("auth-staging.identity-merge-retry@v1"))?.heartbeat).toBeUndefined();
+    expect((await f.store.findCanonicalAccount!(sourceSubject))?.subject).toBe(expire ? sourceSubject : targetSubject);
+    if (expire) expect(await f.store.isAccountAuthenticationFenced!(sourceSubject)).toBe(true);
+  }
+});
+
+test("failed execution preserves an older heartbeat and never fabricates its renewal", async () => {
+  const f = await fixture("d1", false);
+  let now = initialNow;
+  const service = createIdentityMergeRetryService({ store: f.store, stage, now: () => now });
+  const original = f.store.listIdentityMergeOperations!.bind(f.store);
+  f.store.listIdentityMergeOperations = async () => { throw new Error("synthetic_store_failure"); };
+  await expect(service.runBatch(scheduledInvocation)).rejects.toThrow("synthetic_store_failure");
+  expect((await f.store.findIdentityMergeRetryCheckpoint!("auth-staging.identity-merge-retry@v1"))?.heartbeat).toBeUndefined();
+  f.store.listIdentityMergeOperations = original;
+  now += 60_000;
+  await service.runBatch(scheduledInvocation);
+  const prior = (await f.store.findIdentityMergeRetryCheckpoint!("auth-staging.identity-merge-retry@v1"))?.heartbeat;
+  f.store.listIdentityMergeOperations = async () => { throw new Error("synthetic_store_failure"); };
+  now += 60_000;
+  await expect(service.runBatch(scheduledInvocation)).rejects.toThrow("synthetic_store_failure");
+  expect((await f.store.findIdentityMergeRetryCheckpoint!("auth-staging.identity-merge-retry@v1"))?.heartbeat).toEqual(prior);
+});
+
+test("a failed owner attempt returns only bounded status and cannot mint a successful heartbeat", async () => {
+  const f = await fixture("d1", false);
+  const reconciler = { reconcile: async () => { throw new Error("private_owner_failure"); } };
+  await consentIdentityMerge({
+    store: f.store, operation: await proved(f.store, f.session), session: f.session, consent: true, reconciler,
+    retryCapability: { pendingCapacity: 15, assertAvailable: async () => {} }, now: initialNow,
+  });
+  const service = createIdentityMergeRetryService({ store: f.store, stage, reconciler, assertOwnerReadiness: async () => true, now: () => initialNow });
+  const result = await service.runBatch(scheduledInvocation);
+  expect(result).toMatchObject({ failed: 1, activated: 0 });
+  expect(JSON.stringify(result)).not.toContain("private_owner_failure");
+  expect(JSON.stringify(result)).not.toContain(runtimeContext.authorityContextDigest);
+  expect((await f.store.findIdentityMergeRetryCheckpoint!("auth-staging.identity-merge-retry@v1"))?.heartbeat).toBeUndefined();
+  await expect(service.assertAvailable()).rejects.toThrow("merge_retry_unavailable");
+  expect(await f.store.isAccountAuthenticationFenced!(sourceSubject)).toBe(true);
+});
+
+test("release CAS loss cannot persist a fresh heartbeat or report a completed scheduler run", async () => {
+  const f = await fixture("d1", false);
+  let mutations = 0;
+  const original = f.store.compareAndSetIdentityMergeRetryCheckpoint!.bind(f.store);
+  f.store.compareAndSetIdentityMergeRetryCheckpoint = async (input) => ++mutations === 2 ? false : original(input);
+  const service = createIdentityMergeRetryService({ store: f.store, stage, reconciler: { reconcile: async () => undefined }, assertOwnerReadiness: async () => true, now: () => initialNow });
+  expect(await service.runBatch(scheduledInvocation)).toMatchObject({ status: "busy" });
+  expect((await f.store.findIdentityMergeRetryCheckpoint!("auth-staging.identity-merge-retry@v1"))?.heartbeat).toBeUndefined();
+  await expect(service.assertAvailable()).rejects.toThrow("merge_retry_unavailable");
 });
 
 test("stage guards reject production, wrong issuer, bootstrap schema and oversized batches", () => {

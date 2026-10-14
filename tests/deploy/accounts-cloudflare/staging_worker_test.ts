@@ -3,6 +3,9 @@ import { createAuthStagingWorker } from "../../../deploy/accounts-cloudflare/src
 import { AUTH_STAGING_CLIENTS, AUTH_STAGING_COMPATIBILITY_DATE, AUTH_STAGING_ISSUER, AUTH_STAGING_RETRY_CRON, AUTH_STAGING_WORKER } from "../../../deploy/accounts-cloudflare/src/staging-target.ts";
 import { Miniflare } from "miniflare";
 import { resolve } from "node:path";
+import { D1AccountsStore, type D1Database } from "../../../accounts/service/src/d1-store.ts";
+import { createIdentityMergeRetryService, type IdentityMergeRetryScheduledInvocation } from "../../../accounts/service/src/identity-merge-retry.ts";
+import { loadD1AccountsMigrationCatalog, applyD1AccountsMigrationBatch } from "../../../accounts/service/src/d1-migrations.ts";
 
 type Env = Parameters<ReturnType<typeof createAuthStagingWorker>["fetch"]>[1];
 const env = {
@@ -67,7 +70,9 @@ test("stage entry mounts the guarded issuer portal with an in-process provider r
 
 test("scheduled retry uses one per-env factory and refuses prod, unexpected cron or failed schema",async()=>{
   let schemaCalls=0,factoryCalls=0,batches=0;
-  const worker=createAuthStagingWorker({verifySchema:async()=>{schemaCalls++;},retryService:()=>{factoryCalls++;return {pendingCapacity:15,assertAvailable:async()=>{},runBatch:async()=>{batches++;return {status:"completed",scanned:0,activated:0,pending:0,recoveryRequired:0,conflicts:0,failed:0,operations:[]};}};}});
+  const invocations:(IdentityMergeRetryScheduledInvocation|undefined)[]=[];
+  const authorityContextDigest="sha256:"+"a".repeat(64);
+  const worker=createAuthStagingWorker({ownerPorts:()=>({retryAuthorityContextDigest:authorityContextDigest}),verifySchema:async()=>{schemaCalls++;},retryService:()=>{factoryCalls++;return {pendingCapacity:15,assertAvailable:async()=>{},runBatch:async(invocation)=>{batches++;invocations.push(invocation);return {status:"completed",scanned:0,activated:0,pending:0,recoveryRequired:0,conflicts:0,failed:0,operations:[]};}};}});
   await worker.scheduled({cron:"*/5 * * * *"},env);
   await worker.scheduled({cron:AUTH_STAGING_RETRY_CRON},{...env,TAKOSUMI_ENVIRONMENT:"production"});
   await worker.scheduled({cron:AUTH_STAGING_RETRY_CRON},{...env,TAKOSUMI_ACCOUNTS_DB:undefined} as unknown as Env);
@@ -75,6 +80,7 @@ test("scheduled retry uses one per-env factory and refuses prod, unexpected cron
   await worker.scheduled({cron:AUTH_STAGING_RETRY_CRON},env);
   await worker.scheduled({cron:AUTH_STAGING_RETRY_CRON},env);
   expect(schemaCalls).toBe(2);expect(factoryCalls).toBe(1);expect(batches).toBe(2);
+  expect(invocations).toEqual(Array.from({length:2},()=>({kind:"scheduled",workerVersion:"fixture-version",authorityContextDigest})));
   const unavailable=createAuthStagingWorker({verifySchema:async()=>{throw new Error("fixtureprotectedhead");},retryService:()=>{throw new Error("mustnotconstructretry");}});
   await unavailable.scheduled({cron:AUTH_STAGING_RETRY_CRON},env);
   expect(batches).toBe(2);
@@ -142,3 +148,35 @@ test("actual workerd entry refuses production origin and missing protected schem
     expect((await ingress(`${AUTH_STAGING_ISSUER}/.well-known/openid-configuration`)).status).toBe(503);
   } finally { await runtime.dispose(); }
 }, 20_000);
+
+
+test("actual scheduled stage factory writes a native durable heartbeat; probes/private retry do not",async()=>{
+  const runtime=new Miniflare({modules:true,script:"export default {fetch(){return new Response('test');}}",compatibilityDate:AUTH_STAGING_COMPATIBILITY_DATE,d1Databases:{ACCOUNTS:"stage-heartbeat-native"}});
+  try{
+    const native=await runtime.getD1Database("ACCOUNTS");
+    for(const migration of (await loadD1AccountsMigrationCatalog()).migrations)await applyD1AccountsMigrationBatch(native,migration,100+migration.version);
+    const store=new D1AccountsStore(native as unknown as D1Database,{schemaMode:"predeployed",sessionHashSalt:"fixture-heartbeat-salt"});
+    const authorityContextDigest="sha256:"+"b".repeat(64);
+    const context={workerVersion:"fixture-version",authorityContextDigest};
+    const reconciler={reconcile:async()=>undefined};
+    const retry=()=>createIdentityMergeRetryService({store,reconciler,assertOwnerReadiness:async()=>true,runtimeContext:context,stage:{environment:"staging",issuerOrigin:AUTH_STAGING_ISSUER,hostedSessionPolicy:true,accountsSchemaHead:5,accountsSchemaMode:"predeployed"}});
+    await expect(retry().assertAvailable()).rejects.toThrow("merge_retry_unavailable");
+    // This trusted private attempt is old enough not to monopolize the current
+    // scheduled lease. It can resume work but cannot publish a heartbeat.
+    await createIdentityMergeRetryService({store,reconciler,assertOwnerReadiness:async()=>true,runtimeContext:context,now:()=>Date.now()-61_000,stage:{environment:"staging",issuerOrigin:AUTH_STAGING_ISSUER,hostedSessionPolicy:true,accountsSchemaHead:5,accountsSchemaMode:"predeployed"}}).runBatch();
+    const key="auth-staging.identity-merge-retry@v1";
+    expect((await store.findIdentityMergeRetryCheckpoint!(key))?.heartbeat).toBeUndefined();
+    const nativeEnv={...env,TAKOSUMI_ACCOUNTS_DB:native,TAKOSUMI_ACCOUNT_SESSION_HASH_SALT:"fixture-heartbeat-salt"} as unknown as Env;
+    const worker=createAuthStagingWorker({verifySchema:async()=>{},accounts:{fetch:async()=>Response.json({ok:true})},ownerPorts:()=>({identityMergeReconciler:reconciler,assertOwnerReadiness:async()=>true,retryAuthorityContextDigest:authorityContextDigest})});
+    expect((await worker.fetch(request("/readyz"),nativeEnv)).status).toBe(200);
+    expect((await store.findIdentityMergeRetryCheckpoint!(key))?.heartbeat).toBeUndefined();
+    await worker.scheduled({cron:AUTH_STAGING_RETRY_CRON},nativeEnv);
+    const heartbeat=(await store.findIdentityMergeRetryCheckpoint!(key))?.heartbeat;
+    expect(heartbeat?.workerVersion).toBe(context.workerVersion);
+    expect(heartbeat?.authorityContextDigest).toBe(context.authorityContextDigest);
+    expect(heartbeat?.completedAt).toBeGreaterThan(Date.now()-10_000);
+    await expect(retry().assertAvailable()).resolves.toBeUndefined();
+    const foreign=createIdentityMergeRetryService({store,reconciler,assertOwnerReadiness:async()=>true,runtimeContext:{...context,workerVersion:"other-version"},stage:{environment:"staging",issuerOrigin:AUTH_STAGING_ISSUER,hostedSessionPolicy:true,accountsSchemaHead:5,accountsSchemaMode:"predeployed"}});
+    await expect(foreign.assertAvailable()).rejects.toThrow("merge_retry_unavailable");
+  }finally{await runtime.dispose();}
+},20_000);

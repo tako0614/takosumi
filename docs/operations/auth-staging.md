@@ -121,7 +121,19 @@ runtime compatibility settings, exact `fetch`/`scheduled` handlers, plain
 variables and secret names. The same cached per-environment retry service is
 used by consent admission and the scheduled handler; absent actual owner
 readiness denies consent before reservation. The configured financial owner
-remains a separate required adapter, not a fabricated ACK.
+remains a separate required adapter, not a fabricated ACK. The trusted owner
+composition supplies `retryAuthorityContextDigest`, a nonsecret SHA256 fingerprint
+of its actually qualified authority/configuration. Consent also requires a
+successful scheduled heartbeat in the existing Accounts checkpoint within
+120 seconds, matching that context and `TAKOSUMI_VERSION_METADATA.id`. No missing
+or invalid context, readiness probe, owner-ready boolean, private retry, schedule
+readback or manually invented evidence may mint that heartbeat. Login and
+existing pending retry/recovery remain available when admission is refused.
+
+[Cloudflare Cron Triggers](https://developers.cloudflare.com/workers/configuration/cron-triggers/)
+may take up to 15 minutes to propagate. After topology/version changes, verify
+an actual matching scheduled completion before attempting merge qualification;
+a five-minute proof must never be reserved based on cron configuration alone.
 Serving deployment readback requires exactly one Version at 100 percent.
 Topology readback requires the exact stage domain with previews disabled,
 workers.dev/previews disabled, the exact one-minute retry schedule, and no

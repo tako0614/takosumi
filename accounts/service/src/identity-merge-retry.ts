@@ -1,5 +1,5 @@
 import type { AccountsStore } from "./store.ts";
-import type { IdentityMergeOperation } from "./identity-state.ts";
+import type { IdentityMergeOperation, IdentityMergeRetryCheckpoint } from "./identity-state.ts";
 import {
   activateIdentityMerge,
   IdentityMergeConflict,
@@ -11,6 +11,7 @@ const leaseDurationMs = 60_000;
 const maximumBatchSize = 100;
 const recoveryRequired = "reviewed_recovery_required";
 const readinessTimeoutMs = 1_000;
+const heartbeatMaxAgeMs = 120_000;
 
 /** Internal service capability. It is never accepted from browser JSON. The
  * owning stage entry injects the same service that its scheduled handler runs. */
@@ -19,14 +20,15 @@ export interface IdentityMergeRetryCapability {
   assertAvailable(operation?: IdentityMergeOperation): Promise<void>;
 }
 
-interface RetryCheckpoint {
-  revision: number;
-  mutationId: string;
-  cursor?: string;
-  leaseId?: string;
-  leaseExpiresAt?: number;
-  nextPollAt?: number;
-  updatedAt: number;
+export interface IdentityMergeRetryRuntimeContext {
+  readonly workerVersion: string;
+  readonly authorityContextDigest: string;
+}
+
+/** Only the owning scheduled closure supplies this trusted invocation. A
+ * browser request, readiness probe or cron configuration readback cannot. */
+export interface IdentityMergeRetryScheduledInvocation extends IdentityMergeRetryRuntimeContext {
+  readonly kind: "scheduled";
 }
 
 interface RetryStore extends AccountsStore {
@@ -37,11 +39,11 @@ interface RetryStore extends AccountsStore {
     operations: readonly IdentityMergeOperation[];
     nextCursor?: string;
   }>;
-  findIdentityMergeRetryCheckpoint(key: string): Promise<RetryCheckpoint | undefined>;
+  findIdentityMergeRetryCheckpoint(key: string): Promise<IdentityMergeRetryCheckpoint | undefined>;
   compareAndSetIdentityMergeRetryCheckpoint(input: {
     key: string;
     expectedRevision?: number;
-    next: RetryCheckpoint;
+    next: IdentityMergeRetryCheckpoint;
   }): Promise<boolean>;
 }
 
@@ -61,7 +63,7 @@ export interface IdentityMergeRetryBatchResult {
 }
 
 export interface IdentityMergeRetryService extends IdentityMergeRetryCapability {
-  runBatch(): Promise<IdentityMergeRetryBatchResult>;
+  runBatch(invocation?: IdentityMergeRetryScheduledInvocation): Promise<IdentityMergeRetryBatchResult>;
 }
 
 /** Trusted scheduled/private stage composition only. All durable state remains
@@ -71,6 +73,7 @@ export function createIdentityMergeRetryService(input: {
   store: AccountsStore;
   reconciler?: IdentityMergeReconciler;
   assertOwnerReadiness?: (operation?: IdentityMergeOperation) => Promise<boolean>;
+  runtimeContext?: IdentityMergeRetryRuntimeContext;
   stage: {
     environment: string;
     issuerOrigin: string;
@@ -107,6 +110,9 @@ export function createIdentityMergeRetryService(input: {
   const store = input.store;
   const reconciler = input.reconciler;
   const checkOwnerReadiness = input.assertOwnerReadiness;
+  const runtimeContext = validRuntimeContext(input.runtimeContext)
+    ? Object.freeze({ ...input.runtimeContext })
+    : undefined;
   const boundedReconciler = reconciler && {
     reconcile: (operation: IdentityMergeOperation) => boundedAttempt(
       () => reconciler.reconcile(structuredClone(operation)),
@@ -128,9 +134,21 @@ export function createIdentityMergeRetryService(input: {
     }
   }
 
+  async function assertRecentHeartbeat(): Promise<void> {
+    if (!hasRetryPorts(store) || !runtimeContext)
+      throw new IdentityMergeConflict("merge_retry_unavailable");
+    const heartbeat = (await store.findIdentityMergeRetryCheckpoint(checkpointKey))?.heartbeat;
+    const now = validNow(clock());
+    if (!heartbeat || !sameRuntimeContext(runtimeContext, heartbeat) ||
+      !Number.isSafeInteger(heartbeat.completedAt) || heartbeat.completedAt < 0 ||
+      heartbeat.completedAt > now || now - heartbeat.completedAt > heartbeatMaxAgeMs)
+      throw new IdentityMergeConflict("merge_retry_unavailable");
+  }
+
   return Object.freeze<IdentityMergeRetryService>({
     pendingCapacity,
     async assertAvailable(operation) {
+      await assertRecentHeartbeat();
       if (!await ready(operation)) throw new IdentityMergeConflict("merge_retry_unavailable");
       const page = await (store as RetryStore).listIdentityMergeOperations({ limit: pendingCapacity });
       if (page.nextCursor !== undefined || page.operations.length >= pendingCapacity)
@@ -141,22 +159,29 @@ export function createIdentityMergeRetryService(input: {
         if (deadline === undefined || deadline <= validNow(clock()) + cadenceTurns * leaseDurationMs + ownerAttemptTimeoutMs + readinessTimeoutMs)
           throw new IdentityMergeConflict("merge_retry_unavailable");
       }
+      // Owner and store awaits cannot carry a heartbeat past its validity or
+      // silently accept a replacement runtime/authority before reservation.
+      await assertRecentHeartbeat();
     },
-    async runBatch() {
+    async runBatch(invocation) {
       if (!hasRetryPorts(store)) return emptyResult("unavailable");
+      const scheduledContext = invocation?.kind === "scheduled"
+        ? { workerVersion: invocation.workerVersion, authorityContextDigest: invocation.authorityContextDigest }
+        : undefined;
       const acquiredAt = validNow(clock());
       const prior = await store.findIdentityMergeRetryCheckpoint(checkpointKey);
       if ((prior?.leaseExpiresAt !== undefined && prior.leaseExpiresAt > acquiredAt) ||
         (prior?.nextPollAt !== undefined && prior.nextPollAt > acquiredAt))
         return emptyResult("busy");
       const leaseId = crypto.randomUUID();
-      const checkpoint: RetryCheckpoint = {
+      const checkpoint: IdentityMergeRetryCheckpoint = {
         revision: (prior?.revision ?? -1) + 1,
         mutationId: crypto.randomUUID(),
         ...(prior?.cursor === undefined ? {} : { cursor: prior.cursor }),
         leaseId,
         leaseExpiresAt: acquiredAt + leaseDurationMs,
         nextPollAt: acquiredAt + leaseDurationMs,
+        ...(prior?.heartbeat === undefined ? {} : { heartbeat: structuredClone(prior.heartbeat) }),
         updatedAt: acquiredAt,
       };
       if (!await store.compareAndSetIdentityMergeRetryCheckpoint({
@@ -168,6 +193,8 @@ export function createIdentityMergeRetryService(input: {
       const result = emptyResult("completed");
       let nextCursor = checkpoint.cursor;
       let attempts = 0;
+      let executionCompleted = false;
+      let released = false;
       try {
         const page = await store.listIdentityMergeOperations({
           ...(checkpoint.cursor === undefined ? {} : { after: checkpoint.cursor }),
@@ -221,11 +248,18 @@ export function createIdentityMergeRetryService(input: {
         // A partial page advances only through visited operation references.
         // This prevents both skipping later work and starving it behind retries.
         if (finishedPage) nextCursor = page.nextCursor;
-        return structuredClone(result);
+        executionCompleted = true;
       } finally {
         // A replacement lease wins its own revision; this stale invocation can
         // neither erase it nor move its cursor. No automatic replay on errors.
-        await store.compareAndSetIdentityMergeRetryCheckpoint({
+        const completedAt = validNow(clock());
+        const heartbeat = executionCompleted && result.failed === 0 &&
+          scheduledContext && runtimeContext &&
+          sameRuntimeContext(runtimeContext, scheduledContext) &&
+          completedAt >= acquiredAt && completedAt - acquiredAt <= maxBatchDurationMs
+          ? { ...runtimeContext, completedAt }
+          : checkpoint.heartbeat;
+        released = await store.compareAndSetIdentityMergeRetryCheckpoint({
           key: checkpointKey,
           expectedRevision: checkpoint.revision,
           next: {
@@ -233,12 +267,24 @@ export function createIdentityMergeRetryService(input: {
             mutationId: crypto.randomUUID(),
             ...(nextCursor === undefined ? {} : { cursor: nextCursor }),
             nextPollAt: checkpoint.nextPollAt,
-            updatedAt: validNow(clock()),
+            ...(heartbeat === undefined ? {} : { heartbeat }),
+            updatedAt: completedAt,
           },
         });
       }
+      if (!released) result.status = "busy";
+      return structuredClone(result);
     },
   });
+}
+
+function validRuntimeContext(context: IdentityMergeRetryRuntimeContext | undefined): context is IdentityMergeRetryRuntimeContext {
+  return !!context && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(context.workerVersion) &&
+    /^sha256:[0-9a-f]{64}$/.test(context.authorityContextDigest);
+}
+
+function sameRuntimeContext(a: IdentityMergeRetryRuntimeContext, b: IdentityMergeRetryRuntimeContext): boolean {
+  return a.workerVersion === b.workerVersion && a.authorityContextDigest === b.authorityContextDigest;
 }
 
 function hasRetryPorts(store: AccountsStore): store is RetryStore {

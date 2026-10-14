@@ -202,6 +202,11 @@ export interface IdentityMergeRetryCheckpoint {
   leaseId?: string;
   leaseExpiresAt?: number;
   nextPollAt?: number;
+  heartbeat?: {
+    workerVersion: string;
+    authorityContextDigest: string;
+    completedAt: number;
+  };
   updatedAt: number;
 }
 export interface IdentityMergeRetryPage {

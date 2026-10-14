@@ -5,7 +5,7 @@ import type { CloudflareWorkerEnv as ControlEnv } from "../../../worker/src/bind
 import { verifyD1OpenTofuLedgerSchemaPredeployed } from "../../../worker/src/d1_opentofu_store.ts";
 import { assertControlD1MaintenanceInactive } from "../../../worker/src/d1_schema_maintenance.ts";
 import { D1AccountsStore } from "../../../accounts/service/src/d1-store.ts";
-import { createIdentityMergeRetryService, type IdentityMergeRetryService } from "../../../accounts/service/src/identity-merge-retry.ts";
+import { createIdentityMergeRetryService, type IdentityMergeRetryService, type IdentityMergeRetryRuntimeContext } from "../../../accounts/service/src/identity-merge-retry.ts";
 import type { IdentityMergeReconciler } from "../../../accounts/service/src/identity-merge.ts";
 import type { IdentityMergeOperation } from "../../../accounts/service/src/identity-state.ts";
 import type { CredentialUnlinkReconciler } from "../../../accounts/service/src/identity-unlink-state.ts";
@@ -26,6 +26,9 @@ export interface AuthStagingOwnerPorts {
   readonly assertOwnerReadiness?: (operation?: IdentityMergeOperation) => Promise<boolean>;
   readonly credentialUnlinkReconciler?: CredentialUnlinkReconciler;
   readonly workspaceBillingEnrollment?: WorkspaceBillingEnrollmentPort;
+  /** Nonsecret fingerprint of the actually qualified owner authority/config.
+   * Absence keeps login/recovery available but refuses new merge admission. */
+  readonly retryAuthorityContextDigest?: string;
 }
 const seams = new WeakMap<AuthEnv, ReturnType<typeof createInProcessDeployControlSeam>>();
 
@@ -90,12 +93,21 @@ export function createAuthStagingWorker(dependencies: {
     if (!ports) { ports = dependencies.ownerPorts?.(env) ?? {}; owners.set(env,ports); }
     return ports;
   };
+  const runtimeContext = (env: AuthEnv): IdentityMergeRetryRuntimeContext | undefined => {
+    const metadata = env.TAKOSUMI_VERSION_METADATA;
+    const digest = ownerPorts(env).retryAuthorityContextDigest;
+    const version = metadata && typeof metadata === "object" && "id" in metadata ? metadata.id : undefined;
+    if (typeof version !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/u.test(version) ||
+      typeof digest !== "string" || !/^sha256:[a-f0-9]{64}$/u.test(digest)) return undefined;
+    return {workerVersion:version,authorityContextDigest:digest};
+  };
   const retryServices = new WeakMap<AuthEnv, IdentityMergeRetryService>();
   const retryService = (env: AuthEnv): IdentityMergeRetryService => {
     let service = retryServices.get(env);
     if (!service) {
       const ports = ownerPorts(env);
       service = dependencies.retryService?.(env) ?? createIdentityMergeRetryService({
+        runtimeContext:runtimeContext(env),
         store:new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB,{schemaMode:"predeployed",sessionHashSalt:env.TAKOSUMI_ACCOUNT_SESSION_HASH_SALT!}),
         reconciler:ports.identityMergeReconciler,assertOwnerReadiness:ports.assertOwnerReadiness,
         stage:{environment:String(env.TAKOSUMI_ENVIRONMENT),issuerOrigin:String(env.TAKOSUMI_ACCOUNTS_ISSUER),hostedSessionPolicy:env.TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY==="true",accountsSchemaHead:5,accountsSchemaMode:String(env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE)},
@@ -168,7 +180,10 @@ export function createAuthStagingWorker(dependencies: {
         if (REQUIRED_BINDINGS.some((name)=>env[name]===null||env[name]===undefined) ||
           [...REQUIRED_SECRETS,...assertAuthStagingUpstreams(env.TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS)].some((name)=>typeof env[name]!=="string"||!(env[name] as string).trim())) return;
         await schemaFor(env);
-        const result = await retryService(env).runBatch();
+        const context = runtimeContext(env);
+        // Configuration readback is not an execution heartbeat. Only this
+        // guarded, real scheduled closure supplies the trusted invocation.
+        const result = await retryService(env).runBatch(context ? {kind:"scheduled",...context} : undefined);
         console.info(JSON.stringify({event:"auth_staging_merge_retry",status:result.status,scanned:result.scanned,activated:result.activated,pending:result.pending,recoveryRequired:result.recoveryRequired,conflicts:result.conflicts,failed:result.failed}));
       } catch {
         console.info(JSON.stringify({event:"auth_staging_merge_retry",status:"unavailable"}));

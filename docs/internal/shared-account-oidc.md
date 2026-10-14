@@ -174,7 +174,13 @@ expiry. After expiry, owner-reviewed recovery is required. The dedicated staging
 entry mounts the same per-environment retry service for consent readiness and a
 one-minute scheduled handler. Its existing Accounts pending index, bounded
 cursor/CAS lease, queue capacity and proof deadline are checked before fencing.
-Missing real owner readiness refuses consent. Client credentials
+Admission also requires a durable heartbeat from a successfully completed real
+scheduled invocation within 120 seconds, matching the exact runtime version and
+qualified owner-authority context. A readiness probe, private retry, configured
+cron or owner-ready boolean cannot create it. An absent/stale heartbeat refuses
+new consent before fences; pending retry and reviewed recovery continue, and
+ordinary login remains available. Missing real owner readiness refuses consent.
+Client credentials
 or an arbitrary subject parameter never provide that retry authority.
 
 Credential unlink requires a server-minted intent bound to the removed identity
