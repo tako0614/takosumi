@@ -86,6 +86,10 @@ const mirroredMigrationFiles: readonly {
     fileName: "20260430000070_install_config_runner_profile.sql",
     migrationId: "deploy.install_config_runner_profile.normalize",
   },
+  {
+    fileName: "20261014000071_scheduled_sweep_cursors.sql",
+    migrationId: "deploy.scheduled_sweep_cursors.create",
+  },
 ];
 
 test("migration catalog creates every declared storage table", () => {

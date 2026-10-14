@@ -559,6 +559,12 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       ],
     },
     {
+      name: "takosumi_scheduled_sweep_cursors",
+      domain: "deploy",
+      columns: ["lane", "generation", "cursor_created_at", "cursor_id", "upper_created_at", "upper_id"],
+      primaryKey: ["lane"],
+    },
+    {
       // §30 artifact ledger (R2 pointer metadata for plan / state archives).
       name: "takosumi_artifacts",
       domain: "deploy",
@@ -5012,5 +5018,26 @@ create table if not exists takosumi_private_run_file_receipts (
   drop constraint if exists takosumi_capsules_status_check,
   add constraint takosumi_capsules_status_check
     check (status in ('pending', 'active', 'stale', 'error', 'disabled', 'uninstalled', 'destroyed'));`,
+    },
+    {
+      id: "deploy.scheduled_sweep_cursors.create",
+      version: 118,
+      domain: "deploy",
+      description:
+        "Persist independent keyset positions for bounded scheduled Workspace, active Capsule, and recoverable Run sweeps.",
+      sql: `create table if not exists takosumi_scheduled_sweep_cursors (
+  lane text primary key check (lane in ('workspaces', 'active_capsules', 'recoverable_runs')),
+  generation bigint not null default 0,
+  cursor_created_at text,
+  cursor_id text,
+  upper_created_at text,
+  upper_id text,
+  check ((cursor_created_at is null) = (cursor_id is null)),
+  check ((upper_created_at is null) = (upper_id is null))
+);
+insert into takosumi_scheduled_sweep_cursors (lane, generation)
+values ('workspaces', 0), ('active_capsules', 0), ('recoverable_runs', 0)
+on conflict (lane) do nothing;`,
+      down: `drop table if exists takosumi_scheduled_sweep_cursors;`,
     },
   ]);

@@ -33,8 +33,8 @@ export interface DriftSweepOperations {
   /** Creates a Workspace-scoped RunGroup containing read-only §19 drift_check Runs. */
   createWorkspaceDriftCheck(
     workspaceId: string,
-    options?: { readonly limit?: number },
-  ): Promise<unknown>;
+    options?: { readonly limit?: number; readonly capsuleIds?: readonly string[] },
+  ): Promise<{ readonly runs: readonly unknown[] }>;
 }
 
 export interface DriftSweepOptions {
@@ -64,20 +64,20 @@ export async function driftSweep(
     return { scanned: 0, checked: 0 };
   }
   const capsules = await operations.listActiveCapsules(limit);
-  const byWorkspace = new Map<string, number>();
+  const byWorkspace = new Map<string, string[]>();
   for (const capsule of capsules) {
-    byWorkspace.set(
-      capsule.workspaceId,
-      (byWorkspace.get(capsule.workspaceId) ?? 0) + 1,
-    );
+    const ids = byWorkspace.get(capsule.workspaceId) ?? [];
+    ids.push(capsule.id);
+    byWorkspace.set(capsule.workspaceId, ids);
   }
   let checked = 0;
-  for (const [workspaceId, workspaceLimit] of byWorkspace) {
+  for (const [workspaceId, capsuleIds] of byWorkspace) {
     try {
-      await operations.createWorkspaceDriftCheck(workspaceId, {
-        limit: workspaceLimit,
+      const group = await operations.createWorkspaceDriftCheck(workspaceId, {
+        limit: capsuleIds.length,
+        capsuleIds,
       });
-      checked += workspaceLimit;
+      checked += group.runs.length;
     } catch {
       // Best-effort: one bad Workspace must not abort the whole sweep.
       console.warn("scheduled.drift_check_workspace_failed");

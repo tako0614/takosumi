@@ -28,6 +28,7 @@ export const deployControlLogicalTables = [
   "securityFindings",
   "auditEvents",
   "backups",
+  "scheduledSweepCursors",
   // Provider-neutral runtime declarations retained by the Stack flow.
   "interfaces",
   "interfaceBindings",
@@ -67,6 +68,7 @@ export const deployControlD1TableNames = {
   securityFindings: "security_findings",
   auditEvents: "audit_events",
   backups: "backups",
+  scheduledSweepCursors: "scheduled_sweep_cursors",
   interfaces: "interfaces",
   interfaceBindings: "interface_bindings",
 } as const satisfies Record<DeployControlLogicalTable, string>;
@@ -102,6 +104,7 @@ export const deployControlPostgresTableNames = {
   securityFindings: "takosumi_security_findings",
   auditEvents: "takosumi_audit_events",
   backups: "takosumi_backups",
+  scheduledSweepCursors: "takosumi_scheduled_sweep_cursors",
   interfaces: "takosumi_interfaces",
   interfaceBindings: "takosumi_interface_bindings",
 } as const satisfies Record<DeployControlLogicalTable, string>;

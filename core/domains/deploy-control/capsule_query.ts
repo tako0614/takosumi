@@ -95,10 +95,7 @@ export class CapsuleQuery {
 
   async listActiveCapsules(limit: number): Promise<readonly Capsule[]> {
     if (!Number.isFinite(limit) || limit <= 0) return [];
-    const all = await this.#store.listCapsules();
-    return all
-      .filter((capsule) => capsule.status === "active")
-      .slice(0, Math.floor(limit));
+    return await this.#store.listActiveCapsulesForSweep(Math.floor(limit));
   }
 
   async listStateVersions(

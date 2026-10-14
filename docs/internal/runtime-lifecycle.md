@@ -37,6 +37,23 @@ run は scheduled run repair sweep が拾い直すので、ここで止めても
 Workspace の keyed lookup は D1 の 100 bound parameter 上限があるため 90 件ずつ
 chunk する。
 
+stale auto-plan、drift、ordinary repair は `OpenTofuControlStore` の永続巡回
+cursor と一巡の上端 key を使う。上端は巡回開始時に固定し、wrap 時に更新するため、
+新規対象が増え続けても現在の一巡は終わる。各 lane の bounded page の選択と cursor 更新は PG の row lock /
+D1 の transactional batch 内で同時に確定し、外部処理中は lock を保持しない。
+cursor の対象が削除されても keyset 比較で続き、末尾では先頭へ戻る。先頭の処理が
+失敗し続けても次の page へ進むため、上端より後の key の対象が増えても、
+継続して eligible な固定 key の
+対象は有限回で巡回する。
+page 確定後に crash した場合、その対象は次の巡回で再試行する。cursor は処理の
+成功や Run の完了を表さず、既存の owner / admission / idempotency fence が正本である。
+
+repair の対象判定は current heartbeat JSON と最後の billing pending/completed
+marker のまま。terminal retirement outbox の既存 oldest-attempt-first claim は別に
+維持する。drift は選択した Capsule ID を RunGroup へ渡し、active status と Workspace
+所属を再確認するため、Workspace 内で先頭を選び直すこともない。auto-plan の archived
+除外・pending Plan 抑止、各 tick の上限、opt-in flag は従来どおり。
+
 ## 3. edge の path gate は route inventory から導出する
 
 正本: [`core/api/edge_public_paths.ts`](../../core/api/edge_public_paths.ts)

@@ -3307,6 +3307,13 @@ export interface RecoverableOpenTofuRunListOptions {
   readonly staleQueuedBeforeMs: number;
   readonly staleRunningBeforeMs: number;
   readonly limit?: number;
+  /** Internal scheduled repair sweep cursor; public operator reads remain unchanged. */
+  readonly sweep?: true;
+}
+
+interface ScheduledSweepCursorPosition {
+  readonly createdAt: string;
+  readonly id: string;
 }
 
 /** Stable keyset position for the public newest-first Workspace Run list. */
@@ -3457,6 +3464,10 @@ export interface OpenTofuControlStore {
   listRecoverableOpenTofuRuns(
     options: RecoverableOpenTofuRunListOptions,
   ): Promise<readonly StoredRunRecord[]>;
+  /** One bounded, atomically advanced page for the stale-auto-plan sweep. */
+  listWorkspacesForSweep(limit: number): Promise<readonly Workspace[]>;
+  /** One bounded, atomically advanced page for the drift-check sweep. */
+  listActiveCapsulesForSweep(limit: number): Promise<readonly Capsule[]>;
   /**
    * Fair oldest-attempt-first retirement outbox scan. Kept separate from
    * ordinary queued execution so archived or late-listed Workspaces cannot
@@ -4088,6 +4099,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
    * {@link transitionRun}.
    */
   readonly #runLeases = new Map<string, string>();
+  readonly #scheduledSweepCursors = new Map<
+    "workspaces" | "active_capsules" | "recoverable_runs",
+    { readonly cursor: ScheduledSweepCursorPosition; readonly upper: ScheduledSweepCursorPosition }
+  >();
   readonly #workspaces = new Map<string, Workspace>();
   readonly #workspaceManagement = new Map<string, WorkspaceManagement>();
   #gitInstallPlanStore: InMemoryGitInstallPlanStore | undefined;
@@ -4942,12 +4957,20 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   ): Promise<readonly StoredRunRecord[]> {
     const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
     const rows = Array.from(this.#runs.values());
+    const eligible = rows
+      .filter((row) => isRecoverableOpenTofuRunRecord(row, options))
+      .sort((a, b) =>
+        storedRunRecordTimestamp(a) - storedRunRecordTimestamp(b) ||
+        compareRunIdsBinary(a.id, b.id)
+      );
     return Promise.resolve(
-      rows
-        .filter((row) => isRecoverableOpenTofuRunRecord(row, options))
-        .sort(compareStoredRunRecordsAsc)
-        .slice(0, limit)
-        .map(publicStoredRun),
+      (options.sweep === true
+        ? this.#takeScheduledSweepPage("recoverable_runs", eligible, limit, (row) => ({
+            createdAt: String(storedRunRecordTimestamp(row)),
+            id: row.id,
+          }))
+        : eligible.slice(0, limit)
+      ).map(publicStoredRun),
     );
   }
 
@@ -5258,6 +5281,24 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       Array.from(this.#workspaces.values()).sort(
         (a, b) =>
           a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+      ),
+    );
+  }
+
+  listWorkspacesForSweep(limit: number): Promise<readonly Workspace[]> {
+    const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
+    const eligible = Array.from(this.#workspaces.values())
+      .filter((workspace) => !workspace.archivedAt)
+      .sort((a, b) => compareSweepPosition(
+        { createdAt: a.createdAt, id: a.id },
+        { createdAt: b.createdAt, id: b.id },
+      ));
+    return Promise.resolve(
+      this.#takeScheduledSweepPage(
+        "workspaces",
+        eligible,
+        boundedLimit,
+        (workspace) => ({ createdAt: workspace.createdAt, id: workspace.id }),
       ),
     );
   }
@@ -5821,6 +5862,53 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
           a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
       ),
     );
+  }
+
+  listActiveCapsulesForSweep(limit: number): Promise<readonly Capsule[]> {
+    const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
+    const eligible = Array.from(this.#capsules.values())
+      .filter((capsule) => capsule.status === "active")
+      .sort((a, b) => compareSweepPosition(
+        { createdAt: a.createdAt, id: a.id },
+        { createdAt: b.createdAt, id: b.id },
+      ));
+    return Promise.resolve(
+      this.#takeScheduledSweepPage(
+        "active_capsules",
+        eligible,
+        boundedLimit,
+        (capsule) => ({ createdAt: capsule.createdAt, id: capsule.id }),
+      ),
+    );
+  }
+
+  #takeScheduledSweepPage<T>(
+    lane: "workspaces" | "active_capsules" | "recoverable_runs",
+    rows: readonly T[],
+    limit: number,
+    position: (row: T) => ScheduledSweepCursorPosition,
+  ): T[] {
+    if (limit <= 0) return [];
+    if (rows.length === 0) {
+      this.#scheduledSweepCursors.delete(lane);
+      return [];
+    }
+    const lap = this.#scheduledSweepCursors.get(lane);
+    const after = lap
+      ? rows.filter((row) =>
+        compareSweepPosition(position(row), lap.cursor) > 0 &&
+        compareSweepPosition(position(row), lap.upper) <= 0
+      )
+      : [];
+    // When the current lap reaches its end, the next bounded page starts a new lap.
+    const continuing = after.length > 0;
+    const page = (continuing ? after : rows).slice(0, limit);
+    const tail = page.at(-1);
+    if (tail) this.#scheduledSweepCursors.set(lane, {
+      cursor: position(tail),
+      upper: continuing ? lap!.upper : position(rows[rows.length - 1]!),
+    });
+    return page;
   }
 
   async listCapsulesPage(
@@ -8202,6 +8290,18 @@ function normalizeUsageEvent(event: UsageEvent): UsageEvent {
     workspaceId: event.workspaceId,
     usdMicros,
   };
+}
+
+function compareSweepPosition(
+  left: ScheduledSweepCursorPosition,
+  right: ScheduledSweepCursorPosition,
+): number {
+  const leftTime = Number(left.createdAt);
+  const rightTime = Number(right.createdAt);
+  const timeOrder = Number.isFinite(leftTime) && Number.isFinite(rightTime)
+    ? leftTime - rightTime
+    : compareRunIdsBinary(left.createdAt, right.createdAt);
+  return timeOrder || compareRunIdsBinary(left.id, right.id);
 }
 
 function workspaceMemberKey(workspaceId: string, accountId: string): string {

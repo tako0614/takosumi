@@ -2267,16 +2267,43 @@ function d1RunStarted(): SQL {
  */
 function d1KeysetWhere(
   filter: SQL | undefined,
-  createdAtCol: SQLiteColumn,
-  idCol: SQLiteColumn,
-  cursor: { readonly createdAt: string; readonly id: string } | undefined,
+  createdAtCol: SQLiteColumn | SQL,
+  idCol: SQLiteColumn | SQL,
+  cursor: { readonly createdAt: string | number; readonly id: string } | undefined,
 ): SQL | undefined {
   if (cursor === undefined) return filter;
+  const createdAt = sql`${createdAtCol}`;
+  const id = sql`${idCol}`;
   const keyset = or(
-    gt(createdAtCol, cursor.createdAt),
-    and(eq(createdAtCol, cursor.createdAt), gt(idCol, cursor.id)),
+    gt(createdAt, cursor.createdAt),
+    and(eq(createdAt, cursor.createdAt), gt(id, cursor.id)),
   );
   return filter === undefined ? keyset : and(filter, keyset);
+}
+
+/** Scheduled sweep IDs use SQLite BINARY ordering to match PostgreSQL C collation. */
+function d1SweepIdOrder(id: SQLiteColumn): SQL {
+  return sql`${id} collate binary`;
+}
+
+function d1SweepKeysetWhere(
+  filter: SQL | undefined,
+  createdAtCol: SQLiteColumn | SQL,
+  idCol: SQLiteColumn,
+  cursor: { readonly createdAt: string | number; readonly id: string } | undefined,
+  upper?: { readonly createdAt: string | number; readonly id: string },
+): SQL | undefined {
+  const createdAt = sql`${createdAtCol}`;
+  const id = d1SweepIdOrder(idCol);
+  const after = cursor === undefined ? undefined : or(
+    gt(createdAt, cursor.createdAt),
+    and(eq(createdAt, cursor.createdAt), gt(id, cursor.id)),
+  );
+  const beforeUpper = upper === undefined ? undefined : or(
+    lt(createdAt, upper.createdAt),
+    and(eq(createdAt, upper.createdAt), or(lt(id, upper.id), eq(id, upper.id))),
+  );
+  return and(filter, after, beforeUpper);
 }
 
 /**
@@ -2452,6 +2479,125 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     this.#predeployedSchemaVerified =
       this.#schemaMode === "predeployed" &&
       verifiedPredeployedD1Bindings.has(db);
+  }
+
+  async #reserveScheduledSweepPage<T>(input: {
+    readonly lane: "workspaces" | "active_capsules" | "recoverable_runs";
+    readonly limit: number;
+    readonly buildAfter: (
+      cursor?: { readonly createdAt: string; readonly id: string },
+      upper?: { readonly createdAt: string; readonly id: string },
+    ) => { readonly sql: string; readonly params: readonly unknown[] };
+    readonly start: { readonly sql: string; readonly params: readonly unknown[] };
+    readonly upper: { readonly sql: string; readonly params: readonly unknown[] };
+    readonly mapRow: (row: Record<string, unknown>) => T;
+  }): Promise<readonly T[]> {
+    if (input.limit <= 0) return [];
+    // D1 has no interactive transaction and allows at most 100 bound
+    // parameters per statement. Page reads run in one batch, then a
+    // generation-fenced UPDATE reserves the page by binding only the scalar
+    // keyset values computed from those reads (11 parameters, independent of
+    // eligibility predicate size). Competing ticks can observe the same old
+    // generation, but only one can advance it; losers retry and re-read.
+    // Eligibility predicates grow independently (e.g. billing/runner-usage
+    // branches), so the reservation must never re-embed the page queries.
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const snapshot = await this.db
+        .prepare(
+          `select generation, cursor_created_at, cursor_id, upper_created_at, upper_id
+           from scheduled_sweep_cursors where lane = ?`,
+        )
+        .bind(input.lane)
+        .first<{
+          generation: number;
+          cursor_created_at: string | null;
+          cursor_id: string | null;
+          upper_created_at: string | null;
+          upper_id: string | null;
+        }>();
+      if (!snapshot) throw new Error("scheduled sweep cursor row is missing");
+      const after = input.buildAfter(
+        snapshot.cursor_created_at && snapshot.cursor_id &&
+          snapshot.upper_created_at && snapshot.upper_id
+          ? {
+              createdAt: snapshot.cursor_created_at,
+              id: snapshot.cursor_id,
+            }
+          : undefined,
+        snapshot.upper_created_at && snapshot.upper_id
+          ? { createdAt: snapshot.upper_created_at, id: snapshot.upper_id }
+          : undefined,
+      );
+      const reads = await this.db.batch([
+        this.db.prepare(after.sql).bind(...after.params),
+        this.db.prepare(input.start.sql).bind(...input.start.params),
+        this.db.prepare(input.upper.sql).bind(...input.upper.params),
+      ]);
+      const afterRows = (reads[0] as D1Result<Record<string, unknown>>)
+        .results ?? [];
+      const startRows = (reads[1] as D1Result<Record<string, unknown>>)
+        .results ?? [];
+      const upperRows = (reads[2] as D1Result<Record<string, unknown>>)
+        .results ?? [];
+      // Mid-lap pages continue after the cursor; an empty after-page wraps to
+      // the lap-start page, mirroring the previous single-statement CTE.
+      const pageRows = afterRows.length > 0 ? afterRows : startRows;
+      const keyOf = (
+        row: Record<string, unknown> | undefined,
+      ): { readonly createdAt: string; readonly id: string } | undefined => {
+        if (row === undefined) return undefined;
+        const createdAt = row.sweep_created_at;
+        const id = row.sweep_id;
+        if (
+          (typeof createdAt !== "string" && typeof createdAt !== "number") ||
+          typeof id !== "string"
+        ) {
+          throw new Error("scheduled sweep page row has no keyset");
+        }
+        return { createdAt: String(createdAt), id };
+      };
+      const nextCursor = keyOf(pageRows[pageRows.length - 1]);
+      // A non-empty after-page keeps the frozen lap ceiling; a wrap captures
+      // the newest eligible row as the next ceiling (null when nothing is
+      // eligible), so continuous arrivals cannot postpone the lap end.
+      const nextUpper = afterRows.length > 0
+        ? {
+          createdAt: snapshot.upper_created_at,
+          id: snapshot.upper_id,
+        }
+        : keyOf(upperRows[0]);
+      const advanced = await this.db
+        .prepare(
+          `update scheduled_sweep_cursors
+           set generation = generation + 1,
+               cursor_created_at = cast(? as text),
+               cursor_id = ?,
+               upper_created_at = cast(? as text),
+               upper_id = ?
+           where lane = ?
+             and generation = ?
+             and cursor_created_at is ?
+             and cursor_id is ?
+             and upper_created_at is ?
+             and upper_id is ?`,
+        )
+        .bind(
+          nextCursor?.createdAt ?? null,
+          nextCursor?.id ?? null,
+          nextUpper?.createdAt ?? null,
+          nextUpper?.id ?? null,
+          input.lane,
+          snapshot.generation,
+          snapshot.cursor_created_at,
+          snapshot.cursor_id,
+          snapshot.upper_created_at,
+          snapshot.upper_id,
+        )
+        .run();
+      if (changes(advanced as D1Result) === 0) continue;
+      return pageRows.map(input.mapRow);
+    }
+    throw new Error("scheduled sweep cursor changed too often");
   }
 
   /**
@@ -4360,6 +4506,61 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       ),
     );
     const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
+    if (options.sweep === true) {
+      await this.#ensureSchema();
+      const buildQuery = (
+        cursor?: { readonly createdAt: string | number; readonly id: string },
+        upper?: { readonly createdAt: string | number; readonly id: string },
+        descending = false,
+      ) => this.#orm
+        .select({
+          json: sql`${schema.runs.runJson}`.as("json"),
+          sweepCreatedAt: sql`${createdAt}`.as("sweep_created_at"),
+          sweepId: sql`${schema.runs.id}`.as("sweep_id"),
+        })
+        .from(schema.runs)
+        .where(
+          d1SweepKeysetWhere(
+            where,
+            createdAt,
+            schema.runs.id,
+            cursor,
+            upper,
+          ),
+        )
+        .orderBy(
+          descending ? desc(createdAt) : asc(createdAt),
+          descending ? desc(d1SweepIdOrder(schema.runs.id)) : asc(d1SweepIdOrder(schema.runs.id)),
+        )
+        .limit(descending ? 1 : limit)
+        .toSQL();
+      const emptyPage = this.#orm
+        .select({
+          json: sql`${schema.runs.runJson}`.as("json"),
+          sweepCreatedAt: sql`${createdAt}`.as("sweep_created_at"),
+          sweepId: sql`${schema.runs.id}`.as("sweep_id"),
+        })
+        .from(schema.runs)
+        .where(sql`0 = 1`)
+        .toSQL();
+      const rows = await this.#reserveScheduledSweepPage({
+        lane: "recoverable_runs",
+        limit,
+        buildAfter: (cursor, upper) => cursor && upper
+          ? buildQuery(
+              { ...cursor, createdAt: Number(cursor.createdAt) },
+              { ...upper, createdAt: Number(upper.createdAt) },
+            )
+          : emptyPage,
+        start: buildQuery(),
+        upper: buildQuery(undefined, undefined, true),
+        mapRow: (row) => d1StoredRunFromD1Value(row.json),
+      });
+      return rows
+        .filter((row): row is StoredRunRecord => row !== undefined)
+        .filter((row) => isRecoverableOpenTofuRunRecord(row, options))
+        .map(publicStoredRun);
+    }
     const rows = await this.#drizzleManyJson<StoredRunRecord>(
       schema.runs,
       schema.runs.runJson,
@@ -4978,6 +5179,56 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         orderBy: [asc(schema.workspaces.createdAt), asc(schema.workspaces.id)],
       },
     );
+  }
+
+  async listWorkspacesForSweep(limit: number): Promise<readonly Workspace[]> {
+    const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
+    await this.#ensureSchema();
+    if (boundedLimit === 0) return [];
+    const baseWhere = sql`COALESCE(json_extract(${schema.workspaces.recordJson}, '$.archivedAt'), '') = ''`;
+    const buildQuery = (
+      cursor?: { readonly createdAt: string; readonly id: string },
+      upper?: { readonly createdAt: string; readonly id: string },
+      descending = false,
+    ) => this.#orm
+      .select({
+        json: sql`${schema.workspaces.recordJson}`.as("json"),
+        sweepCreatedAt: sql`${schema.workspaces.createdAt}`.as("sweep_created_at"),
+        sweepId: sql`${schema.workspaces.id}`.as("sweep_id"),
+      })
+      .from(schema.workspaces)
+      .where(
+        d1SweepKeysetWhere(
+          baseWhere,
+          schema.workspaces.createdAt,
+          schema.workspaces.id,
+          cursor,
+          upper,
+        ),
+      )
+      .orderBy(
+        descending ? desc(schema.workspaces.createdAt) : asc(schema.workspaces.createdAt),
+        descending ? desc(d1SweepIdOrder(schema.workspaces.id)) : asc(d1SweepIdOrder(schema.workspaces.id)),
+      )
+      .limit(descending ? 1 : boundedLimit)
+      .toSQL();
+    const emptyPage = this.#orm
+      .select({
+        json: sql`${schema.workspaces.recordJson}`.as("json"),
+        sweepCreatedAt: sql`${schema.workspaces.createdAt}`.as("sweep_created_at"),
+        sweepId: sql`${schema.workspaces.id}`.as("sweep_id"),
+      })
+      .from(schema.workspaces)
+      .where(sql`0 = 1`)
+      .toSQL();
+    return await this.#reserveScheduledSweepPage({
+      lane: "workspaces",
+      limit: boundedLimit,
+      buildAfter: (cursor, upper) => cursor && upper ? buildQuery(cursor, upper) : emptyPage,
+      start: buildQuery(),
+      upper: buildQuery(undefined, undefined, true),
+      mapRow: (row) => jsonRecordFromD1Value(row.json) as unknown as Workspace,
+    });
   }
 
   async listWorkspacesPage(params: PageParams): Promise<Page<Workspace>> {
@@ -6940,6 +7191,59 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         },
       )
     ).map(normalizeCapsuleRecord);
+  }
+
+  async listActiveCapsulesForSweep(limit: number): Promise<readonly Capsule[]> {
+    const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
+    await this.#ensureSchema();
+    if (boundedLimit === 0) return [];
+    const baseWhere = eq(schema.capsules.status, "active");
+    const buildQuery = (
+      cursor?: { readonly createdAt: string; readonly id: string },
+      upper?: { readonly createdAt: string; readonly id: string },
+      descending = false,
+    ) => this.#orm
+      .select({
+        json: sql`${schema.capsules.recordJson}`.as("json"),
+        sweepCreatedAt: sql`${schema.capsules.createdAt}`.as("sweep_created_at"),
+        sweepId: sql`${schema.capsules.id}`.as("sweep_id"),
+      })
+      .from(schema.capsules)
+      .where(
+        d1SweepKeysetWhere(
+          baseWhere,
+          schema.capsules.createdAt,
+          schema.capsules.id,
+          cursor,
+          upper,
+        ),
+      )
+      .orderBy(
+        descending ? desc(schema.capsules.createdAt) : asc(schema.capsules.createdAt),
+        descending ? desc(d1SweepIdOrder(schema.capsules.id)) : asc(d1SweepIdOrder(schema.capsules.id)),
+      )
+      .limit(descending ? 1 : boundedLimit)
+      .toSQL();
+    const emptyPage = this.#orm
+      .select({
+        json: sql`${schema.capsules.recordJson}`.as("json"),
+        sweepCreatedAt: sql`${schema.capsules.createdAt}`.as("sweep_created_at"),
+        sweepId: sql`${schema.capsules.id}`.as("sweep_id"),
+      })
+      .from(schema.capsules)
+      .where(sql`0 = 1`)
+      .toSQL();
+    const capsules = await this.#reserveScheduledSweepPage({
+      lane: "active_capsules",
+      limit: boundedLimit,
+      buildAfter: (cursor, upper) => cursor && upper ? buildQuery(cursor, upper) : emptyPage,
+      start: buildQuery(),
+      upper: buildQuery(undefined, undefined, true),
+      mapRow: (row) => normalizeCapsuleRecord(
+        jsonRecordFromD1Value(row.json) as unknown as Capsule,
+      ),
+    });
+    return capsules;
   }
 
   async listCapsulesPage(
@@ -15596,6 +15900,21 @@ const D1_PRIVATE_RUN_FILE_STATEMENTS = [
   )`,
 ] as const;
 
+const D1_SCHEDULED_SWEEP_CURSOR_STATEMENTS = [
+  `create table scheduled_sweep_cursors (
+    lane text primary key check (lane in ('workspaces', 'active_capsules', 'recoverable_runs')),
+    generation integer not null default 0 check (typeof(generation) = 'integer' and generation >= 0),
+    cursor_created_at text,
+    cursor_id text,
+    upper_created_at text,
+    upper_id text,
+    check ((cursor_created_at is null) = (cursor_id is null)),
+    check ((upper_created_at is null) = (upper_id is null))
+  )`,
+  `insert into scheduled_sweep_cursors (lane, generation)
+   values ('workspaces', 0), ('active_capsules', 0), ('recoverable_runs', 0)`,
+] as const;
+
 const D1_OPEN_TOFU_SCHEMA_MIGRATIONS = [
   {
     version: 1,
@@ -17754,6 +18073,22 @@ No foreign key to a Run or Capsule: receipts and pointers outlive attempts.
     },
     async apply(db) {
       await runD1AtomicSql(db, D1_PRIVATE_RUN_FILE_STATEMENTS);
+    },
+  },
+  {
+    version: 71,
+    name: "d1_scheduled_sweep_cursors",
+    checksumSource: () => `
+Persistent keyset cursors reserve bounded pages for Workspace, active Capsule, and recoverable Run sweeps.
+One D1 batch selects the page and compare-and-swap advances one lane generation.
+Cursor positions contain no foreign keys so deleted rows do not invalidate progress.
+${D1_SCHEDULED_SWEEP_CURSOR_STATEMENTS.join("\n---\n")}
+`,
+    async atomicStatements() {
+      return D1_SCHEDULED_SWEEP_CURSOR_STATEMENTS;
+    },
+    async apply(db) {
+      await runD1AtomicSql(db, D1_SCHEDULED_SWEEP_CURSOR_STATEMENTS);
     },
   },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];

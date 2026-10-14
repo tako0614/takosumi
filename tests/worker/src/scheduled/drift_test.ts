@@ -25,10 +25,10 @@ function makeOps(
 ): {
   ops: DriftSweepOperations;
   listCalls: number[];
-  driftCalls: { workspaceId: string; limit?: number }[];
+  driftCalls: { workspaceId: string; limit?: number; capsuleIds?: readonly string[] }[];
 } {
   const listCalls: number[] = [];
-  const driftCalls: { workspaceId: string; limit?: number }[] = [];
+  const driftCalls: { workspaceId: string; limit?: number; capsuleIds?: readonly string[] }[] = [];
   const ops: DriftSweepOperations = {
     listActiveCapsules: (limit) => {
       listCalls.push(limit);
@@ -39,11 +39,11 @@ function makeOps(
       return Promise.resolve(active.slice(0, limit));
     },
     createWorkspaceDriftCheck: (workspaceId, options) => {
-      driftCalls.push({ workspaceId, limit: options?.limit });
+      driftCalls.push({ workspaceId, limit: options?.limit, capsuleIds: options?.capsuleIds });
       if (overrides.failOn?.has(workspaceId)) {
         return Promise.reject(new Error("nope"));
       }
-      return Promise.resolve({});
+      return Promise.resolve({ runs: (options?.capsuleIds ?? []).map((id) => ({ id })) });
     },
   };
   return { ops, listCalls, driftCalls };
@@ -60,7 +60,7 @@ test("drift sweep creates one RunGroup per Workspace, bounded by Capsule limit",
   const result = await driftSweep(ops, { limit: 2 });
   // The limit is pushed down to the listing so the fan-out is bounded.
   expect(listCalls).toEqual([2]);
-  expect(driftCalls).toEqual([{ workspaceId: "ws_a", limit: 2 }]);
+  expect(driftCalls).toEqual([{ workspaceId: "ws_a", limit: 2, capsuleIds: ["cap_a", "cap_b"] }]);
   expect(result).toEqual({ scanned: 2, checked: 2 });
 });
 
@@ -81,8 +81,8 @@ test("drift sweep continues past a failing Workspace", async () => {
   const result = await driftSweep(ops, { limit: 20 });
   // Both Workspaces are attempted; only the non-failing one is counted.
   expect(driftCalls).toEqual([
-    { workspaceId: "ws_a", limit: 1 },
-    { workspaceId: "ws_b", limit: 1 },
+    { workspaceId: "ws_a", limit: 1, capsuleIds: ["cap_a"] },
+    { workspaceId: "ws_b", limit: 1, capsuleIds: ["cap_b"] },
   ]);
   expect(result).toEqual({ scanned: 2, checked: 1 });
 });

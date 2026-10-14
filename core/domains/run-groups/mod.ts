@@ -67,6 +67,8 @@ export interface RunGroupsServiceDependencies {
 
 export interface CreateWorkspaceDriftCheckOptions {
   readonly limit?: number;
+  /** Internal scheduled page. Revalidate membership/status without widening it. */
+  readonly capsuleIds?: readonly string[];
 }
 
 export class RunGroupsService {
@@ -209,8 +211,12 @@ export class RunGroupsService {
   ): Promise<RunGroupWithRuns> {
     requireNonEmptyString(workspaceId, "workspaceId");
     const limit = normalizePositiveLimit(options.limit);
+    const selectedIds = options.capsuleIds === undefined
+      ? undefined
+      : new Set(options.capsuleIds);
     const capsules = (await this.#store.listCapsules(workspaceId))
-      .filter((capsule) => capsule.status === "active")
+      .filter((capsule) => capsule.status === "active" &&
+        (selectedIds === undefined || selectedIds.has(capsule.id)))
       .slice(0, limit);
     if (capsules.length === 0) {
       throw new OpenTofuControllerError(
