@@ -86,13 +86,15 @@ test("Worker composition requires a PAT to outlive the scheduled uninstall deadl
     };
   }
 
-  const short = await scheduleWithPat(1);
+  // One hour past the scheduled deadline is still inside the required margin.
+  const short = await scheduleWithPat(7 + 1 / 24);
   expect(short.response.status).toBe(409);
   expect(await short.response!.json()).toMatchObject({ error: {
     code: "failed_precondition",
     details: { reason: "capsule_uninstall_pat_deadline_unverified" },
   } });
   expect(short.capsule.status).toBe("active");
+  expect(short.capsule.uninstall).toBeUndefined();
   expect(await short.store.listActivityEvents(short.workspaceId, { limit: 100 }))
     .toHaveLength(0);
 

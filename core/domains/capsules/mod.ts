@@ -92,7 +92,10 @@ import {
   scheduledUninstallRecord,
   uninstallGraceMs,
 } from "./uninstall.ts";
-import type { UninstallRequesterAtValidator } from "./uninstall_authorization.ts";
+import {
+  UNINSTALL_PAT_EXPIRY_MARGIN_MS,
+  type UninstallRequesterAtValidator,
+} from "./uninstall_authorization.ts";
 
 /**
  * Capsule name grammar (spec §5): a DNS-style slug. The name doubles as the
@@ -924,12 +927,15 @@ export class CapsulesService {
         let validAtDeadline = false;
         try {
           // Check the same candidate that the CAS will persist, after lifecycle
-          // admission. No caller-supplied expiry or current-time check proves
-          // the pinned PAT can authorize this future reservation.
+          // admission. Accounts validates with expiresAt > validAtMs, so check
+          // the millisecond before the inclusive six-hour expiry threshold.
+          // No caller-supplied expiry or current-time check proves the pinned
+          // PAT can authorize this future reservation.
           validAtDeadline = await this.#validateUninstallRequesterAt?.(
             requester,
             current.workspaceId,
-            Date.parse(uninstall.scheduledDestroyAt),
+            Date.parse(uninstall.scheduledDestroyAt) +
+              UNINSTALL_PAT_EXPIRY_MARGIN_MS - 1,
           ) === true;
         } catch {
           // Accounts backend errors may include credentials; expose only the
@@ -938,7 +944,7 @@ export class CapsulesService {
         if (!validAtDeadline) {
           throw new OpenTofuControllerError(
             "failed_precondition",
-            "PAT authorization could not be confirmed through the uninstall deadline. Use an Accounts session or a PAT that remains valid through finalization.",
+            "PAT authorization could not be confirmed through the uninstall deadline and six-hour safety margin. Use an Accounts session or a PAT that remains valid for at least six hours after the scheduled finalization deadline.",
             { reason: CAPSULE_UNINSTALL_REASONS.patDeadlineUnverified },
           );
         }

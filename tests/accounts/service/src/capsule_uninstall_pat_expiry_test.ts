@@ -8,7 +8,10 @@ import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
 import { handleControlRoute } from "../../../../accounts/service/src/control-routes.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
-import type { UninstallRequesterAtValidator } from "../../../../core/domains/capsules/uninstall_authorization.ts";
+import {
+  UNINSTALL_PAT_EXPIRY_MARGIN_MS,
+  type UninstallRequesterAtValidator,
+} from "../../../../core/domains/capsules/uninstall_authorization.ts";
 
 const dayMs = 86_400_000;
 const nowMs = Date.now() + 60_000;
@@ -141,10 +144,10 @@ test("public uninstall rejects a PAT expiring at the scheduled finalization dead
   expect(state.activity).toHaveLength(0);
 });
 
-test("public uninstall checks the exact scheduled deadline and accepts later or non-expiring PATs", async () => {
+test("public uninstall requires the six-hour PAT margin and accepts its exact boundary", async () => {
   const deadline = nowMs + 7 * dayMs;
   for (const [label, expiresAt] of [
-    ["one millisecond after deadline", deadline + 1],
+    ["exactly at the margin", deadline + UNINSTALL_PAT_EXPIRY_MARGIN_MS],
     ["no expiry", undefined],
   ] as const) {
     const checks: number[] = [];
@@ -165,10 +168,28 @@ test("public uninstall checks the exact scheduled deadline and accepts later or 
 
     expect(validationResults, label).toEqual([true]);
     expect(response?.status, label).toBe(202);
-    expect(checks).toEqual([deadline]);
+    expect(checks).toEqual([deadline + UNINSTALL_PAT_EXPIRY_MARGIN_MS - 1]);
     expect((await state.controlStore.getCapsule(state.seeded.capsule.id))?.uninstall?.scheduledDestroyAt)
       .toBe(new Date(deadline).toISOString());
   }
+});
+
+test("public uninstall rejects a PAT expiring one millisecond before the six-hour margin without side effects", async () => {
+  const deadline = nowMs + 7 * dayMs;
+  const state = await fixture({
+    expiresAt: deadline + UNINSTALL_PAT_EXPIRY_MARGIN_MS - 1,
+  });
+  const before = await state.controlStore.getCapsule(state.seeded.capsule.id);
+
+  const response = await publicUninstall(state);
+
+  expect(response?.status).toBe(409);
+  expect((await response!.json()).error.details.reason)
+    .toBe("capsule_uninstall_pat_deadline_unverified");
+  expect(await state.controlStore.getCapsule(state.seeded.capsule.id)).toEqual(before);
+  expect(await state.controlStore.listActivityEvents(state.seeded.workspace.id, { limit: 100 }))
+    .toHaveLength(0);
+  expect(state.activity).toHaveLength(0);
 });
 
 test("public uninstall rejects a PAT expiring just before the scheduled deadline", async () => {
@@ -263,6 +284,33 @@ test("direct Core scheduling rejects unverified PAT deadlines before saving a re
   }
 });
 
+test("direct Core scheduling rejects a PAT one millisecond short of the six-hour margin without writes", async () => {
+  const state = await fixture({
+    expiresAt: nowMs + 7 * dayMs + UNINSTALL_PAT_EXPIRY_MARGIN_MS - 1,
+  });
+  const before = await state.controlStore.getCapsule(state.seeded.capsule.id);
+  let caught: unknown;
+  try {
+    await state.capsules.scheduleCapsuleUninstall(state.seeded.capsule.id, {
+      actor: state.subject,
+      requester: {
+        subject: state.subject,
+        grant: { kind: "personal-access-token", tokenId: patId },
+      },
+    });
+  } catch (error) {
+    caught = error;
+  }
+
+  expect(caught).toBeInstanceOf(OpenTofuControllerError);
+  expect(caught).toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "capsule_uninstall_pat_deadline_unverified" },
+  });
+  expect(await state.controlStore.getCapsule(state.seeded.capsule.id)).toEqual(before);
+  expect(state.activity).toHaveLength(0);
+});
+
 test("zero grace still rejects a PAT expiring at the immediate finalization deadline", async () => {
   const state = await fixture({
     graceDays: 0,
@@ -279,11 +327,39 @@ test("zero grace still rejects a PAT expiring at the immediate finalization dead
   expect(state.activity).toHaveLength(0);
 });
 
+test("zero grace accepts the exact six-hour PAT margin and rejects one millisecond less", async () => {
+  const deadline = nowMs;
+  const accepted = await fixture({
+    graceDays: 0,
+    expiresAt: deadline + UNINSTALL_PAT_EXPIRY_MARGIN_MS,
+  });
+  const acceptedResponse = await publicUninstall(accepted);
+
+  expect(acceptedResponse?.status).toBe(202);
+  expect((await accepted.controlStore.getCapsule(accepted.seeded.capsule.id))?.uninstall?.scheduledDestroyAt)
+    .toBe(new Date(deadline).toISOString());
+
+  const rejected = await fixture({
+    graceDays: 0,
+    expiresAt: deadline + UNINSTALL_PAT_EXPIRY_MARGIN_MS - 1,
+  });
+  const before = await rejected.controlStore.getCapsule(rejected.seeded.capsule.id);
+  const rejectedResponse = await publicUninstall(rejected);
+
+  expect(rejectedResponse?.status).toBe(409);
+  expect((await rejectedResponse!.json()).error.details.reason)
+    .toBe("capsule_uninstall_pat_deadline_unverified");
+  expect(await rejected.controlStore.getCapsule(rejected.seeded.capsule.id)).toEqual(before);
+  expect(await rejected.controlStore.listActivityEvents(rejected.seeded.workspace.id, { limit: 100 }))
+    .toHaveLength(0);
+  expect(rejected.activity).toHaveLength(0);
+});
+
 test("replaying an already scheduled uninstall does not recheck the PAT deadline", async () => {
   let valid = true;
   let checks = 0;
   const state = await fixture({
-    expiresAt: nowMs + 7 * dayMs + 1,
+    expiresAt: nowMs + 7 * dayMs + UNINSTALL_PAT_EXPIRY_MARGIN_MS,
     validator: async (requester, workspaceId, validAtMs) => {
       checks += 1;
       return valid && validateUninstallRequester(state.accounts, requester, workspaceId, validAtMs);

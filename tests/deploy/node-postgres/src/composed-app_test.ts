@@ -1049,7 +1049,8 @@ test("Node composition requires a PAT to outlive the scheduled uninstall deadlin
     };
   }
 
-  const short = await scheduleWithPat(shortSecret, Date.now() + dayMs);
+  // One hour past the scheduled deadline is still inside the required margin.
+  const short = await scheduleWithPat(shortSecret, Date.now() + 7 * dayMs + 60 * 60_000);
   assert.equal(short.response.status, 409);
   const shortBody = await short.response.json() as {
     error: { details: { reason: string } };
@@ -1058,6 +1059,7 @@ test("Node composition requires a PAT to outlive the scheduled uninstall deadlin
     reason: "capsule_uninstall_pat_deadline_unverified",
   });
   assert.equal(short.capsule?.status, "active");
+  assert.equal(short.capsule?.uninstall, undefined);
   assert.equal(
     (await short.store.listActivityEvents(short.workspaceId, { limit: 100 })).length,
     0,

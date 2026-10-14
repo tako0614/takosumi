@@ -2,6 +2,9 @@ import type { Capsule, CapsuleUninstallRequester } from "takosumi-contract/capsu
 import type { OpenTofuControlStore } from "../deploy-control/store.ts";
 import { workspaceAccountAuthorityAllowed } from "../deploy-control/store.ts";
 
+/** PATs need a six-hour buffer beyond the scheduled uninstall deadline. */
+export const UNINSTALL_PAT_EXPIRY_MARGIN_MS = 6 * 60 * 60 * 1_000;
+
 /** Accounts owns account/grant activity; Core owns the current Workspace roster. */
 export type UninstallRequesterValidator = (
   requester: CapsuleUninstallRequester,
@@ -9,9 +12,11 @@ export type UninstallRequesterValidator = (
 ) => Promise<boolean>;
 
 /**
- * Reservation admission checks the exact grant at Core's candidate deadline.
- * Hosts must re-read Accounts authority and evaluate expiry at validAtMs; the
- * current-time finalizer validator cannot substitute for this capability.
+ * Reservation admission asks hosts to check the exact grant at validAtMs.
+ * For PATs, Core supplies the millisecond before its inclusive post-deadline
+ * expiry threshold to preserve Accounts' strict expiresAt > validAtMs rule.
+ * Hosts must re-read Accounts authority; a current-time finalizer validator
+ * cannot substitute for this capability.
  */
 export type UninstallRequesterAtValidator = (
   requester: CapsuleUninstallRequester,

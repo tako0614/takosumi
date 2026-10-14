@@ -142,6 +142,7 @@ interface CachedAccountsHandler {
   readonly startedAtMs: number;
   readonly waiters: Set<AccountsHandlerWaiter>;
   initialization: Promise<void>;
+  abandoned?: boolean;
   outcome?:
     | { readonly status: "fulfilled"; readonly handler: AccountsHandler }
     | {
@@ -166,6 +167,8 @@ const ACCOUNTS_HANDLER_INIT_DEADLINE_MS = 5_000;
 // Rotate only on demand, so an abandoned request cannot cause a retry loop.
 const ACCOUNTS_HANDLER_INIT_MAX_AGE_MS = 30_000;
 const ACCOUNTS_HANDLER_INIT_FAILURE_BACKOFF_MS = 1_000;
+// Per env and identity/control cache: three displaced flights plus one current.
+const ACCOUNTS_HANDLER_INIT_MAX_ABANDONED = 3;
 
 class AccountsHandlerInitializationTimeoutError extends Error {
   constructor(readonly initializationWaitMs: number) {
@@ -178,6 +181,16 @@ const handlers = new WeakMap<CloudflareWorkerEnv, CachedAccountsHandler>();
 const identityHandlers = new WeakMap<
   CloudflareWorkerEnv,
   CachedAccountsHandler
+>();
+interface AbandonedAccountsHandlerCounts {
+  identity: number;
+  control: number;
+  identityTotal: number;
+  controlTotal: number;
+}
+const abandonedAccountsHandlerCounts = new WeakMap<
+  CloudflareWorkerEnv,
+  AbandonedAccountsHandlerCounts
 >();
 const controlPlaneOperationsByEnv = new WeakMap<
   CloudflareWorkerEnv,
@@ -476,15 +489,46 @@ async function cachedAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   const cache = identityOnly ? identityHandlers : handlers;
   let cached = cache.get(env);
   const waitStartedAt = nowMs();
-  if (
-    cached &&
-    (cached.outcome?.status === "rejected"
-      ? waitStartedAt >= cached.outcome.retryAtMs
-      : !cached.outcome &&
-        waitStartedAt - cached.startedAtMs >= ACCOUNTS_HANDLER_INIT_MAX_AGE_MS)
-  ) {
+  if (cached?.outcome?.status === "rejected" &&
+    waitStartedAt >= cached.outcome.retryAtMs) {
     // This decision and installation of the replacement run without an await.
     // Concurrent callers therefore join exactly one current initialization.
+    cache.delete(env);
+    cached = undefined;
+  } else if (
+    cached &&
+    !cached.outcome &&
+    waitStartedAt - cached.startedAtMs >= ACCOUNTS_HANDLER_INIT_MAX_AGE_MS
+  ) {
+    const abandonedInits = getAbandonedAccountsHandlerCount(env, identityOnly);
+    if (abandonedInits >= ACCOUNTS_HANDLER_INIT_MAX_ABANDONED) {
+      context?.waitUntil(cached.initialization);
+      console.warn(
+        JSON.stringify({
+          event: "accounts_handler_initialization_unavailable",
+          mode: identityOnly ? "identity" : "control",
+          stage: "abandonment_capacity",
+          abandonedInits,
+          abandonedInitsTotal: getAbandonedAccountsHandlerTotal(env, identityOnly),
+          maxAbandonedInits: ACCOUNTS_HANDLER_INIT_MAX_ABANDONED,
+        }),
+      );
+      throw new AccountsHandlerInitializationTimeoutError(0);
+    }
+    cached.abandoned = true;
+    const counts = updateAbandonedAccountsHandlerCount(
+      env,
+      identityOnly,
+      1,
+    );
+    console.warn(
+      JSON.stringify({
+        event: "accounts_handler_initialization_abandoned",
+        mode: identityOnly ? "identity" : "control",
+        ...counts,
+        maxAbandonedInits: ACCOUNTS_HANDLER_INIT_MAX_ABANDONED,
+      }),
+    );
     cache.delete(env);
     cached = undefined;
   }
@@ -505,7 +549,25 @@ async function cachedAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     ): void => {
       // Obsolete work is still observed, but cannot dispatch old waiters or
       // publish a handler/error into the replacement. Its waiters time out.
-      if (cache.get(env) !== attempt) return;
+      if (cache.get(env) !== attempt) {
+        if (attempt.abandoned) {
+          attempt.abandoned = false;
+          const counts = updateAbandonedAccountsHandlerCount(
+            env,
+            identityOnly,
+            -1,
+          );
+          console.warn(
+            JSON.stringify({
+              event: "accounts_handler_abandoned_initialization_settled",
+              mode: identityOnly ? "identity" : "control",
+              ...counts,
+              maxAbandonedInits: ACCOUNTS_HANDLER_INIT_MAX_ABANDONED,
+            }),
+          );
+        }
+        return;
+      }
       attempt.outcome = outcome;
       for (const waiter of attempt.waiters) {
         clearTimeout(waiter.timer);
@@ -558,6 +620,42 @@ async function cachedAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     cached!.waiters.add(waiter);
   });
   return { handler, initializationWaitMs: nowMs() - waitStartedAt };
+}
+
+function getAbandonedAccountsHandlerCount(
+  env: CloudflareWorkerEnv,
+  identityOnly: boolean,
+): number {
+  const counts = abandonedAccountsHandlerCounts.get(env);
+  return counts?.[identityOnly ? "identity" : "control"] ?? 0;
+}
+
+function updateAbandonedAccountsHandlerCount(
+  env: CloudflareWorkerEnv,
+  identityOnly: boolean,
+  delta: 1 | -1,
+): { readonly abandonedInits: number; readonly abandonedInitsTotal: number } {
+  let counts = abandonedAccountsHandlerCounts.get(env);
+  if (!counts) {
+    counts = { identity: 0, control: 0, identityTotal: 0, controlTotal: 0 };
+    abandonedAccountsHandlerCounts.set(env, counts);
+  }
+  const mode = identityOnly ? "identity" : "control";
+  counts[mode] += delta;
+  const totalMode = identityOnly ? "identityTotal" : "controlTotal";
+  if (delta === 1) counts[totalMode] += 1;
+  return {
+    abandonedInits: counts[mode],
+    abandonedInitsTotal: counts[totalMode],
+  };
+}
+
+function getAbandonedAccountsHandlerTotal(
+  env: CloudflareWorkerEnv,
+  identityOnly: boolean,
+): number {
+  const counts = abandonedAccountsHandlerCounts.get(env);
+  return counts?.[identityOnly ? "identityTotal" : "controlTotal"] ?? 0;
 }
 
 function appendAccountsHandlerInitializationTiming(
