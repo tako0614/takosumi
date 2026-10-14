@@ -9529,6 +9529,18 @@ export class RunEngine {
       !intent || typeof durationMs !== "number" || !Number.isSafeInteger(durationMs) || durationMs <= 0 ||
       !Number.isSafeInteger(intent.at) || intent.at !== run.finishedAt
     ) {
+      // Count failed repair observations, including repeated deliveries. Never
+      // attach the malformed intent, measurement, or tenant/Run identity.
+      log.warn("deploy_control.runner_usage_settlement_stuck", {
+        count: 1,
+        reason: "invalid_pending_intent",
+      });
+      await this.#recordMetric({
+        name: "takosumi_runner_usage_settlement_stuck_count",
+        kind: "counter",
+        value: 1,
+        tags: { reason: "invalid_pending_intent" },
+      });
       throw new OpenTofuControllerError(
         "failed_precondition",
         "runner usage intent does not match the terminal Run",

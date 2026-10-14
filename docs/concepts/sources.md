@@ -55,11 +55,17 @@ curl --silent --show-error --fail-with-body -X POST \
   -H "authorization: Bearer $TAKOSUMI_WRITE_PAT"
 ```
 
-応答を受け取ったら、管理された端末上で値を一度だけ確認し、Git ホストの該当 webhook の
+ローテーションには **grace window（旧 secret の猶予期間）がありません**。応答を受け取ったら、
+管理された端末上で値を一度だけ確認し、forge（GitHub 等）の該当 webhook の secret /
 Authorization bearer を新しい値に置き換えます。secret を URL や query string に入れず、
 ログ、shell history、Issue/PR/chat、ファイルへ出力・保存しないでください。コマンドの出力を
 `tee`、ファイル、ログ収集へ流さず、端末録画や共有画面にも載せないでください。Git ホストの
 設定変更後、新しい secret で webhook が受理され、古い secret では `401` になることを確認します。
+
+forge 側の設定は rotate 後 **即時に更新**してください。更新までの間に旧 secret で届いた
+webhook は `401` となり、変更を取りこぼす可能性があります。取りこぼしがあれば、下の
+[SourceSnapshot の手動同期](#sourcesnapshot-ref-と-commit-は別物)で `POST /api/v1/sources/{sourceId}/sync`
+を `intent: manual_plan` で実行し、同期 Run の成功と新しい snapshot を確認してから plan に進みます。
 
 ローテーションの commit 後に検証される webhook request では、旧 secret は直ちに無効です。
 すでに認証済みの webhook や進行中の webhook/Run は取り消されません。並行するローテーションは

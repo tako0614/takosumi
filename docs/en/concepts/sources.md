@@ -56,11 +56,17 @@ curl --silent --show-error --fail-with-body -X POST \
   -H "authorization: Bearer $TAKOSUMI_WRITE_PAT"
 ```
 
-Read the response once on a controlled terminal, then replace the Authorization bearer on the
-Git host's webhook with the new value. Never put the secret in a URL or query string, or write
+Rotation has **no grace window for the old secret**. Read the response once on a controlled
+terminal, then immediately update the forge (GitHub or another Git host) webhook's secret /
+Authorization bearer with the new value. Never put the secret in a URL or query string, or write
 it to logs, shell history, an Issue/PR/chat, or a file. Do not pipe the command through `tee`,
 file capture, or log collection, and keep it out of terminal recording and screen sharing. After
 updating the Git host, confirm that the new secret is accepted and the old one receives `401`.
+
+Deliveries using the old secret between rotation and the forge update receive `401`, so changes
+may be missed. If any were missed, follow the [manual SourceSnapshot sync](#sourcesnapshot-a-ref-is-not-a-commit)
+below: call `POST /api/v1/sources/{sourceId}/sync` with `intent: manual_plan`, then confirm the
+sync Run succeeded and produced a new snapshot before starting a plan.
 
 The old secret is invalid for webhook requests verified after the rotation commits. A webhook
 already authenticated, or a webhook/Run already in progress, is not canceled. Concurrent

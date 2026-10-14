@@ -9028,7 +9028,9 @@ test.each([
       await store.deletePlanRunInputs(destroyPlan.id);
     }
     // A fresh controller models a new DLQ delivery, without in-memory repair state.
+    const observability = new InMemoryObservabilitySink();
     const retry = controllerWith(store, runner, {
+      observability,
       defaultBillingSettings: { mode: "showback" },
       billingEnforcement,
       showbackRater: {
@@ -9051,6 +9053,19 @@ test.each([
         .rejects.toThrow("runner usage intent does not match the terminal Run");
       expect((await store.listUsageEvents(queued.workspaceId)).filter((event) => event.runId === queued.id)).toEqual([]);
       expect((await store.getApplyRun(queued.id))!.auditEvents.some((event) => event.type === "runner_usage.completed")).toBe(false);
+      const stuck = await observability.listMetrics({ name: "takosumi_runner_usage_settlement_stuck_count" });
+      expect(stuck).toHaveLength(2);
+      for (const metric of stuck) {
+        expect(metric.kind).toBe("counter");
+        expect(metric.value).toBe(1);
+        expect(metric.tags).toEqual({ reason: "invalid_pending_intent" });
+        expect(metric.workspaceId).toBeUndefined();
+        expect(metric.payload).toBeUndefined();
+        expect(metric.actor).toBeUndefined();
+        expect(JSON.stringify(metric)).not.toContain(queued.id);
+        expect(JSON.stringify(metric)).not.toContain(queued.workspaceId);
+        expect(JSON.stringify(metric)).not.toContain("durationMs");
+      }
       expect(notifications).toEqual([queued.id]);
       expect(captures).toEqual([]);
       expect(reservationReleases).toEqual([]);
@@ -9078,6 +9093,7 @@ test.each([
     const settled = (await store.getApplyRun(queued.id))!;
     expect(await retry.hasPendingRunnerUsage({ runId: queued.id, workspaceId: queued.workspaceId })).toBe(false);
     expect(settled.auditEvents.filter((event) => event.type === "runner_usage.completed")).toHaveLength(1);
+    expect(await observability.listMetrics({ name: "takosumi_runner_usage_settlement_stuck_count" })).toEqual([]);
     expect(settled.auditEvents.filter((event) => event.type === "destroy.failed")).toHaveLength(1);
     expect(notifications).toEqual([queued.id]);
     expect(destroyCalls).toBe(1);
