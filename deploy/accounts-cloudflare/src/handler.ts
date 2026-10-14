@@ -41,9 +41,11 @@ import {
   runtimeBindingDerivationMode,
 } from "../../../core/domains/deploy-control/runtime_binding_derivation_key.ts";
 import { ensureAccountsD1WorkerSchema } from "./d1-schema-gate.ts";
+import { createRequestPhaseDiagnostics } from "../../../accounts/service/src/request-phase-diagnostics.ts";
 
 export interface CloudflareWorkerEnv {
   readonly [name: string]: unknown;
+  readonly TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS?: string;
   readonly TAKOSUMI_ACCOUNTS_DB: D1Database;
   /**
    * `predeployed` keeps schema DDL off the request/cold-start path. Operators
@@ -210,6 +212,10 @@ export function createCloudflareWorker<
 >(
   options: CreateCloudflareWorkerOptions<TEnv> = {},
 ): CloudflareWorkerHandler<TEnv> {
+  const phaseDiagnostics = new WeakMap<
+    TEnv,
+    ReturnType<typeof createRequestPhaseDiagnostics>
+  >();
   return {
     async fetch(
       request: Request,
@@ -299,11 +305,22 @@ export function createCloudflareWorker<
       }
       let initializationTiming: CachedAccountsHandlerResult | undefined;
       try {
-        const cached = await cachedAccountsHandler(
-          env,
-          options,
-          usesIdentityOnlyAccountsHandler(url.pathname),
-          context,
+        let diagnosticFactory = phaseDiagnostics.get(env);
+        if (!diagnosticFactory) {
+          diagnosticFactory = createRequestPhaseDiagnostics({
+            environment: optionalString(env.TAKOSUMI_ENVIRONMENT),
+            enabled: env.TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS,
+          });
+          phaseDiagnostics.set(env, diagnosticFactory);
+        }
+        const diagnostics = diagnosticFactory.forRequest(request);
+        const cached = await diagnostics.measure("accounts_init", () =>
+          cachedAccountsHandler(
+            env,
+            options,
+            usesIdentityOnlyAccountsHandler(url.pathname),
+            context,
+          ),
         );
         initializationTiming = cached;
         const response = await cached.handler(request);
@@ -811,6 +828,10 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     issuer,
     clients,
     store,
+    requestPhaseDiagnostics: {
+      environment: optionalString(env.TAKOSUMI_ENVIRONMENT),
+      enabled: env.TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS,
+    },
     patWorkspaceMembershipReader:
       options.patWorkspaceMembershipReader?.(env),
     personalAccessTokenSelfServiceScopes:

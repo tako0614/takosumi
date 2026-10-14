@@ -58,6 +58,7 @@ test("latency probe correlates only allowlisted metadata and route shape", async
     (request, response) => {
       calls += 1;
       expect(request.method).toBe("GET");
+    expect(request.headers["x-takosumi-request-probe-id"]).toMatch(/^[a-f0-9]{16}$/u);
       expect(request.url).toBe("/api/v1/runs/run_private_id_marker");
       expect(request.headers.authorization).toBe(`Bearer ${secret}`);
       response.writeHead(200, {
@@ -82,6 +83,7 @@ test("latency probe correlates only allowlisted metadata and route shape", async
       ).toBe(0);
       expect(calls).toBe(2);
       expect(rows.map((row) => row.sample)).toEqual([1, 2]);
+    expect(new Set(rows.map((row) => row.probeId)).size).toBe(2);
       for (const row of rows) {
         expect(row).toMatchObject({
           environment: "local",
