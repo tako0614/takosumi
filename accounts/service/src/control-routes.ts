@@ -73,6 +73,10 @@ import {
   serverTimingBucketForPath,
   type ServerTimingBucket,
 } from "./server-timing.ts";
+import type {
+  RequestPhaseObserver,
+  RequestDiagnosticPhase,
+} from "./request-phase-diagnostics.ts";
 
 const CONTROL_OPERATIONS_INIT_DEADLINE_MS = 5_000;
 
@@ -175,6 +179,7 @@ export function isControlRoutePath(pathname: string): boolean {
 }
 
 interface ControlRouteContext {
+  readonly diagnostics?: RequestPhaseObserver;
   readonly request: Request;
   readonly url: URL;
   readonly store: AccountsStore;
@@ -356,15 +361,26 @@ function controlOperationsAttempt(
 async function resolveOperationsForRequest(
   resolveOperations: ControlOperationsResolver,
   timings: ServerTimingBucket,
+  diagnostics?: RequestPhaseObserver,
 ): Promise<ControlOperationsResolution> {
   const attempt = controlOperationsAttempt(resolveOperations);
   try {
-    return await measureServerTiming(timings, "tk_control_init", () =>
-      attempt.wait(CONTROL_OPERATIONS_INIT_DEADLINE_MS),
+    return await measureRequestPhase(diagnostics, "control_init", () =>
+      measureServerTiming(timings, "tk_control_init", () =>
+        attempt.wait(CONTROL_OPERATIONS_INIT_DEADLINE_MS),
+      ),
     );
   } catch {
     return undefined;
   }
+}
+
+function measureRequestPhase<T>(
+  diagnostics: RequestPhaseObserver | undefined,
+  phase: RequestDiagnosticPhase,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return diagnostics ? diagnostics.measure(phase, operation) : operation();
 }
 
 function logControlOperationsInitializationFailure(error: unknown): void {
@@ -459,15 +475,16 @@ async function dispatchAuthenticatedControlRoute(
     operations = await resolveOperationsForRequest(
       context.resolveOperations,
       timings,
+      context.diagnostics,
     );
   }
   if (!operations)
     return appendServerTiming(controlPlaneUnavailable(), timings);
   try {
-    const response = await measureServerTiming(
-      timings,
-      "tk_control_dispatch",
-      () =>
+    const response = await measureRequestPhase(
+      context.diagnostics,
+      "control_dispatch",
+      () => measureServerTiming(timings, "tk_control_dispatch", () =>
         dispatch({
           request,
           url,
@@ -478,6 +495,7 @@ async function dispatchAuthenticatedControlRoute(
           ...(context.runStreamTiming ? { runStreamTiming: context.runStreamTiming } : {}),
           session: context.session,
         }),
+      ),
     );
     return appendServerTiming(response, timings);
   } catch (error) {
@@ -516,7 +534,11 @@ export async function handleControlRoute(
     const operations =
       context.operations ??
       (context.resolveOperations
-        ? await resolveOperationsForRequest(context.resolveOperations, timings)
+        ? await resolveOperationsForRequest(
+          context.resolveOperations,
+          timings,
+          context.diagnostics,
+        )
         : undefined);
     if (!operations)
       return appendServerTiming(controlPlaneUnavailable(), timings);
@@ -539,12 +561,10 @@ export async function handleControlRoute(
   // Workspace authorization is enforced per route below after the target Workspace is
   // known.
   const requiredAccess = controlRouteRequiredScope(request);
-  const bearer = await measureServerTiming(timings, "tk_control_auth", () =>
-    requireAccountsBearer({
-      request,
-      store,
-      scope: requiredAccess,
-    }),
+  const bearer = await measureRequestPhase(context.diagnostics, "control_auth", () =>
+    measureServerTiming(timings, "tk_control_auth", () =>
+      requireAccountsBearer({ request, store, scope: requiredAccess }),
+    ),
   );
   if (!bearer.ok) return appendServerTiming(bearer.response, timings);
 

@@ -22,6 +22,10 @@ import {
   TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH,
   TAKOSUMI_ACCOUNTS_USERINFO_PATH,
 } from "@takosjp/takosumi-accounts-contract";
+import {
+  createRequestPhaseDiagnostics,
+  type RequestPhaseDiagnosticsConfiguration,
+} from "./request-phase-diagnostics.ts";
 
 export type {
   AccountsJsonWebKey,
@@ -198,6 +202,7 @@ export interface AccountsHandlerOptions {
   identityMergeReconciler?: IdentityMergeReconciler;
   identityMergeRetry?: IdentityMergeRetryCapability;
   credentialUnlinkReconciler?: CredentialUnlinkReconciler;
+  requestPhaseDiagnostics?: RequestPhaseDiagnosticsConfiguration;
   issuer?: string;
   jwks?: JsonWebKeySet;
   clients?: readonly OidcClientRegistration[];
@@ -247,6 +252,7 @@ export interface EphemeralAccountsHandlerOptions {
   identityMergeReconciler?: IdentityMergeReconciler;
   identityMergeRetry?: IdentityMergeRetryCapability;
   credentialUnlinkReconciler?: CredentialUnlinkReconciler;
+  requestPhaseDiagnostics?: RequestPhaseDiagnosticsConfiguration;
   issuer?: string;
   subject?: string;
   keyId?: string;
@@ -378,6 +384,7 @@ export async function createEphemeralAccountsHandler(
     keyPair.publicKey,
   )) as AccountsJsonWebKey;
   return createAccountsHandler({
+    requestPhaseDiagnostics: options.requestPhaseDiagnostics,
     issuer,
     hostedSessionPolicy: options.hostedSessionPolicy,
     sharedAccountWorkspaceDirectory: options.sharedAccountWorkspaceDirectory,
@@ -573,19 +580,21 @@ export function createAccountsHandler(
   const tokenLimiter = createInMemoryRateLimiter(120);
   const accountTokensLimiter = createInMemoryRateLimiter(10);
 
+  const phaseDiagnostics = createRequestPhaseDiagnostics(
+    options.requestPhaseDiagnostics ?? {},
+  );
   const inner = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     const store = createRequestScopedAccountsStore(baseStore);
     const timings = serverTimingBucketForPath(url.pathname);
+    const diagnostics = phaseDiagnostics.forRequest(request);
 
     const ingressFailure = accountsIngressSecurityFailure(request, url, issuer);
     if (ingressFailure) return ingressFailure;
 
     if (!isLoginAllowlistBypassPath(url.pathname)) {
-      const rejectedSession = await measureServerTiming(
-        timings,
-        "tk_allowlist",
-        () =>
+      const rejectedSession = await diagnostics.measure("allowlist", () =>
+        measureServerTiming(timings, "tk_allowlist", () =>
           rejectDisallowedPresentedSession({
             request,
             store,
@@ -593,6 +602,7 @@ export function createAccountsHandler(
             allowlist: loginEmailAllowlist,
             secureCookie: isProductionIssuer,
           }),
+        ),
       );
       if (rejectedSession) return appendServerTiming(rejectedSession, timings);
     }
@@ -957,6 +967,7 @@ export function createAccountsHandler(
             issuer,
             operations: options.controlPlaneOperations,
             resolveOperations: resolveControlPlaneOperations,
+            diagnostics,
           }),
       );
       if (controlResponse) return appendServerTiming(controlResponse, timings);

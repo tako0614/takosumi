@@ -4,6 +4,7 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import type { IncomingMessage } from "node:http";
 import process from "node:process";
+import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import { readOwnerPrivateTextFile } from "./lib/private-evidence-file.ts";
 
@@ -29,6 +30,7 @@ export interface RequestLatencyProbeOptions {
 export interface RequestLatencySample {
   readonly kind: typeof KIND;
   readonly sample: number;
+  readonly probeId: string;
   readonly environment: "staging" | "local";
   readonly client: "node-http";
   readonly route: string;
@@ -120,7 +122,6 @@ function validateTarget(options: RequestLatencyProbeOptions): {
     [
       "/.well-known/takosumi",
       "/.well-known/openid-configuration",
-      "/api/v1/workspaces",
       "/api/v1/views/workspaces.v1",
     ].includes(options.path)
   ) {
@@ -181,6 +182,7 @@ export async function probeRequestLatency(
     throw new Error("invalid bearer input");
   }
   const startedAt = new Date().toISOString();
+  const probeId = randomBytes(8).toString("hex");
   const start = performance.now();
   const elapsed = () => Math.round((performance.now() - start) * 10) / 10;
   return await new Promise<RequestLatencySample>((resolveSample) => {
@@ -200,6 +202,7 @@ export async function probeRequestLatency(
     const headers: Record<string, string> = {
       accept: "application/json",
       "user-agent": "takosumi-request-latency-probe",
+      "x-takosumi-request-probe-id": probeId,
     };
     if (token) headers.authorization = `Bearer ${token}`;
     const request = (url.protocol === "https:" ? httpsRequest : httpRequest)(
@@ -217,6 +220,7 @@ export async function probeRequestLatency(
       resolveSample({
         kind: KIND,
         sample,
+        probeId,
         environment: options.environment,
         client: "node-http",
         route,
