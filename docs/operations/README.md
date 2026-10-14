@@ -54,6 +54,7 @@ Cloud 側のリポジトリで管理します。
 ### 日常運用と障害対応
 
 - [troubleshooting](./troubleshooting.md)
+- [公開 API の応答停止を調べる GET probe](./troubleshooting.md#公開-api-の応答が止まるとき)
 - [runner timing diagnostics](./runner-timing-diagnostics.md)
 - [incident response](./incident-response.md)
 - [on-call](./oncall.md)

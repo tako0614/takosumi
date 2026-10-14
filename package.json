@@ -64,6 +64,7 @@
     "smoke:cloudflare": "bun scripts/smoke-cloudflare.ts",
     "smoke:platform-control-plane": "bun scripts/smoke-platform-control-plane.ts",
     "probe:accounts-rate-limit": "bun scripts/probe-accounts-rate-limit.ts",
+    "probe:request-latency": "bun scripts/probe-request-latency.ts",
     "release-activation:evidence": "bun scripts/validate-release-activation-evidence.ts",
     "production-hardening:evidence": "bun scripts/validate-production-hardening-evidence.ts",
     "production-hardening:gates": "bun scripts/verify-production-hardening-gates.ts",
