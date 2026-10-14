@@ -142,6 +142,7 @@ import {
 import {
   isRunnerInfrastructureRequeueError,
   OpenTofuControllerError,
+  isRecord,
   OpenTofuRunnerExecutionError,
   OpenTofuRunnerInfrastructureError,
   CREDENTIAL_SERVICE_UNAVAILABLE_REASON,
@@ -199,10 +200,13 @@ import {
 import {
   APPLY_BILLING_CAPTURE_COMPLETED_EVENT,
   APPLY_BILLING_CAPTURE_PENDING_EVENT,
+  APPLY_RUNNER_USAGE_COMPLETED_EVENT,
+  APPLY_RUNNER_USAGE_PENDING_EVENT,
   APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT,
   APPLY_RUNTIME_SECRET_RETIREMENT_DEFERRED_EVENT,
   APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT,
   applyRunBillingCapturePending,
+  applyRunRunnerUsagePending,
   applyRunMutationDispatched,
   applyRunProviderMutationDispatched,
   applyRunRuntimeSecretRetirementPending,
@@ -5650,6 +5654,8 @@ export class RunEngine {
    * lease and cannot terminate a running consumer or settle management drain.
    * Used by the DLQ consumer for runs whose consumer crashed before it could
    * record failure.
+   * A terminal destroy may still replay its durable runner-usage intent;
+   * this repairs accounting without another Run transition or notification.
    * Returns true when it transitioned the run.
    */
   async markRunFailed(
@@ -5692,7 +5698,11 @@ export class RunEngine {
       return result.won;
     }
     const applyRun = await this.#store.getApplyRun(runId);
-    if (!applyRun || isTerminalStatus(applyRun.status)) return false;
+    if (!applyRun) return false;
+    if (isTerminalStatus(applyRun.status)) {
+      await this.#finalizeRunnerUsage(applyRun);
+      return false;
+    }
     if (applyRun.status === "running") return false;
     const result = await this.#failUnclaimedApplyRun(applyRun, new Error(reason));
     return result.won;
@@ -5834,12 +5844,15 @@ export class RunEngine {
     runId: string,
     control: RunDispatchControl = {},
   ): Promise<ApplyRunResponse> {
-    const applyRun = await this.#store.getApplyRun(runId);
+    let applyRun = await this.#store.getApplyRun(runId);
     if (!applyRun) {
       throw new OpenTofuControllerError(
         "not_found",
         `apply run ${runId} not found`,
       );
+    }
+    if (applyRunRunnerUsagePending(applyRun)) {
+      applyRun = await this.#finalizeRunnerUsage(applyRun);
     }
     if (
       (applyRun.status === "succeeded" || applyRun.status === "failed") &&
@@ -8392,21 +8405,34 @@ export class RunEngine {
   ): Promise<{ readonly won: boolean; readonly run: ApplyRun | undefined }> {
     const startedAt = observed.startedAt ?? observed.createdAt;
     const eventType = observed.operation === "destroy" ? "destroy.failed" : "apply.failed";
-    const failed = this.#failedApplyRunCandidate(
+    let failed = this.#failedApplyRunCandidate(
       observed, observed.stateBackend, startedAt, eventType, error,
     );
+    if (failed.operation === "destroy" && failed.finishedAt !== undefined) {
+      // Freeze authenticated, confirmed work before the terminal CAS. The
+      // intent is committed only by its winner; a stale DLQ must never occupy
+      // the usage key while another attempt is still executing.
+      const durationMs = await this.#destroyRunnerMinuteDuration({
+        run: failed,
+        finishedAt: failed.finishedAt,
+        current: "none",
+        requirePriorInputs: true,
+      });
+      if (durationMs !== undefined && durationMs > 0) {
+        failed = {
+          ...failed,
+          auditEvents: [
+            ...failed.auditEvents,
+            auditEvent(failed.id, APPLY_RUNNER_USAGE_PENDING_EVENT, failed.finishedAt, { durationMs }),
+          ],
+        };
+      }
+    }
     const result = await this.#persistUnclaimedFailure("apply", observed, failed);
     if (!result.won) return result;
     await this.#afterTerminalRunWon("apply", failed);
     await this.#recordApplyFailure(failed, startedAt, eventType, error);
-    if (failed.operation === "destroy" && failed.finishedAt !== undefined) {
-      await this.#recordDestroyRunnerMinuteUsage({
-        run: failed,
-        finishedAt: failed.finishedAt,
-        current: "none",
-      });
-    }
-    return { won: true, run: failed };
+    return { won: true, run: await this.#finalizeRunnerUsage(failed) };
   }
 
   async #failApplyRun(
@@ -9421,13 +9447,14 @@ export class RunEngine {
     });
   }
 
-  /** Settle one Run-level row from disjoint attempts, without queue wait. */
-  async #recordDestroyRunnerMinuteUsage(input: {
+  /** Compute disjoint confirmed attempts, without queue wait. */
+  async #destroyRunnerMinuteDuration(input: {
     readonly run: ApplyRun;
     readonly startedAt?: number;
     readonly finishedAt: number;
     readonly current: "execution" | "refusal" | "none";
-  }): Promise<void> {
+    readonly requirePriorInputs?: boolean;
+  }): Promise<number | undefined> {
     let inputs: PlanRunInputs | undefined;
     try {
       const planRun = await this.#store.getPlanRun(input.run.planRunId);
@@ -9435,7 +9462,13 @@ export class RunEngine {
         planRun?.id === input.run.planRunId &&
         planRun.workspaceId === input.run.workspaceId
       ) inputs = await this.#requirePreparedPlanRunInputs(planRun);
-    } catch {
+    } catch (error) {
+      const invalidProof = error instanceof OpenTofuControllerError &&
+        isRecord(error.details) &&
+        ["plan_run_inputs_missing", "plan_run_inputs_corrupt", "plan_run_inputs_unprepared"].includes(
+          String(error.details.reason),
+        );
+      if (input.requirePriorInputs && !invalidProof) throw error;
       // This read is only needed to trust older release audit. A post-commit
       // read failure must not prevent settlement of this attempt's execution.
       log.warn("deploy_control.destroy_usage_inputs_read_failed", {
@@ -9463,8 +9496,20 @@ export class RunEngine {
         ? intervals.currentReleaseMs
         : 0;
     const durationMs = intervals.priorMs + currentMs;
-    if (!Number.isSafeInteger(durationMs) || durationMs < 0) return;
-    if (durationMs === 0 && !validExecution) return;
+    if (!Number.isSafeInteger(durationMs) || durationMs < 0) return undefined;
+    if (durationMs === 0 && !validExecution) return undefined;
+    return durationMs;
+  }
+
+  /** Settle one Run-level row from disjoint attempts, without queue wait. */
+  async #recordDestroyRunnerMinuteUsage(input: {
+    readonly run: ApplyRun;
+    readonly startedAt?: number;
+    readonly finishedAt: number;
+    readonly current: "execution" | "refusal" | "none";
+  }): Promise<void> {
+    const durationMs = await this.#destroyRunnerMinuteDuration(input);
+    if (durationMs === undefined) return;
     await this.#recordRunnerMinuteUsage({
       workspaceId: input.run.workspaceId,
       runId: input.run.id,
@@ -9473,6 +9518,43 @@ export class RunEngine {
       finishedAt: input.finishedAt,
       ...(durationMs > 0 ? { durationMs } : {}),
     });
+  }
+
+  /** Replay only the measurement atomically committed by the queued failure. */
+  async #finalizeRunnerUsage(run: ApplyRun): Promise<ApplyRun> {
+    if (!applyRunRunnerUsagePending(run)) return run;
+    const intent = run.auditEvents.findLast((event) => event.type === APPLY_RUNNER_USAGE_PENDING_EVENT);
+    const durationMs = intent?.data?.durationMs;
+    if (
+      !intent || typeof durationMs !== "number" || !Number.isSafeInteger(durationMs) || durationMs <= 0 ||
+      !Number.isSafeInteger(intent.at) || intent.at !== run.finishedAt
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "runner usage intent does not match the terminal Run",
+      );
+    }
+    await this.#recordRunnerMinuteUsage({
+      workspaceId: run.workspaceId,
+      runId: run.id,
+      capsuleId: run.capsuleId,
+      finishedAt: intent.at,
+      durationMs,
+    });
+    const result = await this.#store.transitionRun({
+      id: run.id,
+      kind: "apply",
+      expectFrom: [run.status],
+      expectExactRun: run,
+      run: {
+        ...run,
+        auditEvents: [
+          ...run.auditEvents,
+          auditEvent(run.id, APPLY_RUNNER_USAGE_COMPLETED_EVENT, this.#now()),
+        ],
+      },
+    });
+    return (result.run as ApplyRun | undefined) ?? run;
   }
 
   async #recordDeployOperationMetric(input: {

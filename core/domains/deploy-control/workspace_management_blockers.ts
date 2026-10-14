@@ -5,6 +5,7 @@ import type { CapsuleInterfaceMaterializationIntent } from "./interface_material
 import {
   applyRunBillingCapturePending,
   applyRunRuntimeSecretRetirementPending,
+  applyRunRunnerUsagePending,
 } from "./run_finalization.ts";
 
 type RecordValue = Record<string, unknown>;
@@ -176,7 +177,8 @@ export function runBlocksWorkspaceManagement(value: unknown, ledgers: WorkspaceM
   if (family !== "apply") return false;
   if (!validAuditEvents(value.auditEvents)) return true;
   const apply = value as unknown as ApplyRun;
-  if (applyRunBillingCapturePending(apply) || applyRunRuntimeSecretRetirementPending(apply)) return true;
+  if (applyRunBillingCapturePending(apply) || applyRunRuntimeSecretRetirementPending(apply) ||
+    applyRunRunnerUsagePending(apply)) return true;
   if (apply.status === "succeeded") return false;
   if (failedApplyHasRecovery(value, ledgers)) return false;
   if (dispatched(apply) || hasApplyEffects(value)) return true;

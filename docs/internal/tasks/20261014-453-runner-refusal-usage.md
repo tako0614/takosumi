@@ -54,6 +54,37 @@ The independent reviewer must have no unresolved blocking finding before the
 formal quality/release QA request. QA is requested for that complete head; it
 does not authorize this owner to merge or deploy.
 
+## PR #454 DLQ settlement follow-up
+
+The Codex P1 review on `e338848281ee2af76cbbc4f4797a366ac0428580`
+identified a second loss boundary: the queued destroy backstop commits
+`failed` before rating and writing runner usage. A temporary rating or ledger
+write failure then escapes, while later deliveries reject the terminal Run.
+The controller regression on that source head records 1 pass / 2 fail:
+rating and pre-write faults lose the confirmed interval; a write committed
+before an acknowledgement fault already deduplicates correctly.
+
+Commit an authenticated positive duration as a runner-usage intent in the
+same observed-row/Workspace-fenced terminal CAS. Only the winning failure
+writer settles the existing Run-level key. Terminal DLQ delivery and the
+existing scheduled Run repair both replay the frozen measurement and close
+its audit marker with the existing exact terminal finalizer. Prepared-input
+storage outages remain retryable before the terminal write; invalid or
+missing proof cannot create a billable intent. A pending intent blocks
+Workspace freeze on memory, PostgreSQL and D1. No schema migration, usage
+backfill, historical-row rewrite or capture/release change is introduced.
+
+Follow-up evidence lives at
+`/root/dev/takos/.operator-private/Takosumi-fix454-20261014/`.
+Validate rating/write/acknowledgement/completion faults, reconstruction on a
+fresh controller, frozen measurements after sidecar removal, lost CAS,
+store recovery/finalization parity and management blocking, then rerun the
+complete owner gate at the final commit on isolated loopback ports.
+The follow-up dashboard/docs listeners use ports 16853/16854.
+An independent reviewer must report blocking 0 before ordinary branch push
+and a new formal QA request to the quality/release owner (`cc1494c7`).
+The previously stated publication restrictions still apply.
+
 ## Other audit dispositions
 
 The L4 fixed-64-byte comparison exists only in the WIP snapshot; current main

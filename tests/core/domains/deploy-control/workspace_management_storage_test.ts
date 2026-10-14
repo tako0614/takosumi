@@ -19,6 +19,8 @@ import {
   APPLY_BILLING_CAPTURE_PENDING_EVENT,
   APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT,
   APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT,
+  APPLY_RUNNER_USAGE_COMPLETED_EVENT,
+  APPLY_RUNNER_USAGE_PENDING_EVENT,
   type CommitBackupRunInput,
   type CommitCompatibilityCheckRunInput,
   type CommitRecoveredStateInput,
@@ -1757,6 +1759,103 @@ test("Workspace freeze observes terminal Plan, finalizer, and Interface lineage 
     await expectFreeze(interfaceDraining, "blocked");
     await store.putStateVersion(interfaceState);
     await expectFreeze(interfaceDraining, "frozen");
+  }
+});
+
+test("Workspace freeze remains blocked until failed destroy runner usage is settled", async () => {
+  for (const { label, store } of await adapters()) {
+    const workspaceId = `freeze-runner-usage-${label}`;
+    await store.putWorkspace(workspace(workspaceId));
+    const original = {
+      ...applyRun(`freeze-runner-usage-apply-${label}`, workspaceId, "failed"),
+      operation: "destroy",
+      createdAt: 1,
+      finishedAt: 2,
+      updatedAt: 2,
+      auditEvents: [
+        {
+          id: `destroy-failed-${label}`,
+          type: "destroy.failed",
+          at: 2,
+          data: { providerDispatched: false },
+        },
+        {
+          id: `runner-usage-pending-${label}`,
+          type: APPLY_RUNNER_USAGE_PENDING_EVENT,
+          at: 2,
+          data: { durationMs: 17 },
+        },
+      ],
+    } satisfies ApplyRun;
+    await store.putApplyRun(original);
+    const current = (await store.getWorkspaceManagement(workspaceId))!;
+    const draining = await store.beginWorkspaceDraining(workspaceId, {
+      workspaceId,
+      managementState: "active",
+      managementEpoch: current.managementEpoch,
+    });
+    expect(draining.status, label).toBe("started");
+    const expectation = {
+      workspaceId,
+      managementState: "draining" as const,
+      managementEpoch: current.managementEpoch + 1,
+    };
+    expect((await store.freezeWorkspaceManagementIfQuiescent(expectation)).status, label).toBe("blocked");
+
+    const completed: ApplyRun = {
+      ...original,
+      updatedAt: 3,
+      auditEvents: [...original.auditEvents, {
+        id: `runner-usage-completed-${label}`,
+        type: APPLY_RUNNER_USAGE_COMPLETED_EVENT,
+        at: 3,
+      }],
+    };
+    expect(await store.transitionRun({
+      id: original.id,
+      kind: "apply",
+      expectFrom: ["failed"],
+      expectExactRun: original,
+      run: completed,
+    }), label).toEqual({ won: true, run: completed });
+    expect((await store.freezeWorkspaceManagementIfQuiescent(expectation)).status, label).toBe("frozen");
+
+    const corruptWorkspaceId = `freeze-runner-usage-corrupt-${label}`;
+    await store.putWorkspace(workspace(corruptWorkspaceId));
+    const corrupt = {
+      ...applyRun(`freeze-runner-usage-corrupt-apply-${label}`, corruptWorkspaceId, "failed"),
+      operation: "destroy",
+      createdAt: 1,
+      finishedAt: 2,
+      updatedAt: 2,
+      auditEvents: [
+        {
+          id: `destroy-failed-corrupt-${label}`,
+          type: "destroy.failed",
+          at: 2,
+          data: { providerDispatched: false },
+        },
+        {
+          id: `runner-usage-pending-corrupt-${label}`,
+          type: APPLY_RUNNER_USAGE_PENDING_EVENT,
+          at: 1,
+          data: { durationMs: 0 },
+        },
+      ],
+    } satisfies ApplyRun;
+    await store.putApplyRun(corrupt);
+    const corruptManagement = (await store.getWorkspaceManagement(corruptWorkspaceId))!;
+    const corruptDraining = await store.beginWorkspaceDraining(corruptWorkspaceId, {
+      workspaceId: corruptWorkspaceId,
+      managementState: "active",
+      managementEpoch: corruptManagement.managementEpoch,
+    });
+    expect(corruptDraining.status, label).toBe("started");
+    expect((await store.freezeWorkspaceManagementIfQuiescent({
+      workspaceId: corruptWorkspaceId,
+      managementState: "draining",
+      managementEpoch: corruptManagement.managementEpoch + 1,
+    })).status, `${label}: malformed runner usage remains a blocker`).toBe("blocked");
   }
 });
 

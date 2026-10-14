@@ -53,8 +53,11 @@ import {
   APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT,
   APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT,
   APPLY_RUNTIME_SECRET_RETIREMENT_DEFERRED_EVENT,
+  APPLY_RUNNER_USAGE_PENDING_EVENT,
+  APPLY_RUNNER_USAGE_COMPLETED_EVENT,
   applyRunBillingCapturePending,
   applyRunRuntimeSecretRetirementPending,
+  applyRunRunnerUsagePending,
 } from "./run_finalization.ts";
 export {
   APPLY_BILLING_CAPTURE_PENDING_EVENT,
@@ -62,8 +65,11 @@ export {
   APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT,
   APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT,
   APPLY_RUNTIME_SECRET_RETIREMENT_DEFERRED_EVENT,
+  APPLY_RUNNER_USAGE_PENDING_EVENT,
+  APPLY_RUNNER_USAGE_COMPLETED_EVENT,
   applyRunBillingCapturePending,
   applyRunRuntimeSecretRetirementPending,
+  applyRunRunnerUsagePending,
 } from "./run_finalization.ts";
 import type {
   CapsuleCompatibilityLevel,
@@ -2656,9 +2662,11 @@ export function assertExactRunTransitionInput(input: TransitionRunInput): void {
   const finalizesPendingWork =
     appendedType === APPLY_BILLING_CAPTURE_COMPLETED_EVENT
       ? applyRunBillingCapturePending(expected)
-      : (appendedType === APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT ||
+      : ((appendedType === APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT ||
           appendedType === APPLY_RUNTIME_SECRET_RETIREMENT_DEFERRED_EVENT) &&
-        applyRunRuntimeSecretRetirementPending(expected);
+          applyRunRuntimeSecretRetirementPending(expected)) ||
+        (appendedType === APPLY_RUNNER_USAGE_COMPLETED_EVENT &&
+          applyRunRunnerUsagePending(expected));
   if (
     stableStringify(before) !== stableStringify(after) ||
     afterEvents.length !== beforeEvents.length + 1 ||
@@ -7904,7 +7912,7 @@ export function isRecoverableOpenTofuRunRecord(
   if (
     isApplyRunRecord(row) &&
     (row.status === "succeeded" || row.status === "failed") &&
-    applyRunBillingCapturePending(row)
+    (applyRunBillingCapturePending(row) || applyRunRunnerUsagePending(row))
   ) {
     const committedAt =
       runTimestampValue(row.finishedAt) ??
