@@ -57,6 +57,74 @@
    app bundle / container image /
    DB migration の最適化は app repo / CI / OpenTofu module 側で行う。
 
+## 公開 API の応答が止まるとき
+
+Run の実行時間と、Run を読む HTTP GET の応答時間は分けて調べます。
+`GET /api/v1/runs/:runId` は Accounts の認証、Control の Run 読み取り、
+Workspace 認可を通ります。runner / coordinator の完了待ちとは別の経路です。
+
+`probe:request-latency` は、固定の staging origin または HTTP loopback fixture に
+対する、期限付きの読み取り専用 GET probe です。終了済み Plan の Run ID など、
+調査対象を一つ選びます。token は argv や環境変数で渡さず、owner と一致する
+`0700` directory 内の `0600` regular file から読みます。file は checkout 外に置き、
+symlink を使いません。入力の不備は詳細を伏せた exit 2 になります。
+
+```bash
+bun run probe:request-latency -- \
+  --environment staging \
+  --url https://app-staging.takosumi.com \
+  --path /api/v1/runs/<finished-run-id> \
+  --token-file /absolute/private/staging/account-token \
+  --samples 12 --timeout-ms 130000 --interval-ms 250
+```
+
+`<finished-run-id>` は実際の ID に置き換えてから実行します。許可する route は
+`/.well-known/takosumi`、`/.well-known/openid-configuration`、
+`/api/v1/workspaces`、`/api/v1/views/workspaces.v1`、`/api/v1/runs/:runId`
+だけです。query / fragment、OAuth / logout、内部 API、redirect は拒否します。
+public discovery だけを見る場合は `--token-file` を省略できます。
+local fixture は `--environment local --url http://127.0.0.1:<port>` を使います。
+staging 以外の公開 origin や production はこの probe の対象にできません。
+
+各 sample は完了時に JSON を一行出力します。
+
+| 記録 | 読み方 |
+| --- | --- |
+| `startedAt` / `finishedAt` / `sample` / `client` / `route` | UTC の観測窓、順序、Node HTTP client、route の形。Run ID や origin 自体は出力しない |
+| `cfRay` | 応答に正しい形式の CF Ray がある場合の相関 ID。headers 未到達の timeout では通常得られない |
+| `milestones.dnsMs` / `tcpMs` / `tlsMs` / `headersMs` / `bodyMs` | request 開始から各 event までの累積 ms。数値を足さない。IP literal では DNS、HTTP local fixture では TLS がない |
+| `serverTiming` | allowlist の数値だけ。`tk_accounts_init`、`tk_control_auth`、`tk_control_init`、`tk_control_dispatch`。未到達 / 未計測の stage は欠ける |
+| `outcome` / `phase` / `status` | headers 待ちか body 待ちか、HTTP status、timeout / network / body / size limit / redirect の固定分類。全件 2xx 完了なら exit 0、それ以外は exit 1 |
+
+sample は直列で最大 70 件、各 sample は headers / body を合わせて最大 150 秒です。
+body は読み捨て、1 MiB を超えたら connection を閉じます。timeout でも同じ
+connection を破棄し、無制限 retry や redirect は行いません。sample の完了前には
+結果行が出ないため、進行中の sample 番号と開始時刻は直前の行から推定し、終了後の
+`startedAt` で確かめます。各 sample は新しい connection を使うため、browser の
+HTTP/2 や既存 connection reuse と同じ条件の再現とは扱いません。
+
+結果は operator-private な場所に保存します。probe は body、cookie / bearer、
+Location、query、Run ID、任意の error message を記録しませんが、UTC と CF Ray は
+incident evidence です。公開 PR には必要な集計と検証結果だけを載せます。
+
+停止した sample の UTC / route / CF Ray を、同じ時間帯の Worker **HTTP event**
+と対応付けます。headers が戻らず Ray がない場合は、UTC 窓と client の記録を
+起点にします。Worker 側で対応する event を特定できなければ「未確認」のままです。
+tail や client HAR を保存する際も auth headers / body / query / private ID を落とし、
+必要な event timestamp、HTTP outcome、stage timing だけを残します。
+長い Durable Object **alarm** の canceled event を、HTTP GET の停止と同一視しません。
+保存ログ API の 403 は取得権限の不足として記録し、別 credential や権限変更で迂回しません。
+
+[issue #444](https://github.com/tako0614/takosumi/issues/444) の最大 120 秒停止は、
+既存の読み取り probe では再現せず、原因が未確定です。
+[Accounts の初期化期限修正 #447](https://github.com/tako0614/takosumi/pull/447) と
+[Control reject backoff #461](https://github.com/tako0614/takosumi/pull/461) は
+独立に確認した availability 修正です。この診断 loop も incident 解消や launch 完了を
+示しません。Control の pending initialization は route、Accounts composition、
+`worker/src/deploy_control_seam.ts` の service cache にまたがります。一層だけの
+expiry では実 Worker の回復にならず、複数層の置換は late bootstrap / service callback
+への影響を含む別の設計課題です。probe はこれらの runtime cache を変更しません。
+
 ## Cloudflare composition の Run 実行時間の上限
 
 Cloudflare reference composition (`deploy/platform`) では、1 つの Plan / Apply /
