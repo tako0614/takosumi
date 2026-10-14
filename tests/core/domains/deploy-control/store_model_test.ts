@@ -2162,6 +2162,106 @@ test("terminal billing-finalization markers are recoverable on every store backe
   }
 });
 
+test("failed destroy runner-usage intents are recoverable with the exact stale cutoff", async () => {
+  for (const [label, store] of await stores()) {
+    const pending = applyRunForSafety({
+      id: `apply_runner_usage_pending_${label}`,
+      capsuleId: `capsule_runner_usage_pending_${label}`,
+      operation: "destroy",
+      status: "failed",
+      effectAt: 100,
+      auditEvents: [{
+        id: `audit_runner_usage_pending_${label}`,
+        type: "runner_usage.pending",
+        at: 100,
+        data: { durationMs: 37 },
+      }],
+    });
+    await store.putApplyRun(pending);
+    const list = (staleQueuedBeforeMs: number) => store.listRecoverableOpenTofuRuns({
+      staleQueuedBeforeMs,
+      staleRunningBeforeMs: staleQueuedBeforeMs,
+    });
+    expect((await list(99)).map(({ id }) => id), label).not.toContain(pending.id);
+    expect((await list(100)).map(({ id }) => id), label).toContain(pending.id);
+
+    const malformedIntent: ApplyRun = {
+      ...pending,
+      id: `apply_runner_usage_malformed_${label}`,
+      auditEvents: [{
+        id: `audit_runner_usage_malformed_${label}`,
+        type: "runner_usage.pending",
+        at: 99,
+        data: { durationMs: 0 },
+      }],
+    };
+    await store.putApplyRun(malformedIntent);
+    expect((await list(100)).map(({ id }) => id), label).toContain(malformedIntent.id);
+
+    await store.putApplyRun({
+      ...pending,
+      auditEvents: [...pending.auditEvents, {
+        id: `audit_runner_usage_completed_${label}`,
+        type: "runner_usage.completed",
+        at: 110,
+      }],
+    });
+    expect((await list(200)).map(({ id }) => id), label).not.toContain(pending.id);
+  }
+});
+
+test("runner-usage completion uses exact terminal Apply CAS across stores", async () => {
+  for (const [label, store] of await stores()) {
+    const run = applyRunForSafety({
+      id: `apply_runner_usage_cas_${label}`,
+      capsuleId: `capsule_runner_usage_cas_${label}`,
+      operation: "destroy",
+      status: "failed",
+      effectAt: 100,
+      auditEvents: [{
+        id: `audit_runner_usage_cas_pending_${label}`,
+        type: "runner_usage.pending",
+        at: 100,
+        data: { durationMs: 37 },
+      }],
+    });
+    await store.putApplyRun(run);
+    const completed: ApplyRun = {
+      ...run,
+      updatedAt: 101,
+      auditEvents: [...run.auditEvents, {
+        id: `audit_runner_usage_cas_completed_${label}`,
+        type: "runner_usage.completed",
+        at: 101,
+      }],
+    };
+    expect(await store.transitionRun({
+      id: run.id,
+      kind: "apply",
+      expectFrom: ["failed"],
+      expectExactRun: run,
+      run: completed,
+    }), label).toEqual({ won: true, run: completed });
+
+    const staleCompletion: ApplyRun = {
+      ...run,
+      updatedAt: 102,
+      auditEvents: [...run.auditEvents, {
+        id: `audit_runner_usage_cas_stale_${label}`,
+        type: "runner_usage.completed",
+        at: 102,
+      }],
+    };
+    expect(await store.transitionRun({
+      id: run.id,
+      kind: "apply",
+      expectFrom: ["failed"],
+      expectExactRun: run,
+      run: staleCompletion,
+    }), label).toEqual({ won: false, run: completed });
+  }
+});
+
 test("recoverable run listing applies exact stale predicates before the shared limit", async () => {
   const options = {
     staleQueuedBeforeMs: 200,

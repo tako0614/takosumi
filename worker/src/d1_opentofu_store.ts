@@ -514,6 +514,25 @@ const D1_WORKSPACE_FREEZE_APPLY_FINALIZERS_SETTLED_SQL = `
     end), -1)
       from json_each(${D1_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}) as audit_event
   )
+  and (
+    select coalesce(max(case
+      when json_extract(
+        case when json_valid(audit_event.value) = 1
+          then audit_event.value else '{}' end,
+        '$.type'
+      ) = 'runner_usage.pending' then cast(audit_event.key as integer)
+    end), -1)
+      from json_each(${D1_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}) as audit_event
+  ) <= (
+    select coalesce(max(case
+      when json_extract(
+        case when json_valid(audit_event.value) = 1
+          then audit_event.value else '{}' end,
+        '$.type'
+      ) = 'runner_usage.completed' then cast(audit_event.key as integer)
+    end), -1)
+      from json_each(${D1_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}) as audit_event
+  )
 `;
 
 const D1_WORKSPACE_FREEZE_PLAN_APPROVAL_SETTLED_SQL = `
@@ -2190,6 +2209,23 @@ function d1RunRuntimeSecretRetirementPending(): SQL {
         0
       )
       FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
+    )
+  `;
+}
+
+/** Mirrors applyRunRunnerUsagePending in the shared store model. */
+function d1RunRunnerUsagePending(): SQL {
+  return sql`
+    json_extract(${schema.runs.runJson}, '$.status') = 'failed'
+    AND json_extract(${schema.runs.runJson}, '$.operation') = 'destroy'
+    AND (
+      SELECT COALESCE(MAX(CAST(audit_event.key AS INTEGER) + 1), 0)
+      FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
+      WHERE json_extract(audit_event.value, '$.type') = 'runner_usage.pending'
+    ) > (
+      SELECT COALESCE(MAX(CAST(audit_event.key AS INTEGER) + 1), 0)
+      FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
+      WHERE json_extract(audit_event.value, '$.type') = 'runner_usage.completed'
     )
   `;
 }
@@ -4312,6 +4348,13 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         inArray(schema.runs.type, [RUN_KIND_APPLY, "destroy_apply"]),
         inArray(schema.runs.status, ["succeeded", "failed"]),
         d1RunBillingCapturePending(),
+        sql`${committedAt} > 0`,
+        sql`${committedAt} <= ${options.staleQueuedBeforeMs}`,
+      ),
+      and(
+        inArray(schema.runs.type, [RUN_KIND_APPLY, "destroy_apply"]),
+        inArray(schema.runs.status, ["succeeded", "failed"]),
+        d1RunRunnerUsagePending(),
         sql`${committedAt} > 0`,
         sql`${committedAt} <= ${options.staleQueuedBeforeMs}`,
       ),

@@ -2527,6 +2527,13 @@ export class OpenTofuController {
     return await this.#runQuery.listRecoverableOpenTofuRuns(options);
   }
 
+  async hasPendingRunnerUsage(input: {
+    readonly runId: string;
+    readonly workspaceId: string;
+  }): Promise<boolean> {
+    return await this.#runQuery.hasPendingRunnerUsage(input);
+  }
+
   async listPendingRuntimeSecretRetirementRuns(options: {
     readonly staleBeforeMs: number;
     readonly limit?: number;

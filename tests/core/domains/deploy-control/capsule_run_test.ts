@@ -8699,6 +8699,393 @@ test("pre-destroy release commands run before OpenTofu destroy", async () => {
   });
 });
 
+test.each([
+  ["success", "runner", "intact"],
+  ["success", "runner", "sealed"],
+  ["exhausted", "runner", "intact"],
+  ["dlq", "runner", "intact"],
+  ["dlq", "runner", "tampered"],
+  ["dlq", "runner", "missing"],
+  ["dlq", "operator", "intact"],
+  ["dlq", "operator", "tampered"],
+] as const)("pre_destroy %s after capacity refusal settles %s release usage once with %s inputs", async (settlement, executor, integrity) => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner(
+    {},
+    { launch_url: { sensitive: false, value: "https://x.example" } },
+  );
+  const originalDestroy = runner.destroy!.bind(runner);
+  let destroyCalls = 0;
+  runner.destroy = (job) => {
+    destroyCalls++;
+    if (destroyCalls === 1 || settlement === "exhausted") {
+      return Promise.reject(
+        new OpenTofuRunnerInfrastructureError("runner capacity refused", {
+          reason: "capacity_exhausted",
+        }),
+      );
+    }
+    return originalDestroy(job);
+  };
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: lifecycleInstallConfig([
+      {
+        id: "retire-runtime",
+        phase: "pre_destroy",
+        executor,
+        command: ["bun", "run", "release", "--destroy"],
+      },
+    ]),
+  });
+  const rated: Array<{ runId: string; quantity: number }> = [];
+  const testSealer: NonNullable<OpenTofuControllerDependencies["dependencyValueSealer"]> = {
+    seal: (values) => Promise.resolve({
+      ciphertext: btoa(JSON.stringify(values)),
+      contentDigest: "test-sidecar",
+      names: Object.keys(values),
+    }),
+    open: (sealed) => Promise.resolve(JSON.parse(atob(sealed.ciphertext))),
+  };
+  const controller = controllerWith(store, runner, {
+    defaultBillingSettings: { mode: "showback" },
+    dependencyValueSealer: testSealer,
+    showbackRater: {
+      ratePlan: () => Promise.resolve({ ratingStatus: "rated", usdMicros: 0 }),
+      rateUsage: (context) => {
+        rated.push({ runId: context.runId, quantity: context.quantity });
+        return Promise.resolve({ ratingStatus: "rated", usdMicros: 7_500 });
+      },
+    },
+    enqueueRun: () => Promise.resolve(),
+    releaseActivator: {
+      activate: () => Promise.resolve({ status: "succeeded" }),
+    },
+  });
+  const dispatch = async (run: { readonly id: string; readonly workspaceId: string }, action: "plan" | "apply") => {
+    await controller.dispatchQueuedRun({ action, runId: run.id, workspaceId: run.workspaceId });
+  };
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  await dispatch(create.planRun, "plan");
+  const createPlan = (await store.getPlanRun(create.planRun.id))!;
+  const createApply = await controller.createApplyRun({
+    planRunId: createPlan.id,
+    expected: applyExpectedGuardFromPlanRun(createPlan),
+  });
+  await dispatch(createApply.applyRun, "apply");
+
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  await dispatch(destroy.planRun, "plan");
+  const destroyPlan = (await store.getPlanRun(destroy.planRun.id))!;
+  await controller.approveRun(destroyPlan.id);
+  const destroyApply = await controller.createApplyRun({
+    planRunId: destroyPlan.id,
+    expected: applyExpectedGuardFromPlanRun(destroyPlan),
+  });
+  if (integrity === "sealed") {
+    const inputs = (await store.getPlanRunInputs(destroyPlan.id))!;
+    await store.putPlanRunInputs({
+      planRunId: destroyPlan.id,
+      variables: {},
+      sealed: await testSealer.seal(JSON.parse(JSON.stringify(inputs))),
+    });
+    expect((await store.getPlanRunInputs(destroyPlan.id))?.lifecycleActions).toBeUndefined();
+  }
+  const usage = async () =>
+    (await store.listUsageEvents(destroyApply.applyRun.workspaceId)).filter(
+      (event) => event.runId === destroyApply.applyRun.id && event.kind === "runner_minute",
+    );
+  await dispatch(destroyApply.applyRun, "apply");
+  const queued = (await store.getApplyRun(destroyApply.applyRun.id))!;
+  expect(queued.status).toBe("queued");
+  expect(await usage()).toHaveLength(0);
+  expect(rated.filter((event) => event.runId === queued.id)).toHaveLength(0);
+
+  if (integrity === "missing") {
+    await store.deletePlanRunInputs(destroyPlan.id);
+  } else if (integrity === "tampered") {
+    const inputs = (await store.getPlanRunInputs(destroyPlan.id))!;
+    await store.putPlanRunInputs({
+      ...inputs,
+      lifecycleActions: inputs.lifecycleActions?.map((action) => ({
+        ...action,
+        executor: action.executor === "runner" ? "operator" as const : "runner" as const,
+      })),
+    });
+  }
+
+  if (settlement === "dlq") {
+    expect(await controller.markRunFailed("apply", queued.id, "retries-exhausted")).toBe(true);
+  } else {
+    await dispatch(queued, "apply");
+  }
+  const terminal = (await store.getApplyRun(queued.id))!;
+  expect(terminal.status).toBe(settlement === "success" ? "succeeded" : "failed");
+  if (settlement === "dlq") {
+    expect(await controller.markRunFailed("apply", queued.id, "retries-exhausted")).toBe(false);
+    expect(terminal.auditEvents.filter((event) => event.type === "runner_usage.pending"))
+      .toHaveLength(executor === "runner" && integrity !== "tampered" && integrity !== "missing" ? 1 : 0);
+  }
+  const starts = terminal.auditEvents.filter((event) => event.type === "apply.started");
+  const releases = terminal.auditEvents.filter(
+    (event) => event.type === "lifecycle_action.pre_destroy.succeeded" && event.data?.actionDispatched === true,
+  );
+  expect(starts).toHaveLength(settlement === "dlq" ? 1 : 2);
+  expect(releases).toHaveLength(settlement === "dlq" ? 1 : 2);
+  const expectedMs = executor === "operator" || integrity === "tampered" || integrity === "missing"
+    ? 0
+    : (releases[0]!.at - starts[0]!.at) +
+      (settlement === "success"
+        ? terminal.finishedAt! - starts[1]!.at
+        : settlement === "exhausted"
+          ? releases[1]!.at - starts[1]!.at
+          : 0);
+  if (executor === "runner" && integrity !== "tampered" && integrity !== "missing") expect(expectedMs).toBeGreaterThan(0);
+  const events = await usage();
+  expect(events).toHaveLength(expectedMs > 0 ? 1 : 0);
+  if (expectedMs > 0) {
+    expect(events[0]).toMatchObject({
+      idempotencyKey: `${terminal.id}:runner_minute`,
+      quantity: expectedMs / 60_000,
+      ratingStatus: "rated",
+      usdMicros: 7_500,
+    });
+  }
+  expect(rated.filter((event) => event.runId === terminal.id)).toEqual(
+    expectedMs > 0 ? [{ runId: terminal.id, quantity: expectedMs / 60_000 }] : [],
+  );
+});
+
+test.each([
+  "rating", "usage-write", "usage-write-ack", "completion-write", "completion-write-ack",
+  "input-read", "terminal-write", "lost-cas", "invalid-intent-duration", "invalid-intent-time",
+] as const)(
+  "DLQ destroy usage settlement retries after a transient %s failure",
+  async (failure) => {
+    let failUsageWrite: "before" | "after" | undefined;
+    let failCompletionWrite: "before" | "after" | undefined;
+    let failInputRead = false;
+    let failTerminalWrite = false;
+    let loseTerminalCas = false;
+    const store = new class extends InMemoryOpenTofuControlStore {
+      override async putUsageEvent(event: Parameters<OpenTofuControlStore["putUsageEvent"]>[0]) {
+        const fault = event.kind === "runner_minute" ? failUsageWrite : undefined;
+        if (fault) failUsageWrite = undefined;
+        if (fault === "before") throw new Error("transient usage-write failure");
+        const saved = await super.putUsageEvent(event);
+        if (fault === "after") throw new Error("transient usage-write-ack failure");
+        return saved;
+      }
+      override async getPlanRunInputs(id: string) {
+        if (failInputRead) {
+          failInputRead = false;
+          throw new Error("transient input-read failure");
+        }
+        return await super.getPlanRunInputs(id);
+      }
+      override async transitionRun(input: TransitionRunInput) {
+        if (loseTerminalCas && input.kind === "apply" && input.run.status === "failed") {
+          loseTerminalCas = false;
+          const queued = (await super.getApplyRun(input.id))!;
+          const claimed = await super.transitionRun({
+            id: input.id,
+            kind: "apply",
+            expectFrom: ["queued"],
+            setLeaseToken: "sibling-destroy",
+            run: { ...queued, status: "running", heartbeatAt: queued.updatedAt + 1, startedAt: queued.updatedAt + 1 },
+          });
+          expect(claimed.won).toBe(true);
+        }
+        if (failTerminalWrite && input.kind === "apply" && input.run.status === "failed") {
+          failTerminalWrite = false;
+          throw new Error("transient terminal-write failure");
+        }
+        const fault = input.expectExactRun && input.run.auditEvents.at(-1)?.type === "runner_usage.completed"
+          ? failCompletionWrite : undefined;
+        if (fault) failCompletionWrite = undefined;
+        if (fault === "before") throw new Error("transient completion-write failure");
+        const saved = await super.transitionRun(input);
+        if (fault === "after") throw new Error("transient completion-write-ack failure");
+        return saved;
+      }
+    }();
+    const runner = recordingRunner();
+    let destroyCalls = 0;
+    runner.destroy = () => {
+      destroyCalls++;
+      return Promise.reject(
+        new OpenTofuRunnerInfrastructureError("runner capacity refused", {
+          reason: "capacity_exhausted",
+        }),
+      );
+    };
+    await seedRunnableCapsuleModel(store, {
+      environment: "preview",
+      installConfig: lifecycleInstallConfig([
+        {
+          id: "retire-runtime",
+          phase: "pre_destroy",
+          executor: "runner",
+          command: ["bun", "run", "release", "--destroy"],
+        },
+      ]),
+    });
+    let failRating = false;
+    const captures: string[] = [];
+    const reservationReleases: string[] = [];
+    const billingEnforcement: BillingEnforcement = {
+      reservePlanBilling: () => Promise.resolve({ reasons: [] }),
+      assertReservationSatisfied: () => Promise.resolve(),
+      captureRunBilling: (context) => { captures.push(context.applyRunId); return Promise.resolve(); },
+      releaseReservation: (context) => { reservationReleases.push(context.runId); return Promise.resolve(); },
+    };
+    const controller = controllerWith(store, runner, {
+      defaultBillingSettings: { mode: "showback" },
+      billingEnforcement,
+      showbackRater: {
+        ratePlan: () => Promise.resolve({ ratingStatus: "rated", usdMicros: 0 }),
+        rateUsage: () => {
+          if (failRating) {
+            failRating = false;
+            return Promise.reject(new Error("transient rating failure"));
+          }
+          return Promise.resolve({ ratingStatus: "rated", usdMicros: 7_500 });
+        },
+      },
+      enqueueRun: () => Promise.resolve(),
+      releaseActivator: {
+        activate: () => Promise.resolve({ status: "succeeded" }),
+      },
+    });
+    const dispatch = async (run: { readonly id: string; readonly workspaceId: string }, action: "plan" | "apply") => {
+      await controller.dispatchQueuedRun({ action, runId: run.id, workspaceId: run.workspaceId });
+    };
+    const create = await controller.createCapsulePlan("cap_fixture1");
+    await dispatch(create.planRun, "plan");
+    const createPlan = (await store.getPlanRun(create.planRun.id))!;
+    const createApply = await controller.createApplyRun({
+      planRunId: createPlan.id,
+      expected: applyExpectedGuardFromPlanRun(createPlan),
+    });
+    await dispatch(createApply.applyRun, "apply");
+    const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+    await dispatch(destroy.planRun, "plan");
+    const destroyPlan = (await store.getPlanRun(destroy.planRun.id))!;
+    await controller.approveRun(destroyPlan.id);
+    const destroyApply = await controller.createApplyRun({
+      planRunId: destroyPlan.id,
+      expected: applyExpectedGuardFromPlanRun(destroyPlan),
+    });
+    await dispatch(destroyApply.applyRun, "apply");
+    const queued = (await store.getApplyRun(destroyApply.applyRun.id))!;
+    expect(queued.status).toBe("queued");
+    expect(await controller.hasPendingRunnerUsage({ runId: queued.id, workspaceId: queued.workspaceId })).toBe(false);
+    const starts = queued.auditEvents.filter((event) => event.type === "apply.started");
+    const releases = queued.auditEvents.filter((event) => event.type === "lifecycle_action.pre_destroy.succeeded");
+    expect(starts).toHaveLength(1);
+    expect(releases).toHaveLength(1);
+    const expectedQuantity = (releases[0]!.at - starts[0]!.at) / 60_000;
+    expect(expectedQuantity).toBeGreaterThan(0);
+    captures.length = 0;
+    reservationReleases.length = 0;
+    const notifications: string[] = [];
+    controller.setTerminalRunObserver(async (run) => { notifications.push(run.id); });
+
+    const corruptIntent = failure === "invalid-intent-duration" || failure === "invalid-intent-time";
+    failRating = failure === "rating" || corruptIntent;
+    failUsageWrite = failure === "usage-write" ? "before" : failure === "usage-write-ack" ? "after" : undefined;
+    failCompletionWrite = failure === "completion-write" ? "before" : failure === "completion-write-ack" ? "after" : undefined;
+    failInputRead = failure === "input-read";
+    failTerminalWrite = failure === "terminal-write";
+    loseTerminalCas = failure === "lost-cas";
+    if (loseTerminalCas) {
+      expect(await controller.markRunFailed("apply", queued.id, "retries-exhausted")).toBe(false);
+      expect(await controller.markRunFailed("apply", queued.id, "retries-exhausted")).toBe(false);
+      const running = (await store.getApplyRun(queued.id))!;
+      expect(running.status).toBe("running");
+      expect(running.auditEvents.some((event) => event.type === "runner_usage.pending")).toBe(false);
+      expect((await store.listUsageEvents(queued.workspaceId)).filter((event) => event.runId === queued.id)).toEqual([]);
+      expect(notifications).toEqual([]);
+      expect(captures).toEqual([]);
+      expect(reservationReleases).toEqual([]);
+      return;
+    }
+    await expect(controller.markRunFailed("apply", queued.id, "retries-exhausted"))
+      .rejects.toThrow(`transient ${corruptIntent ? "rating" : failure} failure`);
+    const beforeTerminal = failure === "input-read" || failure === "terminal-write";
+    const afterFault = (await store.getApplyRun(queued.id))!;
+    expect(afterFault.status).toBe(beforeTerminal ? "queued" : "failed");
+    expect(await controller.hasPendingRunnerUsage({ runId: queued.id, workspaceId: queued.workspaceId }))
+      .toBe(!beforeTerminal && failure !== "completion-write-ack");
+    expect(await controller.hasPendingRunnerUsage({ runId: queued.id, workspaceId: "other-workspace" })).toBe(false);
+    expect(await controller.hasPendingRunnerUsage({ runId: "missing-run", workspaceId: queued.workspaceId })).toBe(false);
+    expect(afterFault.auditEvents.filter((event) => event.type === "runner_usage.pending")).toHaveLength(beforeTerminal ? 0 : 1);
+    if (!beforeTerminal) {
+      expect(afterFault.auditEvents.find((event) => event.type === "runner_usage.pending")?.data)
+        .toEqual({ durationMs: expectedQuantity * 60_000 });
+      // Repair must use the frozen measurement even after its preparation
+      // sidecar is retired, rather than reinterpret mutable lifecycle inputs.
+      await store.deletePlanRunInputs(destroyPlan.id);
+    }
+    // A fresh controller models a new DLQ delivery, without in-memory repair state.
+    const retry = controllerWith(store, runner, {
+      defaultBillingSettings: { mode: "showback" },
+      billingEnforcement,
+      showbackRater: {
+        ratePlan: () => Promise.resolve({ ratingStatus: "rated", usdMicros: 0 }),
+        rateUsage: () => Promise.resolve({ ratingStatus: "rated", usdMicros: 9_000 }),
+      },
+    });
+    retry.setTerminalRunObserver(async (run) => { notifications.push(run.id); });
+    if (corruptIntent) {
+      await store.putApplyRun({
+        ...afterFault,
+        auditEvents: afterFault.auditEvents.map((event) => event.type !== "runner_usage.pending" ? event : {
+          ...event,
+          ...(failure === "invalid-intent-time" ? { at: event.at + 1 } : { data: { durationMs: 0 } }),
+        }),
+      });
+      await expect(retry.markRunFailed("apply", queued.id, "retries-exhausted"))
+        .rejects.toThrow("runner usage intent does not match the terminal Run");
+      await expect(retry.runQueuedApply(queued.id))
+        .rejects.toThrow("runner usage intent does not match the terminal Run");
+      expect((await store.listUsageEvents(queued.workspaceId)).filter((event) => event.runId === queued.id)).toEqual([]);
+      expect((await store.getApplyRun(queued.id))!.auditEvents.some((event) => event.type === "runner_usage.completed")).toBe(false);
+      expect(notifications).toEqual([queued.id]);
+      expect(captures).toEqual([]);
+      expect(reservationReleases).toEqual([]);
+      return;
+    }
+    if (beforeTerminal) {
+      expect(await retry.markRunFailed("apply", queued.id, "retries-exhausted")).toBe(true);
+    } else if (failure === "rating" || failure === "completion-write") {
+      // Scheduled repair dispatches terminal ApplyRuns through this entrypoint.
+      expect((await retry.runQueuedApply(queued.id)).applyRun.status).toBe("failed");
+    } else {
+      expect(await retry.markRunFailed("apply", queued.id, "retries-exhausted")).toBe(false);
+    }
+    expect(await retry.markRunFailed("apply", queued.id, "retries-exhausted")).toBe(false);
+    const usage = (await store.listUsageEvents(queued.workspaceId)).filter(
+      (event) => event.runId === queued.id && event.kind === "runner_minute",
+    );
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toMatchObject({
+      idempotencyKey: `${queued.id}:runner_minute`,
+      quantity: expectedQuantity,
+      ratingStatus: "rated",
+      usdMicros: ["usage-write-ack", "completion-write", "completion-write-ack"].includes(failure) ? 7_500 : 9_000,
+    });
+    const settled = (await store.getApplyRun(queued.id))!;
+    expect(await retry.hasPendingRunnerUsage({ runId: queued.id, workspaceId: queued.workspaceId })).toBe(false);
+    expect(settled.auditEvents.filter((event) => event.type === "runner_usage.completed")).toHaveLength(1);
+    expect(settled.auditEvents.filter((event) => event.type === "destroy.failed")).toHaveLength(1);
+    expect(notifications).toEqual([queued.id]);
+    expect(destroyCalls).toBe(1);
+    expect(captures).toEqual([]);
+    expect(reservationReleases).toEqual([]);
+  },
+);
+
 test("destroy recovery executes pre-destroy commands from the reviewed recovery snapshot", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner(

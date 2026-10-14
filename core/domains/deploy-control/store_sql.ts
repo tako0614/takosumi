@@ -429,6 +429,27 @@ const PG_WORKSPACE_FREEZE_APPLY_FINALIZERS_SETTLED_SQL = `
         ${PG_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}
       ) with ordinality as audit_event(value, ordinality)
   )
+  and (
+    select coalesce(
+      max(audit_event.ordinality) filter (
+        where audit_event.value ->> 'type' = 'runner_usage.pending'
+      ),
+      0
+    )
+      from jsonb_array_elements(
+        ${PG_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}
+      ) with ordinality as audit_event(value, ordinality)
+  ) <= (
+    select coalesce(
+      max(audit_event.ordinality) filter (
+        where audit_event.value ->> 'type' = 'runner_usage.completed'
+      ),
+      0
+    )
+      from jsonb_array_elements(
+        ${PG_WORKSPACE_FREEZE_AUDIT_EVENTS_SQL}
+      ) with ordinality as audit_event(value, ordinality)
+  )
 `;
 
 /** Exact state-only recovery evidence required before it can settle a failed create. */
@@ -1632,6 +1653,29 @@ function pgRunRuntimeSecretRetirementPending(): SQL {
         ),
         0
       )
+      FROM jsonb_array_elements(
+        COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
+      ) WITH ORDINALITY AS audit_event(value, ordinality)
+    )
+  `;
+}
+
+/** Mirrors applyRunRunnerUsagePending in the shared store model. */
+function pgRunRunnerUsagePending(): SQL {
+  return sql`
+    ${pgSchema.runs.runJson} ->> 'status' = 'failed'
+    AND ${pgSchema.runs.runJson} ->> 'operation' = 'destroy'
+    AND (
+      SELECT COALESCE(MAX(audit_event.ordinality) FILTER (
+        WHERE audit_event.value ->> 'type' = 'runner_usage.pending'
+      ), 0)
+      FROM jsonb_array_elements(
+        COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
+      ) WITH ORDINALITY AS audit_event(value, ordinality)
+    ) > (
+      SELECT COALESCE(MAX(audit_event.ordinality) FILTER (
+        WHERE audit_event.value ->> 'type' = 'runner_usage.completed'
+      ), 0)
       FROM jsonb_array_elements(
         COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
       ) WITH ORDINALITY AS audit_event(value, ordinality)
@@ -4080,6 +4124,13 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         inArray(pgSchema.runs.kind, [...RUN_KINDS_APPLY]),
         inArray(pgSchema.runs.status, ["succeeded", "failed"]),
         pgRunBillingCapturePending(),
+        sql`${committedAt} > 0`,
+        sql`${committedAt} <= ${options.staleQueuedBeforeMs}`,
+      ),
+      and(
+        inArray(pgSchema.runs.kind, [...RUN_KINDS_APPLY]),
+        inArray(pgSchema.runs.status, ["succeeded", "failed"]),
+        pgRunRunnerUsagePending(),
         sql`${committedAt} > 0`,
         sql`${committedAt} <= ${options.staleQueuedBeforeMs}`,
       ),

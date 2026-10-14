@@ -30,6 +30,7 @@ import type {
   RunLogsResponse,
 } from "takosumi-contract/runs";
 import {
+  applyRunRunnerUsagePending,
   type OpenTofuControlStore,
   type RecoverableOpenTofuRunListOptions,
   type RunListPosition,
@@ -148,6 +149,17 @@ export class RunQueryService {
   ): Promise<readonly Run[]> {
     const rows = await this.#store.listRecoverableOpenTofuRuns(options);
     return await this.#projectStoredRuns(rows);
+  }
+
+  async hasPendingRunnerUsage(input: {
+    readonly runId: string;
+    readonly workspaceId: string;
+  }): Promise<boolean> {
+    requireNonEmptyString(input.runId, "runId");
+    requireNonEmptyString(input.workspaceId, "workspaceId");
+    const run = await this.#store.getApplyRun(input.runId);
+    return run !== undefined && run.workspaceId === input.workspaceId &&
+      applyRunRunnerUsagePending(run);
   }
 
   async listPendingRuntimeSecretRetirementRuns(options: {
