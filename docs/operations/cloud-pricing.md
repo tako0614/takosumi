@@ -53,3 +53,32 @@ The dependency remains one-way: Cloud may implement OSS ports, while OSS never
 imports Cloud pricing or payment contracts. Workspace and optional Capsule
 attribution use `workspaceId` and `capsuleId`; retired Space/Installation
 billing aliases are not part of the current contract.
+
+## Optional retained-artifact facts
+
+`TAKOSUMI_ARTIFACT_STORAGE_USAGE` is an operator-selected private direct RPC
+port for exact retained-artifact facts. It carries Workspace scope, an opaque
+artifact digest, exact encrypted byte count and an authenticated acknowledgement;
+it carries no price, wallet, Organization, account or session. A missing port
+preserves self-host behavior. Configuring this source requires its approved
+caller/target graph and authenticated initial inventory; it never assumes an
+empty existing bucket.
+
+The real runner's `#r2State()` adapter observes only canonical encrypted immutable
+StateVersion keys. It persists intent before a conditional create, verifies
+bounded encrypted readback, and confirms the original intent before returning
+or adopting an artifact. Exact GET/PUT replay cannot recreate a released object,
+replace ciphertext, or turn a failed condition into a successful write. Unknown
+custody ACK is bounded at 15 seconds with no automatic mutation retry. The
+recovery-state adapter similarly gates its optional stage and handle verifier.
+
+This is a declared subset. Legacy artifact-bucket state, plans, provider locks,
+outputs/evidence, source archives, backups and temporary Restore stages need
+their own qualified source writers and lifecycle inventory. The current runtime
+does not collect final immutable StateVersions. Future deletion must preserve
+the same release intent and confirmed absence. Raw facts support a host-owned
+closed-period integration; this source adds no tariff, scheduler, production
+binding or claim of complete Hosted storage. Provider-periodic Resource charges
+must not be submitted again through this retained-artifact lane. CPU is not
+derived from Run duration, and these byte receipts do not attest runner CPU or
+provisioned memory.

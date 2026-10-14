@@ -44,6 +44,8 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly R2_SOURCE?: R2Bucket;
   /** OpenTofu state bucket (`takosumi-state`). Used from M2. */
   readonly R2_STATE?: R2Bucket;
+  /** Optional private host custody for declared immutable state-version bytes. */
+  readonly TAKOSUMI_ARTIFACT_STORAGE_USAGE?: import("./artifact-storage-usage.ts").ArtifactStorageUsagePort;
   /** Backup/export bucket (`takosumi-backups`, core-spec.md §26 / §33). */
   /**
    * Required, not optional: `checkPlatformBindings` calls it required and a

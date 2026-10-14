@@ -6,6 +6,7 @@ import type {
   R2PutOptions,
 } from "../bindings.ts";
 import { isLegacySourceArchiveRestoreRef } from "../legacy_source_archive_restore.ts";
+import { artifactStorageUsageBucket } from "../artifact-storage-usage.ts";
 import {
   maxStateArtifactCiphertextBytes,
   StateArtifactCrypto,
@@ -2855,7 +2856,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (!bucket) {
       throw new Error("R2_STATE binding is not configured for state objects");
     }
-    return bucket;
+    return artifactStorageUsageBucket(bucket, this.env.TAKOSUMI_ARTIFACT_STORAGE_USAGE, {
+      maxCiphertextBytes: maxStateArtifactCiphertextBytes(this.#artifactLimits.state),
+    });
   }
 
   // Source-sync relay: dispatch the run to the container, then on success pull
