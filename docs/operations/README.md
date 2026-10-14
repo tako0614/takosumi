@@ -46,6 +46,7 @@ Cloud 側のリポジトリで管理します。
 ### Security
 
 - [threat model](./security-threat-model.md)
+- [optional shared-account browser authentication](./shared-account-authentication.md)
 - [runner sandbox](./runner-sandbox-security.md)
 - [secret rotation](./secret-rotation.md)
 - [shared-account OIDC の導入](./shared-account-oidc.md)

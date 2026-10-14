@@ -624,13 +624,16 @@ async function listWorkspacePage(
       order,
       limit,
     });
-  const lookupSelected = () =>
-    selectedWorkspaceId && isFirstPage
-      ? operations.workspaces.getWorkspaceForAccount(
-          session.subject,
-          selectedWorkspaceId,
-        )
-      : Promise.resolve(undefined);
+  const lookupSelected = async () => {
+    if (!selectedWorkspaceId || !isFirstPage) return undefined;
+    const selected = await operations.workspaces.getWorkspaceForAccount(
+      session.subject, selectedWorkspaceId,
+    );
+    if (selected && session.requireCurrentMembership && !(await canAccessWorkspace({
+      operations, store, session, workspaceId: selectedWorkspaceId, workspace: selected,
+    }))) return undefined;
+    return selected;
+  };
   const [initialPage, selected] = await Promise.all([
     listPage(),
     lookupSelected(),
@@ -647,7 +650,7 @@ async function listWorkspacePage(
         workspace.ownerUserId === session.subject,
     );
   let personalWorkspace: Workspace | undefined;
-  if (subject !== undefined) {
+  if (subject !== undefined && !session.requireCurrentMembership) {
     // The bounded membership page is the only route preflight. Always invoke
     // the canonical ensure so an already-visible personal Workspace still gets
     // its owner membership and default Project repaired. The helper keeps that
