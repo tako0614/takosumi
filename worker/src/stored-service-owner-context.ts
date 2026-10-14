@@ -1,6 +1,10 @@
 /** Local, non-RPC allocation capture. Core remains the allocation authority;
  * none of these contexts can be obtained by supplying a Workspace UID. */
-import type { ArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
+import type { ArtifactReferenceAllocation, ArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
+import type { BackupArtifactWriteControl } from "../../core/domains/backups/mod.ts";
+import type { Run } from "takosumi-contract/runs";
+import { publicStoredRun, runManagementAuthority } from "../../core/domains/deploy-control/store.ts";
+import { stableStringify } from "../../core/adapters/source/digest.ts";
 import type { D1Database, R2Bucket } from "./bindings.ts";
 import { storedOwnerDatabase, storedOwnerRecord, storedOwnerRows } from "./stored-object-owner-resolver.ts";
 import { storedServiceUsageBucket, StoredServiceUsageError, type StoredBucketRole, type StoredServiceComposition } from "./stored-service-usage.ts";
@@ -48,16 +52,28 @@ export interface StoredRunnerScope {
 /** Paired exclusively with the allocator passed into this Core composition.
  * Backup allocation occurs only after beginBackupRun's admission CAS. Capture
  * the exact opaque ref, not a prefix or a request's Workspace parameter. */
-export function createBackupStoredOwnerContext(allocator: ArtifactReferenceAllocator, composition: StoredServiceComposition | undefined, bucket: R2Bucket | undefined) {
+interface BackupStoredOwnerContext {
+  readonly allocator: ArtifactReferenceAllocator;
+  readonly bucket: R2Bucket | undefined;
+  readonly writeBucket?: (ref: string, control: BackupArtifactWriteControl | undefined) => R2Bucket;
+}
+type BackupAllocation = Extract<ArtifactReferenceAllocation, { readonly backupId: string }>;
+export function createBackupStoredOwnerContext(allocator: ArtifactReferenceAllocator, composition: StoredServiceComposition | undefined, bucket: R2Bucket | undefined, database?: D1Database): BackupStoredOwnerContext {
   if (!composition || !bucket) return { allocator, bucket };
-  const pending = new Map<string, string>();
+  const pending = new Map<string, BackupAllocation>();
   const wrapped = storedServiceUsageBucket(bucket, {
     usage: composition.usage,
     owners: { async resolveStoredObjectOwner(input) {
-      const owner = pending.get(input.key);
-      return owner === undefined ? await composition.owners.resolveStoredObjectOwner(input) : { workspaceId: owner };
+      const allocation = pending.get(input.key);
+      return allocation === undefined ? await composition.owners.resolveStoredObjectOwner(input) : { workspaceId: allocation.workspaceId };
     } },
-  }, { bucketRole: "backups", writerId: "control-backup" });
+  }, {
+    bucketRole: "backups", writerId: "control-backup",
+    // General historical reads carry no mutation authority. Every actual
+    // BackupArtifactStore write selects its own original accepted-Run wrapper.
+    beforePrepare: async () => { throw new StoredServiceUsageError(); },
+    beforeDispatch: async () => { throw new StoredServiceUsageError(); },
+  });
   return {
     allocator: {
       async allocate(input) {
@@ -65,22 +81,80 @@ export function createBackupStoredOwnerContext(allocator: ArtifactReferenceAlloc
         // port, never an API accepting an external allocation assertion.
         const captured = structuredClone(input);
         const ref = await allocator.allocate(captured);
-        if (captured.kind.startsWith("backup_")) {
+        if ("backupId" in captured) {
           const existing = pending.get(ref);
-          if (existing !== undefined && existing !== captured.workspaceId || existing === undefined && pending.size >= 128) throw new StoredServiceUsageError();
-          pending.set(ref, captured.workspaceId);
+          if ((existing !== undefined && stableStringify(existing) !== stableStringify(captured)) ||
+            (existing === undefined && pending.size >= 128)) throw new StoredServiceUsageError();
+          pending.set(ref, captured);
         }
         return ref;
       },
     } satisfies ArtifactReferenceAllocator,
-    bucket: {
-      get: key => wrapped.get(key), head: key => wrapped.head(key), list: input => wrapped.list(input), delete: key => wrapped.delete(key),
-      async put(key, bytes, options) {
-        try { return await wrapped.put(key, bytes, options); }
-        finally { pending.delete(key); }
-      },
-    } satisfies R2Bucket,
+    bucket: wrapped,
+    writeBucket(ref, control) {
+      if (!database || !control) throw new StoredServiceUsageError();
+      // The adapter calls this synchronously before sealing. Neither a later
+      // current Run lookup nor a mutable caller object may replace the witness.
+      const original = structuredClone(control);
+      const allocation = pending.get(ref);
+      if (!allocation || original.allocation?.ref !== ref ||
+        original.allocation.kind !== allocation.kind ||
+        original.allocation.backupId !== allocation.backupId ||
+        original.expectedRunningRun?.workspaceId !== allocation.workspaceId) throw new StoredServiceUsageError();
+      const assertMutation = async (key: string, kind: "put" | "delete") => {
+        if (kind !== "put" || key !== ref) throw new StoredServiceUsageError();
+        await assertAcceptedBackupWrite(database, original);
+      };
+      const owned = storedServiceUsageBucket(bucket, composition, {
+        bucketRole: "backups", writerId: "control-backup", workspaceId: allocation.workspaceId,
+        beforePrepare: assertMutation, beforeDispatch: assertMutation,
+      });
+      return {
+        get: key => owned.get(key), head: key => owned.head(key), list: input => owned.list(input), delete: key => owned.delete(key),
+        async put(key, bytes, options) {
+          try { return await owned.put(key, bytes, options); }
+          finally { pending.delete(ref); }
+        },
+      };
+    },
   };
+}
+
+/** Exact already-accepted manual work, using the same original running-record
+ * witness as Backup settlement. No synthetic lease, refresh or new admission.
+ * As in commitBackupRun, accepted work can finish during management drain. */
+async function assertAcceptedBackupWrite(database: D1Database, original: BackupArtifactWriteControl): Promise<void> {
+  const expected = original.expectedRunningRun;
+  const authority = original.expectedWorkspaceManagementAuthority;
+  if (!expected || expected.type !== "backup" || expected.status !== "running" ||
+    expected.finishedAt !== undefined || expected.errorCode !== undefined ||
+    typeof expected.id !== "string" || !SEGMENT.test(expected.id) ||
+    typeof expected.startedAt !== "string" || !expected.startedAt ||
+    typeof expected.createdAt !== "string" || !expected.createdAt ||
+    !authority || authority.workspaceId !== expected.workspaceId ||
+    authority.managementState !== "active" ||
+    !Number.isSafeInteger(authority.managementEpoch) || authority.managementEpoch <= 0 ||
+    Object.hasOwn(expected, "workspaceManagementAuthority")) throw new StoredServiceUsageError();
+  // Match Core settlement's legacy record-owner conflict detection. The exact
+  // Run result is bounded; the compatibility JSON predicate can scan Backups.
+  const records = await storedOwnerRows(storedOwnerDatabase(database), `select r.id, r.space_id, r.source_id, r.installation_id, r.environment,
+    r.type, r.status, r.lease_token, r.created_at, r.run_json,
+    exists(select 1 from backups b where b.id = ? or b.created_by_run_id = r.id
+      or case when json_valid(b.record_json) then json_extract(b.record_json, '$.createdByRunId') = r.id else 0 end) as has_record
+    from runs r where r.id = ? limit 2`, [original.allocation.backupId, expected.id]);
+  if (records.length !== 1) throw new StoredServiceUsageError();
+  const row = records[0]!, run = storedOwnerRecord(row.run_json) as unknown as Run;
+  const persistedAuthority = runManagementAuthority(run);
+  if (row.id !== expected.id || row.space_id !== expected.workspaceId ||
+    row.source_id !== (expected.sourceId ?? null) ||
+    row.installation_id !== (expected.capsuleId ?? null) ||
+    row.environment !== (expected.environment ?? null) ||
+    row.type !== "backup" || row.status !== "running" || row.lease_token !== null ||
+    row.created_at !== expected.createdAt || row.has_record !== 0 ||
+    stableStringify(publicStoredRun(run)) !== stableStringify(JSON.parse(JSON.stringify(expected))) ||
+    !persistedAuthority || persistedAuthority.workspaceId !== authority.workspaceId ||
+    persistedAuthority.managementState !== authority.managementState ||
+    persistedAuthority.managementEpoch !== authority.managementEpoch) throw new StoredServiceUsageError();
 }
 
 /** The private Runner binding supplies the Run selector. D1, rather than the

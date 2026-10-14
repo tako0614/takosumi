@@ -201,10 +201,12 @@ export async function createWorkerServiceApp(
     new ObjectKeyArtifactReferenceAllocator(),
     storedServiceCompositionFromEnv(env),
     env.R2_BACKUPS,
+    env.TAKOSUMI_CONTROL_DB,
   );
   const backupArtifactStore = backupArtifactStoreFromEnv(
     backupStorage.bucket,
     runtimeEnv,
+    backupStorage.writeBucket,
   );
   const backupStateObjectReader = backupObjectReaderFromR2(env.R2_STATE);
   const sensitiveOutputResolver = sensitiveOutputResolverFromEnv(

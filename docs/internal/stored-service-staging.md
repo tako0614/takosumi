@@ -41,10 +41,32 @@ original scope/blob identity and all four native metadata fields.
 
 New writes can precede final StateVersion, Backup or private-file pointer
 records. Core's already-validated backup allocator captures its exact opaque
-references in the paired local store. Runner writes carry the original claimed
-Run lease and canonical Capsule allocation. Private-file writes carry the
+references in the paired local store. Every backup write also carries the exact
+Run returned by successful `beginBackupRun`, the original management tuple
+frozen before that admission, and its artifact kind, Backup id and allocated
+reference. The adapter freezes this evidence before sealing and checks the same
+persisted original Run and private management tuple before custody prepare and
+immediately before R2. Backup Runs have no lease: the adapter never invents one
+or adopts a later Run read. Accepted work can complete during management drain,
+as in Core settlement; no fresh human or current Workspace admission is used.
+Terminal, replaced, mismatched or already-settled work cannot prepare new
+custody. A transition after prepare retains the original pending intent and
+refuses the R2 effect, without retry or reacquisition. Runner writes carry the
+original claimed Run lease and canonical Capsule allocation. Private-file writes carry the
 already-captured authority described in [private Run files](./private-run-files.md).
 The custody prepare pins the original owner before the native effect.
+
+The Backup guard co-reads one exact Run and its settlement-record absence in a
+single primary D1 snapshot. Returned rows are bounded. The existing settlement
+compatibility check for `record_json.createdByRunId` can scan legacy Backup
+records when their physical Run pointer is absent; it grants no new authority
+and does not drop corrupt physical-owner or legacy-owner conflicts. This does
+not add a schema or index. A final authority read and R2 remain separate effects,
+so the already-documented final-read-to-dispatch boundary applies to Backups.
+External service-data snapshots and commands produce opaque provider pointers;
+their payload storage is outside this four-bucket lane. The service-data JSON
+manifest saved in `R2_BACKUPS` uses the accepted Backup Run above, never the
+isolated runner's synthetic backup id or a Release Run.
 
 If final Core publication or its response fails, a fresh local resolver can
 recover that original owner through the qualified private original-owner role.

@@ -198,9 +198,9 @@ test("native preledger source write pins the original Run owner; forged ref and 
     await db.prepare("update runs set lease_token='lease_successor' where id='sync_stale_before_first_lookup'").run();
     expect((await call({ operation: "runner", bucketRole: "source", runId: "sync_stale_before_first_lookup", expectedLeaseToken: "lease_original", key: "allocated/stale-before-lookup" })).status).toBe(503);
     expect(await db.prepare("select count(*) as n from fixture_usage").first("n")).toBe(2);
-    expect((await call({ operation: "backup" })).status).toBe(200);
+    expect((await call({ operation: "backup" })).status).toBe(503);
     expect(await db.prepare("select count(*) as n from backups").first("n")).toBe(0);
-    expect((await (await runtime.getR2Bucket("BACKUPS")).head("workspaces/workspace_original/backups/backup_prefinal/control.json.zst.enc"))?.size).toBe(4);
+    expect(await (await runtime.getR2Bucket("BACKUPS")).head("workspaces/workspace_original/backups/backup_prefinal/control.json.zst.enc")).toBeNull();
   } finally { await fixture.close(); }
 }, 30_000);
 
@@ -242,25 +242,20 @@ test("native generation write requires canonical Plan, Capsule epoch and Run lea
   } finally { await fixture.close(); }
 }, 30_000);
 
-test("native failed backup acknowledgement preserves the original pending owner for a cold resolver", async () => {
+test("native Workspace/ref-only backup capture has no accepted Backup Run mutation authority", async () => {
   const fixture = await nativeFixture();
   try {
     const { db, runtime, call } = fixture;
-    await db.prepare("insert into fixture_control values('confirm_lost','yes')").run();
     expect((await call({ operation: "backup" })).status).toBe(503);
     const key = "workspaces/workspace_original/backups/backup_prefinal/control.json.zst.enc";
     const bucket = await runtime.getR2Bucket("BACKUPS");
-    const object = await bucket.head(key);
-    expect(object?.size).toBe(4);
+    expect(await bucket.head(key)).toBeNull();
     expect(await db.prepare("select count(*) as n from backups").first("n")).toBe(0);
-    // Each HTTP invocation creates a fresh local allocator/resolver. Only the
-    // original retained 0009-style prepare pin can supply this owner now.
-    expect(await call({ operation: "resolve", bucketRole: "backups", key })).toEqual({ status: 200, body: { result: { workspaceId: "workspace_original" } } });
-    const pendingBefore = await db.prepare("select snapshot from fixture_usage").first("snapshot");
-    expect(JSON.parse(pendingBefore as string).pending.state).toBe("pending");
+    expect((await call({ operation: "resolve", bucketRole: "backups", key })).body.result).toBeNull();
+    expect(await db.prepare("select count(*) as n from fixture_usage").first("n")).toBe(0);
     expect((await call({ operation: "backup" })).status).toBe(503);
-    expect((await bucket.head(key))?.version).toBe(object?.version);
-    expect(await db.prepare("select snapshot from fixture_usage").first("snapshot")).toBe(pendingBefore);
+    expect(await bucket.head(key)).toBeNull();
+    expect(await db.prepare("select count(*) as n from fixture_usage").first("n")).toBe(0);
     expect((await call({ operation: "resolve", bucketRole: "backups", key: key + "-unknown-before-profile" })).body.result).toBeNull();
   } finally { await fixture.close(); }
 }, 30_000);

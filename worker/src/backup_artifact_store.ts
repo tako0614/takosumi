@@ -12,6 +12,7 @@
 import type {
   BackupArtifactStore,
   BackupObjectReader,
+  BackupArtifactWriteControl,
 } from "../../core/domains/backups/mod.ts";
 import type { SecretCryptoEnvLike } from "../../core/adapters/secret-store/memory.ts";
 import { digestBytes, StateArtifactCrypto } from "./state_crypto.ts";
@@ -20,22 +21,28 @@ import type { R2Bucket } from "./bindings.ts";
 export class R2BackupArtifactStore implements BackupArtifactStore {
   readonly #bucket: R2Bucket;
   readonly #crypto: StateArtifactCrypto;
+  readonly #writeBucket: ((ref: string, control: BackupArtifactWriteControl | undefined) => R2Bucket) | undefined;
 
-  constructor(bucket: R2Bucket, crypto: StateArtifactCrypto) {
+  constructor(bucket: R2Bucket, crypto: StateArtifactCrypto, writeBucket?: (ref: string, control: BackupArtifactWriteControl | undefined) => R2Bucket) {
     this.#bucket = bucket;
     this.#crypto = crypto;
+    this.#writeBucket = writeBucket;
   }
 
   async put(input: {
     readonly ref: string;
     readonly payload: Uint8Array;
     readonly contentType: string;
+    readonly writeControl?: BackupArtifactWriteControl;
   }): Promise<{ readonly digest: string; readonly sizeBytes: number }> {
-    const sealed = await this.#crypto.seal(input.payload);
+    const objectKey = input.ref, contentType = input.contentType;
+    const payload = input.payload.slice();
+    const control = input.writeControl === undefined ? undefined : structuredClone(input.writeControl);
+    const bucket = this.#writeBucket?.(objectKey, control) ?? this.#bucket;
+    const sealed = await this.#crypto.seal(payload);
     const digest = await digestBytes(sealed.ciphertext);
-    const objectKey = input.ref;
-    await this.#bucket.put(objectKey, toArrayBuffer(sealed.ciphertext), {
-      httpMetadata: { contentType: input.contentType },
+    await bucket.put(objectKey, toArrayBuffer(sealed.ciphertext), {
+      httpMetadata: { contentType },
       customMetadata: {
         "takosumi-sealed": "1",
         "takosumi-plaintext-digest": sealed.contentDigest,
@@ -48,16 +55,20 @@ export class R2BackupArtifactStore implements BackupArtifactStore {
     readonly ref: string;
     readonly payload: Uint8Array;
     readonly contentType: string;
+    readonly writeControl?: BackupArtifactWriteControl;
   }): Promise<{ readonly digest: string; readonly sizeBytes: number }> {
-    const digest = await digestBytes(input.payload);
-    const objectKey = input.ref;
-    await this.#bucket.put(objectKey, toArrayBuffer(input.payload), {
-      httpMetadata: { contentType: input.contentType },
+    const objectKey = input.ref, contentType = input.contentType;
+    const payload = input.payload.slice();
+    const control = input.writeControl === undefined ? undefined : structuredClone(input.writeControl);
+    const bucket = this.#writeBucket?.(objectKey, control) ?? this.#bucket;
+    const digest = await digestBytes(payload);
+    await bucket.put(objectKey, toArrayBuffer(payload), {
+      httpMetadata: { contentType },
       customMetadata: {
         "takosumi-public-backup-sidecar": "1",
       },
     });
-    return { digest, sizeBytes: input.payload.byteLength };
+    return { digest, sizeBytes: payload.byteLength };
   }
 }
 
@@ -71,11 +82,13 @@ export class R2BackupArtifactStore implements BackupArtifactStore {
 export function backupArtifactStoreFromEnv(
   bucket: R2Bucket | undefined,
   cryptoEnv: SecretCryptoEnvLike,
+  writeBucket?: (ref: string, control: BackupArtifactWriteControl | undefined) => R2Bucket,
 ): BackupArtifactStore | undefined {
   if (!bucket) return undefined;
   return new R2BackupArtifactStore(
     bucket,
     StateArtifactCrypto.fromEnv(cryptoEnv),
+    writeBucket,
   );
 }
 
