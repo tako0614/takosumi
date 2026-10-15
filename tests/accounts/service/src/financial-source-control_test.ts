@@ -138,6 +138,47 @@ async function fixture(backend: Backend, label: string) {
 }
 
 for (const backend of ["memory", "postgres", "native-d1"] as const) {
+test(`${backend}: Control pre-proof reader uses fresh canonical sequence-one original only`, async () => {
+  const f = await fixture(backend, `preproof-${backend}`);
+  try {
+    const adapter = f.adapter([]);
+    const input = {workspaceId: f.workspace.id, accountId: actor};
+    const genesis = await adapter.capture(input);
+    await expect(adapter.prepareOriginalFinancialControlSource({...input,
+      expectedSource: genesis!.evidence.source})).rejects.toThrow("source_pending");
+    await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+      actorAccountId: actor, status: "active", roles: ["viewer"], requireCurrentMembership: true});
+    // The existing delivery path prepares and acknowledges the actual Core
+    // original. These callbacks are synthetic, not a qualified Financial M.
+    const delivering = f.adapter();
+    expect((await delivering.flush({workspaceId: f.workspace.id, afterSequence: 0, limit: 1})).processed).toBe(1);
+    const captured = await delivering.capture(input);
+    expect(captured?.evidence.source.sequence).toBe(1);
+    const prepared = await delivering.prepareOriginalFinancialControlSource({...input,
+      expectedSource: captured!.evidence.source});
+    expect(prepared.kind).toBe("fresh");
+    expect(prepared.registration.registrationRef).toBe(f.registration.sourceRef);
+    expect(prepared.original.key).toEqual({registrationRef: f.registration.sourceRef,
+      incarnation: f.registration.incarnation, affectedRef: f.workspace.id});
+    expect(prepared.original.eventRef).toBe(captured!.evidence.source.eventRef);
+    expect(prepared.original.materialization.event.sequence).toBe(1);
+    expect(prepared.original.materialization.event.previousDigest).toBe(`sha256:${f.registration.genesisDigest}`);
+    await expect(delivering.prepareOriginalFinancialControlSource({...input,
+      expectedSource: {...captured!.evidence.source, affectedRef: "caller-other-workspace"}})).rejects.toThrow("source_conflict");
+    await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+      actorAccountId: actor, status: "active", roles: ["member"], requireCurrentMembership: true});
+    await expect(delivering.prepareOriginalFinancialControlSource({...input,
+      expectedSource: captured!.evidence.source})).rejects.toThrow();
+    expect((await delivering.flush({workspaceId: f.workspace.id, afterSequence: 1, limit: 1})).processed).toBe(1);
+    const later = await delivering.capture(input);
+    expect(later?.evidence.source.sequence).toBe(2);
+    await expect(delivering.prepareOriginalFinancialControlSource({...input,
+      expectedSource: later!.evidence.source})).rejects.toThrow("source_pending");
+  } finally { await f.close(); }
+}, 30_000);
+}
+
+for (const backend of ["memory", "postgres", "native-d1"] as const) {
   test(`${backend}: actual enrolled Core genesis captures only current original Accounts context`, async () => {
     const f = await fixture(backend, `genesis-${backend}`);
     try {

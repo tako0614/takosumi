@@ -385,6 +385,41 @@ there is no new event, command or identity recipe on retry. A new identity proof
 requires exact acknowledgements for all four current parents and every original
 receiver/target. Its response contains only an opaque proof reference. The
 proof is not a payer grant, Customer admission or provider-dispatch approval.
+
+The explicit private `prepareFinancialIdentityProofSource({accessToken,
+challengeRef})` path commits or reuses those four parent originals under the
+same current grant, C0 challenge, canonical Control snapshot, one-use checkpoint
+and store predicates as proof enrollment. It then checks the exact persisted
+raw event, predecessor, materialization and current head for each parent before
+returning their first-event source keys and materializations. It does not need
+receiver callbacks or ACKs and does not issue a proof. Its detached result
+contains the Accounts registration, four slot-labelled originals and a current
+Control source pointer. The pointer can have a null event at genesis and is
+never an installable Control materialization. Neither result is an M command,
+source qualification, payer decision or complete-role census. Parent scopes,
+SID, bearer/token hash and private raw causes are not exported.
+
+`preparePendingFinancialSourceOriginals({after?,limit})` is a separate bounded
+historical pending page. It uses durable original registration/raw/materialization
+custody, including full raw comparison on Memory, and can run after the token
+expires. It never reauthenticates, enrolls a new parent, delivers to a receiver
+or issues a proof. Its cursor only schedules another read, and a partial page
+never establishes complete source coverage. Both paths can export only an
+actual sequence-one event with the registered genesis; a later head cannot be
+adopted directly as a new Financial M bootstrap.
+
+The Control adapter's private `prepareOriginalFinancialControlSource` instead
+captures on the same canonical Core facade, compares the expected source
+pointer, reads the actual first raw event and stored materialization, recomputes
+its digest, asserts the captured original remains current, and rereads the head,
+raw and materialization. Null genesis and unsupported later sequences return
+`source_pending`; it does not synthesize a genesis or promote its WeakMap guard
+to Financial source authority. Root and Financial still own their exact source,
+peer/key, schema digest, realm/Clock and command refs. A lost or unknown external
+M result needs a GET-only read of its original Financial command; the current
+public Financial M install surface does not supply that read, so this Accounts
+data preparation alone is not paired M or live readiness.
+
 The existing `prove({accessToken,challengeRef}) -> {proofRef}` operation is
 idempotent for the same **original request**, rather than for every request with
 the same challenge. New issuers derive an opaque custody locator as `afp_`

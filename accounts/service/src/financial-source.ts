@@ -9,7 +9,7 @@ import type {
   FinancialSourceAuthoritySnapshot, FinancialSourceParentScope,
   FinancialSourceParentVector, FinancialSourceParentHead,
   FinancialSourceParentReference, FinancialSourceProofRecord,
-  FinancialSourceMaterializationRecord,
+  FinancialSourceMaterializationRecord, FinancialSourceRawRecord,
   FinancialSourceControlEvidence,
 } from "./identity-state.ts";
 import {
@@ -43,6 +43,7 @@ const checkpointLifetime = 1_000;
 const proofLifetime = 60_000;
 const slots = ["grant", "issuerSession", "client", "accountGeneration"] as const;
 type MutableVector<T> = { -readonly [K in keyof FinancialSourceParentVector<T>]: T };
+type MaterializationBudget = {remaining: number};
 interface CheckpointState {
   readonly binding: string;
   readonly readTime: () => number;
@@ -90,6 +91,29 @@ export interface AccountsFinancialControlSnapshot {
 export interface AccountsFinancialControl {
   capture(input: { readonly workspaceId: string; readonly accountId: TakosumiSubject }): Promise<AccountsFinancialControlSnapshot | undefined>;
   assertCurrent(snapshot: AccountsFinancialControlSnapshot): Promise<boolean>;
+}
+
+/** Detached original data only. The caller must separately qualify the fixed
+ * Financial source, peer, key, realm and command on its own primary. */
+export interface AccountsFinancialPreparedOriginal {
+  readonly key: {readonly registrationRef: string; readonly incarnation: string; readonly affectedRef: string};
+  readonly eventRef: string;
+  readonly materialization: FinancialSourceMaterialization;
+}
+
+export interface AccountsFinancialPreparedSource {
+  readonly kind: "fresh";
+  readonly registration: FinancialSourceRegistration;
+  readonly parents: FinancialSourceParentVector<AccountsFinancialPreparedOriginal>;
+  /** A current Control pointer, not a Control event or install authority. */
+  readonly controlSource: FinancialSourceControlEvidence["source"];
+}
+
+export interface AccountsFinancialPendingOriginalPage {
+  readonly kind: "historical";
+  readonly registration: FinancialSourceRegistration;
+  readonly entries: readonly {readonly original: AccountsFinancialPreparedOriginal}[];
+  readonly nextCursor?: string;
 }
 
 export interface AccountsFinancialReceiver {
@@ -201,6 +225,13 @@ export function createAccountsFinancialSource(options: AccountsFinancialSourceOp
     if (receivers.has(receiver.receiverRef)) unavailable();
     receivers.set(receiver.receiverRef, { targetRef: receiver.targetRef, read: receiver.read, deliver: receiver.deliver, receiver });
   }
+  function preparationCapabilities() {
+    if (!challengeOwner || !readChallenge || !control || !capture || !assertCurrent ||
+      !store.enrollFinancialSourceParents || !store.findFinancialSourceParent || !store.findFinancialSourceRegistration ||
+      !store.findFinancialSourceRaw || !store.findFinancialSourceMaterialization || !store.commitFinancialSourceMaterialization ||
+      !store.findHostedOidcGrant || !store.getAccountAuthenticationGeneration || !store.findCanonicalAccount ||
+      !store.isAccountAuthenticationFenced || !store.isHostedOidcSessionRevoked || !store.isHostedOidcClientRevoked) unavailable();
+  }
   function capabilities() {
     if (!challengeOwner || !readChallenge || !control || !capture || !assertCurrent ||
       !store.enrollFinancialSourceParents || !store.issueFinancialSourceProof || !store.findFinancialSourceProofsForOriginalRequest ||
@@ -247,6 +278,103 @@ export function createAccountsFinancialSource(options: AccountsFinancialSourceOp
     const saved = await store.findFinancialSourceMaterialization!(eventRef);
     if (!saved || canonicalFinancialSourceJson(saved) !== canonicalFinancialSourceJson({rawRecord: raw, materialization: result})) throw new FinancialSourceUnavailable("source_conflict");
     return saved;
+  }
+  /** Export path always validates the full persisted first original, even if
+   * a Memory reader returns an existing materialization without validation. */
+  async function materializeOriginal(eventRef: string, budget: MaterializationBudget): Promise<FinancialSourceMaterializationRecord> {
+    if (budget.remaining < 1) throw new FinancialSourceUnavailable("source_pending");
+    budget.remaining--;
+    const raw = await store.findFinancialSourceRaw!(eventRef);
+    if (!raw || raw.raw.eventRef !== eventRef || raw.raw.registrationRef !== registration.registrationRef ||
+      raw.raw.incarnation !== registration.incarnation) throw new FinancialSourceUnavailable("source_conflict");
+    if (raw.raw.sequence !== 1 || raw.raw.previousEventRef !== null) throw new FinancialSourceUnavailable("source_pending");
+    let result: FinancialSourceMaterialization;
+    try { result = await materializeFinancialSourceEvent({registration, raw: raw.raw}); }
+    catch { throw new FinancialSourceUnavailable("source_conflict"); }
+    const existing = await store.findFinancialSourceMaterialization!(eventRef);
+    if (existing && canonicalFinancialSourceJson(existing) !== canonicalFinancialSourceJson({rawRecord: raw, materialization: result}))
+      throw new FinancialSourceUnavailable("source_conflict");
+    if (!existing && !(await store.commitFinancialSourceMaterialization!({expectedRaw: raw, materialization: result})))
+      throw new FinancialSourceUnavailable("source_conflict");
+    const saved = await store.findFinancialSourceMaterialization!(eventRef);
+    if (!saved || canonicalFinancialSourceJson(saved) !== canonicalFinancialSourceJson({rawRecord: raw, materialization: result})) throw new FinancialSourceUnavailable("source_conflict");
+    return saved;
+  }
+  async function registered(): Promise<void> {
+    const observed = await store.findFinancialSourceRegistration!(registration.registrationRef);
+    if (!observed || canonicalFinancialSourceJson(observed) !== canonicalFinancialSourceJson(registration)) unavailable();
+  }
+  async function freshChallenge(challengeRef: string) {
+    if (!financialSourceRef(challengeRef)) throw new FinancialSourceUnavailable("invalid_challenge");
+    const challenge = parseFinancialIdentityChallenge(await Reflect.apply(readChallenge!, challengeOwner, [challengeRef]));
+    if (challenge.challengeRef !== challengeRef || challenge.registrationRef !== registration.registrationRef ||
+      challenge.createdAt > now() || challenge.expiresAt <= now()) throw new FinancialSourceUnavailable("invalid_challenge");
+    return challenge;
+  }
+  async function enrollOriginalParents(input: {
+    accessToken: string;
+    challenge: Awaited<ReturnType<typeof freshChallenge>>;
+    original: Awaited<ReturnType<typeof current>>;
+    accessTokenHash: string;
+  }) {
+    const {accessToken, challenge, original, accessTokenHash} = input;
+    const subject = original.record.takosumiSubject!;
+    const snapshot = await Reflect.apply(capture!, control, [{workspaceId: challenge.workspaceId, accountId: subject}]);
+    if (!snapshot || snapshot.accountId !== subject || snapshot.workspaceId !== challenge.workspaceId ||
+      snapshot.organizationId !== challenge.organizationId || snapshot.workspaceRef !== challenge.workspaceRef ||
+      snapshot.evidence.expiresAt <= now()) unavailable();
+    const scope: FinancialSourceParentVector<FinancialSourceParentScope> = {
+      grant: {kind: "grant", sid: original.record.sid!}, issuerSession: {kind: "issuer-session", issuerSessionId: original.record.issuerSessionId!},
+      client: {kind: "client", clientId: original.record.clientId}, accountGeneration: {kind: "account-generation", subject, identityGeneration: original.record.identityGeneration ?? 0},
+    };
+    const parents = {} as MutableVector<{scope: FinancialSourceParentScope; expected?: FinancialSourceParentHead; affectedRef: string; eventRef: string}>;
+    for (const slot of slots) {
+      const expected = await store.findFinancialSourceParent!(scope[slot]);
+      parents[slot] = {scope: scope[slot], expected, affectedRef: expected?.affectedRef ?? hostedOpaqueId("afs_"), eventRef: hostedOpaqueId("afe_")};
+    }
+    const verify = async (): Promise<Omit<FinancialSourceAuthoritySnapshot, "precommitCheckpoint">> => {
+      const challengeNow = await freshChallenge(challenge.challengeRef);
+      if (canonicalFinancialSourceJson(challengeNow) !== canonicalFinancialSourceJson(challenge))
+        throw new FinancialSourceUnavailable("invalid_challenge");
+      const record = (await current(accessToken)).record;
+      // Storage readers legitimately project absent optional columns as own
+      // undefined properties. Normalize this storage representation only.
+      if (canonicalFinancialSourceJson(JSON.parse(JSON.stringify(record))) !==
+        canonicalFinancialSourceJson(JSON.parse(JSON.stringify(original.record)))) invalidGrant();
+      const grant = await store.findHostedOidcGrant!(record.sid!);
+      const generation = await store.getAccountAuthenticationGeneration!(subject);
+      if (!grant || generation !== (record.identityGeneration ?? 0)) invalidGrant();
+      if (!(await Reflect.apply(assertCurrent!, control, [snapshot])) || snapshot.evidence.expiresAt <= now()) unavailable();
+      return {registration, challenge, accessToken, accessTokenHash, expectedAccess: record,
+        expectedGrant: structuredClone(grant), expectedIdentityGeneration: generation,
+        control: structuredClone(snapshot.evidence), now: now()};
+    };
+    const enrollment = await checkpoint<import("./identity-state.ts").FinancialSourceEnrollmentMutation>({...await verify(), evidenceRef: challenge.challengeRef, parents});
+    const heads = await store.enrollFinancialSourceParents!(enrollment);
+    if (!heads) throw new FinancialSourceUnavailable("source_conflict");
+    return {heads, scope, snapshot, verify};
+  }
+  async function preparedOriginal(eventRef: string, budget: MaterializationBudget): Promise<AccountsFinancialPreparedOriginal> {
+    const saved = await materializeOriginal(eventRef, budget);
+    const record: FinancialSourceRawRecord = saved.rawRecord;
+    const raw = record.raw, event = saved.materialization.event, cause = record.cause;
+    const exactKeys = (value: object, keys: readonly string[]) =>
+      Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+    if (!exactKeys(record, ["raw", "parent", "parentRevision", "cause", "capturedAt"]) ||
+      !Number.isSafeInteger(record.capturedAt) || record.capturedAt < 0 || record.parentRevision !== 0 ||
+      cause.kind !== "enrollment" || !exactKeys(cause, ["kind", "challengeRef", "accessTokenHash", "sid", "identityGeneration"]) ||
+      !financialSourceRef(cause.challengeRef) || !financialSourceRef(cause.sid) ||
+      !/^sha256:[A-Za-z0-9_-]{43}$/u.test(cause.accessTokenHash) ||
+      !Number.isSafeInteger(cause.identityGeneration) || cause.identityGeneration < 0 ||
+      record.parent.kind === "grant" && record.parent.sid !== cause.sid ||
+      record.parent.kind === "account-generation" && record.parent.identityGeneration !== cause.identityGeneration)
+      throw new FinancialSourceUnavailable("source_conflict");
+    if (raw.eventRef !== eventRef || raw.sequence !== 1 || raw.previousEventRef !== null || event.eventRef !== eventRef ||
+      event.sequence !== 1 || event.previousDigest !== registration.genesisDigest || event.kind === "close" ||
+      event.affectedRef !== raw.affectedRef || event.registrationRef !== registration.registrationRef ||
+      event.incarnation !== registration.incarnation) throw new FinancialSourceUnavailable("source_pending");
+    return structuredClone({key: {registrationRef: event.registrationRef, incarnation: event.incarnation,
+      affectedRef: event.affectedRef}, eventRef, materialization: saved.materialization});
   }
   async function acknowledged(head: FinancialSourceParentHead, budget: {remaining: number}): Promise<FinancialSourceParentReference> {
     if (head.state !== "open" || head.registrationRef !== registration.registrationRef || head.incarnation !== registration.incarnation) unavailable();
@@ -376,6 +504,90 @@ export function createAccountsFinancialSource(options: AccountsFinancialSourceOp
     async verifyCurrentFinancialIdentityProof(value: FinancialIdentityProofRequest): Promise<FinancialIdentityProofCurrentResult> {
       return verifyCurrentProof(value);
     },
+    /** Explicit first-event originals for a separately qualified Financial M.
+     * No receiver callback, ACK or proof issuer is used by this preparation. */
+    async prepareFinancialIdentityProofSource(input: {readonly accessToken: string; readonly challengeRef: string}): Promise<AccountsFinancialPreparedSource> {
+      const {accessToken, challengeRef} = input;
+      preparationCapabilities();
+      const challenge = await freshChallenge(challengeRef);
+      await registered();
+      const original = await current(accessToken);
+      if (original.client.clientId !== challenge.clientId) invalidGrant();
+      const accessTokenHash = await sha256Text(accessToken);
+      const {heads, scope, snapshot, verify} = await enrollOriginalParents({accessToken, challenge, original, accessTokenHash});
+      const prepared = {} as MutableVector<AccountsFinancialPreparedOriginal>;
+      const rawBefore = {} as MutableVector<FinancialSourceMaterializationRecord["rawRecord"]>;
+      const budget: MaterializationBudget = {remaining: FINANCIAL_SOURCE_MAX_PAGE};
+      for (const slot of slots) {
+        const head = heads[slot];
+        if (head.state !== "open" || head.sequence !== 1 || head.registrationRef !== registration.registrationRef ||
+          head.incarnation !== registration.incarnation || canonicalFinancialSourceJson(head.scope) !== canonicalFinancialSourceJson(scope[slot]))
+          throw new FinancialSourceUnavailable("source_pending");
+        const raw = await store.findFinancialSourceRaw!(head.lastEventRef);
+        if (!raw || canonicalFinancialSourceJson(raw.parent) !== canonicalFinancialSourceJson(scope[slot]) ||
+          raw.raw.affectedRef !== head.affectedRef) throw new FinancialSourceUnavailable("source_conflict");
+        rawBefore[slot] = raw;
+        prepared[slot] = await preparedOriginal(head.lastEventRef, budget);
+        if (prepared[slot].key.affectedRef !== head.affectedRef) throw new FinancialSourceUnavailable("source_conflict");
+      }
+      await verify();
+      await registered();
+      for (const slot of slots) {
+        const head = await store.findFinancialSourceParent!(scope[slot]);
+        const raw = await store.findFinancialSourceRaw!(heads[slot].lastEventRef);
+        const saved = await store.findFinancialSourceMaterialization!(heads[slot].lastEventRef);
+        if (!head || canonicalFinancialSourceJson(head) !== canonicalFinancialSourceJson(heads[slot]) ||
+          !raw || canonicalFinancialSourceJson(raw) !== canonicalFinancialSourceJson(rawBefore[slot]) ||
+          !saved || canonicalFinancialSourceJson(saved.rawRecord) !== canonicalFinancialSourceJson(raw) ||
+          canonicalFinancialSourceJson(saved.materialization) !== canonicalFinancialSourceJson(prepared[slot].materialization))
+          throw new FinancialSourceUnavailable("source_conflict");
+      }
+      await verify();
+      return structuredClone({kind: "fresh", registration, parents: prepared, controlSource: snapshot.evidence.source});
+    },
+    /** One historical pending page only. No token, C0, fresh grant, receiver,
+     * proof or Financial M is consulted or invoked. Cursor is scheduling only. */
+    async preparePendingFinancialSourceOriginals(input: {readonly after?: string; readonly limit: number}): Promise<AccountsFinancialPendingOriginalPage> {
+      const {after, limit} = input;
+      if (!store.listFinancialSourcePending || !store.findFinancialSourceRegistration || !store.findFinancialSourceParent ||
+        !store.findFinancialSourceRaw || !store.findFinancialSourceMaterialization || !store.commitFinancialSourceMaterialization ||
+        !Number.isSafeInteger(limit) || limit < 1 || limit > FINANCIAL_SOURCE_MAX_PAGE ||
+        after !== undefined && !financialSourceRef(after)) unavailable();
+      await registered();
+      const page = await store.listFinancialSourcePending({registrationRef: registration.registrationRef, after, limit});
+      if (!Array.isArray(page.entries) || page.entries.length > limit ||
+        page.nextCursor !== undefined && !financialSourceRef(page.nextCursor)) unavailable();
+      const entries: {original: AccountsFinancialPreparedOriginal}[] = [];
+      const budget: MaterializationBudget = {remaining: FINANCIAL_SOURCE_MAX_PAGE};
+      let previousRef = after ?? "";
+      for (const pending of page.entries) {
+        if (canonicalFinancialSourceJson(pending.registration) !== canonicalFinancialSourceJson(registration) ||
+          !financialSourceRef(pending.eventRef) || pending.eventRef <= previousRef)
+          throw new FinancialSourceUnavailable("source_conflict");
+        previousRef = pending.eventRef;
+        const raw = await store.findFinancialSourceRaw(pending.eventRef);
+        if (!raw) throw new FinancialSourceUnavailable("source_conflict");
+        const head = await store.findFinancialSourceParent(raw.parent);
+        if (!head || head.registrationRef !== registration.registrationRef || head.incarnation !== registration.incarnation ||
+          head.affectedRef !== raw.raw.affectedRef || head.sequence < raw.raw.sequence ||
+          canonicalFinancialSourceJson(head.scope) !== canonicalFinancialSourceJson(raw.parent))
+          throw new FinancialSourceUnavailable("source_conflict");
+        const original = await preparedOriginal(pending.eventRef, budget);
+        const finalRaw = await store.findFinancialSourceRaw(pending.eventRef);
+        const finalSaved = await store.findFinancialSourceMaterialization(pending.eventRef);
+        const finalHead = await store.findFinancialSourceParent(raw.parent);
+        if (!finalRaw || canonicalFinancialSourceJson(finalRaw) !== canonicalFinancialSourceJson(raw) ||
+          !finalSaved || canonicalFinancialSourceJson(finalSaved.rawRecord) !== canonicalFinancialSourceJson(raw) ||
+          canonicalFinancialSourceJson(finalSaved.materialization) !== canonicalFinancialSourceJson(original.materialization) ||
+          !finalHead || canonicalFinancialSourceJson(finalHead) !== canonicalFinancialSourceJson(head))
+          throw new FinancialSourceUnavailable("source_conflict");
+        entries.push({original});
+      }
+      if (page.nextCursor !== undefined && (entries.length !== limit || page.nextCursor !== previousRef))
+        throw new FinancialSourceUnavailable("source_conflict");
+      await registered();
+      return structuredClone({kind: "historical", registration, entries, ...(page.nextCursor === undefined ? {} : {nextCursor: page.nextCursor})});
+    },
     /** Input conveys the actual grant and a Financial-owned challenge REF only.
      * The proof identifies current identity/context, never a Principal or payer. */
     async prove(input: {readonly accessToken: string; readonly challengeRef: string}): Promise<{readonly proofRef: string}> {
@@ -383,11 +595,8 @@ export function createAccountsFinancialSource(options: AccountsFinancialSourceOp
       // must not select a different token, challenge or recovery key.
       const {accessToken, challengeRef} = input;
       capabilities();
-      if (!financialSourceRef(challengeRef)) throw new FinancialSourceUnavailable("invalid_challenge");
-      const challenge = parseFinancialIdentityChallenge(await Reflect.apply(readChallenge!, challengeOwner, [challengeRef]));
-      if (challenge.challengeRef !== challengeRef || challenge.registrationRef !== registration.registrationRef || challenge.createdAt > now() || challenge.expiresAt <= now()) throw new FinancialSourceUnavailable("invalid_challenge");
-      const registered = await store.findFinancialSourceRegistration!(registration.registrationRef);
-      if (!registered || canonicalFinancialSourceJson(registered) !== canonicalFinancialSourceJson(registration)) unavailable();
+      const challenge = await freshChallenge(challengeRef);
+      await registered();
       const original = await current(accessToken);
       if (original.client.clientId !== challenge.clientId) invalidGrant();
       const subject = original.record.takosumiSubject!;
@@ -425,39 +634,7 @@ export function createAccountsFinancialSource(options: AccountsFinancialSourceOp
         return {proofRef: proof.proofRef};
       };
       if ((await census()).length !== 0) return recover();
-      const snapshot = await Reflect.apply(capture!, control, [{workspaceId: challenge.workspaceId, accountId: subject}]);
-      if (!snapshot || snapshot.accountId !== subject || snapshot.workspaceId !== challenge.workspaceId ||
-        snapshot.organizationId !== challenge.organizationId || snapshot.workspaceRef !== challenge.workspaceRef ||
-        snapshot.evidence.expiresAt <= now()) unavailable();
-      const scope: FinancialSourceParentVector<FinancialSourceParentScope> = {
-        grant: {kind: "grant", sid: original.record.sid!}, issuerSession: {kind: "issuer-session", issuerSessionId: original.record.issuerSessionId!},
-        client: {kind: "client", clientId: original.record.clientId}, accountGeneration: {kind: "account-generation", subject, identityGeneration: original.record.identityGeneration ?? 0},
-      };
-      const parents = {} as MutableVector<{scope: FinancialSourceParentScope; expected?: FinancialSourceParentHead; affectedRef: string; eventRef: string}>;
-      for (const slot of slots) {
-        const expected = await store.findFinancialSourceParent!(scope[slot]);
-        parents[slot] = {scope: scope[slot], expected, affectedRef: expected?.affectedRef ?? hostedOpaqueId("afs_"), eventRef: hostedOpaqueId("afe_")};
-      }
-      const verify = async (): Promise<Omit<FinancialSourceAuthoritySnapshot, "precommitCheckpoint">> => {
-        const challengeNow = parseFinancialIdentityChallenge(await Reflect.apply(readChallenge!, challengeOwner, [challengeRef]));
-        if (canonicalFinancialSourceJson(challengeNow) !== canonicalFinancialSourceJson(challenge) || challengeNow.expiresAt <= now())
-          throw new FinancialSourceUnavailable("invalid_challenge");
-        const record = (await current(accessToken)).record;
-        // Storage readers legitimately project absent optional columns as own
-        // undefined properties. This comparison is not a closed wire record;
-        // normalize that storage representation without relaxing the codec.
-        if (canonicalFinancialSourceJson(JSON.parse(JSON.stringify(record))) !==
-          canonicalFinancialSourceJson(JSON.parse(JSON.stringify(original.record)))) invalidGrant();
-        const grant = await store.findHostedOidcGrant!(record.sid!);
-        const generation = await store.getAccountAuthenticationGeneration!(subject);
-        if (!grant || generation !== (record.identityGeneration ?? 0)) invalidGrant();
-        if (!(await Reflect.apply(assertCurrent!, control, [snapshot]))) unavailable();
-        return {registration, challenge, accessToken: accessToken, accessTokenHash, expectedAccess: record,
-          expectedGrant: structuredClone(grant), expectedIdentityGeneration: generation, control: structuredClone(snapshot.evidence), now: now()};
-      };
-      const enrollment = await checkpoint<import("./identity-state.ts").FinancialSourceEnrollmentMutation>({...await verify(), evidenceRef: challenge.challengeRef, parents});
-      const heads = await store.enrollFinancialSourceParents!(enrollment);
-      if (!heads) throw new FinancialSourceUnavailable("source_conflict");
+      const {heads, verify} = await enrollOriginalParents({accessToken, challenge, original, accessTokenHash});
       const refs = {} as MutableVector<FinancialSourceParentReference>;
       const budget = {remaining: FINANCIAL_SOURCE_MAX_PAGE};
       for (const slot of slots) refs[slot] = await acknowledged(heads[slot], budget);
@@ -645,6 +822,55 @@ export function createAccountsFinancialControlSource(options: {
       try { if (canonicalFinancialSourceJson(snapshot) !== retained.binding) return false; } catch { return false; }
       const current = await Reflect.apply(assertCurrent, service, [structuredClone(retained.original)]);
       return current && now() < retained.expiresAt && canonicalFinancialSourceJson(snapshot) === retained.binding;
+    },
+    /** Fresh original Control event from this exact canonical facade. Expected
+     * source is only an equality filter; neither it nor a WeakMap is authority. */
+    async prepareOriginalFinancialControlSource(input: {
+      readonly workspaceId: string;
+      readonly accountId: TakosumiSubject;
+      readonly expectedSource: FinancialSourceControlEvidence["source"];
+    }): Promise<{readonly kind: "fresh"; readonly registration: FinancialSourceRegistration; readonly original: AccountsFinancialPreparedOriginal}> {
+      const {workspaceId, accountId} = input;
+      const expectedSource = structuredClone(input.expectedSource);
+      if (!financialSourceRef(workspaceId) || !financialSourceRef(accountId)) unavailable();
+      const original = await Reflect.apply(capture, service, [{workspaceId, actorAccountId: accountId}]);
+      if (!original || original.workspace.id !== workspaceId || original.member.accountId !== accountId ||
+        original.member.workspaceId !== workspaceId || original.member.status !== "active" ||
+        original.binding.workspaceId !== workspaceId || original.head.workspaceId !== workspaceId ||
+        original.head.closed || original.head.permissionSequence !== original.head.materializedSequence) unavailable();
+      const enrolled = registration(original.head);
+      const source: FinancialSourceControlEvidence["source"] = {registrationRef: enrolled.registrationRef,
+        incarnation: enrolled.incarnation, affectedRef: workspaceId, sequence: original.head.permissionSequence,
+        eventRef: original.head.lastEventRef, eventDigest: hex(original.head.materializedDigest), receivers: enrolled.receivers};
+      if (canonicalFinancialSourceJson(source) !== canonicalFinancialSourceJson(expectedSource))
+        throw new FinancialSourceUnavailable("source_conflict");
+      if (source.sequence !== 1 || source.eventRef === null) throw new FinancialSourceUnavailable("source_pending");
+      const head = await Reflect.apply(readHead, service, [workspaceId]);
+      const raws = await Reflect.apply(listRaw, service, [{workspaceId, afterSequence: 0, limit: 1}]);
+      if (!head || canonicalFinancialSourceJson(head) !== canonicalFinancialSourceJson(original.head) ||
+        raws.length !== 1) throw new FinancialSourceUnavailable("source_conflict");
+      const raw = raws[0]!;
+      if (raw.eventRef !== source.eventRef || raw.permissionSequence !== 1 || raw.previousEventRef !== null ||
+        raw.workspaceId !== workspaceId || raw.sourceRef !== enrolled.registrationRef ||
+        raw.incarnation !== enrolled.incarnation || raw.closed) throw new FinancialSourceUnavailable("source_conflict");
+      const stored = await Reflect.apply(readMaterialization, service, [raw.eventRef]);
+      if (!stored) throw new FinancialSourceUnavailable("source_pending");
+      const wire = await decode(stored, raw);
+      const recomputed = await materializeFinancialSourceEvent({registration: enrolled, raw: rawWire(raw)});
+      if (canonicalFinancialSourceJson(wire) !== canonicalFinancialSourceJson(recomputed) ||
+        wire.eventDigest !== source.eventDigest) throw new FinancialSourceUnavailable("source_conflict");
+      if (!(await Reflect.apply(assertCurrent, service, [structuredClone(original)]))) unavailable();
+      const finalHead = await Reflect.apply(readHead, service, [workspaceId]);
+      const finalRaws = await Reflect.apply(listRaw, service, [{workspaceId, afterSequence: 0, limit: 1}]);
+      const finalStored = await Reflect.apply(readMaterialization, service, [raw.eventRef]);
+      if (!finalHead || canonicalFinancialSourceJson(finalHead) !== canonicalFinancialSourceJson(head) ||
+        finalRaws.length !== 1 || canonicalFinancialSourceJson(finalRaws[0]) !== canonicalFinancialSourceJson(raw) ||
+        !finalStored || canonicalFinancialSourceJson(finalStored) !== canonicalFinancialSourceJson(stored) ||
+        !(await Reflect.apply(assertCurrent, service, [structuredClone(original)])))
+        throw new FinancialSourceUnavailable("source_conflict");
+      return structuredClone({kind: "fresh", registration: enrolled,
+        original: {key: {registrationRef: enrolled.registrationRef, incarnation: enrolled.incarnation,
+          affectedRef: workspaceId}, eventRef: raw.eventRef, materialization: wire}});
     },
     /** One explicit bounded page, never a complete inventory assertion. Lost
      * ACK recovery reads the SAME event before any new delivery attempt. */
