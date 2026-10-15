@@ -56,16 +56,20 @@ repository's portable browser fixture server. They were captured on
 `d4b1c52f8434cb163ac76f1a4682baf564612acc`; the matching light images
 came from checkout `3820a6359e7e044d5283b662540f80212b3929d9`.
 The dark and light desktop Home images were refreshed on 2026-10-04 from
-checkout `0f9f6ac2e` with a full 1200 × 750 viewport. The other six images
-retain their previous capture bytes.
+checkout `0f9f6ac2e` with a full 1200 × 750 viewport. The four Store images were
+recaptured on 2026-10-15 from the dashboard source at `46d87d185`, because the
+earlier ones showed a 「Source」 tab and heading copy that the dashboard no
+longer has. Recapturing Home from the same source produced byte-identical
+images, so the Home files are unchanged.
 `capture-dashboard-ui.mjs` intercepts the public example session, Workspace,
 Capsule, and authorized `interface.ui.surface` list reads for the Home launcher,
 plus the TCS v2 Store discovery reads. The three products are illustrative:
 Takos, Takos Office, and Yurucommu, with `example.test` launch URLs and
 `github.com/example` source URLs. Their rows are shaped as the dashboard's
 real API projections; they do not describe installed production services or
-available official Store listings. The Store images show source selection,
-not completed configuration or installation. All non-GET requests and external browser requests are blocked. The
+available official Store listings. The Store images show the Store with
+three listings before one is chosen, not completed configuration or
+installation. All non-GET requests and external browser requests are blocked. The
 Takos icon is the current `website/public/apps/takos.png`; Office and
 Yurucommu use this repository's `dashboard/public/brand/` SVGs. All three
 are fulfilled locally at an illustrative icon origin.
