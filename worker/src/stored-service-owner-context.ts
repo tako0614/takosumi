@@ -40,6 +40,30 @@ export async function assertStoredRunLease(database: D1Database, original: Store
   const row = records[0]!, run = storedOwnerRecord(row.run_json);
   if (row.status !== "running" || row.lease_token !== original.leaseToken || run.id !== original.runId || run.workspaceId !== row.space_id || run.status !== row.status) throw new StoredServiceUsageError();
 }
+
+export interface StoredReleaseParent {
+  readonly applyRunId: string;
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+}
+
+/** The original private Core lease selects the row. Activation fields only
+ * compare its identity; they cannot supply a lease or grant execution. Each
+ * invocation starts its own first-primary session, including the late check. */
+export async function assertStoredReleaseRunLease(database: D1Database, original: StoredRunLease | undefined, expected: StoredReleaseParent | undefined): Promise<void> {
+  if (!original || !validRunLease(original) || !expected || original.runId !== expected.applyRunId) throw new StoredServiceUsageError();
+  const records = await storedOwnerRows(storedOwnerDatabase(database), "select id, space_id, installation_id, type, status, lease_token, run_json from runs where id = ? limit 2", [original.runId]);
+  if (records.length !== 1) throw new StoredServiceUsageError();
+  const row = records[0]!, run = storedOwnerRecord(row.run_json);
+  if (row.id !== original.runId || run.id !== row.id ||
+    row.status !== "running" || run.status !== row.status || row.lease_token !== original.leaseToken ||
+    typeof run.workspaceId !== "string" || !run.workspaceId || run.workspaceId !== row.space_id || run.workspaceId !== expected.workspaceId ||
+    typeof run.capsuleId !== "string" || !run.capsuleId || run.capsuleId !== row.installation_id || run.capsuleId !== expected.capsuleId ||
+    !["apply", "destroy_apply"].includes(String(row.type)) ||
+    (run.operation !== undefined && run.operation !== "apply" && run.operation !== "destroy") ||
+    row.type !== (run.operation === "destroy" ? "destroy_apply" : "apply") ||
+    (run.type !== undefined && run.type !== row.type) || (run.kind !== undefined && run.kind !== row.type)) throw new StoredServiceUsageError();
+}
 type RecordValue = Record<string, unknown>;
 export interface StoredRunnerScope {
   readonly workspaceId: string;
