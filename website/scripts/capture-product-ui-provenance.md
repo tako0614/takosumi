@@ -77,8 +77,9 @@ are fulfilled locally at an illustrative icon origin.
 Browser runtime errors, failed HTTP requests or images, unexpected external
 requests, and missing product cards fail the capture.
 
-The four `dashboard-review-*` images show the add flow's 「追加前の確認」 screen
-for Takos, reached by opening `/new` with an example Git URL and pressing
+The four `dashboard-review-*` images, captured on 2026-10-15 from the dashboard
+source at `d128a386f` (after #493 fixed the 「ホスト / アカウント」 row), show the
+add flow's 「追加前の確認」 screen for Takos, reached by opening `/new` with an example Git URL and pressing
 「追加」 in the real dashboard. Only for this screen, the script answers the add
 flow's API calls in the browser, following the shapes used by the dashboard's
 portable e2e fixture: source registration and sync, the resolved snapshot and
@@ -125,8 +126,9 @@ site's `<picture>` sources follow the operating system appearance and viewport.
 
 ## Quickstart screens in the docs
 
-The twelve `docs/public/getting-started/quickstart-*.png` images show the
-three screens that Quickstart step 6 describes, in Japanese and English and in
+The twelve `docs/public/getting-started/quickstart-*.png` images, captured on
+2026-10-15 from the dashboard source at `d128a386f`, show the three screens
+that Quickstart step 6 describes, in Japanese and English and in
 light and dark (`-en` and `-dark` suffixes). The same script opens the
 Quickstart's own link,
 `/install?git=https://github.com/tako0614/takosumi.git&ref=main&path=examples/opentofu-basic`,
@@ -144,11 +146,12 @@ What the screens show is derived from this repository rather than invented:
 - The service name `takosumi` is the dashboard's own default for that Git URL.
 
 The resolved commit, IDs and the 「デモ環境」 / "Demo workspace" name are
-placeholders. The first image is the whole add page without the dashboard
+placeholders; none of them appears in the images. The first image is the whole add page without the dashboard
 shell; the other two are clipped to the part of the card each step adds. The
 capture fails unless each heading appears and the review shows 0, 0 and 0 with
 its 「追加する」 (Add) button.
 
-To refresh only these, run the script with `all quickstart` (or `light
+The default run (`all`) rewrites these together with the website images. To
+refresh only these, run the script with `all quickstart` (or `light
 quickstart` / `dark quickstart`). If the image sizes change, update the
 `width` and `height` attributes in both Quickstart pages to match.
