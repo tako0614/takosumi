@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { posix } from "node:path";
 import { expect, test } from "bun:test";
 import { parse as parseYaml } from "yaml";
 
@@ -154,6 +155,30 @@ test("node-postgres app-docs stage has git when vitepress lastUpdated is on", as
   expect(stage(dockerfile, "app-docs")).toMatch(
     /apt-get install -y --no-install-recommends git\b/u,
   );
+});
+
+/** Repository paths of the relative modules a config file imports, read as text. */
+function relativeImports(source: string, fromDir: string): string[] {
+  return [...source.matchAll(
+    /^\s*(?:import|export)\s+(?!type\b)(?:[^;]*?\bfrom\s+)?["'](\.{1,2}\/[^"']+)["']/gmu,
+  )].map((match) => {
+    const resolved = posix.normalize(posix.join(fromDir, match[1]!));
+    return /\.[cm]?[jt]s$/u.test(resolved) ? resolved : `${resolved}.ts`;
+  });
+}
+
+test("node-postgres app-docs stage copies the docs helpers its config imports", async () => {
+  const [dockerfile, appDocsConfig] = await Promise.all([
+    read("deploy/node-postgres/Dockerfile"),
+    read("app-docs/.vitepress/config.ts"),
+  ]);
+  // app-docs/.vitepress/config.ts imports shared helpers from docs/.vitepress;
+  // the app-docs build fails unless its own stage copies them from the context.
+  const imports = relativeImports(appDocsConfig, "app-docs/.vitepress");
+  expect(imports.length).toBeGreaterThan(0);
+  await Promise.all(imports.map(read));
+  const copied = copiedPaths(stage(dockerfile, "app-docs"));
+  expect(imports.filter((input) => !covered(input, copied))).toEqual([]);
 });
 
 test("node-postgres compose applies both schemas and passes only declared service settings", async () => {
