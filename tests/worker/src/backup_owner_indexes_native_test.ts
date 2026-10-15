@@ -148,7 +148,7 @@ test("native actual-union74 indexed guard preserves all38 original-affinity case
     // Ordinary readiness at73 cannot satisfy the separate indexed capability.
     expect((await f.store.getWorkspace("workspace_original"))?.id).toBe("workspace_original");
     await expect(verifyD1BackupOwnerIndexesPredeployed(f.db)).rejects.toThrow();
-    await ensureD1OpenTofuLedgerSchema(f.db);
+    await ensureD1OpenTofuLedgerSchema(f.db, { throughMigrationVersion: 74 });
     await verifyD1BackupOwnerIndexesPredeployed(f.db);
     expect(await f.native.prepare("select name from schema_migrations where version=74").first("name")).toBe("d1_backup_owner_lookup_indexes");
     const currentLedger = (await f.native.prepare("select * from schema_migrations order by version").all<{ version: number; name: string; checksum: string }>()).results;
@@ -315,18 +315,18 @@ test("native74 index migration rolls both index creations back on a failing seco
       prepare(sql) { return f.db.prepare(sql.startsWith("create index if not exists backups_legacy_created_by_run_text_idx") ? "create index fixture_invalid_backup_index on backups(no_such_column)" : sql); },
       batch: statements => f.db.batch!(statements),
     };
-    await expect(ensureD1OpenTofuLedgerSchema(fault)).rejects.toThrow();
+    await expect(ensureD1OpenTofuLedgerSchema(fault, { throughMigrationVersion: 74 })).rejects.toThrow();
     expect((await f.native.prepare("select name from sqlite_master where name in (?,?)").bind(PHYSICAL, LEGACY).all()).results).toEqual([]);
     expect(await f.native.prepare("select max(version) as version from schema_migrations").first("version")).toBe(73);
     expect(await inventory(f.native)).toEqual(before);
-    await ensureD1OpenTofuLedgerSchema(f.db);
+    await ensureD1OpenTofuLedgerSchema(f.db, { throughMigrationVersion: 74 });
     await verifyD1BackupOwnerIndexesPredeployed(f.db);
     expect(await inventory(f.native)).toEqual(before);
   } finally { await f.close(); }
 }, 30_000);
 
-test("native exact71/72/73/74 request bridge separates ordinary, billing, identity and indexed floors without DDL", async () => {
-  for (const head of [71, 72, 73, 74]) {
+test("native exact71/72/73/74/75 request bridge separates ordinary, billing, identity and indexed floors without DDL", async () => {
+  for (const head of [71, 72, 73, 74, 75]) {
     const f = await fixture(head);
     try {
       const workspace = { id: "workspace_bridge", handle: "workspace-bridge", displayName: "Native bridge", type: "personal" as const, ownerUserId: "owner_bridge", createdAt: NOW, updatedAt: NOW };
@@ -346,14 +346,11 @@ test("native exact71/72/73/74 request bridge separates ordinary, billing, identi
       else await expect(store.getWorkspaceBillingBinding(workspace.id)).rejects.toThrow();
       if (head >= 73) expect(await store.captureIdentityReconciliationInventory([member.accountId])).toMatchObject({ accountIds: [member.accountId], members: [member], workspaces: [{ workspace }], overflow: false });
       else await expect(store.captureIdentityReconciliationInventory([member.accountId])).rejects.toThrow();
-      if (head === 74) {
-        await verifyD1BackupOwnerIndexesPredeployed(readonly);
-        await verifyD1OpenTofuLedgerSchemaPredeployed(readonly);
-      } else {
-        await expect(verifyD1BackupOwnerIndexesPredeployed(readonly)).rejects.toThrow();
-        await expect(verifyD1OpenTofuLedgerSchemaPredeployed(readonly)).rejects.toThrow();
-      }
-      expect((await f.native.prepare("select name from sqlite_master where type='index' and name in (?,?)").bind(PHYSICAL, LEGACY).all()).results).toHaveLength(head === 74 ? 2 : 0);
+      if (head >= 74) await verifyD1BackupOwnerIndexesPredeployed(readonly);
+      else await expect(verifyD1BackupOwnerIndexesPredeployed(readonly)).rejects.toThrow();
+      if (head === 75) await verifyD1OpenTofuLedgerSchemaPredeployed(readonly);
+      else await expect(verifyD1OpenTofuLedgerSchemaPredeployed(readonly)).rejects.toThrow();
+      expect((await f.native.prepare("select name from sqlite_master where type='index' and name in (?,?)").bind(PHYSICAL, LEGACY).all()).results).toHaveLength(head >= 74 ? 2 : 0);
       await f.native.prepare("update _takosumi_control_schema_maintenance set active=1,released_at=null where singleton=1").run();
       await expect(store.getWorkspace(workspace.id)).rejects.toThrow("maintenance_fence_active");
       await expect(coldPage.listWorkspacesForAccountPage(member.accountId, { limit: 1 })).rejects.toThrow("maintenance_fence_active");
