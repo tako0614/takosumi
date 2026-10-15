@@ -241,6 +241,10 @@ export default defineConfig({
   // Public docs must not publish product-local design notes or operator runbooks.
   srcExclude: ["internal/**/*.md", "operations/**/*.md"],
   markdown: {
+    // The default github-light tokens (red keywords, green headers, orange
+    // values) and github-dark comments fall below 4.5:1 on the code block
+    // background; these keep every token above it.
+    theme: { light: "github-light-high-contrast", dark: "github-dark-default" },
     config(md) {
       wrappedLines(md);
     },
