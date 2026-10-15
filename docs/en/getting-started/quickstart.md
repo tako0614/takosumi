@@ -83,16 +83,22 @@ https://app.takosumi.test/install?git=https://github.com/tako0614/takosumi.git&r
 ```
 
 The page opens with the Git URL, ref, and module path filled in. Opening the
-link does not create anything. After you check the values and add it, Takosumi
-pins the ref to a commit, checks module compatibility, and creates a plan.
+link does not create anything. Check the service name and press **Add**:
+Takosumi pins the ref to a commit, checks the module, and prepares the changes
+(a plan) before anything is deployed.
 
-The example has no provider and creates no external resource. It lets you test
-the runner, plan, apply, and state storage without cloud credentials.
+When it is ready, **Review before adding** shows how many resources will be
+created, changed, and deleted. The example has no provider and creates no
+external resource, so you can test the runner, plan, apply, and state storage
+without cloud credentials. After checking the changes, press **Add** to start
+the apply. A change that deletes something first needs **I reviewed these
+changes**, and one under an approval policy needs **Approve this change**. A
+change that a policy or billing check stops shows **These changes can't be
+deployed**, with the reason under **Technical details**.
 
-The install action explicitly asks Takosumi to continue a clean plan to apply
-when no approval is required. A deletion, approval policy, billing check, or
-other gate stops on the Run page. Normal updates, detected drift, and new Git
-commits are not applied on their own.
+When it finishes, **Service added** appears and **Open service** opens the new
+workload. Normal updates, detected drift, and new Git commits are not applied
+on their own.
 
 ## 7. Inspect the result
 
