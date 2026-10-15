@@ -47,6 +47,9 @@ Internal navigation:
   Accounts/OIDC design baseline, including client registration, email-assisted
   identity linking and protected migration. The optional implementation contract
   below and operator runbooks distinguish source behavior from deployment.
+- [Canonical account groups and context continuation](./account-group-context-continuation-design.md) —
+  unadopted follow-up design for complete group/context custody; current main,
+  the pending v1 candidate and proposed v2 are separate.
 - [Optional shared-account OIDC](./shared-account-oidc.md) — implementation
   contract for registered shared clients, current canonical Control membership,
   operation-bound merge proof and protected migration; deployment is separate.

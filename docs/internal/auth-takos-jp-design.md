@@ -9,6 +9,10 @@ staging proof around 2026-10-22 are a separate phase, subject to the decisions
 and acceptance criteria below. Production publication requires a separate
 operator approval.
 
+The [account-group/context continuation follow-up](./account-group-context-continuation-design.md)
+requests separate policy review for multi-context and later merge operations.
+It leaves this issuer/session baseline intact and does not adopt or implement v2.
+
 ## 1. Outcome, owners, and current gaps
 
 A user signs in to `auth.takos.jp` with Google or GitHub, then signs in to the
