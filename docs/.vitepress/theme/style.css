@@ -50,9 +50,25 @@
   text-underline-offset: 0.18em;
 }
 
-.vp-doc table {
+/* Wide tables scroll inside their wrapper (see scrollable-tables.ts) instead of
+ * widening the page; narrow ones still fill the column. */
+.vp-doc .table-scroll {
+  margin: 20px 0;
+  overflow-x: auto;
+}
+
+.vp-doc .table-scroll > table {
   display: table;
   width: 100%;
+  margin: 0;
+}
+
+/* The full nav bar appears at 768px, where the English labels need tighter
+ * link padding to stay inside the viewport until the desktop layout. */
+@media (min-width: 768px) and (max-width: 959px) {
+  .VPNavBarMenu .VPNavBarMenuLink {
+    padding: 0 8px;
+  }
 }
 
 /* VitePress keeps the mobile sidebar in the DOM while it is translated away.

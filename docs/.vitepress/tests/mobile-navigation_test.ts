@@ -55,4 +55,19 @@ test.describe("Takosumi docs mobile navigation", () => {
     await expect(page.locator(".VPNavScreen")).toHaveCount(0);
     await expect(trigger).toBeFocused();
   });
+
+  test("keeps wide reference tables inside the page width", async ({ page }) => {
+    await page.goto("/docs/reference/configuration");
+    await expect(page.locator(".vp-doc .table-scroll > table").first()).toBeVisible();
+
+    const layout = await page.evaluate(() => ({
+      pageWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+      scrollingTables: [...document.querySelectorAll(".vp-doc .table-scroll")]
+        .filter((wrapper) => wrapper.scrollWidth > wrapper.clientWidth).length,
+    }));
+
+    expect(layout.pageWidth).toBeLessThanOrEqual(layout.viewportWidth);
+    expect(layout.scrollingTables).toBeGreaterThan(0);
+  });
 });
