@@ -82,18 +82,29 @@ https://app.takosumi.test/install?git=https://github.com/tako0614/takosumi.git&r
 
 追加は、入力済みの画面、**サービスを設定**、**追加前の確認** の 3 画面で進みます。
 
-最初の画面ではサービス名が入力され、Git URL、ref、module path は折りたたまれた
-**取得元の詳細** に入っています。リンクを開いただけでは何も作成されません。サービス名を
-確認して **追加** を押すと、Takosumi は ref を commit に固定し、module を調べます。
+最初の画面ではサービス名が入力され、取得元とこのあとの流れが表示されます。Git URL、ref、
+module path は折りたたまれた **取得元の詳細** に入っています。リンクを開いただけでは
+何も作成されません。サービス名を確認して **追加** を押すと、Takosumi は ref を commit に
+固定し、module を調べます。
 
-このサンプルは入力項目 **名前** と **公開URLの例** を持つため、次に **サービスを設定** が
-表示されます。どちらも省略できます。空欄のまま **続ける** を押すと module の既定値が
+[![最初の画面。サービス名「takosumi」が入力され、取得元 github.com/tako0614/takosumi / バージョン main / examples/opentofu-basic と、このあとの 3 つの手順、「追加」ボタンがある](/getting-started/quickstart-add.png){.screenshot width=1640 height=1578}](/getting-started/quickstart-add.png){.light-only}
+[![最初の画面。サービス名「takosumi」が入力され、取得元 github.com/tako0614/takosumi / バージョン main / examples/opentofu-basic と、このあとの 3 つの手順、「追加」ボタンがある](/getting-started/quickstart-add-dark.png){.screenshot width=1640 height=1578}](/getting-started/quickstart-add-dark.png){.dark-only}
+
+このサンプルは接続を必要とせず、入力項目 **名前** と **公開URLの例** を持つため、次の
+**サービスを設定** には接続の選択がなく、この 2 つだけが表示されます。どちらも省略できます。空欄のまま **続ける** を押すと module の既定値が
 使われ、デプロイ前の変更内容（plan）が作られます。
 
+[![「サービスを設定」の画面。任意の入力項目「名前」と「公開URLの例」が空欄で、その下に「続ける」ボタンがある](/getting-started/quickstart-setup.png){.screenshot width=1468 height=558}](/getting-started/quickstart-setup.png){.light-only}
+[![「サービスを設定」の画面。任意の入力項目「名前」と「公開URLの例」が空欄で、その下に「続ける」ボタンがある](/getting-started/quickstart-setup-dark.png){.screenshot width=1468 height=558}](/getting-started/quickstart-setup-dark.png){.dark-only}
+
 準備が終わると **追加前の確認** に、作成・変更・削除されるリソースの数が表示されます。
-このサンプルは provider を使わず、外部リソースも作らないため、クラウドの認証情報なしで
-runner、plan、apply、state 保存まで確認できます。内容を確認して **追加する** を押すと
-apply が始まります。
+このサンプルは provider を使わず、リソースを作らないため、3 つとも 0 です。それでも
+クラウドの認証情報なしで runner、plan、apply、state 保存まで確認できます。見出しの横の
+**成功** は変更内容（plan）を作れたという意味で、この時点ではまだ何も追加されていません。内容を確認して
+**追加する** を押すと apply が始まります。
+
+[![「追加前の確認」の画面。作成 0、変更 0、削除 0 と表示され、その下に「追加する」ボタンと「技術的な詳細」のリンクがある](/getting-started/quickstart-review.png){.screenshot width=1468 height=652}](/getting-started/quickstart-review.png){.light-only}
+[![「追加前の確認」の画面。作成 0、変更 0、削除 0 と表示され、その下に「追加する」ボタンと「技術的な詳細」のリンクがある](/getting-started/quickstart-review-dark.png){.screenshot width=1468 height=652}](/getting-started/quickstart-review-dark.png){.dark-only}
 
 リソースの削除・置き換え・import を含む変更では、先に **この変更を承認** を押し、
 **変更内容を確認しました** にチェックしてから **追加する** を押します。このサンプルの
