@@ -22,7 +22,8 @@ function fixture() {
   const seen: { auth: Request[]; dashboard: { request: Request; session: unknown }[]; generic: Request[]; selected: number } = {
     auth: [], dashboard: [], generic: [], selected: 0,
   };
-  const route: PlatformExtensionRoute = { basePath: root, handlerKey: "HOSTED", authDelivery: "context", workspaceContext: "query-required", ownsPathSubtree: true };
+  const route: PlatformExtensionRoute = { basePath: root, handlerKey: "HOSTED", authDelivery: "context", workspaceContext: "query-required", ownsPathSubtree: true,
+    contributions: [{ id: "shared-billing", slot: "workspace.billing", href: root, label: "Workspace billing", presentation: "link" }] };
   const rpc = {
     fetchSharedAuth: async () => new Response(null, { status: 204 }),
     authenticateSharedAuth: async function(value: Request): Promise<SharedAuthIdentity> {
@@ -77,6 +78,9 @@ test("actual platform fetch captures RP cookie before generic stripping and send
 
 test("only three published GET views and the four dedicated original-command actions dispatch", async () => {
   const f = fixture();
+  const contributions = await fetch(request("/__takosumi/platform/contributions"), f.env);
+  expect(contributions.status).toBe(200);
+  expect((await contributions.json()).contributions).toEqual(f.route.contributions);
   for (const path of [root, root + "/subscription", root + "/top-up"]) {
     expect((await fetch(request(path + "?workspaceId=ws_selected"), f.env)).status).toBe(200);
   }
@@ -113,7 +117,10 @@ test("URLencoded exact cash and retained-action consent remain byte-for-byte unm
 test("invalid public paths, methods and selectors reject before authentication or financial RPC", async () => {
   const f = fixture();
   const invalid: [Request, number][] = [
+    ...["config", "transactions", "checkout", "auto-recharge", "portal"].map((path): [Request, number] =>
+      [request(root + "/" + path + "?workspaceId=ws_selected"), 404]),
     [request(root + "/summary?workspaceId=ws_selected"), 404],
+    [request(root + "?workspaceId=ws_selected&embed=1"), 400],
     [request(root + "/subscription/extra?workspaceId=ws_selected"), 404],
     [request(root + "/?workspaceId=ws_selected"), 404],
     [request(root + "/subscription/cancel?workspaceId=ws_selected"), 405],

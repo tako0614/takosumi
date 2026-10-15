@@ -32,7 +32,8 @@ test("native actual platform fetch crosses the narrow Worker RPC with one bounde
     { name: "gateway", compatibilityDate: "2026-07-17", compatibilityFlags: ["nodejs_compat"],
       modules: [{ type: "ESModule", path: "browser-billing-gateway.mjs", contents: gatewaySource }],
       bindings: { TAKOSUMI_SHARED_AUTH_PROFILE: "shared-account", TAKOSUMI_SHARED_AUTH_ORIGIN: origin, TAKOSUMI_ENVIRONMENT: "staging",
-        TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([{ basePath: root, handlerKey: "HOSTED", authDelivery: "context", workspaceContext: "query-required", ownsPathSubtree: true }]) },
+        TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([{ basePath: root, handlerKey: "HOSTED", authDelivery: "context", workspaceContext: "query-required", ownsPathSubtree: true,
+          contributions: [{ id: "shared-billing", slot: "workspace.billing", href: root, label: "Workspace billing", presentation: "link" }] }]) },
       serviceBindings: { HOSTED: { name: "receiver", entrypoint: "BrowserBillingReceiver" } },
     },
     { name: "receiver", compatibilityDate: "2026-07-17", compatibilityFlags: ["nodejs_compat"],
@@ -67,6 +68,29 @@ test("native actual platform fetch crosses the narrow Worker RPC with one bounde
     expect(await purchase.json()).toEqual({ syntheticTransportProof: true,
       session: { authKind: "session", subject: "tsub_A" }, url: origin + root + "/top-up?workspaceId=ws_A", method: "POST", cookieSeen: true,
       headerNames: ["accept", "content-type", "cookie", "origin", "sec-fetch-site"], body: form });
+    // The explicit link descriptor uses the actual published 3 GET / 4 POST
+    // transport contract. Synthetic receiver success is not financial admission.
+    for (const path of [root, root + "/subscription", root + "/top-up"]) {
+      const response = await call(path + "?workspaceId=ws_A");
+      expect(response.status).toBe(200);
+      expect((await response.json()).url).toBe(origin + path + "?workspaceId=ws_A");
+    }
+    for (const [path, action] of [
+      ["/subscription", { operationKey: "start_original", planKey: "prepaid_10", consent: "subscription-checkout" }],
+      ["/subscription/cancel", { operationKey: "cancel_original", consent: "cancel-subscription" }],
+      ["/subscription/plan", { operationKey: "plan_original", planKey: "prepaid_50", consent: "change-subscription-plan" }],
+      ["/top-up", { operationKey: "topup_original", amountMinor: 1000, checkoutConsent: "interactive-checkout" }],
+    ] as const) {
+      const body = JSON.stringify({ workspaceId: "ws_A", ...action });
+      const response = await call(root + path + "?workspaceId=ws_A", { method: "POST", body,
+        headers: { origin, "content-type": "application/json" } });
+      expect(response.status).toBe(200);
+      expect((await response.json()).body).toBe(body);
+    }
+    for (const path of ["config", "summary", "transactions", "checkout", "auto-recharge", "portal"]) {
+      expect((await call(root + "/" + path + "?workspaceId=ws_A")).status).toBe(404);
+    }
+    expect((await call(root + "?workspaceId=ws_A&embed=1")).status).toBe(400);
     const concurrent = await Promise.all(["A", "B"].map(async (which) => {
       const result = await call(root + "/subscription?workspaceId=ws_" + which,
         { headers: { cookie: "__Host-takosumi_hosted_session=native_" + which } });
