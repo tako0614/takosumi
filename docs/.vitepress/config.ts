@@ -1,35 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { type DefaultTheme, defineConfig } from "vitepress";
+import { firstParagraphText, wrappedLines } from "./wrapped-lines";
 
 // Pages rarely carry a frontmatter description. Fall back to the first prose
 // paragraph of the Markdown source so a shared link describes the actual page
 // rather than repeating the site blurb.
 function firstParagraph(srcDir: string, relativePath: string): string | undefined {
   try {
-    const raw = readFileSync(path.join(srcDir, relativePath), "utf8");
-    const body = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
-    for (const line of body.split("\n")) {
-      const text = line.trim();
-      if (
-        text === "" ||
-        text.startsWith("#") ||
-        text.startsWith("<") ||
-        text.startsWith("```") ||
-        text.startsWith("---") ||
-        text.startsWith(":::") ||
-        text.startsWith("|")
-      )
-        continue;
-      const plain = text
-        .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-        .replace(/<[^>]+>/g, "")
-        .replace(/\{#[^}]+\}/g, "")
-        .replace(/[*_`~]/g, "")
-        .replace(/\s+/g, " ")
-        .trim();
-      if (plain !== "") return plain.slice(0, 200);
-    }
+    return firstParagraphText(readFileSync(path.join(srcDir, relativePath), "utf8"));
   } catch {
     // Fall back to the site-level description below.
   }
@@ -261,6 +240,11 @@ export default defineConfig({
   },
   // Public docs must not publish product-local design notes or operator runbooks.
   srcExclude: ["internal/**/*.md", "operations/**/*.md"],
+  markdown: {
+    config(md) {
+      wrappedLines(md);
+    },
+  },
   cleanUrls: true,
   lastUpdated: true,
   vite: {
