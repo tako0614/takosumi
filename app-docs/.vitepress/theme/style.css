@@ -71,9 +71,22 @@
   text-underline-offset: 0.18em;
 }
 
-.vp-doc table {
+/* Wide tables scroll inside their wrapper (docs/.vitepress/scrollable-tables.ts)
+ * instead of widening the page; narrow ones still fill the column. */
+.vp-doc .table-scroll {
+  margin: 20px 0;
+  overflow-x: auto;
+}
+
+.vp-doc .table-scroll:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 2px;
+}
+
+.vp-doc .table-scroll > table {
   display: table;
   width: 100%;
+  margin: 0;
 }
 
 /* Seven nav items do not fit the inline nav bar VitePress shows from 768px,
