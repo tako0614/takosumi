@@ -295,6 +295,36 @@ history before recovery. Historical rollback remains owned by
 `takosumi-platform-staging`; this lane creates no plan, journal, archive, or
 parallel restore mechanism.
 
+### Optional private Run file machine ingress
+
+The source supports an optional `TAKOSUMI_PRIVATE_RUN_FILES` nonsecret JSON
+variable with exactly `endpoint`, `prefix`, and `maxBytes`. Absence keeps this
+machine-only route off. `endpoint` is a canonical absolute HTTPS URL ending in
+`/internal/private-run-files/v1`, with no userinfo, query or fragment;
+`maxBytes` is exactly 16777216. The isolated prefix is at most 240 ASCII
+characters, with nonempty `[A-Za-z0-9._-]+` slash-separated segments excluding
+`.` and `..`. The whole JSON value is at most 4096 UTF-8 bytes. Unknown keys
+and invalid configuration refuse initialization.
+
+The host composes one immutable configuration into both the request service
+and RunOwner service, including Core's existing grant minter. Slot declarations
+remain the owning host's canonical InstallConfigs; this variable cannot add
+slots or supply credentials. Only exact endpoint operation URLs accept POST,
+using Core's sealed per-Run private-file capability. Browser session context,
+ordinary user/PAT/operator bearers, and request body scope fields do not grant
+access. The current lease, Capsule epoch, encrypted R2 custody and atomic D1
+receipt checks remain enforced. The existing shared-auth ingress guard stays
+in front of this route; no broad internal-edge opt-in is needed.
+
+This is an optional source composition, not evidence that any deployed host
+has enabled or qualified it. Do not add the variable as part of an unrelated
+code-only release: adoption requires the actual endpoint and isolated prefix,
+existing D1/R2/encryption authority, an authorized slot-bearing InstallConfig,
+and the owning Runner/Provider qualification and retention decision. Keep it
+absent while those inputs are unavailable. See
+[the private Run files contract](../internal/private-run-files.md) for grant
+rotation, unknown receipt handling and retained-byte obligations.
+
 ### Shared-account browser billing descriptor
 
 The shared-account browser billing bridge serves full documents and dedicated

@@ -53,6 +53,8 @@ import {
   OpenTofuRunnerObject,
 } from "../../worker/src/handler.ts";
 import { cachedDeployControlService } from "../../worker/src/deploy_control_seam.ts";
+import { privateRunFilesCompositionFor } from "../../worker/src/private_run_files_composition.ts";
+import { PRIVATE_RUN_FILE_HTTP_PATH } from "../../core/api/private_run_file_routes.ts";
 import {
   authenticateSharedAuthRequest,
   handleSharedAuthRouteRequest,
@@ -660,6 +662,8 @@ export default {
   ): Promise<Response> {
     const sharedIngressFailure = sharedAuthRequestFailure(request, env);
     if (sharedIngressFailure) return sharedIngressFailure;
+    const privateFilesResponse = await handlePlatformPrivateRunFilesRequest(request, env, context);
+    if (privateFilesResponse) return privateFilesResponse;
     const metricsResponse = await handlePlatformMetricsRequest(request, env);
     if (metricsResponse) return metricsResponse;
     const internalEdgeResponse = await handlePlatformInternalEdgeRequest(
@@ -906,6 +910,31 @@ export default {
     }
   },
 };
+
+/** Only the Core sealed capability authorizes this machine route, never a browser session. */
+async function handlePlatformPrivateRunFilesRequest(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  context?: PlatformExecutionContext,
+): Promise<Response | undefined> {
+  const url = new URL(request.url);
+  if (url.pathname !== "/internal/private-run-files" && !url.pathname.startsWith("/internal/private-run-files/")) return undefined;
+  const reject = (status: number, kind: string) => Response.json({ kind }, { status, headers: { "cache-control": "no-store" } });
+  try {
+    const configuration = privateRunFilesCompositionFor(env);
+    if (!configuration) return reject(404, "not_found");
+    if (!["read", "commit", "resolve"].some(operation => request.url === `${configuration.endpoint}/${operation}`) || !url.pathname.startsWith(`${PRIVATE_RUN_FILE_HTTP_PATH}/`)) return reject(404, "not_found");
+    if (request.method !== "POST") return reject(405, "method_not_allowed");
+    if (request.headers.has("origin") || request.headers.has("cookie") || request.headers.has("x-takosumi-account-session")) return reject(403, "authorization_rejected");
+    const service = await cachedDeployControlService(env);
+    const response = await service.app.fetch(request, undefined, honoExecutionContext(context));
+    const headers = new Headers(response.headers);
+    headers.set("cache-control", "no-store");
+    return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  } catch {
+    return reject(503, "unavailable");
+  }
+}
 
 const SCHEDULED_INTERFACE_MATERIALIZATION_INTENT_LIMIT = 25;
 const SCHEDULED_INTERFACE_MATERIALIZATION_WORK_ITEM_LIMIT = 64;

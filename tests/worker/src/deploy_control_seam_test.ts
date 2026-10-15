@@ -539,3 +539,21 @@ test("requests that do not need the ledger never wait on the bootstrap", async (
 
   expect(blockedSettled).toBe(false);
 });
+
+test("private-file options are pinned before deferred service and RunOwner initialization", async () => {
+  const configuration = { endpoint: "https://private.example/internal/private-run-files/v1", prefix: "test/private-files", maxBytes: 16 * 1024 * 1024 };
+  const db = new BlockedControlD1();
+  const env = { TAKOSUMI_CONTROL_DB: db, TAKOSUMI_PRIVATE_RUN_FILES: JSON.stringify(configuration) } as unknown as CloudflareWorkerEnv;
+  const seam = createInProcessDeployControlSeam(env);
+  expect(seam).toBeDefined();
+  const first = deployControlServiceOptions(env).privateRunFiles;
+  expect(first).toEqual(configuration);
+  expect(deployControlServiceOptions(env).privateRunFiles).toBe(first);
+  expect(db.uses).toBe(0);
+  Object.assign(env, { TAKOSUMI_PRIVATE_RUN_FILES: JSON.stringify({ ...configuration, endpoint: "https://changed.example/internal/private-run-files/v1" }) });
+  expect(() => createInProcessDeployControlSeam(env)).toThrow("cannot change");
+  expect(() => deployControlServiceOptions(env)).toThrow("cannot change");
+  const { cachedRunOwnerDeployControlService } = await import("../../../worker/src/deploy_control_seam.ts");
+  expect(() => cachedRunOwnerDeployControlService(env)).toThrow("cannot change");
+  expect(db.uses).toBe(0);
+});

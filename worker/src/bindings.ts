@@ -160,6 +160,10 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * manifest, or OpenTofu Output.
    */
   readonly TAKOSUMI_INSTALL_CONFIG_COMPOSITION?: readonly import("takosumi-contract/install-configs").InstallConfig[];
+  /** Optional closed nonsecret {endpoint,prefix,maxBytes}; absence keeps the machine route off. */
+  readonly TAKOSUMI_PRIVATE_RUN_FILES?: string;
+  /** Immutable host-code projection of that descriptor, never a request or slot declaration. */
+  readonly TAKOSUMI_PRIVATE_RUN_FILES_COMPOSITION?: import("./worker_service.ts").WorkerPrivateRunFilesComposition;
   /**
    * Optional default profile for generic Capsule plans when the public request
    * does not pass runnerProfileId. Must be one of the enabled runner profiles;
