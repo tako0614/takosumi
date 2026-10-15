@@ -1,3 +1,4 @@
+import { SqlWorkspaceFinancialSource, type FinancialSourceSqlPort, type WorkspaceFinancialSourceStore } from "../../core/domains/workspaces/financial-source.ts";
 /**
  * D1-backed control-plane ledger (core-spec.md §27) — Workspace-direct Capsule
  * model.
@@ -2454,7 +2455,7 @@ export async function verifyD1BackupOwnerIndexesPredeployed(db: D1Database): Pro
     // Maintenance is mutable and never covered by a cached catalog decision.
     await assertControlD1MaintenanceInactive(db);
     if (!attempt) {
-      attempt = verifyD1OpenTofuLedgerSchemaPredeployed(db);
+      attempt = verifyD1PredeployedSchemaEvidence(db, 74);
       backupOwnerD1SchemaReadiness.set(db, attempt);
     }
     await attempt;
@@ -2550,6 +2551,31 @@ class D1RequestMaintenanceScope {
 }
 
 export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
+  #financialSourceStore():SqlWorkspaceFinancialSource {
+    const db=this.db;
+    const port:FinancialSourceSqlPort={dialect:"d1",
+      query:async(statement,parameters=[])=>{
+        await this.#ensureSchema();
+        // The new capability always qualifies its actual global constraints
+        // and hooks, including a warmed bootstrap handle. Historical ordinary
+        // runtime and Backup floors do not call this source-only verifier.
+        await verifyD1OpenTofuLedgerSchemaPredeployed(db);
+        const result=await db.prepare(statement).bind(...parameters).all<Record<string,unknown>>();
+        return result.results??[];
+      },
+      enroll:async(_workspaceId,action)=>action(port),
+    };
+    return new SqlWorkspaceFinancialSource(port);
+  }
+  prepareWorkspaceFinancialEnrollment(...args:Parameters<WorkspaceFinancialSourceStore["prepareWorkspaceFinancialEnrollment"]>){return this.#financialSourceStore().prepareWorkspaceFinancialEnrollment(...args);}
+  enrollWorkspaceFinancialSource(...args:Parameters<WorkspaceFinancialSourceStore["enrollWorkspaceFinancialSource"]>){return this.#financialSourceStore().enrollWorkspaceFinancialSource(...args);}
+  getWorkspaceFinancialSourceHead(...args:Parameters<WorkspaceFinancialSourceStore["getWorkspaceFinancialSourceHead"]>){return this.#financialSourceStore().getWorkspaceFinancialSourceHead(...args);}
+  captureWorkspaceFinancialSourceSnapshot(...args:Parameters<WorkspaceFinancialSourceStore["captureWorkspaceFinancialSourceSnapshot"]>){return this.#financialSourceStore().captureWorkspaceFinancialSourceSnapshot(...args);}
+  listWorkspaceFinancialRawEvents(...args:Parameters<WorkspaceFinancialSourceStore["listWorkspaceFinancialRawEvents"]>){return this.#financialSourceStore().listWorkspaceFinancialRawEvents(...args);}
+  getWorkspaceFinancialMaterialization(...args:Parameters<WorkspaceFinancialSourceStore["getWorkspaceFinancialMaterialization"]>){return this.#financialSourceStore().getWorkspaceFinancialMaterialization(...args);}
+  materializeWorkspaceFinancialEvent(...args:Parameters<WorkspaceFinancialSourceStore["materializeWorkspaceFinancialEvent"]>){return this.#financialSourceStore().materializeWorkspaceFinancialEvent(...args);}
+  recordWorkspaceFinancialReceipt(...args:Parameters<WorkspaceFinancialSourceStore["recordWorkspaceFinancialReceipt"]>){return this.#financialSourceStore().recordWorkspaceFinancialReceipt(...args);}
+  listWorkspaceFinancialPendingEvents(...args:Parameters<WorkspaceFinancialSourceStore["listWorkspaceFinancialPendingEvents"]>){return this.#financialSourceStore().listWorkspaceFinancialPendingEvents(...args);}
   readonly persistence = "durable" as const;
   readonly #orm: DrizzleD1Database<typeof schema>;
   readonly #schemaMode: D1OpenTofuControlSchemaMode;
@@ -16730,6 +16756,40 @@ const D1_BACKUP_OWNER_INDEX_STATEMENTS = [
   `create index if not exists backups_legacy_created_by_run_text_idx on backups((cast((case when json_valid(record_json) = 1 then json_extract(record_json, '$.createdByRunId') else null end) as text)))`,
 ] as const;
 
+const D1_WORKSPACE_FINANCIAL_SOURCE_STATEMENTS = [
+  "create table if not exists workspace_financial_sources (\n workspace_id text primary key, source_ref text not null, incarnation text not null,\n registration_json text not null, enrollment_json text not null, identity_json text not null,\n permission_sequence integer not null default 0 check(permission_sequence between 0 and 9007199254740991),\n last_event_ref text, management_state text not null, closed integer not null default 0 check(closed in (0,1)),\n materialized_sequence integer not null default 0 check(materialized_sequence between 0 and permission_sequence),\n materialized_digest text not null, enrolled_at text not null\n)",
+  "create unique index if not exists workspace_financial_sources_source_ref_unique on workspace_financial_sources(source_ref)",
+  "create table if not exists workspace_financial_events (\n event_ref text primary key, workspace_id text not null, source_ref text not null, incarnation text not null,\n sequence integer not null check(sequence between 1 and 9007199254740991), previous_event_ref text,\n kind text not null, payload_json text not null, closed integer not null check(closed in (0,1)), recorded_at text not null\n)",
+  "create unique index if not exists workspace_financial_events_workspace_sequence_unique on workspace_financial_events(workspace_id,sequence)",
+  "create table if not exists workspace_financial_materializations (\n event_ref text primary key, source_ref text not null, incarnation text not null, sequence integer not null,\n previous_digest text not null, digest text not null, expected_head_json text not null, record_json text not null\n)",
+  "create table if not exists workspace_financial_receipts (\n event_ref text not null, receiver_ref text not null, target_ref text not null, record_json text not null,\n primary key(event_ref,receiver_ref)\n)",
+  "create trigger if not exists workspace_financial_events_update_immutable before update on workspace_financial_events begin select raise(abort,'Immutable financial source custody'); end",
+  "create trigger if not exists workspace_financial_events_delete_immutable before delete on workspace_financial_events begin select raise(abort,'Immutable financial source custody'); end",
+  "create trigger if not exists workspace_financial_materializations_update_immutable before update on workspace_financial_materializations begin select raise(abort,'Immutable financial source custody'); end",
+  "create trigger if not exists workspace_financial_materializations_delete_immutable before delete on workspace_financial_materializations begin select raise(abort,'Immutable financial source custody'); end",
+  "create trigger if not exists workspace_financial_receipts_update_immutable before update on workspace_financial_receipts begin select raise(abort,'Immutable financial source custody'); end",
+  "create trigger if not exists workspace_financial_receipts_delete_immutable before delete on workspace_financial_receipts begin select raise(abort,'Immutable financial source custody'); end",
+  "create trigger if not exists workspace_financial_materializations_progress after insert on workspace_financial_materializations begin\n select case when not exists(select 1 from workspace_financial_events e join workspace_financial_sources h on h.workspace_id=e.workspace_id\n where e.event_ref=NEW.event_ref and e.source_ref=NEW.source_ref and e.incarnation=NEW.incarnation and e.sequence=NEW.sequence\n and h.materialized_sequence=NEW.sequence-1 and h.materialized_digest=NEW.previous_digest\n and h.permission_sequence=json_extract(NEW.expected_head_json,'$.permissionSequence') and h.closed=json_extract(NEW.expected_head_json,'$.closed') and h.last_event_ref is json_extract(NEW.expected_head_json,'$.lastEventRef') and h.management_state=json_extract(NEW.expected_head_json,'$.managementState')\n and (NEW.sequence=1 and e.previous_event_ref is null or exists(select 1 from workspace_financial_materializations prior\n where prior.event_ref=e.previous_event_ref and prior.sequence=NEW.sequence-1 and prior.source_ref=NEW.source_ref and prior.incarnation=NEW.incarnation and prior.digest=NEW.previous_digest))) then raise(abort,'Financial materialization predecessor conflict') end;\n update workspace_financial_sources set materialized_sequence=NEW.sequence,materialized_digest=NEW.digest where workspace_id=(select workspace_id from workspace_financial_events where event_ref=NEW.event_ref);\n end",
+  "create trigger if not exists workspaces_financial_source_insert after insert on workspaces begin\n \n select case when exists(select 1 from workspace_financial_sources where workspace_id=NEW.id) then raise(abort,'Financial source is permanently closed') end;\n insert into workspace_financial_events(event_ref,workspace_id,source_ref,incarnation,sequence,previous_event_ref,kind,payload_json,closed,recorded_at)\n select source_ref || '/event/' || (permission_sequence+1),workspace_id,source_ref,incarnation,permission_sequence+1,last_event_ref,'workspace-update',\n json_object('before',json('null'),'after',json(json_object('record_json',json(NEW.record_json),'id',NEW.id,'handle',NEW.handle,'created_at',NEW.created_at,'updated_at',NEW.updated_at,'management_state',NEW.management_state,'management_epoch',NEW.management_epoch,'personal_bootstrap_owner_id',NEW.personal_bootstrap_owner_id))),0,strftime('%Y-%m-%dT%H:%M:%fZ','now') from workspace_financial_sources where workspace_id=NEW.id and closed=0 and 1;\n update workspace_financial_sources set permission_sequence=permission_sequence+1,last_event_ref=source_ref || '/event/' || (permission_sequence+1),closed=0,management_state=NEW.management_state\n where workspace_id=NEW.id and closed=0 and 1;\n end",
+  "create trigger if not exists workspaces_financial_source_update before update on workspaces begin\n select case when NEW.id is not OLD.id and exists(select 1 from workspace_financial_sources where workspace_id in (OLD.id,NEW.id)) then raise(abort,'Financial Workspace identity relocation refused') end;\n select case when exists(select 1 from workspace_financial_sources where workspace_id=NEW.id and closed=1) then raise(abort,'Financial source is permanently closed') end;\n insert into workspace_financial_events(event_ref,workspace_id,source_ref,incarnation,sequence,previous_event_ref,kind,payload_json,closed,recorded_at)\n select source_ref || '/event/' || (permission_sequence+1),workspace_id,source_ref,incarnation,permission_sequence+1,last_event_ref,case when OLD.management_state is not NEW.management_state or OLD.management_epoch is not NEW.management_epoch then 'management-update' else 'workspace-update' end,\n json_object('before',json(json_object('record_json',json(OLD.record_json),'id',OLD.id,'handle',OLD.handle,'created_at',OLD.created_at,'updated_at',OLD.updated_at,'management_state',OLD.management_state,'management_epoch',OLD.management_epoch,'personal_bootstrap_owner_id',OLD.personal_bootstrap_owner_id)),'after',json(json_object('record_json',json(NEW.record_json),'id',NEW.id,'handle',NEW.handle,'created_at',NEW.created_at,'updated_at',NEW.updated_at,'management_state',NEW.management_state,'management_epoch',NEW.management_epoch,'personal_bootstrap_owner_id',NEW.personal_bootstrap_owner_id))),0,strftime('%Y-%m-%dT%H:%M:%fZ','now') from workspace_financial_sources where workspace_id=NEW.id and closed=0 and (OLD.record_json is not NEW.record_json or OLD.id is not NEW.id or OLD.handle is not NEW.handle or OLD.management_state is not NEW.management_state or OLD.management_epoch is not NEW.management_epoch or OLD.personal_bootstrap_owner_id is not NEW.personal_bootstrap_owner_id or OLD.created_at is not NEW.created_at or OLD.updated_at is not NEW.updated_at);\n update workspace_financial_sources set permission_sequence=permission_sequence+1,last_event_ref=source_ref || '/event/' || (permission_sequence+1),closed=0,management_state=NEW.management_state\n where workspace_id=NEW.id and closed=0 and (OLD.record_json is not NEW.record_json or OLD.id is not NEW.id or OLD.handle is not NEW.handle or OLD.management_state is not NEW.management_state or OLD.management_epoch is not NEW.management_epoch or OLD.personal_bootstrap_owner_id is not NEW.personal_bootstrap_owner_id or OLD.created_at is not NEW.created_at or OLD.updated_at is not NEW.updated_at);\n end",
+  "create trigger if not exists workspaces_financial_source_delete before delete on workspaces begin\n \n select case when exists(select 1 from workspace_financial_sources where workspace_id=OLD.id and closed=1) then raise(abort,'Financial source is permanently closed') end;\n insert into workspace_financial_events(event_ref,workspace_id,source_ref,incarnation,sequence,previous_event_ref,kind,payload_json,closed,recorded_at)\n select source_ref || '/event/' || (permission_sequence+1),workspace_id,source_ref,incarnation,permission_sequence+1,last_event_ref,'workspace-delete',\n json_object('before',json(json_object('record_json',json(OLD.record_json),'id',OLD.id,'handle',OLD.handle,'created_at',OLD.created_at,'updated_at',OLD.updated_at,'management_state',OLD.management_state,'management_epoch',OLD.management_epoch,'personal_bootstrap_owner_id',OLD.personal_bootstrap_owner_id)),'after',json('null')),1,strftime('%Y-%m-%dT%H:%M:%fZ','now') from workspace_financial_sources where workspace_id=OLD.id and closed=0 and 1;\n update workspace_financial_sources set permission_sequence=permission_sequence+1,last_event_ref=source_ref || '/event/' || (permission_sequence+1),closed=1,management_state=management_state\n where workspace_id=OLD.id and closed=0 and 1;\n end",
+  "create trigger if not exists workspace_members_financial_source_insert after insert on workspace_members begin\n \n select case when exists(select 1 from workspace_financial_sources where workspace_id=NEW.workspace_id and closed=1) then raise(abort,'Financial source is permanently closed') end;\n insert into workspace_financial_events(event_ref,workspace_id,source_ref,incarnation,sequence,previous_event_ref,kind,payload_json,closed,recorded_at)\n select source_ref || '/event/' || (permission_sequence+1),workspace_id,source_ref,incarnation,permission_sequence+1,last_event_ref,'member-insert',\n json_object('before',json('null'),'after',json(json_object('id',NEW.id,'workspace_id',NEW.workspace_id,'account_id',NEW.account_id,'status',NEW.status,'record_json',json(NEW.record_json),'created_at',NEW.created_at,'updated_at',NEW.updated_at))),0,strftime('%Y-%m-%dT%H:%M:%fZ','now') from workspace_financial_sources where workspace_id=NEW.workspace_id and closed=0 and 1;\n update workspace_financial_sources set permission_sequence=permission_sequence+1,last_event_ref=source_ref || '/event/' || (permission_sequence+1),closed=0,management_state=management_state\n where workspace_id=NEW.workspace_id and closed=0 and 1;\n end",
+  "create trigger if not exists workspace_members_financial_source_update before update on workspace_members begin\n select case when NEW.workspace_id is not OLD.workspace_id and exists(select 1 from workspace_financial_sources where workspace_id in (OLD.workspace_id,NEW.workspace_id)) then raise(abort,'Financial member identity relocation refused') end;\n select case when exists(select 1 from workspace_financial_sources where workspace_id=NEW.workspace_id and closed=1) then raise(abort,'Financial source is permanently closed') end;\n insert into workspace_financial_events(event_ref,workspace_id,source_ref,incarnation,sequence,previous_event_ref,kind,payload_json,closed,recorded_at)\n select source_ref || '/event/' || (permission_sequence+1),workspace_id,source_ref,incarnation,permission_sequence+1,last_event_ref,'member-update',\n json_object('before',json(json_object('id',OLD.id,'workspace_id',OLD.workspace_id,'account_id',OLD.account_id,'status',OLD.status,'record_json',json(OLD.record_json),'created_at',OLD.created_at,'updated_at',OLD.updated_at)),'after',json(json_object('id',NEW.id,'workspace_id',NEW.workspace_id,'account_id',NEW.account_id,'status',NEW.status,'record_json',json(NEW.record_json),'created_at',NEW.created_at,'updated_at',NEW.updated_at))),0,strftime('%Y-%m-%dT%H:%M:%fZ','now') from workspace_financial_sources where workspace_id=NEW.workspace_id and closed=0 and (OLD.record_json is not NEW.record_json or OLD.workspace_id is not NEW.workspace_id or OLD.account_id is not NEW.account_id or OLD.status is not NEW.status or OLD.id is not NEW.id or OLD.created_at is not NEW.created_at or OLD.updated_at is not NEW.updated_at);\n update workspace_financial_sources set permission_sequence=permission_sequence+1,last_event_ref=source_ref || '/event/' || (permission_sequence+1),closed=0,management_state=management_state\n where workspace_id=NEW.workspace_id and closed=0 and (OLD.record_json is not NEW.record_json or OLD.workspace_id is not NEW.workspace_id or OLD.account_id is not NEW.account_id or OLD.status is not NEW.status or OLD.id is not NEW.id or OLD.created_at is not NEW.created_at or OLD.updated_at is not NEW.updated_at);\n end",
+  "create trigger if not exists workspace_members_financial_source_delete before delete on workspace_members begin\n \n select case when 0 then raise(abort,'Financial source is permanently closed') end;\n insert into workspace_financial_events(event_ref,workspace_id,source_ref,incarnation,sequence,previous_event_ref,kind,payload_json,closed,recorded_at)\n select source_ref || '/event/' || (permission_sequence+1),workspace_id,source_ref,incarnation,permission_sequence+1,last_event_ref,'member-delete',\n json_object('before',json(json_object('id',OLD.id,'workspace_id',OLD.workspace_id,'account_id',OLD.account_id,'status',OLD.status,'record_json',json(OLD.record_json),'created_at',OLD.created_at,'updated_at',OLD.updated_at)),'after',json('null')),0,strftime('%Y-%m-%dT%H:%M:%fZ','now') from workspace_financial_sources where workspace_id=OLD.workspace_id and closed=0 and 1;\n update workspace_financial_sources set permission_sequence=permission_sequence+1,last_event_ref=source_ref || '/event/' || (permission_sequence+1),closed=0,management_state=management_state\n where workspace_id=OLD.workspace_id and closed=0 and 1;\n end",
+  "create trigger if not exists workspace_billing_bindings_financial_source_update before update on workspace_billing_bindings when exists(select 1 from workspace_financial_sources where workspace_id=OLD.workspace_id) begin select raise(abort,'Enrolled financial binding is immutable'); end",
+  "create trigger if not exists workspace_billing_bindings_financial_source_delete before delete on workspace_billing_bindings when exists(select 1 from workspace_financial_sources where workspace_id=OLD.workspace_id) begin select raise(abort,'Enrolled financial binding is immutable'); end",
+  "create trigger if not exists workspace_financial_sources_delete_retained before delete on workspace_financial_sources begin select raise(abort,'Financial source tombstone is retained'); end",
+  "create trigger if not exists workspace_financial_sources_update_guard before update on workspace_financial_sources begin\n select case when NEW.workspace_id is not OLD.workspace_id or NEW.source_ref is not OLD.source_ref or NEW.incarnation is not OLD.incarnation\n or NEW.registration_json is not OLD.registration_json or NEW.enrollment_json is not OLD.enrollment_json or NEW.identity_json is not OLD.identity_json or NEW.enrolled_at is not OLD.enrolled_at or OLD.closed=1 and NEW.closed<>1\n then raise(abort,'Immutable financial source identity') end;\n select case when NEW.permission_sequence<>OLD.permission_sequence and (NEW.permission_sequence<>OLD.permission_sequence+1 or NEW.materialized_sequence<>OLD.materialized_sequence or NEW.materialized_digest<>OLD.materialized_digest\n or not exists(select 1 from workspace_financial_events e where e.event_ref=NEW.last_event_ref and e.workspace_id=OLD.workspace_id and e.sequence=NEW.permission_sequence and e.source_ref=OLD.source_ref and e.incarnation=OLD.incarnation and e.previous_event_ref is OLD.last_event_ref and e.closed=NEW.closed))\n then raise(abort,'Noncontiguous financial source event') end;\n select case when NEW.permission_sequence=OLD.permission_sequence and (NEW.last_event_ref is not OLD.last_event_ref or NEW.closed<>OLD.closed or NEW.management_state<>OLD.management_state)\n then raise(abort,'Financial source mutation needs raw event') end;\n select case when NEW.materialized_sequence<>OLD.materialized_sequence and (NEW.materialized_sequence<>OLD.materialized_sequence+1 or NEW.permission_sequence<>OLD.permission_sequence\n or not exists(select 1 from workspace_financial_materializations m join workspace_financial_events e on e.event_ref=m.event_ref where e.workspace_id=OLD.workspace_id and m.sequence=NEW.materialized_sequence and m.digest=NEW.materialized_digest and m.previous_digest=OLD.materialized_digest))\n then raise(abort,'Noncontiguous financial materialization') end;\n select case when NEW.materialized_sequence=OLD.materialized_sequence and NEW.materialized_digest<>OLD.materialized_digest then raise(abort,'Financial digest rewrite refused') end;\n end"
+] as const;
+
+async function assertWorkspaceFinancialD1Triggers(db:D1Database):Promise<void>{
+  const expected=D1_WORKSPACE_FINANCIAL_SOURCE_STATEMENTS.filter(statement=>statement.startsWith("create trigger "));
+  const names=expected.map(statement=>/^create trigger (?:if not exists )?(\w+)/u.exec(statement)![1]!);
+  const result=await db.prepare(`select name,sql from sqlite_master where type='trigger' and name in (${names.map(()=>"?").join(",")})`).bind(...names).all<{readonly name:string;readonly sql:string}>();
+  if(result.results?.length!==expected.length||expected.some((statement,index)=>normalizedD1IndexSql((result.results!.find(row=>row.name===names[index])?.sql??"").replace(/create trigger if not exists /iu,"create trigger "))!==normalizedD1IndexSql(statement.replace("create trigger if not exists ","create trigger "))))
+    throw new Error("D1 Workspace financial source trigger qualification failed");
+}
+
 const D1_OPEN_TOFU_SCHEMA_MIGRATIONS = [
   {
     version: 1,
@@ -18933,6 +18993,14 @@ ${D1_BACKUP_OWNER_INDEX_STATEMENTS.join("\n---\n")}`,
     async atomicStatements() { return D1_BACKUP_OWNER_INDEX_STATEMENTS; },
     async apply(db) { await runD1AtomicSql(db, D1_BACKUP_OWNER_INDEX_STATEMENTS); },
   },
+  {
+    version: 75,
+    name: "d1_workspace_financial_source",
+    checksumSource: () => `Explicit original Workspace permission-source enrollment, immutable raw events/materializations/receipts and same-primary mutation triggers. No ephemeral FK/cascade.
+${D1_WORKSPACE_FINANCIAL_SOURCE_STATEMENTS.join("\n---\n")}`,
+    async atomicStatements() { return D1_WORKSPACE_FINANCIAL_SOURCE_STATEMENTS; },
+    async apply(db) { await runD1AtomicSql(db, D1_WORKSPACE_FINANCIAL_SOURCE_STATEMENTS); },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
@@ -19885,7 +19953,8 @@ const D1_RUNTIME_STRUCTURE_PROJECTION = `(
   from sqlite_master master where master.type = 'table' and master.name in (
     'workspaces', 'workspace_members', 'interface_bindings', 'scheduled_sweep_cursors',
     'workspace_billing_intents', 'workspace_billing_bindings',
-    'identity_reconciliation_operations', 'identity_reconciliation_events', 'backups')
+    'identity_reconciliation_operations', 'identity_reconciliation_events', 'backups',
+    'workspace_financial_sources','workspace_financial_events','workspace_financial_materializations','workspace_financial_receipts')
 )`;
 
 type D1RuntimeIndex = {
@@ -19954,7 +20023,7 @@ function validateD1RuntimeStructures(value: unknown, head: number): void {
       const column = table.columns.find((item) => item.name === columnName);
       return !column || column.type.toLowerCase() !== type || column.notnull !== required || column.pk !== pk;
     }) || indexes.some(([indexName, columns, partial = 0]) => !table.indexes.some((index) => index.name === indexName && index.unique === 1 && index.partial === partial && stableStringify(index.columns) === stableStringify(columns))) ||
-      (name.startsWith("identity_reconciliation_") && table.foreignKeys !== 0)) throw new Error("D1 OpenTofu predeployed schema verification failed");
+      ((name.startsWith("identity_reconciliation_") || name.startsWith("workspace_financial_")) && table.foreignKeys !== 0)) throw new Error("D1 OpenTofu predeployed schema verification failed");
   };
   check("workspaces", [["id", "text", 0, 1], ["handle", "text", 1], ["record_json", "text", 1], ["created_at", "text", 1], ["updated_at", "text", 1],
     ["owner_user_id", "text", 0], ["workspace_type", "text", 0], ["personal_bootstrap_owner_id", "text", 0], ["management_state", "text", 1], ["management_epoch", "integer", 1]],
@@ -19977,6 +20046,28 @@ function validateD1RuntimeStructures(value: unknown, head: number): void {
     check("identity_reconciliation_events", [["operation_id", "text", 1, 1], ["revision", "integer", 1, 2], ["mutation_id", "text", 1], ["record_json", "text", 1], ["recorded_at", "text", 1]],
       [["identity_reconciliation_events_mutation_unique", ["mutation_id"]]]);
   }
+  if(head>=75){
+    check("workspace_financial_sources",[["workspace_id","text",0,1],["source_ref","text",1],["incarnation","text",1],["registration_json","text",1],["enrollment_json","text",1],["identity_json","text",1],
+      ["permission_sequence","integer",1],["last_event_ref","text",0],["management_state","text",1],["closed","integer",1],["materialized_sequence","integer",1],["materialized_digest","text",1],["enrolled_at","text",1]]);
+    check("workspace_financial_events",[["event_ref","text",0,1],["workspace_id","text",1],["source_ref","text",1],["incarnation","text",1],["sequence","integer",1],
+      ["previous_event_ref","text",0],["kind","text",1],["payload_json","text",1],["closed","integer",1],["recorded_at","text",1]]);
+    check("workspace_financial_materializations",[["event_ref","text",0,1],["source_ref","text",1],["incarnation","text",1],["sequence","integer",1],
+      ["previous_digest","text",1],["digest","text",1],["expected_head_json","text",1],["record_json","text",1]]);
+    check("workspace_financial_receipts",[["event_ref","text",1,1],["receiver_ref","text",1,2],["target_ref","text",1],["record_json","text",1]]);
+    for(const [tableName,indexName,columns,cids] of [
+      ["workspace_financial_sources","workspace_financial_sources_source_ref_unique",["source_ref"],[1]],
+      ["workspace_financial_events","workspace_financial_events_workspace_sequence_unique",["workspace_id","sequence"],[1,4]],
+    ] as const){
+      const found=tables.get(tableName)!.indexes.filter(index=>index.name===indexName),index=found[0];
+      const xinfo=[...columns.map((name,position)=>({seqno:position,cid:cids[position],name,desc:0,coll:"BINARY",key:1})),
+        {seqno:columns.length,cid:-1,name:null,desc:0,coll:"BINARY",key:0}];
+      const expected=D1_WORKSPACE_FINANCIAL_SOURCE_STATEMENTS.find(statement=>statement.startsWith(`create unique index if not exists ${indexName} `))!;
+      const normalize=(sql:string|null)=>normalizedD1IndexSql(sql)?.replace(/^create unique index if not exists /u,"create unique index ");
+      if(found.length!==1||!index||index.unique!==1||index.partial!==0||stableStringify(index.columns)!==stableStringify(columns)||
+        stableStringify(index.xinfo)!==stableStringify(xinfo)||normalize(index.sql)!==normalize(expected))throw new Error("D1 financial source constraints unavailable");
+    }
+  }
+
   if (head >= 74) {
     check("backups", [["id", "text", 0, 1], ["space_id", "text", 1], ["installation_id", "text", 0], ["environment", "text", 0],
       ["created_by_run_id", "text", 0], ["record_json", "text", 1], ["created_at", "text", 1]]);
@@ -19993,11 +20084,12 @@ function validateD1RuntimeStructures(value: unknown, head: number): void {
 export async function verifyD1OpenTofuLedgerSchemaPredeployed(
   db: D1Database,
 ): Promise<void> {
-  await verifyD1PredeployedSchemaEvidence(db, 74);
+  await verifyD1PredeployedSchemaEvidence(db, 75);
+  await assertWorkspaceFinancialD1Triggers(db);
 }
 
-/** Runtime floors never weaken qualification, which requires exact current v74. */
-async function verifyD1PredeployedSchemaEvidence(db: D1Database, minimumVersion: 71 | 72 | 73 | 74): Promise<void> {
+/** Runtime floors never weaken qualification, which requires exact current v75. */
+async function verifyD1PredeployedSchemaEvidence(db: D1Database, minimumVersion: 71 | 72 | 73 | 74 | 75): Promise<void> {
   let columns: readonly D1TableInfoRow[];
   let rows: readonly D1SchemaMigrationRow[];
   let structures: string | null;
@@ -20027,11 +20119,11 @@ async function verifyD1PredeployedSchemaEvidence(db: D1Database, minimumVersion:
 async function validateD1OpenTofuLedgerSchemaPredeployed(
   columns: readonly D1TableInfoRow[],
   rows: readonly D1SchemaMigrationRow[],
-  minimumVersion: 71 | 72 | 73 | 74 = 74,
+  minimumVersion: 71 | 72 | 73 | 74 | 75 = 75,
 ): Promise<void> {
   assertD1SchemaMigrationLedgerShape(columns);
   const head = rows.at(-1)?.version;
-  if ((head !== 71 && head !== 72 && head !== 73 && head !== 74) || head < minimumVersion) throw new Error("D1 OpenTofu predeployed schema verification failed");
+  if ((head !== 71 && head !== 72 && head !== 73 && head !== 74 && head !== 75) || head < minimumVersion) throw new Error("D1 OpenTofu predeployed schema verification failed");
   const catalog = D1_OPEN_TOFU_SCHEMA_MIGRATIONS.filter((migration) => migration.version <= head);
   if (rows.length !== catalog.length) {
     throw new Error("D1 OpenTofu predeployed schema verification failed");

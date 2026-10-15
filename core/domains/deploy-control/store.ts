@@ -1,3 +1,8 @@
+import {
+  MemoryWorkspaceFinancialSource, workspaceFinancialPage, type WorkspaceFinancialSourceStore, type WorkspaceFinancialEnrollmentCandidate,
+  type WorkspaceFinancialRegistration, type WorkspaceFinancialMaterializationInput,
+  type WorkspaceFinancialReceipt,
+} from "../workspaces/financial-source.ts";
 /**
  * Persistence boundary for the control-plane ledger (core-spec.md §27).
  *
@@ -3497,7 +3502,7 @@ export type CapsuleRuntimeSafety =
       readonly runType: "destroy_apply";
     };
 
-export interface OpenTofuControlStore extends ControlIdentityReconciliationStore {
+export interface OpenTofuControlStore extends ControlIdentityReconciliationStore, WorkspaceFinancialSourceStore {
   /** Declares whether ledger writes survive process restart. */
   readonly persistence: "durable" | "ephemeral";
   putRunnerProfile(profile: RunnerProfile): Promise<RunnerProfile>;
@@ -4282,6 +4287,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   readonly #workspaceMembers = new Map<string, WorkspaceMember>();
   readonly #workspaceBillingIntents = new Map<string, StoredWorkspaceBillingBindingIntent>();
   readonly #workspaceBillingBindings = new Map<string, WorkspaceBillingBinding>();
+  readonly #financialSource = new MemoryWorkspaceFinancialSource();
   readonly #identityOperations = new Map<string, StoredIdentityReconciliationOperation>();
   readonly #identityEvents = new Map<string, IdentityReconciliationEvent>();
   #identityPrincipalStore?: { retainedPrincipalReferences(accountIds: readonly string[]): ControlIdentityInventory["principalReferences"] };
@@ -4318,6 +4324,76 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
 
   constructor() {
     maybeWarnInMemoryStore("InMemoryOpenTofuControlStore");
+  }
+
+  #financialDetach<T>(value:T):T {
+    const result=structuredClone(value);
+    const freeze=(entry:unknown):void=>{if(entry && typeof entry==="object"){for(const value of Object.values(entry))freeze(value);Object.freeze(entry);}};
+    freeze(result);return result;
+  }
+  #financialPutWorkspace(id:string,workspace:Workspace):void {
+    this.#financialSource.record(id,"workspace-update",this.#workspaces.get(id),workspace);
+    this.#workspaces.set(id,this.#financialSource.heads.has(id)?this.#financialDetach(workspace):workspace);
+  }
+  #financialPutMember(key:string,member:WorkspaceMember):void {
+    const before=this.#workspaceMembers.get(key);
+    this.#financialSource.record(member.workspaceId,before?"member-update":"member-insert",before,member);
+    this.#workspaceMembers.set(key,this.#financialSource.heads.has(member.workspaceId)?this.#financialDetach(member):member);
+  }
+  #financialPutManagement(id:string,management:WorkspaceManagement):void {
+    const before=this.#workspaceManagement.get(id);
+    if(before)this.#financialSource.record(id,"management-update",before,management,management.managementState);
+    this.#workspaceManagement.set(id,structuredClone(management));
+  }
+  #financialDeleteWorkspace(id:string):boolean {
+    const before=this.#workspaces.get(id);
+    if(before)this.#financialSource.record(id,"workspace-delete",before,undefined);
+    return this.#workspaces.delete(id);
+  }
+  #financialDeleteMember(key:string):boolean {
+    const before=this.#workspaceMembers.get(key);
+    if(before)this.#financialSource.record(before.workspaceId,"member-delete",before,undefined);
+    return this.#workspaceMembers.delete(key);
+  }
+  #financialCandidate(workspaceId:string):WorkspaceFinancialEnrollmentCandidate|undefined {
+    const workspace=this.#workspaces.get(workspaceId),management=this.#workspaceManagement.get(workspaceId),binding=this.#workspaceBillingBindings.get(workspaceId);
+    if(!workspace||!management||!binding)return undefined;
+    const members=[...this.#workspaceMembers.values()].filter(m=>m.workspaceId===workspaceId).sort((a,b)=>a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id));
+    return structuredClone({workspace,management,binding,members});
+  }
+  async prepareWorkspaceFinancialEnrollment(workspaceId:string){
+    const candidate=this.#financialCandidate(workspaceId);
+    return candidate&&candidate.members.length<=64&&candidate.management.managementState==="active"&&!candidate.workspace.archivedAt?candidate:undefined;
+  }
+  async enrollWorkspaceFinancialSource(input:{original:WorkspaceFinancialEnrollmentCandidate;registration:WorkspaceFinancialRegistration;enrolledAt:string}){
+    input=structuredClone(input);
+    const head=this.#financialSource.enroll(this.#financialCandidate(input.original.workspace.id),input);
+    if(head){
+      // Prevent retained caller references from mutating enrolled authority
+      // without passing the actual source mutation hooks.
+      const id=head.workspaceId,w=this.#workspaces.get(id);
+      if(w)this.#workspaces.set(id,this.#financialDetach(w));
+      for(const [key,m]of this.#workspaceMembers)if(m.workspaceId===id)this.#workspaceMembers.set(key,this.#financialDetach(m));
+    }
+    return head;
+  }
+  async getWorkspaceFinancialSourceHead(workspaceId:string){return structuredClone(this.#financialSource.heads.get(workspaceId));}
+  async captureWorkspaceFinancialSourceSnapshot(input:{workspaceId:string;actorAccountId:string}){
+    return this.#financialSource.snapshot(this.#financialCandidate(input.workspaceId),input.actorAccountId);
+  }
+  async listWorkspaceFinancialRawEvents(input:{workspaceId:string;afterSequence:number;limit:number}){
+    workspaceFinancialPage(input);
+    return structuredClone([...this.#financialSource.events.values()].filter(e=>e.workspaceId===input.workspaceId&&e.permissionSequence>input.afterSequence)
+      .sort((a,b)=>a.permissionSequence-b.permissionSequence).slice(0,input.limit));
+  }
+  async getWorkspaceFinancialMaterialization(eventRef:string){return structuredClone(this.#financialSource.materializations.get(eventRef));}
+  async materializeWorkspaceFinancialEvent(input:WorkspaceFinancialMaterializationInput){return this.#financialSource.materialize(input);}
+  async recordWorkspaceFinancialReceipt(input:WorkspaceFinancialReceipt){return this.#financialSource.receipt(input);}
+  async listWorkspaceFinancialPendingEvents(input:{workspaceId:string;receiverRef:string;afterSequence:number;limit:number}){
+    workspaceFinancialPage(input);
+    return structuredClone([...this.#financialSource.materializations.values()].filter(m=>this.#financialSource.events.get(m.eventRef)?.workspaceId===input.workspaceId&&
+      m.permissionSequence>input.afterSequence&&!this.#financialSource.hasReceipt(m.eventRef,input.receiverRef))
+      .sort((a,b)=>a.permissionSequence-b.permissionSequence).slice(0,input.limit));
   }
 
   /** Pin the actual co-located InterfaceBinding store, never an empty census. */
@@ -4378,7 +4454,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       const key = workspaceMemberKey(memberChange.after.workspaceId, memberChange.after.accountId);
       if (stableStringify(this.#workspaceMembers.get(key)) !== stableStringify(memberChange.before)) return Promise.resolve(false);
       if ([...this.#workspaceMembers.values()].some((row) => row.id === memberChange.after.id && (row.workspaceId !== memberChange.after.workspaceId || row.accountId !== memberChange.after.accountId))) throw new TypeError("Identity reconciliation member identity collision");
-      this.#workspaceMembers.set(key, structuredClone(memberChange.after));
+      this.#financialPutMember(key, structuredClone(memberChange.after));
     }
     this.#identityOperations.set(next.operationId, next);
     this.#identityEvents.set(eventKey, event);
@@ -5263,9 +5339,9 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   putWorkspace(workspace: Workspace): Promise<Workspace> {
-    this.#workspaces.set(workspace.id, workspace);
+    this.#financialPutWorkspace(workspace.id, workspace);
     if (!this.#workspaceManagement.has(workspace.id)) {
-      this.#workspaceManagement.set(workspace.id, {
+      this.#financialPutManagement(workspace.id, {
         workspaceId: workspace.id,
         managementState: "active",
         managementEpoch: 1,
@@ -5286,9 +5362,9 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     // never leave a newly created Workspace without its initial authority.
     if (this.#workspaceMembers.has(workspaceMemberKey(workspace.id, member.accountId)) ||
       Array.from(this.#workspaceMembers.values()).some((row) => row.id === member.id)) throw new Error("Workspace member identity already exists");
-    this.#workspaces.set(workspace.id, structuredClone(workspace));
-    this.#workspaceManagement.set(workspace.id, { workspaceId: workspace.id, managementState: "active", managementEpoch: 1 });
-    this.#workspaceMembers.set(workspaceMemberKey(workspace.id, member.accountId), structuredClone(member));
+    this.#financialPutWorkspace(workspace.id, structuredClone(workspace));
+    this.#financialPutManagement(workspace.id, { workspaceId: workspace.id, managementState: "active", managementEpoch: 1 });
+    this.#financialPutMember(workspaceMemberKey(workspace.id, member.accountId), structuredClone(member));
     return structuredClone(workspace);
   }
 
@@ -5300,7 +5376,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         expectedWorkspaceManagementAuthority,
       );
     }
-    const existed = this.#workspaces.delete(id);
+    const existed = this.#financialDeleteWorkspace(id);
     this.#workspaceManagement.delete(id);
     return Promise.resolve(existed);
   }
@@ -5360,10 +5436,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       }
     }
     if (blockers.length > 0) return { status: "blocked", blockers };
+    this.#financialDeleteWorkspace(expectedWorkspace.id);
     for (const [key, member] of [...this.#workspaceMembers]) {
-      if (member.workspaceId === expectedWorkspace.id) this.#workspaceMembers.delete(key);
+      if (member.workspaceId === expectedWorkspace.id) this.#financialDeleteMember(key);
     }
-    this.#workspaces.delete(expectedWorkspace.id);
     this.#workspaceManagement.delete(expectedWorkspace.id);
     return { status: "deleted" };
   }
@@ -5384,7 +5460,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     if (current === undefined || stableStringify(current) !== stableStringify(expectedWorkspace)) {
       return false;
     }
-    this.#workspaces.set(workspace.id, structuredClone(workspace));
+    this.#financialPutWorkspace(workspace.id, structuredClone(workspace));
     return true;
   }
 
@@ -5440,7 +5516,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       managementState: "active",
       managementEpoch: 1,
     };
-    this.#workspaceManagement.set(workspaceId, initial);
+    this.#financialPutManagement(workspaceId, initial);
     return Promise.resolve({ ...initial });
   }
 
@@ -5473,7 +5549,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         managementState: "draining",
         managementEpoch: current.managementEpoch + 1,
       };
-      this.#workspaceManagement.set(workspaceId, draining);
+      this.#financialPutManagement(workspaceId, draining);
       return Promise.resolve({ status: "started", management: { ...draining } });
     }
     if (
@@ -5532,7 +5608,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     }
     if (blocked) return { status: "blocked", management: { ...management } };
     const frozen: WorkspaceManagement = { ...management, managementState: "frozen" };
-    this.#workspaceManagement.set(workspaceId, frozen);
+    this.#financialPutManagement(workspaceId, frozen);
     return { status: "frozen", management: { ...frozen } };
   }
 
@@ -5567,7 +5643,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     if (adoptable) {
       this.#personalWorkspaceBootstrapIds.set(ownerUserId, adoptable.id);
       if (!this.#workspaceManagement.has(adoptable.id)) {
-        this.#workspaceManagement.set(adoptable.id, {
+        this.#financialPutManagement(adoptable.id, {
           workspaceId: adoptable.id,
           managementState: "active",
           managementEpoch: 1,
@@ -5587,14 +5663,14 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     if (initialOwnerMember && Array.from(this.#workspaceMembers.values()).some((row) => row.id === initialOwnerMember.id)) {
       return Promise.reject(new Error("Initial personal Workspace member identity is occupied"));
     }
-    this.#workspaces.set(candidate.id, candidate);
-    this.#workspaceManagement.set(candidate.id, {
+    this.#financialPutWorkspace(candidate.id, candidate);
+    this.#financialPutManagement(candidate.id, {
       workspaceId: candidate.id,
       managementState: "active",
       managementEpoch: 1,
     });
     this.#personalWorkspaceBootstrapIds.set(ownerUserId, candidate.id);
-    if (initialOwnerMember) this.#workspaceMembers.set(
+    if (initialOwnerMember) this.#financialPutMember(
       workspaceMemberKey(candidate.id, ownerUserId), structuredClone(initialOwnerMember),
     );
     return Promise.resolve(candidate);
@@ -5671,7 +5747,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   putWorkspaceMember(member: WorkspaceMember): Promise<WorkspaceMember> {
-    this.#workspaceMembers.set(
+    this.#financialPutMember(
       workspaceMemberKey(member.workspaceId, member.accountId),
       member,
     );
@@ -5693,7 +5769,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       row.workspaceId === input.member.workspaceId && row.accountId !== input.member.accountId &&
       isCanonicalActiveWorkspaceOwner(row)
     )) return false;
-    this.#workspaceMembers.set(workspaceMemberKey(input.member.workspaceId, input.member.accountId), structuredClone(input.member));
+    this.#financialPutMember(workspaceMemberKey(input.member.workspaceId, input.member.accountId), structuredClone(input.member));
     return true;
   }
 
@@ -5704,7 +5780,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       input.expectedWorkspaceManagementAuthority,
     );
     if (!this.#workspaceMemberReplacementMatches(input)) return false;
-    this.#workspaceMembers.set(workspaceMemberKey(input.member.workspaceId, input.member.accountId), structuredClone(input.member));
+    this.#financialPutMember(workspaceMemberKey(input.member.workspaceId, input.member.accountId), structuredClone(input.member));
     return true;
   }
 

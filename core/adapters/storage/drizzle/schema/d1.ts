@@ -800,3 +800,48 @@ export const interfaceBindings = sqliteTable(
       .where(sql`${table.phase} = 'Ready'`),
   ],
 );
+
+// Retained permission-source custody: deliberately no ephemeral FK/cascade.
+export const workspaceFinancialSources = sqliteTable(names.workspaceFinancialSources, {
+  workspaceId: text("workspace_id").primaryKey(),
+  sourceRef: text("source_ref").notNull(),
+  incarnation: text("incarnation").notNull(),
+  registrationJson: text("registration_json").notNull(),
+  enrollmentJson: text("enrollment_json").notNull(),
+  identityJson: text("identity_json").notNull(),
+  permissionSequence: integer("permission_sequence").notNull().default(0),
+  lastEventRef: text("last_event_ref"),
+  managementState: text("management_state").notNull(),
+  closed: integer("closed").notNull().default(0),
+  materializedSequence: integer("materialized_sequence").notNull().default(0),
+  materializedDigest: text("materialized_digest").notNull(),
+  enrolledAt: text("enrolled_at").notNull(),
+}, (table) => [uniqueIndex("workspace_financial_sources_source_ref_unique").on(table.sourceRef)]);
+export const workspaceFinancialEvents = sqliteTable(names.workspaceFinancialEvents, {
+  eventRef: text("event_ref").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  sourceRef: text("source_ref").notNull(),
+  incarnation: text("incarnation").notNull(),
+  sequence: integer("sequence").notNull(),
+  previousEventRef: text("previous_event_ref"),
+  kind: text("kind").notNull(),
+  payloadJson: text("payload_json").notNull(),
+  closed: integer("closed").notNull(),
+  recordedAt: text("recorded_at").notNull(),
+}, (table) => [uniqueIndex("workspace_financial_events_workspace_sequence_unique").on(table.workspaceId, table.sequence)]);
+export const workspaceFinancialMaterializations = sqliteTable(names.workspaceFinancialMaterializations, {
+  eventRef: text("event_ref").primaryKey(),
+  sourceRef: text("source_ref").notNull(),
+  incarnation: text("incarnation").notNull(),
+  sequence: integer("sequence").notNull(),
+  previousDigest: text("previous_digest").notNull(),
+  digest: text("digest").notNull(),
+  expectedHeadJson: text("expected_head_json").notNull(),
+  recordJson: text("record_json").notNull(),
+});
+export const workspaceFinancialReceipts = sqliteTable(names.workspaceFinancialReceipts, {
+  eventRef: text("event_ref").notNull(),
+  receiverRef: text("receiver_ref").notNull(),
+  targetRef: text("target_ref").notNull(),
+  recordJson: text("record_json").notNull(),
+}, (table) => [primaryKey({ columns: [table.eventRef, table.receiverRef] })]);

@@ -1,3 +1,4 @@
+import { SqlWorkspaceFinancialSource, type FinancialSourceSqlPort, type WorkspaceFinancialSourceStore } from "../workspaces/financial-source.ts";
 /**
  * SQL-backed OpenTofu deployment-control-plane ledger (core-spec.md §27).
  *
@@ -294,6 +295,7 @@ import {
 import type { SqlTransaction } from "../../adapters/storage/sql.ts";
 import {
   stableJsonDigest,
+  sha256Hex,
   stableStringify,
 } from "../../adapters/source/digest.ts";
 import {
@@ -1819,7 +1821,61 @@ function pgWorkspaceUpdatedDescKeysetWhere(
   return filter === undefined ? keyset : and(filter, keyset);
 }
 
+/** Read-only source qualification; missing/changed mutation hooks fail closed. */
+async function assertWorkspaceFinancialPostgresTriggers(client:SqlClient):Promise<void>{
+  const functions=[["takosumi_financial_source_head_guard", "6aa5d426d2d316b3235cf3ab8fe8bc6ad959cfd82e33e3cc751fa6d071af3cde"], ["takosumi_financial_source_immutable", "39afee079da5321da8da1f55d344ae494646912163d07d8a6f8b4964c66265d5"], ["takosumi_financial_source_materialize", "fa26a7aecd21d235ae000d37d56ecde96ebe726569e856d1685092d42109f36c"], ["takosumi_financial_source_mutation", "77bb9daa1060997c0f1498814b71dfda116f21aeadc31fa37ad9c55ab39c7697"], ["takosumi_financial_binding_immutable", "457df4e32ebf5a27d954bad650415c19e036c898f9f7a079ca819d76f7712b16"]] as const;
+  const triggers=[["takosumi_workspace_financial_sources_guard", "takosumi_workspace_financial_sources", "takosumi_financial_source_head_guard", 27], ["takosumi_workspace_financial_events_immutable", "takosumi_workspace_financial_events", "takosumi_financial_source_immutable", 27], ["takosumi_workspace_financial_materializations_immutable", "takosumi_workspace_financial_materializations", "takosumi_financial_source_immutable", 27], ["takosumi_workspace_financial_receipts_immutable", "takosumi_workspace_financial_receipts", "takosumi_financial_source_immutable", 27], ["takosumi_workspace_financial_materializations_progress", "takosumi_workspace_financial_materializations", "takosumi_financial_source_materialize", 5], ["takosumi_workspaces_financial_source", "takosumi_workspaces", "takosumi_financial_source_mutation", 27], ["takosumi_workspaces_financial_source_insert", "takosumi_workspaces", "takosumi_financial_source_mutation", 5], ["takosumi_workspace_members_financial_source", "takosumi_workspace_members", "takosumi_financial_source_mutation", 27], ["takosumi_workspace_members_financial_source_insert", "takosumi_workspace_members", "takosumi_financial_source_mutation", 5], ["takosumi_workspace_billing_bindings_financial_source", "takosumi_workspace_billing_bindings", "takosumi_financial_binding_immutable", 27]] as const;
+  const functionsResult=await client.query<{name:string;body:string;oid:string;namespace:string;configuration_default:boolean;security_invoker:boolean}>(`select p.proname as name,p.prosrc as body,p.oid::text as oid,p.pronamespace::text as namespace,
+      p.proconfig is null as configuration_default,not p.prosecdef as security_invoker
+    from pg_proc p join pg_language l on l.oid=p.prolang
+    where p.pronamespace=current_schema()::regnamespace and p.proname like 'takosumi_financial_%'
+      and p.pronargs=0 and p.prorettype='trigger'::regtype and p.prokind='f' and l.lanname='plpgsql'`);
+  const triggerResult=await client.query<{name:string;table_name:string;function_name:string;function_oid:string;function_namespace:string;table_namespace:string;event_bits:number;enabled:string;columns:string;no_when:boolean;no_arguments:boolean}>(`select t.tgname as name,c.relname as table_name,p.proname as function_name,
+      t.tgfoid::text as function_oid,p.pronamespace::text as function_namespace,c.relnamespace::text as table_namespace,
+      t.tgtype::integer as event_bits,t.tgenabled as enabled,t.tgattr::text as columns,t.tgqual is null as no_when,t.tgnargs=0 as no_arguments
+    from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_proc p on p.oid=t.tgfoid
+    where c.relnamespace=current_schema()::regnamespace and not t.tgisinternal and (t.tgname like '%financial_source%' or t.tgname like '%financial%immutable%' or t.tgname like '%financial%progress%')`);
+  const qualifiedFunctions=await Promise.all(functionsResult.rows.map(async row=>({...row,digest:await sha256Hex(new TextEncoder().encode(row.body))})));
+  if(functions.some(([name,hash])=>!qualifiedFunctions.some(row=>row.name===name&&row.digest===hash&&row.configuration_default&&row.security_invoker))||
+    triggers.some(([name,table,fn,bits])=>{
+      const qualified=qualifiedFunctions.find(row=>row.name===fn&&row.digest===functions.find(([name])=>name===fn)?.[1]&&row.configuration_default&&row.security_invoker);
+      return !qualified||!triggerResult.rows.some(row=>row.name===name&&row.table_name===table&&row.function_name===fn&&
+        row.function_oid===qualified.oid&&row.function_namespace===qualified.namespace&&row.table_namespace===qualified.namespace&&
+        row.event_bits===bits&&row.enabled==="O"&&row.columns===""&&row.no_when&&row.no_arguments);
+    }))
+    throw new Error("PostgreSQL Workspace financial source trigger qualification failed");
+}
+
 export class SqlOpenTofuControlStore implements OpenTofuControlStore {
+  #financialSourceStore():SqlWorkspaceFinancialSource {
+    const client=this.#client;
+    const make=(executor:SqlClient):FinancialSourceSqlPort=>({dialect:"postgres",
+      query:async(statement,parameters=[])=>{
+        await assertWorkspaceFinancialPostgresTriggers(executor);
+        let n=0;const sql=statement.replace(/\?/gu,()=>`$${++n}`);
+        return (await executor.query(sql,parameters)).rows;
+      },
+      enroll:async(workspaceId,action)=>executor.transaction(async tx=>{
+        // Same EXCLUSIVE gate/order as canonical reconciliation: unlike SHARE
+        // ROW EXCLUSIVE it blocks FOR UPDATE entrants before taking Members.
+        // Otherwise a member writer can hold the Workspace row while its
+        // Members write waits on enrollment's table lock, creating a cycle.
+        await tx.query("lock table takosumi_workspaces, takosumi_workspace_members in exclusive mode");
+        await tx.query("select id from takosumi_workspaces where id=$1 for update",[workspaceId]);
+        return action(make(tx));
+      }),
+    });
+    return new SqlWorkspaceFinancialSource(make(client));
+  }
+  prepareWorkspaceFinancialEnrollment(...args:Parameters<WorkspaceFinancialSourceStore["prepareWorkspaceFinancialEnrollment"]>){return this.#financialSourceStore().prepareWorkspaceFinancialEnrollment(...args);}
+  enrollWorkspaceFinancialSource(...args:Parameters<WorkspaceFinancialSourceStore["enrollWorkspaceFinancialSource"]>){return this.#financialSourceStore().enrollWorkspaceFinancialSource(...args);}
+  getWorkspaceFinancialSourceHead(...args:Parameters<WorkspaceFinancialSourceStore["getWorkspaceFinancialSourceHead"]>){return this.#financialSourceStore().getWorkspaceFinancialSourceHead(...args);}
+  captureWorkspaceFinancialSourceSnapshot(...args:Parameters<WorkspaceFinancialSourceStore["captureWorkspaceFinancialSourceSnapshot"]>){return this.#financialSourceStore().captureWorkspaceFinancialSourceSnapshot(...args);}
+  listWorkspaceFinancialRawEvents(...args:Parameters<WorkspaceFinancialSourceStore["listWorkspaceFinancialRawEvents"]>){return this.#financialSourceStore().listWorkspaceFinancialRawEvents(...args);}
+  getWorkspaceFinancialMaterialization(...args:Parameters<WorkspaceFinancialSourceStore["getWorkspaceFinancialMaterialization"]>){return this.#financialSourceStore().getWorkspaceFinancialMaterialization(...args);}
+  materializeWorkspaceFinancialEvent(...args:Parameters<WorkspaceFinancialSourceStore["materializeWorkspaceFinancialEvent"]>){return this.#financialSourceStore().materializeWorkspaceFinancialEvent(...args);}
+  recordWorkspaceFinancialReceipt(...args:Parameters<WorkspaceFinancialSourceStore["recordWorkspaceFinancialReceipt"]>){return this.#financialSourceStore().recordWorkspaceFinancialReceipt(...args);}
+  listWorkspaceFinancialPendingEvents(...args:Parameters<WorkspaceFinancialSourceStore["listWorkspaceFinancialPendingEvents"]>){return this.#financialSourceStore().listWorkspaceFinancialPendingEvents(...args);}
   readonly persistence = "durable" as const;
   readonly #client: SqlClient;
   readonly #db: PgRemoteDatabase<typeof pgSchema>;

@@ -1,3 +1,4 @@
+import { WorkspaceFinancialSourceService } from "./financial-source.ts";
 /**
  * Workspaces domain service (Core Specification §4).
  *
@@ -80,6 +81,7 @@ export interface UpsertWorkspaceMemberRequest {
 
 export class WorkspacesService {
   readonly billingBindings: WorkspaceBillingBindingsService;
+  readonly financialSource: WorkspaceFinancialSourceService;
   readonly #store: OpenTofuControlStore;
   readonly #ensureDefaultProject?: (workspaceId: string) => Promise<unknown>;
   readonly #newId: (prefix: string) => string;
@@ -97,6 +99,7 @@ export class WorkspacesService {
     this.#ensureDefaultProject = deps.ensureDefaultProject;
     this.#newId = deps.newId ?? defaultId;
     this.#now = deps.now ?? (() => new Date());
+    this.financialSource = new WorkspaceFinancialSourceService(this.#store, this.#now);
     this.billingBindings = new WorkspaceBillingBindingsService({ store: this.#store, newId: this.#newId, now: this.#now });
   }
 
