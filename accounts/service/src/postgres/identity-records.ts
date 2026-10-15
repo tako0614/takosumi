@@ -72,6 +72,11 @@ export class PostgresIdentityRecordRepository
   enrollFinancialSourceParents(value: FS.FinancialSourceEnrollmentMutation) { return this.financialRecords().enrollFinancialSourceParents(value); }
   issueFinancialSourceProof(value: FS.FinancialSourceProofMutation) { return this.financialRecords().issueFinancialSourceProof(value); }
   findFinancialSourceProof(value: string) { return this.financialRecords().findFinancialSourceProof(value); }
+  async findFinancialSourceProofsForOriginalRequest(input: FS.FinancialSourceProofLookup): Promise<readonly FS.FinancialSourceProofRecord[]> {
+    const captured=structuredClone(input);
+    return (await runQuery<{document:FS.FinancialSourceProofRecord}>(this.client,`SELECT document FROM ${table} WHERE bucket=$1 AND document->'challenge'->>'registrationRef'=$2 AND document->'challenge'->>'challengeRef'=$3 AND document->>'accessTokenHash'=$4 LIMIT 2`,
+      [financialSourceBuckets.proofs,captured.registrationRef,captured.challengeRef,captured.accessTokenHash])).rows.map(row=>structuredClone(row.document));
+  }
   findFinancialSourceRaw(value: string) { return this.financialRecords().findFinancialSourceRaw(value); }
   listFinancialSourcePending(value: Parameters<IdentityRecordRepository["listFinancialSourcePending"]>[0]) { return this.financialRecords().listFinancialSourcePending(value); }
   findFinancialSourceMaterialization(value: string) { return this.financialRecords().findFinancialSourceMaterialization(value); }
@@ -97,7 +102,8 @@ export class PostgresIdentityRecordRepository
     const args: unknown[] = [financialSourceJson([...rows.values()]), financialSourceJson(writes)];
     const bind = (value: unknown) => { args.push(value); return `$${args.length}`; };
     const definitions = `expectations AS(SELECT * FROM jsonb_to_recordset($1::jsonb) AS e(bucket text,key text,present boolean,expected jsonb)), write_set AS(SELECT * FROM jsonb_to_recordset($2::jsonb) AS w(bucket text,key text,present boolean,expected jsonb,deleting boolean,next jsonb,subject text))`;
-    const claims = `document_claim AS MATERIALIZED(SELECT d.bucket,d.key FROM ${table} d JOIN expectations e ON e.bucket=d.bucket AND e.key=d.key WHERE e.present AND d.document=e.expected ORDER BY d.bucket,d.key FOR UPDATE OF d), base_guard AS MATERIALIZED(SELECT ((SELECT count(*) FROM document_claim)=(SELECT count(*) FROM expectations WHERE present) AND NOT EXISTS(SELECT 1 FROM expectations e JOIN ${table} d ON d.bucket=e.bucket AND d.key=e.key WHERE NOT e.present)) AS valid)`;
+    const proofGuard = input.proofLookup ? `NOT EXISTS(SELECT 1 FROM ${table} p WHERE p.bucket=${bind(financialSourceBuckets.proofs)} AND p.document->'challenge'->>'registrationRef'=${bind(input.proofLookup.registrationRef)} AND p.document->'challenge'->>'challengeRef'=${bind(input.proofLookup.challengeRef)} AND p.document->>'accessTokenHash'=${bind(input.proofLookup.accessTokenHash)})` : "true";
+    const claims = `document_claim AS MATERIALIZED(SELECT d.bucket,d.key FROM ${table} d JOIN expectations e ON e.bucket=d.bucket AND e.key=d.key WHERE e.present AND d.document=e.expected ORDER BY d.bucket,d.key FOR UPDATE OF d), base_guard AS MATERIALIZED(SELECT (${proofGuard} AND (SELECT count(*) FROM document_claim)=(SELECT count(*) FROM expectations WHERE present) AND NOT EXISTS(SELECT 1 FROM expectations e JOIN ${table} d ON d.bucket=e.bucket AND d.key=e.key WHERE NOT e.present)) AS valid)`;
     const upsert = (name: string, predicate: string, guard: string) => `${name} AS(INSERT INTO ${table} AS dst(bucket,key,document,subject,other_subject) SELECT w.bucket,w.key,w.next,w.subject,NULL FROM write_set w WHERE NOT w.deleting AND ${predicate} AND ${guard} ORDER BY w.bucket,w.key ON CONFLICT(bucket,key) DO UPDATE SET document=excluded.document,subject=excluded.subject,other_subject=excluded.other_subject WHERE EXISTS(SELECT 1 FROM write_set w WHERE w.bucket=dst.bucket AND w.key=dst.key AND w.present AND dst.document=w.expected) RETURNING bucket,key)`;
     const parentCount = `(SELECT count(*) FROM write_set WHERE bucket='${financialSourceBuckets.parents}' AND NOT deleting)`;
     const parents = upsert("parent_write",`w.bucket='${financialSourceBuckets.parents}'`,"(SELECT valid FROM base_guard)");

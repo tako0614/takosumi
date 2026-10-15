@@ -177,6 +177,7 @@ export class MemoryIdentityRecordRepository
         references[slot] = reference;
       }
       if (!financialSourceProofMatches(input, now, input.expectedParents, references)) return undefined;
+      if (this.financialProofCensus({registrationRef: input.registration.registrationRef, challengeRef: input.challenge.challengeRef, accessTokenHash: input.accessTokenHash}).length !== 0) return undefined;
       const key = this.key(financialSourceBuckets.proofs, input.proof.proofRef), old = this.records.get(key);
       if (old !== undefined) return financialSourceEqual(old, input.proof) ? structuredClone(input.proof) : undefined;
       this.records.set(key, structuredClone(input.proof));
@@ -185,6 +186,21 @@ export class MemoryIdentityRecordRepository
   }
   async findFinancialSourceProof(proofRef: string): Promise<Financial.FinancialSourceProofRecord | undefined> {
     return structuredClone(this.financialRecord<Financial.FinancialSourceProofRecord>(financialSourceBuckets.proofs, proofRef));
+  }
+  private financialProofCensus(input: Financial.FinancialSourceProofLookup): readonly Financial.FinancialSourceProofRecord[] {
+    const result: Financial.FinancialSourceProofRecord[] = [];
+    for (const [key, value] of this.records) {
+      const record = value as Financial.FinancialSourceProofRecord | undefined;
+      if (key.startsWith(financialSourceBuckets.proofs + "\n") && record?.challenge?.registrationRef === input.registrationRef &&
+        record.challenge.challengeRef === input.challengeRef && record.accessTokenHash === input.accessTokenHash) {
+        result.push(record);
+        if (result.length === 2) break;
+      }
+    }
+    return result;
+  }
+  async findFinancialSourceProofsForOriginalRequest(input: Financial.FinancialSourceProofLookup): Promise<readonly Financial.FinancialSourceProofRecord[]> {
+    return structuredClone(this.financialProofCensus(input));
   }
   private financialCloseWrites(scope: Financial.FinancialSourceParentScope, cause: Financial.FinancialSourceRawCause, evidenceRef: string, now: number): readonly (readonly [string, unknown])[] {
     const current = this.financialRecord<FinancialSourceParentEnvelope>(financialSourceBuckets.parents, financialSourceScopeKey(scope));

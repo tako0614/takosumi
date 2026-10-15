@@ -46,7 +46,7 @@ async function fixture() {
   const challenge={v:1 as const,challengeRef:"challenge-pg",registrationRef:registration.registrationRef,clientId:record.clientId,workspaceId:"workspace-original",organizationId:"org-original",workspaceRef:"workspace-ref-original",requestFingerprint:`sha256:${"b".repeat(64)}` as const,createdAt:time,expiresAt:time+120000};
   const remote=new Map<string,FinancialSourceMaterialization>();
   const receipt=(m:FinancialSourceMaterialization):FinancialSourceReceipt=>({v:1,eventRef:m.event.eventRef,eventDigest:m.eventDigest,receiptRef:"receipt/"+m.event.eventRef,incarnation:m.event.incarnation,sequence:m.event.sequence,state:m.event.kind==="close"?"admission-closed":"advanced"});
-  const control={accountId:subject,workspaceId:challenge.workspaceId,organizationId:challenge.organizationId,workspaceRef:challenge.workspaceRef,evidence:{evidenceRef:"control-pg",evidenceDigest:`sha256:${"c".repeat(64)}` as const,expiresAt:time+120000,source:{registrationRef:"control-pg-source",incarnation:"control-pg-incarnation",affectedRef:"control-pg-original-affected",sequence:0,eventRef:null,eventDigest:`sha256:${"d".repeat(64)}` as const,receivers:[{receiverRef:"control-receiver",targetRef:"control-target"}]}}};
+  const control={accountId:subject,workspaceId:challenge.workspaceId,organizationId:challenge.organizationId,workspaceRef:challenge.workspaceRef,evidence:{evidenceRef:"control-pg",evidenceDigest:`sha256:${"c".repeat(64)}` as const,expiresAt:time+120000,source:{registrationRef:"control-pg-source",incarnation:"control-pg-incarnation",affectedRef:challenge.workspaceId,sequence:0,eventRef:null,eventDigest:`sha256:${"d".repeat(64)}` as const,receivers:[{receiverRef:"control-receiver",targetRef:"control-target"}]}}};
   const producer=createAccountsFinancialSource({store,issuer,registration,now:()=>time,clients:[{clientId:record.clientId,profile:"shared-account",enabled:true,allowedScopes:["openid"],redirectUris:["https://app.fixture.invalid/callback"]}],challenges:{read:async()=>structuredClone(challenge)},control:{capture:async()=>structuredClone(control),assertCurrent:async()=>true},receivers:registration.receivers.map(r=>({...r,async read(m){const old=remote.get(r.receiverRef+"/"+m.event.eventRef);return old?receipt(old):undefined;},async deliver(m){deliveries++;remote.set(r.receiverRef+"/"+m.event.eventRef,structuredClone(m));return receipt(m);}}))});
   const scopes={grant:{kind:"grant" as const,sid:record.sid!},issuerSession:{kind:"issuer-session" as const,issuerSessionId:record.issuerSessionId!},client:{kind:"client" as const,clientId:record.clientId},accountGeneration:{kind:"account-generation" as const,subject,identityGeneration:0}};
   return {pg,client,store,repository,subject,token,record,registration,challenge,producer,scopes,queries,clock:()=>time,time:(value:number)=>{time=value;},deliveries:()=>deliveries,
@@ -234,3 +234,24 @@ test("postgres actual merge reservation closes both old generation scopes atomic
     expect(await f.store.findAccessToken(f.token)).toBeUndefined();
   }finally{await memory.close();await f.close();}
 },30000);
+
+
+test("postgres proof cardinality loss rolls back the entire actual statement without a partial proof or fresh key retry", async () => {
+  const f = await fixture();
+  try {
+    await enrolled(f); await f.producer.flush({limit: 100});
+    const before = await f.rows();
+    await f.pg.exec(`CREATE FUNCTION accounts_v1.skip_isolated_proof() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.bucket='financial_source_proofs' THEN RETURN NULL; END IF; RETURN NEW; END $$;
+      CREATE TRIGGER skip_isolated_proof BEFORE INSERT ON ${table} FOR EACH ROW EXECUTE FUNCTION accounts_v1.skip_isolated_proof();`);
+    await expect(f.prove()).rejects.toThrow("source_conflict");
+    expect(await f.rows()).toEqual(before);
+    expect(await f.rows(financialSourceBuckets.proofs)).toHaveLength(0);
+    const attempts = f.queries.filter(q => q.sql.includes("authority_claim") && JSON.stringify(q.args[1]).includes("financial_source_proofs"));
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]!.sql).toContain("ON CONFLICT(bucket,key)");
+    await f.pg.exec(`DROP TRIGGER skip_isolated_proof ON ${table}; DROP FUNCTION accounts_v1.skip_isolated_proof();`);
+    const issued = await f.prove();
+    expect(await f.prove()).toEqual(issued);
+    expect(await f.rows(financialSourceBuckets.proofs)).toHaveLength(1);
+  } finally {await f.close();}
+}, 30_000);
