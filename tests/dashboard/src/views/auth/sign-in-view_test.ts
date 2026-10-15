@@ -96,6 +96,19 @@ describe("SignInView disabled OAuth guidance", () => {
     expect(ja["auth.installContextRootPath"]).not.toContain("module");
   });
 
+  test("says what signing in is for and that it does not add a pending app", () => {
+    expect(signInViewSource).toContain(
+      'pendingInstall() ? t("auth.installSignInTitle") : t("auth.signIn")',
+    );
+    expect(signInViewSource).toContain(
+      't("auth.installSignInSub", { name: pendingInstall()!.label })',
+    );
+    expect(en["auth.installSignInSub"]).toContain("{name}");
+    expect(ja["auth.installSignInSub"]).toContain("{name}");
+    expect(en["auth.installSignInSub"]).toContain("does not add the app");
+    expect(ja["auth.installSignInSub"]).toContain("まだ追加はされません");
+  });
+
   test("renders generic provider descriptors returned by discovery", () => {
     expect(signInViewSource).toContain(
       "readonly TakosumiAccountsAuthProvider[]",
@@ -159,10 +172,14 @@ describe("SignInView disabled OAuth guidance", () => {
     expect(signInViewSource).toContain('t("auth.signInSub")');
     expect(signInViewSource).not.toContain("auth.signInCloud");
     expect(signInViewSource).not.toContain("isTakosumiCloudRuntime");
-    expect(en["auth.signInSub"]).toContain("identity provider");
-    expect(ja["auth.signInSub"]).toContain("ID プロバイダー");
-    expect(en["auth.signInSub"].toLowerCase()).not.toContain("google");
-    expect(ja["auth.signInSub"]).not.toContain("Google");
+    for (const key of [
+      "auth.signInSub",
+      "auth.installSignInTitle",
+      "auth.installSignInSub",
+    ] as const) {
+      expect(en[key].toLowerCase()).not.toMatch(/google|github|apple|microsoft/);
+      expect(ja[key]).not.toMatch(/Google|GitHub|Apple|Microsoft/);
+    }
     expect(runtimeCapabilitiesSource).toContain(
       "initializeTakosumiRuntimeCapabilities",
     );

@@ -11,7 +11,20 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.manual": "Add from a Git repository",
   "installStore.back": "Choose again",
   "installStore.configureHint":
-    "Confirm the name and add. Repository analysis happens next.",
+    "No resource is created or changed until you press Add on the review screen.",
+  "installStore.introStepsLabel": "What happens next",
+  "installStore.introSource": "Source",
+  "installStore.introRef": "version {ref}",
+  "installStore.introDefaultRef": "default version",
+  "installStore.introRootPath": "main folder",
+  "installStore.introStepCheck": "Check the repository",
+  "installStore.introStepCheckBody":
+    "Add pins the Git version and checks the module and the connections it needs.",
+  "installStore.introStepSetup": "Connections and settings",
+  "installStore.introStepSetupBody":
+    "Choose the connections it needs (host / account) and fill in what the service asks for.",
+  "installStore.introStepReviewBody":
+    "See how many resources will be created, changed, and deleted, then press Add.",
   "installStore.moduleTitle": "Choose a module",
   "installStore.moduleHint":
     "Choose a module found by scanning this repository revision. The trailing labels are the providers it needs.",
@@ -285,7 +298,7 @@ export const en: Record<keyof typeof ja, string> = {
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "Sign in",
   "legal.policiesNav": "Operator policies",
-  "auth.signInSub": "Sign in with a configured identity provider.",
+  "auth.signInSub": "Sign in to open the apps and settings in your workspace.",
   "auth.singleSignOn": "Single sign-on",
   "auth.continueWith": "Continue with {provider}",
   "auth.providerChecking": "Checking availability",
@@ -305,7 +318,10 @@ export const en: Record<keyof typeof ja, string> = {
   "auth.sessionMaintenanceBody":
     "The dashboard is undergoing maintenance. Please try again in a moment.",
   "auth.installContextAria": "Service to continue after sign-in",
-  "auth.installContextKicker": "Continue adding",
+  "auth.installContextKicker": "App to add",
+  "auth.installSignInTitle": "Sign in to continue adding",
+  "auth.installSignInSub":
+    "After signing in you return to adding {name}. Signing in does not add the app yet.",
   "auth.installContextTitle": "Continue after sign-in",
   "auth.installContextRef": "version {ref}",
   "auth.installContextDefaultRef": "default version",

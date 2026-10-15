@@ -80,6 +80,7 @@ import {
   createAppHandoffConnectHref,
 } from "../../lib/app-handoff.ts";
 import {
+  installReturnContext,
   installReturnPathFromPrefill,
   providerConnectionsHrefForInstallReturn,
 } from "../../lib/install-return-context.ts";
@@ -2194,6 +2195,50 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           >
             {t("installStore.back")}
           </Button>
+          {/* What this service comes from and what happens next, read from the
+              validated prefill state; nothing here creates or changes anything. */}
+          <Show
+            when={installReturnContext(
+              installReturnPathFromPrefill({
+                git: gitUrl(),
+                ref: gitRef(),
+                sourcePath: sourcePath(),
+                path: modulePath(),
+                name: name(),
+              }),
+            )}
+          >
+            {(intro) => (
+              <aside class="iv-intro" aria-label={t("installStore.introStepsLabel")}>
+                <p class="iv-intro-source">
+                  <span>{t("installStore.introSource")}</span>
+                  {[
+                    intro().sourceLabel,
+                    intro().displayRef
+                      ? t("installStore.introRef", { ref: intro().displayRef })
+                      : t("installStore.introDefaultRef"),
+                    intro().path && intro().path !== "."
+                      ? intro().path
+                      : t("installStore.introRootPath"),
+                  ].join(" / ")}
+                </p>
+                <ol class="iv-intro-steps">
+                  <li>
+                    <strong>{t("installStore.introStepCheck")}</strong>
+                    <span>{t("installStore.introStepCheckBody")}</span>
+                  </li>
+                  <li>
+                    <strong>{t("installStore.introStepSetup")}</strong>
+                    <span>{t("installStore.introStepSetupBody")}</span>
+                  </li>
+                  <li>
+                    <strong>{t("installStore.reviewTitle")}</strong>
+                    <span>{t("installStore.introStepReviewBody")}</span>
+                  </li>
+                </ol>
+              </aside>
+            )}
+          </Show>
           {selectedModuleDetails()}
           <Show when={installModulesLoading()}>
             <aside class="iv-setup-note" role="status">

@@ -191,6 +191,21 @@ describe("single-screen install surface", () => {
     expect(view).toContain('phase() !== "browse"');
   });
 
+  test("introduces the prefilled source and the steps before anything changes", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const configure = view.slice(view.indexOf('<Show when={phase() === "configure"}>'));
+    const intro = configure.indexOf('class="iv-intro"');
+
+    // The intro only reads the validated prefill; it cannot widen what is accepted.
+    expect(configure).toContain("installReturnContext(\n              installReturnPathFromPrefill({");
+    expect(intro).toBeGreaterThan(-1);
+    expect(intro).toBeLessThan(configure.indexOf('label={t("installStore.name")}'));
+    expect(configure.slice(intro)).toContain('t("installStore.reviewTitle")');
+    expect(en["installStore.configureHint"]).toContain("until you press Add");
+    expect(ja["installStore.configureHint"]).toContain("「追加する」を押すまで");
+    expect(ja["installStore.introStepReviewBody"]).toContain("作成・変更・削除");
+  });
+
   test("Add starts preparation before compatibility or providers are known", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).toContain("StoreBrowser");

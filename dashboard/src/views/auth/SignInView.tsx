@@ -149,8 +149,16 @@ export function SignInPanel() {
 
   return (
     <div class="sign-in-panel">
-      <h1 class="sign-in-title">{dashboardProductName()}</h1>
-      <p class="sign-in-sub">{t("auth.signInSub")}</p>
+      {/* The brand above already names the product; the heading says what
+          signing in is for, and keeps a pending install in view. */}
+      <h1 class="sign-in-title">
+        {pendingInstall() ? t("auth.installSignInTitle") : t("auth.signIn")}
+      </h1>
+      <p class="sign-in-sub">
+        {pendingInstall()
+          ? t("auth.installSignInSub", { name: pendingInstall()!.label })
+          : t("auth.signInSub")}
+      </p>
       <Show when={pendingInstall()}>
         <div
           class="sign-in-return-context"
