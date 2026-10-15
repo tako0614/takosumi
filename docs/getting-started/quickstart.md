@@ -22,9 +22,10 @@ cd takosumi
 bun install
 ```
 
-この構成は、チェックアウトのディレクトリ名が `takosumi` (`git clone` の既定名) である
-ことを前提に、そのディレクトリをコンテナへ mount します。別の名前で取得した場合は、
-`takosumi` に変えてから続けてください。
+コンテナはこのチェックアウトと、そこへ install した依存をそのまま使います。mount する
+ディレクトリは名前 `takosumi` (`git clone` の既定名) で決まります。既に別の名前で取得済みの
+場合は、ディレクトリ名を `takosumi` に変えてから続けてください。名前が違うと、隣にある
+別の `takosumi` ディレクトリが mount されることがあります。
 
 ## 2. 環境を起動する
 
@@ -45,6 +46,8 @@ bash scripts/up.sh --profile postgres
 ```
 
 ## 3. ローカル証明書と DNS を設定する
+
+ここから先のコマンドは、`deploy/local-substrate` で実行します。
 
 ```bash
 sudo bash scripts/ca-install.sh

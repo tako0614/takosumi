@@ -60,7 +60,8 @@ Git URL と module の宣言
 
 ### API だけ動かす {#api-only}
 
-データはメモリ上に置かれ、再起動すると消えます。dashboard と runner は起動しません。
+開発中の API 確認用です。必要なものは Bun と Git です。データはメモリ上に置かれ、再起動
+すると消えます。dashboard と runner は起動しません。
 
 ```bash
 git clone https://github.com/tako0614/takosumi.git

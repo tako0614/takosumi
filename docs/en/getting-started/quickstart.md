@@ -2,7 +2,8 @@
 
 Start a local Takosumi installation on a Linux machine and run plan and apply
 for a sample Git module. The sample creates no external resources, so you need
-no cloud credentials. The first run builds containers and the dashboard.
+no cloud credentials. The first run builds containers and the dashboard, so it
+takes a while.
 
 To check only the API, without the dashboard or runner, follow
 [Run only the API](../index.md#api-only) on the docs home page.
@@ -22,9 +23,11 @@ cd takosumi
 bun install
 ```
 
-This setup mounts the checkout into its containers by the directory name
-`takosumi` (the `git clone` default). If you cloned under another name, rename
-the directory to `takosumi` before you continue.
+The containers use this checkout and the dependencies installed into it. The
+directory they mount is chosen by the name `takosumi` (the `git clone` default).
+If you already have a checkout under another name, rename it to `takosumi`
+before you continue; otherwise a different `takosumi` directory next to it may
+be mounted instead.
 
 ## 2. Start the environment
 
@@ -45,6 +48,8 @@ bash scripts/up.sh --profile postgres
 ```
 
 ## 3. Configure the local certificate and DNS
+
+Run the remaining commands from `deploy/local-substrate`.
 
 ```bash
 sudo bash scripts/ca-install.sh
