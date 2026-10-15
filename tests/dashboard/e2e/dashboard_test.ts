@@ -2445,23 +2445,32 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
     // A squeezed flex label used to stack one character per line, with the
     // select pushed past the row's right edge.
-    const geometry = await destination.evaluate((row) => {
-      const label = row.querySelector(":scope > span")!;
-      const select = row.querySelector("select")!;
-      return {
-        row: row.getBoundingClientRect().toJSON() as DOMRect,
-        label: label.getBoundingClientRect().toJSON() as DOMRect,
-        select: select.getBoundingClientRect().toJSON() as DOMRect,
-        fontSize: Number.parseFloat(getComputedStyle(label).fontSize),
-      };
-    });
-    expect(geometry.label.height).toBeLessThan(geometry.fontSize * 2);
-    for (const [name, box] of [
-      ["label", geometry.label],
-      ["select", geometry.select],
-    ] as const) {
-      expect(box.left, `${name} starts inside the row`).toBeGreaterThanOrEqual(geometry.row.left);
-      expect(box.right, `${name} ends inside the row`).toBeLessThanOrEqual(geometry.row.right);
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      const geometry = await destination.evaluate((row) => {
+        const style = getComputedStyle(row);
+        const outer = row.getBoundingClientRect();
+        const label = row.querySelector(":scope > span")!;
+        return {
+          content: {
+            left: outer.left + Number.parseFloat(style.borderLeftWidth) + Number.parseFloat(style.paddingLeft),
+            right: outer.right - Number.parseFloat(style.borderRightWidth) - Number.parseFloat(style.paddingRight),
+          },
+          label: label.getBoundingClientRect().toJSON() as DOMRect,
+          select: row.querySelector("select")!.getBoundingClientRect().toJSON() as DOMRect,
+          fontSize: Number.parseFloat(getComputedStyle(label).fontSize),
+          pageFits: document.documentElement.scrollWidth <= window.innerWidth,
+        };
+      });
+      expect(geometry.label.height, `label is one line at ${width}px`).toBeLessThan(geometry.fontSize * 2);
+      for (const [name, box] of [
+        ["label", geometry.label],
+        ["select", geometry.select],
+      ] as const) {
+        expect(box.left, `${name} starts inside the row at ${width}px`).toBeGreaterThanOrEqual(geometry.content.left);
+        expect(box.right, `${name} ends inside the row at ${width}px`).toBeLessThanOrEqual(geometry.content.right);
+      }
+      expect(geometry.pageFits, `page fits ${width}px`).toBe(true);
     }
     expect(state.mutations.some((entry) => /apply|approve/u.test(entry))).toBe(false);
     expectSingleSourceCreate(state);
