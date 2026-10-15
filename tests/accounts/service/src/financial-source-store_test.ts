@@ -169,3 +169,59 @@ for(const mode of ["modern","legacy"] as const)test(`native D1 ${mode} unlink au
     const head=await f.store.findFinancialSourceParent(f.scopes.accountGeneration);expect(head?.state).toBe("closed");const raw=await f.store.findFinancialSourceRaw(head!.lastEventRef);expect(raw?.cause).toMatchObject({kind:"identity-generation-advanced",previousGeneration:0,nextGeneration:1,operationId,reason:"unlink",operationRevision:mode==="legacy"?0:1});expect("legacyUnlink" in raw!.cause?raw!.cause.legacyUnlink:undefined).toBe(mode==="legacy"?true:undefined);for(const slot of slots.filter(s=>s!=="accountGeneration"))expect((await f.store.findFinancialSourceParent(f.scopes[slot]))?.state).toBe("open");expect(await f.store.getAccountAuthenticationGeneration(f.subject)).toBe(1);expect(await f.store.findAccessToken(f.token)).toBeUndefined();await unchanged(f);
   }finally{await f.close();}
 },20000);
+
+
+test("native D1 final batch original census refuses a competing candidate and recovers the original legacy ref", async () => {
+  const f = await fixture(), issue = D1IdentityRecordRepository.prototype.issueFinancialSourceProof;
+  let injected = 0, candidate = "";
+  try {
+    await enrolled(f); await f.producer.flush({limit: 100});
+    D1IdentityRecordRepository.prototype.issueFinancialSourceProof = function(input) {
+      candidate = input.proof.proofRef;
+      const db = this.db;
+      const proxy = new Proxy(db, {get(target, property) {
+        if (property === "batch") return async (statements: Parameters<D1Database["batch"]>[0]) => {
+          injected++;
+          await f.repository.put(financialSourceBuckets.proofs, "afp_legacy_before_batch", {...input.proof, proofRef: "afp_legacy_before_batch"});
+          return db.batch(statements);
+        };
+        const value = Reflect.get(target, property);
+        return typeof value === "function" ? (...args: unknown[]) => Reflect.apply(value, target, args) : value;
+      }});
+      return Reflect.apply(issue, new D1IdentityRecordRepository(proxy, this.initialize, this.hashSession), [input]);
+    };
+    expect(await f.prove()).toEqual({proofRef: "afp_legacy_before_batch"});
+    expect(injected).toBe(1);
+    expect(await f.store.findFinancialSourceProof(candidate)).toBeUndefined();
+    expect(await f.rows(financialSourceBuckets.proofs)).toHaveLength(1);
+    await unchanged(f);
+  } finally {D1IdentityRecordRepository.prototype.issueFinancialSourceProof = issue; await f.close();}
+}, 20_000);
+
+test("native D1 proof write failure rolls back parent and claim writes without another issue attempt", async () => {
+  const f = await fixture(), issue = D1IdentityRecordRepository.prototype.issueFinancialSourceProof;
+  let injected = 0;
+  try {
+    await enrolled(f); await f.producer.flush({limit: 100});
+    const parents = await f.rows(financialSourceBuckets.parents);
+    D1IdentityRecordRepository.prototype.issueFinancialSourceProof = function(input) {
+      const db = this.db;
+      const proxy = new Proxy(db, {get(target, property) {
+        if (property === "batch") return async (statements: Parameters<D1Database["batch"]>[0]) => {
+          injected++;
+          const broken = [...statements];
+          broken[broken.length - 2] = db.prepare("INSERT INTO takosumi_accounts_documents(bucket,key,document,updated_at) VALUES('isolated_proof_failure','x',json('invalid'),0)");
+          return db.batch(broken);
+        };
+        const value = Reflect.get(target, property);
+        return typeof value === "function" ? (...args: unknown[]) => Reflect.apply(value, target, args) : value;
+      }});
+      return Reflect.apply(issue, new D1IdentityRecordRepository(proxy, this.initialize, this.hashSession), [input]);
+    };
+    await expect(f.prove()).rejects.toThrow("source_conflict");
+    expect(injected).toBe(1);
+    expect(await f.rows(financialSourceBuckets.parents)).toEqual(parents);
+    expect(await f.rows(financialSourceBuckets.proofs)).toHaveLength(0);
+    await unchanged(f);
+  } finally {D1IdentityRecordRepository.prototype.issueFinancialSourceProof = issue; await f.close();}
+}, 20_000);
