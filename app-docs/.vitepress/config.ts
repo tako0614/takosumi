@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { DefaultTheme, UserConfig } from "vitepress";
-// app-docs has no node_modules of its own; these helpers import nothing and are
-// shared with the software docs.
+// app-docs has no node_modules of its own; these helpers import nothing at
+// runtime and are shared with the software docs. The self-host image's app-docs
+// stage copies them (deploy/node-postgres/Dockerfile).
 import { scrollableTables } from "../../docs/.vitepress/scrollable-tables";
 import { firstParagraphText, wrappedLines } from "../../docs/.vitepress/wrapped-lines";
 
