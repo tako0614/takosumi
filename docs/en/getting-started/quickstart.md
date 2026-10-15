@@ -82,23 +82,31 @@ While signed in, open:
 https://app.takosumi.test/install?git=https://github.com/tako0614/takosumi.git&ref=main&path=examples/opentofu-basic
 ```
 
-The page opens with the Git URL, ref, and module path filled in. Opening the
-link does not create anything. Check the service name and press **Add**:
-Takosumi pins the ref to a commit, checks the module, and prepares the changes
-(a plan) before anything is deployed.
+The page opens with the service name, and with the Git URL, ref, and module
+path filled in under the collapsed **Source details**. Opening the link does not
+create anything. Check the service name and press **Add**: Takosumi pins the ref
+to a commit and checks the module.
+
+The example declares two inputs, **Name** and **Example public URL**, so
+**Set up the service** comes next. Both are optional. Press **Continue** to keep
+the defaults, and Takosumi prepares the changes (a plan) before anything is
+deployed.
 
 When it is ready, **Review before adding** shows how many resources will be
 created, changed, and deleted. The example has no provider and creates no
 external resource, so you can test the runner, plan, apply, and state storage
-without cloud credentials. After checking the changes, press **Add** to start
-the apply. A change that deletes something first needs **I reviewed these
-changes**, and one under an approval policy needs **Approve this change**. A
-change that a policy or billing check stops shows **These changes can't be
-deployed**, with the reason under **Technical details**.
+without cloud credentials. After checking the changes, press **Add** again to
+start the apply.
+
+A change that deletes, replaces, or imports a resource first needs
+**Approve this change**, then the **I reviewed these changes** checkbox, before
+**Add**; the example's first install shows neither. A change that a policy or
+billing check stops shows **These changes can't be deployed**, and
+**Technical details** opens its Run.
 
 When it finishes, **Service added** appears and **Open service** opens the new
-workload. Normal updates, detected drift, and new Git commits are not applied
-on their own.
+workload (Capsule). Normal updates, detected drift, and new Git commits are not
+applied on their own.
 
 ## 7. Inspect the result
 
