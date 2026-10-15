@@ -33,6 +33,7 @@ import {
 } from "../../core/domains/deploy-control/mod.ts";
 import type { CloudflareWorkerEnv, OpenTofuRunAction } from "./bindings.ts";
 import { STORED_RUN_LEASE_HEADER, storedRunLeaseHeaderValue, type StoredRunLease } from "./stored-service-owner-context.ts";
+import { storedServiceCompositionFromEnv } from "./stored-service-usage.ts";
 import { redactString } from "takosumi-contract/redaction";
 import {
   assertRunExecutionEvidence,
@@ -661,7 +662,10 @@ export class CloudflareContainerOpenTofuRunner
           sourceCommit: job.sourceSnapshot.resolvedCommit,
         },
       },
-      { signal: control?.signal, deadlineAt: control?.deadlineAt },
+      {
+        signal: control?.signal, deadlineAt: control?.deadlineAt,
+        ...(storedServiceCompositionFromEnv(this.env) ? { runLease: control?.runLease } : {}),
+      },
     );
     const status = stringFromRecord(result, "status");
     if (status !== "succeeded") {

@@ -8,7 +8,7 @@ import type {
 import { isLegacySourceArchiveRestoreRef } from "../legacy_source_archive_restore.ts";
 import { artifactStorageUsageBucket } from "../artifact-storage-usage.ts";
 import { storedServiceCompositionFromEnv, type StoredBucketRole } from "../stored-service-usage.ts";
-import { assertStoredRunLease, readStoredRunLeaseHeader, runnerStoredServiceBucket, STORED_RUN_LEASE_HEADER } from "../stored-service-owner-context.ts";
+import { assertStoredReleaseRunLease, assertStoredRunLease, readStoredRunLeaseHeader, runnerStoredServiceBucket, STORED_RUN_LEASE_HEADER, type StoredReleaseParent, type StoredRunLease } from "../stored-service-owner-context.ts";
 import {
   maxStateArtifactCiphertextBytes,
   StateArtifactCrypto,
@@ -2002,6 +2002,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   async #claimReleasePreparation(
     releaseRunId: string,
     requestPayload: unknown,
+    originalLease?: StoredRunLease,
+    parent?: StoredReleaseParent,
   ): Promise<RunnerReleaseAuthorityClaim> {
     let identity: {
       readonly applyRunId: string;
@@ -2046,9 +2048,15 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           this.#activeReleasePreparations.delete(identity.semanticDigest);
           return { kind: "replay", record };
         }
+        if (storedServiceCompositionFromEnv(this.env)) {
+          await assertStoredReleaseRunLease(this.env.TAKOSUMI_CONTROL_DB, originalLease, parent);
+        }
         return { kind: "preparing", record };
       }
 
+      if (storedServiceCompositionFromEnv(this.env)) {
+        await assertStoredReleaseRunLease(this.env.TAKOSUMI_CONTROL_DB, originalLease, parent);
+      }
       const record: RunnerReleaseDispatchRecord = {
         kind: "takosumi.runner-release-dispatch@v1",
         releaseRunId,
@@ -2319,6 +2327,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const inputRestoreReadinessStartedAt = monotonicNow();
     const bodyText = await request.text();
     const envelope = parseRunEnvelope(bodyText);
+    const releaseActivation = envelope.action === "release" ? recordField(envelope.request, "activation") : undefined;
+    const releaseParent = releaseActivation ? Object.freeze({
+      applyRunId: stringField(releaseActivation, "applyRunId") ?? "",
+      workspaceId: stringField(releaseActivation, "workspaceId") ?? "",
+      capsuleId: stringField(releaseActivation, "capsuleId") ?? "",
+    }) : undefined;
     if (storedServiceCompositionFromEnv(this.env) && ["plan", "apply", "destroy", "source_sync", "restore"].includes(envelope.action ?? "")) {
       const canonicalRunId = isRunnerMutationAction(envelope.action) ? parseApplyRunId(envelope.request) : runId;
       if (!originalLease || originalLease.runId !== canonicalRunId) throw new Error("stored service dispatch lease is unavailable");
@@ -2549,6 +2563,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       const claim = await this.#claimReleasePreparation(
         runId,
         envelope.request,
+        originalLease,
+        releaseParent,
       );
       if (claim.kind === "blocked") {
         return runnerReleaseIndeterminateResponse();
@@ -2726,6 +2742,26 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         mutationDispatch,
       );
     } else if (releaseDispatch && releaseRequest) {
+      // The dispatched fence's put/sync awaited above may race a takeover.
+      // Refuse a stale original claim at the last read before command POST;
+      // keep that durable fence even though no command was sent in this path.
+      if (storedServiceCompositionFromEnv(this.env)) {
+        try {
+          await assertStoredReleaseRunLease(this.env.TAKOSUMI_CONTROL_DB, originalLease, releaseParent);
+          // The new D1 await can consume the original deadline or outlive
+          // cancellation. Refresh control and relative budget after it; the
+          // already durable dispatched fence cannot be released on refusal.
+          if (request.signal.aborted) {
+            throw request.signal.reason instanceof Error
+              ? request.signal.reason
+              : new DOMException("OpenTofu runner release was aborted before dispatch", "AbortError");
+          }
+          assertDispatchBudget(RUNNER_MIN_RELEASE_DISPATCH_BUDGET_MS);
+          releaseRequest = dispatchRequest();
+        } catch (error) {
+          return await this.#recordReleaseIndeterminate(releaseDispatch, error);
+        }
+      }
       unboundedRunnerResponse = await this.#dispatchReleaseOnce(
         releaseRequest,
         releaseDispatch,

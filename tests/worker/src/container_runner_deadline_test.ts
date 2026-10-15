@@ -9,6 +9,7 @@ import {
   parseRunDeadlineAt,
   RUN_DEADLINE_AT_HEADER,
 } from "../../../worker/src/runner_protocol.ts";
+import { readStoredRunLeaseHeader, STORED_RUN_LEASE_HEADER } from "../../../worker/src/stored-service-owner-context.ts";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -70,6 +71,65 @@ function mutationJob(): Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0
       "workspaces/ws_deadline/capsules/cap_deadline/runs/apply_deadline/outputs.raw.json.enc",
   } as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0];
 }
+
+function releaseLeaseJob(applyRunId: string): Parameters<CloudflareContainerOpenTofuRunner["release"]>[0] {
+  return {
+    runId: `release_${applyRunId}`, applyRunId,
+    workspaceId: "workspace_release", capsuleId: "capsule_release", stateVersionId: "state_release_1",
+    commands: [{ id: "activate", command: ["echo", "ready"] }],
+    sourceSnapshot: { id: "snapshot_release_1", archiveRef: "source.tar.zst", archiveDigest: PLAN_DIGEST, resolvedCommit: "0123456789abcdef0123456789abcdef01234567" },
+    nonSensitiveOutputs: {}, providerConfigurations: { format: "takosumi.provider-configurations@v1", providers: [] },
+  } as Parameters<CloudflareContainerOpenTofuRunner["release"]>[0];
+}
+
+test("qualified release captures the original parent lease across capacity retry", async () => {
+  for (const parent of ["apply_release_parent", "destroy_apply_release_parent"]) {
+    const claim = { runId: parent, leaseToken: "original-release-lease" };
+    const requests: Request[] = [];
+    const signal = new AbortController().signal;
+    const deadlineAt = Date.now() + 60_000;
+    const runner = new CloudflareContainerOpenTofuRunner({
+      TAKOSUMI_STORED_SERVICE_USAGE: {}, TAKOSUMI_STORED_OBJECT_OWNERS: {},
+      TAKOSUMI_RUNNER_CAPACITY_RETRY_ATTEMPTS: "2", TAKOSUMI_RUNNER_CAPACITY_RETRY_BASE_MS: "1",
+      RUNNER: { idFromName: (name: string) => name, get: () => ({ fetch: async (request: Request) => {
+        requests.push(request);
+        claim.leaseToken = "successor-release-lease";
+        if (requests.length === 1) throw new Error("maximum number of running container instances exceeded");
+        return Response.json({ status: "succeeded", commandCount: 1 });
+      } }) },
+    } as unknown as CloudflareWorkerEnv);
+    await runner.release(releaseLeaseJob(parent), { runLease: claim, signal, deadlineAt });
+    expect(requests).toHaveLength(2);
+    for (const request of requests) {
+      expect(readStoredRunLeaseHeader(request.headers.get(STORED_RUN_LEASE_HEADER))).toEqual({ runId: parent, leaseToken: "original-release-lease" });
+      expect(request.headers.get(RUN_DEADLINE_AT_HEADER)).toBe(String(deadlineAt));
+      expect(request.signal.aborted).toBe(false);
+      const body = await request.text();
+      expect(body).not.toContain("release-lease");
+      expect(body).not.toContain("runLease");
+      expect(JSON.parse(body).request.activation.applyRunId).toBe(parent);
+    }
+  }
+});
+
+test("ordinary release wire ignores private lease control and half-composition refuses", async () => {
+  const requests: Request[] = [];
+  const env = { RUNNER: { idFromName: (name: string) => name, get: () => ({ fetch: async (request: Request) => {
+    requests.push(request); return Response.json({ status: "succeeded", commandCount: 1 });
+  } }) } } as unknown as CloudflareWorkerEnv;
+  const runner = new CloudflareContainerOpenTofuRunner(env);
+  await runner.release(releaseLeaseJob("ordinary_parent"));
+  await runner.release(releaseLeaseJob("ordinary_parent"), { runLease: { runId: "invalid parent", leaseToken: "" } });
+  const payloads = await Promise.all(requests.map(async request => {
+    expect([...request.headers]).toEqual([["content-type", "application/json"]]);
+    const { requestedAt: _requestedAt, ...payload } = await request.json() as Record<string, unknown>;
+    return payload;
+  }));
+  expect(payloads[1]).toEqual(payloads[0]);
+  const half = new CloudflareContainerOpenTofuRunner({ ...env, TAKOSUMI_STORED_SERVICE_USAGE: {} } as CloudflareWorkerEnv);
+  await expect(half.release(releaseLeaseJob("ordinary_parent"))).rejects.toThrow("custody is unavailable");
+  expect(requests).toHaveLength(2);
+});
 
 test("the run deadline reaches the runner object for plan, apply, and destroy", async () => {
   const deadlineAt = Date.parse("2026-10-11T08:30:59.920Z");

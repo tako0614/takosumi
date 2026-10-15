@@ -32,10 +32,11 @@ import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/s
 import { stateVersionIdForRecoveryRun } from "../../../../core/domains/deploy-control/operator_state_recovery.ts";
 import { R2RecoveryStateArtifactStore } from "../../../../worker/src/state_recovery_artifact_store.ts";
 import { PROVIDER_LOCK_RESTORE_DIGEST_HEADER } from "../../../../runner/lib/transport.ts";
+import { RUN_DEADLINE_AT_HEADER, RUNNER_RUN_BUDGET_MS_HEADER } from "../../../../worker/src/runner_protocol.ts";
 import { privateRunFileManifestDigest } from "../../../../core/shared/private_run_file_refresh.ts";
 import { handleRunnerRequestWithDependencies } from "../../../../runner/lib/http_server.ts";
 import { CloudflareContainerOpenTofuRunner } from "../../../../worker/src/container_runner.ts";
-import { readStoredRunLeaseHeader, STORED_RUN_LEASE_HEADER } from "../../../../worker/src/stored-service-owner-context.ts";
+import { readStoredRunLeaseHeader, storedRunLeaseHeaderValue, STORED_RUN_LEASE_HEADER } from "../../../../worker/src/stored-service-owner-context.ts";
 
 const PLAN_BYTES = new TextEncoder().encode("reviewed tfplan bytes");
 const PLAN_DIGEST =
@@ -50,6 +51,234 @@ const RESTORE_STATE_PREFIX =
   "workspaces/space_1/capsules/inst_1/environments/production/state-versions";
 const RESTORE_TARGET_KEY = `${RESTORE_STATE_PREFIX}/00000002.tfstate.enc`;
 const RESTORE_CURRENT_KEY = `${RESTORE_STATE_PREFIX}/current.json`;
+
+function qualifiedReleaseFixture(operation: "apply" | "destroy" = "apply") {
+  const applyRunId = `${operation}_qualified_release`;
+  const claim = { runId: applyRunId, leaseToken: "qualified-original-lease" };
+  const row: Record<string, unknown> = {
+    id: applyRunId, space_id: "workspace_release", installation_id: "capsule_release",
+    type: operation === "destroy" ? "destroy_apply" : "apply", environment: null,
+    status: "running", lease_token: claim.leaseToken,
+    run_json: JSON.stringify({ id: applyRunId, workspaceId: "workspace_release", capsuleId: "capsule_release", status: "running", operation }),
+  };
+  const state = {
+    rows: [row] as readonly Record<string, unknown>[],
+    beforeRead: undefined as (() => Promise<void>) | undefined,
+    onHealth: undefined as (() => void) | undefined,
+    outcome: "succeeded" as "succeeded" | "failed",
+    budgets: [] as (string | null)[],
+    releaseCalls: 0, healthCalls: 0, reads: 0,
+  };
+  const sessions: { constraint: string; queries: number }[] = [];
+  const database = {
+    prepare() { throw new Error("release must use a fresh primary session"); },
+    withSession(constraint: string) {
+      const session = { constraint, queries: 0 }; sessions.push(session);
+      return { prepare(sql: string) {
+        assert.match(sql, /from runs where id = \? limit 2/u);
+        session.queries += 1;
+        let params: unknown[] = [];
+        return { bind(...values: unknown[]) { params = values; return this; }, async all() {
+          state.reads += 1;
+          await state.beforeRead?.();
+          return { success: true, results: params[0] === applyRunId ? state.rows : [] };
+        } };
+      } };
+    },
+  } as unknown as D1Database;
+  const storage = new FakeDoStorage();
+  const runner = runnerWithContainer(new FakeR2Bucket(), {
+    async containerFetch(request) {
+      assert.equal(request.headers.get(STORED_RUN_LEASE_HEADER), null);
+      const body = await request.text();
+      assert.equal(body.includes(claim.leaseToken), false);
+      assert.equal(body.includes("runLease"), false);
+      if (request.method === "POST" && new URL(request.url).pathname === `/runs/release_${applyRunId}`) {
+        state.releaseCalls += 1;
+        state.budgets.push(request.headers.get(RUNNER_RUN_BUDGET_MS_HEADER));
+        return Response.json({ runId: `release_${applyRunId}`, action: "release", status: state.outcome,
+          exitCode: state.outcome === "failed" ? 1 : 0, commandCount: 1,
+          ...(state.outcome === "failed" ? { phase: "release", failedCommandId: "activate" } : {}) }, { status: state.outcome === "failed" ? 500 : 200 });
+      }
+      throw new Error("unexpected release container request");
+    },
+  }, { storage, env: {
+    TAKOSUMI_CONTROL_DB: database,
+    TAKOSUMI_STORED_SERVICE_USAGE: {} as NonNullable<CloudflareWorkerEnv["TAKOSUMI_STORED_SERVICE_USAGE"]>,
+    TAKOSUMI_STORED_OBJECT_OWNERS: {} as NonNullable<CloudflareWorkerEnv["TAKOSUMI_STORED_OBJECT_OWNERS"]>,
+  }, async healthFetch() {
+    state.healthCalls += 1; state.onHealth?.(); return Response.json({ ok: true });
+  } });
+  return { applyRunId, claim, row, state, storage, sessions, runner,
+    request(lease: typeof claim | null = claim) {
+      const request = durableReleaseRequest(applyRunId);
+      if (lease) request.headers.set(STORED_RUN_LEASE_HEADER, storedRunLeaseHeaderValue(lease)!);
+      return request;
+    },
+  };
+}
+
+test("qualified release validates the original Apply and destroy parent in two fresh primary sessions", async () => {
+  for (const operation of ["apply", "destroy"] as const) {
+    const f = qualifiedReleaseFixture(operation);
+    assert.equal((await f.runner.fetch(f.request())).status, 200);
+    assert.equal(f.state.releaseCalls, 1);
+    assert.deepEqual(f.sessions, [{ constraint: "first-primary", queries: 1 }, { constraint: "first-primary", queries: 1 }]);
+    assert.equal(JSON.stringify(f.storage.entries()).includes(f.claim.leaseToken), false);
+  }
+});
+
+test("qualified release refuses missing or forged parent claims before durable preparation", async () => {
+  for (const label of ["missing", "body-only", "wrong-token", "wrong-run", "wrong-workspace", "wrong-capsule", "wrong-family", "operation-mismatch", "physical-id", "json-id", "json-workspace", "json-capsule", "json-status", "terminal", "missing-row", "duplicate-row", "malformed-json"]) {
+    const f = qualifiedReleaseFixture();
+    const json = JSON.parse(String(f.row.run_json));
+    let lease: typeof f.claim | null = f.claim;
+    if (label === "missing" || label === "body-only") lease = null;
+    if (label === "wrong-token") lease = { ...f.claim, leaseToken: "forged-lease" };
+    if (label === "wrong-run") lease = { ...f.claim, runId: "other_apply" };
+    if (label === "wrong-workspace") f.row.space_id = "other_workspace";
+    if (label === "wrong-capsule") f.row.installation_id = "other_capsule";
+    if (label === "wrong-family") f.row.type = "plan";
+    if (label === "operation-mismatch") f.row.type = "destroy_apply";
+    if (label === "physical-id") f.row.id = "other_apply";
+    if (label === "json-id") json.id = "other_apply";
+    if (label === "json-workspace") json.workspaceId = "other_workspace";
+    if (label === "json-capsule") json.capsuleId = "other_capsule";
+    if (label === "json-status") json.status = "succeeded";
+    if (label === "terminal") { f.row.status = "succeeded"; json.status = "succeeded"; }
+    if (label === "missing-row") f.state.rows = [];
+    if (label === "duplicate-row") f.state.rows = [f.row, f.row];
+    f.row.run_json = label === "malformed-json" ? "{" : JSON.stringify(json);
+    let request = f.request(lease);
+    if (label === "body-only") {
+      const payload = await request.json() as { request: Record<string, unknown> };
+      payload.request.runLease = f.claim;
+      request = new Request(request.url, { method: "POST", headers: request.headers, body: JSON.stringify(payload) });
+    }
+    assert.equal((await f.runner.fetch(request)).status, 500, label);
+    assert.equal(f.state.releaseCalls, 0, label);
+    assert.equal(f.state.healthCalls, 0, label);
+    assert.deepEqual(f.storage.entries(), [], label);
+  }
+});
+
+test("a rejected qualified claim preserves an existing preparing record and releases only its own reservation", async () => {
+  const f = qualifiedReleaseFixture();
+  f.storage.failPutAfterCommit(2);
+  assert.equal((await f.runner.fetch(f.request())).status, 500);
+  const prepared = structuredClone(f.storage.entries());
+  assert.match(JSON.stringify(prepared), /"phase":"preparing"/u);
+  f.row.lease_token = "successor";
+  assert.equal((await f.runner.fetch(f.request())).status, 500);
+  assert.deepEqual(f.storage.entries(), prepared);
+  f.row.lease_token = f.claim.leaseToken;
+  assert.equal((await f.runner.fetch(f.request())).status, 200);
+  assert.equal(f.state.releaseCalls, 1);
+});
+
+test("qualified release holds the transient reservation across the first primary read", async () => {
+  const f = qualifiedReleaseFixture();
+  let entered!: () => void, resume!: () => void;
+  const reading = new Promise<void>(resolve => { entered = resolve; });
+  const wait = new Promise<void>(resolve => { resume = resolve; });
+  f.state.beforeRead = async () => { if (f.state.reads === 1) { entered(); await wait; } };
+  const first = f.runner.fetch(f.request());
+  // Wait for either actual read entry or terminal completion; baseline has no read.
+  const phase = await Promise.race([reading.then(() => "reading"), first.then(() => "completed")]);
+  if (phase !== "reading") { await first; assert.fail("release dispatched without reading its original parent"); }
+  try {
+    assert.equal((await f.runner.fetch(f.request())).status, 409);
+    assert.equal(f.state.releaseCalls, 0);
+  } finally { resume(); }
+  assert.equal((await first).status, 200);
+  assert.equal(f.state.releaseCalls, 1);
+});
+
+test("qualified release rechecks after preparation and after dispatched put/sync without erasing the fence", async () => {
+  for (const takeover of ["health", "dispatched-sync"]) {
+    const f = qualifiedReleaseFixture();
+    if (takeover === "health") f.state.onHealth = () => { f.row.lease_token = "successor"; };
+    else {
+      const sync = f.storage.sync.bind(f.storage);
+      f.storage.sync = async () => { await sync(); f.row.lease_token = "successor"; };
+    }
+    assert.equal((await f.runner.fetch(f.request())).status, 409, takeover);
+    assert.equal(f.state.releaseCalls, 0);
+    assert.equal(f.state.reads, 2);
+    assert.match(JSON.stringify(f.storage.entries()), /"phase":"indeterminate"/u);
+    const reads = f.state.reads;
+    assert.equal((await f.runner.fetch(f.request(null))).status, 409);
+    assert.equal(f.state.reads, reads);
+    assert.equal(f.state.releaseCalls, 0);
+  }
+});
+
+for (const change of ["caller-abort", "deadline-expired", "remaining-budget"] as const) {
+  test(`qualified release refreshes dispatch control after delayed final D1: ${change}`, async () => {
+    const originalNow = Date.now;
+    let now = 1_791_790_000_000;
+    Date.now = () => now;
+    const f = qualifiedReleaseFixture();
+    const controller = new AbortController();
+    const deadline = now + 180_000;
+    let entered!: () => void, resume!: () => void;
+    const reading = new Promise<void>(resolve => { entered = resolve; });
+    const wait = new Promise<void>(resolve => { resume = resolve; });
+    f.state.beforeRead = async () => { if (f.state.reads === 2) { entered(); await wait; } };
+    const request = new Request(f.request(), { signal: controller.signal });
+    request.headers.set(RUN_DEADLINE_AT_HEADER, String(deadline));
+    const pending = f.runner.fetch(request);
+    try {
+      const phase = await Promise.race([reading.then(() => "reading"), pending.then(() => "completed")]);
+      assert.equal(phase, "reading");
+      assert.match(JSON.stringify(f.storage.entries()), /"phase":"dispatched"/u);
+      if (change === "caller-abort") controller.abort(new DOMException("caller lost its execution lease", "AbortError"));
+      now += change === "deadline-expired" ? 180_001 : 45_000;
+      resume();
+      const response = await pending;
+      if (change === "remaining-budget") {
+        assert.equal(response.status, 200);
+        assert.equal(f.state.releaseCalls, 1);
+        assert.deepEqual(f.state.budgets, ["135000"]);
+      } else {
+        assert.equal(response.status, 409);
+        assert.equal(f.state.releaseCalls, 0);
+        assertReleaseIndeterminateResponse(await response.text());
+        assert.match(JSON.stringify(f.storage.entries()), /"phase":"indeterminate"/u);
+        assert.equal((await f.runner.fetch(f.request(null))).status, 409);
+        assert.equal(f.state.reads, 2);
+        assert.equal(f.state.releaseCalls, 0);
+      }
+    } finally {
+      resume();
+      await pending;
+      Date.now = originalNow;
+    }
+  });
+}
+
+test("qualified terminal release replays success or failure without new active lease or current ownership", async () => {
+  for (const outcome of ["succeeded", "failed"] as const) {
+    const f = qualifiedReleaseFixture(); f.state.outcome = outcome;
+    const first = await f.runner.fetch(f.request());
+    const firstBody = await first.json() as Record<string, unknown>;
+    f.row.status = "succeeded"; f.row.lease_token = null; f.state.rows = [];
+    const reads = f.state.reads;
+    const replay = await f.runner.fetch(f.request(null));
+    assert.equal(replay.status, first.status);
+    const replayBody = await replay.json() as Record<string, unknown>;
+    assert.equal(replayBody.runId, `release_${f.applyRunId}`);
+    assert.equal(replayBody.action, "release");
+    assert.equal(replayBody.commandCount, 1);
+    // Existing failure normalization omits first-response transport identity;
+    // the durable replay still names the exact original dispatch and outcome.
+    for (const key of ["status", "exitCode", "failedCommandId"]) {
+      assert.equal(replayBody[key], firstBody[key]);
+    }
+    assert.equal(f.state.reads, reads);
+    assert.equal(f.state.releaseCalls, 1);
+  }
+});
 
 test("private transport keeps the original lease through takeover and never forwards it into the Container", async () => {
   let currentLease = "lease_original";
