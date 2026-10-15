@@ -39,6 +39,13 @@ suspended・demoted・missing membership を修復しません。共有 login �
 必要とします。Google の第三者メールは追加の mailbox proof が必要です。通常の
 login session、refresh、公開 profile email だけでは ownership proof になりません。
 
+対象は別々の canonical account として解決する2 account です。matching email の
+候補が他にもある場合、すでに統合された account を新しい root として指定する場合、
+証明や既存 owner の権限・履歴が一致しない場合は停止します。account ID を request に
+書くだけでは所有権を証明できません。追加/team Workspace の作成・選択と、既存
+context を安全に統合できるかは別の条件です。停止を避けるために古い membership や
+履歴を消したり、新しい account/Org/operation key へ置き換えたりしないでください。
+
 issuer browser session と同じ browser の操作で
 `POST /api/v1/account/identity-merges` に `{sourceSubject,targetSubject}` を渡します。
 対象は現在の操作者が含まれる、確認済みの2 account です。5分以内に各 leg を進めます。
@@ -50,6 +57,23 @@ issuer browser session と同じ browser の操作で
 3. `POST /{operationId}/prove` に `{receiptId}` を送ります。両 leg に対して実施します。
 4. `POST /{operationId}/consent` に `{consent:true}` を送り、owner reconciliation を
    待ちます。全 owner の整合が確認されるまで merged login は有効になりません。
+
+### Context plan に対応する版との違い
+
+上の基本手順は、この文書の基準となる
+[main source](https://github.com/tako0614/takosumi/blob/dac30855915e49e5a4fb9782c489a023e7ed1f5a/accounts/service/src/identity-merge.ts#L45-L96)
+の2 account flowです。
+[未マージの context-plan 対応候補](https://github.com/tako0614/takosumi/blob/11d8acf5cae3d624dda6656d84bdcdccdc0585b6/accounts/service/src/identity-merge.ts#L743-L780)
+は、両 leg の証明後に Workspace・現在の membership・保持する課金 context の計画を
+確認し、各 leg が同じ計画を別々に明示承認してから最終 consent に進む方式です。
+provider consent や target 側だけの承認は、この context acceptance を代替しません。
+この候補の初期対象は、共有されていない既存 personal Workspace が各1つの2 account
+で、team・追加 context・復旧で残った行を任意に省略して通すことはできません。
+
+候補の手順や endpoint が現在の deployment にあるとは限りません。未対応版に追加の
+API を呼ぶ手順は、この基本 flow へ混ぜません。同一 operation の再送・同一 recovery
+判断の承認更新と、新しい group 統合・復旧後の別 operation は区別します。繰り返し
+統合の拡張は設計中であり、現在の資格や権限を広げるものではありません。
 
 上記 suffix の base は `/api/v1/account/identity-merges` です。変更は issuer の
 exact Origin と host-only issuer/merge cookie を必要とし、response は no-store です。
