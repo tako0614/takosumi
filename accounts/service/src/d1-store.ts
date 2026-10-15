@@ -576,6 +576,15 @@ export class D1AccountsStore implements AccountsStore {
     this.#sessionHashSalt = options.sessionHashSalt;
   }
 
+  createOwnerOperationContextEvidence(record: import("./owner-operation-contract.ts").OwnerOperationContextEvidence): Promise<boolean> { return this.#hosted.createOwnerOperationContextEvidence(record); }
+  findOwnerOperationContextEvidence(input: import("./owner-operation-evidence.ts").OwnerOperationContextEvidenceLookup): Promise<import("./owner-operation-contract.ts").OwnerOperationContextEvidence | undefined> { return this.#hosted.findOwnerOperationContextEvidence(input); }
+  createOwnerOperationReceiptEvidence(record: import("./owner-operation-contract.ts").OwnerOperationReceiptEvidence): Promise<boolean> { return this.#hosted.createOwnerOperationReceiptEvidence(record); }
+  findOwnerOperationReceiptEvidence(input: import("./owner-operation-evidence.ts").OwnerOperationReceiptEvidenceLookup): Promise<import("./owner-operation-contract.ts").OwnerOperationReceiptEvidence | undefined> { return this.#hosted.findOwnerOperationReceiptEvidence(input); }
+  findReviewedRecoveryApproval(digest: string): Promise<import("./reviewed-recovery-state.ts").ReviewedRecoveryApprovalRecord | undefined> { return this.#hosted.findReviewedRecoveryApproval(digest); }
+  findCurrentReviewedRecoveryApproval(operationId: string): Promise<import("./reviewed-recovery-state.ts").ReviewedRecoveryApprovalPointer | undefined> { return this.#hosted.findCurrentReviewedRecoveryApproval(operationId); }
+  findReviewedRecoveryApprovalByRef(input: {operationId:string;recoveryId:string;reviewedApprovalRef:string}): Promise<string | undefined> { return this.#hosted.findReviewedRecoveryApprovalByRef(input); }
+  compareAndSetReviewedRecoveryApproval(input: import("./reviewed-recovery-state.ts").ReviewedRecoveryApprovalMutation): Promise<boolean> { return this.#hosted.compareAndSetReviewedRecoveryApproval(input); }
+
   async findHostedAccountSessionAnchor(sessionId: string): Promise<string|undefined> { return this.#hosted.findHostedAccountSessionAnchor(await this.#hashSessionId(sessionId)); }
   createCredentialUnlinkIntent(record: import("./identity-unlink-state.ts").CredentialUnlinkIntent): Promise<boolean> { return this.#hosted.createCredentialUnlinkIntent(record); }
   findCredentialUnlinkIntent(id: string): Promise<import("./identity-unlink-state.ts").CredentialUnlinkIntent | undefined> { return this.#hosted.findCredentialUnlinkIntent(id); }
@@ -585,6 +594,13 @@ export class D1AccountsStore implements AccountsStore {
   listIdentityMergeOperations(input: {after?:string;limit:number}): Promise<import("./identity-state.ts").IdentityMergeRetryPage> { return this.#hosted.listIdentityMergeOperations(input); }
   findIdentityMergeRetryCheckpoint(key:string):Promise<import("./identity-state.ts").IdentityMergeRetryCheckpoint|undefined>{return this.#hosted.findIdentityMergeRetryCheckpoint(key);}
   compareAndSetIdentityMergeRetryCheckpoint(input:import("./identity-state.ts").IdentityMergeRetryCheckpointMutation):Promise<boolean>{return this.#hosted.compareAndSetIdentityMergeRetryCheckpoint(input);}
+  createCredentialUnlinkAuthorityTicket(record:import("./identity-context-state.ts").CredentialUnlinkAuthorityTicket):Promise<boolean>{return this.#hosted.createCredentialUnlinkAuthorityTicket(record);}
+  findCredentialUnlinkAuthorityTicket(operationId:string):Promise<import("./identity-context-state.ts").CredentialUnlinkAuthorityTicket|undefined>{return this.#hosted.findCredentialUnlinkAuthorityTicket(operationId);}
+  createIdentityMergeContextPlan(record:import("./identity-context-state.ts").IdentityMergeContextPlanRecord):Promise<boolean>{return this.#hosted.createIdentityMergeContextPlan(record);}
+  findIdentityMergeContextPlan(planId:string):Promise<import("./identity-context-state.ts").IdentityMergeContextPlanRecord|undefined>{return this.#hosted.findIdentityMergeContextPlan(planId);}
+  createIdentityMergeContextReceipt(record:import("./identity-context-state.ts").IdentityMergeContextReceipt):Promise<boolean>{return this.#hosted.createIdentityMergeContextReceipt(record);}
+  findIdentityMergeContextReceipt(receiptId:string):Promise<import("./identity-context-state.ts").IdentityMergeContextReceipt|undefined>{return this.#hosted.findIdentityMergeContextReceipt(receiptId);}
+  findIdentityMergeLock(subject:TakosumiSubject):Promise<import("./identity-context-state.ts").IdentityMergeLock|undefined>{return this.#hosted.findIdentityMergeLock(subject);}
   createIdentityOperationReceipt(record: IdentityOperationReceiptRecord): Promise<boolean> { return this.#hosted.createIdentityOperationReceipt(record); }
   findIdentityOperationReceipt(receiptId: string): Promise<IdentityOperationReceiptRecord | undefined> { return this.#hosted.findIdentityOperationReceipt(receiptId); }
   isHostedOidcSessionHashRevoked(issuerSessionHash: string): Promise<boolean> { return this.#hosted.isHostedOidcSessionHashRevoked(issuerSessionHash); }

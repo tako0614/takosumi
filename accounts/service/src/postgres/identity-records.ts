@@ -1,3 +1,6 @@
+import { readReviewedRecoveryIssuerAvailabilityCheckpoint, consumeReviewedRecoveryIssuerAvailabilityCheckpoint } from "../reviewed-recovery-issuer-availability.ts";
+import type { ReviewedRecoveryApprovalMutation } from "../reviewed-recovery-state.ts";
+import { canonicalOwnerJson, ownerContextBucket, ownerReceiptBucket, reviewedApprovalBucket, reviewedApprovalCurrentBucket, reviewedApprovalRefBucket, reviewedApprovalRefKey } from "../owner-operation-evidence.ts";
 import type {
   CredentialUnlinkIntent,
   CredentialUnlinkReceipt,
@@ -56,6 +59,31 @@ export class PostgresIdentityRecordRepository
   implements IdentityRecordRepository
 {
   constructor(readonly client: PostgresQueryClient) {}
+  async commitReviewedRecoveryApproval(input: ReviewedRecoveryApprovalMutation): Promise<boolean> {
+    const {record:r,pointer:p}=input,a=r.approval,args:unknown[]=[];const bind=(v:unknown)=>{args.push(v);return `$${args.length}`;};
+    const opId=bind(a.operationId),source=bind(a.sourceAccountId),target=bind(a.targetAccountId);
+    const ref={operationId:a.operationId,recoveryId:a.recoveryId,reviewedApprovalRef:a.reviewedApprovalRef,approvalDigest:r.approvalDigest};
+    const opGuard=`bucket='identity_merge_operations' AND key=${opId} AND (document->>'revision')::bigint=${bind(a.operationRevision)} AND document->>'sourceSubject'=${source} AND document->>'targetSubject'=${target} AND document->'contextPlan'->>'planDigest'=${bind(a.planDigest)} AND document ? 'consentAt' AND document->>'status' ${a.mode==="abort-before-active"?"IN ('proved','reconciled','quarantined')":"='quarantined'"}`;
+    const generations=`((key=${source} AND (document->>'generation')::bigint=${bind(a.sourceIdentityGeneration)}) OR (key=${target} AND (document->>'generation')::bigint=${bind(a.targetIdentityGeneration)}))`;
+    let guard=`(SELECT count(*) FROM operation_claim)=1 AND (SELECT count(*) FROM generation_claim)=2 AND (SELECT count(*) FROM lock_claim)=2`;
+    for(const [subject,canonical]of [[a.sourceAccountId,a.mode==="abort-before-active"?a.sourceAccountId:a.targetAccountId],[a.targetAccountId,a.targetAccountId]]as const)guard+=` AND COALESCE((SELECT c.document->>'targetSubject' FROM ${table} c WHERE c.bucket='canonical_accounts' AND c.key=${bind(subject)}),${bind(subject)})=${bind(canonical)}`;
+    const hash=bind(r.approvalDigest),record=bind(canonicalOwnerJson(r)),refBody=bind(canonicalOwnerJson(ref));
+    guard+=` AND NOT EXISTS(SELECT 1 FROM ${table} h WHERE h.bucket='${reviewedApprovalBucket}' AND h.key=${hash} AND h.document<>${record}::jsonb)`;
+    const refKey=bind(reviewedApprovalRefKey(a));
+    guard+=` AND NOT EXISTS(SELECT 1 FROM ${table} f WHERE f.bucket='${reviewedApprovalRefBucket}' AND f.key=${refKey} AND f.document<>${refBody}::jsonb)`;
+    if(input.expectedApprovalDigest!==undefined)guard+=` AND EXISTS(SELECT 1 FROM ${table} h WHERE h.bucket='${reviewedApprovalBucket}' AND h.key=${bind(input.expectedApprovalDigest)} AND h.document->>'decisionDigest'=${bind(r.decisionDigest)} AND (h.document->'approval'->>'createdAt')::bigint<${bind(a.createdAt)})`;
+    const pointer=bind(canonicalOwnerJson(p));
+    const newRecordGuard=`${guard} AND NOT EXISTS(SELECT 1 FROM ${table} h WHERE h.bucket='${reviewedApprovalBucket}' AND h.key=${hash}) AND NOT EXISTS(SELECT 1 FROM ${table} f WHERE f.bucket='${reviewedApprovalRefBucket}' AND f.key=${refKey})`;
+    const changed=input.expectedApprovalDigest===undefined
+      ?`INSERT INTO ${table}(bucket,key,document,subject,other_subject) SELECT '${reviewedApprovalCurrentBucket}',${opId},${pointer}::jsonb,${target},${source} WHERE ${newRecordGuard} ON CONFLICT DO NOTHING RETURNING key`
+      :`UPDATE ${table} SET document=${pointer}::jsonb WHERE bucket='${reviewedApprovalCurrentBucket}' AND key=${opId} AND document->>'approvalDigest'=${bind(input.expectedApprovalDigest)} AND (document->>'revision')::bigint=${bind(p.revision-1)} AND document->>'operationId'=${opId} AND ${newRecordGuard} RETURNING key`;
+    const replay=`SELECT p.key FROM ${table} p WHERE p.bucket='${reviewedApprovalCurrentBucket}' AND p.key=${opId} AND p.document->>'approvalDigest'=${hash} AND (p.document->>'revision')::bigint=${bind(p.revision)} AND p.document->>'operationId'=${opId} AND EXISTS(SELECT 1 FROM ${table} h WHERE h.bucket='${reviewedApprovalBucket}' AND h.key=${hash} AND h.document=${record}::jsonb) AND EXISTS(SELECT 1 FROM ${table} f WHERE f.bucket='${reviewedApprovalRefBucket}' AND f.key=${refKey} AND f.document=${refBody}::jsonb) AND ${guard} AND NOT EXISTS(SELECT 1 FROM changed)`;
+    // One statement on any pooled client; explicit row claims serialize the
+    // pending operation, epochs and owned fences before changing approval.
+    const sql=`WITH operation_claim AS(SELECT key FROM ${table} WHERE ${opGuard} FOR UPDATE), generation_claim AS(SELECT key FROM ${table} WHERE bucket='authentication_generations' AND ${generations} AND EXISTS(SELECT 1 FROM operation_claim) FOR UPDATE), lock_claim AS(SELECT key FROM ${table} WHERE bucket='identity_merge_locks' AND key IN(${source},${target}) AND document->>'operationId'=${opId} AND EXISTS(SELECT 1 FROM generation_claim) FOR UPDATE), changed AS(${changed}), history AS(INSERT INTO ${table}(bucket,key,document,subject,other_subject) SELECT '${reviewedApprovalBucket}',${hash},${bind(canonicalOwnerJson(r))}::jsonb,${target},${source} FROM changed ON CONFLICT DO NOTHING RETURNING key), refs AS(INSERT INTO ${table}(bucket,key,document,subject,other_subject) SELECT '${reviewedApprovalRefBucket}',${refKey},${bind(canonicalOwnerJson(ref))}::jsonb,${target},${source} FROM changed ON CONFLICT DO NOTHING RETURNING key) SELECT key FROM changed UNION ALL ${replay}`;
+    const result=await runQuery(this.client,sql,args);
+    return result.rows.length===1;
+  }
   async get<T>(bucket: string, key: string): Promise<T | undefined> {
     const r = await runQuery<{ document: T }>(
       this.client,
@@ -65,7 +93,7 @@ export class PostgresIdentityRecordRepository
     return r.rows[0]?.document;
   }
   async put(bucket: string, key: string, record: unknown): Promise<void> {
-    const [subject, other] = references(record);
+    const [subject, other] = references(record, bucket);
     await runQuery(
       this.client,
       `INSERT INTO ${table}(bucket,key,document,subject,other_subject) VALUES($1,$2,$3::jsonb,$4,$5) ON CONFLICT(bucket,key) DO UPDATE SET document=excluded.document,subject=excluded.subject,other_subject=excluded.other_subject`,
@@ -73,7 +101,7 @@ export class PostgresIdentityRecordRepository
     );
   }
   async create(bucket: string, key: string, record: unknown): Promise<boolean> {
-    const [subject, other] = references(record);
+    const [subject, other] = references(record, bucket);
     const r = await runQuery(
       this.client,
       `INSERT INTO ${table}(bucket,key,document,subject,other_subject) VALUES($1,$2,$3::jsonb,$4,$5) ON CONFLICT DO NOTHING RETURNING key`,
@@ -156,6 +184,22 @@ export class PostgresIdentityRecordRepository
   }
   async mutateMerge(input: IdentityMergeMutation): Promise<boolean> {
     assertMergeMutation(input);
+    const sessionLookups = new Map<NonNullable<IdentityMergeMutation["sessions"]>[number], string>();
+    for (const proof of input.sessions ?? [])
+      sessionLookups.set(proof, proof.sessionLookupHash ?? await hashSessionId(proof.sessionId!));
+    let inventoryGeneration: number | null | undefined;
+    if (input.reserve || input.activate) {
+      const inventory = await this.get<{ generation: number }>("email_candidate_inventory", "global");
+      if (inventory && (!Number.isSafeInteger(inventory.generation) || inventory.generation < 0)) return false;
+      inventoryGeneration = inventory?.generation ?? null;
+    }
+    if (input.availabilityCheckpoint !== undefined) {
+      const freshNow = readReviewedRecoveryIssuerAvailabilityCheckpoint(input.availabilityCheckpoint, input);
+      if (freshNow === undefined) return false;
+      input = { ...input, now: freshNow };
+      try { assertMergeMutation(input); } catch { return false; }
+      if (input.emailProofs?.some((proof) => proof.validUntil <= freshNow || proof.observedAt > freshNow)) return false;
+    }
     const n = input.next;
     const args: unknown[] = [
       JSON.stringify(n),
@@ -184,7 +228,7 @@ export class PostgresIdentityRecordRepository
     if (input.requireRecovery)
       where += ` AND document ? 'consentAt' AND document->>'status'=${bind(n.status)} AND document->>'status' IN('proved','reconciled') AND ((document->>'expiresAt')::bigint<=$6 OR EXISTS(SELECT 1 FROM ${table} r WHERE r.bucket='identity_operation_receipts' AND r.key IN(${table}.document->'sourceProof'->>'receiptId',${table}.document->'targetProof'->>'receiptId') AND (r.document->>'expiresAt')::bigint<=$6) OR EXISTS(SELECT 1 FROM ${table} e WHERE e.bucket='account_email_proofs' AND e.key IN($4,$5) AND (e.document->>'validUntil')::bigint<=$6))`;
     for (const p of input.sessions ?? []) {
-      where += ` AND EXISTS(SELECT 1 FROM accounts_v1.account_sessions s WHERE s.session_id=${bind(p.sessionLookupHash ?? (await hashSessionId(p.sessionId!)))} AND s.subject=${bind(p.subject)} AND hosted_metadata->>'policy'='hosted' AND (hosted_metadata->>'${p.reauthentication === false ? "authTime" : "reauthenticatedAt"}')::bigint=${bind(p.authTime)} AND expires_at>to_timestamp($6/1000.0) AND (hosted_metadata->>'absoluteExpiresAt')::bigint>$6 AND coalesce((hosted_metadata->>'identityGeneration')::integer,0)=coalesce((SELECT (g.document->>'generation')::integer FROM ${table} g WHERE g.bucket='authentication_generations' AND g.key=s.subject),0))`;
+      where += ` AND EXISTS(SELECT 1 FROM accounts_v1.account_sessions s WHERE s.session_id=${bind(sessionLookups.get(p)!)} AND s.subject=${bind(p.subject)} AND hosted_metadata->>'policy'='hosted' AND (hosted_metadata->>'${p.reauthentication === false ? "authTime" : "reauthenticatedAt"}')::bigint=${bind(p.authTime)} AND expires_at>to_timestamp($6/1000.0) AND (hosted_metadata->>'absoluteExpiresAt')::bigint>$6 AND coalesce((hosted_metadata->>'identityGeneration')::integer,0)=coalesce((SELECT (g.document->>'generation')::integer FROM ${table} g WHERE g.bucket='authentication_generations' AND g.key=s.subject),0))`;
     }
     for (const proof of input.emailProofs ?? [])
       where += ` AND EXISTS(SELECT 1 FROM ${table} e JOIN accounts_v1.accounts a ON a.subject=e.key WHERE e.bucket='account_email_proofs' AND e.key=${bind(proof.subject)} AND e.document=${bind(JSON.stringify(proof))}::jsonb AND a.email=${bind(proof.address)} AND a.email_verified=true)`;
@@ -206,25 +250,25 @@ export class PostgresIdentityRecordRepository
         input.activate || n.status === "reconciled" ? 1 : 0,
         bind,
       );
+    if (n.contextPlan)
+      where += ` AND (NOT(document ? 'contextPlan') OR document->'contextPlan'=${bind(JSON.stringify(n.contextPlan))}::jsonb)`;
+    else where += ` AND NOT(document ? 'contextPlan')`;
+    if (input.contextPlanRecord)
+      where += ` AND EXISTS(SELECT 1 FROM ${table} p WHERE p.bucket='identity_merge_context_plans' AND p.key=${bind(input.contextPlanRecord.planId)} AND p.document=${bind(JSON.stringify(input.contextPlanRecord))}::jsonb)`;
+    const contexts = input.contextReceipt
+      ? [input.contextReceipt]
+      : (input.contextReceipts ?? []);
+    if (contexts.length) {
+      where += ` AND (SELECT count(*) FROM jsonb_array_elements(${bind(JSON.stringify(contexts))}::jsonb) e(value) JOIN ${table} c ON c.bucket='identity_merge_context_receipts' AND c.key=e.value->>'receiptId' WHERE c.document=e.value AND (c.document->>'identityGeneration')::integer+${bind(input.activate || n.status === "reconciled" ? 1 : 0)}=COALESCE((SELECT (g.document->>'generation')::integer FROM ${table} g WHERE g.bucket='authentication_generations' AND g.key=c.document->>'subject'),0) AND NOT EXISTS(SELECT 1 FROM ${table} x WHERE x.bucket='hosted_oidc_revoked_sessions' AND x.key=c.document->>'issuerSessionHash'))=${bind(contexts.length)}`;
+      if (input.contextReceipt)
+        where += ` AND NOT(document ? '${input.contextReceipt.role === "source" ? "sourceContextAcceptance" : "targetContextAcceptance"}')`;
+    }
     if (input.activate)
       where += ` AND document->>'status'='reconciled' AND (SELECT count(*) FROM ${table} WHERE bucket='identity_merge_locks' AND key IN($4,$5) AND document->>'operationId'=$2)=2`;
     if (input.reserve || input.activate)
       where += ` AND NOT EXISTS(SELECT 1 FROM ${table} WHERE bucket='identity_merge_locks' AND key IN($4,$5) AND document->>'operationId'<>$2)`;
     if (input.reserve)
       where += ` AND (SELECT count(*) FROM(SELECT key FROM ${table} WHERE bucket='identity_merge_retry_pending' LIMIT ${bind(input.retryCapacity)} ) q)<${bind(input.retryCapacity)}`;
-    let inventoryGeneration: number | undefined;
-    if (input.reserve || input.activate) {
-      await this.create("email_candidate_inventory", "global", {
-        generation: 0,
-      });
-      inventoryGeneration =
-        (
-          await this.get<{ generation: number }>(
-            "email_candidate_inventory",
-            "global",
-          )
-        )?.generation ?? 0;
-    }
     if (input.emailProofs?.length) {
       const address = input.emailProofs[0]!.normalizedAddress;
       where += ` AND (SELECT count(*) FROM accounts_v1.accounts WHERE ${candidatePredicate(bind(address), bind(address.slice(0, address.lastIndexOf("@"))))})=2`;
@@ -234,7 +278,9 @@ export class PostgresIdentityRecordRepository
     ];
     if (inventoryGeneration !== undefined) {
       ctes.unshift(
-        `inventory_claim AS(UPDATE ${table} SET document=jsonb_set(document,'{generation}',to_jsonb((document->>'generation')::bigint+1)) WHERE bucket='email_candidate_inventory' AND key='global' AND (document->>'generation')::bigint=${bind(inventoryGeneration)} RETURNING key)`,
+        inventoryGeneration === null
+          ? `inventory_claim AS(INSERT INTO ${table}(bucket,key,document,subject,other_subject) VALUES('email_candidate_inventory','global','{"generation":1}'::jsonb,NULL,NULL) ON CONFLICT DO NOTHING RETURNING key)`
+          : `inventory_claim AS(UPDATE ${table} SET document=jsonb_set(document,'{generation}',to_jsonb((document->>'generation')::bigint+1)) WHERE bucket='email_candidate_inventory' AND key='global' AND (document->>'generation')::bigint=${bind(inventoryGeneration)} RETURNING key)`,
       );
       ctes[1] = ctes[1]!.replace(
         " RETURNING document)",
@@ -277,6 +323,10 @@ export class PostgresIdentityRecordRepository
       n.sourceSubject,
       true,
     );
+    if (input.contextReceipt)
+      ctes.push(
+        `consume_context AS(UPDATE ${table} SET document=jsonb_set(jsonb_set(document,'{consumedByOperation}',to_jsonb($2::text)),'{consumedAt}',to_jsonb($6::bigint)) WHERE bucket='identity_merge_context_receipts' AND key=${bind(input.contextReceipt.receiptId)} AND EXISTS(SELECT 1 FROM changed) RETURNING key)`,
+      );
     if (input.receipt)
       ctes.push(
         `consume_receipt AS(UPDATE ${table} SET document=jsonb_set(jsonb_set(document,'{consumedByOperation}',to_jsonb($2::text)),'{consumedAt}',to_jsonb($6::bigint)) WHERE bucket='identity_operation_receipts' AND key=${bind(input.receipt.receiptId)} AND EXISTS(SELECT 1 FROM changed) RETURNING key)`,
@@ -360,16 +410,12 @@ export class PostgresIdentityRecordRepository
       ctes.push(
         `unschedule_pending AS(DELETE FROM ${table} WHERE bucket='identity_merge_retry_pending' AND key=$2 AND EXISTS(SELECT 1 FROM changed) RETURNING key)`,
       );
+    const query = `WITH ${ctes.join(",")} SELECT document FROM changed`;
+    // The checkpoint and all captured expiry bounds are checked again after
+    // preparation. This is a local precommit boundary, not server execution/2PC.
+    if (input.availabilityCheckpoint !== undefined && consumeReviewedRecoveryIssuerAvailabilityCheckpoint(input.availabilityCheckpoint, input) === undefined) return false;
     try {
-      return (
-        (
-          await runQuery(
-            this.client,
-            `WITH ${ctes.join(",")} SELECT document FROM changed`,
-            args,
-          )
-        ).rows.length === 1
-      );
+      return (await runQuery(this.client, query, args)).rows.length === 1;
     } catch (e) {
       if (isConflict(e)) return false;
       throw e;
@@ -613,11 +659,12 @@ export class PostgresIdentityRecordRepository
   }
 }
 
-function references(value: unknown): readonly [string | null, string | null] {
+function references(value: unknown, bucket: string): readonly [string | null, string | null] {
   const r = value as Record<string, unknown>;
+  const context = (bucket === ownerContextBucket ? r.context : bucket === ownerReceiptBucket ? r.receipt : undefined) as Record<string, unknown> | undefined;
   return [
-    ((r.subject ?? r.targetSubject ?? r.canonicalSubject) as string) ?? null,
-    (r.sourceSubject as string) ?? null,
+    ((context?.targetAccountId ?? r.subject ?? r.targetSubject ?? r.canonicalSubject) as string) ?? null,
+    ((context?.sourceAccountId ?? r.sourceSubject) as string) ?? null,
   ];
 }
 function isConflict(error: unknown): boolean {

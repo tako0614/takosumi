@@ -82,3 +82,57 @@ binding or claim of complete Hosted storage. Provider-periodic Resource charges
 must not be submitted again through this retained-artifact lane. CPU is not
 derived from Run duration, and these byte receipts do not attest runner CPU or
 provisioned memory.
+
+## Optional complete stored-service source profile
+
+The separate `TAKOSUMI_STORED_SERVICE_USAGE` and
+`TAKOSUMI_STORED_OBJECT_OWNERS` private RPC bindings select the generic complete
+physical-store profile. Both are required together, and this profile is mutually
+exclusive with `TAKOSUMI_ARTIFACT_STORAGE_USAGE`. Omission preserves the original
+self-host adapters. There is no default binding or production configuration.
+
+The real Runner decorates all `R2_STATE`, `R2_ARTIFACTS` and `R2_SOURCE` accessors,
+including immutable versions, execution evidence, current pointers, Restore
+stages and their existing collector, plans/locks/JSON, outputs and legacy state.
+The Worker backup constructor decorates `R2_BACKUPS`. Private Run files pass
+their already validated exact Workspace scope into the same wrapper; their
+opaque key and original four metadata fields remain unchanged. Their stored
+ciphertext length, including encoding and encryption, is the fact. The optional
+operator recovery adapter accepts the same profile, but has no active default
+runtime constructor. No new purge, TTL or state authority is introduced.
+
+These hooks do not establish complete coverage by themselves. The owning host
+must qualify every physical writer, external S3 principal, lifecycle rule and
+shared bucket; register a fixed physical source namespace; and resolve every
+existing object to its original canonical Workspace through trusted allocation
+or ledger evidence. A sanitized key, legacy backend hash or private-file digest
+alone is not that evidence. Historical `spaces/*` source archives and orphaned
+private blobs require explicit adoption evidence. Unknown ownership blocks the
+inventory rather than becoming zero. Retained current pointers, old immutable
+versions and unreferenced physical objects remain in the measured inventory.
+
+The named `PrivateStoredInventoryWorker` scans native R2 in bounded pages while
+the owner catalog holds the source-wide write fence. It checks the same fence
+before and after each page, uses `truncated/cursor` for EOF, and emits only opaque
+object identities, original Workspace ownership, native upload-version digests
+and exact byte sizes. Raw keys and metadata remain with the OSS storage owner.
+The host's catalog verifies the cursor and digest chain before sealing a nonzero
+per-object baseline. A missing writer or partial page never proves completeness.
+
+Each object mutation has a durable pending intent before its physical effect.
+Only the first prepare winner receives a random dispatch capability; replay
+cannot dispatch, confirm or cancel that writer's live send. Mutable PUTs compare
+the original native etag, and confirmations require the native unique upload
+version and exact bounded byte/metadata readback. DELETE retains the exclusive
+object fence until exact absence is acknowledged. A conditional-null ACK can
+cancel only with the original capability and unchanged version. Unknown ACKs
+do not cancel, release ownership or reissue sends. An original sender may inspect
+one native readback; a lost prepare/confirmation without a retained capability
+stays pending for an explicitly drained owner reconciliation. All remote calls
+have a fixed 15-second deadline; timeout does not cancel the remote operation.
+
+The host owns catalog, watermark, period clock, immutable fact receipts and
+admission. Byte-millisecond occupancy is an unpriced storage fact. It is not an
+adopted Cloudflare R2 tariff: provider daily peaks, billing-day boundaries and
+monthly denominator require separate qualification. These generic facts carry
+no amount, wallet, Organization, account, session or CPU/memory measurement.

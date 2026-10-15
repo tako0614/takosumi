@@ -1805,6 +1805,14 @@ test("execute rebinds the sealed runner proof to the configured immutable image"
   ).toThrow("platform_worker_release_runner_image_proof_invalid");
 });
 
+test("platform activation rejects local-only metered v2 and profile-injected v1 proof", () => {
+  const config = `[[containers]]\nclass_name = "OpenTofuRunnerObject"\nimage = "${PROVED_RUNNER_IMAGE}"\n`;
+  for (const proof of [
+    { kind: "takosumi.runner-image-runtime-input-plan-proof@v2", profile: "hosted-metered-v1", qualification: "local-native-only", image: PROVED_RUNNER_IMAGE },
+    { kind: "takosumi.runner-image-runtime-input-plan-proof@v1", profile: "hosted-metered-v1", qualification: "local-native-only", image: PROVED_RUNNER_IMAGE },
+  ]) expect(() => assertPlatformRunnerImageProof(config, proof)).toThrow("platform_worker_release_runner_image_proof_invalid");
+});
+
 test("platform command diagnostics normalize ArrayBuffer output before bounded redaction", () => {
   const encoder = new TextEncoder();
   const stdout = encoder.encode(

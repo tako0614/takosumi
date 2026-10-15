@@ -46,6 +46,10 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly R2_STATE?: R2Bucket;
   /** Optional private host custody for declared immutable state-version bytes. */
   readonly TAKOSUMI_ARTIFACT_STORAGE_USAGE?: import("./artifact-storage-usage.ts").ArtifactStorageUsagePort;
+  /** Optional complete physical-store profile. Mutually exclusive with the
+   * historical immutable-state subset; requires a qualified owner inventory. */
+  readonly TAKOSUMI_STORED_SERVICE_USAGE?: import("./stored-service-usage.ts").StoredServiceUsagePort;
+  readonly TAKOSUMI_STORED_OBJECT_OWNERS?: import("./stored-service-usage.ts").StoredObjectOwnerPort;
   /** Backup/export bucket (`takosumi-backups`, core-spec.md §26 / §33). */
   /**
    * Required, not optional: `checkPlatformBindings` calls it required and a
@@ -310,6 +314,8 @@ export interface R2Object {
   readonly key: string;
   readonly size: number;
   readonly etag: string;
+  /** Native unique upload identity; mandatory for the optional complete custody profile. */
+  readonly version?: string;
   readonly uploaded: Date;
   readonly httpMetadata?: {
     readonly contentType?: string;

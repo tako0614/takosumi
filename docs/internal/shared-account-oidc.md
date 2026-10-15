@@ -167,6 +167,17 @@ balances and original pending/unknown operation keys remain protected and
 reachable through the reviewed custody adapter. Missing reconciliation refuses
 consent before fencing; partial acknowledgements after reservation leave a
 pending fenced operation for explicit recovery, never a partial active merge.
+The private [Control reconciliation contract](./control-identity-reconciliation.md)
+adds a server-generated context plan and separate explicit acceptance by each
+proved leg. The plan fixes the original context inventory, current membership,
+management epochs, immutable billing pins and A's existing personal anchor.
+Provider consent or target-only final consent cannot replace these acceptances.
+The initial supported case is two disjoint existing personal contexts; unsupported
+team or resource-specific Principal references refuse admission before fencing.
+W_B retains its historical owner, original member, personal slot and Org; an
+explicitly approved additional A membership makes that context reachable without
+combining roles or wallets. A Control receipt does not attest financial or RP
+custody. Actual external owner adapters remain separately required.
 The browser cannot resume through a revoked/fenced session. The composition
 must give a trusted owner service custody of the persisted operation ID and
 retry `activateIdentityMerge` with current proof/grant/generation checks before

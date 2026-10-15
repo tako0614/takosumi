@@ -1,3 +1,9 @@
+import type { ControlIdentityContextPlan } from "../../../contract/identity-reconciliation.ts";
+import {
+  prepareIdentityMergeContextPlan,
+  acceptIdentityMergeContextPlan,
+  readIdentityMergeContextEvidence,
+} from "./identity-context.ts";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type { AccountSessionRecord, AccountsStore } from "./store.ts";
 import type {
@@ -13,6 +19,12 @@ import { identityRecordsEqual } from "./hosted-identity-records.ts";
 import { normalizeMergeEmail } from "./identity-state.ts";
 import { sha256Text } from "./encoding.ts";
 import { errorJson, json, readJsonObject } from "./http-helpers.ts";
+import type { OwnerOperationTarget } from "./owner-operation-contract.ts";
+import {
+  bindReviewedRecoveryIssuerAvailabilityCheckpoint,
+  readReviewedRecoveryIssuerAvailabilityCheckpoint,
+  type ReviewedRecoveryIssuerAvailabilityCheckpoint,
+} from "./reviewed-recovery-issuer-availability.ts";
 
 const freshnessMs = 5 * 60_000;
 const basePath = "/api/v1/account/identity-merges";
@@ -20,7 +32,21 @@ const unlinkPath = "/api/v1/account/identity-credentials/unlink";
 const mergeBrowserCookie = "__Host-takosumi-merge-browser";
 const policyVersion = "takosumi.hosted-identity-merge@v1";
 
+/** Private constructor evidence. Never accepted from an HTTP request or stored
+ * as an operation receipt; the original checkpoint identity must survive CAS. */
+interface IdentityMergeReadiness {
+  readonly availabilityCheckpoint: ReviewedRecoveryIssuerAvailabilityCheckpoint;
+  readonly target: OwnerOperationTarget;
+}
+
 export interface IdentityMergeReconciler {
+  prepareContextPlan?(
+    operation: IdentityMergeOperation,
+  ): Promise<ControlIdentityContextPlan>;
+  assertContextPlanCurrent?(
+    operation: IdentityMergeOperation,
+  ): Promise<ControlIdentityContextPlan>;
+  assertReady?(operation: IdentityMergeOperation): Promise<IdentityMergeReadiness>;
   /** Owner-reviewed references, never a default acknowledgement. Retry uses the
    * same operation ID and immutable Workspace/Organization/intent pins. */
   reconcile(
@@ -136,6 +162,7 @@ export async function proveIdentityMerge(input: {
     throw new IdentityMergeConflict("merge_conflict");
   const proof: IdentityMergeProof = {
     subject: receipt.subject,
+    providerId: receipt.providerId,
     receiptId: receipt.receiptId,
     method: receipt.method,
     identityGeneration: receipt.identityGeneration,
@@ -176,7 +203,14 @@ export async function consentIdentityMerge(input: {
 }): Promise<IdentityMergeOperation> {
   const { store, operation, session } = input;
   let now = input.now;
+  function currentTime(): number {
+    const value = input.clock?.() ?? input.now;
+    if (!Number.isSafeInteger(value) || value < now || value < 0)
+      throw new IdentityMergeConflict("merge_conflict");
+    return value;
+  }
   if (
+    !Number.isSafeInteger(now) || now < 0 ||
     !input.consent ||
     operation.status !== "proved" ||
     operation.consentAt ||
@@ -190,7 +224,7 @@ export async function consentIdentityMerge(input: {
   if (!input.retryCapability)
     throw new IdentityMergeConflict("merge_retry_unavailable");
   await input.retryCapability.assertAvailable(operation);
-  now = input.clock?.() ?? input.now;
+  now = currentTime();
   const receipts = await consumedProofReceipts(store, operation, now, 0);
   if (
     session.policy !== "hosted" ||
@@ -213,6 +247,41 @@ export async function consentIdentityMerge(input: {
     operation.addressDigest
   )
     throw new IdentityMergeConflict("merge_conflict");
+  if (
+    !input.reconciler.assertReady ||
+    !input.reconciler.assertContextPlanCurrent
+  )
+    throw new IdentityMergeConflict("merge_reconciliation_unavailable");
+  const approved = await input.reconciler.assertContextPlanCurrent(operation);
+  now = currentTime();
+  const context = await readIdentityMergeContextEvidence(
+    store,
+    operation,
+    now,
+    0,
+  );
+  if (approved.digest !== context.plan.planDigest)
+    throw new IdentityMergeConflict("context_plan_conflict");
+  const finalReceipts = await consumedProofReceipts(store, operation, now, 0);
+  const finalEvidence = await eligibleEvidence(
+    store,
+    operation.sourceSubject,
+    operation.targetSubject,
+    now,
+  );
+  if ((await identityMergeAddressDigest(finalEvidence[0].normalizedAddress)) !== operation.addressDigest)
+    throw new IdentityMergeConflict("merge_conflict");
+  // The actual reconciler rechecks the Core census after owner preflight, then
+  // verifies a fresh issuer status as its last await. Its original opaque
+  // checkpoint remains live through repository preparation, then is consumed
+  // synchronously immediately before the local reservation write is submitted.
+  const readiness = await input.reconciler.assertReady(operation);
+  now = currentTime();
+  if (operation.expiresAt <= now || session.expiresAt <= now || (session.absoluteExpiresAt ?? 0) <= now ||
+    context.plan.expiresAt <= now || finalReceipts.some((r) => r.expiresAt <= now || r.completedAt > now) ||
+    context.receipts.some((r) => r.expiresAt <= now || r.acceptedAt > now) ||
+    finalEvidence.some((p) => p.validUntil <= now || p.observedAt > now || now - p.observedAt > freshnessMs))
+    throw new IdentityMergeConflict("merge_conflict");
   const next = {
     ...operation,
     consentAt: now,
@@ -228,18 +297,35 @@ export async function consentIdentityMerge(input: {
       reauthentication: false,
     },
   ];
+  const mutation = {
+    expectedRevision: operation.revision,
+    next,
+    now,
+    sessions: requirements,
+    emailProofs: finalEvidence,
+    proofReceipts: finalReceipts,
+    contextPlanRecord: context.plan,
+    contextReceipts: context.receipts,
+    reserve: true,
+    retryCapacity: input.retryCapability.pendingCapacity,
+    availabilityCheckpoint: readiness?.availabilityCheckpoint,
+  };
+  const earliestTimes = [now, operation.createdAt, session.createdAt, context.plan.createdAt,
+    ...finalReceipts.map((r) => r.completedAt), ...context.receipts.map((r) => r.acceptedAt), ...finalEvidence.map((p) => p.observedAt)];
+  const notBefore = Math.max(...earliestTimes);
+  // Email max-age permits equality, while the other deadlines are exclusive.
+  const deadlines = [operation.expiresAt, session.expiresAt, session.absoluteExpiresAt!, context.plan.expiresAt,
+    ...finalReceipts.map((r) => r.expiresAt), ...context.receipts.map((r) => r.expiresAt),
+    ...finalEvidence.flatMap((p) => [p.validUntil, p.observedAt + freshnessMs + 1])];
+  if (!readiness || earliestTimes.some((value) => !Number.isSafeInteger(value) || value < 0) ||
+    deadlines.some((value) => !Number.isSafeInteger(value) || value < 0) ||
+    !bindReviewedRecoveryIssuerAvailabilityCheckpoint(readiness.availabilityCheckpoint, {
+      target: readiness.target, mutation, notBefore, expiresAtExclusive: Math.min(...deadlines),
+    }) || readReviewedRecoveryIssuerAvailabilityCheckpoint(readiness.availabilityCheckpoint, mutation) === undefined)
+    throw new IdentityMergeConflict("merge_reconciliation_unavailable");
   if (
     !store.compareAndSetIdentityMerge ||
-    !(await store.compareAndSetIdentityMerge({
-      expectedRevision: operation.revision,
-      next,
-      now,
-      sessions: requirements,
-      emailProofs: evidence,
-      proofReceipts: receipts,
-      reserve: true,
-      retryCapacity: input.retryCapability.pendingCapacity,
-    }))
+    !(await store.compareAndSetIdentityMerge(mutation))
   )
     throw new IdentityMergeConflict("merge_conflict");
   return next;
@@ -265,12 +351,19 @@ export async function activateIdentityMerge(input: {
   )
     throw new IdentityMergeConflict("merge_conflict");
   let receipts = await consumedProofReceipts(store, operation, now, 1);
+  let context = await readIdentityMergeContextEvidence(
+    store,
+    operation,
+    now,
+    1,
+  );
   if (!reconciler)
     throw new IdentityMergeConflict("merge_reconciliation_pending");
   const ack =
     operation.acknowledgements ?? (await reconciler.reconcile(operation));
   now = input.clock?.() ?? input.now;
   receipts = await consumedProofReceipts(store, operation, now, 1);
+  context = await readIdentityMergeContextEvidence(store, operation, now, 1);
   if (!completeAcknowledgements(operation, ack, now))
     throw new IdentityMergeConflict("merge_reconciliation_pending");
   const evidence = await eligibleEvidence(
@@ -302,6 +395,8 @@ export async function activateIdentityMerge(input: {
         now,
         emailProofs: evidence,
         proofReceipts: receipts,
+        contextPlanRecord: context.plan,
+        contextReceipts: context.receipts,
       }))
     )
       throw new IdentityMergeConflict("merge_conflict");
@@ -322,6 +417,8 @@ export async function activateIdentityMerge(input: {
       now,
       emailProofs: evidence,
       proofReceipts: receipts,
+      contextPlanRecord: context.plan,
+      contextReceipts: context.receipts,
       activate: true,
     }))
   )
@@ -643,6 +740,42 @@ export async function handleIdentityMergeRequest(input: {
           typeof body?.receiptId === "string" ? body.receiptId : undefined,
         now,
       });
+    } else if (parts[1] === "context-plan") {
+      const body = await readJsonObject(input.request);
+      if (!body || Object.keys(body).length)
+        return fail("invalid_request", 400);
+      const prepared = await prepareIdentityMergeContextPlan({
+        store: input.store,
+        operation,
+        reconciler: input.reconciler,
+        now,
+        clock: () => input.now ?? Date.now(),
+      });
+      return json(
+        { operation: publicOperation(prepared.operation), plan: prepared.plan },
+        200,
+        { "cache-control": "no-store" },
+      );
+    } else if (parts[1] === "context-accept") {
+      const body = await readJsonObject(input.request);
+      if (
+        !body ||
+        Object.keys(body).some(
+          (key) => !["planDigest", "consent"].includes(key),
+        ) ||
+        typeof body.planDigest !== "string" ||
+        body.consent !== true
+      )
+        return fail("invalid_request", 400);
+      next = await acceptIdentityMergeContextPlan({
+        store: input.store,
+        operation,
+        session,
+        browserBindingHash,
+        planDigest: body.planDigest,
+        consent: true,
+        now,
+      });
     } else if (parts[1] === "consent") {
       const body = await readJsonObject(input.request);
       if (!body || Object.keys(body).some((key) => key !== "consent"))
@@ -691,7 +824,7 @@ export async function handleIdentityMergeRequest(input: {
   }
 }
 
-async function eligibleEvidence(
+export async function eligibleEvidence(
   store: AccountsStore,
   source: TakosumiSubject,
   target: TakosumiSubject,
@@ -765,7 +898,7 @@ function freshSession(
     authTime: time,
   };
 }
-async function consumedProofReceipts(
+export async function consumedProofReceipts(
   store: AccountsStore,
   op: IdentityMergeOperation,
   now: number,
@@ -778,9 +911,22 @@ async function consumedProofReceipts(
       store.findIdentityOperationReceipt!(p.receiptId),
     ),
   );
+  if (op.sourceProof.receiptId === op.targetProof.receiptId)
+    throw new IdentityMergeConflict("merge_conflict");
   const out: IdentityOperationReceiptRecord[] = [];
-  for (const receipt of receipts) {
-    if (!receipt) throw new IdentityMergeConflict("merge_conflict");
+  for (const [index, receipt] of receipts.entries()) {
+    const proof = index === 0 ? op.sourceProof : op.targetProof;
+    if (
+      !receipt ||
+      receipt.role !== (index === 0 ? "source" : "target") ||
+      proof.subject !== receipt.subject ||
+      proof.identityGeneration !== receipt.identityGeneration ||
+      proof.provedAt !== receipt.completedAt ||
+      proof.method !== receipt.method ||
+      (proof.providerId !== undefined &&
+        proof.providerId !== receipt.providerId)
+    )
+      throw new IdentityMergeConflict("merge_conflict");
     await validateOperationReceipt(
       store,
       op,
@@ -803,6 +949,11 @@ async function validateOperationReceipt(
 ): Promise<void> {
   const subject = r.role === "source" ? op.sourceSubject : op.targetSubject;
   if (
+    !Number.isSafeInteger(r.startedAt) ||
+    !Number.isSafeInteger(r.completedAt) ||
+    !Number.isSafeInteger(r.expiresAt) ||
+    !Number.isSafeInteger(r.legConsentAt) ||
+    !Number.isSafeInteger(r.identityGeneration) ||
     !["source", "target"].includes(r.role) ||
     r.operationId !== op.operationId ||
     r.sourceSubject !== op.sourceSubject ||
@@ -877,6 +1028,16 @@ function publicOperation(operation: IdentityMergeOperation): unknown {
     revision: operation.revision,
     sourceSubject: operation.sourceSubject,
     targetSubject: operation.targetSubject,
+    contextPlan: operation.contextPlan
+      ? {
+          planId: operation.contextPlan.planId,
+          planDigest: operation.contextPlan.planDigest,
+        }
+      : undefined,
+    sourceContextAccepted: !!operation.sourceContextAcceptance,
+    targetContextAccepted: !!operation.targetContextAcceptance,
+    sourceProviderId: operation.sourceProof?.providerId,
+    targetProviderId: operation.targetProof?.providerId,
     sourceProved: !!operation.sourceProof,
     targetProved: !!operation.targetProof,
     consented: !!operation.consentAt,

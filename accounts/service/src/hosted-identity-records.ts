@@ -1,4 +1,9 @@
 import type {
+  IdentityMergeContextPlanRecord,
+  IdentityMergeContextReceipt,
+  IdentityMergeLock,
+} from "./identity-context-state.ts";
+import type {
   CredentialUnlinkIntent,
   CredentialUnlinkReceipt,
   CredentialUnlinkMutation,
@@ -25,8 +30,13 @@ import type {
   UpstreamLoginTransactionRecord,
 } from "./identity-state.ts";
 import { upstreamIdentityKey } from "./identity-state.ts";
+import type { OwnerOperationContextEvidence, OwnerOperationReceiptEvidence } from "./owner-operation-contract.ts";
+import type { ReviewedRecoveryApprovalRecord, ReviewedRecoveryApprovalPointer, ReviewedRecoveryApprovalMutation } from "./reviewed-recovery-state.ts";
+import { ownerContextBucket, ownerReceiptBucket, ownerContextKey, ownerReceiptKey, reviewedApprovalBucket, reviewedApprovalCurrentBucket, reviewedApprovalRefBucket, reviewedApprovalRefKey, canonicalOwnerJson, digest, boundedText, validOwnerTarget, validOwnerContextEvidence, validOwnerReceiptEvidence, OwnerOperationEvidenceConflict, type OwnerOperationContextEvidenceLookup, type OwnerOperationReceiptEvidenceLookup } from "./owner-operation-evidence.ts";
+import { validReviewedRecoveryMutation, validReviewedRecoveryRecord } from "./reviewed-recovery-approvals.ts";
 
 export interface IdentityRecordRepository {
+  commitReviewedRecoveryApproval(input: ReviewedRecoveryApprovalMutation): Promise<boolean>;
   listIdentities(
     subject: TakosumiSubject,
   ): Promise<readonly UpstreamIdentityRecord[]>;
@@ -75,6 +85,116 @@ export class HostedIdentityRecords implements HostedIdentityStore {
     readonly repository: IdentityRecordRepository,
     readonly accounts: Pick<AccountsStore, "findAccount">,
   ) {}
+  async createOwnerOperationContextEvidence(value: OwnerOperationContextEvidence): Promise<boolean> {
+    const record = structuredClone(value);
+    if (!await validOwnerContextEvidence(record)) return false;
+    const key = ownerContextKey(record.context);
+    if (await this.repository.create(ownerContextBucket, key, record)) return true;
+    return canonicalOwnerJson(await this.repository.get(ownerContextBucket, key)) === canonicalOwnerJson(record);
+  }
+  async findOwnerOperationContextEvidence(input: OwnerOperationContextEvidenceLookup): Promise<OwnerOperationContextEvidence | undefined> {
+    if (!validOwnerTarget(input.target)) return undefined;
+    const record = await this.repository.get<OwnerOperationContextEvidence>(ownerContextBucket, ownerContextKey(input));
+    if (!record) return undefined;
+    if (!await validOwnerContextEvidence(record) || canonicalOwnerJson(record.target) !== canonicalOwnerJson(input.target) || ownerContextKey(record.context) !== ownerContextKey(input)) throw new OwnerOperationEvidenceConflict();
+    return structuredClone(record);
+  }
+  async createOwnerOperationReceiptEvidence(value: OwnerOperationReceiptEvidence): Promise<boolean> {
+    const record = structuredClone(value);
+    const parent = await this.repository.get<OwnerOperationContextEvidence>(ownerContextBucket, ownerContextKey(record.receipt));
+    if (!parent || !await validOwnerContextEvidence(parent) || !validOwnerReceiptEvidence(record, parent)) return false;
+    const key = ownerReceiptKey(record);
+    if (await this.repository.create(ownerReceiptBucket, key, record)) return true;
+    return canonicalOwnerJson(await this.repository.get(ownerReceiptBucket, key)) === canonicalOwnerJson(record);
+  }
+  async findOwnerOperationReceiptEvidence(input: OwnerOperationReceiptEvidenceLookup): Promise<OwnerOperationReceiptEvidence | undefined> {
+    const record = await this.repository.get<OwnerOperationReceiptEvidence>(ownerReceiptBucket, ownerReceiptKey(input));
+    if (!record) return undefined;
+    if (ownerReceiptKey(record) !== ownerReceiptKey(input)) throw new OwnerOperationEvidenceConflict();
+    const parent = await this.repository.get<OwnerOperationContextEvidence>(ownerContextBucket, ownerContextKey(record.receipt));
+    if (!parent || !await validOwnerContextEvidence(parent) || !validOwnerReceiptEvidence(record, parent)) throw new OwnerOperationEvidenceConflict();
+    return structuredClone(record);
+  }
+  async findReviewedRecoveryApproval(hash: string): Promise<ReviewedRecoveryApprovalRecord | undefined> {
+    if (!digest(hash)) return undefined;
+    const record = await this.repository.get<ReviewedRecoveryApprovalRecord>(reviewedApprovalBucket, hash);
+    return record && record.approvalDigest === hash && await validReviewedRecoveryRecord(record) ? structuredClone(record) : undefined;
+  }
+  async findCurrentReviewedRecoveryApproval(operationId: string): Promise<ReviewedRecoveryApprovalPointer | undefined> {
+    if (!boundedText(operationId)) return undefined;
+    const p = await this.repository.get<ReviewedRecoveryApprovalPointer>(reviewedApprovalCurrentBucket, operationId);
+    return p?.operationId === operationId && digest(p.approvalDigest) && Number.isSafeInteger(p.revision) && p.revision >= 0 && boundedText(p.mutationId) && Number.isSafeInteger(p.updatedAt) && p.updatedAt >= 0 ? structuredClone(p) : undefined;
+  }
+  async findReviewedRecoveryApprovalByRef(input: {operationId:string;recoveryId:string;reviewedApprovalRef:string}): Promise<string | undefined> {
+    const r = await this.repository.get<{operationId:string;recoveryId:string;reviewedApprovalRef:string;approvalDigest:string}>(reviewedApprovalRefBucket, reviewedApprovalRefKey(input));
+    return r && r.operationId === input.operationId && r.recoveryId === input.recoveryId && r.reviewedApprovalRef === input.reviewedApprovalRef && digest(r.approvalDigest) ? r.approvalDigest : undefined;
+  }
+  async compareAndSetReviewedRecoveryApproval(value: ReviewedRecoveryApprovalMutation): Promise<boolean> {
+    const input = structuredClone(value);
+    if (!await validReviewedRecoveryMutation(input)) return false;
+    const old = await this.repository.get<ReviewedRecoveryApprovalPointer>(reviewedApprovalCurrentBucket, input.pointer.operationId);
+    if (old && (!digest(old.approvalDigest) || old.operationId !== input.pointer.operationId || !Number.isSafeInteger(old.revision) || !boundedText(old.mutationId))) return false;
+    const history = await this.repository.get<ReviewedRecoveryApprovalRecord>(reviewedApprovalBucket, input.record.approvalDigest);
+    if (history && (!await validReviewedRecoveryRecord(history) || canonicalOwnerJson(history) !== canonicalOwnerJson(input.record))) return false;
+    const ref = await this.repository.get<{operationId:string;recoveryId:string;reviewedApprovalRef:string;approvalDigest:string}>(reviewedApprovalRefBucket, reviewedApprovalRefKey(input.record.approval));
+    if (ref && (ref.operationId !== input.record.approval.operationId || ref.recoveryId !== input.record.approval.recoveryId || ref.reviewedApprovalRef !== input.record.approval.reviewedApprovalRef || ref.approvalDigest !== input.record.approvalDigest)) return false;
+    return this.repository.commitReviewedRecoveryApproval(input);
+  }
+  createCredentialUnlinkAuthorityTicket(
+    record: import("./identity-context-state.ts").CredentialUnlinkAuthorityTicket,
+  ): Promise<boolean> {
+    return this.repository.create(
+      "credential_unlink_authority_tickets",
+      record.operationId,
+      record,
+    );
+  }
+  findCredentialUnlinkAuthorityTicket(
+    operationId: string,
+  ): Promise<
+    | import("./identity-context-state.ts").CredentialUnlinkAuthorityTicket
+    | undefined
+  > {
+    return this.repository.get(
+      "credential_unlink_authority_tickets",
+      operationId,
+    );
+  }
+  createIdentityMergeContextPlan(
+    record: IdentityMergeContextPlanRecord,
+  ): Promise<boolean> {
+    return this.repository.create(
+      "identity_merge_context_plans",
+      record.planId,
+      record,
+    );
+  }
+  findIdentityMergeContextPlan(
+    planId: string,
+  ): Promise<IdentityMergeContextPlanRecord | undefined> {
+    return this.repository.get("identity_merge_context_plans", planId);
+  }
+  createIdentityMergeContextReceipt(
+    record: IdentityMergeContextReceipt,
+  ): Promise<boolean> {
+    if (!/^sha256:[A-Za-z0-9_-]{43}$/u.test(record.issuerSessionHash))
+      throw new TypeError("invalid_context_session_hash");
+    return this.repository.create(
+      "identity_merge_context_receipts",
+      record.receiptId,
+      record,
+    );
+  }
+  findIdentityMergeContextReceipt(
+    receiptId: string,
+  ): Promise<IdentityMergeContextReceipt | undefined> {
+    return this.repository.get("identity_merge_context_receipts", receiptId);
+  }
+  findIdentityMergeLock(
+    subject: TakosumiSubject,
+  ): Promise<IdentityMergeLock | undefined> {
+    return this.repository.get("identity_merge_locks", subject);
+  }
   async rememberHostedAccountSessionAnchor(
     sessionLookupHash: string,
     record: AccountSessionRecord,
@@ -435,6 +555,58 @@ export function identityMergeProofAudit(n: IdentityMergeOperation): unknown[] {
 export function assertMergeMutation(input: IdentityMergeMutation): void {
   const next = input.next;
   if (
+    input.contextReceipt &&
+    (!input.contextPlanRecord ||
+      input.contextReceipt.acceptedAt < input.contextPlanRecord.createdAt)
+  )
+    throw new TypeError("context_plan_acceptance_required");
+  if (
+    input.contextReceipts?.some(
+      (r) =>
+        !input.contextPlanRecord ||
+        r.acceptedAt < input.contextPlanRecord.createdAt,
+    )
+  )
+    throw new TypeError("context_plan_acceptance_required");
+  if (
+    (input.reserve || input.activate) &&
+    (!next.contextPlan ||
+      !next.sourceContextAcceptance ||
+      !next.targetContextAcceptance ||
+      input.contextReceipts?.length !== 2 ||
+      !input.contextPlanRecord)
+  )
+    throw new TypeError("context_plan_acceptance_required");
+  if (
+    input.contextPlanRecord &&
+    !identityContextPlanMatches(input.contextPlanRecord, next, input.now)
+  )
+    throw new TypeError("invalid_context_plan");
+  if (
+    input.contextReceipt &&
+    (!identityContextReceiptMatches(
+      input.contextReceipt,
+      next,
+      input.now,
+      false,
+    ) ||
+      (input.contextReceipt.role === "source"
+        ? next.sourceContextAcceptance
+        : next.targetContextAcceptance
+      )?.receiptId !== input.contextReceipt.receiptId)
+  )
+    throw new TypeError("invalid_context_acceptance");
+  if (
+    input.contextReceipts &&
+    (new Set(input.contextReceipts.map((r) => r.role)).size !== 2 ||
+      new Set(input.contextReceipts.map((r) => r.receiptId)).size !== 2)
+  )
+    throw new TypeError("invalid_context_acceptance");
+  for (const receipt of input.contextReceipts ?? [])
+    if (!identityContextReceiptMatches(receipt, next, input.now, true))
+      throw new TypeError("invalid_context_acceptance");
+
+  if (
     input.reserve &&
     (!Number.isInteger(input.retryCapacity) ||
       input.retryCapacity! < 1 ||
@@ -599,4 +771,77 @@ export function identityRecordsEqual(a: unknown, b: unknown): boolean {
           )
         : v;
   return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+}
+
+export function identityContextPlanMatches(
+  p: IdentityMergeContextPlanRecord,
+  n: IdentityMergeOperation,
+  now: number,
+): boolean {
+  const b = n.contextPlan;
+  return (
+    !!b &&
+    p.operationId === n.operationId &&
+    p.sourceSubject === n.sourceSubject &&
+    p.targetSubject === n.targetSubject &&
+    p.sourceProofReceiptId === n.sourceProof?.receiptId &&
+    p.targetProofReceiptId === n.targetProof?.receiptId &&
+    p.sourceIdentityGeneration === n.sourceProof.identityGeneration &&
+    p.targetIdentityGeneration === n.targetProof.identityGeneration &&
+    p.browserBindingHash === n.browserBindingHash &&
+    p.policyVersion === n.policyVersion &&
+    p.planId === b.planId &&
+    p.planDigest === b.planDigest &&
+    p.planningRevision === b.planningRevision &&
+    p.authorityVersion === b.authorityVersion &&
+    p.authorityId === b.authorityId &&
+    p.canonicalPersonalWorkspaceId === b.canonicalPersonalWorkspaceId &&
+    p.createdAt >= n.createdAt &&
+    p.createdAt <= now &&
+    p.expiresAt > now &&
+    p.expiresAt <= n.expiresAt &&
+    p.controlPlan.digest === p.planDigest &&
+    p.controlPlan.operationId === n.operationId
+  );
+}
+export function identityContextReceiptMatches(
+  r: IdentityMergeContextReceipt,
+  n: IdentityMergeOperation,
+  now: number,
+  consumed: boolean,
+): boolean {
+  const b = n.contextPlan;
+  if (!b || !["source", "target"].includes(r.role)) return false;
+  const proof = r.role === "source" ? n.sourceProof : n.targetProof;
+  const a =
+    r.role === "source" ? n.sourceContextAcceptance : n.targetContextAcceptance;
+  return (
+    r.operationId === n.operationId &&
+    r.subject === (r.role === "source" ? n.sourceSubject : n.targetSubject) &&
+    r.sourceSubject === n.sourceSubject &&
+    r.targetSubject === n.targetSubject &&
+    r.planId === b.planId &&
+    r.planDigest === b.planDigest &&
+    r.planningRevision === b.planningRevision &&
+    r.proofReceiptId === proof?.receiptId &&
+    r.identityGeneration === proof.identityGeneration &&
+    r.browserBindingHash === n.browserBindingHash &&
+    r.policyVersion === n.policyVersion &&
+    r.acceptedAt >= n.createdAt &&
+    r.acceptedAt >= proof.provedAt &&
+    r.acceptedAt <= now &&
+    r.expiresAt > now &&
+    r.expiresAt <= n.expiresAt &&
+    r.explicitContextConsent === true &&
+    r.issuerSessionHash.startsWith("sha256:") &&
+    (consumed
+      ? r.consumedByOperation === n.operationId
+      : r.consumedByOperation === undefined) &&
+    (!consumed ||
+      (a?.receiptId === r.receiptId &&
+        a.planDigest === r.planDigest &&
+        a.proofReceiptId === r.proofReceiptId &&
+        a.identityGeneration === r.identityGeneration &&
+        a.acceptedAt === r.acceptedAt))
+  );
 }

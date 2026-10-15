@@ -68,6 +68,31 @@ test("stage entry mounts the guarded issuer portal with an in-process provider r
   const html=await result.text();expect(html).toContain("Continue with Google");expect(html).toContain("Continue with GitHub");expect(paths).toEqual(["/api/v1/auth/providers"]);
 });
 
+test("stage context confirmation is schema-gated and requires its issuer browser cookies", async () => {
+  const path = "/identity-merges/imrg_11111111-1111-4111-8111-111111111111/contexts";
+  let schemaCalls = 0;
+  let accountCalls = 0;
+  const worker = createAuthStagingWorker({
+    verifySchema: async () => { schemaCalls++; },
+    accounts: { async fetch() { accountCalls++; return Response.json({}); } },
+  });
+  const result = await worker.fetch(request(path), env);
+  expect(result.status).toBe(401);
+  expect(result.headers.get("content-security-policy")).toContain("form-action 'self'");
+  expect(result.headers.get("cache-control")).toBe("no-store");
+  expect(schemaCalls).toBe(1);
+  expect(accountCalls).toBe(0);
+  const unavailable = createAuthStagingWorker({
+    verifySchema: async () => { throw new Error("fixture_control72"); },
+    accounts: { async fetch() { accountCalls++; return Response.json({}); } },
+  });
+  expect((await unavailable.fetch(request(path), env)).status).toBe(503);
+  expect(accountCalls).toBe(0);
+  expect((await worker.fetch(new Request(`https://auth.takos.jp${path}`), env)).status).toBe(404);
+  expect((await worker.fetch(request("/identity-merges/other/contexts"), env)).status).toBe(404);
+  expect(schemaCalls).toBe(1);
+});
+
 test("scheduled retry uses one per-env factory and refuses prod, unexpected cron or failed schema",async()=>{
   let schemaCalls=0,factoryCalls=0,batches=0;
   const invocations:(IdentityMergeRetryScheduledInvocation|undefined)[]=[];
@@ -143,9 +168,9 @@ test("actual workerd entry refuses production origin and missing protected schem
     // Bun's Undici bridge does not apply that dispatcher, so supply the same
     // loopback ingress metadata explicitly without weakening the Worker guard.
     const ingress = (url: string) => runtime.dispatchFetch(url, { headers: { host: new URL(url).host, "MF-Original-URL": url } });
-    expect((await ingress("https://auth.takos.jp/oauth/token")).status).toBe(404);
-    expect((await ingress(`${AUTH_STAGING_ISSUER}/readyz`)).status).toBe(503);
-    expect((await ingress(`${AUTH_STAGING_ISSUER}/.well-known/openid-configuration`)).status).toBe(503);
+    for (const [url, status] of [["https://auth.takos.jp/oauth/token", 404], [`${AUTH_STAGING_ISSUER}/readyz`, 503], [`${AUTH_STAGING_ISSUER}/.well-known/openid-configuration`, 503]] as const) {
+      const response = await ingress(url); expect(response.status).toBe(status); await response.arrayBuffer();
+    }
   } finally { await runtime.dispose(); }
 }, 20_000);
 
@@ -167,8 +192,8 @@ test("actual scheduled stage factory writes a native durable heartbeat; probes/p
     const key="auth-staging.identity-merge-retry@v1";
     expect((await store.findIdentityMergeRetryCheckpoint!(key))?.heartbeat).toBeUndefined();
     const nativeEnv={...env,TAKOSUMI_ACCOUNTS_DB:native,TAKOSUMI_ACCOUNT_SESSION_HASH_SALT:"fixture-heartbeat-salt"} as unknown as Env;
-    const worker=createAuthStagingWorker({verifySchema:async()=>{},accounts:{fetch:async()=>Response.json({ok:true})},ownerPorts:()=>({identityMergeReconciler:reconciler,assertOwnerReadiness:async()=>true,retryAuthorityContextDigest:authorityContextDigest})});
-    expect((await worker.fetch(request("/readyz"),nativeEnv)).status).toBe(200);
+    const worker=createAuthStagingWorker({verifySchema:async()=>{},accounts:{fetch:async()=>Response.json({ok:true})},ownerPorts:()=>({retryAuthorityContextDigest:authorityContextDigest}),retryService:retry});
+    const response=await worker.fetch(request("/readyz"),nativeEnv);expect(response.status).toBe(200);await response.arrayBuffer();
     expect((await store.findIdentityMergeRetryCheckpoint!(key))?.heartbeat).toBeUndefined();
     await worker.scheduled({cron:AUTH_STAGING_RETRY_CRON},nativeEnv);
     const heartbeat=(await store.findIdentityMergeRetryCheckpoint!(key))?.heartbeat;

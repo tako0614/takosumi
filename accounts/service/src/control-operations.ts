@@ -164,6 +164,8 @@ export interface MembershipActor {
  * convenience for the same-origin dashboard only.
  */
 export interface ControlPlaneOperations {
+  /** Optional private owner-to-owner identity custody; no public caller admission. */
+  readonly identityReconciliation?:import("../../../contract/identity-reconciliation.ts").ControlIdentityReconciliationPort;
   /** Durable, actor-scoped Git install/revision coordinator ledger. */
   readonly gitInstallPlans: GitInstallPlanStore;
   /**

@@ -23,7 +23,7 @@ type ColumnMirror = {
 
 type UniqueIndexMirror = {
   name: string;
-  columns: readonly string[];
+  columns: readonly (string | null)[];
   unique: boolean;
 };
 
@@ -54,7 +54,7 @@ type SqlitePragmaIndexListRow = {
 type SqlitePragmaIndexInfoRow = {
   seqno: number;
   cid: number;
-  name: string;
+  name: string | null;
 };
 
 type D1SchemaMigrationRow = {
@@ -64,7 +64,10 @@ type D1SchemaMigrationRow = {
   applied_at: string;
 };
 
-function columnsOf(table: TableLike): ColumnMirror[] {
+function columnsOf(
+  table: TableLike,
+  compositePrimaryColumns: readonly string[] = [],
+): ColumnMirror[] {
   const columns = getTableColumns(table);
   return Object.values(columns).map((column) => {
     const typed = column as {
@@ -77,7 +80,7 @@ function columnsOf(table: TableLike): ColumnMirror[] {
       name: typed.name,
       notNull: typed.notNull,
       hasDefault: typed.hasDefault,
-      primary: typed.primary === true,
+      primary: typed.primary === true || compositePrimaryColumns.includes(typed.name),
     };
   });
 }
@@ -89,12 +92,13 @@ function sqliteUniqueIndexesOf(
     getSqliteTableConfig(table).indexes.map((index) => {
       const config = index.config as {
         name: string;
-        columns: Array<{ name: string }>;
+        columns: Array<{ name?: string }>;
         unique?: boolean;
       };
       return {
         name: config.name,
-        columns: config.columns.map((column) => column.name),
+        // SQLite reports an expression key as cid=-2/name=null.
+        columns: config.columns.map((column) => column.name ?? null),
         unique: config.unique === true,
       };
     }),
@@ -174,7 +178,10 @@ async function liveD1InlineUniqueConstraintsOf(
       .all<SqlitePragmaIndexInfoRow>();
     constraints.push({
       name: row.name,
-      columns: (infoRows.results ?? []).map((info) => info.name),
+      columns: (infoRows.results ?? []).map((info) => {
+        if (info.name === null) throw new Error("inline unique constraint has an expression key");
+        return info.name;
+      }),
     });
   }
   return constraints.sort((left, right) =>
@@ -504,8 +511,10 @@ test("Worker D1 bootstrap mirrors every logical D1 Drizzle table", async () => {
 
   for (const logicalName of deployControlLogicalTables) {
     const table = d1Schema[logicalName];
+    const compositePrimaryColumns = getSqliteTableConfig(table).primaryKeys
+      .flatMap((key) => key.columns.map((column) => column.name));
     expect(await liveD1ColumnsOf(db, getTableName(table)), logicalName).toEqual(
-      columnsOf(table),
+      columnsOf(table, compositePrimaryColumns),
     );
   }
 });
@@ -521,6 +530,101 @@ test("Worker D1 bootstrap mirrors every logical D1 Drizzle index", async () => {
       sqliteUniqueIndexesOf(table),
     );
   }
+});
+
+test("identity reconciliation schema retains operation custody and revision evidence without foreign keys", () => {
+  for (const { prefix, operations, events } of [
+    {
+      prefix: "",
+      operations: getSqliteTableConfig(d1Schema.identityReconciliationOperations),
+      events: getSqliteTableConfig(d1Schema.identityReconciliationEvents),
+    },
+    {
+      prefix: "takosumi_",
+      operations: getPgTableConfig(postgresSchema.identityReconciliationOperations),
+      events: getPgTableConfig(postgresSchema.identityReconciliationEvents),
+    },
+  ]) {
+    expect(operations.name).toBe(`${prefix}identity_reconciliation_operations`);
+    expect(events.name).toBe(`${prefix}identity_reconciliation_events`);
+    expect(operations.columns.map((column) => column.name)).toEqual([
+      "operation_id", "kind", "immutable_key", "revision", "status", "mutation_id",
+      "record_json", "created_at", "updated_at",
+    ]);
+    expect(events.columns.map((column) => column.name)).toEqual([
+      "operation_id", "revision", "mutation_id", "record_json", "recorded_at",
+    ]);
+    expect(operations.columns.filter((column) => column.primary).map((column) => column.name))
+      .toEqual(["operation_id"]);
+    expect(events.primaryKeys.map((key) => key.columns.map((column) => column.name)))
+      .toEqual([["operation_id", "revision"]]);
+    for (const [tableName, config] of [["operations", operations], ["events", events]] as const) {
+      expect(config.foreignKeys).toEqual([]);
+      expect(config.columns.every((column) => column.notNull)).toBe(true);
+      expect(config.indexes.map((index) => ({
+        name: index.config.name,
+        unique: index.config.unique,
+        columns: index.config.columns.map((column) => "name" in column ? column.name : undefined),
+      }))).toEqual([{
+        name: `${prefix}identity_reconciliation_${tableName}_mutation_unique`,
+        unique: true,
+        columns: ["mutation_id"],
+      }]);
+    }
+  }
+  expect(d1Schema.identityReconciliationOperations.recordJson.getSQLType()).toBe("text");
+  expect(d1Schema.identityReconciliationEvents.revision.getSQLType()).toBe("integer");
+  expect(postgresSchema.identityReconciliationOperations.recordJson.getSQLType()).toBe("jsonb");
+  expect(postgresSchema.identityReconciliationEvents.revision.getSQLType()).toBe("integer");
+});
+
+test("D1 v73 preserves protected v72 rows and ledger while adding retained identity evidence", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 72 });
+  const ledgerBefore = await db.prepare("select * from schema_migrations order by version").all();
+  const fixtureSql = [
+    `insert into workspaces (id, handle, record_json, created_at, updated_at)
+     values ('protected_workspace', 'protected_workspace', '{"ownerUserId":"protected_owner","type":"organization"}', 'old_birth', 'old_update')`,
+    `insert into workspace_members (id, workspace_id, account_id, status, record_json, created_at, updated_at)
+     values ('protected_member', 'protected_workspace', 'protected_owner', 'active', '{"roles":["owner"]}', 'old_birth', 'old_update')`,
+    `insert into workspace_billing_intents (workspace_id, intent_id, billing_authority, workspace_ref, record_json, created_at)
+     values ('protected_workspace', 'protected_intent', 'owner', 'protected_ref', '{"intentId":"protected_intent"}', 'old_birth')`,
+    `insert into workspace_billing_bindings (workspace_id, intent_id, billing_authority, workspace_ref, organization_ref, record_json, bound_at)
+     values ('protected_workspace', 'protected_intent', 'owner', 'protected_ref', 'protected_organization', '{"organizationRef":"protected_organization"}', 'old_binding')`,
+  ];
+  for (const sql of fixtureSql) await db.prepare(sql).run();
+  const retainedTables = ["workspaces", "workspace_members", "workspace_billing_intents", "workspace_billing_bindings"];
+  const before = await Promise.all(retainedTables.map((table) => db.prepare(`select * from ${table}`).all()));
+
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 73 });
+
+  for (const [index, table] of retainedTables.entries()) {
+    expect(await db.prepare(`select * from ${table}`).all(), table).toEqual(before[index]);
+  }
+  expect((await db.prepare("select * from schema_migrations where version <= 72 order by version").all()).results)
+    .toEqual(ledgerBefore.results);
+  expect(await db.prepare("select name from schema_migrations where version = 73").first())
+    .toEqual({ name: "d1_identity_reconciliation" });
+  for (const table of ["identity_reconciliation_operations", "identity_reconciliation_events"]) {
+    expect((await db.prepare(`pragma foreign_key_list(${table})`).all()).results).toEqual([]);
+  }
+  await db.prepare(`insert into identity_reconciliation_operations values
+    ('operation', 'merge', 'immutable', 1, 'prepared', 'mutation_1', '{"revision":1}', 'birth', 'birth')`).run();
+  await db.prepare(`insert into identity_reconciliation_events values
+    ('operation', 1, 'mutation_1', '{"revision":1}', 'birth'),
+    ('operation', 2, 'mutation_2', '{"revision":2}', 'later')`).run();
+  await expect(Promise.resolve().then(() => db.prepare(`insert into identity_reconciliation_operations values
+    ('other', 'merge', 'other', 1, 'prepared', 'mutation_1', '{}', 'birth', 'birth')`).run())).rejects.toThrow();
+  await expect(Promise.resolve().then(() => db.prepare(`insert into identity_reconciliation_events values
+    ('other', 1, 'mutation_2', '{}', 'birth')`).run())).rejects.toThrow();
+  await expect(Promise.resolve().then(() => db.prepare(`insert into identity_reconciliation_events values
+    ('operation', 1, 'mutation_3', '{}', 'birth')`).run())).rejects.toThrow();
+  await db.prepare("delete from workspaces where id = 'protected_workspace'").run();
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 73 });
+  expect((await db.prepare("select operation_id, revision from identity_reconciliation_events order by revision").all()).results)
+    .toEqual([{ operation_id: "operation", revision: 1 }, { operation_id: "operation", revision: 2 }]);
+  expect(await db.prepare("select count(*) as count from identity_reconciliation_operations").first())
+    .toEqual({ count: 1 });
 });
 
 test("historical D1 Service Form parent keys remain replayable through v60", async () => {
@@ -581,7 +685,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24,
     25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43,
     44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
-    61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72,
+    61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74,
   ]);
   expect(rows.map((row) => row.name)).toEqual([
     "d1_opentofu_connections_and_secret_blobs_shape",
@@ -653,6 +757,8 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_private_run_files",
     "d1_scheduled_sweep_cursors",
     "d1_workspace_billing_bindings",
+    "d1_identity_reconciliation",
+    "d1_backup_owner_lookup_indexes",
   ]);
   for (const row of rows) {
     expect(row.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -1731,7 +1837,7 @@ test("Postgres v112 adds nullable compatibility declarations without upgrading l
     expect(result.rows).toEqual([
       { root_module_variable_declarations_json: null },
     ]);
-    expect(postgresStorageMigrationStatements.slice(-3).map((entry) => entry.version)).toEqual([117, 118, 119]);
+    expect(postgresStorageMigrationStatements.slice(-3).map((entry) => entry.version)).toEqual([118, 119, 120]);
   } finally {
     await client.close();
   }
@@ -1747,6 +1853,56 @@ test("Postgres migration end-state mirrors Drizzle indexes for every deploy tabl
         pgUniqueIndexesOf(table),
       );
     }
+  } finally {
+    await client.close();
+  }
+});
+
+test("Postgres v120 preserves protected v119 rows and retains unique identity evidence", async () => {
+  const client = await PGliteSqlClient.createThroughMigrationVersion(119);
+  try {
+    await client.exec(`insert into takosumi_workspaces (id, handle, space_json, created_at, updated_at)
+      values ('protected_workspace', 'protected_workspace', '{"ownerUserId":"protected_owner","type":"organization"}', 'old_birth', 'old_update');
+      insert into takosumi_workspace_members (id, workspace_id, account_id, status, member_json, created_at, updated_at)
+      values ('protected_member', 'protected_workspace', 'protected_owner', 'active', '{"roles":["owner"]}', 'old_birth', 'old_update');
+      insert into takosumi_workspace_billing_intents (workspace_id, intent_id, billing_authority, workspace_ref, record_json, created_at)
+      values ('protected_workspace', 'protected_intent', 'owner', 'protected_ref', '{"intentId":"protected_intent"}', 'old_birth');
+      insert into takosumi_workspace_billing_bindings (workspace_id, intent_id, billing_authority, workspace_ref, organization_ref, record_json, bound_at)
+      values ('protected_workspace', 'protected_intent', 'owner', 'protected_ref', 'protected_organization', '{"organizationRef":"protected_organization"}', 'old_binding');`);
+    const retainedTables = ["takosumi_workspaces", "takosumi_workspace_members", "takosumi_workspace_billing_intents", "takosumi_workspace_billing_bindings"];
+    const before = await Promise.all(retainedTables.map((table) => client.rawQuery(`select * from ${table}`)));
+    const migration = postgresStorageMigrationStatements.find((entry) => entry.version === 120)!;
+    expect(migration.id).toBe("deploy.identity_reconciliation.create");
+    expect(migration.down).toBeUndefined();
+    const sqlFile = await Bun.file(new URL("../../../../../../core/db/migrations/20261016000073_identity_reconciliation.sql", import.meta.url)).text();
+    expect(sqlFile.replace(/^--.*\n/gmu, "").trim()).toBe(migration.sql);
+    for (const statement of splitSqlStatements(migration.sql)) await client.exec(statement);
+
+    for (const [index, table] of retainedTables.entries()) {
+      expect((await client.rawQuery(`select * from ${table}`)).rows, table).toEqual(before[index].rows);
+    }
+    expect((await client.rawQuery(`select conname from pg_constraint
+      where contype = 'f' and conrelid in (
+        'takosumi_identity_reconciliation_operations'::regclass,
+        'takosumi_identity_reconciliation_events'::regclass
+      )`)).rows).toEqual([]);
+    await client.exec(`insert into takosumi_identity_reconciliation_operations values
+      ('operation', 'merge', 'immutable', 1, 'prepared', 'mutation_1', '{"revision":1}', 'birth', 'birth');
+      insert into takosumi_identity_reconciliation_events values
+      ('operation', 1, 'mutation_1', '{"revision":1}', 'birth'),
+      ('operation', 2, 'mutation_2', '{"revision":2}', 'later');`);
+    await expect(client.exec(`insert into takosumi_identity_reconciliation_operations values
+      ('other', 'merge', 'other', 1, 'prepared', 'mutation_1', '{}', 'birth', 'birth')`)).rejects.toThrow();
+    await expect(client.exec(`insert into takosumi_identity_reconciliation_events values
+      ('other', 1, 'mutation_2', '{}', 'birth')`)).rejects.toThrow();
+    await expect(client.exec(`insert into takosumi_identity_reconciliation_events values
+      ('operation', 1, 'mutation_3', '{}', 'birth')`)).rejects.toThrow();
+    await client.exec("delete from takosumi_workspaces where id = 'protected_workspace'");
+    for (const statement of splitSqlStatements(migration.sql)) await client.exec(statement);
+    expect((await client.rawQuery("select operation_id, revision from takosumi_identity_reconciliation_events order by revision")).rows)
+      .toEqual([{ operation_id: "operation", revision: 1 }, { operation_id: "operation", revision: 2 }]);
+    expect((await client.rawQuery("select record_json from takosumi_identity_reconciliation_operations")).rows)
+      .toEqual([{ record_json: { revision: 1 } }]);
   } finally {
     await client.close();
   }

@@ -5468,7 +5468,7 @@ export class RunEngine {
         stateScope,
         sourceState,
       },
-      { signal, sourceAuthority },
+      { signal, sourceAuthority, runLease: { runId: run.id, leaseToken } },
     );
     signal.throwIfAborted();
     assertRestoreRunnerResult(
@@ -5485,7 +5485,7 @@ export class RunEngine {
             sourceState,
             serviceData: backup.serviceData!,
           },
-          { signal, sourceAuthority },
+          { signal, sourceAuthority, runLease: { runId: run.id, leaseToken } },
         )
       : undefined;
     signal.throwIfAborted();
@@ -8852,7 +8852,7 @@ export class RunEngine {
         };
         const runnerPlanStartedAt = performance.now();
         try {
-          return await runner.plan(job, runnerExecutionControl(signal, deadlineAt));
+          return await runner.plan(job, runnerExecutionControl(signal, deadlineAt, { runId: effectiveRunning.id, leaseToken }));
         } finally {
           runnerPlanMs = finiteElapsedMs(runnerPlanStartedAt, performance.now());
         }
@@ -10424,7 +10424,7 @@ export class RunEngine {
         ...(credentials ? { credentials } : {}),
         ...(privateRunFiles ? { privateRunFiles } : {}),
       },
-      runnerExecutionControl(input.signal, input.deadlineAt),
+      runnerExecutionControl(input.signal, input.deadlineAt, { runId: running.id, leaseToken }),
     );
     if (result.providerExecutionFailure) {
       const stateWasPersisted =
@@ -12098,7 +12098,7 @@ export class RunEngine {
               ...(credentials ? { credentials } : {}),
               ...(privateRunFiles ? { privateRunFiles } : {}),
             },
-            runnerExecutionControl(credentialSignal, deadlineAt),
+            runnerExecutionControl(credentialSignal, deadlineAt, { runId: effectiveRunning.id, leaseToken }),
               );
             },
             (outcome) => Boolean(outcome.providerExecutionFailure),
@@ -13260,6 +13260,7 @@ function providerLockfileObjectRefMatchesRun(ref: string, runId: string): boolea
 function runnerExecutionControl(
   signal: AbortSignal,
   deadlineAt: number | undefined,
+  runLease?: RunExecutionControl["runLease"],
 ): RunExecutionControl {
-  return deadlineAt === undefined ? { signal } : { signal, deadlineAt };
+  return { signal, ...(deadlineAt === undefined ? {} : { deadlineAt }), ...(runLease ? { runLease: { ...runLease } } : {}) };
 }

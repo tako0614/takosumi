@@ -25,6 +25,7 @@ import type {
   InterfaceWriteGuard,
 } from "./stores.ts";
 import { interfaceOAuth2ResourceUri } from "./oauth_resource.ts";
+import { registerIdentityPrincipalStorage } from "../identity-reconciliation/storage-identity.ts";
 
 type InterfaceRow = { readonly record_json: unknown };
 type InterfaceBindingRow = { readonly record_json: unknown };
@@ -289,7 +290,7 @@ class SqlInterfaceStore implements InterfaceStore {
 class SqlInterfaceBindingStore implements InterfaceBindingStore {
   readonly #table = names.interfaceBindings;
 
-  constructor(readonly client: SqlClient) {}
+  constructor(readonly client: SqlClient) { registerIdentityPrincipalStorage(this, client); }
 
   async create(
     record: InterfaceBinding,

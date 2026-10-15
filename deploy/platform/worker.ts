@@ -60,6 +60,7 @@ import {
   resolveSharedAuthWorkspace,
   sharedAuthUnavailableResponse,
   sharedAuthConfigured,
+  sharedAuthRequestFailure,
   type SharedAuthEnvironment,
 } from "../../worker/src/shared_auth_rpc.ts";
 import { createCloudflareD1OpenTofuControlStore } from "../../worker/src/d1_opentofu_store.ts";
@@ -656,6 +657,8 @@ export default {
     env: CloudflareWorkerEnv,
     context?: PlatformExecutionContext,
   ): Promise<Response> {
+    const sharedIngressFailure = sharedAuthRequestFailure(request, env);
+    if (sharedIngressFailure) return sharedIngressFailure;
     const metricsResponse = await handlePlatformMetricsRequest(request, env);
     if (metricsResponse) return metricsResponse;
     const internalEdgeResponse = await handlePlatformInternalEdgeRequest(
@@ -1546,8 +1549,14 @@ export async function handlePlatformSharedAuthSessionRequest(
   env: SharedAuthEnvironment,
 ): Promise<Response | undefined> {
   if (new URL(request.url).pathname !== "/api/v1/account/session/me" ||
-    !sharedAuthConfigured(env) ||
-    new URL(request.url).origin !== env.TAKOSUMI_SHARED_AUTH_ORIGIN) return undefined;
+    !sharedAuthConfigured(env)) return undefined;
+  const ingressFailure = sharedAuthRequestFailure(request, env);
+  if (ingressFailure) return ingressFailure;
+  if (new URL(request.url).origin !== env.TAKOSUMI_SHARED_AUTH_ORIGIN) {
+    return Response.json({ error: "not found" }, {
+      status: 404, headers: { "cache-control": "no-store" },
+    });
+  }
   if (request.method === "DELETE") {
     const target = new URL(request.url);
     target.pathname = "/auth/oidc/logout";
@@ -1583,11 +1592,12 @@ export async function handlePlatformSharedAuthControlRequest(
     readonly runStreamTiming?: RunStreamTiming;
   } = {},
 ): Promise<Response | undefined> {
-  if (!sharedAuthConfigured(env) ||
-    new URL(request.url).origin !== env.TAKOSUMI_SHARED_AUTH_ORIGIN) return undefined;
+  if (!sharedAuthConfigured(env)) return undefined;
   const url = new URL(request.url);
   const resource = controlInventoryResourceKey(url.pathname);
   if (!resource || !CONTROL_DISPATCH_RESOURCE_KEYS.includes(resource)) return undefined;
+  const ingressFailure = sharedAuthRequestFailure(request, env);
+  if (ingressFailure) return ingressFailure;
   if (request.headers.has("authorization")) {
     return Response.json({ error: "unauthenticated" }, {
       status: 401, headers: { "cache-control": "no-store" },
@@ -2617,6 +2627,8 @@ export async function handlePlatformExtensionRouteRequest(
     return await handler.fetch(platformExtensionPreflightRequest(request));
   }
   if (route.authMode === "handler") {
+    const credentialFailure = await sharedAuthHandlerCredentialFailure(request, env);
+    if (credentialFailure) return credentialFailure;
     return await handler.fetch(platformExtensionHandlerAuthRequest(request));
   }
   const authContext = await platformExtensionAuthContext(
@@ -2629,6 +2641,40 @@ export async function handlePlatformExtensionRouteRequest(
   );
   if (!authContext.ok) return authContext.response;
   return await handler.fetch(authContext.request);
+}
+
+/** Local Accounts credentials never cross into a handler-owned protocol.
+ * Exact persisted custody is a refusal only, including retained revoked rows;
+ * an unknown external credential must still pass the owner's real verifier. */
+async function sharedAuthHandlerCredentialFailure(
+  request: Request,
+  env: CloudflareWorkerEnv,
+): Promise<Response | undefined> {
+  if (!sharedAuthConfigured(env)) return undefined;
+  const ingressFailure = sharedAuthRequestFailure(request, env);
+  if (ingressFailure) return ingressFailure;
+  const token = bearerValue(request.headers.get("authorization"));
+  if (!token) return undefined;
+  try {
+    const salt = env.TAKOSUMI_ACCOUNT_SESSION_HASH_SALT;
+    if (typeof salt !== "string" || salt.length === 0) {
+      return sharedAuthUnavailableResponse();
+    }
+    const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
+      schemaMode: "predeployed", sessionHashSalt: salt,
+    });
+    // This existing port performs one bounded indexed read and never boots,
+    // refreshes, touches usage, deletes credentials, or initializes schema.
+    const candidates = await store.resolveAccountsBearerCandidates(token);
+    if (candidates.session || candidates.accessToken || candidates.personalAccessToken) {
+      return Response.json({ error: "unauthenticated" }, {
+        status: 401, headers: { "cache-control": "no-store" },
+      });
+    }
+    return undefined;
+  } catch {
+    return sharedAuthUnavailableResponse();
+  }
 }
 
 function platformExtensionHandlerAuthRequest(request: Request): Request {
@@ -3327,6 +3373,10 @@ export async function verifyPlatformExtensionSession(
   route?: PlatformExtensionRoute,
   context?: PlatformExecutionContext,
 ): Promise<PlatformExtensionSessionContext> {
+  const ingressFailure = sharedAuthRequestFailure(request, env);
+  if (ingressFailure) return ingressFailure.status === 503
+    ? { authenticated: false, unavailable: true }
+    : { authenticated: false };
   const opaqueBearer = bearerValue(request.headers.get("authorization"));
   const deployControlToken =
     typeof env.TAKOSUMI_DEPLOY_CONTROL_TOKEN === "string" &&
@@ -3358,6 +3408,10 @@ export async function verifyPlatformExtensionSession(
   }
 
   if (opaqueBearer) {
+    // Existing Accounts OAuth/PAT/Principal Interface grants represent human
+    // authority. This product profile accepts humans only through the RP;
+    // verified operator and current Run credentials above keep their own lane.
+    if (sharedAuthConfigured(env)) return { authenticated: false };
     const tokenSession = await verifyPlatformExtensionBearerToken(
       request,
       env,
@@ -3525,6 +3579,12 @@ export async function verifyPlatformExtensionBearerToken(
   route?: PlatformExtensionRoute,
   introspectFetch: PlatformExtensionIntrospectFetch = defaultPlatformExtensionIntrospectFetch,
 ): Promise<PlatformExtensionSessionContext> {
+  if (sharedAuthConfigured(env)) {
+    const failure = sharedAuthRequestFailure(request, env);
+    return failure?.status === 503
+      ? { authenticated: false, unavailable: true }
+      : { authenticated: false };
+  }
   return await introspectPlatformExtensionToken(
     request,
     env,
@@ -3580,15 +3640,6 @@ async function introspectPlatformExtensionToken(
     }
     const scope = typeof record.scope === "string" ? record.scope : "";
     const scopes = platformExtensionScopes(scope);
-    // The explicit shared product profile accepts identity grants only through
-    // its private RP session. Keep the issuer's existing standard wire: an
-    // identity-only access token never authorizes even a scope-free extension.
-    if (sharedAuthConfigured(env) &&
-      new URL(request.url).origin === env.TAKOSUMI_SHARED_AUTH_ORIGIN &&
-      tokenUse === "oauth_access" && scopes.includes("openid") &&
-      scopes.every((value) => ["openid", "profile", "email", "offline_access"].includes(value))) {
-      return { authenticated: false };
-    }
     if (!platformExtensionScopesAllowAccess(scopes, route)) {
       return { authenticated: false };
     }

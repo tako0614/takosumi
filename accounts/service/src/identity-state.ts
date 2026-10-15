@@ -1,3 +1,10 @@
+import type {
+  IdentityMergeContextPlanBinding,
+  IdentityMergeContextPlanRecord,
+  IdentityMergeContextAcceptance,
+  IdentityMergeContextReceipt,
+  IdentityMergeLock,
+} from "./identity-context-state.ts";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type {
   CredentialUnlinkIntent,
@@ -34,6 +41,7 @@ export interface UpstreamLoginTransactionRecord {
   maxAgeSeconds?: number;
   returnTo?: string;
   operationProof?: IdentityOperationProofContext;
+  contextContinuation?: import("./identity-context-state.ts").IdentityContextContinuation;
   unlinkProof?: UnlinkOperationProofContext;
 }
 
@@ -91,6 +99,8 @@ export type IdentityOperationProofContext = Omit<
 
 export interface IdentityMergeProof {
   subject: TakosumiSubject;
+  /** Public configured provider label only; immutable upstream IDs remain private. */
+  providerId?:string;
   receiptId: string;
   method: IdentityOperationReceiptRecord["method"];
   identityGeneration: number;
@@ -149,6 +159,9 @@ export interface IdentityMergeOperation {
   createdAt: number;
   expiresAt: number;
   updatedAt: number;
+  contextPlan?: IdentityMergeContextPlanBinding;
+  sourceContextAcceptance?: IdentityMergeContextAcceptance;
+  targetContextAcceptance?: IdentityMergeContextAcceptance;
   sourceProof?: IdentityMergeProof;
   targetProof?: IdentityMergeProof;
   consentAt?: number;
@@ -174,8 +187,14 @@ export interface IdentityMergeMutation {
   sessions?: readonly IdentityMergeSessionRequirement[];
   emailProofs?: readonly AccountEmailProofRecord[];
   receipt?: IdentityOperationReceiptRecord;
+  contextPlanRecord?: IdentityMergeContextPlanRecord;
+  contextReceipt?: IdentityMergeContextReceipt;
+  contextReceipts?: readonly IdentityMergeContextReceipt[];
   proofReceipts?: readonly IdentityOperationReceiptRecord[];
   reserve?: boolean;
+  /** Transient verified issuer status. Never serialized; real hosted consent
+   * requires this capability. Raw unadopted self-host mutations remain optional. */
+  availabilityCheckpoint?: import("./reviewed-recovery-issuer-availability.ts").ReviewedRecoveryIssuerAvailabilityCheckpoint;
   retryCapacity?: number;
   activate?: boolean;
   quarantine?: boolean;
@@ -221,6 +240,47 @@ export interface IdentityMergeRetryCheckpointMutation {
 
 /** Optional ports keep ordinary self-host Accounts independent of hosted mode. */
 export interface HostedIdentityStore {
+  createOwnerOperationContextEvidence?(record: import("./owner-operation-contract.ts").OwnerOperationContextEvidence): Promise<boolean>;
+  findOwnerOperationContextEvidence?(input: import("./owner-operation-evidence.ts").OwnerOperationContextEvidenceLookup): Promise<import("./owner-operation-contract.ts").OwnerOperationContextEvidence | undefined>;
+  createOwnerOperationReceiptEvidence?(record: import("./owner-operation-contract.ts").OwnerOperationReceiptEvidence): Promise<boolean>;
+  findOwnerOperationReceiptEvidence?(input: import("./owner-operation-evidence.ts").OwnerOperationReceiptEvidenceLookup): Promise<import("./owner-operation-contract.ts").OwnerOperationReceiptEvidence | undefined>;
+  findReviewedRecoveryApproval?(digest: string): Promise<import("./reviewed-recovery-state.ts").ReviewedRecoveryApprovalRecord | undefined>;
+  findCurrentReviewedRecoveryApproval?(operationId: string): Promise<import("./reviewed-recovery-state.ts").ReviewedRecoveryApprovalPointer | undefined>;
+  findReviewedRecoveryApprovalByRef?(input: {operationId:string;recoveryId:string;reviewedApprovalRef:string}): Promise<string | undefined>;
+  compareAndSetReviewedRecoveryApproval?(input: import("./reviewed-recovery-state.ts").ReviewedRecoveryApprovalMutation): Promise<boolean>;
+  createCredentialUnlinkAuthorityTicket?(
+    record: import("./identity-context-state.ts").CredentialUnlinkAuthorityTicket,
+  ): boolean | Promise<boolean>;
+  findCredentialUnlinkAuthorityTicket?(
+    operationId: string,
+  ):
+    | import("./identity-context-state.ts").CredentialUnlinkAuthorityTicket
+    | undefined
+    | Promise<
+        | import("./identity-context-state.ts").CredentialUnlinkAuthorityTicket
+        | undefined
+      >;
+  createIdentityMergeContextPlan?(
+    record: IdentityMergeContextPlanRecord,
+  ): boolean | Promise<boolean>;
+  findIdentityMergeContextPlan?(
+    planId: string,
+  ):
+    | IdentityMergeContextPlanRecord
+    | undefined
+    | Promise<IdentityMergeContextPlanRecord | undefined>;
+  createIdentityMergeContextReceipt?(
+    record: IdentityMergeContextReceipt,
+  ): boolean | Promise<boolean>;
+  findIdentityMergeContextReceipt?(
+    receiptId: string,
+  ):
+    | IdentityMergeContextReceipt
+    | undefined
+    | Promise<IdentityMergeContextReceipt | undefined>;
+  findIdentityMergeLock?(
+    subject: TakosumiSubject,
+  ): IdentityMergeLock | undefined | Promise<IdentityMergeLock | undefined>;
   createCredentialUnlinkIntent?(
     record: CredentialUnlinkIntent,
   ): boolean | Promise<boolean>;

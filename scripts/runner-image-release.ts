@@ -19,13 +19,25 @@ import {
 import { userInfo } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
+import {
+  HOSTED_METERED_RUNNER_PROFILE,
+  isRunnerImageMeteredNativeProof,
+  runnerImageMeteredNativeProof,
+  runnerImageProfile,
+  type RunnerImageMeteredNativeProof,
+  type RunnerImageMeteredNativeReport,
+  type RunnerImageProfile,
+} from "./lib/runner-image-profile.ts";
 import { dashboardAssetTreeSeal } from "./platform-worker-release.ts";
 import {
   isPublishedRunnerImageBuildRecord,
   isRunnerImageRuntimeInputPlanProof,
-  runnerImageRuntimeInputPlanProofFromBuildRecord,
+  isRunnerImageMeteredRuntimeInputPlanProof,
+  runnerImageBuildRuntimeInputPlanProofFromBuildRecord,
   RUNNER_IMAGE_RUNTIME_INPUT_PLAN_PROOF_KIND,
+  RUNNER_IMAGE_METERED_RUNTIME_INPUT_PLAN_PROOF_KIND,
   type RunnerImageBuildRecord,
+  type RunnerImageBuildRuntimeInputPlanProof,
   type RunnerImageReleaseEnvironment,
   type RunnerImageRuntimeInputPlanProof,
 } from "./runner-image-release-contract.ts";
@@ -39,6 +51,7 @@ import {
   parseRunnerImageNativeCandidateRecord,
   parseLocalRunnerImageIdentity,
   proveRunnerImageHardenedNative,
+  proveRunnerImageMeteredNative,
   RUNNER_BOOT_SMOKE_OUTPUT_MAX_BYTES,
   RUNNER_IMAGE_NATIVE_CANDIDATE_ARCHIVE_MAX_BYTES,
   verifyRunnerOpenTofuSigstore,
@@ -63,6 +76,7 @@ export type { RunnerImageReleaseEnvironment } from "./runner-image-release-contr
 
 export type RunnerImageReleaseOptions = Readonly<{
   command: RunnerImageReleaseCommand;
+  profile?: RunnerImageProfile;
   config: string;
   environment: RunnerImageReleaseEnvironment;
   release: string;
@@ -83,7 +97,10 @@ type CommandResult = Readonly<{
   stderr: string;
 }>;
 
-type CommandOptions = Readonly<{ dockerConfig?: string }>;
+type CommandOptions = Readonly<{
+  dockerConfig?: string;
+  omitProviderCredentials?: true;
+}>;
 
 type RepositoryIdentity = Readonly<{
   root: string;
@@ -94,6 +111,7 @@ type RepositoryIdentity = Readonly<{
 }>;
 
 type ReleaseContext = Readonly<{
+  profile: RunnerImageProfile;
   repository: RepositoryIdentity;
   releaseSource: PlatformReleaseSourceAuthority;
   config: Readonly<{
@@ -107,8 +125,11 @@ type ReleaseContext = Readonly<{
   dockerfileSha256: string;
 }>;
 
-type RunnerPublicationAttempt = Readonly<{
-  kind: "takosumi.runner-image-publication-state@v2";
+type RunnerPublicationIdentity =
+  | Readonly<{ kind: "takosumi.runner-image-publication-state@v2"; profile?: never }>
+  | Readonly<{ kind: "takosumi.runner-image-publication-state@v3"; profile: typeof HOSTED_METERED_RUNNER_PROFILE }>;
+
+type RunnerPublicationAttempt = RunnerPublicationIdentity & Readonly<{
   status: "publication-started";
   environment: RunnerImageReleaseEnvironment;
   release: string;
@@ -134,7 +155,8 @@ type RunnerPublicationAttempt = Readonly<{
     /** Explicit descriptor authority written by descriptor-aware publishers. */
     localDescriptorDigest?: string;
   };
-  runtimeInputPlanProof?: RunnerImageRuntimeInputPlanProof;
+  runtimeInputPlanProof?: RunnerImageBuildRuntimeInputPlanProof;
+  meteredNativeProof?: RunnerImageMeteredNativeProof;
   review: string;
 }>;
 
@@ -190,9 +212,8 @@ type PublicationStateRecords = Readonly<{
   }>;
 }>;
 
-type RunnerPublicationResolution =
+type RunnerPublicationResolution = RunnerPublicationIdentity & (
   | Readonly<{
-      kind: "takosumi.runner-image-publication-state@v2";
       status: "published";
       environment: RunnerImageReleaseEnvironment;
       release: string;
@@ -203,14 +224,14 @@ type RunnerPublicationResolution =
       build: RunnerImageBuildRecord;
     }>
   | Readonly<{
-      kind: "takosumi.runner-image-publication-state@v2";
       status: "reconciled-absent";
       environment: RunnerImageReleaseEnvironment;
       release: string;
       observedAt: string;
       transportRef: string;
       diagnostic: ReturnType<typeof releaseDiagnostic>;
-    }>;
+    }>
+);
 type RunnerPublishedResolution = Extract<
   RunnerPublicationResolution,
   { status: "published" }
@@ -323,10 +344,10 @@ export type RunnerImageReleaseRuntime = Readonly<{
 export const RUNNER_IMAGE_RELEASE_USAGE = `Takosumi runner image release
 
 Usage:
-  bun run deploy -- takosumi-runner-image build --config <absolute-wrangler.toml> --environment <staging|production> --release <label> --state <absolute-jsonl> --evidence <absolute-jsonl> [--candidate-image <absolute-runner-image.tar> --candidate-record <absolute-candidate.json> --candidate-attestation <absolute-attestation.jsonl>] [--review <review>] [--execute]
+  bun run deploy -- takosumi-runner-image build [--profile hosted-metered-v1] --config <absolute-wrangler.toml> --environment <staging|production> --release <label> --state <absolute-jsonl> --evidence <absolute-jsonl> [--candidate-image <absolute-runner-image.tar> --candidate-record <absolute-candidate.json> --candidate-attestation <absolute-attestation.jsonl>] [--review <review>] [--execute]
   bun run deploy -- takosumi-runner-image recover-journal --config <absolute-wrangler.toml> --environment <staging|production> --release <label> --state <absolute-jsonl> --evidence <absolute-jsonl> --review <review> --execute
-  bun run deploy -- takosumi-runner-image reconcile --config <absolute-wrangler.toml> --environment <staging|production> --release <label> --state <absolute-jsonl> --evidence <absolute-jsonl>
-  bun run deploy -- takosumi-runner-image verify --config <absolute-wrangler.toml> --environment <staging|production> --release <label> --evidence <absolute-jsonl> --build-evidence <absolute-jsonl> --platform-evidence <absolute-json> [--review <review>] [--execute]
+  bun run deploy -- takosumi-runner-image reconcile [--profile hosted-metered-v1] --config <absolute-wrangler.toml> --environment <staging|production> --release <label> --state <absolute-jsonl> --evidence <absolute-jsonl>
+  bun run deploy -- takosumi-runner-image verify [--profile hosted-metered-v1] --config <absolute-wrangler.toml> --environment <staging|production> --release <label> --evidence <absolute-jsonl> --build-evidence <absolute-jsonl> --platform-evidence <absolute-json> [--review <review>] [--execute]
 
 Build publishes one immutable linux/amd64 takosumi-runner image. Its generated
 transport tag is not a version identity; only the remotely read manifest digest
@@ -473,6 +494,7 @@ export function parseRunnerImageReleaseArgs(
   let execute = false;
   const names = new Set([
     "config",
+    "profile",
     "environment",
     "release",
     "evidence",
@@ -508,6 +530,7 @@ export function parseRunnerImageReleaseArgs(
     if (!value) throw new Error(`missing required argument: --${name}`);
     return value;
   };
+  const profile = runnerImageProfile(values.get("profile"));
   const environment = required("environment");
   if (environment !== "staging" && environment !== "production") {
     throw new Error("environment must be staging or production");
@@ -569,6 +592,7 @@ export function parseRunnerImageReleaseArgs(
   }
   return {
     command: commandValue,
+    ...(profile !== "standard" ? { profile } : {}),
     config: required("config"),
     environment,
     release,
@@ -588,6 +612,7 @@ export async function runRunnerImageRelease(
   options: RunnerImageReleaseOptions,
   runtime: RunnerImageReleaseRuntime = {},
 ): Promise<unknown> {
+  runnerImageProfile(options.profile);
   assertRunnerImageCandidateOptions(options);
   if (options.execute && !options.review?.trim()) {
     throw new Error("--execute requires --review");
@@ -669,7 +694,7 @@ export async function runRunnerImageRelease(
       if (options.execute) {
         await prepareEvidenceFile(options.evidence, [repositoryRoot]);
         await appendEvidence(options.evidence, {
-          kind: "takosumi.runner-image-release@v3",
+          ...runnerReleaseIdentity(context.profile),
           operation: "build",
           status: "failed",
           mutationOutcome: "not-started",
@@ -854,6 +879,7 @@ async function buildRunnerImage(
       workspace,
       command,
       materializeSource,
+      context.profile,
     );
     if (materialized.dockerfileSha256 !== context.dockerfileSha256) {
       throw new Error("runner_image_sealed_source_mismatch");
@@ -871,9 +897,10 @@ async function buildRunnerImage(
       flag: "wx",
     });
     let localIdentity: LocalRunnerImageIdentity;
+    let meteredReport: RunnerImageMeteredNativeReport | undefined;
     const candidate = runnerImageCandidateInputs(options);
     if (candidate) {
-      localIdentity = await consumeRunnerImageNativeCandidate(
+      const consumed = await consumeRunnerImageNativeCandidate(
         candidate,
         context,
         materialized,
@@ -882,6 +909,8 @@ async function buildRunnerImage(
         workspace,
         sourceRoots,
       );
+      localIdentity = consumed.identity;
+      meteredReport = consumed.meteredReport;
     } else {
       await verifyRunnerOpenTofuSigstore(
         new TextDecoder("utf-8", { fatal: true }).decode(dockerfileSource),
@@ -920,18 +949,28 @@ async function buildRunnerImage(
         workspace,
       );
       localIdentity = parseLocalRunnerImageIdentity(localImage.stdout);
-      await proveRunnerImageHardenedNative(
-        localIdentity,
-        transportTag,
-        command,
-        workspace,
-      );
+      if (context.profile === HOSTED_METERED_RUNNER_PROFILE) {
+        meteredReport = await proveRunnerImageMeteredNative(
+          localIdentity,
+          sealedSource,
+          (executable, args, cwd) => command(executable, args, cwd, { omitProviderCredentials: true }),
+        );
+        if (JSON.stringify(dashboardAssetTreeSeal(sealedSource)) !== JSON.stringify(buildContext)) {
+          throw new Error("runner_image_sealed_source_drift");
+        }
+      } else {
+        await proveRunnerImageHardenedNative(localIdentity, transportTag, command, workspace);
+      }
     }
     const runtimeInputPlanProof = runnerImageRuntimeInputPlanProof(
       `${imageRepository}@${localIdentity.descriptorDigest}`,
+      context.profile,
     );
+    const meteredNativeProof = context.profile === HOSTED_METERED_RUNNER_PROFILE
+      ? runnerImageMeteredNativeProof(meteredReport!, runtimeInputPlanProof.image)
+      : undefined;
     const attempt: RunnerPublicationAttempt = {
-      kind: "takosumi.runner-image-publication-state@v2",
+      ...runnerPublicationIdentity(context.profile),
       status: "publication-started",
       environment: options.environment,
       release: options.release,
@@ -956,6 +995,7 @@ async function buildRunnerImage(
         localDescriptorDigest: localIdentity.descriptorDigest,
       },
       runtimeInputPlanProof,
+      ...(meteredNativeProof ? { meteredNativeProof } : {}),
       review: options.review!,
     };
     if (!publicationJournal) {
@@ -1021,6 +1061,7 @@ async function buildRunnerImage(
       expectedActivationSha256,
       "published",
       runtimeInputPlanProof,
+      meteredNativeProof,
     );
     const record: RunnerImageBuildRecord = {
       ...baseRecord,
@@ -1034,7 +1075,7 @@ async function buildRunnerImage(
       },
     };
     const resolution: RunnerPublicationResolution = {
-      kind: "takosumi.runner-image-publication-state@v2",
+      ...runnerPublicationIdentity(context.profile),
       status: "published",
       environment: options.environment,
       release: options.release,
@@ -1051,7 +1092,7 @@ async function buildRunnerImage(
     const diagnostic = releaseDiagnostic(error);
     if (publicationAttempted) {
       await appendEvidence(options.evidence, {
-        kind: "takosumi.runner-image-release@v3",
+        ...runnerReleaseIdentity(context.profile),
         operation: "build",
         status: "publication-incomplete",
         mutationOutcome: "unknown",
@@ -1073,7 +1114,7 @@ async function buildRunnerImage(
       });
     } else {
       await appendEvidence(options.evidence, {
-        kind: "takosumi.runner-image-release@v3",
+        ...runnerReleaseIdentity(context.profile),
         operation: "build",
         status: "failed",
         mutationOutcome: "not-started",
@@ -1154,7 +1195,7 @@ async function consumeRunnerImageNativeCandidate(
   command: NonNullable<RunnerImageReleaseRuntime["command"]>,
   workspace: string,
   sourceRoots: readonly string[],
-): Promise<LocalRunnerImageIdentity> {
+): Promise<Readonly<{ identity: LocalRunnerImageIdentity; meteredReport?: RunnerImageMeteredNativeReport }>> {
   if (
     basename(candidate.image) !== "runner-image.tar" ||
     basename(candidate.record) !== "candidate.json" ||
@@ -1309,7 +1350,12 @@ async function consumeRunnerImageNativeCandidate(
       });
     }
     candidateTagMayExist = false;
-    return retagged;
+    return {
+      identity: retagged,
+      ...(record.profile === HOSTED_METERED_RUNNER_PROFILE
+        ? { meteredReport: record.nativeProof }
+        : {}),
+    };
   } catch (error) {
     if (candidateTagMayExist) {
       const cleanupError = await removeExactCandidateLocalTag(
@@ -1341,6 +1387,7 @@ function assertRunnerImageNativeCandidateMatchesSource(
   );
   if (
     candidateRepository.toLowerCase() !== trustedRepository.toLowerCase() ||
+    runnerImageProfile(record.profile) !== context.profile ||
     record.source.authoritySha256 !== context.releaseSource.authoritySha256 ||
     record.source.commit !== context.repository.commit ||
     record.source.treeSha256 !== materialized.buildContext.digest ||
@@ -1637,6 +1684,7 @@ function publicationAttemptMatchesReconciliationContext(
   context: ReleaseContext,
 ): boolean {
   return (
+    runnerImageProfile(attempt.profile) === context.profile &&
     attempt.environment === options.environment &&
     attempt.release === options.release &&
     attempt.source.branch === context.repository.branch &&
@@ -1714,6 +1762,7 @@ async function reconcileRunnerImage(
       workspace,
       command,
       materializeSource,
+      runnerImageProfile(attempt.profile),
     );
     if (
       materialized.dockerfileSha256 !== attempt.source.dockerfileSha256 ||
@@ -1803,6 +1852,7 @@ async function reconcileRunnerImage(
         authoritySha256: attempt.source.authoritySha256,
       },
       dockerfileSha256: attempt.source.dockerfileSha256,
+      profile: runnerImageProfile(attempt.profile),
     };
     const base = buildRecord(
       options,
@@ -1814,6 +1864,7 @@ async function reconcileRunnerImage(
       expectedActivationSha256,
       "published",
       attempt.runtimeInputPlanProof,
+      attempt.meteredNativeProof,
     );
     const record: RunnerImageBuildRecord = {
       ...base,
@@ -1831,7 +1882,7 @@ async function reconcileRunnerImage(
       review: attempt.review,
     };
     const resolution: RunnerPublicationResolution = {
-      kind: "takosumi.runner-image-publication-state@v2",
+      ...runnerPublicationIdentity(context.profile),
       status: "published",
       environment: options.environment,
       release: options.release,
@@ -1848,7 +1899,7 @@ async function reconcileRunnerImage(
     if (isExactRemoteManifestAbsence(error, attempt.image.transportRef)) {
       const diagnostic = releaseDiagnostic(error);
       const resolution: RunnerPublicationResolution = {
-        kind: "takosumi.runner-image-publication-state@v2",
+        ...runnerPublicationIdentity(context.profile),
         status: "reconciled-absent",
         environment: options.environment,
         release: options.release,
@@ -1858,7 +1909,7 @@ async function reconcileRunnerImage(
       };
       await publicationJournal.append(resolution);
       const record = {
-        kind: "takosumi.runner-image-release@v3",
+        ...runnerReleaseIdentity(context.profile),
         operation: "reconcile",
         status: "absent",
         mutationOutcome: "read-only",
@@ -1872,7 +1923,7 @@ async function reconcileRunnerImage(
       return record;
     }
     await appendEvidence(options.evidence, {
-      kind: "takosumi.runner-image-release@v3",
+      ...runnerReleaseIdentity(context.profile),
       operation: "reconcile",
       status: "incomplete",
       mutationOutcome: "read-only",
@@ -1947,11 +1998,14 @@ function isExactRemoteManifestAbsence(
 
 function runnerImageRuntimeInputPlanProof(
   image: string,
-): RunnerImageRuntimeInputPlanProof {
+  profile: RunnerImageProfile,
+): RunnerImageBuildRuntimeInputPlanProof {
   if (!DIGEST_IMAGE.test(image)) {
     throw new Error("runner_image_runtime_input_plan_proof_invalid");
   }
-  return { kind: RUNNER_IMAGE_RUNTIME_INPUT_PLAN_PROOF_KIND, image };
+  return profile === HOSTED_METERED_RUNNER_PROFILE
+    ? { kind: RUNNER_IMAGE_METERED_RUNTIME_INPUT_PLAN_PROOF_KIND, profile, qualification: "local-native-only", image }
+    : { kind: RUNNER_IMAGE_RUNTIME_INPUT_PLAN_PROOF_KIND, image };
 }
 
 async function proveLegacyPublicationLocalIdentity(
@@ -2009,6 +2063,7 @@ function unresolvedPublicationAttemptsFromRecords(
     const attempt = unresolved.get(entry.transportRef);
     if (
       !attempt ||
+      entry.kind !== attempt.kind || entry.profile !== attempt.profile ||
       entry.environment !== attempt.environment ||
       entry.release !== attempt.release ||
       (entry.status === "published" &&
@@ -2030,6 +2085,9 @@ function publicationResolutionMatchesAttempt(
     resolution.immutableRef.lastIndexOf("@") + 1,
   );
   return (
+    resolution.kind === attempt.kind && resolution.profile === attempt.profile &&
+    runnerImageProfile(build.profile) === runnerImageProfile(attempt.profile) &&
+    JSON.stringify(build.meteredNativeProof ?? null) === JSON.stringify(attempt.meteredNativeProof ?? null) &&
     descriptorDigest ===
       (attempt.image.localDescriptorDigest ?? attempt.image.localImageId) &&
     resolution.immutableRef === build.image.immutableRef &&
@@ -2126,7 +2184,7 @@ function parsePublicationState(
   }
 
   const firstCurrentIndex = parsed.findIndex(
-    (value) => value.kind === "takosumi.runner-image-publication-state@v2",
+    (value) => isCurrentPublicationKind(value.kind),
   );
   const legacy = firstCurrentIndex === -1
     ? parsed
@@ -2150,7 +2208,7 @@ function parsePublicationState(
     legacyTransportTags.add((attempt.image as Record<string, unknown>).transportTag as string);
   }
   for (const value of parsed.slice(firstCurrentIndex === -1 ? parsed.length : firstCurrentIndex)) {
-    if (value.kind !== "takosumi.runner-image-publication-state@v2") {
+    if (!isCurrentPublicationKind(value.kind)) {
       throw new Error("runner_image_publication_state_invalid");
     }
     if (value.status === "publication-started") {
@@ -2215,7 +2273,7 @@ function parseCurrentPublicationState(
     } catch {
       throw new Error("runner_image_publication_state_invalid");
     }
-    if (!isRecord(value) || value.kind !== "takosumi.runner-image-publication-state@v2") {
+    if (!isRecord(value) || !isCurrentPublicationKind(value.kind)) {
       throw new Error("runner_image_publication_state_invalid");
     }
     if (value.status === "publication-started") {
@@ -2529,6 +2587,7 @@ function validReview(value: unknown): value is string {
 }
 
 function validPublicationAttempt(value: Record<string, unknown>): boolean {
+  if (!validPublicationProfile(value, true)) return false;
   return (
     (value.environment === "staging" || value.environment === "production") &&
     typeof value.release === "string" &&
@@ -2561,7 +2620,9 @@ function validPublicationAttempt(value: Record<string, unknown>): boolean {
         SHA256.test(value.image.localDescriptorDigest))) &&
     (value.runtimeInputPlanProof === undefined ||
       (typeof value.image.localDescriptorDigest === "string" &&
-        isRunnerImageRuntimeInputPlanProof(
+        (value.kind === "takosumi.runner-image-publication-state@v3"
+          ? isRunnerImageMeteredRuntimeInputPlanProof
+          : isRunnerImageRuntimeInputPlanProof)(
           value.runtimeInputPlanProof,
           `${runnerImageRepository(value.config.previousImage)}@${value.image.localDescriptorDigest}`,
         ))) &&
@@ -2571,6 +2632,7 @@ function validPublicationAttempt(value: Record<string, unknown>): boolean {
 }
 
 function validPublicationResolution(value: Record<string, unknown>): boolean {
+  if (!validPublicationProfile(value, false)) return false;
   const common =
     (value.environment === "staging" || value.environment === "production") &&
     typeof value.release === "string" &&
@@ -2590,6 +2652,7 @@ function validPublicationResolution(value: Record<string, unknown>): boolean {
     typeof value.imageConfigDigest === "string" &&
     SHA256.test(value.imageConfigDigest) &&
     isPublishedRunnerImageBuildRecord(value.build) &&
+    runnerImageProfile(value.build.profile) === runnerImageProfile(value.profile) &&
     value.environment === value.build.environment &&
     value.release === value.build.release &&
     value.transportRef === value.build.image.transportRef &&
@@ -2715,12 +2778,15 @@ async function verifyRunnerImage(
   ) {
     throw new Error("runner_image_source_authority_mismatch");
   }
+  if (runnerImageProfile(build.profile) !== context.profile) {
+    throw new Error("runner_image_profile_mismatch");
+  }
   const immutableRef = build.image.immutableRef;
   if (!immutableRef || !DIGEST_IMAGE.test(immutableRef)) {
     throw new Error("build evidence has no immutable runner image");
   }
   if (
-    runnerImageRuntimeInputPlanProofFromBuildRecord(build, immutableRef) === null
+    runnerImageBuildRuntimeInputPlanProofFromBuildRecord(build, immutableRef) === null
   ) {
     throw new Error("runner_image_runtime_input_plan_proof_required");
   }
@@ -2763,7 +2829,7 @@ async function verifyRunnerImage(
     throw new Error("platform evidence does not bind the runner activation");
   }
   const planned = {
-    kind: "takosumi.runner-image-release@v3",
+    ...runnerReleaseIdentity(context.profile),
     operation: "verify",
     status: "planned",
     environment: options.environment,
@@ -2920,11 +2986,15 @@ async function inspectContext(
   if (!DIGEST_IMAGE.test(imageSpan.image)) {
     throw new Error("realized runner image must be an immutable registry digest");
   }
+  const profile = runnerImageProfile(options.profile);
   const dockerfilePath = await canonicalFile(
-    resolve(repositoryRoot, "runner/Dockerfile"),
+    profile === "standard"
+      ? resolve(repositoryRoot, "runner/Dockerfile")
+      : resolve(repositoryRoot, "runner/Dockerfile.hosted-metered"),
     "runner Dockerfile",
   );
   return {
+    profile,
     repository,
     releaseSource,
     config: {
@@ -3217,6 +3287,52 @@ function finiteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function runnerReleaseIdentity(profile: RunnerImageProfile) {
+  return profile === HOSTED_METERED_RUNNER_PROFILE
+    ? { kind: "takosumi.runner-image-release@v4" as const, profile }
+    : { kind: "takosumi.runner-image-release@v3" as const };
+}
+
+function runnerPublicationIdentity(profile: RunnerImageProfile): RunnerPublicationIdentity {
+  return profile === HOSTED_METERED_RUNNER_PROFILE
+    ? { kind: "takosumi.runner-image-publication-state@v3", profile }
+    : { kind: "takosumi.runner-image-publication-state@v2" };
+}
+
+function isCurrentPublicationKind(kind: unknown): boolean {
+  return kind === "takosumi.runner-image-publication-state@v2" ||
+    kind === "takosumi.runner-image-publication-state@v3";
+}
+
+/** v2 keeps its legacy shape. v3 is closed and cannot reinterpret a v2 attempt. */
+function validPublicationProfile(value: Record<string, unknown>, attempt: boolean): boolean {
+  if (value.kind === "takosumi.runner-image-publication-state@v2") {
+    return value.profile === undefined && value.meteredNativeProof === undefined;
+  }
+  if (value.kind !== "takosumi.runner-image-publication-state@v3" || value.profile !== HOSTED_METERED_RUNNER_PROFILE) return false;
+  if (!attempt) {
+    const fields = value.status === "published"
+      ? ["build", "imageConfigDigest", "immutableRef"]
+      : ["diagnostic"];
+    return exactRecordKeys(value, [
+      "kind", "profile", "status", "environment", "release", "observedAt", "transportRef", ...fields,
+    ]);
+  }
+  return exactRecordKeys(value, [
+    "kind", "profile", "status", "environment", "release", "observedAt", "source", "config", "image", "review", "runtimeInputPlanProof", "meteredNativeProof",
+  ]) && isRecord(value.source) && exactRecordKeys(value.source, [
+    "branch", "repository", "commit", "authoritySha256", "dockerfileSha256", "buildContextSha256",
+  ]) && isRecord(value.config) && exactRecordKeys(value.config, ["path", "buildSha256", "previousImage"]) &&
+    isRecord(value.image) && exactRecordKeys(value.image, ["transportTag", "transportRef", "localImageId", "localDescriptorDigest"]) &&
+    typeof value.config.path === "string" && isAbsolute(value.config.path) &&
+    typeof value.config.previousImage === "string" && DIGEST_IMAGE.test(value.config.previousImage) &&
+    typeof value.image.localDescriptorDigest === "string" &&
+    isRunnerImageMeteredRuntimeInputPlanProof(value.runtimeInputPlanProof,
+      `${runnerImageRepository(value.config.previousImage)}@${value.image.localDescriptorDigest}`) &&
+    isRunnerImageMeteredNativeProof(value.meteredNativeProof,
+      `${runnerImageRepository(value.config.previousImage)}@${value.image.localDescriptorDigest}`);
+}
+
 function buildRecord(
   options: RunnerImageReleaseOptions,
   context: ReleaseContext,
@@ -3226,11 +3342,11 @@ function buildRecord(
   immutableRef: string | null,
   expectedActivationSha256: string | null,
   status: RunnerImageBuildRecord["status"],
-  runtimeInputPlanProof?: RunnerImageRuntimeInputPlanProof,
+  runtimeInputPlanProof?: RunnerImageBuildRuntimeInputPlanProof,
+  meteredNativeProof?: RunnerImageMeteredNativeProof,
 ): RunnerImageBuildRecord {
-  return {
-    kind: "takosumi.runner-image-release@v3",
-    operation: "build",
+  const fields = {
+    operation: "build" as const,
     status,
     environment: options.environment,
     release: options.release,
@@ -3252,6 +3368,15 @@ function buildRecord(
     ...(runtimeInputPlanProof ? { runtimeInputPlanProof } : {}),
     review: options.review ?? null,
   };
+  if (context.profile === HOSTED_METERED_RUNNER_PROFILE) {
+    return {
+      kind: "takosumi.runner-image-release@v4",
+      profile: HOSTED_METERED_RUNNER_PROFILE,
+      ...fields,
+      ...(meteredNativeProof ? { meteredNativeProof } : {}),
+    };
+  }
+  return { kind: "takosumi.runner-image-release@v3", ...fields };
 }
 
 async function readBuildRecord(
@@ -3272,7 +3397,7 @@ async function readBuildRecord(
     }
     if (
       isRecord(value) &&
-      value.kind === "takosumi.runner-image-release@v3" &&
+      (value.kind === "takosumi.runner-image-release@v3" || value.kind === "takosumi.runner-image-release@v4") &&
       value.operation === "build" &&
       value.status === "published" &&
       value.environment === environment &&
@@ -3475,6 +3600,10 @@ function releaseCommandTimeout(
   ) {
     return RELEASE_BUILD_COMMAND_TIMEOUT_MS;
   }
+  if ((executable === "/usr/bin/env" || executable === "/usr/bin/sudo") &&
+    args.some((arg) => basename(arg) === "prove-runner-hosted-metered.ts")) {
+    return RELEASE_BUILD_COMMAND_TIMEOUT_MS;
+  }
   if (executable === "docker" && args[0] === "buildx") {
     return RELEASE_BUILD_COMMAND_TIMEOUT_MS;
   }
@@ -3653,6 +3782,7 @@ function runnerChildEnvironment(commandOptions?: CommandOptions): NodeJS.Process
     "BUILDX_BUILDER",
     "XDG_RUNTIME_DIR",
   ]) {
+    if (commandOptions?.omitProviderCredentials && key.startsWith("CLOUDFLARE_")) continue;
     const value = process.env[key];
     if (value !== undefined) environment[key] = value;
   }

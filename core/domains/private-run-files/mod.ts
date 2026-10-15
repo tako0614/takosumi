@@ -108,6 +108,9 @@ export interface PrivateRunFileRepositoryPort {
 export interface PrivateRunFileBlobPort {
   putEncryptedImmutable(input: {
     readonly scope: PrivateRunFileScope;
+    /** Existing original Core authority, for an adapter's immediate write
+     * fence. Optional for embeddings without an additional custody profile. */
+    readonly authority?: PrivateRunFileAuthority;
     readonly bytes: Uint8Array;
     readonly digest: PrivateRunFileDigest;
   }): Promise<{
@@ -316,6 +319,7 @@ export class PrivateRunFilesService {
       try {
         blob = await this.#blobs.putEncryptedImmutable({
           scope: stable.scope,
+          authority: { ...stable.authority },
           bytes,
           digest,
         });

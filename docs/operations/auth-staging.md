@@ -7,7 +7,7 @@ runbook accepts `auth.takos.jp`, a production Worker, or a production RP.
 Source capability and local tests do not prove a live issuer or launch readiness.
 
 The entry serves identity/OIDC, the Accounts account facade and the narrow
-issuer sign-in portal. It does not mount the dashboard, product Core APIs,
+issuer sign-in and context-confirmation portals. It does not mount the dashboard, product Core APIs,
 internal runner APIs or static assets. Accounts uses the existing protected
 Accounts D1. The lazy `createInProcessDeployControlSeam(env).operations()` port
 uses the same physical canonical Control D1, R2 resources and remote Durable
@@ -27,10 +27,14 @@ database is disposable simply because its environment is staging.
 2. Apply and verify the additive Accounts transition using the sole Accounts
    catalog/CLI. Run Control's own reviewed migration lane separately. The
    dedicated issuer accepts only exact checksummed Accounts v5 and the current
-   canonical predeployed Control v72 catalog. The ordinary bridge supports
-   exact v71/v72 while the new billing-binding ports require v72. PostgreSQL's
-   corresponding protected Control expansion is 119; Accounts 045 is a separate
-   lineage. Keep request/cold-start DDL disabled.
+   canonical predeployed Control v74 catalog. The ordinary bridge supports
+   exact v71/v72/v73/v74 before and after the additive transition. Billing-binding
+   ports require their v72 expansion; identity reconciliation additionally
+   requires v73 or v74. The v74 Backup lookup indexes do not change identity
+   authority or add a PostgreSQL migration. PostgreSQL's corresponding protected Control expansions are
+   119 and 120; Accounts 045 is a separate lineage. Keep request/cold-start DDL
+   disabled. Publish the profile-disabled compatible bridge on the existing
+   catalog before applying any new schema; it must not require v73 or v74 to start.
 3. Create the inert dedicated Worker slot. It has no stores, secrets, issuer or
    cookies, no routes, and disabled workers.dev/previews. Existing Workers are
    never overwritten by bootstrap.
@@ -43,11 +47,37 @@ database is disposable simply because its environment is staging.
    resource and immutable Version readback. No code release changes schedules.
    Run authenticated browser/RP E2E separately; discovery or DNS/TLS alone is
    not sufficient. Production remains awaiting operator approval.
+6. Before enabling real merge readiness, qualify every official product's RP
+   cutover and its shared authentication boundary on the primary origin and all
+   Worker/preview aliases. Legacy human credentials must not bypass account
+   fences; independent operator/Run credentials keep their actual owned actor
+   checks. Obtain real financial, consumer-intent and RP custody receipts under
+   the original operation keys. A flag or owner-ready boolean alone does not
+   establish that release/configuration/topology closure.
 
 Shared-profile activation cannot be the first bridge artifact on a v4 database.
 A v4-only source build fails closed before serving dedicated account/OIDC paths.
 An additive migration can still invalidate an old strict runtime: use the
 schema owner's compatibility window, not an assumed code rollback.
+
+## Context confirmation
+
+After both original operation-bound provider proofs, the authenticated browser
+can open `/identity-merges/{operationId}/contexts`. No token or proof receipt is
+placed in that URL. The page displays the server-owned plan, canonical A personal
+anchor and separate retained Workspace/Organization contexts. Each original leg
+must accept with its own current issuer session. The configured other provider
+link performs an ordinary same-browser login rotation and resumes this exact
+operation; it does not claim a new password or MFA event. Final consent is
+available only after both context acceptances and under the target session.
+
+The default source composition has a real local Control adapter but no real
+financial/consumer/RP adapters. Final consent therefore remains unavailable
+before reservation. A pending result is not success; the page reports completion
+only when the Accounts API returns `active`. The initial supported case requires
+two existing unshared personal contexts. See the [private reconciliation
+contract](../internal/control-identity-reconciliation.md) for preserved IDs,
+inventory refusals and reviewed recovery.
 
 ## Private target and credential custody
 

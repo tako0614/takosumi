@@ -1,13 +1,24 @@
 import { createHash } from "node:crypto";
 import { constants as fsConstants, type BigIntStats } from "node:fs";
-import { lstat, mkdir, open, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { lstat, mkdir, open, realpath, rm } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
+
+import {
+  HOSTED_METERED_RUNNER_PROFILE,
+  isRunnerImageMeteredNativeReport,
+  runnerImageDockerfile,
+  runnerImageNativeCandidateTag,
+  type RunnerImageMeteredNativeReport,
+  type RunnerImageProfile,
+} from "./runner-image-profile.ts";
 
 import { dashboardAssetTreeSeal } from "../platform-worker-release.ts";
 import { platformReleaseSourceAuthorityDigest } from "./platform-release-source.ts";
 
 export const RUNNER_IMAGE_NATIVE_CANDIDATE_KIND =
   "takosumi.runner-image-native-candidate@v1" as const;
+export const RUNNER_IMAGE_METERED_NATIVE_CANDIDATE_KIND =
+  "takosumi.runner-image-native-candidate@v2" as const;
 export const RUNNER_IMAGE_NATIVE_PROOF_KIND =
   "takosumi.runner-image-native-proof@v1" as const;
 
@@ -64,8 +75,7 @@ export type RunnerImageHardenedNativeProof = Readonly<{
   hardenedRuntimeInputPlan: "passed";
 }>;
 
-export type RunnerImageNativeCandidateRecord = Readonly<{
-  kind: typeof RUNNER_IMAGE_NATIVE_CANDIDATE_KIND;
+type RunnerImageNativeCandidateFields = Readonly<{
   observedAt: string;
   source: {
     repository: string;
@@ -88,13 +98,25 @@ export type RunnerImageNativeCandidateRecord = Readonly<{
     size: number;
     sha256: string;
   };
-  nativeProof: {
-    kind: typeof RUNNER_IMAGE_NATIVE_PROOF_KIND;
-    descriptorDigest: string;
-    hardenedRuntimeInputPlan: "passed";
-    fullHttpPlanApply: "passed";
-  };
 }>;
+
+export type RunnerImageNativeCandidateRecord = RunnerImageNativeCandidateFields & (
+  | Readonly<{
+      kind: typeof RUNNER_IMAGE_NATIVE_CANDIDATE_KIND;
+      profile?: never;
+      nativeProof: {
+        kind: typeof RUNNER_IMAGE_NATIVE_PROOF_KIND;
+        descriptorDigest: string;
+        hardenedRuntimeInputPlan: "passed";
+        fullHttpPlanApply: "passed";
+      };
+    }>
+  | Readonly<{
+      kind: typeof RUNNER_IMAGE_METERED_NATIVE_CANDIDATE_KIND;
+      profile: typeof HOSTED_METERED_RUNNER_PROFILE;
+      nativeProof: RunnerImageMeteredNativeReport;
+    }>
+);
 
 export function parseRunnerImageNativeCandidateRecord(
   source: string,
@@ -114,6 +136,7 @@ export function parseRunnerImageNativeCandidateRecord(
 export function isRunnerImageNativeCandidateRecord(
   value: unknown,
 ): value is RunnerImageNativeCandidateRecord {
+  const metered = record(value) && value.kind === RUNNER_IMAGE_METERED_NATIVE_CANDIDATE_KIND;
   if (
     !record(value) ||
     !exactKeys(value, [
@@ -123,8 +146,10 @@ export function isRunnerImageNativeCandidateRecord(
       "nativeProof",
       "observedAt",
       "source",
+      ...(metered ? ["profile"] : []),
     ]) ||
-    value.kind !== RUNNER_IMAGE_NATIVE_CANDIDATE_KIND ||
+    (value.kind !== RUNNER_IMAGE_NATIVE_CANDIDATE_KIND && !metered) ||
+    (metered && value.profile !== HOSTED_METERED_RUNNER_PROFILE) ||
     typeof value.observedAt !== "string" ||
     !isCanonicalTimestamp(value.observedAt) ||
     !record(value.source) ||
@@ -159,8 +184,10 @@ export function isRunnerImageNativeCandidateRecord(
       "platform",
       "tag",
     ]) ||
-    value.image.tag !==
-      `takosumi-runner-native-candidate:${value.source.commit}` ||
+    value.image.tag !== runnerImageNativeCandidateTag(
+      value.source.commit,
+      metered ? HOSTED_METERED_RUNNER_PROFILE : "standard",
+    ) ||
     typeof value.image.localImageId !== "string" ||
     !SHA256.test(value.image.localImageId) ||
     typeof value.image.descriptorDigest !== "string" ||
@@ -181,17 +208,16 @@ export function isRunnerImageNativeCandidateRecord(
     value.archive.size > RUNNER_IMAGE_NATIVE_CANDIDATE_ARCHIVE_MAX_BYTES ||
     typeof value.archive.sha256 !== "string" ||
     !SHA256.test(value.archive.sha256) ||
-    !record(value.nativeProof) ||
-    !exactKeys(value.nativeProof, [
-      "descriptorDigest",
-      "fullHttpPlanApply",
-      "hardenedRuntimeInputPlan",
-      "kind",
-    ]) ||
-    value.nativeProof.kind !== RUNNER_IMAGE_NATIVE_PROOF_KIND ||
-    value.nativeProof.descriptorDigest !== value.image.descriptorDigest ||
-    value.nativeProof.hardenedRuntimeInputPlan !== "passed" ||
-    value.nativeProof.fullHttpPlanApply !== "passed"
+    (metered
+      ? !isRunnerImageMeteredNativeReport(value.nativeProof, value.image.descriptorDigest)
+      : (!record(value.nativeProof) ||
+        !exactKeys(value.nativeProof, [
+          "descriptorDigest", "fullHttpPlanApply", "hardenedRuntimeInputPlan", "kind",
+        ]) ||
+        value.nativeProof.kind !== RUNNER_IMAGE_NATIVE_PROOF_KIND ||
+        value.nativeProof.descriptorDigest !== value.image.descriptorDigest ||
+        value.nativeProof.hardenedRuntimeInputPlan !== "passed" ||
+        value.nativeProof.fullHttpPlanApply !== "passed"))
   ) {
     return false;
   }
@@ -238,6 +264,7 @@ export async function materializeRunnerSource(
     commit: string,
     destination: string,
   ) => Promise<void>,
+  profile: RunnerImageProfile = "standard",
 ): Promise<MaterializedRunnerSource> {
   if (!COMMIT.test(commit)) {
     throw new Error("runner_image_sealed_source_mismatch");
@@ -276,7 +303,7 @@ export async function materializeRunnerSource(
     );
     await rm(archive);
   }
-  const dockerfilePath = join(sourceRoot, "runner", "Dockerfile");
+  const dockerfilePath = join(sourceRoot, runnerImageDockerfile(profile));
   const dockerfileSource = await readStablePhysicalFile(
     dockerfilePath,
     "sealed Dockerfile",
@@ -399,6 +426,121 @@ export function parseLocalRunnerImageIdentity(
     descriptorMediaType: value.Descriptor.mediaType,
     platform: { os: "linux", architecture: "amd64" },
   };
+}
+
+/** Resolve the builder's effective daemon before dropping all credential/context state. */
+export async function runnerImageMeteredDockerHost(
+  command: RunnerImageNativeCommand,
+  cwd: string,
+): Promise<string> {
+  for (const key of ["DOCKER_TLS", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH"]) {
+    if (process.env[key]) throw new Error("runner_image_metered_daemon_tls_unsupported");
+  }
+  const selectedContext = process.env.DOCKER_CONTEXT || undefined;
+  if (!selectedContext && process.env.DOCKER_HOST) {
+    return assertMeteredLocalDockerHost(process.env.DOCKER_HOST);
+  }
+  const context = selectedContext ?? (await checkedNativeCommand(
+    command, "docker", ["context", "show"], cwd,
+  )).stdout.trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(context)) {
+    throw new Error("runner_image_metered_daemon_context_invalid");
+  }
+  const inspected = await checkedNativeCommand(
+    command, "docker", ["context", "inspect", "--format", "{{json .Endpoints.docker}}", context], cwd,
+  );
+  let endpoint: unknown;
+  try { endpoint = JSON.parse(inspected.stdout) as unknown; } catch {
+    throw new Error("runner_image_metered_daemon_context_invalid");
+  }
+  if (!record(endpoint) || !exactKeys(endpoint, ["Host", "SkipTLSVerify"]) ||
+    endpoint.SkipTLSVerify !== false || typeof endpoint.Host !== "string") {
+    throw new Error("runner_image_metered_daemon_context_invalid");
+  }
+  return assertMeteredLocalDockerHost(endpoint.Host);
+}
+
+function assertMeteredLocalDockerHost(value: string): string {
+  // Remote daemons cannot establish this host's /proc PID and kernel cgroup proof.
+  if (value.length > 4_096 || !/^unix:\/\/\/[^\u0000-\u0020\u007f?#]+$/u.test(value)) {
+    throw new Error("runner_image_metered_daemon_local_unix_required");
+  }
+  return value;
+}
+
+/** Only the actual-image harness is elevated; candidate/publisher retain their caller UID. */
+export function runnerImageMeteredHarnessInvocation(input: Readonly<{
+  uid: number;
+  bunExecutable: string;
+  dockerExecutable: string;
+  sourceRoot: string;
+  identity: LocalRunnerImageIdentity;
+  dockerHost: string;
+}>): Readonly<{ executable: string; args: readonly string[] }> {
+  if (!Number.isSafeInteger(input.uid) || input.uid < 0 ||
+    !isAbsolute(input.bunExecutable) || !isAbsolute(input.dockerExecutable) || !isAbsolute(input.sourceRoot) ||
+    !SHA256.test(input.identity.localImageId) || !SHA256.test(input.identity.descriptorDigest)) {
+    throw new Error("runner_image_metered_native_invocation_invalid");
+  }
+  const env = [
+    "--ignore-environment",
+    "PATH=/usr/local/bin:/usr/bin:/bin",
+    "BUN_RUNTIME_TRANSPILER_CACHE_PATH=0",
+    `DOCKER_HOST=${assertMeteredLocalDockerHost(input.dockerHost)}`,
+    `TAKOSUMI_RUNNER_NATIVE_DOCKER=${input.dockerExecutable}`,
+    input.bunExecutable,
+    join(input.sourceRoot, "scripts", "prove-runner-hosted-metered.ts"),
+    "--image", input.identity.localImageId,
+    "--descriptor", input.identity.descriptorDigest,
+  ];
+  return input.uid === 0
+    ? { executable: "/usr/bin/env", args: env }
+    : { executable: "/usr/bin/sudo", args: ["--non-interactive", "--", "/usr/bin/env", ...env] };
+}
+
+/** This accepts only the actual-image harness; source-bind evidence is not publication proof. */
+export async function proveRunnerImageMeteredNative(
+  identity: LocalRunnerImageIdentity,
+  sourceRoot: string,
+  command: RunnerImageNativeCommand,
+): Promise<RunnerImageMeteredNativeReport> {
+  if (process.platform !== "linux" || process.arch !== "x64" || !process.getuid || !process.versions.bun) {
+    throw new Error("runner_image_metered_native_host_unavailable");
+  }
+  const bunExecutable = await realpath(process.execPath);
+  const executable = await lstat(bunExecutable);
+  if (!executable.isFile() || executable.isSymbolicLink() || executable.nlink !== 1 || (executable.mode & 0o111) === 0) {
+    throw new Error("runner_image_metered_native_bun_invalid");
+  }
+  // Resolve through the same minimal owning-command environment as the builder.
+  // The command seam keeps portable tests independent of an installed Docker CLI.
+  const lookup = await checkedNativeCommand(command, bunExecutable, [
+    "--eval", 'const binary=Bun.which("docker");if(!binary)process.exit(1);process.stdout.write(binary);',
+  ], sourceRoot);
+  if (lookup.stdout.length > 4_096 || !isAbsolute(lookup.stdout) || /[\u0000-\u001f\u007f]/u.test(lookup.stdout)) {
+    throw new Error("runner_image_metered_native_docker_invalid");
+  }
+  const dockerExecutable = await realpath(lookup.stdout);
+  const docker = await lstat(dockerExecutable);
+  if (!docker.isFile() || docker.isSymbolicLink() || docker.nlink !== 1 || (docker.mode & 0o111) === 0) {
+    throw new Error("runner_image_metered_native_docker_invalid");
+  }
+  const invocation = runnerImageMeteredHarnessInvocation({
+    uid: process.getuid(), bunExecutable, dockerExecutable, sourceRoot, identity,
+    dockerHost: await runnerImageMeteredDockerHost(command, sourceRoot),
+  });
+  const result = await checkedNativeCommand(command, invocation.executable, invocation.args, sourceRoot);
+  if (Buffer.byteLength(result.stdout, "utf8") > RUNNER_BOOT_SMOKE_OUTPUT_MAX_BYTES || result.stderr.trim()) {
+    throw new Error("runner_image_metered_native_report_invalid");
+  }
+  let report: unknown;
+  try { report = JSON.parse(result.stdout) as unknown; } catch {
+    throw new Error("runner_image_metered_native_report_invalid");
+  }
+  if (!isRunnerImageMeteredNativeReport(report, identity.descriptorDigest)) {
+    throw new Error("runner_image_metered_native_report_invalid");
+  }
+  return report;
 }
 
 export async function proveRunnerImageHardenedNative(

@@ -508,6 +508,10 @@ export interface RunExecutionDispatch {
  */
 export interface RunExecutionControl {
   readonly signal?: AbortSignal;
+  /** Private in-process propagation of the lease already held by Core. Hosts
+   * may bind private executor effects to this exact claim. Never a public Run
+   * field, a new claim, or a credential delivered to the untrusted Container. */
+  readonly runLease?: { readonly runId: string; readonly leaseToken: string };
   /**
    * Absolute epoch-millisecond instant by which the host invocation that is
    * waiting for this operation needs the adapter's reply, when that host has a
@@ -934,7 +938,7 @@ export interface OpenTofuRunner {
    * capability must fail the SourceSync Run explicitly; it must never leave the
    * ledger queued indefinitely.
    */
-  sourceSync?(job: OpenTofuSourceSyncJob): Promise<OpenTofuSourceSyncResult>;
+  sourceSync?(job: OpenTofuSourceSyncJob, control?: RunExecutionControl): Promise<OpenTofuSourceSyncResult>;
   /**
    * Expands an immutable SourceSnapshot archive in the Runner Container and
    * returns the OpenTofu source files needed by the Capsule Compatibility

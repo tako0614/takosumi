@@ -287,3 +287,51 @@ test("upstream secret custody follows explicit descriptors, without fixed provid
     expect(()=>parseAuthStagingTarget({...target,vars:{...vars,TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS:JSON.stringify([{...custom[0],clientSecretEnv:ref},custom[1]])},requiredSecrets})).toThrow();
   }
 });
+
+test("private owner qualification reads exact realized graph, schema and topology without mutating a release", async () => {
+  const { inspectAuthStagingOwnerReleaseTopology } = await import("../../scripts/auth-staging-release.ts");
+  const { authStagingOwnerTargetBindingDigest, parseAuthStagingOwnerGraphExpectation, assertAuthStagingOwnerGraphQualification } = await import("../../scripts/auth-staging-owner-graph.ts");
+  const expected = parseAuthStagingOwnerGraphExpectation({ kind: "takosumi.auth-owner-graph-expectation@v1", ownerClientId: "fixture-private-service-owner",
+    issuer: { worker: AUTH_STAGING_WORKER, versionId: uploadedVersion, sourceCommit: "c".repeat(40), sourceCommitBinding: "TAKOSUMI_AUTH_SOURCE_COMMIT", accountsDatabaseId: uuid("4"), controlDatabaseId: uuid("5") },
+    owner: { worker: "fixture-private-owner", versionId: previousVersion, sourceCommit: "d".repeat(40), sourceCommitBinding: "OWNER_SOURCE", binding: "PRIVATE_ADMISSION", custodyResources: [{ binding: "CUSTODY_DB", type: "d1", resourceId: uuid("6") }] } });
+  const target = parseAuthStagingTarget({ ...fixtureTarget(), vars: { ...fixtureTarget().vars, TAKOSUMI_ACCOUNTS_OWNER_CLIENT_ID: expected.ownerClientId, TAKOSUMI_ACCOUNTS_OWNER_TARGET_BINDING_DIGEST: authStagingOwnerTargetBindingDigest(expected) } });
+  const plan = createAuthStagingPlan(target, config, bytes);
+  const text = (name: string, value: string) => ({ name, type: "plain_text", text: value });
+  const issuerVersion = { id: uploadedVersion, resources: { bindings: { bindings: [
+    ...plan.bindings, ...Object.entries(target.vars).map(([name, value]) => text(name, value)),
+    text("TAKOSUMI_AUTH_ARTIFACT_DIGEST", plan.artifactDigest), text("TAKOSUMI_AUTH_AUTHORITY_DIGEST", plan.authorityDigest), text("TAKOSUMI_AUTH_SOURCE_COMMIT", target.sourceCommit),
+    { name: "TAKOSUMI_VERSION_METADATA", type: "version_metadata" }, ...target.requiredSecrets.map((name) => ({ name, type: "secret_text" })),
+  ] }, script: { handlers: ["fetch", "scheduled"], named_handlers: [{ name: "AccountsOwnerAdmission", handlers: [] }] },
+    script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"], exports: { AccountsOwnerAdmission: { type: "worker" } } } } };
+  const ownerVersion = { id: previousVersion, resources: { bindings: { bindings: [text("TAKOSUMI_ENVIRONMENT", "staging"), text("OWNER_SOURCE", expected.owner.sourceCommit),
+    { name: "PRIVATE_ADMISSION", type: "service", service: AUTH_STAGING_WORKER, entrypoint: "AccountsOwnerAdmission" }, { name: "CUSTODY_DB", type: "d1", id: uuid("6") }] }, script: {}, script_runtime: {} } };
+  let schema = 0;
+  const paths: string[] = [];
+  const provider: AuthStagingProvider = { async request(method, path) {
+    expect(method).toBe("GET"); paths.push(path);
+    if (path === "/workers/scripts") return [{ id: AUTH_STAGING_WORKER }, { id: expected.owner.worker }];
+    if (path.endsWith("/subdomain")) return { enabled: false, previews_enabled: false };
+    if (path.endsWith("/schedules")) return { schedules: [{ cron: "*/1 * * * *" }] };
+    if (path.startsWith("/workers/domains?service=")) return [{ hostname: AUTH_STAGING_HOST, service: AUTH_STAGING_WORKER, zone_id: target.zoneId, enabled: true, previews_enabled: false }];
+    if (path.endsWith("/workers/routes")) return [];
+    const version = path.startsWith(`/workers/scripts/${AUTH_STAGING_WORKER}/`) ? issuerVersion : ownerVersion;
+    if (path.endsWith("/deployments")) return { deployments: [{ versions: [{ version_id: version.id, percentage: 100 }] }] };
+    if (path.includes("/versions?page=")) return { items: path.includes("page=1&") ? [{ id: version.id, metadata: { hasPreview: false } }] : [] };
+    if (path.endsWith(`/versions/${version.id}`)) return structuredClone(version);
+    throw new Error("unexpected qualification fixture path " + path);
+  } };
+  const runtime: AuthStagingReleaseRuntime = { provider, verifySchema: async () => { schema++; }, publicReadback: async () => { throw new Error("no public mutation smoke"); }, bootstrap: async () => { throw new Error("no mutation"); } };
+  const result = await inspectAuthStagingOwnerReleaseTopology({ target, plan, expectation: expected }, runtime);
+  expect(() => assertAuthStagingOwnerGraphQualification(result, expected)).not.toThrow(); expect(schema).toBe(1);
+  const before = paths.length;
+  await expect(inspectAuthStagingOwnerReleaseTopology({ target, plan, expectation: { ...expected, issuer: { ...expected.issuer, accountsDatabaseId: uuid("8") } } }, runtime)).rejects.toThrow("target_mismatch");
+  expect(paths).toHaveLength(before);
+  await expect(inspectAuthStagingOwnerReleaseTopology({ target, plan, expectation: expected }, { ...runtime, verifySchema: async () => { throw new Error("actual schema unavailable"); } })).rejects.toThrow("actual schema unavailable");
+  issuerVersion.resources.script.named_handlers[0]!.handlers = ["fetch"];
+  await expect(inspectAuthStagingOwnerReleaseTopology({ target, plan, expectation: expected }, runtime)).rejects.toThrow("entrypoint_invalid");
+  for (const vars of [{ TAKOSUMI_ACCOUNTS_OWNER_CLIENT_ID: expected.ownerClientId }, { TAKOSUMI_ACCOUNTS_OWNER_TARGET_BINDING_DIGEST: authStagingOwnerTargetBindingDigest(expected) },
+    { TAKOSUMI_ACCOUNTS_OWNER_CLIENT_ID: AUTH_STAGING_CLIENTS[0].clientId, TAKOSUMI_ACCOUNTS_OWNER_TARGET_BINDING_DIGEST: authStagingOwnerTargetBindingDigest(expected) },
+    { TAKOSUMI_ACCOUNTS_OWNER_CLIENT_ID: expected.ownerClientId, TAKOSUMI_ACCOUNTS_OWNER_TARGET_BINDING_DIGEST: "sha256:" + "A".repeat(42) + "B" }]) {
+    expect(() => parseAuthStagingTarget({ ...fixtureTarget(), vars: { ...fixtureTarget().vars, ...vars } })).toThrow();
+  }
+});

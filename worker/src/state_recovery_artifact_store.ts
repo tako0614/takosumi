@@ -12,6 +12,7 @@ import {
 } from "../../core/domains/deploy-control/operator_state_recovery.ts";
 import { stableJsonDigest } from "../../core/adapters/source/digest.ts";
 import type { R2Bucket, R2Object, R2ObjectBody } from "./bindings.ts";
+import { storedServiceUsageBucket, type StoredServiceComposition } from "./stored-service-usage.ts";
 import {
   digestBytes,
   maxStateArtifactCiphertextBytes,
@@ -66,6 +67,7 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
   readonly #crypto: StateArtifactCrypto;
   readonly #allocator: ArtifactReferenceAllocator;
   readonly #storageUsage: ArtifactStorageUsagePort | undefined;
+  readonly #storedService: StoredServiceComposition | undefined;
 
   constructor(input: {
     readonly bucket: R2Bucket;
@@ -73,11 +75,14 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
     readonly allocator: ArtifactReferenceAllocator;
     /** Trusted optional host capability; an HTTP caller cannot select it. */
     readonly storageUsage?: ArtifactStorageUsagePort;
+    readonly storedService?: StoredServiceComposition;
   }) {
+    if (input.storageUsage && input.storedService) throw recoveryArtifactError("recovery storage profiles are mutually exclusive");
     this.#bucket = input.bucket;
     this.#crypto = input.crypto;
     this.#allocator = input.allocator;
     this.#storageUsage = input.storageUsage;
+    this.#storedService = input.storedService;
   }
 
   async stage(input: StageRecoveryStateInput): Promise<StagedRecoveryStateArtifact> {
@@ -90,18 +95,19 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
     }
     const stateRef = await this.#allocate(scope);
     const handle = await handleFor(scope, stateRef);
+    const bucket = this.#bucketFor(scope.workspaceId);
     // Reconcile an earlier committed stage before encrypting. An unknown PUT
     // acknowledgement therefore never causes a fresh ciphertext identity.
     let prior: R2Object | null;
     try {
-      prior = await this.#bucket.head(stateRef);
+      prior = await bucket.head(stateRef);
     } catch {
       throw recoveryArtifactError("recovery state artifact lookup failed");
     }
     if (prior) {
       let existing: R2ObjectBody | null;
       try {
-        existing = await this.#bucket.get(stateRef);
+        existing = await bucket.get(stateRef);
       } catch {
         throw recoveryArtifactError("recovery state artifact readback failed");
       }
@@ -132,7 +138,7 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
     });
     let writeAcknowledged = false;
     try {
-      const put = await this.#bucket.put(stateRef, sealed.ciphertext, {
+      const put = await bucket.put(stateRef, sealed.ciphertext, {
         httpMetadata: { contentType: RECOVERY_METADATA.encryptedContentType },
         customMetadata: metadata,
         onlyIf: { etagDoesNotMatch: "*" },
@@ -145,7 +151,7 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
       // Reconciliation below reads once; custody confirmation is outside this
       // catch so its unknown acknowledgement is never automatically retried.
     }
-    const readback = await this.#readback(stateRef);
+    const readback = await this.#readback(stateRef, input.workspaceId);
     if (!readback) throw recoveryArtifactError(writeAcknowledged
       ? "recovery state artifact readback is missing"
       : "recovery state artifact write was not acknowledged");
@@ -186,7 +192,7 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
       custodyEvidenceDigest: handleParts.custodyEvidenceDigest,
     };
     const stateRef = await this.#allocate(provisionalScope);
-    const object = await this.#readback(stateRef);
+    const object = await this.#readback(stateRef, input.workspaceId);
     if (!object) throw recoveryArtifactError("staged recovery artifact is unavailable");
     const metadata = object.customMetadata;
     const scope: RecoveryStateArtifactScope = {
@@ -210,9 +216,16 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
     return await this.#verifyAndConfirmStorage(object, scope, allocated, input.artifactHandle, prepared);
   }
 
-  async #readback(stateRef: string): Promise<R2ObjectBody | null> {
+  #bucketFor(workspaceId: string): R2Bucket {
+    return storedServiceUsageBucket(this.#bucket, this.#storedService, {
+      bucketRole: "state", writerId: "operator-recovery", workspaceId,
+      maxBytes: RECOVERY_STATE_CIPHERTEXT_MAX_BYTES,
+    });
+  }
+
+  async #readback(stateRef: string, workspaceId: string): Promise<R2ObjectBody | null> {
     try {
-      return await this.#bucket.get(stateRef);
+      return await this.#bucketFor(workspaceId).get(stateRef);
     } catch {
       throw recoveryArtifactError("recovery state artifact readback failed");
     }

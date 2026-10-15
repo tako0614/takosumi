@@ -331,6 +331,16 @@ import {
 } from "./d1_schema_maintenance.ts";
 import { chunkD1InQueryValues } from "./d1_query_limits.ts";
 import { D1_PORTABLE_HOST_IDEMPOTENCY_SCHEMA_STATEMENTS } from "./d1_portable_host_idempotency_schema.ts";
+import {
+  IDENTITY_INVENTORY_LIMIT,
+  normalizeIdentityInventory,
+  validateIdentityCommit,
+  type CommitIdentityReconciliationInput,
+  type ControlIdentityInventory,
+  type IdentityReconciliationEvent,
+  type StoredIdentityReconciliationOperation,
+} from "../../core/domains/identity-reconciliation/store.ts";
+import { registerIdentityControlStorage } from "../../core/domains/identity-reconciliation/storage-identity.ts";
 
 /**
  * Discriminator stored in the single §27 `runs.type` column. PlanRun rows use
@@ -2368,6 +2378,7 @@ type D1PredeployedWorkspacePageRow = {
   readonly maintenance_json: string | null;
   readonly columns_json: string | null;
   readonly migrations_json: string | null;
+  readonly structures_json: string | null;
   readonly total: number | string | null;
   readonly workspace_record: unknown;
   readonly sort_key: string | null;
@@ -2376,7 +2387,7 @@ type D1PredeployedWorkspacePageRow = {
 
 type D1PredeployedWorkspaceRow = Pick<
   D1PredeployedWorkspacePageRow,
-  "maintenance_json" | "columns_json" | "migrations_json" | "workspace_record"
+  "maintenance_json" | "columns_json" | "migrations_json" | "structures_json" | "workspace_record"
 >;
 
 // `createTakosumiWorkerService` constructs a fresh store for every request, but
@@ -2389,12 +2400,14 @@ const verifiedPredeployedD1Bindings = new WeakSet<object>();
 const predeployedD1SchemaReadiness = new WeakMap<object, Promise<void>>();
 const bootstrapD1SchemaReadiness = new WeakMap<object, Promise<void>>();
 const workspaceBillingD1SchemaReadiness = new WeakMap<object, Promise<void>>();
+const identityReconciliationD1SchemaReadiness = new WeakMap<object, Promise<void>>();
+const backupOwnerD1SchemaReadiness = new WeakMap<object, Promise<void>>();
 
 function ensurePredeployedD1SchemaReady(db: D1Database): Promise<void> {
   if (verifiedPredeployedD1Bindings.has(db)) return Promise.resolve();
   let readiness = predeployedD1SchemaReadiness.get(db);
   if (readiness) return readiness;
-  const attempt = verifyD1PredeployedSchemaEvidence(db, true)
+  const attempt = verifyD1PredeployedSchemaEvidence(db, 71)
     .then(() => {
       verifiedPredeployedD1Bindings.add(db);
     })
@@ -2413,12 +2426,57 @@ function ensurePredeployedD1SchemaReady(db: D1Database): Promise<void> {
 function ensureWorkspaceBillingD1SchemaReady(db: D1Database): Promise<void> {
   const existing = workspaceBillingD1SchemaReadiness.get(db);
   if (existing) return existing;
-  const attempt = verifyD1OpenTofuLedgerSchemaPredeployed(db).catch((error: unknown) => {
+  const attempt = verifyD1PredeployedSchemaEvidence(db, 72).catch((error: unknown) => {
     if (workspaceBillingD1SchemaReadiness.get(db) === attempt) workspaceBillingD1SchemaReadiness.delete(db);
     throw error;
   });
   workspaceBillingD1SchemaReadiness.set(db, attempt);
   return attempt;
+}
+
+function ensureIdentityReconciliationD1SchemaReady(db: D1Database): Promise<void> {
+  const existing = identityReconciliationD1SchemaReadiness.get(db);
+  if (existing) return existing;
+  const attempt = verifyD1PredeployedSchemaEvidence(db, 73).catch((error: unknown) => {
+    if (identityReconciliationD1SchemaReadiness.get(db) === attempt) identityReconciliationD1SchemaReadiness.delete(db);
+    throw error;
+  });
+  identityReconciliationD1SchemaReadiness.set(db, attempt);
+  return attempt;
+}
+
+/** Read-only indexed Backup capability, separate from ordinary runtime readiness.
+ * Recheck exact index shape on every guard even after immutable catalog proof,
+ * so a warm binding cannot silently adopt a dropped/replaced index. */
+export async function verifyD1BackupOwnerIndexesPredeployed(db: D1Database): Promise<void> {
+  let attempt = backupOwnerD1SchemaReadiness.get(db);
+  try {
+    // Maintenance is mutable and never covered by a cached catalog decision.
+    await assertControlD1MaintenanceInactive(db);
+    if (!attempt) {
+      attempt = verifyD1OpenTofuLedgerSchemaPredeployed(db);
+      backupOwnerD1SchemaReadiness.set(db, attempt);
+    }
+    await attempt;
+    // The catalog can advance across a completed maintenance window while a
+    // binding stays warm. Co-read its entire bounded prefix with index shape;
+    // one extra row suffices to reject any unknown tail without an unbounded read.
+    const row = await db.prepare(`select ${D1_BACKUP_OWNER_INDEX_PROJECTION} as indexes_json,
+      (select json_group_array(json_object('name', name, 'type', type, 'notnull', "notnull", 'pk', pk))
+        from pragma_table_info('schema_migrations')) as columns_json,
+      (select json_group_array(json_object('version', version, 'name', name, 'checksum', checksum, 'applied_at', applied_at))
+        from (select version, name, checksum, applied_at from schema_migrations order by version limit ${D1_OPEN_TOFU_SCHEMA_MIGRATIONS.length + 1})) as migrations_json`)
+      .first<{ readonly indexes_json: string | null; readonly columns_json: string | null; readonly migrations_json: string | null }>();
+    await validateD1OpenTofuLedgerSchemaPredeployed(
+      parseD1JsonArray<D1TableInfoRow>(row?.columns_json, "schema columns"),
+      parseD1JsonArray<D1SchemaMigrationRow>(row?.migrations_json, "migration ledger"), 74,
+    );
+    validateD1BackupOwnerIndexes(parseD1JsonArray<D1RuntimeIndex>(row?.indexes_json, "Backup owner indexes"));
+    await assertControlD1MaintenanceInactive(db);
+  } catch {
+    if (backupOwnerD1SchemaReadiness.get(db) === attempt) backupOwnerD1SchemaReadiness.delete(db);
+    throw new Error("D1 OpenTofu indexed Backup schema verification failed");
+  }
 }
 
 function ensureBootstrapD1SchemaReady(db: D1Database): Promise<void> {
@@ -2508,6 +2566,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     this.#predeployedSchemaVerified =
       this.#schemaMode === "predeployed" &&
       verifiedPredeployedD1Bindings.has(db);
+    registerIdentityControlStorage(this, db);
   }
 
   async #reserveScheduledSweepPage<T>(input: {
@@ -5294,6 +5353,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
                        )`
                     : "NULL"
                 } AS migrations_json,
+                ${includeSchemaEvidence ? D1_RUNTIME_STRUCTURE_PROJECTION : "NULL"} AS structures_json,
                 (
                   SELECT record_json
                   FROM workspaces
@@ -5687,6 +5747,62 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return existing && !workspaceBillingBindingMatches(existing, binding) ? { status: "conflict" } : { status: "refused" };
   }
 
+  async captureIdentityReconciliationInventory(accountIds: readonly string[]): Promise<ControlIdentityInventory> {
+    const roots = [...new Set(accountIds)].sort();
+    if (roots.some((id) => typeof id !== "string" || !id)) throw new TypeError("Identity inventory roots are invalid");
+    if (roots.length > IDENTITY_INVENTORY_LIMIT) return { accountIds: roots.slice(0, IDENTITY_INVENTORY_LIMIT + 1), workspaces: [], members: [], bindings: [], principalReferences: [], overflow: true };
+    await this.#ensureSchema();
+    await ensureIdentityReconciliationD1SchemaReady(this.db);
+    const row = await this.db.prepare(D1_IDENTITY_INVENTORY_CAPTURE_SQL)
+      .bind(JSON.stringify({ expectedInventory: { accountIds: roots } }))
+      .first<D1IdentityInventoryRow>();
+    if (!row) throw new TypeError("Identity inventory census is absent");
+    return decodeD1IdentityInventory(roots, row);
+  }
+
+  async getIdentityReconciliationOperation(operationId: string): Promise<StoredIdentityReconciliationOperation | undefined> {
+    await this.#ensureSchema();
+    await ensureIdentityReconciliationD1SchemaReady(this.db);
+    const row = await this.db.prepare("select * from identity_reconciliation_operations where operation_id = ?")
+      .bind(operationId).first<D1IdentityOperationRow>();
+    return row ? decodeD1IdentityOperation(row) : undefined;
+  }
+
+  async listIdentityReconciliationEvents(operationId: string): Promise<readonly IdentityReconciliationEvent[]> {
+    await this.#ensureSchema();
+    await ensureIdentityReconciliationD1SchemaReady(this.db);
+    const result = await this.db.prepare("select * from identity_reconciliation_events where operation_id = ? order by revision")
+      .bind(operationId).all<D1IdentityEventRow>();
+    return (result.results ?? []).map(decodeD1IdentityEvent);
+  }
+
+  async commitIdentityReconciliation(input: CommitIdentityReconciliationInput): Promise<boolean> {
+    input = structuredClone(input);
+    validateIdentityCommit(input);
+    const inventory = normalizeIdentityInventory(input.expectedInventory);
+    if (inventory.accountIds.length > IDENTITY_INVENTORY_LIMIT ||
+      [inventory.workspaces, inventory.members, inventory.bindings, inventory.principalReferences].some((rows) => rows.length > IDENTITY_INVENTORY_LIMIT)) return false;
+    const envelope = JSON.stringify({ ...input, expectedInventory: inventory });
+    if (new TextEncoder().encode(envelope).byteLength > D1_SOURCE_SYNC_SETTLEMENT_ENVELOPE_MAX_BYTES) throw new TypeError("Identity reconciliation envelope exceeds D1 capacity");
+    await this.#ensureSchema();
+    await ensureIdentityReconciliationD1SchemaReady(this.db);
+    const statements = [this.db.prepare(input.expected ? D1_IDENTITY_OPERATION_UPDATE_SQL : D1_IDENTITY_OPERATION_INSERT_SQL).bind(envelope)];
+    if (input.memberChange) statements.push(this.db.prepare(input.memberChange.before ? D1_IDENTITY_MEMBER_RESTORE_SQL : D1_IDENTITY_MEMBER_INSERT_SQL).bind(envelope));
+    statements.push(this.db.prepare(D1_IDENTITY_EVENT_INSERT_SQL).bind(envelope));
+    const eventIndex = statements.length - 1;
+    statements.push(this.db.prepare(D1_IDENTITY_COMMIT_ASSERT_SQL).bind(envelope));
+    try {
+      // A fresh, globally unique mutation ticket is written first. Every later
+      // statement consumes the immediately preceding successful write AND that
+      // exact ticket. A constraint abort rolls the complete native batch back.
+      const results = await this.db.batch(statements);
+      return changes(results[0]!) === 1 && changes(results[eventIndex]!) === 1;
+    } catch (error) {
+      if (error instanceof Error && /(?:UNIQUE|PRIMARY KEY|NOT NULL) constraint failed: (?:identity_reconciliation_|workspace_members\.)/iu.test(error.message)) return false;
+      throw error;
+    }
+  }
+
   async listWorkspaceMembers(
     workspaceId: string,
   ): Promise<readonly WorkspaceMember[]> {
@@ -5903,6 +6019,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
                 ) AS maintenance_json,
                 ${columnsProjection} AS columns_json,
                 ${migrationsProjection} AS migrations_json,
+                ${includeSchemaEvidence ? D1_RUNTIME_STRUCTURE_PROJECTION : "NULL"} AS structures_json,
                 ${
                   includeTotal ? "(SELECT count(*) FROM base)" : "NULL"
                 } AS total,
@@ -5914,6 +6031,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
                 NULL AS maintenance_json,
                 NULL AS columns_json,
                 NULL AS migrations_json,
+                NULL AS structures_json,
                 NULL AS total,
                 workspace_record,
                 sort_key,
@@ -5959,7 +6077,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async #acceptPredeployedReadinessEvidence(
     readiness: Pick<
       D1PredeployedWorkspacePageRow,
-      "maintenance_json" | "columns_json" | "migrations_json"
+      "maintenance_json" | "columns_json" | "migrations_json" | "structures_json"
     >,
     includeSchemaEvidence: boolean,
   ): Promise<void> {
@@ -5981,7 +6099,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       readiness.migrations_json,
       "migration ledger",
     );
-    await validateD1OpenTofuLedgerSchemaPredeployed(columns, migrations, true);
+    await validateD1OpenTofuLedgerSchemaPredeployed(columns, migrations, 71);
+    validateD1RuntimeStructures(readiness.structures_json, migrations.at(-1)!.version);
     this.#predeployedSchemaVerified = true;
     verifiedPredeployedD1Bindings.add(this.db);
     this.#initialized = Promise.resolve();
@@ -12461,6 +12580,250 @@ function d1CapsulePlanCreationFenceGuardStmt(
  * configuration writes. The persisted Source Workspace is supplied by the
  * caller only as an expected owner; the SQL row itself remains the authority.
  */
+/** One envelope parameter keeps bounded censuses below D1's variable limit. */
+const D1_IDENTITY_CENSUS_CTE = `with envelope(doc) as (values (?1)),
+  identity_roots(account_id) as materialized (select value from envelope, json_each(doc, '$.expectedInventory.accountIds')),
+  identity_workspace_ids(id) as materialized (
+    select id from workspaces where owner_user_id in (select account_id from identity_roots)
+      or json_extract(record_json, '$.ownerUserId') in (select account_id from identity_roots)
+    union select workspace_id from workspace_members where account_id in (select account_id from identity_roots)
+      or json_extract(record_json, '$.accountId') in (select account_id from identity_roots)
+    union select json_extract(record_json, '$.workspaceId') from workspace_members where account_id in (select account_id from identity_roots)
+      or json_extract(record_json, '$.accountId') in (select account_id from identity_roots)
+  ),
+  identity_workspaces as materialized (select * from workspaces where id in (select id from identity_workspace_ids)),
+  identity_members as materialized (select * from workspace_members where account_id in (select account_id from identity_roots)
+    or json_extract(record_json, '$.accountId') in (select account_id from identity_roots)
+    or workspace_id in (select id from identity_workspace_ids)
+    or json_extract(record_json, '$.workspaceId') in (select id from identity_workspace_ids)),
+  identity_bindings as materialized (select * from workspace_billing_bindings where workspace_id in (select id from identity_workspace_ids)),
+  identity_references as materialized (select * from interface_bindings where (subject_kind = 'Principal' and subject_id in (select account_id from identity_roots))
+    or (json_extract(record_json, '$.spec.subjectRef.kind') = 'Principal' and json_extract(record_json, '$.spec.subjectRef.id') in (select account_id from identity_roots)))`;
+
+const D1_IDENTITY_INVENTORY_CAPTURE_SQL = `${D1_IDENTITY_CENSUS_CTE}
+  select
+    (select json_group_array(json_object('id', id, 'handle', handle, 'record_json', record_json, 'owner_user_id', owner_user_id, 'workspace_type', workspace_type,
+      'created_at', created_at, 'updated_at', updated_at, 'management_state', management_state,
+      'management_epoch', management_epoch, 'bootstrap_owner_id', personal_bootstrap_owner_id))
+      from (select * from identity_workspaces order by id limit 65)) as workspaces_json,
+    (select json_group_array(json_object('id', id, 'workspace_id', workspace_id, 'account_id', account_id,
+      'status', status, 'record_json', record_json, 'created_at', created_at, 'updated_at', updated_at))
+      from (select * from identity_members order by id limit 65)) as members_json,
+    (select json_group_array(json_object('workspace_id', workspace_id, 'intent_id', intent_id,
+      'billing_authority', billing_authority, 'workspace_ref', workspace_ref, 'organization_ref', organization_ref,
+      'record_json', record_json, 'bound_at', bound_at))
+      from (select * from identity_bindings order by workspace_id limit 65)) as bindings_json,
+    (select json_group_array(json_object('id', id, 'workspace_id', workspace_id, 'interface_id', interface_id,
+      'subject_kind', subject_kind, 'subject_id', subject_id, 'phase', phase, 'generation', generation,
+      'record_json', record_json, 'created_at', created_at, 'updated_at', updated_at))
+      from (select * from identity_references order by id limit 65)) as references_json`;
+
+/** Compare every JSON node while ignoring object serialization key order. */
+function d1IdentityJsonEqual(left: string, right: string): string {
+  return `(not exists (select fullkey, type, atom from json_tree(${left}) except select fullkey, type, atom from json_tree(${right}))
+    and not exists (select fullkey, type, atom from json_tree(${right}) except select fullkey, type, atom from json_tree(${left})))`;
+}
+
+function d1IdentityMemberMatches(row: string, record: string): string {
+  return `${row}.id = json_extract(${record}, '$.id')
+    and ${row}.workspace_id = json_extract(${record}, '$.workspaceId')
+    and ${row}.account_id = json_extract(${record}, '$.accountId')
+    and ${row}.status = json_extract(${record}, '$.status')
+    and ${row}.created_at = json_extract(${record}, '$.createdAt')
+    and ${row}.updated_at = json_extract(${record}, '$.updatedAt')
+    and ${d1IdentityJsonEqual(`${row}.record_json`, record)}`;
+}
+
+const D1_IDENTITY_INVENTORY_GUARD_SQL = d1WorkspaceFreezeAll([
+  `json_extract(doc, '$.expectedInventory.overflow') = 0`,
+  `(select count(*) from identity_roots) = (select count(distinct account_id) from identity_roots)`,
+  `(select count(*) from identity_roots) <= 64`,
+  `(select count(*) from identity_workspaces) = json_array_length(doc, '$.expectedInventory.workspaces')`,
+  `(select count(*) from identity_members) = json_array_length(doc, '$.expectedInventory.members')`,
+  `(select count(*) from identity_bindings) = json_array_length(doc, '$.expectedInventory.bindings')`,
+  `(select count(*) from identity_references) = json_array_length(doc, '$.expectedInventory.principalReferences')`,
+  `(select count(distinct json_extract(value, '$.workspace.id')) from json_each(doc, '$.expectedInventory.workspaces')) = json_array_length(doc, '$.expectedInventory.workspaces')`,
+  `(select count(distinct json_extract(value, '$.id')) from json_each(doc, '$.expectedInventory.members')) = json_array_length(doc, '$.expectedInventory.members')`,
+  `(select count(distinct json_extract(value, '$.workspaceId')) from json_each(doc, '$.expectedInventory.bindings')) = json_array_length(doc, '$.expectedInventory.bindings')`,
+  `(select count(distinct json_extract(value, '$.id')) from json_each(doc, '$.expectedInventory.principalReferences')) = json_array_length(doc, '$.expectedInventory.principalReferences')`,
+  `not exists (select 1 from json_each(doc, '$.expectedInventory.workspaces') expected
+    where not exists (select 1 from identity_workspaces w
+      where w.id = json_extract(expected.value, '$.workspace.id')
+        and w.handle = json_extract(expected.value, '$.workspace.handle')
+        and w.created_at = json_extract(expected.value, '$.workspace.createdAt')
+        and w.updated_at = json_extract(expected.value, '$.workspace.updatedAt')
+        and w.owner_user_id is json_extract(expected.value, '$.workspace.ownerUserId')
+        and w.workspace_type is json_extract(expected.value, '$.workspace.type')
+        and w.id = json_extract(expected.value, '$.management.workspaceId')
+        and w.management_state = json_extract(expected.value, '$.management.managementState')
+        and w.management_epoch = json_extract(expected.value, '$.management.managementEpoch')
+        and w.personal_bootstrap_owner_id is json_extract(expected.value, '$.bootstrapOwnerId')
+        and ${d1IdentityJsonEqual("w.record_json", "json_extract(expected.value, '$.workspace')")}))`,
+  `not exists (select 1 from json_each(doc, '$.expectedInventory.members') expected
+    where not exists (select 1 from identity_members m where ${d1IdentityMemberMatches("m", "expected.value")}))`,
+  `not exists (select 1 from json_each(doc, '$.expectedInventory.bindings') expected
+    where not exists (select 1 from identity_bindings b
+      where b.workspace_id = json_extract(expected.value, '$.workspaceId')
+        and b.intent_id = json_extract(expected.value, '$.intentId')
+        and b.billing_authority = json_extract(expected.value, '$.billingAuthority')
+        and b.workspace_ref = json_extract(expected.value, '$.workspaceRef')
+        and b.organization_ref = json_extract(expected.value, '$.organizationRef')
+        and b.bound_at = json_extract(expected.value, '$.boundAt')
+        and ${d1IdentityJsonEqual("b.record_json", "expected.value")}))`,
+  `not exists (select 1 from json_each(doc, '$.expectedInventory.principalReferences') expected
+    where not exists (select 1 from identity_references r
+      where r.id = json_extract(expected.value, '$.id')
+        and r.workspace_id = json_extract(expected.value, '$.workspaceId')
+        and r.subject_id = json_extract(expected.value, '$.subjectId')
+        and r.id = json_extract(expected.value, '$.record.metadata.id')
+        and r.workspace_id = json_extract(expected.value, '$.record.metadata.workspaceId')
+        and r.interface_id = json_extract(expected.value, '$.record.spec.interfaceId')
+        and r.subject_kind = json_extract(expected.value, '$.record.spec.subjectRef.kind')
+        and r.subject_id = json_extract(expected.value, '$.record.spec.subjectRef.id')
+        and r.phase = json_extract(expected.value, '$.record.status.phase')
+        and r.generation = json_extract(expected.value, '$.record.metadata.generation')
+        and r.created_at = json_extract(expected.value, '$.record.metadata.createdAt')
+        and r.updated_at = json_extract(expected.value, '$.record.metadata.updatedAt')
+        and ${d1IdentityJsonEqual("r.record_json", "json_extract(expected.value, '$.record')")}))`,
+  `(json_type(doc, '$.memberChange') is null or (
+    (json_type(doc, '$.memberChange.before') is null
+      and not exists (select 1 from workspace_members m
+        where m.id = json_extract(doc, '$.memberChange.after.id')
+          or (m.workspace_id = json_extract(doc, '$.memberChange.after.workspaceId') and m.account_id = json_extract(doc, '$.memberChange.after.accountId'))))
+    or (json_type(doc, '$.memberChange.before') = 'object' and exists (select 1 from workspace_members m
+      where ${d1IdentityMemberMatches("m", "json_extract(doc, '$.memberChange.before')")}))))`
+]);
+
+const D1_IDENTITY_NEXT_OPERATION_COLUMNS_SQL = `json_extract(doc, '$.next.operationId'), json_extract(doc, '$.next.kind'),
+  json_extract(doc, '$.next.immutableKey'), json_extract(doc, '$.next.revision'), json_extract(doc, '$.next.status'),
+  json_extract(doc, '$.next.mutationId'), json_extract(doc, '$.next'), json_extract(doc, '$.next.createdAt'), json_extract(doc, '$.next.updatedAt')`;
+
+// Keep inventory admission and operation CAS in separate expression trees.
+// Materialization remains within the same SQLite statement/read snapshot.
+const D1_IDENTITY_ADMITTED_CTE = `${D1_IDENTITY_CENSUS_CTE},
+  identity_inventory_admission as materialized (select doc from envelope where ${D1_IDENTITY_INVENTORY_GUARD_SQL})`;
+
+const D1_IDENTITY_OPERATION_INSERT_SQL = `${D1_IDENTITY_ADMITTED_CTE}
+  insert into identity_reconciliation_operations
+    (operation_id, kind, immutable_key, revision, status, mutation_id, record_json, created_at, updated_at)
+  select ${D1_IDENTITY_NEXT_OPERATION_COLUMNS_SQL} from identity_inventory_admission where
+    not exists (select 1 from identity_reconciliation_operations where operation_id = json_extract(doc, '$.next.operationId'))`;
+
+const D1_IDENTITY_OPERATION_UPDATE_SQL = `${D1_IDENTITY_ADMITTED_CTE}
+  update identity_reconciliation_operations set
+    revision = json_extract((select doc from envelope), '$.next.revision'),
+    status = json_extract((select doc from envelope), '$.next.status'),
+    mutation_id = json_extract((select doc from envelope), '$.next.mutationId'),
+    record_json = json_extract((select doc from envelope), '$.next'),
+    updated_at = json_extract((select doc from envelope), '$.next.updatedAt')
+  where exists (select 1 from identity_inventory_admission where operation_id = json_extract(doc, '$.expected.operationId')
+    and kind = json_extract(doc, '$.expected.kind') and immutable_key = json_extract(doc, '$.expected.immutableKey')
+    and revision = json_extract(doc, '$.expected.revision') and status = json_extract(doc, '$.expected.status')
+    and mutation_id = json_extract(doc, '$.expected.mutationId')
+    and created_at = json_extract(doc, '$.expected.createdAt') and updated_at = json_extract(doc, '$.expected.updatedAt')
+    and ${d1IdentityJsonEqual("identity_reconciliation_operations.record_json", "json_extract(doc, '$.expected')")})`;
+
+const D1_IDENTITY_TICKET_SQL = `changes() = 1 and exists (select 1 from identity_reconciliation_operations ticket
+  where ticket.operation_id = json_extract(doc, '$.next.operationId') and ticket.revision = json_extract(doc, '$.next.revision')
+    and ticket.mutation_id = json_extract(doc, '$.next.mutationId')
+    and ${d1IdentityJsonEqual("ticket.record_json", "json_extract(doc, '$.next')")})`;
+
+const D1_IDENTITY_MEMBER_INSERT_SQL = `with envelope(doc) as (values (?1))
+  insert into workspace_members (id, workspace_id, account_id, status, record_json, created_at, updated_at)
+  select json_extract(doc, '$.memberChange.after.id'), json_extract(doc, '$.memberChange.after.workspaceId'),
+    json_extract(doc, '$.memberChange.after.accountId'), json_extract(doc, '$.memberChange.after.status'),
+    json_extract(doc, '$.memberChange.after'), json_extract(doc, '$.memberChange.after.createdAt'), json_extract(doc, '$.memberChange.after.updatedAt')
+  from envelope where ${D1_IDENTITY_TICKET_SQL}`;
+
+const D1_IDENTITY_MEMBER_RESTORE_SQL = `with envelope(doc) as (values (?1))
+  update workspace_members set status = json_extract((select doc from envelope), '$.memberChange.after.status'),
+    record_json = json_extract((select doc from envelope), '$.memberChange.after'),
+    updated_at = json_extract((select doc from envelope), '$.memberChange.after.updatedAt')
+  where exists (select 1 from envelope where ${D1_IDENTITY_TICKET_SQL}
+    and ${d1IdentityMemberMatches("workspace_members", "json_extract(doc, '$.memberChange.before')")})`;
+
+const D1_IDENTITY_EVENT_INSERT_SQL = `with envelope(doc) as (values (?1))
+  insert into identity_reconciliation_events (operation_id, revision, mutation_id, record_json, recorded_at)
+  select json_extract(doc, '$.event.operationId'), json_extract(doc, '$.event.revision'), json_extract(doc, '$.event.mutationId'),
+    json_extract(doc, '$.event'), json_extract(doc, '$.event.recordedAt') from envelope where ${D1_IDENTITY_TICKET_SQL}`;
+
+// An unexpected ignored member/event write must not leave a winning operation
+// without its complete after-image. NOT NULL failure rolls this batch back.
+const D1_IDENTITY_COMMIT_ASSERT_SQL = `with envelope(doc) as (values (?1))
+  insert into identity_reconciliation_events (operation_id, revision, mutation_id, record_json, recorded_at)
+  select null, 0, null, null, null from envelope
+  where exists (select 1 from identity_reconciliation_operations ticket
+    where ticket.operation_id = json_extract(doc, '$.next.operationId') and ticket.mutation_id = json_extract(doc, '$.next.mutationId')
+      and ${d1IdentityJsonEqual("ticket.record_json", "json_extract(doc, '$.next')")})
+    and (not exists (select 1 from identity_reconciliation_events event
+      where event.operation_id = json_extract(doc, '$.event.operationId') and event.revision = json_extract(doc, '$.event.revision')
+        and event.mutation_id = json_extract(doc, '$.event.mutationId') and event.recorded_at = json_extract(doc, '$.event.recordedAt')
+        and ${d1IdentityJsonEqual("event.record_json", "json_extract(doc, '$.event')")})
+      or (json_type(doc, '$.memberChange') = 'object' and not exists (select 1 from workspace_members member
+        where ${d1IdentityMemberMatches("member", "json_extract(doc, '$.memberChange.after')")})))`;
+
+type D1IdentityInventoryRow = { readonly workspaces_json: string; readonly members_json: string; readonly bindings_json: string; readonly references_json: string };
+type D1IdentityOperationRow = { readonly operation_id: string; readonly kind: string; readonly immutable_key: string; readonly revision: number; readonly status: string; readonly mutation_id: string; readonly record_json: string; readonly created_at: string; readonly updated_at: string };
+type D1IdentityEventRow = { readonly operation_id: string; readonly revision: number; readonly mutation_id: string; readonly record_json: string; readonly recorded_at: string };
+
+function decodeD1IdentityOperation(row: D1IdentityOperationRow): StoredIdentityReconciliationOperation {
+  const record = jsonRecordFromD1Value(row.record_json) as unknown as StoredIdentityReconciliationOperation;
+  if (record.operationId !== row.operation_id || record.kind !== row.kind || record.immutableKey !== row.immutable_key ||
+    record.revision !== row.revision || record.status !== row.status || record.mutationId !== row.mutation_id ||
+    record.createdAt !== row.created_at || record.updatedAt !== row.updated_at || !Number.isSafeInteger(row.revision) || row.revision < 1) throw new TypeError("Identity reconciliation operation columns disagree");
+  return structuredClone(record);
+}
+
+function decodeD1IdentityEvent(row: D1IdentityEventRow): IdentityReconciliationEvent {
+  const record = jsonRecordFromD1Value(row.record_json) as unknown as IdentityReconciliationEvent;
+  if (record.operationId !== row.operation_id || record.revision !== row.revision || record.mutationId !== row.mutation_id ||
+    record.recordedAt !== row.recorded_at || !Number.isSafeInteger(row.revision) || row.revision < 1) throw new TypeError("Identity reconciliation event columns disagree");
+  return structuredClone(record);
+}
+
+function decodeD1IdentityInventory(accountIds: readonly string[], row: D1IdentityInventoryRow): ControlIdentityInventory {
+  const workspaceRows = parseD1JsonArray<Record<string, unknown>>(row.workspaces_json, "identity Workspaces");
+  const memberRows = parseD1JsonArray<Record<string, unknown>>(row.members_json, "identity members");
+  const bindingRows = parseD1JsonArray<Record<string, unknown>>(row.bindings_json, "identity bindings");
+  const referenceRows = parseD1JsonArray<Record<string, unknown>>(row.references_json, "identity Principal references");
+  const workspaces = workspaceRows.map((entry) => {
+    const workspace = parseD1WorkspaceRecord(entry.record_json);
+    if (workspace.id !== entry.id || workspace.handle !== entry.handle || workspace.createdAt !== entry.created_at || workspace.updatedAt !== entry.updated_at ||
+      (workspace.ownerUserId ?? null) !== entry.owner_user_id || (workspace.type ?? null) !== entry.workspace_type ||
+      !["active", "draining", "frozen", "released"].includes(String(entry.management_state)) || !Number.isSafeInteger(entry.management_epoch) || Number(entry.management_epoch) < 1 ||
+      (entry.bootstrap_owner_id !== null && typeof entry.bootstrap_owner_id !== "string")) throw new TypeError("Identity Workspace columns disagree");
+    return { workspace, management: { workspaceId: workspace.id, managementState: entry.management_state as "active" | "draining" | "frozen" | "released", managementEpoch: Number(entry.management_epoch) },
+      ...(entry.bootstrap_owner_id === null ? {} : { bootstrapOwnerId: entry.bootstrap_owner_id as string }) };
+  });
+  const members = memberRows.map((entry) => {
+    const member = jsonRecordFromD1Value(entry.record_json) as unknown as WorkspaceMember;
+    workspaceMemberFromRow({ id: entry.id as string, workspaceId: entry.workspace_id as string, accountId: entry.account_id as string,
+      status: entry.status as string, recordJson: member, createdAt: entry.created_at as string, updatedAt: entry.updated_at as string },
+      { workspaceId: entry.workspace_id as string, accountId: entry.account_id as string });
+    return member;
+  });
+  const bindings = bindingRows.map((entry) => {
+    const binding = jsonRecordFromD1Value(entry.record_json) as unknown as WorkspaceBillingBinding;
+    assertWorkspaceBillingBindingRecord(binding);
+    if (binding.workspaceId !== entry.workspace_id || binding.intentId !== entry.intent_id || binding.billingAuthority !== entry.billing_authority ||
+      binding.workspaceRef !== entry.workspace_ref || binding.organizationRef !== entry.organization_ref || binding.boundAt !== entry.bound_at) throw new TypeError("Identity billing binding columns disagree");
+    return binding;
+  });
+  const principalReferences = referenceRows.map((entry) => {
+    const record = jsonRecordFromD1Value(entry.record_json);
+    const metadata = record.metadata as Record<string, unknown> | undefined;
+    const spec = record.spec as Record<string, unknown> | undefined;
+    const subject = spec?.subjectRef as Record<string, unknown> | undefined;
+    const status = record.status as Record<string, unknown> | undefined;
+    if (!metadata || !spec || !subject || !status || metadata.id !== entry.id || metadata.workspaceId !== entry.workspace_id ||
+      spec.interfaceId !== entry.interface_id || subject.kind !== entry.subject_kind || subject.id !== entry.subject_id || status.phase !== entry.phase ||
+      metadata.generation !== entry.generation || metadata.createdAt !== entry.created_at || metadata.updatedAt !== entry.updated_at) throw new TypeError("Identity Principal reference columns disagree");
+    return { id: entry.id as string, workspaceId: entry.workspace_id as string, subjectId: entry.subject_id as string, record };
+  });
+  return normalizeIdentityInventory({ accountIds, workspaces, members, bindings, principalReferences,
+    overflow: [workspaceRows, memberRows, bindingRows, referenceRows].some((rows) => rows.length > IDENTITY_INVENTORY_LIMIT) });
+}
+
 function d1WorkspaceMemberSnapshotExists(
   orm: DrizzleD1Database<typeof schema>, member: WorkspaceMember,
 ): SQL {
@@ -15970,6 +16333,7 @@ export async function ensureD1OpenTofuLedgerSchema(
       on backups (space_id)`,
     `create index if not exists backups_installation_idx
       on backups (installation_id)`,
+    ...(throughMigrationVersion >= 74 ? D1_BACKUP_OWNER_INDEX_STATEMENTS : []),
     // Runtime declaration layer. Values are non-secret declaration documents
     // and resolved public output inputs; credentials remain references only.
     `create table if not exists interfaces (
@@ -16334,6 +16698,36 @@ const D1_WORKSPACE_BILLING_BINDING_STATEMENTS = [
   `create unique index workspace_billing_bindings_intent_unique on workspace_billing_bindings (intent_id)`,
   `create unique index workspace_billing_bindings_authority_ref_unique on workspace_billing_bindings (billing_authority, workspace_ref)`,
   `create unique index workspace_billing_bindings_authority_org_unique on workspace_billing_bindings (billing_authority, organization_ref)`,
+] as const;
+
+const D1_IDENTITY_RECONCILIATION_STATEMENTS = [
+  `create table if not exists identity_reconciliation_operations (
+    operation_id text primary key,
+    kind text not null,
+    immutable_key text not null,
+    revision integer not null,
+    status text not null,
+    mutation_id text not null,
+    record_json text not null,
+    created_at text not null,
+    updated_at text not null
+  )`,
+  `create unique index if not exists identity_reconciliation_operations_mutation_unique on identity_reconciliation_operations (mutation_id)`,
+  `create table if not exists identity_reconciliation_events (
+    operation_id text not null,
+    revision integer not null,
+    mutation_id text not null,
+    record_json text not null,
+    recorded_at text not null,
+    primary key (operation_id, revision)
+  )`,
+  `create unique index if not exists identity_reconciliation_events_mutation_unique on identity_reconciliation_events (mutation_id)`,
+] as const;
+
+// Separate forward declaration: migration 9's historical index array is immutable.
+const D1_BACKUP_OWNER_INDEX_STATEMENTS = [
+  `create index if not exists backups_created_by_run_id_idx on backups(created_by_run_id)`,
+  `create index if not exists backups_legacy_created_by_run_text_idx on backups((cast((case when json_valid(record_json) = 1 then json_extract(record_json, '$.createdByRunId') else null end) as text)))`,
 ] as const;
 
 const D1_OPEN_TOFU_SCHEMA_MIGRATIONS = [
@@ -18521,6 +18915,24 @@ ${D1_WORKSPACE_BILLING_BINDING_STATEMENTS.join("\n---\n")}`,
     async atomicStatements() { return D1_WORKSPACE_BILLING_BINDING_STATEMENTS; },
     async apply(db) { await runD1AtomicSql(db, D1_WORKSPACE_BILLING_BINDING_STATEMENTS); },
   },
+  {
+    version: 73,
+    name: "d1_identity_reconciliation",
+    checksumSource: () => `Retained Control identity reconciliation CAS operations and append-only events.
+No identity, Workspace, membership, or billing cascade foreign key.
+${D1_IDENTITY_RECONCILIATION_STATEMENTS.join("\n---\n")}`,
+    async atomicStatements() { return D1_IDENTITY_RECONCILIATION_STATEMENTS; },
+    async apply(db) { await runD1AtomicSql(db, D1_IDENTITY_RECONCILIATION_STATEMENTS); },
+  },
+  {
+    version: 74,
+    name: "d1_backup_owner_lookup_indexes",
+    checksumSource: () => `Nonunique exact physical and legacy TEXT-affinity Backup owner lookup indexes.
+No data rewrite, ownership normalization, unique constraint or authority change.
+${D1_BACKUP_OWNER_INDEX_STATEMENTS.join("\n---\n")}`,
+    async atomicStatements() { return D1_BACKUP_OWNER_INDEX_STATEMENTS; },
+    async apply(db) { await runD1AtomicSql(db, D1_BACKUP_OWNER_INDEX_STATEMENTS); },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
@@ -19456,6 +19868,122 @@ type D1SchemaMigrationRow = {
   readonly applied_at: string;
 };
 
+const D1_RUNTIME_INDEX_PROJECTION = `json_object('name', indexes.name, 'unique', indexes."unique", 'partial', indexes.partial,
+  'columns', (select json_group_array(name) from (select name from pragma_index_info(indexes.name) order by seqno)),
+  'sql', (select sql from sqlite_master where type = 'index' and name = indexes.name),
+  'xinfo', (select json_group_array(json_object('seqno', seqno, 'cid', cid, 'name', name, 'desc', "desc", 'coll', coll, 'key', "key"))
+    from (select * from pragma_index_xinfo(indexes.name) order by seqno)))`;
+const D1_BACKUP_OWNER_INDEX_PROJECTION = `(select json_group_array(${D1_RUNTIME_INDEX_PROJECTION})
+  from pragma_index_list('backups') indexes where indexes.name in ('backups_created_by_run_id_idx', 'backups_legacy_created_by_run_text_idx'))`;
+
+/** Cold readiness co-reads structures; warm Workspace reads stay one statement. */
+const D1_RUNTIME_STRUCTURE_PROJECTION = `(
+  select json_group_array(json_object('name', master.name,
+    'columns', (select json_group_array(json_object('name', name, 'type', type, 'notnull', "notnull", 'pk', pk)) from pragma_table_xinfo(master.name)),
+    'indexes', (select json_group_array(${D1_RUNTIME_INDEX_PROJECTION}) from pragma_index_list(master.name) indexes),
+    'foreignKeys', (select count(*) from pragma_foreign_key_list(master.name))))
+  from sqlite_master master where master.type = 'table' and master.name in (
+    'workspaces', 'workspace_members', 'interface_bindings', 'scheduled_sweep_cursors',
+    'workspace_billing_intents', 'workspace_billing_bindings',
+    'identity_reconciliation_operations', 'identity_reconciliation_events', 'backups')
+)`;
+
+type D1RuntimeIndex = {
+  readonly name: string;
+  readonly unique: number;
+  readonly partial: number;
+  readonly columns: readonly (string | null)[];
+  readonly sql: string | null;
+  readonly xinfo: readonly { readonly seqno: number; readonly cid: number; readonly name: string | null; readonly desc: number; readonly coll: string; readonly key: number }[];
+};
+type D1RuntimeStructure = {
+  readonly name: string;
+  readonly columns: readonly { readonly name: string; readonly type: string; readonly notnull: number; readonly pk: number }[];
+  readonly indexes: readonly D1RuntimeIndex[];
+  readonly foreignKeys: number;
+};
+
+/** Normalize SQL syntax only. Quoted JSON paths/string literals retain every
+ * byte and case: lowercasing them could qualify a different owner expression. */
+function normalizedD1IndexSql(value: string | null): string | null {
+  if (typeof value !== "string") return null;
+  let result = "", quote = "";
+  for (let i = 0; i < value.length; i++) {
+    const character = value[i]!;
+    if (quote) {
+      result += character;
+      if (character === quote) {
+        if (value[i + 1] === quote) result += value[++i];
+        else quote = "";
+      }
+    } else if (character === "'" || character === '"') {
+      quote = character;
+      result += character;
+    } else if (/\s/u.test(character)) {
+      if (result && !result.endsWith(" ")) result += " ";
+    } else result += character.toLowerCase();
+  }
+  return result.trim().replace(/^create index if not exists /u, "create index ");
+}
+
+function validateD1BackupOwnerIndexes(indexes: readonly D1RuntimeIndex[]): void {
+  const expected = [
+    { name: "backups_created_by_run_id_idx", cid: 4, column: "created_by_run_id" },
+    { name: "backups_legacy_created_by_run_text_idx", cid: -2, column: null },
+  ] as const;
+  for (const [position, identity] of expected.entries()) {
+    const found = indexes.filter(index => index.name === identity.name);
+    const index = found[0];
+    const xinfo = [
+      { seqno: 0, cid: identity.cid, name: identity.column, desc: 0, coll: "BINARY", key: 1 },
+      { seqno: 1, cid: -1, name: null, desc: 0, coll: "BINARY", key: 0 },
+    ];
+    if (found.length !== 1 || !index || index.unique !== 0 || index.partial !== 0 ||
+      stableStringify(index.columns) !== stableStringify([identity.column]) ||
+      normalizedD1IndexSql(index.sql) !== normalizedD1IndexSql(D1_BACKUP_OWNER_INDEX_STATEMENTS[position]!) ||
+      stableStringify(index.xinfo) !== stableStringify(xinfo)) throw new Error("D1 OpenTofu predeployed schema verification failed");
+  }
+}
+
+function validateD1RuntimeStructures(value: unknown, head: number): void {
+  const tables = new Map(parseD1JsonArray<D1RuntimeStructure>(value, "runtime structures").map((table) => [table.name, table]));
+  type Column = readonly [name: string, type: "text" | "integer", notnull: number, pk?: number];
+  const check = (name: string, expected: readonly Column[], indexes: readonly (readonly [string, readonly string[], number?])[] = []) => {
+    const table = tables.get(name);
+    if (!table || table.columns.length !== expected.length || expected.some(([columnName, type, required, pk = 0]) => {
+      const column = table.columns.find((item) => item.name === columnName);
+      return !column || column.type.toLowerCase() !== type || column.notnull !== required || column.pk !== pk;
+    }) || indexes.some(([indexName, columns, partial = 0]) => !table.indexes.some((index) => index.name === indexName && index.unique === 1 && index.partial === partial && stableStringify(index.columns) === stableStringify(columns))) ||
+      (name.startsWith("identity_reconciliation_") && table.foreignKeys !== 0)) throw new Error("D1 OpenTofu predeployed schema verification failed");
+  };
+  check("workspaces", [["id", "text", 0, 1], ["handle", "text", 1], ["record_json", "text", 1], ["created_at", "text", 1], ["updated_at", "text", 1],
+    ["owner_user_id", "text", 0], ["workspace_type", "text", 0], ["personal_bootstrap_owner_id", "text", 0], ["management_state", "text", 1], ["management_epoch", "integer", 1]],
+    [["workspaces_handle_unique", ["handle"]], ["workspaces_personal_bootstrap_owner_unique", ["personal_bootstrap_owner_id"], 1]]);
+  check("workspace_members", [["id", "text", 0, 1], ["workspace_id", "text", 1], ["account_id", "text", 1], ["status", "text", 1], ["record_json", "text", 1], ["created_at", "text", 1], ["updated_at", "text", 1]],
+    [["workspace_members_workspace_account_unique", ["workspace_id", "account_id"]]]);
+  check("interface_bindings", [["id", "text", 0, 1], ["workspace_id", "text", 1], ["interface_id", "text", 1], ["subject_kind", "text", 1], ["subject_id", "text", 1],
+    ["phase", "text", 1], ["generation", "integer", 1], ["record_json", "text", 1], ["created_at", "text", 1], ["updated_at", "text", 1]],
+    [["interface_bindings_active_subject_unique", ["interface_id", "subject_kind", "subject_id"], 1]]);
+  check("scheduled_sweep_cursors", [["lane", "text", 0, 1], ["generation", "integer", 1], ["cursor_created_at", "text", 0], ["cursor_id", "text", 0], ["upper_created_at", "text", 0], ["upper_id", "text", 0]]);
+  if (head >= 72) {
+    check("workspace_billing_intents", [["workspace_id", "text", 0, 1], ["intent_id", "text", 1], ["billing_authority", "text", 1], ["workspace_ref", "text", 1], ["record_json", "text", 1], ["created_at", "text", 1]],
+      [["workspace_billing_intents_intent_unique", ["intent_id"]], ["workspace_billing_intents_authority_ref_unique", ["billing_authority", "workspace_ref"]]]);
+    check("workspace_billing_bindings", [["workspace_id", "text", 0, 1], ["intent_id", "text", 1], ["billing_authority", "text", 1], ["workspace_ref", "text", 1], ["organization_ref", "text", 1], ["record_json", "text", 1], ["bound_at", "text", 1]],
+      [["workspace_billing_bindings_intent_unique", ["intent_id"]], ["workspace_billing_bindings_authority_ref_unique", ["billing_authority", "workspace_ref"]], ["workspace_billing_bindings_authority_org_unique", ["billing_authority", "organization_ref"]]]);
+  }
+  if (head >= 73) {
+    check("identity_reconciliation_operations", [["operation_id", "text", 0, 1], ["kind", "text", 1], ["immutable_key", "text", 1], ["revision", "integer", 1], ["status", "text", 1], ["mutation_id", "text", 1], ["record_json", "text", 1], ["created_at", "text", 1], ["updated_at", "text", 1]],
+      [["identity_reconciliation_operations_mutation_unique", ["mutation_id"]]]);
+    check("identity_reconciliation_events", [["operation_id", "text", 1, 1], ["revision", "integer", 1, 2], ["mutation_id", "text", 1], ["record_json", "text", 1], ["recorded_at", "text", 1]],
+      [["identity_reconciliation_events_mutation_unique", ["mutation_id"]]]);
+  }
+  if (head >= 74) {
+    check("backups", [["id", "text", 0, 1], ["space_id", "text", 1], ["installation_id", "text", 0], ["environment", "text", 0],
+      ["created_by_run_id", "text", 0], ["record_json", "text", 1], ["created_at", "text", 1]]);
+    validateD1BackupOwnerIndexes(tables.get("backups")!.indexes);
+  }
+}
+
 /**
  * Strict read-only readiness check for hosts that predeploy the OSS control
  * schema. Unlike {@link ensureD1OpenTofuLedgerSchema}, this function never
@@ -19465,15 +19993,16 @@ type D1SchemaMigrationRow = {
 export async function verifyD1OpenTofuLedgerSchemaPredeployed(
   db: D1Database,
 ): Promise<void> {
-  await verifyD1PredeployedSchemaEvidence(db, false);
+  await verifyD1PredeployedSchemaEvidence(db, 74);
 }
 
-/** Runtime bridge only: qualification above still requires exact current v72. */
-async function verifyD1PredeployedSchemaEvidence(db: D1Database, allowWorkspaceBillingBridge: boolean): Promise<void> {
+/** Runtime floors never weaken qualification, which requires exact current v74. */
+async function verifyD1PredeployedSchemaEvidence(db: D1Database, minimumVersion: 71 | 72 | 73 | 74): Promise<void> {
   let columns: readonly D1TableInfoRow[];
   let rows: readonly D1SchemaMigrationRow[];
+  let structures: string | null;
   try {
-    const [columnRows, result] = await Promise.all([
+    const [columnRows, result, structureRow] = await Promise.all([
       d1ColumnInfo(db, "schema_migrations"),
       db
         .prepare(
@@ -19482,29 +20011,28 @@ async function verifyD1PredeployedSchemaEvidence(db: D1Database, allowWorkspaceB
            order by version`,
         )
         .all<D1SchemaMigrationRow>(),
+      db.prepare(`select ${D1_RUNTIME_STRUCTURE_PROJECTION} as structures_json`).first<{ readonly structures_json: string }>(),
     ]);
     columns = columnRows;
     rows = result.results ?? [];
+    structures = structureRow?.structures_json ?? null;
   } catch {
     throw new Error("D1 OpenTofu predeployed schema verification failed");
   }
 
-  await validateD1OpenTofuLedgerSchemaPredeployed(columns, rows, allowWorkspaceBillingBridge);
+  await validateD1OpenTofuLedgerSchemaPredeployed(columns, rows, minimumVersion);
+  validateD1RuntimeStructures(structures, rows.at(-1)!.version);
 }
 
 async function validateD1OpenTofuLedgerSchemaPredeployed(
   columns: readonly D1TableInfoRow[],
   rows: readonly D1SchemaMigrationRow[],
-  allowWorkspaceBillingBridge = false,
+  minimumVersion: 71 | 72 | 73 | 74 = 74,
 ): Promise<void> {
   assertD1SchemaMigrationLedgerShape(columns);
   const head = rows.at(-1)?.version;
-  if (allowWorkspaceBillingBridge && head !== 71 && head !== 72) {
-    throw new Error("D1 OpenTofu runtime bridge requires exact v71 or v72 schema");
-  }
-  const catalog = allowWorkspaceBillingBridge && head === 71
-    ? D1_OPEN_TOFU_SCHEMA_MIGRATIONS.filter((migration) => migration.version <= 71)
-    : D1_OPEN_TOFU_SCHEMA_MIGRATIONS;
+  if ((head !== 71 && head !== 72 && head !== 73 && head !== 74) || head < minimumVersion) throw new Error("D1 OpenTofu predeployed schema verification failed");
+  const catalog = D1_OPEN_TOFU_SCHEMA_MIGRATIONS.filter((migration) => migration.version <= head);
   if (rows.length !== catalog.length) {
     throw new Error("D1 OpenTofu predeployed schema verification failed");
   }
