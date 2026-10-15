@@ -2471,6 +2471,73 @@ test.describe("Takosumi dashboard browser surface", () => {
     traffic.assertNoFailures();
   });
 
+  test("the auto-selected Host/account keeps its label on one line on a phone", async ({
+    page,
+  }) => {
+    test.skip(
+      mode !== "portable",
+      "the single destination fixture is portable-only",
+    );
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
+    await page.setViewportSize({ width: 390, height: 844 });
+    const state = await stubProviderDestinationFixture(page, [
+      PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1]!,
+    ]);
+    const query = new URLSearchParams({
+      git: "https://github.com/example/cloudflare-service.git",
+      ref: PORTABLE_SOURCE_COMMIT,
+      path: ".",
+      name: "cloudflare-service",
+    });
+    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: /追加|Add/u }).click();
+
+    await expect(
+      page.getByRole("heading", { name: /追加前の確認|Review before adding/u }),
+    ).toBeVisible();
+    const destination = page.locator(
+      '[data-install-provider-destination="auto-selected"]',
+    );
+    await expect(destination).toHaveAttribute(
+      "data-provider-connection-id",
+      "pc_cloudflare_direct",
+    );
+    // A squeezed flex label used to stack one character per line, with the
+    // select pushed past the row's right edge.
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      const geometry = await destination.evaluate((row) => {
+        const style = getComputedStyle(row);
+        const outer = row.getBoundingClientRect();
+        const label = row.querySelector(":scope > span")!;
+        return {
+          content: {
+            left: outer.left + Number.parseFloat(style.borderLeftWidth) + Number.parseFloat(style.paddingLeft),
+            right: outer.right - Number.parseFloat(style.borderRightWidth) - Number.parseFloat(style.paddingRight),
+          },
+          label: label.getBoundingClientRect().toJSON() as DOMRect,
+          select: row.querySelector("select")!.getBoundingClientRect().toJSON() as DOMRect,
+          fontSize: Number.parseFloat(getComputedStyle(label).fontSize),
+          pageFits: document.documentElement.scrollWidth <= window.innerWidth,
+        };
+      });
+      expect(geometry.label.height, `label is one line at ${width}px`).toBeLessThan(geometry.fontSize * 2);
+      for (const [name, box] of [
+        ["label", geometry.label],
+        ["select", geometry.select],
+      ] as const) {
+        expect(box.left, `${name} starts inside the row at ${width}px`).toBeGreaterThanOrEqual(geometry.content.left);
+        expect(box.right, `${name} ends inside the row at ${width}px`).toBeLessThanOrEqual(geometry.content.right);
+      }
+      expect(geometry.pageFits, `page fits ${width}px`).toBe(true);
+    }
+    expect(state.mutations.some((entry) => /apply|approve/u.test(entry))).toBe(false);
+    expectSingleSourceCreate(state);
+    await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
+  });
+
   test("unrelated v01 provider labels cannot masquerade as a v02 destination", async ({
     page,
   }) => {
