@@ -137,6 +137,125 @@ async function fixture(backend: Backend, label: string) {
   } catch (error) { await close(); throw error; }
 }
 
+test("memory: unacknowledged initial Control original is prepared from canonical raw before capture", async () => {
+  const f = await fixture("memory", "initial-red");
+  try {
+    await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+      actorAccountId: actor, status: "active", roles: ["viewer"], requireCurrentMembership: true});
+    const adapter = f.adapter([]);
+    expect(await adapter.capture({workspaceId: f.workspace.id, accountId: actor})).toBeUndefined();
+    const prepared = await adapter.prepareInitialFinancialControlSourceOriginal({workspaceId: f.workspace.id});
+    expect(prepared.kind).toBe("historical");
+    expect(prepared.original.materialization.event.sequence).toBe(1);
+    expect(f.calls).toEqual([]);
+  } finally { await f.close(); }
+}, 30_000);
+
+for (const backend of ["memory", "postgres", "native-d1"] as const) {
+  test(`${backend}: initial Control original materializes once without receiver ACK and replays exact data`, async () => {
+    const f = await fixture(backend, `initial-${backend}`);
+    try {
+      const adapter = f.adapter([]);
+      await expect(adapter.prepareInitialFinancialControlSourceOriginal({workspaceId: f.workspace.id})).rejects.toThrow("source_pending");
+      await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+        actorAccountId: actor, status: "active", roles: ["viewer"], requireCurrentMembership: true});
+      const before = await f.owner.financialSource.readHead(f.workspace.id);
+      expect(before?.permissionSequence).toBe(1);
+      expect(before?.materializedSequence).toBe(0);
+      expect(await adapter.capture({workspaceId: f.workspace.id, accountId: actor})).toBeUndefined();
+      const first = await adapter.prepareInitialFinancialControlSourceOriginal({workspaceId: f.workspace.id});
+      expect(first).toMatchObject({kind: "historical", registration: {registrationRef: f.registration.sourceRef,
+        incarnation: f.registration.incarnation, genesisDigest: `sha256:${f.registration.genesisDigest}`},
+      original: {key: {registrationRef: f.registration.sourceRef, incarnation: f.registration.incarnation,
+        affectedRef: f.workspace.id}, eventRef: before!.lastEventRef,
+      materialization: {event: {sequence: 1, previousDigest: `sha256:${f.registration.genesisDigest}`}}}});
+      expect(await f.owner.financialSource.readMaterialization(first.original.eventRef)).toMatchObject({
+        eventRef: first.original.eventRef, rawPayloadJson: expect.any(String)});
+      expect(await adapter.prepareInitialFinancialControlSourceOriginal({workspaceId: f.workspace.id})).toEqual(first);
+      expect(await adapter.capture({workspaceId: f.workspace.id, accountId: actor})).toBeUndefined();
+      expect(f.calls).toEqual([]);
+    } finally { await f.close(); }
+  }, 30_000);
+}
+
+test("memory: unknown initial Control CAS reply reads the same stored original without another CAS", async () => {
+  const f = await fixture("memory", "initial-unknown");
+  try {
+    await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+      actorAccountId: actor, status: "active", roles: ["viewer"], requireCurrentMembership: true});
+    const service = f.owner.financialSource;
+    const commit = service.materializeEvent;
+    let calls = 0;
+    service.materializeEvent = async input => {
+      calls++;
+      const accepted = await Reflect.apply(commit, service, [input]);
+      if (accepted) throw new Error("synthetic_lost_control_cas_reply");
+      return accepted;
+    };
+    const adapter = f.adapter([]);
+    const first = await adapter.prepareInitialFinancialControlSourceOriginal({workspaceId: f.workspace.id});
+    expect(first.original.materialization.event.sequence).toBe(1);
+    expect(calls).toBe(1);
+    expect(await adapter.prepareInitialFinancialControlSourceOriginal({workspaceId: f.workspace.id})).toEqual(first);
+    expect(calls).toBe(1);
+    expect(f.calls).toEqual([]);
+  } finally { await f.close(); }
+}, 30_000);
+
+test("memory: initial Control reader rejects altered raw payload, genesis, final head and later sequence", async () => {
+  for (const attack of ["payload", "genesis", "final-head", "later"] as const) {
+    const f = await fixture("memory", `initial-${attack}`);
+    try {
+      await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+        actorAccountId: actor, status: "active", roles: ["viewer"], requireCurrentMembership: true});
+      const service = f.owner.financialSource;
+      if (attack === "payload") {
+        const list = service.listRawEvents;
+        service.listRawEvents = async input => (await Reflect.apply(list, service, [input]))
+          .map(raw => ({...raw, payloadJson: `${raw.payloadJson}tampered`}));
+      } else if (attack === "genesis") {
+        const read = service.readHead;
+        service.readHead = async workspaceId => {
+          const head = await Reflect.apply(read, service, [workspaceId]);
+          return head ? {...head, genesisDigest: "b".repeat(64)} : head;
+        };
+      } else if (attack === "final-head") {
+        const read = service.readHead;
+        let reads = 0;
+        service.readHead = async workspaceId => {
+          const head = await Reflect.apply(read, service, [workspaceId]);
+          return head && ++reads > 1 ? {...head, organizationRef: "changed-original-org"} : head;
+        };
+      } else {
+        await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+          actorAccountId: actor, status: "active", roles: ["member"], requireCurrentMembership: true});
+      }
+      await expect(f.adapter([]).prepareInitialFinancialControlSourceOriginal({workspaceId: f.workspace.id}))
+        .rejects.toThrow(attack === "later" ? "source_pending" : "source_conflict");
+      expect(f.calls).toEqual([]);
+    } finally { await f.close(); }
+  }
+}, 30_000);
+
+test("memory: initial Control replay rejects changed stored materialization without a new CAS", async () => {
+  const f = await fixture("memory", "initial-stored-conflict");
+  try {
+    await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+      actorAccountId: actor, status: "active", roles: ["viewer"], requireCurrentMembership: true});
+    const first = await f.adapter([]).prepareInitialFinancialControlSourceOriginal({workspaceId: f.workspace.id});
+    const service = f.owner.financialSource;
+    const read = service.readMaterialization;
+    service.readMaterialization = async eventRef => {
+      const stored = await Reflect.apply(read, service, [eventRef]);
+      return stored ? {...stored, rawPayloadJson: `${stored.rawPayloadJson}tampered`} : stored;
+    };
+    await expect(f.adapter([]).prepareInitialFinancialControlSourceOriginal({workspaceId: f.workspace.id}))
+      .rejects.toThrow("source_conflict");
+    expect(first.original.eventRef).toBe((await service.readHead(f.workspace.id))?.lastEventRef);
+    expect(f.calls).toEqual([]);
+  } finally { await f.close(); }
+}, 30_000);
+
 for (const backend of ["memory", "postgres", "native-d1"] as const) {
 test(`${backend}: Control pre-proof reader uses fresh canonical sequence-one original only`, async () => {
   const f = await fixture(backend, `preproof-${backend}`);

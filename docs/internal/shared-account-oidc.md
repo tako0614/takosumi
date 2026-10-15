@@ -420,6 +420,21 @@ M result needs a GET-only read of its original Financial command; the current
 public Financial M install surface does not supply that read, so this Accounts
 data preparation alone is not paired M or live readiness.
 
+For the actual Control first event before receiver ACK,
+`prepareInitialFinancialControlSourceOriginal({workspaceId})` is a separate
+historical data path on the same canonical facade. It reads the enrolled open
+head and the real `afterSequence:0, limit:1` raw event, verifies sequence one,
+null predecessor and genesis, then validates an existing full materialization
+or commits it once through Core's captured-head CAS. A lost CAS reply is resolved
+by reading that same event; replay never writes it against a later head. Final
+head/raw/materialization reads permit only the materialization progress caused
+by that CAS. This path has no actor or grant input and calls no receiver, ACK,
+proof or M operation. It is source data for Root's separately qualified caller,
+not current permission. The existing capture/proof route still requires its
+original complete receiver ACKs. A Control head at sequence zero has no event
+to export, and a later head is not a sequence-one bootstrap; both remain
+`source_pending` without a manufactured event or genesis.
+
 The existing `prove({accessToken,challengeRef}) -> {proofRef}` operation is
 idempotent for the same **original request**, rather than for every request with
 the same challenge. New issuers derive an opaque custody locator as `afp_`

@@ -823,6 +823,61 @@ export function createAccountsFinancialControlSource(options: {
       const current = await Reflect.apply(assertCurrent, service, [structuredClone(retained.original)]);
       return current && now() < retained.expiresAt && canonicalFinancialSourceJson(snapshot) === retained.binding;
     },
+    /** Original first Control event, including before any receiver ACK. This is
+     * historical source data, not an actor/currentness or M qualification. */
+    async prepareInitialFinancialControlSourceOriginal(input: {readonly workspaceId: string}): Promise<{
+      readonly kind: "historical";
+      readonly registration: FinancialSourceRegistration;
+      readonly original: AccountsFinancialPreparedOriginal;
+    }> {
+      const {workspaceId} = input;
+      if (!financialSourceRef(workspaceId)) unavailable();
+      const head = await Reflect.apply(readHead, service, [workspaceId]);
+      if (!head || head.workspaceId !== workspaceId || head.closed || head.permissionSequence !== 1 || head.lastEventRef === null)
+        throw new FinancialSourceUnavailable("source_pending");
+      const enrolled = registration(head);
+      const page = await Reflect.apply(listRaw, service, [{workspaceId, afterSequence: 0, limit: 1}]);
+      if (!Array.isArray(page) || page.length !== 1) throw new FinancialSourceUnavailable("source_conflict");
+      const raw = page[0]!;
+      if (raw.workspaceId !== workspaceId || raw.eventRef !== head.lastEventRef || raw.permissionSequence !== 1 ||
+        raw.previousEventRef !== null || raw.sourceRef !== enrolled.registrationRef ||
+        raw.incarnation !== enrolled.incarnation || raw.closed) throw new FinancialSourceUnavailable("source_conflict");
+      let wire: FinancialSourceMaterialization;
+      try { wire = await materializeFinancialSourceEvent({registration: enrolled, raw: rawWire(raw)}); }
+      catch { throw new FinancialSourceUnavailable("source_conflict"); }
+      const expected: WorkspaceFinancialMaterialization = {eventRef: raw.eventRef, sourceRef: raw.sourceRef,
+        incarnation: raw.incarnation, permissionSequence: 1, rawPayloadJson: raw.payloadJson,
+        previousDigest: wire.event.previousDigest.slice(7), wireJson: canonicalFinancialSourceJson(wire.event),
+        digest: wire.eventDigest.slice(7)};
+      if (wire.event.previousDigest !== enrolled.genesisDigest ||
+        ![0, 1].includes(head.materializedSequence) ||
+        head.materializedDigest !== (head.materializedSequence === 0 ? head.genesisDigest : expected.digest))
+        throw new FinancialSourceUnavailable("source_conflict");
+      let stored = await Reflect.apply(readMaterialization, service, [raw.eventRef]);
+      if (!stored) {
+        if (head.materializedSequence !== 0) throw new FinancialSourceUnavailable("source_conflict");
+        // The original Core CAS may succeed and lose its reply. One GET of the
+        // same event recovers it; no second CAS or replacement ref is minted.
+        try { await Reflect.apply(materialize, service, [{original: structuredClone(raw), expectedHead: structuredClone(head), materialization: expected}]); }
+        catch { /* The exact original readback below decides the outcome. */ }
+        stored = await Reflect.apply(readMaterialization, service, [raw.eventRef]);
+      }
+      if (!stored || canonicalFinancialSourceJson(stored) !== canonicalFinancialSourceJson(expected) ||
+        canonicalFinancialSourceJson(await decode(stored, raw)) !== canonicalFinancialSourceJson(wire))
+        throw new FinancialSourceUnavailable("source_conflict");
+      const finalHead = await Reflect.apply(readHead, service, [workspaceId]);
+      const finalPage = await Reflect.apply(listRaw, service, [{workspaceId, afterSequence: 0, limit: 1}]);
+      const finalStored = await Reflect.apply(readMaterialization, service, [raw.eventRef]);
+      const materializedHead = {...head, materializedSequence: 1, materializedDigest: expected.digest};
+      if (!finalHead || canonicalFinancialSourceJson(finalHead) !== canonicalFinancialSourceJson(materializedHead) ||
+        !Array.isArray(finalPage) || finalPage.length !== 1 ||
+        canonicalFinancialSourceJson(finalPage[0]) !== canonicalFinancialSourceJson(raw) ||
+        !finalStored || canonicalFinancialSourceJson(finalStored) !== canonicalFinancialSourceJson(expected))
+        throw new FinancialSourceUnavailable("source_conflict");
+      return structuredClone({kind: "historical", registration: enrolled,
+        original: {key: {registrationRef: enrolled.registrationRef, incarnation: enrolled.incarnation,
+          affectedRef: workspaceId}, eventRef: raw.eventRef, materialization: wire}});
+    },
     /** Fresh original Control event from this exact canonical facade. Expected
      * source is only an equality filter; neither it nor a WeakMap is authority. */
     async prepareOriginalFinancialControlSource(input: {
