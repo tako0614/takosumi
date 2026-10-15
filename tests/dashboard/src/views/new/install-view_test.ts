@@ -201,8 +201,8 @@ describe("single-screen install surface", () => {
     expect(intro).toBeGreaterThan(-1);
     expect(intro).toBeLessThan(configure.indexOf('label={t("installStore.name")}'));
     expect(configure.slice(intro)).toContain('t("installStore.reviewTitle")');
-    expect(en["installStore.configureHint"]).toContain("until you press Add");
-    expect(ja["installStore.configureHint"]).toContain("「追加する」を押すまで");
+    expect(en["installStore.configureHint"]).toContain("Nothing is deployed until you press Add");
+    expect(ja["installStore.configureHint"]).toContain("「追加する」を押すまで、デプロイはされません");
     expect(ja["installStore.introStepReviewBody"]).toContain("作成・変更・削除");
   });
 

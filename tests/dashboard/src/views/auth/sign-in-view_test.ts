@@ -105,7 +105,7 @@ describe("SignInView disabled OAuth guidance", () => {
     );
     expect(en["auth.installSignInSub"]).toContain("{name}");
     expect(ja["auth.installSignInSub"]).toContain("{name}");
-    expect(en["auth.installSignInSub"]).toContain("does not add the app");
+    expect(en["auth.installSignInSub"]).toContain("does not add the service");
     expect(ja["auth.installSignInSub"]).toContain("まだ追加はされません");
   });
 

@@ -16,12 +16,12 @@ export const ja = {
   "installStore.manual": "Gitリポジトリから追加",
   "installStore.back": "選び直す",
   "installStore.configureHint":
-    "確認画面で「追加する」を押すまで、リソースは作成も変更もされません。",
+    "確認画面で「追加する」を押すまで、デプロイはされません。",
   "installStore.introStepsLabel": "このあとの流れ",
   "installStore.introSource": "取得元",
   "installStore.introRef": "バージョン {ref}",
   "installStore.introDefaultRef": "既定のバージョン",
-  "installStore.introRootPath": "メインフォルダ",
+  "installStore.introRootPath": "フォルダは追加時に調べます",
   "installStore.introStepCheck": "リポジトリを調べる",
   "installStore.introStepCheckBody":
     "「追加」を押すと Git の版を固定し、モジュールと必要な接続を調べます。",
@@ -29,7 +29,7 @@ export const ja = {
   "installStore.introStepSetupBody":
     "必要な接続（ホスト / アカウント）を選び、サービスが求める項目を入れます。",
   "installStore.introStepReviewBody":
-    "作成・変更・削除されるリソースの数を見てから「追加する」を押します。",
+    "作成・変更・削除されるリソースの数を見てから「追加する」を押します。削除や作り直しを含む変更は、先に承認が必要です。",
   "installStore.moduleTitle": "モジュールを選択",
   "installStore.moduleHint":
     "このリポジトリ版を走査して見つかったモジュールから、追加するものを選びます。末尾は必要なプロバイダーです。",
@@ -323,14 +323,14 @@ export const ja = {
   "auth.sessionMaintenanceBody":
     "メンテナンス中です。しばらくしてからもう一度お試しください。",
   "auth.installContextAria": "サインイン後に続行するサービス",
-  "auth.installContextKicker": "追加するアプリ",
+  "auth.installContextKicker": "追加するサービス",
   "auth.installSignInTitle": "サインインして続ける",
   "auth.installSignInSub":
     "サインイン後、{name} の追加画面に戻ります。まだ追加はされません。",
   "auth.installContextTitle": "サインイン後に続行します",
   "auth.installContextRef": "バージョン {ref}",
   "auth.installContextDefaultRef": "既定のバージョン",
-  "auth.installContextRootPath": "メインフォルダ",
+  "auth.installContextRootPath": "フォルダは追加時に調べます",
   "auth.termsPrefix": "続行することで",
   "auth.termsOfService": "利用規約",
   "auth.and": "と",

@@ -11,12 +11,12 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.manual": "Add from a Git repository",
   "installStore.back": "Choose again",
   "installStore.configureHint":
-    "No resource is created or changed until you press Add on the review screen.",
+    "Nothing is deployed until you press Add on the review screen.",
   "installStore.introStepsLabel": "What happens next",
   "installStore.introSource": "Source",
   "installStore.introRef": "version {ref}",
   "installStore.introDefaultRef": "default version",
-  "installStore.introRootPath": "main folder",
+  "installStore.introRootPath": "folder found when adding",
   "installStore.introStepCheck": "Check the repository",
   "installStore.introStepCheckBody":
     "Add pins the Git version and checks the module and the connections it needs.",
@@ -24,7 +24,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.introStepSetupBody":
     "Choose the connections it needs (host / account) and fill in what the service asks for.",
   "installStore.introStepReviewBody":
-    "See how many resources will be created, changed, and deleted, then press Add.",
+    "See how many resources will be created, changed, and deleted, then press Add. Changes that delete or recreate something need approval first.",
   "installStore.moduleTitle": "Choose a module",
   "installStore.moduleHint":
     "Choose a module found by scanning this repository revision. The trailing labels are the providers it needs.",
@@ -318,14 +318,14 @@ export const en: Record<keyof typeof ja, string> = {
   "auth.sessionMaintenanceBody":
     "The dashboard is undergoing maintenance. Please try again in a moment.",
   "auth.installContextAria": "Service to continue after sign-in",
-  "auth.installContextKicker": "App to add",
+  "auth.installContextKicker": "Service to add",
   "auth.installSignInTitle": "Sign in to continue adding",
   "auth.installSignInSub":
-    "After signing in you return to adding {name}. Signing in does not add the app yet.",
+    "After signing in you return to adding {name}. Signing in does not add the service yet.",
   "auth.installContextTitle": "Continue after sign-in",
   "auth.installContextRef": "version {ref}",
   "auth.installContextDefaultRef": "default version",
-  "auth.installContextRootPath": "main folder",
+  "auth.installContextRootPath": "folder found when adding",
   "auth.termsPrefix": "By continuing, you agree to the ",
   "auth.termsOfService": "Terms of Service",
   "auth.and": " and ",

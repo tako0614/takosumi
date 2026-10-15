@@ -2204,7 +2204,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                 ref: gitRef(),
                 sourcePath: sourcePath(),
                 path: modulePath(),
-                name: name(),
               }),
             )}
           >
