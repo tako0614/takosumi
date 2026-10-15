@@ -3,6 +3,7 @@ import { resolve, join } from "node:path";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import { identityContextFixture, acceptIsolatedIdentityContexts, contextA, contextB } from "../../accounts/service/fixtures/identity-context-fixture.ts";
 import { AUTH_STAGING_CLIENTS, AUTH_STAGING_ISSUER, AUTH_STAGING_WORKER } from "../../../deploy/accounts-cloudflare/src/staging-target.ts";
@@ -38,8 +39,7 @@ test("two actual Workers use the private named admission entry; public credentia
   try {
     const issuerSource = await build("../../../deploy/accounts-cloudflare/src/entry-worker.ts");
     const ownerSource = await build("fixtures/owner-admission-caller.ts");
-    const host = await Bun.build({ entrypoints: [resolve(import.meta.dir, "fixtures/owner-admission-native-host.ts")], target: "node", format: "esm",
-      plugins: [{ name: "installed-miniflare-node-host", setup(builder) { builder.onResolve({ filter: /^miniflare$/u }, () => ({ path: require.resolve("miniflare"), external: true })); } }] });
+    const host = await Bun.build({ entrypoints: [resolve(import.meta.dir, "fixtures/owner-admission-native-host.ts")], target: "node", format: "esm" });
     expect(host.success, host.logs.map(String).join("\n")).toBe(true);
     const operation = await acceptIsolatedIdentityContexts(fixture.store, fixture.operation, fixture.now);
     const subjects = [contextA, contextB];
@@ -52,7 +52,11 @@ test("two actual Workers use the private named admission entry; public credentia
     };
     const entry = join(directory, "host.mjs"), input = join(directory, "fixture.json");
     await writeFile(entry, await host.outputs[0]!.text(), { mode: 0o600 });
-    await writeFile(input, JSON.stringify({ fixture: seed, issuerSource, ownerSource, bindings, salt, serviceId, targetDigest }), { mode: 0o600 });
+    // Node resolves from the temporary host's location. Supply the installed
+    // module URL explicitly; Bun 1.4.0 keeps bare external import specifiers
+    // even when an onResolve plugin returns an absolute external path.
+    const miniflareModuleUrl = pathToFileURL(require.resolve("miniflare")).href;
+    await writeFile(input, JSON.stringify({ fixture: seed, issuerSource, ownerSource, bindings, salt, serviceId, targetDigest, miniflareModuleUrl }), { mode: 0o600 });
     const child = spawn("node", [entry, input], { detached: true, stdio: ["ignore", "pipe", "pipe"], env: process.env });
     let stdout = "", stderr = "";
     child.stdout!.setEncoding("utf8"); child.stderr!.setEncoding("utf8");

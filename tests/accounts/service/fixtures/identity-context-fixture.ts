@@ -35,7 +35,6 @@ import { CONTROL_IDENTITY_AUTHORITY_VERSION } from "../../../../contract/identit
 import { reviewIssuerAvailabilityFixture } from "./review-issuer-availability-fixture.ts";
 export const contextA = "tsub_context_A",
   contextB = "tsub_context_B";
-export const contextNow = Date.now();
 const baseline = `CREATE SCHEMA accounts_v1;
 CREATE TABLE accounts_v1.accounts(subject text PRIMARY KEY,email text,email_verified boolean,display_name text,picture text,terms_version text,terms_accepted_at timestamptz,terms_accepted_source text,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL);
 CREATE TABLE accounts_v1.upstream_identities(provider_id text,upstream_issuer text,upstream_subject text,subject text REFERENCES accounts_v1.accounts(subject) ON DELETE CASCADE,created_at timestamptz,updated_at timestamptz,PRIMARY KEY(provider_id,upstream_issuer,upstream_subject));
@@ -47,6 +46,7 @@ CREATE TABLE accounts_v1.context_protected_refs(subject text REFERENCES accounts
 export async function identityContextFixture(
   kind: "memory" | "d1" | "postgres" | "native-d1" = "memory",
 ) {
+  const contextNow = Date.now();
   let store: AccountsStore,
     pg: PGlite | undefined,
     close = async () => {};

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { Miniflare } from "miniflare";
 import { D1AccountsStore } from "../../../../accounts/service/src/d1-store.ts";
 import { applyD1AccountsMigrationBatch, loadD1AccountsMigrationCatalog } from "../../../../accounts/service/src/d1-migrations.ts";
 import { ensureD1OpenTofuLedgerSchema } from "../../../../worker/src/d1_opentofu_store.ts";
@@ -14,6 +13,7 @@ import { AUTH_STAGING_COMPATIBILITY_DATE, AUTH_STAGING_ISSUER } from "../../../.
  * before a POST response. Keep the same requests/assertions in Node; no retry,
  * fetch replacement, future flag or production request guard is involved. */
 const input = JSON.parse(await readFile(process.argv[2]!, "utf8"));
+const { Miniflare } = await import(input.miniflareModuleUrl) as typeof import("miniflare");
 const { bindings, fixture, issuerSource, ownerSource, salt, serviceId, targetDigest } = input;
 let assertions = 0;
 function equal(actual: unknown, expected: unknown) { assertions++; assert.deepStrictEqual(actual, expected); }
