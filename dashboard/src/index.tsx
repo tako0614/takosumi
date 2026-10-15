@@ -153,6 +153,7 @@ function App() {
       {/* Public — no session required. */}
       <Route path="/sign-in" component={SignInView} />
       <Route path="/sign-in/callback" component={SignInCallbackView} />
+      <Route path="/install" component={InstallEntryRoute} />
       <Route path="/oauth" component={ServerOwnedRouteReload} />
       <Route path="/oauth/*path" component={ServerOwnedRouteReload} />
       <Route path="/legal/:page" component={() => <LegalView />} />
@@ -181,7 +182,6 @@ function App() {
         <Route path="/settings/manage/hosted-resources" component={HostedResourcesView} />
         <Route path="/workloads" component={WorkloadListView} />
         <Route path="/new" component={InstallView} />
-        <Route path="/install" component={InstallEntryRoute} />
         <Route path="/connections" component={ConnectionsView} />
         <Route path="/workloads/:id" component={WorkloadDetailView} />
         <Route path="/workloads/:id/:tab" component={WorkloadDetailView} />
