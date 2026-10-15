@@ -1,52 +1,34 @@
 # Quickstart
 
-Start with a development API check. If you want to continue, bring up the full
-local environment with the dashboard, sign-in, database, and OpenTofu runner.
+Start a local Takosumi installation on a Linux machine and run plan and apply
+for a sample Git module. The sample creates no external resources, so you need
+no cloud credentials. The first run builds containers and the dashboard.
 
-## Development API
+To check only the API, without the dashboard or runner, follow
+[Run only the API](../index.md#api-only) on the docs home page.
 
-You need Bun and Git.
-
-```bash
-git clone https://github.com/tako0614/takosumi.git
-cd takosumi
-bun install
-
-TAKOSUMI_DEV_MODE=1 \
-TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token \
-PORT=8788 \
-bun core/index.ts
-```
-
-Check it from another terminal.
-
-```bash
-curl http://127.0.0.1:8788/api/v1/capabilities \
-  -H "authorization: Bearer dev-token"
-```
-
-The API is running when it returns JSON. This setup stores data in memory, so
-it disappears on restart. It also does not start the dashboard or runner. Use
-it only for API development.
-
-## Complete local environment
-
-The remaining steps start a local Takosumi installation on Linux and run a
-plan and apply for a Git module. The first run builds containers and the
-dashboard.
-
-### Requirements
+## Requirements
 
 - Linux. This composition does not support macOS, WSL, or Windows
 - Docker and `docker compose`
 - Bun, Git, `curl`, and `python3`
 - `sudo` for local certificate and DNS setup
 
-### 1. Start the environment
+## 1. Get the repository
 
-From the repository root. This setup mounts the checkout into its containers by the
-directory name `takosumi` (the `git clone` default). If you cloned under another name,
-rename the directory to `takosumi` first.
+```bash
+git clone https://github.com/tako0614/takosumi.git
+cd takosumi
+bun install
+```
+
+This setup mounts the checkout into its containers by the directory name
+`takosumi` (the `git clone` default). If you cloned under another name, rename
+the directory to `takosumi` before you continue.
+
+## 2. Start the environment
+
+Run this from the repository root.
 
 ```bash
 cd deploy/local-substrate
@@ -62,7 +44,7 @@ TAKOSUMI_LOCAL_SUBSTRATE_DISABLE_APPARMOR=1 \
 bash scripts/up.sh --profile postgres
 ```
 
-### 2. Configure the local certificate and DNS
+## 3. Configure the local certificate and DNS
 
 ```bash
 sudo bash scripts/ca-install.sh
@@ -72,7 +54,7 @@ sudo bash scripts/configure-dns.sh
 Run these once per host. Run `ca-install.sh` again if you recreate the local
 certificate authority.
 
-### 3. Check the services
+## 4. Check the services
 
 ```bash
 curl https://app.takosumi.test/healthz
@@ -82,12 +64,12 @@ curl https://app.takosumi.test/.well-known/openid-configuration
 When `/healthz` returns `{"ok":true,"database":"ok"}`, the application can reach
 Postgres.
 
-### 4. Sign in
+## 5. Sign in
 
 Open `https://app.takosumi.test/` and choose **Local OIDC**. It is an identity
 provider for local testing and does not require a real account.
 
-### 5. Add the example
+## 6. Add the example
 
 While signed in, open:
 
@@ -107,7 +89,7 @@ when no approval is required. A deletion, approval policy, billing check, or
 other gate stops on the Run page. Normal updates, detected drift, and new Git
 commits are not applied on their own.
 
-### 6. Inspect the result
+## 7. Inspect the result
 
 Open `https://app.takosumi.test/runs` to see the plan and apply records. The
 Capsule page keeps the state produced by each successful apply.
@@ -121,7 +103,7 @@ TAKOSUMI_LOCAL_SUBSTRATE_PROFILE=postgres bash scripts/smoke.sh
 The final line reports `0 failed` when sign-in, Runs, storage, DNS, and TLS all
 work. Logs for failed checks are kept in `/tmp/smoke-logs/`.
 
-### 7. Stop it
+## 8. Stop it
 
 ```bash
 bash scripts/down.sh
