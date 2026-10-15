@@ -214,33 +214,52 @@ version, name, or checksum is missing or different. The OSS default remains
 database; hosted operators must opt into `predeployed` only together with this
 gate.
 
-### Forward bridge for Backup owner indexes (D1 74)
+### Historical bridge for Backup owner indexes (D1 74)
 
 Migration 74, `d1_backup_owner_lookup_indexes`, atomically appends the nonunique
 `backups_created_by_run_id_idx` and `backups_legacy_created_by_run_text_idx`
 indexes and its ledger row. It changes no application rows, logical columns,
 Postgres catalog, or migration 1 through 73 checksums. Historical bootstrap
-targets 71, 72 and 73 do not create these indexes; current bootstrap targets 74.
+targets 71, 72 and 73 do not create these indexes; migration 74 introduced them.
 
-Before any live apply, deploy a reviewed bridge runtime accepting exact heads
-71, 72, 73 and 74. The earlier compiled runtime rejects head 74 and is not a
-rollback target after apply. The bridge keeps ordinary runtime readiness at
-71, billing at 72, and identity reconciliation at 73; the exported strict
-qualification verifier and indexed Backup writer require exactly 74. These
-capabilities have separate readiness caches. The indexed writer must remain
+Before the 74 transition, deploy a reviewed bridge runtime accepting its exact
+predecessor and successor heads. The earlier compiled runtime rejects head 74
+and is not a rollback target after apply. Runtime floors remain 71 for ordinary
+readiness, 72 for billing, 73 for identity reconciliation and 74 for indexed
+Backup reads. These capabilities have separate readiness caches. The indexed
+writer must remain
 inactive until schema predeploy and exact index verification succeed. Request
 readiness never runs DDL or repairs a missing index.
 
-Use the existing owner-controlled plan, fenced apply, verify and release
+For that historical 74 transition, use the owner-controlled plan, fenced apply,
+verify and release
 sequence with manifests generated from the reviewed bridge source. An active
 predecessor fence can transition only from the immediate predecessor, 73;
 older retained fences still require their reviewed forward recovery sequence.
-Keep the fence until the current manifest and exact index shapes verify, then
+Keep the fence until that transition's manifest and exact index shapes verify,
+then
 release and smoke the bridge runtime. If verification fails, retain the fence
 and repair forward. Code rollback must retain 74 compatibility; do not remove
 the ledger row or indexes to accommodate an older binary. Local synthetic
 native fixtures are evidence for the implementation, not approval to apply a
 live database migration or qualify an operator's physical source.
+
+### Current catalog and Financial sources (D1 75)
+
+Current bootstrap targets 75. The compatible ordinary bridge accepts complete,
+checksummed heads 71, 72, 73, 74 and 75 with the separate runtime floors above.
+The exported `verifyD1OpenTofuLedgerSchemaPredeployed` requires exactly current
+75 and the physical Financial source hooks; the dedicated auth release calls
+this strict verifier. Indexed Backup reads retain their 74 floor and recheck
+the exact index shapes on both 74 and 75.
+
+Migration 75 adds the Workspace Financial source heads, immutable raw events,
+materializations and receiver receipts. Its PostgreSQL counterpart is catalog
+121; migration 74 has no PostgreSQL counterpart. Use the owning plan, fenced
+apply, verify and release sequence with manifests from the current reviewed
+source. Preserve every earlier ledger row and checksum. A successful schema
+check does not qualify source registrations, genesis, receivers, credentials
+or the actual service graph, and does not authorize live activation.
 
 Deploy the fence-aware Worker version before entering the contract-migration
 window. The apply command atomically acquires a deterministic maintenance
