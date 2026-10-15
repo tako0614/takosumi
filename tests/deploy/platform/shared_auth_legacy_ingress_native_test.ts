@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import { Miniflare } from "miniflare";
 import { resolve } from "node:path";
 import { readFile } from "node:fs/promises";
+import { Agent, request as httpRequest, type IncomingMessage } from "node:http";
+import { Readable } from "node:stream";
 import { D1AccountsStore } from "../../../accounts/service/src/d1-store.ts";
 import { applyD1AccountsMigrationBatch, loadD1AccountsMigrationCatalog } from "../../../accounts/service/src/d1-migrations.ts";
 import { CloudflareD1OpenTofuControlStore, ensureD1OpenTofuLedgerSchema } from "../../../worker/src/d1_opentofu_store.ts";
@@ -30,13 +32,27 @@ const descriptor = { basePath: "/extensions/legacy-test", handlerKey: "LEGACY_TE
   authDelivery: "context", runCredential: { audience: issuance.audience, requiredScopes: issuance.scopes } };
 
 test("native platform HTTP closes primary and alias legacy ingress while preserving actual operator and current Run credentials", async () => {
-  const build = await Bun.build({
-    entrypoints: [resolve(import.meta.dir, "fixtures/shared_auth_legacy_ingress_runtime.ts")],
-    target: "browser", format: "esm", external: ["cloudflare:workers"],
-  });
-  expect(build.success, build.logs.map(String).join("\n")).toBe(true);
-  const artifact = build.outputs[0];
-  if (!artifact) throw new Error("native platform ingress bundle missing");
+  // Keep bundling outside bun:test's process-local module resolver.
+  const bundle = async () => {
+    const child = Bun.spawn([process.execPath, "build", "--target", "browser", "--format", "esm",
+      "--external", "cloudflare:workers", resolve(import.meta.dir, "fixtures/shared_auth_legacy_ingress_runtime.ts")], {
+      cwd: resolve(import.meta.dir, "../../.."), stdout: "pipe", stderr: "pipe",
+    });
+    const timer = setTimeout(() => child.kill(), 15_000);
+    try {
+      const [exit, source, errors] = await Promise.all([
+        child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+      ]);
+      expect(exit, errors).toBe(0);
+      expect(source.length).toBeGreaterThan(0);
+      return source;
+    } finally {
+      clearTimeout(timer);
+      if (child.exitCode === null) child.kill();
+      await child.exited;
+    }
+  };
+  const bundleSource = await bundle();
   const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
   const signingJwk = await crypto.subtle.exportKey("jwk", keys.privateKey);
   const bindings = {
@@ -57,9 +73,14 @@ test("native platform HTTP closes primary and alias legacy ingress while preserv
       basePath: "/extensions/protocol-test", handlerKey: "PROTOCOL_TEST_EXTENSION", authMode: "handler",
     }]),
   };
-  const modules = [{ type: "ESModule" as const, path: "legacy-ingress.mjs", contents: await artifact.text() }];
+  const modules = [{ type: "ESModule" as const, path: "legacy-ingress.mjs", contents: bundleSource }];
+  const bundleBytes = new TextEncoder().encode(bundleSource);
+  const bundleSha256 = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bundleBytes)),
+    (byte) => byte.toString(16).padStart(2, "0")).join("");
+  console.info(`[legacy-ingress-native:bundle] sha256=${bundleSha256} utf8Bytes=${bundleBytes.byteLength}`);
   const runtime = new Miniflare({ workers: [
     { name: "gateway", compatibilityDate: "2026-07-17", compatibilityFlags: ["nodejs_compat"],
+      unsafeDirectSockets: [{ host: "127.0.0.1", port: 0, proxy: true }],
       modules, bindings, serviceBindings: { HOSTED: { name: "rp", entrypoint: "Authentication" } },
       d1Databases: { TAKOSUMI_ACCOUNTS_DB: "legacy-ingress-accounts", TAKOSUMI_CONTROL_DB: "legacy-ingress-control" } },
     { name: "missing-rp", compatibilityDate: "2026-07-17", compatibilityFlags: ["nodejs_compat"],
@@ -74,6 +95,7 @@ test("native platform HTTP closes primary and alias legacy ingress while preserv
       modules: [{ type: "ESModule", path: "rp.mjs", contents: await readFile(resolve(import.meta.dir, "fixtures/shared-auth-rpc-runtime.mjs"), "utf8") }],
       durableObjects: { SESSIONS: "Sessions" } },
   ] });
+  const directAgent = new Agent({ keepAlive: false });
   try {
     const accountsDb = await runtime.getD1Database("TAKOSUMI_ACCOUNTS_DB", "gateway") as unknown as D1Database;
     for (const migration of (await loadD1AccountsMigrationCatalog()).migrations) {
@@ -116,9 +138,48 @@ test("native platform HTTP closes primary and alias legacy ingress while preserv
     const run = await createRunCredentialToken({ secret: runSecret, audience: issuance.audience, subject: "forged-token-subject",
       workspaceId: "ws_native", capsuleId: "cap_native", runId: "plan_native", installingPrincipalId: "principal_native",
       connectionId: "conn_native", provider, phase: "plan", scopes: issuance.scopes });
-    const gateway = await runtime.getWorker("gateway");
-    // Fetcher.fetch enters real workerd HTTP routing with the supplied HTTPS
-    // URL, including aliases. No session verifier or platform route is mocked.
+    const directURL = await runtime.unsafeGetDirectURL("gateway");
+    if (directURL.protocol !== "http:" || directURL.hostname !== "127.0.0.1" || !directURL.port) {
+      throw new Error("direct endpoint is not bounded loopback HTTP");
+    }
+    // Exercise public HTTP ingress through its native socket, retaining the
+    // absolute HTTPS alias rather than the SDK's getWorker RPC proxy path.
+    const directFetch = (url: string, init: RequestInit): Promise<Response> => {
+      if (new URL(url).protocol !== "https:") throw new Error("original fixture HTTPS alias changed");
+      if (init.body !== undefined && init.body !== null && typeof init.body !== "string") {
+        throw new Error("direct client refuses body reconstruction");
+      }
+      return new Promise((resolve, reject) => {
+        let incoming: IncomingMessage | undefined;
+        const request = httpRequest({ hostname: directURL.hostname, port: Number(directURL.port),
+          method: init.method ?? "GET", path: url, headers: [...new Headers(init.headers).entries()].flat(),
+          agent: directAgent, setHost: false }, (response) => {
+          incoming = response;
+          const headers: [string, string][] = [];
+          for (let index = 0; index < response.rawHeaders.length; index += 2) {
+            headers.push([response.rawHeaders[index]!, response.rawHeaders[index + 1]!]);
+          }
+          try {
+            if (typeof response.statusCode !== "number" || !Number.isInteger(response.statusCode)) {
+              throw new Error("actual HTTP response has no status");
+            }
+            // No eager buffering or drain; body errors remain stream errors.
+            resolve(new Response(Readable.toWeb(response) as ReadableStream, {
+              status: response.statusCode, statusText: response.statusMessage, headers,
+            }));
+          } catch (cause) {
+            response.destroy();
+            reject(cause);
+          }
+        });
+        request.once("error", (cause) => {
+          incoming?.destroy(cause);
+          reject(cause);
+        });
+        // Low-level HTTP never follows redirects; write the original string once.
+        request.end(init.body ?? undefined);
+      });
+    };
     const fetch = (alias: string, path: string, init: RequestInit = {}) => {
       const headers = new Headers(init.headers);
       // Miniflare rejects non-local Host/Origin before entering workerd. The
@@ -130,7 +191,9 @@ test("native platform HTTP closes primary and alias legacy ingress while preserv
           headers.set(`x-fixture-original-${name}`, value);
         }
       }
-      return gateway.fetch(alias + path, { ...init, headers, redirect: "manual" });
+      return directFetch(alias + path, { ...init, headers, redirect: "manual" }).catch((cause) => {
+        throw new Error(`legacy native gateway.fetch ${init.method ?? "GET"} ${alias}${path}`, { cause });
+      });
     };
     for (const alias of aliases) {
       const forgedHeaders = { cookie: legacyCookie, host: new URL(origin).host,
@@ -240,6 +303,6 @@ test("native platform HTTP closes primary and alias legacy ingress while preserv
     expect(fenced.status, await fenced.clone().text()).toBe(500);
     expect(await fenced.json()).toMatchObject({ error: { code: "internal_error" } });
   } finally {
-    await runtime.dispose();
+    try { await runtime.dispose(); } finally { directAgent.destroy(); }
   }
 }, 90_000);

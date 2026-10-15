@@ -747,6 +747,30 @@ caller that aborted its own request, releases the preparation so that a
 redelivery or a takeover of the same ApplyRun may claim it again. Core records
 the typed code as a pre-provider failure, so the Run does not make Capsule runtime
 safety `unknown` unless a lifecycle action such as `pre_destroy` already ran.
+Core forwards its already-held active Run lease in private
+`RunExecutionControl.runLease` to both `post_apply` and `pre_destroy` release
+activations. The parent is the current ApplyRun, including the current destroy
+ApplyRun for `pre_destroy`; a derived release dispatch ID does not create a claim.
+Existing renewal, cancellation, final revalidation and terminal commit ordering
+remain unchanged. In the existing qualified stored-service composition, the
+Cloudflare release adapter snapshots this original lease into its private
+Worker-to-Runner-DO header; neither the Container nor public JSON receives it.
+The DO compares the original claim with the actual D1 Apply/destroy-Apply row,
+including its Workspace and Capsule, before writing or reusing preparation
+authority. It retains its transient reservation across that read. Each check
+uses a new first-primary session when D1 sessions are available; bindings without
+sessions retain their existing read semantics. The second read follows the
+durable dispatched fence's put/sync and precedes the command POST. After that
+read, the DO rechecks cancellation and the remaining original absolute deadline,
+then reconstructs the request's relative budget without another external await.
+A refusal there retains the fence and returns an indeterminate outcome.
+Existing terminal replay requires no new active lease;
+ordinary composition keeps its previous release wire behavior.
+These reads do not atomically couple D1 ownership to DO/Container dispatch:
+lease loss after the last read remains possible. The release input carries no
+independent environment authority. This does not establish atomic accepted-parent
+CAS, durable cleanup/source custody, Financial acceptance or source authorization,
+complete commercial measurement, or B2 metering/image activation.
 A dispatcher whose host invocation has a hard wall-time limit passes its
 deadline through `RunExecutionControl.deadlineAt`; Core forwards it without
 interpreting it to Plan, Apply, Destroy, and their release activations. The

@@ -5,6 +5,129 @@ import {
   resolvePlatformExtensionRequestScopeRoute,
 } from "../../../deploy/platform/platform_extensions.ts";
 
+const sharedBillingBase = "/api/v1/billing";
+const sharedBillingContribution = {
+  id: "shared-billing",
+  slot: "workspace.billing",
+  href: sharedBillingBase,
+  presentation: "link",
+  label: "Workspace billing",
+};
+const sharedBillingRoute = {
+  basePath: sharedBillingBase,
+  handlerKey: "HOSTED",
+  authDelivery: "context",
+  workspaceContext: "query-required",
+  ownsPathSubtree: true,
+  contributions: [sharedBillingContribution],
+};
+function sharedBillingEnv(routes: readonly unknown[]) {
+  return {
+    TAKOSUMI_SHARED_AUTH_PROFILE: "shared-account",
+    TAKOSUMI_SHARED_AUTH_ORIGIN: "https://operator.example",
+    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify(routes),
+  };
+}
+
+test("shared billing rejects native, embedded and implicit presentations", () => {
+  for (const presentation of ["native", "inline-frame", undefined]) {
+    expect(() => platformExtensionRoutes(sharedBillingEnv([{
+      ...sharedBillingRoute,
+      contributions: [{ ...sharedBillingContribution, presentation }],
+    }]))).toThrow("shared authentication billing");
+  }
+});
+
+test("shared billing rejects the legacy capability even after descriptor merging", () => {
+  const legacyCapability = {
+    ...sharedBillingRoute,
+    contributions: undefined,
+    capabilities: ["billing.commercial.v1"],
+  };
+  expect(() => platformExtensionRoutes(sharedBillingEnv([legacyCapability])))
+    .toThrow("shared authentication billing");
+  expect(() => platformExtensionRoutes(sharedBillingEnv([
+    sharedBillingRoute, legacyCapability,
+  ]))).toThrow("shared authentication billing");
+  expect(() => platformExtensionRoutes(sharedBillingEnv([
+    sharedBillingRoute,
+    { ...sharedBillingRoute, contributions: [{
+      ...sharedBillingContribution, id: "native-split", presentation: "native",
+    }] },
+  ]))).toThrow("shared authentication billing");
+  // Duplicate contribution ids use the last effective value, not the first.
+  expect(() => platformExtensionRoutes(sharedBillingEnv([
+    sharedBillingRoute,
+    { ...sharedBillingRoute, contributions: [{
+      ...sharedBillingContribution, presentation: "native",
+    }] },
+  ]))).toThrow("shared authentication billing");
+});
+
+test("shared billing requires the exact private bridge routing seam", () => {
+  for (const change of [
+    { handlerKey: "HOSTED_ALIAS" }, { authMode: "handler", authDelivery: undefined, workspaceContext: undefined },
+    { authDelivery: "headers" }, { matchMode: "exact", ownsPathSubtree: false },
+    { workspaceContext: "query-optional" }, { workspaceContext: undefined },
+    { ownsPathSubtree: false },
+  ]) {
+    expect(() => platformExtensionRoutes(sharedBillingEnv([
+      { ...sharedBillingRoute, ...change },
+    ]))).toThrow("shared authentication billing");
+  }
+  // The existing generic reserved namespace rule already rejects child roots.
+  expect(() => platformExtensionRoutes(sharedBillingEnv([{
+    ...sharedBillingRoute, basePath: sharedBillingBase + "/config",
+    contributions: undefined,
+  }]))).toThrow("core route prefix");
+});
+
+test("shared billing links only to its three published document views", () => {
+  for (const href of [sharedBillingBase, sharedBillingBase + "/subscription", sharedBillingBase + "/top-up"]) {
+    const [route] = platformExtensionRoutes(sharedBillingEnv([{
+      ...sharedBillingRoute, contributions: [{ ...sharedBillingContribution, href }],
+    }]));
+    expect(route?.contributions?.[0]?.href).toBe(href);
+  }
+  for (const contribution of [
+    { ...sharedBillingContribution, href: sharedBillingBase + "/config" },
+    { ...sharedBillingContribution, slot: "navigation.manage" },
+  ]) {
+    expect(() => platformExtensionRoutes(sharedBillingEnv([{
+      ...sharedBillingRoute, contributions: [contribution],
+    }]))).toThrow("shared authentication billing");
+  }
+  expect(platformExtensionRoutes(sharedBillingEnv([{
+    ...sharedBillingRoute, contributions: undefined,
+  }]))[0]?.contributions).toBeUndefined();
+});
+
+test("shared billing opt-in is presence-based while OFF and unrelated extensions retain their contract", () => {
+  const legacy = {
+    basePath: sharedBillingBase,
+    handlerKey: "LEGACY",
+    capabilities: ["billing.commercial.v1"],
+    contributions: [{ ...sharedBillingContribution, presentation: "native" }],
+  };
+  expect(platformExtensionRoutes({
+    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([legacy]),
+  })[0]?.capabilities).toEqual(["billing.commercial.v1"]);
+  const unrelated = {
+    ...legacy, basePath: "/extensions/other",
+    contributions: [{ ...sharedBillingContribution, href: "/extensions/other", presentation: "native" }],
+  };
+  expect(platformExtensionRoutes(sharedBillingEnv([unrelated]))[0]?.contributions?.[0]?.presentation)
+    .toBe("native");
+  for (const optIn of [
+    { TAKOSUMI_SHARED_AUTH_PROFILE: "" },
+    { TAKOSUMI_SHARED_AUTH_ORIGIN: "https://operator.example" },
+  ]) {
+    expect(() => platformExtensionRoutes({
+      ...optIn, TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([legacy]),
+    })).toThrow("shared authentication billing");
+  }
+});
+
 test("generic extension descriptors accept localized UI contributions", () => {
   const routes = platformExtensionRoutes({
     TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([

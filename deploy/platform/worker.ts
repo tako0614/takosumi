@@ -65,6 +65,7 @@ import {
 } from "../../worker/src/shared_auth_rpc.ts";
 import { createCloudflareD1OpenTofuControlStore } from "../../worker/src/d1_opentofu_store.ts";
 import { fenceControlDatabase } from "./fenced-control-database.ts";
+import { handlePlatformBrowserBillingRequest } from "./browser-billing.ts";
 import { createCloudflareD1PatWorkspaceMembershipReader } from "./pat-workspace-membership-reader.ts";
 import type {
   CapsuleExecutionAuthorityResolver,
@@ -790,6 +791,8 @@ export default {
       url.pathname,
       extensionRoutes,
     );
+    const browserBillingResponse = await handlePlatformBrowserBillingRequest(request, env, platformExtensionRoute);
+    if (browserBillingResponse) return browserBillingResponse;
     if (platformExtensionRoute) {
       return await handlePlatformExtensionRouteRequest(
         request,

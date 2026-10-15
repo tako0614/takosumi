@@ -2002,6 +2002,50 @@ test("platform discovery publishes commercial functions only as explicit extensi
   expect(body).not.toHaveProperty("commercial");
 });
 
+for (const [label, change] of [
+  ["native", { contributions: [{ id: "billing", slot: "workspace.billing", href: "/api/v1/billing", label: "Billing", presentation: "native" }] }],
+  ["inline-frame", { contributions: [{ id: "billing", slot: "workspace.billing", href: "/api/v1/billing", label: "Billing", presentation: "inline-frame" }] }],
+  ["commercial capability", { capabilities: ["billing.commercial.v1"] }],
+] as const) {
+  test(`shared billing ${label} mismatch is not advertised by either discovery`, async () => {
+    const worker = (await import("../../../deploy/platform/worker.ts")).default;
+    const HOSTED = {
+      fetchAuthenticated: async () => { throw new Error("discovery must not dispatch"); },
+      fetchSharedAuth: async () => null,
+      authenticateSharedAuth: async () => { throw new Error("discovery must not authenticate"); },
+      resolveSharedAuthWorkspace: async () => { throw new Error("discovery must not resolve"); },
+    };
+    const env = {
+      TAKOSUMI_SHARED_AUTH_PROFILE: "shared-account",
+      TAKOSUMI_SHARED_AUTH_ORIGIN: "https://operator.example",
+      TAKOSUMI_ENVIRONMENT: "staging",
+      HOSTED,
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([{
+        basePath: "/api/v1/billing", handlerKey: "HOSTED", authDelivery: "context",
+        workspaceContext: "query-required", ownsPathSubtree: true,
+        contributions: [{ id: "billing", slot: "workspace.billing", href: "/api/v1/billing", label: "Billing", presentation: "link" }],
+        ...change,
+      }]),
+    } as never;
+    const response = await worker.fetch(new Request(
+      `https://operator.example${TAKOSUMI_PRODUCT_CAPABILITIES_PATH}`,
+    ), env);
+    expect(response.status).toBe(200);
+    expect((await response.json()).extensions).toEqual([]);
+    // Preserve existing malformed-config behavior: contribution GET throws,
+    // the Dashboard loader treats the failed fetch as no extra entries.
+    expect(() => platformExtensionContributionCatalog(env)).toThrow("shared authentication billing");
+    await expect(worker.fetch(new Request(
+      "https://operator.example/__takosumi/platform/contributions",
+    ), env)).rejects.toThrow("shared authentication billing");
+    const head = await worker.fetch(new Request(
+      "https://operator.example/__takosumi/platform/contributions", { method: "HEAD" },
+    ), env);
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
+  });
+}
+
 test("platform worker product discovery exposes only configured extension capabilities", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
 

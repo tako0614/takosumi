@@ -28,6 +28,10 @@ import {
   platformExtensionRouteMatchesPath,
   type PlatformExtensionMatchMode,
 } from "takosumi-contract/platform-extension-routes";
+import {
+  sharedAuthConfigured,
+  type SharedAuthEnvironment,
+} from "../../worker/src/shared_auth_rpc.ts";
 
 export interface PlatformExtensionRoute {
   /** Stable public catalog id. */
@@ -224,13 +228,51 @@ export const PLATFORM_EXTENSION_CONTRIBUTIONS_PATH =
 
 export function platformExtensionRoutes(env: {
   readonly [PLATFORM_EXTENSIONS_ENV]?: unknown;
-}): readonly PlatformExtensionRoute[] {
-  return mergePlatformExtensionRoutes(
+} & Pick<SharedAuthEnvironment, "TAKOSUMI_SHARED_AUTH_PROFILE" | "TAKOSUMI_SHARED_AUTH_ORIGIN">): readonly PlatformExtensionRoute[] {
+  const routes = mergePlatformExtensionRoutes(
     platformExtensionRoutesFromRaw(
       env[PLATFORM_EXTENSIONS_ENV],
       PLATFORM_EXTENSIONS_ENV,
     ),
   );
+  if (sharedAuthConfigured(env)) assertSharedAuthBillingRoutes(routes);
+  return routes;
+}
+
+function assertSharedAuthBillingRoutes(
+  routes: readonly PlatformExtensionRoute[],
+): void {
+  const basePath = "/api/v1/billing";
+  const documents = [basePath, `${basePath}/subscription`, `${basePath}/top-up`];
+  for (const route of routes) {
+    if (
+      !pathIsUnderBase(route.basePath, basePath) &&
+      !platformExtensionRouteMatchesPath(basePath, route.basePath, route.matchMode)
+    ) continue;
+    // This bridge serves dedicated full documents and original-command forms.
+    // Its routes do not implement the legacy native commercial billing API or
+    // the Dashboard iframe's embed query. Validate the effective merged route
+    // before either discovery can advertise a mismatched contribution.
+    if (
+      route.basePath !== basePath ||
+      (route.matchMode ?? "subtree") !== "subtree" ||
+      route.handlerKey !== "HOSTED" ||
+      (route.authMode ?? "platform") !== "platform" ||
+      route.authDelivery !== "context" ||
+      route.workspaceContext !== "query-required" ||
+      route.ownsPathSubtree !== true ||
+      route.capabilities?.includes("billing.commercial.v1") ||
+      route.contributions?.some((contribution) =>
+        contribution.slot !== "workspace.billing" ||
+        contribution.presentation !== "link" ||
+        !documents.includes(contribution.href)
+      )
+    ) {
+      throw new TypeError(
+        "shared authentication billing requires the HOSTED context bridge and explicit document links without billing.commercial.v1",
+      );
+    }
+  }
 }
 
 function platformExtensionRoutesFromRaw(

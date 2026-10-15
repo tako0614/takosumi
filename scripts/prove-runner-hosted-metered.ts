@@ -51,9 +51,11 @@ export function parseHostedMeteredImageProofArgs(argv: readonly string[]): Hoste
 export function assertHostedMeteredImageIdentity(source: string, options: HostedMeteredImageProofOptions): void {
   const identity = parseLocalRunnerImageIdentity(source);
   const value = JSON.parse(source) as { Config?: { User?: unknown; Entrypoint?: unknown; Cmd?: unknown; Labels?: unknown } };
+  // OCI Cmd is optional: https://github.com/opencontainers/image-spec/blob/main/config.md
   if (identity.localImageId !== options.image || identity.descriptorDigest !== options.descriptor ||
     value.Config?.User !== "0:0" || JSON.stringify(value.Config.Entrypoint) !== JSON.stringify([ENTRYPOINT]) ||
-    (value.Config.Cmd !== null && JSON.stringify(value.Config.Cmd) !== "[]")) {
+    (value.Config.Cmd !== undefined && value.Config.Cmd !== null &&
+      (!Array.isArray(value.Config.Cmd) || value.Config.Cmd.length !== 0))) {
     throw new Error("image is not the exact native Hosted-metered composition");
   }
 }
@@ -140,7 +142,12 @@ async function command(args: readonly string[], dockerConfig: string, stdin?: Ui
 
 async function checked(args: readonly string[], dockerConfig: string, stdin?: Uint8Array): Promise<string> {
   const result = await command(args, dockerConfig, stdin);
-  if (result.exitCode !== 0) throw new Error(`image proof ${args[0]} failed (${result.exitCode})`);
+  if (result.exitCode !== 0) {
+    const kind = args[0] === "docker" ? `docker ${args[1]}` : args[0];
+    // Keep the failure, never the remaining argv, stdin, stdout or environment.
+    const stderr = result.stderr.trim().slice(0, 2_048);
+    throw new Error(`image proof ${kind} failed (${result.exitCode})${stderr ? `: ${stderr}` : ""}`);
+  }
   return result.stdout.trim();
 }
 
@@ -205,7 +212,7 @@ async function prepareSession(options: HostedMeteredImageProofOptions, directory
     "--ulimit", "cpu=30:30", "--ulimit", "nofile=256:256", "--ulimit", "core=0:0",
     "--cap-drop=ALL", "--cap-add=SETUID", "--cap-add=SETGID", "--cap-add=SETPCAP", "--cap-add=KILL",
     "--security-opt=no-new-privileges:true", "--tmpfs", "/tmp:rw,nosuid,nodev,size=96m",
-    "--tmpfs", "/run:rw,nosuid,nodev,noexec,size=16m", "--tmpfs", "/proof:rw,nosuid,nodev,size=16m",
+    "--tmpfs", "/run:rw,nosuid,nodev,noexec,size=16m", "--tmpfs", "/proof:rw,exec,nosuid,nodev,mode=755,size=16m",
     "--tmpfs", "/workspace:rw,nosuid,nodev,noexec,uid=65534,gid=65534,mode=700,size=16m",
     "--mount", `type=bind,src=${directory},dst=/run/takosumi-metered`, options.image,
   ], dockerConfig);
@@ -425,7 +432,24 @@ async function proveImageBoundaryAndKernel(session: Session, dockerConfig: strin
   await checked(["cc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-Wconversion", "-Wshadow", "-static", "-pthread", "-o", binary,
     "tests/native/hosted-metered-fixture.c", "runner/native/hosted-metered-supervisor.c"], dockerConfig);
   await chmod(binary, 0o755);
-  await checked(["docker", "cp", binary, `${session.cid}:/proof/native-workload`], dockerConfig);
+  const bytes = await readFile(binary);
+  // Docker cp cannot write this tmpfs through the read-only Container rootfs.
+  const installed = JSON.parse(await checked(["docker", "exec", "--interactive", "--user", "0:0", session.cid, "/usr/local/bin/bun", "-e", [
+    'import{writeFileSync,readFileSync,statSync}from"node:fs";import{createHash}from"node:crypto";',
+    'const d=statSync("/proof");if(!d.isDirectory()||d.uid!==0||d.gid!==0||(d.mode&0o777)!==0o755)throw new Error("fixture directory is not root-owned 0755");',
+    'writeFileSync("/proof/native-workload",Buffer.from(await Bun.stdin.arrayBuffer()),{flag:"wx",mode:0o755});',
+    'const b=readFileSync("/proof/native-workload"),s=statSync("/proof/native-workload");console.log(JSON.stringify({sha256:createHash("sha256").update(b).digest("hex"),size:b.byteLength,uid:s.uid,gid:s.gid,mode:s.mode&0o777}));',
+  ].join("\n")], dockerConfig, bytes)) as Record<string, unknown>;
+  if (installed.sha256 !== sha256(bytes) || installed.size !== bytes.byteLength ||
+    installed.uid !== 0 || installed.gid !== 0 || installed.mode !== 0o755) {
+    throw new Error("actual native fixture bytes or root ownership differ");
+  }
+  const immutable = await checked(["docker", "exec", "--user", "0:0", session.cid, LAUNCHER, "--", "/usr/local/bin/bun", "-e", [
+    'import{writeFileSync}from"node:fs";if(process.getuid?.()!==65534||process.getgid?.()!==65534)throw new Error("fixture attack identity was not dropped");',
+    'for(const[path,flag]of[["/proof/native-workload","r+"],["/proof/untrusted-workload","wx"]]){let denied=false;try{writeFileSync(path,"forged",{flag})}catch(error){if(!["EACCES","EPERM"].includes(error.code))throw error;denied=true}if(!denied)throw new Error("untrusted workload can modify root fixture")}',
+    'console.log("ROOT_FIXTURE_IMMUTABLE");',
+  ].join("\n")], dockerConfig);
+  if (immutable !== "ROOT_FIXTURE_IMMUTABLE") throw new Error("actual native fixture write protection unavailable");
   const consumed = new Map<string, bigint>();
   for (const mode of ["sleep", "burn", "threads", "waited-fork", "autoreap-red", "double-fork", "setsid-background"]) {
     const before = await counter(session);
