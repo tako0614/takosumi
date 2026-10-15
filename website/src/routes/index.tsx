@@ -170,6 +170,7 @@ export default function Home() {
         <div><span>Takosumi</span><small>© contributors</small></div>
         <nav aria-label="フッター">
           <a href="/docs/">ドキュメント</a>
+          <a href="/docs/en/" hreflang="en" lang="en">English docs</a>
           <a href="https://app.takosumi.com/docs/pricing">料金</a>
           <a href="https://github.com/tako0614/takosumi">GitHub <Arrow /></a>
         </nav>
