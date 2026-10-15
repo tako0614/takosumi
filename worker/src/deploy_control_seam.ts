@@ -14,6 +14,8 @@ import type { OpenTofuRunnerExecutorRegistry } from "../../core/domains/deploy-c
 import type { InterfaceOAuth2ResourceAuthorizer } from "../../core/domains/interfaces/mod.ts";
 import { createWorkerServiceApp } from "./worker_service.ts";
 import type { ControlIdentityAuthorityReader } from "../../contract/identity-reconciliation.ts";
+import { privateRunFilesCompositionFor } from "./private_run_files_composition.ts";
+import type { WorkerPrivateRunFilesComposition } from "./worker_service.ts";
 
 export interface DeployControlPrivateComposition {
   readonly identityReconciliationAuthority?: ControlIdentityAuthorityReader;
@@ -38,6 +40,7 @@ export function createDeployControlService(
 }
 
 export function deployControlServiceOptions(env: CloudflareWorkerEnv): {
+  readonly privateRunFiles?: WorkerPrivateRunFilesComposition;
   readonly runnerProfiles: readonly RunnerProfile[];
   readonly runnerExecutors?: OpenTofuRunnerExecutorRegistry;
   readonly executionEvidenceAuthority?: RunnerHostComposition["executionEvidenceAuthority"];
@@ -45,6 +48,7 @@ export function deployControlServiceOptions(env: CloudflareWorkerEnv): {
   readonly interfaceOAuth2ResourceAuthorizer?: InterfaceOAuth2ResourceAuthorizer;
   readonly mountInternalLedgerRoutes?: boolean;
 } {
+  const privateRunFiles = privateRunFilesCompositionFor(env);
   const profileConfiguration = validateRunnerProfileConfiguration(env);
   const hostComposition = profileConfiguration.hostComposition;
   const envExecutionEvidenceAuthority = executionEvidenceAuthorityFromEnv(env);
@@ -83,6 +87,7 @@ export function deployControlServiceOptions(env: CloudflareWorkerEnv): {
   const interfaceOAuth2ResourceAuthorizer =
     interfaceOAuth2ResourceAuthorizerFromEnv(env);
   return {
+    ...(privateRunFiles ? { privateRunFiles } : {}),
     runnerProfiles: profileConfiguration.runnerProfiles,
     ...(interfaceOAuth2ResourceAuthorizer
       ? { interfaceOAuth2ResourceAuthorizer }
@@ -451,6 +456,7 @@ const inProcessDeployControlServices = new WeakMap<
 const inProcessDeployControlCompositions = new WeakMap<CloudflareWorkerEnv, DeployControlPrivateComposition>();
 
 function pinDeployControlComposition(env: CloudflareWorkerEnv, composition: DeployControlPrivateComposition): DeployControlPrivateComposition {
+  privateRunFilesCompositionFor(env);
   const existing = inProcessDeployControlCompositions.get(env);
   if (existing && existing.identityReconciliationAuthority !== composition.identityReconciliationAuthority) throw new TypeError("Deploy Control identity authority cannot change within one environment");
   if (existing) return existing;
@@ -506,6 +512,7 @@ const runOwnerDeployControlServices = new WeakMap<
 export function cachedRunOwnerDeployControlService(
   env: CloudflareWorkerEnv,
 ): Promise<CreatedTakosumiService> {
+  privateRunFilesCompositionFor(env);
   return cachedServiceAttempt(runOwnerDeployControlServices, env, () =>
     createRunOwnerDeployControlService(env),
   );
