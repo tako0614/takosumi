@@ -295,6 +295,64 @@ history before recovery. Historical rollback remains owned by
 `takosumi-platform-staging`; this lane creates no plan, journal, archive, or
 parallel restore mechanism.
 
+### Shared-account browser billing descriptor
+
+The shared-account browser billing bridge serves full documents and dedicated
+original-command forms. It does not implement the legacy native
+`billing.commercial.v1` API. When either shared-auth profile/origin variable is
+present, the merged billing descriptor must use this recipe:
+
+```json
+{
+  "id": "takosumi-hosted-browser-billing",
+  "basePath": "/api/v1/billing",
+  "handlerKey": "HOSTED",
+  "authMode": "platform",
+  "authDelivery": "context",
+  "ownsPathSubtree": true,
+  "workspaceContext": "query-required",
+  "contributions": [{
+    "id": "workspace-billing",
+    "slot": "workspace.billing",
+    "href": "/api/v1/billing",
+    "label": "Workspace billing",
+    "presentation": "link"
+  }]
+}
+```
+
+Omitted `matchMode` and `authMode` retain their `subtree` and `platform`
+defaults. `HOSTED` is the same binding used by the private shared-auth bridge;
+an alias handler is not accepted. Contributions may be omitted to add no
+Dashboard entries; the descriptor's catalog entry and capability declarations
+are unaffected. Each supplied contribution must be an explicit
+`workspace.billing` link to `/api/v1/billing`, `/api/v1/billing/subscription`,
+or `/api/v1/billing/top-up`. The Dashboard adds the selected `workspaceId` to
+the full-document URL. Native presentation, omitted presentation and
+inline-frame/embed are unsupported, and `billing.commercial.v1` must not be
+advertised by this descriptor. Duplicate descriptors are checked after merge.
+
+The bridge accepts GET on those three documents and POST on
+`/api/v1/billing/subscription`, `/api/v1/billing/subscription/cancel`,
+`/api/v1/billing/subscription/plan`, and `/api/v1/billing/top-up`. Legacy
+`config`, `summary`, `transactions`, `checkout`, `auto-recharge`, and `portal`
+leaves remain 404 in shared composition; there is no retail fallback or DTO
+translation. A malformed billing descriptor follows existing optional-config
+failure behavior: product discovery omits extension advertisements,
+contributions GET fails, and the Dashboard loader displays no extra entries.
+The existing contributions HEAD response and unrelated extension/profile-OFF
+contracts are unchanged.
+
+This is a source contract for future composition, not an activation recipe for
+the current official release. The official gate below still requires exactly
+two Hosted descriptors and rejects this third route. Activation also requires
+the genuine per-request Hosted factory, independent current RP verification,
+the four same-primary guarded stores, and the Financial Principal/payer/
+first-Customer receiver and credential authority. A valid descriptor or a
+successful synthetic RPC test supplies none of those authorities. Until they
+are delivered and the official composition is explicitly adopted, keep this
+route inactive; the unmounted private dashboard remains unavailable.
+
 ### Realized Hosted extension descriptors
 
 `TAKOSUMI_PLATFORM_EXTENSIONS` is operator-realized config outside this
