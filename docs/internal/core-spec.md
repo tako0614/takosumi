@@ -747,6 +747,14 @@ caller that aborted its own request, releases the preparation so that a
 redelivery or a takeover of the same ApplyRun may claim it again. Core records
 the typed code as a pre-provider failure, so the Run does not make Capsule runtime
 safety `unknown` unless a lifecycle action such as `pre_destroy` already ran.
+Core forwards its already-held active Run lease in private
+`RunExecutionControl.runLease` to both `post_apply` and `pre_destroy` release
+activations. The parent is the current ApplyRun, including the current destroy
+ApplyRun for `pre_destroy`; a derived release dispatch ID does not create a claim.
+Existing renewal, cancellation, final revalidation and terminal commit ordering
+remain unchanged. This in-process propagation does not add the lease to the
+ordinary Cloudflare release adapter's wire payload or headers, establish an
+atomic accepted-parent CAS or durable cleanup authority, or activate B2 metering.
 A dispatcher whose host invocation has a hard wall-time limit passes its
 deadline through `RunExecutionControl.deadlineAt`; Core forwards it without
 interpreting it to Plan, Apply, Destroy, and their release activations. The

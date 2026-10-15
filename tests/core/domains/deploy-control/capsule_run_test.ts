@@ -27,6 +27,7 @@ import type {
   OpenTofuPlanResult,
   OpenTofuRunner,
   ReleaseActivationInput,
+  RunExecutionControl,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
   applyExpectedGuardFromPlanRun,
@@ -6740,10 +6741,21 @@ test("mirror-required policy is dispatched to plan and apply runner jobs", async
   });
 });
 
-test("a dispatch deadline reaches the post_apply and pre_destroy release activations", async () => {
+test("the original held Run lease and deadline reach post_apply and pre_destroy runner releases", async () => {
   // Release commands run inside the same dispatching invocation as the
-  // provider mutation, so they get the same host deadline.
-  const store = new InMemoryOpenTofuControlStore();
+  // provider mutation, so they retain its actual claim and host deadline.
+  const claims: NonNullable<RunExecutionControl["runLease"]>[] = [];
+  const store = new class extends InMemoryOpenTofuControlStore {
+    override async transitionRun(
+      input: TransitionRunInput,
+    ): Promise<TransitionRunResult> {
+      const result = await super.transitionRun(input);
+      if (result.won && input.kind === "apply" && input.setLeaseToken) {
+        claims.push({ runId: input.id, leaseToken: input.setLeaseToken });
+      }
+      return result;
+    }
+  }();
   const runner = recordingRunner({
     planResourceChanges: [
       {
@@ -6759,13 +6771,13 @@ test("a dispatch deadline reaches the post_apply and pre_destroy release activat
       {
         id: "migrate",
         phase: "post_apply",
-        executor: "operator",
+        executor: "runner",
         command: ["bun", "run", "migrate"],
       },
       {
         id: "retire",
         phase: "pre_destroy",
-        executor: "operator",
+        executor: "runner",
         command: ["bun", "run", "retire"],
       },
     ]),
@@ -6774,19 +6786,35 @@ test("a dispatch deadline reaches the post_apply and pre_destroy release activat
     readonly phase: string | undefined;
     readonly deadlineAt: number | undefined;
     readonly signal: boolean;
+    readonly runLease: RunExecutionControl["runLease"];
+    readonly parentRunId: string;
+    readonly transportRunId: string;
   }[] = [];
+  const profile = {
+    ...multiProviderRunnerProfile(),
+    capabilities: [CAPSULE_LIFECYCLE_COMMAND_CAPABILITY],
+  };
   const controller = controllerWith(store, runner, {
     enqueueRun: () => Promise.resolve(),
-    releaseActivator: {
-      activate: (input, control) => {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+    releaseActivator: createRunnerReleaseActivator({
+      release: async (job, control) => {
         activations.push({
-          phase: input.commands[0]?.phase,
+          phase: job.commands[0]?.phase,
           deadlineAt: control?.deadlineAt,
           signal: control?.signal instanceof AbortSignal,
+          runLease: control?.runLease,
+          parentRunId: job.applyRunId,
+          transportRunId: job.runId,
         });
-        return Promise.resolve({ status: "succeeded" });
+        return {
+          status: "succeeded",
+          runId: job.runId,
+          commandCount: job.commands.length,
+        };
       },
-    },
+    }),
   });
   const deadlineAt = Date.parse("2026-10-11T08:30:59.920Z");
   const dispatchWithDeadline = (run: {
@@ -6818,11 +6846,103 @@ test("a dispatch deadline reaches the post_apply and pre_destroy release activat
   });
   await dispatchWithDeadline(destroyRun, "apply");
 
+  expect(claims).toHaveLength(2);
+  expect(claims.every((claim) => claim.leaseToken.length > 0)).toBe(true);
   expect(activations).toEqual([
-    { phase: "post_apply", deadlineAt, signal: true },
-    { phase: "pre_destroy", deadlineAt, signal: true },
+    {
+      phase: "post_apply",
+      deadlineAt,
+      signal: true,
+      runLease: claims[0],
+      parentRunId: applyRun.id,
+      transportRunId: `release_${applyRun.id}`,
+    },
+    {
+      phase: "pre_destroy",
+      deadlineAt,
+      signal: true,
+      runLease: claims[1],
+      parentRunId: destroyRun.id,
+      transportRunId: `release_${destroyRun.id}`,
+    },
   ]);
 });
+
+for (const phase of ["post_apply", "pre_destroy"] as const) {
+  test(`a ${phase} runner release cannot settle after its original Run lease is replaced`, async () => {
+    const store = new InMemoryOpenTofuControlStore();
+    const runner = recordingRunner();
+    await seedRunnableCapsuleModel(store, {
+      environment: "preview",
+      installConfig: lifecycleInstallConfig([
+        {
+          id: "lifecycle",
+          phase,
+          executor: "runner",
+          command: ["bun", "run", "lifecycle"],
+        },
+      ]),
+    });
+    let releaseControl: RunExecutionControl | undefined;
+    const profile = {
+      ...multiProviderRunnerProfile(),
+      capabilities: [CAPSULE_LIFECYCLE_COMMAND_CAPABILITY],
+    };
+    const controller = controllerWith(store, runner, {
+      runnerProfiles: [profile],
+      defaultRunnerProfileId: profile.id,
+      runRenewalIntervalMs: 0,
+      releaseActivator: createRunnerReleaseActivator({
+        release: async (job, control) => {
+          releaseControl = control;
+          const original = control?.runLease;
+          expect(original).toBeDefined();
+          expect(original!.runId).toBe(job.applyRunId);
+          const current = (await store.getApplyRun(job.applyRunId))!;
+          const takeover = await store.transitionRun({
+            kind: "apply",
+            id: current.id,
+            expectFrom: ["running"],
+            expectLeaseToken: original!.leaseToken,
+            setLeaseToken: "successor-release-owner",
+            run: current,
+          });
+          expect(takeover.won).toBe(true);
+          return {
+            status: "succeeded",
+            runId: job.runId,
+            commandCount: job.commands.length,
+          };
+        },
+      }),
+    });
+
+    const create = await controller.createCapsulePlan("cap_fixture1");
+    const created = await controller.createApplyRun({
+      planRunId: create.planRun.id,
+      expected: applyExpectedGuardFromPlanRun(create.planRun),
+    });
+    let result = created;
+    if (phase === "pre_destroy") {
+      expect(created.applyRun.status).toBe("succeeded");
+      const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+      await controller.approveRun(destroy.planRun.id);
+      result = await controller.createApplyRun({
+        planRunId: destroy.planRun.id,
+        expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+      });
+    }
+
+    expect(releaseControl?.signal?.aborted).toBe(true);
+    expect(releaseControl?.runLease?.leaseToken).not.toBe("successor-release-owner");
+    expect(result.applyRun.status).toBe("running");
+    expect((await controller.getApplyRun(result.applyRun.id)).applyRun.status).toBe(
+      "running",
+    );
+    expect(runner.applyJobs).toHaveLength(1);
+    expect(runner.destroyJobs).toHaveLength(0);
+  });
+}
 
 test("a pre_destroy release the runner refused for lack of deadline headroom requeues the destroy", async () => {
   // Nothing ran: the release was refused before dispatch. The destroy must be
