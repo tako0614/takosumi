@@ -385,6 +385,46 @@ there is no new event, command or identity recipe on retry. A new identity proof
 requires exact acknowledgements for all four current parents and every original
 receiver/target. Its response contains only an opaque proof reference. The
 proof is not a payer grant, Customer admission or provider-dispatch approval.
+The existing `prove({accessToken,challengeRef}) -> {proofRef}` operation is
+idempotent for the same **original request**, rather than for every request with
+the same challenge. New issuers derive an opaque custody locator as `afp_`
+plus the unpadded base64url SHA-256 of canonical UTF-8 JSON
+`{domain:"takosumi.accounts.financial-proof-original-custody@v1",value}`,
+where value is exactly `{registrationRef,challengeRef,accessTokenHash}`: the
+existing retained-original census set. This is not challenge-only uniqueness;
+a properly refreshed token has a different original access-token hash.
+
+The locator must not split when competing observations return different full
+challenge/caller/vector data for that same census set. Those full fields remain
+mandatory comparison and currentness checks on the retained original, including
+the actual caller and captured registration/incarnation/complete receiver set.
+A conflicting full request cannot reuse the winner or insert a second PK.
+The locator itself grants no authority. Bearer bytes never enter it, durable
+records or logs; event/receipt and Customer recipes are unchanged. Prior random
+or candidate locators remain retained originals and are never rewritten.
+
+An original-record census selects retained proofs by Accounts registration,
+challenge reference and original access-token hash, then validates the complete
+original caller/challenge, four parents, Control source vector and current ACKs.
+Exactly one matching original retains its original random or deterministic ref;
+multiple or inconsistent originals refuse issuance. A lost issuance reply or
+conditional-write conflict causes a fresh original-input readback, not a new
+write/key/vector. The returned proof's original issuedAt/expiresAt and Control
+bounds are never renewed by a fresh observation wrapper. A properly refreshed
+different token is a separate original request and can issue a separate proof.
+It cannot replace an already accepted/unknown Financial command's original
+proof, key, fingerprint or custody.
+
+New same-input writers arbitrate on the existing deterministic proof primary
+key. The original-record census introduces no new JSON index or physical
+schema; PostgreSQL snapshot `NOT EXISTS` alone is not that arbitration. Existing
+random history is neither rewritten nor erased. Global retry qualification also
+requires actual all-old-writer drain/fencing: an old writer can still create a
+new random key, and a local marker cannot prove its absence. A census result
+limit bounds the returned count, not database rows scanned; incomplete/error
+reads fail closed. Expired or revoked originals remain historical custody and
+cannot be reissued as fresh permission by retrying the same input.
+
 The private proof reader has exact `{v:1,proofRef,challengeRef}` arguments.
 `loadFinancialIdentityProof` returns `{v:1,status:'found',proof}` or
 `{v:1,status:'not-found'}` and preserves the original after expiry/closure.

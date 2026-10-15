@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { InMemoryAccountsStore, type TokenRecord } from "../../../../accounts/service/src/store.ts";
 import { MemoryIdentityRecordRepository } from "../../../../accounts/service/src/memory-identity-records.ts";
 import { createAccountsFinancialSource, type AccountsFinancialSourceOptions } from "../../../../accounts/service/src/financial-source.ts";
+import { sha256Text } from "../../../../accounts/service/src/encoding.ts";
 import { rotateAccountSession } from "../../../../accounts/service/src/account-session.ts";
 import { financialSourceBuckets, financialSourceScopeKey } from "../../../../accounts/service/src/hosted-identity-records.ts";
 import { materializeFinancialSourceEvent, type FinancialSourceMaterialization, type FinancialSourceReceipt } from "../../../../accounts/service/src/financial-source-contract.ts";
@@ -271,4 +272,48 @@ test("memory pending page is bounded and registration/receiver identities are im
   } while (after !== undefined);
   expect(events.size).toBe(4);
   for (const limit of [0, 101, 1.5]) await expect(f.store.listFinancialSourcePending({ registrationRef: f.registration.registrationRef, limit })).rejects.toThrow();
+});
+
+
+test("memory original-request recovery captures primitive input before deferred Control and never reissues after missing original ACK", async () => {
+  const f = await fixture(); await enrolled(f); await f.producer.flush({limit: 100});
+  const capture = f.options.control!.capture;
+  let entered!: () => void, release!: () => void;
+  const observed = new Promise<void>(resolve => {entered = resolve;}), barrier = new Promise<void>(resolve => {release = resolve;});
+  f.options.control!.capture = async input => {const snapshot = await Reflect.apply(capture, f.options.control, [input]); entered(); await barrier; return snapshot;};
+  const producer = createAccountsFinancialSource(f.options);
+  const input = {accessToken: f.token, challengeRef: f.challenge.challengeRef};
+  const pending = producer.prove(input);
+  await observed; input.accessToken = "replacement-bearer"; input.challengeRef = "replacement-challenge"; release();
+  const issued = await pending, original = (await f.store.findFinancialSourceProof(issued.proofRef))!;
+  expect(original.accessTokenHash).toBe(await sha256Text(f.token));
+  expect(original.challenge).toEqual(f.challenge);
+  const readReceipt = f.store.findFinancialSourceReceipt.bind(f.store);
+  f.store.findFinancialSourceReceipt = async () => undefined;
+  await expect(f.prove()).rejects.toThrow("source_conflict");
+  f.store.findFinancialSourceReceipt = readReceipt;
+  expect(f.rows(financialSourceBuckets.proofs)).toHaveLength(1);
+  expect(await f.prove()).toEqual(issued);
+  expect(await f.store.findFinancialSourceProof(issued.proofRef)).toEqual(original);
+});
+
+
+test("memory final hash boundary prefers an intervening legacy original instead of inserting its deterministic candidate", async () => {
+  const f = await fixture(); await enrolled(f); await f.producer.flush({limit: 100});
+  const issue = f.store.issueFinancialSourceProof.bind(f.store);
+  let candidate = "", injected = false;
+  f.store.issueFinancialSourceProof = async input => {
+    candidate = input.proof.proofRef;
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    crypto.subtle.digest = async (algorithm, bytes) => {
+      const result = await digest(algorithm, bytes);
+      if (!injected) {injected = true; f.repository.records.set(financialSourceBuckets.proofs + "\n" + "afp_legacy_during_hash", {...input.proof, proofRef: "afp_legacy_during_hash"});}
+      return result;
+    };
+    try {return await issue(input);} finally {crypto.subtle.digest = digest;}
+  };
+  expect(await f.prove()).toEqual({proofRef: "afp_legacy_during_hash"});
+  expect(injected).toBe(true);
+  expect(f.rows(financialSourceBuckets.proofs)).toHaveLength(1);
+  expect(await f.store.findFinancialSourceProof(candidate)).toBeUndefined();
 });
