@@ -41,12 +41,13 @@ import {
   type FinancialSourceRegistration,
   materializeFinancialSourceEvent,
 } from "../../../../accounts/service/src/financial-source-contract.ts";
-import { makeFinancialSourceReceipt, type FinancialSourceRegisteredHead, type FinancialSourceCredentialContext } from "../../../../accounts/service/src/financial-source-abi.ts";
+import { makeFinancialSourceReceipt, projectFinancialIdentityProof, type FinancialSourceRegisteredHead, type FinancialSourceCredentialContext } from "../../../../accounts/service/src/financial-source-abi.ts";
 import { HostedIdentityRecords, type IdentityRecordRepository } from "../../../../accounts/service/src/hosted-identity-records.ts";
 import { MemoryIdentityRecordRepository } from "../../../../accounts/service/src/memory-identity-records.ts";
 import type {
   FinancialSourceParentScope,
   FinancialSourceRawRecord,
+  FinancialSourceProofRecord,
   IdentityOperationReceiptRecord,
 } from "../../../../accounts/service/src/identity-state.ts";
 import {
@@ -258,6 +259,17 @@ async function fixture(backend: Backend) {
   return {
     store, get now() { return Date.now(); }, session, registration, challenge, grant, exchange,
     options,
+    async putProofAt(ref: string, record: FinancialSourceProofRecord) {
+      await repository!.put("financial_source_proofs", ref, record);
+    },
+    async replaceProofHistory(records: readonly FinancialSourceProofRecord[]) {
+      const bucket = "financial_source_proofs";
+      if (repository instanceof MemoryIdentityRecordRepository) {
+        for (const key of repository.records.keys()) if (key.startsWith(bucket + "\n")) repository.records.delete(key);
+      } else if (d1) await d1.prepare("DELETE FROM takosumi_accounts_documents WHERE bucket=?").bind(bucket).run();
+      else await pg!.query("DELETE FROM accounts_v1.hosted_identity_records WHERE bucket=$1", [bucket]);
+      for (const record of records) await repository!.put(bucket, record.proofRef, record);
+    },
     async sourceVector():Promise<string>{
       if(repository instanceof MemoryIdentityRecordRepository)return sha256Text(canonicalFinancialSourceJson(JSON.parse(JSON.stringify({documents:[...repository.records].sort(),accounts:[...repository.accounts].sort(),sessions:[...repository.sessions].sort(),identities:[...repository.identities].sort()}))));
       const records:Record<string,unknown>={};
@@ -510,6 +522,117 @@ async function reserveActualMerge(f: Awaited<ReturnType<typeof fixture>>) {
 }
 
 for (const backend of ["memory", "d1", "postgres"] as const) {
+  test(`${backend}: malformed legacy proof key cannot recover a proper-refresh proof for another original token`, async () => {
+    const f = await fixture(backend);
+    try {
+      const grant = await f.grant(), input = {accessToken: grant.access_token, challengeRef: f.challenge.challengeRef};
+      // One injected trusted instant makes both public projections identical:
+      // private tokenHash/access-expiry equality must not be replaced by a
+      // comparison of the closed public projection alone.
+      const instant = Date.now() + 10_000, clock = () => instant;
+      const producer = f.producer(clock);
+      await expect(producer.prove(input)).rejects.toThrow("source_pending");
+      await producer.flush({limit: 100});
+      const first = await producer.prove(input), originalA = (await f.store.findFinancialSourceProof!(first.proofRef))!;
+      const refreshed = await f.exchange({grant_type: "refresh_token", refresh_token: grant.refresh_token});
+      expect(refreshed.status).toBe(200);
+      const rotated = await refreshed.json() as {access_token: string};
+      const second = await producer.prove({...input, accessToken: rotated.access_token});
+      const originalB = (await f.store.findFinancialSourceProof!(second.proofRef))!;
+      expect(second.proofRef).not.toBe(first.proofRef);
+      expect(originalB.accessTokenHash).not.toBe(originalA.accessTokenHash);
+      for (const issued of [first, second]) expect(await producer.verifyCurrentFinancialIdentityProof({v: 1, proofRef: issued.proofRef, challengeRef: input.challengeRef})).toMatchObject({status: "current"});
+      // Retained malformed legacy row: keyA still binds original token A, but
+      // its internal ref selects proper-refresh token B's otherwise valid row.
+      const malformed = {...originalA, proofRef: second.proofRef};
+      expect(projectFinancialIdentityProof(malformed)).toEqual(projectFinancialIdentityProof(originalB));
+      await f.putProofAt(first.proofRef, malformed);
+      const before = await f.sourceVector();
+      await expect(f.producer(clock).prove(input)).rejects.toThrow("source_conflict");
+      expect(await f.sourceVector()).toBe(before);
+      expect(await f.store.findFinancialSourceProof!(second.proofRef)).toEqual(originalB);
+      expect(await producer.prove({...input, accessToken: rotated.access_token})).toEqual(second);
+    } finally {await f.close();}
+  }, 30_000);
+
+  test(`${backend}: concurrent original issuances and commit-unknown recover the one original proof`, async () => {
+    const f = await fixture(backend);
+    try {
+      const grant = await f.grant(), input = {accessToken: grant.access_token, challengeRef: f.challenge.challengeRef};
+      await expect(f.producer().prove(input)).rejects.toThrow("source_pending");
+      await f.producer().flush({limit: 100});
+      const issue = f.store.issueFinancialSourceProof!.bind(f.store);
+      let arrivals = 0, release!: () => void;
+      const bothPrepared = new Promise<void>(resolve => {release = resolve;});
+      f.store.issueFinancialSourceProof = async mutation => {
+        if (++arrivals === 2) release();
+        await bothPrepared;
+        const committed = await issue(mutation);
+        if (committed) throw new Error("isolated_commit_reply_lost");
+        return committed;
+      };
+      const results = await Promise.all([f.producer().prove(input), f.producer().prove(input)]);
+      expect(arrivals).toBe(2);
+      expect(results[0]).toEqual(results[1]);
+      const proof = await f.store.findFinancialSourceProof!(results[0]!.proofRef);
+      expect(proof).toBeTruthy();
+      expect(await f.store.findFinancialSourceProofsForOriginalRequest!({registrationRef: f.registration.registrationRef, challengeRef: input.challengeRef, accessTokenHash: proof!.accessTokenHash})).toEqual([proof!]);
+      expect(await f.producer().prove(input)).toEqual(results[0]!);
+    } finally { await f.close(); }
+  }, 30_000);
+
+  test(`${backend}: legacy original proof is retained and duplicate or changed original input fails closed`, async () => {
+    const f = await fixture(backend);
+    try {
+      const grant = await f.grant(), input = {accessToken: grant.access_token, challengeRef: f.challenge.challengeRef};
+      await expect(f.producer().prove(input)).rejects.toThrow("source_pending");
+      await f.producer().flush({limit: 100});
+      const issued = await f.producer().prove(input);
+      const proof = (await f.store.findFinancialSourceProof!(issued.proofRef))!;
+      const legacy = {...proof, proofRef: "afp_retained_random_original"};
+      await f.replaceProofHistory([legacy]);
+      const before = await f.sourceVector();
+      expect(await f.producer().prove(input)).toEqual({proofRef: legacy.proofRef});
+      expect(await f.sourceVector()).toBe(before);
+      const originalFingerprint = f.challenge.requestFingerprint;
+      f.challenge.requestFingerprint = `sha256:${"f".repeat(64)}`;
+      await expect(f.producer().prove(input)).rejects.toThrow("source_conflict");
+      f.challenge.requestFingerprint = originalFingerprint;
+      f.setControlAffectedRef("changed-after-original-proof");
+      await expect(f.producer().prove(input)).rejects.toThrow("source_conflict");
+      f.setControlAffectedRef("original-workspace");
+      expect(await f.sourceVector()).toBe(before);
+      await f.replaceProofHistory([legacy, {...proof, proofRef: "afp_second_legacy_original"}]);
+      const duplicated = await f.sourceVector();
+      await expect(f.producer().prove(input)).rejects.toThrow("source_conflict");
+      expect(await f.sourceVector()).toBe(duplicated);
+      expect(await f.store.findFinancialSourceProof!(legacy.proofRef)).toEqual(legacy);
+    } finally { await f.close(); }
+  }, 30_000);
+
+  test(`${backend}: original request recovers a lost proof reply without replacing original custody`, async () => {
+    const f = await fixture(backend);
+    try {
+      const grant = await f.grant();
+      const input = {accessToken: grant.access_token, challengeRef: f.challenge.challengeRef};
+      await expect(f.producer().prove(input)).rejects.toThrow("source_pending");
+      await f.producer().flush({limit: 100});
+      const committed = await f.producer().prove(input);
+      const original = await f.store.findFinancialSourceProof!(committed.proofRef);
+      // Lose the first reply after commit. A fresh producer only has the
+      // original request; it cannot replace the original proof or its bounds.
+      const recovered = await f.producer().prove(input);
+      expect(recovered).toEqual(committed);
+      expect(await f.store.findFinancialSourceProof!(recovered.proofRef)).toEqual(original);
+      const lookup = {registrationRef: f.registration.registrationRef, challengeRef: input.challengeRef, accessTokenHash: original!.accessTokenHash};
+      expect(await f.store.findFinancialSourceProofsForOriginalRequest!(lookup)).toEqual([original!]);
+      const expired = f.producer(() => original!.expiresAt);
+      await expect(expired.prove(input)).rejects.toThrow("source_conflict");
+      expect(await expired.loadFinancialIdentityProof({v: 1, proofRef: original!.proofRef, challengeRef: input.challengeRef})).toMatchObject({status: "found"});
+      expect(await f.store.findFinancialSourceProof!(recovered.proofRef)).toEqual(original);
+    } finally { await f.close(); }
+  }, 30_000);
+
   test(`${backend}: actual producer resumes original ACK, issues stored proof, rotates access and closes grant lineage`, async () => {
     const f = await fixture(backend);
     try {

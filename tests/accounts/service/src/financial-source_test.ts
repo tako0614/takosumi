@@ -118,6 +118,8 @@ test("producer uses real shared grant, exact challenge/context and all receiver 
   const proof = await p.prove({accessToken: f.token, challengeRef: f.challenge.challengeRef});
   expect(Object.keys(proof)).toEqual(["proofRef"]);
   expect(proof.proofRef).toStartWith("afp_");
+  // Independent Python hashlib/canonical-JSON vector for this synthetic input.
+  expect(proof.proofRef).toBe("afp_UwKyS1ONe9Fu70GKCedgIoFi9kkQZuD15dQFgPHwHZc");
   expect(f.deliveries()).toBe(4);
 });
 

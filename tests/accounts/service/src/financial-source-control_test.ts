@@ -14,6 +14,8 @@ import {
   type FinancialSourceRegistration,
 } from "../../../../accounts/service/src/financial-source-contract.ts";
 import { makeFinancialSourceReceipt } from "../../../../accounts/service/src/financial-source-abi.ts";
+import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
+import { rotateAccountSession } from "../../../../accounts/service/src/account-session.ts";
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
 import {
   InMemoryOpenTofuControlStore,
@@ -424,5 +426,49 @@ test("memory: C event-evidence reader returns immutable actual Core history with
     expect(await reader.loadFinancialSourceEventEvidence({v: 1, eventRef: terminal.eventRef, eventDigest: `sha256:${"e".repeat(64)}`})).toEqual({v: 1, status: "not-found"});
     expect(await f.owner.financialSource.readMaterialization(terminal.eventRef)).toBeUndefined();
     expect(await state()).toEqual(afterDelete);
+  } finally { await f.close(); }
+});
+
+
+test("memory: original Accounts proof survives fresh actual Control wrapper expiry without renewing its original bounds", async () => {
+  const f = await fixture("memory", "proof-retry-clock");
+  try {
+    const store = new InMemoryAccountsStore(), issuer = "https://accounts-control-retry.fixture.invalid";
+    await store.saveAccount({subject: actor, createdAt: f.now(), updatedAt: f.now()});
+    const login = await rotateAccountSession({store, subject: actor, now: f.now(), ttlMs: 600_000, hostedPolicy: true});
+    const session = (await store.findAccountSession(login.sessionId))!;
+    const token = "isolated-actual-core-retry-access", sid = "actual-core-retry-sid", clientId = "actual-core-retry-client";
+    await store.saveAccessToken(token, {issuer, clientId, subject: actor, takosumiSubject: actor, oidcProfile: "shared-account", sid,
+      issuerSessionId: session.issuerSessionId, identityGeneration: 0, authTime: 0, scope: "openid", expiresAt: f.now() + 200_000});
+    await store.saveHostedOidcGrant({issuer, clientId, subject: actor, sid, issuerSessionId: session.issuerSessionId!, identityGeneration: 0,
+      authTime: 0, scope: "openid", createdAt: f.now(), absoluteExpiresAt: f.now() + 300_000});
+    const registration = {registrationRef: "accounts-distinct-from-control", incarnation: "accounts-retry-incarnation",
+      genesisDigest: `sha256:${"b".repeat(64)}` as const, receivers: [{receiverRef: "synthetic-owner", targetRef: "synthetic-target"}]};
+    await store.registerFinancialSourceRegistration(registration);
+    const challenge = {v: 1 as const, challengeRef: "actual-core-retry-challenge", registrationRef: registration.registrationRef, clientId,
+      workspaceId: f.workspace.id, organizationId: f.binding.organizationRef, workspaceRef: f.binding.workspaceRef,
+      requestFingerprint: `sha256:${"c".repeat(64)}` as const, createdAt: f.now(), expiresAt: f.now() + 120_000};
+    const control = f.adapter(), accepted = new Map<string, FinancialSourceReceipt>();
+    const options = {store, issuer, registration, now: f.now,
+      clients: [{clientId, profile: "shared-account" as const, enabled: true, allowedScopes: ["openid"], redirectUris: ["https://client.fixture.invalid/callback"]}],
+      challenges: {read: async () => structuredClone(challenge)}, control,
+      receivers: registration.receivers.map(receiver => ({...receiver, read: async (m: FinancialSourceMaterialization) => accepted.get(m.event.eventRef),
+        async deliver(m: FinancialSourceMaterialization) {const receipt = await makeFinancialSourceReceipt({...receiver, registrationRef: registration.registrationRef, event: m.event, eventDigest: m.eventDigest}); accepted.set(m.event.eventRef, receipt); return receipt;}}))};
+    const input = {accessToken: token, challengeRef: challenge.challengeRef};
+    const producer = AccountsFinancialSource.createAccountsFinancialSource(options);
+    await expect(producer.prove(input)).rejects.toThrow("source_pending");
+    await producer.flush({limit: 100});
+    const issued = await producer.prove(input), original = (await store.findFinancialSourceProof(issued.proofRef))!;
+    f.setTime(f.now() + 1_000);
+    const fresh = await control.capture({workspaceId: f.workspace.id, accountId: actor});
+    expect(fresh!.evidence.evidenceRef).toBe(original.control.evidenceRef);
+    expect(fresh!.evidence.evidenceDigest).toBe(original.control.evidenceDigest);
+    expect(fresh!.evidence.source).toEqual(original.control.source);
+    expect(fresh!.evidence.expiresAt).toBeGreaterThan(original.control.expiresAt);
+    expect(await AccountsFinancialSource.createAccountsFinancialSource(options).prove(input)).toEqual(issued);
+    expect(await store.findFinancialSourceProof(issued.proofRef)).toEqual(original);
+    f.setTime(original.expiresAt);
+    await expect(producer.prove(input)).rejects.toThrow("source_conflict");
+    expect(await store.findFinancialSourceProof(issued.proofRef)).toEqual(original);
   } finally { await f.close(); }
 });

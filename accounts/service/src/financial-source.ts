@@ -203,7 +203,7 @@ export function createAccountsFinancialSource(options: AccountsFinancialSourceOp
   }
   function capabilities() {
     if (!challengeOwner || !readChallenge || !control || !capture || !assertCurrent ||
-      !store.enrollFinancialSourceParents || !store.issueFinancialSourceProof ||
+      !store.enrollFinancialSourceParents || !store.issueFinancialSourceProof || !store.findFinancialSourceProofsForOriginalRequest ||
       !store.findFinancialSourceParent || !store.findFinancialSourceRegistration ||
       !store.findFinancialSourceRaw || !store.findFinancialSourceMaterialization ||
       !store.commitFinancialSourceMaterialization || !store.findFinancialSourceReceipt ||
@@ -260,6 +260,61 @@ export function createAccountsFinancialSource(options: AccountsFinancialSourceOp
     }
     return {scope: structuredClone(head.scope), registrationRef: head.registrationRef, incarnation: head.incarnation,
       affectedRef: head.affectedRef, sequence: head.sequence, eventRef: head.lastEventRef, eventDigest: saved.materialization.eventDigest};
+  }
+  async function verifyCurrentProof(value: FinancialIdentityProofRequest, expectedOriginal?: FinancialSourceProofRecord): Promise<FinancialIdentityProofCurrentResult> {
+    const request = parseFinancialIdentityProofRequest(value);
+    // Detach the FULL private original before the first await. Public proof
+    // projections intentionally omit token hash and private expiry custody.
+    const expected = expectedOriginal === undefined ? undefined : canonicalFinancialSourceJson(structuredClone(expectedOriginal));
+    capabilities();
+    if (!store.findFinancialSourceProof || !store.findAccessTokenByHash) unavailable();
+    const proof = await store.findFinancialSourceProof(request.proofRef);
+    const notCurrent = {v: 1, status: "not-current"} as const;
+    if (expected !== undefined && (!proof || canonicalFinancialSourceJson(proof) !== expected)) return notCurrent;
+    if (!proof || proof.challenge.challengeRef !== request.challengeRef || proof.challenge.registrationRef !== registration.registrationRef ||
+      proof.issuedAt > now() || proof.expiresAt <= now() || proof.accessExpiresAt <= now() || proof.control.expiresAt <= now() ||
+      typeof proof.accessTokenHash !== "string") return notCurrent;
+    const registered = async () => {
+      const observed = await store.findFinancialSourceRegistration!(registration.registrationRef);
+      return observed !== undefined && canonicalFinancialSourceJson(observed) === canonicalFinancialSourceJson(registration);
+    };
+    if (!(await registered())) return notCurrent;
+    const record = await store.findAccessTokenByHash(proof.accessTokenHash);
+    const client = record && clients.get(record.clientId);
+    const active = async (current: TokenRecord | undefined): Promise<boolean> => !!current && !!client &&
+      current.expiresAt === proof.accessExpiresAt && current.expiresAt > now() && current.oidcProfile === "shared-account" &&
+      current.issuer === proof.issuer && proof.issuer === issuer && current.subject === proof.subject && current.takosumiSubject === proof.subject &&
+      current.clientId === proof.clientId && current.sid === proof.sid && current.issuerSessionId === proof.issuerSessionId &&
+      (current.identityGeneration ?? 0) === proof.identityGeneration && !current.interfaceId && !current.interfaceBindingId &&
+      current.interfaceResolvedRevision === undefined && await hostedGrantIsActive({store, record: current, client, issuer, now: now()});
+    if (!(await active(record))) return notCurrent;
+    const observedChallenge = await Reflect.apply(readChallenge!, challengeOwner, [request.challengeRef]);
+    if (observedChallenge === undefined || canonicalFinancialSourceJson(parseFinancialIdentityChallenge(observedChallenge)) !==
+      canonicalFinancialSourceJson(proof.challenge)) return notCurrent;
+    const snapshot = await Reflect.apply(capture!, control, [{workspaceId: proof.challenge.workspaceId, accountId: proof.subject}]);
+    if (!snapshot || snapshot.accountId !== proof.subject || snapshot.workspaceId !== proof.challenge.workspaceId ||
+      snapshot.organizationId !== proof.challenge.organizationId || snapshot.workspaceRef !== proof.challenge.workspaceRef ||
+      snapshot.evidence.evidenceRef !== proof.control.evidenceRef || snapshot.evidence.evidenceDigest !== proof.control.evidenceDigest ||
+      canonicalFinancialSourceJson(snapshot.evidence.source) !== canonicalFinancialSourceJson(proof.control.source)) return notCurrent;
+    const budget = {remaining: FINANCIAL_SOURCE_MAX_PAGE};
+    for (const slot of slots) {
+      const expected = proof.parents[slot];
+      const head = await store.findFinancialSourceParent!(expected.scope);
+      if (!head || head.state !== "open" || head.registrationRef !== expected.registrationRef || head.incarnation !== expected.incarnation ||
+        head.affectedRef !== expected.affectedRef || head.sequence !== expected.sequence || head.lastEventRef !== expected.eventRef) return notCurrent;
+      try {
+        if (canonicalFinancialSourceJson(await acknowledged(head, budget)) !== canonicalFinancialSourceJson(expected)) return notCurrent;
+      } catch (error) {
+        if (error instanceof FinancialSourceUnavailable && ["source_pending", "source_unavailable"].includes(error.code)) return notCurrent;
+        throw error;
+      }
+    }
+    const currentToken = await store.findAccessTokenByHash(proof.accessTokenHash);
+    if (!(await active(currentToken)) || !(await Reflect.apply(assertCurrent!, control, [snapshot])) || !(await registered())) return notCurrent;
+    const observedAt = now();
+    if (proof.expiresAt <= observedAt || proof.challenge.expiresAt <= observedAt || proof.accessExpiresAt <= observedAt ||
+      proof.control.expiresAt <= observedAt || snapshot.evidence.expiresAt <= observedAt) return notCurrent;
+    return {v: 1, status: "current", proof: projectFinancialIdentityProof(proof), observedAt};
   }
   return {
     /** Read-only ORIGINAL materialization custody. No enrollment, SHA-driven
@@ -319,68 +374,55 @@ export function createAccountsFinancialSource(options: AccountsFinancialSourceOp
      * Control vector and complete ACK set. The Financial owner still performs
      * its L1/L2 same-primary CAS; this remote result is not that atomic guard. */
     async verifyCurrentFinancialIdentityProof(value: FinancialIdentityProofRequest): Promise<FinancialIdentityProofCurrentResult> {
-      const request = parseFinancialIdentityProofRequest(value);
-      capabilities();
-      if (!store.findFinancialSourceProof || !store.findAccessTokenByHash) unavailable();
-      const proof = await store.findFinancialSourceProof(request.proofRef);
-      const notCurrent = {v: 1, status: "not-current"} as const;
-      if (!proof || proof.challenge.challengeRef !== request.challengeRef || proof.challenge.registrationRef !== registration.registrationRef ||
-        proof.issuedAt > now() || proof.expiresAt <= now() || proof.accessExpiresAt <= now() || proof.control.expiresAt <= now() ||
-        typeof proof.accessTokenHash !== "string") return notCurrent;
-      const registered = async () => {
-        const observed = await store.findFinancialSourceRegistration!(registration.registrationRef);
-        return observed !== undefined && canonicalFinancialSourceJson(observed) === canonicalFinancialSourceJson(registration);
-      };
-      if (!(await registered())) return notCurrent;
-      const record = await store.findAccessTokenByHash(proof.accessTokenHash);
-      const client = record && clients.get(record.clientId);
-      const active = async (current: TokenRecord | undefined): Promise<boolean> => !!current && !!client &&
-        current.expiresAt === proof.accessExpiresAt && current.expiresAt > now() && current.oidcProfile === "shared-account" &&
-        current.issuer === proof.issuer && proof.issuer === issuer && current.subject === proof.subject && current.takosumiSubject === proof.subject &&
-        current.clientId === proof.clientId && current.sid === proof.sid && current.issuerSessionId === proof.issuerSessionId &&
-        (current.identityGeneration ?? 0) === proof.identityGeneration && !current.interfaceId && !current.interfaceBindingId &&
-        current.interfaceResolvedRevision === undefined && await hostedGrantIsActive({store, record: current, client, issuer, now: now()});
-      if (!(await active(record))) return notCurrent;
-      const observedChallenge = await Reflect.apply(readChallenge!, challengeOwner, [request.challengeRef]);
-      if (observedChallenge === undefined || canonicalFinancialSourceJson(parseFinancialIdentityChallenge(observedChallenge)) !==
-        canonicalFinancialSourceJson(proof.challenge)) return notCurrent;
-      const snapshot = await Reflect.apply(capture!, control, [{workspaceId: proof.challenge.workspaceId, accountId: proof.subject}]);
-      if (!snapshot || snapshot.accountId !== proof.subject || snapshot.workspaceId !== proof.challenge.workspaceId ||
-        snapshot.organizationId !== proof.challenge.organizationId || snapshot.workspaceRef !== proof.challenge.workspaceRef ||
-        snapshot.evidence.evidenceRef !== proof.control.evidenceRef || snapshot.evidence.evidenceDigest !== proof.control.evidenceDigest ||
-        canonicalFinancialSourceJson(snapshot.evidence.source) !== canonicalFinancialSourceJson(proof.control.source)) return notCurrent;
-      const budget = {remaining: FINANCIAL_SOURCE_MAX_PAGE};
-      for (const slot of slots) {
-        const expected = proof.parents[slot];
-        const head = await store.findFinancialSourceParent!(expected.scope);
-        if (!head || head.state !== "open" || head.registrationRef !== expected.registrationRef || head.incarnation !== expected.incarnation ||
-          head.affectedRef !== expected.affectedRef || head.sequence !== expected.sequence || head.lastEventRef !== expected.eventRef) return notCurrent;
-        try {
-          if (canonicalFinancialSourceJson(await acknowledged(head, budget)) !== canonicalFinancialSourceJson(expected)) return notCurrent;
-        } catch (error) {
-          if (error instanceof FinancialSourceUnavailable && ["source_pending", "source_unavailable"].includes(error.code)) return notCurrent;
-          throw error;
-        }
-      }
-      const currentToken = await store.findAccessTokenByHash(proof.accessTokenHash);
-      if (!(await active(currentToken)) || !(await Reflect.apply(assertCurrent!, control, [snapshot])) || !(await registered())) return notCurrent;
-      const observedAt = now();
-      if (proof.expiresAt <= observedAt || proof.challenge.expiresAt <= observedAt || proof.accessExpiresAt <= observedAt ||
-        proof.control.expiresAt <= observedAt || snapshot.evidence.expiresAt <= observedAt) return notCurrent;
-      return {v: 1, status: "current", proof: projectFinancialIdentityProof(proof), observedAt};
+      return verifyCurrentProof(value);
     },
     /** Input conveys the actual grant and a Financial-owned challenge REF only.
      * The proof identifies current identity/context, never a Principal or payer. */
     async prove(input: {readonly accessToken: string; readonly challengeRef: string}): Promise<{readonly proofRef: string}> {
+      // Capture mutable local input BEFORE the first await. A later mutation
+      // must not select a different token, challenge or recovery key.
+      const {accessToken, challengeRef} = input;
       capabilities();
-      if (!financialSourceRef(input.challengeRef)) throw new FinancialSourceUnavailable("invalid_challenge");
-      const challenge = parseFinancialIdentityChallenge(await Reflect.apply(readChallenge!, challengeOwner, [input.challengeRef]));
-      if (challenge.challengeRef !== input.challengeRef || challenge.registrationRef !== registration.registrationRef || challenge.createdAt > now() || challenge.expiresAt <= now()) throw new FinancialSourceUnavailable("invalid_challenge");
+      if (!financialSourceRef(challengeRef)) throw new FinancialSourceUnavailable("invalid_challenge");
+      const challenge = parseFinancialIdentityChallenge(await Reflect.apply(readChallenge!, challengeOwner, [challengeRef]));
+      if (challenge.challengeRef !== challengeRef || challenge.registrationRef !== registration.registrationRef || challenge.createdAt > now() || challenge.expiresAt <= now()) throw new FinancialSourceUnavailable("invalid_challenge");
       const registered = await store.findFinancialSourceRegistration!(registration.registrationRef);
       if (!registered || canonicalFinancialSourceJson(registered) !== canonicalFinancialSourceJson(registration)) unavailable();
-      const original = await current(input.accessToken);
+      const original = await current(accessToken);
       if (original.client.clientId !== challenge.clientId) invalidGrant();
       const subject = original.record.takosumiSubject!;
+      const accessTokenHash = await sha256Text(accessToken);
+      const lookup = {registrationRef: registration.registrationRef, challengeRef, accessTokenHash};
+      const census = () => store.findFinancialSourceProofsForOriginalRequest!(lookup);
+      const originalCaller = {issuer, subject, clientId: original.record.clientId, sid: original.record.sid!,
+        issuerSessionId: original.record.issuerSessionId!, identityGeneration: original.record.identityGeneration ?? 0};
+      // These are the immutable original request inputs, not newly sampled
+      // Control wrappers, proof timestamps or fresh authorization authority.
+      const requestDigest = await sha256Text(canonicalFinancialSourceJson({
+        domain: "takosumi.accounts.financial-proof-original-request@v1",
+        value: {registration, challenge, ...originalCaller, accessTokenHash},
+      }));
+      const proofRef = "afp_" + requestDigest.slice("sha256:".length);
+      const recover = async (): Promise<{readonly proofRef: string}> => {
+        const matches = await census();
+        if (matches.length !== 1) throw new FinancialSourceUnavailable("source_conflict");
+        const proof = structuredClone(matches[0]!);
+        if (proof.accessTokenHash !== accessTokenHash || proof.accessExpiresAt !== original.record.expiresAt ||
+          canonicalFinancialSourceJson(proof.challenge) !== canonicalFinancialSourceJson(challenge) ||
+          Object.entries(originalCaller).some(([key, value]) => proof[key as keyof typeof proof] !== value) ||
+          slots.some(slot => proof.parents[slot].registrationRef !== registration.registrationRef || proof.parents[slot].incarnation !== registration.incarnation))
+          throw new FinancialSourceUnavailable("source_conflict");
+        const checked = await verifyCurrentProof({v: 1, proofRef: proof.proofRef, challengeRef}, proof);
+        // Preserve the genuine invalid-grant result if revocation won during
+        // a currentness await; a retained original never bypasses live auth.
+        await current(accessToken);
+        if (checked.status !== "current") throw new FinancialSourceUnavailable("source_conflict");
+        const final = await census();
+        if (final.length !== 1 || canonicalFinancialSourceJson(final[0]) !== canonicalFinancialSourceJson(proof) ||
+          proof.expiresAt <= now() || proof.control.expiresAt <= now()) throw new FinancialSourceUnavailable("source_conflict");
+        return {proofRef: proof.proofRef};
+      };
+      if ((await census()).length !== 0) return recover();
       const snapshot = await Reflect.apply(capture!, control, [{workspaceId: challenge.workspaceId, accountId: subject}]);
       if (!snapshot || snapshot.accountId !== subject || snapshot.workspaceId !== challenge.workspaceId ||
         snapshot.organizationId !== challenge.organizationId || snapshot.workspaceRef !== challenge.workspaceRef ||
@@ -394,12 +436,11 @@ export function createAccountsFinancialSource(options: AccountsFinancialSourceOp
         const expected = await store.findFinancialSourceParent!(scope[slot]);
         parents[slot] = {scope: scope[slot], expected, affectedRef: expected?.affectedRef ?? hostedOpaqueId("afs_"), eventRef: hostedOpaqueId("afe_")};
       }
-      const accessTokenHash = await sha256Text(input.accessToken);
       const verify = async (): Promise<Omit<FinancialSourceAuthoritySnapshot, "precommitCheckpoint">> => {
-        const challengeNow = parseFinancialIdentityChallenge(await Reflect.apply(readChallenge!, challengeOwner, [input.challengeRef]));
+        const challengeNow = parseFinancialIdentityChallenge(await Reflect.apply(readChallenge!, challengeOwner, [challengeRef]));
         if (canonicalFinancialSourceJson(challengeNow) !== canonicalFinancialSourceJson(challenge) || challengeNow.expiresAt <= now())
           throw new FinancialSourceUnavailable("invalid_challenge");
-        const record = (await current(input.accessToken)).record;
+        const record = (await current(accessToken)).record;
         // Storage readers legitimately project absent optional columns as own
         // undefined properties. This comparison is not a closed wire record;
         // normalize that storage representation without relaxing the codec.
@@ -409,7 +450,7 @@ export function createAccountsFinancialSource(options: AccountsFinancialSourceOp
         const generation = await store.getAccountAuthenticationGeneration!(subject);
         if (!grant || generation !== (record.identityGeneration ?? 0)) invalidGrant();
         if (!(await Reflect.apply(assertCurrent!, control, [snapshot]))) unavailable();
-        return {registration, challenge, accessToken: input.accessToken, accessTokenHash, expectedAccess: record,
+        return {registration, challenge, accessToken: accessToken, accessTokenHash, expectedAccess: record,
           expectedGrant: structuredClone(grant), expectedIdentityGeneration: generation, control: structuredClone(snapshot.evidence), now: now()};
       };
       const enrollment = await checkpoint<import("./identity-state.ts").FinancialSourceEnrollmentMutation>({...await verify(), evidenceRef: challenge.challengeRef, parents});
@@ -420,13 +461,20 @@ export function createAccountsFinancialSource(options: AccountsFinancialSourceOp
       for (const slot of slots) refs[slot] = await acknowledged(heads[slot], budget);
       const authority = await verify();
       const issuedAt = now();
-      const proof: FinancialSourceProofRecord = {v: 1, proofRef: hostedOpaqueId("afp_"), challenge, issuer, subject,
+      const proof: FinancialSourceProofRecord = {v: 1, proofRef, challenge, issuer, subject,
         accessTokenHash, accessExpiresAt: authority.expectedAccess.expiresAt,
         clientId: challenge.clientId, sid: original.record.sid!, issuerSessionId: original.record.issuerSessionId!, identityGeneration: authority.expectedIdentityGeneration,
         control: authority.control, parents: refs, issuedAt, expiresAt: Math.min(issuedAt + proofLifetime, challenge.expiresAt,
           authority.expectedAccess.expiresAt, authority.expectedGrant.absoluteExpiresAt, authority.control.expiresAt)};
-      const result = await store.issueFinancialSourceProof!(await checkpoint<import("./identity-state.ts").FinancialSourceProofMutation>({...authority, expectedParents: heads, proof}));
-      if (!result || result.proofRef !== proof.proofRef) throw new FinancialSourceUnavailable("source_conflict");
+      let result: FinancialSourceProofRecord | undefined;
+      try {
+        result = await store.issueFinancialSourceProof!(await checkpoint<import("./identity-state.ts").FinancialSourceProofMutation>({...authority, expectedParents: heads, proof}));
+      } catch {
+        // Commit may have succeeded while its reply was lost. Read the original
+        // input once; never retry a write, replace its vector or rotate its key.
+        return recover();
+      }
+      if (!result || result.proofRef !== proof.proofRef) return recover();
       return {proofRef: result.proofRef};
     },
     /** One bounded page; nextCursor is explicit and never means a complete

@@ -642,6 +642,7 @@ export class InMemoryAccountsStore implements AccountsStore {
   enrollFinancialSourceParents(input: FinancialSourceEnrollmentMutation): Promise<FinancialSourceParentVector<FinancialSourceParentHead> | undefined> { return this.#hosted.enrollFinancialSourceParents(input); }
   issueFinancialSourceProof(input: FinancialSourceProofMutation): Promise<FinancialSourceProofRecord | undefined> { return this.#hosted.issueFinancialSourceProof(input); }
   findFinancialSourceProof(proofRef: string): Promise<FinancialSourceProofRecord | undefined> { return this.#hosted.findFinancialSourceProof(proofRef); }
+  findFinancialSourceProofsForOriginalRequest(input: Parameters<HostedIdentityRecords["findFinancialSourceProofsForOriginalRequest"]>[0]): ReturnType<HostedIdentityRecords["findFinancialSourceProofsForOriginalRequest"]> { return this.#hosted.findFinancialSourceProofsForOriginalRequest(input); }
   revokeHostedOidcScope(input: FinancialSourceRevocationMutation): Promise<boolean> { return this.#hosted.revokeHostedOidcScope(input); }
   findFinancialSourceRaw(eventRef: string): Promise<FinancialSourceRawRecord | undefined> { return this.#hosted.findFinancialSourceRaw(eventRef); }
   listFinancialSourcePending(input: { readonly registrationRef: string; readonly after?: string; readonly limit: number }): Promise<FinancialSourcePendingPage> { return this.#hosted.listFinancialSourcePending(input); }
