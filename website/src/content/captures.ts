@@ -25,9 +25,9 @@ export const CAPTURES = {
 /** Actual Takosumi dashboard views with browser-served public examples. */
 export const DASHBOARD_CAPTURES = {
   home: {
-    desktop: { src: "/screens/dashboard-home-desktop.png", width: 2400, height: 880 },
+    desktop: { src: "/screens/dashboard-home-desktop.png", width: 2400, height: 1500 },
     mobile: { src: "/screens/dashboard-home-mobile.png", width: 780, height: 1400 },
-    desktopLight: { src: "/screens/dashboard-home-desktop-light.png", width: 2400, height: 880 },
+    desktopLight: { src: "/screens/dashboard-home-desktop-light.png", width: 2400, height: 1500 },
     mobileLight: { src: "/screens/dashboard-home-mobile-light.png", width: 780, height: 1400 },
   },
   install: {

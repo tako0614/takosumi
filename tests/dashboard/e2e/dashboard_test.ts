@@ -820,6 +820,66 @@ test.describe("Takosumi dashboard browser surface", () => {
     await assertNoPageErrors(errors);
   });
 
+  test("a signed-out install link keeps the chosen app through sign-in", async ({ browser, baseURL }) => {
+    test.skip(mode !== "portable", "signed-out install return is portable-only");
+    const context = await browser.newContext({
+      baseURL,
+      storageState: { cookies: [], origins: [] },
+    });
+    try {
+      const page = await context.newPage();
+      const errors = pageErrors(page);
+      const writes: string[] = [];
+      page.on("request", (request) => {
+        if (request.method() !== "GET" && request.method() !== "HEAD") {
+          writes.push(`${request.method()} ${new URL(request.url()).pathname}`);
+        }
+      });
+      const git = "https://github.com/example/cloudflare-service.git";
+      await page.goto(
+        `/install?git=${encodeURIComponent(git)}&ref=${PORTABLE_SOURCE_COMMIT}` +
+          "&path=.&name=cloudflare-service",
+        { waitUntil: "domcontentloaded" },
+      );
+
+      // The public alias normalizes onto /new before authentication, so the
+      // sign-in screen can show what the visitor is about to add.
+      await expect(page).toHaveURL(/\/sign-in\?return=/u);
+      const returnTo = new URL(page.url()).searchParams.get("return") ?? "";
+      expect(returnTo.startsWith("/new?")).toBe(true);
+      await expect(
+        page.getByRole("heading", { name: "Sign in to continue adding" }),
+      ).toBeVisible();
+      await expect(page.locator(".sign-in-return-context")).toContainText(
+        "cloudflare-service",
+      );
+
+      await context.addCookies([
+        {
+          name: "takosumi_session",
+          value: "portable-e2e",
+          domain: new URL(baseURL!).hostname,
+          path: "/",
+          httpOnly: true,
+          sameSite: "Lax",
+        },
+      ]);
+      await page.goto(returnTo, { waitUntil: "domcontentloaded" });
+      await expect(page).toHaveURL(/\/new\?/u);
+      await expect(
+        page.getByRole("heading", { level: 1, name: "cloudflare-service" }),
+      ).toBeVisible();
+      await expect(page.locator(".iv-intro")).toContainText(
+        "github.com/example/cloudflare-service",
+      );
+      // Showing the context is read-only: nothing is registered or planned yet.
+      expect(writes).toEqual([]);
+      await assertNoPageErrors(errors);
+    } finally {
+      await context.close();
+    }
+  });
+
   test("unexpected readiness errors fail closed without showing Open", async ({ page }) => {
     test.skip(mode !== "portable", "synthetic readiness errors are portable-only");
     const errors = pageErrors(page);

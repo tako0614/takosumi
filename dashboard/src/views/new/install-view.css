@@ -21,6 +21,22 @@
 .iv-manual-row { display: grid; gap: var(--tg-s-3); }
 .iv-app-summary { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--tg-s-4); margin: var(--tg-s-4) 0 var(--tg-s-6); }
 .iv-app-summary > :first-child { width: 4rem; height: 4rem; }
+/* Prefill intro: where the service comes from and the steps before anything is deployed. */
+.iv-intro { margin: var(--tg-s-4) 0 var(--tg-s-5); padding: var(--tg-s-4); border: 1px solid var(--tg-line); border-radius: var(--tg-r-lg); background: var(--tg-bg-subtle); }
+.iv-intro-source { display: flex; flex-wrap: wrap; gap: var(--tg-s-1) var(--tg-s-2); margin: 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); overflow-wrap: anywhere; }
+.iv-intro-source > span { color: var(--tg-fg); font-weight: 600; }
+.iv-intro-steps { display: grid; gap: var(--tg-s-2); margin: var(--tg-s-3) 0 0; padding-left: 1.25rem; }
+.iv-intro-steps strong, .iv-intro-steps span { display: block; }
+.iv-intro-steps span { margin-top: 2px; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); }
+/* With the phone layout (bottom tab bar, see shell.css) the steps become
+   short numbered rows, so Add stays within reach. */
+@media (max-width: 880px) {
+  .iv-intro-steps { display: flex; flex-wrap: wrap; gap: var(--tg-s-1) var(--tg-s-3); padding-left: 0; list-style: none; counter-reset: iv-intro-step; }
+  .iv-intro-steps li { counter-increment: iv-intro-step; font-size: var(--tg-fs-sm); }
+  .iv-intro-steps li::before { content: counter(iv-intro-step) ". "; color: var(--tg-fg-muted); }
+  .iv-intro-steps strong { display: inline; }
+  .iv-intro-steps span { display: none; }
+}
 .iv-source-summary { margin-bottom: var(--tg-s-5); padding-bottom: var(--tg-s-4); border-bottom: 1px solid var(--tg-line); min-width: 0; }
 .iv-source-coordinates { display: grid; gap: var(--tg-s-3); margin: 0; }
 .iv-source-coordinates dt, .iv-provider-summary h2 { margin: 0; font-size: var(--tg-fs-sm); font-weight: 650; }
