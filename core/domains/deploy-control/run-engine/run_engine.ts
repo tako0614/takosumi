@@ -9868,6 +9868,7 @@ export class RunEngine {
           this.#activateReleaseAfterApply({
             planRun,
             applyRun: providerApplied,
+            runLease: Object.freeze({ runId: runningWithEnv.id, leaseToken }),
             capsule: projected.capsule,
             stateVersion,
             output: projected.output,
@@ -10859,6 +10860,7 @@ export class RunEngine {
   async #activateReleaseAfterApply(input: {
     readonly planRun: PlanRun;
     readonly applyRun: ApplyRun;
+    readonly runLease: NonNullable<RunExecutionControl["runLease"]>;
     readonly capsule: Capsule;
     readonly stateVersion: StateVersion;
     readonly output: Output;
@@ -10934,7 +10936,7 @@ export class RunEngine {
           ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
           ...(sourceSnapshot ? { sourceSnapshot } : {}),
         },
-        runnerExecutionControl(input.signal, input.deadlineAt),
+        runnerExecutionControl(input.signal, input.deadlineAt, input.runLease),
       );
       if (result.status === "skipped" && commands.length > 0) {
         return {
@@ -11244,6 +11246,7 @@ export class RunEngine {
   async #activateReleaseBeforeDestroy(input: {
     readonly planRun: PlanRun;
     readonly applyRun: ApplyRun;
+    readonly runLease: NonNullable<RunExecutionControl["runLease"]>;
     readonly capsule: Capsule;
     readonly lifecycleActions: InstallConfig["lifecycleActions"];
     readonly sourceBuild: InstallConfig["sourceBuild"];
@@ -11408,7 +11411,7 @@ export class RunEngine {
           ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
           ...(sourceSnapshot ? { sourceSnapshot } : {}),
         },
-        runnerExecutionControl(input.signal, input.deadlineAt),
+        runnerExecutionControl(input.signal, input.deadlineAt, input.runLease),
       );
     } catch (error) {
       // Refused before anything ran: no lifecycle action happened, so the
@@ -11941,6 +11944,7 @@ export class RunEngine {
           return await this.#activateReleaseBeforeDestroy({
             planRun,
             applyRun: running,
+            runLease: Object.freeze({ runId: running.id, leaseToken }),
             capsule: capsule,
             lifecycleActions: dispatch.lifecycleActions,
             sourceBuild: dispatch.sourceBuild,

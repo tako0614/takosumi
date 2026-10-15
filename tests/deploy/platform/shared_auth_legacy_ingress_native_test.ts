@@ -30,13 +30,27 @@ const descriptor = { basePath: "/extensions/legacy-test", handlerKey: "LEGACY_TE
   authDelivery: "context", runCredential: { audience: issuance.audience, requiredScopes: issuance.scopes } };
 
 test("native platform HTTP closes primary and alias legacy ingress while preserving actual operator and current Run credentials", async () => {
-  const build = await Bun.build({
-    entrypoints: [resolve(import.meta.dir, "fixtures/shared_auth_legacy_ingress_runtime.ts")],
-    target: "browser", format: "esm", external: ["cloudflare:workers"],
-  });
-  expect(build.success, build.logs.map(String).join("\n")).toBe(true);
-  const artifact = build.outputs[0];
-  if (!artifact) throw new Error("native platform ingress bundle missing");
+  // Keep bundling outside bun:test's process-local module resolver.
+  const bundle = async () => {
+    const child = Bun.spawn([process.execPath, "build", "--target", "browser", "--format", "esm",
+      "--external", "cloudflare:workers", resolve(import.meta.dir, "fixtures/shared_auth_legacy_ingress_runtime.ts")], {
+      cwd: resolve(import.meta.dir, "../../.."), stdout: "pipe", stderr: "pipe",
+    });
+    const timer = setTimeout(() => child.kill(), 15_000);
+    try {
+      const [exit, source, errors] = await Promise.all([
+        child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+      ]);
+      expect(exit, errors).toBe(0);
+      expect(source.length).toBeGreaterThan(0);
+      return source;
+    } finally {
+      clearTimeout(timer);
+      if (child.exitCode === null) child.kill();
+      await child.exited;
+    }
+  };
+  const bundleSource = await bundle();
   const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
   const signingJwk = await crypto.subtle.exportKey("jwk", keys.privateKey);
   const bindings = {
@@ -57,7 +71,11 @@ test("native platform HTTP closes primary and alias legacy ingress while preserv
       basePath: "/extensions/protocol-test", handlerKey: "PROTOCOL_TEST_EXTENSION", authMode: "handler",
     }]),
   };
-  const modules = [{ type: "ESModule" as const, path: "legacy-ingress.mjs", contents: await artifact.text() }];
+  const modules = [{ type: "ESModule" as const, path: "legacy-ingress.mjs", contents: bundleSource }];
+  const bundleBytes = new TextEncoder().encode(bundleSource);
+  const bundleSha256 = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bundleBytes)),
+    (byte) => byte.toString(16).padStart(2, "0")).join("");
+  console.info(`[legacy-ingress-native:bundle] sha256=${bundleSha256} utf8Bytes=${bundleBytes.byteLength}`);
   const runtime = new Miniflare({ workers: [
     { name: "gateway", compatibilityDate: "2026-07-17", compatibilityFlags: ["nodejs_compat"],
       modules, bindings, serviceBindings: { HOSTED: { name: "rp", entrypoint: "Authentication" } },
@@ -130,7 +148,9 @@ test("native platform HTTP closes primary and alias legacy ingress while preserv
           headers.set(`x-fixture-original-${name}`, value);
         }
       }
-      return gateway.fetch(alias + path, { ...init, headers, redirect: "manual" });
+      return gateway.fetch(alias + path, { ...init, headers, redirect: "manual" }).catch((cause) => {
+        throw new Error(`legacy native gateway.fetch ${init.method ?? "GET"} ${alias}${path}`, { cause });
+      });
     };
     for (const alias of aliases) {
       const forgedHeaders = { cookie: legacyCookie, host: new URL(origin).host,
