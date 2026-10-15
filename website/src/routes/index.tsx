@@ -97,9 +97,9 @@ export default function Home() {
           <div class="hero-copy">
             <div class="hero-identity"><img class="hero-mark" src="/tako.png" alt="" width="64" height="64" /><h1 id="site-title">Takosumi</h1></div>
             <p class="hero-lead">公開されたオープンソースを、アプリのように入れて使う。</p>
-            <p class="hero-description">アプリを選んで接続と設定を入れ、作られるものを確かめてから追加します。<br class="desktop-break" />入れたアプリは、ワークスペースのホームから開けます。</p>
+            <p class="hero-description">アプリを選んで接続と設定を入れ、作られるものを確かめてから追加します。<br class="desktop-break" />画面のあるアプリは、ワークスペースのホームから開けます。</p>
             <div class="hero-actions">
-              <a class="button button-primary" href="#apps">アプリを探す <Arrow /></a>
+              <a class="button button-primary" href="#apps">アプリを探す <span aria-hidden="true">↓</span></a>
               <a class="button button-secondary" href="https://app.takosumi.com/new">Git URL から追加 <Arrow /></a>
             </div>
           </div>
@@ -128,13 +128,12 @@ export default function Home() {
             <div class="install-copy">
               <div class="install-intro">
                 <h2 id="install-title">追加する前に、<br />作られるものを確かめる。</h2>
-                <p>アプリを選ぶと、Takosumi は Git の版を commit に固定してから、次の順に進みます。</p>
-                <a class="text-link" href="/docs/getting-started/quickstart.html">画面ごとの流れ（クイックスタート） <Arrow /></a>
+                <p>アプリを選ぶと、Takosumi は使う commit を固定してから、次の順に進みます。</p>
               </div>
               <ol class="add-steps">
                 <li><h3>接続と設定</h3><p>必要な接続を選び、アプリが求める項目を入れます。</p></li>
-                <li><h3>追加前の確認</h3><p>作成・変更・削除されるリソースの数を見ます。削除を含む変更は、承認するまで進みません。</p></li>
-                <li><h3>追加する</h3><p>押したときに初めて反映され、ホームから開けるようになります。</p></li>
+                <li><h3>追加前の確認</h3><p>作成・変更・削除されるリソースの数を見ます。削除や作り直しを含む変更は、承認するまで進みません。</p></li>
+                <li><h3>追加する</h3><p>押したときに初めて反映されます。画面のあるアプリは、ホームから開けるようになります。</p></li>
               </ol>
             </div>
             <figure class="install-product">
@@ -150,9 +149,9 @@ export default function Home() {
             <p>ホームからアプリを開き、設定や更新が必要になったら同じワークスペースへ戻ります。</p>
           </div>
           <div class="after-steps">
-            <div><h3>更新も確かめてから</h3><p>新しい版を入れるときも、変わるものの数を見てから反映します。自動更新をオンにしても、作り直しや削除を含む変更は確認を待ちます。</p></div>
-            <div><h3>何が起きたかを残す</h3><p>どの commit を誰が反映し、何が変わったかを Run として記録します。</p></div>
-            <div><h3>鍵は読み出せない形で</h3><p>接続の API token は書き込み専用で保存され、実行中の runner にだけ渡されます。</p></div>
+            <div><h3>危ない更新は止まる</h3><p>新しい版への更新でも自動更新でも、作り直しや削除を含む変更は、確認するまで反映されません。</p></div>
+            <div><h3>何が起きたかを残す</h3><p>どの commit を誰が反映し、何が変わったかを履歴に残します。</p></div>
+            <div><h3>鍵は読み出せない形で</h3><p>接続の API token は書き込み専用で保存され、反映を実行している間の処理にだけ渡されます。</p></div>
           </div>
         </section>
 
@@ -160,7 +159,7 @@ export default function Home() {
           <div class="site-width closing-content">
             <div>
               <h2 id="closing-title">まず、一つ追加してみる。</h2>
-              <p>公式ホスティングは Pre-GA です。Linux と Docker があれば、クラウドの認証情報なしで手元でも試せます。</p>
+              <p>公式ホスティングは Pre-GA です。Linux マシンと Docker などを用意すれば、クラウドの認証情報なしで手元でも試せます。</p>
             </div>
             <div class="closing-actions">
               <a class="button button-primary" href="https://app.takosumi.com/">公式ホスティングで使う <Arrow /></a>
