@@ -109,7 +109,9 @@ main { display: block; }
   .brand { font-size: 1rem; }
   .brand img { width: 28px; height: 28px; }
   .site-header nav { gap: 8px; font-size: .76rem; }
-  .site-header nav a[href="/docs/"] { display: none; }
+  /* The hero button right below already leads to the apps; give the header's
+     second slot to the docs, which otherwise sit only in the footer. */
+  .site-header nav .nav-apps { display: none; }
   .site-header nav .nav-login { padding: 8px 8px; gap: 5px; }
   .hero { padding-block: 52px 70px; }
   .hero h1 { font-size: clamp(3.8rem, 17vw, 6rem); }
