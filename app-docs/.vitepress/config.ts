@@ -183,6 +183,11 @@ const config: UserConfig = {
       ],
     ];
   },
+  markdown: {
+    // The default github-light tokens and github-dark comments fall below 4.5:1
+    // on the code block background; these keep every token above it.
+    theme: { light: "github-light-high-contrast", dark: "github-dark-default" },
+  },
   cleanUrls: true,
   // Published hosted docs depend on pinned source bytes, not available Git history.
   lastUpdated: false,
