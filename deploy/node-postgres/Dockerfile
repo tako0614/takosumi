@@ -50,6 +50,7 @@ FROM node:26.1.0-bookworm-slim AS app-docs
 WORKDIR /work
 COPY docs/package.json docs/package-lock.json /work/docs/
 RUN cd docs && npm ci --no-fund --no-audit
+COPY docs/.vitepress/wrapped-lines.ts docs/.vitepress/scrollable-tables.ts /work/docs/.vitepress/
 COPY app-docs /work/app-docs
 COPY scripts/build-app-docs.sh /work/scripts/build-app-docs.sh
 RUN bash scripts/build-app-docs.sh

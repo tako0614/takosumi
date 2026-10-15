@@ -82,17 +82,34 @@ While signed in, open:
 https://app.takosumi.test/install?git=https://github.com/tako0614/takosumi.git&ref=main&path=examples/opentofu-basic
 ```
 
-The page opens with the Git URL, ref, and module path filled in. Opening the
-link does not create anything. After you check the values and add it, Takosumi
-pins the ref to a commit, checks module compatibility, and creates a plan.
+Adding takes three screens: the prefilled page, **Set up the service**, and
+**Review before adding**.
 
-The example has no provider and creates no external resource. It lets you test
-the runner, plan, apply, and state storage without cloud credentials.
+The first page opens with the service name, and with the Git URL, ref, and
+module path filled in under the collapsed **Source details**. Opening the link does not
+create anything. Check the service name and press **Add**: Takosumi pins the ref
+to a commit and checks the module.
 
-The install action explicitly asks Takosumi to continue a clean plan to apply
-when no approval is required. A deletion, approval policy, billing check, or
-other gate stops on the Run page. Normal updates, detected drift, and new Git
-commits are not applied on their own.
+The example declares two inputs, **Name** and **Example public URL**, so
+**Set up the service** comes next. Both are optional. Leave them blank and press
+**Continue**: the module's defaults apply, and Takosumi prepares the changes
+(a plan) before anything is deployed.
+
+When it is ready, **Review before adding** shows how many resources will be
+created, changed, and deleted. The example has no provider and creates no
+external resource, so you can test the runner, plan, apply, and state storage
+without cloud credentials. After checking the changes, press **Add** again to
+start the apply.
+
+A change that deletes, replaces, or imports a resource first needs
+**Approve this change**, then the **I reviewed these changes** checkbox, before
+**Add**; the example's first install shows neither. A change that a policy or
+billing check stops shows **These changes can't be deployed**, and
+**Technical details** opens its Run.
+
+When it finishes, **Service added** appears and **Open service** opens the new
+workload (Capsule). Normal updates, detected drift, and new Git commits are not
+applied on their own.
 
 ## 7. Inspect the result
 
