@@ -39,7 +39,12 @@ export function joinWrappedLines(lines: readonly string[]): string {
 const DESCRIPTION_LIMIT = 200;
 const QUOTE = /^>\s?/u;
 const LIST_ITEM = /^(?:[-*+]|\d+[.)])\s+/u;
-const FENCE = /^(```|~~~)/u;
+// Only bullets and "1." can interrupt a paragraph; "2. " is wrapped prose.
+const LIST_INTERRUPT = /^(?:[-*+]|1[.)])\s+/u;
+const FENCE = /^(`{3,}|~{3,})/u;
+const ALERT = /^\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*/u;
+// Prefer a complete short sentence to a long one cut mid-way.
+const SHORTEST_SENTENCE = 40;
 // A full stop ends a sentence before a capitalised word, so "e.g. the" and
 // "?git=..." stay inside theirs.
 const SENTENCE_END = /[。！？]|(?<!\.)[.!?](?=\s+[A-Z]|$)/gu;
@@ -61,8 +66,8 @@ function firstProseLines(lines: readonly string[]): string[] {
   let start = 0;
   for (; start < lines.length; start += 1) {
     const text = lines[start];
-    if (FENCE.test(text)) {
-      const fence = text.slice(0, 3);
+    const fence = FENCE.exec(text)?.[1];
+    if (fence) {
       start += 1;
       while (start < lines.length && !lines[start].startsWith(fence)) start += 1;
     } else if (text !== "" && !isOtherBlock(text)) {
@@ -72,11 +77,11 @@ function firstProseLines(lines: readonly string[]): string[] {
   if (start >= lines.length) return [];
 
   const quoted = QUOTE.test(lines[start]);
-  const prose = [lines[start].replace(quoted ? QUOTE : LIST_ITEM, "")];
+  const prose = [lines[start].replace(quoted ? QUOTE : LIST_ITEM, "").replace(ALERT, "")];
   for (let index = start + 1; index < lines.length; index += 1) {
     if (quoted && !QUOTE.test(lines[index])) break;
     const text = quoted ? lines[index].replace(QUOTE, "") : lines[index];
-    if (text === "" || isOtherBlock(text) || LIST_ITEM.test(text)) break;
+    if (text === "" || isOtherBlock(text) || LIST_INTERRUPT.test(text)) break;
     if (!quoted && QUOTE.test(text)) break;
     prose.push(text);
   }
@@ -110,7 +115,7 @@ export function firstParagraphText(markdown: string): string | undefined {
     if (end > DESCRIPTION_LIMIT) break;
     cut = end;
   }
-  if (cut >= DESCRIPTION_LIMIT / 3) return plain.slice(0, cut);
+  if (cut >= SHORTEST_SENTENCE) return plain.slice(0, cut);
   // No usable sentence end: cut English at a word boundary, Japanese anywhere.
   const head = plain.slice(0, DESCRIPTION_LIMIT - 1);
   const space = head.lastIndexOf(" ");

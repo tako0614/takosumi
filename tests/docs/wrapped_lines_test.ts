@@ -87,6 +87,13 @@ test("drops block markers and stops at the next block", () => {
   expect(firstParagraphText("```bash\nnpm i\n```\n\nlocal_compose を使います。")).toBe(
     "local_compose を使います。",
   );
+  expect(firstParagraphText("````md\n```\ncode\n```\n````\n\n本文です。")).toBe(
+    "本文です。",
+  );
+  expect(firstParagraphText("> [!NOTE]\n> Pre-GA です。")).toBe("Pre-GA です。");
+  expect(firstParagraphText("手順は\n2. 番目の版で変わりました。")).toBe(
+    "手順は 2. 番目の版で変わりました。",
+  );
 });
 
 test("ends a long description at the last full sentence that fits", () => {
@@ -96,6 +103,8 @@ test("ends a long description at the last full sentence that fits", () => {
   expect(firstParagraphText(`短い。${"う".repeat(250)}`)).toBe(
     `短い。${"う".repeat(196)}…`,
   );
+  const complete = `${"え".repeat(60)}。`;
+  expect(firstParagraphText(complete + "お".repeat(200))).toBe(complete);
 
   const english = `${"word ".repeat(39)}ends. Next ${"word ".repeat(20)}`;
   expect(firstParagraphText(english)).toBe(`${"word ".repeat(39)}ends.`);
