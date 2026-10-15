@@ -360,6 +360,14 @@ export interface FinancialSourceProofRecord {
   readonly expiresAt: number;
 }
 
+/** Private original-record census, not a new wire/index or authority claim.
+ * Full challenge/caller/vector consistency is validated after this broad match. */
+export interface FinancialSourceProofLookup {
+  readonly registrationRef: string;
+  readonly challengeRef: string;
+  readonly accessTokenHash: string;
+}
+
 export interface FinancialSourceProofMutation extends FinancialSourceAuthoritySnapshot {
   readonly expectedParents: FinancialSourceParentVector<FinancialSourceParentHead>;
   readonly proof: FinancialSourceProofRecord;
@@ -428,6 +436,7 @@ export interface HostedIdentityStore {
   enrollFinancialSourceParents?(input: FinancialSourceEnrollmentMutation): Promise<FinancialSourceParentVector<FinancialSourceParentHead> | undefined>;
   issueFinancialSourceProof?(input: FinancialSourceProofMutation): Promise<FinancialSourceProofRecord | undefined>;
   findFinancialSourceProof?(proofRef: string): Promise<FinancialSourceProofRecord | undefined>;
+  findFinancialSourceProofsForOriginalRequest?(input: FinancialSourceProofLookup): Promise<readonly FinancialSourceProofRecord[]>;
   revokeHostedOidcScope?(input: FinancialSourceRevocationMutation): Promise<boolean>;
   findFinancialSourceRaw?(eventRef: string): Promise<FinancialSourceRawRecord | undefined>;
   listFinancialSourcePending?(input: { readonly registrationRef: string; readonly after?: string; readonly limit: number }): Promise<FinancialSourcePendingPage>;

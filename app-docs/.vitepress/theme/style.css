@@ -1,6 +1,10 @@
-/* Takosumi brand — the landing's ink/red tokens (website/src/styles/tokens.css).
- * Dark mode adopts the product surface verbatim (#0a0a0a ink + 朱 red accent);
- * light mode keeps white paper with a darker red for AA link contrast.
+/* Takosumi brand — red on ink, after the landing (website/src/styles/tokens.css),
+ * with the same colours as the software docs (docs/.vitepress/theme/style.css).
+ * Dark mode uses the product's near-black surface with a light red accent.
+ * Light mode keeps white paper and a darker red than the landing's accent-ink
+ * (#c42f24): brand-1 also colours inline code and the active sidebar item, so
+ * it has to stay above 4.5:1 on the grey code chip and striped table rows.
+ * Hover goes darker still so it stays visible on underlined links.
  * app-docs has no node_modules of its own, so the variable-font files are
  * vendored next to this stylesheet (OFL-licensed, latin/wght subset, same
  * files docs/ loads through @fontsource-variable). */
@@ -23,10 +27,16 @@
 }
 
 :root {
-  --vp-c-brand-1: #dc2626;
-  --vp-c-brand-2: #ef4444;
-  --vp-c-brand-3: #f87171;
+  --vp-c-brand-1: #b91c1c;
+  --vp-c-brand-2: #991b1b;
+  --vp-c-brand-3: #dc2626;
   --vp-c-brand-soft: rgba(220, 38, 38, 0.14);
+
+  /* Inside a tip block the code chip would stack a second brand-soft layer. */
+  --vp-custom-block-tip-code-bg: rgba(220, 38, 38, 0.06);
+
+  /* The default text-3 code-block language label is below 4.5:1 in both modes. */
+  --vp-code-lang-color: var(--vp-c-text-2);
 
   --vp-font-family-base:
     "Bricolage Grotesque Variable", "Bricolage Grotesque", -apple-system,
@@ -64,6 +74,37 @@
 .vp-doc table {
   display: table;
   width: 100%;
+}
+
+/* Seven nav items do not fit the inline nav bar VitePress shows from 768px,
+ * and from 960px the sidebar takes part of the header. Keep the phone menu
+ * button and its panel until 1280px, where the bar has room; the sidebar
+ * already lists the same pages in between. */
+@media (min-width: 768px) and (max-width: 1279px) {
+  .VPNav .VPNavBar .VPNavBarMenu {
+    display: none;
+  }
+
+  /* The panel already holds the language, theme and social links. */
+  .VPNav .VPNavBar .VPNavBarExtra {
+    display: none;
+  }
+
+  .VPNav .VPNavBar .VPNavBarHamburger {
+    display: flex;
+  }
+
+  .VPNav .VPNavScreen {
+    display: block;
+  }
+}
+
+/* At 1280px VitePress moves the language and theme switches into the bar,
+ * which leaves the English labels 8px short until slightly wider. */
+@media (min-width: 1280px) and (max-width: 1359px) {
+  .VPNav .VPNavBar .VPNavBarMenuLink {
+    padding: 0 10px;
+  }
 }
 
 /* VitePress keeps the mobile sidebar in the DOM while it is translated away.

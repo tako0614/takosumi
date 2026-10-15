@@ -46,6 +46,7 @@ export interface IdentityRecordRepository {
   enrollFinancialSourceParents(input: import("./identity-state.ts").FinancialSourceEnrollmentMutation): Promise<import("./identity-state.ts").FinancialSourceParentVector<import("./identity-state.ts").FinancialSourceParentHead> | undefined>;
   issueFinancialSourceProof(input: import("./identity-state.ts").FinancialSourceProofMutation): Promise<import("./identity-state.ts").FinancialSourceProofRecord | undefined>;
   findFinancialSourceProof(proofRef: string): Promise<import("./identity-state.ts").FinancialSourceProofRecord | undefined>;
+  findFinancialSourceProofsForOriginalRequest(input: FS.FinancialSourceProofLookup): Promise<readonly FS.FinancialSourceProofRecord[]>;
   revokeHostedOidcScope(input: import("./identity-state.ts").FinancialSourceRevocationMutation): Promise<boolean>;
   findFinancialSourceRaw(eventRef: string): Promise<import("./identity-state.ts").FinancialSourceRawRecord | undefined>;
   listFinancialSourcePending(input: { readonly registrationRef: string; readonly after?: string; readonly limit: number }): Promise<import("./identity-state.ts").FinancialSourcePendingPage>;
@@ -108,6 +109,7 @@ export class HostedIdentityRecords implements HostedIdentityStore {
   enrollFinancialSourceParents(value: FS.FinancialSourceEnrollmentMutation) { return this.repository.enrollFinancialSourceParents(value); }
   issueFinancialSourceProof(value: FS.FinancialSourceProofMutation) { return this.repository.issueFinancialSourceProof(value); }
   findFinancialSourceProof(value: string) { return this.repository.findFinancialSourceProof(value); }
+  findFinancialSourceProofsForOriginalRequest(value: FS.FinancialSourceProofLookup) { return this.repository.findFinancialSourceProofsForOriginalRequest(value); }
   revokeHostedOidcScope(value: FS.FinancialSourceRevocationMutation) { return this.repository.revokeHostedOidcScope(value); }
   findFinancialSourceRaw(value: string) { return this.repository.findFinancialSourceRaw(value); }
   listFinancialSourcePending(value: { readonly registrationRef: string; readonly after?: string; readonly limit: number }) { return this.repository.listFinancialSourcePending(value); }
@@ -1027,6 +1029,7 @@ export interface FinancialSourceAtomicMutation {
   readonly checks: readonly FinancialSourceDocumentExpectation[];
   readonly writes: readonly FinancialSourceDocumentWrite[];
   readonly authority?: FS.FinancialSourceProtectedMutation;
+  readonly proofLookup?: FS.FinancialSourceProofLookup;
   readonly now: number;
 }
 export function financialSourceAffectedRecord(head: FS.FinancialSourceParentHead) {
@@ -1036,7 +1039,7 @@ export function financialSourceAffectedRecord(head: FS.FinancialSourceParentHead
 /** Shared portable record semantics. Native adapters supply one atomic guarded
  * statement/batch; this class cannot qualify a caller or manufacture a checkpoint. */
 export class FinancialSourceDocumentRecords {
-  constructor(readonly repository: Pick<IdentityRecordRepository,"get"|"create"|"page">,
+  constructor(readonly repository: Pick<IdentityRecordRepository,"get"|"create"|"page"|"findFinancialSourceProofsForOriginalRequest">,
     readonly commit: (input: FinancialSourceAtomicMutation) => Promise<boolean>) {}
   async registerFinancialSourceRegistration(value: FinancialSourceRegistration): Promise<boolean> {
     const record=parseFinancialSourceRegistration(value);
@@ -1146,9 +1149,11 @@ export class FinancialSourceDocumentRecords {
       const receipts:FinancialSourceReceiptRecord[]=[];for(const receiver of registration.receivers){const k=financialSourceReceiptKey(registration.registrationRef,envelope.head.lastEventRef,receiver.receiverRef),receipt=await this.findFinancialSourceReceipt({registrationRef:registration.registrationRef,eventRef:envelope.head.lastEventRef,receiverRef:receiver.receiverRef});if(!receipt)return undefined;receipts.push(receipt);checks.push({bucket:financialSourceBuckets.receipts,key:k,record:receipt});}
       const reference=financialSourceReadyReference(envelope.head,m,registration,receipts);if(!reference)return undefined;references[slot]=reference;writes.push({bucket:financialSourceBuckets.parents,key,record:envelope,next:envelope,subject:input.expectedGrant.subject});
     }
-    const old=await this.repository.get(financialSourceBuckets.proofs,input.proof.proofRef);if(old&&!financialSourceEqual(old,input.proof))return undefined;
+    const proofLookup={registrationRef:input.registration.registrationRef,challengeRef:input.challenge.challengeRef,accessTokenHash:input.accessTokenHash};
+    if((await this.repository.findFinancialSourceProofsForOriginalRequest(proofLookup)).length!==0)return undefined;
+    const old=await this.repository.get(financialSourceBuckets.proofs,input.proof.proofRef);if(old!==undefined)return undefined;
     const now=consumeFinancialSourcePrecommitCheckpoint(input);if(now===undefined||!financialSourceProofMatches(input,now,heads,references))return undefined;
     writes.push({bucket:financialSourceBuckets.proofs,key:input.proof.proofRef,record:old,next:input.proof,subject:input.expectedGrant.subject});
-    return await this.commit({checks,writes,authority:input,now})?structuredClone(input.proof):undefined;
+    return await this.commit({checks,writes,authority:input,proofLookup,now})?structuredClone(input.proof):undefined;
   }
 }

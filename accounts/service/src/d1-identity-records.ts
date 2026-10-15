@@ -74,6 +74,14 @@ export class D1IdentityRecordRepository implements IdentityRecordRepository {
   enrollFinancialSourceParents(value: FS.FinancialSourceEnrollmentMutation) { return this.financialRecords().enrollFinancialSourceParents(value); }
   issueFinancialSourceProof(value: FS.FinancialSourceProofMutation) { return this.financialRecords().issueFinancialSourceProof(value); }
   findFinancialSourceProof(value: string) { return this.financialRecords().findFinancialSourceProof(value); }
+  async findFinancialSourceProofsForOriginalRequest(input: FS.FinancialSourceProofLookup): Promise<readonly FS.FinancialSourceProofRecord[]> {
+    const captured = structuredClone(input);
+    await this.initialize();
+    const result = await this.db.prepare(`SELECT document FROM ${table} WHERE bucket=? AND json_extract(document,'$.challenge.registrationRef')=? AND json_extract(document,'$.challenge.challengeRef')=? AND json_extract(document,'$.accessTokenHash')=? LIMIT 2`)
+      .bind(financialSourceBuckets.proofs,captured.registrationRef,captured.challengeRef,captured.accessTokenHash).all<{document:string}>();
+    if (!result.success) throw new Error("financial_source_proof_census_failed");
+    return (result.results ?? []).map(row => JSON.parse(row.document) as FS.FinancialSourceProofRecord);
+  }
   findFinancialSourceRaw(value: string) { return this.financialRecords().findFinancialSourceRaw(value); }
   listFinancialSourcePending(value: Parameters<IdentityRecordRepository["listFinancialSourcePending"]>[0]) { return this.financialRecords().listFinancialSourcePending(value); }
   findFinancialSourceMaterialization(value: string) { return this.financialRecords().findFinancialSourceMaterialization(value); }
@@ -100,6 +108,10 @@ export class D1IdentityRecordRepository implements IdentityRecordRepository {
       // financialJsonEquals uses each supplied expression twice.
       const access=financialSourceJson(a.expectedAccess),grant=financialSourceJson(g);
       args.push(a.accessTokenHash,access,access,input.now,g.sid,grant,grant,input.now,g.subject,g.subject,a.expectedIdentityGeneration,g.subject,g.subject,g.issuerSessionId,g.clientId);
+    }
+    if(input.proofLookup){
+      guard+=` AND NOT EXISTS(SELECT 1 FROM ${table} WHERE bucket=? AND json_extract(document,'$.challenge.registrationRef')=? AND json_extract(document,'$.challenge.challengeRef')=? AND json_extract(document,'$.accessTokenHash')=?)`;
+      args.push(financialSourceBuckets.proofs,input.proofLookup.registrationRef,input.proofLookup.challengeRef,input.proofLookup.accessTokenHash);
     }
     const attempt=crypto.randomUUID(),claimBucket="financial_source_cas_claims";
     const claim=this.db.prepare(`INSERT INTO ${table}(bucket,key,document,updated_at) SELECT '${claimBucket}',?,'{}',? WHERE ${guard}`).bind(attempt,input.now,...args);
