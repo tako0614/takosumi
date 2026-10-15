@@ -58,6 +58,19 @@ test("image proof binds actual config and manifest independently to the exact ro
   ]) expect(() => assertHostedMeteredImageIdentity(JSON.stringify(value), OPTIONS)).toThrow();
 });
 
+test("image proof accepts omitted OCI Cmd but rejects command arguments and malformed values", () => {
+  const source = inspected();
+  const omitted = { ...source, Config: { User: source.Config.User, Entrypoint: source.Config.Entrypoint } };
+  expect(Object.hasOwn(omitted.Config, "Cmd")).toBe(false);
+  expect(() => assertHostedMeteredImageIdentity(JSON.stringify(omitted), OPTIONS)).not.toThrow();
+  for (const Cmd of [null, []]) {
+    expect(() => assertHostedMeteredImageIdentity(JSON.stringify({ ...source, Config: { ...source.Config, Cmd } }), OPTIONS)).not.toThrow();
+  }
+  for (const Cmd of ["", "[]", false, 0, {}, { length: 0 }, [""], [null], ["--alternate-bootstrap"]]) {
+    expect(() => assertHostedMeteredImageIdentity(JSON.stringify({ ...source, Config: { ...source.Config, Cmd } }), OPTIONS)).toThrow();
+  }
+});
+
 test("private real-process attack client is valid Bun code and refuses an unknown PID", () => {
   const transpiler = new Bun.Transpiler({ loader: "js", target: "bun" });
   expect(() => transpiler.transformSync(hostedMeteredImageBoundaryProbeScript(123))).not.toThrow();

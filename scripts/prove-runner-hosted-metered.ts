@@ -51,9 +51,11 @@ export function parseHostedMeteredImageProofArgs(argv: readonly string[]): Hoste
 export function assertHostedMeteredImageIdentity(source: string, options: HostedMeteredImageProofOptions): void {
   const identity = parseLocalRunnerImageIdentity(source);
   const value = JSON.parse(source) as { Config?: { User?: unknown; Entrypoint?: unknown; Cmd?: unknown; Labels?: unknown } };
+  // OCI Cmd is optional: https://github.com/opencontainers/image-spec/blob/main/config.md
   if (identity.localImageId !== options.image || identity.descriptorDigest !== options.descriptor ||
     value.Config?.User !== "0:0" || JSON.stringify(value.Config.Entrypoint) !== JSON.stringify([ENTRYPOINT]) ||
-    (value.Config.Cmd !== null && JSON.stringify(value.Config.Cmd) !== "[]")) {
+    (value.Config.Cmd !== undefined && value.Config.Cmd !== null &&
+      (!Array.isArray(value.Config.Cmd) || value.Config.Cmd.length !== 0))) {
     throw new Error("image is not the exact native Hosted-metered composition");
   }
 }
