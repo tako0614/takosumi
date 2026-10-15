@@ -57,6 +57,11 @@
   overflow-x: auto;
 }
 
+.vp-doc .table-scroll:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 2px;
+}
+
 .vp-doc .table-scroll > table {
   display: table;
   width: 100%;
@@ -66,7 +71,7 @@
 /* The full nav bar appears at 768px, where the English labels need tighter
  * link padding to stay inside the viewport until the desktop layout. */
 @media (min-width: 768px) and (max-width: 959px) {
-  .VPNavBarMenu .VPNavBarMenuLink {
+  .VPNavBar .VPNavBarMenu .VPNavBarMenuLink {
     padding: 0 8px;
   }
 }

@@ -2,39 +2,40 @@ import { expect, test } from "bun:test";
 
 import { scrollableTables } from "../../docs/.vitepress/scrollable-tables.ts";
 
-function renderer(rules: Record<string, unknown> = {}) {
+type Rule = (...args: unknown[]) => string;
+
+function markdown(rules: Record<string, Rule> = {}) {
   return {
-    rules: rules as never,
-    renderToken: (tokens: unknown[], index: number) => String(tokens[index]),
+    renderer: {
+      rules,
+      renderToken: (tokens: string[], index: number) => tokens[index],
+    },
   };
 }
 
-test("wraps each table in a scroll container", () => {
-  const md = { renderer: renderer() };
-  scrollableTables(md);
-  const tokens = ["<table>", "</table>"];
+function render(md: ReturnType<typeof markdown>, rule: string, tokens: string[], index: number) {
+  return md.renderer.rules[rule]!(tokens, index, {}, {}, md.renderer);
+}
 
-  expect(md.renderer.rules.table_open!(tokens, 0, {}, {}, md.renderer)).toBe(
-    '<div class="table-scroll"><table>',
+test("wraps each table in one focusable scroll container", () => {
+  const md = markdown();
+  scrollableTables(md as never);
+
+  expect(render(md, "table_open", ['<table tabindex="0">'], 0)).toBe(
+    '<div class="table-scroll" tabindex="0"><table>',
   );
-  expect(md.renderer.rules.table_close!(tokens, 1, {}, {}, md.renderer)).toBe(
-    "</table></div>",
-  );
+  expect(render(md, "table_close", ["</table>"], 0)).toBe("</table></div>");
 });
 
 test("keeps an existing table renderer inside the wrapper", () => {
-  const md = {
-    renderer: renderer({
-      table_open: () => '<table class="custom">',
-      table_close: () => "</table><!-- end -->",
-    }),
-  };
-  scrollableTables(md);
+  const md = markdown({
+    table_open: () => '<table tabindex="0" class="custom">',
+    table_close: () => "</table><!-- end -->",
+  });
+  scrollableTables(md as never);
 
-  expect(md.renderer.rules.table_open!([], 0, {}, {}, md.renderer)).toBe(
-    '<div class="table-scroll"><table class="custom">',
+  expect(render(md, "table_open", [], 0)).toBe(
+    '<div class="table-scroll" tabindex="0"><table class="custom">',
   );
-  expect(md.renderer.rules.table_close!([], 0, {}, {}, md.renderer)).toBe(
-    "</table><!-- end --></div>",
-  );
+  expect(render(md, "table_close", [], 0)).toBe("</table><!-- end --></div>");
 });

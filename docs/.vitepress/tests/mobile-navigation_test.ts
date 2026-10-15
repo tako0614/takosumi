@@ -55,7 +55,9 @@ test.describe("Takosumi docs mobile navigation", () => {
     await expect(page.locator(".VPNavScreen")).toHaveCount(0);
     await expect(trigger).toBeFocused();
   });
+});
 
+test.describe("Takosumi docs page width", () => {
   test("keeps wide reference tables inside the page width", async ({ page }) => {
     await page.goto("/docs/reference/configuration");
     await expect(page.locator(".vp-doc .table-scroll > table").first()).toBeVisible();
