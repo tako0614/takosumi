@@ -28,8 +28,9 @@
 .iv-intro-steps { display: grid; gap: var(--tg-s-2); margin: var(--tg-s-3) 0 0; padding-left: 1.25rem; }
 .iv-intro-steps strong, .iv-intro-steps span { display: block; }
 .iv-intro-steps span { margin-top: 2px; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); }
-/* On phones the steps become one numbered line, so Add stays above the fold. */
-@media (max-width: 640px) {
+/* With the phone layout (bottom tab bar, see shell.css) the steps become
+   short numbered rows, so Add stays within reach. */
+@media (max-width: 880px) {
   .iv-intro-steps { display: flex; flex-wrap: wrap; gap: var(--tg-s-1) var(--tg-s-3); padding-left: 0; list-style: none; counter-reset: iv-intro-step; }
   .iv-intro-steps li { counter-increment: iv-intro-step; font-size: var(--tg-fs-sm); }
   .iv-intro-steps li::before { content: counter(iv-intro-step) ". "; color: var(--tg-fg-muted); }

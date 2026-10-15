@@ -29,7 +29,7 @@ export const ja = {
   "installStore.introStepSetupBody":
     "必要な接続（ホスト / アカウント）を選び、サービスが求める項目を入れます。",
   "installStore.introStepReviewBody":
-    "作成・変更・削除されるリソースの数を見てから「追加する」を押します。削除や作り直しを含む変更は、先に承認が必要です。",
+    "作成・変更・削除されるリソースの数を見てから「追加する」を押します。削除・置き換え・import を含む変更は、先に承認が必要です。",
   "installStore.moduleTitle": "モジュールを選択",
   "installStore.moduleHint":
     "このリポジトリ版を走査して見つかったモジュールから、追加するものを選びます。末尾は必要なプロバイダーです。",

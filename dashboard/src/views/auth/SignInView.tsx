@@ -131,7 +131,7 @@ export function SignInPanel() {
       ctx.displayRef
         ? t("auth.installContextRef", { ref: ctx.displayRef })
         : t("auth.installContextDefaultRef"),
-      ctx.path || t("auth.installContextRootPath"),
+      ctx.path && ctx.path !== "." ? ctx.path : t("auth.installContextRootPath"),
     ].join(" / ");
   };
   const noProvidersMessage = () =>

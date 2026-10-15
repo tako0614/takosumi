@@ -24,7 +24,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.introStepSetupBody":
     "Choose the connections it needs (host / account) and fill in what the service asks for.",
   "installStore.introStepReviewBody":
-    "See how many resources will be created, changed, and deleted, then press Add. Changes that delete or recreate something need approval first.",
+    "See how many resources will be created, changed, and deleted, then press Add. Changes that delete, replace, or import something need approval first.",
   "installStore.moduleTitle": "Choose a module",
   "installStore.moduleHint":
     "Choose a module found by scanning this repository revision. The trailing labels are the providers it needs.",
