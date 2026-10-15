@@ -63,10 +63,10 @@ Pick the entry point that matches what you want to do.
   plan and apply.
 - **Run only the API** — start it with the development setup below.
 
-### Run only the API
+### Run only the API {#api-only}
 
-Data stays in memory and is lost on restart. The dashboard and runner do not
-start.
+This is for checking the API during development, and needs Bun and Git. Data
+stays in memory and is lost on restart. The dashboard and runner do not start.
 
 ```bash
 git clone https://github.com/tako0614/takosumi.git
