@@ -45,15 +45,17 @@ Git URL と module の宣言
 
 目的に合わせて入口を選びます。
 
-- **ブラウザで使う** — 公式ホスティングの [app.takosumi.com](https://app.takosumi.com/)
-  にサインインし、Store または Git URL から追加します。公式ホスティングは Pre-GA です。
-  手順、料金、提供状況、サポートは
+- **公式ホスティングで使う** — [app.takosumi.com](https://app.takosumi.com/)
+  にサインインし、Store または Git URL から repository を追加します。公式ホスティングは
+  Pre-GA です。手順、料金、提供状況、サポートは
   [Takosumi hosted service のドキュメント](https://app.takosumi.com/docs/)にあります。
 - **手元で plan から apply まで試す** — [クイックスタート](./getting-started/quickstart.md)
-  に従い、Linux と Docker の上に dashboard、サインイン、データベース、runner を起動します。
-  サンプル module は外部リソースを作らないため、クラウドの認証情報は要りません。
-- **自分の環境で運用する** — [自分で動かす](./concepts/self-host.md)で、Cloudflare または
-  Bun と PostgreSQL の雛形から構成を選びます。
+  に従い、Linux と Docker で dashboard、サインイン、データベース、runner を起動します。
+  ローカル証明書と DNS の設定に `sudo` を使います。サンプル module は外部リソースを
+  作らないため、クラウドの認証情報は要りません。
+- **自分の環境で運用する** — [自分で動かす](./concepts/self-host.md)で構成を選びます。
+  Cloudflare の雛形は runner を含みます。Bun と PostgreSQL の雛形で plan と apply を
+  実行するには、runner を別に組み込みます。
 - **API だけ動かす** — 下の開発用構成で起動します。
 
 ### API だけ動かす

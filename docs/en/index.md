@@ -48,17 +48,19 @@ Git URL and module declaration
 
 Pick the entry point that matches what you want to do.
 
-- **Use it in the browser** — sign in to the official hosted service at
-  [app.takosumi.com](https://app.takosumi.com/) and add a module from the Store or
-  a Git URL. The hosted service is Pre-GA. Steps, pricing, availability, and
-  support are in the
+- **Use the hosted service** — sign in at [app.takosumi.com](https://app.takosumi.com/)
+  and add a repository from the Store or a Git URL. The hosted service is Pre-GA.
+  Steps, pricing, availability, and support are in the
   [Takosumi hosted service documentation](https://app.takosumi.com/docs/en/).
 - **Try plan through apply locally** — follow the
   [Quickstart](./getting-started/quickstart.md) to start the dashboard, sign-in,
-  database, and runner on Linux with Docker. The sample module creates no external
-  resources, so you need no cloud credentials.
-- **Run it in your own environment** — [Running it yourself](./concepts/self-host.md)
-  helps you choose between the Cloudflare and the Bun and PostgreSQL templates.
+  database, and runner on Linux with Docker. It uses `sudo` to set up a local
+  certificate authority and DNS. The sample module creates no external resources,
+  so you need no cloud credentials.
+- **Run it in your own environment** — choose a shape in
+  [Running it yourself](./concepts/self-host.md). The Cloudflare template includes
+  a runner; the Bun + PostgreSQL template needs a separately composed runner for
+  plan and apply.
 - **Run only the API** — start it with the development setup below.
 
 ### Run only the API
@@ -93,7 +95,7 @@ If it returns JSON, the API is running.
 - [Run model](./concepts/run-model.md) — plan, approval, apply, and destroy
 - [Credentials](./concepts/credentials.md) — passing connections to providers
 - [Interfaces](./concepts/interfaces.md) — describing connections and granting use
-- [Self-hosting](./concepts/self-host.md) — operating a production installation
+- [Running it yourself](./concepts/self-host.md) — operating a production installation
 - [Repository manifest](./reference/repository-manifest.md),
   [Store API](./reference/store-api.md), [API](./reference/api.md), and
   [CLI](./reference/cli.md) references
