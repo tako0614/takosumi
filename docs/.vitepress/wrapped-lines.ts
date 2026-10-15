@@ -1,18 +1,22 @@
 // Japanese prose in these docs is hard-wrapped. Markdown turns each wrap into
 // a space, and browsers keep that space between Japanese characters, so pages
 // read "実行者を あとから". A wrap disappears when both neighbours are wide
-// CJK characters, or when the line ends in Japanese punctuation: the docs
-// write "接続です。Run、state" with no space after 。 and 、. Breaks next to
-// Latin words stay spaces, which matches "Git に置いた".
+// CJK characters, or when Japanese punctuation sits on either side: the docs
+// write "接続です。Run、state" and "tuple（binding" with no space. Other
+// breaks next to Latin words stay spaces, which matches "Git に置いた".
 
-const WIDE = /^[⺀-鿿豈-﫿＀-￯]$/u;
+const WIDE = /^[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]$/u;
+// CJK symbols and punctuation without the ideographic letters 々〆〇, plus
+// the katakana middle dot and full-width ASCII punctuation.
 const WIDE_PUNCTUATION =
-  /^[　-〿！-／：-＠［-｀｛-･]$/u;
+  /^[\u3000-\u3004\u3008-\u303f\u30fb\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65]$/u;
 
 export function joinsWithoutSpace(before: string, after: string): boolean {
   if (before === "" || after === "") return false;
   return (
-    WIDE_PUNCTUATION.test(before) || (WIDE.test(before) && WIDE.test(after))
+    WIDE_PUNCTUATION.test(before) ||
+    WIDE_PUNCTUATION.test(after) ||
+    (WIDE.test(before) && WIDE.test(after))
   );
 }
 
@@ -33,16 +37,59 @@ export function joinWrappedLines(lines: readonly string[]): string {
 }
 
 const DESCRIPTION_LIMIT = 200;
+const QUOTE = /^>\s?/u;
+const LIST_ITEM = /^(?:[-*+]|\d+[.)])\s+/u;
+const FENCE = /^(```|~~~)/u;
+// A full stop ends a sentence before a capitalised word, so "e.g. the" and
+// "?git=..." stay inside theirs.
+const SENTENCE_END = /[。！？]|(?<!\.)[.!?](?=\s+[A-Z]|$)/gu;
 
-function isBlockStart(text: string): boolean {
+function isOtherBlock(text: string): boolean {
   return (
     text.startsWith("#") ||
     text.startsWith("<") ||
-    text.startsWith("```") ||
+    FENCE.test(text) ||
     text.startsWith("---") ||
     text.startsWith(":::") ||
     text.startsWith("|")
   );
+}
+
+// The lines of the first paragraph, list item or blockquote that is prose,
+// with their Markdown block markers removed.
+function firstProseLines(lines: readonly string[]): string[] {
+  let start = 0;
+  for (; start < lines.length; start += 1) {
+    const text = lines[start];
+    if (FENCE.test(text)) {
+      const fence = text.slice(0, 3);
+      start += 1;
+      while (start < lines.length && !lines[start].startsWith(fence)) start += 1;
+    } else if (text !== "" && !isOtherBlock(text)) {
+      break;
+    }
+  }
+  if (start >= lines.length) return [];
+
+  const quoted = QUOTE.test(lines[start]);
+  const prose = [lines[start].replace(quoted ? QUOTE : LIST_ITEM, "")];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (quoted && !QUOTE.test(lines[index])) break;
+    const text = quoted ? lines[index].replace(QUOTE, "") : lines[index];
+    if (text === "" || isOtherBlock(text) || LIST_ITEM.test(text)) break;
+    if (!quoted && QUOTE.test(text)) break;
+    prose.push(text);
+  }
+  return prose;
+}
+
+function plainText(markdown: string): string {
+  return markdown
+    .replace(/\[([^\]]*)\]\([^)]*\)/gu, "$1")
+    .replace(/<\/?[A-Za-z][^>\n]*>/gu, "")
+    .replace(/\{#[^}]+\}/gu, "")
+    .replace(/[*`~]/gu, "")
+    .replace(/(?<![\p{L}\p{N}])_+|_+(?![\p{L}\p{N}])/gu, "");
 }
 
 /**
@@ -51,33 +98,24 @@ function isBlockStart(text: string): boolean {
  */
 export function firstParagraphText(markdown: string): string | undefined {
   const body = markdown.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/u, "");
-  const lines = body.split("\n").map((line) => line.trim());
-  const start = lines.findIndex((text) => text !== "" && !isBlockStart(text));
-  if (start === -1) return undefined;
-  let end = start;
-  while (end < lines.length && lines[end] !== "" && !isBlockStart(lines[end])) {
-    end += 1;
-  }
+  const prose = firstProseLines(body.split("\n").map((line) => line.trim()));
   const plain = joinWrappedLines(
-    lines
-      .slice(start, end)
-      .join("\n")
-      .replace(/\[([^\]]*)\]\([^)]*\)/gu, "$1")
-      .replace(/<[^>]+>/gu, "")
-      .replace(/\{#[^}]+\}/gu, "")
-      .replace(/[*_`~]/gu, "")
-      .split("\n"),
+    plainText(prose.join("\n")).split("\n"),
   ).replace(/[ \t]+/gu, " ");
   if (plain === "") return undefined;
   if (plain.length <= DESCRIPTION_LIMIT) return plain;
-  const window = plain.slice(0, DESCRIPTION_LIMIT);
-  const sentenceEnd = Math.max(
-    window.lastIndexOf("。") + 1,
-    window.lastIndexOf(". ") + 1,
-  );
-  return sentenceEnd > 0
-    ? window.slice(0, sentenceEnd)
-    : `${window.slice(0, DESCRIPTION_LIMIT - 1)}…`;
+  let cut = 0;
+  for (const match of plain.matchAll(SENTENCE_END)) {
+    const end = match.index + 1;
+    if (end > DESCRIPTION_LIMIT) break;
+    cut = end;
+  }
+  if (cut >= DESCRIPTION_LIMIT / 3) return plain.slice(0, cut);
+  // No usable sentence end: cut English at a word boundary, Japanese anywhere.
+  const head = plain.slice(0, DESCRIPTION_LIMIT - 1);
+  const space = head.lastIndexOf(" ");
+  const midWord = /[A-Za-z0-9]/u.test(plain[DESCRIPTION_LIMIT - 1]);
+  return `${(midWord && space > DESCRIPTION_LIMIT / 2 ? head.slice(0, space) : head).trimEnd()}…`;
 }
 
 type InlineToken = { type: string; content: string };
