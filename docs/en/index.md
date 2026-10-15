@@ -44,9 +44,29 @@ Git URL and module declaration
   → save state, outputs, and audit records
 ```
 
-## Try the API
+## Getting started
 
-You can start the API with this development setup. It keeps data in memory.
+Pick the entry point that matches what you want to do.
+
+- **Use the hosted service** — sign in at [app.takosumi.com](https://app.takosumi.com/)
+  and add a repository from the Store or a Git URL. The hosted service is Pre-GA.
+  Steps, pricing, availability, and support are in the
+  [Takosumi hosted service documentation](https://app.takosumi.com/docs/en/).
+- **Try plan through apply locally** — follow the
+  [Quickstart](./getting-started/quickstart.md) to start the dashboard, sign-in,
+  database, and runner on Linux with Docker. It uses `sudo` to set up a local
+  certificate authority and DNS. The sample module creates no external resources,
+  so you need no cloud credentials.
+- **Run it in your own environment** — choose a shape in
+  [Running it yourself](./concepts/self-host.md). The Cloudflare template includes
+  a runner; the Bun + PostgreSQL template needs a separately composed runner for
+  plan and apply.
+- **Run only the API** — start it with the development setup below.
+
+### Run only the API {#api-only}
+
+This is for checking the API during development, and needs Bun and Git. Data
+stays in memory and is lost on restart. The dashboard and runner do not start.
 
 ```bash
 git clone https://github.com/tako0614/takosumi.git
@@ -66,8 +86,7 @@ curl http://127.0.0.1:8788/api/v1/capabilities \
   -H "authorization: Bearer dev-token"
 ```
 
-The [Quickstart](./getting-started/quickstart.md) starts the dashboard, sign-in,
-durable database, and OpenTofu runner.
+If it returns JSON, the API is running.
 
 ## Where to go next
 
@@ -76,7 +95,7 @@ durable database, and OpenTofu runner.
 - [Run model](./concepts/run-model.md) — plan, approval, apply, and destroy
 - [Credentials](./concepts/credentials.md) — passing connections to providers
 - [Interfaces](./concepts/interfaces.md) — describing connections and granting use
-- [Self-hosting](./concepts/self-host.md) — operating a production installation
+- [Running it yourself](./concepts/self-host.md) — operating a production installation
 - [Repository manifest](./reference/repository-manifest.md),
   [Store API](./reference/store-api.md), [API](./reference/api.md), and
   [CLI](./reference/cli.md) references
@@ -84,6 +103,3 @@ durable database, and OpenTofu runner.
 The old Resource Shape / Form Host API is documented only in the
 [Resource migration note](./concepts/resources.md); it is not a new authoring
 surface.
-
-Pricing, hosted resources, and support for the official hosted service are in
-the [Takosumi hosted service documentation](https://app.takosumi.com/docs/en/).

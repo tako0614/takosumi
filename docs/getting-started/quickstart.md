@@ -1,50 +1,35 @@
 # クイックスタート
 
-まず開発用 API を確認し、そのあと必要なら dashboard、サインイン、データベース、
-OpenTofu runner を含むローカル環境を起動します。
+Linux マシン上にローカルの Takosumi を起動し、サンプルの Git module で plan と apply を
+実行します。サンプルは外部リソースを作らないため、クラウドの認証情報は要りません。
+初回はコンテナと dashboard をビルドするため時間がかかります。
 
-## 開発用 API
+dashboard や runner なしで API だけ確認する場合は、docs トップの
+[API だけ動かす](../index.md#api-only)の手順を使います。
 
-必要なものは Bun と Git です。
-
-```bash
-git clone https://github.com/tako0614/takosumi.git
-cd takosumi
-bun install
-
-TAKOSUMI_DEV_MODE=1 \
-TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token \
-PORT=8788 \
-bun core/index.ts
-```
-
-別のターミナルで確認します。
-
-```bash
-curl http://127.0.0.1:8788/api/v1/capabilities \
-  -H "authorization: Bearer dev-token"
-```
-
-JSON が返れば API は動いています。この構成はデータをメモリに置き、再起動すると消えます。
-dashboard や runner も起動しないため、開発中の API 確認にだけ使ってください。
-
-## 完全なローカル環境
-
-ここからは Linux マシン上にローカルの Takosumi を立て、Git module の plan と apply を
-実行します。初回はコンテナと dashboard をビルドするため時間がかかります。
-
-### 必要なもの
+## 必要なもの
 
 - Linux。macOS、WSL、Windows はこの構成の対象外です
 - Docker と `docker compose`
 - Bun、Git、`curl`、`python3`
 - 証明書と DNS を設定するための `sudo`
 
-### 1. 環境を起動する
+## 1. リポジトリを取得する
 
-すでにリポジトリを取得している場合は、ルートから次を実行します。この構成はチェックアウトの
-ディレクトリ名が `takosumi` (`git clone` の既定名) であることを前提に、そのディレクトリを
-コンテナへ mount します。別の名前で取得した場合は、`takosumi` に変えてから実行してください。
+```bash
+git clone https://github.com/tako0614/takosumi.git
+cd takosumi
+bun install
+```
+
+コンテナはこのチェックアウトと、そこへ install した依存をそのまま使います。mount する
+ディレクトリは名前 `takosumi` (`git clone` の既定名) で決まります。既に別の名前で取得済みの
+場合は、ディレクトリ名を `takosumi` に変えてから続けてください。名前が違うと、隣にある
+別の `takosumi` ディレクトリが mount されることがあります。
+
+## 2. 環境を起動する
+
+リポジトリのルートから次を実行します。
 
 ```bash
 cd deploy/local-substrate
@@ -60,7 +45,9 @@ TAKOSUMI_LOCAL_SUBSTRATE_DISABLE_APPARMOR=1 \
 bash scripts/up.sh --profile postgres
 ```
 
-### 2. ローカル証明書と DNS を設定する
+## 3. ローカル証明書と DNS を設定する
+
+ここから先のコマンドは、`deploy/local-substrate` で実行します。
 
 ```bash
 sudo bash scripts/ca-install.sh
@@ -70,7 +57,7 @@ sudo bash scripts/configure-dns.sh
 この 2 つはホストごとに 1 回だけ実行します。ローカル認証局を作り直した場合は
 `ca-install.sh` をもう一度実行してください。
 
-### 3. 起動を確認する
+## 4. 起動を確認する
 
 ```bash
 curl https://app.takosumi.test/healthz
@@ -80,12 +67,12 @@ curl https://app.takosumi.test/.well-known/openid-configuration
 `/healthz` が `{"ok":true,"database":"ok"}` を返せば、アプリから Postgres まで
 接続できています。
 
-### 4. サインインする
+## 5. サインインする
 
 ブラウザで `https://app.takosumi.test/` を開き、**Local OIDC** を選びます。これは
 ローカル確認用の ID provider なので、実在のアカウントは必要ありません。
 
-### 5. サンプルを追加する
+## 6. サンプルを追加する
 
 サインインしたまま、次の URL を開きます。
 
@@ -104,7 +91,7 @@ runner、plan、apply、state 保存まで確認できます。
 要求します。削除、承認ポリシー、料金、その他の gate がある場合は Run 画面で停止します。
 通常の更新、drift の検出、Git の新しい commit は勝手に apply されません。
 
-### 6. 結果を見る
+## 7. 結果を見る
 
 `https://app.takosumi.test/runs` で plan と apply の記録を確認します。Capsule の詳細には
 適用後の state が版ごとに保存されます。
@@ -118,7 +105,7 @@ TAKOSUMI_LOCAL_SUBSTRATE_PROFILE=postgres bash scripts/smoke.sh
 最後に `0 failed` と表示されれば、サインイン、Run、保存先、DNS、TLS まで通っています。
 失敗した検査のログは `/tmp/smoke-logs/` に残ります。
 
-### 7. 停止する
+## 8. 停止する
 
 ```bash
 bash scripts/down.sh

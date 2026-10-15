@@ -41,9 +41,27 @@ Git URL と module の宣言
   → state・output・監査記録を保存
 ```
 
-## 最初に試す
+## 始め方
 
-API だけを開発用の構成で起動できます。データはメモリ上に置かれます。
+目的に合わせて入口を選びます。
+
+- **公式ホスティングで使う** — [app.takosumi.com](https://app.takosumi.com/)
+  にサインインし、Store または Git URL から repository を追加します。公式ホスティングは
+  Pre-GA です。手順、料金、提供状況、サポートは
+  [Takosumi hosted service のドキュメント](https://app.takosumi.com/docs/)にあります。
+- **手元で plan から apply まで試す** — [クイックスタート](./getting-started/quickstart.md)
+  に従い、Linux と Docker で dashboard、サインイン、データベース、runner を起動します。
+  ローカル証明書と DNS の設定に `sudo` を使います。サンプル module は外部リソースを
+  作らないため、クラウドの認証情報は要りません。
+- **自分の環境で運用する** — [自分で動かす](./concepts/self-host.md)で構成を選びます。
+  Cloudflare の雛形は runner を含みます。Bun と PostgreSQL の雛形で plan と apply を
+  実行するには、runner を別に組み込みます。
+- **API だけ動かす** — 下の開発用構成で起動します。
+
+### API だけ動かす {#api-only}
+
+開発中の API 確認用です。必要なものは Bun と Git です。データはメモリ上に置かれ、再起動
+すると消えます。dashboard と runner は起動しません。
 
 ```bash
 git clone https://github.com/tako0614/takosumi.git
@@ -63,8 +81,7 @@ curl http://127.0.0.1:8788/api/v1/capabilities \
   -H "authorization: Bearer dev-token"
 ```
 
-dashboard、サインイン、永続データベース、OpenTofu runner を含む環境は
-[クイックスタート](./getting-started/quickstart.md)で起動できます。
+JSON が返れば API は動いています。
 
 ## 次に読むもの
 
@@ -81,6 +98,3 @@ dashboard、サインイン、永続データベース、OpenTofu runner を含�
 
 旧 Resource Shape / Form Host API の資料は [Resource の移行メモ](./concepts/resources.md)
 にまとめています。新しい authoring surface ではありません。
-
-公式ホスティングの料金、hosted service、サポートは
-[Takosumi hosted service のドキュメント](https://app.takosumi.com/docs/)にあります。
