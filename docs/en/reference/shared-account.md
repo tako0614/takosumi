@@ -41,6 +41,14 @@ alone. Each provider requires a new operation-bound login flow and explicit
 consent. Non-authoritative Google third-party email also requires fresh mailbox
 proof. Old sessions, refresh tokens and public profile email cannot prove a leg.
 
+The two accounts must resolve as distinct canonical roots. Additional matching
+candidates, naming an already merged account as a new root, or inconsistent
+proof/owner authority and history stop the operation. An account ID in a request
+is not ownership proof. Creating/selecting an additional or team Workspace is
+separate from eligibility to reconcile its existing context. Do not delete old
+memberships/history or substitute a new account, Org or operation key to bypass
+a refusal.
+
 In the issuer browser session, create an operation with
 `POST /api/v1/account/identity-merges` and `{sourceSubject,targetSubject}`.
 The current actor must be one of the two confirmed accounts. Complete both
@@ -54,6 +62,25 @@ legs within five minutes:
 3. POST `/{operationId}/prove` with `{receiptId}` for each leg.
 4. POST `/{operationId}/consent` with `{consent:true}` and await owner
    reconciliation. Merged login activates only after every owner confirms custody.
+
+### Versions that include a context plan
+
+The basic flow above describes the
+[main source baseline](https://github.com/tako0614/takosumi/blob/dac30855915e49e5a4fb9782c489a023e7ed1f5a/accounts/service/src/identity-merge.ts#L45-L96).
+The [unmerged context-plan candidate](https://github.com/tako0614/takosumi/blob/11d8acf5cae3d624dda6656d84bdcdccdc0585b6/accounts/service/src/identity-merge.ts#L743-L780)
+adds review of the Workspace/current-membership/retained-billing context plan
+after both leg proofs. Each leg separately accepts that same plan before final
+consent. Provider consent or target-only acceptance cannot replace context
+acceptance. Its initial inventory is two existing unshared personal Workspaces,
+one per account; team/extra contexts and retained recovery rows cannot be
+omitted to meet that restriction.
+
+Candidate procedures/endpoints are not necessarily present in the current
+deployment. Do not insert unavailable API calls into this baseline flow.
+Same-operation replay and approval renewal for the same immutable recovery
+decision differ from a new group merge or a distinct operation after recovery.
+Repeated-merge extensions are under design and do not expand current eligibility
+or permission.
 
 These suffixes use `/api/v1/account/identity-merges`. Mutations require the exact
 issuer Origin and host-only issuer/merge browser cookies; responses use no-store.
