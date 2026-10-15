@@ -115,7 +115,7 @@ async function ready(child) {
   throw new Error("dashboard fixture did not become ready");
 }
 
-async function capture(browser, variant, viewport, theme) {
+async function capture(browser, variant, viewport, theme, screens = ["home", "install"]) {
   const iconAssets = new Map(await Promise.all(products.map(async (product) => [
     `/${product.icon}`,
     {
@@ -209,7 +209,7 @@ async function capture(browser, variant, viewport, theme) {
     for (const [screen, path, selector] of [
       ["home", "/", ".av-tile-wrap"],
       ["install", "/new", ".tcs-card"],
-    ]) {
+    ].filter(([screen]) => screens.includes(screen))) {
       failures.length = 0;
       if (screen === "install" && variant === "mobile") {
         await page.setViewportSize({ width: viewport.width, height: 950 });
@@ -238,12 +238,9 @@ async function capture(browser, variant, viewport, theme) {
         throw new Error(`${screen}/${variant}: imagesLoaded=${imagesLoaded}; browser errors=${errors.join("; ")}; HTTP failures=${failures.join("; ")}; unexpected requests=${unexpectedRequests.join("; ")}`);
       }
       const file = resolve(output, `dashboard-${screen}-${variant}${theme === "light" ? "-light" : ""}.png`);
-      const clip = screen === "home" && variant === "desktop"
-        ? { x: 0, y: 0, width: viewport.width, height: 440 }
-        : undefined;
-      await page.screenshot({ path: file, animations: "disabled", ...(clip ? { clip } : {}) });
+      await page.screenshot({ path: file, animations: "disabled" });
       const capturedViewport = page.viewportSize();
-      console.log(`${screen}/${variant}/${theme}: ${file} (${capturedViewport.width * 2}x${(clip?.height ?? capturedViewport.height) * 2})`);
+      console.log(`${screen}/${variant}/${theme}: ${file} (${capturedViewport.width * 2}x${capturedViewport.height * 2})`);
     }
   } finally {
     await context.close();
@@ -252,8 +249,9 @@ async function capture(browser, variant, viewport, theme) {
 
 async function main() {
   const requestedTheme = process.argv[2] ?? "all";
-  if (!["all", "dark", "light"].includes(requestedTheme)) {
-    throw new Error("usage: node website/scripts/capture-dashboard-ui.mjs [all|dark|light]");
+  const requestedVariant = process.argv[3] ?? "all";
+  if (!["all", "dark", "light"].includes(requestedTheme) || !["all", "desktop-home"].includes(requestedVariant)) {
+    throw new Error("usage: node website/scripts/capture-dashboard-ui.mjs [all|dark|light] [all|desktop-home]");
   }
   await mkdir(output, { recursive: true });
   const fixture = spawn("bun", ["tests/dashboard/e2e/fixture-server.ts"], {
@@ -269,8 +267,8 @@ async function main() {
     await ready(fixture);
     browser = await chromium.launch({ channel: "chrome", headless: true });
     for (const theme of requestedTheme === "all" ? ["dark", "light"] : [requestedTheme]) {
-      await capture(browser, "desktop", { width: 1200, height: 750 }, theme);
-      await capture(browser, "mobile", { width: 390, height: 700 }, theme);
+      await capture(browser, "desktop", { width: 1200, height: 750 }, theme, requestedVariant === "desktop-home" ? ["home"] : ["home", "install"]);
+      if (requestedVariant === "all") await capture(browser, "mobile", { width: 390, height: 700 }, theme);
     }
   } finally {
     await browser?.close();
