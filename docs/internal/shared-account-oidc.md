@@ -387,14 +387,21 @@ receiver/target. Its response contains only an opaque proof reference. The
 proof is not a payer grant, Customer admission or provider-dispatch approval.
 The existing `prove({accessToken,challengeRef}) -> {proofRef}` operation is
 idempotent for the same **original request**, rather than for every request with
-the same challenge. New issuers derive an opaque locator as `afp_` plus the
-unpadded base64url SHA-256 of canonical UTF-8 JSON
-`{domain:"takosumi.accounts.financial-proof-original-request@v1",value}`.
-The value contains the full captured registration (including incarnation and
-complete receiver set), full original challenge, actual issuer/subject/clientId,
-SID, stable issuerSessionId, identityGeneration and original accessTokenHash.
-Bearer bytes never enter the locator, durable record or log. This locator is
-not an authority claim; event/receipt and Customer recipes are unchanged.
+the same challenge. New issuers derive an opaque custody locator as `afp_`
+plus the unpadded base64url SHA-256 of canonical UTF-8 JSON
+`{domain:"takosumi.accounts.financial-proof-original-custody@v1",value}`,
+where value is exactly `{registrationRef,challengeRef,accessTokenHash}`: the
+existing retained-original census set. This is not challenge-only uniqueness;
+a properly refreshed token has a different original access-token hash.
+
+The locator must not split when competing observations return different full
+challenge/caller/vector data for that same census set. Those full fields remain
+mandatory comparison and currentness checks on the retained original, including
+the actual caller and captured registration/incarnation/complete receiver set.
+A conflicting full request cannot reuse the winner or insert a second PK.
+The locator itself grants no authority. Bearer bytes never enter it, durable
+records or logs; event/receipt and Customer recipes are unchanged. Prior random
+or candidate locators remain retained originals and are never rewritten.
 
 An original-record census selects retained proofs by Accounts registration,
 challenge reference and original access-token hash, then validates the complete

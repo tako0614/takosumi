@@ -396,11 +396,13 @@ export function createAccountsFinancialSource(options: AccountsFinancialSourceOp
       const census = () => store.findFinancialSourceProofsForOriginalRequest!(lookup);
       const originalCaller = {issuer, subject, clientId: original.record.clientId, sid: original.record.sid!,
         issuerSessionId: original.record.issuerSessionId!, identityGeneration: original.record.identityGeneration ?? 0};
-      // These are the immutable original request inputs, not newly sampled
-      // Control wrappers, proof timestamps or fresh authorization authority.
+      // This opaque rendezvous identifies the SAME retained-census set. Full
+      // challenge/caller/vector differences must not choose another PK under a
+      // concurrent PostgreSQL statement snapshot. They remain rejection checks
+      // below, never authority conferred by this locator.
       const requestDigest = await sha256Text(canonicalFinancialSourceJson({
-        domain: "takosumi.accounts.financial-proof-original-request@v1",
-        value: {registration, challenge, ...originalCaller, accessTokenHash},
+        domain: "takosumi.accounts.financial-proof-original-custody@v1",
+        value: {registrationRef: registration.registrationRef, challengeRef, accessTokenHash},
       }));
       const proofRef = "afp_" + requestDigest.slice("sha256:".length);
       const recover = async (): Promise<{readonly proofRef: string}> => {

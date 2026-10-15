@@ -555,6 +555,56 @@ for (const backend of ["memory", "d1", "postgres"] as const) {
     } finally {await f.close();}
   }, 30_000);
 
+  test(`${backend}: competing full challenges for one retained original share a custody rendezvous and never replace the winner`, async () => {
+    const f = await fixture(backend);
+    try {
+      const grant = await f.grant(), input = {accessToken: grant.access_token, challengeRef: f.challenge.challengeRef};
+      await expect(f.producer().prove(input)).rejects.toThrow("source_pending");
+      await f.producer().flush({limit: 100});
+      const firstChallenge = structuredClone(f.challenge);
+      const secondChallenge = {...firstChallenge, requestFingerprint: `sha256:${"d".repeat(64)}`};
+      const clock = () => Date.now() + 10_000;
+      const first = createAccountsFinancialSource({...f.options, now: clock,
+        challenges: {async read() { return structuredClone(firstChallenge); }}});
+      const second = createAccountsFinancialSource({...f.options, now: clock,
+        challenges: {async read() { return structuredClone(secondChallenge); }}});
+      const issue = f.store.issueFinancialSourceProof!.bind(f.store);
+      const candidates: FinancialSourceProofRecord[] = [];
+      let release!: () => void;
+      const bothPrepared = new Promise<void>(resolve => {release = resolve;});
+      f.store.issueFinancialSourceProof = async mutation => {
+        candidates.push(structuredClone(mutation.proof));
+        if (candidates.length === 2) release();
+        await bothPrepared;
+        return issue(mutation);
+      };
+      const outcomes = await Promise.allSettled([first.prove(input), second.prove(input)]);
+      expect(candidates).toHaveLength(2);
+      expect(candidates[0]!.challenge).not.toEqual(candidates[1]!.challenge);
+      // Actual producers reached the repository boundary with different FULL
+      // challenges but the SAME retained-census set. This must be one PK even
+      // when a real PG statement's NOT EXISTS retains an earlier MVCC snapshot.
+      // PGlite below is not claimed to simulate two concurrent PG sessions.
+      expect(candidates[0]!.proofRef).toBe(candidates[1]!.proofRef);
+      const succeeded = outcomes.filter(outcome => outcome.status === "fulfilled");
+      const refused = outcomes.filter(outcome => outcome.status === "rejected");
+      expect(succeeded).toHaveLength(1);
+      expect(refused).toHaveLength(1);
+      expect((refused[0] as PromiseRejectedResult).reason.message).toBe("source_conflict");
+      const selected = (succeeded[0] as PromiseFulfilledResult<{proofRef:string}>).value;
+      const original = (await f.store.findFinancialSourceProof!(selected.proofRef))!;
+      expect(await f.store.findFinancialSourceProofsForOriginalRequest!({registrationRef:f.registration.registrationRef,
+        challengeRef:input.challengeRef,accessTokenHash:original.accessTokenHash})).toEqual([original]);
+      const winningProducer = canonicalFinancialSourceJson(original.challenge) === canonicalFinancialSourceJson(firstChallenge) ? first : second;
+      const losingProducer = winningProducer === first ? second : first;
+      const before = await f.sourceVector();
+      expect(await winningProducer.prove(input)).toEqual(selected);
+      await expect(losingProducer.prove(input)).rejects.toThrow("source_conflict");
+      expect(await f.store.findFinancialSourceProof!(selected.proofRef)).toEqual(original);
+      expect(await f.sourceVector()).toBe(before);
+    } finally { await f.close(); }
+  }, 30_000);
+
   test(`${backend}: concurrent original issuances and commit-unknown recover the one original proof`, async () => {
     const f = await fixture(backend);
     try {
