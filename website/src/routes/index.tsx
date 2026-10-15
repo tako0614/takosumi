@@ -86,7 +86,7 @@ export default function Home() {
           <span>Takosumi</span>
         </a>
         <nav aria-label="サイトナビゲーション">
-          <a href="#apps">アプリを探す</a>
+          <a class="nav-apps" href="#apps">アプリを探す</a>
           <a href="/docs/">ドキュメント</a>
           <a class="nav-login" href="https://app.takosumi.com/">使ってみる <Arrow /></a>
         </nav>
