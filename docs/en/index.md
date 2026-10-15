@@ -44,9 +44,27 @@ Git URL and module declaration
   → save state, outputs, and audit records
 ```
 
-## Try the API
+## Getting started
 
-You can start the API with this development setup. It keeps data in memory.
+Pick the entry point that matches what you want to do.
+
+- **Use it in the browser** — sign in to the official hosted service at
+  [app.takosumi.com](https://app.takosumi.com/) and add a module from the Store or
+  a Git URL. The hosted service is Pre-GA. Steps, pricing, availability, and
+  support are in the
+  [Takosumi hosted service documentation](https://app.takosumi.com/docs/en/).
+- **Try plan through apply locally** — follow the
+  [Quickstart](./getting-started/quickstart.md) to start the dashboard, sign-in,
+  database, and runner on Linux with Docker. The sample module creates no external
+  resources, so you need no cloud credentials.
+- **Run it in your own environment** — [Running it yourself](./concepts/self-host.md)
+  helps you choose between the Cloudflare and the Bun and PostgreSQL templates.
+- **Run only the API** — start it with the development setup below.
+
+### Run only the API
+
+Data stays in memory and is lost on restart. The dashboard and runner do not
+start.
 
 ```bash
 git clone https://github.com/tako0614/takosumi.git
@@ -66,8 +84,7 @@ curl http://127.0.0.1:8788/api/v1/capabilities \
   -H "authorization: Bearer dev-token"
 ```
 
-The [Quickstart](./getting-started/quickstart.md) starts the dashboard, sign-in,
-durable database, and OpenTofu runner.
+If it returns JSON, the API is running.
 
 ## Where to go next
 
@@ -84,6 +101,3 @@ durable database, and OpenTofu runner.
 The old Resource Shape / Form Host API is documented only in the
 [Resource migration note](./concepts/resources.md); it is not a new authoring
 surface.
-
-Pricing, hosted resources, and support for the official hosted service are in
-the [Takosumi hosted service documentation](https://app.takosumi.com/docs/en/).
