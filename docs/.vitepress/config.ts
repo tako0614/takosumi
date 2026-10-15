@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { type DefaultTheme, defineConfig } from "vitepress";
+import { scrollableTables } from "./scrollable-tables";
 import { firstParagraphText, wrappedLines } from "./wrapped-lines";
 
 // Pages rarely carry a frontmatter description. Fall back to the first prose
@@ -22,8 +23,8 @@ const jaNav: DefaultTheme.NavItem[] = [
   { text: "Takosumi Hosted", link: "https://app.takosumi.com/docs/" },
 ];
 
+// The site title already links to /en/, as the Japanese title does to /.
 const enNav: DefaultTheme.NavItem[] = [
-  { text: "Software", link: "/en/" },
   { text: "Quickstart", link: "/en/getting-started/quickstart" },
   { text: "Concepts", link: "/en/concepts/" },
   { text: "Reference", link: "/en/reference/api" },
@@ -247,6 +248,7 @@ export default defineConfig({
     theme: { light: "github-light-high-contrast", dark: "github-dark-default" },
     config(md) {
       wrappedLines(md);
+      scrollableTables(md);
     },
   },
   cleanUrls: true,
