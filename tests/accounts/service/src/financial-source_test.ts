@@ -118,8 +118,9 @@ test("producer uses real shared grant, exact challenge/context and all receiver 
   const proof = await p.prove({accessToken: f.token, challengeRef: f.challenge.challengeRef});
   expect(Object.keys(proof)).toEqual(["proofRef"]);
   expect(proof.proofRef).toStartWith("afp_");
-  // Independent Python hashlib/canonical-JSON vector for this synthetic input.
-  expect(proof.proofRef).toBe("afp_UwKyS1ONe9Fu70GKCedgIoFi9kkQZuD15dQFgPHwHZc");
+  // Independent Python hashlib/canonical-JSON custody@v1 vector for the
+  // synthetic retained-census tuple (registrationRef, challengeRef, token hash).
+  expect(proof.proofRef).toBe("afp_pkVjf0VlhX_lYPHAV_Jt7-JlhOdDuPqycOU3Bw0aCiw");
   expect(f.deliveries()).toBe(4);
 });
 
