@@ -98,6 +98,10 @@ const mirroredMigrationFiles: readonly {
     fileName: "20261016000073_identity_reconciliation.sql",
     migrationId: "deploy.identity_reconciliation.create",
   },
+  {
+    fileName: "20261016000075_workspace_financial_source.sql",
+    migrationId: "deploy.workspace_financial_source.create",
+  },
 ];
 
 test("migration catalog creates every declared storage table", () => {
@@ -169,7 +173,7 @@ test("migration SQL files have unique timestamp prefixes", () => {
 function extractCreatedTables(sql: string): Set<string> {
   const tables = new Set<string>();
   const pattern =
-    /\bcreate\s+table\s+if\s+not\s+exists\s+([a-z_][a-z0-9_]*)\b/gi;
+    /\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?([a-z_][a-z0-9_]*)\b/gi;
   for (const match of sql.matchAll(pattern)) tables.add(match[1]);
   return tables;
 }
