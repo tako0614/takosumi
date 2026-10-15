@@ -30,6 +30,21 @@ import type {
   UnlinkUpstreamIdentityInput,
 } from "./identity-state.ts";
 import { upstreamIdentityKey } from "./identity-state.ts";
+import type * as Financial from "./identity-state.ts";
+import type { FinancialSourceRegistration, FinancialSourceReceiptRecord } from "./financial-source-contract.ts";
+import { parseFinancialSourceRegistration, FINANCIAL_SOURCE_MAX_PAGE } from "./financial-source-contract.ts";
+import { sha256Text } from "./encoding.ts";
+import { consumeFinancialSourcePrecommitCheckpoint } from "./financial-source.ts";
+import {
+  financialSourceBuckets, financialSourceScopeKey, financialSourcePendingKey, financialSourceReceiptKey,
+  financialSourceEqual, financialSourceParentScopes, validFinancialSourceAuthority,
+  financialSourceAffectedRecord,
+  validFinancialSourceParentEnvelope, financialSourceParentExpected, buildFinancialSourceEnrollment,
+  closeFinancialSourceParent, financialSourceRawPending, financialSourceReadyReference,
+  financialSourceProofMatches, validFinancialSourceMaterialization, validFinancialSourceReceipt,
+  type FinancialSourceParentEnvelope,
+} from "./hosted-identity-records.ts";
+type MutableFinancialVector<T> = { -readonly [K in keyof Financial.FinancialSourceParentVector<T>]: T };
 
 export class MemoryIdentityRecordRepository
   implements IdentityRecordRepository
@@ -40,6 +55,8 @@ export class MemoryIdentityRecordRepository
     readonly sessions: Map<string, AccountSessionRecord>,
     readonly identities: Map<string, UpstreamIdentityRecord>,
     readonly revoke: (subjects: readonly string[], now: number) => void,
+    /** This reads the actual private token map synchronously at final commit. */
+    readonly findCurrentAccessToken?: (accessToken: string) => import("./store.ts").TokenRecord | undefined,
   ) {}
   private assertReferences(record: unknown, bucket: string): void {
     const r = record as Record<string, unknown>;
@@ -53,6 +70,210 @@ export class MemoryIdentityRecordRepository
   }
   private key(bucket: string, key: string): string {
     return `${bucket}\n${key}`;
+  }
+  private financialRecord<T>(bucket: string, key: string): T | undefined {
+    return this.records.get(this.key(bucket, key)) as T | undefined;
+  }
+  async registerFinancialSourceRegistration(registration: FinancialSourceRegistration): Promise<boolean> {
+    try {
+      const record = parseFinancialSourceRegistration(registration);
+      const key = this.key(financialSourceBuckets.registrations, record.registrationRef);
+      const previous = this.records.get(key);
+      if (previous !== undefined) return financialSourceEqual(previous, record);
+      this.records.set(key, record);
+      return true;
+    } catch { return false; }
+  }
+  async findFinancialSourceRegistration(registrationRef: string): Promise<FinancialSourceRegistration | undefined> {
+    return structuredClone(this.financialRecord<FinancialSourceRegistration>(financialSourceBuckets.registrations, registrationRef));
+  }
+  async findFinancialSourceParent(scope: Financial.FinancialSourceParentScope): Promise<Financial.FinancialSourceParentHead | undefined> {
+    const envelope = this.financialRecord<FinancialSourceParentEnvelope>(financialSourceBuckets.parents, financialSourceScopeKey(scope));
+    return envelope && validFinancialSourceParentEnvelope(envelope, scope) ? structuredClone(envelope.head) : undefined;
+  }
+  private financialAuthority(input: Financial.FinancialSourceAuthoritySnapshot, now: number, accessTokenHash: string): boolean {
+    if (!validFinancialSourceAuthority(input, now) || accessTokenHash !== input.accessTokenHash ||
+      !financialSourceEqual(this.financialRecord(financialSourceBuckets.registrations, input.registration.registrationRef), input.registration)) return false;
+    const access = this.findCurrentAccessToken?.(input.accessToken);
+    const grant = this.financialRecord<Financial.HostedOidcGrantRecord>("hosted_oidc_grants", input.expectedGrant.sid);
+    const subject = input.expectedGrant.subject;
+    if (!access || !grant || !financialSourceEqual(access, input.expectedAccess) || !financialSourceEqual(grant, input.expectedGrant) ||
+      access.oidcProfile !== "shared-account" || access.subject !== subject || (access.takosumiSubject !== undefined && access.takosumiSubject !== subject) ||
+      access.clientId !== grant.clientId || access.sid !== grant.sid || access.issuer !== grant.issuer || access.issuerSessionId !== grant.issuerSessionId ||
+      (access.identityGeneration ?? 0) !== input.expectedIdentityGeneration || (grant.identityGeneration ?? 0) !== input.expectedIdentityGeneration ||
+      access.expiresAt <= now || grant.absoluteExpiresAt <= now || grant.revokedAt !== undefined ||
+      !this.accounts.has(subject) || this.records.has(this.key("canonical_accounts", subject)) ||
+      this.records.has(this.key("hosted_oidc_revoked_sessions", grant.issuerSessionId)) ||
+      this.records.has(this.key("hosted_oidc_revoked_clients", grant.clientId)) ||
+      (this.financialRecord<{ generation: number }>("authentication_generations", subject)?.generation ?? 0) !== input.expectedIdentityGeneration) return false;
+    const lock = this.financialRecord<{ operationId: string }>("identity_merge_locks", subject);
+    return !lock || this.financialRecord<IdentityMergeOperation>("identity_merge_operations", lock.operationId)?.status === "active";
+  }
+  /** Prepare every immutable write before the synchronous decision/write block. */
+  private financialEnvelopeWrites(envelope: FinancialSourceParentEnvelope, registration?: FinancialSourceRegistration): readonly (readonly [string, unknown])[] {
+    if (!validFinancialSourceParentEnvelope(envelope, envelope.scope)) throw new Error("invalid_financial_parent_envelope");
+    const writes: Array<readonly [string, unknown]> = [[this.key(financialSourceBuckets.parents, financialSourceScopeKey(envelope.scope)), structuredClone(envelope)]];
+    const head = envelope.head, raw = envelope.lastRaw;
+    if (!head) return writes;
+    if (!raw || !registration || registration.registrationRef !== head.registrationRef || registration.incarnation !== head.incarnation) throw new Error("financial_parent_registration_missing");
+    const affected = { affectedRef: head.affectedRef, scope: envelope.scope, registrationRef: head.registrationRef, incarnation: head.incarnation };
+    const oldAffected = this.financialRecord(financialSourceBuckets.affected, head.affectedRef);
+    if (oldAffected !== undefined && !financialSourceEqual(oldAffected, affected)) throw new Error("financial_parent_affected_conflict");
+    writes.push([this.key(financialSourceBuckets.affected, head.affectedRef), structuredClone(affected)]);
+    if (this.financialRecord(financialSourceBuckets.raw, raw.raw.eventRef) !== undefined) throw new Error("financial_source_event_ref_reused");
+    const pending = financialSourceRawPending(registration, raw);
+    const pendingKey = this.key(financialSourceBuckets.pending, financialSourcePendingKey(registration.registrationRef, raw.raw.eventRef));
+    if (this.records.has(pendingKey)) throw new Error("financial_source_pending_conflict");
+    writes.push([this.key(financialSourceBuckets.raw, raw.raw.eventRef), structuredClone(raw)], [pendingKey, structuredClone(pending)]);
+    return writes;
+  }
+  private commitFinancialWrites(writes: readonly (readonly [string, unknown])[]): void {
+    for (const [key, value] of writes) this.records.set(key, value);
+  }
+  async enrollFinancialSourceParents(input: Financial.FinancialSourceEnrollmentMutation): Promise<Financial.FinancialSourceParentVector<Financial.FinancialSourceParentHead> | undefined> {
+    const accessTokenHash = await sha256Text(input.accessToken);
+    const now = consumeFinancialSourcePrecommitCheckpoint(input);
+    if (now === undefined || !this.financialAuthority(input, now, accessTokenHash)) return undefined;
+    try {
+      const scopes = financialSourceParentScopes(input), next = buildFinancialSourceEnrollment(input, now);
+      if (!next) return undefined;
+      const heads = {} as MutableFinancialVector<Financial.FinancialSourceParentHead>;
+      const writes: Array<readonly [string, unknown]> = [];
+      const affected = new Set<string>(), eventRefs = new Set<string>();
+      for (const slot of ["grant", "issuerSession", "client", "accountGeneration"] as const) {
+        const current = this.financialRecord<FinancialSourceParentEnvelope>(financialSourceBuckets.parents, financialSourceScopeKey(scopes[slot]));
+        if (!financialSourceParentExpected(current, scopes[slot], input.parents[slot].expected) || !next[slot].head) return undefined;
+        heads[slot] = next[slot].head;
+        if (affected.has(heads[slot].affectedRef) || eventRefs.has(heads[slot].lastEventRef)) return undefined;
+        affected.add(heads[slot].affectedRef); eventRefs.add(heads[slot].lastEventRef);
+        if (current === undefined) {
+          if (this.financialRecord(financialSourceBuckets.affected, heads[slot].affectedRef) !== undefined) return undefined;
+          writes.push(...this.financialEnvelopeWrites(next[slot], input.registration));
+        } else if (!financialSourceEqual(this.financialRecord(financialSourceBuckets.affected, current.head!.affectedRef), financialSourceAffectedRecord(current.head!))) return undefined;
+      }
+      this.commitFinancialWrites(writes);
+      return structuredClone(heads);
+    } catch { return undefined; }
+  }
+  async issueFinancialSourceProof(input: Financial.FinancialSourceProofMutation): Promise<Financial.FinancialSourceProofRecord | undefined> {
+    const accessTokenHash = await sha256Text(input.accessToken);
+    const now = consumeFinancialSourcePrecommitCheckpoint(input);
+    if (now === undefined || !this.financialAuthority(input, now, accessTokenHash)) return undefined;
+    try {
+      const scopes = financialSourceParentScopes(input);
+      const references = {} as MutableFinancialVector<Financial.FinancialSourceParentReference>;
+      for (const slot of ["grant", "issuerSession", "client", "accountGeneration"] as const) {
+        const envelope = this.financialRecord<FinancialSourceParentEnvelope>(financialSourceBuckets.parents, financialSourceScopeKey(scopes[slot]));
+        if (!financialSourceParentExpected(envelope, scopes[slot], input.expectedParents[slot]) || !envelope?.head) return undefined;
+        if (!financialSourceEqual(this.financialRecord(financialSourceBuckets.affected, envelope.head.affectedRef), financialSourceAffectedRecord(envelope.head))) return undefined;
+        const materialization = this.financialRecord<Financial.FinancialSourceMaterializationRecord>(financialSourceBuckets.materializations, envelope.head.lastEventRef);
+        if (!materialization || !financialSourceEqual(this.financialRecord(financialSourceBuckets.raw, envelope.head.lastEventRef), materialization.rawRecord)) return undefined;
+        const receipts = input.registration.receivers.flatMap(receiver => {
+          const receipt = this.financialRecord<FinancialSourceReceiptRecord>(financialSourceBuckets.receipts, financialSourceReceiptKey(input.registration.registrationRef, envelope.head!.lastEventRef, receiver.receiverRef));
+          return receipt ? [receipt] : [];
+        });
+        const reference = financialSourceReadyReference(envelope.head, materialization, input.registration, receipts);
+        if (!reference) return undefined;
+        references[slot] = reference;
+      }
+      if (!financialSourceProofMatches(input, now, input.expectedParents, references)) return undefined;
+      const key = this.key(financialSourceBuckets.proofs, input.proof.proofRef), old = this.records.get(key);
+      if (old !== undefined) return financialSourceEqual(old, input.proof) ? structuredClone(input.proof) : undefined;
+      this.records.set(key, structuredClone(input.proof));
+      return structuredClone(input.proof);
+    } catch { return undefined; }
+  }
+  async findFinancialSourceProof(proofRef: string): Promise<Financial.FinancialSourceProofRecord | undefined> {
+    return structuredClone(this.financialRecord<Financial.FinancialSourceProofRecord>(financialSourceBuckets.proofs, proofRef));
+  }
+  private financialCloseWrites(scope: Financial.FinancialSourceParentScope, cause: Financial.FinancialSourceRawCause, evidenceRef: string, now: number): readonly (readonly [string, unknown])[] {
+    const current = this.financialRecord<FinancialSourceParentEnvelope>(financialSourceBuckets.parents, financialSourceScopeKey(scope));
+    if (current !== undefined && !validFinancialSourceParentEnvelope(current, scope)) throw new Error("invalid_financial_parent_envelope");
+    if (current?.closed) return [];
+    const next = closeFinancialSourceParent(scope, current, cause, evidenceRef, now);
+    const registration = next.head ? this.financialRecord<FinancialSourceRegistration>(financialSourceBuckets.registrations, next.head.registrationRef) : undefined;
+    return this.financialEnvelopeWrites(next, registration);
+  }
+  private financialGenerationWrites(subjects: readonly TakosumiAccountRecord["subject"][], now: number, operationId: string, operationRevision: number,
+    reason: Extract<Financial.FinancialSourceRawCause, { kind: "identity-generation-advanced" }>["reason"], legacyUnlink = false): readonly (readonly [string, unknown])[] {
+    const writes: Array<readonly [string, unknown]> = [];
+    for (const subject of new Set(subjects)) {
+      const previousGeneration = this.financialRecord<{ generation: number }>("authentication_generations", subject)?.generation ?? 0;
+      const scope: Financial.FinancialSourceParentScope = { kind: "account-generation", subject, identityGeneration: previousGeneration };
+      // An ordinary account with no enrolled financial parent retains its behavior.
+      if (!this.records.has(this.key(financialSourceBuckets.parents, financialSourceScopeKey(scope)))) continue;
+      const cause: Financial.FinancialSourceRawCause = { kind: "identity-generation-advanced", subject, previousGeneration,
+        nextGeneration: previousGeneration + 1, operationId, operationRevision, reason, ...(legacyUnlink ? { legacyUnlink: true } : {}) };
+      writes.push(...this.financialCloseWrites(scope, cause, `accounts-generation/${operationId}/${operationRevision}`, now));
+    }
+    return writes;
+  }
+  async revokeHostedOidcScope(input: Financial.FinancialSourceRevocationMutation): Promise<boolean> {
+    const { scope, now, evidenceRef } = input;
+    if (!Number.isSafeInteger(now) || now < 0 || !scope || !["grant", "issuer-session", "client"].includes(scope.kind)) return false;
+    const field = scope.kind === "grant" ? "sid" : scope.kind === "issuer-session" ? "issuerSessionId" : "clientId";
+    const value = scope.kind === "grant" ? scope.sid : scope.kind === "issuer-session" ? scope.issuerSessionId : scope.clientId;
+    const bucket = scope.kind === "issuer-session" ? "hosted_oidc_revoked_sessions" : "hosted_oidc_revoked_clients";
+    const cause: Financial.FinancialSourceRawCause = scope.kind === "grant" ? { kind: "grant-revoked", sid: value, revokedAt: now } : scope.kind === "issuer-session" ? { kind: "issuer-session-revoked", issuerSessionId: value, revokedAt: now } : { kind: "client-revoked", clientId: value, revokedAt: now };
+    const writes = [...this.financialCloseWrites(scope, cause, evidenceRef, now)];
+    const tombstone = this.key(bucket, value);
+    if (scope.kind !== "grant" && !this.records.has(tombstone)) writes.push([tombstone, { [field]: value, revokedAt: now }]);
+    for (const [key, record] of this.records) {
+      const grant = record as Record<string, unknown>;
+      if (key.startsWith("hosted_oidc_grants\n") && grant[field] === value && grant.revokedAt === undefined) writes.push([key, { ...grant, revokedAt: now }]);
+    }
+    this.commitFinancialWrites(writes);
+    return true;
+  }
+  async findFinancialSourceRaw(eventRef: string): Promise<Financial.FinancialSourceRawRecord | undefined> {
+    return structuredClone(this.financialRecord<Financial.FinancialSourceRawRecord>(financialSourceBuckets.raw, eventRef));
+  }
+  async listFinancialSourcePending(input: { readonly registrationRef: string; readonly after?: string; readonly limit: number }): Promise<Financial.FinancialSourcePendingPage> {
+    if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > FINANCIAL_SOURCE_MAX_PAGE) throw new TypeError("invalid_financial_source_page");
+    const entries = [...this.records].filter(([key]) => key.startsWith(financialSourceBuckets.pending + "\n")).map(([, value]) => value as Financial.FinancialSourcePendingRecord)
+      .filter(value => value.registration.registrationRef === input.registrationRef && (input.after === undefined || value.eventRef > input.after)).sort((a, b) => a.eventRef < b.eventRef ? -1 : a.eventRef > b.eventRef ? 1 : 0);
+    const page = entries.slice(0, input.limit);
+    return { entries: structuredClone(page), ...(entries.length > input.limit ? { nextCursor: page.at(-1)!.eventRef } : {}) };
+  }
+  async findFinancialSourceMaterialization(eventRef: string): Promise<Financial.FinancialSourceMaterializationRecord | undefined> {
+    return structuredClone(this.financialRecord<Financial.FinancialSourceMaterializationRecord>(financialSourceBuckets.materializations, eventRef));
+  }
+  async commitFinancialSourceMaterialization(original: Financial.FinancialSourceMaterializationMutation): Promise<boolean> {
+    const input = structuredClone(original);
+    const registration = structuredClone(this.financialRecord<FinancialSourceRegistration>(financialSourceBuckets.registrations, input.expectedRaw.raw.registrationRef));
+    if (!registration || !await validFinancialSourceMaterialization(input, registration)) return false;
+    if (!financialSourceEqual(this.financialRecord(financialSourceBuckets.registrations, registration.registrationRef), registration) ||
+      !financialSourceEqual(this.financialRecord(financialSourceBuckets.raw, input.expectedRaw.raw.eventRef), input.expectedRaw)) return false;
+    const raw = input.expectedRaw.raw;
+    const predecessor = raw.previousEventRef === null ? undefined : this.financialRecord<Financial.FinancialSourceMaterializationRecord>(financialSourceBuckets.materializations, raw.previousEventRef);
+    if (!financialSourceEqual(predecessor, input.expectedPredecessor)) return false;
+    const envelope = this.financialRecord<FinancialSourceParentEnvelope>(financialSourceBuckets.parents, financialSourceScopeKey(input.expectedRaw.parent));
+    if (!envelope || !validFinancialSourceParentEnvelope(envelope, input.expectedRaw.parent) || !envelope.head || envelope.head.registrationRef !== raw.registrationRef || envelope.head.incarnation !== raw.incarnation || envelope.head.affectedRef !== raw.affectedRef || envelope.head.sequence < raw.sequence || envelope.head.revision < input.expectedRaw.parentRevision) return false;
+    const record = { rawRecord: input.expectedRaw, materialization: input.materialization };
+    const key = this.key(financialSourceBuckets.materializations, raw.eventRef), old = this.records.get(key);
+    if (old !== undefined) return financialSourceEqual(old, record);
+    this.records.set(key, record); return true;
+  }
+  async findFinancialSourceReceipt(input: { readonly registrationRef: string; readonly eventRef: string; readonly receiverRef: string }): Promise<FinancialSourceReceiptRecord | undefined> {
+    return structuredClone(this.financialRecord<FinancialSourceReceiptRecord>(financialSourceBuckets.receipts, financialSourceReceiptKey(input.registrationRef, input.eventRef, input.receiverRef)));
+  }
+  async recordFinancialSourceReceipt(input: Financial.FinancialSourceReceiptMutation): Promise<boolean> {
+    const event = input.expectedMaterialization.materialization.event;
+    const registration = this.financialRecord<FinancialSourceRegistration>(financialSourceBuckets.registrations, event.registrationRef);
+    if (!registration || !validFinancialSourceReceipt(input, registration) || !financialSourceEqual(this.financialRecord(financialSourceBuckets.materializations, event.eventRef), input.expectedMaterialization) ||
+      !financialSourceEqual(this.financialRecord(financialSourceBuckets.raw, event.eventRef), input.expectedMaterialization.rawRecord)) return false;
+    const key = this.key(financialSourceBuckets.receipts, financialSourceReceiptKey(event.registrationRef, event.eventRef, input.receipt.receiverRef));
+    const old = this.records.get(key);
+    if (old !== undefined) return financialSourceEqual(old, input.receipt);
+    const pendingKey = this.key(financialSourceBuckets.pending, financialSourcePendingKey(event.registrationRef, event.eventRef));
+    const pending = this.records.get(pendingKey) as Financial.FinancialSourcePendingRecord | undefined;
+    if (!pending || !financialSourceEqual(pending.registration, registration)) return false;
+    this.records.set(key, structuredClone(input.receipt));
+    if (registration.receivers.every(receiver => {
+      const receipt = this.financialRecord<FinancialSourceReceiptRecord>(financialSourceBuckets.receipts, financialSourceReceiptKey(event.registrationRef, event.eventRef, receiver.receiverRef));
+      return receipt !== undefined && validFinancialSourceReceipt({ expectedMaterialization: input.expectedMaterialization, receipt }, registration);
+    })) this.records.delete(pendingKey);
+    return true;
   }
   async commitReviewedRecoveryApproval(input: ReviewedRecoveryApprovalMutation): Promise<boolean> {
     const {record:r,pointer:p}=input,a=r.approval;
@@ -130,15 +351,9 @@ export class MemoryIdentityRecordRepository
     value: string,
     now: number,
   ): Promise<void> {
-    for (const [k, v] of this.records) {
-      const r = v as Record<string, unknown>;
-      if (
-        k.startsWith("hosted_oidc_grants\n") &&
-        r[field] === value &&
-        r.revokedAt === undefined
-      )
-        this.records.set(k, { ...r, revokedAt: now });
-    }
+    const scope: Financial.FinancialSourceRevocationMutation["scope"] = field === "sid" ? { kind: "grant", sid: value } :
+      field === "issuerSessionId" ? { kind: "issuer-session", issuerSessionId: value } : { kind: "client", clientId: value };
+    if (!await this.revokeHostedOidcScope({ scope, now, evidenceRef: `accounts-revoke/${crypto.randomUUID()}` })) throw new Error("financial_source_revocation_failed");
   }
   async emailCandidates(
     address: string,
@@ -397,7 +612,13 @@ export class MemoryIdentityRecordRepository
     // The checkpoint and all captured expiry bounds are checked again after
     // preparation. This is a local precommit boundary, not server execution/2PC.
     if (input.availabilityCheckpoint !== undefined && consumeReviewedRecoveryIssuerAvailabilityCheckpoint(input.availabilityCheckpoint, input) === undefined) return false;
+    let financialWrites: readonly (readonly [string, unknown])[] = [];
+    try {
+      const reason = input.reserve ? "reserve" : input.activate ? "activate" : input.quarantine ? "quarantine" : input.abort ? "abort" : input.restore ? "restore" : undefined;
+      if (reason) financialWrites = this.financialGenerationWrites([n.sourceSubject, n.targetSubject], input.now, n.operationId, n.revision, reason);
+    } catch { return false; }
     // No awaits in this decision/write section: one winner consumes the proof.
+    this.commitFinancialWrites(financialWrites);
     this.records.set(
       this.key("identity_merge_operations", n.operationId),
       structuredClone(n),
@@ -676,6 +897,10 @@ export class MemoryIdentityRecordRepository
       )
         return false;
     }
+    let financialWrites: readonly (readonly [string, unknown])[];
+    try { financialWrites = this.financialGenerationWrites([n.subject], input.now, n.operationId, n.revision, "unlink"); }
+    catch { return false; }
+    this.commitFinancialWrites(financialWrites);
     this.records.set(key, structuredClone(n));
     this.records.set(this.key("credential_unlink_receipts", r.receiptId), {
       ...r,
@@ -755,6 +980,12 @@ export class MemoryIdentityRecordRepository
       ) as IdentityMergeOperation | undefined;
       if (op?.status !== "active") return false;
     }
+    let financialWrites: readonly (readonly [string, unknown])[];
+    try {
+      // Revision zero is an explicit legacy sentinel, not a named intent revision.
+      financialWrites = this.financialGenerationWrites([input.subject], input.now, input.operationId, 0, "unlink", true);
+    } catch { return false; }
+    this.commitFinancialWrites(financialWrites);
     this.records.set(this.key("upstream_identity_status", identityKey), {
       identityKey,
       ...input.identity,

@@ -134,6 +134,42 @@ without persisting bearer material. A lost refresh acknowledgement is a
 refusal, not permission to resend an OpenTofu mutation. Existing no-slot
 dispatch identity remains unchanged.
 
+### Ordinary platform composition
+
+The ordinary platform entrypoint also accepts the optional nonsecret
+`TAKOSUMI_PRIVATE_RUN_FILES` JSON descriptor. Its complete key set is
+`endpoint`, `prefix`, and `maxBytes`. The endpoint must be a canonical absolute
+HTTPS URL ending exactly in `/internal/private-run-files/v1`, without userinfo,
+query, or fragment. The isolated R2 prefix uses nonempty ASCII
+`[A-Za-z0-9._-]+` path segments, excludes `.` and `..`, and is at most 240
+characters, matching the existing R2 adapter. `maxBytes` must be exactly
+16777216; the descriptor itself is bounded at 4096 UTF-8 bytes. Absence leaves
+this route unmounted. Invalid or changing configuration refuses initialization.
+
+Host code pins one immutable descriptor snapshot for the request Core,
+pre-constructor RunOwner composition, and Core's existing grant minter. The
+minter delivers that same endpoint alongside each opaque grant. The grant
+itself has no endpoint claim: the platform compares the actual request URL
+with the configured endpoint plus exactly `/read`, `/commit`, or `/resolve`.
+The narrow POST route rejects browser Origin/cookie/session headers and
+preserves the existing global shared-auth ingress guard. It forwards the
+original bearer and bounded body to Core's grant validation and durable
+authority checks; a session, PAT, or operator bearer is not this capability.
+Responses use `Cache-Control: no-store`. Enabling this route does not enable
+the general internal-edge flag, public discovery, or browser CORS.
+
+The descriptor declares no slots, InstallConfigs, grants, or readiness flags.
+Slot declarations still come from the owning host's existing
+`operatorInstallConfigs` / `TAKOSUMI_INSTALL_CONFIG_COMPOSITION` path, then the
+canonical InstallConfig and Core normalization. A matching endpoint is not
+authorization to create or operate on a slot. Existing D1 authority, configured
+partitioned encryption and `R2_ARTIFACTS` custody remain required. The source
+tests exercise real sealed grants, encrypted R2-adapter bytes and D1
+pointer/receipt CAS through the platform entrypoint. They do not qualify an
+operator's actual endpoint, retention policy, deployed Runner, Provider, or
+private-file business journey. Adopting the descriptor in a realized host
+configuration requires that separate owner qualification.
+
 The source bridge and local tests do not qualify bucket retention/lifecycle,
 Cloud restart/kill durability, or a hosted Cloud Runner-to-Provider operation.
 The in-process DO-to-real-Runner HTTP test proves descriptor rotation reaches

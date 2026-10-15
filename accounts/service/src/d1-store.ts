@@ -576,6 +576,20 @@ export class D1AccountsStore implements AccountsStore {
     this.#sessionHashSalt = options.sessionHashSalt;
   }
 
+  registerFinancialSourceRegistration(input: Parameters<HostedIdentityRecords["registerFinancialSourceRegistration"]>[0]): ReturnType<HostedIdentityRecords["registerFinancialSourceRegistration"]> { return this.#hosted.registerFinancialSourceRegistration(input); }
+  findFinancialSourceRegistration(input: Parameters<HostedIdentityRecords["findFinancialSourceRegistration"]>[0]): ReturnType<HostedIdentityRecords["findFinancialSourceRegistration"]> { return this.#hosted.findFinancialSourceRegistration(input); }
+  findFinancialSourceParent(input: Parameters<HostedIdentityRecords["findFinancialSourceParent"]>[0]): ReturnType<HostedIdentityRecords["findFinancialSourceParent"]> { return this.#hosted.findFinancialSourceParent(input); }
+  enrollFinancialSourceParents(input: Parameters<HostedIdentityRecords["enrollFinancialSourceParents"]>[0]): ReturnType<HostedIdentityRecords["enrollFinancialSourceParents"]> { return this.#hosted.enrollFinancialSourceParents(input); }
+  issueFinancialSourceProof(input: Parameters<HostedIdentityRecords["issueFinancialSourceProof"]>[0]): ReturnType<HostedIdentityRecords["issueFinancialSourceProof"]> { return this.#hosted.issueFinancialSourceProof(input); }
+  findFinancialSourceProof(input: Parameters<HostedIdentityRecords["findFinancialSourceProof"]>[0]): ReturnType<HostedIdentityRecords["findFinancialSourceProof"]> { return this.#hosted.findFinancialSourceProof(input); }
+  revokeHostedOidcScope(input: Parameters<HostedIdentityRecords["revokeHostedOidcScope"]>[0]): ReturnType<HostedIdentityRecords["revokeHostedOidcScope"]> { return this.#hosted.revokeHostedOidcScope(input); }
+  findFinancialSourceRaw(input: Parameters<HostedIdentityRecords["findFinancialSourceRaw"]>[0]): ReturnType<HostedIdentityRecords["findFinancialSourceRaw"]> { return this.#hosted.findFinancialSourceRaw(input); }
+  listFinancialSourcePending(input: Parameters<HostedIdentityRecords["listFinancialSourcePending"]>[0]): ReturnType<HostedIdentityRecords["listFinancialSourcePending"]> { return this.#hosted.listFinancialSourcePending(input); }
+  findFinancialSourceMaterialization(input: Parameters<HostedIdentityRecords["findFinancialSourceMaterialization"]>[0]): ReturnType<HostedIdentityRecords["findFinancialSourceMaterialization"]> { return this.#hosted.findFinancialSourceMaterialization(input); }
+  commitFinancialSourceMaterialization(input: Parameters<HostedIdentityRecords["commitFinancialSourceMaterialization"]>[0]): ReturnType<HostedIdentityRecords["commitFinancialSourceMaterialization"]> { return this.#hosted.commitFinancialSourceMaterialization(input); }
+  findFinancialSourceReceipt(input: Parameters<HostedIdentityRecords["findFinancialSourceReceipt"]>[0]): ReturnType<HostedIdentityRecords["findFinancialSourceReceipt"]> { return this.#hosted.findFinancialSourceReceipt(input); }
+  recordFinancialSourceReceipt(input: Parameters<HostedIdentityRecords["recordFinancialSourceReceipt"]>[0]): ReturnType<HostedIdentityRecords["recordFinancialSourceReceipt"]> { return this.#hosted.recordFinancialSourceReceipt(input); }
+
   createOwnerOperationContextEvidence(record: import("./owner-operation-contract.ts").OwnerOperationContextEvidence): Promise<boolean> { return this.#hosted.createOwnerOperationContextEvidence(record); }
   findOwnerOperationContextEvidence(input: import("./owner-operation-evidence.ts").OwnerOperationContextEvidenceLookup): Promise<import("./owner-operation-contract.ts").OwnerOperationContextEvidence | undefined> { return this.#hosted.findOwnerOperationContextEvidence(input); }
   createOwnerOperationReceiptEvidence(record: import("./owner-operation-contract.ts").OwnerOperationReceiptEvidence): Promise<boolean> { return this.#hosted.createOwnerOperationReceiptEvidence(record); }

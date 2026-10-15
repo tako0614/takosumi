@@ -226,6 +226,207 @@ remove only its own fences and advance authentication generations. Expired proof
 alone never activates or releases a fence. Receipt assurance, timing and immutable
 references remain identifiable in the append-only decision audit.
 
+## Private financial-source protocol v1
+
+This source contract does not grant payment authority or expose a public route.
+The real Financial owner still supplies its challenge, Principal/payer decision,
+same-primary command acceptance and actual receiver. Missing qualification or
+ports keep this lane unavailable. Existing direct owner/session and independent
+exact-Org payment-key contracts are separate; a shared key never becomes direct
+because an admission is missing. Customer existence does not authorize another
+subscription, top-up or card-setup command.
+
+Accounts owns `financial-source-contract.ts`. Core owns its local raw
+Workspace/member/source facade and does not import the Accounts service. Hosted
+implements this closed wire independently without a sibling source import.
+
+An event has exactly `{v,eventRef,registrationRef,incarnation,sequence,
+previousDigest,kind,affectedRef,evidenceRef}`, with `v=1`, kind `advance|close`,
+safe integer sequence >=1 and opaque ASCII refs of 1–256 bytes. Digests are
+`sha256:` plus 64 lowercase hexadecimal digits, distinct from existing opaque
+Core or base64url owner-evidence digests. The enrolled source head starts at
+sequence 0 with its actual qualified `genesisDigest`; there is no event at -1 or
+0. First raw event has sequence 1 and `previousEventRef=null`; subsequent events
+name the exact prior raw event. Closing an incarnation is terminal.
+
+SQL captures immutable raw facts without an assumed SHA function. The trusted
+upper Accounts materializer builds wire events in sequence. The event digest is
+SHA-256 of UTF-8 canonical sorted-key JSON
+`{domain:"takosumi.financial-source-event@v1",event:<exact event>}`. It performs no
+Unicode normalization or foreign-digest conversion. Portable raw-event metadata
+uses `{domain:"takosumi.financial-source-raw@v1",value:<exact raw metadata>}`;
+its `rawEventDigest` is not the owning store's full raw snapshot digest.
+
+For the closed literal fixture in `financial-source-contract_test.ts`, the
+independently computed Python JSON/SHA-256 event vector is
+`sha256:85dfc950d869c729357ad56b76bc83275053ea0b037f117649932a36d5924b93`.
+Key insertion order does not change these bytes; unknown keys, malformed refs,
+unsafe sequence, missing predecessor or a changed incarnation are rejected.
+
+The owning store's `putMaterialization` must atomically compare the exact raw
+event ref/incarnation/sequence, **full original raw payload bytes** and captured
+current head before create-if-absent materialization. An identical readback is
+idempotent; a conflicting envelope fails. Raw payload and previously committed
+materializations remain immutable. A batch handles at most 100 events, resumes
+from durable original refs, and cannot skip an unmaterialized predecessor.
+
+Local Control capture is a private same-primary snapshot of the original
+Workspace, actual active member, immutable Org/ref and enrolled source head.
+Accounts derives the actor from the genuine current client-bound grant before
+and after the awaited capture; no caller account/payer assertion or closure is
+transported across RPC. Exact post-await snapshot currentness is rechecked.
+
+Source registration fixes an immutable complete set of 1–8 receiver/target refs;
+descriptors alone cannot qualify them. An event's actual receipt has exactly
+`{v,eventRef,eventDigest,receiptRef,incarnation,sequence,state}`. A close requires
+`state=admission-closed`; advance requires `advanced`. Local custody additionally
+pins the actual qualified receiver/target. Only exact Server-local commit and
+readback can acknowledge an event; a sent request, elapsed timeout, materialized
+digest or partial receiver page cannot. Acknowledgement closes new admission,
+not an already authorized provider effect or an original unknown-ACK obligation.
+This source-head receipt is not an identity-merge activation acknowledgement.
+The actual Financial owner must separately prove original-operation coverage and
+durable readback of all retained prepared/dispatched Org/owner/ref/key/realm
+custody. It need not invent terminal provider results or drain every unknown.
+
+`financial-source-abi.ts` fixes the private receiver ABI separately from codec
+implementation revision 2: payload `v:1` and the original event vector stay
+unchanged. `applySourceEvent({v:1,event,eventDigest})` recomputes the event digest
+and returns the exact seven-field receipt after actual receiver commit/readback.
+`readSourceEventReceipt({v:1,registrationRef,eventRef,eventDigest})` returns that
+original receipt or actual `undefined`. Bare events, materialization envelopes,
+strings, `null`, errors and missing fields are not alternate external forms.
+Closed failures are `invalid-request`, `unregistered-source`, `conflict` or
+`unavailable`; a transport failure never becomes receipt absence.
+
+The external receipt reference is `fsr_` plus the lowercase SHA-256 hex digest
+of canonical UTF-8 `{domain:"takosumi.financial-source-receipt-ref@v1",value:{
+registrationRef,receiverRef,targetRef,eventRef,eventDigest,incarnation,sequence,
+state}}`. Its context comes from actual fixed receiver registration, not caller
+identity. Local receipt-record evidence uses exactly
+`{domain:"takosumi.financial-source-receipt-record@v1",value:{registrationRef,
+receiverRef,targetRef,receipt}}`, with the `sha256:` hex prefix. These recipes
+are distinct from Customer keys and processor fingerprints. Computing a hash
+does not acknowledge a commit. Internal Financial bare/null adapters must expose
+the same external receipt recipe, not relabel a different receipt at the sender.
+
+Registered head/genesis lookup is
+`readRegisteredHead({v:1,head:{registrationRef,incarnation,affectedRef}})`.
+One registration/incarnation may contain multiple original contexts; there is
+no registration-only fallback or request-time genesis. The source interface
+returns that exact key, original genesis, complete receiver/target set and actual
+source schema, immutable credential-custody and clock-policy references. Separate
+owning key-custody/clock ports supply current private capability context. Their
+actual registration, key, target, binding graph and staging values remain
+unconfigured here; consistent descriptor data cannot qualify them. The captured
+adapter refuses absent ports/state and verifies the fixed target/receipt recipe
+without remote function `.bind` property lookups.
+
+The Financial-owned identity challenge is exactly
+`{v,challengeRef,registrationRef,clientId,workspaceId,organizationId,workspaceRef,
+requestFingerprint,createdAt,expiresAt}` with a maximum five-minute lifetime.
+Here `registrationRef` belongs to the Accounts producer and all four Accounts
+parent heads. A Hosted RP source has its own independently qualified
+registration/incarnation/affectedRef; it must not require its registration to
+equal the Accounts registration. The RP validates the complete returned
+challenge and Accounts parent vector against that Accounts-owned registration,
+while retaining its own source head separately.
+The actual owned Financial reader supplies it; a browser cannot choose these
+authority fields. The Accounts producer uses the real RP access grant, exact
+registered client and current issuer/store/Control state. Its private proof is
+identity/context evidence only, never a new Principal or payment consent.
+`requestFingerprint` is an opaque Financial-defined, versioned pre-Customer
+public-request identity. Top-up's full processor fingerprint is generated after
+Customer pinning, so requiring that fingerprint here would create a cycle.
+Accounts preserves the actual Financial challenge bytes and does not derive or
+substitute that recipe, existing Customer fingerprint, original key or realm.
+
+The private `createAccountsFinancialSource` producer reads the actual stored
+access token and current shared-account grant. Its input carries only that
+bearer and a challenge reference; the actual challenge owner supplies the
+registered client, original Workspace/Org/ref and request identity. It checks
+the current canonical account and authentication generation, active issuer
+session/client, identity-only scope and exact Control snapshot. Resource grants,
+caller-selected subjects and membership-derived payer authority are rejected.
+The fixed parent vector is grant SID, stable issuer session, registered client
+and account/authentication generation. These scopes are independent of a
+challenge: retrying a challenge cannot create a second revocation ancestry.
+
+Enrollment and proof writes require a transient, single-use in-process
+checkpoint minted after the real grant/challenge/Control reads. It binds the
+whole mutation, actual token hash, current grant/generation and original context
+expiry. Each backend consumes its original object identity after asynchronous
+preparation and rechecks its actual current token/identity rows immediately
+before the local write. Fresh trusted time bounds both checkpoint and evidence;
+copied objects, changed scope, elapsed validity and backwards clocks deny the
+write. This is a local precommit boundary, not a cross-database transaction or a
+claim about D1 server execution time.
+
+The persisted proof also carries the actual captured Control source
+registration/incarnation, permission sequence, original event reference (null
+only at qualified genesis), materialized event digest and complete original
+receiver/target set. A snapshot hash cannot be reversed into that vector. The
+upper adapter derives these fields from the actual canonical Control head and
+retains the full original snapshot for its currentness check. The Control
+registration is distinct from the Accounts four-parent registration; a shared
+name, caller descriptor or a role never substitutes one authority for another.
+
+Revocation closes the appropriate fixed parent in the same local atomic update
+as its actual grant/session/client revocation. A previously unenrolled scope
+also retains a terminal closure fence, preventing a concurrent first enrollment
+from reviving it. Successful merge/unlink security-generation mutations close
+the previous account-generation parent under that same winner claim. Routine
+issuer-cookie rotation does not close the stable session parent. Existing
+unenrolled self-host behavior stays independent of this source lane.
+
+The producer materializes retained raw events and delivers one bounded pending
+page. A lost ACK is recovered by the same original event/ref/digest readback;
+there is no new event, command or identity recipe on retry. A new identity proof
+requires exact acknowledgements for all four current parents and every original
+receiver/target. Its response contains only an opaque proof reference. The
+proof is not a payer grant, Customer admission or provider-dispatch approval.
+The private proof reader has exact `{v:1,proofRef,challengeRef}` arguments.
+`loadFinancialIdentityProof` returns `{v:1,status:'found',proof}` or
+`{v:1,status:'not-found'}` and preserves the original after expiry/closure.
+`verifyCurrentFinancialIdentityProof` returns
+`{v:1,status:'current',proof,observedAt}` or `{v:1,status:'not-current'}` after
+actual token-hash, grant, client/account/generation, Control and complete source
+ACK checks. Its public projection excludes internal token hashes/expiry fields
+and parent lookup scopes. Current verification is an observation; Financial
+still checks the original vector, class and genuine payer at its L1/L2 command
+CAS. Historical load grants no new permission and is never replaced by fresh
+auth when recovering the original accepted/unknown command.
+
+The optional `loadFinancialSourceEventEvidence({v:1,eventRef,eventDigest})`
+reader returns `{v:1,status:'found',materialization:{event,eventDigest},
+registeredHead}` or `{v:1,status:'not-found'}`. It reads the original persisted
+materialization and full local raw record, recomputes the existing event digest
+and checks the original predecessor, enrolled genesis and complete peers. It
+does not enroll, materialize, dispatch or write during the read. The outward
+projection excludes raw metadata, parent/cause, token hashes and internal
+scopes. Not-found describes missing materialization; it is neither legacy
+history clearance nor an admission or permission to create a fresh command.
+
+Its fixed private composition supplies source credential/schema references,
+receiver/target/schema, actual registered-head and credential-custody readers,
+and a trusted clock. The distinct `event-evidence-read` capability is checked
+before not-found as well as before a found result. Missing qualification,
+genesis, mismatched full head/peers, expired context and backward clock fail
+closed. Existing `event-apply` and `receipt-read` purposes are unchanged.
+
+`createAccountsFinancialControlSource` connects the same canonical
+`WorkspacesService.financialSource` facade. Captures retain the original Core
+snapshot privately; copied or modified snapshots do not acquire provenance.
+Its bounded outbox page maps full retained raw records through the Accounts
+codec and uses the full captured Core head CAS. Original receiver readback
+precedes delivery, and all original receiver/target receipts use the same
+eight-field recipe. The C event reader uses a separate fixed C registration
+and qualification context; the Financial owner selects the qualified source
+binding. It never prefix-searches or falls back between Accounts and Control.
+Named service transport, actual source registration/enrollment, receiver graph,
+Financial Principal/payer producers and live qualification remain separate
+owning composition work; this module has no public route or affirmative default.
+
 ## Protected rollout
 
 See [the operator runbook](../operations/shared-account-oidc.md). PostgreSQL

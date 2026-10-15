@@ -827,3 +827,48 @@ export const interfaceBindings = pgTable(
       .where(sql`${table.phase} = 'Ready'`),
   ],
 );
+
+// Retained permission-source custody: deliberately no ephemeral FK/cascade.
+export const workspaceFinancialSources = pgTable(names.workspaceFinancialSources, {
+  workspaceId: text("workspace_id").primaryKey(),
+  sourceRef: text("source_ref").notNull(),
+  incarnation: text("incarnation").notNull(),
+  registrationJson: text("registration_json").notNull(),
+  enrollmentJson: text("enrollment_json").notNull(),
+  identityJson: text("identity_json").notNull(),
+  permissionSequence: bigint("permission_sequence", { mode: "number" }).notNull().default(0),
+  lastEventRef: text("last_event_ref"),
+  managementState: text("management_state").notNull(),
+  closed: integer("closed").notNull().default(0),
+  materializedSequence: bigint("materialized_sequence", { mode: "number" }).notNull().default(0),
+  materializedDigest: text("materialized_digest").notNull(),
+  enrolledAt: text("enrolled_at").notNull(),
+}, (table) => [uniqueIndex("takosumi_workspace_financial_sources_source_ref_unique").on(table.sourceRef)]);
+export const workspaceFinancialEvents = pgTable(names.workspaceFinancialEvents, {
+  eventRef: text("event_ref").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  sourceRef: text("source_ref").notNull(),
+  incarnation: text("incarnation").notNull(),
+  sequence: bigint("sequence", { mode: "number" }).notNull(),
+  previousEventRef: text("previous_event_ref"),
+  kind: text("kind").notNull(),
+  payloadJson: text("payload_json").notNull(),
+  closed: integer("closed").notNull(),
+  recordedAt: text("recorded_at").notNull(),
+}, (table) => [uniqueIndex("takosumi_workspace_financial_events_workspace_sequence_unique").on(table.workspaceId, table.sequence)]);
+export const workspaceFinancialMaterializations = pgTable(names.workspaceFinancialMaterializations, {
+  eventRef: text("event_ref").primaryKey(),
+  sourceRef: text("source_ref").notNull(),
+  incarnation: text("incarnation").notNull(),
+  sequence: bigint("sequence", { mode: "number" }).notNull(),
+  previousDigest: text("previous_digest").notNull(),
+  digest: text("digest").notNull(),
+  expectedHeadJson: text("expected_head_json").notNull(),
+  recordJson: text("record_json").notNull(),
+});
+export const workspaceFinancialReceipts = pgTable(names.workspaceFinancialReceipts, {
+  eventRef: text("event_ref").notNull(),
+  receiverRef: text("receiver_ref").notNull(),
+  targetRef: text("target_ref").notNull(),
+  recordJson: text("record_json").notNull(),
+}, (table) => [primaryKey({ columns: [table.eventRef, table.receiverRef] })]);

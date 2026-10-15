@@ -12,7 +12,16 @@ import type {
   CredentialUnlinkMutation,
   UnlinkOperationProofContext,
 } from "./identity-unlink-state.ts";
-import type { TakosumiAccountRecord, UpstreamIdentityRecord } from "./store.ts";
+import type { TakosumiAccountRecord, UpstreamIdentityRecord, TokenRecord } from "./store.ts";
+import type {
+  FinancialIdentityChallenge,
+  FinancialSourceRegistration,
+  FinancialSourceRawEvent,
+  FinancialSourceMaterialization,
+  FinancialSourceReceiptRecord,
+  FinancialSourceDigest,
+  FinancialSourceReceiverRegistration,
+} from "./financial-source-contract.ts";
 
 /** Exact address-bound evidence. Historical account booleans are not evidence. */
 export interface AccountEmailProofRecord {
@@ -238,8 +247,194 @@ export interface IdentityMergeRetryCheckpointMutation {
   next: IdentityMergeRetryCheckpoint;
 }
 
+/** Private Accounts storage records. The financial wire alone never qualifies
+ * a caller, source registration, client, receiver or deployment graph. */
+export type FinancialSourceParentScope =
+  | { readonly kind: "grant"; readonly sid: string }
+  | { readonly kind: "issuer-session"; readonly issuerSessionId: string }
+  | { readonly kind: "client"; readonly clientId: string }
+  | { readonly kind: "account-generation"; readonly subject: TakosumiSubject; readonly identityGeneration: number };
+
+/** The physical logical key is the actual parent scope, independent of a
+ * caller-selected registry. A closed scope can never be rebound or reopened. */
+export interface FinancialSourceParentHead {
+  readonly v: 1;
+  readonly scope: FinancialSourceParentScope;
+  readonly registrationRef: string;
+  readonly incarnation: string;
+  readonly affectedRef: string;
+  readonly revision: number;
+  readonly sequence: number;
+  readonly lastEventRef: string;
+  readonly state: "open" | "closed";
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
+
+export interface FinancialSourceParentVector<T> {
+  readonly grant: T;
+  readonly issuerSession: T;
+  readonly client: T;
+  readonly accountGeneration: T;
+}
+
+export interface FinancialSourceParentEnrollment {
+  readonly scope: FinancialSourceParentScope;
+  /** Exact observed head, or absence. Existing open heads retain their identity. */
+  readonly expected?: FinancialSourceParentHead;
+  /** Used only for a genuinely absent parent under current-root guards. */
+  readonly affectedRef: string;
+  readonly eventRef: string;
+}
+
+/** Created only by financial-source.ts's private verified WeakMap factory. */
+declare const financialSourcePrecommit: unique symbol;
+export interface FinancialSourcePrecommitCheckpoint {
+  readonly [financialSourcePrecommit]: true;
+}
+
+export interface FinancialSourceControlEvidence {
+  readonly evidenceRef: string;
+  readonly evidenceDigest: FinancialSourceDigest;
+  readonly expiresAt: number;
+  readonly source: {
+    readonly registrationRef: string;
+    readonly incarnation: string;
+    readonly affectedRef: string;
+    readonly sequence: number;
+    readonly eventRef: string | null;
+    readonly eventDigest: FinancialSourceDigest;
+    readonly receivers: readonly FinancialSourceReceiverRegistration[];
+  };
+}
+
+/** Transient original accessToken is solely for the memory store's actual
+ * synchronous token-map lookup. D1/PG join accessTokenHash and ignore plaintext.
+ * Neither accessToken nor precommitCheckpoint may enter JSON, SQL records or logs. */
+export interface FinancialSourceAuthoritySnapshot {
+  readonly registration: FinancialSourceRegistration;
+  readonly challenge: FinancialIdentityChallenge;
+  readonly accessToken: string;
+  readonly accessTokenHash: string;
+  readonly expectedAccess: TokenRecord;
+  readonly expectedGrant: HostedOidcGrantRecord;
+  readonly expectedIdentityGeneration: number;
+  readonly control: FinancialSourceControlEvidence;
+  readonly now: number;
+  readonly precommitCheckpoint: FinancialSourcePrecommitCheckpoint;
+}
+
+export interface FinancialSourceEnrollmentMutation extends FinancialSourceAuthoritySnapshot {
+  readonly evidenceRef: string;
+  readonly parents: FinancialSourceParentVector<FinancialSourceParentEnrollment>;
+}
+
+export interface FinancialSourceParentReference {
+  readonly scope: FinancialSourceParentScope;
+  readonly registrationRef: string;
+  readonly incarnation: string;
+  readonly affectedRef: string;
+  readonly sequence: number;
+  readonly eventRef: string;
+  readonly eventDigest: FinancialSourceDigest;
+}
+
+/** Immutable issued proof custody; the actual service graph, active roots and
+ * full receiver acknowledgements qualify issuance, never this record's presence. */
+export interface FinancialSourceProofRecord {
+  readonly v: 1;
+  readonly proofRef: string;
+  readonly challenge: FinancialIdentityChallenge;
+  readonly issuer: string;
+  readonly subject: TakosumiSubject;
+  readonly clientId: string;
+  readonly sid: string;
+  readonly issuerSessionId: string;
+  /** Private custody only; excluded from the closed public proof projection. */
+  readonly accessTokenHash: string;
+  readonly accessExpiresAt: number;
+  readonly identityGeneration: number;
+  readonly control: FinancialSourceControlEvidence;
+  readonly parents: FinancialSourceParentVector<FinancialSourceParentReference>;
+  readonly issuedAt: number;
+  readonly expiresAt: number;
+}
+
+export interface FinancialSourceProofMutation extends FinancialSourceAuthoritySnapshot {
+  readonly expectedParents: FinancialSourceParentVector<FinancialSourceParentHead>;
+  readonly proof: FinancialSourceProofRecord;
+}
+
+export type FinancialSourceProtectedMutation = FinancialSourceEnrollmentMutation | FinancialSourceProofMutation;
+
+export interface FinancialSourceRevocationMutation {
+  readonly scope: Exclude<FinancialSourceParentScope, { readonly kind: "account-generation" }>;
+  readonly evidenceRef: string;
+  readonly now: number;
+}
+
+/** Only owned security facts are captured. No bearer, email, body, secret,
+ * receiver-selected subset or mutable future authority is retained here. */
+export type FinancialSourceRawCause =
+  | { readonly kind: "enrollment"; readonly challengeRef: string; readonly accessTokenHash: string; readonly sid: string; readonly identityGeneration: number }
+  | { readonly kind: "grant-revoked"; readonly sid: string; readonly revokedAt: number }
+  | { readonly kind: "issuer-session-revoked"; readonly issuerSessionId: string; readonly revokedAt: number }
+  | { readonly kind: "client-revoked"; readonly clientId: string; readonly revokedAt: number }
+  | { readonly kind: "identity-generation-advanced"; readonly subject: TakosumiSubject; readonly previousGeneration: number; readonly nextGeneration: number; readonly operationId: string; readonly operationRevision: number; /** Legacy unlink has no durable operation revision; zero is explicit only with this marker. */ readonly legacyUnlink?: true; readonly reason: "reserve" | "activate" | "quarantine" | "abort" | "restore" | "unlink" };
+
+export interface FinancialSourceRawRecord {
+  readonly raw: FinancialSourceRawEvent;
+  readonly parent: FinancialSourceParentScope;
+  readonly parentRevision: number;
+  readonly cause: FinancialSourceRawCause;
+  readonly capturedAt: number;
+}
+
+/** A pending row retains the COMPLETE immutable configured receiver set. ACKs
+ * live separately; pending is removed only after every exact receiver ACK. */
+export interface FinancialSourcePendingRecord {
+  readonly registration: FinancialSourceRegistration;
+  readonly eventRef: string;
+  readonly createdAt: number;
+}
+
+export interface FinancialSourcePendingPage {
+  readonly entries: readonly FinancialSourcePendingRecord[];
+  readonly nextCursor?: string;
+}
+
+export interface FinancialSourceMaterializationRecord {
+  readonly rawRecord: FinancialSourceRawRecord;
+  readonly materialization: FinancialSourceMaterialization;
+}
+
+export interface FinancialSourceMaterializationMutation {
+  /** CAS the entire immutable owner payload, not merely wire metadata. */
+  readonly expectedRaw: FinancialSourceRawRecord;
+  readonly expectedPredecessor?: FinancialSourceMaterializationRecord;
+  readonly materialization: FinancialSourceMaterialization;
+}
+
+export interface FinancialSourceReceiptMutation {
+  readonly expectedMaterialization: FinancialSourceMaterializationRecord;
+  readonly receipt: FinancialSourceReceiptRecord;
+}
+
 /** Optional ports keep ordinary self-host Accounts independent of hosted mode. */
 export interface HostedIdentityStore {
+  registerFinancialSourceRegistration?(registration: FinancialSourceRegistration): Promise<boolean>;
+  findFinancialSourceRegistration?(registrationRef: string): Promise<FinancialSourceRegistration | undefined>;
+  findFinancialSourceParent?(scope: FinancialSourceParentScope): Promise<FinancialSourceParentHead | undefined>;
+  enrollFinancialSourceParents?(input: FinancialSourceEnrollmentMutation): Promise<FinancialSourceParentVector<FinancialSourceParentHead> | undefined>;
+  issueFinancialSourceProof?(input: FinancialSourceProofMutation): Promise<FinancialSourceProofRecord | undefined>;
+  findFinancialSourceProof?(proofRef: string): Promise<FinancialSourceProofRecord | undefined>;
+  revokeHostedOidcScope?(input: FinancialSourceRevocationMutation): Promise<boolean>;
+  findFinancialSourceRaw?(eventRef: string): Promise<FinancialSourceRawRecord | undefined>;
+  listFinancialSourcePending?(input: { readonly registrationRef: string; readonly after?: string; readonly limit: number }): Promise<FinancialSourcePendingPage>;
+  findFinancialSourceMaterialization?(eventRef: string): Promise<FinancialSourceMaterializationRecord | undefined>;
+  commitFinancialSourceMaterialization?(input: FinancialSourceMaterializationMutation): Promise<boolean>;
+  findFinancialSourceReceipt?(input: { readonly registrationRef: string; readonly eventRef: string; readonly receiverRef: string }): Promise<FinancialSourceReceiptRecord | undefined>;
+  recordFinancialSourceReceipt?(input: FinancialSourceReceiptMutation): Promise<boolean>;
   createOwnerOperationContextEvidence?(record: import("./owner-operation-contract.ts").OwnerOperationContextEvidence): Promise<boolean>;
   findOwnerOperationContextEvidence?(input: import("./owner-operation-evidence.ts").OwnerOperationContextEvidenceLookup): Promise<import("./owner-operation-contract.ts").OwnerOperationContextEvidence | undefined>;
   createOwnerOperationReceiptEvidence?(record: import("./owner-operation-contract.ts").OwnerOperationReceiptEvidence): Promise<boolean>;

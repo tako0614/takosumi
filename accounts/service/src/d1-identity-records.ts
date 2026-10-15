@@ -10,6 +10,10 @@ import type { IdentityMergeRetryCheckpointMutation } from "./identity-state.ts";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type { D1Database, D1PreparedStatement } from "./d1-store.ts";
 import type { IdentityRecordRepository } from "./hosted-identity-records.ts";
+import type * as FS from "./identity-state.ts";
+import type { FinancialSourceAtomicMutation } from "./hosted-identity-records.ts";
+import { FinancialSourceDocumentRecords, financialSourceBuckets, financialSourceScopeKey, financialSourceJson, financialSourceEqual, validFinancialSourceAuthority } from "./hosted-identity-records.ts";
+import { financialSourceRef } from "./financial-source-contract.ts";
 import {
   assertMergeMutation,
   identityMergeProofAudit,
@@ -30,6 +34,12 @@ import {
 import type { TakosumiAccountRecord, UpstreamIdentityRecord } from "./store.ts";
 
 const table = "takosumi_accounts_documents";
+// Compare semantic JSON including every leaf and container path. SQLite json()
+// preserves object insertion order, so textual equality is insufficient here.
+function financialJsonEquals(actual:string,expected:string):string {
+  const leaves=(value:string)=>`SELECT fullkey,type,atom FROM json_tree(${value})`;
+  return `(NOT EXISTS(${leaves(actual)} EXCEPT ${leaves(expected)}) AND NOT EXISTS(${leaves(expected)} EXCEPT ${leaves(actual)}))`;
+}
 function candidatePredicate(alias = ""): string {
   const column = alias ? `${alias}.document` : "document";
   const email = `trim(json_extract(${column},'$.email'),char(${MERGE_EMAIL_TRIM_CODE_POINTS.join(",")}))`;
@@ -55,6 +65,95 @@ export class D1IdentityRecordRepository implements IdentityRecordRepository {
     readonly initialize: () => Promise<void>,
     readonly hashSession: (value: string) => Promise<string>,
   ) {}
+  private financialRecords(): FinancialSourceDocumentRecords {
+    return new FinancialSourceDocumentRecords(this, (input) => this.commitFinancialSourceDocuments(input));
+  }
+  registerFinancialSourceRegistration(value: Parameters<IdentityRecordRepository["registerFinancialSourceRegistration"]>[0]) { return this.financialRecords().registerFinancialSourceRegistration(value); }
+  findFinancialSourceRegistration(value: string) { return this.financialRecords().findFinancialSourceRegistration(value); }
+  findFinancialSourceParent(value: FS.FinancialSourceParentScope) { return this.financialRecords().findFinancialSourceParent(value); }
+  enrollFinancialSourceParents(value: FS.FinancialSourceEnrollmentMutation) { return this.financialRecords().enrollFinancialSourceParents(value); }
+  issueFinancialSourceProof(value: FS.FinancialSourceProofMutation) { return this.financialRecords().issueFinancialSourceProof(value); }
+  findFinancialSourceProof(value: string) { return this.financialRecords().findFinancialSourceProof(value); }
+  findFinancialSourceRaw(value: string) { return this.financialRecords().findFinancialSourceRaw(value); }
+  listFinancialSourcePending(value: Parameters<IdentityRecordRepository["listFinancialSourcePending"]>[0]) { return this.financialRecords().listFinancialSourcePending(value); }
+  findFinancialSourceMaterialization(value: string) { return this.financialRecords().findFinancialSourceMaterialization(value); }
+  commitFinancialSourceMaterialization(value: FS.FinancialSourceMaterializationMutation) { return this.financialRecords().commitFinancialSourceMaterialization(value); }
+  findFinancialSourceReceipt(value: Parameters<IdentityRecordRepository["findFinancialSourceReceipt"]>[0]) { return this.financialRecords().findFinancialSourceReceipt(value); }
+  recordFinancialSourceReceipt(value: FS.FinancialSourceReceiptMutation) { return this.financialRecords().recordFinancialSourceReceipt(value); }
+
+  /** All reads and checkpoint consumption have finished in the shared planner.
+   * Do not insert an await before this single atomic batch is dispatched. */
+  private async commitFinancialSourceDocuments(input: FinancialSourceAtomicMutation): Promise<boolean> {
+    if (!input.writes.length || input.writes.length > 64 || input.checks.length > 64) return false;
+    const rows = new Map<string, { bucket: string; key: string; record: unknown; exists: boolean }>();
+    for (const check of [...input.checks, ...input.writes]) {
+      const key=financialSourceJson([check.bucket,check.key]), prior=rows.get(key);
+      if(prior && (prior.exists !== (check.record!==undefined) || !financialSourceEqual(prior.record,check.record)))return false;
+      rows.set(key,{bucket:check.bucket,key:check.key,record:check.record,exists:check.record!==undefined});
+    }
+    const args: Array<string|number>=[financialSourceJson([...rows.values()])];
+    let guard=`NOT EXISTS(SELECT 1 FROM json_each(?) e WHERE (json_extract(e.value,'$.exists')=0 AND EXISTS(SELECT 1 FROM ${table} d WHERE d.bucket=json_extract(e.value,'$.bucket') AND d.key=json_extract(e.value,'$.key'))) OR (json_extract(e.value,'$.exists')=1 AND NOT EXISTS(SELECT 1 FROM ${table} d WHERE d.bucket=json_extract(e.value,'$.bucket') AND d.key=json_extract(e.value,'$.key') AND ${financialJsonEquals("d.document","json_extract(e.value,'$.record')")})))`;
+    if(input.authority){
+      if(!validFinancialSourceAuthority(input.authority,input.now))return false;
+      const a=input.authority,g=a.expectedGrant;
+      guard+=` AND EXISTS(SELECT 1 FROM ${table} a WHERE a.bucket='access_tokens' AND a.key=? AND ${financialJsonEquals("a.document","?")} AND json_extract(a.document,'$.expiresAt')>?) AND EXISTS(SELECT 1 FROM ${table} g WHERE g.bucket='hosted_oidc_grants' AND g.key=? AND ${financialJsonEquals("g.document","?")} AND json_type(g.document,'$.revokedAt') IS NULL AND json_extract(g.document,'$.absoluteExpiresAt')>?) AND EXISTS(SELECT 1 FROM ${table} WHERE bucket='accounts' AND key=?) AND COALESCE((SELECT json_extract(document,'$.generation') FROM ${table} WHERE bucket='authentication_generations' AND key=?),0)=? AND NOT EXISTS(SELECT 1 FROM ${table} WHERE bucket='canonical_accounts' AND key=?) AND NOT EXISTS(SELECT 1 FROM ${table} l WHERE l.bucket='identity_merge_locks' AND l.key=? AND NOT EXISTS(SELECT 1 FROM ${table} o WHERE o.bucket='identity_merge_operations' AND o.key=json_extract(l.document,'$.operationId') AND json_extract(o.document,'$.status')='active')) AND NOT EXISTS(SELECT 1 FROM ${table} WHERE (bucket='hosted_oidc_revoked_sessions' AND key=?) OR (bucket='hosted_oidc_revoked_clients' AND key=?))`;
+      // financialJsonEquals uses each supplied expression twice.
+      const access=financialSourceJson(a.expectedAccess),grant=financialSourceJson(g);
+      args.push(a.accessTokenHash,access,access,input.now,g.sid,grant,grant,input.now,g.subject,g.subject,a.expectedIdentityGeneration,g.subject,g.subject,g.issuerSessionId,g.clientId);
+    }
+    const attempt=crypto.randomUUID(),claimBucket="financial_source_cas_claims";
+    const claim=this.db.prepare(`INSERT INTO ${table}(bucket,key,document,updated_at) SELECT '${claimBucket}',?,'{}',? WHERE ${guard}`).bind(attempt,input.now,...args);
+    const claimed=`EXISTS(SELECT 1 FROM ${table} WHERE bucket='${claimBucket}' AND key=?)`;
+    const statements=[claim,...input.writes.map(write=>write.next===undefined
+      ?this.db.prepare(`DELETE FROM ${table} WHERE bucket=? AND key=? AND ${claimed}`).bind(write.bucket,write.key,attempt)
+      :this.db.prepare(`INSERT INTO ${table}(bucket,key,document,updated_at) SELECT ?,?,?,? WHERE ${claimed} ON CONFLICT(bucket,key) DO UPDATE SET document=excluded.document,updated_at=excluded.updated_at`).bind(write.bucket,write.key,financialSourceJson(write.next),input.now,attempt)),
+      this.db.prepare(`DELETE FROM ${table} WHERE bucket='${claimBucket}' AND key=?`).bind(attempt)];
+    const result=await this.db.batch(statements);
+    if(result.some(r=>!r.success))throw new Error("financial_source_atomic_batch_failed");
+    return Number(result[0]?.meta?.changes??0)===1;
+  }
+  async revokeHostedOidcScope(input: FS.FinancialSourceRevocationMutation): Promise<boolean> {
+    financialSourceScopeKey(input.scope);
+    if(!financialSourceRef(input.evidenceRef)||!Number.isSafeInteger(input.now)||input.now<0)return false;
+    await this.initialize();
+    const s=input.scope,field=s.kind==="grant"?"sid":s.kind==="issuer-session"?"issuerSessionId":"clientId";
+    const value=s.kind==="grant"?s.sid:s.kind==="issuer-session"?s.issuerSessionId:s.clientId;
+    const cause:FS.FinancialSourceRawCause=s.kind==="grant"?{kind:"grant-revoked",sid:s.sid,revokedAt:input.now}:s.kind==="issuer-session"?{kind:"issuer-session-revoked",issuerSessionId:s.issuerSessionId,revokedAt:input.now}:{kind:"client-revoked",clientId:s.clientId,revokedAt:input.now};
+    const statements=this.financialCloseStatements({scope:s,cause,evidenceRef:input.evidenceRef,now:input.now},"1",[]);
+    if(s.kind!=="grant"){
+      const bucket=s.kind==="issuer-session"?"hosted_oidc_revoked_sessions":"hosted_oidc_revoked_clients";
+      statements.push(this.db.prepare(`INSERT OR IGNORE INTO ${table}(bucket,key,document,updated_at) VALUES(?,?,?,?)`).bind(bucket,value,financialSourceJson({[field]:value,revokedAt:input.now}),input.now));
+    }
+    statements.push(this.db.prepare(`UPDATE ${table} SET document=json_set(document,'$.revokedAt',?),updated_at=? WHERE bucket='hosted_oidc_grants' AND json_extract(document,'$.${field}')=? AND json_type(document,'$.revokedAt') IS NULL`).bind(input.now,input.now,value));
+    const result=await this.db.batch(statements);
+    if(result.some(r=>!r.success))throw new Error("financial_source_revoke_batch_failed");
+    return true;
+  }
+
+  /** SQLite executes the entire batch under one write transaction. Derive the
+   * closing head from that transaction's current envelope, never a stale JS read.
+   * An unseen scope is fenced without fabricating a genesis event. */
+  private financialCloseStatements(input: {
+    scope?: FS.FinancialSourceParentScope;
+    subject?: string;
+    cause: FS.FinancialSourceRawCause | {kind:"identity-generation-advanced";operationId:string;operationRevision:number;reason:"reserve"|"activate"|"quarantine"|"abort"|"restore"|"unlink";legacyUnlink?:true};
+    evidenceRef: string; now:number;
+  },guard:string,guardArgs:readonly(string|number)[]):D1PreparedStatement[]{
+    const attempt=crypto.randomUUID(),payload=financialSourceJson({...input,attempt});
+    const gen=`COALESCE((SELECT json_extract(document,'$.generation') FROM ${table} WHERE bucket='authentication_generations' AND key=json_extract(p,'$.subject')),0)`;
+    const scope=input.scope?`json_extract(p,'$.scope')`:`json_object('identityGeneration',${gen},'kind','account-generation','subject',json_extract(p,'$.subject'))`;
+    const cause=input.scope?`json_extract(p,'$.cause')`:`json_patch(json_extract(p,'$.cause'),json_object('subject',json_extract(p,'$.subject'),'previousGeneration',json_extract(scope,'$.identityGeneration'),'nextGeneration',json_extract(scope,'$.identityGeneration')+1))`;
+    const cte=`WITH payload(p) AS(SELECT ?), scoped AS(SELECT p,${scope} AS scope FROM payload), closing AS(SELECT p,scope,${cause} AS cause FROM scoped)`;
+    const doc=`${table}.document`,head=`json_extract(${doc},'$.head')`;
+    const raw=`json_object('v',1,'eventRef',json_extract(${head},'$.affectedRef')||'/closed','registrationRef',json_extract(${head},'$.registrationRef'),'incarnation',json_extract(${head},'$.incarnation'),'sequence',json_extract(${head},'$.sequence')+1,'previousEventRef',json_extract(${head},'$.lastEventRef'),'kind','close','affectedRef',json_extract(${head},'$.affectedRef'),'evidenceRef',(SELECT json_extract(p,'$.evidenceRef') FROM closing))`;
+    const record=`json_object('raw',${raw},'parent',json_extract(${doc},'$.scope'),'parentRevision',json_extract(${head},'$.revision')+1,'cause',json((SELECT cause FROM closing)),'capturedAt',(SELECT json_extract(p,'$.now') FROM closing))`;
+    const changed=`json_object('scope',json_extract(${doc},'$.scope'),'closed',json('true'),'head',json_set(${head},'$.state','closed','$.revision',json_extract(${head},'$.revision')+1,'$.sequence',json_extract(${head},'$.sequence')+1,'$.lastEventRef',json_extract(${head},'$.affectedRef')||'/closed','$.updatedAt',(SELECT json_extract(p,'$.now') FROM closing)),'lastRaw',${record},'closureAttemptId',(SELECT json_extract(p,'$.attempt') FROM closing))`;
+    const close=this.db.prepare(`${cte} INSERT INTO ${table}(bucket,key,document,updated_at) SELECT '${financialSourceBuckets.parents}',scope,json_object('scope',json(scope),'closed',json('true'),'closureAttemptId',json_extract(p,'$.attempt')),json_extract(p,'$.now') FROM closing WHERE ${guard} ON CONFLICT(bucket,key) DO UPDATE SET document=CASE WHEN json_extract(${doc},'$.closed')=1 THEN ${doc} WHEN json_extract(${doc},'$.closed')=0 AND json_extract(${head},'$.state')='open' AND json_extract(${head},'$.v')=1 AND json_type(${head},'$.revision')='integer' AND json_extract(${head},'$.revision') BETWEEN 0 AND 9007199254740990 AND json_type(${head},'$.sequence')='integer' AND json_extract(${head},'$.sequence') BETWEEN 1 AND 9007199254740990 AND json_extract(${head},'$.updatedAt')<=(SELECT json_extract(p,'$.now') FROM closing) AND json_extract(${head},'$.lastEventRef')=json_extract(${doc},'$.lastRaw.raw.eventRef') AND json_extract(${head},'$.sequence')=json_extract(${doc},'$.lastRaw.raw.sequence') AND json_extract(${head},'$.revision')=json_extract(${doc},'$.lastRaw.parentRevision') AND json_extract(${head},'$.scope')=json_extract(${doc},'$.scope') AND json_extract(${doc},'$.scope')=(SELECT scope FROM closing) THEN ${changed} ELSE json('financial_parent_conflict') END,updated_at=CASE WHEN json_extract(${doc},'$.closed')=1 THEN ${table}.updated_at ELSE excluded.updated_at END`).bind(payload,...guardArgs);
+    const selected=`FROM ${table} h JOIN closing c ON h.key=c.scope LEFT JOIN ${table} r ON r.bucket='${financialSourceBuckets.registrations}' AND r.key=json_extract(h.document,'$.head.registrationRef') WHERE h.bucket='${financialSourceBuckets.parents}' AND json_extract(h.document,'$.closureAttemptId')=json_extract(c.p,'$.attempt') AND json_type(h.document,'$.head')='object'`;
+    const rawInsert=this.db.prepare(`${cte} INSERT INTO ${table}(bucket,key,document,updated_at) SELECT '${financialSourceBuckets.raw}',json_extract(h.document,'$.lastRaw.raw.eventRef'),CASE WHEN r.key IS NULL OR json_extract(r.document,'$.incarnation')<>json_extract(h.document,'$.head.incarnation') OR NOT EXISTS(SELECT 1 FROM ${table} a WHERE a.bucket='${financialSourceBuckets.affected}' AND a.key=json_extract(h.document,'$.head.affectedRef') AND json_extract(a.document,'$.affectedRef')=a.key AND json_extract(a.document,'$.scope')=json_extract(h.document,'$.scope') AND json_extract(a.document,'$.registrationRef')=r.key AND json_extract(a.document,'$.incarnation')=json_extract(r.document,'$.incarnation')) THEN json('financial_registration_or_custody_missing') ELSE json_extract(h.document,'$.lastRaw') END,json_extract(c.p,'$.now') ${selected}`).bind(payload);
+    const pendingInsert=this.db.prepare(`${cte} INSERT INTO ${table}(bucket,key,document,updated_at) SELECT '${financialSourceBuckets.pending}',json_array(json_extract(h.document,'$.head.registrationRef'),json_extract(h.document,'$.lastRaw.raw.eventRef')),json_object('registration',json(r.document),'eventRef',json_extract(h.document,'$.lastRaw.raw.eventRef'),'createdAt',json_extract(c.p,'$.now')),json_extract(c.p,'$.now') ${selected}`).bind(payload);
+    return [close,rawInsert,pendingInsert];
+  }
   async commitReviewedRecoveryApproval(input: ReviewedRecoveryApprovalMutation): Promise<boolean> {
     await this.initialize();
     const {record:r,pointer:p}=input,a=r.approval;
@@ -150,13 +249,8 @@ export class D1IdentityRecordRepository implements IdentityRecordRepository {
     value: string,
     now: number,
   ): Promise<void> {
-    await this.initialize();
-    await this.db
-      .prepare(
-        `UPDATE ${table} SET document=json_set(document,'$.revokedAt',?),updated_at=? WHERE bucket='hosted_oidc_grants' AND json_extract(document,'$.${field}')=? AND json_type(document,'$.revokedAt') IS NULL`,
-      )
-      .bind(now, now, value)
-      .run();
+    const scope:FS.FinancialSourceRevocationMutation["scope"]=field==="sid"?{kind:"grant",sid:value}:field==="issuerSessionId"?{kind:"issuer-session",issuerSessionId:value}:{kind:"client",clientId:value};
+    if(!await this.revokeHostedOidcScope({scope,evidenceRef:crypto.randomUUID(),now}))throw new Error("hosted_scope_revoke_failed");
   }
   async emailCandidates(
     address: string,
@@ -358,6 +452,10 @@ export class D1IdentityRecordRepository implements IdentityRecordRepository {
         )
         .bind(...args, claimKey, attemptId),
     ];
+    if(input.reserve||input.activate||input.quarantine||input.restore||input.abort){
+      const reason=input.reserve?"reserve":input.activate?"activate":input.quarantine?"quarantine":input.restore?"restore":"abort";
+      for(const subject of [next.sourceSubject,next.targetSubject])statements.push(...this.financialCloseStatements({subject,cause:{kind:"identity-generation-advanced",operationId:next.operationId,operationRevision:next.revision,reason},evidenceRef:next.operationId,now:input.now},guard,[claimKey,attemptId]));
+    }
     const gatedInsert = (
       bucket: string,
       key: string,
@@ -473,7 +571,7 @@ export class D1IdentityRecordRepository implements IdentityRecordRepository {
       input.quarantine ||
       input.restore ||
       input.abort
-    )
+    ) {
       statements.push(
         ...this.generationStatements(
           [next.sourceSubject, next.targetSubject],
@@ -482,6 +580,7 @@ export class D1IdentityRecordRepository implements IdentityRecordRepository {
           [claimKey, attemptId],
         ),
       );
+    }
     if (input.activate)
       statements.push(
         gatedInsert(
@@ -711,6 +810,7 @@ export class D1IdentityRecordRepository implements IdentityRecordRepository {
           `UPDATE ${table} SET document=json_set(document,'$.consumedByOperation',?),updated_at=? WHERE bucket='credential_unlink_receipts' AND key=? AND ${guard}`,
         )
         .bind(n.operationId, now, r.receiptId, claim, attempt),
+      ...this.financialCloseStatements({subject:n.subject,cause:{kind:"identity-generation-advanced",operationId:n.operationId,operationRevision:n.revision,reason:"unlink"},evidenceRef:n.operationId,now},guard,[claim,attempt]),
       ...this.generationStatements([n.subject], now, guard, [claim, attempt]),
       ...this.revokeStatements(n.subject, n.subject, now, guard, [
         claim,
@@ -776,6 +876,7 @@ export class D1IdentityRecordRepository implements IdentityRecordRepository {
     const guard = `EXISTS(SELECT 1 FROM ${table} WHERE bucket='upstream_identity_status' AND key=? AND json_extract(document,'$.mutationId')=?)`;
     const statements = [
       statement,
+      ...this.financialCloseStatements({subject:input.subject,cause:{kind:"identity-generation-advanced",operationId:input.operationId,operationRevision:0,reason:"unlink",legacyUnlink:true},evidenceRef:input.operationId,now:input.now},guard,[key,mutationId]),
       ...this.revokeStatements(input.subject, input.subject, input.now, guard, [
         key,
         mutationId,

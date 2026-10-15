@@ -13,6 +13,7 @@ import {
 } from "../operator-control-mcp.ts";
 import { defaultCapsuleInstallConfig } from "../../core/domains/capsules/default_install_config.ts";
 import type { InstallConfig } from "takosumi-contract/install-configs";
+import { privateRunFilesCompositionFor } from "../../worker/src/private_run_files_composition.ts";
 
 export {
   CoordinationObject,
@@ -71,6 +72,7 @@ function stagingLocalExecInstallConfig(): InstallConfig {
 export function composeTakoserverHostedWorkerEnv(
   env: CloudflareWorkerEnv,
 ): CloudflareWorkerEnv {
+  const privateRunFiles = privateRunFilesCompositionFor(env);
   const existing = composed.get(env);
   if (existing) return existing;
   // The platform runtime deliberately builds its string environment from
@@ -80,6 +82,11 @@ export function composeTakoserverHostedWorkerEnv(
   // Copy the Worker bindings/variables as own enumerable properties and add
   // only the code-owned install composition.
   const value = { ...env } as CloudflareWorkerEnv;
+  if (privateRunFiles) {
+    Object.defineProperty(value, "TAKOSUMI_PRIVATE_RUN_FILES_COMPOSITION", {
+      configurable: false, enumerable: true, writable: false, value: privateRunFiles,
+    });
+  }
   const existingComposition = validateRunnerProfileConfiguration(env)
     .hostComposition;
   const executionEvidenceAuthority = executionEvidenceAuthorityFromEnv(env);

@@ -27,14 +27,18 @@ database is disposable simply because its environment is staging.
 2. Apply and verify the additive Accounts transition using the sole Accounts
    catalog/CLI. Run Control's own reviewed migration lane separately. The
    dedicated issuer accepts only exact checksummed Accounts v5 and the current
-   canonical predeployed Control v74 catalog. The ordinary bridge supports
-   exact v71/v72/v73/v74 before and after the additive transition. Billing-binding
-   ports require their v72 expansion; identity reconciliation additionally
-   requires v73 or v74. The v74 Backup lookup indexes do not change identity
-   authority or add a PostgreSQL migration. PostgreSQL's corresponding protected Control expansions are
-   119 and 120; Accounts 045 is a separate lineage. Keep request/cold-start DDL
-   disabled. Publish the profile-disabled compatible bridge on the existing
-   catalog before applying any new schema; it must not require v73 or v74 to start.
+   canonical predeployed Control v75 catalog, including its physical Financial
+   source hooks. The profile-disabled ordinary bridge supports exact Accounts
+   v4/v5 and Control v71/v72/v73/v74/v75 before and after the additive transition.
+   Ordinary Control readiness has a v71 floor; billing-binding ports require
+   v72, identity reconciliation v73, and indexed Backup reads v74 with exact
+   index shapes. Financial source operations require current v75 and its hooks.
+   The v74 Backup indexes do not change identity authority or add a PostgreSQL
+   migration. The corresponding protected Control expansions are PostgreSQL
+   119/120 and Financial source 121; Accounts 045 is a separate lineage. Keep
+   request/cold-start DDL disabled. Publish the profile-disabled compatible
+   bridge on the existing catalog before applying any new schema; ordinary
+   startup must not require v75 or the dedicated issuer's Accounts v5 transition.
 3. Create the inert dedicated Worker slot. It has no stores, secrets, issuer or
    cookies, no routes, and disabled workers.dev/previews. Existing Workers are
    never overwritten by bootstrap.
