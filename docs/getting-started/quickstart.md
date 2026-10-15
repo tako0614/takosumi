@@ -80,13 +80,15 @@ curl https://app.takosumi.test/.well-known/openid-configuration
 https://app.takosumi.test/install?git=https://github.com/tako0614/takosumi.git&ref=main&path=examples/opentofu-basic
 ```
 
-画面にはサービス名と、折りたたまれた **取得元の詳細** に Git URL、ref、module path が
-入力された状態で表示されます。リンクを開いただけでは何も作成されません。サービス名を
+追加は、入力済みの画面、**サービスを設定**、**追加前の確認** の 3 画面で進みます。
+
+最初の画面ではサービス名が入力され、Git URL、ref、module path は折りたたまれた
+**取得元の詳細** に入っています。リンクを開いただけでは何も作成されません。サービス名を
 確認して **追加** を押すと、Takosumi は ref を commit に固定し、module を調べます。
 
 このサンプルは入力項目 **名前** と **公開URLの例** を持つため、次に **サービスを設定** が
-表示されます。どちらも省略できます。そのまま **続ける** を押すと、デプロイ前の変更内容
-（plan）が作られます。
+表示されます。どちらも省略できます。空欄のまま **続ける** を押すと module の既定値が
+使われ、デプロイ前の変更内容（plan）が作られます。
 
 準備が終わると **追加前の確認** に、作成・変更・削除されるリソースの数が表示されます。
 このサンプルは provider を使わず、外部リソースも作らないため、クラウドの認証情報なしで

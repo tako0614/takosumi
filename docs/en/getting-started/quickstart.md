@@ -82,15 +82,18 @@ While signed in, open:
 https://app.takosumi.test/install?git=https://github.com/tako0614/takosumi.git&ref=main&path=examples/opentofu-basic
 ```
 
-The page opens with the service name, and with the Git URL, ref, and module
-path filled in under the collapsed **Source details**. Opening the link does not
+Adding takes three screens: the prefilled page, **Set up the service**, and
+**Review before adding**.
+
+The first page opens with the service name, and with the Git URL, ref, and
+module path filled in under the collapsed **Source details**. Opening the link does not
 create anything. Check the service name and press **Add**: Takosumi pins the ref
 to a commit and checks the module.
 
 The example declares two inputs, **Name** and **Example public URL**, so
-**Set up the service** comes next. Both are optional. Press **Continue** to keep
-the defaults, and Takosumi prepares the changes (a plan) before anything is
-deployed.
+**Set up the service** comes next. Both are optional. Leave them blank and press
+**Continue**: the module's defaults apply, and Takosumi prepares the changes
+(a plan) before anything is deployed.
 
 When it is ready, **Review before adding** shows how many resources will be
 created, changed, and deleted. The example has no provider and creates no
