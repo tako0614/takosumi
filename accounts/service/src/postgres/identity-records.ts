@@ -1,3 +1,7 @@
+import type * as FS from "../identity-state.ts";
+import type { FinancialSourceAtomicMutation } from "../hosted-identity-records.ts";
+import { FinancialSourceDocumentRecords, financialSourceBuckets, financialSourceScopeKey, financialSourceJson, financialSourceEqual, validFinancialSourceAuthority } from "../hosted-identity-records.ts";
+import { financialSourceRef } from "../financial-source-contract.ts";
 import { readReviewedRecoveryIssuerAvailabilityCheckpoint, consumeReviewedRecoveryIssuerAvailabilityCheckpoint } from "../reviewed-recovery-issuer-availability.ts";
 import type { ReviewedRecoveryApprovalMutation } from "../reviewed-recovery-state.ts";
 import { canonicalOwnerJson, ownerContextBucket, ownerReceiptBucket, reviewedApprovalBucket, reviewedApprovalCurrentBucket, reviewedApprovalRefBucket, reviewedApprovalRefKey } from "../owner-operation-evidence.ts";
@@ -59,6 +63,77 @@ export class PostgresIdentityRecordRepository
   implements IdentityRecordRepository
 {
   constructor(readonly client: PostgresQueryClient) {}
+  private financialRecords(): FinancialSourceDocumentRecords {
+    return new FinancialSourceDocumentRecords(this, (input) => this.commitFinancialSourceDocuments(input));
+  }
+  registerFinancialSourceRegistration(value: Parameters<IdentityRecordRepository["registerFinancialSourceRegistration"]>[0]) { return this.financialRecords().registerFinancialSourceRegistration(value); }
+  findFinancialSourceRegistration(value: string) { return this.financialRecords().findFinancialSourceRegistration(value); }
+  findFinancialSourceParent(value: FS.FinancialSourceParentScope) { return this.financialRecords().findFinancialSourceParent(value); }
+  enrollFinancialSourceParents(value: FS.FinancialSourceEnrollmentMutation) { return this.financialRecords().enrollFinancialSourceParents(value); }
+  issueFinancialSourceProof(value: FS.FinancialSourceProofMutation) { return this.financialRecords().issueFinancialSourceProof(value); }
+  findFinancialSourceProof(value: string) { return this.financialRecords().findFinancialSourceProof(value); }
+  findFinancialSourceRaw(value: string) { return this.financialRecords().findFinancialSourceRaw(value); }
+  listFinancialSourcePending(value: Parameters<IdentityRecordRepository["listFinancialSourcePending"]>[0]) { return this.financialRecords().listFinancialSourcePending(value); }
+  findFinancialSourceMaterialization(value: string) { return this.financialRecords().findFinancialSourceMaterialization(value); }
+  commitFinancialSourceMaterialization(value: FS.FinancialSourceMaterializationMutation) { return this.financialRecords().commitFinancialSourceMaterialization(value); }
+  findFinancialSourceReceipt(value: Parameters<IdentityRecordRepository["findFinancialSourceReceipt"]>[0]) { return this.financialRecords().findFinancialSourceReceipt(value); }
+  recordFinancialSourceReceipt(value: FS.FinancialSourceReceiptMutation) { return this.financialRecords().recordFinancialSourceReceipt(value); }
+
+  /** Common preparation has consumed the opaque checkpoint and supplied fresh
+   * now. No hash, read, pool transaction or other await precedes this dispatch.
+   * Parent claims serialize against revocation, including an initially absent
+   * scope. A lost CAS anywhere aborts every write in this one pooled statement. */
+  private async commitFinancialSourceDocuments(input: FinancialSourceAtomicMutation): Promise<boolean> {
+    const rows = new Map<string, { bucket: string; key: string; present: boolean; expected: unknown }>();
+    for (const check of [...input.checks, ...input.writes]) {
+      const key = financialSourceJson([check.bucket, check.key]), old = rows.get(key);
+      if (old && (old.present !== (check.record !== undefined) || !financialSourceEqual(old.expected, check.record ?? null))) return false;
+      rows.set(key, { bucket: check.bucket, key: check.key, present: check.record !== undefined, expected: check.record ?? null });
+    }
+    if (new Set(input.writes.map((w) => financialSourceJson([w.bucket,w.key]))).size !== input.writes.length || input.writes.length === 0) return false;
+    if (input.authority && !validFinancialSourceAuthority(input.authority, input.now)) return false;
+    const writes = input.writes.map((w) => ({ bucket:w.bucket, key:w.key, present:w.record !== undefined, expected:w.record ?? null,
+      deleting:w.next === undefined, next:w.next ?? null, subject:w.subject ?? null }));
+    const args: unknown[] = [financialSourceJson([...rows.values()]), financialSourceJson(writes)];
+    const bind = (value: unknown) => { args.push(value); return `$${args.length}`; };
+    const definitions = `expectations AS(SELECT * FROM jsonb_to_recordset($1::jsonb) AS e(bucket text,key text,present boolean,expected jsonb)), write_set AS(SELECT * FROM jsonb_to_recordset($2::jsonb) AS w(bucket text,key text,present boolean,expected jsonb,deleting boolean,next jsonb,subject text))`;
+    const claims = `document_claim AS MATERIALIZED(SELECT d.bucket,d.key FROM ${table} d JOIN expectations e ON e.bucket=d.bucket AND e.key=d.key WHERE e.present AND d.document=e.expected ORDER BY d.bucket,d.key FOR UPDATE OF d), base_guard AS MATERIALIZED(SELECT ((SELECT count(*) FROM document_claim)=(SELECT count(*) FROM expectations WHERE present) AND NOT EXISTS(SELECT 1 FROM expectations e JOIN ${table} d ON d.bucket=e.bucket AND d.key=e.key WHERE NOT e.present)) AS valid)`;
+    const upsert = (name: string, predicate: string, guard: string) => `${name} AS(INSERT INTO ${table} AS dst(bucket,key,document,subject,other_subject) SELECT w.bucket,w.key,w.next,w.subject,NULL FROM write_set w WHERE NOT w.deleting AND ${predicate} AND ${guard} ORDER BY w.bucket,w.key ON CONFLICT(bucket,key) DO UPDATE SET document=excluded.document,subject=excluded.subject,other_subject=excluded.other_subject WHERE EXISTS(SELECT 1 FROM write_set w WHERE w.bucket=dst.bucket AND w.key=dst.key AND w.present AND dst.document=w.expected) RETURNING bucket,key)`;
+    const parentCount = `(SELECT count(*) FROM write_set WHERE bucket='${financialSourceBuckets.parents}' AND NOT deleting)`;
+    const parents = upsert("parent_write",`w.bucket='${financialSourceBuckets.parents}'`,"(SELECT valid FROM base_guard)");
+    const parentGuard = `(SELECT count(*) FROM parent_write)=${parentCount}`;
+    let authority = `authority_claim AS MATERIALIZED(SELECT 1 AS valid WHERE ${parentGuard})`;
+    if (input.authority) {
+      const a=input.authority,g=a.expectedGrant;
+      const token=financialTokenProjection("a");
+      authority=`authority_claim AS MATERIALIZED(SELECT a.token_hash FROM accounts_v1.oauth_access_tokens a JOIN ${table} g ON g.bucket='hosted_oidc_grants' AND g.key=${bind(g.sid)} JOIN accounts_v1.accounts account ON account.subject=${bind(g.subject)} WHERE ${parentGuard} AND a.token_hash=${bind(a.accessTokenHash)} AND ${token}=${bind(financialSourceJson(a.expectedAccess))}::jsonb AND a.interface_resolved_revision IS NULL AND a.expires_at>to_timestamp(${bind(input.now)}::double precision/1000.0) AND g.document=${bind(financialSourceJson(g))}::jsonb AND NOT(g.document ? 'revokedAt') AND (g.document->>'absoluteExpiresAt')::bigint>${bind(input.now)} AND COALESCE((SELECT (epoch.document->>'generation')::bigint FROM ${table} epoch WHERE epoch.bucket='authentication_generations' AND epoch.key=${bind(g.subject)}),0)=${bind(a.expectedIdentityGeneration)} AND NOT EXISTS(SELECT 1 FROM ${table} c WHERE c.bucket='canonical_accounts' AND c.key=${bind(g.subject)}) AND NOT EXISTS(SELECT 1 FROM ${table} f WHERE f.bucket='identity_merge_locks' AND f.key=${bind(g.subject)} AND NOT EXISTS(SELECT 1 FROM ${table} operation WHERE operation.bucket='identity_merge_operations' AND operation.key=f.document->>'operationId' AND operation.document->>'status'='active')) AND NOT EXISTS(SELECT 1 FROM ${table} r WHERE (r.bucket='hosted_oidc_revoked_sessions' AND r.key=${bind(g.issuerSessionId)}) OR (r.bucket='hosted_oidc_revoked_clients' AND r.key=${bind(g.clientId)})) FOR UPDATE OF a,g,account)`;
+    }
+    const guard=`(SELECT valid FROM base_guard) AND ${parentGuard} AND (SELECT count(*) FROM authority_claim)=1`;
+    const others=upsert("other_write",`w.bucket<>'${financialSourceBuckets.parents}'`,guard);
+    const deleted=`deleted AS(DELETE FROM ${table} d USING write_set w WHERE w.deleting AND w.present AND d.bucket=w.bucket AND d.key=w.key AND d.document=w.expected AND ${guard} RETURNING d.bucket,d.key)`;
+    // Runtime cardinality, not a constant 1/0: PostgreSQL must execute every
+    // write before deciding whether to abort the whole statement.
+    const query=`WITH ${definitions},${claims},${parents},${authority},${others},${deleted} SELECT CASE WHEN NOT(SELECT valid FROM base_guard) THEN 0 ELSE 1/CASE WHEN ${guard} AND (SELECT count(*) FROM parent_write)+(SELECT count(*) FROM other_write)+(SELECT count(*) FROM deleted)=(SELECT count(*) FROM write_set) THEN 1 ELSE 0 END END AS committed`;
+    try { return (await runQuery<{committed:number}>(this.client,query,args)).rows[0]?.committed===1; }
+    catch(error) { if(isFinancialConflict(error))return false; throw error; }
+  }
+
+  async revokeHostedOidcScope(input: FS.FinancialSourceRevocationMutation): Promise<boolean> {
+    const scope=input.scope;
+    if(!scope || !["grant","issuer-session","client"].includes(scope.kind) || !Number.isSafeInteger(input.now) || input.now<0 || !financialSourceRef(input.evidenceRef))throw new TypeError("invalid_financial_revocation");
+    financialSourceScopeKey(scope);
+    const field=scope.kind==="grant"?"sid":scope.kind==="issuer-session"?"issuerSessionId":"clientId";
+    const value=scope.kind==="grant"?scope.sid:scope.kind==="issuer-session"?scope.issuerSessionId:scope.clientId;
+    const cause:FS.FinancialSourceRawCause=scope.kind==="grant"?{kind:"grant-revoked",sid:value,revokedAt:input.now}:scope.kind==="issuer-session"?{kind:"issuer-session-revoked",issuerSessionId:value,revokedAt:input.now}:{kind:"client-revoked",clientId:value,revokedAt:input.now};
+    const args:unknown[]=[];const bind=(v:unknown)=>{args.push(v);return `$${args.length}`;};
+    const ctes:string[]=[];
+    appendFinancialCloseCtes(ctes,"scope_close",`SELECT ${bind(financialSourceJson(scope))}::jsonb AS scope,${bind(financialSourceScopeKey(scope))}::text AS key,${bind(financialSourceJson(cause))}::jsonb AS cause,${bind(input.evidenceRef)}::text AS evidence,${bind(input.now)}::bigint AS now,${bind(crypto.randomUUID())}::text AS attempt,NULL::text AS subject`);
+    const dependency=`(SELECT valid FROM scope_close_checked)=1`;
+    if(scope.kind!=="grant")ctes.push(`tombstone AS(INSERT INTO ${table}(bucket,key,document) SELECT ${bind(scope.kind==="issuer-session"?"hosted_oidc_revoked_sessions":"hosted_oidc_revoked_clients")},${bind(value)},${bind(financialSourceJson({[field]:value,revokedAt:input.now}))}::jsonb WHERE ${dependency} ON CONFLICT DO NOTHING RETURNING key)`);
+    ctes.push(`grants AS(UPDATE ${table} SET document=jsonb_set(document,'{revokedAt}',to_jsonb(${bind(input.now)}::bigint)) WHERE bucket='hosted_oidc_grants' AND document->>'${field}'=${bind(value)} AND NOT(document ? 'revokedAt') AND ${dependency} RETURNING key)`);
+    await runQuery(this.client,`WITH ${ctes.join(",")} SELECT valid AS revoked FROM scope_close_checked`,args);
+    return true;
+  }
   async commitReviewedRecoveryApproval(input: ReviewedRecoveryApprovalMutation): Promise<boolean> {
     const {record:r,pointer:p}=input,a=r.approval,args:unknown[]=[];const bind=(v:unknown)=>{args.push(v);return `$${args.length}`;};
     const opId=bind(a.operationId),source=bind(a.sourceAccountId),target=bind(a.targetAccountId);
@@ -331,6 +406,8 @@ export class PostgresIdentityRecordRepository
       ctes.push(
         `consume_receipt AS(UPDATE ${table} SET document=jsonb_set(jsonb_set(document,'{consumedByOperation}',to_jsonb($2::text)),'{consumedAt}',to_jsonb($6::bigint)) WHERE bucket='identity_operation_receipts' AND key=${bind(input.receipt.receiptId)} AND EXISTS(SELECT 1 FROM changed) RETURNING key)`,
       );
+    const advances=input.reserve||input.activate||input.quarantine||input.restore||input.abort;
+    const generationGuard=advances?this.generationCtes(ctes,[n.sourceSubject,n.targetSubject],bind,{now:input.now,operationId:n.operationId,operationRevision:n.revision,reason:input.reserve?"reserve":input.activate?"activate":input.quarantine?"quarantine":input.restore?"restore":"abort"}):"true";
     if (input.reserve || input.quarantine) {
       for (const [i, subject] of [n.sourceSubject, n.targetSubject].entries())
         insert(
@@ -344,7 +421,7 @@ export class PostgresIdentityRecordRepository
         );
       this.revokeCtes(
         ctes,
-        `SELECT 1 FROM changed`,
+        `SELECT 1 FROM changed WHERE ${generationGuard}`,
         `subject IN($4,$5)`,
         input.now,
         bind,
@@ -353,7 +430,7 @@ export class PostgresIdentityRecordRepository
     if (input.restore || input.abort) {
       this.revokeCtes(
         ctes,
-        `SELECT 1 FROM changed`,
+        `SELECT 1 FROM changed WHERE ${generationGuard}`,
         `subject IN($4,$5)`,
         input.now,
         bind,
@@ -369,19 +446,11 @@ export class PostgresIdentityRecordRepository
     if (input.activate)
       this.revokeCtes(
         ctes,
-        `SELECT 1 FROM changed`,
+        `SELECT 1 FROM changed WHERE ${generationGuard}`,
         `subject IN($4,$5)`,
         input.now,
         bind,
       );
-    if (
-      input.reserve ||
-      input.activate ||
-      input.quarantine ||
-      input.restore ||
-      input.abort
-    )
-      this.generationCtes(ctes, [n.sourceSubject, n.targetSubject], bind);
     if (input.activate)
       insert(
         "canonical",
@@ -410,14 +479,14 @@ export class PostgresIdentityRecordRepository
       ctes.push(
         `unschedule_pending AS(DELETE FROM ${table} WHERE bucket='identity_merge_retry_pending' AND key=$2 AND EXISTS(SELECT 1 FROM changed) RETURNING key)`,
       );
-    const query = `WITH ${ctes.join(",")} SELECT document FROM changed`;
+    const query = `WITH ${ctes.join(",")} SELECT document FROM changed WHERE 1/CASE WHEN ${generationGuard} THEN 1 ELSE 0 END=1`;
     // The checkpoint and all captured expiry bounds are checked again after
     // preparation. This is a local precommit boundary, not server execution/2PC.
     if (input.availabilityCheckpoint !== undefined && consumeReviewedRecoveryIssuerAvailabilityCheckpoint(input.availabilityCheckpoint, input) === undefined) return false;
     try {
       return (await runQuery(this.client, query, args)).rows.length === 1;
     } catch (e) {
-      if (isConflict(e)) return false;
+      if (isFinancialConflict(e)) return false;
       throw e;
     }
   }
@@ -454,14 +523,25 @@ export class PostgresIdentityRecordRepository
     );
   }
   private generationCtes(
-    ctes: string[],
-    subjects: readonly string[],
-    bind: (value: unknown) => string,
-  ): void {
-    for (const [i, subject] of [...new Set(subjects)].entries())
-      ctes.push(
-        `generation${i} AS(INSERT INTO ${table}(bucket,key,document,subject) SELECT 'authentication_generations',${bind(subject)},${bind(JSON.stringify({ subject, generation: 1 }))}::jsonb,${bind(subject)} FROM changed ON CONFLICT(bucket,key) DO UPDATE SET document=jsonb_set(${table}.document,'{generation}',to_jsonb((${table}.document->>'generation')::integer+1)) RETURNING key)`,
-      );
+    ctes: string[], subjects: readonly string[], bind: (value: unknown) => string,
+    context: { now:number; operationId:string; operationRevision:number; reason:"reserve"|"activate"|"quarantine"|"abort"|"restore"|"unlink"; legacyUnlink?:true },
+  ): string {
+    const guards:string[]=[];
+    for (const [i, subject] of [...new Set(subjects)].entries()) {
+      const sub=bind(subject),claim=`financial_epoch${i}`,scoped=`financial_epoch_scope${i}`;
+      ctes.push(`${claim} AS MATERIALIZED(SELECT document FROM ${table} WHERE bucket='authentication_generations' AND key=${sub} AND EXISTS(SELECT 1 FROM changed) FOR UPDATE)`);
+      const epoch=`COALESCE((SELECT (document->>'generation')::bigint FROM ${claim}),0)`;
+      ctes.push(`${scoped} AS MATERIALIZED(SELECT ${sub}::text AS subject,${epoch} AS previous FROM changed)`);
+      const scope=`jsonb_build_object('kind','account-generation','subject',subject,'identityGeneration',previous)`;
+      // JSONB text contains formatting spaces. Physical keys use exactly the
+      // shared canonical key projection, including JSON quoting of subject.
+      const key=`'{"identityGeneration":'||previous::text||',"kind":"account-generation","subject":'||to_jsonb(subject)::text||'}'`;
+      const cause=`${bind(financialSourceJson({kind:"identity-generation-advanced",operationId:context.operationId,operationRevision:context.operationRevision,reason:context.reason,...(context.legacyUnlink?{legacyUnlink:true}:{})}))}::jsonb||jsonb_build_object('subject',subject,'previousGeneration',previous,'nextGeneration',previous+1)`;
+      const dependency=appendFinancialCloseCtes(ctes,`financial_epoch_close${i}`,`SELECT ${scope} AS scope,${key} AS key,${cause} AS cause,${bind(context.operationId)}::text AS evidence,${bind(context.now)}::bigint AS now,${bind(crypto.randomUUID())}::text AS attempt,subject FROM ${scoped}`);
+      ctes.push(`generation${i} AS(INSERT INTO ${table} AS epoch(bucket,key,document,subject) SELECT 'authentication_generations',subject,jsonb_build_object('subject',subject,'generation',previous+1),subject FROM ${scoped} WHERE ${dependency} ON CONFLICT(bucket,key) DO UPDATE SET document=jsonb_set(epoch.document,'{generation}',to_jsonb((epoch.document->>'generation')::bigint+1)) WHERE (epoch.document->>'generation')::bigint=(SELECT previous FROM ${scoped}) RETURNING key)`);
+      guards.push(`(SELECT count(*) FROM generation${i})=1`);
+    }
+    return guards.join(" AND ") || "true";
   }
 
   async page<T>(
@@ -541,7 +621,7 @@ export class PostgresIdentityRecordRepository
     const inventoryEpoch = bind(inventory);
     const ctes = [
       `inventory_claim AS(UPDATE ${table} SET document=jsonb_set(document,'{generation}',to_jsonb((document->>'generation')::bigint+1)) WHERE bucket='email_candidate_inventory' AND key='global' AND (document->>'generation')::bigint=${inventoryEpoch} AND EXISTS(SELECT 1 FROM ${table} WHERE ${condition}) RETURNING key)`,
-      `security_claim AS(UPDATE ${table} g SET document=jsonb_set(g.document,'{generation}',to_jsonb((g.document->>'generation')::integer+1)) WHERE g.bucket='authentication_generations' AND g.key=$4 AND (g.document->>'generation')::integer=${epoch} AND EXISTS(SELECT 1 FROM inventory_claim) AND EXISTS(SELECT 1 FROM ${table} WHERE ${condition}) RETURNING key)`,
+      `security_claim AS MATERIALIZED(SELECT g.key FROM ${table} g WHERE g.bucket='authentication_generations' AND g.key=$4 AND (g.document->>'generation')::integer=${epoch} AND EXISTS(SELECT 1 FROM inventory_claim) AND EXISTS(SELECT 1 FROM ${table} WHERE ${condition}) FOR UPDATE OF g)`,
       `changed AS(UPDATE ${table} SET document=$1::jsonb WHERE ${condition} AND EXISTS(SELECT 1 FROM security_claim) RETURNING key)`,
       `consume_receipt AS(UPDATE ${table} SET document=jsonb_set(document,'{consumedByOperation}',to_jsonb($2::text)) WHERE bucket='credential_unlink_receipts' AND key=${bind(r.receiptId)} AND EXISTS(SELECT 1 FROM changed) RETURNING key)`,
     ];
@@ -572,19 +652,20 @@ export class PostgresIdentityRecordRepository
       n.operationId,
       credentialUnlinkAudit(input),
     );
-    this.revokeCtes(ctes, "SELECT 1 FROM changed", "subject IN($4)", now, bind);
+    const generationGuard=this.generationCtes(ctes,[n.subject],bind,{now,operationId:n.operationId,operationRevision:n.revision,reason:"unlink"});
+    this.revokeCtes(ctes, `SELECT 1 FROM changed WHERE ${generationGuard}`, "subject IN($4)", now, bind);
     try {
       return (
         (
           await runQuery(
             this.client,
-            `WITH ${ctes.join(",")} SELECT key FROM changed`,
+            `WITH ${ctes.join(",")} SELECT key FROM changed WHERE 1/CASE WHEN ${generationGuard} THEN 1 ELSE 0 END=1`,
             args,
           )
         ).rows.length === 1
       );
     } catch (error) {
-      if (isConflict(error)) return false;
+      if (isFinancialConflict(error)) return false;
       throw error;
     }
   }
@@ -616,14 +697,14 @@ export class PostgresIdentityRecordRepository
     const ctes = [
       `changed AS(INSERT INTO ${table}(bucket,key,document,subject) SELECT 'upstream_identity_status',${bind(identityKey)},${bind(JSON.stringify(status))}::jsonb,$1 WHERE ${condition} ON CONFLICT DO NOTHING RETURNING key)`,
     ];
+    const generationGuard=this.generationCtes(ctes,[input.subject],bind,{now:input.now,operationId:input.operationId,operationRevision:0,reason:"unlink",legacyUnlink:true});
     this.revokeCtes(
       ctes,
-      `SELECT 1 FROM changed`,
+      `SELECT 1 FROM changed WHERE ${generationGuard}`,
       `subject IN($1)`,
       input.now,
       bind,
     );
-    this.generationCtes(ctes, [input.subject], bind);
     ctes.push(
       `audit AS(INSERT INTO ${table}(bucket,key,document,subject) SELECT 'identity_merge_audit',${bind(input.operationId)},${bind(JSON.stringify({ operationId: input.operationId, subject: input.subject, decision: "credential_unlinked", identityKey, at: input.now }))}::jsonb,$1 FROM changed RETURNING key)`,
     );
@@ -647,13 +728,13 @@ export class PostgresIdentityRecordRepository
         (
           await runQuery(
             this.client,
-            `WITH ${ctes.join(",")} SELECT key FROM changed`,
+            `WITH ${ctes.join(",")} SELECT key FROM changed WHERE 1/CASE WHEN ${generationGuard} THEN 1 ELSE 0 END=1`,
             args,
           )
         ).rows.length === 1
       );
     } catch (e) {
-      if (isConflict(e)) return false;
+      if (isFinancialConflict(e)) return false;
       throw e;
     }
   }
@@ -667,11 +748,37 @@ function references(value: unknown, bucket: string): readonly [string | null, st
     ((context?.sourceAccountId ?? r.sourceSubject) as string) ?? null,
   ];
 }
-function isConflict(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code: string }).code === "23505"
-  );
+/** Mirrors tokenFromRow: native columns override hosted metadata, absent optional
+ * native fields remove a same-named metadata property. No oidc_clients table is
+ * joined: official clients may be immutable source registrations. */
+function financialTokenProjection(alias: string): string {
+  const overwritten=["clientId","audience","scope","subject","takosumiSubject","capsuleId","workspaceId","role","interfaceId","interfaceBindingId","interfaceResolvedRevision","expiresAt"];
+  return `(COALESCE(${alias}.hosted_metadata,'{}'::jsonb)-ARRAY[${overwritten.map(k=>`'${k}'`).join(",")}]::text[] || jsonb_build_object('clientId',${alias}.client_id,'scope',${alias}.scope,'subject',${alias}.subject,'expiresAt',(extract(epoch FROM ${alias}.expires_at)*1000)::bigint) || jsonb_strip_nulls(jsonb_build_object('audience',${alias}.audience,'takosumiSubject',${alias}.takosumi_subject,'capsuleId',${alias}.capsule_id,'workspaceId',${alias}.workspace_id,'role',${alias}.role,'interfaceId',${alias}.interface_id,'interfaceBindingId',${alias}.interface_binding_id,'interfaceResolvedRevision',${alias}.interface_resolved_revision)))`;
+}
+
+/** One actual parent-key UPSERT serializes absent enrollment and revocation.
+ * RETURNING is the only source of the closing raw/outbox records; a SELECT of
+ * the earlier statement snapshot cannot observe a concurrently inserted head.
+ * Already-closed rows are not updated or returned, so replay never requeues. */
+function appendFinancialCloseCtes(ctes: string[], name: string, scopeQuery: string): string {
+  const input=`${name}_input`,current="parent.document",head=`(${current}->'head')`;
+  ctes.push(`${input} AS MATERIALIZED(${scopeQuery})`);
+  const field=(key:string)=>`(SELECT ${key} FROM ${input})`;
+  const eventRef=`(${head}->>'affectedRef')||'/closed'`;
+  const raw=`jsonb_build_object('v',1,'eventRef',${eventRef},'registrationRef',${head}->>'registrationRef','incarnation',${head}->>'incarnation','sequence',(${head}->>'sequence')::bigint+1,'previousEventRef',${head}->>'lastEventRef','kind','close','affectedRef',${head}->>'affectedRef','evidenceRef',${field("evidence")})`;
+  const record=`jsonb_build_object('raw',${raw},'parent',${current}->'scope','parentRevision',(${head}->>'revision')::bigint+1,'cause',${field("cause")},'capturedAt',${field("now")})`;
+  const changed=`jsonb_build_object('scope',${current}->'scope','closed',true,'head',${head}||jsonb_build_object('state','closed','revision',(${head}->>'revision')::bigint+1,'sequence',(${head}->>'sequence')::bigint+1,'lastEventRef',${eventRef},'updatedAt',${field("now")}),'lastRaw',${record},'closureAttemptId',${field("attempt")})`;
+  const valid=`${current}->'scope'=${field("scope")} AND ${current}->'closed'='false'::jsonb AND ${head}->'scope'=${current}->'scope' AND ${head}->>'state'='open' AND (${head}->>'sequence')::bigint BETWEEN 1 AND 9007199254740990 AND (${head}->>'revision')::bigint BETWEEN 0 AND 9007199254740990 AND (${head}->>'updatedAt')::bigint<=${field("now")} AND ${head}->>'lastEventRef' IS NOT NULL AND ${current}->'lastRaw'->'parent'=${current}->'scope' AND (${current}->'lastRaw'->>'parentRevision')::bigint=(${head}->>'revision')::bigint AND (${current}->'lastRaw'->>'capturedAt')::bigint=(${head}->>'updatedAt')::bigint AND ${current}->'lastRaw'->'raw'->>'kind'='advance' AND ${current}->'lastRaw'->'raw'->>'eventRef'=${head}->>'lastEventRef' AND (${current}->'lastRaw'->'raw'->>'sequence')::bigint=(${head}->>'sequence')::bigint AND ${current}->'lastRaw'->'raw'->>'affectedRef'=${head}->>'affectedRef' AND ${current}->'lastRaw'->'raw'->>'registrationRef'=${head}->>'registrationRef' AND ${current}->'lastRaw'->'raw'->>'incarnation'=${head}->>'incarnation' AND EXISTS(SELECT 1 FROM ${table} idx WHERE idx.bucket='${financialSourceBuckets.affected}' AND idx.key=${head}->>'affectedRef' AND idx.document=jsonb_build_object('affectedRef',${head}->>'affectedRef','scope',${current}->'scope','registrationRef',${head}->>'registrationRef','incarnation',${head}->>'incarnation')) AND EXISTS(SELECT 1 FROM ${table} original WHERE original.bucket='${financialSourceBuckets.raw}' AND original.key=${head}->>'lastEventRef' AND original.document=${current}->'lastRaw') AND EXISTS(SELECT 1 FROM ${table} registration WHERE registration.bucket='${financialSourceBuckets.registrations}' AND registration.key=${head}->>'registrationRef' AND registration.document->>'registrationRef'=${head}->>'registrationRef' AND registration.document->>'incarnation'=${head}->>'incarnation')`;
+  ctes.push(`${name} AS(INSERT INTO ${table} AS parent(bucket,key,document,subject) SELECT '${financialSourceBuckets.parents}',key,jsonb_build_object('scope',scope,'closed',true,'closureAttemptId',attempt),subject FROM ${input} ON CONFLICT(bucket,key) DO UPDATE SET document=CASE WHEN ${valid} THEN ${changed} ELSE (${field("attempt")}||'-invalid-financial-parent')::jsonb END,subject=COALESCE(parent.subject,excluded.subject) WHERE NOT COALESCE((parent.document->>'closed')::boolean,false) RETURNING document,subject)`);
+  const closing=`${name}_closing`;
+  ctes.push(`${closing} AS MATERIALIZED(SELECT p.document,p.subject,r.document AS registration FROM ${name} p LEFT JOIN ${table} r ON r.bucket='${financialSourceBuckets.registrations}' AND r.key=p.document->'head'->>'registrationRef' WHERE p.document->>'closureAttemptId'=${field("attempt")} AND jsonb_typeof(p.document->'head')='object')`);
+  ctes.push(`${name}_raw AS(INSERT INTO ${table} AS existing(bucket,key,document,subject) SELECT '${financialSourceBuckets.raw}',document->'lastRaw'->'raw'->>'eventRef',CASE WHEN registration IS NULL THEN (${field("attempt")}||'-missing-financial-registration')::jsonb ELSE document->'lastRaw' END,subject FROM ${closing} ON CONFLICT(bucket,key) DO UPDATE SET document=excluded.document WHERE existing.document=excluded.document RETURNING key)`);
+  const registration=`(document->'head'->>'registrationRef')`,ref=`(document->'lastRaw'->'raw'->>'eventRef')`;
+  const pendingKey=`'['||to_jsonb(${registration})::text||','||to_jsonb(${ref})::text||']'`;
+  ctes.push(`${name}_pending AS(INSERT INTO ${table} AS existing(bucket,key,document,subject) SELECT '${financialSourceBuckets.pending}',${pendingKey},jsonb_build_object('registration',registration,'eventRef',${ref},'createdAt',${field("now")}),subject FROM ${closing} ON CONFLICT(bucket,key) DO UPDATE SET document=excluded.document WHERE existing.document=excluded.document RETURNING key)`);
+  ctes.push(`${name}_checked AS MATERIALIZED(SELECT 1/CASE WHEN (SELECT count(*) FROM ${name}_raw)=(SELECT count(*) FROM ${closing}) AND (SELECT count(*) FROM ${name}_pending)=(SELECT count(*) FROM ${closing}) THEN 1 ELSE 0 END AS valid)`);
+  return `(SELECT valid FROM ${name}_checked)=1`;
+}
+function isFinancialConflict(error: unknown): boolean {
+  return !!error && typeof error==="object" && "code" in error && ["23505","22012","40001","40P01"].includes(String(error.code));
 }

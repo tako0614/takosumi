@@ -12,6 +12,13 @@ import type {
   RefreshChainRetentionPhase,
 } from "./refresh-chain-retention.ts";
 import { sha256Text } from "./encoding.ts";
+import type { FinancialSourceRegistration, FinancialSourceReceiptRecord } from "./financial-source-contract.ts";
+import type {
+  FinancialSourceParentScope, FinancialSourceParentHead, FinancialSourceParentVector,
+  FinancialSourceEnrollmentMutation, FinancialSourceProofMutation, FinancialSourceProofRecord,
+  FinancialSourceRevocationMutation, FinancialSourceRawRecord, FinancialSourcePendingPage,
+  FinancialSourceMaterializationRecord, FinancialSourceMaterializationMutation, FinancialSourceReceiptMutation,
+} from "./identity-state.ts";
 
 import type { HostedIdentityStore } from "./identity-state.ts";
 export type { AccountEmailProofRecord, UpstreamLoginTransactionRecord, HostedOidcGrantRecord, IdentityMergeOperation, IdentityMergeMutation, UnlinkUpstreamIdentityInput, UpstreamIdentityStatusRecord } from "./identity-state.ts";
@@ -627,7 +634,21 @@ export class InMemoryAccountsStore implements AccountsStore {
     for (const [key, value] of this.#accountSessions) if (subjects.includes(value.subject)) this.#accountSessions.delete(key);
     for (const [key, value] of this.#authorizationCodes) if (subjects.includes(value.subject) || value.takosumiSubject && subjects.includes(value.takosumiSubject)) this.#authorizationCodes.delete(key);
     for (const map of [this.#accessTokens, this.#refreshTokens]) for (const [key, value] of map) if (subjects.includes(value.subject) || value.takosumiSubject && subjects.includes(value.takosumiSubject)) map.delete(key);
-  }), this);
+  }, (accessToken) => this.#accessTokens.get(accessToken)), this);
+
+  registerFinancialSourceRegistration(registration: FinancialSourceRegistration): Promise<boolean> { return this.#hosted.registerFinancialSourceRegistration(registration); }
+  findFinancialSourceRegistration(registrationRef: string): Promise<FinancialSourceRegistration | undefined> { return this.#hosted.findFinancialSourceRegistration(registrationRef); }
+  findFinancialSourceParent(scope: FinancialSourceParentScope): Promise<FinancialSourceParentHead | undefined> { return this.#hosted.findFinancialSourceParent(scope); }
+  enrollFinancialSourceParents(input: FinancialSourceEnrollmentMutation): Promise<FinancialSourceParentVector<FinancialSourceParentHead> | undefined> { return this.#hosted.enrollFinancialSourceParents(input); }
+  issueFinancialSourceProof(input: FinancialSourceProofMutation): Promise<FinancialSourceProofRecord | undefined> { return this.#hosted.issueFinancialSourceProof(input); }
+  findFinancialSourceProof(proofRef: string): Promise<FinancialSourceProofRecord | undefined> { return this.#hosted.findFinancialSourceProof(proofRef); }
+  revokeHostedOidcScope(input: FinancialSourceRevocationMutation): Promise<boolean> { return this.#hosted.revokeHostedOidcScope(input); }
+  findFinancialSourceRaw(eventRef: string): Promise<FinancialSourceRawRecord | undefined> { return this.#hosted.findFinancialSourceRaw(eventRef); }
+  listFinancialSourcePending(input: { readonly registrationRef: string; readonly after?: string; readonly limit: number }): Promise<FinancialSourcePendingPage> { return this.#hosted.listFinancialSourcePending(input); }
+  findFinancialSourceMaterialization(eventRef: string): Promise<FinancialSourceMaterializationRecord | undefined> { return this.#hosted.findFinancialSourceMaterialization(eventRef); }
+  commitFinancialSourceMaterialization(input: FinancialSourceMaterializationMutation): Promise<boolean> { return this.#hosted.commitFinancialSourceMaterialization(input); }
+  findFinancialSourceReceipt(input: { readonly registrationRef: string; readonly eventRef: string; readonly receiverRef: string }): Promise<FinancialSourceReceiptRecord | undefined> { return this.#hosted.findFinancialSourceReceipt(input); }
+  recordFinancialSourceReceipt(input: FinancialSourceReceiptMutation): Promise<boolean> { return this.#hosted.recordFinancialSourceReceipt(input); }
 
   createOwnerOperationContextEvidence(record: import("./owner-operation-contract.ts").OwnerOperationContextEvidence): Promise<boolean> { return this.#hosted.createOwnerOperationContextEvidence(record); }
   findOwnerOperationContextEvidence(input: import("./owner-operation-evidence.ts").OwnerOperationContextEvidenceLookup): Promise<import("./owner-operation-contract.ts").OwnerOperationContextEvidence | undefined> { return this.#hosted.findOwnerOperationContextEvidence(input); }
