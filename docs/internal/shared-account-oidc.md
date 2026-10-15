@@ -396,6 +396,33 @@ and parent lookup scopes. Current verification is an observation; Financial
 still checks the original vector, class and genuine payer at its L1/L2 command
 CAS. Historical load grants no new permission and is never replaced by fresh
 auth when recovering the original accepted/unknown command.
+
+The optional `loadFinancialSourceEventEvidence({v:1,eventRef,eventDigest})`
+reader returns `{v:1,status:'found',materialization:{event,eventDigest},
+registeredHead}` or `{v:1,status:'not-found'}`. It reads the original persisted
+materialization and full local raw record, recomputes the existing event digest
+and checks the original predecessor, enrolled genesis and complete peers. It
+does not enroll, materialize, dispatch or write during the read. The outward
+projection excludes raw metadata, parent/cause, token hashes and internal
+scopes. Not-found describes missing materialization; it is neither legacy
+history clearance nor an admission or permission to create a fresh command.
+
+Its fixed private composition supplies source credential/schema references,
+receiver/target/schema, actual registered-head and credential-custody readers,
+and a trusted clock. The distinct `event-evidence-read` capability is checked
+before not-found as well as before a found result. Missing qualification,
+genesis, mismatched full head/peers, expired context and backward clock fail
+closed. Existing `event-apply` and `receipt-read` purposes are unchanged.
+
+`createAccountsFinancialControlSource` connects the same canonical
+`WorkspacesService.financialSource` facade. Captures retain the original Core
+snapshot privately; copied or modified snapshots do not acquire provenance.
+Its bounded outbox page maps full retained raw records through the Accounts
+codec and uses the full captured Core head CAS. Original receiver readback
+precedes delivery, and all original receiver/target receipts use the same
+eight-field recipe. The C event reader uses a separate fixed C registration
+and qualification context; the Financial owner selects the qualified source
+binding. It never prefix-searches or falls back between Accounts and Control.
 Named service transport, actual source registration/enrollment, receiver graph,
 Financial Principal/payer producers and live qualification remain separate
 owning composition work; this module has no public route or affirmative default.

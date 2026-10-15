@@ -3,9 +3,11 @@ import {
   createFinancialSourceReceiverAdapter, financialSourceReceiptRef, financialSourceReceiptRecordDigest,
   makeFinancialSourceReceipt, parseFinancialSourceApplyRequest, verifyFinancialSourceApplyRequest,
   parseFinancialSourceReadRequest, parseFinancialSourceHeadKey, parseFinancialIdentityProofRequest,
+  parseFinancialSourceEventEvidenceRequest, projectFinancialSourceEventEvidence,
+  parseFinancialSourceEventEvidenceLoadResult, verifyFinancialSourceEventEvidenceLoadResult,
   type FinancialSourceReceiverAdapterOptions, type FinancialSourceApplyRequest, type FinancialSourceReadRequest,
 } from "../../../../accounts/service/src/financial-source-abi.ts";
-import type { FinancialSourceEvent, FinancialSourceMaterialization, FinancialSourceReceipt } from "../../../../accounts/service/src/financial-source-contract.ts";
+import { financialSourceEventDigest, type FinancialSourceEvent, type FinancialSourceMaterialization, type FinancialSourceReceipt } from "../../../../accounts/service/src/financial-source-contract.ts";
 
 const event: FinancialSourceEvent = {v: 1, eventRef: "event:one", registrationRef: "source:accounts", incarnation: "incarnation:one", sequence: 1,
   previousDigest: `sha256:${"1".repeat(64)}`, kind: "close", affectedRef: "grant:one", evidenceRef: "evidence:one"};
@@ -13,6 +15,11 @@ const digest = "sha256:85dfc950d869c729357ad56b76bc83275053ea0b037f117649932a36d
 const receiverRef = "receiver:financial", targetRef = "target:qualified";
 const materialization: FinancialSourceMaterialization = {rawEventDigest: `sha256:${"2".repeat(64)}`, event, eventDigest: digest};
 const context = {registrationRef: event.registrationRef, receiverRef, targetRef};
+const evidenceRequest = {v: 1 as const, eventRef: event.eventRef, eventDigest: digest};
+const registeredHead = {v: 1 as const, head: {registrationRef: event.registrationRef, incarnation: event.incarnation, affectedRef: event.affectedRef},
+  genesisDigest: event.previousDigest, receivers: [{receiverRef, targetRef}], sourceSchemaRef: "schema:synthetic-source",
+  sourceCredentialRef: "credential:synthetic-source", clockPolicyRef: "clock:synthetic-ms"};
+const evidenceResult = {v: 1 as const, status: "found" as const, materialization: {event, eventDigest: digest}, registeredHead};
 
 // All registration/key/clock/transport objects below are explicit SYNTHETIC
 // source fixtures. They do not qualify a real key, binding graph or Financial DB.
@@ -136,4 +143,108 @@ test("proof request accepts only immutable proof and exact challenge references"
   expect(parseFinancialIdentityProofRequest({v: 1, proofRef: "proof:one", challengeRef: "challenge:one"})).toEqual({v: 1, proofRef: "proof:one", challengeRef: "challenge:one"});
   for (const value of [{v: 1, proofRef: "proof:one"}, {v: 1, proofRef: "proof:one", challengeRef: "challenge:one", subject: "caller"},
     {v: 1, proofRef: "proof:one", challengeRef: "challenge:one", current: true}]) expect(() => parseFinancialIdentityProofRequest(value)).toThrow();
+});
+
+test("immutable event evidence exposes only the original event and full registered head", async () => {
+  const request = parseFinancialSourceEventEvidenceRequest({v: 1, eventRef: event.eventRef, eventDigest: digest});
+  const result = await projectFinancialSourceEventEvidence({request, materialization, registeredHead});
+  expect(result).toEqual({v: 1, status: "found", materialization: {event, eventDigest: digest}, registeredHead});
+  expect(result.materialization).not.toHaveProperty("rawEventDigest");
+});
+
+test("event evidence request cannot choose caller, receiver, target, registration or missing digest", () => {
+  for (const input of [event.eventRef, {v: 1, eventRef: event.eventRef}, {...evidenceRequest, v: 2},
+    {...evidenceRequest, eventDigest: "sha256:opaque"}, {...evidenceRequest, eventRef: "bad\nref"},
+    ...["subject", "payer", "receiverRef", "targetRef", "registrationRef", "sourceSchemaRef", "sourceCredentialRef", "clockPolicyRef"].map((key) => ({...evidenceRequest, [key]: "caller-selected"}))])
+    expect(() => parseFinancialSourceEventEvidenceRequest(input)).toThrow();
+});
+
+test("event evidence absence is a closed result and still requires valid request and expected head", async () => {
+  expect(parseFinancialSourceEventEvidenceLoadResult({v: 1, status: "not-found"})).toEqual({v: 1, status: "not-found"});
+  expect(await verifyFinancialSourceEventEvidenceLoadResult({v: 1, status: "not-found"}, evidenceRequest, registeredHead)).toEqual({v: 1, status: "not-found"});
+  for (const result of [undefined, null, {v: 1, status: "missing"}, {v: 2, status: "not-found"},
+    {v: 1, status: "not-found", materialization: evidenceResult.materialization}, {v: 1, status: "not-found", raw: {}}])
+    expect(() => parseFinancialSourceEventEvidenceLoadResult(result)).toThrow();
+  await expect(verifyFinancialSourceEventEvidenceLoadResult({v: 1, status: "not-found"}, {...evidenceRequest, eventRef: ""}, registeredHead)).rejects.toThrow();
+  await expect(verifyFinancialSourceEventEvidenceLoadResult({v: 1, status: "not-found"}, evidenceRequest,
+    {...registeredHead, receivers: []})).rejects.toThrow();
+});
+
+test("event evidence result rejects raw metadata, internal scopes and hidden extra keys at every envelope", () => {
+  for (const key of ["raw", "rawRecord", "parent", "cause", "accessTokenHash", "scope", "rawEventDigest"]) {
+    expect(() => parseFinancialSourceEventEvidenceLoadResult({...evidenceResult, [key]: "private"})).toThrow();
+    expect(() => parseFinancialSourceEventEvidenceLoadResult({...evidenceResult, materialization: {...evidenceResult.materialization, [key]: "private"}})).toThrow();
+    expect(() => parseFinancialSourceEventEvidenceLoadResult({...evidenceResult, materialization: {event: {...event, [key]: "private"}, eventDigest: digest}})).toThrow();
+  }
+  expect(() => parseFinancialSourceEventEvidenceLoadResult({...evidenceResult, registeredHead: {...registeredHead, raw: "private"}})).toThrow();
+  const symbol = Symbol("hidden-source-state");
+  const hidden = {...evidenceResult}; Object.defineProperty(hidden, symbol, {value: true});
+  expect(() => parseFinancialSourceEventEvidenceLoadResult(hidden)).toThrow();
+});
+
+test("event evidence also rejects hidden or accessor fields inside original event and receiver entries", () => {
+  const hiddenEvent = {...event}; Object.defineProperty(hiddenEvent, Symbol("raw-parent"), {value: "private"});
+  expect(() => parseFinancialSourceEventEvidenceLoadResult({...evidenceResult, materialization: {event: hiddenEvent, eventDigest: digest}})).toThrow();
+  const accessorEvent = {...event}; Object.defineProperty(accessorEvent, "evidenceRef", {get: () => event.evidenceRef, enumerable: true});
+  expect(() => parseFinancialSourceEventEvidenceLoadResult({...evidenceResult, materialization: {event: accessorEvent, eventDigest: digest}})).toThrow();
+  const hiddenReceiver = {receiverRef, targetRef}; Object.defineProperty(hiddenReceiver, "cause", {value: "private"});
+  expect(() => parseFinancialSourceEventEvidenceLoadResult({...evidenceResult, registeredHead: {...registeredHead, receivers: [hiddenReceiver]}})).toThrow();
+});
+
+test("event-derived three-part head and sequence-one genesis must match the original materialization", () => {
+  for (const field of ["registrationRef", "incarnation", "affectedRef"] as const) {
+    expect(() => parseFinancialSourceEventEvidenceLoadResult({...evidenceResult, registeredHead: {...registeredHead,
+      head: {...registeredHead.head, [field]: "foreign"}}})).toThrow();
+  }
+  expect(() => parseFinancialSourceEventEvidenceLoadResult({...evidenceResult, registeredHead: {...registeredHead,
+    genesisDigest: `sha256:${"0".repeat(64)}`}})).toThrow();
+  expect(() => parseFinancialSourceEventEvidenceLoadResult({...evidenceResult, registeredHead: {...registeredHead,
+    head: {registrationRef: event.registrationRef, incarnation: event.incarnation}}})).toThrow();
+});
+
+test("event evidence verifies request ref, claimed digest and actual event bytes independently", async () => {
+  for (const input of [{...evidenceRequest, eventRef: "event:other"}, {...evidenceRequest, eventDigest: `sha256:${"0".repeat(64)}` as const}])
+    await expect(verifyFinancialSourceEventEvidenceLoadResult(evidenceResult, input, registeredHead)).rejects.toThrow("invalid-request");
+  const wrongDigest = `sha256:${"0".repeat(64)}` as const;
+  await expect(verifyFinancialSourceEventEvidenceLoadResult({...evidenceResult, materialization: {event, eventDigest: wrongDigest}},
+    {...evidenceRequest, eventDigest: wrongDigest}, registeredHead)).rejects.toThrow("invalid-request");
+  await expect(verifyFinancialSourceEventEvidenceLoadResult({...evidenceResult, materialization: {event: {...event, evidenceRef: "changed-evidence"}, eventDigest: digest}},
+    evidenceRequest, registeredHead)).rejects.toThrow("invalid-request");
+});
+
+test("verification pins the complete actual head including receiver set, schema, custody and clock", async () => {
+  for (const expected of [{...registeredHead, receivers: [...registeredHead.receivers, {receiverRef: "other-receiver", targetRef: "other-target"}]},
+    {...registeredHead, receivers: [{receiverRef, targetRef: "other-target"}]}, {...registeredHead, sourceSchemaRef: "other-schema"},
+    {...registeredHead, sourceCredentialRef: "other-custody"}, {...registeredHead, clockPolicyRef: "other-clock"}])
+    await expect(verifyFinancialSourceEventEvidenceLoadResult(evidenceResult, evidenceRequest, expected)).rejects.toThrow("invalid-request");
+});
+
+test("later immutable event evidence retains its original predecessor instead of substituting genesis", async () => {
+  const later = {...event, eventRef: "event:later", sequence: 2, previousDigest: `sha256:${"3".repeat(64)}` as const};
+  const eventDigest = await financialSourceEventDigest(later);
+  const request = {v: 1 as const, eventRef: later.eventRef, eventDigest};
+  const result = await projectFinancialSourceEventEvidence({request, materialization: {...materialization, event: later, eventDigest}, registeredHead});
+  expect(result.materialization.event.previousDigest).toBe(later.previousDigest);
+  expect(result.materialization.event.previousDigest).not.toBe(registeredHead.genesisDigest);
+});
+
+test("projection accepts only the internal materialization and returns no raw capture or caller fields", async () => {
+  await expect(projectFinancialSourceEventEvidence({request: evidenceRequest, materialization: {...materialization, rawEventDigest: "invalid" as never}, registeredHead})).rejects.toThrow();
+  const extra = {...materialization, cause: {accessTokenHash: "private"}};
+  await expect(projectFinancialSourceEventEvidence({request: evidenceRequest, materialization: extra, registeredHead})).rejects.toThrow();
+  const withCaller = {request: evidenceRequest, materialization, registeredHead, receiverRef: "caller-selected"};
+  await expect(projectFinancialSourceEventEvidence(withCaller)).rejects.toThrow();
+  const projected = await projectFinancialSourceEventEvidence({request: evidenceRequest, materialization, registeredHead});
+  expect(Object.keys(projected).sort()).toEqual(["materialization", "registeredHead", "status", "v"]);
+  expect(Object.keys(projected.materialization).sort()).toEqual(["event", "eventDigest"]);
+});
+
+test("event evidence verification captures original inputs before digest await and returns detached data", async () => {
+  const request = structuredClone(evidenceRequest), result = structuredClone(evidenceResult), expected = structuredClone(registeredHead);
+  const pending = verifyFinancialSourceEventEvidenceLoadResult(result, request, expected);
+  request.eventRef = "late-request";
+  result.materialization.event.evidenceRef = "late-evidence";
+  expected.sourceCredentialRef = "late-custody";
+  expect(await pending).toEqual(evidenceResult);
+  expect(result.materialization.event.evidenceRef).toBe("late-evidence");
 });

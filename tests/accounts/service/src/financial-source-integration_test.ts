@@ -28,19 +28,25 @@ import {
 import {
   createAccountsFinancialSource,
   type AccountsFinancialSourceOptions,
+  type AccountsFinancialEventEvidenceOptions,
 } from "../../../../accounts/service/src/financial-source.ts";
 import {
   financialSourceEventDigest,
+  canonicalFinancialSourceJson,
   parseFinancialSourceEvent,
   parseFinancialSourceReceipt,
   type FinancialIdentityChallenge,
   type FinancialSourceMaterialization,
   type FinancialSourceReceipt,
   type FinancialSourceRegistration,
+  materializeFinancialSourceEvent,
 } from "../../../../accounts/service/src/financial-source-contract.ts";
-import { makeFinancialSourceReceipt } from "../../../../accounts/service/src/financial-source-abi.ts";
+import { makeFinancialSourceReceipt, type FinancialSourceRegisteredHead, type FinancialSourceCredentialContext } from "../../../../accounts/service/src/financial-source-abi.ts";
+import { HostedIdentityRecords, type IdentityRecordRepository } from "../../../../accounts/service/src/hosted-identity-records.ts";
+import { MemoryIdentityRecordRepository } from "../../../../accounts/service/src/memory-identity-records.ts";
 import type {
   FinancialSourceParentScope,
+  FinancialSourceRawRecord,
   IdentityOperationReceiptRecord,
 } from "../../../../accounts/service/src/identity-state.ts";
 import {
@@ -186,7 +192,12 @@ async function fixture(backend: Backend) {
       {receiverRef: "synthetic-financial-secondary", targetRef: "synthetic-qualified-secondary"},
     ],
   };
-  expect(await store.registerFinancialSourceRegistration!(registration)).toBe(true);
+  let repository:IdentityRecordRepository|undefined;
+  const register=HostedIdentityRecords.prototype.registerFinancialSourceRegistration;
+  HostedIdentityRecords.prototype.registerFinancialSourceRegistration=function(value){repository=this.repository;return register.call(this,value);};
+  try {expect(await store.registerFinancialSourceRegistration!(registration)).toBe(true);}
+  finally {HostedIdentityRecords.prototype.registerFinancialSourceRegistration=register;}
+  if(!repository)throw new Error("isolated_actual_repository_not_captured");
   const challenge: FinancialIdentityChallenge = {
     v: 1, challengeRef: "synthetic-financial-challenge", registrationRef: registration.registrationRef,
     clientId: "hosted", workspaceId: "original-workspace", organizationId: "original-organization",
@@ -246,6 +257,19 @@ async function fixture(backend: Backend) {
   };
   return {
     store, get now() { return Date.now(); }, session, registration, challenge, grant, exchange,
+    options,
+    async sourceVector():Promise<string>{
+      if(repository instanceof MemoryIdentityRecordRepository)return sha256Text(canonicalFinancialSourceJson(JSON.parse(JSON.stringify({documents:[...repository.records].sort(),accounts:[...repository.accounts].sort(),sessions:[...repository.sessions].sort(),identities:[...repository.identities].sort()}))));
+      const records:Record<string,unknown>={};
+      if(d1){
+        const tables=await d1.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all<{name:string}>();
+        for(const {name} of tables.results??[])records[name]=(await d1.prepare(`SELECT * FROM "${name.replaceAll('"','""')}"`).all()).results;
+      }else if(pg){
+        const tables=await pg.query<{table_name:string}>("SELECT table_name FROM information_schema.tables WHERE table_schema='accounts_v1' ORDER BY table_name");
+        for(const {table_name}of tables.rows)records[table_name]=(await pg.query(`SELECT to_jsonb(t) AS value FROM accounts_v1."${table_name.replaceAll('"','""')}" t ORDER BY to_jsonb(t)::text`)).rows;
+      }
+      return sha256Text(canonicalFinancialSourceJson(JSON.parse(JSON.stringify(records))));
+    },
     producer: (clock: () => number = Date.now) => createAccountsFinancialSource({...options, now: clock}),
     setBeforeCapture(fn: () => Promise<void>) { beforeCapture = fn; },
     setControlAffectedRef(value: string) { snapshot.evidence.source.affectedRef = value; },
@@ -294,6 +318,154 @@ function scopes(record: TokenRecord): readonly FinancialSourceParentScope[] {
     {kind: "client", clientId: record.clientId},
     {kind: "account-generation", subject, identityGeneration: record.identityGeneration ?? 0},
   ];
+}
+
+/** These registered-head, key-custody and clock ports are explicitly synthetic.
+ * Their heads are enrolled from the ACTUAL Accounts parent tuples below; they
+ * qualify no real credential, deployment, receiver or Financial payer context. */
+async function eventEvidenceFixture(backend:Backend, materialized=true){
+  const f=await fixture(backend);
+  try{
+    const grant=await f.grant(),producer=f.producer();
+    await expect(producer.prove({accessToken:grant.access_token,challengeRef:f.challenge.challengeRef})).rejects.toThrow("source_pending");
+    const heads=await Promise.all(scopes(grant.record).map(scope=>f.store.findFinancialSourceParent!(scope)));
+    expect(heads.every(Boolean)).toBe(true);
+    if(materialized){await producer.flush({limit:100});await producer.prove({accessToken:grant.access_token,challengeRef:f.challenge.challengeRef});}
+    const sourceCredentialRef="synthetic-event-evidence-source-credential",sourceSchemaRef="synthetic-event-evidence-source-schema",receiverSchemaRef="synthetic-event-evidence-receiver-schema",clockPolicyRef="synthetic-event-evidence-clock";
+    const receiver=f.registration.receivers[0]!;
+    const registry=new Map<string,FinancialSourceRegisteredHead>();
+    const key=(value:unknown)=>canonicalFinancialSourceJson(value);
+    for(const head of heads)registry.set(key({registrationRef:head!.registrationRef,incarnation:head!.incarnation,affectedRef:head!.affectedRef}),{
+      v:1,head:{registrationRef:head!.registrationRef,incarnation:head!.incarnation,affectedRef:head!.affectedRef},genesisDigest:f.registration.genesisDigest,receivers:structuredClone(f.registration.receivers),sourceSchemaRef,sourceCredentialRef,clockPolicyRef,
+    });
+    let time=f.now,validUntil=time+120_000,credentialMissing=false,headMissing=false;
+    let credentialPatch:Partial<FinancialSourceCredentialContext>={},headPatch:Partial<FinancialSourceRegisteredHead>={};
+    let keyReads=0,headReads=0,materializationReads=0;
+    let onKeyRead:((count:number)=>void|Promise<void>)|undefined,onHeadRead:((count:number)=>void|Promise<void>)|undefined;
+    let rawOverride:((ref:string,record:FinancialSourceRawRecord|undefined)=>FinancialSourceRawRecord|undefined)|undefined;
+    const writes:string[]=[],purposes:string[]=[],requestedHeads:unknown[]=[];
+    const readStore=new Proxy(f.store,{get(target,property){
+      const value=Reflect.get(target,property,target);
+      if(property==="findFinancialSourceRaw")return async(ref:string)=>{const record=await target.findFinancialSourceRaw!(ref);return rawOverride?rawOverride(ref,record):record;};
+      if(property==="findFinancialSourceMaterialization")return async(ref:string)=>{materializationReads++;return target.findFinancialSourceMaterialization!(ref);};
+      if(typeof value!=="function")return value;
+      if(/^(save|create|register|enroll|issue|commit|record|revoke|delete|unlink|compareAndSet|consume|touch|link|rotate|advance)/u.test(String(property)))return()=>{writes.push(String(property));throw new Error("unexpected_event_evidence_store_write");};
+      return value.bind(target);
+    }});
+    const eventEvidence:AccountsFinancialEventEvidenceOptions={sourceCredentialRef,sourceSchemaRef,receiverRef:receiver.receiverRef,targetRef:receiver.targetRef,receiverSchemaRef,
+      clock:{policyRef:clockPolicyRef,nowMilliseconds:()=>time},
+      registeredHeads:{async readRegisteredHead(input){headReads++;requestedHeads.push(structuredClone(input));const enrolled=registry.get(key(input.head));const result=headMissing||!enrolled?undefined:{...structuredClone(enrolled),...structuredClone(headPatch)};await onHeadRead?.(headReads);return result;}},
+      keyCustody:{async readCredentialContext(input){keyReads++;purposes.push(input.purpose);expect(input).toEqual({credentialRef:sourceCredentialRef,receiverRef:receiver.receiverRef,targetRef:receiver.targetRef,receiverSchemaRef,purpose:"event-evidence-read"});const result=credentialMissing?undefined:{credentialRef:sourceCredentialRef,incarnationRef:"synthetic-event-evidence-key-incarnation",sourceSchemaRef,receiverRef:receiver.receiverRef,targetRef:receiver.targetRef,receiverSchemaRef,clockPolicyRef,purpose:"event-evidence-read" as const,validUntil,...credentialPatch};await onKeyRead?.(keyReads);return result;}},
+    };
+    const makeReader=(qualification:AccountsFinancialEventEvidenceOptions|null=eventEvidence)=>createAccountsFinancialSource({...f.options,store:readStore,eventEvidence:qualification??undefined});
+    const reader=makeReader();
+    async function readonly<T>(run:()=>Promise<T>):Promise<T>{const before=await f.sourceVector();try{return await run();}finally{expect(await f.sourceVector()).toBe(before);expect(writes).toEqual([]);}}
+    return {...f,grant,producer,heads:heads.map(h=>h!),reader,makeReader,eventEvidence,registry,readonly,
+      stats:()=>({keyReads,headReads,materializationReads,purposes:[...purposes],requestedHeads:structuredClone(requestedHeads)}),
+      patchHead(value:Partial<FinancialSourceRegisteredHead>={}){headPatch=value;},patchCredential(value:Partial<FinancialSourceCredentialContext>={}){credentialPatch=value;},
+      missingHead(value:boolean){headMissing=value;},missingCredential(value:boolean){credentialMissing=value;},
+      setTime(value:number){time=value;},getTime:()=>time,authorizeUntil(value:number){validUntil=value;},
+      afterKeyRead(value:typeof onKeyRead){onKeyRead=value;},afterHeadRead(value:typeof onHeadRead){onHeadRead=value;},rawRead(value:typeof rawOverride){rawOverride=value;},
+    };
+  }catch(error){await f.close();throw error;}
+}
+
+for(const backend of ["memory","d1","postgres"]as const){
+  test(`${backend}: event-evidence actual immutable materialization has closed projection after token expiry/revocation and close`,async()=>{
+    const f=await eventEvidenceFixture(backend);try{
+      const originals=await Promise.all(f.heads.map(h=>f.store.findFinancialSourceMaterialization!(h.lastEventRef)));
+      const requests=originals.map(m=>({v:1 as const,eventRef:m!.materialization.event.eventRef,eventDigest:m!.materialization.eventDigest}));
+      const loaded=[];
+      for(let i=0;i<requests.length;i++){
+        const result=await f.readonly(()=>f.reader.loadFinancialSourceEventEvidence(requests[i]!));loaded.push(result);
+        expect(result.status).toBe("found");if(result.status!=="found")throw new Error("expected_stored_original_event");
+        expect(Object.keys(result).sort()).toEqual(["v","status","materialization","registeredHead"].sort());expect(Object.keys(result.materialization).sort()).toEqual(["event","eventDigest"]);
+        expect(result.materialization).toEqual({event:originals[i]!.materialization.event,eventDigest:originals[i]!.materialization.eventDigest});
+        expect(Object.keys(result.materialization.event).sort()).toEqual(["v","eventRef","registrationRef","incarnation","sequence","previousDigest","kind","affectedRef","evidenceRef"].sort());
+        expect(Object.keys(result.registeredHead).sort()).toEqual(["v","head","genesisDigest","receivers","sourceSchemaRef","sourceCredentialRef","clockPolicyRef"].sort());
+        expect(result.registeredHead.head).toEqual({registrationRef:f.heads[i]!.registrationRef,incarnation:f.heads[i]!.incarnation,affectedRef:f.heads[i]!.affectedRef});expect(result.registeredHead.receivers).toEqual(f.registration.receivers);
+        expect(result).not.toHaveProperty("rawEventDigest");expect(result.materialization).not.toHaveProperty("rawEventDigest");for(const privateField of ["parent","cause","accessTokenHash","accessExpiresAt","scope","parents","subject"])expect(result).not.toHaveProperty(privateField);
+        expect(JSON.stringify(result)).not.toContain(f.grant.access_token);expect(JSON.stringify(result)).not.toContain(await sha256Text(f.grant.access_token));
+      }
+      await f.store.deleteToken(f.grant.access_token);expect(await f.store.findAccessToken(f.grant.access_token)).toBeUndefined();
+      await f.store.revokeHostedOidcGrant!(f.grant.record.sid!,f.now);await f.producer.flush({limit:100});
+      const closed=(await f.store.findFinancialSourceParent!(scopes(f.grant.record)[0]!))!,closeMaterial=(await f.store.findFinancialSourceMaterialization!(closed.lastEventRef))!;
+      f.setTime(f.grant.record.expiresAt+1);f.authorizeUntil(f.getTime()+120_000);
+      for(let i=0;i<requests.length;i++)expect(await f.readonly(()=>f.reader.loadFinancialSourceEventEvidence(requests[i]!))).toEqual(loaded[i]);
+      const result=await f.readonly(()=>f.reader.loadFinancialSourceEventEvidence({v:1,eventRef:closed.lastEventRef,eventDigest:closeMaterial.materialization.eventDigest}));
+      expect(result).toMatchObject({v:1,status:"found",materialization:{event:{kind:"close",sequence:2,previousDigest:originals[0]!.materialization.eventDigest}}});
+      expect(f.stats().purposes.every(p=>p==="event-evidence-read")).toBe(true);
+    }finally{await f.close();}
+  },30_000);
+
+  test(`${backend}: event-evidence qualified absence and raw-only event read create no materialization, outbox or proof`,async()=>{
+    const f=await eventEvidenceFixture(backend,false);try{
+      const head=f.heads[1]!,raw=(await f.store.findFinancialSourceRaw!(head.lastEventRef))!;
+      expect(await f.store.findFinancialSourceMaterialization!(head.lastEventRef)).toBeUndefined();
+      const pure=await materializeFinancialSourceEvent({registration:f.registration,raw:raw.raw});
+      const before=f.stats();expect(await f.readonly(()=>f.reader.loadFinancialSourceEventEvidence({v:1,eventRef:head.lastEventRef,eventDigest:pure.eventDigest}))).toEqual({v:1,status:"not-found"});
+      expect(await f.store.findFinancialSourceMaterialization!(head.lastEventRef)).toBeUndefined();expect(f.stats().keyReads-before.keyReads).toBe(2);expect(f.stats().headReads-before.headReads).toBe(0);
+      expect(await f.readonly(()=>f.reader.loadFinancialSourceEventEvidence({v:1,eventRef:"absent-original-event",eventDigest:pure.eventDigest}))).toEqual({v:1,status:"not-found"});
+      expect((await f.store.listFinancialSourcePending!({registrationRef:f.registration.registrationRef,limit:100})).entries).toHaveLength(4);
+      const unavailable=f.makeReader(null);const reads=f.stats().materializationReads;
+      await expect(f.readonly(()=>unavailable.loadFinancialSourceEventEvidence({v:1,eventRef:"absent-original-event",eventDigest:pure.eventDigest}))).rejects.toThrow("unavailable");expect(f.stats().materializationReads).toBe(reads);
+      f.missingCredential(true);await expect(f.readonly(()=>f.reader.loadFinancialSourceEventEvidence({v:1,eventRef:"absent-original-event",eventDigest:pure.eventDigest}))).rejects.toThrow("unavailable");expect(f.stats().materializationReads).toBe(reads);
+    }finally{await f.close();}
+  },30_000);
+
+  test(`${backend}: event-evidence rejects wrong ref/digest, explicit head tuple, genesis and complete receiver qualification`,async()=>{
+    const f=await eventEvidenceFixture(backend);try{
+      const original=(await f.store.findFinancialSourceMaterialization!(f.heads[0]!.lastEventRef))!,request={v:1 as const,eventRef:original.materialization.event.eventRef,eventDigest:original.materialization.eventDigest};
+      await expect(f.readonly(()=>f.reader.loadFinancialSourceEventEvidence({...request,eventDigest:`sha256:${"0".repeat(64)}`}))).rejects.toThrow("conflict");
+      await expect(f.readonly(()=>f.reader.loadFinancialSourceEventEvidence({...request,eventRef:f.heads[1]!.lastEventRef}))).rejects.toThrow("conflict");
+      const enrolled=[...f.registry.values()].find(h=>h.head.affectedRef===f.heads[0]!.affectedRef)!;
+      for(const patch of [
+        {head:{...enrolled.head,registrationRef:"different-registration"}},
+        {head:{...enrolled.head,incarnation:"different-incarnation"}},
+        {head:{...enrolled.head,affectedRef:"different-affected-original"}},
+        {genesisDigest:`sha256:${"e".repeat(64)}` as const},
+        {receivers:[enrolled.receivers[0]!]},
+        {receivers:[enrolled.receivers[0]!,{...enrolled.receivers[1]!,targetRef:"different-secondary-target"}]},
+        {sourceCredentialRef:"different-source-credential"},
+        {sourceSchemaRef:"different-source-schema"},
+      ]){f.patchHead(patch);await expect(f.readonly(()=>f.reader.loadFinancialSourceEventEvidence(request))).rejects.toThrow("unregistered-source");}
+      f.patchHead();f.missingHead(true);await expect(f.readonly(()=>f.reader.loadFinancialSourceEventEvidence(request))).rejects.toThrow("unregistered-source");f.missingHead(false);
+      for(const patch of [{credentialRef:"different-credential"},{receiverRef:"different-receiver"},{targetRef:"different-target"},{receiverSchemaRef:"different-receiver-schema"},{sourceSchemaRef:"different-source-schema"},{clockPolicyRef:"different-clock"},{purpose:"receipt-read" as const},{validUntil:f.getTime()},{validUntil:Number.NaN}]){
+        f.patchCredential(patch);await expect(f.readonly(()=>f.reader.loadFinancialSourceEventEvidence(request))).rejects.toThrow("unavailable");
+      }
+      f.patchCredential();expect((await f.readonly(()=>f.reader.loadFinancialSourceEventEvidence(request))).status).toBe("found");f.setTime(f.getTime()-1);await expect(f.readonly(()=>f.reader.loadFinancialSourceEventEvidence(request))).rejects.toThrow("unavailable");
+    }finally{await f.close();}
+  },30_000);
+
+  test(`${backend}: event-evidence repeats key/head qualification and checks captured expiry after final awaits`,async()=>{
+    const f=await eventEvidenceFixture(backend);try{
+      const material=(await f.store.findFinancialSourceMaterialization!(f.heads[0]!.lastEventRef))!,request={v:1 as const,eventRef:material.materialization.event.eventRef,eventDigest:material.materialization.eventDigest};
+      const keyAt=f.stats().keyReads;f.afterKeyRead(count=>{if(count===keyAt+1)f.missingCredential(true);});
+      // First read returns its original current context. Losing actual custody
+      // while the store is read must be detected by the final capability read.
+      await expect(f.readonly(()=>f.reader.loadFinancialSourceEventEvidence(request))).rejects.toThrow("unavailable");expect(f.stats().keyReads-keyAt).toBe(2);f.missingCredential(false);f.afterKeyRead(undefined);
+      const headAt=f.stats().headReads,enrolled=[...f.registry.values()].find(h=>h.head.affectedRef===f.heads[0]!.affectedRef)!;
+      f.afterHeadRead(count=>{if(count===headAt+1)f.patchHead({receivers:[enrolled.receivers[0]!,{...enrolled.receivers[1]!,targetRef:"changed-after-first-head"}]});});
+      await expect(f.readonly(()=>f.reader.loadFinancialSourceEventEvidence(request))).rejects.toThrow("unavailable");f.patchHead();f.afterHeadRead(undefined);
+      const deadline=f.getTime()+10,keys=f.stats().keyReads;f.authorizeUntil(deadline);f.afterKeyRead(count=>{if(count===keys+2)f.setTime(deadline);});
+      await expect(f.readonly(()=>f.reader.loadFinancialSourceEventEvidence(request))).rejects.toThrow("unavailable");
+      f.afterKeyRead(undefined);f.authorizeUntil(f.getTime()+120_000);
+      const absent={...request,eventRef:"absent-after-qualified-read"},absentKeys=f.stats().keyReads,absentDeadline=f.getTime()+10;f.authorizeUntil(absentDeadline);f.afterKeyRead(count=>{if(count===absentKeys+2)f.setTime(absentDeadline);});
+      await expect(f.readonly(()=>f.reader.loadFinancialSourceEventEvidence(absent))).rejects.toThrow("unavailable");
+    }finally{await f.close();}
+  },30_000);
+
+  test(`${backend}: event-evidence rechecks FULL original raw and predecessor custody without read-side repair`,async()=>{
+    const f=await eventEvidenceFixture(backend);try{
+      const old=(await f.store.findFinancialSourceMaterialization!(f.heads[0]!.lastEventRef))!,request={v:1 as const,eventRef:old.materialization.event.eventRef,eventDigest:old.materialization.eventDigest};
+      f.rawRead((ref,record)=>ref===request.eventRef&&record?{...record,capturedAt:record.capturedAt+1}:record);
+      await expect(f.readonly(()=>f.reader.loadFinancialSourceEventEvidence(request))).rejects.toThrow("conflict");f.rawRead(undefined);
+      await f.store.revokeHostedOidcGrant!(f.grant.record.sid!,f.now);await f.producer.flush({limit:100});const closed=(await f.store.findFinancialSourceParent!(scopes(f.grant.record)[0]!))!,material=(await f.store.findFinancialSourceMaterialization!(closed.lastEventRef))!,closeRequest={v:1 as const,eventRef:closed.lastEventRef,eventDigest:material.materialization.eventDigest};
+      f.rawRead((ref,record)=>ref===request.eventRef&&record?{...record,parentRevision:record.parentRevision+1}:record);
+      await expect(f.readonly(()=>f.reader.loadFinancialSourceEventEvidence(closeRequest))).rejects.toThrow("conflict");f.rawRead(undefined);
+      expect((await f.readonly(()=>f.reader.loadFinancialSourceEventEvidence(closeRequest))).status).toBe("found");expect(await f.store.findFinancialSourceMaterialization!(old.materialization.event.eventRef)).toEqual(old);
+    }finally{await f.close();}
+  },30_000);
 }
 
 /** Synthetic upstream receipts and the existing context/review issuer fixture

@@ -1,4 +1,4 @@
-/** Accounts-owned ABI revision 1. Payload event/receipt v:1 and their existing
+/** Accounts-owned ABI with immutable event-evidence read extension. Payload event/receipt v:1 and their existing
  * codec/vector are unchanged. Hashes provide integrity, never caller authority.
  * No key, registration, target or qualified deployment is created by this file. */
 import {
@@ -6,6 +6,7 @@ import {
   financialSourceEventDigest, financialReceiptMatches, hashFinancialSourceValue,
   parseFinancialSourceEvent, parseFinancialSourceReceipt, parseFinancialSourceRegistration,
   parseFinancialIdentityChallenge,
+  FINANCIAL_SOURCE_MAX_RECEIVERS,
   type FinancialSourceDigest, type FinancialSourceEvent, type FinancialSourceReceipt,
   type FinancialSourceReceiptRecord, type FinancialSourceReceiverRegistration,
   type FinancialSourceMaterialization,
@@ -15,6 +16,7 @@ import type { FinancialSourceProofRecord } from "./identity-state.ts";
 export interface FinancialSourceApplyRequest { readonly v: 1; readonly event: FinancialSourceEvent; readonly eventDigest: FinancialSourceDigest; }
 export interface FinancialSourceReadRequest { readonly v: 1; readonly registrationRef: string; readonly eventRef: string; readonly eventDigest: FinancialSourceDigest; }
 export interface FinancialIdentityProofRequest { readonly v: 1; readonly proofRef: string; readonly challengeRef: string; }
+export interface FinancialSourceEventEvidenceRequest { readonly v: 1; readonly eventRef: string; readonly eventDigest: FinancialSourceDigest; }
 
 /** A registration/incarnation may contain several original contexts. */
 export interface FinancialSourceHeadKey { readonly registrationRef: string; readonly incarnation: string; readonly affectedRef: string; }
@@ -32,6 +34,17 @@ export interface FinancialSourceRegisteredHeadReader {
   /** Actual pre-enrolled owner state. Absence is unavailable, never auto-genesis. */
   readRegisteredHead(input: { readonly v: 1; readonly head: FinancialSourceHeadKey }): Promise<FinancialSourceRegisteredHead | undefined>;
 }
+/** Immutable wire projection only. Raw capture metadata, cause, token hashes
+ * and internal parent scopes are never part of this service result. */
+export type FinancialSourceEventEvidenceLoadResult = {
+  readonly v: 1;
+  readonly status: "found";
+  readonly materialization: Pick<FinancialSourceMaterialization, "event" | "eventDigest">;
+  readonly registeredHead: FinancialSourceRegisteredHead;
+} | { readonly v: 1; readonly status: "not-found" };
+export interface FinancialSourceEventEvidenceReaderAbi {
+  loadFinancialSourceEventEvidence(input: FinancialSourceEventEvidenceRequest): Promise<FinancialSourceEventEvidenceLoadResult>;
+}
 export interface FinancialSourceCredentialContext {
   readonly credentialRef: string;
   readonly incarnationRef: string;
@@ -40,7 +53,7 @@ export interface FinancialSourceCredentialContext {
   readonly targetRef: string;
   readonly receiverSchemaRef: string;
   readonly clockPolicyRef: string;
-  readonly purpose: "event-apply" | "receipt-read";
+  readonly purpose: "event-apply" | "receipt-read" | "event-evidence-read";
   readonly validUntil: number;
 }
 export interface FinancialSourceKeyCustody {
@@ -50,7 +63,7 @@ export interface FinancialSourceKeyCustody {
    * never resurrect a retired source for new admission. No default exists. */
   readCredentialContext(input: {
     readonly credentialRef: string; readonly receiverRef: string; readonly targetRef: string;
-    readonly receiverSchemaRef: string; readonly purpose: "event-apply" | "receipt-read";
+    readonly receiverSchemaRef: string; readonly purpose: "event-apply" | "receipt-read" | "event-evidence-read";
   }): Promise<FinancialSourceCredentialContext | undefined>;
 }
 export interface FinancialSourceClock { readonly policyRef: string; nowMilliseconds(): number; }
@@ -188,6 +201,62 @@ export function parseFinancialSourceRegisteredHead(value: unknown): FinancialSou
     genesisDigest: r.genesisDigest, receivers: r.receivers});
   return {v: 1, head, genesisDigest: registration.genesisDigest, receivers: registration.receivers,
     sourceSchemaRef: r.sourceSchemaRef as string, sourceCredentialRef: r.sourceCredentialRef as string, clockPolicyRef: r.clockPolicyRef as string};
+}
+
+export function parseFinancialSourceEventEvidenceRequest(value: unknown): FinancialSourceEventEvidenceRequest {
+  const r = object(value, ["v", "eventRef", "eventDigest"]);
+  if (r.v !== 1 || !financialSourceRef(r.eventRef) || !financialSourceDigest(r.eventDigest)) invalid();
+  return {v: 1, eventRef: r.eventRef, eventDigest: r.eventDigest};
+}
+export function parseFinancialSourceEventEvidenceLoadResult(value: unknown): FinancialSourceEventEvidenceLoadResult {
+  if (value && typeof value === "object" && "status" in value && value.status === "not-found") {
+    const r = object(value, ["v", "status"]); if (r.v !== 1) invalid(); return {v: 1, status: "not-found"};
+  }
+  const r = object(value, ["v", "status", "materialization", "registeredHead"]);
+  if (r.v !== 1 || r.status !== "found") invalid();
+  const m = object(r.materialization, ["event", "eventDigest"]);
+  if (!financialSourceDigest(m.eventDigest)) invalid();
+  object(m.event, ["v", "eventRef", "registrationRef", "incarnation", "sequence", "previousDigest", "kind", "affectedRef", "evidenceRef"]);
+  const rawHead = object(r.registeredHead, ["v", "head", "genesisDigest", "receivers", "sourceSchemaRef", "sourceCredentialRef", "clockPolicyRef"]);
+  if (!Array.isArray(rawHead.receivers) || rawHead.receivers.length > FINANCIAL_SOURCE_MAX_RECEIVERS) invalid();
+  for (let index = 0; index < rawHead.receivers.length; index++) {
+    const slot = Object.getOwnPropertyDescriptor(rawHead.receivers, String(index));
+    if (!slot || !("value" in slot)) invalid();
+    object(slot.value, ["receiverRef", "targetRef"]);
+  }
+  const event = parseFinancialSourceEvent(m.event), head = parseFinancialSourceRegisteredHead(rawHead);
+  if (event.registrationRef !== head.head.registrationRef || event.incarnation !== head.head.incarnation ||
+    event.affectedRef !== head.head.affectedRef || event.sequence === 1 && event.previousDigest !== head.genesisDigest) invalid();
+  return {v: 1, status: "found", materialization: {event, eventDigest: m.eventDigest}, registeredHead: head};
+}
+/** Integrity checks only. The expected full head comes from the ACTUAL private
+ * enrolled-head reader; a descriptor or matching hash never qualifies callers,
+ * key custody, receiver/target/schema, clock or the physical source deployment. */
+export async function verifyFinancialSourceEventEvidenceLoadResult(value: unknown, request: FinancialSourceEventEvidenceRequest,
+  expectedRegisteredHead: FinancialSourceRegisteredHead): Promise<FinancialSourceEventEvidenceLoadResult> {
+  const input = parseFinancialSourceEventEvidenceRequest(request);
+  const expected = parseFinancialSourceRegisteredHead(expectedRegisteredHead);
+  const result = parseFinancialSourceEventEvidenceLoadResult(value);
+  if (result.status === "not-found") return result;
+  if (result.materialization.event.eventRef !== input.eventRef || result.materialization.eventDigest !== input.eventDigest ||
+    canonicalFinancialSourceJson(result.registeredHead) !== canonicalFinancialSourceJson(expected) ||
+    await financialSourceEventDigest(result.materialization.event) !== result.materialization.eventDigest) invalid();
+  return result;
+}
+/** Select only closed wire fields from the stored original materialization.
+ * This function reads no store and creates no event, enrollment, ACK or proof. */
+export async function projectFinancialSourceEventEvidence(input: {
+  readonly request: FinancialSourceEventEvidenceRequest;
+  readonly materialization: FinancialSourceMaterialization;
+  readonly registeredHead: FinancialSourceRegisteredHead;
+}): Promise<Extract<FinancialSourceEventEvidenceLoadResult, {readonly status: "found"}>> {
+  const r = object(input, ["request", "materialization", "registeredHead"]);
+  const m = object(r.materialization, ["rawEventDigest", "event", "eventDigest"]);
+  if (!financialSourceDigest(m.rawEventDigest)) invalid();
+  const result = await verifyFinancialSourceEventEvidenceLoadResult({v: 1, status: "found", materialization: {event: m.event,
+    eventDigest: m.eventDigest}, registeredHead: r.registeredHead}, r.request as FinancialSourceEventEvidenceRequest, r.registeredHead as FinancialSourceRegisteredHead);
+  if (result.status !== "found") invalid();
+  return result;
 }
 
 /** Deterministic original receipt identity. Only the receiver's actual committed

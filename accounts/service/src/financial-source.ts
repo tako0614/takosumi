@@ -14,19 +14,30 @@ import type {
 } from "./identity-state.ts";
 import {
   canonicalFinancialSourceJson, financialSourceRef,
+  financialSourceEventDigest, hashFinancialSourceValue, parseFinancialSourceEvent,
   materializeFinancialSourceEvent, parseFinancialIdentityChallenge,
   parseFinancialSourceRegistration, parseFinancialSourceReceipt,
   financialReceiptMatches, FINANCIAL_SOURCE_MAX_PAGE,
   type FinancialSourceRegistration,
-  type FinancialSourceMaterialization, type FinancialSourceReceipt,
+  type FinancialSourceMaterialization, type FinancialSourceReceipt, type FinancialSourceEvent,
 } from "./financial-source-contract.ts";
 import { hostedGrantIsActive, hostedOpaqueId } from "./hosted-oidc-profile.ts";
 import { sha256Text } from "./encoding.ts";
 import {
   parseFinancialIdentityProofRequest, projectFinancialIdentityProof,
+  makeFinancialSourceReceipt,
+  FinancialSourceAbiError, parseFinancialSourceRegisteredHead,
+  parseFinancialSourceEventEvidenceRequest, projectFinancialSourceEventEvidence,
+  type FinancialSourceRegisteredHeadReader, type FinancialSourceKeyCustody, type FinancialSourceClock,
+  type FinancialSourceEventEvidenceRequest, type FinancialSourceEventEvidenceLoadResult,
   type FinancialIdentityProofRequest, type FinancialIdentityProofLoadResult,
   type FinancialIdentityProofCurrentResult,
 } from "./financial-source-abi.ts";
+import type {
+  WorkspaceFinancialSourceService, WorkspaceFinancialSourceSnapshot,
+  WorkspaceFinancialSourceHead, WorkspaceFinancialRawEvent,
+  WorkspaceFinancialMaterialization,
+} from "../../../core/domains/workspaces/financial-source.ts";
 
 const checkpointLifetime = 1_000;
 const proofLifetime = 60_000;
@@ -96,12 +107,72 @@ export interface AccountsFinancialSourceOptions {
   readonly challenges?: { read(challengeRef: string): Promise<unknown> };
   readonly control?: AccountsFinancialControl;
   readonly receivers?: readonly AccountsFinancialReceiver[];
+  readonly eventEvidence?: AccountsFinancialEventEvidenceOptions;
   /** Trusted in-process clock injection, never request or wire timestamps. */
   readonly now?: () => number;
 }
 
+/** Actual qualified private composition supplies these capabilities. Refs are
+ * fixed custody identifiers, never body-selected values or key material. */
+export interface AccountsFinancialEventEvidenceOptions {
+  readonly sourceCredentialRef: string;
+  readonly sourceSchemaRef: string;
+  readonly receiverRef: string;
+  readonly targetRef: string;
+  readonly receiverSchemaRef: string;
+  readonly registeredHeads?: FinancialSourceRegisteredHeadReader;
+  readonly keyCustody?: FinancialSourceKeyCustody;
+  readonly clock?: FinancialSourceClock;
+}
+
 export class FinancialSourceUnavailable extends Error {
   constructor(readonly code: "source_unavailable" | "invalid_grant" | "invalid_challenge" | "source_pending" | "source_conflict") { super(code); }
+}
+
+function captureEventEvidenceAuthority(options: AccountsFinancialEventEvidenceOptions | undefined) {
+  const sourceCredentialRef = options?.sourceCredentialRef, sourceSchemaRef = options?.sourceSchemaRef;
+  const receiverRef = options?.receiverRef, targetRef = options?.targetRef, receiverSchemaRef = options?.receiverSchemaRef;
+  const heads = options?.registeredHeads, readHead = heads?.readRegisteredHead;
+  const custody = options?.keyCustody, readCredential = custody?.readCredentialContext;
+  const clock = options?.clock, readClock = clock?.nowMilliseconds, clockPolicyRef = clock?.policyRef;
+  let previousTime = -1;
+  const unavailable = (): never => { throw new FinancialSourceAbiError("unavailable"); };
+  const now = () => {
+    if (!clock || !readClock || !financialSourceRef(clockPolicyRef)) return unavailable();
+    const value = Reflect.apply(readClock, clock, []);
+    if (!Number.isSafeInteger(value) || value < 0 || value < previousTime) return unavailable();
+    previousTime = value;
+    return value;
+  };
+  const authorize = async () => {
+    if (!heads || !readHead || !custody || !readCredential ||
+      ![sourceCredentialRef, sourceSchemaRef, receiverRef, targetRef, receiverSchemaRef].every(financialSourceRef)) return unavailable();
+    now();
+    const context = await Reflect.apply(readCredential, custody, [{credentialRef: sourceCredentialRef!, receiverRef: receiverRef!,
+      targetRef: targetRef!, receiverSchemaRef: receiverSchemaRef!, purpose: "event-evidence-read"}]);
+    if (!context || Reflect.ownKeys(context).length !== 9 || context.credentialRef !== sourceCredentialRef ||
+      !financialSourceRef(context.incarnationRef) || context.sourceSchemaRef !== sourceSchemaRef ||
+      context.receiverRef !== receiverRef || context.targetRef !== targetRef || context.receiverSchemaRef !== receiverSchemaRef ||
+      context.clockPolicyRef !== clockPolicyRef || context.purpose !== "event-evidence-read" ||
+      !Number.isSafeInteger(context.validUntil) || context.validUntil <= now()) return unavailable();
+    return context.validUntil;
+  };
+  return {
+    authorize,
+    now,
+    async head(event: FinancialSourceEvent) {
+      if (!heads || !readHead) return unavailable();
+      const key = {registrationRef: event.registrationRef, incarnation: event.incarnation, affectedRef: event.affectedRef};
+      const value = await Reflect.apply(readHead, heads, [{v: 1, head: key}]);
+      if (value === undefined) throw new FinancialSourceAbiError("unregistered-source");
+      const result = parseFinancialSourceRegisteredHead(value);
+      if (canonicalFinancialSourceJson(result.head) !== canonicalFinancialSourceJson(key) ||
+        result.sourceCredentialRef !== sourceCredentialRef || result.sourceSchemaRef !== sourceSchemaRef || result.clockPolicyRef !== clockPolicyRef ||
+        !result.receivers.some((r) => r.receiverRef === receiverRef && r.targetRef === targetRef) ||
+        event.sequence === 1 && event.previousDigest !== result.genesisDigest) throw new FinancialSourceAbiError("unregistered-source");
+      return result;
+    },
+  };
 }
 
 /** All callbacks and configuration are captured before any request await.
@@ -110,6 +181,7 @@ export function createAccountsFinancialSource(options: AccountsFinancialSourceOp
   const store = options.store;
   const issuer = options.issuer;
   const registration = parseFinancialSourceRegistration(structuredClone(options.registration));
+  const eventEvidence = captureEventEvidenceAuthority(options.eventEvidence);
   const clients = new Map(options.clients.map((client) => [client.clientId, structuredClone(client)]));
   const rawClock = options.now ?? anchoredClock();
   let lastNow = -1;
@@ -190,6 +262,49 @@ export function createAccountsFinancialSource(options: AccountsFinancialSourceOp
       affectedRef: head.affectedRef, sequence: head.sequence, eventRef: head.lastEventRef, eventDigest: saved.materialization.eventDigest};
   }
   return {
+    /** Read-only ORIGINAL materialization custody. No enrollment, SHA-driven
+     * materialization write, current grant or new command is created here. */
+    async loadFinancialSourceEventEvidence(value: FinancialSourceEventEvidenceRequest): Promise<FinancialSourceEventEvidenceLoadResult> {
+      const request = parseFinancialSourceEventEvidenceRequest(value);
+      const validUntil = await eventEvidence.authorize();
+      if (!store.findFinancialSourceRegistration || !store.findFinancialSourceMaterialization || !store.findFinancialSourceRaw)
+        throw new FinancialSourceAbiError("unavailable");
+      const enrolled = await store.findFinancialSourceRegistration(registration.registrationRef);
+      if (!enrolled || canonicalFinancialSourceJson(enrolled) !== canonicalFinancialSourceJson(registration))
+        throw new FinancialSourceAbiError("unregistered-source");
+      const record = await store.findFinancialSourceMaterialization(request.eventRef);
+      if (!record) {
+        await eventEvidence.authorize();
+        if (validUntil <= eventEvidence.now()) throw new FinancialSourceAbiError("unavailable");
+        return {v: 1, status: "not-found"};
+      }
+      const original = await store.findFinancialSourceRaw(request.eventRef);
+      if (!original || canonicalFinancialSourceJson(original) !== canonicalFinancialSourceJson(record.rawRecord) ||
+        original.raw.registrationRef !== registration.registrationRef || original.raw.incarnation !== registration.incarnation)
+        throw new FinancialSourceAbiError("conflict");
+      const predecessor = original.raw.previousEventRef === null ? undefined : await store.findFinancialSourceMaterialization(original.raw.previousEventRef);
+      if (predecessor) {
+        const priorRaw = await store.findFinancialSourceRaw(original.raw.previousEventRef!);
+        if (!priorRaw || canonicalFinancialSourceJson(priorRaw) !== canonicalFinancialSourceJson(predecessor.rawRecord) ||
+          await financialSourceEventDigest(predecessor.materialization.event) !== predecessor.materialization.eventDigest)
+          throw new FinancialSourceAbiError("conflict");
+      }
+      const expected = await materializeFinancialSourceEvent({registration, raw: original.raw, predecessor: predecessor?.materialization});
+      if (canonicalFinancialSourceJson(expected) !== canonicalFinancialSourceJson(record.materialization) || expected.eventDigest !== request.eventDigest)
+        throw new FinancialSourceAbiError("conflict");
+      const head = await eventEvidence.head(expected.event);
+      if (head.genesisDigest !== registration.genesisDigest ||
+        canonicalFinancialSourceJson(head.receivers) !== canonicalFinancialSourceJson(registration.receivers))
+        throw new FinancialSourceAbiError("unregistered-source");
+      const result = await projectFinancialSourceEventEvidence({request, materialization: record.materialization, registeredHead: head});
+      const finalRegistration = await store.findFinancialSourceRegistration(registration.registrationRef);
+      const finalHead = await eventEvidence.head(expected.event);
+      await eventEvidence.authorize();
+      if (!finalRegistration || canonicalFinancialSourceJson(finalRegistration) !== canonicalFinancialSourceJson(enrolled) ||
+        canonicalFinancialSourceJson(finalHead) !== canonicalFinancialSourceJson(head) || validUntil <= eventEvidence.now())
+        throw new FinancialSourceAbiError("unavailable");
+      return result;
+    },
     /** Immutable original custody, including after expiry or revocation. This
      * read never confers fresh grant, Principal, payer or dispatch authority. */
     async loadFinancialIdentityProof(value: FinancialIdentityProofRequest): Promise<FinancialIdentityProofLoadResult> {
@@ -345,6 +460,197 @@ export function createAccountsFinancialSource(options: AccountsFinancialSourceOp
         processed++;
       }
       return {processed, nextCursor: page.nextCursor};
+    },
+  };
+}
+
+/** Accounts-owned adapter above the SAME canonical Control facade. It never
+ * enrolls a source, chooses a payer or accepts a browser-built snapshot. */
+export function createAccountsFinancialControlSource(options: {
+  readonly service: WorkspaceFinancialSourceService;
+  readonly receivers?: readonly AccountsFinancialReceiver[];
+  readonly eventEvidence?: AccountsFinancialEventEvidenceOptions & {readonly registration: FinancialSourceRegistration};
+  readonly now?: () => number;
+}) {
+  const service = options.service;
+  const capture = service.captureFinancialSourceSnapshot;
+  const assertCurrent = service.assertFinancialSourceSnapshotCurrent;
+  const readHead = service.readHead;
+  const listRaw = service.listRawEvents;
+  const readMaterialization = service.readMaterialization;
+  const materialize = service.materializeEvent;
+  const recordReceipt = service.recordReceipt;
+  const eventEvidence = captureEventEvidenceAuthority(options.eventEvidence);
+  const evidenceRegistration = options.eventEvidence && parseFinancialSourceRegistration(structuredClone(options.eventEvidence.registration));
+  const rawClock = options.now ?? anchoredClock();
+  let lastNow = -1;
+  const now = () => {
+    const value = rawClock();
+    if (!Number.isSafeInteger(value) || value < 0 || value < lastNow) throw new FinancialSourceUnavailable("source_unavailable");
+    lastNow = value;
+    return value;
+  };
+  const snapshots = new WeakMap<object, {original: WorkspaceFinancialSourceSnapshot; binding: string; expiresAt: number}>();
+  const receivers = new Map<string, {receiver: AccountsFinancialReceiver; targetRef: string;
+    read: AccountsFinancialReceiver["read"]; deliver: AccountsFinancialReceiver["deliver"]}>();
+  for (const receiver of options.receivers ?? []) {
+    if (!financialSourceRef(receiver.receiverRef) || !financialSourceRef(receiver.targetRef) || receivers.has(receiver.receiverRef))
+      throw new FinancialSourceUnavailable("source_unavailable");
+    receivers.set(receiver.receiverRef, {receiver, targetRef: receiver.targetRef, read: receiver.read, deliver: receiver.deliver});
+  }
+  const fail: () => never = () => { throw new FinancialSourceUnavailable("source_conflict"); };
+  const hex = (value: string): `sha256:${string}` => /^[a-f0-9]{64}$/u.test(value) ? `sha256:${value}` : fail();
+  const registration = (head: WorkspaceFinancialSourceHead): FinancialSourceRegistration => parseFinancialSourceRegistration({
+    registrationRef: head.sourceRef, incarnation: head.incarnation, genesisDigest: hex(head.genesisDigest), receivers: head.requiredReceivers,
+  });
+  const rawWire = (raw: WorkspaceFinancialRawEvent) => ({v: 1 as const, eventRef: raw.eventRef,
+    registrationRef: raw.sourceRef, incarnation: raw.incarnation, sequence: raw.permissionSequence,
+    previousEventRef: raw.previousEventRef, kind: raw.closed ? "close" as const : "advance" as const,
+    affectedRef: raw.workspaceId, evidenceRef: raw.eventRef});
+  const decode = async (stored: WorkspaceFinancialMaterialization, raw: WorkspaceFinancialRawEvent): Promise<FinancialSourceMaterialization> => {
+    const event = parseFinancialSourceEvent(JSON.parse(stored.wireJson));
+    const {previousEventRef: _previous, ...fields} = rawWire(raw);
+    if (stored.eventRef !== raw.eventRef || stored.sourceRef !== raw.sourceRef || stored.incarnation !== raw.incarnation ||
+      stored.permissionSequence !== raw.permissionSequence || stored.rawPayloadJson !== raw.payloadJson ||
+      canonicalFinancialSourceJson(event) !== stored.wireJson ||
+      canonicalFinancialSourceJson(event) !== canonicalFinancialSourceJson({...fields, previousDigest: hex(stored.previousDigest)}) ||
+      await financialSourceEventDigest(event) !== hex(stored.digest)) fail();
+    return {rawEventDigest: await hashFinancialSourceValue("takosumi.financial-source-raw@v1", rawWire(raw)),
+      event, eventDigest: hex(stored.digest)};
+  };
+  return {
+    /** A separate fixed C-source instance. The caller selects its qualified
+     * source binding; this never prefix-searches or falls back to Accounts. */
+    async loadFinancialSourceEventEvidence(value: FinancialSourceEventEvidenceRequest): Promise<FinancialSourceEventEvidenceLoadResult> {
+      const request = parseFinancialSourceEventEvidenceRequest(value);
+      if (!evidenceRegistration) throw new FinancialSourceAbiError("unavailable");
+      const validUntil = await eventEvidence.authorize();
+      const stored = await Reflect.apply(readMaterialization, service, [request.eventRef]);
+      if (!stored) {
+        await eventEvidence.authorize();
+        if (validUntil <= eventEvidence.now()) throw new FinancialSourceAbiError("unavailable");
+        return {v: 1, status: "not-found"};
+      }
+      const event = parseFinancialSourceEvent(JSON.parse(stored.wireJson));
+      if (event.registrationRef !== evidenceRegistration.registrationRef || event.incarnation !== evidenceRegistration.incarnation ||
+        event.eventRef !== request.eventRef || stored.digest !== request.eventDigest.slice(7)) throw new FinancialSourceAbiError("conflict");
+      const actualHead = await Reflect.apply(readHead, service, [event.affectedRef]);
+      if (!actualHead || canonicalFinancialSourceJson(registration(actualHead)) !== canonicalFinancialSourceJson(evidenceRegistration))
+        throw new FinancialSourceAbiError("unregistered-source");
+      const raw = await Reflect.apply(listRaw, service, [{workspaceId: event.affectedRef, afterSequence: event.sequence - 1, limit: 1}]);
+      if (raw.length !== 1 || raw[0]!.eventRef !== request.eventRef || raw[0]!.permissionSequence !== event.sequence) throw new FinancialSourceAbiError("conflict");
+      const original = raw[0]!;
+      const wire = await decode(stored, original);
+      let predecessor: FinancialSourceMaterialization | undefined;
+      if (original.previousEventRef !== null) {
+        const prior = await Reflect.apply(readMaterialization, service, [original.previousEventRef]);
+        const priorRaw = await Reflect.apply(listRaw, service, [{workspaceId: event.affectedRef, afterSequence: event.sequence - 2, limit: 1}]);
+        if (!prior || priorRaw.length !== 1 || priorRaw[0]!.eventRef !== original.previousEventRef) throw new FinancialSourceAbiError("conflict");
+        predecessor = await decode(prior, priorRaw[0]!);
+      }
+      const expected = await materializeFinancialSourceEvent({registration: evidenceRegistration, raw: rawWire(original), predecessor});
+      if (canonicalFinancialSourceJson(expected) !== canonicalFinancialSourceJson(wire)) throw new FinancialSourceAbiError("conflict");
+      const registeredHead = await eventEvidence.head(wire.event);
+      if (registeredHead.genesisDigest !== evidenceRegistration.genesisDigest ||
+        canonicalFinancialSourceJson(registeredHead.receivers) !== canonicalFinancialSourceJson(evidenceRegistration.receivers))
+        throw new FinancialSourceAbiError("unregistered-source");
+      const result = await projectFinancialSourceEventEvidence({request, materialization: wire, registeredHead});
+      const finalHead = await Reflect.apply(readHead, service, [event.affectedRef]);
+      const finalQualifiedHead = await eventEvidence.head(wire.event);
+      await eventEvidence.authorize();
+      if (!finalHead || canonicalFinancialSourceJson(registration(finalHead)) !== canonicalFinancialSourceJson(evidenceRegistration) ||
+        canonicalFinancialSourceJson(finalQualifiedHead) !== canonicalFinancialSourceJson(registeredHead) || validUntil <= eventEvidence.now())
+        throw new FinancialSourceAbiError("unavailable");
+      return result;
+    },
+    async capture(input: {readonly workspaceId: string; readonly accountId: TakosumiSubject}): Promise<AccountsFinancialControlSnapshot | undefined> {
+      const {workspaceId, accountId} = input;
+      if (!financialSourceRef(workspaceId) || !financialSourceRef(accountId)) return undefined;
+      now();
+      const original = await Reflect.apply(capture, service, [{workspaceId, actorAccountId: accountId}]);
+      if (!original || original.workspace.id !== workspaceId || original.member.workspaceId !== workspaceId ||
+        original.member.accountId !== accountId || original.member.status !== "active" || original.head.closed ||
+        original.binding.workspaceId !== workspaceId || original.head.workspaceId !== workspaceId ||
+        original.binding.organizationRef !== original.head.organizationRef || original.binding.workspaceRef !== original.head.workspaceRef ||
+        original.head.permissionSequence !== original.head.materializedSequence) return undefined;
+      const enrolled = registration(original.head);
+      // Storage has legitimate absent optional columns. Normalize only their
+      // representation; the exact ORIGINAL Core object is retained privately.
+      const digest = await hashFinancialSourceValue("takosumi.financial-source-control-evidence@v1", JSON.parse(JSON.stringify(original)));
+      if (!(await Reflect.apply(assertCurrent, service, [original]))) return undefined;
+      const issuedAt = now();
+      if (!Number.isSafeInteger(issuedAt + proofLifetime)) return undefined;
+      const result: AccountsFinancialControlSnapshot = {workspaceId, accountId,
+        organizationId: original.binding.organizationRef, workspaceRef: original.binding.workspaceRef,
+        evidence: {evidenceRef: `cfe_${digest.slice(7)}`, evidenceDigest: digest, expiresAt: issuedAt + proofLifetime,
+          source: {registrationRef: enrolled.registrationRef, incarnation: enrolled.incarnation, affectedRef: original.workspace.id,
+            sequence: original.head.permissionSequence, eventRef: original.head.lastEventRef,
+            eventDigest: hex(original.head.materializedDigest), receivers: enrolled.receivers}}};
+      snapshots.set(result, {original: structuredClone(original), binding: canonicalFinancialSourceJson(result), expiresAt: result.evidence.expiresAt});
+      return result;
+    },
+    async assertCurrent(snapshot: AccountsFinancialControlSnapshot): Promise<boolean> {
+      const retained = snapshots.get(snapshot);
+      if (!retained || now() >= retained.expiresAt) return false;
+      try { if (canonicalFinancialSourceJson(snapshot) !== retained.binding) return false; } catch { return false; }
+      const current = await Reflect.apply(assertCurrent, service, [structuredClone(retained.original)]);
+      return current && now() < retained.expiresAt && canonicalFinancialSourceJson(snapshot) === retained.binding;
+    },
+    /** One explicit bounded page, never a complete inventory assertion. Lost
+     * ACK recovery reads the SAME event before any new delivery attempt. */
+    async flush(input: {readonly workspaceId: string; readonly afterSequence: number; readonly limit: number}): Promise<{
+      readonly processed: number; readonly nextAfterSequence?: number;
+    }> {
+      const {workspaceId, afterSequence, limit} = input;
+      if (!financialSourceRef(workspaceId) || !Number.isSafeInteger(afterSequence) || afterSequence < 0 ||
+        !Number.isSafeInteger(limit) || limit < 1 || limit > 64) fail();
+      const page = await Reflect.apply(listRaw, service, [{workspaceId, afterSequence, limit}]);
+      if (!Array.isArray(page) || page.length > limit) fail();
+      let processed = 0, previousSequence = afterSequence;
+      for (const raw of page) {
+        if (raw.workspaceId !== workspaceId || raw.permissionSequence !== previousSequence + 1) fail();
+        // Capture the FULL head BEFORE asynchronous codec/SHA preparation.
+        const head = await Reflect.apply(readHead, service, [workspaceId]);
+        if (!head || head.workspaceId !== raw.workspaceId || head.sourceRef !== raw.sourceRef || head.incarnation !== raw.incarnation) fail();
+        const enrolled = registration(head);
+        for (const required of enrolled.receivers) {
+          if (receivers.get(required.receiverRef)?.targetRef !== required.targetRef) throw new FinancialSourceUnavailable("source_unavailable");
+        }
+        let predecessor: FinancialSourceMaterialization | undefined;
+        if (raw.previousEventRef !== null) {
+          const prior = await Reflect.apply(readMaterialization, service, [raw.previousEventRef]);
+          const originals = await Reflect.apply(listRaw, service, [{workspaceId, afterSequence: raw.permissionSequence - 2, limit: 1}]);
+          if (!prior || originals.length !== 1 || originals[0]!.eventRef !== raw.previousEventRef ||
+            originals[0]!.permissionSequence !== raw.permissionSequence - 1) fail();
+          predecessor = await decode(prior, originals[0]!);
+        }
+        const wire = await materializeFinancialSourceEvent({registration: enrolled, raw: rawWire(raw), predecessor});
+        const expected: WorkspaceFinancialMaterialization = {eventRef: raw.eventRef, sourceRef: raw.sourceRef, incarnation: raw.incarnation,
+          permissionSequence: raw.permissionSequence, rawPayloadJson: raw.payloadJson, previousDigest: wire.event.previousDigest.slice(7),
+          wireJson: canonicalFinancialSourceJson(wire.event), digest: wire.eventDigest.slice(7)};
+        const stored = await Reflect.apply(readMaterialization, service, [raw.eventRef]);
+        if (stored) {
+          if (stored.rawPayloadJson !== expected.rawPayloadJson ||
+            canonicalFinancialSourceJson({...stored, rawPayloadJson: ""}) !==
+              canonicalFinancialSourceJson({...expected, rawPayloadJson: ""})) fail();
+          await decode(stored, raw);
+        } else if (!(await Reflect.apply(materialize, service, [{original: structuredClone(raw), expectedHead: structuredClone(head), materialization: expected}]))) fail();
+        for (const required of enrolled.receivers) {
+          const configured = receivers.get(required.receiverRef)!;
+          const found = await Reflect.apply(configured.read, configured.receiver, [structuredClone(wire)]);
+          const receipt = parseFinancialSourceReceipt(found === undefined ?
+            await Reflect.apply(configured.deliver, configured.receiver, [structuredClone(wire)]) : found);
+          const expectedReceipt = await makeFinancialSourceReceipt({registrationRef: enrolled.registrationRef,
+            receiverRef: required.receiverRef, targetRef: required.targetRef, event: wire.event, eventDigest: wire.eventDigest});
+          if (canonicalFinancialSourceJson(receipt) !== canonicalFinancialSourceJson(expectedReceipt) ||
+            !(await Reflect.apply(recordReceipt, service, [{eventRef: raw.eventRef, sourceRef: raw.sourceRef, incarnation: raw.incarnation,
+              permissionSequence: raw.permissionSequence, receiverRef: required.receiverRef, targetRef: required.targetRef,
+              digest: wire.eventDigest.slice(7), receiptRef: receipt.receiptRef, receiptJson: canonicalFinancialSourceJson(receipt)}]))) fail();
+        }
+        processed++;
+        previousSequence = raw.permissionSequence;
+      }
+      return {processed, ...(page.length === limit ? {nextAfterSequence: previousSequence} : {})};
     },
   };
 }
