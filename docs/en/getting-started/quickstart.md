@@ -115,8 +115,8 @@ point. After checking the changes, press **Add** again to start the apply.
 A change that deletes, replaces, or imports a resource first needs
 **Approve this change**, then the **I reviewed these changes** checkbox, before
 **Add**; the example's first install shows neither. A change that a policy or
-billing check stops shows **These changes can't be deployed**, and
-**Technical details** opens its Run.
+billing check stops shows **Service setup did not finish**, and
+**Technical details** shows why.
 
 When it finishes, **Service added** appears and **Open service** opens the new
 workload (Capsule). Normal updates, detected drift, and new Git commits are not

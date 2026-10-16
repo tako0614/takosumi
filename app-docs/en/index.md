@@ -14,14 +14,16 @@ apply, state, outputs, audit, usage, and prepaid credit together.
 2. Press **Add** on an app in the **Store**, or enter a Git URL under
    **Add from a Git repository**. Opening an app's add link leads to the same screen.
 3. Check the service name and source, then press **Add**. Takosumi pins the Git version
-   and checks the module and the connections it needs. Nothing is created yet.
-4. If a connection has to be chosen, pick it on **Choose a Host / account**. Providers
-   that need no credentials need no connection. Then fill in what the app asks for on
-   **Set up the service** and press **Continue**.
+   and checks the module and the connections it needs. No resources are created yet.
+4. If a connection has to be chosen, pick it on **Choose a Host / account** and press
+   **Continue**. Providers that need no credentials need no connection. If the app asks
+   for input, fill it in on **Set up the service** and press **Continue**.
 5. On **Review before adding**, check how many resources will be created, changed, and
-   deleted, then press **Add**. A change that deletes, replaces, or imports something
-   first needs **Approve this change** and the **I reviewed these changes** checkbox. A
-   change that a policy or billing check stops shows **These changes can't be deployed**.
+   deleted, then press **Add**.
+   - A change that deletes, replaces, or imports something first needs
+     **Approve this change** and the **I reviewed these changes** checkbox.
+   - A change that a policy or billing check stops shows **Service setup did not finish**,
+     and **Technical details** shows why.
 6. When **Service added** appears, **Open service** takes you to it.
 
 ```text
