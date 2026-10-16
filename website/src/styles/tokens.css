@@ -28,12 +28,12 @@
   --tg-text-md: 1rem;
   --tg-text-lg: 1.125rem;
   --tg-text-xl: 1.5rem;
-  --tg-text-display: clamp(4.2rem, 10vw, 8.75rem);
+  --tg-text-display: clamp(2.75rem, 5vw, 4rem);
   --tg-ease-out: cubic-bezier(.2,.7,.2,1);
   --tg-dur-short: 140ms;
   --tg-rule-thin: 1px;
-  --tg-radius-control: 8px;
-  --tg-radius-panel: 14px;
+  --tg-radius-control: 999px;
+  --tg-radius-panel: 24px;
 }
 
 :root[data-theme="light"] {

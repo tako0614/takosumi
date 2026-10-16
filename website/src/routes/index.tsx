@@ -49,8 +49,8 @@ function FeaturedAppRow(props: { app: FeaturedApp }) {
           <h3>{props.app.name}</h3>
           <p>{props.app.summary} {props.app.use}</p>
         </div>
-        <a class="featured-action" href={props.app.install} aria-label={props.app.name + "のインストール設定へ進む"}>
-          インストール設定へ <Arrow />
+        <a class="featured-action" href={props.app.install} aria-label={props.app.name + "の追加画面を開く"}>
+          追加画面を開く <Arrow />
         </a>
       </div>
       <details class="featured-details">
@@ -95,17 +95,17 @@ export default function Home() {
       <main id="main">
         <section class="hero site-width" aria-labelledby="site-title">
           <div class="hero-copy">
-            <h1 id="site-title">Takosumi</h1>
-            <p class="hero-lead">公開されたアプリを、<br />自分の環境へ。</p>
-            <p class="hero-description">Git の OpenTofu 定義を読み込み、接続先と設定を確認してインストール。入れたアプリも、変更も、ひとつのワークスペースから見渡せます。</p>
+            <div class="hero-identity"><img class="hero-mark" src="/tako.png" alt="" width="64" height="64" /><h1 id="site-title">Takosumi</h1></div>
+            <p class="hero-lead">公開されたオープンソースを、アプリのように入れて使う。</p>
+            <p class="hero-description">アプリを選んで接続と設定を入れ、作られるものを確かめてから追加します。<br class="desktop-break" />画面のあるアプリは、ワークスペースのホームから開けます。</p>
             <div class="hero-actions">
-              <a class="button button-primary" href="#apps">アプリを見つける <Arrow /></a>
-              <a class="text-link" href="https://app.takosumi.com/new">Git URL から追加 <Arrow /></a>
+              <a class="button button-primary" href="#apps">アプリを探す <span aria-hidden="true">↓</span></a>
+              <a class="button button-secondary" href="https://app.takosumi.com/new">Git URL から追加 <Arrow /></a>
             </div>
           </div>
           <figure class="hero-product">
-            <DashboardShot capture={DASHBOARD_CAPTURES.home} alt="Takosumi のダッシュボード。ワークスペース内のインストール済みアプリと追加操作が並ぶ" class="launcher-shot" priority />
-            <figcaption><span class="caption-dot" aria-hidden="true" /> Takosumi のダッシュボード（デモ画面）</figcaption>
+            <DashboardShot capture={DASHBOARD_CAPTURES.home} alt="Takosumi のホーム画面。ワークスペースに Takos、Takos Office、Yurucommu のアプリと追加操作が並ぶ" class="launcher-shot" priority />
+            <figcaption><span class="caption-dot" aria-hidden="true" /> Takosumi ダッシュボードの公開用サンプル画面</figcaption>
           </figure>
         </section>
 
@@ -126,39 +126,44 @@ export default function Home() {
         <section class="install-section" aria-labelledby="install-title">
           <div class="site-width install-layout">
             <div class="install-copy">
-              <p class="section-index">追加する</p>
-              <h2 id="install-title">選んで、<br />自分の環境へ。</h2>
-              <p>ストアでサービスを探すか、公開 Git リポジトリを指定して追加します。アプリごとに必要な接続先や設定は、追加後の画面で確認します。</p>
-              <a class="text-link" href="/docs/concepts/sources.html">ソースとインストールの仕組み <Arrow /></a>
+              <div class="install-intro">
+                <h2 id="install-title">追加する前に、<br />作られるものを確かめる。</h2>
+                <p>アプリを選ぶと、Takosumi は使う commit を固定してから、次の順に進みます。</p>
+              </div>
+              <ol class="add-steps">
+                <li><h3>接続と設定</h3><p>必要な接続を選び、アプリが求める項目を入れます。</p></li>
+                <li><h3>追加前の確認</h3><p>作成・変更・削除されるリソースの数を見ます。削除や作り直しを含む変更は、承認するまで進みません。</p></li>
+                <li><h3>追加する</h3><p>押したときに初めて反映されます。画面のあるアプリは、ホームから開けるようになります。</p></li>
+              </ol>
             </div>
             <figure class="install-product">
-              <DashboardShot capture={DASHBOARD_CAPTURES.install} alt="Takosumi のストアでサービスを探し、公開 Git ソースを選ぶ画面" class="install-shot" />
-              <figcaption>Takosumi のストアでソースを選ぶ画面</figcaption>
+              <DashboardShot capture={DASHBOARD_CAPTURES.install} alt="Takosumi のストア。Takos、Takos Office、Yurucommu にそれぞれ追加ボタンがあり、Git リポジトリからも追加できる" class="install-shot" />
+              <figcaption>ストアでアプリを選ぶ画面（Takosumi ダッシュボードを公開用デモデータで撮影）</figcaption>
             </figure>
           </div>
         </section>
 
         <section class="after-section site-width" aria-labelledby="after-title">
           <div class="after-intro">
-            <p class="section-index">使い続ける</p>
-            <h2 id="after-title">入れたあとも、<br />ここから。</h2>
-            <p>ホームからアプリを開き、設定や変更が必要になったら同じワークスペースへ戻れます。新しい Git の版を取り込むときも、確認した変更をもとに進めます。</p>
+            <h2 id="after-title">入れたあとの、<br />更新と記録。</h2>
+            <p>ホームからアプリを開き、設定や更新が必要になったら同じワークスペースへ戻ります。</p>
           </div>
           <div class="after-steps">
-            <div><h3>変更を見る</h3><p>OpenTofu の plan で作成・変更・削除を確認し、承認してから適用します。</p></div>
-            <div><h3>実行をたどる</h3><p>インストールや更新の実行履歴と結果を残し、あとから何が起きたか確認できます。</p></div>
-            <div><h3>アプリを管理する</h3><p>インストール済みのアプリ、接続先、設定をワークスペースで整理できます。</p></div>
+            <div><h3>危ない更新は止まる</h3><p>新しい版への更新でも自動更新でも、作り直しや削除を含む変更は、確認するまで反映されません。</p></div>
+            <div><h3>何が起きたかを残す</h3><p>どの commit を誰が反映し、何が変わったかを履歴に残します。</p></div>
+            <div><h3>鍵は読み出せない形で</h3><p>接続の API token は書き込み専用で保存され、変更の確認や反映を実行している間だけ、その処理に渡されます。</p></div>
           </div>
         </section>
 
         <section class="closing-section" aria-labelledby="closing-title">
           <div class="site-width closing-content">
             <div>
-              <h2 id="closing-title">自分のアプリを、<br />自分で選ぶ。</h2>
-              <p>Takosumi は Git と OpenTofu で定義されたものを、自分の環境で使い続けるための場所です。</p>
+              <h2 id="closing-title">まず、一つ追加してみる。</h2>
+              <p>公式ホスティングは Pre-GA です。Linux マシンと Docker などを用意すれば、クラウドの認証情報なしで手元でも試せます。</p>
             </div>
             <div class="closing-actions">
-              <a class="button button-primary" href="https://app.takosumi.com/">Takosumi を使う <Arrow /></a>
+              <a class="button button-primary" href="https://app.takosumi.com/">公式ホスティングで使う <Arrow /></a>
+              <a class="text-link" href="/docs/getting-started/quickstart.html">手元で試す（クイックスタート） <Arrow /></a>
               <a class="text-link" href="/docs/concepts/self-host.html">セルフホストについて <Arrow /></a>
             </div>
           </div>
