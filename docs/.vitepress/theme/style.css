@@ -50,6 +50,19 @@
   text-underline-offset: 0.18em;
 }
 
+/* Dashboard screenshots have a light grey page behind a white card; the frame
+ * keeps their edge visible on the white light-mode page and the dark one. */
+.vp-doc img.screenshot {
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+}
+
+/* Screenshots come in both appearances; show the one matching the page. */
+.dark .vp-doc .light-only,
+html:not(.dark) .vp-doc .dark-only {
+  display: none;
+}
+
 /* Wide tables scroll inside their wrapper (see scrollable-tables.ts) instead of
  * widening the page; narrow ones still fill the column. */
 .vp-doc .table-scroll {

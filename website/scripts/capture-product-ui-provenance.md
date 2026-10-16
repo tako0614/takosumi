@@ -49,10 +49,11 @@ verify all three selections on the final website at desktop and mobile widths.
 
 ## Takosumi dashboard
 
-The eight `dashboard-home-*` and `dashboard-install-*` images capture this checkout's actual `dashboard` SPA,
+The twelve `dashboard-home-*`, `dashboard-install-*` and `dashboard-review-*`
+images capture this checkout's actual `dashboard` SPA,
 built from source and served by the
-repository's portable browser fixture server. They were captured on
-2026-09-28. The original dark images came from checkout
+repository's portable browser fixture server. The Home and Store images were
+first captured on 2026-09-28; the review images are described below. The original dark images came from checkout
 `d4b1c52f8434cb163ac76f1a4682baf564612acc`; the matching light images
 came from checkout `3820a6359e7e044d5283b662540f80212b3929d9`.
 The dark and light desktop Home images were refreshed on 2026-10-04 from
@@ -69,16 +70,44 @@ Takos, Takos Office, and Yurucommu, with `example.test` launch URLs and
 real API projections; they do not describe installed production services or
 available official Store listings. The Store images show the Store with
 three listings before one is chosen, not completed configuration or
-installation. All non-GET requests and external browser requests are blocked. The
+installation; the landing no longer shows them, but the script still keeps them
+current. Outside the add-flow screens below, all non-GET requests and external
+browser requests are blocked. The
 Takos icon is the current `website/public/apps/takos.png`; Office and
 Yurucommu use this repository's `dashboard/public/brand/` SVGs. All three
 are fulfilled locally at an illustrative icon origin.
 Browser runtime errors, failed HTTP requests or images, unexpected external
 requests, and missing product cards fail the capture.
 
-Desktop Home and Store both use the complete 1200 × 750 viewport, with no
+The four `dashboard-review-*` images, captured on 2026-10-15 from the dashboard
+source at `d128a386f` (after #493 fixed the 「ホスト / アカウント」 row), show the
+add flow's 「追加前の確認」 screen for Takos, reached by opening `/new` with an
+example Git URL and pressing 「追加」 in the real dashboard. For this screen and
+the Quickstart screens, the script answers the add flow's API calls in the
+browser, following the shapes used by the dashboard's
+portable e2e fixture: source registration and sync, the resolved snapshot and
+its module, a compatibility report that requires the Cloudflare provider, one
+verified workspace connection for it, the default install config, the install
+plan, and its plan Run. Everything is an illustrative example (the
+`github.com/example/takos` URL, a placeholder commit, IDs, the connection); no
+request reaches a live API or a Git host, and the screen proves no plan,
+approval, or apply. The one value derived from a real source is the change
+count: takos v0.12.7 `deploy/opentofu/cloudflare` creates 1 D1 database, 1 KV
+namespace, 5 R2 buckets and 6 queues on a fresh install, so the Run reports 13
+to create, 0 to change and 0 to delete, with policy passing and no approval
+required. The real Takos module also asks for settings on 「サービスを設定」
+(a required 「Cloudflare デプロイ設定」 and optional public URL and Takosumi
+Accounts inputs in its v0.12.7 manifest) before this review; the
+stub uses the default install config, so that step is skipped and the image
+shows only the review. The 13 covers the module's own resources; the Vectorize
+index and Worker upload that Takos performs in its own follow-up step are not
+part of this plan. The capture fails unless the screen shows those three counts
+and its 「追加する」 button.
+
+Desktop Home, Store and review use the complete 1200 × 750 viewport, with no
 screenshot clip. Mobile Home uses 390 × 700, and
-mobile Store uses 390 × 950 so the first service card is readable.
+mobile Store and review use 390 × 950 so the first service card, or the change
+counts and 「追加する」, are readable.
 All use device scale 2, Japanese locale, loaded UI fonts, and Noto Sans JP as the system
 Japanese fallback. The script seeds the dashboard's own `tg_theme` preference
 to match the browser color scheme and confirms the rendered `data-theme` before
@@ -100,6 +129,38 @@ does not write to a live Takosumi API. These are UI illustrations, not deploy,
 Run, or end-to-end proof.
 Pass `light` or `dark` instead of `all` to refresh one appearance only. Pass
 `desktop-home` as the second argument to refresh only the desktop Home images
-without rewriting the Store or mobile assets. Dark
+without rewriting the Store, review or mobile assets. Dark
 images keep their original filenames; light images use a `-light` suffix. The
 site's `<picture>` sources follow the operating system appearance and viewport.
+
+## Quickstart screens in the docs
+
+The twelve `docs/public/getting-started/quickstart-*.png` images, captured on
+2026-10-15 from the dashboard source at `d128a386f`, show the three screens
+that Quickstart step 6 describes, in Japanese and English and in
+light and dark (`-en` and `-dark` suffixes). The same script opens the
+Quickstart's own link,
+`/install?git=https://github.com/tako0614/takosumi.git&ref=main&path=examples/opentofu-basic`,
+in the real dashboard and presses 「追加」 and 「続ける」 (Add, Continue) as a
+reader would. It answers that flow's API calls in the browser like the review
+screen above, and no request reaches a live API or a Git host.
+
+What the screens show is derived from this repository rather than invented:
+
+- The two optional inputs, 名前 and 公開URLの例 (Name, Example public URL), are
+  the `variablePresentation` that `compileRepositoryInstallUx` produces from
+  `.well-known/takosumi.json` for `examples/opentofu-basic`.
+- The review's 0 / 0 / 0 is what `tofu plan` (OpenTofu 1.12.3) reports for
+  `examples/opentofu-basic/main.tf`: no resource changes, only two outputs.
+- The service name `takosumi` is the dashboard's own default for that Git URL.
+
+The resolved commit, IDs and the 「デモ環境」 / "Demo workspace" name are
+placeholders; none of them appears in the images. The first image is the whole add page without the dashboard
+shell; the other two are clipped to the part of the card each step adds. The
+capture fails unless each heading appears and the review shows 0, 0 and 0 with
+its 「追加する」 (Add) button.
+
+The default run (`all`) rewrites these together with the website images. To
+refresh only these, run the script with `all quickstart` (or `light
+quickstart` / `dark quickstart`). If the image sizes change, update the
+`width` and `height` attributes in both Quickstart pages to match.

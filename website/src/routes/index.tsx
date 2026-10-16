@@ -137,8 +137,8 @@ export default function Home() {
               </ol>
             </div>
             <figure class="install-product">
-              <DashboardShot capture={DASHBOARD_CAPTURES.install} alt="Takosumi のストア。Takos、Takos Office、Yurucommu にそれぞれ追加ボタンがあり、Git リポジトリからも追加できる" class="install-shot" />
-              <figcaption>ストアでアプリを選ぶ画面（Takosumi ダッシュボードを公開用デモデータで撮影）</figcaption>
+              <DashboardShot capture={DASHBOARD_CAPTURES.review} alt="Takosumi の追加前の確認画面。Takos を追加すると作成 13、変更 0、削除 0 と表示され、その下に「追加する」ボタンがある" class="install-shot" />
+              <figcaption>Takos を追加する前の確認画面（Takosumi ダッシュボードを公開用デモデータで撮影。件数は Takos v0.12.7 の Cloudflare 構成から算出）</figcaption>
             </figure>
           </div>
         </section>

@@ -36,4 +36,10 @@ export const DASHBOARD_CAPTURES = {
     desktopLight: { src: "/screens/dashboard-install-desktop-light.png", width: 2400, height: 1500 },
     mobileLight: { src: "/screens/dashboard-install-mobile-light.png", width: 780, height: 1900 },
   },
+  review: {
+    desktop: { src: "/screens/dashboard-review-desktop.png", width: 2400, height: 1500 },
+    mobile: { src: "/screens/dashboard-review-mobile.png", width: 780, height: 1900 },
+    desktopLight: { src: "/screens/dashboard-review-desktop-light.png", width: 2400, height: 1500 },
+    mobileLight: { src: "/screens/dashboard-review-mobile-light.png", width: 780, height: 1900 },
+  },
 } as const;
