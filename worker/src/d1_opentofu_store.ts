@@ -2570,6 +2570,24 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   prepareWorkspaceFinancialEnrollment(...args:Parameters<WorkspaceFinancialSourceStore["prepareWorkspaceFinancialEnrollment"]>){return this.#financialSourceStore().prepareWorkspaceFinancialEnrollment(...args);}
   enrollWorkspaceFinancialSource(...args:Parameters<WorkspaceFinancialSourceStore["enrollWorkspaceFinancialSource"]>){return this.#financialSourceStore().enrollWorkspaceFinancialSource(...args);}
   getWorkspaceFinancialSourceHead(...args:Parameters<WorkspaceFinancialSourceStore["getWorkspaceFinancialSourceHead"]>){return this.#financialSourceStore().getWorkspaceFinancialSourceHead(...args);}
+  readWorkspaceFinancialEnrollmentOriginal(...args:Parameters<WorkspaceFinancialSourceStore["readWorkspaceFinancialEnrollmentOriginal"]>){
+    const db=this.db;
+    // This historical GET must never enter #ensureSchema: its default bootstrap
+    // mode can write DDL on a cold binding. Keep the request's maintenance
+    // admission, then require the complete exact read-only v75 qualification.
+    const port:FinancialSourceSqlPort={dialect:"d1",
+      query:async(statement,parameters=[])=>{
+        await (this.#requestMaintenanceScope?.ensure(db) ?? assertControlD1MaintenanceInactive(db));
+        await verifyD1OpenTofuLedgerSchemaPredeployed(db);
+        if(!statement.trimStart().startsWith("select "))throw new Error("Financial original read requires SELECT");
+        const result=await db.prepare(statement).bind(...parameters).all<Record<string,unknown>>();
+        if(result.success!==true||!Array.isArray(result.results))throw new Error("Financial original read result unavailable");
+        return result.results;
+      },
+      enroll:async()=>{throw new Error("Financial original read cannot enroll");},
+    };
+    return new SqlWorkspaceFinancialSource(port).readWorkspaceFinancialEnrollmentOriginal(...args);
+  }
   captureWorkspaceFinancialSourceSnapshot(...args:Parameters<WorkspaceFinancialSourceStore["captureWorkspaceFinancialSourceSnapshot"]>){return this.#financialSourceStore().captureWorkspaceFinancialSourceSnapshot(...args);}
   listWorkspaceFinancialRawEvents(...args:Parameters<WorkspaceFinancialSourceStore["listWorkspaceFinancialRawEvents"]>){return this.#financialSourceStore().listWorkspaceFinancialRawEvents(...args);}
   getWorkspaceFinancialMaterialization(...args:Parameters<WorkspaceFinancialSourceStore["getWorkspaceFinancialMaterialization"]>){return this.#financialSourceStore().getWorkspaceFinancialMaterialization(...args);}

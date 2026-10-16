@@ -1,7 +1,7 @@
 import {
   MemoryWorkspaceFinancialSource, workspaceFinancialPage, type WorkspaceFinancialSourceStore, type WorkspaceFinancialEnrollmentCandidate,
   type WorkspaceFinancialRegistration, type WorkspaceFinancialMaterializationInput,
-  type WorkspaceFinancialReceipt,
+  type WorkspaceFinancialReceipt, type WorkspaceFinancialEnrollmentOriginalQuery,
 } from "../workspaces/financial-source.ts";
 /**
  * Persistence boundary for the control-plane ledger (core-spec.md §27).
@@ -4378,6 +4378,9 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return head;
   }
   async getWorkspaceFinancialSourceHead(workspaceId:string){return structuredClone(this.#financialSource.heads.get(workspaceId));}
+  async readWorkspaceFinancialEnrollmentOriginal(input:WorkspaceFinancialEnrollmentOriginalQuery){
+    return this.#financialSource.readOriginal(input);
+  }
   async captureWorkspaceFinancialSourceSnapshot(input:{workspaceId:string;actorAccountId:string}){
     return this.#financialSource.snapshot(this.#financialCandidate(input.workspaceId),input.actorAccountId);
   }
