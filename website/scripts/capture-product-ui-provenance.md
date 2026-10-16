@@ -80,7 +80,9 @@ Browser runtime errors, failed HTTP requests or images, unexpected external
 requests, and missing product cards fail the capture.
 
 The four `dashboard-review-*` images, captured on 2026-10-15 from the dashboard
-source at `d128a386f` (after #493 fixed the 「ホスト / アカウント」 row), show the
+source at `d128a386f` (after #493 fixed the 「ホスト / アカウント」 row) and
+recaptured on 2026-10-16 from `9f6218bfd` (after #496 changed the review's badge
+from 「成功」 to 「確認できます」), show the
 add flow's 「追加前の確認」 screen for Takos, reached by opening `/new` with an
 example Git URL and pressing 「追加」 in the real dashboard. For this screen and
 the Quickstart screens, the script answers the add flow's API calls in the
@@ -136,7 +138,8 @@ site's `<picture>` sources follow the operating system appearance and viewport.
 ## Quickstart screens in the docs
 
 The twelve `docs/public/getting-started/quickstart-*.png` images, captured on
-2026-10-15 from the dashboard source at `d128a386f`, show the three screens
+2026-10-15 from the dashboard source at `d128a386f` (the four `quickstart-review*`
+images recaptured on 2026-10-16 from `9f6218bfd`, after #496), show the three screens
 that Quickstart step 6 describes, in Japanese and English and in
 light and dark (`-en` and `-dark` suffixes). The same script opens the
 Quickstart's own link,
