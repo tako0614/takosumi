@@ -199,6 +199,113 @@ const quickstartFlow = {
 };
 const quickstartPath = `/install?git=${quickstartFlow.git}&ref=${quickstartFlow.ref}&path=${quickstartFlow.modulePath}`;
 
+// The workload page's 「更新」 tab after a few applies. Takos (the landing) has
+// three recorded versions; the Quickstart sample has two, as after one apply
+// and one re-apply with a changed input. Times, IDs and refs are placeholders.
+const updatesFlows = {
+  takos: {
+    capsuleId: "cap_demo_takos",
+    name: "Takos",
+    git: "https://github.com/example/takos",
+    ref: "v0.12.7",
+    modulePath: ".",
+    appliedAt: ["2026-08-01T09:12:00.000Z", "2026-08-20T03:40:00.000Z", "2026-09-10T11:05:00.000Z"],
+  },
+  quickstart: {
+    capsuleId: "cap_demo_quickstart",
+    name: "takosumi",
+    git: "https://github.com/tako0614/takosumi.git",
+    ref: "main",
+    modulePath: quickstartModule,
+    appliedAt: ["2026-08-01T09:12:00.000Z", "2026-08-01T09:30:00.000Z"],
+  },
+};
+
+/** Answer one workload page's reads with a short apply history. */
+async function stubWorkloadUpdates(page, flow) {
+  const id = flow.capsuleId;
+  const versions = flow.appliedAt.map((at, index) => ({
+    id: `sv_${id}_${index + 1}`, workspaceId: "ws_alpha", capsuleId: id, environment: "production",
+    generation: index + 1, createdByRunId: `run_${id}_apply_${index + 1}`, createdAt: at,
+  }));
+  const current = versions.at(-1);
+  const capsuleRecord = {
+    id, workspaceId: "ws_alpha", name: flow.name, slug: flow.name.toLowerCase(),
+    sourceId: `src_${id}`, installConfigId: `cfg_${id}`, environment: "production",
+    currentStateVersionId: current.id, currentStateGeneration: current.generation,
+    status: "active", freshness: "fresh", createdAt: flow.appliedAt[0], updatedAt: current.createdAt,
+  };
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    const json = (body) => route.fulfill({ status: 200, json: body });
+    if (request.method() !== "GET") return route.fallback();
+    if (path === `/api/v1/capsules/${id}`) {
+      return json({ capsule: capsuleRecord, installConfigReAdoption: { authorityGuard: `sha256:${"a".repeat(64)}` } });
+    }
+    if (path === `/api/v1/capsules/${id}/state-versions`) return json({ stateVersions: [...versions].reverse() });
+    if (path.startsWith("/api/v1/state-versions/")) {
+      const version = versions.find((entry) => path.endsWith(`/${entry.id}`));
+      return version ? json({ stateVersion: version }) : route.fallback();
+    }
+    if (path === `/api/v1/capsules/${id}/current-resource-inventory`) {
+      return json({ inventory: {
+        kind: "takosumi.capsule-current-resource-inventory@v1", capsuleId: id, workspaceId: "ws_alpha",
+        environment: "production", stateVersionId: current.id, generation: current.generation,
+        applyRunId: current.createdByRunId, planRunId: `run_${id}_plan_${current.generation}`,
+        recordedAt: current.createdAt, availability: "recorded", resources: [],
+      } });
+    }
+    if (path === `/api/v1/capsule-configs/cfg_${id}`) {
+      return json({ installConfig: {
+        id: `cfg_${id}`, workspaceId: "ws_alpha", name: flow.name,
+        sourceSelector: { kind: "git", url: flow.git, ref: flow.ref, path: flow.modulePath },
+        policy: {}, variableMapping: {}, variablePresentation: [], outputAllowlist: {}, interfaceBlueprints: [],
+        createdAt: flow.appliedAt[0], updatedAt: current.createdAt,
+      } });
+    }
+    if (path === `/api/v1/capsules/${id}/provider-bindings`) {
+      return json({ providerBindingSet: {
+        id: `pbs_${id}`, workspaceId: "ws_alpha", capsuleId: id, environment: "production", bindings: [],
+        createdAt: flow.appliedAt[0], updatedAt: current.createdAt,
+      } });
+    }
+    if (path === `/api/v1/capsules/${id}/usage-summary`) {
+      return json({ summary: { capsuleId: id, usdMicros: 0, eventCount: 0, ratedEventCount: 0, unratedEventCount: 0 } });
+    }
+    if (path === "/api/v1/sources") {
+      return json({ sources: [{
+        id: `src_${id}`, workspaceId: "ws_alpha", name: flow.name, url: flow.git, defaultRef: flow.ref,
+        defaultPath: flow.modulePath, status: "active", autoSync: false, createdAt: flow.appliedAt[0], updatedAt: current.createdAt,
+      }] });
+    }
+    if (path === "/api/v1/provider-connections") return json({ providerConnections: [] });
+    if (path === "/api/v1/workspaces/ws_alpha/graph") return json({ nodes: [], edges: [] });
+    return route.fallback();
+  });
+}
+
+/**
+ * Open the 「更新」 tab's 更新履歴 and one older version's restore disclosure, as
+ * a reader would. Returns the update card's page box.
+ */
+async function showUpdateHistory(page, flow) {
+  const history = page.locator("details.wb-disclosure").filter({ has: page.locator("summary", { hasText: /^(更新履歴|Update history)$/u }) });
+  await history.locator("summary").first().click();
+  const rows = history.locator(".wa-deploy-row");
+  await rows.first().waitFor({ state: "visible" });
+  if (await rows.count() !== flow.appliedAt.length) {
+    throw new Error(`update history showed ${await rows.count()} versions`);
+  }
+  await rows.nth(1).locator("details > summary").click();
+  await rows.nth(1).getByRole("button", { name: /^(この状態に戻す|Restore this state)$/u }).waitFor({ state: "visible" });
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+  return await page.locator(".tg-card").filter({ has: history }).first().evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { left: rect.left, right: rect.right, top: rect.top + window.scrollY, bottom: rect.bottom + window.scrollY };
+  });
+}
+
 /** Answer one add flow's API calls so the real dashboard reaches its review. */
 async function stubAddFlow(page, flow) {
   const ids = {
@@ -316,7 +423,7 @@ async function ready(child) {
   throw new Error("dashboard fixture did not become ready");
 }
 
-async function capture(browser, variant, viewport, theme, screens = ["home", "install", "review"], locale = "ja-JP") {
+async function capture(browser, variant, viewport, theme, screens = ["home", "install", "review", "updates"], locale = "ja-JP") {
   const iconAssets = new Map(await Promise.all(products.map(async (product) => [
     `/${product.icon}`,
     {
@@ -414,12 +521,15 @@ async function capture(browser, variant, viewport, theme, screens = ["home", "in
       ["home", "/", ".av-tile-wrap"],
       ["install", "/new", ".tcs-card"],
       ["review", reviewPath, ".iv-execution .iv-change-counts"],
+      // Last: on desktop it resizes the viewport to the update card.
+      ["updates", `/workloads/${updatesFlows.takos.capsuleId}/deploys`, ".wb-disclosure > summary"],
     ].filter(([screen]) => screens.includes(screen))) {
       failures.length = 0;
       if (screen !== "home" && variant === "mobile") {
         await page.setViewportSize({ width: viewport.width, height: 950 });
       }
       if (screen === "review") await stubAddFlow(page, takosFlow);
+      if (screen === "updates") await stubWorkloadUpdates(page, updatesFlows.takos);
       await page.goto(`${origin}${path}`, { waitUntil: "domcontentloaded" });
       if (screen === "review") {
         await page.getByRole("button", { name: "追加", exact: true }).click();
@@ -456,6 +566,15 @@ async function capture(browser, variant, viewport, theme, screens = ["home", "in
           window.scrollTo({ top: element.getBoundingClientRect().top + window.scrollY - header - 24, behavior: "instant" });
         });
       }
+      if (screen === "updates") {
+        // From the top, so the service name and tabs are not under the sticky
+        // header; on desktop the viewport ends just below the update card.
+        const card = await showUpdateHistory(page, updatesFlows.takos);
+        if (variant === "desktop") {
+          await page.setViewportSize({ width: viewport.width, height: Math.ceil(card.bottom + 32) });
+          await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+        }
+      }
       if (!imagesLoaded || errors.length || failures.length || unexpectedRequests.length) {
         throw new Error(`${screen}/${variant}: imagesLoaded=${imagesLoaded}; browser errors=${errors.join("; ")}; HTTP failures=${failures.join("; ")}; unexpected requests=${unexpectedRequests.join("; ")}`);
       }
@@ -478,8 +597,9 @@ async function capture(browser, variant, viewport, theme, screens = ["home", "in
 
 /**
  * The three screens Quickstart step 6 describes, from opening its /install
- * link to the review. The first image is the whole add page without the
- * shell; the next two are only the part of the card that each step adds.
+ * link to the review, and the 「更新」 tab step 7 describes. The first image is
+ * the whole add page without the shell; the next two are only the part of the
+ * card that each step adds; the last is the tabs and the update card.
  */
 async function captureQuickstart(page, locale, theme, assertClean) {
   const ja = locale === "ja-JP";
@@ -539,13 +659,27 @@ async function captureQuickstart(page, locale, theme, assertClean) {
     const reviewBox = await box(page.locator(".iv-execution"));
     return inside(cardBox, reviewBox.top - 20, reviewBox.bottom + 24);
   });
+
+  // Step 7: the same sample's 「更新」 tab after one more apply, from its tabs to
+  // the bottom of the update card.
+  await stubWorkloadUpdates(page, updatesFlows.quickstart);
+  await page.goto(`${origin}/workloads/${updatesFlows.quickstart.capsuleId}/deploys`, { waitUntil: "domcontentloaded" });
+  await page.locator(".wb-disclosure > summary").first().waitFor({ state: "visible" });
+  const updateCard = await showUpdateHistory(page, updatesFlows.quickstart);
+  await shoot("updates", async () => {
+    const tabs = await page.locator('a[href$="/deploys"]').first().evaluate((link) => {
+      const rect = link.parentElement.getBoundingClientRect();
+      return { top: rect.top + window.scrollY };
+    });
+    return { left: updateCard.left, right: updateCard.right, top: tabs.top - 16, bottom: updateCard.bottom + 16 };
+  });
 }
 
 async function main() {
   const requestedTheme = process.argv[2] ?? "all";
   const requestedVariant = process.argv[3] ?? "all";
-  if (!["all", "dark", "light"].includes(requestedTheme) || !["all", "desktop-home", "quickstart"].includes(requestedVariant)) {
-    throw new Error("usage: node website/scripts/capture-dashboard-ui.mjs [all|dark|light] [all|desktop-home|quickstart]");
+  if (!["all", "dark", "light"].includes(requestedTheme) || !["all", "desktop-home", "quickstart", "updates"].includes(requestedVariant)) {
+    throw new Error("usage: node website/scripts/capture-dashboard-ui.mjs [all|dark|light] [all|desktop-home|quickstart|updates]");
   }
   await mkdir(output, { recursive: true });
   await mkdir(docsOutput, { recursive: true });
@@ -563,12 +697,17 @@ async function main() {
     browser = await chromium.launch({ channel: "chrome", headless: true });
     for (const theme of requestedTheme === "all" ? ["dark", "light"] : [requestedTheme]) {
       if (requestedVariant === "quickstart") break;
-      await capture(browser, "desktop", { width: 1200, height: 750 }, theme, requestedVariant === "desktop-home" ? ["home"] : ["home", "install", "review"]);
+      if (requestedVariant === "updates") {
+        await capture(browser, "desktop", { width: 1200, height: 750 }, theme, ["updates"]);
+        await capture(browser, "mobile", { width: 390, height: 700 }, theme, ["updates"]);
+        continue;
+      }
+      await capture(browser, "desktop", { width: 1200, height: 750 }, theme, requestedVariant === "desktop-home" ? ["home"] : ["home", "install", "review", "updates"]);
       if (requestedVariant === "all") await capture(browser, "mobile", { width: 390, height: 700 }, theme);
     }
     // The docs show these in both locales and appearances, at a width where
     // the add page keeps its desktop layout.
-    if (requestedVariant !== "desktop-home") {
+    if (requestedVariant === "all" || requestedVariant === "quickstart") {
       for (const theme of requestedTheme === "all" ? ["light", "dark"] : [requestedTheme]) {
         for (const locale of ["ja-JP", "en-US"]) {
           await capture(browser, "desktop", { width: 1100, height: 900 }, theme, ["quickstart"], locale);

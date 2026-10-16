@@ -121,6 +121,9 @@ apply ごとの記録が日時つきで並び、使われている版に **現�
 apply では、前の版の **以前の状態に戻す** → **この状態に戻す** で、その版に戻す変更内容
 （plan）が作られます。手順 6 と同じく、内容を確認してから適用します。
 
+[![「更新」タブ。追跡するバージョン main と「変更を確認」ボタンの下の更新履歴に、「現在」の版と第1版が日時つきで並び、第1版の「以前の状態に戻す」を開くと「この状態に戻す」ボタンがある（もう一度 apply したあとの例）](/getting-started/quickstart-updates.png){.screenshot width=1640 height=1050}](/getting-started/quickstart-updates.png){.light-only}
+[![「更新」タブ。追跡するバージョン main と「変更を確認」ボタンの下の更新履歴に、「現在」の版と第1版が日時つきで並び、第1版の「以前の状態に戻す」を開くと「この状態に戻す」ボタンがある（もう一度 apply したあとの例）](/getting-started/quickstart-updates-dark.png){.screenshot width=1640 height=1050}](/getting-started/quickstart-updates-dark.png){.dark-only}
+
 plan と apply の Run は、右上の頭文字のアイコン（ユーザーメニュー）にある **デプロイ履歴**
 （`https://app.takosumi.test/runs`）に、**変更の確認**（plan）と **デプロイ**（apply）として
 新しい順に並びます。
