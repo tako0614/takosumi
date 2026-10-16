@@ -164,9 +164,12 @@ export default defineConfig({
     ["meta", { name: "twitter:card", content: "summary_large_image" }],
   ],
   transformPageData(pageData, { siteConfig }) {
-    if (pageData.frontmatter?.description) return;
+    // A frontmatter or head: description is already set; keep it.
+    if (pageData.description) return;
     const description = firstParagraph(siteConfig.srcDir, pageData.relativePath);
-    if (description) return { description };
+    // VitePress writes <meta name="description"> without escaping, so a
+    // straight double quote from the prose would end the attribute.
+    if (description) return { description: description.replace(/"/gu, "”") };
   },
   // `description` is the page's own, from transformPageData, when it has one.
   transformHead({ pageData, siteConfig, title, description }) {
