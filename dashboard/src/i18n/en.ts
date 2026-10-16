@@ -112,6 +112,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.reviewingHint": "Checking the changes before anything is deployed.",
   "installStore.reviewTitle": "Review before adding",
   "installStore.reviewHint": "These are the changes Takosumi will make.",
+  "installStore.reviewReady": "Ready to review",
   "installStore.changes": "Changes",
   "installStore.createCount": "Create",
   "installStore.updateCount": "Change",
