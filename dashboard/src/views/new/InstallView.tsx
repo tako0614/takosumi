@@ -635,17 +635,12 @@ function Inner(props: { readonly installingPrincipalId: string }) {
             destination: providerConnectionDisplayName(destination()),
           })}
         >
+          {/* Already decided, so plain text: a disabled select looked like a
+              choice that did nothing and cut long names at its chevron. */}
           <span>{t("installStore.destination")}</span>{" "}
-          <Select
-            aria-label={t("installStore.destination")}
-            value={destination().id}
-            disabled={true}
-            data-provider-connection-id={destination().id}
-          >
-            <option value={destination().id}>
-              {providerConnectionDisplayName(destination())}
-            </option>
-          </Select>
+          <strong class="iv-destination-name">
+            {providerConnectionDisplayName(destination())}
+          </strong>
         </div>
       )}
     </Show>
