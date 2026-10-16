@@ -200,8 +200,8 @@ const quickstartFlow = {
 const quickstartPath = `/install?git=${quickstartFlow.git}&ref=${quickstartFlow.ref}&path=${quickstartFlow.modulePath}`;
 
 // The workload page's 「更新」 tab after a few applies. Takos (the landing) has
-// three recorded versions; the Quickstart sample has two, as after one apply
-// and one re-apply with a changed input. Times, IDs and refs are placeholders.
+// three recorded versions; the Quickstart sample has two, as after one more
+// apply. Times, IDs and refs are placeholders.
 const updatesFlows = {
   takos: {
     capsuleId: "cap_demo_takos",
@@ -299,6 +299,11 @@ async function showUpdateHistory(page, flow) {
   }
   await rows.nth(1).locator("details > summary").click();
   await rows.nth(1).getByRole("button", { name: /^(この状態に戻す|Restore this state)$/u }).waitFor({ state: "visible" });
+  // The tracked ref and an enabled Review changes mean the install config loaded.
+  await page.locator("code", { hasText: flow.ref }).first().waitFor({ state: "visible" });
+  const review = page.getByRole("button", { name: /^(変更を確認|Review changes)$/u });
+  await review.waitFor({ state: "visible" });
+  if (!await review.isEnabled()) throw new Error("Review changes stayed disabled on the updates tab");
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
   return await page.locator(".tg-card").filter({ has: history }).first().evaluate((element) => {
     const rect = element.getBoundingClientRect();
@@ -437,6 +442,8 @@ async function capture(browser, variant, viewport, theme, screens = ["home", "in
     viewport,
     deviceScaleFactor: 2,
     locale,
+    // The update history shows times in the browser's zone; keep them stable.
+    timezoneId: "UTC",
     colorScheme: theme,
   });
   await context.addCookies([{
@@ -573,6 +580,9 @@ async function capture(browser, variant, viewport, theme, screens = ["home", "in
         if (variant === "desktop") {
           await page.setViewportSize({ width: viewport.width, height: Math.ceil(card.bottom + 32) });
           await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+        } else if (card.bottom > 860) {
+          // The landing crops the phone image at 780 / 1720 (.updates-shot).
+          throw new Error(`mobile update card ends at ${card.bottom}px, below the landing's crop`);
         }
       }
       if (!imagesLoaded || errors.length || failures.length || unexpectedRequests.length) {
@@ -671,7 +681,7 @@ async function captureQuickstart(page, locale, theme, assertClean) {
       const rect = link.parentElement.getBoundingClientRect();
       return { top: rect.top + window.scrollY };
     });
-    return { left: updateCard.left, right: updateCard.right, top: tabs.top - 16, bottom: updateCard.bottom + 16 };
+    return { left: updateCard.left - 16, right: updateCard.right + 16, top: tabs.top - 16, bottom: updateCard.bottom + 16 };
   });
 }
 

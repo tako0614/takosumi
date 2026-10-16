@@ -109,13 +109,15 @@ and its 「追加する」 button.
 
 The four `dashboard-updates-*` images, captured on 2026-10-16 from the dashboard
 source at `66f059361`, show the Takos workload page's 「更新」 tab. The script
-answers that page's reads in the browser (the workload, its install config and
-source, provider bindings, usage, the resource inventory, and three recorded
-state versions) and then opens 「更新履歴」 and the second version's
-「以前の状態に戻す」, as a reader would. The times, IDs and the tracked ref
+answers that tab's reads in the browser (the workload, its install config and
+source, usage, the resource inventory, and three recorded state versions; the
+fixture server's activity feed is empty and sits below the image) and then
+opens 「更新履歴」 and the second version's 「以前の状態に戻す」, as a reader
+would. Times are formatted in UTC. The times, IDs and the tracked ref
 `v0.12.7` are illustrative; the page shows only what those records contain, and
 nothing is restored or applied. The capture fails unless the history shows all
-three versions and the 「この状態に戻す」 button. Pressing that button in the
+three versions, the tracked ref and an enabled 「変更を確認」, and the
+「この状態に戻す」 button. Pressing that button in the
 real dashboard creates a plan back to that version, reviewed and applied like
 any other change.
 
@@ -179,7 +181,7 @@ capture fails unless each heading appears and the review shows 0, 0 and 0 with
 its 「追加する」 (Add) button.
 
 The step 7 image shows the same sample's 「更新」 / Updates tab, clipped from the
-tabs to the bottom of the update card. Its page reads are answered the same way
+tabs to just below the update card, with a 16px margin around the card. Its page reads are answered the same way
 as the landing's updates screen, with two recorded versions, as after one more
 apply of the sample; 「更新履歴」 and the first
 version's 「以前の状態に戻す」 are opened before the capture. The tracked ref is
@@ -187,5 +189,6 @@ the Quickstart link's `main`.
 
 The default run (`all`) rewrites these together with the website images. To
 refresh only these, run the script with `all quickstart` (or `light
-quickstart` / `dark quickstart`). If the image sizes change, update the
+quickstart` / `dark quickstart`); `all updates` refreshes only the landing's
+updates images. If the image sizes change, update the
 `width` and `height` attributes in both Quickstart pages to match.

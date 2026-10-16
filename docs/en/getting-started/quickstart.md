@@ -128,10 +128,11 @@ On the workload page that **Open service** opened, expand **Update history** on
 the **Updates** tab. It lists each apply with its time and marks the version in
 use as **Current**. After a later apply, **Restore a previous version** →
 **Restore this state** on an older entry creates the changes (a plan) that take
-the workload back to it; as in step 6, review them before they are applied.
+the workload back to that version's source; as in step 6, review them before
+they are applied.
 
-[![The Updates tab. Under the tracked version main and the Review changes button, Update history lists the Current version and Version 1 with their times; Restore a previous version on Version 1 is open and shows the Restore this state button (an example after a second apply)](/getting-started/quickstart-updates-en.png){.screenshot width=1640 height=1050}](/getting-started/quickstart-updates-en.png){.light-only}
-[![The Updates tab. Under the tracked version main and the Review changes button, Update history lists the Current version and Version 1 with their times; Restore a previous version on Version 1 is open and shows the Restore this state button (an example after a second apply)](/getting-started/quickstart-updates-en-dark.png){.screenshot width=1640 height=1050}](/getting-started/quickstart-updates-en-dark.png){.dark-only}
+[![The Updates tab. Under the tracked version main and the Review changes button, Update history lists the Current version and Version 1 with their times; Restore a previous version on Version 1 is open and shows the Restore this state button (an example after a second apply)](/getting-started/quickstart-updates-en.png){.screenshot width=1704 height=1050}](/getting-started/quickstart-updates-en.png){.light-only}
+[![The Updates tab. Under the tracked version main and the Review changes button, Update history lists the Current version and Version 1 with their times; Restore a previous version on Version 1 is open and shows the Restore this state button (an example after a second apply)](/getting-started/quickstart-updates-en-dark.png){.screenshot width=1704 height=1050}](/getting-started/quickstart-updates-en-dark.png){.dark-only}
 
 The plan and apply Runs are listed newest first, as **Review** (plan) and
 **Deploy** (apply), under **Deploy history** in the user menu behind your initial
