@@ -49,8 +49,8 @@ verify all three selections on the final website at desktop and mobile widths.
 
 ## Takosumi dashboard
 
-The twelve `dashboard-home-*`, `dashboard-install-*` and `dashboard-review-*`
-images capture this checkout's actual `dashboard` SPA,
+The sixteen `dashboard-home-*`, `dashboard-install-*`, `dashboard-review-*` and
+`dashboard-updates-*` images capture this checkout's actual `dashboard` SPA,
 built from source and served by the
 repository's portable browser fixture server. The Home and Store images were
 first captured on 2026-09-28; the review images are described below. The original dark images came from checkout
@@ -107,10 +107,26 @@ index and Worker upload that Takos performs in its own follow-up step are not
 part of this plan. The capture fails unless the screen shows those three counts
 and its 「追加する」 button.
 
+The four `dashboard-updates-*` images, captured on 2026-10-16 from the dashboard
+source at `66f059361`, show the Takos workload page's 「更新」 tab. The script
+answers that tab's reads in the browser (the workload, its install config and
+source, usage, the resource inventory, and three recorded state versions; the
+fixture server's activity feed is empty and sits below the image) and then
+opens 「更新履歴」 and the second version's 「以前の状態に戻す」, as a reader
+would. Times are formatted in UTC. The times, IDs and the tracked ref
+`v0.12.7` are illustrative; the page shows only what those records contain, and
+nothing is restored or applied. The capture fails unless the history shows all
+three versions, the tracked ref and an enabled 「変更を確認」, and the
+「この状態に戻す」 button, or if the phone image's update card would end below
+the landing's 780 / 1720 crop. Pressing that button in the
+real dashboard creates a plan back to that version's source, reviewed and
+applied like any other change.
+
 Desktop Home, Store and review use the complete 1200 × 750 viewport, with no
-screenshot clip. Mobile Home uses 390 × 700, and
-mobile Store and review use 390 × 950 so the first service card, or the change
-counts and 「追加する」, are readable.
+screenshot clip; desktop updates keeps the 1200px width and ends just below the
+update card. Mobile Home uses 390 × 700, and
+mobile Store, review and updates use 390 × 950 so the first service card, the
+change counts and 「追加する」, or the update history, are readable.
 All use device scale 2, Japanese locale, loaded UI fonts, and Noto Sans JP as the system
 Japanese fallback. The script seeds the dashboard's own `tg_theme` preference
 to match the browser color scheme and confirms the rendered `data-theme` before
@@ -138,10 +154,11 @@ site's `<picture>` sources follow the operating system appearance and viewport.
 
 ## Quickstart screens in the docs
 
-The twelve `docs/public/getting-started/quickstart-*.png` images, captured on
+The sixteen `docs/public/getting-started/quickstart-*.png` images, captured on
 2026-10-15 from the dashboard source at `d128a386f` (the four `quickstart-review*`
-images recaptured on 2026-10-16 from `9f6218bfd`, after #496), show the three screens
-that Quickstart step 6 describes, in Japanese and English and in
+images recaptured on 2026-10-16 from `9f6218bfd`, after #496, and the four
+`quickstart-updates*` images captured on 2026-10-16 from `66f059361`), show the
+three screens that Quickstart step 6 describes and the 「更新」 tab of step 7, in Japanese and English and in
 light and dark (`-en` and `-dark` suffixes). The same script opens the
 Quickstart's own link,
 `/install?git=https://github.com/tako0614/takosumi.git&ref=main&path=examples/opentofu-basic`,
@@ -160,11 +177,19 @@ What the screens show is derived from this repository rather than invented:
 
 The resolved commit, IDs and the 「デモ環境」 / "Demo workspace" name are
 placeholders; none of them appears in the images. The first image is the whole add page without the dashboard
-shell; the other two are clipped to the part of the card each step adds. The
+shell; the next two are clipped to the part of the card each step adds. The
 capture fails unless each heading appears and the review shows 0, 0 and 0 with
 its 「追加する」 (Add) button.
 
+The step 7 image shows the same sample's 「更新」 / Updates tab, clipped from the
+tabs to just below the update card, with a 16px margin around the card. Its page reads are answered the same way
+as the landing's updates screen, with two recorded versions, as after one more
+apply of the sample; 「更新履歴」 and the first
+version's 「以前の状態に戻す」 are opened before the capture. The tracked ref is
+the Quickstart link's `main`.
+
 The default run (`all`) rewrites these together with the website images. To
 refresh only these, run the script with `all quickstart` (or `light
-quickstart` / `dark quickstart`). If the image sizes change, update the
+quickstart` / `dark quickstart`); `all updates` refreshes only the landing's
+updates images. If the image sizes change, update the
 `width` and `height` attributes in both Quickstart pages to match.

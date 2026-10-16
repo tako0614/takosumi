@@ -150,9 +150,13 @@ export default function Home() {
           </div>
           <div class="after-steps">
             <div><h3>危ない更新は止まる</h3><p>新しい版への更新でも自動更新でも、作り直しや削除を含む変更は、確認するまで反映されません。</p></div>
-            <div><h3>何が起きたかを残す</h3><p>どの commit を誰が反映し、何が変わったかを履歴に残します。</p></div>
+            <div><h3>何が起きたかを残す</h3><p>どの commit を誰が反映し、何が変わったかを履歴に残します。前の版に戻すときも、戻す変更を確認してから反映します。</p></div>
             <div><h3>鍵は読み出せない形で</h3><p>接続の API token は書き込み専用で保存され、変更の確認や反映を実行している間だけ、その処理に渡されます。</p></div>
           </div>
+          <figure class="after-product">
+            <DashboardShot capture={DASHBOARD_CAPTURES.updates} alt="Takos の「更新」タブ。追跡するバージョン v0.12.7 と「変更を確認」ボタンの下の更新履歴に、現在の版、第2版、第1版が日時つきで並び、第2版には「この状態に戻す」ボタンがある" class="updates-shot" />
+            <figcaption>アプリの「更新」タブ。反映した版が並び、前の版にはそこへ戻す操作がある（Takosumi ダッシュボードを公開用デモデータで撮影）</figcaption>
+          </figure>
         </section>
 
         <section class="closing-section" aria-labelledby="closing-title">
