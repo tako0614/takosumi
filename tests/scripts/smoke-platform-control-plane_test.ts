@@ -617,15 +617,18 @@ test("Interface retirement accepts only explicit 404 and fails closed on transpo
   })).rejects.toThrow("retirement is inconclusive");
   expect(oversizedCancelled).toBe(true);
 
+  // HTTP status assertions use the verifier's ordinary transport budget.
+  // Keep the 10ms override above only for intentional transport failures.
+  const responseRetry = { maxAttempts: retry.maxAttempts, sleep: retry.sleep };
   for (const status of [200, 401, 410, 500]) {
     await expect(verifyInterfaceEndpointRetired(endpoint, {
-      ...retry,
+      ...responseRetry,
       resolver: resolvePublicDns,
       connector: async () => new Response("not a contract absence", { status }),
     })).rejects.toThrow("did not return contract 404");
   }
   await expect(verifyInterfaceEndpointRetired(endpoint, {
-    ...retry,
+    ...responseRetry,
     resolver: resolvePublicDns,
     connector: async () => new Response("gone", { status: 404 }),
   })).resolves.toBe(true);

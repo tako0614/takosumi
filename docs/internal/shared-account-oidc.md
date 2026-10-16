@@ -385,6 +385,78 @@ there is no new event, command or identity recipe on retry. A new identity proof
 requires exact acknowledgements for all four current parents and every original
 receiver/target. Its response contains only an opaque proof reference. The
 proof is not a payer grant, Customer admission or provider-dispatch approval.
+
+The explicit private `prepareFinancialIdentityProofSource({accessToken,
+challengeRef})` path commits or reuses those four parent originals under the
+same current grant, C0 challenge, canonical Control snapshot, one-use checkpoint
+and store predicates as proof enrollment. It then checks the exact persisted
+raw event, predecessor, materialization and current head for each parent before
+returning their first-event source keys and materializations. It does not need
+receiver callbacks or ACKs and does not issue a proof. Its detached result
+contains the Accounts registration, four slot-labelled originals and a current
+Control source pointer. The pointer can have a null event at genesis and is
+never an installable Control materialization. Neither result is an M command,
+source qualification, payer decision or complete-role census. Parent scopes,
+SID, bearer/token hash and private raw causes are not exported.
+
+`preparePendingFinancialSourceOriginals({after?,limit})` is a separate bounded
+historical pending page. It uses durable original registration/raw/materialization
+custody, including full raw comparison on Memory, and can run after the token
+expires. It never reauthenticates, enrolls a new parent, delivers to a receiver
+or issues a proof. Its cursor only schedules another read, and a partial page
+never establishes complete source coverage. Both paths can export only an
+actual sequence-one event with the registered genesis; a later head cannot be
+adopted directly as a new Financial M bootstrap.
+
+The Control adapter's private `prepareOriginalFinancialControlSource` instead
+captures on the same canonical Core facade, compares the expected source
+pointer, reads the actual first raw event and stored materialization, recomputes
+its digest, asserts the captured original remains current, and rereads the head,
+raw and materialization. Null genesis and unsupported later sequences return
+`source_pending`; it does not synthesize a genesis or promote its WeakMap guard
+to Financial source authority. Root and Financial still own their exact source,
+peer/key, schema digest, realm/Clock and command refs. A lost or unknown external
+M result needs a GET-only read of its original Financial command; the current
+public Financial M install surface does not supply that read, so this Accounts
+data preparation alone is not paired M or live readiness.
+
+For the actual Control first event before receiver ACK,
+`prepareInitialFinancialControlSourceOriginal({workspaceId})` is a separate
+historical data path on the same canonical facade. It reads the enrolled open
+head and the real `afterSequence:0, limit:1` raw event, verifies sequence one,
+null predecessor and genesis, then validates an existing full materialization
+or commits it once through Core's captured-head CAS. A lost CAS reply is resolved
+by reading that same event; replay never writes it against a later head. Final
+head/raw/materialization reads permit only the materialization progress caused
+by that CAS. This path has no actor or grant input and calls no receiver, ACK,
+proof or M operation. It is source data for Root's separately qualified caller,
+not current permission. The existing capture/proof route still requires its
+original complete receiver ACKs. A Control head at sequence zero has no event
+to export, and a later head is not a sequence-one bootstrap; both remain
+`source_pending` without a manufactured event or genesis.
+
+For a Control head already beyond sequence one, the private
+`prepareHistoricalFinancialControlSourceOriginals({workspaceId,
+afterSequence,limit})` reads one actual bounded page of the same Core history.
+It accepts at most 64 originals per call, checks the full registered head,
+raw predecessor link and stored materializations, and materializes a missing
+contiguous original through one captured-head Core CAS. A lost CAS response is
+resolved by GET of that exact event; an existing original is read before any
+write. The final full head, bounded raw page and each returned materialization
+are reread. It returns detached source keys, event refs and canonical
+materializations, never raw private payloads, a token, actor or permission
+ticket. A closed head can supply historical close data but never fresh payer
+admission. The initial and current Control readers keep their sequence-one
+and receiver-ACK guards.
+
+The page cursor and `pageReachedObservedHead` describe only this call's
+observed head. Root must retain and compare the original registration and
+event digests from sequence one across pages, and independently qualify the
+actual actor, source binding and current head before admission. This method
+does not call a receiver, ACK, proof or Financial M, and cannot install a
+genesis-only sequence-zero source. Financial still owns unknown-result M
+readback and the separate genesis-only contract.
+
 The existing `prove({accessToken,challengeRef}) -> {proofRef}` operation is
 idempotent for the same **original request**, rather than for every request with
 the same challenge. New issuers derive an opaque custody locator as `afp_`
