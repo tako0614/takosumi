@@ -299,13 +299,13 @@ async function showUpdateHistory(page, flow) {
   }
   await rows.nth(1).locator("details > summary").click();
   await rows.nth(1).getByRole("button", { name: /^(この状態に戻す|Restore this state)$/u }).waitFor({ state: "visible" });
-  // The tracked ref and an enabled Review changes mean the install config loaded.
-  await page.locator("code", { hasText: flow.ref }).first().waitFor({ state: "visible" });
-  const review = page.getByRole("button", { name: /^(変更を確認|Review changes)$/u });
-  await review.waitFor({ state: "visible" });
-  if (!await review.isEnabled()) throw new Error("Review changes stayed disabled on the updates tab");
+  // The tracked ref comes from the source record; Review changes only becomes
+  // enabled once the install config has loaded.
+  const card = page.locator(".tg-card").filter({ has: history }).first();
+  await card.locator("code").filter({ hasText: new RegExp(`^${flow.ref.replaceAll(".", "\\.")}$`, "u") }).first().waitFor({ state: "visible" });
+  await card.locator("button:enabled").filter({ hasText: /^(変更を確認|Review changes)$/u }).first().waitFor({ state: "visible" });
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
-  return await page.locator(".tg-card").filter({ has: history }).first().evaluate((element) => {
+  return await card.evaluate((element) => {
     const rect = element.getBoundingClientRect();
     return { left: rect.left, right: rect.right, top: rect.top + window.scrollY, bottom: rect.bottom + window.scrollY };
   });

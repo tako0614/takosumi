@@ -117,9 +117,10 @@ would. Times are formatted in UTC. The times, IDs and the tracked ref
 `v0.12.7` are illustrative; the page shows only what those records contain, and
 nothing is restored or applied. The capture fails unless the history shows all
 three versions, the tracked ref and an enabled 「変更を確認」, and the
-「この状態に戻す」 button. Pressing that button in the
-real dashboard creates a plan back to that version, reviewed and applied like
-any other change.
+「この状態に戻す」 button, or if the phone image's update card would end below
+the landing's 780 / 1720 crop. Pressing that button in the
+real dashboard creates a plan back to that version's source, reviewed and
+applied like any other change.
 
 Desktop Home, Store and review use the complete 1200 × 750 viewport, with no
 screenshot clip; desktop updates keeps the 1200px width and ends just below the
