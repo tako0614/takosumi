@@ -82,7 +82,8 @@ requests, and missing product cards fail the capture.
 The four `dashboard-review-*` images, captured on 2026-10-15 from the dashboard
 source at `d128a386f` (after #493 fixed the 「ホスト / アカウント」 row) and
 recaptured on 2026-10-16 from `9f6218bfd` (after #496 changed the review's badge
-from 「成功」 to 「確認できます」), show the
+from 「成功」 to 「確認できます」) and again from `245a524a1` (which shows the
+auto-selected 「ホスト / アカウント」 as text instead of a disabled select), show the
 add flow's 「追加前の確認」 screen for Takos, reached by opening `/new` with an
 example Git URL and pressing 「追加」 in the real dashboard. For this screen and
 the Quickstart screens, the script answers the add flow's API calls in the

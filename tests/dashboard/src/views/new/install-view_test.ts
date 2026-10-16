@@ -596,6 +596,13 @@ describe("single-screen install surface", () => {
     expect(view).toContain("providerConnectionDisplayName(destination())");
     expect(view).toContain("setAutoSelectedProviderRows");
     expect(view).toContain("setAutoSelectedProviderRows(new Set<string>());");
+    // The decided destination reads as text, not as a disabled select.
+    const summary = view.slice(
+      view.indexOf("const autoSelectedDestinationSummary"),
+      view.indexOf("const providerConnectionSetupRequired"),
+    );
+    expect(summary).toContain('class="iv-destination-name"');
+    expect(summary).not.toContain("<Select");
   });
 
   test("makes the provider/module then Host/account boundary explicit", () => {

@@ -20,13 +20,13 @@ function firstParagraph(srcDir: string, relativePath: string): string | undefine
 }
 
 const jaNav: DefaultTheme.NavItem[] = [
-  { text: "Takosumi", link: "/" },
-  { text: "Pricing", link: "/pricing" },
-  { text: "Resources", link: "/resources" },
-  { text: "Endpoints", link: "/endpoints" },
-  { text: "Support", link: "/support" },
+  { text: "概要", link: "/" },
+  { text: "料金", link: "/pricing" },
+  { text: "リソース", link: "/resources" },
+  { text: "エンドポイント", link: "/endpoints" },
+  { text: "サポート", link: "/support" },
   { text: "SLA", link: "/sla" },
-  { text: "Software docs", link: "https://takosumi.com/docs/" },
+  { text: "ソフトウェアのドキュメント", link: "https://takosumi.com/docs/" },
 ];
 
 const enNav: DefaultTheme.NavItem[] = [
@@ -44,11 +44,11 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
     {
       text: "Takosumi hosted service",
       items: [
-        { text: "Overview", link: "/" },
-        { text: "Pricing", link: "/pricing" },
-        { text: "Resources", link: "/resources" },
-        { text: "Endpoints", link: "/endpoints" },
-        { text: "Support", link: "/support" },
+        { text: "概要", link: "/" },
+        { text: "料金", link: "/pricing" },
+        { text: "リソース", link: "/resources" },
+        { text: "エンドポイント", link: "/endpoints" },
+        { text: "サポート", link: "/support" },
         { text: "SLA", link: "/sla" },
       ],
     },

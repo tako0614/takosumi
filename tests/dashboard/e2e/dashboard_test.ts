@@ -2485,8 +2485,9 @@ test.describe("Takosumi dashboard browser surface", () => {
     const errors = pageErrors(page);
     const traffic = monitorDashboardTraffic(page, mode);
     await page.setViewportSize({ width: 390, height: 844 });
+    const longName = "Cloudflare (direct) production account for the example team";
     const state = await stubProviderDestinationFixture(page, [
-      PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1]!,
+      { ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1]!, displayName: longName },
     ]);
     const query = new URLSearchParams({
       git: "https://github.com/example/cloudflare-service.git",
@@ -2507,8 +2508,12 @@ test.describe("Takosumi dashboard browser surface", () => {
       "data-provider-connection-id",
       "pc_cloudflare_direct",
     );
-    // A squeezed flex label used to stack one character per line, with the
-    // select pushed past the row's right edge.
+    // The choice is already made: plain text, not a disabled select.
+    await expect(destination.locator("select, [role=combobox]")).toHaveCount(0);
+    await expect(destination).toContainText(/ホスト \/ アカウント|Host \/ account/u);
+    await expect(destination.locator(".iv-destination-name")).toHaveText(longName);
+    // A squeezed flex label used to stack one character per line; a long name
+    // has to wrap inside the row rather than be cut off.
     for (const width of [390, 320]) {
       await page.setViewportSize({ width, height: 844 });
       const geometry = await destination.evaluate((row) => {
@@ -2521,7 +2526,7 @@ test.describe("Takosumi dashboard browser surface", () => {
             right: outer.right - Number.parseFloat(style.borderRightWidth) - Number.parseFloat(style.paddingRight),
           },
           label: label.getBoundingClientRect().toJSON() as DOMRect,
-          select: row.querySelector("select")!.getBoundingClientRect().toJSON() as DOMRect,
+          name: row.querySelector(".iv-destination-name")!.getBoundingClientRect().toJSON() as DOMRect,
           fontSize: Number.parseFloat(getComputedStyle(label).fontSize),
           pageFits: document.documentElement.scrollWidth <= window.innerWidth,
         };
@@ -2529,12 +2534,15 @@ test.describe("Takosumi dashboard browser surface", () => {
       expect(geometry.label.height, `label is one line at ${width}px`).toBeLessThan(geometry.fontSize * 2);
       for (const [name, box] of [
         ["label", geometry.label],
-        ["select", geometry.select],
+        ["name", geometry.name],
       ] as const) {
         expect(box.left, `${name} starts inside the row at ${width}px`).toBeGreaterThanOrEqual(geometry.content.left);
         expect(box.right, `${name} ends inside the row at ${width}px`).toBeLessThanOrEqual(geometry.content.right);
       }
       expect(geometry.pageFits, `page fits ${width}px`).toBe(true);
+      if (width === 320) {
+        expect(geometry.name.height, "the long name wraps at 320px").toBeGreaterThan(geometry.fontSize * 2);
+      }
     }
     expect(state.mutations.some((entry) => /apply|approve/u.test(entry))).toBe(false);
     expectSingleSourceCreate(state);
