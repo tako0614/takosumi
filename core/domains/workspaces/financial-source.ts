@@ -96,6 +96,28 @@ export interface WorkspaceFinancialSourceSnapshot {
   readonly head: WorkspaceFinancialSourceHead;
 }
 
+/** Historical custody only. This is not a current head, actor grant or ACK. */
+export interface WorkspaceFinancialEnrollmentOriginal {
+  readonly workspaceId: string;
+  readonly sourceRef: string;
+  readonly incarnation: string;
+  readonly registrationJson: string;
+  readonly enrollmentJson: string;
+  readonly identityJson: string;
+  readonly enrolledAt: string;
+}
+
+export type WorkspaceFinancialEnrollmentOriginalQuery = Pick<
+  WorkspaceFinancialEnrollmentOriginal, "workspaceId" | "sourceRef" | "incarnation"
+>;
+
+export class WorkspaceFinancialOriginalReadError extends Error {
+  constructor(readonly code: "invalid_request" | "conflict" | "unavailable") {
+    super(`Workspace financial original ${code}`);
+    this.name = "WorkspaceFinancialOriginalReadError";
+  }
+}
+
 export interface WorkspaceFinancialSourceStore {
   /** All enrollment predicates and the original census are rechecked INSIDE
    * the head insert transaction. Unknown ACK retries this exact registration. */
@@ -106,6 +128,9 @@ export interface WorkspaceFinancialSourceStore {
     readonly enrolledAt: string;
   }): Promise<WorkspaceFinancialSourceHead | undefined>;
   getWorkspaceFinancialSourceHead(workspaceId: string): Promise<WorkspaceFinancialSourceHead | undefined>;
+  readWorkspaceFinancialEnrollmentOriginal(
+    input: WorkspaceFinancialEnrollmentOriginalQuery,
+  ): Promise<WorkspaceFinancialEnrollmentOriginal | undefined>;
   /** One current primary snapshot, including actual active membership and
    * complete enrolled receiver acknowledgement; missing/pending denies. */
   captureWorkspaceFinancialSourceSnapshot(input: {
@@ -162,6 +187,101 @@ export function workspaceFinancialRegistration(input: WorkspaceFinancialRegistra
     throw new TypeError("Distinct original receiver set required");
   return { sourceRef: input.sourceRef, incarnation: input.incarnation, genesisDigest: input.genesisDigest,
     requiredReceivers: result };
+}
+
+/** Snapshot all three own data properties before the first await. A caller's
+ * DTO never supplies any returned enrollment fact or a currentness claim. */
+function originalQuery(input: WorkspaceFinancialEnrollmentOriginalQuery): WorkspaceFinancialEnrollmentOriginalQuery {
+  try {
+    if (!input || typeof input !== "object" || Object.getPrototypeOf(input) !== Object.prototype ||
+      !sameKeys(input, ["workspaceId", "sourceRef", "incarnation"]))
+      throw new Error();
+    const values = ["workspaceId", "sourceRef", "incarnation"].map((key) => {
+      const descriptor = Object.getOwnPropertyDescriptor(input, key);
+      if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "string") throw new Error();
+      return workspaceFinancialReference(descriptor.value);
+    });
+    if (values[1]!.length > 220) throw new Error();
+    return { workspaceId: values[0]!, sourceRef: values[1]!, incarnation: values[2]! };
+  } catch {
+    throw new WorkspaceFinancialOriginalReadError("invalid_request");
+  }
+}
+
+function sameKeys(value: object, keys: readonly string[]): boolean {
+  const actual = Reflect.ownKeys(value);
+  return actual.length === keys.length && keys.every((key) => actual.includes(key));
+}
+
+function originalJson(value: unknown, maximumBytes: number): unknown {
+  if (typeof value !== "string" || new TextEncoder().encode(value).length > maximumBytes) throw new Error();
+  const parsed: unknown = JSON.parse(value);
+  // The actual enrollment writer stores JSON.stringify bytes. Reject changed
+  // whitespace, duplicate keys and non-writer serialization rather than
+  // silently manufacturing a different Financial original.
+  if (JSON.stringify(parsed) !== value) throw new Error();
+  return parsed;
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
+}
+
+/** Validate actual retained bytes and their immutable identity, without
+ * consulting live Workspace, membership, management or current source head. */
+function retainedOriginal(raw: WorkspaceFinancialEnrollmentOriginal): WorkspaceFinancialEnrollmentOriginal {
+  try {
+    const registrationValue = originalJson(raw.registrationJson, 16_384);
+    const enrollmentValue = originalJson(raw.enrollmentJson, 262_144);
+    if (!record(registrationValue) || !sameKeys(registrationValue,
+      ["sourceRef", "incarnation", "genesisDigest", "requiredReceivers"]) ||
+      !Array.isArray(registrationValue.requiredReceivers) ||
+      !registrationValue.requiredReceivers.every((receiver: unknown) =>
+        record(receiver) && sameKeys(receiver, ["receiverRef", "targetRef"])) ||
+      !record(enrollmentValue) || !sameKeys(enrollmentValue,
+        ["workspace", "management", "binding", "members"]) ||
+      !record(enrollmentValue.workspace) || !record(enrollmentValue.management) ||
+      !record(enrollmentValue.binding) || !Array.isArray(enrollmentValue.members)) throw new Error();
+    const registration = workspaceFinancialRegistration(registrationValue as unknown as WorkspaceFinancialRegistration);
+    const enrollment = enrollmentValue as unknown as WorkspaceFinancialEnrollmentCandidate;
+    if (!candidateAllowed(enrollment) ||
+      !enrollment.members.every((member) => record(member) &&
+        typeof member.id === "string" && typeof member.accountId === "string" &&
+        typeof member.createdAt === "string" && typeof member.updatedAt === "string" &&
+        (member.status === "active" || member.status === "invited" || member.status === "suspended") &&
+        Array.isArray(member.roles) && member.roles.every((role) =>
+          role === "owner" || role === "admin" || role === "member" || role === "viewer")) ||
+      new Set(enrollment.members.map((member) => member.accountId)).size !== enrollment.members.length ||
+      enrollment.workspace.id !== raw.workspaceId ||
+      enrollment.management.workspaceId !== raw.workspaceId ||
+      enrollment.binding.workspaceId !== raw.workspaceId ||
+      typeof enrollment.workspace.createdAt !== "string" ||
+      enrollment.binding.workspaceCreatedAt !== enrollment.workspace.createdAt ||
+      !Number.isSafeInteger(enrollment.management.managementEpoch) ||
+      enrollment.management.managementEpoch < 0 ||
+      !Number.isSafeInteger(enrollment.binding.managementEpoch) ||
+      enrollment.binding.managementEpoch < 0 ||
+      typeof enrollment.binding.billingAuthority !== "string" ||
+      typeof enrollment.binding.actorAccountId !== "string" ||
+      typeof enrollment.binding.ownerAcknowledgementRef !== "string" ||
+      typeof enrollment.binding.boundAt !== "string" ||
+      typeof enrollment.binding.organizationRef !== "string" ||
+      typeof enrollment.binding.workspaceRef !== "string" ||
+      typeof enrollment.binding.intentId !== "string" ||
+      registration.sourceRef !== raw.sourceRef || registration.incarnation !== raw.incarnation ||
+      JSON.stringify(registration) !== raw.registrationJson ||
+      typeof raw.enrolledAt !== "string" || raw.enrolledAt.length > 35 ||
+      !raw.enrolledAt.endsWith("Z") || new Date(raw.enrolledAt).toISOString() !== raw.enrolledAt) throw new Error();
+    const identity = headIdentity(newHead(enrollment, registration, raw.enrolledAt));
+    if (typeof raw.identityJson !== "string" ||
+      new TextEncoder().encode(raw.identityJson).length > 262_144 ||
+      raw.identityJson !== identity) throw new Error();
+    return { workspaceId: raw.workspaceId, sourceRef: raw.sourceRef, incarnation: raw.incarnation,
+      registrationJson: raw.registrationJson, enrollmentJson: raw.enrollmentJson,
+      identityJson: raw.identityJson, enrolledAt: raw.enrolledAt };
+  } catch {
+    throw new WorkspaceFinancialOriginalReadError("unavailable");
+  }
 }
 
 export interface WorkspaceFinancialMaterializationInput {
@@ -226,6 +346,37 @@ export class MemoryWorkspaceFinancialSource {
     const head = newHead(input.original, registration, input.enrolledAt);
     this.enrollments.set(head.workspaceId, copy(input.original)); this.heads.set(head.workspaceId, head);
     return copy(head);
+  }
+
+  readOriginal(input: WorkspaceFinancialEnrollmentOriginalQuery): WorkspaceFinancialEnrollmentOriginal | undefined {
+    input = originalQuery(input);
+    let head: WorkspaceFinancialSourceHead | undefined;
+    for (const candidate of this.heads.values()) {
+      if (candidate.workspaceId !== input.workspaceId && candidate.sourceRef !== input.sourceRef) continue;
+      if (head) throw new WorkspaceFinancialOriginalReadError("conflict");
+      head = candidate;
+    }
+    if (!head) {
+      if (this.enrollments.has(input.workspaceId)) throw new WorkspaceFinancialOriginalReadError("unavailable");
+      return undefined;
+    }
+    if (head.workspaceId !== input.workspaceId || head.sourceRef !== input.sourceRef ||
+      head.incarnation !== input.incarnation) throw new WorkspaceFinancialOriginalReadError("conflict");
+    const enrollment = this.enrollments.get(head.workspaceId);
+    if (!enrollment) throw new WorkspaceFinancialOriginalReadError("unavailable");
+    try {
+      const registration: WorkspaceFinancialRegistration = {
+        sourceRef: head.sourceRef, incarnation: head.incarnation,
+        genesisDigest: head.genesisDigest, requiredReceivers: head.requiredReceivers,
+      };
+      const result = retainedOriginal({ workspaceId: head.workspaceId, sourceRef: head.sourceRef,
+        incarnation: head.incarnation, registrationJson: JSON.stringify(registration),
+        enrollmentJson: JSON.stringify(enrollment), identityJson: headIdentity(head),
+        enrolledAt: head.enrolledAt });
+      return copy(result);
+    } catch {
+      throw new WorkspaceFinancialOriginalReadError("unavailable");
+    }
   }
 
   record(workspaceId: string, kind: WorkspaceFinancialRawEventKind, before: unknown, after: unknown,
@@ -358,6 +509,36 @@ export class SqlWorkspaceFinancialSource implements WorkspaceFinancialSourceStor
     const row = (await this.port.query(`select * from ${this.table("workspace_financial_sources")} where workspace_id=?`,[workspaceId]))[0];
     return row ? this.head(row) : undefined;
   }
+  async readWorkspaceFinancialEnrollmentOriginal(input: WorkspaceFinancialEnrollmentOriginalQuery) {
+    const query = originalQuery(input);
+    let rows: readonly Record<string, unknown>[];
+    try {
+      rows = await this.port.query(`select workspace_id,source_ref,incarnation,registration_json,enrollment_json,identity_json,enrolled_at
+        from ${this.table("workspace_financial_sources")} where workspace_id=? or source_ref=? limit 3`,
+        [query.workspaceId, query.sourceRef]);
+    } catch {
+      throw new WorkspaceFinancialOriginalReadError("unavailable");
+    }
+    if (!Array.isArray(rows) || rows.length > 2) throw new WorkspaceFinancialOriginalReadError("unavailable");
+    if (rows.length === 0) return undefined;
+    if (rows.length !== 1) throw new WorkspaceFinancialOriginalReadError("conflict");
+    try {
+      const row = rows[0]!;
+      if (typeof row.workspace_id !== "string" || typeof row.source_ref !== "string" ||
+        typeof row.incarnation !== "string" || typeof row.registration_json !== "string" ||
+        typeof row.enrollment_json !== "string" || typeof row.identity_json !== "string" ||
+        typeof row.enrolled_at !== "string") throw new WorkspaceFinancialOriginalReadError("unavailable");
+      if (row.workspace_id !== query.workspaceId || row.source_ref !== query.sourceRef ||
+        row.incarnation !== query.incarnation) throw new WorkspaceFinancialOriginalReadError("conflict");
+      return retainedOriginal({ workspaceId: query.workspaceId, sourceRef: query.sourceRef,
+        incarnation: query.incarnation, registrationJson: row.registration_json,
+        enrollmentJson: row.enrollment_json, identityJson: row.identity_json,
+        enrolledAt: row.enrolled_at });
+    } catch (error) {
+      if (error instanceof WorkspaceFinancialOriginalReadError) throw error;
+      throw new WorkspaceFinancialOriginalReadError("unavailable");
+    }
+  }
   async captureWorkspaceFinancialSourceSnapshot(input: { workspaceId:string;actorAccountId:string }) {
     const pg=this.port.dialect==="postgres",w=pg?"w.space_json":"w.record_json",m=pg?"m.member_json":"m.record_json";
     const receiver = pg ? "jsonb_array_elements(h.registration_json::jsonb -> 'requiredReceivers') receiver" : "json_each(h.registration_json, '$.requiredReceivers') receiver";
@@ -461,6 +642,11 @@ export class WorkspaceFinancialSourceService {
   readHead(workspaceId: string) {
     workspaceFinancialReference(workspaceId);
     return this.store.getWorkspaceFinancialSourceHead(workspaceId);
+  }
+
+  /** GET-only historical original. No Clock, reenrollment or currentness. */
+  readEnrollmentOriginal(input: WorkspaceFinancialEnrollmentOriginalQuery) {
+    return this.store.readWorkspaceFinancialEnrollmentOriginal(originalQuery(input));
   }
 
   captureFinancialSourceSnapshot(input: { readonly workspaceId: string; readonly actorAccountId: string }) {

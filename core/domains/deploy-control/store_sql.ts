@@ -1870,6 +1870,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   prepareWorkspaceFinancialEnrollment(...args:Parameters<WorkspaceFinancialSourceStore["prepareWorkspaceFinancialEnrollment"]>){return this.#financialSourceStore().prepareWorkspaceFinancialEnrollment(...args);}
   enrollWorkspaceFinancialSource(...args:Parameters<WorkspaceFinancialSourceStore["enrollWorkspaceFinancialSource"]>){return this.#financialSourceStore().enrollWorkspaceFinancialSource(...args);}
   getWorkspaceFinancialSourceHead(...args:Parameters<WorkspaceFinancialSourceStore["getWorkspaceFinancialSourceHead"]>){return this.#financialSourceStore().getWorkspaceFinancialSourceHead(...args);}
+  readWorkspaceFinancialEnrollmentOriginal(...args:Parameters<WorkspaceFinancialSourceStore["readWorkspaceFinancialEnrollmentOriginal"]>){return this.#financialSourceStore().readWorkspaceFinancialEnrollmentOriginal(...args);}
   captureWorkspaceFinancialSourceSnapshot(...args:Parameters<WorkspaceFinancialSourceStore["captureWorkspaceFinancialSourceSnapshot"]>){return this.#financialSourceStore().captureWorkspaceFinancialSourceSnapshot(...args);}
   listWorkspaceFinancialRawEvents(...args:Parameters<WorkspaceFinancialSourceStore["listWorkspaceFinancialRawEvents"]>){return this.#financialSourceStore().listWorkspaceFinancialRawEvents(...args);}
   getWorkspaceFinancialMaterialization(...args:Parameters<WorkspaceFinancialSourceStore["getWorkspaceFinancialMaterialization"]>){return this.#financialSourceStore().getWorkspaceFinancialMaterialization(...args);}

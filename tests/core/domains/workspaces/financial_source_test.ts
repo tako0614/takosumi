@@ -7,6 +7,14 @@ import { createD1InterfaceStores } from "../../../../core/domains/interfaces/d1_
 import { expect, test } from "bun:test";
 import { Miniflare } from "miniflare";
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
+import type { D1Database, D1PreparedStatement, D1Result } from "../../../../worker/src/bindings.ts";
+import {
+  SqlWorkspaceFinancialSource,
+  WorkspaceFinancialOriginalReadError,
+  WorkspaceFinancialSourceService,
+  type FinancialSourceSqlPort,
+  type WorkspaceFinancialEnrollmentOriginal,
+} from "../../../../core/domains/workspaces/financial-source.ts";
 import {
   InMemoryOpenTofuControlStore,
   type OpenTofuControlStore,
@@ -129,6 +137,198 @@ function receipt(input:Awaited<ReturnType<typeof materialization>>,receiverRef:s
     receiverRef,targetRef,digest:m.digest,receiptRef:`retained_receipt_${receiverRef}_${m.permissionSequence}`,
     receiptJson:JSON.stringify({fixture:"actual-local-validated-receipt-port",eventRef:m.eventRef,digest:m.digest})};
 }
+
+type OriginalD1ResultMode = "actual" | "failed" | "missing-results" | "missing-success" | "null-results";
+function guardedOriginalD1(base:D1Database, mode:OriginalD1ResultMode="actual") {
+  const counts={mutatingPrepares:0,runs:0,batches:0,originalReads:0};
+  const wrap=(inner:D1PreparedStatement,sql:string):D1PreparedStatement=>({
+    bind(...values){return wrap(inner.bind(...values),sql);},
+    first<T>(){return inner.first<T>();},
+    async all<T>(){
+      if(sql.includes("from workspace_financial_sources where workspace_id=? or source_ref=? limit 3")){
+        counts.originalReads++;
+        if(mode==="failed")return {success:false,results:[]} as D1Result<T>;
+        if(mode==="missing-results")return {success:true} as D1Result<T>;
+        if(mode==="missing-success")return {results:[]} as D1Result<T>;
+        if(mode==="null-results")return {success:true,results:null} as unknown as D1Result<T>;
+      }
+      return inner.all<T>();
+    },
+    async run<T>(){counts.runs++;throw new Error("historical read called D1 run");},
+  });
+  const db:D1Database={
+    prepare(sql){
+      if(/^\s*(?:create|alter|drop|insert|update|delete|replace|vacuum|attach|detach|reindex|begin|commit|rollback)\b/iu.test(sql)||
+        /^\s*pragma\s+\w+\s*=/iu.test(sql)){
+        counts.mutatingPrepares++;throw new Error("historical read prepared a mutation");
+      }
+      return wrap(base.prepare(sql),sql);
+    },
+    async batch<T>(_statements:readonly D1PreparedStatement[]):Promise<readonly D1Result<T>[]> {
+      counts.batches++;throw new Error("historical read called D1 batch");
+    },
+  };
+  return {db,counts};
+}
+
+test("retained seq0 enrollment original is exact across memory, PGlite and native D1 after advance and closure", async () => {
+  const f = await adapters();
+  try {
+    const originals: WorkspaceFinancialEnrollmentOriginal[] = [];
+    for (const { label, store } of f.rows) {
+      // Each backend must return its own writer's exact retained bytes; SQL
+      // JSON aggregation may choose a different object key order from Memory.
+      const c = await enrolled(store, "retained_original");
+      const reader = new WorkspaceFinancialSourceService(store, () => {
+        throw new Error("read called Clock");
+      });
+      const query = { workspaceId: c.workspace.id, sourceRef: c.registration.sourceRef,
+        incarnation: c.registration.incarnation };
+      expect(c.head.permissionSequence, label).toBe(0);
+      const first = await reader.readEnrollmentOriginal(query);
+      expect(first, label).toBeDefined();
+      expect(first, label).toMatchObject(query);
+      expect(first!.registrationJson, label).toBe(JSON.stringify(c.registration));
+      expect(first!.enrollmentJson, label).toBe(JSON.stringify(c.original));
+      expect(JSON.parse(first!.identityJson), label).toMatchObject({
+        workspaceId: c.workspace.id, workspaceCreatedAt: c.workspace.createdAt,
+        sourceRef: c.registration.sourceRef, incarnation: c.registration.incarnation,
+        genesisDigest: c.registration.genesisDigest, requiredReceivers: c.registration.requiredReceivers,
+        bindingJson: JSON.stringify(c.original.binding), enrolledAt: c.head.enrolledAt,
+      });
+      expect(first!.enrolledAt, label).toBe(c.head.enrolledAt);
+      if (label === "postgres") {
+        const row = (await f.postgres.query("select registration_json,enrollment_json,identity_json,enrolled_at from takosumi_workspace_financial_sources where workspace_id=$1", [c.workspace.id])).rows[0]!;
+        expect([first!.registrationJson, first!.enrollmentJson, first!.identityJson, first!.enrolledAt], label)
+          .toEqual([row.registration_json, row.enrollment_json, row.identity_json, row.enrolled_at]);
+      } else if (label === "native-d1") {
+        const row = (await f.native.prepare("select registration_json,enrollment_json,identity_json,enrolled_at from workspace_financial_sources where workspace_id=?").bind(c.workspace.id).first<Record<string, unknown>>())!;
+        expect([first!.registrationJson, first!.enrollmentJson, first!.identityJson, first!.enrolledAt], label)
+          .toEqual([row.registration_json, row.enrollment_json, row.identity_json, row.enrolled_at]);
+      }
+      const exact = { ...first! };
+      originals.push(exact);
+      const mutable = { ...query };
+      const pending = reader.readEnrollmentOriginal(mutable);
+      mutable.sourceRef = "replacement_source";
+      expect(await pending, label).toEqual(exact);
+      (first as { enrollmentJson: string }).enrollmentJson = "caller_mutation";
+      expect(await reader.readEnrollmentOriginal(query), label).toEqual(exact);
+      const actor = (await store.getWorkspaceMember(c.workspace.id, "actor_original"))!;
+      await store.putWorkspaceMember({ ...actor, status: "suspended" });
+      const advanced = await reader.readHead(c.workspace.id);
+      expect(advanced?.permissionSequence, label).toBeGreaterThan(0);
+      expect(advanced?.closed, label).toBe(false);
+      expect(await reader.readEnrollmentOriginal(query), label).toEqual(exact);
+      await store.deleteWorkspace(c.workspace.id);
+      const closed = await reader.readHead(c.workspace.id);
+      expect(closed?.closed, label).toBe(true);
+      expect(closed?.permissionSequence, label).toBeGreaterThan(advanced!.permissionSequence);
+      expect(await reader.readEnrollmentOriginal(query), label).toEqual(exact);
+      await expect(reader.readEnrollmentOriginal({ ...query, incarnation: "other_incarnation" }))
+        .rejects.toMatchObject({ code: "conflict" });
+      await expect(reader.readEnrollmentOriginal({ ...query, sourceRef: "other_source" }))
+        .rejects.toMatchObject({ code: "conflict" });
+      await expect(reader.readEnrollmentOriginal({ ...query, workspaceId: "other_workspace" }))
+        .rejects.toMatchObject({ code: "conflict" });
+      expect(await reader.readEnrollmentOriginal({ workspaceId: "absent_workspace",
+        sourceRef: "absent_source", incarnation: "absent_incarnation" }), label).toBeUndefined();
+    }
+    expect(originals).toHaveLength(3);
+  } finally { await f.close(); }
+}, 30_000);
+
+test("native D1 historical original uses exact read-only schema and rejects unknown results without bootstrap writes", async () => {
+  const f=await adapters();
+  const coldRuntime=new Miniflare({compatibilityDate:"2026-07-17",
+    modules:[workerdD1Module("workspace-financial-original-cold.mjs")],
+    d1Databases:{CONTROL:"workspace-financial-original-cold"}});
+  try {
+    await coldRuntime.ready;
+    const cold=guardedOriginalD1(workerdD1Database(coldRuntime));
+    const query={workspaceId:"uncreated_workspace",sourceRef:"uncreated_source",incarnation:"uncreated_inc"};
+    const coldReader=new WorkspaceFinancialSourceService(new CloudflareD1OpenTofuControlStore(cold.db),()=>{
+      throw new Error("historical read called Clock");
+    });
+    await expect(coldReader.readEnrollmentOriginal(query)).rejects.toMatchObject({code:"unavailable"});
+    expect(cold.counts).toEqual({mutatingPrepares:0,runs:0,batches:0,originalReads:0});
+
+    const c=await enrolled(f.rows[2]!.store,"original_read_only");
+    const exact={workspaceId:c.workspace.id,sourceRef:c.registration.sourceRef,incarnation:c.registration.incarnation};
+    const actual=guardedOriginalD1(f.native);
+    const reader=new WorkspaceFinancialSourceService(new CloudflareD1OpenTofuControlStore(actual.db),()=>{
+      throw new Error("historical read called Clock");
+    });
+    expect(await reader.readEnrollmentOriginal(exact)).toMatchObject(exact);
+    expect(await reader.readEnrollmentOriginal(query)).toBeUndefined();
+    expect(actual.counts).toEqual({mutatingPrepares:0,runs:0,batches:0,originalReads:2});
+
+    for(const mode of ["failed","missing-results","missing-success","null-results"] as const){
+      const guarded=guardedOriginalD1(f.native,mode);
+      const failing=new WorkspaceFinancialSourceService(new CloudflareD1OpenTofuControlStore(guarded.db),()=>{
+        throw new Error("historical read called Clock");
+      });
+      await expect(failing.readEnrollmentOriginal(query)).rejects.toMatchObject({code:"unavailable"});
+      expect(guarded.counts,mode).toEqual({mutatingPrepares:0,runs:0,batches:0,originalReads:1});
+    }
+  } finally {await coldRuntime.dispose();await f.close();}
+},30_000);
+
+test("original reader separates positive absence, occupied full keys and unavailable retained rows without writes", async () => {
+  let rows: readonly Record<string, unknown>[] = [];
+  let failRead = false;
+  let reads = 0;
+  let writes = 0;
+  const port: FinancialSourceSqlPort = {
+    dialect: "d1",
+    query: async (sql, parameters) => {
+      reads++;
+      expect(sql.trimStart().startsWith("select ")).toBe(true);
+      expect(sql).toContain("limit 3");
+      expect(parameters).toEqual(["workspace_original", "source_original"]);
+      if (failRead) throw new Error("unknown SQL read");
+      return rows;
+    },
+    enroll: async () => { writes++; throw new Error("unexpected enrollment"); },
+  };
+  const reader = new WorkspaceFinancialSourceService(new SqlWorkspaceFinancialSource(port), () => {
+    throw new Error("unexpected Clock");
+  });
+  const query = { workspaceId: "workspace_original", sourceRef: "source_original", incarnation: "inc_original" };
+  expect(await reader.readEnrollmentOriginal(query)).toBeUndefined();
+  rows = [{ workspace_id: "workspace_original", source_ref: "other_source", incarnation: "inc_original",
+    registration_json: "{}", enrollment_json: "{}", identity_json: "{}", enrolled_at: "2026-10-15T00:00:00.000Z" }];
+  await expect(reader.readEnrollmentOriginal(query)).rejects.toMatchObject({ code: "conflict" });
+  rows = [{ workspace_id: "workspace_original", source_ref: "source_original", incarnation: "inc_original" }];
+  await expect(reader.readEnrollmentOriginal(query)).rejects.toMatchObject({ code: "unavailable" });
+  rows = [{ workspace_id: "workspace_original", source_ref: "source_original", incarnation: "inc_original",
+    registration_json: "{broken", enrollment_json: "{}", identity_json: "{}", enrolled_at: "2026-10-15T00:00:00.000Z" }];
+  await expect(reader.readEnrollmentOriginal(query)).rejects.toMatchObject({ code: "unavailable" });
+  rows = [Object.defineProperty({ workspace_id: "workspace_original", source_ref: "source_original",
+    incarnation: "inc_original" }, "registration_json", { get: () => { throw new Error("unknown row decode"); } })];
+  await expect(reader.readEnrollmentOriginal(query)).rejects.toMatchObject({ code: "unavailable" });
+  rows = [{ workspace_id: "workspace_original", source_ref: "source_original", incarnation: "inc_original" },
+    { workspace_id: "other_workspace", source_ref: "source_original", incarnation: "inc_original" }];
+  await expect(reader.readEnrollmentOriginal(query)).rejects.toMatchObject({ code: "conflict" });
+  rows = [{}, {}, {}];
+  await expect(reader.readEnrollmentOriginal(query)).rejects.toMatchObject({ code: "unavailable" });
+  rows = [];
+  failRead = true;
+  await expect(reader.readEnrollmentOriginal(query)).rejects.toMatchObject({ code: "unavailable" });
+  const beforeInvalid = reads;
+  for (const invalid of [
+    { ...query, extra: "alias" },
+    Object.create({ ...query }),
+    Object.defineProperty({ ...query }, "sourceRef", { get: () => "source_original" }),
+  ]) {
+    await expect(Promise.resolve().then(() => reader.readEnrollmentOriginal(invalid)))
+      .rejects.toBeInstanceOf(WorkspaceFinancialOriginalReadError);
+    await expect(Promise.resolve().then(() => reader.readEnrollmentOriginal(invalid)))
+      .rejects.toMatchObject({ code: "invalid_request" });
+  }
+  expect(reads).toBe(beforeInvalid);
+  expect(writes).toBe(0);
+});
 
 test("full raw/head CAS, ordered materialization, immutable unknown-ACK recovery and complete original receiver-target custody",async()=>{
   const f=await adapters();try{for(const{label,store}of f.rows){
