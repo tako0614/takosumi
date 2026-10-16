@@ -52,8 +52,8 @@ verify all three selections on the final website at desktop and mobile widths.
 The twelve `dashboard-home-*`, `dashboard-install-*` and `dashboard-review-*`
 images capture this checkout's actual `dashboard` SPA,
 built from source and served by the
-repository's portable browser fixture server. They were captured on
-2026-09-28. The original dark images came from checkout
+repository's portable browser fixture server. The Home and Store images were
+first captured on 2026-09-28; the review images are described below. The original dark images came from checkout
 `d4b1c52f8434cb163ac76f1a4682baf564612acc`; the matching light images
 came from checkout `3820a6359e7e044d5283b662540f80212b3929d9`.
 The dark and light desktop Home images were refreshed on 2026-10-04 from
@@ -70,7 +70,9 @@ Takos, Takos Office, and Yurucommu, with `example.test` launch URLs and
 real API projections; they do not describe installed production services or
 available official Store listings. The Store images show the Store with
 three listings before one is chosen, not completed configuration or
-installation. All non-GET requests and external browser requests are blocked. The
+installation; the landing no longer shows them, but the script still keeps them
+current. Outside the add-flow screens below, all non-GET requests and external
+browser requests are blocked. The
 Takos icon is the current `website/public/apps/takos.png`; Office and
 Yurucommu use this repository's `dashboard/public/brand/` SVGs. All three
 are fulfilled locally at an illustrative icon origin.
@@ -79,9 +81,10 @@ requests, and missing product cards fail the capture.
 
 The four `dashboard-review-*` images, captured on 2026-10-15 from the dashboard
 source at `d128a386f` (after #493 fixed the 「ホスト / アカウント」 row), show the
-add flow's 「追加前の確認」 screen for Takos, reached by opening `/new` with an example Git URL and pressing
-「追加」 in the real dashboard. Only for this screen, the script answers the add
-flow's API calls in the browser, following the shapes used by the dashboard's
+add flow's 「追加前の確認」 screen for Takos, reached by opening `/new` with an
+example Git URL and pressing 「追加」 in the real dashboard. For this screen and
+the Quickstart screens, the script answers the add flow's API calls in the
+browser, following the shapes used by the dashboard's
 portable e2e fixture: source registration and sync, the resolved snapshot and
 its module, a compatibility report that requires the Cloudflare provider, one
 verified workspace connection for it, the default install config, the install
@@ -92,8 +95,14 @@ approval, or apply. The one value derived from a real source is the change
 count: takos v0.12.7 `deploy/opentofu/cloudflare` creates 1 D1 database, 1 KV
 namespace, 5 R2 buckets and 6 queues on a fresh install, so the Run reports 13
 to create, 0 to change and 0 to delete, with policy passing and no approval
-required. The capture fails unless the screen shows those three counts and its
-「追加する」 button.
+required. The real Takos module also asks for settings on 「サービスを設定」
+(a required 「Cloudflare デプロイ設定」 and optional public URL and Takosumi
+Accounts inputs in its v0.12.7 manifest) before this review; the
+stub uses the default install config, so that step is skipped and the image
+shows only the review. The 13 covers the module's own resources; the Vectorize
+index and Worker upload that Takos performs in its own follow-up step are not
+part of this plan. The capture fails unless the screen shows those three counts
+and its 「追加する」 button.
 
 Desktop Home, Store and review use the complete 1200 × 750 viewport, with no
 screenshot clip. Mobile Home uses 390 × 700, and

@@ -1,6 +1,6 @@
 /** Capture the actual built Takosumi dashboard with deterministic public examples. */
 import { spawn } from "node:child_process";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
@@ -146,25 +146,36 @@ const reviewPath = `/new?git=${encodeURIComponent(takosFlow.git)}&ref=${takosFlo
 // The Quickstart's sample: this repository's examples/opentofu-basic, opened
 // through the Quickstart's /install link. Its inputs are read from this
 // repository's .well-known/takosumi.json and mapped the way
-// compileRepositoryInstallUx maps user inputs (both module variables have
-// defaults, so neither is required). `tofu plan` of the module creates no
+// compileRepositoryInstallUx maps plain user inputs with an explicit type and
+// required flag. `tofu plan` of the module creates no
 // resources, only two outputs, so the review shows 0, 0 and 0; the capture
 // stops if the module starts declaring any. The commit and IDs are
 // placeholders.
 const quickstartModule = "examples/opentofu-basic";
-const quickstartInputs = JSON.parse(await readFile(resolve(root, ".well-known/takosumi.json"), "utf8"))
-  .install.modules[quickstartModule].inputs
-  .filter((input) => input.source.kind === "user")
+const quickstartManifestInputs = JSON.parse(await readFile(resolve(root, ".well-known/takosumi.json"), "utf8"))
+  .install.modules[quickstartModule].inputs;
+// This mapping covers only explicit, plain user inputs; anything the compiler
+// would derive differently has to be handled here before recapturing.
+for (const input of quickstartManifestInputs) {
+  if (input.source.kind !== "user" || input.type === undefined || input.required === undefined
+    || input.advanced !== undefined || input.secret !== undefined) {
+    throw new Error(`${quickstartModule} input ${input.name} needs the capture's presentation mapping updated`);
+  }
+}
+const quickstartInputs = quickstartManifestInputs
   .map((input) => ({
     name: input.name,
     ...(input.type ? { type: input.type } : {}),
     ...(input.format ? { format: input.format } : {}),
-    required: input.required ?? false,
+    required: input.required,
     label: input.label,
     ...(input.helper ? { helper: input.helper } : {}),
     ...(input.placeholder ? { placeholder: input.placeholder } : {}),
   }));
-if (/^\s*(?:resource|data|module)\s+"/mu.test(await readFile(resolve(root, quickstartModule, "main.tf"), "utf8"))) {
+const quickstartTf = (await Promise.all((await readdir(resolve(root, quickstartModule)))
+  .filter((file) => /\.tf(?:\.json)?$/u.test(file))
+  .map((file) => readFile(resolve(root, quickstartModule, file), "utf8")))).join("\n");
+if (/^\s*(?:resource|data|module)\s+["\w]|"(?:resource|data|module)"\s*:/mu.test(quickstartTf)) {
   throw new Error(`${quickstartModule} now declares resources; re-plan it and update quickstartFlow.summary`);
 }
 const quickstartFlow = {
@@ -494,8 +505,9 @@ async function captureQuickstart(page, locale, theme, assertClean) {
   };
   const card = page.locator(".iv-workbench").last();
   // Stay inside the card's border, so the docs frame is the only edge.
+  const radius = await card.evaluate((element) => Number.parseFloat(getComputedStyle(element).borderBottomLeftRadius));
   const inside = (cardBox, top, bottom) => ({
-    left: cardBox.left + 1, right: cardBox.right - 1, top, bottom: Math.min(bottom, cardBox.bottom - 1),
+    left: cardBox.left + 1, right: cardBox.right - 1, top, bottom: Math.min(bottom, cardBox.bottom - radius),
   });
   await page.locator(".iv-intro").waitFor({ state: "visible" });
   // The whole add page, down to just below its card.

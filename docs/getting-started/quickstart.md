@@ -94,8 +94,8 @@ module path は折りたたまれた **取得元の詳細** に入っていま�
 **サービスを設定** には接続の選択がなく、この 2 つだけが表示されます。どちらも省略できます。空欄のまま **続ける** を押すと module の既定値が
 使われ、デプロイ前の変更内容（plan）が作られます。
 
-[![「サービスを設定」の画面。任意の入力項目「名前」と「公開URLの例」が空欄で、その下に「続ける」ボタンがある](/getting-started/quickstart-setup.png){.screenshot width=1468 height=558}](/getting-started/quickstart-setup.png){.light-only}
-[![「サービスを設定」の画面。任意の入力項目「名前」と「公開URLの例」が空欄で、その下に「続ける」ボタンがある](/getting-started/quickstart-setup-dark.png){.screenshot width=1468 height=558}](/getting-started/quickstart-setup-dark.png){.dark-only}
+[![「サービスを設定」の画面。任意の入力項目「名前」と「公開URLの例」が空欄で、その下に「続ける」ボタンがある](/getting-started/quickstart-setup.png){.screenshot width=1468 height=532}](/getting-started/quickstart-setup.png){.light-only}
+[![「サービスを設定」の画面。任意の入力項目「名前」と「公開URLの例」が空欄で、その下に「続ける」ボタンがある](/getting-started/quickstart-setup-dark.png){.screenshot width=1468 height=532}](/getting-started/quickstart-setup-dark.png){.dark-only}
 
 準備が終わると **追加前の確認** に、作成・変更・削除されるリソースの数が表示されます。
 このサンプルは provider を使わず、リソースを作らないため、3 つとも 0 です。それでも
@@ -103,8 +103,8 @@ module path は折りたたまれた **取得元の詳細** に入っていま�
 **成功** は変更内容（plan）を作れたという意味で、この時点ではまだ何も追加されていません。内容を確認して
 **追加する** を押すと apply が始まります。
 
-[![「追加前の確認」の画面。作成 0、変更 0、削除 0 と表示され、その下に「追加する」ボタンと「技術的な詳細」のリンクがある](/getting-started/quickstart-review.png){.screenshot width=1468 height=652}](/getting-started/quickstart-review.png){.light-only}
-[![「追加前の確認」の画面。作成 0、変更 0、削除 0 と表示され、その下に「追加する」ボタンと「技術的な詳細」のリンクがある](/getting-started/quickstart-review-dark.png){.screenshot width=1468 height=652}](/getting-started/quickstart-review-dark.png){.dark-only}
+[![「追加前の確認」の画面。作成 0、変更 0、削除 0 と表示され、その下に「追加する」ボタンと「技術的な詳細」のリンクがある](/getting-started/quickstart-review.png){.screenshot width=1468 height=626}](/getting-started/quickstart-review.png){.light-only}
+[![「追加前の確認」の画面。作成 0、変更 0、削除 0 と表示され、その下に「追加する」ボタンと「技術的な詳細」のリンクがある](/getting-started/quickstart-review-dark.png){.screenshot width=1468 height=626}](/getting-started/quickstart-review-dark.png){.dark-only}
 
 リソースの削除・置き換え・import を含む変更では、先に **この変更を承認** を押し、
 **変更内容を確認しました** にチェックしてから **追加する** を押します。このサンプルの

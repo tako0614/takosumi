@@ -100,8 +100,8 @@ fields and no connection to choose. Both are optional. Leave them blank and pres
 **Continue**: the module's defaults apply, and Takosumi prepares the changes
 (a plan) before anything is deployed.
 
-[![Set up the service. The optional Name and Example public URL fields are empty, with the Continue button below](/getting-started/quickstart-setup-en.png){.screenshot width=1468 height=558}](/getting-started/quickstart-setup-en.png){.light-only}
-[![Set up the service. The optional Name and Example public URL fields are empty, with the Continue button below](/getting-started/quickstart-setup-en-dark.png){.screenshot width=1468 height=558}](/getting-started/quickstart-setup-en-dark.png){.dark-only}
+[![Set up the service. The optional Name and Example public URL fields are empty, with the Continue button below](/getting-started/quickstart-setup-en.png){.screenshot width=1468 height=532}](/getting-started/quickstart-setup-en.png){.light-only}
+[![Set up the service. The optional Name and Example public URL fields are empty, with the Continue button below](/getting-started/quickstart-setup-en-dark.png){.screenshot width=1468 height=532}](/getting-started/quickstart-setup-en-dark.png){.dark-only}
 
 When it is ready, **Review before adding** shows how many resources will be
 created, changed, and deleted. The example has no provider and creates no
@@ -110,8 +110,8 @@ and state storage without cloud credentials. The **Succeeded** badge next to the
 heading means the plan was made; nothing has been added yet. After checking the changes, press
 **Add** again to start the apply.
 
-[![Review before adding. Create 0, Change 0 and Delete 0 are shown, with the Add button and the Technical details link below](/getting-started/quickstart-review-en.png){.screenshot width=1468 height=652}](/getting-started/quickstart-review-en.png){.light-only}
-[![Review before adding. Create 0, Change 0 and Delete 0 are shown, with the Add button and the Technical details link below](/getting-started/quickstart-review-en-dark.png){.screenshot width=1468 height=652}](/getting-started/quickstart-review-en-dark.png){.dark-only}
+[![Review before adding. Create 0, Change 0 and Delete 0 are shown, with the Add button and the Technical details link below](/getting-started/quickstart-review-en.png){.screenshot width=1468 height=626}](/getting-started/quickstart-review-en.png){.light-only}
+[![Review before adding. Create 0, Change 0 and Delete 0 are shown, with the Add button and the Technical details link below](/getting-started/quickstart-review-en-dark.png){.screenshot width=1468 height=626}](/getting-started/quickstart-review-en-dark.png){.dark-only}
 
 A change that deletes, replaces, or imports a resource first needs
 **Approve this change**, then the **I reviewed these changes** checkbox, before
