@@ -151,6 +151,281 @@ test("memory: unacknowledged initial Control original is prepared from canonical
   } finally { await f.close(); }
 }, 30_000);
 
+test("memory: historical Control originals page unacknowledged sequence two without receiver delivery", async () => {
+  const f = await fixture("memory", "historical-red");
+  try {
+    await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+      actorAccountId: actor, status: "active", roles: ["viewer"], requireCurrentMembership: true});
+    await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+      actorAccountId: actor, status: "active", roles: ["member"], requireCurrentMembership: true});
+    const adapter = f.adapter([]);
+    expect((await f.owner.financialSource.readHead(f.workspace.id))?.permissionSequence).toBe(2);
+    await expect(adapter.prepareInitialFinancialControlSourceOriginal({workspaceId: f.workspace.id})).rejects.toThrow("source_pending");
+    expect(await adapter.capture({workspaceId: f.workspace.id, accountId: actor})).toBeUndefined();
+    const first = await adapter.prepareHistoricalFinancialControlSourceOriginals({workspaceId: f.workspace.id,
+      afterSequence: 0, limit: 1});
+    expect(first.entries).toHaveLength(1);
+    expect(first.entries[0]!.original.materialization.event.sequence).toBe(1);
+    expect(first.nextAfterSequence).toBe(1);
+    expect(first.pageReachedObservedHead).toBe(false);
+    const second = await adapter.prepareHistoricalFinancialControlSourceOriginals({workspaceId: f.workspace.id,
+      afterSequence: 1, limit: 1});
+    expect(second.entries[0]!.original.materialization.event.sequence).toBe(2);
+    expect(second.pageReachedObservedHead).toBe(true);
+    expect(f.calls).toEqual([]);
+  } finally { await f.close(); }
+}, 30_000);
+
+for (const backend of ["memory", "postgres", "native-d1"] as const) {
+  test(`${backend}: historical Control page retains both actual unacknowledged originals across cursors`, async () => {
+    const f = await fixture(backend, `history-${backend}`);
+    try {
+      await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+        actorAccountId: actor, status: "active", roles: ["viewer"], requireCurrentMembership: true});
+      await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+        actorAccountId: actor, status: "active", roles: ["member"], requireCurrentMembership: true});
+      const adapter = f.adapter([]);
+      const raw = await f.owner.financialSource.listRawEvents({workspaceId: f.workspace.id, afterSequence: 0, limit: 2});
+      expect(raw).toHaveLength(2);
+      const first = await adapter.prepareHistoricalFinancialControlSourceOriginals({workspaceId: f.workspace.id,
+        afterSequence: 0, limit: 1});
+      expect(first).toMatchObject({kind: "historical", observedPermissionSequence: 2, observedClosed: false,
+        nextAfterSequence: 1, pageReachedObservedHead: false,
+        entries: [{original: {eventRef: raw[0]!.eventRef, materialization: {event: {sequence: 1}}}}]});
+      const second = await adapter.prepareHistoricalFinancialControlSourceOriginals({workspaceId: f.workspace.id,
+        afterSequence: 1, limit: 1});
+      expect(second).toMatchObject({kind: "historical", observedPermissionSequence: 2, observedClosed: false,
+        pageReachedObservedHead: true,
+        entries: [{original: {eventRef: raw[1]!.eventRef, materialization: {event: {
+          sequence: 2, previousDigest: first.entries[0]!.original.materialization.eventDigest}}}}]});
+      expect(second.nextAfterSequence).toBeUndefined();
+      for (const item of [...first.entries, ...second.entries]) {
+        const stored = await f.owner.financialSource.readMaterialization(item.original.eventRef);
+        expect(stored?.rawPayloadJson).toBe(raw[item.original.materialization.event.sequence - 1]!.payloadJson);
+        expect(item.original.materialization.eventDigest).toBe(`sha256:${stored!.digest}`);
+      }
+      expect(await adapter.prepareHistoricalFinancialControlSourceOriginals({workspaceId: f.workspace.id,
+        afterSequence: 0, limit: 2})).toMatchObject({pageReachedObservedHead: true, entries: [first.entries[0], second.entries[0]]});
+      expect(await adapter.capture({workspaceId: f.workspace.id, accountId: actor})).toBeUndefined();
+      expect(f.calls).toEqual([]);
+    } finally { await f.close(); }
+  }, 30_000);
+}
+
+test("memory: historical Control lost and false CAS responses recover by exact GET without replay CAS", async () => {
+  const f = await fixture("memory", "history-lost-cas");
+  try {
+    await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+      actorAccountId: actor, status: "active", roles: ["viewer"], requireCurrentMembership: true});
+    await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+      actorAccountId: actor, status: "active", roles: ["member"], requireCurrentMembership: true});
+    const service = f.owner.financialSource;
+    const commit = service.materializeEvent;
+    let calls = 0;
+    service.materializeEvent = async input => {
+      calls++;
+      const accepted = await Reflect.apply(commit, service, [input]);
+      if (calls === 1 && accepted) throw new Error("synthetic_lost_original_reply");
+      return calls === 2 && accepted ? false : accepted;
+    };
+    const adapter = f.adapter([]);
+    const first = await adapter.prepareHistoricalFinancialControlSourceOriginals({workspaceId: f.workspace.id,
+      afterSequence: 0, limit: 2});
+    expect(first.entries).toHaveLength(2);
+    expect(calls).toBe(2);
+    expect(await adapter.prepareHistoricalFinancialControlSourceOriginals({workspaceId: f.workspace.id,
+      afterSequence: 0, limit: 2})).toEqual(first);
+    expect(calls).toBe(2);
+    expect(f.calls).toEqual([]);
+  } finally { await f.close(); }
+}, 30_000);
+
+test("memory: historical Control one-page budget stops at 64 without draining later history", async () => {
+  const f = await fixture("memory", "history-budget");
+  try {
+    for (let index = 0; index < 65; index++) {
+      await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+        actorAccountId: actor, status: "active", roles: [index % 2 === 0 ? "viewer" : "member"],
+        requireCurrentMembership: true});
+    }
+    const adapter = f.adapter([]);
+    const first = await adapter.prepareHistoricalFinancialControlSourceOriginals({workspaceId: f.workspace.id,
+      afterSequence: 0, limit: 64});
+    expect(first).toMatchObject({observedPermissionSequence: 65, nextAfterSequence: 64,
+      pageReachedObservedHead: false});
+    expect(first.entries).toHaveLength(64);
+    const second = await adapter.prepareHistoricalFinancialControlSourceOriginals({workspaceId: f.workspace.id,
+      afterSequence: 64, limit: 1});
+    expect(second.entries[0]!.original.materialization.event.sequence).toBe(65);
+    expect(second.pageReachedObservedHead).toBe(true);
+    expect(f.calls).toEqual([]);
+  } finally { await f.close(); }
+}, 30_000);
+
+test("memory: historical Control refuses genesis, invalid cursors, skipped progress and oversized raw pages", async () => {
+  const f = await fixture("memory", "history-inputs");
+  try {
+    const service = f.owner.financialSource;
+    const write = service.materializeEvent;
+    let writes = 0;
+    service.materializeEvent = async input => { writes++; return Reflect.apply(write, service, [input]); };
+    const adapter = f.adapter([]);
+    const page = (afterSequence: number, limit: number) => adapter.prepareHistoricalFinancialControlSourceOriginals({
+      workspaceId: f.workspace.id, afterSequence, limit});
+    await expect(page(0, 1)).rejects.toThrow("source_pending");
+    for (const [after, limit] of [[-1, 1], [0, 0], [0, 65], [Number.MAX_SAFE_INTEGER + 1, 1]])
+      await expect(page(after!, limit!)).rejects.toThrow("source_unavailable");
+    expect(writes).toBe(0);
+    await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+      actorAccountId: actor, status: "active", roles: ["viewer"], requireCurrentMembership: true});
+    await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+      actorAccountId: actor, status: "active", roles: ["member"], requireCurrentMembership: true});
+    await expect(page(1, 1)).rejects.toThrow("source_pending");
+    await expect(page(3, 1)).rejects.toThrow("source_conflict");
+    const list = service.listRawEvents;
+    service.listRawEvents = async input => {
+      const rows = await Reflect.apply(list, service, [input]);
+      return input.afterSequence === 0 && input.limit === 1 ? [...rows, ...rows] : rows;
+    };
+    await expect(f.adapter([]).prepareHistoricalFinancialControlSourceOriginals({workspaceId: f.workspace.id,
+      afterSequence: 0, limit: 1})).rejects.toThrow("source_conflict");
+    expect(writes).toBe(0);
+    expect(f.calls).toEqual([]);
+  } finally { await f.close(); }
+}, 30_000);
+
+test("memory: historical Control refuses page gaps, altered raw custody and wrong predecessor", async () => {
+  for (const attack of ["gap", "payload", "predecessor"] as const) {
+    const f = await fixture("memory", `history-${attack}`);
+    try {
+      await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+        actorAccountId: actor, status: "active", roles: ["viewer"], requireCurrentMembership: true});
+      await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+        actorAccountId: actor, status: "active", roles: ["member"], requireCurrentMembership: true});
+      const service = f.owner.financialSource;
+      const list = service.listRawEvents;
+      service.listRawEvents = async input => {
+        const rows = await Reflect.apply(list, service, [input]);
+        if (attack === "gap" && input.afterSequence === 0 && input.limit === 2) return rows.slice(1);
+        return rows.map(raw => raw.permissionSequence !== 2 ? raw : attack === "payload"
+          ? {...raw, payloadJson: `${raw.payloadJson}tampered`}
+          : attack === "predecessor" ? {...raw, previousEventRef: "wrong_original_predecessor"} : raw);
+      };
+      await expect(f.adapter([]).prepareHistoricalFinancialControlSourceOriginals({workspaceId: f.workspace.id,
+        afterSequence: 0, limit: 2})).rejects.toThrow("source_conflict");
+      expect(f.calls).toEqual([]);
+    } finally { await f.close(); }
+  }
+}, 30_000);
+
+test("memory: historical Control rejects altered stored predecessor and full-head drift", async () => {
+  for (const attack of ["stored", "missing", "receivers", "concurrent-append"] as const) {
+    const f = await fixture("memory", `history-${attack}`);
+    try {
+      await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+        actorAccountId: actor, status: "active", roles: ["viewer"], requireCurrentMembership: true});
+      await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+        actorAccountId: actor, status: "active", roles: ["member"], requireCurrentMembership: true});
+      const service = f.owner.financialSource;
+      if (attack !== "concurrent-append")
+        await f.adapter([]).prepareHistoricalFinancialControlSourceOriginals({workspaceId: f.workspace.id,
+          afterSequence: 0, limit: 1});
+      if (attack === "stored" || attack === "missing") {
+        const first = (await service.listRawEvents({workspaceId: f.workspace.id, afterSequence: 0, limit: 1}))[0]!;
+        const read = service.readMaterialization;
+        service.readMaterialization = async eventRef => eventRef !== first.eventRef
+          ? Reflect.apply(read, service, [eventRef])
+          : attack === "missing" ? undefined : {...(await Reflect.apply(read, service, [eventRef]))!, rawPayloadJson: "tampered"};
+      } else if (attack === "receivers") {
+        const read = service.readHead;
+        let reads = 0;
+        service.readHead = async workspaceId => {
+          const head = await Reflect.apply(read, service, [workspaceId]);
+          return head && ++reads > 1 ? {...head, requiredReceivers: [head.requiredReceivers[0]!]} : head;
+        };
+      } else {
+        const commit = service.materializeEvent;
+        let appended = false;
+        service.materializeEvent = async input => {
+          const result = await Reflect.apply(commit, service, [input]);
+          if (!appended) {
+            appended = true;
+            await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+              actorAccountId: actor, status: "active", roles: ["viewer"], requireCurrentMembership: true});
+          }
+          return result;
+        };
+      }
+      await expect(f.adapter([]).prepareHistoricalFinancialControlSourceOriginals({workspaceId: f.workspace.id,
+        afterSequence: attack === "concurrent-append" ? 0 : 1, limit: 1})).rejects.toThrow("source_conflict");
+      expect(f.calls).toEqual([]);
+    } finally { await f.close(); }
+  }
+}, 30_000);
+
+test("memory: historical Control final readback refuses changed head, raw page or stored original", async () => {
+  for (const attack of ["head", "raw", "stored"] as const) {
+    const f = await fixture("memory", `history-final-${attack}`);
+    try {
+      await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+        actorAccountId: actor, status: "active", roles: ["viewer"], requireCurrentMembership: true});
+      await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+        actorAccountId: actor, status: "active", roles: ["member"], requireCurrentMembership: true});
+      await f.adapter([]).prepareHistoricalFinancialControlSourceOriginals({workspaceId: f.workspace.id,
+        afterSequence: 0, limit: 2});
+      const service = f.owner.financialSource;
+      if (attack === "head") {
+        const read = service.readHead;
+        let reads = 0;
+        service.readHead = async workspaceId => {
+          const head = await Reflect.apply(read, service, [workspaceId]);
+          return head && ++reads > 1 ? {...head, organizationRef: "changed_after_original_read"} : head;
+        };
+      } else if (attack === "raw") {
+        const list = service.listRawEvents;
+        let pageReads = 0;
+        service.listRawEvents = async input => {
+          const rows = await Reflect.apply(list, service, [input]);
+          return input.afterSequence === 0 && input.limit === 2 && ++pageReads > 1
+            ? rows.map(raw => raw.permissionSequence === 2 ? {...raw, payloadJson: "changed_after_original_read"} : raw)
+            : rows;
+        };
+      } else {
+        const first = (await service.listRawEvents({workspaceId: f.workspace.id, afterSequence: 0, limit: 1}))[0]!;
+        const read = service.readMaterialization;
+        let firstReads = 0;
+        service.readMaterialization = async eventRef => {
+          const stored = await Reflect.apply(read, service, [eventRef]);
+          return eventRef === first.eventRef && ++firstReads > 1 && stored
+            ? {...stored, rawPayloadJson: "changed_after_original_read"} : stored;
+        };
+      }
+      await expect(f.adapter([]).prepareHistoricalFinancialControlSourceOriginals({workspaceId: f.workspace.id,
+        afterSequence: 0, limit: 2})).rejects.toThrow("source_conflict");
+      expect(f.calls).toEqual([]);
+    } finally { await f.close(); }
+  }
+}, 30_000);
+
+test("memory: closed Control head exports historical close only, never a current snapshot", async () => {
+  const f = await fixture("memory", "history-closed");
+  try {
+    await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+      actorAccountId: actor, status: "active", roles: ["viewer"], requireCurrentMembership: true});
+    await f.owner.deleteWorkspaceForAccount(f.workspace.id, actor, undefined, {requireCurrentMembership: true});
+    const head = await f.owner.financialSource.readHead(f.workspace.id);
+    expect(head?.closed).toBe(true);
+    const adapter = f.adapter([]);
+    const result = await adapter.prepareHistoricalFinancialControlSourceOriginals({workspaceId: f.workspace.id,
+      afterSequence: 0, limit: 64});
+    expect(result.observedClosed).toBe(true);
+    expect(result.pageReachedObservedHead).toBe(true);
+    expect(result.entries.at(-1)!.original.materialization.event.kind).toBe("close");
+    expect(await adapter.capture({workspaceId: f.workspace.id, accountId: actor})).toBeUndefined();
+    expect(f.calls).toEqual([]);
+  } finally { await f.close(); }
+}, 30_000);
+
 for (const backend of ["memory", "postgres", "native-d1"] as const) {
   test(`${backend}: initial Control original materializes once without receiver ACK and replays exact data`, async () => {
     const f = await fixture(backend, `initial-${backend}`);

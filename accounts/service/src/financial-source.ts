@@ -41,6 +41,7 @@ import type {
 
 const checkpointLifetime = 1_000;
 const proofLifetime = 60_000;
+const controlHistoricalPageLimit = 64;
 const slots = ["grant", "issuerSession", "client", "accountGeneration"] as const;
 type MutableVector<T> = { -readonly [K in keyof FinancialSourceParentVector<T>]: T };
 type MaterializationBudget = {remaining: number};
@@ -877,6 +878,136 @@ export function createAccountsFinancialControlSource(options: {
       return structuredClone({kind: "historical", registration: enrolled,
         original: {key: {registrationRef: enrolled.registrationRef, incarnation: enrolled.incarnation,
           affectedRef: workspaceId}, eventRef: raw.eventRef, materialization: wire}});
+    },
+    /** One bounded page of actual Control history. A cursor is only a paging
+     * position; this data never grants current actor or receiver authority. */
+    async prepareHistoricalFinancialControlSourceOriginals(input: {
+      readonly workspaceId: string;
+      readonly afterSequence: number;
+      readonly limit: number;
+    }): Promise<{
+      readonly kind: "historical";
+      readonly registration: FinancialSourceRegistration;
+      readonly observedPermissionSequence: number;
+      readonly observedClosed: boolean;
+      readonly entries: readonly {readonly original: AccountsFinancialPreparedOriginal}[];
+      readonly nextAfterSequence?: number;
+      readonly pageReachedObservedHead: boolean;
+    }> {
+      const {workspaceId, afterSequence, limit} = input;
+      if (!financialSourceRef(workspaceId) || !Number.isSafeInteger(afterSequence) || afterSequence < 0 ||
+        !Number.isSafeInteger(limit) || limit < 1 || limit > controlHistoricalPageLimit) unavailable();
+      const observedHead = await Reflect.apply(readHead, service, [workspaceId]);
+      if (!observedHead) unavailable();
+      const head: WorkspaceFinancialSourceHead = structuredClone(observedHead);
+      if (head.workspaceId !== workspaceId || !Number.isSafeInteger(head.permissionSequence) ||
+        head.permissionSequence < 0 || !Number.isSafeInteger(head.materializedSequence) ||
+        head.materializedSequence < 0 || head.materializedSequence > head.permissionSequence) fail();
+      const enrolled = registration(head);
+      if (head.permissionSequence === 0) {
+        if (head.lastEventRef !== null || head.materializedSequence !== 0 ||
+          head.materializedDigest !== head.genesisDigest) fail();
+        throw new FinancialSourceUnavailable("source_pending");
+      }
+      if (head.lastEventRef === null || afterSequence > head.permissionSequence) fail();
+      const exactRaw = async (sequence: number): Promise<WorkspaceFinancialRawEvent> => {
+        const rows = await Reflect.apply(listRaw, service, [{workspaceId, afterSequence: sequence - 1, limit: 1}]);
+        if (!Array.isArray(rows) || rows.length !== 1 || !Object.hasOwn(rows, 0)) fail();
+        const raw: WorkspaceFinancialRawEvent = rows[0]!;
+        if (raw.workspaceId !== workspaceId || raw.sourceRef !== enrolled.registrationRef ||
+          raw.incarnation !== enrolled.incarnation || raw.permissionSequence !== sequence ||
+          !financialSourceRef(raw.eventRef)) fail();
+        return structuredClone(raw);
+      };
+      const tail = await exactRaw(head.permissionSequence);
+      if (tail.eventRef !== head.lastEventRef || tail.closed !== head.closed) fail();
+      if (head.materializedSequence === 0) {
+        if (head.materializedDigest !== head.genesisDigest) fail();
+      } else {
+        const baselineRaw = await exactRaw(head.materializedSequence);
+        const baseline = await Reflect.apply(readMaterialization, service, [baselineRaw.eventRef]);
+        if (!baseline || baseline.digest !== head.materializedDigest) fail();
+        await decode(baseline, baselineRaw);
+      }
+      const observedPage = await Reflect.apply(listRaw, service, [{workspaceId, afterSequence, limit}]);
+      if (!Array.isArray(observedPage) || observedPage.length > limit || observedPage.length > controlHistoricalPageLimit ||
+        observedPage.length === 0 && afterSequence < head.permissionSequence) fail();
+      const page: readonly WorkspaceFinancialRawEvent[] = structuredClone(observedPage);
+      let predecessor: FinancialSourceMaterialization | undefined;
+      let previousRaw: WorkspaceFinancialRawEvent | undefined;
+      if (afterSequence > 0) {
+        if (afterSequence > head.materializedSequence) throw new FinancialSourceUnavailable("source_pending");
+        previousRaw = await exactRaw(afterSequence);
+        const previousStored = await Reflect.apply(readMaterialization, service, [previousRaw.eventRef]);
+        if (!previousStored) throw new FinancialSourceUnavailable("source_pending");
+        predecessor = await decode(previousStored, previousRaw);
+        if (afterSequence === head.materializedSequence && previousStored.digest !== head.materializedDigest) fail();
+      }
+      let remaining = limit;
+      let progressSequence = head.materializedSequence;
+      let progressDigest = head.materializedDigest;
+      const originals: {original: AccountsFinancialPreparedOriginal}[] = [];
+      const retainedRaw: WorkspaceFinancialRawEvent[] = [];
+      const retainedStored: WorkspaceFinancialMaterialization[] = [];
+      for (let index = 0; index < page.length; index++) {
+        if (!Object.hasOwn(page, index) || --remaining < 0) fail();
+        const raw: WorkspaceFinancialRawEvent = page[index]!;
+        const sequence = afterSequence + index + 1;
+        if (raw.workspaceId !== workspaceId || raw.sourceRef !== enrolled.registrationRef ||
+          raw.incarnation !== enrolled.incarnation || raw.permissionSequence !== sequence ||
+          !financialSourceRef(raw.eventRef) || raw.previousEventRef !== (previousRaw?.eventRef ?? null) ||
+          previousRaw?.closed || sequence > head.permissionSequence ||
+          raw.closed && sequence !== head.permissionSequence) fail();
+        if (sequence === head.permissionSequence && (raw.eventRef !== head.lastEventRef || raw.closed !== head.closed)) fail();
+        let wire: FinancialSourceMaterialization;
+        try { wire = await materializeFinancialSourceEvent({registration: enrolled, raw: rawWire(raw), predecessor}); }
+        catch { throw new FinancialSourceUnavailable("source_conflict"); }
+        const expected: WorkspaceFinancialMaterialization = {eventRef: raw.eventRef, sourceRef: raw.sourceRef,
+          incarnation: raw.incarnation, permissionSequence: sequence, rawPayloadJson: raw.payloadJson,
+          previousDigest: wire.event.previousDigest.slice(7), wireJson: canonicalFinancialSourceJson(wire.event),
+          digest: wire.eventDigest.slice(7)};
+        let stored = await Reflect.apply(readMaterialization, service, [raw.eventRef]);
+        if (stored && sequence > head.materializedSequence) fail();
+        if (!stored) {
+          if (sequence !== progressSequence + 1) throw new FinancialSourceUnavailable("source_pending");
+          const currentHead = await Reflect.apply(readHead, service, [workspaceId]);
+          const expectedHead = {...head, materializedSequence: progressSequence, materializedDigest: progressDigest};
+          if (!currentHead || canonicalFinancialSourceJson(currentHead) !== canonicalFinancialSourceJson(expectedHead)) fail();
+          // Core's captured full-head CAS is attempted once. Unknown or false
+          // replies are resolved only by GET of this exact event and head.
+          try { await Reflect.apply(materialize, service, [{original: structuredClone(raw),
+            expectedHead: structuredClone(currentHead), materialization: expected}]); }
+          catch { /* Exact readback below decides whether the original committed. */ }
+          stored = await Reflect.apply(readMaterialization, service, [raw.eventRef]);
+          const afterWriteHead = await Reflect.apply(readHead, service, [workspaceId]);
+          if (!afterWriteHead || canonicalFinancialSourceJson(afterWriteHead) !== canonicalFinancialSourceJson({
+            ...head, materializedSequence: sequence, materializedDigest: expected.digest})) fail();
+          progressSequence = sequence;
+          progressDigest = expected.digest;
+        }
+        if (!stored || canonicalFinancialSourceJson(stored) !== canonicalFinancialSourceJson(expected) ||
+          canonicalFinancialSourceJson(await decode(stored, raw)) !== canonicalFinancialSourceJson(wire)) fail();
+        retainedRaw.push(structuredClone(raw));
+        retainedStored.push(structuredClone(stored));
+        originals.push({original: {key: {registrationRef: enrolled.registrationRef, incarnation: enrolled.incarnation,
+          affectedRef: workspaceId}, eventRef: raw.eventRef, materialization: wire}});
+        previousRaw = raw;
+        predecessor = wire;
+      }
+      const finalHead = await Reflect.apply(readHead, service, [workspaceId]);
+      const finalPage = await Reflect.apply(listRaw, service, [{workspaceId, afterSequence, limit}]);
+      if (!finalHead || canonicalFinancialSourceJson(finalHead) !== canonicalFinancialSourceJson({
+        ...head, materializedSequence: progressSequence, materializedDigest: progressDigest}) ||
+        !Array.isArray(finalPage) || canonicalFinancialSourceJson(finalPage) !== canonicalFinancialSourceJson(retainedRaw)) fail();
+      for (let index = 0; index < retainedRaw.length; index++) {
+        const finalStored = await Reflect.apply(readMaterialization, service, [retainedRaw[index]!.eventRef]);
+        if (!finalStored || canonicalFinancialSourceJson(finalStored) !== canonicalFinancialSourceJson(retainedStored[index])) fail();
+      }
+      const lastSequence = afterSequence + originals.length;
+      return structuredClone({kind: "historical", registration: enrolled,
+        observedPermissionSequence: head.permissionSequence, observedClosed: head.closed,
+        entries: originals, ...(lastSequence < head.permissionSequence ? {nextAfterSequence: lastSequence} : {}),
+        pageReachedObservedHead: lastSequence === head.permissionSequence});
     },
     /** Fresh original Control event from this exact canonical facade. Expected
      * source is only an equality filter; neither it nor a WeakMap is authority. */

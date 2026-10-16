@@ -435,6 +435,28 @@ original complete receiver ACKs. A Control head at sequence zero has no event
 to export, and a later head is not a sequence-one bootstrap; both remain
 `source_pending` without a manufactured event or genesis.
 
+For a Control head already beyond sequence one, the private
+`prepareHistoricalFinancialControlSourceOriginals({workspaceId,
+afterSequence,limit})` reads one actual bounded page of the same Core history.
+It accepts at most 64 originals per call, checks the full registered head,
+raw predecessor link and stored materializations, and materializes a missing
+contiguous original through one captured-head Core CAS. A lost CAS response is
+resolved by GET of that exact event; an existing original is read before any
+write. The final full head, bounded raw page and each returned materialization
+are reread. It returns detached source keys, event refs and canonical
+materializations, never raw private payloads, a token, actor or permission
+ticket. A closed head can supply historical close data but never fresh payer
+admission. The initial and current Control readers keep their sequence-one
+and receiver-ACK guards.
+
+The page cursor and `pageReachedObservedHead` describe only this call's
+observed head. Root must retain and compare the original registration and
+event digests from sequence one across pages, and independently qualify the
+actual actor, source binding and current head before admission. This method
+does not call a receiver, ACK, proof or Financial M, and cannot install a
+genesis-only sequence-zero source. Financial still owns unknown-result M
+readback and the separate genesis-only contract.
+
 The existing `prove({accessToken,challengeRef}) -> {proofRef}` operation is
 idempotent for the same **original request**, rather than for every request with
 the same challenge. New issuers derive an opaque custody locator as `afp_`
