@@ -1,6 +1,6 @@
 /** Capture the actual built Takosumi dashboard with deterministic public examples. */
 import { spawn } from "node:child_process";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
@@ -8,6 +8,7 @@ import { chromium } from "@playwright/test";
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../..");
 const output = resolve(here, "../public/screens");
+const docsOutput = resolve(root, "docs/public/getting-started");
 const origin = "http://127.0.0.1:5199";
 const createdAt = "2026-08-01T00:00:00.000Z";
 const assetOrigin = "https://assets.example.test";
@@ -104,6 +105,206 @@ const storeListings = products.map((product, order) => ({
   updatedAt: `2026-08-0${3 - order}T00:00:00.000Z`,
 }));
 
+const cloudflareProvider = "registry.opentofu.org/cloudflare/cloudflare";
+
+// The landing's review screen ("追加前の確認") for adding Takos. The plan
+// counts are derived from takos v0.12.7 deploy/opentofu/cloudflare: its
+// platform module creates 1 D1 database, 1 KV namespace, 5 R2 buckets and 6
+// queues on a fresh install, so the review shows 13 to create and nothing to
+// change or delete. Every other value is an illustrative example.
+const takosFlow = {
+  key: "takos",
+  git: "https://github.com/example/takos",
+  ref: "0123456789abcdef0123456789abcdef01234567",
+  modulePath: ".",
+  name: "takos",
+  installPlanId: "gip_7a3c9e2f41b6d805",
+  providers: [{ source: cloudflareProvider, moduleLocalName: "cloudflare" }],
+  connections: [{
+    id: "pc_demo_cloudflare",
+    workspaceId: "ws_alpha",
+    provider: "cloudflare",
+    providerSource: cloudflareProvider,
+    scope: "workspace",
+    status: "verified",
+    displayName: "Cloudflare",
+    materialization: "secret",
+    envNames: ["CLOUDFLARE_API_TOKEN"],
+    createdAt,
+    updatedAt: createdAt,
+    verifiedAt: createdAt,
+  }],
+  rootModuleVariables: [],
+  installConfig: {
+    id: "cfg-default-opentofu-capsule", name: "default-opentofu-capsule", policy: {}, variableMapping: {},
+    variablePresentation: [], outputAllowlist: {}, createdAt, updatedAt: createdAt,
+  },
+  summary: { add: 13, change: 0, destroy: 0 },
+};
+const reviewPath = `/new?git=${encodeURIComponent(takosFlow.git)}&ref=${takosFlow.ref}&path=.&name=${takosFlow.name}`;
+
+// The Quickstart's sample: this repository's examples/opentofu-basic, opened
+// through the Quickstart's /install link. Its inputs are read from this
+// repository's .well-known/takosumi.json and mapped the way
+// compileRepositoryInstallUx maps plain user inputs with an explicit type and
+// required flag. `tofu plan` of the module creates no
+// resources, only two outputs, so the review shows 0, 0 and 0; the capture
+// stops if the module starts declaring any. The commit and IDs are
+// placeholders.
+const quickstartModule = "examples/opentofu-basic";
+const quickstartManifestInputs = JSON.parse(await readFile(resolve(root, ".well-known/takosumi.json"), "utf8"))
+  .install.modules[quickstartModule].inputs;
+// This mapping covers only explicit, plain user inputs; anything the compiler
+// would derive differently has to be handled here before recapturing.
+for (const input of quickstartManifestInputs) {
+  if (input.source.kind !== "user" || input.type === undefined || input.required === undefined
+    || input.advanced !== undefined || input.secret !== undefined) {
+    throw new Error(`${quickstartModule} input ${input.name} needs the capture's presentation mapping updated`);
+  }
+}
+const quickstartInputs = quickstartManifestInputs
+  .map((input) => ({
+    name: input.name,
+    ...(input.type ? { type: input.type } : {}),
+    ...(input.format ? { format: input.format } : {}),
+    required: input.required,
+    label: input.label,
+    ...(input.helper ? { helper: input.helper } : {}),
+    ...(input.placeholder ? { placeholder: input.placeholder } : {}),
+  }));
+const quickstartTf = (await Promise.all((await readdir(resolve(root, quickstartModule)))
+  .filter((file) => /\.tf(?:\.json)?$/u.test(file))
+  .map((file) => readFile(resolve(root, quickstartModule, file), "utf8")))).join("\n");
+if (/^\s*(?:resource|data|module)\s+["\w]|"(?:resource|data|module)"\s*:/mu.test(quickstartTf)) {
+  throw new Error(`${quickstartModule} now declares resources; re-plan it and update quickstartFlow.summary`);
+}
+const quickstartFlow = {
+  key: "quickstart",
+  git: "https://github.com/tako0614/takosumi.git",
+  ref: "main",
+  resolvedCommit: "89abcdef0123456789abcdef0123456789abcdef",
+  modulePath: quickstartModule,
+  installPlanId: "gip_3b8e1d0c6a5f4972",
+  providers: [],
+  connections: [],
+  rootModuleVariables: quickstartInputs.map((input) => input.name).sort(),
+  repositoryInstallConfigId: "cfg_demo_quickstart_repository",
+  installConfig: {
+    id: "cfg_demo_quickstart_repository", name: "opentofu-basic", policy: {}, variableMapping: {},
+    variablePresentation: quickstartInputs,
+    installExperience: { repositoryInstallUx: { status: "accepted" } },
+    outputAllowlist: {}, createdAt, updatedAt: createdAt,
+  },
+  summary: { add: 0, change: 0, destroy: 0 },
+};
+const quickstartPath = `/install?git=${quickstartFlow.git}&ref=${quickstartFlow.ref}&path=${quickstartFlow.modulePath}`;
+
+/** Answer one add flow's API calls so the real dashboard reaches its review. */
+async function stubAddFlow(page, flow) {
+  const ids = {
+    source: `src_demo_${flow.key}`,
+    snapshot: `snap_demo_${flow.key}`,
+    syncRun: `run_demo_${flow.key}_sync`,
+    planRun: `run_demo_${flow.key}_plan`,
+    capsule: `cap_demo_${flow.key}`,
+  };
+  const commit = flow.resolvedCommit ?? flow.ref;
+  let sourceRequest = {};
+  let planRequest = {};
+  const source = (extra = {}) => ({
+    id: ids.source, workspaceId: "ws_alpha", name: sourceRequest.name ?? flow.name, url: flow.git,
+    defaultRef: sourceRequest.defaultRef ?? flow.ref, defaultPath: sourceRequest.defaultPath ?? ".",
+    status: "active", autoSync: false, createdAt, updatedAt: createdAt, ...extra,
+  });
+  const installPlan = () => ({
+    installPlan: {
+      id: flow.installPlanId, workspaceId: "ws_alpha", createdBy: "sub_portable_e2e",
+      requestDigest: `sha256:${"2".repeat(64)}`,
+      source: { name: source().name, url: flow.git, ref: commit, path: flow.modulePath },
+      capsule: { name: planRequest.capsule?.name ?? source().name, environment: "production" },
+      options: planRequest.options ?? {}, preflight: planRequest.preflight,
+      sourceId: ids.source, sourceSnapshotId: ids.snapshot,
+      installConfigId: flow.installConfig.id, capsuleId: ids.capsule,
+      planRunId: ids.planRun, phase: "reviewable", generation: 1, createdAt, updatedAt: createdAt,
+    },
+    nextAction: "review_run",
+    links: { self: `/api/v1/install-plans/${flow.installPlanId}`, run: `/api/v1/runs/${ids.planRun}` },
+  });
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+    const json = (body, status = 200) => route.fulfill({ status, json: body });
+    if (path === "/api/v1/sources" && method === "GET") return json({ sources: [] });
+    if (path === "/api/v1/connections") return json({ connections: [] });
+    if (path === "/api/v1/provider-connections") return json({ providerConnections: flow.connections });
+    if (path === "/api/v1/sources" && method === "POST") {
+      sourceRequest = request.postDataJSON() ?? {};
+      return json({ source: source(), hookSecret: "fixture-only" });
+    }
+    if (path === `/api/v1/sources/${ids.source}` && method === "PATCH") {
+      return json({ source: source({ autoSync: request.postDataJSON()?.autoSync === true }) });
+    }
+    if (path === `/api/v1/sources/${ids.source}/sync` && method === "POST") return json({ run: { id: ids.syncRun } });
+    if (path === `/api/v1/runs/${ids.syncRun}`) {
+      return json({ run: {
+        id: ids.syncRun, workspaceId: "ws_alpha", sourceId: ids.source, type: "source_sync",
+        status: "succeeded", sourceSnapshotId: ids.snapshot, createdBy: "sub_portable_e2e", createdAt,
+      } });
+    }
+    if (path === `/api/v1/sources/${ids.source}/snapshots`) {
+      return json({ snapshots: [{
+        id: ids.snapshot, origin: "git", workspaceId: "ws_alpha", sourceId: ids.source,
+        url: flow.git, ref: flow.ref, resolvedCommit: commit, path: ".", archiveRef: "fixture",
+        archiveDigest: `sha256:${"1".repeat(64)}`, archiveSizeBytes: 1, fetchedByRunId: ids.syncRun,
+        fetchedAt: createdAt,
+      }] });
+    }
+    if (path === `/api/v1/sources/${ids.source}/snapshots/${ids.snapshot}/install-modules`) {
+      return json({
+        status: "ready", sourceSnapshotId: ids.snapshot, scopePath: ".",
+        modules: [{
+          path: flow.modulePath,
+          providerPackages: flow.providers.map(({ source: provider }) => ({ source: provider })),
+          rootProviderRequirements: flow.providers,
+        }],
+      });
+    }
+    if (path === `/api/v1/sources/${ids.source}/compatibility-check` && method === "POST") {
+      return json({
+        run: { id: `ccr_demo_${flow.key}`, type: "compatibility_check", status: "succeeded", compatibilityReportId: `caprep_demo_${flow.key}` },
+        report: {
+          id: `caprep_demo_${flow.key}`, level: "ready", findings: [],
+          providerPackages: flow.providers.map(({ source: provider }) => ({ source: provider, allowed: true })),
+          rootProviderRequirements: flow.providers.map((provider) => ({ ...provider, credentialRequired: true })),
+          resources: [], rootModuleVariables: flow.rootModuleVariables,
+        },
+        ...(flow.repositoryInstallConfigId
+          ? { repositoryInstallUx: { status: "accepted", installConfigId: flow.repositoryInstallConfigId } }
+          : {}),
+      });
+    }
+    if (path === `/api/v1/capsule-configs/${flow.installConfig.id}`) return json({ installConfig: flow.installConfig });
+    if (path === "/api/v1/workspaces/ws_alpha/install-plans" && method === "POST") {
+      planRequest = request.postDataJSON() ?? {};
+      return json(installPlan(), 201);
+    }
+    if (path === `/api/v1/install-plans/${flow.installPlanId}` && method === "GET") return json(installPlan());
+    if (path === `/api/v1/runs/${ids.planRun}`) {
+      return json({ run: {
+        id: ids.planRun, workspaceId: "ws_alpha", capsuleId: ids.capsule, type: "plan",
+        status: "succeeded", summary: flow.summary, policyStatus: "pass", requiresApproval: false,
+        createdBy: "sub_portable_e2e", createdAt,
+      } });
+    }
+    if (path === `/api/v1/runs/${ids.planRun}/stream`) {
+      return route.fulfill({ status: 200, contentType: "text/event-stream", body: "" });
+    }
+    return route.fallback();
+  });
+}
+
 async function ready(child) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (child.exitCode !== null) throw new Error(`dashboard fixture exited ${child.exitCode}`);
@@ -115,7 +316,7 @@ async function ready(child) {
   throw new Error("dashboard fixture did not become ready");
 }
 
-async function capture(browser, variant, viewport, theme, screens = ["home", "install"]) {
+async function capture(browser, variant, viewport, theme, screens = ["home", "install", "review"], locale = "ja-JP") {
   const iconAssets = new Map(await Promise.all(products.map(async (product) => [
     `/${product.icon}`,
     {
@@ -128,7 +329,7 @@ async function capture(browser, variant, viewport, theme, screens = ["home", "in
   const context = await browser.newContext({
     viewport,
     deviceScaleFactor: 2,
-    locale: "ja-JP",
+    locale,
     colorScheme: theme,
   });
   await context.addCookies([{
@@ -178,13 +379,16 @@ async function capture(browser, variant, viewport, theme, screens = ["home", "in
     if (url.pathname === "/api/v1/dashboard/bootstrap") {
       return json({
         session,
-        workspaces: [workspace],
+        workspaces: [locale === "ja-JP" ? workspace : { ...workspace, displayName: "Demo workspace" }],
         workspaceList: { total: 1, returned: 1, limit: 50, truncated: false },
         notifications: [],
       });
     }
     if (url.pathname === "/api/v1/workspaces") {
-      return json({ workspaces: [workspace], total: 1, returned: 1, limit: 50, truncated: false });
+      return json({
+        workspaces: [locale === "ja-JP" ? workspace : { ...workspace, displayName: "Demo workspace" }],
+        total: 1, returned: 1, limit: 50, truncated: false,
+      });
     }
     if (url.pathname === "/api/v1/workspaces/ws_alpha/capsules") {
       return json({ capsules: products.map(capsule) });
@@ -209,12 +413,17 @@ async function capture(browser, variant, viewport, theme, screens = ["home", "in
     for (const [screen, path, selector] of [
       ["home", "/", ".av-tile-wrap"],
       ["install", "/new", ".tcs-card"],
+      ["review", reviewPath, ".iv-execution .iv-change-counts"],
     ].filter(([screen]) => screens.includes(screen))) {
       failures.length = 0;
-      if (screen === "install" && variant === "mobile") {
+      if (screen !== "home" && variant === "mobile") {
         await page.setViewportSize({ width: viewport.width, height: 950 });
       }
+      if (screen === "review") await stubAddFlow(page, takosFlow);
       await page.goto(`${origin}${path}`, { waitUntil: "domcontentloaded" });
+      if (screen === "review") {
+        await page.getByRole("button", { name: "追加", exact: true }).click();
+      }
       await page.locator(selector).first().waitFor({ state: "visible" });
       const actualTheme = await page.locator("html").getAttribute("data-theme");
       if (actualTheme !== theme) {
@@ -234,6 +443,19 @@ async function capture(browser, variant, viewport, theme, screens = ["home", "in
       if (screen === "install" && await page.locator(selector).count() !== storeListings.length) {
         throw new Error("store did not render all three example listings");
       }
+      if (screen === "review") {
+        const counts = await page.locator(".iv-change-counts dd").allTextContents();
+        if (counts.join(",") !== Object.values(takosFlow.summary).join(",")) {
+          throw new Error(`review counts were ${counts.join(",")}`);
+        }
+        await page.locator(".iv-execution").getByRole("button", { name: "追加する", exact: true }).waitFor({ state: "visible" });
+        // The review sits below the source summary. Frame it from the required
+        // connection, just under the dashboard's sticky header.
+        await page.locator(".iv-provider-summary").filter({ hasText: "必要な接続" }).first().evaluate((element) => {
+          const header = document.querySelector("header")?.getBoundingClientRect().bottom ?? 0;
+          window.scrollTo({ top: element.getBoundingClientRect().top + window.scrollY - header - 24, behavior: "instant" });
+        });
+      }
       if (!imagesLoaded || errors.length || failures.length || unexpectedRequests.length) {
         throw new Error(`${screen}/${variant}: imagesLoaded=${imagesLoaded}; browser errors=${errors.join("; ")}; HTTP failures=${failures.join("; ")}; unexpected requests=${unexpectedRequests.join("; ")}`);
       }
@@ -242,18 +464,91 @@ async function capture(browser, variant, viewport, theme, screens = ["home", "in
       const capturedViewport = page.viewportSize();
       console.log(`${screen}/${variant}/${theme}: ${file} (${capturedViewport.width * 2}x${capturedViewport.height * 2})`);
     }
+    if (screens.includes("quickstart")) {
+      await captureQuickstart(page, locale, theme, () => {
+        if (errors.length || failures.length || unexpectedRequests.length) {
+          throw new Error(`quickstart/${locale}: browser errors=${errors.join("; ")}; HTTP failures=${failures.join("; ")}; unexpected requests=${unexpectedRequests.join("; ")}`);
+        }
+      });
+    }
   } finally {
     await context.close();
   }
 }
 
+/**
+ * The three screens Quickstart step 6 describes, from opening its /install
+ * link to the review. The first image is the whole add page without the
+ * shell; the next two are only the part of the card that each step adds.
+ */
+async function captureQuickstart(page, locale, theme, assertClean) {
+  const ja = locale === "ja-JP";
+  const labels = ja
+    ? { add: "追加", setup: "サービスを設定", next: "続ける", review: "追加前の確認", install: "追加する" }
+    : { add: "Add", setup: "Set up the service", next: "Continue", review: "Review before adding", install: "Add" };
+  await stubAddFlow(page, quickstartFlow);
+  await page.goto(`${origin}${quickstartPath}`, { waitUntil: "domcontentloaded" });
+  const box = (locator) => locator.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { left: rect.left, right: rect.right, top: rect.top + window.scrollY, bottom: rect.bottom + window.scrollY };
+  });
+  const shoot = async (step, region) => {
+    await page.evaluate(() => document.fonts.ready);
+    assertClean();
+    // Page coordinates from the top, so the sticky header never covers them.
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+    const { left, right, top, bottom } = await region();
+    const clip = { x: left, y: top, width: right - left, height: bottom - top };
+    const file = resolve(docsOutput, `quickstart-${step}${ja ? "" : "-en"}${theme === "dark" ? "-dark" : ""}.png`);
+    await page.screenshot({ path: file, clip, fullPage: true, animations: "disabled" });
+    console.log(`quickstart/${step}/${locale}/${theme}: ${file} (${Math.round(clip.width * 2)}x${Math.round(clip.height * 2)})`);
+  };
+  const card = page.locator(".iv-workbench").last();
+  // Stay inside the card's border, so the docs frame is the only edge.
+  const radius = await card.evaluate((element) => Number.parseFloat(getComputedStyle(element).borderBottomLeftRadius));
+  const inside = (cardBox, top, bottom) => ({
+    left: cardBox.left + 1, right: cardBox.right - 1, top, bottom: Math.min(bottom, cardBox.bottom - radius),
+  });
+  await page.locator(".iv-intro").waitFor({ state: "visible" });
+  // The whole add page, down to just below its card.
+  await shoot("add", async () => {
+    const pageBox = await box(page.locator(".iv-page"));
+    const cardBox = await box(card);
+    return { ...pageBox, bottom: cardBox.bottom + 32 };
+  });
+  await page.getByRole("button", { name: labels.add, exact: true }).click();
+  const setupHeading = page.getByRole("heading", { name: labels.setup });
+  await setupHeading.waitFor({ state: "visible" });
+  // From the setup heading to its Continue button, across the card.
+  await shoot("setup", async () => {
+    const cardBox = await box(card);
+    const headingBox = await box(setupHeading);
+    const buttonBox = await box(page.getByRole("button", { name: labels.next, exact: true }));
+    return inside(cardBox, headingBox.top - 20, buttonBox.bottom + 24);
+  });
+  await page.getByRole("button", { name: labels.next, exact: true }).click();
+  await page.getByRole("heading", { name: labels.review }).waitFor({ state: "visible" });
+  const counts = await page.locator(".iv-change-counts dd").allTextContents();
+  if (counts.join(",") !== Object.values(quickstartFlow.summary).join(",")) {
+    throw new Error(`quickstart review counts were ${counts.join(",")}`);
+  }
+  await page.locator(".iv-execution").getByRole("button", { name: labels.install, exact: true }).waitFor({ state: "visible" });
+  // The review section alone, across the card.
+  await shoot("review", async () => {
+    const cardBox = await box(card);
+    const reviewBox = await box(page.locator(".iv-execution"));
+    return inside(cardBox, reviewBox.top - 20, reviewBox.bottom + 24);
+  });
+}
+
 async function main() {
   const requestedTheme = process.argv[2] ?? "all";
   const requestedVariant = process.argv[3] ?? "all";
-  if (!["all", "dark", "light"].includes(requestedTheme) || !["all", "desktop-home"].includes(requestedVariant)) {
-    throw new Error("usage: node website/scripts/capture-dashboard-ui.mjs [all|dark|light] [all|desktop-home]");
+  if (!["all", "dark", "light"].includes(requestedTheme) || !["all", "desktop-home", "quickstart"].includes(requestedVariant)) {
+    throw new Error("usage: node website/scripts/capture-dashboard-ui.mjs [all|dark|light] [all|desktop-home|quickstart]");
   }
   await mkdir(output, { recursive: true });
+  await mkdir(docsOutput, { recursive: true });
   const fixture = spawn("bun", ["tests/dashboard/e2e/fixture-server.ts"], {
     cwd: root,
     env: { ...process.env, TAKOSUMI_E2E_PORT: "5199" },
@@ -267,8 +562,18 @@ async function main() {
     await ready(fixture);
     browser = await chromium.launch({ channel: "chrome", headless: true });
     for (const theme of requestedTheme === "all" ? ["dark", "light"] : [requestedTheme]) {
-      await capture(browser, "desktop", { width: 1200, height: 750 }, theme, requestedVariant === "desktop-home" ? ["home"] : ["home", "install"]);
+      if (requestedVariant === "quickstart") break;
+      await capture(browser, "desktop", { width: 1200, height: 750 }, theme, requestedVariant === "desktop-home" ? ["home"] : ["home", "install", "review"]);
       if (requestedVariant === "all") await capture(browser, "mobile", { width: 390, height: 700 }, theme);
+    }
+    // The docs show these in both locales and appearances, at a width where
+    // the add page keeps its desktop layout.
+    if (requestedVariant !== "desktop-home") {
+      for (const theme of requestedTheme === "all" ? ["light", "dark"] : [requestedTheme]) {
+        for (const locale of ["ja-JP", "en-US"]) {
+          await capture(browser, "desktop", { width: 1100, height: 900 }, theme, ["quickstart"], locale);
+        }
+      }
     }
   } finally {
     await browser?.close();

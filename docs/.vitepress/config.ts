@@ -246,6 +246,8 @@ export default defineConfig({
     // values) and github-dark comments fall below 4.5:1 on the code block
     // background; these keep every token above it.
     theme: { light: "github-light-high-contrast", dark: "github-dark-default" },
+    // Screenshots sit far down long pages; load them as the reader arrives.
+    image: { lazyLoading: true },
     config(md) {
       wrappedLines(md);
       scrollableTables(md);
