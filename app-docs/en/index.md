@@ -23,7 +23,7 @@ apply, state, outputs, audit, usage, and prepaid credit together.
    - A change that deletes, replaces, or imports something first needs
      **Approve this change** and the **I reviewed these changes** checkbox.
    - A change that a policy or billing check stops shows **Service setup did not finish**,
-     and **Technical details** shows why.
+     and **Technical details** opens its Run.
 6. When **Service added** appears, **Open service** takes you to it.
 
 ```text
