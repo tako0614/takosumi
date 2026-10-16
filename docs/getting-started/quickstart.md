@@ -99,9 +99,8 @@ module path は折りたたまれた **取得元の詳細** に入っていま�
 
 準備が終わると **追加前の確認** に、作成・変更・削除されるリソースの数が表示されます。
 このサンプルは provider を使わず、リソースを作らないため、3 つとも 0 です。それでも
-クラウドの認証情報なしで runner、plan、apply、state 保存まで確認できます。見出しの横の
-**成功** は変更内容（plan）を作れたという意味で、この時点ではまだ何も追加されていません。内容を確認して
-**追加する** を押すと apply が始まります。
+クラウドの認証情報なしで runner、plan、apply、state 保存まで確認できます。この時点では
+まだ何も追加されていません。内容を確認して **追加する** を押すと apply が始まります。
 
 [![「追加前の確認」の画面。作成 0、変更 0、削除 0 と表示され、その下に「追加する」ボタンと「技術的な詳細」のリンクがある](/getting-started/quickstart-review.png){.screenshot width=1468 height=626}](/getting-started/quickstart-review.png){.light-only}
 [![「追加前の確認」の画面。作成 0、変更 0、削除 0 と表示され、その下に「追加する」ボタンと「技術的な詳細」のリンクがある](/getting-started/quickstart-review-dark.png){.screenshot width=1468 height=626}](/getting-started/quickstart-review-dark.png){.dark-only}
@@ -117,8 +116,12 @@ module path は折りたたまれた **取得元の詳細** に入っていま�
 
 ## 7. 結果を見る
 
-`https://app.takosumi.test/runs` で plan と apply の記録を確認します。Capsule の詳細には
-適用後の state が版ごとに保存されます。
+**追加できました** の **サービスを開く** で、追加したワークロードを開きます。**更新** タブの
+**更新履歴** を開くと、apply ごとの記録が日時つきで並び、使われている版に **現在** と
+表示されます。2 回目以降の apply では、前の版の **以前の状態に戻す** からその版に戻せます。
+
+plan と apply の Run は、右上のアカウントのメニューにある **デプロイ履歴**
+（`https://app.takosumi.test/runs`）に新しい順に並びます。
 
 環境全体を検査する場合は、リポジトリ同梱の smoke test を使います。
 
