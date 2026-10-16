@@ -2248,6 +2248,10 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(
       page.getByRole("heading", { name: /追加前の確認|Review before adding/u }),
     ).toBeVisible();
+    // A succeeded plan is ready to review; nothing has been added yet.
+    const reviewBadge = page.locator(".iv-review-head .tg-badge");
+    await expect(reviewBadge).toHaveText(/確認できます|Ready to review/u);
+    await expect(reviewBadge).not.toHaveText(/成功|Succeeded/u);
     await expect(
       page.locator('[data-install-provider-destination="auto-selected"]'),
     ).toHaveCount(0);

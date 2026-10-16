@@ -404,7 +404,9 @@ export default function InstallExecution(props: Props) {
                   readinessState(),
                 )}
               >
-                {runStatusLabel(current().status)}
+                {current().type === "plan" && current().status === "succeeded"
+                  ? t("installStore.reviewReady")
+                  : runStatusLabel(current().status)}
               </Badge>
             </div>
 

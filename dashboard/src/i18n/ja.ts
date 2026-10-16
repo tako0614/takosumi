@@ -118,6 +118,7 @@ export const ja = {
   "installStore.reviewingHint": "デプロイする前に変更内容を確認しています。",
   "installStore.reviewTitle": "追加前の確認",
   "installStore.reviewHint": "Takosumiが行う変更です。",
+  "installStore.reviewReady": "確認できます",
   "installStore.changes": "変更数",
   "installStore.createCount": "作成",
   "installStore.updateCount": "変更",
