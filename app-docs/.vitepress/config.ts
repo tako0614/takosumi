@@ -8,8 +8,8 @@ import { scrollableTables } from "../../docs/.vitepress/scrollable-tables";
 import { firstParagraphText, wrappedLines } from "../../docs/.vitepress/wrapped-lines";
 
 // Pages rarely carry a frontmatter description. Fall back to the first prose
-// paragraph of the Markdown source so a shared link describes the actual page
-// rather than repeating the site blurb.
+// paragraph of the Markdown source so a search result or a shared link
+// describes the actual page rather than repeating the site blurb.
 function firstParagraph(srcDir: string, relativePath: string): string | undefined {
   try {
     return firstParagraphText(readFileSync(path.join(srcDir, relativePath), "utf8"));
@@ -90,15 +90,19 @@ const config: UserConfig = {
     ["meta", { property: "og:site_name", content: "Takosumi" }],
     ["meta", { name: "twitter:card", content: "summary_large_image" }],
   ],
+  transformPageData(pageData, { siteConfig }) {
+    // A frontmatter or head: description is already set; keep it.
+    if (pageData.description) return;
+    const description = firstParagraph(siteConfig.srcDir, pageData.relativePath);
+    // VitePress writes <meta name="description"> without escaping, so a
+    // straight double quote from the prose would end the attribute.
+    if (description) return { description: description.replace(/"/gu, "”") };
+  },
+  // `description` is the page's own, from transformPageData, when it has one.
   transformHead({ pageData, siteConfig, title, description }) {
     const route = pageData.relativePath
       .replace(/(^|\/)index\.md$/u, "$1")
       .replace(/\.md$/u, "");
-    const ogDescription = pageData.frontmatter?.description
-      ? description
-      : (siteConfig?.srcDir
-          ? firstParagraph(siteConfig.srcDir, pageData.relativePath)
-          : undefined) ?? description;
     const pageUrl = new URL(`${base}${route}`, "https://app.takosumi.com/").href;
     // hreflang targets the same page in the other locale when that source file
     // exists; x-default points at the root (Japanese) locale.
@@ -131,7 +135,7 @@ const config: UserConfig = {
     }
     return [
       ["meta", { property: "og:title", content: title }],
-      ["meta", { property: "og:description", content: ogDescription }],
+      ["meta", { property: "og:description", content: description }],
       [
         "meta",
         { property: "og:locale", content: route.startsWith("en/") ? "en_US" : "ja_JP" },
@@ -156,7 +160,7 @@ const config: UserConfig = {
       ["meta", { property: "og:image:height", content: "630" }],
       ...alternates,
       ["meta", { name: "twitter:title", content: title }],
-      ["meta", { name: "twitter:description", content: ogDescription }],
+      ["meta", { name: "twitter:description", content: description }],
       [
         "meta",
         {
