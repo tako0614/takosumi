@@ -124,13 +124,15 @@ applied on their own.
 
 ## 7. Inspect the result
 
-On **Service added**, **Open service** opens the new workload. Its **Updates**
-tab has **Update history**, which lists each apply with its time and marks the
-version in use as **Current**. After a later apply, **Restore a previous
-version** on an older entry takes the workload back to it.
+On the workload page that **Open service** opened, expand **Update history** on
+the **Updates** tab. It lists each apply with its time and marks the version in
+use as **Current**. After a later apply, **Restore a previous version** →
+**Restore this state** on an older entry creates the changes (a plan) that take
+the workload back to it; as in step 6, review them before they are applied.
 
-The plan and apply Runs are listed newest first under **Deploy history** in the
-account menu at the top right (`https://app.takosumi.test/runs`).
+The plan and apply Runs are listed newest first, as **Review** (plan) and
+**Deploy** (apply), under **Deploy history** in the user menu behind your initial
+at the top right (`https://app.takosumi.test/runs`).
 
 To test the whole environment:
 
