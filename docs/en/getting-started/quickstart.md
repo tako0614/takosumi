@@ -106,9 +106,8 @@ fields and no connection to choose. Both are optional. Leave them blank and pres
 When it is ready, **Review before adding** shows how many resources will be
 created, changed, and deleted. The example has no provider and creates no
 resources, so all three are 0; it still lets you test the runner, plan, apply,
-and state storage without cloud credentials. The **Succeeded** badge next to the
-heading means the plan was made; nothing has been added yet. After checking the changes, press
-**Add** again to start the apply.
+and state storage without cloud credentials. Nothing has been added yet at this
+point. After checking the changes, press **Add** again to start the apply.
 
 [![Review before adding. Create 0, Change 0 and Delete 0 are shown, with the Add button and the Technical details link below](/getting-started/quickstart-review-en.png){.screenshot width=1468 height=626}](/getting-started/quickstart-review-en.png){.light-only}
 [![Review before adding. Create 0, Change 0 and Delete 0 are shown, with the Add button and the Technical details link below](/getting-started/quickstart-review-en-dark.png){.screenshot width=1468 height=626}](/getting-started/quickstart-review-en-dark.png){.dark-only}
@@ -125,8 +124,15 @@ applied on their own.
 
 ## 7. Inspect the result
 
-Open `https://app.takosumi.test/runs` to see the plan and apply records. The
-Capsule page keeps the state produced by each successful apply.
+On the workload page that **Open service** opened, expand **Update history** on
+the **Updates** tab. It lists each apply with its time and marks the version in
+use as **Current**. After a later apply, **Restore a previous version** →
+**Restore this state** on an older entry creates the changes (a plan) that take
+the workload back to it; as in step 6, review them before they are applied.
+
+The plan and apply Runs are listed newest first, as **Review** (plan) and
+**Deploy** (apply), under **Deploy history** in the user menu behind your initial
+at the top right (`https://app.takosumi.test/runs`).
 
 To test the whole environment:
 
