@@ -1,5 +1,6 @@
 import {
   TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH,
+  normalizeIssuer,
   type TakosumiSubject,
   type TakosumiAccountsPatScope,
 } from "@takosjp/takosumi-accounts-contract";
@@ -52,6 +53,19 @@ import {
   type SharedWorkspaceBillingResolver,
 } from "../../../accounts/service/src/shared-account-workspace.ts";
 import { createRequestPhaseDiagnostics } from "../../../accounts/service/src/request-phase-diagnostics.ts";
+import {
+  createAccountsFinancialControlSource,
+  createAccountsFinancialSource,
+  FinancialSourceUnavailable,
+  type AccountsFinancialEventEvidenceOptions,
+  type AccountsFinancialSourceOptions,
+} from "../../../accounts/service/src/financial-source.ts";
+import {
+  financialSourceRef,
+  parseFinancialSourceRegistration,
+  type FinancialSourceRegistration,
+} from "../../../accounts/service/src/financial-source-contract.ts";
+import { WorkspaceFinancialSourceService } from "../../../core/domains/workspaces/financial-source.ts";
 
 export interface CloudflareWorkerEnv {
   readonly [name: string]: unknown;
@@ -120,10 +134,44 @@ export interface CloudflareWorkerHandler<
     env: TEnv,
     context?: AccountsWorkerExecutionContext,
   ): Promise<Response>;
+  /** In-process named caller only. No request route invokes this resolver. */
+  resolvePrivateFinancialSource?(env: TEnv): Promise<PrivateAccountsFinancialSourceFacade>;
 }
 
 interface AccountsWorkerExecutionContext {
   waitUntil(promise: Promise<unknown>): void;
+}
+
+/** Private, unmounted source-origin assembly. Its observer receives only the
+ * existing Accounts producer methods. Presence of this hook is never evidence
+ * of a genuine issuer, a selected Financial peer, or M dispatch authority. */
+export type PrivateAccountsFinancialSourceFacade = Pick<
+  ReturnType<typeof createAccountsFinancialSource>,
+  "prepareFinancialIdentityProofSource" |
+    "preparePendingFinancialSourceOriginals" |
+    "loadFinancialSourceEventEvidence"
+>;
+
+export interface PrivateAccountsFinancialSourceInputs {
+  readonly registration: FinancialSourceRegistration;
+  readonly challenges: NonNullable<AccountsFinancialSourceOptions["challenges"]>;
+  readonly eventEvidence: AccountsFinancialEventEvidenceOptions;
+}
+
+type RegisteredHeadReadRequest = Parameters<
+  NonNullable<AccountsFinancialEventEvidenceOptions["registeredHeads"]>["readRegisteredHead"]
+>[0];
+type CredentialContextReadRequest = Parameters<
+  NonNullable<AccountsFinancialEventEvidenceOptions["keyCustody"]>["readCredentialContext"]
+>[0];
+
+export interface PrivateAccountsFinancialSourceOrigin<TEnv extends CloudflareWorkerEnv> {
+  /** Supplied by the same canonical Control composition, never a copied facade. */
+  readonly coreFinancialSource: (env: TEnv) => Promise<WorkspaceFinancialSourceService | undefined>;
+  /** An owner-captured original C0/registration/key/head/clock set, not request data. */
+  readonly inputs?: (env: TEnv) => Promise<PrivateAccountsFinancialSourceInputs | undefined>;
+  /** No store, env, configuration, token, or dispatch capability crosses this seam. */
+  readonly observe?: (source: PrivateAccountsFinancialSourceFacade) => void | Promise<void>;
 }
 
 export interface CreateCloudflareWorkerOptions<
@@ -140,6 +188,8 @@ export interface CreateCloudflareWorkerOptions<
   readonly controlPlaneOperations?: (
     env: TEnv,
   ) => Promise<ControlPlaneOperations | undefined>;
+  /** @internal Explicit source preparation only; absent complete inputs remain off. */
+  readonly privateFinancialSourceOrigin?: PrivateAccountsFinancialSourceOrigin<TEnv>;
   /**
    * Narrow, read-only Workspace membership authority for the PAT self view.
    * This is deliberately separate from the lazy full Control composition.
@@ -232,6 +282,27 @@ const controlPlaneOperationsByEnv = new WeakMap<
   CloudflareWorkerEnv,
   Promise<ControlPlaneOperations | undefined>
 >();
+interface PrivateFinancialSourceSlot { active: boolean }
+interface PrivateFinancialSourceRecord {
+  readonly owner: object;
+  readonly resolve: () => Promise<PrivateAccountsFinancialSourceFacade>;
+}
+// A second full-handler build for one env revokes the prior private facade and
+// cannot silently replace its Accounts store, Control service or origin inputs.
+const privateFinancialSourceSlots = new WeakMap<CloudflareWorkerEnv, PrivateFinancialSourceSlot>();
+const privateFinancialSourceByHandler = new WeakMap<AccountsHandler, PrivateFinancialSourceRecord>();
+const PRIVATE_FINANCIAL_SOURCE_RESOLUTION_DEADLINE_MS = 5_000;
+
+type CapturedPrivateFinancialSourceOrigin<TEnv extends CloudflareWorkerEnv> =
+  Readonly<PrivateAccountsFinancialSourceOrigin<TEnv>>;
+
+function nextPrivateFinancialSourceSlot(env: CloudflareWorkerEnv): PrivateFinancialSourceSlot {
+  const prior = privateFinancialSourceSlots.get(env);
+  if (prior) prior.active = false;
+  const slot = { active: prior === undefined };
+  privateFinancialSourceSlots.set(env, slot);
+  return slot;
+}
 
 type Es256PrivateJwk = JsonWebKey & {
   readonly kid?: string;
@@ -244,11 +315,33 @@ export function createCloudflareWorker<
 >(
   options: CreateCloudflareWorkerOptions<TEnv> = {},
 ): CloudflareWorkerHandler<TEnv> {
+  // Capture the private functions at worker construction. Changing the options
+  // object after a request begins cannot substitute the source origin.
+  const requestedOrigin = options.privateFinancialSourceOrigin;
+  const privateOrigin = requestedOrigin && Object.freeze({
+    coreFinancialSource: requestedOrigin.coreFinancialSource,
+    inputs: requestedOrigin.inputs,
+    observe: requestedOrigin.observe,
+  });
   const phaseDiagnostics = new WeakMap<
     TEnv,
     ReturnType<typeof createRequestPhaseDiagnostics>
   >();
   return {
+    async resolvePrivateFinancialSource(env: TEnv): Promise<PrivateAccountsFinancialSourceFacade> {
+      try {
+        if (!privateOrigin) throw new FinancialSourceUnavailable("source_unavailable");
+        // This may initialize the ordinary HTTP handler, but it never creates
+        // a second store. Optional source callbacks run only after that handler
+        // and its actual D1 store have been captured.
+        const cached = await cachedAccountsHandler(env, options, false, undefined, privateOrigin);
+        const record = privateFinancialSourceByHandler.get(cached.handler);
+        if (record?.owner !== privateOrigin) throw new FinancialSourceUnavailable("source_unavailable");
+        return await record.resolve();
+      } catch {
+        throw new FinancialSourceUnavailable("source_unavailable");
+      }
+    },
     async fetch(
       request: Request,
       env: TEnv,
@@ -352,6 +445,7 @@ export function createCloudflareWorker<
             options,
             usesIdentityOnlyAccountsHandler(url.pathname),
             context,
+            privateOrigin,
           ),
         );
         initializationTiming = cached;
@@ -536,6 +630,7 @@ async function cachedAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   options: CreateCloudflareWorkerOptions<TEnv>,
   identityOnly = false,
   context?: AccountsWorkerExecutionContext,
+  privateOrigin?: CapturedPrivateFinancialSourceOrigin<TEnv>,
 ): Promise<CachedAccountsHandlerResult> {
   const cache = identityOnly ? identityHandlers : handlers;
   let cached = cache.get(env);
@@ -608,7 +703,7 @@ async function cachedAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     cache.set(env, cached);
     const attempt = cached;
     const promise = observeAccountsHandlerInitialization(
-      buildAccountsHandler(env, options, identityOnly),
+      buildAccountsHandler(env, options, identityOnly, privateOrigin),
       identityOnly ? "identity" : "control",
     );
     const settle = (
@@ -809,11 +904,158 @@ function usesIdentityOnlyAccountsHandler(pathname: string): boolean {
   return false;
 }
 
+async function installPrivateFinancialSourceOrigin<TEnv extends CloudflareWorkerEnv>(input: {
+  readonly env: TEnv;
+  readonly slot: PrivateFinancialSourceSlot;
+  readonly origin: CapturedPrivateFinancialSourceOrigin<TEnv>;
+  readonly store: D1AccountsStore;
+  readonly issuer: string;
+  readonly clients: readonly OidcClientRegistration[] | undefined;
+}): Promise<PrivateAccountsFinancialSourceFacade> {
+  const {env, slot, origin, store, issuer, clients} = input;
+  const isCurrent = () => slot.active && privateFinancialSourceSlots.get(env) === slot;
+  // The staging owner currently supplies only the real Core resolver. Without
+  // its separate fixed C0/registration/key/head/clock source this stays OFF.
+  if (origin.inputs === undefined && origin.observe === undefined)
+    throw new FinancialSourceUnavailable("source_unavailable");
+  try {
+    if (typeof origin.inputs !== "function" || typeof origin.observe !== "function" ||
+        typeof origin.coreFinancialSource !== "function" || !clients || !isCurrent())
+      throw new FinancialSourceUnavailable("source_unavailable");
+    const supplied = await Reflect.apply(origin.inputs, origin, [env]);
+    if (!isCurrent() || !supplied || !supplied.challenges || !supplied.eventEvidence)
+      throw new FinancialSourceUnavailable("source_unavailable");
+    const registration = parseFinancialSourceRegistration(structuredClone(supplied.registration));
+    const challengeOwner = supplied.challenges;
+    const readChallenge = challengeOwner.read;
+    const selected = supplied.eventEvidence;
+    const heads = selected.registeredHeads, readHead = heads?.readRegisteredHead;
+    const custody = selected.keyCustody, readCredential = custody?.readCredentialContext;
+    const clock = selected.clock, readClock = clock?.nowMilliseconds;
+    const sourceCredentialRef = selected.sourceCredentialRef;
+    const sourceSchemaRef = selected.sourceSchemaRef;
+    const receiverRef = selected.receiverRef;
+    const targetRef = selected.targetRef;
+    const receiverSchemaRef = selected.receiverSchemaRef;
+    const clockPolicyRef = clock?.policyRef;
+    if (!heads || !custody || !clock || typeof readChallenge !== "function" ||
+        typeof readHead !== "function" || typeof readCredential !== "function" || typeof readClock !== "function" ||
+        ![sourceCredentialRef, sourceSchemaRef, receiverRef,
+          targetRef, receiverSchemaRef].every(financialSourceRef) ||
+        !financialSourceRef(clockPolicyRef) ||
+        !registration.receivers.some((peer) => peer.receiverRef === receiverRef && peer.targetRef === targetRef))
+      throw new FinancialSourceUnavailable("source_unavailable");
+    // Capture the callable and its original receiver before the next await.
+    // Later mutation of the supplied option objects cannot swap bindings.
+    const challenges: NonNullable<AccountsFinancialSourceOptions["challenges"]> = Object.freeze({
+      read: async (ref: string) => await Reflect.apply(readChallenge, challengeOwner, [ref]),
+    });
+    const eventEvidence: AccountsFinancialEventEvidenceOptions = Object.freeze({
+      sourceCredentialRef,
+      sourceSchemaRef,
+      receiverRef,
+      targetRef,
+      receiverSchemaRef,
+      registeredHeads: Object.freeze({
+        readRegisteredHead: async (request: RegisteredHeadReadRequest) =>
+          await Reflect.apply(readHead, heads, [request]),
+      }),
+      keyCustody: Object.freeze({
+        readCredentialContext: async (request: CredentialContextReadRequest) =>
+          await Reflect.apply(readCredential, custody, [request]),
+      }),
+      clock: Object.freeze({
+        policyRef: clockPolicyRef,
+        nowMilliseconds: () => Reflect.apply(readClock, clock, []),
+      }),
+    });
+    const core = await Reflect.apply(origin.coreFinancialSource, origin, [env]);
+    if (!isCurrent() || !(core instanceof WorkspaceFinancialSourceService))
+      throw new FinancialSourceUnavailable("source_unavailable");
+    // Core's actual Control original has an independent registration/full key.
+    // Accounts registration must never be projected into Control event evidence.
+    const control = createAccountsFinancialControlSource({service: core});
+    const producer = createAccountsFinancialSource({
+      store, issuer: normalizeIssuer(issuer), clients, registration, challenges, control, eventEvidence,
+    });
+    let published = false;
+    const through = async <T>(work: () => Promise<T>): Promise<T> => {
+      if (!published || !isCurrent()) throw new FinancialSourceUnavailable("source_unavailable");
+      const result = await work();
+      if (!isCurrent()) throw new FinancialSourceUnavailable("source_unavailable");
+      return result;
+    };
+    const facade: PrivateAccountsFinancialSourceFacade = Object.freeze({
+      prepareFinancialIdentityProofSource: (value) =>
+        through(() => producer.prepareFinancialIdentityProofSource(value)),
+      preparePendingFinancialSourceOriginals: (value) =>
+        through(() => producer.preparePendingFinancialSourceOriginals(value)),
+      loadFinancialSourceEventEvidence: (value) =>
+        through(() => producer.loadFinancialSourceEventEvidence(value)),
+    });
+    await Reflect.apply(origin.observe, origin, [facade]);
+    if (!isCurrent()) throw new FinancialSourceUnavailable("source_unavailable");
+    published = true;
+    return facade;
+  } catch {
+    slot.active = false;
+    // The outer Accounts init response includes an error description. Never
+    // echo a private callback/credential-reader exception into that response.
+    throw new FinancialSourceUnavailable("source_unavailable");
+  }
+}
+
+function privateFinancialSourceRecord<TEnv extends CloudflareWorkerEnv>(input: {
+  readonly env: TEnv;
+  readonly slot: PrivateFinancialSourceSlot;
+  readonly origin: CapturedPrivateFinancialSourceOrigin<TEnv>;
+  readonly store: D1AccountsStore;
+  readonly issuer: string;
+  readonly clients: readonly OidcClientRegistration[] | undefined;
+}): PrivateFinancialSourceRecord {
+  let flight: Promise<PrivateAccountsFinancialSourceFacade> | undefined;
+  return {
+    owner: input.origin,
+    resolve: () => {
+      if (!input.slot.active || privateFinancialSourceSlots.get(input.env) !== input.slot)
+        return Promise.reject(new FinancialSourceUnavailable("source_unavailable"));
+      if (!flight) {
+        // One supervised source-only flight per actual handler. A stuck owner
+        // callback cannot delay HTTP and cannot publish after this deadline.
+        const operation = installPrivateFinancialSourceOrigin(input);
+        flight = new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            input.slot.active = false;
+            reject(new FinancialSourceUnavailable("source_unavailable"));
+          }, PRIVATE_FINANCIAL_SOURCE_RESOLUTION_DEADLINE_MS);
+          void operation.then(
+            (facade) => {
+              clearTimeout(timer);
+              if (input.slot.active) resolve(facade);
+              else reject(new FinancialSourceUnavailable("source_unavailable"));
+            },
+            () => {
+              clearTimeout(timer);
+              input.slot.active = false;
+              reject(new FinancialSourceUnavailable("source_unavailable"));
+            },
+          );
+        });
+      }
+      return flight;
+    },
+  };
+}
+
 async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   env: TEnv,
   options: CreateCloudflareWorkerOptions<TEnv>,
   identityOnly = false,
+  privateOrigin?: CapturedPrivateFinancialSourceOrigin<TEnv>,
 ): Promise<AccountsHandler> {
+  // No identity-only request, later request, or abandoned initializer can
+  // publish a new private source over an earlier source for the same env.
+  const sourceSlot = identityOnly ? undefined : nextPrivateFinancialSourceSlot(env);
   if (!env.TAKOSUMI_ACCOUNTS_DB) {
     throw new TypeError("TAKOSUMI_ACCOUNTS_DB D1 binding is required");
   }
@@ -908,17 +1150,26 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     ),
   };
   const stableOidc = await parseStableOidcFlow(env);
+  let handler: AccountsHandler;
   if (stableOidc) {
-    return createAccountsHandler({
+    handler = createAccountsHandler({
       ...commonOptions,
       jwks: stableOidc.jwks,
       oidcFlow: stableOidc.oidcFlow,
     });
+  } else {
+    handler = await createEphemeralAccountsHandler({
+      ...commonOptions,
+      subject: optionalString(env.TAKOSUMI_ACCOUNTS_SUBJECT),
+    });
   }
-  return await createEphemeralAccountsHandler({
-    ...commonOptions,
-    subject: optionalString(env.TAKOSUMI_ACCOUNTS_SUBJECT),
-  });
+  if (sourceSlot && privateOrigin) {
+    privateFinancialSourceByHandler.set(handler, privateFinancialSourceRecord({
+      env, slot: sourceSlot, origin: privateOrigin, store,
+      issuer, clients,
+    }));
+  }
+  return handler;
 }
 
 /** Resolve common Control only for directory operations, never identity probes. */
