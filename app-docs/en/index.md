@@ -10,12 +10,21 @@ apply, state, outputs, audit, usage, and prepaid credit together.
 
 ## Your first deployment
 
-1. Sign in to the [Dashboard](https://app.takosumi.com/) and select a Workspace.
-2. Add a repository from the Store or by Git URL.
-3. Select a Connection for each displayed connection requirement, using its module name and
-   alias to distinguish entries. Providers that do not require credentials need no Connection.
-4. Review the plan and quote, then apply it.
-5. Open the service from the Run outputs or an Interface published by the app.
+1. Sign in to the [dashboard](https://app.takosumi.com/) and select a workspace.
+2. Press **Add** on an app in the **Store**, or enter a Git URL under
+   **Add from a Git repository**. Opening an app's add link leads to the same screen.
+3. Check the service name and source, then press **Add**. Takosumi pins the Git version
+   and checks the module and the connections it needs. No resources are created yet.
+4. If a connection has to be chosen, pick it on **Choose a Host / account** and press
+   **Continue**. Providers that need no credentials need no connection. If the app asks
+   for input, fill it in on **Set up the service** and press **Continue**.
+5. On **Review before adding**, check how many resources will be created, changed, and
+   deleted, then press **Add**.
+   - A change that deletes, replaces, or imports something first needs
+     **Approve this change** and the **I reviewed these changes** checkbox.
+   - A change that a policy or billing check stops shows **Service setup did not finish**,
+     and **Technical details** opens its Run.
+6. When **Service added** appears, **Open service** takes you to it.
 
 ```text
 Git repository

@@ -69,10 +69,10 @@
 .iv-centered h2 { margin-top: var(--tg-s-4); }
 .iv-error, .iv-review-warning { display: flex; gap: var(--tg-s-3); width: min(100%, 46rem); margin: 0 auto var(--tg-s-4); padding: var(--tg-s-4); border: 1px solid var(--tg-danger); border-radius: var(--tg-r-md); background: var(--tg-bg-subtle); color: var(--tg-fg); }
 .iv-execution { display: grid; gap: var(--tg-s-5); }
-/* The label keeps its line; on a narrow screen the select wraps below it. */
+/* The label keeps its line; a name too long to fit wraps below it. */
 .iv-destination-summary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tg-s-2); margin-bottom: var(--tg-s-5); padding: var(--tg-s-3) var(--tg-s-4); border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); background: var(--tg-bg-subtle); color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); }
 .iv-destination-summary > span { flex: none; white-space: nowrap; }
-.iv-destination-summary .tg-select { flex: 1 1 14rem; width: auto; min-width: 0; margin: 0; color: var(--tg-fg); }
+.iv-destination-name { flex: 1 1 auto; min-width: 0; color: var(--tg-fg); font-weight: 600; overflow-wrap: anywhere; }
 .iv-review-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--tg-s-4); }
 .iv-status { display: flex; align-items: flex-start; gap: var(--tg-s-3); padding: var(--tg-s-4); border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); background: var(--tg-bg-hi); }
 .iv-status strong, .iv-status span { display: block; }
