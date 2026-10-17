@@ -109,9 +109,13 @@ bunx wrangler secret put TAKOSUMI_ACCOUNT_SESSION_HASH_SALT \
 `TAKOSUMI_DEPLOY_CONTROL_TOKEN` が operator 専用 API の bearer です。
 
 accounts 側の D1 スキーマは、チェックアウトの `takosumi` CLI で適用します。用意の仕方は
-[CLI](../reference/cli.md) にあります。Worker は Accounts の D1 が対応する版になっていないと
-動かず、ログに `accounts_d1_schema_incompatible` を出すため、`wrangler deploy` の前に
-済ませます。
+[CLI](../reference/cli.md) にあります。Accounts D1 が対応する版でないと Worker は要求を処理せず、
+ログに `accounts_d1_schema_incompatible` を出します。
+
+新しく構築する場合は、Worker に最初の要求が届く前、つまり `wrangler deploy` の前に済ませます。
+既定の `bootstrap` モードの Worker は、最初の要求で版の記録のない表を作るためです。CLI で適用する
+運用では、`[vars]` に `TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE = "predeployed"` を加えると、Worker は
+Accounts D1 に DDL を出さず、版の確認だけを行います。
 
 次の値を環境変数に入れます。
 
@@ -121,6 +125,12 @@ accounts 側の D1 スキーマは、チェックアウトの `takosumi` CLI で
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare のアカウント ID |
 | `CLOUDFLARE_DATABASE_ID` | `takosumi-accounts` の database ID |
 | `SOURCE_COMMIT` | 変更のないチェックアウトの commit（`git rev-parse HEAD`）。一致しないと CLI は外部に触れずに止まります |
+
+各段階は結果を JSON で表示します。`BACKUP_EVIDENCE_DIGEST` には backup-status が表示する
+`backupEvidenceDigest` を入れます。`SOURCE_DIGEST`、`CATALOG_DIGEST`、`TARGET_DIGEST`、
+`CONFIGURATION_DIGEST` には、plan が表示する `sourceDigest`、`catalogDigest`、`targetDigest`、
+`configurationDigest` を入れます。`--out` には毎回新しいファイル名を指定します。同じ名前の
+ファイルがあると止まります。
 
 ```bash
 # 1. 適用前の状態を記録する。Time Travel の bookmark を非公開のファイルに書き出し、

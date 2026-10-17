@@ -113,9 +113,14 @@ Four more go in the same way. `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK` and
 `TAKOSUMI_DEPLOY_CONTROL_TOKEN` is the bearer for the operator-only API.
 
 Apply the Accounts D1 schema with the `takosumi` CLI from a checkout;
-[CLI](../reference/cli.md) shows how to set it up. The Worker does not serve until the
-Accounts D1 is at a version it accepts, and it logs `accounts_d1_schema_incompatible`, so
-do this before `wrangler deploy`.
+[CLI](../reference/cli.md) shows how to set it up. Until the Accounts D1 is at a version it
+accepts, the Worker does not handle requests and logs `accounts_d1_schema_incompatible`.
+
+For a new installation, do this before the Worker receives its first request, that is,
+before `wrangler deploy`. In the default `bootstrap` mode, the Worker's first request
+creates tables with no version record. If you apply the schema with the CLI, adding
+`TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE = "predeployed"` under `[vars]` makes the Worker issue no
+DDL to the Accounts D1 and only check the version.
 
 Set these environment variables:
 
@@ -125,6 +130,12 @@ Set these environment variables:
 | `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare account ID |
 | `CLOUDFLARE_DATABASE_ID` | The database ID of `takosumi-accounts` |
 | `SOURCE_COMMIT` | The commit of a clean checkout (`git rev-parse HEAD`). If it does not match, the CLI stops before touching anything outside |
+
+Each step prints its result as JSON. Set `BACKUP_EVIDENCE_DIGEST` to the
+`backupEvidenceDigest` that backup-status prints. Set `SOURCE_DIGEST`, `CATALOG_DIGEST`,
+`TARGET_DIGEST`, and `CONFIGURATION_DIGEST` to the `sourceDigest`, `catalogDigest`,
+`targetDigest`, and `configurationDigest` that plan prints. Give `--out` a new file name
+each time; the CLI stops if the file already exists.
 
 ```bash
 # 1. Record the state before applying. Writes the Time Travel bookmark to a private
@@ -143,7 +154,7 @@ takosumi accounts migrate-d1 plan \
   --database-id "$CLOUDFLARE_DATABASE_ID" \
   --source-commit "$SOURCE_COMMIT" \
   --backup-evidence-digest "$BACKUP_EVIDENCE_DIGEST"
-# 3. Check the four digests plan printed, then apply (... is the same options as plan).
+# 3. Check the four digests plan printed, then apply (... takes the same options as plan).
 takosumi accounts migrate-d1 apply ... \
   --confirm-source-digest "$SOURCE_DIGEST" \
   --confirm-catalog-digest "$CATALOG_DIGEST" \

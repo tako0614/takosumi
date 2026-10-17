@@ -65,8 +65,12 @@ Upgrade the Accounts D1 with the same `takosumi accounts migrate-d1` sequence as
 installation: backup-status, plan, apply, verify (see
 [Putting it on Cloudflare](../concepts/self-host.md#putting-it-on-cloudflare)). Each Worker
 accepts specific Accounts D1 versions, so whether you apply or deploy the Worker first
-depends on the version. For the order and caveats, including an upgrade from v3, see
-[online DB migrations](https://github.com/tako0614/takosumi/blob/main/docs/operations/online-db-migrations.md).
+depends on the version. Upgrading from a v3 Accounts D1 has a fixed order: deploy the
+bridge Worker, apply v4, then switch to a Worker that accepts only v4 and later. Before
+v4, apply backfills the existing OIDC client records in chunks of 100. After v4, you
+cannot go back to a Worker that accepts only v3. Follow
+[online DB migrations](https://github.com/tako0614/takosumi/blob/main/docs/operations/online-db-migrations.md)
+for this order and its caveats.
 
 ## Failure handling
 
