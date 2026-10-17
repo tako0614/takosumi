@@ -16,8 +16,6 @@ StateVersion は上書きされません。**戻す操作をしても履歴は�
 
 例の `$TAKOSUMI_DEPLOY_CONTROL_TOKEN` には、`read` と `write` を持つ[発行した token](../reference/cli.md#トークンを発行する)を入れます。
 
-例の `$TAKOSUMI_DEPLOY_CONTROL_TOKEN` には、`read` と `write` を持つ[発行した token](../reference/cli.md#トークンを発行する)を入れます。
-
 ```bash
 curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/state-versions" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
