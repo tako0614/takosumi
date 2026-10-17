@@ -142,20 +142,47 @@ interface AccountsWorkerExecutionContext {
   waitUntil(promise: Promise<unknown>): void;
 }
 
-/** Private, unmounted source-origin assembly. Its observer receives only the
- * existing Accounts producer methods. Presence of this hook is never evidence
+/** Private, unmounted source-origin assembly. Its observer receives only
+ * captured existing Accounts/Control producer methods. This is not a wire.
+ * Presence of this hook is never evidence
  * of a genuine issuer, a selected Financial peer, or M dispatch authority. */
 export type PrivateAccountsFinancialSourceFacade = Pick<
   ReturnType<typeof createAccountsFinancialSource>,
   "prepareFinancialIdentityProofSource" |
     "preparePendingFinancialSourceOriginals" |
-    "loadFinancialSourceEventEvidence"
+    "loadFinancialSourceEventEvidence" |
+    "prove" |
+    "loadFinancialIdentityProof" |
+    "verifyCurrentFinancialIdentityProof" |
+    "flush"
+> & {readonly control: PrivateAccountsFinancialControlFacade};
+
+export type PrivateAccountsFinancialControlFacade = Pick<
+  ReturnType<typeof createAccountsFinancialControlSource>,
+  "prepareInitialFinancialControlSourceOriginal" |
+    "prepareHistoricalFinancialControlSourceOriginals" |
+    "prepareOriginalFinancialControlSource" |
+    "loadFinancialSourceEventEvidence" |
+    "flush"
 >;
+
+type PrivateFinancialControlOptions = Parameters<typeof createAccountsFinancialControlSource>[0];
+
+export interface PrivateAccountsFinancialControlInputs {
+  readonly receivers: NonNullable<PrivateFinancialControlOptions["receivers"]>;
+  readonly eventEvidence: NonNullable<PrivateFinancialControlOptions["eventEvidence"]>;
+}
 
 export interface PrivateAccountsFinancialSourceInputs {
   readonly registration: FinancialSourceRegistration;
   readonly challenges: NonNullable<AccountsFinancialSourceOptions["challenges"]>;
   readonly eventEvidence: AccountsFinancialEventEvidenceOptions;
+  /** Optional only to retain the original preparation-only composition. Proof
+   * and flush retain the actual producer's complete-receiver checks. */
+  readonly receivers?: NonNullable<AccountsFinancialSourceOptions["receivers"]>;
+  /** Independent C registration, callbacks and expiry clock. The service itself
+   * is always obtained from the handler's canonical Control resolver. */
+  readonly control?: PrivateAccountsFinancialControlInputs;
 }
 
 type RegisteredHeadReadRequest = Parameters<
@@ -904,6 +931,67 @@ function usesIdentityOnlyAccountsHandler(pathname: string): boolean {
   return false;
 }
 
+function capturePrivateFinancialEventEvidence(selected: AccountsFinancialEventEvidenceOptions): {
+  readonly eventEvidence: AccountsFinancialEventEvidenceOptions;
+  readonly now: NonNullable<AccountsFinancialSourceOptions["now"]>;
+} {
+  const heads = selected.registeredHeads, readHead = heads?.readRegisteredHead;
+  const custody = selected.keyCustody, readCredential = custody?.readCredentialContext;
+  const clock = selected.clock, readClock = clock?.nowMilliseconds;
+  const sourceCredentialRef = selected.sourceCredentialRef;
+  const sourceSchemaRef = selected.sourceSchemaRef;
+  const receiverRef = selected.receiverRef;
+  const targetRef = selected.targetRef;
+  const receiverSchemaRef = selected.receiverSchemaRef;
+  const clockPolicyRef = clock?.policyRef;
+  if (!heads || !custody || !clock || typeof readHead !== "function" ||
+      typeof readCredential !== "function" || typeof readClock !== "function" ||
+      ![sourceCredentialRef, sourceSchemaRef, receiverRef, targetRef,
+        receiverSchemaRef].every(financialSourceRef) || !financialSourceRef(clockPolicyRef))
+    throw new FinancialSourceUnavailable("source_unavailable");
+  const now = () => Reflect.apply(readClock, clock, []);
+  return Object.freeze({
+    now,
+    eventEvidence: Object.freeze({
+      sourceCredentialRef, sourceSchemaRef, receiverRef, targetRef, receiverSchemaRef,
+      registeredHeads: Object.freeze({
+        readRegisteredHead: async (request: RegisteredHeadReadRequest) =>
+          await Reflect.apply(readHead, heads, [request]),
+      }),
+      keyCustody: Object.freeze({
+        readCredentialContext: async (request: CredentialContextReadRequest) =>
+          await Reflect.apply(readCredential, custody, [request]),
+      }),
+      clock: Object.freeze({policyRef: clockPolicyRef, nowMilliseconds: now}),
+    }),
+  });
+}
+
+function capturePrivateFinancialReceivers(
+  values: AccountsFinancialSourceOptions["receivers"],
+): AccountsFinancialSourceOptions["receivers"] {
+  if (values === undefined) return undefined;
+  if (!Array.isArray(values) || values.length > 8)
+    throw new FinancialSourceUnavailable("source_unavailable");
+  type Receiver = NonNullable<AccountsFinancialSourceOptions["receivers"]>[number];
+  const captured: Receiver[] = [];
+  const seen = new Set<string>();
+  for (const receiver of values) {
+    const receiverRef = receiver?.receiverRef, targetRef = receiver?.targetRef;
+    const read = receiver?.read, deliver = receiver?.deliver;
+    if (!financialSourceRef(receiverRef) || !financialSourceRef(targetRef) ||
+        typeof read !== "function" || typeof deliver !== "function" || seen.has(receiverRef))
+      throw new FinancialSourceUnavailable("source_unavailable");
+    seen.add(receiverRef);
+    captured.push(Object.freeze<Receiver>({
+      receiverRef, targetRef,
+      read: async (materialization) => await Reflect.apply(read, receiver, [materialization]),
+      deliver: async (materialization) => await Reflect.apply(deliver, receiver, [materialization]),
+    }));
+  }
+  return Object.freeze(captured);
+}
+
 async function installPrivateFinancialSourceOrigin<TEnv extends CloudflareWorkerEnv>(input: {
   readonly env: TEnv;
   readonly slot: PrivateFinancialSourceSlot;
@@ -928,55 +1016,49 @@ async function installPrivateFinancialSourceOrigin<TEnv extends CloudflareWorker
     const registration = parseFinancialSourceRegistration(structuredClone(supplied.registration));
     const challengeOwner = supplied.challenges;
     const readChallenge = challengeOwner.read;
-    const selected = supplied.eventEvidence;
-    const heads = selected.registeredHeads, readHead = heads?.readRegisteredHead;
-    const custody = selected.keyCustody, readCredential = custody?.readCredentialContext;
-    const clock = selected.clock, readClock = clock?.nowMilliseconds;
-    const sourceCredentialRef = selected.sourceCredentialRef;
-    const sourceSchemaRef = selected.sourceSchemaRef;
-    const receiverRef = selected.receiverRef;
-    const targetRef = selected.targetRef;
-    const receiverSchemaRef = selected.receiverSchemaRef;
-    const clockPolicyRef = clock?.policyRef;
-    if (!heads || !custody || !clock || typeof readChallenge !== "function" ||
-        typeof readHead !== "function" || typeof readCredential !== "function" || typeof readClock !== "function" ||
-        ![sourceCredentialRef, sourceSchemaRef, receiverRef,
-          targetRef, receiverSchemaRef].every(financialSourceRef) ||
-        !financialSourceRef(clockPolicyRef) ||
-        !registration.receivers.some((peer) => peer.receiverRef === receiverRef && peer.targetRef === targetRef))
+    const selected = capturePrivateFinancialEventEvidence(supplied.eventEvidence);
+    const receivers = capturePrivateFinancialReceivers(supplied.receivers);
+    const controlInput = supplied.control;
+    let selectedControl: {
+      readonly eventEvidence: NonNullable<PrivateFinancialControlOptions["eventEvidence"]>;
+      readonly receivers: NonNullable<PrivateFinancialControlOptions["receivers"]>;
+      readonly now: NonNullable<PrivateFinancialControlOptions["now"]>;
+    } | undefined;
+    if (controlInput !== undefined) {
+      if (!controlInput.eventEvidence || !controlInput.receivers)
+        throw new FinancialSourceUnavailable("source_unavailable");
+      const selectedEvidence = capturePrivateFinancialEventEvidence(controlInput.eventEvidence);
+      const controlRegistration = parseFinancialSourceRegistration(structuredClone(controlInput.eventEvidence.registration));
+      const controlReceivers = capturePrivateFinancialReceivers(controlInput.receivers);
+      if (!controlReceivers || !controlRegistration.receivers.some((peer) =>
+        peer.receiverRef === selectedEvidence.eventEvidence.receiverRef && peer.targetRef === selectedEvidence.eventEvidence.targetRef))
+        throw new FinancialSourceUnavailable("source_unavailable");
+      selectedControl = Object.freeze({
+        eventEvidence: Object.freeze({...selectedEvidence.eventEvidence, registration: controlRegistration}),
+        receivers: controlReceivers,
+        now: selectedEvidence.now,
+      });
+    }
+    if (typeof readChallenge !== "function" ||
+        !registration.receivers.some((peer) => peer.receiverRef === selected.eventEvidence.receiverRef && peer.targetRef === selected.eventEvidence.targetRef))
       throw new FinancialSourceUnavailable("source_unavailable");
     // Capture the callable and its original receiver before the next await.
     // Later mutation of the supplied option objects cannot swap bindings.
     const challenges: NonNullable<AccountsFinancialSourceOptions["challenges"]> = Object.freeze({
       read: async (ref: string) => await Reflect.apply(readChallenge, challengeOwner, [ref]),
     });
-    const eventEvidence: AccountsFinancialEventEvidenceOptions = Object.freeze({
-      sourceCredentialRef,
-      sourceSchemaRef,
-      receiverRef,
-      targetRef,
-      receiverSchemaRef,
-      registeredHeads: Object.freeze({
-        readRegisteredHead: async (request: RegisteredHeadReadRequest) =>
-          await Reflect.apply(readHead, heads, [request]),
-      }),
-      keyCustody: Object.freeze({
-        readCredentialContext: async (request: CredentialContextReadRequest) =>
-          await Reflect.apply(readCredential, custody, [request]),
-      }),
-      clock: Object.freeze({
-        policyRef: clockPolicyRef,
-        nowMilliseconds: () => Reflect.apply(readClock, clock, []),
-      }),
-    });
     const core = await Reflect.apply(origin.coreFinancialSource, origin, [env]);
     if (!isCurrent() || !(core instanceof WorkspaceFinancialSourceService))
       throw new FinancialSourceUnavailable("source_unavailable");
     // Core's actual Control original has an independent registration/full key.
     // Accounts registration must never be projected into Control event evidence.
-    const control = createAccountsFinancialControlSource({service: core});
+    // A and C consume the captured expiry-clock callbacks through their existing
+    // now options. No anchoredClock/default or policy string proves that those
+    // callbacks have genuine Root/Financial clock custody.
+    const control = createAccountsFinancialControlSource({service: core, ...selectedControl});
     const producer = createAccountsFinancialSource({
-      store, issuer: normalizeIssuer(issuer), clients, registration, challenges, control, eventEvidence,
+      store, issuer: normalizeIssuer(issuer), clients, registration, challenges, control,
+      eventEvidence: selected.eventEvidence, receivers, now: selected.now,
     });
     let published = false;
     const through = async <T>(work: () => Promise<T>): Promise<T> => {
@@ -985,13 +1067,40 @@ async function installPrivateFinancialSourceOrigin<TEnv extends CloudflareWorker
       if (!isCurrent()) throw new FinancialSourceUnavailable("source_unavailable");
       return result;
     };
-    const facade: PrivateAccountsFinancialSourceFacade = Object.freeze({
+    // C methods were not part of the original preparation-only inputs. Opting
+    // into this private projection requires its own captured constructor ports;
+    // their presence does not prove genuine origin/peer/clock qualification.
+    const throughControl = async <T>(work: () => Promise<T>): Promise<T> => {
+      if (!selectedControl) throw new FinancialSourceUnavailable("source_unavailable");
+      return through(work);
+    };
+    const controlFacade = Object.freeze<PrivateAccountsFinancialControlFacade>({
+      prepareInitialFinancialControlSourceOriginal: (value) =>
+        throughControl(() => control.prepareInitialFinancialControlSourceOriginal(value)),
+      prepareHistoricalFinancialControlSourceOriginals: (value) =>
+        throughControl(() => control.prepareHistoricalFinancialControlSourceOriginals(value)),
+      prepareOriginalFinancialControlSource: (value) =>
+        throughControl(() => control.prepareOriginalFinancialControlSource(value)),
+      loadFinancialSourceEventEvidence: (value) =>
+        throughControl(() => control.loadFinancialSourceEventEvidence(value)),
+      flush: (value) => throughControl(() => control.flush(value)),
+    });
+    const facade = Object.freeze<PrivateAccountsFinancialSourceFacade>({
       prepareFinancialIdentityProofSource: (value) =>
         through(() => producer.prepareFinancialIdentityProofSource(value)),
       preparePendingFinancialSourceOriginals: (value) =>
         through(() => producer.preparePendingFinancialSourceOriginals(value)),
       loadFinancialSourceEventEvidence: (value) =>
         through(() => producer.loadFinancialSourceEventEvidence(value)),
+      // Fresh/current proof uses the explicitly captured C constructor too;
+      // preparation-only inputs must not promote its legacy default clock.
+      prove: (value) => throughControl(() => producer.prove(value)),
+      loadFinancialIdentityProof: (value) =>
+        through(() => producer.loadFinancialIdentityProof(value)),
+      verifyCurrentFinancialIdentityProof: (value) =>
+        throughControl(() => producer.verifyCurrentFinancialIdentityProof(value)),
+      flush: (value) => through(() => producer.flush(value)),
+      control: controlFacade,
     });
     await Reflect.apply(origin.observe, origin, [facade]);
     if (!isCurrent()) throw new FinancialSourceUnavailable("source_unavailable");

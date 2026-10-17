@@ -40,8 +40,11 @@ export function createAuthStagingWorker(dependencies: {
    * real owner readiness refuses merge consent before reservation. */
   readonly ownerPorts?: (env: AuthEnv) => AuthStagingOwnerPorts | undefined;
   readonly retryService?: (env: AuthEnv) => IdentityMergeRetryService;
-  /** Private source-preparation observer only. The actual HTTP Accounts store
-   * is captured by handler.ts; this callback never receives that raw store.
+  /** Private A/C source-method publication only. The actual HTTP Accounts store
+   * and canonical Control instances are retained by handler.ts, not supplied
+   * by the observer. Existing source receiver/expiry-clock callbacks are
+   * captured there; genuine qualification is still an owning responsibility.
+   * The observer cannot dispatch before named resolution has completed.
    * No Financial M constructor, command custody or dispatch is installed here. */
   readonly financialSourceOrigin?: Pick<PrivateAccountsFinancialSourceOrigin<AuthEnv>, "inputs" | "observe">;
 } = {}) {

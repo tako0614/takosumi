@@ -12,7 +12,13 @@ import {
   type D1Database,
 } from "../../../../accounts/service/src/d1-store.ts";
 import type { TokenRecord } from "../../../../accounts/service/src/store.ts";
-import { financialSourceEventDigest } from "../../../../accounts/service/src/financial-source-contract.ts";
+import {
+  canonicalFinancialSourceJson,
+  financialSourceEventDigest,
+  type FinancialSourceReceipt,
+} from "../../../../accounts/service/src/financial-source-contract.ts";
+import { makeFinancialSourceReceipt } from "../../../../accounts/service/src/financial-source-abi.ts";
+import type { AccountsFinancialReceiver } from "../../../../accounts/service/src/financial-source.ts";
 import { createAuthStagingWorker } from "../../../../deploy/accounts-cloudflare/src/staging-worker.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import {
@@ -129,13 +135,28 @@ test("only explicit named resolution publishes one source bound to the actual HT
   const source = seen[0]!;
   expect(resolved).toBe(source);
   expect(Reflect.ownKeys(source).map(String).sort()).toEqual([
+    "control",
+    "flush",
+    "loadFinancialIdentityProof",
     "loadFinancialSourceEventEvidence",
     "prepareFinancialIdentityProofSource",
     "preparePendingFinancialSourceOriginals",
+    "prove",
+    "verifyCurrentFinancialIdentityProof",
+  ]);
+  expect(Reflect.ownKeys(source.control).map(String).sort()).toEqual([
+    "flush", "loadFinancialSourceEventEvidence",
+    "prepareHistoricalFinancialControlSourceOriginals",
+    "prepareInitialFinancialControlSourceOriginal",
+    "prepareOriginalFinancialControlSource",
   ]);
   expect(Reflect.ownKeys(source)).not.toContain("store");
   expect(Reflect.ownKeys(source)).not.toContain("install");
   expect(Reflect.ownKeys(source)).not.toContain("readOriginal");
+  // Preparation-only inputs still cannot acquire new proof/receiver or C
+  // capabilities merely because the named method projection is present.
+  await expect(source.prove({accessToken: "unused", challengeRef: "unused"})).rejects.toThrow("source_unavailable");
+  await expect(source.control.prepareInitialFinancialControlSourceOriginal({workspaceId: "unused"})).rejects.toThrow("source_unavailable");
   const before = sql.mock.calls.length;
   const boundBefore = boundRegistrationReads.length;
   await expect(source.loadFinancialSourceEventEvidence({v: 1, eventRef: "event-original", eventDigest: `sha256:${"b".repeat(64)}`})).rejects.toThrow();
@@ -224,12 +245,85 @@ test("named HTTP-store facade retains four fresh originals and the same bounded 
     workspaceRef: binding.workspaceRef, requestFingerprint: `sha256:${"d".repeat(64)}` as const,
     createdAt: now, expiresAt: now + 120_000,
   };
+  // This Set models only an explicitly supplied local M prerequisite. It is
+  // not a Financial command constructor, M/G implementation or real authority.
+  const admittedOriginals = new Set<string>();
+  const receiverReceipts = new Map<string, FinancialSourceReceipt>();
+  let deliveries = 0;
+  const receiver: AccountsFinancialReceiver = {
+    receiverRef: accountRegistration.receivers[0]!.receiverRef,
+    targetRef: accountRegistration.receivers[0]!.targetRef,
+    async read(materialization) {
+      expect(this).toBe(receiver);
+      return receiverReceipts.get(canonicalFinancialSourceJson(materialization));
+    },
+    async deliver(materialization) {
+      expect(this).toBe(receiver);
+      const originalKey = canonicalFinancialSourceJson(materialization);
+      if (!admittedOriginals.has(originalKey)) throw new Error("local original M prerequisite unavailable");
+      const receipt = await makeFinancialSourceReceipt({
+        registrationRef: materialization.event.registrationRef,
+        receiverRef: accountRegistration.receivers[0]!.receiverRef,
+        targetRef: accountRegistration.receivers[0]!.targetRef,
+        event: materialization.event, eventDigest: materialization.eventDigest,
+      });
+      deliveries++;
+      receiverReceipts.set(originalKey, receipt);
+      return receipt;
+    },
+  };
+  let clockNow = now;
+  const expiryClock = {policyRef: "clock-original", nowMilliseconds() {return clockNow;}};
+  const baseInputs = inputs();
+  const fixedInputs: PrivateAccountsFinancialSourceInputs = {
+    ...baseInputs, registration: accountRegistration,
+    receivers: [receiver],
+    challenges: {read: async (ref) => ref === challenge.challengeRef ? structuredClone(challenge) : undefined},
+    eventEvidence: {
+      ...baseInputs.eventEvidence, clock: expiryClock,
+      keyCustody: {readCredentialContext: async (request) => ({
+        credentialRef: "source-credential-original", incarnationRef: "credential-incarnation-original",
+        sourceSchemaRef: "source-schema-original", receiverRef: receiver.receiverRef,
+        targetRef: receiver.targetRef, receiverSchemaRef: "receiver-schema-original",
+        clockPolicyRef: "clock-original", purpose: request.purpose, validUntil: now + 180_000,
+      })},
+    },
+    control: {
+      receivers: [receiver],
+      eventEvidence: {
+        registration: {registrationRef: controlRegistration.sourceRef, incarnation: controlRegistration.incarnation,
+          genesisDigest: `sha256:${controlRegistration.genesisDigest}` as const, receivers: controlRegistration.requiredReceivers},
+        sourceCredentialRef: "control-credential-original", sourceSchemaRef: "control-schema-original",
+        receiverRef: receiver.receiverRef, targetRef: receiver.targetRef,
+        receiverSchemaRef: "receiver-schema-original", clock: expiryClock,
+        registeredHeads: {readRegisteredHead: async ({head}) => {
+          const current = await owner.financialSource.readHead(head.affectedRef);
+          if (!current || current.sourceRef !== head.registrationRef || current.incarnation !== head.incarnation) return undefined;
+          return {v: 1 as const, head: {registrationRef: current.sourceRef, incarnation: current.incarnation, affectedRef: current.workspaceId},
+            genesisDigest: `sha256:${current.genesisDigest}` as const, receivers: current.requiredReceivers,
+            sourceSchemaRef: "control-schema-original", sourceCredentialRef: "control-credential-original", clockPolicyRef: "clock-original"};
+        }},
+        keyCustody: {readCredentialContext: async (request) => ({
+          credentialRef: "control-credential-original", incarnationRef: "control-credential-incarnation",
+          sourceSchemaRef: "control-schema-original", receiverRef: receiver.receiverRef,
+          targetRef: receiver.targetRef, receiverSchemaRef: "receiver-schema-original",
+          clockPolicyRef: "clock-original", purpose: request.purpose, validUntil: now + 180_000,
+        })},
+      },
+    },
+  };
   let observed = 0;
   const worker = createCloudflareWorker({privateFinancialSourceOrigin: {
     coreFinancialSource: async () => owner.financialSource,
-    inputs: async () => ({...inputs(), registration: accountRegistration,
-      challenges: {read: async (ref) => ref === challenge.challengeRef ? structuredClone(challenge) : undefined}}),
-    observe: () => {observed++;},
+    inputs: async () => fixedInputs,
+    observe: async (published) => {
+      observed++;
+      // Publication is not dispatch. Every family must refuse observer reentry
+      // until resolve completes, before any actual source operation can start.
+      await expect(published.prepareFinancialIdentityProofSource({accessToken: token, challengeRef: challenge.challengeRef})).rejects.toThrow("source_unavailable");
+      await expect(published.flush({limit: 4})).rejects.toThrow("source_unavailable");
+      await expect(published.control.prepareInitialFinancialControlSourceOriginal({workspaceId: workspace.id})).rejects.toThrow("source_unavailable");
+    },
   }});
   expect((await worker.fetch(hostedFull, actualEnv)).status).toBe(401);
   const source = await worker.resolvePrivateFinancialSource!(actualEnv);
@@ -248,6 +342,9 @@ test("named HTTP-store facade retains four fresh originals and the same bounded 
   expect(prepared.controlSource.eventDigest).toBe(`sha256:${controlRegistration.genesisDigest}`);
   expect(prepared.controlSource.receivers).toEqual(controlRegistration.requiredReceivers);
   expect(prepared.controlSource.registrationRef).not.toBe(prepared.registration.registrationRef);
+  // Permission-seq0/G is not an event0/ACK0. Existing initial-event preparation
+  // must refuse it, and this test creates no empty fallback or G receipt.
+  await expect(source.control.prepareInitialFinancialControlSourceOriginal({workspaceId: workspace.id})).rejects.toThrow("source_pending");
   for (const original of Object.values(prepared.parents)) {
     expect(original.key).toEqual({
       registrationRef: accountRegistration.registrationRef,
@@ -279,6 +376,76 @@ test("named HTTP-store facade retains four fresh originals and the same bounded 
     .toEqual(Object.values(prepared.parents).sort((a, b) => a.eventRef.localeCompare(b.eventRef)));
   expect((await seed.listFinancialSourcePending({registrationRef: accountRegistration.registrationRef, limit: 4})).entries)
     .toHaveLength(4);
+
+  // A real canonical permission mutation creates C event1. Until its actual
+  // materialization exists, the unchanged C.capture predicate denies A prep.
+  await owner.upsertWorkspaceMember({workspaceId: workspace.id, accountId: subject,
+    actorAccountId: subject, roles: ["owner", "admin"], status: "active", requireCurrentMembership: true});
+  expect((await owner.financialSource.readHead(workspace.id))?.permissionSequence).toBe(1);
+  await expect(source.prepareFinancialIdentityProofSource({accessToken: token, challengeRef: challenge.challengeRef})).rejects.toThrow("source_unavailable");
+  const controlOriginal = await source.control.prepareInitialFinancialControlSourceOriginal({workspaceId: workspace.id});
+  expect(controlOriginal.original.key).toEqual({registrationRef: controlRegistration.sourceRef,
+    incarnation: controlRegistration.incarnation, affectedRef: workspace.id});
+  expect(controlOriginal.original.materialization.event.sequence).toBe(1);
+  expect(controlOriginal.original.materialization.event.previousDigest).toBe(`sha256:${controlRegistration.genesisDigest}`);
+  await expect(source.control.flush({workspaceId: workspace.id, afterSequence: 0, limit: 4})).rejects.toThrow("local original M prerequisite unavailable");
+  expect(deliveries).toBe(0);
+  // C's explicit original M prerequisite and actual original receiver ACK come
+  // before the new A preparation. This is never the permission-seq0/G path.
+  admittedOriginals.add(canonicalFinancialSourceJson(controlOriginal.original.materialization));
+  // Later replacement of supplied callable slots cannot swap the captured
+  // receivers or clocks. The actual callbacks still read their current state.
+  Reflect.set(receiver, "read", async () => {throw new Error("late read replacement");});
+  Reflect.set(receiver, "deliver", async () => {throw new Error("late deliver replacement");});
+  Reflect.set(expiryClock, "nowMilliseconds", () => {throw new Error("late clock replacement");});
+  clockNow = now + 17;
+  expect((await source.control.flush({workspaceId: workspace.id, afterSequence: 0, limit: 4})).processed).toBe(1);
+  expect((await owner.financialSource.listPendingEvents({workspaceId: workspace.id,
+    receiverRef: accountRegistration.receivers[0]!.receiverRef, afterSequence: 0, limit: 4}))).toEqual([]);
+  expect(deliveries).toBe(1);
+  const refreshed = await source.prepareFinancialIdentityProofSource({accessToken: token, challengeRef: challenge.challengeRef});
+  expect(refreshed.parents).toEqual(prepared.parents);
+  expect(refreshed.controlSource.eventRef).toBe(controlOriginal.original.eventRef);
+  expect(refreshed.controlSource.registrationRef).not.toBe(refreshed.registration.registrationRef);
+  await expect(source.control.prepareOriginalFinancialControlSource({workspaceId: workspace.id, accountId: subject,
+    expectedSource: {...refreshed.controlSource, incarnation: "wrong-full-key"}})).rejects.toThrow("source_conflict");
+  expect((await source.control.prepareOriginalFinancialControlSource({workspaceId: workspace.id,
+    accountId: subject, expectedSource: refreshed.controlSource})).original).toEqual(controlOriginal.original);
+  const evidence = await source.control.loadFinancialSourceEventEvidence({v: 1,
+    eventRef: controlOriginal.original.eventRef, eventDigest: controlOriginal.original.materialization.eventDigest});
+  expect(evidence.status).toBe("found");
+  if (evidence.status === "found") expect(evidence.registeredHead.head).toEqual(controlOriginal.original.key);
+  await expect(source.prove({accessToken: token, challengeRef: challenge.challengeRef})).rejects.toThrow("source_pending");
+  await expect(source.flush({limit: 4})).rejects.toThrow("local original M prerequisite unavailable");
+  expect(deliveries).toBe(1);
+
+  // Select only retained originals in the explicit local M fixture. No source
+  // code here implements M, manufactures G or turns missing readback into ACK.
+  for (const original of Object.values(refreshed.parents)) admittedOriginals.add(canonicalFinancialSourceJson(original.materialization));
+  expect((await source.flush({limit: 4})).processed).toBe(4);
+  expect(deliveries).toBe(5);
+  for (const original of Object.values(refreshed.parents)) {
+    expect((await seed.findFinancialSourceReceipt({registrationRef: accountRegistration.registrationRef,
+      eventRef: original.eventRef, receiverRef: accountRegistration.receivers[0]!.receiverRef}))?.receipt.eventRef).toBe(original.eventRef);
+  }
+  const proof = await source.prove({accessToken: token, challengeRef: challenge.challengeRef});
+  const loaded = await source.loadFinancialIdentityProof({v: 1, proofRef: proof.proofRef, challengeRef: challenge.challengeRef});
+  expect(loaded.status).toBe("found");
+  if (loaded.status === "found") {
+    expect(loaded.proof.issuedAt).toBe(clockNow);
+    expect(loaded.proof.control.source).toEqual(refreshed.controlSource);
+  }
+  expect((await source.verifyCurrentFinancialIdentityProof({v: 1, proofRef: proof.proofRef,
+    challengeRef: challenge.challengeRef})).status).toBe("current");
+  expect(await source.prove({accessToken: token, challengeRef: challenge.challengeRef})).toEqual(proof);
+  expect((await source.control.prepareHistoricalFinancialControlSourceOriginals({workspaceId: workspace.id,
+    afterSequence: 0, limit: 4})).entries.map(({original}) => original)).toEqual([controlOriginal.original]);
+  clockNow = challenge.expiresAt;
+  expect((await source.verifyCurrentFinancialIdentityProof({v: 1, proofRef: proof.proofRef,
+    challengeRef: challenge.challengeRef})).status).toBe("not-current");
+  await expect(source.prove({accessToken: token, challengeRef: challenge.challengeRef})).rejects.toThrow("invalid_challenge");
+  expect(await source.loadFinancialIdentityProof({v: 1, proofRef: proof.proofRef,
+    challengeRef: challenge.challengeRef})).toEqual(loaded);
 });
 
 test("missing fixed C0, selected peer, head, key, clock or Core refuses source placement", async () => {
@@ -373,6 +540,37 @@ test("a hung private input times out only its named caller and cannot publish la
   release(inputs());
   await Promise.resolve();
   expect(seen).toBe(0);
+  expect((await worker.fetch(full, actualEnv)).status).toBe(401);
+}, 10_000);
+
+test("a timed-out observer cannot publish or use either retained source family late", async () => {
+  const actualEnv = env(await accountsDb());
+  const selected = inputs();
+  const receiver: AccountsFinancialReceiver = {
+    receiverRef: registration.receivers[0]!.receiverRef,
+    targetRef: registration.receivers[0]!.targetRef,
+    read: async () => undefined,
+    deliver: async () => {throw new Error("no receiver is qualified by this fixture");},
+  };
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>((resolve) => {enter = resolve;});
+  const held = new Promise<void>((resolve) => {release = resolve;});
+  let captured: PrivateAccountsFinancialSourceFacade | undefined;
+  const worker = createCloudflareWorker({privateFinancialSourceOrigin: {
+    coreFinancialSource: async () => core,
+    inputs: async () => ({...selected, receivers: [receiver],
+      control: {receivers: [receiver], eventEvidence: {...selected.eventEvidence, registration}}}),
+    observe: async (source) => {captured = source; enter(); await held;},
+  }});
+  const pending = worker.resolvePrivateFinancialSource!(actualEnv);
+  await entered;
+  await expect(pending).rejects.toThrow("source_unavailable");
+  release();
+  await Promise.resolve();
+  expect(captured).toBeDefined();
+  await expect(captured!.loadFinancialIdentityProof({v: 1,
+    proofRef: "proof-original", challengeRef: "challenge-original"})).rejects.toThrow("source_unavailable");
+  await expect(captured!.control.prepareInitialFinancialControlSourceOriginal({workspaceId: "absent-workspace"})).rejects.toThrow("source_unavailable");
   expect((await worker.fetch(full, actualEnv)).status).toBe(401);
 }, 10_000);
 
