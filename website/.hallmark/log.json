@@ -1,5 +1,13 @@
 [
   {
+    "date": "2026-10-17",
+    "macrostructure": "product workbench story",
+    "theme": "Takosumi dashboard dark",
+    "enrichment": "actual app and dashboard captures in normal flow",
+    "brief": "Away from AI-slop templates: show each featured app's real screen and pinned source instead of a closed disclosure, plain section headings below the product name, body-face captions, a review capture with nothing under the translucent header, and a share card, 404 and favicon that carry the homepage's identity and hero line.",
+    "scope": "website"
+  },
+  {
     "date": "2026-09-28",
     "macrostructure": "product workbench story",
     "theme": "Takosumi dashboard dark",
