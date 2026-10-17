@@ -95,6 +95,7 @@ import {
   readJsonObject,
   readOptionalJsonObject,
   stringValue,
+  withPrivateNoStoreHeaders,
 } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
@@ -143,6 +144,46 @@ import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
 
+const RUN_GET_READ_DEADLINE_MS = 5_000;
+
+function runGetWithinDeadline(
+  operation: (assertActive: () => void) => Promise<Response>,
+): Promise<Response> {
+  return new Promise<Response>((resolve, reject) => {
+    let settled = false;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      timedOut = true;
+      settled = true;
+      resolve(withPrivateNoStoreHeaders(controlPlaneUnavailable()));
+    }, RUN_GET_READ_DEADLINE_MS);
+    const assertActive = (): void => {
+      if (timedOut) throw new Error("run_get_read_deadline_expired");
+    };
+    let pending: Promise<Response>;
+    try {
+      pending = Promise.resolve(operation(assertActive));
+    } catch (error) {
+      pending = Promise.reject(error);
+    }
+    void pending.then(
+      (response) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(response);
+      },
+      (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 export async function handleRuns(
   ctx: ControlDispatchContext,
   segments: readonly string[],
@@ -152,6 +193,24 @@ export async function handleRuns(
   // /api/v1/runs/:id ; .../apply ; .../approve ; .../logs ; .../cost
   if (segments[0] === "runs" && segments.length >= 2) {
     const runId = decodeURIComponent(segments[1] ?? "");
+    if (segments.length === 2 && method === "GET") {
+      return await runGetWithinDeadline(async (assertActive) => {
+        const run = await operations.getRun(runId);
+        assertActive();
+        const auth = await requireWorkspaceAccess({
+          operations,
+          store,
+          workspaceId: run.workspaceId,
+          session: ctx.session,
+          assertActive,
+        });
+        assertActive();
+        if (!auth.ok) return auth.response;
+        const publicValue = await publicRun(operations, run, assertActive);
+        assertActive();
+        return json({ run: publicValue });
+      });
+    }
     const run = await operations.getRun(runId);
     const auth = await requireWorkspaceAccess({
       operations,
