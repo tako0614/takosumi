@@ -58,9 +58,8 @@ Cloudflare、AWS、Kubernetes、Takoform などはすべて通常の provider �
 provider の接続情報を ProviderConnection / ProviderBinding から Run の間だけ runner に
 渡し、provider の state と実体は provider 側の契約に任せます。
 
-以前の Resource Shape / Form Host 経路は supported product ではありません。残る
-Resource API、schema、TargetPool、SpacePolicy は既存データを移行するための temporary
-migration internals です。[Resource の移行メモ](./resources.md) はこの扱いを説明します。
+以前あった Resource Shape / Form Host の仕組みは廃止しました。既存のデータを移すための
+内部の schema と記録だけが残っています（[Resource の移行メモ](./resources.md)）。
 
 ## デプロイしたものをつなぐ
 

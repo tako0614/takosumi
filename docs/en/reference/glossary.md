@@ -19,6 +19,8 @@ docs use a different name, read it back through this table.
 | Change verification ID | planDigest                           | The value that proves the plan you reviewed is the plan being applied. |
 | Deploy history         | The list of Runs                     | Reviews, approvals, and deploys, newest first.                         |
 | Update history         | The list of StateVersions            | On a service's Updates tab: the versions you deployed.                 |
+| Resources              | OpenTofu resources recorded in state | The real things a service created in a cloud. Deployed resources on the Updates tab lists them for each version. |
+| Hosted resources       | A read-only list the host provides   | The page for checking the resources a workspace manages. Available only where the host environment supports it. |
 | History                | Activity / AuditEvent                | Who did what, and when.                                                |
 | Restore this state     | Restoring from a StateVersion        | Choosing an earlier state again.                                       |
 
@@ -61,7 +63,7 @@ docs use a different name, read it back through this table.
 | Output       | A non-secret value a Capsule publishes outward.                                                                                                                  |
 | OutputShare  | The record that passes an Output across Workspaces. The receiving side approves it before it takes effect.                                                       |
 | AuditEvent   | A record, one per entry, of who acted on what, how, and with what result.                                                                                        |
-| ledger       | The store that Run and Resource records accumulate in. The entry point differs, but the destination is the same.                                                 |
+| ledger       | The store that Run, StateVersion, and audit records accumulate in. The entry point differs, but the destination is the same.                                                 |
 
 ## Credentials
 
@@ -86,12 +88,51 @@ docs use a different name, read it back through this table.
 | permission       | A token for an operation a Binding allows. You request this range when taking a token.                             |
 | Interface token  | A non-refreshable token valid for at most 60 seconds when calling an Interface. Its string format is host-defined. |
 
+## Reading status
+
+| Term               | Meaning                                                                                                                         |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| phase              | The observed stage. An InterfaceBinding is `Pending`, `Ready`, `NotReady`, or `Revoked`.                                        |
+| Ready              | A word for a usable state. It is a phase value on InterfaceBinding, and one of the Condition types.                             |
+| Condition          | A record that keeps the evidence for a state, one entry at a time. It holds a type, `true` / `false` / `unknown`, and a reason. |
+| generation         | The version number of the desired state. It advances each time the declaration changes.                                         |
+| observedGeneration | The number showing which generation the status was written against.                                                             |
+
+## Words that cut across
+
+| Term                   | Meaning                                                                                                                                                      |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| capability             | A token for what is enabled on an endpoint. Read this rather than an edition name.                                                                           |
+| profile                | A named bundle of settings with a decided scope. Examples are `compat.s3.v1` on the compatibility API, and the `profiles` an EdgeWorker asks of its runtime. |
+| surface                | A group of entry points. Takosumi public JSON APIs use `/api/v1`, operator APIs use `/internal/v1`, and the retired `/v1` namespace is not a public surface. |
+| digest                 | A SHA-256 fingerprint computed from content. The same content always gives the same value.                                                                   |
+| fail closed            | Stopping rather than letting something through when the decision is unclear.                                                                                 |
+| lease                  | A mechanism that reserves ownership with an expiry so the same target is not processed in two places at once.                                                |
+| materialization      | Preparing a declared Interface / Binding / credential as a concrete thing only on the host or runner that executes it. Declarations and plans never carry secret values. |
+| CAS (compare-and-swap) | Checking just before an update that the version you read is still current, and not writing if it changed.                                                    |
+| cursor                 | An opaque token for reading the next part of a list. Do not interpret it; pass it straight into the next request.                                            |
+| Compatibility API | An entry point that accepts a standard protocol such as S3 or OCI within a decided scope and version.                                          |
+
+Which capabilities are enabled on an endpoint is answered by the endpoint itself.
+
+```bash
+curl -s https://takosumi.example.com/.well-known/takosumi
+```
+
+## Who operates it
+
+| Term           | Meaning                                                           |
+| -------------- | ----------------------------------------------------------------- |
+| Operator       | The party running Takosumi for themselves or for their own users. |
+| Takosumi hosted service | The hosted service run officially.                        |
+| showback       | The billing mode that goes as far as recording and showing usage. |
+
 ## Retained Resource / Form migration vocabulary
 
-These terms remain only in the old Resource Shape / Form Host API, stored data,
-and migration runbooks. They do not describe a supported OSS authoring surface
-or dashboard navigation. The current user path is a Git module with ordinary
-OpenTofu providers.
+These terms remain only in the retired Resource Shape / Form Host API, stored data,
+and migration runbooks. They do not appear in current use, and they are not the
+dashboard's **resources** (the real things a service created in a cloud). The current
+user path is a Git module with ordinary OpenTofu providers.
 
 | Term              | Meaning                                                                                                                                        |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -113,42 +154,3 @@ OpenTofu providers.
 | observe           | The old Resource read-only drift check; migration only.                                                                                         |
 | import            | The old operation taking an existing object into the Resource ledger; migration only.                                                          |
 | portability       | The old Resource-resolution mobility classification; migration only.                                                                            |
-| Compatibility API | An entry point that accepts a standard protocol such as S3 or OCI within a decided scope and version.                                          |
-
-## Reading status
-
-| Term               | Meaning                                                                                                                         |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| phase              | The observed stage. A Resource ranges from `Pending` through `Ready` or `Failed`.                                               |
-| Ready              | A word for a usable state. It is a phase value on Resource and InterfaceBinding, and one of the Condition types.                |
-| Condition          | A record that keeps the evidence for a state, one entry at a time. It holds a type, `true` / `false` / `unknown`, and a reason. |
-| generation         | The version number of the desired state. It advances each time the declaration changes.                                         |
-| observedGeneration | The number showing which generation the status was written against.                                                             |
-
-## Words that cut across
-
-| Term                   | Meaning                                                                                                                                                      |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| capability             | A token for what is enabled on an endpoint. Read this rather than an edition name.                                                                           |
-| profile                | A named bundle of settings with a decided scope. Examples are `compat.s3.v1` on the compatibility API, and the `profiles` an EdgeWorker asks of its runtime. |
-| surface                | A group of entry points. Takosumi public JSON APIs use `/api/v1`, operator APIs use `/internal/v1`, and the retired `/v1` namespace is not a public surface. |
-| digest                 | A SHA-256 fingerprint computed from content. The same content always gives the same value.                                                                   |
-| fail closed            | Stopping rather than letting something through when the decision is unclear.                                                                                 |
-| lease                  | A mechanism that reserves ownership with an expiry so the same target is not processed in two places at once.                                                |
-| materialization      | Preparing a declared Interface / Binding / credential as a concrete thing only on the host or runner that executes it. Declarations and plans never carry secret values. |
-| CAS (compare-and-swap) | Checking just before an update that the version you read is still current, and not writing if it changed.                                                    |
-| cursor                 | An opaque token for reading the next part of a list. Do not interpret it; pass it straight into the next request.                                            |
-
-Which capabilities are enabled on an endpoint is answered by the endpoint itself.
-
-```bash
-curl -s https://takosumi.example.com/.well-known/takosumi
-```
-
-## Who operates it
-
-| Term           | Meaning                                                           |
-| -------------- | ----------------------------------------------------------------- |
-| Operator       | The party running Takosumi for themselves or for their own users. |
-| Takosumi hosted service | The hosted service run officially.                        |
-| showback       | The billing mode that goes as far as recording and showing usage. |
