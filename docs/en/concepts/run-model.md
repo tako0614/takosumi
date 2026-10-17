@@ -100,12 +100,12 @@ encrypted artifact store, readable only by authorized internal processing. The
 lockfile body and its artifact reference do not appear in public Run, Output, or
 log projections.
 
-With the current runner, a plan that uses providers does not succeed if its
-lockfile record is missing, oversized, does not match the digest, or points to
-another Run. Before apply runs any provider, it checks that the SHA-256 of the
-lockfile after `tofu init` matches the digest recorded at plan time, and stops if
-it does not. A record from an older runner that kept no lockfile bytes stays
-marked as unknown; Takosumi does not fill it in later with a newly generated
+The lockfile record is checked. A plan does not succeed if its record is oversized,
+does not match the digest, points to another Run, or says there is no lockfile even
+though the plan uses providers. When the plan has a digest, apply checks that the
+SHA-256 of the lockfile after `tofu init` matches it before running any provider,
+and stops if it does not. A plan from an older runner that has no lockfile record
+stays marked as unknown; Takosumi does not fill it in later with a newly generated
 lockfile.
 
 ## What can continue automatically
