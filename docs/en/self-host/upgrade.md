@@ -61,6 +61,13 @@ and application sequence before publishing. Use the
 [platform worker deploy](https://github.com/tako0614/takosumi/blob/main/docs/operations/platform-worker-deploy.md) runbooks.
 Request-time schema bootstrap is not an upgrade procedure for an existing deployment.
 
+Upgrade the Accounts D1 with the same `takosumi accounts migrate-d1` sequence as a new
+installation: backup-status, plan, apply, verify (see
+[Putting it on Cloudflare](../concepts/self-host.md#putting-it-on-cloudflare)). Each Worker
+accepts specific Accounts D1 versions, so whether you apply or deploy the Worker first
+depends on the version. For the order and caveats, including an upgrade from v3, see
+[online DB migrations](https://github.com/tako0614/takosumi/blob/main/docs/operations/online-db-migrations.md).
+
 ## Failure handling
 
 Record whether failure occurred before or after durable state was touched. After mutation,

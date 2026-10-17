@@ -112,36 +112,54 @@ Four more go in the same way. `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK` and
 `TAKOSUMI_SECRET_STORE_PASSPHRASE` is the sealing key for credentials and state, and
 `TAKOSUMI_DEPLOY_CONTROL_TOKEN` is the bearer for the operator-only API.
 
-Apply the Accounts D1 schema through the owner CLI. First retain private backup or
-Time Travel evidence and bind its opaque digest to plan/apply. Plan makes no remote
-call, apply sends one atomic REST batch per migration, and verify is read-only. The
-`takosumi` command runs from a checkout; [CLI](../reference/cli.md) shows how to set it up.
+Apply the Accounts D1 schema with the `takosumi` CLI from a checkout;
+[CLI](../reference/cli.md) shows how to set it up. The Worker does not serve until the
+Accounts D1 is at a version it accepts, and it logs `accounts_d1_schema_incompatible`, so
+do this before `wrangler deploy`.
+
+Set these environment variables:
+
+| Variable | Contents |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | A Cloudflare API token with D1 Edit permission. The CLI never prints it |
+| `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare account ID |
+| `CLOUDFLARE_DATABASE_ID` | The database ID of `takosumi-accounts` |
+| `SOURCE_COMMIT` | The commit of a clean checkout (`git rev-parse HEAD`). If it does not match, the CLI stops before touching anything outside |
 
 ```bash
+# 1. Record the state before applying. Writes the Time Travel bookmark to a private
+#    file and prints backupEvidenceDigest.
+install -d -m 700 "$HOME/.takosumi-private"
+takosumi accounts migrate-d1 backup-status \
+  --environment production \
+  --account-id "$CLOUDFLARE_ACCOUNT_ID" \
+  --database-id "$CLOUDFLARE_DATABASE_ID" \
+  --source-commit "$SOURCE_COMMIT" \
+  --out "$HOME/.takosumi-private/accounts-d1-backup.json"
+# 2. See what will be applied. Makes no remote call.
 takosumi accounts migrate-d1 plan \
   --environment production \
   --account-id "$CLOUDFLARE_ACCOUNT_ID" \
   --database-id "$CLOUDFLARE_DATABASE_ID" \
   --source-commit "$SOURCE_COMMIT" \
   --backup-evidence-digest "$BACKUP_EVIDENCE_DIGEST"
-# Review the source/catalog/target/configuration digests before apply.
+# 3. Check the four digests plan printed, then apply (... is the same options as plan).
 takosumi accounts migrate-d1 apply ... \
   --confirm-source-digest "$SOURCE_DIGEST" \
   --confirm-catalog-digest "$CATALOG_DIGEST" \
   --confirm-target-digest "$TARGET_DIGEST" \
   --confirm-configuration-digest "$CONFIGURATION_DIGEST"
+# 4. Check the result, read-only.
 takosumi accounts migrate-d1 verify ...
 ```
 
-A same-catalog concurrent runner can adopt the exact winning receipt; conflict or partial
-state fails closed, and a lost acknowledgement is never blindly retried. After v4, a
-v3-only Worker is past the rollback cutoff. Deploy the v3/v4 bridge, apply and verify v4,
-then ship the later exact-v4 Worker. The CLI never restores a database; keep raw bookmarks,
-target IDs, and restore authority outside source checkouts in owner-private 0600/0700
-custody. While the exact-v3 bridge serves, `apply` inventories and backfills OIDC clients
-in deterministic `key` chunks of at most 100, requires zero missing values, then re-fences
-the exact-v3 ledger/schema closure plus zero-missing in the first statement of the atomic
-v4 batch.
+On a new D1 database, apply runs every version from the first to the latest in order. It
+sends one atomic batch per migration and never retries on its own after a failure; check
+the state with the read-only `status` before deciding what to do next. The CLI never
+restores a database. Keep the bookmark file private and outside the checkout, because it is
+what a restore would start from. Once applied, you cannot go back to an older Worker that
+does not accept that version. To upgrade the Accounts D1 of a running installation, see
+[Upgrade](../self-host/upgrade.md).
 
 The control plane D1 needs no migrations. While `TAKOSUMI_CONTROL_D1_SCHEMA_MODE` is at
 its default of `bootstrap`, the schema settles on the first request. To run against a

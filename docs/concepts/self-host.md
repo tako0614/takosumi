@@ -108,37 +108,53 @@ bunx wrangler secret put TAKOSUMI_ACCOUNT_SESSION_HASH_SALT \
 `TAKOSUMI_SECRET_STORE_PASSPHRASE` が認証情報と state の封印鍵、
 `TAKOSUMI_DEPLOY_CONTROL_TOKEN` が operator 専用 API の bearer です。
 
-accounts 側の D1 スキーマは Accounts owner CLI で適用します。先に owner-private な
-backup / Time Travel evidence を保全し、その opaque digest を plan/apply に結びます。
-`plan` は remote call を行わず、`apply` は migration ごとに 1 つの atomic REST batch、
-`verify` は read-only です。`takosumi` コマンドはチェックアウトから使います。用意の仕方は
-[CLI](../reference/cli.md) にあります。
+accounts 側の D1 スキーマは、チェックアウトの `takosumi` CLI で適用します。用意の仕方は
+[CLI](../reference/cli.md) にあります。Worker は Accounts の D1 が対応する版になっていないと
+動かず、ログに `accounts_d1_schema_incompatible` を出すため、`wrangler deploy` の前に
+済ませます。
+
+次の値を環境変数に入れます。
+
+| 変数 | 中身 |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | D1 の Edit 権限を持つ Cloudflare API トークン。CLI は値を表示しません |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare のアカウント ID |
+| `CLOUDFLARE_DATABASE_ID` | `takosumi-accounts` の database ID |
+| `SOURCE_COMMIT` | 変更のないチェックアウトの commit（`git rev-parse HEAD`）。一致しないと CLI は外部に触れずに止まります |
 
 ```bash
+# 1. 適用前の状態を記録する。Time Travel の bookmark を非公開のファイルに書き出し、
+#    backupEvidenceDigest を表示します
+install -d -m 700 "$HOME/.takosumi-private"
+takosumi accounts migrate-d1 backup-status \
+  --environment production \
+  --account-id "$CLOUDFLARE_ACCOUNT_ID" \
+  --database-id "$CLOUDFLARE_DATABASE_ID" \
+  --source-commit "$SOURCE_COMMIT" \
+  --out "$HOME/.takosumi-private/accounts-d1-backup.json"
+# 2. 適用する内容を確かめる。遠隔の呼び出しはしません
 takosumi accounts migrate-d1 plan \
   --environment production \
   --account-id "$CLOUDFLARE_ACCOUNT_ID" \
   --database-id "$CLOUDFLARE_DATABASE_ID" \
   --source-commit "$SOURCE_COMMIT" \
   --backup-evidence-digest "$BACKUP_EVIDENCE_DIGEST"
-# plan の source/catalog/target/configuration digest を人が確認してから apply に渡す
+# 3. plan が表示した 4 つの digest を確かめてから適用する（... は plan と同じ指定）
 takosumi accounts migrate-d1 apply ... \
   --confirm-source-digest "$SOURCE_DIGEST" \
   --confirm-catalog-digest "$CATALOG_DIGEST" \
   --confirm-target-digest "$TARGET_DIGEST" \
   --confirm-configuration-digest "$CONFIGURATION_DIGEST"
+# 4. 読み取りだけで結果を確かめる
 takosumi accounts migrate-d1 verify ...
 ```
 
-同じ catalog の concurrent runner は exact receipt を採用できますが、conflict / partial
-state は fail-closed です。lost acknowledgement を blind retry せず、明示的な次の
-operator invocation まで止めます。v4 の後は v3-only Worker へ戻せません。v3/v4 bridge
-Worker → v4 apply/verify → 後日の exact-v4 Worker の順で進めます。CLI は restore を
-行わず、raw backup/bookmark と target ID は source checkout 外の owner-private
-0700 directory / 0600 file にだけ保持します。`apply` は exact v3 の bridge 中に
-OIDC client を `key` 順 100 row 以下で backfill し、zero-missing を確認した後、v4
-atomic batch の先頭で exact v3 ledger/schema closure と zero-missing を再度 fence
-します。
+新しく作った D1 には、apply が最初の版から最新の版まで順に適用します。apply は migration
+ごとに 1 回だけ atomic な batch を送り、途中で失敗しても自動では再試行しません。読み取りだけの
+`status` で状態を確かめてから、次の操作を決めます。CLI はデータベースを復元しません。書き出した
+bookmark は復元の手がかりになるため、チェックアウトの外で非公開のまま保管します。適用した後は、
+その版を受け付けない古い Worker には戻せません。すでに動いている環境の Accounts D1 を上げる
+場合は、[更新](../self-host/upgrade.md)を参照してください。
 
 control plane 側の D1 にマイグレーションは要りません。`TAKOSUMI_CONTROL_D1_SCHEMA_MODE`
 が既定の `bootstrap` のあいだ、最初のリクエストでスキーマが整います。事前に用意した
