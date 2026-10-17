@@ -96,7 +96,10 @@ browser, following the shapes used by the dashboard's
 portable e2e fixture: source registration and sync, the resolved snapshot and
 its module, a compatibility report that requires the Cloudflare provider, one
 verified workspace connection for it, the default install config, the install
-plan, and its plan Run. Everything is an illustrative example (the
+plan, and its plan Run. The module path is Takos's real
+`deploy/opentofu/cloudflare`, the one the landing's add link for Takos uses, so
+the screen's 「構成」 names it (recaptured on 2026-10-17; before that it showed
+an illustrative `.`). Everything else is an illustrative example (the
 `github.com/example/takos` URL, a placeholder commit, IDs, the connection); no
 request reaches a live API or a Git host, and the screen proves no plan,
 approval, or apply. The one value derived from a real source is the change

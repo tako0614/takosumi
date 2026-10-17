@@ -111,12 +111,14 @@ const cloudflareProvider = "registry.opentofu.org/cloudflare/cloudflare";
 // counts are derived from takos v0.12.7 deploy/opentofu/cloudflare: its
 // platform module creates 1 D1 database, 1 KV namespace, 5 R2 buckets and 6
 // queues on a fresh install, so the review shows 13 to create and nothing to
-// change or delete. Every other value is an illustrative example.
+// change or delete. The module path is that real one, as in the landing's add
+// link for Takos (website/src/content/apps.ts), so 「構成」 names it; every other
+// value is an illustrative example.
 const takosFlow = {
   key: "takos",
   git: "https://github.com/example/takos",
   ref: "0123456789abcdef0123456789abcdef01234567",
-  modulePath: ".",
+  modulePath: "deploy/opentofu/cloudflare",
   name: "takos",
   installPlanId: "gip_7a3c9e2f41b6d805",
   providers: [{ source: cloudflareProvider, moduleLocalName: "cloudflare" }],
@@ -141,7 +143,7 @@ const takosFlow = {
   },
   summary: { add: 13, change: 0, destroy: 0 },
 };
-const reviewPath = `/new?git=${encodeURIComponent(takosFlow.git)}&ref=${takosFlow.ref}&path=.&name=${takosFlow.name}`;
+const reviewPath = `/new?git=${encodeURIComponent(takosFlow.git)}&ref=${takosFlow.ref}&path=${takosFlow.modulePath}&name=${takosFlow.name}`;
 
 // The Quickstart's sample: this repository's examples/opentofu-basic, opened
 // through the Quickstart's /install link. Its inputs are read from this
@@ -208,7 +210,7 @@ const updatesFlows = {
     name: "Takos",
     git: "https://github.com/example/takos",
     ref: "v0.12.7",
-    modulePath: ".",
+    modulePath: "deploy/opentofu/cloudflare",
     appliedAt: ["2026-08-01T09:12:00.000Z", "2026-08-20T03:40:00.000Z", "2026-09-10T11:05:00.000Z"],
   },
   quickstart: {
