@@ -283,7 +283,7 @@ test("latency probe uses fixed HTTP and transport outcomes without error or body
         });
         expect(row.cfRay).toBeUndefined();
         expect(JSON.stringify(row)).not.toContain("private-");
-        expect(progress).toHaveLength(2);
+        expect(progress).toHaveLength(3);
         expect(progress.every((event) => event.versionId === undefined)).toBe(true);
         expect(JSON.stringify(progress)).not.toContain("private-");
       }
@@ -435,7 +435,7 @@ test("latency progress identifies a headers wait before the final sample settles
         expect(progress[0].probeId).toMatch(/^[a-f0-9]{16}$/u);
         const final = await pending;
         expect(final).toMatchObject({ outcome: "timeout", phase: "headers" });
-        expect(progress).toHaveLength(1);
+        expect(progress).toHaveLength(2);
         expect(progress[0].probeId).toBe(final.probeId);
         expect(progress[0].elapsedMs).toBeLessThanOrEqual(final.durationMs);
       } finally {
@@ -484,8 +484,8 @@ test("latency progress distinguishes a stalled body while its final result is st
           true,
         );
         expect(settled).toBe(false);
-        expect(progress.map((row) => row.phase)).toEqual(["headers", "body"]);
-        expect(progress[1]).toMatchObject({
+        expect(progress.map((row) => row.phase)).toEqual(["headers", "headers", "body"]);
+        expect(progress[2]).toMatchObject({
           phase: "body",
           status: 200,
           cfRay: "0123456789abcdef-NRT",
@@ -497,6 +497,7 @@ test("latency progress distinguishes a stalled body while its final result is st
         }
         expect(progress[0].probeId).toBe(requestProbe);
         expect(progress[1].probeId).toBe(requestProbe);
+        expect(progress[2].probeId).toBe(requestProbe);
         for (const marker of [
           secret,
           "private_progress_run",
@@ -510,7 +511,7 @@ test("latency progress distinguishes a stalled body while its final result is st
         const final = await pending;
         expect(final).toMatchObject({ outcome: "timeout", phase: "body" });
         expect(final.milestones.bodyMs).toBeUndefined();
-        expect(progress).toHaveLength(2);
+        expect(progress).toHaveLength(3);
       } finally {
         await pending;
       }
@@ -528,7 +529,7 @@ test("latency progress observer failure does not change the request result", asy
         throw new Error("private-observer-error");
       });
       expect(final.outcome).toBe("response");
-      expect(notifications).toBe(2);
+      expect(notifications).toBe(3);
       expect(JSON.stringify(final)).not.toContain("private-observer-error");
     },
   );
@@ -558,10 +559,10 @@ test("latency CLI emits progress only on opt-in stderr and preserves final stdou
         expect(stderr).toHaveLength(0);
         expect(await main(["--progress", ...args])).toBe(0);
         expect(stdout).toHaveLength(2);
-        expect(stderr).toHaveLength(2);
+        expect(stderr).toHaveLength(3);
         const progress = stderr.map((line) => JSON.parse(line));
         const final = JSON.parse(stdout[1]);
-        expect(progress.map((row) => row.phase)).toEqual(["headers", "body"]);
+        expect(progress.map((row) => row.phase)).toEqual(["headers", "headers", "body"]);
         expect(progress.every((row) => row.probeId === final.probeId)).toBe(true);
         expect(final.kind).toBe("takosumi.request-latency-sample@v1");
         expect(final.outcome).toBe("response");
@@ -576,4 +577,69 @@ test("latency CLI emits progress only on opt-in stderr and preserves final stdou
     console.log = originalLog;
     console.error = originalError;
   }
+});
+
+
+test("latency progress exposes TCP arrival while response headers remain pending", async () => {
+  let holdHeaders!: (response: ServerResponse) => void;
+  const headersHeld = new Promise<ServerResponse>((resolveHeld) => {
+    holdHeaders = resolveHeld;
+  });
+  await fixture(
+    (_request, response) => holdHeaders(response),
+    async (options) => {
+      const progress: RequestLatencyProgress[] = [];
+      let settled = false;
+      const pending = probeRequestLatency(options, 1, undefined, (row) => {
+        // Save each callback's values now: later milestone mutations must not
+        // make an earlier notification appear to have observed TCP arrival.
+        progress.push({ ...row, milestones: { ...row.milestones } });
+      }).then((row) => {
+        settled = true;
+        return row;
+      });
+      let held: ServerResponse | undefined;
+      try {
+        held = await Promise.race([
+          headersHeld,
+          pending.then(() => undefined),
+        ]);
+        expect(held).toBeDefined();
+        if (!held) throw new Error("fixture headers barrier not reached");
+        // A real HTTP request reached this server over TCP; no headers have
+        // been sent and the sample has not settled when progress is inspected.
+        expect(held.headersSent).toBe(false);
+        expect(settled).toBe(false);
+        expect(progress[0].phase).toBe("headers");
+        expect(progress[0].milestones.tcpMs).toBeUndefined();
+        const tcp = progress.find((row) =>
+          Number.isFinite(row.milestones.tcpMs),
+        );
+        expect(tcp).toBeDefined();
+        if (!tcp) throw new Error("TCP progress missing before headers");
+        expect(tcp.phase).toBe("headers");
+        expect(tcp.status).toBeUndefined();
+        expect(tcp.milestones.tcpMs).toBeGreaterThanOrEqual(0);
+        expect(tcp.milestones.tcpMs).toBeLessThanOrEqual(tcp.elapsedMs);
+        expect(tcp.milestones.headersMs).toBeUndefined();
+        expect(tcp.milestones.bodyMs).toBeUndefined();
+        held.end("discarded fixture body");
+        const final = await pending;
+        expect(final).toMatchObject({ outcome: "response", phase: "body", status: 200 });
+        expect(progress.map((row) => row.phase)).toEqual(["headers", "headers", "body"]);
+        expect(progress.every((row) => row.probeId === final.probeId)).toBe(true);
+        expect(progress[0].milestones.tcpMs).toBeUndefined();
+        expect(tcp.milestones.headersMs).toBeUndefined();
+        expect(progress[2].milestones.headersMs).toBeDefined();
+        expect(progress[2].milestones.bodyMs).toBeUndefined();
+        expect(JSON.stringify(progress)).not.toContain("discarded fixture body");
+        const countAtFinish = progress.length;
+        await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
+        expect(progress).toHaveLength(countAtFinish);
+      } finally {
+        held?.end();
+        await pending;
+      }
+    },
+  );
 });
