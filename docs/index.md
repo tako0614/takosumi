@@ -23,8 +23,9 @@ Takosumi は `plan` と `apply` をそれぞれ別の Run として記録しま�
 
 ### 実行の履歴を残す
 
-どの Git commit を誰が実行し、何が変わったかを記録します。適用ごとに state と output
-を保存するため、障害の調査や以前の状態との比較ができます。
+どの Git commit を誰が実行し、何が変わったかを記録します。適用ごとに state を版として
+output とともに保存するため、障害を調べられるほか、以前の版の取得元に戻す変更も、
+確認してから適用できます。
 
 ## 1 つの Git/OpenTofu flow
 
@@ -46,8 +47,8 @@ Git URL と module の宣言
 目的に合わせて入口を選びます。
 
 - **公式ホスティングで使う** — [app.takosumi.com](https://app.takosumi.com/)
-  にサインインし、Store または Git URL から repository を追加します。公式ホスティングは
-  Pre-GA です。手順、料金、提供状況、サポートは
+  にサインインし、**ストア** でアプリを選ぶか、**Gitリポジトリから追加** で Git URL を
+  入れて追加します。公式ホスティングは Pre-GA です。手順、料金、提供状況、サポートは
   [Takosumi hosted service のドキュメント](https://app.takosumi.com/docs/)にあります。
 - **手元で plan から apply まで試す** — [クイックスタート](./getting-started/quickstart.md)
   に従い、Linux と Docker で dashboard、サインイン、データベース、runner を起動します。
