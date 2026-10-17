@@ -9,6 +9,7 @@ import { resolve } from "node:path";
 import { readOwnerPrivateTextFile } from "./lib/private-evidence-file.ts";
 
 const KIND = "takosumi.request-latency-sample@v1";
+const PROGRESS_KIND = "takosumi.request-latency-progress@v1";
 const STAGING_ORIGIN = "https://app-staging.takosumi.com";
 const BODY_LIMIT_BYTES = 1024 * 1024;
 const TIMING_NAMES = new Set([
@@ -57,6 +58,23 @@ export interface RequestLatencySample {
     headersMs?: number;
     bodyMs?: number;
   }>;
+}
+
+/** At most two records per sample, available before its final result. */
+export interface RequestLatencyProgress {
+  readonly kind: typeof PROGRESS_KIND;
+  readonly sample: number;
+  readonly probeId: string;
+  readonly environment: "staging" | "local";
+  readonly client: "node-http";
+  readonly route: string;
+  readonly startedAt: string;
+  readonly at: string;
+  readonly elapsedMs: number;
+  readonly phase: "headers" | "body";
+  readonly status?: number;
+  readonly cfRay?: string;
+  readonly versionId?: string;
 }
 
 export function resolveLatencyProbeOptions(
@@ -173,6 +191,7 @@ export async function probeRequestLatency(
   options: RequestLatencyProbeOptions,
   sample: number,
   token?: string,
+  onProgress?: (progress: RequestLatencyProgress) => void,
 ): Promise<RequestLatencySample> {
   const { url, route } = validateTarget(options);
   if (
@@ -191,6 +210,32 @@ export async function probeRequestLatency(
     let response: IncomingMessage | undefined;
     let metadata: Pick<RequestLatencySample, "cfRay" | "serverTiming"> = {
       serverTiming: {},
+    };
+    const emitProgress = (): void => {
+      if (!onProgress) return;
+      try {
+        const version = response?.headers["x-takosumi-version-id"];
+        onProgress({
+          kind: PROGRESS_KIND,
+          sample,
+          probeId,
+          environment: options.environment,
+          client: "node-http",
+          route,
+          startedAt,
+          at: new Date().toISOString(),
+          elapsedMs: elapsed(),
+          phase,
+          status: response?.statusCode,
+          cfRay: metadata.cfRay,
+          ...(typeof version === "string" &&
+          /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(version)
+            ? { versionId: version }
+            : {}),
+        });
+      } catch {
+        // Observability must not change the request outcome or its deadline.
+      }
     };
     const milestones: {
       dnsMs?: number;
@@ -264,6 +309,7 @@ export async function probeRequestLatency(
         finish("redirect_refused");
         return;
       }
+      emitProgress();
       let bytes = 0;
       incoming.on("data", (chunk: Buffer) => {
         bytes += chunk.length;
@@ -276,6 +322,7 @@ export async function probeRequestLatency(
         finish(status >= 200 && status < 300 ? "response" : "http_error");
       });
     });
+    emitProgress();
     request.end();
   });
 }
@@ -284,11 +331,12 @@ export async function runRequestLatencyProbe(
   options: RequestLatencyProbeOptions,
   emit: (sample: RequestLatencySample) => void,
   token?: string,
+  onProgress?: (progress: RequestLatencyProgress) => void,
 ): Promise<number> {
   validateTarget(options);
   let exitCode = 0;
   for (let sample = 1; sample <= options.samples; sample += 1) {
-    const result = await probeRequestLatency(options, sample, token);
+    const result = await probeRequestLatency(options, sample, token, onProgress);
     emit(result);
     if (result.outcome !== "response") exitCode = 1;
     if (sample < options.samples && options.intervalMs) {
@@ -302,15 +350,17 @@ export async function runRequestLatencyProbe(
 
 export async function main(argv: readonly string[]): Promise<number> {
   if (argv.length === 1 && argv[0] === "--help") {
-    console.log(`Usage: bun scripts/probe-request-latency.ts --environment staging --url ${STAGING_ORIGIN} [--path /api/v1/runs/<id>] [--token-file /private/token] [--samples 12] [--timeout-ms 130000] [--interval-ms 250]
+    console.log(`Usage: bun scripts/probe-request-latency.ts --environment staging --url ${STAGING_ORIGIN} [--path /api/v1/runs/<id>] [--token-file /private/token] [--samples 12] [--timeout-ms 130000] [--interval-ms 250] [--progress]
 Local fixtures: --environment local --url http://127.0.0.1:<port>
 Output: one allowlisted JSON sample per GET; route IDs, credentials, bodies and raw errors are omitted.
+With --progress: at most two allowlisted JSON progress rows per sample on stderr, while headers or body are pending; final stdout is unchanged.
 Limits: 1..70 sequential samples, 1..150000ms total deadline per sample, 0..5000ms interval, 1MiB discarded body.
 Exit: 0 only when every sample completes with 2xx; 1 on timeout/HTTP/transport failure; 2 on invalid input.`);
     return 0;
   }
   try {
     const args: Record<string, string> = {};
+    let progress = false;
     const names = new Set([
       "environment",
       "url",
@@ -320,7 +370,12 @@ Exit: 0 only when every sample completes with 2xx; 1 on timeout/HTTP/transport f
       "timeout-ms",
       "interval-ms",
     ]);
-    for (let index = 0; index < argv.length; index += 2) {
+    for (let index = 0; index < argv.length; index += 1) {
+      if (argv[index] === "--progress") {
+        if (progress) throw new Error("duplicate progress argument");
+        progress = true;
+        continue;
+      }
       const key = argv[index].slice(2);
       const value = argv[index + 1];
       if (
@@ -333,6 +388,7 @@ Exit: 0 only when every sample completes with 2xx; 1 on timeout/HTTP/transport f
         throw new Error("invalid argument");
       }
       args[key] = value;
+      index += 1;
     }
     const options = resolveLatencyProbeOptions(args);
     const token = args["token-file"]
@@ -348,6 +404,7 @@ Exit: 0 only when every sample completes with 2xx; 1 on timeout/HTTP/transport f
       options,
       (sample) => console.log(JSON.stringify(sample)),
       token,
+      progress ? (row) => console.error(JSON.stringify(row)) : undefined,
     );
   } catch {
     console.error(

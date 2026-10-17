@@ -15,6 +15,7 @@ import {
   runRequestLatencyProbe,
   type RequestLatencyProbeOptions,
   type RequestLatencySample,
+  type RequestLatencyProgress,
 } from "../../scripts/probe-request-latency.ts";
 
 async function fixture(
@@ -252,24 +253,40 @@ test("latency probe stops reading a response at its byte limit", async () => {
 });
 
 test("latency probe uses fixed HTTP and transport outcomes without error or body text", async () => {
+  let metadataCalls = 0;
   await fixture(
     (_request, response) => {
       response.writeHead(503, {
         "cf-ray": "private-ray-marker",
+        "x-takosumi-version-id":
+          ++metadataCalls === 1
+            ? "private-version-marker"
+            : [
+                "12345678-1234-1234-1234-123456789abc",
+                "12345678-1234-1234-1234-123456789abc",
+              ],
         "server-timing":
           "tk_control_init;dur=Infinity, tk_control_auth;dur=-2, tk_control_dispatch;dur=999999999, tk_accounts_init;dur=3;desc=private-marker",
       });
       response.end("private-error-marker");
     },
     async (options) => {
-      const row = await probeRequestLatency(options, 1);
-      expect(row).toMatchObject({
-        outcome: "http_error",
-        status: 503,
-        serverTiming: {},
-      });
-      expect(row.cfRay).toBeUndefined();
-      expect(JSON.stringify(row)).not.toContain("private-");
+      for (const sample of [1, 2]) {
+        const progress: RequestLatencyProgress[] = [];
+        const row = await probeRequestLatency(options, sample, undefined, (event) =>
+          progress.push(event),
+        );
+        expect(row).toMatchObject({
+          outcome: "http_error",
+          status: 503,
+          serverTiming: {},
+        });
+        expect(row.cfRay).toBeUndefined();
+        expect(JSON.stringify(row)).not.toContain("private-");
+        expect(progress).toHaveLength(2);
+        expect(progress.every((event) => event.versionId === undefined)).toBe(true);
+        expect(JSON.stringify(progress)).not.toContain("private-");
+      }
     },
   );
   await fixture(
@@ -305,7 +322,7 @@ test("latency probe rejects production, alternate origins, unsafe GET routes and
     samples: 12,
     timeoutMs: 130000,
   });
-  for (const invalid of [
+  const invalidArgs: readonly Readonly<Record<string, string>>[] = [
     { environment: "production" },
     { url: "https://app.takosumi.com" },
     { url: "http://app-staging.takosumi.com" },
@@ -328,7 +345,8 @@ test("latency probe rejects production, alternate origins, unsafe GET routes and
     { "timeout-ms": "0" },
     { "timeout-ms": "150001" },
     { "interval-ms": "5001" },
-  ])
+  ];
+  for (const invalid of invalidArgs)
     expect(() => resolveLatencyProbeOptions({ ...args, ...invalid })).toThrow();
   expect(() =>
     resolveLatencyProbeOptions({
@@ -387,5 +405,175 @@ test("latency probe CLI reads a private token file without printing credentials 
     console.log = originalLog;
     console.error = originalError;
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("latency progress identifies a headers wait before the final sample settles", async () => {
+  await fixture(
+    () => {},
+    async (options) => {
+      const progress: RequestLatencyProgress[] = [];
+      let settled = false;
+      const pending = probeRequestLatency(
+        { ...options, timeoutMs: 100 },
+        1,
+        undefined,
+        (row) => progress.push(row),
+      ).then((row) => {
+        settled = true;
+        return row;
+      });
+      try {
+        expect(settled).toBe(false);
+        expect(progress.map((row) => row.phase)).toEqual(["headers"]);
+        expect(progress[0]).toMatchObject({
+          kind: "takosumi.request-latency-progress@v1",
+          sample: 1,
+          route: "/.well-known/takosumi",
+          client: "node-http",
+        });
+        expect(progress[0].probeId).toMatch(/^[a-f0-9]{16}$/u);
+        const final = await pending;
+        expect(final).toMatchObject({ outcome: "timeout", phase: "headers" });
+        expect(progress).toHaveLength(1);
+        expect(progress[0].probeId).toBe(final.probeId);
+        expect(progress[0].elapsedMs).toBeLessThanOrEqual(final.durationMs);
+      } finally {
+        await pending;
+      }
+    },
+  );
+});
+
+test("latency progress distinguishes a stalled body while its final result is still pending", async () => {
+  const secret = "private-progress-bearer";
+  const progress: RequestLatencyProgress[] = [];
+  let requestProbe: string | string[] | undefined;
+  let bodyObserved!: () => void;
+  const bodyReady = new Promise<true>((resolveBody) => {
+    bodyObserved = () => resolveBody(true);
+  });
+  await fixture(
+    (request, response) => {
+      requestProbe = request.headers["x-takosumi-request-probe-id"];
+      expect(request.headers.authorization).toBe("Bearer " + secret);
+      response.writeHead(200, {
+        "cf-ray": "0123456789abcdef-NRT",
+        "x-takosumi-version-id": "12345678-1234-1234-1234-123456789abc",
+        "set-cookie": "private=" + secret,
+        "server-timing": 'private_metadata;dur=1;desc="' + secret + '"',
+      });
+      response.write("private-progress-body");
+    },
+    async (options) => {
+      let settled = false;
+      const pending = probeRequestLatency(
+        { ...options, path: "/api/v1/runs/private_progress_run" },
+        1,
+        secret,
+        (row) => {
+          progress.push(row);
+          if (row.phase === "body") bodyObserved();
+        },
+      ).then((row) => {
+        settled = true;
+        return row;
+      });
+      try {
+        expect(await Promise.race([bodyReady, pending.then(() => false)])).toBe(
+          true,
+        );
+        expect(settled).toBe(false);
+        expect(progress.map((row) => row.phase)).toEqual(["headers", "body"]);
+        expect(progress[1]).toMatchObject({
+          phase: "body",
+          status: 200,
+          cfRay: "0123456789abcdef-NRT",
+          route: "/api/v1/runs/:runId",
+          versionId: "12345678-1234-1234-1234-123456789abc",
+        });
+        if (typeof requestProbe !== "string") {
+          throw new Error("fixture probe id missing");
+        }
+        expect(progress[0].probeId).toBe(requestProbe);
+        expect(progress[1].probeId).toBe(requestProbe);
+        for (const marker of [
+          secret,
+          "private_progress_run",
+          "private-progress-body",
+          "private_metadata",
+          "set-cookie",
+          options.url,
+        ]) {
+          expect(JSON.stringify(progress)).not.toContain(marker);
+        }
+        const final = await pending;
+        expect(final).toMatchObject({ outcome: "timeout", phase: "body" });
+        expect(final.milestones.bodyMs).toBeUndefined();
+        expect(progress).toHaveLength(2);
+      } finally {
+        await pending;
+      }
+    },
+  );
+});
+
+test("latency progress observer failure does not change the request result", async () => {
+  await fixture(
+    (_request, response) => response.end("discarded"),
+    async (options) => {
+      let notifications = 0;
+      const final = await probeRequestLatency(options, 1, undefined, () => {
+        notifications += 1;
+        throw new Error("private-observer-error");
+      });
+      expect(final.outcome).toBe("response");
+      expect(notifications).toBe(2);
+      expect(JSON.stringify(final)).not.toContain("private-observer-error");
+    },
+  );
+});
+
+test("latency CLI emits progress only on opt-in stderr and preserves final stdout", async () => {
+  const originalLog = console.log;
+  const originalError = console.error;
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  console.log = (line) => stdout.push(String(line));
+  console.error = (line) => stderr.push(String(line));
+  try {
+    await fixture(
+      (_request, response) => response.end("private-cli-body"),
+      async (options) => {
+        const args = [
+          "--environment",
+          "local",
+          "--url",
+          options.url,
+          "--samples",
+          "1",
+        ];
+        expect(await main(args)).toBe(0);
+        expect(stdout).toHaveLength(1);
+        expect(stderr).toHaveLength(0);
+        expect(await main(["--progress", ...args])).toBe(0);
+        expect(stdout).toHaveLength(2);
+        expect(stderr).toHaveLength(2);
+        const progress = stderr.map((line) => JSON.parse(line));
+        const final = JSON.parse(stdout[1]);
+        expect(progress.map((row) => row.phase)).toEqual(["headers", "body"]);
+        expect(progress.every((row) => row.probeId === final.probeId)).toBe(true);
+        expect(final.kind).toBe("takosumi.request-latency-sample@v1");
+        expect(final.outcome).toBe("response");
+        expect(stdout.join("\n")).not.toContain("private-cli-body");
+        expect(stderr.join("\n")).not.toContain("private-cli-body");
+        expect(stderr.join("\n")).not.toContain(options.url);
+        expect(await main(["--progress", "--progress", ...args])).toBe(2);
+        expect(await main(["--progress", "false", ...args])).toBe(2);
+      },
+    );
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
   }
 });

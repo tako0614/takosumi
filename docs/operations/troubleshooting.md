@@ -101,9 +101,7 @@ staging 以外の公開 origin や production はこの probe の対象にでき
 
 sample は直列で最大 70 件、各 sample は headers / body を合わせて最大 150 秒です。
 body は読み捨て、1 MiB を超えたら connection を閉じます。timeout でも同じ
-connection を破棄し、無制限 retry や redirect は行いません。sample の完了前には
-結果行が出ないため、進行中の sample 番号と開始時刻は直前の行から推定し、終了後の
-`startedAt` で確かめます。各 sample は新しい connection を使うため、browser の
+connection を破棄し、無制限 retry や redirect は行いません。最終結果は sample 完了時に出ます。停止中の対応付けには下記の `--progress` を使います。各 sample は新しい connection を使うため、browser の
 HTTP/2 や既存 connection reuse と同じ条件の再現とは扱いません。
 
 結果は operator-private な場所に保存します。probe は body、cookie / bearer、
@@ -117,6 +115,39 @@ tail や client HAR を保存する際も auth headers / body / query / private 
 必要な event timestamp、HTTP outcome、stage timing だけを残します。
 長い Durable Object **alarm** の canceled event を、HTTP GET の停止と同一視しません。
 保存ログ API の 403 は取得権限の不足として記録し、別 credential や権限変更で迂回しません。
+
+### 停止中の client phase を対応付ける
+
+`--progress` を明示すると、各 sample の開始時に `headers`、応答 headers を受けた
+後に `body` の progress JSON を stderr に出します。最終 sample が未完了でも、
+その `probeId` で Worker log と対応付けられます。各 sample は最大2行で、redirect
+を拒否した場合の `body` 行はありません。最終 sample JSON は従来どおり stdout に
+1行出力し、headers/body 共通の期限、接続破棄、secret の扱いは変わりません。
+
+```bash
+bun run probe:request-latency -- --environment staging \
+  --url https://app-staging.takosumi.com \
+  --path /api/v1/runs/<finished-run-id> \
+  --token-file /absolute/private/staging/account-token \
+  --samples 1 --timeout-ms 130000 --progress
+```
+
+stderr も operator-private な場所へ保存します。progress は UTC、route shape、
+probe ID、待機 phase、経過時間と、headers 到達後の status / 検証済み CF Ray / Version UUID のみを
+含み、body 完了や server phase への到達を示しません。client の `body` 待機は、
+Worker の `control_dispatch` span が Response を返した後にも続くことがあります。
+Version UUID は応答の `x-takosumi-version-id` が厳密な形式に一致した場合だけ記録し、
+欠測を serving source の証明にしません。
+redirect / error / timeout の判定は最終 sample で確認します。progress は対応付けを
+助ける観測であり、応答期限の追加や過去の120秒停止の原因証明ではありません。
+
+Platform composition の `/.well-known/takosumi` は `deploy/platform/worker.ts` が
+Accounts handler より前に直接返します。この GET の成功や空の `Server-Timing` は
+Accounts 初期化・認証・Control dispatch の観測にはなりません。終了済み Plan GET の
+症状を調べる場合は、正当な既存 Run の GET を選び、元の client / 操作、UTC の開始・
+停止、headers/body 到達状況、client timeout、probe / Ray / serving Version を
+対応付けます。元の失敗 request の値が無ければ欠測のまま保持します。公開 report に
+credential、raw headers/body、query、private Run ID を含めません。
 
 ### staging で未完了の request phase を観測する
 
