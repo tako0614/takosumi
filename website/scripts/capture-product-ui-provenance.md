@@ -17,6 +17,11 @@ Takos interface source. The website picks matching Takos and Office images for
 the operating system appearance; Yurucommu uses the same native screenshots
 in both appearances.
 
+The landing shows each application's screen beside its description in the
+「アプリを選ぶ」 list, not behind a disclosure. On phones it frames every mobile
+image at 780 × 1240 from the top, so the taller Yurucommu image ends partway
+through the second post's photo.
+
 No application chrome is redrawn and no screenshot pixels are edited. Office
 shows the development checkout's interface, not a claim that every visual detail
 matches the pinned install release. That checkout was read without modifying or
