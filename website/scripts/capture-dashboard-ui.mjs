@@ -10,6 +10,9 @@ const root = resolve(here, "../..");
 const output = resolve(here, "../public/screens");
 const docsOutput = resolve(root, "docs/public/getting-started");
 const origin = "http://127.0.0.1:5199";
+// Desktop Home is the landing's hero. A smaller 16:10 window keeps the
+// launcher tiles from sitting in one corner of a mostly empty frame.
+const desktopHomeViewport = { width: 960, height: 600 };
 const createdAt = "2026-08-01T00:00:00.000Z";
 const assetOrigin = "https://assets.example.test";
 const workspace = {
@@ -565,7 +568,7 @@ async function capture(browser, variant, viewport, theme, screens = ["home", "in
         await page.setViewportSize({ width: viewport.width, height: 950 });
       } else {
         // The review and updates screens fit the desktop viewport to their card.
-        await page.setViewportSize(viewport);
+        await page.setViewportSize(screen === "home" && variant === "desktop" ? desktopHomeViewport : viewport);
       }
       if (screen === "review") await stubAddFlow(page, takosFlow);
       if (screen === "updates") await stubWorkloadUpdates(page, updatesFlows.takos);

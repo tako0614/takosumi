@@ -141,8 +141,10 @@ the landing's 780 / 1720 crop. Pressing that button in the
 real dashboard creates a plan back to that version's source, reviewed and
 applied like any other change.
 
-Desktop Home and Store use the complete 1200 × 750 viewport, with no
-screenshot clip; desktop review and updates keep the 1200px width and end just
+Desktop Home uses the complete 960 × 600 viewport (since 2026-10-17; before
+that 1200 × 750, which left the three launcher tiles in one corner of the
+landing's hero frame). Desktop Store uses the complete 1200 × 750 viewport, with
+no screenshot clip; desktop review and updates keep the 1200px width and end just
 below their card. Mobile Home uses 390 × 700, mobile Store and updates use
 390 × 950 so the first service card or the update history is readable, and
 mobile review is the card clip described above.
