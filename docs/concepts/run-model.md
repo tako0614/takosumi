@@ -6,7 +6,7 @@ Run は Takosumi における実行の記録単位です。変更の確認（pla
 ## Plan と Apply は別の Run です
 
 `plan` は Plan Run を作り、`apply` は確認した Plan Run に `planRunId` で結びついた
-別の Apply Run を作ります。デプロイ時は plan の digest、source snapshot、依存関係の snapshot、
+別の Apply Run を作ります。デプロイ時には plan の digest、source snapshot、依存関係の snapshot、
 state generation などを再検証するため、確認した計画からずれません。
 
 **確認した計画と、デプロイされる内容が食い違わない**ように、Apply Run はこの plan に固定されます。

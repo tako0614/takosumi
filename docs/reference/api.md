@@ -231,11 +231,11 @@ member 行は同時に削除します。削除後の読み取りは 404 です�
 | GET      | `/api/v1/capsule-configs/{capsuleConfigId}`                | Capsule 作成設定を読む                       |
 
 Capsule の削除 API は Workspace owner/admin と `capsules:write` scope を要求します。
-`DELETE /api/v1/capsules/{capsuleId}` は既定で適用済み Capsule の削除を予約し、`202`
+`DELETE /api/v1/capsules/{capsuleId}` は既定でデプロイ済みの Capsule の削除を予約し、`202`
 `{capsule,graceDays}` を返します。猶予期間は operator 設定
 `TAKOSUMI_UNINSTALL_GRACE_DAYS`（OSS 既定 7 日）で、予約中は
 `POST /api/v1/capsules/{capsuleId}/cancel-uninstall` で取り消せます。破棄済み Capsule
-への再試行は `200 {capsule,alreadyDeleted:true}` です。未適用 Capsule は従来どおり即時
+への再試行は `200 {capsule,alreadyDeleted:true}` です。未デプロイの Capsule は従来どおり即時
 abandon します。
 
 旧来の即時 Plan 作成は `DELETE /api/v1/capsules/{capsuleId}?immediate=true` で明示します。
@@ -249,15 +249,15 @@ Plan の確認・承認と、その Run の Apply が別途必要です。`immed
 destroy-plan が bridge になります。猶予なしで破棄したい client は cutover より前に
 `immediate=true` を送るよう更新してください。互換運用は旧 artifact を運用する期間だけです。
 
-`POST /api/v1/capsules/{capsuleId}/uninstall` は適用済みの Capsule を `uninstalled`
+`POST /api/v1/capsules/{capsuleId}/uninstall` はデプロイ済みの Capsule を `uninstalled`
 にし、`uninstall.scheduledDestroyAt` まで何も壊しません。猶予日数は operator 設定
 `TAKOSUMI_UNINSTALL_GRACE_DAYS` (OSS 既定 7 日) です。猶予中も provider の資源と
 データは残り、課金も続きます。Takosumi の OIDC によるサインインは止まります
-(client は失効させないので、取り消せば再開します)。破棄以外の計画・適用は拒否されます
+(client は失効させないので、取り消せば再開します)。破棄以外の計画・デプロイは拒否されます
 (`capsule_uninstalled`)。猶予中は `cancel-uninstall` で元の状態に戻せます。
 期日を過ぎると control plane が一度だけ Capsule 単位の書き出しを試み、結果
 (`exported` / `failed` / `skipped`) を `uninstall.preDestroyExport` に記録してから、
-通常の破棄計画を作ります。計画が削除だけである場合に限り system が承認して適用し、
+通常の破棄計画を作ります。計画が削除だけである場合に限り system が承認してデプロイし、
 そこから先は原則として取り消せません。削除だけでない、変更内容が分からない、
 所有者が計画を取り消した、または破棄が provider に届く前に拒否・失敗した場合は
 `uninstall.blockedReason` を残して止まり、所有者が取り消すか即時削除を選びます。
@@ -266,7 +266,7 @@ provider に届いた破棄が失敗した場合は、通常の破棄失敗と�
 
 新しい Capsule は `POST /api/v1/workspaces/{workspaceId}/install-plans` から
 exact SourceSnapshot と成功済み compatibility declaration を固定して作成し、返された
-Plan Run を確認してから適用します。Workspace Capsule collection の公開面は GET のみです。
+Plan Run を確認してからデプロイします。Workspace Capsule collection の公開面は GET のみです。
 Run は必ず計画の作成から始まります。
 
 | メソッド | パス                                        | 説明                         |
@@ -516,7 +516,7 @@ Apply が新しい InstallConfig を認可することはありません。
 | GET      | `/api/v1/workspaces/{workspaceId}/runs`                 | Run を一覧する                  |
 | GET      | `/api/v1/runs/{runId}`                                  | Run を読む                      |
 | POST     | `/api/v1/runs/{runId}/approve`                          | Run を承認する                  |
-| POST     | `/api/v1/runs/{runId}/apply`                            | 確認済みの Run を適用する       |
+| POST     | `/api/v1/runs/{runId}/apply`                            | 確認済みの Run をデプロイする   |
 | POST     | `/api/v1/runs/{runId}/cancel`                           | Run を取り消す                  |
 | GET      | `/api/v1/runs/{runId}/logs`                             | Run のログを読む                |
 | GET      | `/api/v1/runs/{runId}/events`                           | Run のイベントを読む            |

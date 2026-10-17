@@ -17,7 +17,7 @@ docs use a different name, read it back through this table.
 | Connected accounts     | ProviderConnection / ProviderBinding | Stored credentials, and where they are assigned.                       |
 | Changes                | plan                                 | The list of changes you review before anything is deployed.            |
 | Change verification ID | planDigest                           | The value that proves the plan you reviewed is the plan being applied. |
-| Deploy history         | The list of Runs                     | Reviews and deploys: what ran, and when.                               |
+| Deploy history         | The list of Runs                     | Reviews, approvals, and deploys, newest first.                         |
 | Update history         | The list of StateVersions            | On a service's Updates tab: the versions you deployed.                 |
 | History                | Activity / AuditEvent                | Who did what, and when.                                                |
 | Restore this state     | Restoring from a StateVersion        | Choosing an earlier state again.                                       |

@@ -53,7 +53,7 @@ Capsule への変更は、変更の確認（plan）とデプロイ（apply）を
 2. 接続と入力を確認する
 3. plan で変更内容を作る
 4. 変更内容を確認する。削除・置き換え・import を含む場合は承認する
-5. apply でデプロイする
+5. デプロイ（apply）する
 6. state・output・履歴を保存する
 
 Takosumi は first-party Terraform/OpenTofu provider を同梱しません。Cloudflare、AWS
