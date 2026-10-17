@@ -89,7 +89,7 @@ export default function Home() {
           <span>Takosumi</span>
         </a>
         <nav aria-label="サイトナビゲーション">
-          <a class="nav-apps" href="#apps">アプリを探す</a>
+          <a class="nav-apps" href="#apps">アプリを選ぶ</a>
           <a href="/docs/">ドキュメント</a>
           <a class="nav-login" href="https://app.takosumi.com/">使ってみる <Arrow /></a>
         </nav>
@@ -102,7 +102,7 @@ export default function Home() {
             <p class="hero-lead">公開されたオープンソースを、アプリのように入れて使う。</p>
             <p class="hero-description">アプリを選んで接続と設定を入れ、作られるものを確かめてから追加します。<br class="desktop-break" />画面のあるものは、アプリとしてワークスペースのホームから開けます。</p>
             <div class="hero-actions">
-              <a class="button button-primary" href="#apps">アプリを探す <span aria-hidden="true">↓</span></a>
+              <a class="button button-primary" href="#apps">アプリを選ぶ <span aria-hidden="true">↓</span></a>
               <a class="button button-secondary" href="https://app.takosumi.com/new">Git URL から追加 <Arrow /></a>
             </div>
           </div>
