@@ -38,6 +38,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "Takosumi とは", link: "/" },
         { text: "クイックスタート", link: "/getting-started/quickstart" },
+        { text: "API だけ動かす", link: "/getting-started/api-only" },
       ],
     },
     {
@@ -97,6 +98,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
           text: "Quickstart",
           link: "/en/getting-started/quickstart",
         },
+        { text: "Run only the API", link: "/en/getting-started/api-only" },
       ],
     },
     {

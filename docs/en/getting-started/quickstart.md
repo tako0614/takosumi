@@ -1,12 +1,13 @@
 # Quickstart
 
-Start a local Takosumi installation on a Linux machine and run plan and apply
-for a sample Git module. The sample creates no external resources, so you need
-no cloud credentials. The first run builds containers and the dashboard, so it
-takes a while.
+Start a local Takosumi installation on a Linux machine, add a sample from the
+dashboard, and take it from reviewing the changes (plan) to applying them
+(apply). The sample creates no external resources, so you need no cloud
+credentials. The first run builds containers and the dashboard, so it takes a
+while.
 
 To check only the API, without the dashboard or runner, follow
-[Run only the API](../index.md#api-only) on the docs home page.
+[Run only the API](./api-only.md).
 
 ## Requirements
 
@@ -119,7 +120,7 @@ billing check stops shows **Service setup did not finish**, and
 **Technical details** opens its Run.
 
 When it finishes, **Service added** appears and **Open service** opens the new
-workload (Capsule). Normal updates, detected drift, and new Git commits are not
+service's page under **Workloads**. Normal updates, detected drift, and new Git commits are not
 applied on their own.
 
 ## 7. Inspect the result
@@ -163,5 +164,5 @@ Use `bash scripts/down.sh -v` to also remove Postgres data and certificates.
 - [Self-hosting](../concepts/self-host.md)
 - [CLI](../reference/cli.md)
 
-For the official hosted service, use the
-[Takosumi hosted service documentation](https://app.takosumi.com/docs/en/).
+For the official hosted service (Takosumi Hosted), see the
+[hosted service documentation](https://app.takosumi.com/docs/en/).
