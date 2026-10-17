@@ -30,11 +30,11 @@ state、output、ログ、監査記録は Run の結果です。provider の API
 ## Git module をデプロイする
 
 ```text
-1. Git URL、ref、optional source subtree を Source として登録
-2. ref を 1 つの commit に固定して tracked OpenTofu tree を scan
-3. 実在する module を選び Capsule を作成
-4. Connection と入力変数を割り当て
-5. plan を実行
+1. Git URL と ref（必要ならリポジトリ内のディレクトリも）を Source として登録
+2. ref を 1 つの commit に固定し、Git が追跡している OpenTofu のファイルを読み取り専用で調べる（scan）
+3. scan で見つかった module を選び、Capsule を作成
+4. 接続済みアカウント（Connection）と入力変数を割り当て
+5. 変更の確認（plan）を実行
 6. 差分を確認してデプロイ（apply）
 7. state、output、ログ、監査記録を保存
 ```

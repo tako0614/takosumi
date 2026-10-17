@@ -12,12 +12,12 @@ provider です。その他の API / instance lifecycle は、それを提供す
 
 | 状況                                                | 扱い方                                                         |
 | --------------------------------------------------- | -------------------------------------------------------------- |
-| 外部 resource に標準 API / OpenTofu provider がある | plain Stack flow でその surface を使う                         |
-| Form を提供する Host がある                         | その Host が定義・instance・lifecycle の authority を持つ      |
-| 一回限りの不足                                      | generic-env ProviderConnection と通常の OpenTofu module で扱う |
+| 外部 resource に標準 API / OpenTofu provider がある | Git の module からその provider をそのまま使う（Stack flow） |
+| Form を提供する Host がある                         | その Host が定義・instance・lifecycle を管理する |
+| 一回限りの不足                                      | 環境変数を渡すだけの汎用の接続（`--recipe generic-env`）と通常の OpenTofu module で扱う |
 
 Takosumi は自前の Terraform / OpenTofu provider を配布しません。Takoform は通常の
-provider として使います。外部 provider は plain Stack flow でそのまま実行され、
+provider として使います。外部 provider は Git の module からそのまま実行され、
 Interface / InterfaceBinding は provider-neutral な接続認可を表します。
 Cloudflare 固有の import/deploy compatibility profile は廃止済みです。この API の一部ではありません。
 

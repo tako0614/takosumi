@@ -12,13 +12,14 @@ External infrastructure keeps its existing providers and standard APIs.
 
 ```text
 External resource has a standard API / OpenTofu provider:
-  use that surface through the plain Stack flow.
+  use that provider directly from a Git module (the Stack flow).
 
 An external Host offers a Form instance:
   use that Host's own API and lifecycle contract.
 
 One-off gap:
-  use generic-env ProviderConnection and an ordinary OpenTofu module.
+  use a generic connection that only passes environment variables
+  (--recipe generic-env) with an ordinary OpenTofu module.
 ```
 
 Takosumi does not ship a first-party Terraform/OpenTofu provider. Use Takoform
