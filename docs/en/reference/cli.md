@@ -1,7 +1,7 @@
 # CLI
 
-The Takosumi CLI runs from scripts the things you can also do in the dashboard.
-You normally add services in the dashboard (from the Store or a Git URL), and use
+The Takosumi CLI lets you script things you can also do in the dashboard. You
+normally add services in the dashboard (from the Store or a Git URL), and use
 the CLI afterwards to check on them (`takosumi status`, `takosumi logs`) and to
 manage API keys and connections.
 

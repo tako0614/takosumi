@@ -322,8 +322,9 @@ curl -s https://takosumi.example.com/api/v1/capabilities
 ```
 
 With that much working, read real data once. Sign in to the dashboard, create an API key
-with **Read** and with **Restrict this key to the current Workspace** unticked, as in
-[Creating a token](../reference/cli.md#creating-a-token), and list the Workspaces. Scopes do not include one another, so a `write`-only token gets `403` here. Use
+with **Read** (untick **Restrict this key to the current Workspace** if it is
+shown), as in [Creating a token](../reference/cli.md#creating-a-token), and list the
+Workspaces. Scopes do not include one another, so a `write`-only token gets `403` here. Use
 the token you created, not the operator-only `TAKOSUMI_DEPLOY_CONTROL_TOKEN`. A `200` means
 authentication and reading the records both work.
 

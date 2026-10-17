@@ -316,8 +316,8 @@ curl -s https://takosumi.example.com/api/v1/capabilities
 ```
 
 ここまでが通ったら、実データを 1 回読みます。dashboard でサインインし、
-[API キーの作り方](../reference/cli.md#トークンを発行する)に沿って、**読み取り** を持ち
-**現在のワークスペースだけで使用できるようにする** をオフにした API キーを作って、Workspace の
+[API キーの作り方](../reference/cli.md#トークンを発行する)に沿って、**読み取り** を持ち、
+**現在のワークスペースだけで使用できるようにする** が表示されていればオフにした API キーを作って、Workspace の
 一覧を取ります。scope は互いを含まないので、`write` だけの token ではこの読み取りが `403` に
 なります。使うのは発行した token で、operator 専用の `TAKOSUMI_DEPLOY_CONTROL_TOKEN` では
 ありません。`200` が返れば、認証と記録の読み取りが通っています。
