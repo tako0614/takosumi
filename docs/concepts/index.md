@@ -48,8 +48,8 @@ commit があることを示すだけで、次の plan とデプロイは人が�
 詳しくは [Source と Capsule](./sources.md) と
 [実行モデル](./run-model.md)を参照してください。
 
-アンインストールの猶予期間、再認可、修復方法は
-[予約アンインストール](./scheduled-uninstall.md)を参照してください。
+サービスを猶予期間のあとで削除する方法と、取り消し・止まったときの直し方は
+[削除の予約](./scheduled-uninstall.md)を参照してください。
 
 ## provider を使う
 

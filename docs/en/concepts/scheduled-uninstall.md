@@ -1,72 +1,91 @@
-# Scheduled Capsule uninstall
+# Scheduled deletion (uninstall)
 
-A new request requires its pinned PAT to expire at least six hours after
-`scheduledDestroyAt`. A PAT expiring exactly at `scheduledDestroyAt + 6h` is
-accepted; one expiring one millisecond earlier is refused with
-`409 failed_precondition` and
-`details.reason: capsule_uninstall_pat_deadline_unverified`. If Accounts cannot
-confirm this margin, Capsule state, the reservation, and Activity stay unchanged.
-The six-hour reserve allows for finalizer and provider-dispatch delay. It does
-not guarantee execution if dispatch takes longer or the PAT is revoked; the
-finalizer rechecks the same PAT at each boundary. Use a browser session, a
-non-expiring PAT, or one valid through at least six hours after the deadline.
-The same six-hour margin applies with zero grace.
-Replaying an existing reservation returns the original request without
-replacing its deadline or requester. Admission does not guarantee later
-execution: the same PAT must remain valid through actual provider dispatch.
+**Schedule deletion** in the dashboard does not remove a service (Capsule) right away; it
+deletes it after a grace period. Once scheduled, the service shows **Scheduled for
+deletion** (`uninstalled`). Provider resources and data remain during the grace period,
+and charges continue. The OSS default grace period is seven days. At the deadline, the
+service attempts a data export, then creates a destroy Plan and deletes the service. A
+failed or unsupported export does not stop the deletion; the outcome (`exported` /
+`failed` / `skipped`) is recorded on the request.
 
-`POST /api/v1/capsules/{capsuleId}/uninstall` marks an applied Capsule as
-`uninstalled` and schedules its later destruction. Provider resources and data
-remain during the grace period, and charges continue. The OSS default grace
-period is seven days. The current Workspace owner or admin can cancel with
-`POST /api/v1/capsules/{capsuleId}/cancel-uninstall` while `uninstall.phase` is
-`scheduled`, provided teardown is not in flight or complete. When the phase is
-`destroying`, cancellation is allowed only if the request is blocked
-(`uninstall.blockedReason` is set) and runtime safety is absent or `safe`. An
-approved Plan alone, or the fact that provider dispatch has not happened yet,
-does not make it cancellable. If an external lifecycle or provider operation
-has begun, inspect its outcome and use authorized forward repair.
+In the API, `POST /api/v1/capsules/{capsuleId}/uninstall` creates this request for an
+applied Capsule. Sending the same request again returns the original one without
+changing its deadline or requester.
 
-The request privately records the Accounts subject and a reference to the
-credential used to schedule it. Before export or creation of a destroy Plan,
-and again at approval, apply, and provider dispatch boundaries, the finalizer
-rechecks current Workspace management authority and Accounts authorization. A
-browser session represents the account's intent, so session expiry or rotation
-alone does not stop the request. The account and its Workspace authority are
-still checked at the deadline. For a PAT request, the **same PAT** pinned when
-the request was scheduled must remain active, have `write` scope, and satisfy
-any Workspace restriction at every recheck. Finalization or provider dispatch
-can happen after the scheduled deadline, so the PAT must remain valid through
-the actual provider dispatch; the deadline alone is not a guarantee. Another
-active PAT for the same subject does not replace it.
+## Cancelling
 
-OAuth access tokens have a default lifetime of five minutes, compared with the
-seven-day default uninstall grace period. The scheduled request revalidates the
-same token grant, so OAuth cannot currently schedule an uninstall. This also
-applies when the configured grace period is zero. An OAuth scheduling attempt
-returns `409 failed_precondition` with
-`details.reason: capsule_uninstall_oauth_unsupported`. Refreshing the token
-does not replace the grant pinned to a request. Existing OAuth requests are not
-automatically moved to a new token; the finalizer stops when their pinned grant
-expires.
+**Cancel deletion** in the dashboard, or
+`POST /api/v1/capsules/{capsuleId}/cancel-uninstall` from the current Workspace owner or
+admin, cancels the request. Cancellation is possible only in these cases; the second is a
+request that stopped after the deadline:
 
-If authorization or Workspace authority cannot be confirmed at the deadline,
-the Capsule stays `uninstalled`, and the request stops with
-`uninstall.blockedReason` and `uninstall.authorizationRejectedAt`. A legacy
-request without a requester uses
-`uninstall.blockedReason: uninstall_requester_missing`; a pinned grant that is
-expired, revoked, or otherwise no longer valid uses
-`uninstall.blockedReason: uninstall_requester_denied`. Authorization refusal
-normally happens before export, destroy Plan creation, or provider work. The
-`capsule.uninstall_blocked` activity record also carries the refusal reason and
-time. Restoring authorization later does not resume the request.
+- `uninstall.phase` is `scheduled`, and teardown is neither in flight nor complete; or
+- `phase` is `destroying`, but the request is blocked (`uninstall.blockedReason` is set)
+  and runtime safety is absent or `safe`.
 
-To recover an authorization-blocked request, the current Workspace owner or
-admin first confirms that one of the cancellation cases above applies, calls
-`cancel-uninstall`, then schedules a new request with a browser session or a
-PAT that will remain valid through provider dispatch. The new request has a new
-ID and a full grace period. It does not adopt the old request's requester. If those
-cancellation conditions do not hold or an external operation has begun, inspect
-its outcome and use authorized forward repair.
+An approved Plan alone, or the fact that provider dispatch has not happened yet, does not
+make it cancellable. If an external lifecycle or provider operation has begun, do not
+cancel; inspect its outcome and use authorized forward repair.
+
+## Which credential to schedule with
+
+The request privately records the Accounts subject and a reference to the credential used
+to schedule it. Before exporting data and creating the destroy Plan, and again before
+approval, apply, and provider dispatch, the deletion rechecks current Workspace management
+authority and Accounts authorization. Because this can run after the deadline, choose the
+credential as follows.
+
+| Credential | Can schedule | Checks after the deadline |
+| --- | --- | --- |
+| Browser session | Yes | It represents the account's intent, so session expiry or rotation alone does not stop the request. The account and its Workspace authority are still checked at the deadline |
+| PAT | Only one valid until at least six hours after the deadline (`scheduledDestroyAt`), or one that does not expire | The **same PAT** used to schedule must be active, have `write` scope, and satisfy any Workspace restriction at every recheck |
+| OAuth | No | — |
+
+About PATs:
+
+- A PAT expiring exactly at `scheduledDestroyAt + 6h` is accepted. One expiring even one
+  millisecond earlier is refused with `409 failed_precondition`
+  (`details.reason: capsule_uninstall_pat_deadline_unverified`). If Accounts cannot
+  confirm this margin, Capsule state, the request, and Activity stay unchanged.
+- The six hours are a margin, at scheduling time, for delays in the deletion and in
+  provider dispatch. The same margin applies with zero grace. Execution is not guaranteed
+  if dispatch takes longer or the PAT is revoked: the PAT must remain valid through actual
+  provider dispatch, not just the deadline.
+- Another active PAT for the same account does not replace the one used to schedule.
+
+About OAuth: access tokens have a default lifetime of five minutes, far shorter than the
+seven-day default grace period, and the request rechecks the same token grant after the
+deadline. So OAuth cannot currently schedule a deletion; it returns `409 failed_precondition`
+(`details.reason: capsule_uninstall_oauth_unsupported`). This also applies with zero
+grace. Refreshing the token does not replace the grant recorded for a request. Existing
+OAuth requests are not automatically moved to a new token, and the deletion stops when
+their recorded grant expires.
+
+## When the deadline check fails
+
+If authorization or Workspace authority cannot be confirmed at the deadline, the service
+stays **Scheduled for deletion** (`uninstalled`), and the request stops with
+`uninstall.blockedReason` and `uninstall.authorizationRejectedAt`.
+
+| `uninstall.blockedReason` | Reason |
+| --- | --- |
+| `uninstall_requester_missing` | A legacy request with no recorded requester |
+| `uninstall_requester_denied` | The credential used to schedule is expired, revoked, or otherwise no longer valid, or the account's Workspace authority no longer allows it |
+| `uninstall_authorization_unavailable` | Authorization could not be checked: the check is not available, or it failed |
+
+The refusal is normally recorded before export, destroy Plan creation, or provider work.
+The `capsule.uninstall_blocked` audit record also carries the reason and time. Restoring
+authorization later does not resume the request.
+
+## Repairing a blocked request
+
+1. Confirm that one of the cases under "Cancelling" applies.
+2. The current Workspace owner or admin calls `cancel-uninstall`.
+3. Schedule again with `POST /api/v1/capsules/{capsuleId}/uninstall`, using a browser
+   session or a PAT that will remain valid through provider dispatch.
+
+The new request has a new ID and a full grace period. It does not adopt the old request's
+requester. If the cancellation conditions do not hold, or an external operation has
+begun, inspect its outcome and use authorized forward repair.
 
 See the [API reference](../reference/api.md) for the API operations.
