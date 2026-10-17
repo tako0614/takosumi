@@ -36,7 +36,7 @@ object, add `OPERATOR_CONTROL_MCP_INSTALL_CONFIG` to that array as well.
 
 ### 2. Deploy the Git module
 
-In Add service on the dashboard, enter:
+In **Add service** (`/new`) on the dashboard, enter:
 
 ```text
 Git URL:     https://github.com/tako0614/takosumi.git

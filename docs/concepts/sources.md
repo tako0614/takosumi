@@ -130,7 +130,7 @@ Capsule が追跡している Source に新しい commit が来ると、Capsule 
 plan と apply は人が始めます。
 
 Capsule で `autoUpdate` を明示的に有効にした場合だけ、新しい snapshot ごとに 1 回、
-更新用の plan を作ります。削除を含まず、承認や policy の gate がない clean plan は
+更新用の plan を作ります。削除や置き換えを含まず、承認や policy の gate がない clean plan は
 apply まで続けられます。それ以外は Run 画面で停止します。単なる `stale`、drift の
 検出、古い snapshot の再通知が無条件に apply を起動することはありません。
 

@@ -134,8 +134,8 @@ When a new commit arrives on the Source a Capsule tracks, the Capsule becomes `s
 next plan and apply.
 
 Only a Capsule with `autoUpdate` explicitly enabled creates one update plan for each new
-snapshot. A clean plan can continue to apply when it has no deletion, approval, or policy
-gate. Any gated plan stops on the Run page. A `stale` marker, drift detection, or a repeat
+snapshot. A clean plan can continue to apply when it has no deletion, replacement, approval,
+or policy gate. Any gated plan stops on the Run page. A `stale` marker, drift detection, or a repeat
 notification for an old snapshot never starts an apply unconditionally.
 
 ## The screen, and links from outside
