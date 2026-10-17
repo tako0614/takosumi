@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { type DefaultTheme, defineConfig } from "vitepress";
 import { scrollableTables } from "./scrollable-tables";
+import { slugify } from "./slugify";
 import { firstParagraphText, wrappedLines } from "./wrapped-lines";
 
 // Pages rarely carry a frontmatter description. Fall back to the first prose
@@ -255,6 +256,8 @@ export default defineConfig({
     theme: { light: "github-light-high-contrast", dark: "github-dark-default" },
     // Screenshots sit far down long pages; load them as the reader arrives.
     image: { lazyLoading: true },
+    // Heading ids keep voiced kana composed so in-page links reach them.
+    anchor: { slugify },
     config(md) {
       wrappedLines(md);
       scrollableTables(md);

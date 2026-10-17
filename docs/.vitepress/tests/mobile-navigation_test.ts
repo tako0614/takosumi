@@ -73,3 +73,17 @@ test.describe("Takosumi docs page width", () => {
     expect(layout.scrollingTables).toBeGreaterThan(0);
   });
 });
+
+test.describe("Takosumi docs heading links", () => {
+  test("reaches a heading whose id has a voiced kana", async ({ page }) => {
+    await page.goto("/docs/concepts/self-host#ローカルで安全に起動して確認する");
+    await expect(page.locator("#VPContent main")).toBeVisible();
+
+    const target = await page.evaluate(() => {
+      const id = decodeURIComponent(location.hash.slice(1));
+      return document.getElementById(id)?.textContent?.replace(/​/g, "").trim() ?? null;
+    });
+
+    expect(target).toBe("ローカルで安全に起動して確認する");
+  });
+});
