@@ -3,6 +3,7 @@ import path from "node:path";
 import { type DefaultTheme, defineConfig } from "vitepress";
 import { scrollableTables } from "./scrollable-tables";
 import { slugify } from "./slugify";
+import { stackedTables } from "./stacked-tables";
 import { firstParagraphText, wrappedLines } from "./wrapped-lines";
 
 // Pages rarely carry a frontmatter description. Fall back to the first prose
@@ -277,6 +278,7 @@ export default defineConfig({
     config(md) {
       wrappedLines(md);
       scrollableTables(md);
+      stackedTables(md);
     },
   },
   cleanUrls: true,

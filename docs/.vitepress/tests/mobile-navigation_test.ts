@@ -58,19 +58,36 @@ test.describe("Takosumi docs mobile navigation", () => {
 });
 
 test.describe("Takosumi docs page width", () => {
-  test("keeps wide reference tables inside the page width", async ({ page }) => {
+  test("lays wide reference tables out as labelled rows that fit the phone", async ({ page }) => {
     await page.goto("/docs/reference/configuration");
     await expect(page.locator(".vp-doc .table-scroll > table").first()).toBeVisible();
 
-    const layout = await page.evaluate(() => ({
-      pageWidth: document.documentElement.scrollWidth,
-      viewportWidth: window.innerWidth,
-      scrollingTables: [...document.querySelectorAll(".vp-doc .table-scroll")]
-        .filter((wrapper) => wrapper.scrollWidth > wrapper.clientWidth).length,
-    }));
+    const layout = await page.evaluate(() => {
+      const firstRow = document.querySelector(".vp-doc .table-scroll tbody > tr");
+      const label = document.querySelector(".vp-doc td > .cell-label");
+      const overflows = (element: Element) => element.scrollWidth > element.clientWidth;
+      return {
+        pageWidth: document.documentElement.scrollWidth,
+        viewportWidth: window.innerWidth,
+        scrollingTables: [
+          ...document.querySelectorAll(".vp-doc .table-scroll"),
+          ...document.querySelectorAll(".vp-doc .table-scroll > table"),
+        ].filter(overflows).length,
+        rowDisplay: firstRow ? getComputedStyle(firstRow).display : "",
+        labelDisplay: label ? getComputedStyle(label).display : "",
+        labelHidden: label?.getAttribute("aria-hidden"),
+        tableRole: document.querySelector(".vp-doc .table-scroll > table")?.getAttribute("role"),
+      };
+    });
 
     expect(layout.pageWidth).toBeLessThanOrEqual(layout.viewportWidth);
-    expect(layout.scrollingTables).toBeGreaterThan(0);
+    expect(layout.scrollingTables).toBe(0);
+    expect(layout.rowDisplay).toBe("block");
+    expect(layout.labelDisplay).toBe("block");
+    expect(layout.labelHidden).toBe("true");
+    expect(layout.tableRole).toBe("table");
+    // Stacked tables do not scroll, so they are not keyboard stops.
+    await expect(page.locator(".vp-doc .table-scroll[tabindex]")).toHaveCount(0);
   });
 });
 

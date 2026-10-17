@@ -81,6 +81,67 @@ html:not(.dark) .vp-doc .dark-only {
   margin: 0;
 }
 
+/* Column labels inside cells exist only for the stacked layout below. */
+.vp-doc .cell-label {
+  display: none;
+}
+
+/* Below 640px a table becomes a list of rows. The first cell reads as the
+ * row's name and the other cells follow under it, each labelled with its
+ * column name when the table has three or more columns (stacked-tables.ts).
+ * A sideways scroll hid the descriptions of most reference tables on a
+ * phone. */
+@media (max-width: 639px) {
+  .vp-doc .table-scroll,
+  .vp-doc .table-scroll > table {
+    overflow-x: visible;
+  }
+
+  .vp-doc .table-scroll > table,
+  .vp-doc .table-scroll > table > tbody,
+  .vp-doc .table-scroll > table > tbody > tr,
+  .vp-doc .table-scroll > table > tbody > tr > td {
+    display: block;
+  }
+
+  .vp-doc .table-scroll > table > thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .vp-doc .table-scroll > table > tbody > tr {
+    padding: 12px 0;
+    border-top: 1px solid var(--vp-c-divider);
+    background-color: transparent;
+  }
+
+  .vp-doc .table-scroll > table > tbody > tr:last-child {
+    border-bottom: 1px solid var(--vp-c-divider);
+  }
+
+  .vp-doc .table-scroll > table > tbody > tr > td {
+    padding: 2px 0;
+    border: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .vp-doc .table-scroll > table > tbody > tr > td:first-child {
+    font-weight: 600;
+  }
+
+  .vp-doc .table-scroll .cell-label {
+    display: block;
+    margin-top: 6px;
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--vp-c-text-2);
+  }
+}
+
 /* The full nav bar appears at 768px, where the English labels need tighter
  * link padding to stay inside the viewport until the desktop layout. */
 @media (min-width: 768px) and (max-width: 959px) {

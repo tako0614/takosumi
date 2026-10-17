@@ -73,10 +73,64 @@ function installMobileNavigationA11y(): void {
   }
 }
 
+// The build makes every table wrapper a keyboard stop so a wide table can be
+// scrolled (scrollable-tables.ts). A wrapper that does not scroll, such as a
+// narrow table or any table stacked on a phone (style.css), would be a stop
+// with nothing to do, so keep the stop only while the wrapper overflows.
+// Without JavaScript every wrapper keeps its stop, which still leaves each
+// wide table reachable by keyboard.
+function installTableScrollStops(): void {
+  if (typeof window === "undefined") return;
+
+  const install = (): void => {
+    if (!document.body) {
+      window.requestAnimationFrame(install);
+      return;
+    }
+
+    const root = document.documentElement;
+    if (root.dataset.takosumiTableScrollStops === "installed") return;
+    root.dataset.takosumiTableScrollStops = "installed";
+
+    let pending = false;
+    const sync = (): void => {
+      pending = false;
+      for (const wrapper of document.querySelectorAll<HTMLElement>(
+        ".vp-doc .table-scroll",
+      )) {
+        if (wrapper.scrollWidth > wrapper.clientWidth) {
+          wrapper.setAttribute("tabindex", "0");
+        } else {
+          wrapper.removeAttribute("tabindex");
+        }
+      }
+    };
+    const schedule = (): void => {
+      if (pending) return;
+      pending = true;
+      window.requestAnimationFrame(sync);
+    };
+
+    new MutationObserver(schedule).observe(document.body, {
+      childList: true,
+      subtree: true,
+    });
+    window.addEventListener("resize", schedule);
+    schedule();
+  };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", install, { once: true });
+  } else {
+    install();
+  }
+}
+
 const theme: Theme = {
   extends: DefaultTheme,
   enhanceApp() {
     installMobileNavigationA11y();
+    installTableScrollStops();
   },
 };
 
