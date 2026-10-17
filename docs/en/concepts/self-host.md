@@ -10,11 +10,11 @@ things.
 
 ## Choosing a shape
 
-| Shape | Where it runs | Where state lives | Template |
+| Shape and template | Plan and apply | Where it runs | Where state lives |
 | --- | --- | --- | --- |
-| Cloudflare | Cloudflare Workers | D1 / R2 / Durable Objects | `deploy/platform/wrangler.toml` |
-| Bun and PostgreSQL | A VM or a container | PostgreSQL | `deploy/node-postgres/` |
-| Local only | Your own Linux and Docker | Compose volumes | `deploy/local-substrate/` |
+| **Cloudflare**<br>`deploy/platform/` | Yes (a Cloudflare Container runner) | Cloudflare Workers | D1 / R2 / Durable Objects |
+| **Bun and PostgreSQL**<br>`deploy/node-postgres/` | Not until you compose in a runner | A VM or a container | PostgreSQL |
+| **Local only**<br>`deploy/local-substrate/` | Yes (a bundled runner container) | Your own Linux and Docker | Compose volumes |
 
 **Cloudflare** suits you when you would rather not keep servers. A Cloudflare account and
 wrangler are enough, and OpenTofu execution is taken on by a runner in a Cloudflare
@@ -24,7 +24,7 @@ Worker.
 **Bun and PostgreSQL** suits you when it should live on your own infrastructure. You need
 a host running Docker, PostgreSQL, and Caddy to terminate TLS. The bundled
 `docker-compose.yml` brings up PostgreSQL, the migrations, the service itself, and Caddy
-together. It does not include an OpenTofu runner, so running Stacks needs a runner composed
+together. It does not include an OpenTofu runner, so plan and apply need a runner composed
 in separately.
 
 **Local only** is for exercising the whole thing without exposing anything. It assumes

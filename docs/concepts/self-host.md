@@ -9,11 +9,11 @@ CLI、dashboard、Takoform client とその他の API client は、その origin
 
 ## 構成を選ぶ
 
-| 構成 | 実行環境 | 状態の保存先 | 雛形 |
+| 構成と雛形 | plan と apply | 実行環境 | 状態の保存先 |
 | --- | --- | --- | --- |
-| Cloudflare | Cloudflare Workers | D1 / R2 / Durable Objects | `deploy/platform/wrangler.toml` |
-| Bun と PostgreSQL | VM やコンテナ | PostgreSQL | `deploy/node-postgres/` |
-| 手元だけ | 手元の Linux と Docker | Docker Compose のボリューム | `deploy/local-substrate/` |
+| **Cloudflare**<br>`deploy/platform/` | できます（Cloudflare Container の runner） | Cloudflare Workers | D1 / R2 / Durable Objects |
+| **Bun と PostgreSQL**<br>`deploy/node-postgres/` | runner を別に組み込むまでできません | VM やコンテナ | PostgreSQL |
+| **手元だけ**<br>`deploy/local-substrate/` | できます（同梱の runner コンテナ） | 手元の Linux と Docker | Docker Compose のボリューム |
 
 **Cloudflare** は、サーバーを自分で持たずに運用したい場合に向きます。Cloudflare
 アカウントと wrangler があれば動き、OpenTofu の実行も Cloudflare Container の runner が
@@ -24,7 +24,7 @@ CLI、dashboard、Takoform client とその他の API client は、その origin
 TLS 用 Caddy を起動します。この stock 構成に OpenTofu runner や runner artifact store は
 ありません。control / pre-destroy export は `takosumi-runtime` volume に保存します。
 Accounts、control plane、dashboard の確認には使えますが、Git sync、plan、
-apply は `runner_capability_missing` になります。Stack 実行には runner とその保存先を含む別の
+apply は `runner_capability_missing` になります。plan と apply には runner とその保存先を含む別の
 operator composition が必要です。
 
 **手元だけ**の構成は、公開せずに全体を通したい場合に使います。Linux と
