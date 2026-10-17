@@ -73,3 +73,13 @@ test.describe("Takosumi docs page width", () => {
     expect(layout.scrollingTables).toBeGreaterThan(0);
   });
 });
+
+test.describe("Takosumi docs heading links", () => {
+  test("reaches a heading whose id has a voiced kana", async ({ page }) => {
+    await page.goto("/docs/concepts/self-host#ローカルで安全に起動して確認する");
+    await expect(page.locator("#VPContent main")).toBeVisible();
+
+    // :target is the browser's own match of the URL fragment to an element id.
+    await expect(page.locator("h3:target")).toContainText("ローカルで安全に起動して確認する");
+  });
+});
