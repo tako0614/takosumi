@@ -9,6 +9,8 @@ Source は「このリポジトリのこのディレクトリを、この ref �
 
 必須は Workspace、名前、URL の 3 つだけです。
 
+例の `$TAKOSUMI_DEPLOY_CONTROL_TOKEN` には、[発行した token](../reference/cli.md#トークンを発行する)を入れます。
+
 ```bash
 curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN" \

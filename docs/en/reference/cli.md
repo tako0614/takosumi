@@ -46,7 +46,10 @@ leaves any bearer passed to `--token` in your terminal.
 
 ## Creating a token
 
-The `TAKOSUMI_DEPLOY_CONTROL_TOKEN` used by the other pages is created here.
+The CLI and the API examples on other pages read their bearer from the
+`TAKOSUMI_DEPLOY_CONTROL_TOKEN` environment variable. Normally you put a token
+created here in it. The server's setting of the same name is the operator's
+secret; use it only for operator work.
 
 ```bash
 takosumi accounts tokens create \

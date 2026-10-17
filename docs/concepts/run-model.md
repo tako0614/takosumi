@@ -17,11 +17,12 @@ module の明示的な OpenTofu `import` block を Plan に含め、その差分
 ## 計画から始まります
 
 公開 `/api/v1` は Accounts session または必要な write 権限を持つ PAT を使います。
-以下の例では `TAKOSUMI_URL` を公開 API の origin、`TAKOSUMI_ACCOUNTS_PAT` を PAT とします。
+以下の例では、ほかのページと同じく `TAKOSUMI_DEPLOY_CONTROL_URL` を公開 API の origin とし、
+`TAKOSUMI_DEPLOY_CONTROL_TOKEN` に[発行した token](../reference/cli.md#トークンを発行する)を入れます。
 
 ```bash
-curl -X POST "$TAKOSUMI_URL/api/v1/capsules/cap_example/plan" \
-  -H "authorization: Bearer $TAKOSUMI_ACCOUNTS_PAT"
+curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/plan" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
 `plan` は Plan Run を作ります。Capsule の通常の `DELETE` は適用済み Capsule の削除を
@@ -41,19 +42,19 @@ takosumi logs run_example
 イベントと費用の見込みは別の経路です。
 
 ```bash
-curl -s "$TAKOSUMI_URL/api/v1/runs/run_example/events" \
-  -H "authorization: Bearer $TAKOSUMI_ACCOUNTS_PAT"
+curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/runs/run_example/events" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 
-curl -s "$TAKOSUMI_URL/api/v1/runs/run_example/cost" \
-  -H "authorization: Bearer $TAKOSUMI_ACCOUNTS_PAT"
+curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/runs/run_example/cost" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
 納得したら、確認した plan の Run に対して適用します。別の Apply Run が作られ、承認が必要な
 設定なら、適用の前に `/approve` を通します。
 
 ```bash
-curl -X POST "$TAKOSUMI_URL/api/v1/runs/run_example/apply" \
-  -H "authorization: Bearer $TAKOSUMI_ACCOUNTS_PAT"
+curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/runs/run_example/apply" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
 途中でやめる場合は `/cancel` です。取り消したことも記録に残ります。
@@ -117,11 +118,11 @@ plan から apply へ続きます。**
 差分だけを見る操作は Capsule 単位でも Workspace 単位でも行えます。
 
 ```bash
-curl -X POST "$TAKOSUMI_URL/api/v1/capsules/cap_example/drift-check" \
-  -H "authorization: Bearer $TAKOSUMI_ACCOUNTS_PAT"
+curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/drift-check" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 
-curl -X POST "$TAKOSUMI_URL/api/v1/workspaces/ws_example/drift-check" \
-  -H "authorization: Bearer $TAKOSUMI_ACCOUNTS_PAT"
+curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/drift-check" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
 ## まとめて実行する
@@ -129,8 +130,8 @@ curl -X POST "$TAKOSUMI_URL/api/v1/workspaces/ws_example/drift-check" \
 Workspace 全体を更新すると、複数の Run が RunGroup としてまとめられます。
 
 ```bash
-curl -X POST "$TAKOSUMI_URL/api/v1/workspaces/ws_example/plan-update" \
-  -H "authorization: Bearer $TAKOSUMI_ACCOUNTS_PAT"
+curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/plan-update" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
 承認は `/api/v1/run-groups/{runGroupId}/approve` でまとめて行えます。個々の Run の
@@ -147,11 +148,11 @@ StateVersion と状態も確認してから対応してください。結果が�
 ## 履歴
 
 ```bash
-curl -s "$TAKOSUMI_URL/api/v1/workspaces/ws_example/runs" \
-  -H "authorization: Bearer $TAKOSUMI_ACCOUNTS_PAT"
+curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/runs" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 
-curl -s "$TAKOSUMI_URL/api/v1/workspaces/ws_example/activity" \
-  -H "authorization: Bearer $TAKOSUMI_ACCOUNTS_PAT"
+curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/activity" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
 操作履歴は Workspace に属します。

@@ -15,6 +15,9 @@ created — database rows, stored files — are not part of it.
 Going back runs through an ordinary plan and apply. **Choosing a StateVersion changes
 nothing by itself.**
 
+Put a [token you created](../reference/cli.md#creating-a-token) in
+`$TAKOSUMI_DEPLOY_CONTROL_TOKEN` for these examples.
+
 ```bash
 curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/state-versions" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"

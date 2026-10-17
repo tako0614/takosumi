@@ -9,6 +9,9 @@ A Source declares that you want to follow this directory of this repository at t
 
 Only three things are required: the Workspace, a name, and a URL.
 
+Put a [token you created](../reference/cli.md#creating-a-token) in
+`$TAKOSUMI_DEPLOY_CONTROL_TOKEN` for these examples.
+
 ```bash
 curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN" \

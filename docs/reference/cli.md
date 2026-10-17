@@ -42,7 +42,9 @@ takosumi --help
 
 ## トークンを発行する
 
-ほかのページが使えと書いている `TAKOSUMI_DEPLOY_CONTROL_TOKEN` は、ここで作ります。
+CLI と、ほかのページの API の例は、`TAKOSUMI_DEPLOY_CONTROL_TOKEN` 環境変数の bearer を使います。
+ふだんは、ここで発行した token を入れます。サーバーの設定にある同じ名前の値は operator 用の
+秘密で、operator の作業にだけ使います。
 
 ```bash
 takosumi accounts tokens create \
