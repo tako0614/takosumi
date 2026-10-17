@@ -22,11 +22,11 @@ control plane、dashboard、runner がまとまります。
 
 **Bun と PostgreSQL** は、自分のインフラに置きたい場合に向きます。Docker が動くホストが
 あれば、同梱の `docker-compose.yml` が PostgreSQL、2 系統の schema migration、サービス本体、
-TLS 用 Caddy を起動します。この stock 構成に OpenTofu runner や runner artifact store は
-ありません。control / pre-destroy export は `takosumi-runtime` volume に保存します。
-Accounts、control plane、dashboard の確認には使えますが、Git sync、plan、
-apply は `runner_capability_missing` になります。plan と apply には runner とその保存先を含む別の
-operator composition が必要です。
+TLS 用 Caddy を起動します。この標準の構成には、OpenTofu を動かす runner も、その成果物の
+保存先もありません。制御情報の書き出しと削除前の書き出し（control / pre-destroy export）は
+`takosumi-runtime` volume に保存します。Accounts、control plane、dashboard の確認には
+使えますが、Git の同期、plan、apply は `runner_capability_missing` になります。plan と apply には、
+runner とその保存先を組み込んだ構成を自分で用意する必要があります。
 
 **手元だけ**の構成は、公開せずに全体を通したい場合に使います。Linux、Docker、Bun と、
 証明書と DNS を設定するための `sudo` が要ります。ACME 用の Pebble、CoreDNS、Caddy を
@@ -62,7 +62,7 @@ operator composition が必要です。
 
 Run は作成時に `RUN_OWNER` へ直接 schedule されます。Cloudflare Queue や
 dead-letter queue はこの GA 構成にはありません。`RUN_OWNER` が再試行と終端失敗を
-所有し、binding がなければ実行は fail closed になります。
+所有し、binding がなければ実行せずに止まります（fail closed）。
 
 まずリソースを作ります。名前は雛形に合わせています。
 
@@ -77,10 +77,11 @@ bunx wrangler r2 bucket create takosumi-backups
 
 `wrangler.toml` を自分用に写します。書き換えるのは `database_id`、`routes` の
 `pattern`、`[vars]` の `TAKOSUMI_ACCOUNTS_ISSUER` です。issuer は dashboard を配る
-origin そのものです。公開されている雛形は placeholder ID を含む参照用です。実際に deploy する
+origin そのものです。公開されている雛形は仮の ID を含む参照用です。実際に deploy する
 設定の値は自分の環境のものに置き換え、公開しない場所で管理してください。
 雛形の `[vars]` には `TAKOSUMI_ENVIRONMENT = "production"` がすでに設定されています。
-この値が `production` か `staging` のとき、暗号鍵と永続ストアの検査が fail-closed になります。
+この値が `production` か `staging` のとき、暗号鍵と永続ストアの検査に通らなければ、警告で
+済ませずに止まります（fail closed）。
 値の意味は[設定リファレンス](../reference/configuration.md)にまとめてあります。
 
 この参照雛形は release tool が `main` と `[assets] directory` を注入する前提で、その 2 つを
@@ -308,7 +309,7 @@ Docker Compose を使わず手で動かす場合は、同じ環境変数を渡�
 この雛形には OpenTofu runner が入っていません。accounts、control plane、dashboard は
 動きますが、Git の同期、plan、apply は `runner_capability_missing` で失敗します。plan と
 apply を実行するには、runner を組み込んだ構成を使います。Cloudflare 構成か、
-`deploy/local-substrate/` のように runner コンテナを接続した operator composition です。
+`deploy/local-substrate/` のように runner コンテナをつないだ、自分で組んだ構成です。
 
 ## 手元だけで通す
 
