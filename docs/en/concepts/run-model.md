@@ -100,13 +100,9 @@ encrypted artifact store, readable only by authorized internal processing. The
 lockfile body and its artifact reference do not appear in public Run, Output, or
 log projections.
 
-When the current runner is provider-free and did not produce a lockfile, private
-metadata records an explicit `null`. An empty lockfile is a present raw byte
-sequence of size 0 and is distinct from `null`. Digest-only records from older
-runners remain `undefined` (unknown); Takosumi does not later retrieve or
-regenerate a lockfile and claim that it was the historical byte sequence. A
-provider plan with a missing, oversized, modified, or cross-Run lockfile
-reference cannot succeed.
+A provider plan with a missing, oversized, modified, or cross-Run lockfile
+reference cannot succeed. For an older Run with no recorded bytes, Takosumi never
+fetches or regenerates a lockfile later and presents it as the original.
 
 ## What can continue automatically
 

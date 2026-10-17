@@ -45,6 +45,9 @@ An output marked `sensitive = true` in OpenTofu is correct as far as OpenTofu is
 concerned, but it **does not become a published Output**. That closes it off as a way to
 carry secrets.
 
+An Output is not a per-Run record; it is the value published right now. Read it
+from `/api/v1/capsules/{capsuleId}/outputs`:
+
 ```bash
 curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_db/outputs" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
@@ -103,11 +106,6 @@ something directly in a cloud console.
 A drift check reads that difference and reports it, read-only. **It repairs nothing on its
 own.** It reports with the current version and endpoint held fixed, and a person decides
 whether to act.
-
-`refresh` remains only as a historical `ResourceOperation` marker; it is not a current
-`RunType`. A drift check remains read-only and does not change anything outside on its own.
-An Output is not a Run; it is the current public projection read from
-`/api/v1/capsules/{capsuleId}/outputs`.
 
 ## How this differs from an export
 
