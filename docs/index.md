@@ -54,7 +54,7 @@ Git URL・ref・module path と、変数・接続をまとめた、デプロイ�
 5. apply で反映する
 6. state・output・履歴を保存する
 
-Takosumi は first-party の Terraform / OpenTofu provider を同梱しません。Cloudflare、AWS
+Takosumi は first-party Terraform/OpenTofu provider を同梱しません。Cloudflare、AWS
 などは、それぞれの既存 provider が操作します。
 
 ## 次に読むもの
