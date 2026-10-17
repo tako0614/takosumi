@@ -34,8 +34,9 @@ Run の問題は dashboard または認可された `GET /api/v1/runs/:runId` �
 | provider の認証拒否 | その phase に渡る ProviderConnection、recipe、権限、失効 |
 | state・排他制御の印（fence）・実行記録（receipt）が食い違う | 保存済みの記録、fence、現在の state を照合。apply を繰り返さず、結果を判定できない変更は operator が調査 |
 
-Cloudflare の修復処理（定期的な sweep）は `scheduled.run_repair_failures` と
-`takosumi_run_repair_total{outcome="ordinary_failure"}` / `{outcome="retirement_failure"}` で失敗件数を示します。
+Cloudflare の修復処理（定期的な sweep）は、止まったままの Run を拾い直し、その件数を
+`takosumi_run_repair_total{outcome="rescheduled"}` で示します。失敗件数は `scheduled.run_repair_failures` と
+`takosumi_run_repair_total{outcome="ordinary_failure"}` / `{outcome="retirement_failure"}` で示します。
 source poll、stale auto-plan、drift の警告は phase を示し、例外本文や認証情報を出しません。
 
 新しい Plan で直せる validation error と、provider mutation の結果が不明な失敗を区別します。
