@@ -318,7 +318,7 @@ async function showUpdateHistory(page, flow) {
 async function assertNothingUnderHeader(page, label) {
   const under = await page.evaluate(() => {
     const header = document.querySelector("header");
-    if (!header) return [];
+    if (!header) return ["(no sticky header found)"];
     const box = header.getBoundingClientRect();
     const overlaps = (rect) => rect.width > 0 && rect.height > 0 && rect.top < box.bottom && rect.bottom > box.top && rect.left < box.right && rect.right > box.left;
     const found = [];
@@ -615,6 +615,7 @@ async function capture(browser, variant, viewport, theme, screens = ["home", "in
           await page.setViewportSize({ width: viewport.width, height: Math.ceil(card.y + card.height + 120) });
           await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
           clip = { x: card.x - 16, y: card.y - 16, width: card.width + 32, height: card.height + 32 };
+          await assertNothingUnderHeader(page, `${screen}/${variant}/${theme}`);
           const covered = await page.evaluate((bottom) => [...document.querySelectorAll("nav")].some((nav) => getComputedStyle(nav).position === "fixed" && nav.getBoundingClientRect().top < bottom), clip.y + clip.height);
           if (covered) throw new Error(`${screen}/${variant}/${theme}: a fixed bar covers the card`);
         }
@@ -637,7 +638,7 @@ async function capture(browser, variant, viewport, theme, screens = ["home", "in
       const file = resolve(output, `dashboard-${screen}-${variant}${theme === "light" ? "-light" : ""}.png`);
       await page.screenshot(clip ? { path: file, clip, fullPage: true, animations: "disabled" } : { path: file, animations: "disabled" });
       const size = clip ?? page.viewportSize();
-      console.log(`${screen}/${variant}/${theme}: ${file} (${Math.round(size.width * 2)}x${Math.round(size.height * 2)})`);
+      console.log(`${screen}/${variant}/${theme}: ${file} (${Math.floor(size.width * 2)}x${Math.floor(size.height * 2)})`);
     }
     if (screens.includes("quickstart")) {
       await captureQuickstart(page, locale, theme, () => {

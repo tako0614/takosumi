@@ -120,8 +120,8 @@ so the script no longer scrolls this screen. Desktop shows the whole add page
 from the top, with the viewport ending just below the card. The phone image is
 the card alone: a page clip of the card with a 16px margin, taken in a viewport
 tall enough that the fixed bottom tab bar sits below it. The capture fails if
-any page text or image overlaps the header in the desktop image, or if a fixed
-bar overlaps the phone clip.
+the page has no header, if any page text or image overlaps the header, or if a
+fixed bar overlaps the phone clip.
 
 The four `dashboard-updates-*` images, captured on 2026-10-16 from the dashboard
 source at `66f059361`, show the Takos workload page's 「更新」 tab. The script
