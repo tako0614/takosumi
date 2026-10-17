@@ -22,12 +22,12 @@ control plane、dashboard、runner がまとまります。
 
 **Bun と PostgreSQL** は、自分のインフラに置きたい場合に向きます。Docker が動くホストが
 あれば、同梱の `docker-compose.yml` が PostgreSQL、control plane と Accounts のデータベースの
-移行（schema migration）、サービス本体、
-TLS 用 Caddy を起動します。この標準の構成には、OpenTofu を動かす runner も、その成果物の
-保存先もありません。制御情報の書き出しと削除前の書き出し（control / pre-destroy export）は
-`takosumi-runtime` volume に保存します。Accounts、control plane、dashboard の確認には
-使えますが、Git の同期、plan、apply は `runner_capability_missing` になります。plan と apply には、
-runner とその保存先を組み込んだ構成を自分で用意する必要があります。
+移行（schema migration）、サービス本体、TLS 用 Caddy を起動します。この標準の構成には、
+OpenTofu を動かす runner も、その成果物の保存先もありません。制御情報の書き出しと削除前の
+書き出し（control / pre-destroy export）は `takosumi-runtime` volume に保存します。Accounts、
+control plane、dashboard の確認には使えますが、Git の同期、plan、apply は
+`runner_capability_missing` になります。plan と apply には、runner とその保存先を組み込んだ
+構成を自分で用意する必要があります。
 
 **手元だけ**の構成は、公開せずに全体を通したい場合に使います。Linux、Docker、Bun と、
 証明書と DNS を設定するための `sudo` が要ります。ACME 用の Pebble、CoreDNS、Caddy を
