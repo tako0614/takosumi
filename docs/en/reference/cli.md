@@ -1,30 +1,29 @@
 # CLI
 
-The Takosumi CLI is an automation helper for actions you can also do in the
-dashboard. The normal product flow is the dashboard `/install?git=...` / `/new`
-path: choose a service, choose the provider connection it should use, then
-plan / apply. The CLI can target any Takosumi endpoint.
+The Takosumi CLI lets you script things you can also do in the dashboard. You
+normally add services in the dashboard (from the Store or a Git URL), and use
+the CLI afterwards to check on them (`takosumi status`, `takosumi logs`) and to
+manage API keys and connections.
 
 ```bash
 export TAKOSUMI_DEPLOY_CONTROL_URL=https://takosumi.example.com
 export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>
 
-open "$TAKOSUMI_DEPLOY_CONTROL_URL/install?git=https://git.example.com/example/photo-blog.git&ref=v1.0.0&sourcePath=infra&path=deploy/opentofu"
-
 takosumi status <run-id>
 takosumi logs   <run-id>
 ```
 
-When using the Takosumi hosted service, the endpoint is `https://app.takosumi.com`.
+Put the origin you sign in to the dashboard at in `TAKOSUMI_DEPLOY_CONTROL_URL`;
+for the Takosumi hosted service it is `https://app.takosumi.com`. Create the API
+key for `TAKOSUMI_DEPLOY_CONTROL_TOKEN` as described in
+[Creating a token](#creating-a-token) below.
 
-The CLI does not run OpenTofu directly. The normal creation flow is dashboard
-Git URL install, which creates Source / Capsule / Run records. `sourcePath` is
-the Git subtree acquired by the Source; `path` is the scanned module inside that
-Snapshot. The Run pins the Git commit / ref and both path coordinates. Execution happens in the runner
-sandbox, and credentials are injected at run time from ProviderConnections and
-CredentialRecipes. Source authoring is Git-only; immutable source archives are
-internal runner transport and are not accepted as a CLI creation input. The
-local-upload path for `takosumi deploy` / `takosumi plan` is retired.
+The CLI does not run OpenTofu itself. A runner does the plan and apply, and cloud
+credentials reach it only while a Run executes (see
+[Credentials](../concepts/credentials.md)). The link format that opens the add
+screen from a Git URL is in
+[Sources and Capsules](../concepts/sources.md#the-screen-and-links-from-outside).
+Sending local files with `takosumi deploy` / `takosumi plan` is retired.
 
 ## Setting up the CLI
 
@@ -47,12 +46,29 @@ leaves any bearer passed to `--token` in your terminal.
 ## Creating a token
 
 The CLI and the API examples on other pages read their bearer from the
-`TAKOSUMI_DEPLOY_CONTROL_TOKEN` environment variable. Normally you put a token
-created here in it. Those examples both read and change things, so the example
-below creates a `read,write` token (`read` and `write` do not include each
-other). The server's setting of the same name is the operator's secret, for
-work that calls the operator-only API; `takosumi connections` on this page is
-such work and needs that secret.
+`TAKOSUMI_DEPLOY_CONTROL_TOKEN` environment variable. Normally you put an API
+key created in the dashboard in it.
+
+1. In the dashboard, open **Settings**, then **Account**.
+2. Under **Takosumi API keys**, choose a name and an expiry (the key stops
+   working after it), select both **Read** and **Write** under **Permissions**,
+   and press **Create API key**. The examples on other pages both read and
+   change things, and `read` and `write` do not include each other, so with
+   **Write** alone the reading examples return `403`. **Restrict this key to the
+   current Workspace** starts ticked, and such a key works only inside that
+   Workspace; untick it for examples that list Workspaces or touch other ones.
+3. The secret is shown once, when the key is created. Copy it into
+   `TAKOSUMI_DEPLOY_CONTROL_TOKEN`.
+
+The server's setting of the same name is the operator's secret, for work that
+calls the operator-only API; `takosumi connections` on this page is such work
+and needs that secret.
+
+### Creating one from the CLI
+
+If you have an Accounts session bearer (`sess_...`), the CLI can create a key
+with the same scopes. It has no Workspace restriction, and it expires only if
+you pass `--expires-at`.
 
 ```bash
 takosumi accounts tokens create \
