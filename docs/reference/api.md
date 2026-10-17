@@ -13,8 +13,8 @@ provider です。その他の API / instance lifecycle は、それを提供す
 | 状況                                                | 扱い方                                                         |
 | --------------------------------------------------- | -------------------------------------------------------------- |
 | 外部 resource に標準 API / OpenTofu provider がある | Git の module からその provider をそのまま使う（Stack flow） |
-| Form を提供する Host がある                         | その Host が定義・instance・lifecycle を管理する |
-| 一回限りの不足                                      | 環境変数を渡すだけの汎用の接続（`--recipe generic-env`）と通常の OpenTofu module で扱う |
+| Form を提供する Host がある                         | その Host が定義・instance・lifecycle を所有する |
+| 一回限りの不足                                      | 環境変数で認証情報を渡す汎用の接続（`--recipe generic-env --auth-mode env`）と通常の OpenTofu module で扱う |
 
 Takosumi は自前の Terraform / OpenTofu provider を配布しません。Takoform は通常の
 provider として使います。外部 provider は Git の module からそのまま実行され、
@@ -129,7 +129,7 @@ schema、Workspace / Project / TargetPool を更新・bootstrap しません。
 
 ## OpenTofu Stack API
 
-Stack API は plain OpenTofu / Terraform module を Git から実行します。
+Stack API は通常の OpenTofu / Terraform module を Git から実行します。
 この flow では既存 provider をそのまま使います。
 
 module graph は immutable SourceSnapshot 内の tracked regular files と vendored local

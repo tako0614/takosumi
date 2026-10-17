@@ -18,14 +18,14 @@ An external Host offers a Form instance:
   use that Host's own API and lifecycle contract.
 
 One-off gap:
-  use a generic connection that only passes environment variables
-  (--recipe generic-env) with an ordinary OpenTofu module.
+  use a generic connection that passes credentials as environment variables
+  (--recipe generic-env --auth-mode env) with an ordinary OpenTofu module.
 ```
 
 Takosumi does not ship a first-party Terraform/OpenTofu provider. Use Takoform
 as an ordinary provider, and use this API, CLI, or dashboard for the supported
 Git/OpenTofu control-plane operations. External providers continue to run
-through plain Stack execution. Takosumi owns that Stack's Run, state, Output,
+from ordinary Git modules (the Stack flow). Takosumi owns that Stack's Run, state, Output,
 and audit records; the provider and its state still own provider-side objects.
 The Cloudflare-specific import/deploy compatibility profile is retired and is
 not part of this API.
