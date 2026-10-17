@@ -26,8 +26,8 @@ Run の問題は dashboard または認可された `GET /api/v1/runs/:runId` �
 | --- | --- |
 | source の取得失敗 | Git URL/ref、SourceSnapshot、Git 接続 |
 | 承認待ち | 保存済み Plan の内容と承認者 |
-| queued のまま | 同じサービス（Capsule）で別の Run が実行中なら、終わるまで待ちます。dashboard の デプロイ履歴で確認します。Cloudflare では、同時に動かせる runner コンテナ（`wrangler.toml` の `max_instances`、雛形は 10）が埋まっていると空きを待ちます |
-| runner_capability_missing | Bun と PostgreSQL の標準の構成には runner がありません。plan と apply には runner を組み込んだ構成が要ります（[自分で動かす](../concepts/self-host.md)） |
+| queued のまま | 同じサービス（Capsule）で別の Run が実行中なら、終わるまで待ちます。dashboard の デプロイ履歴で確認します。Cloudflare では、同時に動かせる runner コンテナ（`wrangler.toml` の `max_instances`、雛形は 10）が埋まっていると空きを待ちます。15 分ほど待っても空かなければ待つのをやめ、`bunx wrangler tail` のログに `takosumi.run_owner.controller_poll_deadline_exceeded` を出します。自分の `wrangler.toml` に雛形の `RUNNER` binding があるかも確認します |
+| runner_capability_missing | Bun と PostgreSQL の標準の構成には runner がありません。plan と apply には runner を組み込んだ構成が要ります（[構成を選ぶ](../concepts/self-host.md#構成を選ぶ)） |
 | migration が失敗する | `local_compose logs migrations postgres`、DB 接続、適用済み migration を確認。down migration は実行しない |
 | `/healthz` が応答しない | `local_compose ps`、accounts logs、公開 port と bind を確認。local test は `localhost:26401` |
 | dashboard は表示されるが sign-in できない | issuer、origin、redirect URI、upstream `clientSecretEnv` の明示 mapping を確認 |
