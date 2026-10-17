@@ -26,8 +26,8 @@ Run の問題は dashboard または認可された `GET /api/v1/runs/:runId` �
 | --- | --- |
 | source の取得失敗 | Git URL/ref、SourceSnapshot、Git 接続 |
 | 承認待ち | 保存済み Plan の内容と承認者 |
-| queued のまま | 同じ Capsule の実行中 Run、runner の配線と capacity、Run owner の dispatch |
-| runner_capability_missing | Bun/PostgreSQL の標準の配布には runner が無い。組み込みの実配線を確認 |
+| queued のまま | 同じサービス（Capsule）で別の Run が実行中なら、終わるまで待ちます。dashboard の デプロイ履歴で確認します。Cloudflare では、同時に動かせる runner コンテナ（`wrangler.toml` の `max_instances`、雛形は 10）が埋まっていると空きを待ちます |
+| runner_capability_missing | Bun と PostgreSQL の標準の構成には runner がありません。plan と apply には runner を組み込んだ構成が要ります（[自分で動かす](../concepts/self-host.md)） |
 | migration が失敗する | `local_compose logs migrations postgres`、DB 接続、適用済み migration を確認。down migration は実行しない |
 | `/healthz` が応答しない | `local_compose ps`、accounts logs、公開 port と bind を確認。local test は `localhost:26401` |
 | dashboard は表示されるが sign-in できない | issuer、origin、redirect URI、upstream `clientSecretEnv` の明示 mapping を確認 |
