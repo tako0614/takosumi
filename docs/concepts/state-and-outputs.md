@@ -40,6 +40,9 @@ Output は Capsule が外に見せる値です。公開されるのは**明示�
 OpenTofu で `sensitive = true` を付けた output は、OpenTofu としては正しくても
 **公開 Output になりません**。秘密を運ぶ経路として使えないようにしてあります。
 
+Output は Run ごとの記録ではなく、いま公開されている値です。
+`/api/v1/capsules/{capsuleId}/outputs` から読めます。
+
 ```bash
 curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_db/outputs" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
@@ -96,10 +99,6 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/output-shares/share_example/ap
 
 差分確認はこのずれを読み取り専用で報告します。**自動では直しません。** 現在の版と
 endpoint を固定したまま報告するので、直すかどうかは人が決めます。
-
-`refresh` は歴史的な `ResourceOperation` marker としてのみ残っており、現在の `RunType` では
-ありません。差分確認は読み取り専用のままで、外部の実物を自動では変更しません。Output は
-Run ではなく、`/api/v1/capsules/{capsuleId}/outputs` から読む現在の公開 projection です。
 
 ## 書き出しとの違い
 

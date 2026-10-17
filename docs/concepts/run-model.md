@@ -93,11 +93,11 @@ plan は成功しません。runner の終了後も、既存の暗号化 artifac
 immutable object として残り、権限のある内部処理だけが読み出せます。Run / Output / log の
 公開 projection には lockfile の本文も artifact ref も含めません。
 
-現在の runner が provider-free で lockfile を生成しなかった場合だけ、private metadata に
-明示的な `null` を記録します。空の lockfile は存在した生バイト列（サイズ 0）として `null` と
-区別します。古い runner の digest-only 記録は `undefined`（不明）のまま
-扱い、後から lockfile を取得・再生成して過去のバイト列だとは主張しません。lockfile が
-欠落、上限超過、改変、または別 Run の ref になった provider plan は成功になりません。
+lockfile の記録は検証されます。記録が上限を超えている、digest と一致しない、別の Run の
+ものを指している、または provider を使うのに「lockfile なし」となっている plan は成功しません。
+plan に digest があれば、apply は `tofu init` の後の lockfile の SHA-256 がその digest と
+一致することを確かめてから provider を実行し、一致しなければ止まります。lockfile の記録を
+持たない古い runner の plan は不明のまま扱い、後から作った lockfile で補うことはしません。
 
 ## 自動で進む範囲
 

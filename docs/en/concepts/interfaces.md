@@ -15,7 +15,7 @@ values you explicitly mapped.
 
 ## Declaring one
 
-The Interface API is the canonical ledger. Declarations materialized from a Capsule
+The Interface API is the canonical ledger. Declarations generated from a Capsule
 blueprint, or projected by an external Host from a Form descriptor, converge on the same
 records. The external Host owns the Form descriptor's definition and realization authority.
 
@@ -105,11 +105,13 @@ The two declarations remain separate.
   repository metadata, an Output convention, or provider configuration.
 
 Takosumi resolves the Capsule's Interface, Ready InterfaceBinding, and permissions. The runtime
-receives only a materialization with exact authority for each alias. It does not receive provider credentials, account ids, native resource ids, or bearer tokens.
+receives only a materialization scoped to exactly the permissions of each alias.
+It does not receive provider credentials, account ids, native resource ids, or bearer
+tokens.
 
 After a Binding is revoked or an Interface generation or permission changes, a host must
-not fall back to an old materialization. It creates a new exact runtime version or fails
-the call closed.
+not fall back to an old materialization. It builds a new runtime version, or fails the call
+rather than run with stale permissions.
 
 This is an Interface authorization capability. It does not replace the path where an OpenTofu
 module uses Cloudflare, AWS, Takoform, or another provider directly.
