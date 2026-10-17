@@ -1,7 +1,7 @@
 # Takosumi
 
-Takosumi is a server for adding Git-hosted OpenTofu and Terraform software to
-the clouds you connect, the way you would add an app. Before anything is added
+Takosumi is a server that adds Git-hosted OpenTofu and Terraform software to
+the clouds you connect, much like installing an app. Before anything is added
 or updated, you can see what will be created and what will change.
 
 Your modules and providers stay unchanged, and there is no Takosumi-specific
@@ -9,8 +9,8 @@ configuration language.
 
 ## What you can do
 
-- **Pick and add** — choose an app from the Store or a Git URL, then fill in the
-  connections and settings it needs.
+- **Pick and add** — choose a service from the Store or a Git URL, then fill in
+  the connections and settings it needs.
 - **Check before applying** — see how many resources will be created, changed,
   and deleted before anything is applied. Changes that delete, replace, or
   import something wait until you approve them.
@@ -27,9 +27,9 @@ configuration language.
 Pick the entry point that matches what you want to do.
 
 - **Use the hosted service** — sign in at [app.takosumi.com](https://app.takosumi.com/)
-  and add an app from the **Store**, or enter a Git URL under
-  **Add from a Git repository**. The hosted service (Takosumi Hosted) is
-  Pre-GA. Steps, pricing, availability, and support are in the
+  and add a service from the **Store**, or enter a Git URL under
+  **Add from a Git repository**. The Takosumi hosted service is Pre-GA.
+  Steps, pricing, availability, and support are in the
   [hosted service documentation](https://app.takosumi.com/docs/en/).
 - **Try adding and applying locally** — follow the
   [Quickstart](./getting-started/quickstart.md) to start the dashboard, sign-in,
@@ -47,19 +47,21 @@ Pick the entry point that matches what you want to do.
 
 What the dashboard calls an app or a service, the docs and the API call a
 **Capsule**: one unit of deployment that bundles a Git URL, ref, and module path
-with its variables and connections ([Glossary](./reference/glossary.md)). Each
-change to a Capsule is recorded as two Runs, a plan and an apply. The apply Run
-is pinned to the reviewed plan Run with `planRunId`, so the changes you read are
-the changes that are applied.
+with its variables and connections ([Glossary](./reference/glossary.md)). Added
+Capsules are listed under **Workloads** in the dashboard. Each change to a
+Capsule is recorded as two Runs, a plan and an apply. The apply Run is pinned to
+the reviewed plan Run with `planRunId`, so the changes you read are the changes
+that are applied.
 
-```text
-Git URL and module declaration
-  → check connections and inputs
-  → plan (prepare the changes)
-  → review and approve the changes
-  → apply
-  → save state, outputs, and history
-```
+Adding or updating something goes through these steps:
+
+1. Name the Git URL and module.
+2. Check the connections and inputs.
+3. Plan the changes.
+4. Review the changes, and approve them if they delete, replace, or import
+   something.
+5. Apply the changes.
+6. Save the state, outputs, and history.
 
 Takosumi does not ship a first-party Terraform/OpenTofu provider. Cloudflare,
 AWS, and others are operated by their existing providers.

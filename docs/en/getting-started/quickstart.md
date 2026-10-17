@@ -119,9 +119,10 @@ A change that deletes, replaces, or imports a resource first needs
 billing check stops shows **Service setup did not finish**, and
 **Technical details** opens its Run.
 
-When it finishes, **Service added** appears and **Open service** opens the new
-service's page under **Workloads**. Normal updates, detected drift, and new Git commits are not
-applied on their own.
+When it finishes, **Service added** appears. The sample has no app screen of
+its own, so **Open service** opens the new service's page under **Workloads**.
+Normal updates, detected drift, and new Git commits are not applied on their
+own.
 
 ## 7. Inspect the result
 
@@ -164,5 +165,5 @@ Use `bash scripts/down.sh -v` to also remove Postgres data and certificates.
 - [Self-hosting](../concepts/self-host.md)
 - [CLI](../reference/cli.md)
 
-For the official hosted service (Takosumi Hosted), see the
+For the official Takosumi hosted service, see the
 [hosted service documentation](https://app.takosumi.com/docs/en/).

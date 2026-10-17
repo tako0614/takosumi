@@ -1,6 +1,6 @@
 # Takosumi
 
-Takosumi は、Git で公開された OpenTofu / Terraform のソフトウェアを、接続したクラウドへ
+Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、接続したクラウドへ
 アプリのように追加して使うための管理サーバーです。追加や更新の前に、作られるものと
 変わるものを確かめてから反映できます。
 
@@ -8,7 +8,7 @@ Takosumi は、Git で公開された OpenTofu / Terraform のソフトウェア
 
 ## できること
 
-- **選んで追加する** — ストアのアプリや Git URL を選び、必要な接続と設定を入れて追加します。
+- **選んで追加する** — ストアのサービスや Git URL を選び、必要な接続と設定を入れて追加します。
 - **反映する前に確かめる** — 作成・変更・削除されるリソースの数を見てから反映します。
   削除・置き換え・import を含む変更は、承認するまで進みません。
 - **鍵を module に書かない** — クラウドの API key や token は Takosumi に保存します。
@@ -22,9 +22,9 @@ Takosumi は、Git で公開された OpenTofu / Terraform のソフトウェア
 目的に合わせて入口を選びます。
 
 - **公式ホスティングで使う** — [app.takosumi.com](https://app.takosumi.com/)
-  にサインインし、**ストア** でアプリを選ぶか、**Gitリポジトリから追加** で Git URL を
-  入れて追加します。公式ホスティング（Takosumi Hosted）は Pre-GA です。手順、料金、
-  提供状況、サポートは[公式ホスティングのドキュメント](https://app.takosumi.com/docs/)に
+  にサインインし、**ストア** でサービスを選ぶか、**Gitリポジトリから追加** で Git URL を
+  入れて追加します。公式ホスティング（Takosumi hosted service）は Pre-GA です。手順、
+  料金、提供状況、サポートは[公式ホスティングのドキュメント](https://app.takosumi.com/docs/)に
   あります。
 - **手元で追加から反映まで試す** — [クイックスタート](./getting-started/quickstart.md)
   に従い、Linux と Docker で dashboard、サインイン、データベース、runner を起動します。
@@ -40,18 +40,19 @@ Takosumi は、Git で公開された OpenTofu / Terraform のソフトウェア
 
 dashboard でアプリ・サービスと呼ぶものを、docs と API では **Capsule** と呼びます。
 Git URL・ref・module path と、変数・接続をまとめた、デプロイの 1 単位です
-（[用語集](./reference/glossary.md)）。Capsule への変更は、計画（plan）と反映（apply）を
+（[用語集](./reference/glossary.md)）。追加した Capsule は dashboard の **ワークロード** に
+並びます。Capsule への変更は、計画（plan）と反映（apply）を
 別々の Run として記録します。apply の Run は確認した plan の Run に `planRunId` で
 固定されるため、読んだ差分と実際に反映する差分が一致します。
 
-```text
-Git URL と module の宣言
-  → 接続と入力を確認
-  → plan（変更内容を作る）
-  → 変更内容を確認・承認
-  → apply（反映する）
-  → state・output・履歴を保存
-```
+追加や更新は、次の順に進みます。
+
+1. Git URL と module を指定する
+2. 接続と入力を確認する
+3. plan で変更内容を作る
+4. 変更内容を確認する。削除・置き換え・import を含む場合は承認する
+5. apply で反映する
+6. state・output・履歴を保存する
 
 Takosumi は first-party の Terraform / OpenTofu provider を同梱しません。Cloudflare、AWS
 などは、それぞれの既存 provider が操作します。

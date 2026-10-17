@@ -1,7 +1,8 @@
 # API だけ動かす
 
 開発中に API を確かめるための、最小の起動手順です。必要なものは Bun と Git です。
-データはメモリ上に置かれ、再起動すると消えます。dashboard と runner は起動しません。
+`DATABASE_URL` などのデータベース設定がなければ、データはメモリ上に置かれ、再起動すると
+消えます。dashboard と runner は起動しません。
 
 ```bash
 git clone https://github.com/tako0614/takosumi.git

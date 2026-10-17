@@ -1,8 +1,8 @@
 # Run only the API
 
 This is the smallest setup for checking the API during development. It needs Bun
-and Git. Data stays in memory and is lost on restart. The dashboard and runner do
-not start.
+and Git. Without a database setting such as `DATABASE_URL`, data stays in memory
+and is lost on restart. The dashboard and runner do not start.
 
 ```bash
 git clone https://github.com/tako0614/takosumi.git
