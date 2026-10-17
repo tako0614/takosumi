@@ -64,7 +64,7 @@ OAuth について: access token の既定の有効期間は 5 分で、既定�
 | `uninstall.blockedReason` | 理由 |
 | --- | --- |
 | `uninstall_requester_missing` | 依頼者の記録がない古い予約です |
-| `uninstall_requester_denied` | 予約に使った認証が期限切れや失効などで使えないか、アカウントの Workspace の権限で許されなくなりました |
+| `uninstall_requester_denied` | 予約に使った認証が期限切れや失効などで使えないか、アカウントの Workspace 権限で許されなくなりました |
 | `uninstall_authorization_unavailable` | 認証や権限を確かめる仕組みが使えないか、確かめる途中で失敗しました |
 
 この拒否は、通常はデータの書き出し、destroy の Plan、provider の操作より前に記録されます。

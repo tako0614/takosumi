@@ -58,8 +58,8 @@ seven-day default grace period, and the request rechecks the same token grant af
 deadline. So OAuth cannot currently schedule a deletion; it returns `409 failed_precondition`
 (`details.reason: capsule_uninstall_oauth_unsupported`). This also applies with zero
 grace. Refreshing the token does not replace the grant recorded for a request. Existing
-OAuth requests are not automatically moved to a new token, and the deletion stops when their recorded
-grant expires.
+OAuth requests are not automatically moved to a new token, and the deletion stops when
+their recorded grant expires.
 
 ## When the deadline check fails
 
