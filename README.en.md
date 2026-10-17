@@ -6,9 +6,9 @@ Takosumi is an open-source server that adds Git-hosted OpenTofu and Terraform
 software to the clouds you connect, much like installing an app. Before anything
 is added or updated, you can see what will be created and what will change.
 
-Your modules and providers stay unchanged. There is no Takosumi-specific `.tf`
-syntax or first-party provider; Cloudflare, AWS, Kubernetes, and other systems
-are still managed by their existing providers.
+Your modules and providers stay unchanged. There is no Takosumi-specific
+configuration language or first-party provider; Cloudflare, AWS, Kubernetes,
+and other systems are still managed by their existing providers.
 
 [Software documentation](https://takosumi.com/docs/) ·
 [Takosumi hosted service documentation](https://app.takosumi.com/docs/en/)
@@ -27,7 +27,6 @@ are still managed by their existing providers.
   applied, by whom, and what changed. Each apply keeps the state as a version,
   with its outputs, and going back to an earlier version's source is a change
   you review before it is applied.
-
 
 ## Getting started
 
@@ -69,7 +68,8 @@ Takoform definitions and any service that hosts and realizes Forms are not owned
 by this repository. Earlier experiments exposed `/v1/resources`, Resource
 Shape, a Form Host, TargetPool, and SpacePolicy APIs and dashboard screens.
 They are not part of the current software. Retained compatibility APIs,
-schemas, and persistence are migration internals, not user setup instructions.
+schemas, and persistence are migration internals, not user setup instructions
+or dashboard navigation.
 
 ## Takosumi and the hosted service
 

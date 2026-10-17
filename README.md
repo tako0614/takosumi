@@ -23,7 +23,6 @@ Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、
   反映ごとの state を版として output とともに残し、以前の版の取得元に戻す変更も、
   確認してから適用できます。
 
-
 ## 始め方
 
 - **公式ホスティングで使う** — [app.takosumi.com](https://app.takosumi.com/) にサインインします。
