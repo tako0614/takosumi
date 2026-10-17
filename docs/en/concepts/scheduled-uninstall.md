@@ -3,9 +3,10 @@
 **Schedule deletion** in the dashboard does not remove a service (Capsule) right away; it
 deletes it after a grace period. Once scheduled, the service shows **Scheduled for
 deletion** (`uninstalled`). Provider resources and data remain during the grace period,
-and charges continue. The OSS default grace period is seven days. At the deadline, a
-server that supports it exports the data first, then creates a destroy Plan and deletes
-the service.
+and charges continue. The OSS default grace period is seven days. At the deadline, the
+service attempts a data export, then creates a destroy Plan and deletes the service. A
+failed or unsupported export does not stop the deletion; the outcome (`exported` /
+`failed` / `skipped`) is recorded on the request.
 
 In the API, `POST /api/v1/capsules/{capsuleId}/uninstall` creates this request for an
 applied Capsule. Sending the same request again returns the original one without
@@ -13,9 +14,10 @@ changing its deadline or requester.
 
 ## Cancelling
 
-Until the deadline, **Cancel deletion** in the dashboard cancels the request. In the API,
-the current Workspace owner or admin calls
-`POST /api/v1/capsules/{capsuleId}/cancel-uninstall`. Cancellation is possible only when:
+**Cancel deletion** in the dashboard, or
+`POST /api/v1/capsules/{capsuleId}/cancel-uninstall` from the current Workspace owner or
+admin, cancels the request. Cancellation is possible only in these cases; the second is a
+request that stopped after the deadline:
 
 - `uninstall.phase` is `scheduled`, and teardown is neither in flight nor complete; or
 - `phase` is `destroying`, but the request is blocked (`uninstall.blockedReason` is set)
@@ -53,10 +55,10 @@ About PATs:
 
 About OAuth: access tokens have a default lifetime of five minutes, far shorter than the
 seven-day default grace period, and the request rechecks the same token grant after the
-deadline. So OAuth cannot schedule a deletion; it returns `409 failed_precondition`
+deadline. So OAuth cannot currently schedule a deletion; it returns `409 failed_precondition`
 (`details.reason: capsule_uninstall_oauth_unsupported`). This also applies with zero
 grace. Refreshing the token does not replace the grant recorded for a request. Existing
-OAuth requests are not moved to a new token, and the deletion stops when their recorded
+OAuth requests are not automatically moved to a new token, and the deletion stops when their recorded
 grant expires.
 
 ## When the deadline check fails
@@ -68,7 +70,8 @@ stays **Scheduled for deletion** (`uninstalled`), and the request stops with
 | `uninstall.blockedReason` | Reason |
 | --- | --- |
 | `uninstall_requester_missing` | A legacy request with no recorded requester |
-| `uninstall_requester_denied` | The credential used to schedule is expired, revoked, or otherwise no longer valid |
+| `uninstall_requester_denied` | The credential used to schedule is expired, revoked, or otherwise no longer valid, or the account's Workspace authority no longer allows it |
+| `uninstall_authorization_unavailable` | Authorization could not be checked: the check is not available, or it failed |
 
 The refusal is normally recorded before export, destroy Plan creation, or provider work.
 The `capsule.uninstall_blocked` audit record also carries the reason and time. Restoring
