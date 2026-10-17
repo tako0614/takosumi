@@ -20,7 +20,7 @@ const jaNav: DefaultTheme.NavItem[] = [
   { text: "はじめに", link: "/getting-started/quickstart" },
   { text: "解説", link: "/concepts/" },
   { text: "リファレンス", link: "/reference/api" },
-  { text: "Takosumi Hosted", link: "https://app.takosumi.com/docs/" },
+  { text: "公式ホスティング", link: "https://app.takosumi.com/docs/" },
 ];
 
 // The site title already links to /en/, as the Japanese title does to /.
@@ -28,7 +28,7 @@ const enNav: DefaultTheme.NavItem[] = [
   { text: "Quickstart", link: "/en/getting-started/quickstart" },
   { text: "Concepts", link: "/en/concepts/" },
   { text: "Reference", link: "/en/reference/api" },
-  { text: "Takosumi Hosted", link: "https://app.takosumi.com/docs/en/" },
+  { text: "Hosted service", link: "https://app.takosumi.com/docs/en/" },
 ];
 
 const jaSidebar: DefaultTheme.SidebarMulti = {
@@ -38,6 +38,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "Takosumi とは", link: "/" },
         { text: "クイックスタート", link: "/getting-started/quickstart" },
+        { text: "API だけ動かす", link: "/getting-started/api-only" },
       ],
     },
     {
@@ -97,6 +98,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
           text: "Quickstart",
           link: "/en/getting-started/quickstart",
         },
+        { text: "Run only the API", link: "/en/getting-started/api-only" },
       ],
     },
     {

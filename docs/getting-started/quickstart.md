@@ -1,11 +1,12 @@
 # クイックスタート
 
-Linux マシン上にローカルの Takosumi を起動し、サンプルの Git module で plan と apply を
-実行します。サンプルは外部リソースを作らないため、クラウドの認証情報は要りません。
-初回はコンテナと dashboard をビルドするため時間がかかります。
+Linux マシン上にローカルの Takosumi を起動し、サンプルを dashboard から追加して、
+変更内容の確認（plan）から反映（apply）まで試します。サンプルは外部リソースを作らない
+ため、クラウドの認証情報は要りません。初回はコンテナと dashboard をビルドするため
+時間がかかります。
 
-dashboard や runner なしで API だけ確認する場合は、docs トップの
-[API だけ動かす](../index.md#api-only)の手順を使います。
+dashboard や runner なしで API だけ確認する場合は、[API だけ動かす](./api-only.md)の
+手順を使います。
 
 ## 必要なもの
 
@@ -110,9 +111,9 @@ module path は折りたたまれた **取得元の詳細** に入っていま�
 最初の追加では表示されません。ポリシーや料金の条件で止められた変更は
 **追加を完了できませんでした** と表示され、**技術的な詳細** から Run の詳細を確認できます。
 
-完了すると **追加できました** と表示され、**サービスを開く** から追加したワークロード
-（Capsule）を開けます。通常の更新、drift の検出、Git の新しい commit は勝手に apply
-されません。
+完了すると **追加できました** と表示されます。このサンプルは画面を持たないため、
+**サービスを開く** で、追加したサービスの **ワークロード** 画面が開きます。通常の更新、
+drift の検出、Git の新しい commit は勝手に apply されません。
 
 ## 7. 結果を見る
 
@@ -153,5 +154,5 @@ Postgres のデータと証明書も消す場合は `bash scripts/down.sh -v` �
 - [自分で動かす](../concepts/self-host.md)
 - [CLI](../reference/cli.md)
 
-公式ホスティングを使う場合は
-[Takosumi hosted service のドキュメント](https://app.takosumi.com/docs/)を参照してください。
+公式ホスティング（Takosumi hosted service）を使う場合は、
+[公式ホスティングのドキュメント](https://app.takosumi.com/docs/)を参照してください。

@@ -1,87 +1,61 @@
 # Takosumi
 
-Takosumi は、Git に置いた OpenTofu / Terraform module を、**計画 → 確認 → 反映**の
-順で実行する管理サーバーです。実行した commit、変更内容、state、output、実行者を
-あとから追える形で保存します。
+Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、接続したクラウドへ
+アプリのように追加して使うための管理サーバーです。追加や更新の前に、作られるものと
+変わるものを確かめてから反映できます。
 
-module や provider はそのまま使います。Takosumi 専用の設定言語はありません。
-Takosumi は first-party Terraform/OpenTofu provider を同梱しません。
+使う module と provider はそのままで、Takosumi 専用の設定言語はありません。
 
-## Takosumi を使う理由
+## できること
 
-### 確認した変更だけを反映する
-
-Takosumi は `plan` と `apply` をそれぞれ別の Run として記録します。`apply` の Run は
-確認した plan の Run に `planRunId` で固定され、別の計画を作り直さないため、読んだ差分と
-実際に反映する差分を一致させられます。
-
-### 認証情報を module から分離する
-
-クラウドの API key や token は Takosumi に保存します。値は読み戻せず、必要な Run
-の実行中だけ runner に渡されます。同じ module を開発用と本番用で使い、接続だけを
-切り替えられます。
-
-### 実行の履歴を残す
-
-どの Git commit を誰が実行し、何が変わったかを記録します。適用ごとに state と output
-を保存するため、障害の調査や以前の状態との比較ができます。
-
-## 1 つの Git/OpenTofu flow
-
-登録した Git module を Takosumi は **Capsule** と呼びます。利用者が用意するのは Git
-URL、ref、module path、変数、そして module が宣言する provider の接続です。Run、state、
-output、監査記録はこの 1 つの Stack flow に集約されます。
-
-```text
-Git URL と module の宣言
-  → 入力と接続を確認
-  → plan
-  → 差分を確認
-  → apply
-  → state・output・監査記録を保存
-```
+- **選んで追加する** — ストアのサービスや Git URL を選び、必要な接続と設定を入れて追加します。
+- **反映する前に確かめる** — 作成・変更・削除されるリソースの数を見てから反映します。
+  削除・置き換え・import を含む変更は、承認するまで進みません。
+- **鍵を module に書かない** — クラウドの API key や token は Takosumi に保存します。
+  値は読み戻せず、変更の確認や反映を実行している間だけ runner に渡ります。
+- **記録を残し、戻せる** — 誰がどの commit を反映し、何が変わったかを記録します。
+  反映ごとの state を版として output とともに残し、以前の版の取得元に戻す変更も、
+  確認してから適用できます。
 
 ## 始め方
 
 目的に合わせて入口を選びます。
 
 - **公式ホスティングで使う** — [app.takosumi.com](https://app.takosumi.com/)
-  にサインインし、Store または Git URL から repository を追加します。公式ホスティングは
-  Pre-GA です。手順、料金、提供状況、サポートは
-  [Takosumi hosted service のドキュメント](https://app.takosumi.com/docs/)にあります。
-- **手元で plan から apply まで試す** — [クイックスタート](./getting-started/quickstart.md)
+  にサインインし、**ストア** でサービスを選ぶか、**Gitリポジトリから追加** で Git URL を
+  入れて追加します。公式ホスティング（Takosumi hosted service）は Pre-GA です。手順、
+  料金、提供状況、サポートは[公式ホスティングのドキュメント](https://app.takosumi.com/docs/)に
+  あります。
+- **手元で追加から反映まで試す** — [クイックスタート](./getting-started/quickstart.md)
   に従い、Linux と Docker で dashboard、サインイン、データベース、runner を起動します。
-  ローカル証明書と DNS の設定に `sudo` を使います。サンプル module は外部リソースを
-  作らないため、クラウドの認証情報は要りません。
+  ローカル証明書と DNS の設定に `sudo` を使います。サンプルは外部リソースを作らないため、
+  クラウドの認証情報は要りません。
 - **自分の環境で運用する** — [自分で動かす](./concepts/self-host.md)で構成を選びます。
   Cloudflare の雛形は runner を含みます。Bun と PostgreSQL の雛形で plan と apply を
   実行するには、runner を別に組み込みます。
-- **API だけ動かす** — 下の開発用構成で起動します。
+- **API だけ動かす** — 開発中の API 確認用に、[API だけ動かす](./getting-started/api-only.md)
+  の手順でメモリ上の API サーバーを起動します。
 
-### API だけ動かす {#api-only}
+## 仕組み
 
-開発中の API 確認用です。必要なものは Bun と Git です。データはメモリ上に置かれ、再起動
-すると消えます。dashboard と runner は起動しません。
+dashboard でアプリ・サービスと呼ぶものを、docs と API では **Capsule** と呼びます。
+Git URL・ref・module path と、変数・接続をまとめた、デプロイの 1 単位です
+（[用語集](./reference/glossary.md)）。追加した Capsule は dashboard の **ワークロード** に
+並びます。Capsule への変更は、計画（plan）と反映（apply）を
+別々の Run として記録します。apply の Run は確認した plan の Run に `planRunId` で
+固定されるため、読んだ差分と実際に反映する差分が一致します。
 
-```bash
-git clone https://github.com/tako0614/takosumi.git
-cd takosumi
-bun install
+追加や更新は、次の順に進みます。
 
-TAKOSUMI_DEV_MODE=1 \
-TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token \
-PORT=8788 \
-bun core/index.ts
-```
+1. Git URL と module を指定する
+2. 接続と入力を確認する
+3. plan で変更内容を作る
+4. 変更内容を確認する。削除・置き換え・import を含む場合は承認する
+5. apply で反映する
+6. state・output・履歴を保存する
 
-別のターミナルから確認します。
-
-```bash
-curl http://127.0.0.1:8788/api/v1/capabilities \
-  -H "authorization: Bearer dev-token"
-```
-
-JSON が返れば API は動いています。
+Takosumi は first-party Terraform/OpenTofu provider を同梱しません。Cloudflare、AWS
+などは、それぞれの既存 provider が操作します。
 
 ## 次に読むもの
 
