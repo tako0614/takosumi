@@ -14,8 +14,8 @@ Bun と PostgreSQL の標準の構成を手元で試す場合は、そのペー�
 `/metrics` は `TAKOSUMI_METRICS_SCRAPE_TOKEN` の bearer で保護されます。
 Workspace/Capsule ID は scrape ラベルに含めません。個別の記録は認可された API で確認します。
 
-dashboard の **ストア** に並ぶサービスは、TCS 2.0 互換の Store から読みます。読む先は、
-サーバーに設定した Store と、利用者がブラウザーで追加した Store です。サーバーに設定するには、
+dashboard の **ストア** に並ぶサービスは、TCS 2.0 互換の次の Store から読みます。サーバーに
+設定した Store と、利用者がブラウザーで追加した Store です。サーバーに設定するには、
 使う Store の公開 HTTP(S) URL を環境変数 `TAKOSUMI_TCS_STORE_URL` に入れ、サーバーを再起動
 します（Cloudflare では Worker を再デプロイします）。Takosumi は `/.well-known/takosumi` の
 `endpoints.extensions["takosumi.tcs-store.v1"]` でその URL を dashboard に知らせるため、
