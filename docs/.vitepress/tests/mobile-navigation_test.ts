@@ -58,19 +58,28 @@ test.describe("Takosumi docs mobile navigation", () => {
 });
 
 test.describe("Takosumi docs page width", () => {
-  test("keeps wide reference tables inside the page width", async ({ page }) => {
+  test("lays wide reference tables out as labelled rows that fit the phone", async ({ page }) => {
     await page.goto("/docs/reference/configuration");
     await expect(page.locator(".vp-doc .table-scroll > table").first()).toBeVisible();
 
-    const layout = await page.evaluate(() => ({
-      pageWidth: document.documentElement.scrollWidth,
-      viewportWidth: window.innerWidth,
-      scrollingTables: [...document.querySelectorAll(".vp-doc .table-scroll")]
-        .filter((wrapper) => wrapper.scrollWidth > wrapper.clientWidth).length,
-    }));
+    const layout = await page.evaluate(() => {
+      const firstRow = document.querySelector(".vp-doc .table-scroll tbody > tr");
+      return {
+        pageWidth: document.documentElement.scrollWidth,
+        viewportWidth: window.innerWidth,
+        scrollingTables: [...document.querySelectorAll(".vp-doc .table-scroll")]
+          .filter((wrapper) => wrapper.scrollWidth > wrapper.clientWidth).length,
+        rowDisplay: firstRow ? getComputedStyle(firstRow).display : "",
+        labelledCells: document.querySelectorAll(".vp-doc td[data-label]").length,
+        tableRole: document.querySelector(".vp-doc .table-scroll > table")?.getAttribute("role"),
+      };
+    });
 
     expect(layout.pageWidth).toBeLessThanOrEqual(layout.viewportWidth);
-    expect(layout.scrollingTables).toBeGreaterThan(0);
+    expect(layout.scrollingTables).toBe(0);
+    expect(layout.rowDisplay).toBe("block");
+    expect(layout.labelledCells).toBeGreaterThan(0);
+    expect(layout.tableRole).toBe("table");
   });
 });
 
