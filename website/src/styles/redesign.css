@@ -94,6 +94,8 @@ main { display: block; }
 .site-footer nav { display: flex; gap: 25px; flex-wrap: wrap; }
 
 @media (max-width: 900px) {
+  /* Below two readable columns, the screen goes under its description at full width. */
+  .featured-app { grid-template-columns: minmax(0, 1fr); gap: 28px; }
   .install-layout { grid-template-columns: 1fr; gap: 38px; }
   .install-intro > p { max-width: 62ch; }
   .after-section { gap: 46px; }
@@ -132,7 +134,6 @@ main { display: block; }
   /* The phone shots are taller than the screen they show; keep the top. */
   .featured-screen img { aspect-ratio: 780 / 1240; object-fit: cover; object-position: top; border-radius: 9px; }
   .install-layout { padding-block: 74px; }
-  .install-shot { aspect-ratio: 780 / 1580; max-height: none; }
   .after-section { display: block; padding-block: 82px 90px; }
   .after-steps { margin-top: 45px; }
   .after-product { margin-top: 45px; }

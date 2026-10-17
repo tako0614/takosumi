@@ -112,6 +112,17 @@ index and Worker upload that Takos performs in its own follow-up step are not
 part of this plan. The capture fails unless the screen shows those three counts
 and its 「追加する」 button.
 
+On 2026-10-17 the review images were reframed from the dashboard source at
+`454eb7292`. They had been scrolled to the 「必要な接続」 row, so the line above
+it showed faintly through the dashboard's translucent sticky header. The page
+heading, the step indicator and the card leave no gap as tall as that header,
+so the script no longer scrolls this screen. Desktop shows the whole add page
+from the top, with the viewport ending just below the card. The phone image is
+the card alone: a page clip of the card with a 16px margin, taken in a viewport
+tall enough that the fixed bottom tab bar sits below it. The capture fails if
+any page text or image overlaps the header in the desktop image, or if a fixed
+bar overlaps the phone clip.
+
 The four `dashboard-updates-*` images, captured on 2026-10-16 from the dashboard
 source at `66f059361`, show the Takos workload page's 「更新」 tab. The script
 answers that tab's reads in the browser (the workload, its install config and
@@ -127,11 +138,11 @@ the landing's 780 / 1720 crop. Pressing that button in the
 real dashboard creates a plan back to that version's source, reviewed and
 applied like any other change.
 
-Desktop Home, Store and review use the complete 1200 × 750 viewport, with no
-screenshot clip; desktop updates keeps the 1200px width and ends just below the
-update card. Mobile Home uses 390 × 700, and
-mobile Store, review and updates use 390 × 950 so the first service card, the
-change counts and 「追加する」, or the update history, are readable.
+Desktop Home and Store use the complete 1200 × 750 viewport, with no
+screenshot clip; desktop review and updates keep the 1200px width and end just
+below their card. Mobile Home uses 390 × 700, mobile Store and updates use
+390 × 950 so the first service card or the update history is readable, and
+mobile review is the card clip described above.
 All use device scale 2, Japanese locale, loaded UI fonts, and Noto Sans JP as the system
 Japanese fallback. The script seeds the dashboard's own `tg_theme` preference
 to match the browser color scheme and confirms the rendered `data-theme` before

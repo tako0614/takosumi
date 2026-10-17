@@ -34,7 +34,7 @@ function DashboardShot(props: { capture: (typeof DASHBOARD_CAPTURES)[keyof typeo
 
 /** What each app's demo screen shows, for its alt text. */
 const APP_SCREEN_ALT: Record<FeaturedApp["id"], string> = {
-  takos: "Takos の会話画面。作業ノートと Takos Office の更新から今週の進捗をまとめるよう頼まれ、2 件のツールを実行して結果をまとめている",
+  takos: "Takos の会話画面。作業ノートと Office の更新から今週の進捗をまとめるよう頼まれ、2 件のツールを実行して結果をまとめている",
   yurucommu: "Yurucommu のホーム。ストーリーの下に、コミュニティの投稿が並んでいる",
   office: "Takos Office の文書エディター。「今週の進捗メモ」という文書を開いている",
 };
@@ -63,7 +63,7 @@ function FeaturedAppRow(props: { app: FeaturedApp }) {
           追加画面を開く <Arrow />
         </a>
         <p class="featured-source">
-          <a href={moduleUrl}>OpenTofu 定義<span class="featured-ref">（{repoName}・{refLabel}）</span><Arrow /></a>
+          <a href={moduleUrl}>公開元<span class="featured-ref">（{repoName}・{refLabel}）</span><Arrow /></a>
           <a href={props.app.site}>{props.app.name} のサイト <Arrow /></a>
         </p>
       </div>
@@ -123,7 +123,7 @@ export default function Home() {
           <div class="featured-list">
             <For each={FEATURED_APPS}>{app => <FeaturedAppRow app={app} />}</For>
           </div>
-          <p class="section-note">アプリの画面は、それぞれのアプリを公開用のデモデータで撮影したものです。</p>
+          <p class="section-note">アプリの画面は、公開用のデモデータで撮影したものです。</p>
         </section>
 
         <section class="install-section" aria-labelledby="install-title">
@@ -140,7 +140,7 @@ export default function Home() {
               </ol>
             </div>
             <figure class="install-product">
-              <DashboardShot capture={DASHBOARD_CAPTURES.review} alt="Takosumi の追加前の確認画面。Takos を追加すると作成 13、変更 0、削除 0 と表示され、その下に「追加する」ボタンがある" class="install-shot" />
+              <DashboardShot capture={DASHBOARD_CAPTURES.review} alt="Takosumi で Takos を追加する画面の確認の段階。使うプロバイダー、必要な Cloudflare の接続と追加先の下に、作成 13、変更 0、削除 0 と「追加する」ボタンが並ぶ" class="install-shot" />
               <figcaption>Takos を追加する前の確認画面（Takosumi ダッシュボードを公開用デモデータで撮影。件数は Takos v0.12.7 の Cloudflare 構成から算出）</figcaption>
             </figure>
           </div>

@@ -43,9 +43,9 @@ export const DASHBOARD_CAPTURES = {
     mobileLight: { src: "/screens/dashboard-updates-mobile-light.png", width: 780, height: 1900 },
   },
   review: {
-    desktop: { src: "/screens/dashboard-review-desktop.png", width: 2400, height: 1500 },
-    mobile: { src: "/screens/dashboard-review-mobile.png", width: 780, height: 1900 },
-    desktopLight: { src: "/screens/dashboard-review-desktop-light.png", width: 2400, height: 1500 },
-    mobileLight: { src: "/screens/dashboard-review-mobile-light.png", width: 780, height: 1900 },
+    desktop: { src: "/screens/dashboard-review-desktop.png", width: 2400, height: 2042 },
+    mobile: { src: "/screens/dashboard-review-mobile.png", width: 732, height: 1652 },
+    desktopLight: { src: "/screens/dashboard-review-desktop-light.png", width: 2400, height: 2042 },
+    mobileLight: { src: "/screens/dashboard-review-mobile-light.png", width: 732, height: 1652 },
   },
 } as const;
