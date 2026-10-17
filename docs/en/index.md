@@ -28,9 +28,9 @@ Pick the entry point that matches what you want to do.
 
 - **Use the hosted service** — sign in at [app.takosumi.com](https://app.takosumi.com/)
   and add a service from the **Store**, or enter a Git URL under
-  **Add from a Git repository**. The Takosumi hosted service is Pre-GA.
-  Steps, pricing, availability, and support are in the
-  [hosted service documentation](https://app.takosumi.com/docs/en/).
+  **Add from a Git repository**. The Takosumi hosted service is Pre-GA (not
+  yet generally available). Steps, pricing, availability, and support are in
+  the [hosted service documentation](https://app.takosumi.com/docs/en/).
 - **Try adding and deploying locally** — follow the
   [Quickstart](./getting-started/quickstart.md) to start the dashboard, sign-in,
   database, and runner on Linux with Docker. It uses `sudo` to set up a local
@@ -51,8 +51,8 @@ from Home, is an **app**. The docs and the API call an added service a
 **Capsule**: one unit of deployment that bundles a Git URL, ref, and module path
 with its variables and connections ([Glossary](./reference/glossary.md)). Each
 change to a Capsule is recorded as two Runs: a plan (shown as Review) and an
-apply (shown as Deploy). The apply Run is pinned to the reviewed plan Run with
-`planRunId`, so the changes you read are the changes that are deployed.
+apply (shown as Deploy). The apply Run is pinned to the reviewed plan Run
+(`planRunId`), so the changes you read are the changes that are deployed.
 
 Adding or updating something goes through these steps:
 

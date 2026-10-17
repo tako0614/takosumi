@@ -23,7 +23,7 @@ Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、
 
 - **公式ホスティングで使う** — [app.takosumi.com](https://app.takosumi.com/)
   にサインインし、**ストア** でサービスを選ぶか、**Gitリポジトリから追加** で Git URL を
-  入れて追加します。公式ホスティング（Takosumi hosted service）は Pre-GA です。手順、
+  入れて追加します。公式ホスティング（Takosumi hosted service）は正式提供前（Pre-GA）です。手順、
   料金、提供状況、サポートは[公式ホスティングのドキュメント](https://app.takosumi.com/docs/)に
   あります。
 - **手元で追加からデプロイまで試す** — [クイックスタート](./getting-started/quickstart.md)
@@ -41,9 +41,11 @@ Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、
 dashboard では、ストアで選んで追加するものを **サービス** と呼び、追加したサービスは
 **ワークロード** の一覧に並びます。ホームから開く、サービス自身の画面は **アプリ** です。
 docs と API では、追加したサービスを **Capsule** と呼びます。デプロイの 1 単位で、
-Git URL・ref・module path と、変数・接続をまとめたものです（[用語集](./reference/glossary.md)）。Capsule への変更は、
-変更の確認（plan）とデプロイ（apply）を別々の Run として記録します。apply の Run は確認した
-plan の Run に `planRunId` で固定されるため、読んだ差分と実際にデプロイする差分が一致します。
+Git URL・ref・module path と、変数・接続をまとめたものです（[用語集](./reference/glossary.md)）。
+
+Capsule への変更は、変更の確認（plan）とデプロイ（apply）を別々の Run として記録します。
+デプロイの Run は確認した変更の Run に固定される（`planRunId`）ため、読んだ差分と実際に
+デプロイする差分が一致します。
 
 追加や更新は、次の順に進みます。
 
