@@ -53,8 +53,8 @@ or policy gate, and a known list of resource changes (see
 Read [Sources and Capsules](./sources.md) and the
 [Run model](./run-model.md) for details.
 
-See [Scheduled Capsule uninstall](./scheduled-uninstall.md) for grace periods,
-reauthorization, and recovery.
+See [Scheduled deletion](./scheduled-uninstall.md) for deleting a service after a grace
+period, cancelling, and repairing a request that stopped.
 
 ## Using providers
 

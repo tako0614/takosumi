@@ -1,15 +1,82 @@
-# Capsule の予約アンインストール
+# 削除の予約（予約アンインストール）
 
-新しい予約では、固定 PAT の有効期限が `scheduledDestroyAt` の 6 時間後以降である必要があります。`scheduledDestroyAt + 6h` と同時に失効する PAT は受け付け、それより 1ms 早く失効する PAT は `409 failed_precondition` と `details.reason: capsule_uninstall_pat_deadline_unverified` で拒否します。Accounts がこの条件を確認できない場合も、Capsule の状態・予約・Activity を変更しません。この 6 時間は finalizer や provider dispatch の遅延に備える予約時の余裕です。実際の dispatch がさらに遅れた場合や、PAT が revoke された場合は実行を保証せず、finalizer は各境界で同じ PAT を再確認します。ブラウザー session、無期限 PAT、予約期限より少なくとも 6 時間後まで有効な PAT を使ってください。猶予 0 日でも同じ 6 時間の余裕を適用します。既存予約の再送は元の予約を返し、期限や requester を差し替えません。
+dashboard の **削除を予約** は、サービス（Capsule）をすぐには消さず、猶予期間のあとで削除する
+操作です。予約すると状態は **削除予定**（`uninstalled`）になります。猶予期間のあいだ provider の
+resource とデータは残り、課金も続きます。OSS の既定の猶予期間は 7 日です。期限が来ると、
+対応しているサーバーではデータを書き出してから、destroy の Plan を作って削除します。
 
-`POST /api/v1/capsules/{capsuleId}/uninstall` は、デプロイ済みの Capsule を `uninstalled` にして、後で破棄する予約を作ります。猶予期間中は provider の resource とデータが残り、課金も続きます。OSS の既定猶予期間は 7 日です。現在の Workspace owner または admin は、`uninstall.phase` が `scheduled` で teardown が実行中・完了済みでない場合、`POST /api/v1/capsules/{capsuleId}/cancel-uninstall` で予約を取り消せます。`phase` が `destroying` の場合は、予約が停止済み (`uninstall.blockedReason` が設定済み) で、runtime safety が未登録または `safe` の場合だけ取り消せます。承認済み Plan があるだけ、または provider dispatch 前という理由だけでは取り消せません。外部 lifecycle/provider 操作が始まっていれば取り消さず、結果を確認して認可済みの forward repair を行います。
+API では `POST /api/v1/capsules/{capsuleId}/uninstall` が、デプロイ済みの Capsule にこの予約を
+作ります。同じ予約を送り直すと元の予約が返り、期限や依頼者は変わりません。
 
-予約には、操作した Accounts subject と予約に使った認証方式の参照が内部保存されます。finalizer は export や destroy Plan を作る前、その後の承認・デプロイ（apply）・provider dispatch の境界でも、Workspace の現在の管理権限と Accounts の認証状態を再確認します。ブラウザー session は subject の意図として扱うため、session の期限切れや rotation だけでは予約を止めません。subject のアカウントと Workspace 権限は期限時にも確認します。PAT 予約では、予約時に固定された**同じ PAT** が各再確認時に有効で、`write` scope と Workspace 制限を満たす必要があります。finalizer の実行や provider dispatch は予約期日より遅れることがあるため、PAT は期日だけでなく実際の provider dispatch まで有効でなければなりません。同じ subject の別 PAT が有効でも、予約に固定された PAT の代わりにはなりません。
+## 取り消す
 
-OAuth access token は既定で 5 分間有効ですが、OSS の既定アンインストール猶予期間は 7 日です。予約後も同じ token grant を再確認するため、OAuth は現在の予約操作では利用できません。猶予期間が 0 日でも同じです。OAuth で予約すると `409 failed_precondition` と `details.reason: capsule_uninstall_oauth_unsupported` が返ります。token を更新しても、予約に固定された grant の代わりにはなりません。既存の OAuth 予約も新しい token へ自動移行されず、固定された grant の期限切れ後は finalizer が停止します。
+期限までは dashboard の **削除を取り消す** で取り消せます。API では、現在の Workspace の owner
+または admin が `POST /api/v1/capsules/{capsuleId}/cancel-uninstall` を呼びます。取り消せるのは
+次の場合だけです。
 
-認証または Workspace 権限を期限時に確認できない予約は、Capsule の `status` を `uninstalled` のまま保ち、`uninstall.blockedReason` と `uninstall.authorizationRejectedAt` を記録して停止します。requester のない既存予約は `uninstall.blockedReason: uninstall_requester_missing`、期限切れ・失効などで固定 grant を確認できない予約は `uninstall.blockedReason: uninstall_requester_denied` になります。通常、認可拒否は export、destroy Plan、provider 操作より前に記録されます。監査記録の `capsule.uninstall_blocked` にも拒否理由と時刻が含まれます。権限や認証状態を後から戻しても予約は再開しません。
+- `uninstall.phase` が `scheduled` で、削除の処理（teardown）が実行中でも完了済みでもない
+- `phase` が `destroying` でも、予約が停止済み（`uninstall.blockedReason` が設定済み）で、
+  runtime safety が未登録か `safe` である
 
-認可停止した予約を修復するには、上記の取消条件を満たすことを確認したうえで、現在の Workspace owner または admin が `cancel-uninstall` を呼び、その後、ブラウザー session または provider dispatch まで有効であり続ける PAT で `POST /api/v1/capsules/{capsuleId}/uninstall` を呼びます。新しい予約には新しい ID と猶予期間が適用されます。古い予約は新しい requester を採用しません。取消条件を満たさない場合や外部操作が始まった場合は、結果を確認して認可済みの forward repair を行ってください。
+承認済みの Plan があるだけ、または provider への dispatch の前というだけでは取り消せません。
+外部の lifecycle や provider の操作が始まっていれば取り消さず、結果を確かめてから、認可された
+前方修復（forward repair）で直します。
 
-詳細な操作経路は [API reference](../reference/api.md) を参照してください。
+## 予約に使う認証
+
+予約には、操作した Accounts のアカウントと、予約に使った認証の参照が内部に記録されます。
+削除の処理は、データの書き出しと destroy の Plan を作る前、そのあとの承認・デプロイ（apply）・
+provider への dispatch の前に、そのつど Workspace の現在の管理権限と Accounts の認証状態を
+確かめ直します。処理は期限より遅れることがあるため、予約に使う認証は次のように選びます。
+
+| 認証 | 予約 | 期限のあとの確認 |
+| --- | --- | --- |
+| ブラウザーのセッション | できます | アカウントの意図として扱うため、セッションの期限切れや更新だけでは止まりません。アカウントと Workspace の権限は期限にも確かめます |
+| PAT | 期限（`scheduledDestroyAt`）の 6 時間後以降まで有効なもの、または無期限のものだけ | 予約に使った**同じ PAT** が、確かめるたびに有効で、`write` scope と Workspace の制限を満たす必要があります |
+| OAuth | できません | — |
+
+PAT について:
+
+- `scheduledDestroyAt + 6h` ちょうどに失効する PAT は受け付けます。それより 1 ms でも早く
+  失効する PAT は `409 failed_precondition` で断ります
+  （`details.reason: capsule_uninstall_pat_deadline_unverified`）。Accounts がこの条件を
+  確かめられない場合も、Capsule の状態・予約・Activity は変えません。
+- 6 時間は、削除の処理や provider への dispatch の遅れに備えた予約時の余裕です。猶予期間が
+  0 日でも同じです。dispatch がさらに遅れた場合や PAT が revoke された場合は、実行を保証
+  しません。PAT は期限ではなく、実際の provider への dispatch まで有効である必要があります。
+- 同じアカウントの別の有効な PAT があっても、予約に使った PAT の代わりにはなりません。
+
+OAuth について: access token の既定の有効期間は 5 分で、既定の猶予期間 7 日よりずっと短く、
+予約は同じ token grant を期限のあとにも確かめます。そのため OAuth では予約できず、
+`409 failed_precondition`（`details.reason: capsule_uninstall_oauth_unsupported`）が返ります。
+猶予期間が 0 日でも同じです。token を更新しても、予約に記録した grant の代わりにはなりません。
+既存の OAuth の予約も新しい token には移らず、記録した grant が期限切れになると削除の処理は
+止まります。
+
+## 期限に確認できなかったとき
+
+期限に認証または Workspace の権限を確かめられなかった予約は、状態を **削除予定**
+（`uninstalled`）のまま止め、`uninstall.blockedReason` と `uninstall.authorizationRejectedAt` を
+記録します。
+
+| `uninstall.blockedReason` | 理由 |
+| --- | --- |
+| `uninstall_requester_missing` | 依頼者の記録がない古い予約です |
+| `uninstall_requester_denied` | 期限切れや失効などで、予約に使った認証を確かめられません |
+
+この拒否は、通常はデータの書き出し、destroy の Plan、provider の操作より前に記録されます。
+監査記録の `capsule.uninstall_blocked` にも理由と時刻が残ります。あとから権限や認証を戻しても、
+予約は再開しません。
+
+## 止まった予約を直す
+
+1. 上の「取り消す」の条件を満たしていることを確かめます。
+2. 現在の Workspace の owner または admin が `cancel-uninstall` を呼びます。
+3. ブラウザーのセッション、または provider への dispatch まで有効であり続ける PAT で、
+   `POST /api/v1/capsules/{capsuleId}/uninstall` をもう一度呼びます。
+
+新しい予約には新しい ID と、改めて全部の猶予期間が付きます。古い予約が新しい依頼者を引き継ぐ
+ことはありません。取り消しの条件を満たさない場合や外部の操作が始まっている場合は、結果を
+確かめてから、認可された前方修復で直します。
+
+API の詳細は [API リファレンス](../reference/api.md) にあります。
