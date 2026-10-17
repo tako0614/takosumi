@@ -35,7 +35,8 @@ use logs/events to identify the failing phase.
 | State/fence/receipt mismatch | Retained evidence and current state; investigate indeterminate mutations before retry |
 
 The Cloudflare repair sweep picks up stalled Runs again and counts them as
-`takosumi_run_repair_total{outcome="rescheduled"}`. Repair failures appear in `scheduled.run_repair_failures` and
+`takosumi_run_repair_total{outcome="rescheduled"}`. Repair failures appear in
+`scheduled.run_repair_failures` and
 `takosumi_run_repair_total{outcome="ordinary_failure"}` / `{outcome="retirement_failure"}`.
 Source-poll, stale-auto-plan, and drift warnings identify the phase without exception text
 or credentials.
