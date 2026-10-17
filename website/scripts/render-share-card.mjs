@@ -2,13 +2,13 @@
  * Render the 1200 × 630 share card for takosumi.com and its docs from the
  * landing's own pieces: the real mark, the hero line, and the actual dashboard
  * Home capture (see capture-product-ui-provenance.md). Run it after the Home
- * capture or the hero line changes:
+ * capture or the hero line changes. Japanese text uses Noto Sans JP from the
+ * system fontconfig; the committed card was rendered with the same font set as
+ * the dashboard captures:
  *
- *   FONTCONFIG_FILE=… node website/scripts/render-share-card.mjs
- *
- * Japanese text uses the system sans (Noto Sans JP through the fontconfig file
- * the dashboard captures use).
+ *   FONTCONFIG_FILE=/root/.cache/task-0052-fonts/fonts.conf node website/scripts/render-share-card.mjs
  */
+import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,13 @@ const outputs = [
   resolve(website, "public/brand/og-cover.png"),
   resolve(website, "../docs/public/og-cover.png"),
 ];
+
+// Chrome resolves the Japanese text through fontconfig; refuse to render with a
+// silent fallback face.
+const japanese = execFileSync("fc-match", ["-f", "%{family}", "Noto Sans JP:lang=ja"], { encoding: "utf8" });
+if (!/Noto Sans (CJK )?JP/.test(japanese)) {
+  throw new Error(`fontconfig resolves Noto Sans JP to "${japanese}"; set FONTCONFIG_FILE to a config that has it`);
+}
 
 const dataUri = async (path, type) => `data:${type};base64,${(await readFile(path)).toString("base64")}`;
 const mark = await dataUri(resolve(website, "public/tako.png"), "image/png");
@@ -40,6 +47,7 @@ body { background: #0a0a0b; color: #f5f5f6; font-family: "Bricolage Grotesque Va
 .identity img { width: 56px; height: 56px; border-radius: 13px; }
 .identity span { font-size: 52px; font-weight: 560; letter-spacing: -.05em; line-height: 1; }
 .lead { position: absolute; left: 64px; top: 138px; font-size: 36px; font-weight: 600; letter-spacing: -.02em; }
+/* The Home screen runs off the bottom edge, so the card shows the top of the window. */
 .shot { position: absolute; left: 64px; top: 222px; width: 1072px; height: 460px; overflow: hidden; border: 1px solid #37373d; border-radius: 16px; background: #151517; }
 .shot img { display: block; width: 100%; height: auto; }
 </style></head><body>
@@ -57,7 +65,7 @@ try {
     const lead = document.querySelector(".lead").getBoundingClientRect();
     return { leadRight: lead.right, families: [...document.fonts].filter((face) => face.status === "loaded").map((face) => face.family) };
   });
-  if (fit.leadRight > 1136) throw new Error(`hero line overflows the card: right edge ${fit.leadRight}`);
+  if (fit.leadRight > 1136) throw new Error(`hero line wraps or overflows the card: right edge ${fit.leadRight}`);
   if (!fit.families.includes("Bricolage Grotesque Variable")) throw new Error("Bricolage Grotesque did not load");
   const png = await page.screenshot({ type: "png" });
   for (const output of outputs) {

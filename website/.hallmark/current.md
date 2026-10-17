@@ -21,4 +21,7 @@ The share card (og-cover.png, 1200 × 630, also copied to docs/public) and the
 404 page carry the same identity, hero line and palette as the homepage.
 website/scripts/render-share-card.mjs renders the card from the real mark, the
 hero line and the dashboard Home capture; rerun it when either changes.
-favicon.ico is the real mark at 48, 32 and 16px.
+favicon.ico is the real mark at 48, 32 and 16px, and the docs and Hosted docs
+tabs use the same mark (tako.png). The 404 page loads its own copy of the
+Bricolage Grotesque latin variable face from public/fonts/, the file the
+landing bundles from @fontsource-variable/bricolage-grotesque.

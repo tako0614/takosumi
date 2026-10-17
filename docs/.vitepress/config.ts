@@ -159,7 +159,7 @@ export default defineConfig({
   head: [
     [
       "link",
-      { rel: "icon", type: "image/svg+xml", href: `${base}favicon.svg` },
+      { rel: "icon", type: "image/png", href: `${base}tako.png` },
     ],
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { property: "og:site_name", content: "Takosumi" }],
