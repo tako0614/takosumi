@@ -47,12 +47,26 @@ leaves any bearer passed to `--token` in your terminal.
 ## Creating a token
 
 The CLI and the API examples on other pages read their bearer from the
-`TAKOSUMI_DEPLOY_CONTROL_TOKEN` environment variable. Normally you put a token
-created here in it. Those examples both read and change things, so the example
-below creates a `read,write` token (`read` and `write` do not include each
-other). The server's setting of the same name is the operator's secret, for
-work that calls the operator-only API; `takosumi connections` on this page is
-such work and needs that secret.
+`TAKOSUMI_DEPLOY_CONTROL_TOKEN` environment variable. Normally you put an API
+key created in the dashboard in it.
+
+1. In the dashboard, open **Settings**, then **Account**.
+2. Under **Takosumi API keys**, choose a name and an expiry, select both
+   **Read** and **Write** under **Permissions**, and press **Create API key**.
+   The examples on other pages both read and change things, and `read` and
+   `write` do not include each other, so with **Write** alone the reading
+   examples return `403`.
+3. The secret is shown once, when the key is created. Copy it into
+   `TAKOSUMI_DEPLOY_CONTROL_TOKEN`.
+
+The server's setting of the same name is the operator's secret, for work that
+calls the operator-only API; `takosumi connections` on this page is such work
+and needs that secret.
+
+### Creating one from the CLI
+
+If you have an Accounts session bearer (`sess_...`), the CLI can create the same
+key.
 
 ```bash
 takosumi accounts tokens create \
