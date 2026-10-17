@@ -2,83 +2,61 @@
 
 English: [README.en.md](README.en.md)
 
-Takosumi は、Git に置いた OpenTofu / Terraform module をチームで安全に実行するための
-オープンソースの管理サーバーです。
+Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、接続したクラウドへ
+アプリのように追加して使うための、オープンソースの管理サーバーです。追加や更新の前に、
+作られるものと変わるものを確かめてから反映できます。
 
-既存の module と provider をそのまま使い、次の部分を Takosumi が引き受けます。
-
-- 変更内容を `plan` で確認してから、同じ計画を `apply` する
-- 実行した commit、実行者、時刻、結果を記録する
-- state、output、ログを実行ごとに保存する
-- クラウドの認証情報を保管し、実行中の runner にだけ渡す
-- Git から取り込んだアプリやインフラを、画面と API から管理する
-
-Takosumi 専用の `.tf` 記法や first-party provider はありません。Cloudflare、AWS、
-Kubernetes などは、それぞれの既存 provider が操作します。
+使う module と provider はそのままで、Takosumi 専用の設定言語や first-party provider は
+ありません。Cloudflare、AWS、Kubernetes などは、それぞれの既存 provider が操作します。
 
 [ソフトウェアのドキュメント](https://takosumi.com/docs/) ·
 [Takosumi hosted service のドキュメント](https://app.takosumi.com/docs/)
 
-## 5 分で動作を確認する
+## できること
 
-この短い手順は、開発用の API をメモリ上で起動します。Bun と Git が必要です。
+- **選んで追加する** — ストアのサービスや Git URL を選び、必要な接続と設定を入れて追加します。
+- **反映する前に確かめる** — 作成・変更・削除されるリソースの数を見てから反映します。
+  削除・置き換え・import を含む変更は、承認するまで進みません。
+- **鍵を module に書かない** — クラウドの API key や token は Takosumi に保存します。
+  値は読み戻せず、変更の確認や反映を実行している間だけ runner に渡ります。
+- **記録を残し、戻せる** — 誰がどの commit を反映し、何が変わったかを記録します。
+  反映ごとの state を版として output とともに残し、以前の版の取得元に戻す変更も、
+  確認してから適用できます。
 
-```bash
-git clone https://github.com/tako0614/takosumi.git
-cd takosumi
-bun install
+## 始め方
 
-TAKOSUMI_DEV_MODE=1 \
-TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token \
-PORT=8788 \
-bun core/index.ts
-```
+- **公式ホスティングで使う** — [app.takosumi.com](https://app.takosumi.com/) にサインインします。
+  公式ホスティング（Takosumi hosted service）は Pre-GA です。手順、料金、提供状況、
+  サポートは[公式ホスティングのドキュメント](https://app.takosumi.com/docs/)にあります。
+- **手元で追加から反映まで試す** — [クイックスタート](docs/getting-started/quickstart.md)
+  に従い、Linux と Docker で dashboard、サインイン、データベース、runner を起動します。
+  ローカル証明書と DNS の設定に `sudo` を使います。サンプルは外部リソースを作らないため、
+  クラウドの認証情報は要りません。
+- **自分の環境で運用する** — [自分で動かす](docs/concepts/self-host.md)で構成を選びます。
+  Cloudflare の雛形は runner を含みます。Bun と PostgreSQL の雛形で plan と apply を
+  実行するには、runner を別に組み込みます。
+- **API だけ動かす** — 開発中の API 確認用に、[API だけ動かす](docs/getting-started/api-only.md)
+  の手順で、Bun と Git だけでメモリ上の API サーバーを起動します。
 
-別のターミナルから、起動したサーバーが公開している機能を確認します。
+## 仕組み
 
-```bash
-curl http://127.0.0.1:8788/api/v1/capabilities \
-  -H "authorization: Bearer dev-token"
-```
+dashboard でアプリ・サービスと呼ぶものを、docs と API では **Capsule** と呼びます。
+Git URL・ref・module path と、変数・接続をまとめた、デプロイの 1 単位です。Takosumi は
+ref を 1 つの commit に固定し、Capsule への変更を、計画（plan）と反映（apply）の別々の
+Run として記録します。apply の Run は確認した plan の Run に固定されるため、読んだ差分と
+実際に反映する差分が一致します。
 
-これは API の動作確認用です。再起動するとデータは消え、dashboard と OpenTofu runner
-も含みません。実際に Git module を plan / apply する手順は
-[クイックスタート](docs/getting-started/quickstart.md)にあります。
+repository は任意で `.well-known/takosumi.json` を置き、同じ commit の scan で見つかった
+module に、Takosumi 向けの情報を添えられます。manifest は module を作ったり選んだりできず、
+実行の権限は DB が持つ `InstallConfig`、Plan、Run にあります
+（[Repository manifest](docs/reference/repository-manifest.md)）。
 
-## デプロイ方法
-
-Takosumi の利用者向け入口は、Git module を実行する 1 つの Stack flow です。
-
-### Git の module を実行する
-
-通常はこちらを使います。
-
-1. Git URL、ref、module のパスを登録する
-2. Takosumi が ref を 1 つの commit に固定する
-3. `plan` を作り、変更内容を確認する
-4. 確認した計画を `apply` する
-5. state、output、ログ、監査記録を保存する
-
-Takosumi では、登録した 1 つの module を **Capsule** と呼びます。この名前を知らなくても
-module 自体を書き換える必要はありません。
-
-repository は任意の `.well-known/takosumi.json` で、同じ commit に固定された
-Takosumi 向け metadata を提案できます。現行contractは一般
-`Repository` envelopeの `install.modules` だけを定義し、実行authorityは
-DB-owned `InstallConfig`、Plan、Runに残ります。詳細は
-[Repository manifest](docs/reference/repository-manifest.md)を参照してください。
-
-### provider を使う
-
-Takosumi OSS の利用者向けの経路は、Git の OpenTofu / Terraform module を実行する
-Stack flow です。Takoform は `registry.terraform.io/tako0614/takoform` から
-インストールする、ほかの provider と同じ provider です。Takoform の Form 定義や、
-Form をホストして実体化するサービスはこのリポジトリの所有物ではありません。
-
-過去の試作には `/v1/resources`、Resource Shape、Form Host、TargetPool、SpacePolicy を
-使う API と dashboard がありました。これらは現在の OSS の supported product surface
-ではありません。互換用の API、schema、保存データを残している箇所は migration
-internal として扱い、通常の利用者向け手順やナビゲーションには掲載しません。
+Takoform は `registry.terraform.io/tako0614/takoform` からインストールする、ほかと同じ
+provider です。Takoform の Form 定義や、Form をホストして実体化するサービスは、この
+リポジトリの所有物ではありません。過去の試作にあった `/v1/resources`、Resource Shape、
+Form Host、TargetPool、SpacePolicy の API と画面は、現在のソフトウェアの機能ではありません。
+互換用に残る API、schema、保存データは移行用の内部実装で、利用手順や画面のナビゲーションには
+載せません。
 
 ## Takosumi と Takosumi hosted service
 
