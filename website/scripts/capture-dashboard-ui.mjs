@@ -10,6 +10,11 @@ const root = resolve(here, "../..");
 const output = resolve(here, "../public/screens");
 const docsOutput = resolve(root, "docs/public/getting-started");
 const origin = "http://127.0.0.1:5199";
+// Desktop Home is the landing's hero. A smaller 16:10 window keeps the
+// launcher tiles from sitting in one corner of a mostly empty frame; a 2.5
+// device scale keeps the 2400px width the hero had at 1200 × 750 and 2×.
+const desktopHomeViewport = { width: 960, height: 600 };
+const desktopHomeScale = 2.5;
 const createdAt = "2026-08-01T00:00:00.000Z";
 const assetOrigin = "https://assets.example.test";
 const workspace = {
@@ -456,7 +461,7 @@ async function ready(child) {
   throw new Error("dashboard fixture did not become ready");
 }
 
-async function capture(browser, variant, viewport, theme, screens = ["home", "install", "review", "updates"], locale = "ja-JP") {
+async function capture(browser, variant, viewport, theme, screens = ["home", "install", "review", "updates"], locale = "ja-JP", scale = 2) {
   const iconAssets = new Map(await Promise.all(products.map(async (product) => [
     `/${product.icon}`,
     {
@@ -468,7 +473,7 @@ async function capture(browser, variant, viewport, theme, screens = ["home", "in
   ])));
   const context = await browser.newContext({
     viewport,
-    deviceScaleFactor: 2,
+    deviceScaleFactor: scale,
     locale,
     // The update history shows times in the browser's zone; keep them stable.
     timezoneId: "UTC",
@@ -640,7 +645,7 @@ async function capture(browser, variant, viewport, theme, screens = ["home", "in
       const file = resolve(output, `dashboard-${screen}-${variant}${theme === "light" ? "-light" : ""}.png`);
       await page.screenshot(clip ? { path: file, clip, fullPage: true, animations: "disabled" } : { path: file, animations: "disabled" });
       const size = clip ?? page.viewportSize();
-      console.log(`${screen}/${variant}/${theme}: ${file} (${Math.floor(size.width * 2)}x${Math.floor(size.height * 2)})`);
+      console.log(`${screen}/${variant}/${theme}: ${file} (${Math.floor(size.width * scale)}x${Math.floor(size.height * scale)})`);
     }
     if (screens.includes("quickstart")) {
       await captureQuickstart(page, locale, theme, () => {
@@ -761,7 +766,10 @@ async function main() {
         await capture(browser, "mobile", { width: 390, height: 700 }, theme, ["updates"]);
         continue;
       }
-      await capture(browser, "desktop", { width: 1200, height: 750 }, theme, requestedVariant === "desktop-home" ? ["home"] : ["home", "install", "review", "updates"]);
+      await capture(browser, "desktop", desktopHomeViewport, theme, ["home"], "ja-JP", desktopHomeScale);
+      if (requestedVariant !== "desktop-home") {
+        await capture(browser, "desktop", { width: 1200, height: 750 }, theme, ["install", "review", "updates"]);
+      }
       if (requestedVariant === "all") await capture(browser, "mobile", { width: 390, height: 700 }, theme);
     }
     // The docs show these in both locales and appearances, at a width where
