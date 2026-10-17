@@ -25,8 +25,9 @@ One-off gap:
 Takosumi does not ship a first-party Terraform/OpenTofu provider. Use Takoform
 as an ordinary provider, and use this API, CLI, or dashboard for the supported
 Git/OpenTofu control-plane operations. External providers continue to run
-from ordinary Git modules (the Stack flow). Takosumi owns that Stack's Run, state, Output,
-and audit records; the provider and its state still own provider-side objects.
+from ordinary Git modules (the Stack flow). Takosumi owns that Stack's Run,
+state, Output, and audit records; the provider and its state still own
+provider-side objects.
 The Cloudflare-specific import/deploy compatibility profile is retired and is
 not part of this API.
 
@@ -138,7 +139,7 @@ audit, sessions, the Control schema, or Workspace / Project / TargetPool state.
 
 ## OpenTofu Stack API
 
-The Stack API runs plain OpenTofu / Terraform modules from Git. Existing
+The Stack API runs ordinary OpenTofu / Terraform modules from Git. Existing
 providers run as-is in this flow. The stock composition uses the provider-neutral
 `opentofu-default` execution path; an operator can explicitly select a different
 capability profile without using provider names as routing authority. Known
