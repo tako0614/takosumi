@@ -1,6 +1,6 @@
 # 状態と出力
 
-適用が成功するたびに、Takosumi は状態を 1 地点として保存します。これが
+デプロイ（apply）が成功するたびに、Takosumi は状態を 1 地点として保存します。これが
 StateVersion です。そこから公開用に取り出した値が Output です。
 
 ## StateVersion は積み重なります
@@ -12,7 +12,7 @@ StateVersion は上書きされません。**戻す操作をしても履歴は�
 保存されるのは Takosumi が管理している状態です。module が作った実物の中身
 (データベースのレコード、保管されたファイル) は含まれません。
 
-戻すときも通常の計画と適用を通ります。**StateVersion を選んだ時点では何も起きません。**
+戻すときも通常の変更の確認とデプロイを通ります。**StateVersion を選んだ時点では何も起きません。**
 
 例の `$TAKOSUMI_DEPLOY_CONTROL_TOKEN` には、`read` と `write` を持つ[発行した token](../reference/cli.md#トークンを発行する)を入れます。
 
@@ -24,7 +24,7 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/state-versions/sv_example/roll
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-作られた Run を確認し、適用して初めて戻ります。Workspace 内の全 Capsule の現在地点は
+作られた Run を確認し、デプロイして初めて戻ります。Workspace 内の全 Capsule の現在地点は
 `/api/v1/workspaces/{workspaceId}/current-state-versions` でまとめて読めます。
 
 戻す前に確認すべきことが 2 つあります。作り直しでデータが失われる種類のリソースが
@@ -111,7 +111,7 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/backups"
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-直前の適用を取り消したいだけなら、書き出しではなく StateVersion から戻します。
+直前のデプロイを取り消したいだけなら、書き出しではなく StateVersion から戻します。
 書き出しが要るのは、Workspace ごと別の環境へ移す場合や、制御情報を Takosumi の外に
 保管したい場合です。秘密は含まれないため、復元後に Connection を作り直す作業が
 必ず発生します。

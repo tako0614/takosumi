@@ -104,7 +104,7 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources/src_example/sync" \
 
 同期 Run が `succeeded` になり、その Run の `sourceSnapshotId` が
 `/api/v1/sources/{sourceId}/snapshots` に現れてから、互換性確認と計画に進みます。
-**古い snapshot を「最新」として流用してはいけません。** 確認した内容と適用する
+**古い snapshot を「最新」として流用してはいけません。** 確認した内容とデプロイする
 内容が一致しなくなります。
 
 dashboard はこの scan 結果を読み、利用者が実在する module を選びます。同じ path の

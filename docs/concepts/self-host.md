@@ -327,7 +327,7 @@ curl -s -H "authorization: Bearer $TAKOSUMI_READ_TOKEN" \
 ```
 
 最後に、runner を含む構成で実際に 1 回デプロイします。dashboard の `/new` に Git URL を入れて計画を作り、
-内容を確認してから適用します。Run が成功し、StateVersion と Output が残れば、runner と
+内容を確認してからデプロイします。Run が成功し、StateVersion と Output が残れば、runner と
 state backend まで通っています。provider の認証を必要としない
 `examples/opentofu-basic` が、この確認にちょうど使えます。
 

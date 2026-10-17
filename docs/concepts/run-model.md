@@ -1,15 +1,15 @@
 # 実行モデル
 
-Run は Takosumi における実行の記録単位です。計画、適用、破棄、差分確認などの実行は、
+Run は Takosumi における実行の記録単位です。変更の確認（plan）、デプロイ（apply）、破棄、差分確認などの実行は、
 それぞれ Run として記録されます。
 
 ## Plan と Apply は別の Run です
 
 `plan` は Plan Run を作り、`apply` は確認した Plan Run に `planRunId` で結びついた
-別の Apply Run を作ります。適用時は plan の digest、source snapshot、依存関係の snapshot、
+別の Apply Run を作ります。デプロイ時には plan の digest、source snapshot、依存関係の snapshot、
 state generation などを再検証するため、確認した計画からずれません。
 
-**確認した計画と、適用される内容が食い違わない**ように、Apply Run はこの plan に固定されます。
+**確認した計画と、デプロイされる内容が食い違わない**ように、Apply Run はこの plan に固定されます。
 runner は通常の Plan、破棄計画、保存済み Plan の Apply の前に、state にない resource を
 名前から推測して import しません。既存の実物を state に取り込む必要がある場合は、
 module の明示的な OpenTofu `import` block を Plan に含め、その差分を確認します。
@@ -25,7 +25,7 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/plan" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-`plan` は Plan Run を作ります。Capsule の通常の `DELETE` は適用済み Capsule の削除を
+`plan` は Plan Run を作ります。Capsule の通常の `DELETE` はデプロイ済みの Capsule の削除を
 7 日（operator が変更可能）の猶予付きで予約します。猶予中は
 `POST /api/v1/capsules/{capsuleId}/cancel-uninstall` で取り消せます。猶予なしの破棄計画を
 作る場合は `DELETE /api/v1/capsules/{capsuleId}?immediate=true` または
@@ -49,8 +49,8 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/runs/run_example/cost" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-納得したら、確認した plan の Run に対して適用します。別の Apply Run が作られ、承認が必要な
-設定なら、適用の前に `/approve` を通します。
+納得したら、確認した plan の Run に対してデプロイします。別の Apply Run が作られ、承認が必要な
+設定なら、デプロイの前に `/approve` を通します。
 
 ```bash
 curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/runs/run_example/apply" \
@@ -107,7 +107,7 @@ Git の変更や drift を見つけただけで、Takosumi が apply を始め�
 - 差分確認で違いが見つかっても、報告するだけです
 - 定期観測は読み取り専用で、配置先を選び直しません
 
-例外は、利用者が dashboard のインストール操作または明示的な自動更新を開始した
+例外は、利用者が dashboard の追加操作または明示的な自動更新を開始した
 場合です。この操作は「plan が安全に完了したら apply まで続ける」という要求を
 `autoApplyRequested` として Run に記録します。それでも、削除を含む変更、承認ポリシー、
 料金や policy の gate がある plan は自動で apply されず、確認画面で停止します。
@@ -140,10 +140,10 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/plan-upd
 ## 失敗したとき
 
 Run の失敗だけでは、provider 側の変更が戻ったかどうかは分かりません。provider の実行失敗時に
-状態が保存されて StateVersion が進む場合も、apply 後の lifecycle action の失敗で適用済みの状態が
+状態が保存されて StateVersion が進む場合も、apply 後の lifecycle action の失敗でデプロイ済みの状態が
 残る場合もあります。Run の結果とログに加え、Run に StateVersion が記録されているか、Capsule の現在の
 StateVersion と状態も確認してから対応してください。結果が不明な場合は provider 側の状態も確認し、
-何が適用されたか分からないまま apply を繰り返さないでください。
+何がデプロイされたか分からないまま apply を繰り返さないでください。
 
 ## 履歴
 

@@ -15,7 +15,7 @@ Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、
   値は読み戻せず、変更の確認やデプロイを実行している間だけ runner に渡ります。
 - **記録を残し、戻せる** — 誰がどの commit をデプロイし、何が変わったかを記録します。
   デプロイごとの state を版として output とともに残し、以前の版の取得元に戻す変更も、
-  確認してから適用できます。
+  確認してからデプロイできます。
 
 ## 始め方
 
@@ -53,7 +53,7 @@ Capsule への変更は、変更の確認（plan）とデプロイ（apply）を
 2. 接続と入力を確認する
 3. plan で変更内容を作る
 4. 変更内容を確認する。削除・置き換え・import を含む場合は承認する
-5. apply でデプロイする
+5. デプロイ（apply）する
 6. state・output・履歴を保存する
 
 Takosumi は first-party Terraform/OpenTofu provider を同梱しません。Cloudflare、AWS

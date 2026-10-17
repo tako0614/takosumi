@@ -16,8 +16,9 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | アプリ             | 画面を持つ Interface                 | サービス自身の画面で、ホームから開けます。           |
 | 接続済みアカウント | ProviderConnection / ProviderBinding | 保存した認証情報と、その割り当てです。               |
 | 変更内容           | plan                                 | デプロイする前に確認する変更の一覧です。             |
-| 変更内容の検証 ID  | planDigest                           | 確認した計画と適用する計画が同じだと確かめる値です。 |
-| 更新履歴           | Run の一覧                           | いつ何を流したかが並びます。                         |
+| 変更内容の検証 ID  | planDigest                           | 確認した計画とデプロイする計画が同じだと確かめる値です。 |
+| デプロイ履歴       | Run の一覧                           | 変更の確認・承認・デプロイを、新しい順に並べます。   |
+| 更新履歴           | StateVersion の一覧                  | サービスの 更新 タブで、デプロイした版が並びます。   |
 | 操作履歴           | Activity / AuditEvent                | 誰がいつ何をしたかが並びます。                       |
 | この状態に戻す     | StateVersion からの復元              | 過去の状態を選び直す操作です。                       |
 
@@ -56,7 +57,7 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | drift                  | 保存した状態と実物のあいだに生まれたずれのことです。                                                                  | [状態と出力](../concepts/state-and-outputs.md) |
 | RunGroup               | 依存関係の順に複数の Run をまとめた記録です。Workspace 全体の更新や差分確認、Capsule の追加・更新・削除で作られます。 | [実行モデル](../concepts/run-model.md)         |
 | Runner                 | OpenTofu を実際に動かす隔離された実行環境です。認証情報が渡るのはこの中だけです。                                     | [実行モデル](../concepts/run-model.md)         |
-| StateVersion           | 適用を終えた時点の状態です。上書きされず、積み重なります。                                                            | [状態と出力](../concepts/state-and-outputs.md) |
+| StateVersion           | デプロイ（apply）を終えた時点の状態です。上書きされず、積み重なります。                                                            | [状態と出力](../concepts/state-and-outputs.md) |
 | Output                 | Capsule が外に公開する、秘密でない値です。                                                                            | [状態と出力](../concepts/state-and-outputs.md) |
 | OutputShare            | Workspace をまたいで Output を渡す記録です。受け取る側が承認して有効になります。                                      | [状態と出力](../concepts/state-and-outputs.md) |
 | AuditEvent             | 誰が、何に対して、何をして、結果どうなったかを 1 件ずつ残した記録です。                                               | [実行モデル](../concepts/run-model.md)         |
