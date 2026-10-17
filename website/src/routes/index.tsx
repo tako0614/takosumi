@@ -32,46 +32,49 @@ function DashboardShot(props: { capture: (typeof DASHBOARD_CAPTURES)[keyof typeo
   );
 }
 
+/** What each app's demo screen shows, for its alt text. */
+const APP_SCREEN_ALT: Record<FeaturedApp["id"], string> = {
+  takos: "Takos の会話画面。作業ノートと Office の更新から今週の進捗をまとめるよう頼まれ、2 件のツールを実行して結果をまとめている",
+  yurucommu: "Yurucommu のホーム。ストーリーの下に、コミュニティの投稿が並んでいる",
+  office: "Takos Office の文書エディター。「今週の進捗メモ」という文書を開いている",
+};
+
 function FeaturedAppRow(props: { app: FeaturedApp }) {
   const source = new URL(props.app.install).searchParams;
   const repo = source.get("git")!.replace(/\.git$/, "");
   const path = source.get("path")!;
   const ref = source.get("ref")!;
   const moduleUrl = repo + "/tree/" + encodeURIComponent(ref) + (path === "." ? "" : "/" + path);
+  const repoName = new URL(repo).pathname.slice(1);
+  const refLabel = /^[0-9a-f]{40}$/.test(ref) ? ref.slice(0, 7) : ref;
   const capture = CAPTURES[props.app.id];
   const darkCapture = "dark" in capture ? capture.dark : undefined;
 
   return (
     <article class="featured-app" id={"app-" + props.app.id}>
-      <div class="featured-app-main">
-        <div class="featured-icon"><AppIcon id={props.app.id} /></div>
-        <div class="featured-copy">
+      <div class="featured-copy">
+        <div class="featured-title">
+          <div class="featured-icon"><AppIcon id={props.app.id} /></div>
           <h3>{props.app.name}</h3>
-          <p>{props.app.summary} {props.app.use}</p>
         </div>
+        <p class="featured-summary">{props.app.summary}{props.app.use}</p>
+        <p class="featured-needs">{props.app.prerequisite}</p>
         <a class="featured-action" href={props.app.install} aria-label={props.app.name + "の追加画面を開く"}>
           追加画面を開く <Arrow />
         </a>
+        <p class="featured-source">
+          <a href={moduleUrl}>公開元<span class="featured-ref">（{repoName}・{refLabel}）</span><Arrow /></a>
+          <a href={props.app.site}>{props.app.name} のサイト <Arrow /></a>
+        </p>
       </div>
-      <details class="featured-details">
-        <summary>接続と公開元を確認</summary>
-        <div class="featured-details-body">
-          <p>{props.app.prerequisite}</p>
-          <div class="featured-links">
-            <a href={moduleUrl}>Git の OpenTofu 定義 <Arrow /></a>
-            <a href={props.app.site}>{props.app.name} のサイト <Arrow /></a>
-          </div>
-          <figure>
-            <picture>
-              {darkCapture && <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset={darkCapture.mobile.src} width={darkCapture.mobile.width} height={darkCapture.mobile.height} />}
-              <source media="(max-width: 640px)" srcset={capture.mobile.src} width={capture.mobile.width} height={capture.mobile.height} />
-              {darkCapture && <source media="(prefers-color-scheme: dark)" srcset={darkCapture.desktop.src} width={darkCapture.desktop.width} height={darkCapture.desktop.height} />}
-              <img src={capture.desktop.src} width={capture.desktop.width} height={capture.desktop.height} alt={props.app.name + "の公開用デモ画面"} loading="lazy" />
-            </picture>
-            <figcaption>公開用のデモデータを使ったアプリ画面です。</figcaption>
-          </figure>
-        </div>
-      </details>
+      <figure class="featured-screen">
+        <picture>
+          {darkCapture && <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset={darkCapture.mobile.src} width={darkCapture.mobile.width} height={darkCapture.mobile.height} />}
+          <source media="(max-width: 640px)" srcset={capture.mobile.src} width={capture.mobile.width} height={capture.mobile.height} />
+          {darkCapture && <source media="(prefers-color-scheme: dark)" srcset={darkCapture.desktop.src} width={darkCapture.desktop.width} height={darkCapture.desktop.height} />}
+          <img src={capture.desktop.src} width={capture.desktop.width} height={capture.desktop.height} alt={APP_SCREEN_ALT[props.app.id]} loading="lazy" />
+        </picture>
+      </figure>
     </article>
   );
 }
@@ -105,29 +108,29 @@ export default function Home() {
           </div>
           <figure class="hero-product">
             <DashboardShot capture={DASHBOARD_CAPTURES.home} alt="Takosumi のホーム画面。ワークスペースに Takos、Takos Office、Yurucommu のアプリと追加操作が並ぶ" class="launcher-shot" priority />
-            <figcaption><span class="caption-dot" aria-hidden="true" /> Takosumi ダッシュボードの公開用サンプル画面</figcaption>
+            <figcaption>Takosumi ダッシュボードのホーム（公開用のデモデータで撮影）</figcaption>
           </figure>
         </section>
 
         <section id="apps" class="apps-section site-width" aria-labelledby="apps-title">
           <div class="section-heading">
             <div>
-              <h2 id="apps-title">使うものを選ぶ。</h2>
-              <p>それぞれの公開 Git リポジトリにある OpenTofu 定義から始められます。好きなソースを自分で指定することもできます。</p>
+              <h2 id="apps-title">アプリを選ぶ</h2>
+              <p>どれも、公開されている Git リポジトリの OpenTofu 定義から追加します。ほかのソフトウェアも、Git URL を指定して追加できます。</p>
             </div>
             <a class="text-link" href="https://app.takosumi.com/new">自分の Git URL を指定 <Arrow /></a>
           </div>
           <div class="featured-list">
             <For each={FEATURED_APPS}>{app => <FeaturedAppRow app={app} />}</For>
           </div>
-          <p class="section-note">ここで紹介するアプリは公開ソースへの入口です。利用には、アプリごとに必要な接続先と設定があります。</p>
+          <p class="section-note">アプリの画面は、公開用のデモデータで撮影したものです。</p>
         </section>
 
         <section class="install-section" aria-labelledby="install-title">
           <div class="site-width install-layout">
             <div class="install-copy">
               <div class="install-intro">
-                <h2 id="install-title">追加する前に、<br />作られるものを確かめる。</h2>
+                <h2 id="install-title">追加する前に、作られるものを確かめる</h2>
                 <p>アプリを選ぶと、Takosumi は使う commit を固定してから、次の順に進みます。</p>
               </div>
               <ol class="add-steps">
@@ -137,7 +140,7 @@ export default function Home() {
               </ol>
             </div>
             <figure class="install-product">
-              <DashboardShot capture={DASHBOARD_CAPTURES.review} alt="Takosumi の追加前の確認画面。Takos を追加すると作成 13、変更 0、削除 0 と表示され、その下に「追加する」ボタンがある" class="install-shot" />
+              <DashboardShot capture={DASHBOARD_CAPTURES.review} alt="Takos を追加する前の確認画面。使うプロバイダーと必要な Cloudflare の接続の下に、作成 13、変更 0、削除 0 と「追加する」ボタンが並ぶ" class="install-shot" />
               <figcaption>Takos を追加する前の確認画面（Takosumi ダッシュボードを公開用デモデータで撮影。件数は Takos v0.12.7 の Cloudflare 構成から算出）</figcaption>
             </figure>
           </div>
@@ -145,7 +148,7 @@ export default function Home() {
 
         <section class="after-section site-width" aria-labelledby="after-title">
           <div class="after-intro">
-            <h2 id="after-title">入れたあとの、<br />更新と記録。</h2>
+            <h2 id="after-title">入れたあとの更新と記録</h2>
             <p>ホームからアプリを開き、設定や更新が必要になったら同じワークスペースへ戻ります。</p>
           </div>
           <div class="after-steps">
@@ -162,7 +165,7 @@ export default function Home() {
         <section class="closing-section" aria-labelledby="closing-title">
           <div class="site-width closing-content">
             <div>
-              <h2 id="closing-title">まず、一つ追加してみる。</h2>
+              <h2 id="closing-title">一つ追加してみる</h2>
               <p>公式ホスティングは Pre-GA です。Linux マシンと Docker などを用意すれば、クラウドの認証情報なしで手元でも試せます。</p>
             </div>
             <div class="closing-actions">

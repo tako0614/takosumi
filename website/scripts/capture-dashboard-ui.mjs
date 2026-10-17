@@ -311,6 +311,32 @@ async function showUpdateHistory(page, flow) {
   });
 }
 
+/**
+ * Fail when page text or an image sits under the dashboard's sticky header,
+ * which is translucent: whatever is scrolled beneath it shows through.
+ */
+async function assertNothingUnderHeader(page, label) {
+  const under = await page.evaluate(() => {
+    const header = document.querySelector("header");
+    if (!header) return ["(no sticky header found)"];
+    const box = header.getBoundingClientRect();
+    const overlaps = (rect) => rect.width > 0 && rect.height > 0 && rect.top < box.bottom && rect.bottom > box.top && rect.left < box.right && rect.right > box.left;
+    const found = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.textContent.trim() || header.contains(node)) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      if ([...range.getClientRects()].some(overlaps)) found.push(node.textContent.trim().slice(0, 40));
+    }
+    for (const element of document.body.querySelectorAll("img, svg")) {
+      if (!header.contains(element) && overlaps(element.getBoundingClientRect())) found.push(`<${element.tagName.toLowerCase()}>`);
+    }
+    return found;
+  });
+  if (under.length) throw new Error(`${label}: under the sticky header: ${under.join(" | ")}`);
+}
+
 /** Answer one add flow's API calls so the real dashboard reaches its review. */
 async function stubAddFlow(page, flow) {
   const ids = {
@@ -532,8 +558,12 @@ async function capture(browser, variant, viewport, theme, screens = ["home", "in
       ["updates", `/workloads/${updatesFlows.takos.capsuleId}/deploys`, ".wb-disclosure > summary"],
     ].filter(([screen]) => screens.includes(screen))) {
       failures.length = 0;
+      let clip;
       if (screen !== "home" && variant === "mobile") {
         await page.setViewportSize({ width: viewport.width, height: 950 });
+      } else {
+        // The review and updates screens fit the desktop viewport to their card.
+        await page.setViewportSize(viewport);
       }
       if (screen === "review") await stubAddFlow(page, takosFlow);
       if (screen === "updates") await stubWorkloadUpdates(page, updatesFlows.takos);
@@ -566,12 +596,29 @@ async function capture(browser, variant, viewport, theme, screens = ["home", "in
           throw new Error(`review counts were ${counts.join(",")}`);
         }
         await page.locator(".iv-execution").getByRole("button", { name: "追加する", exact: true }).waitFor({ state: "visible" });
-        // The review sits below the source summary. Frame it from the required
-        // connection, just under the dashboard's sticky header.
-        await page.locator(".iv-provider-summary").filter({ hasText: "必要な接続" }).first().evaluate((element) => {
-          const header = document.querySelector("header")?.getBoundingClientRect().bottom ?? 0;
-          window.scrollTo({ top: element.getBoundingClientRect().top + window.scrollY - header - 24, behavior: "instant" });
+        // The review sits below the source summary, and the page heading, the
+        // step indicator and the card leave no gap as tall as the dashboard's
+        // sticky header, which is translucent: anything scrolled beneath it
+        // shows through. So never scroll. On desktop show the whole add page,
+        // from the top to just below the card; on a phone, only the card.
+        await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+        const card = await page.locator(".iv-workbench").last().evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return { x: rect.left, y: rect.top + window.scrollY, width: rect.width, height: rect.height };
         });
+        if (variant === "desktop") {
+          await page.setViewportSize({ width: viewport.width, height: Math.ceil(card.y + card.height + 32) });
+          await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+          await assertNothingUnderHeader(page, `${screen}/${variant}/${theme}`);
+        } else {
+          // Tall enough that the fixed bottom tab bar sits below the card.
+          await page.setViewportSize({ width: viewport.width, height: Math.ceil(card.y + card.height + 120) });
+          await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+          clip = { x: card.x - 16, y: card.y - 16, width: card.width + 32, height: card.height + 32 };
+          await assertNothingUnderHeader(page, `${screen}/${variant}/${theme}`);
+          const covered = await page.evaluate((bottom) => [...document.querySelectorAll("nav")].some((nav) => getComputedStyle(nav).position === "fixed" && nav.getBoundingClientRect().top < bottom), clip.y + clip.height);
+          if (covered) throw new Error(`${screen}/${variant}/${theme}: a fixed bar covers the card`);
+        }
       }
       if (screen === "updates") {
         // From the top, so the service name and tabs are not under the sticky
@@ -589,9 +636,9 @@ async function capture(browser, variant, viewport, theme, screens = ["home", "in
         throw new Error(`${screen}/${variant}: imagesLoaded=${imagesLoaded}; browser errors=${errors.join("; ")}; HTTP failures=${failures.join("; ")}; unexpected requests=${unexpectedRequests.join("; ")}`);
       }
       const file = resolve(output, `dashboard-${screen}-${variant}${theme === "light" ? "-light" : ""}.png`);
-      await page.screenshot({ path: file, animations: "disabled" });
-      const capturedViewport = page.viewportSize();
-      console.log(`${screen}/${variant}/${theme}: ${file} (${capturedViewport.width * 2}x${capturedViewport.height * 2})`);
+      await page.screenshot(clip ? { path: file, clip, fullPage: true, animations: "disabled" } : { path: file, animations: "disabled" });
+      const size = clip ?? page.viewportSize();
+      console.log(`${screen}/${variant}/${theme}: ${file} (${Math.floor(size.width * 2)}x${Math.floor(size.height * 2)})`);
     }
     if (screens.includes("quickstart")) {
       await captureQuickstart(page, locale, theme, () => {
