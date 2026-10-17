@@ -18,8 +18,8 @@ things.
 
 **Cloudflare** suits you when you would rather not keep servers. You need a Cloudflare
 account on the Workers Paid plan and a domain whose DNS Cloudflare manages. OpenTofu
-execution is taken on by a runner in a Cloudflare Container. Accounts, the control plane, the dashboard, and the runner all sit in one
-Worker.
+execution is taken on by a runner in a Cloudflare Container. Accounts, the control
+plane, the dashboard, and the runner all sit in one Worker.
 
 **Bun and PostgreSQL** suits you when it should live on your own infrastructure. You need
 a host running Docker, PostgreSQL, and Caddy to terminate TLS. The bundled
@@ -28,8 +28,9 @@ together. It does not include an OpenTofu runner, so plan and apply need a runne
 in separately.
 
 **Local only** is for exercising the whole thing without exposing anything. You need
-Linux, Docker, Bun, and `sudo` to set up certificates and DNS. Pebble for ACME, CoreDNS, and Caddy come up on the same Docker network,
-and `*.takosumi.test` resolves the same way it would in production.
+Linux, Docker, Bun, and `sudo` to set up certificates and DNS. Pebble for ACME, CoreDNS,
+and Caddy come up on the same Docker network, and `*.takosumi.test` resolves the same way
+it would in production.
 
 ## Putting it on Cloudflare
 
@@ -37,6 +38,8 @@ What you need:
 
 - A Cloudflare account on the Workers Paid plan. The runner uses Cloudflare Containers,
   which the Free plan does not offer. Sign in with `bunx wrangler login`.
+- R2 enabled on the account. Even within the free tier, you cannot create buckets until
+  you complete the one-time R2 purchase step in the Cloudflare dashboard.
 - A domain whose DNS Cloudflare manages. The `routes` hostname is registered as a custom
   domain, and its origin becomes the Accounts issuer.
 - Docker running on the machine where you run `wrangler deploy`. The deploy builds the
