@@ -45,9 +45,9 @@ need to learn all of them before starting.
 
 By default, a new commit in Git is not deployed automatically. Takosumi shows
 that a newer revision exists; the next plan and apply remain explicit actions.
-Only when you turn on auto-update (`autoUpdate`) for a Capsule is a plan with no
-deletion, replacement, approval, or policy gate applied automatically (see
-[Sources and Capsules](./sources.md)).
+Only when you turn on auto-update (`autoUpdate`) for a Capsule is a plan applied
+automatically, and only one with no deletion or replacement, no approval or policy
+gate, and a known list of resource changes (see [Sources and Capsules](./sources.md)).
 
 Read [Sources and Capsules](./sources.md) and the
 [Run model](./run-model.md) for details.

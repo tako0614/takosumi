@@ -127,12 +127,13 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/capsules" \
 
 Capsule が追跡している Source に新しい commit が来ると、Capsule は `stale` に
 なります。**stale は状態であって動作ではありません。** 通常はそこで止まり、次の
-plan と apply は人が始めます。
+plan とデプロイは人が始めます。
 
 Capsule で `autoUpdate` を明示的に有効にした場合だけ、新しい snapshot ごとに 1 回、
-更新用の plan を作ります。削除や置き換えを含まず、承認や policy の gate がない clean plan は
-apply まで続けられます。それ以外は Run 画面で停止します。単なる `stale`、drift の
-検出、古い snapshot の再通知が無条件に apply を起動することはありません。
+更新用の plan を作ります。削除や置き換えがなく、承認や policy の gate にもかからず、
+変更されるリソースの一覧が分かっている plan だけが、自動でデプロイまで進みます。
+それ以外は Run 画面で停止します。単なる `stale`、drift の検出、古い snapshot の
+再通知が無条件にデプロイを始めることはありません。
 
 ## 画面と外部リンク
 
