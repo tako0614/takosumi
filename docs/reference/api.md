@@ -221,7 +221,7 @@ member 行は同時に削除します。削除後の読み取りは 404 です�
 | POST     | `/api/v1/capsules/{capsuleId}/uninstall`                   | 猶予付きの削除 (二段階アンインストール) を予約する |
 | POST     | `/api/v1/capsules/{capsuleId}/cancel-uninstall`            | 猶予期間中の削除予約を取り消す               |
 | GET      | `/api/v1/capsules/{capsuleId}/outputs`                     | 公開 Output を読む                           |
-| GET      | `/api/v1/capsules/{capsuleId}/current-resource-inventory`  | 現在の版に記録された resource の一覧を読む   |
+| GET      | `/api/v1/capsules/{capsuleId}/current-resource-inventory`  | 現在の版に記録された OpenTofu の resource の一覧を読む |
 | GET      | `/api/v1/capsules/{capsuleId}/usage-summary`               | 利用量の集計を読む                           |
 | GET      | `/api/v1/capsules/{capsuleId}/state-versions`              | StateVersion を一覧する                      |
 | GET      | `/api/v1/capsules/{capsuleId}/dependencies`                | 依存を一覧する                               |

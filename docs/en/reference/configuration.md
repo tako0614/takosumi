@@ -198,7 +198,7 @@ ENV
 | `TAKOSUMI_DEPLOY_CONTROL_URL`    | Required when `--url` is omitted   | none                | Takosumi origin the CLI talks to                                                 |
 | `TAKOSUMI_DEPLOY_CONTROL_TOKEN`  | Required when `--token` is omitted, **secret** | none                | Bearer passed to that origin: normally a [token you created](./cli.md#creating-a-token). Commands that call the operator-only API, such as `takosumi connections`, need the server's operator secret |
 | `TAKOSUMI_ACCOUNTS_URL`          | Required when `--accounts-url` is omitted | none                | accounts URL that `takosumi accounts tokens` talks to                            |
-| `TAKOSUMI_ACCOUNTS_TOKEN`        | Required for `takosumi accounts tokens` when `--token` is omitted, **secret** | none | The Accounts session bearer (`sess_...`) that `takosumi accounts tokens` sends |
+| `TAKOSUMI_ACCOUNTS_TOKEN`        | Used by `takosumi accounts tokens` when `--token` is omitted, **secret** | none | The Accounts session bearer (`sess_...`) that `takosumi accounts tokens` sends. Without it, the legacy `TAKOS_TOKEN` is read; with neither, the request is sent without a bearer and Accounts rejects it |
 | `TAKOSUMI_ACCOUNTS_DATABASE_URL` | Required when `--database-url` is omitted | none                | Connection target for `takosumi accounts migrate`                                |
 | `TAKOSUMI_LANG`                  | Optional                           | inferred from `LANG` etc. | Values starting with `ja` make the CLI help Japanese. `TAKOSUMI_LOCALE` is also read |
 

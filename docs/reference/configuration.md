@@ -191,7 +191,7 @@ ENV
 | `TAKOSUMI_DEPLOY_CONTROL_URL`    | `--url` を省くとき必須             | なし                | CLI が話しかける Takosumi の origin                                                  |
 | `TAKOSUMI_DEPLOY_CONTROL_TOKEN`  | `--token` を省くとき必須・**秘密** | なし                | その origin に渡す bearer。ふだんは[発行した token](./cli.md#トークンを発行する)です。`takosumi connections` など operator 専用 API を呼ぶコマンドには、サーバーの operator 用の秘密を入れます |
 | `TAKOSUMI_ACCOUNTS_URL`          | `--accounts-url` を省くとき必須    | なし                | `takosumi accounts tokens` が話しかける accounts の URL                              |
-| `TAKOSUMI_ACCOUNTS_TOKEN`        | `takosumi accounts tokens` で `--token` を省くとき必須・**秘密** | なし | `takosumi accounts tokens` が渡す Accounts のセッション bearer（`sess_...`） |
+| `TAKOSUMI_ACCOUNTS_TOKEN`        | `takosumi accounts tokens` で `--token` を省くときに使う・**秘密** | なし | `takosumi accounts tokens` が渡す Accounts のセッション bearer（`sess_...`）。無ければ旧名の `TAKOS_TOKEN` を読み、どちらも無いと bearer なしで送られて Accounts が拒否します |
 | `TAKOSUMI_ACCOUNTS_DATABASE_URL` | `--database-url` を省くとき必須    | なし                | `takosumi accounts migrate` の接続先                                                 |
 | `TAKOSUMI_LANG`                  | 任意                               | `LANG` などから判定 | `ja` で始まる値にすると CLI のヘルプが日本語になります。`TAKOSUMI_LOCALE` も読みます |
 

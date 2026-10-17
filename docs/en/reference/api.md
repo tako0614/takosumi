@@ -69,7 +69,8 @@ Example:
 }
 ```
 
-Field names are case-sensitive. `endpoints.api` is `<origin>/api/v1`, while
+Field names are case-sensitive. Most are snake_case; `apiBaseUrl` and `oidcClientId`
+are camelCase. `endpoints.api` is `<origin>/api/v1`, while
 `apiBaseUrl` is `<origin>/api/v1`. `features.opentofu_runner` is `true` only
 when the endpoint has an OpenTofu runner configured; a composition without one,
 such as the Bun + PostgreSQL reference, returns `false`.

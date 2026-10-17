@@ -77,7 +77,7 @@ takosumi accounts tokens create \
 | `--scope`        | `read` / `write` / `admin`                          |
 | `--expires-at`   | 失効日時 (ISO 8601)                                 |
 | `--accounts-url` | Accounts の URL。環境変数は `TAKOSUMI_ACCOUNTS_URL` |
-| `--token`        | **Accounts のセッション bearer** (`sess_...`)。省くと `TAKOSUMI_ACCOUNTS_TOKEN` を読みます |
+| `--token`        | **Accounts のセッション bearer** (`sess_...`)。省くと `TAKOSUMI_ACCOUNTS_TOKEN`、次に旧名の `TAKOS_TOKEN` を読みます。どれも無いと bearer なしで送られ、Accounts が拒否します |
 | `--json`         | JSON で出力する                                     |
 
 `accounts` 系の `--token` に渡すのは Accounts のセッション bearer であって、発行

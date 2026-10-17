@@ -162,10 +162,11 @@ exact 4件です。v2.4 では `bindings` でも届けられ、その slot は `
 の明示的な `allowedOidcScopes` 内でなければなりません。allowlist がない場合は
 capability を許可しません。
 
-Plan は endpoint の `url` variable から、path、query、fragment、credential のない
-canonical な exact HTTPS origin を読めなければ fail closed です。その origin と
+variables で届ける場合、Plan は endpoint の `url` variable から、path、query、fragment、
+credential のない canonical な exact HTTPS origin を読めなければ fail closed です。その origin と
 review 済み `callbackPath` から redirect URI を導出し、exact 4 variables と authority
-digest を Plan sidecar に固定します。Plan と `apply_check` は Accounts を変更せず、
+digest を Plan sidecar に固定します。bindings で届ける場合（v2.4）は、4 つの値を plan、state、
+log に書かず、Apply のときだけ runner に渡します。Plan と `apply_check` は Accounts を変更せず、
 final Apply だけが Capsule-bound public client を何度実行しても結果が同じ形で登録できます。terminal
 destroy 後の retirement も、何度実行しても結果は同じです。Accounts capability が利用できない、
 origin/variable/callback/scope/digest が drift した場合は runner 実行前に失敗します。
