@@ -1,7 +1,7 @@
 # Quickstart
 
 Start a local Takosumi installation on a Linux machine, add a sample from the
-dashboard, and take it from reviewing the changes (plan) to applying them
+dashboard, and take it from reviewing the changes (plan) to deploying them
 (apply). The sample creates no external resources, so you need no cloud
 credentials. The first run builds containers and the dashboard, so it takes a
 while.
@@ -126,7 +126,7 @@ own.
 
 ## 7. Inspect the result
 
-On the workload page that **Open service** opened, expand **Update history** on
+On the service page that **Open service** opened, expand **Update history** on
 the **Updates** tab. It lists each apply with its time and marks the version in
 use as **Current**. After a later apply, **Restore a previous version** →
 **Restore this state** on an older entry creates the changes (a plan) that take

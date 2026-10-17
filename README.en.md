@@ -17,16 +17,16 @@ and other systems are still managed by their existing providers.
 
 - **Pick and add** — choose a service from the Store or a Git URL, then fill in
   the connections and settings it needs.
-- **Check before applying** — see how many resources will be created, changed,
-  and deleted before anything is applied. Changes that delete, replace, or
+- **Check before deploying** — see how many resources will be created, changed,
+  and deleted before anything is deployed. Changes that delete, replace, or
   import something wait until you approve them.
 - **Keep keys out of modules** — cloud API keys and tokens are stored in
   Takosumi. Their values cannot be read back and reach the runner only while a
-  review or apply is running.
+  review or deploy is running.
 - **Keep a record you can go back to** — Takosumi records which Git commit was
-  applied, by whom, and what changed. Each apply keeps the state as a version,
+  deployed, by whom, and what changed. Each deploy keeps the state as a version,
   with its outputs, and going back to an earlier version's source is a change
-  you review before it is applied.
+  you review before it is deployed.
 
 ## Getting started
 
@@ -34,7 +34,7 @@ and other systems are still managed by their existing providers.
   The Takosumi hosted service is Pre-GA. Steps, pricing, availability, and
   support are in the
   [hosted service documentation](https://app.takosumi.com/docs/en/).
-- **Try adding and applying locally** — follow the
+- **Try adding and deploying locally** — follow the
   [Quickstart](docs/en/getting-started/quickstart.md) to start the dashboard,
   sign-in, database, and runner on Linux with Docker. It uses `sudo` to set up a
   local certificate authority and DNS. The sample creates no external resources,
@@ -49,12 +49,14 @@ and other systems are still managed by their existing providers.
 
 ## How it works
 
-What the dashboard calls an app or a service, the docs and the API call a
+In the dashboard, what you pick in the Store and add is a **service**, and the
+services you add are listed under **Workloads**. A service's own screen, opened
+from Home, is an **app**. The docs and the API call an added service a
 **Capsule**: one unit of deployment that bundles a Git URL, ref, and module path
 with its variables and connections. Takosumi pins the ref to one commit and
-records each change to a Capsule as two Runs, a plan and an apply. The apply Run
-is pinned to the reviewed plan Run, so the changes you read are the changes that
-are applied.
+records each change to a Capsule as two Runs: a plan (shown as Review) and an
+apply (shown as Deploy). The apply Run is pinned to the reviewed plan Run, so
+the changes you read are the changes that are deployed.
 
 A repository may optionally publish `.well-known/takosumi.json` to add Takosumi
 metadata to modules that the scan of the same commit finds. The manifest cannot

@@ -2,19 +2,19 @@
 
 Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、接続したクラウドへ
 アプリのように追加して使うための管理サーバーです。追加や更新の前に、作られるものと
-変わるものを確かめてから反映できます。
+変わるものを確かめてからデプロイできます。
 
 使う module と provider はそのままで、Takosumi 専用の設定言語はありません。
 
 ## できること
 
 - **選んで追加する** — ストアのサービスや Git URL を選び、必要な接続と設定を入れて追加します。
-- **反映する前に確かめる** — 作成・変更・削除されるリソースの数を見てから反映します。
+- **デプロイする前に確かめる** — 作成・変更・削除されるリソースの数を見てからデプロイします。
   削除・置き換え・import を含む変更は、承認するまで進みません。
 - **鍵を module に書かない** — クラウドの API key や token は Takosumi に保存します。
-  値は読み戻せず、変更の確認や反映を実行している間だけ runner に渡ります。
-- **記録を残し、戻せる** — 誰がどの commit を反映し、何が変わったかを記録します。
-  反映ごとの state を版として output とともに残し、以前の版の取得元に戻す変更も、
+  値は読み戻せず、変更の確認やデプロイを実行している間だけ runner に渡ります。
+- **記録を残し、戻せる** — 誰がどの commit をデプロイし、何が変わったかを記録します。
+  デプロイごとの state を版として output とともに残し、以前の版の取得元に戻す変更も、
   確認してから適用できます。
 
 ## 始め方
@@ -26,7 +26,7 @@ Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、
   入れて追加します。公式ホスティング（Takosumi hosted service）は Pre-GA です。手順、
   料金、提供状況、サポートは[公式ホスティングのドキュメント](https://app.takosumi.com/docs/)に
   あります。
-- **手元で追加から反映まで試す** — [クイックスタート](./getting-started/quickstart.md)
+- **手元で追加からデプロイまで試す** — [クイックスタート](./getting-started/quickstart.md)
   に従い、Linux と Docker で dashboard、サインイン、データベース、runner を起動します。
   ローカル証明書と DNS の設定に `sudo` を使います。サンプルは外部リソースを作らないため、
   クラウドの認証情報は要りません。
@@ -38,12 +38,12 @@ Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、
 
 ## 仕組み
 
-dashboard でアプリ・サービスと呼ぶものを、docs と API では **Capsule** と呼びます。
-Git URL・ref・module path と、変数・接続をまとめた、デプロイの 1 単位です
-（[用語集](./reference/glossary.md)）。追加した Capsule は dashboard の **ワークロード** に
-並びます。Capsule への変更は、計画（plan）と反映（apply）を
-別々の Run として記録します。apply の Run は確認した plan の Run に `planRunId` で
-固定されるため、読んだ差分と実際に反映する差分が一致します。
+dashboard では、ストアで選んで追加するものを **サービス** と呼び、追加したサービスは
+**ワークロード** の一覧に並びます。ホームから開く、サービス自身の画面は **アプリ** です。
+docs と API では、追加したサービスを **Capsule** と呼びます。デプロイの 1 単位で、
+Git URL・ref・module path と、変数・接続をまとめたものです（[用語集](./reference/glossary.md)）。Capsule への変更は、
+変更の確認（plan）とデプロイ（apply）を別々の Run として記録します。apply の Run は確認した
+plan の Run に `planRunId` で固定されるため、読んだ差分と実際にデプロイする差分が一致します。
 
 追加や更新は、次の順に進みます。
 
@@ -51,7 +51,7 @@ Git URL・ref・module path と、変数・接続をまとめた、デプロイ�
 2. 接続と入力を確認する
 3. plan で変更内容を作る
 4. 変更内容を確認する。削除・置き換え・import を含む場合は承認する
-5. apply で反映する
+5. apply でデプロイする
 6. state・output・履歴を保存する
 
 Takosumi は first-party Terraform/OpenTofu provider を同梱しません。Cloudflare、AWS
