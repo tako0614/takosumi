@@ -39,7 +39,7 @@ state、output、ログ、監査記録は Run の結果です。provider の API
 7. state、output、ログ、監査記録を保存
 ```
 
-Git に新しい commit が追加されても、自動では反映しません。Takosumi は新しい差分が
+Git に新しい commit が追加されても、自動ではデプロイしません。Takosumi は新しい差分が
 あることを示し、次の plan と apply は改めて実行します。
 
 詳しくは [Source と Capsule](./sources.md) と

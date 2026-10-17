@@ -43,7 +43,7 @@ need to learn all of them before starting.
 7. Save state, outputs, logs, and audit records.
 ```
 
-A new commit in Git is not applied automatically. Takosumi shows that a newer
+A new commit in Git is not deployed automatically. Takosumi shows that a newer
 revision exists; the next plan and apply remain explicit actions.
 
 Read [Sources and Capsules](./sources.md) and the

@@ -4,7 +4,7 @@ English: [README.en.md](README.en.md)
 
 Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、接続したクラウドへ
 アプリのように追加して使うための、オープンソースの管理サーバーです。追加や更新の前に、
-作られるものと変わるものを確かめてから反映できます。
+作られるものと変わるものを確かめてからデプロイできます。
 
 使う module と provider はそのままで、Takosumi 専用の設定言語や first-party provider は
 ありません。Cloudflare、AWS、Kubernetes などは、それぞれの既存 provider が操作します。
@@ -15,12 +15,12 @@ Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、
 ## できること
 
 - **選んで追加する** — ストアのサービスや Git URL を選び、必要な接続と設定を入れて追加します。
-- **反映する前に確かめる** — 作成・変更・削除されるリソースの数を見てから反映します。
+- **デプロイする前に確かめる** — 作成・変更・削除されるリソースの数を見てからデプロイします。
   削除・置き換え・import を含む変更は、承認するまで進みません。
 - **鍵を module に書かない** — クラウドの API key や token は Takosumi に保存します。
-  値は読み戻せず、変更の確認や反映を実行している間だけ runner に渡ります。
-- **記録を残し、戻せる** — 誰がどの commit を反映し、何が変わったかを記録します。
-  反映ごとの state を版として output とともに残し、以前の版の取得元に戻す変更も、
+  値は読み戻せず、変更の確認やデプロイを実行している間だけ runner に渡ります。
+- **記録を残し、戻せる** — 誰がどの commit をデプロイし、何が変わったかを記録します。
+  デプロイごとの state を版として output とともに残し、以前の版の取得元に戻す変更も、
   確認してから適用できます。
 
 ## 始め方
@@ -28,7 +28,7 @@ Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、
 - **公式ホスティングで使う** — [app.takosumi.com](https://app.takosumi.com/) にサインインします。
   公式ホスティング（Takosumi hosted service）は Pre-GA です。手順、料金、提供状況、
   サポートは[公式ホスティングのドキュメント](https://app.takosumi.com/docs/)にあります。
-- **手元で追加から反映まで試す** — [クイックスタート](docs/getting-started/quickstart.md)
+- **手元で追加からデプロイまで試す** — [クイックスタート](docs/getting-started/quickstart.md)
   に従い、Linux と Docker で dashboard、サインイン、データベース、runner を起動します。
   ローカル証明書と DNS の設定に `sudo` を使います。サンプルは外部リソースを作らないため、
   クラウドの認証情報は要りません。
@@ -40,11 +40,12 @@ Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、
 
 ## 仕組み
 
-dashboard でアプリ・サービスと呼ぶものを、docs と API では **Capsule** と呼びます。
-Git URL・ref・module path と、変数・接続をまとめた、デプロイの 1 単位です。Takosumi は
-ref を 1 つの commit に固定し、Capsule への変更を、計画（plan）と反映（apply）の別々の
-Run として記録します。apply の Run は確認した plan の Run に固定されるため、読んだ差分と
-実際に反映する差分が一致します。
+dashboard では、ストアで選ぶものを **サービス**、追加してデプロイしたものを **ワークロード**、
+ホームから開く画面を持つものを **アプリ** と呼びます。docs と API では、デプロイの 1 単位を
+**Capsule** と呼び、dashboard のワークロードに当たります。Git URL・ref・module path と、
+変数・接続をまとめたものです。Takosumi は ref を 1 つの commit に固定し、Capsule への変更を、
+変更の確認（plan）とデプロイ（apply）の別々の Run として記録します。apply の Run は確認した
+plan の Run に固定されるため、読んだ差分と実際にデプロイする差分が一致します。
 
 repository は任意で `.well-known/takosumi.json` を置き、同じ commit の scan で見つかった
 module に、Takosumi 向けの情報を添えられます。manifest は module を作ったり選んだりできず、

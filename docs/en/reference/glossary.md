@@ -11,9 +11,11 @@ docs use a different name, read it back through this table.
 
 | Word on screen         | Internal term                        | What it refers to                                                      |
 | ---------------------- | ------------------------------------ | ---------------------------------------------------------------------- |
-| Service / App          | Capsule                              | One deployed unit.                                                     |
+| Service                | Store listing                        | What you pick in the Store and add.                                    |
+| Workload               | Capsule                              | One unit you added and deployed.                                       |
+| App                    | Interface                            | A workload's own screen, opened from Home.                             |
 | Connected accounts     | ProviderConnection / ProviderBinding | Stored credentials, and where they are assigned.                       |
-| Changes                | plan                                 | The list of changes you review before anything is applied.             |
+| Changes                | plan                                 | The list of changes you review before anything is deployed.            |
 | Change verification ID | planDigest                           | The value that proves the plan you reviewed is the plan being applied. |
 | Update history         | The list of Runs                     | What ran, and when.                                                    |
 | History                | Activity / AuditEvent                | Who did what, and when.                                                |
@@ -48,7 +50,7 @@ docs use a different name, read it back through this table.
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Run          | The record of one execution. plan and apply are separate Runs, and an apply Run is pinned to the plan Run you reviewed.                                          |
 | plan         | The operation that computes and shows what will change. Nothing real changes yet.                                                                                |
-| apply        | The operation that applies the plan you reviewed, unchanged.                                                                                                     |
+| apply        | The operation that deploys the plan you reviewed, unchanged; shown as Deploy.                                                                                                     |
 | destroy      | The operation that removes the resources a Capsule created. A plan is produced first, then applied.                                                              |
 | drift check  | The read-only operation that looks for gaps between saved state and reality.                                                                                     |
 | drift        | The gap that has appeared between saved state and reality.                                                                                                       |

@@ -1,7 +1,7 @@
 # Quickstart
 
 Start a local Takosumi installation on a Linux machine, add a sample from the
-dashboard, and take it from reviewing the changes (plan) to applying them
+dashboard, and take it from reviewing the changes (plan) to deploying them
 (apply). The sample creates no external resources, so you need no cloud
 credentials. The first run builds containers and the dashboard, so it takes a
 while.
