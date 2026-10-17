@@ -1,4 +1,5 @@
-import { createCloudflareWorker } from "./handler.ts";
+import { createCloudflareWorker, type PrivateAccountsFinancialSourceFacade, type PrivateAccountsFinancialSourceOrigin } from "./handler.ts";
+import { FinancialSourceUnavailable } from "../../../accounts/service/src/financial-source.ts";
 import { createIdentityMergeRetryService, type IdentityMergeRetryService, type IdentityMergeRetryRuntimeContext } from "../../../accounts/service/src/identity-merge-retry.ts";
 import { handleStagingLoginPortal } from "./staging-login-portal.ts";
 import { createStagingIdentityPortal } from "./staging-identity-portal.ts";
@@ -39,7 +40,16 @@ export function createAuthStagingWorker(dependencies: {
    * real owner readiness refuses merge consent before reservation. */
   readonly ownerPorts?: (env: AuthEnv) => AuthStagingOwnerPorts | undefined;
   readonly retryService?: (env: AuthEnv) => IdentityMergeRetryService;
+  /** Private A/C source-method publication only. The actual HTTP Accounts store
+   * and canonical Control instances are retained by handler.ts, not supplied
+   * by the observer. Existing source receiver/expiry-clock callbacks are
+   * captured there; genuine qualification is still an owning responsibility.
+   * The observer cannot dispatch before named resolution has completed.
+   * No Financial M constructor, command custody or dispatch is installed here. */
+  readonly financialSourceOrigin?: Pick<PrivateAccountsFinancialSourceOrigin<AuthEnv>, "inputs" | "observe">;
 } = {}) {
+  const sourceInputs = dependencies.financialSourceOrigin?.inputs;
+  const sourceObserver = dependencies.financialSourceOrigin?.observe;
   // D1 work cannot be forcibly cancelled. Keep at most one pending read-only
   // verification per env; a timed-out caller never starts a parallel attempt.
   const schemaAttempts = new WeakMap<AuthEnv, Promise<void>>();
@@ -99,12 +109,28 @@ export function createAuthStagingWorker(dependencies: {
   };
   const accounts = dependencies.accounts ?? createCloudflareWorker<AuthEnv>({
     controlPlaneOperations: controlOperations,
+    // This exact cached operations instance owns the canonical Core Workspace
+    // service. ownerBundle(env).store is a different AccountsStore instance and
+    // must never stand in for the HTTP handler's actual D1 store.
+    privateFinancialSourceOrigin: {
+      coreFinancialSource: async (env) => (await authStagingControlOperations(env)).workspaces.financialSource,
+      ...(sourceInputs ? {inputs: sourceInputs} : {}),
+      ...(sourceObserver ? {observe: sourceObserver} : {}),
+    },
     identityMergeReconciler:(env)=>ownerPorts(env).identityMergeReconciler,
     identityMergeRetry:retryService,
     credentialUnlinkReconciler:(env)=>ownerPorts(env).credentialUnlinkReconciler,
     workspaceBillingEnrollment:(env)=>ownerPorts(env).workspaceBillingEnrollment,
   });
+  const sourceResolver = accounts.resolvePrivateFinancialSource;
   return {
+    // Explicit in-process named caller only. A supplied mock Accounts worker
+    // cannot qualify the actual HTTP D1 store captured by the default worker.
+    async resolvePrivateFinancialSource(env: AuthEnv): Promise<PrivateAccountsFinancialSourceFacade> {
+      if (dependencies.accounts || !sourceResolver)
+        throw new FinancialSourceUnavailable("source_unavailable");
+      return await sourceResolver.call(accounts, env);
+    },
     async fetch(request: Request, env: AuthEnv, context?: { waitUntil(promise: Promise<unknown>): void }): Promise<Response> {
       const url = new URL(request.url);
       if (url.origin !== AUTH_STAGING_ISSUER ||

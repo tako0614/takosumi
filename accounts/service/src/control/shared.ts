@@ -260,19 +260,20 @@ export function publicProviderConnection(
 export async function publicRun(
   operations: ControlPlaneOperations,
   run: Run,
+  assertActive?: () => void,
 ): Promise<PublicRun> {
+  assertActive?.();
   const { providerResolutions, ...rest } = run;
   if (!providerResolutions || providerResolutions.length === 0) {
     return rest;
   }
-  return {
-    ...rest,
-    providerResolutions: await Promise.all(
-      providerResolutions.map((resolution) =>
-        publicProviderResolution(operations, resolution),
-      ),
+  const publicProviderResolutions = await Promise.all(
+    providerResolutions.map((resolution) =>
+      publicProviderResolution(operations, resolution),
     ),
-  };
+  );
+  assertActive?.();
+  return { ...rest, providerResolutions: publicProviderResolutions };
 }
 
 async function publicProviderResolution(
@@ -576,16 +577,19 @@ export async function requireWorkspaceAccess(input: {
   readonly session: ControlSession;
   readonly workspaceId: string;
   readonly workspace?: Workspace;
+  readonly assertActive?: () => void;
 }): Promise<WorkspaceAccessResult> {
-  if (
-    await canAccessWorkspace({
-      operations: input.operations,
-      store: input.store,
-      session: input.session,
-      workspaceId: input.workspaceId,
-      ...(input.workspace ? { workspace: input.workspace } : {}),
-    })
-  ) {
+  input.assertActive?.();
+  const canAccess = await canAccessWorkspace({
+    operations: input.operations,
+    store: input.store,
+    session: input.session,
+    workspaceId: input.workspaceId,
+    ...(input.workspace ? { workspace: input.workspace } : {}),
+    ...(input.assertActive ? { assertActive: input.assertActive } : {}),
+  });
+  input.assertActive?.();
+  if (canAccess) {
     return { ok: true };
   }
   return {
@@ -604,7 +608,9 @@ export async function canAccessWorkspace(input: {
   readonly session: ControlSession;
   readonly workspaceId: string;
   readonly workspace?: Workspace;
+  readonly assertActive?: () => void;
 }): Promise<boolean> {
+  input.assertActive?.();
   // A Workspace-restricted credential must not reach any other Workspace, even
   // one whose membership its subject legitimately holds: a PAT scoped to
   // workspace A, or an OAuth token issued for a Capsule in A, would otherwise
@@ -615,6 +621,7 @@ export async function canAccessWorkspace(input: {
   const workspace =
     input.workspace ??
     (await input.operations.workspaces.getWorkspace(input.workspaceId));
+  input.assertActive?.();
   if (workspace.id !== input.workspaceId) return false;
   if (!input.session.requireCurrentMembership &&
     workspace.ownerUserId === input.session.subject) return true;
@@ -633,9 +640,11 @@ export async function canAccessWorkspace(input: {
       input.workspaceId,
       input.session.subject,
     );
+    input.assertActive?.();
     return mayUseMember(member);
   }
   const members = await input.operations.members.listMembers(input.workspaceId);
+  input.assertActive?.();
   return mayUseMember(
     members.find((member) => member.accountId === input.session.subject),
   );

@@ -24,14 +24,30 @@ import {
   loadD1AccountsMigrationCatalog,
 } from "../../../../accounts/service/src/d1-migrations.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
+import type {
+  D1Database as ControlD1Database,
+  D1PreparedStatement as ControlD1PreparedStatement,
+  D1Result as ControlD1Result,
+} from "../../../../worker/src/bindings.ts";
 import platformWorker from "../../../../deploy/platform/worker.ts";
+import { cachedDeployControlService } from "../../../../worker/src/deploy_control_seam.ts";
+import {
+  CloudflareD1OpenTofuControlStore,
+  ensureD1OpenTofuLedgerSchema,
+} from "../../../../worker/src/d1_opentofu_store.ts";
+import {
+  acquireControlD1MaintenanceFence,
+  releaseControlD1MaintenanceFence,
+} from "../../../../worker/src/d1_schema_maintenance.ts";
+import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
+import type { PlanRun } from "@takosumi/internal/deploy-control-api";
 
 function env(values: Record<string, unknown> = {}): CloudflareWorkerEnv {
   return values as CloudflareWorkerEnv;
 }
 
-async function accountsDbAtHead(headVersion: 3 | 4): Promise<SqliteFakeD1> {
-  const db = new SqliteFakeD1();
+async function accountsDbAtHead(headVersion: 3 | 4): Promise<AccountsSqliteD1> {
+  const db = new AccountsSqliteD1();
   const catalog = await loadD1AccountsMigrationCatalog();
   for (const migration of catalog.migrations) {
     if (migration.version > headVersion) break;
@@ -40,12 +56,148 @@ async function accountsDbAtHead(headVersion: 3 | 4): Promise<SqliteFakeD1> {
   return db;
 }
 
-async function versionedAccountsDb(): Promise<SqliteFakeD1> {
+async function versionedAccountsDb(): Promise<AccountsSqliteD1> {
   return accountsDbAtHead(4);
+}
+
+// The shared SQLite fake implements Control's optional-success D1 contract.
+// Validate its actual results at this Accounts boundary; never invent success.
+function accountsD1Result<T>(result: ControlD1Result<T>): D1Result<T> {
+  if (typeof result.success !== "boolean") {
+    throw new TypeError("SQLite Accounts fixture requires an explicit success result");
+  }
+  return {
+    ...result,
+    success: result.success,
+    results: result.results === undefined ? undefined : [...result.results],
+  };
+}
+
+async function sqliteRawRows(statement: ControlD1PreparedStatement): Promise<unknown[][]> {
+  if (!("raw" in statement) || typeof statement.raw !== "function") {
+    throw new TypeError("SQLite fixture statement does not support raw rows");
+  }
+  const rows: unknown = await statement.raw();
+  if (!Array.isArray(rows)) throw new TypeError("SQLite raw rows must be an array");
+  return rows.map((row: unknown) => {
+    if (!Array.isArray(row)) throw new TypeError("SQLite raw row must be an array");
+    const values: unknown[] = [...row];
+    return values;
+  });
+}
+
+class AccountsSqliteD1 implements D1Database {
+  private readonly delegate = new SqliteFakeD1();
+  private readonly statements = new WeakMap<D1PreparedStatement, ControlD1PreparedStatement>();
+
+  prepare(query: string): D1PreparedStatement {
+    return this.wrap(this.delegate.prepare(query));
+  }
+
+  private wrap(bound: ControlD1PreparedStatement): D1PreparedStatement {
+    const statement: D1PreparedStatement = {
+      bind: (...values) => this.wrap(bound.bind(...values)),
+      run: async () => accountsD1Result(await bound.run()),
+      first: <T>(column?: string) => {
+        if (column !== undefined) throw new TypeError("SQLite fixture first(column) is unsupported");
+        return bound.first<T>();
+      },
+      all: async <T>() => accountsD1Result(await bound.all<T>()),
+      raw: () => sqliteRawRows(bound),
+    };
+    this.statements.set(statement, bound);
+    return statement;
+  }
+
+  async batch<T = unknown>(statements: readonly D1PreparedStatement[]): Promise<readonly D1Result<T>[]> {
+    const originals = statements.map((statement) => {
+      const original = this.statements.get(statement);
+      if (!original) throw new TypeError("SQLite Accounts batch requires its own prepared statements");
+      return original;
+    });
+    // Preserve the real fake's transaction and SELECT dispatch, including rollback.
+    return (await this.delegate.batch<T>(originals)).map(accountsD1Result);
+  }
+
+  exec(query: string): Promise<D1ExecResult> {
+    return this.delegate.exec(query);
+  }
+}
+
+async function jwksFixtureKeys(response: Response): Promise<Array<{ kid: string; d: unknown }>> {
+  const document: unknown = await response.json();
+  if (typeof document !== "object" || document === null || !("keys" in document) ||
+      !Array.isArray(document.keys)) throw new TypeError("Expected a JWKS keys array");
+  return document.keys.map((key: unknown) => {
+    if (typeof key !== "object" || key === null || !("kid" in key) ||
+        typeof key.kid !== "string") throw new TypeError("Expected an explicit fixture key ID");
+    return { kid: key.kid, d: "d" in key ? key.d : undefined };
+  });
 }
 
 afterEach(() => {
   __resetSessionHashSaltConfigForTesting();
+});
+
+test("Accounts SQLite fixture validates success without changing results or metadata", () => {
+  const meta = { changes: 1, rows_read: 2 };
+  const rows: readonly { id: number }[] = [{ id: 7 }];
+  const result = accountsD1Result({ success: false, results: rows, meta });
+  expect(result.success).toBe(false);
+  expect(result.meta).toBe(meta);
+  expect(result.results).toEqual([...rows]);
+  expect(result.results).not.toBe(rows);
+  expect(() => accountsD1Result({ results: rows, meta })).toThrow("explicit success");
+});
+
+test("Accounts SQLite fixture preserves read batches and real transaction rollback", async () => {
+  const db = new AccountsSqliteD1();
+  await db.exec("CREATE TABLE fixture_rows (id INTEGER PRIMARY KEY)");
+  const results = await db.batch<{ id: number }>([
+    db.prepare("INSERT INTO fixture_rows (id) VALUES (?)").bind(1),
+    db.prepare("SELECT id FROM fixture_rows ORDER BY id"),
+  ]);
+  expect(results[0]?.meta?.changes).toBe(1);
+  expect(results[1]?.results).toEqual([{ id: 1 }]);
+  await expect(db.batch([
+    db.prepare("INSERT INTO fixture_rows (id) VALUES (?)").bind(2),
+    db.prepare("INSERT INTO fixture_rows (id) VALUES (?)").bind(1),
+  ])).rejects.toThrow();
+  expect(await db.prepare("SELECT id FROM fixture_rows ORDER BY id").all()).toEqual({
+    success: true, results: [{ id: 1 }],
+  });
+  expect(await db.prepare("SELECT id FROM fixture_rows ORDER BY id").raw?.()).toEqual([[1]]);
+  const foreign = new AccountsSqliteD1();
+  await expect(db.batch([foreign.prepare("SELECT 1")])).rejects.toThrow("own prepared statements");
+});
+
+test("Accounts SQLite fixture composes counting wrappers with atomic read/write batches", async () => {
+  for (const wrap of [
+    (db: D1Database) => new CountingAccountsD1(db),
+    (db: D1Database) => new PendingAccountsSchemaReadD1(db),
+  ]) {
+    const db = wrap(new AccountsSqliteD1());
+    await db.exec("CREATE TABLE wrapped_rows (id INTEGER PRIMARY KEY)");
+    const results = await db.batch<{ id: number }>([
+      db.prepare("INSERT INTO wrapped_rows (id) VALUES (?)").bind(1),
+      db.prepare("SELECT id FROM wrapped_rows ORDER BY id"),
+    ]);
+    expect(results[0]?.meta?.changes).toBe(1);
+    expect(results[1]?.results).toEqual([{ id: 1 }]);
+    // Count the exec and batch calls; batch's real statements stay atomic.
+    expect(db.writeCount).toBe(2);
+    await expect(db.batch([
+      db.prepare("INSERT INTO wrapped_rows (id) VALUES (?)").bind(2),
+      db.prepare("INSERT INTO wrapped_rows (id) VALUES (?)").bind(1),
+    ])).rejects.toThrow();
+    expect(db.writeCount).toBe(3);
+    expect((await db.prepare("SELECT id FROM wrapped_rows ORDER BY id").all()).results).toEqual([{ id: 1 }]);
+    await db.prepare("INSERT INTO wrapped_rows (id) VALUES (?)").bind(3).run();
+    expect(db.writeCount).toBe(4);
+    const foreign = wrap(new AccountsSqliteD1());
+    await expect(db.batch([foreign.prepare("SELECT 1")])).rejects.toThrow("own prepared statements");
+    expect(db.writeCount).toBe(5);
+  }
 });
 
 test("Cloudflare Accounts worker keeps health local", async () => {
@@ -860,7 +1012,7 @@ test("Cloudflare OIDC signing rotation publishes bounded overlap then removes th
     }),
   );
   expect(before.status).toBe(200);
-  expect((await before.json()).keys.map((key: JsonWebKey) => key.kid)).toEqual([
+  expect((await jwksFixtureKeys(before)).map((key) => key.kid)).toEqual([
     "oidc-key-before-rotation",
   ]);
 
@@ -876,7 +1028,7 @@ test("Cloudflare OIDC signing rotation publishes bounded overlap then removes th
     }),
   );
   expect(overlap.status).toBe(200);
-  const overlapKeys = (await overlap.json()).keys as JsonWebKey[];
+  const overlapKeys = await jwksFixtureKeys(overlap);
   expect(overlapKeys.map((key) => key.kid)).toEqual([
     "oidc-key-after-rotation",
     "oidc-key-before-rotation",
@@ -892,7 +1044,7 @@ test("Cloudflare OIDC signing rotation publishes bounded overlap then removes th
     }),
   );
   expect(after.status).toBe(200);
-  expect((await after.json()).keys.map((key: JsonWebKey) => key.kid)).toEqual([
+  expect((await jwksFixtureKeys(after)).map((key) => key.kid)).toEqual([
     "oidc-key-after-rotation",
   ]);
 });
@@ -951,7 +1103,7 @@ test("predeployed accounts routes perform multiple document operations with zero
 });
 
 test("predeployed accounts schema mode fails closed when schema is absent", async () => {
-  const db = new SqliteFakeD1();
+  const db = new AccountsSqliteD1();
   const predeployedDb = new NoDdlD1Database(db);
   const response = await createCloudflareWorker().fetch(
     new Request("https://app.example.test/api/v1/account/session/me"),
@@ -1731,7 +1883,22 @@ for (const mode of ["identity", "control"] as const) {
 for (const route of ["identity", "extension-session"] as const) {
   test(`platform ${route} keeps the shared Accounts initializer in waitUntil after request deadlines`, async () => {
     const delayedDb = new PendingAccountsSchemaReadD1(await versionedAccountsDb());
+    const unexpectedBindingIo = (): never => {
+      throw new Error("Accounts init fixture must not access R2 or coordination transport");
+    };
     const workerEnv = {
+      R2_ARTIFACTS: {
+        get: unexpectedBindingIo, put: unexpectedBindingIo, head: unexpectedBindingIo,
+        list: unexpectedBindingIo, delete: unexpectedBindingIo,
+      },
+      R2_BACKUPS: {
+        get: unexpectedBindingIo, put: unexpectedBindingIo, head: unexpectedBindingIo,
+        list: unexpectedBindingIo, delete: unexpectedBindingIo,
+      },
+      COORDINATION: {
+        idFromName: (name: string) => name,
+        get: () => ({ fetch: unexpectedBindingIo }),
+      },
       TAKOSUMI_ACCOUNTS_DB: delayedDb,
       TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
       TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
@@ -1746,7 +1913,7 @@ for (const route of ["identity", "extension-session"] as const) {
           throw new Error("an unauthenticated request must not dispatch");
         },
       },
-    } as Parameters<typeof platformWorker.fetch>[1];
+    } satisfies Parameters<typeof platformWorker.fetch>[1];
     const isIdentity = route === "identity";
     const request = () =>
       new Request(
@@ -1828,6 +1995,7 @@ class NoDdlD1Database implements D1Database {
 class PendingAccountsSchemaReadD1 implements D1Database {
   schemaReadCount = 0;
   writeCount = 0;
+  private readonly statements = new WeakMap<D1PreparedStatement, D1PreparedStatement>();
   private readonly schemaReads: Array<{
     promise: Promise<void>;
     release: () => void;
@@ -1855,7 +2023,7 @@ class PendingAccountsSchemaReadD1 implements D1Database {
     bound: D1PreparedStatement,
     waitForSchema = false,
   ): D1PreparedStatement {
-    return {
+    const statement: D1PreparedStatement = {
       bind: (...values) =>
         this.wrapStatement(bound.bind(...values), waitForSchema),
       run: () => {
@@ -1879,11 +2047,210 @@ class PendingAccountsSchemaReadD1 implements D1Database {
       },
       raw: () => bound.raw?.() ?? Promise.resolve([]),
     };
+    this.statements.set(statement, bound);
+    return statement;
   }
 
-  batch<T = unknown>(
-    statements: readonly D1PreparedStatement[],
-  ): Promise<readonly D1Result<T>[]> {
+  async batch<T = unknown>(statements: readonly D1PreparedStatement[]): Promise<readonly D1Result<T>[]> {
+    this.writeCount += 1;
+    const originals = statements.map((statement) => {
+      const original = this.statements.get(statement);
+      if (!original) throw new TypeError("Accounts counting batch requires its own prepared statements");
+      return original;
+    });
+    return await this.delegate.batch<T>(originals);
+  }
+
+  exec(query: string): Promise<D1ExecResult> {
+    this.writeCount += 1;
+    return this.delegate.exec(query);
+  }
+}
+
+
+const PLAN_RUN_SELECT = /\bfrom\s+(?:(?:"[^"]+"|[A-Za-z_][\w]*)\s*\.\s*)?(?:"runs"|runs)(?=\s|$)/iu;
+const WORKSPACE_SELECT = /\bfrom\s+(?:(?:"[^"]+"|[A-Za-z_][\w]*)\s*\.\s*)?(?:"workspaces"|workspaces)(?=\s|$)/iu;
+const WORKSPACE_MEMBER_SELECT = /\bfrom\s+(?:(?:"[^"]+"|[A-Za-z_][\w]*)\s*\.\s*)?(?:"workspace_members"|workspace_members)(?=\s|$)/iu;
+type PendingControlReadKind = "planRun" | "workspace" | "member";
+interface PendingControlReadGate {
+  readonly started: Promise<void>;
+  readonly completed: Promise<void>;
+  readonly waiting: Promise<void>;
+  readonly signalStarted: () => void;
+  readonly signalCompleted: () => void;
+  readonly markConsumed: () => void;
+  readonly release: () => void;
+  readonly reject: (error: unknown) => void;
+}
+interface PausedControlRead {
+  readonly started: Promise<void>;
+  readonly completed: Promise<void>;
+  readonly release: () => void;
+  readonly reject: (error: unknown) => void;
+}
+
+class CountingAccountsD1 implements D1Database {
+  writeCount = 0;
+  private readonly statements = new WeakMap<D1PreparedStatement, D1PreparedStatement>();
+
+  constructor(private readonly delegate: D1Database) {}
+
+  prepare(query: string): D1PreparedStatement {
+    return this.wrap(this.delegate.prepare(query));
+  }
+
+  private wrap(bound: D1PreparedStatement): D1PreparedStatement {
+    const statement: D1PreparedStatement = {
+      bind: (...values) => this.wrap(bound.bind(...values)),
+      run: () => {
+        this.writeCount += 1;
+        return bound.run();
+      },
+      first: <T>(column?: string) => bound.first<T>(column),
+      all: <T>() => bound.all<T>(),
+      raw: () => bound.raw?.() ?? Promise.resolve([]),
+    };
+    this.statements.set(statement, bound);
+    return statement;
+  }
+
+  async batch<T = unknown>(statements: readonly D1PreparedStatement[]): Promise<readonly D1Result<T>[]> {
+    this.writeCount += 1;
+    const originals = statements.map((statement) => {
+      const original = this.statements.get(statement);
+      if (!original) throw new TypeError("Accounts counting batch requires its own prepared statements");
+      return original;
+    });
+    return await this.delegate.batch<T>(originals);
+  }
+
+  exec(query: string): Promise<D1ExecResult> {
+    this.writeCount += 1;
+    return this.delegate.exec(query);
+  }
+}
+
+
+class PendingPlanRunReadD1 implements ControlD1Database {
+  planRunReadCount = 0;
+  workspaceReadCount = 0;
+  memberReadCount = 0;
+  writeCount = 0;
+  private readonly nextGates = new Map<PendingControlReadKind, PendingControlReadGate>();
+
+  constructor(private readonly delegate: SqliteFakeD1) {}
+
+  pauseNextPlanRunRead(): PausedControlRead {
+    return this.pauseNextRead("planRun");
+  }
+
+  pauseNextWorkspaceRead(): PausedControlRead {
+    return this.pauseNextRead("workspace");
+  }
+
+  pauseNextMemberRead(): PausedControlRead {
+    return this.pauseNextRead("member");
+  }
+
+  private pauseNextRead(kind: PendingControlReadKind): PausedControlRead {
+    let signalStarted!: () => void;
+    let signalCompleted!: () => void;
+    let release!: () => void;
+    let reject!: (error: unknown) => void;
+    let consumed = false;
+    const started = new Promise<void>((resolve) => { signalStarted = resolve; });
+    const completed = new Promise<void>((resolve) => { signalCompleted = resolve; });
+    const waiting = new Promise<void>((resolve, rejectPromise) => {
+      release = () => {
+        resolve();
+        if (!consumed) {
+          if (this.nextGates.get(kind)?.completed === completed) {
+            this.nextGates.delete(kind);
+          }
+          signalCompleted();
+        }
+      };
+      reject = (error) => {
+        rejectPromise(error);
+        if (!consumed) {
+          if (this.nextGates.get(kind)?.completed === completed) {
+            this.nextGates.delete(kind);
+          }
+          signalCompleted();
+        }
+      };
+    });
+    const markConsumed = () => { consumed = true; };
+    this.nextGates.set(kind, {
+      started, completed, signalStarted, signalCompleted, markConsumed, waiting, release, reject,
+    });
+    return { started, completed, release, reject };
+  }
+
+  prepare(query: string): ControlD1PreparedStatement & { raw(): Promise<unknown[][]> } {
+    const kind: PendingControlReadKind | undefined = PLAN_RUN_SELECT.test(query)
+      ? "planRun"
+      : WORKSPACE_MEMBER_SELECT.test(query)
+        ? "member"
+        : WORKSPACE_SELECT.test(query)
+          ? "workspace"
+          : undefined;
+    return this.wrap(this.delegate.prepare(query), kind);
+  }
+
+  private wrap(bound: ControlD1PreparedStatement, kind: PendingControlReadKind | undefined): ControlD1PreparedStatement & { raw(): Promise<unknown[][]> } {
+    const beforeRead = async (): Promise<(() => void) | undefined> => {
+      if (!kind) return undefined;
+      if (kind === "planRun") this.planRunReadCount += 1;
+      if (kind === "workspace") this.workspaceReadCount += 1;
+      if (kind === "member") this.memberReadCount += 1;
+      const gate = this.nextGates.get(kind);
+      if (!gate) return undefined;
+      this.nextGates.delete(kind);
+      gate.markConsumed();
+      gate.signalStarted();
+      try {
+        await gate.waiting;
+        return gate.signalCompleted;
+      } catch (error) {
+        gate.signalCompleted();
+        throw error;
+      }
+    };
+    return {
+      bind: (...values) => this.wrap(bound.bind(...values), kind),
+      run: <T>() => {
+        this.writeCount += 1;
+        return bound.run<T>();
+      },
+      first: async <T>() => {
+        const completeGate = await beforeRead();
+        try {
+          return await bound.first<T>();
+        } finally {
+          completeGate?.();
+        }
+      },
+      all: async <T>() => {
+        const completeGate = await beforeRead();
+        try {
+          return await bound.all<T>();
+        } finally {
+          completeGate?.();
+        }
+      },
+      raw: async () => {
+        const completeGate = await beforeRead();
+        try {
+          return await sqliteRawRows(bound);
+        } finally {
+          completeGate?.();
+        }
+      },
+    };
+  }
+
+  batch<T = unknown>(statements: readonly ControlD1PreparedStatement[]): Promise<readonly ControlD1Result<T>[]> {
     this.writeCount += 1;
     return this.delegate.batch<T>(statements);
   }
@@ -1893,7 +2260,6 @@ class PendingAccountsSchemaReadD1 implements D1Database {
     return this.delegate.exec(query);
   }
 }
-
 
 test("staging request phase diagnostics locate pending Accounts initialization without changing its deadline", async () => {
   const delayedDb = new PendingAccountsSchemaReadD1(
@@ -1971,6 +2337,426 @@ test("staging request phase diagnostics locate pending Accounts initialization w
     delayedDb.releaseSchemaRead();
     await flushMicrotasks();
     jest.useRealTimers();
+    infoSpy.mockRestore();
+    warnSpy.mockRestore();
+  }
+});
+
+test("platform GET Run separates an Accounts init gate from a post-init Plan read stall", async () => {
+  const subject = "tsub_issue444_platform_run";
+  const sessionId = "sess_issue444_platform_run";
+  const sessionSalt = "issue444-platform-run-session-salt";
+  const runId = "plan_issue444_platform_run";
+  const now = Date.now();
+  const rawAccountsDb = await versionedAccountsDb();
+  const accountWriter = new D1AccountsStore(rawAccountsDb, {
+    sessionHashSalt: sessionSalt,
+    schemaMode: "predeployed",
+  });
+  await accountWriter.saveAccount({ subject, createdAt: now, updatedAt: now });
+  await accountWriter.saveAccountSession({
+    sessionId,
+    subject,
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+
+  const rawControlDb = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(rawControlDb);
+  // Predeployed request reads co-read the operator-maintenance singleton.
+  // Seed its valid released state using the same canonical APIs as store tests.
+  const maintenanceFence = await acquireControlD1MaintenanceFence(rawControlDb, {
+    sourceCommit: "a".repeat(40),
+    manifestDigest: `sha256:${"b".repeat(64)}`,
+    environment: "test",
+    databaseRole: "in_place",
+    releasePolicy: "in_place",
+  }, "2026-10-17T00:00:00.000Z");
+  await releaseControlD1MaintenanceFence(
+    rawControlDb, maintenanceFence, "2026-10-17T00:00:01.000Z",
+  );
+  const controlStore = new CloudflareD1OpenTofuControlStore(rawControlDb);
+  const seeded = await seedCapsuleModel(controlStore, {
+    workspaceId: "ws_issue444_platform_run",
+    capsuleId: "cap_issue444_platform_run",
+  });
+  await controlStore.putWorkspaceMember({
+    id: "member_issue444_platform_run",
+    workspaceId: seeded.workspace.id,
+    accountId: subject,
+    status: "active",
+    roles: ["owner"],
+    createdAt: seeded.workspace.createdAt,
+    updatedAt: seeded.workspace.updatedAt,
+  });
+  const completedPlan: PlanRun = {
+    id: runId,
+    workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id,
+    source: {
+      kind: "git",
+      url: seeded.source.url,
+      ref: seeded.source.defaultRef,
+      modulePath: seeded.snapshot.path,
+    },
+    sourceDigest: seeded.snapshot.archiveDigest,
+    operation: "update",
+    runnerProfileId: "fixture-runner",
+    variablesDigest: "fixture-variables-digest",
+    requiredProviders: [],
+    status: "succeeded",
+    policy: { status: "passed", reasons: [], checkedAt: now },
+    policyDecisionDigest: "fixture-policy-decision",
+    auditEvents: [],
+    createdAt: now,
+    updatedAt: now,
+    startedAt: now - 1,
+    finishedAt: now,
+    sourceSnapshotId: seeded.snapshot.id,
+  };
+  await controlStore.putPlanRun(completedPlan);
+
+  const accountDb = new CountingAccountsD1(rawAccountsDb);
+  const controlDb = new PendingPlanRunReadD1(rawControlDb);
+  // Match the existing HTTPS worker fixtures: one synthetic signing key is
+  // shared by both local envs; the production HTTPS signing guard stays active.
+  const oidcKeyPair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const oidcPrivateJwk = await crypto.subtle.exportKey("jwk", oidcKeyPair.privateKey);
+  let bindingIoCount = 0;
+  const unexpectedBindingIo = (): never => {
+    bindingIoCount += 1;
+    throw new Error("completed Run reads must not access R2 or coordination transport");
+  };
+  const baseBindings = {
+    TAKOSUMI_ACCOUNTS_DB: accountDb,
+    R2_ARTIFACTS: {
+      get: unexpectedBindingIo, put: unexpectedBindingIo, head: unexpectedBindingIo,
+      list: unexpectedBindingIo, delete: unexpectedBindingIo,
+    },
+    R2_BACKUPS: {
+      get: unexpectedBindingIo, put: unexpectedBindingIo, head: unexpectedBindingIo,
+      list: unexpectedBindingIo, delete: unexpectedBindingIo,
+    },
+    COORDINATION: {
+      idFromName: (name: string) => name,
+      get: () => ({ fetch: unexpectedBindingIo }),
+    },
+    TAKOSUMI_CONTROL_DB: controlDb,
+    TAKOSUMI_CONTROL_D1_SCHEMA_MODE: "predeployed",
+    TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+    TAKOSUMI_ACCOUNTS_ISSUER: "https://app.example.test",
+    TAKOSUMI_ACCOUNT_SESSION_HASH_SALT: sessionSalt,
+    TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK: JSON.stringify(oidcPrivateJwk),
+    TAKOSUMI_ACCOUNTS_ES256_KEY_ID: "issue444-platform-run-test-key",
+    TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET:
+      "issue444-platform-run-test-pairwise-secret",
+    TAKOSUMI_SECRET_STORE_KEY: "issue444-platform-run-test-storage-encryption-key",
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "issue444-platform-run-test-operator-token",
+    TAKOSUMI_ENVIRONMENT: "staging",
+    TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS: "true",
+  } satisfies Parameters<typeof platformWorker.fetch>[1];
+  const request = (probeId: string) => new Request(
+    `https://app.example.test/api/v1/runs/${runId}`,
+    {
+      method: "GET",
+      headers: {
+        origin: "https://app.example.test",
+        "x-takosumi-account-session": sessionId,
+        "x-takosumi-request-probe-id": probeId,
+      },
+    },
+  );
+  const phaseRows: Record<string, unknown>[] = [];
+  const infoSpy = spyOn(console, "info").mockImplementation((value) => {
+    if (typeof value !== "string") return;
+    try {
+      const row = JSON.parse(value) as Record<string, unknown>;
+      if (row.event === "request_phase") phaseRows.push(row);
+    } catch {
+      // Retain only the fixed-vocabulary phase records in memory.
+    }
+  });
+  const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+  const rowsFor = (probeId: string) => phaseRows
+    .filter((row) => row.probeId === probeId);
+  const releaseReads: Array<() => void> = [];
+  const pendingReadCompletions: Array<Promise<void>> = [];
+  const pendingRouteResponses: Array<Promise<Response>> = [];
+  let downstreamResponsePromise: Promise<Response> | undefined;
+  let downstreamSettlementObserver: Promise<void> | undefined;
+  const realSetTimeout = setTimeout;
+  const realClearTimeout = clearTimeout;
+  const readinessCleanups: Array<() => void> = [];
+  const prepareGateWait = (started: Promise<void>) => {
+    // Arm while real timers are active: capturing setTimeout alone does not
+    // bypass Bun's fake timer heap. This real timer also yields to native I/O.
+    let realExpired = false;
+    let expire: ((reached: boolean) => void) | undefined;
+    const readinessExpired = new Promise<boolean>((resolve) => { expire = resolve; });
+    const timer = realSetTimeout(() => {
+      realExpired = true;
+      expire?.(false);
+    }, 1_000);
+    const cleanup = (): void => {
+      realClearTimeout(timer);
+      expire?.(false);
+    };
+    readinessCleanups.push(cleanup);
+    return async (pending: Promise<Response>): Promise<void> => {
+      const fakeNow = Date.now();
+      try {
+        // Observe rejections immediately. A response before the exact storage
+        // gate or a real readiness timeout is failure, never successful entry.
+        const reached = await Promise.race([
+          started.then(() => !realExpired),
+          pending.then(() => false),
+          readinessExpired,
+        ]);
+        expect(reached).toBe(true);
+        expect(Date.now()).toBe(fakeNow);
+      } finally {
+        cleanup();
+      }
+    };
+  };
+  const drainLateRouteContinuation = async (gate: PausedControlRead): Promise<void> => {
+    // `completed` is signaled only after the actual bound first/all/raw promise
+    // settles (or after its intentional rejection). Switch to real timers for
+    // one macrotask checkpoint so queued store/operation/route reactions drain;
+    // the fixed fake-time deadline has already won and its timer is cleared.
+    await gate.completed;
+    jest.useRealTimers();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    // Leave real timers active so the next gate can arm its real readiness
+    // timeout before re-enabling that request's separate fake deadline.
+  };
+  const realSetImmediate = setImmediate;
+  const realClearImmediate = clearImmediate;
+  const flushRouteResponse = async (): Promise<void> => {
+    const fakeNow = Date.now();
+    let immediate: ReturnType<typeof setImmediate> | undefined;
+    try {
+      await new Promise<void>((resolve) => { immediate = realSetImmediate(resolve); });
+    } finally {
+      if (immediate !== undefined) realClearImmediate(immediate);
+    }
+    expect(Date.now()).toBe(fakeNow);
+  };
+  const expectDeadlineResponse = async (
+    pending: Promise<Response>,
+  ): Promise<Response> => {
+    let settled = false;
+    const observer = pending.then(
+      () => { settled = true; },
+      () => { settled = true; },
+    );
+    jest.advanceTimersByTime(4_999);
+    await flushRouteResponse();
+    expect(settled).toBe(false);
+    jest.advanceTimersByTime(1);
+    await flushRouteResponse();
+    expect(settled).toBe(true);
+    const response = await pending;
+    await observer;
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual(expect.objectContaining({
+      error: expect.objectContaining({ code: "feature_unavailable" }),
+    }));
+    return response;
+  };
+  try {
+    const pendingAccountsDb = new PendingAccountsSchemaReadD1(rawAccountsDb);
+    const initEnv = { ...baseBindings, TAKOSUMI_ACCOUNTS_DB: pendingAccountsDb };
+    const initTasks: Promise<unknown>[] = [];
+    const initContext = {
+      waitUntil(promise: Promise<unknown>): void { initTasks.push(promise); },
+    };
+    let initResponsePromise: Promise<Response> | undefined;
+    jest.useFakeTimers();
+    try {
+      const initProbe = "a444000000000001";
+      initResponsePromise = platformWorker.fetch(request(initProbe), initEnv, initContext);
+      await flushMicrotasks();
+      expect(pendingAccountsDb.schemaReadCount).toBe(1);
+      expect(initTasks).toHaveLength(1);
+      jest.advanceTimersByTime(5_000);
+      await flushMicrotasks();
+      const initResponse = await initResponsePromise;
+      expect(initResponse.status).toBe(503);
+      expect(controlDb.planRunReadCount).toBe(0);
+      expect(pendingAccountsDb.writeCount).toBe(0);
+      expect(rowsFor(initProbe)).toContainEqual(expect.objectContaining({
+        phase: "accounts_init", outcome: "pending", route: "/api/v1/runs/{runId}",
+      }));
+      expect(rowsFor(initProbe)).toContainEqual(expect.objectContaining({
+        phase: "accounts_init", outcome: "rejected", route: "/api/v1/runs/{runId}",
+      }));
+      expect(rowsFor(initProbe)).not.toContainEqual(expect.objectContaining({
+        phase: "control_dispatch", outcome: "started",
+      }));
+      pendingAccountsDb.releaseSchemaRead();
+      await initTasks[0];
+    } finally {
+      pendingAccountsDb.releaseSchemaRead();
+      await initResponsePromise?.catch(() => undefined);
+      await Promise.all(initTasks.map((task) => task.catch(() => undefined)));
+      jest.useRealTimers();
+    }
+
+    const routeEnv = { ...baseBindings, TAKOSUMI_ACCOUNTS_DB: accountDb };
+    // The actual same-env service seeds its default runner profile at boot.
+    // Await that canonical initialization; never reset or filter the counter.
+    const initializedService = await cachedDeployControlService(routeEnv);
+    const initializedProfiles = await initializedService.operations.listRunnerProfiles();
+    expect(await cachedDeployControlService(routeEnv)).toBe(initializedService);
+    expect(initializedProfiles.runnerProfiles).toHaveLength(1);
+    const controlWritesAtPostInitStart = controlDb.writeCount;
+    expect(controlWritesAtPostInitStart).toBe(1);
+    expect(accountDb.writeCount).toBe(0);
+    expect(bindingIoCount).toBe(0);
+
+    const baselineProbe = "a444000000000002";
+    const baselineResponse = await platformWorker.fetch(request(baselineProbe), routeEnv);
+    const baselineBody = await baselineResponse.text();
+    expect(baselineResponse.status, baselineBody).toBe(200);
+    const baselinePlanReads = controlDb.planRunReadCount;
+    const baselineAccountWrites = accountDb.writeCount;
+    const baselineControlWrites = controlDb.writeCount - controlWritesAtPostInitStart;
+    expect(baselinePlanReads).toBeGreaterThan(0);
+    expect(baselineAccountWrites).toBe(0);
+    expect(baselineControlWrites).toBe(0);
+
+    const downstreamProbe = "a444000000000003";
+    const gate = controlDb.pauseNextPlanRunRead();
+    releaseReads.push(gate.release);
+    pendingReadCompletions.push(gate.completed);
+    let downstreamSettled = false;
+    const waitForDownstreamGate = prepareGateWait(gate.started);
+    jest.useFakeTimers();
+    expect(jest.getTimerCount()).toBe(0);
+    downstreamResponsePromise = platformWorker.fetch(request(downstreamProbe), routeEnv);
+    pendingRouteResponses.push(downstreamResponsePromise);
+    downstreamSettlementObserver = downstreamResponsePromise.then(
+      () => { downstreamSettled = true; },
+      () => { downstreamSettled = true; },
+    );
+    await waitForDownstreamGate(downstreamResponsePromise);
+    expect(controlDb.planRunReadCount).toBeGreaterThan(baselinePlanReads);
+
+    // A held request owns only its local deadline. A second exact GET still
+    // returns the baseline response while the first SELECT remains gated.
+    const parallelProbe = "a444000000000004";
+    const parallelResponse = await platformWorker.fetch(request(parallelProbe), routeEnv);
+    expect(parallelResponse.status).toBe(200);
+    expect(await parallelResponse.text()).toBe(baselineBody);
+    expect(controlDb.writeCount - controlWritesAtPostInitStart).toBe(baselineControlWrites);
+    expect(accountDb.writeCount).toBe(baselineAccountWrites);
+
+    const workspaceReadsBeforeLateRun = controlDb.workspaceReadCount;
+    const memberReadsBeforeLateRun = controlDb.memberReadCount;
+    const downstreamResponse = await expectDeadlineResponse(downstreamResponsePromise);
+    await downstreamSettlementObserver;
+    expect(downstreamSettled).toBe(true);
+    expect(rowsFor(downstreamProbe)).toContainEqual(expect.objectContaining({
+      phase: "accounts_init", outcome: "fulfilled", route: "/api/v1/runs/{runId}",
+    }));
+    expect(rowsFor(downstreamProbe)).toContainEqual(expect.objectContaining({
+      phase: "control_dispatch", outcome: "started", route: "/api/v1/runs/{runId}",
+    }));
+    expect(rowsFor(downstreamProbe)).toContainEqual(expect.objectContaining({
+      phase: "control_dispatch", outcome: "pending", route: "/api/v1/runs/{runId}",
+    }));
+    expect(rowsFor(downstreamProbe)).toContainEqual(expect.objectContaining({
+      phase: "control_dispatch", outcome: "fulfilled", route: "/api/v1/runs/{runId}",
+    }));
+    expect(downstreamResponse.status).toBe(503);
+
+    // Release the underlying read only after the response has settled. The
+    // expired route must not start its Workspace/member checks afterward.
+    gate.release();
+    await drainLateRouteContinuation(gate);
+    expect(controlDb.workspaceReadCount).toBe(workspaceReadsBeforeLateRun);
+    expect(controlDb.memberReadCount).toBe(memberReadsBeforeLateRun);
+    downstreamResponsePromise = undefined;
+    downstreamSettlementObserver = undefined;
+
+    const lateRejectGate = controlDb.pauseNextPlanRunRead();
+    releaseReads.push(lateRejectGate.release);
+    pendingReadCompletions.push(lateRejectGate.completed);
+    const lateRejectProbe = "a444000000000005";
+    const waitForLateRejectGate = prepareGateWait(lateRejectGate.started);
+    jest.useFakeTimers();
+    expect(jest.getTimerCount()).toBe(0);
+    const lateRejectResponse = platformWorker.fetch(request(lateRejectProbe), routeEnv);
+    pendingRouteResponses.push(lateRejectResponse);
+    await waitForLateRejectGate(lateRejectResponse);
+    const workspaceReadsBeforeLateReject = controlDb.workspaceReadCount;
+    const memberReadsBeforeLateReject = controlDb.memberReadCount;
+    await expectDeadlineResponse(lateRejectResponse);
+    lateRejectGate.reject(new Error("fixture late rejection"));
+    await drainLateRouteContinuation(lateRejectGate);
+    expect(controlDb.workspaceReadCount).toBe(workspaceReadsBeforeLateReject);
+    expect(controlDb.memberReadCount).toBe(memberReadsBeforeLateReject);
+
+    // If Workspace loading itself finishes after the same deadline, the guard
+    // after that await prevents a new member read from starting.
+    const workspaceGate = controlDb.pauseNextWorkspaceRead();
+    releaseReads.push(workspaceGate.release);
+    pendingReadCompletions.push(workspaceGate.completed);
+    const workspaceProbe = "a444000000000006";
+    const waitForWorkspaceGate = prepareGateWait(workspaceGate.started);
+    jest.useFakeTimers();
+    expect(jest.getTimerCount()).toBe(0);
+    const workspaceResponse = platformWorker.fetch(request(workspaceProbe), routeEnv);
+    pendingRouteResponses.push(workspaceResponse);
+    await waitForWorkspaceGate(workspaceResponse);
+    const memberReadsBeforeWorkspaceRelease = controlDb.memberReadCount;
+    await expectDeadlineResponse(workspaceResponse);
+    workspaceGate.release();
+    await drainLateRouteContinuation(workspaceGate);
+    expect(controlDb.memberReadCount).toBe(memberReadsBeforeWorkspaceRelease);
+
+    // If membership loading is already in flight, its late result must not
+    // start further authorization reads/writes after the already returned 503.
+    const memberGate = controlDb.pauseNextMemberRead();
+    releaseReads.push(memberGate.release);
+    pendingReadCompletions.push(memberGate.completed);
+    const memberProbe = "a444000000000007";
+    const waitForMemberGate = prepareGateWait(memberGate.started);
+    jest.useFakeTimers();
+    expect(jest.getTimerCount()).toBe(0);
+    const memberResponse = platformWorker.fetch(request(memberProbe), routeEnv);
+    pendingRouteResponses.push(memberResponse);
+    await waitForMemberGate(memberResponse);
+    const readsBeforeMemberRelease = {
+      plan: controlDb.planRunReadCount,
+      workspace: controlDb.workspaceReadCount,
+      member: controlDb.memberReadCount,
+    };
+    await expectDeadlineResponse(memberResponse);
+    memberGate.release();
+    await drainLateRouteContinuation(memberGate);
+    expect(controlDb.planRunReadCount).toBe(readsBeforeMemberRelease.plan);
+    expect(controlDb.workspaceReadCount).toBe(readsBeforeMemberRelease.workspace);
+    expect(controlDb.memberReadCount).toBe(readsBeforeMemberRelease.member);
+    expect(accountDb.writeCount).toBe(baselineAccountWrites);
+    expect(controlDb.writeCount - controlWritesAtPostInitStart).toBe(baselineControlWrites);
+    expect(bindingIoCount).toBe(0);
+  } finally {
+    for (const cleanup of readinessCleanups) cleanup();
+    for (const release of releaseReads) release();
+    await downstreamResponsePromise?.catch(() => undefined);
+    await Promise.all(pendingReadCompletions);
+    await Promise.all(pendingRouteResponses.map((pending) => pending.catch(() => undefined)));
+    await downstreamSettlementObserver;
+    jest.useRealTimers();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await flushMicrotasks();
     infoSpy.mockRestore();
     warnSpy.mockRestore();
   }
