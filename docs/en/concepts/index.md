@@ -63,8 +63,9 @@ module. Cloudflare, AWS, Kubernetes, and Takoform are all ordinary providers.
 Takosumi delivers provider connections to the runner only for the Run and leaves
 provider state and provider-side objects to that provider's contract.
 
-The earlier Resource Shape / Form Host path is retired. Only the internal schema and
-records for moving existing data remain (see the [Resource migration note](./resources.md)).
+The earlier Resource Shape / Form Host path is retired, and the old `/v1` HTTP routes
+always return `404`. Only the internal schema and records for existing data, and
+migration-only processing, remain (see the [Resource migration note](./resources.md)).
 
 ## Connecting deployments
 

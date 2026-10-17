@@ -58,8 +58,9 @@ Cloudflare、AWS、Kubernetes、Takoform などはすべて通常の provider �
 provider の接続情報を ProviderConnection / ProviderBinding から Run の間だけ runner に
 渡し、provider の state と実体は provider 側の契約に任せます。
 
-以前あった Resource Shape / Form Host の仕組みは廃止しました。既存のデータを移すための
-内部の schema と記録だけが残っています（[Resource の移行メモ](./resources.md)）。
+以前あった Resource Shape / Form Host の仕組みは廃止し、旧 `/v1` HTTP は常に `404` を返します。
+既存のデータを扱うための内部の schema と記録、移行専用の処理だけが残っています
+（[Resource の移行メモ](./resources.md)）。
 
 ## デプロイしたものをつなぐ
 

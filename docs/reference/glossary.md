@@ -19,7 +19,7 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | 変更内容の検証 ID  | planDigest                           | 確認した計画とデプロイする計画が同じだと確かめる値です。 |
 | デプロイ履歴       | Run の一覧                           | 変更の確認・承認・デプロイを、新しい順に並べます。   |
 | 更新履歴           | StateVersion の一覧                  | サービスの 更新 タブで、デプロイした版が並びます。   |
-| リソース           | OpenTofu の resource（state に記録したもの） | サービスがクラウドに作った実物です。更新 タブの デプロイ済みリソース に、版ごとの一覧が出ます。 |
+| リソース           | 適用した plan に記録された OpenTofu の resource | サービスが作った resource の記録です。更新タブの「デプロイ済みリソース」に、現在の版の一覧が出ます。ライブの稼働状態ではありません。 |
 | ホスト済みリソース | ホスト環境が提供する読み取り専用の一覧 | ワークスペースで管理されているリソースを確かめる画面です。ホスト環境が対応している場合だけ使えます。 |
 | 操作履歴           | Activity / AuditEvent                | 誰がいつ何をしたかが並びます。                       |
 | この状態に戻す     | StateVersion からの復元              | 過去の状態を選び直す操作です。                       |
@@ -63,7 +63,7 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | Output                 | Capsule が外に公開する、秘密でない値です。                                                                            | [状態と出力](../concepts/state-and-outputs.md) |
 | OutputShare            | Workspace をまたいで Output を渡す記録です。受け取る側が承認して有効になります。                                      | [状態と出力](../concepts/state-and-outputs.md) |
 | AuditEvent             | 誰が、何に対して、何をして、結果どうなったかを 1 件ずつ残した記録です。                                               | [実行モデル](../concepts/run-model.md)         |
-| ledger                 | Run、StateVersion、監査の記録を積み上げていく保存先です。入口が違っても記録先は同じです。                                    | [実行モデル](../concepts/run-model.md)         |
+| ledger                 | Run、StateVersion、Output、監査の記録を積み上げていく保存先です。入口が違っても記録先は同じです。         | [実行モデル](../concepts/run-model.md)         |
 
 ## 認証情報
 
@@ -129,9 +129,10 @@ curl -s https://takosumi.example.com/.well-known/takosumi
 
 ## 旧 Resource / Form の移行用語
 
-次の語は、廃止した Resource Shape / Form Host の API、保存データ、移行の runbook にだけ残る
-内部の語です。いまの使い方には出てきません。dashboard の **リソース**（サービスがクラウドに
-作った実物）とは別のものです。現在は、Git の module と通常の OpenTofu provider を使います。
+次の語は、廃止した Resource Shape / Form Host の API、保存データ、移行の runbook に残る内部の
+語と、Takoform などの外部 Host の語です。Takosumi のいまの使い方には出てきません。dashboard の
+**リソース**（サービスが作った resource の記録）とは別のものです。現在は、Git の module と
+通常の OpenTofu provider を使います。
 
 | 用語              | 意味                                                                                                          | 詳しい説明                                  |
 | ----------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
