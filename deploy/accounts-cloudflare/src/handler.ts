@@ -171,6 +171,7 @@ type PrivateFinancialControlOptions = Parameters<typeof createAccountsFinancialC
 export interface PrivateAccountsFinancialControlInputs {
   readonly receivers: NonNullable<PrivateFinancialControlOptions["receivers"]>;
   readonly eventEvidence: NonNullable<PrivateFinancialControlOptions["eventEvidence"]>;
+  readonly genesisCoverage?: PrivateFinancialControlOptions["genesisCoverage"];
 }
 
 export interface PrivateAccountsFinancialSourceInputs {
@@ -192,11 +193,23 @@ type CredentialContextReadRequest = Parameters<
   NonNullable<AccountsFinancialEventEvidenceOptions["keyCustody"]>["readCredentialContext"]
 >[0];
 
+/** Code-selected in-process construction only. These actual same-module
+ * functions/readers are not source qualification or a serialized capability. */
+interface PrivateAccountsFinancialSourceConstruction {
+  readonly createAccountsFinancialControlSource: typeof createAccountsFinancialControlSource;
+  readonly FinancialSourceUnavailable: typeof FinancialSourceUnavailable;
+  readonly core: Readonly<Pick<WorkspaceFinancialSourceService,
+    "captureFinancialSourceSnapshot" | "assertFinancialSourceSnapshotCurrent" | "readEnrollmentOriginal">>;
+}
+
 export interface PrivateAccountsFinancialSourceOrigin<TEnv extends CloudflareWorkerEnv> {
   /** Supplied by the same canonical Control composition, never a copied facade. */
   readonly coreFinancialSource: (env: TEnv) => Promise<WorkspaceFinancialSourceService | undefined>;
   /** An owner-captured original C0/registration/key/head/clock set, not request data. */
-  readonly inputs?: (env: TEnv) => Promise<PrivateAccountsFinancialSourceInputs | undefined>;
+  readonly inputs?: (
+    env: TEnv,
+    construction: PrivateAccountsFinancialSourceConstruction,
+  ) => Promise<PrivateAccountsFinancialSourceInputs | undefined>;
   /** No store, env, configuration, token, or dispatch capability crosses this seam. */
   readonly observe?: (source: PrivateAccountsFinancialSourceFacade) => void | Promise<void>;
 }
@@ -931,6 +944,46 @@ function usesIdentityOnlyAccountsHandler(pathname: string): boolean {
   return false;
 }
 
+function capturePrivateFinancialConstruction(core: WorkspaceFinancialSourceService): {
+  readonly construction: PrivateAccountsFinancialSourceConstruction;
+  readonly assertReaderIdentity: () => void;
+} {
+  // Inspect data slots without invoking a replaced getter. The Root bridge and
+  // actual C factory must capture the same functions on this exact instance.
+  const readSlot = (key: keyof PrivateAccountsFinancialSourceConstruction["core"]): unknown => {
+    let owner: object | null = core;
+    while (owner !== null) {
+      const slot = Object.getOwnPropertyDescriptor(owner, key);
+      if (slot) return "value" in slot ? slot.value : undefined;
+      owner = Object.getPrototypeOf(owner);
+    }
+    return undefined;
+  };
+  const capture = readSlot("captureFinancialSourceSnapshot") as WorkspaceFinancialSourceService["captureFinancialSourceSnapshot"];
+  const assertCurrent = readSlot("assertFinancialSourceSnapshotCurrent") as WorkspaceFinancialSourceService["assertFinancialSourceSnapshotCurrent"];
+  const readOriginal = readSlot("readEnrollmentOriginal") as WorkspaceFinancialSourceService["readEnrollmentOriginal"];
+  const assertReaderIdentity = () => {
+    if (typeof capture !== "function" || typeof assertCurrent !== "function" || typeof readOriginal !== "function" ||
+        readSlot("captureFinancialSourceSnapshot") !== capture ||
+        readSlot("assertFinancialSourceSnapshotCurrent") !== assertCurrent ||
+        readSlot("readEnrollmentOriginal") !== readOriginal)
+      throw new FinancialSourceUnavailable("source_unavailable");
+  };
+  assertReaderIdentity();
+  return Object.freeze({
+    assertReaderIdentity,
+    construction: Object.freeze({
+      createAccountsFinancialControlSource,
+      FinancialSourceUnavailable,
+      core: Object.freeze<PrivateAccountsFinancialSourceConstruction["core"]>({
+        captureFinancialSourceSnapshot: (value) => Reflect.apply(capture, core, [value]),
+        assertFinancialSourceSnapshotCurrent: (value) => Reflect.apply(assertCurrent, core, [value]),
+        readEnrollmentOriginal: (value) => Reflect.apply(readOriginal, core, [value]),
+      }),
+    }),
+  });
+}
+
 function capturePrivateFinancialEventEvidence(selected: AccountsFinancialEventEvidenceOptions): {
   readonly eventEvidence: AccountsFinancialEventEvidenceOptions;
   readonly now: NonNullable<AccountsFinancialSourceOptions["now"]>;
@@ -1010,7 +1063,14 @@ async function installPrivateFinancialSourceOrigin<TEnv extends CloudflareWorker
     if (typeof origin.inputs !== "function" || typeof origin.observe !== "function" ||
         typeof origin.coreFinancialSource !== "function" || !clients || !isCurrent())
       throw new FinancialSourceUnavailable("source_unavailable");
-    const supplied = await Reflect.apply(origin.inputs, origin, [env]);
+    // Resolve the canonical instance before the owner constructs its private
+    // G reader. This captures construction only; owner inputs must not dispatch.
+    const core = await Reflect.apply(origin.coreFinancialSource, origin, [env]);
+    if (!isCurrent() || !(core instanceof WorkspaceFinancialSourceService))
+      throw new FinancialSourceUnavailable("source_unavailable");
+    const capturedConstruction = capturePrivateFinancialConstruction(core);
+    const supplied = await Reflect.apply(origin.inputs, origin, [env, capturedConstruction.construction]);
+    capturedConstruction.assertReaderIdentity();
     if (!isCurrent() || !supplied || !supplied.challenges || !supplied.eventEvidence)
       throw new FinancialSourceUnavailable("source_unavailable");
     const registration = parseFinancialSourceRegistration(structuredClone(supplied.registration));
@@ -1023,6 +1083,7 @@ async function installPrivateFinancialSourceOrigin<TEnv extends CloudflareWorker
       readonly eventEvidence: NonNullable<PrivateFinancialControlOptions["eventEvidence"]>;
       readonly receivers: NonNullable<PrivateFinancialControlOptions["receivers"]>;
       readonly now: NonNullable<PrivateFinancialControlOptions["now"]>;
+      readonly genesisCoverage?: PrivateFinancialControlOptions["genesisCoverage"];
     } | undefined;
     if (controlInput !== undefined) {
       if (!controlInput.eventEvidence || !controlInput.receivers)
@@ -1037,6 +1098,7 @@ async function installPrivateFinancialSourceOrigin<TEnv extends CloudflareWorker
         eventEvidence: Object.freeze({...selectedEvidence.eventEvidence, registration: controlRegistration}),
         receivers: controlReceivers,
         now: selectedEvidence.now,
+        ...(controlInput.genesisCoverage === undefined ? {} : {genesisCoverage: controlInput.genesisCoverage}),
       });
     }
     if (typeof readChallenge !== "function" ||
@@ -1047,14 +1109,12 @@ async function installPrivateFinancialSourceOrigin<TEnv extends CloudflareWorker
     const challenges: NonNullable<AccountsFinancialSourceOptions["challenges"]> = Object.freeze({
       read: async (ref: string) => await Reflect.apply(readChallenge, challengeOwner, [ref]),
     });
-    const core = await Reflect.apply(origin.coreFinancialSource, origin, [env]);
-    if (!isCurrent() || !(core instanceof WorkspaceFinancialSourceService))
-      throw new FinancialSourceUnavailable("source_unavailable");
     // Core's actual Control original has an independent registration/full key.
     // Accounts registration must never be projected into Control event evidence.
     // A and C consume the captured expiry-clock callbacks through their existing
     // now options. No anchoredClock/default or policy string proves that those
     // callbacks have genuine Root/Financial clock custody.
+    capturedConstruction.assertReaderIdentity();
     const control = createAccountsFinancialControlSource({service: core, ...selectedControl});
     const producer = createAccountsFinancialSource({
       store, issuer: normalizeIssuer(issuer), clients, registration, challenges, control,

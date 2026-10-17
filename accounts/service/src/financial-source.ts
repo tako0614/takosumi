@@ -13,12 +13,12 @@ import type {
   FinancialSourceControlEvidence,
 } from "./identity-state.ts";
 import {
-  canonicalFinancialSourceJson, financialSourceRef,
+  canonicalFinancialSourceJson, financialSourceRef, financialSourceDigest,
   financialSourceEventDigest, hashFinancialSourceValue, parseFinancialSourceEvent,
   materializeFinancialSourceEvent, parseFinancialIdentityChallenge,
   parseFinancialSourceRegistration, parseFinancialSourceReceipt,
   financialReceiptMatches, FINANCIAL_SOURCE_MAX_PAGE,
-  type FinancialSourceRegistration,
+  type FinancialSourceRegistration, type FinancialSourceDigest,
   type FinancialSourceMaterialization, type FinancialSourceReceipt, type FinancialSourceEvent,
 } from "./financial-source-contract.ts";
 import { hostedGrantIsActive, hostedOpaqueId } from "./hosted-oidc-profile.ts";
@@ -37,6 +37,7 @@ import type {
   WorkspaceFinancialSourceService, WorkspaceFinancialSourceSnapshot,
   WorkspaceFinancialSourceHead, WorkspaceFinancialRawEvent,
   WorkspaceFinancialMaterialization,
+  WorkspaceFinancialEnrollmentOriginal,
 } from "../../../core/domains/workspaces/financial-source.ts";
 
 const checkpointLifetime = 1_000;
@@ -92,6 +93,66 @@ export interface AccountsFinancialControlSnapshot {
 export interface AccountsFinancialControl {
   capture(input: { readonly workspaceId: string; readonly accountId: TakosumiSubject }): Promise<AccountsFinancialControlSnapshot | undefined>;
   assertCurrent(snapshot: AccountsFinancialControlSnapshot): Promise<boolean>;
+}
+
+/** Private composition data. These descriptors/receipts do not qualify their
+ * caller, the selected source or its actual primary/realm/epoch. */
+export interface AccountsFinancialGenesisSource {
+  readonly registration: FinancialSourceRegistration;
+  readonly registrationDigest: FinancialSourceDigest;
+  readonly qualificationRef: string;
+  readonly sourceSchemaDigest: FinancialSourceDigest;
+  readonly sourceCredentialRef: string;
+  readonly clockPolicyRef: string;
+  readonly originRef: string;
+}
+export interface AccountsFinancialGenesisPeer {
+  readonly receiverRef: string;
+  readonly targetRef: string;
+  readonly source: AccountsFinancialGenesisSource;
+  readonly affectedRef: string;
+  readonly genesisQualificationRef: string;
+}
+export interface AccountsFinancialGenesisCommand {
+  readonly admissionRef: string;
+  readonly commandRef: string;
+  readonly receiptRef: string;
+  readonly enrollmentOriginal: WorkspaceFinancialEnrollmentOriginal;
+}
+export interface AccountsFinancialGenesisReceipt {
+  readonly admissionRef: string;
+  readonly commandRef: string;
+  readonly receiptRef: string;
+}
+export type AccountsFinancialGenesisPeerRead = Readonly<{
+  receiverRef: string;
+  targetRef: string;
+  command: AccountsFinancialGenesisCommand;
+} & (
+  | {status: "found"; receipt: AccountsFinancialGenesisReceipt}
+  | {status: "absent"}
+)>;
+export interface AccountsFinancialGenesisCoveragePort {
+  readonly peers: readonly AccountsFinancialGenesisPeer[];
+  /** The qualified Root bridge selects retained commands before dispatch,
+   * reads ONLY those G originals and checks its actual current admission.
+   * Unknown/conflict reject; only proven exact-command absence is absent.
+   * This is not a remote atomic check or Financial's final local CAS. */
+  readCurrentOriginals(input: Readonly<{
+    coreSnapshot: WorkspaceFinancialSourceSnapshot;
+    coreOriginal: WorkspaceFinancialEnrollmentOriginal;
+  }>): Promise<readonly AccountsFinancialGenesisPeerRead[]>;
+}
+
+interface AccountsFinancialGenesisBundle {
+  readonly family: "G";
+  readonly core: WorkspaceFinancialSourceSnapshot;
+  readonly coreOriginal: WorkspaceFinancialEnrollmentOriginal;
+  readonly peers: readonly {
+    readonly configured: AccountsFinancialGenesisPeer;
+    readonly command: AccountsFinancialGenesisCommand;
+    readonly receipt: AccountsFinancialGenesisReceipt;
+  }[];
 }
 
 /** Detached original data only. The caller must separately qualify the fixed
@@ -152,6 +213,124 @@ export interface AccountsFinancialEventEvidenceOptions {
 
 export class FinancialSourceUnavailable extends Error {
   constructor(readonly code: "source_unavailable" | "invalid_grant" | "invalid_challenge" | "source_pending" | "source_conflict") { super(code); }
+}
+
+function genesisConflict(): never { throw new FinancialSourceUnavailable("source_conflict"); }
+
+function genesisRecord(value: unknown, keys: readonly string[]): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+    (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) ||
+    Reflect.ownKeys(value).length !== keys.length) return genesisConflict();
+  const result: Record<string, unknown> = {};
+  for (const key of keys) {
+    const field = Object.getOwnPropertyDescriptor(value, key);
+    if (!field || !("value" in field)) return genesisConflict();
+    result[key] = field.value;
+  }
+  return result;
+}
+
+function genesisArray(value: unknown): unknown[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 8 ||
+    Reflect.ownKeys(value).length !== value.length + 1) return genesisConflict();
+  return Array.from({length: value.length}, (_, index) => {
+    const slot = Object.getOwnPropertyDescriptor(value, String(index));
+    return slot && "value" in slot ? slot.value : genesisConflict();
+  });
+}
+
+function genesisRef(value: unknown): string { return financialSourceRef(value) ? value : genesisConflict(); }
+function genesisDigest(value: unknown): FinancialSourceDigest { return financialSourceDigest(value) ? value : genesisConflict(); }
+function genesisFreeze<T>(value: T): T {
+  if (value && typeof value === "object") {
+    for (const child of Object.values(value)) genesisFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function genesisRegistration(value: unknown): FinancialSourceRegistration {
+  const row = genesisRecord(value, ["registrationRef", "incarnation", "genesisDigest", "receivers"]);
+  const receivers = genesisArray(row.receivers).map((value) => {
+    const peer = genesisRecord(value, ["receiverRef", "targetRef"]);
+    return {receiverRef: genesisRef(peer.receiverRef), targetRef: genesisRef(peer.targetRef)};
+  });
+  if (new Set(receivers.map((peer) => peer.receiverRef)).size !== receivers.length) return genesisConflict();
+  return {registrationRef: genesisRef(row.registrationRef), incarnation: genesisRef(row.incarnation),
+    genesisDigest: genesisDigest(row.genesisDigest), receivers};
+}
+
+function genesisPeer(value: unknown): AccountsFinancialGenesisPeer {
+  const peer = genesisRecord(value, ["receiverRef", "targetRef", "source", "affectedRef", "genesisQualificationRef"]);
+  const source = genesisRecord(peer.source, ["registration", "registrationDigest", "qualificationRef", "sourceSchemaDigest",
+    "sourceCredentialRef", "clockPolicyRef", "originRef"]);
+  return {receiverRef: genesisRef(peer.receiverRef), targetRef: genesisRef(peer.targetRef),
+    affectedRef: genesisRef(peer.affectedRef), genesisQualificationRef: genesisRef(peer.genesisQualificationRef),
+    source: {registration: genesisRegistration(source.registration), registrationDigest: genesisDigest(source.registrationDigest),
+      qualificationRef: genesisRef(source.qualificationRef), sourceSchemaDigest: genesisDigest(source.sourceSchemaDigest),
+      sourceCredentialRef: genesisRef(source.sourceCredentialRef), clockPolicyRef: genesisRef(source.clockPolicyRef), originRef: genesisRef(source.originRef)}};
+}
+
+function genesisOriginal(value: unknown): WorkspaceFinancialEnrollmentOriginal {
+  const row = genesisRecord(value, ["workspaceId", "sourceRef", "incarnation", "registrationJson", "enrollmentJson", "identityJson", "enrolledAt"]);
+  const json = (value: unknown, maximum: number): string => {
+    if (typeof value !== "string" || new TextEncoder().encode(value).length > maximum) return genesisConflict();
+    try { if (JSON.stringify(JSON.parse(value)) !== value) return genesisConflict(); }
+    catch { return genesisConflict(); }
+    return value;
+  };
+  if (typeof row.enrolledAt !== "string" || row.enrolledAt.length > 35 || !row.enrolledAt.endsWith("Z")) return genesisConflict();
+  try { if (new Date(row.enrolledAt).toISOString() !== row.enrolledAt) return genesisConflict(); }
+  catch { return genesisConflict(); }
+  return {workspaceId: genesisRef(row.workspaceId), sourceRef: genesisRef(row.sourceRef), incarnation: genesisRef(row.incarnation),
+    registrationJson: json(row.registrationJson, 16_384), enrollmentJson: json(row.enrollmentJson, 262_144),
+    identityJson: json(row.identityJson, 262_144), enrolledAt: row.enrolledAt};
+}
+
+function genesisCommand(value: unknown): AccountsFinancialGenesisCommand {
+  const row = genesisRecord(value, ["admissionRef", "commandRef", "receiptRef", "enrollmentOriginal"]);
+  return {admissionRef: genesisRef(row.admissionRef), commandRef: genesisRef(row.commandRef),
+    receiptRef: genesisRef(row.receiptRef), enrollmentOriginal: genesisOriginal(row.enrollmentOriginal)};
+}
+
+function genesisReceipt(value: unknown): AccountsFinancialGenesisReceipt {
+  const row = genesisRecord(value, ["admissionRef", "commandRef", "receiptRef"]);
+  return {admissionRef: genesisRef(row.admissionRef), commandRef: genesisRef(row.commandRef), receiptRef: genesisRef(row.receiptRef)};
+}
+
+function sameGenesisOriginal(left: WorkspaceFinancialEnrollmentOriginal, right: WorkspaceFinancialEnrollmentOriginal): boolean {
+  return left.workspaceId === right.workspaceId && left.sourceRef === right.sourceRef && left.incarnation === right.incarnation &&
+    left.registrationJson === right.registrationJson && left.enrollmentJson === right.enrollmentJson &&
+    left.identityJson === right.identityJson && left.enrolledAt === right.enrolledAt;
+}
+
+/** Commit exact retained UTF-8 bytes without using the public wire codec's
+ * 16KiB string limit. This does not replace any original passed to Root/G. */
+async function genesisTextCommitment(domain: string, text: string, maximumBytes: number): Promise<FinancialSourceDigest> {
+  const bytes = new Uint8Array(new TextEncoder().encode(text));
+  if (bytes.byteLength > maximumBytes || new TextDecoder().decode(bytes) !== text) return genesisConflict();
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  const sha256: FinancialSourceDigest = `sha256:${Array.from(digest, byte => byte.toString(16).padStart(2, "0")).join("")}`;
+  return hashFinancialSourceValue(domain, {utf8Bytes: bytes.byteLength, sha256});
+}
+
+async function genesisEvidenceDigest(bundle: AccountsFinancialGenesisBundle): Promise<FinancialSourceDigest> {
+  const original = bundle.coreOriginal;
+  const coreOriginal = await hashFinancialSourceValue("takosumi.accounts.control-genesis-original@v1", {
+    workspaceId: original.workspaceId, sourceRef: original.sourceRef, incarnation: original.incarnation, enrolledAt: original.enrolledAt,
+    registrationJson: await genesisTextCommitment("takosumi.accounts.control-genesis-registration-json@v1", original.registrationJson, 16_384),
+    enrollmentJson: await genesisTextCommitment("takosumi.accounts.control-genesis-enrollment-json@v1", original.enrollmentJson, 262_144),
+    identityJson: await genesisTextCommitment("takosumi.accounts.control-genesis-identity-json@v1", original.identityJson, 262_144),
+  });
+  const peers: FinancialSourceDigest[] = [];
+  for (const peer of bundle.peers) peers.push(await hashFinancialSourceValue("takosumi.accounts.control-genesis-peer@v1", {
+    configured: peer.configured, command: {admissionRef: peer.command.admissionRef, commandRef: peer.command.commandRef,
+      receiptRef: peer.command.receiptRef, enrollmentOriginal: coreOriginal}, receipt: peer.receipt,
+  }));
+  // The existing snapshot/wire limits remain unchanged. Only the larger
+  // retained JSON strings and repeated peer originals use small commitments.
+  const core = await hashFinancialSourceValue("takosumi.financial-source-control-evidence@v1", bundle.core);
+  return hashFinancialSourceValue("takosumi.accounts.control-genesis-coverage-evidence@v1", {family: "G", core, coreOriginal, peers});
 }
 
 function captureEventEvidenceAuthority(options: AccountsFinancialEventEvidenceOptions | undefined) {
@@ -698,6 +877,7 @@ export function createAccountsFinancialControlSource(options: {
   readonly service: WorkspaceFinancialSourceService;
   readonly receivers?: readonly AccountsFinancialReceiver[];
   readonly eventEvidence?: AccountsFinancialEventEvidenceOptions & {readonly registration: FinancialSourceRegistration};
+  readonly genesisCoverage?: AccountsFinancialGenesisCoveragePort;
   readonly now?: () => number;
 }) {
   const service = options.service;
@@ -708,6 +888,11 @@ export function createAccountsFinancialControlSource(options: {
   const readMaterialization = service.readMaterialization;
   const materialize = service.materializeEvent;
   const recordReceipt = service.recordReceipt;
+  const readEnrollmentOriginal = service.readEnrollmentOriginal;
+  const genesisPort = options.genesisCoverage;
+  const readGenesisOriginals = genesisPort?.readCurrentOriginals;
+  const genesisPeers = genesisPort && genesisFreeze(genesisArray(genesisPort.peers).map(genesisPeer));
+  if (genesisPort && typeof readGenesisOriginals !== "function") throw new FinancialSourceUnavailable("source_unavailable");
   const eventEvidence = captureEventEvidenceAuthority(options.eventEvidence);
   const evidenceRegistration = options.eventEvidence && parseFinancialSourceRegistration(structuredClone(options.eventEvidence.registration));
   const rawClock = options.now ?? anchoredClock();
@@ -718,7 +903,8 @@ export function createAccountsFinancialControlSource(options: {
     lastNow = value;
     return value;
   };
-  const snapshots = new WeakMap<object, {original: WorkspaceFinancialSourceSnapshot; binding: string; expiresAt: number}>();
+  const snapshots = new WeakMap<object, {original: WorkspaceFinancialSourceSnapshot; binding: string; expiresAt: number;
+    genesis?: AccountsFinancialGenesisBundle; genesisDigest?: FinancialSourceDigest}>();
   const receivers = new Map<string, {receiver: AccountsFinancialReceiver; targetRef: string;
     read: AccountsFinancialReceiver["read"]; deliver: AccountsFinancialReceiver["deliver"]}>();
   for (const receiver of options.receivers ?? []) {
@@ -731,6 +917,75 @@ export function createAccountsFinancialControlSource(options: {
   const registration = (head: WorkspaceFinancialSourceHead): FinancialSourceRegistration => parseFinancialSourceRegistration({
     registrationRef: head.sourceRef, incarnation: head.incarnation, genesisDigest: hex(head.genesisDigest), receivers: head.requiredReceivers,
   });
+  const readGenesis = async (core: WorkspaceFinancialSourceSnapshot): Promise<AccountsFinancialGenesisBundle | undefined> => {
+    if (!genesisPort || !genesisPeers) return undefined;
+    if (typeof readEnrollmentOriginal !== "function" || typeof readGenesisOriginals !== "function")
+      throw new FinancialSourceUnavailable("source_unavailable");
+    const head = core.head, enrolled = registration(head);
+    if (head.permissionSequence !== 0 || head.lastEventRef !== null || head.materializedSequence !== 0 ||
+      head.materializedDigest !== head.genesisDigest) return fail();
+    let observed: WorkspaceFinancialEnrollmentOriginal | undefined;
+    try {
+      observed = await Reflect.apply(readEnrollmentOriginal, service,
+        [{workspaceId: core.workspace.id, sourceRef: head.sourceRef, incarnation: head.incarnation}]);
+    } catch (error) {
+      // Classification of a rejection from the captured Core method only;
+      // this never treats an error object or its code as source authority.
+      const code = error instanceof Error && Object.getOwnPropertyDescriptor(error, "code");
+      if (code && "value" in code && (code.value === "conflict" || code.value === "invalid_request"))
+        return fail();
+      throw new FinancialSourceUnavailable("source_unavailable");
+    }
+    // We already captured an enrolled head. Missing immutable producer data
+    // is unavailable, never a selected G command's positive absence.
+    if (observed === undefined) throw new FinancialSourceUnavailable("source_unavailable");
+    const coreOriginal = genesisOriginal(observed);
+    const retained = genesisRecord(JSON.parse(coreOriginal.registrationJson), ["sourceRef", "incarnation", "genesisDigest", "requiredReceivers"]);
+    const retainedRegistration = genesisRegistration({registrationRef: retained.sourceRef, incarnation: retained.incarnation,
+      genesisDigest: typeof retained.genesisDigest === "string" ? hex(retained.genesisDigest) : fail(), receivers: retained.requiredReceivers});
+    const identity = genesisRecord(JSON.parse(coreOriginal.identityJson), ["sourceRef", "incarnation", "genesisDigest", "requiredReceivers",
+      "workspaceId", "workspaceCreatedAt", "organizationRef", "workspaceRef", "bindingIntentId", "bindingJson", "enrolledAt"]);
+    const expectedIdentity = {sourceRef: head.sourceRef, incarnation: head.incarnation, genesisDigest: head.genesisDigest,
+      requiredReceivers: head.requiredReceivers, workspaceId: head.workspaceId, workspaceCreatedAt: head.workspaceCreatedAt,
+      organizationRef: head.organizationRef, workspaceRef: head.workspaceRef, bindingIntentId: head.bindingIntentId,
+      bindingJson: head.bindingJson, enrolledAt: head.enrolledAt};
+    if (coreOriginal.workspaceId !== core.workspace.id || coreOriginal.sourceRef !== head.sourceRef || coreOriginal.incarnation !== head.incarnation ||
+      coreOriginal.enrolledAt !== head.enrolledAt || head.workspaceCreatedAt !== core.workspace.createdAt ||
+      canonicalFinancialSourceJson(retainedRegistration) !== canonicalFinancialSourceJson(enrolled) ||
+      canonicalFinancialSourceJson(identity) !== canonicalFinancialSourceJson(expectedIdentity) ||
+      canonicalFinancialSourceJson(genesisRecord(JSON.parse(coreOriginal.enrollmentJson), ["workspace", "management", "binding", "members"]).binding) !==
+        canonicalFinancialSourceJson(JSON.parse(JSON.stringify(core.binding))) ||
+      genesisPeers.length !== enrolled.receivers.length) return fail();
+    for (const [index, peer] of genesisPeers.entries()) {
+      const required = enrolled.receivers[index]!;
+      if (peer.receiverRef !== required.receiverRef || peer.targetRef !== required.targetRef || peer.affectedRef !== core.workspace.id ||
+        canonicalFinancialSourceJson(peer.source.registration) !== canonicalFinancialSourceJson(enrolled)) return fail();
+    }
+    // Only the actual qualified Root bridge establishes real source/realm/epoch
+    // admission. Its historical G read and this local recheck are not atomic.
+    const rows = genesisArray(await Reflect.apply(readGenesisOriginals, genesisPort,
+      [{coreSnapshot: structuredClone(core), coreOriginal: structuredClone(coreOriginal)}]));
+    if (rows.length !== genesisPeers.length) return fail();
+    const peers: AccountsFinancialGenesisBundle["peers"][number][] = [];
+    let absent = false;
+    for (const [index, value] of rows.entries()) {
+      if (!value || typeof value !== "object") return fail();
+      const status = Object.getOwnPropertyDescriptor(value, "status");
+      if (!status || !("value" in status) || (status.value !== "found" && status.value !== "absent")) return fail();
+      const row = genesisRecord(value, status.value === "found" ? ["receiverRef", "targetRef", "command", "status", "receipt"] :
+        ["receiverRef", "targetRef", "command", "status"]);
+      const configured = genesisPeers[index]!;
+      const command = genesisCommand(row.command);
+      if (row.receiverRef !== configured.receiverRef || row.targetRef !== configured.targetRef ||
+        !sameGenesisOriginal(command.enrollmentOriginal, coreOriginal)) return fail();
+      if (row.status === "absent") { absent = true; continue; }
+      const receipt = genesisReceipt(row.receipt);
+      if (receipt.admissionRef !== command.admissionRef || receipt.commandRef !== command.commandRef || receipt.receiptRef !== command.receiptRef)
+        return fail();
+      peers.push({configured, command, receipt});
+    }
+    return absent ? undefined : {family: "G", core: JSON.parse(JSON.stringify(core)), coreOriginal, peers};
+  };
   const rawWire = (raw: WorkspaceFinancialRawEvent) => ({v: 1 as const, eventRef: raw.eventRef,
     registrationRef: raw.sourceRef, incarnation: raw.incarnation, sequence: raw.permissionSequence,
     previousEventRef: raw.previousEventRef, kind: raw.closed ? "close" as const : "advance" as const,
@@ -795,16 +1050,25 @@ export function createAccountsFinancialControlSource(options: {
       const {workspaceId, accountId} = input;
       if (!financialSourceRef(workspaceId) || !financialSourceRef(accountId)) return undefined;
       now();
-      const original = await Reflect.apply(capture, service, [{workspaceId, actorAccountId: accountId}]);
+      const captured = await Reflect.apply(capture, service, [{workspaceId, actorAccountId: accountId}]);
+      const original = captured?.head.permissionSequence === 0 ? structuredClone(captured) : captured;
       if (!original || original.workspace.id !== workspaceId || original.member.workspaceId !== workspaceId ||
         original.member.accountId !== accountId || original.member.status !== "active" || original.head.closed ||
         original.binding.workspaceId !== workspaceId || original.head.workspaceId !== workspaceId ||
         original.binding.organizationRef !== original.head.organizationRef || original.binding.workspaceRef !== original.head.workspaceRef ||
         original.head.permissionSequence !== original.head.materializedSequence) return undefined;
       const enrolled = registration(original.head);
+      if ((original.head.permissionSequence === 0) !== (original.head.lastEventRef === null)) return fail();
+      let genesis: AccountsFinancialGenesisBundle | undefined;
+      if (original.head.permissionSequence === 0) {
+        if (!(await Reflect.apply(assertCurrent, service, [structuredClone(original)]))) return undefined;
+        genesis = await readGenesis(structuredClone(original));
+        if (!genesis) return undefined;
+      }
       // Storage has legitimate absent optional columns. Normalize only their
       // representation; the exact ORIGINAL Core object is retained privately.
-      const digest = await hashFinancialSourceValue("takosumi.financial-source-control-evidence@v1", JSON.parse(JSON.stringify(original)));
+      const digest = genesis ? await genesisEvidenceDigest(genesis) :
+        await hashFinancialSourceValue("takosumi.financial-source-control-evidence@v1", JSON.parse(JSON.stringify(original)));
       if (!(await Reflect.apply(assertCurrent, service, [original]))) return undefined;
       const issuedAt = now();
       if (!Number.isSafeInteger(issuedAt + proofLifetime)) return undefined;
@@ -814,7 +1078,8 @@ export function createAccountsFinancialControlSource(options: {
           source: {registrationRef: enrolled.registrationRef, incarnation: enrolled.incarnation, affectedRef: original.workspace.id,
             sequence: original.head.permissionSequence, eventRef: original.head.lastEventRef,
             eventDigest: hex(original.head.materializedDigest), receivers: enrolled.receivers}}};
-      snapshots.set(result, {original: structuredClone(original), binding: canonicalFinancialSourceJson(result), expiresAt: result.evidence.expiresAt});
+      snapshots.set(result, {original: structuredClone(original), binding: canonicalFinancialSourceJson(result), expiresAt: result.evidence.expiresAt,
+        ...(genesis ? {genesis: structuredClone(genesis), genesisDigest: digest} : {})});
       return result;
     },
     async assertCurrent(snapshot: AccountsFinancialControlSnapshot): Promise<boolean> {
@@ -822,7 +1087,14 @@ export function createAccountsFinancialControlSource(options: {
       if (!retained || now() >= retained.expiresAt) return false;
       try { if (canonicalFinancialSourceJson(snapshot) !== retained.binding) return false; } catch { return false; }
       const current = await Reflect.apply(assertCurrent, service, [structuredClone(retained.original)]);
-      return current && now() < retained.expiresAt && canonicalFinancialSourceJson(snapshot) === retained.binding;
+      if (!current) return false;
+      if (retained.genesis) {
+        const genesis = await readGenesis(structuredClone(retained.original));
+        if (!genesis) return false;
+        if (await genesisEvidenceDigest(genesis) !== retained.genesisDigest) return fail();
+        if (!(await Reflect.apply(assertCurrent, service, [structuredClone(retained.original)]))) return false;
+      }
+      return now() < retained.expiresAt && canonicalFinancialSourceJson(snapshot) === retained.binding;
     },
     /** Original first Control event, including before any receiver ACK. This is
      * historical source data, not an actor/currentness or M qualification. */

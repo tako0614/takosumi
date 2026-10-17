@@ -18,7 +18,10 @@ import {
   type FinancialSourceReceipt,
 } from "../../../../accounts/service/src/financial-source-contract.ts";
 import { makeFinancialSourceReceipt } from "../../../../accounts/service/src/financial-source-abi.ts";
-import type { AccountsFinancialReceiver } from "../../../../accounts/service/src/financial-source.ts";
+import {
+  createAccountsFinancialControlSource, FinancialSourceUnavailable,
+  type AccountsFinancialReceiver, type AccountsFinancialGenesisCoveragePort,
+} from "../../../../accounts/service/src/financial-source.ts";
 import { createAuthStagingWorker } from "../../../../deploy/accounts-cloudflare/src/staging-worker.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import {
@@ -312,12 +315,72 @@ test("named HTTP-store facade retains four fresh originals and the same bounded 
       },
     },
   };
+  const retainedEnrollment = await owner.financialSource.readEnrollmentOriginal({
+    workspaceId: workspace.id, sourceRef: controlRegistration.sourceRef,
+    incarnation: controlRegistration.incarnation,
+  });
+  if (!retainedEnrollment) throw new Error("actual retained Core original missing");
+  // Original command custody and G GET below are explicit synthetic external
+  // fixtures. They neither implement a genuine Root factory nor dispatch G/M.
+  const originalGCommand = Object.freeze({admissionRef: "synthetic-original-g-admission",
+    commandRef: "synthetic-original-g-command", receiptRef: "synthetic-original-g-receipt",
+    enrollmentOriginal: structuredClone(retainedEnrollment)});
+  let gStatus: "found" | "absent" | "unknown" = "absent";
+  let genesisReads = 0;
+  let coverage!: AccountsFinancialGenesisCoveragePort;
   let observed = 0;
   const worker = createCloudflareWorker({privateFinancialSourceOrigin: {
     coreFinancialSource: async () => owner.financialSource,
-    inputs: async () => fixedInputs,
+    inputs: async (_env, construction) => {
+      expect(construction.createAccountsFinancialControlSource).toBe(createAccountsFinancialControlSource);
+      expect(construction.FinancialSourceUnavailable).toBe(FinancialSourceUnavailable);
+      expect(new construction.FinancialSourceUnavailable("source_conflict")).toBeInstanceOf(FinancialSourceUnavailable);
+      expect(Object.isFrozen(construction)).toBe(true);
+      expect(Object.isFrozen(construction.core)).toBe(true);
+      expect(Reflect.ownKeys(construction.core).sort()).toEqual([
+        "assertFinancialSourceSnapshotCurrent", "captureFinancialSourceSnapshot", "readEnrollmentOriginal",
+      ]);
+      expect(Reflect.set(construction.core, "readEnrollmentOriginal", async () => undefined)).toBe(false);
+      expect(genesisReads).toBe(0);
+      const selectedPeer = {
+        receiverRef: receiver.receiverRef, targetRef: receiver.targetRef, affectedRef: workspace.id,
+        genesisQualificationRef: "synthetic-g-genesis-qualification",
+        source: {
+          registration: fixedInputs.control!.eventEvidence.registration,
+          registrationDigest: `sha256:${"1".repeat(64)}` as const,
+          qualificationRef: "synthetic-g-source-qualification",
+          sourceSchemaDigest: `sha256:${"2".repeat(64)}` as const,
+          sourceCredentialRef: "control-credential-original", clockPolicyRef: "clock-original",
+          originRef: "synthetic-g-selected-origin",
+        },
+      };
+      coverage = {
+        peers: [structuredClone(selectedPeer)],
+        async readCurrentOriginals({coreSnapshot, coreOriginal}) {
+          expect(this).toBe(coverage);
+          genesisReads++;
+          const before = await construction.core.captureFinancialSourceSnapshot({workspaceId: workspace.id,
+            actorAccountId: subject});
+          expect(before).toEqual(coreSnapshot);
+          expect(await construction.core.readEnrollmentOriginal({workspaceId: workspace.id,
+            sourceRef: controlRegistration.sourceRef, incarnation: controlRegistration.incarnation})).toEqual(retainedEnrollment);
+          expect(coreOriginal).toEqual(originalGCommand.enrollmentOriginal);
+          if (gStatus === "unknown") throw new construction.FinancialSourceUnavailable("source_unavailable");
+          const row = {receiverRef: selectedPeer.receiverRef, targetRef: selectedPeer.targetRef,
+            command: structuredClone(originalGCommand)};
+          const result = gStatus === "absent" ? {...row, status: "absent" as const} :
+            {...row, status: "found" as const, receipt: {admissionRef: originalGCommand.admissionRef,
+              commandRef: originalGCommand.commandRef, receiptRef: originalGCommand.receiptRef}};
+          if (!await construction.core.assertFinancialSourceSnapshotCurrent(coreSnapshot))
+            throw new construction.FinancialSourceUnavailable("source_unavailable");
+          return [result];
+        },
+      };
+      return {...fixedInputs, control: {...fixedInputs.control!, genesisCoverage: coverage}};
+    },
     observe: async (published) => {
       observed++;
+      expect(genesisReads).toBe(0);
       // Publication is not dispatch. Every family must refuse observer reentry
       // until resolve completes, before any actual source operation can start.
       await expect(published.prepareFinancialIdentityProofSource({accessToken: token, challengeRef: challenge.challengeRef})).rejects.toThrow("source_unavailable");
@@ -328,6 +391,15 @@ test("named HTTP-store facade retains four fresh originals and the same bounded 
   expect((await worker.fetch(hostedFull, actualEnv)).status).toBe(401);
   const source = await worker.resolvePrivateFinancialSource!(actualEnv);
   expect(observed).toBe(1);
+  expect(genesisReads).toBe(0);
+  await expect(source.prepareFinancialIdentityProofSource({accessToken: token,
+    challengeRef: challenge.challengeRef})).rejects.toThrow("source_unavailable");
+  gStatus = "unknown";
+  await expect(source.prepareFinancialIdentityProofSource({accessToken: token,
+    challengeRef: challenge.challengeRef})).rejects.toBeInstanceOf(FinancialSourceUnavailable);
+  expect((await seed.listFinancialSourcePending({registrationRef: accountRegistration.registrationRef, limit: 4})).entries).toEqual([]);
+  expect(deliveries).toBe(0);
+  gStatus = "found";
   const prepared = await source.prepareFinancialIdentityProofSource({
     accessToken: token, challengeRef: challenge.challengeRef,
   });
@@ -342,8 +414,33 @@ test("named HTTP-store facade retains four fresh originals and the same bounded 
   expect(prepared.controlSource.eventDigest).toBe(`sha256:${controlRegistration.genesisDigest}`);
   expect(prepared.controlSource.receivers).toEqual(controlRegistration.requiredReceivers);
   expect(prepared.controlSource.registrationRef).not.toBe(prepared.registration.registrationRef);
+  const readsBeforeMutation = genesisReads;
+  Reflect.set(coverage, "readCurrentOriginals", async () => {throw new Error("late G callable replacement");});
+  Reflect.set(coverage.peers[0]!.source, "qualificationRef", "late G selected-source replacement");
+  expect((await source.prepareFinancialIdentityProofSource({accessToken: token,
+    challengeRef: challenge.challengeRef})).parents).toEqual(prepared.parents);
+  expect(genesisReads).toBeGreaterThan(readsBeforeMutation);
+  // Both direct captures keep their original functions/receiver after publish.
+  // Core's internal virtual call from assertCurrent to capture remains Core's
+  // existing behavior; this test does not replace that transitive dependency.
+  const coreRead = Object.getOwnPropertyDescriptor(owner.financialSource, "readEnrollmentOriginal");
+  const coreAssert = Object.getOwnPropertyDescriptor(owner.financialSource, "assertFinancialSourceSnapshotCurrent");
+  try {
+    for (const key of ["readEnrollmentOriginal", "assertFinancialSourceSnapshotCurrent"] as const)
+      Object.defineProperty(owner.financialSource, key, {configurable: true,
+        value: async () => {throw new Error("late direct Core callable replacement");}});
+    expect((await source.prepareFinancialIdentityProofSource({accessToken: token,
+      challengeRef: challenge.challengeRef})).parents).toEqual(prepared.parents);
+  } finally {
+    for (const [key, descriptor] of [["readEnrollmentOriginal", coreRead],
+      ["assertFinancialSourceSnapshotCurrent", coreAssert]] as const) {
+      if (descriptor) Object.defineProperty(owner.financialSource, key, descriptor);
+      else Reflect.deleteProperty(owner.financialSource, key);
+    }
+  }
   // Permission-seq0/G is not an event0/ACK0. Existing initial-event preparation
-  // must refuse it, and this test creates no empty fallback or G receipt.
+  // must refuse it. The synthetic G readback creates no Core event/ACK0,
+  // empty fallback or writer; it is not a genuine external G qualification.
   await expect(source.control.prepareInitialFinancialControlSourceOriginal({workspaceId: workspace.id})).rejects.toThrow("source_pending");
   for (const original of Object.values(prepared.parents)) {
     expect(original.key).toEqual({
@@ -523,6 +620,79 @@ test("private owner failure does not enter HTTP initialization or reveal its err
   await expect(worker.resolvePrivateFinancialSource!(actualEnv)).rejects.toThrow("source_unavailable");
   expect(calls).toBe(1);
 });
+
+test("a Core reader replaced during owner-input await cannot split bridge and C source capture", async () => {
+  for (const key of ["captureFinancialSourceSnapshot", "assertFinancialSourceSnapshotCurrent", "readEnrollmentOriginal"] as const) {
+    for (const replacement of ["data", "accessor"] as const) {
+      const actualEnv = env(await accountsDb());
+      const actualCore = new WorkspacesService({store: new InMemoryOpenTofuControlStore()}).financialSource;
+      let entered!: () => void, release!: () => void;
+      const inputEntered = new Promise<void>((resolve) => {entered = resolve;});
+      const held = new Promise<void>((resolve) => {release = resolve;});
+      let inputCalls = 0, observed = 0, replacementCalls = 0;
+      const worker = createCloudflareWorker({privateFinancialSourceOrigin: {
+        coreFinancialSource: async () => actualCore,
+        inputs: async (_env, construction) => {
+          inputCalls++;
+          expect(construction.FinancialSourceUnavailable).toBe(FinancialSourceUnavailable);
+          entered();
+          await held;
+          return inputs();
+        },
+        observe: () => {observed++;},
+      }});
+      const pending = worker.resolvePrivateFinancialSource!(actualEnv);
+      await inputEntered;
+      const original = actualCore[key];
+      if (replacement === "data") Object.defineProperty(actualCore, key, {configurable: true,
+        value: async () => {replacementCalls++; throw new Error("changed Core callable must not run");}});
+      else Object.defineProperty(actualCore, key, {configurable: true,
+        get() {replacementCalls++; return original;}});
+      release();
+      await expect(pending).rejects.toThrow("source_unavailable");
+      expect(inputCalls).toBe(1);
+      expect(observed).toBe(0);
+      expect(replacementCalls).toBe(0);
+      expect((await worker.fetch(full, actualEnv)).status).toBe(401);
+    }
+  }
+});
+
+test("canonical Core failure refuses construction before owner inputs or observation", async () => {
+  const actualEnv = env(await accountsDb());
+  let inputCalls = 0, observed = 0;
+  const worker = createCloudflareWorker({privateFinancialSourceOrigin: {
+    coreFinancialSource: async () => {throw new Error("private-core-failure-sentinel");},
+    inputs: async () => {inputCalls++; return inputs();},
+    observe: () => {observed++;},
+  }});
+  expect((await worker.fetch(full, actualEnv)).status).toBe(401);
+  await expect(worker.resolvePrivateFinancialSource!(actualEnv)).rejects.toThrow("source_unavailable");
+  expect(inputCalls).toBe(0);
+  expect(observed).toBe(0);
+  const ordinary = await worker.fetch(full, actualEnv);
+  expect(ordinary.status).toBe(401);
+  expect(await ordinary.text()).not.toContain("private-core-failure-sentinel");
+});
+
+test("a timed-out canonical Core cannot invoke construction inputs or publish late", async () => {
+  const actualEnv = env(await accountsDb());
+  let release!: (value: typeof core) => void;
+  let inputsCalled = 0, observed = 0;
+  const worker = createCloudflareWorker({privateFinancialSourceOrigin: {
+    coreFinancialSource: () => new Promise<typeof core>((resolve) => {release = resolve;}),
+    inputs: async () => {inputsCalled++; return inputs();},
+    observe: () => {observed++;},
+  }});
+  const pending = worker.resolvePrivateFinancialSource!(actualEnv);
+  expect((await worker.fetch(full, actualEnv)).status).toBe(401);
+  await expect(pending).rejects.toThrow("source_unavailable");
+  release(core);
+  await Promise.resolve();
+  expect(inputsCalled).toBe(0);
+  expect(observed).toBe(0);
+  expect((await worker.fetch(full, actualEnv)).status).toBe(401);
+}, 10_000);
 
 test("a hung private input times out only its named caller and cannot publish late", async () => {
   const actualEnv = env(await accountsDb());

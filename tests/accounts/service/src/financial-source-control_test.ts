@@ -5,9 +5,13 @@ import { expect, test } from "bun:test";
 import { Miniflare } from "miniflare";
 import * as AccountsFinancialSource from "../../../../accounts/service/src/financial-source.ts";
 import type { AccountsFinancialReceiver } from "../../../../accounts/service/src/financial-source.ts";
+import type {
+  AccountsFinancialGenesisCoveragePort, AccountsFinancialGenesisPeerRead,
+} from "../../../../accounts/service/src/financial-source.ts";
 import {
   canonicalFinancialSourceJson,
   financialSourceEventDigest,
+  hashFinancialSourceValue,
   parseFinancialSourceEvent,
   type FinancialSourceMaterialization,
   type FinancialSourceReceipt,
@@ -17,6 +21,7 @@ import { makeFinancialSourceReceipt } from "../../../../accounts/service/src/fin
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { rotateAccountSession } from "../../../../accounts/service/src/account-session.ts";
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
+import { WorkspaceFinancialOriginalReadError } from "../../../../core/domains/workspaces/financial-source.ts";
 import {
   InMemoryOpenTofuControlStore,
   type OpenTofuControlStore,
@@ -29,11 +34,12 @@ import {
   workerdD1Module,
 } from "../../../helpers/deploy-control/workerd_d1.ts";
 
-const actor = "control_original_actor";
+const actor: Parameters<AccountsFinancialSource.AccountsFinancialControl["capture"]>[0]["accountId"] = "tsub_control_original_actor";
 const member = "control_other_member";
 type Backend = "memory" | "postgres" | "native-d1";
 
-async function enrolled(store: OpenTofuControlStore, label: string, now: () => number) {
+async function enrolled(store: OpenTofuControlStore, label: string, now: () => number,
+  size: {members?: number; peers?: number} = {}) {
   let serial = 0;
   const owner = new WorkspacesService({
     store, newId: (prefix) => `${prefix}_${label}_${++serial}`,
@@ -47,6 +53,9 @@ async function enrolled(store: OpenTofuControlStore, label: string, now: () => n
     workspaceId: workspace.id, intentId: intent.intentId, actorAccountId: actor,
     organizationRef: `original_org_${label}`, ownerAcknowledgementRef: "synthetic_existing_owner_ack",
   });
+  for (let index = 1; index < (size.members ?? 1); index++) await owner.upsertWorkspaceMember({workspaceId: workspace.id,
+    accountId: `synthetic_member_${label}_${index}_${"x".repeat(100)}`, actorAccountId: actor,
+    status: "active", roles: ["viewer"], requireCurrentMembership: true});
   const original = await owner.financialSource.prepareEnrollment({workspaceId: workspace.id});
   if (!original) throw new Error("actual enrollment census missing");
   // This is a synthetic qualified owner's registration, never implicit
@@ -56,6 +65,9 @@ async function enrolled(store: OpenTofuControlStore, label: string, now: () => n
     genesisDigest: "a".repeat(64), requiredReceivers: [
       {receiverRef: "synthetic_financial_zeta", targetRef: "synthetic_target_one"},
       {receiverRef: "synthetic_financial_alpha", targetRef: "synthetic_target_two"},
+      ...Array.from({length: (size.peers ?? 2) - 2}, (_, index) => ({
+        receiverRef: `synthetic_financial_extra_${index}`, targetRef: `synthetic_target_extra_${index}`,
+      })),
     ],
   };
   const head = await owner.financialSource.enroll({original, registration});
@@ -63,7 +75,7 @@ async function enrolled(store: OpenTofuControlStore, label: string, now: () => n
   return {owner, workspace, binding, registration, head};
 }
 
-async function fixture(backend: Backend, label: string) {
+async function fixture(backend: Backend, label: string, size: {members?: number; peers?: number} = {}) {
   let time = Date.parse("2026-10-15T00:00:00.000Z");
   let pg: PGliteSqlClient | undefined;
   let runtime: Miniflare | undefined;
@@ -83,7 +95,38 @@ async function fixture(backend: Backend, label: string) {
       await runtime.ready;
       store = new CloudflareD1OpenTofuControlStore(workerdD1Database(runtime));
     }
-    const f = await enrolled(store, label, () => time);
+    const f = await enrolled(store, label, () => time, size);
+    const enrollmentOriginal = await f.owner.financialSource.readEnrollmentOriginal({workspaceId: f.workspace.id,
+      sourceRef: f.registration.sourceRef, incarnation: f.registration.incarnation});
+    if (!enrollmentOriginal) throw new Error("actual retained Core enrollment missing");
+    // Explicitly synthetic foreign G custody, fixed BEFORE any read/dispatch.
+    // These refs and descriptors do not qualify a Financial factory or realm.
+    const genesisRegistration: FinancialSourceRegistration = {registrationRef: f.registration.sourceRef,
+      incarnation: f.registration.incarnation, genesisDigest: `sha256:${f.registration.genesisDigest}`,
+      receivers: structuredClone(f.registration.requiredReceivers)};
+    const genesisPeers = f.registration.requiredReceivers.map((peer) => ({...peer, affectedRef: f.workspace.id,
+      genesisQualificationRef: "synthetic-genesis-qualification", source: {registration: structuredClone(genesisRegistration),
+        registrationDigest: `sha256:${"d".repeat(64)}` as const, qualificationRef: "synthetic-source-qualification",
+        sourceSchemaDigest: `sha256:${"e".repeat(64)}` as const, sourceCredentialRef: "synthetic-source-credential",
+        clockPolicyRef: "synthetic-clock-policy", originRef: "synthetic-core-origin"}}));
+    const genesisRows: AccountsFinancialGenesisPeerRead[] = genesisPeers.map((peer, index) => {
+      const refs = {admissionRef: `synthetic-g-${label}-${index}`, commandRef: `synthetic-command-${label}-${index}`,
+        receiptRef: `synthetic-receipt-${label}-${index}`};
+      return {receiverRef: peer.receiverRef, targetRef: peer.targetRef, status: "found",
+        command: {...refs, enrollmentOriginal: structuredClone(enrollmentOriginal)}, receipt: {...refs}};
+    });
+    let genesisCalls = 0;
+    let genesisHook: (() => Promise<void>) | undefined;
+    let genesisResult: (rows: AccountsFinancialGenesisPeerRead[]) => unknown = rows => rows;
+    const genesisCoverage: AccountsFinancialGenesisCoveragePort = {peers: genesisPeers,
+      async readCurrentOriginals(input) {
+        genesisCalls++;
+        expect(input.coreOriginal).toEqual(enrollmentOriginal);
+        expect(input.coreSnapshot.head.sourceRef).toBe(f.registration.sourceRef);
+        const rows = structuredClone(genesisRows);
+        await genesisHook?.();
+        return genesisResult(rows) as readonly AccountsFinancialGenesisPeerRead[];
+      }};
     // Only foreign receiver custody is synthetic. Raw events, materialization,
     // original receiver ACK custody and current snapshots belong to real Core.
     const accepted = new Map<string, FinancialSourceReceipt>();
@@ -126,16 +169,243 @@ async function fixture(backend: Backend, label: string) {
       },
     }));
     return {...f, store, receivers, accepted, wires, calls, close,
+      genesisCoverage, genesisRows, enrollmentOriginal,
+      genesisCalls: () => genesisCalls,
+      setGenesisHook(hook: (() => Promise<void>) | undefined) { genesisHook = hook; },
+      setGenesisResult(result: (rows: AccountsFinancialGenesisPeerRead[]) => unknown) { genesisResult = result; },
       now: () => time, setTime(value: number) { time = value; },
       pauseSecondary(value: boolean) { pauseSecondary = value; },
       wrongTargetReceipt() { wrongTargetOnce = true; },
       loseAck() { loseSecondaryAck = true; },
       commits: (receiverRef: string) => commits.get(receiverRef) ?? 0,
       adapter: (configured: readonly AccountsFinancialReceiver[] = receivers) =>
-        AccountsFinancialSource.createAccountsFinancialControlSource({service: f.owner.financialSource, receivers: configured, now: () => time}),
+        AccountsFinancialSource.createAccountsFinancialControlSource({service: f.owner.financialSource, receivers: configured,
+          genesisCoverage, now: () => time}),
     };
   } catch (error) { await close(); throw error; }
 }
+
+test("memory: ordinary Core genesis is not Financial peer coverage without the explicit G port", async () => {
+  const f = await fixture("memory", "genesis-default-off");
+  try {
+    const input = {workspaceId: f.workspace.id, accountId: actor};
+    const core = await f.owner.financialSource.captureFinancialSourceSnapshot({workspaceId: input.workspaceId, actorAccountId: actor});
+    expect(core?.head.permissionSequence).toBe(0);
+    expect(core?.head.lastEventRef).toBeNull();
+    const adapter = AccountsFinancialSource.createAccountsFinancialControlSource({service: f.owner.financialSource, now: f.now});
+    expect(await adapter.capture(input)).toBeUndefined();
+    await expect(adapter.prepareInitialFinancialControlSourceOriginal({workspaceId: input.workspaceId})).rejects.toThrow("source_pending");
+    expect(f.genesisCalls()).toBe(0);
+    expect(f.calls).toEqual([]);
+    expect(await f.owner.financialSource.readHead(input.workspaceId)).toEqual(f.head);
+  } finally { await f.close(); }
+}, 30_000);
+
+test("memory: only exact command-bearing positive G absence is pending; unknown never becomes absence", async () => {
+  const f = await fixture("memory", "genesis-absence-unknown");
+  try {
+    const adapter = f.adapter(), input = {workspaceId: f.workspace.id, accountId: actor};
+    const snapshot = await adapter.capture(input);
+    expect(snapshot).toBeDefined();
+    f.setGenesisResult(rows => rows.map((row, index) => index === 0 ? {
+      receiverRef: row.receiverRef, targetRef: row.targetRef, command: row.command, status: "absent",
+    } : row));
+    expect(await adapter.capture(input)).toBeUndefined();
+    expect(await adapter.assertCurrent(snapshot!)).toBe(false);
+    f.setGenesisResult(rows => [{receiverRef: rows[0]!.receiverRef, targetRef: rows[0]!.targetRef, status: "absent"}, rows[1]!]);
+    await expect(adapter.capture(input)).rejects.toMatchObject({code: "source_conflict"});
+    for (const code of ["source_unavailable", "source_conflict"] as const) {
+      f.setGenesisResult(() => { throw new AccountsFinancialSource.FinancialSourceUnavailable(code); });
+      await expect(adapter.capture(input)).rejects.toMatchObject({code});
+      await expect(adapter.assertCurrent(snapshot!)).rejects.toMatchObject({code});
+    }
+    f.setGenesisResult(() => { throw new Error("synthetic_g_transport_unknown"); });
+    await expect(adapter.capture(input)).rejects.toThrow("synthetic_g_transport_unknown");
+    await expect(adapter.assertCurrent(snapshot!)).rejects.toThrow("synthetic_g_transport_unknown");
+    expect(f.calls).toEqual([]);
+    expect(await f.owner.financialSource.readHead(input.workspaceId)).toEqual(f.head);
+  } finally { await f.close(); }
+}, 30_000);
+
+test("memory: every selected G peer, original, command and receipt is checked before a covered capture", async () => {
+  const f = await fixture("memory", "genesis-closed-originals");
+  try {
+    const adapter = f.adapter(), input = {workspaceId: f.workspace.id, accountId: actor};
+    const mutations: ((rows: AccountsFinancialGenesisPeerRead[]) => unknown)[] = [
+      rows => rows.slice(0, 1),
+      rows => [rows[1], rows[0]],
+      rows => [rows[0], rows[0]],
+      rows => [{...rows[0], targetRef: "other-target"}, rows[1]],
+      rows => [{...rows[0], extra: "not-in-ABI"}, rows[1]],
+      rows => [{...rows[0], [Symbol("extra")]: true}, rows[1]],
+      rows => [{...rows[0], command: {...rows[0]!.command,
+        enrollmentOriginal: {...rows[0]!.command.enrollmentOriginal, workspaceId: "other-workspace"}}}, rows[1]],
+      rows => [{...rows[0], command: {...rows[0]!.command,
+        enrollmentOriginal: {...rows[0]!.command.enrollmentOriginal, identityJson: rows[0]!.command.enrollmentOriginal.identityJson + " "}}}, rows[1]],
+      rows => [{...rows[0], receipt: {admissionRef: rows[0]!.command.admissionRef,
+        commandRef: "wrong-original-command", receiptRef: rows[0]!.command.receiptRef}}, rows[1]],
+      // A valid absent peer cannot hide a malformed second peer.
+      rows => [{receiverRef: rows[0]!.receiverRef, targetRef: rows[0]!.targetRef, command: rows[0]!.command, status: "absent"},
+        {...rows[1], receipt: {admissionRef: "wrong", commandRef: "wrong", receiptRef: "wrong"}}],
+    ];
+    for (const mutate of mutations) {
+      f.setGenesisResult(mutate);
+      await expect(adapter.capture(input)).rejects.toMatchObject({code: "source_conflict"});
+    }
+    let accessorReads = 0;
+    f.setGenesisResult(rows => {
+      const row = {...rows[0]};
+      Object.defineProperty(row, "command", {get() { accessorReads++; return rows[0]!.command; }, enumerable: true});
+      return [row, rows[1]];
+    });
+    await expect(adapter.capture(input)).rejects.toMatchObject({code: "source_conflict"});
+    expect(accessorReads).toBe(0);
+    expect(f.calls).toEqual([]);
+    expect(await f.owner.financialSource.readHead(input.workspaceId)).toEqual(f.head);
+  } finally { await f.close(); }
+}, 30_000);
+
+test("memory: fixed G configuration is captured and any changed original bundle invalidates the old handle", async () => {
+  const f = await fixture("memory", "genesis-fixed-bundle");
+  try {
+    const adapter = f.adapter(), input = {workspaceId: f.workspace.id, accountId: actor};
+    const snapshot = await adapter.capture(input);
+    Object.assign(f.genesisCoverage.peers[0]!.source, {qualificationRef: "mutated-after-factory"});
+    Object.assign(f.genesisCoverage, {readCurrentOriginals: async () => { throw new Error("replaced-after-factory"); }});
+    f.setTime(f.now() + 1_000);
+    const fresh = await adapter.capture(input);
+    expect(fresh!.evidence.evidenceDigest).toBe(snapshot!.evidence.evidenceDigest);
+    expect(fresh!.evidence.expiresAt).toBeGreaterThan(snapshot!.evidence.expiresAt);
+    expect(await adapter.assertCurrent(snapshot!)).toBe(true);
+    f.setGenesisResult(rows => rows.map(row => row.status === "found" ? {...row,
+      command: {...row.command, commandRef: "different-retained-command"},
+      receipt: {...row.receipt, commandRef: "different-retained-command"}} : row));
+    const changed = await adapter.capture(input);
+    expect(changed!.evidence.evidenceDigest).not.toBe(snapshot!.evidence.evidenceDigest);
+    await expect(adapter.assertCurrent(snapshot!)).rejects.toMatchObject({code: "source_conflict"});
+    expect(f.calls).toEqual([]);
+  } finally { await f.close(); }
+}, 30_000);
+
+test("memory: real Core advance while G read is paused prevents a stale seq0 capture", async () => {
+  const f = await fixture("memory", "genesis-await-advance");
+  let release!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  let arrived!: () => void;
+  const entered = new Promise<void>(resolve => { arrived = resolve; });
+  try {
+    f.setGenesisHook(async () => { arrived(); await barrier; });
+    const adapter = f.adapter();
+    const input = {workspaceId: f.workspace.id, accountId: actor};
+    const pending = adapter.capture(input);
+    Object.assign(input, {workspaceId: "caller-mutated-after-call", accountId: "tsub_caller_mutated_actor"});
+    await entered;
+    await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+      actorAccountId: actor, status: "active", roles: ["viewer"], requireCurrentMembership: true});
+    expect((await f.owner.financialSource.readHead(f.workspace.id))?.permissionSequence).toBe(1);
+    release();
+    expect(await pending).toBeUndefined();
+    expect(await f.owner.financialSource.readEnrollmentOriginal({workspaceId: f.workspace.id,
+      sourceRef: f.registration.sourceRef, incarnation: f.registration.incarnation})).toEqual(f.enrollmentOriginal);
+    expect(f.calls).toEqual([]);
+  } finally { release(); await f.close(); }
+}, 30_000);
+
+test("memory: maximum complete roster and eight synthetic G peers do not use the 16KiB event-wire limit", async () => {
+  const f = await fixture("memory", "genesis-max-roster", {members: 64, peers: 8});
+  try {
+    const bytes = new TextEncoder().encode(f.enrollmentOriginal.enrollmentJson).byteLength;
+    expect(bytes).toBeGreaterThan(16_384);
+    expect(bytes).toBeLessThanOrEqual(262_144);
+    expect(JSON.parse(f.enrollmentOriginal.enrollmentJson).members).toHaveLength(64);
+    expect(f.genesisCoverage.peers).toHaveLength(8);
+    const adapter = f.adapter(), input = {workspaceId: f.workspace.id, accountId: actor};
+    const snapshot = await adapter.capture(input);
+    expect(snapshot?.evidence.source.sequence).toBe(0);
+    expect(await adapter.assertCurrent(snapshot!)).toBe(true);
+    f.setTime(f.now() + 1_000);
+    expect((await adapter.capture(input))?.evidence.evidenceDigest).toBe(snapshot!.evidence.evidenceDigest);
+    expect(f.calls).toEqual([]);
+    expect(await f.owner.financialSource.readHead(input.workspaceId)).toEqual(f.head);
+  } finally { await f.close(); }
+}, 30_000);
+
+test("memory: configured G source and peer mismatches fail closed", async () => {
+  const f = await fixture("memory", "genesis-config-mismatch");
+  try {
+    const corruptions: ((peers: AccountsFinancialSource.AccountsFinancialGenesisPeer[]) => void)[] = [
+      peers => { Object.assign(peers[0]!, {receiverRef: "wrong-selected-receiver"}); },
+      peers => { Object.assign(peers[0]!, {targetRef: "wrong-selected-target"}); },
+      peers => { Object.assign(peers[0]!, {affectedRef: "wrong-workspace"}); },
+      peers => { Object.assign(peers[0]!.source.registration, {incarnation: "wrong-source-incarnation"}); },
+      peers => { Object.assign(peers[0]!.source.registration, {genesisDigest: `sha256:${"f".repeat(64)}`}); },
+    ];
+    for (const corrupt of corruptions) {
+      const peers = structuredClone([...f.genesisCoverage.peers]);
+      corrupt(peers);
+      const adapter = AccountsFinancialSource.createAccountsFinancialControlSource({service: f.owner.financialSource,
+        genesisCoverage: {...f.genesisCoverage, peers}, now: f.now});
+      await expect(adapter.capture({workspaceId: f.workspace.id, accountId: actor})).rejects.toMatchObject({code: "source_conflict"});
+    }
+    expect(f.genesisCalls()).toBe(0);
+    expect(f.calls).toEqual([]);
+  } finally { await f.close(); }
+}, 30_000);
+
+test("memory: captured Core head without its original or required reader is unavailable, not G pending", async () => {
+  const f = await fixture("memory", "genesis-core-errors");
+  try {
+    const actual = f.owner.financialSource;
+    const reader = actual.readEnrollmentOriginal;
+    const cases = [
+      {code: "source_unavailable", read: async () => undefined},
+      {code: "source_conflict", read: async () => { throw new WorkspaceFinancialOriginalReadError("invalid_request"); }},
+      {code: "source_conflict", read: async () => { throw new WorkspaceFinancialOriginalReadError("conflict"); }},
+      {code: "source_unavailable", read: async () => { throw new WorkspaceFinancialOriginalReadError("unavailable"); }},
+      {code: "source_unavailable", read: async () => { throw new Error("unknown-core-read"); }},
+    ];
+    for (const entry of cases) {
+      let fail = false;
+      const service: typeof actual = Object.create(actual);
+      Object.defineProperty(service, "readEnrollmentOriginal", {value: async (input: Parameters<typeof reader>[0]) =>
+        fail ? entry.read() : Reflect.apply(reader, actual, [input])});
+      const adapter = AccountsFinancialSource.createAccountsFinancialControlSource({service, genesisCoverage: f.genesisCoverage, now: f.now});
+      const input = {workspaceId: f.workspace.id, accountId: actor};
+      const snapshot = await adapter.capture(input);
+      expect(snapshot).toBeDefined();
+      fail = true;
+      await expect(adapter.capture(input)).rejects.toMatchObject({code: entry.code});
+      await expect(adapter.assertCurrent(snapshot!)).rejects.toMatchObject({code: entry.code});
+    }
+    const missing: typeof actual = Object.create(actual);
+    Object.defineProperty(missing, "readEnrollmentOriginal", {value: undefined});
+    const adapter = AccountsFinancialSource.createAccountsFinancialControlSource({service: missing, genesisCoverage: f.genesisCoverage, now: f.now});
+    await expect(adapter.capture({workspaceId: f.workspace.id, accountId: actor})).rejects.toMatchObject({code: "source_unavailable"});
+    expect(f.calls).toEqual([]);
+  } finally { await f.close(); }
+}, 30_000);
+
+test("memory: currentness is rechecked after G await and the original expiry cannot be extended", async () => {
+  for (const mutation of ["advance", "expire"] as const) {
+    const f = await fixture("memory", `genesis-current-${mutation}`);
+    let release!: () => void, arrived!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    const entered = new Promise<void>(resolve => { arrived = resolve; });
+    try {
+      const adapter = f.adapter();
+      const snapshot = await adapter.capture({workspaceId: f.workspace.id, accountId: actor});
+      f.setGenesisHook(async () => { arrived(); await barrier; });
+      const pending = adapter.assertCurrent(snapshot!);
+      await entered;
+      if (mutation === "advance") await f.owner.upsertWorkspaceMember({workspaceId: f.workspace.id, accountId: member,
+        actorAccountId: actor, status: "active", roles: ["viewer"], requireCurrentMembership: true});
+      else f.setTime(snapshot!.evidence.expiresAt);
+      release();
+      expect(await pending).toBe(false);
+      expect(f.calls).toEqual([]);
+    } finally { release(); await f.close(); }
+  }
+}, 30_000);
 
 test("memory: unacknowledged initial Control original is prepared from canonical raw before capture", async () => {
   const f = await fixture("memory", "initial-red");
@@ -526,7 +796,9 @@ test("memory: initial Control replay rejects changed stored materialization with
     };
     await expect(f.adapter([]).prepareInitialFinancialControlSourceOriginal({workspaceId: f.workspace.id}))
       .rejects.toThrow("source_conflict");
-    expect(first.original.eventRef).toBe((await service.readHead(f.workspace.id))?.lastEventRef);
+    const retainedEventRef = (await service.readHead(f.workspace.id))?.lastEventRef;
+    if (typeof retainedEventRef !== "string") throw new Error("actual retained Core event missing");
+    expect(first.original.eventRef).toBe(retainedEventRef);
     expect(f.calls).toEqual([]);
   } finally { await f.close(); }
 }, 30_000);
@@ -554,7 +826,9 @@ test(`${backend}: Control pre-proof reader uses fresh canonical sequence-one ori
     expect(prepared.registration.registrationRef).toBe(f.registration.sourceRef);
     expect(prepared.original.key).toEqual({registrationRef: f.registration.sourceRef,
       incarnation: f.registration.incarnation, affectedRef: f.workspace.id});
-    expect(prepared.original.eventRef).toBe(captured!.evidence.source.eventRef);
+    const capturedEventRef = captured?.evidence.source.eventRef;
+    if (typeof capturedEventRef !== "string") throw new Error("actual captured Core event missing");
+    expect(prepared.original.eventRef).toBe(capturedEventRef);
     expect(prepared.original.materialization.event.sequence).toBe(1);
     expect(prepared.original.materialization.event.previousDigest).toBe(`sha256:${f.registration.genesisDigest}`);
     await expect(delivering.prepareOriginalFinancialControlSource({...input,
@@ -573,7 +847,7 @@ test(`${backend}: Control pre-proof reader uses fresh canonical sequence-one ori
 }
 
 for (const backend of ["memory", "postgres", "native-d1"] as const) {
-  test(`${backend}: actual enrolled Core genesis captures only current original Accounts context`, async () => {
+  test(`${backend}: actual Core genesis plus explicit synthetic G peers captures only current original Accounts context`, async () => {
     const f = await fixture(backend, `genesis-${backend}`);
     try {
       const adapter = f.adapter();
@@ -599,7 +873,7 @@ for (const backend of ["memory", "postgres", "native-d1"] as const) {
       const tampered = await adapter.capture(input);
       Object.assign(tampered!.evidence.source, {affectedRef: "different_workspace"});
       expect(await adapter.assertCurrent(tampered!)).toBe(false);
-      expect(await adapter.capture({...input, accountId: "unrelated_actor"})).toBeUndefined();
+      expect(await adapter.capture({...input, accountId: "tsub_unrelated_actor"})).toBeUndefined();
       const unenrolled = await f.owner.createWorkspaceForSharedAccount({
         handle: `unenrolled-${backend}`, displayName: "Unenrolled context", type: "organization", ownerUserId: actor,
       });
@@ -734,7 +1008,7 @@ test("memory: awaited actual Core capture and raw reads pin original primitive c
     const pending = adapter.capture(input);
     await entered;
     input.workspaceId = "caller_replacement_workspace";
-    input.accountId = "caller_replacement_actor";
+    input.accountId = "tsub_caller_replacement_actor";
     releaseCapture();
     const snapshot = await pending;
     service.captureFinancialSourceSnapshot = realCapture;
@@ -902,6 +1176,55 @@ test("memory: original Accounts proof survives fresh actual Control wrapper expi
     expect(fresh!.evidence.expiresAt).toBeGreaterThan(original.control.expiresAt);
     expect(await AccountsFinancialSource.createAccountsFinancialSource(options).prove(input)).toEqual(issued);
     expect(await store.findFinancialSourceProof(issued.proofRef)).toEqual(original);
+    const request = {v: 1 as const, proofRef: issued.proofRef, challengeRef: challenge.challengeRef};
+    const loaded = await producer.loadFinancialIdentityProof(request);
+    expect(loaded.status).toBe("found");
+    expect(await producer.verifyCurrentFinancialIdentityProof(request)).toMatchObject({status: "current"});
+    f.setGenesisResult(rows => rows.map(row => ({receiverRef: row.receiverRef, targetRef: row.targetRef,
+      command: row.command, status: "absent"})));
+    expect(await producer.verifyCurrentFinancialIdentityProof(request)).toEqual({v: 1, status: "not-current"});
+    expect(await producer.loadFinancialIdentityProof(request)).toEqual(loaded);
+    f.setGenesisResult(() => { throw new AccountsFinancialSource.FinancialSourceUnavailable("source_unavailable"); });
+    await expect(producer.verifyCurrentFinancialIdentityProof(request)).rejects.toMatchObject({code: "source_unavailable"});
+    expect(await producer.loadFinancialIdentityProof(request)).toEqual(loaded);
+    expect(await store.findFinancialSourceProof(issued.proofRef)).toEqual(original);
+    f.setGenesisResult(rows => rows);
+
+    // Explicit legacy adapter fixture reproduces the pre-G private digest.
+    // It is not a genuine Root issuer or a new production compatibility path.
+    const core = await f.owner.financialSource.captureFinancialSourceSnapshot({workspaceId: f.workspace.id, actorAccountId: actor});
+    if (!core) throw new Error("actual legacy Core context missing");
+    const legacyDigest = await hashFinancialSourceValue("takosumi.financial-source-control-evidence@v1", JSON.parse(JSON.stringify(core)));
+    const legacySnapshot = {...structuredClone(fresh!), evidence: {...structuredClone(fresh!.evidence),
+      evidenceRef: `cfe_${legacyDigest.slice(7)}`, evidenceDigest: legacyDigest}};
+    const legacyHandles = new WeakSet<object>();
+    const legacyControl: AccountsFinancialSource.AccountsFinancialControl = {
+      async capture(value) {
+        if (value.workspaceId !== f.workspace.id || value.accountId !== actor ||
+          !(await f.owner.financialSource.assertFinancialSourceSnapshotCurrent(core))) return undefined;
+        const result = structuredClone(legacySnapshot);
+        legacyHandles.add(result);
+        return result;
+      },
+      async assertCurrent(value) {
+        return legacyHandles.has(value) && canonicalFinancialSourceJson(value) === canonicalFinancialSourceJson(legacySnapshot) &&
+          await f.owner.financialSource.assertFinancialSourceSnapshotCurrent(core);
+      },
+    };
+    const legacyChallenge = {...challenge, challengeRef: "actual-core-legacy-challenge"};
+    const legacyOptions = {...options, challenges: {read: async (ref: string) =>
+      ref === legacyChallenge.challengeRef ? structuredClone(legacyChallenge) : undefined}};
+    const legacyProducer = AccountsFinancialSource.createAccountsFinancialSource({...legacyOptions, control: legacyControl});
+    const legacyIssued = await legacyProducer.prove({...input, challengeRef: legacyChallenge.challengeRef});
+    const legacyOriginal = await store.findFinancialSourceProof(legacyIssued.proofRef);
+    const legacyRequest = {v: 1 as const, proofRef: legacyIssued.proofRef, challengeRef: legacyChallenge.challengeRef};
+    const legacyLoaded = await legacyProducer.loadFinancialIdentityProof(legacyRequest);
+    expect(legacyLoaded.status).toBe("found");
+    expect(await legacyProducer.verifyCurrentFinancialIdentityProof(legacyRequest)).toMatchObject({status: "current"});
+    const migrated = AccountsFinancialSource.createAccountsFinancialSource(legacyOptions);
+    expect(await migrated.loadFinancialIdentityProof(legacyRequest)).toEqual(legacyLoaded);
+    expect(await migrated.verifyCurrentFinancialIdentityProof(legacyRequest)).toEqual({v: 1, status: "not-current"});
+    expect(await store.findFinancialSourceProof(legacyIssued.proofRef)).toEqual(legacyOriginal);
     f.setTime(original.expiresAt);
     await expect(producer.prove(input)).rejects.toThrow("source_conflict");
     expect(await store.findFinancialSourceProof(issued.proofRef)).toEqual(original);
