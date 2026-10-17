@@ -59,6 +59,16 @@ plan、backup evidence、適用手順を確認します。control D1 は
 [platform worker deploy](https://github.com/tako0614/takosumi/blob/main/docs/operations/platform-worker-deploy.md)を参照してください。
 リクエストによる schema bootstrap を既存環境の更新手順として扱いません。
 
+Accounts D1 は、新しく構築するときと同じ `takosumi accounts migrate-d1` の backup-status、
+plan、apply、verify の順で上げます（[Cloudflare に置く](../concepts/self-host.md#cloudflare-に置く)）。
+Worker ごとに受け付ける Accounts D1 の版が決まっているため、適用と Worker のデプロイの
+どちらを先にするかは版によって変わります。v3 の Accounts D1 から上げる場合は、bridge Worker を
+デプロイしてから v4 を適用し、その後で v4 以降だけを受け付ける Worker に替える、という決まった
+順序があります。apply は v4 を適用する直前に、既存の OIDC client の記録を 100 行ずつ補います。
+v4 を適用した後は、v3 だけを受け付ける Worker には戻せません。この順序と注意は
+[online DB migrations](https://github.com/tako0614/takosumi/blob/main/docs/operations/online-db-migrations.md)
+に従ってください。
+
 ## 失敗した場合
 
 schema に触れる前の失敗と、触れた後の失敗を分けて記録します。後者では排他制御の印（fence）と
