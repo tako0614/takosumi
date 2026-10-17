@@ -93,7 +93,7 @@ provider はこの一覧に入れず、通常の provider plugin として同じ
 
 判断の内訳は Run の `providerResolutions` に、provider ごとに 1 件ずつ入ります。
 
-例の `$TAKOSUMI_DEPLOY_CONTROL_TOKEN` には、[発行した token](../reference/cli.md#トークンを発行する)を入れます。
+例の `$TAKOSUMI_DEPLOY_CONTROL_TOKEN` には、`read` と `write` を持つ[発行した token](../reference/cli.md#トークンを発行する)を入れます。
 
 ```bash
 curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/runs/run_example" \

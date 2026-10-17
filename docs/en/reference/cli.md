@@ -48,13 +48,16 @@ leaves any bearer passed to `--token` in your terminal.
 
 The CLI and the API examples on other pages read their bearer from the
 `TAKOSUMI_DEPLOY_CONTROL_TOKEN` environment variable. Normally you put a token
-created here in it. The server's setting of the same name is the operator's
-secret; use it only for operator work.
+created here in it. Those examples both read and change things, so the example
+below creates a `read,write` token (`read` and `write` do not include each
+other). The server's setting of the same name is the operator's secret, for
+work that calls the operator-only API; `takosumi connections` on this page is
+such work and needs that secret.
 
 ```bash
 takosumi accounts tokens create \
   --name my-cli \
-  --scope write \
+  --scope read,write \
   --accounts-url "$TAKOSUMI_ACCOUNTS_URL" \
   --token "$TAKOSUMI_ACCOUNTS_SESSION_BEARER"
 ```

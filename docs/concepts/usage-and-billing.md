@@ -5,7 +5,7 @@ Takosumi は、何にどれだけ使ったかを記録します。**Takosumi 自
 
 ## 3 つの粒度で読めます
 
-例の `$TAKOSUMI_DEPLOY_CONTROL_TOKEN` には、[発行した token](../reference/cli.md#トークンを発行する)を入れます。
+例の `$TAKOSUMI_DEPLOY_CONTROL_TOKEN` には、`read` を持つ[発行した token](../reference/cli.md#トークンを発行する)を入れます。
 
 ```bash
 curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/usage" \

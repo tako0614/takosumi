@@ -18,11 +18,11 @@ include an explicit OpenTofu `import` block in the module and review that plan.
 
 ## Everything starts with a plan
 
-The public `/api/v1` API uses an Accounts session or PAT with the required write
-authority. Like the other pages, these examples use
+The public `/api/v1` API uses an Accounts session or PAT: reading needs `read`
+and changing needs `write`. Like the other pages, these examples use
 `TAKOSUMI_DEPLOY_CONTROL_URL` for the public origin and put a
-[token you created](../reference/cli.md#creating-a-token) in
-`TAKOSUMI_DEPLOY_CONTROL_TOKEN`.
+[token you created](../reference/cli.md#creating-a-token) with `read` and
+`write` in `TAKOSUMI_DEPLOY_CONTROL_TOKEN`.
 
 ```bash
 curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/plan" \

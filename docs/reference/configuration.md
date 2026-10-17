@@ -16,7 +16,7 @@ secret ストアから渡してください。
 | `PORT`                          | 任意                                                        | `8788`  | `bun core/index.ts` で起動したときの待ち受けポート                                                                                                                                                           |
 | `TAKOSUMI_DATABASE_URL`         | `bun core/index.ts` で control plane を単体で動かすとき必須 | なし    | control plane の PostgreSQL 接続先。`DATABASE_URL` も同じ用途で読みます。同梱の Docker Compose 定義は control plane と accounts を 1 つの接続で動かすので、そちらでは `TAKOSUMI_ACCOUNTS_DATABASE_URL` だけを設定します |
 | `TAKOSUMI_DB_AUTO_MIGRATE`      | 任意                                                        | `false` | `bun core/index.ts` の起動時にマイグレーションを適用するか。既定では適用せず、読み取りだけで検証します。`staging` と `production` で `true` にすると起動が失敗します                                         |
-| `TAKOSUMI_DEPLOY_CONTROL_TOKEN` | 実運用では必須・**秘密**                                    | なし    | サーバーが受け付ける operator 用の bearer。旧 Resource/Form `/v1` surface には作用しません。CLI 側の同じ名前の変数は下の「CLI が読むもの」にあります |
+| `TAKOSUMI_DEPLOY_CONTROL_TOKEN` | 実運用では必須・**秘密**                                    | なし    | operator 専用 API（`/internal/v1/*`、`/capabilities`、`/openapi.json`、Interface の operator 経路）の bearer。全 Workspace に作用する強い権限で、公開 `/api/v1` の一般の route は受け付けません。旧 Resource/Form `/v1` surface には作用しません。CLI 側の同じ名前の変数は[CLI が読むもの](#cli-が読むもの)にあります |
 | `TAKOSUMI_METRICS_SCRAPE_TOKEN` | 任意・**秘密**                                              | なし    | `/metrics` を読むための bearer。未設定のあいだ `/metrics` は `404` を返します                                                                                                                                |
 
 ```bash
@@ -189,7 +189,7 @@ ENV
 | 変数                             | 必須                               | 既定値              | 決めること                                                                           |
 | -------------------------------- | ---------------------------------- | ------------------- | ------------------------------------------------------------------------------------ |
 | `TAKOSUMI_DEPLOY_CONTROL_URL`    | `--url` を省くとき必須             | なし                | CLI が話しかける Takosumi の origin                                                  |
-| `TAKOSUMI_DEPLOY_CONTROL_TOKEN`  | `--token` を省くとき必須・**秘密** | なし                | その origin に渡す bearer。ふだんは[発行した token](./cli.md#トークンを発行する)で、サーバーの operator 用の秘密とは別のものです |
+| `TAKOSUMI_DEPLOY_CONTROL_TOKEN`  | `--token` を省くとき必須・**秘密** | なし                | その origin に渡す bearer。ふだんは[発行した token](./cli.md#トークンを発行する)です。`takosumi connections` など operator 専用 API を呼ぶコマンドには、サーバーの operator 用の秘密を入れます |
 | `TAKOSUMI_ACCOUNTS_URL`          | `--accounts-url` を省くとき必須    | なし                | `takosumi accounts tokens` が話しかける accounts の URL                              |
 | `TAKOSUMI_ACCOUNTS_DATABASE_URL` | `--database-url` を省くとき必須    | なし                | `takosumi accounts migrate` の接続先                                                 |
 | `TAKOSUMI_LANG`                  | 任意                               | `LANG` などから判定 | `ja` で始まる値にすると CLI のヘルプが日本語になります。`TAKOSUMI_LOCALE` も読みます |

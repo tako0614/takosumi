@@ -4,7 +4,7 @@ Takosumi records what was used and how much. **The software itself never bills a
 
 ## Reading usage
 
-Put a [token you created](../reference/cli.md#creating-a-token) in
+Put a [token you created](../reference/cli.md#creating-a-token) with `read` in
 `$TAKOSUMI_DEPLOY_CONTROL_TOKEN` for these examples.
 
 ```bash

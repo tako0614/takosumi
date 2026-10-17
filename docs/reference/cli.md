@@ -43,13 +43,15 @@ takosumi --help
 ## トークンを発行する
 
 CLI と、ほかのページの API の例は、`TAKOSUMI_DEPLOY_CONTROL_TOKEN` 環境変数の bearer を使います。
-ふだんは、ここで発行した token を入れます。サーバーの設定にある同じ名前の値は operator 用の
-秘密で、operator の作業にだけ使います。
+ふだんは、ここで発行した token を入れます。ほかのページの例には読み取りと変更の両方があるので、
+下の例は `read,write` で発行します（`read` と `write` は互いを含みません）。
+サーバーの設定にある同じ名前の値は operator 用の秘密で、operator 専用 API を呼ぶ作業にだけ
+使います。このページの `takosumi connections` はその API を使うため、operator 用の秘密が要ります。
 
 ```bash
 takosumi accounts tokens create \
   --name my-cli \
-  --scope write \
+  --scope read,write \
   --accounts-url "$TAKOSUMI_ACCOUNTS_URL" \
   --token "$TAKOSUMI_ACCOUNTS_SESSION_BEARER"
 ```

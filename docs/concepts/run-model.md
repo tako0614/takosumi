@@ -16,9 +16,9 @@ module の明示的な OpenTofu `import` block を Plan に含め、その差分
 
 ## 計画から始まります
 
-公開 `/api/v1` は Accounts session または必要な write 権限を持つ PAT を使います。
+公開 `/api/v1` は Accounts session か PAT を使います。読み取りには `read`、変更には `write` が要ります。
 以下の例では、ほかのページと同じく `TAKOSUMI_DEPLOY_CONTROL_URL` を公開 API の origin とし、
-`TAKOSUMI_DEPLOY_CONTROL_TOKEN` に[発行した token](../reference/cli.md#トークンを発行する)を入れます。
+`TAKOSUMI_DEPLOY_CONTROL_TOKEN` に `read` と `write` を持つ[発行した token](../reference/cli.md#トークンを発行する)を入れます。
 
 ```bash
 curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/plan" \

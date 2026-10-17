@@ -15,7 +15,7 @@ created — database rows, stored files — are not part of it.
 Going back runs through an ordinary plan and apply. **Choosing a StateVersion changes
 nothing by itself.**
 
-Put a [token you created](../reference/cli.md#creating-a-token) in
+Put a [token you created](../reference/cli.md#creating-a-token) with `read` and `write` in
 `$TAKOSUMI_DEPLOY_CONTROL_TOKEN` for these examples.
 
 ```bash
